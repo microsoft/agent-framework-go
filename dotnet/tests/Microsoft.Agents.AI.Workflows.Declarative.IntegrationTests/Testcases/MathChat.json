@@ -1,0 +1,31 @@
+﻿{
+  "description": "Student/Teacher sample - MathChat.yaml.",
+  "setup": {
+    "input": {
+      "type": "String",
+      "value": "How could one compute the value of PI?"
+    }
+  },
+  "validation": {
+    "conversation_count": 1,
+    "min_action_count": 6,
+    "max_action_count": -1,
+    "min_response_count": 2,
+    "max_response_count": 8,
+    "actions": {
+      "start": [
+      ],
+      "repeat": [
+        "question_student",
+        "question_teacher",
+        "set_count_increment",
+        "check_completion"
+      ],
+      "final": [
+        "sendActivity_done",
+        "sendActivity_tired",
+        "check_completion_Post"
+      ]
+    }
+  }
+}

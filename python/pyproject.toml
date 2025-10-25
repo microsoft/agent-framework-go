@@ -1,0 +1,326 @@
+[project]
+name = "agent-framework"
+description = "Microsoft Agent Framework for building AI Agents with Python. This package contains all the core and optional packages."
+authors = [{ name = "Microsoft", email = "af-support@microsoft.com"}]
+readme = "README.md"
+requires-python = ">=3.10"
+version = "1.0.0b251016"
+license-files = ["LICENSE"]
+urls.homepage = "https://aka.ms/agent-framework"
+urls.source = "https://github.com/microsoft/agent-framework/tree/main/python"
+urls.release_notes = "https://github.com/microsoft/agent-framework/releases?q=tag%3Apython-1&expanded=true"
+urls.issues = "https://github.com/microsoft/agent-framework/issues"
+classifiers = [
+  "License :: OSI Approved :: MIT License",
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Typing :: Typed",
+]
+dependencies = [
+    "agent-framework-core",
+    "agent-framework-a2a",
+    "agent-framework-azure-ai",
+    "agent-framework-copilotstudio",
+    "agent-framework-mem0",
+    "agent-framework-redis",
+    "agent-framework-devui",
+    "agent-framework-purview",
+]
+
+[dependency-groups]
+dev = [
+    "uv>=0.8.2,<0.10.0",
+    "flit>=3.12.0",
+    "pre-commit >= 3.7",
+    "ruff>=0.11.8",
+    "pytest>=8.4.1",
+    "pytest-asyncio>=1.0.0",
+    "pytest-cov>=6.2.1",
+    "pytest-env>=1.1.5",
+    "pytest-xdist[psutil]>=3.8.0",
+    "pytest-timeout>=2.3.1",
+    "pytest-retry>=1",
+    "mypy>=1.16.1",
+    "pyright>=1.1.402",
+    #tasks
+    "poethepoet>=0.36.0",
+    "rich",
+    "tomli",
+    "tomli-w",
+]
+docs = [
+    # Documentation
+    "debugpy>=1.8.16",
+    "py2docfx>=0.1.22.dev2259826",
+    "pip",
+]
+
+[tool.uv]
+package = false
+prerelease = "if-necessary-or-explicit"
+environments = [
+    "sys_platform == 'darwin'",
+    "sys_platform == 'linux'",
+    "sys_platform == 'win32'"
+]
+
+[tool.uv.workspace]
+members = [ "packages/*" ]
+
+[tool.uv.sources]
+agent-framework = { workspace = true }
+agent-framework-core = { workspace = true }
+agent-framework-a2a = { workspace = true }
+agent-framework-azure-ai = { workspace = true }
+agent-framework-copilotstudio = { workspace = true }
+agent-framework-lab = { workspace = true }
+agent-framework-mem0 = { workspace = true }
+agent-framework-redis = { workspace = true }
+agent-framework-devui = { workspace = true }
+agent-framework-purview = { workspace = true }
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+fix = true
+include = ["*.py", "*.pyi", "**/pyproject.toml", "*.ipynb"]
+exclude = ["docs/*", "run_tasks_in_packages_if_exists.py", "check_md_code_blocks.py"]
+extend-exclude = [
+    "[{][{]cookiecutter.package_name[}][}]",
+]
+preview = true
+
+[tool.ruff.lint]
+fixable = ["ALL"]
+unfixable = []
+select = [
+    "ASYNC", # async checks
+    "B", # bugbear checks
+    "CPY", # copyright
+    "D", # pydocstyle checks
+    "E", # pycodestyle error checks
+    "ERA", # remove connected out code
+    "F", # pyflakes checks
+    "FIX", # fixme checks
+    "I", # isort
+    "INP", # implicit namespace package
+    "ISC", # implicit string concat
+    "Q", # flake8-quotes checks
+    "RET", # flake8-return check
+    "RSE", # raise exception parantheses check
+    "RUF", # RUF specific rules
+    "SIM", # flake8-simplify check
+    "T20", # typing checks
+    "TD", # todos
+    "W", # pycodestyle warning checks
+    "T100", # Debugger,
+    "S", # Bandit checks
+]
+ignore = [
+    "D100", # allow missing docstring in public module
+    "D104", # allow missing docstring in public package
+    "D418", # allow overload to have a docstring
+    "TD003", # allow missing link to todo issue
+    "FIX002", # allow todo
+    "B027" # allow empty non-abstract method in ABC
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Ignore all directories named `tests` and `samples`.
+"**/tests/**" = ["D", "INP", "TD", "ERA001", "RUF", "S"]
+"samples/**" = ["D", "INP", "ERA001", "RUF", "S", "T201"]
+"*.ipynb" = ["CPY", "E501"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.flake8-copyright]
+notice-rgx = "^# Copyright \\(c\\) Microsoft\\. All rights reserved\\."
+min-file-size = 1
+
+[tool.pytest.ini_options]
+testpaths = 'packages/**/tests'
+norecursedirs = '**/lab/**'
+addopts = "-ra -q -r fEX"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = []
+timeout = 120
+markers = [
+    "azure: marks tests as Azure provider specific",
+    "azure-ai: marks tests as Azure AI provider specific",
+    "openai: marks tests as OpenAI provider specific",
+]
+
+[tool.coverage.run]
+omit = [
+    "**/__init__.py"
+]
+
+[tool.pyright]
+include = ["agent_framework", "samples"]
+exclude = ["**/tests/**", "docs", "**/.venv/**", "samples/semantic-kernel-migration/**"]
+typeCheckingMode = "strict"
+reportUnnecessaryIsInstance = false
+reportMissingTypeStubs = false
+
+[[tool.pyright.executionEnvironments]]
+root = "samples/semantic-kernel-migration"
+typeCheckingMode = "off"
+
+[tool.mypy]
+plugins = ['pydantic.mypy']
+strict = true
+python_version = "3.10"
+ignore_missing_imports = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+check_untyped_defs = true
+warn_return_any = true
+show_error_codes = true
+warn_unused_ignores = false
+disallow_incomplete_defs = true
+disallow_untyped_decorators = true
+
+[tool.bandit]
+targets = ["agent_framework"]
+exclude_dirs = ["tests", "./run_tasks_in_packages_if_exists.py", "./check_md_code_blocks.py", "docs", "samples"]
+
+[tool.poe]
+executor.type = "uv"
+
+[tool.poe.tasks]
+markdown-code-lint = """uv run python check_md_code_blocks.py README.md ./packages/**/README.md ./samples/**/*.md --exclude cookiecutter-agent-framework-lab --exclude tau2"""
+samples-code-check = """pyright ./samples"""
+docs-install = "uv sync --all-packages --all-extras --dev -U --prerelease=if-necessary-or-explicit --group=docs"
+docs-clean = "rm -rf docs/build"
+docs-build = "uv run python ./docs/generate_docs.py"
+docs-debug = "uv run python -m debugpy --listen 5678 ./docs/generate_docs.py"
+docs-rename = "mv docs/build/agent-framework-core docs/build/agent-framework"
+pre-commit-install = "uv run pre-commit install --install-hooks --overwrite"
+install = "uv sync --all-packages --all-extras --dev -U --prerelease=if-necessary-or-explicit --no-group=docs"
+test = "python run_tasks_in_packages_if_exists.py test"
+fmt = "python run_tasks_in_packages_if_exists.py fmt"
+format.ref = "fmt"
+lint = "python run_tasks_in_packages_if_exists.py lint"
+pyright = "python run_tasks_in_packages_if_exists.py pyright"
+mypy = "python run_tasks_in_packages_if_exists.py mypy"
+# cleaning
+clean-dist-packages = "python run_tasks_in_packages_if_exists.py clean-dist"
+clean-dist-meta = "rm -rf dist"
+clean-dist = ["clean-dist-packages", "clean-dist-meta"]
+# build and publish
+build-packages = "python run_tasks_in_packages_if_exists.py build"
+build-meta = "python -m flit build"
+build = ["build-packages", "build-meta"]
+publish = "uv publish"
+# combined checks
+check = ["fmt", "lint", "pyright", "mypy", "test", "markdown-code-lint", "samples-code-check"]
+pre-commit-check = ["fmt", "lint", "pyright", "markdown-code-lint", "samples-code-check"]
+
+[tool.poe.tasks.all-tests-cov]
+cmd = """
+pytest --import-mode=importlib
+--cov=agent_framework
+--cov=agent_framework_a2a
+--cov=agent_framework_azure_ai
+--cov=agent_framework_copilotstudio
+--cov=agent_framework_mem0
+--cov=agent_framework_redis
+--cov=agent_framework_purview
+--cov-report=term-missing:skip-covered
+--ignore-glob=packages/lab/**
+--ignore-glob=packages/devui/**
+-n logical --dist loadfile --dist worksteal
+packages/**/tests
+"""
+
+[tool.poe.tasks.all-tests]
+cmd = """
+pytest --import-mode=importlib
+--ignore-glob=packages/lab/**
+--ignore-glob=packages/devui/**
+-n logical --dist loadfile --dist worksteal
+packages/**/tests
+"""
+
+[tool.poe.tasks.azure-ai-tests]
+cmd = """
+pytest --import-mode=importlib
+-n logical --dist loadfile --dist worksteal
+packages/azure-ai/tests
+"""
+
+[tool.poe.tasks.venv]
+cmd = "uv venv --clear --python $python"
+args = [{ name = "python", default = "3.13", options = ['-p', '--python'] }]
+[tool.poe.tasks.setup]
+sequence = [
+    { ref = "venv --python $python"},
+    { ref = "install" },
+    { ref = "pre-commit-install" }
+]
+args = [{ name = "python", default = "3.13", options = ['-p', '--python'] }]
+[tool.poe.tasks.docs-full]
+sequence = [
+    { ref = "clean-dist" },
+    { ref = 'build' },
+    { ref = "docs-clean" },
+    { ref = "docs-build" },
+    { ref = "docs-rename" }
+]
+[tool.poe.tasks.docs-full-setup-install]
+sequence = [
+    { ref = "setup --python 3.11" },
+    { ref = "docs-install" },
+    { ref = 'build' },
+    { ref = "docs-clean" },
+    { ref = "docs-build" },
+    { ref = "docs-rename" }
+]
+[tool.poe.tasks.docs-full-install]
+sequence = [
+    { ref = "docs-install" },
+    { ref = 'build' },
+    { ref = "docs-clean" },
+    { ref = "docs-build" },
+    { ref = "docs-rename" }
+]
+[tool.poe.tasks.docs-rebuild]
+sequence = [
+    { ref = "docs-clean" },
+    { ref = "docs-build" },
+    { ref = "docs-rename" }
+]
+[tool.poe.tasks.docs-rebuild-debug]
+sequence = [
+    { ref = "docs-clean" },
+    { ref = "docs-debug" },
+    { ref = "docs-rename" }
+]
+
+[tool.setuptools.packages.find]
+where = ["packages"]
+include = ["agent_framework**"]
+namespaces = true
+
+[[tool.uv.index]]
+name = "testpypi"
+url = "https://test.pypi.org/simple/"
+publish-url = "https://test.pypi.org/legacy/"
+explicit = true
+
+[tool.flit.module]
+name = "agent_framework_meta"
+
+[build-system]
+requires = ["flit-core >= 3.11,<4.0"]
+build-backend = "flit_core.buildapi"

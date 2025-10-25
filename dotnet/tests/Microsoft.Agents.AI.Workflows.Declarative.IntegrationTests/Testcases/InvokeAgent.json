@@ -1,0 +1,24 @@
+﻿{
+  "description": "Produce a single response from an agent.",
+  "setup": {
+    "input": {
+      "type": "String",
+      "value": "Why is the sky blue?"
+    }
+  },
+  "validation": {
+    "conversation_count": 3,
+    "min_action_count": 3,
+    "min_response_count": 2,
+    "actions": {
+      "start": [
+        "invoke_inner1",
+        "invoke_inner2",
+        "invoke_external"
+      ],
+      "final": [
+        "invoke_external"
+      ]
+    }
+  }
+}

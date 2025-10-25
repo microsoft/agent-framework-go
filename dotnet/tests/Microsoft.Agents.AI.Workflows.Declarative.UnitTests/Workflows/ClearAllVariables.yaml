@@ -1,0 +1,11 @@
+kind: Workflow
+trigger:
+
+  kind: OnConversationStart
+  id: my_workflow
+  actions:
+
+    - kind: ClearAllVariables
+      id: clear_all
+      variables: ConversationScopedVariables
+
