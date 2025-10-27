@@ -16,7 +16,7 @@ func main() {
 	// - AZURE_OPENAI_API_KEY
 	// - AZURE_OPENAI_ENDPOINT
 	// - AZURE_OPENAI_DEPLOYMENT_NAME
-	client := openai.NewAzureOpenAIChatClient(openai.AzureOpenAIChatClientConfig{
+	client := openai.NewAzureChatClient(openai.AzureChatClientConfig{
 		APIKey:         os.Getenv("AZURE_OPENAI_API_KEY"),         // or set directly
 		Endpoint:       os.Getenv("AZURE_OPENAI_ENDPOINT"),        // e.g., "https://your-resource.openai.azure.com/"
 		DeploymentName: os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), // e.g., "gpt-4o"
