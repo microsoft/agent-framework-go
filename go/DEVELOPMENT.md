@@ -10,14 +10,15 @@ This guide provides information for contributors working on the Go SDK implement
 
 ### Prerequisites
 
-- Go 1.21 or later
+- Go 1.24 or later
 - Git
 - An OpenAI or Azure OpenAI API key for testing
 
 ### Clone and Setup
 
 ```bash
-cd agent-framework/golang
+git clone https://github.com/microsoft/agent-framework
+cd agent-framework/go
 go mod download
 ```
 
