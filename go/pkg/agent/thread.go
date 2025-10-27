@@ -5,15 +5,15 @@ package agent
 import "github.com/google/uuid"
 
 // Thread represents a conversation thread that maintains message history.
-type Thread[M any] interface {
+type Thread interface {
 	// ID returns the unique identifier.
 	ID() string
 
 	// AddMessage adds a message to the thread.
-	AddMessage(message M)
+	AddMessage(message *Message)
 
 	// GetMessages returns all messages in the thread.
-	GetMessages() []M
+	GetMessages() []*Message
 
 	// Clear removes all messages from the thread.
 	Clear()
@@ -23,41 +23,41 @@ type Thread[M any] interface {
 }
 
 // InMemoryThread is a simple in-memory implementation of [Thread].
-type InMemoryThread[M any] struct {
+type InMemoryThread struct {
 	id       string
-	messages []M
+	messages []*Message
 }
 
 // NewInMemoryThread creates a new InMemoryThread.
-func NewInMemoryThread[M any]() *InMemoryThread[M] {
-	return &InMemoryThread[M]{
+func NewInMemoryThread() *InMemoryThread {
+	return &InMemoryThread{
 		id:       uuid.New().String(),
-		messages: make([]M, 0),
+		messages: make([]*Message, 0),
 	}
 }
 
 // ID returns the thread's unique identifier.
-func (t *InMemoryThread[M]) ID() string {
+func (t *InMemoryThread) ID() string {
 	return t.id
 }
 
 // AddMessage adds a message to the thread.
-func (t *InMemoryThread[M]) AddMessage(msg M) {
+func (t *InMemoryThread) AddMessage(msg *Message) {
 	t.messages = append(t.messages, msg)
 }
 
 // GetMessages returns all messages in the thread.
-func (t *InMemoryThread[M]) GetMessages() []M {
+func (t *InMemoryThread) GetMessages() []*Message {
 	return t.messages
 }
 
 // Clear removes all messages from the thread.
-func (t *InMemoryThread[M]) Clear() {
-	t.messages = make([]M, 0)
+func (t *InMemoryThread) Clear() {
+	t.messages = make([]*Message, 0)
 }
 
 // Serialize serializes the thread to JSON.
-func (t *InMemoryThread[M]) Serialize() ([]byte, error) {
+func (t *InMemoryThread) Serialize() ([]byte, error) {
 	// TODO: Implement JSON serialization
 	return []byte("{}"), nil
 }

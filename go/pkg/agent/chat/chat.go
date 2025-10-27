@@ -10,7 +10,7 @@ import (
 	"github.com/microsoft/agent-framework/go/pkg/agent"
 )
 
-var _ agent.Agent[*Message] = (*Agent)(nil) // ensure Agent implements Agent interface
+var _ agent.Agent = (*Agent)(nil) // ensure Agent implements Agent interface
 
 // Agent is an agent that uses a [Client] to generate responses.
 type Agent struct {
@@ -48,7 +48,7 @@ func (a *Agent) Name() string {
 }
 
 // Run executes the agent with the given messages and options.
-func (a *Agent) Run(ctx context.Context, t agent.Thread[*Message], options *agent.RunOptions, messages ...*Message) (*agent.RunResponse[*Message], error) {
+func (a *Agent) Run(ctx context.Context, t agent.Thread, options *agent.RunOptions, messages ...*agent.Message) (*agent.RunResponse, error) {
 	// Prepare messages with system instructions
 	allMessages := a.prepareMessages(messages)
 
@@ -70,7 +70,7 @@ func (a *Agent) Run(ctx context.Context, t agent.Thread[*Message], options *agen
 	}
 
 	// Convert to RunResponse
-	return &agent.RunResponse[*Message]{
+	return &agent.RunResponse{
 		Message:      response.Message,
 		FinishReason: response.FinishReason,
 		Usage:        response.Usage,
@@ -80,7 +80,7 @@ func (a *Agent) Run(ctx context.Context, t agent.Thread[*Message], options *agen
 }
 
 // RunStream executes the agent and streams responses.
-func (a *Agent) RunStream(ctx context.Context, t agent.Thread[*Message], options *agent.RunOptions, messages ...*Message) iter.Seq2[*agent.RunResponseUpdate[*Message], error] {
+func (a *Agent) RunStream(ctx context.Context, t agent.Thread, options *agent.RunOptions, messages ...*agent.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
 	// Prepare messages with system instructions
 	allMessages := a.prepareMessages(messages)
 
@@ -89,11 +89,11 @@ func (a *Agent) RunStream(ctx context.Context, t agent.Thread[*Message], options
 
 	// Call the chat client for streaming
 	tID := getThreadID(t)
-	return func(yield func(*agent.RunResponseUpdate[*Message], error) bool) {
+	return func(yield func(*agent.RunResponseUpdate, error) bool) {
 		for resp, err := range completeStream(ctx, a.client, chatOptions, allMessages...) {
-			var runResp *agent.RunResponseUpdate[*Message]
+			var runResp *agent.RunResponseUpdate
 			if resp != nil {
-				runResp = &agent.RunResponseUpdate[*Message]{
+				runResp = &agent.RunResponseUpdate{
 					Delta:        resp.Delta,
 					FinishReason: resp.FinishReason,
 					Usage:        resp.Usage,
@@ -109,24 +109,24 @@ func (a *Agent) RunStream(ctx context.Context, t agent.Thread[*Message], options
 }
 
 // NewThread creates a new thread for this agent.
-func (a *Agent) NewThread() agent.Thread[*Message] {
-	return agent.NewInMemoryThread[*Message]()
+func (a *Agent) NewThread() agent.Thread {
+	return agent.NewInMemoryThread()
 }
 
 // DeserializeThread deserializes a thread from JSON.
-func (a *Agent) DeserializeThread(data []byte) (agent.Thread[*Message], error) {
+func (a *Agent) DeserializeThread(data []byte) (agent.Thread, error) {
 	// TODO: Implement JSON deserialization
-	return agent.NewInMemoryThread[*Message](), nil
+	return agent.NewInMemoryThread(), nil
 }
 
 // prepareMessages adds system instructions to the message list.
-func (a *Agent) prepareMessages(messages []*Message) []*Message {
+func (a *Agent) prepareMessages(messages []*agent.Message) []*agent.Message {
 	if a.instructions == "" {
 		return messages
 	}
 
-	systemMessage := NewMessage("system", a.instructions)
-	allMessages := make([]*Message, 0, len(messages)+1)
+	systemMessage := agent.NewMessage("system", a.instructions)
+	allMessages := make([]*agent.Message, 0, len(messages)+1)
 	allMessages = append(allMessages, systemMessage)
 	allMessages = append(allMessages, messages...)
 	return allMessages
@@ -149,7 +149,7 @@ func (a *Agent) convertOptions(options *agent.RunOptions) *Options {
 }
 
 // getThreadID returns the thread ID or empty string if no thread.
-func getThreadID(t agent.Thread[*Message]) string {
+func getThreadID(t agent.Thread) string {
 	if t == nil {
 		return ""
 	}
