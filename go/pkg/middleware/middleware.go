@@ -5,27 +5,26 @@ package middleware
 import (
 	"context"
 
-	"github.com/microsoft/agent-framework/go/pkg/message"
 	"github.com/microsoft/agent-framework/go/pkg/tool"
 )
 
 // AgentMiddleware intercepts agent run requests and responses.
-type AgentMiddleware interface {
+type AgentMiddleware[M ~string | any] interface {
 	// OnRunStart is called before an agent run.
-	OnRunStart(ctx context.Context, agentCtx *AgentContext) error
+	OnRunStart(ctx context.Context, agentCtx *AgentContext[M]) error
 
 	// OnRunComplete is called after an agent run completes.
-	OnRunComplete(ctx context.Context, agentCtx *AgentContext, response *message.ChatResponse) error
+	OnRunComplete(ctx context.Context, agentCtx *AgentContext[M], response M) error
 
 	// OnRunError is called when an agent run fails.
-	OnRunError(ctx context.Context, agentCtx *AgentContext, err error) error
+	OnRunError(ctx context.Context, agentCtx *AgentContext[M], err error) error
 }
 
 // AgentContext contains context for an agent run.
-type AgentContext struct {
+type AgentContext[M ~string | any] struct {
 	AgentID  string
-	Messages []*message.ChatMessage
-	Metadata map[string]interface{}
+	Messages []M
+	Metadata map[string]any
 }
 
 // FunctionMiddleware intercepts tool/function calls.
@@ -45,65 +44,40 @@ type FunctionContext struct {
 	Tool      tool.Tool
 	Arguments string
 	CallID    string
-	Metadata  map[string]interface{}
-}
-
-// ChatMiddleware intercepts chat client requests and responses.
-type ChatMiddleware interface {
-	// OnChatRequest is called before a chat completion request.
-	OnChatRequest(ctx context.Context, chatCtx *ChatContext) error
-
-	// OnChatResponse is called after a chat completion response.
-	OnChatResponse(ctx context.Context, chatCtx *ChatContext, response *message.ChatResponse) error
-
-	// OnChatError is called when a chat completion fails.
-	OnChatError(ctx context.Context, chatCtx *ChatContext, err error) error
-}
-
-// ChatContext contains context for a chat completion.
-type ChatContext struct {
-	ModelID  string
-	Messages []*message.ChatMessage
-	Metadata map[string]interface{}
+	Metadata  map[string]any
 }
 
 // Pipeline manages a chain of middleware.
-type Pipeline struct {
-	agentMiddleware    []AgentMiddleware
+type Pipeline[M ~string | any] struct {
+	agentMiddleware    []AgentMiddleware[M]
 	functionMiddleware []FunctionMiddleware
-	chatMiddleware     []ChatMiddleware
 }
 
 // NewPipeline creates a new middleware pipeline.
-func NewPipeline() *Pipeline {
-	return &Pipeline{
-		agentMiddleware:    make([]AgentMiddleware, 0),
+func NewPipeline[M ~string | any]() *Pipeline[M] {
+	return &Pipeline[M]{
+		agentMiddleware:    make([]AgentMiddleware[M], 0),
 		functionMiddleware: make([]FunctionMiddleware, 0),
-		chatMiddleware:     make([]ChatMiddleware, 0),
 	}
 }
 
 // AddAgentMiddleware adds agent middleware to the pipeline.
-func (p *Pipeline) AddAgentMiddleware(middleware AgentMiddleware) {
+func (p *Pipeline[M]) AddAgentMiddleware(middleware AgentMiddleware[M]) {
 	p.agentMiddleware = append(p.agentMiddleware, middleware)
 }
 
 // AddFunctionMiddleware adds function middleware to the pipeline.
-func (p *Pipeline) AddFunctionMiddleware(middleware FunctionMiddleware) {
+func (p *Pipeline[M]) AddFunctionMiddleware(middleware FunctionMiddleware) {
 	p.functionMiddleware = append(p.functionMiddleware, middleware)
 }
 
-// AddChatMiddleware adds chat middleware to the pipeline.
-func (p *Pipeline) AddChatMiddleware(middleware ChatMiddleware) {
-	p.chatMiddleware = append(p.chatMiddleware, middleware)
-}
-
 // ExecuteAgentRun runs agent middleware chain.
-func (p *Pipeline) ExecuteAgentRun(ctx context.Context, agentCtx *AgentContext, handler func() (*message.ChatResponse, error)) (*message.ChatResponse, error) {
+func (p *Pipeline[M]) ExecuteAgentRun(ctx context.Context, agentCtx *AgentContext[M], handler func() (M, error)) (M, error) {
 	// Execute OnRunStart for all middleware
 	for _, mw := range p.agentMiddleware {
 		if err := mw.OnRunStart(ctx, agentCtx); err != nil {
-			return nil, err
+			var zero M
+			return zero, err
 		}
 	}
 
