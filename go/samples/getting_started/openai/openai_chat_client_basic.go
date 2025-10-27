@@ -7,7 +7,6 @@ import (
 	"os"
 
 	"github.com/microsoft/agent-framework/go/pkg/agent"
-	"github.com/microsoft/agent-framework/go/pkg/agent/chat"
 	"github.com/microsoft/agent-framework/go/pkg/openai"
 )
 
@@ -30,22 +29,22 @@ func main() {
 	streamingExample(ag, "What's the weather like in Portland?")
 }
 
-func nonStreamingExample(ag agent.Agent[*chat.Message], query string) {
+func nonStreamingExample(ag agent.Agent, query string) {
 	ctx := context.Background()
 	log.Printf("=== Non-streaming Response Example ===\n")
 	log.Printf("User: %s\n", query)
-	resp, err := ag.Run(ctx, nil, nil, chat.NewMessage(agent.RoleUser, query))
+	resp, err := ag.Run(ctx, nil, nil, agent.NewMessage(agent.RoleUser, query))
 	if err != nil {
 		log.Fatal(err)
 	}
 	log.Printf("Result: %s\n", resp.Message.Text())
 }
 
-func streamingExample(ag agent.Agent[*chat.Message], query string) {
+func streamingExample(ag agent.Agent, query string) {
 	ctx := context.Background()
 	log.Printf("=== Streaming Response Example ===\n")
 	log.Printf("User: %s\n", query)
-	stream := agent.RunStream(ctx, ag, nil, nil, chat.NewMessage(agent.RoleUser, query))
+	stream := agent.RunStream(ctx, ag, nil, nil, agent.NewMessage(agent.RoleUser, query))
 	for update := range stream {
 		if update.Delta != nil {
 			fmt.Print(update.Delta.Text())

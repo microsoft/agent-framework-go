@@ -8,7 +8,7 @@ import (
 )
 
 // Agent represents an AI agent that can process messages and generate responses.
-type Agent[M any] interface {
+type Agent interface {
 	// ID returns the unique identifier.
 	ID() string
 
@@ -16,38 +16,38 @@ type Agent[M any] interface {
 	Name() string
 
 	// Run executes the agent with the given messages and options.
-	Run(ctx context.Context, thread Thread[M], options *RunOptions, messages ...M) (*RunResponse[M], error)
+	Run(ctx context.Context, thread Thread, options *RunOptions, messages ...*Message) (*RunResponse, error)
 
 	// NewThread creates a new thread for this agent.
-	NewThread() Thread[M]
+	NewThread() Thread
 
 	// DeserializeThread deserializes a thread from JSON.
-	DeserializeThread(data []byte) (Thread[M], error)
+	DeserializeThread(data []byte) (Thread, error)
 }
 
 // StreamableAgent is the interface implemented by agents that support streaming responses.
-type StreamableAgent[M any] interface {
-	Agent[M]
+type StreamableAgent interface {
+	Agent
 
 	// RunStream executes the agent and streams responses.
-	RunStream(ctx context.Context, thread Thread[M], options *RunOptions, messages ...M) iter.Seq2[*RunResponseUpdate[M], error]
+	RunStream(ctx context.Context, thread Thread, options *RunOptions, messages ...*Message) iter.Seq2[*RunResponseUpdate, error]
 }
 
 // RunStream is a helper function to run an agent in streaming mode.
 // If the agent does not implement [StreamableAgent], it falls back to calling [Agent.Run].
-func RunStream[M any](ctx context.Context, agent Agent[M], thread Thread[M], options *RunOptions, messages ...M) iter.Seq2[*RunResponseUpdate[M], error] {
-	if agent, ok := agent.(StreamableAgent[M]); ok {
+func RunStream(ctx context.Context, agent Agent, thread Thread, options *RunOptions, messages ...*Message) iter.Seq2[*RunResponseUpdate, error] {
+	if agent, ok := agent.(StreamableAgent); ok {
 		return agent.RunStream(ctx, thread, options, messages...)
 	}
 	var tID string
 	if thread != nil {
 		tID = thread.ID()
 	}
-	return func(yield func(*RunResponseUpdate[M], error) bool) {
+	return func(yield func(*RunResponseUpdate, error) bool) {
 		resp, err := agent.Run(ctx, thread, options, messages...)
-		var runResp *RunResponseUpdate[M]
+		var runResp *RunResponseUpdate
 		if resp != nil {
-			runResp = &RunResponseUpdate[M]{
+			runResp = &RunResponseUpdate{
 				Delta:        resp.Message,
 				FinishReason: resp.FinishReason,
 				Usage:        resp.Usage,
@@ -86,8 +86,8 @@ type RunOptions struct {
 }
 
 // RunResponse represents the result of an agent execution.
-type RunResponse[M any] struct {
-	Message      M
+type RunResponse struct {
+	Message      *Message
 	FinishReason FinishReason
 	Usage        *UsageDetails
 	ThreadID     string
@@ -95,8 +95,8 @@ type RunResponse[M any] struct {
 }
 
 // RunResponseUpdate represents a streaming update from an agent execution.
-type RunResponseUpdate[M any] struct {
-	Delta        M
+type RunResponseUpdate struct {
+	Delta        *Message
 	FinishReason FinishReason
 	Usage        *UsageDetails
 	ThreadID     string
