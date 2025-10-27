@@ -38,7 +38,7 @@ func NewOpenAIChatClient(config OpenAIChatClientConfig) (*OpenAIChatClient, erro
 }
 
 // Complete generates a single response for the given messages.
-func (c *OpenAIChatClient) Complete(ctx context.Context, messages []*message.ChatMessage, options *ChatOptions) (*message.ChatResponse, error) {
+func (c *OpenAIChatClient) Complete(ctx context.Context, options *ChatOptions, messages ...*message.ChatMessage) (*message.ChatResponse, error) {
 	// TODO: Implement OpenAI API call
 	return &message.ChatResponse{
 		Message:      message.NewChatMessage("assistant", "Not implemented"),
@@ -48,7 +48,7 @@ func (c *OpenAIChatClient) Complete(ctx context.Context, messages []*message.Cha
 }
 
 // CompleteStream generates a streaming response for the given messages.
-func (c *OpenAIChatClient) CompleteStream(ctx context.Context, messages []*message.ChatMessage, options *ChatOptions) iter.Seq2[*message.ChatResponseUpdate, error] {
+func (c *OpenAIChatClient) CompleteStream(ctx context.Context, options *ChatOptions, messages ...*message.ChatMessage) iter.Seq2[*message.ChatResponseUpdate, error] {
 	return func(yield func(*message.ChatResponseUpdate, error) bool) {
 		// TODO: Implement OpenAI streaming API call
 	}
@@ -81,7 +81,7 @@ func NewAzureOpenAIChatClient(config AzureOpenAIChatClientConfig) (*AzureOpenAIC
 }
 
 // Complete generates a single response for the given messages.
-func (c *AzureOpenAIChatClient) Complete(ctx context.Context, messages []*message.ChatMessage, options *ChatOptions) (*message.ChatResponse, error) {
+func (c *AzureOpenAIChatClient) Complete(ctx context.Context, options *ChatOptions, messages ...*message.ChatMessage) (*message.ChatResponse, error) {
 	// TODO: Implement Azure OpenAI API call
 	return &message.ChatResponse{
 		Message:      message.NewChatMessage("assistant", "Not implemented"),
@@ -91,7 +91,7 @@ func (c *AzureOpenAIChatClient) Complete(ctx context.Context, messages []*messag
 }
 
 // CompleteStream generates a streaming response for the given messages.
-func (c *AzureOpenAIChatClient) CompleteStream(ctx context.Context, messages []*message.ChatMessage, options *ChatOptions) iter.Seq2[*message.ChatResponseUpdate, error] {
+func (c *AzureOpenAIChatClient) CompleteStream(ctx context.Context, options *ChatOptions, messages ...*message.ChatMessage) iter.Seq2[*message.ChatResponseUpdate, error] {
 	return func(yield func(*message.ChatResponseUpdate, error) bool) {
 		// TODO: Implement Azure OpenAI streaming API call
 	}

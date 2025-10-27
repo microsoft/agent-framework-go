@@ -267,7 +267,7 @@ type Agent interface {
     //
     // The agent will process the messages in the context of the provided
     // thread (if any) and return a structured response.
-    Run(ctx context.Context, messages []*message.ChatMessage, thread AgentThread, options *RunOptions) (*RunResponse, error)
+    Run(ctx context.Context, thread AgentThread, options *RunOptions, messages ...*message.ChatMessage) (*RunResponse, error)
 }
 ```
 

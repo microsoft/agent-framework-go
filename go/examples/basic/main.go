@@ -18,7 +18,7 @@ import (
 type mockChatClient struct{}
 
 // Complete implements the ChatClient interface.
-func (m *mockChatClient) Complete(ctx context.Context, messages []*message.ChatMessage, options *client.ChatOptions) (*message.ChatResponse, error) {
+func (m *mockChatClient) Complete(ctx context.Context, options *client.ChatOptions, messages ...*message.ChatMessage) (*message.ChatResponse, error) {
 	return &message.ChatResponse{
 		Message:      message.NewChatMessage(types.RoleAssistant, "Hello! This is a mock response."),
 		FinishReason: types.FinishReasonStop,
@@ -32,7 +32,7 @@ func (m *mockChatClient) Complete(ctx context.Context, messages []*message.ChatM
 }
 
 // CompleteStream implements the ChatClient interface for streaming.
-func (m *mockChatClient) CompleteStream(ctx context.Context, messages []*message.ChatMessage, options *client.ChatOptions) iter.Seq2[*message.ChatResponseUpdate, error] {
+func (m *mockChatClient) CompleteStream(ctx context.Context, options *client.ChatOptions, messages ...*message.ChatMessage) iter.Seq2[*message.ChatResponseUpdate, error] {
 	resp := []*message.ChatResponseUpdate{
 		{
 			Delta:        message.NewChatMessage(types.RoleAssistant, "Hello! This is a streaming mock response."),
@@ -73,7 +73,7 @@ func main() {
 	userMessage := message.NewChatMessage(types.RoleUser, "Hello, how are you?")
 
 	// Run the agent
-	response, err := myAgent.Run(ctx, []*message.ChatMessage{userMessage}, nil, nil)
+	response, err := myAgent.Run(ctx, nil, nil, userMessage)
 	if err != nil {
 		log.Fatalf("Error running agent: %v", err)
 	}
@@ -88,7 +88,7 @@ func main() {
 
 	// Example with streaming
 	fmt.Println("\n--- Streaming Example ---")
-	for update := range myAgent.RunStream(ctx, []*message.ChatMessage{userMessage}, nil, nil) {
+	for update := range myAgent.RunStream(ctx, nil, nil, userMessage) {
 		if update.Delta != nil {
 			for _, content := range update.Delta.Contents {
 				if textContent, ok := content.(*message.TextContent); ok {

@@ -11,7 +11,7 @@ import (
 // ContextProvider provides additional context to agents.
 type ContextProvider interface {
 	// GetContext retrieves context based on the current messages.
-	GetContext(ctx context.Context, messages []*message.ChatMessage) ([]string, error)
+	GetContext(ctx context.Context, messages ...*message.ChatMessage) ([]string, error)
 }
 
 // AggregateContextProvider combines multiple context providers.
@@ -27,10 +27,10 @@ func NewAggregateContextProvider(providers ...ContextProvider) *AggregateContext
 }
 
 // GetContext retrieves context from all providers.
-func (a *AggregateContextProvider) GetContext(ctx context.Context, messages []*message.ChatMessage) ([]string, error) {
+func (a *AggregateContextProvider) GetContext(ctx context.Context, messages ...*message.ChatMessage) ([]string, error) {
 	var allContext []string
 	for _, provider := range a.providers {
-		context, err := provider.GetContext(ctx, messages)
+		context, err := provider.GetContext(ctx, messages...)
 		if err != nil {
 			return nil, err
 		}
@@ -42,7 +42,7 @@ func (a *AggregateContextProvider) GetContext(ctx context.Context, messages []*m
 // MessageStore persists and retrieves messages.
 type MessageStore interface {
 	// Save stores messages.
-	Save(ctx context.Context, threadID string, messages []*message.ChatMessage) error
+	Save(ctx context.Context, threadID string, messages ...*message.ChatMessage) error
 
 	// Load retrieves messages for a thread.
 	Load(ctx context.Context, threadID string) ([]*message.ChatMessage, error)
@@ -64,7 +64,7 @@ func NewInMemoryMessageStore() *InMemoryMessageStore {
 }
 
 // Save stores messages.
-func (s *InMemoryMessageStore) Save(ctx context.Context, threadID string, messages []*message.ChatMessage) error {
+func (s *InMemoryMessageStore) Save(ctx context.Context, threadID string, messages ...*message.ChatMessage) error {
 	s.store[threadID] = messages
 	return nil
 }
