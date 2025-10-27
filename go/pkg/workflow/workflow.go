@@ -5,8 +5,8 @@ package workflow
 import (
 	"context"
 
-	"github.com/microsoft/agent-framework/golang/pkg/message"
-	"github.com/microsoft/agent-framework/golang/pkg/types"
+	"github.com/microsoft/agent-framework/go/pkg/message"
+	"github.com/microsoft/agent-framework/go/pkg/types"
 )
 
 // Workflow represents a graph-based orchestration of agents and executors.

@@ -5,8 +5,8 @@ package middleware
 import (
 	"context"
 
-	"github.com/microsoft/agent-framework/golang/pkg/message"
-	"github.com/microsoft/agent-framework/golang/pkg/tool"
+	"github.com/microsoft/agent-framework/go/pkg/message"
+	"github.com/microsoft/agent-framework/go/pkg/tool"
 )
 
 // AgentMiddleware intercepts agent run requests and responses.

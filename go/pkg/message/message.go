@@ -3,7 +3,7 @@
 package message
 
 import (
-	"github.com/microsoft/agent-framework/golang/pkg/types"
+	"github.com/microsoft/agent-framework/go/pkg/types"
 )
 
 // Content represents message content.

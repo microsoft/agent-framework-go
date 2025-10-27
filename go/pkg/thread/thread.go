@@ -4,8 +4,8 @@ package thread
 
 import (
 	"github.com/google/uuid"
-	"github.com/microsoft/agent-framework/golang/pkg/message"
-	"github.com/microsoft/agent-framework/golang/pkg/types"
+	"github.com/microsoft/agent-framework/go/pkg/message"
+	"github.com/microsoft/agent-framework/go/pkg/types"
 )
 
 // AgentThread represents a conversation thread that maintains message history.

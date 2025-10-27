@@ -5,7 +5,7 @@ package tool
 import (
 	"context"
 
-	"github.com/microsoft/agent-framework/golang/pkg/types"
+	"github.com/microsoft/agent-framework/go/pkg/types"
 )
 
 // Tool represents a tool or function that an agent can use.
@@ -93,10 +93,10 @@ func NewCodeInterpreter() *CodeInterpreter {
 	return &CodeInterpreter{id: "code_interpreter"}
 }
 
-func (c *CodeInterpreter) ID() string                                              { return c.id }
-func (c *CodeInterpreter) Name() string                                            { return "code_interpreter" }
-func (c *CodeInterpreter) Description() string                                     { return "Execute Python code" }
-func (c *CodeInterpreter) Schema() map[string]interface{}                          { return nil }
+func (c *CodeInterpreter) ID() string                     { return c.id }
+func (c *CodeInterpreter) Name() string                   { return "code_interpreter" }
+func (c *CodeInterpreter) Description() string            { return "Execute Python code" }
+func (c *CodeInterpreter) Schema() map[string]interface{} { return nil }
 func (c *CodeInterpreter) Execute(ctx context.Context, arguments string) (string, error) {
 	return "", nil
 }
@@ -112,10 +112,10 @@ func NewFileSearch() *FileSearch {
 	return &FileSearch{id: "file_search"}
 }
 
-func (f *FileSearch) ID() string                                              { return f.id }
-func (f *FileSearch) Name() string                                            { return "file_search" }
-func (f *FileSearch) Description() string                                     { return "Search files" }
-func (f *FileSearch) Schema() map[string]interface{}                          { return nil }
+func (f *FileSearch) ID() string                     { return f.id }
+func (f *FileSearch) Name() string                   { return "file_search" }
+func (f *FileSearch) Description() string            { return "Search files" }
+func (f *FileSearch) Schema() map[string]interface{} { return nil }
 func (f *FileSearch) Execute(ctx context.Context, arguments string) (string, error) {
 	return "", nil
 }
@@ -131,10 +131,10 @@ func NewWebSearch() *WebSearch {
 	return &WebSearch{id: "web_search"}
 }
 
-func (w *WebSearch) ID() string                                              { return w.id }
-func (w *WebSearch) Name() string                                            { return "web_search" }
-func (w *WebSearch) Description() string                                     { return "Search the web" }
-func (w *WebSearch) Schema() map[string]interface{}                          { return nil }
+func (w *WebSearch) ID() string                     { return w.id }
+func (w *WebSearch) Name() string                   { return "web_search" }
+func (w *WebSearch) Description() string            { return "Search the web" }
+func (w *WebSearch) Schema() map[string]interface{} { return nil }
 func (w *WebSearch) Execute(ctx context.Context, arguments string) (string, error) {
 	return "", nil
 }
