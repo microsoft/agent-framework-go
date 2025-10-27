@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package client
+package chat
 
 import (
 	"context"
@@ -10,23 +10,23 @@ import (
 	"github.com/microsoft/agent-framework/go/pkg/tool"
 )
 
-// ChatClient represents a client for chat completions.
-type ChatClient interface {
+// Client represents a client for chat completions.
+type Client interface {
 	// Complete generates a single response for the given messages.
-	Complete(ctx context.Context, options *ChatOptions, messages ...*message.ChatMessage) (*message.ChatResponse, error)
+	Complete(ctx context.Context, options *Options, messages ...*message.ChatMessage) (*message.ChatResponse, error)
 }
 
 // StreamableChatClient is the interface implemented by agents that support streaming responses.
 type StreamableChatClient interface {
-	ChatClient
+	Client
 
 	// CompleteStream generates a streaming response for the given messages.
-	CompleteStream(ctx context.Context, options *ChatOptions, messages ...*message.ChatMessage) iter.Seq2[*message.ChatResponseUpdate, error]
+	CompleteStream(ctx context.Context, options *Options, messages ...*message.ChatMessage) iter.Seq2[*message.ChatResponseUpdate, error]
 }
 
-// CompleteStream is a helper function to run an agent in streaming mode.
-// If the agent does not implement [StreamableChatClient], it falls back to calling [ChatClient.Complete] sequentially.
-func CompleteStream(ctx context.Context, client ChatClient, options *ChatOptions, messages ...*message.ChatMessage) iter.Seq2[*message.ChatResponseUpdate, error] {
+// completeStream is a helper function to run an agent in streaming mode.
+// If the agent does not implement [StreamableChatClient], it falls back to calling [Client.Complete] sequentially.
+func completeStream(ctx context.Context, client Client, options *Options, messages ...*message.ChatMessage) iter.Seq2[*message.ChatResponseUpdate, error] {
 	if agent, ok := client.(StreamableChatClient); ok {
 		return agent.CompleteStream(ctx, options, messages...)
 	}
@@ -47,8 +47,8 @@ func CompleteStream(ctx context.Context, client ChatClient, options *ChatOptions
 	}
 }
 
-// ChatOptions contains options for chat completion.
-type ChatOptions struct {
+// Options contains options for chat completion.
+type Options struct {
 	// Tools to make available to the model.
 	Tools []tool.Tool
 
