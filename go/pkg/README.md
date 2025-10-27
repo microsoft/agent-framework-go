@@ -39,7 +39,7 @@ type Agent interface {
     ID() string
     Name() string
     Run(ctx, messages, thread, options) (*RunResponse, error)
-    GetNewThread() agent.Thread
+    NewThread() agent.Thread
 }
 ```
 
