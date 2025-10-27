@@ -20,8 +20,8 @@ type Agent[M ~string | any] interface {
 	// Run executes the agent with the given messages and options.
 	Run(ctx context.Context, thread Thread[M], options *RunOptions, messages ...M) (*RunResponse[M], error)
 
-	// GetNewThread creates a new thread for this agent.
-	GetNewThread() Thread[M]
+	// NewThread creates a new thread for this agent.
+	NewThread() Thread[M]
 
 	// DeserializeThread deserializes a thread from JSON.
 	DeserializeThread(data []byte) (Thread[M], error)

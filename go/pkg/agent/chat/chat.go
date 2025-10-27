@@ -108,8 +108,8 @@ func (a *Agent) RunStream(ctx context.Context, t agent.Thread[*Message], options
 	}
 }
 
-// GetNewThread creates a new thread for this agent.
-func (a *Agent) GetNewThread() agent.Thread[*Message] {
+// NewThread creates a new thread for this agent.
+func (a *Agent) NewThread() agent.Thread[*Message] {
 	return agent.NewInMemoryThread[*Message]()
 }
 
