@@ -5,8 +5,6 @@ package agent
 import (
 	"context"
 	"iter"
-
-	"github.com/microsoft/agent-framework/go/pkg/tool"
 )
 
 // Agent represents an AI agent that can process messages and generate responses.
@@ -66,10 +64,10 @@ func RunStream[M any](ctx context.Context, agent Agent[M], thread Thread[M], opt
 // RunOptions contains options for agent execution.
 type RunOptions struct {
 	// Tools to make available to the agent.
-	Tools []tool.Tool
+	Tools []Tool
 
 	// ToolMode specifies how tools should be used.
-	ToolMode tool.Mode
+	ToolMode ToolMode
 
 	// MaxTurns limits the number of agent turns.
 	MaxTurns int

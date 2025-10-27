@@ -6,7 +6,7 @@ import (
 	"context"
 	"iter"
 
-	"github.com/microsoft/agent-framework/go/pkg/tool"
+	"github.com/microsoft/agent-framework/go/pkg/agent"
 )
 
 // Client represents a client for chat completions.
@@ -49,10 +49,10 @@ func completeStream(ctx context.Context, client Client, options *Options, messag
 // Options contains options for chat completion.
 type Options struct {
 	// Tools to make available to the model.
-	Tools []tool.Tool
+	Tools []agent.Tool
 
 	// ToolMode specifies how tools should be used.
-	ToolMode tool.Mode
+	ToolMode agent.ToolMode
 
 	// Temperature controls randomness (0.0 to 2.0).
 	Temperature *float64
