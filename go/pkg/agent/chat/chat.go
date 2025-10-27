@@ -10,7 +10,6 @@ import (
 	"github.com/microsoft/agent-framework/go/pkg/agent"
 	"github.com/microsoft/agent-framework/go/pkg/client"
 	"github.com/microsoft/agent-framework/go/pkg/message"
-	"github.com/microsoft/agent-framework/go/pkg/thread"
 )
 
 // Agent is an agent that uses a ChatClient to generate responses.
@@ -111,13 +110,13 @@ func (a *Agent) RunStream(ctx context.Context, t agent.Thread, options *agent.Ru
 
 // GetNewThread creates a new thread for this agent.
 func (a *Agent) GetNewThread() agent.Thread {
-	return thread.NewInMemoryThread()
+	return agent.NewInMemoryThread()
 }
 
 // DeserializeThread deserializes a thread from JSON.
 func (a *Agent) DeserializeThread(data []byte) (agent.Thread, error) {
 	// TODO: Implement JSON deserialization
-	return thread.NewInMemoryThread(), nil
+	return agent.NewInMemoryThread(), nil
 }
 
 // prepareMessages adds system instructions to the message list.
