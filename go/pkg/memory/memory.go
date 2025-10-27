@@ -5,7 +5,7 @@ package memory
 import (
 	"context"
 
-	"github.com/microsoft/agent-framework/golang/pkg/message"
+	"github.com/microsoft/agent-framework/go/pkg/message"
 )
 
 // ContextProvider provides additional context to agents.

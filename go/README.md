@@ -21,7 +21,7 @@ This SDK provides a comprehensive framework for building, orchestrating, and dep
 ## Installation
 
 ```bash
-go get github.com/microsoft/agent-framework/golang
+go get github.com/microsoft/agent-framework/go
 ```
 
 ## Quick Start
@@ -34,8 +34,8 @@ import (
     "fmt"
     "log"
     
-    "github.com/microsoft/agent-framework/golang/pkg/agent"
-    "github.com/microsoft/agent-framework/golang/pkg/client"
+    "github.com/microsoft/agent-framework/go/pkg/agent"
+    "github.com/microsoft/agent-framework/go/pkg/client"
 )
 
 func main() {
@@ -92,7 +92,7 @@ golang/
 - [Agent Guide](docs/agents.md)
 - [Workflow Guide](docs/workflows.md)
 - [Tools & Functions](docs/tools.md)
-- [API Reference](https://pkg.go.dev/github.com/microsoft/agent-framework/golang)
+- [API Reference](https://pkg.go.dev/github.com/microsoft/agent-framework/go)
 
 ## Contributing
 

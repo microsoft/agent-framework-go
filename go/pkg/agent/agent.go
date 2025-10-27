@@ -5,10 +5,10 @@ package agent
 import (
 	"context"
 
-	"github.com/microsoft/agent-framework/golang/pkg/message"
-	"github.com/microsoft/agent-framework/golang/pkg/thread"
-	"github.com/microsoft/agent-framework/golang/pkg/tool"
-	"github.com/microsoft/agent-framework/golang/pkg/types"
+	"github.com/microsoft/agent-framework/go/pkg/message"
+	"github.com/microsoft/agent-framework/go/pkg/thread"
+	"github.com/microsoft/agent-framework/go/pkg/tool"
+	"github.com/microsoft/agent-framework/go/pkg/types"
 )
 
 // Agent represents an AI agent that can process messages and generate responses.

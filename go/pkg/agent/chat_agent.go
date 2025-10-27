@@ -6,9 +6,9 @@ import (
 	"context"
 
 	"github.com/google/uuid"
-	"github.com/microsoft/agent-framework/golang/pkg/client"
-	"github.com/microsoft/agent-framework/golang/pkg/message"
-	"github.com/microsoft/agent-framework/golang/pkg/thread"
+	"github.com/microsoft/agent-framework/go/pkg/client"
+	"github.com/microsoft/agent-framework/go/pkg/message"
+	"github.com/microsoft/agent-framework/go/pkg/thread"
 )
 
 // ChatAgent is an agent that uses a ChatClient to generate responses.

@@ -94,8 +94,8 @@ package main
 
 import (
     "context"
-    "github.com/microsoft/agent-framework/golang/pkg/agent"
-    "github.com/microsoft/agent-framework/golang/pkg/client"
+    "github.com/microsoft/agent-framework/go/pkg/agent"
+    "github.com/microsoft/agent-framework/go/pkg/client"
 )
 
 func main() {
