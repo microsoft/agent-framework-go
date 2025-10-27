@@ -53,15 +53,3 @@ type UsageDetails struct {
 	// TotalTokens is the total number of tokens used.
 	TotalTokens int
 }
-
-// Identifiable represents an entity with a unique identifier.
-type Identifiable interface {
-	// ID returns the unique identifier.
-	ID() string
-}
-
-// Nameable represents an entity with a name.
-type Nameable interface {
-	// Name returns the name.
-	Name() string
-}

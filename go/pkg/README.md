@@ -40,7 +40,7 @@ type Agent interface {
     Name() string
     Run(ctx, messages, thread, options) (*RunResponse, error)
     RunStream(ctx, messages, thread, options) iter.Seq2[*RunResponseUpdate, error]
-    GetNewThread() AgentThread
+    GetNewThread() agent.Thread
 }
 ```
 
@@ -60,7 +60,7 @@ type ChatClient interface {
 - `FunctionResultContent` - Function results
 
 ### 4. Thread Management
-- `AgentThread` - Conversation state management
+- `Thread` - Conversation state management
 - `InMemoryThread` - In-memory implementation
 
 ### 5. Tools
