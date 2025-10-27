@@ -5,18 +5,18 @@ package agent
 import "context"
 
 // ContextProvider provides additional context to agents.
-type ContextProvider[M ~string | any] interface {
+type ContextProvider[M any] interface {
 	// GetContext retrieves context based on the current messages.
 	GetContext(ctx context.Context, messages ...M) ([]string, error)
 }
 
 // AggregateContextProvider combines multiple context providers.
-type AggregateContextProvider[M ~string | any] struct {
+type AggregateContextProvider[M any] struct {
 	providers []ContextProvider[M]
 }
 
 // NewAggregateContextProvider creates a new AggregateContextProvider.
-func NewAggregateContextProvider[M ~string | any](providers ...ContextProvider[M]) *AggregateContextProvider[M] {
+func NewAggregateContextProvider[M any](providers ...ContextProvider[M]) *AggregateContextProvider[M] {
 	return &AggregateContextProvider[M]{
 		providers: providers,
 	}
@@ -36,7 +36,7 @@ func (a *AggregateContextProvider[M]) GetContext(ctx context.Context, messages .
 }
 
 // MessageStore persists and retrieves messages.
-type MessageStore[M ~string | any] interface {
+type MessageStore[M any] interface {
 	// Save stores messages.
 	Save(ctx context.Context, threadID string, messages ...M) error
 

@@ -5,7 +5,7 @@ package agent
 import "github.com/google/uuid"
 
 // Thread represents a conversation thread that maintains message history.
-type Thread[M ~string | any] interface {
+type Thread[M any] interface {
 	// ID returns the unique identifier.
 	ID() string
 
@@ -23,13 +23,13 @@ type Thread[M ~string | any] interface {
 }
 
 // InMemoryThread is a simple in-memory implementation of [Thread].
-type InMemoryThread[M ~string | any] struct {
+type InMemoryThread[M any] struct {
 	id       string
 	messages []M
 }
 
 // NewInMemoryThread creates a new InMemoryThread.
-func NewInMemoryThread[M ~string | any]() *InMemoryThread[M] {
+func NewInMemoryThread[M any]() *InMemoryThread[M] {
 	return &InMemoryThread[M]{
 		id:       uuid.New().String(),
 		messages: make([]M, 0),

@@ -9,7 +9,7 @@ import (
 )
 
 // AgentMiddleware intercepts agent run requests and responses.
-type AgentMiddleware[M ~string | any] interface {
+type AgentMiddleware[M any] interface {
 	// OnRunStart is called before an agent run.
 	OnRunStart(ctx context.Context, agentCtx *AgentContext[M]) error
 
@@ -21,7 +21,7 @@ type AgentMiddleware[M ~string | any] interface {
 }
 
 // AgentContext contains context for an agent run.
-type AgentContext[M ~string | any] struct {
+type AgentContext[M any] struct {
 	AgentID  string
 	Messages []M
 	Metadata map[string]any
@@ -48,13 +48,13 @@ type FunctionContext struct {
 }
 
 // Pipeline manages a chain of middleware.
-type Pipeline[M ~string | any] struct {
+type Pipeline[M any] struct {
 	agentMiddleware    []AgentMiddleware[M]
 	functionMiddleware []FunctionMiddleware
 }
 
 // NewPipeline creates a new middleware pipeline.
-func NewPipeline[M ~string | any]() *Pipeline[M] {
+func NewPipeline[M any]() *Pipeline[M] {
 	return &Pipeline[M]{
 		agentMiddleware:    make([]AgentMiddleware[M], 0),
 		functionMiddleware: make([]FunctionMiddleware, 0),
