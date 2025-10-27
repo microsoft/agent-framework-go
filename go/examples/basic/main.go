@@ -88,7 +88,7 @@ func main() {
 
 	// Example with streaming
 	fmt.Println("\n--- Streaming Example ---")
-	for update := range myAgent.RunStream(ctx, nil, nil, userMessage) {
+	for update := range agent.RunStream(ctx, myAgent, nil, nil, userMessage) {
 		if update.Delta != nil {
 			for _, content := range update.Delta.Contents {
 				if textContent, ok := content.(*message.TextContent); ok {
