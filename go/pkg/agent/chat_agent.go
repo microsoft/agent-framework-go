@@ -74,7 +74,7 @@ func (a *ChatAgent) Run(ctx context.Context, t Thread, options *RunOptions, mess
 		Message:      response.Message,
 		FinishReason: response.FinishReason,
 		Usage:        response.Usage,
-		ThreadID:     a.getThreadID(t),
+		ThreadID:     getThreadID(t),
 		ModelID:      response.ModelID,
 	}, nil
 }
@@ -88,7 +88,7 @@ func (a *ChatAgent) RunStream(ctx context.Context, t Thread, options *RunOptions
 	chatOptions := a.convertOptions(options)
 
 	// Call the chat client for streaming
-	tID := a.getThreadID(t)
+	tID := getThreadID(t)
 	return func(yield func(*RunResponseUpdate, error) bool) {
 		for resp, err := range a.chatClient.CompleteStream(ctx, chatOptions, allMessages...) {
 			var runResp *RunResponseUpdate
@@ -149,7 +149,7 @@ func (a *ChatAgent) convertOptions(options *RunOptions) *client.ChatOptions {
 }
 
 // getThreadID returns the thread ID or empty string if no thread.
-func (a *ChatAgent) getThreadID(t Thread) string {
+func getThreadID(t Thread) string {
 	if t == nil {
 		return ""
 	}

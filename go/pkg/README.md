@@ -39,7 +39,6 @@ type Agent interface {
     ID() string
     Name() string
     Run(ctx, messages, thread, options) (*RunResponse, error)
-    RunStream(ctx, messages, thread, options) iter.Seq2[*RunResponseUpdate, error]
     GetNewThread() agent.Thread
 }
 ```
