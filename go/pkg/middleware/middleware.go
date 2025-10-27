@@ -5,7 +5,7 @@ package middleware
 import (
 	"context"
 
-	"github.com/microsoft/agent-framework/go/pkg/tool"
+	"github.com/microsoft/agent-framework/go/pkg/agent"
 )
 
 // AgentMiddleware intercepts agent run requests and responses.
@@ -41,7 +41,7 @@ type FunctionMiddleware interface {
 
 // FunctionContext contains context for a function call.
 type FunctionContext struct {
-	Tool      tool.Tool
+	Tool      agent.Tool
 	Arguments string
 	CallID    string
 	Metadata  map[string]any

@@ -11,6 +11,7 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/param"
+	"github.com/openai/openai-go/v3/shared"
 )
 
 // ChatClient is a Client implementation for OpenAI.
@@ -58,6 +59,10 @@ func (c *ChatClient) Complete(ctx context.Context, options *chat.Options, messag
 		return nil, err
 	}
 	choice := resp.Choices[0]
+	if len(choice.Message.ToolCalls) > 0 {
+		// Handle tool calls
+
+	}
 	return &chat.Response{
 		Message:      chat.NewMessage(agent.Role(choice.Message.Role), choice.Message.Content),
 		FinishReason: agent.FinishReason(choice.FinishReason),
@@ -113,8 +118,21 @@ func (c *ChatClient) buildCompletionParams(options *chat.Options, messages ...*c
 		if options.MaxTokens != nil {
 			params.MaxTokens = openai.Int(int64(*options.MaxTokens))
 		}
+		for _, tool := range options.Tools {
+			params.Tools = append(params.Tools, openai.ChatCompletionToolUnionParam{
+				OfFunction: &openai.ChatCompletionFunctionToolParam{
+					Function: shared.FunctionDefinitionParam{
+						Name:        tool.Name,
+						Description: param.NewOpt(tool.Description),
+						Parameters:  tool.Schema,
+					},
+				},
+			})
+		}
+		params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
+			OfAuto: openai.String(string(options.ToolMode)),
+		}
 	}
-
 	return params
 }
 
