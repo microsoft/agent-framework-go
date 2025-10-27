@@ -4,6 +4,7 @@ package client
 
 import (
 	"context"
+	"iter"
 
 	"github.com/microsoft/agent-framework/go/pkg/message"
 )
@@ -47,11 +48,10 @@ func (c *OpenAIChatClient) Complete(ctx context.Context, messages []*message.Cha
 }
 
 // CompleteStream generates a streaming response for the given messages.
-func (c *OpenAIChatClient) CompleteStream(ctx context.Context, messages []*message.ChatMessage, options *ChatOptions) (<-chan *message.ChatResponseUpdate, error) {
-	// TODO: Implement OpenAI streaming API call
-	responseChan := make(chan *message.ChatResponseUpdate)
-	close(responseChan)
-	return responseChan, nil
+func (c *OpenAIChatClient) CompleteStream(ctx context.Context, messages []*message.ChatMessage, options *ChatOptions) iter.Seq2[*message.ChatResponseUpdate, error] {
+	return func(yield func(*message.ChatResponseUpdate, error) bool) {
+		// TODO: Implement OpenAI streaming API call
+	}
 }
 
 // AzureOpenAIChatClient is a ChatClient implementation for Azure OpenAI.
@@ -91,9 +91,8 @@ func (c *AzureOpenAIChatClient) Complete(ctx context.Context, messages []*messag
 }
 
 // CompleteStream generates a streaming response for the given messages.
-func (c *AzureOpenAIChatClient) CompleteStream(ctx context.Context, messages []*message.ChatMessage, options *ChatOptions) (<-chan *message.ChatResponseUpdate, error) {
-	// TODO: Implement Azure OpenAI streaming API call
-	responseChan := make(chan *message.ChatResponseUpdate)
-	close(responseChan)
-	return responseChan, nil
+func (c *AzureOpenAIChatClient) CompleteStream(ctx context.Context, messages []*message.ChatMessage, options *ChatOptions) iter.Seq2[*message.ChatResponseUpdate, error] {
+	return func(yield func(*message.ChatResponseUpdate, error) bool) {
+		// TODO: Implement Azure OpenAI streaming API call
+	}
 }

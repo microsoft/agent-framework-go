@@ -4,6 +4,7 @@ package agent
 
 import (
 	"context"
+	"iter"
 
 	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework/go/pkg/client"
@@ -79,7 +80,7 @@ func (a *ChatAgent) Run(ctx context.Context, messages []*message.ChatMessage, t 
 }
 
 // RunStream executes the agent and streams responses.
-func (a *ChatAgent) RunStream(ctx context.Context, messages []*message.ChatMessage, t thread.AgentThread, options *RunOptions) (<-chan *RunResponseUpdate, error) {
+func (a *ChatAgent) RunStream(ctx context.Context, messages []*message.ChatMessage, t thread.AgentThread, options *RunOptions) iter.Seq2[*RunResponseUpdate, error] {
 	// Prepare messages with system instructions
 	allMessages := a.prepareMessages(messages)
 
@@ -87,27 +88,24 @@ func (a *ChatAgent) RunStream(ctx context.Context, messages []*message.ChatMessa
 	chatOptions := a.convertOptions(options)
 
 	// Call the chat client for streaming
-	responseChan, err := a.chatClient.CompleteStream(ctx, allMessages, chatOptions)
-	if err != nil {
-		return nil, err
-	}
-
-	// Convert chat responses to run responses
-	runResponseChan := make(chan *RunResponseUpdate)
-	go func() {
-		defer close(runResponseChan)
-		for update := range responseChan {
-			runResponseChan <- &RunResponseUpdate{
-				Delta:        update.Delta,
-				FinishReason: update.FinishReason,
-				Usage:        update.Usage,
-				ThreadID:     a.getThreadID(t),
-				ModelID:      update.ModelID,
+	tID := a.getThreadID(t)
+	return func(yield func(*RunResponseUpdate, error) bool) {
+		for resp, err := range a.chatClient.CompleteStream(ctx, allMessages, chatOptions) {
+			var runResp *RunResponseUpdate
+			if resp != nil {
+				runResp = &RunResponseUpdate{
+					Delta:        resp.Delta,
+					FinishReason: resp.FinishReason,
+					Usage:        resp.Usage,
+					ThreadID:     tID,
+					ModelID:      resp.ModelID,
+				}
+			}
+			if !yield(runResp, err) {
+				return
 			}
 		}
-	}()
-
-	return runResponseChan, nil
+	}
 }
 
 // GetNewThread creates a new thread for this agent.

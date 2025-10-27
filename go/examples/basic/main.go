@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"iter"
 	"log"
 
 	"github.com/microsoft/agent-framework/go/pkg/agent"
@@ -31,13 +32,9 @@ func (m *mockChatClient) Complete(ctx context.Context, messages []*message.ChatM
 }
 
 // CompleteStream implements the ChatClient interface for streaming.
-func (m *mockChatClient) CompleteStream(ctx context.Context, messages []*message.ChatMessage, options *client.ChatOptions) (<-chan *message.ChatResponseUpdate, error) {
-	updateChan := make(chan *message.ChatResponseUpdate, 1)
-
-	go func() {
-		defer close(updateChan)
-
-		updateChan <- &message.ChatResponseUpdate{
+func (m *mockChatClient) CompleteStream(ctx context.Context, messages []*message.ChatMessage, options *client.ChatOptions) iter.Seq2[*message.ChatResponseUpdate, error] {
+	resp := []*message.ChatResponseUpdate{
+		{
 			Delta:        message.NewChatMessage(types.RoleAssistant, "Hello! This is a streaming mock response."),
 			FinishReason: types.FinishReasonStop,
 			Usage: &types.UsageDetails{
@@ -46,10 +43,15 @@ func (m *mockChatClient) CompleteStream(ctx context.Context, messages []*message
 				TotalTokens:      19,
 			},
 			ModelID: "mock-model",
+		},
+	}
+	return func(yield func(*message.ChatResponseUpdate, error) bool) {
+		for _, r := range resp {
+			if !yield(r, nil) {
+				return
+			}
 		}
-	}()
-
-	return updateChan, nil
+	}
 }
 
 func main() {
@@ -86,12 +88,7 @@ func main() {
 
 	// Example with streaming
 	fmt.Println("\n--- Streaming Example ---")
-	streamChan, err := myAgent.RunStream(ctx, []*message.ChatMessage{userMessage}, nil, nil)
-	if err != nil {
-		log.Fatalf("Error starting stream: %v", err)
-	}
-
-	for update := range streamChan {
+	for update := range myAgent.RunStream(ctx, []*message.ChatMessage{userMessage}, nil, nil) {
 		if update.Delta != nil {
 			for _, content := range update.Delta.Contents {
 				if textContent, ok := content.(*message.TextContent); ok {
