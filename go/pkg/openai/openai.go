@@ -21,14 +21,17 @@ type ChatClient struct {
 
 // ChatClientConfig contains configuration for OpenAIChatClient.
 type ChatClientConfig struct {
-	APIKey   string
 	Model    string
+	APIKey   string // Optional, if not set will use default environment variable
 	Endpoint string // Optional, defaults to OpenAI API
 }
 
-// NewOpenAIChatClient creates a new OpenAIChatClient.
-func NewOpenAIChatClient(config ChatClientConfig) (*ChatClient, error) {
-	ops := []option.RequestOption{option.WithAPIKey(config.APIKey)}
+// NewChatClient creates a new OpenAIChatClient.
+func NewChatClient(config ChatClientConfig) *ChatClient {
+	ops := make([]option.RequestOption, 0, 2)
+	if config.APIKey != "" {
+		ops = append(ops, option.WithAPIKey(config.APIKey))
+	}
 	if config.Endpoint != "" {
 		ops = append(ops, option.WithBaseURL(config.Endpoint))
 	}
@@ -36,7 +39,16 @@ func NewOpenAIChatClient(config ChatClientConfig) (*ChatClient, error) {
 	return &ChatClient{
 		BaseChatClient: chat.NewBaseChatClient(config.Model),
 		client:         &client,
-	}, nil
+	}
+}
+
+// NewAgent creates a new agent that uses this chat client.
+func (c *ChatClient) NewAgent(instructions string) agent.Agent[*chat.Message] {
+	return chat.New(chat.Config{
+		Name:         "OpenAI Chat Agent",
+		Instructions: instructions,
+		Client:       c,
+	})
 }
 
 // Complete generates a single response for the given messages.

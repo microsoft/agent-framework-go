@@ -1,0 +1,45 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	"github.com/microsoft/agent-framework/go/pkg/agent"
+	"github.com/microsoft/agent-framework/go/pkg/agent/chat"
+	"github.com/microsoft/agent-framework/go/pkg/openai"
+)
+
+func main() {
+	client := openai.NewChatClient(openai.ChatClientConfig{
+		Model: "gpt-5-nano",
+	})
+	ag := client.NewAgent("You are a helpful weather agent.")
+
+	nonStreamingExample(ag, "What's the weather like in Seattle?")
+	streamingExample(ag, "What's the weather like in Portland?")
+}
+
+func nonStreamingExample(ag agent.Agent[*chat.Message], query string) {
+	ctx := context.Background()
+	log.Printf("=== Non-streaming Response Example ===\n")
+	log.Printf("User: %s\n", query)
+	resp, err := ag.Run(ctx, nil, nil, chat.NewMessage(agent.RoleUser, query))
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("Result: %s\n", resp.Message.Text())
+}
+
+func streamingExample(ag agent.Agent[*chat.Message], query string) {
+	ctx := context.Background()
+	log.Printf("=== Streaming Response Example ===\n")
+	log.Printf("User: %s\n", query)
+	stream := agent.RunStream(ctx, ag, nil, nil, chat.NewMessage(agent.RoleUser, query))
+	for update := range stream {
+		if update.Delta != nil {
+			fmt.Print(update.Delta.Text())
+		}
+	}
+	fmt.Print("\n")
+}
