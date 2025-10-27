@@ -6,12 +6,13 @@ import (
 	"context"
 	"iter"
 
+	"github.com/microsoft/agent-framework/go/pkg/agent/chat"
 	"github.com/microsoft/agent-framework/go/pkg/message"
 )
 
 // OpenAIChatClient is a ChatClient implementation for OpenAI.
 type OpenAIChatClient struct {
-	*BaseChatClient
+	*chat.BaseChatClient
 	apiKey   string
 	endpoint string
 }
@@ -31,14 +32,14 @@ func NewOpenAIChatClient(config OpenAIChatClientConfig) (*OpenAIChatClient, erro
 	}
 
 	return &OpenAIChatClient{
-		BaseChatClient: NewBaseChatClient(config.Model),
+		BaseChatClient: chat.NewBaseChatClient(config.Model),
 		apiKey:         config.APIKey,
 		endpoint:       endpoint,
 	}, nil
 }
 
 // Complete generates a single response for the given messages.
-func (c *OpenAIChatClient) Complete(ctx context.Context, options *ChatOptions, messages ...*message.ChatMessage) (*message.ChatResponse, error) {
+func (c *OpenAIChatClient) Complete(ctx context.Context, options *chat.Options, messages ...*message.ChatMessage) (*message.ChatResponse, error) {
 	// TODO: Implement OpenAI API call
 	return &message.ChatResponse{
 		Message:      message.NewChatMessage("assistant", "Not implemented"),
@@ -48,7 +49,7 @@ func (c *OpenAIChatClient) Complete(ctx context.Context, options *ChatOptions, m
 }
 
 // CompleteStream generates a streaming response for the given messages.
-func (c *OpenAIChatClient) CompleteStream(ctx context.Context, options *ChatOptions, messages ...*message.ChatMessage) iter.Seq2[*message.ChatResponseUpdate, error] {
+func (c *OpenAIChatClient) CompleteStream(ctx context.Context, options *chat.Options, messages ...*message.ChatMessage) iter.Seq2[*message.ChatResponseUpdate, error] {
 	return func(yield func(*message.ChatResponseUpdate, error) bool) {
 		// TODO: Implement OpenAI streaming API call
 	}
@@ -56,7 +57,7 @@ func (c *OpenAIChatClient) CompleteStream(ctx context.Context, options *ChatOpti
 
 // AzureOpenAIChatClient is a ChatClient implementation for Azure OpenAI.
 type AzureOpenAIChatClient struct {
-	*BaseChatClient
+	*chat.BaseChatClient
 	apiKey         string
 	endpoint       string
 	deploymentName string
@@ -73,7 +74,7 @@ type AzureOpenAIChatClientConfig struct {
 // NewAzureOpenAIChatClient creates a new AzureOpenAIChatClient.
 func NewAzureOpenAIChatClient(config AzureOpenAIChatClientConfig) (*AzureOpenAIChatClient, error) {
 	return &AzureOpenAIChatClient{
-		BaseChatClient: NewBaseChatClient(config.Model),
+		BaseChatClient: chat.NewBaseChatClient(config.Model),
 		apiKey:         config.APIKey,
 		endpoint:       config.Endpoint,
 		deploymentName: config.DeploymentName,
@@ -81,7 +82,7 @@ func NewAzureOpenAIChatClient(config AzureOpenAIChatClientConfig) (*AzureOpenAIC
 }
 
 // Complete generates a single response for the given messages.
-func (c *AzureOpenAIChatClient) Complete(ctx context.Context, options *ChatOptions, messages ...*message.ChatMessage) (*message.ChatResponse, error) {
+func (c *AzureOpenAIChatClient) Complete(ctx context.Context, options *chat.Options, messages ...*message.ChatMessage) (*message.ChatResponse, error) {
 	// TODO: Implement Azure OpenAI API call
 	return &message.ChatResponse{
 		Message:      message.NewChatMessage("assistant", "Not implemented"),
@@ -91,7 +92,7 @@ func (c *AzureOpenAIChatClient) Complete(ctx context.Context, options *ChatOptio
 }
 
 // CompleteStream generates a streaming response for the given messages.
-func (c *AzureOpenAIChatClient) CompleteStream(ctx context.Context, options *ChatOptions, messages ...*message.ChatMessage) iter.Seq2[*message.ChatResponseUpdate, error] {
+func (c *AzureOpenAIChatClient) CompleteStream(ctx context.Context, options *chat.Options, messages ...*message.ChatMessage) iter.Seq2[*message.ChatResponseUpdate, error] {
 	return func(yield func(*message.ChatResponseUpdate, error) bool) {
 		// TODO: Implement Azure OpenAI streaming API call
 	}

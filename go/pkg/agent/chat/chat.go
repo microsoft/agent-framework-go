@@ -8,23 +8,22 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework/go/pkg/agent"
-	"github.com/microsoft/agent-framework/go/pkg/client"
 	"github.com/microsoft/agent-framework/go/pkg/message"
 )
 
-// Agent is an agent that uses a ChatClient to generate responses.
+// Agent is an agent that uses a [Client] to generate responses.
 type Agent struct {
 	id           string
 	name         string
 	instructions string
-	client       client.ChatClient
+	client       Client
 }
 
 // Config contains configuration for creating a [Agent].
 type Config struct {
 	Name         string
 	Instructions string
-	Client       client.ChatClient
+	Client       Client
 }
 
 // New creates a new [Agent].
@@ -90,7 +89,7 @@ func (a *Agent) RunStream(ctx context.Context, t agent.Thread, options *agent.Ru
 	// Call the chat client for streaming
 	tID := getThreadID(t)
 	return func(yield func(*agent.RunResponseUpdate, error) bool) {
-		for resp, err := range client.CompleteStream(ctx, a.client, chatOptions, allMessages...) {
+		for resp, err := range completeStream(ctx, a.client, chatOptions, allMessages...) {
 			var runResp *agent.RunResponseUpdate
 			if resp != nil {
 				runResp = &agent.RunResponseUpdate{
@@ -133,12 +132,12 @@ func (a *Agent) prepareMessages(messages []*message.ChatMessage) []*message.Chat
 }
 
 // convertOptions converts RunOptions to ChatOptions.
-func (a *Agent) convertOptions(options *agent.RunOptions) *client.ChatOptions {
+func (a *Agent) convertOptions(options *agent.RunOptions) *Options {
 	if options == nil {
 		return nil
 	}
 
-	return &client.ChatOptions{
+	return &Options{
 		Tools:              options.Tools,
 		ToolMode:           options.ToolMode,
 		Temperature:        options.Temperature,

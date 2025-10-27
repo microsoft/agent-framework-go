@@ -10,7 +10,6 @@ import (
 
 	"github.com/microsoft/agent-framework/go/pkg/agent"
 	"github.com/microsoft/agent-framework/go/pkg/agent/chat"
-	"github.com/microsoft/agent-framework/go/pkg/client"
 	"github.com/microsoft/agent-framework/go/pkg/message"
 	"github.com/microsoft/agent-framework/go/pkg/types"
 )
@@ -19,7 +18,7 @@ import (
 type mockChatClient struct{}
 
 // Complete implements the ChatClient interface.
-func (m *mockChatClient) Complete(ctx context.Context, options *client.ChatOptions, messages ...*message.ChatMessage) (*message.ChatResponse, error) {
+func (m *mockChatClient) Complete(ctx context.Context, options *chat.Options, messages ...*message.ChatMessage) (*message.ChatResponse, error) {
 	return &message.ChatResponse{
 		Message:      message.NewChatMessage(types.RoleAssistant, "Hello! This is a mock response."),
 		FinishReason: types.FinishReasonStop,
@@ -33,7 +32,7 @@ func (m *mockChatClient) Complete(ctx context.Context, options *client.ChatOptio
 }
 
 // CompleteStream implements the ChatClient interface for streaming.
-func (m *mockChatClient) CompleteStream(ctx context.Context, options *client.ChatOptions, messages ...*message.ChatMessage) iter.Seq2[*message.ChatResponseUpdate, error] {
+func (m *mockChatClient) CompleteStream(ctx context.Context, options *chat.Options, messages ...*message.ChatMessage) iter.Seq2[*message.ChatResponseUpdate, error] {
 	resp := []*message.ChatResponseUpdate{
 		{
 			Delta:        message.NewChatMessage(types.RoleAssistant, "Hello! This is a streaming mock response."),
