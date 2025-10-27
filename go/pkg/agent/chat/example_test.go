@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package main
+package chat_test
 
 import (
 	"context"
@@ -55,7 +55,7 @@ func (m *mockChatClient) CompleteStream(ctx context.Context, options *client.Cha
 	}
 }
 
-func main() {
+func Example() {
 	ctx := context.Background()
 
 	// Create a mock chat client
@@ -68,8 +68,6 @@ func main() {
 		Client:       chatClient,
 	})
 
-	fmt.Printf("Created agent: %s (ID: %s)\n", myAgent.Name(), myAgent.ID())
-
 	// Create a message
 	userMessage := message.NewChatMessage(types.RoleUser, "Hello, how are you?")
 
@@ -80,7 +78,7 @@ func main() {
 	}
 
 	// Print the response
-	fmt.Printf("\nAgent Response:\n%s\n", response.Text())
+	fmt.Printf("\nAgent Response: %s\n", response.Text())
 	fmt.Printf("Model ID: %s\n", response.ModelID)
 	fmt.Printf("Usage: %d prompt + %d completion = %d total tokens\n",
 		response.Usage.PromptTokens,
@@ -102,4 +100,15 @@ func main() {
 		}
 	}
 	fmt.Println("\nStreaming completed")
+
+	// Output:
+	// Agent Response: Hello! This is a mock response.
+	// Model ID: mock-model
+	// Usage: 10 prompt + 8 completion = 18 total tokens
+	//
+	// --- Streaming Example ---
+	// Streaming: Hello! This is a streaming mock response.
+	// Finished: stop
+	//
+	// Streaming completed
 }
