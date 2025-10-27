@@ -68,7 +68,7 @@ func main() {
 ## Project Structure
 
 ```
-golang/
+go/
 ├── pkg/              # Public API packages
 │   ├── agent/        # Agent abstractions and implementations
 │   ├── thread/       # Conversation thread management
