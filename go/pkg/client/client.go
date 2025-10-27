@@ -4,6 +4,7 @@ package client
 
 import (
 	"context"
+	"iter"
 
 	"github.com/microsoft/agent-framework/go/pkg/message"
 	"github.com/microsoft/agent-framework/go/pkg/tool"
@@ -16,7 +17,7 @@ type ChatClient interface {
 	Complete(ctx context.Context, messages []*message.ChatMessage, options *ChatOptions) (*message.ChatResponse, error)
 
 	// CompleteStream generates a streaming response for the given messages.
-	CompleteStream(ctx context.Context, messages []*message.ChatMessage, options *ChatOptions) (<-chan *message.ChatResponseUpdate, error)
+	CompleteStream(ctx context.Context, messages []*message.ChatMessage, options *ChatOptions) iter.Seq2[*message.ChatResponseUpdate, error]
 }
 
 // ChatOptions contains options for chat completion.

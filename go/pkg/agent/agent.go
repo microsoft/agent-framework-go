@@ -4,6 +4,7 @@ package agent
 
 import (
 	"context"
+	"iter"
 
 	"github.com/microsoft/agent-framework/go/pkg/message"
 	"github.com/microsoft/agent-framework/go/pkg/thread"
@@ -20,7 +21,7 @@ type Agent interface {
 	Run(ctx context.Context, messages []*message.ChatMessage, thread thread.AgentThread, options *RunOptions) (*RunResponse, error)
 
 	// RunStream executes the agent and streams responses.
-	RunStream(ctx context.Context, messages []*message.ChatMessage, thread thread.AgentThread, options *RunOptions) (<-chan *RunResponseUpdate, error)
+	RunStream(ctx context.Context, messages []*message.ChatMessage, thread thread.AgentThread, options *RunOptions) iter.Seq2[*RunResponseUpdate, error]
 
 	// GetNewThread creates a new thread for this agent.
 	GetNewThread() thread.AgentThread

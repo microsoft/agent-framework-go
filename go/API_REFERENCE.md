@@ -46,7 +46,7 @@ type Agent interface {
     DisplayName() string
     Description() string
     Run(ctx context.Context, messages []*message.ChatMessage, thread AgentThread, options *RunOptions) (*RunResponse, error)
-    RunStream(ctx context.Context, messages []*message.ChatMessage, thread AgentThread, options *RunOptions) (<-chan *RunResponseUpdate, <-chan error)
+    RunStream(ctx context.Context, messages []*message.ChatMessage, thread AgentThread, options *RunOptions) iter.Seq2[*RunResponseUpdate, error]
     GetNewThread() AgentThread
     DeserializeThread(data map[string]interface{}) (AgentThread, error)
     GetService(serviceType string, serviceKey interface{}) (interface{}, error)
@@ -180,7 +180,7 @@ func NewInMemoryThread() *InMemoryThread
 ```go
 type ChatClient interface {
     GetResponse(ctx context.Context, messages []*message.ChatMessage, options *ChatOptions) (*message.ChatResponse, error)
-    GetStreamingResponse(ctx context.Context, messages []*message.ChatMessage, options *ChatOptions) (<-chan *message.ChatResponseUpdate, <-chan error)
+    GetStreamingResponse(ctx context.Context, messages []*message.ChatMessage, options *ChatOptions) iter.Seq2[*RunResponseUpdate, error]
 }
 ```
 
@@ -268,7 +268,7 @@ func NewFunction(config FunctionConfig) *Function
 ```go
 type Workflow interface {
     Run(ctx context.Context, input interface{}, options *RunOptions) (*RunResult, error)
-    RunStream(ctx context.Context, input interface{}, options *RunOptions) (<-chan *RunUpdate, <-chan error)
+    RunStream(ctx context.Context, input interface{}, options *RunOptions) iter.Seq2[*RunResponseUpdate, error]
 }
 ```
 
@@ -460,28 +460,6 @@ func NewThreadError(threadID, message string, cause error) *ThreadError
 ---
 
 ## Design Patterns
-
-### Streaming Pattern
-
-```go
-updateChan, errChan := agent.RunStream(ctx, messages, thread, options)
-
-for {
-    select {
-    case update, ok := <-updateChan:
-        if !ok {
-            return
-        }
-        // Process update
-    case err := <-errChan:
-        if err != nil {
-            // Handle error
-        }
-    case <-ctx.Done():
-        // Handle cancellation
-    }
-}
-```
 
 ### Context Pattern
 

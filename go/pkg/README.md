@@ -39,7 +39,7 @@ type Agent interface {
     ID() string
     Name() string
     Run(ctx, messages, thread, options) (*RunResponse, error)
-    RunStream(ctx, messages, thread, options) (<-chan *RunResponseUpdate, <-chan error)
+    RunStream(ctx, messages, thread, options) iter.Seq2[*RunResponseUpdate, error]
     GetNewThread() AgentThread
 }
 ```
@@ -48,7 +48,7 @@ type Agent interface {
 ```go
 type ChatClient interface {
     GetResponse(ctx, messages, options) (*ChatResponse, error)
-    GetStreamingResponse(ctx, messages, options) (<-chan *ChatResponseUpdate, <-chan error)
+    GetStreamingResponse(ctx, messages, options) iter.Seq2[*RunResponseUpdate, error]
 }
 ```
 

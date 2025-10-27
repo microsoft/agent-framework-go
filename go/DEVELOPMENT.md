@@ -162,8 +162,7 @@ pkg/
    - Make options optional where possible
 
 3. **Streaming**
-   - Return `(<-chan T, <-chan error)` for streaming
-   - Close channels when done
+   - Return `iter.Seq2[*RunResponseUpdate, error]` for streaming
    - Handle context cancellation
 
 4. **Errors**
