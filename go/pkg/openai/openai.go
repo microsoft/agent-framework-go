@@ -6,14 +6,17 @@ import (
 	"context"
 	"iter"
 
+	"github.com/microsoft/agent-framework/go/pkg/agent"
 	"github.com/microsoft/agent-framework/go/pkg/agent/chat"
+	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/packages/param"
 )
 
 // ChatClient is a Client implementation for OpenAI.
 type ChatClient struct {
 	*chat.BaseChatClient
-	apiKey   string
-	endpoint string
+	client *openai.Client
 }
 
 // ChatClientConfig contains configuration for OpenAIChatClient.
@@ -25,25 +28,43 @@ type ChatClientConfig struct {
 
 // NewOpenAIChatClient creates a new OpenAIChatClient.
 func NewOpenAIChatClient(config ChatClientConfig) (*ChatClient, error) {
-	endpoint := config.Endpoint
-	if endpoint == "" {
-		endpoint = "https://api.openai.com/v1"
+	ops := []option.RequestOption{option.WithAPIKey(config.APIKey)}
+	if config.Endpoint != "" {
+		ops = append(ops, option.WithBaseURL(config.Endpoint))
 	}
-
+	client := openai.NewClient(ops...)
 	return &ChatClient{
 		BaseChatClient: chat.NewBaseChatClient(config.Model),
-		apiKey:         config.APIKey,
-		endpoint:       endpoint,
+		client:         &client,
 	}, nil
 }
 
 // Complete generates a single response for the given messages.
 func (c *ChatClient) Complete(ctx context.Context, options *chat.Options, messages ...*chat.Message) (*chat.Response, error) {
-	// TODO: Implement OpenAI API call
+	oaiMsgs := make([]openai.ChatCompletionMessageParamUnion, 0, len(messages))
+	for _, msg := range messages {
+		// TODO: support roles, content types, and multiple messages
+		oaiMsgs = append(oaiMsgs, openai.ChatCompletionMessageParamUnion{
+			OfUser: &openai.ChatCompletionUserMessageParam{
+				Content: openai.ChatCompletionUserMessageParamContentUnion{
+					OfString: param.NewOpt(msg.Text()),
+				},
+			},
+		})
+	}
+	resp, err := c.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
+		Model:    c.ModelID,
+		N:        openai.Int(1),
+		Messages: oaiMsgs,
+	})
+	if err != nil {
+		return nil, err
+	}
+	choise := resp.Choices[0]
 	return &chat.Response{
-		Message:      chat.NewMessage("assistant", "Not implemented"),
-		FinishReason: "stop",
-		ModelID:      c.ModelID,
+		Message:      chat.NewMessage(agent.Role(choise.Message.Role), choise.Message.Content),
+		FinishReason: agent.FinishReason(choise.FinishReason),
+		ModelID:      resp.Model,
 	}, nil
 }
 
