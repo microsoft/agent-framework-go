@@ -1,10 +1,6 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package message
-
-import (
-	"github.com/microsoft/agent-framework/go/pkg/types"
-)
+package agent
 
 // Content represents message content.
 type Content interface {
@@ -90,52 +86,3 @@ type ThinkingContent struct {
 }
 
 func (t *ThinkingContent) ContentType() string { return "thinking" }
-
-// ChatMessage represents a message in a conversation.
-type ChatMessage struct {
-	Role     types.Role
-	Contents []Content
-	Name     string // Optional name of the message sender
-}
-
-// NewChatMessage creates a new ChatMessage with text content.
-func NewChatMessage(role types.Role, text string) *ChatMessage {
-	return &ChatMessage{
-		Role:     role,
-		Contents: []Content{&TextContent{Text: text}},
-	}
-}
-
-// AddContent adds content to the message.
-func (m *ChatMessage) AddContent(content Content) {
-	m.Contents = append(m.Contents, content)
-}
-
-// ChatResponse represents a response from an agent or chat client.
-type ChatResponse struct {
-	Message      *ChatMessage
-	FinishReason types.FinishReason
-	Usage        *types.UsageDetails
-	ModelID      string
-}
-
-// Text returns the first text content in the response, or empty string.
-func (r *ChatResponse) Text() string {
-	if r.Message == nil {
-		return ""
-	}
-	for _, content := range r.Message.Contents {
-		if textContent, ok := content.(*TextContent); ok {
-			return textContent.Text
-		}
-	}
-	return ""
-}
-
-// ChatResponseUpdate represents a streaming update from an agent or chat client.
-type ChatResponseUpdate struct {
-	Delta        *ChatMessage
-	FinishReason types.FinishReason
-	Usage        *types.UsageDetails
-	ModelID      string
-}

@@ -6,14 +6,13 @@ import (
 	"context"
 	"iter"
 
-	"github.com/microsoft/agent-framework/go/pkg/message"
 	"github.com/microsoft/agent-framework/go/pkg/tool"
 )
 
 // Client represents a client for chat completions.
 type Client interface {
 	// Complete generates a single response for the given messages.
-	Complete(ctx context.Context, options *Options, messages ...*message.ChatMessage) (*message.ChatResponse, error)
+	Complete(ctx context.Context, options *Options, messages ...*Message) (*Response, error)
 }
 
 // StreamableChatClient is the interface implemented by agents that support streaming responses.
@@ -21,20 +20,20 @@ type StreamableChatClient interface {
 	Client
 
 	// CompleteStream generates a streaming response for the given messages.
-	CompleteStream(ctx context.Context, options *Options, messages ...*message.ChatMessage) iter.Seq2[*message.ChatResponseUpdate, error]
+	CompleteStream(ctx context.Context, options *Options, messages ...*Message) iter.Seq2[*ResponseUpdate, error]
 }
 
 // completeStream is a helper function to run an agent in streaming mode.
 // If the agent does not implement [StreamableChatClient], it falls back to calling [Client.Complete] sequentially.
-func completeStream(ctx context.Context, client Client, options *Options, messages ...*message.ChatMessage) iter.Seq2[*message.ChatResponseUpdate, error] {
+func completeStream(ctx context.Context, client Client, options *Options, messages ...*Message) iter.Seq2[*ResponseUpdate, error] {
 	if agent, ok := client.(StreamableChatClient); ok {
 		return agent.CompleteStream(ctx, options, messages...)
 	}
-	return func(yield func(*message.ChatResponseUpdate, error) bool) {
+	return func(yield func(*ResponseUpdate, error) bool) {
 		resp, err := client.Complete(ctx, options, messages...)
-		var runResp *message.ChatResponseUpdate
+		var runResp *ResponseUpdate
 		if resp != nil {
-			runResp = &message.ChatResponseUpdate{
+			runResp = &ResponseUpdate{
 				Delta:        resp.Message,
 				FinishReason: resp.FinishReason,
 				Usage:        resp.Usage,

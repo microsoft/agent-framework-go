@@ -10,7 +10,6 @@ import (
 
 	"github.com/microsoft/agent-framework/go/pkg/agent"
 	"github.com/microsoft/agent-framework/go/pkg/agent/chat"
-	"github.com/microsoft/agent-framework/go/pkg/message"
 	"github.com/microsoft/agent-framework/go/pkg/types"
 )
 
@@ -18,9 +17,9 @@ import (
 type mockChatClient struct{}
 
 // Complete implements the ChatClient interface.
-func (m *mockChatClient) Complete(ctx context.Context, options *chat.Options, messages ...*message.ChatMessage) (*message.ChatResponse, error) {
-	return &message.ChatResponse{
-		Message:      message.NewChatMessage(types.RoleAssistant, "Hello! This is a mock response."),
+func (m *mockChatClient) Complete(ctx context.Context, options *chat.Options, messages ...*chat.Message) (*chat.Response, error) {
+	return &chat.Response{
+		Message:      chat.NewMessage(types.RoleAssistant, "Hello! This is a mock response."),
 		FinishReason: types.FinishReasonStop,
 		Usage: &types.UsageDetails{
 			PromptTokens:     10,
@@ -32,10 +31,10 @@ func (m *mockChatClient) Complete(ctx context.Context, options *chat.Options, me
 }
 
 // CompleteStream implements the ChatClient interface for streaming.
-func (m *mockChatClient) CompleteStream(ctx context.Context, options *chat.Options, messages ...*message.ChatMessage) iter.Seq2[*message.ChatResponseUpdate, error] {
-	resp := []*message.ChatResponseUpdate{
+func (m *mockChatClient) CompleteStream(ctx context.Context, options *chat.Options, messages ...*chat.Message) iter.Seq2[*chat.ResponseUpdate, error] {
+	resp := []*chat.ResponseUpdate{
 		{
-			Delta:        message.NewChatMessage(types.RoleAssistant, "Hello! This is a streaming mock response."),
+			Delta:        chat.NewMessage(types.RoleAssistant, "Hello! This is a streaming mock response."),
 			FinishReason: types.FinishReasonStop,
 			Usage: &types.UsageDetails{
 				PromptTokens:     10,
@@ -45,7 +44,7 @@ func (m *mockChatClient) CompleteStream(ctx context.Context, options *chat.Optio
 			ModelID: "mock-model",
 		},
 	}
-	return func(yield func(*message.ChatResponseUpdate, error) bool) {
+	return func(yield func(*chat.ResponseUpdate, error) bool) {
 		for _, r := range resp {
 			if !yield(r, nil) {
 				return
@@ -54,7 +53,7 @@ func (m *mockChatClient) CompleteStream(ctx context.Context, options *chat.Optio
 	}
 }
 
-func Example() {
+func Example_CustomAgent() {
 	ctx := context.Background()
 
 	// Create a mock chat client
@@ -68,7 +67,7 @@ func Example() {
 	})
 
 	// Create a message
-	userMessage := message.NewChatMessage(types.RoleUser, "Hello, how are you?")
+	userMessage := chat.NewMessage(types.RoleUser, "Hello, how are you?")
 
 	// Run the agent
 	response, err := myAgent.Run(ctx, nil, nil, userMessage)
@@ -77,7 +76,7 @@ func Example() {
 	}
 
 	// Print the response
-	fmt.Printf("\nAgent Response: %s\n", response.Text())
+	fmt.Printf("\nAgent Response: %s\n", response.Message.Text())
 	fmt.Printf("Model ID: %s\n", response.ModelID)
 	fmt.Printf("Usage: %d prompt + %d completion = %d total tokens\n",
 		response.Usage.PromptTokens,
@@ -89,7 +88,7 @@ func Example() {
 	for update := range agent.RunStream(ctx, myAgent, nil, nil, userMessage) {
 		if update.Delta != nil {
 			for _, content := range update.Delta.Contents {
-				if textContent, ok := content.(*message.TextContent); ok {
+				if textContent, ok := content.(*agent.TextContent); ok {
 					fmt.Printf("Streaming: %s\n", textContent.Text)
 				}
 			}

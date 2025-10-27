@@ -2,11 +2,7 @@
 
 package workflow
 
-import (
-	"context"
-
-	"github.com/microsoft/agent-framework/go/pkg/message"
-)
+import "context"
 
 // Workflow represents a graph-based orchestration of agents and executors.
 type Workflow interface {
@@ -75,8 +71,8 @@ type CheckpointStorage interface {
 }
 
 // WorkflowContext contains execution context for a workflow.
-type WorkflowContext struct {
+type WorkflowContext[M ~string | any] struct {
 	WorkflowID string
-	Messages   []*message.ChatMessage
+	Messages   []M
 	State      map[string]interface{}
 }

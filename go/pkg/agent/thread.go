@@ -2,21 +2,18 @@
 
 package agent
 
-import (
-	"github.com/google/uuid"
-	"github.com/microsoft/agent-framework/go/pkg/message"
-)
+import "github.com/google/uuid"
 
 // Thread represents a conversation thread that maintains message history.
-type Thread interface {
+type Thread[M ~string | any] interface {
 	// ID returns the unique identifier.
 	ID() string
 
 	// AddMessage adds a message to the thread.
-	AddMessage(message *message.ChatMessage)
+	AddMessage(message M)
 
 	// GetMessages returns all messages in the thread.
-	GetMessages() []*message.ChatMessage
+	GetMessages() []M
 
 	// Clear removes all messages from the thread.
 	Clear()
@@ -26,41 +23,41 @@ type Thread interface {
 }
 
 // InMemoryThread is a simple in-memory implementation of [Thread].
-type InMemoryThread struct {
+type InMemoryThread[M ~string | any] struct {
 	id       string
-	messages []*message.ChatMessage
+	messages []M
 }
 
 // NewInMemoryThread creates a new InMemoryThread.
-func NewInMemoryThread() *InMemoryThread {
-	return &InMemoryThread{
+func NewInMemoryThread[M ~string | any]() *InMemoryThread[M] {
+	return &InMemoryThread[M]{
 		id:       uuid.New().String(),
-		messages: make([]*message.ChatMessage, 0),
+		messages: make([]M, 0),
 	}
 }
 
 // ID returns the thread's unique identifier.
-func (t *InMemoryThread) ID() string {
+func (t *InMemoryThread[M]) ID() string {
 	return t.id
 }
 
 // AddMessage adds a message to the thread.
-func (t *InMemoryThread) AddMessage(msg *message.ChatMessage) {
+func (t *InMemoryThread[M]) AddMessage(msg M) {
 	t.messages = append(t.messages, msg)
 }
 
 // GetMessages returns all messages in the thread.
-func (t *InMemoryThread) GetMessages() []*message.ChatMessage {
+func (t *InMemoryThread[M]) GetMessages() []M {
 	return t.messages
 }
 
 // Clear removes all messages from the thread.
-func (t *InMemoryThread) Clear() {
-	t.messages = make([]*message.ChatMessage, 0)
+func (t *InMemoryThread[M]) Clear() {
+	t.messages = make([]M, 0)
 }
 
 // Serialize serializes the thread to JSON.
-func (t *InMemoryThread) Serialize() ([]byte, error) {
+func (t *InMemoryThread[M]) Serialize() ([]byte, error) {
 	// TODO: Implement JSON serialization
 	return []byte("{}"), nil
 }

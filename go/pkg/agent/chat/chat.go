@@ -8,8 +8,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework/go/pkg/agent"
-	"github.com/microsoft/agent-framework/go/pkg/message"
 )
+
+var _ agent.Agent[*Message] = (*Agent)(nil) // ensure Agent implements Agent interface
 
 // Agent is an agent that uses a [Client] to generate responses.
 type Agent struct {
@@ -47,7 +48,7 @@ func (a *Agent) Name() string {
 }
 
 // Run executes the agent with the given messages and options.
-func (a *Agent) Run(ctx context.Context, t agent.Thread, options *agent.RunOptions, messages ...*message.ChatMessage) (*agent.RunResponse, error) {
+func (a *Agent) Run(ctx context.Context, t agent.Thread[*Message], options *agent.RunOptions, messages ...*Message) (*agent.RunResponse[*Message], error) {
 	// Prepare messages with system instructions
 	allMessages := a.prepareMessages(messages)
 
@@ -69,7 +70,7 @@ func (a *Agent) Run(ctx context.Context, t agent.Thread, options *agent.RunOptio
 	}
 
 	// Convert to RunResponse
-	return &agent.RunResponse{
+	return &agent.RunResponse[*Message]{
 		Message:      response.Message,
 		FinishReason: response.FinishReason,
 		Usage:        response.Usage,
@@ -79,7 +80,7 @@ func (a *Agent) Run(ctx context.Context, t agent.Thread, options *agent.RunOptio
 }
 
 // RunStream executes the agent and streams responses.
-func (a *Agent) RunStream(ctx context.Context, t agent.Thread, options *agent.RunOptions, messages ...*message.ChatMessage) iter.Seq2[*agent.RunResponseUpdate, error] {
+func (a *Agent) RunStream(ctx context.Context, t agent.Thread[*Message], options *agent.RunOptions, messages ...*Message) iter.Seq2[*agent.RunResponseUpdate[*Message], error] {
 	// Prepare messages with system instructions
 	allMessages := a.prepareMessages(messages)
 
@@ -88,11 +89,11 @@ func (a *Agent) RunStream(ctx context.Context, t agent.Thread, options *agent.Ru
 
 	// Call the chat client for streaming
 	tID := getThreadID(t)
-	return func(yield func(*agent.RunResponseUpdate, error) bool) {
+	return func(yield func(*agent.RunResponseUpdate[*Message], error) bool) {
 		for resp, err := range completeStream(ctx, a.client, chatOptions, allMessages...) {
-			var runResp *agent.RunResponseUpdate
+			var runResp *agent.RunResponseUpdate[*Message]
 			if resp != nil {
-				runResp = &agent.RunResponseUpdate{
+				runResp = &agent.RunResponseUpdate[*Message]{
 					Delta:        resp.Delta,
 					FinishReason: resp.FinishReason,
 					Usage:        resp.Usage,
@@ -108,24 +109,24 @@ func (a *Agent) RunStream(ctx context.Context, t agent.Thread, options *agent.Ru
 }
 
 // GetNewThread creates a new thread for this agent.
-func (a *Agent) GetNewThread() agent.Thread {
-	return agent.NewInMemoryThread()
+func (a *Agent) GetNewThread() agent.Thread[*Message] {
+	return agent.NewInMemoryThread[*Message]()
 }
 
 // DeserializeThread deserializes a thread from JSON.
-func (a *Agent) DeserializeThread(data []byte) (agent.Thread, error) {
+func (a *Agent) DeserializeThread(data []byte) (agent.Thread[*Message], error) {
 	// TODO: Implement JSON deserialization
-	return agent.NewInMemoryThread(), nil
+	return agent.NewInMemoryThread[*Message](), nil
 }
 
 // prepareMessages adds system instructions to the message list.
-func (a *Agent) prepareMessages(messages []*message.ChatMessage) []*message.ChatMessage {
+func (a *Agent) prepareMessages(messages []*Message) []*Message {
 	if a.instructions == "" {
 		return messages
 	}
 
-	systemMessage := message.NewChatMessage("system", a.instructions)
-	allMessages := make([]*message.ChatMessage, 0, len(messages)+1)
+	systemMessage := NewMessage("system", a.instructions)
+	allMessages := make([]*Message, 0, len(messages)+1)
 	allMessages = append(allMessages, systemMessage)
 	allMessages = append(allMessages, messages...)
 	return allMessages
@@ -148,7 +149,7 @@ func (a *Agent) convertOptions(options *agent.RunOptions) *Options {
 }
 
 // getThreadID returns the thread ID or empty string if no thread.
-func getThreadID(t agent.Thread) string {
+func getThreadID(t agent.Thread[*Message]) string {
 	if t == nil {
 		return ""
 	}
