@@ -9,21 +9,21 @@ import (
 )
 
 // AgentMiddleware intercepts agent run requests and responses.
-type AgentMiddleware[M any] interface {
+type AgentMiddleware interface {
 	// OnRunStart is called before an agent run.
-	OnRunStart(ctx context.Context, agentCtx *AgentContext[M]) error
+	OnRunStart(ctx context.Context, agentCtx *AgentContext) error
 
 	// OnRunComplete is called after an agent run completes.
-	OnRunComplete(ctx context.Context, agentCtx *AgentContext[M], response M) error
+	OnRunComplete(ctx context.Context, agentCtx *AgentContext, response *agent.Message) error
 
 	// OnRunError is called when an agent run fails.
-	OnRunError(ctx context.Context, agentCtx *AgentContext[M], err error) error
+	OnRunError(ctx context.Context, agentCtx *AgentContext, err error) error
 }
 
 // AgentContext contains context for an agent run.
-type AgentContext[M any] struct {
+type AgentContext struct {
 	AgentID  string
-	Messages []M
+	Messages []*agent.Message
 	Metadata map[string]any
 }
 
@@ -48,35 +48,35 @@ type FunctionContext struct {
 }
 
 // Pipeline manages a chain of middleware.
-type Pipeline[M any] struct {
-	agentMiddleware    []AgentMiddleware[M]
+type Pipeline struct {
+	agentMiddleware    []AgentMiddleware
 	functionMiddleware []FunctionMiddleware
 }
 
 // NewPipeline creates a new middleware pipeline.
-func NewPipeline[M any]() *Pipeline[M] {
-	return &Pipeline[M]{
-		agentMiddleware:    make([]AgentMiddleware[M], 0),
+func NewPipeline() *Pipeline {
+	return &Pipeline{
+		agentMiddleware:    make([]AgentMiddleware, 0),
 		functionMiddleware: make([]FunctionMiddleware, 0),
 	}
 }
 
 // AddAgentMiddleware adds agent middleware to the pipeline.
-func (p *Pipeline[M]) AddAgentMiddleware(middleware AgentMiddleware[M]) {
+func (p *Pipeline) AddAgentMiddleware(middleware AgentMiddleware) {
 	p.agentMiddleware = append(p.agentMiddleware, middleware)
 }
 
 // AddFunctionMiddleware adds function middleware to the pipeline.
-func (p *Pipeline[M]) AddFunctionMiddleware(middleware FunctionMiddleware) {
+func (p *Pipeline) AddFunctionMiddleware(middleware FunctionMiddleware) {
 	p.functionMiddleware = append(p.functionMiddleware, middleware)
 }
 
 // ExecuteAgentRun runs agent middleware chain.
-func (p *Pipeline[M]) ExecuteAgentRun(ctx context.Context, agentCtx *AgentContext[M], handler func() (M, error)) (M, error) {
+func (p *Pipeline) ExecuteAgentRun(ctx context.Context, agentCtx *AgentContext, handler func() (*agent.Message, error)) (*agent.Message, error) {
 	// Execute OnRunStart for all middleware
 	for _, mw := range p.agentMiddleware {
 		if err := mw.OnRunStart(ctx, agentCtx); err != nil {
-			var zero M
+			var zero *agent.Message
 			return zero, err
 		}
 	}
