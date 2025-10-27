@@ -4,14 +4,15 @@ package tool
 
 import (
 	"context"
-
-	"github.com/microsoft/agent-framework/go/pkg/types"
 )
 
 // Tool represents a tool or function that an agent can use.
 type Tool interface {
-	types.Identifiable
-	types.Nameable
+	// ID returns the unique identifier.
+	ID() string
+
+	// Name returns the name.
+	Name() string
 
 	// Description returns a description of what the tool does.
 	Description() string
