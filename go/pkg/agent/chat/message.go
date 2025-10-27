@@ -8,39 +8,9 @@ import (
 	"github.com/microsoft/agent-framework/go/pkg/agent"
 )
 
-// Message represents a message in a conversation.
-type Message struct {
-	Role     agent.Role
-	Contents []agent.Content
-	Name     string // Optional name of the message sender
-}
-
-// NewMessage creates a new ChatMessage with text content.
-func NewMessage(role agent.Role, text string) *Message {
-	return &Message{
-		Role:     role,
-		Contents: []agent.Content{&agent.TextContent{Text: text}},
-	}
-}
-
-// Text returns the first text content in the response, or empty string.
-func (m *Message) Text() string {
-	for _, content := range m.Contents {
-		if textContent, ok := content.(*agent.TextContent); ok {
-			return textContent.Text
-		}
-	}
-	return ""
-}
-
-// AddContent adds content to the message.
-func (m *Message) AddContent(content agent.Content) {
-	m.Contents = append(m.Contents, content)
-}
-
 // Response represents a response from an agent or chat client.
 type Response struct {
-	Message      *Message
+	Message      *agent.Message
 	FinishReason agent.FinishReason
 	Usage        *agent.UsageDetails
 	ModelID      string
@@ -61,7 +31,7 @@ func (r *Response) Text() string {
 
 // ResponseUpdate represents a streaming update from an agent or chat client.
 type ResponseUpdate struct {
-	Delta        *Message
+	Delta        *agent.Message
 	FinishReason agent.FinishReason
 	Usage        *agent.UsageDetails
 	ModelID      string
@@ -69,27 +39,27 @@ type ResponseUpdate struct {
 
 // InMemoryMessageStore is a simple in-memory implementation of MessageStore.
 type InMemoryMessageStore struct {
-	store map[string][]*Message
+	store map[string][]*agent.Message
 }
 
 // NewInMemoryMessageStore creates a new InMemoryMessageStore.
 func NewInMemoryMessageStore() *InMemoryMessageStore {
 	return &InMemoryMessageStore{
-		store: make(map[string][]*Message),
+		store: make(map[string][]*agent.Message),
 	}
 }
 
 // Save stores messages.
-func (s *InMemoryMessageStore) Save(ctx context.Context, threadID string, messages ...*Message) error {
+func (s *InMemoryMessageStore) Save(ctx context.Context, threadID string, messages ...*agent.Message) error {
 	s.store[threadID] = messages
 	return nil
 }
 
 // Load retrieves messages for a thread.
-func (s *InMemoryMessageStore) Load(ctx context.Context, threadID string) ([]*Message, error) {
+func (s *InMemoryMessageStore) Load(ctx context.Context, threadID string) ([]*agent.Message, error) {
 	messages, ok := s.store[threadID]
 	if !ok {
-		return []*Message{}, nil
+		return []*agent.Message{}, nil
 	}
 	return messages, nil
 }
