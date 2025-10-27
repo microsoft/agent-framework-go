@@ -43,7 +43,10 @@ func RunStream(ctx context.Context, agent Agent, thread Thread, options *RunOpti
 	if agent, ok := agent.(StreamableAgent); ok {
 		return agent.RunStream(ctx, thread, options, messages...)
 	}
-	tID := getThreadID(thread)
+	var tID string
+	if thread != nil {
+		tID = thread.ID()
+	}
 	return func(yield func(*RunResponseUpdate, error) bool) {
 		resp, err := agent.Run(ctx, thread, options, messages...)
 		var runResp *RunResponseUpdate
@@ -68,7 +71,7 @@ type RunOptions struct {
 	Tools []tool.Tool
 
 	// ToolMode specifies how tools should be used.
-	ToolMode types.ToolMode
+	ToolMode tool.Mode
 
 	// MaxTurns limits the number of agent turns.
 	MaxTurns int
@@ -83,7 +86,7 @@ type RunOptions struct {
 	MaxTokens *int
 
 	// AdditionalMetadata for provider-specific options.
-	AdditionalMetadata map[string]interface{}
+	AdditionalMetadata map[string]any
 }
 
 // RunResponse represents the result of an agent execution.
