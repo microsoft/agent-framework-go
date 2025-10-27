@@ -41,10 +41,49 @@ func NewOpenAIChatClient(config ChatClientConfig) (*ChatClient, error) {
 
 // Complete generates a single response for the given messages.
 func (c *ChatClient) Complete(ctx context.Context, options *chat.Options, messages ...*chat.Message) (*chat.Response, error) {
-	oaiMsgs := make([]openai.ChatCompletionMessageParamUnion, 0, len(messages))
+	resp, err := c.client.Chat.Completions.New(ctx, c.buildCompletionParams(options, messages...))
+	if err != nil {
+		return nil, err
+	}
+	choice := resp.Choices[0]
+	return &chat.Response{
+		Message:      chat.NewMessage(agent.Role(choice.Message.Role), choice.Message.Content),
+		FinishReason: agent.FinishReason(choice.FinishReason),
+		ModelID:      resp.Model,
+	}, nil
+}
+
+// CompleteStream generates a streaming response for the given messages.
+func (c *ChatClient) CompleteStream(ctx context.Context, options *chat.Options, messages ...*chat.Message) iter.Seq2[*chat.ResponseUpdate, error] {
+	stream := c.client.Chat.Completions.NewStreaming(ctx, c.buildCompletionParams(options, messages...))
+	return func(yield func(*chat.ResponseUpdate, error) bool) {
+		defer stream.Close()
+		for stream.Next() {
+			choice := stream.Current().Choices[0]
+			resp := &chat.ResponseUpdate{
+				Delta:        chat.NewMessage(agent.Role(choice.Delta.Role), choice.Delta.Content),
+				FinishReason: agent.FinishReason(choice.FinishReason),
+			}
+			if !yield(resp, nil) {
+				return
+			}
+		}
+		if stream.Err() != nil {
+			yield(nil, stream.Err())
+		}
+	}
+}
+
+// buildCompletionParams constructs the parameters for the OpenAI chat completion API.
+func (c *ChatClient) buildCompletionParams(options *chat.Options, messages ...*chat.Message) openai.ChatCompletionNewParams {
+	params := openai.ChatCompletionNewParams{
+		Model:    c.ModelID,
+		N:        openai.Int(1),
+		Messages: make([]openai.ChatCompletionMessageParamUnion, 0, len(messages)),
+	}
 	for _, msg := range messages {
 		// TODO: support roles, content types, and multiple messages
-		oaiMsgs = append(oaiMsgs, openai.ChatCompletionMessageParamUnion{
+		params.Messages = append(params.Messages, openai.ChatCompletionMessageParamUnion{
 			OfUser: &openai.ChatCompletionUserMessageParam{
 				Content: openai.ChatCompletionUserMessageParamContentUnion{
 					OfString: param.NewOpt(msg.Text()),
@@ -52,27 +91,19 @@ func (c *ChatClient) Complete(ctx context.Context, options *chat.Options, messag
 			},
 		})
 	}
-	resp, err := c.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
-		Model:    c.ModelID,
-		N:        openai.Int(1),
-		Messages: oaiMsgs,
-	})
-	if err != nil {
-		return nil, err
+	if options != nil {
+		if options.Temperature != nil {
+			params.Temperature = openai.Float(*options.Temperature)
+		}
+		if options.TopP != nil {
+			params.TopP = openai.Float(*options.TopP)
+		}
+		if options.MaxTokens != nil {
+			params.MaxTokens = openai.Int(int64(*options.MaxTokens))
+		}
 	}
-	choise := resp.Choices[0]
-	return &chat.Response{
-		Message:      chat.NewMessage(agent.Role(choise.Message.Role), choise.Message.Content),
-		FinishReason: agent.FinishReason(choise.FinishReason),
-		ModelID:      resp.Model,
-	}, nil
-}
 
-// CompleteStream generates a streaming response for the given messages.
-func (c *ChatClient) CompleteStream(ctx context.Context, options *chat.Options, messages ...*chat.Message) iter.Seq2[*chat.ResponseUpdate, error] {
-	return func(yield func(*chat.ResponseUpdate, error) bool) {
-		// TODO: Implement OpenAI streaming API call
-	}
+	return params
 }
 
 // AzureOpenAIChatClient is a ChatClient implementation for Azure OpenAI.
