@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package client
+package openai
 
 import (
 	"context"
@@ -10,28 +10,28 @@ import (
 	"github.com/microsoft/agent-framework/go/pkg/message"
 )
 
-// OpenAIChatClient is a ChatClient implementation for OpenAI.
-type OpenAIChatClient struct {
+// ChatClient is a Client implementation for OpenAI.
+type ChatClient struct {
 	*chat.BaseChatClient
 	apiKey   string
 	endpoint string
 }
 
-// OpenAIChatClientConfig contains configuration for OpenAIChatClient.
-type OpenAIChatClientConfig struct {
+// ChatClientConfig contains configuration for OpenAIChatClient.
+type ChatClientConfig struct {
 	APIKey   string
 	Model    string
 	Endpoint string // Optional, defaults to OpenAI API
 }
 
 // NewOpenAIChatClient creates a new OpenAIChatClient.
-func NewOpenAIChatClient(config OpenAIChatClientConfig) (*OpenAIChatClient, error) {
+func NewOpenAIChatClient(config ChatClientConfig) (*ChatClient, error) {
 	endpoint := config.Endpoint
 	if endpoint == "" {
 		endpoint = "https://api.openai.com/v1"
 	}
 
-	return &OpenAIChatClient{
+	return &ChatClient{
 		BaseChatClient: chat.NewBaseChatClient(config.Model),
 		apiKey:         config.APIKey,
 		endpoint:       endpoint,
@@ -39,7 +39,7 @@ func NewOpenAIChatClient(config OpenAIChatClientConfig) (*OpenAIChatClient, erro
 }
 
 // Complete generates a single response for the given messages.
-func (c *OpenAIChatClient) Complete(ctx context.Context, options *chat.Options, messages ...*message.ChatMessage) (*message.ChatResponse, error) {
+func (c *ChatClient) Complete(ctx context.Context, options *chat.Options, messages ...*message.ChatMessage) (*message.ChatResponse, error) {
 	// TODO: Implement OpenAI API call
 	return &message.ChatResponse{
 		Message:      message.NewChatMessage("assistant", "Not implemented"),
@@ -49,7 +49,7 @@ func (c *OpenAIChatClient) Complete(ctx context.Context, options *chat.Options, 
 }
 
 // CompleteStream generates a streaming response for the given messages.
-func (c *OpenAIChatClient) CompleteStream(ctx context.Context, options *chat.Options, messages ...*message.ChatMessage) iter.Seq2[*message.ChatResponseUpdate, error] {
+func (c *ChatClient) CompleteStream(ctx context.Context, options *chat.Options, messages ...*message.ChatMessage) iter.Seq2[*message.ChatResponseUpdate, error] {
 	return func(yield func(*message.ChatResponseUpdate, error) bool) {
 		// TODO: Implement OpenAI streaming API call
 	}
