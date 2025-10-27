@@ -10,7 +10,7 @@ import (
 )
 
 // Agent represents an AI agent that can process messages and generate responses.
-type Agent[M ~string | any] interface {
+type Agent[M any] interface {
 	// ID returns the unique identifier.
 	ID() string
 
@@ -28,7 +28,7 @@ type Agent[M ~string | any] interface {
 }
 
 // StreamableAgent is the interface implemented by agents that support streaming responses.
-type StreamableAgent[M ~string | any] interface {
+type StreamableAgent[M any] interface {
 	Agent[M]
 
 	// RunStream executes the agent and streams responses.
@@ -37,7 +37,7 @@ type StreamableAgent[M ~string | any] interface {
 
 // RunStream is a helper function to run an agent in streaming mode.
 // If the agent does not implement [StreamableAgent], it falls back to calling [Agent.Run] sequentially.
-func RunStream[M ~string | any](ctx context.Context, agent Agent[M], thread Thread[M], options *RunOptions, messages ...M) iter.Seq2[*RunResponseUpdate[M], error] {
+func RunStream[M any](ctx context.Context, agent Agent[M], thread Thread[M], options *RunOptions, messages ...M) iter.Seq2[*RunResponseUpdate[M], error] {
 	if agent, ok := agent.(StreamableAgent[M]); ok {
 		return agent.RunStream(ctx, thread, options, messages...)
 	}
@@ -88,7 +88,7 @@ type RunOptions struct {
 }
 
 // RunResponse represents the result of an agent execution.
-type RunResponse[M ~string | any] struct {
+type RunResponse[M any] struct {
 	Message      M
 	FinishReason FinishReason
 	Usage        *UsageDetails
@@ -97,7 +97,7 @@ type RunResponse[M ~string | any] struct {
 }
 
 // RunResponseUpdate represents a streaming update from an agent execution.
-type RunResponseUpdate[M ~string | any] struct {
+type RunResponseUpdate[M any] struct {
 	Delta        M
 	FinishReason FinishReason
 	Usage        *UsageDetails

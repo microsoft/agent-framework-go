@@ -71,7 +71,7 @@ type CheckpointStorage interface {
 }
 
 // WorkflowContext contains execution context for a workflow.
-type WorkflowContext[M ~string | any] struct {
+type WorkflowContext[M any] struct {
 	WorkflowID string
 	Messages   []M
 	State      map[string]interface{}
