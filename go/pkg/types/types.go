@@ -32,18 +32,6 @@ const (
 	FinishReasonError FinishReason = "error"
 )
 
-// ToolMode represents how tools should be used by the agent.
-type ToolMode string
-
-const (
-	// ToolModeAuto allows the agent to decide when to use tools.
-	ToolModeAuto ToolMode = "auto"
-	// ToolModeRequired forces the agent to use at least one tool.
-	ToolModeRequired ToolMode = "required"
-	// ToolModeNone disables tool usage.
-	ToolModeNone ToolMode = "none"
-)
-
 // UsageDetails contains token usage information.
 type UsageDetails struct {
 	// PromptTokens is the number of tokens in the prompt.

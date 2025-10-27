@@ -6,6 +6,18 @@ import (
 	"context"
 )
 
+// Mode represents how tools should be used by the agent.
+type Mode string
+
+const (
+	// ModeAuto allows the agent to decide when to use tools.
+	ModeAuto Mode = "auto"
+	// ModeRequired forces the agent to use at least one tool.
+	ModeRequired Mode = "required"
+	// ModeNone disables tool usage.
+	ModeNone Mode = "none"
+)
+
 // Tool represents a tool or function that an agent can use.
 type Tool interface {
 	// ID returns the unique identifier.

@@ -8,7 +8,6 @@ import (
 
 	"github.com/microsoft/agent-framework/go/pkg/message"
 	"github.com/microsoft/agent-framework/go/pkg/tool"
-	"github.com/microsoft/agent-framework/go/pkg/types"
 )
 
 // ChatClient represents a client for chat completions.
@@ -54,7 +53,7 @@ type ChatOptions struct {
 	Tools []tool.Tool
 
 	// ToolMode specifies how tools should be used.
-	ToolMode types.ToolMode
+	ToolMode tool.Mode
 
 	// Temperature controls randomness (0.0 to 2.0).
 	Temperature *float64

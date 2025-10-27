@@ -9,6 +9,7 @@ import (
 	"log"
 
 	"github.com/microsoft/agent-framework/go/pkg/agent"
+	"github.com/microsoft/agent-framework/go/pkg/agent/chat"
 	"github.com/microsoft/agent-framework/go/pkg/client"
 	"github.com/microsoft/agent-framework/go/pkg/message"
 	"github.com/microsoft/agent-framework/go/pkg/types"
@@ -61,10 +62,10 @@ func main() {
 	chatClient := &mockChatClient{}
 
 	// Create an agent
-	myAgent := agent.NewChatAgent(agent.ChatAgentConfig{
+	myAgent := chat.New(chat.Config{
 		Name:         "ExampleAgent",
 		Instructions: "You are a helpful assistant.",
-		ChatClient:   chatClient,
+		Client:       chatClient,
 	})
 
 	fmt.Printf("Created agent: %s (ID: %s)\n", myAgent.Name(), myAgent.ID())

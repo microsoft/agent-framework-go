@@ -1,54 +1,55 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package agent
+package chat
 
 import (
 	"context"
 	"iter"
 
 	"github.com/google/uuid"
+	"github.com/microsoft/agent-framework/go/pkg/agent"
 	"github.com/microsoft/agent-framework/go/pkg/client"
 	"github.com/microsoft/agent-framework/go/pkg/message"
 	"github.com/microsoft/agent-framework/go/pkg/thread"
 )
 
-// ChatAgent is an agent that uses a ChatClient to generate responses.
-type ChatAgent struct {
+// Agent is an agent that uses a ChatClient to generate responses.
+type Agent struct {
 	id           string
 	name         string
 	instructions string
-	chatClient   client.ChatClient
+	client       client.ChatClient
 }
 
-// ChatAgentConfig contains configuration for creating a ChatAgent.
-type ChatAgentConfig struct {
+// Config contains configuration for creating a [Agent].
+type Config struct {
 	Name         string
 	Instructions string
-	ChatClient   client.ChatClient
+	Client       client.ChatClient
 }
 
-// NewChatAgent creates a new ChatAgent.
-func NewChatAgent(config ChatAgentConfig) *ChatAgent {
-	return &ChatAgent{
+// New creates a new [Agent].
+func New(config Config) *Agent {
+	return &Agent{
 		id:           uuid.New().String(),
 		name:         config.Name,
 		instructions: config.Instructions,
-		chatClient:   config.ChatClient,
+		client:       config.Client,
 	}
 }
 
 // ID returns the agent's unique identifier.
-func (a *ChatAgent) ID() string {
+func (a *Agent) ID() string {
 	return a.id
 }
 
 // Name returns the agent's name.
-func (a *ChatAgent) Name() string {
+func (a *Agent) Name() string {
 	return a.name
 }
 
 // Run executes the agent with the given messages and options.
-func (a *ChatAgent) Run(ctx context.Context, t Thread, options *RunOptions, messages ...*message.ChatMessage) (*RunResponse, error) {
+func (a *Agent) Run(ctx context.Context, t agent.Thread, options *agent.RunOptions, messages ...*message.ChatMessage) (*agent.RunResponse, error) {
 	// Prepare messages with system instructions
 	allMessages := a.prepareMessages(messages)
 
@@ -56,7 +57,7 @@ func (a *ChatAgent) Run(ctx context.Context, t Thread, options *RunOptions, mess
 	chatOptions := a.convertOptions(options)
 
 	// Call the chat client
-	response, err := a.chatClient.Complete(ctx, chatOptions, allMessages...)
+	response, err := a.client.Complete(ctx, chatOptions, allMessages...)
 	if err != nil {
 		return nil, err
 	}
@@ -70,7 +71,7 @@ func (a *ChatAgent) Run(ctx context.Context, t Thread, options *RunOptions, mess
 	}
 
 	// Convert to RunResponse
-	return &RunResponse{
+	return &agent.RunResponse{
 		Message:      response.Message,
 		FinishReason: response.FinishReason,
 		Usage:        response.Usage,
@@ -80,7 +81,7 @@ func (a *ChatAgent) Run(ctx context.Context, t Thread, options *RunOptions, mess
 }
 
 // RunStream executes the agent and streams responses.
-func (a *ChatAgent) RunStream(ctx context.Context, t Thread, options *RunOptions, messages ...*message.ChatMessage) iter.Seq2[*RunResponseUpdate, error] {
+func (a *Agent) RunStream(ctx context.Context, t agent.Thread, options *agent.RunOptions, messages ...*message.ChatMessage) iter.Seq2[*agent.RunResponseUpdate, error] {
 	// Prepare messages with system instructions
 	allMessages := a.prepareMessages(messages)
 
@@ -89,11 +90,11 @@ func (a *ChatAgent) RunStream(ctx context.Context, t Thread, options *RunOptions
 
 	// Call the chat client for streaming
 	tID := getThreadID(t)
-	return func(yield func(*RunResponseUpdate, error) bool) {
-		for resp, err := range client.CompleteStream(ctx, a.chatClient, chatOptions, allMessages...) {
-			var runResp *RunResponseUpdate
+	return func(yield func(*agent.RunResponseUpdate, error) bool) {
+		for resp, err := range client.CompleteStream(ctx, a.client, chatOptions, allMessages...) {
+			var runResp *agent.RunResponseUpdate
 			if resp != nil {
-				runResp = &RunResponseUpdate{
+				runResp = &agent.RunResponseUpdate{
 					Delta:        resp.Delta,
 					FinishReason: resp.FinishReason,
 					Usage:        resp.Usage,
@@ -109,18 +110,18 @@ func (a *ChatAgent) RunStream(ctx context.Context, t Thread, options *RunOptions
 }
 
 // GetNewThread creates a new thread for this agent.
-func (a *ChatAgent) GetNewThread() Thread {
+func (a *Agent) GetNewThread() agent.Thread {
 	return thread.NewInMemoryThread()
 }
 
 // DeserializeThread deserializes a thread from JSON.
-func (a *ChatAgent) DeserializeThread(data []byte) (Thread, error) {
+func (a *Agent) DeserializeThread(data []byte) (agent.Thread, error) {
 	// TODO: Implement JSON deserialization
 	return thread.NewInMemoryThread(), nil
 }
 
 // prepareMessages adds system instructions to the message list.
-func (a *ChatAgent) prepareMessages(messages []*message.ChatMessage) []*message.ChatMessage {
+func (a *Agent) prepareMessages(messages []*message.ChatMessage) []*message.ChatMessage {
 	if a.instructions == "" {
 		return messages
 	}
@@ -133,7 +134,7 @@ func (a *ChatAgent) prepareMessages(messages []*message.ChatMessage) []*message.
 }
 
 // convertOptions converts RunOptions to ChatOptions.
-func (a *ChatAgent) convertOptions(options *RunOptions) *client.ChatOptions {
+func (a *Agent) convertOptions(options *agent.RunOptions) *client.ChatOptions {
 	if options == nil {
 		return nil
 	}
@@ -149,7 +150,7 @@ func (a *ChatAgent) convertOptions(options *RunOptions) *client.ChatOptions {
 }
 
 // getThreadID returns the thread ID or empty string if no thread.
-func getThreadID(t Thread) string {
+func getThreadID(t agent.Thread) string {
 	if t == nil {
 		return ""
 	}
