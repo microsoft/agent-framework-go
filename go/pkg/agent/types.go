@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package types
+package agent
 
 // Role represents the role of a message sender in a conversation.
 type Role string

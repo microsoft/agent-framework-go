@@ -10,7 +10,6 @@ import (
 
 	"github.com/microsoft/agent-framework/go/pkg/agent"
 	"github.com/microsoft/agent-framework/go/pkg/agent/chat"
-	"github.com/microsoft/agent-framework/go/pkg/types"
 )
 
 // mockChatClient is a simple mock implementation for demonstration.
@@ -19,9 +18,9 @@ type mockChatClient struct{}
 // Complete implements the ChatClient interface.
 func (m *mockChatClient) Complete(ctx context.Context, options *chat.Options, messages ...*chat.Message) (*chat.Response, error) {
 	return &chat.Response{
-		Message:      chat.NewMessage(types.RoleAssistant, "Hello! This is a mock response."),
-		FinishReason: types.FinishReasonStop,
-		Usage: &types.UsageDetails{
+		Message:      chat.NewMessage(agent.RoleAssistant, "Hello! This is a mock response."),
+		FinishReason: agent.FinishReasonStop,
+		Usage: &agent.UsageDetails{
 			PromptTokens:     10,
 			CompletionTokens: 8,
 			TotalTokens:      18,
@@ -34,9 +33,9 @@ func (m *mockChatClient) Complete(ctx context.Context, options *chat.Options, me
 func (m *mockChatClient) CompleteStream(ctx context.Context, options *chat.Options, messages ...*chat.Message) iter.Seq2[*chat.ResponseUpdate, error] {
 	resp := []*chat.ResponseUpdate{
 		{
-			Delta:        chat.NewMessage(types.RoleAssistant, "Hello! This is a streaming mock response."),
-			FinishReason: types.FinishReasonStop,
-			Usage: &types.UsageDetails{
+			Delta:        chat.NewMessage(agent.RoleAssistant, "Hello! This is a streaming mock response."),
+			FinishReason: agent.FinishReasonStop,
+			Usage: &agent.UsageDetails{
 				PromptTokens:     10,
 				CompletionTokens: 9,
 				TotalTokens:      19,
@@ -53,7 +52,7 @@ func (m *mockChatClient) CompleteStream(ctx context.Context, options *chat.Optio
 	}
 }
 
-func Example_CustomAgent() {
+func Example_customAgent() {
 	ctx := context.Background()
 
 	// Create a mock chat client
@@ -67,7 +66,7 @@ func Example_CustomAgent() {
 	})
 
 	// Create a message
-	userMessage := chat.NewMessage(types.RoleUser, "Hello, how are you?")
+	userMessage := chat.NewMessage(agent.RoleUser, "Hello, how are you?")
 
 	// Run the agent
 	response, err := myAgent.Run(ctx, nil, nil, userMessage)

@@ -5,12 +5,11 @@ package telemetry
 import (
 	"context"
 
+	"github.com/microsoft/agent-framework/go/pkg/agent"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
-
-	"github.com/microsoft/agent-framework/go/pkg/types"
 )
 
 const (
@@ -62,7 +61,7 @@ func (t *Tracer) StartChatCompletion(ctx context.Context, modelID string, messag
 }
 
 // RecordUsage records token usage metrics.
-func (t *Tracer) RecordUsage(ctx context.Context, modelID string, usage *types.UsageDetails) {
+func (t *Tracer) RecordUsage(ctx context.Context, modelID string, usage *agent.UsageDetails) {
 	if usage == nil {
 		return
 	}
