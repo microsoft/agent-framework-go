@@ -90,7 +90,7 @@ func (a *ChatAgent) RunStream(ctx context.Context, t Thread, options *RunOptions
 	// Call the chat client for streaming
 	tID := getThreadID(t)
 	return func(yield func(*RunResponseUpdate, error) bool) {
-		for resp, err := range a.chatClient.CompleteStream(ctx, chatOptions, allMessages...) {
+		for resp, err := range client.CompleteStream(ctx, a.chatClient, chatOptions, allMessages...) {
 			var runResp *RunResponseUpdate
 			if resp != nil {
 				runResp = &RunResponseUpdate{
