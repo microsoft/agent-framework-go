@@ -7,7 +7,6 @@ import (
 	"iter"
 
 	"github.com/microsoft/agent-framework/go/pkg/tool"
-	"github.com/microsoft/agent-framework/go/pkg/types"
 )
 
 // Agent represents an AI agent that can process messages and generate responses.
@@ -91,8 +90,8 @@ type RunOptions struct {
 // RunResponse represents the result of an agent execution.
 type RunResponse[M ~string | any] struct {
 	Message      M
-	FinishReason types.FinishReason
-	Usage        *types.UsageDetails
+	FinishReason FinishReason
+	Usage        *UsageDetails
 	ThreadID     string
 	ModelID      string
 }
@@ -100,8 +99,8 @@ type RunResponse[M ~string | any] struct {
 // RunResponseUpdate represents a streaming update from an agent execution.
 type RunResponseUpdate[M ~string | any] struct {
 	Delta        M
-	FinishReason types.FinishReason
-	Usage        *types.UsageDetails
+	FinishReason FinishReason
+	Usage        *UsageDetails
 	ThreadID     string
 	ModelID      string
 }

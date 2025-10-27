@@ -6,18 +6,17 @@ import (
 	"context"
 
 	"github.com/microsoft/agent-framework/go/pkg/agent"
-	"github.com/microsoft/agent-framework/go/pkg/types"
 )
 
 // Message represents a message in a conversation.
 type Message struct {
-	Role     types.Role
+	Role     agent.Role
 	Contents []agent.Content
 	Name     string // Optional name of the message sender
 }
 
 // NewMessage creates a new ChatMessage with text content.
-func NewMessage(role types.Role, text string) *Message {
+func NewMessage(role agent.Role, text string) *Message {
 	return &Message{
 		Role:     role,
 		Contents: []agent.Content{&agent.TextContent{Text: text}},
@@ -42,8 +41,8 @@ func (m *Message) AddContent(content agent.Content) {
 // Response represents a response from an agent or chat client.
 type Response struct {
 	Message      *Message
-	FinishReason types.FinishReason
-	Usage        *types.UsageDetails
+	FinishReason agent.FinishReason
+	Usage        *agent.UsageDetails
 	ModelID      string
 }
 
@@ -63,8 +62,8 @@ func (r *Response) Text() string {
 // ResponseUpdate represents a streaming update from an agent or chat client.
 type ResponseUpdate struct {
 	Delta        *Message
-	FinishReason types.FinishReason
-	Usage        *types.UsageDetails
+	FinishReason agent.FinishReason
+	Usage        *agent.UsageDetails
 	ModelID      string
 }
 
