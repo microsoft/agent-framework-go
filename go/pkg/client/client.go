@@ -5,9 +5,9 @@ package client
 import (
 	"context"
 
-	"github.com/microsoft/agent-framework/golang/pkg/message"
-	"github.com/microsoft/agent-framework/golang/pkg/tool"
-	"github.com/microsoft/agent-framework/golang/pkg/types"
+	"github.com/microsoft/agent-framework/go/pkg/message"
+	"github.com/microsoft/agent-framework/go/pkg/tool"
+	"github.com/microsoft/agent-framework/go/pkg/types"
 )
 
 // ChatClient represents a client for chat completions.

@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/microsoft/agent-framework/golang/pkg/agent"
-	"github.com/microsoft/agent-framework/golang/pkg/client"
-	"github.com/microsoft/agent-framework/golang/pkg/message"
-	"github.com/microsoft/agent-framework/golang/pkg/types"
+	"github.com/microsoft/agent-framework/go/pkg/agent"
+	"github.com/microsoft/agent-framework/go/pkg/client"
+	"github.com/microsoft/agent-framework/go/pkg/message"
+	"github.com/microsoft/agent-framework/go/pkg/types"
 )
 
 // mockChatClient is a simple mock implementation for demonstration.
