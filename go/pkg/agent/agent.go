@@ -36,7 +36,7 @@ type StreamableAgent[M any] interface {
 }
 
 // RunStream is a helper function to run an agent in streaming mode.
-// If the agent does not implement [StreamableAgent], it falls back to calling [Agent.Run] sequentially.
+// If the agent does not implement [StreamableAgent], it falls back to calling [Agent.Run].
 func RunStream[M any](ctx context.Context, agent Agent[M], thread Thread[M], options *RunOptions, messages ...M) iter.Seq2[*RunResponseUpdate[M], error] {
 	if agent, ok := agent.(StreamableAgent[M]); ok {
 		return agent.RunStream(ctx, thread, options, messages...)
