@@ -6,13 +6,15 @@ import (
 	"context"
 
 	"github.com/microsoft/agent-framework/go/pkg/message"
-	"github.com/microsoft/agent-framework/go/pkg/types"
 )
 
 // Workflow represents a graph-based orchestration of agents and executors.
 type Workflow interface {
-	types.Identifiable
-	types.Nameable
+	// ID returns the unique identifier.
+	ID() string
+
+	// Name returns the name.
+	Name() string
 
 	// Execute runs the workflow with the given input.
 	Execute(ctx context.Context, input map[string]interface{}) (map[string]interface{}, error)
@@ -38,8 +40,11 @@ type WorkflowBuilder interface {
 
 // Executor represents a node in the workflow graph.
 type Executor interface {
-	types.Identifiable
-	types.Nameable
+	// ID returns the unique identifier.
+	ID() string
+
+	// Name returns the name.
+	Name() string
 
 	// Execute processes the input and returns output.
 	Execute(ctx context.Context, input map[string]interface{}) (map[string]interface{}, error)

@@ -7,27 +7,29 @@ import (
 	"iter"
 
 	"github.com/microsoft/agent-framework/go/pkg/message"
-	"github.com/microsoft/agent-framework/go/pkg/thread"
 	"github.com/microsoft/agent-framework/go/pkg/tool"
 	"github.com/microsoft/agent-framework/go/pkg/types"
 )
 
 // Agent represents an AI agent that can process messages and generate responses.
 type Agent interface {
-	types.Identifiable
-	types.Nameable
+	// ID returns the unique identifier.
+	ID() string
+
+	// Name returns the name.
+	Name() string
 
 	// Run executes the agent with the given messages and options.
-	Run(ctx context.Context, thread thread.AgentThread, options *RunOptions, messages ...*message.ChatMessage) (*RunResponse, error)
+	Run(ctx context.Context, thread Thread, options *RunOptions, messages ...*message.ChatMessage) (*RunResponse, error)
 
 	// RunStream executes the agent and streams responses.
-	RunStream(ctx context.Context, thread thread.AgentThread, options *RunOptions, messages ...*message.ChatMessage) iter.Seq2[*RunResponseUpdate, error]
+	RunStream(ctx context.Context, thread Thread, options *RunOptions, messages ...*message.ChatMessage) iter.Seq2[*RunResponseUpdate, error]
 
 	// GetNewThread creates a new thread for this agent.
-	GetNewThread() thread.AgentThread
+	GetNewThread() Thread
 
 	// DeserializeThread deserializes a thread from JSON.
-	DeserializeThread(data []byte) (thread.AgentThread, error)
+	DeserializeThread(data []byte) (Thread, error)
 }
 
 // RunOptions contains options for agent execution.

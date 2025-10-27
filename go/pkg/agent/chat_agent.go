@@ -48,7 +48,7 @@ func (a *ChatAgent) Name() string {
 }
 
 // Run executes the agent with the given messages and options.
-func (a *ChatAgent) Run(ctx context.Context, t thread.AgentThread, options *RunOptions, messages ...*message.ChatMessage) (*RunResponse, error) {
+func (a *ChatAgent) Run(ctx context.Context, t Thread, options *RunOptions, messages ...*message.ChatMessage) (*RunResponse, error) {
 	// Prepare messages with system instructions
 	allMessages := a.prepareMessages(messages)
 
@@ -80,7 +80,7 @@ func (a *ChatAgent) Run(ctx context.Context, t thread.AgentThread, options *RunO
 }
 
 // RunStream executes the agent and streams responses.
-func (a *ChatAgent) RunStream(ctx context.Context, t thread.AgentThread, options *RunOptions, messages ...*message.ChatMessage) iter.Seq2[*RunResponseUpdate, error] {
+func (a *ChatAgent) RunStream(ctx context.Context, t Thread, options *RunOptions, messages ...*message.ChatMessage) iter.Seq2[*RunResponseUpdate, error] {
 	// Prepare messages with system instructions
 	allMessages := a.prepareMessages(messages)
 
@@ -109,12 +109,12 @@ func (a *ChatAgent) RunStream(ctx context.Context, t thread.AgentThread, options
 }
 
 // GetNewThread creates a new thread for this agent.
-func (a *ChatAgent) GetNewThread() thread.AgentThread {
+func (a *ChatAgent) GetNewThread() Thread {
 	return thread.NewInMemoryThread()
 }
 
 // DeserializeThread deserializes a thread from JSON.
-func (a *ChatAgent) DeserializeThread(data []byte) (thread.AgentThread, error) {
+func (a *ChatAgent) DeserializeThread(data []byte) (Thread, error) {
 	// TODO: Implement JSON deserialization
 	return thread.NewInMemoryThread(), nil
 }
@@ -149,7 +149,7 @@ func (a *ChatAgent) convertOptions(options *RunOptions) *client.ChatOptions {
 }
 
 // getThreadID returns the thread ID or empty string if no thread.
-func (a *ChatAgent) getThreadID(t thread.AgentThread) string {
+func (a *ChatAgent) getThreadID(t Thread) string {
 	if t == nil {
 		return ""
 	}

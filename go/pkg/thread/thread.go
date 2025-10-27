@@ -5,27 +5,9 @@ package thread
 import (
 	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework/go/pkg/message"
-	"github.com/microsoft/agent-framework/go/pkg/types"
 )
 
-// AgentThread represents a conversation thread that maintains message history.
-type AgentThread interface {
-	types.Identifiable
-
-	// AddMessage adds a message to the thread.
-	AddMessage(message *message.ChatMessage)
-
-	// GetMessages returns all messages in the thread.
-	GetMessages() []*message.ChatMessage
-
-	// Clear removes all messages from the thread.
-	Clear()
-
-	// Serialize serializes the thread to JSON.
-	Serialize() ([]byte, error)
-}
-
-// InMemoryThread is a simple in-memory implementation of AgentThread.
+// InMemoryThread is a simple in-memory implementation of [agent.Thread].
 type InMemoryThread struct {
 	id       string
 	messages []*message.ChatMessage
