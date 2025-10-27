@@ -45,8 +45,8 @@ type Agent interface {
     Name() string
     DisplayName() string
     Description() string
-    Run(ctx context.Context, messages []*message.ChatMessage, thread AgentThread, options *RunOptions) (*RunResponse, error)
-    RunStream(ctx context.Context, messages []*message.ChatMessage, thread AgentThread, options *RunOptions) iter.Seq2[*RunResponseUpdate, error]
+    Run(ctx context.Context, thread AgentThread, options *RunOptions, messages ...*message.ChatMessage) (*RunResponse, error)
+    RunStream(ctx context.Context, thread AgentThread, options *RunOptions, messages ...*message.ChatMessage) iter.Seq2[*RunResponseUpdate, error]
     GetNewThread() AgentThread
     DeserializeThread(data map[string]interface{}) (AgentThread, error)
     GetService(serviceType string, serviceKey interface{}) (interface{}, error)
@@ -158,7 +158,7 @@ type Content interface {
 ```go
 type AgentThread interface {
     GetMessages(ctx context.Context) ([]*message.ChatMessage, error)
-    AddMessages(ctx context.Context, messages []*message.ChatMessage) error
+    AddMessages(ctx context.Context, messages ...*message.ChatMessage) error
     Serialize() (map[string]interface{}, error)
     Deserialize(data map[string]interface{}) error
     GetService(serviceType string, serviceKey interface{}) (interface{}, error)
@@ -179,8 +179,8 @@ func NewInMemoryThread() *InMemoryThread
 
 ```go
 type ChatClient interface {
-    GetResponse(ctx context.Context, messages []*message.ChatMessage, options *ChatOptions) (*message.ChatResponse, error)
-    GetStreamingResponse(ctx context.Context, messages []*message.ChatMessage, options *ChatOptions) iter.Seq2[*RunResponseUpdate, error]
+    GetResponse(ctx context.Context, options *ChatOptions, messages ...*message.ChatMessage) (*message.ChatResponse, error)
+    GetStreamingResponse(ctx context.Context, options *ChatOptions, messages ...*message.ChatMessage) iter.Seq2[*RunResponseUpdate, error]
 }
 ```
 

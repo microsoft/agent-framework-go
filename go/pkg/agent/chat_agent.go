@@ -48,7 +48,7 @@ func (a *ChatAgent) Name() string {
 }
 
 // Run executes the agent with the given messages and options.
-func (a *ChatAgent) Run(ctx context.Context, messages []*message.ChatMessage, t thread.AgentThread, options *RunOptions) (*RunResponse, error) {
+func (a *ChatAgent) Run(ctx context.Context, t thread.AgentThread, options *RunOptions, messages ...*message.ChatMessage) (*RunResponse, error) {
 	// Prepare messages with system instructions
 	allMessages := a.prepareMessages(messages)
 
@@ -56,7 +56,7 @@ func (a *ChatAgent) Run(ctx context.Context, messages []*message.ChatMessage, t 
 	chatOptions := a.convertOptions(options)
 
 	// Call the chat client
-	response, err := a.chatClient.Complete(ctx, allMessages, chatOptions)
+	response, err := a.chatClient.Complete(ctx, chatOptions, allMessages...)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +80,7 @@ func (a *ChatAgent) Run(ctx context.Context, messages []*message.ChatMessage, t 
 }
 
 // RunStream executes the agent and streams responses.
-func (a *ChatAgent) RunStream(ctx context.Context, messages []*message.ChatMessage, t thread.AgentThread, options *RunOptions) iter.Seq2[*RunResponseUpdate, error] {
+func (a *ChatAgent) RunStream(ctx context.Context, t thread.AgentThread, options *RunOptions, messages ...*message.ChatMessage) iter.Seq2[*RunResponseUpdate, error] {
 	// Prepare messages with system instructions
 	allMessages := a.prepareMessages(messages)
 
@@ -90,7 +90,7 @@ func (a *ChatAgent) RunStream(ctx context.Context, messages []*message.ChatMessa
 	// Call the chat client for streaming
 	tID := a.getThreadID(t)
 	return func(yield func(*RunResponseUpdate, error) bool) {
-		for resp, err := range a.chatClient.CompleteStream(ctx, allMessages, chatOptions) {
+		for resp, err := range a.chatClient.CompleteStream(ctx, chatOptions, allMessages...) {
 			var runResp *RunResponseUpdate
 			if resp != nil {
 				runResp = &RunResponseUpdate{

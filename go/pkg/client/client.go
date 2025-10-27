@@ -14,10 +14,10 @@ import (
 // ChatClient represents a client for chat completions.
 type ChatClient interface {
 	// Complete generates a single response for the given messages.
-	Complete(ctx context.Context, messages []*message.ChatMessage, options *ChatOptions) (*message.ChatResponse, error)
+	Complete(ctx context.Context, options *ChatOptions, messages ...*message.ChatMessage) (*message.ChatResponse, error)
 
 	// CompleteStream generates a streaming response for the given messages.
-	CompleteStream(ctx context.Context, messages []*message.ChatMessage, options *ChatOptions) iter.Seq2[*message.ChatResponseUpdate, error]
+	CompleteStream(ctx context.Context, options *ChatOptions, messages ...*message.ChatMessage) iter.Seq2[*message.ChatResponseUpdate, error]
 }
 
 // ChatOptions contains options for chat completion.

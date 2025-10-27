@@ -18,10 +18,10 @@ type Agent interface {
 	types.Nameable
 
 	// Run executes the agent with the given messages and options.
-	Run(ctx context.Context, messages []*message.ChatMessage, thread thread.AgentThread, options *RunOptions) (*RunResponse, error)
+	Run(ctx context.Context, thread thread.AgentThread, options *RunOptions, messages ...*message.ChatMessage) (*RunResponse, error)
 
 	// RunStream executes the agent and streams responses.
-	RunStream(ctx context.Context, messages []*message.ChatMessage, thread thread.AgentThread, options *RunOptions) iter.Seq2[*RunResponseUpdate, error]
+	RunStream(ctx context.Context, thread thread.AgentThread, options *RunOptions, messages ...*message.ChatMessage) iter.Seq2[*RunResponseUpdate, error]
 
 	// GetNewThread creates a new thread for this agent.
 	GetNewThread() thread.AgentThread
