@@ -191,7 +191,7 @@ func buildCompletionParams(model string, options *chat.Options, messages ...*age
 					Function: shared.FunctionDefinitionParam{
 						Name:        tool.Name,
 						Description: param.NewOpt(tool.Description),
-						Parameters:  tool.Schema,
+						Parameters:  tool.Schema(),
 					},
 				},
 			})
@@ -326,14 +326,6 @@ func executeTool(ctx context.Context, tools []agent.Tool, toolCall *agent.Functi
 	}
 
 	// Find the tool in the options
-	if tools == nil {
-		return &agent.FunctionResultContent{
-			CallID: toolCall.CallID,
-			Error:  fmt.Errorf("no tools available"),
-			Result: "No tools available to execute",
-		}
-	}
-
 	var tool *agent.Tool
 	for _, t := range tools {
 		if t.Name == toolCall.Name {
@@ -350,18 +342,8 @@ func executeTool(ctx context.Context, tools []agent.Tool, toolCall *agent.Functi
 		}
 	}
 
-	// Marshal arguments to JSON string for the tool function
-	argsJSON, err := json.Marshal(toolCall.Arguments)
-	if err != nil {
-		return &agent.FunctionResultContent{
-			CallID: toolCall.CallID,
-			Error:  err,
-			Result: fmt.Sprintf("Error marshaling arguments: %v", err),
-		}
-	}
-
 	// Execute the tool
-	result, err := tool.Func(ctx, string(argsJSON))
+	result, err := tool.Call(ctx, toolCall.Arguments)
 	if err != nil {
 		return &agent.FunctionResultContent{
 			CallID: toolCall.CallID,
