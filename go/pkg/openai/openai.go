@@ -67,10 +67,8 @@ func (c *ChatClient) Complete(ctx context.Context, options *chat.Options, messag
 		// Check if there are tool calls to execute
 		if choice.FinishReason == "tool_calls" && len(choice.Message.ToolCalls) > 0 {
 			// Parse and collect tool calls
-			toolMessages := processToolCalls(ctx, choice, options)
-			for _, msg := range toolMessages {
-				completionParams.Messages = append(completionParams.Messages, buildMessageParam(msg))
-			}
+			assistant, tools := processToolCalls(ctx, choice, options)
+			completionParams.Messages = append(completionParams.Messages, buildMessageParam(assistant), buildMessageParam(tools))
 
 			// Continue the loop to get the final response
 			continue
@@ -118,8 +116,8 @@ func (c *ChatClient) CompleteStream(ctx context.Context, options *chat.Options, 
 	}
 }
 
-func processToolCalls(ctx context.Context, choice openai.ChatCompletionChoice, options *chat.Options) []*agent.Message {
-	toolCalls := make([]*agent.FunctionCallContent, 0, len(choice.Message.ToolCalls))
+func processToolCalls(ctx context.Context, choice openai.ChatCompletionChoice, options *chat.Options) (assistant, tools *agent.Message) {
+	toolCalls := make([]agent.Content, 0, len(choice.Message.ToolCalls))
 	for _, toolCall := range choice.Message.ToolCalls {
 		// Parse arguments from JSON string to map
 		var args map[string]any
@@ -140,27 +138,9 @@ func processToolCalls(ctx context.Context, choice openai.ChatCompletionChoice, o
 		})
 	}
 
-	// Add tool calls to contents
-	contents := make([]agent.Content, 0, len(toolCalls))
-	for _, tc := range toolCalls {
-		contents = append(contents, tc)
-	}
-
-	messages := make([]*agent.Message, 0, 2)
-
-	// Add assistant message with tool calls
-	messages = append(messages, agent.NewMessage(agent.Role(choice.Message.Role), contents...))
-
-	// Execute all tool calls and collect results
-	toolResults := make([]agent.Content, 0, len(toolCalls))
-	for _, toolCall := range toolCalls {
-		result := executeTool(ctx, options.Tools, toolCall)
-		toolResults = append(toolResults, result)
-	}
-
-	// Add tool results as a tool role message
-	messages = append(messages, agent.NewMessage(agent.RoleTool, toolResults...))
-	return messages
+	assistant = agent.NewMessage(agent.RoleAssistant, toolCalls...)
+	tools = agent.CallTools(ctx, options.Tools, toolCalls...)
+	return assistant, tools
 }
 
 // buildCompletionParams constructs the parameters for the OpenAI chat completion API.
@@ -312,48 +292,4 @@ func extractToolCallID(msg *agent.Message) string {
 		}
 	}
 	return ""
-}
-
-// executeTool executes a single tool call and returns the result as FunctionResultContent.
-func executeTool(ctx context.Context, tools []agent.Tool, toolCall *agent.FunctionCallContent) *agent.FunctionResultContent {
-	// If there was an error parsing the tool call, return error content
-	if toolCall.Error != nil {
-		return &agent.FunctionResultContent{
-			CallID: toolCall.CallID,
-			Error:  toolCall.Error,
-			Result: fmt.Sprintf("Error parsing tool call: %v", toolCall.Error),
-		}
-	}
-
-	// Find the tool in the options
-	var tool *agent.Tool
-	for _, t := range tools {
-		if t.Name == toolCall.Name {
-			tool = &t
-			break
-		}
-	}
-
-	if tool == nil {
-		return &agent.FunctionResultContent{
-			CallID: toolCall.CallID,
-			Error:  fmt.Errorf("tool not found: %s", toolCall.Name),
-			Result: fmt.Sprintf("Tool '%s' not found", toolCall.Name),
-		}
-	}
-
-	// Execute the tool
-	result, err := tool.Call(ctx, toolCall.Arguments)
-	if err != nil {
-		return &agent.FunctionResultContent{
-			CallID: toolCall.CallID,
-			Error:  err,
-			Result: fmt.Sprintf("Error executing tool: %v", err),
-		}
-	}
-
-	return &agent.FunctionResultContent{
-		CallID: toolCall.CallID,
-		Result: result,
-	}
 }

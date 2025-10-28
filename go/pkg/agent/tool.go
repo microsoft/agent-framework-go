@@ -129,3 +129,69 @@ func (t *Tool) Call(ctx context.Context, args map[string]any) (any, error) {
 		panic("unexpected number of return values")
 	}
 }
+
+// CallTools executes the given tool calls using the provided tools.
+func CallTools(ctx context.Context, tools []Tool, contents ...Content) *Message {
+	// Execute all tool calls and collect results
+	toolResults := make([]Content, 0, len(contents))
+	for _, content := range contents {
+		toolCall, ok := content.(*FunctionCallContent)
+		if !ok {
+			continue
+		}
+		result := executeTool(ctx, tools, toolCall)
+		toolResults = append(toolResults, result)
+	}
+
+	return NewMessage(RoleTool, toolResults...)
+}
+
+// executeTool executes a single tool call.
+func executeTool(ctx context.Context, tools []Tool, toolCall *FunctionCallContent) (ct Content) {
+	if toolCall.Error != nil {
+		// If there was an error parsing the tool call, return the error.
+		return &FunctionCallContent{
+			CallID: toolCall.CallID,
+			Error:  toolCall.Error,
+		}
+	}
+
+	// Find the tool in the options
+	var tool *Tool
+	for _, t := range tools {
+		if t.Name == toolCall.Name {
+			tool = &t
+			break
+		}
+	}
+
+	if tool == nil {
+		return &FunctionCallContent{
+			CallID: toolCall.CallID,
+			Error:  fmt.Errorf("tool not found: %s", toolCall.Name),
+		}
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			var err error
+			if e, ok := r.(error); ok {
+				err = e
+			} else {
+				err = fmt.Errorf("%v", r)
+			}
+			ct = &FunctionResultContent{
+				CallID: toolCall.CallID,
+				Error:  fmt.Errorf("tool execution panic: %v", err),
+			}
+		}
+	}()
+
+	// Execute the tool
+	result, err := tool.Call(ctx, toolCall.Arguments)
+	return &FunctionResultContent{
+		CallID: toolCall.CallID,
+		Error:  err,
+		Result: result,
+	}
+}
