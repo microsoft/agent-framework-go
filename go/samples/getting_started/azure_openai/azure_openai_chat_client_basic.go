@@ -32,13 +32,9 @@ func main() {
 	ag := client.NewAgent(&chat.Config{
 		Instructions: "You are a helpful weather agent.",
 		Options: &chat.Options{
-			Tools: []agent.Tool{{
-				Name:        "weather",
-				Description: "Get the current weather for a given location. Input should be a city name.",
-				Func: func(ctx context.Context, input string) (string, error) {
-					return weather(input), nil
-				},
-			}},
+			Tools: []agent.Tool{
+				agent.NewTool("weather", weather),
+			},
 		},
 	})
 
