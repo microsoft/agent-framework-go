@@ -59,10 +59,9 @@ func Example_customAgent() {
 	chatClient := &mockChatClient{}
 
 	// Create an agent
-	myAgent := chat.New(chat.Config{
+	myAgent := chat.New(chatClient, &chat.Config{
 		Name:         "ExampleAgent",
 		Instructions: "You are a helpful assistant.",
-		Client:       chatClient,
 	})
 
 	// Create a message
