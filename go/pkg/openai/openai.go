@@ -4,6 +4,8 @@ package openai
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"iter"
 
 	"github.com/microsoft/agent-framework/go/pkg/agent"
@@ -44,35 +46,55 @@ func NewChatClient(config ChatClientConfig) *ChatClient {
 }
 
 // NewAgent creates a new agent that uses this chat client.
-func (c *ChatClient) NewAgent(instructions string) agent.Agent {
-	return chat.New(chat.Config{
-		Name:         "OpenAI Chat Agent",
-		Instructions: instructions,
-		Client:       c,
-	})
+func (c *ChatClient) NewAgent(config *chat.Config) agent.Agent {
+	return chat.New(c, config)
 }
 
 // Complete generates a single response for the given messages.
 func (c *ChatClient) Complete(ctx context.Context, options *chat.Options, messages ...*agent.Message) (*chat.Response, error) {
-	resp, err := c.client.Chat.Completions.New(ctx, c.buildCompletionParams(options, messages...))
-	if err != nil {
-		return nil, err
-	}
-	choice := resp.Choices[0]
-	if len(choice.Message.ToolCalls) > 0 {
-		// Handle tool calls
+	// Keep track of all messages in the conversation
+	completionParams := buildCompletionParams(c.model, options, messages...)
 
+	for {
+		// Call OpenAI API
+		resp, err := c.client.Chat.Completions.New(ctx, completionParams)
+		if err != nil {
+			return nil, err
+		}
+
+		choice := resp.Choices[0]
+
+		// Check if there are tool calls to execute
+		if choice.FinishReason == "tool_calls" && len(choice.Message.ToolCalls) > 0 {
+			// Parse and collect tool calls
+			toolMessages := processToolCalls(ctx, choice, options)
+			for _, msg := range toolMessages {
+				completionParams.Messages = append(completionParams.Messages, buildMessageParam(msg))
+			}
+
+			// Continue the loop to get the final response
+			continue
+		}
+
+		// If no tool calls, this is the final response
+		contents := make([]agent.Content, 0, 1)
+		if choice.Message.Content != "" {
+			contents = append(contents, &agent.TextContent{Text: choice.Message.Content})
+		} else {
+			contents = append(contents, &agent.TextContent{Text: ""})
+		}
+
+		return &chat.Response{
+			Message:      agent.NewMessage(agent.Role(choice.Message.Role), contents...),
+			FinishReason: agent.FinishReason(choice.FinishReason),
+			ModelID:      resp.Model,
+		}, nil
 	}
-	return &chat.Response{
-		Message:      agent.NewMessage(agent.Role(choice.Message.Role), &agent.TextContent{Text: choice.Message.Content}),
-		FinishReason: agent.FinishReason(choice.FinishReason),
-		ModelID:      resp.Model,
-	}, nil
 }
 
 // CompleteStream generates a streaming response for the given messages.
 func (c *ChatClient) CompleteStream(ctx context.Context, options *chat.Options, messages ...*agent.Message) iter.Seq2[*chat.ResponseUpdate, error] {
-	stream := c.client.Chat.Completions.NewStreaming(ctx, c.buildCompletionParams(options, messages...))
+	stream := c.client.Chat.Completions.NewStreaming(ctx, buildCompletionParams(c.model, options, messages...))
 	return func(yield func(*chat.ResponseUpdate, error) bool) {
 		defer stream.Close()
 		for stream.Next() {
@@ -96,23 +118,63 @@ func (c *ChatClient) CompleteStream(ctx context.Context, options *chat.Options, 
 	}
 }
 
+func processToolCalls(ctx context.Context, choice openai.ChatCompletionChoice, options *chat.Options) []*agent.Message {
+	toolCalls := make([]*agent.FunctionCallContent, 0, len(choice.Message.ToolCalls))
+	for _, toolCall := range choice.Message.ToolCalls {
+		// Parse arguments from JSON string to map
+		var args map[string]any
+		if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
+			// If parsing fails, store the error
+			toolCalls = append(toolCalls, &agent.FunctionCallContent{
+				CallID: toolCall.ID,
+				Name:   toolCall.Function.Name,
+				Error:  err,
+			})
+			continue
+		}
+
+		toolCalls = append(toolCalls, &agent.FunctionCallContent{
+			CallID:    toolCall.ID,
+			Name:      toolCall.Function.Name,
+			Arguments: args,
+		})
+	}
+
+	// Add tool calls to contents
+	contents := make([]agent.Content, 0, len(toolCalls))
+	for _, tc := range toolCalls {
+		contents = append(contents, tc)
+	}
+
+	messages := make([]*agent.Message, 0, 2)
+
+	// Add assistant message with tool calls
+	messages = append(messages, agent.NewMessage(agent.Role(choice.Message.Role), contents...))
+
+	// Execute all tool calls and collect results
+	toolResults := make([]agent.Content, 0, len(toolCalls))
+	for _, toolCall := range toolCalls {
+		result := executeTool(ctx, options.Tools, toolCall)
+		toolResults = append(toolResults, result)
+	}
+
+	// Add tool results as a tool role message
+	messages = append(messages, agent.NewMessage(agent.RoleTool, toolResults...))
+	return messages
+}
+
 // buildCompletionParams constructs the parameters for the OpenAI chat completion API.
-func (c *ChatClient) buildCompletionParams(options *chat.Options, messages ...*agent.Message) openai.ChatCompletionNewParams {
+func buildCompletionParams(model string, options *chat.Options, messages ...*agent.Message) openai.ChatCompletionNewParams {
 	params := openai.ChatCompletionNewParams{
-		Model:    c.model,
+		Model:    model,
 		N:        openai.Int(1),
 		Messages: make([]openai.ChatCompletionMessageParamUnion, 0, len(messages)),
 	}
+
 	for _, msg := range messages {
-		// TODO: support roles, content types, and multiple messages
-		params.Messages = append(params.Messages, openai.ChatCompletionMessageParamUnion{
-			OfUser: &openai.ChatCompletionUserMessageParam{
-				Content: openai.ChatCompletionUserMessageParamContentUnion{
-					OfString: param.NewOpt(msg.Text()),
-				},
-			},
-		})
+		params.Messages = append(params.Messages, buildMessageParam(msg))
 	}
+
 	if options != nil {
 		if options.Temperature != nil {
 			params.Temperature = openai.Float(*options.Temperature)
@@ -134,9 +196,182 @@ func (c *ChatClient) buildCompletionParams(options *chat.Options, messages ...*a
 				},
 			})
 		}
-		params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
-			OfAuto: openai.String(string(options.ToolMode)),
+		if options.ToolMode != "" {
+			params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
+				OfAuto: openai.String(string(options.ToolMode)),
+			}
 		}
 	}
 	return params
+}
+
+// buildMessageParam converts an agent.Message to an OpenAI message parameter.
+func buildMessageParam(msg *agent.Message) openai.ChatCompletionMessageParamUnion {
+	switch msg.Role {
+	case agent.RoleSystem:
+		return openai.ChatCompletionMessageParamUnion{
+			OfSystem: &openai.ChatCompletionSystemMessageParam{
+				Content: openai.ChatCompletionSystemMessageParamContentUnion{
+					OfString: param.NewOpt(extractText(msg)),
+				},
+			},
+		}
+
+	case agent.RoleUser:
+		return openai.ChatCompletionMessageParamUnion{
+			OfUser: &openai.ChatCompletionUserMessageParam{
+				Content: openai.ChatCompletionUserMessageParamContentUnion{
+					OfString: param.NewOpt(extractText(msg)),
+				},
+			},
+		}
+
+	case agent.RoleAssistant:
+		// Check if the message contains tool calls
+		toolCalls := extractToolCalls(msg)
+		return openai.ChatCompletionMessageParamUnion{
+			OfAssistant: &openai.ChatCompletionAssistantMessageParam{
+				Content: openai.ChatCompletionAssistantMessageParamContentUnion{
+					OfString: param.NewOpt(extractText(msg)),
+				},
+				ToolCalls: toolCalls,
+			},
+		}
+
+	case agent.RoleTool:
+		// Tool messages contain function results
+		toolResults := extractToolResults(msg)
+		return openai.ChatCompletionMessageParamUnion{
+			OfTool: &openai.ChatCompletionToolMessageParam{
+				Content: openai.ChatCompletionToolMessageParamContentUnion{
+					OfString: param.NewOpt(toolResults),
+				},
+				ToolCallID: extractToolCallID(msg),
+			},
+		}
+
+	default:
+		panic("unknown message role: " + string(msg.Role))
+	}
+}
+
+// extractText extracts text content from a message.
+func extractText(msg *agent.Message) string {
+	var text string
+	for _, content := range msg.Contents {
+		if tc, ok := content.(*agent.TextContent); ok {
+			text += tc.Text
+		}
+	}
+	return text
+}
+
+// extractToolCalls extracts function call content from a message.
+func extractToolCalls(msg *agent.Message) []openai.ChatCompletionMessageToolCallUnionParam {
+	var toolCalls []openai.ChatCompletionMessageToolCallUnionParam
+	for _, content := range msg.Contents {
+		if fc, ok := content.(*agent.FunctionCallContent); ok {
+			// Marshal arguments to JSON
+			argsJSON, err := json.Marshal(fc.Arguments)
+			if err != nil {
+				continue
+			}
+
+			toolCalls = append(toolCalls, openai.ChatCompletionMessageToolCallUnionParam{
+				OfFunction: &openai.ChatCompletionMessageFunctionToolCallParam{
+					ID: fc.CallID,
+					Function: openai.ChatCompletionMessageFunctionToolCallFunctionParam{
+						Name:      fc.Name,
+						Arguments: string(argsJSON),
+					},
+				},
+			})
+		}
+	}
+	return toolCalls
+}
+
+// extractToolResults extracts function result content from a message and formats it.
+func extractToolResults(msg *agent.Message) string {
+	for _, content := range msg.Contents {
+		if fr, ok := content.(*agent.FunctionResultContent); ok {
+			if fr.Error != nil {
+				return fmt.Sprintf("Error: %v", fr.Error)
+			}
+			return fmt.Sprintf("%v", fr.Result)
+		}
+	}
+	return ""
+}
+
+// extractToolCallID extracts the first tool call ID from function result content.
+func extractToolCallID(msg *agent.Message) string {
+	for _, content := range msg.Contents {
+		if fr, ok := content.(*agent.FunctionResultContent); ok {
+			return fr.CallID
+		}
+	}
+	return ""
+}
+
+// executeTool executes a single tool call and returns the result as FunctionResultContent.
+func executeTool(ctx context.Context, tools []agent.Tool, toolCall *agent.FunctionCallContent) *agent.FunctionResultContent {
+	// If there was an error parsing the tool call, return error content
+	if toolCall.Error != nil {
+		return &agent.FunctionResultContent{
+			CallID: toolCall.CallID,
+			Error:  toolCall.Error,
+			Result: fmt.Sprintf("Error parsing tool call: %v", toolCall.Error),
+		}
+	}
+
+	// Find the tool in the options
+	if tools == nil {
+		return &agent.FunctionResultContent{
+			CallID: toolCall.CallID,
+			Error:  fmt.Errorf("no tools available"),
+			Result: "No tools available to execute",
+		}
+	}
+
+	var tool *agent.Tool
+	for _, t := range tools {
+		if t.Name == toolCall.Name {
+			tool = &t
+			break
+		}
+	}
+
+	if tool == nil {
+		return &agent.FunctionResultContent{
+			CallID: toolCall.CallID,
+			Error:  fmt.Errorf("tool not found: %s", toolCall.Name),
+			Result: fmt.Sprintf("Tool '%s' not found", toolCall.Name),
+		}
+	}
+
+	// Marshal arguments to JSON string for the tool function
+	argsJSON, err := json.Marshal(toolCall.Arguments)
+	if err != nil {
+		return &agent.FunctionResultContent{
+			CallID: toolCall.CallID,
+			Error:  err,
+			Result: fmt.Sprintf("Error marshaling arguments: %v", err),
+		}
+	}
+
+	// Execute the tool
+	result, err := tool.Func(ctx, string(argsJSON))
+	if err != nil {
+		return &agent.FunctionResultContent{
+			CallID: toolCall.CallID,
+			Error:  err,
+			Result: fmt.Sprintf("Error executing tool: %v", err),
+		}
+	}
+
+	return &agent.FunctionResultContent{
+		CallID: toolCall.CallID,
+		Result: result,
+	}
 }

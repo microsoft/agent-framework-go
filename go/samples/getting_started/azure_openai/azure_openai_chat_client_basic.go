@@ -3,11 +3,18 @@ package main
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"os"
 
 	"github.com/microsoft/agent-framework/go/pkg/agent"
+	"github.com/microsoft/agent-framework/go/pkg/agent/chat"
 	"github.com/microsoft/agent-framework/go/pkg/openai"
 )
+
+func weather(location string) string {
+	conditions := []string{"sunny", "cloudy", "rainy", "stormy"}
+	return fmt.Sprintf("The weather in %s is %s with a high of %d°C.", location, conditions[rand.Intn(4)], rand.Intn(21)+10)
+}
 
 func main() {
 	// Azure OpenAI configuration
@@ -22,7 +29,18 @@ func main() {
 		APIVersion:     "2025-01-01-preview",                      // optional, uses default if not specified
 	})
 
-	ag := client.NewAgent("You are a helpful weather agent.")
+	ag := client.NewAgent(&chat.Config{
+		Instructions: "You are a helpful weather agent.",
+		Options: &chat.Options{
+			Tools: []agent.Tool{{
+				Name:        "weather",
+				Description: "Get the current weather for a given location. Input should be a city name.",
+				Func: func(ctx context.Context, input string) (string, error) {
+					return weather(input), nil
+				},
+			}},
+		},
+	})
 
 	nonStreamingExample(ag, "What's the weather like in Seattle?")
 	streamingExample(ag, "What's the weather like in Portland?")

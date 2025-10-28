@@ -3,6 +3,7 @@
 package chat
 
 import (
+	"cmp"
 	"context"
 	"iter"
 
@@ -14,37 +15,42 @@ var _ agent.Agent = (*Agent)(nil) // ensure Agent implements Agent interface
 
 // Agent is an agent that uses a [Client] to generate responses.
 type Agent struct {
-	id           string
-	name         string
-	instructions string
-	client       Client
+	client Client
+	config *Config
 }
 
 // Config contains configuration for creating a [Agent].
 type Config struct {
 	Name         string
 	Instructions string
-	Client       Client
+	ID           string
+	Options      *Options // Default options for the agent.
 }
 
 // New creates a new [Agent].
-func New(config Config) *Agent {
+// If config is nil, default configuration values are used.
+func New(client Client, config *Config) *Agent {
+	var cfg Config
+	if config != nil {
+		cfg = *config
+	}
+	if cfg.ID == "" {
+		cfg.ID = uuid.New().String()
+	}
 	return &Agent{
-		id:           uuid.New().String(),
-		name:         config.Name,
-		instructions: config.Instructions,
-		client:       config.Client,
+		client: client,
+		config: &cfg,
 	}
 }
 
 // ID returns the agent's unique identifier.
 func (a *Agent) ID() string {
-	return a.id
+	return a.config.ID
 }
 
 // Name returns the agent's name.
 func (a *Agent) Name() string {
-	return a.name
+	return a.config.Name
 }
 
 // Run executes the agent with the given messages and options.
@@ -121,11 +127,11 @@ func (a *Agent) DeserializeThread(data []byte) (agent.Thread, error) {
 
 // prepareMessages adds system instructions to the message list.
 func (a *Agent) prepareMessages(messages []*agent.Message) []*agent.Message {
-	if a.instructions == "" {
+	if a.config.Instructions == "" {
 		return messages
 	}
 
-	systemMessage := agent.NewMessage(agent.RoleSystem, &agent.TextContent{Text: a.instructions})
+	systemMessage := agent.NewMessage(agent.RoleSystem, &agent.TextContent{Text: a.config.Instructions})
 	allMessages := make([]*agent.Message, 0, len(messages)+1)
 	allMessages = append(allMessages, systemMessage)
 	allMessages = append(allMessages, messages...)
@@ -135,10 +141,9 @@ func (a *Agent) prepareMessages(messages []*agent.Message) []*agent.Message {
 // convertOptions converts RunOptions to ChatOptions.
 func (a *Agent) convertOptions(options *agent.RunOptions) *Options {
 	if options == nil {
-		return nil
+		return a.config.Options
 	}
-
-	return &Options{
+	opts := &Options{
 		Tools:              options.Tools,
 		ToolMode:           options.ToolMode,
 		Temperature:        options.Temperature,
@@ -146,6 +151,23 @@ func (a *Agent) convertOptions(options *agent.RunOptions) *Options {
 		MaxTokens:          options.MaxTokens,
 		AdditionalMetadata: options.AdditionalMetadata,
 	}
+	if baseOptions := a.config.Options; baseOptions != nil {
+		// Fill in any missing fields from base options.
+		if opts.Tools == nil {
+			opts.Tools = baseOptions.Tools
+		}
+		cmp.Or(opts.ToolMode, baseOptions.ToolMode)
+		cmp.Or(opts.Temperature, baseOptions.Temperature)
+		cmp.Or(opts.TopP, baseOptions.TopP)
+		cmp.Or(opts.MaxTokens, baseOptions.MaxTokens)
+		for k, v := range baseOptions.AdditionalMetadata {
+			if _, exists := opts.AdditionalMetadata[k]; !exists {
+				opts.AdditionalMetadata[k] = v
+			}
+		}
+	}
+
+	return opts
 }
 
 // getThreadID returns the thread ID or empty string if no thread.
