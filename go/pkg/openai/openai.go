@@ -16,8 +16,8 @@ import (
 
 // ChatClient is a Client implementation for OpenAI.
 type ChatClient struct {
-	*chat.BaseChatClient
 	client *openai.Client
+	model  string
 }
 
 // ChatClientConfig contains configuration for OpenAIChatClient.
@@ -38,8 +38,8 @@ func NewChatClient(config ChatClientConfig) *ChatClient {
 	}
 	client := openai.NewClient(ops...)
 	return &ChatClient{
-		BaseChatClient: chat.NewBaseChatClient(config.Model),
-		client:         &client,
+		model:  config.Model,
+		client: &client,
 	}
 }
 
@@ -99,7 +99,7 @@ func (c *ChatClient) CompleteStream(ctx context.Context, options *chat.Options, 
 // buildCompletionParams constructs the parameters for the OpenAI chat completion API.
 func (c *ChatClient) buildCompletionParams(options *chat.Options, messages ...*agent.Message) openai.ChatCompletionNewParams {
 	params := openai.ChatCompletionNewParams{
-		Model:    c.ModelID,
+		Model:    c.model,
 		N:        openai.Int(1),
 		Messages: make([]openai.ChatCompletionMessageParamUnion, 0, len(messages)),
 	}

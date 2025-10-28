@@ -3,7 +3,6 @@
 package openai
 
 import (
-	"github.com/microsoft/agent-framework/go/pkg/agent/chat"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
 	"github.com/openai/openai-go/v3/option"
@@ -40,7 +39,7 @@ func NewAzureChatClient(config AzureChatClientConfig) *ChatClient {
 	// Create Azure OpenAI client
 	client := openai.NewClient(ops...)
 	return &ChatClient{
-		BaseChatClient: chat.NewBaseChatClient(config.DeploymentName),
-		client:         &client,
+		model:  config.DeploymentName,
+		client: &client,
 	}
 }
