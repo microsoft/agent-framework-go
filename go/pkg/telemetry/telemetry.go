@@ -71,9 +71,9 @@ func (t *Tracer) RecordUsage(ctx context.Context, modelID string, usage *agent.U
 	span.AddEvent("usage",
 		trace.WithAttributes(
 			attribute.String("model.id", modelID),
-			attribute.Int("tokens.prompt", usage.PromptTokens),
-			attribute.Int("tokens.completion", usage.CompletionTokens),
-			attribute.Int("tokens.total", usage.TotalTokens),
+			attribute.Int64("tokens.input", usage.InputTokenCount),
+			attribute.Int64("tokens.output", usage.OutputTokenCount),
+			attribute.Int64("tokens.total", usage.TotalTokenCount),
 		),
 	)
 

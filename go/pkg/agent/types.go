@@ -32,12 +32,10 @@ const (
 	FinishReasonError FinishReason = "error"
 )
 
-// UsageDetails contains token usage information.
+// UsageDetails provides usage details about a request/response.
 type UsageDetails struct {
-	// PromptTokens is the number of tokens in the prompt.
-	PromptTokens int
-	// CompletionTokens is the number of tokens in the completion.
-	CompletionTokens int
-	// TotalTokens is the total number of tokens used.
-	TotalTokens int
+	AdditionalCounts map[string]int64
+	InputTokenCount  int64
+	OutputTokenCount int64
+	TotalTokenCount  int64
 }
