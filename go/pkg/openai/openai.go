@@ -64,7 +64,7 @@ func (c *ChatClient) Complete(ctx context.Context, options *chat.Options, messag
 
 	}
 	return &chat.Response{
-		Message:      agent.NewMessage(agent.Role(choice.Message.Role), choice.Message.Content),
+		Message:      agent.NewMessage(agent.Role(choice.Message.Role), &agent.TextContent{Text: choice.Message.Content}),
 		FinishReason: agent.FinishReason(choice.FinishReason),
 		ModelID:      resp.Model,
 	}, nil
@@ -83,7 +83,7 @@ func (c *ChatClient) CompleteStream(ctx context.Context, options *chat.Options, 
 			}
 			choice := current.Choices[0]
 			resp := &chat.ResponseUpdate{
-				Delta:        agent.NewMessage(agent.Role(choice.Delta.Role), choice.Delta.Content),
+				Delta:        agent.NewMessage(agent.Role(choice.Delta.Role), &agent.TextContent{Text: choice.Delta.Content}),
 				FinishReason: agent.FinishReason(choice.FinishReason),
 			}
 			if !yield(resp, nil) {

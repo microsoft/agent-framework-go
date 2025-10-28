@@ -18,7 +18,7 @@ type mockChatClient struct{}
 // Complete implements the ChatClient interface.
 func (m *mockChatClient) Complete(ctx context.Context, options *chat.Options, messages ...*agent.Message) (*chat.Response, error) {
 	return &chat.Response{
-		Message:      agent.NewMessage(agent.RoleAssistant, "Hello! This is a mock response."),
+		Message:      agent.NewMessage(agent.RoleAssistant, &agent.TextContent{Text: "Hello! This is a mock response."}),
 		FinishReason: agent.FinishReasonStop,
 		Usage: &agent.UsageDetails{
 			InputTokenCount:  10,
@@ -33,7 +33,7 @@ func (m *mockChatClient) Complete(ctx context.Context, options *chat.Options, me
 func (m *mockChatClient) CompleteStream(ctx context.Context, options *chat.Options, messages ...*agent.Message) iter.Seq2[*chat.ResponseUpdate, error] {
 	resp := []*chat.ResponseUpdate{
 		{
-			Delta:        agent.NewMessage(agent.RoleAssistant, "Hello! This is a streaming mock response."),
+			Delta:        agent.NewMessage(agent.RoleAssistant, &agent.TextContent{Text: "Hello! This is a streaming mock response."}),
 			FinishReason: agent.FinishReasonStop,
 			Usage: &agent.UsageDetails{
 				InputTokenCount:  10,
@@ -66,7 +66,7 @@ func Example_customAgent() {
 	})
 
 	// Create a message
-	userMessage := agent.NewMessage(agent.RoleUser, "Hello, how are you?")
+	userMessage := agent.NewTextMessage("Hello, how are you?")
 
 	// Run the agent
 	response, err := myAgent.Run(ctx, nil, nil, userMessage)

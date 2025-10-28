@@ -125,7 +125,7 @@ func (a *Agent) prepareMessages(messages []*agent.Message) []*agent.Message {
 		return messages
 	}
 
-	systemMessage := agent.NewMessage("system", a.instructions)
+	systemMessage := agent.NewMessage(agent.RoleSystem, &agent.TextContent{Text: a.instructions})
 	allMessages := make([]*agent.Message, 0, len(messages)+1)
 	allMessages = append(allMessages, systemMessage)
 	allMessages = append(allMessages, messages...)
