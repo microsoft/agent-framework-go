@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 
 	"github.com/microsoft/agent-framework/go/pkg/agent"
@@ -31,24 +30,27 @@ func main() {
 
 func nonStreamingExample(ag agent.Agent, query string) {
 	ctx := context.Background()
-	log.Printf("=== Non-streaming Response Example ===\n")
-	log.Printf("User: %s\n", query)
+	fmt.Printf("=== Non-streaming Response Example ===\n")
+	fmt.Printf("User: %s\n", query)
 	resp, err := ag.Run(ctx, nil, nil, agent.NewTextMessage(query))
 	if err != nil {
-		log.Fatal(err)
+		fmt.Print(err)
+		return
 	}
-	log.Printf("Result: %s\n", resp.Message.Text())
+	fmt.Printf("Result: %s\n", resp.Message.Text())
 }
 
 func streamingExample(ag agent.Agent, query string) {
 	ctx := context.Background()
-	log.Printf("=== Streaming Response Example ===\n")
-	log.Printf("User: %s\n", query)
+	fmt.Printf("=== Streaming Response Example ===\n")
+	fmt.Printf("User: %s\n", query)
 	stream := agent.RunStream(ctx, ag, nil, nil, agent.NewTextMessage(query))
-	for update := range stream {
-		if update.Delta != nil {
-			fmt.Print(update.Delta.Text())
+	for update, err := range stream {
+		if err != nil {
+			fmt.Print(err)
+			return
 		}
+		fmt.Print(update.Delta.Text())
 	}
 	fmt.Print("\n")
 }

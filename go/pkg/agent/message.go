@@ -27,6 +27,9 @@ func NewTextMessage(text string) *Message {
 
 // Text returns the first text content in the response, or empty string.
 func (m *Message) Text() string {
+	if m == nil {
+		return ""
+	}
 	for _, content := range m.Contents {
 		if textContent, ok := content.(*TextContent); ok {
 			return textContent.Text
