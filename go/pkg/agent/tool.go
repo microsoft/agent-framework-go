@@ -2,7 +2,12 @@
 
 package agent
 
-import "context"
+import (
+	"context"
+	"fmt"
+	"reflect"
+	"strconv"
+)
 
 // ToolMode represents how tools should be used by the agent.
 type ToolMode string
@@ -18,18 +23,109 @@ const (
 
 // Tool represents a tool or function that an agent can use.
 type Tool struct {
-	// ID returns the unique identifier.
-	ID string
-
-	// Name returns the name.
-	Name string
-
-	// Description returns a description of what the tool does.
+	Name        string
 	Description string
 
-	// Schema returns the JSON schema for the tool's parameters.
-	Schema map[string]any
+	fn          any
+	wantContext bool
+	hasError    bool
+	schema      map[string]any
+	argsOrder   []string
+}
 
-	// Func is the function to execute the tool.
-	Func func(ctx context.Context, arguments string) (string, error)
+var (
+	typeOfContext = reflect.TypeOf((*context.Context)(nil)).Elem()
+	typeOfError   = reflect.TypeOf((*error)(nil)).Elem()
+)
+
+func NewTool(name string, fn any) Tool {
+	fnType := reflect.TypeOf(fn)
+	if fnType.Kind() != reflect.Func {
+		panic("tool function must be a function")
+	}
+
+	var hasError bool
+	switch fnType.NumOut() {
+	case 0:
+		// no return values
+	case 1:
+		// one return value, check if it's error
+		hasError = fnType.Out(0).Implements(typeOfError)
+	case 2:
+		// two return values, second must be error
+		if !fnType.Out(1).Implements(typeOfError) {
+			panic("tool function's second return value must be of type error")
+		}
+		hasError = true
+	default:
+		panic("tool function must have at most two return values")
+	}
+
+	tool := Tool{
+		Name:      name,
+		fn:        fn,
+		hasError:  hasError,
+		argsOrder: make([]string, 0, fnType.NumIn()),
+	}
+	var args = make(map[string]any, fnType.NumIn())
+	for i := 0; i < fnType.NumIn(); i++ {
+		typ := fnType.In(i)
+		if i == 0 && typ == typeOfContext {
+			tool.wantContext = true
+			continue
+		}
+		name := "arg" + strconv.Itoa(i)
+		args[name] = map[string]any{
+			"type": typ.String(),
+		}
+		tool.argsOrder = append(tool.argsOrder, name)
+
+	}
+	tool.schema = map[string]any{
+		"type":       "object",
+		"properties": args,
+	}
+	return tool
+}
+
+func (t *Tool) Schema() map[string]any {
+	return t.schema
+}
+
+func (t *Tool) Call(ctx context.Context, args map[string]any) (any, error) {
+	fnValue := reflect.ValueOf(t.fn)
+	in := make([]reflect.Value, 0, len(args)+1)
+	if t.wantContext {
+		in = append(in, reflect.ValueOf(ctx))
+	}
+	for _, name := range t.argsOrder {
+		arg, ok := args[name]
+		if !ok {
+			return nil, fmt.Errorf("missing argument: %s", name)
+		}
+		in = append(in, reflect.ValueOf(arg))
+	}
+	out := fnValue.Call(in)
+	switch len(out) {
+	case 0:
+		return nil, nil
+	case 1:
+		if t.hasError {
+			if !out[0].IsNil() {
+				return nil, out[0].Interface().(error)
+			}
+			return nil, nil
+		}
+		return out[0].Interface(), nil
+	case 2:
+		var err error
+		if t.hasError {
+			if !out[1].IsNil() {
+				err = out[1].Interface().(error)
+			}
+		}
+		return out[0].Interface(), err
+	default:
+		panic("unexpected number of return values")
+	}
 }
