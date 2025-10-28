@@ -9,10 +9,18 @@ type Message struct {
 	Name     string // Optional name of the message sender
 }
 
-// NewMessage creates a new ChatMessage with text content.
-func NewMessage(role Role, text string) *Message {
+// NewMessage creates a new [Message] with the given role and contents.
+func NewMessage(role Role, contents ...Content) *Message {
 	return &Message{
 		Role:     role,
+		Contents: contents,
+	}
+}
+
+// NewTextMessage creates a new [Message] with text content.
+func NewTextMessage(text string) *Message {
+	return &Message{
+		Role:     RoleUser,
 		Contents: []Content{&TextContent{Text: text}},
 	}
 }
@@ -25,9 +33,4 @@ func (m *Message) Text() string {
 		}
 	}
 	return ""
-}
-
-// AddContent adds content to the message.
-func (m *Message) AddContent(content Content) {
-	m.Contents = append(m.Contents, content)
 }
