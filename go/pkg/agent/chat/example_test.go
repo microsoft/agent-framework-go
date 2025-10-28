@@ -21,9 +21,9 @@ func (m *mockChatClient) Complete(ctx context.Context, options *chat.Options, me
 		Message:      agent.NewMessage(agent.RoleAssistant, "Hello! This is a mock response."),
 		FinishReason: agent.FinishReasonStop,
 		Usage: &agent.UsageDetails{
-			PromptTokens:     10,
-			CompletionTokens: 8,
-			TotalTokens:      18,
+			InputTokenCount:  10,
+			OutputTokenCount: 8,
+			TotalTokenCount:  18,
 		},
 		ModelID: "mock-model",
 	}, nil
@@ -36,9 +36,9 @@ func (m *mockChatClient) CompleteStream(ctx context.Context, options *chat.Optio
 			Delta:        agent.NewMessage(agent.RoleAssistant, "Hello! This is a streaming mock response."),
 			FinishReason: agent.FinishReasonStop,
 			Usage: &agent.UsageDetails{
-				PromptTokens:     10,
-				CompletionTokens: 9,
-				TotalTokens:      19,
+				InputTokenCount:  10,
+				OutputTokenCount: 9,
+				TotalTokenCount:  19,
 			},
 			ModelID: "mock-model",
 		},
@@ -77,10 +77,10 @@ func Example_customAgent() {
 	// Print the response
 	fmt.Printf("\nAgent Response: %s\n", response.Message.Text())
 	fmt.Printf("Model ID: %s\n", response.ModelID)
-	fmt.Printf("Usage: %d prompt + %d completion = %d total tokens\n",
-		response.Usage.PromptTokens,
-		response.Usage.CompletionTokens,
-		response.Usage.TotalTokens)
+	fmt.Printf("Usage: %d input + %d output = %d total tokens\n",
+		response.Usage.InputTokenCount,
+		response.Usage.OutputTokenCount,
+		response.Usage.TotalTokenCount)
 
 	// Example with streaming
 	fmt.Println("\n--- Streaming Example ---")
