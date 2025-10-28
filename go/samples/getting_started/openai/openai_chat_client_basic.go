@@ -33,7 +33,7 @@ func nonStreamingExample(ag agent.Agent, query string) {
 	ctx := context.Background()
 	fmt.Printf("=== Non-streaming Response Example ===\n")
 	fmt.Printf("User: %s\n", query)
-	resp, err := ag.Run(ctx, nil, nil, agent.NewTextMessage(query))
+	resp, err := agent.RunText(ctx, ag, query)
 	if err != nil {
 		fmt.Print(err)
 		return
