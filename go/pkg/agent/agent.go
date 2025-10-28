@@ -61,6 +61,11 @@ func RunStream(ctx context.Context, agent Agent, thread Thread, options *RunOpti
 	}
 }
 
+// Run is a helper function to run an agent with a text message.
+func RunText(ctx context.Context, agent Agent, msg string) (*RunResponse, error) {
+	return agent.Run(ctx, nil, nil, NewTextMessage(msg))
+}
+
 // RunOptions contains options for agent execution.
 type RunOptions struct {
 	// Tools to make available to the agent.
