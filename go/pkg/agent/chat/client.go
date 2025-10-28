@@ -66,15 +66,3 @@ type Options struct {
 	// AdditionalMetadata for provider-specific options.
 	AdditionalMetadata map[string]interface{}
 }
-
-// BaseChatClient provides common functionality for ChatClient implementations.
-type BaseChatClient struct {
-	ModelID string
-}
-
-// NewBaseChatClient creates a new BaseChatClient.
-func NewBaseChatClient(modelID string) *BaseChatClient {
-	return &BaseChatClient{
-		ModelID: modelID,
-	}
-}
