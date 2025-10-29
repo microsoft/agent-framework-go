@@ -3,10 +3,14 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"reflect"
+	"runtime"
 	"strconv"
+	"strings"
+	"sync"
 )
 
 // ToolMode represents how tools should be used by the agent.
@@ -21,16 +25,54 @@ const (
 	ToolModeNone ToolMode = "none"
 )
 
+type ToolParameter struct {
+	Name        string
+	Description string
+	Type        string
+}
+
 // Tool represents a tool or function that an agent can use.
 type Tool struct {
 	Name        string
 	Description string
+	Parameters  []ToolParameter
 
-	fn          any
+	// Func is the function to be called when the tool is invoked.
+	// The function can have any signature, but must return either nothing, a single value,
+	// or a value and an error. If the first parameter of Func is context.Context, it will be
+	// passed the context when the tool is called.
+	Func any
+
+	initOnce sync.Once
+	initErr  error
+
 	wantContext bool
 	hasError    bool
-	schema      map[string]any
-	argsOrder   []string
+}
+
+// NewTool creates a new Tool with the given name, description, parameters, and function.
+// See [Tool] for more details.
+func NewTool(name string, description string, params []ToolParameter, fn any) (*Tool, error) {
+	t := &Tool{
+		Name:        name,
+		Description: description,
+		Parameters:  params,
+		Func:        fn,
+	}
+	if err := t.init(); err != nil {
+		return nil, err
+	}
+	return t, nil
+}
+
+// MustNewTool creates a new Tool and panics if there is an error.
+// See [NewTool] for more details.
+func MustNewTool(name string, description string, params []ToolParameter, fn any) *Tool {
+	t, err := NewTool(name, description, params, fn)
+	if err != nil {
+		panic(err)
+	}
+	return t
 }
 
 var (
@@ -38,70 +80,88 @@ var (
 	typeOfError   = reflect.TypeOf((*error)(nil)).Elem()
 )
 
-func NewTool(name string, fn any) Tool {
-	fnType := reflect.TypeOf(fn)
-	if fnType.Kind() != reflect.Func {
-		panic("tool function must be a function")
-	}
-
-	var hasError bool
-	switch fnType.NumOut() {
-	case 0:
-		// no return values
-	case 1:
-		// one return value, check if it's error
-		hasError = fnType.Out(0).Implements(typeOfError)
-	case 2:
-		// two return values, second must be error
-		if !fnType.Out(1).Implements(typeOfError) {
-			panic("tool function's second return value must be of type error")
+func (t *Tool) init() error {
+	t.initOnce.Do(func() {
+		if t.Func == nil {
+			t.initErr = fmt.Errorf("tool %q: Fn cannot be nil", t.Name)
+			return
 		}
-		hasError = true
-	default:
-		panic("tool function must have at most two return values")
-	}
-
-	tool := Tool{
-		Name:      name,
-		fn:        fn,
-		hasError:  hasError,
-		argsOrder: make([]string, 0, fnType.NumIn()),
-	}
-	var args = make(map[string]any, fnType.NumIn())
-	for i := 0; i < fnType.NumIn(); i++ {
-		typ := fnType.In(i)
-		if i == 0 && typ == typeOfContext {
-			tool.wantContext = true
-			continue
+		fnType := reflect.TypeOf(t.Func)
+		if fnType.Kind() != reflect.Func {
+			t.initErr = fmt.Errorf("tool %q: Fn must be a function", t.Name)
+			return
 		}
-		name := "arg" + strconv.Itoa(i)
-		args[name] = map[string]any{
-			"type": typ.String(),
+		if t.Name == "" {
+			t.Name = runtime.FuncForPC(reflect.ValueOf(t.Func).Pointer()).Name()
+			if nameParts := strings.Split(t.Name, "."); len(nameParts) != 0 {
+				t.Name = nameParts[len(nameParts)-1]
+			}
 		}
-		tool.argsOrder = append(tool.argsOrder, name)
 
-	}
-	tool.schema = map[string]any{
-		"type":       "object",
-		"properties": args,
-	}
-	return tool
+		switch fnType.NumOut() {
+		case 0:
+			// no return values
+		case 1:
+			// one return value, check if it's error
+			t.hasError = fnType.Out(0).Implements(typeOfError)
+		case 2:
+			// two return values, second must be error
+			if !fnType.Out(1).Implements(typeOfError) {
+				t.initErr = fmt.Errorf("tool %q: second return value must be of type error, got %q", t.Name, fnType.Out(1).String())
+				return
+			}
+			t.hasError = true
+		default:
+			t.initErr = fmt.Errorf("tool %q: must have at most two return values, got %d", t.Name, fnType.NumOut())
+			return
+		}
+
+		nargs := fnType.NumIn()
+		if t.Parameters != nil && len(t.Parameters) != nargs {
+			t.initErr = fmt.Errorf("tool %q: parameter count does not match provided Parameters, got %d", t.Name, nargs)
+			return
+		}
+		if nargs > 0 && fnType.In(0) == typeOfContext {
+			t.wantContext = true
+		}
+		if t.Parameters == nil {
+			t.Parameters = make([]ToolParameter, 0, nargs)
+		}
+		for i := range nargs {
+			typ := fnType.In(i)
+			if i == 0 && t.wantContext {
+				continue
+			}
+			name := "arg" + strconv.Itoa(i)
+			if i >= len(t.Parameters) {
+				t.Parameters = append(t.Parameters, ToolParameter{
+					Name: name,
+					Type: typ.String(),
+				})
+			} else {
+				p := &t.Parameters[i]
+				p.Name = cmp.Or(p.Name, name)
+				p.Type = cmp.Or(p.Type, typ.String())
+			}
+		}
+	})
+	return t.initErr
 }
 
-func (t *Tool) Schema() map[string]any {
-	return t.schema
-}
-
+// Call invokes the tool with the given context and arguments.
 func (t *Tool) Call(ctx context.Context, args map[string]any) (any, error) {
-	fnValue := reflect.ValueOf(t.fn)
+	if err := t.init(); err != nil {
+		return nil, err
+	}
+	fnValue := reflect.ValueOf(t.Func)
 	in := make([]reflect.Value, 0, len(args)+1)
 	if t.wantContext {
 		in = append(in, reflect.ValueOf(ctx))
 	}
-	for _, name := range t.argsOrder {
-		arg, ok := args[name]
+	for _, param := range t.Parameters {
+		arg, ok := args[param.Name]
 		if !ok {
-			return nil, fmt.Errorf("missing argument: %s", name)
+			return nil, fmt.Errorf("missing argument: %s", param.Name)
 		}
 		in = append(in, reflect.ValueOf(arg))
 	}
@@ -127,71 +187,5 @@ func (t *Tool) Call(ctx context.Context, args map[string]any) (any, error) {
 		return out[0].Interface(), err
 	default:
 		panic("unexpected number of return values")
-	}
-}
-
-// CallTools executes the given tool calls using the provided tools.
-func CallTools(ctx context.Context, tools []Tool, contents ...Content) *Message {
-	// Execute all tool calls and collect results
-	toolResults := make([]Content, 0, len(contents))
-	for _, content := range contents {
-		toolCall, ok := content.(*FunctionCallContent)
-		if !ok {
-			continue
-		}
-		result := executeTool(ctx, tools, toolCall)
-		toolResults = append(toolResults, result)
-	}
-
-	return NewMessage(RoleTool, toolResults...)
-}
-
-// executeTool executes a single tool call.
-func executeTool(ctx context.Context, tools []Tool, toolCall *FunctionCallContent) (ct Content) {
-	if toolCall.Error != nil {
-		// If there was an error parsing the tool call, return the error.
-		return &FunctionCallContent{
-			CallID: toolCall.CallID,
-			Error:  toolCall.Error,
-		}
-	}
-
-	// Find the tool in the options
-	var tool *Tool
-	for _, t := range tools {
-		if t.Name == toolCall.Name {
-			tool = &t
-			break
-		}
-	}
-
-	if tool == nil {
-		return &FunctionCallContent{
-			CallID: toolCall.CallID,
-			Error:  fmt.Errorf("tool not found: %s", toolCall.Name),
-		}
-	}
-
-	defer func() {
-		if r := recover(); r != nil {
-			var err error
-			if e, ok := r.(error); ok {
-				err = e
-			} else {
-				err = fmt.Errorf("%v", r)
-			}
-			ct = &FunctionResultContent{
-				CallID: toolCall.CallID,
-				Error:  fmt.Errorf("tool execution panic: %v", err),
-			}
-		}
-	}()
-
-	// Execute the tool
-	result, err := tool.Call(ctx, toolCall.Arguments)
-	return &FunctionResultContent{
-		CallID: toolCall.CallID,
-		Error:  err,
-		Result: result,
 	}
 }

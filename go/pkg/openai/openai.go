@@ -10,6 +10,7 @@ import (
 
 	"github.com/microsoft/agent-framework/go/pkg/agent"
 	"github.com/microsoft/agent-framework/go/pkg/agent/chat"
+	"github.com/microsoft/agent-framework/go/pkg/internal/exp"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/param"
@@ -139,7 +140,7 @@ func processToolCalls(ctx context.Context, choice openai.ChatCompletionChoice, o
 	}
 
 	assistant = agent.NewMessage(agent.RoleAssistant, toolCalls...)
-	tools = agent.CallTools(ctx, options.Tools, toolCalls...)
+	tools = exp.CallTools(ctx, options.Tools, toolCalls...)
 	return assistant, tools
 }
 
@@ -166,12 +167,22 @@ func buildCompletionParams(model string, options *chat.Options, messages ...*age
 			params.MaxTokens = openai.Int(int64(*options.MaxTokens))
 		}
 		for _, tool := range options.Tools {
+			args := make(map[string]any, len(tool.Parameters))
+			for _, param := range tool.Parameters {
+				args[param.Name] = map[string]any{
+					"type":        param.Type,
+					"description": param.Description,
+				}
+			}
 			params.Tools = append(params.Tools, openai.ChatCompletionToolUnionParam{
 				OfFunction: &openai.ChatCompletionFunctionToolParam{
 					Function: shared.FunctionDefinitionParam{
 						Name:        tool.Name,
 						Description: param.NewOpt(tool.Description),
-						Parameters:  tool.Schema(),
+						Parameters: map[string]any{
+							"type":       "object",
+							"properties": args,
+						},
 					},
 				},
 			})

@@ -49,7 +49,7 @@ func completeStream(ctx context.Context, client Client, options *Options, messag
 // Options contains options for chat completion.
 type Options struct {
 	// Tools to make available to the model.
-	Tools []agent.Tool
+	Tools []*agent.Tool
 
 	// ToolMode specifies how tools should be used.
 	ToolMode agent.ToolMode

@@ -12,10 +12,16 @@ import (
 	"github.com/microsoft/agent-framework/go/pkg/openai"
 )
 
-func weather(location string) string {
-	conditions := []string{"sunny", "cloudy", "rainy", "stormy"}
-	return fmt.Sprintf("The weather in %s is %s with a high of %d°C.", location, conditions[rand.Intn(4)], rand.Intn(21)+10)
-}
+var weatherTool = agent.MustNewTool(
+	"weather", "Get the current weather for a given location",
+	[]agent.ToolParameter{
+		{Name: "location", Description: "The location to get the weather for"},
+	},
+	func(location string) string {
+		conditions := []string{"sunny", "cloudy", "rainy", "stormy"}
+		return fmt.Sprintf("The weather in %s is %s with a high of %d°C.", location, conditions[rand.Intn(4)], rand.Intn(21)+10)
+	},
+)
 
 func main() {
 	// OpenAI configuration
@@ -33,9 +39,7 @@ func main() {
 	ag := client.NewAgent(&chat.Config{
 		Instructions: "You are a helpful weather agent.",
 		Options: &chat.Options{
-			Tools: []agent.Tool{
-				agent.NewTool("weather", weather),
-			},
+			Tools: []*agent.Tool{weatherTool},
 		},
 	})
 
