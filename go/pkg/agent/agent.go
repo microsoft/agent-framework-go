@@ -69,7 +69,7 @@ func RunText(ctx context.Context, agent Agent, msg string) (*RunResponse, error)
 // RunOptions contains options for agent execution.
 type RunOptions struct {
 	// Tools to make available to the agent.
-	Tools []*Tool
+	Tools []Tool
 
 	// ToolMode specifies how tools should be used.
 	ToolMode ToolMode

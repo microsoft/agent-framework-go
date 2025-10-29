@@ -9,8 +9,16 @@ import (
 	"github.com/microsoft/agent-framework/go/pkg/agent"
 )
 
-// CallTools executes the given tool calls using the provided tools.
-func CallTools(ctx context.Context, tools []*agent.Tool, contents ...agent.Content) *agent.Message {
+func ToolString(tool agent.Tool) string {
+	name, desc := tool.ToolInfo()
+	if desc == "" {
+		return fmt.Sprintf("%T{Name: %q}", tool, name)
+	}
+	return fmt.Sprintf("%T{Name: %q, Description: %q}", tool, name, desc)
+}
+
+// CallFunc executes the given tool calls using the provided tools.
+func CallFunc(ctx context.Context, tools []agent.Tool, contents ...agent.Content) *agent.Message {
 	// Execute all tool calls and collect results
 	toolResults := make([]agent.Content, 0, len(contents))
 	for _, content := range contents {
@@ -18,15 +26,15 @@ func CallTools(ctx context.Context, tools []*agent.Tool, contents ...agent.Conte
 		if !ok {
 			continue
 		}
-		result := executeTool(ctx, tools, toolCall)
+		result := executeFunc(ctx, tools, toolCall)
 		toolResults = append(toolResults, result)
 	}
 
 	return agent.NewMessage(agent.RoleTool, toolResults...)
 }
 
-// executeTool executes a single tool call.
-func executeTool(ctx context.Context, tools []*agent.Tool, toolCall *agent.FunctionCallContent) (ct agent.Content) {
+// executeFunc executes a single tool call.
+func executeFunc(ctx context.Context, tools []agent.Tool, toolCall *agent.FunctionCallContent) (ct agent.Content) {
 	if toolCall.Error != nil {
 		// If there was an error parsing the tool call, return the error.
 		return &agent.FunctionCallContent{
@@ -36,10 +44,14 @@ func executeTool(ctx context.Context, tools []*agent.Tool, toolCall *agent.Funct
 	}
 
 	// Find the tool in the options
-	var tool *agent.Tool
+	var tool *agent.Func
 	for _, t := range tools {
-		if t.Name == toolCall.Name {
-			tool = t
+		fn, ok := t.(*agent.Func)
+		if !ok {
+			continue
+		}
+		if fn.Name == toolCall.Name {
+			tool = fn
 			break
 		}
 	}

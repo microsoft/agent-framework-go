@@ -140,7 +140,7 @@ func processToolCalls(ctx context.Context, choice openai.ChatCompletionChoice, o
 	}
 
 	assistant = agent.NewMessage(agent.RoleAssistant, toolCalls...)
-	tools = exp.CallTools(ctx, options.Tools, toolCalls...)
+	tools = exp.CallFunc(ctx, options.Tools, toolCalls...)
 	return assistant, tools
 }
 
@@ -148,7 +148,6 @@ func processToolCalls(ctx context.Context, choice openai.ChatCompletionChoice, o
 func buildCompletionParams(model string, options *chat.Options, messages ...*agent.Message) openai.ChatCompletionNewParams {
 	params := openai.ChatCompletionNewParams{
 		Model:    model,
-		N:        openai.Int(1),
 		Messages: make([]openai.ChatCompletionMessageParamUnion, 0, len(messages)),
 	}
 
@@ -167,25 +166,45 @@ func buildCompletionParams(model string, options *chat.Options, messages ...*age
 			params.MaxTokens = openai.Int(int64(*options.MaxTokens))
 		}
 		for _, tool := range options.Tools {
-			args := make(map[string]any, len(tool.Parameters))
-			for _, param := range tool.Parameters {
-				args[param.Name] = map[string]any{
-					"type":        param.Type,
-					"description": param.Description,
+			switch tool := tool.(type) {
+			case *agent.HostedWebSearchTool:
+				if location, ok := tool.AdditionalProperties["user_location"]; ok {
+					if location, ok := location.(map[string]string); ok {
+						if city, ok := location["city"]; ok {
+							params.WebSearchOptions.UserLocation.Approximate.City = param.NewOpt(city)
+						}
+						if region, ok := location["region"]; ok {
+							params.WebSearchOptions.UserLocation.Approximate.Region = param.NewOpt(region)
+						}
+						if country, ok := location["country"]; ok {
+							params.WebSearchOptions.UserLocation.Approximate.Country = param.NewOpt(country)
+						}
+						if timezone, ok := location["timezone"]; ok {
+							params.WebSearchOptions.UserLocation.Approximate.Timezone = param.NewOpt(timezone)
+						}
+					}
 				}
-			}
-			params.Tools = append(params.Tools, openai.ChatCompletionToolUnionParam{
-				OfFunction: &openai.ChatCompletionFunctionToolParam{
-					Function: shared.FunctionDefinitionParam{
-						Name:        tool.Name,
-						Description: param.NewOpt(tool.Description),
-						Parameters: map[string]any{
-							"type":       "object",
-							"properties": args,
+			case *agent.Func:
+				args := make(map[string]any, len(tool.Parameters))
+				for _, param := range tool.Parameters {
+					args[param.Name] = map[string]any{
+						"type":        param.Type,
+						"description": param.Description,
+					}
+				}
+				params.Tools = append(params.Tools, openai.ChatCompletionToolUnionParam{
+					OfFunction: &openai.ChatCompletionFunctionToolParam{
+						Function: shared.FunctionDefinitionParam{
+							Name:        tool.Name,
+							Description: param.NewOpt(tool.Description),
+							Parameters: map[string]any{
+								"type":       "object",
+								"properties": args,
+							},
 						},
 					},
-				},
-			})
+				})
+			}
 		}
 		if options.ToolMode != "" {
 			params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
