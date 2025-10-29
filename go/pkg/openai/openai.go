@@ -13,7 +13,6 @@ import (
 	"github.com/microsoft/agent-framework/go/pkg/internal/exp"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
-	"github.com/openai/openai-go/v3/packages/param"
 	"github.com/openai/openai-go/v3/shared"
 )
 
@@ -171,16 +170,16 @@ func buildCompletionParams(model string, options *chat.Options, messages ...*age
 				if location, ok := tool.AdditionalProperties["user_location"]; ok {
 					if location, ok := location.(map[string]string); ok {
 						if city, ok := location["city"]; ok {
-							params.WebSearchOptions.UserLocation.Approximate.City = param.NewOpt(city)
+							params.WebSearchOptions.UserLocation.Approximate.City = openai.String(city)
 						}
 						if region, ok := location["region"]; ok {
-							params.WebSearchOptions.UserLocation.Approximate.Region = param.NewOpt(region)
+							params.WebSearchOptions.UserLocation.Approximate.Region = openai.String(region)
 						}
 						if country, ok := location["country"]; ok {
-							params.WebSearchOptions.UserLocation.Approximate.Country = param.NewOpt(country)
+							params.WebSearchOptions.UserLocation.Approximate.Country = openai.String(country)
 						}
 						if timezone, ok := location["timezone"]; ok {
-							params.WebSearchOptions.UserLocation.Approximate.Timezone = param.NewOpt(timezone)
+							params.WebSearchOptions.UserLocation.Approximate.Timezone = openai.String(timezone)
 						}
 					}
 				}
@@ -196,7 +195,7 @@ func buildCompletionParams(model string, options *chat.Options, messages ...*age
 					OfFunction: &openai.ChatCompletionFunctionToolParam{
 						Function: shared.FunctionDefinitionParam{
 							Name:        tool.Name,
-							Description: param.NewOpt(tool.Description),
+							Description: openai.String(tool.Description),
 							Parameters: map[string]any{
 								"type":       "object",
 								"properties": args,
@@ -222,7 +221,7 @@ func buildMessageParam(msg *agent.Message) openai.ChatCompletionMessageParamUnio
 		return openai.ChatCompletionMessageParamUnion{
 			OfSystem: &openai.ChatCompletionSystemMessageParam{
 				Content: openai.ChatCompletionSystemMessageParamContentUnion{
-					OfString: param.NewOpt(extractText(msg)),
+					OfString: openai.String(extractText(msg)),
 				},
 			},
 		}
@@ -231,7 +230,7 @@ func buildMessageParam(msg *agent.Message) openai.ChatCompletionMessageParamUnio
 		return openai.ChatCompletionMessageParamUnion{
 			OfUser: &openai.ChatCompletionUserMessageParam{
 				Content: openai.ChatCompletionUserMessageParamContentUnion{
-					OfString: param.NewOpt(extractText(msg)),
+					OfString: openai.String(extractText(msg)),
 				},
 			},
 		}
@@ -242,7 +241,7 @@ func buildMessageParam(msg *agent.Message) openai.ChatCompletionMessageParamUnio
 		return openai.ChatCompletionMessageParamUnion{
 			OfAssistant: &openai.ChatCompletionAssistantMessageParam{
 				Content: openai.ChatCompletionAssistantMessageParamContentUnion{
-					OfString: param.NewOpt(extractText(msg)),
+					OfString: openai.String(extractText(msg)),
 				},
 				ToolCalls: toolCalls,
 			},
@@ -254,7 +253,7 @@ func buildMessageParam(msg *agent.Message) openai.ChatCompletionMessageParamUnio
 		return openai.ChatCompletionMessageParamUnion{
 			OfTool: &openai.ChatCompletionToolMessageParam{
 				Content: openai.ChatCompletionToolMessageParamContentUnion{
-					OfString: param.NewOpt(toolResults),
+					OfString: openai.String(toolResults),
 				},
 				ToolCallID: extractToolCallID(msg),
 			},
