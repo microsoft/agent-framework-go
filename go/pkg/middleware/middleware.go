@@ -41,7 +41,7 @@ type FunctionMiddleware interface {
 
 // FunctionContext contains context for a function call.
 type FunctionContext struct {
-	Tool      agent.Tool
+	Tool      agent.Func
 	Arguments string
 	CallID    string
 	Metadata  map[string]any

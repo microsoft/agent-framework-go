@@ -11,9 +11,9 @@ import (
 	"github.com/microsoft/agent-framework/go/pkg/openai"
 )
 
-var weatherTool = agent.MustNewTool(
+var weatherTool = agent.MustNewFunc(
 	"weather", "Get the current weather for a given location",
-	[]agent.ToolParameter{
+	[]agent.FuncParameter{
 		{Name: "location", Description: "The location to get the weather for"},
 	},
 	func(location string) string {
@@ -38,7 +38,7 @@ func main() {
 	ag := client.NewAgent(&chat.Config{
 		Instructions: "You are a helpful weather agent.",
 		Options: &chat.Options{
-			Tools: []*agent.Tool{weatherTool},
+			Tools: []agent.Tool{weatherTool},
 		},
 	})
 

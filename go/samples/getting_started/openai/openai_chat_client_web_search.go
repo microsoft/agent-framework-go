@@ -5,48 +5,43 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
-	"math/rand"
-	"os"
 
 	"github.com/microsoft/agent-framework/go/pkg/agent"
 	"github.com/microsoft/agent-framework/go/pkg/agent/chat"
 	"github.com/microsoft/agent-framework/go/pkg/openai"
 )
 
-var weatherTool = agent.MustNewFunc(
-	"weather", "Get the current weather for a given location",
-	[]agent.FuncParameter{
-		{Name: "location", Description: "The location to get the weather for"},
-	},
-	func(location string) string {
-		conditions := []string{"sunny", "cloudy", "rainy", "stormy"}
-		return fmt.Sprintf("The weather in %s is %s with a high of %d°C.", location, conditions[rand.Intn(4)], rand.Intn(21)+10)
-	},
-)
+/*
+OpenAI Chat Client with Web Search Example
+
+This sample demonstrates using HostedWebSearchTool with OpenAI Chat Client
+for real-time information retrieval and current data access.
+*/
 
 func main() {
-	// OpenAI configuration
-	// Set your API key via environment variable: export OPENAI_API_KEY=your-key-here
-	// Or get one from: https://platform.openai.com/account/api-keys
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey == "" {
-		log.Fatal("OPENAI_API_KEY environment variable is required. Get your key from https://platform.openai.com/account/api-keys")
-	}
-
 	client := openai.NewChatClient(openai.ChatClientConfig{
-		Model:  "gpt-5-nano",
-		APIKey: apiKey,
+		Model: "gpt-4o-search-preview",
 	})
 	ag := client.NewAgent(&chat.Config{
 		Instructions: "You are a helpful weather agent.",
 		Options: &chat.Options{
-			Tools: []agent.Tool{weatherTool},
+			Tools: []agent.Tool{&agent.HostedWebSearchTool{
+				AdditionalProperties: map[string]any{
+					"user_location": map[string]string{
+						"country": "US",
+						"city":    "Seattle",
+					},
+				},
+			}},
 		},
 	})
 
-	nonStreamingExample(ag, "What's the weather like in Seattle?")
-	streamingExample(ag, "What's the weather like in Portland?")
+	const message = "What is the current weather? Do not ask for my current location."
+	if true {
+		nonStreamingExample(ag, message)
+	} else {
+		streamingExample(ag, message)
+	}
 }
 
 func nonStreamingExample(ag agent.Agent, query string) {
