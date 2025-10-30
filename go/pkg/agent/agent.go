@@ -3,8 +3,10 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"iter"
+	"maps"
 )
 
 // Agent represents an AI agent that can process messages and generate responses.
@@ -88,6 +90,31 @@ type RunOptions struct {
 
 	// AdditionalMetadata for provider-specific options.
 	AdditionalMetadata map[string]any
+}
+
+// Merge merges another RunOptions into this one, giving precedence to the other.
+func (o *RunOptions) Merge(other *RunOptions) *RunOptions {
+	if o == nil || other == nil {
+		if o == nil {
+			return other
+		}
+		return o
+	}
+	result := *o // copy
+	o = &result
+	o.Tools = append(other.Tools, o.Tools...)
+	o.ToolMode = cmp.Or(other.ToolMode, o.ToolMode)
+	o.MaxTurns = cmp.Or(other.MaxTurns, o.MaxTurns)
+	o.Temperature = cmp.Or(other.Temperature, o.Temperature)
+	o.TopP = cmp.Or(other.TopP, o.TopP)
+	o.MaxTokens = cmp.Or(other.MaxTokens, o.MaxTokens)
+	if other.AdditionalMetadata != nil {
+		if o.AdditionalMetadata == nil {
+			o.AdditionalMetadata = make(map[string]any)
+		}
+		maps.Copy(o.AdditionalMetadata, other.AdditionalMetadata)
+	}
+	return o
 }
 
 // RunResponse represents the result of an agent execution.
