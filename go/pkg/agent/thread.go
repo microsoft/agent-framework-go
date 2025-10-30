@@ -2,62 +2,65 @@
 
 package agent
 
-import "github.com/google/uuid"
+import (
+	"context"
+	"encoding/json"
+	"iter"
+)
 
-// Thread represents a conversation thread that maintains message history.
+// Thread contains the state of a specific conversation with an agent which may include:
+//
+//   - Conversation history or a reference to externally stored conversation history.
+//   - Memories or a reference to externally stored memories.
+//   - Any other state that the agent needs to persist across runs for a conversation.
+//
+// A Thread may also have behaviors attached to it that may include:
+//
+//   - Customized storage of state.
+//   - Data extraction from and injection into a conversation.
+//   - Chat history reduction, e.g. where messages needs to be summarized or truncated to reduce the size.
+//
+// A Thread is always constructed by an [Agent] so that the [Agent] can attach any necessary behaviors to the Thread.
+// See the [Agent.NewThread] and [Agent.DeserializeThread] methods for more information.
+//
+// Because of these behaviors, a Thread may not be reusable across different agents, since each agent may add different
+// behaviors to the Thread it creates.
+//
+// To support conversations that may need to survive application restarts or separate service requests,
+// a Thread can be serialized and deserialized, so that it can be saved in a persistent store.
 type Thread interface {
-	// ID returns the unique identifier.
-	ID() string
+	json.Marshaler
 
-	// AddMessage adds a message to the thread.
-	AddMessage(message *Message)
+	// Add adds messages to the thread.
+	Add(ctx context.Context, messages ...*Message) error
 
-	// GetMessages returns all messages in the thread.
-	GetMessages() []*Message
-
-	// Clear removes all messages from the thread.
-	Clear()
-
-	// Serialize serializes the thread to JSON.
-	Serialize() ([]byte, error)
+	// All returns an iterator over all messages in the thread.
+	All(ctx context.Context) iter.Seq2[*Message, error]
 }
 
-// InMemoryThread is a simple in-memory implementation of [Thread].
+var _ Thread = (*InMemoryThread)(nil)
+
+// InMemoryThread provides an in-memory implementation of [Thread].
+// Messages are stored entirely in local memory, providing fast access and manipulation capabilities.
 type InMemoryThread struct {
-	id       string
 	messages []*Message
 }
 
-// NewInMemoryThread creates a new InMemoryThread.
-func NewInMemoryThread() *InMemoryThread {
-	return &InMemoryThread{
-		id:       uuid.New().String(),
-		messages: make([]*Message, 0),
+func (t *InMemoryThread) MarshalJSON() ([]byte, error) {
+	return json.Marshal(t.messages)
+}
+
+func (t *InMemoryThread) Add(ctx context.Context, messages ...*Message) error {
+	t.messages = append(t.messages, messages...)
+	return nil
+}
+
+func (t *InMemoryThread) All(ctx context.Context) iter.Seq2[*Message, error] {
+	return func(yield func(*Message, error) bool) {
+		for _, v := range t.messages {
+			if !yield(v, nil) {
+				return
+			}
+		}
 	}
-}
-
-// ID returns the thread's unique identifier.
-func (t *InMemoryThread) ID() string {
-	return t.id
-}
-
-// AddMessage adds a message to the thread.
-func (t *InMemoryThread) AddMessage(msg *Message) {
-	t.messages = append(t.messages, msg)
-}
-
-// GetMessages returns all messages in the thread.
-func (t *InMemoryThread) GetMessages() []*Message {
-	return t.messages
-}
-
-// Clear removes all messages from the thread.
-func (t *InMemoryThread) Clear() {
-	t.messages = make([]*Message, 0)
-}
-
-// Serialize serializes the thread to JSON.
-func (t *InMemoryThread) Serialize() ([]byte, error) {
-	// TODO: Implement JSON serialization
-	return []byte("{}"), nil
 }
