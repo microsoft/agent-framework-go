@@ -11,6 +11,13 @@ import (
 	"github.com/microsoft/agent-framework/go/pkg/openai"
 )
 
+/*
+OpenAI Chat Agent Basic Example
+
+This sample demonstrates basic usage of openai.Agent for direct chat-based
+interactions, showing both streaming and non-streaming responses.
+*/
+
 var weatherTool = agent.MustNewFunc(
 	"weather", "Get the current weather for a given location",
 	[]agent.FuncParameter{
@@ -31,7 +38,7 @@ func main() {
 		log.Fatal("OPENAI_API_KEY environment variable is required. Get your key from https://platform.openai.com/account/api-keys")
 	}
 
-	ag := openai.NewAgent(openai.AgentConfig{
+	ag := openai.NewChatAgent(openai.AgentConfig{
 		Model:        "gpt-5-nano",
 		APIKey:       apiKey,
 		Instructions: "You are a helpful weather agent.",

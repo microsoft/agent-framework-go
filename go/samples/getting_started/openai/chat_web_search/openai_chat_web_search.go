@@ -9,14 +9,14 @@ import (
 )
 
 /*
-OpenAI Chat Client with Web Search Example
+OpenAI Chat Agent with Web Search Example
 
-This sample demonstrates using HostedWebSearchTool with OpenAI Chat Client
+This sample demonstrates using HostedWebSearchTool with OpenAI Chat Agent
 for real-time information retrieval and current data access.
 */
 
 func main() {
-	ag := openai.NewAgent(openai.AgentConfig{
+	ag := openai.NewChatAgent(openai.AgentConfig{
 		Model:        "gpt-4o-search-preview",
 		Instructions: "You are a helpful weather agent.",
 		Options: &agent.RunOptions{

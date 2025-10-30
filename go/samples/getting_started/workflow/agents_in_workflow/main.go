@@ -61,14 +61,14 @@ func main() {
 	}
 
 	// Create agents for different roles
-	writerAgent := openai.NewAgent(openai.AgentConfig{
+	writerAgent := openai.NewChatAgent(openai.AgentConfig{
 		Model:        "gpt-4o-mini",
 		APIKey:       apiKey,
 		Name:         "Story Writer",
 		Instructions: "You are a creative writer. Write a short story based on the input in 2-3 sentences.",
 	})
 
-	editorAgent := openai.NewAgent(openai.AgentConfig{
+	editorAgent := openai.NewChatAgent(openai.AgentConfig{
 		Model:        "gpt-4o-mini",
 		APIKey:       apiKey,
 		Name:         "Story Editor",
