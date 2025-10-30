@@ -39,3 +39,22 @@ type UsageDetails struct {
 	OutputTokenCount int64
 	TotalTokenCount  int64
 }
+
+func (u *UsageDetails) Add(other *UsageDetails) {
+	if u == nil || other == nil {
+		return
+	}
+	u.InputTokenCount += other.InputTokenCount
+	u.OutputTokenCount += other.OutputTokenCount
+	u.TotalTokenCount += other.TotalTokenCount
+
+	// Merge additional counts
+	if other.AdditionalCounts != nil {
+		if u.AdditionalCounts == nil {
+			u.AdditionalCounts = make(map[string]int64)
+		}
+		for k, v := range other.AdditionalCounts {
+			u.AdditionalCounts[k] += v
+		}
+	}
+}

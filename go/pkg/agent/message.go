@@ -4,9 +4,10 @@ package agent
 
 // Message represents a message in a conversation.
 type Message struct {
-	Role     Role
-	Contents []Content
-	Name     string // Optional name of the message sender
+	Contents  []Content
+	Role      Role
+	Name      string
+	MessageID string
 }
 
 // NewMessage creates a new [Message] with the given role and contents.

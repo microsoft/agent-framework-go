@@ -2,6 +2,8 @@
 
 package agent
 
+import "encoding/json"
+
 // AnnotatedRegion describes the portion of an associated [Content]
 // to which an annotation applies.
 type AnnotatedRegion interface {
@@ -96,10 +98,18 @@ type FunctionCallContent struct {
 	Annotations          []Annotation
 	RawRepresentation    any
 
-	Arguments map[string]any
+	Arguments string // Arguments as a JSON-encoded string.
 	CallID    string
 	Error     error // Error that occurred while mapping the original function call data to this object.
 	Name      string
+}
+
+func (t *FunctionCallContent) ParseArgs() (map[string]any, error) {
+	var args map[string]any
+	if err := json.Unmarshal([]byte(t.Arguments), &args); err != nil {
+		return nil, err
+	}
+	return args, nil
 }
 
 func (t *FunctionCallContent) isContent() {}

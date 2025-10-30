@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/microsoft/agent-framework/go/pkg/agent"
-	"github.com/microsoft/agent-framework/go/pkg/agent/chat"
 	"github.com/microsoft/agent-framework/go/pkg/openai"
 )
 
@@ -17,12 +16,10 @@ for real-time information retrieval and current data access.
 */
 
 func main() {
-	client := openai.NewChatClient(openai.ChatClientConfig{
-		Model: "gpt-4o-search-preview",
-	})
-	ag := client.NewAgent(&chat.Config{
+	ag := openai.NewAgent(openai.AgentConfig{
+		Model:        "gpt-4o-search-preview",
 		Instructions: "You are a helpful weather agent.",
-		Options: &chat.Options{
+		Options: &agent.RunOptions{
 			Tools: []agent.Tool{&agent.HostedWebSearchTool{
 				AdditionalProperties: map[string]any{
 					"user_location": map[string]string{
@@ -51,7 +48,7 @@ func nonStreamingExample(ag agent.Agent, query string) {
 		fmt.Print(err)
 		return
 	}
-	fmt.Printf("Result: %s\n", resp.Message.Text())
+	fmt.Printf("Result: %s\n", resp.Text())
 }
 
 func streamingExample(ag agent.Agent, query string) {
@@ -64,7 +61,7 @@ func streamingExample(ag agent.Agent, query string) {
 			fmt.Print(err)
 			return
 		}
-		fmt.Print(update.Delta.Text())
+		fmt.Print(update.Text())
 	}
 	fmt.Print("\n")
 }
