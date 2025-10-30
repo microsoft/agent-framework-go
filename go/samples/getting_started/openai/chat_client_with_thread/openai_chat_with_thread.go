@@ -41,7 +41,7 @@ func main() {
 func exampleWithAutomaticThreadCreation() {
 	fmt.Println("=== Automatic Thread Creation Example ===")
 
-	ag := openai.NewAgent(openai.AgentConfig{
+	ag := openai.NewChatAgent(openai.AgentConfig{
 		Model:        "gpt-4o-mini",
 		Instructions: "You are a helpful weather agent.",
 		Options: &agent.RunOptions{
@@ -80,7 +80,7 @@ func exampleWithThreadPersistence() {
 	fmt.Println("Using the same thread across multiple conversations to maintain context.")
 	fmt.Println()
 
-	ag := openai.NewAgent(openai.AgentConfig{
+	ag := openai.NewChatAgent(openai.AgentConfig{
 		Model:        "gpt-4o-mini",
 		Instructions: "You are a helpful weather agent.",
 		Options: &agent.RunOptions{
@@ -130,7 +130,7 @@ func exampleWithThreadPersistence() {
 func exampleWithExistingThreadMessages() {
 	fmt.Println("=== Existing Thread Messages Example ===")
 
-	ag := openai.NewAgent(openai.AgentConfig{
+	ag := openai.NewChatAgent(openai.AgentConfig{
 		Model:        "gpt-4o-mini",
 		Instructions: "You are a helpful weather agent.",
 		Options: &agent.RunOptions{
@@ -155,7 +155,7 @@ func exampleWithExistingThreadMessages() {
 	fmt.Println("\n--- Continuing with the same thread in a new agent instance ---")
 
 	// Create a new agent instance but use the existing thread with its message history
-	newAgent := openai.NewAgent(openai.AgentConfig{
+	newAgent := openai.NewChatAgent(openai.AgentConfig{
 		Model:        "gpt-4o-mini",
 		Instructions: "You are a helpful weather agent.",
 		Options: &agent.RunOptions{
