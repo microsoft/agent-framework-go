@@ -131,7 +131,9 @@ func (a *Agent) RawRun(ctx context.Context, options *agent.RunOptions, messages 
 		contents = append(contents, &agent.TextContent{Text: choice.Message.Content})
 	}
 	return &agent.RunResponse{
-		Messages: []*agent.Message{agent.NewMessage(agent.Role(choice.Message.Role), contents...)},
+		Messages:   []*agent.Message{agent.NewMessage(agent.Role(choice.Message.Role), contents...)},
+		AgentID:    a.ID(),
+		ResponseID: resp.ID,
 	}, nil
 }
 
@@ -157,7 +159,11 @@ func (a *Agent) RawRunStream(ctx context.Context, options *agent.RunOptions, mes
 				contents = append(contents, &agent.TextContent{Text: choice.Delta.Content})
 			}
 			resp := &agent.RunResponseUpdate{
-				Contents: contents,
+				Contents:   contents,
+				AgentID:    a.ID(),
+				Role:       agent.RoleAssistant,
+				ResponseID: chunk.ID,
+				MessageID:  chunk.ID,
 			}
 			if !yield(resp, nil) {
 				return
