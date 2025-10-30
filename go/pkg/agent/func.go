@@ -21,6 +21,7 @@ type FuncParameter struct {
 }
 
 var _ Tool = (*Func)(nil)
+var _ CallTool = (*Func)(nil)
 
 // Func represents a tool that wraps a Go function to make it callable by AI models.
 type Func struct {
@@ -48,6 +49,20 @@ func (t *Func) ToolInfo() (name string, description string) {
 
 func (t *Func) Properties() map[string]any {
 	return t.AdditionalProperties
+}
+
+func (t *Func) Schema() map[string]any {
+	args := make(map[string]any, len(t.Parameters))
+	for _, param := range t.Parameters {
+		args[param.Name] = map[string]any{
+			"type":        param.Type,
+			"description": param.Description,
+		}
+	}
+	return map[string]any{
+		"type":       "object",
+		"properties": args,
+	}
 }
 
 // NewFunc creates a new [Func] with the given name, description, parameters, and function.

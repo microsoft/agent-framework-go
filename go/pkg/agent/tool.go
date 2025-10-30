@@ -2,6 +2,8 @@
 
 package agent
 
+import "context"
+
 // ToolMode represents how tools should be used by the agent.
 type ToolMode string
 
@@ -16,7 +18,13 @@ const (
 
 type Tool interface {
 	ToolInfo() (name string, description string)
-	Properties() map[string]any
+}
+
+type CallTool interface {
+	Tool
+
+	Schema() map[string]any
+	Call(ctx context.Context, args map[string]any) (any, error)
 }
 
 var _ Tool = (*HostedWebSearchTool)(nil)
