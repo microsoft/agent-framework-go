@@ -42,7 +42,7 @@ type AgentConfig struct {
 	Options      *agent.RunOptions // Default options for the agent.
 }
 
-func newAgent(isAzure bool, config AgentConfig) *Agent {
+func newChatAgent(isAzure bool, config AgentConfig) *Agent {
 	ops := make([]option.RequestOption, 0, 2)
 	if isAzure {
 		if config.Endpoint != "" {
@@ -72,14 +72,14 @@ func newAgent(isAzure bool, config AgentConfig) *Agent {
 	}
 }
 
-// NewAgent creates a new Agent.
-func NewAgent(config AgentConfig) *Agent {
-	return newAgent(false, config)
+// NewChatAgent creates a new Agent.
+func NewChatAgent(config AgentConfig) *Agent {
+	return newChatAgent(false, config)
 }
 
-// NewAzureAgent creates a new [Agent].
-func NewAzureAgent(config AgentConfig) *Agent {
-	return newAgent(true, config)
+// NewAzureChatAgent creates a new [Agent].
+func NewAzureChatAgent(config AgentConfig) *Agent {
+	return newChatAgent(true, config)
 }
 
 // ID returns the agent's unique identifier.

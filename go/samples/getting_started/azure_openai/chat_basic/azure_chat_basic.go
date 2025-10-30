@@ -10,6 +10,13 @@ import (
 	"github.com/microsoft/agent-framework/go/pkg/openai"
 )
 
+/*
+OpenAI Azure Chat Agent Basic Example
+
+This sample demonstrates basic usage of openai.Agent for direct chat-based
+interactions, showing both streaming and non-streaming responses.
+*/
+
 var weatherTool = agent.MustNewFunc(
 	"weather", "Get the current weather for a given location",
 	[]agent.FuncParameter{
@@ -27,7 +34,7 @@ func main() {
 	// - AZURE_OPENAI_API_KEY
 	// - AZURE_OPENAI_ENDPOINT
 	// - AZURE_OPENAI_DEPLOYMENT_NAME
-	ag := openai.NewAzureAgent(openai.AgentConfig{
+	ag := openai.NewAzureChatAgent(openai.AgentConfig{
 		APIKey:     os.Getenv("AZURE_OPENAI_API_KEY"),         // or set directly
 		Endpoint:   os.Getenv("AZURE_OPENAI_ENDPOINT"),        // e.g., "https://your-resource.openai.azure.com/"
 		Model:      os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), // e.g., "gpt-4o"
