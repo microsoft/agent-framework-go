@@ -113,7 +113,7 @@ func (a *Agent) Run(ctx context.Context, t agent.Thread, options *agent.RunOptio
 	startLength := len(threadMessages)
 
 	// Convert RunOptions to ChatOptions
-	options = a.mergeOptions(options)
+	options = a.config.Options.Merge(options)
 
 	for {
 		// Call the chat client
@@ -169,7 +169,7 @@ func (a *Agent) RunStream(ctx context.Context, t agent.Thread, options *agent.Ru
 	threadMessages, err := a.prepareMessages(ctx, t, slices.Clone(messages))
 
 	// Convert RunOptions to ChatOptions
-	options = a.mergeOptions(options)
+	options = a.config.Options.Merge(options)
 
 	startLength := len(threadMessages)
 	return func(yield func(*agent.RunResponseUpdate, error) bool) {
@@ -274,38 +274,6 @@ func (a *Agent) prepareMessages(ctx context.Context, thread agent.Thread, messag
 		}
 	}
 	return messages, nil
-}
-
-// mergeOptions merges the provided RunOptions with the agent's default options.
-func (a *Agent) mergeOptions(options *agent.RunOptions) *agent.RunOptions {
-	if options == nil {
-		return a.config.Options
-	}
-	opts := &agent.RunOptions{
-		Tools:              options.Tools,
-		ToolMode:           options.ToolMode,
-		Temperature:        options.Temperature,
-		TopP:               options.TopP,
-		MaxTokens:          options.MaxTokens,
-		AdditionalMetadata: options.AdditionalMetadata,
-	}
-	if baseOptions := a.config.Options; baseOptions != nil {
-		// Fill in any missing fields from base options.
-		if opts.Tools == nil {
-			opts.Tools = baseOptions.Tools
-		}
-		cmp.Or(opts.ToolMode, baseOptions.ToolMode)
-		cmp.Or(opts.Temperature, baseOptions.Temperature)
-		cmp.Or(opts.TopP, baseOptions.TopP)
-		cmp.Or(opts.MaxTokens, baseOptions.MaxTokens)
-		for k, v := range baseOptions.AdditionalMetadata {
-			if _, exists := opts.AdditionalMetadata[k]; !exists {
-				opts.AdditionalMetadata[k] = v
-			}
-		}
-	}
-
-	return opts
 }
 
 // buildCompletionParams constructs the parameters for the OpenAI chat completion API.
