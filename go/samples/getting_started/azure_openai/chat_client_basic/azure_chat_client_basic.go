@@ -7,7 +7,6 @@ import (
 	"os"
 
 	"github.com/microsoft/agent-framework/go/pkg/agent"
-	"github.com/microsoft/agent-framework/go/pkg/agent/chat"
 	"github.com/microsoft/agent-framework/go/pkg/openai"
 )
 
@@ -28,16 +27,14 @@ func main() {
 	// - AZURE_OPENAI_API_KEY
 	// - AZURE_OPENAI_ENDPOINT
 	// - AZURE_OPENAI_DEPLOYMENT_NAME
-	client := openai.NewAzureChatClient(openai.AzureChatClientConfig{
-		APIKey:         os.Getenv("AZURE_OPENAI_API_KEY"),         // or set directly
-		Endpoint:       os.Getenv("AZURE_OPENAI_ENDPOINT"),        // e.g., "https://your-resource.openai.azure.com/"
-		DeploymentName: os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), // e.g., "gpt-4o"
-		APIVersion:     "2025-01-01-preview",                      // optional, uses default if not specified
-	})
+	ag := openai.NewAzureAgent(openai.AgentConfig{
+		APIKey:     os.Getenv("AZURE_OPENAI_API_KEY"),         // or set directly
+		Endpoint:   os.Getenv("AZURE_OPENAI_ENDPOINT"),        // e.g., "https://your-resource.openai.azure.com/"
+		Model:      os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), // e.g., "gpt-4o"
+		APIVersion: "2025-01-01-preview",                      // optional, uses default if not specified
 
-	ag := client.NewAgent(&chat.Config{
 		Instructions: "You are a helpful weather agent.",
-		Options: &chat.Options{
+		Options: &agent.RunOptions{
 			Tools: []agent.Tool{weatherTool},
 		},
 	})
@@ -55,7 +52,7 @@ func nonStreamingExample(ag agent.Agent, query string) {
 		fmt.Print(err)
 		return
 	}
-	fmt.Printf("Result: %s\n", resp.Message.Text())
+	fmt.Printf("Result: %s\n", resp.Text())
 }
 
 func streamingExample(ag agent.Agent, query string) {
@@ -68,7 +65,7 @@ func streamingExample(ag agent.Agent, query string) {
 			fmt.Print(err)
 			return
 		}
-		fmt.Print(update.Delta.Text())
+		fmt.Print(update.Text())
 	}
 	fmt.Print("\n")
 }

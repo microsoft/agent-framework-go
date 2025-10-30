@@ -39,24 +39,24 @@ func RunStream(ctx context.Context, agent Agent, thread Thread, options *RunOpti
 	if agent, ok := agent.(StreamableAgent); ok {
 		return agent.RunStream(ctx, thread, options, messages...)
 	}
-	var tID string
-	if thread != nil {
-		tID = thread.ID()
-	}
+	resp, err := agent.Run(ctx, thread, options, messages...)
+	agentID := agent.ID()
 	return func(yield func(*RunResponseUpdate, error) bool) {
-		resp, err := agent.Run(ctx, thread, options, messages...)
-		var runResp *RunResponseUpdate
-		if resp != nil {
-			runResp = &RunResponseUpdate{
-				Delta:        resp.Message,
-				FinishReason: resp.FinishReason,
-				Usage:        resp.Usage,
-				ThreadID:     tID,
-				ModelID:      resp.ModelID,
-			}
-		}
-		if !yield(runResp, err) {
+		if err != nil {
+			_ = yield(nil, err)
 			return
+		}
+		for _, msg := range resp.Messages {
+			resp := &RunResponseUpdate{
+				AgentID:    agentID,
+				MessageID:  msg.MessageID,
+				ResponseID: resp.ResponseID,
+				Role:       msg.Role,
+				Contents:   msg.Contents,
+			}
+			if !yield(resp, nil) {
+				return
+			}
 		}
 	}
 }
@@ -92,18 +92,41 @@ type RunOptions struct {
 
 // RunResponse represents the result of an agent execution.
 type RunResponse struct {
-	Message      *Message
-	FinishReason FinishReason
-	Usage        *UsageDetails
-	ThreadID     string
-	ModelID      string
+	AgentID    string
+	ResponseID string
+	Messages   []*Message
+	Usage      *UsageDetails
+}
+
+// Text returns the concatenated text contents of the response messages.
+func (r *RunResponse) Text() string {
+	var text string
+	for _, msg := range r.Messages {
+		for _, content := range msg.Contents {
+			if textContent, ok := content.(*TextContent); ok {
+				text += textContent.Text
+			}
+		}
+	}
+	return text
 }
 
 // RunResponseUpdate represents a streaming update from an agent execution.
 type RunResponseUpdate struct {
-	Delta        *Message
-	FinishReason FinishReason
-	Usage        *UsageDetails
-	ThreadID     string
-	ModelID      string
+	AgentID    string
+	MessageID  string
+	ResponseID string
+	Role       Role
+	Contents   []Content
+}
+
+// Text returns the concatenated text contents of the response messages.
+func (r *RunResponseUpdate) Text() string {
+	var text string
+	for _, content := range r.Contents {
+		if textContent, ok := content.(*TextContent); ok {
+			text += textContent.Text
+		}
+	}
+	return text
 }

@@ -4,6 +4,7 @@ package exp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/microsoft/agent-framework/go/pkg/agent"
@@ -17,24 +18,34 @@ func ToolString(tool agent.Tool) string {
 	return fmt.Sprintf("%T{Name: %q, Description: %q}", tool, name, desc)
 }
 
-// CallFunc executes the given tool calls using the provided tools.
-func CallFunc(ctx context.Context, tools []agent.Tool, contents ...agent.Content) *agent.Message {
-	// Execute all tool calls and collect results
-	toolResults := make([]agent.Content, 0, len(contents))
-	for _, content := range contents {
-		toolCall, ok := content.(*agent.FunctionCallContent)
-		if !ok {
-			continue
-		}
-		result := executeFunc(ctx, tools, toolCall)
-		toolResults = append(toolResults, result)
+func RunToolCalls(ctx context.Context, options *agent.RunOptions, contents ...agent.Content) []agent.Content {
+	if len(options.Tools) == 0 {
+		return nil
 	}
-
-	return agent.NewMessage(agent.RoleTool, toolResults...)
+	funcResults := make(map[string]struct{})
+	for _, contents := range contents {
+		if funcResult, ok := contents.(*agent.FunctionResultContent); ok {
+			funcResults[funcResult.CallID] = struct{}{}
+		}
+	}
+	funcCalls := make([]*agent.FunctionCallContent, 0, len(contents)-len(funcResults))
+	for _, contents := range contents {
+		if funcCall, ok := contents.(*agent.FunctionCallContent); ok {
+			if _, executed := funcResults[funcCall.CallID]; executed {
+				continue
+			}
+			funcCalls = append(funcCalls, funcCall)
+		}
+	}
+	toolContent := make([]agent.Content, 0, len(funcCalls))
+	for _, funcCall := range funcCalls {
+		toolContent = append(toolContent, FuncCall(ctx, options.Tools, funcCall))
+	}
+	return toolContent
 }
 
-// executeFunc executes a single tool call.
-func executeFunc(ctx context.Context, tools []agent.Tool, toolCall *agent.FunctionCallContent) (ct agent.Content) {
+// FuncCall executes a function tool call.
+func FuncCall(ctx context.Context, tools []agent.Tool, toolCall *agent.FunctionCallContent) (ct agent.Content) {
 	if toolCall.Error != nil {
 		// If there was an error parsing the tool call, return the error.
 		return &agent.FunctionCallContent{
@@ -63,6 +74,16 @@ func executeFunc(ctx context.Context, tools []agent.Tool, toolCall *agent.Functi
 		}
 	}
 
+	var args map[string]any
+	if toolCall.Arguments != "" {
+		if err := json.Unmarshal([]byte(toolCall.Arguments), &args); err != nil {
+			return &agent.FunctionCallContent{
+				CallID: toolCall.CallID,
+				Error:  fmt.Errorf("failed to parse arguments: %w", err),
+			}
+		}
+	}
+
 	defer func() {
 		if r := recover(); r != nil {
 			var err error
@@ -79,7 +100,7 @@ func executeFunc(ctx context.Context, tools []agent.Tool, toolCall *agent.Functi
 	}()
 
 	// Execute the tool
-	result, err := tool.Call(ctx, toolCall.Arguments)
+	result, err := tool.Call(ctx, args)
 	return &agent.FunctionResultContent{
 		CallID: toolCall.CallID,
 		Error:  err,

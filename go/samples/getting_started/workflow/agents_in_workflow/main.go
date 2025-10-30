@@ -7,7 +7,6 @@ import (
 	"os"
 
 	"github.com/microsoft/agent-framework/go/pkg/agent"
-	"github.com/microsoft/agent-framework/go/pkg/agent/chat"
 	"github.com/microsoft/agent-framework/go/pkg/openai"
 	"github.com/microsoft/agent-framework/go/pkg/workflow"
 )
@@ -48,7 +47,7 @@ func (e *AgentExecutor) Execute(ctx context.Context, input map[string]interface{
 
 	// Return output
 	output := make(map[string]interface{})
-	output["response"] = resp.Message.Text()
+	output["response"] = resp.Text()
 	output["message"] = message
 
 	return output, nil
@@ -61,17 +60,17 @@ func main() {
 		log.Fatal("OPENAI_API_KEY environment variable is required")
 	}
 
-	client := openai.NewChatClient(openai.ChatClientConfig{
-		Model:  "gpt-4o-mini",
-		APIKey: apiKey,
-	})
-
 	// Create agents for different roles
-	writerAgent := client.NewAgent(&chat.Config{
+	writerAgent := openai.NewAgent(openai.AgentConfig{
+		Model:        "gpt-4o-mini",
+		APIKey:       apiKey,
 		Name:         "Story Writer",
 		Instructions: "You are a creative writer. Write a short story based on the input in 2-3 sentences.",
 	})
-	editorAgent := client.NewAgent(&chat.Config{
+
+	editorAgent := openai.NewAgent(openai.AgentConfig{
+		Model:        "gpt-4o-mini",
+		APIKey:       apiKey,
 		Name:         "Story Editor",
 		Instructions: "You are an editor. Review and improve the following text. Make it more concise and impactful.",
 	})

@@ -3,108 +3,236 @@
 package openai
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"iter"
+	"slices"
 
+	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework/go/pkg/agent"
-	"github.com/microsoft/agent-framework/go/pkg/agent/chat"
 	"github.com/microsoft/agent-framework/go/pkg/internal/exp"
 	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/azure"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/shared"
 )
 
-// ChatClient is a Client implementation for OpenAI.
-type ChatClient struct {
-	client *openai.Client
-	model  string
+var _ agent.Agent = (*Agent)(nil)
+var _ agent.StreamableAgent = (*Agent)(nil)
+
+type Agent struct {
+	client openai.Client
+	config AgentConfig
 }
 
-// ChatClientConfig contains configuration for OpenAIChatClient.
-type ChatClientConfig struct {
+// AgentConfig contains configuration for [Agent].
+type AgentConfig struct {
 	Model    string
 	APIKey   string // Optional, if not set will use default environment variable
 	Endpoint string // Optional, defaults to OpenAI API
+
+	// Only used for Azure OpenAI
+	APIVersion string // Optional, defaults to latest API version
+
+	Name         string
+	Instructions string
+	ID           string
+	Options      *agent.RunOptions // Default options for the agent.
 }
 
-// NewChatClient creates a new OpenAIChatClient.
-func NewChatClient(config ChatClientConfig) *ChatClient {
+func newAgent(isAzure bool, config AgentConfig) *Agent {
 	ops := make([]option.RequestOption, 0, 2)
-	if config.APIKey != "" {
-		ops = append(ops, option.WithAPIKey(config.APIKey))
-	}
-	if config.Endpoint != "" {
-		ops = append(ops, option.WithBaseURL(config.Endpoint))
+	if isAzure {
+		if config.Endpoint != "" {
+			// The latest API versions, including previews, can be found here:
+			// https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#rest-api-versioning
+			apiVersion := cmp.Or(config.APIVersion, "2025-01-01-preview")
+			ops = append(ops, azure.WithEndpoint(config.Endpoint, apiVersion))
+		}
+		if config.APIKey != "" {
+			ops = append(ops, azure.WithAPIKey(config.APIKey))
+		}
+	} else {
+		if config.APIKey != "" {
+			ops = append(ops, option.WithAPIKey(config.APIKey))
+		}
+		if config.Endpoint != "" {
+			ops = append(ops, option.WithBaseURL(config.Endpoint))
+		}
 	}
 	client := openai.NewClient(ops...)
-	return &ChatClient{
-		model:  config.Model,
-		client: &client,
+	if config.ID == "" {
+		config.ID = uuid.New().String()
+	}
+	return &Agent{
+		client: client,
+		config: config,
 	}
 }
 
-// NewAgent creates a new agent that uses this chat client.
-func (c *ChatClient) NewAgent(config *chat.Config) agent.Agent {
-	return chat.New(c, config)
+// NewAgent creates a new Agent.
+func NewAgent(config AgentConfig) *Agent {
+	return newAgent(false, config)
 }
 
-// Complete generates a single response for the given messages.
-func (c *ChatClient) Complete(ctx context.Context, options *chat.Options, messages ...*agent.Message) (*chat.Response, error) {
-	// Keep track of all messages in the conversation
-	completionParams := buildCompletionParams(c.model, options, messages...)
+// NewAzureAgent creates a new [Agent].
+func NewAzureAgent(config AgentConfig) *Agent {
+	return newAgent(true, config)
+}
+
+// ID returns the agent's unique identifier.
+func (a *Agent) ID() string {
+	return a.config.ID
+}
+
+// Name returns the agent's name.
+func (a *Agent) Name() string {
+	return a.config.Name
+}
+
+// NewThread creates a new thread for this agent.
+func (a *Agent) NewThread() agent.Thread {
+	return agent.NewInMemoryThread()
+}
+
+// DeserializeThread deserializes a thread from JSON.
+func (a *Agent) DeserializeThread(data []byte) (agent.Thread, error) {
+	// TODO: Implement JSON deserialization
+	return agent.NewInMemoryThread(), nil
+}
+
+// Run executes the agent with the given messages and options.
+func (a *Agent) Run(ctx context.Context, t agent.Thread, options *agent.RunOptions, messages ...*agent.Message) (*agent.RunResponse, error) {
+	messages = slices.Clone(messages)
+	inLength := len(messages)
+
+	// Prepare messages with system instructions
+	messages = a.prepareMessages(messages)
+
+	// Convert RunOptions to ChatOptions
+	options = a.mergeOptions(options)
 
 	for {
-		// Call OpenAI API
-		resp, err := c.client.Chat.Completions.New(ctx, completionParams)
+		// Call the chat client
+		response, err := a.run(ctx, options, messages...)
 		if err != nil {
 			return nil, err
 		}
-
-		choice := resp.Choices[0]
-
-		// Check if there are tool calls to execute
-		if choice.FinishReason == "tool_calls" && len(choice.Message.ToolCalls) > 0 {
-			// Parse and collect tool calls
-			assistant, tools := processToolCalls(ctx, choice, options)
-			completionParams.Messages = append(completionParams.Messages, buildMessageParam(assistant), buildMessageParam(tools))
-
-			// Continue the loop to get the final response
+		message := response.Messages[0]
+		messages = append(messages, message)
+		toolResult := exp.RunToolCalls(ctx, options, message.Contents...)
+		if len(toolResult) > 0 {
+			// Add a single Message to the response with the results
+			messages = append(messages, agent.NewMessage(agent.RoleTool, toolResult...))
 			continue
 		}
-
-		// If no tool calls, this is the final response
-		contents := make([]agent.Content, 0, 1)
-		if choice.Message.Content != "" {
-			contents = append(contents, &agent.TextContent{Text: choice.Message.Content})
-		} else {
-			contents = append(contents, &agent.TextContent{Text: ""})
-		}
-
-		return &chat.Response{
-			Message:      agent.NewMessage(agent.Role(choice.Message.Role), contents...),
-			FinishReason: agent.FinishReason(choice.FinishReason),
-			ModelID:      resp.Model,
+		return &agent.RunResponse{
+			Messages:   messages[inLength:],
+			AgentID:    a.ID(),
+			ResponseID: response.ResponseID,
 		}, nil
 	}
 }
 
-// CompleteStream generates a streaming response for the given messages.
-func (c *ChatClient) CompleteStream(ctx context.Context, options *chat.Options, messages ...*agent.Message) iter.Seq2[*chat.ResponseUpdate, error] {
-	stream := c.client.Chat.Completions.NewStreaming(ctx, buildCompletionParams(c.model, options, messages...))
-	return func(yield func(*chat.ResponseUpdate, error) bool) {
-		defer stream.Close()
-		for stream.Next() {
-			current := stream.Current()
-			// Skip if no choices are available (common in streaming responses)
-			if len(current.Choices) == 0 {
+// Run generates a single response for the given messages.
+func (c *Agent) run(ctx context.Context, options *agent.RunOptions, messages ...*agent.Message) (*agent.RunResponse, error) {
+	resp, err := c.client.Chat.Completions.New(ctx, buildCompletionParams(c.config.Model, options, messages...))
+	if err != nil {
+		return nil, err
+	}
+	choice := resp.Choices[0]
+	contents := make([]agent.Content, 0, 1+len(choice.Message.ToolCalls))
+	for _, tc := range choice.Message.ToolCalls {
+		contents = append(contents, &agent.FunctionCallContent{
+			CallID:    tc.ID,
+			Name:      tc.Function.Name,
+			Arguments: tc.Function.Arguments,
+		})
+	}
+	if choice.Message.Content != "" {
+		contents = append(contents, &agent.TextContent{Text: choice.Message.Content})
+	}
+	return &agent.RunResponse{
+		Messages: []*agent.Message{agent.NewMessage(agent.Role(choice.Message.Role), contents...)},
+	}, nil
+}
+
+func (a *Agent) RunStream(ctx context.Context, t agent.Thread, options *agent.RunOptions, messages ...*agent.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
+	messages = slices.Clone(messages)
+
+	// Prepare messages with system instructions
+	messages = a.prepareMessages(messages)
+
+	// Convert RunOptions to ChatOptions
+	options = a.mergeOptions(options)
+
+	return func(yield func(*agent.RunResponseUpdate, error) bool) {
+		for {
+			var contents []agent.Content
+			for update, err := range a.runStream(ctx, options, messages...) {
+				if err != nil {
+					if !yield(nil, err) {
+						return
+					}
+				}
+				contents = append(contents, update.Contents...)
+				if !yield(update, nil) {
+					return
+				}
+			}
+			if !slices.ContainsFunc(contents, func(content agent.Content) bool {
+				_, ok := content.(*agent.FunctionCallContent)
+				return ok
+			}) {
+				// No tool calls
+				return
+			}
+			messages = append(messages, agent.NewMessage(agent.RoleAssistant, contents...))
+			toolResult := exp.RunToolCalls(ctx, options, contents...)
+			if len(toolResult) > 0 {
+				// Add a single Message to the response with the results
+				if !yield(&agent.RunResponseUpdate{
+					AgentID:  a.ID(),
+					Contents: toolResult,
+					Role:     agent.RoleAssistant,
+				}, nil) {
+					return
+				}
+				messages = append(messages, agent.NewMessage(agent.RoleTool, toolResult...))
 				continue
 			}
-			choice := current.Choices[0]
-			resp := &chat.ResponseUpdate{
-				Delta:        agent.NewMessage(agent.Role(choice.Delta.Role), &agent.TextContent{Text: choice.Delta.Content}),
-				FinishReason: agent.FinishReason(choice.FinishReason),
+			// No more tool calls to process
+			return
+		}
+	}
+
+}
+
+func (a *Agent) runStream(ctx context.Context, options *agent.RunOptions, messages ...*agent.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
+	stream := a.client.Chat.Completions.NewStreaming(ctx, buildCompletionParams(a.config.Model, options, messages...))
+	return func(yield func(*agent.RunResponseUpdate, error) bool) {
+		defer stream.Close()
+		var acc openai.ChatCompletionAccumulator
+		for stream.Next() {
+			chunk := stream.Current()
+			if !acc.AddChunk(chunk) {
+				continue
+			}
+			var contents []agent.Content
+			if tc, ok := acc.JustFinishedToolCall(); ok {
+				contents = append(contents, &agent.FunctionCallContent{
+					CallID:    tc.ID,
+					Name:      tc.Name,
+					Arguments: tc.Arguments,
+				})
+			}
+			if choice := chunk.Choices[0]; choice.Delta.Content != "" {
+				contents = append(contents, &agent.TextContent{Text: choice.Delta.Content})
+			}
+			resp := &agent.RunResponseUpdate{
+				Contents: contents,
 			}
 			if !yield(resp, nil) {
 				return
@@ -116,35 +244,49 @@ func (c *ChatClient) CompleteStream(ctx context.Context, options *chat.Options, 
 	}
 }
 
-func processToolCalls(ctx context.Context, choice openai.ChatCompletionChoice, options *chat.Options) (assistant, tools *agent.Message) {
-	toolCalls := make([]agent.Content, 0, len(choice.Message.ToolCalls))
-	for _, toolCall := range choice.Message.ToolCalls {
-		// Parse arguments from JSON string to map
-		var args map[string]any
-		if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
-			// If parsing fails, store the error
-			toolCalls = append(toolCalls, &agent.FunctionCallContent{
-				CallID: toolCall.ID,
-				Name:   toolCall.Function.Name,
-				Error:  err,
-			})
-			continue
-		}
-
-		toolCalls = append(toolCalls, &agent.FunctionCallContent{
-			CallID:    toolCall.ID,
-			Name:      toolCall.Function.Name,
-			Arguments: args,
-		})
+// prepareMessages adds system instructions to the message list.
+func (a *Agent) prepareMessages(messages []*agent.Message) []*agent.Message {
+	if a.config.Instructions == "" {
+		return messages
 	}
 
-	assistant = agent.NewMessage(agent.RoleAssistant, toolCalls...)
-	tools = exp.CallFunc(ctx, options.Tools, toolCalls...)
-	return assistant, tools
+	return append(messages, agent.NewMessage(agent.RoleSystem, &agent.TextContent{Text: a.config.Instructions}))
+}
+
+// mergeOptions merges the provided RunOptions with the agent's default options.
+func (a *Agent) mergeOptions(options *agent.RunOptions) *agent.RunOptions {
+	if options == nil {
+		return a.config.Options
+	}
+	opts := &agent.RunOptions{
+		Tools:              options.Tools,
+		ToolMode:           options.ToolMode,
+		Temperature:        options.Temperature,
+		TopP:               options.TopP,
+		MaxTokens:          options.MaxTokens,
+		AdditionalMetadata: options.AdditionalMetadata,
+	}
+	if baseOptions := a.config.Options; baseOptions != nil {
+		// Fill in any missing fields from base options.
+		if opts.Tools == nil {
+			opts.Tools = baseOptions.Tools
+		}
+		cmp.Or(opts.ToolMode, baseOptions.ToolMode)
+		cmp.Or(opts.Temperature, baseOptions.Temperature)
+		cmp.Or(opts.TopP, baseOptions.TopP)
+		cmp.Or(opts.MaxTokens, baseOptions.MaxTokens)
+		for k, v := range baseOptions.AdditionalMetadata {
+			if _, exists := opts.AdditionalMetadata[k]; !exists {
+				opts.AdditionalMetadata[k] = v
+			}
+		}
+	}
+
+	return opts
 }
 
 // buildCompletionParams constructs the parameters for the OpenAI chat completion API.
-func buildCompletionParams(model string, options *chat.Options, messages ...*agent.Message) openai.ChatCompletionNewParams {
+func buildCompletionParams(model string, options *agent.RunOptions, messages ...*agent.Message) openai.ChatCompletionNewParams {
 	params := openai.ChatCompletionNewParams{
 		Model:    model,
 		Messages: make([]openai.ChatCompletionMessageParamUnion, 0, len(messages)),
