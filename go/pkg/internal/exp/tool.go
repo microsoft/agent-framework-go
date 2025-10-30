@@ -18,7 +18,7 @@ func ToolString(tool agent.Tool) string {
 	return fmt.Sprintf("%T{Name: %q, Description: %q}", tool, name, desc)
 }
 
-func RunToolCalls(ctx context.Context, options *agent.RunOptions, contents ...agent.Content) []agent.Content {
+func runToolCalls(ctx context.Context, options *agent.RunOptions, contents ...agent.Content) []agent.Content {
 	if len(options.Tools) == 0 {
 		return nil
 	}
@@ -30,22 +30,22 @@ func RunToolCalls(ctx context.Context, options *agent.RunOptions, contents ...ag
 	}
 	funcCalls := make([]*agent.FunctionCallContent, 0, len(contents)-len(funcResults))
 	for _, contents := range contents {
-		if funcCall, ok := contents.(*agent.FunctionCallContent); ok {
-			if _, executed := funcResults[funcCall.CallID]; executed {
+		if fc, ok := contents.(*agent.FunctionCallContent); ok {
+			if _, executed := funcResults[fc.CallID]; executed {
 				continue
 			}
-			funcCalls = append(funcCalls, funcCall)
+			funcCalls = append(funcCalls, fc)
 		}
 	}
 	toolContent := make([]agent.Content, 0, len(funcCalls))
-	for _, funcCall := range funcCalls {
-		toolContent = append(toolContent, FuncCall(ctx, options.Tools, funcCall))
+	for _, fc := range funcCalls {
+		toolContent = append(toolContent, funcCall(ctx, options.Tools, fc))
 	}
 	return toolContent
 }
 
-// FuncCall executes a function tool call.
-func FuncCall(ctx context.Context, tools []agent.Tool, toolCall *agent.FunctionCallContent) (ct agent.Content) {
+// funcCall executes a function tool call.
+func funcCall(ctx context.Context, tools []agent.Tool, toolCall *agent.FunctionCallContent) (ct agent.Content) {
 	if toolCall.Error != nil {
 		// If there was an error parsing the tool call, return the error.
 		return &agent.FunctionCallContent{
