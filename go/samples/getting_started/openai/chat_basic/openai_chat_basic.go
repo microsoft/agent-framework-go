@@ -23,7 +23,7 @@ var weatherTool = agent.MustNewFunc(
 	[]agent.FuncParameter{
 		{Name: "location", Description: "The location to get the weather for"},
 	},
-	func(location string) string {
+	func(ctx context.Context, location string) string {
 		conditions := []string{"sunny", "cloudy", "rainy", "stormy"}
 		return fmt.Sprintf("The weather in %s is %s with a high of %d°C.", location, conditions[rand.Intn(4)], rand.Intn(21)+10)
 	},
