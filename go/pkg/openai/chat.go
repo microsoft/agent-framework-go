@@ -103,48 +103,18 @@ func (a *Agent) DeserializeThread(data []byte) (agent.Thread, error) {
 	return new(agent.InMemoryThread), nil
 }
 
-// Run executes the agent with the given messages and options.
 func (a *Agent) Run(ctx context.Context, t agent.Thread, options *agent.RunOptions, messages ...*agent.Message) (*agent.RunResponse, error) {
-	// Prepare messages with system instructions
-	threadMessages, err := a.prepareMessages(ctx, t, slices.Clone(messages))
-	if err != nil {
-		return nil, err
-	}
-	startLength := len(threadMessages)
-
-	// Convert RunOptions to ChatOptions
 	options = a.config.Options.Merge(options)
-
-	for {
-		// Call the chat client
-		response, err := a.run(ctx, options, threadMessages...)
-		if err != nil {
-			return nil, err
-		}
-		message := response.Messages[0]
-		threadMessages = append(threadMessages, message)
-		toolResult := exp.RunToolCalls(ctx, options, message.Contents...)
-		if len(toolResult) > 0 {
-			// Add a single Message to the response with the results
-			threadMessages = append(threadMessages, agent.NewMessage(agent.RoleTool, toolResult...))
-			continue
-		}
-		if t != nil {
-			if err := t.Add(ctx, threadMessages[startLength:]...); err != nil {
-				return nil, err
-			}
-		}
-		return &agent.RunResponse{
-			Messages:   threadMessages[startLength:],
-			AgentID:    a.ID(),
-			ResponseID: response.ResponseID,
-		}, nil
-	}
+	return exp.Run(ctx, a, t, options, slices.Clone(messages)...)
 }
 
-// Run generates a single response for the given messages.
-func (c *Agent) run(ctx context.Context, options *agent.RunOptions, messages ...*agent.Message) (*agent.RunResponse, error) {
-	resp, err := c.client.Chat.Completions.New(ctx, buildCompletionParams(c.config.Model, options, messages...))
+func (a *Agent) RunStream(ctx context.Context, t agent.Thread, options *agent.RunOptions, messages ...*agent.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
+	options = a.config.Options.Merge(options)
+	return exp.RunStream(ctx, a, t, options, slices.Clone(messages)...)
+}
+
+func (a *Agent) RawRun(ctx context.Context, options *agent.RunOptions, messages ...*agent.Message) (*agent.RunResponse, error) {
+	resp, err := a.client.Chat.Completions.New(ctx, a.buildCompletionParams(options, messages...))
 	if err != nil {
 		return nil, err
 	}
@@ -165,69 +135,8 @@ func (c *Agent) run(ctx context.Context, options *agent.RunOptions, messages ...
 	}, nil
 }
 
-func (a *Agent) RunStream(ctx context.Context, t agent.Thread, options *agent.RunOptions, messages ...*agent.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
-	threadMessages, err := a.prepareMessages(ctx, t, slices.Clone(messages))
-
-	// Convert RunOptions to ChatOptions
-	options = a.config.Options.Merge(options)
-
-	startLength := len(threadMessages)
-	return func(yield func(*agent.RunResponseUpdate, error) bool) {
-		if err != nil {
-			if !yield(nil, err) {
-				return
-			}
-		}
-		for {
-			var contents []agent.Content
-			for update, err := range a.runStream(ctx, options, threadMessages...) {
-				if err != nil {
-					if !yield(nil, err) {
-						return
-					}
-				}
-				contents = append(contents, update.Contents...)
-				if !yield(update, nil) {
-					return
-				}
-			}
-			if !slices.ContainsFunc(contents, func(content agent.Content) bool {
-				_, ok := content.(*agent.FunctionCallContent)
-				return ok
-			}) {
-				// No tool calls
-				return
-			}
-			threadMessages = append(threadMessages, agent.NewMessage(agent.RoleAssistant, contents...))
-			toolResult := exp.RunToolCalls(ctx, options, contents...)
-			if len(toolResult) > 0 {
-				// Add a single Message to the response with the results
-				if !yield(&agent.RunResponseUpdate{
-					AgentID:  a.ID(),
-					Contents: toolResult,
-					Role:     agent.RoleAssistant,
-				}, nil) {
-					return
-				}
-				threadMessages = append(threadMessages, agent.NewMessage(agent.RoleTool, toolResult...))
-				continue
-			}
-			// No more tool calls to process
-			if t != nil {
-				if err := t.Add(ctx, threadMessages[startLength:]...); err != nil {
-					if !yield(nil, err) {
-						return
-					}
-				}
-			}
-			return
-		}
-	}
-
-}
-
-func (a *Agent) runStream(ctx context.Context, options *agent.RunOptions, messages ...*agent.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
-	stream := a.client.Chat.Completions.NewStreaming(ctx, buildCompletionParams(a.config.Model, options, messages...))
+func (a *Agent) RawRunStream(ctx context.Context, options *agent.RunOptions, messages ...*agent.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
+	stream := a.client.Chat.Completions.NewStreaming(ctx, a.buildCompletionParams(options, messages...))
 	return func(yield func(*agent.RunResponseUpdate, error) bool) {
 		defer stream.Close()
 		var acc openai.ChatCompletionAccumulator
@@ -260,29 +169,21 @@ func (a *Agent) runStream(ctx context.Context, options *agent.RunOptions, messag
 	}
 }
 
-// prepareMessages adds system instructions to the message list.
-func (a *Agent) prepareMessages(ctx context.Context, thread agent.Thread, messages []*agent.Message) ([]*agent.Message, error) {
-	if a.config.Instructions == "" {
-		messages = append(messages, agent.NewMessage(agent.RoleSystem, &agent.TextContent{Text: a.config.Instructions}))
-	}
-	if thread != nil {
-		for msg, err := range thread.All(ctx) {
-			if err != nil {
-				return nil, err
-			}
-			messages = append(messages, msg)
-		}
-	}
-	return messages, nil
-}
-
 // buildCompletionParams constructs the parameters for the OpenAI chat completion API.
-func buildCompletionParams(model string, options *agent.RunOptions, messages ...*agent.Message) openai.ChatCompletionNewParams {
+func (a *Agent) buildCompletionParams(options *agent.RunOptions, messages ...*agent.Message) openai.ChatCompletionNewParams {
 	params := openai.ChatCompletionNewParams{
-		Model:    model,
-		Messages: make([]openai.ChatCompletionMessageParamUnion, 0, len(messages)),
+		Model:    a.config.Model,
+		Messages: make([]openai.ChatCompletionMessageParamUnion, 0, len(messages)+1),
 	}
-
+	if a.config.Instructions != "" {
+		params.Messages = append(params.Messages, openai.ChatCompletionMessageParamUnion{
+			OfSystem: &openai.ChatCompletionSystemMessageParam{
+				Content: openai.ChatCompletionSystemMessageParamContentUnion{
+					OfString: openai.String(a.config.Instructions),
+				},
+			},
+		})
+	}
 	for _, msg := range messages {
 		params.Messages = append(params.Messages, buildMessageParam(msg))
 	}
