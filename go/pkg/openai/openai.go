@@ -94,42 +94,48 @@ func (a *Agent) Name() string {
 
 // NewThread creates a new thread for this agent.
 func (a *Agent) NewThread() agent.Thread {
-	return agent.NewInMemoryThread()
+	return new(agent.InMemoryThread)
 }
 
 // DeserializeThread deserializes a thread from JSON.
 func (a *Agent) DeserializeThread(data []byte) (agent.Thread, error) {
 	// TODO: Implement JSON deserialization
-	return agent.NewInMemoryThread(), nil
+	return new(agent.InMemoryThread), nil
 }
 
 // Run executes the agent with the given messages and options.
 func (a *Agent) Run(ctx context.Context, t agent.Thread, options *agent.RunOptions, messages ...*agent.Message) (*agent.RunResponse, error) {
-	messages = slices.Clone(messages)
-	inLength := len(messages)
-
 	// Prepare messages with system instructions
-	messages = a.prepareMessages(messages)
+	threadMessages, err := a.prepareMessages(ctx, t, slices.Clone(messages))
+	if err != nil {
+		return nil, err
+	}
+	startLength := len(threadMessages)
 
 	// Convert RunOptions to ChatOptions
 	options = a.mergeOptions(options)
 
 	for {
 		// Call the chat client
-		response, err := a.run(ctx, options, messages...)
+		response, err := a.run(ctx, options, threadMessages...)
 		if err != nil {
 			return nil, err
 		}
 		message := response.Messages[0]
-		messages = append(messages, message)
+		threadMessages = append(threadMessages, message)
 		toolResult := exp.RunToolCalls(ctx, options, message.Contents...)
 		if len(toolResult) > 0 {
 			// Add a single Message to the response with the results
-			messages = append(messages, agent.NewMessage(agent.RoleTool, toolResult...))
+			threadMessages = append(threadMessages, agent.NewMessage(agent.RoleTool, toolResult...))
 			continue
 		}
+		if t != nil {
+			if err := t.Add(ctx, threadMessages[startLength:]...); err != nil {
+				return nil, err
+			}
+		}
 		return &agent.RunResponse{
-			Messages:   messages[inLength:],
+			Messages:   threadMessages[startLength:],
 			AgentID:    a.ID(),
 			ResponseID: response.ResponseID,
 		}, nil
@@ -160,18 +166,21 @@ func (c *Agent) run(ctx context.Context, options *agent.RunOptions, messages ...
 }
 
 func (a *Agent) RunStream(ctx context.Context, t agent.Thread, options *agent.RunOptions, messages ...*agent.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
-	messages = slices.Clone(messages)
-
-	// Prepare messages with system instructions
-	messages = a.prepareMessages(messages)
+	threadMessages, err := a.prepareMessages(ctx, t, slices.Clone(messages))
 
 	// Convert RunOptions to ChatOptions
 	options = a.mergeOptions(options)
 
+	startLength := len(threadMessages)
 	return func(yield func(*agent.RunResponseUpdate, error) bool) {
+		if err != nil {
+			if !yield(nil, err) {
+				return
+			}
+		}
 		for {
 			var contents []agent.Content
-			for update, err := range a.runStream(ctx, options, messages...) {
+			for update, err := range a.runStream(ctx, options, threadMessages...) {
 				if err != nil {
 					if !yield(nil, err) {
 						return
@@ -189,7 +198,7 @@ func (a *Agent) RunStream(ctx context.Context, t agent.Thread, options *agent.Ru
 				// No tool calls
 				return
 			}
-			messages = append(messages, agent.NewMessage(agent.RoleAssistant, contents...))
+			threadMessages = append(threadMessages, agent.NewMessage(agent.RoleAssistant, contents...))
 			toolResult := exp.RunToolCalls(ctx, options, contents...)
 			if len(toolResult) > 0 {
 				// Add a single Message to the response with the results
@@ -200,10 +209,17 @@ func (a *Agent) RunStream(ctx context.Context, t agent.Thread, options *agent.Ru
 				}, nil) {
 					return
 				}
-				messages = append(messages, agent.NewMessage(agent.RoleTool, toolResult...))
+				threadMessages = append(threadMessages, agent.NewMessage(agent.RoleTool, toolResult...))
 				continue
 			}
 			// No more tool calls to process
+			if t != nil {
+				if err := t.Add(ctx, threadMessages[startLength:]...); err != nil {
+					if !yield(nil, err) {
+						return
+					}
+				}
+			}
 			return
 		}
 	}
@@ -245,12 +261,19 @@ func (a *Agent) runStream(ctx context.Context, options *agent.RunOptions, messag
 }
 
 // prepareMessages adds system instructions to the message list.
-func (a *Agent) prepareMessages(messages []*agent.Message) []*agent.Message {
+func (a *Agent) prepareMessages(ctx context.Context, thread agent.Thread, messages []*agent.Message) ([]*agent.Message, error) {
 	if a.config.Instructions == "" {
-		return messages
+		messages = append(messages, agent.NewMessage(agent.RoleSystem, &agent.TextContent{Text: a.config.Instructions}))
 	}
-
-	return append(messages, agent.NewMessage(agent.RoleSystem, &agent.TextContent{Text: a.config.Instructions}))
+	if thread != nil {
+		for msg, err := range thread.All(ctx) {
+			if err != nil {
+				return nil, err
+			}
+			messages = append(messages, msg)
+		}
+	}
+	return messages, nil
 }
 
 // mergeOptions merges the provided RunOptions with the agent's default options.
