@@ -223,26 +223,19 @@ func (a *Agent) buildCompletionParams(options *agent.RunOptions, messages ...*ag
 						}
 					}
 				}
-			case *agent.Func:
-				args := make(map[string]any, len(tool.Parameters))
-				for _, param := range tool.Parameters {
-					args[param.Name] = map[string]any{
-						"type":        param.Type,
-						"description": param.Description,
-					}
-				}
-				params.Tools = append(params.Tools, openai.ChatCompletionToolUnionParam{
-					OfFunction: &openai.ChatCompletionFunctionToolParam{
-						Function: shared.FunctionDefinitionParam{
-							Name:        tool.Name,
-							Description: openai.String(tool.Description),
-							Parameters: map[string]any{
-								"type":       "object",
-								"properties": args,
+			default:
+				name, description := tool.ToolInfo()
+				if tool, ok := tool.(agent.CallTool); ok {
+					params.Tools = append(params.Tools, openai.ChatCompletionToolUnionParam{
+						OfFunction: &openai.ChatCompletionFunctionToolParam{
+							Function: shared.FunctionDefinitionParam{
+								Name:        name,
+								Description: openai.String(description),
+								Parameters:  tool.Schema(),
 							},
 						},
-					},
-				})
+					})
+				}
 			}
 		}
 		if options.ToolMode != "" {

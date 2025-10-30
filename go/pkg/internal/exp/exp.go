@@ -25,6 +25,18 @@ type RawStreamAgent interface {
 }
 
 func Run(ctx context.Context, ag RawRunAgent, t agent.Thread, options *agent.RunOptions, messages ...*agent.Message) (*agent.RunResponse, error) {
+	var err error
+	if options != nil {
+		if err := initTools(ctx, options.Tools); err != nil {
+			return nil, err
+		}
+		extraTools, err := loadTools(ctx, options.Tools)
+		if err != nil {
+			return nil, err
+		}
+		options.Tools = append(options.Tools, extraTools...)
+	}
+
 	// Prepare messages with system instructions
 	threadMessages, err := prepareMessages(ctx, t, messages)
 	if err != nil {
@@ -59,7 +71,11 @@ func Run(ctx context.Context, ag RawRunAgent, t agent.Thread, options *agent.Run
 }
 
 func RunStream(ctx context.Context, ag RawStreamAgent, t agent.Thread, options *agent.RunOptions, messages ...*agent.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
-	threadMessages, err := prepareMessages(ctx, t, messages)
+	err := initTools(ctx, options.Tools)
+	var threadMessages []*agent.Message
+	if err == nil {
+		threadMessages, err = prepareMessages(ctx, t, messages)
+	}
 	startLength := len(threadMessages)
 	return func(yield func(*agent.RunResponseUpdate, error) bool) {
 		if err != nil {

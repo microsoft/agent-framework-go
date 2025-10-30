@@ -10,6 +10,47 @@ import (
 	"github.com/microsoft/agent-framework/go/pkg/agent"
 )
 
+type LoaderTool interface {
+	agent.Tool
+
+	LoadTools(ctx context.Context) ([]agent.Tool, error)
+}
+
+func loadTools(ctx context.Context, tools []agent.Tool) ([]agent.Tool, error) {
+	var result []agent.Tool
+	for _, tool := range tools {
+		if lt, ok := tool.(LoaderTool); ok {
+			innerTools, err := lt.LoadTools(ctx)
+			if err != nil {
+				name, _ := tool.ToolInfo()
+				return nil, fmt.Errorf("failed to load inner tools for %q: %w", name, err)
+			}
+			result = append(result, innerTools...)
+		}
+	}
+	return result, nil
+}
+
+type InitTool interface {
+	agent.Tool
+
+	// Init performs any initialization required for the tool.
+	Init(ctx context.Context) error
+}
+
+// initTools initializes all tools that implement the InitTool interface.
+func initTools(ctx context.Context, tools []agent.Tool) error {
+	for _, tool := range tools {
+		if tool, ok := tool.(InitTool); ok {
+			if err := tool.Init(ctx); err != nil {
+				name, _ := tool.ToolInfo()
+				return fmt.Errorf("failed to initialize tool %q: %w", name, err)
+			}
+		}
+	}
+	return nil
+}
+
 func ToolString(tool agent.Tool) string {
 	name, desc := tool.ToolInfo()
 	if desc == "" {
@@ -55,14 +96,13 @@ func funcCall(ctx context.Context, tools []agent.Tool, toolCall *agent.FunctionC
 	}
 
 	// Find the tool in the options
-	var tool *agent.Func
+	var tool agent.CallTool
 	for _, t := range tools {
-		fn, ok := t.(*agent.Func)
-		if !ok {
-			continue
-		}
-		if fn.Name == toolCall.Name {
-			tool = fn
+		name, _ := t.ToolInfo()
+		if name == toolCall.Name {
+			if t, ok := t.(agent.CallTool); ok {
+				tool = t
+			}
 			break
 		}
 	}
