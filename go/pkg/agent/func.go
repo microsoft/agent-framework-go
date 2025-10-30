@@ -116,21 +116,26 @@ func (t *Func) init() error {
 			return
 		}
 
-		nargs := fnType.NumIn()
-		if t.Parameters != nil && len(t.Parameters) != nargs {
-			t.initErr = fmt.Errorf("tool %q: parameter count does not match provided Parameters, got %d", t.Name, nargs)
+		nParams := fnType.NumIn()
+		wantParams := nParams
+		if nParams > 0 && fnType.In(0) == typeOfContext {
+			t.wantContext = true
+			wantParams--
+		}
+		if t.Parameters != nil && len(t.Parameters) != wantParams {
+			t.initErr = fmt.Errorf("tool %q: parameter count does not match provided Parameters, got %d", t.Name, nParams)
 			return
 		}
-		if nargs > 0 && fnType.In(0) == typeOfContext {
-			t.wantContext = true
-		}
 		if t.Parameters == nil {
-			t.Parameters = make([]FuncParameter, 0, nargs)
+			t.Parameters = make([]FuncParameter, 0, wantParams)
 		}
-		for i := range nargs {
+		for i := range nParams {
 			typ := fnType.In(i)
 			if i == 0 && t.wantContext {
 				continue
+			}
+			if t.wantContext {
+				i--
 			}
 			name := "arg" + strconv.Itoa(i)
 			if i >= len(t.Parameters) {
