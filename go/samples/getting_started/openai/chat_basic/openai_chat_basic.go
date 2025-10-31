@@ -18,16 +18,24 @@ This sample demonstrates basic usage of openai.Agent for direct chat-based
 interactions, showing both streaming and non-streaming responses.
 */
 
-var weatherTool = agent.MustNewFunc(
-	"weather", "Get the current weather for a given location",
-	[]agent.FuncParameter{
-		{Name: "location", Description: "The location to get the weather for"},
-	},
-	func(ctx context.Context, location string) string {
-		conditions := []string{"sunny", "cloudy", "rainy", "stormy"}
-		return fmt.Sprintf("The weather in %s is %s with a high of %d°C.", location, conditions[rand.Intn(4)], rand.Intn(21)+10)
-	},
-)
+type weatherRequest struct {
+	Location string `json:"location"`
+}
+
+type weatherResponse struct {
+	Conditions string `json:"conditions"`
+	HighTemp   int    `json:"high_temp"`
+}
+
+var weatherTool = agent.MustNewFuncTool(&agent.Func{
+	Name:        "weather",
+	Description: "Get the current weather for a given location",
+}, func(_ context.Context, req weatherRequest) (weatherResponse, error) {
+	return weatherResponse{
+		Conditions: []string{"sunny", "cloudy", "rainy", "stormy"}[rand.Intn(4)],
+		HighTemp:   rand.Intn(21) + 10,
+	}, nil
+})
 
 func main() {
 	// OpenAI configuration

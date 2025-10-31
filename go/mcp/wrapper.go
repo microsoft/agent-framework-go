@@ -30,16 +30,16 @@ func (w *mcpToolWrapper) ToolInfo() (name string, description string) {
 	return w.tool.Name, w.tool.Description
 }
 
-func (w *mcpToolWrapper) Schema() map[string]any {
-	return w.tool.InputSchema.(map[string]any)
+func (w *mcpToolWrapper) Schema() any {
+	return w.tool.InputSchema
 }
 
 // Call implements the Func-like calling pattern for MCP tools.
-func (w *mcpToolWrapper) Call(ctx context.Context, arguments map[string]any) (any, error) {
+func (w *mcpToolWrapper) Call(ctx context.Context, args map[string]any) (any, error) {
 	// Call the MCP tool
 	result, err := w.session.CallTool(ctx, &mcpsdk.CallToolParams{
 		Name:      w.tool.Name,
-		Arguments: arguments,
+		Arguments: args,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("MCP tool call failed: %w", err)

@@ -27,8 +27,48 @@ type Tool interface {
 type CallTool interface {
 	Tool
 
-	Schema() map[string]any
+	Schema() any
 	Call(ctx context.Context, args map[string]any) (any, error)
+}
+
+var _ Tool = (*FuncTool)(nil)
+var _ CallTool = (*FuncTool)(nil)
+
+type FuncTool struct {
+	Func    Func
+	Handler FuncHandler
+}
+
+func (t *FuncTool) ToolInfo() (name string, description string) {
+	return t.Func.Name, t.Func.Description
+}
+
+func (t *FuncTool) Schema() any {
+	if t.Func.InputSchema == nil {
+		// This prevents the tool author from forgetting to write a schema where
+		// one should be provided. If we papered over this by supplying the empty
+		// schema, then every input would be validated and the problem wouldn't be
+		// discovered until runtime, when the LLM sent bad data.
+		panic("FuncTool.Schema: InputSchema is nil")
+	}
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"arg0": t.Func.InputSchema,
+		},
+		"required": []string{"arg0"},
+	}
+}
+
+func (t *FuncTool) Call(ctx context.Context, args map[string]any) (any, error) {
+	if _, ok := args["arg0"]; !ok {
+		return nil, fmt.Errorf("missing required argument: arg0")
+	}
+	argsBytes, err := json.Marshal(args["arg0"])
+	if err != nil {
+		return nil, err
+	}
+	return t.Handler(ctx, string(argsBytes))
 }
 
 var _ Tool = (*HostedWebSearchTool)(nil)
@@ -46,10 +86,6 @@ type HostedWebSearchTool struct {
 
 func (t *HostedWebSearchTool) ToolInfo() (name string, description string) {
 	return "web_search", t.Description
-}
-
-func (t *HostedWebSearchTool) Properties() map[string]any {
-	return t.AdditionalProperties
 }
 
 type LoaderTool interface {
