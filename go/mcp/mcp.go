@@ -11,7 +11,7 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/microsoft/agent-framework/go/pkg/agent"
+	"github.com/microsoft/agent-framework/go/agent"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -129,25 +129,4 @@ func (t *baseTool) loadTools(ctx context.Context) ([]agent.Tool, error) {
 	}
 
 	return result, nil
-}
-
-// CallTool calls a specific tool on the MCP server.
-func (t *baseTool) CallTool(ctx context.Context, toolName string, arguments map[string]any) (any, error) {
-	t.mu.RLock()
-	session := t.session
-	t.mu.RUnlock()
-
-	if session == nil {
-		return nil, fmt.Errorf("not connected to MCP server")
-	}
-
-	result, err := session.CallTool(ctx, &mcpsdk.CallToolParams{
-		Name:      toolName,
-		Arguments: arguments,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to call tool %q: %w", toolName, err)
-	}
-
-	return mcpContentToAgentContent(result.Content), nil
 }

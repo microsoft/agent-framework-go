@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/microsoft/agent-framework/go/pkg/agent"
-	"github.com/microsoft/agent-framework/go/pkg/middleware"
+	"github.com/microsoft/agent-framework/go/agent"
+	"github.com/microsoft/agent-framework/go/middleware"
 )
 
 // SecurityFilterMiddleware filters sensitive information from requests.

@@ -4,7 +4,7 @@ import (
 	"context"
 	"log"
 
-	"github.com/microsoft/agent-framework/go/pkg/workflow"
+	"github.com/microsoft/agent-framework/go/workflow"
 )
 
 // DataProcessingExecutor processes data and manages state

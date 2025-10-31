@@ -6,8 +6,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/microsoft/agent-framework/go/pkg/agent"
-	"github.com/microsoft/agent-framework/go/pkg/middleware"
+	"github.com/microsoft/agent-framework/go/agent"
+	"github.com/microsoft/agent-framework/go/middleware"
 )
 
 // LoggingMiddleware logs agent invocations before and after execution.

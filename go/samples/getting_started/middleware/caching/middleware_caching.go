@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/microsoft/agent-framework/go/pkg/agent"
-	"github.com/microsoft/agent-framework/go/pkg/middleware"
+	"github.com/microsoft/agent-framework/go/agent"
+	"github.com/microsoft/agent-framework/go/middleware"
 )
 
 // CachingMiddleware caches function results to avoid duplicate calls.
