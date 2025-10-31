@@ -8,21 +8,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
-	"slices"
 
-	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework/go/pkg/agent"
-	"github.com/microsoft/agent-framework/go/pkg/internal/exp"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/shared"
 )
 
-var _ agent.Agent = (*Agent)(nil)
-var _ agent.StreamableAgent = (*Agent)(nil)
+var _ agent.Client = (*Client)(nil)
+var _ agent.StreamableClient = (*Client)(nil)
 
-type Agent struct {
+type Client struct {
 	client openai.Client
 	config AgentConfig
 }
@@ -35,14 +32,9 @@ type AgentConfig struct {
 
 	// Only used for Azure OpenAI
 	APIVersion string // Optional, defaults to latest API version
-
-	Name         string
-	Instructions string
-	ID           string
-	Options      *agent.RunOptions // Default options for the agent.
 }
 
-func newChatAgent(isAzure bool, config AgentConfig) *Agent {
+func newChatClient(isAzure bool, config AgentConfig) *Client {
 	ops := make([]option.RequestOption, 0, 2)
 	if isAzure {
 		if config.Endpoint != "" {
@@ -63,58 +55,24 @@ func newChatAgent(isAzure bool, config AgentConfig) *Agent {
 		}
 	}
 	client := openai.NewClient(ops...)
-	if config.ID == "" {
-		config.ID = uuid.New().String()
-	}
-	return &Agent{
+	return &Client{
 		client: client,
 		config: config,
 	}
 }
 
-// NewChatAgent creates a new Agent.
-func NewChatAgent(config AgentConfig) *Agent {
-	return newChatAgent(false, config)
+// NewChatClient creates a new Agent.
+func NewChatClient(config AgentConfig) *Client {
+	return newChatClient(false, config)
 }
 
-// NewAzureChatAgent creates a new [Agent].
-func NewAzureChatAgent(config AgentConfig) *Agent {
-	return newChatAgent(true, config)
+// NewAzureChatClient creates a new [Agent].
+func NewAzureChatClient(config AgentConfig) *Client {
+	return newChatClient(true, config)
 }
 
-// ID returns the agent's unique identifier.
-func (a *Agent) ID() string {
-	return a.config.ID
-}
-
-// Name returns the agent's name.
-func (a *Agent) Name() string {
-	return a.config.Name
-}
-
-// NewThread creates a new thread for this agent.
-func (a *Agent) NewThread() agent.Thread {
-	return new(agent.InMemoryThread)
-}
-
-// DeserializeThread deserializes a thread from JSON.
-func (a *Agent) DeserializeThread(data []byte) (agent.Thread, error) {
-	// TODO: Implement JSON deserialization
-	return new(agent.InMemoryThread), nil
-}
-
-func (a *Agent) Run(ctx context.Context, t agent.Thread, options *agent.RunOptions, messages ...*agent.Message) (*agent.RunResponse, error) {
-	options = a.config.Options.Merge(options)
-	return exp.Run(ctx, a, t, options, slices.Clone(messages)...)
-}
-
-func (a *Agent) RunStream(ctx context.Context, t agent.Thread, options *agent.RunOptions, messages ...*agent.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
-	options = a.config.Options.Merge(options)
-	return exp.RunStream(ctx, a, t, options, slices.Clone(messages)...)
-}
-
-func (a *Agent) RawRun(ctx context.Context, options *agent.RunOptions, messages ...*agent.Message) (*agent.RunResponse, error) {
-	resp, err := a.client.Chat.Completions.New(ctx, a.buildCompletionParams(options, messages...))
+func (a *Client) Run(ctx context.Context, t agent.Thread, config agent.Config, opts *agent.RunOptions, messages ...*agent.Message) (*agent.RunResponse, error) {
+	resp, err := a.client.Chat.Completions.New(ctx, a.buildCompletionParams(opts, messages...))
 	if err != nil {
 		return nil, err
 	}
@@ -132,13 +90,13 @@ func (a *Agent) RawRun(ctx context.Context, options *agent.RunOptions, messages 
 	}
 	return &agent.RunResponse{
 		Messages:   []*agent.Message{agent.NewMessage(agent.Role(choice.Message.Role), contents...)},
-		AgentID:    a.ID(),
+		AgentID:    config.ID,
 		ResponseID: resp.ID,
 	}, nil
 }
 
-func (a *Agent) RawRunStream(ctx context.Context, options *agent.RunOptions, messages ...*agent.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
-	stream := a.client.Chat.Completions.NewStreaming(ctx, a.buildCompletionParams(options, messages...))
+func (a *Client) RunStream(ctx context.Context, t agent.Thread, config agent.Config, opts *agent.RunOptions, messages ...*agent.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
+	stream := a.client.Chat.Completions.NewStreaming(ctx, a.buildCompletionParams(opts, messages...))
 	return func(yield func(*agent.RunResponseUpdate, error) bool) {
 		defer stream.Close()
 		var acc openai.ChatCompletionAccumulator
@@ -160,7 +118,7 @@ func (a *Agent) RawRunStream(ctx context.Context, options *agent.RunOptions, mes
 			}
 			resp := &agent.RunResponseUpdate{
 				Contents:   contents,
-				AgentID:    a.ID(),
+				AgentID:    config.ID,
 				Role:       agent.RoleAssistant,
 				ResponseID: chunk.ID,
 				MessageID:  chunk.ID,
@@ -176,19 +134,10 @@ func (a *Agent) RawRunStream(ctx context.Context, options *agent.RunOptions, mes
 }
 
 // buildCompletionParams constructs the parameters for the OpenAI chat completion API.
-func (a *Agent) buildCompletionParams(options *agent.RunOptions, messages ...*agent.Message) openai.ChatCompletionNewParams {
+func (a *Client) buildCompletionParams(options *agent.RunOptions, messages ...*agent.Message) openai.ChatCompletionNewParams {
 	params := openai.ChatCompletionNewParams{
 		Model:    a.config.Model,
 		Messages: make([]openai.ChatCompletionMessageParamUnion, 0, len(messages)+1),
-	}
-	if a.config.Instructions != "" {
-		params.Messages = append(params.Messages, openai.ChatCompletionMessageParamUnion{
-			OfSystem: &openai.ChatCompletionSystemMessageParam{
-				Content: openai.ChatCompletionSystemMessageParamContentUnion{
-					OfString: openai.String(a.config.Instructions),
-				},
-			},
-		})
 	}
 	for _, msg := range messages {
 		params.Messages = append(params.Messages, buildMessageParam(msg))

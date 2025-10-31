@@ -8,12 +8,12 @@ import (
 	"os/exec"
 	"runtime"
 
-	"github.com/microsoft/agent-framework/go/pkg/internal/exp"
+	"github.com/microsoft/agent-framework/go/pkg/agent"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-var _ exp.LoaderTool = (*StdioTool)(nil)
-var _ exp.InitTool = (*StdioTool)(nil)
+var _ agent.LoaderTool = (*StdioTool)(nil)
+var _ agent.InitTool = (*StdioTool)(nil)
 
 // StdioTool connects to an MCP server via stdio (process communication).
 // This is the most common transport for local MCP servers.

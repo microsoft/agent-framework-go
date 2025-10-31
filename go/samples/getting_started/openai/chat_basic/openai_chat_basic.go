@@ -38,24 +38,26 @@ func main() {
 		log.Fatal("OPENAI_API_KEY environment variable is required. Get your key from https://platform.openai.com/account/api-keys")
 	}
 
-	ag := openai.NewChatAgent(openai.AgentConfig{
-		Model:        "gpt-5-nano",
-		APIKey:       apiKey,
-		Instructions: "You are a helpful weather agent.",
-		Options: &agent.RunOptions{
-			Tools: []agent.Tool{weatherTool},
-		},
+	client := openai.NewChatClient(openai.AgentConfig{
+		Model:  "gpt-5-nano",
+		APIKey: apiKey,
+	})
+
+	ag := agent.New(client, &agent.Config{
+		SystemInstructions: "You are a helpful weather agent.",
+	}, &agent.RunOptions{
+		Tools: []agent.Tool{weatherTool},
 	})
 
 	nonStreamingExample(ag, "What's the weather like in Seattle?")
 	streamingExample(ag, "What's the weather like in Portland, Oregon?")
 }
 
-func nonStreamingExample(ag agent.Agent, query string) {
+func nonStreamingExample(ag *agent.Agent, query string) {
 	ctx := context.Background()
 	fmt.Printf("=== Non-streaming Response Example ===\n")
 	fmt.Printf("User: %s\n", query)
-	resp, err := agent.RunText(ctx, ag, query)
+	resp, err := ag.RunText(ctx, query)
 	if err != nil {
 		fmt.Print(err)
 		return
@@ -63,11 +65,11 @@ func nonStreamingExample(ag agent.Agent, query string) {
 	fmt.Printf("Result: %s\n", resp.Text())
 }
 
-func streamingExample(ag agent.Agent, query string) {
+func streamingExample(ag *agent.Agent, query string) {
 	ctx := context.Background()
 	fmt.Printf("=== Streaming Response Example ===\n")
 	fmt.Printf("User: %s\n", query)
-	stream := agent.RunStream(ctx, ag, nil, nil, agent.NewTextMessage(query))
+	stream := ag.RunStream(ctx, nil, nil, agent.NewTextMessage(query))
 	for update, err := range stream {
 		if err != nil {
 			fmt.Print(err)
