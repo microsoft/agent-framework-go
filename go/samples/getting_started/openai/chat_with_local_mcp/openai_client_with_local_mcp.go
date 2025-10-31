@@ -24,9 +24,9 @@ func main() {
 		log.Fatalf("Agent level example failed: %v", err)
 	}
 
-	//if err := mcpToolsOnRunLevel(); err != nil {
-	//	log.Fatalf("Run level example failed: %v", err)
-	//}
+	if err := mcpToolsOnRunLevel(); err != nil {
+		log.Fatalf("Run level example failed: %v", err)
+	}
 }
 
 // mcpToolsOnAgentLevel demonstrates tools defined when creating the agent.
@@ -35,12 +35,7 @@ func mcpToolsOnAgentLevel() error {
 	fmt.Println("=== Tools Defined on Agent Level ===")
 
 	// Create MCP HTTP tool for Microsoft Learn
-	mcpTool := mcp.NewHTTPTool(
-		"https://learn.microsoft.com/api/mcp",
-		nil, // no custom headers
-		nil, // use default HTTP client
-		nil, // no sampling callback
-	)
+	mcpTool := mcp.NewHTTPTool("https://learn.microsoft.com/api/mcp")
 
 	ctx := context.Background()
 
@@ -92,19 +87,11 @@ func mcpToolsOnAgentLevel() error {
 }
 
 // mcpToolsOnRunLevel demonstrates MCP tools defined when running the agent.
-// Tools are provided when running the agent, which means we have to ensure we
-// connect to the MCP server before running the agent and pass the tools to the
-// run method.
 func mcpToolsOnRunLevel() error {
 	fmt.Println("=== Tools Defined on Run Level ===")
 
 	// Create MCP HTTP tool for Microsoft Learn
-	mcpServer := mcp.NewHTTPTool(
-		"https://learn.microsoft.com/api/mcp",
-		nil, // no custom headers
-		nil, // use default HTTP client
-		nil, // no sampling callback
-	)
+	mcpServer := mcp.NewHTTPTool("https://learn.microsoft.com/api/mcp")
 
 	ctx := context.Background()
 

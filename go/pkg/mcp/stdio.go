@@ -12,7 +12,6 @@ import (
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-var _ Tool = (*StdioTool)(nil)
 var _ exp.LoaderTool = (*StdioTool)(nil)
 var _ exp.InitTool = (*StdioTool)(nil)
 
@@ -69,29 +68,18 @@ func (t *StdioTool) connect(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, t.Command, t.Args...)
 
 	// Add environment variables
-	if len(t.Env) > 0 {
-		cmd.Env = append(cmd.Environ(), t.Env...)
-	}
+	cmd.Env = append(cmd.Environ(), t.Env...)
 
 	// Create the transport
 	transport := &mcpsdk.CommandTransport{
 		Command: cmd,
 	}
 
-	// Create implementation info
-	impl := &mcpsdk.Implementation{
+	// Connect using the base tool
+	return t.baseTool.connect(ctx, transport, &mcpsdk.Implementation{
 		Name:    t.Name,
 		Version: t.Version,
-	}
-	if impl.Name == "" {
-		impl.Name = "agent-framework-mcp-client"
-	}
-	if impl.Version == "" {
-		impl.Version = "1.0.0"
-	}
-
-	// Connect using the base tool
-	return t.baseTool.connect(ctx, transport, impl)
+	})
 }
 
 // NewStdioTool creates a new MCP tool that connects via stdio.

@@ -31,23 +31,6 @@ type ApprovalCallback func(ctx context.Context, toolName string, arguments map[s
 // SamplingCallback is called when the MCP server requests AI completion.
 type SamplingCallback func(ctx context.Context, params *mcpsdk.CreateMessageParams) (*mcpsdk.CreateMessageResult, error)
 
-// Tool is the base interface for MCP tools that integrate with the agent framework.
-type Tool interface {
-	agent.Tool
-
-	// Close terminates the connection to the MCP server.
-	Close() error
-
-	// LoadPrompts loads all prompts from the MCP server and returns them as agent.Tool instances.
-	LoadPrompts(ctx context.Context, allowedPrompts []string, approval ApprovalMode, approvalCallback ApprovalCallback) ([]agent.Tool, error)
-
-	// CallTool calls a specific tool on the MCP server.
-	CallTool(ctx context.Context, toolName string, arguments map[string]any) (any, error)
-
-	// GetPrompt retrieves a prompt from the MCP server.
-	GetPrompt(ctx context.Context, promptName string, arguments map[string]any) (any, error)
-}
-
 // baseTool provides common functionality for all MCP tool implementations.
 type baseTool struct {
 	mu      sync.RWMutex
@@ -56,6 +39,7 @@ type baseTool struct {
 
 	samplingCallback SamplingCallback
 	connected        bool
+	connectedError   error
 }
 
 // Connect establishes the MCP connection.
@@ -64,7 +48,14 @@ func (t *baseTool) connect(ctx context.Context, transport mcpsdk.Transport, impl
 	defer t.mu.Unlock()
 
 	if t.connected {
-		return fmt.Errorf("already connected")
+		return t.connectedError
+	}
+
+	if impl.Name == "" {
+		impl.Name = "agent-framework-mcp-client"
+	}
+	if impl.Version == "" {
+		impl.Version = "1.0.0"
 	}
 
 	// Create client with sampling callback if provided
@@ -81,7 +72,8 @@ func (t *baseTool) connect(ctx context.Context, transport mcpsdk.Transport, impl
 
 	session, err := t.client.Connect(ctx, transport, nil)
 	if err != nil {
-		return fmt.Errorf("failed to connect to MCP server: %w", err)
+		t.connectedError = fmt.Errorf("failed to connect to MCP server: %w", err)
+		return t.connectedError
 	}
 
 	t.session = session
@@ -106,6 +98,7 @@ func (t *baseTool) Close() error {
 	}
 
 	t.connected = false
+	t.connectedError = nil
 	return nil
 }
 
@@ -135,49 +128,6 @@ func (t *baseTool) LoadTools(ctx context.Context) ([]agent.Tool, error) {
 	return result, nil
 }
 
-// LoadPrompts loads prompts from the MCP server.
-func (t *baseTool) LoadPrompts(ctx context.Context, allowedPrompts []string, approval ApprovalMode, approvalCallback ApprovalCallback) ([]agent.Tool, error) {
-	t.mu.RLock()
-	session := t.session
-	t.mu.RUnlock()
-
-	if session == nil {
-		return nil, fmt.Errorf("not connected to MCP server")
-	}
-
-	// List available prompts
-	promptsResult, err := session.ListPrompts(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list prompts: %w", err)
-	}
-
-	// Filter prompts if allowedPrompts is specified
-	promptsToLoad := promptsResult.Prompts
-	if len(allowedPrompts) > 0 {
-		allowedSet := make(map[string]bool, len(allowedPrompts))
-		for _, name := range allowedPrompts {
-			allowedSet[name] = true
-		}
-
-		filtered := make([]*mcpsdk.Prompt, 0, len(promptsResult.Prompts))
-		for _, prompt := range promptsResult.Prompts {
-			if allowedSet[prompt.Name] {
-				filtered = append(filtered, prompt)
-			}
-		}
-		promptsToLoad = filtered
-	}
-
-	// Create agent.Tool instances for each MCP prompt
-	result := make([]agent.Tool, 0, len(promptsToLoad))
-	for _, mcpPrompt := range promptsToLoad {
-		agentTool := newMCPPromptWrapper(t.session, mcpPrompt, approval, approvalCallback)
-		result = append(result, agentTool)
-	}
-
-	return result, nil
-}
-
 // CallTool calls a specific tool on the MCP server.
 func (t *baseTool) CallTool(ctx context.Context, toolName string, arguments map[string]any) (any, error) {
 	t.mu.RLock()
@@ -197,32 +147,4 @@ func (t *baseTool) CallTool(ctx context.Context, toolName string, arguments map[
 	}
 
 	return mcpContentToAgentContent(result.Content), nil
-}
-
-// GetPrompt retrieves a prompt from the MCP server.
-func (t *baseTool) GetPrompt(ctx context.Context, promptName string, arguments map[string]any) (any, error) {
-	t.mu.RLock()
-	session := t.session
-	t.mu.RUnlock()
-
-	if session == nil {
-		return nil, fmt.Errorf("not connected to MCP server")
-	}
-
-	args := make(map[string]string)
-	for k, v := range arguments {
-		if v, ok := v.(string); ok {
-			args[k] = v
-		}
-	}
-
-	result, err := session.GetPrompt(ctx, &mcpsdk.GetPromptParams{
-		Name:      promptName,
-		Arguments: args,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get prompt %q: %w", promptName, err)
-	}
-
-	return mcpPromptToAgentContent(result), nil
 }

@@ -12,7 +12,6 @@ import (
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-var _ Tool = (*HTTPTool)(nil)
 var _ exp.LoaderTool = (*HTTPTool)(nil)
 var _ exp.InitTool = (*HTTPTool)(nil)
 
@@ -22,9 +21,6 @@ type HTTPTool struct {
 
 	// URL is the endpoint of the MCP server.
 	URL string
-
-	// Headers are additional HTTP headers to include in requests.
-	Headers map[string]string
 
 	// HTTPClient is the HTTP client to use for requests.
 	// If nil, http.DefaultClient is used.
@@ -53,32 +49,17 @@ func (t *HTTPTool) connect(ctx context.Context) error {
 		Endpoint:   t.URL,
 		HTTPClient: t.HTTPClient,
 	}
-
-	// Create implementation info
-	impl := &mcpsdk.Implementation{
+	// Connect using the base tool
+	return t.baseTool.connect(ctx, transport, &mcpsdk.Implementation{
 		Name:    t.Name,
 		Version: t.Version,
-	}
-	if impl.Name == "" {
-		impl.Name = "agent-framework-mcp-client"
-	}
-	if impl.Version == "" {
-		impl.Version = "1.0.0"
-	}
-
-	// Connect using the base tool
-	return t.baseTool.connect(ctx, transport, impl)
+	})
 }
 
 // NewHTTPTool creates a new MCP tool that connects via HTTP.
-func NewHTTPTool(url string, headers map[string]string, httpClient *http.Client, samplingCallback SamplingCallback) *HTTPTool {
+func NewHTTPTool(url string) *HTTPTool {
 	t := &HTTPTool{
-		URL:        url,
-		Headers:    headers,
-		HTTPClient: httpClient,
-		baseTool: baseTool{
-			samplingCallback: samplingCallback,
-		},
+		URL: url,
 	}
 	runtime.AddCleanup(t, func(client *mcpsdk.ClientSession) { client.Close() }, t.baseTool.session)
 	return t
