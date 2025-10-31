@@ -8,6 +8,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"sync"
 
 	"github.com/microsoft/agent-framework/go/pkg/agent"
@@ -78,6 +79,8 @@ func (t *baseTool) connect(ctx context.Context, transport mcpsdk.Transport, impl
 
 	t.session = session
 	t.connected = true
+
+	runtime.AddCleanup(t, func(client *mcpsdk.ClientSession) { client.Close() }, t.session)
 	return nil
 }
 
@@ -102,8 +105,8 @@ func (t *baseTool) Close() error {
 	return nil
 }
 
-// LoadTools loads tools from the MCP server.
-func (t *baseTool) LoadTools(ctx context.Context) ([]agent.Tool, error) {
+// loadTools loads tools from the MCP server.
+func (t *baseTool) loadTools(ctx context.Context) ([]agent.Tool, error) {
 	t.mu.RLock()
 	session := t.session
 	t.mu.RUnlock()
