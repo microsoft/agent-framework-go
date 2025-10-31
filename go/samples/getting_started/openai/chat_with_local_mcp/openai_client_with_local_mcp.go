@@ -41,47 +41,38 @@ func mcpToolsOnAgentLevel() error {
 
 	// Create the OpenAI agent with MCP tools
 	// In Go, we configure tools as default options that will be used for all runs
-	chatAgent := openai.NewChatAgent(
+	client := openai.NewChatClient(
 		openai.AgentConfig{
-			Model:        "gpt-4o-mini",
-			Name:         "DocsAgent",
-			Instructions: "You are a helpful assistant that can help with microsoft documentation questions.",
-			Options: &agent.RunOptions{
-				Tools:    []agent.Tool{mcpTool},
-				ToolMode: agent.ToolModeAuto,
-			},
+			Model: "gpt-4o-mini",
 		},
 	)
+	ag := agent.New(client, &agent.Config{
+		Name:               "DocsAgent",
+		SystemInstructions: "You are a helpful assistant that can help with microsoft documentation questions.",
+	}, &agent.RunOptions{
+		Tools:    []agent.Tool{mcpTool},
+		ToolMode: agent.ToolModeAuto,
+	})
 
 	// First query - uses the tools defined at agent creation
-	query1 := "How to create an Azure storage account using az cli?"
+	const query1 = "How to create an Azure storage account using az cli?"
 	fmt.Printf("User: %s\n", query1)
-	result1, err := chatAgent.Run(
-		ctx,
-		nil,
-		nil, // uses default options with MCP tools
-		agent.NewTextMessage(query1),
-	)
+	result1, err := ag.RunText(ctx, query1)
 	if err != nil {
 		return fmt.Errorf("agent run failed: %w", err)
 	}
-	fmt.Printf("%s: %s\n\n", chatAgent.Name(), result1.Text())
+	fmt.Printf("%s: %s\n\n", ag.Name(), result1.Text())
 
 	fmt.Println("\n=======================================")
 
 	// Second query
-	query2 := "What is Microsoft Agent Framework?"
+	const query2 = "What is Microsoft Agent Framework?"
 	fmt.Printf("User: %s\n", query2)
-	result2, err := chatAgent.Run(
-		ctx,
-		nil,
-		nil, // uses default options with MCP tools
-		agent.NewTextMessage(query2),
-	)
+	result2, err := ag.RunText(ctx, query2)
 	if err != nil {
 		return fmt.Errorf("agent run failed: %w", err)
 	}
-	fmt.Printf("%s: %s\n\n", chatAgent.Name(), result2.Text())
+	fmt.Printf("%s: %s\n\n", ag.Name(), result2.Text())
 
 	return nil
 }
@@ -96,18 +87,20 @@ func mcpToolsOnRunLevel() error {
 	ctx := context.Background()
 
 	// Create the OpenAI agent
-	chatAgent := openai.NewChatAgent(
+	client := openai.NewChatClient(
 		openai.AgentConfig{
-			Model:        "gpt-4o-mini",
-			Name:         "DocsAgent",
-			Instructions: "You are a helpful assistant that can help with microsoft documentation questions.",
+			Model: "gpt-4o-mini",
 		},
 	)
+	ag := agent.New(client, &agent.Config{
+		Name:               "DocsAgent",
+		SystemInstructions: "You are a helpful assistant that can help with microsoft documentation questions.",
+	}, nil)
 
 	// First query
 	query1 := "How to create an Azure storage account using az cli?"
 	fmt.Printf("User: %s\n", query1)
-	result1, err := chatAgent.Run(
+	result1, err := ag.Run(
 		ctx,
 		nil,
 		&agent.RunOptions{
@@ -119,14 +112,14 @@ func mcpToolsOnRunLevel() error {
 	if err != nil {
 		return fmt.Errorf("agent run failed: %w", err)
 	}
-	fmt.Printf("%s: %s\n\n", chatAgent.Name(), result1.Text())
+	fmt.Printf("%s: %s\n\n", ag.Name(), result1.Text())
 
 	fmt.Print("\n=======================================\n")
 
 	// Second query
 	query2 := "What is Microsoft Agent Framework?"
 	fmt.Printf("User: %s\n", query2)
-	result2, err := chatAgent.Run(
+	result2, err := ag.Run(
 		ctx,
 		nil,
 		&agent.RunOptions{
@@ -138,7 +131,7 @@ func mcpToolsOnRunLevel() error {
 	if err != nil {
 		return fmt.Errorf("agent run failed: %w", err)
 	}
-	fmt.Printf("%s: %s\n\n", chatAgent.Name(), result2.Text())
+	fmt.Printf("%s: %s\n\n", ag.Name(), result2.Text())
 
 	return nil
 }

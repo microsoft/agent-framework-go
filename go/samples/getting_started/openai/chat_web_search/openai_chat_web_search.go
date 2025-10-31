@@ -16,19 +16,20 @@ for real-time information retrieval and current data access.
 */
 
 func main() {
-	ag := openai.NewChatAgent(openai.AgentConfig{
-		Model:        "gpt-4o-search-preview",
-		Instructions: "You are a helpful weather agent.",
-		Options: &agent.RunOptions{
-			Tools: []agent.Tool{&agent.HostedWebSearchTool{
-				AdditionalProperties: map[string]any{
-					"user_location": map[string]string{
-						"country": "US",
-						"city":    "Seattle",
-					},
+	client := openai.NewChatClient(openai.AgentConfig{
+		Model: "gpt-4o-search-preview",
+	})
+	ag := agent.New(client, &agent.Config{
+		SystemInstructions: "You are a helpful weather agent.",
+	}, &agent.RunOptions{
+		Tools: []agent.Tool{&agent.HostedWebSearchTool{
+			AdditionalProperties: map[string]any{
+				"user_location": map[string]string{
+					"country": "US",
+					"city":    "Seattle",
 				},
-			}},
-		},
+			},
+		}},
 	})
 
 	const message = "What is the current weather? Do not ask for my current location."
@@ -39,11 +40,11 @@ func main() {
 	}
 }
 
-func nonStreamingExample(ag agent.Agent, query string) {
+func nonStreamingExample(ag *agent.Agent, query string) {
 	ctx := context.Background()
 	fmt.Printf("=== Non-streaming Response Example ===\n")
 	fmt.Printf("User: %s\n", query)
-	resp, err := agent.RunText(ctx, ag, query)
+	resp, err := ag.RunText(ctx, query)
 	if err != nil {
 		fmt.Print(err)
 		return
@@ -51,11 +52,11 @@ func nonStreamingExample(ag agent.Agent, query string) {
 	fmt.Printf("Result: %s\n", resp.Text())
 }
 
-func streamingExample(ag agent.Agent, query string) {
+func streamingExample(ag *agent.Agent, query string) {
 	ctx := context.Background()
 	fmt.Printf("=== Streaming Response Example ===\n")
 	fmt.Printf("User: %s\n", query)
-	stream := agent.RunStream(ctx, ag, nil, nil, agent.NewTextMessage(query))
+	stream := ag.RunStream(ctx, nil, nil, agent.NewTextMessage(query))
 	for update, err := range stream {
 		if err != nil {
 			fmt.Print(err)

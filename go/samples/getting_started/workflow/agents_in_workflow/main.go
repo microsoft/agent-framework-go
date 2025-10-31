@@ -15,10 +15,10 @@ import (
 type AgentExecutor struct {
 	id    string
 	name  string
-	agent agent.Agent
+	agent *agent.Agent
 }
 
-func NewAgentExecutor(id, name string, agnt agent.Agent) *AgentExecutor {
+func NewAgentExecutor(id, name string, agnt *agent.Agent) *AgentExecutor {
 	return &AgentExecutor{id: id, name: name, agent: agnt}
 }
 
@@ -61,23 +61,20 @@ func main() {
 	}
 
 	// Create agents for different roles
-	writerAgent := openai.NewChatAgent(openai.AgentConfig{
-		Model:        "gpt-4o-mini",
-		APIKey:       apiKey,
-		Name:         "Story Writer",
-		Instructions: "You are a creative writer. Write a short story based on the input in 2-3 sentences.",
-	})
-
-	editorAgent := openai.NewChatAgent(openai.AgentConfig{
-		Model:        "gpt-4o-mini",
-		APIKey:       apiKey,
-		Name:         "Story Editor",
-		Instructions: "You are an editor. Review and improve the following text. Make it more concise and impactful.",
+	client := openai.NewChatClient(openai.AgentConfig{
+		Model:  "gpt-4o-mini",
+		APIKey: apiKey,
 	})
 
 	// Create executor for each agent
-	writerExecutor := NewAgentExecutor("writer", "Story Writer", writerAgent)
-	editorExecutor := NewAgentExecutor("editor", "Story Editor", editorAgent)
+	writerExecutor := NewAgentExecutor("writer", "Story Writer", agent.New(client, &agent.Config{
+		Name:               "Story Writer",
+		SystemInstructions: "You are a creative writer. Write a short story based on the input in 2-3 sentences.",
+	}, nil))
+	editorExecutor := NewAgentExecutor("editor", "Story Editor", agent.New(client, &agent.Config{
+		Name:               "Story Editor",
+		SystemInstructions: "You are an editor. Review and improve the following text. Make it more concise and impactful.",
+	}, nil))
 
 	// Build workflow
 	builder := workflow.NewWorkflowBuilder().

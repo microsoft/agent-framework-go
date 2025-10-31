@@ -7,50 +7,199 @@ import (
 	"context"
 	"iter"
 	"maps"
+	"slices"
+
+	"github.com/google/uuid"
 )
 
-// Agent represents an AI agent that can process messages and generate responses.
-type Agent interface {
-	// ID returns the unique identifier.
-	ID() string
-
-	// Name returns the name.
-	Name() string
-
-	// Run executes the agent with the given messages and options.
-	Run(ctx context.Context, thread Thread, options *RunOptions, messages ...*Message) (*RunResponse, error)
-
-	// NewThread creates a new thread for this agent.
-	NewThread() Thread
-
-	// DeserializeThread deserializes a thread from JSON.
-	DeserializeThread(data []byte) (Thread, error)
+type Agent struct {
+	config Config
+	client Client
+	opts   *RunOptions
 }
 
-// StreamableAgent is the interface implemented by agents that support streaming responses.
-type StreamableAgent interface {
-	Agent
+type Config struct {
+	ID   string
+	Name string
 
-	// RunStream executes the agent and streams responses.
-	RunStream(ctx context.Context, thread Thread, options *RunOptions, messages ...*Message) iter.Seq2[*RunResponseUpdate, error]
+	SystemInstructions string
 }
 
-// RunStream is a helper function to run an agent in streaming mode.
-// If the agent does not implement [StreamableAgent], it falls back to calling [Agent.Run].
-func RunStream(ctx context.Context, agent Agent, thread Thread, options *RunOptions, messages ...*Message) iter.Seq2[*RunResponseUpdate, error] {
-	if agent, ok := agent.(StreamableAgent); ok {
-		return agent.RunStream(ctx, thread, options, messages...)
+type Client interface {
+	Run(ctx context.Context, thread Thread, config Config, opts *RunOptions, messages ...*Message) (*RunResponse, error)
+}
+
+// New creates a new [Agent].
+//
+// The first argument must not be nil.
+//
+// If non-nil, the provided configuration configure the Agent.
+// If non-nil, the provided options are used as default run options for each execution.
+func New(client Client, config *Config, opts *RunOptions) *Agent {
+	if client == nil {
+		panic("nil Client")
 	}
-	resp, err := agent.Run(ctx, thread, options, messages...)
-	agentID := agent.ID()
+	a := &Agent{
+		client: client,
+	}
+	if config != nil {
+		a.config = *config
+	}
+	if opts != nil {
+		a.opts = opts
+	}
+	if a.config.ID == "" {
+		a.config.ID = uuid.New().String()
+	}
+	return a
+}
+
+func (a *Agent) ID() string {
+	return a.config.ID
+}
+
+func (a *Agent) Name() string {
+	return a.config.Name
+}
+
+func (a *Agent) NewThread() Thread {
+	return new(InMemoryThread)
+}
+
+func (a *Agent) Run(ctx context.Context, thread Thread, opts *RunOptions, messages ...*Message) (*RunResponse, error) {
+	opts = a.opts.Merge(opts)
+	messages = slices.Clone(messages)
+	if a.config.SystemInstructions != "" {
+		messages = append([]*Message{NewMessage(RoleSystem, &TextContent{Text: a.config.SystemInstructions})}, messages...)
+	}
+	var err error
+	if opts != nil {
+		if err := initTools(ctx, opts.Tools); err != nil {
+			return nil, err
+		}
+		extraTools, err := loadTools(ctx, opts.Tools)
+		if err != nil {
+			return nil, err
+		}
+		opts.Tools = append(opts.Tools, extraTools...)
+	}
+
+	// Prepare messages with system instructions
+	threadMessages, err := prepareMessages(ctx, thread, messages)
+	if err != nil {
+		return nil, err
+	}
+	startLength := len(threadMessages)
+	id := a.ID()
+	for {
+		// Call the chat client
+		response, err := a.client.Run(ctx, thread, a.config, opts, threadMessages...)
+		if err != nil {
+			return nil, err
+		}
+		message := response.Messages[0]
+		threadMessages = append(threadMessages, message)
+		toolResult := runToolCalls(ctx, opts, message.Contents...)
+		if len(toolResult) > 0 {
+			// Add a single Message to the response with the results
+			threadMessages = append(threadMessages, NewMessage(RoleTool, toolResult...))
+			continue
+		}
+		if thread != nil {
+			if err := thread.Add(ctx, threadMessages[startLength:]...); err != nil {
+				return nil, err
+			}
+		}
+		return &RunResponse{
+			Messages:   threadMessages[startLength:],
+			ResponseID: response.ResponseID,
+			AgentID:    id,
+		}, nil
+	}
+}
+
+func (a *Agent) RunText(ctx context.Context, msg string) (*RunResponse, error) {
+	return a.Run(ctx, nil, nil, NewTextMessage(msg))
+}
+
+func (a *Agent) RunStream(ctx context.Context, thread Thread, opts *RunOptions, messages ...*Message) iter.Seq2[*RunResponseUpdate, error] {
+	client, ok := a.client.(StreamableClient)
+	if !ok {
+		return a.runStreamFallback(ctx, thread, opts, messages...)
+	}
+	opts = a.opts.Merge(opts)
+	messages = slices.Clone(messages)
+	if a.config.SystemInstructions != "" {
+		messages = append([]*Message{NewMessage(RoleSystem, &TextContent{Text: a.config.SystemInstructions})}, messages...)
+	}
+	err := initTools(ctx, opts.Tools)
+	var threadMessages []*Message
+	if err == nil {
+		threadMessages, err = prepareMessages(ctx, thread, messages)
+	}
+	startLength := len(threadMessages)
+	id := a.ID()
 	return func(yield func(*RunResponseUpdate, error) bool) {
 		if err != nil {
-			_ = yield(nil, err)
+			yield(nil, err)
+			return
+		}
+		for {
+			var contents []Content
+			for update, err := range client.RunStream(ctx, thread, a.config, opts, threadMessages...) {
+				if err != nil {
+					yield(nil, err)
+					return
+				}
+				contents = append(contents, update.Contents...)
+				if !yield(update, nil) {
+					return
+				}
+			}
+			if !slices.ContainsFunc(contents, func(content Content) bool {
+				_, ok := content.(*FunctionCallContent)
+				return ok
+			}) {
+				// No tool calls
+				return
+			}
+			threadMessages = append(threadMessages, NewMessage(RoleAssistant, contents...))
+			toolResult := runToolCalls(ctx, opts, contents...)
+			if len(toolResult) > 0 {
+				// Add a single Message to the response with the results
+				if !yield(&RunResponseUpdate{
+					Contents: toolResult,
+					Role:     RoleAssistant,
+					AgentID:  id,
+				}, nil) {
+					return
+				}
+				threadMessages = append(threadMessages, NewMessage(RoleTool, toolResult...))
+				continue
+			}
+			// No more tool calls to process
+			if thread != nil {
+				if err := thread.Add(ctx, threadMessages[startLength:]...); err != nil {
+					yield(nil, err)
+					return
+				}
+			}
+			return
+		}
+	}
+}
+
+func (a *Agent) runStreamFallback(ctx context.Context, thread Thread, options *RunOptions, messages ...*Message) iter.Seq2[*RunResponseUpdate, error] {
+	resp, err := a.Run(ctx, thread, options, messages...)
+	id := a.ID()
+	return func(yield func(*RunResponseUpdate, error) bool) {
+		if err != nil {
+			yield(nil, err)
 			return
 		}
 		for _, msg := range resp.Messages {
 			resp := &RunResponseUpdate{
-				AgentID:    agentID,
+				AgentID:    id,
 				MessageID:  msg.MessageID,
 				ResponseID: resp.ResponseID,
 				Role:       msg.Role,
@@ -63,9 +212,12 @@ func RunStream(ctx context.Context, agent Agent, thread Thread, options *RunOpti
 	}
 }
 
-// Run is a helper function to run an agent with a text message.
-func RunText(ctx context.Context, agent Agent, msg string) (*RunResponse, error) {
-	return agent.Run(ctx, nil, nil, NewTextMessage(msg))
+// StreamableClient is the interface implemented by agents that support streaming responses.
+type StreamableClient interface {
+	Client
+
+	// RunStream executes the agent and streams responses.
+	RunStream(ctx context.Context, thread Thread, config Config, opts *RunOptions, messages ...*Message) iter.Seq2[*RunResponseUpdate, error]
 }
 
 // RunOptions contains options for agent execution.
@@ -95,10 +247,13 @@ type RunOptions struct {
 // Merge merges another RunOptions into this one, giving precedence to the other.
 func (o *RunOptions) Merge(other *RunOptions) *RunOptions {
 	if o == nil || other == nil {
-		if o == nil {
+		if other != nil {
 			return other
 		}
-		return o
+		if o != nil {
+			return o
+		}
+		return new(RunOptions)
 	}
 	result := *o // copy
 	o = &result
@@ -156,4 +311,16 @@ func (r *RunResponseUpdate) Text() string {
 		}
 	}
 	return text
+}
+
+func prepareMessages(ctx context.Context, t Thread, messages []*Message) ([]*Message, error) {
+	if t != nil {
+		for msg, err := range t.All(ctx) {
+			if err != nil {
+				return nil, err
+			}
+			messages = append(messages, msg)
+		}
+	}
+	return messages, nil
 }
