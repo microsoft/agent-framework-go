@@ -172,19 +172,31 @@ func (a *Client) buildCompletionParams(options *agent.RunOptions, messages ...*a
 						}
 					}
 				}
-			default:
+			case agent.CallTool:
 				name, description := tool.ToolInfo()
-				if tool, ok := tool.(agent.CallTool); ok {
-					params.Tools = append(params.Tools, openai.ChatCompletionToolUnionParam{
-						OfFunction: &openai.ChatCompletionFunctionToolParam{
-							Function: shared.FunctionDefinitionParam{
-								Name:        name,
-								Description: openai.String(description),
-								Parameters:  tool.Schema(),
-							},
-						},
-					})
+				var funcParams map[string]any
+				switch schema := tool.Schema().(type) {
+				case map[string]any:
+					funcParams = schema
+				default:
+					if schema == nil {
+						break
+					}
+					data, err := json.Marshal(schema)
+					if err == nil {
+						break
+					}
+					json.Unmarshal(data, &funcParams)
 				}
+				params.Tools = append(params.Tools, openai.ChatCompletionToolUnionParam{
+					OfFunction: &openai.ChatCompletionFunctionToolParam{
+						Function: shared.FunctionDefinitionParam{
+							Name:        name,
+							Description: openai.String(description),
+							Parameters:  funcParams,
+						},
+					},
+				})
 			}
 		}
 		if options.ToolMode != "" {
