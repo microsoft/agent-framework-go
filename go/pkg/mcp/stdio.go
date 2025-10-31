@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
-	"runtime"
 
 	"github.com/microsoft/agent-framework/go/pkg/agent"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -18,7 +17,7 @@ var _ agent.InitTool = (*StdioTool)(nil)
 // StdioTool connects to an MCP server via stdio (process communication).
 // This is the most common transport for local MCP servers.
 type StdioTool struct {
-	baseTool
+	tool *baseTool
 
 	// Command is the path to the MCP server executable.
 	Command string
@@ -38,23 +37,19 @@ type StdioTool struct {
 
 // ToolInfo implements the agent.Tool interface.
 // This returns a generic name for the MCP connection itself, not individual tools.
-func (t *StdioTool) ToolInfo() (name string, description string) {
+func (t StdioTool) ToolInfo() (name string, description string) {
 	return "mcp_stdio", fmt.Sprintf("MCP connection via stdio to %s", t.Command)
 }
 
-// Properties implements the agent.Tool interface.
-func (t *StdioTool) Properties() map[string]any {
-	return map[string]any{
-		"command": t.Command,
-		"args":    t.Args,
-	}
-}
-
-func (t *StdioTool) Init(ctx context.Context) error {
+func (t StdioTool) Init(ctx context.Context) error {
 	return t.connect(ctx)
 }
 
-func (t *StdioTool) Schema() map[string]any {
+func (t StdioTool) LoadTools(ctx context.Context) ([]agent.Tool, error) {
+	return t.tool.loadTools(ctx)
+}
+
+func (t StdioTool) Schema() map[string]any {
 	return map[string]any{
 		"command": t.Command,
 		"args":    t.Args,
@@ -63,7 +58,7 @@ func (t *StdioTool) Schema() map[string]any {
 }
 
 // connect establishes a connection to the MCP server via stdio.
-func (t *StdioTool) connect(ctx context.Context) error {
+func (t StdioTool) connect(ctx context.Context) error {
 	// Create the command
 	cmd := exec.CommandContext(ctx, t.Command, t.Args...)
 
@@ -76,22 +71,18 @@ func (t *StdioTool) connect(ctx context.Context) error {
 	}
 
 	// Connect using the base tool
-	return t.baseTool.connect(ctx, transport, &mcpsdk.Implementation{
+	return t.tool.connect(ctx, transport, &mcpsdk.Implementation{
 		Name:    t.Name,
 		Version: t.Version,
 	})
 }
 
 // NewStdioTool creates a new MCP tool that connects via stdio.
-func NewStdioTool(command string, args []string, env []string, samplingCallback SamplingCallback) *StdioTool {
-	t := &StdioTool{
+func NewStdioTool(command string, args []string, env []string, samplingCallback SamplingCallback) StdioTool {
+	return StdioTool{
 		Command: command,
 		Args:    args,
 		Env:     env,
-		baseTool: baseTool{
-			samplingCallback: samplingCallback,
-		},
+		tool:    new(baseTool),
 	}
-	runtime.AddCleanup(t, func(client *mcpsdk.ClientSession) { client.Close() }, t.baseTool.session)
-	return t
 }
