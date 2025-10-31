@@ -220,13 +220,6 @@ func remarshal(from, to any) error {
 	return nil
 }
 
-// FuncParameter represents a parameter for a tool function.
-type FuncParameter struct {
-	Name        string
-	Description string
-	Type        string
-}
-
 var _ Tool = (*Func)(nil)
 
 // Func represents a tool that wraps a Go function to make it callable by AI models.
