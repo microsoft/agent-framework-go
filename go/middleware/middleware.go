@@ -6,7 +6,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/microsoft/agent-framework/go/pkg/agent"
+	"github.com/microsoft/agent-framework/go/agent"
 )
 
 // ContextKey is used for storing values in context.

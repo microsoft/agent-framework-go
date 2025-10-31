@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/microsoft/agent-framework/go/pkg/agent"
+	"github.com/microsoft/agent-framework/go/agent"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 

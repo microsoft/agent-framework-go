@@ -11,9 +11,9 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/microsoft/agent-framework/go/pkg/agent"
-	"github.com/microsoft/agent-framework/go/pkg/mcp"
-	"github.com/microsoft/agent-framework/go/pkg/openai"
+	"github.com/microsoft/agent-framework/go/agent"
+	"github.com/microsoft/agent-framework/go/mcp"
+	"github.com/microsoft/agent-framework/go/openai"
 )
 
 func main() {

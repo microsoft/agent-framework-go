@@ -6,9 +6,9 @@ import (
 	"log"
 	"os"
 
-	"github.com/microsoft/agent-framework/go/pkg/agent"
-	"github.com/microsoft/agent-framework/go/pkg/openai"
-	"github.com/microsoft/agent-framework/go/pkg/workflow"
+	"github.com/microsoft/agent-framework/go/agent"
+	"github.com/microsoft/agent-framework/go/openai"
+	"github.com/microsoft/agent-framework/go/workflow"
 )
 
 // AgentExecutor wraps a chat agent to be used as a workflow executor.

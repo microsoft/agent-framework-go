@@ -6,8 +6,8 @@ import (
 	"math/rand"
 	"os"
 
-	"github.com/microsoft/agent-framework/go/pkg/agent"
-	"github.com/microsoft/agent-framework/go/pkg/openai"
+	"github.com/microsoft/agent-framework/go/agent"
+	"github.com/microsoft/agent-framework/go/openai"
 )
 
 /*

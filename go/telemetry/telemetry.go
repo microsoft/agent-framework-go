@@ -5,7 +5,7 @@ package telemetry
 import (
 	"context"
 
-	"github.com/microsoft/agent-framework/go/pkg/agent"
+	"github.com/microsoft/agent-framework/go/agent"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"

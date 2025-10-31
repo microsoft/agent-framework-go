@@ -4,7 +4,7 @@ import (
 	"context"
 	"log"
 
-	"github.com/microsoft/agent-framework/go/pkg/workflow"
+	"github.com/microsoft/agent-framework/go/workflow"
 )
 
 // RoutingExecutor routes requests based on priority
