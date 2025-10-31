@@ -91,7 +91,9 @@ func (a *Agent) Run(ctx context.Context, thread Thread, opts *RunOptions, messag
 	}
 	startLength := len(threadMessages)
 	id := a.ID()
-	for {
+	var finalResponse *RunResponse
+	const maxRetries = 5
+	for range maxRetries {
 		// Call the chat client
 		response, err := a.client.Run(ctx, thread, a.config, opts, threadMessages...)
 		if err != nil {
@@ -105,17 +107,29 @@ func (a *Agent) Run(ctx context.Context, thread Thread, opts *RunOptions, messag
 			threadMessages = append(threadMessages, NewMessage(RoleTool, toolResult...))
 			continue
 		}
-		if thread != nil {
-			if err := thread.Add(ctx, threadMessages[startLength:]...); err != nil {
-				return nil, err
-			}
-		}
-		return &RunResponse{
-			Messages:   threadMessages[startLength:],
-			ResponseID: response.ResponseID,
-			AgentID:    id,
-		}, nil
+		finalResponse = response
 	}
+	if finalResponse == nil {
+		// Exceeded max retries with tool calls pending, disable tools and try one last time
+		// to get a final response.
+		opts.ToolMode = ToolModeNone
+		finalResponse, err = a.client.Run(ctx, thread, a.config, opts, threadMessages...)
+		if err != nil {
+			return nil, err
+		}
+		message := finalResponse.Messages[0]
+		threadMessages = append(threadMessages, message)
+	}
+	if thread != nil {
+		if err := thread.Add(ctx, threadMessages[startLength:]...); err != nil {
+			return nil, err
+		}
+	}
+	return &RunResponse{
+		Messages:   threadMessages[startLength:],
+		ResponseID: finalResponse.ResponseID,
+		AgentID:    id,
+	}, nil
 }
 
 func (a *Agent) RunText(ctx context.Context, msg string) (*RunResponse, error) {
@@ -144,7 +158,9 @@ func (a *Agent) RunStream(ctx context.Context, thread Thread, opts *RunOptions, 
 			yield(nil, err)
 			return
 		}
-		for {
+		const maxRetries = 5
+		var success bool
+		for range maxRetries {
 			var contents []Content
 			for update, err := range client.RunStream(ctx, thread, a.config, opts, threadMessages...) {
 				if err != nil {
@@ -156,14 +172,13 @@ func (a *Agent) RunStream(ctx context.Context, thread Thread, opts *RunOptions, 
 					return
 				}
 			}
+			threadMessages = append(threadMessages, NewMessage(RoleAssistant, contents...))
 			if !slices.ContainsFunc(contents, func(content Content) bool {
 				_, ok := content.(*FunctionCallContent)
 				return ok
 			}) {
-				// No tool calls
-				return
+				break
 			}
-			threadMessages = append(threadMessages, NewMessage(RoleAssistant, contents...))
 			toolResult := runToolCalls(ctx, opts, contents...)
 			if len(toolResult) > 0 {
 				// Add a single Message to the response with the results
@@ -178,13 +193,28 @@ func (a *Agent) RunStream(ctx context.Context, thread Thread, opts *RunOptions, 
 				continue
 			}
 			// No more tool calls to process
-			if thread != nil {
-				if err := thread.Add(ctx, threadMessages[startLength:]...); err != nil {
+			success = true
+			break
+		}
+		if !success {
+			// Exceeded max retries with tool calls pending, disable tools and try one last time
+			// to get a final response.
+			opts.ToolMode = ToolModeNone
+			for update, err := range client.RunStream(ctx, thread, a.config, opts, threadMessages...) {
+				if err != nil {
 					yield(nil, err)
 					return
 				}
+				if !yield(update, nil) {
+					return
+				}
 			}
-			return
+		}
+		if thread != nil {
+			if err := thread.Add(ctx, threadMessages[startLength:]...); err != nil {
+				yield(nil, err)
+				return
+			}
 		}
 	}
 }
