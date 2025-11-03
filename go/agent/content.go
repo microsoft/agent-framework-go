@@ -45,6 +45,12 @@ type Content interface {
 	isContent()
 }
 
+type ExternalContent interface {
+	Content
+
+	Reference() (uri string, mediaType string)
+}
+
 // TextContent represents plain text content.
 type TextContent struct {
 	AdditionalProperties map[string]any
@@ -75,6 +81,10 @@ type DataContent struct {
 }
 
 func (t *DataContent) isContent() {}
+
+func (t *DataContent) Reference() (uri string, mediaType string) {
+	return t.URI, t.MediaType
+}
 
 // ErrorContent represents an error.
 //
@@ -186,6 +196,10 @@ type URIContent struct {
 }
 
 func (t *URIContent) isContent() {}
+
+func (t *URIContent) Reference() (uri string, mediaType string) {
+	return t.URI, t.MediaType
+}
 
 // UsageContent represents usage information associated with a chat request and response.
 type UsageContent struct {
