@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
+	"strings"
 
 	"github.com/microsoft/agent-framework/go/agent"
 	"github.com/openai/openai-go/v3"
@@ -212,107 +213,92 @@ func (a *Client) buildCompletionParams(options *agent.RunOptions, messages ...*a
 func buildMessageParam(msg *agent.Message) openai.ChatCompletionMessageParamUnion {
 	switch msg.Role {
 	case agent.RoleSystem:
-		return openai.ChatCompletionMessageParamUnion{
-			OfSystem: &openai.ChatCompletionSystemMessageParam{
-				Content: openai.ChatCompletionSystemMessageParamContentUnion{
-					OfString: openai.String(extractText(msg)),
-				},
-			},
+		var contents []openai.ChatCompletionContentPartTextParam
+		for _, content := range msg.Contents {
+			if tc, ok := content.(*agent.TextContent); ok {
+				contents = append(contents, openai.ChatCompletionContentPartTextParam{
+					Text: tc.Text,
+				})
+			}
 		}
-
+		return openai.SystemMessage(contents)
 	case agent.RoleUser:
-		return openai.ChatCompletionMessageParamUnion{
-			OfUser: &openai.ChatCompletionUserMessageParam{
-				Content: openai.ChatCompletionUserMessageParamContentUnion{
-					OfString: openai.String(extractText(msg)),
-				},
-			},
+		var contents []openai.ChatCompletionContentPartUnionParam
+		for _, content := range msg.Contents {
+			switch content := content.(type) {
+			case *agent.TextContent:
+				contents = append(contents, openai.TextContentPart(content.Text))
+			case agent.ExternalContent:
+				uri, mime := content.Reference()
+				switch topLevelMediaType(mime) {
+				case "image":
+					contents = append(contents, openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
+						URL: uri,
+					}))
+				}
+			}
 		}
+		return openai.UserMessage(contents)
 
 	case agent.RoleAssistant:
-		// Check if the message contains tool calls
-		toolCalls := extractToolCalls(msg)
+		var contents []openai.ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion
+		var toolCalls []openai.ChatCompletionMessageToolCallUnionParam
+		for _, content := range msg.Contents {
+			switch content := content.(type) {
+			case *agent.TextContent:
+				contents = append(contents, openai.ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion{
+					OfText: &openai.ChatCompletionContentPartTextParam{
+						Text: content.Text,
+					},
+				})
+			case *agent.FunctionCallContent:
+				toolCalls = append(toolCalls, openai.ChatCompletionMessageToolCallUnionParam{
+					OfFunction: &openai.ChatCompletionMessageFunctionToolCallParam{
+						ID: content.CallID,
+						Function: openai.ChatCompletionMessageFunctionToolCallFunctionParam{
+							Name:      content.Name,
+							Arguments: content.Arguments,
+						},
+					},
+				})
+			}
+		}
 		return openai.ChatCompletionMessageParamUnion{
 			OfAssistant: &openai.ChatCompletionAssistantMessageParam{
-				Content: openai.ChatCompletionAssistantMessageParamContentUnion{
-					OfString: openai.String(extractText(msg)),
-				},
+				Content:   openai.ChatCompletionAssistantMessageParamContentUnion{OfArrayOfContentParts: contents},
 				ToolCalls: toolCalls,
 			},
 		}
 
 	case agent.RoleTool:
-		// Tool messages contain function results
-		toolResults := extractToolResults(msg)
-		return openai.ChatCompletionMessageParamUnion{
-			OfTool: &openai.ChatCompletionToolMessageParam{
-				Content: openai.ChatCompletionToolMessageParamContentUnion{
-					OfString: openai.String(toolResults),
-				},
-				ToolCallID: extractToolCallID(msg),
-			},
+		var contents []openai.ChatCompletionContentPartTextParam
+		var callID string
+		for _, content := range msg.Contents {
+			switch content := content.(type) {
+			case *agent.FunctionResultContent:
+				txt := content.Result
+				if content.Error != nil {
+					txt = content.Error
+				}
+				contents = append(contents, openai.ChatCompletionContentPartTextParam{
+					Text: fmt.Sprintf("%v", txt),
+				})
+				callID = content.CallID
+			}
 		}
+		return openai.ToolMessage(contents, callID)
 
 	default:
 		panic("unknown message role: " + string(msg.Role))
 	}
 }
 
-// extractText extracts text content from a message.
-func extractText(msg *agent.Message) string {
-	var text string
-	for _, content := range msg.Contents {
-		if tc, ok := content.(*agent.TextContent); ok {
-			text += tc.Text
-		}
+func topLevelMediaType(media string) string {
+	if media == "" {
+		return ""
 	}
-	return text
-}
-
-// extractToolCalls extracts function call content from a message.
-func extractToolCalls(msg *agent.Message) []openai.ChatCompletionMessageToolCallUnionParam {
-	var toolCalls []openai.ChatCompletionMessageToolCallUnionParam
-	for _, content := range msg.Contents {
-		if fc, ok := content.(*agent.FunctionCallContent); ok {
-			// Marshal arguments to JSON
-			argsJSON, err := json.Marshal(fc.Arguments)
-			if err != nil {
-				continue
-			}
-
-			toolCalls = append(toolCalls, openai.ChatCompletionMessageToolCallUnionParam{
-				OfFunction: &openai.ChatCompletionMessageFunctionToolCallParam{
-					ID: fc.CallID,
-					Function: openai.ChatCompletionMessageFunctionToolCallFunctionParam{
-						Name:      fc.Name,
-						Arguments: string(argsJSON),
-					},
-				},
-			})
-		}
+	if idx := strings.Index(media, "/"); idx >= 0 {
+		return media[:idx]
 	}
-	return toolCalls
-}
-
-// extractToolResults extracts function result content from a message and formats it.
-func extractToolResults(msg *agent.Message) string {
-	for _, content := range msg.Contents {
-		if fr, ok := content.(*agent.FunctionResultContent); ok {
-			if fr.Error != nil {
-				return fmt.Sprintf("Error: %v", fr.Error)
-			}
-			return fmt.Sprintf("%v", fr.Result)
-		}
-	}
-	return ""
-}
-
-// extractToolCallID extracts the first tool call ID from function result content.
-func extractToolCallID(msg *agent.Message) string {
-	for _, content := range msg.Contents {
-		if fr, ok := content.(*agent.FunctionResultContent); ok {
-			return fr.CallID
-		}
-	}
-	return ""
+	return media
 }
