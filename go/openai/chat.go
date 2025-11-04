@@ -228,14 +228,46 @@ func buildMessageParam(msg *agent.Message) openai.ChatCompletionMessageParamUnio
 			switch content := content.(type) {
 			case *agent.TextContent:
 				contents = append(contents, openai.TextContentPart(content.Text))
-			case agent.ExternalContent:
-				uri, mime := content.Reference()
-				switch topLevelMediaType(mime) {
+			case *agent.URIContent:
+				switch topLevelMediaType(content.MediaType) {
 				case "image":
 					contents = append(contents, openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
-						URL: uri,
+						URL: content.URI,
+					}))
+				default:
+					// For other URI content types, just ignore, they are not supported yet.
+				}
+			case *agent.DataContent:
+				switch topLevelMediaType(content.MediaType) {
+				case "image":
+					contents = append(contents, openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
+						URL: content.URI,
+					}))
+				case "audio":
+					var format string
+					switch content.MediaType {
+					case "audio/wav":
+						format = "wav"
+					case "audio/mp3", "audio/mpeg":
+						format = "mp3"
+					default:
+						// Default to mp3
+						format = "mp3"
+					}
+					contents = append(contents, openai.InputAudioContentPart(openai.ChatCompletionContentPartInputAudioInputAudioParam{
+						Data:   string(content.Data),
+						Format: format,
+					}))
+				default:
+					contents = append(contents, openai.FileContentPart(openai.ChatCompletionContentPartFileFileParam{
+						FileData: openai.String(string(content.Data)),
+						Filename: openai.String(content.Name),
 					}))
 				}
+			case *agent.HostedFileContent:
+				contents = append(contents, openai.FileContentPart(openai.ChatCompletionContentPartFileFileParam{
+					FileID: openai.String(content.FileID),
+				}))
 			}
 		}
 		return openai.UserMessage(contents)
@@ -259,6 +291,12 @@ func buildMessageParam(msg *agent.Message) openai.ChatCompletionMessageParamUnio
 							Name:      content.Name,
 							Arguments: content.Arguments,
 						},
+					},
+				})
+			case *agent.ErrorContent:
+				contents = append(contents, openai.ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion{
+					OfText: &openai.ChatCompletionContentPartTextParam{
+						Text: content.Message,
 					},
 				})
 			}
