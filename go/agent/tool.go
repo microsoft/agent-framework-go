@@ -24,15 +24,8 @@ type Tool interface {
 	ToolInfo() (name string, description string)
 }
 
-type CallTool interface {
-	Tool
-
-	Schema() any
-	Call(ctx context.Context, args map[string]any) (any, error)
-}
-
 var _ Tool = (*FuncTool)(nil)
-var _ CallTool = (*FuncTool)(nil)
+var _ callTool = (*FuncTool)(nil)
 
 type FuncTool struct {
 	Func    Func
@@ -88,16 +81,10 @@ func (t *HostedWebSearchTool) ToolInfo() (name string, description string) {
 	return "web_search", t.Description
 }
 
-type LoaderTool interface {
-	Tool
-
-	LoadTools(ctx context.Context) ([]Tool, error)
-}
-
 func loadTools(ctx context.Context, tools []Tool) ([]Tool, error) {
 	var result []Tool
 	for _, tool := range tools {
-		if lt, ok := tool.(LoaderTool); ok {
+		if lt, ok := tool.(loaderTool); ok {
 			innerTools, err := lt.LoadTools(ctx)
 			if err != nil {
 				name, _ := tool.ToolInfo()
@@ -109,17 +96,10 @@ func loadTools(ctx context.Context, tools []Tool) ([]Tool, error) {
 	return result, nil
 }
 
-type InitTool interface {
-	Tool
-
-	// Init performs any initialization required for the tool.
-	Init(ctx context.Context) error
-}
-
 // initTools initializes all tools that implement the InitTool interface.
 func initTools(ctx context.Context, tools []Tool) error {
 	for _, tool := range tools {
-		if tool, ok := tool.(InitTool); ok {
+		if tool, ok := tool.(initTool); ok {
 			if err := tool.Init(ctx); err != nil {
 				name, _ := tool.ToolInfo()
 				return fmt.Errorf("failed to initialize tool %q: %w", name, err)
@@ -174,11 +154,11 @@ func funcCall(ctx context.Context, tools []Tool, toolCall *FunctionCallContent) 
 	}
 
 	// Find the tool in the options
-	var tool CallTool
+	var tool callTool
 	for _, t := range tools {
 		name, _ := t.ToolInfo()
 		if name == toolCall.Name {
-			if t, ok := t.(CallTool); ok {
+			if t, ok := t.(callTool); ok {
 				tool = t
 			}
 			break

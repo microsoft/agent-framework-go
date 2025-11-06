@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/microsoft/agent-framework/go/agent"
+	"github.com/microsoft/agent-framework/go/agent/agentext"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
 	"github.com/openai/openai-go/v3/option"
@@ -18,7 +19,7 @@ import (
 )
 
 var _ agent.Client = (*Client)(nil)
-var _ agent.StreamableClient = (*Client)(nil)
+var _ agentext.StreamableClient = (*Client)(nil)
 
 type Client struct {
 	client openai.Client
@@ -173,7 +174,7 @@ func (a *Client) buildCompletionParams(options *agent.RunOptions, messages ...*a
 						}
 					}
 				}
-			case agent.CallTool:
+			case agentext.CallTool:
 				name, description := tool.ToolInfo()
 				var funcParams map[string]any
 				switch schema := tool.Schema().(type) {
