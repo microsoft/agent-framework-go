@@ -4,65 +4,67 @@ package workflow
 
 import (
 	"encoding/json"
-	"reflect"
 )
 
-// PortableValue represents a value that can be exported / imported to a workflow,
+// Value represents a value that can be exported / imported to a workflow,
 // e.g. through an external request/response, or through checkpointing.
-type PortableValue struct {
-	value             any
-	deserializedValue any
+// The zero Value corresponds to nil.
+type Value struct {
+	_   [0]func() // disallow ==
+	any any
+	// TODO: Optimize small values so they avoid allocations, like in slog.Value.
 }
 
-func NewPortableValue(value any) *PortableValue {
-	return &PortableValue{
-		value: value,
+// AnyValue returns a [Value] for the supplied value.
+//
+// If the supplied value is of type Value, it is returned
+// unmodified.
+func AnyValue(v any) Value {
+	switch val := v.(type) {
+	case Value:
+		return val
+	default:
+		return Value{any: v}
 	}
 }
 
-func PortableValueAs[T any](v *PortableValue) (T, bool) {
+// ValueAs attempts to convert the supplied [Value] to the requested type T.
+func ValueAs[T any](v *Value) (T, bool) {
+	if v == nil {
+		var zero T
+		return zero, false
+	}
+
 	tryDeserializeValue[T](v)
 
-	as, ok := v.Value().(T)
+	as, ok := v.Any().(T)
 	return as, ok
 }
 
-func PortableValueIs[T any](v *PortableValue) bool {
-	tryDeserializeValue[T](v)
+// Any returns v's value as an any.
+func (v *Value) Any() any {
+	return v.any
+}
 
-	_, ok := v.Value().(T)
+// Delayed reports whether the value is stored in a delayed deserialized form.
+func (v *Value) Delayed() bool {
+	if v.any == nil {
+		return false
+	}
+	_, ok := v.any.(json.RawMessage)
 	return ok
 }
 
-func (v *PortableValue) Value() any {
-	if v.deserializedValue != nil {
-		return v.deserializedValue
-	}
-	if v.value == nil {
-		panic("nil value")
-	}
-	return v.value
-}
-
-func (v *PortableValue) DelayedDeserialization() bool {
-	_, ok := v.value.(json.RawMessage)
-	return ok
-}
-
-func tryDeserializeValue[T any](v *PortableValue) {
-	raw, ok := v.value.(json.RawMessage)
+func tryDeserializeValue[T any](v *Value) {
+	raw, ok := v.any.(json.RawMessage)
 	if !ok {
 		// not a delayed deserialization; nothing to do
 		return
 	}
 	var target T
-	if v.deserializedValue != nil && reflect.TypeOf(v.deserializedValue).AssignableTo(reflect.TypeOf(target)) {
-		// We have a cached deserialized value, and it's compatible with the requested type
-		return
-	}
 	// Either we have no cache, or the types are incompatible; see if we can deserialize to the requested type
 	if err := json.Unmarshal(raw, &target); err != nil {
 		return
 	}
-	v.deserializedValue = target
+	v.any = target
 }
