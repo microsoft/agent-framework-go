@@ -12,12 +12,14 @@ import (
 	"github.com/google/uuid"
 )
 
+// Agent represents an AI agent that can execute tasks using a client and tools.
 type Agent struct {
 	config Config
 	client Client
 	opts   *RunOptions
 }
 
+// Config contains configuration for an [Agent].
 type Config struct {
 	ID   string
 	Name string
@@ -25,6 +27,7 @@ type Config struct {
 	SystemInstructions string
 }
 
+// Client is the interface implemented by agent clients.
 type Client interface {
 	Run(ctx context.Context, thread Thread, config Config, opts *RunOptions, messages ...*Message) (*RunResponse, error)
 }
