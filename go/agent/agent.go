@@ -111,6 +111,7 @@ func (a *Agent) Run(ctx context.Context, thread Thread, opts *RunOptions, messag
 			continue
 		}
 		finalResponse = response
+		break
 	}
 	if finalResponse == nil {
 		// Exceeded max retries with tool calls pending, disable tools and try one last time
