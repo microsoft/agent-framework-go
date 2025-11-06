@@ -11,7 +11,7 @@ import (
 	"github.com/microsoft/agent-framework/go/workflow"
 )
 
-func TestPortableValueRoundtrip(t *testing.T) {
+func TestValueRoundtrip(t *testing.T) {
 	testRountrip(t, "string")
 	testRountrip(t, 42)
 	testRountrip(t, true)
@@ -19,6 +19,7 @@ func TestPortableValueRoundtrip(t *testing.T) {
 	testRountrip(t, agent.NewTextMessage("hello"))
 	testRountrip(t, agent.RoleAssistant)
 	testRountrip(t, agent.ErrorContent{Message: "error message"})
+	testRountrip(t, workflow.AnyValue(0))
 }
 
 func testRountrip[T any](t *testing.T, v T) {
@@ -29,11 +30,11 @@ func testRountrip[T any](t *testing.T, v T) {
 
 func testNonDelayedRountrip[T any](t *testing.T, v T) {
 	t.Helper()
-	pv := workflow.NewPortableValue(v)
-	if workflow.PortableValueIs[struct{}](pv) {
+	pv := workflow.AnyValue(v)
+	if _, ok := workflow.ValueAs[struct{}](&pv); ok {
 		t.Errorf("nondelayed: expected not to be struct{}")
 	}
-	got, ok := workflow.PortableValueAs[T](pv)
+	got, ok := workflow.ValueAs[T](&pv)
 	if !ok {
 		t.Errorf("nondelayed: expected to be able to convert to any")
 	}
@@ -52,11 +53,11 @@ func testDelayedRoundtrip[T any](t *testing.T, v T) {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		t.Error(err)
 	}
-	pv := workflow.NewPortableValue(v)
-	if workflow.PortableValueIs[struct{}](pv) {
+	pv := workflow.AnyValue(v)
+	if _, ok := workflow.ValueAs[struct{}](&pv); ok {
 		t.Errorf("delayed: expected not to be struct{}")
 	}
-	got, ok := workflow.PortableValueAs[T](pv)
+	got, ok := workflow.ValueAs[T](&pv)
 	if !ok {
 		t.Errorf("delayed: expected to be able to convert to any")
 	}
