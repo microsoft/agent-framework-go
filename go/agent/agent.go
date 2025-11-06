@@ -137,7 +137,7 @@ func (a *Agent) RunText(ctx context.Context, msg string) (*RunResponse, error) {
 }
 
 func (a *Agent) RunStream(ctx context.Context, thread Thread, opts *RunOptions, messages ...*Message) iter.Seq2[*RunResponseUpdate, error] {
-	client, ok := a.client.(StreamableClient)
+	client, ok := a.client.(streamableClient)
 	if !ok {
 		return a.runStreamFallback(ctx, thread, opts, messages...)
 	}
@@ -240,14 +240,6 @@ func (a *Agent) runStreamFallback(ctx context.Context, thread Thread, options *R
 			}
 		}
 	}
-}
-
-// StreamableClient is the interface implemented by agents that support streaming responses.
-type StreamableClient interface {
-	Client
-
-	// RunStream executes the agent and streams responses.
-	RunStream(ctx context.Context, thread Thread, config Config, opts *RunOptions, messages ...*Message) iter.Seq2[*RunResponseUpdate, error]
 }
 
 // RunOptions contains options for agent execution.

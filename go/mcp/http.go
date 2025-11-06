@@ -8,11 +8,12 @@ import (
 	"net/http"
 
 	"github.com/microsoft/agent-framework/go/agent"
+	"github.com/microsoft/agent-framework/go/agent/agentext"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-var _ agent.LoaderTool = (*HTTPTool)(nil)
-var _ agent.InitTool = (*HTTPTool)(nil)
+var _ agentext.LoaderTool = (*HTTPTool)(nil)
+var _ agentext.InitTool = (*HTTPTool)(nil)
 
 // HTTPTool connects to an MCP server via HTTP/SSE (Server-Sent Events).
 type HTTPTool struct {

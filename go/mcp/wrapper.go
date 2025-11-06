@@ -7,11 +7,12 @@ import (
 	"fmt"
 
 	"github.com/microsoft/agent-framework/go/agent"
+	"github.com/microsoft/agent-framework/go/agent/agentext"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 var _ agent.Tool = (*mcpToolWrapper)(nil)
-var _ agent.CallTool = (*mcpToolWrapper)(nil)
+var _ agentext.CallTool = (*mcpToolWrapper)(nil)
 
 // mcpToolWrapper wraps an MCP tool as an agent.Tool.
 type mcpToolWrapper struct {
