@@ -4,6 +4,7 @@ package workflow
 
 import (
 	"encoding/json"
+	"reflect"
 )
 
 // Value represents a value that can be exported / imported to a workflow,
@@ -30,20 +31,27 @@ func AnyValue(v any) Value {
 
 // ValueAs attempts to convert the supplied [Value] to the requested type T.
 func ValueAs[T any](v *Value) (T, bool) {
-	if v == nil {
+	if v == nil || !v.tryDeserializeValue(reflect.TypeFor[T]()) {
 		var zero T
 		return zero, false
 	}
-
-	tryDeserializeValue[T](v)
-
-	as, ok := v.Any().(T)
-	return as, ok
+	return v.Any().(T), true
 }
 
 // Any returns v's value as an any.
 func (v *Value) Any() any {
 	return v.any
+}
+
+func (v *Value) Is(typ reflect.Type) bool {
+	return v.tryDeserializeValue(typ)
+}
+
+func (v *Value) As(typ reflect.Type) (any, bool) {
+	if v.Is(typ) {
+		return v.any, true
+	}
+	return nil, false
 }
 
 // Delayed reports whether the value is stored in a delayed deserialized form.
@@ -55,16 +63,17 @@ func (v *Value) Delayed() bool {
 	return ok
 }
 
-func tryDeserializeValue[T any](v *Value) {
+func (v *Value) tryDeserializeValue(typ reflect.Type) bool {
 	raw, ok := v.any.(json.RawMessage)
 	if !ok {
-		// not a delayed deserialization; nothing to do
-		return
+		// not a delayed deserialization
+		return reflect.TypeOf(v.any).AssignableTo(typ)
 	}
-	var target T
+	target := reflect.New(typ).Interface()
 	// Either we have no cache, or the types are incompatible; see if we can deserialize to the requested type
-	if err := json.Unmarshal(raw, &target); err != nil {
-		return
+	if err := json.Unmarshal(raw, target); err != nil {
+		return false
 	}
 	v.any = target
+	return true
 }
