@@ -6,7 +6,7 @@ type Event interface {
 	Data() any
 }
 
-var _ Event = (*ExecutorInvokedEvent)(nil)
+var _ Event = ExecutorInvokedEvent{}
 
 // ExecutorInvokedEvent is an event triggered when an executor handler is invoked.
 type ExecutorInvokedEvent struct {
@@ -14,11 +14,11 @@ type ExecutorInvokedEvent struct {
 	Message    any
 }
 
-func (e *ExecutorInvokedEvent) Data() any {
+func (e ExecutorInvokedEvent) Data() any {
 	return e.Message
 }
 
-var _ Event = (*ExecutorCompletedEvent)(nil)
+var _ Event = ExecutorCompletedEvent{}
 
 // ExecutorCompletedEvent is an event triggered when an executor handler completes.
 type ExecutorCompletedEvent struct {
@@ -26,11 +26,11 @@ type ExecutorCompletedEvent struct {
 	Result     any
 }
 
-func (e *ExecutorCompletedEvent) Data() any {
+func (e ExecutorCompletedEvent) Data() any {
 	return e.Result
 }
 
-var _ Event = (*ExecutorFailedEvent)(nil)
+var _ Event = ExecutorFailedEvent{}
 
 // ExecutorFailedEvent is an event triggered when an executor handler fails.
 type ExecutorFailedEvent struct {
@@ -38,7 +38,7 @@ type ExecutorFailedEvent struct {
 	Error      error
 }
 
-func (e *ExecutorFailedEvent) Data() any {
+func (e ExecutorFailedEvent) Data() any {
 	return e.Error
 }
 
@@ -51,7 +51,7 @@ type SuperStepStartInfo struct {
 	HasExternalMessages bool
 }
 
-var _ Event = (*SuperStepStartedEvent)(nil)
+var _ Event = SuperStepStartedEvent{}
 
 // SuperStepStartedEvent is an event triggered when a super step starts.
 type SuperStepStartedEvent struct {
@@ -59,22 +59,22 @@ type SuperStepStartedEvent struct {
 	StartInfo  *SuperStepStartInfo
 }
 
-func (e *SuperStepStartedEvent) Data() any {
+func (e SuperStepStartedEvent) Data() any {
 	return e.StartInfo
 }
 
-var _ Event = (*StartedEvent)(nil)
+var _ Event = StartedEvent{}
 
 // StartedEvent is an event triggered when the workflow starts.
 type StartedEvent struct {
 	Message any
 }
 
-func (e *StartedEvent) Data() any {
+func (e StartedEvent) Data() any {
 	return e.Message
 }
 
-var _ Event = (*ErrorEvent)(nil)
+var _ Event = ErrorEvent{}
 
 // ErrorEvent is an event triggered when an error occurs in the workflow.
 type ErrorEvent struct {
@@ -84,11 +84,11 @@ type ErrorEvent struct {
 	SubWorkflowID string
 }
 
-func (e *ErrorEvent) Data() any {
+func (e ErrorEvent) Data() any {
 	return e.Error
 }
 
-var _ Event = (*OutputEvent)(nil)
+var _ Event = OutputEvent{}
 
 // OutputEvent is an event triggered when the workflow produces an output.
 type OutputEvent struct {
@@ -96,17 +96,17 @@ type OutputEvent struct {
 	Output   any
 }
 
-func (e *OutputEvent) Data() any {
+func (e OutputEvent) Data() any {
 	return e.Output
 }
 
-var _ Event = (*RequestInfoEvent)(nil)
+var _ Event = RequestInfoEvent{}
 
 // RequestInfoEvent is an event containing request information.
 type RequestInfoEvent struct {
 	Request *ExternalRequest
 }
 
-func (e *RequestInfoEvent) Data() any {
+func (e RequestInfoEvent) Data() any {
 	return e.Request
 }
