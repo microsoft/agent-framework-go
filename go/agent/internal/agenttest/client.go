@@ -40,7 +40,7 @@ type Client struct {
 }
 
 func (c *Client) ID() string {
-	return c.agent.Config.ID
+	return c.agent.ID()
 }
 
 // RunCall records a call to Run.
@@ -111,7 +111,7 @@ func (c *Client) Run(ctx context.Context, thread agent.Thread, opts *agent.RunOp
 
 	// Fallback to a minimal response
 	return &agent.RunResponse{
-		AgentID:    c.agent.Config.ID,
+		AgentID:    c.ID(),
 		ResponseID: "response",
 		Messages: []*agent.Message{
 			agent.NewMessage(agent.RoleAssistant, &agent.TextContent{Text: "response"}),
@@ -134,7 +134,7 @@ func (c *Client) RunStream(ctx context.Context, thread agent.Thread, opts *agent
 	runStreamFunc := c.RunStreamFunc
 	defaultError := c.DefaultError
 	defaultUpdates := c.DefaultResponseUpdates
-	configID := c.agent.Config.ID
+	configID := c.ID()
 	c.mu.Unlock()
 
 	// Use custom function if provided
@@ -273,7 +273,7 @@ func (c *Client) WithToolCalls(toolCalls []*agent.FunctionCallContent, finalResp
 				contents[i] = tc
 			}
 			return &agent.RunResponse{
-				AgentID:    c.agent.Config.ID,
+				AgentID:    c.ID(),
 				ResponseID: "response-with-tools",
 				Messages: []*agent.Message{
 					agent.NewMessage(agent.RoleAssistant, contents...),
@@ -282,7 +282,7 @@ func (c *Client) WithToolCalls(toolCalls []*agent.FunctionCallContent, finalResp
 		}
 		// Subsequent calls return final response
 		return &agent.RunResponse{
-			AgentID:    c.agent.Config.ID,
+			AgentID:    c.ID(),
 			ResponseID: "final-response",
 			Messages: []*agent.Message{
 				agent.NewMessage(agent.RoleAssistant, &agent.TextContent{Text: finalResponse}),
@@ -310,7 +310,7 @@ func (c *Client) WithStreamingToolCalls(toolCalls []*agent.FunctionCallContent, 
 					contents[i] = tc
 				}
 				yield(&agent.RunResponseUpdate{
-					AgentID:    c.agent.Config.ID,
+					AgentID:    c.ID(),
 					MessageID:  "message-with-tools",
 					ResponseID: "response-with-tools",
 					Role:       agent.RoleAssistant,
@@ -320,7 +320,7 @@ func (c *Client) WithStreamingToolCalls(toolCalls []*agent.FunctionCallContent, 
 			}
 			// Subsequent calls return final response
 			yield(&agent.RunResponseUpdate{
-				AgentID:    c.agent.Config.ID,
+				AgentID:    c.ID(),
 				MessageID:  "final-message",
 				ResponseID: "final-response",
 				Role:       agent.RoleAssistant,
