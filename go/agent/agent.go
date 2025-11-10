@@ -81,7 +81,7 @@ func (a *Agent) Run(ctx context.Context, thread Thread, opts *RunOptions, messag
 			threadMessages = append(threadMessages, NewMessage(RoleTool, toolResult...))
 
 			// After executing tools, get exactly one more response and then stop
-			finalResponse, err = a.client.Run(ctx, thread, a.config, opts, threadMessages...)
+			finalResponse, err = a.Config.Run(ctx, thread, opts, threadMessages...)
 			if err != nil {
 				return nil, err
 			}
@@ -184,7 +184,7 @@ func (a *Agent) RunStream(ctx context.Context, thread Thread, opts *RunOptions, 
 
 				// After executing tools, get exactly one more response and then stop
 				var finalContents []Content
-				for update, err := range client.RunStream(ctx, thread, a.config, opts, threadMessages...) {
+				for update, err := range a.Config.RunStream(ctx, thread, opts, threadMessages...) {
 					if err != nil {
 						yield(nil, err)
 						return
