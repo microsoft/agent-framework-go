@@ -31,10 +31,10 @@ func testRountrip[T any](t *testing.T, v T) {
 func testNonDelayedRountrip[T any](t *testing.T, v T) {
 	t.Helper()
 	pv := workflow.AnyValue(v)
-	if _, ok := workflow.ValueAs[struct{}](&pv); ok {
+	if _, ok := workflow.ValueAs[struct{}](pv); ok {
 		t.Errorf("nondelayed: expected not to be struct{}")
 	}
-	got, ok := workflow.ValueAs[T](&pv)
+	got, ok := workflow.ValueAs[T](pv)
 	if !ok {
 		t.Errorf("nondelayed: expected to be able to convert to any")
 	}
@@ -54,10 +54,10 @@ func testDelayedRoundtrip[T any](t *testing.T, v T) {
 		t.Error(err)
 	}
 	pv := workflow.AnyValue(v)
-	if _, ok := workflow.ValueAs[struct{}](&pv); ok {
+	if _, ok := workflow.ValueAs[struct{}](pv); ok {
 		t.Errorf("delayed: expected not to be struct{}")
 	}
-	got, ok := workflow.ValueAs[T](&pv)
+	got, ok := workflow.ValueAs[T](pv)
 	if !ok {
 		t.Errorf("delayed: expected to be able to convert to any")
 	}
