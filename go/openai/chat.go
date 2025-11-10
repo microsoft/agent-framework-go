@@ -334,12 +334,14 @@ func buildMessageParam(msg *agent.Message) []openai.ChatCompletionMessageParamUn
 		var messages []openai.ChatCompletionMessageParamUnion
 		for _, content := range msg.Contents {
 			if funcResult, ok := content.(*agent.FunctionResultContent); ok {
-				txt := funcResult.Result
+				ret := funcResult.Result
 				if funcResult.Error != nil {
-					txt = funcResult.Error
+					ret = funcResult.Error
+				} else if b, ok := ret.(json.RawMessage); ok {
+					ret = string(b)
 				}
 				messages = append(messages, openai.ToolMessage(
-					[]openai.ChatCompletionContentPartTextParam{{Text: fmt.Sprintf("%v", txt)}},
+					[]openai.ChatCompletionContentPartTextParam{{Text: fmt.Sprintf("%v", ret)}},
 					funcResult.CallID,
 				))
 			}
