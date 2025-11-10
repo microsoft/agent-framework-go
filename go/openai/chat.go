@@ -115,8 +115,10 @@ func (a *Client) RunStream(ctx context.Context, t agent.Thread, config agent.Con
 					Arguments: tc.Arguments,
 				})
 			}
-			if choice := chunk.Choices[0]; choice.Delta.Content != "" {
-				contents = append(contents, &agent.TextContent{Text: choice.Delta.Content})
+			if len(chunk.Choices) > 0 {
+				if choice := chunk.Choices[0]; choice.Delta.Content != "" {
+					contents = append(contents, &agent.TextContent{Text: choice.Delta.Content})
+				}
 			}
 			resp := &agent.RunResponseUpdate{
 				Contents:   contents,
