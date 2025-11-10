@@ -83,15 +83,7 @@ func (a *Agent) Run(ctx context.Context, thread Thread, opts *RunOptions, messag
 		if len(toolResult) > 0 {
 			// Add a single Message to the response with the results
 			threadMessages = append(threadMessages, NewMessage(RoleTool, toolResult...))
-
-			// After executing tools, get exactly one more response and then stop
-			finalResponse, err = a.Config.Run(ctx, thread, opts, threadMessages...)
-			if err != nil {
-				return nil, err
-			}
-			message = finalResponse.Messages[0]
-			threadMessages = append(threadMessages, message)
-			break
+			continue
 		}
 		finalResponse = response
 		break
@@ -185,22 +177,7 @@ func (a *Agent) RunStream(ctx context.Context, thread Thread, opts *RunOptions, 
 					return
 				}
 				threadMessages = append(threadMessages, NewMessage(RoleTool, toolResult...))
-
-				// After executing tools, get exactly one more response and then stop
-				var finalContents []Content
-				for update, err := range a.Config.RunStream(ctx, thread, opts, threadMessages...) {
-					if err != nil {
-						yield(nil, err)
-						return
-					}
-					finalContents = append(finalContents, update.Contents...)
-					if !yield(update, nil) {
-						return
-					}
-				}
-				threadMessages = append(threadMessages, NewMessage(RoleAssistant, finalContents...))
-				success = true
-				break
+				continue
 			}
 			// No more tool calls to process
 			success = true
