@@ -18,7 +18,7 @@ type RequestPort struct {
 
 // ExternalResponse represents a response to an external request.
 type ExternalResponse struct {
-	ID          string
+	RequestID   string
 	RequestPort RequestPort
 	Data        Value
 }
@@ -29,18 +29,18 @@ type ExternalRequest struct {
 	Data        Value
 }
 
-func NewExternalRequest(port RequestPort, id string, data any) *ExternalRequest {
+func NewExternalRequest(id string, port RequestPort, data any) (*ExternalRequest, error) {
 	if id == "" {
 		id = uuid.New().String()
 	}
 	if typ := reflect.TypeOf(data); typ != port.RequestType {
-		panic(fmt.Errorf("invalid request data type: expected %v, got %v", port.RequestType, typ))
+		return nil, fmt.Errorf("invalid request data type: expected %v, got %v", port.RequestType, typ)
 	}
 	return &ExternalRequest{
 		ID:          id,
 		RequestPort: port,
 		Data:        AnyValue(data),
-	}
+	}, nil
 }
 
 func (r *ExternalRequest) NewResponse(data any) (ExternalResponse, error) {
@@ -48,8 +48,16 @@ func (r *ExternalRequest) NewResponse(data any) (ExternalResponse, error) {
 		return ExternalResponse{}, fmt.Errorf("invalid response type: expected %v, got %v", r.RequestPort.ResponseType, typ)
 	}
 	return ExternalResponse{
-		ID:          r.ID,
+		RequestID:   r.ID,
 		RequestPort: r.RequestPort,
 		Data:        AnyValue(data),
 	}, nil
+}
+
+func (r *ExternalRequest) Rewrap(other *ExternalResponse) *ExternalResponse {
+	return &ExternalResponse{
+		RequestID:   other.RequestID,
+		RequestPort: other.RequestPort,
+		Data:        r.Data,
+	}
 }
