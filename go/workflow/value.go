@@ -30,8 +30,11 @@ func AnyValue(v any) Value {
 }
 
 // ValueAs attempts to convert the supplied [Value] to the requested type T.
-func ValueAs[T any](v *Value) (T, bool) {
-	if v == nil || !v.tryDeserializeValue(reflect.TypeFor[T]()) {
+func ValueAs[T any](v Value) (T, bool) {
+	if reflect.TypeFor[T]() == reflect.TypeFor[Value]() {
+		return any(v).(T), true
+	}
+	if !v.Is(reflect.TypeFor[T]()) {
 		var zero T
 		return zero, false
 	}
@@ -43,8 +46,28 @@ func (v *Value) Any() any {
 	return v.any
 }
 
+// Is reports whether the value is of the specified type.
+// If the value is stored in a delayed deserialized form, it will attempt to
+// deserialize it to the requested type.
 func (v *Value) Is(typ reflect.Type) bool {
-	return v.tryDeserializeValue(typ)
+	if v == nil {
+		return false
+	}
+	if typ == reflect.TypeFor[Value]() {
+		return true
+	}
+	raw, ok := v.any.(json.RawMessage)
+	if !ok {
+		// not a delayed deserialization
+		return reflect.TypeOf(v.any).AssignableTo(typ)
+	}
+	target := reflect.New(typ).Interface()
+	// Either we have no cache, or the types are incompatible; see if we can deserialize to the requested type
+	if err := json.Unmarshal(raw, target); err != nil {
+		return false
+	}
+	v.any = target
+	return true
 }
 
 func (v *Value) As(typ reflect.Type) (any, bool) {
@@ -61,19 +84,4 @@ func (v *Value) Delayed() bool {
 	}
 	_, ok := v.any.(json.RawMessage)
 	return ok
-}
-
-func (v *Value) tryDeserializeValue(typ reflect.Type) bool {
-	raw, ok := v.any.(json.RawMessage)
-	if !ok {
-		// not a delayed deserialization
-		return reflect.TypeOf(v.any).AssignableTo(typ)
-	}
-	target := reflect.New(typ).Interface()
-	// Either we have no cache, or the types are incompatible; see if we can deserialize to the requested type
-	if err := json.Unmarshal(raw, target); err != nil {
-		return false
-	}
-	v.any = target
-	return true
 }
