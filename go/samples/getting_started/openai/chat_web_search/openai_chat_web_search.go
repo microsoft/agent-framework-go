@@ -6,6 +6,8 @@ import (
 
 	"github.com/microsoft/agent-framework/go/agent"
 	"github.com/microsoft/agent-framework/go/openai"
+	"github.com/microsoft/agent-framework/go/tool"
+	"github.com/microsoft/agent-framework/go/tool/websearchtool"
 )
 
 /*
@@ -20,7 +22,7 @@ func main() {
 		Model:              "gpt-4o-search-preview",
 		SystemInstructions: "You are a helpful weather agent.",
 		Opts: &agent.RunOptions{
-			Tools: []agent.Tool{&agent.HostedWebSearchTool{
+			Tools: []tool.Tool{&websearchtool.HostedWebSearch{
 				AdditionalProperties: map[string]any{
 					"user_location": map[string]string{
 						"country": "US",

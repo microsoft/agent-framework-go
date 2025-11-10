@@ -8,6 +8,8 @@ import (
 
 	"github.com/microsoft/agent-framework/go/agent"
 	"github.com/microsoft/agent-framework/go/openai"
+	"github.com/microsoft/agent-framework/go/tool"
+	"github.com/microsoft/agent-framework/go/tool/functool"
 )
 
 /*
@@ -26,7 +28,7 @@ type weatherResponse struct {
 	HighTemp   int    `json:"high_temp"`
 }
 
-var weatherTool = agent.MustNewFuncTool(&agent.Func{
+var weatherTool = functool.MustNew(&functool.Func{
 	Name:        "weather",
 	Description: "Get the current weather for a given location",
 }, func(_ context.Context, req weatherRequest) (weatherResponse, error) {
@@ -53,7 +55,7 @@ func exampleWithAutomaticThreadCreation() {
 		Model:              "gpt-4o-mini",
 		SystemInstructions: "You are a helpful weather agent.",
 		Opts: &agent.RunOptions{
-			Tools: []agent.Tool{weatherTool},
+			Tools: []tool.Tool{weatherTool},
 		},
 	})
 
@@ -91,7 +93,7 @@ func exampleWithThreadPersistence() {
 	ag := openai.NewChatAgent(openai.AgentConfig{
 		Model: "gpt-4o-mini",
 		Opts: &agent.RunOptions{
-			Tools: []agent.Tool{weatherTool},
+			Tools: []tool.Tool{weatherTool},
 		},
 	})
 
@@ -140,7 +142,7 @@ func exampleWithExistingThreadMessages() {
 	ag := openai.NewChatAgent(openai.AgentConfig{
 		Model: "gpt-4o-mini",
 		Opts: &agent.RunOptions{
-			Tools: []agent.Tool{weatherTool},
+			Tools: []tool.Tool{weatherTool},
 		},
 	})
 
@@ -164,7 +166,7 @@ func exampleWithExistingThreadMessages() {
 	newAgent := openai.NewChatAgent(openai.AgentConfig{
 		Model: "gpt-4o-mini",
 		Opts: &agent.RunOptions{
-			Tools: []agent.Tool{weatherTool},
+			Tools: []tool.Tool{weatherTool},
 		},
 	})
 

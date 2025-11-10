@@ -8,6 +8,8 @@ import (
 
 	"github.com/microsoft/agent-framework/go/agent"
 	"github.com/microsoft/agent-framework/go/openai"
+	"github.com/microsoft/agent-framework/go/tool"
+	"github.com/microsoft/agent-framework/go/tool/functool"
 )
 
 /*
@@ -26,7 +28,7 @@ type weatherResponse struct {
 	HighTemp   int    `json:"high_temp"`
 }
 
-var weatherTool = agent.MustNewFuncTool(&agent.Func{
+var weatherTool = functool.MustNew(&functool.Func{
 	Name:        "weather",
 	Description: "Get the current weather for a given location",
 }, func(_ context.Context, req weatherRequest) (weatherResponse, error) {
@@ -49,7 +51,7 @@ func main() {
 		APIVersion:         "2025-01-01-preview",                      // optional, uses default if not specified
 		SystemInstructions: "You are a helpful weather agent.",
 		Opts: &agent.RunOptions{
-			Tools: []agent.Tool{weatherTool},
+			Tools: []tool.Tool{weatherTool},
 		},
 	})
 

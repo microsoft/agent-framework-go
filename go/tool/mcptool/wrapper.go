@@ -1,42 +1,41 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package mcp
+package mcptool
 
 import (
 	"context"
 	"fmt"
 
-	"github.com/microsoft/agent-framework/go/agent"
-	"github.com/microsoft/agent-framework/go/agent/agentext"
+	"github.com/microsoft/agent-framework/go/tool"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-var _ agent.Tool = (*mcpToolWrapper)(nil)
-var _ agentext.CallTool = (*mcpToolWrapper)(nil)
+var _ tool.Tool = (*mcpWrapper)(nil)
+var _ tool.CallTool = (*mcpWrapper)(nil)
 
-// mcpToolWrapper wraps an MCP tool as an agent.Tool.
-type mcpToolWrapper struct {
+// mcpWrapper wraps an MCP tool as an agent.Tool.
+type mcpWrapper struct {
 	session *mcpsdk.ClientSession
 	tool    *mcpsdk.Tool
 }
 
-func newMCPToolWrapper(session *mcpsdk.ClientSession, tool *mcpsdk.Tool) *mcpToolWrapper {
-	return &mcpToolWrapper{
+func newMCPToolWrapper(session *mcpsdk.ClientSession, tool *mcpsdk.Tool) *mcpWrapper {
+	return &mcpWrapper{
 		session: session,
 		tool:    tool,
 	}
 }
 
-func (w *mcpToolWrapper) ToolInfo() (name string, description string) {
+func (w *mcpWrapper) ToolInfo() (name string, description string) {
 	return w.tool.Name, w.tool.Description
 }
 
-func (w *mcpToolWrapper) Schema() any {
+func (w *mcpWrapper) Schema() any {
 	return w.tool.InputSchema
 }
 
 // Call implements the Func-like calling pattern for MCP tools.
-func (w *mcpToolWrapper) Call(ctx context.Context, args map[string]any) (any, error) {
+func (w *mcpWrapper) Call(ctx context.Context, args map[string]any) (any, error) {
 	// Call the MCP tool
 	result, err := w.session.CallTool(ctx, &mcpsdk.CallToolParams{
 		Name:      w.tool.Name,

@@ -5,9 +5,13 @@ package agent
 import (
 	"cmp"
 	"context"
+	"encoding/json"
+	"fmt"
 	"iter"
 	"maps"
 	"slices"
+
+	"github.com/microsoft/agent-framework/go/tool"
 )
 
 // Agent represents an AI agent that can execute tasks using a client and tools.
@@ -95,7 +99,7 @@ func (a *Agent) Run(ctx context.Context, thread Thread, opts *RunOptions, messag
 	if finalResponse == nil {
 		// Exceeded max retries with tool calls pending, disable tools and try one last time
 		// to get a final response.
-		opts.ToolMode = ToolModeNone
+		opts.ToolMode = tool.ToolModeNone
 		finalResponse, err = a.Config.Run(ctx, thread, opts, threadMessages...)
 		if err != nil {
 			return nil, err
@@ -205,7 +209,7 @@ func (a *Agent) RunStream(ctx context.Context, thread Thread, opts *RunOptions, 
 		if !success {
 			// Exceeded max retries with tool calls pending, disable tools and try one last time
 			// to get a final response.
-			opts.ToolMode = ToolModeNone
+			opts.ToolMode = tool.ToolModeNone
 			for update, err := range a.Config.RunStream(ctx, thread, opts, threadMessages...) {
 				if err != nil {
 					yield(nil, err)
@@ -251,10 +255,10 @@ func (a *Agent) runStreamFallback(ctx context.Context, thread Thread, options *R
 // RunOptions contains options for agent execution.
 type RunOptions struct {
 	// Tools to make available to the agent.
-	Tools []Tool
+	Tools []tool.Tool
 
 	// ToolMode specifies how tools should be used.
-	ToolMode ToolMode
+	ToolMode tool.ToolMode
 
 	// MaxTurns limits the number of agent turns.
 	MaxTurns int
@@ -351,4 +355,121 @@ func prepareMessages(ctx context.Context, t Thread, messages []*Message) ([]*Mes
 		}
 	}
 	return messages, nil
+}
+
+func loadTools(ctx context.Context, tools []tool.Tool) ([]tool.Tool, error) {
+	var result []tool.Tool
+	for _, t := range tools {
+		if lt, ok := t.(tool.LoaderTool); ok {
+			innerTools, err := lt.LoadTools(ctx)
+			if err != nil {
+				name, _ := t.ToolInfo()
+				return nil, fmt.Errorf("failed to load inner tools for %q: %w", name, err)
+			}
+			result = append(result, innerTools...)
+		}
+	}
+	return result, nil
+}
+
+// initTools initializes all tools that implement the InitTool interface.
+func initTools(ctx context.Context, tools []tool.Tool) error {
+	for _, t := range tools {
+		if t, ok := t.(tool.InitTool); ok {
+			if err := t.Init(ctx); err != nil {
+				name, _ := t.ToolInfo()
+				return fmt.Errorf("failed to initialize tool %q: %w", name, err)
+			}
+		}
+	}
+	return nil
+}
+
+func runToolCalls(ctx context.Context, options *RunOptions, contents ...Content) []Content {
+	if len(options.Tools) == 0 {
+		return nil
+	}
+	funcResults := make(map[string]struct{})
+	for _, contents := range contents {
+		if funcResult, ok := contents.(*FunctionResultContent); ok {
+			funcResults[funcResult.CallID] = struct{}{}
+		}
+	}
+	funcCalls := make([]*FunctionCallContent, 0, len(contents)-len(funcResults))
+	for _, contents := range contents {
+		if fc, ok := contents.(*FunctionCallContent); ok {
+			if _, executed := funcResults[fc.CallID]; executed {
+				continue
+			}
+			funcCalls = append(funcCalls, fc)
+		}
+	}
+	toolContent := make([]Content, 0, len(funcCalls))
+	for _, fc := range funcCalls {
+		toolContent = append(toolContent, funcCall(ctx, options.Tools, fc))
+	}
+	return toolContent
+}
+
+// funcCall executes a function tool call.
+func funcCall(ctx context.Context, tools []tool.Tool, toolCall *FunctionCallContent) (ct Content) {
+	if toolCall.Error != nil {
+		// If there was an error parsing the tool call, return the error.
+		return &FunctionCallContent{
+			CallID: toolCall.CallID,
+			Error:  toolCall.Error,
+		}
+	}
+
+	// Find the tool in the options
+	var found tool.CallTool
+	for _, t := range tools {
+		name, _ := t.ToolInfo()
+		if name == toolCall.Name {
+			if t, ok := t.(tool.CallTool); ok {
+				found = t
+			}
+			break
+		}
+	}
+
+	if found == nil {
+		return &FunctionCallContent{
+			CallID: toolCall.CallID,
+			Error:  fmt.Errorf("tool not found: %s", toolCall.Name),
+		}
+	}
+
+	var args map[string]any
+	if toolCall.Arguments != "" {
+		if err := json.Unmarshal([]byte(toolCall.Arguments), &args); err != nil {
+			return &FunctionCallContent{
+				CallID: toolCall.CallID,
+				Error:  fmt.Errorf("failed to parse arguments: %w", err),
+			}
+		}
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			var err error
+			if e, ok := r.(error); ok {
+				err = e
+			} else {
+				err = fmt.Errorf("%v", r)
+			}
+			ct = &FunctionResultContent{
+				CallID: toolCall.CallID,
+				Error:  fmt.Errorf("tool execution panic: %v", err),
+			}
+		}
+	}()
+
+	// Execute the tool
+	result, err := found.Call(ctx, args)
+	return &FunctionResultContent{
+		CallID: toolCall.CallID,
+		Error:  err,
+		Result: result,
+	}
 }

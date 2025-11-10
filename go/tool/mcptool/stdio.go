@@ -1,23 +1,22 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package mcp
+package mcptool
 
 import (
 	"context"
 	"fmt"
 	"os/exec"
 
-	"github.com/microsoft/agent-framework/go/agent"
-	"github.com/microsoft/agent-framework/go/agent/agentext"
+	"github.com/microsoft/agent-framework/go/tool"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-var _ agentext.LoaderTool = (*StdioTool)(nil)
-var _ agentext.InitTool = (*StdioTool)(nil)
+var _ tool.LoaderTool = (*Stdio)(nil)
+var _ tool.InitTool = (*Stdio)(nil)
 
-// StdioTool connects to an MCP server via stdio (process communication).
+// Stdio connects to an MCP server via stdio (process communication).
 // This is the most common transport for local MCP servers.
-type StdioTool struct {
+type Stdio struct {
 	tool *baseTool
 
 	// Command is the path to the MCP server executable.
@@ -38,19 +37,19 @@ type StdioTool struct {
 
 // ToolInfo implements the agent.Tool interface.
 // This returns a generic name for the MCP connection itself, not individual tools.
-func (t StdioTool) ToolInfo() (name string, description string) {
+func (t Stdio) ToolInfo() (name string, description string) {
 	return "mcp_stdio", fmt.Sprintf("MCP connection via stdio to %s", t.Command)
 }
 
-func (t StdioTool) Init(ctx context.Context) error {
+func (t Stdio) Init(ctx context.Context) error {
 	return t.connect(ctx)
 }
 
-func (t StdioTool) LoadTools(ctx context.Context) ([]agent.Tool, error) {
+func (t Stdio) LoadTools(ctx context.Context) ([]tool.Tool, error) {
 	return t.tool.loadTools(ctx)
 }
 
-func (t StdioTool) Schema() map[string]any {
+func (t Stdio) Schema() map[string]any {
 	return map[string]any{
 		"command": t.Command,
 		"args":    t.Args,
@@ -59,7 +58,7 @@ func (t StdioTool) Schema() map[string]any {
 }
 
 // connect establishes a connection to the MCP server via stdio.
-func (t StdioTool) connect(ctx context.Context) error {
+func (t Stdio) connect(ctx context.Context) error {
 	// Create the command
 	cmd := exec.CommandContext(ctx, t.Command, t.Args...)
 
@@ -78,9 +77,9 @@ func (t StdioTool) connect(ctx context.Context) error {
 	})
 }
 
-// NewStdioTool creates a new MCP tool that connects via stdio.
-func NewStdioTool(command string, args []string, env []string, samplingCallback SamplingCallback) StdioTool {
-	return StdioTool{
+// NewStdio creates a new MCP tool that connects via stdio.
+func NewStdio(command string, args []string, env []string, samplingCallback SamplingCallback) Stdio {
+	return Stdio{
 		Command: command,
 		Args:    args,
 		Env:     env,

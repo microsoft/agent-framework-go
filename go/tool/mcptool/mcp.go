@@ -3,7 +3,7 @@
 // Package mcp provides integration with the Model Context Protocol (MCP).
 // It allows agents to connect to external MCP servers via stdio, HTTP, or WebSocket
 // and expose their tools and prompts as agent.Tool instances.
-package mcp
+package mcptool
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/microsoft/agent-framework/go/agent"
+	"github.com/microsoft/agent-framework/go/tool"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -106,7 +106,7 @@ func (t *baseTool) Close() error {
 }
 
 // loadTools loads tools from the MCP server.
-func (t *baseTool) loadTools(ctx context.Context) ([]agent.Tool, error) {
+func (t *baseTool) loadTools(ctx context.Context) ([]tool.Tool, error) {
 	t.mu.RLock()
 	session := t.session
 	t.mu.RUnlock()
@@ -122,7 +122,7 @@ func (t *baseTool) loadTools(ctx context.Context) ([]agent.Tool, error) {
 	}
 
 	// Create agent.Tool instances for each MCP tool
-	result := make([]agent.Tool, 0, len(toolsResult.Tools))
+	result := make([]tool.Tool, 0, len(toolsResult.Tools))
 	for _, mcpTool := range toolsResult.Tools {
 		agentTool := newMCPToolWrapper(t.session, mcpTool)
 		result = append(result, agentTool)
