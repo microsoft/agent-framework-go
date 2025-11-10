@@ -55,6 +55,7 @@ func main() {
 
 	nonStreamingExample(ag, "What's the weather like in Seattle?")
 	streamingExample(ag, "What's the weather like in Portland?")
+
 }
 
 func nonStreamingExample(ag *agent.Agent, query string) {
