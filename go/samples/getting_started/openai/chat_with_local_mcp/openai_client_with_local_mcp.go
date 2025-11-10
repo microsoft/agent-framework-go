@@ -41,17 +41,13 @@ func mcpToolsOnAgentLevel() error {
 
 	// Create the OpenAI agent with MCP tools
 	// In Go, we configure tools as default options that will be used for all runs
-	client := openai.NewChatClient(
-		openai.AgentConfig{
-			Model: "gpt-4o-mini",
-		},
-	)
-	ag := agent.New(client, &agent.Config{
+	ag := openai.NewChatAgent(openai.AgentConfig{
+		Model:              "gpt-4o-mini",
 		Name:               "DocsAgent",
 		SystemInstructions: "You are a helpful assistant that can help with microsoft documentation questions.",
-	}, &agent.RunOptions{
-		Tools:    []agent.Tool{mcpTool},
-		ToolMode: agent.ToolModeAuto,
+		Opts: &agent.RunOptions{
+			Tools: []agent.Tool{mcpTool},
+		},
 	})
 
 	// First query - uses the tools defined at agent creation
@@ -87,15 +83,11 @@ func mcpToolsOnRunLevel() error {
 	ctx := context.Background()
 
 	// Create the OpenAI agent
-	client := openai.NewChatClient(
-		openai.AgentConfig{
-			Model: "gpt-4o-mini",
-		},
-	)
-	ag := agent.New(client, &agent.Config{
+	ag := openai.NewChatAgent(openai.AgentConfig{
+		Model:              "gpt-4o-mini",
 		Name:               "DocsAgent",
 		SystemInstructions: "You are a helpful assistant that can help with microsoft documentation questions.",
-	}, nil)
+	})
 
 	// First query
 	query1 := "How to create an Azure storage account using az cli?"

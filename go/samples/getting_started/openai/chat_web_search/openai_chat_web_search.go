@@ -16,20 +16,19 @@ for real-time information retrieval and current data access.
 */
 
 func main() {
-	client := openai.NewChatClient(openai.AgentConfig{
-		Model: "gpt-4o-search-preview",
-	})
-	ag := agent.New(client, &agent.Config{
+	ag := openai.NewChatAgent(openai.AgentConfig{
+		Model:              "gpt-4o-search-preview",
 		SystemInstructions: "You are a helpful weather agent.",
-	}, &agent.RunOptions{
-		Tools: []agent.Tool{&agent.HostedWebSearchTool{
-			AdditionalProperties: map[string]any{
-				"user_location": map[string]string{
-					"country": "US",
-					"city":    "Seattle",
+		Opts: &agent.RunOptions{
+			Tools: []agent.Tool{&agent.HostedWebSearchTool{
+				AdditionalProperties: map[string]any{
+					"user_location": map[string]string{
+						"country": "US",
+						"city":    "Seattle",
+					},
 				},
-			},
-		}},
+			}},
+		},
 	})
 
 	const message = "What is the current weather? Do not ask for my current location."

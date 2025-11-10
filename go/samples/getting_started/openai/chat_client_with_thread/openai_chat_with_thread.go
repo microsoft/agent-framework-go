@@ -49,13 +49,12 @@ func main() {
 func exampleWithAutomaticThreadCreation() {
 	fmt.Println("=== Automatic Thread Creation Example ===")
 
-	client := openai.NewChatClient(openai.AgentConfig{
-		Model: "gpt-4o-mini",
-	})
-	ag := agent.New(client, &agent.Config{
+	ag := openai.NewChatAgent(openai.AgentConfig{
+		Model:              "gpt-4o-mini",
 		SystemInstructions: "You are a helpful weather agent.",
-	}, &agent.RunOptions{
-		Tools: []agent.Tool{weatherTool},
+		Opts: &agent.RunOptions{
+			Tools: []agent.Tool{weatherTool},
+		},
 	})
 
 	ctx := context.Background()
@@ -89,13 +88,11 @@ func exampleWithThreadPersistence() {
 	fmt.Println("Using the same thread across multiple conversations to maintain context.")
 	fmt.Println()
 
-	client := openai.NewChatClient(openai.AgentConfig{
+	ag := openai.NewChatAgent(openai.AgentConfig{
 		Model: "gpt-4o-mini",
-	})
-	ag := agent.New(client, &agent.Config{
-		SystemInstructions: "You are a helpful weather agent.",
-	}, &agent.RunOptions{
-		Tools: []agent.Tool{weatherTool},
+		Opts: &agent.RunOptions{
+			Tools: []agent.Tool{weatherTool},
+		},
 	})
 
 	ctx := context.Background()
@@ -140,13 +137,11 @@ func exampleWithThreadPersistence() {
 func exampleWithExistingThreadMessages() {
 	fmt.Println("=== Existing Thread Messages Example ===")
 
-	client := openai.NewChatClient(openai.AgentConfig{
+	ag := openai.NewChatAgent(openai.AgentConfig{
 		Model: "gpt-4o-mini",
-	})
-	ag := agent.New(client, &agent.Config{
-		SystemInstructions: "You are a helpful weather agent.",
-	}, &agent.RunOptions{
-		Tools: []agent.Tool{weatherTool},
+		Opts: &agent.RunOptions{
+			Tools: []agent.Tool{weatherTool},
+		},
 	})
 
 	ctx := context.Background()
@@ -166,13 +161,11 @@ func exampleWithExistingThreadMessages() {
 	fmt.Println("\n--- Continuing with the same thread in a new agent instance ---")
 
 	// Create a new agent instance but use the existing thread with its message history
-	newClient := openai.NewChatClient(openai.AgentConfig{
+	newAgent := openai.NewChatAgent(openai.AgentConfig{
 		Model: "gpt-4o-mini",
-	})
-	newAgent := agent.New(newClient, &agent.Config{
-		SystemInstructions: "You are a helpful weather agent.",
-	}, &agent.RunOptions{
-		Tools: []agent.Tool{weatherTool},
+		Opts: &agent.RunOptions{
+			Tools: []agent.Tool{weatherTool},
+		},
 	})
 
 	// Use the same thread object which contains the conversation history
