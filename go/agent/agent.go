@@ -108,7 +108,15 @@ func (a *Agent) Run(ctx context.Context, thread Thread, opts *RunOptions, messag
 		if len(toolResult) > 0 {
 			// Add a single Message to the response with the results
 			threadMessages = append(threadMessages, NewMessage(RoleTool, toolResult...))
-			continue
+
+			// After executing tools, get exactly one more response and then stop
+			finalResponse, err = a.client.Run(ctx, thread, a.config, opts, threadMessages...)
+			if err != nil {
+				return nil, err
+			}
+			message = finalResponse.Messages[0]
+			threadMessages = append(threadMessages, message)
+			break
 		}
 		finalResponse = response
 		break
@@ -164,6 +172,7 @@ func (a *Agent) RunStream(ctx context.Context, thread Thread, opts *RunOptions, 
 		}
 		const maxRetries = 5
 		var success bool
+
 		for range maxRetries {
 			var contents []Content
 			for update, err := range client.RunStream(ctx, thread, a.config, opts, threadMessages...) {
@@ -177,12 +186,20 @@ func (a *Agent) RunStream(ctx context.Context, thread Thread, opts *RunOptions, 
 				}
 			}
 			threadMessages = append(threadMessages, NewMessage(RoleAssistant, contents...))
-			if !slices.ContainsFunc(contents, func(content Content) bool {
+
+			// Check if this response contains tool calls
+			hasToolCalls := slices.ContainsFunc(contents, func(content Content) bool {
 				_, ok := content.(*FunctionCallContent)
 				return ok
-			}) {
+			})
+
+			if !hasToolCalls {
+				// This is a final response (no tool calls)
+				success = true
 				break
 			}
+
+			// Execute tools
 			toolResult := runToolCalls(ctx, opts, contents...)
 			if len(toolResult) > 0 {
 				// Add a single Message to the response with the results
@@ -194,7 +211,22 @@ func (a *Agent) RunStream(ctx context.Context, thread Thread, opts *RunOptions, 
 					return
 				}
 				threadMessages = append(threadMessages, NewMessage(RoleTool, toolResult...))
-				continue
+
+				// After executing tools, get exactly one more response and then stop
+				var finalContents []Content
+				for update, err := range client.RunStream(ctx, thread, a.config, opts, threadMessages...) {
+					if err != nil {
+						yield(nil, err)
+						return
+					}
+					finalContents = append(finalContents, update.Contents...)
+					if !yield(update, nil) {
+						return
+					}
+				}
+				threadMessages = append(threadMessages, NewMessage(RoleAssistant, finalContents...))
+				success = true
+				break
 			}
 			// No more tool calls to process
 			success = true
