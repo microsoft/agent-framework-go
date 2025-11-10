@@ -8,7 +8,6 @@ import (
 	"sync"
 
 	"github.com/microsoft/agent-framework/go/agent"
-	"github.com/microsoft/agent-framework/go/agent/agentext"
 )
 
 // Client is a configurable stub implementation of Client and streamableClient
@@ -16,11 +15,13 @@ import (
 type Client struct {
 	mu sync.Mutex
 
+	agent *agent.Agent
+
 	// RunFunc is called when Run is invoked. If nil, uses default behavior.
-	RunFunc func(ctx context.Context, thread agent.Thread, config agent.Config, opts *agent.RunOptions, messages ...*agent.Message) (*agent.RunResponse, error)
+	RunFunc func(ctx context.Context, thread agent.Thread, opts *agent.RunOptions, messages ...*agent.Message) (*agent.RunResponse, error)
 
 	// RunStreamFunc is called when RunStream is invoked. If nil, uses default behavior.
-	RunStreamFunc func(ctx context.Context, thread agent.Thread, config agent.Config, opts *agent.RunOptions, messages ...*agent.Message) iter.Seq2[*agent.RunResponseUpdate, error]
+	RunStreamFunc func(ctx context.Context, thread agent.Thread, opts *agent.RunOptions, messages ...*agent.Message) iter.Seq2[*agent.RunResponseUpdate, error]
 
 	// RunCalls records all calls to Run.
 	RunCalls []RunCall
@@ -38,11 +39,14 @@ type Client struct {
 	DefaultError error
 }
 
+func (c *Client) ID() string {
+	return c.agent.Config.ID
+}
+
 // RunCall records a call to Run.
 type RunCall struct {
 	Ctx      context.Context
 	Thread   agent.Thread
-	Config   agent.Config
 	Opts     *agent.RunOptions
 	Messages []*agent.Message
 }
@@ -51,59 +55,63 @@ type RunCall struct {
 type RunStreamCall struct {
 	Ctx      context.Context
 	Thread   agent.Thread
-	Config   agent.Config
 	Opts     *agent.RunOptions
 	Messages []*agent.Message
 }
 
-var _ agent.Client = (*Client)(nil)
-var _ agentext.StreamableClient = (*Client)(nil)
-
-// NewClient creates a new Client with sensible defaults.
-func NewClient() *Client {
-	return &Client{
+// NewAgent creates a new Client with sensible defaults.
+func NewAgent() (*Client, *agent.Agent) {
+	id := "agent"
+	c := &Client{
 		DefaultResponse: &agent.RunResponse{
-			AgentID:    "agent",
+			AgentID:    id,
 			ResponseID: "response-1",
 			Messages: []*agent.Message{
 				agent.NewMessage(agent.RoleAssistant, &agent.TextContent{Text: "response"}),
 			},
 		},
 	}
+	c.agent = &agent.Agent{
+		Config: agent.Config{
+			ID:        id,
+			Run:       c.Run,
+			RunStream: c.RunStream,
+		},
+	}
+	return c, c.agent
 }
 
 // Run implements the Client interface.
-func (m *Client) Run(ctx context.Context, thread agent.Thread, config agent.Config, opts *agent.RunOptions, messages ...*agent.Message) (*agent.RunResponse, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func (c *Client) Run(ctx context.Context, thread agent.Thread, opts *agent.RunOptions, messages ...*agent.Message) (*agent.RunResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	// Record the call
-	m.RunCalls = append(m.RunCalls, RunCall{
+	c.RunCalls = append(c.RunCalls, RunCall{
 		Ctx:      ctx,
 		Thread:   thread,
-		Config:   config,
 		Opts:     opts,
 		Messages: messages,
 	})
 
 	// Use custom function if provided
-	if m.RunFunc != nil {
-		return m.RunFunc(ctx, thread, config, opts, messages...)
+	if c.RunFunc != nil {
+		return c.RunFunc(ctx, thread, opts, messages...)
 	}
 
 	// Return error if configured
-	if m.DefaultError != nil {
-		return nil, m.DefaultError
+	if c.DefaultError != nil {
+		return nil, c.DefaultError
 	}
 
 	// Return default response
-	if m.DefaultResponse != nil {
-		return m.DefaultResponse, nil
+	if c.DefaultResponse != nil {
+		return c.DefaultResponse, nil
 	}
 
 	// Fallback to a minimal response
 	return &agent.RunResponse{
-		AgentID:    config.ID,
+		AgentID:    c.agent.Config.ID,
 		ResponseID: "response",
 		Messages: []*agent.Message{
 			agent.NewMessage(agent.RoleAssistant, &agent.TextContent{Text: "response"}),
@@ -112,27 +120,26 @@ func (m *Client) Run(ctx context.Context, thread agent.Thread, config agent.Conf
 }
 
 // RunStream implements the streamableClient interface.
-func (m *Client) RunStream(ctx context.Context, thread agent.Thread, config agent.Config, opts *agent.RunOptions, messages ...*agent.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
-	m.mu.Lock()
+func (c *Client) RunStream(ctx context.Context, thread agent.Thread, opts *agent.RunOptions, messages ...*agent.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
+	c.mu.Lock()
 	// Record the call
-	m.RunStreamCalls = append(m.RunStreamCalls, RunStreamCall{
+	c.RunStreamCalls = append(c.RunStreamCalls, RunStreamCall{
 		Ctx:      ctx,
 		Thread:   thread,
-		Config:   config,
 		Opts:     opts,
 		Messages: messages,
 	})
 
 	// Capture values needed for the iterator
-	runStreamFunc := m.RunStreamFunc
-	defaultError := m.DefaultError
-	defaultUpdates := m.DefaultResponseUpdates
-	configID := config.ID
-	m.mu.Unlock()
+	runStreamFunc := c.RunStreamFunc
+	defaultError := c.DefaultError
+	defaultUpdates := c.DefaultResponseUpdates
+	configID := c.agent.Config.ID
+	c.mu.Unlock()
 
 	// Use custom function if provided
 	if runStreamFunc != nil {
-		return runStreamFunc(ctx, thread, config, opts, messages...)
+		return runStreamFunc(ctx, thread, opts, messages...)
 	}
 
 	// Return an iterator
@@ -166,80 +173,80 @@ func (m *Client) RunStream(ctx context.Context, thread agent.Thread, config agen
 }
 
 // Reset clears all recorded calls and resets to default configuration.
-func (m *Client) Reset() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func (c *Client) Reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	m.RunCalls = nil
-	m.RunStreamCalls = nil
-	m.RunFunc = nil
-	m.RunStreamFunc = nil
-	m.DefaultError = nil
+	c.RunCalls = nil
+	c.RunStreamCalls = nil
+	c.RunFunc = nil
+	c.RunStreamFunc = nil
+	c.DefaultError = nil
 }
 
 // SetResponse sets the default response to be returned by Run.
-func (m *Client) SetResponse(response *agent.RunResponse) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.DefaultResponse = response
+func (c *Client) SetResponse(response *agent.RunResponse) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.DefaultResponse = response
 }
 
 // SetError sets the default error to be returned by Run and RunStream.
-func (m *Client) SetError(err error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.DefaultError = err
+func (c *Client) SetError(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.DefaultError = err
 }
 
 // SetStreamUpdates sets the default updates to be returned by RunStream.
-func (m *Client) SetStreamUpdates(updates []*agent.RunResponseUpdate) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.DefaultResponseUpdates = updates
+func (c *Client) SetStreamUpdates(updates []*agent.RunResponseUpdate) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.DefaultResponseUpdates = updates
 }
 
 // GetRunCallCount returns the number of times Run was called.
-func (m *Client) GetRunCallCount() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return len(m.RunCalls)
+func (c *Client) GetRunCallCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.RunCalls)
 }
 
 // GetRunStreamCallCount returns the number of times RunStream was called.
-func (m *Client) GetRunStreamCallCount() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return len(m.RunStreamCalls)
+func (c *Client) GetRunStreamCallCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.RunStreamCalls)
 }
 
 // GetLastRunCall returns the last call to Run, or nil if no calls were made.
-func (m *Client) GetLastRunCall() *RunCall {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if len(m.RunCalls) == 0 {
+func (c *Client) GetLastRunCall() *RunCall {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.RunCalls) == 0 {
 		return nil
 	}
-	return &m.RunCalls[len(m.RunCalls)-1]
+	return &c.RunCalls[len(c.RunCalls)-1]
 }
 
 // GetLastRunStreamCall returns the last call to RunStream, or nil if no calls were made.
-func (m *Client) GetLastRunStreamCall() *RunStreamCall {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if len(m.RunStreamCalls) == 0 {
+func (c *Client) GetLastRunStreamCall() *RunStreamCall {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.RunStreamCalls) == 0 {
 		return nil
 	}
-	return &m.RunStreamCalls[len(m.RunStreamCalls)-1]
+	return &c.RunStreamCalls[len(c.RunStreamCalls)-1]
 }
 
 // WithResponseSequence returns a Client configured to return a sequence of responses.
 // Each call to Run returns the next response in the sequence.
-func (m *Client) WithResponseSequence(responses ...*agent.RunResponse) *Client {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func (c *Client) WithResponseSequence(responses ...*agent.RunResponse) *Client {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	index := 0
-	m.RunFunc = func(ctx context.Context, thread agent.Thread, config agent.Config, opts *agent.RunOptions, messages ...*agent.Message) (*agent.RunResponse, error) {
+	c.RunFunc = func(ctx context.Context, thread agent.Thread, opts *agent.RunOptions, messages ...*agent.Message) (*agent.RunResponse, error) {
 		if index >= len(responses) {
 			return responses[len(responses)-1], nil
 		}
@@ -247,17 +254,17 @@ func (m *Client) WithResponseSequence(responses ...*agent.RunResponse) *Client {
 		index++
 		return resp, nil
 	}
-	return m
+	return c
 }
 
 // WithToolCalls returns a Client configured to return a response with tool calls
 // followed by a final response.
-func (m *Client) WithToolCalls(toolCalls []*agent.FunctionCallContent, finalResponse string) *Client {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func (c *Client) WithToolCalls(toolCalls []*agent.FunctionCallContent, finalResponse string) *Client {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	callCount := 0
-	m.RunFunc = func(ctx context.Context, thread agent.Thread, config agent.Config, opts *agent.RunOptions, messages ...*agent.Message) (*agent.RunResponse, error) {
+	c.RunFunc = func(ctx context.Context, thread agent.Thread, opts *agent.RunOptions, messages ...*agent.Message) (*agent.RunResponse, error) {
 		callCount++
 		if callCount == 1 {
 			// First call returns tool calls
@@ -266,7 +273,7 @@ func (m *Client) WithToolCalls(toolCalls []*agent.FunctionCallContent, finalResp
 				contents[i] = tc
 			}
 			return &agent.RunResponse{
-				AgentID:    config.ID,
+				AgentID:    c.agent.Config.ID,
 				ResponseID: "response-with-tools",
 				Messages: []*agent.Message{
 					agent.NewMessage(agent.RoleAssistant, contents...),
@@ -275,24 +282,24 @@ func (m *Client) WithToolCalls(toolCalls []*agent.FunctionCallContent, finalResp
 		}
 		// Subsequent calls return final response
 		return &agent.RunResponse{
-			AgentID:    config.ID,
+			AgentID:    c.agent.Config.ID,
 			ResponseID: "final-response",
 			Messages: []*agent.Message{
 				agent.NewMessage(agent.RoleAssistant, &agent.TextContent{Text: finalResponse}),
 			},
 		}, nil
 	}
-	return m
+	return c
 }
 
 // WithStreamingToolCalls returns a Client configured to return streaming updates
 // with tool calls followed by a final response.
-func (m *Client) WithStreamingToolCalls(toolCalls []*agent.FunctionCallContent, finalResponse string) *Client {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func (c *Client) WithStreamingToolCalls(toolCalls []*agent.FunctionCallContent, finalResponse string) *Client {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	callCount := 0
-	m.RunStreamFunc = func(ctx context.Context, thread agent.Thread, config agent.Config, opts *agent.RunOptions, messages ...*agent.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
+	c.RunStreamFunc = func(ctx context.Context, thread agent.Thread, opts *agent.RunOptions, messages ...*agent.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
 		callCount++
 		currentCall := callCount
 		return func(yield func(*agent.RunResponseUpdate, error) bool) {
@@ -303,7 +310,7 @@ func (m *Client) WithStreamingToolCalls(toolCalls []*agent.FunctionCallContent, 
 					contents[i] = tc
 				}
 				yield(&agent.RunResponseUpdate{
-					AgentID:    config.ID,
+					AgentID:    c.agent.Config.ID,
 					MessageID:  "message-with-tools",
 					ResponseID: "response-with-tools",
 					Role:       agent.RoleAssistant,
@@ -313,7 +320,7 @@ func (m *Client) WithStreamingToolCalls(toolCalls []*agent.FunctionCallContent, 
 			}
 			// Subsequent calls return final response
 			yield(&agent.RunResponseUpdate{
-				AgentID:    config.ID,
+				AgentID:    c.agent.Config.ID,
 				MessageID:  "final-message",
 				ResponseID: "final-response",
 				Role:       agent.RoleAssistant,
@@ -321,5 +328,5 @@ func (m *Client) WithStreamingToolCalls(toolCalls []*agent.FunctionCallContent, 
 			}, nil)
 		}
 	}
-	return m
+	return c
 }

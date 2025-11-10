@@ -4,16 +4,7 @@ package agent
 
 import (
 	"context"
-	"iter"
 )
-
-// StreamableClient is the interface implemented by agents that support streaming responses.
-type streamableClient interface {
-	Client
-
-	// RunStream executes the agent and streams responses.
-	RunStream(ctx context.Context, thread Thread, config Config, opts *RunOptions, messages ...*Message) iter.Seq2[*RunResponseUpdate, error]
-}
 
 type callTool interface {
 	Tool

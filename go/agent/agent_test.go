@@ -12,12 +12,7 @@ import (
 )
 
 func TestAgent_BasicRun(t *testing.T) {
-	client := agenttest.NewClient()
-
-	a := agent.New(client, &agent.Config{
-		ID:   "test-agent",
-		Name: "Test Agent",
-	}, nil)
+	client, a := agenttest.NewAgent()
 
 	resp, err := a.Run(t.Context(), nil, nil, agent.NewTextMessage("Hello"))
 
@@ -37,14 +32,10 @@ func TestAgent_BasicRun(t *testing.T) {
 	if lastCall == nil {
 		t.Fatal("expected last call to be recorded")
 	}
-	if want := a.ID(); lastCall.Config.ID != want {
-		t.Errorf("expected config ID %q, got %q", want, lastCall.Config.ID)
-	}
 }
 
 func TestAgent_CustomResponse(t *testing.T) {
-	client := agenttest.NewClient()
-
+	client, a := agenttest.NewAgent()
 	const respTest = "Custom response text"
 
 	customResponse := &agent.RunResponse{
@@ -55,8 +46,6 @@ func TestAgent_CustomResponse(t *testing.T) {
 		},
 	}
 	client.SetResponse(customResponse)
-
-	a := agent.New(client, &agent.Config{ID: "test-agent"}, nil)
 
 	resp, err := a.Run(t.Context(), nil, nil, agent.NewTextMessage("Test"))
 	if err != nil {
@@ -69,12 +58,10 @@ func TestAgent_CustomResponse(t *testing.T) {
 }
 
 func TestAgent_ErrorHandling(t *testing.T) {
-	client := agenttest.NewClient()
+	client, a := agenttest.NewAgent()
 
 	expectedError := errors.New("an error")
 	client.SetError(expectedError)
-
-	a := agent.New(client, &agent.Config{ID: "test-agent"}, nil)
 
 	_, err := a.Run(t.Context(), nil, nil, agent.NewTextMessage("Test"))
 	if err == nil {
@@ -86,7 +73,7 @@ func TestAgent_ErrorHandling(t *testing.T) {
 }
 
 func TestAgent_RunStream(t *testing.T) {
-	client := agenttest.NewClient()
+	client, a := agenttest.NewAgent()
 
 	client.SetStreamUpdates([]*agent.RunResponseUpdate{
 		{
@@ -98,8 +85,6 @@ func TestAgent_RunStream(t *testing.T) {
 			Contents: []agent.Content{&agent.TextContent{Text: "world!"}},
 		},
 	})
-
-	a := agent.New(client, &agent.Config{ID: "test-agent"}, nil)
 
 	var receivedUpdates []*agent.RunResponseUpdate
 	for update, err := range a.RunStream(t.Context(), nil, nil, agent.NewTextMessage("Test")) {
@@ -119,7 +104,7 @@ func TestAgent_RunStream(t *testing.T) {
 }
 
 func TestAgent_ResponseSequence(t *testing.T) {
-	client := agenttest.NewClient()
+	client, a := agenttest.NewAgent()
 
 	const respText1 = "First response"
 	const respText2 = "Second response"
@@ -133,8 +118,6 @@ func TestAgent_ResponseSequence(t *testing.T) {
 		},
 	}
 	client.WithResponseSequence(responses...)
-
-	a := agent.New(client, &agent.Config{ID: "test-agent"}, nil)
 
 	resp1, err := a.Run(t.Context(), nil, nil, agent.NewTextMessage("Test 1"))
 	if err != nil {
@@ -154,7 +137,7 @@ func TestAgent_ResponseSequence(t *testing.T) {
 }
 
 func TestAgent_WithToolCalls(t *testing.T) {
-	client := agenttest.NewClient()
+	client, a := agenttest.NewAgent()
 
 	const respText = "The weather in Seattle is sunny"
 
@@ -172,8 +155,6 @@ func TestAgent_WithToolCalls(t *testing.T) {
 			return map[string]any{"temperature": "72F", "condition": "sunny"}, nil
 		},
 	}
-
-	a := agent.New(client, &agent.Config{ID: "test-agent"}, nil)
 
 	resp, err := a.Run(t.Context(), nil, &agent.RunOptions{
 		Tools: []agent.Tool{tool},
@@ -197,29 +178,27 @@ func TestAgent_WithToolCalls(t *testing.T) {
 }
 
 func TestAgent_CustomFunction(t *testing.T) {
-	client := agenttest.NewClient()
+	client, a := agenttest.NewAgent()
 
 	const respText1 = "Please confirm"
 	const respText2 = "Confirmed!"
 
 	callCount := 0
-	client.RunFunc = func(ctx context.Context, thread agent.Thread, config agent.Config, opts *agent.RunOptions, messages ...*agent.Message) (*agent.RunResponse, error) {
+	client.RunFunc = func(ctx context.Context, thread agent.Thread, opts *agent.RunOptions, messages ...*agent.Message) (*agent.RunResponse, error) {
 		callCount++
 		if callCount == 1 {
 			return &agent.RunResponse{
-				AgentID:    config.ID,
+				AgentID:    client.ID(),
 				ResponseID: "resp-1",
 				Messages:   []*agent.Message{agent.NewMessage(agent.RoleAssistant, &agent.TextContent{Text: respText1})},
 			}, nil
 		}
 		return &agent.RunResponse{
-			AgentID:    config.ID,
+			AgentID:    client.ID(),
 			ResponseID: "resp-2",
 			Messages:   []*agent.Message{agent.NewMessage(agent.RoleAssistant, &agent.TextContent{Text: respText2})},
 		}, nil
 	}
-
-	a := agent.New(client, &agent.Config{ID: "test-agent"}, nil)
 
 	resp1, _ := a.Run(t.Context(), nil, nil, agent.NewTextMessage("Test"))
 	if resp1.Text() != respText1 {
@@ -232,24 +211,8 @@ func TestAgent_CustomFunction(t *testing.T) {
 	}
 }
 
-// Test Agent methods
-func TestAgent_Name(t *testing.T) {
-	client := agenttest.NewClient()
-	const agentName = "MyAgent"
-
-	a := agent.New(client, &agent.Config{
-		ID:   "test-agent",
-		Name: agentName,
-	}, nil)
-
-	if a.Name() != agentName {
-		t.Errorf("expected name %q, got %q", agentName, a.Name())
-	}
-}
-
 func TestAgent_NewThread(t *testing.T) {
-	client := agenttest.NewClient()
-	a := agent.New(client, &agent.Config{ID: "test-agent"}, nil)
+	_, a := agenttest.NewAgent()
 
 	thread := a.NewThread()
 	if thread == nil {
@@ -258,7 +221,7 @@ func TestAgent_NewThread(t *testing.T) {
 }
 
 func TestAgent_RunText(t *testing.T) {
-	client := agenttest.NewClient()
+	client, a := agenttest.NewAgent()
 	const responseText = "Response to hello"
 
 	client.SetResponse(&agent.RunResponse{
@@ -268,8 +231,6 @@ func TestAgent_RunText(t *testing.T) {
 			agent.NewMessage(agent.RoleAssistant, &agent.TextContent{Text: responseText}),
 		},
 	})
-
-	a := agent.New(client, &agent.Config{ID: "test-agent"}, nil)
 
 	resp, err := a.RunText(context.Background(), "hello")
 	if err != nil {
@@ -282,13 +243,9 @@ func TestAgent_RunText(t *testing.T) {
 }
 
 func TestAgent_SystemInstructions(t *testing.T) {
-	client := agenttest.NewClient()
+	client, a := agenttest.NewAgent()
 	const sysInstr = "You are a helpful assistant."
-
-	a := agent.New(client, &agent.Config{
-		ID:                 "test-agent",
-		SystemInstructions: sysInstr,
-	}, nil)
+	a.Config.SystemInstructions = sysInstr
 
 	_, err := a.Run(context.Background(), nil, nil, agent.NewTextMessage("Test"))
 	if err != nil {
@@ -313,8 +270,7 @@ func TestAgent_SystemInstructions(t *testing.T) {
 }
 
 func TestAgent_WithThread(t *testing.T) {
-	client := agenttest.NewClient()
-	a := agent.New(client, &agent.Config{ID: "test-agent"}, nil)
+	_, a := agenttest.NewAgent()
 
 	thread := a.NewThread()
 
@@ -349,8 +305,7 @@ func TestAgent_WithThread(t *testing.T) {
 }
 
 func TestAgent_RunOptionsTemperature(t *testing.T) {
-	client := agenttest.NewClient()
-	a := agent.New(client, &agent.Config{ID: "test-agent"}, nil)
+	client, a := agenttest.NewAgent()
 
 	temp := 0.7
 	_, err := a.Run(context.Background(), nil, &agent.RunOptions{
@@ -371,8 +326,7 @@ func TestAgent_RunOptionsTemperature(t *testing.T) {
 }
 
 func TestAgent_RunOptionsMaxTokens(t *testing.T) {
-	client := agenttest.NewClient()
-	a := agent.New(client, &agent.Config{ID: "test-agent"}, nil)
+	client, a := agenttest.NewAgent()
 
 	maxTokens := 100
 	_, err := a.Run(context.Background(), nil, &agent.RunOptions{
@@ -393,8 +347,7 @@ func TestAgent_RunOptionsMaxTokens(t *testing.T) {
 }
 
 func TestAgent_RunOptionsAdditionalMetadata(t *testing.T) {
-	client := agenttest.NewClient()
-	a := agent.New(client, &agent.Config{ID: "test-agent"}, nil)
+	client, a := agenttest.NewAgent()
 
 	metadata := map[string]any{
 		"custom_key": "custom_value",
@@ -419,14 +372,12 @@ func TestAgent_RunOptionsAdditionalMetadata(t *testing.T) {
 }
 
 func TestAgent_DefaultRunOptions(t *testing.T) {
-	client := agenttest.NewClient()
+	client, a := agenttest.NewAgent()
 	temp := 0.5
-	defaultOpts := &agent.RunOptions{
+	a.Config.Opts = &agent.RunOptions{
 		Temperature: &temp,
 		ToolMode:    agent.ToolModeAuto,
 	}
-
-	a := agent.New(client, &agent.Config{ID: "test-agent"}, defaultOpts)
 
 	_, err := a.Run(context.Background(), nil, nil, agent.NewTextMessage("Test"))
 	if err != nil {
@@ -446,15 +397,13 @@ func TestAgent_DefaultRunOptions(t *testing.T) {
 }
 
 func TestAgent_RunOptionsMerge(t *testing.T) {
-	client := agenttest.NewClient()
+	client, a := agenttest.NewAgent()
 	defaultTemp := 0.5
 	overrideTemp := 0.8
-	defaultOpts := &agent.RunOptions{
+	a.Config.Opts = &agent.RunOptions{
 		Temperature: &defaultTemp,
 		ToolMode:    agent.ToolModeAuto,
 	}
-
-	a := agent.New(client, &agent.Config{ID: "test-agent"}, defaultOpts)
 
 	_, err := a.Run(context.Background(), nil, &agent.RunOptions{
 		Temperature: &overrideTemp,
@@ -479,16 +428,16 @@ func TestAgent_RunOptionsMerge(t *testing.T) {
 }
 
 func TestAgent_MaxRetries(t *testing.T) {
-	client := agenttest.NewClient()
+	client, a := agenttest.NewAgent()
 
 	callCount := 0
 	// Return tool calls on every call except when we've been called 5 times
-	client.RunFunc = func(ctx context.Context, thread agent.Thread, config agent.Config, opts *agent.RunOptions, messages ...*agent.Message) (*agent.RunResponse, error) {
+	client.RunFunc = func(ctx context.Context, thread agent.Thread, opts *agent.RunOptions, messages ...*agent.Message) (*agent.RunResponse, error) {
 		callCount++
 		if callCount <= 5 {
 			// Return a tool call
 			return &agent.RunResponse{
-				AgentID:    config.ID,
+				AgentID:    a.ID(),
 				ResponseID: "resp",
 				Messages: []*agent.Message{
 					agent.NewMessage(agent.RoleAssistant, &agent.FunctionCallContent{
@@ -501,7 +450,7 @@ func TestAgent_MaxRetries(t *testing.T) {
 		}
 		// After max retries, return final response
 		return &agent.RunResponse{
-			AgentID:    config.ID,
+			AgentID:    a.ID(),
 			ResponseID: "resp-final",
 			Messages: []*agent.Message{
 				agent.NewMessage(agent.RoleAssistant, &agent.TextContent{Text: "Final response"}),
@@ -515,8 +464,6 @@ func TestAgent_MaxRetries(t *testing.T) {
 			return "result", nil
 		},
 	}
-
-	a := agent.New(client, &agent.Config{ID: "test-agent"}, nil)
 
 	resp, err := a.Run(context.Background(), nil, &agent.RunOptions{
 		Tools: []agent.Tool{tool},
@@ -537,18 +484,15 @@ func TestAgent_MaxRetries(t *testing.T) {
 }
 
 func TestAgent_RunStreamFallback(t *testing.T) {
-	// Create a client that doesn't implement streamableClient
-	client := &NonStreamingClient{
-		response: &agent.RunResponse{
-			AgentID:    "test-agent",
-			ResponseID: "resp-1",
-			Messages: []*agent.Message{
-				agent.NewMessage(agent.RoleAssistant, &agent.TextContent{Text: "Fallback response"}),
-			},
+	client, a := agenttest.NewAgent()
+	a.Config.RunStream = nil // Disable RunStream implementation
+	client.DefaultResponse = &agent.RunResponse{
+		AgentID:    a.ID(),
+		ResponseID: "resp-1",
+		Messages: []*agent.Message{
+			agent.NewMessage(agent.RoleAssistant, &agent.TextContent{Text: "Fallback response"}),
 		},
 	}
-
-	a := agent.New(client, &agent.Config{ID: "test-agent"}, nil)
 
 	// Should use fallback since client doesn't implement streaming
 	var updates []*agent.RunResponseUpdate
@@ -666,7 +610,7 @@ func TestFunctionCallContent_ParseArgs(t *testing.T) {
 
 // Test tool error handling
 func TestAgent_ToolError(t *testing.T) {
-	client := agenttest.NewClient()
+	client, a := agenttest.NewAgent()
 
 	toolCalls := []*agent.FunctionCallContent{
 		{
@@ -685,8 +629,6 @@ func TestAgent_ToolError(t *testing.T) {
 		},
 	}
 
-	a := agent.New(client, &agent.Config{ID: "test-agent"}, nil)
-
 	resp, err := a.Run(context.Background(), nil, &agent.RunOptions{
 		Tools: []agent.Tool{tool},
 	}, agent.NewTextMessage("Test"))
@@ -703,7 +645,7 @@ func TestAgent_ToolError(t *testing.T) {
 
 // Test tool not found
 func TestAgent_ToolNotFound(t *testing.T) {
-	client := agenttest.NewClient()
+	client, a := agenttest.NewAgent()
 
 	toolCalls := []*agent.FunctionCallContent{
 		{
@@ -713,8 +655,6 @@ func TestAgent_ToolNotFound(t *testing.T) {
 		},
 	}
 	client.WithToolCalls(toolCalls, "Handled missing tool")
-
-	a := agent.New(client, &agent.Config{ID: "test-agent"}, nil)
 
 	// Provide an empty tool list - the agent will still process the response
 	// Tool call will fail but agent continues
@@ -735,7 +675,7 @@ func TestAgent_ToolNotFound(t *testing.T) {
 
 // Test tool with invalid arguments
 func TestAgent_ToolInvalidArgs(t *testing.T) {
-	client := agenttest.NewClient()
+	client, a := agenttest.NewAgent()
 
 	toolCalls := []*agent.FunctionCallContent{
 		{
@@ -753,8 +693,6 @@ func TestAgent_ToolInvalidArgs(t *testing.T) {
 		},
 	}
 
-	a := agent.New(client, &agent.Config{ID: "test-agent"}, nil)
-
 	resp, err := a.Run(context.Background(), nil, &agent.RunOptions{
 		Tools: []agent.Tool{tool},
 	}, agent.NewTextMessage("Test"))
@@ -771,49 +709,6 @@ func TestAgent_ToolInvalidArgs(t *testing.T) {
 	if resp.Text() != "Handled invalid args" {
 		t.Errorf("expected final response, got %q", resp.Text())
 	}
-}
-
-// Test New with nil config
-func TestAgent_NewWithNilConfig(t *testing.T) {
-	client := agenttest.NewClient()
-	a := agent.New(client, nil, nil)
-
-	if a == nil {
-		t.Fatal("expected agent, got nil")
-	}
-
-	// ID should be auto-generated
-	if a.ID() == "" {
-		t.Error("expected auto-generated ID, got empty string")
-	}
-
-	if a.Name() != "" {
-		t.Errorf("expected empty name, got %q", a.Name())
-	}
-}
-
-// Test New with nil client (should panic)
-func TestAgent_NewWithNilClient(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic when creating agent with nil client")
-		}
-	}()
-
-	agent.New(nil, &agent.Config{ID: "test"}, nil)
-}
-
-// NonStreamingClient is a client that doesn't implement streaming
-type NonStreamingClient struct {
-	response *agent.RunResponse
-	err      error
-}
-
-func (c *NonStreamingClient) Run(ctx context.Context, thread agent.Thread, config agent.Config, opts *agent.RunOptions, messages ...*agent.Message) (*agent.RunResponse, error) {
-	if c.err != nil {
-		return nil, c.err
-	}
-	return c.response, nil
 }
 
 // Test RunOptions.Merge with various combinations

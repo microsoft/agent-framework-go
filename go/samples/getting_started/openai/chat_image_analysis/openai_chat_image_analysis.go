@@ -16,14 +16,11 @@ showing multi-modal content handling with text and images.
 */
 
 func main() {
-	client := openai.NewChatClient(openai.AgentConfig{
-		Model: "gpt-5-nano",
-	})
-
-	ag := agent.New(client, &agent.Config{
+	ag := openai.NewChatAgent(openai.AgentConfig{
+		Model:              "gpt-5-nano",
 		Name:               "VisionAgent",
 		SystemInstructions: "You are a helpful agent that can analyze images.",
-	}, nil)
+	})
 
 	ctx := context.Background()
 	resp, err := ag.Run(ctx, nil, nil, agent.NewMessage(agent.RoleUser,

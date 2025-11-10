@@ -10,6 +10,7 @@ import (
 	"iter"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework/go/agent"
 	"github.com/microsoft/agent-framework/go/agent/agentext"
 	"github.com/openai/openai-go/v3"
@@ -18,25 +19,28 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 )
 
-var _ agent.Client = (*Client)(nil)
-var _ agentext.StreamableClient = (*Client)(nil)
-
-type Client struct {
+type client struct {
 	client openai.Client
 	config AgentConfig
 }
 
 // AgentConfig contains configuration for [Agent].
 type AgentConfig struct {
+	ID                 string
+	Name               string
+	SystemInstructions string
+
 	Model    string
 	APIKey   string // Optional, if not set will use default environment variable
 	Endpoint string // Optional, defaults to OpenAI API
 
 	// Only used for Azure OpenAI
 	APIVersion string // Optional, defaults to latest API version
+
+	Opts *agent.RunOptions
 }
 
-func newChatClient(isAzure bool, config AgentConfig) *Client {
+func newChatAgent(isAzure bool, config AgentConfig) *agent.Agent {
 	ops := make([]option.RequestOption, 0, 2)
 	if isAzure {
 		if config.Endpoint != "" {
@@ -56,24 +60,35 @@ func newChatClient(isAzure bool, config AgentConfig) *Client {
 			ops = append(ops, option.WithBaseURL(config.Endpoint))
 		}
 	}
-	client := openai.NewClient(ops...)
-	return &Client{
-		client: client,
+	if config.ID == "" {
+		config.ID = uuid.New().String()
+	}
+	c := &client{
+		client: openai.NewClient(ops...),
 		config: config,
+	}
+	return &agent.Agent{
+		Config: agent.Config{
+			ID:                 config.ID,
+			Name:               config.Name,
+			Opts:               config.Opts,
+			SystemInstructions: config.SystemInstructions,
+			Run:                c.Run,
+			RunStream:          c.RunStream,
+		},
 	}
 }
 
-// NewChatClient creates a new Agent.
-func NewChatClient(config AgentConfig) *Client {
-	return newChatClient(false, config)
+func NewChatAgent(config AgentConfig) *agent.Agent {
+	return newChatAgent(false, config)
 }
 
-// NewAzureChatClient creates a new [Agent].
-func NewAzureChatClient(config AgentConfig) *Client {
-	return newChatClient(true, config)
+// NewChatAgentAzure creates a new [Agent].
+func NewChatAgentAzure(config AgentConfig) *agent.Agent {
+	return newChatAgent(true, config)
 }
 
-func (a *Client) Run(ctx context.Context, t agent.Thread, config agent.Config, opts *agent.RunOptions, messages ...*agent.Message) (*agent.RunResponse, error) {
+func (a *client) Run(ctx context.Context, t agent.Thread, opts *agent.RunOptions, messages ...*agent.Message) (*agent.RunResponse, error) {
 	resp, err := a.client.Chat.Completions.New(ctx, a.buildCompletionParams(opts, messages...))
 	if err != nil {
 		return nil, err
@@ -92,12 +107,12 @@ func (a *Client) Run(ctx context.Context, t agent.Thread, config agent.Config, o
 	}
 	return &agent.RunResponse{
 		Messages:   []*agent.Message{agent.NewMessage(agent.Role(choice.Message.Role), contents...)},
-		AgentID:    config.ID,
+		AgentID:    a.config.ID,
 		ResponseID: resp.ID,
 	}, nil
 }
 
-func (a *Client) RunStream(ctx context.Context, t agent.Thread, config agent.Config, opts *agent.RunOptions, messages ...*agent.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
+func (a *client) RunStream(ctx context.Context, t agent.Thread, opts *agent.RunOptions, messages ...*agent.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
 	stream := a.client.Chat.Completions.NewStreaming(ctx, a.buildCompletionParams(opts, messages...))
 	return func(yield func(*agent.RunResponseUpdate, error) bool) {
 		defer stream.Close()
@@ -120,7 +135,7 @@ func (a *Client) RunStream(ctx context.Context, t agent.Thread, config agent.Con
 			}
 			resp := &agent.RunResponseUpdate{
 				Contents:   contents,
-				AgentID:    config.ID,
+				AgentID:    a.config.ID,
 				Role:       agent.RoleAssistant,
 				ResponseID: chunk.ID,
 				MessageID:  chunk.ID,
@@ -136,7 +151,7 @@ func (a *Client) RunStream(ctx context.Context, t agent.Thread, config agent.Con
 }
 
 // buildCompletionParams constructs the parameters for the OpenAI chat completion API.
-func (a *Client) buildCompletionParams(options *agent.RunOptions, messages ...*agent.Message) openai.ChatCompletionNewParams {
+func (a *client) buildCompletionParams(options *agent.RunOptions, messages ...*agent.Message) openai.ChatCompletionNewParams {
 	params := openai.ChatCompletionNewParams{
 		Model:    a.config.Model,
 		Messages: make([]openai.ChatCompletionMessageParamUnion, 0, len(messages)+1),

@@ -46,15 +46,13 @@ func main() {
 		log.Fatal("OPENAI_API_KEY environment variable is required. Get your key from https://platform.openai.com/account/api-keys")
 	}
 
-	client := openai.NewChatClient(openai.AgentConfig{
-		Model:  "gpt-5-nano",
-		APIKey: apiKey,
-	})
-
-	ag := agent.New(client, &agent.Config{
+	ag := openai.NewChatAgent(openai.AgentConfig{
+		Model:              "gpt-5-nano",
+		APIKey:             apiKey,
 		SystemInstructions: "You are a helpful weather agent.",
-	}, &agent.RunOptions{
-		Tools: []agent.Tool{weatherTool},
+		Opts: &agent.RunOptions{
+			Tools: []agent.Tool{weatherTool},
+		},
 	})
 
 	nonStreamingExample(ag, "What's the weather like in Seattle?")

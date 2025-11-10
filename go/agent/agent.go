@@ -8,61 +8,32 @@ import (
 	"iter"
 	"maps"
 	"slices"
-
-	"github.com/google/uuid"
 )
 
 // Agent represents an AI agent that can execute tasks using a client and tools.
 type Agent struct {
-	config Config
-	client Client
-	opts   *RunOptions
+	Config Config
 }
 
 // Config contains configuration for an [Agent].
 type Config struct {
 	ID   string
 	Name string
+	Opts *RunOptions
 
 	SystemInstructions string
-}
 
-// Client is the interface implemented by agent clients.
-type Client interface {
-	Run(ctx context.Context, thread Thread, config Config, opts *RunOptions, messages ...*Message) (*RunResponse, error)
-}
+	Run func(ctx context.Context, thread Thread, opts *RunOptions, messages ...*Message) (*RunResponse, error)
 
-// New creates a new [Agent].
-//
-// The first argument must not be nil.
-//
-// If non-nil, the provided configuration configure the Agent.
-// If non-nil, the provided options are used as default run options for each execution.
-func New(client Client, config *Config, opts *RunOptions) *Agent {
-	if client == nil {
-		panic("nil Client")
-	}
-	a := &Agent{
-		client: client,
-	}
-	if config != nil {
-		a.config = *config
-	}
-	if opts != nil {
-		a.opts = opts
-	}
-	if a.config.ID == "" {
-		a.config.ID = uuid.New().String()
-	}
-	return a
+	RunStream func(ctx context.Context, thread Thread, opts *RunOptions, messages ...*Message) iter.Seq2[*RunResponseUpdate, error]
 }
 
 func (a *Agent) ID() string {
-	return a.config.ID
+	return a.Config.ID
 }
 
 func (a *Agent) Name() string {
-	return a.config.Name
+	return a.Config.Name
 }
 
 func (a *Agent) NewThread() Thread {
@@ -70,10 +41,10 @@ func (a *Agent) NewThread() Thread {
 }
 
 func (a *Agent) Run(ctx context.Context, thread Thread, opts *RunOptions, messages ...*Message) (*RunResponse, error) {
-	opts = a.opts.Merge(opts)
+	opts = a.Config.Opts.Merge(opts)
 	messages = slices.Clone(messages)
-	if a.config.SystemInstructions != "" {
-		messages = append([]*Message{NewMessage(RoleSystem, &TextContent{Text: a.config.SystemInstructions})}, messages...)
+	if a.Config.SystemInstructions != "" {
+		messages = append([]*Message{NewMessage(RoleSystem, &TextContent{Text: a.Config.SystemInstructions})}, messages...)
 	}
 	var err error
 	if opts != nil {
@@ -98,7 +69,7 @@ func (a *Agent) Run(ctx context.Context, thread Thread, opts *RunOptions, messag
 	const maxRetries = 5
 	for range maxRetries {
 		// Call the chat client
-		response, err := a.client.Run(ctx, thread, a.config, opts, threadMessages...)
+		response, err := a.Config.Run(ctx, thread, opts, threadMessages...)
 		if err != nil {
 			return nil, err
 		}
@@ -117,7 +88,7 @@ func (a *Agent) Run(ctx context.Context, thread Thread, opts *RunOptions, messag
 		// Exceeded max retries with tool calls pending, disable tools and try one last time
 		// to get a final response.
 		opts.ToolMode = ToolModeNone
-		finalResponse, err = a.client.Run(ctx, thread, a.config, opts, threadMessages...)
+		finalResponse, err = a.Config.Run(ctx, thread, opts, threadMessages...)
 		if err != nil {
 			return nil, err
 		}
@@ -141,14 +112,13 @@ func (a *Agent) RunText(ctx context.Context, msg string) (*RunResponse, error) {
 }
 
 func (a *Agent) RunStream(ctx context.Context, thread Thread, opts *RunOptions, messages ...*Message) iter.Seq2[*RunResponseUpdate, error] {
-	client, ok := a.client.(streamableClient)
-	if !ok {
+	if a.Config.RunStream == nil {
 		return a.runStreamFallback(ctx, thread, opts, messages...)
 	}
-	opts = a.opts.Merge(opts)
+	opts = a.Config.Opts.Merge(opts)
 	messages = slices.Clone(messages)
-	if a.config.SystemInstructions != "" {
-		messages = append([]*Message{NewMessage(RoleSystem, &TextContent{Text: a.config.SystemInstructions})}, messages...)
+	if a.Config.SystemInstructions != "" {
+		messages = append([]*Message{NewMessage(RoleSystem, &TextContent{Text: a.Config.SystemInstructions})}, messages...)
 	}
 	err := initTools(ctx, opts.Tools)
 	var threadMessages []*Message
@@ -166,7 +136,7 @@ func (a *Agent) RunStream(ctx context.Context, thread Thread, opts *RunOptions, 
 		var success bool
 		for range maxRetries {
 			var contents []Content
-			for update, err := range client.RunStream(ctx, thread, a.config, opts, threadMessages...) {
+			for update, err := range a.Config.RunStream(ctx, thread, opts, threadMessages...) {
 				if err != nil {
 					yield(nil, err)
 					return
@@ -204,7 +174,7 @@ func (a *Agent) RunStream(ctx context.Context, thread Thread, opts *RunOptions, 
 			// Exceeded max retries with tool calls pending, disable tools and try one last time
 			// to get a final response.
 			opts.ToolMode = ToolModeNone
-			for update, err := range client.RunStream(ctx, thread, a.config, opts, threadMessages...) {
+			for update, err := range a.Config.RunStream(ctx, thread, opts, threadMessages...) {
 				if err != nil {
 					yield(nil, err)
 					return

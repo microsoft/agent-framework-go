@@ -42,17 +42,15 @@ func main() {
 	// - AZURE_OPENAI_API_KEY
 	// - AZURE_OPENAI_ENDPOINT
 	// - AZURE_OPENAI_DEPLOYMENT_NAME
-	client := openai.NewAzureChatClient(openai.AgentConfig{
-		APIKey:     os.Getenv("AZURE_OPENAI_API_KEY"),         // or set directly
-		Endpoint:   os.Getenv("AZURE_OPENAI_ENDPOINT"),        // e.g., "https://your-resource.openai.azure.com/"
-		Model:      os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), // e.g., "gpt-4o"
-		APIVersion: "2025-01-01-preview",                      // optional, uses default if not specified
-	})
-
-	ag := agent.New(client, &agent.Config{
+	ag := openai.NewChatAgentAzure(openai.AgentConfig{
+		APIKey:             os.Getenv("AZURE_OPENAI_API_KEY"),         // or set directly
+		Endpoint:           os.Getenv("AZURE_OPENAI_ENDPOINT"),        // e.g., "https://your-resource.openai.azure.com/"
+		Model:              os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), // e.g., "gpt-4o"
+		APIVersion:         "2025-01-01-preview",                      // optional, uses default if not specified
 		SystemInstructions: "You are a helpful weather agent.",
-	}, &agent.RunOptions{
-		Tools: []agent.Tool{weatherTool},
+		Opts: &agent.RunOptions{
+			Tools: []agent.Tool{weatherTool},
+		},
 	})
 
 	nonStreamingExample(ag, "What's the weather like in Seattle?")
