@@ -130,7 +130,7 @@ func TestFuncTool_HandlerError(t *testing.T) {
 }
 
 func TestFuncTool_WithAgent(t *testing.T) {
-	client := agenttest.NewClient()
+	client, a := agenttest.NewAgent()
 
 	handler := func(ctx context.Context, location string) (string, error) {
 		return "Weather in " + location + " is sunny", nil
@@ -155,8 +155,6 @@ func TestFuncTool_WithAgent(t *testing.T) {
 		},
 	}
 	client.WithToolCalls(toolCalls, "Final response")
-
-	a := agent.New(client, &agent.Config{ID: "test-agent"}, nil)
 
 	resp, err := a.Run(context.Background(), nil, &agent.RunOptions{
 		Tools: []agent.Tool{tool},
@@ -205,7 +203,7 @@ func TestToolString(t *testing.T) {
 
 // Test tool initialization
 func TestAgent_ToolInit(t *testing.T) {
-	client := agenttest.NewClient()
+	_, a := agenttest.NewAgent()
 
 	initCalled := false
 	tool := &agenttest.InitializableTool{
@@ -217,8 +215,6 @@ func TestAgent_ToolInit(t *testing.T) {
 			return nil
 		},
 	}
-
-	a := agent.New(client, &agent.Config{ID: "test-agent"}, nil)
 
 	_, err := a.Run(context.Background(), nil, &agent.RunOptions{
 		Tools: []agent.Tool{tool},
@@ -234,7 +230,7 @@ func TestAgent_ToolInit(t *testing.T) {
 }
 
 func TestAgent_ToolInitError(t *testing.T) {
-	client := agenttest.NewClient()
+	_, a := agenttest.NewAgent()
 
 	expectedErr := errors.New("init failed")
 	tool := &agenttest.InitializableTool{
@@ -245,8 +241,6 @@ func TestAgent_ToolInitError(t *testing.T) {
 			return expectedErr
 		},
 	}
-
-	a := agent.New(client, &agent.Config{ID: "test-agent"}, nil)
 
 	_, err := a.Run(context.Background(), nil, &agent.RunOptions{
 		Tools: []agent.Tool{tool},
@@ -259,7 +253,7 @@ func TestAgent_ToolInitError(t *testing.T) {
 
 // Test tool loader
 func TestAgent_ToolLoader(t *testing.T) {
-	client := agenttest.NewClient()
+	client, a := agenttest.NewAgent()
 
 	innerTool := &agenttest.Tool{
 		NameValue: "inner_tool",
@@ -273,8 +267,6 @@ func TestAgent_ToolLoader(t *testing.T) {
 			return []agent.Tool{innerTool}, nil
 		},
 	}
-
-	a := agent.New(client, &agent.Config{ID: "test-agent"}, nil)
 
 	_, err := a.Run(context.Background(), nil, &agent.RunOptions{
 		Tools: []agent.Tool{loaderTool},
@@ -296,7 +288,7 @@ func TestAgent_ToolLoader(t *testing.T) {
 }
 
 func TestAgent_ToolLoaderError(t *testing.T) {
-	client := agenttest.NewClient()
+	_, a := agenttest.NewAgent()
 
 	expectedErr := errors.New("load failed")
 	loaderTool := &agenttest.LoaderTool{
@@ -307,8 +299,6 @@ func TestAgent_ToolLoaderError(t *testing.T) {
 			return nil, expectedErr
 		},
 	}
-
-	a := agent.New(client, &agent.Config{ID: "test-agent"}, nil)
 
 	_, err := a.Run(context.Background(), nil, &agent.RunOptions{
 		Tools: []agent.Tool{loaderTool},
