@@ -5,7 +5,7 @@ package agenttest
 import (
 	"context"
 
-	"github.com/microsoft/agent-framework/go/agent"
+	"github.com/microsoft/agent-framework/go/tool"
 )
 
 // Helper types for testing
@@ -24,10 +24,10 @@ func (t *InitializableTool) Init(ctx context.Context) error {
 
 type LoaderTool struct {
 	Tool
-	LoadFunc func(ctx context.Context) ([]agent.Tool, error)
+	LoadFunc func(ctx context.Context) ([]tool.Tool, error)
 }
 
-func (t *LoaderTool) LoadTools(ctx context.Context) ([]agent.Tool, error) {
+func (t *LoaderTool) LoadTools(ctx context.Context) ([]tool.Tool, error) {
 	if t.LoadFunc != nil {
 		return t.LoadFunc(ctx)
 	}

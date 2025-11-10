@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/microsoft/agent-framework/go/agent"
 	"github.com/microsoft/agent-framework/go/middleware"
+	"github.com/microsoft/agent-framework/go/tool/functool"
 )
 
 // CachingMiddleware caches function results to avoid duplicate calls.
@@ -146,7 +146,7 @@ func main() {
 	// First call - should miss cache
 	fmt.Println("\nCall 1: First time calling function")
 	ctx1 := &middleware.FunctionInvocationContext{
-		Function: &agent.Func{
+		Function: &functool.Func{
 			Name:        "expensive_calculation",
 			Description: "An expensive calculation",
 		},
@@ -171,7 +171,7 @@ func main() {
 	// Second call - should hit cache
 	fmt.Println("\nCall 2: Calling function again with same arguments")
 	ctx2 := &middleware.FunctionInvocationContext{
-		Function: &agent.Func{
+		Function: &functool.Func{
 			Name:        "expensive_calculation",
 			Description: "An expensive calculation",
 		},
@@ -208,7 +208,7 @@ func main() {
 	// Valid result
 	fmt.Println("\nTest: Valid result")
 	ctx3 := &middleware.FunctionInvocationContext{
-		Function: &agent.Func{
+		Function: &functool.Func{
 			Name:        "get_count",
 			Description: "Get count",
 		},
@@ -230,7 +230,7 @@ func main() {
 	// Invalid result
 	fmt.Println("\n\nTest: Invalid result")
 	ctx4 := &middleware.FunctionInvocationContext{
-		Function: &agent.Func{
+		Function: &functool.Func{
 			Name:        "get_count",
 			Description: "Get count",
 		},
@@ -257,7 +257,7 @@ func main() {
 	callCount := 0
 	fmt.Println("\nTest: Function succeeds on second attempt")
 	ctx5 := &middleware.FunctionInvocationContext{
-		Function: &agent.Func{
+		Function: &functool.Func{
 			Name:        "unreliable_function",
 			Description: "A function that sometimes fails",
 		},

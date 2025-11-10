@@ -9,134 +9,18 @@ import (
 
 	"github.com/microsoft/agent-framework/go/agent"
 	"github.com/microsoft/agent-framework/go/agent/internal/agenttest"
+	"github.com/microsoft/agent-framework/go/tool"
+	"github.com/microsoft/agent-framework/go/tool/functool"
 )
 
-// Test FuncTool
-func TestFuncTool_Basic(t *testing.T) {
-	type Input struct {
-		Message string `json:"message"`
-	}
-
-	handler := func(ctx context.Context, input Input) (string, error) {
-		return "output: " + input.Message, nil
-	}
-
-	funcDef := &agent.Func{
-		Name:        "test_func",
-		Description: "Test function",
-	}
-
-	tool, err := agent.NewFuncTool(funcDef, handler)
-	if err != nil {
-		t.Fatalf("expected no error creating FuncTool, got: %v", err)
-	}
-
-	name, desc := tool.ToolInfo()
-	if name != "test_func" {
-		t.Errorf("expected name 'test_func', got %q", name)
-	}
-	if desc != "Test function" {
-		t.Errorf("expected description 'Test function', got %q", desc)
-	}
-
-	// Test schema
-	schema := tool.Schema()
-	if schema == nil {
-		t.Fatal("expected schema, got nil")
-	}
-}
-
-func TestFuncTool_MustNew(t *testing.T) {
-	handler := func(ctx context.Context, input string) (string, error) {
-		return "result", nil
-	}
-
-	funcDef := &agent.Func{
-		Name:        "must_func",
-		Description: "Must function",
-	}
-
-	tool := agent.MustNewFuncTool(funcDef, handler)
-	if tool == nil {
-		t.Fatal("expected tool, got nil")
-	}
-
-	name, _ := tool.ToolInfo()
-	if name != "must_func" {
-		t.Errorf("expected name 'must_func', got %q", name)
-	}
-}
-
-func TestFuncTool_MustNewPanic(t *testing.T) {
-	// Test that MustNewFuncTool panics on error
-	// We'll create an error condition by having invalid schema setup
-	defer func() {
-		if r := recover(); r != nil {
-			// Expected panic, test passes
-			return
-		}
-	}()
-
-	// This should succeed, so we skip this test as it's hard to force an error
-	t.Skip("Skipping panic test as it's difficult to force an error condition")
-}
-
-func TestFuncTool_MissingArg0(t *testing.T) {
-	type Input struct {
-		Value string `json:"value"`
-	}
-
-	handler := func(ctx context.Context, input Input) (string, error) {
-		return "result", nil
-	}
-
-	tool := agent.MustNewFuncTool(
-		&agent.Func{
-			Name: "test",
-		},
-		handler,
-	)
-
-	// Call without required arg0
-	_, err := tool.Call(context.Background(), map[string]any{})
-	if err == nil {
-		t.Error("expected error for missing arg0, got nil")
-	}
-}
-
-func TestFuncTool_HandlerError(t *testing.T) {
-	type Input struct {
-		Value string `json:"value"`
-	}
-
-	expectedErr := errors.New("handler error")
-	handler := func(ctx context.Context, input Input) (string, error) {
-		return "", expectedErr
-	}
-
-	tool := agent.MustNewFuncTool(
-		&agent.Func{
-			Name: "error_func",
-		},
-		handler,
-	)
-
-	_, err := tool.Call(context.Background(), map[string]any{
-		"arg0": map[string]any{"value": "test"},
-	})
-	if err != expectedErr {
-		t.Errorf("expected error %v, got %v", expectedErr, err)
-	}
-}
-
-func TestFuncTool_WithAgent(t *testing.T) {
+func TestAgentCallTool(t *testing.T) {
 	client, a := agenttest.NewAgent()
 
 	handler := func(ctx context.Context, location string) (string, error) {
 		return "Weather in " + location + " is sunny", nil
 	}
 
-	funcDef := &agent.Func{
+	funcDef := &functool.Func{
 		Name:        "get_weather",
 		Description: "Get weather for a location",
 		InputSchema: map[string]any{
@@ -145,7 +29,7 @@ func TestFuncTool_WithAgent(t *testing.T) {
 		},
 	}
 
-	tool := agent.MustNewFuncTool(funcDef, handler)
+	tl := functool.MustNew(funcDef, handler)
 
 	toolCalls := []*agent.FunctionCallContent{
 		{
@@ -157,7 +41,7 @@ func TestFuncTool_WithAgent(t *testing.T) {
 	client.WithToolCalls(toolCalls, "Final response")
 
 	resp, err := a.Run(context.Background(), nil, &agent.RunOptions{
-		Tools: []agent.Tool{tool},
+		Tools: []tool.Tool{tl},
 	}, agent.NewTextMessage("What's the weather?"))
 
 	if err != nil {
@@ -169,44 +53,12 @@ func TestFuncTool_WithAgent(t *testing.T) {
 	}
 }
 
-// Test HostedWebSearchTool
-func TestHostedWebSearchTool(t *testing.T) {
-	tool := &agent.HostedWebSearchTool{
-		Description: "Search the web",
-	}
-
-	name, desc := tool.ToolInfo()
-	if name != "web_search" {
-		t.Errorf("expected name 'web_search', got %q", name)
-	}
-	if desc != "Search the web" {
-		t.Errorf("expected description 'Search the web', got %q", desc)
-	}
-}
-
-// Test ToolString
-func TestToolString(t *testing.T) {
-	tool := &agenttest.Tool{
-		NameValue: "test_tool",
-		DescValue: "A test tool",
-	}
-
-	str := agent.ToolString(tool)
-	if str == "" {
-		t.Error("expected non-empty string")
-	}
-	// Should contain the name
-	if len(str) < len("test_tool") {
-		t.Errorf("expected string to contain tool name, got %q", str)
-	}
-}
-
 // Test tool initialization
 func TestAgent_ToolInit(t *testing.T) {
 	_, a := agenttest.NewAgent()
 
 	initCalled := false
-	tool := &agenttest.InitializableTool{
+	tl := &agenttest.InitializableTool{
 		Tool: agenttest.Tool{
 			NameValue: "init_tool",
 		},
@@ -217,7 +69,7 @@ func TestAgent_ToolInit(t *testing.T) {
 	}
 
 	_, err := a.Run(context.Background(), nil, &agent.RunOptions{
-		Tools: []agent.Tool{tool},
+		Tools: []tool.Tool{tl},
 	}, agent.NewTextMessage("Test"))
 
 	if err != nil {
@@ -233,7 +85,7 @@ func TestAgent_ToolInitError(t *testing.T) {
 	_, a := agenttest.NewAgent()
 
 	expectedErr := errors.New("init failed")
-	tool := &agenttest.InitializableTool{
+	tl := &agenttest.InitializableTool{
 		Tool: agenttest.Tool{
 			NameValue: "init_tool",
 		},
@@ -243,7 +95,7 @@ func TestAgent_ToolInitError(t *testing.T) {
 	}
 
 	_, err := a.Run(context.Background(), nil, &agent.RunOptions{
-		Tools: []agent.Tool{tool},
+		Tools: []tool.Tool{tl},
 	}, agent.NewTextMessage("Test"))
 
 	if err == nil {
@@ -263,13 +115,13 @@ func TestAgent_ToolLoader(t *testing.T) {
 		Tool: agenttest.Tool{
 			NameValue: "loader",
 		},
-		LoadFunc: func(ctx context.Context) ([]agent.Tool, error) {
-			return []agent.Tool{innerTool}, nil
+		LoadFunc: func(ctx context.Context) ([]tool.Tool, error) {
+			return []tool.Tool{innerTool}, nil
 		},
 	}
 
 	_, err := a.Run(context.Background(), nil, &agent.RunOptions{
-		Tools: []agent.Tool{loaderTool},
+		Tools: []tool.Tool{loaderTool},
 	}, agent.NewTextMessage("Test"))
 
 	if err != nil {
@@ -295,13 +147,13 @@ func TestAgent_ToolLoaderError(t *testing.T) {
 		Tool: agenttest.Tool{
 			NameValue: "loader",
 		},
-		LoadFunc: func(ctx context.Context) ([]agent.Tool, error) {
+		LoadFunc: func(ctx context.Context) ([]tool.Tool, error) {
 			return nil, expectedErr
 		},
 	}
 
 	_, err := a.Run(context.Background(), nil, &agent.RunOptions{
-		Tools: []agent.Tool{loaderTool},
+		Tools: []tool.Tool{loaderTool},
 	}, agent.NewTextMessage("Test"))
 
 	if err == nil {

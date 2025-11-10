@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/microsoft/agent-framework/go/agent"
+	"github.com/microsoft/agent-framework/go/tool/functool"
 )
 
 // ContextKey is used for storing values in context.
@@ -51,7 +52,7 @@ func (c *AgentRunContext) GetMetadata(key string) (any, bool) {
 
 // FunctionInvocationContext is the context passed to function middleware.
 type FunctionInvocationContext struct {
-	Function  *agent.Func
+	Function  *functool.Func
 	Arguments any
 	Metadata  map[string]any
 	Result    any

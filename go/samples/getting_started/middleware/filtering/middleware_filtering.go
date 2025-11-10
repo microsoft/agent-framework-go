@@ -7,6 +7,7 @@ import (
 
 	"github.com/microsoft/agent-framework/go/agent"
 	"github.com/microsoft/agent-framework/go/middleware"
+	"github.com/microsoft/agent-framework/go/tool/functool"
 )
 
 // SecurityFilterMiddleware filters sensitive information from requests.
@@ -203,7 +204,7 @@ func main() {
 	// Test allowed function
 	fmt.Println("\nTest: Allowed function")
 	ctx4 := &middleware.FunctionInvocationContext{
-		Function: &agent.Func{
+		Function: &functool.Func{
 			Name:        "get_weather",
 			Description: "Get weather",
 		},
@@ -224,7 +225,7 @@ func main() {
 	// Test blocked function
 	fmt.Println("\n\nTest: Blocked function")
 	ctx5 := &middleware.FunctionInvocationContext{
-		Function: &agent.Func{
+		Function: &functool.Func{
 			Name:        "delete_data",
 			Description: "Delete data",
 		},

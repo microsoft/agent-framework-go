@@ -12,7 +12,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework/go/agent"
-	"github.com/microsoft/agent-framework/go/agent/agentext"
+	"github.com/microsoft/agent-framework/go/tool"
+	"github.com/microsoft/agent-framework/go/tool/websearchtool"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
 	"github.com/openai/openai-go/v3/option"
@@ -172,10 +173,10 @@ func (a *client) buildCompletionParams(options *agent.RunOptions, messages ...*a
 		if options.MaxTokens != nil {
 			params.MaxTokens = openai.Int(int64(*options.MaxTokens))
 		}
-		for _, tool := range options.Tools {
-			switch tool := tool.(type) {
-			case *agent.HostedWebSearchTool:
-				if location, ok := tool.AdditionalProperties["user_location"]; ok {
+		for _, tl := range options.Tools {
+			switch tl := tl.(type) {
+			case *websearchtool.HostedWebSearch:
+				if location, ok := tl.AdditionalProperties["user_location"]; ok {
 					if location, ok := location.(map[string]string); ok {
 						if city, ok := location["city"]; ok {
 							params.WebSearchOptions.UserLocation.Approximate.City = openai.String(city)
@@ -191,10 +192,10 @@ func (a *client) buildCompletionParams(options *agent.RunOptions, messages ...*a
 						}
 					}
 				}
-			case agentext.CallTool:
-				name, description := tool.ToolInfo()
+			case tool.CallTool:
+				name, description := tl.ToolInfo()
 				var funcParams map[string]any
-				switch schema := tool.Schema().(type) {
+				switch schema := tl.Schema().(type) {
 				case map[string]any:
 					funcParams = schema
 				default:

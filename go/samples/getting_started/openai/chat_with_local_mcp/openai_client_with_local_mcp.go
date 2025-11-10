@@ -12,8 +12,9 @@ import (
 	"log"
 
 	"github.com/microsoft/agent-framework/go/agent"
-	"github.com/microsoft/agent-framework/go/mcp"
 	"github.com/microsoft/agent-framework/go/openai"
+	"github.com/microsoft/agent-framework/go/tool"
+	"github.com/microsoft/agent-framework/go/tool/mcptool"
 )
 
 func main() {
@@ -35,7 +36,7 @@ func mcpToolsOnAgentLevel() error {
 	fmt.Println("=== Tools Defined on Agent Level ===")
 
 	// Create MCP HTTP tool for Microsoft Learn
-	mcpTool := mcp.NewHTTPTool("https://learn.microsoft.com/api/mcp")
+	mcpTool := mcptool.NewHTTP("https://learn.microsoft.com/api/mcp")
 
 	ctx := context.Background()
 
@@ -46,7 +47,7 @@ func mcpToolsOnAgentLevel() error {
 		Name:               "DocsAgent",
 		SystemInstructions: "You are a helpful assistant that can help with microsoft documentation questions.",
 		Opts: &agent.RunOptions{
-			Tools: []agent.Tool{mcpTool},
+			Tools: []tool.Tool{mcpTool},
 		},
 	})
 
@@ -78,7 +79,7 @@ func mcpToolsOnRunLevel() error {
 	fmt.Println("=== Tools Defined on Run Level ===")
 
 	// Create MCP HTTP tool for Microsoft Learn
-	mcpServer := mcp.NewHTTPTool("https://learn.microsoft.com/api/mcp")
+	mcpServer := mcptool.NewHTTP("https://learn.microsoft.com/api/mcp")
 
 	ctx := context.Background()
 
@@ -96,8 +97,8 @@ func mcpToolsOnRunLevel() error {
 		ctx,
 		nil,
 		&agent.RunOptions{
-			Tools:    []agent.Tool{mcpServer},
-			ToolMode: agent.ToolModeAuto,
+			Tools:    []tool.Tool{mcpServer},
+			ToolMode: tool.ToolModeAuto,
 		},
 		agent.NewTextMessage(query1),
 	)
@@ -115,8 +116,8 @@ func mcpToolsOnRunLevel() error {
 		ctx,
 		nil,
 		&agent.RunOptions{
-			Tools:    []agent.Tool{mcpServer},
-			ToolMode: agent.ToolModeAuto,
+			Tools:    []tool.Tool{mcpServer},
+			ToolMode: tool.ToolModeAuto,
 		},
 		agent.NewTextMessage(query2),
 	)

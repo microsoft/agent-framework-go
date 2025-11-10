@@ -1,22 +1,21 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package mcp
+package mcptool
 
 import (
 	"context"
 	"fmt"
 	"net/http"
 
-	"github.com/microsoft/agent-framework/go/agent"
-	"github.com/microsoft/agent-framework/go/agent/agentext"
+	"github.com/microsoft/agent-framework/go/tool"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-var _ agentext.LoaderTool = (*HTTPTool)(nil)
-var _ agentext.InitTool = (*HTTPTool)(nil)
+var _ tool.LoaderTool = (*HTTP)(nil)
+var _ tool.InitTool = (*HTTP)(nil)
 
-// HTTPTool connects to an MCP server via HTTP/SSE (Server-Sent Events).
-type HTTPTool struct {
+// HTTP connects to an MCP server via HTTP/SSE (Server-Sent Events).
+type HTTP struct {
 	tool *baseTool
 
 	// URL is the endpoint of the MCP server.
@@ -34,20 +33,20 @@ type HTTPTool struct {
 }
 
 // ToolInfo implements the agent.Tool interface.
-func (t HTTPTool) ToolInfo() (name string, description string) {
+func (t HTTP) ToolInfo() (name string, description string) {
 	return "mcp_http", fmt.Sprintf("MCP connection via HTTP to %s", t.URL)
 }
 
-func (t HTTPTool) Init(ctx context.Context) error {
+func (t HTTP) Init(ctx context.Context) error {
 	return t.connect(ctx)
 }
 
-func (t HTTPTool) LoadTools(ctx context.Context) ([]agent.Tool, error) {
+func (t HTTP) LoadTools(ctx context.Context) ([]tool.Tool, error) {
 	return t.tool.loadTools(ctx)
 }
 
 // connect establishes a connection to the MCP server via HTTP.
-func (t HTTPTool) connect(ctx context.Context) error {
+func (t HTTP) connect(ctx context.Context) error {
 	// Create the transport
 	transport := &mcpsdk.StreamableClientTransport{
 		Endpoint:   t.URL,
@@ -60,9 +59,9 @@ func (t HTTPTool) connect(ctx context.Context) error {
 	})
 }
 
-// NewHTTPTool creates a new MCP tool that connects via HTTP.
-func NewHTTPTool(url string) HTTPTool {
-	return HTTPTool{
+// NewHTTP creates a new MCP tool that connects via HTTP.
+func NewHTTP(url string) HTTP {
+	return HTTP{
 		URL:  url,
 		tool: new(baseTool),
 	}

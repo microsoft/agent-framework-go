@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package mcp
+package mcptool
 
 import (
 	"fmt"

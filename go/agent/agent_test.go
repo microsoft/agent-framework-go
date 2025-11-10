@@ -9,6 +9,7 @@ import (
 
 	"github.com/microsoft/agent-framework/go/agent"
 	"github.com/microsoft/agent-framework/go/agent/internal/agenttest"
+	"github.com/microsoft/agent-framework/go/tool"
 )
 
 func TestAgent_BasicRun(t *testing.T) {
@@ -149,7 +150,7 @@ func TestAgent_WithToolCalls(t *testing.T) {
 	}
 	client.WithToolCalls(toolCalls, respText)
 
-	tool := &agenttest.Tool{
+	tl := &agenttest.Tool{
 		NameValue: "get_weather",
 		CallFunc: func(ctx context.Context, args map[string]any) (any, error) {
 			return map[string]any{"temperature": "72F", "condition": "sunny"}, nil
@@ -157,7 +158,7 @@ func TestAgent_WithToolCalls(t *testing.T) {
 	}
 
 	resp, err := a.Run(t.Context(), nil, &agent.RunOptions{
-		Tools: []agent.Tool{tool},
+		Tools: []tool.Tool{tl},
 	}, agent.NewTextMessage("What's the weather?"))
 
 	if err != nil {
@@ -172,8 +173,8 @@ func TestAgent_WithToolCalls(t *testing.T) {
 		t.Errorf("expected at least 2 calls to Run, got %d", client.GetRunCallCount())
 	}
 
-	if tool.CallCount != 1 {
-		t.Errorf("expected tool to be called once, got %d", tool.CallCount)
+	if tl.CallCount != 1 {
+		t.Errorf("expected tool to be called once, got %d", tl.CallCount)
 	}
 }
 
@@ -376,7 +377,7 @@ func TestAgent_DefaultRunOptions(t *testing.T) {
 	temp := 0.5
 	a.Config.Opts = &agent.RunOptions{
 		Temperature: &temp,
-		ToolMode:    agent.ToolModeAuto,
+		ToolMode:    tool.ToolModeAuto,
 	}
 
 	_, err := a.Run(context.Background(), nil, nil, agent.NewTextMessage("Test"))
@@ -391,8 +392,8 @@ func TestAgent_DefaultRunOptions(t *testing.T) {
 	if lastCall.Opts.Temperature == nil || *lastCall.Opts.Temperature != temp {
 		t.Errorf("expected default temperature %v, got %v", temp, lastCall.Opts.Temperature)
 	}
-	if lastCall.Opts.ToolMode != agent.ToolModeAuto {
-		t.Errorf("expected default tool mode %v, got %v", agent.ToolModeAuto, lastCall.Opts.ToolMode)
+	if lastCall.Opts.ToolMode != tool.ToolModeAuto {
+		t.Errorf("expected default tool mode %v, got %v", tool.ToolModeAuto, lastCall.Opts.ToolMode)
 	}
 }
 
@@ -402,7 +403,7 @@ func TestAgent_RunOptionsMerge(t *testing.T) {
 	overrideTemp := 0.8
 	a.Config.Opts = &agent.RunOptions{
 		Temperature: &defaultTemp,
-		ToolMode:    agent.ToolModeAuto,
+		ToolMode:    tool.ToolModeAuto,
 	}
 
 	_, err := a.Run(context.Background(), nil, &agent.RunOptions{
@@ -422,8 +423,8 @@ func TestAgent_RunOptionsMerge(t *testing.T) {
 		t.Errorf("expected override temperature %v, got %v", overrideTemp, lastCall.Opts.Temperature)
 	}
 	// Default should still be present
-	if lastCall.Opts.ToolMode != agent.ToolModeAuto {
-		t.Errorf("expected default tool mode %v, got %v", agent.ToolModeAuto, lastCall.Opts.ToolMode)
+	if lastCall.Opts.ToolMode != tool.ToolModeAuto {
+		t.Errorf("expected default tool mode %v, got %v", tool.ToolModeAuto, lastCall.Opts.ToolMode)
 	}
 }
 
@@ -458,7 +459,7 @@ func TestAgent_MaxRetries(t *testing.T) {
 		}, nil
 	}
 
-	tool := &agenttest.Tool{
+	tl := &agenttest.Tool{
 		NameValue: "test_tool",
 		CallFunc: func(ctx context.Context, args map[string]any) (any, error) {
 			return "result", nil
@@ -466,7 +467,7 @@ func TestAgent_MaxRetries(t *testing.T) {
 	}
 
 	resp, err := a.Run(context.Background(), nil, &agent.RunOptions{
-		Tools: []agent.Tool{tool},
+		Tools: []tool.Tool{tl},
 	}, agent.NewTextMessage("Test"))
 
 	if err != nil {
@@ -622,7 +623,7 @@ func TestAgent_ToolError(t *testing.T) {
 	client.WithToolCalls(toolCalls, "Handled error")
 
 	expectedErr := errors.New("tool execution failed")
-	tool := &agenttest.Tool{
+	tl := &agenttest.Tool{
 		NameValue: "error_tool",
 		CallFunc: func(ctx context.Context, args map[string]any) (any, error) {
 			return nil, expectedErr
@@ -630,7 +631,7 @@ func TestAgent_ToolError(t *testing.T) {
 	}
 
 	resp, err := a.Run(context.Background(), nil, &agent.RunOptions{
-		Tools: []agent.Tool{tool},
+		Tools: []tool.Tool{tl},
 	}, agent.NewTextMessage("Test"))
 
 	if err != nil {
@@ -659,8 +660,8 @@ func TestAgent_ToolNotFound(t *testing.T) {
 	// Provide an empty tool list - the agent will still process the response
 	// Tool call will fail but agent continues
 	resp, err := a.Run(context.Background(), nil, &agent.RunOptions{
-		Tools:    []agent.Tool{}, // No tools provided
-		ToolMode: agent.ToolModeAuto,
+		Tools:    []tool.Tool{}, // No tools provided
+		ToolMode: tool.ToolModeAuto,
 	}, agent.NewTextMessage("Test"))
 
 	if err != nil {
@@ -686,7 +687,7 @@ func TestAgent_ToolInvalidArgs(t *testing.T) {
 	}
 	client.WithToolCalls(toolCalls, "Handled invalid args")
 
-	tool := &agenttest.Tool{
+	tl := &agenttest.Tool{
 		NameValue: "test_tool",
 		CallFunc: func(ctx context.Context, args map[string]any) (any, error) {
 			return "should not be called", nil
@@ -694,7 +695,7 @@ func TestAgent_ToolInvalidArgs(t *testing.T) {
 	}
 
 	resp, err := a.Run(context.Background(), nil, &agent.RunOptions{
-		Tools: []agent.Tool{tool},
+		Tools: []tool.Tool{tl},
 	}, agent.NewTextMessage("Test"))
 
 	if err != nil {
@@ -702,8 +703,8 @@ func TestAgent_ToolInvalidArgs(t *testing.T) {
 	}
 
 	// Tool should not have been called
-	if tool.CallCount != 0 {
-		t.Errorf("expected tool not to be called, but was called %d times", tool.CallCount)
+	if tl.CallCount != 0 {
+		t.Errorf("expected tool not to be called, but was called %d times", tl.CallCount)
 	}
 
 	if resp.Text() != "Handled invalid args" {
@@ -732,11 +733,11 @@ func TestRunOptions_Merge(t *testing.T) {
 		{
 			name: "override nil",
 			base: &agent.RunOptions{
-				ToolMode: agent.ToolModeAuto,
+				ToolMode: tool.ToolModeAuto,
 			},
 			override: nil,
 			check: func(t *testing.T, result *agent.RunOptions) {
-				if result.ToolMode != agent.ToolModeAuto {
+				if result.ToolMode != tool.ToolModeAuto {
 					t.Errorf("expected ToolModeAuto, got %v", result.ToolMode)
 				}
 			},
@@ -745,10 +746,10 @@ func TestRunOptions_Merge(t *testing.T) {
 			name: "base nil",
 			base: nil,
 			override: &agent.RunOptions{
-				ToolMode: agent.ToolModeRequired,
+				ToolMode: tool.ToolModeRequired,
 			},
 			check: func(t *testing.T, result *agent.RunOptions) {
-				if result.ToolMode != agent.ToolModeRequired {
+				if result.ToolMode != tool.ToolModeRequired {
 					t.Errorf("expected ToolModeRequired, got %v", result.ToolMode)
 				}
 			},
@@ -756,10 +757,10 @@ func TestRunOptions_Merge(t *testing.T) {
 		{
 			name: "tools merged",
 			base: &agent.RunOptions{
-				Tools: []agent.Tool{&agenttest.Tool{NameValue: "tool1"}},
+				Tools: []tool.Tool{&agenttest.Tool{NameValue: "tool1"}},
 			},
 			override: &agent.RunOptions{
-				Tools: []agent.Tool{&agenttest.Tool{NameValue: "tool2"}},
+				Tools: []tool.Tool{&agenttest.Tool{NameValue: "tool2"}},
 			},
 			check: func(t *testing.T, result *agent.RunOptions) {
 				if len(result.Tools) != 2 {

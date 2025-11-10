@@ -8,6 +8,7 @@ import (
 
 	"github.com/microsoft/agent-framework/go/agent"
 	"github.com/microsoft/agent-framework/go/middleware"
+	"github.com/microsoft/agent-framework/go/tool/functool"
 )
 
 // LoggingMiddleware logs agent invocations before and after execution.
@@ -137,7 +138,7 @@ func main() {
 	funcPipeline := middleware.NewFunctionMiddlewarePipeline(functionLogger)
 
 	funcCtx := &middleware.FunctionInvocationContext{
-		Function: &agent.Func{
+		Function: &functool.Func{
 			Name:        "calculate",
 			Description: "Performs calculations",
 		},
