@@ -428,26 +428,20 @@ func funcCall(ctx context.Context, tools []tool.Tool, toolCall *FunctionCallCont
 	}
 
 	// Handle panics during tool execution
-	var panicErr error
-	defer func() {
-		if r := recover(); r != nil {
-			if e, ok := r.(error); ok {
-				panicErr = e
-			} else {
-				panicErr = fmt.Errorf("%v", r)
+	var result any
+	var err error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				if e, ok := r.(error); ok {
+					err = fmt.Errorf("tool execution panic: %w", e)
+				} else {
+					err = fmt.Errorf("tool execution panic: %v", r)
+				}
 			}
-		}
+		}()
+		result, err = found.Call(ctx, args)
 	}()
-
-	// Execute the tool
-	result, err := found.Call(ctx, args)
-
-	if panicErr != nil {
-		return &FunctionResultContent{
-			CallID: toolCall.CallID,
-			Error:  fmt.Errorf("tool execution panic: %v", panicErr),
-		}
-	}
 
 	return &FunctionResultContent{
 		CallID: toolCall.CallID,
