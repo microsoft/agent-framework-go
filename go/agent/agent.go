@@ -389,13 +389,11 @@ func runToolCalls(ctx context.Context, options *RunOptions, contents ...Content)
 }
 
 // funcCall executes a function tool call.
-func funcCall(ctx context.Context, tools []tool.Tool, toolCall *FunctionCallContent) (ct Content) {
+func funcCall(ctx context.Context, tools []tool.Tool, toolCall *FunctionCallContent) Content {
 	if toolCall.Error != nil {
-		// If there was an error parsing the tool call, return the error.
-		return &FunctionCallContent{
-			CallID: toolCall.CallID,
-			Error:  toolCall.Error,
-		}
+		// If there was an error parsing the tool call, return it as-is.
+		// This error occurred during mapping from the AI model to FunctionCallContent.
+		return toolCall
 	}
 
 	// Find the tool in the options
@@ -411,7 +409,7 @@ func funcCall(ctx context.Context, tools []tool.Tool, toolCall *FunctionCallCont
 	}
 
 	if found == nil {
-		return &FunctionCallContent{
+		return &FunctionResultContent{
 			CallID: toolCall.CallID,
 			Error:  fmt.Errorf("tool not found: %s", toolCall.Name),
 		}
@@ -420,30 +418,29 @@ func funcCall(ctx context.Context, tools []tool.Tool, toolCall *FunctionCallCont
 	var args map[string]any
 	if toolCall.Arguments != "" {
 		if err := json.Unmarshal([]byte(toolCall.Arguments), &args); err != nil {
-			return &FunctionCallContent{
+			return &FunctionResultContent{
 				CallID: toolCall.CallID,
 				Error:  fmt.Errorf("failed to parse arguments: %w", err),
 			}
 		}
 	}
 
-	defer func() {
-		if r := recover(); r != nil {
-			var err error
-			if e, ok := r.(error); ok {
-				err = e
-			} else {
-				err = fmt.Errorf("%v", r)
+	// Handle panics during tool execution
+	var result any
+	var err error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				if e, ok := r.(error); ok {
+					err = fmt.Errorf("tool execution panic: %w", e)
+				} else {
+					err = fmt.Errorf("tool execution panic: %v", r)
+				}
 			}
-			ct = &FunctionResultContent{
-				CallID: toolCall.CallID,
-				Error:  fmt.Errorf("tool execution panic: %v", err),
-			}
-		}
+		}()
+		result, err = found.Call(ctx, args)
 	}()
 
-	// Execute the tool
-	result, err := found.Call(ctx, args)
 	return &FunctionResultContent{
 		CallID: toolCall.CallID,
 		Error:  err,

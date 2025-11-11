@@ -160,7 +160,7 @@ func (a *client) buildCompletionParams(options *agent.RunOptions, messages ...*a
 		Messages: make([]openai.ChatCompletionMessageParamUnion, 0, len(messages)+1),
 	}
 	for _, msg := range messages {
-		params.Messages = append(params.Messages, buildMessageParam(msg))
+		params.Messages = append(params.Messages, buildMessageParam(msg)...)
 	}
 
 	if options != nil {
@@ -228,8 +228,9 @@ func (a *client) buildCompletionParams(options *agent.RunOptions, messages ...*a
 	return params
 }
 
-// buildMessageParam converts an agent.Message to an OpenAI message parameter.
-func buildMessageParam(msg *agent.Message) openai.ChatCompletionMessageParamUnion {
+// buildMessageParam converts an agent.Message to one or more OpenAI message parameters.
+// Returns a slice because some agent messages (like RoleTool) need to be split into multiple OpenAI messages.
+func buildMessageParam(msg *agent.Message) []openai.ChatCompletionMessageParamUnion {
 	switch msg.Role {
 	case agent.RoleSystem:
 		var contents []openai.ChatCompletionContentPartTextParam
@@ -240,7 +241,8 @@ func buildMessageParam(msg *agent.Message) openai.ChatCompletionMessageParamUnio
 				})
 			}
 		}
-		return openai.SystemMessage(contents)
+		return []openai.ChatCompletionMessageParamUnion{openai.SystemMessage(contents)}
+
 	case agent.RoleUser:
 		var contents []openai.ChatCompletionContentPartUnionParam
 		for _, content := range msg.Contents {
@@ -289,7 +291,7 @@ func buildMessageParam(msg *agent.Message) openai.ChatCompletionMessageParamUnio
 				}))
 			}
 		}
-		return openai.UserMessage(contents)
+		return []openai.ChatCompletionMessageParamUnion{openai.UserMessage(contents)}
 
 	case agent.RoleAssistant:
 		var contents []openai.ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion
@@ -320,30 +322,29 @@ func buildMessageParam(msg *agent.Message) openai.ChatCompletionMessageParamUnio
 				})
 			}
 		}
-		return openai.ChatCompletionMessageParamUnion{
+		return []openai.ChatCompletionMessageParamUnion{{
 			OfAssistant: &openai.ChatCompletionAssistantMessageParam{
 				Content:   openai.ChatCompletionAssistantMessageParamContentUnion{OfArrayOfContentParts: contents},
 				ToolCalls: toolCalls,
 			},
-		}
+		}}
 
 	case agent.RoleTool:
-		var contents []openai.ChatCompletionContentPartTextParam
-		var callID string
+		// Each tool result needs its own separate message for OpenAI API compliance
+		var messages []openai.ChatCompletionMessageParamUnion
 		for _, content := range msg.Contents {
-			switch content := content.(type) {
-			case *agent.FunctionResultContent:
-				txt := content.Result
-				if content.Error != nil {
-					txt = content.Error
+			if funcResult, ok := content.(*agent.FunctionResultContent); ok {
+				txt := funcResult.Result
+				if funcResult.Error != nil {
+					txt = funcResult.Error
 				}
-				contents = append(contents, openai.ChatCompletionContentPartTextParam{
-					Text: fmt.Sprintf("%v", txt),
-				})
-				callID = content.CallID
+				messages = append(messages, openai.ToolMessage(
+					[]openai.ChatCompletionContentPartTextParam{{Text: fmt.Sprintf("%v", txt)}},
+					funcResult.CallID,
+				))
 			}
 		}
-		return openai.ToolMessage(contents, callID)
+		return messages
 
 	default:
 		panic("unknown message role: " + string(msg.Role))
