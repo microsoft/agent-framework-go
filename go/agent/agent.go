@@ -391,11 +391,9 @@ func runToolCalls(ctx context.Context, options *RunOptions, contents ...Content)
 // funcCall executes a function tool call.
 func funcCall(ctx context.Context, tools []tool.Tool, toolCall *FunctionCallContent) Content {
 	if toolCall.Error != nil {
-		// If there was an error parsing the tool call, return the error.
-		return &FunctionResultContent{
-			CallID: toolCall.CallID,
-			Error:  toolCall.Error,
-		}
+		// If there was an error parsing the tool call, return it as-is.
+		// This error occurred during mapping from the AI model to FunctionCallContent.
+		return toolCall
 	}
 
 	// Find the tool in the options
