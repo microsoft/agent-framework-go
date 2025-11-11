@@ -160,7 +160,23 @@ func (a *client) buildCompletionParams(options *agent.RunOptions, messages ...*a
 		Messages: make([]openai.ChatCompletionMessageParamUnion, 0, len(messages)+1),
 	}
 	for _, msg := range messages {
-		params.Messages = append(params.Messages, buildMessageParam(msg))
+		// Special handling for tool messages: each tool result needs its own message
+		if msg.Role == agent.RoleTool {
+			for _, content := range msg.Contents {
+				if funcResult, ok := content.(*agent.FunctionResultContent); ok {
+					txt := funcResult.Result
+					if funcResult.Error != nil {
+						txt = funcResult.Error
+					}
+					params.Messages = append(params.Messages, openai.ToolMessage(
+						[]openai.ChatCompletionContentPartTextParam{{Text: fmt.Sprintf("%v", txt)}},
+						funcResult.CallID,
+					))
+				}
+			}
+		} else {
+			params.Messages = append(params.Messages, buildMessageParam(msg))
+		}
 	}
 
 	if options != nil {
@@ -326,24 +342,6 @@ func buildMessageParam(msg *agent.Message) openai.ChatCompletionMessageParamUnio
 				ToolCalls: toolCalls,
 			},
 		}
-
-	case agent.RoleTool:
-		var contents []openai.ChatCompletionContentPartTextParam
-		var callID string
-		for _, content := range msg.Contents {
-			switch content := content.(type) {
-			case *agent.FunctionResultContent:
-				txt := content.Result
-				if content.Error != nil {
-					txt = content.Error
-				}
-				contents = append(contents, openai.ChatCompletionContentPartTextParam{
-					Text: fmt.Sprintf("%v", txt),
-				})
-				callID = content.CallID
-			}
-		}
-		return openai.ToolMessage(contents, callID)
 
 	default:
 		panic("unknown message role: " + string(msg.Role))
