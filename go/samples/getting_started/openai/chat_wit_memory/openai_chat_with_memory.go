@@ -13,7 +13,7 @@ func main() {
 	ag := openai.NewChatAgent(openai.AgentConfig{
 		Model:              "gpt-4o-mini",
 		SystemInstructions: "You are a friendly assistant. Always address the user by their name.",
-		ContextProvider:    new(UserInfoMemory),
+		ContextProvider:    &UserInfoMemory{},
 	})
 
 	thread := ag.NewThread()
@@ -43,16 +43,16 @@ type UserInfoMemory struct {
 }
 
 func (u *UserInfoMemory) Invoked(ctx context.Context, messages []*agent.Message, responses []*agent.Message, _ error) error {
-	if u.UserInfo != nil {
+	if u.UserInfo != nil || u.Agent == nil {
 		return nil
 	}
-	hasUserMsg := slices.ContainsFunc(responses, func(msg *agent.Message) bool {
+	hasUserMsg := slices.ContainsFunc(messages, func(msg *agent.Message) bool {
 		return msg.Role == agent.RoleUser
 	})
 	if !hasUserMsg {
 		return nil
 	}
-	ret, err := u.Agent.Run(ctx, nil, nil, append(responses,
+	ret, err := u.Agent.Run(ctx, nil, nil, append(messages,
 		agent.NewTextMessage("Extract the user's name from the conversation. Respond with just the name. Return an empty response if the name is not present."),
 	)...)
 	if err != nil {
