@@ -276,7 +276,7 @@ func TestAgent_WithThread(t *testing.T) {
 	thread := a.NewThread()
 
 	// Add some messages to the thread
-	err := thread.Add(context.Background(), agent.NewTextMessage("First message"))
+	err := thread.AddMessage(context.Background(), agent.NewTextMessage("First message"))
 	if err != nil {
 		t.Fatalf("expected no error adding to thread, got: %v", err)
 	}
@@ -292,14 +292,7 @@ func TestAgent_WithThread(t *testing.T) {
 	}
 
 	// Verify the thread now contains messages
-	var messageCount int
-	for _, err := range thread.All(context.Background()) {
-		if err != nil {
-			t.Fatalf("expected no error iterating thread, got: %v", err)
-		}
-		messageCount++
-	}
-
+	messageCount := len(thread.(*agent.InMemoryThread).Messages)
 	if messageCount < 2 {
 		t.Errorf("expected at least 2 messages in thread, got %d", messageCount)
 	}

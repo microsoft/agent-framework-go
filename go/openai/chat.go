@@ -38,6 +38,8 @@ type AgentConfig struct {
 	// Only used for Azure OpenAI
 	APIVersion string // Optional, defaults to latest API version
 
+	ContextProvider agent.ContextProvider
+
 	Opts *agent.RunOptions
 }
 
@@ -76,6 +78,7 @@ func newChatAgent(isAzure bool, config AgentConfig) *agent.Agent {
 			SystemInstructions: config.SystemInstructions,
 			Run:                c.Run,
 			RunStream:          c.RunStream,
+			ContextProvider:    config.ContextProvider,
 		},
 	}
 }
@@ -334,12 +337,14 @@ func buildMessageParam(msg *agent.Message) []openai.ChatCompletionMessageParamUn
 		var messages []openai.ChatCompletionMessageParamUnion
 		for _, content := range msg.Contents {
 			if funcResult, ok := content.(*agent.FunctionResultContent); ok {
-				txt := funcResult.Result
+				ret := funcResult.Result
 				if funcResult.Error != nil {
-					txt = funcResult.Error
+					ret = funcResult.Error
+				} else if b, ok := ret.(json.RawMessage); ok {
+					ret = string(b)
 				}
 				messages = append(messages, openai.ToolMessage(
-					[]openai.ChatCompletionContentPartTextParam{{Text: fmt.Sprintf("%v", txt)}},
+					[]openai.ChatCompletionContentPartTextParam{{Text: fmt.Sprintf("%v", ret)}},
 					funcResult.CallID,
 				))
 			}
