@@ -13,7 +13,7 @@ import (
 // Test JSON marshaling of InMemoryThread
 func TestInMemoryThread_MarshalJSON(t *testing.T) {
 	thread := &agent.InMemoryThread{}
-	thread.Add(context.Background(), agent.NewTextMessage("test"))
+	thread.AddMessage(context.Background(), agent.NewTextMessage("test"))
 
 	data, err := json.Marshal(thread)
 	if err != nil {
@@ -25,7 +25,7 @@ func TestInMemoryThread_MarshalJSON(t *testing.T) {
 	}
 
 	// Verify it's valid JSON array (thread marshals as array of messages)
-	var result []interface{}
+	var result []any
 	if err := json.Unmarshal(data, &result); err != nil {
 		t.Errorf("expected valid JSON array, got error: %v", err)
 	}

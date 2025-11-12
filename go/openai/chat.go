@@ -38,6 +38,8 @@ type AgentConfig struct {
 	// Only used for Azure OpenAI
 	APIVersion string // Optional, defaults to latest API version
 
+	ContextProvider agent.ContextProvider
+
 	Opts *agent.RunOptions
 }
 
@@ -76,6 +78,7 @@ func newChatAgent(isAzure bool, config AgentConfig) *agent.Agent {
 			SystemInstructions: config.SystemInstructions,
 			Run:                c.Run,
 			RunStream:          c.RunStream,
+			ContextProvider:    config.ContextProvider,
 		},
 	}
 }
