@@ -350,11 +350,13 @@ func (a *Agent) prepareRun(ctx context.Context, thread Thread, opts *RunOptions,
 		if err != nil {
 			return nil, nil, err
 		}
-		opts.Tools = append(opts.Tools, ctxData.Tools...)
-		if ctxData.Instructions != "" {
-			messages = append([]*Message{NewMessage(RoleSystem, &TextContent{Text: ctxData.Instructions})}, messages...)
+		if ctxData != nil {
+			opts.Tools = append(opts.Tools, ctxData.Tools...)
+			if ctxData.Instructions != "" {
+				messages = append([]*Message{NewMessage(RoleSystem, &TextContent{Text: ctxData.Instructions})}, messages...)
+			}
+			messages = append(messages, ctxData.Messages...)
 		}
-		messages = append(messages, ctxData.Messages...)
 	}
 	return opts, messages, nil
 }

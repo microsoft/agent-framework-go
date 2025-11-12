@@ -30,7 +30,7 @@ import (
 type Thread interface {
 	json.Marshaler
 
-	// Add adds messages to the thread.
+	// AddMessage adds messages to the thread.
 	AddMessage(ctx context.Context, messages ...*Message) error
 }
 
@@ -101,6 +101,9 @@ func (p *inmemoryContextProvider) Invoking(ctx context.Context, messages []*Mess
 }
 
 func (p *inmemoryContextProvider) Invoked(ctx context.Context, messages []*Message, responses []*Message, err error) error {
+	if p.contextProvider != nil {
+		return p.contextProvider.Invoked(ctx, messages, responses, err)
+	}
 	// Nothing to do for in-memory context, messages are already added via InMemoryThread.AddMessage.
 	return nil
 }
