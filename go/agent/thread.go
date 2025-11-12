@@ -5,7 +5,6 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"iter"
 )
 
 // Thread contains the state of a specific conversation with an agent which may include:
@@ -31,36 +30,80 @@ import (
 type Thread interface {
 	json.Marshaler
 
-	// Add adds messages to the thread.
-	Add(ctx context.Context, messages ...*Message) error
+	// AddMessage adds messages to the thread.
+	AddMessage(ctx context.Context, messages ...*Message) error
+}
 
-	// All returns an iterator over all messages in the thread.
-	All(ctx context.Context) iter.Seq2[*Message, error]
+type contextProviderThread interface {
+	Thread
+
+	ContextProvider() ContextProvider
 }
 
 var _ Thread = (*InMemoryThread)(nil)
+var _ contextProviderThread = (*InMemoryThread)(nil)
 
 // InMemoryThread provides an in-memory implementation of [Thread].
 // Messages are stored entirely in local memory, providing fast access and manipulation capabilities.
 type InMemoryThread struct {
-	messages []*Message
+	Messages []*Message
+
+	wrappedContextProvider ContextProvider
+
+	contextProvider inmemoryContextProvider
+}
+
+func NewInMemoryThread(cp ContextProvider) *InMemoryThread {
+	return &InMemoryThread{
+		wrappedContextProvider: cp,
+	}
 }
 
 func (t *InMemoryThread) MarshalJSON() ([]byte, error) {
-	return json.Marshal(t.messages)
+	return json.Marshal(t.Messages)
 }
 
-func (t *InMemoryThread) Add(ctx context.Context, messages ...*Message) error {
-	t.messages = append(t.messages, messages...)
+func (t *InMemoryThread) AddMessage(ctx context.Context, messages ...*Message) error {
+	t.Messages = append(t.Messages, messages...)
 	return nil
 }
 
-func (t *InMemoryThread) All(ctx context.Context) iter.Seq2[*Message, error] {
-	return func(yield func(*Message, error) bool) {
-		for _, v := range t.messages {
-			if !yield(v, nil) {
-				return
-			}
+func (t *InMemoryThread) ContextProvider() ContextProvider {
+	if t.contextProvider.messages == nil {
+		t.contextProvider.messages = &t.Messages
+		t.contextProvider.contextProvider = t.wrappedContextProvider
+	}
+	return &t.contextProvider
+}
+
+type inmemoryContextProvider struct {
+	messages        *[]*Message
+	contextProvider ContextProvider
+}
+
+func (p *inmemoryContextProvider) Invoking(ctx context.Context, messages []*Message) (*Context, error) {
+	var ctxp *Context
+	if p.contextProvider != nil {
+		var err error
+		ctxp, err = p.contextProvider.Invoking(ctx, messages)
+		if err != nil {
+			return nil, err
 		}
 	}
+	if ctxp != nil {
+		ctxp.Messages = append(ctxp.Messages, *p.messages...)
+	} else {
+		ctxp = &Context{
+			Messages: *p.messages,
+		}
+	}
+	return ctxp, nil
+}
+
+func (p *inmemoryContextProvider) Invoked(ctx context.Context, messages []*Message, responses []*Message, err error) error {
+	if p.contextProvider != nil {
+		return p.contextProvider.Invoked(ctx, messages, responses, err)
+	}
+	// Nothing to do for in-memory context, messages are already added via InMemoryThread.AddMessage.
+	return nil
 }

@@ -27,6 +27,10 @@ type Config struct {
 
 	SystemInstructions string
 
+	NewThread func() Thread
+
+	ContextProvider ContextProvider
+
 	Run func(ctx context.Context, thread Thread, opts *RunOptions, messages ...*Message) (*RunResponse, error)
 
 	RunStream func(ctx context.Context, thread Thread, opts *RunOptions, messages ...*Message) iter.Seq2[*RunResponseUpdate, error]
@@ -41,29 +45,15 @@ func (a *Agent) Name() string {
 }
 
 func (a *Agent) NewThread() Thread {
-	return new(InMemoryThread)
+	if a.Config.NewThread != nil {
+		return a.Config.NewThread()
+	}
+	return NewInMemoryThread(a.Config.ContextProvider)
 }
 
 func (a *Agent) Run(ctx context.Context, thread Thread, opts *RunOptions, messages ...*Message) (*RunResponse, error) {
-	opts = a.Config.Opts.Merge(opts)
-	messages = slices.Clone(messages)
-	if a.Config.SystemInstructions != "" {
-		messages = append([]*Message{NewMessage(RoleSystem, &TextContent{Text: a.Config.SystemInstructions})}, messages...)
-	}
-	var err error
-	if opts != nil {
-		if err := initTools(ctx, opts.Tools); err != nil {
-			return nil, err
-		}
-		extraTools, err := loadTools(ctx, opts.Tools)
-		if err != nil {
-			return nil, err
-		}
-		opts.Tools = append(opts.Tools, extraTools...)
-	}
-
 	// Prepare messages with system instructions
-	threadMessages, err := prepareMessages(ctx, thread, messages)
+	opts, threadMessages, err := a.prepareRun(ctx, thread, opts, messages)
 	if err != nil {
 		return nil, err
 	}
@@ -100,10 +90,16 @@ func (a *Agent) Run(ctx context.Context, thread Thread, opts *RunOptions, messag
 		threadMessages = append(threadMessages, message)
 	}
 	if thread != nil {
-		if err := thread.Add(ctx, threadMessages[startLength:]...); err != nil {
+		if err := thread.AddMessage(ctx, threadMessages[startLength:]...); err != nil {
 			return nil, err
 		}
 	}
+	if ctxprovider := a.contextProvider(thread); ctxprovider != nil {
+		if err := ctxprovider.Invoked(ctx, messages, threadMessages[startLength:], nil); err != nil {
+			return nil, err
+		}
+	}
+
 	return &RunResponse{
 		Messages:   threadMessages[startLength:],
 		ResponseID: finalResponse.ResponseID,
@@ -119,16 +115,7 @@ func (a *Agent) RunStream(ctx context.Context, thread Thread, opts *RunOptions, 
 	if a.Config.RunStream == nil {
 		return a.runStreamFallback(ctx, thread, opts, messages...)
 	}
-	opts = a.Config.Opts.Merge(opts)
-	messages = slices.Clone(messages)
-	if a.Config.SystemInstructions != "" {
-		messages = append([]*Message{NewMessage(RoleSystem, &TextContent{Text: a.Config.SystemInstructions})}, messages...)
-	}
-	err := initTools(ctx, opts.Tools)
-	var threadMessages []*Message
-	if err == nil {
-		threadMessages, err = prepareMessages(ctx, thread, messages)
-	}
+	opts, threadMessages, err := a.prepareRun(ctx, thread, opts, messages)
 	startLength := len(threadMessages)
 	id := a.ID()
 	return func(yield func(*RunResponseUpdate, error) bool) {
@@ -198,7 +185,14 @@ func (a *Agent) RunStream(ctx context.Context, thread Thread, opts *RunOptions, 
 			}
 		}
 		if thread != nil {
-			if err := thread.Add(ctx, threadMessages[startLength:]...); err != nil {
+			if err := thread.AddMessage(ctx, threadMessages[startLength:]...); err != nil {
+				yield(nil, err)
+				return
+			}
+		}
+
+		if ctxprovider := a.contextProvider(thread); ctxprovider != nil {
+			if err := ctxprovider.Invoked(ctx, messages, threadMessages[startLength:], nil); err != nil {
 				yield(nil, err)
 				return
 			}
@@ -322,16 +316,49 @@ func (r *RunResponseUpdate) Text() string {
 	return text
 }
 
-func prepareMessages(ctx context.Context, t Thread, messages []*Message) ([]*Message, error) {
-	if t != nil {
-		for msg, err := range t.All(ctx) {
-			if err != nil {
-				return nil, err
-			}
-			messages = append(messages, msg)
+func (a *Agent) contextProvider(thread Thread) ContextProvider {
+	if a.Config.ContextProvider != nil {
+		return a.Config.ContextProvider
+	}
+	if thread != nil {
+		if thread, ok := thread.(contextProviderThread); ok {
+			return thread.ContextProvider()
 		}
 	}
-	return messages, nil
+	return nil
+}
+
+func (a *Agent) prepareRun(ctx context.Context, thread Thread, opts *RunOptions, messages []*Message) (*RunOptions, []*Message, error) {
+	opts = a.Config.Opts.Merge(opts)
+	messages = slices.Clone(messages)
+	if a.Config.SystemInstructions != "" {
+		messages = append([]*Message{NewMessage(RoleSystem, &TextContent{Text: a.Config.SystemInstructions})}, messages...)
+	}
+	if opts != nil {
+		if err := initTools(ctx, opts.Tools); err != nil {
+			return nil, nil, err
+		}
+		extraTools, err := loadTools(ctx, opts.Tools)
+		if err != nil {
+			return nil, nil, err
+		}
+		opts.Tools = append(opts.Tools, extraTools...)
+	}
+	ctxProvider := a.contextProvider(thread)
+	if ctxProvider != nil {
+		ctxData, err := ctxProvider.Invoking(ctx, messages)
+		if err != nil {
+			return nil, nil, err
+		}
+		if ctxData != nil {
+			opts.Tools = append(opts.Tools, ctxData.Tools...)
+			if ctxData.Instructions != "" {
+				messages = append([]*Message{NewMessage(RoleSystem, &TextContent{Text: ctxData.Instructions})}, messages...)
+			}
+			messages = append(messages, ctxData.Messages...)
+		}
+	}
+	return opts, messages, nil
 }
 
 func loadTools(ctx context.Context, tools []tool.Tool) ([]tool.Tool, error) {
