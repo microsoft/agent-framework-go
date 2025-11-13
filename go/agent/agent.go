@@ -13,8 +13,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/microsoft/agent-framework/go/content"
 	"github.com/microsoft/agent-framework/go/format"
+	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/tool"
 )
 
@@ -30,9 +30,9 @@ type Config struct {
 
 	ContextProvider ContextProvider
 
-	Run func(ctx context.Context, thread Thread, opts *RunOptions, messages ...*Message) (*RunResponse, error)
+	Run func(ctx context.Context, thread Thread, opts *RunOptions, messages ...*message.Message) (*RunResponse, error)
 
-	RunStream func(ctx context.Context, thread Thread, opts *RunOptions, messages ...*Message) iter.Seq2[*RunResponseUpdate, error]
+	RunStream func(ctx context.Context, thread Thread, opts *RunOptions, messages ...*message.Message) iter.Seq2[*RunResponseUpdate, error]
 }
 
 // Agent represents an AI agent that can execute tasks using a client and tools.
@@ -55,7 +55,7 @@ func (a *Agent) NewThread() Thread {
 	return NewInMemoryThread(a.Config.ContextProvider)
 }
 
-func (a *Agent) Run(ctx context.Context, thread Thread, opts *RunOptions, messages ...*Message) (*RunResponse, error) {
+func (a *Agent) Run(ctx context.Context, thread Thread, opts *RunOptions, messages ...*message.Message) (*RunResponse, error) {
 	// Prepare messages with system instructions
 	opts, threadMessages, err := a.prepareRun(ctx, thread, opts, messages)
 	if err != nil {
@@ -71,12 +71,12 @@ func (a *Agent) Run(ctx context.Context, thread Thread, opts *RunOptions, messag
 		if err != nil {
 			return nil, err
 		}
-		message := response.Messages[0]
-		threadMessages = append(threadMessages, message)
-		toolResult := runToolCalls(ctx, opts, message.Contents...)
+		msg := response.Messages[0]
+		threadMessages = append(threadMessages, msg)
+		toolResult := runToolCalls(ctx, opts, msg.Contents...)
 		if len(toolResult) > 0 {
 			// Add a single Message to the response with the results
-			threadMessages = append(threadMessages, NewMessage(RoleTool, toolResult...))
+			threadMessages = append(threadMessages, &message.Message{Role: message.RoleTool, Contents: toolResult})
 			continue
 		}
 		finalResponse = response
@@ -118,10 +118,10 @@ func (a *Agent) Run(ctx context.Context, thread Thread, opts *RunOptions, messag
 }
 
 func (a *Agent) RunText(ctx context.Context, msg string) (*RunResponse, error) {
-	return a.Run(ctx, nil, nil, NewTextMessage(msg))
+	return a.Run(ctx, nil, nil, message.NewText(msg))
 }
 
-func (a *Agent) RunStream(ctx context.Context, thread Thread, opts *RunOptions, messages ...*Message) iter.Seq2[*RunResponseUpdate, error] {
+func (a *Agent) RunStream(ctx context.Context, thread Thread, opts *RunOptions, messages ...*message.Message) iter.Seq2[*RunResponseUpdate, error] {
 	if a.Config.RunStream == nil {
 		return a.runStreamFallback(ctx, thread, opts, messages...)
 	}
@@ -137,7 +137,7 @@ func (a *Agent) RunStream(ctx context.Context, thread Thread, opts *RunOptions, 
 		var success bool
 
 		for range maxRetries {
-			var contents []content.Content
+			var contents []message.Content
 			for update, err := range a.Config.RunStream(ctx, thread, opts, threadMessages...) {
 				if err != nil {
 					yield(nil, err)
@@ -148,11 +148,11 @@ func (a *Agent) RunStream(ctx context.Context, thread Thread, opts *RunOptions, 
 					return
 				}
 			}
-			threadMessages = append(threadMessages, NewMessage(RoleAssistant, contents...))
+			threadMessages = append(threadMessages, &message.Message{Role: message.RoleAssistant, Contents: contents})
 
 			// Check if this response contains tool calls
-			hasToolCalls := slices.ContainsFunc(contents, func(c content.Content) bool {
-				_, ok := c.(*content.FunctionCall)
+			hasToolCalls := slices.ContainsFunc(contents, func(c message.Content) bool {
+				_, ok := c.(*message.FunctionCallContent)
 				return ok
 			})
 
@@ -168,12 +168,12 @@ func (a *Agent) RunStream(ctx context.Context, thread Thread, opts *RunOptions, 
 				// Add a single Message to the response with the results
 				if !yield(&RunResponseUpdate{
 					Contents: toolResult,
-					Role:     RoleAssistant,
+					Role:     message.RoleAssistant,
 					AgentID:  id,
 				}, nil) {
 					return
 				}
-				threadMessages = append(threadMessages, NewMessage(RoleTool, toolResult...))
+				threadMessages = append(threadMessages, &message.Message{Role: message.RoleTool, Contents: toolResult})
 				continue
 			}
 			// No more tool calls to process
@@ -211,7 +211,7 @@ func (a *Agent) RunStream(ctx context.Context, thread Thread, opts *RunOptions, 
 			var finalText strings.Builder
 			for _, msg := range threadMessages[startLength:] {
 				for _, c := range msg.Contents {
-					if textContent, ok := c.(*content.Text); ok {
+					if textContent, ok := c.(*message.TextContent); ok {
 						finalText.WriteString(textContent.Text)
 					}
 				}
@@ -224,7 +224,7 @@ func (a *Agent) RunStream(ctx context.Context, thread Thread, opts *RunOptions, 
 	}
 }
 
-func (a *Agent) runStreamFallback(ctx context.Context, thread Thread, options *RunOptions, messages ...*Message) iter.Seq2[*RunResponseUpdate, error] {
+func (a *Agent) runStreamFallback(ctx context.Context, thread Thread, options *RunOptions, messages ...*message.Message) iter.Seq2[*RunResponseUpdate, error] {
 	resp, err := a.Run(ctx, thread, options, messages...)
 	id := a.ID()
 	return func(yield func(*RunResponseUpdate, error) bool) {
@@ -317,7 +317,7 @@ func (o *RunOptions) Merge(other *RunOptions) *RunOptions {
 type RunResponse struct {
 	AgentID    string
 	ResponseID string
-	Messages   []*Message
+	Messages   []*message.Message
 }
 
 // Text returns the concatenated text contents of the response messages.
@@ -325,7 +325,7 @@ func (r *RunResponse) Text() string {
 	var text string
 	for _, msg := range r.Messages {
 		for _, c := range msg.Contents {
-			if textContent, ok := c.(*content.Text); ok {
+			if textContent, ok := c.(*message.TextContent); ok {
 				text += textContent.Text
 			}
 		}
@@ -338,15 +338,15 @@ type RunResponseUpdate struct {
 	AgentID    string
 	MessageID  string
 	ResponseID string
-	Role       Role
-	Contents   []content.Content
+	Role       message.Role
+	Contents   []message.Content
 }
 
 // Text returns the concatenated text contents of the response messages.
 func (r *RunResponseUpdate) Text() string {
 	var sb strings.Builder
 	for _, c := range r.Contents {
-		if textContent, ok := c.(*content.Text); ok {
+		if textContent, ok := c.(*message.TextContent); ok {
 			sb.WriteString(textContent.Text)
 		}
 	}
@@ -365,7 +365,7 @@ func (a *Agent) contextProvider(thread Thread) ContextProvider {
 	return nil
 }
 
-func (a *Agent) prepareRun(ctx context.Context, thread Thread, opts *RunOptions, messages []*Message) (*RunOptions, []*Message, error) {
+func (a *Agent) prepareRun(ctx context.Context, thread Thread, opts *RunOptions, messages []*message.Message) (*RunOptions, []*message.Message, error) {
 	opts = a.Config.Opts.Merge(opts)
 	if opts.ResponseFormat == nil && opts.Response != nil {
 		// Try to get the format from the response object.
@@ -379,7 +379,7 @@ func (a *Agent) prepareRun(ctx context.Context, thread Thread, opts *RunOptions,
 	}
 	messages = slices.Clone(messages)
 	if a.Config.SystemInstructions != "" {
-		messages = append([]*Message{NewMessage(RoleSystem, &content.Text{Text: a.Config.SystemInstructions})}, messages...)
+		messages = append([]*message.Message{&message.Message{Role: message.RoleSystem, Contents: []message.Content{&message.TextContent{Text: a.Config.SystemInstructions}}}}, messages...)
 	}
 	if opts != nil {
 		if err := initTools(ctx, opts.Tools); err != nil {
@@ -400,7 +400,7 @@ func (a *Agent) prepareRun(ctx context.Context, thread Thread, opts *RunOptions,
 		if ctxData != nil {
 			opts.Tools = append(opts.Tools, ctxData.Tools...)
 			if ctxData.Instructions != "" {
-				messages = append([]*Message{NewMessage(RoleSystem, &content.Text{Text: ctxData.Instructions})}, messages...)
+				messages = append([]*message.Message{&message.Message{Role: message.RoleSystem, Contents: []message.Content{&message.TextContent{Text: ctxData.Instructions}}}}, messages...)
 			}
 			messages = append(messages, ctxData.Messages...)
 		}
@@ -436,26 +436,26 @@ func initTools(ctx context.Context, tools []tool.Tool) error {
 	return nil
 }
 
-func runToolCalls(ctx context.Context, options *RunOptions, contents ...content.Content) []content.Content {
+func runToolCalls(ctx context.Context, options *RunOptions, contents ...message.Content) []message.Content {
 	if len(options.Tools) == 0 {
 		return nil
 	}
 	funcResults := make(map[string]struct{})
 	for _, c := range contents {
-		if funcResult, ok := c.(*content.FunctionResult); ok {
+		if funcResult, ok := c.(*message.FunctionResultContent); ok {
 			funcResults[funcResult.CallID] = struct{}{}
 		}
 	}
-	funcCalls := make([]*content.FunctionCall, 0, len(contents)-len(funcResults))
+	funcCalls := make([]*message.FunctionCallContent, 0, len(contents)-len(funcResults))
 	for _, c := range contents {
-		if fc, ok := c.(*content.FunctionCall); ok {
+		if fc, ok := c.(*message.FunctionCallContent); ok {
 			if _, executed := funcResults[fc.CallID]; executed {
 				continue
 			}
 			funcCalls = append(funcCalls, fc)
 		}
 	}
-	toolContent := make([]content.Content, 0, len(funcCalls))
+	toolContent := make([]message.Content, 0, len(funcCalls))
 	for _, fc := range funcCalls {
 		toolContent = append(toolContent, funcCall(ctx, options.Tools, fc))
 	}
@@ -463,7 +463,7 @@ func runToolCalls(ctx context.Context, options *RunOptions, contents ...content.
 }
 
 // funcCall executes a function tool call.
-func funcCall(ctx context.Context, tools []tool.Tool, toolCall *content.FunctionCall) content.Content {
+func funcCall(ctx context.Context, tools []tool.Tool, toolCall *message.FunctionCallContent) message.Content {
 	if toolCall.Error != nil {
 		// If there was an error parsing the tool call, return it as-is.
 		// This error occurred during mapping from the AI model to FunctionCallContent.
@@ -483,7 +483,7 @@ func funcCall(ctx context.Context, tools []tool.Tool, toolCall *content.Function
 	}
 
 	if found == nil {
-		return &content.FunctionResult{
+		return &message.FunctionResultContent{
 			CallID: toolCall.CallID,
 			Error:  fmt.Errorf("tool not found: %s", toolCall.Name),
 		}
@@ -492,7 +492,7 @@ func funcCall(ctx context.Context, tools []tool.Tool, toolCall *content.Function
 	var args map[string]any
 	if toolCall.Arguments != "" {
 		if err := json.Unmarshal([]byte(toolCall.Arguments), &args); err != nil {
-			return &content.FunctionResult{
+			return &message.FunctionResultContent{
 				CallID: toolCall.CallID,
 				Error:  fmt.Errorf("failed to parse arguments: %w", err),
 			}
@@ -515,7 +515,7 @@ func funcCall(ctx context.Context, tools []tool.Tool, toolCall *content.Function
 		result, err = found.Call(ctx, args)
 	}()
 
-	return &content.FunctionResult{
+	return &message.FunctionResultContent{
 		CallID: toolCall.CallID,
 		Error:  err,
 		Result: result,

@@ -6,6 +6,7 @@ import (
 	"context"
 	"iter"
 
+	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/workflow"
 	"github.com/microsoft/agent-framework/go/workflow/workflowext"
 )
@@ -15,10 +16,10 @@ type messagesExecutorOptions struct {
 }
 
 type messagesExecutor struct {
-	workflowext.StatefulExecutor[[]*Message]
+	workflowext.StatefulExecutor[[]*message.Message]
 
 	Options         messagesExecutorOptions
-	TakeTurnHandler func(ctx context.Context, wctx workflow.Context, emitEvents bool, messages []*Message) error
+	TakeTurnHandler func(ctx context.Context, wctx workflow.Context, emitEvents bool, messages []*message.Message) error
 
 	bld workflow.RouteBuilder
 }
@@ -29,7 +30,7 @@ func (e *messagesExecutor) Router() (*workflow.MessageRouter, error) {
 	}
 	if e.Options.StringMessageRole == "" {
 		workflowext.RouteBuilderAddHandler1(&e.bld, false, func(ctx context.Context, wctx workflow.Context, msg workflow.Value) error {
-			return e.addMessage(ctx, wctx, NewMessage(Role(e.Options.StringMessageRole)))
+			return e.addMessage(ctx, wctx, &message.Message{Role: message.Role(e.Options.StringMessageRole)})
 		})
 	}
 	workflowext.RouteBuilderAddHandler1(&e.bld, false, e.addMessage)
@@ -39,20 +40,20 @@ func (e *messagesExecutor) Router() (*workflow.MessageRouter, error) {
 	return e.bld.Build()
 }
 
-func (e *messagesExecutor) addMessage(ctx context.Context, wctx workflow.Context, msg *Message) error {
-	return e.InvokeWithState(ctx, wctx, false, func(ctx context.Context, wctx workflow.Context, state []*Message) ([]*Message, error) {
+func (e *messagesExecutor) addMessage(ctx context.Context, wctx workflow.Context, msg *message.Message) error {
+	return e.InvokeWithState(ctx, wctx, false, func(ctx context.Context, wctx workflow.Context, state []*message.Message) ([]*message.Message, error) {
 		return append(state, msg), nil
 	})
 }
 
-func (e *messagesExecutor) addMessages(ctx context.Context, wctx workflow.Context, msgs []*Message) error {
-	return e.InvokeWithState(ctx, wctx, false, func(ctx context.Context, wctx workflow.Context, state []*Message) ([]*Message, error) {
+func (e *messagesExecutor) addMessages(ctx context.Context, wctx workflow.Context, msgs []*message.Message) error {
+	return e.InvokeWithState(ctx, wctx, false, func(ctx context.Context, wctx workflow.Context, state []*message.Message) ([]*message.Message, error) {
 		return append(state, msgs...), nil
 	})
 }
 
-func (e *messagesExecutor) addMessageIter(ctx context.Context, wctx workflow.Context, msgs iter.Seq[*Message]) error {
-	return e.InvokeWithState(ctx, wctx, false, func(ctx context.Context, wctx workflow.Context, state []*Message) ([]*Message, error) {
+func (e *messagesExecutor) addMessageIter(ctx context.Context, wctx workflow.Context, msgs iter.Seq[*message.Message]) error {
+	return e.InvokeWithState(ctx, wctx, false, func(ctx context.Context, wctx workflow.Context, state []*message.Message) ([]*message.Message, error) {
 		for msg := range msgs {
 			state = append(state, msg)
 		}
@@ -61,7 +62,7 @@ func (e *messagesExecutor) addMessageIter(ctx context.Context, wctx workflow.Con
 }
 
 func (e *messagesExecutor) takeTurn(ctx context.Context, wctx workflow.Context, token workflow.TurnToken) error {
-	return e.InvokeWithState(ctx, wctx, false, func(ctx context.Context, wctx workflow.Context, state []*Message) ([]*Message, error) {
+	return e.InvokeWithState(ctx, wctx, false, func(ctx context.Context, wctx workflow.Context, state []*message.Message) ([]*message.Message, error) {
 		if err := e.TakeTurnHandler(ctx, wctx, token.EmitEvents, state); err != nil {
 			return nil, err
 		}
@@ -111,7 +112,7 @@ func (e *hostExecutor) ensureThread() Thread {
 	return e.thread
 }
 
-func (e *hostExecutor) takeTurnHandler(ctx context.Context, wctx workflow.Context, emitEvents bool, messages []*Message) error {
+func (e *hostExecutor) takeTurnHandler(ctx context.Context, wctx workflow.Context, emitEvents bool, messages []*message.Message) error {
 	if !emitEvents {
 		response, err := e.agent.Run(ctx, e.ensureThread(), nil, messages...)
 		if err != nil {
@@ -129,9 +130,9 @@ func (e *hostExecutor) takeTurnHandler(ctx context.Context, wctx workflow.Contex
 		}
 		updates = append(updates, update)
 	}
-	msgs := make([]*Message, 0, len(updates))
+	msgs := make([]*message.Message, 0, len(updates))
 	for _, update := range updates {
-		msgs = append(msgs, NewMessage(update.Role, update.Contents...))
+		msgs = append(msgs, &message.Message{Role: update.Role, Contents: update.Contents})
 	}
 	return wctx.SendMessage(ctx, msgs, "")
 }

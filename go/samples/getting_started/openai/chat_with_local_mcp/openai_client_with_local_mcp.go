@@ -12,6 +12,7 @@ import (
 	"log"
 
 	"github.com/microsoft/agent-framework/go/agent"
+	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/openai"
 	"github.com/microsoft/agent-framework/go/tool"
 	"github.com/microsoft/agent-framework/go/tool/mcptool"
@@ -100,7 +101,7 @@ func mcpToolsOnRunLevel() error {
 			Tools:    []tool.Tool{mcpServer},
 			ToolMode: tool.ToolModeAuto,
 		},
-		agent.NewTextMessage(query1),
+		message.NewText(query1),
 	)
 	if err != nil {
 		return fmt.Errorf("agent run failed: %w", err)
@@ -119,7 +120,7 @@ func mcpToolsOnRunLevel() error {
 			Tools:    []tool.Tool{mcpServer},
 			ToolMode: tool.ToolModeAuto,
 		},
-		agent.NewTextMessage(query2),
+		message.NewText(query2),
 	)
 	if err != nil {
 		return fmt.Errorf("agent run failed: %w", err)
