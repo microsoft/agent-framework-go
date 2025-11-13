@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/microsoft/agent-framework/go/agent"
+	"github.com/microsoft/agent-framework/go/content"
 	"github.com/microsoft/agent-framework/go/middleware"
 	"github.com/microsoft/agent-framework/go/tool/functool"
 )
@@ -95,8 +96,8 @@ func main() {
 		Messages: []agent.Message{
 			{
 				Role: agent.RoleUser,
-				Contents: []agent.Content{
-					&agent.TextContent{Text: "What is 2+2?"},
+				Contents: []content.Content{
+					&content.Text{Text: "What is 2+2?"},
 				},
 			},
 		},

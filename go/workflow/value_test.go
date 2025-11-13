@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/microsoft/agent-framework/go/agent"
+	"github.com/microsoft/agent-framework/go/content"
 	"github.com/microsoft/agent-framework/go/workflow"
 )
 
@@ -18,7 +19,7 @@ func TestValueRoundtrip(t *testing.T) {
 	testRountrip(t, 3.14)
 	testRountrip(t, agent.NewTextMessage("hello"))
 	testRountrip(t, agent.RoleAssistant)
-	testRountrip(t, agent.ErrorContent{Message: "error message"})
+	testRountrip(t, content.Error{Message: "error message"})
 	testRountrip(t, workflow.AnyValue(0))
 }
 

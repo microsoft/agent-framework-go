@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework/go/agent"
+	"github.com/microsoft/agent-framework/go/content"
 	"github.com/microsoft/agent-framework/go/format/jsonformat"
 	"github.com/microsoft/agent-framework/go/tool"
 	"github.com/microsoft/agent-framework/go/tool/websearchtool"
@@ -99,16 +100,16 @@ func (a *client) Run(ctx context.Context, t agent.Thread, opts *agent.RunOptions
 		return nil, err
 	}
 	choice := resp.Choices[0]
-	contents := make([]agent.Content, 0, 1+len(choice.Message.ToolCalls))
+	contents := make([]content.Content, 0, 1+len(choice.Message.ToolCalls))
 	for _, tc := range choice.Message.ToolCalls {
-		contents = append(contents, &agent.FunctionCallContent{
+		contents = append(contents, &content.FunctionCall{
 			CallID:    tc.ID,
 			Name:      tc.Function.Name,
 			Arguments: tc.Function.Arguments,
 		})
 	}
 	if choice.Message.Content != "" {
-		contents = append(contents, &agent.TextContent{Text: choice.Message.Content})
+		contents = append(contents, &content.Text{Text: choice.Message.Content})
 	}
 	return &agent.RunResponse{
 		Messages:   []*agent.Message{agent.NewMessage(agent.Role(choice.Message.Role), contents...)},
@@ -127,9 +128,9 @@ func (a *client) RunStream(ctx context.Context, t agent.Thread, opts *agent.RunO
 			if !acc.AddChunk(chunk) {
 				continue
 			}
-			var contents []agent.Content
+			var contents []content.Content
 			if tc, ok := acc.JustFinishedToolCall(); ok {
-				contents = append(contents, &agent.FunctionCallContent{
+				contents = append(contents, &content.FunctionCall{
 					CallID:    tc.ID,
 					Name:      tc.Name,
 					Arguments: tc.Arguments,
@@ -137,7 +138,7 @@ func (a *client) RunStream(ctx context.Context, t agent.Thread, opts *agent.RunO
 			}
 			if len(chunk.Choices) > 0 {
 				if choice := chunk.Choices[0]; choice.Delta.Content != "" {
-					contents = append(contents, &agent.TextContent{Text: choice.Delta.Content})
+					contents = append(contents, &content.Text{Text: choice.Delta.Content})
 				}
 			}
 			resp := &agent.RunResponseUpdate{
@@ -261,8 +262,8 @@ func buildMessageParam(msg *agent.Message) []openai.ChatCompletionMessageParamUn
 	switch msg.Role {
 	case agent.RoleSystem:
 		var contents []openai.ChatCompletionContentPartTextParam
-		for _, content := range msg.Contents {
-			if tc, ok := content.(*agent.TextContent); ok {
+		for _, c := range msg.Contents {
+			if tc, ok := c.(*content.Text); ok {
 				contents = append(contents, openai.ChatCompletionContentPartTextParam{
 					Text: tc.Text,
 				})
@@ -272,28 +273,28 @@ func buildMessageParam(msg *agent.Message) []openai.ChatCompletionMessageParamUn
 
 	case agent.RoleUser:
 		var contents []openai.ChatCompletionContentPartUnionParam
-		for _, content := range msg.Contents {
-			switch content := content.(type) {
-			case *agent.TextContent:
-				contents = append(contents, openai.TextContentPart(content.Text))
-			case *agent.URIContent:
-				switch topLevelMediaType(content.MediaType) {
+		for _, c := range msg.Contents {
+			switch c := c.(type) {
+			case *content.Text:
+				contents = append(contents, openai.TextContentPart(c.Text))
+			case *content.URI:
+				switch topLevelMediaType(c.MediaType) {
 				case "image":
 					contents = append(contents, openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
-						URL: content.URI,
+						URL: c.URI,
 					}))
 				default:
 					// For other URI content types, just ignore, they are not supported yet.
 				}
-			case *agent.DataContent:
-				switch topLevelMediaType(content.MediaType) {
+			case *content.Data:
+				switch topLevelMediaType(c.MediaType) {
 				case "image":
 					contents = append(contents, openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
-						URL: content.URI,
+						URL: c.URI,
 					}))
 				case "audio":
 					var format string
-					switch content.MediaType {
+					switch c.MediaType {
 					case "audio/wav":
 						format = "wav"
 					case "audio/mp3", "audio/mpeg":
@@ -303,18 +304,18 @@ func buildMessageParam(msg *agent.Message) []openai.ChatCompletionMessageParamUn
 						format = "mp3"
 					}
 					contents = append(contents, openai.InputAudioContentPart(openai.ChatCompletionContentPartInputAudioInputAudioParam{
-						Data:   string(content.Data),
+						Data:   string(c.Data),
 						Format: format,
 					}))
 				default:
 					contents = append(contents, openai.FileContentPart(openai.ChatCompletionContentPartFileFileParam{
-						FileData: openai.String(string(content.Data)),
-						Filename: openai.String(content.Name),
+						FileData: openai.String(string(c.Data)),
+						Filename: openai.String(c.Name),
 					}))
 				}
-			case *agent.HostedFileContent:
+			case *content.HostedFile:
 				contents = append(contents, openai.FileContentPart(openai.ChatCompletionContentPartFileFileParam{
-					FileID: openai.String(content.FileID),
+					FileID: openai.String(c.FileID),
 				}))
 			}
 		}
@@ -323,28 +324,28 @@ func buildMessageParam(msg *agent.Message) []openai.ChatCompletionMessageParamUn
 	case agent.RoleAssistant:
 		var contents []openai.ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion
 		var toolCalls []openai.ChatCompletionMessageToolCallUnionParam
-		for _, content := range msg.Contents {
-			switch content := content.(type) {
-			case *agent.TextContent:
+		for _, c := range msg.Contents {
+			switch c := c.(type) {
+			case *content.Text:
 				contents = append(contents, openai.ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion{
 					OfText: &openai.ChatCompletionContentPartTextParam{
-						Text: content.Text,
+						Text: c.Text,
 					},
 				})
-			case *agent.FunctionCallContent:
+			case *content.FunctionCall:
 				toolCalls = append(toolCalls, openai.ChatCompletionMessageToolCallUnionParam{
 					OfFunction: &openai.ChatCompletionMessageFunctionToolCallParam{
-						ID: content.CallID,
+						ID: c.CallID,
 						Function: openai.ChatCompletionMessageFunctionToolCallFunctionParam{
-							Name:      content.Name,
-							Arguments: content.Arguments,
+							Name:      c.Name,
+							Arguments: c.Arguments,
 						},
 					},
 				})
-			case *agent.ErrorContent:
+			case *content.Error:
 				contents = append(contents, openai.ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion{
 					OfText: &openai.ChatCompletionContentPartTextParam{
-						Text: content.Message,
+						Text: c.Message,
 					},
 				})
 			}
@@ -359,8 +360,8 @@ func buildMessageParam(msg *agent.Message) []openai.ChatCompletionMessageParamUn
 	case agent.RoleTool:
 		// Each tool result needs its own separate message for OpenAI API compliance
 		var messages []openai.ChatCompletionMessageParamUnion
-		for _, content := range msg.Contents {
-			if funcResult, ok := content.(*agent.FunctionResultContent); ok {
+		for _, c := range msg.Contents {
+			if funcResult, ok := c.(*content.FunctionResult); ok {
 				ret := funcResult.Result
 				if funcResult.Error != nil {
 					ret = funcResult.Error

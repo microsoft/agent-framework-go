@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/microsoft/agent-framework/go/agent"
+	"github.com/microsoft/agent-framework/go/content"
 	"github.com/microsoft/agent-framework/go/openai"
 )
 
@@ -24,8 +25,8 @@ func main() {
 
 	ctx := context.Background()
 	resp, err := ag.Run(ctx, nil, nil, agent.NewMessage(agent.RoleUser,
-		&agent.TextContent{Text: "Describe the content of this image."},
-		&agent.URIContent{
+		&content.Text{Text: "Describe the content of this image."},
+		&content.URI{
 			URI:       "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg",
 			MediaType: "image/jpeg",
 		}))

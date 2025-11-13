@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/microsoft/agent-framework/go/agent"
+	"github.com/microsoft/agent-framework/go/content"
 )
 
 // Client is a configurable stub implementation of Client and streamableClient
@@ -67,7 +68,7 @@ func NewAgent() (*Client, *agent.Agent) {
 			AgentID:    id,
 			ResponseID: "response-1",
 			Messages: []*agent.Message{
-				agent.NewMessage(agent.RoleAssistant, &agent.TextContent{Text: "response"}),
+				agent.NewMessage(agent.RoleAssistant, &content.Text{Text: "response"}),
 			},
 		},
 	}
@@ -114,7 +115,7 @@ func (c *Client) Run(ctx context.Context, thread agent.Thread, opts *agent.RunOp
 		AgentID:    c.ID(),
 		ResponseID: "response",
 		Messages: []*agent.Message{
-			agent.NewMessage(agent.RoleAssistant, &agent.TextContent{Text: "response"}),
+			agent.NewMessage(agent.RoleAssistant, &content.Text{Text: "response"}),
 		},
 	}, nil
 }
@@ -166,7 +167,7 @@ func (c *Client) RunStream(ctx context.Context, thread agent.Thread, opts *agent
 			MessageID:  "message-1",
 			ResponseID: "response-1",
 			Role:       agent.RoleAssistant,
-			Contents:   []agent.Content{&agent.TextContent{Text: "streaming response"}},
+			Contents:   []content.Content{&content.Text{Text: "streaming response"}},
 		}
 		yield(update, nil)
 	}
@@ -259,7 +260,7 @@ func (c *Client) WithResponseSequence(responses ...*agent.RunResponse) *Client {
 
 // WithToolCalls returns a Client configured to return a response with tool calls
 // followed by a final response.
-func (c *Client) WithToolCalls(toolCalls []*agent.FunctionCallContent, finalResponse string) *Client {
+func (c *Client) WithToolCalls(toolCalls []*content.FunctionCall, finalResponse string) *Client {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -268,7 +269,7 @@ func (c *Client) WithToolCalls(toolCalls []*agent.FunctionCallContent, finalResp
 		callCount++
 		if callCount == 1 {
 			// First call returns tool calls
-			contents := make([]agent.Content, len(toolCalls))
+			contents := make([]content.Content, len(toolCalls))
 			for i, tc := range toolCalls {
 				contents[i] = tc
 			}
@@ -285,7 +286,7 @@ func (c *Client) WithToolCalls(toolCalls []*agent.FunctionCallContent, finalResp
 			AgentID:    c.ID(),
 			ResponseID: "final-response",
 			Messages: []*agent.Message{
-				agent.NewMessage(agent.RoleAssistant, &agent.TextContent{Text: finalResponse}),
+				agent.NewMessage(agent.RoleAssistant, &content.Text{Text: finalResponse}),
 			},
 		}, nil
 	}
@@ -294,7 +295,7 @@ func (c *Client) WithToolCalls(toolCalls []*agent.FunctionCallContent, finalResp
 
 // WithStreamingToolCalls returns a Client configured to return streaming updates
 // with tool calls followed by a final response.
-func (c *Client) WithStreamingToolCalls(toolCalls []*agent.FunctionCallContent, finalResponse string) *Client {
+func (c *Client) WithStreamingToolCalls(toolCalls []*content.FunctionCall, finalResponse string) *Client {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -305,7 +306,7 @@ func (c *Client) WithStreamingToolCalls(toolCalls []*agent.FunctionCallContent, 
 		return func(yield func(*agent.RunResponseUpdate, error) bool) {
 			if currentCall == 1 {
 				// First call returns tool calls
-				contents := make([]agent.Content, len(toolCalls))
+				contents := make([]content.Content, len(toolCalls))
 				for i, tc := range toolCalls {
 					contents[i] = tc
 				}
@@ -324,7 +325,7 @@ func (c *Client) WithStreamingToolCalls(toolCalls []*agent.FunctionCallContent, 
 				MessageID:  "final-message",
 				ResponseID: "final-response",
 				Role:       agent.RoleAssistant,
-				Contents:   []agent.Content{&agent.TextContent{Text: finalResponse}},
+				Contents:   []content.Content{&content.Text{Text: finalResponse}},
 			}, nil)
 		}
 	}
