@@ -7,6 +7,7 @@ import (
 	"math/rand"
 
 	"github.com/microsoft/agent-framework/go/agent"
+	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/openai"
 	"github.com/microsoft/agent-framework/go/tool"
 	"github.com/microsoft/agent-framework/go/tool/functool"
@@ -64,7 +65,7 @@ func exampleWithAutomaticThreadCreation() {
 	// First conversation - no thread provided, will be created automatically
 	query1 := "What's the weather like in Seattle?"
 	fmt.Printf("User: %s\n", query1)
-	result1, err := ag.Run(ctx, nil, nil, agent.NewTextMessage(query1))
+	result1, err := ag.Run(ctx, nil, nil, message.NewText(query1))
 	if err != nil {
 		log.Printf("Error: %v\n", err)
 		return
@@ -74,7 +75,7 @@ func exampleWithAutomaticThreadCreation() {
 	// Second conversation - still no thread provided, will create another new thread
 	query2 := "What was the last city I asked about?"
 	fmt.Printf("\nUser: %s\n", query2)
-	result2, err := ag.Run(ctx, nil, nil, agent.NewTextMessage(query2))
+	result2, err := ag.Run(ctx, nil, nil, message.NewText(query2))
 	if err != nil {
 		log.Printf("Error: %v\n", err)
 		return
@@ -105,7 +106,7 @@ func exampleWithThreadPersistence() {
 	// First conversation
 	query1 := "What's the weather like in Tokyo?"
 	fmt.Printf("User: %s\n", query1)
-	result1, err := ag.Run(ctx, thread, nil, agent.NewTextMessage(query1))
+	result1, err := ag.Run(ctx, thread, nil, message.NewText(query1))
 	if err != nil {
 		log.Printf("Error: %v\n", err)
 		return
@@ -115,7 +116,7 @@ func exampleWithThreadPersistence() {
 	// Second conversation using the same thread - maintains context
 	query2 := "How about London?"
 	fmt.Printf("\nUser: %s\n", query2)
-	result2, err := ag.Run(ctx, thread, nil, agent.NewTextMessage(query2))
+	result2, err := ag.Run(ctx, thread, nil, message.NewText(query2))
 	if err != nil {
 		log.Printf("Error: %v\n", err)
 		return
@@ -125,7 +126,7 @@ func exampleWithThreadPersistence() {
 	// Third conversation - agent should remember both previous cities
 	query3 := "Which of the cities I asked about has better weather?"
 	fmt.Printf("\nUser: %s\n", query3)
-	result3, err := ag.Run(ctx, thread, nil, agent.NewTextMessage(query3))
+	result3, err := ag.Run(ctx, thread, nil, message.NewText(query3))
 	if err != nil {
 		log.Printf("Error: %v\n", err)
 		return
@@ -153,7 +154,7 @@ func exampleWithExistingThreadMessages() {
 
 	query1 := "What's the weather in Paris?"
 	fmt.Printf("User: %s\n", query1)
-	result1, err := ag.Run(ctx, thread, nil, agent.NewTextMessage(query1))
+	result1, err := ag.Run(ctx, thread, nil, message.NewText(query1))
 	if err != nil {
 		log.Printf("Error: %v\n", err)
 		return
@@ -173,7 +174,7 @@ func exampleWithExistingThreadMessages() {
 	// Use the same thread object which contains the conversation history
 	query2 := "What was the last city I asked about?"
 	fmt.Printf("User: %s\n", query2)
-	result2, err := newAgent.Run(ctx, thread, nil, agent.NewTextMessage(query2))
+	result2, err := newAgent.Run(ctx, thread, nil, message.NewText(query2))
 	if err != nil {
 		log.Printf("Error: %v\n", err)
 		return

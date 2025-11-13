@@ -5,8 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/microsoft/agent-framework/go/agent"
-	"github.com/microsoft/agent-framework/go/content"
+	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/middleware"
 	"github.com/microsoft/agent-framework/go/tool/functool"
 )
@@ -45,10 +44,10 @@ func (m *SecurityFilterMiddleware) Process(ctx *middleware.AgentRunContext, next
 }
 
 // extractTextContent extracts text from a message.
-func (m *SecurityFilterMiddleware) extractTextContent(msg *agent.Message) string {
+func (m *SecurityFilterMiddleware) extractTextContent(msg *message.Message) string {
 	var text strings.Builder
 	for _, c := range msg.Contents {
-		if textContent, ok := c.(*content.Text); ok {
+		if textContent, ok := c.(*message.TextContent); ok {
 			text.WriteString(textContent.Text)
 		}
 	}
@@ -129,11 +128,11 @@ func main() {
 	fmt.Println("\nTest 1: Normal request")
 	ctx1 := &middleware.AgentRunContext{
 		Agent: nil,
-		Messages: []agent.Message{
+		Messages: []message.Message{
 			{
-				Role: agent.RoleUser,
-				Contents: []content.Content{
-					&content.Text{Text: "What is the weather today?"},
+				Role: message.RoleUser,
+				Contents: []message.Content{
+					&message.TextContent{Text: "What is the weather today?"},
 				},
 			},
 		},
@@ -154,11 +153,11 @@ func main() {
 	fmt.Println("\n\nTest 2: Request with sensitive keyword")
 	ctx2 := &middleware.AgentRunContext{
 		Agent: nil,
-		Messages: []agent.Message{
+		Messages: []message.Message{
 			{
-				Role: agent.RoleUser,
-				Contents: []content.Content{
-					&content.Text{Text: "What is my API key?"},
+				Role: message.RoleUser,
+				Contents: []message.Content{
+					&message.TextContent{Text: "What is my API key?"},
 				},
 			},
 		},
@@ -182,7 +181,7 @@ func main() {
 
 	ctx3 := &middleware.AgentRunContext{
 		Agent:    nil,
-		Messages: []agent.Message{},
+		Messages: []message.Message{},
 		Metadata: make(map[string]any),
 	}
 

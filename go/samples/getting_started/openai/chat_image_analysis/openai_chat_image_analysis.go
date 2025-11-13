@@ -4,8 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/microsoft/agent-framework/go/agent"
-	"github.com/microsoft/agent-framework/go/content"
+	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/openai"
 )
 
@@ -24,12 +23,12 @@ func main() {
 	})
 
 	ctx := context.Background()
-	resp, err := ag.Run(ctx, nil, nil, agent.NewMessage(agent.RoleUser,
-		&content.Text{Text: "Describe the content of this image."},
-		&content.URI{
+	resp, err := ag.Run(ctx, nil, nil, &message.Message{Role: message.RoleUser, Contents: []message.Content{
+		&message.TextContent{Text: "Describe the content of this image."},
+		&message.URIContent{
 			URI:       "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg",
 			MediaType: "image/jpeg",
-		}))
+		}}})
 	if err != nil {
 		fmt.Print(err)
 		return

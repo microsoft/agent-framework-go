@@ -9,7 +9,7 @@ import (
 
 	"github.com/microsoft/agent-framework/go/agent"
 	"github.com/microsoft/agent-framework/go/agent/internal/agenttest"
-	"github.com/microsoft/agent-framework/go/content"
+	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/tool"
 	"github.com/microsoft/agent-framework/go/tool/functool"
 )
@@ -28,7 +28,7 @@ func TestAgentCallTool(t *testing.T) {
 
 	tl := functool.MustNew(funcDef, handler)
 
-	toolCalls := []*content.FunctionCall{
+	toolCalls := []*message.FunctionCallContent{
 		{
 			CallID:    "call-1",
 			Name:      "get_weather",
@@ -39,7 +39,7 @@ func TestAgentCallTool(t *testing.T) {
 
 	resp, err := a.Run(context.Background(), nil, &agent.RunOptions{
 		Tools: []tool.Tool{tl},
-	}, agent.NewTextMessage("What's the weather?"))
+	}, message.NewText("What's the weather?"))
 
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -67,7 +67,7 @@ func TestAgent_ToolInit(t *testing.T) {
 
 	_, err := a.Run(context.Background(), nil, &agent.RunOptions{
 		Tools: []tool.Tool{tl},
-	}, agent.NewTextMessage("Test"))
+	}, message.NewText("Test"))
 
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -93,7 +93,7 @@ func TestAgent_ToolInitError(t *testing.T) {
 
 	_, err := a.Run(context.Background(), nil, &agent.RunOptions{
 		Tools: []tool.Tool{tl},
-	}, agent.NewTextMessage("Test"))
+	}, message.NewText("Test"))
 
 	if err == nil {
 		t.Fatal("expected error from tool init, got nil")
@@ -119,7 +119,7 @@ func TestAgent_ToolLoader(t *testing.T) {
 
 	_, err := a.Run(context.Background(), nil, &agent.RunOptions{
 		Tools: []tool.Tool{loaderTool},
-	}, agent.NewTextMessage("Test"))
+	}, message.NewText("Test"))
 
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -151,7 +151,7 @@ func TestAgent_ToolLoaderError(t *testing.T) {
 
 	_, err := a.Run(context.Background(), nil, &agent.RunOptions{
 		Tools: []tool.Tool{loaderTool},
-	}, agent.NewTextMessage("Test"))
+	}, message.NewText("Test"))
 
 	if err == nil {
 		t.Fatal("expected error from tool loader, got nil")

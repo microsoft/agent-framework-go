@@ -6,8 +6,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/microsoft/agent-framework/go/agent"
-	"github.com/microsoft/agent-framework/go/content"
+	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/middleware"
 	"github.com/microsoft/agent-framework/go/tool/functool"
 )
@@ -93,11 +92,11 @@ func main() {
 	// Create an agent context
 	agentCtx := &middleware.AgentRunContext{
 		Agent: nil, // In real usage, this would be an actual agent
-		Messages: []agent.Message{
+		Messages: []message.Message{
 			{
-				Role: agent.RoleUser,
-				Contents: []content.Content{
-					&content.Text{Text: "What is 2+2?"},
+				Role: message.RoleUser,
+				Contents: []message.Content{
+					&message.TextContent{Text: "What is 2+2?"},
 				},
 			},
 		},

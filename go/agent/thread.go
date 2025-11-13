@@ -5,6 +5,8 @@ package agent
 import (
 	"context"
 	"encoding/json"
+
+	"github.com/microsoft/agent-framework/go/message"
 )
 
 // Thread contains the state of a specific conversation with an agent which may include:
@@ -31,7 +33,7 @@ type Thread interface {
 	json.Marshaler
 
 	// AddMessage adds messages to the thread.
-	AddMessage(ctx context.Context, messages ...*Message) error
+	AddMessage(ctx context.Context, messages ...*message.Message) error
 }
 
 type contextProviderThread interface {
@@ -46,7 +48,7 @@ var _ contextProviderThread = (*InMemoryThread)(nil)
 // InMemoryThread provides an in-memory implementation of [Thread].
 // Messages are stored entirely in local memory, providing fast access and manipulation capabilities.
 type InMemoryThread struct {
-	Messages []*Message
+	Messages []*message.Message
 
 	wrappedContextProvider ContextProvider
 
@@ -63,7 +65,7 @@ func (t *InMemoryThread) MarshalJSON() ([]byte, error) {
 	return json.Marshal(t.Messages)
 }
 
-func (t *InMemoryThread) AddMessage(ctx context.Context, messages ...*Message) error {
+func (t *InMemoryThread) AddMessage(ctx context.Context, messages ...*message.Message) error {
 	t.Messages = append(t.Messages, messages...)
 	return nil
 }
@@ -77,11 +79,11 @@ func (t *InMemoryThread) ContextProvider() ContextProvider {
 }
 
 type inmemoryContextProvider struct {
-	messages        *[]*Message
+	messages        *[]*message.Message
 	contextProvider ContextProvider
 }
 
-func (p *inmemoryContextProvider) Invoking(ctx context.Context, messages []*Message) (*Context, error) {
+func (p *inmemoryContextProvider) Invoking(ctx context.Context, messages []*message.Message) (*Context, error) {
 	var ctxp *Context
 	if p.contextProvider != nil {
 		var err error
@@ -100,7 +102,7 @@ func (p *inmemoryContextProvider) Invoking(ctx context.Context, messages []*Mess
 	return ctxp, nil
 }
 
-func (p *inmemoryContextProvider) Invoked(ctx context.Context, messages []*Message, responses []*Message, err error) error {
+func (p *inmemoryContextProvider) Invoked(ctx context.Context, messages []*message.Message, responses []*message.Message, err error) error {
 	if p.contextProvider != nil {
 		return p.contextProvider.Invoked(ctx, messages, responses, err)
 	}

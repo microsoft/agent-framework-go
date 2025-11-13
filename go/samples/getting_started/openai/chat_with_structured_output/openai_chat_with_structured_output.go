@@ -6,6 +6,7 @@ import (
 
 	"github.com/microsoft/agent-framework/go/agent"
 	"github.com/microsoft/agent-framework/go/format/jsonformat"
+	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/openai"
 )
 
@@ -34,7 +35,7 @@ func main() {
 	fmt.Println("User: " + query)
 
 	var out jsonformat.Value[CityInfo]
-	resp, err := ag.Run(ctx, nil, &agent.RunOptions{Response: &out}, agent.NewTextMessage(query))
+	resp, err := ag.Run(ctx, nil, &agent.RunOptions{Response: &out}, message.NewText(query))
 	if err != nil {
 		fmt.Print(err)
 		return
