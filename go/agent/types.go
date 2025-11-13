@@ -15,19 +15,3 @@ const (
 	// RoleTool represents a message from a tool execution.
 	RoleTool Role = "tool"
 )
-
-// FinishReason represents the reason why the agent stopped generating.
-type FinishReason string
-
-const (
-	// FinishReasonStop indicates the agent stopped naturally.
-	FinishReasonStop FinishReason = "stop"
-	// FinishReasonLength indicates the agent stopped due to length limit.
-	FinishReasonLength FinishReason = "length"
-	// FinishReasonToolCalls indicates the agent stopped to execute tools.
-	FinishReasonToolCalls FinishReason = "tool_calls"
-	// FinishReasonContentFilter indicates content was filtered.
-	FinishReasonContentFilter FinishReason = "content_filter"
-	// FinishReasonError indicates an error occurred.
-	FinishReasonError FinishReason = "error"
-)
