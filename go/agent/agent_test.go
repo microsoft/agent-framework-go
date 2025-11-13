@@ -9,14 +9,14 @@ import (
 
 	"github.com/microsoft/agent-framework/go/agent"
 	"github.com/microsoft/agent-framework/go/agent/internal/agenttest"
-	"github.com/microsoft/agent-framework/go/content"
+	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/tool"
 )
 
 func TestAgent_BasicRun(t *testing.T) {
 	client, a := agenttest.NewAgent()
 
-	resp, err := a.Run(t.Context(), nil, nil, agent.NewTextMessage("Hello"))
+	resp, err := a.Run(t.Context(), nil, nil, message.NewText("Hello"))
 
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -43,13 +43,13 @@ func TestAgent_CustomResponse(t *testing.T) {
 	customResponse := &agent.RunResponse{
 		AgentID:    "custom-agent",
 		ResponseID: "custom-response",
-		Messages: []*agent.Message{
-			agent.NewMessage(agent.RoleAssistant, &content.Text{Text: respTest}),
+		Messages: []*message.Message{
+			{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: respTest}}},
 		},
 	}
 	client.SetResponse(customResponse)
 
-	resp, err := a.Run(t.Context(), nil, nil, agent.NewTextMessage("Test"))
+	resp, err := a.Run(t.Context(), nil, nil, message.NewText("Test"))
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestAgent_ErrorHandling(t *testing.T) {
 	expectedError := errors.New("an error")
 	client.SetError(expectedError)
 
-	_, err := a.Run(t.Context(), nil, nil, agent.NewTextMessage("Test"))
+	_, err := a.Run(t.Context(), nil, nil, message.NewText("Test"))
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -79,17 +79,17 @@ func TestAgent_RunStream(t *testing.T) {
 
 	client.SetStreamUpdates([]*agent.RunResponseUpdate{
 		{
-			Role:     agent.RoleAssistant,
-			Contents: []content.Content{&content.Text{Text: "Hello "}},
+			Role:     message.RoleAssistant,
+			Contents: []message.Content{&message.TextContent{Text: "Hello "}},
 		},
 		{
-			Role:     agent.RoleAssistant,
-			Contents: []content.Content{&content.Text{Text: "world!"}},
+			Role:     message.RoleAssistant,
+			Contents: []message.Content{&message.TextContent{Text: "world!"}},
 		},
 	})
 
 	var receivedUpdates []*agent.RunResponseUpdate
-	for update, err := range a.RunStream(t.Context(), nil, nil, agent.NewTextMessage("Test")) {
+	for update, err := range a.RunStream(t.Context(), nil, nil, message.NewText("Test")) {
 		if err != nil {
 			t.Fatalf("expected no error, got: %v", err)
 		}
@@ -113,15 +113,16 @@ func TestAgent_ResponseSequence(t *testing.T) {
 
 	responses := []*agent.RunResponse{
 		{
-			Messages: []*agent.Message{agent.NewMessage(agent.RoleAssistant, &content.Text{Text: respText1})},
+
+			Messages: []*message.Message{{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: respText1}}}},
 		},
 		{
-			Messages: []*agent.Message{agent.NewMessage(agent.RoleAssistant, &content.Text{Text: respText2})},
+			Messages: []*message.Message{{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: respText2}}}},
 		},
 	}
 	client.WithResponseSequence(responses...)
 
-	resp1, err := a.Run(t.Context(), nil, nil, agent.NewTextMessage("Test 1"))
+	resp1, err := a.Run(t.Context(), nil, nil, message.NewText("Test 1"))
 	if err != nil {
 		t.Fatalf("expected no error on first call, got: %v", err)
 	}
@@ -129,7 +130,7 @@ func TestAgent_ResponseSequence(t *testing.T) {
 		t.Errorf("expected %q, got %q", respText1, resp1.Text())
 	}
 
-	resp2, err := a.Run(t.Context(), nil, nil, agent.NewTextMessage("Test 2"))
+	resp2, err := a.Run(t.Context(), nil, nil, message.NewText("Test 2"))
 	if err != nil {
 		t.Fatalf("expected no error on second call, got: %v", err)
 	}
@@ -143,7 +144,7 @@ func TestAgent_WithToolCalls(t *testing.T) {
 
 	const respText = "The weather in Seattle is sunny"
 
-	toolCalls := []*content.FunctionCall{
+	toolCalls := []*message.FunctionCallContent{
 		{
 			Name:      "get_weather",
 			Arguments: `{"location": "Seattle"}`,
@@ -160,7 +161,7 @@ func TestAgent_WithToolCalls(t *testing.T) {
 
 	resp, err := a.Run(t.Context(), nil, &agent.RunOptions{
 		Tools: []tool.Tool{tl},
-	}, agent.NewTextMessage("What's the weather?"))
+	}, message.NewText("What's the weather?"))
 
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -186,28 +187,28 @@ func TestAgent_CustomFunction(t *testing.T) {
 	const respText2 = "Confirmed!"
 
 	callCount := 0
-	client.RunFunc = func(ctx context.Context, thread agent.Thread, opts *agent.RunOptions, messages ...*agent.Message) (*agent.RunResponse, error) {
+	client.RunFunc = func(ctx context.Context, thread agent.Thread, opts *agent.RunOptions, messages ...*message.Message) (*agent.RunResponse, error) {
 		callCount++
 		if callCount == 1 {
 			return &agent.RunResponse{
 				AgentID:    client.ID(),
 				ResponseID: "resp-1",
-				Messages:   []*agent.Message{agent.NewMessage(agent.RoleAssistant, &content.Text{Text: respText1})},
+				Messages:   []*message.Message{{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: respText1}}}},
 			}, nil
 		}
 		return &agent.RunResponse{
 			AgentID:    client.ID(),
 			ResponseID: "resp-2",
-			Messages:   []*agent.Message{agent.NewMessage(agent.RoleAssistant, &content.Text{Text: respText2})},
+			Messages:   []*message.Message{{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: respText2}}}},
 		}, nil
 	}
 
-	resp1, _ := a.Run(t.Context(), nil, nil, agent.NewTextMessage("Test"))
+	resp1, _ := a.Run(t.Context(), nil, nil, message.NewText("Test"))
 	if resp1.Text() != respText1 {
 		t.Errorf("expected %q, got %q", respText1, resp1.Text())
 	}
 
-	resp2, _ := a.Run(t.Context(), nil, nil, agent.NewTextMessage("Yes"))
+	resp2, _ := a.Run(t.Context(), nil, nil, message.NewText("Yes"))
 	if resp2.Text() != respText2 {
 		t.Errorf("expected %q, got %q", respText2, resp2.Text())
 	}
@@ -229,8 +230,8 @@ func TestAgent_RunText(t *testing.T) {
 	client.SetResponse(&agent.RunResponse{
 		AgentID:    "test-agent",
 		ResponseID: "resp-1",
-		Messages: []*agent.Message{
-			agent.NewMessage(agent.RoleAssistant, &content.Text{Text: responseText}),
+		Messages: []*message.Message{
+			{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: responseText}}},
 		},
 	})
 
@@ -249,7 +250,7 @@ func TestAgent_SystemInstructions(t *testing.T) {
 	const sysInstr = "You are a helpful assistant."
 	a.Config.SystemInstructions = sysInstr
 
-	_, err := a.Run(context.Background(), nil, nil, agent.NewTextMessage("Test"))
+	_, err := a.Run(context.Background(), nil, nil, message.NewText("Test"))
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -263,7 +264,7 @@ func TestAgent_SystemInstructions(t *testing.T) {
 	if len(lastCall.Messages) < 2 {
 		t.Errorf("expected at least 2 messages (system + user), got %d", len(lastCall.Messages))
 	}
-	if lastCall.Messages[0].Role != agent.RoleSystem {
+	if lastCall.Messages[0].Role != message.RoleSystem {
 		t.Errorf("expected first message to be system role, got %s", lastCall.Messages[0].Role)
 	}
 	if lastCall.Messages[0].Text() != sysInstr {
@@ -277,13 +278,13 @@ func TestAgent_WithThread(t *testing.T) {
 	thread := a.NewThread()
 
 	// Add some messages to the thread
-	err := thread.AddMessage(context.Background(), agent.NewTextMessage("First message"))
+	err := thread.AddMessage(context.Background(), message.NewText("First message"))
 	if err != nil {
 		t.Fatalf("expected no error adding to thread, got: %v", err)
 	}
 
 	// Run with the thread
-	resp, err := a.Run(context.Background(), thread, nil, agent.NewTextMessage("Second message"))
+	resp, err := a.Run(context.Background(), thread, nil, message.NewText("Second message"))
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -305,7 +306,7 @@ func TestAgent_RunOptionsTemperature(t *testing.T) {
 	temp := 0.7
 	_, err := a.Run(context.Background(), nil, &agent.RunOptions{
 		Temperature: &temp,
-	}, agent.NewTextMessage("Test"))
+	}, message.NewText("Test"))
 
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -326,7 +327,7 @@ func TestAgent_RunOptionsMaxTokens(t *testing.T) {
 	maxTokens := 100
 	_, err := a.Run(context.Background(), nil, &agent.RunOptions{
 		MaxTokens: &maxTokens,
-	}, agent.NewTextMessage("Test"))
+	}, message.NewText("Test"))
 
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -351,7 +352,7 @@ func TestAgent_RunOptionsAdditionalMetadata(t *testing.T) {
 
 	_, err := a.Run(context.Background(), nil, &agent.RunOptions{
 		AdditionalMetadata: metadata,
-	}, agent.NewTextMessage("Test"))
+	}, message.NewText("Test"))
 
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -374,7 +375,7 @@ func TestAgent_DefaultRunOptions(t *testing.T) {
 		ToolMode:    tool.ToolModeAuto,
 	}
 
-	_, err := a.Run(context.Background(), nil, nil, agent.NewTextMessage("Test"))
+	_, err := a.Run(context.Background(), nil, nil, message.NewText("Test"))
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -402,7 +403,7 @@ func TestAgent_RunOptionsMerge(t *testing.T) {
 
 	_, err := a.Run(context.Background(), nil, &agent.RunOptions{
 		Temperature: &overrideTemp,
-	}, agent.NewTextMessage("Test"))
+	}, message.NewText("Test"))
 
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -427,19 +428,19 @@ func TestAgent_MaxRetries(t *testing.T) {
 
 	callCount := 0
 	// Return tool calls on every call except when we've been called 5 times
-	client.RunFunc = func(ctx context.Context, thread agent.Thread, opts *agent.RunOptions, messages ...*agent.Message) (*agent.RunResponse, error) {
+	client.RunFunc = func(ctx context.Context, thread agent.Thread, opts *agent.RunOptions, messages ...*message.Message) (*agent.RunResponse, error) {
 		callCount++
 		if callCount <= 5 {
 			// Return a tool call
 			return &agent.RunResponse{
 				AgentID:    a.ID(),
 				ResponseID: "resp",
-				Messages: []*agent.Message{
-					agent.NewMessage(agent.RoleAssistant, &content.FunctionCall{
+				Messages: []*message.Message{
+					{Role: message.RoleAssistant, Contents: []message.Content{&message.FunctionCallContent{
 						CallID:    "call-1",
 						Name:      "test_tool",
 						Arguments: `{}`,
-					}),
+					}}},
 				},
 			}, nil
 		}
@@ -447,8 +448,8 @@ func TestAgent_MaxRetries(t *testing.T) {
 		return &agent.RunResponse{
 			AgentID:    a.ID(),
 			ResponseID: "resp-final",
-			Messages: []*agent.Message{
-				agent.NewMessage(agent.RoleAssistant, &content.Text{Text: "Final response"}),
+			Messages: []*message.Message{
+				{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "Final response"}}},
 			},
 		}, nil
 	}
@@ -462,7 +463,7 @@ func TestAgent_MaxRetries(t *testing.T) {
 
 	resp, err := a.Run(context.Background(), nil, &agent.RunOptions{
 		Tools: []tool.Tool{tl},
-	}, agent.NewTextMessage("Test"))
+	}, message.NewText("Test"))
 
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -484,14 +485,14 @@ func TestAgent_RunStreamFallback(t *testing.T) {
 	client.DefaultResponse = &agent.RunResponse{
 		AgentID:    a.ID(),
 		ResponseID: "resp-1",
-		Messages: []*agent.Message{
-			agent.NewMessage(agent.RoleAssistant, &content.Text{Text: "Fallback response"}),
+		Messages: []*message.Message{
+			{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "Fallback response"}}},
 		},
 	}
 
 	// Should use fallback since client doesn't implement streaming
 	var updates []*agent.RunResponseUpdate
-	for update, err := range a.RunStream(context.Background(), nil, nil, agent.NewTextMessage("Test")) {
+	for update, err := range a.RunStream(context.Background(), nil, nil, message.NewText("Test")) {
 		if err != nil {
 			t.Fatalf("expected no error, got: %v", err)
 		}
@@ -513,25 +514,26 @@ func TestAgent_RunStreamFallback(t *testing.T) {
 
 // Test Message methods
 func TestMessage_Text(t *testing.T) {
-	msg := agent.NewMessage(agent.RoleAssistant,
-		&content.Text{Text: "Hello "},
-		&content.Text{Text: "world!"},
-	)
+	msg := &message.Message{Role: message.RoleAssistant,
+		Contents: []message.Content{
+			&message.TextContent{Text: "Hello "},
+			&message.TextContent{Text: "world!"},
+		}}
 
 	if msg.Text() != "Hello " {
 		t.Errorf("expected first text content 'Hello ', got %q", msg.Text())
 	}
 
 	// Test with no text content
-	msgNoText := agent.NewMessage(agent.RoleAssistant,
-		&content.FunctionCall{Name: "test"},
-	)
+	msgNoText := &message.Message{Role: message.RoleAssistant,
+		Contents: []message.Content{&message.FunctionCallContent{Name: "test"}},
+	}
 	if msgNoText.Text() != "" {
 		t.Errorf("expected empty string for message without text, got %q", msgNoText.Text())
 	}
 
 	// Test with nil message
-	var nilMsg *agent.Message
+	var nilMsg *message.Message
 	if nilMsg.Text() != "" {
 		t.Errorf("expected empty string for nil message, got %q", nilMsg.Text())
 	}
@@ -542,9 +544,9 @@ func TestRunResponse_Text(t *testing.T) {
 	resp := &agent.RunResponse{
 		AgentID:    "test",
 		ResponseID: "resp-1",
-		Messages: []*agent.Message{
-			agent.NewMessage(agent.RoleAssistant, &content.Text{Text: "First "}),
-			agent.NewMessage(agent.RoleAssistant, &content.Text{Text: "Second"}),
+		Messages: []*message.Message{
+			{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "First "}}},
+			{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "Second"}}},
 		},
 	}
 
@@ -558,10 +560,10 @@ func TestRunResponseUpdate_Text(t *testing.T) {
 	update := &agent.RunResponseUpdate{
 		AgentID:    "test",
 		ResponseID: "resp-1",
-		Role:       agent.RoleAssistant,
-		Contents: []content.Content{
-			&content.Text{Text: "Part 1 "},
-			&content.Text{Text: "Part 2"},
+		Role:       message.RoleAssistant,
+		Contents: []message.Content{
+			&message.TextContent{Text: "Part 1 "},
+			&message.TextContent{Text: "Part 2"},
 		},
 	}
 
@@ -573,7 +575,7 @@ func TestRunResponseUpdate_Text(t *testing.T) {
 
 // Test FunctionCallContent
 func TestFunctionCallContent_ParseArgs(t *testing.T) {
-	fc := &content.FunctionCall{
+	fc := &message.FunctionCallContent{
 		CallID:    "call-1",
 		Name:      "test_func",
 		Arguments: `{"key": "value", "number": 42}`,
@@ -592,7 +594,7 @@ func TestFunctionCallContent_ParseArgs(t *testing.T) {
 	}
 
 	// Test invalid JSON
-	fcInvalid := &content.FunctionCall{
+	fcInvalid := &message.FunctionCallContent{
 		CallID:    "call-2",
 		Name:      "test_func",
 		Arguments: `invalid json`,
@@ -607,7 +609,7 @@ func TestFunctionCallContent_ParseArgs(t *testing.T) {
 func TestAgent_ToolError(t *testing.T) {
 	client, a := agenttest.NewAgent()
 
-	toolCalls := []*content.FunctionCall{
+	toolCalls := []*message.FunctionCallContent{
 		{
 			CallID:    "call-1",
 			Name:      "error_tool",
@@ -626,7 +628,7 @@ func TestAgent_ToolError(t *testing.T) {
 
 	resp, err := a.Run(context.Background(), nil, &agent.RunOptions{
 		Tools: []tool.Tool{tl},
-	}, agent.NewTextMessage("Test"))
+	}, message.NewText("Test"))
 
 	if err != nil {
 		t.Fatalf("expected no error from agent, got: %v", err)
@@ -642,7 +644,7 @@ func TestAgent_ToolError(t *testing.T) {
 func TestAgent_ToolNotFound(t *testing.T) {
 	client, a := agenttest.NewAgent()
 
-	toolCalls := []*content.FunctionCall{
+	toolCalls := []*message.FunctionCallContent{
 		{
 			CallID:    "call-1",
 			Name:      "nonexistent_tool",
@@ -656,7 +658,7 @@ func TestAgent_ToolNotFound(t *testing.T) {
 	resp, err := a.Run(context.Background(), nil, &agent.RunOptions{
 		Tools:    []tool.Tool{}, // No tools provided
 		ToolMode: tool.ToolModeAuto,
-	}, agent.NewTextMessage("Test"))
+	}, message.NewText("Test"))
 
 	if err != nil {
 		t.Fatalf("expected no error from agent, got: %v", err)
@@ -672,7 +674,7 @@ func TestAgent_ToolNotFound(t *testing.T) {
 func TestAgent_ToolInvalidArgs(t *testing.T) {
 	client, a := agenttest.NewAgent()
 
-	toolCalls := []*content.FunctionCall{
+	toolCalls := []*message.FunctionCallContent{
 		{
 			CallID:    "call-1",
 			Name:      "test_tool",
@@ -690,7 +692,7 @@ func TestAgent_ToolInvalidArgs(t *testing.T) {
 
 	resp, err := a.Run(context.Background(), nil, &agent.RunOptions{
 		Tools: []tool.Tool{tl},
-	}, agent.NewTextMessage("Test"))
+	}, message.NewText("Test"))
 
 	if err != nil {
 		t.Fatalf("expected no error from agent, got: %v", err)
@@ -789,84 +791,5 @@ func TestRunOptions_Merge(t *testing.T) {
 			result := tt.base.Merge(tt.override)
 			tt.check(t, result)
 		})
-	}
-}
-
-// Test TextContent
-func TestTextContent_String(t *testing.T) {
-	tc := &content.Text{Text: "test content"}
-	if tc.String() != "test content" {
-		t.Errorf("expected 'test content', got %q", tc.String())
-	}
-}
-
-// Test TextReasoningContent
-func TestTextReasoningContent_String(t *testing.T) {
-	trc := &content.TextReasoning{Text: "reasoning text"}
-	if trc.String() != "reasoning text" {
-		t.Errorf("expected 'reasoning text', got %q", trc.String())
-	}
-}
-
-// Test UsageDetails
-func TestUsageDetails_Add(t *testing.T) {
-	ud1 := &content.UsageDetails{
-		InputTokenCount:  10,
-		OutputTokenCount: 20,
-		TotalTokenCount:  30,
-	}
-	ud2 := &content.UsageDetails{
-		InputTokenCount:  5,
-		OutputTokenCount: 15,
-		TotalTokenCount:  20,
-	}
-
-	ud1.Add(ud2)
-	if ud1.InputTokenCount != 15 {
-		t.Errorf("expected input tokens 15, got %d", ud1.InputTokenCount)
-	}
-	if ud1.OutputTokenCount != 35 {
-		t.Errorf("expected output tokens 35, got %d", ud1.OutputTokenCount)
-	}
-	if ud1.TotalTokenCount != 50 {
-		t.Errorf("expected total tokens 50, got %d", ud1.TotalTokenCount)
-	}
-}
-
-func TestUsageDetails_AddWithAdditionalCounts(t *testing.T) {
-	ud1 := &content.UsageDetails{
-		InputTokenCount: 10,
-		AdditionalCounts: map[string]int64{
-			"cache_read": 5,
-		},
-	}
-	ud2 := &content.UsageDetails{
-		InputTokenCount: 5,
-		AdditionalCounts: map[string]int64{
-			"cache_read":  3,
-			"cache_write": 2,
-		},
-	}
-
-	ud1.Add(ud2)
-	if ud1.AdditionalCounts["cache_read"] != 8 {
-		t.Errorf("expected cache_read 8, got %d", ud1.AdditionalCounts["cache_read"])
-	}
-	if ud1.AdditionalCounts["cache_write"] != 2 {
-		t.Errorf("expected cache_write 2, got %d", ud1.AdditionalCounts["cache_write"])
-	}
-}
-
-func TestUsageDetails_AddWithNil(t *testing.T) {
-	var ud1 *content.UsageDetails
-	ud2 := &content.UsageDetails{InputTokenCount: 10}
-
-	// Should not panic
-	ud1.Add(ud2)
-
-	ud1 = &content.UsageDetails{InputTokenCount: 10}
-	ud1.Add(nil)
-	if ud1.InputTokenCount != 10 {
-		t.Errorf("expected input tokens to remain 10, got %d", ud1.InputTokenCount)
 	}
 }

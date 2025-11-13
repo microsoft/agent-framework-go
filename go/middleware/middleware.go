@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/microsoft/agent-framework/go/agent"
+	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/tool/functool"
 )
 
@@ -25,7 +26,7 @@ const (
 // AgentRunContext is the context passed to agent middleware.
 type AgentRunContext struct {
 	Agent     *agent.Agent
-	Messages  []agent.Message
+	Messages  []message.Message
 	Metadata  map[string]any
 	Result    any // AgentRunResponse or error result
 	Terminate bool
