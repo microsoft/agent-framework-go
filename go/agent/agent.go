@@ -11,13 +11,9 @@ import (
 	"maps"
 	"slices"
 
+	"github.com/microsoft/agent-framework/go/format"
 	"github.com/microsoft/agent-framework/go/tool"
 )
-
-// Agent represents an AI agent that can execute tasks using a client and tools.
-type Agent struct {
-	Config Config
-}
 
 // Config contains configuration for an [Agent].
 type Config struct {
@@ -34,6 +30,11 @@ type Config struct {
 	Run func(ctx context.Context, thread Thread, opts *RunOptions, messages ...*Message) (*RunResponse, error)
 
 	RunStream func(ctx context.Context, thread Thread, opts *RunOptions, messages ...*Message) iter.Seq2[*RunResponseUpdate, error]
+}
+
+// Agent represents an AI agent that can execute tasks using a client and tools.
+type Agent struct {
+	Config Config
 }
 
 func (a *Agent) ID() string {
@@ -225,6 +226,11 @@ func (a *Agent) runStreamFallback(ctx context.Context, thread Thread, options *R
 
 // RunOptions contains options for agent execution.
 type RunOptions struct {
+	// ResponseFormat represents the desired response format for agent execution.
+	// It is up to the client implementation if or how to honor the request.
+	// If the client implementation doesn't recognize the specific kind, it can be ignored.
+	ResponseFormat format.Format
+
 	// Tools to make available to the agent.
 	Tools []tool.Tool
 
