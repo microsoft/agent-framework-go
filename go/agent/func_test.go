@@ -23,10 +23,6 @@ func TestAgentCallTool(t *testing.T) {
 	funcDef := &functool.Func{
 		Name:        "get_weather",
 		Description: "Get weather for a location",
-		InputSchema: map[string]any{
-			"type":       "object",
-			"properties": map[string]any{"location": map[string]any{"type": "string"}},
-		},
 	}
 
 	tl := functool.MustNew(funcDef, handler)

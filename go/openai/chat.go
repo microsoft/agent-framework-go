@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework/go/agent"
+	"github.com/microsoft/agent-framework/go/format/jsonformat"
 	"github.com/microsoft/agent-framework/go/tool"
 	"github.com/microsoft/agent-framework/go/tool/websearchtool"
 	"github.com/openai/openai-go/v3"
@@ -175,6 +176,29 @@ func (a *client) buildCompletionParams(options *agent.RunOptions, messages ...*a
 		}
 		if options.MaxTokens != nil {
 			params.MaxTokens = openai.Int(int64(*options.MaxTokens))
+		}
+		if options.ResponseFormat != nil {
+			switch options.ResponseFormat.Kind() {
+			case "json":
+				if schema, ok := options.ResponseFormat.(*jsonformat.Format); ok {
+					params.ResponseFormat.OfJSONSchema = &shared.ResponseFormatJSONSchemaParam{
+						JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
+							Name:   schema.Name,
+							Schema: schema.Schema,
+						},
+					}
+					if schema.Description != "" {
+						params.ResponseFormat.OfJSONSchema.JSONSchema.Description = openai.String(schema.Description)
+					}
+					if schema.Strict {
+						params.ResponseFormat.OfJSONSchema.JSONSchema.Strict = openai.Bool(true)
+					}
+				} else {
+					// Fallback to generic JSON object format
+					param := shared.NewResponseFormatJSONObjectParam()
+					params.ResponseFormat.OfJSONObject = &param
+				}
+			}
 		}
 		for _, tl := range options.Tools {
 			switch tl := tl.(type) {
