@@ -2,16 +2,18 @@
 
 package agent
 
+import "github.com/microsoft/agent-framework/go/content"
+
 // Message represents a message in a conversation.
 type Message struct {
-	Contents  []Content
+	Contents  []content.Content
 	Role      Role
 	Name      string
 	MessageID string
 }
 
 // NewMessage creates a new [Message] with the given role and contents.
-func NewMessage(role Role, contents ...Content) *Message {
+func NewMessage(role Role, contents ...content.Content) *Message {
 	return &Message{
 		Role:     role,
 		Contents: contents,
@@ -22,7 +24,7 @@ func NewMessage(role Role, contents ...Content) *Message {
 func NewTextMessage(text string) *Message {
 	return &Message{
 		Role:     RoleUser,
-		Contents: []Content{&TextContent{Text: text}},
+		Contents: []content.Content{&content.Text{Text: text}},
 	}
 }
 
@@ -31,8 +33,8 @@ func (m *Message) Text() string {
 	if m == nil {
 		return ""
 	}
-	for _, content := range m.Contents {
-		if textContent, ok := content.(*TextContent); ok {
+	for _, c := range m.Contents {
+		if textContent, ok := c.(*content.Text); ok {
 			return textContent.Text
 		}
 	}
