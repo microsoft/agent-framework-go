@@ -90,10 +90,13 @@ func New[In, Out any](fnp *Func, h HandlerFor[In, Out]) (*Tool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("input schema: %w", err)
 	}
-	t.Func.inputFormat, _ = in.Format()
+	t.Func.inputFormat, err = in.FormatJSON()
+	if err != nil {
+		return nil, fmt.Errorf("input schema: %w", err)
+	}
 
 	var out jsonformat.Value[Out]
-	t.Func.outputFormat, err = out.Format()
+	t.Func.outputFormat, err = out.FormatJSON()
 	if err != nil {
 		return nil, fmt.Errorf("output schema: %w", err)
 	}

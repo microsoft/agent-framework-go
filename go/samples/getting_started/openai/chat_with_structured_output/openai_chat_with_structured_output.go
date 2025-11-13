@@ -34,17 +34,15 @@ func main() {
 	fmt.Println("User: " + query)
 
 	var out jsonformat.Value[Output]
-	resp, err := ag.Run(ctx, nil, &agent.RunOptions{ResponseFormat: out.MustFormat()}, agent.NewTextMessage(query))
+	resp, err := ag.Run(ctx, nil, &agent.RunOptions{Response: &out}, agent.NewTextMessage(query))
 	if err != nil {
 		fmt.Print(err)
 		return
 	}
 
-	if err := out.UnmarshalJSON([]byte(resp.Text())); err != nil {
-		fmt.Print(err)
-		return
-	}
+	fmt.Printf("Agent raw response: %s\n", resp.Text())
 
 	fmt.Printf("City: %v\n", out.Unwrap().City)
 	fmt.Printf("Population: %v\n", out.Unwrap().Population)
+	fmt.Printf("Area: %v\n", out.Unwrap().Area)
 }

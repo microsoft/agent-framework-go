@@ -3,12 +3,17 @@
 package jsonformat
 
 import (
+	"encoding"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
-	"sync"
+
+	"github.com/microsoft/agent-framework/go/format"
 )
+
+var _ encoding.BinaryUnmarshaler = (*Value[any])(nil)
+var _ format.FormatProvider = (*Value[any])(nil)
 
 // A Value represents a value of type T along with its JSON Schema.
 // It can marshal and unmarshal itself to and from JSON, validating against the schema.
@@ -17,9 +22,8 @@ type Value[T any] struct {
 	value  T
 	format *Format
 
-	opts     *Options
-	initOnce sync.Once
-	initErr  error
+	opts    *Options
+	initErr error
 }
 
 // MustNewValue calls [NewValue] and panics on error.
@@ -43,14 +47,18 @@ func NewValue[T any](v T, opts *Options) (*Value[T], error) {
 }
 
 func (v *Value[T]) init(opts *Options) error {
-	v.initOnce.Do(func() {
+	if v.format == nil && v.initErr == nil {
 		if reflect.TypeFor[T]() == reflect.TypeFor[any]() && any(v.value) != nil {
 			v.initErr = errors.New("cannot create Value[any] with non-nil value")
-			return
+			return v.initErr
 		}
 		v.format, v.initErr = For[T](opts)
-	})
+	}
 	return v.initErr
+}
+
+func (v *Value[T]) UnmarshalBinary(data []byte) error {
+	return v.UnmarshalJSON(data)
 }
 
 func (v *Value[T]) UnmarshalJSON(data []byte) error {
@@ -114,7 +122,12 @@ func (v *Value[T]) Unwrap() T {
 }
 
 // Format returns the [Format] associated with this value.
-func (v *Value[T]) Format() (*Format, error) {
+func (v *Value[T]) Format() (format.Format, error) {
+	return v.FormatJSON()
+}
+
+// FormatJSON returns the [Format] associated with this value.
+func (v *Value[T]) FormatJSON() (*Format, error) {
 	if err := v.init(v.opts); err != nil {
 		return nil, err
 	}
@@ -122,7 +135,7 @@ func (v *Value[T]) Format() (*Format, error) {
 }
 
 // MustFormat calls [Format] and panics on error.
-func (v *Value[T]) MustFormat() *Format {
+func (v *Value[T]) MustFormat() format.Format {
 	f, err := v.Format()
 	if err != nil {
 		panic(err)

@@ -43,7 +43,7 @@ func TestNewValue(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		format, err := value.Format()
+		format, err := value.FormatJSON()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -128,7 +128,7 @@ func TestValueWrapUnwrap(t *testing.T) {
 
 func TestValueFormat(t *testing.T) {
 	value := jsonformat.MustNewValue(SimpleStruct{}, nil)
-	format, err := value.Format()
+	format, err := value.FormatJSON()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +318,10 @@ func TestValueWithOptions(t *testing.T) {
 		}
 		value := jsonformat.MustNewValue(SimpleStruct{Name: "Test"}, opts)
 
-		format := value.MustFormat()
+		format, err := value.FormatJSON()
+		if err != nil {
+			t.Fatal(err)
+		}
 		if format.Name != "CustomStruct" {
 			t.Fatalf("expected: %v, got: %v", "CustomStruct", format.Name)
 		}
@@ -333,7 +336,10 @@ func TestValueWithOptions(t *testing.T) {
 		}
 		value := jsonformat.MustNewValue(SimpleStruct{Name: "Test"}, opts)
 
-		format := value.MustFormat()
+		format, err := value.FormatJSON()
+		if err != nil {
+			t.Fatal(err)
+		}
 		if !format.Strict {
 			t.Fatal("expected Strict to be true")
 		}

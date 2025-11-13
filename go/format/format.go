@@ -9,6 +9,11 @@ type Format interface {
 	Kind() string
 }
 
+// FormatProvider is an interface for types that can provide a Format.
+type FormatProvider interface {
+	Format() (Format, error)
+}
+
 type simple struct {
 	kind string
 }
