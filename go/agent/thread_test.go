@@ -8,12 +8,13 @@ import (
 	"testing"
 
 	"github.com/microsoft/agent-framework/go/agent"
+	"github.com/microsoft/agent-framework/go/message"
 )
 
 // Test JSON marshaling of InMemoryThread
 func TestInMemoryThread_MarshalJSON(t *testing.T) {
 	thread := &agent.InMemoryThread{}
-	thread.AddMessage(context.Background(), agent.NewTextMessage("test"))
+	thread.AddMessage(context.Background(), message.NewText("test"))
 
 	data, err := json.Marshal(thread)
 	if err != nil {

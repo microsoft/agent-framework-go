@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/microsoft/agent-framework/go/agent"
+	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/openai"
 	"github.com/microsoft/agent-framework/go/tool"
 	"github.com/microsoft/agent-framework/go/tool/functool"
@@ -100,7 +101,7 @@ func streamingExample(ag *agent.Agent, query string) {
 	fmt.Printf("\n=== Streaming Response Example ===\n")
 	fmt.Printf("User: %s\n", query)
 	fmt.Print("Assistant: ")
-	stream := ag.RunStream(ctx, nil, nil, agent.NewTextMessage(query))
+	stream := ag.RunStream(ctx, nil, nil, message.NewText(query))
 	for update, err := range stream {
 		if err != nil {
 			fmt.Print(err)
