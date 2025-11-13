@@ -5,19 +5,17 @@ package agent
 import (
 	"cmp"
 	"context"
+	"encoding"
 	"encoding/json"
 	"fmt"
 	"iter"
 	"maps"
 	"slices"
+	"strings"
 
+	"github.com/microsoft/agent-framework/go/format"
 	"github.com/microsoft/agent-framework/go/tool"
 )
-
-// Agent represents an AI agent that can execute tasks using a client and tools.
-type Agent struct {
-	Config Config
-}
 
 // Config contains configuration for an [Agent].
 type Config struct {
@@ -34,6 +32,11 @@ type Config struct {
 	Run func(ctx context.Context, thread Thread, opts *RunOptions, messages ...*Message) (*RunResponse, error)
 
 	RunStream func(ctx context.Context, thread Thread, opts *RunOptions, messages ...*Message) iter.Seq2[*RunResponseUpdate, error]
+}
+
+// Agent represents an AI agent that can execute tasks using a client and tools.
+type Agent struct {
+	Config Config
 }
 
 func (a *Agent) ID() string {
@@ -89,22 +92,28 @@ func (a *Agent) Run(ctx context.Context, thread Thread, opts *RunOptions, messag
 		message := finalResponse.Messages[0]
 		threadMessages = append(threadMessages, message)
 	}
+	outMessages := threadMessages[startLength:]
 	if thread != nil {
-		if err := thread.AddMessage(ctx, threadMessages[startLength:]...); err != nil {
+		if err := thread.AddMessage(ctx, outMessages...); err != nil {
 			return nil, err
 		}
 	}
 	if ctxprovider := a.contextProvider(thread); ctxprovider != nil {
-		if err := ctxprovider.Invoked(ctx, messages, threadMessages[startLength:], nil); err != nil {
+		if err := ctxprovider.Invoked(ctx, messages, outMessages, nil); err != nil {
 			return nil, err
 		}
 	}
-
-	return &RunResponse{
+	response := &RunResponse{
 		Messages:   threadMessages[startLength:],
 		ResponseID: finalResponse.ResponseID,
 		AgentID:    id,
-	}, nil
+	}
+	if opts.Response != nil {
+		if err := opts.Response.UnmarshalBinary([]byte(response.Text())); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+		}
+	}
+	return response, nil
 }
 
 func (a *Agent) RunText(ctx context.Context, msg string) (*RunResponse, error) {
@@ -197,6 +206,20 @@ func (a *Agent) RunStream(ctx context.Context, thread Thread, opts *RunOptions, 
 				return
 			}
 		}
+		if opts.Response != nil {
+			var finalText strings.Builder
+			for _, msg := range threadMessages[startLength:] {
+				for _, content := range msg.Contents {
+					if textContent, ok := content.(*TextContent); ok {
+						finalText.WriteString(textContent.Text)
+					}
+				}
+			}
+			if err := opts.Response.UnmarshalBinary([]byte(finalText.String())); err != nil {
+				yield(nil, fmt.Errorf("failed to unmarshal response: %w", err))
+				return
+			}
+		}
 	}
 }
 
@@ -225,6 +248,18 @@ func (a *Agent) runStreamFallback(ctx context.Context, thread Thread, options *R
 
 // RunOptions contains options for agent execution.
 type RunOptions struct {
+	// Response is an object to unmarshal the response into.
+	// For streaming responses, this will be called once with the full response.
+	// Ignored if nil.
+	Response encoding.BinaryUnmarshaler
+
+	// ResponseFormat represents the desired response format for agent execution.
+	// It is up to the client implementation if or how to honor the request.
+	// If the client implementation doesn't recognize the specific kind, it can be ignored.
+	// If nil and Response implemented [format.FormatProvider], it is obtained from there.
+	// Otherwise, the client default is used.
+	ResponseFormat format.Format
+
 	// Tools to make available to the agent.
 	Tools []tool.Tool
 
@@ -266,6 +301,8 @@ func (o *RunOptions) Merge(other *RunOptions) *RunOptions {
 	o.Temperature = cmp.Or(other.Temperature, o.Temperature)
 	o.TopP = cmp.Or(other.TopP, o.TopP)
 	o.MaxTokens = cmp.Or(other.MaxTokens, o.MaxTokens)
+	o.ResponseFormat = cmp.Or(other.ResponseFormat, o.ResponseFormat)
+	o.Response = cmp.Or(other.Response, o.Response)
 	if other.AdditionalMetadata != nil {
 		if o.AdditionalMetadata == nil {
 			o.AdditionalMetadata = make(map[string]any)
@@ -307,13 +344,13 @@ type RunResponseUpdate struct {
 
 // Text returns the concatenated text contents of the response messages.
 func (r *RunResponseUpdate) Text() string {
-	var text string
+	var sb strings.Builder
 	for _, content := range r.Contents {
 		if textContent, ok := content.(*TextContent); ok {
-			text += textContent.Text
+			sb.WriteString(textContent.Text)
 		}
 	}
-	return text
+	return sb.String()
 }
 
 func (a *Agent) contextProvider(thread Thread) ContextProvider {
@@ -330,6 +367,16 @@ func (a *Agent) contextProvider(thread Thread) ContextProvider {
 
 func (a *Agent) prepareRun(ctx context.Context, thread Thread, opts *RunOptions, messages []*Message) (*RunOptions, []*Message, error) {
 	opts = a.Config.Opts.Merge(opts)
+	if opts.ResponseFormat == nil && opts.Response != nil {
+		// Try to get the format from the response object.
+		if rf, ok := opts.Response.(format.FormatProvider); ok {
+			var err error
+			opts.ResponseFormat, err = rf.Format()
+			if err != nil {
+				return nil, nil, err
+			}
+		}
+	}
 	messages = slices.Clone(messages)
 	if a.Config.SystemInstructions != "" {
 		messages = append([]*Message{NewMessage(RoleSystem, &TextContent{Text: a.Config.SystemInstructions})}, messages...)
