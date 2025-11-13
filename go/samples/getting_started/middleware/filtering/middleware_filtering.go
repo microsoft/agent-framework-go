@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/microsoft/agent-framework/go/agent"
+	"github.com/microsoft/agent-framework/go/content"
 	"github.com/microsoft/agent-framework/go/middleware"
 	"github.com/microsoft/agent-framework/go/tool/functool"
 )
@@ -46,8 +47,8 @@ func (m *SecurityFilterMiddleware) Process(ctx *middleware.AgentRunContext, next
 // extractTextContent extracts text from a message.
 func (m *SecurityFilterMiddleware) extractTextContent(msg *agent.Message) string {
 	var text strings.Builder
-	for _, content := range msg.Contents {
-		if textContent, ok := content.(*agent.TextContent); ok {
+	for _, c := range msg.Contents {
+		if textContent, ok := c.(*content.Text); ok {
 			text.WriteString(textContent.Text)
 		}
 	}
@@ -131,8 +132,8 @@ func main() {
 		Messages: []agent.Message{
 			{
 				Role: agent.RoleUser,
-				Contents: []agent.Content{
-					&agent.TextContent{Text: "What is the weather today?"},
+				Contents: []content.Content{
+					&content.Text{Text: "What is the weather today?"},
 				},
 			},
 		},
@@ -156,8 +157,8 @@ func main() {
 		Messages: []agent.Message{
 			{
 				Role: agent.RoleUser,
-				Contents: []agent.Content{
-					&agent.TextContent{Text: "What is my API key?"},
+				Contents: []content.Content{
+					&content.Text{Text: "What is my API key?"},
 				},
 			},
 		},

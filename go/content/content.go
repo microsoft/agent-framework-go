@@ -1,8 +1,13 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package agent
+package content
 
 import "encoding/json"
+
+// Content represents message content.
+type Content interface {
+	isContent()
+}
 
 // AnnotatedRegion describes the portion of an associated [Content]
 // to which an annotation applies.
@@ -40,13 +45,8 @@ type CitationAnnotation struct {
 
 func (t *CitationAnnotation) isAnnotation() {}
 
-// Content represents message content.
-type Content interface {
-	isContent()
-}
-
-// TextContent represents plain text content.
-type TextContent struct {
+// Text represents plain text content.
+type Text struct {
 	AdditionalProperties map[string]any
 	Annotations          []Annotation
 	RawRepresentation    any
@@ -54,16 +54,16 @@ type TextContent struct {
 	Text string
 }
 
-func (t *TextContent) isContent() {}
+func (t *Text) isContent() {}
 
 // String returns the text of the content.
-func (t *TextContent) String() string { return t.Text }
+func (t *Text) String() string { return t.Text }
 
-// DataContent represents binary content with an associated media type.
+// Data represents binary content with an associated media type.
 //
 // The content represents in-memory data. For references to data at a remote URI,
-// use [URIContent] instead.
-type DataContent struct {
+// use [URI] instead.
+type Data struct {
 	AdditionalProperties map[string]any
 	Annotations          []Annotation
 	RawRepresentation    any
@@ -74,13 +74,13 @@ type DataContent struct {
 	URI       string
 }
 
-func (t *DataContent) isContent() {}
+func (t *Data) isContent() {}
 
-// ErrorContent represents an error.
+// Error represents an error.
 //
-// Typically, ErrorContent is used for non-fatal errors, where something went wrong as part
+// Typically, Error is used for non-fatal errors, where something went wrong as part
 // of the operation but the operation was still able to continue.
-type ErrorContent struct {
+type Error struct {
 	AdditionalProperties map[string]any
 	Annotations          []Annotation
 	RawRepresentation    any
@@ -90,10 +90,10 @@ type ErrorContent struct {
 	Message   string
 }
 
-func (t *ErrorContent) isContent() {}
+func (t *Error) isContent() {}
 
-// FunctionCallContent represents a function call request.
-type FunctionCallContent struct {
+// FunctionCall represents a function call request.
+type FunctionCall struct {
 	AdditionalProperties map[string]any
 	Annotations          []Annotation
 	RawRepresentation    any
@@ -104,7 +104,7 @@ type FunctionCallContent struct {
 	Name      string
 }
 
-func (t *FunctionCallContent) ParseArgs() (map[string]any, error) {
+func (t *FunctionCall) ParseArgs() (map[string]any, error) {
 	var args map[string]any
 	if err := json.Unmarshal([]byte(t.Arguments), &args); err != nil {
 		return nil, err
@@ -112,10 +112,10 @@ func (t *FunctionCallContent) ParseArgs() (map[string]any, error) {
 	return args, nil
 }
 
-func (t *FunctionCallContent) isContent() {}
+func (t *FunctionCall) isContent() {}
 
-// FunctionResultContent represents the result of a function call.
-type FunctionResultContent struct {
+// FunctionResult represents the result of a function call.
+type FunctionResult struct {
 	AdditionalProperties map[string]any
 	Annotations          []Annotation
 	RawRepresentation    any
@@ -125,14 +125,14 @@ type FunctionResultContent struct {
 	Result any
 }
 
-func (t *FunctionResultContent) isContent() {}
+func (t *FunctionResult) isContent() {}
 
-// HostedFileContent represents a file that is hosted by the AI service.
+// HostedFile represents a file that is hosted by the AI service.
 //
-// Unlike [DataContent] which contains the data for a file or blob, this class represents a file
+// Unlike [Data] which contains the data for a file or blob, this class represents a file
 // that is hosted by the AI service and referenced by an identifier.
 // Such identifiers are specific to the provider.
-type HostedFileContent struct {
+type HostedFile struct {
 	AdditionalProperties map[string]any
 	Annotations          []Annotation
 	RawRepresentation    any
@@ -140,13 +140,13 @@ type HostedFileContent struct {
 	FileID string
 }
 
-func (t *HostedFileContent) isContent() {}
+func (t *HostedFile) isContent() {}
 
-// HostedVectorStoreContent represents a vector store that is hosted by the AI service.
+// HostedVectorStore represents a vector store that is hosted by the AI service.
 //
-// Unlike [HostedFileContent] which represents a specific file that is hosted by the AI service,
-// HostedVectorStoreContent represents a vector store that can contain multiple files, indexed for searching.
-type HostedVectorStoreContent struct {
+// Unlike [HostedFile] which represents a specific file that is hosted by the AI service,
+// HostedVectorStore represents a vector store that can contain multiple files, indexed for searching.
+type HostedVectorStore struct {
 	AdditionalProperties map[string]any
 	Annotations          []Annotation
 	RawRepresentation    any
@@ -154,14 +154,14 @@ type HostedVectorStoreContent struct {
 	VectorStoreID string
 }
 
-func (t *HostedVectorStoreContent) isContent() {}
+func (t *HostedVectorStore) isContent() {}
 
-// TextReasoningContent represents text reasoning content in a chat.
+// TextReasoning represents text reasoning content in a chat.
 //
-// TextReasoningContent is distinct from [TextContent]. TextReasoningContent represents "thinking" or "reasoning"
+// TextReasoning is distinct from [Text]. TextReasoning represents "thinking" or "reasoning"
 // performed by the model and is distinct from the actual output text from the model,
-// which is represented by [TextContent].
-type TextReasoningContent struct {
+// which is represented by [Text].
+type TextReasoning struct {
 	AdditionalProperties map[string]any
 	Annotations          []Annotation
 	RawRepresentation    any
@@ -170,13 +170,13 @@ type TextReasoningContent struct {
 	Text          string
 }
 
-func (t *TextReasoningContent) isContent() {}
+func (t *TextReasoning) isContent() {}
 
 // String returns the text of the reasoning content.
-func (t *TextReasoningContent) String() string { return t.Text }
+func (t *TextReasoning) String() string { return t.Text }
 
-// URIContent represents a URL, typically to hosted content such as an image, audio, or video.
-type URIContent struct {
+// URI represents a URL, typically to hosted content such as an image, audio, or video.
+type URI struct {
 	AdditionalProperties map[string]any
 	Annotations          []Annotation
 	RawRepresentation    any
@@ -185,10 +185,37 @@ type URIContent struct {
 	URI       string
 }
 
-func (t *URIContent) isContent() {}
+func (t *URI) isContent() {}
 
-// UsageContent represents usage information associated with a chat request and response.
-type UsageContent struct {
+// UsageDetails provides usage details about a request/response.
+type UsageDetails struct {
+	AdditionalCounts map[string]int64
+	InputTokenCount  int64
+	OutputTokenCount int64
+	TotalTokenCount  int64
+}
+
+func (u *UsageDetails) Add(other *UsageDetails) {
+	if u == nil || other == nil {
+		return
+	}
+	u.InputTokenCount += other.InputTokenCount
+	u.OutputTokenCount += other.OutputTokenCount
+	u.TotalTokenCount += other.TotalTokenCount
+
+	// Merge additional counts
+	if other.AdditionalCounts != nil {
+		if u.AdditionalCounts == nil {
+			u.AdditionalCounts = make(map[string]int64)
+		}
+		for k, v := range other.AdditionalCounts {
+			u.AdditionalCounts[k] += v
+		}
+	}
+}
+
+// Usage represents usage information associated with a chat request and response.
+type Usage struct {
 	AdditionalProperties map[string]any
 	Annotations          []Annotation
 	RawRepresentation    any
@@ -196,4 +223,4 @@ type UsageContent struct {
 	Details UsageDetails
 }
 
-func (t *UsageContent) isContent() {}
+func (t *Usage) isContent() {}

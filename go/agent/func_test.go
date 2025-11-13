@@ -9,6 +9,7 @@ import (
 
 	"github.com/microsoft/agent-framework/go/agent"
 	"github.com/microsoft/agent-framework/go/agent/internal/agenttest"
+	"github.com/microsoft/agent-framework/go/content"
 	"github.com/microsoft/agent-framework/go/tool"
 	"github.com/microsoft/agent-framework/go/tool/functool"
 )
@@ -27,7 +28,7 @@ func TestAgentCallTool(t *testing.T) {
 
 	tl := functool.MustNew(funcDef, handler)
 
-	toolCalls := []*agent.FunctionCallContent{
+	toolCalls := []*content.FunctionCall{
 		{
 			CallID:    "call-1",
 			Name:      "get_weather",

@@ -9,6 +9,7 @@ import (
 
 	"github.com/microsoft/agent-framework/go/agent"
 	"github.com/microsoft/agent-framework/go/agent/internal/agenttest"
+	"github.com/microsoft/agent-framework/go/content"
 	"github.com/microsoft/agent-framework/go/tool"
 )
 
@@ -43,7 +44,7 @@ func TestAgent_CustomResponse(t *testing.T) {
 		AgentID:    "custom-agent",
 		ResponseID: "custom-response",
 		Messages: []*agent.Message{
-			agent.NewMessage(agent.RoleAssistant, &agent.TextContent{Text: respTest}),
+			agent.NewMessage(agent.RoleAssistant, &content.Text{Text: respTest}),
 		},
 	}
 	client.SetResponse(customResponse)
@@ -79,11 +80,11 @@ func TestAgent_RunStream(t *testing.T) {
 	client.SetStreamUpdates([]*agent.RunResponseUpdate{
 		{
 			Role:     agent.RoleAssistant,
-			Contents: []agent.Content{&agent.TextContent{Text: "Hello "}},
+			Contents: []content.Content{&content.Text{Text: "Hello "}},
 		},
 		{
 			Role:     agent.RoleAssistant,
-			Contents: []agent.Content{&agent.TextContent{Text: "world!"}},
+			Contents: []content.Content{&content.Text{Text: "world!"}},
 		},
 	})
 
@@ -112,10 +113,10 @@ func TestAgent_ResponseSequence(t *testing.T) {
 
 	responses := []*agent.RunResponse{
 		{
-			Messages: []*agent.Message{agent.NewMessage(agent.RoleAssistant, &agent.TextContent{Text: respText1})},
+			Messages: []*agent.Message{agent.NewMessage(agent.RoleAssistant, &content.Text{Text: respText1})},
 		},
 		{
-			Messages: []*agent.Message{agent.NewMessage(agent.RoleAssistant, &agent.TextContent{Text: respText2})},
+			Messages: []*agent.Message{agent.NewMessage(agent.RoleAssistant, &content.Text{Text: respText2})},
 		},
 	}
 	client.WithResponseSequence(responses...)
@@ -142,7 +143,7 @@ func TestAgent_WithToolCalls(t *testing.T) {
 
 	const respText = "The weather in Seattle is sunny"
 
-	toolCalls := []*agent.FunctionCallContent{
+	toolCalls := []*content.FunctionCall{
 		{
 			Name:      "get_weather",
 			Arguments: `{"location": "Seattle"}`,
@@ -191,13 +192,13 @@ func TestAgent_CustomFunction(t *testing.T) {
 			return &agent.RunResponse{
 				AgentID:    client.ID(),
 				ResponseID: "resp-1",
-				Messages:   []*agent.Message{agent.NewMessage(agent.RoleAssistant, &agent.TextContent{Text: respText1})},
+				Messages:   []*agent.Message{agent.NewMessage(agent.RoleAssistant, &content.Text{Text: respText1})},
 			}, nil
 		}
 		return &agent.RunResponse{
 			AgentID:    client.ID(),
 			ResponseID: "resp-2",
-			Messages:   []*agent.Message{agent.NewMessage(agent.RoleAssistant, &agent.TextContent{Text: respText2})},
+			Messages:   []*agent.Message{agent.NewMessage(agent.RoleAssistant, &content.Text{Text: respText2})},
 		}, nil
 	}
 
@@ -229,7 +230,7 @@ func TestAgent_RunText(t *testing.T) {
 		AgentID:    "test-agent",
 		ResponseID: "resp-1",
 		Messages: []*agent.Message{
-			agent.NewMessage(agent.RoleAssistant, &agent.TextContent{Text: responseText}),
+			agent.NewMessage(agent.RoleAssistant, &content.Text{Text: responseText}),
 		},
 	})
 
@@ -434,7 +435,7 @@ func TestAgent_MaxRetries(t *testing.T) {
 				AgentID:    a.ID(),
 				ResponseID: "resp",
 				Messages: []*agent.Message{
-					agent.NewMessage(agent.RoleAssistant, &agent.FunctionCallContent{
+					agent.NewMessage(agent.RoleAssistant, &content.FunctionCall{
 						CallID:    "call-1",
 						Name:      "test_tool",
 						Arguments: `{}`,
@@ -447,7 +448,7 @@ func TestAgent_MaxRetries(t *testing.T) {
 			AgentID:    a.ID(),
 			ResponseID: "resp-final",
 			Messages: []*agent.Message{
-				agent.NewMessage(agent.RoleAssistant, &agent.TextContent{Text: "Final response"}),
+				agent.NewMessage(agent.RoleAssistant, &content.Text{Text: "Final response"}),
 			},
 		}, nil
 	}
@@ -484,7 +485,7 @@ func TestAgent_RunStreamFallback(t *testing.T) {
 		AgentID:    a.ID(),
 		ResponseID: "resp-1",
 		Messages: []*agent.Message{
-			agent.NewMessage(agent.RoleAssistant, &agent.TextContent{Text: "Fallback response"}),
+			agent.NewMessage(agent.RoleAssistant, &content.Text{Text: "Fallback response"}),
 		},
 	}
 
@@ -513,8 +514,8 @@ func TestAgent_RunStreamFallback(t *testing.T) {
 // Test Message methods
 func TestMessage_Text(t *testing.T) {
 	msg := agent.NewMessage(agent.RoleAssistant,
-		&agent.TextContent{Text: "Hello "},
-		&agent.TextContent{Text: "world!"},
+		&content.Text{Text: "Hello "},
+		&content.Text{Text: "world!"},
 	)
 
 	if msg.Text() != "Hello " {
@@ -523,7 +524,7 @@ func TestMessage_Text(t *testing.T) {
 
 	// Test with no text content
 	msgNoText := agent.NewMessage(agent.RoleAssistant,
-		&agent.FunctionCallContent{Name: "test"},
+		&content.FunctionCall{Name: "test"},
 	)
 	if msgNoText.Text() != "" {
 		t.Errorf("expected empty string for message without text, got %q", msgNoText.Text())
@@ -542,8 +543,8 @@ func TestRunResponse_Text(t *testing.T) {
 		AgentID:    "test",
 		ResponseID: "resp-1",
 		Messages: []*agent.Message{
-			agent.NewMessage(agent.RoleAssistant, &agent.TextContent{Text: "First "}),
-			agent.NewMessage(agent.RoleAssistant, &agent.TextContent{Text: "Second"}),
+			agent.NewMessage(agent.RoleAssistant, &content.Text{Text: "First "}),
+			agent.NewMessage(agent.RoleAssistant, &content.Text{Text: "Second"}),
 		},
 	}
 
@@ -558,9 +559,9 @@ func TestRunResponseUpdate_Text(t *testing.T) {
 		AgentID:    "test",
 		ResponseID: "resp-1",
 		Role:       agent.RoleAssistant,
-		Contents: []agent.Content{
-			&agent.TextContent{Text: "Part 1 "},
-			&agent.TextContent{Text: "Part 2"},
+		Contents: []content.Content{
+			&content.Text{Text: "Part 1 "},
+			&content.Text{Text: "Part 2"},
 		},
 	}
 
@@ -572,7 +573,7 @@ func TestRunResponseUpdate_Text(t *testing.T) {
 
 // Test FunctionCallContent
 func TestFunctionCallContent_ParseArgs(t *testing.T) {
-	fc := &agent.FunctionCallContent{
+	fc := &content.FunctionCall{
 		CallID:    "call-1",
 		Name:      "test_func",
 		Arguments: `{"key": "value", "number": 42}`,
@@ -591,7 +592,7 @@ func TestFunctionCallContent_ParseArgs(t *testing.T) {
 	}
 
 	// Test invalid JSON
-	fcInvalid := &agent.FunctionCallContent{
+	fcInvalid := &content.FunctionCall{
 		CallID:    "call-2",
 		Name:      "test_func",
 		Arguments: `invalid json`,
@@ -606,7 +607,7 @@ func TestFunctionCallContent_ParseArgs(t *testing.T) {
 func TestAgent_ToolError(t *testing.T) {
 	client, a := agenttest.NewAgent()
 
-	toolCalls := []*agent.FunctionCallContent{
+	toolCalls := []*content.FunctionCall{
 		{
 			CallID:    "call-1",
 			Name:      "error_tool",
@@ -641,7 +642,7 @@ func TestAgent_ToolError(t *testing.T) {
 func TestAgent_ToolNotFound(t *testing.T) {
 	client, a := agenttest.NewAgent()
 
-	toolCalls := []*agent.FunctionCallContent{
+	toolCalls := []*content.FunctionCall{
 		{
 			CallID:    "call-1",
 			Name:      "nonexistent_tool",
@@ -671,7 +672,7 @@ func TestAgent_ToolNotFound(t *testing.T) {
 func TestAgent_ToolInvalidArgs(t *testing.T) {
 	client, a := agenttest.NewAgent()
 
-	toolCalls := []*agent.FunctionCallContent{
+	toolCalls := []*content.FunctionCall{
 		{
 			CallID:    "call-1",
 			Name:      "test_tool",
@@ -793,7 +794,7 @@ func TestRunOptions_Merge(t *testing.T) {
 
 // Test TextContent
 func TestTextContent_String(t *testing.T) {
-	tc := &agent.TextContent{Text: "test content"}
+	tc := &content.Text{Text: "test content"}
 	if tc.String() != "test content" {
 		t.Errorf("expected 'test content', got %q", tc.String())
 	}
@@ -801,7 +802,7 @@ func TestTextContent_String(t *testing.T) {
 
 // Test TextReasoningContent
 func TestTextReasoningContent_String(t *testing.T) {
-	trc := &agent.TextReasoningContent{Text: "reasoning text"}
+	trc := &content.TextReasoning{Text: "reasoning text"}
 	if trc.String() != "reasoning text" {
 		t.Errorf("expected 'reasoning text', got %q", trc.String())
 	}
@@ -809,12 +810,12 @@ func TestTextReasoningContent_String(t *testing.T) {
 
 // Test UsageDetails
 func TestUsageDetails_Add(t *testing.T) {
-	ud1 := &agent.UsageDetails{
+	ud1 := &content.UsageDetails{
 		InputTokenCount:  10,
 		OutputTokenCount: 20,
 		TotalTokenCount:  30,
 	}
-	ud2 := &agent.UsageDetails{
+	ud2 := &content.UsageDetails{
 		InputTokenCount:  5,
 		OutputTokenCount: 15,
 		TotalTokenCount:  20,
@@ -833,13 +834,13 @@ func TestUsageDetails_Add(t *testing.T) {
 }
 
 func TestUsageDetails_AddWithAdditionalCounts(t *testing.T) {
-	ud1 := &agent.UsageDetails{
+	ud1 := &content.UsageDetails{
 		InputTokenCount: 10,
 		AdditionalCounts: map[string]int64{
 			"cache_read": 5,
 		},
 	}
-	ud2 := &agent.UsageDetails{
+	ud2 := &content.UsageDetails{
 		InputTokenCount: 5,
 		AdditionalCounts: map[string]int64{
 			"cache_read":  3,
@@ -857,13 +858,13 @@ func TestUsageDetails_AddWithAdditionalCounts(t *testing.T) {
 }
 
 func TestUsageDetails_AddWithNil(t *testing.T) {
-	var ud1 *agent.UsageDetails
-	ud2 := &agent.UsageDetails{InputTokenCount: 10}
+	var ud1 *content.UsageDetails
+	ud2 := &content.UsageDetails{InputTokenCount: 10}
 
 	// Should not panic
 	ud1.Add(ud2)
 
-	ud1 = &agent.UsageDetails{InputTokenCount: 10}
+	ud1 = &content.UsageDetails{InputTokenCount: 10}
 	ud1.Add(nil)
 	if ud1.InputTokenCount != 10 {
 		t.Errorf("expected input tokens to remain 10, got %d", ud1.InputTokenCount)
