@@ -113,7 +113,7 @@ func (a *client) Run(ctx context.Context, t memory.Thread, opts *agent.RunOption
 		contents = append(contents, &message.TextContent{Text: choice.Message.Content})
 	}
 	return &agent.RunResponse{
-		Messages:   []*message.Message{&message.Message{Role: message.Role(choice.Message.Role), Contents: contents}},
+		Messages:   []*message.Message{{Role: message.Role(choice.Message.Role), Contents: contents}},
 		AgentID:    a.config.ID,
 		ResponseID: resp.ID,
 	}, nil
