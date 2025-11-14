@@ -22,7 +22,7 @@ import (
 //   - Chat history reduction, e.g. where messages needs to be summarized or truncated to reduce the size.
 //
 // A Thread is always constructed by an [agent.Agent] so that the [agent.Agent] can attach any necessary behaviors to the Thread.
-// See the [agent.Agent.NewThread] and [agent.Agent.DeserializeThread] methods for more information.
+// See the [agent.Agent.NewThread] and [agent.Agent.UnmarshalThread] methods for more information.
 //
 // Because of these behaviors, a Thread may not be reusable across different agents, since each agent may add different
 // behaviors to the Thread it creates.
@@ -72,7 +72,7 @@ type InvokedContext struct {
 	Err       error
 }
 
-// Marshaler defines a contract for components that enhance AI context management during agent invocations.
+// ContextProvider defines a contract for components that enhance AI context management during agent invocations.
 type ContextProvider interface {
 	// Invoking is called before agent invocation. It returns additional context to be used
 	// during the invocation, or an error if context retrieval fails.

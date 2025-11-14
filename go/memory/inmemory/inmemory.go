@@ -62,6 +62,6 @@ func (p *contextProvider) Invoked(ctx *memory.InvokedContext) error {
 	if p.ContextProvider != nil {
 		return p.ContextProvider.Invoked(ctx)
 	}
-	// Nothing to do for in-memory context, messages are already added via InMemoryThread.AddMessage.
+	// Nothing to do for in-memory context, messages are already added via Thread.AddMessage.
 	return nil
 }
