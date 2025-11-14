@@ -32,19 +32,22 @@ func main() {
 	})
 
 	const query = "Tell me about Paris, France"
-	fmt.Println("User: " + query)
+	fmt.Println("User: ", query)
 
 	var out jsonformat.Value[CityInfo]
-	resp, err := ag.Run(ctx, nil, &agent.RunOptions{Response: &out}, message.NewText(query))
-	if err != nil {
-		fmt.Print(err)
-		return
-	}
-
-	fmt.Printf("Agent raw response: %s\n", resp.Text())
+	fmt.Println("Agent raw response: ", must(ag.Run(ctx, nil, &agent.RunOptions{Response: &out}, message.NewText(query))))
 
 	city := out.Unwrap()
-	fmt.Printf("City Name: %v\n", city.Name)
-	fmt.Printf("Population: %v\n", city.Population)
-	fmt.Printf("Area: %v\n", city.Area)
+	fmt.Println("City Name: ", city.Name)
+	fmt.Println("Population: ", city.Population)
+	fmt.Println("Area: ", city.Area)
+}
+
+// must is a helper to panic on error for samples.
+// In production code, handle errors appropriately.
+func must[T any](resp T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return resp
 }

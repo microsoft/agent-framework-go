@@ -45,8 +45,8 @@ func TestAgentCallTool(t *testing.T) {
 		t.Fatalf("expected no error, got: %v", err)
 	}
 
-	if resp.Text() != "Final response" {
-		t.Errorf("expected 'Final response', got %q", resp.Text())
+	if resp.String() != "Final response" {
+		t.Errorf("expected 'Final response', got %q", resp.String())
 	}
 }
 

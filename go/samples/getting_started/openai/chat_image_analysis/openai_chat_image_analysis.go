@@ -23,15 +23,21 @@ func main() {
 	})
 
 	ctx := context.Background()
-	resp, err := ag.Run(ctx, nil, nil, &message.Message{Role: message.RoleUser, Contents: []message.Content{
-		&message.TextContent{Text: "Describe the content of this image."},
-		&message.URIContent{
-			URI:       "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg",
-			MediaType: "image/jpeg",
-		}}})
+	fmt.Println("Result: ", must(
+		ag.Run(ctx, nil, nil, &message.Message{Role: message.RoleUser, Contents: []message.Content{
+			&message.TextContent{Text: "Describe the content of this image."},
+			&message.URIContent{
+				URI:       "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg",
+				MediaType: "image/jpeg",
+			}}}),
+	))
+}
+
+// must is a helper to panic on error for samples.
+// In production code, handle errors appropriately.
+func must[T any](resp T, err error) T {
 	if err != nil {
-		fmt.Print(err)
-		return
+		panic(err)
 	}
-	fmt.Printf("Result: %s\n", resp.Text())
+	return resp
 }

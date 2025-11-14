@@ -140,7 +140,7 @@ func (a *Agent) Run(ctx context.Context, thread memory.Thread, opts *RunOptions,
 		AgentID:    id,
 	}
 	if opts.Response != nil {
-		if err := opts.Response.UnmarshalBinary([]byte(response.Text())); err != nil {
+		if err := opts.Response.UnmarshalBinary([]byte(response.String())); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 		}
 	}
@@ -355,17 +355,17 @@ type RunResponse struct {
 	Messages   []*message.Message
 }
 
-// Text returns the concatenated text contents of the response messages.
-func (r *RunResponse) Text() string {
-	var text string
+// String returns the concatenated text contents of the response messages.
+func (r *RunResponse) String() string {
+	var sb strings.Builder
 	for _, msg := range r.Messages {
 		for _, c := range msg.Contents {
 			if textContent, ok := c.(*message.TextContent); ok {
-				text += textContent.Text
+				sb.WriteString(textContent.Text)
 			}
 		}
 	}
-	return text
+	return sb.String()
 }
 
 // RunResponseUpdate represents a streaming update from an agent execution.
@@ -377,8 +377,8 @@ type RunResponseUpdate struct {
 	Contents   []message.Content
 }
 
-// Text returns the concatenated text contents of the response messages.
-func (r *RunResponseUpdate) Text() string {
+// String returns the concatenated text contents of the response messages.
+func (r *RunResponseUpdate) String() string {
 	var sb strings.Builder
 	for _, c := range r.Contents {
 		if textContent, ok := c.(*message.TextContent); ok {

@@ -56,8 +56,8 @@ func TestAgent_CustomResponse(t *testing.T) {
 		t.Fatalf("expected no error, got: %v", err)
 	}
 
-	if resp.Text() != respTest {
-		t.Errorf("expected %q, got %q", respTest, resp.Text())
+	if resp.String() != respTest {
+		t.Errorf("expected %q, got %q", respTest, resp.String())
 	}
 }
 
@@ -128,16 +128,16 @@ func TestAgent_ResponseSequence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error on first call, got: %v", err)
 	}
-	if resp1.Text() != respText1 {
-		t.Errorf("expected %q, got %q", respText1, resp1.Text())
+	if resp1.String() != respText1 {
+		t.Errorf("expected %q, got %q", respText1, resp1.String())
 	}
 
 	resp2, err := a.Run(t.Context(), nil, nil, message.NewText("Test 2"))
 	if err != nil {
 		t.Fatalf("expected no error on second call, got: %v", err)
 	}
-	if resp2.Text() != respText2 {
-		t.Errorf("expected %q, got %q", respText2, resp2.Text())
+	if resp2.String() != respText2 {
+		t.Errorf("expected %q, got %q", respText2, resp2.String())
 	}
 }
 
@@ -169,8 +169,8 @@ func TestAgent_WithToolCalls(t *testing.T) {
 		t.Fatalf("expected no error, got: %v", err)
 	}
 
-	if resp.Text() != respText {
-		t.Errorf("expected final response %q, got %q", respText, resp.Text())
+	if resp.String() != respText {
+		t.Errorf("expected final response %q, got %q", respText, resp.String())
 	}
 
 	if client.GetRunCallCount() < 2 {
@@ -206,13 +206,13 @@ func TestAgent_CustomFunction(t *testing.T) {
 	}
 
 	resp1, _ := a.Run(t.Context(), nil, nil, message.NewText("Test"))
-	if resp1.Text() != respText1 {
-		t.Errorf("expected %q, got %q", respText1, resp1.Text())
+	if resp1.String() != respText1 {
+		t.Errorf("expected %q, got %q", respText1, resp1.String())
 	}
 
 	resp2, _ := a.Run(t.Context(), nil, nil, message.NewText("Yes"))
-	if resp2.Text() != respText2 {
-		t.Errorf("expected %q, got %q", respText2, resp2.Text())
+	if resp2.String() != respText2 {
+		t.Errorf("expected %q, got %q", respText2, resp2.String())
 	}
 }
 
@@ -242,8 +242,8 @@ func TestAgent_RunText(t *testing.T) {
 		t.Fatalf("expected no error, got: %v", err)
 	}
 
-	if resp.Text() != responseText {
-		t.Errorf("expected %q, got %q", responseText, resp.Text())
+	if resp.String() != responseText {
+		t.Errorf("expected %q, got %q", responseText, resp.String())
 	}
 }
 
@@ -476,8 +476,8 @@ func TestAgent_MaxRetries(t *testing.T) {
 		t.Errorf("expected 6 calls, got %d", callCount)
 	}
 
-	if resp.Text() != "Final response" {
-		t.Errorf("expected final response, got %q", resp.Text())
+	if resp.String() != "Final response" {
+		t.Errorf("expected final response, got %q", resp.String())
 	}
 }
 
@@ -507,7 +507,7 @@ func TestAgent_RunStreamFallback(t *testing.T) {
 
 	var text string
 	for _, u := range updates {
-		text += u.Text()
+		text += u.String()
 	}
 	if text != "Fallback response" {
 		t.Errorf("expected 'Fallback response', got %q", text)
@@ -553,8 +553,8 @@ func TestRunResponse_Text(t *testing.T) {
 	}
 
 	expected := "First Second"
-	if resp.Text() != expected {
-		t.Errorf("expected %q, got %q", expected, resp.Text())
+	if resp.String() != expected {
+		t.Errorf("expected %q, got %q", expected, resp.String())
 	}
 }
 
@@ -570,8 +570,8 @@ func TestRunResponseUpdate_Text(t *testing.T) {
 	}
 
 	expected := "Part 1 Part 2"
-	if update.Text() != expected {
-		t.Errorf("expected %q, got %q", expected, update.Text())
+	if update.String() != expected {
+		t.Errorf("expected %q, got %q", expected, update.String())
 	}
 }
 
@@ -637,8 +637,8 @@ func TestAgent_ToolError(t *testing.T) {
 	}
 
 	// Agent should handle the tool error and return final response
-	if resp.Text() != "Handled error" {
-		t.Errorf("expected final response, got %q", resp.Text())
+	if resp.String() != "Handled error" {
+		t.Errorf("expected final response, got %q", resp.String())
 	}
 }
 
@@ -705,8 +705,8 @@ func TestAgent_ToolInvalidArgs(t *testing.T) {
 		t.Errorf("expected tool not to be called, but was called %d times", tl.CallCount)
 	}
 
-	if resp.Text() != "Handled invalid args" {
-		t.Errorf("expected final response, got %q", resp.Text())
+	if resp.String() != "Handled invalid args" {
+		t.Errorf("expected final response, got %q", resp.String())
 	}
 }
 
