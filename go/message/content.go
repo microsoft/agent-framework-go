@@ -407,7 +407,7 @@ func (t *UsageContent) MarshalJSON() ([]byte, error) {
 		Type contentKind
 	}{
 		alias: (*alias)(t),
-		Type:  "usage",
+		Type:  t.kind(),
 	}
 	return json.Marshal(tmp)
 }
