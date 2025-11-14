@@ -90,7 +90,7 @@ func TestUsageDetails_AddWithNil(t *testing.T) {
 	}
 }
 
-func TestContentEncoding_Rountrip(t *testing.T) {
+func TestContentEncoding_Roundtrip(t *testing.T) {
 	contents := message.Contents{
 		&message.TextContent{Text: "sample text"},
 		&message.TextReasoningContent{Text: "sample reasoning"},

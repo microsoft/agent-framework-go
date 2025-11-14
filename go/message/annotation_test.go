@@ -10,7 +10,7 @@ import (
 	"github.com/microsoft/agent-framework/go/message"
 )
 
-func TestAnnotationEncoding_Rountrip(t *testing.T) {
+func TestAnnotationEncoding_Roundtrip(t *testing.T) {
 	annotations := message.Annotations{
 		&message.CitationAnnotation{
 			URL:      "http://example.com",

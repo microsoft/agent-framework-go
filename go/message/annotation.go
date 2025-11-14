@@ -49,7 +49,7 @@ type Annotation interface {
 // such as documents, URLs, files, or tool outputs.
 type CitationAnnotation struct {
 	AdditionalProperties map[string]any    `json:"-"`
-	AnnotatedRegions     []AnnotatedRegion `json:",omitempty"`
+	AnnotatedRegions     AnnotatedRegions  `json:",omitempty"`
 	RawRepresentation    any               `json:"-"`
 
 	FileID   string `json:",omitempty"` // Source identifier associated with the annotation.
