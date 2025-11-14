@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/microsoft/agent-framework/go/agent"
+	"github.com/microsoft/agent-framework/go/memory"
 	"github.com/microsoft/agent-framework/go/message"
 )
 
@@ -19,10 +20,10 @@ type Client struct {
 	agent *agent.Agent
 
 	// RunFunc is called when Run is invoked. If nil, uses default behavior.
-	RunFunc func(ctx context.Context, thread agent.Thread, opts *agent.RunOptions, messages ...*message.Message) (*agent.RunResponse, error)
+	RunFunc func(ctx context.Context, thread memory.Thread, opts *agent.RunOptions, messages ...*message.Message) (*agent.RunResponse, error)
 
 	// RunStreamFunc is called when RunStream is invoked. If nil, uses default behavior.
-	RunStreamFunc func(ctx context.Context, thread agent.Thread, opts *agent.RunOptions, messages ...*message.Message) iter.Seq2[*agent.RunResponseUpdate, error]
+	RunStreamFunc func(ctx context.Context, thread memory.Thread, opts *agent.RunOptions, messages ...*message.Message) iter.Seq2[*agent.RunResponseUpdate, error]
 
 	// RunCalls records all calls to Run.
 	RunCalls []RunCall
@@ -47,7 +48,7 @@ func (c *Client) ID() string {
 // RunCall records a call to Run.
 type RunCall struct {
 	Ctx      context.Context
-	Thread   agent.Thread
+	Thread   memory.Thread
 	Opts     *agent.RunOptions
 	Messages []*message.Message
 }
@@ -55,7 +56,7 @@ type RunCall struct {
 // RunStreamCall records a call to RunStream.
 type RunStreamCall struct {
 	Ctx      context.Context
-	Thread   agent.Thread
+	Thread   memory.Thread
 	Opts     *agent.RunOptions
 	Messages []*message.Message
 }
@@ -83,7 +84,7 @@ func NewAgent() (*Client, *agent.Agent) {
 }
 
 // Run implements the Client interface.
-func (c *Client) Run(ctx context.Context, thread agent.Thread, opts *agent.RunOptions, messages ...*message.Message) (*agent.RunResponse, error) {
+func (c *Client) Run(ctx context.Context, thread memory.Thread, opts *agent.RunOptions, messages ...*message.Message) (*agent.RunResponse, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -121,7 +122,7 @@ func (c *Client) Run(ctx context.Context, thread agent.Thread, opts *agent.RunOp
 }
 
 // RunStream implements the streamableClient interface.
-func (c *Client) RunStream(ctx context.Context, thread agent.Thread, opts *agent.RunOptions, messages ...*message.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
+func (c *Client) RunStream(ctx context.Context, thread memory.Thread, opts *agent.RunOptions, messages ...*message.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
 	c.mu.Lock()
 	// Record the call
 	c.RunStreamCalls = append(c.RunStreamCalls, RunStreamCall{
@@ -247,7 +248,7 @@ func (c *Client) WithResponseSequence(responses ...*agent.RunResponse) *Client {
 	defer c.mu.Unlock()
 
 	index := 0
-	c.RunFunc = func(ctx context.Context, thread agent.Thread, opts *agent.RunOptions, messages ...*message.Message) (*agent.RunResponse, error) {
+	c.RunFunc = func(ctx context.Context, thread memory.Thread, opts *agent.RunOptions, messages ...*message.Message) (*agent.RunResponse, error) {
 		if index >= len(responses) {
 			return responses[len(responses)-1], nil
 		}
@@ -265,7 +266,7 @@ func (c *Client) WithToolCalls(toolCalls []*message.FunctionCallContent, finalRe
 	defer c.mu.Unlock()
 
 	callCount := 0
-	c.RunFunc = func(ctx context.Context, thread agent.Thread, opts *agent.RunOptions, messages ...*message.Message) (*agent.RunResponse, error) {
+	c.RunFunc = func(ctx context.Context, thread memory.Thread, opts *agent.RunOptions, messages ...*message.Message) (*agent.RunResponse, error) {
 		callCount++
 		if callCount == 1 {
 			// First call returns tool calls
@@ -300,7 +301,7 @@ func (c *Client) WithStreamingToolCalls(toolCalls []*message.FunctionCallContent
 	defer c.mu.Unlock()
 
 	callCount := 0
-	c.RunStreamFunc = func(ctx context.Context, thread agent.Thread, opts *agent.RunOptions, messages ...*message.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
+	c.RunStreamFunc = func(ctx context.Context, thread memory.Thread, opts *agent.RunOptions, messages ...*message.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
 		callCount++
 		currentCall := callCount
 		return func(yield func(*agent.RunResponseUpdate, error) bool) {

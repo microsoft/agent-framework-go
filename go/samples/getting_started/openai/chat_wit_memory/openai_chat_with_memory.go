@@ -1,78 +1,126 @@
 package main
 
 import (
+	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 
 	"github.com/microsoft/agent-framework/go/agent"
+	"github.com/microsoft/agent-framework/go/format/jsonformat"
+	"github.com/microsoft/agent-framework/go/memory"
 	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/openai"
 )
 
 func main() {
-	ag := openai.NewChatAgent(openai.AgentConfig{
+	ctx := context.Background()
+	var ag *agent.Agent
+	ag = openai.NewChatAgent(openai.AgentConfig{
 		Model:              "gpt-4o-mini",
 		SystemInstructions: "You are a friendly assistant. Always address the user by their name.",
-		ContextProvider:    &UserInfoMemory{},
+		//NewContextProvider: func() memory.ContextProvider { return &UserInfoMemory{Agent: ag} },
 	})
+
+	fmt.Println(">> Use thread with blank memory")
 
 	thread := ag.NewThread()
 
-	resp, err := ag.Run(context.Background(), thread, nil, message.NewText("Hello, what is the square root of 9?"))
+	resp, err := ag.Run(ctx, thread, nil, message.NewText("Hello, what is the square root of 9?"))
 	if err != nil {
-		panic(err)
+		fmt.Print(err)
+		return
 	}
 	fmt.Println(resp.Text())
 
-	resp, err = ag.Run(context.Background(), thread, nil, message.NewText("My name is Ruaidhrí"))
+	resp, err = ag.Run(ctx, thread, nil, message.NewText("My name is Ruaidhrí"))
 	if err != nil {
-		panic(err)
+		fmt.Print(err)
+		return
 	}
 	fmt.Println(resp.Text())
+
+	resp, err = ag.Run(ctx, thread, nil, message.NewText("I am 20 years old"))
+	if err != nil {
+		fmt.Print(err)
+		return
+	}
+	fmt.Println(resp.Text())
+
+	// We can serialize the thread. The serialized state will include the state of the memory component.
+	serializedThread, err := json.Marshal(thread)
+	if err != nil {
+		fmt.Print(err)
+		return
+	}
+
+	fmt.Println(">> Use new thread with previously created memories")
+
+	// TODO: Fix message.Content unmarshaling
+	deserializedThread, err := ag.UnmarshalThread(serializedThread)
+	if err != nil {
+		fmt.Print(err)
+		return
+	}
+	resp, err = ag.Run(ctx, deserializedThread, nil, message.NewText("What is my name and age?"))
+	if err != nil {
+		fmt.Print(err)
+		return
+	}
+	fmt.Println(resp.Text())
+
 }
 
 type UserInfo struct {
 	Name string
+	Age  int
 }
 
-var _ agent.ContextProvider = (*UserInfoMemory)(nil)
+var _ memory.ContextProvider = (*UserInfoMemory)(nil)
 
 type UserInfoMemory struct {
-	UserInfo *UserInfo
-	Agent    *agent.Agent
+	UserInfo UserInfo
+	Agent    *agent.Agent `json:"-"`
 }
 
-func (u *UserInfoMemory) Invoked(ctx context.Context, messages []*message.Message, responses []*message.Message, _ error) error {
-	if u.UserInfo != nil || u.Agent == nil {
+func (u *UserInfoMemory) Invoked(ctx *memory.InvokedContext) error {
+	if u.UserInfo.Age != 0 && u.UserInfo.Name != "" {
+		// We already have the user info.
 		return nil
 	}
-	hasUserMsg := slices.ContainsFunc(messages, func(msg *message.Message) bool {
-		return msg.Role == message.RoleUser
-	})
-	if !hasUserMsg {
+	if !slices.ContainsFunc(ctx.Messages, func(msg *message.Message) bool { return msg.Role == message.RoleUser }) {
+		// No user messages to extract info from.
 		return nil
 	}
-	ret, err := u.Agent.Run(ctx, nil, nil, append(messages,
-		message.NewText("Extract the user's name from the conversation. Respond with just the name. Return an empty response if the name is not present."),
+	var out jsonformat.Value[UserInfo]
+	_, err := u.Agent.Run(ctx.Context, nil, &agent.RunOptions{Response: &out}, append(ctx.Messages,
+		message.NewText("Extract the user's name and age from the message if present. If not present return empty values."),
 	)...)
 	if err != nil {
 		return err
 	}
-	if name := ret.Text(); name != "" {
-		u.UserInfo = &UserInfo{Name: name}
-	}
+	user := out.Unwrap()
+	u.UserInfo.Name = cmp.Or(u.UserInfo.Name, user.Name)
+	u.UserInfo.Age = cmp.Or(u.UserInfo.Age, user.Age)
 	return nil
 }
 
-func (u *UserInfoMemory) Invoking(ctx context.Context, messages []*message.Message) (*agent.Context, error) {
+func (u *UserInfoMemory) Invoking(ctx *memory.InvokingContext) (*memory.Context, error) {
+	// If we don't already know the user's name and age, add instructions to ask for them, otherwise just provide what we have to the context.
 	var instructions string
-	if u.UserInfo == nil {
+	if u.UserInfo.Name == "" {
 		instructions = "Ask the user for their name and politely decline to answer any questions until they provide it."
 	} else {
-		instructions = "The user's name is " + u.UserInfo.Name + "."
+		instructions = fmt.Sprintf("The user's name is %s.", u.UserInfo.Name)
 	}
-	return &agent.Context{
+	instructions += "\n"
+	if u.UserInfo.Age == 0 {
+		instructions += "Ask the user for their age and politely decline to answer any questions until they provide it."
+	} else {
+		instructions += fmt.Sprintf("The user's age is %d.", u.UserInfo.Age)
+	}
+	return &memory.Context{
 		Instructions: instructions,
 	}, nil
 }
