@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"math/rand"
 	"os"
 
@@ -21,37 +20,18 @@ This sample demonstrates basic usage of openai.Agent for direct chat-based
 interactions, showing both streaming and non-streaming responses.
 */
 
-type weatherRequest struct {
-	Location string `json:"location"`
-}
-
-type weatherResponse struct {
-	Conditions string `json:"conditions"`
-	HighTemp   int    `json:"high_temp"`
-}
-
 var weatherTool = functool.MustNew(&functool.Func{
 	Name:        "weather",
 	Description: "Get the current weather for a given location",
-}, func(_ context.Context, req weatherRequest) (weatherResponse, error) {
-	return weatherResponse{
-		Conditions: []string{"sunny", "cloudy", "rainy", "stormy"}[rand.Intn(4)],
-		HighTemp:   rand.Intn(21) + 10,
-	}, nil
+}, func(_ context.Context, location string) (string, error) {
+	conditions := []string{"sunny", "cloudy", "rainy", "stormy"}
+	return fmt.Sprintf("The weather in %s is %s with a high of %d°C.", location, conditions[rand.Intn(len(conditions))], rand.Intn(21)+10), nil
 })
 
 func main() {
-	// OpenAI configuration
-	// Set your API key via environment variable: export OPENAI_API_KEY=your-key-here
-	// Or get one from: https://platform.openai.com/account/api-keys
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey == "" {
-		log.Fatal("OPENAI_API_KEY environment variable is required. Get your key from https://platform.openai.com/account/api-keys")
-	}
-
 	ag := openai.NewChatAgent(openai.AgentConfig{
 		Model:              "gpt-5-nano",
-		APIKey:             apiKey,
+		APIKey:             os.Getenv("OPENAI_API_KEY"),
 		SystemInstructions: "You are a helpful weather agent.",
 		Opts: &agent.RunOptions{
 			Tools: []tool.Tool{weatherTool},
@@ -64,27 +44,31 @@ func main() {
 
 func nonStreamingExample(ag *agent.Agent, query string) {
 	ctx := context.Background()
-	fmt.Printf("=== Non-streaming Response Example ===\n")
-	fmt.Printf("User: %s\n", query)
-	resp, err := ag.RunText(ctx, query)
-	if err != nil {
-		fmt.Print(err)
-		return
-	}
-	fmt.Printf("Result: %s\n", resp.Text())
+	fmt.Println("=== Non-streaming Response Example ===")
+	fmt.Println("User: ", query)
+	fmt.Println("Result: ", must(ag.RunText(ctx, query)))
 }
 
 func streamingExample(ag *agent.Agent, query string) {
 	ctx := context.Background()
-	fmt.Printf("=== Streaming Response Example ===\n")
-	fmt.Printf("User: %s\n", query)
+	fmt.Println("=== Streaming Response Example ===")
+	fmt.Println("User: ", query)
 	stream := ag.RunStream(ctx, nil, nil, message.NewText(query))
 	for update, err := range stream {
 		if err != nil {
 			fmt.Print(err)
-			return
+			break
 		}
-		fmt.Print(update.Text())
+		fmt.Print(update)
 	}
 	fmt.Print("\n")
+}
+
+// must is a helper to panic on error for samples.
+// In production code, handle errors appropriately.
+func must[T any](resp T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return resp
 }

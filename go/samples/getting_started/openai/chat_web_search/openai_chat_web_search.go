@@ -44,27 +44,31 @@ func main() {
 
 func nonStreamingExample(ag *agent.Agent, query string) {
 	ctx := context.Background()
-	fmt.Printf("=== Non-streaming Response Example ===\n")
-	fmt.Printf("User: %s\n", query)
-	resp, err := ag.RunText(ctx, query)
-	if err != nil {
-		fmt.Print(err)
-		return
-	}
-	fmt.Printf("Result: %s\n", resp.Text())
+	fmt.Println("=== Non-streaming Response Example ===")
+	fmt.Println("User: ", query)
+	fmt.Println("Result: ", must(ag.RunText(ctx, query)))
 }
 
 func streamingExample(ag *agent.Agent, query string) {
 	ctx := context.Background()
-	fmt.Printf("=== Streaming Response Example ===\n")
-	fmt.Printf("User: %s\n", query)
+	fmt.Println("=== Streaming Response Example ===")
+	fmt.Println("User: ", query)
 	stream := ag.RunStream(ctx, nil, nil, message.NewText(query))
 	for update, err := range stream {
 		if err != nil {
 			fmt.Print(err)
-			return
+			break
 		}
-		fmt.Print(update.Text())
+		fmt.Print(update)
 	}
 	fmt.Print("\n")
+}
+
+// must is a helper to panic on error for samples.
+// In production code, handle errors appropriately.
+func must[T any](resp T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return resp
 }
