@@ -18,7 +18,7 @@ const (
 
 // Message represents a message in a conversation.
 type Message struct {
-	Contents  []Content
+	Contents  Contents
 	Role      Role
 	Name      string
 	MessageID string

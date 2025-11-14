@@ -20,7 +20,7 @@ func main() {
 	ag = openai.NewChatAgent(openai.AgentConfig{
 		Model:              "gpt-4o-mini",
 		SystemInstructions: "You are a friendly assistant. Always address the user by their name.",
-		//NewContextProvider: func() memory.ContextProvider { return &UserInfoMemory{Agent: ag} },
+		NewContextProvider: func() memory.ContextProvider { return &UserInfoMemory{Agent: ag} },
 	})
 
 	fmt.Println(">> Use thread with blank memory")

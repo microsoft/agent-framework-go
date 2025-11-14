@@ -3,6 +3,9 @@
 package message_test
 
 import (
+	"encoding/json"
+	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/microsoft/agent-framework/go/message"
@@ -84,5 +87,63 @@ func TestUsageDetails_AddWithNil(t *testing.T) {
 	ud1.Add(nil)
 	if ud1.InputTokenCount != 10 {
 		t.Errorf("expected input tokens to remain 10, got %d", ud1.InputTokenCount)
+	}
+}
+
+func TestContentEncoding_Roundtrip(t *testing.T) {
+	contents := message.Contents{
+		&message.TextContent{Text: "sample text"},
+		&message.TextReasoningContent{Text: "sample reasoning"},
+		&message.FunctionCallContent{
+			Arguments: "sample args",
+		},
+		&message.FunctionResultContent{
+			CallID: "call-123",
+			Result: map[string]any{"key": "value"},
+			Error:  errors.New("sample error"),
+		},
+		&message.URIContent{
+			URI: "https://example.com/resource",
+		},
+		&message.UsageContent{
+			Details: message.UsageDetails{
+				InputTokenCount:  10,
+				OutputTokenCount: 20,
+				TotalTokenCount:  30,
+			},
+		},
+		&message.ErrorContent{
+			ErrorCode: "1",
+			Message:   "sample error message",
+			Details:   "sample error details",
+		},
+		&message.DataContent{
+			Data:      []byte("sample data"),
+			Name:      "sample data name",
+			URI:       "sample data uri",
+			MediaType: "sample media type",
+		},
+		&message.HostedFileContent{
+			FileID: "file-123",
+		},
+		&message.HostedVectorStoreContent{
+			VectorStoreID: "store-123",
+		},
+	}
+	data, err := json.Marshal(contents)
+	if err != nil {
+		t.Error(err)
+	}
+	var decoded message.Contents
+	if err = json.Unmarshal(data, &decoded); err != nil {
+		t.Error(err)
+	}
+	if len(decoded) != len(contents) {
+		t.Errorf("expected %d contents, got %d", len(contents), len(decoded))
+	}
+	for i, v := range contents {
+		if !reflect.DeepEqual(v, decoded[i]) {
+			t.Errorf("[%d]: expected content %v, got %v", i, v, decoded[i])
+		}
 	}
 }
