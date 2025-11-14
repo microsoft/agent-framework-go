@@ -20,7 +20,7 @@ func main() {
 	ag = openai.NewChatAgent(openai.AgentConfig{
 		Model:              "gpt-4o-mini",
 		SystemInstructions: "You are a friendly assistant. Always address the user by their name.",
-		NewContextProvider: func() memory.ContextProvider { return &UserInfoMemory{Agent: ag} },
+		//NewContextProvider: func() memory.ContextProvider { return &UserInfoMemory{Agent: ag} },
 	})
 
 	fmt.Println(">> Use thread with blank memory")
@@ -55,7 +55,7 @@ func main() {
 		return
 	}
 
-	fmt.Println(">> Use thread with blank memory")
+	fmt.Println(">> Use new thread with previously created memories")
 
 	// TODO: Fix message.Content unmarshaling
 	deserializedThread, err := ag.UnmarshalThread(serializedThread)
