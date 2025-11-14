@@ -9,6 +9,8 @@ import (
 
 	"github.com/microsoft/agent-framework/go/agent"
 	"github.com/microsoft/agent-framework/go/agent/internal/agenttest"
+	"github.com/microsoft/agent-framework/go/memory"
+	"github.com/microsoft/agent-framework/go/memory/inmemory"
 	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/tool"
 )
@@ -187,7 +189,7 @@ func TestAgent_CustomFunction(t *testing.T) {
 	const respText2 = "Confirmed!"
 
 	callCount := 0
-	client.RunFunc = func(ctx context.Context, thread agent.Thread, opts *agent.RunOptions, messages ...*message.Message) (*agent.RunResponse, error) {
+	client.RunFunc = func(ctx context.Context, thread memory.Thread, opts *agent.RunOptions, messages ...*message.Message) (*agent.RunResponse, error) {
 		callCount++
 		if callCount == 1 {
 			return &agent.RunResponse{
@@ -294,7 +296,7 @@ func TestAgent_WithThread(t *testing.T) {
 	}
 
 	// Verify the thread now contains messages
-	messageCount := len(thread.(*agent.InMemoryThread).Messages)
+	messageCount := len(thread.(*inmemory.Thread).Messages)
 	if messageCount < 2 {
 		t.Errorf("expected at least 2 messages in thread, got %d", messageCount)
 	}
@@ -428,7 +430,7 @@ func TestAgent_MaxRetries(t *testing.T) {
 
 	callCount := 0
 	// Return tool calls on every call except when we've been called 5 times
-	client.RunFunc = func(ctx context.Context, thread agent.Thread, opts *agent.RunOptions, messages ...*message.Message) (*agent.RunResponse, error) {
+	client.RunFunc = func(ctx context.Context, thread memory.Thread, opts *agent.RunOptions, messages ...*message.Message) (*agent.RunResponse, error) {
 		callCount++
 		if callCount <= 5 {
 			// Return a tool call

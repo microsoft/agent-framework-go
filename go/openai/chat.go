@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework/go/agent"
 	"github.com/microsoft/agent-framework/go/format/jsonformat"
+	"github.com/microsoft/agent-framework/go/memory"
 	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/tool"
 	"github.com/microsoft/agent-framework/go/tool/websearchtool"
@@ -40,7 +41,7 @@ type AgentConfig struct {
 	// Only used for Azure OpenAI
 	APIVersion string // Optional, defaults to latest API version
 
-	ContextProvider agent.ContextProvider
+	NewContextProvider func() memory.ContextProvider
 
 	Opts *agent.RunOptions
 }
@@ -80,7 +81,7 @@ func newChatAgent(isAzure bool, config AgentConfig) *agent.Agent {
 			SystemInstructions: config.SystemInstructions,
 			Run:                c.Run,
 			RunStream:          c.RunStream,
-			ContextProvider:    config.ContextProvider,
+			NewContextProvider: config.NewContextProvider,
 		},
 	}
 }
@@ -94,7 +95,7 @@ func NewChatAgentAzure(config AgentConfig) *agent.Agent {
 	return newChatAgent(true, config)
 }
 
-func (a *client) Run(ctx context.Context, t agent.Thread, opts *agent.RunOptions, messages ...*message.Message) (*agent.RunResponse, error) {
+func (a *client) Run(ctx context.Context, t memory.Thread, opts *agent.RunOptions, messages ...*message.Message) (*agent.RunResponse, error) {
 	resp, err := a.client.Chat.Completions.New(ctx, a.buildCompletionParams(opts, messages...))
 	if err != nil {
 		return nil, err
@@ -118,7 +119,7 @@ func (a *client) Run(ctx context.Context, t agent.Thread, opts *agent.RunOptions
 	}, nil
 }
 
-func (a *client) RunStream(ctx context.Context, t agent.Thread, opts *agent.RunOptions, messages ...*message.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
+func (a *client) RunStream(ctx context.Context, t memory.Thread, opts *agent.RunOptions, messages ...*message.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
 	stream := a.client.Chat.Completions.NewStreaming(ctx, a.buildCompletionParams(opts, messages...))
 	return func(yield func(*agent.RunResponseUpdate, error) bool) {
 		defer stream.Close()
