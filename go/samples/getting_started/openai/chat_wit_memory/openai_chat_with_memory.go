@@ -27,49 +27,20 @@ func main() {
 
 	thread := ag.NewThread()
 
-	resp, err := ag.Run(ctx, thread, nil, message.NewText("Hello, what is the square root of 9?"))
-	if err != nil {
-		fmt.Print(err)
-		return
-	}
-	fmt.Println(resp.Text())
+	fmt.Println(must(ag.Run(ctx, thread, nil, message.NewText("Hello, what is the square root of 9?"))))
 
-	resp, err = ag.Run(ctx, thread, nil, message.NewText("My name is Ruaidhrí"))
-	if err != nil {
-		fmt.Print(err)
-		return
-	}
-	fmt.Println(resp.Text())
+	fmt.Println(must(ag.Run(ctx, thread, nil, message.NewText("My name is Ruaidhrí"))))
 
-	resp, err = ag.Run(ctx, thread, nil, message.NewText("I am 20 years old"))
-	if err != nil {
-		fmt.Print(err)
-		return
-	}
-	fmt.Println(resp.Text())
+	fmt.Println(must(ag.Run(ctx, thread, nil, message.NewText("I am 20 years old"))))
 
 	// We can serialize the thread. The serialized state will include the state of the memory component.
-	serializedThread, err := json.Marshal(thread)
-	if err != nil {
-		fmt.Print(err)
-		return
-	}
+	serializedThread := must(json.Marshal(thread))
 
 	fmt.Println(">> Use new thread with previously created memories")
 
-	// TODO: Fix message.Content unmarshaling
-	deserializedThread, err := ag.UnmarshalThread(serializedThread)
-	if err != nil {
-		fmt.Print(err)
-		return
-	}
-	resp, err = ag.Run(ctx, deserializedThread, nil, message.NewText("What is my name and age?"))
-	if err != nil {
-		fmt.Print(err)
-		return
-	}
-	fmt.Println(resp.Text())
+	deserializedThread := must(ag.UnmarshalThread(serializedThread))
 
+	fmt.Println(must(ag.Run(ctx, deserializedThread, nil, message.NewText("What is my name and age?"))))
 }
 
 type UserInfo struct {
@@ -123,4 +94,13 @@ func (u *UserInfoMemory) Invoking(ctx *memory.InvokingContext) (*memory.Context,
 	return &memory.Context{
 		Instructions: instructions,
 	}, nil
+}
+
+// must is a helper to panic on error for samples.
+// In production code, handle errors appropriately.
+func must[T any](resp T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return resp
 }
