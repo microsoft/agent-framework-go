@@ -16,13 +16,12 @@ import (
 
 func main() {
 	ctx := context.Background()
-	ctxProvider := &UserInfoMemory{}
-	ag := openai.NewChatAgent(openai.AgentConfig{
+	var ag *agent.Agent
+	ag = openai.NewChatAgent(openai.AgentConfig{
 		Model:              "gpt-4o-mini",
 		SystemInstructions: "You are a friendly assistant. Always address the user by their name.",
-		NewContextProvider: func() memory.ContextProvider { return ctxProvider },
+		NewContextProvider: func() memory.ContextProvider { return &UserInfoMemory{Agent: ag} },
 	})
-	ctxProvider.Agent = ag
 
 	fmt.Println(">> Use thread with blank memory")
 
@@ -30,26 +29,30 @@ func main() {
 
 	resp, err := ag.Run(ctx, thread, nil, message.NewText("Hello, what is the square root of 9?"))
 	if err != nil {
-		panic(err)
+		fmt.Print(err)
+		return
 	}
 	fmt.Println(resp.Text())
 
 	resp, err = ag.Run(ctx, thread, nil, message.NewText("My name is Ruaidhrí"))
 	if err != nil {
-		panic(err)
+		fmt.Print(err)
+		return
 	}
 	fmt.Println(resp.Text())
 
 	resp, err = ag.Run(ctx, thread, nil, message.NewText("I am 20 years old"))
 	if err != nil {
-		panic(err)
+		fmt.Print(err)
+		return
 	}
 	fmt.Println(resp.Text())
 
 	// We can serialize the thread. The serialized state will include the state of the memory component.
 	serializedThread, err := json.Marshal(thread)
 	if err != nil {
-		panic(err)
+		fmt.Print(err)
+		return
 	}
 
 	fmt.Println(">> Use thread with blank memory")
@@ -57,11 +60,13 @@ func main() {
 	// TODO: Fix message.Content unmarshaling
 	deserializedThread, err := ag.UnmarshalThread(serializedThread)
 	if err != nil {
-		panic(err)
+		fmt.Print(err)
+		return
 	}
 	resp, err = ag.Run(ctx, deserializedThread, nil, message.NewText("What is my name and age?"))
 	if err != nil {
-		panic(err)
+		fmt.Print(err)
+		return
 	}
 	fmt.Println(resp.Text())
 
