@@ -14,6 +14,8 @@ import (
 	"strings"
 
 	"github.com/microsoft/agent-framework/go/format"
+	"github.com/microsoft/agent-framework/go/memory"
+	"github.com/microsoft/agent-framework/go/memory/inmemory"
 	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/tool"
 )
@@ -26,13 +28,13 @@ type Config struct {
 
 	SystemInstructions string
 
-	NewThread func() Thread
+	NewThread       func() memory.Thread
+	UnmarshalThread func(data []byte) (memory.Thread, error)
 
-	ContextProvider ContextProvider
+	NewContextProvider func() memory.ContextProvider
 
-	Run func(ctx context.Context, thread Thread, opts *RunOptions, messages ...*message.Message) (*RunResponse, error)
-
-	RunStream func(ctx context.Context, thread Thread, opts *RunOptions, messages ...*message.Message) iter.Seq2[*RunResponseUpdate, error]
+	Run       func(ctx context.Context, thread memory.Thread, opts *RunOptions, messages ...*message.Message) (*RunResponse, error)
+	RunStream func(ctx context.Context, thread memory.Thread, opts *RunOptions, messages ...*message.Message) iter.Seq2[*RunResponseUpdate, error]
 }
 
 // Agent represents an AI agent that can execute tasks using a client and tools.
@@ -48,14 +50,37 @@ func (a *Agent) Name() string {
 	return a.Config.Name
 }
 
-func (a *Agent) NewThread() Thread {
+func (a *Agent) NewThread() memory.Thread {
 	if a.Config.NewThread != nil {
 		return a.Config.NewThread()
 	}
-	return NewInMemoryThread(a.Config.ContextProvider)
+	var ctx memory.ContextProvider
+	if a.Config.NewContextProvider != nil {
+		ctx = a.Config.NewContextProvider()
+	}
+	return &inmemory.Thread{
+		Provider: ctx,
+	}
 }
 
-func (a *Agent) Run(ctx context.Context, thread Thread, opts *RunOptions, messages ...*message.Message) (*RunResponse, error) {
+func (a *Agent) UnmarshalThread(data []byte) (memory.Thread, error) {
+	if a.Config.UnmarshalThread != nil {
+		return a.Config.UnmarshalThread(data)
+	}
+	var ctx memory.ContextProvider
+	if a.Config.NewContextProvider != nil {
+		ctx = a.Config.NewContextProvider()
+	}
+	thread := &inmemory.Thread{
+		Provider: ctx,
+	}
+	if err := json.Unmarshal(data, thread); err != nil {
+		return nil, err
+	}
+	return thread, nil
+}
+
+func (a *Agent) Run(ctx context.Context, thread memory.Thread, opts *RunOptions, messages ...*message.Message) (*RunResponse, error) {
 	// Prepare messages with system instructions
 	opts, threadMessages, err := a.prepareRun(ctx, thread, opts, messages)
 	if err != nil {
@@ -100,12 +125,17 @@ func (a *Agent) Run(ctx context.Context, thread Thread, opts *RunOptions, messag
 		}
 	}
 	if ctxprovider := a.contextProvider(thread); ctxprovider != nil {
-		if err := ctxprovider.Invoked(ctx, messages, outMessages, nil); err != nil {
+		if err := ctxprovider.Invoked(&memory.InvokedContext{
+			Context:   ctx,
+			Messages:  messages,
+			Responses: outMessages,
+			Err:       nil,
+		}); err != nil {
 			return nil, err
 		}
 	}
 	response := &RunResponse{
-		Messages:   threadMessages[startLength:],
+		Messages:   outMessages,
 		ResponseID: finalResponse.ResponseID,
 		AgentID:    id,
 	}
@@ -121,7 +151,7 @@ func (a *Agent) RunText(ctx context.Context, msg string) (*RunResponse, error) {
 	return a.Run(ctx, nil, nil, message.NewText(msg))
 }
 
-func (a *Agent) RunStream(ctx context.Context, thread Thread, opts *RunOptions, messages ...*message.Message) iter.Seq2[*RunResponseUpdate, error] {
+func (a *Agent) RunStream(ctx context.Context, thread memory.Thread, opts *RunOptions, messages ...*message.Message) iter.Seq2[*RunResponseUpdate, error] {
 	if a.Config.RunStream == nil {
 		return a.runStreamFallback(ctx, thread, opts, messages...)
 	}
@@ -202,7 +232,12 @@ func (a *Agent) RunStream(ctx context.Context, thread Thread, opts *RunOptions, 
 		}
 
 		if ctxprovider := a.contextProvider(thread); ctxprovider != nil {
-			if err := ctxprovider.Invoked(ctx, messages, threadMessages[startLength:], nil); err != nil {
+			if err := ctxprovider.Invoked(&memory.InvokedContext{
+				Context:   ctx,
+				Messages:  messages,
+				Responses: threadMessages[startLength:],
+				Err:       nil,
+			}); err != nil {
 				yield(nil, err)
 				return
 			}
@@ -224,7 +259,7 @@ func (a *Agent) RunStream(ctx context.Context, thread Thread, opts *RunOptions, 
 	}
 }
 
-func (a *Agent) runStreamFallback(ctx context.Context, thread Thread, options *RunOptions, messages ...*message.Message) iter.Seq2[*RunResponseUpdate, error] {
+func (a *Agent) runStreamFallback(ctx context.Context, thread memory.Thread, options *RunOptions, messages ...*message.Message) iter.Seq2[*RunResponseUpdate, error] {
 	resp, err := a.Run(ctx, thread, options, messages...)
 	id := a.ID()
 	return func(yield func(*RunResponseUpdate, error) bool) {
@@ -353,19 +388,16 @@ func (r *RunResponseUpdate) Text() string {
 	return sb.String()
 }
 
-func (a *Agent) contextProvider(thread Thread) ContextProvider {
-	if a.Config.ContextProvider != nil {
-		return a.Config.ContextProvider
-	}
+func (a *Agent) contextProvider(thread memory.Thread) memory.ContextProvider {
 	if thread != nil {
-		if thread, ok := thread.(contextProviderThread); ok {
+		if thread, ok := thread.(memory.ContextProviderThread); ok {
 			return thread.ContextProvider()
 		}
 	}
 	return nil
 }
 
-func (a *Agent) prepareRun(ctx context.Context, thread Thread, opts *RunOptions, messages []*message.Message) (*RunOptions, []*message.Message, error) {
+func (a *Agent) prepareRun(ctx context.Context, thread memory.Thread, opts *RunOptions, messages []*message.Message) (*RunOptions, []*message.Message, error) {
 	opts = a.Config.Opts.Merge(opts)
 	if opts.ResponseFormat == nil && opts.Response != nil {
 		// Try to get the format from the response object.
@@ -379,7 +411,7 @@ func (a *Agent) prepareRun(ctx context.Context, thread Thread, opts *RunOptions,
 	}
 	messages = slices.Clone(messages)
 	if a.Config.SystemInstructions != "" {
-		messages = append([]*message.Message{&message.Message{Role: message.RoleSystem, Contents: []message.Content{&message.TextContent{Text: a.Config.SystemInstructions}}}}, messages...)
+		messages = append([]*message.Message{{Role: message.RoleSystem, Contents: []message.Content{&message.TextContent{Text: a.Config.SystemInstructions}}}}, messages...)
 	}
 	if opts != nil {
 		if err := initTools(ctx, opts.Tools); err != nil {
@@ -393,14 +425,17 @@ func (a *Agent) prepareRun(ctx context.Context, thread Thread, opts *RunOptions,
 	}
 	ctxProvider := a.contextProvider(thread)
 	if ctxProvider != nil {
-		ctxData, err := ctxProvider.Invoking(ctx, messages)
+		ctxData, err := ctxProvider.Invoking(&memory.InvokingContext{
+			Context:  ctx,
+			Messages: messages,
+		})
 		if err != nil {
 			return nil, nil, err
 		}
 		if ctxData != nil {
 			opts.Tools = append(opts.Tools, ctxData.Tools...)
 			if ctxData.Instructions != "" {
-				messages = append([]*message.Message{&message.Message{Role: message.RoleSystem, Contents: []message.Content{&message.TextContent{Text: ctxData.Instructions}}}}, messages...)
+				messages = append([]*message.Message{{Role: message.RoleSystem, Contents: []message.Content{&message.TextContent{Text: ctxData.Instructions}}}}, messages...)
 			}
 			messages = append(messages, ctxData.Messages...)
 		}

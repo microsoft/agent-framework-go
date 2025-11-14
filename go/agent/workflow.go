@@ -6,6 +6,7 @@ import (
 	"context"
 	"iter"
 
+	"github.com/microsoft/agent-framework/go/memory"
 	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/workflow"
 	"github.com/microsoft/agent-framework/go/workflow/workflowext"
@@ -88,7 +89,7 @@ type hostExecutor struct {
 
 	emitEvents bool
 	agent      *Agent
-	thread     Thread
+	thread     memory.Thread
 }
 
 func NewWorkflowExecutor(agent *Agent, emitEvents bool) workflow.Executor {
@@ -105,7 +106,7 @@ func (e *hostExecutor) ID() string {
 	return e.agent.ID()
 }
 
-func (e *hostExecutor) ensureThread() Thread {
+func (e *hostExecutor) ensureThread() memory.Thread {
 	if e.thread == nil {
 		e.thread = e.agent.NewThread()
 	}
