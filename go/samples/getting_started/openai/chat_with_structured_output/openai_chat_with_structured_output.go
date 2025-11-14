@@ -32,7 +32,7 @@ func main() {
 	})
 
 	const query = "Tell me about Paris, France"
-	fmt.Println("User: " + query)
+	fmt.Println("User: ", query)
 
 	var out jsonformat.Value[CityInfo]
 	fmt.Println("Agent raw response: ", must(ag.Run(ctx, nil, &agent.RunOptions{Response: &out}, message.NewText(query))))

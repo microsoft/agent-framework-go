@@ -75,14 +75,14 @@ func main() {
 func nonStreamingExample(ag *agent.Agent, query string) {
 	ctx := context.Background()
 	fmt.Println("\n=== Non-streaming Response Example ===")
-	fmt.Println("User: " + query)
+	fmt.Println("User: ", query)
 	fmt.Println("Assistant: ", must(ag.RunText(ctx, query)))
 }
 
 func streamingExample(ag *agent.Agent, query string) {
 	ctx := context.Background()
 	fmt.Println("\n=== Streaming Response Example ===")
-	fmt.Println("User: " + query)
+	fmt.Println("User: ", query)
 	fmt.Print("Assistant: ")
 	stream := ag.RunStream(ctx, nil, nil, message.NewText(query))
 	for update, err := range stream {
