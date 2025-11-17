@@ -20,7 +20,7 @@ func Unmarshal(format *Format, data []byte, v any) error {
 	if err != nil {
 		return fmt.Errorf("validating: %v", err)
 	}
-	if err := json.Unmarshal(data, &v); err != nil {
+	if err := json.Unmarshal(data, v); err != nil {
 		return fmt.Errorf("unmarshaling: %w", err)
 	}
 	return nil
