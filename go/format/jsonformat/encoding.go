@@ -18,7 +18,7 @@ func Unmarshal(format *Format, data []byte, v any) error {
 	}
 	data, err = applySchema(data, resolved)
 	if err != nil {
-		return fmt.Errorf("validating: %v", err)
+		return fmt.Errorf("validating: %w", err)
 	}
 	if err := json.Unmarshal(data, v); err != nil {
 		return fmt.Errorf("unmarshaling: %w", err)
@@ -64,7 +64,7 @@ func applySchema(data json.RawMessage, resolved *jsonschema.Resolved) (json.RawM
 
 	// ApplyDefaults and Validate work on the unmarshaled value
 	if err := resolved.ApplyDefaults(&v); err != nil {
-		return nil, fmt.Errorf("applying schema defaults:\n%w", err)
+		return nil, fmt.Errorf("applying schema defaults: %w", err)
 	}
 
 	if err := resolved.Validate(&v); err != nil {
@@ -75,7 +75,7 @@ func applySchema(data json.RawMessage, resolved *jsonschema.Resolved) (json.RawM
 	var err error
 	data, err = json.Marshal(v)
 	if err != nil {
-		return nil, fmt.Errorf("marshalling with defaults: %v", err)
+		return nil, fmt.Errorf("marshalling with defaults: %w", err)
 	}
 	return data, nil
 }

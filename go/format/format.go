@@ -6,12 +6,12 @@ import "encoding"
 
 // Format represents the desired format, e.g., for agent responses or tool input/output.
 type Format interface {
-	// Kind if the format type.
+	// Kind is the format type.
 	// For example, "text" or "json".
 	Kind() string
 }
 
-type Formatable interface {
+type Formattable interface {
 	encoding.BinaryUnmarshaler
 
 	// Format returns the desired format for the object.
