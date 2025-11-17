@@ -303,17 +303,6 @@ type RunContext struct {
 	Options *RunOptions
 }
 
-func (c *RunContext) Clone() *RunContext {
-	if c == nil {
-		return nil
-	}
-	return &RunContext{
-		Context: c.Context,
-		Thread:  c.Thread,
-		Options: c.Options,
-	}
-}
-
 // RunOptions contains options for agent execution.
 type RunOptions struct {
 	// ResponseFormat represents the desired response format for agent execution.
