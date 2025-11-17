@@ -3,7 +3,6 @@
 package jsonformat
 
 import (
-	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -102,8 +101,7 @@ func ForType(rt reflect.Type) (*Format, error) {
 	if err != nil {
 		return nil, err
 	}
-	name := fmt.Sprintf("%T", reflect.New(rt).Interface())
-	name = strings.ReplaceAll(name, "*", "") // json don't care about pointers
+	name := rt.String()
 	if split := strings.Split(name, "."); len(split) != 0 {
 		// Use only the type name, not the package path.
 		name = split[len(split)-1]
