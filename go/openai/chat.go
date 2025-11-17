@@ -4,7 +4,6 @@ package openai
 
 import (
 	"cmp"
-	"context"
 	"encoding/json"
 	"fmt"
 	"iter"
@@ -95,8 +94,8 @@ func NewChatAgentAzure(config AgentConfig) *agent.Agent {
 	return newChatAgent(true, config)
 }
 
-func (a *client) Run(ctx context.Context, t memory.Thread, opts *agent.RunOptions, messages ...*message.Message) (*agent.RunResponse, error) {
-	resp, err := a.client.Chat.Completions.New(ctx, a.buildCompletionParams(opts, messages...))
+func (a *client) Run(ctx *agent.RunContext, messages ...*message.Message) (*agent.RunResponse, error) {
+	resp, err := a.client.Chat.Completions.New(ctx, a.buildCompletionParams(ctx.Options, messages...))
 	if err != nil {
 		return nil, err
 	}
@@ -119,8 +118,8 @@ func (a *client) Run(ctx context.Context, t memory.Thread, opts *agent.RunOption
 	}, nil
 }
 
-func (a *client) RunStream(ctx context.Context, t memory.Thread, opts *agent.RunOptions, messages ...*message.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
-	stream := a.client.Chat.Completions.NewStreaming(ctx, a.buildCompletionParams(opts, messages...))
+func (a *client) RunStream(ctx *agent.RunContext, messages ...*message.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
+	stream := a.client.Chat.Completions.NewStreaming(ctx, a.buildCompletionParams(ctx.Options, messages...))
 	return func(yield func(*agent.RunResponseUpdate, error) bool) {
 		defer stream.Close()
 		var acc openai.ChatCompletionAccumulator

@@ -2,7 +2,6 @@ package main
 
 import (
 	"cmp"
-	"context"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -15,7 +14,6 @@ import (
 )
 
 func main() {
-	ctx := context.Background()
 	var ag *agent.Agent
 	ag = openai.NewChatAgent(openai.AgentConfig{
 		Model:              "gpt-4o-mini",
@@ -25,22 +23,22 @@ func main() {
 
 	fmt.Println(">> Use thread with blank memory")
 
-	thread := ag.NewThread()
+	ctx := &agent.RunContext{Thread: ag.NewThread()}
 
-	fmt.Println(must(ag.Run(ctx, thread, nil, message.NewText("Hello, what is the square root of 9?"))))
+	fmt.Println(must(ag.Run(ctx, message.NewText("Hello, what is the square root of 9?"))))
 
-	fmt.Println(must(ag.Run(ctx, thread, nil, message.NewText("My name is Ruaidhrí"))))
+	fmt.Println(must(ag.Run(ctx, message.NewText("My name is Ruaidhrí"))))
 
-	fmt.Println(must(ag.Run(ctx, thread, nil, message.NewText("I am 20 years old"))))
+	fmt.Println(must(ag.Run(ctx, message.NewText("I am 20 years old"))))
 
 	// We can serialize the thread. The serialized state will include the state of the memory component.
-	serializedThread := must(json.Marshal(thread))
+	serializedThread := must(json.Marshal(ctx.Thread))
 
 	fmt.Println(">> Use new thread with previously created memories")
 
 	deserializedThread := must(ag.UnmarshalThread(serializedThread))
 
-	fmt.Println(must(ag.Run(ctx, deserializedThread, nil, message.NewText("What is my name and age?"))))
+	fmt.Println(must(ag.Run(&agent.RunContext{Thread: deserializedThread}, message.NewText("What is my name and age?"))))
 }
 
 type UserInfo struct {
@@ -65,7 +63,7 @@ func (u *UserInfoMemory) Invoked(ctx *memory.InvokedContext) error {
 		return nil
 	}
 	var out jsonformat.Value[UserInfo]
-	_, err := u.Agent.Run(ctx.Context, nil, &agent.RunOptions{Response: &out}, append(ctx.Messages,
+	_, err := u.Agent.Run(&agent.RunContext{Context: ctx.Context, Options: &agent.RunOptions{Response: &out}}, append(ctx.Messages,
 		message.NewText("Extract the user's name and age from the message if present. If not present return empty values."),
 	)...)
 	if err != nil {

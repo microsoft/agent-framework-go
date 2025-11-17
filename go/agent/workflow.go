@@ -115,14 +115,14 @@ func (e *hostExecutor) ensureThread() memory.Thread {
 
 func (e *hostExecutor) takeTurnHandler(ctx context.Context, wctx workflow.Context, emitEvents bool, messages []*message.Message) error {
 	if !emitEvents {
-		response, err := e.agent.Run(ctx, e.ensureThread(), nil, messages...)
+		response, err := e.agent.Run(&RunContext{Context: ctx, Thread: e.ensureThread()}, messages...)
 		if err != nil {
 			return err
 		}
 		return wctx.SendMessage(ctx, response.Messages, "")
 	}
 	var updates []*RunResponseUpdate
-	for update, err := range e.agent.RunStream(ctx, e.ensureThread(), nil, messages...) {
+	for update, err := range e.agent.RunStream(&RunContext{Context: ctx, Thread: e.ensureThread()}, messages...) {
 		if err != nil {
 			return err
 		}

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/microsoft/agent-framework/go/agent"
@@ -24,7 +23,6 @@ type CityInfo struct {
 }
 
 func main() {
-	ctx := context.Background()
 	ag := openai.NewChatAgent(openai.AgentConfig{
 		Model:              "gpt-5-nano",
 		Name:               "CityAgent",
@@ -35,7 +33,12 @@ func main() {
 	fmt.Println("User: ", query)
 
 	var out jsonformat.Value[CityInfo]
-	fmt.Println("Agent raw response: ", must(ag.Run(ctx, nil, &agent.RunOptions{Response: &out}, message.NewText(query))))
+	ctx := &agent.RunContext{
+		Options: &agent.RunOptions{
+			Response: &out,
+		},
+	}
+	fmt.Println("Agent raw response: ", must(ag.Run(ctx, message.NewText(query))))
 
 	city := out.Unwrap()
 	fmt.Println("City Name: ", city.Name)
