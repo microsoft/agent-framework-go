@@ -33,8 +33,8 @@ type Config struct {
 
 	NewContextProvider func() memory.ContextProvider
 
-	Run       func(ctx context.Context, thread memory.Thread, opts *RunOptions, messages ...*message.Message) (*RunResponse, error)
-	RunStream func(ctx context.Context, thread memory.Thread, opts *RunOptions, messages ...*message.Message) iter.Seq2[*RunResponseUpdate, error]
+	Run       func(ctx *RunContext, messages ...*message.Message) (*RunResponse, error)
+	RunStream func(ctx *RunContext, messages ...*message.Message) iter.Seq2[*RunResponseUpdate, error]
 }
 
 // Agent represents an AI agent that can execute tasks using a client and tools.
@@ -80,9 +80,10 @@ func (a *Agent) UnmarshalThread(data []byte) (memory.Thread, error) {
 	return thread, nil
 }
 
-func (a *Agent) Run(ctx context.Context, thread memory.Thread, opts *RunOptions, messages ...*message.Message) (*RunResponse, error) {
+// Run executes the agent with the given messages and returns the response.
+func (a *Agent) Run(ctx *RunContext, messages ...*message.Message) (*RunResponse, error) {
 	// Prepare messages with system instructions
-	opts, threadMessages, err := a.prepareRun(ctx, thread, opts, messages)
+	ctx, threadMessages, err := a.prepareRun(ctx, messages)
 	if err != nil {
 		return nil, err
 	}
@@ -92,13 +93,13 @@ func (a *Agent) Run(ctx context.Context, thread memory.Thread, opts *RunOptions,
 	const maxRetries = 5
 	for range maxRetries {
 		// Call the chat client
-		response, err := a.Config.Run(ctx, thread, opts, threadMessages...)
+		response, err := a.Config.Run(ctx, threadMessages...)
 		if err != nil {
 			return nil, err
 		}
 		msg := response.Messages[0]
 		threadMessages = append(threadMessages, msg)
-		toolResult := runToolCalls(ctx, opts, msg.Contents...)
+		toolResult := runToolCalls(ctx.Context, ctx.Options, msg.Contents...)
 		if len(toolResult) > 0 {
 			// Add a single Message to the response with the results
 			threadMessages = append(threadMessages, &message.Message{Role: message.RoleTool, Contents: toolResult})
@@ -110,8 +111,8 @@ func (a *Agent) Run(ctx context.Context, thread memory.Thread, opts *RunOptions,
 	if finalResponse == nil {
 		// Exceeded max retries with tool calls pending, disable tools and try one last time
 		// to get a final response.
-		opts.ToolMode = tool.ToolModeNone
-		finalResponse, err = a.Config.Run(ctx, thread, opts, threadMessages...)
+		ctx.Options.ToolMode = tool.ToolModeNone
+		finalResponse, err = a.Config.Run(ctx, threadMessages...)
 		if err != nil {
 			return nil, err
 		}
@@ -119,12 +120,12 @@ func (a *Agent) Run(ctx context.Context, thread memory.Thread, opts *RunOptions,
 		threadMessages = append(threadMessages, message)
 	}
 	outMessages := threadMessages[startLength:]
-	if thread != nil {
-		if err := thread.AddMessage(ctx, outMessages...); err != nil {
+	if ctx.Thread != nil {
+		if err := ctx.Thread.AddMessage(ctx, outMessages...); err != nil {
 			return nil, err
 		}
 	}
-	if ctxprovider := a.contextProvider(thread); ctxprovider != nil {
+	if ctxprovider := a.contextProvider(ctx.Thread); ctxprovider != nil {
 		if err := ctxprovider.Invoked(&memory.InvokedContext{
 			Context:   ctx,
 			Messages:  messages,
@@ -139,23 +140,25 @@ func (a *Agent) Run(ctx context.Context, thread memory.Thread, opts *RunOptions,
 		ResponseID: finalResponse.ResponseID,
 		AgentID:    id,
 	}
-	if opts.Response != nil {
-		if err := opts.Response.UnmarshalBinary([]byte(response.String())); err != nil {
+	if ctx.Options.Response != nil {
+		if err := ctx.Options.Response.UnmarshalBinary([]byte(response.String())); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 		}
 	}
 	return response, nil
 }
 
-func (a *Agent) RunText(ctx context.Context, msg string) (*RunResponse, error) {
-	return a.Run(ctx, nil, nil, message.NewText(msg))
+// RunText executes the agent with a single text message and returns the response.
+func (a *Agent) RunText(ctx *RunContext, msg string) (*RunResponse, error) {
+	return a.Run(ctx, message.NewText(msg))
 }
 
-func (a *Agent) RunStream(ctx context.Context, thread memory.Thread, opts *RunOptions, messages ...*message.Message) iter.Seq2[*RunResponseUpdate, error] {
+// RunStream executes the agent with the given messages and returns a streaming response.
+func (a *Agent) RunStream(ctx *RunContext, messages ...*message.Message) iter.Seq2[*RunResponseUpdate, error] {
 	if a.Config.RunStream == nil {
-		return a.runStreamFallback(ctx, thread, opts, messages...)
+		return a.runStreamFallback(ctx, messages...)
 	}
-	opts, threadMessages, err := a.prepareRun(ctx, thread, opts, messages)
+	ctx, threadMessages, err := a.prepareRun(ctx, messages)
 	startLength := len(threadMessages)
 	id := a.ID()
 	return func(yield func(*RunResponseUpdate, error) bool) {
@@ -168,7 +171,7 @@ func (a *Agent) RunStream(ctx context.Context, thread memory.Thread, opts *RunOp
 
 		for range maxRetries {
 			var contents []message.Content
-			for update, err := range a.Config.RunStream(ctx, thread, opts, threadMessages...) {
+			for update, err := range a.Config.RunStream(ctx, threadMessages...) {
 				if err != nil {
 					yield(nil, err)
 					return
@@ -193,7 +196,7 @@ func (a *Agent) RunStream(ctx context.Context, thread memory.Thread, opts *RunOp
 			}
 
 			// Execute tools
-			toolResult := runToolCalls(ctx, opts, contents...)
+			toolResult := runToolCalls(ctx.Context, ctx.Options, contents...)
 			if len(toolResult) > 0 {
 				// Add a single Message to the response with the results
 				if !yield(&RunResponseUpdate{
@@ -213,8 +216,8 @@ func (a *Agent) RunStream(ctx context.Context, thread memory.Thread, opts *RunOp
 		if !success {
 			// Exceeded max retries with tool calls pending, disable tools and try one last time
 			// to get a final response.
-			opts.ToolMode = tool.ToolModeNone
-			for update, err := range a.Config.RunStream(ctx, thread, opts, threadMessages...) {
+			ctx.Options.ToolMode = tool.ToolModeNone
+			for update, err := range a.Config.RunStream(ctx, threadMessages...) {
 				if err != nil {
 					yield(nil, err)
 					return
@@ -224,14 +227,14 @@ func (a *Agent) RunStream(ctx context.Context, thread memory.Thread, opts *RunOp
 				}
 			}
 		}
-		if thread != nil {
-			if err := thread.AddMessage(ctx, threadMessages[startLength:]...); err != nil {
+		if ctx.Thread != nil {
+			if err := ctx.Thread.AddMessage(ctx, threadMessages[startLength:]...); err != nil {
 				yield(nil, err)
 				return
 			}
 		}
 
-		if ctxprovider := a.contextProvider(thread); ctxprovider != nil {
+		if ctxprovider := a.contextProvider(ctx.Thread); ctxprovider != nil {
 			if err := ctxprovider.Invoked(&memory.InvokedContext{
 				Context:   ctx,
 				Messages:  messages,
@@ -242,7 +245,7 @@ func (a *Agent) RunStream(ctx context.Context, thread memory.Thread, opts *RunOp
 				return
 			}
 		}
-		if opts.Response != nil {
+		if ctx.Options.Response != nil {
 			var finalText strings.Builder
 			for _, msg := range threadMessages[startLength:] {
 				for _, c := range msg.Contents {
@@ -251,7 +254,7 @@ func (a *Agent) RunStream(ctx context.Context, thread memory.Thread, opts *RunOp
 					}
 				}
 			}
-			if err := opts.Response.UnmarshalBinary([]byte(finalText.String())); err != nil {
+			if err := ctx.Options.Response.UnmarshalBinary([]byte(finalText.String())); err != nil {
 				yield(nil, fmt.Errorf("failed to unmarshal response: %w", err))
 				return
 			}
@@ -259,8 +262,8 @@ func (a *Agent) RunStream(ctx context.Context, thread memory.Thread, opts *RunOp
 	}
 }
 
-func (a *Agent) runStreamFallback(ctx context.Context, thread memory.Thread, options *RunOptions, messages ...*message.Message) iter.Seq2[*RunResponseUpdate, error] {
-	resp, err := a.Run(ctx, thread, options, messages...)
+func (a *Agent) runStreamFallback(ctx *RunContext, messages ...*message.Message) iter.Seq2[*RunResponseUpdate, error] {
+	resp, err := a.Run(ctx, messages...)
 	id := a.ID()
 	return func(yield func(*RunResponseUpdate, error) bool) {
 		if err != nil {
@@ -280,6 +283,13 @@ func (a *Agent) runStreamFallback(ctx context.Context, thread memory.Thread, opt
 			}
 		}
 	}
+}
+
+// RunContext contains context for agent execution.
+type RunContext struct {
+	context.Context
+	Thread  memory.Thread
+	Options *RunOptions
 }
 
 // RunOptions contains options for agent execution.
@@ -397,13 +407,21 @@ func (a *Agent) contextProvider(thread memory.Thread) memory.ContextProvider {
 	return nil
 }
 
-func (a *Agent) prepareRun(ctx context.Context, thread memory.Thread, opts *RunOptions, messages []*message.Message) (*RunOptions, []*message.Message, error) {
-	opts = a.Config.Opts.Merge(opts)
-	if opts.ResponseFormat == nil && opts.Response != nil {
+func (a *Agent) prepareRun(c *RunContext, messages []*message.Message) (*RunContext, []*message.Message, error) {
+	var ctx RunContext
+	if c != nil {
+		ctx = *c
+		c = nil // prevent reuse
+	}
+	if ctx.Context == nil {
+		ctx.Context = context.Background()
+	}
+	ctx.Options = a.Config.Opts.Merge(ctx.Options)
+	if ctx.Options.ResponseFormat == nil && ctx.Options.Response != nil {
 		// Try to get the format from the response object.
-		if rf, ok := opts.Response.(format.FormatProvider); ok {
+		if rf, ok := ctx.Options.Response.(format.FormatProvider); ok {
 			var err error
-			opts.ResponseFormat, err = rf.Format()
+			ctx.Options.ResponseFormat, err = rf.Format()
 			if err != nil {
 				return nil, nil, err
 			}
@@ -413,17 +431,17 @@ func (a *Agent) prepareRun(ctx context.Context, thread memory.Thread, opts *RunO
 	if a.Config.SystemInstructions != "" {
 		messages = append([]*message.Message{{Role: message.RoleSystem, Contents: []message.Content{&message.TextContent{Text: a.Config.SystemInstructions}}}}, messages...)
 	}
-	if opts != nil {
-		if err := initTools(ctx, opts.Tools); err != nil {
+	if ctx.Options != nil {
+		if err := initTools(ctx, ctx.Options.Tools); err != nil {
 			return nil, nil, err
 		}
-		extraTools, err := loadTools(ctx, opts.Tools)
+		extraTools, err := loadTools(ctx, ctx.Options.Tools)
 		if err != nil {
 			return nil, nil, err
 		}
-		opts.Tools = append(opts.Tools, extraTools...)
+		ctx.Options.Tools = append(ctx.Options.Tools, extraTools...)
 	}
-	ctxProvider := a.contextProvider(thread)
+	ctxProvider := a.contextProvider(ctx.Thread)
 	if ctxProvider != nil {
 		ctxData, err := ctxProvider.Invoking(&memory.InvokingContext{
 			Context:  ctx,
@@ -433,14 +451,14 @@ func (a *Agent) prepareRun(ctx context.Context, thread memory.Thread, opts *RunO
 			return nil, nil, err
 		}
 		if ctxData != nil {
-			opts.Tools = append(opts.Tools, ctxData.Tools...)
+			ctx.Options.Tools = append(ctx.Options.Tools, ctxData.Tools...)
 			if ctxData.Instructions != "" {
 				messages = append([]*message.Message{{Role: message.RoleSystem, Contents: []message.Content{&message.TextContent{Text: ctxData.Instructions}}}}, messages...)
 			}
 			messages = append(messages, ctxData.Messages...)
 		}
 	}
-	return opts, messages, nil
+	return &ctx, messages, nil
 }
 
 func loadTools(ctx context.Context, tools []tool.Tool) ([]tool.Tool, error) {

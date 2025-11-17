@@ -20,10 +20,10 @@ type Client struct {
 	agent *agent.Agent
 
 	// RunFunc is called when Run is invoked. If nil, uses default behavior.
-	RunFunc func(ctx context.Context, thread memory.Thread, opts *agent.RunOptions, messages ...*message.Message) (*agent.RunResponse, error)
+	RunFunc func(ctx *agent.RunContext, messages ...*message.Message) (*agent.RunResponse, error)
 
 	// RunStreamFunc is called when RunStream is invoked. If nil, uses default behavior.
-	RunStreamFunc func(ctx context.Context, thread memory.Thread, opts *agent.RunOptions, messages ...*message.Message) iter.Seq2[*agent.RunResponseUpdate, error]
+	RunStreamFunc func(ctx *agent.RunContext, messages ...*message.Message) iter.Seq2[*agent.RunResponseUpdate, error]
 
 	// RunCalls records all calls to Run.
 	RunCalls []RunCall
@@ -84,21 +84,21 @@ func NewAgent() (*Client, *agent.Agent) {
 }
 
 // Run implements the Client interface.
-func (c *Client) Run(ctx context.Context, thread memory.Thread, opts *agent.RunOptions, messages ...*message.Message) (*agent.RunResponse, error) {
+func (c *Client) Run(ctx *agent.RunContext, messages ...*message.Message) (*agent.RunResponse, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	// Record the call
 	c.RunCalls = append(c.RunCalls, RunCall{
 		Ctx:      ctx,
-		Thread:   thread,
-		Opts:     opts,
+		Thread:   ctx.Thread,
+		Opts:     ctx.Options,
 		Messages: messages,
 	})
 
 	// Use custom function if provided
 	if c.RunFunc != nil {
-		return c.RunFunc(ctx, thread, opts, messages...)
+		return c.RunFunc(ctx, messages...)
 	}
 
 	// Return error if configured
@@ -122,13 +122,13 @@ func (c *Client) Run(ctx context.Context, thread memory.Thread, opts *agent.RunO
 }
 
 // RunStream implements the streamableClient interface.
-func (c *Client) RunStream(ctx context.Context, thread memory.Thread, opts *agent.RunOptions, messages ...*message.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
+func (c *Client) RunStream(ctx *agent.RunContext, messages ...*message.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
 	c.mu.Lock()
 	// Record the call
 	c.RunStreamCalls = append(c.RunStreamCalls, RunStreamCall{
 		Ctx:      ctx,
-		Thread:   thread,
-		Opts:     opts,
+		Thread:   ctx.Thread,
+		Opts:     ctx.Options,
 		Messages: messages,
 	})
 
@@ -141,7 +141,7 @@ func (c *Client) RunStream(ctx context.Context, thread memory.Thread, opts *agen
 
 	// Use custom function if provided
 	if runStreamFunc != nil {
-		return runStreamFunc(ctx, thread, opts, messages...)
+		return runStreamFunc(ctx, messages...)
 	}
 
 	// Return an iterator
@@ -248,7 +248,7 @@ func (c *Client) WithResponseSequence(responses ...*agent.RunResponse) *Client {
 	defer c.mu.Unlock()
 
 	index := 0
-	c.RunFunc = func(ctx context.Context, thread memory.Thread, opts *agent.RunOptions, messages ...*message.Message) (*agent.RunResponse, error) {
+	c.RunFunc = func(ctx *agent.RunContext, messages ...*message.Message) (*agent.RunResponse, error) {
 		if index >= len(responses) {
 			return responses[len(responses)-1], nil
 		}
@@ -266,7 +266,7 @@ func (c *Client) WithToolCalls(toolCalls []*message.FunctionCallContent, finalRe
 	defer c.mu.Unlock()
 
 	callCount := 0
-	c.RunFunc = func(ctx context.Context, thread memory.Thread, opts *agent.RunOptions, messages ...*message.Message) (*agent.RunResponse, error) {
+	c.RunFunc = func(ctx *agent.RunContext, messages ...*message.Message) (*agent.RunResponse, error) {
 		callCount++
 		if callCount == 1 {
 			// First call returns tool calls
@@ -301,7 +301,7 @@ func (c *Client) WithStreamingToolCalls(toolCalls []*message.FunctionCallContent
 	defer c.mu.Unlock()
 
 	callCount := 0
-	c.RunStreamFunc = func(ctx context.Context, thread memory.Thread, opts *agent.RunOptions, messages ...*message.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
+	c.RunStreamFunc = func(ctx *agent.RunContext, messages ...*message.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
 		callCount++
 		currentCall := callCount
 		return func(yield func(*agent.RunResponseUpdate, error) bool) {

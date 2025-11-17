@@ -9,16 +9,19 @@ import (
 
 	"github.com/microsoft/agent-framework/go/agent"
 	"github.com/microsoft/agent-framework/go/agent/internal/agenttest"
-	"github.com/microsoft/agent-framework/go/memory"
 	"github.com/microsoft/agent-framework/go/memory/inmemory"
 	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/tool"
 )
 
+func testRunContext(t *testing.T) *agent.RunContext {
+	return &agent.RunContext{Context: context.Background()}
+}
+
 func TestAgent_BasicRun(t *testing.T) {
 	client, a := agenttest.NewAgent()
 
-	resp, err := a.Run(t.Context(), nil, nil, message.NewText("Hello"))
+	resp, err := a.Run(testRunContext(t), message.NewText("Hello"))
 
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -51,7 +54,7 @@ func TestAgent_CustomResponse(t *testing.T) {
 	}
 	client.SetResponse(customResponse)
 
-	resp, err := a.Run(t.Context(), nil, nil, message.NewText("Test"))
+	resp, err := a.Run(testRunContext(t), message.NewText("Test"))
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -67,7 +70,7 @@ func TestAgent_ErrorHandling(t *testing.T) {
 	expectedError := errors.New("an error")
 	client.SetError(expectedError)
 
-	_, err := a.Run(t.Context(), nil, nil, message.NewText("Test"))
+	_, err := a.Run(testRunContext(t), message.NewText("Test"))
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -91,7 +94,7 @@ func TestAgent_RunStream(t *testing.T) {
 	})
 
 	var receivedUpdates []*agent.RunResponseUpdate
-	for update, err := range a.RunStream(t.Context(), nil, nil, message.NewText("Test")) {
+	for update, err := range a.RunStream(testRunContext(t), message.NewText("Test")) {
 		if err != nil {
 			t.Fatalf("expected no error, got: %v", err)
 		}
@@ -124,7 +127,7 @@ func TestAgent_ResponseSequence(t *testing.T) {
 	}
 	client.WithResponseSequence(responses...)
 
-	resp1, err := a.Run(t.Context(), nil, nil, message.NewText("Test 1"))
+	resp1, err := a.Run(testRunContext(t), message.NewText("Test 1"))
 	if err != nil {
 		t.Fatalf("expected no error on first call, got: %v", err)
 	}
@@ -132,7 +135,7 @@ func TestAgent_ResponseSequence(t *testing.T) {
 		t.Errorf("expected %q, got %q", respText1, resp1.String())
 	}
 
-	resp2, err := a.Run(t.Context(), nil, nil, message.NewText("Test 2"))
+	resp2, err := a.Run(testRunContext(t), message.NewText("Test 2"))
 	if err != nil {
 		t.Fatalf("expected no error on second call, got: %v", err)
 	}
@@ -161,9 +164,9 @@ func TestAgent_WithToolCalls(t *testing.T) {
 		},
 	}
 
-	resp, err := a.Run(t.Context(), nil, &agent.RunOptions{
+	resp, err := a.Run(&agent.RunContext{Context: t.Context(), Options: &agent.RunOptions{
 		Tools: []tool.Tool{tl},
-	}, message.NewText("What's the weather?"))
+	}}, message.NewText("What's the weather?"))
 
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -189,7 +192,7 @@ func TestAgent_CustomFunction(t *testing.T) {
 	const respText2 = "Confirmed!"
 
 	callCount := 0
-	client.RunFunc = func(ctx context.Context, thread memory.Thread, opts *agent.RunOptions, messages ...*message.Message) (*agent.RunResponse, error) {
+	client.RunFunc = func(ctx *agent.RunContext, messages ...*message.Message) (*agent.RunResponse, error) {
 		callCount++
 		if callCount == 1 {
 			return &agent.RunResponse{
@@ -205,12 +208,12 @@ func TestAgent_CustomFunction(t *testing.T) {
 		}, nil
 	}
 
-	resp1, _ := a.Run(t.Context(), nil, nil, message.NewText("Test"))
+	resp1, _ := a.Run(testRunContext(t), message.NewText("Test"))
 	if resp1.String() != respText1 {
 		t.Errorf("expected %q, got %q", respText1, resp1.String())
 	}
 
-	resp2, _ := a.Run(t.Context(), nil, nil, message.NewText("Yes"))
+	resp2, _ := a.Run(testRunContext(t), message.NewText("Yes"))
 	if resp2.String() != respText2 {
 		t.Errorf("expected %q, got %q", respText2, resp2.String())
 	}
@@ -237,7 +240,7 @@ func TestAgent_RunText(t *testing.T) {
 		},
 	})
 
-	resp, err := a.RunText(context.Background(), "hello")
+	resp, err := a.RunText(testRunContext(t), "hello")
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -252,7 +255,7 @@ func TestAgent_SystemInstructions(t *testing.T) {
 	const sysInstr = "You are a helpful assistant."
 	a.Config.SystemInstructions = sysInstr
 
-	_, err := a.Run(context.Background(), nil, nil, message.NewText("Test"))
+	_, err := a.Run(testRunContext(t), message.NewText("Test"))
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -286,7 +289,7 @@ func TestAgent_WithThread(t *testing.T) {
 	}
 
 	// Run with the thread
-	resp, err := a.Run(context.Background(), thread, nil, message.NewText("Second message"))
+	resp, err := a.Run(&agent.RunContext{Context: context.Background(), Thread: thread}, message.NewText("Second message"))
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -306,9 +309,9 @@ func TestAgent_RunOptionsTemperature(t *testing.T) {
 	client, a := agenttest.NewAgent()
 
 	temp := 0.7
-	_, err := a.Run(context.Background(), nil, &agent.RunOptions{
+	_, err := a.Run(&agent.RunContext{Context: context.Background(), Options: &agent.RunOptions{
 		Temperature: &temp,
-	}, message.NewText("Test"))
+	}}, message.NewText("Test"))
 
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -327,9 +330,9 @@ func TestAgent_RunOptionsMaxTokens(t *testing.T) {
 	client, a := agenttest.NewAgent()
 
 	maxTokens := 100
-	_, err := a.Run(context.Background(), nil, &agent.RunOptions{
+	_, err := a.Run(&agent.RunContext{Context: context.Background(), Options: &agent.RunOptions{
 		MaxTokens: &maxTokens,
-	}, message.NewText("Test"))
+	}}, message.NewText("Test"))
 
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -352,9 +355,9 @@ func TestAgent_RunOptionsAdditionalMetadata(t *testing.T) {
 		"number":     42,
 	}
 
-	_, err := a.Run(context.Background(), nil, &agent.RunOptions{
+	_, err := a.Run(&agent.RunContext{Context: context.Background(), Options: &agent.RunOptions{
 		AdditionalMetadata: metadata,
-	}, message.NewText("Test"))
+	}}, message.NewText("Test"))
 
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -377,7 +380,7 @@ func TestAgent_DefaultRunOptions(t *testing.T) {
 		ToolMode:    tool.ToolModeAuto,
 	}
 
-	_, err := a.Run(context.Background(), nil, nil, message.NewText("Test"))
+	_, err := a.Run(testRunContext(t), message.NewText("Test"))
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -403,9 +406,9 @@ func TestAgent_RunOptionsMerge(t *testing.T) {
 		ToolMode:    tool.ToolModeAuto,
 	}
 
-	_, err := a.Run(context.Background(), nil, &agent.RunOptions{
+	_, err := a.Run(&agent.RunContext{Context: context.Background(), Options: &agent.RunOptions{
 		Temperature: &overrideTemp,
-	}, message.NewText("Test"))
+	}}, message.NewText("Test"))
 
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -430,7 +433,7 @@ func TestAgent_MaxRetries(t *testing.T) {
 
 	callCount := 0
 	// Return tool calls on every call except when we've been called 5 times
-	client.RunFunc = func(ctx context.Context, thread memory.Thread, opts *agent.RunOptions, messages ...*message.Message) (*agent.RunResponse, error) {
+	client.RunFunc = func(ctx *agent.RunContext, messages ...*message.Message) (*agent.RunResponse, error) {
 		callCount++
 		if callCount <= 5 {
 			// Return a tool call
@@ -463,9 +466,9 @@ func TestAgent_MaxRetries(t *testing.T) {
 		},
 	}
 
-	resp, err := a.Run(context.Background(), nil, &agent.RunOptions{
+	resp, err := a.Run(&agent.RunContext{Context: context.Background(), Options: &agent.RunOptions{
 		Tools: []tool.Tool{tl},
-	}, message.NewText("Test"))
+	}}, message.NewText("Test"))
 
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -494,7 +497,7 @@ func TestAgent_RunStreamFallback(t *testing.T) {
 
 	// Should use fallback since client doesn't implement streaming
 	var updates []*agent.RunResponseUpdate
-	for update, err := range a.RunStream(context.Background(), nil, nil, message.NewText("Test")) {
+	for update, err := range a.RunStream(testRunContext(t), message.NewText("Test")) {
 		if err != nil {
 			t.Fatalf("expected no error, got: %v", err)
 		}
@@ -628,9 +631,9 @@ func TestAgent_ToolError(t *testing.T) {
 		},
 	}
 
-	resp, err := a.Run(context.Background(), nil, &agent.RunOptions{
+	resp, err := a.Run(&agent.RunContext{Context: context.Background(), Options: &agent.RunOptions{
 		Tools: []tool.Tool{tl},
-	}, message.NewText("Test"))
+	}}, message.NewText("Test"))
 
 	if err != nil {
 		t.Fatalf("expected no error from agent, got: %v", err)
@@ -657,10 +660,10 @@ func TestAgent_ToolNotFound(t *testing.T) {
 
 	// Provide an empty tool list - the agent will still process the response
 	// Tool call will fail but agent continues
-	resp, err := a.Run(context.Background(), nil, &agent.RunOptions{
+	resp, err := a.Run(&agent.RunContext{Context: context.Background(), Options: &agent.RunOptions{
 		Tools:    []tool.Tool{}, // No tools provided
 		ToolMode: tool.ToolModeAuto,
-	}, message.NewText("Test"))
+	}}, message.NewText("Test"))
 
 	if err != nil {
 		t.Fatalf("expected no error from agent, got: %v", err)
@@ -692,9 +695,9 @@ func TestAgent_ToolInvalidArgs(t *testing.T) {
 		},
 	}
 
-	resp, err := a.Run(context.Background(), nil, &agent.RunOptions{
+	resp, err := a.Run(&agent.RunContext{Context: context.Background(), Options: &agent.RunOptions{
 		Tools: []tool.Tool{tl},
-	}, message.NewText("Test"))
+	}}, message.NewText("Test"))
 
 	if err != nil {
 		t.Fatalf("expected no error from agent, got: %v", err)
