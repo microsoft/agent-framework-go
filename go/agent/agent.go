@@ -169,7 +169,7 @@ func (a *Agent) RunOf(v any, ctx *RunContext, messages ...*message.Message) (*Ru
 // RunFor executes the agent with the given messages and returns the result of type T.
 func RunFor[T any](a *Agent, ctx *RunContext, messages ...*message.Message) (T, *RunResponse, error) {
 	var v T
-	resp, err := a.run(&v, ctx, messages...)
+	resp, err := a.RunOf(&v, ctx, messages...)
 	return v, resp, err
 }
 
