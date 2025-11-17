@@ -3,99 +3,47 @@
 package jsonformat_test
 
 import (
+	"reflect"
 	"testing"
 
-	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/microsoft/agent-framework/go/format/jsonformat"
 )
 
-type SimpleStruct struct {
+type Struct struct {
 	Name  string `json:"name"`
 	Age   int    `json:"age"`
 	Email string `json:"email,omitempty"`
 }
 
-type NestedStruct struct {
-	ID     string       `json:"id"`
-	Person SimpleStruct `json:"person"`
-	Active bool         `json:"active"`
-}
-
-type PointerStruct struct {
-	Value *string `json:"value,omitempty"`
-	Count *int    `json:"count,omitempty"`
-}
-
-func TestFor(t *testing.T) {
-	t.Run("SimpleStruct", func(t *testing.T) {
-		format, err := jsonformat.For[SimpleStruct]()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if name := format.Name(); name != "SimpleStruct" {
-			t.Fatalf("expected: %v, got: %v", "SimpleStruct", name)
-		}
-		if format.Kind() != "json" {
-			t.Fatalf("expected: %v, got: %v", "json", format.Kind())
-		}
-	})
-
-	t.Run("AnyType", func(t *testing.T) {
-		format, err := jsonformat.For[any]()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := format.Schema().(*jsonschema.Schema).Type; got != "" {
-			t.Fatalf("expected empty type, got: %v", got)
-		}
-	})
-
-	t.Run("PointerType", func(t *testing.T) {
-		format, err := jsonformat.For[*SimpleStruct]()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if name := format.Name(); name != "SimpleStruct" {
-			t.Fatalf("expected: %v, got: %v", "SimpleStruct", name)
-		}
-	})
-
-	t.Run("PrimitiveTypes", func(t *testing.T) {
-		t.Run("String", func(t *testing.T) {
-			_, err := jsonformat.For[string]()
+func TestForType(t *testing.T) {
+	tests := []struct {
+		name string
+		v    any
+	}{
+		{"Struct", Struct{}},
+		{"Struct", &Struct{}},
+		{"map[string]int", map[string]int{}},
+		{"[]string", []string{}},
+		{"int", 0},
+		{"string", ""},
+		{"bool", true},
+		{"bool", new(bool)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f, err := jsonformat.ForType(reflect.TypeOf(tt.v))
 			if err != nil {
 				t.Fatal(err)
 			}
-		})
-
-		t.Run("Int", func(t *testing.T) {
-			_, err := jsonformat.For[int]()
-			if err != nil {
-				t.Fatal(err)
+			if f.Name() != tt.name {
+				t.Fatalf("expected: %v, got: %v", tt.name, f.Name())
 			}
 		})
-
-		t.Run("Bool", func(t *testing.T) {
-			_, err := jsonformat.For[bool]()
-			if err != nil {
-				t.Fatal(err)
-			}
-		})
-	})
-
-	t.Run("NestedStruct", func(t *testing.T) {
-		format, err := jsonformat.For[NestedStruct]()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if name := format.Name(); name != "NestedStruct" {
-			t.Fatalf("expected: %v, got: %v", "NestedStruct", name)
-		}
-	})
+	}
 }
 
 func TestFormatKind(t *testing.T) {
-	format := jsonformat.MustFor[SimpleStruct]()
+	format := jsonformat.MustFor[Struct]()
 	if format.Kind() != "json" {
 		t.Fatalf("expected: %v, got: %v", "json", format.Kind())
 	}
