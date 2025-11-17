@@ -50,7 +50,7 @@ func nonStreamingExample(ag *agent.Agent, query string) {
 func streamingExample(ag *agent.Agent, query string) {
 	fmt.Println("=== Streaming Response Example ===")
 	fmt.Println("User: ", query)
-	stream := ag.RunStream(nil, nil, message.NewText(query))
+	stream := ag.RunStream(nil, message.NewText(query))
 	for update, err := range stream {
 		if err != nil {
 			fmt.Print(err)
