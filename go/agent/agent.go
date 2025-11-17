@@ -27,15 +27,16 @@ type Config struct {
 
 	SystemInstructions string
 
-	NewThread       func() memory.Thread
-	UnmarshalThread func(data []byte) (memory.Thread, error)
-
+	// The following functions implement the core behavior of the agent.
+	// If any of these are nil, the corresponding functionality is not supported,
+	// and the [Agent] might fall back to default behavior or return an error.
+	// The input parameters will always be non-nil and can be mutated as needed.
+	NewThread          func() memory.Thread
+	UnmarshalThread    func(data []byte) (memory.Thread, error)
 	NewContextProvider func() memory.ContextProvider
-
-	Run       func(ctx *RunContext, messages ...*message.Message) (*RunResponse, error)
-	RunStream func(ctx *RunContext, messages ...*message.Message) iter.Seq2[*RunResponseUpdate, error]
-
-	RunOf func(v any, ctx *RunContext, messages ...*message.Message) (*RunResponse, error)
+	Run                func(ctx *RunContext, messages ...*message.Message) (*RunResponse, error)
+	RunStream          func(ctx *RunContext, messages ...*message.Message) iter.Seq2[*RunResponseUpdate, error]
+	RunOf              func(v any, ctx *RunContext, messages ...*message.Message) (*RunResponse, error)
 }
 
 // Agent represents an AI agent that can execute tasks using a client and tools.
