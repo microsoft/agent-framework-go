@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
+	"reflect"
 	"strings"
 
 	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework/go/agent"
+	"github.com/microsoft/agent-framework/go/format"
 	"github.com/microsoft/agent-framework/go/format/jsonformat"
 	"github.com/microsoft/agent-framework/go/memory"
 	"github.com/microsoft/agent-framework/go/message"
@@ -80,6 +82,7 @@ func newChatAgent(isAzure bool, config AgentConfig) *agent.Agent {
 			SystemInstructions: config.SystemInstructions,
 			Run:                c.Run,
 			RunStream:          c.RunStream,
+			RunOf:              c.RunOf,
 			NewContextProvider: config.NewContextProvider,
 		},
 	}
@@ -92,6 +95,25 @@ func NewChatAgent(config AgentConfig) *agent.Agent {
 // NewChatAgentAzure creates a new [Agent].
 func NewChatAgentAzure(config AgentConfig) *agent.Agent {
 	return newChatAgent(true, config)
+}
+
+func (a *client) RunOf(v any, ctx *agent.RunContext, messages ...*message.Message) (*agent.RunResponse, error) {
+	// The OpenAI models that support structured outputs use JSON Schema for defining the response format.
+	format, err := jsonformat.ForType(reflect.TypeOf(v))
+	if err != nil {
+		return nil, err
+	}
+	ctx.Options.ResponseFormat = format
+	resp, err := a.Run(ctx, messages...)
+	if err != nil {
+		return nil, err
+	}
+	if txt := resp.String(); txt != "" {
+		if err := jsonformat.Unmarshal(format, []byte(txt), v); err != nil {
+			return nil, err
+		}
+	}
+	return resp, nil
 }
 
 func (a *client) Run(ctx *agent.RunContext, messages ...*message.Message) (*agent.RunResponse, error) {
@@ -111,10 +133,14 @@ func (a *client) Run(ctx *agent.RunContext, messages ...*message.Message) (*agen
 	if choice.Message.Content != "" {
 		contents = append(contents, &message.TextContent{Text: choice.Message.Content})
 	}
+	if choice.Message.Refusal != "" {
+		contents = append(contents, &message.ErrorContent{Message: choice.Message.Refusal})
+	}
 	return &agent.RunResponse{
-		Messages:   []*message.Message{{Role: message.Role(choice.Message.Role), Contents: contents}},
-		AgentID:    a.config.ID,
-		ResponseID: resp.ID,
+		Messages:     []*message.Message{{Role: message.Role(choice.Message.Role), Contents: contents}},
+		AgentID:      a.config.ID,
+		ResponseID:   resp.ID,
+		FinishReason: choice.FinishReason,
 	}, nil
 }
 
@@ -181,17 +207,17 @@ func (a *client) buildCompletionParams(options *agent.RunOptions, messages ...*m
 		if options.ResponseFormat != nil {
 			switch options.ResponseFormat.Kind() {
 			case "json":
-				if schema, ok := options.ResponseFormat.(*jsonformat.Format); ok {
+				if schema, ok := options.ResponseFormat.(format.SchemaFormat); ok {
 					params.ResponseFormat.OfJSONSchema = &shared.ResponseFormatJSONSchemaParam{
 						JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
-							Name:   schema.Name,
-							Schema: schema.Schema,
+							Name:   schema.Name(),
+							Schema: schema.Schema(),
 						},
 					}
-					if schema.Description != "" {
-						params.ResponseFormat.OfJSONSchema.JSONSchema.Description = openai.String(schema.Description)
+					if desc := schema.Description(); desc != "" {
+						params.ResponseFormat.OfJSONSchema.JSONSchema.Description = openai.String(desc)
 					}
-					if schema.Strict {
+					if schema.Strict() {
 						params.ResponseFormat.OfJSONSchema.JSONSchema.Strict = openai.Bool(true)
 					}
 				} else {

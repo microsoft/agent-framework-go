@@ -3,54 +3,78 @@
 package jsonformat
 
 import (
-	"encoding/json"
-	"fmt"
 	"reflect"
+	"strings"
+	"sync"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/microsoft/agent-framework/go/format"
 )
 
-// The jsonschema handling is loosely based on https://github.com/modelcontextprotocol/go-sdk
-
-var _ format.Format = (*Format)(nil)
+var _ format.SchemaFormat = (*Format)(nil)
 
 // Format implements the [format.Format] interface for JSON schema-based formats.
 type Format struct {
-	Name        string
-	Description string
-	Strict      bool
-	Schema      *jsonschema.Schema
+	name        string
+	description string
+	schema      *jsonschema.Schema
 
-	resolvedSchema *jsonschema.Resolved
-	zero           any
+	resolvedOnce sync.Once
+	resolved     *jsonschema.Resolved
+	resolvedErr  error
 }
 
 func (f *Format) Kind() string {
 	return "json"
 }
 
-// Options for creating a [Format] or a [Value] for a type T.
-type Options struct {
-	jsonschema.ForOptions
+func (f *Format) Name() string {
+	return f.name
+}
 
-	// Name is the name of the schema.
-	//
-	// If empty, the name of the type T is used.
-	Name string
+func (f *Format) Description() string {
+	return f.description
+}
 
-	// Description is the description of the schema.
-	Description string
+func (f *Format) Strict() bool {
+	return true
+}
 
-	// Strict indicates whether to enable strict validation
-	// of the JSON schema and the strict adherence to the schema during
-	// marshaling and unmarshaling.
-	Strict bool
+func (f *Format) Schema() any {
+	return f.schema
+}
+
+func (f *Format) ResolvedSchema() (*jsonschema.Resolved, error) {
+	f.resolvedOnce.Do(func() {
+		f.resolved, f.resolvedErr = f.schema.Resolve(&jsonschema.ResolveOptions{ValidateDefaults: true})
+	})
+	return f.resolved, f.resolvedErr
+}
+
+// New creates a new Format with the given name, description, and schema.
+func New(name, description string, schema *jsonschema.Schema) *Format {
+	return &Format{
+		name:        name,
+		description: description,
+		schema:      schema,
+	}
+}
+
+// Any returns a Format representing the any type (no schema constraints).
+func Any() *Format {
+	return New("any", "", &jsonschema.Schema{})
+}
+
+// Nothing returns a Format that matches no values.
+func Nothing() *Format {
+	return New("empty", "", &jsonschema.Schema{
+		Not: &jsonschema.Schema{},
+	})
 }
 
 // MustFor calls [For] and panics on error.
-func MustFor[T any](opts *Options) *Format {
-	f, err := For[T](opts)
+func MustFor[T any]() *Format {
+	f, err := For[T]()
 	if err != nil {
 		panic(err)
 	}
@@ -58,83 +82,36 @@ func MustFor[T any](opts *Options) *Format {
 }
 
 // For creates a Schema for the type T.
-// If opts is nil, default options are used.
-// The any type is treated as an empty object.
-func For[T any](opts *Options) (*Format, error) {
-	if opts == nil {
-		opts = &Options{}
-	}
-	rt := reflect.TypeFor[T]()
-	name := opts.Name
-	if name == "" {
-		name = rt.Name()
-	}
-	var schema *jsonschema.Schema
-	var zero any
-	if rt == reflect.TypeFor[any]() {
-		// Special handling for an "any" input: treat as an empty object.
-		schema = &jsonschema.Schema{Type: "object"}
-	} else {
-		if rt.Kind() == reflect.Pointer {
-			// Pointers are treated equivalently to non-pointers when deriving the schema.
-			// If an indirection occurred to derive the schema, a non-nil zero value is
-			// returned to be used in place of the typed nil zero value.
-			rt = rt.Elem()
-			zero = reflect.Zero(rt).Interface()
-		}
-		var err error
-		schema, err = jsonschema.ForType(rt, &opts.ForOptions)
-		if err != nil {
-			return nil, err
-		}
-	}
-	// Always set ValidateDefaults to true when resolving the schema,
-	// even when opts.Strict is false. The JSON Schema spec says it should
-	// only be false for tools that generate schema visualizations.
-	resolved, err := schema.Resolve(&jsonschema.ResolveOptions{ValidateDefaults: true})
-	if err != nil {
-		return nil, fmt.Errorf("resolving schema: %w", err)
-	}
-	return &Format{
-		Name:           name,
-		Description:    opts.Description,
-		Schema:         schema,
-		Strict:         opts.Strict,
-		resolvedSchema: resolved,
-		zero:           zero,
-	}, nil
+func For[T any]() (*Format, error) {
+	return ForType(reflect.TypeFor[T]())
 }
 
-// applySchema validates whether data is valid JSON according to the provided
-// schema, after applying schema defaults.
-//
-// Returns the JSON value augmented with defaults.
-func applySchema(data json.RawMessage, resolved *jsonschema.Resolved, strict bool) (json.RawMessage, error) {
-	var v any
-
-	// For primitive types (non-object, non-array), unmarshal directly into the appropriate type
-	if len(data) > 0 {
-		if err := json.Unmarshal(data, &v); err != nil {
-			return nil, fmt.Errorf("unmarshaling arguments: %w", err)
-		}
+// ForType creates a Schema for the given reflect.Type.
+// A nil rt is treated as [Nothing].
+func ForType(rt reflect.Type) (*Format, error) {
+	var schema *jsonschema.Schema
+	if rt == nil {
+		return Nothing(), nil
 	}
-
-	// ApplyDefaults and Validate work on the unmarshaled value
-	if err := resolved.ApplyDefaults(&v); err != nil {
-		return nil, fmt.Errorf("applying schema defaults:\n%w", err)
-	}
-
-	if strict {
-		if err := resolved.Validate(&v); err != nil {
-			return nil, err
-		}
-	}
-
-	// We must re-marshal with the default values applied.
-	var err error
-	data, err = json.Marshal(v)
+	// Pointers are treated equivalently to non-pointers when deriving the schema.
+	// The only difference is whether the value can be null. We don't want that
+	// to happen for the root object, as that complicates usage with no benefit.
+	rt = dereference(rt)
+	schema, err := jsonschema.ForType(rt, &jsonschema.ForOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("marshalling with defaults: %v", err)
+		return nil, err
 	}
-	return data, nil
+	name := rt.String()
+	if split := strings.Split(name, "."); len(split) != 0 {
+		// Use only the type name, not the package path.
+		name = split[len(split)-1]
+	}
+	return New(name, "", schema), nil
+}
+
+func dereference(t reflect.Type) reflect.Type {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	return t
 }

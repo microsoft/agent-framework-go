@@ -7,7 +7,6 @@ import (
 	"slices"
 
 	"github.com/microsoft/agent-framework/go/agent"
-	"github.com/microsoft/agent-framework/go/format/jsonformat"
 	"github.com/microsoft/agent-framework/go/memory"
 	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/openai"
@@ -62,16 +61,14 @@ func (u *UserInfoMemory) Invoked(ctx *memory.InvokedContext) error {
 		// No user messages to extract info from.
 		return nil
 	}
-	var out jsonformat.Value[UserInfo]
-	_, err := u.Agent.Run(&agent.RunContext{Context: ctx.Context, Options: &agent.RunOptions{Response: &out}}, append(ctx.Messages,
+	out, _, err := agent.RunFor[UserInfo](u.Agent, nil, append(ctx.Messages,
 		message.NewText("Extract the user's name and age from the message if present. If not present return empty values."),
 	)...)
 	if err != nil {
 		return err
 	}
-	user := out.Unwrap()
-	u.UserInfo.Name = cmp.Or(u.UserInfo.Name, user.Name)
-	u.UserInfo.Age = cmp.Or(u.UserInfo.Age, user.Age)
+	u.UserInfo.Name = cmp.Or(u.UserInfo.Name, out.Name)
+	u.UserInfo.Age = cmp.Or(u.UserInfo.Age, out.Age)
 	return nil
 }
 
