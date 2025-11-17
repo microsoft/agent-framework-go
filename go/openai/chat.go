@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
+	"reflect"
 	"strings"
 
 	"github.com/google/uuid"
@@ -98,20 +99,17 @@ func NewChatAgentAzure(config AgentConfig) *agent.Agent {
 
 func (a *client) RunOf(v any, ctx *agent.RunContext, messages ...*message.Message) (*agent.RunResponse, error) {
 	// The OpenAI models that support structured outputs use JSON Schema for defining the response format.
-	val, err := jsonformat.NewValue(v, nil)
+	format, err := jsonformat.ForType(reflect.TypeOf(v))
 	if err != nil {
 		return nil, err
 	}
-	ctx.Options.ResponseFormat, err = val.Format()
-	if err != nil {
-		return nil, err
-	}
+	ctx.Options.ResponseFormat = format
 	resp, err := a.Run(ctx, messages...)
 	if err != nil {
 		return nil, err
 	}
 	if txt := resp.String(); txt != "" {
-		if err := json.Unmarshal([]byte(txt), &val); err != nil {
+		if err := jsonformat.Unmarshal(format, []byte(txt), v); err != nil {
 			return nil, err
 		}
 	}

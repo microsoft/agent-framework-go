@@ -87,34 +87,32 @@ func New[In, Out any](fnp *Func, h HandlerFor[In, Out]) (*Tool, error) {
 	}
 
 	var err error
-	var in jsonformat.Value[In]
-	t.Func.inputFormat, err = in.FormatJSON()
+	t.Func.inputFormat, err = jsonformat.For[In]()
 	if err != nil {
 		return nil, fmt.Errorf("input schema: %w", err)
 	}
 
-	var out jsonformat.Value[Out]
 	if reflect.TypeFor[Out]() == reflect.TypeFor[any]() {
 		// If Out is any, we don't provide an output schema.
 		t.Func.outputFormat = jsonformat.Nothing()
 	} else {
-		t.Func.outputFormat, err = out.FormatJSON()
+		t.Func.outputFormat, err = jsonformat.For[Out]()
 		if err != nil {
 			return nil, fmt.Errorf("output schema: %w", err)
 		}
 	}
 
 	t.Handler = func(ctx context.Context, args string) (any, error) {
-		if err := in.UnmarshalJSON([]byte(args)); err != nil {
+		var in In
+		if err := jsonformat.Unmarshal(t.Func.inputFormat, []byte(args), &in); err != nil {
 			return nil, err
 		}
 		// Call typed handler.
-		outval, err := h(ctx, in.Unwrap())
+		outval, err := h(ctx, in)
 		if err != nil {
 			return nil, err
 		}
-		out.Wrap(outval)
-		outjson, err := out.MarshalJSON()
+		outjson, err := jsonformat.Marshal(t.Func.outputFormat, outval)
 		if err != nil {
 			return nil, err
 		}

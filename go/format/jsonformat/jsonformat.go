@@ -3,9 +3,8 @@
 package jsonformat
 
 import (
-	"encoding/json"
-	"fmt"
 	"reflect"
+	"sync"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/microsoft/agent-framework/go/format"
@@ -19,11 +18,11 @@ var _ format.SchemaFormat = (*Format)(nil)
 type Format struct {
 	name        string
 	description string
-	strict      bool
 	schema      *jsonschema.Schema
 
-	resolvedSchema *jsonschema.Resolved
-	zero           any
+	resolvedOnce sync.Once
+	resolved     *jsonschema.Resolved
+	resolvedErr  error
 }
 
 func (f *Format) Kind() string {
@@ -39,34 +38,46 @@ func (f *Format) Description() string {
 }
 
 func (f *Format) Strict() bool {
-	return f.strict
+	return true
 }
 
 func (f *Format) Schema() any {
 	return f.schema
 }
 
-// Options for creating a [Format] or a [Value] for a type T.
-type Options struct {
-	jsonschema.ForOptions
+func (f *Format) ResolvedSchema() (*jsonschema.Resolved, error) {
+	f.resolvedOnce.Do(func() {
+		f.resolved, f.resolvedErr = f.schema.Resolve(&jsonschema.ResolveOptions{ValidateDefaults: true})
+	})
+	return f.resolved, f.resolvedErr
+}
 
-	// Name is the name of the schema.
-	//
-	// If empty, the name of the type T is used.
-	Name string
+// New creates a new Format with the given name, description, and schema.
+func New(name, description string, schema *jsonschema.Schema) *Format {
+	return &Format{
+		name:        name,
+		description: description,
+		schema:      schema,
+	}
+}
 
-	// Description is the description of the schema.
-	Description string
+// Any returns a Format representing the any type (no schema constraints).
+func Any() *Format {
+	return New("any", "", &jsonschema.Schema{
+		Not: &jsonschema.Schema{},
+	})
+}
 
-	// Strict indicates whether to enable strict validation
-	// of the JSON schema and the strict adherence to the schema during
-	// marshaling and unmarshaling.
-	Strict bool
+// Nothing returns a Format that matches no values.
+func Nothing() *Format {
+	return New("empty", "", &jsonschema.Schema{
+		Not: &jsonschema.Schema{},
+	})
 }
 
 // MustFor calls [For] and panics on error.
-func MustFor[T any](opts *Options) *Format {
-	f, err := For[T](opts)
+func MustFor[T any]() *Format {
+	f, err := For[T]()
 	if err != nil {
 		panic(err)
 	}
@@ -74,115 +85,33 @@ func MustFor[T any](opts *Options) *Format {
 }
 
 // For creates a Schema for the type T.
-// If opts is nil, default options are used.
-func For[T any](opts *Options) (*Format, error) {
-	return ForType(reflect.TypeFor[T](), opts)
-}
-
-// Nothing returns a Format that matches no values.
-func Nothing() *Format {
-	schema := &jsonschema.Schema{
-		Not: &jsonschema.Schema{},
-	}
-	resolved, err := schema.Resolve(nil)
-	if err != nil {
-		// should never happen
-		panic(err)
-	}
-	return &Format{
-		name:           "empty",
-		schema:         schema,
-		strict:         true,
-		resolvedSchema: resolved,
-	}
-}
-
-// Any returns a Format representing the any type (no schema constraints).
-func Any() *Format {
-	format, err := For[any](nil)
-	if err != nil {
-		// should never happen
-		panic(err)
-	}
-	return format
+func For[T any]() (*Format, error) {
+	return ForType(reflect.TypeFor[T]())
 }
 
 // ForType creates a Schema for the given reflect.Type.
 // If opts is nil, default options are used.
-// A nil rt is treated as an empty object.
-func ForType(rt reflect.Type, opts *Options) (*Format, error) {
-	if opts == nil {
-		opts = &Options{}
-	}
-	name := opts.Name
+// A nil rt is treated as [Nothing].
+func ForType(rt reflect.Type) (*Format, error) {
 	var schema *jsonschema.Schema
-	var zero any
 	if rt == nil {
-		schema = &jsonschema.Schema{Type: "object"}
-	} else {
-		if rt.Kind() == reflect.Pointer {
-			// Pointers are treated equivalently to non-pointers when deriving the schema.
-			// If an indirection occurred to derive the schema, a non-nil zero value is
-			// returned to be used in place of the typed nil zero value.
-			rt = rt.Elem()
-			zero = reflect.Zero(rt).Interface()
-		}
-		if name == "" {
-			name = rt.Name()
-		}
-		var err error
-		schema, err = jsonschema.ForType(rt, &opts.ForOptions)
-		if err != nil {
-			return nil, err
-		}
+		return Nothing(), nil
 	}
-	// Always set ValidateDefaults to true when resolving the schema,
-	// even when opts.Strict is false. The JSON Schema spec says it should
-	// only be false for tools that generate schema visualizations.
-	resolved, err := schema.Resolve(&jsonschema.ResolveOptions{ValidateDefaults: true})
+	// Pointers are treated equivalently to non-pointers when deriving the schema.
+	// The only difference is whether the value can be null. We don't want that
+	// to happen for the root object, as that complicates usage with no benefit.
+	rt = dereference(rt)
+	schema, err := jsonschema.ForType(rt, &jsonschema.ForOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("resolving schema: %w", err)
+		return nil, err
 	}
-	return &Format{
-		name:           name,
-		description:    opts.Description,
-		schema:         schema,
-		strict:         opts.Strict,
-		resolvedSchema: resolved,
-		zero:           zero,
-	}, nil
+	name := rt.Name()
+	return New(name, "", schema), nil
 }
 
-// applySchema validates whether data is valid JSON according to the provided
-// schema, after applying schema defaults.
-//
-// Returns the JSON value augmented with defaults.
-func applySchema(data json.RawMessage, resolved *jsonschema.Resolved, strict bool) (json.RawMessage, error) {
-	var v any
-
-	// For primitive types (non-object, non-array), unmarshal directly into the appropriate type
-	if len(data) > 0 {
-		if err := json.Unmarshal(data, &v); err != nil {
-			return nil, fmt.Errorf("unmarshaling arguments: %w", err)
-		}
+func dereference(t reflect.Type) reflect.Type {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
 	}
-
-	// ApplyDefaults and Validate work on the unmarshaled value
-	if err := resolved.ApplyDefaults(&v); err != nil {
-		return nil, fmt.Errorf("applying schema defaults:\n%w", err)
-	}
-
-	if strict {
-		if err := resolved.Validate(&v); err != nil {
-			return nil, err
-		}
-	}
-
-	// We must re-marshal with the default values applied.
-	var err error
-	data, err = json.Marshal(v)
-	if err != nil {
-		return nil, fmt.Errorf("marshalling with defaults: %v", err)
-	}
-	return data, nil
+	return t
 }
