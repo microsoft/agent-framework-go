@@ -10,8 +10,6 @@ import (
 	"github.com/microsoft/agent-framework/go/format"
 )
 
-// The jsonschema handling is loosely based on https://github.com/modelcontextprotocol/go-sdk
-
 var _ format.SchemaFormat = (*Format)(nil)
 
 // Format implements the [format.Format] interface for JSON schema-based formats.
@@ -90,7 +88,6 @@ func For[T any]() (*Format, error) {
 }
 
 // ForType creates a Schema for the given reflect.Type.
-// If opts is nil, default options are used.
 // A nil rt is treated as [Nothing].
 func ForType(rt reflect.Type) (*Format, error) {
 	var schema *jsonschema.Schema
