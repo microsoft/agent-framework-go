@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/microsoft/agent-framework/go/message"
@@ -22,9 +21,8 @@ func main() {
 		SystemInstructions: "You are a helpful agent that can analyze images.",
 	})
 
-	ctx := context.Background()
 	fmt.Println("Result: ", must(
-		ag.Run(ctx, nil, nil, &message.Message{Role: message.RoleUser, Contents: []message.Content{
+		ag.Run(nil, &message.Message{Role: message.RoleUser, Contents: []message.Content{
 			&message.TextContent{Text: "Describe the content of this image."},
 			&message.URIContent{
 				URI:       "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg",

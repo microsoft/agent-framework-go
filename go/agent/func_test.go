@@ -37,9 +37,10 @@ func TestAgentCallTool(t *testing.T) {
 	}
 	client.WithToolCalls(toolCalls, "Final response")
 
-	resp, err := a.Run(context.Background(), nil, &agent.RunOptions{
+	ctx := &agent.RunContext{Options: &agent.RunOptions{
 		Tools: []tool.Tool{tl},
-	}, message.NewText("What's the weather?"))
+	}}
+	resp, err := a.Run(ctx, message.NewText("What's the weather?"))
 
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -64,10 +65,10 @@ func TestAgent_ToolInit(t *testing.T) {
 			return nil
 		},
 	}
-
-	_, err := a.Run(context.Background(), nil, &agent.RunOptions{
+	ctx := &agent.RunContext{Options: &agent.RunOptions{
 		Tools: []tool.Tool{tl},
-	}, message.NewText("Test"))
+	}}
+	_, err := a.Run(ctx, message.NewText("Test"))
 
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -91,9 +92,10 @@ func TestAgent_ToolInitError(t *testing.T) {
 		},
 	}
 
-	_, err := a.Run(context.Background(), nil, &agent.RunOptions{
+	ctx := &agent.RunContext{Options: &agent.RunOptions{
 		Tools: []tool.Tool{tl},
-	}, message.NewText("Test"))
+	}}
+	_, err := a.Run(ctx, message.NewText("Test"))
 
 	if err == nil {
 		t.Fatal("expected error from tool init, got nil")
@@ -117,9 +119,10 @@ func TestAgent_ToolLoader(t *testing.T) {
 		},
 	}
 
-	_, err := a.Run(context.Background(), nil, &agent.RunOptions{
+	ctx := &agent.RunContext{Options: &agent.RunOptions{
 		Tools: []tool.Tool{loaderTool},
-	}, message.NewText("Test"))
+	}}
+	_, err := a.Run(ctx, message.NewText("Test"))
 
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -149,10 +152,10 @@ func TestAgent_ToolLoaderError(t *testing.T) {
 		},
 	}
 
-	_, err := a.Run(context.Background(), nil, &agent.RunOptions{
+	ctx := &agent.RunContext{Options: &agent.RunOptions{
 		Tools: []tool.Tool{loaderTool},
-	}, message.NewText("Test"))
-
+	}}
+	_, err := a.Run(ctx, message.NewText("Test"))
 	if err == nil {
 		t.Fatal("expected error from tool loader, got nil")
 	}
