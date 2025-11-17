@@ -5,7 +5,6 @@ package jsonformat_test
 import (
 	"encoding/json"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/microsoft/agent-framework/go/format/jsonformat"
@@ -47,35 +46,21 @@ func TestNewValue(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if format.Name != "TestValue" {
-			t.Fatalf("expected: %v, got: %v", "TestValue", format.Name)
+		if name := format.Name(); name != "TestValue" {
+			t.Fatalf("expected: %v, got: %v", "TestValue", name)
 		}
-		if format.Description != "Test description" {
-			t.Fatalf("expected: %v, got: %v", "Test description", format.Description)
+		if desc := format.Description(); desc != "Test description" {
+			t.Fatalf("expected: %v, got: %v", "Test description", desc)
 		}
 	})
 
 	t.Run("AnyTypeWithNilValue", func(t *testing.T) {
-		value, err := jsonformat.NewValue[any](nil, nil)
+		value, err := jsonformat.NewValue(nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if value == nil {
 			t.Fatal("expected non-nil value, got nil")
-		}
-	})
-
-	t.Run("AnyTypeWithNonNilValue", func(t *testing.T) {
-		value, err := jsonformat.NewValue[any]("something", nil)
-		if err == nil {
-			t.Fatal("expected error, got nil")
-		}
-		if value != nil {
-			t.Fatalf("expected nil, got: %v", value)
-		}
-		want := "cannot create Value[any] with non-nil value"
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("expected error to contain %q, got: %q", want, err.Error())
 		}
 	})
 
@@ -92,25 +77,11 @@ func TestNewValue(t *testing.T) {
 	})
 }
 
-func TestMustNewValue(t *testing.T) {
-	t.Run("Success", func(t *testing.T) {
-		assertNotPanics(t, func() {
-			jsonformat.MustNewValue(SimpleStruct{Name: "Test"}, nil)
-		})
-	})
-
-	t.Run("Panic", func(t *testing.T) {
-		assertPanics(t, func() {
-			_ = jsonformat.MustNewValue[any]("invalid", nil)
-		})
-	})
-}
-
 func TestValueWrapUnwrap(t *testing.T) {
 	value := jsonformat.MustNewValue(SimpleStruct{Name: "Initial"}, nil)
 
 	t.Run("InitialValue", func(t *testing.T) {
-		got := value.Unwrap()
+		got := value.Unwrap().(SimpleStruct)
 		if got.Name != "Initial" {
 			t.Fatalf("expected: %v, got: %v", "Initial", got.Name)
 		}
@@ -132,16 +103,9 @@ func TestValueFormat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if format.Name != "SimpleStruct" {
-		t.Fatalf("expected: %v, got: %v", "SimpleStruct", format.Name)
+	if name := format.Name(); name != "SimpleStruct" {
+		t.Fatalf("expected: %v, got: %v", "SimpleStruct", name)
 	}
-}
-
-func TestValueMustFormat(t *testing.T) {
-	value := jsonformat.MustNewValue(SimpleStruct{}, nil)
-	assertNotPanics(t, func() {
-		value.MustFormat()
-	})
 }
 
 func TestValueMarshalJSON(t *testing.T) {
@@ -322,11 +286,11 @@ func TestValueWithOptions(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if format.Name != "CustomStruct" {
-			t.Fatalf("expected: %v, got: %v", "CustomStruct", format.Name)
+		if name := format.Name(); name != "CustomStruct" {
+			t.Fatalf("expected: %v, got: %v", "CustomStruct", name)
 		}
-		if format.Description != "This is a custom struct" {
-			t.Fatalf("expected: %v, got: %v", "This is a custom struct", format.Description)
+		if desc := format.Description(); desc != "This is a custom struct" {
+			t.Fatalf("expected: %v, got: %v", "This is a custom struct", desc)
 		}
 	})
 
@@ -340,7 +304,7 @@ func TestValueWithOptions(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !format.Strict {
+		if !format.Strict() {
 			t.Fatal("expected Strict to be true")
 		}
 	})
@@ -620,7 +584,7 @@ func TestBuiltinPointerTypes(t *testing.T) {
 	t.Run("StringPointer", func(t *testing.T) {
 		str := "test"
 		value := jsonformat.MustNewValue(&str, nil)
-		result := value.Unwrap()
+		result := value.Unwrap().(*string)
 		if *result != "test" {
 			t.Fatalf("expected: %v, got: %v", "test", *result)
 		}
@@ -629,7 +593,7 @@ func TestBuiltinPointerTypes(t *testing.T) {
 	t.Run("IntPointer", func(t *testing.T) {
 		num := 42
 		value := jsonformat.MustNewValue(&num, nil)
-		result := value.Unwrap()
+		result := value.Unwrap().(*int)
 		if *result != 42 {
 			t.Fatalf("expected: %v, got: %v", 42, *result)
 		}
@@ -642,7 +606,7 @@ func TestBuiltinPointerTypes(t *testing.T) {
 			t.Fatal(err)
 		}
 		result := value.Unwrap()
-		if result != nil {
+		if result.(*string) != nil {
 			t.Fatalf("expected nil, got: %v", result)
 		}
 	})

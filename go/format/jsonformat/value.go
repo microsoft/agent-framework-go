@@ -5,7 +5,6 @@ package jsonformat
 import (
 	"encoding"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"reflect"
 
@@ -13,7 +12,7 @@ import (
 )
 
 var _ encoding.BinaryUnmarshaler = (*Value[any])(nil)
-var _ format.FormatProvider = (*Value[any])(nil)
+var _ format.Formatable = (*Value[any])(nil)
 
 // A Value represents a value of type T along with its JSON Schema.
 // It can marshal and unmarshal itself to and from JSON, validating against the schema.
@@ -27,7 +26,7 @@ type Value[T any] struct {
 }
 
 // MustNewValue calls [NewValue] and panics on error.
-func MustNewValue[T any](v T, opts *Options) *Value[T] {
+func MustNewValue(v any, opts *Options) *Value[any] {
 	val, err := NewValue(v, opts)
 	if err != nil {
 		panic(err)
@@ -37,9 +36,8 @@ func MustNewValue[T any](v T, opts *Options) *Value[T] {
 
 // NewValue creates a new Value for type T.
 // If opts is nil, default options are used.
-// The any type is treated as an empty object.
-func NewValue[T any](v T, opts *Options) (*Value[T], error) {
-	val := &Value[T]{value: v, opts: opts}
+func NewValue(v any, opts *Options) (*Value[any], error) {
+	val := &Value[any]{value: v, opts: opts}
 	if err := val.init(opts); err != nil {
 		return nil, err
 	}
@@ -48,11 +46,7 @@ func NewValue[T any](v T, opts *Options) (*Value[T], error) {
 
 func (v *Value[T]) init(opts *Options) error {
 	if v.format == nil && v.initErr == nil {
-		if reflect.TypeFor[T]() == reflect.TypeFor[any]() && any(v.value) != nil {
-			v.initErr = errors.New("cannot create Value[any] with non-nil value")
-			return v.initErr
-		}
-		v.format, v.initErr = For[T](opts)
+		v.format, v.initErr = ForType(reflect.TypeOf(v.value), opts)
 	}
 	return v.initErr
 }
@@ -66,7 +60,7 @@ func (v *Value[T]) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	var err error
-	data, err = applySchema(data, v.format.resolvedSchema, v.format.Strict)
+	data, err = applySchema(data, v.format.resolvedSchema, v.format.strict)
 	if err != nil {
 		return fmt.Errorf("validating: %v", err)
 	}
@@ -89,7 +83,7 @@ func (v *Value[T]) MarshalJSON() ([]byte, error) {
 		// Avoid typed nil, which will serialize as JSON null.
 		// Instead, use the zero value of the unpointered type.
 		var z T
-		if any(v.value) == any(z) { // zero is only non-nil if Out is a pointer type
+		if any(v.value) == any(z) { // zero is only non-nil if T is a pointer type
 			outval = v.format.zero
 		}
 	}
@@ -104,7 +98,7 @@ func (v *Value[T]) MarshalJSON() ([]byte, error) {
 	//
 	// We validate against the JSON, rather than the output value, as
 	// some types may have custom JSON marshalling.
-	outJSON, err := applySchema(json.RawMessage(outbytes), v.format.resolvedSchema, v.format.Strict)
+	outJSON, err := applySchema(json.RawMessage(outbytes), v.format.resolvedSchema, v.format.strict)
 	if err != nil {
 		return nil, fmt.Errorf("validating: %w", err)
 	}

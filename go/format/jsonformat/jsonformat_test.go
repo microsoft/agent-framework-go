@@ -5,6 +5,7 @@ package jsonformat_test
 import (
 	"testing"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/microsoft/agent-framework/go/format/jsonformat"
 )
 
@@ -31,8 +32,8 @@ func TestFor(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if format.Name != "SimpleStruct" {
-			t.Fatalf("expected: %v, got: %v", "SimpleStruct", format.Name)
+		if name := format.Name(); name != "SimpleStruct" {
+			t.Fatalf("expected: %v, got: %v", "SimpleStruct", name)
 		}
 		if format.Kind() != "json" {
 			t.Fatalf("expected: %v, got: %v", "json", format.Kind())
@@ -48,11 +49,11 @@ func TestFor(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if format.Name != "CustomName" {
-			t.Fatalf("expected: %v, got: %v", "CustomName", format.Name)
+		if name := format.Name(); name != "CustomName" {
+			t.Fatalf("expected: %v, got: %v", "CustomName", name)
 		}
-		if format.Description != "A custom description" {
-			t.Fatalf("expected: %v, got: %v", "A custom description", format.Description)
+		if desc := format.Description(); desc != "A custom description" {
+			t.Fatalf("expected: %v, got: %v", "A custom description", desc)
 		}
 	})
 
@@ -64,7 +65,7 @@ func TestFor(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !format.Strict {
+		if !format.Strict() {
 			t.Fatal("expected Strict to be true")
 		}
 	})
@@ -74,8 +75,8 @@ func TestFor(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if format.Schema.Type != "object" {
-			t.Fatalf("expected: %v, got: %v", "object", format.Schema.Type)
+		if got := format.Schema().(*jsonschema.Schema).Type; got != "" {
+			t.Fatalf("expected empty type, got: %v", got)
 		}
 	})
 
@@ -84,9 +85,8 @@ func TestFor(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// Pointer types don't have a name by default
-		if format.Name != "" {
-			t.Fatalf("expected: %v, got: %v", "", format.Name)
+		if name := format.Name(); name != "SimpleStruct" {
+			t.Fatalf("expected: %v, got: %v", "SimpleStruct", name)
 		}
 	})
 
@@ -118,15 +118,9 @@ func TestFor(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if format.Name != "NestedStruct" {
-			t.Fatalf("expected: %v, got: %v", "NestedStruct", format.Name)
+		if name := format.Name(); name != "NestedStruct" {
+			t.Fatalf("expected: %v, got: %v", "NestedStruct", name)
 		}
-	})
-}
-
-func TestMustFor(t *testing.T) {
-	assertNotPanics(t, func() {
-		jsonformat.MustFor[SimpleStruct](nil)
 	})
 }
 
@@ -137,22 +131,16 @@ func TestFormatKind(t *testing.T) {
 	}
 }
 
-func assertPanics(t *testing.T, fn func()) {
-	t.Helper()
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatal("expected panic, but function did not panic")
-		}
-	}()
-	fn()
+func TestNothing(t *testing.T) {
+	format := jsonformat.Nothing()
+	if format.Kind() != "json" {
+		t.Fatalf("expected: %v, got: %v", "json", format.Kind())
+	}
 }
 
-func assertNotPanics(t *testing.T, fn func()) {
-	t.Helper()
-	defer func() {
-		if r := recover(); r != nil {
-			t.Fatalf("expected no panic, but got panic: %v", r)
-		}
-	}()
-	fn()
+func TestAny(t *testing.T) {
+	format := jsonformat.Any()
+	if format.Kind() != "json" {
+		t.Fatalf("expected: %v, got: %v", "json", format.Kind())
+	}
 }

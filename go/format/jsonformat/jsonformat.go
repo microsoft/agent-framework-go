@@ -13,14 +13,14 @@ import (
 
 // The jsonschema handling is loosely based on https://github.com/modelcontextprotocol/go-sdk
 
-var _ format.Format = (*Format)(nil)
+var _ format.SchemaFormat = (*Format)(nil)
 
 // Format implements the [format.Format] interface for JSON schema-based formats.
 type Format struct {
-	Name        string
-	Description string
-	Strict      bool
-	Schema      *jsonschema.Schema
+	name        string
+	description string
+	strict      bool
+	schema      *jsonschema.Schema
 
 	resolvedSchema *jsonschema.Resolved
 	zero           any
@@ -28,6 +28,22 @@ type Format struct {
 
 func (f *Format) Kind() string {
 	return "json"
+}
+
+func (f *Format) Name() string {
+	return f.name
+}
+
+func (f *Format) Description() string {
+	return f.description
+}
+
+func (f *Format) Strict() bool {
+	return f.strict
+}
+
+func (f *Format) Schema() any {
+	return f.schema
 }
 
 // Options for creating a [Format] or a [Value] for a type T.
@@ -59,20 +75,49 @@ func MustFor[T any](opts *Options) *Format {
 
 // For creates a Schema for the type T.
 // If opts is nil, default options are used.
-// The any type is treated as an empty object.
 func For[T any](opts *Options) (*Format, error) {
+	return ForType(reflect.TypeFor[T](), opts)
+}
+
+// Nothing returns a Format that matches no values.
+func Nothing() *Format {
+	schema := &jsonschema.Schema{
+		Not: &jsonschema.Schema{},
+	}
+	resolved, err := schema.Resolve(nil)
+	if err != nil {
+		// should never happen
+		panic(err)
+	}
+	return &Format{
+		name:           "empty",
+		schema:         schema,
+		strict:         true,
+		resolvedSchema: resolved,
+	}
+}
+
+// Any returns a Format representing the any type (no schema constraints).
+func Any() *Format {
+	format, err := For[any](nil)
+	if err != nil {
+		// should never happen
+		panic(err)
+	}
+	return format
+}
+
+// ForType creates a Schema for the given reflect.Type.
+// If opts is nil, default options are used.
+// A nil rt is treated as an empty object.
+func ForType(rt reflect.Type, opts *Options) (*Format, error) {
 	if opts == nil {
 		opts = &Options{}
 	}
-	rt := reflect.TypeFor[T]()
 	name := opts.Name
-	if name == "" {
-		name = rt.Name()
-	}
 	var schema *jsonschema.Schema
 	var zero any
-	if rt == reflect.TypeFor[any]() {
-		// Special handling for an "any" input: treat as an empty object.
+	if rt == nil {
 		schema = &jsonschema.Schema{Type: "object"}
 	} else {
 		if rt.Kind() == reflect.Pointer {
@@ -81,6 +126,9 @@ func For[T any](opts *Options) (*Format, error) {
 			// returned to be used in place of the typed nil zero value.
 			rt = rt.Elem()
 			zero = reflect.Zero(rt).Interface()
+		}
+		if name == "" {
+			name = rt.Name()
 		}
 		var err error
 		schema, err = jsonschema.ForType(rt, &opts.ForOptions)
@@ -96,10 +144,10 @@ func For[T any](opts *Options) (*Format, error) {
 		return nil, fmt.Errorf("resolving schema: %w", err)
 	}
 	return &Format{
-		Name:           name,
-		Description:    opts.Description,
-		Schema:         schema,
-		Strict:         opts.Strict,
+		name:           name,
+		description:    opts.Description,
+		schema:         schema,
+		strict:         opts.Strict,
 		resolvedSchema: resolved,
 		zero:           zero,
 	}, nil

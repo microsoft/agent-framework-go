@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 
 	"github.com/microsoft/agent-framework/go/format/jsonformat"
 	"github.com/microsoft/agent-framework/go/tool"
@@ -55,7 +56,7 @@ func (t *Tool) Schema() any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"arg0": t.Func.inputFormat.Schema,
+			"arg0": t.Func.inputFormat.Schema(),
 		},
 		"required": []string{"arg0"},
 	}
@@ -85,20 +86,22 @@ func New[In, Out any](fnp *Func, h HandlerFor[In, Out]) (*Tool, error) {
 		Func: *fnp,
 	}
 
-	var inzero In
-	in, err := jsonformat.NewValue(inzero, nil)
-	if err != nil {
-		return nil, fmt.Errorf("input schema: %w", err)
-	}
+	var err error
+	var in jsonformat.Value[In]
 	t.Func.inputFormat, err = in.FormatJSON()
 	if err != nil {
 		return nil, fmt.Errorf("input schema: %w", err)
 	}
 
 	var out jsonformat.Value[Out]
-	t.Func.outputFormat, err = out.FormatJSON()
-	if err != nil {
-		return nil, fmt.Errorf("output schema: %w", err)
+	if reflect.TypeFor[Out]() == reflect.TypeFor[any]() {
+		// If Out is any, we don't provide an output schema.
+		t.Func.outputFormat = jsonformat.Nothing()
+	} else {
+		t.Func.outputFormat, err = out.FormatJSON()
+		if err != nil {
+			return nil, fmt.Errorf("output schema: %w", err)
+		}
 	}
 
 	t.Handler = func(ctx context.Context, args string) (any, error) {
