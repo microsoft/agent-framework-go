@@ -5,7 +5,6 @@ package agent
 import (
 	"cmp"
 	"context"
-	"encoding"
 	"encoding/json"
 	"fmt"
 	"iter"
@@ -28,13 +27,16 @@ type Config struct {
 
 	SystemInstructions string
 
-	NewThread       func() memory.Thread
-	UnmarshalThread func(data []byte) (memory.Thread, error)
-
+	// The following functions implement the core behavior of the agent.
+	// If any of these are nil, the corresponding functionality is not supported,
+	// and the [Agent] might fall back to default behavior or return an error.
+	// The input parameters will always be non-nil and can be mutated as needed.
+	NewThread          func() memory.Thread
+	UnmarshalThread    func(data []byte) (memory.Thread, error)
 	NewContextProvider func() memory.ContextProvider
-
-	Run       func(ctx *RunContext, messages ...*message.Message) (*RunResponse, error)
-	RunStream func(ctx *RunContext, messages ...*message.Message) iter.Seq2[*RunResponseUpdate, error]
+	Run                func(ctx *RunContext, messages ...*message.Message) (*RunResponse, error)
+	RunStream          func(ctx *RunContext, messages ...*message.Message) iter.Seq2[*RunResponseUpdate, error]
+	RunOf              func(v any, ctx *RunContext, messages ...*message.Message) (*RunResponse, error)
 }
 
 // Agent represents an AI agent that can execute tasks using a client and tools.
@@ -82,10 +84,22 @@ func (a *Agent) UnmarshalThread(data []byte) (memory.Thread, error) {
 
 // Run executes the agent with the given messages and returns the response.
 func (a *Agent) Run(ctx *RunContext, messages ...*message.Message) (*RunResponse, error) {
-	// Prepare messages with system instructions
+	if a.Config.Run == nil {
+		return nil, fmt.Errorf("agent does not support Run")
+	}
+	return a.run(nil, ctx, messages...)
+}
+
+func (a *Agent) run(out any, ctx *RunContext, messages ...*message.Message) (*RunResponse, error) {
 	ctx, threadMessages, err := a.prepareRun(ctx, messages)
 	if err != nil {
 		return nil, err
+	}
+	run := func(msgs ...*message.Message) (*RunResponse, error) {
+		if out != nil {
+			return a.Config.RunOf(out, ctx, msgs...)
+		}
+		return a.Config.Run(ctx, msgs...)
 	}
 	startLength := len(threadMessages)
 	id := a.ID()
@@ -93,7 +107,7 @@ func (a *Agent) Run(ctx *RunContext, messages ...*message.Message) (*RunResponse
 	const maxRetries = 5
 	for range maxRetries {
 		// Call the chat client
-		response, err := a.Config.Run(ctx, threadMessages...)
+		response, err := run(threadMessages...)
 		if err != nil {
 			return nil, err
 		}
@@ -112,7 +126,7 @@ func (a *Agent) Run(ctx *RunContext, messages ...*message.Message) (*RunResponse
 		// Exceeded max retries with tool calls pending, disable tools and try one last time
 		// to get a final response.
 		ctx.Options.ToolMode = tool.ToolModeNone
-		finalResponse, err = a.Config.Run(ctx, threadMessages...)
+		finalResponse, err = run(threadMessages...)
 		if err != nil {
 			return nil, err
 		}
@@ -136,16 +150,28 @@ func (a *Agent) Run(ctx *RunContext, messages ...*message.Message) (*RunResponse
 		}
 	}
 	response := &RunResponse{
-		Messages:   outMessages,
-		ResponseID: finalResponse.ResponseID,
-		AgentID:    id,
-	}
-	if ctx.Options.Response != nil {
-		if err := ctx.Options.Response.UnmarshalBinary([]byte(response.String())); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal response: %w", err)
-		}
+		Messages:     outMessages,
+		ResponseID:   finalResponse.ResponseID,
+		AgentID:      id,
+		FinishReason: finalResponse.FinishReason,
 	}
 	return response, nil
+}
+
+// RunOf executes the agent with the given value type and messages, and stores the result
+// in the value pointed to by v.
+func (a *Agent) RunOf(v any, ctx *RunContext, messages ...*message.Message) (*RunResponse, error) {
+	if a.Config.RunOf == nil {
+		return nil, fmt.Errorf("agent does not support RunOf")
+	}
+	return a.run(v, ctx, messages...)
+}
+
+// RunFor executes the agent with the given messages and returns the result of type T.
+func RunFor[T any](a *Agent, ctx *RunContext, messages ...*message.Message) (T, *RunResponse, error) {
+	var v T
+	resp, err := a.RunOf(&v, ctx, messages...)
+	return v, resp, err
 }
 
 // RunText executes the agent with a single text message and returns the response.
@@ -245,20 +271,6 @@ func (a *Agent) RunStream(ctx *RunContext, messages ...*message.Message) iter.Se
 				return
 			}
 		}
-		if ctx.Options.Response != nil {
-			var finalText strings.Builder
-			for _, msg := range threadMessages[startLength:] {
-				for _, c := range msg.Contents {
-					if textContent, ok := c.(*message.TextContent); ok {
-						finalText.WriteString(textContent.Text)
-					}
-				}
-			}
-			if err := ctx.Options.Response.UnmarshalBinary([]byte(finalText.String())); err != nil {
-				yield(nil, fmt.Errorf("failed to unmarshal response: %w", err))
-				return
-			}
-		}
 	}
 }
 
@@ -294,16 +306,10 @@ type RunContext struct {
 
 // RunOptions contains options for agent execution.
 type RunOptions struct {
-	// Response is an object to unmarshal the response into.
-	// For streaming responses, this will be called once with the full response.
-	// Ignored if nil.
-	Response encoding.BinaryUnmarshaler
-
 	// ResponseFormat represents the desired response format for agent execution.
 	// It is up to the client implementation if or how to honor the request.
 	// If the client implementation doesn't recognize the specific kind, it can be ignored.
-	// If nil and Response implemented [format.FormatProvider], it is obtained from there.
-	// Otherwise, the client default is used.
+	// If nil, the client default is used.
 	ResponseFormat format.Format
 
 	// Tools to make available to the agent.
@@ -348,7 +354,6 @@ func (o *RunOptions) Merge(other *RunOptions) *RunOptions {
 	o.TopP = cmp.Or(other.TopP, o.TopP)
 	o.MaxTokens = cmp.Or(other.MaxTokens, o.MaxTokens)
 	o.ResponseFormat = cmp.Or(other.ResponseFormat, o.ResponseFormat)
-	o.Response = cmp.Or(other.Response, o.Response)
 	if other.AdditionalMetadata != nil {
 		if o.AdditionalMetadata == nil {
 			o.AdditionalMetadata = make(map[string]any)
@@ -360,9 +365,10 @@ func (o *RunOptions) Merge(other *RunOptions) *RunOptions {
 
 // RunResponse represents the result of an agent execution.
 type RunResponse struct {
-	AgentID    string
-	ResponseID string
-	Messages   []*message.Message
+	AgentID      string
+	ResponseID   string
+	FinishReason string
+	Messages     []*message.Message
 }
 
 // String returns the concatenated text contents of the response messages.
@@ -417,16 +423,6 @@ func (a *Agent) prepareRun(c *RunContext, messages []*message.Message) (*RunCont
 		ctx.Context = context.Background()
 	}
 	ctx.Options = a.Config.Opts.Merge(ctx.Options)
-	if ctx.Options.ResponseFormat == nil && ctx.Options.Response != nil {
-		// Try to get the format from the response object.
-		if rf, ok := ctx.Options.Response.(format.FormatProvider); ok {
-			var err error
-			ctx.Options.ResponseFormat, err = rf.Format()
-			if err != nil {
-				return nil, nil, err
-			}
-		}
-	}
 	messages = slices.Clone(messages)
 	if a.Config.SystemInstructions != "" {
 		messages = append([]*message.Message{{Role: message.RoleSystem, Contents: []message.Content{&message.TextContent{Text: a.Config.SystemInstructions}}}}, messages...)

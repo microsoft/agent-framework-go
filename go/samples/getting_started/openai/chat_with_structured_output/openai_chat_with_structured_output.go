@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/microsoft/agent-framework/go/agent"
-	"github.com/microsoft/agent-framework/go/format/jsonformat"
 	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/openai"
 )
@@ -32,25 +31,13 @@ func main() {
 	const query = "Tell me about Paris, France"
 	fmt.Println("User: ", query)
 
-	var out jsonformat.Value[CityInfo]
-	ctx := &agent.RunContext{
-		Options: &agent.RunOptions{
-			Response: &out,
-		},
-	}
-	fmt.Println("Agent raw response: ", must(ag.Run(ctx, message.NewText(query))))
-
-	city := out.Unwrap()
-	fmt.Println("City Name: ", city.Name)
-	fmt.Println("Population: ", city.Population)
-	fmt.Println("Area: ", city.Area)
-}
-
-// must is a helper to panic on error for samples.
-// In production code, handle errors appropriately.
-func must[T any](resp T, err error) T {
+	city, resp, err := agent.RunFor[CityInfo](ag, nil, message.NewText(query))
 	if err != nil {
 		panic(err)
 	}
-	return resp
+	fmt.Println("Agent raw response: ", resp)
+
+	fmt.Println("City Name: ", city.Name)
+	fmt.Println("Population: ", city.Population)
+	fmt.Println("Area: ", city.Area)
 }

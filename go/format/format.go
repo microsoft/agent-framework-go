@@ -2,15 +2,19 @@
 
 package format
 
+import "encoding"
+
 // Format represents the desired format, e.g., for agent responses or tool input/output.
 type Format interface {
-	// Kind if the format type.
+	// Kind is the format type.
 	// For example, "text" or "json".
 	Kind() string
 }
 
-// FormatProvider is an interface for types that can provide a Format.
-type FormatProvider interface {
+type Formattable interface {
+	encoding.BinaryUnmarshaler
+
+	// Format returns the desired format for the object.
 	Format() (Format, error)
 }
 
@@ -31,4 +35,17 @@ func JSON() Format {
 // Text represents the plain text format.
 func Text() Format {
 	return simple{kind: "text"}
+}
+
+// SchemaFormat represents a format defined by a schema,
+// e.g., a JSON Schema.
+type SchemaFormat interface {
+	Format
+
+	Name() string
+	Description() string
+	Strict() bool
+
+	// Schema returns the JSON Schema that defines the format.
+	Schema() any
 }
