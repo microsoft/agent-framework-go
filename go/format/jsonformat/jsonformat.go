@@ -63,9 +63,7 @@ func New(name, description string, schema *jsonschema.Schema) *Format {
 
 // Any returns a Format representing the any type (no schema constraints).
 func Any() *Format {
-	return New("any", "", &jsonschema.Schema{
-		Not: &jsonschema.Schema{},
-	})
+	return New("any", "", &jsonschema.Schema{})
 }
 
 // Nothing returns a Format that matches no values.
