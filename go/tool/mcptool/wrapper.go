@@ -11,7 +11,7 @@ import (
 )
 
 var _ tool.Tool = (*mcpWrapper)(nil)
-var _ tool.CallTool = (*mcpWrapper)(nil)
+var _ tool.FuncTool = (*mcpWrapper)(nil)
 
 // mcpWrapper wraps an MCP tool as an agent.Tool.
 type mcpWrapper struct {
@@ -32,6 +32,10 @@ func (w *mcpWrapper) ToolInfo() (name string, description string) {
 
 func (w *mcpWrapper) Schema() any {
 	return w.tool.InputSchema
+}
+
+func (w *mcpWrapper) ReturnSchema() any {
+	return w.tool.OutputSchema
 }
 
 // Call implements the Func-like calling pattern for MCP tools.

@@ -36,20 +36,21 @@ func (t *LoaderTool) LoadTools(ctx context.Context) ([]tool.Tool, error) {
 
 // Tool is a simple tool for testing.
 type Tool struct {
-	NameValue   string
-	DescValue   string
-	CallFunc    func(ctx context.Context, args map[string]any) (any, error)
-	SchemaValue any
-	CallCount   int
+	Name          string
+	Desc          string
+	CallFunc      func(ctx context.Context, args map[string]any) (any, error)
+	Schema_       any
+	ReturnSchema_ any
+	CallCount     int
 }
 
 func (m *Tool) ToolInfo() (name string, description string) {
-	return m.NameValue, m.DescValue
+	return m.Name, m.Desc
 }
 
 func (m *Tool) Schema() any {
-	if m.SchemaValue != nil {
-		return m.SchemaValue
+	if m.Schema_ != nil {
+		return m.Schema_
 	}
 	return map[string]any{
 		"type": "object",
@@ -57,6 +58,10 @@ func (m *Tool) Schema() any {
 			"location": map[string]any{"type": "string"},
 		},
 	}
+}
+
+func (m *Tool) ReturnSchema() any {
+	return m.ReturnSchema_
 }
 
 func (m *Tool) Call(ctx context.Context, args map[string]any) (any, error) {

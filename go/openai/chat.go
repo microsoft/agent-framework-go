@@ -246,7 +246,7 @@ func (a *client) buildCompletionParams(options *agent.RunOptions, messages ...*m
 						}
 					}
 				}
-			case tool.CallTool:
+			case tool.FuncTool:
 				name, description := tl.ToolInfo()
 				var funcParams map[string]any
 				switch schema := tl.Schema().(type) {

@@ -129,6 +129,19 @@ func TestContentEncoding_Roundtrip(t *testing.T) {
 		&message.HostedVectorStoreContent{
 			VectorStoreID: "store-123",
 		},
+		&message.FunctionApprovalRequestContent{
+			ID: "approval-123",
+			FunctionCall: &message.FunctionCallContent{
+				CallID: "1",
+			},
+		},
+		&message.FunctionApprovalResponseContent{
+			ID:       "approval-123",
+			Approved: true,
+			FunctionCall: &message.FunctionCallContent{
+				CallID: "1",
+			},
+		},
 	}
 	data, err := json.Marshal(contents)
 	if err != nil {

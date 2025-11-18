@@ -22,10 +22,12 @@ type Tool interface {
 	ToolInfo() (name string, description string)
 }
 
-type CallTool interface {
+type FuncTool interface {
 	Tool
 
 	Schema() any
+	ReturnSchema() any
+
 	Call(ctx context.Context, args map[string]any) (any, error)
 }
 
@@ -40,4 +42,26 @@ type LoaderTool interface {
 	Tool
 
 	LoadTools(ctx context.Context) ([]Tool, error)
+}
+
+// ApprovalRequiredTool indicates that a tool requires user approval before invocation.
+type ApprovalRequiredTool interface {
+	Tool
+
+	ApprovalRequired() bool
+}
+
+type approvalRequiredFunc struct {
+	FuncTool
+}
+
+func (approvalRequiredFunc) ApprovalRequired() bool {
+	return true
+}
+
+// ApprovalRequiredFunc wraps a tool to indicate that it requires user approval before invocation.
+// If the tool already requires approval, it is returned as-is.
+// Not all tools support approval, in which case the original tool is returned.
+func ApprovalRequiredFunc(t FuncTool) FuncTool {
+	return approvalRequiredFunc{t}
 }

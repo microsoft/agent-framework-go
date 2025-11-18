@@ -34,7 +34,7 @@ type Handler func(_ context.Context, args string) (any, error)
 type HandlerFor[In, Out any] func(context.Context, In) (Out, error)
 
 var _ tool.Tool = (*Tool)(nil)
-var _ tool.CallTool = (*Tool)(nil)
+var _ tool.FuncTool = (*Tool)(nil)
 
 type Tool struct {
 	Func    Func
@@ -57,6 +57,20 @@ func (t *Tool) Schema() any {
 		"type": "object",
 		"properties": map[string]any{
 			"arg0": t.Func.inputFormat.Schema(),
+		},
+		"required": []string{"arg0"},
+	}
+}
+
+func (t *Tool) ReturnSchema() any {
+	if t.Func.outputFormat == nil {
+		// See comment in Schema() method.
+		panic("OutputSchema is nil")
+	}
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"arg0": t.Func.outputFormat.Schema(),
 		},
 		"required": []string{"arg0"},
 	}
