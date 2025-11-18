@@ -25,6 +25,8 @@ func init() {
 		&TextReasoningContent{},
 		&URIContent{},
 		&UsageContent{},
+		&FunctionApprovalRequestContent{},
+		&FunctionApprovalResponseContent{},
 	} {
 		supportedContents[c.kind()] = reflect.TypeOf(c).Elem()
 	}
@@ -413,3 +415,59 @@ func (t *UsageContent) MarshalJSON() ([]byte, error) {
 }
 
 func (t UsageContent) kind() contentKind { return "usage" }
+
+type FunctionApprovalRequestContent struct {
+	AdditionalProperties map[string]any `json:"-"`
+	Annotations          Annotations    `json:",omitempty"`
+	RawRepresentation    any            `json:"-"`
+
+	ID           string
+	FunctionCall *FunctionCallContent
+}
+
+func (t *FunctionApprovalRequestContent) MarshalJSON() ([]byte, error) {
+	type alias FunctionApprovalRequestContent
+	tmp := struct {
+		*alias
+		Type contentKind
+	}{
+		alias: (*alias)(t),
+		Type:  t.kind(),
+	}
+	return json.Marshal(tmp)
+}
+
+func (t FunctionApprovalRequestContent) kind() contentKind { return "functionApprovalRequest" }
+
+func (t *FunctionApprovalRequestContent) Response(approved bool) *FunctionApprovalResponseContent {
+	return &FunctionApprovalResponseContent{
+		ID:                   t.ID,
+		Approved:             approved,
+		FunctionCall:         t.FunctionCall,
+		AdditionalProperties: t.AdditionalProperties,
+	}
+}
+
+type FunctionApprovalResponseContent struct {
+	AdditionalProperties map[string]any `json:"-"`
+	Annotations          Annotations    `json:",omitempty"`
+	RawRepresentation    any            `json:"-"`
+
+	ID           string
+	Approved     bool
+	FunctionCall *FunctionCallContent
+}
+
+func (t *FunctionApprovalResponseContent) MarshalJSON() ([]byte, error) {
+	type alias FunctionApprovalResponseContent
+	tmp := struct {
+		*alias
+		Type contentKind
+	}{
+		alias: (*alias)(t),
+		Type:  t.kind(),
+	}
+	return json.Marshal(tmp)
+}
+
+func (t FunctionApprovalResponseContent) kind() contentKind { return "functionApprovalResponse" }

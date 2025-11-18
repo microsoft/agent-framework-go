@@ -58,7 +58,7 @@ func TestAgent_ToolInit(t *testing.T) {
 	initCalled := false
 	tl := &agenttest.InitializableTool{
 		Tool: agenttest.Tool{
-			NameValue: "init_tool",
+			Name: "init_tool",
 		},
 		InitFunc: func(ctx context.Context) error {
 			initCalled = true
@@ -85,7 +85,7 @@ func TestAgent_ToolInitError(t *testing.T) {
 	expectedErr := errors.New("init failed")
 	tl := &agenttest.InitializableTool{
 		Tool: agenttest.Tool{
-			NameValue: "init_tool",
+			Name: "init_tool",
 		},
 		InitFunc: func(ctx context.Context) error {
 			return expectedErr
@@ -107,12 +107,12 @@ func TestAgent_ToolLoader(t *testing.T) {
 	client, a := agenttest.NewAgent()
 
 	innerTool := &agenttest.Tool{
-		NameValue: "inner_tool",
+		Name: "inner_tool",
 	}
 
 	loaderTool := &agenttest.LoaderTool{
 		Tool: agenttest.Tool{
-			NameValue: "loader",
+			Name: "loader",
 		},
 		LoadFunc: func(ctx context.Context) ([]tool.Tool, error) {
 			return []tool.Tool{innerTool}, nil
@@ -145,7 +145,7 @@ func TestAgent_ToolLoaderError(t *testing.T) {
 	expectedErr := errors.New("load failed")
 	loaderTool := &agenttest.LoaderTool{
 		Tool: agenttest.Tool{
-			NameValue: "loader",
+			Name: "loader",
 		},
 		LoadFunc: func(ctx context.Context) ([]tool.Tool, error) {
 			return nil, expectedErr

@@ -158,7 +158,7 @@ func TestAgent_WithToolCalls(t *testing.T) {
 	client.WithToolCalls(toolCalls, respText)
 
 	tl := &agenttest.Tool{
-		NameValue: "get_weather",
+		Name: "get_weather",
 		CallFunc: func(ctx context.Context, args map[string]any) (any, error) {
 			return map[string]any{"temperature": "72F", "condition": "sunny"}, nil
 		},
@@ -460,7 +460,7 @@ func TestAgent_MaxRetries(t *testing.T) {
 	}
 
 	tl := &agenttest.Tool{
-		NameValue: "test_tool",
+		Name: "test_tool",
 		CallFunc: func(ctx context.Context, args map[string]any) (any, error) {
 			return "result", nil
 		},
@@ -625,7 +625,7 @@ func TestAgent_ToolError(t *testing.T) {
 
 	expectedErr := errors.New("tool execution failed")
 	tl := &agenttest.Tool{
-		NameValue: "error_tool",
+		Name: "error_tool",
 		CallFunc: func(ctx context.Context, args map[string]any) (any, error) {
 			return nil, expectedErr
 		},
@@ -689,7 +689,7 @@ func TestAgent_ToolInvalidArgs(t *testing.T) {
 	client.WithToolCalls(toolCalls, "Handled invalid args")
 
 	tl := &agenttest.Tool{
-		NameValue: "test_tool",
+		Name: "test_tool",
 		CallFunc: func(ctx context.Context, args map[string]any) (any, error) {
 			return "should not be called", nil
 		},
@@ -758,10 +758,10 @@ func TestRunOptions_Merge(t *testing.T) {
 		{
 			name: "tools merged",
 			base: &agent.RunOptions{
-				Tools: []tool.Tool{&agenttest.Tool{NameValue: "tool1"}},
+				Tools: []tool.Tool{&agenttest.Tool{Name: "tool1"}},
 			},
 			override: &agent.RunOptions{
-				Tools: []tool.Tool{&agenttest.Tool{NameValue: "tool2"}},
+				Tools: []tool.Tool{&agenttest.Tool{Name: "tool2"}},
 			},
 			check: func(t *testing.T, result *agent.RunOptions) {
 				if len(result.Tools) != 2 {
