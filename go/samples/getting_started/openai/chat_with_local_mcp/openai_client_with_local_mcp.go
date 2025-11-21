@@ -7,13 +7,16 @@
 package main
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/microsoft/agent-framework/go/agent"
+	"github.com/microsoft/agent-framework/go/agent/chatagent"
 	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/openai"
 	"github.com/microsoft/agent-framework/go/tool"
 	"github.com/microsoft/agent-framework/go/tool/mcptool"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func main() {
@@ -31,16 +34,21 @@ func mcpToolsOnAgentLevel() {
 	fmt.Println("=== Tools Defined on Agent Level ===")
 
 	// Create MCP HTTP tool for Microsoft Learn
-	mcpTool := mcptool.NewHTTP("https://learn.microsoft.com/api/mcp")
+	session := must(mcptool.Connect(context.Background(), &mcp.StreamableClientTransport{
+		Endpoint: "https://learn.microsoft.com/api/mcp",
+	}))
+	defer session.Close()
+	tools := must(mcptool.ListTools(context.Background(), session))
 
 	// Create the OpenAI agent with MCP tools
 	// In Go, we configure tools as default options that will be used for all runs
-	ag := openai.NewChatAgent(openai.AgentConfig{
-		Model:              "gpt-4o-mini",
-		Name:               "DocsAgent",
-		SystemInstructions: "You are a helpful assistant that can help with microsoft documentation questions.",
-		Opts: &agent.RunOptions{
-			Tools: []tool.Tool{mcpTool},
+	ag := openai.NewChatAgent(openai.ClientConfig{
+		Model: "gpt-4o-mini",
+	}, &chatagent.Options{
+		Name:         "DocsAgent",
+		Instructions: "You are a helpful assistant that can help with microsoft documentation questions.",
+		ChatOptions: &chatagent.ChatOptions{
+			Tools: tools,
 		},
 	})
 
@@ -62,19 +70,26 @@ func mcpToolsOnRunLevel() {
 	fmt.Println("=== Tools Defined on Run Level ===")
 
 	// Create MCP HTTP tool for Microsoft Learn
-	mcpServer := mcptool.NewHTTP("https://learn.microsoft.com/api/mcp")
+	session := must(mcptool.Connect(context.Background(), &mcp.StreamableClientTransport{
+		Endpoint: "https://learn.microsoft.com/api/mcp",
+	}))
+	defer session.Close()
+	tools := must(mcptool.ListTools(context.Background(), session))
 
 	// Create the OpenAI agent
-	ag := openai.NewChatAgent(openai.AgentConfig{
-		Model:              "gpt-4o-mini",
-		Name:               "DocsAgent",
-		SystemInstructions: "You are a helpful assistant that can help with microsoft documentation questions.",
+	ag := openai.NewChatAgent(openai.ClientConfig{
+		Model: "gpt-4o-mini",
+	}, &chatagent.Options{
+		Name:         "DocsAgent",
+		Instructions: "You are a helpful assistant that can help with microsoft documentation questions.",
 	})
 
 	ctx := &agent.RunContext{
 		Options: &agent.RunOptions{
-			Tools:    []tool.Tool{mcpServer},
-			ToolMode: tool.ToolModeAuto,
+			Options: &chatagent.ChatOptions{
+				Tools:    tools,
+				ToolMode: tool.ToolModeAuto,
+			},
 		},
 	}
 

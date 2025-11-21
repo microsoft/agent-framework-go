@@ -4,6 +4,7 @@ package memory
 
 import (
 	"context"
+	"iter"
 
 	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/tool"
@@ -30,8 +31,8 @@ import (
 // To support conversations that may need to survive application restarts or separate service requests,
 // a Thread can be serialized and deserialized, so that it can be saved in a persistent store.
 type Thread interface {
-	// AddMessage adds messages to the thread.
-	AddMessage(ctx context.Context, messages ...*message.Message) error
+	// MessagesReceived adds messages to the thread.
+	MessagesReceived(ctx context.Context, messages ...*message.Message) error
 }
 
 // ContextProviderThread is a Thread that can provide its own context.
@@ -67,9 +68,10 @@ type InvokingContext struct {
 type InvokedContext struct {
 	context.Context
 
-	Messages  []*message.Message
-	Responses []*message.Message
-	Err       error
+	RequestMessages         []*message.Message
+	ContextProviderMessages []*message.Message
+	ResponsesMessages       []*message.Message
+	Error                   error
 }
 
 // ContextProvider defines a contract for components that enhance AI context management during agent invocations.
@@ -81,4 +83,14 @@ type ContextProvider interface {
 
 	// Invoked is called immediately after an agent has been invoked to process the results.
 	Invoked(*InvokedContext) error
+}
+
+// MessageStore defines a contract for storing and retrieving messages associated with an agent conversation.
+type MessageStore interface {
+	// Add adds messages to the store.
+	// Messages should be added in the order they were generated to maintain proper chronological sequence.
+	Add(ctx context.Context, msgs ...*message.Message) error
+
+	// Messages retrieves all messages from the store that should be provided as context for the next agent invocation.
+	All(ctx context.Context) iter.Seq2[*message.Message, error]
 }

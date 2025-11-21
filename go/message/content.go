@@ -3,9 +3,14 @@
 package message
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"maps"
 	"reflect"
+	"slices"
+	"strings"
 
 	"github.com/microsoft/agent-framework/go/internal/jsonx"
 )
@@ -36,10 +41,22 @@ func init() {
 // It is unexported to prevent external implementations of Content.
 type contentKind string
 
+// ContentHeader contains common properties for all content types.
+type ContentHeader struct {
+	AdditionalProperties map[string]any `json:"-"`
+	Annotations          Annotations    `json:",omitempty"`
+	RawRepresentation    any            `json:"-"`
+}
+
+func (ch ContentHeader) Header() ContentHeader {
+	return ch
+}
+
 // Content represents message content.
 type Content interface {
 	json.Marshaler
 	kind() contentKind
+	Header() ContentHeader
 }
 
 // Contents is a slice of Content that supports JSON encoding.
@@ -53,9 +70,7 @@ func (cs *Contents) UnmarshalJSON(data []byte) error {
 
 // TextContent represents plain text content.
 type TextContent struct {
-	AdditionalProperties map[string]any `json:"-"`
-	Annotations          Annotations    `json:",omitempty"`
-	RawRepresentation    any            `json:"-"`
+	ContentHeader
 
 	Text string
 }
@@ -82,14 +97,16 @@ func (t *TextContent) String() string { return t.Text }
 // The content represents in-memory data. For references to data at a remote URI,
 // use [URIContent] instead.
 type DataContent struct {
-	AdditionalProperties map[string]any `json:"-"`
-	Annotations          Annotations    `json:",omitempty"`
-	RawRepresentation    any            `json:"-"`
+	ContentHeader
 
 	Data      []byte
 	MediaType string
 	Name      string `json:",omitempty"`
 	URI       string `json:",omitempty"`
+}
+
+func (t *DataContent) TopLevelMediaType() string {
+	return topLevelMediaType(t.MediaType)
 }
 
 func (t *DataContent) MarshalJSON() ([]byte, error) {
@@ -111,9 +128,7 @@ func (t DataContent) kind() contentKind { return "data" }
 // Typically, ErrorContent is used for non-fatal errors, where something went wrong as part
 // of the operation but the operation was still able to continue.
 type ErrorContent struct {
-	AdditionalProperties map[string]any `json:"-"`
-	Annotations          Annotations    `json:",omitempty"`
-	RawRepresentation    any            `json:"-"`
+	ContentHeader
 
 	Message   string
 	Details   string `json:",omitempty"`
@@ -135,11 +150,9 @@ func (t *ErrorContent) MarshalJSON() ([]byte, error) {
 func (t ErrorContent) kind() contentKind { return "error" }
 
 type serializedFunctionCallContent struct {
-	AdditionalProperties map[string]any `json:"-"`
-	Annotations          Annotations    `json:",omitempty"`
-	RawRepresentation    any            `json:"-"`
+	ContentHeader
 
-	Arguments string
+	Arguments any
 	CallID    string
 	Error     string `json:",omitempty"`
 	Name      string `json:",omitempty"`
@@ -149,11 +162,9 @@ type serializedFunctionCallContent struct {
 
 // FunctionCallContent represents a function call request.
 type FunctionCallContent struct {
-	AdditionalProperties map[string]any `json:"-"`
-	Annotations          Annotations    `json:",omitempty"`
-	RawRepresentation    any            `json:"-"`
+	ContentHeader
 
-	Arguments string // Arguments as a JSON-encoded string.
+	Arguments any
 	CallID    string
 	Error     error // Error that occurred while mapping the original function call data to this object.
 	Name      string
@@ -161,13 +172,11 @@ type FunctionCallContent struct {
 
 func (t *FunctionCallContent) MarshalJSON() ([]byte, error) {
 	tmp := serializedFunctionCallContent{
-		AdditionalProperties: t.AdditionalProperties,
-		Annotations:          t.Annotations,
-		RawRepresentation:    t.RawRepresentation,
-		Arguments:            t.Arguments,
-		CallID:               t.CallID,
-		Name:                 t.Name,
-		Type:                 t.kind(),
+		ContentHeader: t.ContentHeader,
+		Arguments:     t.Arguments,
+		CallID:        t.CallID,
+		Name:          t.Name,
+		Type:          t.kind(),
 	}
 	if t.Error != nil {
 		tmp.Error = t.Error.Error()
@@ -180,9 +189,7 @@ func (t *FunctionCallContent) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &tmp); err != nil {
 		return err
 	}
-	t.AdditionalProperties = tmp.AdditionalProperties
-	t.Annotations = tmp.Annotations
-	t.RawRepresentation = tmp.RawRepresentation
+	t.ContentHeader = tmp.ContentHeader
 	t.Arguments = tmp.Arguments
 	t.CallID = tmp.CallID
 	t.Name = tmp.Name
@@ -192,20 +199,10 @@ func (t *FunctionCallContent) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func (t *FunctionCallContent) ParseArgs() (map[string]any, error) {
-	var args map[string]any
-	if err := json.Unmarshal([]byte(t.Arguments), &args); err != nil {
-		return nil, err
-	}
-	return args, nil
-}
-
 func (t FunctionCallContent) kind() contentKind { return "function_call" }
 
 type serializedFunctionResultContent struct {
-	AdditionalProperties map[string]any `json:"-"`
-	Annotations          Annotations    `json:",omitempty"`
-	RawRepresentation    any            `json:"-"`
+	ContentHeader
 
 	CallID string
 	Error  string `json:",omitempty"`
@@ -216,9 +213,7 @@ type serializedFunctionResultContent struct {
 
 // FunctionResultContent represents the result of a function call.
 type FunctionResultContent struct {
-	AdditionalProperties map[string]any `json:"-"`
-	Annotations          Annotations    `json:",omitempty"`
-	RawRepresentation    any            `json:"-"`
+	ContentHeader
 
 	CallID string
 	Error  error `json:",omitempty"` // Error that occurred if the function call failed.
@@ -227,12 +222,10 @@ type FunctionResultContent struct {
 
 func (t *FunctionResultContent) MarshalJSON() ([]byte, error) {
 	tmp := serializedFunctionResultContent{
-		AdditionalProperties: t.AdditionalProperties,
-		Annotations:          t.Annotations,
-		RawRepresentation:    t.RawRepresentation,
-		CallID:               t.CallID,
-		Result:               t.Result,
-		Type:                 t.kind(),
+		ContentHeader: t.ContentHeader,
+		CallID:        t.CallID,
+		Result:        t.Result,
+		Type:          t.kind(),
 	}
 	if t.Error != nil {
 		tmp.Error = t.Error.Error()
@@ -245,9 +238,7 @@ func (t *FunctionResultContent) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &tmp); err != nil {
 		return err
 	}
-	t.AdditionalProperties = tmp.AdditionalProperties
-	t.Annotations = tmp.Annotations
-	t.RawRepresentation = tmp.RawRepresentation
+	t.ContentHeader = tmp.ContentHeader
 	t.CallID = tmp.CallID
 	t.Result = tmp.Result
 	if tmp.Error != "" {
@@ -264,9 +255,7 @@ func (t FunctionResultContent) kind() contentKind { return "function_result" }
 // that is hosted by the AI service and referenced by an identifier.
 // Such identifiers are specific to the provider.
 type HostedFileContent struct {
-	AdditionalProperties map[string]any `json:"-"`
-	Annotations          Annotations    `json:",omitempty"`
-	RawRepresentation    any            `json:"-"`
+	ContentHeader
 
 	FileID string
 }
@@ -290,9 +279,7 @@ func (t HostedFileContent) kind() contentKind { return "hosted_file" }
 // Unlike [HostedFileContent] which represents a specific file that is hosted by the AI service,
 // HostedVectorStoreContent represents a vector store that can contain multiple files, indexed for searching.
 type HostedVectorStoreContent struct {
-	AdditionalProperties map[string]any `json:"-"`
-	Annotations          Annotations    `json:",omitempty"`
-	RawRepresentation    any            `json:"-"`
+	ContentHeader
 
 	VectorStoreID string
 }
@@ -317,9 +304,7 @@ func (t HostedVectorStoreContent) kind() contentKind { return "hosted_vector_sto
 // performed by the model and is distinct from the actual output text from the model,
 // which is represented by [TextContent].
 type TextReasoningContent struct {
-	AdditionalProperties map[string]any `json:"-"`
-	Annotations          Annotations    `json:",omitempty"`
-	RawRepresentation    any            `json:"-"`
+	ContentHeader
 
 	ProtectedData string `json:",omitempty"`
 	Text          string
@@ -344,12 +329,14 @@ func (t *TextReasoningContent) String() string { return t.Text }
 
 // URIContent represents a URL, typically to hosted content such as an image, audio, or video.
 type URIContent struct {
-	AdditionalProperties map[string]any `json:"-"`
-	Annotations          Annotations    `json:",omitempty"`
-	RawRepresentation    any            `json:"-"`
+	ContentHeader
 
 	MediaType string
 	URI       string
+}
+
+func (t *URIContent) TopLevelMediaType() string {
+	return topLevelMediaType(t.MediaType)
 }
 
 func (t *URIContent) MarshalJSON() ([]byte, error) {
@@ -395,9 +382,7 @@ func (u *UsageDetails) Add(other *UsageDetails) {
 
 // UsageContent represents usage information associated with a chat request and response.
 type UsageContent struct {
-	AdditionalProperties map[string]any `json:"-"`
-	Annotations          Annotations    `json:",omitempty"`
-	RawRepresentation    any            `json:"-"`
+	ContentHeader
 
 	Details UsageDetails
 }
@@ -439,6 +424,14 @@ func (t *FunctionApprovalRequestContent) MarshalJSON() ([]byte, error) {
 
 func (t FunctionApprovalRequestContent) kind() contentKind { return "functionApprovalRequest" }
 
+func (t FunctionApprovalRequestContent) Header() ContentHeader {
+	return ContentHeader{
+		AdditionalProperties: t.AdditionalProperties,
+		Annotations:          t.Annotations,
+		RawRepresentation:    t.RawRepresentation,
+	}
+}
+
 func (t *FunctionApprovalRequestContent) Response(approved bool) *FunctionApprovalResponseContent {
 	return &FunctionApprovalResponseContent{
 		ID:                   t.ID,
@@ -471,3 +464,136 @@ func (t *FunctionApprovalResponseContent) MarshalJSON() ([]byte, error) {
 }
 
 func (t FunctionApprovalResponseContent) kind() contentKind { return "functionApprovalResponse" }
+
+func (t FunctionApprovalResponseContent) Header() ContentHeader {
+	return ContentHeader{
+		AdditionalProperties: t.AdditionalProperties,
+		Annotations:          t.Annotations,
+		RawRepresentation:    t.RawRepresentation,
+	}
+}
+
+func topLevelMediaType(media string) string {
+	if media == "" {
+		return ""
+	}
+	if idx := strings.Index(media, "/"); idx >= 0 {
+		return media[:idx]
+	}
+	return media
+}
+
+// CoalesceContents combines sequential contents elements.
+func CoalesceContents(contents []Content) []Content {
+	var sb strings.Builder
+	mergeText := func(contents []Content, start, end int) string {
+		sb.Reset()
+		for _, c := range contents[start:end] {
+			if tc, ok := c.(fmt.Stringer); ok {
+				sb.WriteString(tc.String())
+			}
+		}
+		return sb.String()
+	}
+	var buf bytes.Buffer
+	mergeBytes := func(contents []Content, start, end int) []byte {
+		buf.Reset()
+		for _, c := range contents[start:end] {
+			if dc, ok := c.(*DataContent); ok {
+				buf.Write(dc.Data)
+			}
+		}
+		return buf.Bytes()
+	}
+
+	contents = coalesce(contents, false, nil, func(contents []Content, start, end int) *TextContent {
+		return &TextContent{
+			ContentHeader: ContentHeader{
+				AdditionalProperties: maps.Clone(contents[start].(*TextContent).AdditionalProperties),
+			},
+			Text: mergeText(contents, start, end),
+		}
+	})
+
+	contents = coalesce(contents, false,
+		func(a, b *TextReasoningContent) bool { return a.ProtectedData == "" }, // we allow merging if the first item has no ProtectedData, even if the second does
+		func(contents []Content, start, end int) *TextReasoningContent {
+			content := &TextReasoningContent{
+				ContentHeader: ContentHeader{
+					AdditionalProperties: maps.Clone(contents[start].(*TextReasoningContent).AdditionalProperties),
+				},
+				Text: mergeText(contents, start, end),
+			}
+			last := contents[end-1].(*TextReasoningContent)
+			if last.ProtectedData != "" {
+				content.ProtectedData = last.ProtectedData
+			}
+			return content
+		})
+
+	contents = coalesce(contents, false,
+		func(a, b *DataContent) bool {
+			return a.MediaType == b.MediaType && a.TopLevelMediaType() == "text" && a.Name == b.Name
+		},
+		func(contents []Content, start, end int) *DataContent {
+			first := contents[start].(*DataContent)
+			return &DataContent{
+				ContentHeader: ContentHeader{
+					AdditionalProperties: maps.Clone(first.AdditionalProperties),
+				},
+				Name:      first.Name,
+				MediaType: first.MediaType,
+				Data:      mergeBytes(contents, start, end),
+			}
+		})
+
+	return contents
+}
+
+func coalesce[T Content](contents []Content, mergeSingle bool, canMerge func(a, b T) bool, merge func([]Content, int, int) T) []Content {
+	// Iterate through all of the items in the list looking for contiguous items that can be coalesced.
+	start := 0
+	tryAsCoalescable := func(c Content) (T, bool) {
+		if tc, ok := c.(T); ok && len(tc.Header().Annotations) == 0 {
+			return tc, true
+		}
+		var zero T
+		return zero, false
+	}
+	for start < len(contents) {
+		first, ok := tryAsCoalescable(contents[start])
+		if !ok {
+			start++
+			continue
+		}
+		// Iterate until we find a non-coalescable item.
+		i := start + 1
+		prev := first
+		for i < len(contents) {
+			next, ok := tryAsCoalescable(contents[i])
+			if !ok {
+				break
+			}
+			if canMerge != nil && !canMerge(prev, next) {
+				break
+			}
+			i++
+			prev = next
+		}
+		// If there's only one item in the run, and we don't want to merge single items, skip it.
+		if start == i-1 && !mergeSingle {
+			start = i
+			continue
+		}
+		// Store the replacement node and nil out all of the nodes that we coalesced.
+		// We can then remove all coalesced nodes in one O(N) operation later.
+		// Leave start positioned at the start of the next run.
+		contents[start] = merge(contents, start, i)
+		start++
+		for start < i {
+			contents[start] = nil
+			start++
+		}
+	}
+	return slices.DeleteFunc(contents, func(c Content) bool { return c == nil })
+}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/microsoft/agent-framework/go/agent"
+	"github.com/microsoft/agent-framework/go/agent/chatagent"
 	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/openai"
 	"github.com/microsoft/agent-framework/go/tool"
@@ -18,10 +19,11 @@ for real-time information retrieval and current data access.
 */
 
 func main() {
-	ag := openai.NewChatAgent(openai.AgentConfig{
-		Model:              "gpt-4o-search-preview",
-		SystemInstructions: "You are a helpful weather agent.",
-		Opts: &agent.RunOptions{
+	ag := openai.NewChatAgent(openai.ClientConfig{
+		Model: "gpt-4o-search-preview",
+	}, &chatagent.Options{
+		Instructions: "You are a helpful weather agent.",
+		ChatOptions: &chatagent.ChatOptions{
 			Tools: []tool.Tool{&websearchtool.HostedWebSearch{
 				AdditionalProperties: map[string]any{
 					"user_location": map[string]string{
@@ -41,13 +43,13 @@ func main() {
 	}
 }
 
-func nonStreamingExample(ag *agent.Agent, query string) {
+func nonStreamingExample(ag agent.Agent, query string) {
 	fmt.Println("=== Non-streaming Response Example ===")
 	fmt.Println("User: ", query)
-	fmt.Println("Result: ", must(ag.RunText(nil, query)))
+	fmt.Println("Result: ", must(ag.Run(nil, message.NewText(query))))
 }
 
-func streamingExample(ag *agent.Agent, query string) {
+func streamingExample(ag agent.Agent, query string) {
 	fmt.Println("=== Streaming Response Example ===")
 	fmt.Println("User: ", query)
 	stream := ag.RunStream(nil, message.NewText(query))

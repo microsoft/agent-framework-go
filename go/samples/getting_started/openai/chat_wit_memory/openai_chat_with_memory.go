@@ -2,21 +2,24 @@ package main
 
 import (
 	"cmp"
+	"context"
 	"encoding/json"
 	"fmt"
 	"slices"
 
 	"github.com/microsoft/agent-framework/go/agent"
+	"github.com/microsoft/agent-framework/go/agent/chatagent"
 	"github.com/microsoft/agent-framework/go/memory"
 	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/openai"
 )
 
 func main() {
-	var ag *agent.Agent
-	ag = openai.NewChatAgent(openai.AgentConfig{
-		Model:              "gpt-4o-mini",
-		SystemInstructions: "You are a friendly assistant. Always address the user by their name.",
+	var ag *chatagent.Agent
+	ag = openai.NewChatAgent(openai.ClientConfig{
+		Model: "gpt-4o-mini",
+	}, &chatagent.Options{
+		Instructions:       "You are a friendly assistant. Always address the user by their name.",
 		NewContextProvider: func() memory.ContextProvider { return &UserInfoMemory{Agent: ag} },
 	})
 
@@ -49,19 +52,37 @@ var _ memory.ContextProvider = (*UserInfoMemory)(nil)
 
 type UserInfoMemory struct {
 	UserInfo UserInfo
-	Agent    *agent.Agent `json:"-"`
+	Agent    *chatagent.Agent `json:"-"`
+}
+
+type reentrantCtxKey struct{}
+
+func isReentrant(ctx context.Context) bool {
+	return ctx.Value(reentrantCtxKey{}) != nil
 }
 
 func (u *UserInfoMemory) Invoked(ctx *memory.InvokedContext) error {
+	if isReentrant(ctx.Context) {
+		// Don't try to extract user info when re-entrant.
+		return nil
+	}
+	if ctx.Error != nil {
+		// Nothing to do if there was an error.
+		return nil
+	}
 	if u.UserInfo.Age != 0 && u.UserInfo.Name != "" {
 		// We already have the user info.
 		return nil
 	}
-	if !slices.ContainsFunc(ctx.Messages, func(msg *message.Message) bool { return msg.Role == message.RoleUser }) {
+	if !slices.ContainsFunc(ctx.RequestMessages, func(msg *message.Message) bool { return msg.Role == message.RoleUser }) {
 		// No user messages to extract info from.
 		return nil
 	}
-	out, _, err := agent.RunFor[UserInfo](u.Agent, nil, append(ctx.Messages,
+	// To avoid infinite loops, we mark re-entrancy in the context.
+	actx := &agent.RunContext{
+		Context: context.WithValue(ctx.Context, reentrantCtxKey{}, struct{}{}),
+	}
+	out, _, err := chatagent.RunFor[UserInfo](u.Agent, actx, append(ctx.RequestMessages,
 		message.NewText("Extract the user's name and age from the message if present. If not present return empty values."),
 	)...)
 	if err != nil {
@@ -73,6 +94,10 @@ func (u *UserInfoMemory) Invoked(ctx *memory.InvokedContext) error {
 }
 
 func (u *UserInfoMemory) Invoking(ctx *memory.InvokingContext) (*memory.Context, error) {
+	if isReentrant(ctx.Context) {
+		// Don't provide context when re-entrant.
+		return nil, nil
+	}
 	// If we don't already know the user's name and age, add instructions to ask for them, otherwise just provide what we have to the context.
 	var instructions string
 	if u.UserInfo.Name == "" {
