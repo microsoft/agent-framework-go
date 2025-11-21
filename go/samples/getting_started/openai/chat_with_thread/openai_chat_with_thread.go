@@ -6,6 +6,7 @@ import (
 	"math/rand"
 
 	"github.com/microsoft/agent-framework/go/agent"
+	"github.com/microsoft/agent-framework/go/agent/chatagent"
 	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/openai"
 	"github.com/microsoft/agent-framework/go/tool"
@@ -40,10 +41,11 @@ func main() {
 func exampleWithAutomaticThreadCreation() {
 	fmt.Println("=== Automatic Thread Creation Example ===")
 
-	ag := openai.NewChatAgent(openai.AgentConfig{
-		Model:              "gpt-4o-mini",
-		SystemInstructions: "You are a helpful weather agent.",
-		Opts: &agent.RunOptions{
+	ag := openai.NewChatAgent(openai.ClientConfig{
+		Model: "gpt-4o-mini",
+	}, &chatagent.Options{
+		Instructions: "You are a helpful weather agent.",
+		ChatOptions: &chatagent.ChatOptions{
 			Tools: []tool.Tool{weatherTool},
 		},
 	})
@@ -67,9 +69,10 @@ func exampleWithThreadPersistence() {
 	fmt.Println("Using the same thread across multiple conversations to maintain context.")
 	fmt.Println()
 
-	ag := openai.NewChatAgent(openai.AgentConfig{
+	ag := openai.NewChatAgent(openai.ClientConfig{
 		Model: "gpt-4o-mini",
-		Opts: &agent.RunOptions{
+	}, &chatagent.Options{
+		ChatOptions: &chatagent.ChatOptions{
 			Tools: []tool.Tool{weatherTool},
 		},
 	})
@@ -99,9 +102,10 @@ func exampleWithThreadPersistence() {
 func exampleWithExistingThreadMessages() {
 	fmt.Println("=== Existing Thread Messages Example ===")
 
-	ag := openai.NewChatAgent(openai.AgentConfig{
+	ag := openai.NewChatAgent(openai.ClientConfig{
 		Model: "gpt-4o-mini",
-		Opts: &agent.RunOptions{
+	}, &chatagent.Options{
+		ChatOptions: &chatagent.ChatOptions{
 			Tools: []tool.Tool{weatherTool},
 		},
 	})
@@ -116,9 +120,10 @@ func exampleWithExistingThreadMessages() {
 	fmt.Println("\n--- Continuing with the same thread in a new agent instance ---")
 
 	// Create a new agent instance but use the existing thread with its message history
-	newAgent := openai.NewChatAgent(openai.AgentConfig{
+	newAgent := openai.NewChatAgent(openai.ClientConfig{
 		Model: "gpt-4o-mini",
-		Opts: &agent.RunOptions{
+	}, &chatagent.Options{
+		ChatOptions: &chatagent.ChatOptions{
 			Tools: []tool.Tool{weatherTool},
 		},
 	})

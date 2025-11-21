@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 
+	"github.com/microsoft/agent-framework/go/agent/chatagent"
 	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/openai"
 )
@@ -15,10 +16,11 @@ showing multi-modal content handling with text and images.
 */
 
 func main() {
-	ag := openai.NewChatAgent(openai.AgentConfig{
-		Model:              "gpt-5-nano",
-		Name:               "VisionAgent",
-		SystemInstructions: "You are a helpful agent that can analyze images.",
+	ag := openai.NewChatAgent(openai.ClientConfig{
+		Model: "gpt-5-nano",
+	}, &chatagent.Options{
+		Name:         "VisionAgent",
+		Instructions: "You are a helpful agent that can analyze images.",
 	})
 
 	fmt.Println("Result: ", must(

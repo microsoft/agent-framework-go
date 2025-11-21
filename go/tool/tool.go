@@ -31,33 +31,18 @@ type FuncTool interface {
 	Call(ctx context.Context, args map[string]any) (any, error)
 }
 
-type InitTool interface {
-	Tool
-
-	// Init performs any initialization required for the tool.
-	Init(ctx context.Context) error
-}
-
-type LoaderTool interface {
-	Tool
-
-	LoadTools(ctx context.Context) ([]Tool, error)
-}
-
 // ApprovalRequiredTool indicates that a tool requires user approval before invocation.
 type ApprovalRequiredTool interface {
 	Tool
 
-	ApprovalRequired() bool
+	ApprovalRequired()
 }
 
 type approvalRequiredFunc struct {
 	FuncTool
 }
 
-func (approvalRequiredFunc) ApprovalRequired() bool {
-	return true
-}
+func (approvalRequiredFunc) ApprovalRequired() {}
 
 // ApprovalRequiredFunc wraps a tool to indicate that it requires user approval before invocation.
 // If the tool already requires approval, it is returned as-is.

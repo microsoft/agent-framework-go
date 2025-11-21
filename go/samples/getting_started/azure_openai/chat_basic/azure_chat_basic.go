@@ -1,16 +1,12 @@
 package main
 
 import (
-	"context"
 	"fmt"
-	"math/rand"
 	"os"
 
 	"github.com/microsoft/agent-framework/go/agent"
 	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/openai"
-	"github.com/microsoft/agent-framework/go/tool"
-	"github.com/microsoft/agent-framework/go/tool/functool"
 )
 
 /*
@@ -20,40 +16,18 @@ This sample demonstrates basic usage of openai.Agent for direct chat-based
 interactions, showing both streaming and non-streaming responses.
 */
 
-var weatherTool = functool.MustNew(&functool.Func{
-	Name:        "weather",
-	Description: "Get the current weather for a given location",
-}, func(_ context.Context, location string) (string, error) {
-	conditions := []string{"sunny", "cloudy", "rainy", "stormy"}
-	return fmt.Sprintf("The weather in %s is %s with a high of %d°C.", location, conditions[rand.Intn(len(conditions))], rand.Intn(21)+10), nil
-})
-
 func main() {
 	// Azure OpenAI configuration
 	// You can also set these via environment variables:
 	// - AZURE_OPENAI_API_KEY
 	// - AZURE_OPENAI_ENDPOINT
 	// - AZURE_OPENAI_DEPLOYMENT_NAME
-	ag := openai.NewChatAgentAzure(openai.AgentConfig{
-		APIKey:             os.Getenv("AZURE_OPENAI_API_KEY"),         // or set directly
-		Endpoint:           os.Getenv("AZURE_OPENAI_ENDPOINT"),        // e.g., "https://your-resource.openai.azure.com/"
-		Model:              os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), // e.g., "gpt-4o"
-		APIVersion:         "2025-01-01-preview",                      // optional, uses default if not specified
-		SystemInstructions: "You are a helpful weather agent.",
-		Opts: &agent.RunOptions{
-			Tools: []tool.Tool{weatherTool},
-		},
-	})
-
-	// Add this debug code:
-	if ag.Config.Opts != nil && len(ag.Config.Opts.Tools) > 0 {
-		fmt.Println("📋 Registered tools:")
-		for _, t := range ag.Config.Opts.Tools {
-			name, desc := t.ToolInfo()
-			fmt.Printf("  - %s: %s\n", name, desc)
-		}
-		fmt.Println()
-	}
+	ag := openai.NewChatAgentAzure(openai.ClientConfig{
+		APIKey:     os.Getenv("AZURE_OPENAI_API_KEY"),         // or set directly
+		Endpoint:   os.Getenv("AZURE_OPENAI_ENDPOINT"),        // e.g., "https://your-resource.openai.azure.com/"
+		Model:      os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), // e.g., "gpt-4o"
+		APIVersion: "2025-01-01-preview",                      // optional, uses default if not specified
+	}, nil)
 
 	// Example 1: Tool WILL be called (weather-related query)
 	nonStreamingExample(ag, "What's the weather like in Seattle?")
@@ -72,13 +46,13 @@ func main() {
 
 }
 
-func nonStreamingExample(ag *agent.Agent, query string) {
+func nonStreamingExample(ag agent.Agent, query string) {
 	fmt.Println("\n=== Non-streaming Response Example ===")
 	fmt.Println("User: ", query)
-	fmt.Println("Assistant: ", must(ag.RunText(nil, query)))
+	fmt.Println("Assistant: ", must(ag.Run(nil, message.NewText(query))))
 }
 
-func streamingExample(ag *agent.Agent, query string) {
+func streamingExample(ag agent.Agent, query string) {
 	fmt.Println("\n=== Streaming Response Example ===")
 	fmt.Println("User: ", query)
 	fmt.Print("Assistant: ")

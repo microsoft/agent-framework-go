@@ -88,11 +88,11 @@ type hostExecutor struct {
 	messagesExecutor
 
 	emitEvents bool
-	agent      *Agent
+	agent      Agent
 	thread     memory.Thread
 }
 
-func NewWorkflowExecutor(agent *Agent, emitEvents bool) workflow.Executor {
+func NewWorkflowExecutor(agent Agent, emitEvents bool) workflow.Executor {
 	e := &hostExecutor{
 		agent:            agent,
 		emitEvents:       emitEvents,
