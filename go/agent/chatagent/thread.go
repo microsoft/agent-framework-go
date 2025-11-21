@@ -60,7 +60,7 @@ func (t *Thread) MessagesReceived(ctx context.Context, messages ...*message.Mess
 	}
 	if t.MessageStore == nil {
 		// If there is no conversation id, and no store we
-		// can createa a default in memory store and add messages to it.
+		// can create a default in memory store and add messages to it.
 		t.MessageStore = &inmemory.MessageStore{}
 	}
 	return t.MessageStore.Add(ctx, messages...)

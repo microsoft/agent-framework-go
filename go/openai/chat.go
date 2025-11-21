@@ -266,7 +266,7 @@ func (a *client) buildCompletionParams(options *chatclient.ChatOptions, messages
 						err = json.Unmarshal(data, &funcParams)
 					}
 					if err != nil {
-						return openai.ChatCompletionNewParams{}, fmt.Errorf("can't marshal function tool schema: %w", err)
+						return openai.ChatCompletionNewParams{}, fmt.Errorf("failed to convert function tool schema to JSON format: %w", err)
 					}
 				}
 				params.Tools = append(params.Tools, openai.ChatCompletionToolUnionParam{
