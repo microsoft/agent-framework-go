@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/microsoft/agent-framework/go/agent"
+	"github.com/microsoft/agent-framework/go/agent/chatagent"
 	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/openai"
 )
@@ -22,16 +22,17 @@ type CityInfo struct {
 }
 
 func main() {
-	ag := openai.NewChatAgent(openai.AgentConfig{
-		Model:              "gpt-5-nano",
-		Name:               "CityAgent",
-		SystemInstructions: "You are a helpful agent that describes cities in a structured format.",
+	ag := openai.NewChatAgent(openai.ClientConfig{
+		Model: "gpt-5-nano",
+	}, &chatagent.Options{
+		Name:         "CityAgent",
+		Instructions: "You are a helpful agent that describes cities in a structured format.",
 	})
 
 	const query = "Tell me about Paris, France"
 	fmt.Println("User: ", query)
 
-	city, resp, err := agent.RunFor[CityInfo](ag, nil, message.NewText(query))
+	city, resp, err := chatagent.RunFor[CityInfo](ag, nil, message.NewText(query))
 	if err != nil {
 		panic(err)
 	}

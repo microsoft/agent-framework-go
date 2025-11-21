@@ -66,30 +66,103 @@ func TestFuncTool_MustNew(t *testing.T) {
 	}
 }
 
-func TestFuncTool_MissingArg0(t *testing.T) {
-	type Input struct {
-		Value string `json:"value"`
-	}
-
-	handler := func(ctx context.Context, input Input) (string, error) {
-		return "result", nil
-	}
-
+func TestFuncTool_CallMissingArg0(t *testing.T) {
 	tl := functool.MustNew(
 		&functool.Func{
 			Name: "test",
 		},
-		handler,
+		func(ctx context.Context, input string) (string, error) {
+			return "result", nil
+		},
 	)
 
 	// Call without required arg0
-	_, err := tl.Call(context.Background(), map[string]any{})
+	_, err := tl.Call(t.Context(), map[string]any{})
 	if err == nil {
 		t.Error("expected error for missing arg0, got nil")
 	}
 }
 
-func TestFuncTool_HandlerError(t *testing.T) {
+func TestFuncTool_CallStruct(t *testing.T) {
+	type In struct {
+		V string `json:"v"`
+	}
+	tl := functool.MustNew(
+		&functool.Func{
+			Name: "test",
+		},
+		func(ctx context.Context, input In) (string, error) {
+			return input.V, nil
+		},
+	)
+
+	ret, err := tl.Call(t.Context(), map[string]any{"v": "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ret.(string) != "hello" {
+		t.Errorf("expected 'hello', got %q", ret.(string))
+	}
+}
+
+func TestFuncTool_CallString(t *testing.T) {
+	tl := functool.MustNew(
+		&functool.Func{
+			Name: "test",
+		},
+		func(ctx context.Context, input string) (string, error) {
+			return input, nil
+		},
+	)
+
+	ret, err := tl.Call(t.Context(), map[string]any{"arg0": "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ret.(string) != "hello" {
+		t.Errorf("expected 'hello', got %q", ret.(string))
+	}
+}
+
+func TestFuncTool_CallNoArg(t *testing.T) {
+	tl := functool.MustNew(
+		&functool.Func{
+			Name: "test",
+		},
+		func(ctx context.Context, _ struct{}) (string, error) {
+			return "hello", nil
+		},
+	)
+
+	ret, err := tl.Call(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ret.(string) != "hello" {
+		t.Errorf("expected 'hello', got %q", ret.(string))
+	}
+}
+
+func TestFuncTool_CallNoRet(t *testing.T) {
+	tl := functool.MustNew(
+		&functool.Func{
+			Name: "test",
+		},
+		func(ctx context.Context, _ struct{}) (struct{}, error) {
+			return struct{}{}, nil
+		},
+	)
+
+	ret, err := tl.Call(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ret != struct{}{} {
+		t.Errorf("expected empty struct{}, got %v", ret)
+	}
+}
+
+func TestFuncTool_CallError(t *testing.T) {
 	type Input struct {
 		Value string `json:"value"`
 	}
@@ -106,9 +179,7 @@ func TestFuncTool_HandlerError(t *testing.T) {
 		handler,
 	)
 
-	_, err := tl.Call(context.Background(), map[string]any{
-		"arg0": map[string]any{"value": "test"},
-	})
+	_, err := tl.Call(t.Context(), map[string]any{"value": "test"})
 	if err != expectedErr {
 		t.Errorf("expected error %v, got %v", expectedErr, err)
 	}

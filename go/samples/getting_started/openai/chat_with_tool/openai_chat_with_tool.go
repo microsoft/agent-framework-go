@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 
-	"github.com/microsoft/agent-framework/go/agent"
+	"github.com/microsoft/agent-framework/go/agent/chatagent"
 	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/openai"
 	"github.com/microsoft/agent-framework/go/tool"
@@ -28,10 +28,11 @@ var weatherTool = functool.MustNew(&functool.Func{
 })
 
 func main() {
-	ag := openai.NewChatAgent(openai.AgentConfig{
-		Model:              "gpt-5-nano",
-		SystemInstructions: "You are a helpful weather agent.",
-		Opts: &agent.RunOptions{
+	ag := openai.NewChatAgent(openai.ClientConfig{
+		Model: "gpt-5-nano",
+	}, &chatagent.Options{
+		Instructions: "You are a helpful weather agent.",
+		ChatOptions: &chatagent.ChatOptions{
 			Tools: []tool.Tool{weatherTool},
 		},
 	})

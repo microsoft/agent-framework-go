@@ -2,6 +2,8 @@
 
 package message
 
+import "time"
+
 // Role represents the role of a message sender in a conversation.
 type Role string
 
@@ -18,10 +20,13 @@ const (
 
 // Message represents a message in a conversation.
 type Message struct {
-	Contents  Contents
-	Role      Role
-	Name      string
-	MessageID string
+	AdditionalProperties map[string]any `json:",omitzero"`
+	Contents             Contents
+	Role                 Role
+	ID                   string
+	AuthorName           string    `json:",omitzero"`
+	CreatedAt            time.Time `json:",omitzero"`
+	RawRepresentation    any       `json:",omitzero"`
 }
 
 // New creates a new [Message] with the given role and contents.
@@ -40,6 +45,10 @@ func NewText(text string) *Message {
 	}
 }
 
+func (m *Message) String() string {
+	return m.Text()
+}
+
 // Text returns the first text content in the response, or empty string.
 func (m *Message) Text() string {
 	if m == nil {
@@ -51,4 +60,13 @@ func (m *Message) Text() string {
 		}
 	}
 	return ""
+}
+
+// Clone creates a shallow copy of the message.
+func (m *Message) Clone() *Message {
+	if m == nil {
+		return nil
+	}
+	v := *m
+	return &v
 }

@@ -4,17 +4,17 @@ package openai
 
 import (
 	"cmp"
+	"context"
 	"encoding/json"
 	"fmt"
 	"iter"
 	"reflect"
-	"strings"
+	"time"
 
-	"github.com/google/uuid"
-	"github.com/microsoft/agent-framework/go/agent"
+	"github.com/microsoft/agent-framework/go/agent/chatagent"
+	"github.com/microsoft/agent-framework/go/agent/chatagent/chatclient"
 	"github.com/microsoft/agent-framework/go/format"
 	"github.com/microsoft/agent-framework/go/format/jsonformat"
-	"github.com/microsoft/agent-framework/go/memory"
 	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/tool"
 	"github.com/microsoft/agent-framework/go/tool/websearchtool"
@@ -24,30 +24,25 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 )
 
+var _ chatclient.Client = (*client)(nil)
+var _ chatclient.StructuredResponseClient = (*client)(nil)
+
 type client struct {
 	client openai.Client
-	config AgentConfig
+	config ClientConfig
 }
 
-// AgentConfig contains configuration for [Agent].
-type AgentConfig struct {
-	ID                 string
-	Name               string
-	SystemInstructions string
-
+// ClientConfig contains configuration for [Agent].
+type ClientConfig struct {
 	Model    string
 	APIKey   string // Optional, if not set will use default environment variable
 	Endpoint string // Optional, defaults to OpenAI API
 
 	// Only used for Azure OpenAI
 	APIVersion string // Optional, defaults to latest API version
-
-	NewContextProvider func() memory.ContextProvider
-
-	Opts *agent.RunOptions
 }
 
-func newChatAgent(isAzure bool, config AgentConfig) *agent.Agent {
+func newChatAgent(isAzure bool, config ClientConfig, options *chatagent.Options) *chatagent.Agent {
 	ops := make([]option.RequestOption, 0, 2)
 	if isAzure {
 		if config.Endpoint != "" {
@@ -67,44 +62,35 @@ func newChatAgent(isAzure bool, config AgentConfig) *agent.Agent {
 			ops = append(ops, option.WithBaseURL(config.Endpoint))
 		}
 	}
-	if config.ID == "" {
-		config.ID = uuid.New().String()
-	}
 	c := &client{
 		client: openai.NewClient(ops...),
 		config: config,
 	}
-	return &agent.Agent{
-		Config: agent.Config{
-			ID:                 config.ID,
-			Name:               config.Name,
-			Opts:               config.Opts,
-			SystemInstructions: config.SystemInstructions,
-			Run:                c.Run,
-			RunStream:          c.RunStream,
-			RunOf:              c.RunOf,
-			NewContextProvider: config.NewContextProvider,
-		},
-	}
+	return chatagent.NewAgent(c, options)
 }
 
-func NewChatAgent(config AgentConfig) *agent.Agent {
-	return newChatAgent(false, config)
+func NewChatAgent(config ClientConfig, options *chatagent.Options) *chatagent.Agent {
+	return newChatAgent(false, config, options)
 }
 
 // NewChatAgentAzure creates a new [Agent].
-func NewChatAgentAzure(config AgentConfig) *agent.Agent {
-	return newChatAgent(true, config)
+func NewChatAgentAzure(config ClientConfig, options *chatagent.Options) *chatagent.Agent {
+	return newChatAgent(true, config, options)
 }
 
-func (a *client) RunOf(v any, ctx *agent.RunContext, messages ...*message.Message) (*agent.RunResponse, error) {
+func (a *client) StructuredResponse(v any, ctx context.Context, opts *chatclient.ChatOptions, messages ...*message.Message) (*chatclient.ChatResponse, error) {
 	// The OpenAI models that support structured outputs use JSON Schema for defining the response format.
 	format, err := jsonformat.ForType(reflect.TypeOf(v))
 	if err != nil {
 		return nil, err
 	}
-	ctx.Options.ResponseFormat = format
-	resp, err := a.Run(ctx, messages...)
+	if opts == nil {
+		opts = &chatclient.ChatOptions{}
+	} else {
+		opts = opts.Clone()
+	}
+	opts.ResponseFormat = format
+	resp, err := a.Response(ctx, opts, messages...)
 	if err != nil {
 		return nil, err
 	}
@@ -116,18 +102,26 @@ func (a *client) RunOf(v any, ctx *agent.RunContext, messages ...*message.Messag
 	return resp, nil
 }
 
-func (a *client) Run(ctx *agent.RunContext, messages ...*message.Message) (*agent.RunResponse, error) {
-	resp, err := a.client.Chat.Completions.New(ctx, a.buildCompletionParams(ctx.Options, messages...))
+func (a *client) Response(ctx context.Context, opts *chatclient.ChatOptions, messages ...*message.Message) (*chatclient.ChatResponse, error) {
+	body, err := a.buildCompletionParams(opts, messages...)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := a.client.Chat.Completions.New(ctx, body)
 	if err != nil {
 		return nil, err
 	}
 	choice := resp.Choices[0]
 	contents := make([]message.Content, 0, 1+len(choice.Message.ToolCalls))
 	for _, tc := range choice.Message.ToolCalls {
+		args, err := unmarshalArgs(tc.Function.Arguments)
+		if err != nil {
+			return nil, err
+		}
 		contents = append(contents, &message.FunctionCallContent{
 			CallID:    tc.ID,
 			Name:      tc.Function.Name,
-			Arguments: tc.Function.Arguments,
+			Arguments: args,
 		})
 	}
 	if choice.Message.Content != "" {
@@ -136,17 +130,21 @@ func (a *client) Run(ctx *agent.RunContext, messages ...*message.Message) (*agen
 	if choice.Message.Refusal != "" {
 		contents = append(contents, &message.ErrorContent{Message: choice.Message.Refusal})
 	}
-	return &agent.RunResponse{
+	return &chatclient.ChatResponse{
 		Messages:     []*message.Message{{Role: message.Role(choice.Message.Role), Contents: contents}},
-		AgentID:      a.config.ID,
-		ResponseID:   resp.ID,
+		ID:           resp.ID,
 		FinishReason: choice.FinishReason,
 	}, nil
 }
 
-func (a *client) RunStream(ctx *agent.RunContext, messages ...*message.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
-	stream := a.client.Chat.Completions.NewStreaming(ctx, a.buildCompletionParams(ctx.Options, messages...))
-	return func(yield func(*agent.RunResponseUpdate, error) bool) {
+func (a *client) StreamingResponse(ctx context.Context, options *chatclient.ChatOptions, messages ...*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error] {
+	return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
+		body, err := a.buildCompletionParams(options, messages...)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		stream := a.client.Chat.Completions.NewStreaming(ctx, body)
 		defer stream.Close()
 		var acc openai.ChatCompletionAccumulator
 		for stream.Next() {
@@ -156,10 +154,15 @@ func (a *client) RunStream(ctx *agent.RunContext, messages ...*message.Message) 
 			}
 			var contents []message.Content
 			if tc, ok := acc.JustFinishedToolCall(); ok {
+				args, err := unmarshalArgs(tc.Arguments)
+				if err != nil {
+					yield(nil, err)
+					return
+				}
 				contents = append(contents, &message.FunctionCallContent{
 					CallID:    tc.ID,
 					Name:      tc.Name,
-					Arguments: tc.Arguments,
+					Arguments: args,
 				})
 			}
 			if len(chunk.Choices) > 0 {
@@ -167,12 +170,13 @@ func (a *client) RunStream(ctx *agent.RunContext, messages ...*message.Message) 
 					contents = append(contents, &message.TextContent{Text: choice.Delta.Content})
 				}
 			}
-			resp := &agent.RunResponseUpdate{
+			resp := &chatclient.ChatResponseUpdate{
 				Contents:   contents,
-				AgentID:    a.config.ID,
 				Role:       message.RoleAssistant,
 				ResponseID: chunk.ID,
 				MessageID:  chunk.ID,
+				ModelID:    chunk.Model,
+				CreatedAt:  time.Unix(chunk.Created, 0),
 			}
 			if !yield(resp, nil) {
 				return
@@ -185,24 +189,25 @@ func (a *client) RunStream(ctx *agent.RunContext, messages ...*message.Message) 
 }
 
 // buildCompletionParams constructs the parameters for the OpenAI chat completion API.
-func (a *client) buildCompletionParams(options *agent.RunOptions, messages ...*message.Message) openai.ChatCompletionNewParams {
+func (a *client) buildCompletionParams(options *chatclient.ChatOptions, messages ...*message.Message) (openai.ChatCompletionNewParams, error) {
 	params := openai.ChatCompletionNewParams{
 		Model:    a.config.Model,
 		Messages: make([]openai.ChatCompletionMessageParamUnion, 0, len(messages)+1),
 	}
-	for _, msg := range messages {
-		params.Messages = append(params.Messages, buildMessageParam(msg)...)
-	}
-
 	if options != nil {
-		if options.Temperature != nil {
-			params.Temperature = openai.Float(*options.Temperature)
+		if options.Instructions != "" {
+			params.Messages = append(params.Messages, openai.SystemMessage([]openai.ChatCompletionContentPartTextParam{
+				{Text: options.Instructions},
+			}))
 		}
-		if options.TopP != nil {
-			params.TopP = openai.Float(*options.TopP)
+		if options.Temperature.Valid() {
+			params.Temperature = openai.Float(options.Temperature.MustValue())
 		}
-		if options.MaxTokens != nil {
-			params.MaxTokens = openai.Int(int64(*options.MaxTokens))
+		if options.TopP.Valid() {
+			params.TopP = openai.Float(options.TopP.MustValue())
+		}
+		if options.MaxTokens.Valid() {
+			params.MaxTokens = openai.Int(int64(options.MaxTokens.MustValue()))
 		}
 		if options.ResponseFormat != nil {
 			switch options.ResponseFormat.Kind() {
@@ -258,9 +263,11 @@ func (a *client) buildCompletionParams(options *agent.RunOptions, messages ...*m
 					}
 					data, err := json.Marshal(schema)
 					if err == nil {
-						break
+						err = json.Unmarshal(data, &funcParams)
 					}
-					json.Unmarshal(data, &funcParams)
+					if err != nil {
+						return openai.ChatCompletionNewParams{}, fmt.Errorf("failed to convert function tool schema to JSON format: %w", err)
+					}
 				}
 				params.Tools = append(params.Tools, openai.ChatCompletionToolUnionParam{
 					OfFunction: &openai.ChatCompletionFunctionToolParam{
@@ -279,12 +286,19 @@ func (a *client) buildCompletionParams(options *agent.RunOptions, messages ...*m
 			}
 		}
 	}
-	return params
+	for _, msg := range messages {
+		omsg, err := buildMessageParam(msg)
+		if err != nil {
+			return openai.ChatCompletionNewParams{}, err
+		}
+		params.Messages = append(params.Messages, omsg...)
+	}
+	return params, nil
 }
 
 // buildMessageParam converts an agent.Message to one or more OpenAI message parameters.
 // Returns a slice because some agent messages (like RoleTool) need to be split into multiple OpenAI messages.
-func buildMessageParam(msg *message.Message) []openai.ChatCompletionMessageParamUnion {
+func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessageParamUnion, error) {
 	switch msg.Role {
 	case message.RoleSystem:
 		var contents []openai.ChatCompletionContentPartTextParam
@@ -295,7 +309,7 @@ func buildMessageParam(msg *message.Message) []openai.ChatCompletionMessageParam
 				})
 			}
 		}
-		return []openai.ChatCompletionMessageParamUnion{openai.SystemMessage(contents)}
+		return []openai.ChatCompletionMessageParamUnion{openai.SystemMessage(contents)}, nil
 
 	case message.RoleUser:
 		var contents []openai.ChatCompletionContentPartUnionParam
@@ -304,7 +318,7 @@ func buildMessageParam(msg *message.Message) []openai.ChatCompletionMessageParam
 			case *message.TextContent:
 				contents = append(contents, openai.TextContentPart(c.Text))
 			case *message.URIContent:
-				switch topLevelMediaType(c.MediaType) {
+				switch c.TopLevelMediaType() {
 				case "image":
 					contents = append(contents, openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
 						URL: c.URI,
@@ -313,7 +327,7 @@ func buildMessageParam(msg *message.Message) []openai.ChatCompletionMessageParam
 					// For other URI content types, just ignore, they are not supported yet.
 				}
 			case *message.DataContent:
-				switch topLevelMediaType(c.MediaType) {
+				switch c.TopLevelMediaType() {
 				case "image":
 					contents = append(contents, openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
 						URL: c.URI,
@@ -345,7 +359,7 @@ func buildMessageParam(msg *message.Message) []openai.ChatCompletionMessageParam
 				}))
 			}
 		}
-		return []openai.ChatCompletionMessageParamUnion{openai.UserMessage(contents)}
+		return []openai.ChatCompletionMessageParamUnion{openai.UserMessage(contents)}, nil
 
 	case message.RoleAssistant:
 		var contents []openai.ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion
@@ -359,12 +373,16 @@ func buildMessageParam(msg *message.Message) []openai.ChatCompletionMessageParam
 					},
 				})
 			case *message.FunctionCallContent:
+				args, err := marshalArgs(c.Arguments)
+				if err != nil {
+					return nil, err
+				}
 				toolCalls = append(toolCalls, openai.ChatCompletionMessageToolCallUnionParam{
 					OfFunction: &openai.ChatCompletionMessageFunctionToolCallParam{
 						ID: c.CallID,
 						Function: openai.ChatCompletionMessageFunctionToolCallFunctionParam{
 							Name:      c.Name,
-							Arguments: c.Arguments,
+							Arguments: args,
 						},
 					},
 				})
@@ -381,7 +399,7 @@ func buildMessageParam(msg *message.Message) []openai.ChatCompletionMessageParam
 				Content:   openai.ChatCompletionAssistantMessageParamContentUnion{OfArrayOfContentParts: contents},
 				ToolCalls: toolCalls,
 			},
-		}}
+		}}, nil
 
 	case message.RoleTool:
 		// Each tool result needs its own separate message for OpenAI API compliance
@@ -400,19 +418,25 @@ func buildMessageParam(msg *message.Message) []openai.ChatCompletionMessageParam
 				))
 			}
 		}
-		return messages
+		return messages, nil
 
 	default:
 		panic("unknown message role: " + string(msg.Role))
 	}
 }
 
-func topLevelMediaType(media string) string {
-	if media == "" {
-		return ""
+func marshalArgs(args any) (string, error) {
+	data, err := json.Marshal(args)
+	if err != nil {
+		return "", err
 	}
-	if idx := strings.Index(media, "/"); idx >= 0 {
-		return media[:idx]
+	return string(data), nil
+}
+
+func unmarshalArgs(data string) (any, error) {
+	var args any
+	if err := json.Unmarshal([]byte(data), &args); err != nil {
+		return nil, fmt.Errorf("can't unmarshal response args: %w", err)
 	}
-	return media
+	return args, nil
 }
