@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"iter"
 	"strings"
@@ -11,6 +12,8 @@ import (
 	"github.com/microsoft/agent-framework/go/memory"
 	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/param"
+	"github.com/microsoft/agent-framework/go/tool"
+	"github.com/microsoft/agent-framework/go/tool/functool"
 )
 
 // RunContext contains context for agent execution.
@@ -85,11 +88,13 @@ type Config struct {
 
 // RunResponse represents the result of an agent execution.
 type RunResponse struct {
-	ID        string
-	AgentID   string
-	CreatedAt time.Time
-	Usage     *message.UsageDetails
-	Messages  []*message.Message
+	RawRepresentation    any
+	AdditionalProperties map[string]any
+	ID                   string
+	AgentID              string
+	CreatedAt            time.Time
+	Usage                *message.UsageDetails
+	Messages             []*message.Message
 }
 
 // String returns the concatenated text contents of the response messages.
@@ -122,13 +127,15 @@ func (r *RunResponse) UserInputRequests() iter.Seq[message.Content] {
 
 // RunResponseUpdate represents a streaming update from an agent execution.
 type RunResponseUpdate struct {
-	AgentID    string
-	MessageID  string
-	ResponseID string
-	AuthorName string
-	Role       message.Role
-	CreatedAt  time.Time
-	Contents   []message.Content
+	RawRepresentation    any
+	AdditionalProperties map[string]any
+	AgentID              string
+	MessageID            string
+	ResponseID           string
+	AuthorName           string
+	Role                 message.Role
+	CreatedAt            time.Time
+	Contents             []message.Content
 }
 
 // String returns the concatenated text contents of the response messages.
@@ -153,4 +160,27 @@ func (r *RunResponseUpdate) UserInputRequests() iter.Seq[message.Content] {
 			}
 		}
 	}
+}
+
+// FuncTool creates a function tool that invokes the given agent.
+func FuncTool(agent Agent, name, description string, thread memory.Thread) tool.FuncTool {
+	type funcToolIn struct {
+		Query string `jsonschema:"input query to invoke the agent"`
+	}
+	return functool.MustNew(&functool.Func{
+		Name:        cmp.Or(name, agent.Name()),
+		Description: cmp.Or(description, agent.Description()),
+	}, func(ctx context.Context, in funcToolIn) (string, error) {
+		resp, err := agent.Run(&RunContext{
+			Context: ctx,
+			Thread:  thread,
+		}, &message.Message{
+			Role:     message.RoleUser,
+			Contents: []message.Content{&message.TextContent{Text: in.Query}},
+		})
+		if err != nil {
+			return "", err
+		}
+		return resp.String(), nil
+	})
 }

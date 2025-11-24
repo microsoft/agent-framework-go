@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 
 	"github.com/microsoft/agent-framework/go/memory"
-	"github.com/microsoft/agent-framework/go/memory/inmemory"
 	"github.com/microsoft/agent-framework/go/message"
 )
 
@@ -43,7 +42,7 @@ func newThreadFromJSON(data []byte, newMessageStore func() memory.MessageStore, 
 	if newMessageStore != nil {
 		thread.MessageStore = newMessageStore()
 	} else {
-		thread.MessageStore = &inmemory.MessageStore{}
+		thread.MessageStore = &memory.InMemoryMessageStore{}
 	}
 	if err := json.Unmarshal(tmp.MessageStore, thread.MessageStore); err != nil {
 		return nil, err
@@ -61,7 +60,7 @@ func (t *Thread) MessagesReceived(ctx context.Context, messages ...*message.Mess
 	if t.MessageStore == nil {
 		// If there is no conversation id, and no store we
 		// can create a default in memory store and add messages to it.
-		t.MessageStore = &inmemory.MessageStore{}
+		t.MessageStore = &memory.InMemoryMessageStore{}
 	}
 	return t.MessageStore.Add(ctx, messages...)
 }
