@@ -21,7 +21,7 @@ type MessageStore interface {
 
 var _ MessageStore = (*InMemoryMessageStore)(nil)
 
-// InMemmoryMessageStore is an in-memory implementation of the MessageStore interface.
+// InMemoryMessageStore is an in-memory implementation of the MessageStore interface.
 type InMemoryMessageStore struct {
 	Messages []*message.Message
 }

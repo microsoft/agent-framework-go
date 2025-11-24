@@ -558,7 +558,7 @@ func (t FunctionApprovalResponseContent) Header() ContentHeader {
 func CoalesceContents(contents []Content) []Content {
 	var sb strings.Builder
 	mergeText := func(contents []Content, start, end int) string {
-		defer sb.Reset()
+		sb.Reset()
 		for _, c := range contents[start:end] {
 			if tc, ok := c.(fmt.Stringer); ok {
 				sb.WriteString(tc.String())
