@@ -61,9 +61,9 @@ func mcpContentToAgentContent(mcpContents []mcp.Content) []message.Content {
 				})
 			} else {
 				result = append(result, &message.DataContent{
-					Data:      c.Resource.Blob,
+					Data:      string(c.Resource.Blob),
 					MediaType: c.Resource.MIMEType,
-					URI:       c.Resource.URI,
+					Name:      c.Resource.URI,
 				})
 			}
 

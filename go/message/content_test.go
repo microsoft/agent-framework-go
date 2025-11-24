@@ -3,6 +3,7 @@
 package message_test
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -118,10 +119,9 @@ func TestContentEncoding_Roundtrip(t *testing.T) {
 			Details:   "sample error details",
 		},
 		&message.DataContent{
-			Data:      []byte("sample data"),
+			Data:      base64.StdEncoding.EncodeToString([]byte("sample data")),
 			Name:      "sample data name",
-			URI:       "sample data uri",
-			MediaType: "sample media type",
+			MediaType: "text/plain",
 		},
 		&message.HostedFileContent{
 			FileID: "file-123",
@@ -145,14 +145,14 @@ func TestContentEncoding_Roundtrip(t *testing.T) {
 	}
 	data, err := json.Marshal(contents)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	var decoded message.Contents
 	if err = json.Unmarshal(data, &decoded); err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	if len(decoded) != len(contents) {
-		t.Errorf("expected %d contents, got %d", len(contents), len(decoded))
+		t.Fatalf("expected %d contents, got %d", len(contents), len(decoded))
 	}
 	for i, v := range contents {
 		if !reflect.DeepEqual(v, decoded[i]) {
@@ -284,17 +284,17 @@ func TestCoalesceContents(t *testing.T) {
 			name: "data contents with same text media type",
 			input: []message.Content{
 				&message.DataContent{
-					Data:      []byte("hello"),
+					Data:      base64.StdEncoding.EncodeToString([]byte("hello")),
 					MediaType: "text/plain",
 				},
 				&message.DataContent{
-					Data:      []byte(" world"),
+					Data:      base64.StdEncoding.EncodeToString([]byte(" world")),
 					MediaType: "text/plain",
 				},
 			},
 			expected: []message.Content{
 				&message.DataContent{
-					Data:      []byte("hello world"),
+					Data:      base64.StdEncoding.EncodeToString([]byte("hello world")),
 					MediaType: "text/plain",
 				},
 			},
@@ -303,21 +303,21 @@ func TestCoalesceContents(t *testing.T) {
 			name: "data contents with different media types not coalesced",
 			input: []message.Content{
 				&message.DataContent{
-					Data:      []byte("hello"),
+					Data:      base64.StdEncoding.EncodeToString([]byte("hello")),
 					MediaType: "text/plain",
 				},
 				&message.DataContent{
-					Data:      []byte("world"),
+					Data:      base64.StdEncoding.EncodeToString([]byte("world")),
 					MediaType: "text/html",
 				},
 			},
 			expected: []message.Content{
 				&message.DataContent{
-					Data:      []byte("hello"),
+					Data:      base64.StdEncoding.EncodeToString([]byte("hello")),
 					MediaType: "text/plain",
 				},
 				&message.DataContent{
-					Data:      []byte("world"),
+					Data:      base64.StdEncoding.EncodeToString([]byte("world")),
 					MediaType: "text/html",
 				},
 			},
@@ -326,21 +326,21 @@ func TestCoalesceContents(t *testing.T) {
 			name: "data contents with non-text media type not coalesced",
 			input: []message.Content{
 				&message.DataContent{
-					Data:      []byte{0x01, 0x02},
+					Data:      base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}),
 					MediaType: "application/octet-stream",
 				},
 				&message.DataContent{
-					Data:      []byte{0x03, 0x04},
+					Data:      base64.StdEncoding.EncodeToString([]byte{0x03, 0x04}),
 					MediaType: "application/octet-stream",
 				},
 			},
 			expected: []message.Content{
 				&message.DataContent{
-					Data:      []byte{0x01, 0x02},
+					Data:      base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}),
 					MediaType: "application/octet-stream",
 				},
 				&message.DataContent{
-					Data:      []byte{0x03, 0x04},
+					Data:      base64.StdEncoding.EncodeToString([]byte{0x03, 0x04}),
 					MediaType: "application/octet-stream",
 				},
 			},
@@ -380,24 +380,24 @@ func TestCoalesceContents(t *testing.T) {
 			name: "data contents with different names not coalesced",
 			input: []message.Content{
 				&message.DataContent{
-					Data:      []byte("hello"),
+					Data:      base64.StdEncoding.EncodeToString([]byte("hello")),
 					MediaType: "text/plain",
 					Name:      "file1.txt",
 				},
 				&message.DataContent{
-					Data:      []byte(" world"),
+					Data:      base64.StdEncoding.EncodeToString([]byte(" world")),
 					MediaType: "text/plain",
 					Name:      "file2.txt",
 				},
 			},
 			expected: []message.Content{
 				&message.DataContent{
-					Data:      []byte("hello"),
+					Data:      base64.StdEncoding.EncodeToString([]byte("hello")),
 					MediaType: "text/plain",
 					Name:      "file1.txt",
 				},
 				&message.DataContent{
-					Data:      []byte(" world"),
+					Data:      base64.StdEncoding.EncodeToString([]byte(" world")),
 					MediaType: "text/plain",
 					Name:      "file2.txt",
 				},
@@ -407,19 +407,19 @@ func TestCoalesceContents(t *testing.T) {
 			name: "data contents with same name coalesced",
 			input: []message.Content{
 				&message.DataContent{
-					Data:      []byte("hello"),
+					Data:      base64.StdEncoding.EncodeToString([]byte("hello")),
 					MediaType: "text/plain",
 					Name:      "file.txt",
 				},
 				&message.DataContent{
-					Data:      []byte(" world"),
+					Data:      base64.StdEncoding.EncodeToString([]byte(" world")),
 					MediaType: "text/plain",
 					Name:      "file.txt",
 				},
 			},
 			expected: []message.Content{
 				&message.DataContent{
-					Data:      []byte("hello world"),
+					Data:      base64.StdEncoding.EncodeToString([]byte("hello world")),
 					MediaType: "text/plain",
 					Name:      "file.txt",
 				},
