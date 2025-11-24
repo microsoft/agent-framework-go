@@ -4,6 +4,8 @@ package message
 
 import (
 	"bytes"
+	"cmp"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -99,29 +101,102 @@ func (t *TextContent) String() string { return t.Text }
 type DataContent struct {
 	ContentHeader
 
-	Data      []byte
+	// Name is an optional name associated with the data.
+	// A service might use this name as part of citations or to help infer the type of data
+	// being represented based on a file extension.
+	Name string
+
+	Data      string // base64-encoded data
 	MediaType string
-	Name      string `json:",omitempty"`
-	URI       string `json:",omitempty"`
+}
+
+type serializedDataContent struct {
+	ContentHeader
+
+	Name string `json:",omitempty"`
+	URI  string
+	Type contentKind
+}
+
+func (t *DataContent) MarshalJSON() ([]byte, error) {
+	tmp := serializedDataContent{
+		ContentHeader: t.ContentHeader,
+		Name:          t.Name,
+		URI:           t.URI(),
+		Type:          t.kind(),
+	}
+	return json.Marshal(tmp)
+}
+
+func (t *DataContent) UnmarshalJSON(data []byte) error {
+	var tmp serializedDataContent
+	if err := json.Unmarshal(data, &tmp); err != nil {
+		return err
+	}
+	d, err := newDataContentFromURI(tmp.URI, "")
+	if err != nil {
+		return err
+	}
+	t.ContentHeader = tmp.ContentHeader
+	t.Name = tmp.Name
+	t.Data = d.Data
+	t.MediaType = d.MediaType
+	return nil
+}
+
+func (t DataContent) kind() contentKind { return "data" }
+
+// URI returns the Data URI representation of the content,
+// as defined in RFC 2397:
+//
+//	data:[<mediatype>][;base64],<data>
+func (t *DataContent) URI() string {
+	return fmt.Sprintf("data:%s;base64,%s", t.MediaType, t.Data)
+}
+
+// newDataContentFromURI creates a new DataContent from a Data URI string.
+// The mediaType parameter is optional; if not provided, it must be present in the URI.
+// Returns an error if the URI is invalid or doesn't contain a media type when required.
+func newDataContentFromURI(uri string, mediaType string) (*DataContent, error) {
+	if uri == "" {
+		return nil, fmt.Errorf("uri cannot be empty")
+	}
+
+	// Validate that it's a data URI
+	if !strings.HasPrefix(strings.ToLower(uri), dataURIScheme) {
+		return nil, fmt.Errorf("the provided URI is not a data URI")
+	}
+
+	// Parse the data URI to extract the data and media type
+	parsedURI, err := parseDataURI(uri)
+	if err != nil {
+		return nil, err
+	}
+
+	// Determine the media type to use
+	mediaType = cmp.Or(mediaType, parsedURI.MediaType)
+	if mediaType == "" {
+		return nil, fmt.Errorf("uri did not contain a media type, and mediaType was not provided")
+	}
+
+	// Validate media type
+	if !isValidMediaType(mediaType) {
+		return nil, fmt.Errorf("invalid media type: %s", mediaType)
+	}
+	return &DataContent{
+		Data:      parsedURI.data(),
+		MediaType: mediaType,
+	}, nil
+}
+
+// Bytes returns the decoded data.
+func (t *DataContent) Bytes() ([]byte, error) {
+	return base64.StdEncoding.DecodeString(t.Data)
 }
 
 func (t *DataContent) TopLevelMediaType() string {
 	return topLevelMediaType(t.MediaType)
 }
-
-func (t *DataContent) MarshalJSON() ([]byte, error) {
-	type alias DataContent
-	tmp := struct {
-		*alias
-		Type contentKind
-	}{
-		alias: (*alias)(t),
-		Type:  t.kind(),
-	}
-	return json.Marshal(tmp)
-}
-
-func (t DataContent) kind() contentKind { return "data" }
 
 // ErrorContent represents an error.
 //
@@ -257,7 +332,13 @@ func (t FunctionResultContent) kind() contentKind { return "function_result" }
 type HostedFileContent struct {
 	ContentHeader
 
-	FileID string
+	FileID    string
+	Name      string `json:",omitempty"`
+	MediaType string `json:",omitempty"`
+}
+
+func (t *HostedFileContent) TopLevelMediaType() string {
+	return topLevelMediaType(t.MediaType)
 }
 
 func (t *HostedFileContent) MarshalJSON() ([]byte, error) {
@@ -473,21 +554,11 @@ func (t FunctionApprovalResponseContent) Header() ContentHeader {
 	}
 }
 
-func topLevelMediaType(media string) string {
-	if media == "" {
-		return ""
-	}
-	if idx := strings.Index(media, "/"); idx >= 0 {
-		return media[:idx]
-	}
-	return media
-}
-
 // CoalesceContents combines sequential contents elements.
 func CoalesceContents(contents []Content) []Content {
 	var sb strings.Builder
 	mergeText := func(contents []Content, start, end int) string {
-		sb.Reset()
+		defer sb.Reset()
 		for _, c := range contents[start:end] {
 			if tc, ok := c.(fmt.Stringer); ok {
 				sb.WriteString(tc.String())
@@ -496,14 +567,20 @@ func CoalesceContents(contents []Content) []Content {
 		return sb.String()
 	}
 	var buf bytes.Buffer
-	mergeBytes := func(contents []Content, start, end int) []byte {
-		buf.Reset()
+	mergeBase64 := func(contents []Content, start, end int) string {
+		// Base64 strings can't be concatenated directly, so we need to decode and re-encode.
+		defer buf.Reset()
 		for _, c := range contents[start:end] {
-			if dc, ok := c.(*DataContent); ok {
-				buf.Write(dc.Data)
+			var bytes []byte
+			switch c := c.(type) {
+			case *DataContent:
+				bytes, _ = c.Bytes() // if we got here it means the data URI is valid
+			}
+			if len(bytes) > 0 {
+				buf.Write(bytes)
 			}
 		}
-		return buf.Bytes()
+		return base64.StdEncoding.EncodeToString(buf.Bytes())
 	}
 
 	contents = coalesce(contents, false, nil, func(contents []Content, start, end int) *TextContent {
@@ -533,17 +610,18 @@ func CoalesceContents(contents []Content) []Content {
 
 	contents = coalesce(contents, false,
 		func(a, b *DataContent) bool {
-			return a.MediaType == b.MediaType && a.TopLevelMediaType() == "text" && a.Name == b.Name
+			return strings.EqualFold(a.MediaType, b.MediaType) && a.TopLevelMediaType() == "text" && a.Name == b.Name
 		},
 		func(contents []Content, start, end int) *DataContent {
 			first := contents[start].(*DataContent)
+
 			return &DataContent{
 				ContentHeader: ContentHeader{
 					AdditionalProperties: maps.Clone(first.AdditionalProperties),
 				},
 				Name:      first.Name,
 				MediaType: first.MediaType,
-				Data:      mergeBytes(contents, start, end),
+				Data:      mergeBase64(contents, start, end),
 			}
 		})
 
