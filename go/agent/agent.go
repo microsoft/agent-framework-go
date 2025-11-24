@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"iter"
 	"strings"
@@ -167,8 +168,8 @@ func FuncTool(agent Agent, name, description string, thread memory.Thread) tool.
 		Query string `jsonschema:"input query to invoke the agent"`
 	}
 	return functool.MustNew(&functool.Func{
-		Name:        agent.Name(),
-		Description: agent.Description(),
+		Name:        cmp.Or(name, agent.Name()),
+		Description: cmp.Or(description, agent.Description()),
 	}, func(ctx context.Context, in funcToolIn) (string, error) {
 		resp, err := agent.Run(&RunContext{
 			Context: ctx,
