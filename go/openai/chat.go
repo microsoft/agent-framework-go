@@ -330,7 +330,7 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 				switch c.TopLevelMediaType() {
 				case "image":
 					contents = append(contents, openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
-						URL: c.URI,
+						URL: c.Data,
 					}))
 				case "audio":
 					var format string
@@ -344,12 +344,12 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 						format = "mp3"
 					}
 					contents = append(contents, openai.InputAudioContentPart(openai.ChatCompletionContentPartInputAudioInputAudioParam{
-						Data:   string(c.Data),
+						Data:   c.Data,
 						Format: format,
 					}))
 				default:
 					contents = append(contents, openai.FileContentPart(openai.ChatCompletionContentPartFileFileParam{
-						FileData: openai.String(string(c.Data)),
+						FileData: openai.String(c.Data),
 						Filename: openai.String(c.Name),
 					}))
 				}
