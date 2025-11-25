@@ -8,13 +8,12 @@ import (
 	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/openai"
 	"github.com/microsoft/agent-framework/go/tool"
-	"github.com/microsoft/agent-framework/go/tool/websearchtool"
 )
 
 /*
 OpenAI Chat Agent with Web Search Example
 
-This sample demonstrates using HostedWebSearchTool with OpenAI Chat Agent
+This sample demonstrates using hostedtool.WebSearch with OpenAI Chat Agent
 for real-time information retrieval and current data access.
 */
 
@@ -24,14 +23,7 @@ func main() {
 	}, &chatagent.Options{
 		Instructions: "You are a helpful weather agent.",
 		ChatOptions: &chatagent.ChatOptions{
-			Tools: []tool.Tool{&websearchtool.HostedWebSearch{
-				AdditionalProperties: map[string]any{
-					"user_location": map[string]string{
-						"country": "US",
-						"city":    "Seattle",
-					},
-				},
-			}},
+			Tools: []tool.Tool{openai.NewWebSearchTool("Seattle", "", "US", "", "")},
 		},
 	})
 

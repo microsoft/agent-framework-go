@@ -3,8 +3,9 @@
 package agent
 
 import (
-	"cmp"
 	"context"
+	"encoding/json"
+	"fmt"
 	"iter"
 	"strings"
 	"time"
@@ -13,7 +14,6 @@ import (
 	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/param"
 	"github.com/microsoft/agent-framework/go/tool"
-	"github.com/microsoft/agent-framework/go/tool/functool"
 )
 
 // RunContext contains context for agent execution.
@@ -163,24 +163,77 @@ func (r *RunResponseUpdate) UserInputRequests() iter.Seq[message.Content] {
 }
 
 // FuncTool creates a function tool that invokes the given agent.
-func FuncTool(agent Agent, name, description string, thread memory.Thread) tool.FuncTool {
-	type funcToolIn struct {
-		Query string `jsonschema:"input query to invoke the agent"`
+// The provided thread is used for the agent's context during invocations,
+// or nil to create a new thread for each invocation.
+func FuncTool(agent Agent, thread memory.Thread) tool.FuncTool {
+	return functool{
+		name:        agent.Name(),
+		description: agent.Description(),
+		thread:      thread,
+		agent:       agent,
 	}
-	return functool.MustNew(&functool.Func{
-		Name:        cmp.Or(name, agent.Name()),
-		Description: cmp.Or(description, agent.Description()),
-	}, func(ctx context.Context, in funcToolIn) (string, error) {
-		resp, err := agent.Run(&RunContext{
-			Context: ctx,
-			Thread:  thread,
-		}, &message.Message{
-			Role:     message.RoleUser,
-			Contents: []message.Content{&message.TextContent{Text: in.Query}},
-		})
-		if err != nil {
-			return "", err
+}
+
+type functool struct {
+	name        string
+	description string
+	thread      memory.Thread
+	agent       Agent
+}
+
+func (t functool) Name() string {
+	return t.name
+}
+
+func (t functool) Description() string {
+	return t.description
+}
+
+func (t functool) Schema() any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"query": map[string]any{
+				"type":        "string",
+				"description": "input query to invoke the agent",
+			},
+		},
+		"required": []string{"query"},
+	}
+}
+
+func (t functool) ReturnSchema() any {
+	return map[string]any{
+		"type": "string",
+	}
+}
+
+func (t functool) Call(ctx context.Context, args any) (any, error) {
+	var in struct {
+		Query string `json:"query"`
+	}
+	var raw json.RawMessage
+	if args == nil {
+		raw = json.RawMessage("{}")
+	} else {
+		var ok bool
+		raw, ok = args.(json.RawMessage)
+		if !ok {
+			return nil, fmt.Errorf("expected json.RawMessage arguments, got %T", args)
 		}
-		return resp.String(), nil
+	}
+	if err := json.Unmarshal(raw, &in); err != nil {
+		return nil, err
+	}
+	resp, err := t.agent.Run(&RunContext{
+		Context: ctx,
+		Thread:  t.thread,
+	}, &message.Message{
+		Role:     message.RoleUser,
+		Contents: []message.Content{&message.TextContent{Text: in.Query}},
 	})
+	if err != nil {
+		return "", err
+	}
+	return resp.String(), nil
 }
