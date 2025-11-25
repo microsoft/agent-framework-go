@@ -5,7 +5,6 @@ package chatclient
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"iter"
@@ -398,7 +397,7 @@ func checkForApprovalRequiringFCC(functionCalls []*message.FunctionCallContent, 
 	for ; lastApprovalCheckedFCCIdx < len(functionCalls); lastApprovalCheckedFCCIdx++ {
 		fcc := functionCalls[lastApprovalCheckedFCCIdx]
 		for _, t := range approvalRequiredFunctions {
-			if tname, _ := t.ToolInfo(); tname == fcc.Name {
+			if t.Name() == fcc.Name {
 				hasApprovalRequiringFcc = true
 				break
 			}
@@ -532,8 +531,7 @@ func (f *functionInvoking) createToolsMap(opts *ChatOptions) (mtools map[string]
 		if mtools == nil {
 			mtools = make(map[string]tool.Tool)
 		}
-		name, _ := t.ToolInfo()
-		mtools[name] = t
+		mtools[t.Name()] = t
 		if !anyRequiredApproval {
 			if _, ok := t.(tool.ApprovalRequiredTool); ok {
 				anyRequiredApproval = true
@@ -590,7 +588,7 @@ func replaceFunctionCallsWithApprovalRequests(msgs []*message.Message, tools map
 			allFunctionCallContentIndices = append(allFunctionCallContentIndices, entry{i, j})
 			if !requiresApproval {
 				for _, t := range tools {
-					if tname, _ := t.ToolInfo(); tname == fcc.Name {
+					if t.Name() == fcc.Name {
 						if _, ok := t.(tool.ApprovalRequiredTool); ok {
 							requiresApproval = true
 							break
@@ -702,25 +700,6 @@ func (f *functionInvoking) processFunctionCall(ctx context.Context, tools map[st
 			nil,
 		)
 	}
-	var args map[string]any
-	if funcCall.Arguments != nil {
-		switch v := funcCall.Arguments.(type) {
-		case map[string]any:
-			args = v
-		default:
-			data, err := json.Marshal(v)
-			if err == nil {
-				err = json.Unmarshal(data, &args)
-			}
-			if err != nil {
-				return f.createFunctionResult(
-					funcCall.CallID,
-					fmt.Sprintf("Error: Unable to parse function arguments: %v", err),
-					nil,
-				)
-			}
-		}
-	}
 	var result any
 	var err error
 	func() {
@@ -733,7 +712,7 @@ func (f *functionInvoking) processFunctionCall(ctx context.Context, tools map[st
 				}
 			}
 		}()
-		result, err = tl.Call(ctx, args)
+		result, err = tl.Call(ctx, funcCall.Arguments)
 	}()
 
 	return f.createFunctionResult(funcCall.CallID, result, err)

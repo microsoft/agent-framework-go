@@ -38,7 +38,7 @@ func main() {
 	}, &chatagent.Options{
 		Instructions: "You are a helpful assistant who responds in French.",
 		ChatOptions: &chatagent.ChatOptions{
-			Tools: []tool.Tool{agent.FuncTool(weatherAgent, "", "", nil)},
+			Tools: []tool.Tool{agent.FuncTool(weatherAgent, nil)},
 		},
 	})
 

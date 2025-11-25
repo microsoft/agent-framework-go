@@ -28,7 +28,7 @@ type Func struct {
 // request or result: the params contain raw arguments, no input validation
 // is performed, and the result is returned to the user as-is, without any
 // validation of the output.
-type Handler func(_ context.Context, args string) (any, error)
+type Handler func(_ context.Context, args json.RawMessage) (any, error)
 
 // A HandlerFor handles a call to tools/call with typed arguments and results.
 //
@@ -48,8 +48,12 @@ type Tool struct {
 	Handler Handler
 }
 
-func (t *Tool) ToolInfo() (name string, description string) {
-	return t.Func.Name, t.Func.Description
+func (t *Tool) Name() string {
+	return t.Func.Name
+}
+
+func (t *Tool) Description() string {
+	return t.Func.Description
 }
 
 func (t *Tool) Schema() any {
@@ -60,18 +64,18 @@ func (t *Tool) ReturnSchema() any {
 	return t.Func.outputFormat.Schema()
 }
 
-func (t *Tool) Call(ctx context.Context, args map[string]any) (any, error) {
-	var argsBytes []byte
-	if args != nil {
-		var err error
-		argsBytes, err = json.Marshal(args)
-		if err != nil {
-			return nil, err
-		}
+func (t *Tool) Call(ctx context.Context, args any) (any, error) {
+	var raw json.RawMessage
+	if args == nil {
+		raw = json.RawMessage("{}")
 	} else {
-		argsBytes = []byte("{}")
+		var ok bool
+		raw, ok = args.(json.RawMessage)
+		if !ok {
+			return nil, fmt.Errorf("expected json.RawMessage arguments, got %T", args)
+		}
 	}
-	return t.Handler(ctx, string(argsBytes))
+	return t.Handler(ctx, raw)
 }
 
 func MustNew[In, Out any](fnp *Func, h HandlerFor[In, Out]) *Tool {
@@ -117,17 +121,17 @@ func New[In, Out any](fnp *Func, h HandlerFor[In, Out]) (*Tool, error) {
 		return nil, fmt.Errorf("resolving output schema: %w", err)
 	}
 
-	t.Handler = func(ctx context.Context, args string) (any, error) {
+	t.Handler = func(ctx context.Context, args json.RawMessage) (any, error) {
 		var in In
 		if t.Func.inputWrapped {
 			// Extract wrapped value.
 			var decodedArgs inputWrapper[In]
-			if err := jsonformat.Unmarshal(t.Func.inputFormat, []byte(args), &decodedArgs); err != nil {
+			if err := jsonformat.Unmarshal(t.Func.inputFormat, args, &decodedArgs); err != nil {
 				return nil, err
 			}
 			in = decodedArgs.Arg0
 		} else {
-			if err := jsonformat.Unmarshal(t.Func.inputFormat, []byte(args), &in); err != nil {
+			if err := jsonformat.Unmarshal(t.Func.inputFormat, args, &in); err != nil {
 				return nil, err
 			}
 		}
