@@ -4,7 +4,8 @@ package agent
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
+	"fmt"
 	"iter"
 	"strings"
 	"time"
@@ -207,21 +208,29 @@ func (t functool) ReturnSchema() any {
 	}
 }
 
-func (t functool) Call(ctx context.Context, args map[string]any) (any, error) {
-	query, ok := args["query"]
-	if !ok {
-		return nil, errors.New("missing required argument 'query'")
+func (t functool) Call(ctx context.Context, args any) (any, error) {
+	var in struct {
+		Query string `json:"query"`
 	}
-	queryStr, ok := query.(string)
-	if !ok {
-		return nil, errors.New("argument 'query' must be a string")
+	var raw json.RawMessage
+	if args == nil {
+		raw = json.RawMessage("{}")
+	} else {
+		var ok bool
+		raw, ok = args.(json.RawMessage)
+		if !ok {
+			return nil, fmt.Errorf("expected json.RawMessage arguments, got %T", args)
+		}
+	}
+	if err := json.Unmarshal(raw, &in); err != nil {
+		return nil, err
 	}
 	resp, err := t.agent.Run(&RunContext{
 		Context: ctx,
 		Thread:  t.thread,
 	}, &message.Message{
 		Role:     message.RoleUser,
-		Contents: []message.Content{&message.TextContent{Text: queryStr}},
+		Contents: []message.Content{&message.TextContent{Text: in.Query}},
 	})
 	if err != nil {
 		return "", err

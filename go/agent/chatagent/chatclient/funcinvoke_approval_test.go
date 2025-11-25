@@ -4,6 +4,7 @@ package chatclient_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"iter"
 	"testing"
@@ -228,14 +229,14 @@ func TestFunctionInvoking_AllFunctionCallsReplacedWithApprovalsWhenAllRequireApp
 			downstreamClientOutput := []*message.Message{
 				{Role: message.RoleAssistant, Contents: []message.Content{
 					&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
-					&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}},
+					&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)},
 				}},
 			}
 
 			expectedOutput := []*message.Message{
 				{Role: message.RoleAssistant, Contents: []message.Content{
 					&message.FunctionApprovalRequestContent{ID: "callId1", FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
-					&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}}},
+					&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)}},
 				}},
 			}
 
@@ -267,14 +268,14 @@ func TestFunctionInvoking_AllFunctionCallsReplacedWithApprovalsWhenAnyRequireApp
 	downstreamClientOutput := []*message.Message{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
-			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}},
+			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)},
 		}},
 	}
 
 	expectedOutput := []*message.Message{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionApprovalRequestContent{ID: "callId1", FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
-			&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}}},
+			&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)}},
 		}},
 	}
 
@@ -322,14 +323,14 @@ func TestFunctionInvoking_AllFunctionCallsReplacedWithApprovalsWhenAnyRequestOrA
 			downstreamClientOutput := []*message.Message{
 				{Role: message.RoleAssistant, Contents: []message.Content{
 					&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
-					&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}},
+					&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)},
 				}},
 			}
 
 			expectedOutput := []*message.Message{
 				{Role: message.RoleAssistant, Contents: []message.Content{
 					&message.FunctionApprovalRequestContent{ID: "callId1", FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
-					&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}}},
+					&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)}},
 				}},
 			}
 
@@ -353,11 +354,11 @@ func TestFunctionInvoking_ApprovedApprovalResponsesAreExecuted(t *testing.T) {
 		message.New(&message.TextContent{Text: "hello"}),
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionApprovalRequestContent{ID: "callId1", FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
-			&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}}},
+			&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)}},
 		}},
 		message.New(
 			&message.FunctionApprovalResponseContent{ID: "callId1", Approved: true, FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
-			&message.FunctionApprovalResponseContent{ID: "callId2", Approved: true, FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}}},
+			&message.FunctionApprovalResponseContent{ID: "callId2", Approved: true, FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)}},
 		),
 	}
 
@@ -366,7 +367,7 @@ func TestFunctionInvoking_ApprovedApprovalResponsesAreExecuted(t *testing.T) {
 		message.New(&message.TextContent{Text: "hello"}),
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
-			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}},
+			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)},
 		}},
 		{Role: message.RoleTool, Contents: []message.Content{
 			&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
@@ -385,7 +386,7 @@ func TestFunctionInvoking_ApprovedApprovalResponsesAreExecuted(t *testing.T) {
 	expectedOutput := []*message.Message{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
-			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}},
+			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)},
 		}},
 		{Role: message.RoleTool, Contents: []message.Content{
 			&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
@@ -418,13 +419,13 @@ func TestFunctionInvoking_ApprovedApprovalResponsesFromSeparateFCCMessagesAreExe
 			&message.FunctionApprovalRequestContent{ID: "callId1", FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
 		}},
 		{Role: message.RoleAssistant, ID: "resp2", Contents: []message.Content{
-			&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}}},
+			&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)}},
 		}},
 		message.New(
 			&message.FunctionApprovalResponseContent{ID: "callId1", Approved: true, FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
 		),
 		message.New(
-			&message.FunctionApprovalResponseContent{ID: "callId2", Approved: true, FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}}},
+			&message.FunctionApprovalResponseContent{ID: "callId2", Approved: true, FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)}},
 		),
 	}
 
@@ -435,7 +436,7 @@ func TestFunctionInvoking_ApprovedApprovalResponsesFromSeparateFCCMessagesAreExe
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
 		}},
 		{Role: message.RoleAssistant, ID: "resp2", Contents: []message.Content{
-			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}},
+			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)},
 		}},
 		{Role: message.RoleTool, Contents: []message.Content{
 			&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
@@ -453,7 +454,7 @@ func TestFunctionInvoking_ApprovedApprovalResponsesFromSeparateFCCMessagesAreExe
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
 		}},
 		{Role: message.RoleAssistant, ID: "resp2", Contents: []message.Content{
-			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}},
+			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)},
 		}},
 		{Role: message.RoleTool, Contents: []message.Content{
 			&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
@@ -479,11 +480,11 @@ func TestFunctionInvoking_RejectedApprovalResponsesAreFailed(t *testing.T) {
 		message.New(&message.TextContent{Text: "hello"}),
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionApprovalRequestContent{ID: "callId1", FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
-			&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}}},
+			&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)}},
 		}},
 		message.New(
 			&message.FunctionApprovalResponseContent{ID: "callId1", Approved: false, FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
-			&message.FunctionApprovalResponseContent{ID: "callId2", Approved: false, FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}}},
+			&message.FunctionApprovalResponseContent{ID: "callId2", Approved: false, FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)}},
 		),
 	}
 
@@ -491,7 +492,7 @@ func TestFunctionInvoking_RejectedApprovalResponsesAreFailed(t *testing.T) {
 		message.New(&message.TextContent{Text: "hello"}),
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
-			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}},
+			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)},
 		}},
 		{Role: message.RoleTool, Contents: []message.Content{
 			&message.FunctionResultContent{CallID: "callId1", Result: "Error: Tool call invocation was rejected by user."},
@@ -508,7 +509,7 @@ func TestFunctionInvoking_RejectedApprovalResponsesAreFailed(t *testing.T) {
 	expectedOutput := []*message.Message{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
-			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}},
+			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)},
 		}},
 		{Role: message.RoleTool, Contents: []message.Content{
 			&message.FunctionResultContent{CallID: "callId1", Result: "Error: Tool call invocation was rejected by user."},
@@ -537,11 +538,11 @@ func TestFunctionInvoking_MixedApprovedAndRejectedApprovalResponsesAreExecutedAn
 		message.New(&message.TextContent{Text: "hello"}),
 		{Role: message.RoleAssistant, ID: "resp1", Contents: []message.Content{
 			&message.FunctionApprovalRequestContent{ID: "callId1", FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
-			&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}}},
+			&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)}},
 		}},
 		message.New(
 			&message.FunctionApprovalResponseContent{ID: "callId1", Approved: false, FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
-			&message.FunctionApprovalResponseContent{ID: "callId2", Approved: true, FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}}},
+			&message.FunctionApprovalResponseContent{ID: "callId2", Approved: true, FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)}},
 		),
 	}
 
@@ -549,7 +550,7 @@ func TestFunctionInvoking_MixedApprovedAndRejectedApprovalResponsesAreExecutedAn
 		message.New(&message.TextContent{Text: "hello"}),
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
-			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}},
+			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)},
 		}},
 		{Role: message.RoleTool, Contents: []message.Content{
 			&message.FunctionResultContent{CallID: "callId1", Result: "Error: Tool call invocation was rejected by user."},
@@ -569,7 +570,7 @@ func TestFunctionInvoking_MixedApprovedAndRejectedApprovalResponsesAreExecutedAn
 	expectedOutputNonStreaming := []*message.Message{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
-			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}},
+			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)},
 		}},
 		{Role: message.RoleTool, Contents: []message.Content{
 			&message.FunctionResultContent{CallID: "callId1", Result: "Error: Tool call invocation was rejected by user."},
@@ -586,7 +587,7 @@ func TestFunctionInvoking_MixedApprovedAndRejectedApprovalResponsesAreExecutedAn
 	expectedOutputStreaming := []*message.Message{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
-			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}},
+			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)},
 		}},
 		{Role: message.RoleTool, Contents: []message.Content{
 			&message.FunctionResultContent{CallID: "callId1", Result: "Error: Tool call invocation was rejected by user."},
@@ -615,11 +616,11 @@ func TestFunctionInvoking_ApprovedInputsAreExecutedAndFunctionResultsAreConverte
 		message.New(&message.TextContent{Text: "hello"}),
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionApprovalRequestContent{ID: "callId1", FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
-			&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}}},
+			&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)}},
 		}},
 		message.New(
 			&message.FunctionApprovalResponseContent{ID: "callId1", Approved: true, FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
-			&message.FunctionApprovalResponseContent{ID: "callId2", Approved: true, FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}}},
+			&message.FunctionApprovalResponseContent{ID: "callId2", Approved: true, FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)}},
 		),
 	}
 
@@ -627,7 +628,7 @@ func TestFunctionInvoking_ApprovedInputsAreExecutedAndFunctionResultsAreConverte
 		message.New(&message.TextContent{Text: "hello"}),
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
-			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}},
+			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)},
 		}},
 		{Role: message.RoleTool, Contents: []message.Content{
 			&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
@@ -638,7 +639,7 @@ func TestFunctionInvoking_ApprovedInputsAreExecutedAndFunctionResultsAreConverte
 	// Downstream client returns a new FunctionCallContent for Func2 with different arguments
 	downstreamClientOutput := []*message.Message{
 		{Role: message.RoleAssistant, Contents: []message.Content{
-			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 3}},
+			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":3}`)},
 		}},
 	}
 
@@ -646,14 +647,14 @@ func TestFunctionInvoking_ApprovedInputsAreExecutedAndFunctionResultsAreConverte
 	expectedOutput := []*message.Message{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
-			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}},
+			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)},
 		}},
 		{Role: message.RoleTool, Contents: []message.Content{
 			&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
 			&message.FunctionResultContent{CallID: "callId2", Result: "Result 2: 42"},
 		}},
 		{Role: message.RoleAssistant, Contents: []message.Content{
-			&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 3}}},
+			&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":3}`)}},
 		}},
 	}
 
@@ -677,17 +678,17 @@ func TestFunctionInvoking_AlreadyExecutedApprovalsAreIgnored(t *testing.T) {
 		// Previous turn: approval requests
 		{Role: message.RoleAssistant, ID: "resp1", Contents: []message.Content{
 			&message.FunctionApprovalRequestContent{ID: "callId1", FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
-			&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}}},
+			&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)}},
 		}},
 		// Previous turn: approval responses
 		message.New(
 			&message.FunctionApprovalResponseContent{ID: "callId1", Approved: true, FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
-			&message.FunctionApprovalResponseContent{ID: "callId2", Approved: true, FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}}},
+			&message.FunctionApprovalResponseContent{ID: "callId2", Approved: true, FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)}},
 		),
 		// Previous turn: already executed - function calls
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
-			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}},
+			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)},
 		}},
 		// Previous turn: already executed - function results
 		{Role: message.RoleTool, Contents: []message.Content{
@@ -709,7 +710,7 @@ func TestFunctionInvoking_AlreadyExecutedApprovalsAreIgnored(t *testing.T) {
 		message.New(&message.TextContent{Text: "hello"}),
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
-			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}},
+			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)},
 		}},
 		{Role: message.RoleTool, Contents: []message.Content{
 			&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
@@ -769,7 +770,7 @@ func TestFunctionInvoking_MixedApprovalRequiredToolsWithNonApprovalRequiringFunc
 			// Round 1: Only Func2 is called (doesn't require approval, so it's executed immediately)
 			{
 				{Role: message.RoleAssistant, Contents: []message.Content{
-					&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}},
+					&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)},
 				}},
 			},
 			// Round 2: Final response after Func2 execution
@@ -784,7 +785,7 @@ func TestFunctionInvoking_MixedApprovalRequiredToolsWithNonApprovalRequiringFunc
 	// Expected output: Func2 call, result, and final response
 	expectedOutput := []*message.Message{
 		{Role: message.RoleAssistant, Contents: []message.Content{
-			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}},
+			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)},
 		}},
 		{Role: message.RoleTool, Contents: []message.Content{
 			&message.FunctionResultContent{CallID: "callId2", Result: "Result 2: 42"},
@@ -816,7 +817,7 @@ func TestFunctionInvoking_ApprovedApprovalResponsesWithoutApprovalRequestAreExec
 		message.New(&message.TextContent{Text: "hello"}),
 		message.New(
 			&message.FunctionApprovalResponseContent{ID: "callId1", Approved: true, FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
-			&message.FunctionApprovalResponseContent{ID: "callId2", Approved: true, FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}}},
+			&message.FunctionApprovalResponseContent{ID: "callId2", Approved: true, FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)}},
 		),
 	}
 
@@ -824,7 +825,7 @@ func TestFunctionInvoking_ApprovedApprovalResponsesWithoutApprovalRequestAreExec
 		message.New(&message.TextContent{Text: "hello"}),
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
-			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}},
+			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)},
 		}},
 		{Role: message.RoleTool, Contents: []message.Content{
 			&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
@@ -841,7 +842,7 @@ func TestFunctionInvoking_ApprovedApprovalResponsesWithoutApprovalRequestAreExec
 	expectedOutput := []*message.Message{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
-			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}},
+			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)},
 		}},
 		{Role: message.RoleTool, Contents: []message.Content{
 			&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
@@ -871,7 +872,7 @@ func TestFunctionInvoking_FunctionCallContentIsNotPassedToDownstreamServiceWithS
 	input := []*message.Message{
 		message.New(
 			&message.FunctionApprovalResponseContent{ID: "callId1", Approved: true, FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
-			&message.FunctionApprovalResponseContent{ID: "callId2", Approved: true, FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}}},
+			&message.FunctionApprovalResponseContent{ID: "callId2", Approved: true, FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)}},
 		),
 	}
 
@@ -893,7 +894,7 @@ func TestFunctionInvoking_FunctionCallContentIsNotPassedToDownstreamServiceWithS
 	expectedOutput := []*message.Message{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
-			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}},
+			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)},
 		}},
 		{Role: message.RoleTool, Contents: []message.Content{
 			&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
@@ -929,7 +930,7 @@ func TestFunctionInvoking_FunctionCallContentIsYieldedImmediatelyIfNoApprovalReq
 			{
 				{Role: message.RoleAssistant, Contents: []message.Content{
 					&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
-					&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}},
+					&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)},
 				}},
 			},
 			// Round 2: After executing functions, downstream returns final response
@@ -945,7 +946,7 @@ func TestFunctionInvoking_FunctionCallContentIsYieldedImmediatelyIfNoApprovalReq
 	expectedOutput := []*message.Message{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
-			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}},
+			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)},
 		}},
 		{Role: message.RoleTool, Contents: []message.Content{
 			&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
@@ -981,7 +982,7 @@ func TestFunctionInvoking_FunctionCallsAreBufferedUntilApprovalRequirementEncoun
 	downstreamClientOutput := []*message.Message{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
-			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}},
+			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)},
 		}},
 	}
 
@@ -989,7 +990,7 @@ func TestFunctionInvoking_FunctionCallsAreBufferedUntilApprovalRequirementEncoun
 	expectedOutput := []*message.Message{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionApprovalRequestContent{ID: "callId1", FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
-			&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}}},
+			&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)}},
 		}},
 	}
 

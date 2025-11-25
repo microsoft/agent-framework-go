@@ -4,6 +4,7 @@ package functool_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -77,7 +78,7 @@ func TestFuncTool_CallMissingArg0(t *testing.T) {
 	)
 
 	// Call without required arg0
-	_, err := tl.Call(t.Context(), map[string]any{})
+	_, err := tl.Call(t.Context(), json.RawMessage(`{}`))
 	if err == nil {
 		t.Error("expected error for missing arg0, got nil")
 	}
@@ -96,7 +97,7 @@ func TestFuncTool_CallStruct(t *testing.T) {
 		},
 	)
 
-	ret, err := tl.Call(t.Context(), map[string]any{"v": "hello"})
+	ret, err := tl.Call(t.Context(), json.RawMessage(`{"v":"hello"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +116,7 @@ func TestFuncTool_CallString(t *testing.T) {
 		},
 	)
 
-	ret, err := tl.Call(t.Context(), map[string]any{"arg0": "hello"})
+	ret, err := tl.Call(t.Context(), json.RawMessage(`{"arg0":"hello"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +180,7 @@ func TestFuncTool_CallError(t *testing.T) {
 		handler,
 	)
 
-	_, err := tl.Call(t.Context(), map[string]any{"value": "test"})
+	_, err := tl.Call(t.Context(), json.RawMessage(`{"value":"test"}`))
 	if err != expectedErr {
 		t.Errorf("expected error %v, got %v", expectedErr, err)
 	}

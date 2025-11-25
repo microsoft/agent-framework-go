@@ -68,19 +68,19 @@ func TestFunctionInvoking_SupportsSingleFunctionCallPerRequest(t *testing.T) {
 	plan := []*message.Message{
 		message.New(&message.TextContent{Text: "hello"}),
 		{Role: message.RoleAssistant, Contents: []message.Content{
-			&message.FunctionCallContent{CallID: "callId1", Name: "Func1", Arguments: map[string]any{}},
+			&message.FunctionCallContent{CallID: "callId1", Name: "Func1", Arguments: json.RawMessage(`{}`)},
 		}},
 		{Role: message.RoleTool, Contents: []message.Content{
 			&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
 		}},
 		{Role: message.RoleAssistant, Contents: []message.Content{
-			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}},
+			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)},
 		}},
 		{Role: message.RoleTool, Contents: []message.Content{
 			&message.FunctionResultContent{CallID: "callId2", Result: "Result 2: 42"},
 		}},
 		{Role: message.RoleAssistant, Contents: []message.Content{
-			&message.FunctionCallContent{CallID: "callId3", Name: "VoidReturn", Arguments: map[string]any{"i": 43}},
+			&message.FunctionCallContent{CallID: "callId3", Name: "VoidReturn", Arguments: json.RawMessage(`{"i":43}`)},
 		}},
 		{Role: message.RoleTool, Contents: []message.Content{
 			&message.FunctionResultContent{CallID: "callId3", Result: "Success: Function completed."},
@@ -136,9 +136,9 @@ func TestFunctionInvoking_SupportsMultipleFunctionCallsPerRequest(t *testing.T) 
 			plan := []*message.Message{
 				message.New(&message.TextContent{Text: "hello"}),
 				{Role: message.RoleAssistant, Contents: []message.Content{
-					&message.FunctionCallContent{CallID: "callId1", Name: "Func1", Arguments: map[string]any{"i": nil}},
-					&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 34}},
-					&message.FunctionCallContent{CallID: "callId3", Name: "Func2", Arguments: map[string]any{"i": 56}},
+					&message.FunctionCallContent{CallID: "callId1", Name: "Func1", Arguments: json.RawMessage(`{"i":null}`)},
+					&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":34}`)},
+					&message.FunctionCallContent{CallID: "callId3", Name: "Func2", Arguments: json.RawMessage(`{"i":56}`)},
 				}},
 				{Role: message.RoleTool, Contents: []message.Content{
 					&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
@@ -146,8 +146,8 @@ func TestFunctionInvoking_SupportsMultipleFunctionCallsPerRequest(t *testing.T) 
 					&message.FunctionResultContent{CallID: "callId3", Result: "Result 2: 56"},
 				}},
 				{Role: message.RoleAssistant, Contents: []message.Content{
-					&message.FunctionCallContent{CallID: "callId4", Name: "Func2", Arguments: map[string]any{"i": 78}},
-					&message.FunctionCallContent{CallID: "callId5", Name: "Func1", Arguments: map[string]any{"i": nil}},
+					&message.FunctionCallContent{CallID: "callId4", Name: "Func2", Arguments: json.RawMessage(`{"i":78}`)},
+					&message.FunctionCallContent{CallID: "callId5", Name: "Func1", Arguments: json.RawMessage(`{"i":null}`)},
 				}},
 				{Role: message.RoleTool, Contents: []message.Content{
 					&message.FunctionResultContent{CallID: "callId4", Result: "Result 2: 78"},
@@ -437,19 +437,19 @@ func TestFunctionInvoking_SupportsToolsProvidedByAdditionalTools(t *testing.T) {
 			plan := []*message.Message{
 				message.New(&message.TextContent{Text: "hello"}),
 				{Role: message.RoleAssistant, Contents: []message.Content{
-					&message.FunctionCallContent{CallID: "callId1", Name: "Func1", Arguments: map[string]any{}},
+					&message.FunctionCallContent{CallID: "callId1", Name: "Func1", Arguments: json.RawMessage(`{}`)},
 				}},
 				{Role: message.RoleTool, Contents: []message.Content{
 					&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
 				}},
 				{Role: message.RoleAssistant, Contents: []message.Content{
-					&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}},
+					&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)},
 				}},
 				{Role: message.RoleTool, Contents: []message.Content{
 					&message.FunctionResultContent{CallID: "callId2", Result: "Result 2: 42"},
 				}},
 				{Role: message.RoleAssistant, Contents: []message.Content{
-					&message.FunctionCallContent{CallID: "callId3", Name: "VoidReturn", Arguments: map[string]any{"i": 43}},
+					&message.FunctionCallContent{CallID: "callId3", Name: "VoidReturn", Arguments: json.RawMessage(`{"i":43}`)},
 				}},
 				{Role: message.RoleTool, Contents: []message.Content{
 					&message.FunctionResultContent{CallID: "callId3", Result: "Success: Function completed."},
@@ -507,13 +507,13 @@ func TestFunctionInvoking_PrefersToolsProvidedByChatOptions(t *testing.T) {
 			&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
 		}},
 		{Role: message.RoleAssistant, Contents: []message.Content{
-			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}},
+			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)},
 		}},
 		{Role: message.RoleTool, Contents: []message.Content{
 			&message.FunctionResultContent{CallID: "callId2", Result: "Result 2: 42"},
 		}},
 		{Role: message.RoleAssistant, Contents: []message.Content{
-			&message.FunctionCallContent{CallID: "callId3", Name: "VoidReturn", Arguments: map[string]any{"i": 43}},
+			&message.FunctionCallContent{CallID: "callId3", Name: "VoidReturn", Arguments: json.RawMessage(`{"i":43}`)},
 		}},
 		{Role: message.RoleTool, Contents: []message.Content{
 			&message.FunctionResultContent{CallID: "callId3", Result: "Success: Function completed."},
@@ -550,8 +550,8 @@ func TestFunctionInvoking_ParallelFunctionCallsMayBeInvokedConcurrently(t *testi
 		plan := []*message.Message{
 			message.New(&message.TextContent{Text: "hello"}),
 			{Role: message.RoleAssistant, Contents: []message.Content{
-				&message.FunctionCallContent{CallID: "callId1", Name: "Func", Arguments: map[string]any{"Arg": "hello"}},
-				&message.FunctionCallContent{CallID: "callId2", Name: "Func", Arguments: map[string]any{"Arg": "world"}},
+				&message.FunctionCallContent{CallID: "callId1", Name: "Func", Arguments: json.RawMessage(`{"Arg":"hello"}`)},
+				&message.FunctionCallContent{CallID: "callId2", Name: "Func", Arguments: json.RawMessage(`{"Arg":"world"}`)},
 			}},
 			{Role: message.RoleTool, Contents: []message.Content{
 				&message.FunctionResultContent{CallID: "callId1", Result: "hellohello"},
@@ -590,8 +590,8 @@ func TestFunctionInvoking_ParallelFunctionCallsMayBeInvokedConcurrently(t *testi
 		plan := []*message.Message{
 			message.New(&message.TextContent{Text: "hello"}),
 			{Role: message.RoleAssistant, Contents: []message.Content{
-				&message.FunctionCallContent{CallID: "callId1", Name: "Func", Arguments: map[string]any{"Arg": "hello"}},
-				&message.FunctionCallContent{CallID: "callId2", Name: "Func", Arguments: map[string]any{"Arg": "world"}},
+				&message.FunctionCallContent{CallID: "callId1", Name: "Func", Arguments: json.RawMessage(`{"Arg":"hello"}`)},
+				&message.FunctionCallContent{CallID: "callId2", Name: "Func", Arguments: json.RawMessage(`{"Arg":"world"}`)},
 			}},
 			{Role: message.RoleTool, Contents: []message.Content{
 				&message.FunctionResultContent{CallID: "callId1", Result: "hellohello"},
@@ -632,8 +632,8 @@ func TestFunctionInvoking_ConcurrentInvocationOfParallelCallsDisabledByDefault(t
 	plan := []*message.Message{
 		message.New(&message.TextContent{Text: "hello"}),
 		{Role: message.RoleAssistant, Contents: []message.Content{
-			&message.FunctionCallContent{CallID: "callId1", Name: "Func", Arguments: map[string]any{"Arg": "hello"}},
-			&message.FunctionCallContent{CallID: "callId2", Name: "Func", Arguments: map[string]any{"Arg": "world"}},
+			&message.FunctionCallContent{CallID: "callId1", Name: "Func", Arguments: json.RawMessage(`{"Arg":"hello"}`)},
+			&message.FunctionCallContent{CallID: "callId2", Name: "Func", Arguments: json.RawMessage(`{"Arg":"world"}`)},
 		}},
 		{Role: message.RoleTool, Contents: []message.Content{
 			&message.FunctionResultContent{CallID: "callId1", Result: "hellohello"},
@@ -826,10 +826,11 @@ func createFunctionCallIterationPlan(callIndex *int, shouldThrow ...bool) []*mes
 		*callIndex++
 		callID := fmt.Sprintf("callId%d", thisCallIndex)
 
+		arguments, _ := json.Marshal(map[string]any{"shouldThrow": callShouldThrow, "callIndex": thisCallIndex})
 		assistantContents = append(assistantContents, &message.FunctionCallContent{
 			CallID:    callID,
 			Name:      "Func",
-			Arguments: map[string]any{"shouldThrow": callShouldThrow, "callIndex": thisCallIndex},
+			Arguments: json.RawMessage(arguments),
 		})
 
 		result := "Success"
@@ -969,13 +970,13 @@ func TestFunctionInvoking_KeepsFunctionCallingContent(t *testing.T) {
 			&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
 		}},
 		{Role: message.RoleAssistant, Contents: []message.Content{
-			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: map[string]any{"i": 42}},
+			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)},
 		}},
 		{Role: message.RoleTool, Contents: []message.Content{
 			&message.FunctionResultContent{CallID: "callId2", Result: "Result 2: 42"},
 		}},
 		{Role: message.RoleAssistant, Contents: []message.Content{
-			&message.FunctionCallContent{CallID: "callId3", Name: "VoidReturn", Arguments: map[string]any{"i": 43}},
+			&message.FunctionCallContent{CallID: "callId3", Name: "VoidReturn", Arguments: json.RawMessage(`{"i":43}`)},
 			&message.TextContent{Text: "more"},
 		}},
 		{Role: message.RoleTool, Contents: []message.Content{
@@ -1041,8 +1042,8 @@ func TestFunctionInvoking_TerminateOnUnknownCalls(t *testing.T) {
 			fullPlan := []*message.Message{
 				message.New(&message.TextContent{Text: "hello"}),
 				{Role: message.RoleAssistant, Contents: []message.Content{
-					&message.FunctionCallContent{CallID: "callId1", Name: "UnknownFunc", Arguments: map[string]any{"i": 1}},
-					&message.FunctionCallContent{CallID: "callId2", Name: "KnownFunc", Arguments: map[string]any{"i": 2}},
+					&message.FunctionCallContent{CallID: "callId1", Name: "UnknownFunc", Arguments: json.RawMessage(`{"i":1}`)},
+					&message.FunctionCallContent{CallID: "callId2", Name: "KnownFunc", Arguments: json.RawMessage(`{"i":2}`)},
 				}},
 				{Role: message.RoleTool, Contents: []message.Content{
 					&message.FunctionResultContent{CallID: "callId1", Result: "Error: Requested function \"UnknownFunc\" not found."},

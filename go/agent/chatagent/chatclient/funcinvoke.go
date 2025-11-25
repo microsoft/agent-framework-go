@@ -5,7 +5,6 @@ package chatclient
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"iter"
@@ -701,25 +700,6 @@ func (f *functionInvoking) processFunctionCall(ctx context.Context, tools map[st
 			nil,
 		)
 	}
-	var args map[string]any
-	if funcCall.Arguments != nil {
-		switch v := funcCall.Arguments.(type) {
-		case map[string]any:
-			args = v
-		default:
-			data, err := json.Marshal(v)
-			if err == nil {
-				err = json.Unmarshal(data, &args)
-			}
-			if err != nil {
-				return f.createFunctionResult(
-					funcCall.CallID,
-					fmt.Sprintf("Error: Unable to parse function arguments: %v", err),
-					nil,
-				)
-			}
-		}
-	}
 	var result any
 	var err error
 	func() {
@@ -732,7 +712,7 @@ func (f *functionInvoking) processFunctionCall(ctx context.Context, tools map[st
 				}
 			}
 		}()
-		result, err = tl.Call(ctx, args)
+		result, err = tl.Call(ctx, funcCall.Arguments)
 	}()
 
 	return f.createFunctionResult(funcCall.CallID, result, err)

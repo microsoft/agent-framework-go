@@ -133,14 +133,10 @@ func (a *client) Response(ctx context.Context, opts *chatclient.ChatOptions, mes
 	choice := resp.Choices[0]
 	contents := make([]message.Content, 0, 1+len(choice.Message.ToolCalls))
 	for _, tc := range choice.Message.ToolCalls {
-		args, err := unmarshalArgs(tc.Function.Arguments)
-		if err != nil {
-			return nil, err
-		}
 		contents = append(contents, &message.FunctionCallContent{
 			CallID:    tc.ID,
 			Name:      tc.Function.Name,
-			Arguments: args,
+			Arguments: json.RawMessage(tc.Function.Arguments),
 		})
 	}
 	if choice.Message.Content != "" {
