@@ -19,7 +19,8 @@ const (
 )
 
 type Tool interface {
-	ToolInfo() (name string, description string)
+	Name() string
+	Description() string
 }
 
 type FuncTool interface {

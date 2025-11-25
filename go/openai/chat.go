@@ -17,12 +17,31 @@ import (
 	"github.com/microsoft/agent-framework/go/format/jsonformat"
 	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/tool"
-	"github.com/microsoft/agent-framework/go/tool/websearchtool"
+	"github.com/microsoft/agent-framework/go/tool/hostedtool"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/shared"
 )
+
+// NewWebSearchTool creates a new [hostedtool.WebSearch] with the specified user location.
+// All parameters are optional; pass empty strings for any unknown values.
+//
+// SearchContextSize is the high level guidance for the amount of context window space to use for the
+// search. One of `low`, `medium`, or `high`. `medium` is the default.
+func NewWebSearchTool(city, region, country, timezone, searchContextSize string) *hostedtool.WebSearch {
+	return &hostedtool.WebSearch{
+		AdditionalProperties: map[string]any{
+			"user_location": map[string]string{
+				"city":     city,
+				"region":   region,
+				"country":  country,
+				"timezone": timezone,
+			},
+			"search_context_size": searchContextSize,
+		},
+	}
+}
 
 var _ chatclient.Client = (*client)(nil)
 var _ chatclient.StructuredResponseClient = (*client)(nil)
@@ -234,25 +253,30 @@ func (a *client) buildCompletionParams(options *chatclient.ChatOptions, messages
 		}
 		for _, tl := range options.Tools {
 			switch tl := tl.(type) {
-			case *websearchtool.HostedWebSearch:
+			case *hostedtool.WebSearch:
 				if location, ok := tl.AdditionalProperties["user_location"]; ok {
 					if location, ok := location.(map[string]string); ok {
-						if city, ok := location["city"]; ok {
+						if city, ok := location["city"]; ok && city != "" {
 							params.WebSearchOptions.UserLocation.Approximate.City = openai.String(city)
 						}
-						if region, ok := location["region"]; ok {
+						if region, ok := location["region"]; ok && region != "" {
 							params.WebSearchOptions.UserLocation.Approximate.Region = openai.String(region)
 						}
-						if country, ok := location["country"]; ok {
+						if country, ok := location["country"]; ok && country != "" {
 							params.WebSearchOptions.UserLocation.Approximate.Country = openai.String(country)
 						}
-						if timezone, ok := location["timezone"]; ok {
+						if timezone, ok := location["timezone"]; ok && timezone != "" {
 							params.WebSearchOptions.UserLocation.Approximate.Timezone = openai.String(timezone)
 						}
 					}
 				}
+				if contextSize, ok := tl.AdditionalProperties["context_size"]; ok {
+					if contextSize, ok := contextSize.(string); ok && contextSize != "" {
+						params.WebSearchOptions.SearchContextSize = contextSize
+					}
+				}
 			case tool.FuncTool:
-				name, description := tl.ToolInfo()
+				name, description := tl.Name(), tl.Description()
 				var funcParams map[string]any
 				switch schema := tl.Schema().(type) {
 				case map[string]any:

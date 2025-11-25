@@ -48,8 +48,12 @@ type Tool struct {
 	Handler Handler
 }
 
-func (t *Tool) ToolInfo() (name string, description string) {
-	return t.Func.Name, t.Func.Description
+func (t *Tool) Name() string {
+	return t.Func.Name
+}
+
+func (t *Tool) Description() string {
+	return t.Func.Description
 }
 
 func (t *Tool) Schema() any {

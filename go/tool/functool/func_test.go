@@ -30,7 +30,7 @@ func TestFuncTool_Basic(t *testing.T) {
 		t.Fatalf("expected no error creating FuncTool, got: %v", err)
 	}
 
-	name, desc := tl.ToolInfo()
+	name, desc := tl.Name(), tl.Description()
 	if name != "test_func" {
 		t.Errorf("expected name 'test_func', got %q", name)
 	}
@@ -60,7 +60,7 @@ func TestFuncTool_MustNew(t *testing.T) {
 		t.Fatal("expected tool, got nil")
 	}
 
-	name, _ := tl.ToolInfo()
+	name, _ := tl.Name(), tl.Description()
 	if name != "must_func" {
 		t.Errorf("expected name 'must_func', got %q", name)
 	}

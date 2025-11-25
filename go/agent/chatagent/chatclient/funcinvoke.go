@@ -398,7 +398,7 @@ func checkForApprovalRequiringFCC(functionCalls []*message.FunctionCallContent, 
 	for ; lastApprovalCheckedFCCIdx < len(functionCalls); lastApprovalCheckedFCCIdx++ {
 		fcc := functionCalls[lastApprovalCheckedFCCIdx]
 		for _, t := range approvalRequiredFunctions {
-			if tname, _ := t.ToolInfo(); tname == fcc.Name {
+			if t.Name() == fcc.Name {
 				hasApprovalRequiringFcc = true
 				break
 			}
@@ -532,8 +532,7 @@ func (f *functionInvoking) createToolsMap(opts *ChatOptions) (mtools map[string]
 		if mtools == nil {
 			mtools = make(map[string]tool.Tool)
 		}
-		name, _ := t.ToolInfo()
-		mtools[name] = t
+		mtools[t.Name()] = t
 		if !anyRequiredApproval {
 			if _, ok := t.(tool.ApprovalRequiredTool); ok {
 				anyRequiredApproval = true
@@ -590,7 +589,7 @@ func replaceFunctionCallsWithApprovalRequests(msgs []*message.Message, tools map
 			allFunctionCallContentIndices = append(allFunctionCallContentIndices, entry{i, j})
 			if !requiresApproval {
 				for _, t := range tools {
-					if tname, _ := t.ToolInfo(); tname == fcc.Name {
+					if t.Name() == fcc.Name {
 						if _, ok := t.(tool.ApprovalRequiredTool); ok {
 							requiresApproval = true
 							break

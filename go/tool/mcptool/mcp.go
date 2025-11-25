@@ -94,8 +94,12 @@ func newMCPToolWrapper(session *mcp.ClientSession, tool *mcp.Tool) *mcpWrapper {
 	}
 }
 
-func (w *mcpWrapper) ToolInfo() (name string, description string) {
-	return w.tool.Name, w.tool.Description
+func (w *mcpWrapper) Name() string {
+	return w.tool.Name
+}
+
+func (w *mcpWrapper) Description() string {
+	return w.tool.Description
 }
 
 func (w *mcpWrapper) Schema() any {
