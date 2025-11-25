@@ -270,7 +270,7 @@ func (a *client) buildCompletionParams(options *chatclient.ChatOptions, messages
 						}
 					}
 				}
-				if contextSize, ok := tl.AdditionalProperties["context_size"]; ok {
+				if contextSize, ok := tl.AdditionalProperties["search_context_size"]; ok {
 					if contextSize, ok := contextSize.(string); ok && contextSize != "" {
 						params.WebSearchOptions.SearchContextSize = contextSize
 					}
