@@ -165,7 +165,7 @@ func (r *RunResponseUpdate) UserInputRequests() iter.Seq[message.Content] {
 // The provided thread is used for the agent's context during invocations,
 // or nil to create a new thread for each invocation.
 func FuncTool(agent Agent, thread memory.Thread) tool.FuncTool {
-	return &functool{
+	return functool{
 		name:        agent.Name(),
 		description: agent.Description(),
 		thread:      thread,
