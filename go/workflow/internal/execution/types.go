@@ -35,7 +35,7 @@ func NewMessageEnvelope(message any, declaredType reflect.Type, sourceID, target
 		declaredType = reflect.TypeOf(message)
 	}
 	if !reflect.TypeOf(message).AssignableTo(declaredType) {
-		return nil, fmt.Errorf("rhe declared type %q is not compatible with the message instance of type %q", declaredType, reflect.TypeOf(message))
+		return nil, fmt.Errorf("the declared type %q is not compatible with the message instance of type %q", declaredType, reflect.TypeOf(message))
 	}
 	return &MessageEnvelope{
 		Message:      message,

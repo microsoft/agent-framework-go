@@ -161,7 +161,7 @@ func (s *streamingRunEventStream) runLoop() {
 		if s.stepRunner.HasUnservicedRequests() {
 			s.setStatus(workflow.RunStatusPendingRequests)
 		} else {
-			s.setStatus(workflow.RunStatusIddle)
+			s.setStatus(workflow.RunStatusIdle)
 		}
 
 		// Signal completion to consumer so they can check status and decide whether to continue
@@ -241,7 +241,7 @@ func (s *streamingRunEventStream) TakeEventStream(ctx context.Context, blockOnPe
 					// Check if we should stop streaming based on the status captured at completion time
 					// - Idle: Workflow completed, no pending requests
 					// - Ended: Run loop cancelled
-					if signal.status == workflow.RunStatusIddle || signal.status == workflow.RunStatusEnded {
+					if signal.status == workflow.RunStatusIdle || signal.status == workflow.RunStatusEnded {
 						return
 					}
 
@@ -385,7 +385,7 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 			if l.stepRunner.HasUnservicedRequests() {
 				l.setStatus(workflow.RunStatusPendingRequests)
 			} else {
-				l.setStatus(workflow.RunStatusIddle)
+				l.setStatus(workflow.RunStatusIdle)
 			}
 			// Remove event handler
 			handlers := l.stepRunner.OutgoingEvents().EventRaised
@@ -438,7 +438,7 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 			if l.stepRunner.HasUnservicedRequests() {
 				l.setStatus(workflow.RunStatusPendingRequests)
 			} else {
-				l.setStatus(workflow.RunStatusIddle)
+				l.setStatus(workflow.RunStatusIdle)
 			}
 
 			// Check if we should break
@@ -467,7 +467,7 @@ func (l *lockstepRunEventStream) shouldBreak(status workflow.RunStatus, blockOnP
 	if ctx.Err() != nil {
 		return true
 	}
-	if status == workflow.RunStatusIddle || status == workflow.RunStatusEnded {
+	if status == workflow.RunStatusIdle || status == workflow.RunStatusEnded {
 		return true
 	}
 	if status == workflow.RunStatusPendingRequests && !blockOnPendingRequest {

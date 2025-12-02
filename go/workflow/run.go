@@ -11,7 +11,7 @@ type RunStatus int
 
 const (
 	RunStatusNotStarted RunStatus = iota
-	RunStatusIddle
+	RunStatusIdle
 	RunStatusPendingRequests
 	RunStatusEnded
 	RunStatusRunning
