@@ -63,6 +63,28 @@ func (e SuperStepStartedEvent) Data() any {
 	return e.StartInfo
 }
 
+// SuperStepCompletionInfo contains information about a completed super step.
+type SuperStepCompletionInfo struct {
+	ActivatedExecutors    []string
+	InstantiatedExecutors []string
+	HasPendingMessages    bool
+	HasPendingRequests    bool
+	StateUpdated          bool
+	CheckpointInfo        any // TODO: Use proper CheckpointInfo type
+}
+
+var _ Event = SuperStepCompletedEvent{}
+
+// SuperStepCompletedEvent is an event triggered when a super step completes.
+type SuperStepCompletedEvent struct {
+	StepNumber     int
+	CompletionInfo *SuperStepCompletionInfo
+}
+
+func (e SuperStepCompletedEvent) Data() any {
+	return e.CompletionInfo
+}
+
 var _ Event = StartedEvent{}
 
 // StartedEvent is an event triggered when the workflow starts.
@@ -98,6 +120,16 @@ type OutputEvent struct {
 
 func (e OutputEvent) Data() any {
 	return e.Output
+}
+
+var _ Event = RequestHaltEvent{}
+
+type RequestHaltEvent struct {
+	Result any
+}
+
+func (e RequestHaltEvent) Data() any {
+	return e.Result
 }
 
 var _ Event = RequestInfoEvent{}
