@@ -324,10 +324,15 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 		var contents []openai.ChatCompletionContentPartTextParam
 		for _, c := range msg.Contents {
 			if tc, ok := c.(*message.TextContent); ok {
-				contents = append(contents, openai.ChatCompletionContentPartTextParam{
-					Text: tc.Text,
-				})
+				if tc.Text != "" {
+					contents = append(contents, openai.ChatCompletionContentPartTextParam{
+						Text: tc.Text,
+					})
+				}
 			}
+		}
+		if len(contents) == 0 {
+			return nil, nil
 		}
 		return []openai.ChatCompletionMessageParamUnion{openai.SystemMessage(contents)}, nil
 
@@ -336,7 +341,9 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 		for _, c := range msg.Contents {
 			switch c := c.(type) {
 			case *message.TextContent:
-				contents = append(contents, openai.TextContentPart(c.Text))
+				if c.Text != "" {
+					contents = append(contents, openai.TextContentPart(c.Text))
+				}
 			case *message.URIContent:
 				switch c.TopLevelMediaType() {
 				case "image":
@@ -379,6 +386,9 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 				}))
 			}
 		}
+		if len(contents) == 0 {
+			return nil, nil
+		}
 		return []openai.ChatCompletionMessageParamUnion{openai.UserMessage(contents)}, nil
 
 	case message.RoleAssistant:
@@ -387,11 +397,13 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 		for _, c := range msg.Contents {
 			switch c := c.(type) {
 			case *message.TextContent:
-				contents = append(contents, openai.ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion{
-					OfText: &openai.ChatCompletionContentPartTextParam{
-						Text: c.Text,
-					},
-				})
+				if c.Text != "" {
+					contents = append(contents, openai.ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion{
+						OfText: &openai.ChatCompletionContentPartTextParam{
+							Text: c.Text,
+						},
+					})
+				}
 			case *message.FunctionCallContent:
 				args, err := marshalArgs(c.Arguments)
 				if err != nil {
@@ -413,6 +425,9 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 					},
 				})
 			}
+		}
+		if len(contents) == 0 && len(toolCalls) == 0 {
+			return nil, nil
 		}
 		return []openai.ChatCompletionMessageParamUnion{{
 			OfAssistant: &openai.ChatCompletionAssistantMessageParam{
