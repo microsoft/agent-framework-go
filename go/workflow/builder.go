@@ -224,7 +224,7 @@ func (wb *Builder) validate(validateOrphans bool) bool {
 		}
 	}
 	if len(remainingExecutors) > 0 {
-		keys := slices.Collect(maps.Keys(wb.unboundExecutors))
+		keys := slices.Collect(maps.Keys(remainingExecutors))
 		slices.Sort(keys)
 		wb.err = fmt.Errorf("workflow cannot be built because there are orphaned executors: %v", keys)
 		return false

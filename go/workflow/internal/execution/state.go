@@ -4,132 +4,14 @@ package execution
 
 import (
 	"fmt"
+	"hash/maphash"
 	"iter"
 	"maps"
-	"reflect"
 
-	"github.com/microsoft/agent-framework/go/internal/concurrent"
+	"github.com/microsoft/agent-framework/go/internal/hashmap"
 	"github.com/microsoft/agent-framework/go/workflow"
 	"github.com/microsoft/agent-framework/go/workflow/internal/checkpoint"
 )
-
-type StepTracer interface {
-	TraceActivated(executorID string)
-	TraceCheckpointCreated(workflow.CheckpointInfo)
-	TraceInstantiated(executorID string)
-	TraceStatePublished()
-}
-
-// MessageEnvelope wraps a message with routing and tracing information.
-type MessageEnvelope struct {
-	Message      any
-	SourceID     string
-	TargetID     string
-	TraceContext map[string]string
-
-	declaredType workflow.TypeID
-}
-
-func NewMessageEnvelope(message any, declaredType reflect.Type, sourceID, targetID string) (*MessageEnvelope, error) {
-	if declaredType == nil {
-		declaredType = reflect.TypeOf(message)
-	}
-	if !reflect.TypeOf(message).AssignableTo(declaredType) {
-		return nil, fmt.Errorf("the declared type %q is not compatible with the message instance of type %q", declaredType, reflect.TypeOf(message))
-	}
-	return &MessageEnvelope{
-		Message:      message,
-		declaredType: workflow.NewTypeID(declaredType),
-		SourceID:     sourceID,
-		TargetID:     targetID,
-	}, nil
-}
-
-func NewMessageEnvelopeFromPortable(envelope *checkpoint.PortableMessageEnvelope) *MessageEnvelope {
-	return &MessageEnvelope{
-		Message:      envelope.Message.Any(),
-		declaredType: envelope.MessageType,
-		SourceID:     envelope.SourceID,
-		TargetID:     envelope.TargetID,
-		TraceContext: nil,
-	}
-}
-
-func (e *MessageEnvelope) MessageType() workflow.TypeID {
-	if e.declaredType.IsZero() {
-		return workflow.NewTypeID(reflect.TypeOf(e.Message))
-	}
-	return e.declaredType
-}
-
-func (e *MessageEnvelope) Portable() *checkpoint.PortableMessageEnvelope {
-	return &checkpoint.PortableMessageEnvelope{
-		MessageType: e.MessageType(),
-		Message:     workflow.AnyPortableValue(e.Message),
-		SourceID:    e.SourceID,
-		TargetID:    e.TargetID,
-	}
-}
-
-// IsExternal returns true if this message is from an external source.
-func (e *MessageEnvelope) IsExternal() bool {
-	return e.SourceID == ""
-}
-
-// StepContext manages the queued messages for a single workflow step.
-// It provides thread-safe access to message queues for each executor.
-type StepContext struct {
-	queuedMessages concurrent.Map[string, *concurrent.Queue[*MessageEnvelope]]
-}
-
-// HasMessages returns true if there are any queued messages.
-func (s *StepContext) HasMessages() bool {
-	for _, value := range s.queuedMessages.All() {
-		if !value.IsEmpty() {
-			return true
-		}
-	}
-	return false
-}
-
-func (s *StepContext) Keys() []string {
-	var keys []string
-	for key := range s.queuedMessages.All() {
-		keys = append(keys, key)
-	}
-	return keys
-}
-
-// MessagesFor returns the messages queued for the given target executor.
-// It initializes an empty slice if the target doesn't exist yet.
-func (s *StepContext) MessagesFor(target string) *concurrent.Queue[*MessageEnvelope] {
-	v, _ := s.queuedMessages.LoadOrStore(target, &concurrent.Queue[*MessageEnvelope]{})
-	return v
-}
-
-// ExportMessages exports all queued messages for checkpointing.
-func (s *StepContext) ExportMessages() map[string][]*checkpoint.PortableMessageEnvelope {
-	result := make(map[string][]*checkpoint.PortableMessageEnvelope)
-	for identity, envelopes := range s.queuedMessages.All() {
-		exported := make([]*checkpoint.PortableMessageEnvelope, 0, envelopes.Len())
-		for env := range envelopes.All() {
-			exported = append(exported, env.Portable())
-		}
-		result[identity] = exported
-	}
-	return result
-}
-
-// ImportMessages imports queued messages from a checkpoint.
-func (s *StepContext) ImportMessages(messages map[string][]*checkpoint.PortableMessageEnvelope) {
-	for identity, envelopes := range messages {
-		var imported concurrent.Queue[*MessageEnvelope]
-		for _, env := range envelopes {
-			imported.Enqueue(NewMessageEnvelopeFromPortable(env))
-		}
-		s.queuedMessages.Store(identity, &imported)
-	}
-}
 
 // StateScope manages state for a single scope (executor + optional scope name).
 type StateScope struct {
@@ -226,56 +108,84 @@ type UpdateKey struct {
 	Key     string
 }
 
+func (u UpdateKey) Equal(other UpdateKey) bool {
+	return u.IsMatchingScope(other.ScopeID, true) && u.Key == other.Key
+}
+
 // IsMatchingScope returns true if this update key matches the given scope.
 func (u UpdateKey) IsMatchingScope(scopeID workflow.ScopeID, strict bool) bool {
-	if strict {
-		return u.ScopeID == scopeID
-	}
-	// For non-strict, match executor ID only
-	return u.ScopeID.ExecutorID == scopeID.ExecutorID
+	return u.ScopeID.Equal(scopeID) && (!strict || u.ScopeID.ExecutorID == scopeID.ExecutorID)
+}
+
+func (s UpdateKey) Hash(h *maphash.Hash) {
+	h.WriteString(s.ScopeID.ExecutorID)
+	h.WriteString(s.ScopeID.ScopeName)
+	h.WriteString(s.Key)
+}
+
+var theSeed = maphash.MakeSeed()
+
+type updateKeyHasher struct{}
+
+var UpdateKeyHasher hashmap.Hasher[UpdateKey] = updateKeyHasher{}
+
+func (updateKeyHasher) Hash(s UpdateKey) uint64 {
+	var mh maphash.Hash
+	mh.SetSeed(theSeed)
+	s.Hash(&mh)
+	return mh.Sum64()
+}
+
+func (h updateKeyHasher) Equal(a, b UpdateKey) bool {
+	return a.Equal(b)
 }
 
 // StateManager manages state for all executors in a workflow run.
 // A zero value is valid is ready to use.
 type StateManager struct {
-	scopes        map[workflow.ScopeID]*StateScope
-	queuedUpdates map[UpdateKey]StateUpdate
+	scopes        hashmap.Map[workflow.ScopeID, *StateScope]
+	queuedUpdates hashmap.Map[UpdateKey, StateUpdate]
+}
+
+func NewStateManager() StateManager {
+	return StateManager{
+		scopes:        *hashmap.NewMap[workflow.ScopeID, *StateScope](workflow.ScopeIDHasher),
+		queuedUpdates: *hashmap.NewMap[UpdateKey, StateUpdate](UpdateKeyHasher),
+	}
 }
 
 // getOrCreateScope gets or creates a state scope.
 func (sm *StateManager) getOrCreateScope(scopeID workflow.ScopeID) *StateScope {
-	if scope, ok := sm.scopes[scopeID]; ok {
+	if scope, ok := sm.scopes.At(scopeID); ok {
 		return scope
 	}
-
-	if sm.scopes == nil {
-		sm.scopes = make(map[workflow.ScopeID]*StateScope)
-	}
 	scope := NewStateScope(scopeID)
-	sm.scopes[scopeID] = scope
+	sm.scopes.Set(scopeID, scope)
 	return scope
 }
 
 // getUpdatesForScopeStrict returns all queued updates for a specific scope.
-func (sm *StateManager) getUpdatesForScopeStrict(scopeID workflow.ScopeID) []UpdateKey {
-	var keys []UpdateKey
-	for key := range sm.queuedUpdates {
-		if key.IsMatchingScope(scopeID, true) {
-			keys = append(keys, key)
+func (sm *StateManager) getUpdatesForScopeStrict(scopeID workflow.ScopeID) iter.Seq[UpdateKey] {
+	return func(yield func(UpdateKey) bool) {
+		for key := range sm.queuedUpdates.Keys() {
+			if key.IsMatchingScope(scopeID, true) {
+				if !yield(key) {
+					return
+				}
+			}
 		}
 	}
-	return keys
 }
 
 // ClearState clears all state in the given scope.
 func (sm *StateManager) ClearState(executorID string, scopeName string) error {
-	scopeID := workflow.ScopeID{ExecutorID: executorID, Name: scopeName}
+	scopeID := workflow.ScopeID{ExecutorID: executorID, ScopeName: scopeName}
 	return sm.ClearStateByID(scopeID)
 }
 
 // ClearStateByID clears all state for the given scope ID.
 func (sm *StateManager) ClearStateByID(scopeID workflow.ScopeID) error {
-	scope, exists := sm.scopes[scopeID]
+	scope, exists := sm.scopes.At(scopeID)
 	if !exists {
 		return nil
 	}
@@ -283,23 +193,17 @@ func (sm *StateManager) ClearStateByID(scopeID workflow.ScopeID) error {
 	keysToDelete := scope.ReadKeys()
 
 	// Mark existing updates as deletes
-	for _, updateKey := range sm.getUpdatesForScopeStrict(scopeID) {
-		update := sm.queuedUpdates[updateKey]
+	for updateKey := range sm.getUpdatesForScopeStrict(scopeID) {
+		update, _ := sm.queuedUpdates.At(updateKey)
 		if !update.IsDelete {
-			if sm.queuedUpdates == nil {
-				sm.queuedUpdates = make(map[UpdateKey]StateUpdate)
-			}
-			sm.queuedUpdates[updateKey] = DeleteStateUpdate(update.Key)
+			sm.queuedUpdates.Set(updateKey, DeleteStateUpdate(update.Key))
 		}
 		delete(keysToDelete, update.Key)
 	}
 
 	// Queue deletes for remaining keys
 	for key := range keysToDelete {
-		if sm.queuedUpdates == nil {
-			sm.queuedUpdates = make(map[UpdateKey]StateUpdate)
-		}
-		sm.queuedUpdates[UpdateKey{ScopeID: scopeID, Key: key}] = DeleteStateUpdate(key)
+		sm.queuedUpdates.Set(UpdateKey{ScopeID: scopeID, Key: key}, DeleteStateUpdate(key))
 	}
 
 	return nil
@@ -307,8 +211,8 @@ func (sm *StateManager) ClearStateByID(scopeID workflow.ScopeID) error {
 
 // applyUnpublishedUpdates applies queued updates to a set of keys.
 func (sm *StateManager) applyUnpublishedUpdates(scopeID workflow.ScopeID, keys map[string]struct{}) map[string]struct{} {
-	for _, key := range sm.getUpdatesForScopeStrict(scopeID) {
-		update := sm.queuedUpdates[key]
+	for key := range sm.getUpdatesForScopeStrict(scopeID) {
+		update, _ := sm.queuedUpdates.At(key)
 		if update.IsDelete {
 			delete(keys, update.Key)
 		} else {
@@ -321,7 +225,7 @@ func (sm *StateManager) applyUnpublishedUpdates(scopeID workflow.ScopeID, keys m
 
 // ReadKeys returns all keys in the given scope.
 func (sm *StateManager) ReadKeys(executorID string, scopeName string) map[string]struct{} {
-	scopeID := workflow.ScopeID{ExecutorID: executorID, Name: scopeName}
+	scopeID := workflow.ScopeID{ExecutorID: executorID, ScopeName: scopeName}
 	return sm.ReadKeysByID(scopeID)
 }
 
@@ -334,7 +238,7 @@ func (sm *StateManager) ReadKeysByID(scopeID workflow.ScopeID) map[string]struct
 
 // ReadState reads state from the given scope.
 func (sm *StateManager) ReadState(executorID string, scopeName string, key string) (workflow.PortableValue, bool, error) {
-	scopeID := workflow.ScopeID{ExecutorID: executorID, Name: scopeName}
+	scopeID := workflow.ScopeID{ExecutorID: executorID, ScopeName: scopeName}
 	return sm.ReadStateByID(scopeID, key)
 }
 
@@ -347,7 +251,7 @@ func (sm *StateManager) ReadStateByID(scopeID workflow.ScopeID, key string) (wor
 	stateKey := UpdateKey{ScopeID: scopeID, Key: key}
 
 	// Check queued updates first
-	if update, hasUpdate := sm.queuedUpdates[stateKey]; hasUpdate {
+	if update, hasUpdate := sm.queuedUpdates.At(stateKey); hasUpdate {
 		if update.IsDelete || update.Value == nil {
 			return workflow.PortableValue{}, false, nil
 		}
@@ -362,7 +266,7 @@ func (sm *StateManager) ReadStateByID(scopeID workflow.ScopeID, key string) (wor
 
 // ReadOrInitState reads state or initializes it with the factory function.
 func (sm *StateManager) ReadOrInitState(executorID string, scopeName string, key string, factory func() any) (workflow.PortableValue, error) {
-	scopeID := workflow.ScopeID{ExecutorID: executorID, Name: scopeName}
+	scopeID := workflow.ScopeID{ExecutorID: executorID, ScopeName: scopeName}
 	return sm.ReadOrInitStateByID(scopeID, key, factory)
 }
 
@@ -389,7 +293,7 @@ func (sm *StateManager) ReadOrInitStateByID(scopeID workflow.ScopeID, key string
 
 // WriteState writes state to the given scope.
 func (sm *StateManager) WriteState(executorID string, scopeName string, key string, value any) error {
-	scopeID := workflow.ScopeID{ExecutorID: executorID, Name: scopeName}
+	scopeID := workflow.ScopeID{ExecutorID: executorID, ScopeName: scopeName}
 	return sm.WriteStateByID(scopeID, key, value)
 }
 
@@ -399,18 +303,15 @@ func (sm *StateManager) WriteStateByID(scopeID workflow.ScopeID, key string, val
 		return fmt.Errorf("key cannot be empty")
 	}
 
-	if sm.queuedUpdates == nil {
-		sm.queuedUpdates = make(map[UpdateKey]StateUpdate)
-	}
 	stateKey := UpdateKey{ScopeID: scopeID, Key: key}
-	sm.queuedUpdates[stateKey] = UpdateStateUpdate(key, value)
+	sm.queuedUpdates.Set(stateKey, UpdateStateUpdate(key, value))
 
 	return nil
 }
 
 // ClearStateKey clears a specific key in the given scope.
 func (sm *StateManager) ClearStateKey(executorID string, scopeName string, key string) error {
-	scopeID := workflow.ScopeID{ExecutorID: executorID, Name: scopeName}
+	scopeID := workflow.ScopeID{ExecutorID: executorID, ScopeName: scopeName}
 	return sm.ClearStateKeyByID(scopeID, key)
 }
 
@@ -420,11 +321,8 @@ func (sm *StateManager) ClearStateKeyByID(scopeID workflow.ScopeID, key string) 
 		return fmt.Errorf("key cannot be empty")
 	}
 
-	if sm.queuedUpdates == nil {
-		sm.queuedUpdates = make(map[UpdateKey]StateUpdate)
-	}
 	stateKey := UpdateKey{ScopeID: scopeID, Key: key}
-	sm.queuedUpdates[stateKey] = DeleteStateUpdate(key)
+	sm.queuedUpdates.Set(stateKey, DeleteStateUpdate(key))
 
 	return nil
 }
@@ -432,80 +330,70 @@ func (sm *StateManager) ClearStateKeyByID(scopeID workflow.ScopeID, key string) 
 // PublishUpdates publishes all queued updates to their respective scopes.
 func (sm *StateManager) PublishUpdates(tracer StepTracer) error {
 	// Aggregate updates by scope
-	updatesByScope := make(map[workflow.ScopeID]map[string][]StateUpdate)
+	updatesByScope := hashmap.NewMap[workflow.ScopeID, map[string][]StateUpdate](workflow.ScopeIDHasher)
 
-	for key, update := range sm.queuedUpdates {
-		if _, ok := updatesByScope[key.ScopeID]; !ok {
-			updatesByScope[key.ScopeID] = make(map[string][]StateUpdate)
+	for key, update := range sm.queuedUpdates.All() {
+		if _, ok := updatesByScope.At(key.ScopeID); !ok {
+			updatesByScope.Set(key.ScopeID, make(map[string][]StateUpdate))
 		}
 
-		scopeUpdates := updatesByScope[key.ScopeID]
+		scopeUpdates, _ := updatesByScope.At(key.ScopeID)
 		scopeUpdates[key.Key] = append(scopeUpdates[key.Key], update)
 	}
 
-	if tracer != nil && len(updatesByScope) > 0 {
+	if tracer != nil && updatesByScope.Len() > 0 {
 		tracer.TraceStatePublished()
 	}
 
 	// Apply updates to each scope
-	for scopeID, updates := range updatesByScope {
-		scope := sm.scopes[scopeID]
-		if scope == nil {
-			if sm.scopes == nil {
-				sm.scopes = make(map[workflow.ScopeID]*StateScope)
-			}
-			scope = NewStateScope(scopeID)
-			sm.scopes[scopeID] = scope
-		}
-
-		if err := scope.WriteState(updates); err != nil {
+	for scopeID, updates := range updatesByScope.All() {
+		stateScope := sm.getOrCreateScope(scopeID)
+		if err := stateScope.WriteState(updates); err != nil {
 			return err
 		}
 	}
 
 	// Clear queued updates
-	clear(sm.queuedUpdates)
+	sm.queuedUpdates.Clear()
 
 	return nil
 }
 
 // ExportState exports all state for checkpointing.
-func (sm *StateManager) ExportState() (map[workflow.ScopeKey]workflow.PortableValue, error) {
-	if len(sm.queuedUpdates) != 0 {
+func (sm *StateManager) ExportState() (iter.Seq2[workflow.ScopeKey, workflow.PortableValue], error) {
+	if sm.queuedUpdates.Len() != 0 {
 		return nil, fmt.Errorf("cannot export state while there are queued updates. Call PublishUpdates() first")
 	}
 
-	result := make(map[workflow.ScopeKey]workflow.PortableValue)
-	for _, scope := range sm.scopes {
-		for key, value := range scope.ExportStates() {
-			scopeKey := workflow.ScopeKey{
-				ID:  scope.ScopeID(),
-				Key: key,
+	return func(yield func(workflow.ScopeKey, workflow.PortableValue) bool) {
+		for _, scope := range sm.scopes.All() {
+			for key, value := range scope.ExportStates() {
+				scopeKey := workflow.ScopeKey{
+					ID:  scope.ScopeID(),
+					Key: key,
+				}
+				if !yield(scopeKey, value) {
+					return
+				}
 			}
-			result[scopeKey] = value
 		}
-	}
-
-	return result, nil
+	}, nil
 }
 
 // ImportState imports state from a checkpoint.
 func (sm *StateManager) ImportState(cp *checkpoint.Checkpoint) error {
-	if len(sm.queuedUpdates) != 0 {
+	if sm.queuedUpdates.Len() != 0 {
 		return fmt.Errorf("cannot import state while there are queued updates. Call PublishUpdates() first")
 	}
 
-	clear(sm.queuedUpdates)
-	clear(sm.scopes)
+	sm.queuedUpdates.Clear()
+	sm.scopes.Clear()
 
-	for scopeKey, value := range cp.StateData {
-		scope, ok := sm.scopes[scopeKey.ID]
+	for scopeKey, value := range cp.StateData.All() {
+		scope, ok := sm.scopes.At(scopeKey.ID)
 		if !ok {
-			if sm.scopes == nil {
-				sm.scopes = make(map[workflow.ScopeID]*StateScope)
-			}
 			scope = NewStateScope(scopeKey.ID)
-			sm.scopes[scopeKey.ID] = scope
+			sm.scopes.Set(scopeKey.ID, scope)
 		}
 		scope.ImportState(scopeKey.Key, value)
 	}

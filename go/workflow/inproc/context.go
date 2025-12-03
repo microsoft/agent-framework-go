@@ -69,6 +69,7 @@ func newInProcessRunnerContext(
 		outgoingEvents:           outgoingEvents,
 		withCheckpointing:        withCheckpointing,
 		concurrentRunsEnabled:    enableConcurrentRuns,
+		stateManager:             execution.NewStateManager(),
 	}
 
 	ctx.edgeMap = execution.NewEdgeRunner(wf, tracer, ctx.EnsureExecutor)
@@ -382,9 +383,7 @@ func (proc *runnerContext) Bind(ctx context.Context, executorID string, traceCon
 			return result
 		},
 
-		ConcurrentRunsEnabled: func() bool {
-			return proc.concurrentRunsEnabled
-		},
+		ConcurrentRunsEnabled: proc.concurrentRunsEnabled,
 	}
 }
 
@@ -450,16 +449,6 @@ func (proc *runnerContext) DetachSuperstep(joinID string) bool {
 	_, existed := proc.joinedSubworkflowRunners[joinID]
 	delete(proc.joinedSubworkflowRunners, joinID)
 	return existed
-}
-
-// WithCheckpointing returns whether checkpointing is enabled.
-func (proc *runnerContext) WithCheckpointing() bool {
-	return proc.withCheckpointing
-}
-
-// ConcurrentRunsEnabled returns whether concurrent runs are enabled.
-func (proc *runnerContext) ConcurrentRunsEnabled() bool {
-	return proc.concurrentRunsEnabled
 }
 
 // EndRun marks the run as ended and cleans up resources.
