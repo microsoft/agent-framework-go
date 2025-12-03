@@ -215,7 +215,7 @@ func (s *StatefulExecutorCache[T]) cache(v T) {
 }
 
 func (s *StatefulExecutorCache[T]) InvokeWithState(ctx *Context, skipCache bool, fn func(ctx *Context, state T) (T, error)) error {
-	if !skipCache && !ctx.ConcurrentRunsEnabled() {
+	if !skipCache && !ctx.ConcurrentRunsEnabled {
 		state := s.stateCache
 		if !s.cached {
 			state = s.InitialStateFactory()
@@ -224,8 +224,10 @@ func (s *StatefulExecutorCache[T]) InvokeWithState(ctx *Context, skipCache bool,
 		if err != nil {
 			return err
 		}
-		if err := ctx.QueueStateUpdate(s.StateKey, s.ScopeName, newState); err != nil {
-			return err
+		if ctx.QueueStateUpdate != nil {
+			if err := ctx.QueueStateUpdate(s.StateKey, s.ScopeName, newState); err != nil {
+				return err
+			}
 		}
 		s.cache(newState)
 		return nil
@@ -237,6 +239,9 @@ func (s *StatefulExecutorCache[T]) InvokeWithState(ctx *Context, skipCache bool,
 	newState, err := fn(ctx, state.(T))
 	if err != nil {
 		return err
+	}
+	if ctx.QueueStateUpdate == nil {
+		return nil
 	}
 	return ctx.QueueStateUpdate(s.StateKey, s.ScopeName, newState)
 }

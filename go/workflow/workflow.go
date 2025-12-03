@@ -5,9 +5,12 @@ package workflow
 import (
 	"context"
 	"errors"
+	"hash/maphash"
 	"iter"
 	"reflect"
 	"sync/atomic"
+
+	"github.com/microsoft/agent-framework/go/internal/hashmap"
 )
 
 type TurnToken struct {
@@ -26,9 +29,72 @@ type ScopeKey struct {
 	Key string
 }
 
+func (s ScopeKey) Equal(other ScopeKey) bool {
+	return s.ID.Equal(other.ID) && s.Key == other.Key
+}
+
+func (s ScopeKey) Hash(h *maphash.Hash) {
+	s.ID.Hash(h)
+	h.WriteString(s.Key)
+}
+
+type scopeKeyHasher struct{}
+
+var ScopeKeyHasher hashmap.Hasher[ScopeKey] = scopeKeyHasher{}
+
+func (scopeKeyHasher) Hash(s ScopeKey) uint64 {
+	var mh maphash.Hash
+	mh.SetSeed(theSeed)
+	s.Hash(&mh)
+	return mh.Sum64()
+}
+
+func (h scopeKeyHasher) Equal(a, b ScopeKey) bool {
+	return a.Equal(b)
+}
+
+// ScopeID is a unique identifier for a scope within an executor. If a scope name is not provided, it references the
+// default scope private to the executor. Otherwise, regardless of the executorId, it references a shared
+// scope with the specified name.
 type ScopeID struct {
-	Name       string
+	_          [0]func() // disallow ==
+	ScopeName  string
 	ExecutorID string
+}
+
+func (s ScopeID) Equal(other ScopeID) bool {
+	if other.ScopeName == "" && s.ScopeName == "" {
+		return other.ExecutorID == s.ExecutorID
+	}
+	if other.ScopeName != "" && s.ScopeName != "" {
+		return other.ScopeName == s.ScopeName
+	}
+	return false
+}
+
+func (s ScopeID) Hash(h *maphash.Hash) {
+	if s.ScopeName == "" {
+		h.WriteString(s.ExecutorID)
+	} else {
+		h.WriteString(s.ScopeName)
+	}
+}
+
+var theSeed = maphash.MakeSeed()
+
+type scopeIDHasher struct{}
+
+var ScopeIDHasher hashmap.Hasher[ScopeID] = scopeIDHasher{}
+
+func (h scopeIDHasher) Hash(s ScopeID) uint64 {
+	var mh maphash.Hash
+	mh.SetSeed(theSeed)
+	s.Hash(&mh)
+	return mh.Sum64()
+}
+
+func (h scopeIDHasher) Equal(a, b ScopeID) bool {
+	return a.Equal(b)
 }
 
 type ProtocolDescriptor struct {
@@ -197,7 +263,7 @@ type Context struct {
 	TraceContext func() map[string]any
 
 	// ConcurrentRunsEnabled returns whether the current execution environment support concurrent runs against the same workflow instance.
-	ConcurrentRunsEnabled func() bool
+	ConcurrentRunsEnabled bool
 }
 
 func (ctx *Context) GetContext() context.Context {
