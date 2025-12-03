@@ -5,6 +5,7 @@ package checkpoint
 import (
 	"context"
 
+	"github.com/microsoft/agent-framework/go/internal/hashmap"
 	"github.com/microsoft/agent-framework/go/workflow"
 )
 
@@ -22,7 +23,7 @@ type Checkpoint struct {
 	StepNumber    int
 	WorkflowInfo  WorkflowInfo
 	RunnerData    RunnerStateData
-	StateData     map[workflow.ScopeKey]workflow.PortableValue
+	StateData     hashmap.Map[workflow.ScopeKey, workflow.PortableValue]
 	EdgeStateData map[string]workflow.PortableValue
 	Parent        workflow.CheckpointInfo
 }
