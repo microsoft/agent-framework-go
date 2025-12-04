@@ -136,12 +136,12 @@ func (a *Agent) sendMsg(ctx context.Context, options *agent.RunOptions, params *
 			yield(nil, err)
 			return
 		}
-		var contextID, taskID string
-		var update *agent.RunResponseUpdate
 		switch e := e.(type) {
 		case *a2a.Task:
-			contextID = e.ContextID
-			taskID = string(e.ID)
+			if err := a.updateThreadContextID(thread, e.ContextID, string(e.ID)); err != nil {
+				yield(nil, err)
+				return
+			}
 			now := time.Now()
 			for _, artifact := range e.Artifacts {
 				contents, err := partsToContents(artifact.Parts)
@@ -153,7 +153,7 @@ func (a *Agent) sendMsg(ctx context.Context, options *agent.RunOptions, params *
 				if e.Status.Timestamp != nil {
 					timestamp = *e.Status.Timestamp
 				}
-				update = &agent.RunResponseUpdate{
+				if !yield(&agent.RunResponseUpdate{
 					RawRepresentation:    artifact,
 					AdditionalProperties: artifact.Metadata,
 					AgentID:              id,
@@ -163,10 +163,15 @@ func (a *Agent) sendMsg(ctx context.Context, options *agent.RunOptions, params *
 					Role:                 message.RoleAssistant,
 					CreatedAt:            timestamp,
 					AuthorName:           name,
+				}, nil) {
+					return
 				}
 			}
 		case *a2a.Message:
-			contextID = e.ContextID
+			if err := a.updateThreadContextID(thread, e.ContextID, ""); err != nil {
+				yield(nil, err)
+				return
+			}
 			contents, err := partsToContents(e.Parts)
 			if err != nil {
 				yield(nil, err)
@@ -176,7 +181,7 @@ func (a *Agent) sendMsg(ctx context.Context, options *agent.RunOptions, params *
 			if e.Role == a2a.MessageRoleAgent {
 				role = message.RoleAssistant
 			}
-			update = &agent.RunResponseUpdate{
+			if !yield(&agent.RunResponseUpdate{
 				RawRepresentation:    e,
 				AdditionalProperties: e.Metadata,
 				AgentID:              id,
@@ -186,16 +191,11 @@ func (a *Agent) sendMsg(ctx context.Context, options *agent.RunOptions, params *
 				Contents:             contents,
 				AuthorName:           name,
 				CreatedAt:            time.Now(),
+			}, nil) {
+				return
 			}
 		default:
 			yield(nil, fmt.Errorf("unsupported response type: %T", e))
-			return
-		}
-		if err := a.updateThreadContextID(thread, contextID, taskID); err != nil {
-			yield(nil, err)
-			return
-		}
-		if !yield(update, nil) {
 			return
 		}
 	}
