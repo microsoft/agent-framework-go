@@ -1,11 +1,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 
 	"github.com/microsoft/agent-framework/go/agent"
-	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/openai"
 )
 
@@ -22,7 +22,7 @@ func main() {
 	// - AZURE_OPENAI_API_KEY
 	// - AZURE_OPENAI_ENDPOINT
 	// - AZURE_OPENAI_DEPLOYMENT_NAME
-	ag := openai.NewChatAgentAzure(openai.ClientConfig{
+	a := openai.NewChatAgentAzure(openai.ClientConfig{
 		APIKey:     os.Getenv("AZURE_OPENAI_API_KEY"),         // or set directly
 		Endpoint:   os.Getenv("AZURE_OPENAI_ENDPOINT"),        // e.g., "https://your-resource.openai.azure.com/"
 		Model:      os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), // e.g., "gpt-4o"
@@ -30,34 +30,33 @@ func main() {
 	}, nil)
 
 	// Example 1: Tool WILL be called (weather-related query)
-	nonStreamingExample(ag, "What's the weather like in Seattle?")
+	nonStreamingExample(a, "What's the weather like in Seattle?")
 
 	// Example 2: Tool WILL be called (streaming)
-	streamingExample(ag, "What's the weather like in Portland?")
+	streamingExample(a, "What's the weather like in Portland?")
 
 	// Example 3: Tool will NOT be called (general conversation)
-	nonStreamingExample(ag, "Hello! How are you today?")
+	nonStreamingExample(a, "Hello! How are you today?")
 
 	// Example 4: Tool will NOT be called (unrelated question)
-	nonStreamingExample(ag, "What is the capital of France?")
+	nonStreamingExample(a, "What is the capital of France?")
 
 	// Example 5: Tool WILL be called (implicit weather request)
-	nonStreamingExample(ag, "Should I bring an umbrella in Boston today?")
+	nonStreamingExample(a, "Should I bring an umbrella in Boston today?")
 
 }
 
-func nonStreamingExample(ag agent.Agent, query string) {
+func nonStreamingExample(a agent.Agent, query string) {
 	fmt.Println("\n=== Non-streaming Response Example ===")
 	fmt.Println("User: ", query)
-	fmt.Println("Assistant: ", must(ag.Run(nil, message.NewText(query))))
+	fmt.Println("Assistant: ", must(agent.RunText(context.Background(), a, query)))
 }
 
-func streamingExample(ag agent.Agent, query string) {
+func streamingExample(a agent.Agent, query string) {
 	fmt.Println("\n=== Streaming Response Example ===")
 	fmt.Println("User: ", query)
 	fmt.Print("Assistant: ")
-	stream := ag.RunStream(nil, message.NewText(query))
-	for update, err := range stream {
+	for update, err := range agent.RunTextStream(context.Background(), a, query) {
 		if err != nil {
 			fmt.Print(err)
 			break

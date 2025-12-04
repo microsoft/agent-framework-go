@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"math/rand"
 
+	"github.com/microsoft/agent-framework/go/agent"
 	"github.com/microsoft/agent-framework/go/agent/chatagent"
-	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/openai"
 	"github.com/microsoft/agent-framework/go/tool"
 	"github.com/microsoft/agent-framework/go/tool/functool"
@@ -28,7 +28,7 @@ var weatherTool = functool.MustNew(&functool.Func{
 })
 
 func main() {
-	ag := openai.NewChatAgent(openai.ClientConfig{
+	a := openai.NewChatAgent(openai.ClientConfig{
 		Model: "gpt-5-nano",
 	}, &chatagent.Options{
 		Instructions: "You are a helpful weather agent.",
@@ -37,10 +37,9 @@ func main() {
 		},
 	})
 
-	fmt.Println(must(ag.RunText(nil, "What's the weather like in Amsterdam?")))
+	fmt.Println(must(agent.RunText(context.Background(), a, "What's the weather like in Amsterdam?")))
 
-	stream := ag.RunStream(nil, message.NewText("What is the weather like in Amsterdam?"))
-	for update, err := range stream {
+	for update, err := range agent.RunTextStream(context.Background(), a, "What is the weather like in Amsterdam?") {
 		if err != nil {
 			fmt.Print(err)
 			break

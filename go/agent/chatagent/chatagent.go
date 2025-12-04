@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"iter"
 
-	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework/go/agent"
 	"github.com/microsoft/agent-framework/go/agent/chatagent/chatclient"
 	"github.com/microsoft/agent-framework/go/memory"
@@ -24,7 +23,7 @@ type Agent struct {
 	Client  chatclient.Client
 	Options Options
 
-	id string
+	iden agent.Identity
 }
 
 // NewAgent creates a new chat agent with the given chat client and options.
@@ -42,25 +41,20 @@ func NewAgent(client chatclient.Client, options *Options) *Agent {
 	return &Agent{
 		Client:  client,
 		Options: opts,
+		iden:    agent.NewIdentity(opts.ID, opts.Name, opts.Description),
 	}
 }
 
-func (a *Agent) ID() string {
-	if a.Options.ID != "" {
-		return a.Options.ID
-	}
-	if a.id == "" {
-		a.id = uuid.NewString()
-	}
-	return a.id
+func (a *Agent) Identity() agent.Identity {
+	return a.iden
 }
 
-func (a *Agent) Name() string {
-	return a.Options.Name
-}
-
-func (a *Agent) Description() string {
-	return a.Options.Description
+func (a *Agent) Capabilities() agent.Capabilities {
+	caps := agent.Capabilities{
+		Streaming: true,
+	}
+	_, caps.StructuredOutput = a.Client.(chatclient.StructuredResponseClient)
+	return caps
 }
 
 func (a *Agent) Instructions() string {
@@ -89,73 +83,74 @@ func (a *Agent) UnmarshalThread(data []byte) (memory.Thread, error) {
 	return newThreadFromJSON(data, a.Options.NewMessageStore, a.Options.NewContextProvider)
 }
 
-// RunOf executes the agent with the given value type and messages, and stores the result
-// in the value pointed to by v.
-func (a *Agent) RunOf(v any, ctx *agent.RunContext, messages ...*message.Message) (*agent.RunResponse, error) {
-	return a.run(ctx, func(ctx context.Context, client chatclient.Client, opts *chatclient.ChatOptions, messages []*message.Message) (*chatclient.ChatResponse, error) {
-		c, ok := client.(chatclient.StructuredResponseClient)
-		if !ok {
-			return nil, fmt.Errorf("the %T chat client doesn't support structured responses", client)
-		}
-		return c.StructuredResponse(v, ctx, opts, messages...)
-	}, messages)
-}
-
-// RunFor executes the agent with the given messages and returns the result of type T.
-func RunFor[T any](a *Agent, ctx *agent.RunContext, messages ...*message.Message) (T, *agent.RunResponse, error) {
-	var v T
-	resp, err := a.RunOf(&v, ctx, messages...)
-	return v, resp, err
-}
-
-// RunText executes the agent with a single text message and returns the response.
-func (a *Agent) RunText(ctx *agent.RunContext, msg string) (*agent.RunResponse, error) {
-	return a.Run(ctx, message.NewText(msg))
-}
-
 // Run executes the agent with the given messages and returns the response.
-func (a *Agent) Run(ctx *agent.RunContext, messages ...*message.Message) (*agent.RunResponse, error) {
-	return a.run(ctx, func(ctx context.Context, client chatclient.Client, opts *chatclient.ChatOptions, messages []*message.Message) (*chatclient.ChatResponse, error) {
-		return client.Response(ctx, opts, messages...)
-	}, messages)
+func (a *Agent) Run(ctx context.Context, options agent.RunOptions, messages ...*message.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
+	if options.Streaming.Or(false) {
+		return a.runStream(ctx, &options, messages...)
+	} else {
+		return a.run(ctx, &options, func(ctx context.Context, client chatclient.Client, opts *chatclient.ChatOptions, messages []*message.Message) (*chatclient.ChatResponse, error) {
+			if options.StructuredOutput != nil {
+				c, ok := client.(chatclient.StructuredResponseClient)
+				if !ok {
+					return nil, fmt.Errorf("the %T chat client doesn't support structured responses", client)
+				}
+				return c.StructuredResponse(options.StructuredOutput, ctx, opts, messages...)
+			}
+			return client.Response(ctx, opts, messages...)
+		}, messages)
+	}
 }
 
-func (a *Agent) run(actx *agent.RunContext,
+func (a *Agent) run(ctx context.Context, options *agent.RunOptions,
 	runFn func(context.Context, chatclient.Client, *chatclient.ChatOptions, []*message.Message) (*chatclient.ChatResponse, error),
-	messages []*message.Message) (*agent.RunResponse, error) {
+	messages []*message.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
 
-	ctx, thread, opts, messages, ctxMessages, err := a.prepareThreadAndMessages(actx, messages)
-	if err != nil {
-		return nil, err
-	}
-	client := applyRunOptionsTransformations(actx.GetOptions(), a.Client)
-	resp, err := runFn(ctx, client, opts, messages)
-	if err != nil {
-		a.notifyContextProviderOfFailure(ctx, thread, err, messages, ctxMessages)
-		return nil, err
-	}
+	id, name := a.iden.ID(), a.iden.Name()
+	return func(yield func(*agent.RunResponseUpdate, error) bool) {
+		thread, opts, messages, ctxMessages, err := a.prepareThreadAndMessages(ctx, options, messages)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		client := applyRunOptionsTransformations(options, a.Client)
+		resp, err := runFn(ctx, client, opts, messages)
+		if err != nil {
+			a.notifyContextProviderOfFailure(ctx, thread, err, messages, ctxMessages)
+			yield(nil, err)
+			return
+		}
 
-	// Ensure that the author name is set for each message in the response.
-	for _, msg := range resp.Messages {
-		msg.AuthorName = cmp.Or(msg.AuthorName, a.Name())
+		// Ensure that the author name is set for each message in the response.
+		for _, msg := range resp.Messages {
+			msg.AuthorName = cmp.Or(msg.AuthorName, name)
+		}
+		if err := a.finishRun(ctx, thread, resp, messages, ctxMessages); err != nil {
+			yield(nil, err)
+			return
+		}
+		for _, msg := range resp.Messages {
+			if !yield(&agent.RunResponseUpdate{
+				AgentID:              id,
+				AuthorName:           msg.AuthorName,
+				MessageID:            msg.ID,
+				ResponseID:           resp.ID,
+				CreatedAt:            msg.CreatedAt,
+				Role:                 msg.Role,
+				Contents:             msg.Contents,
+				RawRepresentation:    msg.RawRepresentation,
+				AdditionalProperties: msg.AdditionalProperties,
+			}, nil) {
+				return
+			}
+		}
 	}
-	if err := a.finishRun(ctx, thread, resp, messages, ctxMessages); err != nil {
-		return nil, err
-	}
-	return &agent.RunResponse{
-		AgentID:   a.ID(),
-		ID:        resp.ID,
-		CreatedAt: resp.CreatedAt,
-		Messages:  resp.Messages,
-		Usage:     resp.Usage,
-	}, nil
 }
 
 // RunStream executes the agent with the given messages and returns a streaming response.
-func (a *Agent) RunStream(actx *agent.RunContext, messages ...*message.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
-	client := applyRunOptionsTransformations(actx.GetOptions(), a.Client)
+func (a *Agent) runStream(ctx context.Context, options *agent.RunOptions, messages ...*message.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
+	client := applyRunOptionsTransformations(options, a.Client)
 	return func(yield func(*agent.RunResponseUpdate, error) bool) {
-		ctx, thread, opts, messages, ctxMessages, err := a.prepareThreadAndMessages(actx, messages)
+		thread, opts, messages, ctxMessages, err := a.prepareThreadAndMessages(ctx, options, messages)
 		if err != nil {
 			yield(nil, err)
 			return
@@ -168,16 +163,18 @@ func (a *Agent) RunStream(actx *agent.RunContext, messages ...*message.Message) 
 				return
 			}
 			if update != nil {
-				update.AuthorName = cmp.Or(update.AuthorName, a.Name())
+				update.AuthorName = cmp.Or(update.AuthorName, a.Identity().Name())
 				updates = append(updates, update)
 				if !yield(&agent.RunResponseUpdate{
-					AgentID:    a.ID(),
-					AuthorName: update.AuthorName,
-					MessageID:  update.MessageID,
-					ResponseID: update.ResponseID,
-					CreatedAt:  update.CreatedAt,
-					Role:       update.Role,
-					Contents:   update.Contents,
+					AgentID:              a.Identity().ID(),
+					AuthorName:           update.AuthorName,
+					MessageID:            update.MessageID,
+					ResponseID:           update.ResponseID,
+					CreatedAt:            update.CreatedAt,
+					Role:                 update.Role,
+					Contents:             update.Contents,
+					RawRepresentation:    update.RawRepresentation,
+					AdditionalProperties: update.AdditionalProperties,
 				}, nil) {
 					return
 				}
@@ -250,19 +247,19 @@ func (a *Agent) updateThreadWithTypeAndConversationID(thread *Thread, convID str
 	return nil
 }
 
-func (a *Agent) prepareThreadAndMessages(ctx *agent.RunContext, messages []*message.Message) (_ context.Context, thread *Thread, opts *ChatOptions, msgsForClient, ctxMessages []*message.Message, err error) {
-	retError := func(e error) (context.Context, *Thread, *ChatOptions, []*message.Message, []*message.Message, error) {
-		return nil, nil, nil, nil, nil, e
+func (a *Agent) prepareThreadAndMessages(ctx context.Context, options *agent.RunOptions, messages []*message.Message) (thread *Thread, opts *ChatOptions, msgsForClient, ctxMessages []*message.Message, err error) {
+	retError := func(e error) (*Thread, *ChatOptions, []*message.Message, []*message.Message, error) {
+		return nil, nil, nil, nil, e
 	}
-	opts = a.createConfiguredChatOptions(ctx.GetOptions())
+	opts = a.createConfiguredChatOptions(options)
 	if opts != nil {
 		if v, ok := opts.AllowBackgroundResponses.Value(); ok && v && thread == nil {
 			return retError(errors.New("a thread must be provided when continuing a background response with a continuation token"))
 		}
 	}
-	if cthread := ctx.GetThread(); cthread != nil {
+	if options.Thread != nil {
 		var ok bool
-		thread, ok = cthread.(*Thread)
+		thread, ok = options.Thread.(*Thread)
 		if !ok {
 			return retError(errors.New("the provided thread is not compatible with the agent, only threads created by the agent can be used"))
 		}
@@ -278,7 +275,7 @@ func (a *Agent) prepareThreadAndMessages(ctx *agent.RunContext, messages []*mess
 	if opts == nil || opts.ContinuationToken == nil {
 		if thread.MessageStore != nil {
 			//  Add any existing messages from the thread to the messages to be sent to the chat client.
-			for msg, err := range thread.MessageStore.All(ctx.GetContext()) {
+			for msg, err := range thread.MessageStore.All(ctx) {
 				if err != nil {
 					return retError(err)
 				}
@@ -289,7 +286,7 @@ func (a *Agent) prepareThreadAndMessages(ctx *agent.RunContext, messages []*mess
 			// If we have a ContextProvider, we should get context from it, and update our
 			// messages and options with the additional context.
 			ctxData, err := thread.ContextProvider.Invoking(&memory.InvokingContext{
-				Context:  ctx.GetContext(),
+				Context:  ctx,
 				Messages: messages,
 			})
 			if err != nil {
@@ -339,7 +336,7 @@ func (a *Agent) prepareThreadAndMessages(ctx *agent.RunContext, messages []*mess
 		}
 		opts.ConversationID = thread.ConversationID
 	}
-	return ctx.GetContext(), thread, opts, msgsForClient, ctxMessages, nil
+	return thread, opts, msgsForClient, ctxMessages, nil
 }
 
 func (a *Agent) createConfiguredChatOptions(runOpts *agent.RunOptions) *ChatOptions {
@@ -370,9 +367,6 @@ func (a *Agent) createConfiguredChatOptions(runOpts *agent.RunOptions) *ChatOpti
 }
 
 func applyRunOptionsTransformations(opts *agent.RunOptions, client chatclient.Client) chatclient.Client {
-	if opts == nil {
-		return client
-	}
 	if v, ok := opts.Options.(*RunOptions); ok && v.NewClient != nil {
 		// If we have a custom chat client factory, we should use it to create a new chat client with the transformed tools.
 		client = v.NewClient(client)
