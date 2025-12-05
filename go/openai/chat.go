@@ -96,10 +96,23 @@ func NewChatAgentAzure(config ClientConfig, options *chatagent.Options) *chatage
 	return newChatAgent(true, config, options)
 }
 
+var _ format.Formatter = (*formatter)(nil)
+
+type formatter struct {
+}
+
+func (formatter) Format(v any) (format.Format, error) {
+	return jsonformat.ForType(reflect.TypeOf(v))
+}
+
+func (formatter) Unmarshal(data []byte, format format.Format, v any) error {
+	return jsonformat.Unmarshal(format.(*jsonformat.Format), data, v)
+}
+
 func (a *client) Capabilities() chatclient.Capabilities {
 	return chatclient.Capabilities{
 		Streaming:        true,
-		StructuredOutput: true,
+		StructuredOutput: formatter{},
 	}
 }
 
@@ -143,14 +156,6 @@ func (a *client) Response(ctx context.Context, options chatclient.ChatOptions, m
 			}
 			if !yield(update, nil) {
 				return
-			}
-
-			if options.StructuredOutput != nil {
-				if txt := update.String(); txt != "" {
-					if err := jsonformat.Unmarshal(options.ResponseFormat.(*jsonformat.Format), []byte(txt), options.StructuredOutput); err != nil {
-						yield(nil, err)
-					}
-				}
 			}
 		}
 	}
@@ -236,13 +241,6 @@ func (a *client) buildCompletionParams(options *chatclient.ChatOptions, messages
 	}
 	if options.MaxTokens.Valid() {
 		params.MaxTokens = openai.Int(int64(options.MaxTokens.MustValue()))
-	}
-	if options.ResponseFormat == nil && options.StructuredOutput != nil {
-		format, err := jsonformat.ForType(reflect.TypeOf(options.StructuredOutput))
-		if err != nil {
-			return params, err
-		}
-		options.ResponseFormat = format
 	}
 	if options.ResponseFormat != nil {
 		switch options.ResponseFormat.Kind() {

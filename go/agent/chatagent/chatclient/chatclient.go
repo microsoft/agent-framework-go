@@ -19,7 +19,7 @@ import (
 
 type Capabilities struct {
 	Streaming        bool
-	StructuredOutput bool
+	StructuredOutput format.Formatter // nil if structured output is not supported
 }
 
 type Client interface {
@@ -85,8 +85,6 @@ type ChatOptions struct {
 
 	// MaxTokens limits the response length.
 	MaxTokens param.Opt[int]
-
-	StructuredOutput any
 
 	// AdditionalProperties for provider-specific options.
 	AdditionalProperties map[string]any

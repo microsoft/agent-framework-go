@@ -6,13 +6,13 @@ import (
 	"cmp"
 	"context"
 	"errors"
-	"fmt"
 	"iter"
 	"maps"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/microsoft/agent-framework/go/format"
 	"github.com/microsoft/agent-framework/go/memory"
 	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/param"
@@ -23,10 +23,7 @@ type RunOptions struct {
 	Streaming                param.Opt[bool]
 	AllowBackgroundResponses param.Opt[bool]
 	ContinuationToken        any
-
-	// StructuredOutput specifies an optional output structure for the agent to
-	// populate. The agent must support structured output for this to be used.
-	StructuredOutput any
+	ResponseFormat           format.Format
 
 	Options any
 }
@@ -62,7 +59,7 @@ func (iden Identity) Description() string {
 
 type Capabilities struct {
 	Streaming        bool
-	StructuredOutput bool
+	StructuredOutput format.Formatter // nil if structured output is not supported
 }
 
 type Agent interface {
@@ -105,10 +102,6 @@ func run(ctx context.Context, a Agent, options RunOptions, messages ...*message.
 	if a == nil {
 		return retErr(errors.New("agent cannot be nil"))
 	}
-	caps := a.Capabilities()
-	if !caps.StructuredOutput && options.StructuredOutput != nil {
-		return retErr(fmt.Errorf("agent does not support structured output"))
-	}
 	return a.Run(ctx, options, messages...)
 }
 
@@ -124,8 +117,20 @@ func RunTextStream(ctx context.Context, a Agent, msg string) iter.Seq2[*RunRespo
 // RunFor executes the agent with the given messages and returns the result of type T.
 func RunFor[T any](ctx context.Context, a Agent, options RunOptions, messages ...*message.Message) (T, *RunResponse, error) {
 	var v T
-	options.StructuredOutput = &v
+	formatter := a.Capabilities().StructuredOutput
+	if formatter == nil {
+		return v, nil, errors.New("agent does not support structured output")
+	}
+	format, err := formatter.Format(v)
+	if err != nil {
+		return v, nil, err
+	}
+	options.ResponseFormat = format
 	resp, err := Run(ctx, a, options, messages...)
+	if err != nil {
+		return v, resp, err
+	}
+	err = formatter.Unmarshal([]byte(resp.String()), options.ResponseFormat, &v)
 	return v, resp, err
 }
 

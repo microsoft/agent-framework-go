@@ -277,7 +277,7 @@ func (a *Agent) createConfiguredChatOptions(runOpts *agent.RunOptions) ChatOptio
 	opts.AllowBackgroundResponses = runOpts.AllowBackgroundResponses
 	opts.ContinuationToken = runOpts.ContinuationToken
 	opts.Streaming = runOpts.Streaming
-	opts.StructuredOutput = runOpts.StructuredOutput
+	opts.ResponseFormat = runOpts.ResponseFormat
 	return opts
 }
 

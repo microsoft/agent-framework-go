@@ -52,8 +52,7 @@ func NewChatAgent(config ClientConfig, options *chatagent.Options) *chatagent.Ag
 
 func (a *client) Capabilities() chatclient.Capabilities {
 	return chatclient.Capabilities{
-		Streaming:        true,
-		StructuredOutput: false,
+		Streaming: true,
 	}
 }
 
