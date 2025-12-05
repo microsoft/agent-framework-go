@@ -135,7 +135,7 @@ func (a *client) Response(ctx context.Context, options chatclient.ChatOptions, m
 		return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
 			update := &chatclient.ChatResponseUpdate{
 				Contents:   contents,
-				Role:       message.Role(choice.Message.Role),
+				Role:       message.RoleAssistant,
 				ResponseID: resp.ID,
 				MessageID:  resp.ID,
 				ModelID:    resp.Model,
@@ -176,14 +176,17 @@ func (a *client) Response(ctx context.Context, options chatclient.ChatOptions, m
 					Arguments: args,
 				})
 			}
+			var role message.Role
 			if len(chunk.Choices) > 0 {
-				if choice := chunk.Choices[0]; choice.Delta.Content != "" {
+				choice := chunk.Choices[0]
+				if choice.Delta.Content != "" {
 					contents = append(contents, &message.TextContent{Text: choice.Delta.Content})
 				}
+				role = mapRole(choice.Delta.Role)
 			}
 			resp := &chatclient.ChatResponseUpdate{
 				Contents:   contents,
-				Role:       message.RoleAssistant,
+				Role:       role,
 				ResponseID: chunk.ID,
 				MessageID:  chunk.ID,
 				ModelID:    chunk.Model,
@@ -196,6 +199,21 @@ func (a *client) Response(ctx context.Context, options chatclient.ChatOptions, m
 		if stream.Err() != nil {
 			yield(nil, stream.Err())
 		}
+	}
+}
+
+func mapRole(r string) message.Role {
+	switch r {
+	case "user":
+		return message.RoleUser
+	case "system":
+		return message.RoleSystem
+	case "tool":
+		return message.RoleTool
+	case "assistant", "developer":
+		return message.RoleAssistant
+	default:
+		return message.RoleAssistant
 	}
 }
 

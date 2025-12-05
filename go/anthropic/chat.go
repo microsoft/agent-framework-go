@@ -55,14 +55,44 @@ func (a *client) Capabilities() chatclient.Capabilities {
 }
 
 func (a *client) Response(ctx context.Context, opts chatclient.ChatOptions, messages ...*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error] {
-	return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
-		params, err := a.buildMessageParams(&opts, messages...)
-		if err != nil {
+	params, err := a.buildMessageParams(&opts, messages...)
+	if err != nil {
+		return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
 			yield(nil, err)
-			return
+		}
+	}
+	if !opts.Streaming.Or(false) {
+		resp, err := a.client.Messages.New(ctx, params)
+		if err != nil {
+			return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
+				yield(nil, err)
+			}
 		}
 
-		// TODO: support non-streaming responses
+		contents := make([]message.Content, 0, len(resp.Content))
+		for _, c := range resp.Content {
+			contents = a.buildBlock(c.AsAny(), contents)
+		}
+		contents = append(contents, &message.UsageContent{
+			Details: message.UsageDetails{
+				InputTokenCount:  resp.Usage.InputTokens,
+				OutputTokenCount: resp.Usage.OutputTokens,
+			},
+		})
+		return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
+			yield(&chatclient.ChatResponseUpdate{
+				Contents:          contents,
+				Role:              message.RoleAssistant,
+				MessageID:         resp.ID,
+				ResponseID:        resp.ID,
+				ModelID:           string(resp.Model),
+				FinishReason:      string(resp.StopReason),
+				CreatedAt:         time.Now(),
+				RawRepresentation: resp,
+			}, nil)
+		}
+	}
+	return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
 		stream := a.client.Messages.NewStreaming(ctx, params)
 
 		var currentMessageID string
@@ -74,43 +104,30 @@ func (a *client) Response(ctx context.Context, opts chatclient.ChatOptions, mess
 
 			var contents []message.Content
 			var finishReason string
-
-			switch event.Type {
-			case "message_start":
+			switch event := event.AsAny().(type) {
+			case anthropic.MessageStartEvent:
 				currentMessageID = event.Message.ID
 				currentModel = string(event.Message.Model)
-				currentRole = message.Role(event.Message.Role)
-			case "content_block_start":
-				if event.ContentBlock.Type == "tool_use" {
-					contents = append(contents, &message.FunctionCallContent{
-						CallID:    event.ContentBlock.ID,
-						Name:      event.ContentBlock.Name,
-						Arguments: event.ContentBlock.Input,
-					})
-				}
-			case "content_block_delta":
-				if event.Delta.Type == "text_delta" {
-					contents = append(contents, &message.TextContent{Text: event.Delta.Text})
-				}
-			case "message_delta":
-				if event.Delta.StopReason != "" {
-					finishReason = string(event.Delta.StopReason)
-				}
+				currentRole = message.RoleAssistant
+			case anthropic.ContentBlockStartEvent:
+				contents = a.buildBlock(event.ContentBlock.AsAny(), contents)
+			case anthropic.ContentBlockDeltaEvent:
+				contents = a.buildDelta(event.Delta.AsAny(), contents)
+			case anthropic.MessageDeltaEvent:
+				finishReason = string(event.Delta.StopReason)
 			}
 
-			if len(contents) > 0 || finishReason != "" {
-				resp := &chatclient.ChatResponseUpdate{
-					Contents:     contents,
-					Role:         currentRole,
-					ResponseID:   currentMessageID,
-					MessageID:    currentMessageID,
-					ModelID:      currentModel,
-					FinishReason: finishReason,
-					CreatedAt:    time.Now(),
-				}
-				if !yield(resp, nil) {
-					return
-				}
+			if !yield(&chatclient.ChatResponseUpdate{
+				Contents:          contents,
+				Role:              currentRole,
+				ResponseID:        currentMessageID,
+				MessageID:         currentMessageID,
+				ModelID:           currentModel,
+				FinishReason:      finishReason,
+				CreatedAt:         time.Now(),
+				RawRepresentation: event,
+			}, nil) {
+				return
 			}
 		}
 
@@ -118,6 +135,28 @@ func (a *client) Response(ctx context.Context, opts chatclient.ChatOptions, mess
 			yield(nil, err)
 		}
 	}
+}
+
+func (a *client) buildBlock(v any, contents []message.Content) []message.Content {
+	switch v := v.(type) {
+	case anthropic.TextBlock:
+		contents = append(contents, &message.TextContent{Text: v.Text})
+	case anthropic.ToolUseBlock:
+		contents = append(contents, &message.FunctionCallContent{
+			CallID:    v.ID,
+			Name:      v.Name,
+			Arguments: v.Input,
+		})
+	}
+	return contents
+}
+
+func (a *client) buildDelta(v any, contents []message.Content) []message.Content {
+	switch d := v.(type) {
+	case anthropic.TextDelta:
+		contents = append(contents, &message.TextContent{Text: d.Text})
+	}
+	return contents
 }
 
 func (a *client) buildMessageParams(options *chatclient.ChatOptions, messages ...*message.Message) (anthropic.MessageNewParams, error) {
@@ -251,9 +290,10 @@ func buildMessageParam(msg *message.Message) (anthropic.MessageParam, error) {
 		}
 	}
 
-	if msg.Role == message.RoleAssistant {
+	switch msg.Role {
+	case message.RoleAssistant:
 		return anthropic.NewAssistantMessage(content...), nil
-	} else if msg.Role == message.RoleTool {
+	case message.RoleTool:
 		// Tool results are user messages in Anthropic
 		return anthropic.NewUserMessage(content...), nil
 	}
