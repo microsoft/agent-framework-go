@@ -3,10 +3,13 @@
 package anthropic
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"iter"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -68,16 +71,18 @@ func (a *client) Response(ctx context.Context, opts chatclient.ChatOptions, mess
 				yield(nil, err)
 			}
 		}
-
+		functions := make(map[int]*message.FunctionCallContent)
 		contents := make([]message.Content, 0, len(resp.Content))
-		for _, c := range resp.Content {
-			contents = a.buildBlock(c.AsAny(), contents)
+		for i, c := range resp.Content {
+			contents = a.buildBlock(i, c.AsAny(), contents, functions)
+		}
+		indices := slices.Collect(maps.Keys(functions))
+		slices.Sort(indices)
+		for _, f := range indices {
+			contents = append(contents, functions[f])
 		}
 		contents = append(contents, &message.UsageContent{
-			Details: message.UsageDetails{
-				InputTokenCount:  resp.Usage.InputTokens,
-				OutputTokenCount: resp.Usage.OutputTokens,
-			},
+			Details: toUsageDetails(resp.Usage),
 		})
 		return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
 			yield(&chatclient.ChatResponseUpdate{
@@ -95,34 +100,44 @@ func (a *client) Response(ctx context.Context, opts chatclient.ChatOptions, mess
 	return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
 		stream := a.client.Messages.NewStreaming(ctx, params)
 
-		var currentMessageID string
-		var currentModel string
-		var currentRole message.Role
+		var messageID string
+		var modelID string
+		var usage message.UsageDetails
+		var finishReason string
+		var functions = make(map[int]*message.FunctionCallContent)
 
 		for stream.Next() {
 			event := stream.Current()
 
 			var contents []message.Content
-			var finishReason string
 			switch event := event.AsAny().(type) {
 			case anthropic.MessageStartEvent:
-				currentMessageID = event.Message.ID
-				currentModel = string(event.Message.Model)
-				currentRole = message.RoleAssistant
-			case anthropic.ContentBlockStartEvent:
-				contents = a.buildBlock(event.ContentBlock.AsAny(), contents)
-			case anthropic.ContentBlockDeltaEvent:
-				contents = a.buildDelta(event.Delta.AsAny(), contents)
+				messageID = cmp.Or(messageID, event.Message.ID)
+				modelID = cmp.Or(modelID, string(event.Message.Model))
+				usage.Add(toUsageDetails(event.Message.Usage))
 			case anthropic.MessageDeltaEvent:
 				finishReason = string(event.Delta.StopReason)
+				usage.Add(toUsageDetailsDelta(event.Usage))
+			case anthropic.ContentBlockStartEvent:
+				contents = a.buildBlock(int(event.Index), event.ContentBlock.AsAny(), contents, functions)
+			case anthropic.ContentBlockDeltaEvent:
+				contents = a.buildDelta(int(event.Index), event.Delta.AsAny(), contents, functions)
+			case anthropic.ContentBlockStopEvent:
+				indices := slices.Collect(maps.Keys(functions))
+				slices.Sort(indices)
+				for _, id := range indices {
+					fn := functions[id]
+					fn.Arguments = json.RawMessage(fn.Arguments.(string))
+					contents = append(contents, fn)
+				}
 			}
 
 			if !yield(&chatclient.ChatResponseUpdate{
 				Contents:          contents,
-				Role:              currentRole,
-				ResponseID:        currentMessageID,
-				MessageID:         currentMessageID,
-				ModelID:           currentModel,
+				Role:              message.RoleAssistant,
+				ResponseID:        messageID,
+				MessageID:         messageID,
+				ModelID:           modelID,
 				FinishReason:      finishReason,
 				CreatedAt:         time.Now(),
 				RawRepresentation: event,
@@ -130,31 +145,124 @@ func (a *client) Response(ctx context.Context, opts chatclient.ChatOptions, mess
 				return
 			}
 		}
-
+		if !yield(&chatclient.ChatResponseUpdate{
+			CreatedAt:    time.Now(),
+			FinishReason: finishReason,
+			Role:         message.RoleAssistant,
+			MessageID:    messageID,
+			Contents: []message.Content{
+				&message.UsageContent{
+					Details: usage,
+				},
+			},
+		}, nil) {
+			return
+		}
 		if err := stream.Err(); err != nil {
 			yield(nil, err)
 		}
 	}
 }
 
-func (a *client) buildBlock(v any, contents []message.Content) []message.Content {
+func toUsageDetails(usage anthropic.Usage) message.UsageDetails {
+	details := message.UsageDetails{
+		InputTokenCount:  usage.InputTokens,
+		OutputTokenCount: usage.OutputTokens,
+		TotalTokenCount:  usage.InputTokens + usage.OutputTokens,
+	}
+	if usage.CacheCreationInputTokens != 0 {
+		if details.AdditionalCounts == nil {
+			details.AdditionalCounts = make(map[string]int64)
+		}
+		details.AdditionalCounts["cache_creation_input_tokens"] = usage.CacheCreationInputTokens
+	}
+	if usage.CacheReadInputTokens != 0 {
+		if details.AdditionalCounts == nil {
+			details.AdditionalCounts = make(map[string]int64)
+		}
+		details.AdditionalCounts["cache_read_input_tokens"] = usage.CacheReadInputTokens
+	}
+	return details
+}
+
+func toUsageDetailsDelta(usage anthropic.MessageDeltaUsage) message.UsageDetails {
+	return toUsageDetails(anthropic.Usage{
+		InputTokens:              usage.InputTokens,
+		OutputTokens:             usage.OutputTokens,
+		CacheCreationInputTokens: usage.CacheCreationInputTokens,
+		CacheReadInputTokens:     usage.CacheReadInputTokens,
+	})
+}
+
+func (a *client) buildBlock(index int, v any, contents []message.Content, functions map[int]*message.FunctionCallContent) []message.Content {
 	switch v := v.(type) {
 	case anthropic.TextBlock:
-		contents = append(contents, &message.TextContent{Text: v.Text})
+		contents = append(contents, &message.TextContent{
+			Text: v.Text,
+			ContentHeader: message.ContentHeader{
+				RawRepresentation: v,
+			},
+		})
+	case anthropic.ThinkingBlock:
+		contents = append(contents, &message.TextReasoningContent{
+			ProtectedData: v.Signature,
+			Text:          v.Thinking,
+			ContentHeader: message.ContentHeader{
+				RawRepresentation: v,
+			},
+		})
+	case anthropic.RedactedThinkingBlock:
+		contents = append(contents, &message.TextReasoningContent{
+			ProtectedData: v.Data,
+			ContentHeader: message.ContentHeader{
+				RawRepresentation: v,
+			},
+		})
 	case anthropic.ToolUseBlock:
-		contents = append(contents, &message.FunctionCallContent{
+		var input any
+		if v.Input != nil {
+			input = v.Input
+		}
+		functions[index] = &message.FunctionCallContent{
 			CallID:    v.ID,
 			Name:      v.Name,
-			Arguments: v.Input,
-		})
+			Arguments: input,
+		}
 	}
 	return contents
 }
 
-func (a *client) buildDelta(v any, contents []message.Content) []message.Content {
+func (a *client) buildDelta(index int, v any, contents []message.Content, functions map[int]*message.FunctionCallContent) []message.Content {
 	switch d := v.(type) {
 	case anthropic.TextDelta:
-		contents = append(contents, &message.TextContent{Text: d.Text})
+		contents = append(contents, &message.TextContent{
+			Text: d.Text,
+			ContentHeader: message.ContentHeader{
+				RawRepresentation: d,
+			},
+		})
+	case anthropic.InputJSONDelta:
+		if fnContent, ok := functions[index]; ok {
+			if fnContent.Arguments == nil {
+				fnContent.Arguments = d.PartialJSON
+			} else {
+				fnContent.Arguments = fnContent.Arguments.(string) + d.PartialJSON
+			}
+		}
+	case anthropic.ThinkingDelta:
+		contents = append(contents, &message.TextReasoningContent{
+			Text: d.Thinking,
+			ContentHeader: message.ContentHeader{
+				RawRepresentation: d,
+			},
+		})
+	case anthropic.SignatureDelta:
+		contents = append(contents, &message.TextReasoningContent{
+			ProtectedData: d.Signature,
+			ContentHeader: message.ContentHeader{
+				RawRepresentation: d,
+			},
+		})
 	}
 	return contents
 }

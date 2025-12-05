@@ -442,10 +442,7 @@ type UsageDetails struct {
 	TotalTokenCount  int64
 }
 
-func (u *UsageDetails) Add(other *UsageDetails) {
-	if u == nil || other == nil {
-		return
-	}
+func (u *UsageDetails) Add(other UsageDetails) {
 	u.InputTokenCount += other.InputTokenCount
 	u.OutputTokenCount += other.OutputTokenCount
 	u.TotalTokenCount += other.TotalTokenCount

@@ -154,7 +154,7 @@ func (f *functionInvoking) Response(ctx context.Context, opts ChatOptions, messa
 						if totalUsage == nil {
 							totalUsage = new(message.UsageDetails)
 						}
-						totalUsage.Add(&c.Details)
+						totalUsage.Add(c.Details)
 					}
 				}
 				// We're streaming updates back to the caller. However, approvals requires extra handling. We should not yield any

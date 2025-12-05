@@ -170,7 +170,7 @@ func processUpdate(r *RunResponse, update *RunResponseUpdate) {
 			if r.Usage == nil {
 				r.Usage = new(message.UsageDetails)
 			}
-			r.Usage.Add(&c.Details)
+			r.Usage.Add(c.Details)
 		default:
 			msg.Contents = append(msg.Contents, content)
 		}
