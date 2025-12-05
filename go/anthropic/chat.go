@@ -47,50 +47,22 @@ func NewChatAgent(config ClientConfig, options *chatagent.Options) *chatagent.Ag
 	return chatagent.NewAgent(c, options)
 }
 
-func (a *client) Response(ctx context.Context, opts *chatclient.ChatOptions, messages ...*message.Message) (*chatclient.ChatResponse, error) {
-	params, err := a.buildMessageParams(opts, messages...)
-	if err != nil {
-		return nil, err
+func (a *client) Capabilities() chatclient.Capabilities {
+	return chatclient.Capabilities{
+		Streaming:        true,
+		StructuredOutput: false,
 	}
-	resp, err := a.client.Messages.New(ctx, params)
-	if err != nil {
-		return nil, err
-	}
-
-	contents := make([]message.Content, 0, len(resp.Content))
-	for _, c := range resp.Content {
-		switch c.Type {
-		case "text":
-			contents = append(contents, &message.TextContent{Text: c.Text})
-		case "tool_use":
-			contents = append(contents, &message.FunctionCallContent{
-				CallID:    c.ID,
-				Name:      c.Name,
-				Arguments: c.Input,
-			})
-		}
-	}
-
-	return &chatclient.ChatResponse{
-		Messages:     []*message.Message{{Role: message.RoleAssistant, Contents: contents}},
-		ID:           resp.ID,
-		FinishReason: string(resp.StopReason),
-		ModelID:      string(resp.Model),
-		Usage: &message.UsageDetails{
-			InputTokenCount:  resp.Usage.InputTokens,
-			OutputTokenCount: resp.Usage.OutputTokens,
-		},
-	}, nil
 }
 
-func (a *client) StreamingResponse(ctx context.Context, opts *chatclient.ChatOptions, messages ...*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error] {
+func (a *client) Response(ctx context.Context, opts chatclient.ChatOptions, messages ...*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error] {
 	return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
-		params, err := a.buildMessageParams(opts, messages...)
+		params, err := a.buildMessageParams(&opts, messages...)
 		if err != nil {
 			yield(nil, err)
 			return
 		}
 
+		// TODO: support non-streaming responses
 		stream := a.client.Messages.NewStreaming(ctx, params)
 
 		var currentMessageID string
@@ -155,84 +127,82 @@ func (a *client) buildMessageParams(options *chatclient.ChatOptions, messages ..
 		MaxTokens: 1024, // Default max tokens
 	}
 
-	if options != nil {
-		if options.Instructions != "" {
-			params.System = []anthropic.TextBlockParam{
-				{Text: options.Instructions, Type: constant.Text("text")},
-			}
+	if options.Instructions != "" {
+		params.System = []anthropic.TextBlockParam{
+			{Text: options.Instructions, Type: constant.Text("text")},
 		}
-		if options.Temperature.Valid() {
-			params.Temperature = anthropic.Float(options.Temperature.MustValue())
-		}
-		if options.TopP.Valid() {
-			params.TopP = anthropic.Float(options.TopP.MustValue())
-		}
-		if options.MaxTokens.Valid() {
-			params.MaxTokens = int64(options.MaxTokens.MustValue())
-		}
+	}
+	if options.Temperature.Valid() {
+		params.Temperature = anthropic.Float(options.Temperature.MustValue())
+	}
+	if options.TopP.Valid() {
+		params.TopP = anthropic.Float(options.TopP.MustValue())
+	}
+	if options.MaxTokens.Valid() {
+		params.MaxTokens = int64(options.MaxTokens.MustValue())
+	}
 
-		var tools []anthropic.ToolUnionParam
-		for _, tl := range options.Tools {
-			if ft, ok := tl.(tool.FuncTool); ok {
-				name, description := ft.Name(), ft.Description()
-				var properties any
-				var required []string
+	var tools []anthropic.ToolUnionParam
+	for _, tl := range options.Tools {
+		if ft, ok := tl.(tool.FuncTool); ok {
+			name, description := ft.Name(), ft.Description()
+			var properties any
+			var required []string
 
-				// Extract schema details
-				switch schema := ft.Schema().(type) {
-				case map[string]any:
-					if props, ok := schema["properties"]; ok {
-						properties = props
-					}
-					if reqs, ok := schema["required"]; ok {
-						if reqList, ok := reqs.([]interface{}); ok {
-							for _, r := range reqList {
-								if s, ok := r.(string); ok {
-									required = append(required, s)
-								}
+			// Extract schema details
+			switch schema := ft.Schema().(type) {
+			case map[string]any:
+				if props, ok := schema["properties"]; ok {
+					properties = props
+				}
+				if reqs, ok := schema["required"]; ok {
+					if reqList, ok := reqs.([]interface{}); ok {
+						for _, r := range reqList {
+							if s, ok := r.(string); ok {
+								required = append(required, s)
 							}
-						} else if reqList, ok := reqs.([]string); ok {
-							required = reqList
 						}
+					} else if reqList, ok := reqs.([]string); ok {
+						required = reqList
 					}
-				default:
-					// Fallback or error handling
-				}
-
-				schemaParam := anthropic.ToolInputSchemaParam{
-					Type:       constant.Object("object"),
-					Properties: properties,
-					Required:   required,
-				}
-
-				toolParam := anthropic.ToolUnionParamOfTool(schemaParam, name)
-				if toolParam.OfTool != nil {
-					toolParam.OfTool.Description = anthropic.String(description)
-				}
-				tools = append(tools, toolParam)
-			}
-		}
-		if len(tools) > 0 {
-			params.Tools = tools
-		}
-
-		if options.ToolMode != "" {
-			switch options.ToolMode {
-			case tool.ToolModeAuto:
-				params.ToolChoice = anthropic.ToolChoiceUnionParam{
-					OfAuto: &anthropic.ToolChoiceAutoParam{Type: constant.Auto("auto")},
-				}
-			case tool.ToolModeRequired:
-				params.ToolChoice = anthropic.ToolChoiceUnionParam{
-					OfAny: &anthropic.ToolChoiceAnyParam{Type: constant.Any("any")},
 				}
 			default:
-				params.ToolChoice = anthropic.ToolChoiceUnionParam{
-					OfTool: &anthropic.ToolChoiceToolParam{
-						Type: constant.Tool("tool"),
-						Name: string(options.ToolMode),
-					},
-				}
+				// Fallback or error handling
+			}
+
+			schemaParam := anthropic.ToolInputSchemaParam{
+				Type:       constant.Object("object"),
+				Properties: properties,
+				Required:   required,
+			}
+
+			toolParam := anthropic.ToolUnionParamOfTool(schemaParam, name)
+			if toolParam.OfTool != nil {
+				toolParam.OfTool.Description = anthropic.String(description)
+			}
+			tools = append(tools, toolParam)
+		}
+	}
+	if len(tools) > 0 {
+		params.Tools = tools
+	}
+
+	if options.ToolMode != "" {
+		switch options.ToolMode {
+		case tool.ToolModeAuto:
+			params.ToolChoice = anthropic.ToolChoiceUnionParam{
+				OfAuto: &anthropic.ToolChoiceAutoParam{Type: constant.Auto("auto")},
+			}
+		case tool.ToolModeRequired:
+			params.ToolChoice = anthropic.ToolChoiceUnionParam{
+				OfAny: &anthropic.ToolChoiceAnyParam{Type: constant.Any("any")},
+			}
+		default:
+			params.ToolChoice = anthropic.ToolChoiceUnionParam{
+				OfTool: &anthropic.ToolChoiceToolParam{
+					Type: constant.Tool("tool"),
+					Name: string(options.ToolMode),
+				},
 			}
 		}
 	}

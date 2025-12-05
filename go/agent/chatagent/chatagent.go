@@ -6,7 +6,6 @@ import (
 	"cmp"
 	"context"
 	"errors"
-	"fmt"
 	"iter"
 
 	"github.com/microsoft/agent-framework/go/agent"
@@ -50,11 +49,11 @@ func (a *Agent) Identity() agent.Identity {
 }
 
 func (a *Agent) Capabilities() agent.Capabilities {
-	caps := agent.Capabilities{
-		Streaming: true,
+	caps := a.Client.Capabilities()
+	return agent.Capabilities{
+		Streaming:        caps.Streaming,
+		StructuredOutput: caps.StructuredOutput,
 	}
-	_, caps.StructuredOutput = a.Client.(chatclient.StructuredResponseClient)
-	return caps
 }
 
 func (a *Agent) Instructions() string {
@@ -83,80 +82,16 @@ func (a *Agent) UnmarshalThread(data []byte) (memory.Thread, error) {
 	return newThreadFromJSON(data, a.Options.NewMessageStore, a.Options.NewContextProvider)
 }
 
-// Run executes the agent with the given messages and returns the response.
 func (a *Agent) Run(ctx context.Context, options agent.RunOptions, messages ...*message.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
-	if options.Streaming.Or(false) {
-		return a.runStream(ctx, &options, messages...)
-	} else {
-		return a.run(ctx, &options, func(ctx context.Context, client chatclient.Client, opts *chatclient.ChatOptions, messages []*message.Message) (*chatclient.ChatResponse, error) {
-			if options.StructuredOutput != nil {
-				c, ok := client.(chatclient.StructuredResponseClient)
-				if !ok {
-					return nil, fmt.Errorf("the %T chat client doesn't support structured responses", client)
-				}
-				return c.StructuredResponse(options.StructuredOutput, ctx, opts, messages...)
-			}
-			return client.Response(ctx, opts, messages...)
-		}, messages)
-	}
-}
-
-func (a *Agent) run(ctx context.Context, options *agent.RunOptions,
-	runFn func(context.Context, chatclient.Client, *chatclient.ChatOptions, []*message.Message) (*chatclient.ChatResponse, error),
-	messages []*message.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
-
-	id, name := a.iden.ID(), a.iden.Name()
+	client := applyRunOptionsTransformations(&options, a.Client)
 	return func(yield func(*agent.RunResponseUpdate, error) bool) {
-		thread, opts, messages, ctxMessages, err := a.prepareThreadAndMessages(ctx, options, messages)
-		if err != nil {
-			yield(nil, err)
-			return
-		}
-		client := applyRunOptionsTransformations(options, a.Client)
-		resp, err := runFn(ctx, client, opts, messages)
-		if err != nil {
-			a.notifyContextProviderOfFailure(ctx, thread, err, messages, ctxMessages)
-			yield(nil, err)
-			return
-		}
-
-		// Ensure that the author name is set for each message in the response.
-		for _, msg := range resp.Messages {
-			msg.AuthorName = cmp.Or(msg.AuthorName, name)
-		}
-		if err := a.finishRun(ctx, thread, resp, messages, ctxMessages); err != nil {
-			yield(nil, err)
-			return
-		}
-		for _, msg := range resp.Messages {
-			if !yield(&agent.RunResponseUpdate{
-				AgentID:              id,
-				AuthorName:           msg.AuthorName,
-				MessageID:            msg.ID,
-				ResponseID:           resp.ID,
-				CreatedAt:            msg.CreatedAt,
-				Role:                 msg.Role,
-				Contents:             msg.Contents,
-				RawRepresentation:    msg.RawRepresentation,
-				AdditionalProperties: msg.AdditionalProperties,
-			}, nil) {
-				return
-			}
-		}
-	}
-}
-
-// RunStream executes the agent with the given messages and returns a streaming response.
-func (a *Agent) runStream(ctx context.Context, options *agent.RunOptions, messages ...*message.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
-	client := applyRunOptionsTransformations(options, a.Client)
-	return func(yield func(*agent.RunResponseUpdate, error) bool) {
-		thread, opts, messages, ctxMessages, err := a.prepareThreadAndMessages(ctx, options, messages)
+		thread, opts, messages, ctxMessages, err := a.prepareThreadAndMessages(ctx, &options, messages)
 		if err != nil {
 			yield(nil, err)
 			return
 		}
 		var updates []*chatclient.ChatResponseUpdate
-		for update, err := range client.StreamingResponse(ctx, opts, messages...) {
+		for update, err := range client.Response(ctx, opts, messages...) {
 			if err != nil {
 				a.notifyContextProviderOfFailure(ctx, thread, err, messages, ctxMessages)
 				yield(nil, err)
@@ -180,26 +115,28 @@ func (a *Agent) runStream(ctx context.Context, options *agent.RunOptions, messag
 				}
 			}
 		}
-		resp := chatclient.NewChatResponseFromUpdates(updates)
-		if err := a.finishRun(ctx, thread, resp, messages, ctxMessages); err != nil {
+		convID := ""
+		if len(updates) > 0 {
+			convID = updates[len(updates)-1].ConversationID
+		}
+		// We can derive the type of supported thread from whether we have a conversation id,
+		// so let's update it and set the conversation id for the service thread case.
+		if err := a.updateThreadWithTypeAndConversationID(thread, convID); err != nil {
+			yield(nil, err)
+			return
+		}
+		msgs := chatclient.NewMessageFromUpdates(updates)
+		// Only notify the thread of new messages if the chatResponse was successful to avoid inconsistent message state in the thread.
+		if err := thread.MessagesReceived(ctx, append(ctxMessages, msgs...)...); err != nil {
+			yield(nil, err)
+			return
+		}
+		// Notify the ContextProvider of all new messages.
+		if err := a.notifyContextProviderOfSuccess(ctx, thread, messages, ctxMessages, msgs); err != nil {
 			yield(nil, err)
 			return
 		}
 	}
-}
-
-func (a *Agent) finishRun(ctx context.Context, thread *Thread, resp *chatclient.ChatResponse, messages, ctxMessages []*message.Message) error {
-	// We can derive the type of supported thread from whether we have a conversation id,
-	// so let's update it and set the conversation id for the service thread case.
-	if err := a.updateThreadWithTypeAndConversationID(thread, resp.ConversationID); err != nil {
-		return err
-	}
-	// Only notify the thread of new messages if the chatResponse was successful to avoid inconsistent message state in the thread.
-	if err := thread.MessagesReceived(ctx, append(ctxMessages, resp.Messages...)...); err != nil {
-		return err
-	}
-	// Notify the ContextProvider of all new messages.
-	return a.notifyContextProviderOfSuccess(ctx, thread, messages, ctxMessages, resp.Messages)
 }
 
 func (a *Agent) notifyContextProviderOfSuccess(ctx context.Context, thread *Thread, messages, contextProviderMessages, respMessages []*message.Message) error {
@@ -247,15 +184,13 @@ func (a *Agent) updateThreadWithTypeAndConversationID(thread *Thread, convID str
 	return nil
 }
 
-func (a *Agent) prepareThreadAndMessages(ctx context.Context, options *agent.RunOptions, messages []*message.Message) (thread *Thread, opts *ChatOptions, msgsForClient, ctxMessages []*message.Message, err error) {
-	retError := func(e error) (*Thread, *ChatOptions, []*message.Message, []*message.Message, error) {
-		return nil, nil, nil, nil, e
+func (a *Agent) prepareThreadAndMessages(ctx context.Context, options *agent.RunOptions, messages []*message.Message) (thread *Thread, opts ChatOptions, msgsForClient, ctxMessages []*message.Message, err error) {
+	retError := func(e error) (*Thread, ChatOptions, []*message.Message, []*message.Message, error) {
+		return nil, ChatOptions{}, nil, nil, e
 	}
 	opts = a.createConfiguredChatOptions(options)
-	if opts != nil {
-		if v, ok := opts.AllowBackgroundResponses.Value(); ok && v && thread == nil {
-			return retError(errors.New("a thread must be provided when continuing a background response with a continuation token"))
-		}
+	if v, ok := opts.AllowBackgroundResponses.Value(); ok && v && thread == nil {
+		return retError(errors.New("a thread must be provided when continuing a background response with a continuation token"))
 	}
 	if options.Thread != nil {
 		var ok bool
@@ -266,13 +201,13 @@ func (a *Agent) prepareThreadAndMessages(ctx context.Context, options *agent.Run
 	} else {
 		thread = a.newThread("")
 	}
-	if opts != nil && opts.ContinuationToken != nil {
+	if opts.ContinuationToken != nil {
 		if len(messages) > 0 {
 			return retError(errors.New("messages are not allowed when continuing a background response using a continuation token"))
 		}
 	}
 
-	if opts == nil || opts.ContinuationToken == nil {
+	if opts.ContinuationToken == nil {
 		if thread.MessageStore != nil {
 			//  Add any existing messages from the thread to the messages to be sent to the chat client.
 			for msg, err := range thread.MessageStore.All(ctx) {
@@ -296,15 +231,9 @@ func (a *Agent) prepareThreadAndMessages(ctx context.Context, options *agent.Run
 				ctxMessages = ctxData.Messages
 				msgsForClient = append(msgsForClient, ctxData.Messages...)
 				if len(ctxData.Tools) > 0 {
-					if opts == nil {
-						opts = &ChatOptions{}
-					}
 					opts.Tools = append(opts.Tools, ctxData.Tools...)
 				}
 				if ctxData.Instructions != "" {
-					if opts == nil {
-						opts = &ChatOptions{}
-					}
 					if opts.Instructions != "" {
 						opts.Instructions += "\n"
 					}
@@ -317,52 +246,38 @@ func (a *Agent) prepareThreadAndMessages(ctx context.Context, options *agent.Run
 	}
 	// If a user provided two different thread ids, via the thread object and options, we should throw
 	// since we don't know which one to use.
-	if thread.ConversationID != "" && opts != nil && opts.ConversationID != "" && thread.ConversationID != opts.ConversationID {
+	if thread.ConversationID != "" && opts.ConversationID != "" && thread.ConversationID != opts.ConversationID {
 		return retError(errors.New("conflicting conversation IDs provided in thread and chat options"))
 	}
 	if a.Instructions() != "" {
-		if opts == nil {
-			opts = &ChatOptions{}
-		}
 		if opts.Instructions != "" {
 			opts.Instructions = "\n" + opts.Instructions
 		}
 		opts.Instructions = a.Instructions() + opts.Instructions
 	}
-	if thread.ConversationID != "" && opts != nil && opts.ConversationID != thread.ConversationID {
-		// Only create or update ChatOptions if we have an id on the thread and we don't have the same one already in ChatOptions.
-		if opts == nil {
-			opts = &ChatOptions{}
-		}
+	if thread.ConversationID != "" && opts.ConversationID != thread.ConversationID {
 		opts.ConversationID = thread.ConversationID
 	}
 	return thread, opts, msgsForClient, ctxMessages, nil
 }
 
-func (a *Agent) createConfiguredChatOptions(runOpts *agent.RunOptions) *ChatOptions {
-	var opts *ChatOptions
+func (a *Agent) createConfiguredChatOptions(runOpts *agent.RunOptions) ChatOptions {
+	var opts ChatOptions
 	// Try to get ChatOptions from RunOptions
-	if runOpts != nil && runOpts.Options != nil {
+	if runOpts.Options != nil {
 		if v, ok := runOpts.Options.(*ChatOptions); ok {
-			opts = v.Clone()
+			opts = *v.Clone()
 		}
 	}
 	// Merge in Agent-level ChatOptions
 	if a.Options.ChatOptions != nil {
-		if opts == nil {
-			opts = a.Options.ChatOptions.Clone()
-		} else {
-			opts.Copy(a.Options.ChatOptions)
-		}
+		opts.Copy(a.Options.ChatOptions)
 	}
 	// Merge in RunOptions specific fields
-	if runOpts != nil && (runOpts.AllowBackgroundResponses.Valid() || runOpts.ContinuationToken != nil) {
-		if opts == nil {
-			opts = &ChatOptions{}
-		}
-		opts.AllowBackgroundResponses = runOpts.AllowBackgroundResponses
-		opts.ContinuationToken = runOpts.ContinuationToken
-	}
+	opts.AllowBackgroundResponses = runOpts.AllowBackgroundResponses
+	opts.ContinuationToken = runOpts.ContinuationToken
+	opts.Streaming = runOpts.Streaming
+	opts.StructuredOutput = runOpts.StructuredOutput
 	return opts
 }
 
