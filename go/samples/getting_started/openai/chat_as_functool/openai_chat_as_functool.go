@@ -33,7 +33,7 @@ func main() {
 		},
 	})
 
-	ag := openai.NewChatAgent(openai.ClientConfig{
+	a := openai.NewChatAgent(openai.ClientConfig{
 		Model: "gpt-5-nano",
 	}, &chatagent.Options{
 		Instructions: "You are a helpful assistant who responds in French.",
@@ -42,7 +42,7 @@ func main() {
 		},
 	})
 
-	fmt.Println(must(ag.RunText(nil, "What is the weather like in Amsterdam?")))
+	fmt.Println(must(agent.RunText(context.Background(), a, "What is the weather like in Amsterdam?")))
 
 }
 

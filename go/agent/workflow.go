@@ -21,17 +21,17 @@ func (e RunUpdateEvent) Data() any {
 	return e.Update
 }
 
-func newExecutor(ag Agent, emitEvents bool) *workflow.Executor {
+func newExecutor(a Agent, emitEvents bool) *workflow.Executor {
 	var thread memory.Thread
 	var threadStateKey string
 	ensureThread := func() memory.Thread {
 		if thread == nil {
-			thread = ag.NewThread()
+			thread = a.NewThread()
 		}
 		threadStateKey = reflect.ValueOf(thread).String()
 		return thread
 	}
-	id := agentDescriptiveID(ag)
+	id := agentDescriptiveID(a)
 	ex := &workflow.Executor{
 		ID: id,
 		Config: []*workflow.ExecutorConfig{
@@ -54,7 +54,7 @@ func newExecutor(ag Agent, emitEvents bool) *workflow.Executor {
 					if data == nil {
 						return nil
 					}
-					thread, err = ag.UnmarshalThread(data.([]byte))
+					thread, err = a.UnmarshalThread(data.([]byte))
 					return err
 				},
 			},
@@ -64,7 +64,7 @@ func newExecutor(ag Agent, emitEvents bool) *workflow.Executor {
 		StateKey: "agent_messages",
 		TakeTurnHandler: func(ctx *workflow.Context, token workflow.TurnToken, messages []*message.Message) error {
 			if !token.EmitEventsOr(emitEvents) {
-				response, err := ag.Run(&RunContext{Context: ctx.GetContext(), Thread: ensureThread()}, messages...)
+				response, err := Run(ctx, a, RunOptions{Thread: ensureThread()}, messages...)
 				if err != nil {
 					return err
 				}
@@ -72,7 +72,7 @@ func newExecutor(ag Agent, emitEvents bool) *workflow.Executor {
 			}
 			// Run the agent in streaming mode only when agent run update events are to be emitted.
 			var updates []*RunResponseUpdate
-			for update, err := range ag.RunStream(&RunContext{Context: ctx.GetContext(), Thread: ensureThread()}, messages...) {
+			for update, err := range RunStream(ctx, a, RunOptions{Thread: ensureThread()}, messages...) {
 				if err != nil {
 					return err
 				}
@@ -104,8 +104,9 @@ func Bind(ag Agent, emitEvents bool) *workflow.ExecutorBinding {
 }
 
 func agentDescriptiveID(ag Agent) string {
-	id := ag.ID()
-	name := ag.Name()
+	iden := ag.Identity()
+	id := iden.ID()
+	name := iden.Name()
 	if name != "" {
 		return name + "_" + id
 	}

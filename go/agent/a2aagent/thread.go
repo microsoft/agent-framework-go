@@ -11,6 +11,7 @@ import (
 // Thread represents a thread identified by a service-managed identifier.
 type Thread struct {
 	ContextID string
+	TaskID    string
 }
 
 func (t *Thread) MessagesReceived(ctx context.Context, messages ...*message.Message) error {

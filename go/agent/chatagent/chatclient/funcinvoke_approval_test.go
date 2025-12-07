@@ -23,35 +23,33 @@ type approvalTestClient struct {
 	streamingCallback func(messages []*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error]
 }
 
-func (c *approvalTestClient) Response(ctx context.Context, opts *chatclient.ChatOptions, messages ...*message.Message) (*chatclient.ChatResponse, error) {
-	if c.currentRound >= len(c.responses) {
-		return nil, fmt.Errorf("unexpected call to Response, round %d, expected %d rounds", c.currentRound, len(c.responses))
-	}
-
-	response := c.responses[c.currentRound]
-	c.currentRound++
-
-	return &chatclient.ChatResponse{Messages: response}, nil
+func (c *approvalTestClient) Capabilities() chatclient.Capabilities {
+	return chatclient.Capabilities{}
 }
 
-func (c *approvalTestClient) StreamingResponse(ctx context.Context, opts *chatclient.ChatOptions, messages ...*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error] {
+func (c *approvalTestClient) Response(ctx context.Context, opts chatclient.ChatOptions, messages ...*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error] {
 	if c.streamingCallback != nil {
 		return c.streamingCallback(messages)
 	}
 
-	// Default streaming implementation: convert Response to streaming
-	return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
-		resp, err := c.Response(ctx, opts, messages...)
-		if err != nil {
-			yield(nil, err)
-			return
+	if c.currentRound >= len(c.responses) {
+		return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
+			yield(nil, fmt.Errorf("unexpected call to Response, round %d, expected %d rounds", c.currentRound, len(c.responses)))
 		}
+	}
 
-		for _, msg := range resp.Messages {
+	responseMessages := c.responses[c.currentRound]
+	c.currentRound++
+
+	return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
+		for _, msg := range responseMessages {
 			for _, content := range msg.Contents {
 				update := &chatclient.ChatResponseUpdate{
-					Role:     msg.Role,
-					Contents: []message.Content{content},
+					Role:           msg.Role,
+					Contents:       []message.Content{content},
+					AuthorName:     msg.AuthorName,
+					MessageID:      msg.ID,
+					ConversationID: opts.ConversationID,
 				}
 				if !yield(update, nil) {
 					return
@@ -61,8 +59,8 @@ func (c *approvalTestClient) StreamingResponse(ctx context.Context, opts *chatcl
 	}
 }
 
-// invokeAndAssertApproval is the main helper for non-streaming approval tests
-func invokeAndAssertApproval(t *testing.T, options *chatclient.ChatOptions, input []*message.Message,
+// invokeAndAssertApproval is the helper for approval tests
+func invokeAndAssertApproval(t *testing.T, options chatclient.ChatOptions, input []*message.Message,
 	downstreamClientOutput []*message.Message, expectedOutput []*message.Message,
 	expectedDownstreamClientInput []*message.Message, additionalTools []tool.Tool) {
 
@@ -77,46 +75,9 @@ func invokeAndAssertApproval(t *testing.T, options *chatclient.ChatOptions, inpu
 	invokeAndAssertApprovalWithClient(t, client, options, input, expectedOutput, additionalTools)
 }
 
-// invokeAndAssertApprovalWithClient performs the actual test execution
+// invokeAndAssertApprovalWithClient performs streaming test execution
 func invokeAndAssertApprovalWithClient(t *testing.T, innerClient chatclient.Client,
-	options *chatclient.ChatOptions, input []*message.Message,
-	expectedOutput []*message.Message, additionalTools []tool.Tool) {
-
-	functionInvokingOptions := &chatclient.FunctionInvokingOptions{}
-	if additionalTools != nil {
-		functionInvokingOptions.AdditionalTools = additionalTools
-	}
-
-	client := chatclient.NewFunctionInvoking(innerClient, functionInvokingOptions)
-	ctx := context.Background()
-
-	response, err := client.Response(ctx, options, input...)
-	if err != nil {
-		t.Fatalf("Response failed: %v", err)
-	}
-
-	assertMessageListsEqual(t, expectedOutput, response.Messages)
-}
-
-// invokeAndAssertStreamingApproval is the helper for streaming approval tests
-func invokeAndAssertStreamingApproval(t *testing.T, options *chatclient.ChatOptions, input []*message.Message,
-	downstreamClientOutput []*message.Message, expectedOutput []*message.Message,
-	expectedDownstreamClientInput []*message.Message, additionalTools []tool.Tool) {
-
-	client := &approvalTestClient{
-		responses: [][]*message.Message{downstreamClientOutput},
-	}
-
-	if expectedDownstreamClientInput != nil {
-		client.expectedInputs = [][]*message.Message{expectedDownstreamClientInput}
-	}
-
-	invokeAndAssertStreamingApprovalWithClient(t, client, options, input, expectedOutput, additionalTools)
-}
-
-// invokeAndAssertStreamingApprovalWithClient performs streaming test execution
-func invokeAndAssertStreamingApprovalWithClient(t *testing.T, innerClient chatclient.Client,
-	options *chatclient.ChatOptions, input []*message.Message,
+	options chatclient.ChatOptions, input []*message.Message,
 	expectedOutput []*message.Message, additionalTools []tool.Tool) {
 
 	functionInvokingOptions := &chatclient.FunctionInvokingOptions{}
@@ -130,44 +91,18 @@ func invokeAndAssertStreamingApprovalWithClient(t *testing.T, innerClient chatcl
 	// Collect all streaming updates into messages
 
 	var updates []*chatclient.ChatResponseUpdate
-	for update, err := range client.StreamingResponse(ctx, options, input...) {
+	for update, err := range client.Response(ctx, options, input...) {
 		if err != nil {
 			t.Fatalf("StreamingResponse failed: %v", err)
 		}
 		updates = append(updates, update)
 	}
-	resp := chatclient.NewChatResponseFromUpdates(updates)
-	assertMessageListsEqual(t, expectedOutput, resp.Messages)
+	msgs := chatclient.NewMessageFromUpdates(updates)
+	assertMessageListsEqual(t, expectedOutput, msgs)
 }
 
-// expectApprovalError expects an error to be thrown during invocation
-func expectApprovalError(t *testing.T, options *chatclient.ChatOptions, input []*message.Message,
-	downstreamClientOutput []*message.Message, expectedErrorMsg string, additionalTools []tool.Tool) {
-
-	client := &approvalTestClient{
-		responses: [][]*message.Message{downstreamClientOutput},
-	}
-
-	functionInvokingOptions := &chatclient.FunctionInvokingOptions{}
-	if additionalTools != nil {
-		functionInvokingOptions.AdditionalTools = additionalTools
-	}
-
-	fiClient := chatclient.NewFunctionInvoking(client, functionInvokingOptions)
-	ctx := context.Background()
-
-	_, err := fiClient.Response(ctx, options, input...)
-	if err == nil {
-		t.Fatalf("Expected error with message %q, but got nil", expectedErrorMsg)
-	}
-
-	if err.Error() != expectedErrorMsg {
-		t.Fatalf("Expected error message %q, got %q", expectedErrorMsg, err.Error())
-	}
-}
-
-// expectStreamingApprovalError expects an error during streaming invocation
-func expectStreamingApprovalError(t *testing.T, options *chatclient.ChatOptions, input []*message.Message,
+// expectApprovalError expects an error during streaming invocation
+func expectApprovalError(t *testing.T, options chatclient.ChatOptions, input []*message.Message,
 	downstreamClientOutput []*message.Message, expectedErrorMsg string, additionalTools []tool.Tool) {
 
 	client := &approvalTestClient{
@@ -183,7 +118,7 @@ func expectStreamingApprovalError(t *testing.T, options *chatclient.ChatOptions,
 	ctx := context.Background()
 
 	var lastErr error
-	for _, err := range fiClient.StreamingResponse(ctx, options, input...) {
+	for _, err := range fiClient.Response(ctx, options, input...) {
 		if err != nil {
 			lastErr = err
 			break
@@ -217,7 +152,7 @@ func TestFunctionInvoking_AllFunctionCallsReplacedWithApprovalsWhenAllRequireApp
 				tool.ApprovalRequiredFunc(createFunc2()),
 			}
 
-			options := &chatclient.ChatOptions{Tools: tools}
+			options := chatclient.ChatOptions{Tools: tools}
 			if tt.useAdditionalTools {
 				options.Tools = nil
 			}
@@ -246,7 +181,6 @@ func TestFunctionInvoking_AllFunctionCallsReplacedWithApprovalsWhenAllRequireApp
 			}
 
 			invokeAndAssertApproval(t, options, input, downstreamClientOutput, expectedOutput, nil, additionalTools)
-			invokeAndAssertStreamingApproval(t, options, input, downstreamClientOutput, expectedOutput, nil, additionalTools)
 		})
 	}
 }
@@ -254,7 +188,7 @@ func TestFunctionInvoking_AllFunctionCallsReplacedWithApprovalsWhenAllRequireApp
 // TestFunctionInvoking_AllFunctionCallsReplacedWithApprovalsWhenAnyRequireApproval tests that
 // all function calls are replaced with approval requests when any function requires approval
 func TestFunctionInvoking_AllFunctionCallsReplacedWithApprovalsWhenAnyRequireApproval(t *testing.T) {
-	options := &chatclient.ChatOptions{
+	options := chatclient.ChatOptions{
 		Tools: []tool.Tool{
 			tool.ApprovalRequiredFunc(createFunc1()),
 			createFunc2(),
@@ -280,7 +214,6 @@ func TestFunctionInvoking_AllFunctionCallsReplacedWithApprovalsWhenAnyRequireApp
 	}
 
 	invokeAndAssertApproval(t, options, input, downstreamClientOutput, expectedOutput, nil, nil)
-	invokeAndAssertStreamingApproval(t, options, input, downstreamClientOutput, expectedOutput, nil, nil)
 }
 
 // TestFunctionInvoking_AllFunctionCallsReplacedWithApprovalsWhenAnyRequestOrAdditionalRequireApproval tests that
@@ -312,7 +245,7 @@ func TestFunctionInvoking_AllFunctionCallsReplacedWithApprovalsWhenAnyRequestOrA
 				additionalTools = []tool.Tool{func1}
 			}
 
-			options := &chatclient.ChatOptions{
+			options := chatclient.ChatOptions{
 				Tools: chatOptionsTools,
 			}
 
@@ -335,14 +268,13 @@ func TestFunctionInvoking_AllFunctionCallsReplacedWithApprovalsWhenAnyRequestOrA
 			}
 
 			invokeAndAssertApproval(t, options, input, downstreamClientOutput, expectedOutput, nil, additionalTools)
-			invokeAndAssertStreamingApproval(t, options, input, downstreamClientOutput, expectedOutput, nil, additionalTools)
 		})
 	}
 }
 
 // TestFunctionInvoking_ApprovedApprovalResponsesAreExecuted tests that approved approval responses are executed
 func TestFunctionInvoking_ApprovedApprovalResponsesAreExecuted(t *testing.T) {
-	options := &chatclient.ChatOptions{
+	options := chatclient.ChatOptions{
 		Tools: []tool.Tool{
 			tool.ApprovalRequiredFunc(createFunc1()),
 			createFunc2(),
@@ -398,13 +330,12 @@ func TestFunctionInvoking_ApprovedApprovalResponsesAreExecuted(t *testing.T) {
 	}
 
 	invokeAndAssertApproval(t, options, input, downstreamClientOutput, expectedOutput, expectedDownstreamClientInput, nil)
-	invokeAndAssertStreamingApproval(t, options, input, downstreamClientOutput, expectedOutput, expectedDownstreamClientInput, nil)
 }
 
 // TestFunctionInvoking_ApprovedApprovalResponsesFromSeparateFCCMessagesAreExecuted tests that approved approval responses
 // from separate assistant messages (each with their own MessageId) are properly aggregated and executed
 func TestFunctionInvoking_ApprovedApprovalResponsesFromSeparateFCCMessagesAreExecuted(t *testing.T) {
-	options := &chatclient.ChatOptions{
+	options := chatclient.ChatOptions{
 		Tools: []tool.Tool{
 			tool.ApprovalRequiredFunc(createFunc1()),
 			createFunc2(),
@@ -464,12 +395,11 @@ func TestFunctionInvoking_ApprovedApprovalResponsesFromSeparateFCCMessagesAreExe
 	}
 
 	invokeAndAssertApproval(t, options, input, downstreamClientOutput, expectedOutput, expectedDownstreamClientInput, nil)
-	invokeAndAssertStreamingApproval(t, options, input, downstreamClientOutput, expectedOutput, expectedDownstreamClientInput, nil)
 }
 
 // TestFunctionInvoking_RejectedApprovalResponsesAreFailed tests that rejected approval responses fail with error messages
 func TestFunctionInvoking_RejectedApprovalResponsesAreFailed(t *testing.T) {
-	options := &chatclient.ChatOptions{
+	options := chatclient.ChatOptions{
 		Tools: []tool.Tool{
 			tool.ApprovalRequiredFunc(createFunc1()),
 			createFunc2(),
@@ -521,13 +451,12 @@ func TestFunctionInvoking_RejectedApprovalResponsesAreFailed(t *testing.T) {
 	}
 
 	invokeAndAssertApproval(t, options, input, downstreamClientOutput, expectedOutput, expectedDownstreamClientInput, nil)
-	invokeAndAssertStreamingApproval(t, options, input, downstreamClientOutput, expectedOutput, expectedDownstreamClientInput, nil)
 }
 
 // TestFunctionInvoking_MixedApprovedAndRejectedApprovalResponsesAreExecutedAndFailed tests that
 // mixed approved and rejected approval responses are handled correctly
 func TestFunctionInvoking_MixedApprovedAndRejectedApprovalResponsesAreExecutedAndFailed(t *testing.T) {
-	options := &chatclient.ChatOptions{
+	options := chatclient.ChatOptions{
 		Tools: []tool.Tool{
 			tool.ApprovalRequiredFunc(createFunc1()),
 			createFunc2(),
@@ -566,25 +495,7 @@ func TestFunctionInvoking_MixedApprovedAndRejectedApprovalResponsesAreExecutedAn
 		}},
 	}
 
-	// Non-streaming output: separate Tool messages for each function result
-	expectedOutputNonStreaming := []*message.Message{
-		{Role: message.RoleAssistant, Contents: []message.Content{
-			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
-			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)},
-		}},
-		{Role: message.RoleTool, Contents: []message.Content{
-			&message.FunctionResultContent{CallID: "callId1", Result: "Error: Tool call invocation was rejected by user."},
-		}},
-		{Role: message.RoleTool, Contents: []message.Content{
-			&message.FunctionResultContent{CallID: "callId2", Result: "Result 2: 42"},
-		}},
-		{Role: message.RoleAssistant, Contents: []message.Content{
-			&message.TextContent{Text: "world"},
-		}},
-	}
-
-	// Streaming output: combined Tool message with both function results
-	expectedOutputStreaming := []*message.Message{
+	expectedOutput := []*message.Message{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
 			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: json.RawMessage(`{"i":42}`)},
@@ -598,14 +509,13 @@ func TestFunctionInvoking_MixedApprovedAndRejectedApprovalResponsesAreExecutedAn
 		}},
 	}
 
-	invokeAndAssertApproval(t, options, input, downstreamClientOutput, expectedOutputNonStreaming, expectedDownstreamClientInput, nil)
-	invokeAndAssertStreamingApproval(t, options, input, downstreamClientOutput, expectedOutputStreaming, expectedDownstreamClientInput, nil)
+	invokeAndAssertApproval(t, options, input, downstreamClientOutput, expectedOutput, expectedDownstreamClientInput, nil)
 }
 
 // TestFunctionInvoking_ApprovedInputsAreExecutedAndFunctionResultsAreConverted tests that
 // approved inputs are executed and function results are converted back to approval requests
 func TestFunctionInvoking_ApprovedInputsAreExecutedAndFunctionResultsAreConverted(t *testing.T) {
-	options := &chatclient.ChatOptions{
+	options := chatclient.ChatOptions{
 		Tools: []tool.Tool{
 			createFunc1(),
 			tool.ApprovalRequiredFunc(createFunc2()),
@@ -659,13 +569,12 @@ func TestFunctionInvoking_ApprovedInputsAreExecutedAndFunctionResultsAreConverte
 	}
 
 	invokeAndAssertApproval(t, options, input, downstreamClientOutput, expectedOutput, expectedDownstreamClientInput, nil)
-	invokeAndAssertStreamingApproval(t, options, input, downstreamClientOutput, expectedOutput, expectedDownstreamClientInput, nil)
 }
 
 // TestFunctionInvoking_AlreadyExecutedApprovalsAreIgnored tests that already executed approvals
 // (ones that have both FunctionCallContent and FunctionResultContent in history) are ignored
 func TestFunctionInvoking_AlreadyExecutedApprovalsAreIgnored(t *testing.T) {
-	options := &chatclient.ChatOptions{
+	options := chatclient.ChatOptions{
 		Tools: []tool.Tool{
 			createFunc1(),
 			tool.ApprovalRequiredFunc(createFunc2()),
@@ -744,14 +653,13 @@ func TestFunctionInvoking_AlreadyExecutedApprovalsAreIgnored(t *testing.T) {
 	}
 
 	invokeAndAssertApproval(t, options, input, downstreamClientOutput, expectedOutput, expectedDownstreamClientInput, nil)
-	invokeAndAssertStreamingApproval(t, options, input, downstreamClientOutput, expectedOutput, expectedDownstreamClientInput, nil)
 }
 
 // TestFunctionInvoking_MixedApprovalRequiredToolsWithNonApprovalRequiringFunctionCall tests that
 // when only some tools require approval, non-approval-requiring function calls are executed immediately
 // and don't trigger approval requests for all calls
 func TestFunctionInvoking_MixedApprovalRequiredToolsWithNonApprovalRequiringFunctionCall(t *testing.T) {
-	options := &chatclient.ChatOptions{
+	options := chatclient.ChatOptions{
 		Tools: []tool.Tool{
 			tool.ApprovalRequiredFunc(createFunc1()), // Func1 requires approval
 			createFunc2(),                            // Func2 does NOT require approval
@@ -796,16 +704,12 @@ func TestFunctionInvoking_MixedApprovalRequiredToolsWithNonApprovalRequiringFunc
 	}
 
 	invokeAndAssertApprovalWithClient(t, client, options, input, expectedOutput, nil)
-
-	// Reset for streaming test
-	client.currentRound = 0
-	invokeAndAssertStreamingApprovalWithClient(t, client, options, input, expectedOutput, nil)
 }
 
 // TestFunctionInvoking_ApprovedApprovalResponsesWithoutApprovalRequestAreExecuted tests that
 // approval responses without preceding approval requests are still executed
 func TestFunctionInvoking_ApprovedApprovalResponsesWithoutApprovalRequestAreExecuted(t *testing.T) {
-	options := &chatclient.ChatOptions{
+	options := chatclient.ChatOptions{
 		Tools: []tool.Tool{
 			tool.ApprovalRequiredFunc(createFunc1()),
 			createFunc2(),
@@ -854,13 +758,12 @@ func TestFunctionInvoking_ApprovedApprovalResponsesWithoutApprovalRequestAreExec
 	}
 
 	invokeAndAssertApproval(t, options, input, downstreamClientOutput, expectedOutput, expectedDownstreamClientInput, nil)
-	invokeAndAssertStreamingApproval(t, options, input, downstreamClientOutput, expectedOutput, expectedDownstreamClientInput, nil)
 }
 
 // TestFunctionInvoking_FunctionCallContentIsNotPassedToDownstreamServiceWithServiceThreads tests that
 // when using ConversationId (service threads), FunctionCallContent is not passed to downstream service
 func TestFunctionInvoking_FunctionCallContentIsNotPassedToDownstreamServiceWithServiceThreads(t *testing.T) {
-	options := &chatclient.ChatOptions{
+	options := chatclient.ChatOptions{
 		Tools: []tool.Tool{
 			tool.ApprovalRequiredFunc(createFunc1()),
 			createFunc2(),
@@ -906,13 +809,12 @@ func TestFunctionInvoking_FunctionCallContentIsNotPassedToDownstreamServiceWithS
 	}
 
 	invokeAndAssertApproval(t, options, input, downstreamClientOutput, expectedOutput, expectedDownstreamClientInput, nil)
-	invokeAndAssertStreamingApproval(t, options, input, downstreamClientOutput, expectedOutput, expectedDownstreamClientInput, nil)
 }
 
 // TestFunctionInvoking_FunctionCallContentIsYieldedImmediatelyIfNoApprovalRequiredWhenStreaming tests that
 // function call content is yielded immediately when no approval is required (no approval-required functions)
 func TestFunctionInvoking_FunctionCallContentIsYieldedImmediatelyIfNoApprovalRequiredWhenStreaming(t *testing.T) {
-	options := &chatclient.ChatOptions{
+	options := chatclient.ChatOptions{
 		Tools: []tool.Tool{
 			createFunc1(), // No approval required
 			createFunc2(), // No approval required
@@ -957,17 +859,14 @@ func TestFunctionInvoking_FunctionCallContentIsYieldedImmediatelyIfNoApprovalReq
 		}},
 	}
 
-	invokeAndAssertApprovalWithClient(t, client, options, input, expectedOutput, nil)
-
-	// Reset for streaming test
 	client.currentRound = 0
-	invokeAndAssertStreamingApprovalWithClient(t, client, options, input, expectedOutput, nil)
+	invokeAndAssertApprovalWithClient(t, client, options, input, expectedOutput, nil)
 }
 
 // TestFunctionInvoking_FunctionCallsAreBufferedUntilApprovalRequirementEncounteredWhenStreaming tests that
 // when some functions require approval, function calls are buffered and converted to approval requests
 func TestFunctionInvoking_FunctionCallsAreBufferedUntilApprovalRequirementEncounteredWhenStreaming(t *testing.T) {
-	options := &chatclient.ChatOptions{
+	options := chatclient.ChatOptions{
 		Tools: []tool.Tool{
 			createFunc1(),                            // No approval required
 			tool.ApprovalRequiredFunc(createFunc2()), // Approval required
@@ -995,13 +894,12 @@ func TestFunctionInvoking_FunctionCallsAreBufferedUntilApprovalRequirementEncoun
 	}
 
 	invokeAndAssertApproval(t, options, input, downstreamClientOutput, expectedOutput, nil, nil)
-	invokeAndAssertStreamingApproval(t, options, input, downstreamClientOutput, expectedOutput, nil, nil)
 }
 
 // TestFunctionInvoking_ApprovalRequestWithoutApprovalResponseThrows tests that an approval request
 // without a matching approval response throws an error
 func TestFunctionInvoking_ApprovalRequestWithoutApprovalResponseThrows(t *testing.T) {
-	options := &chatclient.ChatOptions{
+	options := chatclient.ChatOptions{
 		Tools: []tool.Tool{
 			tool.ApprovalRequiredFunc(createFunc1()),
 			createFunc2(),
@@ -1019,7 +917,6 @@ func TestFunctionInvoking_ApprovalRequestWithoutApprovalResponseThrows(t *testin
 
 	// Note: We don't pass any downstream client output since the error should occur during approval processing
 	expectApprovalError(t, options, input, nil, expectedErrorMsg, nil)
-	expectStreamingApprovalError(t, options, input, nil, expectedErrorMsg, nil)
 }
 
 // Helper functions to create test tools

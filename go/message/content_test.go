@@ -30,12 +30,12 @@ func TestTextReasoningContent_String(t *testing.T) {
 
 // Test UsageDetails
 func TestUsageDetails_Add(t *testing.T) {
-	ud1 := &message.UsageDetails{
+	ud1 := message.UsageDetails{
 		InputTokenCount:  10,
 		OutputTokenCount: 20,
 		TotalTokenCount:  30,
 	}
-	ud2 := &message.UsageDetails{
+	ud2 := message.UsageDetails{
 		InputTokenCount:  5,
 		OutputTokenCount: 15,
 		TotalTokenCount:  20,
@@ -54,13 +54,13 @@ func TestUsageDetails_Add(t *testing.T) {
 }
 
 func TestUsageDetails_AddWithAdditionalCounts(t *testing.T) {
-	ud1 := &message.UsageDetails{
+	ud1 := message.UsageDetails{
 		InputTokenCount: 10,
 		AdditionalCounts: map[string]int64{
 			"cache_read": 5,
 		},
 	}
-	ud2 := &message.UsageDetails{
+	ud2 := message.UsageDetails{
 		InputTokenCount: 5,
 		AdditionalCounts: map[string]int64{
 			"cache_read":  3,
@@ -74,20 +74,6 @@ func TestUsageDetails_AddWithAdditionalCounts(t *testing.T) {
 	}
 	if ud1.AdditionalCounts["cache_write"] != 2 {
 		t.Errorf("expected cache_write 2, got %d", ud1.AdditionalCounts["cache_write"])
-	}
-}
-
-func TestUsageDetails_AddWithNil(t *testing.T) {
-	var ud1 *message.UsageDetails
-	ud2 := &message.UsageDetails{InputTokenCount: 10}
-
-	// Should not panic
-	ud1.Add(ud2)
-
-	ud1 = &message.UsageDetails{InputTokenCount: 10}
-	ud1.Add(nil)
-	if ud1.InputTokenCount != 10 {
-		t.Errorf("expected input tokens to remain 10, got %d", ud1.InputTokenCount)
 	}
 }
 

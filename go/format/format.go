@@ -2,20 +2,11 @@
 
 package format
 
-import "encoding"
-
 // Format represents the desired format, e.g., for agent responses or tool input/output.
 type Format interface {
 	// Kind is the format type.
 	// For example, "text" or "json".
 	Kind() string
-}
-
-type Formattable interface {
-	encoding.BinaryUnmarshaler
-
-	// Format returns the desired format for the object.
-	Format() (Format, error)
 }
 
 type simple struct {
@@ -48,4 +39,9 @@ type SchemaFormat interface {
 
 	// Schema returns the JSON Schema that defines the format.
 	Schema() any
+}
+
+type Formatter interface {
+	Format(v any) (Format, error)
+	Unmarshal(data []byte, format Format, v any) error
 }

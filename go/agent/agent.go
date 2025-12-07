@@ -3,87 +3,207 @@
 package agent
 
 import (
+	"cmp"
 	"context"
-	"encoding/json"
-	"fmt"
+	"errors"
 	"iter"
+	"maps"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/microsoft/agent-framework/go/format"
 	"github.com/microsoft/agent-framework/go/memory"
 	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/param"
-	"github.com/microsoft/agent-framework/go/tool"
 )
 
-// RunContext contains context for agent execution.
-type RunContext struct {
-	context.Context
-	Thread  memory.Thread
-	Options *RunOptions
-}
-
-// GetContext returns the context.Context from the RunContext, or a background context if nil.
-func (ctx *RunContext) GetContext() context.Context {
-	if ctx == nil || ctx.Context == nil {
-		return context.Background()
-	}
-	return ctx.Context
-}
-
-// GetThread returns the memory.Thread from the RunContext, or nil if none.
-func (ctx *RunContext) GetThread() memory.Thread {
-	if ctx == nil {
-		return nil
-	}
-	return ctx.Thread
-}
-
-// GetOptions returns the RunOptions from the RunContext, or nil if none.
-func (ctx *RunContext) GetOptions() *RunOptions {
-	if ctx == nil {
-		return nil
-	}
-	return ctx.Options
-}
-
 type RunOptions struct {
-	ContinuationToken        any
+	Thread                   memory.Thread
+	Streaming                param.Opt[bool]
 	AllowBackgroundResponses param.Opt[bool]
+	ContinuationToken        any
+	ResponseFormat           format.Format
 
 	Options any
 }
 
-type Agent interface {
-	ID() string
-	Name() string
-	Description() string
+type Identity struct {
+	id          string
+	name        string
+	description string
+}
 
-	Run(ctx *RunContext, messages ...*message.Message) (*RunResponse, error)
-	RunStream(ctx *RunContext, messages ...*message.Message) iter.Seq2[*RunResponseUpdate, error]
+func NewIdentity(id, name, description string) Identity {
+	if id == "" {
+		id = uuid.NewString()
+	}
+	return Identity{
+		id:          id,
+		name:        name,
+		description: description,
+	}
+}
+
+func (iden Identity) ID() string {
+	return iden.id
+}
+
+func (iden Identity) Name() string {
+	return iden.name
+}
+
+func (iden Identity) Description() string {
+	return iden.description
+}
+
+type Capabilities struct {
+	Streaming        bool
+	StructuredOutput format.Formatter // nil if structured output is not supported
+}
+
+type Agent interface {
+	Identity() Identity
+	Capabilities() Capabilities
+
+	Run(ctx context.Context, options RunOptions, messages ...*message.Message) iter.Seq2[*RunResponseUpdate, error]
 
 	NewThread() memory.Thread
 	UnmarshalThread(data []byte) (memory.Thread, error)
 }
 
-// Config contains configuration for an [Agent].
-type Config struct {
-	ID   string
-	Name string
-	Opts *RunOptions
+func Run(ctx context.Context, a Agent, options RunOptions, messages ...*message.Message) (*RunResponse, error) {
+	resp := RunResponse{
+		AgentID: a.Identity().ID(),
+	}
+	for update, err := range run(ctx, a, options, messages...) {
+		if err != nil {
+			return nil, err
+		}
+		processUpdate(&resp, update)
+	}
+	for _, msg := range resp.Messages {
+		msg.Contents = message.CoalesceContents(msg.Contents)
+	}
+	return &resp, nil
+}
 
-	SystemInstructions string
+func RunStream(ctx context.Context, a Agent, options RunOptions, messages ...*message.Message) iter.Seq2[*RunResponseUpdate, error] {
+	options.Streaming = param.NewOpt(true)
+	return run(ctx, a, options, messages...)
+}
 
-	// The following functions implement the core behavior of the agent.
-	// If any of these are nil, the corresponding functionality is not supported,
-	// and the [Agent] might fall back to default behavior or return an error.
-	// The input parameters will always be non-nil and can be mutated as needed.
-	NewThread          func() memory.Thread
-	UnmarshalThread    func(data []byte) (memory.Thread, error)
-	NewContextProvider func() memory.ContextProvider
-	Run                func(ctx *RunContext, messages ...*message.Message) (*RunResponse, error)
-	RunStream          func(ctx *RunContext, messages ...*message.Message) iter.Seq2[*RunResponseUpdate, error]
-	RunOf              func(v any, ctx *RunContext, messages ...*message.Message) (*RunResponse, error)
+func run(ctx context.Context, a Agent, options RunOptions, messages ...*message.Message) iter.Seq2[*RunResponseUpdate, error] {
+	retErr := func(err error) iter.Seq2[*RunResponseUpdate, error] {
+		return func(yield func(*RunResponseUpdate, error) bool) {
+			yield(nil, err)
+		}
+	}
+	if a == nil {
+		return retErr(errors.New("agent cannot be nil"))
+	}
+	return a.Run(ctx, options, messages...)
+}
+
+// RunText executes the agent with a single text message and returns the response.
+func RunText(ctx context.Context, a Agent, msg string) (*RunResponse, error) {
+	return Run(ctx, a, RunOptions{}, message.NewText(msg))
+}
+
+func RunTextStream(ctx context.Context, a Agent, msg string) iter.Seq2[*RunResponseUpdate, error] {
+	return RunStream(ctx, a, RunOptions{}, message.NewText(msg))
+}
+
+// RunFor executes the agent with the given messages and returns the result of type T.
+func RunFor[T any](ctx context.Context, a Agent, options RunOptions, messages ...*message.Message) (T, *RunResponse, error) {
+	var v T
+	formatter := a.Capabilities().StructuredOutput
+	if formatter == nil {
+		return v, nil, errors.New("agent does not support structured output")
+	}
+	format, err := formatter.Format(v)
+	if err != nil {
+		return v, nil, err
+	}
+	options.ResponseFormat = format
+	resp, err := Run(ctx, a, options, messages...)
+	if err != nil {
+		return v, resp, err
+	}
+	err = formatter.Unmarshal([]byte(resp.String()), options.ResponseFormat, &v)
+	return v, resp, err
+}
+
+// processUpdate updates the ChatResponse r with the information from the ChatResponseUpdate update.
+func processUpdate(r *RunResponse, update *RunResponseUpdate) {
+	if update == nil {
+		return
+	}
+	// If there is no message created yet, or if the last update we saw had a different
+	// identifying parts, create a new message.
+	isNewMessage := true
+	if len(r.Messages) > 0 {
+		lastMsg := r.Messages[len(r.Messages)-1]
+		isNewMessage = notEmptyNorEqual(update.AuthorName, lastMsg.AuthorName) ||
+			notEmptyNorEqual(update.MessageID, lastMsg.ID) ||
+			notEmptyNorEqual(string(update.Role), string(lastMsg.Role))
+	}
+	// Get the message to target, either a new one or the last ones.
+	var msg *message.Message
+	if isNewMessage {
+		msg = &message.Message{
+			Role: message.RoleAssistant,
+		}
+		r.Messages = append(r.Messages, msg)
+	} else {
+		msg = r.Messages[len(r.Messages)-1]
+	}
+	// Some members on ChatResponseUpdate map to members of ChatMessage.
+	// Incorporate those into the latest message; in cases where the message
+	// stores a single value, prefer the latest update's value over anything
+	// stored in the message.
+	msg.AuthorName = cmp.Or(update.AuthorName, msg.AuthorName)
+	msg.Role = cmp.Or(update.Role, msg.Role)
+	msg.ID = cmp.Or(update.MessageID, msg.ID)
+	if msg.CreatedAt.IsZero() || (!update.CreatedAt.IsZero() && update.CreatedAt.After(msg.CreatedAt)) {
+		msg.CreatedAt = update.CreatedAt
+	}
+	for _, content := range update.Contents {
+		switch c := content.(type) {
+		case *message.UsageContent:
+			// Usage content is treated specially and propagated to the response's Usage.
+			if r.Usage == nil {
+				r.Usage = new(message.UsageDetails)
+			}
+			r.Usage.Add(c.Details)
+		default:
+			msg.Contents = append(msg.Contents, content)
+		}
+	}
+	// Other members on a ChatResponseUpdate map to members of the ChatResponse.
+	// Update the response object with those, preferring the values from later updates.
+	r.ID = cmp.Or(update.ResponseID, r.ID)
+	if r.CreatedAt.IsZero() || (!update.CreatedAt.IsZero() && update.CreatedAt.After(r.CreatedAt)) {
+		r.CreatedAt = update.CreatedAt
+	}
+	if update.AdditionalProperties != nil {
+		if r.AdditionalProperties == nil {
+			r.AdditionalProperties = make(map[string]any)
+		}
+		maps.Copy(r.AdditionalProperties, update.AdditionalProperties)
+	}
+	if r.RawRepresentation == nil {
+		r.RawRepresentation = update.RawRepresentation
+	} else if s, ok := r.RawRepresentation.([]any); ok {
+		r.RawRepresentation = append(s, update.RawRepresentation)
+	} else {
+		r.RawRepresentation = []any{r.RawRepresentation, update.RawRepresentation}
+	}
+}
+
+// notEmptyNorEqual returns true if both strings are not empty and not the same as each other.
+func notEmptyNorEqual(s1, s2 string) bool {
+	return s1 != "" && s2 != "" && s1 != s2
 }
 
 // RunResponse represents the result of an agent execution.
@@ -160,80 +280,4 @@ func (r *RunResponseUpdate) UserInputRequests() iter.Seq[message.Content] {
 			}
 		}
 	}
-}
-
-// FuncTool creates a function tool that invokes the given agent.
-// The provided thread is used for the agent's context during invocations,
-// or nil to create a new thread for each invocation.
-func FuncTool(agent Agent, thread memory.Thread) tool.FuncTool {
-	return functool{
-		name:        agent.Name(),
-		description: agent.Description(),
-		thread:      thread,
-		agent:       agent,
-	}
-}
-
-type functool struct {
-	name        string
-	description string
-	thread      memory.Thread
-	agent       Agent
-}
-
-func (t functool) Name() string {
-	return t.name
-}
-
-func (t functool) Description() string {
-	return t.description
-}
-
-func (t functool) Schema() any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"query": map[string]any{
-				"type":        "string",
-				"description": "input query to invoke the agent",
-			},
-		},
-		"required": []string{"query"},
-	}
-}
-
-func (t functool) ReturnSchema() any {
-	return map[string]any{
-		"type": "string",
-	}
-}
-
-func (t functool) Call(ctx context.Context, args any) (any, error) {
-	var in struct {
-		Query string `json:"query"`
-	}
-	var raw json.RawMessage
-	if args == nil {
-		raw = json.RawMessage("{}")
-	} else {
-		var ok bool
-		raw, ok = args.(json.RawMessage)
-		if !ok {
-			return nil, fmt.Errorf("expected json.RawMessage arguments, got %T", args)
-		}
-	}
-	if err := json.Unmarshal(raw, &in); err != nil {
-		return nil, err
-	}
-	resp, err := t.agent.Run(&RunContext{
-		Context: ctx,
-		Thread:  t.thread,
-	}, &message.Message{
-		Role:     message.RoleUser,
-		Contents: []message.Content{&message.TextContent{Text: in.Query}},
-	})
-	if err != nil {
-		return "", err
-	}
-	return resp.String(), nil
 }

@@ -15,32 +15,33 @@ import (
 )
 
 func main() {
-	var ag *chatagent.Agent
-	ag = openai.NewChatAgent(openai.ClientConfig{
+	var a *chatagent.Agent
+	a = openai.NewChatAgent(openai.ClientConfig{
 		Model: "gpt-4o-mini",
 	}, &chatagent.Options{
 		Instructions:       "You are a friendly assistant. Always address the user by their name.",
-		NewContextProvider: func() memory.ContextProvider { return &UserInfoMemory{Agent: ag} },
+		NewContextProvider: func() memory.ContextProvider { return &UserInfoMemory{Agent: a} },
 	})
 
 	fmt.Println(">> Use thread with blank memory")
 
-	ctx := &agent.RunContext{Thread: ag.NewThread()}
+	ctx := context.Background()
+	opts := agent.RunOptions{Thread: a.NewThread()}
 
-	fmt.Println(must(ag.Run(ctx, message.NewText("Hello, what is the square root of 9?"))))
+	fmt.Println(must(agent.Run(ctx, a, opts, message.NewText("Hello, what is the square root of 9?"))))
 
-	fmt.Println(must(ag.Run(ctx, message.NewText("My name is Ruaidhrí"))))
+	fmt.Println(must(agent.Run(ctx, a, opts, message.NewText("My name is Ruaidhrí"))))
 
-	fmt.Println(must(ag.Run(ctx, message.NewText("I am 20 years old"))))
+	fmt.Println(must(agent.Run(ctx, a, opts, message.NewText("I am 20 years old"))))
 
 	// We can serialize the thread. The serialized state will include the state of the memory component.
-	serializedThread := must(json.Marshal(ctx.Thread))
+	serializedThread := must(json.Marshal(opts.Thread))
 
 	fmt.Println(">> Use new thread with previously created memories")
 
-	deserializedThread := must(ag.UnmarshalThread(serializedThread))
+	deserializedThread := must(a.UnmarshalThread(serializedThread))
 
-	fmt.Println(must(ag.Run(&agent.RunContext{Thread: deserializedThread}, message.NewText("What is my name and age?"))))
+	fmt.Println(must(agent.Run(ctx, a, agent.RunOptions{Thread: deserializedThread}, message.NewText("What is my name and age?"))))
 }
 
 type UserInfo struct {
@@ -79,10 +80,8 @@ func (u *UserInfoMemory) Invoked(ctx *memory.InvokedContext) error {
 		return nil
 	}
 	// To avoid infinite loops, we mark re-entrancy in the context.
-	actx := &agent.RunContext{
-		Context: context.WithValue(ctx.Context, reentrantCtxKey{}, struct{}{}),
-	}
-	out, _, err := chatagent.RunFor[UserInfo](u.Agent, actx, append(ctx.RequestMessages,
+	ctx.Context = context.WithValue(ctx.Context, reentrantCtxKey{}, struct{}{})
+	out, _, err := agent.RunFor[UserInfo](ctx, u.Agent, agent.RunOptions{}, append(ctx.RequestMessages,
 		message.NewText("Extract the user's name and age from the message if present. If not present return empty values."),
 	)...)
 	if err != nil {

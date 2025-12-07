@@ -1,11 +1,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/microsoft/agent-framework/go/agent"
 	"github.com/microsoft/agent-framework/go/agent/chatagent"
-	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/openai"
 	"github.com/microsoft/agent-framework/go/tool"
 )
@@ -18,7 +18,7 @@ for real-time information retrieval and current data access.
 */
 
 func main() {
-	ag := openai.NewChatAgent(openai.ClientConfig{
+	a := openai.NewChatAgent(openai.ClientConfig{
 		Model: "gpt-4o-search-preview",
 	}, &chatagent.Options{
 		Instructions: "You are a helpful weather agent.",
@@ -29,23 +29,22 @@ func main() {
 
 	const message = "What is the current weather? Do not ask for my current location."
 	if true {
-		nonStreamingExample(ag, message)
+		nonStreamingExample(a, message)
 	} else {
-		streamingExample(ag, message)
+		streamingExample(a, message)
 	}
 }
 
-func nonStreamingExample(ag agent.Agent, query string) {
+func nonStreamingExample(a agent.Agent, query string) {
 	fmt.Println("=== Non-streaming Response Example ===")
 	fmt.Println("User: ", query)
-	fmt.Println("Result: ", must(ag.Run(nil, message.NewText(query))))
+	fmt.Println("Result: ", must(agent.RunText(context.Background(), a, query)))
 }
 
-func streamingExample(ag agent.Agent, query string) {
+func streamingExample(a agent.Agent, query string) {
 	fmt.Println("=== Streaming Response Example ===")
 	fmt.Println("User: ", query)
-	stream := ag.RunStream(nil, message.NewText(query))
-	for update, err := range stream {
+	for update, err := range agent.RunTextStream(context.Background(), a, query) {
 		if err != nil {
 			fmt.Print(err)
 			break

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"fmt"
 
+	"github.com/microsoft/agent-framework/go/agent"
 	"github.com/microsoft/agent-framework/go/agent/chatagent"
 	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/openai"
@@ -16,7 +18,7 @@ showing multi-modal content handling with text and images.
 */
 
 func main() {
-	ag := openai.NewChatAgent(openai.ClientConfig{
+	a := openai.NewChatAgent(openai.ClientConfig{
 		Model: "gpt-5-nano",
 	}, &chatagent.Options{
 		Name:         "VisionAgent",
@@ -24,12 +26,13 @@ func main() {
 	})
 
 	fmt.Println("Result: ", must(
-		ag.Run(nil, &message.Message{Role: message.RoleUser, Contents: []message.Content{
+		agent.Run(context.Background(), a, agent.RunOptions{}, message.New(
 			&message.TextContent{Text: "Describe the content of this image."},
 			&message.URIContent{
 				URI:       "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg",
 				MediaType: "image/jpeg",
-			}}}),
+			},
+		)),
 	))
 }
 

@@ -135,14 +135,14 @@ func TestConstructorWithAllParameters(t *testing.T) {
 	}
 	a := newTestAgent(transport, opts)
 
-	if a.ID() != testID {
-		t.Errorf("ID() = %q, want %q", a.ID(), testID)
+	if a.Identity().ID() != testID {
+		t.Errorf("ID() = %q, want %q", a.Identity().ID(), testID)
 	}
-	if a.Name() != testName {
-		t.Errorf("Name() = %q, want %q", a.Name(), testName)
+	if a.Identity().Name() != testName {
+		t.Errorf("Name() = %q, want %q", a.Identity().Name(), testName)
 	}
-	if a.Description() != testDescription {
-		t.Errorf("Description() = %q, want %q", a.Description(), testDescription)
+	if a.Identity().Description() != testDescription {
+		t.Errorf("Description() = %q, want %q", a.Identity().Description(), testDescription)
 	}
 }
 
@@ -161,15 +161,15 @@ func TestConstructorWithDefaultParameters(t *testing.T) {
 	transport := &mockA2ATransport{}
 	a := newTestAgent(transport, nil)
 
-	id := a.ID()
+	id := a.Identity().ID()
 	if id == "" {
 		t.Error("ID() returned empty string, want non-empty")
 	}
-	if a.Name() != "" {
-		t.Errorf("Name() = %q, want empty string", a.Name())
+	if a.Identity().Name() != "" {
+		t.Errorf("Name() = %q, want empty string", a.Identity().Name())
 	}
-	if a.Description() != "" {
-		t.Errorf("Description() = %q, want empty string", a.Description())
+	if a.Identity().Description() != "" {
+		t.Errorf("Description() = %q, want empty string", a.Identity().Description())
 	}
 }
 
@@ -184,8 +184,7 @@ func TestRunAllowsNonUserRoleMessages(t *testing.T) {
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Valid user message"}}},
 	}
 
-	ctx := &agent.RunContext{Context: t.Context()}
-	_, err := a.Run(ctx, inputMessages...)
+	_, err := agent.Run(t.Context(), a, agent.RunOptions{}, inputMessages...)
 	if err != nil {
 		t.Errorf("Run() error = %v, want nil", err)
 	}
@@ -208,8 +207,7 @@ func TestRunWithValidUserMessage(t *testing.T) {
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Hello, world!"}}},
 	}
 
-	ctx := &agent.RunContext{Context: t.Context()}
-	result, err := a.Run(ctx, inputMessages...)
+	result, err := agent.Run(t.Context(), a, agent.RunOptions{}, inputMessages...)
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil", err)
 	}
@@ -240,8 +238,8 @@ func TestRunWithValidUserMessage(t *testing.T) {
 	if result == nil {
 		t.Fatal("result is nil")
 	}
-	if result.AgentID != a.ID() {
-		t.Errorf("result.AgentID = %q, want %q", result.AgentID, a.ID())
+	if result.AgentID != a.Identity().ID() {
+		t.Errorf("result.AgentID = %q, want %q", result.AgentID, a.Identity().ID())
 	}
 	if result.ID != "response-123" {
 		t.Errorf("result.ID = %q, want %q", result.ID, "response-123")
@@ -287,12 +285,7 @@ func TestRunWithNewThread(t *testing.T) {
 	}
 
 	thread := a.NewThread()
-	ctx := &agent.RunContext{
-		Context: t.Context(),
-		Thread:  thread,
-	}
-
-	_, err := a.Run(ctx, inputMessages...)
+	_, err := agent.Run(t.Context(), a, agent.RunOptions{Thread: thread}, inputMessages...)
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil", err)
 	}
@@ -316,12 +309,8 @@ func TestRunWithExistingThread(t *testing.T) {
 	}
 
 	thread := a.NewThreadWithContextID("existing-context-id")
-	ctx := &agent.RunContext{
-		Context: t.Context(),
-		Thread:  thread,
-	}
 
-	_, err := a.Run(ctx, inputMessages...)
+	_, err := agent.Run(t.Context(), a, agent.RunOptions{Thread: thread}, inputMessages...)
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil", err)
 	}
@@ -352,12 +341,8 @@ func TestRunWithThreadHavingDifferentContextID(t *testing.T) {
 	}
 
 	thread := a.NewThreadWithContextID("existing-context-id")
-	ctx := &agent.RunContext{
-		Context: t.Context(),
-		Thread:  thread,
-	}
 
-	_, err := a.Run(ctx, inputMessages...)
+	_, err := agent.Run(t.Context(), a, agent.RunOptions{Thread: thread}, inputMessages...)
 	if err == nil {
 		t.Error("Run() error = nil, want error")
 	}
@@ -379,10 +364,8 @@ func TestRunStreamingAsyncWithValidUserMessage(t *testing.T) {
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Hello, streaming!"}}},
 	}
 
-	ctx := &agent.RunContext{Context: t.Context()}
-
 	var updates []*agent.RunResponseUpdate
-	for update, err := range a.RunStream(ctx, inputMessages...) {
+	for update, err := range agent.RunStream(t.Context(), a, agent.RunOptions{}, inputMessages...) {
 		if err != nil {
 			t.Fatalf("RunStream() error = %v, want nil", err)
 		}
@@ -429,8 +412,8 @@ func TestRunStreamingAsyncWithValidUserMessage(t *testing.T) {
 	if update.MessageID != "stream-1" {
 		t.Errorf("update.MessageID = %q, want %q", update.MessageID, "stream-1")
 	}
-	if update.AgentID != a.ID() {
-		t.Errorf("update.AgentID = %q, want %q", update.AgentID, a.ID())
+	if update.AgentID != a.Identity().ID() {
+		t.Errorf("update.AgentID = %q, want %q", update.AgentID, a.Identity().ID())
 	}
 	if update.ResponseID != "stream-1" {
 		t.Errorf("update.ResponseID = %q, want %q", update.ResponseID, "stream-1")
@@ -466,12 +449,8 @@ func TestRunStreamingAsyncWithThread(t *testing.T) {
 	}
 
 	thread := a.NewThread()
-	ctx := &agent.RunContext{
-		Context: t.Context(),
-		Thread:  thread,
-	}
 
-	for _, err := range a.RunStream(ctx, inputMessages...) {
+	for _, err := range agent.RunStream(t.Context(), a, agent.RunOptions{Thread: thread}, inputMessages...) {
 		if err != nil {
 			t.Fatalf("RunStream() error = %v, want nil", err)
 		}
@@ -498,12 +477,8 @@ func TestRunStreamingAsyncWithExistingThread(t *testing.T) {
 	}
 
 	thread := a.NewThreadWithContextID("existing-context-id")
-	ctx := &agent.RunContext{
-		Context: t.Context(),
-		Thread:  thread,
-	}
 
-	for _, err := range a.RunStream(ctx, inputMessages...) {
+	for _, err := range agent.RunStream(t.Context(), a, agent.RunOptions{Thread: thread}, inputMessages...) {
 		if err != nil {
 			t.Fatalf("RunStream() error = %v, want nil", err)
 		}
@@ -535,13 +510,8 @@ func TestRunStreamingAsyncWithThreadHavingDifferentContextID(t *testing.T) {
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Test streaming"}}},
 	}
 
-	ctx := &agent.RunContext{
-		Context: t.Context(),
-		Thread:  thread,
-	}
-
 	gotError := false
-	for _, err := range a.RunStream(ctx, inputMessages...) {
+	for _, err := range agent.RunStream(t.Context(), a, agent.RunOptions{Thread: thread}, inputMessages...) {
 		if err != nil {
 			gotError = true
 			break
@@ -571,9 +541,7 @@ func TestRunStreamingAsyncAllowsNonUserRoleMessages(t *testing.T) {
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Valid user message"}}},
 	}
 
-	ctx := &agent.RunContext{Context: t.Context()}
-
-	for _, err := range a.RunStream(ctx, inputMessages...) {
+	for _, err := range agent.RunStream(t.Context(), a, agent.RunOptions{}, inputMessages...) {
 		if err != nil {
 			t.Fatalf("RunStream() error = %v, want nil", err)
 		}
@@ -598,8 +566,7 @@ func TestRunWithHostedFileContent(t *testing.T) {
 		},
 	}
 
-	ctx := &agent.RunContext{Context: t.Context()}
-	_, err := a.Run(ctx, inputMessages...)
+	_, err := agent.Run(t.Context(), a, agent.RunOptions{}, inputMessages...)
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil", err)
 	}

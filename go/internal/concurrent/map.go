@@ -96,6 +96,14 @@ func (m *Map[K, V]) Keys() iter.Seq[K] {
 	}
 }
 
+func (m *Map[K, V]) Values() iter.Seq[V] {
+	return func(yield func(V) bool) {
+		m.data.Range(func(key, value any) bool {
+			return yield(value.(V))
+		})
+	}
+}
+
 // All returns an iterator over the key-value pairs in the map.
 // The iteration order is not specified and is not guaranteed to be the same from one iteration to the next.
 //

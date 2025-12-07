@@ -22,7 +22,7 @@ var weatherTool = functool.MustNew(&functool.Func{
 })
 
 func main() {
-	ag := openai.NewChatAgent(openai.ClientConfig{
+	a := openai.NewChatAgent(openai.ClientConfig{
 		Model: "gpt-5-nano",
 	}, &chatagent.Options{
 		Instructions: "You are a helpful weather agent.",
@@ -31,11 +31,12 @@ func main() {
 		},
 	})
 
-	ctx := &agent.RunContext{
-		Thread: ag.NewThread(),
+	ctx := context.Background()
+	options := agent.RunOptions{
+		Thread: a.NewThread(),
 	}
 
-	resp := must(ag.RunText(ctx, "What's the weather like in Amsterdam?"))
+	resp := must(agent.Run(ctx, a, options, message.NewText("What's the weather like in Amsterdam?")))
 
 	var userResponses []message.Content
 	for req := range resp.UserInputRequests() {
@@ -54,7 +55,7 @@ func main() {
 	}
 
 	// Pass the user input responses back to the agent for further processing.
-	fmt.Println("Agent:", must(ag.Run(ctx, message.New(userResponses...))))
+	fmt.Println("Agent:", must(agent.Run(ctx, a, options, message.New(userResponses...))))
 }
 
 // must is a helper to panic on error for samples.

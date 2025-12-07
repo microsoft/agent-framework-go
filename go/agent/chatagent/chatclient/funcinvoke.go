@@ -20,7 +20,6 @@ import (
 )
 
 var _ Client = (*functionInvoking)(nil)
-var _ StructuredResponseClient = (*functionInvoking)(nil)
 
 type FunctionInvokingOptions struct {
 	Logger                             *slog.Logger
@@ -60,128 +59,16 @@ func NewFunctionInvoking(client Client, options *FunctionInvokingOptions) Client
 	}
 }
 
-func (f *functionInvoking) StructuredResponse(v any, ctx context.Context, opts *ChatOptions, messages ...*message.Message) (*ChatResponse, error) {
-	if c, ok := f.Client.(StructuredResponseClient); ok {
-		return c.StructuredResponse(v, ctx, opts, messages...)
-	}
-	return nil, fmt.Errorf("inner client %T does not support structured responses", f.Client)
+func (f *functionInvoking) Capabilities() Capabilities {
+	return f.Client.Capabilities()
 }
 
-func (f *functionInvoking) Response(ctx context.Context, opts *ChatOptions, messages ...*message.Message) (*ChatResponse, error) {
-	originalMessages := messages
-	tools, requiresApproval := f.createToolsMap(opts)
-	var responseMsgs []*message.Message
-	var errCount int
-	var totalUsage *message.UsageDetails
-	if hasAnyApprovalContent(originalMessages) {
-		// A previous turn may have translated FunctionCallContents from the inner client into approval requests sent back to the caller,
-		// for any function that were actually ApprovalRequiredFunctions. If the incoming chat messages include responses to those
-		// approval requests, we need to process them now. This entails removing these manufactured approval requests from the chat message
-		// list and replacing them with the appropriate FunctionCallContents and FunctionResultContents that would have been generated if
-		// the inner client had returned them directly.
-		var notInvokedMsgs []approvalResultWithRequestMessage
-		var err error
-		originalMessages = slices.Clone(originalMessages) // Clone to avoid modifying caller's slice
-		originalMessages, responseMsgs, notInvokedMsgs, err = processFunctionApprovalResponses(originalMessages, opts != nil && opts.ConversationID != "", "", "")
-		if err != nil {
-			return nil, err
-		}
-		var newMsg *message.Message
-		newMsg, errCount, err = f.invokeApprovedFunctionApprovalResponses(ctx, notInvokedMsgs, tools, 0)
-		if err != nil {
-			return nil, err
-		}
-		if newMsg != nil {
-			originalMessages = append(originalMessages, newMsg)
-			// Add any generated FRCs to the list we'll return to callers as part of the next response.
-			responseMsgs = append(responseMsgs, newMsg)
-		}
-	}
-	// At this point, we've fully handled all approval responses that were part of the original messages,
-	// and we can now enter the main function calling loop.
-	var functionCallContents []*message.FunctionCallContent
-	var lastIterHadConvID bool
-	var augmentedHistory []*message.Message
-	var resp *ChatResponse
-	for i := 0; ; i++ {
-		functionCallContents = functionCallContents[:0] // Reset slice without reallocating.
-		// Make the call to the inner client.
-		var err error
-		resp, err = f.Client.Response(ctx, opts, messages...)
-		if err != nil {
-			return nil, err
-		}
-		if resp == nil {
-			return nil, fmt.Errorf("inner client %T returned nil response", f.Client)
-		}
-		// Before we do any function execution, make sure that any functions that require approval have been turned into
-		// approval requests so that they don't get executed here.
-		if requiresApproval {
-			if tools == nil {
-				panic("requiresApproval can only be true if there are tools")
-			}
-			resp.Messages = replaceFunctionCallsWithApprovalRequests(resp.Messages, tools)
-		}
-		responseMsgs = append(responseMsgs, resp.Messages...)
-		requiresFunctionInvocation := i < f.maximumIterationsPerRequest()
-		if requiresFunctionInvocation {
-			// Accumulate function call contents from the response messages.
-			for _, msg := range resp.Messages {
-				for _, c := range msg.Contents {
-					if fcc, ok := c.(*message.FunctionCallContent); ok {
-						functionCallContents = append(functionCallContents, fcc)
-					}
-				}
-			}
-			requiresFunctionInvocation = len(functionCallContents) > 0
-		}
-		if !requiresFunctionInvocation && i == 0 {
-			// In a common case where we make an initial request and there's no function calling work required,
-			// fast path out by just returning the original response. We may already have some messages
-			// in responseMessages from processing function approval responses, and we need to ensure
-			// those are included in the final response, too.
-			resp.Messages = responseMsgs
-			return resp, nil
-		}
-		// Track aggregate details from the response, including all of the response messages and usage details.
-		if resp.Usage != nil {
-			if totalUsage == nil {
-				totalUsage = new(message.UsageDetails)
-			}
-			totalUsage.Add(resp.Usage)
-		}
-		// If there's nothing more to do, break out of the loop and allow the handling at the
-		// end to configure the response with aggregated data from previous requests.
-		if !requiresFunctionInvocation || f.shouldTerminateLoopBasedOnHandleableFunctions(functionCallContents, tools) {
-			break
-		}
-		// Prepare the history for the next iteration.
-		augmentedHistory = fixupHistories(originalMessages, augmentedHistory, resp, responseMsgs, &lastIterHadConvID)
-
-		// Add the responses from the function calls into the augmented history and also into the tracked
-		// list of response messages.
-		var newMsg *message.Message
-		newMsg, errCount, err = f.processFunctionCalls(ctx, tools, functionCallContents, errCount)
-		if err != nil {
-			return nil, err
-		}
-		augmentedHistory = append(augmentedHistory, newMsg)
-		responseMsgs = append(responseMsgs, newMsg)
-		updateOptionsForNextIteration(&opts, resp.ConversationID)
-		// Use the augmented history as the new set of messages to send.
-		messages = augmentedHistory
-	}
-	resp.Messages = responseMsgs
-	resp.Usage = totalUsage
-	return resp, nil
-}
-
-func (f *functionInvoking) StreamingResponse(ctx context.Context, opts *ChatOptions, messages ...*message.Message) iter.Seq2[*ChatResponseUpdate, error] {
+func (f *functionInvoking) Response(ctx context.Context, opts ChatOptions, messages ...*message.Message) iter.Seq2[*ChatResponseUpdate, error] {
 	// A single request into this StreamingResponse may result in multiple requests to the inner client.
 	// Create an activity to group them together for better observability.
 	originalMessages := messages
 
-	tools, requiresApproval := f.createToolsMap(opts)
+	tools, requiresApproval := f.createToolsMap(&opts)
 
 	// This is a synthetic ID since we're generating the tool messages instead of getting them from
 	// the underlying provider. When emitting the streamed chunks, it's perfectly valid for us to
@@ -189,16 +76,13 @@ func (f *functionInvoking) StreamingResponse(ctx context.Context, opts *ChatOpti
 	// message with multiple content items. We could also use different message IDs per tool content,
 	// but there's no benefit to doing so.
 	toolMsgID := uuid.NewString()
-	var convID string
-	if opts != nil {
-		convID = opts.ConversationID
-	}
 	var errCount int
 	return func(yield func(*ChatResponseUpdate, error) bool) {
 		if hasAnyApprovalContent(originalMessages) {
 			// We also need a synthetic ID for the function call content for approved function calls
 			// where we don't know what the original message id of the function call was.
 			funcCallFallbackMsgID := uuid.NewString()
+			convID := opts.ConversationID
 
 			// A previous turn may have translated FunctionCallContents from the inner client into approval requests sent back to the caller,
 			// for any functions that were actually ApprovalRequiredFunctions. If the incoming chat messages include responses to those
@@ -208,6 +92,7 @@ func (f *functionInvoking) StreamingResponse(ctx context.Context, opts *ChatOpti
 			var notInvokedMsgs []approvalResultWithRequestMessage
 			var preDownstreamCallHistory []*message.Message
 			var err error
+			originalMessages = slices.Clone(originalMessages) // Clone to avoid modifying caller's slice
 			originalMessages, preDownstreamCallHistory, notInvokedMsgs, err = processFunctionApprovalResponses(originalMessages, convID != "", toolMsgID, funcCallFallbackMsgID)
 			if err != nil {
 				yield(nil, err)
@@ -247,7 +132,7 @@ func (f *functionInvoking) StreamingResponse(ctx context.Context, opts *ChatOpti
 			functionCallContents = functionCallContents[:0]
 			var hasApprovalRequiringFcc bool
 			var lastApprovalCheckedFCCIdx, lastYieldedUpdateIdx int
-			for update, err := range f.Client.StreamingResponse(ctx, opts, messages...) {
+			for update, err := range f.Client.Response(ctx, opts, messages...) {
 				if err != nil {
 					yield(nil, err)
 					return
@@ -269,7 +154,7 @@ func (f *functionInvoking) StreamingResponse(ctx context.Context, opts *ChatOpti
 						if totalUsage == nil {
 							totalUsage = new(message.UsageDetails)
 						}
-						totalUsage.Add(&c.Details)
+						totalUsage.Add(c.Details)
 					}
 				}
 				// We're streaming updates back to the caller. However, approvals requires extra handling. We should not yield any
@@ -282,11 +167,9 @@ func (f *functionInvoking) StreamingResponse(ctx context.Context, opts *ChatOpti
 				// or the first time we get an FCC that requires approval. At that point, we can yield all of the updates buffered thus far
 				// and anything further, replacing FCCs with approval if any required it, or yielding them as is.
 				if requiresApproval && approvalRequiredFunctions == nil && len(functionCallContents) > 0 {
-					if opts != nil {
-						for _, tl := range opts.Tools {
-							if tl, ok := tl.(tool.ApprovalRequiredTool); ok {
-								approvalRequiredFunctions = append(approvalRequiredFunctions, tl)
-							}
+					for _, tl := range opts.Tools {
+						if tl, ok := tl.(tool.ApprovalRequiredTool); ok {
+							approvalRequiredFunctions = append(approvalRequiredFunctions, tl)
 						}
 					}
 					for _, tl := range f.AdditionalTools {
@@ -342,10 +225,14 @@ func (f *functionInvoking) StreamingResponse(ctx context.Context, opts *ChatOpti
 			// We need to invoke functions.
 
 			// Reconstitute a response from the response updates.
-			resp := NewChatResponseFromUpdates(updates)
-			responseMsgs = append(responseMsgs, resp.Messages...)
+			convID := ""
+			if len(updates) > 0 {
+				convID = updates[len(updates)-1].ConversationID
+			}
+			currentMsgs := NewMessageFromUpdates(updates)
+			responseMsgs = append(responseMsgs, currentMsgs...)
 			// Prepare the history for the next iteration.
-			augmentedHistory = fixupHistories(originalMessages, augmentedHistory, resp, responseMsgs, &lastIterHadConvID)
+			augmentedHistory = fixupHistories(originalMessages, augmentedHistory, convID, currentMsgs, responseMsgs, &lastIterHadConvID)
 
 			// Process all of the functions, adding their results into the history.
 			var newMsg *message.Message
@@ -363,7 +250,7 @@ func (f *functionInvoking) StreamingResponse(ctx context.Context, opts *ChatOpti
 			if !yield(convertToolResultMsgToUpdate(newMsg, convID, toolMsgID), nil) {
 				return
 			}
-			updateOptionsForNextIteration(&opts, resp.ConversationID)
+			updateOptionsForNextIteration(&opts, convID)
 			// Use the augmented history as the new set of messages to send.
 			messages = augmentedHistory
 		}
@@ -421,43 +308,29 @@ func convertToolResultMsgToUpdate(msg *message.Message, convID, msgID string) *C
 	}
 }
 
-func updateOptionsForNextIteration(popts **ChatOptions, convID string) {
-	opts := *popts
-	if opts == nil {
-		if convID != "" {
-			*popts = &ChatOptions{ConversationID: convID}
-		}
-	} else if opts.ToolMode == tool.ToolModeRequired {
+func updateOptionsForNextIteration(opts *ChatOptions, convID string) {
+	if opts.ToolMode == tool.ToolModeRequired {
 		// We have to reset the tool mode to be non-required after the first iteration,
 		// as otherwise we'll be in an infinite loop.
-		*popts = opts.Clone()
-		opts = *popts
 		opts.ToolMode = tool.ToolModeAuto
-		opts.ConversationID = convID
 	} else if opts.ConversationID != convID {
 		// As with the other modes, ensure we've propagated the chat conversation ID to the options.
 		// We only need to clone the options if we're actually mutating it.
-		*popts = opts.Clone()
-		opts = *popts
 		opts.ConversationID = convID
-	} else if opts.ContinuationToken != nil {
-		// Clone options before resetting the continuation token below.
-		*popts = opts.Clone()
-		opts = *popts
 	}
 	// Reset the continuation token of a background response operation
 	// to signal the inner client to handle function call result rather
 	// than getting the result of the operation.
-	if opts != nil && opts.ContinuationToken != nil {
+	if opts.ContinuationToken != nil {
 		opts.ContinuationToken = nil
 	}
 }
 
 // fixupHistories prepares the various chat message lists after a response from the inner client and before invoking functions.
-func fixupHistories(originalMsgs []*message.Message, augmentedHistory []*message.Message, resp *ChatResponse, allTurnsResponseMsgs []*message.Message, lastIterHadConvID *bool) []*message.Message {
+func fixupHistories(originalMsgs []*message.Message, augmentedHistory []*message.Message, convID string, responseMsgs []*message.Message, allTurnsResponseMsgs []*message.Message, lastIterHadConvID *bool) []*message.Message {
 	// We're now going to need to augment the history with function result contents.
 	// That means we need a separate list to store the augmented history.
-	if resp.ConversationID != "" {
+	if convID != "" {
 		// The response indicates the inner client is tracking the history, so we don't want to send
 		// anything we've already sent or received.
 		augmentedHistory = augmentedHistory[:0]
@@ -478,7 +351,7 @@ func fixupHistories(originalMsgs []*message.Message, augmentedHistory []*message
 			augmentedHistory = slices.Clone(originalMsgs)
 		}
 		// Now add the most recent response messages.
-		augmentedHistory = append(augmentedHistory, resp.Messages...)
+		augmentedHistory = append(augmentedHistory, responseMsgs...)
 		*lastIterHadConvID = false
 	}
 	return augmentedHistory
@@ -541,10 +414,8 @@ func (f *functionInvoking) createToolsMap(opts *ChatOptions) (mtools map[string]
 	for _, t := range f.AdditionalTools {
 		fn(t)
 	}
-	if opts != nil {
-		for _, t := range opts.Tools {
-			fn(t)
-		}
+	for _, t := range opts.Tools {
+		fn(t)
 	}
 	return mtools, anyRequiredApproval
 }
