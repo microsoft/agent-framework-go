@@ -17,41 +17,14 @@ import (
 	"github.com/microsoft/agent-framework/go/tool"
 )
 
+type Capabilities struct {
+	Streaming        bool
+	StructuredOutput format.Formatter // nil if structured output is not supported
+}
+
 type Client interface {
-	Response(context.Context, *ChatOptions, ...*message.Message) (*ChatResponse, error)
-	StreamingResponse(context.Context, *ChatOptions, ...*message.Message) iter.Seq2[*ChatResponseUpdate, error]
-}
-
-type StructuredResponseClient interface {
-	Client
-
-	StructuredResponse(any, context.Context, *ChatOptions, ...*message.Message) (*ChatResponse, error)
-}
-
-type ChatResponse struct {
-	AdditionalProperties map[string]any
-	ConversationID       string
-	FinishReason         string
-	ModelID              string
-	ID                   string
-	Role                 message.Role
-	CreatedAt            time.Time
-	RawRepresentation    any
-	Usage                *message.UsageDetails
-	Messages             []*message.Message
-}
-
-// String returns the concatenated text contents of the response messages.
-func (r *ChatResponse) String() string {
-	var sb strings.Builder
-	for _, msg := range r.Messages {
-		for _, c := range msg.Contents {
-			if textContent, ok := c.(*message.TextContent); ok {
-				sb.WriteString(textContent.Text)
-			}
-		}
-	}
-	return sb.String()
+	Capabilities() Capabilities
+	Response(context.Context, ChatOptions, ...*message.Message) iter.Seq2[*ChatResponseUpdate, error]
 }
 
 type ChatResponseUpdate struct {
@@ -80,6 +53,7 @@ func (r *ChatResponseUpdate) String() string {
 }
 
 type ChatOptions struct {
+	Streaming                param.Opt[bool]
 	AllowBackgroundResponses param.Opt[bool]
 
 	ContinuationToken any
@@ -154,80 +128,42 @@ func (o *ChatOptions) Copy(other *ChatOptions) {
 	}
 }
 
-func NewChatResponseFromUpdates(updates []*ChatResponseUpdate) *ChatResponse {
-	r := &ChatResponse{}
+func NewMessageFromUpdates(updates []*ChatResponseUpdate) []*message.Message {
+	var msgs []*message.Message
 	for _, update := range updates {
-		processUpdate(r, update)
+		isNewMessage := true
+		if len(msgs) > 0 {
+			lastMsg := msgs[len(msgs)-1]
+			isNewMessage = notEmptyNorEqual(update.AuthorName, lastMsg.AuthorName) ||
+				notEmptyNorEqual(update.MessageID, lastMsg.ID) ||
+				notEmptyNorEqual(string(update.Role), string(lastMsg.Role))
+		}
+		// Get the message to target, either a new one or the last ones.
+		var msg *message.Message
+		if isNewMessage {
+			msg = &message.Message{
+				Role: message.RoleAssistant,
+			}
+			msgs = append(msgs, msg)
+		} else {
+			msg = msgs[len(msgs)-1]
+		}
+		// Some members on ChatResponseUpdate map to members of ChatMessage.
+		// Incorporate those into the latest message; in cases where the message
+		// stores a single value, prefer the latest update's value over anything
+		// stored in the message.
+		msg.AuthorName = cmp.Or(update.AuthorName, msg.AuthorName)
+		msg.Role = cmp.Or(update.Role, msg.Role)
+		msg.ID = cmp.Or(update.MessageID, msg.ID)
+		if msg.CreatedAt.IsZero() || (!update.CreatedAt.IsZero() && update.CreatedAt.After(msg.CreatedAt)) {
+			msg.CreatedAt = update.CreatedAt
+		}
+		msg.Contents = append(msg.Contents, update.Contents...)
 	}
-	finalizeResponse(r)
-	return r
-}
-
-func finalizeResponse(r *ChatResponse) {
-	for _, msg := range r.Messages {
+	for _, msg := range msgs {
 		msg.Contents = message.CoalesceContents(msg.Contents)
 	}
-}
-
-// processUpdate updates the ChatResponse r with the information from the ChatResponseUpdate update.
-func processUpdate(r *ChatResponse, update *ChatResponseUpdate) {
-	// If there is no message created yet, or if the last update we saw had a different
-	// identifying parts, create a new message.
-	isNewMessage := true
-	if len(r.Messages) > 0 {
-		lastMsg := r.Messages[len(r.Messages)-1]
-		isNewMessage = notEmptyNorEqual(update.AuthorName, lastMsg.AuthorName) ||
-			notEmptyNorEqual(update.MessageID, lastMsg.ID) ||
-			notEmptyNorEqual(string(update.Role), string(lastMsg.Role))
-	}
-	// Get the message to target, either a new one or the last ones.
-	var msg *message.Message
-	if isNewMessage {
-		msg = &message.Message{
-			Role: message.RoleAssistant,
-		}
-		r.Messages = append(r.Messages, msg)
-	} else {
-		msg = r.Messages[len(r.Messages)-1]
-	}
-	// Some members on ChatResponseUpdate map to members of ChatMessage.
-	// Incorporate those into the latest message; in cases where the message
-	// stores a single value, prefer the latest update's value over anything
-	// stored in the message.
-	msg.AuthorName = cmp.Or(update.AuthorName, msg.AuthorName)
-	msg.Role = cmp.Or(update.Role, msg.Role)
-	msg.ID = cmp.Or(update.MessageID, msg.ID)
-	if msg.CreatedAt.IsZero() || (!update.CreatedAt.IsZero() && update.CreatedAt.After(msg.CreatedAt)) {
-		msg.CreatedAt = update.CreatedAt
-	}
-	for _, content := range update.Contents {
-		switch c := content.(type) {
-		case *message.UsageContent:
-			// Usage content is treated specially and propagated to the response's Usage.
-			if r.Usage == nil {
-				r.Usage = new(message.UsageDetails)
-			}
-			r.Usage.Add(&c.Details)
-		default:
-			msg.Contents = append(msg.Contents, content)
-		}
-	}
-	// Other members on a ChatResponseUpdate map to members of the ChatResponse.
-	// Update the response object with those, preferring the values from later updates.
-	r.ID = cmp.Or(update.ResponseID, r.ID)
-	r.ConversationID = cmp.Or(update.ConversationID, r.ConversationID)
-	r.FinishReason = cmp.Or(update.FinishReason, r.FinishReason)
-	r.Role = cmp.Or(update.Role, r.Role)
-	r.ModelID = cmp.Or(update.ModelID, r.ModelID)
-	if r.CreatedAt.IsZero() || (!update.CreatedAt.IsZero() && update.CreatedAt.After(r.CreatedAt)) {
-		r.CreatedAt = update.CreatedAt
-	}
-	if update.AdditionalProperties != nil {
-		if r.AdditionalProperties == nil {
-			r.AdditionalProperties = make(map[string]any)
-		}
-		maps.Copy(r.AdditionalProperties, update.AdditionalProperties)
-	}
+	return msgs
 }
 
 // notEmptyNorEqual returns true if both strings are not empty and not the same as each other.

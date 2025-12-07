@@ -44,7 +44,6 @@ func NewWebSearchTool(city, region, country, timezone, searchContextSize string)
 }
 
 var _ chatclient.Client = (*client)(nil)
-var _ chatclient.StructuredResponseClient = (*client)(nil)
 
 type client struct {
 	client openai.Client
@@ -97,68 +96,70 @@ func NewChatAgentAzure(config ClientConfig, options *chatagent.Options) *chatage
 	return newChatAgent(true, config, options)
 }
 
-func (a *client) StructuredResponse(v any, ctx context.Context, opts *chatclient.ChatOptions, messages ...*message.Message) (*chatclient.ChatResponse, error) {
-	// The OpenAI models that support structured outputs use JSON Schema for defining the response format.
-	format, err := jsonformat.ForType(reflect.TypeOf(v))
-	if err != nil {
-		return nil, err
-	}
-	if opts == nil {
-		opts = &chatclient.ChatOptions{}
-	} else {
-		opts = opts.Clone()
-	}
-	opts.ResponseFormat = format
-	resp, err := a.Response(ctx, opts, messages...)
-	if err != nil {
-		return nil, err
-	}
-	if txt := resp.String(); txt != "" {
-		if err := jsonformat.Unmarshal(format, []byte(txt), v); err != nil {
-			return nil, err
-		}
-	}
-	return resp, nil
+var _ format.Formatter = (*formatter)(nil)
+
+type formatter struct {
 }
 
-func (a *client) Response(ctx context.Context, opts *chatclient.ChatOptions, messages ...*message.Message) (*chatclient.ChatResponse, error) {
-	body, err := a.buildCompletionParams(opts, messages...)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := a.client.Chat.Completions.New(ctx, body)
-	if err != nil {
-		return nil, err
-	}
-	choice := resp.Choices[0]
-	contents := make([]message.Content, 0, 1+len(choice.Message.ToolCalls))
-	for _, tc := range choice.Message.ToolCalls {
-		contents = append(contents, &message.FunctionCallContent{
-			CallID:    tc.ID,
-			Name:      tc.Function.Name,
-			Arguments: json.RawMessage(tc.Function.Arguments),
-		})
-	}
-	if choice.Message.Content != "" {
-		contents = append(contents, &message.TextContent{Text: choice.Message.Content})
-	}
-	if choice.Message.Refusal != "" {
-		contents = append(contents, &message.ErrorContent{Message: choice.Message.Refusal})
-	}
-	return &chatclient.ChatResponse{
-		Messages:     []*message.Message{{Role: message.Role(choice.Message.Role), Contents: contents}},
-		ID:           resp.ID,
-		FinishReason: choice.FinishReason,
-	}, nil
+func (formatter) Format(v any) (format.Format, error) {
+	return jsonformat.ForType(reflect.TypeOf(v))
 }
 
-func (a *client) StreamingResponse(ctx context.Context, options *chatclient.ChatOptions, messages ...*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error] {
-	return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
-		body, err := a.buildCompletionParams(options, messages...)
-		if err != nil {
+func (formatter) Unmarshal(data []byte, format format.Format, v any) error {
+	return jsonformat.Unmarshal(format.(*jsonformat.Format), data, v)
+}
+
+func (a *client) Capabilities() chatclient.Capabilities {
+	return chatclient.Capabilities{
+		Streaming:        true,
+		StructuredOutput: formatter{},
+	}
+}
+
+func (a *client) Response(ctx context.Context, options chatclient.ChatOptions, messages ...*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error] {
+	body, err := a.buildCompletionParams(&options, messages...)
+	if err != nil {
+		return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
 			yield(nil, err)
-			return
 		}
+	}
+	if !options.Streaming.Or(false) {
+		resp, err := a.client.Chat.Completions.New(ctx, body)
+		if err != nil {
+			return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
+				yield(nil, err)
+			}
+		}
+		choice := resp.Choices[0]
+		contents := make([]message.Content, 0, 1+len(choice.Message.ToolCalls))
+		for _, tc := range choice.Message.ToolCalls {
+			contents = append(contents, &message.FunctionCallContent{
+				CallID:    tc.ID,
+				Name:      tc.Function.Name,
+				Arguments: json.RawMessage(tc.Function.Arguments),
+			})
+		}
+		if choice.Message.Content != "" {
+			contents = append(contents, &message.TextContent{Text: choice.Message.Content})
+		}
+		if choice.Message.Refusal != "" {
+			contents = append(contents, &message.ErrorContent{Message: choice.Message.Refusal})
+		}
+		return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
+			update := &chatclient.ChatResponseUpdate{
+				Contents:   contents,
+				Role:       message.RoleAssistant,
+				ResponseID: resp.ID,
+				MessageID:  resp.ID,
+				ModelID:    resp.Model,
+				CreatedAt:  time.Unix(resp.Created, 0),
+			}
+			if !yield(update, nil) {
+				return
+			}
+		}
+	}
+	return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
 		stream := a.client.Chat.Completions.NewStreaming(ctx, body)
 		defer stream.Close()
 		var acc openai.ChatCompletionAccumulator
@@ -180,14 +181,17 @@ func (a *client) StreamingResponse(ctx context.Context, options *chatclient.Chat
 					Arguments: args,
 				})
 			}
+			var role message.Role
 			if len(chunk.Choices) > 0 {
-				if choice := chunk.Choices[0]; choice.Delta.Content != "" {
+				choice := chunk.Choices[0]
+				if choice.Delta.Content != "" {
 					contents = append(contents, &message.TextContent{Text: choice.Delta.Content})
 				}
+				role = mapRole(choice.Delta.Role)
 			}
 			resp := &chatclient.ChatResponseUpdate{
 				Contents:   contents,
-				Role:       message.RoleAssistant,
+				Role:       role,
 				ResponseID: chunk.ID,
 				MessageID:  chunk.ID,
 				ModelID:    chunk.Model,
@@ -203,107 +207,120 @@ func (a *client) StreamingResponse(ctx context.Context, options *chatclient.Chat
 	}
 }
 
+func mapRole(r string) message.Role {
+	switch r {
+	case "user":
+		return message.RoleUser
+	case "system":
+		return message.RoleSystem
+	case "tool":
+		return message.RoleTool
+	case "assistant", "developer":
+		return message.RoleAssistant
+	default:
+		return message.RoleAssistant
+	}
+}
+
 // buildCompletionParams constructs the parameters for the OpenAI chat completion API.
 func (a *client) buildCompletionParams(options *chatclient.ChatOptions, messages ...*message.Message) (openai.ChatCompletionNewParams, error) {
 	params := openai.ChatCompletionNewParams{
 		Model:    a.config.Model,
 		Messages: make([]openai.ChatCompletionMessageParamUnion, 0, len(messages)+1),
 	}
-	if options != nil {
-		if options.Instructions != "" {
-			params.Messages = append(params.Messages, openai.SystemMessage([]openai.ChatCompletionContentPartTextParam{
-				{Text: options.Instructions},
-			}))
-		}
-		if options.Temperature.Valid() {
-			params.Temperature = openai.Float(options.Temperature.MustValue())
-		}
-		if options.TopP.Valid() {
-			params.TopP = openai.Float(options.TopP.MustValue())
-		}
-		if options.MaxTokens.Valid() {
-			params.MaxTokens = openai.Int(int64(options.MaxTokens.MustValue()))
-		}
-		if options.ResponseFormat != nil {
-			switch options.ResponseFormat.Kind() {
-			case "json":
-				if schema, ok := options.ResponseFormat.(format.SchemaFormat); ok {
-					params.ResponseFormat.OfJSONSchema = &shared.ResponseFormatJSONSchemaParam{
-						JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
-							Name:   schema.Name(),
-							Schema: schema.Schema(),
-						},
-					}
-					if desc := schema.Description(); desc != "" {
-						params.ResponseFormat.OfJSONSchema.JSONSchema.Description = openai.String(desc)
-					}
-					if schema.Strict() {
-						params.ResponseFormat.OfJSONSchema.JSONSchema.Strict = openai.Bool(true)
-					}
-				} else {
-					// Fallback to generic JSON object format
-					param := shared.NewResponseFormatJSONObjectParam()
-					params.ResponseFormat.OfJSONObject = &param
-				}
-			}
-		}
-		for _, tl := range options.Tools {
-			switch tl := tl.(type) {
-			case *hostedtool.WebSearch:
-				if location, ok := tl.AdditionalProperties["user_location"]; ok {
-					if location, ok := location.(map[string]string); ok {
-						if city, ok := location["city"]; ok && city != "" {
-							params.WebSearchOptions.UserLocation.Approximate.City = openai.String(city)
-						}
-						if region, ok := location["region"]; ok && region != "" {
-							params.WebSearchOptions.UserLocation.Approximate.Region = openai.String(region)
-						}
-						if country, ok := location["country"]; ok && country != "" {
-							params.WebSearchOptions.UserLocation.Approximate.Country = openai.String(country)
-						}
-						if timezone, ok := location["timezone"]; ok && timezone != "" {
-							params.WebSearchOptions.UserLocation.Approximate.Timezone = openai.String(timezone)
-						}
-					}
-				}
-				if contextSize, ok := tl.AdditionalProperties["search_context_size"]; ok {
-					if contextSize, ok := contextSize.(string); ok && contextSize != "" {
-						params.WebSearchOptions.SearchContextSize = contextSize
-					}
-				}
-			case tool.FuncTool:
-				name, description := tl.Name(), tl.Description()
-				var funcParams map[string]any
-				switch schema := tl.Schema().(type) {
-				case map[string]any:
-					funcParams = schema
-				default:
-					if schema == nil {
-						break
-					}
-					data, err := json.Marshal(schema)
-					if err == nil {
-						err = json.Unmarshal(data, &funcParams)
-					}
-					if err != nil {
-						return openai.ChatCompletionNewParams{}, fmt.Errorf("failed to convert function tool schema to JSON format: %w", err)
-					}
-				}
-				params.Tools = append(params.Tools, openai.ChatCompletionToolUnionParam{
-					OfFunction: &openai.ChatCompletionFunctionToolParam{
-						Function: shared.FunctionDefinitionParam{
-							Name:        name,
-							Description: openai.String(description),
-							Parameters:  funcParams,
-						},
+	if options.Instructions != "" {
+		params.Messages = append(params.Messages, openai.SystemMessage([]openai.ChatCompletionContentPartTextParam{
+			{Text: options.Instructions},
+		}))
+	}
+	if options.Temperature.Valid() {
+		params.Temperature = openai.Float(options.Temperature.MustValue())
+	}
+	if options.TopP.Valid() {
+		params.TopP = openai.Float(options.TopP.MustValue())
+	}
+	if options.MaxTokens.Valid() {
+		params.MaxTokens = openai.Int(int64(options.MaxTokens.MustValue()))
+	}
+	if options.ResponseFormat != nil {
+		switch options.ResponseFormat.Kind() {
+		case "json":
+			if schema, ok := options.ResponseFormat.(format.SchemaFormat); ok {
+				params.ResponseFormat.OfJSONSchema = &shared.ResponseFormatJSONSchemaParam{
+					JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
+						Name:   schema.Name(),
+						Schema: schema.Schema(),
 					},
-				})
+				}
+				if desc := schema.Description(); desc != "" {
+					params.ResponseFormat.OfJSONSchema.JSONSchema.Description = openai.String(desc)
+				}
+				if schema.Strict() {
+					params.ResponseFormat.OfJSONSchema.JSONSchema.Strict = openai.Bool(true)
+				}
+			} else {
+				// Fallback to generic JSON object format
+				param := shared.NewResponseFormatJSONObjectParam()
+				params.ResponseFormat.OfJSONObject = &param
 			}
 		}
-		if options.ToolMode != "" {
-			params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
-				OfAuto: openai.String(string(options.ToolMode)),
+	}
+	for _, tl := range options.Tools {
+		switch tl := tl.(type) {
+		case *hostedtool.WebSearch:
+			if location, ok := tl.AdditionalProperties["user_location"]; ok {
+				if location, ok := location.(map[string]string); ok {
+					if city, ok := location["city"]; ok && city != "" {
+						params.WebSearchOptions.UserLocation.Approximate.City = openai.String(city)
+					}
+					if region, ok := location["region"]; ok && region != "" {
+						params.WebSearchOptions.UserLocation.Approximate.Region = openai.String(region)
+					}
+					if country, ok := location["country"]; ok && country != "" {
+						params.WebSearchOptions.UserLocation.Approximate.Country = openai.String(country)
+					}
+					if timezone, ok := location["timezone"]; ok && timezone != "" {
+						params.WebSearchOptions.UserLocation.Approximate.Timezone = openai.String(timezone)
+					}
+				}
 			}
+			if contextSize, ok := tl.AdditionalProperties["search_context_size"]; ok {
+				if contextSize, ok := contextSize.(string); ok && contextSize != "" {
+					params.WebSearchOptions.SearchContextSize = contextSize
+				}
+			}
+		case tool.FuncTool:
+			name, description := tl.Name(), tl.Description()
+			var funcParams map[string]any
+			switch schema := tl.Schema().(type) {
+			case map[string]any:
+				funcParams = schema
+			default:
+				if schema == nil {
+					break
+				}
+				data, err := json.Marshal(schema)
+				if err == nil {
+					err = json.Unmarshal(data, &funcParams)
+				}
+				if err != nil {
+					return openai.ChatCompletionNewParams{}, fmt.Errorf("failed to convert function tool schema to JSON format: %w", err)
+				}
+			}
+			params.Tools = append(params.Tools, openai.ChatCompletionToolUnionParam{
+				OfFunction: &openai.ChatCompletionFunctionToolParam{
+					Function: shared.FunctionDefinitionParam{
+						Name:        name,
+						Description: openai.String(description),
+						Parameters:  funcParams,
+					},
+				},
+			})
+		}
+	}
+	if options.ToolMode != "" {
+		params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
+			OfAuto: openai.String(string(options.ToolMode)),
 		}
 	}
 	for _, msg := range messages {

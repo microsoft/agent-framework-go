@@ -42,7 +42,7 @@ func mcpToolsOnAgentLevel() {
 
 	// Create the OpenAI agent with MCP tools
 	// In Go, we configure tools as default options that will be used for all runs
-	ag := openai.NewChatAgent(openai.ClientConfig{
+	a := openai.NewChatAgent(openai.ClientConfig{
 		Model: "gpt-4o-mini",
 	}, &chatagent.Options{
 		Name:         "DocsAgent",
@@ -52,17 +52,19 @@ func mcpToolsOnAgentLevel() {
 		},
 	})
 
+	ctx := context.Background()
+
 	// First query - uses the tools defined at agent creation
 	const query1 = "How to create an Azure storage account using az cli?"
 	fmt.Println("User: ", query1)
-	fmt.Println(ag.Name(), ": ", must(ag.RunText(nil, query1)))
+	fmt.Println(a.Identity().Name(), ": ", must(agent.RunText(ctx, a, query1)))
 
 	fmt.Println("\n=======================================")
 
 	// Second query
 	const query2 = "What is Microsoft Agent Framework?"
 	fmt.Println("User: ", query2)
-	fmt.Println(ag.Name(), ": ", must(ag.RunText(nil, query2)))
+	fmt.Println(a.Identity().Name(), ": ", must(agent.RunText(ctx, a, query2)))
 }
 
 // mcpToolsOnRunLevel demonstrates MCP tools defined when running the agent.
@@ -77,33 +79,32 @@ func mcpToolsOnRunLevel() {
 	tools := must(mcptool.ListTools(context.Background(), session))
 
 	// Create the OpenAI agent
-	ag := openai.NewChatAgent(openai.ClientConfig{
+	a := openai.NewChatAgent(openai.ClientConfig{
 		Model: "gpt-4o-mini",
 	}, &chatagent.Options{
 		Name:         "DocsAgent",
 		Instructions: "You are a helpful assistant that can help with microsoft documentation questions.",
 	})
 
-	ctx := &agent.RunContext{
-		Options: &agent.RunOptions{
-			Options: &chatagent.ChatOptions{
-				Tools:    tools,
-				ToolMode: tool.ToolModeAuto,
-			},
+	ctx := context.Background()
+	opts := agent.RunOptions{
+		Options: &chatagent.ChatOptions{
+			Tools:    tools,
+			ToolMode: tool.ToolModeAuto,
 		},
 	}
 
 	// First query
 	query1 := "How to create an Azure storage account using az cli?"
 	fmt.Println("User: ", query1)
-	fmt.Println(ag.Name(), ": ", must(ag.Run(ctx, message.NewText(query1))))
+	fmt.Println(a.Identity().Name(), ": ", must(agent.Run(ctx, a, opts, message.NewText(query1))))
 
 	fmt.Println("\n=======================================")
 
 	// Second query
 	query2 := "What is Microsoft Agent Framework?"
 	fmt.Println("User: ", query2)
-	fmt.Println(ag.Name(), ": ", must(ag.Run(ctx, message.NewText(query2))))
+	fmt.Println(a.Identity().Name(), ": ", must(agent.Run(ctx, a, opts, message.NewText(query2))))
 }
 
 // must is a helper to panic on error for samples.

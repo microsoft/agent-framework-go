@@ -22,20 +22,16 @@ import (
 
 // testChatClient is a minimal test implementation of Client
 type testChatClient struct {
-	responseFunc          func(ctx context.Context, opts *chatclient.ChatOptions, messages ...*message.Message) (*chatclient.ChatResponse, error)
-	streamingResponseFunc func(ctx context.Context, opts *chatclient.ChatOptions, messages ...*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error]
+	responseFunc func(ctx context.Context, opts chatclient.ChatOptions, messages ...*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error]
 }
 
-func (t *testChatClient) Response(ctx context.Context, opts *chatclient.ChatOptions, messages ...*message.Message) (*chatclient.ChatResponse, error) {
+func (t *testChatClient) Capabilities() chatclient.Capabilities {
+	return chatclient.Capabilities{}
+}
+
+func (t *testChatClient) Response(ctx context.Context, opts chatclient.ChatOptions, messages ...*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error] {
 	if t.responseFunc != nil {
 		return t.responseFunc(ctx, opts, messages...)
-	}
-	return &chatclient.ChatResponse{}, nil
-}
-
-func (t *testChatClient) StreamingResponse(ctx context.Context, opts *chatclient.ChatOptions, messages ...*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error] {
-	if t.streamingResponseFunc != nil {
-		return t.streamingResponseFunc(ctx, opts, messages...)
 	}
 	return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
 		// Default empty implementation
@@ -48,7 +44,7 @@ func TestFunctionInvoking_SupportsSingleFunctionCallPerRequest(t *testing.T) {
 		I int `json:"i"`
 	}
 
-	options := &chatclient.ChatOptions{
+	options := chatclient.ChatOptions{
 		Tools: []tool.Tool{
 			functool.MustNew(&functool.Func{Name: "Func1", Description: "Function 1"},
 				func(ctx context.Context, args EmptyArgs) (string, error) {
@@ -91,7 +87,6 @@ func TestFunctionInvoking_SupportsSingleFunctionCallPerRequest(t *testing.T) {
 	}
 
 	invokeAndAssert(t, options, plan, nil, nil)
-	invokeAndAssertStreaming(t, options, plan, nil, nil)
 }
 
 func TestFunctionInvoking_SupportsMultipleFunctionCallsPerRequest(t *testing.T) {
@@ -112,7 +107,7 @@ func TestFunctionInvoking_SupportsMultipleFunctionCallsPerRequest(t *testing.T) 
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			options := &chatclient.ChatOptions{
+			options := chatclient.ChatOptions{
 				Tools: []tool.Tool{
 					functool.MustNew(&functool.Func{Name: "Func1"},
 						func(ctx context.Context, args Func1Args) (string, error) {
@@ -163,7 +158,6 @@ func TestFunctionInvoking_SupportsMultipleFunctionCallsPerRequest(t *testing.T) 
 			}
 
 			invokeAndAssert(t, options, plan, nil, functionInvokingOptions)
-			invokeAndAssertStreaming(t, options, plan, nil, functionInvokingOptions)
 		})
 	}
 }
@@ -173,7 +167,7 @@ func TestFunctionInvoking_SupportsMultipleFunctionCallsPerRequest(t *testing.T) 
 // Returns the final chat history.
 // Plan should start with the initial user message and contain all expected messages.
 // functionInvokingOptions can be nil to use default settings.
-func invokeAndAssert(t *testing.T, options *chatclient.ChatOptions, plan []*message.Message, expected []*message.Message, functionInvokingOptions *chatclient.FunctionInvokingOptions) []*message.Message {
+func invokeAndAssert(t *testing.T, options chatclient.ChatOptions, plan []*message.Message, expected []*message.Message, functionInvokingOptions *chatclient.FunctionInvokingOptions) []*message.Message {
 	t.Helper()
 
 	if len(plan) == 0 {
@@ -185,57 +179,11 @@ func invokeAndAssert(t *testing.T, options *chatclient.ChatOptions, plan []*mess
 	}
 
 	innerClient := &testChatClient{
-		responseFunc: func(ctx context.Context, opts *chatclient.ChatOptions, messages ...*message.Message) (*chatclient.ChatResponse, error) {
-			idx := len(messages)
-			if idx >= len(plan) {
-				t.Fatalf("unexpected call to Response, message count=%d, len(plan)=%d", idx, len(plan))
-			}
-			msg := plan[idx]
-			return &chatclient.ChatResponse{Messages: []*message.Message{msg}}, nil
-		},
-	}
-
-	client := chatclient.NewFunctionInvoking(innerClient, functionInvokingOptions)
-	ctx := context.Background()
-	initialMessages := []*message.Message{plan[0]}
-
-	response, err := client.Response(ctx, options, initialMessages...)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if response == nil {
-		t.Fatal("expected non-nil response")
-	}
-
-	// Build actual chat history
-	actual := append(initialMessages, response.Messages...)
-
-	// Assert messages match expected
-	assertMessageListsEqual(t, expected, actual)
-
-	return actual
-}
-
-// invokeAndAssertStreaming is similar to invokeAndAssert but tests streaming response.
-// functionInvokingOptions can be nil to use default settings.
-func invokeAndAssertStreaming(t *testing.T, options *chatclient.ChatOptions, plan []*message.Message, expected []*message.Message, functionInvokingOptions *chatclient.FunctionInvokingOptions) []*message.Message {
-	t.Helper()
-
-	if len(plan) == 0 {
-		t.Fatal("plan must not be empty")
-	}
-
-	if expected == nil {
-		expected = plan
-	}
-
-	innerClient := &testChatClient{
-		streamingResponseFunc: func(ctx context.Context, opts *chatclient.ChatOptions, messages ...*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error] {
+		responseFunc: func(ctx context.Context, opts chatclient.ChatOptions, messages ...*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error] {
 			return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
 				idx := len(messages)
 				if idx >= len(plan) {
-					t.Fatalf("unexpected call to StreamingResponse, message count=%d, len(plan)=%d", idx, len(plan))
+					t.Fatalf("unexpected call to Response, message count=%d, len(plan)=%d", idx, len(plan))
 				}
 				msg := plan[idx]
 
@@ -259,7 +207,7 @@ func invokeAndAssertStreaming(t *testing.T, options *chatclient.ChatOptions, pla
 
 	// Collect all updates
 	var updates []*chatclient.ChatResponseUpdate
-	for update, err := range client.StreamingResponse(ctx, options, initialMessages...) {
+	for update, err := range client.Response(ctx, options, initialMessages...) {
 		if err != nil {
 			t.Fatalf("unexpected error during streaming: %v", err)
 		}
@@ -271,10 +219,10 @@ func invokeAndAssertStreaming(t *testing.T, options *chatclient.ChatOptions, pla
 	}
 
 	// Convert streaming updates back to consolidated messages
-	consolidated := chatclient.NewChatResponseFromUpdates(updates)
+	consolidated := chatclient.NewMessageFromUpdates(updates)
 
 	// Build actual chat history
-	actual := append(initialMessages, consolidated.Messages...)
+	actual := append(initialMessages, consolidated...)
 
 	// Assert messages match expected
 	assertMessageListsEqual(t, expected, actual)
@@ -404,9 +352,9 @@ func TestFunctionInvoking_SupportsToolsProvidedByAdditionalTools(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var options *chatclient.ChatOptions
+			var options chatclient.ChatOptions
 			if tt.provideOptions {
-				options = &chatclient.ChatOptions{
+				options = chatclient.ChatOptions{
 					Tools: []tool.Tool{
 						functool.MustNew(&functool.Func{Name: "ChatOptionsFunc"},
 							func(ctx context.Context, args struct{}) (string, error) {
@@ -460,7 +408,6 @@ func TestFunctionInvoking_SupportsToolsProvidedByAdditionalTools(t *testing.T) {
 			}
 
 			invokeAndAssert(t, options, plan, nil, functionInvokingOptions)
-			invokeAndAssertStreaming(t, options, plan, nil, functionInvokingOptions)
 		})
 	}
 }
@@ -471,7 +418,7 @@ func TestFunctionInvoking_PrefersToolsProvidedByChatOptions(t *testing.T) {
 		I int `json:"i"`
 	}
 
-	options := &chatclient.ChatOptions{
+	options := chatclient.ChatOptions{
 		Tools: []tool.Tool{
 			functool.MustNew(&functool.Func{Name: "Func1"},
 				func(ctx context.Context, args struct{}) (string, error) {
@@ -524,97 +471,54 @@ func TestFunctionInvoking_PrefersToolsProvidedByChatOptions(t *testing.T) {
 	}
 
 	invokeAndAssert(t, options, plan, nil, functionInvokingOptions)
-	invokeAndAssertStreaming(t, options, plan, nil, functionInvokingOptions)
 }
 
 // TestFunctionInvoking_ParallelFunctionCallsMayBeInvokedConcurrently tests concurrent invocation
 func TestFunctionInvoking_ParallelFunctionCallsMayBeInvokedConcurrently(t *testing.T) {
-	t.Run("Response", func(t *testing.T) {
-		var remaining atomic.Int32
-		remaining.Store(2)
-		done := make(chan bool)
+	var remaining atomic.Int32
+	remaining.Store(2)
+	done := make(chan bool)
 
-		options := &chatclient.ChatOptions{
-			Tools: []tool.Tool{
-				functool.MustNew(&functool.Func{Name: "Func"},
-					func(ctx context.Context, args struct{ Arg string }) (string, error) {
-						if remaining.Add(-1) == 0 {
-							close(done)
-						}
-						<-done
-						return args.Arg + args.Arg, nil
-					}),
-			},
-		}
+	options := chatclient.ChatOptions{
+		Tools: []tool.Tool{
+			functool.MustNew(&functool.Func{Name: "Func"},
+				func(ctx context.Context, args struct{ Arg string }) (string, error) {
+					if remaining.Add(-1) == 0 {
+						close(done)
+					}
+					<-done
+					return args.Arg + args.Arg, nil
+				}),
+		},
+	}
 
-		plan := []*message.Message{
-			message.New(&message.TextContent{Text: "hello"}),
-			{Role: message.RoleAssistant, Contents: []message.Content{
-				&message.FunctionCallContent{CallID: "callId1", Name: "Func", Arguments: json.RawMessage(`{"Arg":"hello"}`)},
-				&message.FunctionCallContent{CallID: "callId2", Name: "Func", Arguments: json.RawMessage(`{"Arg":"world"}`)},
-			}},
-			{Role: message.RoleTool, Contents: []message.Content{
-				&message.FunctionResultContent{CallID: "callId1", Result: "hellohello"},
-				&message.FunctionResultContent{CallID: "callId2", Result: "worldworld"},
-			}},
-			{Role: message.RoleAssistant, Contents: []message.Content{
-				&message.TextContent{Text: "done"},
-			}},
-		}
+	plan := []*message.Message{
+		message.New(&message.TextContent{Text: "hello"}),
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			&message.FunctionCallContent{CallID: "callId1", Name: "Func", Arguments: json.RawMessage(`{"Arg":"hello"}`)},
+			&message.FunctionCallContent{CallID: "callId2", Name: "Func", Arguments: json.RawMessage(`{"Arg":"world"}`)},
+		}},
+		{Role: message.RoleTool, Contents: []message.Content{
+			&message.FunctionResultContent{CallID: "callId1", Result: "hellohello"},
+			&message.FunctionResultContent{CallID: "callId2", Result: "worldworld"},
+		}},
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			&message.TextContent{Text: "done"},
+		}},
+	}
 
-		functionInvokingOptions := &chatclient.FunctionInvokingOptions{
-			AllowConcurrentInvocations: param.NewOpt(true),
-		}
+	functionInvokingOptions := &chatclient.FunctionInvokingOptions{
+		AllowConcurrentInvocations: param.NewOpt(true),
+	}
 
-		invokeAndAssert(t, options, plan, nil, functionInvokingOptions)
-	})
-
-	t.Run("StreamingResponse", func(t *testing.T) {
-		var remaining atomic.Int32
-		remaining.Store(2)
-		done := make(chan bool)
-
-		options := &chatclient.ChatOptions{
-			Tools: []tool.Tool{
-				functool.MustNew(&functool.Func{Name: "Func"},
-					func(ctx context.Context, args struct{ Arg string }) (string, error) {
-						if remaining.Add(-1) == 0 {
-							close(done)
-						}
-						<-done
-						return args.Arg + args.Arg, nil
-					}),
-			},
-		}
-
-		plan := []*message.Message{
-			message.New(&message.TextContent{Text: "hello"}),
-			{Role: message.RoleAssistant, Contents: []message.Content{
-				&message.FunctionCallContent{CallID: "callId1", Name: "Func", Arguments: json.RawMessage(`{"Arg":"hello"}`)},
-				&message.FunctionCallContent{CallID: "callId2", Name: "Func", Arguments: json.RawMessage(`{"Arg":"world"}`)},
-			}},
-			{Role: message.RoleTool, Contents: []message.Content{
-				&message.FunctionResultContent{CallID: "callId1", Result: "hellohello"},
-				&message.FunctionResultContent{CallID: "callId2", Result: "worldworld"},
-			}},
-			{Role: message.RoleAssistant, Contents: []message.Content{
-				&message.TextContent{Text: "done"},
-			}},
-		}
-
-		functionInvokingOptions := &chatclient.FunctionInvokingOptions{
-			AllowConcurrentInvocations: param.NewOpt(true),
-		}
-
-		invokeAndAssertStreaming(t, options, plan, nil, functionInvokingOptions)
-	})
+	invokeAndAssert(t, options, plan, nil, functionInvokingOptions)
 }
 
 // TestFunctionInvoking_ConcurrentInvocationOfParallelCallsDisabledByDefault tests serial invocation by default
 func TestFunctionInvoking_ConcurrentInvocationOfParallelCallsDisabledByDefault(t *testing.T) {
 	var activeCount atomic.Int32
 
-	options := &chatclient.ChatOptions{
+	options := chatclient.ChatOptions{
 		Tools: []tool.Tool{
 			functool.MustNew(&functool.Func{Name: "Func"},
 				func(ctx context.Context, args struct{ Arg string }) (string, error) {
@@ -645,7 +549,6 @@ func TestFunctionInvoking_ConcurrentInvocationOfParallelCallsDisabledByDefault(t
 	}
 
 	invokeAndAssert(t, options, plan, nil, nil)
-	invokeAndAssertStreaming(t, options, plan, nil, nil)
 }
 
 // TestFunctionInvoking_ContinuesWithSuccessfulCallsUntilMaximumIterations tests MaximumIterationsPerRequest
@@ -653,7 +556,7 @@ func TestFunctionInvoking_ContinuesWithSuccessfulCallsUntilMaximumIterations(t *
 	maxIterations := 7
 	actualCallCount := 0
 
-	options := &chatclient.ChatOptions{
+	options := chatclient.ChatOptions{
 		Tools: []tool.Tool{
 			functool.MustNew(&functool.Func{Name: "VoidReturn"},
 				func(ctx context.Context, args struct{}) (string, error) {
@@ -696,11 +599,7 @@ func TestFunctionInvoking_ContinuesWithSuccessfulCallsUntilMaximumIterations(t *
 	}
 
 	actualCallCount = 0
-	invokeAndAssertStreaming(t, options, plan, expectedPlan, functionInvokingOptions)
 
-	if actualCallCount != maxIterations {
-		t.Errorf("Expected %d function calls (streaming), got %d", maxIterations, actualCallCount)
-	}
 }
 
 // TestFunctionInvoking_ContinuesWithFailingCallsUntilMaximumConsecutiveErrors tests MaximumConsecutiveErrorsPerRequest
@@ -717,7 +616,7 @@ func TestFunctionInvoking_ContinuesWithFailingCallsUntilMaximumConsecutiveErrors
 		t.Run(tt.name, func(t *testing.T) {
 			callIndex := 0
 
-			options := &chatclient.ChatOptions{
+			options := chatclient.ChatOptions{
 				Tools: []tool.Tool{
 					functool.MustNew(&functool.Func{Name: "Func"},
 						func(ctx context.Context, args struct {
@@ -758,13 +657,24 @@ func TestFunctionInvoking_ContinuesWithFailingCallsUntilMaximumConsecutiveErrors
 
 			// The test expects an error to be thrown
 			innerClient := &testChatClient{
-				responseFunc: func(ctx context.Context, opts *chatclient.ChatOptions, messages ...*message.Message) (*chatclient.ChatResponse, error) {
-					idx := len(messages)
-					if idx >= len(plan) {
-						t.Fatalf("unexpected call to Response, message count=%d, len(plan)=%d", idx, len(plan))
+				responseFunc: func(ctx context.Context, opts chatclient.ChatOptions, messages ...*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error] {
+					return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
+						idx := len(messages)
+						if idx >= len(plan) {
+							t.Fatalf("unexpected call to Response, message count=%d, len(plan)=%d", idx, len(plan))
+						}
+						msg := plan[idx]
+
+						for _, content := range msg.Contents {
+							update := &chatclient.ChatResponseUpdate{
+								Role:     msg.Role,
+								Contents: []message.Content{content},
+							}
+							if !yield(update, nil) {
+								return
+							}
+						}
 					}
-					msg := plan[idx]
-					return &chatclient.ChatResponse{Messages: []*message.Message{msg}}, nil
 				},
 			}
 
@@ -772,37 +682,8 @@ func TestFunctionInvoking_ContinuesWithFailingCallsUntilMaximumConsecutiveErrors
 			ctx := context.Background()
 			initialMessages := []*message.Message{plan[0]}
 
-			_, err := client.Response(ctx, options, initialMessages...)
-			if err == nil {
-				t.Error("Expected error due to MaximumConsecutiveErrors exceeded, got nil")
-			} else if !errors.Is(err, context.Canceled) && err.Error() != "maximum consecutive function call errors reached" {
-				// Check for expected error message
-				t.Logf("Got error: %v", err)
-			}
-
-			// Test streaming as well
-			innerClient.streamingResponseFunc = func(ctx context.Context, opts *chatclient.ChatOptions, messages ...*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error] {
-				return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
-					idx := len(messages)
-					if idx >= len(plan) {
-						t.Fatalf("unexpected call to StreamingResponse, message count=%d, len(plan)=%d", idx, len(plan))
-					}
-					msg := plan[idx]
-
-					for _, content := range msg.Contents {
-						update := &chatclient.ChatResponseUpdate{
-							Role:     msg.Role,
-							Contents: []message.Content{content},
-						}
-						if !yield(update, nil) {
-							return
-						}
-					}
-				}
-			}
-
 			var streamErr error
-			for _, err := range client.StreamingResponse(ctx, options, initialMessages...) {
+			for _, err := range client.Response(ctx, options, initialMessages...) {
 				if err != nil {
 					streamErr = err
 					break
@@ -811,6 +692,9 @@ func TestFunctionInvoking_ContinuesWithFailingCallsUntilMaximumConsecutiveErrors
 
 			if streamErr == nil {
 				t.Error("Expected error in streaming due to MaximumConsecutiveErrors exceeded, got nil")
+			} else if !errors.Is(streamErr, context.Canceled) && streamErr.Error() != "maximum consecutive function call errors reached" {
+				// Check for expected error message
+				t.Logf("Got error: %v", streamErr)
 			}
 		})
 	}
@@ -863,7 +747,7 @@ func TestFunctionInvoking_CanFailOnFirstException(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			callIndex := 0
 
-			options := &chatclient.ChatOptions{
+			options := chatclient.ChatOptions{
 				Tools: []tool.Tool{
 					functool.MustNew(&functool.Func{Name: "Func"},
 						func(ctx context.Context, args struct{}) (string, error) {
@@ -883,46 +767,31 @@ func TestFunctionInvoking_CanFailOnFirstException(t *testing.T) {
 			}
 
 			innerClient := &testChatClient{
-				responseFunc: func(ctx context.Context, opts *chatclient.ChatOptions, messages ...*message.Message) (*chatclient.ChatResponse, error) {
-					idx := len(messages)
-					if idx >= len(plan) {
-						t.Fatalf("unexpected call to Response")
+				responseFunc: func(ctx context.Context, opts chatclient.ChatOptions, messages ...*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error] {
+					return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
+						idx := len(messages)
+						if idx >= len(plan) {
+							t.Fatalf("unexpected call to StreamingResponse")
+						}
+						msg := plan[idx]
+						for _, content := range msg.Contents {
+							update := &chatclient.ChatResponseUpdate{
+								Role:     msg.Role,
+								Contents: []message.Content{content},
+							}
+							if !yield(update, nil) {
+								return
+							}
+						}
 					}
-					msg := plan[idx]
-					return &chatclient.ChatResponse{Messages: []*message.Message{msg}}, nil
 				},
 			}
 
 			client := chatclient.NewFunctionInvoking(innerClient, functionInvokingOptions)
 			ctx := context.Background()
 
-			_, err := client.Response(ctx, options, plan[0])
-			if err == nil {
-				t.Error("Expected error on first exception, got nil")
-			}
-
-			// Test streaming
-			innerClient.streamingResponseFunc = func(ctx context.Context, opts *chatclient.ChatOptions, messages ...*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error] {
-				return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
-					idx := len(messages)
-					if idx >= len(plan) {
-						t.Fatalf("unexpected call to StreamingResponse")
-					}
-					msg := plan[idx]
-					for _, content := range msg.Contents {
-						update := &chatclient.ChatResponseUpdate{
-							Role:     msg.Role,
-							Contents: []message.Content{content},
-						}
-						if !yield(update, nil) {
-							return
-						}
-					}
-				}
-			}
-
 			var streamErr error
-			for _, err := range client.StreamingResponse(ctx, options, plan[0]) {
+			for _, err := range client.Response(ctx, options, plan[0]) {
 				if err != nil {
 					streamErr = err
 					break
@@ -942,7 +811,7 @@ func TestFunctionInvoking_KeepsFunctionCallingContent(t *testing.T) {
 		I int `json:"i"`
 	}
 
-	options := &chatclient.ChatOptions{
+	options := chatclient.ChatOptions{
 		Tools: []tool.Tool{
 			functool.MustNew(&functool.Func{Name: "Func1"},
 				func(ctx context.Context, args struct{}) (string, error) {
@@ -989,9 +858,6 @@ func TestFunctionInvoking_KeepsFunctionCallingContent(t *testing.T) {
 
 	finalChat := invokeAndAssert(t, options, plan, nil, nil)
 	validateFunctionContent(t, finalChat)
-
-	finalChat = invokeAndAssertStreaming(t, options, plan, nil, nil)
-	validateFunctionContent(t, finalChat)
 }
 
 func validateFunctionContent(t *testing.T, messages []*message.Message) {
@@ -1026,7 +892,7 @@ func TestFunctionInvoking_TerminateOnUnknownCalls(t *testing.T) {
 				I int `json:"i"`
 			}
 
-			options := &chatclient.ChatOptions{
+			options := chatclient.ChatOptions{
 				Tools: []tool.Tool{
 					functool.MustNew(&functool.Func{Name: "KnownFunc"},
 						func(ctx context.Context, args Func2Args) (string, error) {
@@ -1058,11 +924,9 @@ func TestFunctionInvoking_TerminateOnUnknownCalls(t *testing.T) {
 				// Should terminate after the assistant message with unknown function call
 				expectedPlan := fullPlan[:2]
 				invokeAndAssert(t, options, fullPlan, expectedPlan, functionInvokingOptions)
-				invokeAndAssertStreaming(t, options, fullPlan, expectedPlan, functionInvokingOptions)
 			} else {
 				// Should continue and add error result for unknown function
 				invokeAndAssert(t, options, fullPlan, nil, functionInvokingOptions)
-				invokeAndAssertStreaming(t, options, fullPlan, nil, functionInvokingOptions)
 			}
 		})
 	}
@@ -1081,7 +945,7 @@ func TestFunctionInvoking_ExceptionDetailsOnlyReportedWhenRequested(t *testing.T
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			options := &chatclient.ChatOptions{
+			options := chatclient.ChatOptions{
 				Tools: []tool.Tool{
 					functool.MustNew(&functool.Func{Name: "Func1"},
 						func(ctx context.Context, args struct{}) (string, error) {
@@ -1108,14 +972,13 @@ func TestFunctionInvoking_ExceptionDetailsOnlyReportedWhenRequested(t *testing.T
 			}
 
 			invokeAndAssert(t, options, plan, nil, functionInvokingOptions)
-			invokeAndAssertStreaming(t, options, plan, nil, functionInvokingOptions)
 		})
 	}
 }
 
 // TestFunctionInvoking_AllResponseMessagesReturned tests that all response messages are returned
 func TestFunctionInvoking_AllResponseMessagesReturned(t *testing.T) {
-	options := &chatclient.ChatOptions{
+	options := chatclient.ChatOptions{
 		Tools: []tool.Tool{
 			functool.MustNew(&functool.Func{Name: "Func1"},
 				func(ctx context.Context, args struct{}) (string, error) {
@@ -1130,61 +993,78 @@ func TestFunctionInvoking_AllResponseMessagesReturned(t *testing.T) {
 
 	callCount := 0
 	innerClient := &testChatClient{
-		responseFunc: func(ctx context.Context, opts *chatclient.ChatOptions, msgs ...*message.Message) (*chatclient.ChatResponse, error) {
-			callCount++
-			var msg *message.Message
-			if len(msgs) == 1 || len(msgs) == 3 {
-				// First and third call - return function call
-				msg = &message.Message{Role: message.RoleAssistant, Contents: []message.Content{
-					&message.FunctionCallContent{CallID: fmt.Sprintf("callId%d", len(msgs)), Name: "Func1"},
-				}}
-			} else {
-				// Second call - return final answer
-				msg = &message.Message{Role: message.RoleAssistant, Contents: []message.Content{
-					&message.TextContent{Text: "The answer is 42."},
-				}}
+		responseFunc: func(ctx context.Context, opts chatclient.ChatOptions, msgs ...*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error] {
+			return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
+				callCount++
+				var msg *message.Message
+				if len(msgs) == 1 || len(msgs) == 3 {
+					// First and third call - return function call
+					msg = &message.Message{Role: message.RoleAssistant, Contents: []message.Content{
+						&message.FunctionCallContent{CallID: fmt.Sprintf("callId%d", len(msgs)), Name: "Func1"},
+					}}
+				} else {
+					// Second call - return final answer
+					msg = &message.Message{Role: message.RoleAssistant, Contents: []message.Content{
+						&message.TextContent{Text: "The answer is 42."},
+					}}
+				}
+				for _, content := range msg.Contents {
+					update := &chatclient.ChatResponseUpdate{
+						Role:     msg.Role,
+						Contents: []message.Content{content},
+					}
+					if !yield(update, nil) {
+						return
+					}
+				}
 			}
-			return &chatclient.ChatResponse{Messages: []*message.Message{msg}}, nil
 		},
 	}
 
 	client := chatclient.NewFunctionInvoking(innerClient, nil)
 	ctx := context.Background()
 
-	response, err := client.Response(ctx, options, messages...)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	var updates []*chatclient.ChatResponseUpdate
+	for update, err := range client.Response(ctx, options, messages...) {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		updates = append(updates, update)
 	}
 
-	if len(response.Messages) != 5 {
-		t.Errorf("Expected 5 messages, got %d", len(response.Messages))
+	responseMessages := chatclient.NewMessageFromUpdates(updates)
+
+	if len(responseMessages) != 5 {
+		t.Errorf("Expected 5 messages, got %d", len(responseMessages))
 	}
 
-	if response.String() != "The answer is 42." {
-		t.Errorf("Expected text 'The answer is 42.', got %q", response.String())
+	// Check last message text
+	lastMsg := responseMessages[len(responseMessages)-1]
+	if lastMsg.String() != "The answer is 42." {
+		t.Errorf("Expected text 'The answer is 42.', got %q", lastMsg.String())
 	}
 
 	// Verify message types
-	if _, ok := response.Messages[0].Contents[0].(*message.FunctionCallContent); !ok {
+	if _, ok := responseMessages[0].Contents[0].(*message.FunctionCallContent); !ok {
 		t.Error("Expected first message to be FunctionCallContent")
 	}
-	if _, ok := response.Messages[1].Contents[0].(*message.FunctionResultContent); !ok {
+	if _, ok := responseMessages[1].Contents[0].(*message.FunctionResultContent); !ok {
 		t.Error("Expected second message to be FunctionResultContent")
 	}
-	if _, ok := response.Messages[2].Contents[0].(*message.FunctionCallContent); !ok {
+	if _, ok := responseMessages[2].Contents[0].(*message.FunctionCallContent); !ok {
 		t.Error("Expected third message to be FunctionCallContent")
 	}
-	if _, ok := response.Messages[3].Contents[0].(*message.FunctionResultContent); !ok {
+	if _, ok := responseMessages[3].Contents[0].(*message.FunctionResultContent); !ok {
 		t.Error("Expected fourth message to be FunctionResultContent")
 	}
-	if _, ok := response.Messages[4].Contents[0].(*message.TextContent); !ok {
+	if _, ok := responseMessages[4].Contents[0].(*message.TextContent); !ok {
 		t.Error("Expected fifth message to be TextContent")
 	}
 }
 
 // TestFunctionInvoking_PropagatesResponseConversationIdToOptions tests conversation ID propagation
 func TestFunctionInvoking_PropagatesResponseConversationIdToOptions(t *testing.T) {
-	options := &chatclient.ChatOptions{
+	options := chatclient.ChatOptions{
 		Tools: []tool.Tool{
 			functool.MustNew(&functool.Func{Name: "Func1"},
 				func(ctx context.Context, args struct{}) (string, error) {
@@ -1194,145 +1074,117 @@ func TestFunctionInvoking_PropagatesResponseConversationIdToOptions(t *testing.T
 	}
 
 	iteration := 0
-	responseFunc := func(ctx context.Context, opts *chatclient.ChatOptions, messages ...*message.Message) (*chatclient.ChatResponse, error) {
-		iteration++
+	responseFunc := func(ctx context.Context, opts chatclient.ChatOptions, messages ...*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error] {
+		return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
+			iteration++
+			var msg *message.Message
+			var convID string
 
-		switch iteration {
-		case 1:
-			if opts != nil && opts.ConversationID != "" {
-				t.Errorf("First call should have empty ConversationID, got %q", opts.ConversationID)
+			switch iteration {
+			case 1:
+				if opts.ConversationID != "" {
+					t.Errorf("First call should have empty ConversationID, got %q", opts.ConversationID)
+				}
+				msg = &message.Message{Role: message.RoleAssistant, Contents: []message.Content{&message.FunctionCallContent{CallID: "callId-abc", Name: "Func1"}}}
+				convID = "12345"
+			case 2:
+				if opts.ConversationID != "12345" {
+					t.Errorf("Second call should have ConversationID '12345', got %q", opts.ConversationID)
+				}
+				msg = &message.Message{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "done!"}}}
+			default:
+				t.Fatal("Unexpected iteration")
 			}
-			return &chatclient.ChatResponse{
-				Messages:       []*message.Message{{Role: message.RoleAssistant, Contents: []message.Content{&message.FunctionCallContent{CallID: "callId-abc", Name: "Func1"}}}},
-				ConversationID: "12345",
-			}, nil
-		case 2:
-			if opts == nil || opts.ConversationID != "12345" {
-				t.Errorf("Second call should have ConversationID '12345', got %q", opts.ConversationID)
+
+			for _, content := range msg.Contents {
+				update := &chatclient.ChatResponseUpdate{
+					Role:           msg.Role,
+					Contents:       []message.Content{content},
+					ConversationID: convID,
+				}
+				if !yield(update, nil) {
+					return
+				}
 			}
-			return &chatclient.ChatResponse{
-				Messages: []*message.Message{{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "done!"}}}},
-			}, nil
-		default:
-			t.Fatal("Unexpected iteration")
-			return nil, nil
 		}
 	}
 
 	innerClient := &testChatClient{
 		responseFunc: responseFunc,
-		streamingResponseFunc: func(ctx context.Context, opts *chatclient.ChatOptions, messages ...*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error] {
-			return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
-				var response *chatclient.ChatResponse
-				var err error
-				if responseFunc != nil {
-					response, err = responseFunc(ctx, opts, messages...)
-					if err != nil {
-						yield(nil, err)
-						return
-					}
-				}
-				if response != nil {
-					for _, msg := range response.Messages {
-						for _, content := range msg.Contents {
-							update := &chatclient.ChatResponseUpdate{
-								Role:           msg.Role,
-								Contents:       []message.Content{content},
-								ConversationID: response.ConversationID,
-							}
-							if !yield(update, nil) {
-								return
-							}
-						}
-					}
-				}
-			}
-		},
 	}
 
 	client := chatclient.NewFunctionInvoking(innerClient, nil)
 	ctx := context.Background()
 
 	iteration = 0
-	response, err := client.Response(ctx, options, message.New(&message.TextContent{Text: "hey"}))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if response.String() != "done!" {
-		t.Errorf("Expected 'done!', got %q", response.String())
-	}
-
-	iteration = 0
-	response, err = nil, nil
-	for update, e := range client.StreamingResponse(ctx, options, message.New(&message.TextContent{Text: "hey"})) {
-		if e != nil {
-			err = e
-			break
+	var updates []*chatclient.ChatResponseUpdate
+	for update, err := range client.Response(ctx, options, message.New(&message.TextContent{Text: "hey"})) {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
 		}
-		if response == nil {
-			response = &chatclient.ChatResponse{}
-		}
-		// Consolidate updates
-		if len(response.Messages) == 0 || response.Messages[len(response.Messages)-1].Role != update.Role {
-			response.Messages = append(response.Messages, &message.Message{Role: update.Role, Contents: update.Contents})
-		} else {
-			response.Messages[len(response.Messages)-1].Contents = append(response.Messages[len(response.Messages)-1].Contents, update.Contents...)
-		}
+		updates = append(updates, update)
 	}
-	if err != nil {
-		t.Fatalf("unexpected streaming error: %v", err)
-	}
-	if response.String() != "done!" {
-		t.Errorf("Expected streaming 'done!', got %q", response.String())
+	response := chatclient.NewMessageFromUpdates(updates)
+	if len(response) == 0 || response[len(response)-1].String() != "done!" {
+		t.Errorf("Expected 'done!', got %v", response)
 	}
 }
 
 // TestFunctionInvoking_ClonesChatOptionsAndResetContinuationToken tests continuation token handling
 func TestFunctionInvoking_ClonesChatOptionsAndResetContinuationToken(t *testing.T) {
-	var actualChatOptions *chatclient.ChatOptions
+	var actualChatOptions chatclient.ChatOptions
 
 	innerClient := &testChatClient{
-		responseFunc: func(ctx context.Context, opts *chatclient.ChatOptions, messages ...*message.Message) (*chatclient.ChatResponse, error) {
-			actualChatOptions = opts
+		responseFunc: func(ctx context.Context, opts chatclient.ChatOptions, messages ...*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error] {
+			return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
+				actualChatOptions = opts
 
-			// Simulate the model returning a function call for the first call only
-			hasFunctionCall := false
-			for _, m := range messages {
-				for _, c := range m.Contents {
-					if _, ok := c.(*message.FunctionCallContent); ok {
-						hasFunctionCall = true
-						break
+				// Simulate the model returning a function call for the first call only
+				hasFunctionCall := false
+				for _, m := range messages {
+					for _, c := range m.Contents {
+						if _, ok := c.(*message.FunctionCallContent); ok {
+							hasFunctionCall = true
+							break
+						}
+					}
+				}
+
+				var msg *message.Message
+				if !hasFunctionCall {
+					msg = &message.Message{Role: message.RoleAssistant, Contents: []message.Content{&message.FunctionCallContent{CallID: "callId1", Name: "Func1"}}}
+				} else {
+					msg = &message.Message{Role: message.RoleAssistant, Contents: []message.Content{}}
+				}
+
+				for _, content := range msg.Contents {
+					update := &chatclient.ChatResponseUpdate{
+						Role:     msg.Role,
+						Contents: []message.Content{content},
+					}
+					if !yield(update, nil) {
+						return
 					}
 				}
 			}
-
-			if !hasFunctionCall {
-				return &chatclient.ChatResponse{
-					Messages: []*message.Message{{Role: message.RoleAssistant, Contents: []message.Content{&message.FunctionCallContent{CallID: "callId1", Name: "Func1"}}}},
-				}, nil
-			}
-
-			return &chatclient.ChatResponse{Messages: []*message.Message{}}, nil
 		},
 	}
 
 	client := chatclient.NewFunctionInvoking(innerClient, nil)
 	ctx := context.Background()
 
-	originalChatOptions := &chatclient.ChatOptions{
+	originalChatOptions := chatclient.ChatOptions{
 		Tools:             []tool.Tool{functool.MustNew(&functool.Func{Name: "Func1"}, func(ctx context.Context, args struct{}) (string, error) { return "", nil })},
 		ContinuationToken: []byte{1, 2, 3, 4},
 	}
 
-	_, err := client.Response(ctx, originalChatOptions, message.New(&message.TextContent{Text: "hi"}))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	for _, err := range client.Response(ctx, originalChatOptions, message.New(&message.TextContent{Text: "hi"})) {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 	}
 
-	// The original options should be cloned and have a nil ContinuationToken
-	if actualChatOptions == originalChatOptions {
-		t.Error("ChatOptions should have been cloned")
-	}
+	// The original options should have a nil ContinuationToken
 	if actualChatOptions.ContinuationToken != nil {
 		t.Error("ContinuationToken should be nil in cloned options")
 	}

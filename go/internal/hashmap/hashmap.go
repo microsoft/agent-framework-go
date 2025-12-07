@@ -43,8 +43,8 @@ func (m *Map[K, V]) All() iter.Seq2[K, V] {
 	}
 }
 
-// At returns the map entry for the given key.
-func (m *Map[K, V]) At(key K) (V, bool) {
+// Load returns the map entry for the given key.
+func (m *Map[K, V]) Load(key K) (V, bool) {
 	entry, ok := m.entries[m.h.Hash(key)]
 	return entry.value, ok
 }
