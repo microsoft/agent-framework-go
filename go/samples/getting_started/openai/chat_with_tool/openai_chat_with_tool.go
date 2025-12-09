@@ -37,22 +37,17 @@ func main() {
 		},
 	})
 
-	fmt.Println(must(agent.RunText(context.Background(), a, "What's the weather like in Amsterdam?")))
+	resp, err := agent.RunText(a, "What's the weather like in Amsterdam?")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(resp)
 
-	for update, err := range agent.RunTextStream(context.Background(), a, "What is the weather like in Amsterdam?") {
+	for update, err := range agent.RunTextStream(a, "What is the weather like in Amsterdam?") {
 		if err != nil {
 			fmt.Print(err)
 			break
 		}
 		fmt.Print(update)
 	}
-}
-
-// must is a helper to panic on error for samples.
-// In production code, handle errors appropriately.
-func must[T any](resp T, err error) T {
-	if err != nil {
-		panic(err)
-	}
-	return resp
 }

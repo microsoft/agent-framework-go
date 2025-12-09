@@ -82,7 +82,7 @@ func TestContentEncoding_Roundtrip(t *testing.T) {
 		&message.TextContent{Text: "sample text"},
 		&message.TextReasoningContent{Text: "sample reasoning"},
 		&message.FunctionCallContent{
-			Arguments: map[string]any{"key": "value"},
+			Arguments: `{"key":"value"}`,
 		},
 		&message.FunctionResultContent{
 			CallID: "call-123",

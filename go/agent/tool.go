@@ -5,7 +5,6 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 
 	"github.com/microsoft/agent-framework/go/memory"
 	"github.com/microsoft/agent-framework/go/message"
@@ -59,27 +58,17 @@ func (t functool) ReturnSchema() any {
 	}
 }
 
-func (t functool) Call(ctx context.Context, args any) (any, error) {
+func (t functool) Call(ctx context.Context, args string) (any, error) {
 	var in struct {
 		Query string `json:"query"`
 	}
-	var raw json.RawMessage
-	if args == nil {
-		raw = json.RawMessage("{}")
-	} else {
-		var ok bool
-		raw, ok = args.(json.RawMessage)
-		if !ok {
-			return nil, fmt.Errorf("expected json.RawMessage arguments, got %T", args)
-		}
+	if args == "" {
+		args = "{}"
 	}
-	if err := json.Unmarshal(raw, &in); err != nil {
+	if err := json.Unmarshal([]byte(args), &in); err != nil {
 		return nil, err
 	}
-	resp, err := Run(ctx, t.agent, RunOptions{Thread: t.thread}, &message.Message{
-		Role:     message.RoleUser,
-		Contents: []message.Content{&message.TextContent{Text: in.Query}},
-	})
+	resp, err := Run(t.agent, WithContext(ctx), WithThread(t.thread), WithMessage(message.NewText(in.Query)))
 	if err != nil {
 		return "", err
 	}

@@ -41,16 +41,9 @@ func main() {
 			Tools: []tool.Tool{agent.FuncTool(weatherAgent, nil)},
 		},
 	})
-
-	fmt.Println(must(agent.RunText(context.Background(), a, "What is the weather like in Amsterdam?")))
-
-}
-
-// must is a helper to panic on error for samples.
-// In production code, handle errors appropriately.
-func must[T any](resp T, err error) T {
+	resp, err := agent.RunText(a, "What is the weather like in Amsterdam?")
 	if err != nil {
 		panic(err)
 	}
-	return resp
+	fmt.Println(resp)
 }

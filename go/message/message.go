@@ -39,10 +39,7 @@ func New(contents ...Content) *Message {
 
 // NewText creates a new [Message] with text content.
 func NewText(text string) *Message {
-	return &Message{
-		Role:     RoleUser,
-		Contents: []Content{&TextContent{Text: text}},
-	}
+	return New(&TextContent{Text: text})
 }
 
 func (m *Message) String() string {

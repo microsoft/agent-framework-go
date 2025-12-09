@@ -15,18 +15,7 @@ import (
 	"github.com/microsoft/agent-framework/go/format"
 	"github.com/microsoft/agent-framework/go/memory"
 	"github.com/microsoft/agent-framework/go/message"
-	"github.com/microsoft/agent-framework/go/param"
 )
-
-type RunOptions struct {
-	Thread                   memory.Thread
-	Streaming                param.Opt[bool]
-	AllowBackgroundResponses param.Opt[bool]
-	ContinuationToken        any
-	ResponseFormat           format.Format
-
-	Options any
-}
 
 type Identity struct {
 	id          string
@@ -66,17 +55,18 @@ type Agent interface {
 	Identity() Identity
 	Capabilities() Capabilities
 
-	Run(ctx context.Context, options RunOptions, messages ...*message.Message) iter.Seq2[*RunResponseUpdate, error]
+	Run(...Option) iter.Seq2[*RunResponseUpdate, error]
 
 	NewThread() memory.Thread
 	UnmarshalThread(data []byte) (memory.Thread, error)
 }
 
-func Run(ctx context.Context, a Agent, options RunOptions, messages ...*message.Message) (*RunResponse, error) {
+// Run executes the agent with the given options and returns the response.
+func Run(a Agent, opts ...Option) (*RunResponse, error) {
 	resp := RunResponse{
 		AgentID: a.Identity().ID(),
 	}
-	for update, err := range run(ctx, a, options, messages...) {
+	for update, err := range run(a, opts...) {
 		if err != nil {
 			return nil, err
 		}
@@ -88,34 +78,37 @@ func Run(ctx context.Context, a Agent, options RunOptions, messages ...*message.
 	return &resp, nil
 }
 
-func RunStream(ctx context.Context, a Agent, options RunOptions, messages ...*message.Message) iter.Seq2[*RunResponseUpdate, error] {
-	options.Streaming = param.NewOpt(true)
-	return run(ctx, a, options, messages...)
-}
-
-func run(ctx context.Context, a Agent, options RunOptions, messages ...*message.Message) iter.Seq2[*RunResponseUpdate, error] {
-	retErr := func(err error) iter.Seq2[*RunResponseUpdate, error] {
-		return func(yield func(*RunResponseUpdate, error) bool) {
-			yield(nil, err)
-		}
-	}
-	if a == nil {
-		return retErr(errors.New("agent cannot be nil"))
-	}
-	return a.Run(ctx, options, messages...)
+// RunStream executes the agent with the given options and returns a streaming sequence of response updates.
+func RunStream(a Agent, opts ...Option) iter.Seq2[*RunResponseUpdate, error] {
+	opts = append(opts, WithStreaming(true))
+	return run(a, opts...)
 }
 
 // RunText executes the agent with a single text message and returns the response.
-func RunText(ctx context.Context, a Agent, msg string) (*RunResponse, error) {
-	return Run(ctx, a, RunOptions{}, message.NewText(msg))
+func RunText(a Agent, msg string, opts ...Option) (*RunResponse, error) {
+	return Run(a, append(opts, WithMessage(message.NewText(msg)))...)
 }
 
-func RunTextStream(ctx context.Context, a Agent, msg string) iter.Seq2[*RunResponseUpdate, error] {
-	return RunStream(ctx, a, RunOptions{}, message.NewText(msg))
+// RunTextStream executes the agent with a single text message and returns a streaming sequence of response updates.
+func RunTextStream(a Agent, msg string, opts ...Option) iter.Seq2[*RunResponseUpdate, error] {
+	return RunStream(a, append(opts, WithMessage(message.NewText(msg)))...)
+}
+
+func run(a Agent, opts ...Option) iter.Seq2[*RunResponseUpdate, error] {
+	if a == nil {
+		return func(yield func(*RunResponseUpdate, error) bool) {
+			yield(nil, errors.New("agent cannot be nil"))
+		}
+	}
+	if _, ok := GetOption(WithContext, opts...); !ok {
+		// If no context is provided, use background.
+		opts = append(opts, WithContext(context.Background()))
+	}
+	return a.Run(opts...)
 }
 
 // RunFor executes the agent with the given messages and returns the result of type T.
-func RunFor[T any](ctx context.Context, a Agent, options RunOptions, messages ...*message.Message) (T, *RunResponse, error) {
+func RunFor[T any](a Agent, opts ...Option) (T, *RunResponse, error) {
 	var v T
 	formatter := a.Capabilities().StructuredOutput
 	if formatter == nil {
@@ -125,12 +118,12 @@ func RunFor[T any](ctx context.Context, a Agent, options RunOptions, messages ..
 	if err != nil {
 		return v, nil, err
 	}
-	options.ResponseFormat = format
-	resp, err := Run(ctx, a, options, messages...)
+	opts = append(opts, WithResponseFormat(format))
+	resp, err := Run(a, opts...)
 	if err != nil {
 		return v, resp, err
 	}
-	err = formatter.Unmarshal([]byte(resp.String()), options.ResponseFormat, &v)
+	err = formatter.Unmarshal([]byte(resp.String()), format, &v)
 	return v, resp, err
 }
 

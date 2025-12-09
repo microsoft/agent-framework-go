@@ -81,20 +81,24 @@ func (a *Agent) UnmarshalThread(data []byte) (memory.Thread, error) {
 	return &thread, nil
 }
 
-func (a *Agent) Run(ctx context.Context, options agent.RunOptions, messages ...*message.Message) iter.Seq2[*agent.RunResponseUpdate, error] {
+func (a *Agent) Run(options ...agent.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
 	return func(yield func(*agent.RunResponseUpdate, error) bool) {
 		var thread *Thread
-		if options.Thread == nil {
+		if v, ok := agent.GetOption(agent.WithThread, options...); !ok {
 			thread = a.NewThread().(*Thread)
-			options.Thread = thread
-		} else if t, ok := options.Thread.(*Thread); ok {
+		} else if t, ok := v.(*Thread); ok {
 			thread = t
 		} else {
 			yield(nil, errors.New("the provided thread is not compatible with the agent, only threads created by the agent can be used"))
 			return
 		}
+		ctx, ok := agent.GetOption(agent.WithContext, options...)
+		if !ok {
+			ctx = context.Background()
+		}
+		streaming, _ := agent.GetOption(agent.WithStreaming, options...)
 		var parts []a2a.Part
-		for _, msg := range messages {
+		for msg := range agent.GetOptions(agent.WithMessage, options...) {
 			parts = parts[:0] // reset parts slice
 			parts, err := contentsToParts(msg.Contents, parts)
 			if err != nil {
@@ -114,14 +118,14 @@ func (a *Agent) Run(ctx context.Context, options agent.RunOptions, messages ...*
 					ContextID:      thread.ContextID,
 				},
 			}
-			a.sendMsg(ctx, &options, params, yield)
+			a.sendMsg(ctx, thread, streaming, params, yield)
 		}
 	}
 }
 
-func (a *Agent) sendMsg(ctx context.Context, options *agent.RunOptions, params *a2a.MessageSendParams, yield func(*agent.RunResponseUpdate, error) bool) {
+func (a *Agent) sendMsg(ctx context.Context, thread *Thread, streaming bool, params *a2a.MessageSendParams, yield func(*agent.RunResponseUpdate, error) bool) {
 	var seq iter.Seq2[a2a.Event, error]
-	if options.Streaming.Or(false) {
+	if streaming {
 		seq = a.Client.SendStreamingMessage(ctx, params)
 	} else {
 		resp, err := a.Client.SendMessage(ctx, params)
@@ -130,7 +134,6 @@ func (a *Agent) sendMsg(ctx context.Context, options *agent.RunOptions, params *
 		}
 	}
 	id, name := a.iden.ID(), a.iden.Name()
-	thread := options.Thread.(*Thread)
 	for e, err := range seq {
 		if err != nil {
 			yield(nil, err)

@@ -178,13 +178,13 @@ func TestRunAllowsNonUserRoleMessages(t *testing.T) {
 	transport := &mockA2ATransport{}
 	a := newTestAgent(transport, nil)
 
-	inputMessages := []*message.Message{
-		{Role: message.RoleSystem, Contents: []message.Content{&message.TextContent{Text: "I am a system message"}}},
-		{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "I am an assistant message"}}},
-		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Valid user message"}}},
+	inputMessages := []agent.Option{
+		agent.WithMessage(&message.Message{Role: message.RoleSystem, Contents: []message.Content{&message.TextContent{Text: "I am a system message"}}}),
+		agent.WithMessage(&message.Message{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "I am an assistant message"}}}),
+		agent.WithMessage(&message.Message{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Valid user message"}}}),
 	}
 
-	_, err := agent.Run(t.Context(), a, agent.RunOptions{}, inputMessages...)
+	_, err := agent.Run(a, inputMessages...)
 	if err != nil {
 		t.Errorf("Run() error = %v, want nil", err)
 	}
@@ -203,11 +203,7 @@ func TestRunWithValidUserMessage(t *testing.T) {
 	}
 	a := newTestAgent(transport, nil)
 
-	inputMessages := []*message.Message{
-		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Hello, world!"}}},
-	}
-
-	result, err := agent.Run(t.Context(), a, agent.RunOptions{}, inputMessages...)
+	result, err := agent.RunText(a, "Hello, world!")
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil", err)
 	}
@@ -280,12 +276,8 @@ func TestRunWithNewThread(t *testing.T) {
 	}
 	a := newTestAgent(transport, nil)
 
-	inputMessages := []*message.Message{
-		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Test message"}}},
-	}
-
 	thread := a.NewThread()
-	_, err := agent.Run(t.Context(), a, agent.RunOptions{Thread: thread}, inputMessages...)
+	_, err := agent.RunText(a, "Test message", agent.WithThread(thread))
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil", err)
 	}
@@ -304,13 +296,9 @@ func TestRunWithExistingThread(t *testing.T) {
 	transport := &mockA2ATransport{}
 	a := newTestAgent(transport, nil)
 
-	inputMessages := []*message.Message{
-		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Test message"}}},
-	}
-
 	thread := a.NewThreadWithContextID("existing-context-id")
 
-	_, err := agent.Run(t.Context(), a, agent.RunOptions{Thread: thread}, inputMessages...)
+	_, err := agent.RunText(a, "Test message", agent.WithThread(thread))
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil", err)
 	}
@@ -336,13 +324,9 @@ func TestRunWithThreadHavingDifferentContextID(t *testing.T) {
 	}
 	a := newTestAgent(transport, nil)
 
-	inputMessages := []*message.Message{
-		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Test message"}}},
-	}
-
 	thread := a.NewThreadWithContextID("existing-context-id")
 
-	_, err := agent.Run(t.Context(), a, agent.RunOptions{Thread: thread}, inputMessages...)
+	_, err := agent.RunText(a, "Test message", agent.WithThread(thread))
 	if err == nil {
 		t.Error("Run() error = nil, want error")
 	}
@@ -360,12 +344,8 @@ func TestRunStreamingAsyncWithValidUserMessage(t *testing.T) {
 	}
 	a := newTestAgent(transport, nil)
 
-	inputMessages := []*message.Message{
-		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Hello, streaming!"}}},
-	}
-
 	var updates []*agent.RunResponseUpdate
-	for update, err := range agent.RunStream(t.Context(), a, agent.RunOptions{}, inputMessages...) {
+	for update, err := range agent.RunTextStream(a, "Hello, streaming!") {
 		if err != nil {
 			t.Fatalf("RunStream() error = %v, want nil", err)
 		}
@@ -444,13 +424,9 @@ func TestRunStreamingAsyncWithThread(t *testing.T) {
 	}
 	a := newTestAgent(transport, nil)
 
-	inputMessages := []*message.Message{
-		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Test streaming"}}},
-	}
-
 	thread := a.NewThread()
 
-	for _, err := range agent.RunStream(t.Context(), a, agent.RunOptions{Thread: thread}, inputMessages...) {
+	for _, err := range agent.RunTextStream(a, "Test streaming", agent.WithThread(thread)) {
 		if err != nil {
 			t.Fatalf("RunStream() error = %v, want nil", err)
 		}
@@ -472,13 +448,9 @@ func TestRunStreamingAsyncWithExistingThread(t *testing.T) {
 	}
 	a := newTestAgent(transport, nil)
 
-	inputMessages := []*message.Message{
-		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Test streaming"}}},
-	}
-
 	thread := a.NewThreadWithContextID("existing-context-id")
 
-	for _, err := range agent.RunStream(t.Context(), a, agent.RunOptions{Thread: thread}, inputMessages...) {
+	for _, err := range agent.RunTextStream(a, "Test streaming", agent.WithThread(thread)) {
 		if err != nil {
 			t.Fatalf("RunStream() error = %v, want nil", err)
 		}
@@ -506,12 +478,9 @@ func TestRunStreamingAsyncWithThreadHavingDifferentContextID(t *testing.T) {
 	a := newTestAgent(transport, nil)
 
 	thread := a.NewThreadWithContextID("existing-context-id")
-	inputMessages := []*message.Message{
-		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Test streaming"}}},
-	}
 
 	gotError := false
-	for _, err := range agent.RunStream(t.Context(), a, agent.RunOptions{Thread: thread}, inputMessages...) {
+	for _, err := range agent.RunTextStream(a, "Test streaming", agent.WithThread(thread)) {
 		if err != nil {
 			gotError = true
 			break
@@ -535,13 +504,13 @@ func TestRunStreamingAsyncAllowsNonUserRoleMessages(t *testing.T) {
 	}
 	a := newTestAgent(transport, nil)
 
-	inputMessages := []*message.Message{
-		{Role: message.RoleSystem, Contents: []message.Content{&message.TextContent{Text: "I am a system message"}}},
-		{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "I am an assistant message"}}},
-		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Valid user message"}}},
+	inputMessages := []agent.Option{
+		agent.WithMessage(&message.Message{Role: message.RoleSystem, Contents: []message.Content{&message.TextContent{Text: "I am a system message"}}}),
+		agent.WithMessage(&message.Message{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "I am an assistant message"}}}),
+		agent.WithMessage(&message.Message{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Valid user message"}}}),
 	}
 
-	for _, err := range agent.RunStream(t.Context(), a, agent.RunOptions{}, inputMessages...) {
+	for _, err := range agent.RunStream(a, inputMessages...) {
 		if err != nil {
 			t.Fatalf("RunStream() error = %v, want nil", err)
 		}
@@ -553,8 +522,8 @@ func TestRunWithHostedFileContent(t *testing.T) {
 	transport := &mockA2ATransport{}
 	a := newTestAgent(transport, nil)
 
-	inputMessages := []*message.Message{
-		{
+	inputMessages := []agent.Option{
+		agent.WithMessage(&message.Message{
 			Role: message.RoleUser,
 			Contents: []message.Content{
 				&message.TextContent{Text: "Check this file:"},
@@ -563,10 +532,10 @@ func TestRunWithHostedFileContent(t *testing.T) {
 					MediaType: "application/pdf",
 				},
 			},
-		},
+		}),
 	}
 
-	_, err := agent.Run(t.Context(), a, agent.RunOptions{}, inputMessages...)
+	_, err := agent.Run(a, inputMessages...)
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil", err)
 	}
