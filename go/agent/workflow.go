@@ -63,21 +63,26 @@ func newExecutor(a Agent, emitEvents bool) *workflow.Executor {
 	ex.Config = append(ex.Config, messageworkflow.NewExecutorConfig(&messageworkflow.Options{
 		StateKey: "agent_messages",
 		TakeTurnHandler: func(ctx *workflow.Context, token workflow.TurnToken, messages []*message.Message) error {
-			if !token.EmitEventsOr(emitEvents) {
-				response, err := Run(ctx, a, RunOptions{Thread: ensureThread()}, messages...)
-				if err != nil {
-					return err
-				}
-				return ctx.SendMessage("", response.Messages)
+			emitEvents := token.EmitEventsOr(emitEvents)
+			options := make([]Option, 0, 2+len(messages))
+			options = append(options, WithContext(ctx))
+			options = append(options, WithThread(ensureThread()))
+			if emitEvents {
+				// Run the agent in streaming mode only when agent run update events are to be emitted.
+				options = append(options, WithStreaming(true))
 			}
-			// Run the agent in streaming mode only when agent run update events are to be emitted.
+			for _, msg := range messages {
+				options = append(options, WithMessage(msg))
+			}
 			var updates []*RunResponseUpdate
-			for update, err := range RunStream(ctx, a, RunOptions{Thread: ensureThread()}, messages...) {
+			for update, err := range RunStream(a, options...) {
 				if err != nil {
 					return err
 				}
-				if err := ctx.AddEvent(RunUpdateEvent{id, update}); err != nil {
-					return err
+				if emitEvents {
+					if err := ctx.AddEvent(RunUpdateEvent{id, update}); err != nil {
+						return err
+					}
 				}
 				updates = append(updates, update)
 			}

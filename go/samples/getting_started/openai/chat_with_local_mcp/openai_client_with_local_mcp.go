@@ -12,7 +12,6 @@ import (
 
 	"github.com/microsoft/agent-framework/go/agent"
 	"github.com/microsoft/agent-framework/go/agent/chatagent"
-	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/openai"
 	"github.com/microsoft/agent-framework/go/tool"
 	"github.com/microsoft/agent-framework/go/tool/mcptool"
@@ -52,19 +51,17 @@ func mcpToolsOnAgentLevel() {
 		},
 	})
 
-	ctx := context.Background()
-
 	// First query - uses the tools defined at agent creation
 	const query1 = "How to create an Azure storage account using az cli?"
 	fmt.Println("User: ", query1)
-	fmt.Println(a.Identity().Name(), ": ", must(agent.RunText(ctx, a, query1)))
+	fmt.Println(a.Identity().Name(), ": ", must(agent.RunText(a, query1)))
 
 	fmt.Println("\n=======================================")
 
 	// Second query
 	const query2 = "What is Microsoft Agent Framework?"
 	fmt.Println("User: ", query2)
-	fmt.Println(a.Identity().Name(), ": ", must(agent.RunText(ctx, a, query2)))
+	fmt.Println(a.Identity().Name(), ": ", must(agent.RunText(a, query2)))
 }
 
 // mcpToolsOnRunLevel demonstrates MCP tools defined when running the agent.
@@ -86,25 +83,22 @@ func mcpToolsOnRunLevel() {
 		Instructions: "You are a helpful assistant that can help with microsoft documentation questions.",
 	})
 
-	ctx := context.Background()
-	opts := agent.RunOptions{
-		Options: &chatagent.ChatOptions{
-			Tools:    tools,
-			ToolMode: tool.ToolModeAuto,
-		},
-	}
+	opts := chatagent.WithOptions(&chatagent.ChatOptions{
+		Tools:    tools,
+		ToolMode: tool.ToolModeAuto,
+	})
 
 	// First query
 	query1 := "How to create an Azure storage account using az cli?"
 	fmt.Println("User: ", query1)
-	fmt.Println(a.Identity().Name(), ": ", must(agent.Run(ctx, a, opts, message.NewText(query1))))
+	fmt.Println(a.Identity().Name(), ": ", must(agent.RunText(a, query1, opts)))
 
 	fmt.Println("\n=======================================")
 
 	// Second query
 	query2 := "What is Microsoft Agent Framework?"
 	fmt.Println("User: ", query2)
-	fmt.Println(a.Identity().Name(), ": ", must(agent.Run(ctx, a, opts, message.NewText(query2))))
+	fmt.Println(a.Identity().Name(), ": ", must(agent.RunText(a, query2, opts)))
 }
 
 // must is a helper to panic on error for samples.

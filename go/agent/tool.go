@@ -76,10 +76,7 @@ func (t functool) Call(ctx context.Context, args any) (any, error) {
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return nil, err
 	}
-	resp, err := Run(ctx, t.agent, RunOptions{Thread: t.thread}, &message.Message{
-		Role:     message.RoleUser,
-		Contents: []message.Content{&message.TextContent{Text: in.Query}},
-	})
+	resp, err := Run(t.agent, WithContext(ctx), WithThread(t.thread), WithMessage(message.NewText(in.Query)))
 	if err != nil {
 		return "", err
 	}

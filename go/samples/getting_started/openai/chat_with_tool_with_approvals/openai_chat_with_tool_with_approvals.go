@@ -31,12 +31,12 @@ func main() {
 		},
 	})
 
-	ctx := context.Background()
-	options := agent.RunOptions{
-		Thread: a.NewThread(),
-	}
+	thread := a.NewThread()
 
-	resp := must(agent.Run(ctx, a, options, message.NewText("What's the weather like in Amsterdam?")))
+	resp, err := agent.RunText(a, "What's the weather like in Amsterdam?", agent.WithThread(thread))
+	if err != nil {
+		panic(err)
+	}
 
 	var userResponses []message.Content
 	for req := range resp.UserInputRequests() {
@@ -55,14 +55,9 @@ func main() {
 	}
 
 	// Pass the user input responses back to the agent for further processing.
-	fmt.Println("Agent:", must(agent.Run(ctx, a, options, message.New(userResponses...))))
-}
-
-// must is a helper to panic on error for samples.
-// In production code, handle errors appropriately.
-func must[T any](resp T, err error) T {
+	resp, err = agent.Run(a, agent.WithMessage(message.New(userResponses...)), agent.WithThread(thread))
 	if err != nil {
 		panic(err)
 	}
-	return resp
+	fmt.Println("Agent:", resp)
 }

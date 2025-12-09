@@ -5,6 +5,7 @@ package chatagent
 import (
 	"log/slog"
 
+	"github.com/microsoft/agent-framework/go/agent"
 	"github.com/microsoft/agent-framework/go/agent/chatagent/chatclient"
 	"github.com/microsoft/agent-framework/go/memory"
 )
@@ -33,9 +34,30 @@ func (o *Options) Clone() *Options {
 	return &clone
 }
 
-// RunOptions contains options for agent execution.
-type RunOptions struct {
-	ChatOptions *ChatOptions
+type opts struct {
+	*ChatOptions
+}
 
+func (opts) AgentOption() {}
+
+func (o opts) Value() any {
+	return o.ChatOptions
+}
+
+func WithOptions(options *ChatOptions) agent.Option {
+	return opts{options}
+}
+
+type newClientOpts struct {
 	NewClient func(chatclient.Client) chatclient.Client
+}
+
+func (newClientOpts) AgentOption() {}
+
+func (o newClientOpts) Value() any {
+	return o.NewClient
+}
+
+func WithNewClient(newClient func(chatclient.Client) chatclient.Client) agent.Option {
+	return newClientOpts{newClient}
 }

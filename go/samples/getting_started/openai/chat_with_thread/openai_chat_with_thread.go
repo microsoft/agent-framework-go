@@ -7,7 +7,6 @@ import (
 
 	"github.com/microsoft/agent-framework/go/agent"
 	"github.com/microsoft/agent-framework/go/agent/chatagent"
-	"github.com/microsoft/agent-framework/go/message"
 	"github.com/microsoft/agent-framework/go/openai"
 	"github.com/microsoft/agent-framework/go/tool"
 	"github.com/microsoft/agent-framework/go/tool/functool"
@@ -50,17 +49,15 @@ func exampleWithAutomaticThreadCreation() {
 		},
 	})
 
-	ctx := context.Background()
-
 	// First conversation - no thread provided, will be created automatically
 	query1 := "What's the weather like in Seattle?"
 	fmt.Println("User: ", query1)
-	fmt.Println("Agent: ", must(agent.Run(ctx, a, agent.RunOptions{}, message.NewText(query1))))
+	fmt.Println("Agent: ", must(agent.RunText(a, query1)))
 
 	// Second conversation - still no thread provided, will create another new thread
 	query2 := "What was the last city I asked about?"
 	fmt.Println("User: ", query2)
-	fmt.Println("Agent: ", must(agent.Run(ctx, a, agent.RunOptions{}, message.NewText(query2))))
+	fmt.Println("Agent: ", must(agent.RunText(a, query2)))
 	fmt.Println("Note: Each call creates a separate thread, so the agent doesn't remember previous context.")
 	fmt.Println()
 }
@@ -80,23 +77,22 @@ func exampleWithThreadPersistence() {
 	})
 
 	// Create a new thread that will be reused
-	ctx := context.Background()
-	options := agent.RunOptions{Thread: a.NewThread()}
+	thread := a.NewThread()
 
 	// First conversation
 	query1 := "What's the weather like in Tokyo?"
 	fmt.Println("User: ", query1)
-	fmt.Println("Agent: ", must(agent.Run(ctx, a, options, message.NewText(query1))))
+	fmt.Println("Agent: ", must(agent.RunText(a, query1, agent.WithThread(thread))))
 
 	// Second conversation using the same thread - maintains context
 	query2 := "How about London?"
 	fmt.Println("User: ", query2)
-	fmt.Println("Agent: ", must(agent.Run(ctx, a, options, message.NewText(query2))))
+	fmt.Println("Agent: ", must(agent.RunText(a, query2, agent.WithThread(thread))))
 
 	// Third conversation - agent should remember both previous cities
 	query3 := "Which of the cities I asked about has better weather?"
 	fmt.Println("User: ", query3)
-	fmt.Println("Agent: ", must(agent.Run(ctx, a, options, message.NewText(query3))))
+	fmt.Println("Agent: ", must(agent.RunText(a, query3, agent.WithThread(thread))))
 	fmt.Println("Note: The agent remembers context from previous messages in the same thread.")
 	fmt.Println()
 }
@@ -114,12 +110,11 @@ func exampleWithExistingThreadMessages() {
 	})
 
 	// Start a conversation and build up message history
-	ctx := context.Background()
-	options := agent.RunOptions{Thread: a.NewThread()}
+	thread := a.NewThread()
 
 	query1 := "What's the weather in Paris?"
 	fmt.Println("User: ", query1)
-	fmt.Println("Agent: ", must(agent.Run(ctx, a, options, message.NewText(query1))))
+	fmt.Println("Agent: ", must(agent.RunText(a, query1, agent.WithThread(thread))))
 
 	fmt.Println("\n--- Continuing with the same thread in a new agent instance ---")
 
@@ -135,7 +130,7 @@ func exampleWithExistingThreadMessages() {
 	// Use the same thread object which contains the conversation history
 	query2 := "What was the last city I asked about?"
 	fmt.Println("User: ", query2)
-	fmt.Println("Agent: ", must(agent.Run(ctx, newAgent, agent.RunOptions{Thread: options.Thread}, message.NewText(query2))))
+	fmt.Println("Agent: ", must(agent.RunText(newAgent, query2, agent.WithThread(thread))))
 	fmt.Println("Note: The agent continues the conversation using the thread message history.")
 	fmt.Println()
 }
