@@ -84,14 +84,14 @@ func (a *Agent) UnmarshalThread(data []byte) (memory.Thread, error) {
 	return newThreadFromJSON(data, a.Options.NewMessageStore, a.Options.NewContextProvider)
 }
 
-func (a *Agent) Run(opts ...agent.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
+func (a *Agent) Run(options ...agent.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
 	return func(yield func(*agent.RunResponseUpdate, error) bool) {
 		client := a.Client
-		if fn, ok := agent.GetOption(WithNewClient, opts...); ok {
+		if fn, ok := agent.GetOption(WithNewClient, options...); ok {
 			// If we have a custom chat client factory, we should use it to create a new chat client with the transformed tools.
 			client = fn(client)
 		}
-		ctx, thread, opts, messages, ctxMessages, err := a.prepareThreadAndMessages(opts)
+		ctx, thread, opts, messages, ctxMessages, err := a.prepareThreadAndMessages(options)
 		if err != nil {
 			yield(nil, err)
 			return

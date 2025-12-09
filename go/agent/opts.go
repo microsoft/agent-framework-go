@@ -16,7 +16,7 @@ import (
 // An Option configures the behavior of an Agent during a Run.
 //
 // Each option must be implemented as its own distinct type.
-// [GetOption] and [GetOptions] uses the option's type
+// [GetOption] and [GetOptions] use the option's type
 // to uniquely identify each option.
 type Option interface {
 	AgentOption()
