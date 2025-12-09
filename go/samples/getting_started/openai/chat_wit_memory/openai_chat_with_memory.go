@@ -25,23 +25,22 @@ func main() {
 
 	fmt.Println(">> Use thread with blank memory")
 
-	ctx := context.Background()
-	opts := agent.RunOptions{Thread: a.NewThread()}
+	thread := a.NewThread()
 
-	fmt.Println(must(agent.Run(ctx, a, opts, message.NewText("Hello, what is the square root of 9?"))))
+	fmt.Println(must(agent.RunText(a, "Hello, what is the square root of 9?", agent.WithThread(thread))))
 
-	fmt.Println(must(agent.Run(ctx, a, opts, message.NewText("My name is Ruaidhrí"))))
+	fmt.Println(must(agent.RunText(a, "My name is Ruaidhrí", agent.WithThread(thread))))
 
-	fmt.Println(must(agent.Run(ctx, a, opts, message.NewText("I am 20 years old"))))
+	fmt.Println(must(agent.RunText(a, "I am 20 years old", agent.WithThread(thread))))
 
 	// We can serialize the thread. The serialized state will include the state of the memory component.
-	serializedThread := must(json.Marshal(opts.Thread))
+	serializedThread := must(json.Marshal(thread))
 
 	fmt.Println(">> Use new thread with previously created memories")
 
 	deserializedThread := must(a.UnmarshalThread(serializedThread))
 
-	fmt.Println(must(agent.Run(ctx, a, agent.RunOptions{Thread: deserializedThread}, message.NewText("What is my name and age?"))))
+	fmt.Println(must(agent.RunText(a, "What is my name and age?", agent.WithThread(deserializedThread))))
 }
 
 type UserInfo struct {
@@ -80,10 +79,13 @@ func (u *UserInfoMemory) Invoked(ctx *memory.InvokedContext) error {
 		return nil
 	}
 	// To avoid infinite loops, we mark re-entrancy in the context.
-	ctx.Context = context.WithValue(ctx.Context, reentrantCtxKey{}, struct{}{})
-	out, _, err := agent.RunFor[UserInfo](ctx, u.Agent, agent.RunOptions{}, append(ctx.RequestMessages,
-		message.NewText("Extract the user's name and age from the message if present. If not present return empty values."),
-	)...)
+	opts := []agent.Option{agent.WithContext(context.WithValue(ctx.Context, reentrantCtxKey{}, struct{}{}))}
+	for _, msg := range ctx.RequestMessages {
+		opts = append(opts, agent.WithMessage(msg))
+	}
+	opts = append(opts, agent.WithMessage(message.NewText("Extract the user's name and age from the message if present. If not present return empty values.")))
+	// We ask the agent to extract the user info from the conversation so far.
+	out, _, err := agent.RunFor[UserInfo](u.Agent, opts...)
 	if err != nil {
 		return err
 	}

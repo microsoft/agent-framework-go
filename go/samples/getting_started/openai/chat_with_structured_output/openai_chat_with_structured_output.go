@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/microsoft/agent-framework/go/agent"
@@ -34,7 +33,7 @@ func main() {
 	const query = "Tell me about Paris, France"
 	fmt.Println("User: ", query)
 
-	city, resp, err := agent.RunFor[CityInfo](context.Background(), a, agent.RunOptions{}, message.NewText(query))
+	city, resp, err := agent.RunFor[CityInfo](a, agent.WithMessage(message.NewText(query)))
 	if err != nil {
 		panic(err)
 	}

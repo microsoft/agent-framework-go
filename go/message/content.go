@@ -227,7 +227,7 @@ func (t ErrorContent) kind() contentKind { return "error" }
 type serializedFunctionCallContent struct {
 	ContentHeader
 
-	Arguments any
+	Arguments string
 	CallID    string
 	Error     string `json:",omitempty"`
 	Name      string `json:",omitempty"`
@@ -239,7 +239,7 @@ type serializedFunctionCallContent struct {
 type FunctionCallContent struct {
 	ContentHeader
 
-	Arguments any
+	Arguments string
 	CallID    string
 	Error     error // Error that occurred while mapping the original function call data to this object.
 	Name      string

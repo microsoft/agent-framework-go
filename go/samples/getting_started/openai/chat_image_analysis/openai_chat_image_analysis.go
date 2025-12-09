@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/microsoft/agent-framework/go/agent"
@@ -25,22 +24,15 @@ func main() {
 		Instructions: "You are a helpful agent that can analyze images.",
 	})
 
-	fmt.Println("Result: ", must(
-		agent.Run(context.Background(), a, agent.RunOptions{}, message.New(
-			&message.TextContent{Text: "Describe the content of this image."},
-			&message.URIContent{
-				URI:       "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg",
-				MediaType: "image/jpeg",
-			},
-		)),
-	))
-}
-
-// must is a helper to panic on error for samples.
-// In production code, handle errors appropriately.
-func must[T any](resp T, err error) T {
+	resp, err := agent.Run(a,
+		agent.WithMessage(message.NewText("Describe the content of this image.")),
+		agent.WithMessage(message.New(&message.URIContent{
+			URI:       "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg",
+			MediaType: "image/jpeg",
+		})),
+	)
 	if err != nil {
 		panic(err)
 	}
-	return resp
+	fmt.Println(resp)
 }
