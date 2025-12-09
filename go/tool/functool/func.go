@@ -4,7 +4,6 @@ package functool
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"reflect"
 
@@ -28,7 +27,7 @@ type Func struct {
 // request or result: the params contain raw arguments, no input validation
 // is performed, and the result is returned to the user as-is, without any
 // validation of the output.
-type Handler func(_ context.Context, args json.RawMessage) (any, error)
+type Handler func(_ context.Context, args string) (any, error)
 
 // A HandlerFor handles a call to tools/call with typed arguments and results.
 //
@@ -64,18 +63,11 @@ func (t *Tool) ReturnSchema() any {
 	return t.Func.outputFormat.Schema()
 }
 
-func (t *Tool) Call(ctx context.Context, args any) (any, error) {
-	var raw json.RawMessage
-	if args == nil {
-		raw = json.RawMessage("{}")
-	} else {
-		var ok bool
-		raw, ok = args.(json.RawMessage)
-		if !ok {
-			return nil, fmt.Errorf("expected json.RawMessage arguments, got %T", args)
-		}
+func (t *Tool) Call(ctx context.Context, args string) (any, error) {
+	if args == "" {
+		args = "{}"
 	}
-	return t.Handler(ctx, raw)
+	return t.Handler(ctx, args)
 }
 
 func MustNew[In, Out any](fnp *Func, h HandlerFor[In, Out]) *Tool {
@@ -121,17 +113,17 @@ func New[In, Out any](fnp *Func, h HandlerFor[In, Out]) (*Tool, error) {
 		return nil, fmt.Errorf("resolving output schema: %w", err)
 	}
 
-	t.Handler = func(ctx context.Context, args json.RawMessage) (any, error) {
+	t.Handler = func(ctx context.Context, args string) (any, error) {
 		var in In
 		if t.Func.inputWrapped {
 			// Extract wrapped value.
 			var decodedArgs inputWrapper[In]
-			if err := jsonformat.Unmarshal(t.Func.inputFormat, args, &decodedArgs); err != nil {
+			if err := jsonformat.Unmarshal(t.Func.inputFormat, []byte(args), &decodedArgs); err != nil {
 				return nil, err
 			}
 			in = decodedArgs.Arg0
 		} else {
-			if err := jsonformat.Unmarshal(t.Func.inputFormat, args, &in); err != nil {
+			if err := jsonformat.Unmarshal(t.Func.inputFormat, []byte(args), &in); err != nil {
 				return nil, err
 			}
 		}

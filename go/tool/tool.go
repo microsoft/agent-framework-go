@@ -29,7 +29,7 @@ type FuncTool interface {
 	Schema() any
 	ReturnSchema() any
 
-	Call(ctx context.Context, args any) (any, error)
+	Call(ctx context.Context, args string) (any, error)
 }
 
 // ApprovalRequiredTool indicates that a tool requires user approval before invocation.

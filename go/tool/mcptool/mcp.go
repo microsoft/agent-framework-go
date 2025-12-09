@@ -7,6 +7,7 @@ package mcptool
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/microsoft/agent-framework/go/message"
@@ -111,11 +112,11 @@ func (w *mcpWrapper) ReturnSchema() any {
 }
 
 // Call implements the Func-like calling pattern for MCP tools.
-func (w *mcpWrapper) Call(ctx context.Context, args any) (any, error) {
+func (w *mcpWrapper) Call(ctx context.Context, args string) (any, error) {
 	// Call the MCP tool
 	result, err := w.session.CallTool(ctx, &mcp.CallToolParams{
 		Name:      w.tool.Name,
-		Arguments: args,
+		Arguments: json.RawMessage(args),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("MCP tool call failed: %w", err)

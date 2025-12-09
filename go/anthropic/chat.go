@@ -125,9 +125,7 @@ func (a *client) Response(ctx context.Context, opts chatclient.ChatOptions, mess
 				indices := slices.Collect(maps.Keys(functions))
 				slices.Sort(indices)
 				for _, id := range indices {
-					fn := functions[id]
-					fn.Arguments = json.RawMessage(fn.Arguments.(string))
-					contents = append(contents, fn)
+					contents = append(contents, functions[id])
 				}
 			}
 
@@ -218,14 +216,10 @@ func (a *client) buildBlock(index int, v any, contents []message.Content, functi
 			},
 		})
 	case anthropic.ToolUseBlock:
-		var input any
-		if v.Input != nil {
-			input = v.Input
-		}
 		functions[index] = &message.FunctionCallContent{
 			CallID:    v.ID,
 			Name:      v.Name,
-			Arguments: input,
+			Arguments: string(v.Input),
 		}
 	}
 	return contents
@@ -242,11 +236,7 @@ func (a *client) buildDelta(index int, v any, contents []message.Content, functi
 		})
 	case anthropic.InputJSONDelta:
 		if fnContent, ok := functions[index]; ok {
-			if fnContent.Arguments == nil {
-				fnContent.Arguments = d.PartialJSON
-			} else {
-				fnContent.Arguments = fnContent.Arguments.(string) + d.PartialJSON
-			}
+			fnContent.Arguments += d.PartialJSON
 		}
 	case anthropic.ThinkingDelta:
 		contents = append(contents, &message.TextReasoningContent{
@@ -302,7 +292,7 @@ func (a *client) buildMessageParams(options *chatclient.ChatOptions, messages ..
 					properties = props
 				}
 				if reqs, ok := schema["required"]; ok {
-					if reqList, ok := reqs.([]interface{}); ok {
+					if reqList, ok := reqs.([]any); ok {
 						for _, r := range reqList {
 							if s, ok := r.(string); ok {
 								required = append(required, s)

@@ -136,7 +136,7 @@ func (a *client) Response(ctx context.Context, options chatclient.ChatOptions, m
 			contents = append(contents, &message.FunctionCallContent{
 				CallID:    tc.ID,
 				Name:      tc.Function.Name,
-				Arguments: json.RawMessage(tc.Function.Arguments),
+				Arguments: tc.Function.Arguments,
 			})
 		}
 		if choice.Message.Content != "" {
@@ -170,15 +170,10 @@ func (a *client) Response(ctx context.Context, options chatclient.ChatOptions, m
 			}
 			var contents []message.Content
 			if tc, ok := acc.JustFinishedToolCall(); ok {
-				args, err := unmarshalArgs(tc.Arguments)
-				if err != nil {
-					yield(nil, err)
-					return
-				}
 				contents = append(contents, &message.FunctionCallContent{
 					CallID:    tc.ID,
 					Name:      tc.Name,
-					Arguments: args,
+					Arguments: tc.Arguments,
 				})
 			}
 			var role message.Role
@@ -422,16 +417,12 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 					})
 				}
 			case *message.FunctionCallContent:
-				args, err := marshalArgs(c.Arguments)
-				if err != nil {
-					return nil, err
-				}
 				toolCalls = append(toolCalls, openai.ChatCompletionMessageToolCallUnionParam{
 					OfFunction: &openai.ChatCompletionMessageFunctionToolCallParam{
 						ID: c.CallID,
 						Function: openai.ChatCompletionMessageFunctionToolCallFunctionParam{
 							Name:      c.Name,
-							Arguments: args,
+							Arguments: c.Arguments,
 						},
 					},
 				})
@@ -475,20 +466,4 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 	default:
 		panic("unknown message role: " + string(msg.Role))
 	}
-}
-
-func marshalArgs(args any) (string, error) {
-	data, err := json.Marshal(args)
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
-}
-
-func unmarshalArgs(data string) (any, error) {
-	var args any
-	if err := json.Unmarshal([]byte(data), &args); err != nil {
-		return nil, fmt.Errorf("can't unmarshal response args: %w", err)
-	}
-	return args, nil
 }

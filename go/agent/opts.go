@@ -94,10 +94,7 @@ func GetOption[T any](setter func(T) Option, opts ...Option) (T, bool) {
 	for _, opt := range slices.Backward(opts) {
 		if reflect.TypeOf(opt) == setterType {
 			v, ok := opt.Value().(T)
-			if !ok {
-				panic("option type mismatch")
-			}
-			return v, true
+			return v, ok
 		}
 	}
 	return zero, false
