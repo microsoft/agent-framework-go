@@ -11,6 +11,7 @@ import (
 	"github.com/microsoft/agent-framework/go/format"
 	"github.com/microsoft/agent-framework/go/memory"
 	"github.com/microsoft/agent-framework/go/message"
+	"github.com/microsoft/agent-framework/go/tool"
 )
 
 // An Option configures the behavior of an Agent during a Run.
@@ -30,6 +31,8 @@ type (
 	continuationTokenOpt struct{ any }
 
 	messageOpt struct{ *message.Message }
+	toolOpt    struct{ tool.Tool }
+	toolMode   tool.ToolMode
 
 	streamingOpt                bool
 	allowBackgroundResponsesOpt bool
@@ -42,6 +45,8 @@ func (streamingOpt) AgentOption()                {}
 func (continuationTokenOpt) AgentOption()        {}
 func (allowBackgroundResponsesOpt) AgentOption() {}
 func (messageOpt) AgentOption()                  {}
+func (toolOpt) AgentOption()                     {}
+func (toolMode) AgentOption()                    {}
 
 func (o contextOpt) Value() any                  { return o.Context }
 func (o responseFormatOpt) Value() any           { return o.Format }
@@ -50,6 +55,18 @@ func (o streamingOpt) Value() any                { return bool(o) }
 func (o continuationTokenOpt) Value() any        { return o.any }
 func (o allowBackgroundResponsesOpt) Value() any { return bool(o) }
 func (o messageOpt) Value() any                  { return o.Message }
+func (o toolOpt) Value() any                     { return o.Tool }
+func (o toolMode) Value() any                    { return tool.ToolMode(o) }
+
+// WithTool adds a tool to the agent run.
+func WithTool(tool tool.Tool) Option {
+	return toolOpt{tool}
+}
+
+// WithToolMode sets the tool mode for the agent run.
+func WithToolMode(mode tool.ToolMode) Option {
+	return toolMode(mode)
+}
 
 // WithContext sets the context to use during the agent run.
 func WithContext(context context.Context) Option {
@@ -88,7 +105,7 @@ func WithMessage(message *message.Message) Option {
 
 // GetOption returns the value stored in opts with the provided setter,
 // reporting whether the value is present.
-func GetOption[T any](setter func(T) Option, opts ...Option) (T, bool) {
+func GetOption[T any](opts []Option, setter func(T) Option) (T, bool) {
 	var zero T
 	var setterType = reflect.TypeOf(setter(zero))
 	for _, opt := range slices.Backward(opts) {
@@ -100,8 +117,16 @@ func GetOption[T any](setter func(T) Option, opts ...Option) (T, bool) {
 	return zero, false
 }
 
+func DeleteOption[T any](opts []Option, setter func(T) Option) []Option {
+	var zero T
+	var setterType = reflect.TypeOf(setter(zero))
+	return slices.DeleteFunc(opts, func(opt Option) bool {
+		return reflect.TypeOf(opt) == setterType
+	})
+}
+
 // GetOptions returns a sequence of all values stored in opts with the provided setter.
-func GetOptions[T any](setter func(T) Option, opts ...Option) iter.Seq[T] {
+func GetOptions[T any](opts []Option, setter func(T) Option) iter.Seq[T] {
 	return func(yield func(T) bool) {
 		var zero T
 		var setterType = reflect.TypeOf(setter(zero))
