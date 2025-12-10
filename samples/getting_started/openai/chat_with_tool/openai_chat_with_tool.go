@@ -37,13 +37,13 @@ func main() {
 		},
 	})
 
-	resp, err := agent.RunText(a, "What's the weather like in Amsterdam?")
+	resp, err := agent.RunText(context.Background(), a, "What's the weather like in Amsterdam?")
 	if err != nil {
 		panic(err)
 	}
 	fmt.Println(resp)
 
-	for update, err := range agent.RunTextStream(a, "What is the weather like in Amsterdam?") {
+	for update, err := range agent.RunTextStream(context.Background(), a, "What is the weather like in Amsterdam?") {
 		if err != nil {
 			fmt.Print(err)
 			break

@@ -54,14 +54,14 @@ func mcpToolsOnAgentLevel() {
 	// First query - uses the tools defined at agent creation
 	const query1 = "How to create an Azure storage account using az cli?"
 	fmt.Println("User: ", query1)
-	fmt.Println(a.Identity().Name(), ": ", must(agent.RunText(a, query1)))
+	fmt.Println(a.Identity().Name(), ": ", must(agent.RunText(context.Background(), a, query1)))
 
 	fmt.Println("\n=======================================")
 
 	// Second query
 	const query2 = "What is Microsoft Agent Framework?"
 	fmt.Println("User: ", query2)
-	fmt.Println(a.Identity().Name(), ": ", must(agent.RunText(a, query2)))
+	fmt.Println(a.Identity().Name(), ": ", must(agent.RunText(context.Background(), a, query2)))
 }
 
 // mcpToolsOnRunLevel demonstrates MCP tools defined when running the agent.
@@ -91,14 +91,14 @@ func mcpToolsOnRunLevel() {
 	// First query
 	query1 := "How to create an Azure storage account using az cli?"
 	fmt.Println("User: ", query1)
-	fmt.Println(a.Identity().Name(), ": ", must(agent.RunText(a, query1, opts)))
+	fmt.Println(a.Identity().Name(), ": ", must(agent.RunText(context.Background(), a, query1, opts)))
 
 	fmt.Println("\n=======================================")
 
 	// Second query
 	query2 := "What is Microsoft Agent Framework?"
 	fmt.Println("User: ", query2)
-	fmt.Println(a.Identity().Name(), ": ", must(agent.RunText(a, query2, opts)))
+	fmt.Println(a.Identity().Name(), ": ", must(agent.RunText(context.Background(), a, query2, opts)))
 }
 
 // must is a helper to panic on error for samples.

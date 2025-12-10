@@ -27,11 +27,11 @@ func main() {
 
 	thread := a.NewThread()
 
-	fmt.Println(must(agent.RunText(a, "Hello, what is the square root of 9?", agent.WithThread(thread))))
+	fmt.Println(must(agent.RunText(context.Background(), a, "Hello, what is the square root of 9?", agent.WithThread(thread))))
 
-	fmt.Println(must(agent.RunText(a, "My name is Ruaidhrí", agent.WithThread(thread))))
+	fmt.Println(must(agent.RunText(context.Background(), a, "My name is Ruaidhrí", agent.WithThread(thread))))
 
-	fmt.Println(must(agent.RunText(a, "I am 20 years old", agent.WithThread(thread))))
+	fmt.Println(must(agent.RunText(context.Background(), a, "I am 20 years old", agent.WithThread(thread))))
 
 	// We can serialize the thread. The serialized state will include the state of the memory component.
 	serializedThread := must(json.Marshal(thread))
@@ -40,7 +40,7 @@ func main() {
 
 	deserializedThread := must(a.UnmarshalThread(serializedThread))
 
-	fmt.Println(must(agent.RunText(a, "What is my name and age?", agent.WithThread(deserializedThread))))
+	fmt.Println(must(agent.RunText(context.Background(), a, "What is my name and age?", agent.WithThread(deserializedThread))))
 }
 
 type UserInfo struct {
@@ -79,13 +79,14 @@ func (u *UserInfoMemory) Invoked(ctx *memory.InvokedContext) error {
 		return nil
 	}
 	// To avoid infinite loops, we mark re-entrancy in the context.
-	opts := []agent.Option{agent.WithContext(context.WithValue(ctx.Context, reentrantCtxKey{}, struct{}{}))}
+	ctx2 := context.WithValue(ctx.Context, reentrantCtxKey{}, struct{}{})
+	var opts []agent.Option
 	for _, msg := range ctx.RequestMessages {
 		opts = append(opts, agent.WithMessage(msg))
 	}
 	opts = append(opts, agent.WithMessage(message.NewText("Extract the user's name and age from the message if present. If not present return empty values.")))
 	// We ask the agent to extract the user info from the conversation so far.
-	out, _, err := agent.RunFor[UserInfo](u.Agent, opts...)
+	out, _, err := agent.RunFor[UserInfo](ctx2, u.Agent, opts...)
 	if err != nil {
 		return err
 	}

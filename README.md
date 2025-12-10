@@ -74,6 +74,7 @@ Create a simple Azure Chat Agent that writes a haiku about the Microsoft Agent F
 
 ```go
 import (
+  "context"
 	"fmt"
 	"os"
 
@@ -93,7 +94,7 @@ func main() {
 		Model:      os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), // e.g., "gpt-4o"
 	}, nil)
 
-  resp, err := agent.RunText(a, "Write a haiku about the Microsoft Agent Framework")
+  resp, err := agent.RunText(context.Background(), a, "Write a haiku about the Microsoft Agent Framework")
   if err != nil {
     panic(err)
   }

@@ -64,8 +64,7 @@ func newExecutor(a Agent, emitEvents bool) *workflow.Executor {
 		StateKey: "agent_messages",
 		TakeTurnHandler: func(ctx *workflow.Context, token workflow.TurnToken, messages []*message.Message) error {
 			emitEvents := token.EmitEventsOr(emitEvents)
-			options := make([]Option, 0, 2+len(messages))
-			options = append(options, WithContext(ctx))
+			options := make([]Option, 0, 1+len(messages))
 			options = append(options, WithThread(ensureThread()))
 			if emitEvents {
 				// Run the agent in streaming mode only when agent run update events are to be emitted.
@@ -75,7 +74,7 @@ func newExecutor(a Agent, emitEvents bool) *workflow.Executor {
 				options = append(options, WithMessage(msg))
 			}
 			var updates []*RunResponseUpdate
-			for update, err := range RunStream(a, options...) {
+			for update, err := range RunStream(ctx, a, options...) {
 				if err != nil {
 					return err
 				}
