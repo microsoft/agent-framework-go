@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/microsoft/agent-framework/go/workflow"
-	"github.com/microsoft/agent-framework/go/workflow/inproc"
+	"github.com/microsoft/agent-framework-go/workflow"
+	"github.com/microsoft/agent-framework-go/workflow/inproc"
 )
 
 type TestTurnToken struct {

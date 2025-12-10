@@ -10,11 +10,11 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/microsoft/agent-framework/go/agent"
-	"github.com/microsoft/agent-framework/go/agent/chatagent"
-	"github.com/microsoft/agent-framework/go/openai"
-	"github.com/microsoft/agent-framework/go/tool"
-	"github.com/microsoft/agent-framework/go/tool/mcptool"
+	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/chatagent"
+	"github.com/microsoft/agent-framework-go/openai"
+	"github.com/microsoft/agent-framework-go/tool"
+	"github.com/microsoft/agent-framework-go/tool/mcptool"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 

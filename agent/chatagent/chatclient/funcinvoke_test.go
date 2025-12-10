@@ -13,11 +13,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/microsoft/agent-framework/go/agent/chatagent/chatclient"
-	"github.com/microsoft/agent-framework/go/message"
-	"github.com/microsoft/agent-framework/go/param"
-	"github.com/microsoft/agent-framework/go/tool"
-	"github.com/microsoft/agent-framework/go/tool/functool"
+	"github.com/microsoft/agent-framework-go/agent/chatagent/chatclient"
+	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/param"
+	"github.com/microsoft/agent-framework-go/tool"
+	"github.com/microsoft/agent-framework-go/tool/functool"
 )
 
 // testChatClient is a minimal test implementation of Client

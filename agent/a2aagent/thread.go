@@ -5,7 +5,7 @@ package a2aagent
 import (
 	"context"
 
-	"github.com/microsoft/agent-framework/go/message"
+	"github.com/microsoft/agent-framework-go/message"
 )
 
 // Thread represents a thread identified by a service-managed identifier.

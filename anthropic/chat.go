@@ -15,10 +15,10 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/anthropics/anthropic-sdk-go/shared/constant"
-	"github.com/microsoft/agent-framework/go/agent/chatagent"
-	"github.com/microsoft/agent-framework/go/agent/chatagent/chatclient"
-	"github.com/microsoft/agent-framework/go/message"
-	"github.com/microsoft/agent-framework/go/tool"
+	"github.com/microsoft/agent-framework-go/agent/chatagent"
+	"github.com/microsoft/agent-framework-go/agent/chatagent/chatclient"
+	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/tool"
 )
 
 var _ chatclient.Client = (*client)(nil)

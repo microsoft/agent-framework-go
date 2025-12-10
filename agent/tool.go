@@ -6,9 +6,9 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/microsoft/agent-framework/go/memory"
-	"github.com/microsoft/agent-framework/go/message"
-	"github.com/microsoft/agent-framework/go/tool"
+	"github.com/microsoft/agent-framework-go/memory"
+	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/tool"
 )
 
 // FuncTool creates a function tool that invokes the given agent.

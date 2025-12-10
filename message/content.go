@@ -14,7 +14,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/microsoft/agent-framework/go/internal/jsonx"
+	"github.com/microsoft/agent-framework-go/internal/jsonx"
 )
 
 var supportedContents map[contentKind]reflect.Type

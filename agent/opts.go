@@ -8,10 +8,10 @@ import (
 	"reflect"
 	"slices"
 
-	"github.com/microsoft/agent-framework/go/format"
-	"github.com/microsoft/agent-framework/go/memory"
-	"github.com/microsoft/agent-framework/go/message"
-	"github.com/microsoft/agent-framework/go/tool"
+	"github.com/microsoft/agent-framework-go/format"
+	"github.com/microsoft/agent-framework-go/memory"
+	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/tool"
 )
 
 // An Option configures the behavior of an Agent during a Run.

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/microsoft/agent-framework/go/agent"
-	"github.com/microsoft/agent-framework/go/anthropic"
+	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/anthropic"
 )
 
 /*

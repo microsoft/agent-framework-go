@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"reflect"
 
-	"github.com/microsoft/agent-framework/go/format/jsonformat"
-	"github.com/microsoft/agent-framework/go/tool"
+	"github.com/microsoft/agent-framework-go/format/jsonformat"
+	"github.com/microsoft/agent-framework-go/tool"
 )
 
 // Func represents a tool that wraps a Go function to make it callable by AI models.

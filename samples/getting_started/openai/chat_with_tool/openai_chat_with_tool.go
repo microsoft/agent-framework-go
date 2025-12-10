@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"math/rand"
 
-	"github.com/microsoft/agent-framework/go/agent"
-	"github.com/microsoft/agent-framework/go/agent/chatagent"
-	"github.com/microsoft/agent-framework/go/openai"
-	"github.com/microsoft/agent-framework/go/tool"
-	"github.com/microsoft/agent-framework/go/tool/functool"
+	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/chatagent"
+	"github.com/microsoft/agent-framework-go/openai"
+	"github.com/microsoft/agent-framework-go/tool"
+	"github.com/microsoft/agent-framework-go/tool/functool"
 )
 
 /*

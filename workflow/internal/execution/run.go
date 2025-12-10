@@ -10,8 +10,8 @@ import (
 	"slices"
 	"sync/atomic"
 
-	"github.com/microsoft/agent-framework/go/workflow"
-	"github.com/microsoft/agent-framework/go/workflow/internal/checkpoint"
+	"github.com/microsoft/agent-framework-go/workflow"
+	"github.com/microsoft/agent-framework-go/workflow/internal/checkpoint"
 )
 
 type DeliveryMapping struct {

@@ -3,9 +3,9 @@ package execution
 import (
 	"testing"
 
-	"github.com/microsoft/agent-framework/go/internal/hashmap"
-	"github.com/microsoft/agent-framework/go/workflow"
-	"github.com/microsoft/agent-framework/go/workflow/internal/checkpoint"
+	"github.com/microsoft/agent-framework-go/internal/hashmap"
+	"github.com/microsoft/agent-framework-go/workflow"
+	"github.com/microsoft/agent-framework-go/workflow/internal/checkpoint"
 )
 
 func TestScopeSharedScope_ReadKeys(t *testing.T) {

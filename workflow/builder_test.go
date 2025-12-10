@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/microsoft/agent-framework/go/workflow"
+	"github.com/microsoft/agent-framework-go/workflow"
 )
 
 type noOpExecutor struct {

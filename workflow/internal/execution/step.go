@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"reflect"
 
-	"github.com/microsoft/agent-framework/go/internal/concurrent"
-	"github.com/microsoft/agent-framework/go/workflow"
-	"github.com/microsoft/agent-framework/go/workflow/internal/checkpoint"
+	"github.com/microsoft/agent-framework-go/internal/concurrent"
+	"github.com/microsoft/agent-framework-go/workflow"
+	"github.com/microsoft/agent-framework-go/workflow/internal/checkpoint"
 )
 
 type StepTracer interface {

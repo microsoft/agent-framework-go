@@ -6,8 +6,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/microsoft/agent-framework/go/workflow"
-	"github.com/microsoft/agent-framework/go/workflow/inproc"
+	"github.com/microsoft/agent-framework-go/workflow"
+	"github.com/microsoft/agent-framework-go/workflow/inproc"
 )
 
 // This sample introduces the concepts of executors and edges in a workflow.

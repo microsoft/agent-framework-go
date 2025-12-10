@@ -9,7 +9,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/microsoft/agent-framework/go/message"
+	"github.com/microsoft/agent-framework-go/message"
 )
 
 // Test TextContent

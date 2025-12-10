@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/microsoft/agent-framework/go/format/jsonformat"
+	"github.com/microsoft/agent-framework-go/format/jsonformat"
 )
 
 func TestEncodingRoundtrip(t *testing.T) {

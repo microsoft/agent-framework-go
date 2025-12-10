@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/microsoft/agent-framework/go/middleware"
-	"github.com/microsoft/agent-framework/go/tool/functool"
+	"github.com/microsoft/agent-framework-go/middleware"
+	"github.com/microsoft/agent-framework-go/tool/functool"
 )
 
 // CachingMiddleware caches function results to avoid duplicate calls.

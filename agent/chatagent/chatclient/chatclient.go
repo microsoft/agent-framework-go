@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/microsoft/agent-framework/go/format"
-	"github.com/microsoft/agent-framework/go/message"
-	"github.com/microsoft/agent-framework/go/param"
-	"github.com/microsoft/agent-framework/go/tool"
+	"github.com/microsoft/agent-framework-go/format"
+	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/param"
+	"github.com/microsoft/agent-framework-go/tool"
 )
 
 type Capabilities struct {

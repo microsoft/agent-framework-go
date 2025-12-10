@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"reflect"
 
-	"github.com/microsoft/agent-framework/go/internal/jsonx"
+	"github.com/microsoft/agent-framework-go/internal/jsonx"
 )
 
 var supportedAnnotations map[annotationKind]reflect.Type

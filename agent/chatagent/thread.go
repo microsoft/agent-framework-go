@@ -6,8 +6,8 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/microsoft/agent-framework/go/memory"
-	"github.com/microsoft/agent-framework/go/message"
+	"github.com/microsoft/agent-framework-go/memory"
+	"github.com/microsoft/agent-framework-go/message"
 )
 
 var _ memory.Thread = (*Thread)(nil)

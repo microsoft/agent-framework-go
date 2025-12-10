@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/microsoft/agent-framework/go/internal/errgroup"
+	"github.com/microsoft/agent-framework-go/internal/errgroup"
 )
 
 var (

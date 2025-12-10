@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/microsoft/agent-framework/go/agent/chatagent/chatclient"
-	"github.com/microsoft/agent-framework/go/message"
+	"github.com/microsoft/agent-framework-go/agent/chatagent/chatclient"
+	"github.com/microsoft/agent-framework-go/message"
 )
 
 // messageText returns all concatenated text from a message's contents

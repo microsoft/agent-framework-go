@@ -13,8 +13,8 @@ import (
 	"unsafe"
 
 	"github.com/google/uuid"
-	"github.com/microsoft/agent-framework/go/workflow"
-	"github.com/microsoft/agent-framework/go/workflow/internal/execution"
+	"github.com/microsoft/agent-framework-go/workflow"
+	"github.com/microsoft/agent-framework-go/workflow/internal/execution"
 )
 
 // runnerContext manages the execution context for a workflow run.

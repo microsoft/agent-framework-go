@@ -10,9 +10,9 @@ import (
 	"slices"
 	"sync"
 
-	"github.com/microsoft/agent-framework/go/internal/errgroup"
-	"github.com/microsoft/agent-framework/go/workflow"
-	"github.com/microsoft/agent-framework/go/workflow/internal/checkpoint"
+	"github.com/microsoft/agent-framework-go/internal/errgroup"
+	"github.com/microsoft/agent-framework-go/workflow"
+	"github.com/microsoft/agent-framework-go/workflow/internal/checkpoint"
 )
 
 type statefulEdgeStateJSON struct {

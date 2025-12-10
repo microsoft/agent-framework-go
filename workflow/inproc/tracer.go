@@ -5,9 +5,9 @@ package inproc
 import (
 	"slices"
 
-	"github.com/microsoft/agent-framework/go/internal/concurrent"
-	"github.com/microsoft/agent-framework/go/workflow"
-	"github.com/microsoft/agent-framework/go/workflow/internal/execution"
+	"github.com/microsoft/agent-framework-go/internal/concurrent"
+	"github.com/microsoft/agent-framework-go/workflow"
+	"github.com/microsoft/agent-framework-go/workflow/internal/execution"
 )
 
 var _ execution.StepTracer = (*stepTracer)(nil)
