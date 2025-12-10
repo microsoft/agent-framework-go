@@ -69,6 +69,6 @@ func main() {
 	}
 	fmt.Println("Assistant Output:")
 	fmt.Println("Name:", person2.Name)
-	fmt.Println("Age:", person.Age)
-	fmt.Println("Occupation:", person.Occupation)
+	fmt.Println("Age:", person2.Age)
+	fmt.Println("Occupation:", person2.Occupation)
 }

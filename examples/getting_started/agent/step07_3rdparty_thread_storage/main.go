@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-// This sample shows how to run an Agent to produce structured output.
+// This sample demonstrates third-party thread storage and message persistence
+// using a filesystem-based message store for agent conversations.
 
 package main
 
@@ -99,7 +100,7 @@ func (d *fsMessageStore) Add(ctx context.Context, msgs ...*message.Message) erro
 func (d *fsMessageStore) All(ctx context.Context) iter.Seq2[*message.Message, error] {
 	return func(yield func(*message.Message, error) bool) {
 		for _, file := range d.Files {
-			data, err := os.ReadFile(file)
+			data, err := os.ReadFile(filepath.Join(d.Dir, file))
 			if err != nil {
 				if !yield(nil, err) {
 					return
