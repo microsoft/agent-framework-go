@@ -33,7 +33,7 @@ func main() {
 
 	thread := a.NewThread()
 
-	resp, err := agent.RunText(a, "What's the weather like in Amsterdam?", agent.WithThread(thread))
+	resp, err := agent.RunText(context.Background(), a, "What's the weather like in Amsterdam?", agent.WithThread(thread))
 	if err != nil {
 		panic(err)
 	}
@@ -55,7 +55,7 @@ func main() {
 	}
 
 	// Pass the user input responses back to the agent for further processing.
-	resp, err = agent.Run(a, agent.WithMessage(message.New(userResponses...)), agent.WithThread(thread))
+	resp, err = agent.Run(context.Background(), a, agent.WithMessage(message.New(userResponses...)), agent.WithThread(thread))
 	if err != nil {
 		panic(err)
 	}

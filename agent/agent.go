@@ -55,18 +55,18 @@ type Agent interface {
 	Identity() Identity
 	Capabilities() Capabilities
 
-	Run(...Option) iter.Seq2[*RunResponseUpdate, error]
+	Run(context.Context, ...Option) iter.Seq2[*RunResponseUpdate, error]
 
 	NewThread() memory.Thread
 	UnmarshalThread(data []byte) (memory.Thread, error)
 }
 
 // Run executes the agent with the given options and returns the response.
-func Run(a Agent, opts ...Option) (*RunResponse, error) {
+func Run(ctx context.Context, a Agent, opts ...Option) (*RunResponse, error) {
 	resp := RunResponse{
 		AgentID: a.Identity().ID(),
 	}
-	for update, err := range run(a, opts) {
+	for update, err := range run(ctx, a, opts) {
 		if err != nil {
 			return nil, err
 		}
@@ -79,40 +79,36 @@ func Run(a Agent, opts ...Option) (*RunResponse, error) {
 }
 
 // RunStream executes the agent with the given options and returns a streaming sequence of response updates.
-func RunStream(a Agent, opts ...Option) iter.Seq2[*RunResponseUpdate, error] {
+func RunStream(ctx context.Context, a Agent, opts ...Option) iter.Seq2[*RunResponseUpdate, error] {
 	opts = append(opts, WithStreaming(true))
-	return run(a, opts)
+	return run(ctx, a, opts)
 }
 
 // RunText executes the agent with a single text message and returns the response.
-func RunText(a Agent, msg string, opts ...Option) (*RunResponse, error) {
-	return Run(a, append(opts, WithMessage(message.NewText(msg)))...)
+func RunText(ctx context.Context, a Agent, msg string, opts ...Option) (*RunResponse, error) {
+	return Run(ctx, a, append(opts, WithMessage(message.NewText(msg)))...)
 }
 
 // RunTextStream executes the agent with a single text message and returns a streaming sequence of response updates.
-func RunTextStream(a Agent, msg string, opts ...Option) iter.Seq2[*RunResponseUpdate, error] {
-	return RunStream(a, append(opts, WithMessage(message.NewText(msg)))...)
+func RunTextStream(ctx context.Context, a Agent, msg string, opts ...Option) iter.Seq2[*RunResponseUpdate, error] {
+	return RunStream(ctx, a, append(opts, WithMessage(message.NewText(msg)))...)
 }
 
-func run(a Agent, opts []Option) iter.Seq2[*RunResponseUpdate, error] {
+func run(ctx context.Context, a Agent, opts []Option) iter.Seq2[*RunResponseUpdate, error] {
 	if a == nil {
 		return func(yield func(*RunResponseUpdate, error) bool) {
 			yield(nil, errors.New("agent cannot be nil"))
 		}
 	}
-	if _, ok := GetOption(opts, WithContext); !ok {
-		// If no context is provided, use background.
-		opts = append(opts, WithContext(context.Background()))
-	}
 	if _, ok := GetOption(opts, WithThread); !ok {
 		// If no thread is provided, create a new one.
 		opts = append(opts, WithThread(a.NewThread()))
 	}
-	return a.Run(opts...)
+	return a.Run(ctx, opts...)
 }
 
 // RunFor executes the agent with the given messages and returns the result of type T.
-func RunFor[T any](a Agent, opts ...Option) (T, *RunResponse, error) {
+func RunFor[T any](ctx context.Context, a Agent, opts ...Option) (T, *RunResponse, error) {
 	var v T
 	formatter := a.Capabilities().StructuredOutput
 	if formatter == nil {
@@ -123,7 +119,7 @@ func RunFor[T any](a Agent, opts ...Option) (T, *RunResponse, error) {
 		return v, nil, err
 	}
 	opts = append(opts, WithResponseFormat(format))
-	resp, err := Run(a, opts...)
+	resp, err := Run(ctx, a, opts...)
 	if err != nil {
 		return v, resp, err
 	}

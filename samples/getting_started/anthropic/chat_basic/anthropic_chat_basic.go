@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -28,13 +29,13 @@ func main() {
 func nonStreamingExample(a agent.Agent, query string) {
 	fmt.Println("=== Non-streaming Response Example ===")
 	fmt.Println("User: ", query)
-	fmt.Println("Result: ", must(agent.RunText(a, query)))
+	fmt.Println("Result: ", must(agent.RunText(context.Background(), a, query)))
 }
 
 func streamingExample(a agent.Agent, query string) {
 	fmt.Println("=== Streaming Response Example ===")
 	fmt.Println("User: ", query)
-	for update, err := range agent.RunTextStream(a, query) {
+	for update, err := range agent.RunTextStream(context.Background(), a, query) {
 		if err != nil {
 			fmt.Print(err)
 			break

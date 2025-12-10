@@ -81,7 +81,7 @@ func (a *Agent) UnmarshalThread(data []byte) (memory.Thread, error) {
 	return &thread, nil
 }
 
-func (a *Agent) Run(options ...agent.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
+func (a *Agent) Run(ctx context.Context, options ...agent.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
 	return func(yield func(*agent.RunResponseUpdate, error) bool) {
 		var thread *Thread
 		if v, ok := agent.GetOption(options, agent.WithThread); !ok {
@@ -91,10 +91,6 @@ func (a *Agent) Run(options ...agent.Option) iter.Seq2[*agent.RunResponseUpdate,
 		} else {
 			yield(nil, errors.New("the provided thread is not compatible with the agent, only threads created by the agent can be used"))
 			return
-		}
-		ctx, ok := agent.GetOption(options, agent.WithContext)
-		if !ok {
-			ctx = context.Background()
 		}
 		streaming, _ := agent.GetOption(options, agent.WithStreaming)
 		var parts []a2a.Part

@@ -68,7 +68,7 @@ func (t functool) Call(ctx context.Context, args string) (any, error) {
 	if err := json.Unmarshal([]byte(args), &in); err != nil {
 		return nil, err
 	}
-	resp, err := Run(t.agent, WithContext(ctx), WithThread(t.thread), WithMessage(message.NewText(in.Query)))
+	resp, err := Run(ctx, t.agent, WithThread(t.thread), WithMessage(message.NewText(in.Query)))
 	if err != nil {
 		return "", err
 	}

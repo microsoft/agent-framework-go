@@ -41,7 +41,7 @@ func main() {
 			Tools: []tool.Tool{agent.FuncTool(weatherAgent, nil)},
 		},
 	})
-	resp, err := agent.RunText(a, "What is the weather like in Amsterdam?")
+	resp, err := agent.RunText(context.Background(), a, "What is the weather like in Amsterdam?")
 	if err != nil {
 		panic(err)
 	}

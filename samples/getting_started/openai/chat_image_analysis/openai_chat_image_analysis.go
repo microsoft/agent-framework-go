@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -24,7 +25,7 @@ func main() {
 		Instructions: "You are a helpful agent that can analyze images.",
 	})
 
-	resp, err := agent.Run(a,
+	resp, err := agent.Run(context.Background(), a,
 		agent.WithMessage(message.NewText("Describe the content of this image.")),
 		agent.WithMessage(message.New(&message.URIContent{
 			URI:       "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg",

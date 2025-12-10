@@ -68,11 +68,6 @@ func WithToolMode(mode tool.ToolMode) Option {
 	return toolMode(mode)
 }
 
-// WithContext sets the context to use during the agent run.
-func WithContext(context context.Context) Option {
-	return contextOpt{context}
-}
-
 // WithStreaming sets whether to use streaming responses during the agent run.
 func WithStreaming(streaming bool) Option {
 	return streamingOpt(streaming)
