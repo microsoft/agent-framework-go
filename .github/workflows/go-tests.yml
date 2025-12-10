@@ -34,3 +34,16 @@ jobs:
     - name: Run tests
       working-directory: ./go
       run: go test -v -race -shuffle=on ./...
+
+  conclusion:
+    needs: [test]
+    runs-on: ubuntu-latest
+    if: ${{ always() }}
+    steps:
+      - name: Result
+        run: |
+          if [[ "${{ contains(needs.*.result, 'failure') }}" == "true" || "${{ contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
+            echo "One or more jobs failed or were cancelled."
+            exit 1
+          fi
+          echo "All jobs passed."
