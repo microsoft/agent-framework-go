@@ -367,7 +367,14 @@ func buildMessageParam(msg *message.Message) (anthropic.MessageParam, error) {
 		case *message.TextContent:
 			content = append(content, anthropic.NewTextBlock(c.Text))
 		case *message.FunctionCallContent:
-			content = append(content, anthropic.NewToolUseBlock(c.CallID, c.Arguments, c.Name))
+			// Parse the JSON string arguments into a map for Anthropic SDK
+			var args map[string]any
+			if c.Arguments != "" {
+				if err := json.Unmarshal([]byte(c.Arguments), &args); err != nil {
+					return anthropic.MessageParam{}, fmt.Errorf("failed to unmarshal tool arguments: %w", err)
+				}
+			}
+			content = append(content, anthropic.NewToolUseBlock(c.CallID, args, c.Name))
 		case *message.FunctionResultContent:
 			resStr := ""
 			if b, ok := c.Result.(json.RawMessage); ok {
