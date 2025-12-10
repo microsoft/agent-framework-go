@@ -285,13 +285,28 @@ func (a *client) buildMessageParams(options *chatclient.ChatOptions, messages ..
 			var properties any
 			var required []string
 
-			// Extract schema details
-			switch schema := ft.Schema().(type) {
+			// Extract schema details - first convert to map[string]any if needed
+			schema := ft.Schema()
+			var schemaMap map[string]any
+
+			switch s := schema.(type) {
 			case map[string]any:
-				if props, ok := schema["properties"]; ok {
+				schemaMap = s
+			default:
+				// For *jsonschema.Schema or other types, marshal to JSON then unmarshal to map
+				if schema != nil {
+					jsonBytes, err := json.Marshal(schema)
+					if err == nil {
+						json.Unmarshal(jsonBytes, &schemaMap)
+					}
+				}
+			}
+
+			if schemaMap != nil {
+				if props, ok := schemaMap["properties"]; ok {
 					properties = props
 				}
-				if reqs, ok := schema["required"]; ok {
+				if reqs, ok := schemaMap["required"]; ok {
 					if reqList, ok := reqs.([]any); ok {
 						for _, r := range reqList {
 							if s, ok := r.(string); ok {
@@ -302,8 +317,6 @@ func (a *client) buildMessageParams(options *chatclient.ChatOptions, messages ..
 						required = reqList
 					}
 				}
-			default:
-				// Fallback or error handling
 			}
 
 			schemaParam := anthropic.ToolInputSchemaParam{
@@ -377,10 +390,21 @@ func buildMessageParam(msg *message.Message) (anthropic.MessageParam, error) {
 			content = append(content, anthropic.NewToolUseBlock(c.CallID, args, c.Name))
 		case *message.FunctionResultContent:
 			resStr := ""
-			if b, ok := c.Result.(json.RawMessage); ok {
-				resStr = string(b)
-			} else {
-				resStr = fmt.Sprintf("%v", c.Result)
+			switch r := c.Result.(type) {
+			case json.RawMessage:
+				resStr = string(r)
+			case string:
+				resStr = r
+			case []byte:
+				resStr = string(r)
+			default:
+				// Marshal any other type to JSON for proper formatting
+				jsonBytes, err := json.Marshal(c.Result)
+				if err != nil {
+					resStr = fmt.Sprintf("%v", c.Result)
+				} else {
+					resStr = string(jsonBytes)
+				}
 			}
 			content = append(content, anthropic.NewToolResultBlock(c.CallID, resStr, c.Error != nil))
 		case *message.DataContent:
