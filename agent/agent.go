@@ -66,7 +66,7 @@ func Run(a Agent, opts ...Option) (*RunResponse, error) {
 	resp := RunResponse{
 		AgentID: a.Identity().ID(),
 	}
-	for update, err := range run(a, opts...) {
+	for update, err := range run(a, opts) {
 		if err != nil {
 			return nil, err
 		}
@@ -81,7 +81,7 @@ func Run(a Agent, opts ...Option) (*RunResponse, error) {
 // RunStream executes the agent with the given options and returns a streaming sequence of response updates.
 func RunStream(a Agent, opts ...Option) iter.Seq2[*RunResponseUpdate, error] {
 	opts = append(opts, WithStreaming(true))
-	return run(a, opts...)
+	return run(a, opts)
 }
 
 // RunText executes the agent with a single text message and returns the response.
@@ -94,15 +94,19 @@ func RunTextStream(a Agent, msg string, opts ...Option) iter.Seq2[*RunResponseUp
 	return RunStream(a, append(opts, WithMessage(message.NewText(msg)))...)
 }
 
-func run(a Agent, opts ...Option) iter.Seq2[*RunResponseUpdate, error] {
+func run(a Agent, opts []Option) iter.Seq2[*RunResponseUpdate, error] {
 	if a == nil {
 		return func(yield func(*RunResponseUpdate, error) bool) {
 			yield(nil, errors.New("agent cannot be nil"))
 		}
 	}
-	if _, ok := GetOption(WithContext, opts...); !ok {
+	if _, ok := GetOption(opts, WithContext); !ok {
 		// If no context is provided, use background.
 		opts = append(opts, WithContext(context.Background()))
+	}
+	if _, ok := GetOption(opts, WithThread); !ok {
+		// If no thread is provided, create a new one.
+		opts = append(opts, WithThread(a.NewThread()))
 	}
 	return a.Run(opts...)
 }
