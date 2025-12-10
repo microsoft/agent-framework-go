@@ -1,12 +1,19 @@
+// Copyright (c) Microsoft. All rights reserved.
+
+// This sample demonstrates how to use an Agent with function tools that require a human in the loop for approvals.
+// It shows both non-streaming and streaming agent interactions using menu-related tools.
+// If the agent is hosted in a service, with a remote user, combine this sample with the Persisted Conversations sample to persist the chat history
+// while the agent is waiting for user input.
+
 package main
 
 import (
 	"context"
 	"fmt"
-	"math/rand"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
+	"github.com/microsoft/agent-framework-go/agent/chatagent/chatclient"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/openai"
 	"github.com/microsoft/agent-framework-go/tool"
@@ -17,23 +24,26 @@ var weatherTool = functool.MustNew(&functool.Func{
 	Name:        "weather",
 	Description: "Get the current weather for a given location",
 }, func(_ context.Context, location string) (string, error) {
-	conditions := []string{"sunny", "cloudy", "rainy", "stormy"}
-	return fmt.Sprintf("The weather in %s is %s with a high of %d°C.", location, conditions[rand.Intn(len(conditions))], rand.Intn(21)+10), nil
+	return fmt.Sprintf("The weather in %s is cloudy with a high of 15°C.", location), nil
 })
 
 func main() {
+	// Create the agent.
+	// Note that we are wrapping the function tool with tool.ApprovalRequiredFunc to require user approval before invoking it.
 	a := openai.NewChatAgent(openai.ClientConfig{
-		Model: "gpt-5-nano",
+		Model: "gpt-4o-mini",
 	}, &chatagent.Options{
-		Instructions: "You are a helpful weather agent.",
-		ChatOptions: &chatagent.ChatOptions{
+		Instructions: "You are a helpful assistant",
+		ChatOptions: &chatclient.ChatOptions{
 			Tools: []tool.Tool{tool.ApprovalRequiredFunc(weatherTool)},
 		},
 	})
 
-	thread := a.NewThread()
+	ctx := context.Background()
 
-	resp, err := agent.RunText(context.Background(), a, "What's the weather like in Amsterdam?", agent.WithThread(thread))
+	// Call the agent and check if there are any user input requests to handle.
+	thread := a.NewThread()
+	resp, err := agent.RunText(ctx, a, "What is the weather like in Amsterdam?", agent.WithThread(thread))
 	if err != nil {
 		panic(err)
 	}
@@ -55,9 +65,5 @@ func main() {
 	}
 
 	// Pass the user input responses back to the agent for further processing.
-	resp, err = agent.Run(context.Background(), a, agent.WithMessage(message.New(userResponses...)), agent.WithThread(thread))
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println("Agent:", resp)
+	fmt.Println(agent.Run(ctx, a, agent.WithMessage(message.New(userResponses...)), agent.WithThread(thread)))
 }

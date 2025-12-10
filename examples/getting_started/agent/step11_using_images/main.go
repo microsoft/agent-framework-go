@@ -1,3 +1,7 @@
+// Copyright (c) Microsoft. All rights reserved.
+
+// This sample shows how to use Image Multi-Modality with an Aagent.
+
 package main
 
 import (
@@ -10,30 +14,28 @@ import (
 	"github.com/microsoft/agent-framework-go/openai"
 )
 
-/*
-OpenAI Chat Agent Image Analysis Example
-
-This sample demonstrates using OpenAI Chat Agent for image analysis and vision tasks,
-showing multi-modal content handling with text and images.
-*/
-
 func main() {
+	// Create the agent.
 	a := openai.NewChatAgent(openai.ClientConfig{
-		Model: "gpt-5-nano",
+		Model: "gpt-4o-mini",
 	}, &chatagent.Options{
-		Name:         "VisionAgent",
 		Instructions: "You are a helpful agent that can analyze images.",
+		Name:         "VisionAgent",
 	})
 
-	resp, err := agent.Run(context.Background(), a,
-		agent.WithMessage(message.NewText("Describe the content of this image.")),
-		agent.WithMessage(message.New(&message.URIContent{
+	ctx := context.Background()
+	msg := message.New(
+		&message.TextContent{Text: "What do you see in this image?"},
+		&message.URIContent{
 			URI:       "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg",
 			MediaType: "image/jpeg",
-		})),
+		},
 	)
-	if err != nil {
-		panic(err)
+
+	for resp, err := range agent.RunStream(ctx, a, agent.WithMessage(msg)) {
+		if err != nil {
+			panic(err)
+		}
+		fmt.Println(resp)
 	}
-	fmt.Println(resp)
 }
