@@ -5,8 +5,8 @@ package checkpoint
 import (
 	"context"
 
-	"github.com/microsoft/agent-framework/go/internal/hashmap"
-	"github.com/microsoft/agent-framework/go/workflow"
+	"github.com/microsoft/agent-framework-go/internal/hashmap"
+	"github.com/microsoft/agent-framework-go/workflow"
 )
 
 type CheckpointingHandle interface {

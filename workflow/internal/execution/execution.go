@@ -6,7 +6,7 @@ import (
 	"context"
 	"reflect"
 
-	"github.com/microsoft/agent-framework/go/workflow"
+	"github.com/microsoft/agent-framework-go/workflow"
 )
 
 type Mode int

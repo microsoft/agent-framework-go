@@ -8,10 +8,10 @@ import (
 	"iter"
 	"maps"
 
-	"github.com/microsoft/agent-framework/go/internal/concurrent"
-	"github.com/microsoft/agent-framework/go/internal/hashmap"
-	"github.com/microsoft/agent-framework/go/workflow"
-	"github.com/microsoft/agent-framework/go/workflow/internal/checkpoint"
+	"github.com/microsoft/agent-framework-go/internal/concurrent"
+	"github.com/microsoft/agent-framework-go/internal/hashmap"
+	"github.com/microsoft/agent-framework-go/workflow"
+	"github.com/microsoft/agent-framework-go/workflow/internal/checkpoint"
 )
 
 // StateScope manages state for a single scope (executor + optional scope name).

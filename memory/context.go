@@ -5,8 +5,8 @@ package memory
 import (
 	"context"
 
-	"github.com/microsoft/agent-framework/go/message"
-	"github.com/microsoft/agent-framework/go/tool"
+	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/tool"
 )
 
 // Context represents additional context information that can be dynamically

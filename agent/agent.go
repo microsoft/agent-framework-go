@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/microsoft/agent-framework/go/format"
-	"github.com/microsoft/agent-framework/go/memory"
-	"github.com/microsoft/agent-framework/go/message"
+	"github.com/microsoft/agent-framework-go/format"
+	"github.com/microsoft/agent-framework-go/memory"
+	"github.com/microsoft/agent-framework-go/message"
 )
 
 type Identity struct {

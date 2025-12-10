@@ -7,9 +7,9 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/microsoft/agent-framework/go/message"
-	"github.com/microsoft/agent-framework/go/message/messageworkflow"
-	"github.com/microsoft/agent-framework/go/workflow"
+	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/message/messageworkflow"
+	"github.com/microsoft/agent-framework-go/workflow"
 )
 
 type TestExecutor struct {

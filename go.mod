@@ -1,4 +1,4 @@
-module github.com/microsoft/agent-framework/go
+module github.com/microsoft/agent-framework-go
 
 go 1.24.4
 

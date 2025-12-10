@@ -14,9 +14,9 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
-	"github.com/microsoft/agent-framework/go/message"
-	"github.com/microsoft/agent-framework/go/param"
-	"github.com/microsoft/agent-framework/go/tool"
+	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/param"
+	"github.com/microsoft/agent-framework-go/tool"
 )
 
 var _ Client = (*functionInvoking)(nil)

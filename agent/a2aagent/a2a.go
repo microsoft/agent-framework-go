@@ -15,9 +15,9 @@ import (
 
 	"github.com/a2aproject/a2a-go/a2a"
 	"github.com/a2aproject/a2a-go/a2aclient"
-	"github.com/microsoft/agent-framework/go/agent"
-	"github.com/microsoft/agent-framework/go/memory"
-	"github.com/microsoft/agent-framework/go/message"
+	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/memory"
+	"github.com/microsoft/agent-framework-go/message"
 )
 
 type Options struct {

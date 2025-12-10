@@ -8,8 +8,8 @@
 package hostedtool
 
 import (
-	"github.com/microsoft/agent-framework/go/message"
-	"github.com/microsoft/agent-framework/go/tool"
+	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/tool"
 )
 
 var _ tool.Tool = (*WebSearch)(nil)

@@ -5,9 +5,9 @@ package chatagent
 import (
 	"log/slog"
 
-	"github.com/microsoft/agent-framework/go/agent"
-	"github.com/microsoft/agent-framework/go/agent/chatagent/chatclient"
-	"github.com/microsoft/agent-framework/go/memory"
+	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/chatagent/chatclient"
+	"github.com/microsoft/agent-framework-go/memory"
 )
 
 type Options struct {

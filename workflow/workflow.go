@@ -10,7 +10,7 @@ import (
 	"reflect"
 	"sync/atomic"
 
-	"github.com/microsoft/agent-framework/go/internal/hashmap"
+	"github.com/microsoft/agent-framework-go/internal/hashmap"
 )
 
 type TurnToken struct {

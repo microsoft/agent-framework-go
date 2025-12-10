@@ -5,7 +5,7 @@ package memory
 import (
 	"context"
 
-	"github.com/microsoft/agent-framework/go/message"
+	"github.com/microsoft/agent-framework-go/message"
 )
 
 // Thread contains the state of a specific conversation with an agent which may include:

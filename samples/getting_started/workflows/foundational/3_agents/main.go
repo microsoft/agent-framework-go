@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/microsoft/agent-framework/go/agent"
-	"github.com/microsoft/agent-framework/go/agent/chatagent"
-	"github.com/microsoft/agent-framework/go/message"
-	"github.com/microsoft/agent-framework/go/openai"
-	"github.com/microsoft/agent-framework/go/workflow"
-	"github.com/microsoft/agent-framework/go/workflow/inproc"
+	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/chatagent"
+	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/openai"
+	"github.com/microsoft/agent-framework-go/workflow"
+	"github.com/microsoft/agent-framework-go/workflow/inproc"
 )
 
 // This sample introduces the use of AI agents as executors within a workflow.

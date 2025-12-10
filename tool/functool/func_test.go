@@ -7,7 +7,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/microsoft/agent-framework/go/tool/functool"
+	"github.com/microsoft/agent-framework-go/tool/functool"
 )
 
 // Test FuncTool

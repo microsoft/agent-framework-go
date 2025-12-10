@@ -6,8 +6,8 @@ import (
 	"iter"
 	"reflect"
 
-	"github.com/microsoft/agent-framework/go/message"
-	"github.com/microsoft/agent-framework/go/workflow"
+	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/workflow"
 )
 
 type Options struct {

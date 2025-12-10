@@ -8,10 +8,10 @@ import (
 	"iter"
 	"testing"
 
-	"github.com/microsoft/agent-framework/go/agent/chatagent/chatclient"
-	"github.com/microsoft/agent-framework/go/message"
-	"github.com/microsoft/agent-framework/go/tool"
-	"github.com/microsoft/agent-framework/go/tool/functool"
+	"github.com/microsoft/agent-framework-go/agent/chatagent/chatclient"
+	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/tool"
+	"github.com/microsoft/agent-framework-go/tool/functool"
 )
 
 // approvalTestClient is a test client for approval tests that supports multi-round responses

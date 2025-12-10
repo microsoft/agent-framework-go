@@ -6,7 +6,7 @@ import (
 	"context"
 	"iter"
 
-	"github.com/microsoft/agent-framework/go/message"
+	"github.com/microsoft/agent-framework-go/message"
 )
 
 // MessageStore defines a contract for storing and retrieving messages associated with an agent conversation.

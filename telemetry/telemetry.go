@@ -5,7 +5,7 @@ package telemetry
 import (
 	"context"
 
-	"github.com/microsoft/agent-framework/go/message"
+	"github.com/microsoft/agent-framework-go/message"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	instrumentationName = "github.com/microsoft/agent-framework/go"
+	instrumentationName = "github.com/microsoft/agent-framework-go"
 )
 
 // Tracer provides OpenTelemetry tracing for agent operations.

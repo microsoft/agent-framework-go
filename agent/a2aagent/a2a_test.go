@@ -10,9 +10,9 @@ import (
 
 	"github.com/a2aproject/a2a-go/a2a"
 	"github.com/a2aproject/a2a-go/a2aclient"
-	"github.com/microsoft/agent-framework/go/agent"
-	"github.com/microsoft/agent-framework/go/agent/a2aagent"
-	"github.com/microsoft/agent-framework/go/message"
+	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/a2aagent"
+	"github.com/microsoft/agent-framework-go/message"
 )
 
 // mockA2ATransport is a stub that implements a2aclient.Transport for testing

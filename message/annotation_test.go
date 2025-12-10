@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/microsoft/agent-framework/go/message"
+	"github.com/microsoft/agent-framework-go/message"
 )
 
 func TestAnnotationEncoding_Roundtrip(t *testing.T) {

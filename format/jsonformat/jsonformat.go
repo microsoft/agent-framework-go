@@ -8,7 +8,7 @@ import (
 	"sync"
 
 	"github.com/google/jsonschema-go/jsonschema"
-	"github.com/microsoft/agent-framework/go/format"
+	"github.com/microsoft/agent-framework-go/format"
 )
 
 var _ format.SchemaFormat = (*Format)(nil)

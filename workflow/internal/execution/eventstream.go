@@ -11,8 +11,8 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/microsoft/agent-framework/go/internal/concurrent"
-	"github.com/microsoft/agent-framework/go/workflow"
+	"github.com/microsoft/agent-framework-go/internal/concurrent"
+	"github.com/microsoft/agent-framework-go/workflow"
 )
 
 type RunEventStream interface {

@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/microsoft/agent-framework/go/agent"
-	"github.com/microsoft/agent-framework/go/agent/chatagent"
-	"github.com/microsoft/agent-framework/go/memory"
-	"github.com/microsoft/agent-framework/go/message"
-	"github.com/microsoft/agent-framework/go/openai"
+	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/chatagent"
+	"github.com/microsoft/agent-framework-go/memory"
+	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/openai"
 )
 
 func main() {
