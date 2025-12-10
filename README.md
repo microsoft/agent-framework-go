@@ -73,6 +73,8 @@ go get github.com/microsoft/agent-framework-go
 Create a simple Azure Chat Agent that writes a haiku about the Microsoft Agent Framework
 
 ```go
+package main
+
 import (
   "context"
 	"fmt"
