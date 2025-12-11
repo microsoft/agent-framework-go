@@ -26,7 +26,7 @@ type PersonInfo struct {
 func main() {
 	a := openai.NewChatAgent(openai.ClientConfig{
 		Model: "gpt-4o-mini",
-	}, &chatagent.Options{
+	}, chatagent.Options{
 		Instructions: "You are a helpful assistant.",
 		Name:         "HelpfulAssistant",
 	})
@@ -47,7 +47,7 @@ func main() {
 	// Create the agent with the specified name, instructions, and expected structured output the agent should produce.
 	a = openai.NewChatAgent(openai.ClientConfig{
 		Model: "gpt-4o-mini",
-	}, &chatagent.Options{
+	}, chatagent.Options{
 		Instructions: "You are a helpful assistant.",
 		Name:         "HelpfulAssistant",
 		ChatOptions: &chatclient.ChatOptions{

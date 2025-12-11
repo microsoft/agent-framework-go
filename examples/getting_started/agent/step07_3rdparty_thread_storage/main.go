@@ -32,7 +32,7 @@ func main() {
 	// Create the agent with a custom message store that persists messages to disk.
 	a := openai.NewChatAgent(openai.ClientConfig{
 		Model: "gpt-4o-mini",
-	}, &chatagent.Options{
+	}, chatagent.Options{
 		Instructions: "You are good at telling jokes.",
 		Name:         "Joker",
 		NewMessageStore: func() memory.MessageStore {

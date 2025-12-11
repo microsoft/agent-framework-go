@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/chatagent"
 	"github.com/microsoft/agent-framework-go/openai"
 )
 
@@ -27,7 +28,7 @@ func main() {
 		Endpoint:   os.Getenv("AZURE_OPENAI_ENDPOINT"),        // e.g., "https://your-resource.openai.azure.com/"
 		Model:      os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), // e.g., "gpt-4o"
 		APIVersion: "2025-01-01-preview",                      // optional, uses default if not specified
-	}, nil)
+	}, chatagent.Options{})
 
 	// Example 1: Tool WILL be called (weather-related query)
 	nonStreamingExample(a, "What's the weather like in Seattle?")

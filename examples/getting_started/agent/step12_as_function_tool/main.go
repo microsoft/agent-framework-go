@@ -26,7 +26,7 @@ func main() {
 	// Create the agent and provide the function tool.
 	weatherAgent := openai.NewChatAgent(openai.ClientConfig{
 		Model: "gpt-5-nano",
-	}, &chatagent.Options{
+	}, chatagent.Options{
 		Instructions: "You answer questions about the weather.",
 		Name:         "WeatherAgent",
 		Description:  "An agent that answers questions about the weather.",
@@ -38,7 +38,7 @@ func main() {
 	// Create the main agent, and provide the weather agent as a function tool.
 	a := openai.NewChatAgent(openai.ClientConfig{
 		Model: "gpt-5-nano",
-	}, &chatagent.Options{
+	}, chatagent.Options{
 		Instructions: "You are a helpful assistant who responds in French.",
 		ChatOptions: &chatagent.ChatOptions{
 			Tools: []tool.Tool{agent.FuncTool(weatherAgent, nil)},

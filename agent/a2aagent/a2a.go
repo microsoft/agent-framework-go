@@ -37,19 +37,14 @@ type Agent struct {
 	iden agent.Identity
 }
 
-func NewAgent(client *a2aclient.Client, options *Options) *Agent {
+func NewAgent(client *a2aclient.Client, options Options) *Agent {
 	if client == nil {
 		panic("client cannot be nil")
 	}
-	var opts Options
-	if options != nil {
-		opts = *options
-		options = nil // prevent further use of the original options
-	}
 	return &Agent{
 		Client:  client,
-		Options: opts,
-		iden:    agent.NewIdentity(opts.ID, opts.Name, opts.Description),
+		Options: options,
+		iden:    agent.NewIdentity(options.ID, options.Name, options.Description),
 	}
 }
 

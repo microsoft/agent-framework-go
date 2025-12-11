@@ -18,7 +18,7 @@ func main() {
 	// Create the agent.
 	a := openai.NewChatAgent(openai.ClientConfig{
 		Model: "gpt-4o-mini",
-	}, &chatagent.Options{
+	}, chatagent.Options{
 		Instructions: "You are a helpful agent that can analyze images.",
 		Name:         "VisionAgent",
 	})

@@ -92,7 +92,6 @@ func (f *functionInvoking) Response(ctx context.Context, opts ChatOptions, messa
 			var notInvokedMsgs []approvalResultWithRequestMessage
 			var preDownstreamCallHistory []*message.Message
 			var err error
-			originalMessages = slices.Clone(originalMessages) // Clone to avoid modifying caller's slice
 			originalMessages, preDownstreamCallHistory, notInvokedMsgs, err = processFunctionApprovalResponses(originalMessages, convID != "", toolMsgID, funcCallFallbackMsgID)
 			if err != nil {
 				yield(nil, err)
@@ -117,6 +116,7 @@ func (f *functionInvoking) Response(ctx context.Context, opts ChatOptions, messa
 					return
 				}
 			}
+			messages = originalMessages
 		}
 		// At this point, we've fully handled all approval responses that were part of the original messages,
 		// and we can now enter the main function calling loop.
