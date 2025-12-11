@@ -80,6 +80,13 @@ func (a *Agent) Run(ctx context.Context, options ...agent.Option) iter.Seq2[*age
 	return func(yield func(*agent.RunResponseUpdate, error) bool) {
 		var thread *Thread
 		if v, ok := agent.GetOption(options, agent.WithThread); !ok {
+			// Aligning with other agent implementations that support background responses, where
+			// a thread is required for background responses to prevent inconsistent experience
+			// for callers if they forget to provide the thread for initial or follow-up runs.
+			if opts, ok := agent.GetOption(options, agent.WithAllowBackgroundResponses); ok && opts {
+				yield(nil, errors.New("a thread must be provided when AllowBackgroundResponses is enabled"))
+				return
+			}
 			thread = a.NewThread().(*Thread)
 		} else if t, ok := v.(*Thread); ok {
 			thread = t
@@ -88,6 +95,33 @@ func (a *Agent) Run(ctx context.Context, options ...agent.Option) iter.Seq2[*age
 			return
 		}
 		streaming, _ := agent.GetOption(options, agent.WithStreaming)
+		if token, ok := agent.GetOption(options, agent.WithContinuationToken); ok && token != nil {
+			if streaming {
+				// TODO: support resuming streaming responses using continuation tokens.
+				yield(nil, errors.New("reconnecting to task streams using continuation tokens is not supported yet"))
+				return
+			}
+			if _, ok := agent.GetOption(options, agent.WithMessage); ok {
+				yield(nil, errors.New("messages are not allowed when continuing a background response using a continuation token"))
+				return
+			}
+			taskID, ok := token.(a2a.TaskID)
+			if !ok {
+				yield(nil, fmt.Errorf("invalid continuation token type: expected %T but got %T", a2a.TaskID(""), token))
+				return
+			}
+			task, err := a.Client.GetTask(ctx, &a2a.TaskQueryParams{ID: taskID})
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+			if err := a.updateThreadContextID(thread, task.ContextID, string(task.ID)); err != nil {
+				yield(nil, err)
+				return
+			}
+			a.yieldTask(yield, task)
+			return
+		}
 		var parts []a2a.Part
 		for msg := range agent.GetOptions(options, agent.WithMessage) {
 			parts = parts[:0] // reset parts slice
@@ -124,48 +158,53 @@ func (a *Agent) sendMsg(ctx context.Context, thread *Thread, streaming bool, par
 			yield(resp, err)
 		}
 	}
-	id, name := a.iden.ID(), a.iden.Name()
 	for e, err := range seq {
 		if err != nil {
 			yield(nil, err)
 			return
 		}
+		if err := a.updateThreadContextID(thread, e.TaskInfo().ContextID, string(e.TaskInfo().TaskID)); err != nil {
+			yield(nil, err)
+			return
+		}
 		switch e := e.(type) {
 		case *a2a.Task:
-			if err := a.updateThreadContextID(thread, e.ContextID, string(e.ID)); err != nil {
+			if ok := a.yieldTask(yield, e); !ok {
+				return
+			}
+		case *a2a.TaskStatusUpdateEvent:
+			if !yield(&agent.RunResponseUpdate{
+				RawRepresentation:    e,
+				AdditionalProperties: e.Metadata,
+				AgentID:              a.iden.ID(),
+				MessageID:            string(e.TaskID),
+				ResponseID:           string(e.TaskID),
+				Role:                 message.RoleAssistant,
+				AuthorName:           a.iden.Name(),
+				CreatedAt:            time.Now(),
+			}, nil) {
+				return
+			}
+		case *a2a.TaskArtifactUpdateEvent:
+			contents, err := partsToContents(e.Artifact.Parts)
+			if err != nil {
 				yield(nil, err)
 				return
 			}
-			now := time.Now()
-			for _, artifact := range e.Artifacts {
-				contents, err := partsToContents(artifact.Parts)
-				if err != nil {
-					yield(nil, err)
-					return
-				}
-				timestamp := now
-				if e.Status.Timestamp != nil {
-					timestamp = *e.Status.Timestamp
-				}
-				if !yield(&agent.RunResponseUpdate{
-					RawRepresentation:    artifact,
-					AdditionalProperties: artifact.Metadata,
-					AgentID:              id,
-					MessageID:            string(artifact.ID),
-					ResponseID:           string(e.ID),
-					Contents:             contents,
-					Role:                 message.RoleAssistant,
-					CreatedAt:            timestamp,
-					AuthorName:           name,
-				}, nil) {
-					return
-				}
+			if !yield(&agent.RunResponseUpdate{
+				RawRepresentation:    e,
+				AdditionalProperties: e.Metadata,
+				AgentID:              a.iden.ID(),
+				MessageID:            string(e.Artifact.ID),
+				ResponseID:           string(e.TaskID),
+				Contents:             contents,
+				Role:                 message.RoleAssistant,
+				AuthorName:           a.iden.Name(),
+				CreatedAt:            time.Now(),
+			}, nil) {
+				return
 			}
 		case *a2a.Message:
-			if err := a.updateThreadContextID(thread, e.ContextID, ""); err != nil {
-				yield(nil, err)
-				return
-			}
 			contents, err := partsToContents(e.Parts)
 			if err != nil {
 				yield(nil, err)
@@ -178,12 +217,12 @@ func (a *Agent) sendMsg(ctx context.Context, thread *Thread, streaming bool, par
 			if !yield(&agent.RunResponseUpdate{
 				RawRepresentation:    e,
 				AdditionalProperties: e.Metadata,
-				AgentID:              id,
+				AgentID:              a.iden.ID(),
 				MessageID:            e.ID,
 				ResponseID:           e.ID,
 				Role:                 role,
 				Contents:             contents,
-				AuthorName:           name,
+				AuthorName:           a.iden.Name(),
 				CreatedAt:            time.Now(),
 			}, nil) {
 				return
@@ -193,6 +232,42 @@ func (a *Agent) sendMsg(ctx context.Context, thread *Thread, streaming bool, par
 			return
 		}
 	}
+}
+
+func (a *Agent) yieldTask(yield func(*agent.RunResponseUpdate, error) bool, task *a2a.Task) bool {
+	now := time.Now()
+	id, name := a.iden.ID(), a.iden.Name()
+	for _, artifact := range task.Artifacts {
+		contents, err := partsToContents(artifact.Parts)
+		if err != nil {
+			yield(nil, err)
+			return false
+		}
+		timestamp := now
+		if task.Status.Timestamp != nil {
+			timestamp = *task.Status.Timestamp
+		}
+		var continuationToken any
+		switch task.Status.State {
+		case a2a.TaskStateSubmitted, a2a.TaskStateWorking:
+			continuationToken = task.ID
+		}
+		if !yield(&agent.RunResponseUpdate{
+			RawRepresentation:    artifact,
+			AdditionalProperties: artifact.Metadata,
+			AgentID:              id,
+			MessageID:            string(artifact.ID),
+			ResponseID:           string(task.ID),
+			Contents:             contents,
+			ContinuationToken:    continuationToken,
+			Role:                 message.RoleAssistant,
+			CreatedAt:            timestamp,
+			AuthorName:           name,
+		}, nil) {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *Agent) updateThreadContextID(thread *Thread, contextID, taskID string) error {

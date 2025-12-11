@@ -83,12 +83,35 @@ func WithThread(thread memory.Thread) Option {
 	return threadOpt{thread}
 }
 
-// WithContinuationToken sets the continuation token for the agent run.
+// WithContinuationToken sets the continuation token for resuming and getting the result
+// of the agent response identified by this token.
+//
+// This token is used for background responses that can be activated via [WithAllowBackgroundResponses]
+// if the agent supports them. Streamed background responses, such as those returned by default by [RunStream],
+// can be resumed if interrupted. This means that a continuation token obtained from the [RunResponseUpdate] continuation token
+// of an update just before the interruption occurred can be passed to this function to resume the stream from
+// the point of interruption. Non-streamed background responses, such as those returned by [Run], can be polled for
+// completion by obtaining the token from the [RunResponse] continuation token.
 func WithContinuationToken(token any) Option {
 	return continuationTokenOpt{token}
 }
 
 // WithAllowBackgroundResponses sets whether to allow background responses during the agent run.
+//
+// Background responses allow running long-running operations or tasks asynchronously in the background that can be resumed
+// by streaming APIs and polled for completion by non-streaming APIs.
+//
+// When this property is set to true, non-streaming APIs may start a background operation and return an initial
+// response with a continuation token. Subsequent calls to the same API should be made in a polling manner with
+// the continuation token to get the final result of the operation.
+//
+// When this property is set to true, streaming APIs may also start a background operation and begin streaming
+// response updates until the operation is completed. If the streaming connection is interrupted, the
+// continuation token obtained from the last update that has one should be supplied to a subsequent call to the same streaming API
+// to resume the stream from the point of interruption and continue receiving updates until the operation is completed.
+//
+// This property only takes effect if the implementation it's used with supports background responses.
+// If the implementation does not support background responses, this property will be ignored.
 func WithAllowBackgroundResponses(allow bool) Option {
 	return allowBackgroundResponsesOpt(allow)
 }

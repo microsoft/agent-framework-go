@@ -36,6 +36,7 @@ type ChatResponseUpdate struct {
 	ModelID              string
 	ResponseID           string
 	Role                 message.Role
+	ContinuationToken    any
 	CreatedAt            time.Time
 	RawRepresentation    any
 	Contents             []message.Content

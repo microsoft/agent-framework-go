@@ -91,6 +91,10 @@ func (a *Agent) Run(ctx context.Context, options ...agent.Option) iter.Seq2[*age
 			yield(nil, err)
 			return
 		}
+		if err := validateStreamResumptionAllowed(opts.ContinuationToken, thread); err != nil {
+			yield(nil, err)
+			return
+		}
 		var updates []*chatclient.ChatResponseUpdate
 		for update, err := range client.Response(ctx, opts, messages...) {
 			if err != nil {
@@ -108,6 +112,7 @@ func (a *Agent) Run(ctx context.Context, options ...agent.Option) iter.Seq2[*age
 					ResponseID:           update.ResponseID,
 					CreatedAt:            update.CreatedAt,
 					Role:                 update.Role,
+					ContinuationToken:    update.ContinuationToken,
 					Contents:             update.Contents,
 					RawRepresentation:    update.RawRepresentation,
 					AdditionalProperties: update.AdditionalProperties,
@@ -207,6 +212,9 @@ func (a *Agent) prepareThreadAndMessages(ctx context.Context, options []agent.Op
 		if len(inputMsgs) > 0 {
 			return retError(errors.New("messages are not allowed when continuing a background response using a continuation token"))
 		}
+		if thread.ConversationID == "" && thread.MessageStore == nil {
+			return retError(errors.New("continuation tokens are not allowed to be used for initial runs"))
+		}
 	}
 	if opts.ContinuationToken == nil {
 		if thread.MessageStore != nil {
@@ -260,6 +268,23 @@ func (a *Agent) prepareThreadAndMessages(ctx context.Context, options []agent.Op
 		opts.ConversationID = thread.ConversationID
 	}
 	return thread, opts, inputMsgs, msgsForClient, ctxMessages, nil
+}
+
+func validateStreamResumptionAllowed(continuationToken any, thread *Thread) error {
+	if continuationToken == nil {
+		return nil
+	}
+	// Streaming resumption is only supported with chat history managed by the agent service because, currently, there's no good solution
+	// to collect updates received in failed runs and pass them to the last successful run so it can store them to the message store.
+	if thread.ConversationID == "" {
+		return errors.New("streaming resumption is only supported when chat history is stored and managed by the underlying service")
+	}
+	// Similarly, streaming resumption is not supported when a context provider is used because, currently, there's no good solution
+	// to collect updates received in failed runs and pass them to the last successful run so it can notify the context provider of the updates.
+	if thread.ContextProvider != nil {
+		return errors.New("using context provider with streaming resumption is not supported")
+	}
+	return nil
 }
 
 func (a *Agent) createConfiguredChatOptions(options []agent.Option) ChatOptions {

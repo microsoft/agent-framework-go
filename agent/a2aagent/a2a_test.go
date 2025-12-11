@@ -19,7 +19,7 @@ import (
 type mockA2ATransport struct {
 	capturedMessageSendParams  *a2a.MessageSendParams
 	responseToReturn           a2a.SendMessageResult
-	streamingResponseToReturn  *a2a.Message // Use concrete type instead of interface
+	streamingResponseToReturn  a2a.Event
 	sendMessageCalled          bool
 	sendStreamingMessageCalled bool
 }
@@ -49,9 +49,26 @@ func (m *mockA2ATransport) SendStreamingMessage(ctx context.Context, params *a2a
 			Role:      a2a.MessageRoleAgent,
 			ContextID: params.Message.ContextID,
 		}
-	} else if responseToYield.ContextID == "" {
-		// If a response was provided but has no context ID, use the one from the request
-		responseToYield.ContextID = params.Message.ContextID
+	} else {
+		// Set context ID based on response type
+		switch resp := responseToYield.(type) {
+		case *a2a.Message:
+			if resp.ContextID == "" {
+				resp.ContextID = params.Message.ContextID
+			}
+		case *a2a.Task:
+			if resp.ContextID == "" {
+				resp.ContextID = params.Message.ContextID
+			}
+		case *a2a.TaskStatusUpdateEvent:
+			if resp.ContextID == "" {
+				resp.ContextID = params.Message.ContextID
+			}
+		case *a2a.TaskArtifactUpdateEvent:
+			if resp.ContextID == "" {
+				resp.ContextID = params.Message.ContextID
+			}
+		}
 	}
 	return func(yield func(a2a.Event, error) bool) {
 		yield(responseToYield, nil)
@@ -59,6 +76,11 @@ func (m *mockA2ATransport) SendStreamingMessage(ctx context.Context, params *a2a
 }
 
 func (m *mockA2ATransport) GetTask(ctx context.Context, params *a2a.TaskQueryParams) (*a2a.Task, error) {
+	if m.responseToReturn != nil {
+		if task, ok := m.responseToReturn.(*a2a.Task); ok {
+			return task, nil
+		}
+	}
 	return nil, errors.New("not implemented")
 }
 
@@ -332,8 +354,8 @@ func TestRunWithThreadHavingDifferentContextID(t *testing.T) {
 	}
 }
 
-// TestRunStreamingAsyncWithValidUserMessage tests streaming with valid user message
-func TestRunStreamingAsyncWithValidUserMessage(t *testing.T) {
+// TestRunStreamingWithValidUserMessage tests streaming with valid user message
+func TestRunStreamingWithValidUserMessage(t *testing.T) {
 	transport := &mockA2ATransport{
 		streamingResponseToReturn: &a2a.Message{
 			ID:        "stream-1",
@@ -412,8 +434,8 @@ func TestRunStreamingAsyncWithValidUserMessage(t *testing.T) {
 	}
 }
 
-// TestRunStreamingAsyncWithThread tests streaming with thread context ID update
-func TestRunStreamingAsyncWithThread(t *testing.T) {
+// TestRunStreamingWithThread tests streaming with thread context ID update
+func TestRunStreamingWithThread(t *testing.T) {
 	transport := &mockA2ATransport{
 		streamingResponseToReturn: &a2a.Message{
 			ID:        "stream-1",
@@ -441,8 +463,8 @@ func TestRunStreamingAsyncWithThread(t *testing.T) {
 	}
 }
 
-// TestRunStreamingAsyncWithExistingThread tests streaming with existing thread
-func TestRunStreamingAsyncWithExistingThread(t *testing.T) {
+// TestRunStreamingWithExistingThread tests streaming with existing thread
+func TestRunStreamingWithExistingThread(t *testing.T) {
 	transport := &mockA2ATransport{
 		streamingResponseToReturn: &a2a.Message{},
 	}
@@ -465,8 +487,8 @@ func TestRunStreamingAsyncWithExistingThread(t *testing.T) {
 	}
 }
 
-// TestRunStreamingAsyncWithThreadHavingDifferentContextID tests error on context ID mismatch in streaming
-func TestRunStreamingAsyncWithThreadHavingDifferentContextID(t *testing.T) {
+// TestRunStreamingWithThreadHavingDifferentContextID tests error on context ID mismatch in streaming
+func TestRunStreamingWithThreadHavingDifferentContextID(t *testing.T) {
 	transport := &mockA2ATransport{
 		streamingResponseToReturn: &a2a.Message{
 			ID:        "stream-1",
@@ -492,8 +514,8 @@ func TestRunStreamingAsyncWithThreadHavingDifferentContextID(t *testing.T) {
 	}
 }
 
-// TestRunStreamingAsyncAllowsNonUserRoleMessages tests that streaming allows non-user messages
-func TestRunStreamingAsyncAllowsNonUserRoleMessages(t *testing.T) {
+// TestRunStreamingAllowsNonUserRoleMessages tests that streaming allows non-user messages
+func TestRunStreamingAllowsNonUserRoleMessages(t *testing.T) {
 	transport := &mockA2ATransport{
 		streamingResponseToReturn: &a2a.Message{
 			ID:        "stream-1",
@@ -566,4 +588,617 @@ func TestRunWithHostedFileContent(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestRunWithInvalidThreadType tests error when using invalid thread type
+func TestRunWithInvalidThreadType(t *testing.T) {
+	transport := &mockA2ATransport{}
+	a := newTestAgent(transport, a2aagent.Options{})
+
+	// Create a custom thread type that is not an a2aagent.Thread
+	invalidThread := &customAgentThread{}
+
+	_, err := agent.RunText(t.Context(), a, "Test message", agent.WithThread(invalidThread))
+	if err == nil {
+		t.Error("Run() error = nil, want error for invalid thread type")
+	}
+}
+
+// TestRunStreamingWithInvalidThreadType tests error when using invalid thread type in streaming
+func TestRunStreamingWithInvalidThreadType(t *testing.T) {
+	transport := &mockA2ATransport{
+		streamingResponseToReturn: &a2a.Message{
+			ID:   "stream-1",
+			Role: a2a.MessageRoleAgent,
+			Parts: []a2a.Part{
+				a2a.TextPart{Text: "Response"},
+			},
+		},
+	}
+	a := newTestAgent(transport, a2aagent.Options{})
+
+	// Create a custom thread type that is not an a2aagent.Thread
+	invalidThread := &customAgentThread{}
+
+	gotError := false
+	for _, err := range agent.RunTextStream(t.Context(), a, "Test message", agent.WithThread(invalidThread)) {
+		if err != nil {
+			gotError = true
+			break
+		}
+	}
+
+	if !gotError {
+		t.Error("RunStream() expected error for invalid thread type, got nil")
+	}
+}
+
+// TestRunWithContinuationTokenAndMessages tests error when both continuation token and messages are provided
+func TestRunWithContinuationTokenAndMessages(t *testing.T) {
+	transport := &mockA2ATransport{}
+	a := newTestAgent(transport, a2aagent.Options{})
+
+	_, err := agent.RunText(t.Context(), a, "Test message", agent.WithContinuationToken(a2a.TaskID("task-123")))
+	if err == nil {
+		t.Error("Run() error = nil, want error when continuation token and messages are provided")
+	}
+}
+
+// TestRunWithContinuationToken tests that continuation token calls GetTask
+func TestRunWithContinuationToken(t *testing.T) {
+	transport := &mockA2ATransport{
+		responseToReturn: &a2a.Task{
+			ID:        a2a.TaskID("task-123"),
+			ContextID: "context-123",
+		},
+	}
+	a := newTestAgent(transport, a2aagent.Options{})
+
+	_, err := agent.Run(t.Context(), a, agent.WithContinuationToken(a2a.TaskID("task-123")))
+	if err != nil {
+		t.Fatalf("Run() error = %v, want nil", err)
+	}
+}
+
+// TestRunWithTaskInThreadAndMessage tests that task ID is added as reference
+func TestRunWithTaskInThreadAndMessage(t *testing.T) {
+	transport := &mockA2ATransport{
+		responseToReturn: &a2a.Message{
+			ID:   "response-123",
+			Role: a2a.MessageRoleAgent,
+			Parts: []a2a.Part{
+				a2a.TextPart{Text: "Response to task"},
+			},
+		},
+	}
+	a := newTestAgent(transport, a2aagent.Options{})
+
+	thread := a.NewThread().(*a2aagent.Thread)
+	thread.TaskID = "task-123"
+
+	_, err := agent.RunText(t.Context(), a, "Please make the background transparent", agent.WithThread(thread))
+	if err != nil {
+		t.Fatalf("Run() error = %v, want nil", err)
+	}
+
+	capturedMsg := transport.capturedMessageSendParams.Message
+	if capturedMsg == nil {
+		t.Fatal("capturedMessageSendParams.Message is nil")
+	}
+	if len(capturedMsg.ReferenceTasks) == 0 {
+		t.Error("message.ReferenceTasks is empty, expected task-123")
+	} else if string(capturedMsg.ReferenceTasks[0]) != "task-123" {
+		t.Errorf("message.ReferenceTasks[0] = %q, want %q", capturedMsg.ReferenceTasks[0], "task-123")
+	}
+}
+
+// TestRunWithAgentTask tests that thread task ID is updated
+func TestRunWithAgentTask(t *testing.T) {
+	transport := &mockA2ATransport{
+		responseToReturn: &a2a.Task{
+			ID:        a2a.TaskID("task-456"),
+			ContextID: "context-789",
+			Status: a2a.TaskStatus{
+				State: a2a.TaskStateSubmitted,
+			},
+		},
+	}
+	a := newTestAgent(transport, a2aagent.Options{})
+
+	thread := a.NewThread()
+
+	_, err := agent.RunText(t.Context(), a, "Start a task", agent.WithThread(thread))
+	if err != nil {
+		t.Fatalf("Run() error = %v, want nil", err)
+	}
+
+	a2aThread, ok := thread.(*a2aagent.Thread)
+	if !ok {
+		t.Fatalf("thread type = %T, want *a2aagent.Thread", thread)
+	}
+	if a2aThread.TaskID != "task-456" {
+		t.Errorf("thread.TaskID = %q, want %q", a2aThread.TaskID, "task-456")
+	}
+}
+
+// TestRunWithAgentTaskResponse tests task response conversion
+func TestRunWithAgentTaskResponse(t *testing.T) {
+	transport := &mockA2ATransport{
+		responseToReturn: &a2a.Task{
+			ID:        a2a.TaskID("task-789"),
+			ContextID: "context-456",
+			Status: a2a.TaskStatus{
+				State: a2a.TaskStateSubmitted,
+			},
+			Artifacts: []*a2a.Artifact{
+				{
+					ID: a2a.ArtifactID("art-1"),
+					Parts: []a2a.Part{
+						a2a.TextPart{Text: "Artifact content"},
+					},
+				},
+			},
+		},
+	}
+	a := newTestAgent(transport, a2aagent.Options{})
+
+	thread := a.NewThread()
+
+	result, err := agent.RunText(t.Context(), a, "Start a long-running task", agent.WithThread(thread))
+	if err != nil {
+		t.Fatalf("Run() error = %v, want nil", err)
+	}
+
+	if result == nil {
+		t.Fatal("result is nil")
+	}
+	if result.AgentID != a.Identity().ID() {
+		t.Errorf("result.AgentID = %q, want %q", result.AgentID, a.Identity().ID())
+	}
+	if result.ID != "task-789" {
+		t.Errorf("result.ID = %q, want %q", result.ID, "task-789")
+	}
+
+	if result.ContinuationToken == nil {
+		t.Error("result.ContinuationToken is nil, want non-nil for submitted task")
+	} else if token, ok := result.ContinuationToken.(a2a.TaskID); !ok {
+		t.Errorf("result.ContinuationToken type = %T, want a2a.TaskID", result.ContinuationToken)
+	} else if string(token) != "task-789" {
+		t.Errorf("continuation token = %q, want %q", token, "task-789")
+	}
+
+	a2aThread, ok := thread.(*a2aagent.Thread)
+	if !ok {
+		t.Fatalf("thread type = %T, want *a2aagent.Thread", thread)
+	}
+	if a2aThread.ContextID != "context-456" {
+		t.Errorf("thread.ContextID = %q, want %q", a2aThread.ContextID, "context-456")
+	}
+	if a2aThread.TaskID != "task-789" {
+		t.Errorf("thread.TaskID = %q, want %q", a2aThread.TaskID, "task-789")
+	}
+}
+
+// TestRunWithVariousTaskStates tests continuation token behavior for different task states
+func TestRunWithVariousTaskStates(t *testing.T) {
+	tests := []struct {
+		name                    string
+		state                   a2a.TaskState
+		expectContinuationToken bool
+	}{
+		{"Submitted", a2a.TaskStateSubmitted, true},
+		{"Working", a2a.TaskStateWorking, true},
+		{"Completed", a2a.TaskStateCompleted, false},
+		{"Failed", a2a.TaskStateFailed, false},
+		{"Canceled", a2a.TaskStateCanceled, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			transport := &mockA2ATransport{
+				responseToReturn: &a2a.Task{
+					ID:        a2a.TaskID("task-123"),
+					ContextID: "context-123",
+					Status: a2a.TaskStatus{
+						State: tt.state,
+					},
+					Artifacts: []*a2a.Artifact{
+						{
+							ID:    a2a.ArtifactID("art-1"),
+							Parts: []a2a.Part{a2a.TextPart{Text: "Content"}},
+						},
+					},
+				},
+			}
+			a := newTestAgent(transport, a2aagent.Options{})
+
+			result, err := agent.RunText(t.Context(), a, "Test message")
+			if err != nil {
+				t.Fatalf("Run() error = %v, want nil", err)
+			}
+
+			if tt.expectContinuationToken {
+				if result.ContinuationToken == nil {
+					t.Error("result.ContinuationToken is nil, want non-nil")
+				}
+			} else {
+				if result.ContinuationToken != nil {
+					t.Errorf("result.ContinuationToken = %v, want nil", result.ContinuationToken)
+				}
+			}
+		})
+	}
+}
+
+// TestRunStreamingWithContinuationTokenAndMessages tests error in streaming mode
+func TestRunStreamingWithContinuationTokenAndMessages(t *testing.T) {
+	transport := &mockA2ATransport{}
+	a := newTestAgent(transport, a2aagent.Options{})
+
+	gotError := false
+	for _, err := range agent.RunTextStream(t.Context(), a, "Test message", agent.WithContinuationToken(a2a.TaskID("task-123"))) {
+		if err != nil {
+			gotError = true
+			break
+		}
+	}
+
+	if !gotError {
+		t.Error("RunStream() expected error when continuation token used with streaming, got nil")
+	}
+}
+
+// TestRunStreamingWithTaskInThreadAndMessage tests task reference in streaming
+func TestRunStreamingWithTaskInThreadAndMessage(t *testing.T) {
+	transport := &mockA2ATransport{
+		streamingResponseToReturn: &a2a.Message{
+			ID:   "response-123",
+			Role: a2a.MessageRoleAgent,
+			Parts: []a2a.Part{
+				a2a.TextPart{Text: "Response to task"},
+			},
+		},
+	}
+	a := newTestAgent(transport, a2aagent.Options{})
+
+	thread := a.NewThread().(*a2aagent.Thread)
+	thread.TaskID = "task-123"
+
+	for _, err := range agent.RunTextStream(t.Context(), a, "Please make the background transparent", agent.WithThread(thread)) {
+		if err != nil {
+			t.Fatalf("RunStream() error = %v, want nil", err)
+		}
+	}
+
+	capturedMsg := transport.capturedMessageSendParams.Message
+	if capturedMsg == nil {
+		t.Fatal("capturedMessageSendParams.Message is nil")
+	}
+	if len(capturedMsg.ReferenceTasks) == 0 {
+		t.Error("message.ReferenceTasks is empty, expected task-123")
+	} else if string(capturedMsg.ReferenceTasks[0]) != "task-123" {
+		t.Errorf("message.ReferenceTasks[0] = %q, want %q", capturedMsg.ReferenceTasks[0], "task-123")
+	}
+}
+
+// TestRunStreamingWithAgentTaskUpdatesThread tests thread task ID update in streaming
+func TestRunStreamingWithAgentTaskUpdatesThread(t *testing.T) {
+	transport := &mockA2ATransport{
+		streamingResponseToReturn: &a2a.Task{
+			ID:        a2a.TaskID("task-456"),
+			ContextID: "context-789",
+			Status: a2a.TaskStatus{
+				State: a2a.TaskStateSubmitted,
+			},
+			Artifacts: []*a2a.Artifact{
+				{
+					ID:    a2a.ArtifactID("art-1"),
+					Parts: []a2a.Part{a2a.TextPart{Text: "Task content"}},
+				},
+			},
+		},
+	}
+	a := newTestAgent(transport, a2aagent.Options{})
+
+	thread := a.NewThread()
+
+	for _, err := range agent.RunTextStream(t.Context(), a, "Start a task", agent.WithThread(thread)) {
+		if err != nil {
+			t.Fatalf("RunStream() error = %v, want nil", err)
+		}
+	}
+
+	a2aThread, ok := thread.(*a2aagent.Thread)
+	if !ok {
+		t.Fatalf("thread type = %T, want *a2aagent.Thread", thread)
+	}
+	if a2aThread.TaskID != "task-456" {
+		t.Errorf("thread.TaskID = %q, want %q", a2aThread.TaskID, "task-456")
+	}
+}
+
+// TestRunStreamingWithAgentMessage tests streaming message response
+func TestRunStreamingWithAgentMessage(t *testing.T) {
+	const messageID = "msg-123"
+	const contextID = "ctx-456"
+	const messageText = "Hello from agent!"
+
+	transport := &mockA2ATransport{
+		streamingResponseToReturn: &a2a.Message{
+			ID:        messageID,
+			Role:      a2a.MessageRoleAgent,
+			ContextID: contextID,
+			Parts: []a2a.Part{
+				a2a.TextPart{Text: messageText},
+			},
+		},
+	}
+	a := newTestAgent(transport, a2aagent.Options{})
+
+	var updates []*agent.RunResponseUpdate
+	for update, err := range agent.RunTextStream(t.Context(), a, "Test message") {
+		if err != nil {
+			t.Fatalf("RunStream() error = %v, want nil", err)
+		}
+		updates = append(updates, update)
+	}
+
+	if len(updates) != 1 {
+		t.Fatalf("len(updates) = %d, want 1", len(updates))
+	}
+
+	update := updates[0]
+	if update.Role != message.RoleAssistant {
+		t.Errorf("update.Role = %q, want %q", update.Role, message.RoleAssistant)
+	}
+	if update.MessageID != messageID {
+		t.Errorf("update.MessageID = %q, want %q", update.MessageID, messageID)
+	}
+	if update.ResponseID != messageID {
+		t.Errorf("update.ResponseID = %q, want %q", update.ResponseID, messageID)
+	}
+	if update.AgentID != a.Identity().ID() {
+		t.Errorf("update.AgentID = %q, want %q", update.AgentID, a.Identity().ID())
+	}
+	if update.String() != messageText {
+		t.Errorf("update.String() = %q, want %q", update.String(), messageText)
+	}
+	if _, ok := update.RawRepresentation.(*a2a.Message); !ok {
+		t.Errorf("update.RawRepresentation type = %T, want *a2a.Message", update.RawRepresentation)
+	}
+}
+
+// TestRunStreamingWithAgentTaskYieldsUpdate tests streaming task response
+func TestRunStreamingWithAgentTaskYieldsUpdate(t *testing.T) {
+	const taskID = "task-789"
+	const contextID = "ctx-012"
+
+	transport := &mockA2ATransport{
+		streamingResponseToReturn: &a2a.Task{
+			ID:        a2a.TaskID(taskID),
+			ContextID: contextID,
+			Status: a2a.TaskStatus{
+				State: a2a.TaskStateSubmitted,
+			},
+			Artifacts: []*a2a.Artifact{
+				{
+					ID: a2a.ArtifactID("art-123"),
+					Parts: []a2a.Part{
+						a2a.TextPart{Text: "Task artifact content"},
+					},
+				},
+			},
+		},
+	}
+	a := newTestAgent(transport, a2aagent.Options{})
+
+	thread := a.NewThread()
+
+	var updates []*agent.RunResponseUpdate
+	for update, err := range agent.RunTextStream(t.Context(), a, "Start long-running task", agent.WithThread(thread)) {
+		if err != nil {
+			t.Fatalf("RunStream() error = %v, want nil", err)
+		}
+		updates = append(updates, update)
+	}
+
+	if len(updates) != 1 {
+		t.Fatalf("len(updates) = %d, want 1", len(updates))
+	}
+
+	update := updates[0]
+	if update.Role != message.RoleAssistant {
+		t.Errorf("update.Role = %q, want %q", update.Role, message.RoleAssistant)
+	}
+	if update.ResponseID != taskID {
+		t.Errorf("update.ResponseID = %q, want %q", update.ResponseID, taskID)
+	}
+	if update.AgentID != a.Identity().ID() {
+		t.Errorf("update.AgentID = %q, want %q", update.AgentID, a.Identity().ID())
+	}
+	if _, ok := update.RawRepresentation.(*a2a.Artifact); !ok {
+		t.Errorf("update.RawRepresentation type = %T, want *a2a.Artifact", update.RawRepresentation)
+	}
+
+	a2aThread, ok := thread.(*a2aagent.Thread)
+	if !ok {
+		t.Fatalf("thread type = %T, want *a2aagent.Thread", thread)
+	}
+	if a2aThread.ContextID != contextID {
+		t.Errorf("thread.ContextID = %q, want %q", a2aThread.ContextID, contextID)
+	}
+	if a2aThread.TaskID != taskID {
+		t.Errorf("thread.TaskID = %q, want %q", a2aThread.TaskID, taskID)
+	}
+}
+
+// TestRunStreamingWithTaskStatusUpdateEvent tests handling of TaskStatusUpdateEvent
+func TestRunStreamingWithTaskStatusUpdateEvent(t *testing.T) {
+	const taskID = "task-status-123"
+	const contextID = "ctx-status-456"
+
+	transport := &mockA2ATransport{
+		streamingResponseToReturn: &a2a.TaskStatusUpdateEvent{
+			TaskID:    a2a.TaskID(taskID),
+			ContextID: contextID,
+			Status: a2a.TaskStatus{
+				State: a2a.TaskStateWorking,
+			},
+		},
+	}
+	a := newTestAgent(transport, a2aagent.Options{})
+
+	thread := a.NewThread()
+
+	var updates []*agent.RunResponseUpdate
+	for update, err := range agent.RunTextStream(t.Context(), a, "Check task status", agent.WithThread(thread)) {
+		if err != nil {
+			t.Fatalf("RunStream() error = %v, want nil", err)
+		}
+		updates = append(updates, update)
+	}
+
+	if len(updates) != 1 {
+		t.Fatalf("len(updates) = %d, want 1", len(updates))
+	}
+
+	update := updates[0]
+	if update.Role != message.RoleAssistant {
+		t.Errorf("update.Role = %q, want %q", update.Role, message.RoleAssistant)
+	}
+	if update.ResponseID != taskID {
+		t.Errorf("update.ResponseID = %q, want %q", update.ResponseID, taskID)
+	}
+	if update.AgentID != a.Identity().ID() {
+		t.Errorf("update.AgentID = %q, want %q", update.AgentID, a.Identity().ID())
+	}
+	if _, ok := update.RawRepresentation.(*a2a.TaskStatusUpdateEvent); !ok {
+		t.Errorf("update.RawRepresentation type = %T, want *a2a.TaskStatusUpdateEvent", update.RawRepresentation)
+	}
+
+	a2aThread, ok := thread.(*a2aagent.Thread)
+	if !ok {
+		t.Fatalf("thread type = %T, want *a2aagent.Thread", thread)
+	}
+	if a2aThread.ContextID != contextID {
+		t.Errorf("thread.ContextID = %q, want %q", a2aThread.ContextID, contextID)
+	}
+	if a2aThread.TaskID != taskID {
+		t.Errorf("thread.TaskID = %q, want %q", a2aThread.TaskID, taskID)
+	}
+}
+
+// TestRunStreamingWithTaskArtifactUpdateEvent tests handling of TaskArtifactUpdateEvent
+func TestRunStreamingWithTaskArtifactUpdateEvent(t *testing.T) {
+	const taskID = "task-artifact-123"
+	const contextID = "ctx-artifact-456"
+	const artifactContent = "Task artifact data"
+
+	transport := &mockA2ATransport{
+		streamingResponseToReturn: &a2a.TaskArtifactUpdateEvent{
+			TaskID:    a2a.TaskID(taskID),
+			ContextID: contextID,
+			Artifact: &a2a.Artifact{
+				ID: a2a.ArtifactID("artifact-789"),
+				Parts: []a2a.Part{
+					a2a.TextPart{Text: artifactContent},
+				},
+			},
+		},
+	}
+	a := newTestAgent(transport, a2aagent.Options{})
+
+	thread := a.NewThread()
+
+	var updates []*agent.RunResponseUpdate
+	for update, err := range agent.RunTextStream(t.Context(), a, "Process artifact", agent.WithThread(thread)) {
+		if err != nil {
+			t.Fatalf("RunStream() error = %v, want nil", err)
+		}
+		updates = append(updates, update)
+	}
+
+	if len(updates) != 1 {
+		t.Fatalf("len(updates) = %d, want 1", len(updates))
+	}
+
+	update := updates[0]
+	if update.Role != message.RoleAssistant {
+		t.Errorf("update.Role = %q, want %q", update.Role, message.RoleAssistant)
+	}
+	if update.ResponseID != taskID {
+		t.Errorf("update.ResponseID = %q, want %q", update.ResponseID, taskID)
+	}
+	if update.AgentID != a.Identity().ID() {
+		t.Errorf("update.AgentID = %q, want %q", update.AgentID, a.Identity().ID())
+	}
+	if _, ok := update.RawRepresentation.(*a2a.TaskArtifactUpdateEvent); !ok {
+		t.Errorf("update.RawRepresentation type = %T, want *a2a.TaskArtifactUpdateEvent", update.RawRepresentation)
+	}
+
+	if len(update.Contents) == 0 {
+		t.Error("update.Contents is empty, want non-empty")
+	}
+	if update.String() != artifactContent {
+		t.Errorf("update.String() = %q, want %q", update.String(), artifactContent)
+	}
+
+	a2aThread, ok := thread.(*a2aagent.Thread)
+	if !ok {
+		t.Fatalf("thread type = %T, want *a2aagent.Thread", thread)
+	}
+	if a2aThread.ContextID != contextID {
+		t.Errorf("thread.ContextID = %q, want %q", a2aThread.ContextID, contextID)
+	}
+	if a2aThread.TaskID != taskID {
+		t.Errorf("thread.TaskID = %q, want %q", a2aThread.TaskID, taskID)
+	}
+}
+
+// TestRunWithAllowBackgroundResponsesAndNoThread tests error when no thread provided
+func TestRunWithAllowBackgroundResponsesAndNoThread(t *testing.T) {
+	transport := &mockA2ATransport{}
+	a := newTestAgent(transport, a2aagent.Options{})
+
+	// Call the agent's Run method directly (not the helper functions) to test the validation
+	gotError := false
+	for _, err := range a.Run(context.Background(), agent.WithMessage(message.NewText("Test message")), agent.WithAllowBackgroundResponses(true)) {
+		if err != nil {
+			gotError = true
+			break
+		}
+	}
+	if !gotError {
+		t.Error("Run() error = nil, want error when AllowBackgroundResponses is true without thread")
+	}
+}
+
+// TestRunStreamingWithAllowBackgroundResponsesAndNoThread tests error in streaming mode
+func TestRunStreamingWithAllowBackgroundResponsesAndNoThread(t *testing.T) {
+	transport := &mockA2ATransport{}
+	a := newTestAgent(transport, a2aagent.Options{})
+
+	// Call the agent's Run method directly with streaming enabled
+	gotError := false
+	for _, err := range a.Run(context.Background(), agent.WithMessage(message.NewText("Test message")), agent.WithAllowBackgroundResponses(true), agent.WithStreaming(true)) {
+		if err != nil {
+			gotError = true
+			break
+		}
+	}
+
+	if !gotError {
+		t.Error("RunStream() expected error when AllowBackgroundResponses is true without thread, got nil")
+	}
+}
+
+// customAgentThread is a custom agent thread for testing invalid thread type scenario
+type customAgentThread struct{}
+
+func (c *customAgentThread) ID() string {
+	return "custom-thread-id"
+}
+
+func (c *customAgentThread) MessagesReceived(ctx context.Context, messages ...*message.Message) error {
+	return nil
 }

@@ -179,6 +179,7 @@ func processUpdate(r *RunResponse, update *RunResponseUpdate) {
 	if r.CreatedAt.IsZero() || (!update.CreatedAt.IsZero() && update.CreatedAt.After(r.CreatedAt)) {
 		r.CreatedAt = update.CreatedAt
 	}
+	r.ContinuationToken = cmp.Or(update.ContinuationToken, r.ContinuationToken)
 	if update.AdditionalProperties != nil {
 		if r.AdditionalProperties == nil {
 			r.AdditionalProperties = make(map[string]any)
@@ -205,6 +206,7 @@ type RunResponse struct {
 	AdditionalProperties map[string]any
 	ID                   string
 	AgentID              string
+	ContinuationToken    any
 	CreatedAt            time.Time
 	Usage                *message.UsageDetails
 	Messages             []*message.Message
@@ -247,6 +249,7 @@ type RunResponseUpdate struct {
 	ResponseID           string
 	AuthorName           string
 	Role                 message.Role
+	ContinuationToken    any
 	CreatedAt            time.Time
 	Contents             []message.Content
 }
