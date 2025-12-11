@@ -33,7 +33,7 @@ func Example_toolApproval() {
 		Endpoint:   "https://your-resource.openai.azure.com/",
 		Model:      "gpt-4o",
 		APIVersion: "2025-01-01-preview",
-	}, &chatagent.Options{
+	}, chatagent.Options{
 		Instructions: "You are an email assistant.",
 		ChatOptions: &chatagent.ChatOptions{
 			Tools: []tool.Tool{tool.ApprovalRequiredFunc(sendEmailTool)},
@@ -67,7 +67,7 @@ func Example_approvalCallback() {
 		Endpoint:   "https://your-resource.openai.azure.com/",
 		Model:      "gpt-4o",
 		APIVersion: "2025-01-01-preview",
-	}, &chatagent.Options{
+	}, chatagent.Options{
 		Instructions: "You are a file manager.",
 		ChatOptions: &chatagent.ChatOptions{
 			Tools: []tool.Tool{tool.ApprovalRequiredFunc(deleteTool)},
