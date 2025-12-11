@@ -5,7 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"math/rand"
+	"math/rand/v2"
 	"os"
 	"strings"
 
@@ -30,7 +30,7 @@ var weatherTool = functool.MustNew(&functool.Func{
 }, func(_ context.Context, location string) (string, error) {
 	conditions := []string{"sunny", "cloudy", "rainy", "stormy"}
 	return fmt.Sprintf("The weather in %s is %s with a high of %d°C.",
-		location, conditions[rand.Intn(len(conditions))], rand.Intn(21)+10), nil
+		location, conditions[rand.IntN(len(conditions))], rand.IntN(21)+10), nil
 })
 
 func main() {
@@ -42,7 +42,7 @@ func main() {
 
 	ag := openai.NewChatAgent(openai.ClientConfig{
 		Model: "gpt-4o-mini",
-	}, &chatagent.Options{
+	}, chatagent.Options{
 		Instructions: "You are a helpful assistant with access to weather information. Be concise and friendly.",
 		ChatOptions: &chatagent.ChatOptions{
 			Tools: []tool.Tool{weatherTool},
