@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"math/rand"
+	"math/rand/v2"
 	"os"
 	"strings"
 	"testing"
@@ -37,7 +37,7 @@ var weatherTool = functool.MustNew(&functool.Func{
 }, func(_ context.Context, location string) (string, error) {
 	fmt.Printf("%s🌤️  [Tool Called: weather] Location: %s%s\n", colorYellow, location, colorReset)
 	conditions := []string{"sunny", "cloudy", "rainy", "stormy"}
-	return fmt.Sprintf("The weather in %s is %s with a high of %d°C.", location, conditions[rand.Intn(len(conditions))], rand.Intn(21)+10), nil
+	return fmt.Sprintf("The weather in %s is %s with a high of %d°C.", location, conditions[rand.IntN(len(conditions))], rand.IntN(21)+10), nil
 })
 
 // TestFunctionTools demonstrates how to create an agent with function tools
