@@ -179,7 +179,12 @@ func processUpdate(r *RunResponse, update *RunResponseUpdate) {
 	if r.CreatedAt.IsZero() || (!update.CreatedAt.IsZero() && update.CreatedAt.After(r.CreatedAt)) {
 		r.CreatedAt = update.CreatedAt
 	}
-	r.ContinuationToken = cmp.Or(update.ContinuationToken, r.ContinuationToken)
+	// If the update provides a nil ContinuationToken, clear it; otherwise, use the update's value.
+	if update.ContinuationToken == nil {
+		r.ContinuationToken = nil
+	} else {
+		r.ContinuationToken = update.ContinuationToken
+	}
 	if update.AdditionalProperties != nil {
 		if r.AdditionalProperties == nil {
 			r.AdditionalProperties = make(map[string]any)

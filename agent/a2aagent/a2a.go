@@ -163,7 +163,8 @@ func (a *Agent) sendMsg(ctx context.Context, thread *Thread, streaming bool, par
 			yield(nil, err)
 			return
 		}
-		if err := a.updateThreadContextID(thread, e.TaskInfo().ContextID, string(e.TaskInfo().TaskID)); err != nil {
+		taskInfo := e.TaskInfo()
+		if err := a.updateThreadContextID(thread, taskInfo.ContextID, string(taskInfo.TaskID)); err != nil {
 			yield(nil, err)
 			return
 		}
