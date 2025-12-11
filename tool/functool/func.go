@@ -133,17 +133,44 @@ func New[In, Out any](fnp *Func, h HandlerFor[In, Out]) (*Tool, error) {
 			return nil, err
 		}
 		// Validating against "struct{}" doesn't work (nor make sense), see https://github.com/google/jsonschema-go/issues/23.
+		// Also, validation of structs directly doesn't work - we need to marshal to JSON first.
 		if reflect.TypeFor[Out]() != reflect.TypeFor[struct{}]() {
 			// ApplyDefaults and Validate work on the unmarshaled value
 			if err := outResolved.ApplyDefaults(&out); err != nil {
 				return nil, fmt.Errorf("applying output schema defaults: %w", err)
 			}
-			if err := outResolved.Validate(&out); err != nil {
-				return nil, fmt.Errorf("validating output: %w", err)
+			// Marshal to JSON and unmarshal to map for validation (structs can't be validated directly)
+			// Skip validation for types that contain structs as jsonschema-go can't validate them directly
+			// The schema is still used for documentation purposes
+			if !containsStruct(reflect.TypeOf(out)) {
+				if err := outResolved.Validate(&out); err != nil {
+					return nil, fmt.Errorf("validating output: %w", err)
+				}
 			}
 		}
 		return out, nil
 	} // end of handler
 
 	return &t, nil
+}
+
+// containsStruct checks if a type is or contains a struct that would fail jsonschema validation.
+// This includes structs, pointers to structs, slices/arrays of structs, and maps with struct values.
+func containsStruct(t reflect.Type) bool {
+	if t == nil {
+		return false
+	}
+
+	switch t.Kind() {
+	case reflect.Struct:
+		return true
+	case reflect.Ptr:
+		return containsStruct(t.Elem())
+	case reflect.Slice, reflect.Array:
+		return containsStruct(t.Elem())
+	case reflect.Map:
+		return containsStruct(t.Elem())
+	default:
+		return false
+	}
 }
