@@ -97,7 +97,7 @@ func (m *mockA2ATransport) Destroy() error {
 }
 
 // Test fixtures
-func newTestAgent(transport a2aclient.Transport, opts *a2aagent.Options) *a2aagent.Agent {
+func newTestAgent(transport a2aclient.Transport, opts a2aagent.Options) *a2aagent.Agent {
 	card := &a2a.AgentCard{
 		URL:                "test://localhost",
 		PreferredTransport: "test",
@@ -127,7 +127,7 @@ func TestConstructorWithAllParameters(t *testing.T) {
 	testDisplayName := "test-display-name"
 
 	transport := &mockA2ATransport{}
-	opts := &a2aagent.Options{
+	opts := a2aagent.Options{
 		ID:          testID,
 		Name:        testName,
 		Description: testDescription,
@@ -153,13 +153,13 @@ func TestConstructorWithNilClient(t *testing.T) {
 			t.Error("Expected panic when client is nil")
 		}
 	}()
-	a2aagent.NewAgent(nil, nil)
+	a2aagent.NewAgent(nil, a2aagent.Options{})
 }
 
 // TestConstructorWithDefaultParameters tests default parameter behavior
 func TestConstructorWithDefaultParameters(t *testing.T) {
 	transport := &mockA2ATransport{}
-	a := newTestAgent(transport, nil)
+	a := newTestAgent(transport, a2aagent.Options{})
 
 	id := a.Identity().ID()
 	if id == "" {
@@ -176,7 +176,7 @@ func TestConstructorWithDefaultParameters(t *testing.T) {
 // TestRunAllowsNonUserRoleMessages tests that non-user role messages are accepted
 func TestRunAllowsNonUserRoleMessages(t *testing.T) {
 	transport := &mockA2ATransport{}
-	a := newTestAgent(transport, nil)
+	a := newTestAgent(transport, a2aagent.Options{})
 
 	inputMessages := []agent.Option{
 		agent.WithMessage(&message.Message{Role: message.RoleSystem, Contents: []message.Content{&message.TextContent{Text: "I am a system message"}}}),
@@ -201,7 +201,7 @@ func TestRunWithValidUserMessage(t *testing.T) {
 			},
 		},
 	}
-	a := newTestAgent(transport, nil)
+	a := newTestAgent(transport, a2aagent.Options{})
 
 	result, err := agent.RunText(t.Context(), a, "Hello, world!")
 	if err != nil {
@@ -274,7 +274,7 @@ func TestRunWithNewThread(t *testing.T) {
 			ContextID: "new-context-id",
 		},
 	}
-	a := newTestAgent(transport, nil)
+	a := newTestAgent(transport, a2aagent.Options{})
 
 	thread := a.NewThread()
 	_, err := agent.RunText(t.Context(), a, "Test message", agent.WithThread(thread))
@@ -294,7 +294,7 @@ func TestRunWithNewThread(t *testing.T) {
 // TestRunWithExistingThread tests that existing thread context ID is used
 func TestRunWithExistingThread(t *testing.T) {
 	transport := &mockA2ATransport{}
-	a := newTestAgent(transport, nil)
+	a := newTestAgent(transport, a2aagent.Options{})
 
 	thread := a.NewThreadWithContextID("existing-context-id")
 
@@ -322,7 +322,7 @@ func TestRunWithThreadHavingDifferentContextID(t *testing.T) {
 			ContextID: "different-context",
 		},
 	}
-	a := newTestAgent(transport, nil)
+	a := newTestAgent(transport, a2aagent.Options{})
 
 	thread := a.NewThreadWithContextID("existing-context-id")
 
@@ -342,7 +342,7 @@ func TestRunStreamingAsyncWithValidUserMessage(t *testing.T) {
 			ContextID: "stream-context",
 		},
 	}
-	a := newTestAgent(transport, nil)
+	a := newTestAgent(transport, a2aagent.Options{})
 
 	var updates []*agent.RunResponseUpdate
 	for update, err := range agent.RunTextStream(t.Context(), a, "Hello, streaming!") {
@@ -422,7 +422,7 @@ func TestRunStreamingAsyncWithThread(t *testing.T) {
 			ContextID: "new-stream-context",
 		},
 	}
-	a := newTestAgent(transport, nil)
+	a := newTestAgent(transport, a2aagent.Options{})
 
 	thread := a.NewThread()
 
@@ -446,7 +446,7 @@ func TestRunStreamingAsyncWithExistingThread(t *testing.T) {
 	transport := &mockA2ATransport{
 		streamingResponseToReturn: &a2a.Message{},
 	}
-	a := newTestAgent(transport, nil)
+	a := newTestAgent(transport, a2aagent.Options{})
 
 	thread := a.NewThreadWithContextID("existing-context-id")
 
@@ -475,7 +475,7 @@ func TestRunStreamingAsyncWithThreadHavingDifferentContextID(t *testing.T) {
 			ContextID: "different-context",
 		},
 	}
-	a := newTestAgent(transport, nil)
+	a := newTestAgent(transport, a2aagent.Options{})
 
 	thread := a.NewThreadWithContextID("existing-context-id")
 
@@ -502,7 +502,7 @@ func TestRunStreamingAsyncAllowsNonUserRoleMessages(t *testing.T) {
 			ContextID: "new-stream-context",
 		},
 	}
-	a := newTestAgent(transport, nil)
+	a := newTestAgent(transport, a2aagent.Options{})
 
 	inputMessages := []agent.Option{
 		agent.WithMessage(&message.Message{Role: message.RoleSystem, Contents: []message.Content{&message.TextContent{Text: "I am a system message"}}}),
@@ -520,7 +520,7 @@ func TestRunStreamingAsyncAllowsNonUserRoleMessages(t *testing.T) {
 // TestRunWithHostedFileContent tests conversion of hosted file content to file part
 func TestRunWithHostedFileContent(t *testing.T) {
 	transport := &mockA2ATransport{}
-	a := newTestAgent(transport, nil)
+	a := newTestAgent(transport, a2aagent.Options{})
 
 	inputMessages := []agent.Option{
 		agent.WithMessage(&message.Message{

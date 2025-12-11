@@ -1,9 +1,12 @@
+// Copyright (c) Microsoft. All rights reserved.
+
+// This sample shows how to create and use an Agent as a function tool.
+
 package main
 
 import (
 	"context"
 	"fmt"
-	"math/rand"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
@@ -16,15 +19,14 @@ var weatherTool = functool.MustNew(&functool.Func{
 	Name:        "weather",
 	Description: "Get the current weather for a given location",
 }, func(_ context.Context, location string) (string, error) {
-	conditions := []string{"sunny", "cloudy", "rainy", "stormy"}
-	return fmt.Sprintf("The weather in %s is %s with a high of %d°C.", location, conditions[rand.Intn(len(conditions))], rand.Intn(21)+10), nil
+	return fmt.Sprintf("The weather in %s is cloudy with a high of 15°C.", location), nil
 })
 
 func main() {
-	// Create the chat client and agent, and provide the function tool to the agent.
+	// Create the agent and provide the function tool.
 	weatherAgent := openai.NewChatAgent(openai.ClientConfig{
 		Model: "gpt-5-nano",
-	}, &chatagent.Options{
+	}, chatagent.Options{
 		Instructions: "You answer questions about the weather.",
 		Name:         "WeatherAgent",
 		Description:  "An agent that answers questions about the weather.",
@@ -33,17 +35,15 @@ func main() {
 		},
 	})
 
+	// Create the main agent, and provide the weather agent as a function tool.
 	a := openai.NewChatAgent(openai.ClientConfig{
 		Model: "gpt-5-nano",
-	}, &chatagent.Options{
+	}, chatagent.Options{
 		Instructions: "You are a helpful assistant who responds in French.",
 		ChatOptions: &chatagent.ChatOptions{
 			Tools: []tool.Tool{agent.FuncTool(weatherAgent, nil)},
 		},
 	})
-	resp, err := agent.RunText(context.Background(), a, "What is the weather like in Amsterdam?")
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println(resp)
+
+	fmt.Println(agent.RunText(context.Background(), a, "What is the weather like in Amsterdam?"))
 }

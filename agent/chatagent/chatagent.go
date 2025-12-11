@@ -28,21 +28,16 @@ type Agent struct {
 }
 
 // NewAgent creates a new chat agent with the given chat client and options.
-func NewAgent(client chatclient.Client, options *Options) *Agent {
-	var opts Options
-	if options != nil {
-		opts = *options.Clone()
-		options = nil // prevent further use of the original options
-	}
-	if !opts.UseProvidedChatClientAsIs {
+func NewAgent(client chatclient.Client, options Options) *Agent {
+	if !options.UseProvidedChatClientAsIs {
 		client = chatclient.NewFunctionInvoking(client, &chatclient.FunctionInvokingOptions{
-			Logger: opts.Logger,
+			Logger: options.Logger,
 		})
 	}
 	return &Agent{
 		Client:  client,
-		Options: opts,
-		iden:    agent.NewIdentity(opts.ID, opts.Name, opts.Description),
+		Options: options,
+		iden:    agent.NewIdentity(options.ID, options.Name, options.Description),
 	}
 }
 

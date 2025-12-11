@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/chatagent"
 	"github.com/microsoft/agent-framework-go/anthropic"
 )
 
@@ -20,7 +21,7 @@ func main() {
 	a := anthropic.NewChatAgent(anthropic.ClientConfig{
 		Model:  "claude-sonnet-4-5",
 		APIKey: os.Getenv("ANTHROPIC_API_KEY"),
-	}, nil)
+	}, chatagent.Options{})
 
 	nonStreamingExample(a, "What's the weather like in Seattle?")
 	streamingExample(a, "What's the weather like in Portland, Oregon?")

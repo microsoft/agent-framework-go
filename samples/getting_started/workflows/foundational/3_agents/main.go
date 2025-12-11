@@ -57,7 +57,7 @@ func main() {
 func newAgent(language string) agent.Agent {
 	return openai.NewChatAgent(openai.ClientConfig{
 		Model: "gpt-5-nano",
-	}, &chatagent.Options{
+	}, chatagent.Options{
 		Instructions: fmt.Sprintf("You are a helpful assistant who translates text to %s.", language),
 	})
 }
