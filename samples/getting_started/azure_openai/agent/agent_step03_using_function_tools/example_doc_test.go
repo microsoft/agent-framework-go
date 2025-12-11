@@ -28,7 +28,7 @@ func Example_functionTool() {
 		Endpoint:   "https://your-resource.openai.azure.com/",
 		Model:      "gpt-4o",
 		APIVersion: "2025-01-01-preview",
-	}, &chatagent.Options{
+	}, chatagent.Options{
 		Instructions: "You are a friendly greeter. Use the greet tool to welcome people.",
 		ChatOptions: &chatagent.ChatOptions{
 			Tools: []tool.Tool{greetTool},
@@ -72,7 +72,7 @@ func Example_multipleTools() {
 		Endpoint:   "https://your-resource.openai.azure.com/",
 		Model:      "gpt-4o",
 		APIVersion: "2025-01-01-preview",
-	}, &chatagent.Options{
+	}, chatagent.Options{
 		Instructions: "You are a calculator. Use the available tools to perform math.",
 		ChatOptions: &chatagent.ChatOptions{
 			Tools: []tool.Tool{addTool, multiplyTool},

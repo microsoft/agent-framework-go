@@ -57,7 +57,7 @@ func TestMultiTurnConversation(t *testing.T) {
 		Endpoint:   endpoint,
 		Model:      deployment,
 		APIVersion: "2025-01-01-preview",
-	}, &chatagent.Options{
+	}, chatagent.Options{
 		Instructions: "You are good at telling jokes.",
 		Name:         "Joker",
 	})

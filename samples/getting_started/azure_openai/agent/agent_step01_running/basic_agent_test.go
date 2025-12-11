@@ -66,7 +66,7 @@ func TestAzureChatBasic(t *testing.T) {
 		Endpoint:   endpoint,
 		Model:      deployment,
 		APIVersion: "2025-01-01-preview",
-	}, &chatagent.Options{
+	}, chatagent.Options{
 		Instructions: "You are a helpful weather assistant. Use the weather tool when asked about weather conditions.",
 		ChatOptions: &chatagent.ChatOptions{
 			Tools: []tool.Tool{weatherTool},

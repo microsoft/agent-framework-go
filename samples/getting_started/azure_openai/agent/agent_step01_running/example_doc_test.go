@@ -18,7 +18,7 @@ func Example_basicAgent() {
 		Endpoint:   "https://your-resource.openai.azure.com/",
 		Model:      "gpt-4o",
 		APIVersion: "2025-01-01-preview",
-	}, &chatagent.Options{
+	}, chatagent.Options{
 		Instructions: "You are a helpful assistant.",
 	})
 
@@ -41,7 +41,7 @@ func Example_streamingResponse() {
 		Endpoint:   "https://your-resource.openai.azure.com/",
 		Model:      "gpt-4o",
 		APIVersion: "2025-01-01-preview",
-	}, nil)
+	}, chatagent.Options{})
 
 	ctx := context.Background()
 
