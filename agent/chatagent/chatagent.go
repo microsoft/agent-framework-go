@@ -11,6 +11,7 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/chatagent/chatclient"
+	"github.com/microsoft/agent-framework-go/agent/middleware/autocall"
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/param"
@@ -29,11 +30,6 @@ type Agent struct {
 
 // NewAgent creates a new chat agent with the given chat client and options.
 func NewAgent(client chatclient.Client, options Options) *Agent {
-	if !options.UseProvidedChatClientAsIs {
-		client = chatclient.NewFunctionInvoking(client, &chatclient.FunctionInvokingOptions{
-			Logger: options.Logger,
-		})
-	}
 	return &Agent{
 		Client:  client,
 		Options: options,
@@ -47,9 +43,17 @@ func (a *Agent) Identity() agent.Identity {
 
 func (a *Agent) Capabilities() agent.Capabilities {
 	caps := a.Client.Capabilities()
+	middlewares := a.Options.Middlewares
+	if middlewares == nil {
+		middlewares = []agent.Middleware{
+			autocall.New(autocall.Options{}),
+		}
+	}
 	return agent.Capabilities{
 		Streaming:        caps.Streaming,
 		StructuredOutput: caps.StructuredOutput,
+		Middlewares:      middlewares,
+		Tools:            a.Options.ChatOptions.Tools,
 	}
 }
 

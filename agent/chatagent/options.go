@@ -19,7 +19,8 @@ type Options struct {
 	ChatOptions  *ChatOptions
 	Logger       *slog.Logger
 
-	UseProvidedChatClientAsIs bool
+	// If nil, a default middleware chain will be used.
+	Middlewares []agent.Middleware
 
 	NewMessageStore    func() memory.MessageStore
 	NewContextProvider func() memory.ContextProvider

@@ -1,123 +1,104 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package chatclient_test
+package autocall_test
 
 import (
 	"context"
 	"fmt"
-	"iter"
+	"slices"
 	"testing"
 
-	"github.com/microsoft/agent-framework-go/agent/chatagent/chatclient"
+	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/agenttest"
+	"github.com/microsoft/agent-framework-go/agent/middleware/autocall"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 )
 
-// approvalTestClient is a test client for approval tests that supports multi-round responses
-type approvalTestClient struct {
-	responses         [][]*message.Message // Queue of response messages for multiple rounds
-	expectedInputs    [][]*message.Message // Queue of expected input messages for validation
-	currentRound      int
-	streamingCallback func(messages []*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error]
-}
-
-func (c *approvalTestClient) Capabilities() chatclient.Capabilities {
-	return chatclient.Capabilities{}
-}
-
-func (c *approvalTestClient) Response(ctx context.Context, opts chatclient.ChatOptions, messages ...*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error] {
-	if c.streamingCallback != nil {
-		return c.streamingCallback(messages)
-	}
-
-	if c.currentRound >= len(c.responses) {
-		return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
-			yield(nil, fmt.Errorf("unexpected call to Response, round %d, expected %d rounds", c.currentRound, len(c.responses)))
-		}
-	}
-
-	responseMessages := c.responses[c.currentRound]
-	c.currentRound++
-
-	return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
-		for _, msg := range responseMessages {
-			for _, content := range msg.Contents {
-				update := &chatclient.ChatResponseUpdate{
-					Role:           msg.Role,
-					Contents:       []message.Content{content},
-					AuthorName:     msg.AuthorName,
-					MessageID:      msg.ID,
-					ConversationID: opts.ConversationID,
-				}
-				if !yield(update, nil) {
-					return
-				}
-			}
+func expectedMessages(t *testing.T, expected ...*message.Message) func(context.Context, ...agent.Option) {
+	return func(ctx context.Context, opts ...agent.Option) {
+		got := slices.Collect(agent.GetOptions(opts, agent.WithMessage))
+		if err := agenttest.MessagesEqual(expected, got); err != nil {
+			t.Errorf("Messages not equal: %v", err)
 		}
 	}
 }
 
 // invokeAndAssertApproval is the helper for approval tests
-func invokeAndAssertApproval(t *testing.T, options chatclient.ChatOptions, input []*message.Message,
-	downstreamClientOutput []*message.Message, expectedOutput []*message.Message,
-	expectedDownstreamClientInput []*message.Message, additionalTools []tool.Tool) {
+func invokeAndAssertApproval(t *testing.T, tools []tool.Tool, input []*message.Message,
+	downstreamAgentOutput []*agent.RunResponseUpdate, expectedOutput []*agent.RunResponseUpdate,
+	expectedDownstreamAgentInput []*message.Message, additionalTools []tool.Tool) {
 
-	client := &approvalTestClient{
-		responses: [][]*message.Message{downstreamClientOutput},
+	var cb func(context.Context, ...agent.Option)
+	if expectedDownstreamAgentInput != nil {
+		cb = expectedMessages(t, expectedDownstreamAgentInput...)
+	}
+	var rb = agenttest.NewResponseBuilder(cb)
+	for _, resp := range downstreamAgentOutput {
+		rb.Add(resp)
 	}
 
-	if expectedDownstreamClientInput != nil {
-		client.expectedInputs = [][]*message.Message{expectedDownstreamClientInput}
+	runner := &agenttest.Runner{
+		Responses: rb.Build(),
 	}
 
-	invokeAndAssertApprovalWithClient(t, client, options, input, expectedOutput, additionalTools)
+	invokeAndAssertApprovalWithAgent(t, runner, tools, input, expectedOutput, additionalTools)
 }
 
-// invokeAndAssertApprovalWithClient performs streaming test execution
-func invokeAndAssertApprovalWithClient(t *testing.T, innerClient chatclient.Client,
-	options chatclient.ChatOptions, input []*message.Message,
-	expectedOutput []*message.Message, additionalTools []tool.Tool) {
+// invokeAndAssertApprovalWithAgent performs streaming test execution
+func invokeAndAssertApprovalWithAgent(t *testing.T, runner agent.Runner,
+	tools []tool.Tool, input []*message.Message,
+	expectedOutput []*agent.RunResponseUpdate, additionalTools []tool.Tool) {
 
-	functionInvokingOptions := &chatclient.FunctionInvokingOptions{}
+	autocallOptions := autocall.Options{
+		NewID: func() string { return "" },
+	}
 	if additionalTools != nil {
-		functionInvokingOptions.AdditionalTools = additionalTools
+		autocallOptions.AdditionalTools = additionalTools
 	}
 
-	client := chatclient.NewFunctionInvoking(innerClient, functionInvokingOptions)
-	ctx := context.Background()
+	ctx := t.Context()
+
+	// Build options
+	opts := []agent.Option{}
+	for _, msg := range input {
+		opts = append(opts, agent.WithMessage(msg))
+	}
+	for _, tool := range tools {
+		opts = append(opts, agent.WithTool(tool))
+	}
 
 	// Collect all streaming updates into messages
-
-	var updates []*chatclient.ChatResponseUpdate
-	for update, err := range client.Response(ctx, options, input...) {
+	var updates []*agent.RunResponseUpdate
+	for update, err := range autocall.New(autocallOptions).Run(ctx, runner, opts...) {
 		if err != nil {
 			t.Fatalf("StreamingResponse failed: %v", err)
 		}
 		updates = append(updates, update)
 	}
-	msgs := chatclient.NewMessageFromUpdates(updates)
-	assertMessageListsEqual(t, expectedOutput, msgs)
+	if err := agenttest.AgentRunResponseUpdatesEqual(expectedOutput, updates); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // expectApprovalError expects an error during streaming invocation
-func expectApprovalError(t *testing.T, options chatclient.ChatOptions, input []*message.Message,
-	downstreamClientOutput []*message.Message, expectedErrorMsg string, additionalTools []tool.Tool) {
+func expectApprovalError(t *testing.T, tools []tool.Tool, input []*message.Message, expectedErrorMsg string) {
+	runner := &agenttest.Runner{}
 
-	client := &approvalTestClient{
-		responses: [][]*message.Message{downstreamClientOutput},
+	ctx := t.Context()
+
+	// Build options
+	opts := []agent.Option{}
+	for _, msg := range input {
+		opts = append(opts, agent.WithMessage(msg))
 	}
-
-	functionInvokingOptions := &chatclient.FunctionInvokingOptions{}
-	if additionalTools != nil {
-		functionInvokingOptions.AdditionalTools = additionalTools
+	for _, tool := range tools {
+		opts = append(opts, agent.WithTool(tool))
 	}
-
-	fiClient := chatclient.NewFunctionInvoking(client, functionInvokingOptions)
-	ctx := context.Background()
 
 	var lastErr error
-	for _, err := range fiClient.Response(ctx, options, input...) {
+	for _, err := range autocall.New(autocall.Options{}).Run(ctx, runner, opts...) {
 		if err != nil {
 			lastErr = err
 			break
@@ -140,34 +121,34 @@ func TestFunctionInvoking_AllFunctionCallsReplacedWithApprovalsWhenAllRequireApp
 		name               string
 		useAdditionalTools bool
 	}{
-		{"with_chat_options_tools", false},
+		{"with_agent_options_tools", false},
 		{"with_additional_tools", true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tools := []tool.Tool{
+			toolList := []tool.Tool{
 				tool.ApprovalRequiredFunc(createFunc1()),
 				tool.ApprovalRequiredFunc(createFunc2()),
 			}
 
-			options := chatclient.ChatOptions{Tools: tools}
+			tools := toolList
 			if tt.useAdditionalTools {
-				options.Tools = nil
+				tools = nil
 			}
 
 			input := []*message.Message{
 				message.New(&message.TextContent{Text: "hello"}),
 			}
 
-			downstreamClientOutput := []*message.Message{
+			downstreamAgentOutput := []*agent.RunResponseUpdate{
 				{Role: message.RoleAssistant, Contents: []message.Content{
 					&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
 					&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`},
 				}},
 			}
 
-			expectedOutput := []*message.Message{
+			expectedOutput := []*agent.RunResponseUpdate{
 				{Role: message.RoleAssistant, Contents: []message.Content{
 					&message.FunctionApprovalRequestContent{ID: "callId1", FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
 					&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
@@ -176,10 +157,10 @@ func TestFunctionInvoking_AllFunctionCallsReplacedWithApprovalsWhenAllRequireApp
 
 			additionalTools := []tool.Tool(nil)
 			if tt.useAdditionalTools {
-				additionalTools = tools
+				additionalTools = toolList
 			}
 
-			invokeAndAssertApproval(t, options, input, downstreamClientOutput, expectedOutput, nil, additionalTools)
+			invokeAndAssertApproval(t, tools, input, downstreamAgentOutput, expectedOutput, nil, additionalTools)
 		})
 	}
 }
@@ -187,32 +168,30 @@ func TestFunctionInvoking_AllFunctionCallsReplacedWithApprovalsWhenAllRequireApp
 // TestFunctionInvoking_AllFunctionCallsReplacedWithApprovalsWhenAnyRequireApproval tests that
 // all function calls are replaced with approval requests when any function requires approval
 func TestFunctionInvoking_AllFunctionCallsReplacedWithApprovalsWhenAnyRequireApproval(t *testing.T) {
-	options := chatclient.ChatOptions{
-		Tools: []tool.Tool{
-			tool.ApprovalRequiredFunc(createFunc1()),
-			createFunc2(),
-		},
+	tools := []tool.Tool{
+		tool.ApprovalRequiredFunc(createFunc1()),
+		createFunc2(),
 	}
 
 	input := []*message.Message{
 		message.New(&message.TextContent{Text: "hello"}),
 	}
 
-	downstreamClientOutput := []*message.Message{
+	downstreamAgentOutput := []*agent.RunResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
 			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`},
 		}},
 	}
 
-	expectedOutput := []*message.Message{
+	expectedOutput := []*agent.RunResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionApprovalRequestContent{ID: "callId1", FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
 			&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
 		}},
 	}
 
-	invokeAndAssertApproval(t, options, input, downstreamClientOutput, expectedOutput, nil, nil)
+	invokeAndAssertApproval(t, tools, input, downstreamAgentOutput, expectedOutput, nil, nil)
 }
 
 // TestFunctionInvoking_AllFunctionCallsReplacedWithApprovalsWhenAnyRequestOrAdditionalRequireApproval tests that
@@ -244,40 +223,34 @@ func TestFunctionInvoking_AllFunctionCallsReplacedWithApprovalsWhenAnyRequestOrA
 				additionalTools = []tool.Tool{func1}
 			}
 
-			options := chatclient.ChatOptions{
-				Tools: chatOptionsTools,
-			}
-
 			input := []*message.Message{
 				message.New(&message.TextContent{Text: "hello"}),
 			}
 
-			downstreamClientOutput := []*message.Message{
+			downstreamAgentOutput := []*agent.RunResponseUpdate{
 				{Role: message.RoleAssistant, Contents: []message.Content{
 					&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
 					&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`},
 				}},
 			}
 
-			expectedOutput := []*message.Message{
+			expectedOutput := []*agent.RunResponseUpdate{
 				{Role: message.RoleAssistant, Contents: []message.Content{
 					&message.FunctionApprovalRequestContent{ID: "callId1", FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
 					&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
 				}},
 			}
 
-			invokeAndAssertApproval(t, options, input, downstreamClientOutput, expectedOutput, nil, additionalTools)
+			invokeAndAssertApproval(t, chatOptionsTools, input, downstreamAgentOutput, expectedOutput, nil, additionalTools)
 		})
 	}
 }
 
 // TestFunctionInvoking_ApprovedApprovalResponsesAreExecuted tests that approved approval responses are executed
 func TestFunctionInvoking_ApprovedApprovalResponsesAreExecuted(t *testing.T) {
-	options := chatclient.ChatOptions{
-		Tools: []tool.Tool{
-			tool.ApprovalRequiredFunc(createFunc1()),
-			createFunc2(),
-		},
+	tools := []tool.Tool{
+		tool.ApprovalRequiredFunc(createFunc1()),
+		createFunc2(),
 	}
 
 	// Input includes: user message, approval requests (from previous turn), and approval responses
@@ -293,28 +266,24 @@ func TestFunctionInvoking_ApprovedApprovalResponsesAreExecuted(t *testing.T) {
 		),
 	}
 
-	// Downstream client receives: user message, function calls (not approval requests), and function results
-	expectedDownstreamClientInput := []*message.Message{
+	// Downstream agent receives: user message and function results
+	expectedDownstreamAgentInput := []*message.Message{
 		message.New(&message.TextContent{Text: "hello"}),
-		{Role: message.RoleAssistant, Contents: []message.Content{
-			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
-			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`},
-		}},
 		{Role: message.RoleTool, Contents: []message.Content{
 			&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
 			&message.FunctionResultContent{CallID: "callId2", Result: "Result 2: 42"},
 		}},
 	}
 
-	// Downstream client returns a simple text response
-	downstreamClientOutput := []*message.Message{
+	// Downstream agent returns a simple text response
+	downstreamAgentOutput := []*agent.RunResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.TextContent{Text: "world"},
 		}},
 	}
 
 	// Final output includes: function calls, function results, and the assistant response
-	expectedOutput := []*message.Message{
+	expectedOutput := []*agent.RunResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
 			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`},
@@ -328,17 +297,15 @@ func TestFunctionInvoking_ApprovedApprovalResponsesAreExecuted(t *testing.T) {
 		}},
 	}
 
-	invokeAndAssertApproval(t, options, input, downstreamClientOutput, expectedOutput, expectedDownstreamClientInput, nil)
+	invokeAndAssertApproval(t, tools, input, downstreamAgentOutput, expectedOutput, expectedDownstreamAgentInput, nil)
 }
 
 // TestFunctionInvoking_ApprovedApprovalResponsesFromSeparateFCCMessagesAreExecuted tests that approved approval responses
 // from separate assistant messages (each with their own MessageId) are properly aggregated and executed
 func TestFunctionInvoking_ApprovedApprovalResponsesFromSeparateFCCMessagesAreExecuted(t *testing.T) {
-	options := chatclient.ChatOptions{
-		Tools: []tool.Tool{
-			tool.ApprovalRequiredFunc(createFunc1()),
-			createFunc2(),
-		},
+	tools := []tool.Tool{
+		tool.ApprovalRequiredFunc(createFunc1()),
+		createFunc2(),
 	}
 
 	// Input has approval requests in separate assistant messages with different IDs,
@@ -359,31 +326,25 @@ func TestFunctionInvoking_ApprovedApprovalResponsesFromSeparateFCCMessagesAreExe
 		),
 	}
 
-	// Downstream client receives function calls with their original message IDs preserved
-	expectedDownstreamClientInput := []*message.Message{
+	// Downstream agent receives function calls with their original message IDs preserved
+	expectedDownstreamAgentInput := []*message.Message{
 		message.New(&message.TextContent{Text: "hello"}),
-		{Role: message.RoleAssistant, ID: "resp1", Contents: []message.Content{
-			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
-		}},
-		{Role: message.RoleAssistant, ID: "resp2", Contents: []message.Content{
-			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`},
-		}},
 		{Role: message.RoleTool, Contents: []message.Content{
 			&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
 			&message.FunctionResultContent{CallID: "callId2", Result: "Result 2: 42"},
 		}},
 	}
 
-	downstreamClientOutput := []*message.Message{
+	downstreamAgentOutput := []*agent.RunResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "world"}}},
 	}
 
 	// Output includes the function calls, results, and downstream response
-	expectedOutput := []*message.Message{
-		{Role: message.RoleAssistant, ID: "resp1", Contents: []message.Content{
+	expectedOutput := []*agent.RunResponseUpdate{
+		{MessageID: "resp1", ResponseID: "resp1", Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
 		}},
-		{Role: message.RoleAssistant, ID: "resp2", Contents: []message.Content{
+		{MessageID: "resp2", ResponseID: "resp2", Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`},
 		}},
 		{Role: message.RoleTool, Contents: []message.Content{
@@ -393,16 +354,14 @@ func TestFunctionInvoking_ApprovedApprovalResponsesFromSeparateFCCMessagesAreExe
 		{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "world"}}},
 	}
 
-	invokeAndAssertApproval(t, options, input, downstreamClientOutput, expectedOutput, expectedDownstreamClientInput, nil)
+	invokeAndAssertApproval(t, tools, input, downstreamAgentOutput, expectedOutput, expectedDownstreamAgentInput, nil)
 }
 
 // TestFunctionInvoking_RejectedApprovalResponsesAreFailed tests that rejected approval responses fail with error messages
 func TestFunctionInvoking_RejectedApprovalResponsesAreFailed(t *testing.T) {
-	options := chatclient.ChatOptions{
-		Tools: []tool.Tool{
-			tool.ApprovalRequiredFunc(createFunc1()),
-			createFunc2(),
-		},
+	tools := []tool.Tool{
+		tool.ApprovalRequiredFunc(createFunc1()),
+		createFunc2(),
 	}
 
 	input := []*message.Message{
@@ -417,8 +376,21 @@ func TestFunctionInvoking_RejectedApprovalResponsesAreFailed(t *testing.T) {
 		),
 	}
 
-	expectedDownstreamClientInput := []*message.Message{
+	expectedDownstreamAgentInput := []*message.Message{
 		message.New(&message.TextContent{Text: "hello"}),
+		{Role: message.RoleTool, Contents: []message.Content{
+			&message.FunctionResultContent{CallID: "callId1", Result: "Error: Tool call invocation was rejected by user."},
+			&message.FunctionResultContent{CallID: "callId2", Result: "Error: Tool call invocation was rejected by user."},
+		}},
+	}
+
+	downstreamAgentOutput := []*agent.RunResponseUpdate{
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			&message.TextContent{Text: "world"},
+		}},
+	}
+
+	expectedOutput := []*agent.RunResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
 			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`},
@@ -427,39 +399,20 @@ func TestFunctionInvoking_RejectedApprovalResponsesAreFailed(t *testing.T) {
 			&message.FunctionResultContent{CallID: "callId1", Result: "Error: Tool call invocation was rejected by user."},
 			&message.FunctionResultContent{CallID: "callId2", Result: "Error: Tool call invocation was rejected by user."},
 		}},
-	}
-
-	downstreamClientOutput := []*message.Message{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.TextContent{Text: "world"},
 		}},
 	}
 
-	expectedOutput := []*message.Message{
-		{Role: message.RoleAssistant, Contents: []message.Content{
-			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
-			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`},
-		}},
-		{Role: message.RoleTool, Contents: []message.Content{
-			&message.FunctionResultContent{CallID: "callId1", Result: "Error: Tool call invocation was rejected by user."},
-			&message.FunctionResultContent{CallID: "callId2", Result: "Error: Tool call invocation was rejected by user."},
-		}},
-		{Role: message.RoleAssistant, Contents: []message.Content{
-			&message.TextContent{Text: "world"},
-		}},
-	}
-
-	invokeAndAssertApproval(t, options, input, downstreamClientOutput, expectedOutput, expectedDownstreamClientInput, nil)
+	invokeAndAssertApproval(t, tools, input, downstreamAgentOutput, expectedOutput, expectedDownstreamAgentInput, nil)
 }
 
 // TestFunctionInvoking_MixedApprovedAndRejectedApprovalResponsesAreExecutedAndFailed tests that
 // mixed approved and rejected approval responses are handled correctly
 func TestFunctionInvoking_MixedApprovedAndRejectedApprovalResponsesAreExecutedAndFailed(t *testing.T) {
-	options := chatclient.ChatOptions{
-		Tools: []tool.Tool{
-			tool.ApprovalRequiredFunc(createFunc1()),
-			createFunc2(),
-		},
+	tools := []tool.Tool{
+		tool.ApprovalRequiredFunc(createFunc1()),
+		createFunc2(),
 	}
 
 	input := []*message.Message{
@@ -474,9 +427,24 @@ func TestFunctionInvoking_MixedApprovedAndRejectedApprovalResponsesAreExecutedAn
 		),
 	}
 
-	expectedDownstreamClientInput := []*message.Message{
+	expectedDownstreamAgentInput := []*message.Message{
 		message.New(&message.TextContent{Text: "hello"}),
+		{Role: message.RoleTool, Contents: []message.Content{
+			&message.FunctionResultContent{CallID: "callId1", Result: "Error: Tool call invocation was rejected by user."},
+		}},
+		{Role: message.RoleTool, Contents: []message.Content{
+			&message.FunctionResultContent{CallID: "callId2", Result: "Result 2: 42"},
+		}},
+	}
+
+	downstreamAgentOutput := []*agent.RunResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{
+			&message.TextContent{Text: "world"},
+		}},
+	}
+
+	expectedOutput := []*agent.RunResponseUpdate{
+		{MessageID: "resp1", ResponseID: "resp1", Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
 			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`},
 		}},
@@ -486,39 +454,20 @@ func TestFunctionInvoking_MixedApprovedAndRejectedApprovalResponsesAreExecutedAn
 		{Role: message.RoleTool, Contents: []message.Content{
 			&message.FunctionResultContent{CallID: "callId2", Result: "Result 2: 42"},
 		}},
-	}
-
-	downstreamClientOutput := []*message.Message{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.TextContent{Text: "world"},
 		}},
 	}
 
-	expectedOutput := []*message.Message{
-		{Role: message.RoleAssistant, Contents: []message.Content{
-			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
-			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`},
-		}},
-		{Role: message.RoleTool, Contents: []message.Content{
-			&message.FunctionResultContent{CallID: "callId1", Result: "Error: Tool call invocation was rejected by user."},
-			&message.FunctionResultContent{CallID: "callId2", Result: "Result 2: 42"},
-		}},
-		{Role: message.RoleAssistant, Contents: []message.Content{
-			&message.TextContent{Text: "world"},
-		}},
-	}
-
-	invokeAndAssertApproval(t, options, input, downstreamClientOutput, expectedOutput, expectedDownstreamClientInput, nil)
+	invokeAndAssertApproval(t, tools, input, downstreamAgentOutput, expectedOutput, expectedDownstreamAgentInput, nil)
 }
 
 // TestFunctionInvoking_ApprovedInputsAreExecutedAndFunctionResultsAreConverted tests that
 // approved inputs are executed and function results are converted back to approval requests
 func TestFunctionInvoking_ApprovedInputsAreExecutedAndFunctionResultsAreConverted(t *testing.T) {
-	options := chatclient.ChatOptions{
-		Tools: []tool.Tool{
-			createFunc1(),
-			tool.ApprovalRequiredFunc(createFunc2()),
-		},
+	tools := []tool.Tool{
+		createFunc1(),
+		tool.ApprovalRequiredFunc(createFunc2()),
 	}
 
 	input := []*message.Message{
@@ -533,12 +482,8 @@ func TestFunctionInvoking_ApprovedInputsAreExecutedAndFunctionResultsAreConverte
 		),
 	}
 
-	expectedDownstreamClientInput := []*message.Message{
+	expectedDownstreamAgentInput := []*message.Message{
 		message.New(&message.TextContent{Text: "hello"}),
-		{Role: message.RoleAssistant, Contents: []message.Content{
-			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
-			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`},
-		}},
 		{Role: message.RoleTool, Contents: []message.Content{
 			&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
 			&message.FunctionResultContent{CallID: "callId2", Result: "Result 2: 42"},
@@ -546,14 +491,14 @@ func TestFunctionInvoking_ApprovedInputsAreExecutedAndFunctionResultsAreConverte
 	}
 
 	// Downstream client returns a new FunctionCallContent for Func2 with different arguments
-	downstreamClientOutput := []*message.Message{
+	downstreamAgentOutput := []*agent.RunResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":3}`},
 		}},
 	}
 
 	// Output includes executed functions and the new approval request for the new Func2 call
-	expectedOutput := []*message.Message{
+	expectedOutput := []*agent.RunResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
 			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`},
@@ -567,17 +512,15 @@ func TestFunctionInvoking_ApprovedInputsAreExecutedAndFunctionResultsAreConverte
 		}},
 	}
 
-	invokeAndAssertApproval(t, options, input, downstreamClientOutput, expectedOutput, expectedDownstreamClientInput, nil)
+	invokeAndAssertApproval(t, tools, input, downstreamAgentOutput, expectedOutput, expectedDownstreamAgentInput, nil)
 }
 
 // TestFunctionInvoking_AlreadyExecutedApprovalsAreIgnored tests that already executed approvals
 // (ones that have both FunctionCallContent and FunctionResultContent in history) are ignored
 func TestFunctionInvoking_AlreadyExecutedApprovalsAreIgnored(t *testing.T) {
-	options := chatclient.ChatOptions{
-		Tools: []tool.Tool{
-			createFunc1(),
-			tool.ApprovalRequiredFunc(createFunc2()),
-		},
+	tools := []tool.Tool{
+		createFunc1(),
+		tool.ApprovalRequiredFunc(createFunc2()),
 	}
 
 	// Input includes history with already-executed approvals and a new approval to execute
@@ -614,7 +557,7 @@ func TestFunctionInvoking_AlreadyExecutedApprovalsAreIgnored(t *testing.T) {
 	}
 
 	// Downstream client should receive history with already-executed items and the new function call
-	expectedDownstreamClientInput := []*message.Message{
+	expectedDownstreamAgentInput := []*message.Message{
 		message.New(&message.TextContent{Text: "hello"}),
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
@@ -624,23 +567,20 @@ func TestFunctionInvoking_AlreadyExecutedApprovalsAreIgnored(t *testing.T) {
 			&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
 			&message.FunctionResultContent{CallID: "callId2", Result: "Result 2: 42"},
 		}},
-		{Role: message.RoleAssistant, Contents: []message.Content{
-			&message.FunctionCallContent{CallID: "callId3", Name: "Func1"},
-		}},
 		{Role: message.RoleTool, Contents: []message.Content{
 			&message.FunctionResultContent{CallID: "callId3", Result: "Result 1"},
 		}},
 	}
 
-	downstreamClientOutput := []*message.Message{
+	downstreamAgentOutput := []*agent.RunResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.TextContent{Text: "World"},
 		}},
 	}
 
 	// Output only includes the newly executed approval (not the already-executed ones from history)
-	expectedOutput := []*message.Message{
-		{Role: message.RoleAssistant, Contents: []message.Content{
+	expectedOutput := []*agent.RunResponseUpdate{
+		{MessageID: "resp2", ResponseID: "resp2", Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId3", Name: "Func1"},
 		}},
 		{Role: message.RoleTool, Contents: []message.Content{
@@ -651,46 +591,40 @@ func TestFunctionInvoking_AlreadyExecutedApprovalsAreIgnored(t *testing.T) {
 		}},
 	}
 
-	invokeAndAssertApproval(t, options, input, downstreamClientOutput, expectedOutput, expectedDownstreamClientInput, nil)
+	invokeAndAssertApproval(t, tools, input, downstreamAgentOutput, expectedOutput, expectedDownstreamAgentInput, nil)
 }
 
 // TestFunctionInvoking_MixedApprovalRequiredToolsWithNonApprovalRequiringFunctionCall tests that
 // when only some tools require approval, non-approval-requiring function calls are executed immediately
 // and don't trigger approval requests for all calls
 func TestFunctionInvoking_MixedApprovalRequiredToolsWithNonApprovalRequiringFunctionCall(t *testing.T) {
-	options := chatclient.ChatOptions{
-		Tools: []tool.Tool{
-			tool.ApprovalRequiredFunc(createFunc1()), // Func1 requires approval
-			createFunc2(),                            // Func2 does NOT require approval
-		},
+	tools := []tool.Tool{
+		tool.ApprovalRequiredFunc(createFunc1()), // Func1 requires approval
+		createFunc2(),                            // Func2 does NOT require approval
 	}
 
 	input := []*message.Message{
 		message.New(&message.TextContent{Text: "hello"}),
 	}
 
-	// Multi-round client:
+	// Multi-round agent:
 	// Round 1: Downstream returns only Func2 call (no approval required)
 	// Round 2: After executing Func2, downstream returns final response
-	client := &approvalTestClient{
-		responses: [][]*message.Message{
-			// Round 1: Only Func2 is called (doesn't require approval, so it's executed immediately)
-			{
-				{Role: message.RoleAssistant, Contents: []message.Content{
-					&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`},
-				}},
-			},
-			// Round 2: Final response after Func2 execution
-			{
-				{Role: message.RoleAssistant, Contents: []message.Content{
-					&message.TextContent{Text: "World again"},
-				}},
-			},
-		},
+
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder(expectedMessages(t, input[0])).
+			AddFunctionCall("callId2", "Func2", `{"i":42}`).
+			NewTurn(expectedMessages(t, &message.Message{
+				Role: message.RoleTool, Contents: []message.Content{
+					&message.FunctionResultContent{CallID: "callId2", Result: "Result 2: 42"},
+				},
+			})).
+			AddText("World again").
+			Build(),
 	}
 
 	// Expected output: Func2 call, result, and final response
-	expectedOutput := []*message.Message{
+	expectedOutput := []*agent.RunResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`},
 		}},
@@ -702,17 +636,15 @@ func TestFunctionInvoking_MixedApprovalRequiredToolsWithNonApprovalRequiringFunc
 		}},
 	}
 
-	invokeAndAssertApprovalWithClient(t, client, options, input, expectedOutput, nil)
+	invokeAndAssertApprovalWithAgent(t, runner, tools, input, expectedOutput, nil)
 }
 
 // TestFunctionInvoking_ApprovedApprovalResponsesWithoutApprovalRequestAreExecuted tests that
 // approval responses without preceding approval requests are still executed
 func TestFunctionInvoking_ApprovedApprovalResponsesWithoutApprovalRequestAreExecuted(t *testing.T) {
-	options := chatclient.ChatOptions{
-		Tools: []tool.Tool{
-			tool.ApprovalRequiredFunc(createFunc1()),
-			createFunc2(),
-		},
+	tools := []tool.Tool{
+		tool.ApprovalRequiredFunc(createFunc1()),
+		createFunc2(),
 	}
 
 	// Input has approval responses but NO approval requests in history
@@ -724,76 +656,21 @@ func TestFunctionInvoking_ApprovedApprovalResponsesWithoutApprovalRequestAreExec
 		),
 	}
 
-	expectedDownstreamClientInput := []*message.Message{
+	expectedDownstreamAgentInput := []*message.Message{
 		message.New(&message.TextContent{Text: "hello"}),
-		{Role: message.RoleAssistant, Contents: []message.Content{
-			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
-			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`},
-		}},
 		{Role: message.RoleTool, Contents: []message.Content{
 			&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
 			&message.FunctionResultContent{CallID: "callId2", Result: "Result 2: 42"},
 		}},
 	}
 
-	downstreamClientOutput := []*message.Message{
+	downstreamAgentOutput := []*agent.RunResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.TextContent{Text: "world"},
 		}},
 	}
 
-	expectedOutput := []*message.Message{
-		{Role: message.RoleAssistant, Contents: []message.Content{
-			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
-			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`},
-		}},
-		{Role: message.RoleTool, Contents: []message.Content{
-			&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
-			&message.FunctionResultContent{CallID: "callId2", Result: "Result 2: 42"},
-		}},
-		{Role: message.RoleAssistant, Contents: []message.Content{
-			&message.TextContent{Text: "world"},
-		}},
-	}
-
-	invokeAndAssertApproval(t, options, input, downstreamClientOutput, expectedOutput, expectedDownstreamClientInput, nil)
-}
-
-// TestFunctionInvoking_FunctionCallContentIsNotPassedToDownstreamServiceWithServiceThreads tests that
-// when using ConversationId (service threads), FunctionCallContent is not passed to downstream service
-func TestFunctionInvoking_FunctionCallContentIsNotPassedToDownstreamServiceWithServiceThreads(t *testing.T) {
-	options := chatclient.ChatOptions{
-		Tools: []tool.Tool{
-			tool.ApprovalRequiredFunc(createFunc1()),
-			createFunc2(),
-		},
-		ConversationID: "test-conversation",
-	}
-
-	// Input has only approval responses (service thread scenario)
-	input := []*message.Message{
-		message.New(
-			&message.FunctionApprovalResponseContent{ID: "callId1", Approved: true, FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
-			&message.FunctionApprovalResponseContent{ID: "callId2", Approved: true, FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
-		),
-	}
-
-	// With ConversationId, FunctionCallContent should NOT be sent to downstream
-	expectedDownstreamClientInput := []*message.Message{
-		{Role: message.RoleTool, Contents: []message.Content{
-			&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
-			&message.FunctionResultContent{CallID: "callId2", Result: "Result 2: 42"},
-		}},
-	}
-
-	downstreamClientOutput := []*message.Message{
-		{Role: message.RoleAssistant, Contents: []message.Content{
-			&message.TextContent{Text: "world"},
-		}},
-	}
-
-	// Output includes FunctionCallContent, function results, and assistant response
-	expectedOutput := []*message.Message{
+	expectedOutput := []*agent.RunResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
 			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`},
@@ -807,46 +684,43 @@ func TestFunctionInvoking_FunctionCallContentIsNotPassedToDownstreamServiceWithS
 		}},
 	}
 
-	invokeAndAssertApproval(t, options, input, downstreamClientOutput, expectedOutput, expectedDownstreamClientInput, nil)
+	invokeAndAssertApproval(t, tools, input, downstreamAgentOutput, expectedOutput, expectedDownstreamAgentInput, nil)
 }
 
 // TestFunctionInvoking_FunctionCallContentIsYieldedImmediatelyIfNoApprovalRequiredWhenStreaming tests that
 // function call content is yielded immediately when no approval is required (no approval-required functions)
 func TestFunctionInvoking_FunctionCallContentIsYieldedImmediatelyIfNoApprovalRequiredWhenStreaming(t *testing.T) {
-	options := chatclient.ChatOptions{
-		Tools: []tool.Tool{
-			createFunc1(), // No approval required
-			createFunc2(), // No approval required
-		},
+	tools := []tool.Tool{
+		createFunc1(), // No approval required
+		createFunc2(), // No approval required
 	}
 
 	input := []*message.Message{
 		message.New(&message.TextContent{Text: "hello"}),
 	}
 
-	// Multi-round client: first returns function calls, second returns final response
-	client := &approvalTestClient{
-		responses: [][]*message.Message{
-			// Round 1: Downstream returns function calls
-			{
-				{Role: message.RoleAssistant, Contents: []message.Content{
-					&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
-					&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`},
-				}},
-			},
-			// Round 2: After executing functions, downstream returns final response
-			{
-				{Role: message.RoleAssistant, Contents: []message.Content{
-					&message.TextContent{Text: "world"},
-				}},
-			},
-		},
+	// Multi-round agent: first returns function calls, second returns final response
+
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder(expectedMessages(t, input[0])).
+			AddFunctionCall("callId1", "Func1", "").
+			AddFunctionCall("callId2", "Func2", `{"i":42}`).
+			NewTurn(expectedMessages(t, &message.Message{
+				Role: message.RoleTool, Contents: []message.Content{
+					&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
+					&message.FunctionResultContent{CallID: "callId2", Result: "Result 2: 42"},
+				},
+			})).
+			AddText("world").
+			Build(),
 	}
 
 	// Expected output includes function calls, their results, and final response
-	expectedOutput := []*message.Message{
+	expectedOutput := []*agent.RunResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
+		}},
+		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`},
 		}},
 		{Role: message.RoleTool, Contents: []message.Content{
@@ -858,18 +732,15 @@ func TestFunctionInvoking_FunctionCallContentIsYieldedImmediatelyIfNoApprovalReq
 		}},
 	}
 
-	client.currentRound = 0
-	invokeAndAssertApprovalWithClient(t, client, options, input, expectedOutput, nil)
+	invokeAndAssertApprovalWithAgent(t, runner, tools, input, expectedOutput, nil)
 }
 
 // TestFunctionInvoking_FunctionCallsAreBufferedUntilApprovalRequirementEncounteredWhenStreaming tests that
 // when some functions require approval, function calls are buffered and converted to approval requests
 func TestFunctionInvoking_FunctionCallsAreBufferedUntilApprovalRequirementEncounteredWhenStreaming(t *testing.T) {
-	options := chatclient.ChatOptions{
-		Tools: []tool.Tool{
-			createFunc1(),                            // No approval required
-			tool.ApprovalRequiredFunc(createFunc2()), // Approval required
-		},
+	tools := []tool.Tool{
+		createFunc1(),                            // No approval required
+		tool.ApprovalRequiredFunc(createFunc2()), // Approval required
 	}
 
 	input := []*message.Message{
@@ -877,7 +748,7 @@ func TestFunctionInvoking_FunctionCallsAreBufferedUntilApprovalRequirementEncoun
 	}
 
 	// Downstream returns function calls
-	downstreamClientOutput := []*message.Message{
+	downstreamAgentOutput := []*agent.RunResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
 			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`},
@@ -885,24 +756,22 @@ func TestFunctionInvoking_FunctionCallsAreBufferedUntilApprovalRequirementEncoun
 	}
 
 	// Since approval is required for at least one function, ALL are converted to approval requests
-	expectedOutput := []*message.Message{
+	expectedOutput := []*agent.RunResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionApprovalRequestContent{ID: "callId1", FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
 			&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
 		}},
 	}
 
-	invokeAndAssertApproval(t, options, input, downstreamClientOutput, expectedOutput, nil, nil)
+	invokeAndAssertApproval(t, tools, input, downstreamAgentOutput, expectedOutput, nil, nil)
 }
 
 // TestFunctionInvoking_ApprovalRequestWithoutApprovalResponseThrows tests that an approval request
 // without a matching approval response throws an error
 func TestFunctionInvoking_ApprovalRequestWithoutApprovalResponseThrows(t *testing.T) {
-	options := chatclient.ChatOptions{
-		Tools: []tool.Tool{
-			tool.ApprovalRequiredFunc(createFunc1()),
-			createFunc2(),
-		},
+	tools := []tool.Tool{
+		tool.ApprovalRequiredFunc(createFunc1()),
+		createFunc2(),
 	}
 
 	input := []*message.Message{
@@ -915,7 +784,7 @@ func TestFunctionInvoking_ApprovalRequestWithoutApprovalResponseThrows(t *testin
 	expectedErrorMsg := "FunctionApprovalRequestContent found with FunctionCall.CallId(s) 'callId1' that have no matching FunctionApprovalResponseContent"
 
 	// Note: We don't pass any downstream client output since the error should occur during approval processing
-	expectApprovalError(t, options, input, nil, expectedErrorMsg, nil)
+	expectApprovalError(t, tools, input, expectedErrorMsg)
 }
 
 // Helper functions to create test tools

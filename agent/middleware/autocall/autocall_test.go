@@ -1,42 +1,25 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package chatclient_test
+package autocall_test
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"iter"
 	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/microsoft/agent-framework-go/agent/chatagent/chatclient"
+	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/agenttest"
+	"github.com/microsoft/agent-framework-go/agent/middleware/autocall"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/param"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 )
-
-// testChatClient is a minimal test implementation of Client
-type testChatClient struct {
-	responseFunc func(ctx context.Context, opts chatclient.ChatOptions, messages ...*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error]
-}
-
-func (t *testChatClient) Capabilities() chatclient.Capabilities {
-	return chatclient.Capabilities{}
-}
-
-func (t *testChatClient) Response(ctx context.Context, opts chatclient.ChatOptions, messages ...*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error] {
-	if t.responseFunc != nil {
-		return t.responseFunc(ctx, opts, messages...)
-	}
-	return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
-		// Default empty implementation
-	}
-}
 
 func TestFunctionInvoking_SupportsSingleFunctionCallPerRequest(t *testing.T) {
 	type EmptyArgs struct{}
@@ -44,21 +27,19 @@ func TestFunctionInvoking_SupportsSingleFunctionCallPerRequest(t *testing.T) {
 		I int `json:"i"`
 	}
 
-	options := chatclient.ChatOptions{
-		Tools: []tool.Tool{
-			functool.MustNew(&functool.Func{Name: "Func1", Description: "Function 1"},
-				func(ctx context.Context, args EmptyArgs) (string, error) {
-					return "Result 1", nil
-				}),
-			functool.MustNew(&functool.Func{Name: "Func2", Description: "Function 2"},
-				func(ctx context.Context, args Func2Args) (string, error) {
-					return "Result 2: 42", nil
-				}),
-			functool.MustNew(&functool.Func{Name: "VoidReturn", Description: "Void return"},
-				func(ctx context.Context, args Func2Args) (string, error) {
-					return "Success: Function completed.", nil
-				}),
-		},
+	tools := []tool.Tool{
+		functool.MustNew(&functool.Func{Name: "Func1", Description: "Function 1"},
+			func(ctx context.Context, args EmptyArgs) (string, error) {
+				return "Result 1", nil
+			}),
+		functool.MustNew(&functool.Func{Name: "Func2", Description: "Function 2"},
+			func(ctx context.Context, args Func2Args) (string, error) {
+				return "Result 2: 42", nil
+			}),
+		functool.MustNew(&functool.Func{Name: "VoidReturn", Description: "Void return"},
+			func(ctx context.Context, args Func2Args) (string, error) {
+				return "Success: Function completed.", nil
+			}),
 	}
 
 	plan := []*message.Message{
@@ -86,7 +67,7 @@ func TestFunctionInvoking_SupportsSingleFunctionCallPerRequest(t *testing.T) {
 		}},
 	}
 
-	invokeAndAssert(t, options, plan, nil, nil)
+	invokeAndAssert(t, tools, plan, nil, autocall.Options{})
 }
 
 func TestFunctionInvoking_SupportsMultipleFunctionCallsPerRequest(t *testing.T) {
@@ -107,25 +88,23 @@ func TestFunctionInvoking_SupportsMultipleFunctionCallsPerRequest(t *testing.T) 
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			options := chatclient.ChatOptions{
-				Tools: []tool.Tool{
-					functool.MustNew(&functool.Func{Name: "Func1"},
-						func(ctx context.Context, args Func1Args) (string, error) {
-							return "Result 1", nil
-						}),
-					functool.MustNew(&functool.Func{Name: "Func2"},
-						func(ctx context.Context, args Func2Args) (string, error) {
-							switch args.I {
-							case 34:
-								return "Result 2: 34", nil
-							case 56:
-								return "Result 2: 56", nil
-							case 78:
-								return "Result 2: 78", nil
-							}
-							return "Result 2", nil
-						}),
-				},
+			tools := []tool.Tool{
+				functool.MustNew(&functool.Func{Name: "Func1"},
+					func(ctx context.Context, args Func1Args) (string, error) {
+						return "Result 1", nil
+					}),
+				functool.MustNew(&functool.Func{Name: "Func2"},
+					func(ctx context.Context, args Func2Args) (string, error) {
+						switch args.I {
+						case 34:
+							return "Result 2: 34", nil
+						case 56:
+							return "Result 2: 56", nil
+						case 78:
+							return "Result 2: 78", nil
+						}
+						return "Result 2", nil
+					}),
 			}
 
 			plan := []*message.Message{
@@ -153,21 +132,21 @@ func TestFunctionInvoking_SupportsMultipleFunctionCallsPerRequest(t *testing.T) 
 				}},
 			}
 
-			functionInvokingOptions := &chatclient.FunctionInvokingOptions{
+			autocallOptions := autocall.Options{
 				AllowConcurrentInvocations: param.NewOpt(tt.allowConcurrentInvocations),
 			}
 
-			invokeAndAssert(t, options, plan, nil, functionInvokingOptions)
+			invokeAndAssert(t, tools, plan, nil, autocallOptions)
 		})
 	}
 }
 
-// invokeAndAssert is a helper that creates a test client following the given plan
-// and asserts that the function-invoking client processes it correctly.
+// invokeAndAssert is a helper that creates a test agent following the given plan
+// and asserts that the autocall middleware processes it correctly.
 // Returns the final chat history.
 // Plan should start with the initial user message and contain all expected messages.
-// functionInvokingOptions can be nil to use default settings.
-func invokeAndAssert(t *testing.T, options chatclient.ChatOptions, plan []*message.Message, expected []*message.Message, functionInvokingOptions *chatclient.FunctionInvokingOptions) []*message.Message {
+// autocallOptions can be nil to use default settings.
+func invokeAndAssert(t *testing.T, tools []tool.Tool, plan []*message.Message, expected []*message.Message, autocallOptions autocall.Options) []*message.Message {
 	t.Helper()
 
 	if len(plan) == 0 {
@@ -178,36 +157,37 @@ func invokeAndAssert(t *testing.T, options chatclient.ChatOptions, plan []*messa
 		expected = plan
 	}
 
-	innerClient := &testChatClient{
-		responseFunc: func(ctx context.Context, opts chatclient.ChatOptions, messages ...*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error] {
-			return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
-				idx := len(messages)
-				if idx >= len(plan) {
-					t.Fatalf("unexpected call to Response, message count=%d, len(plan)=%d", idx, len(plan))
-				}
-				msg := plan[idx]
-
-				// Convert message to updates
-				for _, content := range msg.Contents {
-					update := &chatclient.ChatResponseUpdate{
-						Role:     msg.Role,
-						Contents: []message.Content{content},
-					}
-					if !yield(update, nil) {
-						return
-					}
-				}
-			}
-		},
+	rb := agenttest.NewResponseBuilder()
+	for i := range plan {
+		idx := i*2 + 1
+		if idx >= len(plan) {
+			break
+		}
+		msg := plan[idx]
+		for _, content := range msg.Contents {
+			rb.Add(&agent.RunResponseUpdate{
+				Role:     msg.Role,
+				Contents: []message.Content{content},
+			})
+		}
+		rb.NewTurn()
 	}
 
-	client := chatclient.NewFunctionInvoking(innerClient, functionInvokingOptions)
-	ctx := context.Background()
+	runner := &agenttest.Runner{
+		Responses: rb.Build(),
+	}
+
 	initialMessages := []*message.Message{plan[0]}
 
+	// Build options
+	opts := []agent.Option{agent.WithMessage(initialMessages[0])}
+	for _, tool := range tools {
+		opts = append(opts, agent.WithTool(tool))
+	}
+
 	// Collect all updates
-	var updates []*chatclient.ChatResponseUpdate
-	for update, err := range client.Response(ctx, options, initialMessages...) {
+	var updates []*agent.RunResponseUpdate
+	for update, err := range autocall.New(autocallOptions).Run(t.Context(), runner, opts...) {
 		if err != nil {
 			t.Fatalf("unexpected error during streaming: %v", err)
 		}
@@ -219,7 +199,7 @@ func invokeAndAssert(t *testing.T, options chatclient.ChatOptions, plan []*messa
 	}
 
 	// Convert streaming updates back to consolidated messages
-	consolidated := chatclient.NewMessageFromUpdates(updates)
+	consolidated := agent.NewMessagesFromUpdates(updates)
 
 	// Build actual chat history
 	actual := append(initialMessages, consolidated...)
@@ -323,18 +303,6 @@ func assertMessageListsEqual(t *testing.T, expected, actual []*message.Message) 
 	}
 }
 
-// TestFunctionInvoking_InvalidArgs tests that NewFunctionInvoking panics with nil client
-func TestFunctionInvoking_InvalidArgs(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("NewFunctionInvoking with nil client should panic")
-		}
-	}()
-
-	chatclient.NewFunctionInvoking(nil, nil)
-	t.Error("Should not reach here - NewFunctionInvoking should have panicked")
-}
-
 // TestFunctionInvoking_SupportsToolsProvidedByAdditionalTools tests AdditionalTools functionality
 func TestFunctionInvoking_SupportsToolsProvidedByAdditionalTools(t *testing.T) {
 	type Func1Args struct{}
@@ -346,26 +314,24 @@ func TestFunctionInvoking_SupportsToolsProvidedByAdditionalTools(t *testing.T) {
 		name           string
 		provideOptions bool
 	}{
-		{"without_chat_options_tools", false},
-		{"with_chat_options_tools", true},
+		{"without_tools", false},
+		{"with_tools", true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var options chatclient.ChatOptions
+			var tools []tool.Tool
 			if tt.provideOptions {
-				options = chatclient.ChatOptions{
-					Tools: []tool.Tool{
-						functool.MustNew(&functool.Func{Name: "ChatOptionsFunc"},
-							func(ctx context.Context, args struct{}) (string, error) {
-								t.Error("ChatOptionsFunc should not be invoked")
-								return "Shouldn't be invoked", nil
-							}),
-					},
+				tools = []tool.Tool{
+					functool.MustNew(&functool.Func{Name: "OptionsFunc"},
+						func(ctx context.Context, args struct{}) (string, error) {
+							t.Error("OptionsFunc should not be invoked")
+							return "Shouldn't be invoked", nil
+						}),
 				}
 			}
 
-			functionInvokingOptions := &chatclient.FunctionInvokingOptions{
+			autocallOptions := autocall.Options{
 				AdditionalTools: []tool.Tool{
 					functool.MustNew(&functool.Func{Name: "Func1"},
 						func(ctx context.Context, args Func1Args) (string, error) {
@@ -407,27 +373,25 @@ func TestFunctionInvoking_SupportsToolsProvidedByAdditionalTools(t *testing.T) {
 				}},
 			}
 
-			invokeAndAssert(t, options, plan, nil, functionInvokingOptions)
+			invokeAndAssert(t, tools, plan, nil, autocallOptions)
 		})
 	}
 }
 
-// TestFunctionInvoking_PrefersToolsProvidedByChatOptions tests that ChatOptions.Tools take precedence over AdditionalTools
-func TestFunctionInvoking_PrefersToolsProvidedByChatOptions(t *testing.T) {
+// TestFunctionInvoking_PrefersToolsProvidedByOptions tests that provided tools take precedence over AdditionalTools
+func TestFunctionInvoking_PrefersToolsProvidedByOptions(t *testing.T) {
 	type Func2Args struct {
 		I int `json:"i"`
 	}
 
-	options := chatclient.ChatOptions{
-		Tools: []tool.Tool{
-			functool.MustNew(&functool.Func{Name: "Func1"},
-				func(ctx context.Context, args struct{}) (string, error) {
-					return "Result 1", nil
-				}),
-		},
+	tools := []tool.Tool{
+		functool.MustNew(&functool.Func{Name: "Func1"},
+			func(ctx context.Context, args struct{}) (string, error) {
+				return "Result 1", nil
+			}),
 	}
 
-	functionInvokingOptions := &chatclient.FunctionInvokingOptions{
+	autocallOptions := autocall.Options{
 		AdditionalTools: []tool.Tool{
 			functool.MustNew(&functool.Func{Name: "Func1"},
 				func(ctx context.Context, args struct{}) (string, error) {
@@ -470,7 +434,7 @@ func TestFunctionInvoking_PrefersToolsProvidedByChatOptions(t *testing.T) {
 		}},
 	}
 
-	invokeAndAssert(t, options, plan, nil, functionInvokingOptions)
+	invokeAndAssert(t, tools, plan, nil, autocallOptions)
 }
 
 // TestFunctionInvoking_ParallelFunctionCallsMayBeInvokedConcurrently tests concurrent invocation
@@ -479,17 +443,15 @@ func TestFunctionInvoking_ParallelFunctionCallsMayBeInvokedConcurrently(t *testi
 	remaining.Store(2)
 	done := make(chan bool)
 
-	options := chatclient.ChatOptions{
-		Tools: []tool.Tool{
-			functool.MustNew(&functool.Func{Name: "Func"},
-				func(ctx context.Context, args struct{ Arg string }) (string, error) {
-					if remaining.Add(-1) == 0 {
-						close(done)
-					}
-					<-done
-					return args.Arg + args.Arg, nil
-				}),
-		},
+	tools := []tool.Tool{
+		functool.MustNew(&functool.Func{Name: "Func"},
+			func(ctx context.Context, args struct{ Arg string }) (string, error) {
+				if remaining.Add(-1) == 0 {
+					close(done)
+				}
+				<-done
+				return args.Arg + args.Arg, nil
+			}),
 	}
 
 	plan := []*message.Message{
@@ -507,30 +469,28 @@ func TestFunctionInvoking_ParallelFunctionCallsMayBeInvokedConcurrently(t *testi
 		}},
 	}
 
-	functionInvokingOptions := &chatclient.FunctionInvokingOptions{
+	autocallOptions := autocall.Options{
 		AllowConcurrentInvocations: param.NewOpt(true),
 	}
 
-	invokeAndAssert(t, options, plan, nil, functionInvokingOptions)
+	invokeAndAssert(t, tools, plan, nil, autocallOptions)
 }
 
 // TestFunctionInvoking_ConcurrentInvocationOfParallelCallsDisabledByDefault tests serial invocation by default
 func TestFunctionInvoking_ConcurrentInvocationOfParallelCallsDisabledByDefault(t *testing.T) {
 	var activeCount atomic.Int32
 
-	options := chatclient.ChatOptions{
-		Tools: []tool.Tool{
-			functool.MustNew(&functool.Func{Name: "Func"},
-				func(ctx context.Context, args struct{ Arg string }) (string, error) {
-					activeCount.Add(1)
-					time.Sleep(100 * time.Millisecond)
-					if activeCount.Load() != 1 {
-						t.Error("Expected only 1 active function call at a time")
-					}
-					activeCount.Add(-1)
-					return args.Arg + args.Arg, nil
-				}),
-		},
+	tools := []tool.Tool{
+		functool.MustNew(&functool.Func{Name: "Func"},
+			func(ctx context.Context, args struct{ Arg string }) (string, error) {
+				activeCount.Add(1)
+				time.Sleep(100 * time.Millisecond)
+				if activeCount.Load() != 1 {
+					t.Error("Expected only 1 active function call at a time")
+				}
+				activeCount.Add(-1)
+				return args.Arg + args.Arg, nil
+			}),
 	}
 
 	plan := []*message.Message{
@@ -548,7 +508,7 @@ func TestFunctionInvoking_ConcurrentInvocationOfParallelCallsDisabledByDefault(t
 		}},
 	}
 
-	invokeAndAssert(t, options, plan, nil, nil)
+	invokeAndAssert(t, tools, plan, nil, autocall.Options{})
 }
 
 // TestFunctionInvoking_ContinuesWithSuccessfulCallsUntilMaximumIterations tests MaximumIterationsPerRequest
@@ -556,14 +516,12 @@ func TestFunctionInvoking_ContinuesWithSuccessfulCallsUntilMaximumIterations(t *
 	maxIterations := 7
 	actualCallCount := 0
 
-	options := chatclient.ChatOptions{
-		Tools: []tool.Tool{
-			functool.MustNew(&functool.Func{Name: "VoidReturn"},
-				func(ctx context.Context, args struct{}) (string, error) {
-					actualCallCount++
-					return "Success: Function completed.", nil
-				}),
-		},
+	tools := []tool.Tool{
+		functool.MustNew(&functool.Func{Name: "VoidReturn"},
+			func(ctx context.Context, args struct{}) (string, error) {
+				actualCallCount++
+				return "Success: Function completed.", nil
+			}),
 	}
 
 	// Build a plan that has more iterations than the max
@@ -588,11 +546,11 @@ func TestFunctionInvoking_ContinuesWithSuccessfulCallsUntilMaximumIterations(t *
 	// The loop runs maxIterations times, each time adding assistant+tool, then stops with one more assistant message
 	expectedPlan := plan[:maxIterations*2+2]
 
-	functionInvokingOptions := &chatclient.FunctionInvokingOptions{
+	autocallOptions := autocall.Options{
 		MaximumIterationsPerRequest: param.NewOpt(maxIterations),
 	}
 
-	invokeAndAssert(t, options, plan, expectedPlan, functionInvokingOptions)
+	invokeAndAssert(t, tools, plan, expectedPlan, autocallOptions)
 
 	if actualCallCount != maxIterations {
 		t.Errorf("Expected %d function calls, got %d", maxIterations, actualCallCount)
@@ -616,19 +574,17 @@ func TestFunctionInvoking_ContinuesWithFailingCallsUntilMaximumConsecutiveErrors
 		t.Run(tt.name, func(t *testing.T) {
 			callIndex := 0
 
-			options := chatclient.ChatOptions{
-				Tools: []tool.Tool{
-					functool.MustNew(&functool.Func{Name: "Func"},
-						func(ctx context.Context, args struct {
-							ShouldThrow bool `json:"shouldThrow"`
-							CallIndex   int  `json:"callIndex"`
-						}) (string, error) {
-							if args.ShouldThrow {
-								return "", fmt.Errorf("Exception from call %d", args.CallIndex)
-							}
-							return "Success", nil
-						}),
-				},
+			tools := []tool.Tool{
+				functool.MustNew(&functool.Func{Name: "Func"},
+					func(ctx context.Context, args struct {
+						ShouldThrow bool `json:"shouldThrow"`
+						CallIndex   int  `json:"callIndex"`
+					}) (string, error) {
+						if args.ShouldThrow {
+							return "", fmt.Errorf("Exception from call %d", args.CallIndex)
+						}
+						return "Success", nil
+					}),
 			}
 
 			plan := []*message.Message{
@@ -650,40 +606,42 @@ func TestFunctionInvoking_ContinuesWithFailingCallsUntilMaximumConsecutiveErrors
 			// Any more failures will exceed the limit (should throw)
 			plan = append(plan, createFunctionCallIterationPlan(&callIndex, true, true)...)
 
-			functionInvokingOptions := &chatclient.FunctionInvokingOptions{
+			autocallOptions := autocall.Options{
 				MaximumConsecutiveErrorsPerRequest: param.NewOpt(2),
 				AllowConcurrentInvocations:         param.NewOpt(tt.allowConcurrentInvocations),
 			}
 
 			// The test expects an error to be thrown
-			innerClient := &testChatClient{
-				responseFunc: func(ctx context.Context, opts chatclient.ChatOptions, messages ...*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error] {
-					return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
-						idx := len(messages)
-						if idx >= len(plan) {
-							t.Fatalf("unexpected call to Response, message count=%d, len(plan)=%d", idx, len(plan))
-						}
-						msg := plan[idx]
-
-						for _, content := range msg.Contents {
-							update := &chatclient.ChatResponseUpdate{
-								Role:     msg.Role,
-								Contents: []message.Content{content},
-							}
-							if !yield(update, nil) {
-								return
-							}
-						}
-					}
-				},
+			rb := agenttest.NewResponseBuilder()
+			for i := range plan {
+				idx := i*2 + 1
+				if idx >= len(plan) {
+					break
+				}
+				msg := plan[idx]
+				for _, content := range msg.Contents {
+					rb.Add(&agent.RunResponseUpdate{
+						Role:     msg.Role,
+						Contents: []message.Content{content},
+					})
+				}
+				rb.NewTurn()
 			}
 
-			client := chatclient.NewFunctionInvoking(innerClient, functionInvokingOptions)
-			ctx := context.Background()
+			runner := &agenttest.Runner{
+				Responses: rb.Build(),
+			}
+
 			initialMessages := []*message.Message{plan[0]}
 
+			// Build options
+			opts := []agent.Option{agent.WithMessage(initialMessages[0])}
+			for _, tool := range tools {
+				opts = append(opts, agent.WithTool(tool))
+			}
+
 			var streamErr error
-			for _, err := range client.Response(ctx, options, initialMessages...) {
+			for _, err := range autocall.New(autocallOptions).Run(t.Context(), runner, opts...) {
 				if err != nil {
 					streamErr = err
 					break
@@ -717,14 +675,20 @@ func createFunctionCallIterationPlan(callIndex *int, shouldThrow ...bool) []*mes
 			Arguments: string(arguments),
 		})
 
-		result := "Success"
+		var funcResult *message.FunctionResultContent
 		if callShouldThrow {
-			result = "Error: Function failed."
+			funcResult = &message.FunctionResultContent{
+				CallID: callID,
+				Result: "Error: Function failed.",
+				Error:  fmt.Errorf("Exception from call %d", thisCallIndex),
+			}
+		} else {
+			funcResult = &message.FunctionResultContent{
+				CallID: callID,
+				Result: "Success",
+			}
 		}
-		toolContents = append(toolContents, &message.FunctionResultContent{
-			CallID: callID,
-			Result: result,
-		})
+		toolContents = append(toolContents, funcResult)
 	}
 
 	return []*message.Message{
@@ -747,13 +711,11 @@ func TestFunctionInvoking_CanFailOnFirstException(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			callIndex := 0
 
-			options := chatclient.ChatOptions{
-				Tools: []tool.Tool{
-					functool.MustNew(&functool.Func{Name: "Func"},
-						func(ctx context.Context, args struct{}) (string, error) {
-							return "", errors.New("It failed")
-						}),
-				},
+			tools := []tool.Tool{
+				functool.MustNew(&functool.Func{Name: "Func"},
+					func(ctx context.Context, args struct{}) (string, error) {
+						return "", errors.New("It failed")
+					}),
 			}
 
 			plan := []*message.Message{
@@ -761,37 +723,38 @@ func TestFunctionInvoking_CanFailOnFirstException(t *testing.T) {
 			}
 			plan = append(plan, createFunctionCallIterationPlan(&callIndex, true)...)
 
-			functionInvokingOptions := &chatclient.FunctionInvokingOptions{
+			autocallOptions := autocall.Options{
 				MaximumConsecutiveErrorsPerRequest: param.NewOpt(0),
 				AllowConcurrentInvocations:         param.NewOpt(tt.allowConcurrentInvocations),
 			}
 
-			innerClient := &testChatClient{
-				responseFunc: func(ctx context.Context, opts chatclient.ChatOptions, messages ...*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error] {
-					return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
-						idx := len(messages)
-						if idx >= len(plan) {
-							t.Fatalf("unexpected call to StreamingResponse")
-						}
-						msg := plan[idx]
-						for _, content := range msg.Contents {
-							update := &chatclient.ChatResponseUpdate{
-								Role:     msg.Role,
-								Contents: []message.Content{content},
-							}
-							if !yield(update, nil) {
-								return
-							}
-						}
-					}
-				},
+			rb := agenttest.NewResponseBuilder()
+			for i := range plan {
+				idx := i*2 + 1
+				if idx >= len(plan) {
+					break
+				}
+				msg := plan[idx]
+				for _, content := range msg.Contents {
+					rb.Add(&agent.RunResponseUpdate{
+						Role:     msg.Role,
+						Contents: []message.Content{content},
+					})
+				}
+				rb.NewTurn()
 			}
 
-			client := chatclient.NewFunctionInvoking(innerClient, functionInvokingOptions)
-			ctx := context.Background()
+			runner := &agenttest.Runner{
+				Responses: rb.Build(),
+			}
+
+			opts := []agent.Option{agent.WithMessage(plan[0])}
+			for _, tool := range tools {
+				opts = append(opts, agent.WithTool(tool))
+			}
 
 			var streamErr error
-			for _, err := range client.Response(ctx, options, plan[0]) {
+			for _, err := range autocall.New(autocallOptions).Run(t.Context(), runner, opts...) {
 				if err != nil {
 					streamErr = err
 					break
@@ -811,21 +774,19 @@ func TestFunctionInvoking_KeepsFunctionCallingContent(t *testing.T) {
 		I int `json:"i"`
 	}
 
-	options := chatclient.ChatOptions{
-		Tools: []tool.Tool{
-			functool.MustNew(&functool.Func{Name: "Func1"},
-				func(ctx context.Context, args struct{}) (string, error) {
-					return "Result 1", nil
-				}),
-			functool.MustNew(&functool.Func{Name: "Func2"},
-				func(ctx context.Context, args Func2Args) (string, error) {
-					return fmt.Sprintf("Result 2: %d", args.I), nil
-				}),
-			functool.MustNew(&functool.Func{Name: "VoidReturn"},
-				func(ctx context.Context, args Func2Args) (string, error) {
-					return "Success: Function completed.", nil
-				}),
-		},
+	tools := []tool.Tool{
+		functool.MustNew(&functool.Func{Name: "Func1"},
+			func(ctx context.Context, args struct{}) (string, error) {
+				return "Result 1", nil
+			}),
+		functool.MustNew(&functool.Func{Name: "Func2"},
+			func(ctx context.Context, args Func2Args) (string, error) {
+				return fmt.Sprintf("Result 2: %d", args.I), nil
+			}),
+		functool.MustNew(&functool.Func{Name: "VoidReturn"},
+			func(ctx context.Context, args Func2Args) (string, error) {
+				return "Success: Function completed.", nil
+			}),
 	}
 
 	plan := []*message.Message{
@@ -856,7 +817,7 @@ func TestFunctionInvoking_KeepsFunctionCallingContent(t *testing.T) {
 		}},
 	}
 
-	finalChat := invokeAndAssert(t, options, plan, nil, nil)
+	finalChat := invokeAndAssert(t, tools, plan, nil, autocall.Options{})
 	validateFunctionContent(t, finalChat)
 }
 
@@ -892,16 +853,14 @@ func TestFunctionInvoking_TerminateOnUnknownCalls(t *testing.T) {
 				I int `json:"i"`
 			}
 
-			options := chatclient.ChatOptions{
-				Tools: []tool.Tool{
-					functool.MustNew(&functool.Func{Name: "KnownFunc"},
-						func(ctx context.Context, args Func2Args) (string, error) {
-							return fmt.Sprintf("Known: %d", args.I), nil
-						}),
-				},
+			tools := []tool.Tool{
+				functool.MustNew(&functool.Func{Name: "KnownFunc"},
+					func(ctx context.Context, args Func2Args) (string, error) {
+						return fmt.Sprintf("Known: %d", args.I), nil
+					}),
 			}
 
-			functionInvokingOptions := &chatclient.FunctionInvokingOptions{
+			autocallOptions := autocall.Options{
 				TerminateOnUnknownCalls: param.NewOpt(tt.terminateOnUnknownCalls),
 			}
 
@@ -923,10 +882,10 @@ func TestFunctionInvoking_TerminateOnUnknownCalls(t *testing.T) {
 			if tt.terminateOnUnknownCalls {
 				// Should terminate after the assistant message with unknown function call
 				expectedPlan := fullPlan[:2]
-				invokeAndAssert(t, options, fullPlan, expectedPlan, functionInvokingOptions)
+				invokeAndAssert(t, tools, fullPlan, expectedPlan, autocallOptions)
 			} else {
 				// Should continue and add error result for unknown function
-				invokeAndAssert(t, options, fullPlan, nil, functionInvokingOptions)
+				invokeAndAssert(t, tools, fullPlan, nil, autocallOptions)
 			}
 		})
 	}
@@ -945,13 +904,11 @@ func TestFunctionInvoking_ExceptionDetailsOnlyReportedWhenRequested(t *testing.T
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			options := chatclient.ChatOptions{
-				Tools: []tool.Tool{
-					functool.MustNew(&functool.Func{Name: "Func1"},
-						func(ctx context.Context, args struct{}) (string, error) {
-							return "", errors.New("Oh no!")
-						}),
-				},
+			tools := []tool.Tool{
+				functool.MustNew(&functool.Func{Name: "Func1"},
+					func(ctx context.Context, args struct{}) (string, error) {
+						return "", errors.New("Oh no!")
+					}),
 			}
 
 			plan := []*message.Message{
@@ -967,72 +924,61 @@ func TestFunctionInvoking_ExceptionDetailsOnlyReportedWhenRequested(t *testing.T
 				}},
 			}
 
-			functionInvokingOptions := &chatclient.FunctionInvokingOptions{
+			autocallOptions := autocall.Options{
 				IncludeDetailedErrors: param.NewOpt(tt.detailedErrors),
 			}
 
-			invokeAndAssert(t, options, plan, nil, functionInvokingOptions)
+			invokeAndAssert(t, tools, plan, nil, autocallOptions)
 		})
 	}
 }
 
 // TestFunctionInvoking_AllResponseMessagesReturned tests that all response messages are returned
 func TestFunctionInvoking_AllResponseMessagesReturned(t *testing.T) {
-	options := chatclient.ChatOptions{
-		Tools: []tool.Tool{
-			functool.MustNew(&functool.Func{Name: "Func1"},
-				func(ctx context.Context, args struct{}) (string, error) {
-					return "doesn't matter", nil
-				}),
-		},
+	tools := []tool.Tool{
+		functool.MustNew(&functool.Func{Name: "Func1"},
+			func(ctx context.Context, args struct{}) (string, error) {
+				return "doesn't matter", nil
+			}),
 	}
 
 	messages := []*message.Message{
 		message.New(&message.TextContent{Text: "Hello"}),
 	}
 
-	callCount := 0
-	innerClient := &testChatClient{
-		responseFunc: func(ctx context.Context, opts chatclient.ChatOptions, msgs ...*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error] {
-			return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
-				callCount++
-				var msg *message.Message
-				if len(msgs) == 1 || len(msgs) == 3 {
-					// First and third call - return function call
-					msg = &message.Message{Role: message.RoleAssistant, Contents: []message.Content{
-						&message.FunctionCallContent{CallID: fmt.Sprintf("callId%d", len(msgs)), Name: "Func1"},
-					}}
-				} else {
-					// Second call - return final answer
-					msg = &message.Message{Role: message.RoleAssistant, Contents: []message.Content{
-						&message.TextContent{Text: "The answer is 42."},
-					}}
-				}
-				for _, content := range msg.Contents {
-					update := &chatclient.ChatResponseUpdate{
-						Role:     msg.Role,
-						Contents: []message.Content{content},
-					}
-					if !yield(update, nil) {
-						return
-					}
-				}
-			}
-		},
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder().
+			Add(&agent.RunResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: []message.Content{&message.FunctionCallContent{CallID: "callId0", Name: "Func1"}},
+			}).
+			NewTurn().
+			Add(&agent.RunResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: []message.Content{&message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
+			}).
+			NewTurn().
+			Add(&agent.RunResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: []message.Content{&message.TextContent{Text: "The answer is 42."}},
+			}).
+			Build(),
 	}
 
-	client := chatclient.NewFunctionInvoking(innerClient, nil)
-	ctx := context.Background()
+	opts := []agent.Option{agent.WithMessage(messages[0])}
+	for _, tool := range tools {
+		opts = append(opts, agent.WithTool(tool))
+	}
 
-	var updates []*chatclient.ChatResponseUpdate
-	for update, err := range client.Response(ctx, options, messages...) {
+	var updates []*agent.RunResponseUpdate
+	for update, err := range autocall.New(autocall.Options{}).Run(t.Context(), runner, opts...) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		updates = append(updates, update)
 	}
 
-	responseMessages := chatclient.NewMessageFromUpdates(updates)
+	responseMessages := agent.NewMessagesFromUpdates(updates)
 
 	if len(responseMessages) != 5 {
 		t.Errorf("Expected 5 messages, got %d", len(responseMessages))
@@ -1059,133 +1005,5 @@ func TestFunctionInvoking_AllResponseMessagesReturned(t *testing.T) {
 	}
 	if _, ok := responseMessages[4].Contents[0].(*message.TextContent); !ok {
 		t.Error("Expected fifth message to be TextContent")
-	}
-}
-
-// TestFunctionInvoking_PropagatesResponseConversationIdToOptions tests conversation ID propagation
-func TestFunctionInvoking_PropagatesResponseConversationIdToOptions(t *testing.T) {
-	options := chatclient.ChatOptions{
-		Tools: []tool.Tool{
-			functool.MustNew(&functool.Func{Name: "Func1"},
-				func(ctx context.Context, args struct{}) (string, error) {
-					return "Result 1", nil
-				}),
-		},
-	}
-
-	iteration := 0
-	responseFunc := func(ctx context.Context, opts chatclient.ChatOptions, messages ...*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error] {
-		return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
-			iteration++
-			var msg *message.Message
-			var convID string
-
-			switch iteration {
-			case 1:
-				if opts.ConversationID != "" {
-					t.Errorf("First call should have empty ConversationID, got %q", opts.ConversationID)
-				}
-				msg = &message.Message{Role: message.RoleAssistant, Contents: []message.Content{&message.FunctionCallContent{CallID: "callId-abc", Name: "Func1"}}}
-				convID = "12345"
-			case 2:
-				if opts.ConversationID != "12345" {
-					t.Errorf("Second call should have ConversationID '12345', got %q", opts.ConversationID)
-				}
-				msg = &message.Message{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "done!"}}}
-			default:
-				t.Fatal("Unexpected iteration")
-			}
-
-			for _, content := range msg.Contents {
-				update := &chatclient.ChatResponseUpdate{
-					Role:           msg.Role,
-					Contents:       []message.Content{content},
-					ConversationID: convID,
-				}
-				if !yield(update, nil) {
-					return
-				}
-			}
-		}
-	}
-
-	innerClient := &testChatClient{
-		responseFunc: responseFunc,
-	}
-
-	client := chatclient.NewFunctionInvoking(innerClient, nil)
-	ctx := context.Background()
-
-	iteration = 0
-	var updates []*chatclient.ChatResponseUpdate
-	for update, err := range client.Response(ctx, options, message.New(&message.TextContent{Text: "hey"})) {
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		updates = append(updates, update)
-	}
-	response := chatclient.NewMessageFromUpdates(updates)
-	if len(response) == 0 || response[len(response)-1].String() != "done!" {
-		t.Errorf("Expected 'done!', got %v", response)
-	}
-}
-
-// TestFunctionInvoking_ClonesChatOptionsAndResetContinuationToken tests continuation token handling
-func TestFunctionInvoking_ClonesChatOptionsAndResetContinuationToken(t *testing.T) {
-	var actualChatOptions chatclient.ChatOptions
-
-	innerClient := &testChatClient{
-		responseFunc: func(ctx context.Context, opts chatclient.ChatOptions, messages ...*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error] {
-			return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
-				actualChatOptions = opts
-
-				// Simulate the model returning a function call for the first call only
-				hasFunctionCall := false
-				for _, m := range messages {
-					for _, c := range m.Contents {
-						if _, ok := c.(*message.FunctionCallContent); ok {
-							hasFunctionCall = true
-							break
-						}
-					}
-				}
-
-				var msg *message.Message
-				if !hasFunctionCall {
-					msg = &message.Message{Role: message.RoleAssistant, Contents: []message.Content{&message.FunctionCallContent{CallID: "callId1", Name: "Func1"}}}
-				} else {
-					msg = &message.Message{Role: message.RoleAssistant, Contents: []message.Content{}}
-				}
-
-				for _, content := range msg.Contents {
-					update := &chatclient.ChatResponseUpdate{
-						Role:     msg.Role,
-						Contents: []message.Content{content},
-					}
-					if !yield(update, nil) {
-						return
-					}
-				}
-			}
-		},
-	}
-
-	client := chatclient.NewFunctionInvoking(innerClient, nil)
-	ctx := context.Background()
-
-	originalChatOptions := chatclient.ChatOptions{
-		Tools:             []tool.Tool{functool.MustNew(&functool.Func{Name: "Func1"}, func(ctx context.Context, args struct{}) (string, error) { return "", nil })},
-		ContinuationToken: []byte{1, 2, 3, 4},
-	}
-
-	for _, err := range client.Response(ctx, originalChatOptions, message.New(&message.TextContent{Text: "hi"})) {
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	}
-
-	// The original options should have a nil ContinuationToken
-	if actualChatOptions.ContinuationToken != nil {
-		t.Error("ContinuationToken should be nil in cloned options")
 	}
 }

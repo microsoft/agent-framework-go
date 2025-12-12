@@ -3,7 +3,6 @@
 package agent
 
 import (
-	"context"
 	"iter"
 	"reflect"
 	"slices"
@@ -25,20 +24,19 @@ type Option interface {
 }
 
 type (
-	contextOpt           struct{ context.Context }
 	responseFormatOpt    struct{ format.Format }
 	threadOpt            struct{ memory.Thread }
 	continuationTokenOpt struct{ any }
 
-	messageOpt struct{ *message.Message }
-	toolOpt    struct{ tool.Tool }
-	toolMode   tool.ToolMode
+	messageOpt    struct{ *message.Message }
+	toolOpt       struct{ tool.Tool }
+	middlewareOpt struct{ Middleware }
 
+	toolModeOpt                 tool.ToolMode
 	streamingOpt                bool
 	allowBackgroundResponsesOpt bool
 )
 
-func (contextOpt) AgentOption()                  {}
 func (responseFormatOpt) AgentOption()           {}
 func (threadOpt) AgentOption()                   {}
 func (streamingOpt) AgentOption()                {}
@@ -46,17 +44,23 @@ func (continuationTokenOpt) AgentOption()        {}
 func (allowBackgroundResponsesOpt) AgentOption() {}
 func (messageOpt) AgentOption()                  {}
 func (toolOpt) AgentOption()                     {}
-func (toolMode) AgentOption()                    {}
+func (toolModeOpt) AgentOption()                 {}
+func (middlewareOpt) AgentOption()               {}
 
-func (o contextOpt) Value() any                  { return o.Context }
 func (o responseFormatOpt) Value() any           { return o.Format }
 func (o threadOpt) Value() any                   { return o.Thread }
 func (o streamingOpt) Value() any                { return bool(o) }
 func (o continuationTokenOpt) Value() any        { return o.any }
 func (o allowBackgroundResponsesOpt) Value() any { return bool(o) }
 func (o messageOpt) Value() any                  { return o.Message }
+func (o toolModeOpt) Value() any                 { return tool.ToolMode(o) }
 func (o toolOpt) Value() any                     { return o.Tool }
-func (o toolMode) Value() any                    { return tool.ToolMode(o) }
+func (o middlewareOpt) Value() any               { return Middleware(o) }
+
+// WithMiddleware adds a middleware to the agent run.
+func WithMiddleware(mw Middleware) Option {
+	return middlewareOpt{mw}
+}
 
 // WithTool adds a tool to the agent run.
 func WithTool(tool tool.Tool) Option {
@@ -65,7 +69,7 @@ func WithTool(tool tool.Tool) Option {
 
 // WithToolMode sets the tool mode for the agent run.
 func WithToolMode(mode tool.ToolMode) Option {
-	return toolMode(mode)
+	return toolModeOpt(mode)
 }
 
 // WithStreaming sets whether to use streaming responses during the agent run.

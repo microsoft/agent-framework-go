@@ -5,7 +5,6 @@ package agent
 import (
 	"cmp"
 	"context"
-	"errors"
 	"iter"
 	"maps"
 	"strings"
@@ -15,6 +14,7 @@ import (
 	"github.com/microsoft/agent-framework-go/format"
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/tool"
 )
 
 type Identity struct {
@@ -49,82 +49,67 @@ func (iden Identity) Description() string {
 type Capabilities struct {
 	Streaming        bool
 	StructuredOutput format.Formatter // nil if structured output is not supported
+	Middlewares      []Middleware
+	Tools            []tool.Tool
 }
 
 type Agent interface {
+	Runner
+
 	Identity() Identity
 	Capabilities() Capabilities
-
-	Run(context.Context, ...Option) iter.Seq2[*RunResponseUpdate, error]
 
 	NewThread() memory.Thread
 	UnmarshalThread(data []byte) (memory.Thread, error)
 }
 
-// Run executes the agent with the given options and returns the response.
-func Run(ctx context.Context, a Agent, opts ...Option) (*RunResponse, error) {
-	resp := RunResponse{
-		AgentID: a.Identity().ID(),
-	}
-	for update, err := range run(ctx, a, opts) {
-		if err != nil {
-			return nil, err
+type Runner interface {
+	Run(ctx context.Context, options ...Option) iter.Seq2[*RunResponseUpdate, error]
+}
+
+type Middleware interface {
+	Run(ctx context.Context, next Runner, options ...Option) iter.Seq2[*RunResponseUpdate, error]
+}
+
+func NewMessagesFromUpdates(updates []*RunResponseUpdate) []*message.Message {
+	var msgs []*message.Message
+	for _, update := range updates {
+		if update == nil {
+			continue
 		}
-		processUpdate(&resp, update)
+		// If there is no message created yet, or if the last update we saw had a different
+		// identifying parts, create a new message.
+		isNewMessage := true
+		if len(msgs) > 0 {
+			lastMsg := msgs[len(msgs)-1]
+			isNewMessage = notEmptyNorEqual(update.AuthorName, lastMsg.AuthorName) ||
+				notEmptyNorEqual(update.MessageID, lastMsg.ID) ||
+				notEmptyNorEqual(string(update.Role), string(lastMsg.Role))
+		}
+		// Get the message to target, either a new one or the last ones.
+		var msg *message.Message
+		if isNewMessage {
+			msg = &message.Message{
+				Role: message.RoleAssistant,
+			}
+			msgs = append(msgs, msg)
+		} else {
+			msg = msgs[len(msgs)-1]
+		}
+		msg.AuthorName = cmp.Or(update.AuthorName, msg.AuthorName)
+		msg.Role = cmp.Or(update.Role, msg.Role)
+		msg.ID = cmp.Or(update.MessageID, msg.ID)
+		if msg.CreatedAt.IsZero() || (!update.CreatedAt.IsZero() && update.CreatedAt.After(msg.CreatedAt)) {
+			msg.CreatedAt = update.CreatedAt
+		}
+		for _, content := range update.Contents {
+			msg.Contents = append(msg.Contents, content)
+		}
 	}
-	for _, msg := range resp.Messages {
+	for _, msg := range msgs {
 		msg.Contents = message.CoalesceContents(msg.Contents)
 	}
-	return &resp, nil
-}
-
-// RunStream executes the agent with the given options and returns a streaming sequence of response updates.
-func RunStream(ctx context.Context, a Agent, opts ...Option) iter.Seq2[*RunResponseUpdate, error] {
-	opts = append(opts, WithStreaming(true))
-	return run(ctx, a, opts)
-}
-
-// RunText executes the agent with a single text message and returns the response.
-func RunText(ctx context.Context, a Agent, msg string, opts ...Option) (*RunResponse, error) {
-	return Run(ctx, a, append(opts, WithMessage(message.NewText(msg)))...)
-}
-
-// RunTextStream executes the agent with a single text message and returns a streaming sequence of response updates.
-func RunTextStream(ctx context.Context, a Agent, msg string, opts ...Option) iter.Seq2[*RunResponseUpdate, error] {
-	return RunStream(ctx, a, append(opts, WithMessage(message.NewText(msg)))...)
-}
-
-func run(ctx context.Context, a Agent, opts []Option) iter.Seq2[*RunResponseUpdate, error] {
-	if a == nil {
-		return func(yield func(*RunResponseUpdate, error) bool) {
-			yield(nil, errors.New("agent cannot be nil"))
-		}
-	}
-	if _, ok := GetOption(opts, WithThread); !ok {
-		// If no thread is provided, create a new one.
-		opts = append(opts, WithThread(a.NewThread()))
-	}
-	return a.Run(ctx, opts...)
-}
-
-// RunFor executes the agent with the given messages and returns the result of type T.
-func RunFor[T any](ctx context.Context, a Agent, opts ...Option) (T, *RunResponse, error) {
-	var v T
-	formatter := a.Capabilities().StructuredOutput
-	if formatter == nil {
-		return v, nil, errors.New("agent does not support structured output")
-	}
-	format, err := formatter.Format(v)
-	if err != nil {
-		return v, nil, err
-	}
-	opts = append(opts, WithResponseFormat(format))
-	resp, err := Run(ctx, a, opts...)
-	if err != nil {
-		return v, resp, err
-	}
-	err = formatter.Unmarshal([]byte(resp.String()), format, &v)
-	return v, resp, err
+	return msgs
 }
 
 // processUpdate updates the ChatResponse r with the information from the ChatResponseUpdate update.
@@ -247,16 +232,16 @@ func (r *RunResponse) UserInputRequests() iter.Seq[message.Content] {
 
 // RunResponseUpdate represents a streaming update from an agent execution.
 type RunResponseUpdate struct {
-	RawRepresentation    any
-	AdditionalProperties map[string]any
+	RawRepresentation    any            `json:"-"`
+	AdditionalProperties map[string]any `json:",omitzero"`
 	AgentID              string
 	MessageID            string
 	ResponseID           string
-	AuthorName           string
-	Role                 message.Role
-	ContinuationToken    any
-	CreatedAt            time.Time
-	Contents             []message.Content
+	AuthorName           string            `json:",omitzero"`
+	Role                 message.Role      `json:",omitzero"`
+	ContinuationToken    any               `json:",omitzero"`
+	CreatedAt            time.Time         `json:",omitzero"`
+	Contents             []message.Content `json:",omitzero"`
 }
 
 // String returns the concatenated text contents of the response messages.
