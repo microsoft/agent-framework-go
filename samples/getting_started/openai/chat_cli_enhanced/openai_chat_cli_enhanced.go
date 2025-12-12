@@ -29,14 +29,14 @@ Type 'exit' or 'quit' to end the chat.
 
 // ANSI color codes
 const (
-	colorReset   = "\033[0m"
-	colorRed     = "\033[31m"
-	colorGreen   = "\033[32m"
-	colorYellow  = "\033[33m"
-	colorBlue    = "\033[34m"
-	colorCyan    = "\033[36m"
-	colorGray    = "\033[90m"
-	colorBold    = "\033[1m"
+	colorReset  = "\033[0m"
+	colorRed    = "\033[31m"
+	colorGreen  = "\033[32m"
+	colorYellow = "\033[33m"
+	colorBlue   = "\033[34m"
+	colorCyan   = "\033[36m"
+	colorGray   = "\033[90m"
+	colorBold   = "\033[1m"
 )
 
 var weatherTool = functool.MustNew(&functool.Func{
@@ -57,7 +57,7 @@ func main() {
 
 	ag := openai.NewChatAgent(openai.ClientConfig{
 		Model: "gpt-4o-mini",
-	}, &chatagent.Options{
+	}, chatagent.Options{
 		Instructions: "You are a helpful assistant with access to weather information. Be concise and friendly.",
 		ChatOptions: &chatagent.ChatOptions{
 			Tools: []tool.Tool{weatherTool},
