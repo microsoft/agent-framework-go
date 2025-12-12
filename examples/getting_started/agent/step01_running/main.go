@@ -1,19 +1,19 @@
 // Copyright (c) Microsoft. All rights reserved.
 
+// This sample shows how to create and use a simple Agent with OpenAI as the backend.
+
 package main
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
-	"github.com/microsoft/agent-framework-go/examples/internal/console"
 	"github.com/microsoft/agent-framework-go/openai"
 )
 
 func main() {
-	console.Welcome("Agent Basic Run", "A basic example of using an Agent with OpenAI backend.", "gpt-4o-mini")
-
 	a := openai.NewChatAgent(openai.ClientConfig{
 		Model: "gpt-4o-mini",
 	}, chatagent.Options{
@@ -24,11 +24,13 @@ func main() {
 	ctx := context.Background()
 
 	// Invoke the agent and output the text result.
-	console.AgentResponse(agent.RunText(ctx, a, "Tell me a joke about a pirate."))
+	fmt.Println(agent.RunText(ctx, a, "Tell me a joke about a pirate."))
 
 	// Invoke the agent with streaming support.
-	console.Agent()
 	for update, err := range agent.RunTextStream(ctx, a, "Tell me a joke about a pirate.") {
-		console.AgentStreamResponse(update, err)
+		if err != nil {
+			panic(err)
+		}
+		fmt.Println(update)
 	}
 }

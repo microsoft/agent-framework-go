@@ -1,13 +1,11 @@
-package example_test
+package main
 
 import (
 	"context"
 	"fmt"
 	"log"
-	"math/rand"
 	"os"
 	"strings"
-	"testing"
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -34,9 +32,7 @@ var weatherTool = functool.MustNew(&functool.Func{
 	Name:        "weather",
 	Description: "Get the current weather for a given location",
 }, func(_ context.Context, location string) (string, error) {
-	fmt.Printf("%s🌤️  [Tool Called: weather] Location: %s%s\n", colorYellow, location, colorReset)
-	conditions := []string{"sunny", "cloudy", "rainy", "stormy"}
-	return fmt.Sprintf("The weather in %s is %s with a high of %d°C.", location, conditions[rand.Intn(len(conditions))], rand.Intn(21)+10), nil
+	return fmt.Sprintf("The weather in %s is cloudy with a high of 15°C.", location), nil
 })
 
 // TestAzureChatBasic demonstrates basic usage of Azure OpenAI Agent for
@@ -47,7 +43,7 @@ var weatherTool = functool.MustNew(&functool.Func{
 //   - AZURE_OPENAI_API_KEY
 //   - AZURE_OPENAI_ENDPOINT
 //   - AZURE_OPENAI_DEPLOYMENT_NAME
-func TestAzureChatBasic(t *testing.T) {
+func main() {
 	// Azure OpenAI configuration
 	apiKey := os.Getenv("AZURE_OPENAI_API_KEY")
 	endpoint := os.Getenv("AZURE_OPENAI_ENDPOINT")

@@ -1,4 +1,4 @@
-package example_test
+package main
 
 import (
 	"context"
@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"strings"
-	"testing"
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -26,7 +25,7 @@ const (
 	colorBold    = "\033[1m"
 )
 
-// TestMultiTurnConversation demonstrates a multi-turn conversation where
+// Demonstrates a multi-turn conversation where
 // the agent maintains context across multiple messages using a thread.
 //
 // This mirrors the .NET sample that shows:
@@ -38,7 +37,7 @@ const (
 //   - AZURE_OPENAI_API_KEY
 //   - AZURE_OPENAI_ENDPOINT
 //   - AZURE_OPENAI_DEPLOYMENT_NAME
-func TestMultiTurnConversation(t *testing.T) {
+func main() {
 	// Azure OpenAI configuration
 	apiKey := os.Getenv("AZURE_OPENAI_API_KEY")
 	endpoint := os.Getenv("AZURE_OPENAI_ENDPOINT")
