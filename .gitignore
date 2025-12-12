@@ -36,6 +36,8 @@ Thumbs.db
 # Compiled binaries
 /bin/
 /dist/
+samples/getting_started/openai/chat_cli/chat_cli
+samples/getting_started/openai/chat_cli_enhanced/chat_cli_enhanced
 
 # Temporary files
 tmp/
