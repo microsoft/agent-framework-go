@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
@@ -138,7 +139,7 @@ func runWithApproval(ag agent.Agent, thread memory.Thread, query string, simulat
 		colorGreen, colorBold, colorReset, query)
 
 	// Run the agent - this may return approval requests instead of a final answer
-	resp, err := agent.RunText(ctx, ag, query, agent.WithThread(thread))
+	resp, err := agent.RunText(ctx, ag, query, agentopt.Thread(thread))
 	if err != nil {
 		fmt.Printf("%s❌ Error: %v%s\n", colorRed, err, colorReset)
 		return
@@ -180,8 +181,8 @@ func runWithApproval(ag agent.Agent, thread memory.Thread, query string, simulat
 			colorBlue, colorBold, colorReset)
 
 		resp, err = agent.Run(ctx, ag,
-			agent.WithMessage(message.New(userResponses...)),
-			agent.WithThread(thread))
+			agentopt.Message(message.New(userResponses...)),
+			agentopt.Thread(thread))
 		if err != nil {
 			fmt.Printf("\n%s❌ Error: %v%s\n", colorRed, err, colorReset)
 			return

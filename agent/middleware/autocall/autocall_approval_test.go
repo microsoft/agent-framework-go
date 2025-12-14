@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/agenttest"
 	"github.com/microsoft/agent-framework-go/agent/middleware/autocall"
 	"github.com/microsoft/agent-framework-go/message"
@@ -16,9 +17,9 @@ import (
 	"github.com/microsoft/agent-framework-go/tool/functool"
 )
 
-func expectedMessages(t *testing.T, expected ...*message.Message) func(context.Context, ...agent.Option) {
-	return func(ctx context.Context, opts ...agent.Option) {
-		got := slices.Collect(agent.GetOptions(opts, agent.WithMessage))
+func expectedMessages(t *testing.T, expected ...*message.Message) func(context.Context, ...agentopt.Option) {
+	return func(ctx context.Context, opts ...agentopt.Option) {
+		got := slices.Collect(agentopt.All(opts, agentopt.Message))
 		if err := agenttest.MessagesEqual(expected, got); err != nil {
 			t.Errorf("Messages not equal: %v", err)
 		}
@@ -30,7 +31,7 @@ func invokeAndAssertApproval(t *testing.T, tools []tool.Tool, input []*message.M
 	downstreamAgentOutput []*agent.RunResponseUpdate, expectedOutput []*agent.RunResponseUpdate,
 	expectedDownstreamAgentInput []*message.Message, additionalTools []tool.Tool) {
 
-	var cb func(context.Context, ...agent.Option)
+	var cb func(context.Context, ...agentopt.Option)
 	if expectedDownstreamAgentInput != nil {
 		cb = expectedMessages(t, expectedDownstreamAgentInput...)
 	}
@@ -61,12 +62,12 @@ func invokeAndAssertApprovalWithAgent(t *testing.T, runner agent.Runner,
 	ctx := t.Context()
 
 	// Build options
-	opts := []agent.Option{}
+	opts := []agentopt.Option{}
 	for _, msg := range input {
-		opts = append(opts, agent.WithMessage(msg))
+		opts = append(opts, agentopt.Message(msg))
 	}
 	for _, tool := range tools {
-		opts = append(opts, agent.WithTool(tool))
+		opts = append(opts, agentopt.Tool(tool))
 	}
 
 	// Collect all streaming updates into messages
@@ -89,12 +90,12 @@ func expectApprovalError(t *testing.T, tools []tool.Tool, input []*message.Messa
 	ctx := t.Context()
 
 	// Build options
-	opts := []agent.Option{}
+	opts := []agentopt.Option{}
 	for _, msg := range input {
-		opts = append(opts, agent.WithMessage(msg))
+		opts = append(opts, agentopt.Message(msg))
 	}
 	for _, tool := range tools {
-		opts = append(opts, agent.WithTool(tool))
+		opts = append(opts, agentopt.Tool(tool))
 	}
 
 	var lastErr error

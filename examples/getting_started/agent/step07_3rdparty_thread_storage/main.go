@@ -15,6 +15,7 @@ import (
 	"slices"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
@@ -46,7 +47,7 @@ func main() {
 	thread := a.NewThread()
 
 	// Run the agent with the thread that stores conversation history in the disk store.
-	fmt.Println(agent.RunText(ctx, a, "Tell me a joke about a pirate.", agent.WithThread(thread)))
+	fmt.Println(agent.RunText(ctx, a, "Tell me a joke about a pirate.", agentopt.Thread(thread)))
 
 	// Serialize the thread state, so it can be stored for later use.
 	// Since the chat history is stored in the disk store, the serialized thread
@@ -68,7 +69,7 @@ func main() {
 	}
 
 	// Run the agent with the thread that stores conversation history in the vector store a second time.
-	fmt.Println(agent.RunText(ctx, a, "Now tell the same joke in the voice of a pirate, and add some emojis to the joke.", agent.WithThread(resumedThread)))
+	fmt.Println(agent.RunText(ctx, a, "Now tell the same joke in the voice of a pirate, and add some emojis to the joke.", agentopt.Thread(resumedThread)))
 }
 
 type fsMessageStore struct {

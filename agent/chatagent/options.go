@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent/chatclient"
 	"github.com/microsoft/agent-framework-go/memory"
 )
@@ -45,7 +46,7 @@ func (o opts) Value() any {
 	return o.ChatOptions
 }
 
-func WithOptions(options *ChatOptions) agent.Option {
+func WithOptions(options *ChatOptions) agentopt.Option {
 	return opts{options}
 }
 
@@ -59,6 +60,6 @@ func (o newClientOpts) Value() any {
 	return o.NewClient
 }
 
-func WithNewClient(newClient func(chatclient.Client) chatclient.Client) agent.Option {
+func WithNewClient(newClient func(chatclient.Client) chatclient.Client) agentopt.Option {
 	return newClientOpts{newClient}
 }

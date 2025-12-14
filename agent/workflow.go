@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"reflect"
 
+	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/message/messageworkflow"
@@ -64,14 +65,14 @@ func newExecutor(a Agent, emitEvents bool) *workflow.Executor {
 		StateKey: "agent_messages",
 		TakeTurnHandler: func(ctx *workflow.Context, token workflow.TurnToken, messages []*message.Message) error {
 			emitEvents := token.EmitEventsOr(emitEvents)
-			options := make([]Option, 0, 1+len(messages))
-			options = append(options, WithThread(ensureThread()))
+			options := make([]agentopt.Option, 0, 1+len(messages))
+			options = append(options, agentopt.Thread(ensureThread()))
 			if emitEvents {
 				// Run the agent in streaming mode only when agent run update events are to be emitted.
-				options = append(options, WithStreaming(true))
+				options = append(options, agentopt.Streaming(true))
 			}
 			for _, msg := range messages {
-				options = append(options, WithMessage(msg))
+				options = append(options, agentopt.Message(msg))
 			}
 			var updates []*RunResponseUpdate
 			for update, err := range RunStream(ctx, a, options...) {

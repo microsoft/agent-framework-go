@@ -10,6 +10,7 @@ import (
 	"fmt"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
 	"github.com/microsoft/agent-framework-go/agent/chatagent/chatclient"
 	"github.com/microsoft/agent-framework-go/format/jsonformat"
@@ -34,7 +35,7 @@ func main() {
 	ctx := context.Background()
 
 	// Set PersonInfo as the type parameter of RunFor method to specify the expected structured output from the agent and invoke the agent with some unstructured input.
-	person, _, err := agent.RunFor[PersonInfo](ctx, a, agent.WithMessage(message.NewText("Please provide information about John Smith, who is a 35-year-old software engineer.")))
+	person, _, err := agent.RunFor[PersonInfo](ctx, a, agentopt.Message(message.NewText("Please provide information about John Smith, who is a 35-year-old software engineer.")))
 	if err != nil {
 		panic(err)
 	}

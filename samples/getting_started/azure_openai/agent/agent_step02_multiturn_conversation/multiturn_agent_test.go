@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/openai"
@@ -131,7 +132,7 @@ func runWithThread(ag agent.Agent, thread memory.Thread, query string) {
 		colorGray, timestamp(), colorReset,
 		colorBlue, colorBold, colorReset)
 
-	resp, err := agent.RunText(ctx, ag, query, agent.WithThread(thread))
+	resp, err := agent.RunText(ctx, ag, query, agentopt.Thread(thread))
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		return
@@ -151,7 +152,7 @@ func runStreamWithThread(ag agent.Agent, thread memory.Thread, query string) {
 		colorGray, timestamp(), colorReset,
 		colorBlue, colorBold, colorReset)
 
-	for update, err := range agent.RunTextStream(ctx, ag, query, agent.WithThread(thread)) {
+	for update, err := range agent.RunTextStream(ctx, ag, query, agentopt.Thread(thread)) {
 		if err != nil {
 			fmt.Printf("Error: %v\n", err)
 			return

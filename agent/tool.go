@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
@@ -68,7 +69,7 @@ func (t functool) Call(ctx context.Context, args string) (any, error) {
 	if err := json.Unmarshal([]byte(args), &in); err != nil {
 		return nil, err
 	}
-	resp, err := Run(ctx, t.agent, WithThread(t.thread), WithMessage(message.NewText(in.Query)))
+	resp, err := Run(ctx, t.agent, agentopt.Thread(t.thread), agentopt.Message(message.NewText(in.Query)))
 	if err != nil {
 		return "", err
 	}

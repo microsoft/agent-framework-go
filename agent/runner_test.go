@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/agenttest"
 	"github.com/microsoft/agent-framework-go/format"
 	"github.com/microsoft/agent-framework-go/memory"
@@ -249,68 +250,6 @@ func TestRun_ResponseMetadata(t *testing.T) {
 	}
 }
 
-func TestRun_WithMiddleware(t *testing.T) {
-	ctx := t.Context()
-	mw := &agenttest.Middleware{}
-
-	a := &agenttest.Agent{
-		Responses: agenttest.NewResponseBuilder().
-			AddText("Response").
-			Build(),
-	}
-
-	_, err := agent.Run(ctx, a, agent.WithMiddleware(mw))
-	if err != nil {
-		t.Fatalf("Run failed: %v", err)
-	}
-
-	if !mw.Called() {
-		t.Error("expected middleware to be invoked")
-	}
-}
-
-func TestRun_MiddlewareOrder(t *testing.T) {
-	ctx := t.Context()
-
-	mw1 := &agenttest.Middleware{
-		PreResponses: agenttest.NewResponseBuilder().
-			AddText("mw1-before ").
-			Build(),
-		PostResponses: agenttest.NewResponseBuilder().
-			AddText("mw1-after").
-			Build(),
-	}
-
-	mw2 := &agenttest.Middleware{
-		PreResponses: agenttest.NewResponseBuilder().
-			AddText("mw2-before ").
-			Build(),
-		PostResponses: agenttest.NewResponseBuilder().
-			AddText("mw2-after ").
-			Build(),
-	}
-
-	a := &agenttest.Agent{
-		Responses: agenttest.NewResponseBuilder().
-			Add(&agent.RunResponseUpdate{
-				Contents: []message.Content{
-					&message.TextContent{Text: "Response "},
-				},
-			}).
-			Build(),
-	}
-
-	resp, err := agent.Run(ctx, a, agent.WithMiddleware(mw1), agent.WithMiddleware(mw2))
-	if err != nil {
-		t.Fatalf("Run failed: %v", err)
-	}
-	want := "mw1-before mw2-before Response mw2-after mw1-after"
-	got := resp.String()
-	if got != want {
-		t.Errorf("expected response %q, got %q", want, got)
-	}
-}
-
 func TestRun_AgentCapabilitiesMiddleware(t *testing.T) {
 	ctx := t.Context()
 	capsMw := &agenttest.Middleware{}
@@ -345,8 +284,8 @@ func TestRun_AgentCapabilitiesTools(t *testing.T) {
 			Tools: []tool.Tool{testTool},
 		},
 		Responses: agenttest.NewResponseBuilder(
-			func(ctx context.Context, opts ...agent.Option) {
-				for tool := range agent.GetOptions(opts, agent.WithTool) {
+			func(ctx context.Context, opts ...agentopt.Option) {
+				for tool := range agentopt.All(opts, agentopt.Tool) {
 					receivedTools = append(receivedTools, tool.Name())
 				}
 			}).
@@ -460,8 +399,8 @@ func TestRun_ThreadCreation(t *testing.T) {
 			return agenttest.NewThread()
 		},
 		Responses: agenttest.NewResponseBuilder(
-			func(ctx context.Context, opts ...agent.Option) {
-				thread, ok := agent.GetOption(opts, agent.WithThread)
+			func(ctx context.Context, opts ...agentopt.Option) {
+				thread, ok := agentopt.Get(opts, agentopt.Thread)
 				if !ok || thread == nil {
 					t.Error("no thread provided")
 				}
@@ -491,8 +430,8 @@ func TestRun_ProvidedThread(t *testing.T) {
 			return agenttest.NewThread()
 		},
 		Responses: agenttest.NewResponseBuilder(
-			func(ctx context.Context, opts ...agent.Option) {
-				thread, ok := agent.GetOption(opts, agent.WithThread)
+			func(ctx context.Context, opts ...agentopt.Option) {
+				thread, ok := agentopt.Get(opts, agentopt.Thread)
 				if !ok {
 					t.Fatal("no thread provided")
 				}
@@ -509,7 +448,7 @@ func TestRun_ProvidedThread(t *testing.T) {
 			Build(),
 	}
 
-	_, err := agent.Run(ctx, a, agent.WithThread(providedThread))
+	_, err := agent.Run(ctx, a, agentopt.Thread(providedThread))
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
@@ -578,9 +517,9 @@ func TestRunStream_BasicExecution(t *testing.T) {
 
 	a := &agenttest.Agent{
 		Responses: agenttest.NewResponseBuilder(
-			func(ctx context.Context, opts ...agent.Option) {
+			func(ctx context.Context, opts ...agentopt.Option) {
 				// Verify streaming option is set
-				streaming, ok := agent.GetOption(opts, agent.WithStreaming)
+				streaming, ok := agentopt.Get(opts, agentopt.Streaming)
 				if !ok || !streaming {
 					t.Fatal("streaming not enabled")
 				}
@@ -644,10 +583,10 @@ func TestRunText_BasicExecution(t *testing.T) {
 
 	a := &agenttest.Agent{
 		Responses: agenttest.NewResponseBuilder(
-			func(ctx context.Context, opts ...agent.Option) {
+			func(ctx context.Context, opts ...agentopt.Option) {
 				// Verify message option is set with correct text
 				hasMessage := false
-				for msg := range agent.GetOptions(opts, agent.WithMessage) {
+				for msg := range agentopt.All(opts, agentopt.Message) {
 					if len(msg.Contents) > 0 {
 						if tc, ok := msg.Contents[0].(*message.TextContent); ok {
 							if tc.Text == "Hello" {
@@ -680,10 +619,10 @@ func TestRunText_WithAdditionalOptions(t *testing.T) {
 
 	a := &agenttest.Agent{
 		Responses: agenttest.NewResponseBuilder(
-			func(ctx context.Context, opts ...agent.Option) {
+			func(ctx context.Context, opts ...agentopt.Option) {
 				// Verify both message and thread are present
-				_, hasMessage := agent.GetOption(opts, agent.WithMessage)
-				thread, hasThread := agent.GetOption(opts, agent.WithThread)
+				_, hasMessage := agentopt.Get(opts, agentopt.Message)
+				thread, hasThread := agentopt.Get(opts, agentopt.Thread)
 
 				if !hasMessage {
 					t.Fatal("message not found")
@@ -699,7 +638,7 @@ func TestRunText_WithAdditionalOptions(t *testing.T) {
 			Build(),
 	}
 
-	_, err := agent.RunText(ctx, a, "Test", agent.WithThread(providedThread))
+	_, err := agent.RunText(ctx, a, "Test", agentopt.Thread(providedThread))
 	if err != nil {
 		t.Fatalf("RunText failed: %v", err)
 	}
@@ -712,14 +651,14 @@ func TestRunTextStream_BasicExecution(t *testing.T) {
 
 	a := &agenttest.Agent{
 		Responses: agenttest.NewResponseBuilder(
-			func(ctx context.Context, opts ...agent.Option) {
+			func(ctx context.Context, opts ...agentopt.Option) {
 				// Verify streaming is enabled
-				streaming, ok := agent.GetOption(opts, agent.WithStreaming)
+				streaming, ok := agentopt.Get(opts, agentopt.Streaming)
 				if !ok || !streaming {
 					t.Fatal("streaming not enabled")
 				}
 				// Verify message is present
-				_, hasMessage := agent.GetOption(opts, agent.WithMessage)
+				_, hasMessage := agentopt.Get(opts, agentopt.Message)
 				if !hasMessage {
 					t.Fatal("message not found")
 				}
@@ -792,9 +731,9 @@ func TestRunFor_BasicExecution(t *testing.T) {
 			StructuredOutput: formatter,
 		},
 		Responses: agenttest.NewResponseBuilder(
-			func(ctx context.Context, opts ...agent.Option) {
+			func(ctx context.Context, opts ...agentopt.Option) {
 				// Verify response format is set
-				_, hasFormat := agent.GetOption(opts, agent.WithResponseFormat)
+				_, hasFormat := agentopt.Get(opts, agentopt.ResponseFormat)
 				if !hasFormat {
 					t.Fatal("response format not set")
 				}

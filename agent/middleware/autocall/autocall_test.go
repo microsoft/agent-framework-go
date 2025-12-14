@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/agenttest"
 	"github.com/microsoft/agent-framework-go/agent/middleware/autocall"
 	"github.com/microsoft/agent-framework-go/message"
@@ -180,9 +181,9 @@ func invokeAndAssert(t *testing.T, tools []tool.Tool, plan []*message.Message, e
 	initialMessages := []*message.Message{plan[0]}
 
 	// Build options
-	opts := []agent.Option{agent.WithMessage(initialMessages[0])}
+	opts := []agentopt.Option{agentopt.Message(initialMessages[0])}
 	for _, tool := range tools {
-		opts = append(opts, agent.WithTool(tool))
+		opts = append(opts, agentopt.Tool(tool))
 	}
 
 	// Collect all updates
@@ -635,9 +636,9 @@ func TestFunctionInvoking_ContinuesWithFailingCallsUntilMaximumConsecutiveErrors
 			initialMessages := []*message.Message{plan[0]}
 
 			// Build options
-			opts := []agent.Option{agent.WithMessage(initialMessages[0])}
+			opts := []agentopt.Option{agentopt.Message(initialMessages[0])}
 			for _, tool := range tools {
-				opts = append(opts, agent.WithTool(tool))
+				opts = append(opts, agentopt.Tool(tool))
 			}
 
 			var streamErr error
@@ -748,9 +749,9 @@ func TestFunctionInvoking_CanFailOnFirstException(t *testing.T) {
 				Responses: rb.Build(),
 			}
 
-			opts := []agent.Option{agent.WithMessage(plan[0])}
+			opts := []agentopt.Option{agentopt.Message(plan[0])}
 			for _, tool := range tools {
-				opts = append(opts, agent.WithTool(tool))
+				opts = append(opts, agentopt.Tool(tool))
 			}
 
 			var streamErr error
@@ -965,9 +966,9 @@ func TestFunctionInvoking_AllResponseMessagesReturned(t *testing.T) {
 			Build(),
 	}
 
-	opts := []agent.Option{agent.WithMessage(messages[0])}
+	opts := []agentopt.Option{agentopt.Message(messages[0])}
 	for _, tool := range tools {
-		opts = append(opts, agent.WithTool(tool))
+		opts = append(opts, agentopt.Tool(tool))
 	}
 
 	var updates []*agent.RunResponseUpdate

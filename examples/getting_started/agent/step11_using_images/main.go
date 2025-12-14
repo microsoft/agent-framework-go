@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/openai"
@@ -32,7 +33,7 @@ func main() {
 		},
 	)
 
-	for resp, err := range agent.RunStream(ctx, a, agent.WithMessage(msg)) {
+	for resp, err := range agent.RunStream(ctx, a, agentopt.Message(msg)) {
 		if err != nil {
 			panic(err)
 		}

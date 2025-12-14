@@ -12,6 +12,7 @@ import (
 	"github.com/a2aproject/a2a-go/a2aclient"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/a2aagent"
+	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
@@ -200,10 +201,10 @@ func TestRunAllowsNonUserRoleMessages(t *testing.T) {
 	transport := &mockA2ATransport{}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	inputMessages := []agent.Option{
-		agent.WithMessage(&message.Message{Role: message.RoleSystem, Contents: []message.Content{&message.TextContent{Text: "I am a system message"}}}),
-		agent.WithMessage(&message.Message{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "I am an assistant message"}}}),
-		agent.WithMessage(&message.Message{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Valid user message"}}}),
+	inputMessages := []agentopt.Option{
+		agentopt.Message(&message.Message{Role: message.RoleSystem, Contents: []message.Content{&message.TextContent{Text: "I am a system message"}}}),
+		agentopt.Message(&message.Message{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "I am an assistant message"}}}),
+		agentopt.Message(&message.Message{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Valid user message"}}}),
 	}
 
 	_, err := agent.Run(t.Context(), a, inputMessages...)
@@ -299,7 +300,7 @@ func TestRunWithNewThread(t *testing.T) {
 	a := newTestAgent(transport, a2aagent.Options{})
 
 	thread := a.NewThread()
-	_, err := agent.RunText(t.Context(), a, "Test message", agent.WithThread(thread))
+	_, err := agent.RunText(t.Context(), a, "Test message", agentopt.Thread(thread))
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil", err)
 	}
@@ -320,7 +321,7 @@ func TestRunWithExistingThread(t *testing.T) {
 
 	thread := a.NewThreadWithContextID("existing-context-id")
 
-	_, err := agent.RunText(t.Context(), a, "Test message", agent.WithThread(thread))
+	_, err := agent.RunText(t.Context(), a, "Test message", agentopt.Thread(thread))
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil", err)
 	}
@@ -348,7 +349,7 @@ func TestRunWithThreadHavingDifferentContextID(t *testing.T) {
 
 	thread := a.NewThreadWithContextID("existing-context-id")
 
-	_, err := agent.RunText(t.Context(), a, "Test message", agent.WithThread(thread))
+	_, err := agent.RunText(t.Context(), a, "Test message", agentopt.Thread(thread))
 	if err == nil {
 		t.Error("Run() error = nil, want error")
 	}
@@ -448,7 +449,7 @@ func TestRunStreamingWithThread(t *testing.T) {
 
 	thread := a.NewThread()
 
-	for _, err := range agent.RunTextStream(t.Context(), a, "Test streaming", agent.WithThread(thread)) {
+	for _, err := range agent.RunTextStream(t.Context(), a, "Test streaming", agentopt.Thread(thread)) {
 		if err != nil {
 			t.Fatalf("RunStream() error = %v, want nil", err)
 		}
@@ -472,7 +473,7 @@ func TestRunStreamingWithExistingThread(t *testing.T) {
 
 	thread := a.NewThreadWithContextID("existing-context-id")
 
-	for _, err := range agent.RunTextStream(t.Context(), a, "Test streaming", agent.WithThread(thread)) {
+	for _, err := range agent.RunTextStream(t.Context(), a, "Test streaming", agentopt.Thread(thread)) {
 		if err != nil {
 			t.Fatalf("RunStream() error = %v, want nil", err)
 		}
@@ -502,7 +503,7 @@ func TestRunStreamingWithThreadHavingDifferentContextID(t *testing.T) {
 	thread := a.NewThreadWithContextID("existing-context-id")
 
 	gotError := false
-	for _, err := range agent.RunTextStream(t.Context(), a, "Test streaming", agent.WithThread(thread)) {
+	for _, err := range agent.RunTextStream(t.Context(), a, "Test streaming", agentopt.Thread(thread)) {
 		if err != nil {
 			gotError = true
 			break
@@ -526,10 +527,10 @@ func TestRunStreamingAllowsNonUserRoleMessages(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	inputMessages := []agent.Option{
-		agent.WithMessage(&message.Message{Role: message.RoleSystem, Contents: []message.Content{&message.TextContent{Text: "I am a system message"}}}),
-		agent.WithMessage(&message.Message{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "I am an assistant message"}}}),
-		agent.WithMessage(&message.Message{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Valid user message"}}}),
+	inputMessages := []agentopt.Option{
+		agentopt.Message(&message.Message{Role: message.RoleSystem, Contents: []message.Content{&message.TextContent{Text: "I am a system message"}}}),
+		agentopt.Message(&message.Message{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "I am an assistant message"}}}),
+		agentopt.Message(&message.Message{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Valid user message"}}}),
 	}
 
 	for _, err := range agent.RunStream(t.Context(), a, inputMessages...) {
@@ -544,8 +545,8 @@ func TestRunWithHostedFileContent(t *testing.T) {
 	transport := &mockA2ATransport{}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	inputMessages := []agent.Option{
-		agent.WithMessage(&message.Message{
+	inputMessages := []agentopt.Option{
+		agentopt.Message(&message.Message{
 			Role: message.RoleUser,
 			Contents: []message.Content{
 				&message.TextContent{Text: "Check this file:"},
@@ -598,7 +599,7 @@ func TestRunWithInvalidThreadType(t *testing.T) {
 	// Create a custom thread type that is not an a2aagent.Thread
 	invalidThread := &customAgentThread{}
 
-	_, err := agent.RunText(t.Context(), a, "Test message", agent.WithThread(invalidThread))
+	_, err := agent.RunText(t.Context(), a, "Test message", agentopt.Thread(invalidThread))
 	if err == nil {
 		t.Error("Run() error = nil, want error for invalid thread type")
 	}
@@ -621,7 +622,7 @@ func TestRunStreamingWithInvalidThreadType(t *testing.T) {
 	invalidThread := &customAgentThread{}
 
 	gotError := false
-	for _, err := range agent.RunTextStream(t.Context(), a, "Test message", agent.WithThread(invalidThread)) {
+	for _, err := range agent.RunTextStream(t.Context(), a, "Test message", agentopt.Thread(invalidThread)) {
 		if err != nil {
 			gotError = true
 			break
@@ -638,7 +639,7 @@ func TestRunWithContinuationTokenAndMessages(t *testing.T) {
 	transport := &mockA2ATransport{}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	_, err := agent.RunText(t.Context(), a, "Test message", agent.WithContinuationToken(a2a.TaskID("task-123")))
+	_, err := agent.RunText(t.Context(), a, "Test message", agentopt.ContinuationToken(a2a.TaskID("task-123")))
 	if err == nil {
 		t.Error("Run() error = nil, want error when continuation token and messages are provided")
 	}
@@ -654,7 +655,7 @@ func TestRunWithContinuationToken(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	_, err := agent.Run(t.Context(), a, agent.WithContinuationToken(a2a.TaskID("task-123")))
+	_, err := agent.Run(t.Context(), a, agentopt.ContinuationToken(a2a.TaskID("task-123")))
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil", err)
 	}
@@ -676,7 +677,7 @@ func TestRunWithTaskInThreadAndMessage(t *testing.T) {
 	thread := a.NewThread().(*a2aagent.Thread)
 	thread.TaskID = "task-123"
 
-	_, err := agent.RunText(t.Context(), a, "Please make the background transparent", agent.WithThread(thread))
+	_, err := agent.RunText(t.Context(), a, "Please make the background transparent", agentopt.Thread(thread))
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil", err)
 	}
@@ -707,7 +708,7 @@ func TestRunWithAgentTask(t *testing.T) {
 
 	thread := a.NewThread()
 
-	_, err := agent.RunText(t.Context(), a, "Start a task", agent.WithThread(thread))
+	_, err := agent.RunText(t.Context(), a, "Start a task", agentopt.Thread(thread))
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil", err)
 	}
@@ -744,7 +745,7 @@ func TestRunWithAgentTaskResponse(t *testing.T) {
 
 	thread := a.NewThread()
 
-	result, err := agent.RunText(t.Context(), a, "Start a long-running task", agent.WithThread(thread))
+	result, err := agent.RunText(t.Context(), a, "Start a long-running task", agentopt.Thread(thread))
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil", err)
 	}
@@ -836,7 +837,7 @@ func TestRunStreamingWithContinuationTokenAndMessages(t *testing.T) {
 	a := newTestAgent(transport, a2aagent.Options{})
 
 	gotError := false
-	for _, err := range agent.RunTextStream(t.Context(), a, "Test message", agent.WithContinuationToken(a2a.TaskID("task-123"))) {
+	for _, err := range agent.RunTextStream(t.Context(), a, "Test message", agentopt.ContinuationToken(a2a.TaskID("task-123"))) {
 		if err != nil {
 			gotError = true
 			break
@@ -864,7 +865,7 @@ func TestRunStreamingWithTaskInThreadAndMessage(t *testing.T) {
 	thread := a.NewThread().(*a2aagent.Thread)
 	thread.TaskID = "task-123"
 
-	for _, err := range agent.RunTextStream(t.Context(), a, "Please make the background transparent", agent.WithThread(thread)) {
+	for _, err := range agent.RunTextStream(t.Context(), a, "Please make the background transparent", agentopt.Thread(thread)) {
 		if err != nil {
 			t.Fatalf("RunStream() error = %v, want nil", err)
 		}
@@ -902,7 +903,7 @@ func TestRunStreamingWithAgentTaskUpdatesThread(t *testing.T) {
 
 	thread := a.NewThread()
 
-	for _, err := range agent.RunTextStream(t.Context(), a, "Start a task", agent.WithThread(thread)) {
+	for _, err := range agent.RunTextStream(t.Context(), a, "Start a task", agentopt.Thread(thread)) {
 		if err != nil {
 			t.Fatalf("RunStream() error = %v, want nil", err)
 		}
@@ -995,7 +996,7 @@ func TestRunStreamingWithAgentTaskYieldsUpdate(t *testing.T) {
 	thread := a.NewThread()
 
 	var updates []*agent.RunResponseUpdate
-	for update, err := range agent.RunTextStream(t.Context(), a, "Start long-running task", agent.WithThread(thread)) {
+	for update, err := range agent.RunTextStream(t.Context(), a, "Start long-running task", agentopt.Thread(thread)) {
 		if err != nil {
 			t.Fatalf("RunStream() error = %v, want nil", err)
 		}
@@ -1051,7 +1052,7 @@ func TestRunStreamingWithTaskStatusUpdateEvent(t *testing.T) {
 	thread := a.NewThread()
 
 	var updates []*agent.RunResponseUpdate
-	for update, err := range agent.RunTextStream(t.Context(), a, "Check task status", agent.WithThread(thread)) {
+	for update, err := range agent.RunTextStream(t.Context(), a, "Check task status", agentopt.Thread(thread)) {
 		if err != nil {
 			t.Fatalf("RunStream() error = %v, want nil", err)
 		}
@@ -1111,7 +1112,7 @@ func TestRunStreamingWithTaskArtifactUpdateEvent(t *testing.T) {
 	thread := a.NewThread()
 
 	var updates []*agent.RunResponseUpdate
-	for update, err := range agent.RunTextStream(t.Context(), a, "Process artifact", agent.WithThread(thread)) {
+	for update, err := range agent.RunTextStream(t.Context(), a, "Process artifact", agentopt.Thread(thread)) {
 		if err != nil {
 			t.Fatalf("RunStream() error = %v, want nil", err)
 		}
@@ -1162,7 +1163,7 @@ func TestRunWithAllowBackgroundResponsesAndNoThread(t *testing.T) {
 
 	// Call the agent's Run method directly (not the helper functions) to test the validation
 	gotError := false
-	for _, err := range a.Run(context.Background(), agent.WithMessage(message.NewText("Test message")), agent.WithAllowBackgroundResponses(true)) {
+	for _, err := range a.Run(context.Background(), agentopt.Message(message.NewText("Test message")), agentopt.AllowBackgroundResponses(true)) {
 		if err != nil {
 			gotError = true
 			break
@@ -1180,7 +1181,7 @@ func TestRunStreamingWithAllowBackgroundResponsesAndNoThread(t *testing.T) {
 
 	// Call the agent's Run method directly with streaming enabled
 	gotError := false
-	for _, err := range a.Run(context.Background(), agent.WithMessage(message.NewText("Test message")), agent.WithAllowBackgroundResponses(true), agent.WithStreaming(true)) {
+	for _, err := range a.Run(context.Background(), agentopt.Message(message.NewText("Test message")), agentopt.AllowBackgroundResponses(true), agentopt.Streaming(true)) {
 		if err != nil {
 			gotError = true
 			break

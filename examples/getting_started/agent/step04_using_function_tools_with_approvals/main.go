@@ -12,6 +12,7 @@ import (
 	"fmt"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
 	"github.com/microsoft/agent-framework-go/agent/chatagent/chatclient"
 	"github.com/microsoft/agent-framework-go/message"
@@ -43,7 +44,7 @@ func main() {
 
 	// Call the agent and check if there are any user input requests to handle.
 	thread := a.NewThread()
-	resp, err := agent.RunText(ctx, a, "What is the weather like in Amsterdam?", agent.WithThread(thread))
+	resp, err := agent.RunText(ctx, a, "What is the weather like in Amsterdam?", agentopt.Thread(thread))
 	if err != nil {
 		panic(err)
 	}
@@ -65,5 +66,5 @@ func main() {
 	}
 
 	// Pass the user input responses back to the agent for further processing.
-	fmt.Println(agent.Run(ctx, a, agent.WithMessage(message.New(userResponses...)), agent.WithThread(thread)))
+	fmt.Println(agent.Run(ctx, a, agentopt.Message(message.New(userResponses...)), agentopt.Thread(thread)))
 }

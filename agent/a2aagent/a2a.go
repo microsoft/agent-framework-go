@@ -16,6 +16,7 @@ import (
 	"github.com/a2aproject/a2a-go/a2a"
 	"github.com/a2aproject/a2a-go/a2aclient"
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
 )
@@ -76,14 +77,14 @@ func (a *Agent) UnmarshalThread(data []byte) (memory.Thread, error) {
 	return &thread, nil
 }
 
-func (a *Agent) Run(ctx context.Context, options ...agent.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
+func (a *Agent) Run(ctx context.Context, options ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
 	return func(yield func(*agent.RunResponseUpdate, error) bool) {
 		var thread *Thread
-		if v, ok := agent.GetOption(options, agent.WithThread); !ok {
+		if v, ok := agentopt.Get(options, agentopt.Thread); !ok {
 			// Aligning with other agent implementations that support background responses, where
 			// a thread is required for background responses to prevent inconsistent experience
 			// for callers if they forget to provide the thread for initial or follow-up runs.
-			if opts, ok := agent.GetOption(options, agent.WithAllowBackgroundResponses); ok && opts {
+			if opts, ok := agentopt.Get(options, agentopt.AllowBackgroundResponses); ok && opts {
 				yield(nil, errors.New("a thread must be provided when AllowBackgroundResponses is enabled"))
 				return
 			}
@@ -94,14 +95,14 @@ func (a *Agent) Run(ctx context.Context, options ...agent.Option) iter.Seq2[*age
 			yield(nil, errors.New("the provided thread is not compatible with the agent, only threads created by the agent can be used"))
 			return
 		}
-		streaming, _ := agent.GetOption(options, agent.WithStreaming)
-		if token, ok := agent.GetOption(options, agent.WithContinuationToken); ok && token != nil {
+		streaming, _ := agentopt.Get(options, agentopt.Streaming)
+		if token, ok := agentopt.Get(options, agentopt.ContinuationToken); ok && token != nil {
 			if streaming {
 				// TODO: support resuming streaming responses using continuation tokens.
 				yield(nil, errors.New("reconnecting to task streams using continuation tokens is not supported yet"))
 				return
 			}
-			if _, ok := agent.GetOption(options, agent.WithMessage); ok {
+			if _, ok := agentopt.Get(options, agentopt.Message); ok {
 				yield(nil, errors.New("messages are not allowed when continuing a background response using a continuation token"))
 				return
 			}
@@ -123,7 +124,7 @@ func (a *Agent) Run(ctx context.Context, options ...agent.Option) iter.Seq2[*age
 			return
 		}
 		var parts []a2a.Part
-		for msg := range agent.GetOptions(options, agent.WithMessage) {
+		for msg := range agentopt.All(options, agentopt.Message) {
 			parts = parts[:0] // reset parts slice
 			parts, err := contentsToParts(msg.Contents, parts)
 			if err != nil {

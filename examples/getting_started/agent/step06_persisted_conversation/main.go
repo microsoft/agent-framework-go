@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
 	"github.com/microsoft/agent-framework-go/openai"
 )
@@ -31,7 +32,7 @@ func main() {
 	thread := a.NewThread()
 
 	// Run the agent with a new thread.
-	fmt.Println(agent.RunText(ctx, a, "Tell me a joke about a pirate.", agent.WithThread(thread)))
+	fmt.Println(agent.RunText(ctx, a, "Tell me a joke about a pirate.", agentopt.Thread(thread)))
 
 	// Serialize the thread state to JSON, so it can be stored for later use.
 	serializedThread, err := json.Marshal(thread)
@@ -62,5 +63,5 @@ func main() {
 	}
 
 	// Run the agent again with the resumed thread.
-	fmt.Println(agent.RunText(ctx, a, "Now tell the same joke in the voice of a pirate, and add some emojis to the joke.", agent.WithThread(resumedThread)))
+	fmt.Println(agent.RunText(ctx, a, "Now tell the same joke in the voice of a pirate, and add some emojis to the joke.", agentopt.Thread(resumedThread)))
 }

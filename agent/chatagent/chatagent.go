@@ -10,6 +10,7 @@ import (
 	"slices"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent/chatclient"
 	"github.com/microsoft/agent-framework-go/agent/middleware/autocall"
 	"github.com/microsoft/agent-framework-go/memory"
@@ -83,10 +84,10 @@ func (a *Agent) UnmarshalThread(data []byte) (memory.Thread, error) {
 	return newThreadFromJSON(data, a.Options.NewMessageStore, a.Options.NewContextProvider)
 }
 
-func (a *Agent) Run(ctx context.Context, options ...agent.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
+func (a *Agent) Run(ctx context.Context, options ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
 	return func(yield func(*agent.RunResponseUpdate, error) bool) {
 		client := a.Client
-		if fn, ok := agent.GetOption(options, WithNewClient); ok {
+		if fn, ok := agentopt.Get(options, WithNewClient); ok {
 			// If we have a custom chat client factory, we should use it to create a new chat client with the transformed tools.
 			client = fn(client)
 		}
@@ -194,7 +195,7 @@ func (a *Agent) updateThreadWithTypeAndConversationID(thread *Thread, convID str
 	return nil
 }
 
-func (a *Agent) prepareThreadAndMessages(ctx context.Context, options []agent.Option) (thread *Thread, opts ChatOptions, inputMsgs, msgsForClient, ctxMessages []*message.Message, err error) {
+func (a *Agent) prepareThreadAndMessages(ctx context.Context, options []agentopt.Option) (thread *Thread, opts ChatOptions, inputMsgs, msgsForClient, ctxMessages []*message.Message, err error) {
 	retError := func(e error) (*Thread, ChatOptions, []*message.Message, []*message.Message, []*message.Message, error) {
 		return nil, ChatOptions{}, nil, nil, nil, e
 	}
@@ -202,7 +203,7 @@ func (a *Agent) prepareThreadAndMessages(ctx context.Context, options []agent.Op
 	if v, ok := opts.AllowBackgroundResponses.Value(); ok && v && thread == nil {
 		return retError(errors.New("a thread must be provided when continuing a background response with a continuation token"))
 	}
-	if v, ok := agent.GetOption(options, agent.WithThread); ok {
+	if v, ok := agentopt.Get(options, agentopt.Thread); ok {
 		var ok bool
 		thread, ok = v.(*Thread)
 		if !ok {
@@ -211,7 +212,7 @@ func (a *Agent) prepareThreadAndMessages(ctx context.Context, options []agent.Op
 	} else {
 		thread = a.newThread("")
 	}
-	inputMsgs = slices.Collect(agent.GetOptions(options, agent.WithMessage))
+	inputMsgs = slices.Collect(agentopt.All(options, agentopt.Message))
 	if opts.ContinuationToken != nil {
 		if len(inputMsgs) > 0 {
 			return retError(errors.New("messages are not allowed when continuing a background response using a continuation token"))
@@ -291,10 +292,10 @@ func validateStreamResumptionAllowed(continuationToken any, thread *Thread) erro
 	return nil
 }
 
-func (a *Agent) createConfiguredChatOptions(options []agent.Option) ChatOptions {
+func (a *Agent) createConfiguredChatOptions(options []agentopt.Option) ChatOptions {
 	var opts ChatOptions
 	// Try to get ChatOptions from RunOptions
-	if v, ok := agent.GetOption(options, WithOptions); ok {
+	if v, ok := agentopt.Get(options, WithOptions); ok {
 		opts = *v.Clone()
 	}
 	// Merge in Agent-level ChatOptions
@@ -302,16 +303,16 @@ func (a *Agent) createConfiguredChatOptions(options []agent.Option) ChatOptions 
 		opts.Copy(a.Options.ChatOptions)
 	}
 	// Merge in RunOptions specific fields
-	if v, ok := agent.GetOption(options, agent.WithAllowBackgroundResponses); ok {
+	if v, ok := agentopt.Get(options, agentopt.AllowBackgroundResponses); ok {
 		opts.AllowBackgroundResponses = param.NewOpt(v)
 	}
-	if v, ok := agent.GetOption(options, agent.WithContinuationToken); ok {
+	if v, ok := agentopt.Get(options, agentopt.ContinuationToken); ok {
 		opts.ContinuationToken = v
 	}
-	if v, ok := agent.GetOption(options, agent.WithStreaming); ok {
+	if v, ok := agentopt.Get(options, agentopt.Streaming); ok {
 		opts.Streaming = param.NewOpt(v)
 	}
-	if v, ok := agent.GetOption(options, agent.WithResponseFormat); ok {
+	if v, ok := agentopt.Get(options, agentopt.ResponseFormat); ok {
 		opts.ResponseFormat = v
 	}
 	return opts

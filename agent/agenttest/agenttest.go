@@ -7,12 +7,13 @@ import (
 	"iter"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
 type Turn struct {
-	Callbacks []func(context.Context, ...agent.Option)
+	Callbacks []func(context.Context, ...agentopt.Option)
 	Responses []Response
 }
 
@@ -20,7 +21,7 @@ type ResponseBuilder struct {
 	turns []Turn
 }
 
-func NewResponseBuilder(firstTurnCallbacks ...func(ctx context.Context, opts ...agent.Option)) *ResponseBuilder {
+func NewResponseBuilder(firstTurnCallbacks ...func(ctx context.Context, opts ...agentopt.Option)) *ResponseBuilder {
 	return &ResponseBuilder{
 		turns: []Turn{{
 			Responses: []Response{},
@@ -29,7 +30,7 @@ func NewResponseBuilder(firstTurnCallbacks ...func(ctx context.Context, opts ...
 	}
 }
 
-func (rb *ResponseBuilder) NewTurn(callbacks ...func(ctx context.Context, opts ...agent.Option)) *ResponseBuilder {
+func (rb *ResponseBuilder) NewTurn(callbacks ...func(ctx context.Context, opts ...agentopt.Option)) *ResponseBuilder {
 	rb.turns = append(rb.turns, Turn{
 		Callbacks: callbacks,
 		Responses: []Response{},
@@ -104,7 +105,7 @@ func (a *Agent) Capabilities() agent.Capabilities {
 	return a.Caps
 }
 
-func (a *Agent) Run(ctx context.Context, opts ...agent.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
+func (a *Agent) Run(ctx context.Context, opts ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
 	return func(yield func(*agent.RunResponseUpdate, error) bool) {
 		defer func() { a.currentTurn++ }()
 		if a.currentTurn >= len(a.Responses) {
@@ -160,7 +161,7 @@ func (m *Middleware) Called() bool {
 	return m.called
 }
 
-func (m *Middleware) Run(ctx context.Context, next agent.Runner, opts ...agent.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
+func (m *Middleware) Run(ctx context.Context, next agent.Runner, opts ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
 	m.called = true
 	return func(yield func(*agent.RunResponseUpdate, error) bool) {
 		defer func() { m.currentTurn++ }()
@@ -194,7 +195,7 @@ type Runner struct {
 	currentTurn int
 }
 
-func (r *Runner) Run(ctx context.Context, opts ...agent.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
+func (r *Runner) Run(ctx context.Context, opts ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
 	return func(yield func(*agent.RunResponseUpdate, error) bool) {
 		defer func() { r.currentTurn++ }()
 		if r.currentTurn >= len(r.Responses) {

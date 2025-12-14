@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/format"
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
@@ -64,11 +65,11 @@ type Agent interface {
 }
 
 type Runner interface {
-	Run(ctx context.Context, options ...Option) iter.Seq2[*RunResponseUpdate, error]
+	Run(ctx context.Context, options ...agentopt.Option) iter.Seq2[*RunResponseUpdate, error]
 }
 
 type Middleware interface {
-	Run(ctx context.Context, next Runner, options ...Option) iter.Seq2[*RunResponseUpdate, error]
+	Run(ctx context.Context, next Runner, options ...agentopt.Option) iter.Seq2[*RunResponseUpdate, error]
 }
 
 func NewMessagesFromUpdates(updates []*RunResponseUpdate) []*message.Message {
