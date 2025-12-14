@@ -32,13 +32,13 @@ type (
 	toolOpt    struct{ tool.Tool }
 
 	toolModeOpt                 tool.ToolMode
-	streamingOpt                bool
+	streamOpt                   bool
 	allowBackgroundResponsesOpt bool
 )
 
 func (responseFormatOpt) AgentOption()           {}
 func (threadOpt) AgentOption()                   {}
-func (streamingOpt) AgentOption()                {}
+func (streamOpt) AgentOption()                   {}
 func (continuationTokenOpt) AgentOption()        {}
 func (allowBackgroundResponsesOpt) AgentOption() {}
 func (messageOpt) AgentOption()                  {}
@@ -47,7 +47,7 @@ func (toolModeOpt) AgentOption()                 {}
 
 func (o responseFormatOpt) Value() any           { return o.Format }
 func (o threadOpt) Value() any                   { return o.Thread }
-func (o streamingOpt) Value() any                { return bool(o) }
+func (o streamOpt) Value() any                   { return bool(o) }
 func (o continuationTokenOpt) Value() any        { return o.any }
 func (o allowBackgroundResponsesOpt) Value() any { return bool(o) }
 func (o messageOpt) Value() any                  { return o.Message }
@@ -64,9 +64,9 @@ func ToolMode(mode tool.ToolMode) Option {
 	return toolModeOpt(mode)
 }
 
-// Streaming sets whether to use streaming responses during the agent run.
-func Streaming(streaming bool) Option {
-	return streamingOpt(streaming)
+// Stream sets whether to use streaming responses during the agent run.
+func Stream(stream bool) Option {
+	return streamOpt(stream)
 }
 
 // ResponseFormat sets the desired response format for the agent run.

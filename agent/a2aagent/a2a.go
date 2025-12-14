@@ -95,7 +95,7 @@ func (a *Agent) Run(ctx context.Context, options ...agentopt.Option) iter.Seq2[*
 			yield(nil, errors.New("the provided thread is not compatible with the agent, only threads created by the agent can be used"))
 			return
 		}
-		streaming, _ := agentopt.Get(options, agentopt.Streaming)
+		streaming, _ := agentopt.Get(options, agentopt.Stream)
 		if token, ok := agentopt.Get(options, agentopt.ContinuationToken); ok && token != nil {
 			if streaming {
 				// TODO: support resuming streaming responses using continuation tokens.

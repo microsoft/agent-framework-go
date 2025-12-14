@@ -309,7 +309,7 @@ func (a *Agent) createConfiguredChatOptions(options []agentopt.Option) ChatOptio
 	if v, ok := agentopt.Get(options, agentopt.ContinuationToken); ok {
 		opts.ContinuationToken = v
 	}
-	if v, ok := agentopt.Get(options, agentopt.Streaming); ok {
+	if v, ok := agentopt.Get(options, agentopt.Stream); ok {
 		opts.Streaming = param.NewOpt(v)
 	}
 	if v, ok := agentopt.Get(options, agentopt.ResponseFormat); ok {

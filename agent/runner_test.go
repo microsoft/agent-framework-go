@@ -517,7 +517,7 @@ func TestRunStream_BasicExecution(t *testing.T) {
 		Responses: agenttest.NewResponseBuilder(
 			func(ctx context.Context, opts ...agentopt.Option) {
 				// Verify streaming option is set
-				streaming, ok := agentopt.Get(opts, agentopt.Streaming)
+				streaming, ok := agentopt.Get(opts, agentopt.Stream)
 				if !ok || !streaming {
 					t.Fatal("streaming not enabled")
 				}
@@ -651,7 +651,7 @@ func TestRunTextStream_BasicExecution(t *testing.T) {
 		Responses: agenttest.NewResponseBuilder(
 			func(ctx context.Context, opts ...agentopt.Option) {
 				// Verify streaming is enabled
-				streaming, ok := agentopt.Get(opts, agentopt.Streaming)
+				streaming, ok := agentopt.Get(opts, agentopt.Stream)
 				if !ok || !streaming {
 					t.Fatal("streaming not enabled")
 				}

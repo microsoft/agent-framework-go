@@ -32,7 +32,7 @@ func Run(ctx context.Context, a Agent, opts ...agentopt.Option) (*RunResponse, e
 
 // RunStream executes the agent with the given options and returns a streaming sequence of response updates.
 func RunStream(ctx context.Context, a Agent, opts ...agentopt.Option) iter.Seq2[*RunResponseUpdate, error] {
-	opts = append(opts, agentopt.Streaming(true))
+	opts = append(opts, agentopt.Stream(true))
 	return run(ctx, a, opts)
 }
 

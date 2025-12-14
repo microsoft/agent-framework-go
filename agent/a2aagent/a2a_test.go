@@ -1181,7 +1181,7 @@ func TestRunStreamingWithAllowBackgroundResponsesAndNoThread(t *testing.T) {
 
 	// Call the agent's Run method directly with streaming enabled
 	gotError := false
-	for _, err := range a.Run(context.Background(), agentopt.Message(message.NewText("Test message")), agentopt.AllowBackgroundResponses(true), agentopt.Streaming(true)) {
+	for _, err := range a.Run(context.Background(), agentopt.Message(message.NewText("Test message")), agentopt.AllowBackgroundResponses(true), agentopt.Stream(true)) {
 		if err != nil {
 			gotError = true
 			break
