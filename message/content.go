@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"iter"
 	"maps"
 	"reflect"
 	"slices"
@@ -68,6 +69,39 @@ func (cs *Contents) UnmarshalJSON(data []byte) error {
 	var err error
 	*cs, err = jsonx.UnmarshalDiscriminatedUnionSlice[Content](data, supportedContents)
 	return err
+}
+
+// Text returns the first text content in the response, or empty string.
+func (cs Contents) Text() string {
+	for _, c := range cs {
+		if textContent, ok := c.(*TextContent); ok {
+			return textContent.Text
+		}
+	}
+	return ""
+}
+
+func (cs Contents) Usage() UsageDetails {
+	var usage UsageDetails
+	for _, c := range cs {
+		if usageContent, ok := c.(*UsageContent); ok {
+			usage.Add(usageContent.Details)
+		}
+	}
+	return usage
+}
+
+func (cs Contents) UserInputRequests() iter.Seq[Content] {
+	return func(yield func(Content) bool) {
+		for _, c := range cs {
+			switch c := c.(type) {
+			case *FunctionApprovalRequestContent:
+				if !yield(c) {
+					return
+				}
+			}
+		}
+	}
 }
 
 // TextContent represents plain text content.

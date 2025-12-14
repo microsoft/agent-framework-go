@@ -282,8 +282,8 @@ func TestRunWithValidUserMessage(t *testing.T) {
 	if result.Messages[0].Role != message.RoleAssistant {
 		t.Errorf("result.Messages[0].Role = %q, want %q", result.Messages[0].Role, message.RoleAssistant)
 	}
-	if result.Messages[0].Text() != "Hello! How can I help you today?" {
-		t.Errorf("result.Messages[0].Text() = %q, want %q", result.Messages[0].Text(), "Hello! How can I help you today?")
+	if result.Messages[0].String() != "Hello! How can I help you today?" {
+		t.Errorf("result.Messages[0].String() = %q, want %q", result.Messages[0].String(), "Hello! How can I help you today?")
 	}
 }
 

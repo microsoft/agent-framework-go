@@ -168,20 +168,18 @@ func TestRun_UsageTracking(t *testing.T) {
 		t.Fatalf("Run failed: %v", err)
 	}
 
-	if resp.Usage == nil {
-		t.Fatal("expected usage details, got nil")
+	usage := resp.Usage()
+
+	if usage.InputTokenCount != 10 {
+		t.Errorf("expected input tokens 10, got %d", usage.InputTokenCount)
 	}
 
-	if resp.Usage.InputTokenCount != 10 {
-		t.Errorf("expected input tokens 10, got %d", resp.Usage.InputTokenCount)
+	if usage.OutputTokenCount != 20 {
+		t.Errorf("expected output tokens 20, got %d", usage.OutputTokenCount)
 	}
 
-	if resp.Usage.OutputTokenCount != 20 {
-		t.Errorf("expected output tokens 20, got %d", resp.Usage.OutputTokenCount)
-	}
-
-	if resp.Usage.TotalTokenCount != 30 {
-		t.Errorf("expected total tokens 30, got %d", resp.Usage.TotalTokenCount)
+	if usage.TotalTokenCount != 30 {
+		t.Errorf("expected total tokens 30, got %d", usage.TotalTokenCount)
 	}
 }
 

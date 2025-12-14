@@ -2,7 +2,9 @@
 
 package message
 
-import "time"
+import (
+	"time"
+)
 
 // Role represents the role of a message sender in a conversation.
 type Role string
@@ -24,9 +26,11 @@ type Message struct {
 	Contents             Contents
 	Role                 Role
 	ID                   string
+	AuthorID             string    `json:",omitzero"`
 	AuthorName           string    `json:",omitzero"`
 	CreatedAt            time.Time `json:",omitzero"`
-	RawRepresentation    any       `json:",omitzero"`
+	ContinuationToken    any       `json:",omitzero"`
+	RawRepresentation    any       `json:"-"`
 }
 
 // New creates a new [Message] with the given role and contents.
@@ -43,20 +47,17 @@ func NewText(text string) *Message {
 }
 
 func (m *Message) String() string {
-	return m.Text()
+	return m.Contents.Text()
 }
 
-// Text returns the first text content in the response, or empty string.
-func (m *Message) Text() string {
-	if m == nil {
-		return ""
-	}
+func (m *Message) Usage() UsageDetails {
+	var usage UsageDetails
 	for _, c := range m.Contents {
-		if textContent, ok := c.(*TextContent); ok {
-			return textContent.Text
+		if usageContent, ok := c.(*UsageContent); ok {
+			usage.Add(usageContent.Details)
 		}
 	}
-	return ""
+	return usage
 }
 
 // Clone creates a shallow copy of the message.
