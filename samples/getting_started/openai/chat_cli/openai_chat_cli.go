@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/openai"
@@ -104,7 +105,7 @@ func runChatLoop(ag agent.Agent, thread memory.Thread) {
 		fmt.Print("Assistant: ")
 
 		hasError := false
-		for update, err := range agent.RunTextStream(ctx, ag, userInput, agent.WithThread(thread)) {
+		for update, err := range agent.RunTextStream(ctx, ag, userInput, agentopt.Thread(thread)) {
 			if err != nil {
 				fmt.Printf("\n❌ Error: %v\n", err)
 				hasError = true
