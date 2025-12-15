@@ -14,7 +14,6 @@ import (
 	"github.com/microsoft/agent-framework-go/format"
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/tool"
 )
 
 func TestRun_BasicExecution(t *testing.T) {
@@ -248,63 +247,6 @@ func TestRun_ResponseMetadata(t *testing.T) {
 	}
 }
 
-func TestRun_AgentCapabilitiesMiddleware(t *testing.T) {
-	ctx := t.Context()
-	capsMw := &agenttest.Middleware{}
-
-	a := &agenttest.Agent{
-		Caps: agent.Capabilities{
-			Middlewares: []agent.Middleware{capsMw},
-		},
-		Responses: agenttest.NewResponseBuilder().
-			AddText("Response").
-			Build(),
-	}
-
-	_, err := agent.Run(ctx, a)
-	if err != nil {
-		t.Fatalf("Run failed: %v", err)
-	}
-
-	if !capsMw.Called() {
-		t.Error("expected capabilities middleware to be invoked")
-	}
-}
-
-func TestRun_AgentCapabilitiesTools(t *testing.T) {
-	ctx := t.Context()
-
-	testTool := agenttest.NewTool("test_tool", "A test tool")
-	var receivedTools []string
-
-	a := &agenttest.Agent{
-		Caps: agent.Capabilities{
-			Tools: []tool.Tool{testTool},
-		},
-		Responses: agenttest.NewResponseBuilder(
-			func(ctx context.Context, opts ...agentopt.Option) {
-				for tool := range agentopt.All(opts, agentopt.Tool) {
-					receivedTools = append(receivedTools, tool.Name())
-				}
-			}).
-			AddText("Response").
-			Build(),
-	}
-
-	_, err := agent.Run(ctx, a)
-	if err != nil {
-		t.Fatalf("Run failed: %v", err)
-	}
-
-	if len(receivedTools) != 1 {
-		t.Fatalf("expected 1 tool, got %d", len(receivedTools))
-	}
-
-	if receivedTools[0] != "test_tool" {
-		t.Errorf("expected tool name 'test_tool', got %q", receivedTools[0])
-	}
-}
-
 func TestRun_AdditionalProperties(t *testing.T) {
 	ctx := t.Context()
 
@@ -337,83 +279,6 @@ func TestRun_AdditionalProperties(t *testing.T) {
 
 	if resp.AdditionalProperties["key2"] != 42 {
 		t.Errorf("expected key2=42, got %v", resp.AdditionalProperties["key2"])
-	}
-}
-
-func TestRun_NilUpdateHandling(t *testing.T) {
-	ctx := t.Context()
-
-	a := &agenttest.Agent{
-		Responses: agenttest.NewResponseBuilder().
-			AddText("Before nil").
-			Add(nil). // Nil update
-			Build(),
-	}
-
-	resp, err := agent.Run(ctx, a)
-	if err == nil {
-		t.Fatal("expected error for nil update with nil error, got nil")
-	}
-
-	if resp != nil {
-		t.Errorf("expected nil response on error, got %v", resp)
-	}
-}
-
-func TestRun_PopulatesAgentIDAndAuthorName(t *testing.T) {
-	ctx := t.Context()
-
-	a := &agenttest.Agent{
-		Iden: agent.NewIdentity("custom-id", "CustomAgent", "Description"),
-		Responses: agenttest.NewResponseBuilder().
-			AddText("Response").
-			Build(),
-	}
-
-	resp, err := agent.Run(ctx, a)
-	if err != nil {
-		t.Fatalf("Run failed: %v", err)
-	}
-
-	if resp.AgentID != "custom-id" {
-		t.Errorf("expected AgentID 'custom-id', got %q", resp.AgentID)
-	}
-
-	if len(resp.Messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(resp.Messages))
-	}
-
-	if resp.Messages[0].AuthorName != "CustomAgent" {
-		t.Errorf("expected AuthorName 'CustomAgent', got %q", resp.Messages[0].AuthorName)
-	}
-}
-
-func TestRun_ThreadCreation(t *testing.T) {
-	ctx := t.Context()
-	newThreadCalled := false
-	a := &agenttest.Agent{
-		NewThreadFunc: func() memory.Thread {
-			newThreadCalled = true
-			return agenttest.NewThread()
-		},
-		Responses: agenttest.NewResponseBuilder(
-			func(ctx context.Context, opts ...agentopt.Option) {
-				thread, ok := agentopt.Get(opts, agentopt.Thread)
-				if !ok || thread == nil {
-					t.Error("no thread provided")
-				}
-			}).
-			AddText("Response").
-			Build(),
-	}
-
-	_, err := agent.Run(ctx, a)
-	if err != nil {
-		t.Fatalf("Run failed: %v", err)
-	}
-
-	if !newThreadCalled {
-		t.Error("expected NewThread to be called")
 	}
 }
 
@@ -516,10 +381,10 @@ func TestRunStream_BasicExecution(t *testing.T) {
 	a := &agenttest.Agent{
 		Responses: agenttest.NewResponseBuilder(
 			func(ctx context.Context, opts ...agentopt.Option) {
-				// Verify streaming option is set
-				streaming, ok := agentopt.Get(opts, agentopt.Stream)
-				if !ok || !streaming {
-					t.Fatal("streaming not enabled")
+				// Verify stream option is set
+				stream, ok := agentopt.Get(opts, agentopt.Stream)
+				if !ok || !stream {
+					t.Fatal("stream not enabled")
 				}
 			}).
 			AddText("Streamed ").
@@ -651,8 +516,8 @@ func TestRunTextStream_BasicExecution(t *testing.T) {
 		Responses: agenttest.NewResponseBuilder(
 			func(ctx context.Context, opts ...agentopt.Option) {
 				// Verify streaming is enabled
-				streaming, ok := agentopt.Get(opts, agentopt.Stream)
-				if !ok || !streaming {
+				stream, ok := agentopt.Get(opts, agentopt.Stream)
+				if !ok || !stream {
 					t.Fatal("streaming not enabled")
 				}
 				// Verify message is present

@@ -11,6 +11,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/agenttest"
+	"github.com/microsoft/agent-framework-go/agent/middleware"
 	"github.com/microsoft/agent-framework-go/agent/middleware/autocall"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
@@ -44,11 +45,11 @@ func invokeAndAssertApproval(t *testing.T, tools []tool.Tool, input []*message.M
 		Responses: rb.Build(),
 	}
 
-	invokeAndAssertApprovalWithAgent(t, runner, tools, input, expectedOutput, additionalTools)
+	invokeAndAssertApprovalWithAgent(t, runner.Run, tools, input, expectedOutput, additionalTools)
 }
 
 // invokeAndAssertApprovalWithAgent performs streaming test execution
-func invokeAndAssertApprovalWithAgent(t *testing.T, runner agent.Runner,
+func invokeAndAssertApprovalWithAgent(t *testing.T, next middleware.RunFunc,
 	tools []tool.Tool, input []*message.Message,
 	expectedOutput []*agent.RunResponseUpdate, additionalTools []tool.Tool) {
 
@@ -72,7 +73,7 @@ func invokeAndAssertApprovalWithAgent(t *testing.T, runner agent.Runner,
 
 	// Collect all streaming updates into messages
 	var updates []*agent.RunResponseUpdate
-	for update, err := range autocall.New(autocallOptions).Run(ctx, runner, opts...) {
+	for update, err := range autocall.New(autocallOptions).Run(ctx, next, opts...) {
 		if err != nil {
 			t.Fatalf("StreamingResponse failed: %v", err)
 		}
@@ -99,7 +100,7 @@ func expectApprovalError(t *testing.T, tools []tool.Tool, input []*message.Messa
 	}
 
 	var lastErr error
-	for _, err := range autocall.New(autocall.Options{}).Run(ctx, runner, opts...) {
+	for _, err := range autocall.New(autocall.Options{}).Run(ctx, runner.Run, opts...) {
 		if err != nil {
 			lastErr = err
 			break
@@ -637,7 +638,7 @@ func TestFunctionInvoking_MixedApprovalRequiredToolsWithNonApprovalRequiringFunc
 		}},
 	}
 
-	invokeAndAssertApprovalWithAgent(t, runner, tools, input, expectedOutput, nil)
+	invokeAndAssertApprovalWithAgent(t, runner.Run, tools, input, expectedOutput, nil)
 }
 
 // TestFunctionInvoking_ApprovedApprovalResponsesWithoutApprovalRequestAreExecuted tests that
@@ -733,7 +734,7 @@ func TestFunctionInvoking_FunctionCallContentIsYieldedImmediatelyIfNoApprovalReq
 		}},
 	}
 
-	invokeAndAssertApprovalWithAgent(t, runner, tools, input, expectedOutput, nil)
+	invokeAndAssertApprovalWithAgent(t, runner.Run, tools, input, expectedOutput, nil)
 }
 
 // TestFunctionInvoking_FunctionCallsAreBufferedUntilApprovalRequirementEncounteredWhenStreaming tests that

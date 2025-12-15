@@ -5,9 +5,7 @@ package agent
 import (
 	"context"
 	"errors"
-	"fmt"
 	"iter"
-	"slices"
 
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/message"
@@ -18,7 +16,7 @@ func Run(ctx context.Context, a Agent, opts ...agentopt.Option) (*RunResponse, e
 	resp := RunResponse{
 		AgentID: a.Identity().ID(),
 	}
-	for update, err := range run(ctx, a, opts) {
+	for update, err := range a.Run(ctx, opts...) {
 		if err != nil {
 			return nil, err
 		}
@@ -33,7 +31,7 @@ func Run(ctx context.Context, a Agent, opts ...agentopt.Option) (*RunResponse, e
 // RunStream executes the agent with the given options and returns a streaming sequence of response updates.
 func RunStream(ctx context.Context, a Agent, opts ...agentopt.Option) iter.Seq2[*RunResponseUpdate, error] {
 	opts = append(opts, agentopt.Stream(true))
-	return run(ctx, a, opts)
+	return a.Run(ctx, opts...)
 }
 
 // RunText executes the agent with a single text message and returns the response.
@@ -64,71 +62,4 @@ func RunFor[T any](ctx context.Context, a Agent, opts ...agentopt.Option) (T, *R
 	}
 	err = formatter.Unmarshal([]byte(resp.String()), format, &v)
 	return v, resp, err
-}
-
-// agentRunner is a Runner that runs an Agent, validating and populating updates as needed.
-type agentRunner struct {
-	agent Agent
-}
-
-func (ar agentRunner) Run(ctx context.Context, opts ...agentopt.Option) iter.Seq2[*RunResponseUpdate, error] {
-	return func(yield func(*RunResponseUpdate, error) bool) {
-		iden := ar.agent.Identity()
-		id, name := iden.ID(), iden.Name()
-		for update, err := range ar.agent.Run(ctx, opts...) {
-			if update == nil && err == nil {
-				if !yield(nil, fmt.Errorf("agent %s (%s) returned nil update", id, name)) {
-					return
-				}
-				continue
-			}
-			if update != nil {
-				if update.AgentID == "" {
-					update.AgentID = id
-				}
-				if update.AuthorName == "" {
-					update.AuthorName = name
-				}
-			}
-			if !yield(update, err) {
-				return
-			}
-		}
-	}
-}
-
-type middlewareRunner struct {
-	Middleware
-	next Runner
-}
-
-func (mr middlewareRunner) Run(ctx context.Context, opts ...agentopt.Option) iter.Seq2[*RunResponseUpdate, error] {
-	return mr.Middleware.Run(ctx, mr.next, opts...)
-}
-
-func run(ctx context.Context, a Agent, opts []agentopt.Option) iter.Seq2[*RunResponseUpdate, error] {
-	// If no thread is provided, create a new one.
-	if _, ok := agentopt.Get(opts, agentopt.Thread); !ok {
-		opts = append(opts, agentopt.Thread(a.NewThread()))
-	}
-
-	caps := a.Capabilities()
-
-	// Collect tools from agent capabilities.
-	for _, t := range caps.Tools {
-		opts = append(opts, agentopt.Tool(t))
-	}
-
-	// Collect all middlewares and add the agent's Run method as the final middleware.
-	middlewares := slices.Clone(caps.Middlewares)
-
-	// Chain the middlewares together.
-	var chain Runner = agentRunner{agent: a}
-	for _, mw := range slices.Backward(middlewares) {
-		chain = middlewareRunner{
-			Middleware: mw,
-			next:       chain,
-		}
-	}
-	return chain.Run(ctx, opts...)
 }

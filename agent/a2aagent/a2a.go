@@ -54,9 +54,7 @@ func (a *Agent) Identity() agent.Identity {
 }
 
 func (a *Agent) Capabilities() agent.Capabilities {
-	return agent.Capabilities{
-		Streaming: true,
-	}
+	return agent.Capabilities{}
 }
 
 func (a *Agent) NewThread() memory.Thread {
@@ -95,10 +93,10 @@ func (a *Agent) Run(ctx context.Context, options ...agentopt.Option) iter.Seq2[*
 			yield(nil, errors.New("the provided thread is not compatible with the agent, only threads created by the agent can be used"))
 			return
 		}
-		streaming, _ := agentopt.Get(options, agentopt.Stream)
+		stream, _ := agentopt.Get(options, agentopt.Stream)
 		if token, ok := agentopt.Get(options, agentopt.ContinuationToken); ok && token != nil {
-			if streaming {
-				// TODO: support resuming streaming responses using continuation tokens.
+			if stream {
+				// TODO: support resuming stream responses using continuation tokens.
 				yield(nil, errors.New("reconnecting to task streams using continuation tokens is not supported yet"))
 				return
 			}
@@ -144,7 +142,7 @@ func (a *Agent) Run(ctx context.Context, options ...agentopt.Option) iter.Seq2[*
 					ContextID:      thread.ContextID,
 				},
 			}
-			a.sendMsg(ctx, thread, streaming, params, yield)
+			a.sendMsg(ctx, thread, stream, params, yield)
 		}
 	}
 }

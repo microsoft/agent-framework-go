@@ -188,7 +188,7 @@ func invokeAndAssert(t *testing.T, tools []tool.Tool, plan []*message.Message, e
 
 	// Collect all updates
 	var updates []*agent.RunResponseUpdate
-	for update, err := range autocall.New(autocallOptions).Run(t.Context(), runner, opts...) {
+	for update, err := range autocall.New(autocallOptions).Run(t.Context(), runner.Run, opts...) {
 		if err != nil {
 			t.Fatalf("unexpected error during streaming: %v", err)
 		}
@@ -642,7 +642,7 @@ func TestFunctionInvoking_ContinuesWithFailingCallsUntilMaximumConsecutiveErrors
 			}
 
 			var streamErr error
-			for _, err := range autocall.New(autocallOptions).Run(t.Context(), runner, opts...) {
+			for _, err := range autocall.New(autocallOptions).Run(t.Context(), runner.Run, opts...) {
 				if err != nil {
 					streamErr = err
 					break
@@ -755,7 +755,7 @@ func TestFunctionInvoking_CanFailOnFirstException(t *testing.T) {
 			}
 
 			var streamErr error
-			for _, err := range autocall.New(autocallOptions).Run(t.Context(), runner, opts...) {
+			for _, err := range autocall.New(autocallOptions).Run(t.Context(), runner.Run, opts...) {
 				if err != nil {
 					streamErr = err
 					break
@@ -972,7 +972,7 @@ func TestFunctionInvoking_AllResponseMessagesReturned(t *testing.T) {
 	}
 
 	var updates []*agent.RunResponseUpdate
-	for update, err := range autocall.New(autocall.Options{}).Run(t.Context(), runner, opts...) {
+	for update, err := range autocall.New(autocall.Options{}).Run(t.Context(), runner.Run, opts...) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
