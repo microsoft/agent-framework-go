@@ -1,8 +1,5 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-// This sample demonstrates third-party thread storage and message persistence
-// using a filesystem-based message store for agent conversations.
-
 package main
 
 import (
@@ -17,9 +14,17 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
+	"github.com/microsoft/agent-framework-go/agent/middleware"
+	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/openai"
+)
+
+var logger = demo.NewLogger(
+	"3rd-Party Thread Storage",
+	"Demonstrates how to use a custom message store to persist conversation history to disk.",
+	"Model", "gpt-4o-mini",
 )
 
 func main() {
@@ -36,6 +41,7 @@ func main() {
 	}, chatagent.Options{
 		Instructions: "You are good at telling jokes.",
 		Name:         "Joker",
+		Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
 		NewMessageStore: func() memory.MessageStore {
 			return &fsMessageStore{Dir: tmpDir}
 		},
@@ -47,14 +53,14 @@ func main() {
 	thread := a.NewThread()
 
 	// Run the agent with the thread that stores conversation history in the disk store.
-	fmt.Println(agent.RunText(ctx, a, "Tell me a joke about a pirate.", agentopt.Thread(thread)))
+	demo.Response(agent.RunText(ctx, a, "Tell me a joke about a pirate.", agentopt.Thread(thread)))
 
 	// Serialize the thread state, so it can be stored for later use.
 	// Since the chat history is stored in the disk store, the serialized thread
 	// only contains the ID that the messages are stored under in the store.
 	serializedThread, err := json.MarshalIndent(thread, "", "\t")
 	if err != nil {
-		panic(err)
+		demo.Panic(err)
 	}
 	fmt.Println("\n--- Serialized thread ---")
 	fmt.Println(string(serializedThread))
@@ -65,11 +71,11 @@ func main() {
 	// Deserialize the thread state after loading from storage.
 	resumedThread, err := a.UnmarshalThread(serializedThread)
 	if err != nil {
-		panic(err)
+		demo.Panic(err)
 	}
 
 	// Run the agent with the thread that stores conversation history in the vector store a second time.
-	fmt.Println(agent.RunText(ctx, a, "Now tell the same joke in the voice of a pirate, and add some emojis to the joke.", agentopt.Thread(resumedThread)))
+	demo.Response(agent.RunText(ctx, a, "Now tell the same joke in the voice of a pirate, and add some emojis to the joke.", agentopt.Thread(resumedThread)))
 }
 
 type fsMessageStore struct {

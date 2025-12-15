@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"os"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
@@ -12,15 +13,19 @@ import (
 	"github.com/microsoft/agent-framework-go/openai"
 )
 
+var deployment = os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
+
 var logger = demo.NewLogger(
 	"Basic Run",
 	"Demonstrates a simple agent run.",
-	"Model", "gpt-4o-mini",
+	"Model", deployment,
 )
 
 func main() {
-	a := openai.NewChatAgent(openai.ClientConfig{
-		Model: "gpt-4o-mini",
+	// Create Azure OpenAI agent with weather tool
+	a := openai.NewChatAgentAzure(openai.ClientConfig{
+		Model:      deployment,
+		APIVersion: "2025-01-01-preview",
 	}, chatagent.Options{
 		Instructions: "You are good at telling jokes.",
 		Name:         "Joker",

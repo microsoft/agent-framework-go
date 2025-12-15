@@ -1,18 +1,23 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-// This sample shows how to use Image Multi-Modality with an Aagent.
-
 package main
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
+	"github.com/microsoft/agent-framework-go/agent/middleware"
+	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/openai"
+)
+
+var logger = demo.NewLogger(
+	"Using Images",
+	"Demonstrates how to use Image Multi-Modality with an Agent.",
+	"Model", "gpt-4o-mini",
 )
 
 func main() {
@@ -22,6 +27,7 @@ func main() {
 	}, chatagent.Options{
 		Instructions: "You are a helpful agent that can analyze images.",
 		Name:         "VisionAgent",
+		Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
 	})
 
 	ctx := context.Background()
@@ -33,10 +39,5 @@ func main() {
 		},
 	)
 
-	for resp, err := range agent.RunStream(ctx, a, agentopt.Message(msg)) {
-		if err != nil {
-			panic(err)
-		}
-		fmt.Println(resp)
-	}
+	demo.Response(agent.Run(ctx, a, agentopt.Message(msg)))
 }
