@@ -11,7 +11,6 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/agenttest"
-	"github.com/microsoft/agent-framework-go/format"
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
 )
@@ -538,30 +537,4 @@ func TestRunTextStream_BasicExecution(t *testing.T) {
 	if updateCount != 2 {
 		t.Errorf("expected 2 updates, got %d", updateCount)
 	}
-}
-
-// Tests for RunFor
-
-type testStructuredOutput struct {
-	Name  string `json:"name"`
-	Value int    `json:"value"`
-}
-
-type mockFormatter struct {
-	formatFunc    func(v any) (format.Format, error)
-	unmarshalFunc func(data []byte, f format.Format, v any) error
-}
-
-func (m *mockFormatter) Format(v any) (format.Format, error) {
-	if m.formatFunc != nil {
-		return m.formatFunc(v)
-	}
-	return format.JSON(), nil
-}
-
-func (m *mockFormatter) Unmarshal(data []byte, f format.Format, v any) error {
-	if m.unmarshalFunc != nil {
-		return m.unmarshalFunc(data, f, v)
-	}
-	return nil
 }
