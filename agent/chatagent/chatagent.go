@@ -31,6 +31,9 @@ type Agent struct {
 
 // NewAgent creates a new chat agent with the given chat client and options.
 func NewAgent(client chatclient.Client, options Options) *Agent {
+	if options.ChatOptions == nil {
+		options.ChatOptions = &ChatOptions{}
+	}
 	return &Agent{
 		Client:  client,
 		Options: options,
