@@ -1,10 +1,5 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-// This sample demonstrates how to use an Agent with function tools that require a human in the loop for approvals.
-// It shows both non-streaming and streaming agent interactions using menu-related tools.
-// If the agent is hosted in a service, with a remote user, combine this sample with the Persisted Conversations sample to persist the chat history
-// while the agent is waiting for user input.
-
 package main
 
 import (
@@ -15,10 +10,18 @@ import (
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
 	"github.com/microsoft/agent-framework-go/agent/chatagent/chatclient"
+	"github.com/microsoft/agent-framework-go/agent/middleware"
+	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/openai"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
+)
+
+var logger = demo.NewLogger(
+	"Function Tools With User Approvals",
+	"Demonstrates how to use function tools that require user approval.",
+	"Model", "gpt-4o-mini",
 )
 
 var weatherTool = functool.MustNew(&functool.Func{
@@ -35,6 +38,7 @@ func main() {
 		Model: "gpt-4o-mini",
 	}, chatagent.Options{
 		Instructions: "You are a helpful assistant",
+		Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
 		ChatOptions: &chatclient.ChatOptions{
 			Tools: []tool.Tool{tool.ApprovalRequiredFunc(weatherTool)},
 		},
@@ -50,21 +54,24 @@ func main() {
 	}
 
 	var userResponses []message.Content
+	var approvedRequests bool
 	for req := range resp.UserInputRequests() {
 		// Ask the user to approve each function call request.
 		request, ok := req.(*message.FunctionApprovalRequestContent)
 		if !ok {
-			panic(fmt.Sprintf("unexpected type %T", req))
-		}
-		fmt.Println("The agent would like to invoke the following function, please reply Y to approve:", request.FunctionCall.Name)
-		var approval string
-		fmt.Scanln(&approval)
-		if approval != "Y" {
+			demo.Panicf("unexpected request type: %T", req)
 			continue
 		}
-		userResponses = append(userResponses, request.Response(true))
+		approved := demo.UserInputRequest(request)
+		if approved {
+			approvedRequests = true
+		}
+		userResponses = append(userResponses, request.Response(approved))
 	}
-
+	if !approvedRequests {
+		demo.Assistant("User did not approve any function calls.")
+		return
+	}
 	// Pass the user input responses back to the agent for further processing.
-	fmt.Println(agent.Run(ctx, a, agentopt.Message(message.New(userResponses...)), agentopt.Thread(thread)))
+	demo.Response(agent.Run(ctx, a, agentopt.Message(message.New(userResponses...)), agentopt.Thread(thread)))
 }

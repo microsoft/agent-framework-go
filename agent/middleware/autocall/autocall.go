@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
+	"github.com/microsoft/agent-framework-go/agent/middleware"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/param"
 	"github.com/microsoft/agent-framework-go/tool"
@@ -37,7 +38,7 @@ type autocall struct {
 }
 
 // New creates a new function-invoking chat client that wraps the provided client.
-func New(options Options) agent.Middleware {
+func New(options Options) middleware.Middleware {
 	ac := &autocall{options}
 	if ac.NewID == nil {
 		ac.NewID = uuid.NewString
@@ -45,7 +46,7 @@ func New(options Options) agent.Middleware {
 	return ac
 }
 
-func (f *autocall) Run(ctx context.Context, next agent.Runner, opts ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
+func (f *autocall) Run(ctx context.Context, next middleware.RunFunc, opts ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
 	return func(yield func(*agent.RunResponseUpdate, error) bool) {
 		tools, requiresApproval := f.createToolsMap(agentopt.All(opts, agentopt.Tool))
 
@@ -112,7 +113,7 @@ func (f *autocall) Run(ctx context.Context, next agent.Runner, opts ...agentopt.
 			functionCallContents = functionCallContents[:0]
 			var hasApprovalRequiringFcc bool
 			var lastApprovalCheckedFCCIdx, lastYieldedUpdateIdx int
-			for update, err := range next.Run(ctx, opts...) {
+			for update, err := range next(ctx, opts...) {
 				if err != nil {
 					yield(nil, err)
 					return

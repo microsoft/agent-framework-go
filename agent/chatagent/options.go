@@ -4,10 +4,11 @@ package chatagent
 
 import (
 	"log/slog"
+	"slices"
 
-	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent/chatclient"
+	"github.com/microsoft/agent-framework-go/agent/middleware"
 	"github.com/microsoft/agent-framework-go/memory"
 )
 
@@ -20,8 +21,8 @@ type Options struct {
 	ChatOptions  *ChatOptions
 	Logger       *slog.Logger
 
-	// If nil, a default middleware chain will be used.
-	Middlewares []agent.Middleware
+	DisableFuncAutoCall bool
+	Middlewares         []middleware.Middleware
 
 	NewMessageStore    func() memory.MessageStore
 	NewContextProvider func() memory.ContextProvider
@@ -32,6 +33,7 @@ func (o *Options) Clone() *Options {
 		return nil
 	}
 	clone := *o
+	clone.Middlewares = slices.Clone(o.Middlewares)
 	clone.ChatOptions = o.ChatOptions.Clone()
 	return &clone
 }

@@ -10,9 +10,17 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
+	"github.com/microsoft/agent-framework-go/agent/middleware"
+	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/openai"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
+)
+
+var logger = demo.NewLogger(
+	"Agent As Function Tool",
+	"Demonstrates how to create and use an Agent as a function tool.",
+	"Model", "gpt-4o-mini",
 )
 
 var weatherTool = functool.MustNew(&functool.Func{
@@ -30,6 +38,7 @@ func main() {
 		Instructions: "You answer questions about the weather.",
 		Name:         "WeatherAgent",
 		Description:  "An agent that answers questions about the weather.",
+		Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
 		ChatOptions: &chatagent.ChatOptions{
 			Tools: []tool.Tool{weatherTool},
 		},
@@ -45,5 +54,5 @@ func main() {
 		},
 	})
 
-	fmt.Println(agent.RunText(context.Background(), a, "What is the weather like in Amsterdam?"))
+	demo.Response(agent.RunText(context.Background(), a, "What is the weather like in Amsterdam?"))
 }

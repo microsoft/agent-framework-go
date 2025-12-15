@@ -1,7 +1,5 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-// This sample shows how to run an Agent to produce structured output.
-
 package main
 
 import (
@@ -13,9 +11,17 @@ import (
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
 	"github.com/microsoft/agent-framework-go/agent/chatagent/chatclient"
+	"github.com/microsoft/agent-framework-go/agent/middleware"
+	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/openai"
+)
+
+var logger = demo.NewLogger(
+	"Structured Output",
+	"Demonstrates how to produce structured output.",
+	"Model", "gpt-4o-mini",
 )
 
 type PersonInfo struct {
@@ -30,20 +36,20 @@ func main() {
 	}, chatagent.Options{
 		Instructions: "You are a helpful assistant.",
 		Name:         "HelpfulAssistant",
+		Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
 	})
 
 	ctx := context.Background()
 
 	// Set PersonInfo as the type parameter of RunFor method to specify the expected structured output from the agent and invoke the agent with some unstructured input.
-	person, _, err := agent.RunFor[PersonInfo](ctx, a, agentopt.Message(message.NewText("Please provide information about John Smith, who is a 35-year-old software engineer.")))
-	if err != nil {
-		panic(err)
-	}
+	person, resp, err := agent.RunFor[PersonInfo](ctx, a, agentopt.Message(message.NewText("Please provide information about John Smith, who is a 35-year-old software engineer.")))
+	demo.Response(resp, err)
 
-	fmt.Println("Assistant Output:")
-	fmt.Println("Name:", person.Name)
-	fmt.Println("Age:", person.Age)
-	fmt.Println("Occupation:", person.Occupation)
+	fmt.Println("Structured Output:")
+	fmt.Println("\tName:", person.Name)
+	fmt.Println("\tAge:", person.Age)
+	fmt.Println("\tOccupation:", person.Occupation)
+	fmt.Println()
 
 	// Create the agent with the specified name, instructions, and expected structured output the agent should produce.
 	a = openai.NewChatAgent(openai.ClientConfig{
@@ -51,6 +57,7 @@ func main() {
 	}, chatagent.Options{
 		Instructions: "You are a helpful assistant.",
 		Name:         "HelpfulAssistant",
+		Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
 		ChatOptions: &chatclient.ChatOptions{
 			ResponseFormat: jsonformat.MustFor[PersonInfo](),
 		},
@@ -59,17 +66,17 @@ func main() {
 	// Invoke the agent with some unstructured input while streaming, to extract the structured information from.
 	var personRaw []byte
 	for update, err := range agent.RunTextStream(ctx, a, "Please provide information about John Smith, who is a 35-year-old software engineer.") {
-		if err != nil {
-			panic(err)
-		}
+		demo.Response(update, err)
 		personRaw = append(personRaw, update.String()...)
 	}
 	var person2 PersonInfo
 	if err := json.Unmarshal(personRaw, &person2); err != nil {
-		panic(err)
+		demo.Panic(err)
 	}
-	fmt.Println("Assistant Output:")
-	fmt.Println("Name:", person2.Name)
-	fmt.Println("Age:", person2.Age)
-	fmt.Println("Occupation:", person2.Occupation)
+
+	fmt.Println("Structured Output:")
+	fmt.Println("\tName:", person2.Name)
+	fmt.Println("\tAge:", person2.Age)
+	fmt.Println("\tOccupation:", person2.Occupation)
+	fmt.Println()
 }

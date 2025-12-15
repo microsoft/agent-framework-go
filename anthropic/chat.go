@@ -51,9 +51,7 @@ func NewChatAgent(config ClientConfig, options chatagent.Options) *chatagent.Age
 }
 
 func (a *client) Capabilities() chatclient.Capabilities {
-	return chatclient.Capabilities{
-		Streaming: true,
-	}
+	return chatclient.Capabilities{}
 }
 
 func (a *client) Response(ctx context.Context, opts chatclient.ChatOptions, messages ...*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error] {
@@ -63,7 +61,7 @@ func (a *client) Response(ctx context.Context, opts chatclient.ChatOptions, mess
 			yield(nil, err)
 		}
 	}
-	if !opts.Streaming.Or(false) {
+	if !opts.Stream.Or(false) {
 		resp, err := a.client.Messages.New(ctx, params)
 		if err != nil {
 			return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {

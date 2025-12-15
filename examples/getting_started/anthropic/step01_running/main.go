@@ -8,19 +8,20 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
 	"github.com/microsoft/agent-framework-go/agent/middleware"
+	"github.com/microsoft/agent-framework-go/anthropic"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
-	"github.com/microsoft/agent-framework-go/openai"
 )
 
 var logger = demo.NewLogger(
 	"Basic Run",
 	"Demonstrates a simple agent run.",
-	"Model", "gpt-4o-mini",
+	"Model", "claude-sonnet-4-5",
 )
 
 func main() {
-	a := openai.NewChatAgent(openai.ClientConfig{
-		Model: "gpt-4o-mini",
+	// Create Anthropic agent
+	a := anthropic.NewChatAgent(anthropic.ClientConfig{
+		Model: "claude-sonnet-4-5",
 	}, chatagent.Options{
 		Instructions: "You are good at telling jokes.",
 		Name:         "Joker",

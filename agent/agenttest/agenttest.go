@@ -8,6 +8,7 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
+	"github.com/microsoft/agent-framework-go/agent/middleware"
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
 )
@@ -161,7 +162,7 @@ func (m *Middleware) Called() bool {
 	return m.called
 }
 
-func (m *Middleware) Run(ctx context.Context, next agent.Runner, opts ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
+func (m *Middleware) Run(ctx context.Context, next middleware.RunFunc, opts ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
 	m.called = true
 	return func(yield func(*agent.RunResponseUpdate, error) bool) {
 		defer func() { m.currentTurn++ }()
@@ -173,7 +174,7 @@ func (m *Middleware) Run(ctx context.Context, next agent.Runner, opts ...agentop
 				}
 			}
 		}
-		for update, err := range next.Run(ctx, opts...) {
+		for update, err := range next(ctx, opts...) {
 			if !yield(update, err) {
 				return
 			}

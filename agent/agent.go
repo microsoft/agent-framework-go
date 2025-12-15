@@ -15,7 +15,6 @@ import (
 	"github.com/microsoft/agent-framework-go/format"
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/tool"
 )
 
 type Identity struct {
@@ -48,28 +47,17 @@ func (iden Identity) Description() string {
 }
 
 type Capabilities struct {
-	Streaming        bool
 	StructuredOutput format.Formatter // nil if structured output is not supported
-	Middlewares      []Middleware
-	Tools            []tool.Tool
 }
 
 type Agent interface {
-	Runner
-
 	Identity() Identity
 	Capabilities() Capabilities
 
+	Run(ctx context.Context, options ...agentopt.Option) iter.Seq2[*RunResponseUpdate, error]
+
 	NewThread() memory.Thread
 	UnmarshalThread(data []byte) (memory.Thread, error)
-}
-
-type Runner interface {
-	Run(ctx context.Context, options ...agentopt.Option) iter.Seq2[*RunResponseUpdate, error]
-}
-
-type Middleware interface {
-	Run(ctx context.Context, next Runner, options ...agentopt.Option) iter.Seq2[*RunResponseUpdate, error]
 }
 
 func NewMessagesFromUpdates(updates []*RunResponseUpdate) []*message.Message {

@@ -18,7 +18,6 @@ import (
 )
 
 type Capabilities struct {
-	Streaming        bool
 	StructuredOutput format.Formatter // nil if structured output is not supported
 }
 
@@ -54,7 +53,7 @@ func (r *ChatResponseUpdate) String() string {
 }
 
 type ChatOptions struct {
-	Streaming                param.Opt[bool]
+	Stream                   param.Opt[bool]
 	AllowBackgroundResponses param.Opt[bool]
 
 	ContinuationToken any

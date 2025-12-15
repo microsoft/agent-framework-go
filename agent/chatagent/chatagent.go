@@ -12,6 +12,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent/chatclient"
+	"github.com/microsoft/agent-framework-go/agent/middleware"
 	"github.com/microsoft/agent-framework-go/agent/middleware/autocall"
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
@@ -31,12 +32,15 @@ type Agent struct {
 
 // NewAgent creates a new chat agent with the given chat client and options.
 func NewAgent(client chatclient.Client, options Options) *Agent {
-	if options.ChatOptions == nil {
-		options.ChatOptions = &ChatOptions{}
+	opts := *options.Clone()
+	if !opts.DisableFuncAutoCall {
+		opts.Middlewares = append(opts.Middlewares,
+			autocall.New(autocall.Options{}),
+		)
 	}
 	return &Agent{
 		Client:  client,
-		Options: options,
+		Options: opts,
 		iden:    agent.NewIdentity(options.ID, options.Name, options.Description),
 	}
 }
@@ -47,17 +51,8 @@ func (a *Agent) Identity() agent.Identity {
 
 func (a *Agent) Capabilities() agent.Capabilities {
 	caps := a.Client.Capabilities()
-	middlewares := a.Options.Middlewares
-	if middlewares == nil {
-		middlewares = []agent.Middleware{
-			autocall.New(autocall.Options{}),
-		}
-	}
 	return agent.Capabilities{
-		Streaming:        caps.Streaming,
 		StructuredOutput: caps.StructuredOutput,
-		Middlewares:      middlewares,
-		Tools:            a.Options.ChatOptions.Tools,
 	}
 }
 
@@ -88,6 +83,18 @@ func (a *Agent) UnmarshalThread(data []byte) (memory.Thread, error) {
 }
 
 func (a *Agent) Run(ctx context.Context, options ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
+	if a.Options.ChatOptions != nil {
+		for _, tl := range a.Options.ChatOptions.Tools {
+			options = append(options, agentopt.Tool(tl))
+		}
+	}
+	if _, ok := agentopt.Get(options, agentopt.Thread); !ok {
+		options = append(options, agentopt.Thread(a.NewThread()))
+	}
+	return middleware.RunChain(ctx, a.run, a.Options.Middlewares, options)
+}
+
+func (a *Agent) run(ctx context.Context, options ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
 	return func(yield func(*agent.RunResponseUpdate, error) bool) {
 		client := a.Client
 		if fn, ok := agentopt.Get(options, WithNewClient); ok {
@@ -213,7 +220,8 @@ func (a *Agent) prepareThreadAndMessages(ctx context.Context, options []agentopt
 			return retError(errors.New("the provided thread is not compatible with the agent, only threads created by the agent can be used"))
 		}
 	} else {
-		thread = a.newThread("")
+		// This should never happen because we ensure a thread is always provided in Run.
+		panic("nil thread")
 	}
 	inputMsgs = slices.Collect(agentopt.All(options, agentopt.Message))
 	if opts.ContinuationToken != nil {
@@ -313,7 +321,7 @@ func (a *Agent) createConfiguredChatOptions(options []agentopt.Option) ChatOptio
 		opts.ContinuationToken = v
 	}
 	if v, ok := agentopt.Get(options, agentopt.Stream); ok {
-		opts.Streaming = param.NewOpt(v)
+		opts.Stream = param.NewOpt(v)
 	}
 	if v, ok := agentopt.Get(options, agentopt.ResponseFormat); ok {
 		opts.ResponseFormat = v

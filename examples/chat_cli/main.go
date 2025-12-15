@@ -4,44 +4,34 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"log"
-	"math/rand/v2"
 	"os"
 	"strings"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
+	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/openai"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 )
 
-/*
-OpenAI Chat CLI Example
-
-This sample demonstrates an interactive CLI chat interface with an OpenAI agent.
-Type your messages and get streaming responses. Type 'exit' or 'quit' to end the chat.
-*/
+var logger = demo.NewLogger(
+	"Chat CLI - Interactive Mode",
+	"Type your message and press Enter to chat.\nCommands: 'exit' or 'quit' to end, 'clear' to reset conversation",
+	"Model", "gpt-4o-mini",
+)
 
 var weatherTool = functool.MustNew(&functool.Func{
 	Name:        "weather",
 	Description: "Get the current weather for a given location",
 }, func(_ context.Context, location string) (string, error) {
-	conditions := []string{"sunny", "cloudy", "rainy", "stormy"}
-	return fmt.Sprintf("The weather in %s is %s with a high of %d°C.",
-		location, conditions[rand.IntN(len(conditions))], rand.IntN(21)+10), nil
+	return fmt.Sprintf("The weather in %s is cloudy with a high of 15°C.", location), nil
 })
 
 func main() {
-	// OpenAI configuration
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey == "" {
-		log.Fatal("OPENAI_API_KEY environment variable is required. Get your key from https://platform.openai.com/account/api-keys")
-	}
-
-	ag := openai.NewChatAgent(openai.ClientConfig{
+	a := openai.NewChatAgent(openai.ClientConfig{
 		Model: "gpt-4o-mini",
 	}, chatagent.Options{
 		Instructions: "You are a helpful assistant with access to weather information. Be concise and friendly.",
@@ -51,26 +41,12 @@ func main() {
 	})
 
 	// Create a thread to maintain conversation history
-	thread := ag.NewThread()
+	thread := a.NewThread()
 
-	printWelcome()
-	runChatLoop(ag, thread)
+	runChatLoop(context.Background(), a, thread)
 }
 
-func printWelcome() {
-	fmt.Println("╔════════════════════════════════════════════════════════════╗")
-	fmt.Println("║           OpenAI Chat CLI - Interactive Mode               ║")
-	fmt.Println("╚════════════════════════════════════════════════════════════╝")
-	fmt.Println()
-	fmt.Println("Type your message and press Enter to chat.")
-	fmt.Println("Commands: 'exit' or 'quit' to end, 'clear' to reset conversation")
-	fmt.Println()
-	fmt.Println(strings.Repeat("─", 60))
-	fmt.Println()
-}
-
-func runChatLoop(ag agent.Agent, thread memory.Thread) {
-	ctx := context.Background()
+func runChatLoop(ctx context.Context, a agent.Agent, thread memory.Thread) {
 	scanner := bufio.NewScanner(os.Stdin)
 
 	for {
@@ -96,7 +72,7 @@ func runChatLoop(ag agent.Agent, thread memory.Thread) {
 		}
 
 		if userInput == "clear" {
-			thread = ag.NewThread()
+			thread = a.NewThread()
 			fmt.Print("\n✨ Conversation cleared!\n\n")
 			continue
 		}
@@ -105,7 +81,7 @@ func runChatLoop(ag agent.Agent, thread memory.Thread) {
 		fmt.Print("Assistant: ")
 
 		hasError := false
-		for update, err := range agent.RunTextStream(ctx, ag, userInput, agentopt.Thread(thread)) {
+		for update, err := range agent.RunTextStream(ctx, a, userInput, agentopt.Thread(thread)) {
 			if err != nil {
 				fmt.Printf("\n❌ Error: %v\n", err)
 				hasError = true

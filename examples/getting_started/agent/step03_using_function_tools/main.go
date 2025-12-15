@@ -1,8 +1,5 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-// This sample demonstrates how to use an Agent with function tools.
-// It shows both non-streaming and streaming agent interactions using menu-related tools.
-
 package main
 
 import (
@@ -12,9 +9,17 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
 	"github.com/microsoft/agent-framework-go/agent/chatagent/chatclient"
+	"github.com/microsoft/agent-framework-go/agent/middleware"
+	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/openai"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
+)
+
+var logger = demo.NewLogger(
+	"Function Tools",
+	"Demonstrates how to use function tools.",
+	"Model", "gpt-4o-mini",
 )
 
 var weatherTool = functool.MustNew(&functool.Func{
@@ -30,6 +35,7 @@ func main() {
 		Model: "gpt-4o-mini",
 	}, chatagent.Options{
 		Instructions: "You are a helpful assistant",
+		Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
 		ChatOptions: &chatclient.ChatOptions{
 			Tools: []tool.Tool{weatherTool},
 		},
@@ -38,13 +44,10 @@ func main() {
 	ctx := context.Background()
 
 	// Non-streaming agent interaction with function tools.
-	fmt.Println(agent.RunText(ctx, a, "What is the weather like in Amsterdam?"))
+	demo.Response(agent.RunText(ctx, a, "What is the weather like in Amsterdam?"))
 
 	// Invoke the agent with streaming support.
 	for update, err := range agent.RunTextStream(ctx, a, "What is the weather like in Amsterdam?") {
-		if err != nil {
-			panic(err)
-		}
-		fmt.Println(update)
+		demo.Response(update, err)
 	}
 }

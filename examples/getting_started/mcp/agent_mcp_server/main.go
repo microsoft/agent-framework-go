@@ -1,18 +1,23 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-// This sample shows how to create and use a simple Agent with tools from an MCP Server.
-
 package main
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
+	"github.com/microsoft/agent-framework-go/agent/middleware"
+	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/openai"
 	"github.com/microsoft/agent-framework-go/tool/mcptool"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+var logger = demo.NewLogger(
+	"MCP Tools",
+	"Demonstrates how to create and use an Agent with tools from an MCP Server.",
+	"Model", "gpt-4o-mini",
 )
 
 func main() {
@@ -40,12 +45,12 @@ func main() {
 	}, chatagent.Options{
 		Name:         "DocsAgent",
 		Instructions: "You are a helpful assistant that can help with microsoft documentation questions.",
+		Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
 		ChatOptions: &chatagent.ChatOptions{
 			Tools: tools,
 		},
 	})
 
 	// Invoke the agent and output the text result.
-	fmt.Println(agent.RunText(ctx, a, "How to create an Azure storage account using az cli?"))
-
+	demo.Response(agent.RunText(ctx, a, "How to create an Azure storage account using az cli?"))
 }

@@ -111,7 +111,6 @@ func (formatter) Unmarshal(data []byte, format format.Format, v any) error {
 
 func (a *client) Capabilities() chatclient.Capabilities {
 	return chatclient.Capabilities{
-		Streaming:        true,
 		StructuredOutput: formatter{},
 	}
 }
@@ -123,7 +122,7 @@ func (a *client) Response(ctx context.Context, options chatclient.ChatOptions, m
 			yield(nil, err)
 		}
 	}
-	if !options.Streaming.Or(false) {
+	if !options.Stream.Or(false) {
 		resp, err := a.client.Chat.Completions.New(ctx, body)
 		if err != nil {
 			return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
