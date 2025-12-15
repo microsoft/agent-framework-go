@@ -19,7 +19,7 @@ var logger = demo.NewLogger(
 )
 
 func main() {
-	// Create Azure OpenAI agent with weather tool
+	// Create Anthropic agent
 	a := anthropic.NewChatAgent(anthropic.ClientConfig{
 		Model: "claude-sonnet-4-5",
 	}, chatagent.Options{

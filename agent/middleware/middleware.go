@@ -17,7 +17,7 @@ type Middleware interface {
 	Run(ctx context.Context, next RunFunc, options ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error]
 }
 
-// RunChain applies the given middlewares around the given Runner.
+// RunChain applies the given middlewares around the given RunFunc.
 func RunChain(ctx context.Context, fn RunFunc, middlewares []Middleware, opts []agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
 	// Chain the middlewares together.
 	for _, mw := range slices.Backward(middlewares) {
