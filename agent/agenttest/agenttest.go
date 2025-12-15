@@ -88,7 +88,6 @@ type Response struct {
 
 type Agent struct {
 	Iden          agent.Identity
-	Caps          agent.Capabilities
 	NewThreadFunc func() memory.Thread
 	Responses     []Turn
 
@@ -100,10 +99,6 @@ func (a *Agent) Identity() agent.Identity {
 		return agent.NewIdentity("test-agent-id", "TestAgent", "A test agent")
 	}
 	return a.Iden
-}
-
-func (a *Agent) Capabilities() agent.Capabilities {
-	return a.Caps
 }
 
 func (a *Agent) Run(ctx context.Context, messages []*message.Message, opts ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {

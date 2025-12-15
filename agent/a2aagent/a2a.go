@@ -53,10 +53,6 @@ func (a *Agent) Identity() agent.Identity {
 	return a.iden
 }
 
-func (a *Agent) Capabilities() agent.Capabilities {
-	return agent.Capabilities{}
-}
-
 func (a *Agent) NewThread() memory.Thread {
 	return &Thread{}
 }

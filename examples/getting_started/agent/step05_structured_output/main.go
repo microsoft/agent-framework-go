@@ -40,8 +40,10 @@ func main() {
 	ctx := context.Background()
 
 	// Set PersonInfo as the type parameter of RunTextFor method to specify the expected structured output from the agent and invoke the agent with some unstructured input.
-	person, resp, err := agent.RunTextFor[PersonInfo](ctx, a, "Please provide information about John Smith, who is a 35-year-old software engineer.")
-	demo.Response(resp, err)
+	person, err := agent.RunTextFor[PersonInfo](ctx, a, "Please provide information about John Smith, who is a 35-year-old software engineer.")
+	if err != nil {
+		demo.Panic(err)
+	}
 
 	fmt.Println("Structured Output:")
 	fmt.Println("\tName:", person.Name)

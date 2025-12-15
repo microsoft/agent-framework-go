@@ -48,13 +48,6 @@ func (a *Agent) Identity() agent.Identity {
 	return a.iden
 }
 
-func (a *Agent) Capabilities() agent.Capabilities {
-	caps := a.Client.Capabilities()
-	return agent.Capabilities{
-		StructuredOutput: caps.StructuredOutput,
-	}
-}
-
 func (a *Agent) Instructions() string {
 	return a.Options.Instructions
 }
@@ -91,6 +84,35 @@ func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ..
 		options = append(options, agentopt.Thread(a.NewThread()))
 	}
 	return middleware.RunChain(ctx, a.run, a.Options.Middlewares, messages, options...)
+}
+
+func (a *Agent) RunOf(ctx context.Context, v any, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
+	return func(yield func(*agent.RunResponseUpdate, error) bool) {
+		formatter := a.Client.Capabilities().StructuredOutput
+		if formatter == nil {
+			yield(nil, errors.New("agent does not support structured output"))
+			return
+		}
+		format, err := formatter.Format(v)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		options = append(options, agentopt.ResponseFormat(format))
+		var personRaw []byte
+		for update, err := range a.Run(ctx, messages, options...) {
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+			personRaw = append(personRaw, update.String()...)
+		}
+		err = formatter.Unmarshal(personRaw, format, &v)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+	}
 }
 
 func (a *Agent) run(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {

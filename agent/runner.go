@@ -54,32 +54,27 @@ func RunMessageStream(ctx context.Context, a Agent, msg *message.Message, opts .
 	return RunStream(ctx, a, []*message.Message{msg}, opts...)
 }
 
-// RunTextFor executes the agent with a single text message and returns the result of type T and the response.
-func RunTextFor[T any](ctx context.Context, a Agent, msg string, opts ...agentopt.Option) (T, *RunResponse, error) {
+// RunTextFor executes the agent with a single text message and returns the result of type T.
+func RunTextFor[T any](ctx context.Context, a Agent, msg string, opts ...agentopt.Option) (T, error) {
 	return RunFor[T](ctx, a, []*message.Message{message.NewText(msg)}, opts...)
 }
 
-// RunMessageFor executes the agent with a single message and returns the result of type T and the response.
-func RunMessageFor[T any](ctx context.Context, a Agent, msg *message.Message, opts ...agentopt.Option) (T, *RunResponse, error) {
+// RunMessageFor executes the agent with a single message and returns the result of type T.
+func RunMessageFor[T any](ctx context.Context, a Agent, msg *message.Message, opts ...agentopt.Option) (T, error) {
 	return RunFor[T](ctx, a, []*message.Message{msg}, opts...)
 }
 
 // RunFor executes the agent with the given messages and returns the result of type T.
-func RunFor[T any](ctx context.Context, a Agent, messages []*message.Message, opts ...agentopt.Option) (T, *RunResponse, error) {
+func RunFor[T any](ctx context.Context, a Agent, messages []*message.Message, opts ...agentopt.Option) (T, error) {
 	var v T
-	formatter := a.Capabilities().StructuredOutput
-	if formatter == nil {
-		return v, nil, errors.New("agent does not support structured output")
+	if a, ok := a.(StructuredOutputAgent); ok {
+		for _, err := range a.RunOf(ctx, &v, messages, opts...) {
+			if err != nil {
+				return v, err
+			}
+			// Exhaust the iterator to get the final result.
+		}
+		return v, nil
 	}
-	format, err := formatter.Format(v)
-	if err != nil {
-		return v, nil, err
-	}
-	opts = append(opts, agentopt.ResponseFormat(format))
-	resp, err := Run(ctx, a, messages, opts...)
-	if err != nil {
-		return v, resp, err
-	}
-	err = formatter.Unmarshal([]byte(resp.String()), format, &v)
-	return v, resp, err
+	return v, errors.New("agent does not support structured output")
 }
