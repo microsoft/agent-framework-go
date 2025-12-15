@@ -54,10 +54,12 @@ func RunMessageStream(ctx context.Context, a Agent, msg *message.Message, opts .
 	return RunStream(ctx, a, []*message.Message{msg}, opts...)
 }
 
+// RunTextFor executes the agent with a single text message and returns the result of type T and the response.
 func RunTextFor[T any](ctx context.Context, a Agent, msg string, opts ...agentopt.Option) (T, *RunResponse, error) {
 	return RunFor[T](ctx, a, []*message.Message{message.NewText(msg)}, opts...)
 }
 
+// RunMessageFor executes the agent with a single message and returns the result of type T and the response.
 func RunMessageFor[T any](ctx context.Context, a Agent, msg *message.Message, opts ...agentopt.Option) (T, *RunResponse, error) {
 	return RunFor[T](ctx, a, []*message.Message{msg}, opts...)
 }
