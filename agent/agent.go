@@ -54,7 +54,7 @@ type Agent interface {
 	Identity() Identity
 	Capabilities() Capabilities
 
-	Run(ctx context.Context, options ...agentopt.Option) iter.Seq2[*RunResponseUpdate, error]
+	Run(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*RunResponseUpdate, error]
 
 	NewThread() memory.Thread
 	UnmarshalThread(data []byte) (memory.Thread, error)

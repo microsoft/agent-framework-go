@@ -25,7 +25,7 @@ func TestRun_BasicExecution(t *testing.T) {
 			Build(),
 	}
 
-	resp, err := agent.Run(ctx, a)
+	resp, err := agent.Run(ctx, a, nil)
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestRun_MultipleUpdates(t *testing.T) {
 			Build(),
 	}
 
-	resp, err := agent.Run(ctx, a)
+	resp, err := agent.RunText(ctx, a, "Test message")
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestRun_MultipleMessages(t *testing.T) {
 			Build(),
 	}
 
-	resp, err := agent.Run(ctx, a)
+	resp, err := agent.RunText(ctx, a, "Test message")
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestRun_ErrorHandling(t *testing.T) {
 			Build(),
 	}
 
-	resp, err := agent.Run(ctx, a)
+	resp, err := agent.RunText(ctx, a, "Test message")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -162,7 +162,7 @@ func TestRun_UsageTracking(t *testing.T) {
 			Build(),
 	}
 
-	resp, err := agent.Run(ctx, a)
+	resp, err := agent.RunText(ctx, a, "Test message")
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestRun_ContinuationToken(t *testing.T) {
 			Build(),
 	}
 
-	resp, err := agent.Run(ctx, a)
+	resp, err := agent.RunText(ctx, a, "Test message")
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
@@ -225,7 +225,7 @@ func TestRun_ResponseMetadata(t *testing.T) {
 			Build(),
 	}
 
-	resp, err := agent.Run(ctx, a)
+	resp, err := agent.RunText(ctx, a, "Test message")
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestRun_AdditionalProperties(t *testing.T) {
 			Build(),
 	}
 
-	resp, err := agent.Run(ctx, a)
+	resp, err := agent.RunText(ctx, a, "Test message")
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
@@ -293,7 +293,7 @@ func TestRun_ProvidedThread(t *testing.T) {
 			return agenttest.NewThread()
 		},
 		Responses: agenttest.NewResponseBuilder(
-			func(ctx context.Context, opts ...agentopt.Option) {
+			func(ctx context.Context, messages []*message.Message, opts ...agentopt.Option) {
 				thread, ok := agentopt.Get(opts, agentopt.Thread)
 				if !ok {
 					t.Fatal("no thread provided")
@@ -311,7 +311,7 @@ func TestRun_ProvidedThread(t *testing.T) {
 			Build(),
 	}
 
-	_, err := agent.Run(ctx, a, agentopt.Thread(providedThread))
+	_, err := agent.RunText(ctx, a, "Test message", agentopt.Thread(providedThread))
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
@@ -353,7 +353,7 @@ func TestRun_ContentCoalescing(t *testing.T) {
 			Build(),
 	}
 
-	resp, err := agent.Run(ctx, a)
+	resp, err := agent.RunText(ctx, a, "Test message")
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
@@ -380,7 +380,7 @@ func TestRunStream_BasicExecution(t *testing.T) {
 
 	a := &agenttest.Agent{
 		Responses: agenttest.NewResponseBuilder(
-			func(ctx context.Context, opts ...agentopt.Option) {
+			func(ctx context.Context, messages []*message.Message, opts ...agentopt.Option) {
 				// Verify stream option is set
 				stream, ok := agentopt.Get(opts, agentopt.Stream)
 				if !ok || !stream {
@@ -393,7 +393,7 @@ func TestRunStream_BasicExecution(t *testing.T) {
 	}
 
 	updateCount := 0
-	for update, err := range agent.RunStream(ctx, a) {
+	for update, err := range agent.RunTextStream(ctx, a, "Test message") {
 		if err != nil {
 			t.Fatalf("RunStream failed: %v", err)
 		}
@@ -420,7 +420,7 @@ func TestRunStream_ErrorHandling(t *testing.T) {
 
 	var receivedErr error
 	updateCount := 0
-	for update, err := range agent.RunStream(ctx, a) {
+	for update, err := range agent.RunTextStream(ctx, a, "Test message") {
 		if err != nil {
 			receivedErr = err
 			break
@@ -446,10 +446,10 @@ func TestRunText_BasicExecution(t *testing.T) {
 
 	a := &agenttest.Agent{
 		Responses: agenttest.NewResponseBuilder(
-			func(ctx context.Context, opts ...agentopt.Option) {
+			func(ctx context.Context, messages []*message.Message, opts ...agentopt.Option) {
 				// Verify message option is set with correct text
 				hasMessage := false
-				for msg := range agentopt.All(opts, agentopt.Message) {
+				for _, msg := range messages {
 					if len(msg.Contents) > 0 {
 						if tc, ok := msg.Contents[0].(*message.TextContent); ok {
 							if tc.Text == "Hello" {
@@ -482,12 +482,11 @@ func TestRunText_WithAdditionalOptions(t *testing.T) {
 
 	a := &agenttest.Agent{
 		Responses: agenttest.NewResponseBuilder(
-			func(ctx context.Context, opts ...agentopt.Option) {
+			func(ctx context.Context, messages []*message.Message, opts ...agentopt.Option) {
 				// Verify both message and thread are present
-				_, hasMessage := agentopt.Get(opts, agentopt.Message)
 				thread, hasThread := agentopt.Get(opts, agentopt.Thread)
 
-				if !hasMessage {
+				if len(messages) == 0 {
 					t.Fatal("message not found")
 				}
 				if !hasThread {
@@ -514,16 +513,11 @@ func TestRunTextStream_BasicExecution(t *testing.T) {
 
 	a := &agenttest.Agent{
 		Responses: agenttest.NewResponseBuilder(
-			func(ctx context.Context, opts ...agentopt.Option) {
+			func(ctx context.Context, messages []*message.Message, opts ...agentopt.Option) {
 				// Verify streaming is enabled
 				stream, ok := agentopt.Get(opts, agentopt.Stream)
 				if !ok || !stream {
 					t.Fatal("streaming not enabled")
-				}
-				// Verify message is present
-				_, hasMessage := agentopt.Get(opts, agentopt.Message)
-				if !hasMessage {
-					t.Fatal("message not found")
 				}
 			}).
 			AddText("Streamed ").
@@ -594,7 +588,7 @@ func TestRunFor_BasicExecution(t *testing.T) {
 			StructuredOutput: formatter,
 		},
 		Responses: agenttest.NewResponseBuilder(
-			func(ctx context.Context, opts ...agentopt.Option) {
+			func(ctx context.Context, messages []*message.Message, opts ...agentopt.Option) {
 				// Verify response format is set
 				_, hasFormat := agentopt.Get(opts, agentopt.ResponseFormat)
 				if !hasFormat {
@@ -609,7 +603,7 @@ func TestRunFor_BasicExecution(t *testing.T) {
 			Build(),
 	}
 
-	result, resp, err := agent.RunFor[testStructuredOutput](ctx, a)
+	result, resp, err := agent.RunFor[testStructuredOutput](ctx, a, []*message.Message{})
 	if err != nil {
 		t.Fatalf("RunFor failed: %v", err)
 	}
@@ -639,7 +633,7 @@ func TestRunFor_NoStructuredOutputSupport(t *testing.T) {
 			Build(),
 	}
 
-	_, resp, err := agent.RunFor[testStructuredOutput](ctx, a)
+	_, resp, err := agent.RunFor[testStructuredOutput](ctx, a, []*message.Message{})
 	if err == nil {
 		t.Fatal("expected error for unsupported structured output, got nil")
 	}
@@ -672,7 +666,7 @@ func TestRunFor_FormatterError(t *testing.T) {
 			Build(),
 	}
 
-	_, resp, err := agent.RunFor[testStructuredOutput](ctx, a)
+	_, resp, err := agent.RunFor[testStructuredOutput](ctx, a, []*message.Message{})
 	if !errors.Is(err, expectedErr) {
 		t.Errorf("expected error %v, got %v", expectedErr, err)
 	}
@@ -704,7 +698,7 @@ func TestRunFor_UnmarshalError(t *testing.T) {
 			Build(),
 	}
 
-	_, resp, err := agent.RunFor[testStructuredOutput](ctx, a)
+	_, resp, err := agent.RunFor[testStructuredOutput](ctx, a, []*message.Message{})
 	if !errors.Is(err, expectedErr) {
 		t.Errorf("expected error %v, got %v", expectedErr, err)
 	}

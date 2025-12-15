@@ -46,7 +46,7 @@ func New(options Options) middleware.Middleware {
 	return ac
 }
 
-func (f *autocall) Run(ctx context.Context, next middleware.RunFunc, opts ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
+func (f *autocall) Run(ctx context.Context, next middleware.RunFunc, messages []*message.Message, opts ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
 	return func(yield func(*agent.RunResponseUpdate, error) bool) {
 		tools, requiresApproval := f.createToolsMap(agentopt.All(opts, agentopt.Tool))
 
@@ -57,7 +57,8 @@ func (f *autocall) Run(ctx context.Context, next middleware.RunFunc, opts ...age
 		// but there's no benefit to doing so.
 		toolMsgID := f.NewID()
 		var errCount int
-		if messages := slices.Collect(agentopt.All(opts, agentopt.Message)); hasAnyApprovalContent(messages) {
+		if hasAnyApprovalContent(messages) {
+			messages = slices.Clone(messages)
 			// We also need a synthetic ID for the function call content for approved function calls
 			// where we don't know what the original message id of the function call was.
 			funcCallFallbackMsgID := f.NewID()
@@ -94,13 +95,6 @@ func (f *autocall) Run(ctx context.Context, next middleware.RunFunc, opts ...age
 					return
 				}
 			}
-			// Remove all existing message options
-			opts = agentopt.Delete(opts, agentopt.Message)
-
-			// Add all accumulated messages
-			for _, msg := range messages {
-				opts = append(opts, agentopt.Message(msg))
-			}
 		}
 		// At this point, we've fully handled all approval responses that were part of the original messages,
 		// and we can now enter the main function calling loop.
@@ -113,7 +107,7 @@ func (f *autocall) Run(ctx context.Context, next middleware.RunFunc, opts ...age
 			functionCallContents = functionCallContents[:0]
 			var hasApprovalRequiringFcc bool
 			var lastApprovalCheckedFCCIdx, lastYieldedUpdateIdx int
-			for update, err := range next(ctx, opts...) {
+			for update, err := range next(ctx, messages, opts...) {
 				if err != nil {
 					yield(nil, err)
 					return
@@ -212,7 +206,8 @@ func (f *autocall) Run(ctx context.Context, next middleware.RunFunc, opts ...age
 			}
 
 			// Use the augmented history as the new set of messages to send.
-			opts = updateOptionsForNextIteration(opts, newMsg)
+			opts = updateOptionsForNextIteration(opts)
+			messages = []*message.Message{newMsg}
 		}
 	}
 }
@@ -266,13 +261,7 @@ func convertToolResultMsgToUpdate(msg *message.Message, msgID string) *agent.Run
 	}
 }
 
-func updateOptionsForNextIteration(opts []agentopt.Option, msg *message.Message) []agentopt.Option {
-	// Remove all existing message options
-	opts = agentopt.Delete(opts, agentopt.Message)
-
-	// Add the new message
-	opts = append(opts, agentopt.Message(msg))
-
+func updateOptionsForNextIteration(opts []agentopt.Option) []agentopt.Option {
 	if v, ok := agentopt.Get(opts, agentopt.ToolMode); ok && v == tool.ToolModeRequired {
 		// We have to reset the tool mode to be non-required after the first iteration,
 		// as otherwise we'll be in an infinite loop.

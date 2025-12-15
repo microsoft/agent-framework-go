@@ -75,7 +75,7 @@ func (a *Agent) UnmarshalThread(data []byte) (memory.Thread, error) {
 	return &thread, nil
 }
 
-func (a *Agent) Run(ctx context.Context, options ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
+func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
 	return func(yield func(*agent.RunResponseUpdate, error) bool) {
 		var thread *Thread
 		if v, ok := agentopt.Get(options, agentopt.Thread); !ok {
@@ -100,7 +100,7 @@ func (a *Agent) Run(ctx context.Context, options ...agentopt.Option) iter.Seq2[*
 				yield(nil, errors.New("reconnecting to task streams using continuation tokens is not supported yet"))
 				return
 			}
-			if _, ok := agentopt.Get(options, agentopt.Message); ok {
+			if len(messages) > 0 {
 				yield(nil, errors.New("messages are not allowed when continuing a background response using a continuation token"))
 				return
 			}
@@ -122,7 +122,7 @@ func (a *Agent) Run(ctx context.Context, options ...agentopt.Option) iter.Seq2[*
 			return
 		}
 		var parts []a2a.Part
-		for msg := range agentopt.All(options, agentopt.Message) {
+		for _, msg := range messages {
 			parts = parts[:0] // reset parts slice
 			parts, err := contentsToParts(msg.Contents, parts)
 			if err != nil {

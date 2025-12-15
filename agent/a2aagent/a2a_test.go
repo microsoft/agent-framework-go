@@ -201,13 +201,13 @@ func TestRunAllowsNonUserRoleMessages(t *testing.T) {
 	transport := &mockA2ATransport{}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	inputMessages := []agentopt.Option{
-		agentopt.Message(&message.Message{Role: message.RoleSystem, Contents: []message.Content{&message.TextContent{Text: "I am a system message"}}}),
-		agentopt.Message(&message.Message{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "I am an assistant message"}}}),
-		agentopt.Message(&message.Message{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Valid user message"}}}),
+	inputMessages := []*message.Message{
+		{Role: message.RoleSystem, Contents: []message.Content{&message.TextContent{Text: "I am a system message"}}},
+		{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "I am an assistant message"}}},
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Valid user message"}}},
 	}
 
-	_, err := agent.Run(t.Context(), a, inputMessages...)
+	_, err := agent.Run(t.Context(), a, inputMessages)
 	if err != nil {
 		t.Errorf("Run() error = %v, want nil", err)
 	}
@@ -527,13 +527,13 @@ func TestRunStreamingAllowsNonUserRoleMessages(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	inputMessages := []agentopt.Option{
-		agentopt.Message(&message.Message{Role: message.RoleSystem, Contents: []message.Content{&message.TextContent{Text: "I am a system message"}}}),
-		agentopt.Message(&message.Message{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "I am an assistant message"}}}),
-		agentopt.Message(&message.Message{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Valid user message"}}}),
+	inputMessages := []*message.Message{
+		{Role: message.RoleSystem, Contents: []message.Content{&message.TextContent{Text: "I am a system message"}}},
+		{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "I am an assistant message"}}},
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Valid user message"}}},
 	}
 
-	for _, err := range agent.RunStream(t.Context(), a, inputMessages...) {
+	for _, err := range agent.RunStream(t.Context(), a, inputMessages) {
 		if err != nil {
 			t.Fatalf("RunStream() error = %v, want nil", err)
 		}
@@ -545,8 +545,8 @@ func TestRunWithHostedFileContent(t *testing.T) {
 	transport := &mockA2ATransport{}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	inputMessages := []agentopt.Option{
-		agentopt.Message(&message.Message{
+	inputMessages := []*message.Message{
+		{
 			Role: message.RoleUser,
 			Contents: []message.Content{
 				&message.TextContent{Text: "Check this file:"},
@@ -555,10 +555,10 @@ func TestRunWithHostedFileContent(t *testing.T) {
 					MediaType: "application/pdf",
 				},
 			},
-		}),
+		},
 	}
 
-	_, err := agent.Run(t.Context(), a, inputMessages...)
+	_, err := agent.Run(t.Context(), a, inputMessages)
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil", err)
 	}
@@ -655,7 +655,7 @@ func TestRunWithContinuationToken(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	_, err := agent.Run(t.Context(), a, agentopt.ContinuationToken(a2a.TaskID("task-123")))
+	_, err := agent.Run(t.Context(), a, nil, agentopt.ContinuationToken(a2a.TaskID("task-123")))
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil", err)
 	}
@@ -1161,15 +1161,8 @@ func TestRunWithAllowBackgroundResponsesAndNoThread(t *testing.T) {
 	transport := &mockA2ATransport{}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	// Call the agent's Run method directly (not the helper functions) to test the validation
-	gotError := false
-	for _, err := range a.Run(context.Background(), agentopt.Message(message.NewText("Test message")), agentopt.AllowBackgroundResponses(true)) {
-		if err != nil {
-			gotError = true
-			break
-		}
-	}
-	if !gotError {
+	_, err := agent.RunText(t.Context(), a, "Test message", agentopt.AllowBackgroundResponses(true))
+	if err == nil {
 		t.Error("Run() error = nil, want error when AllowBackgroundResponses is true without thread")
 	}
 }
@@ -1181,7 +1174,7 @@ func TestRunStreamingWithAllowBackgroundResponsesAndNoThread(t *testing.T) {
 
 	// Call the agent's Run method directly with streaming enabled
 	gotError := false
-	for _, err := range a.Run(context.Background(), agentopt.Message(message.NewText("Test message")), agentopt.AllowBackgroundResponses(true), agentopt.Stream(true)) {
+	for _, err := range agent.RunTextStream(t.Context(), a, "Test message", agentopt.AllowBackgroundResponses(true)) {
 		if err != nil {
 			gotError = true
 			break

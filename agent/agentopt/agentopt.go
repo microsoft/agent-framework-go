@@ -9,7 +9,6 @@ import (
 
 	"github.com/microsoft/agent-framework-go/format"
 	"github.com/microsoft/agent-framework-go/memory"
-	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 )
 
@@ -28,8 +27,7 @@ type (
 	threadOpt            struct{ memory.Thread }
 	continuationTokenOpt struct{ any }
 
-	messageOpt struct{ *message.Message }
-	toolOpt    struct{ tool.Tool }
+	toolOpt struct{ tool.Tool }
 
 	toolModeOpt                 tool.ToolMode
 	streamOpt                   bool
@@ -41,7 +39,6 @@ func (threadOpt) AgentOption()                   {}
 func (streamOpt) AgentOption()                   {}
 func (continuationTokenOpt) AgentOption()        {}
 func (allowBackgroundResponsesOpt) AgentOption() {}
-func (messageOpt) AgentOption()                  {}
 func (toolOpt) AgentOption()                     {}
 func (toolModeOpt) AgentOption()                 {}
 
@@ -50,7 +47,6 @@ func (o threadOpt) Value() any                   { return o.Thread }
 func (o streamOpt) Value() any                   { return bool(o) }
 func (o continuationTokenOpt) Value() any        { return o.any }
 func (o allowBackgroundResponsesOpt) Value() any { return bool(o) }
-func (o messageOpt) Value() any                  { return o.Message }
 func (o toolModeOpt) Value() any                 { return tool.ToolMode(o) }
 func (o toolOpt) Value() any                     { return o.Tool }
 
@@ -110,11 +106,6 @@ func ContinuationToken(token any) Option {
 // If the implementation does not support background responses, this property will be ignored.
 func AllowBackgroundResponses(allow bool) Option {
 	return allowBackgroundResponsesOpt(allow)
-}
-
-// Message adds a message to the agent run.
-func Message(message *message.Message) Option {
-	return messageOpt{message}
 }
 
 // Get returns the value stored in opts with the provided setter,

@@ -9,16 +9,17 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
+	"github.com/microsoft/agent-framework-go/message"
 )
 
-type RunFunc func(ctx context.Context, options ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error]
+type RunFunc func(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error]
 
 type Middleware interface {
-	Run(ctx context.Context, next RunFunc, options ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error]
+	Run(ctx context.Context, next RunFunc, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error]
 }
 
 // RunChain applies the given middlewares around the given RunFunc.
-func RunChain(ctx context.Context, fn RunFunc, middlewares []Middleware, opts []agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
+func RunChain(ctx context.Context, fn RunFunc, middlewares []Middleware, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
 	// Chain the middlewares together.
 	for _, mw := range slices.Backward(middlewares) {
 		fn = middlewareRunner{
@@ -26,7 +27,7 @@ func RunChain(ctx context.Context, fn RunFunc, middlewares []Middleware, opts []
 			next:       fn,
 		}.Run
 	}
-	return fn(ctx, opts...)
+	return fn(ctx, messages, options...)
 }
 
 type middlewareRunner struct {
@@ -34,6 +35,6 @@ type middlewareRunner struct {
 	next RunFunc
 }
 
-func (mr middlewareRunner) Run(ctx context.Context, opts ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
-	return mr.Middleware.Run(ctx, mr.next, opts...)
+func (mr middlewareRunner) Run(ctx context.Context, messages []*message.Message, opts ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
+	return mr.Middleware.Run(ctx, mr.next, messages, opts...)
 }

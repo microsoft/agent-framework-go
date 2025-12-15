@@ -73,5 +73,5 @@ func main() {
 		return
 	}
 	// Pass the user input responses back to the agent for further processing.
-	demo.Response(agent.Run(ctx, a, agentopt.Message(message.New(userResponses...)), agentopt.Thread(thread)))
+	demo.Response(agent.RunMessage(ctx, a, message.New(userResponses...), agentopt.Thread(thread)))
 }
