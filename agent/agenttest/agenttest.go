@@ -14,7 +14,7 @@ import (
 )
 
 type Turn struct {
-	Callbacks []func(context.Context, ...agentopt.Option)
+	Callbacks []func(context.Context, []*message.Message, ...agentopt.Option)
 	Responses []Response
 }
 
@@ -22,7 +22,7 @@ type ResponseBuilder struct {
 	turns []Turn
 }
 
-func NewResponseBuilder(firstTurnCallbacks ...func(ctx context.Context, opts ...agentopt.Option)) *ResponseBuilder {
+func NewResponseBuilder(firstTurnCallbacks ...func(ctx context.Context, messages []*message.Message, opts ...agentopt.Option)) *ResponseBuilder {
 	return &ResponseBuilder{
 		turns: []Turn{{
 			Responses: []Response{},
@@ -31,7 +31,7 @@ func NewResponseBuilder(firstTurnCallbacks ...func(ctx context.Context, opts ...
 	}
 }
 
-func (rb *ResponseBuilder) NewTurn(callbacks ...func(ctx context.Context, opts ...agentopt.Option)) *ResponseBuilder {
+func (rb *ResponseBuilder) NewTurn(callbacks ...func(ctx context.Context, messages []*message.Message, opts ...agentopt.Option)) *ResponseBuilder {
 	rb.turns = append(rb.turns, Turn{
 		Callbacks: callbacks,
 		Responses: []Response{},
@@ -88,7 +88,6 @@ type Response struct {
 
 type Agent struct {
 	Iden          agent.Identity
-	Caps          agent.Capabilities
 	NewThreadFunc func() memory.Thread
 	Responses     []Turn
 
@@ -102,11 +101,7 @@ func (a *Agent) Identity() agent.Identity {
 	return a.Iden
 }
 
-func (a *Agent) Capabilities() agent.Capabilities {
-	return a.Caps
-}
-
-func (a *Agent) Run(ctx context.Context, opts ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
+func (a *Agent) Run(ctx context.Context, messages []*message.Message, opts ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
 	return func(yield func(*agent.RunResponseUpdate, error) bool) {
 		defer func() { a.currentTurn++ }()
 		if a.currentTurn >= len(a.Responses) {
@@ -114,7 +109,7 @@ func (a *Agent) Run(ctx context.Context, opts ...agentopt.Option) iter.Seq2[*age
 		}
 		turn := a.Responses[a.currentTurn]
 		for _, cb := range turn.Callbacks {
-			cb(ctx, opts...)
+			cb(ctx, messages, opts...)
 		}
 		for _, resp := range turn.Responses {
 			if !yield(resp.Response, resp.Error) {
@@ -162,7 +157,7 @@ func (m *Middleware) Called() bool {
 	return m.called
 }
 
-func (m *Middleware) Run(ctx context.Context, next middleware.RunFunc, opts ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
+func (m *Middleware) Run(ctx context.Context, next middleware.RunFunc, messages []*message.Message, opts ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
 	m.called = true
 	return func(yield func(*agent.RunResponseUpdate, error) bool) {
 		defer func() { m.currentTurn++ }()
@@ -174,7 +169,7 @@ func (m *Middleware) Run(ctx context.Context, next middleware.RunFunc, opts ...a
 				}
 			}
 		}
-		for update, err := range next(ctx, opts...) {
+		for update, err := range next(ctx, messages, opts...) {
 			if !yield(update, err) {
 				return
 			}
@@ -196,7 +191,7 @@ type Runner struct {
 	currentTurn int
 }
 
-func (r *Runner) Run(ctx context.Context, opts ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
+func (r *Runner) Run(ctx context.Context, messages []*message.Message, opts ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
 	return func(yield func(*agent.RunResponseUpdate, error) bool) {
 		defer func() { r.currentTurn++ }()
 		if r.currentTurn >= len(r.Responses) {
@@ -205,7 +200,7 @@ func (r *Runner) Run(ctx context.Context, opts ...agentopt.Option) iter.Seq2[*ag
 		turn := r.Responses[r.currentTurn]
 		for _, cb := range turn.Callbacks {
 			if cb != nil {
-				cb(ctx, opts...)
+				cb(ctx, messages, opts...)
 			}
 		}
 		for _, resp := range turn.Responses {

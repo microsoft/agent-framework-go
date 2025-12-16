@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"iter"
-	"slices"
 	"strings"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -45,18 +44,17 @@ func NewLogger(name, description string, metadata ...string) middleware.Middlewa
 	return &logger{}
 }
 
-func (mw *logger) Run(ctx context.Context, next middleware.RunFunc, opts ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
+func (mw *logger) Run(ctx context.Context, next middleware.RunFunc, messages []*message.Message, opts ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
 	return func(yield func(*agent.RunResponseUpdate, error) bool) {
 		mw.n++
 		fmt.Printf("===== Run %d =====\n\n", mw.n)
-		msgs := slices.Collect(agentopt.All(opts, agentopt.Message))
-		for _, msg := range msgs {
+		for _, msg := range messages {
 			if msg.Role == message.RoleUser {
 				user(msg.String())
 			}
 		}
 		first := true
-		for update, err := range next(ctx, opts...) {
+		for update, err := range next(ctx, messages, opts...) {
 			if err == nil && update.String() != "" {
 				if first {
 					assistant()

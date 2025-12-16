@@ -8,13 +8,11 @@ import (
 	"fmt"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
 	"github.com/microsoft/agent-framework-go/agent/chatagent/chatclient"
 	"github.com/microsoft/agent-framework-go/agent/middleware"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/format/jsonformat"
-	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/openai"
 )
 
@@ -41,9 +39,11 @@ func main() {
 
 	ctx := context.Background()
 
-	// Set PersonInfo as the type parameter of RunFor method to specify the expected structured output from the agent and invoke the agent with some unstructured input.
-	person, resp, err := agent.RunFor[PersonInfo](ctx, a, agentopt.Message(message.NewText("Please provide information about John Smith, who is a 35-year-old software engineer.")))
-	demo.Response(resp, err)
+	// Set PersonInfo as the type parameter of RunTextFor method to specify the expected structured output from the agent and invoke the agent with some unstructured input.
+	person, err := agent.RunTextFor[PersonInfo](ctx, a, "Please provide information about John Smith, who is a 35-year-old software engineer.")
+	if err != nil {
+		demo.Panic(err)
+	}
 
 	fmt.Println("Structured Output:")
 	fmt.Println("\tName:", person.Name)

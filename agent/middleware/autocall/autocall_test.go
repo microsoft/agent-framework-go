@@ -181,14 +181,14 @@ func invokeAndAssert(t *testing.T, tools []tool.Tool, plan []*message.Message, e
 	initialMessages := []*message.Message{plan[0]}
 
 	// Build options
-	opts := []agentopt.Option{agentopt.Message(initialMessages[0])}
+	var opts []agentopt.Option
 	for _, tool := range tools {
 		opts = append(opts, agentopt.Tool(tool))
 	}
 
 	// Collect all updates
 	var updates []*agent.RunResponseUpdate
-	for update, err := range autocall.New(autocallOptions).Run(t.Context(), runner.Run, opts...) {
+	for update, err := range autocall.New(autocallOptions).Run(t.Context(), runner.Run, initialMessages, opts...) {
 		if err != nil {
 			t.Fatalf("unexpected error during streaming: %v", err)
 		}
@@ -636,13 +636,13 @@ func TestFunctionInvoking_ContinuesWithFailingCallsUntilMaximumConsecutiveErrors
 			initialMessages := []*message.Message{plan[0]}
 
 			// Build options
-			opts := []agentopt.Option{agentopt.Message(initialMessages[0])}
+			var opts []agentopt.Option
 			for _, tool := range tools {
 				opts = append(opts, agentopt.Tool(tool))
 			}
 
 			var streamErr error
-			for _, err := range autocall.New(autocallOptions).Run(t.Context(), runner.Run, opts...) {
+			for _, err := range autocall.New(autocallOptions).Run(t.Context(), runner.Run, initialMessages, opts...) {
 				if err != nil {
 					streamErr = err
 					break
@@ -749,13 +749,16 @@ func TestFunctionInvoking_CanFailOnFirstException(t *testing.T) {
 				Responses: rb.Build(),
 			}
 
-			opts := []agentopt.Option{agentopt.Message(plan[0])}
+			initialMessages := []*message.Message{plan[0]}
+
+			// Build options
+			var opts []agentopt.Option
 			for _, tool := range tools {
 				opts = append(opts, agentopt.Tool(tool))
 			}
 
 			var streamErr error
-			for _, err := range autocall.New(autocallOptions).Run(t.Context(), runner.Run, opts...) {
+			for _, err := range autocall.New(autocallOptions).Run(t.Context(), runner.Run, initialMessages, opts...) {
 				if err != nil {
 					streamErr = err
 					break
@@ -966,13 +969,14 @@ func TestFunctionInvoking_AllResponseMessagesReturned(t *testing.T) {
 			Build(),
 	}
 
-	opts := []agentopt.Option{agentopt.Message(messages[0])}
+	initialMessages := []*message.Message{messages[0]}
+	var opts []agentopt.Option
 	for _, tool := range tools {
 		opts = append(opts, agentopt.Tool(tool))
 	}
 
 	var updates []*agent.RunResponseUpdate
-	for update, err := range autocall.New(autocall.Options{}).Run(t.Context(), runner.Run, opts...) {
+	for update, err := range autocall.New(autocall.Options{}).Run(t.Context(), runner.Run, initialMessages, opts...) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

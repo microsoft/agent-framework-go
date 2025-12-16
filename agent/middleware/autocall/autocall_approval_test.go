@@ -5,7 +5,6 @@ package autocall_test
 import (
 	"context"
 	"fmt"
-	"slices"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -18,10 +17,9 @@ import (
 	"github.com/microsoft/agent-framework-go/tool/functool"
 )
 
-func expectedMessages(t *testing.T, expected ...*message.Message) func(context.Context, ...agentopt.Option) {
-	return func(ctx context.Context, opts ...agentopt.Option) {
-		got := slices.Collect(agentopt.All(opts, agentopt.Message))
-		if err := agenttest.MessagesEqual(expected, got); err != nil {
+func expectedMessages(t *testing.T, expected ...*message.Message) func(context.Context, []*message.Message, ...agentopt.Option) {
+	return func(ctx context.Context, messages []*message.Message, opts ...agentopt.Option) {
+		if err := agenttest.MessagesEqual(expected, messages); err != nil {
 			t.Errorf("Messages not equal: %v", err)
 		}
 	}
@@ -32,7 +30,7 @@ func invokeAndAssertApproval(t *testing.T, tools []tool.Tool, input []*message.M
 	downstreamAgentOutput []*agent.RunResponseUpdate, expectedOutput []*agent.RunResponseUpdate,
 	expectedDownstreamAgentInput []*message.Message, additionalTools []tool.Tool) {
 
-	var cb func(context.Context, ...agentopt.Option)
+	var cb func(context.Context, []*message.Message, ...agentopt.Option)
 	if expectedDownstreamAgentInput != nil {
 		cb = expectedMessages(t, expectedDownstreamAgentInput...)
 	}
@@ -63,17 +61,14 @@ func invokeAndAssertApprovalWithAgent(t *testing.T, next middleware.RunFunc,
 	ctx := t.Context()
 
 	// Build options
-	opts := []agentopt.Option{}
-	for _, msg := range input {
-		opts = append(opts, agentopt.Message(msg))
-	}
+	var opts []agentopt.Option
 	for _, tool := range tools {
 		opts = append(opts, agentopt.Tool(tool))
 	}
 
 	// Collect all streaming updates into messages
 	var updates []*agent.RunResponseUpdate
-	for update, err := range autocall.New(autocallOptions).Run(ctx, next, opts...) {
+	for update, err := range autocall.New(autocallOptions).Run(ctx, next, input, opts...) {
 		if err != nil {
 			t.Fatalf("StreamingResponse failed: %v", err)
 		}
@@ -91,16 +86,13 @@ func expectApprovalError(t *testing.T, tools []tool.Tool, input []*message.Messa
 	ctx := t.Context()
 
 	// Build options
-	opts := []agentopt.Option{}
-	for _, msg := range input {
-		opts = append(opts, agentopt.Message(msg))
-	}
+	var opts []agentopt.Option
 	for _, tool := range tools {
 		opts = append(opts, agentopt.Tool(tool))
 	}
 
 	var lastErr error
-	for _, err := range autocall.New(autocall.Options{}).Run(ctx, runner.Run, opts...) {
+	for _, err := range autocall.New(autocall.Options{}).Run(ctx, runner.Run, input, opts...) {
 		if err != nil {
 			lastErr = err
 			break

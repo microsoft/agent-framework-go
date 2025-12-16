@@ -11,7 +11,6 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/agenttest"
-	"github.com/microsoft/agent-framework-go/format"
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
 )
@@ -25,7 +24,7 @@ func TestRun_BasicExecution(t *testing.T) {
 			Build(),
 	}
 
-	resp, err := agent.Run(ctx, a)
+	resp, err := agent.Run(ctx, a, nil)
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
@@ -58,7 +57,7 @@ func TestRun_MultipleUpdates(t *testing.T) {
 			Build(),
 	}
 
-	resp, err := agent.Run(ctx, a)
+	resp, err := agent.RunText(ctx, a, "Test message")
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
@@ -99,7 +98,7 @@ func TestRun_MultipleMessages(t *testing.T) {
 			Build(),
 	}
 
-	resp, err := agent.Run(ctx, a)
+	resp, err := agent.RunText(ctx, a, "Test message")
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
@@ -128,7 +127,7 @@ func TestRun_ErrorHandling(t *testing.T) {
 			Build(),
 	}
 
-	resp, err := agent.Run(ctx, a)
+	resp, err := agent.RunText(ctx, a, "Test message")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -162,7 +161,7 @@ func TestRun_UsageTracking(t *testing.T) {
 			Build(),
 	}
 
-	resp, err := agent.Run(ctx, a)
+	resp, err := agent.RunText(ctx, a, "Test message")
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
@@ -197,7 +196,7 @@ func TestRun_ContinuationToken(t *testing.T) {
 			Build(),
 	}
 
-	resp, err := agent.Run(ctx, a)
+	resp, err := agent.RunText(ctx, a, "Test message")
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
@@ -225,7 +224,7 @@ func TestRun_ResponseMetadata(t *testing.T) {
 			Build(),
 	}
 
-	resp, err := agent.Run(ctx, a)
+	resp, err := agent.RunText(ctx, a, "Test message")
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
@@ -264,7 +263,7 @@ func TestRun_AdditionalProperties(t *testing.T) {
 			Build(),
 	}
 
-	resp, err := agent.Run(ctx, a)
+	resp, err := agent.RunText(ctx, a, "Test message")
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
@@ -293,7 +292,7 @@ func TestRun_ProvidedThread(t *testing.T) {
 			return agenttest.NewThread()
 		},
 		Responses: agenttest.NewResponseBuilder(
-			func(ctx context.Context, opts ...agentopt.Option) {
+			func(ctx context.Context, messages []*message.Message, opts ...agentopt.Option) {
 				thread, ok := agentopt.Get(opts, agentopt.Thread)
 				if !ok {
 					t.Fatal("no thread provided")
@@ -311,7 +310,7 @@ func TestRun_ProvidedThread(t *testing.T) {
 			Build(),
 	}
 
-	_, err := agent.Run(ctx, a, agentopt.Thread(providedThread))
+	_, err := agent.RunText(ctx, a, "Test message", agentopt.Thread(providedThread))
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
@@ -353,7 +352,7 @@ func TestRun_ContentCoalescing(t *testing.T) {
 			Build(),
 	}
 
-	resp, err := agent.Run(ctx, a)
+	resp, err := agent.RunText(ctx, a, "Test message")
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
@@ -380,7 +379,7 @@ func TestRunStream_BasicExecution(t *testing.T) {
 
 	a := &agenttest.Agent{
 		Responses: agenttest.NewResponseBuilder(
-			func(ctx context.Context, opts ...agentopt.Option) {
+			func(ctx context.Context, messages []*message.Message, opts ...agentopt.Option) {
 				// Verify stream option is set
 				stream, ok := agentopt.Get(opts, agentopt.Stream)
 				if !ok || !stream {
@@ -393,7 +392,7 @@ func TestRunStream_BasicExecution(t *testing.T) {
 	}
 
 	updateCount := 0
-	for update, err := range agent.RunStream(ctx, a) {
+	for update, err := range agent.RunTextStream(ctx, a, "Test message") {
 		if err != nil {
 			t.Fatalf("RunStream failed: %v", err)
 		}
@@ -420,7 +419,7 @@ func TestRunStream_ErrorHandling(t *testing.T) {
 
 	var receivedErr error
 	updateCount := 0
-	for update, err := range agent.RunStream(ctx, a) {
+	for update, err := range agent.RunTextStream(ctx, a, "Test message") {
 		if err != nil {
 			receivedErr = err
 			break
@@ -446,10 +445,10 @@ func TestRunText_BasicExecution(t *testing.T) {
 
 	a := &agenttest.Agent{
 		Responses: agenttest.NewResponseBuilder(
-			func(ctx context.Context, opts ...agentopt.Option) {
+			func(ctx context.Context, messages []*message.Message, opts ...agentopt.Option) {
 				// Verify message option is set with correct text
 				hasMessage := false
-				for msg := range agentopt.All(opts, agentopt.Message) {
+				for _, msg := range messages {
 					if len(msg.Contents) > 0 {
 						if tc, ok := msg.Contents[0].(*message.TextContent); ok {
 							if tc.Text == "Hello" {
@@ -482,12 +481,11 @@ func TestRunText_WithAdditionalOptions(t *testing.T) {
 
 	a := &agenttest.Agent{
 		Responses: agenttest.NewResponseBuilder(
-			func(ctx context.Context, opts ...agentopt.Option) {
+			func(ctx context.Context, messages []*message.Message, opts ...agentopt.Option) {
 				// Verify both message and thread are present
-				_, hasMessage := agentopt.Get(opts, agentopt.Message)
 				thread, hasThread := agentopt.Get(opts, agentopt.Thread)
 
-				if !hasMessage {
+				if len(messages) == 0 {
 					t.Fatal("message not found")
 				}
 				if !hasThread {
@@ -514,16 +512,11 @@ func TestRunTextStream_BasicExecution(t *testing.T) {
 
 	a := &agenttest.Agent{
 		Responses: agenttest.NewResponseBuilder(
-			func(ctx context.Context, opts ...agentopt.Option) {
+			func(ctx context.Context, messages []*message.Message, opts ...agentopt.Option) {
 				// Verify streaming is enabled
 				stream, ok := agentopt.Get(opts, agentopt.Stream)
 				if !ok || !stream {
 					t.Fatal("streaming not enabled")
-				}
-				// Verify message is present
-				_, hasMessage := agentopt.Get(opts, agentopt.Message)
-				if !hasMessage {
-					t.Fatal("message not found")
 				}
 			}).
 			AddText("Streamed ").
@@ -543,173 +536,5 @@ func TestRunTextStream_BasicExecution(t *testing.T) {
 
 	if updateCount != 2 {
 		t.Errorf("expected 2 updates, got %d", updateCount)
-	}
-}
-
-// Tests for RunFor
-
-type testStructuredOutput struct {
-	Name  string `json:"name"`
-	Value int    `json:"value"`
-}
-
-type mockFormatter struct {
-	formatFunc    func(v any) (format.Format, error)
-	unmarshalFunc func(data []byte, f format.Format, v any) error
-}
-
-func (m *mockFormatter) Format(v any) (format.Format, error) {
-	if m.formatFunc != nil {
-		return m.formatFunc(v)
-	}
-	return format.JSON(), nil
-}
-
-func (m *mockFormatter) Unmarshal(data []byte, f format.Format, v any) error {
-	if m.unmarshalFunc != nil {
-		return m.unmarshalFunc(data, f, v)
-	}
-	return nil
-}
-
-func TestRunFor_BasicExecution(t *testing.T) {
-	ctx := t.Context()
-
-	formatter := &mockFormatter{
-		formatFunc: func(v any) (format.Format, error) {
-			return format.JSON(), nil
-		},
-		unmarshalFunc: func(data []byte, f format.Format, v any) error {
-			// Simulate unmarshaling
-			if output, ok := v.(*testStructuredOutput); ok {
-				output.Name = "TestName"
-				output.Value = 42
-			}
-			return nil
-		},
-	}
-
-	a := &agenttest.Agent{
-		Caps: agent.Capabilities{
-			StructuredOutput: formatter,
-		},
-		Responses: agenttest.NewResponseBuilder(
-			func(ctx context.Context, opts ...agentopt.Option) {
-				// Verify response format is set
-				_, hasFormat := agentopt.Get(opts, agentopt.ResponseFormat)
-				if !hasFormat {
-					t.Fatal("response format not set")
-				}
-			}).
-			Add(&agent.RunResponseUpdate{
-				Contents: []message.Content{
-					&message.TextContent{Text: `{"name":"TestName","value":42}`},
-				},
-			}).
-			Build(),
-	}
-
-	result, resp, err := agent.RunFor[testStructuredOutput](ctx, a)
-	if err != nil {
-		t.Fatalf("RunFor failed: %v", err)
-	}
-
-	if resp == nil {
-		t.Fatal("expected non-nil response")
-	}
-
-	if result.Name != "TestName" {
-		t.Errorf("expected Name 'TestName', got %q", result.Name)
-	}
-
-	if result.Value != 42 {
-		t.Errorf("expected Value 42, got %d", result.Value)
-	}
-}
-
-func TestRunFor_NoStructuredOutputSupport(t *testing.T) {
-	ctx := t.Context()
-
-	a := &agenttest.Agent{
-		Caps: agent.Capabilities{
-			StructuredOutput: nil, // No structured output support
-		},
-		Responses: agenttest.NewResponseBuilder().
-			AddText("Response").
-			Build(),
-	}
-
-	_, resp, err := agent.RunFor[testStructuredOutput](ctx, a)
-	if err == nil {
-		t.Fatal("expected error for unsupported structured output, got nil")
-	}
-
-	if resp != nil {
-		t.Errorf("expected nil response when agent doesn't support structured output, got %v", resp)
-	}
-
-	if err.Error() != "agent does not support structured output" {
-		t.Errorf("unexpected error message: %v", err)
-	}
-}
-
-func TestRunFor_FormatterError(t *testing.T) {
-	ctx := t.Context()
-	expectedErr := errors.New("format error")
-
-	formatter := &mockFormatter{
-		formatFunc: func(v any) (format.Format, error) {
-			return nil, expectedErr
-		},
-	}
-
-	a := &agenttest.Agent{
-		Caps: agent.Capabilities{
-			StructuredOutput: formatter,
-		},
-		Responses: agenttest.NewResponseBuilder().
-			AddText("Response").
-			Build(),
-	}
-
-	_, resp, err := agent.RunFor[testStructuredOutput](ctx, a)
-	if !errors.Is(err, expectedErr) {
-		t.Errorf("expected error %v, got %v", expectedErr, err)
-	}
-
-	if resp != nil {
-		t.Errorf("expected nil response on formatter error, got %v", resp)
-	}
-}
-
-func TestRunFor_UnmarshalError(t *testing.T) {
-	ctx := t.Context()
-	expectedErr := errors.New("unmarshal error")
-
-	formatter := &mockFormatter{
-		formatFunc: func(v any) (format.Format, error) {
-			return format.JSON(), nil
-		},
-		unmarshalFunc: func(data []byte, f format.Format, v any) error {
-			return expectedErr
-		},
-	}
-
-	a := &agenttest.Agent{
-		Caps: agent.Capabilities{
-			StructuredOutput: formatter,
-		},
-		Responses: agenttest.NewResponseBuilder().
-			AddText("Invalid JSON").
-			Build(),
-	}
-
-	_, resp, err := agent.RunFor[testStructuredOutput](ctx, a)
-	if !errors.Is(err, expectedErr) {
-		t.Errorf("expected error %v, got %v", expectedErr, err)
-	}
-
-	if resp == nil {
-		t.Error("expected response even when unmarshal fails")
 	}
 }

@@ -12,7 +12,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
-	"github.com/microsoft/agent-framework-go/format"
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
 )
@@ -46,18 +45,19 @@ func (iden Identity) Description() string {
 	return iden.description
 }
 
-type Capabilities struct {
-	StructuredOutput format.Formatter // nil if structured output is not supported
-}
-
 type Agent interface {
 	Identity() Identity
-	Capabilities() Capabilities
 
-	Run(ctx context.Context, options ...agentopt.Option) iter.Seq2[*RunResponseUpdate, error]
+	Run(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*RunResponseUpdate, error]
 
 	NewThread() memory.Thread
 	UnmarshalThread(data []byte) (memory.Thread, error)
+}
+
+type StructuredOutputAgent interface {
+	Agent
+
+	RunOf(ctx context.Context, v any, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*RunResponseUpdate, error]
 }
 
 func NewMessagesFromUpdates(updates []*RunResponseUpdate) []*message.Message {
