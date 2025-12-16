@@ -149,9 +149,6 @@ func (resp *Response) Update(update *ResponseUpdate) {
 		msg.CreatedAt = update.CreatedAt
 	}
 	msg.Contents = append(msg.Contents, update.Contents...)
-	if msg.CreatedAt.IsZero() || (!update.CreatedAt.IsZero() && update.CreatedAt.After(msg.CreatedAt)) {
-		msg.CreatedAt = update.CreatedAt
-	}
 	if update.AdditionalProperties != nil {
 		if msg.AdditionalProperties == nil {
 			msg.AdditionalProperties = make(map[string]any)
