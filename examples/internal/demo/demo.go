@@ -8,7 +8,6 @@ import (
 	"iter"
 	"strings"
 
-	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/middleware"
 	"github.com/microsoft/agent-framework-go/message"
@@ -44,8 +43,8 @@ func NewLogger(name, description string, metadata ...string) middleware.Middlewa
 	return &logger{}
 }
 
-func (mw *logger) Run(ctx context.Context, next middleware.RunFunc, messages []*message.Message, opts ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
-	return func(yield func(*agent.RunResponseUpdate, error) bool) {
+func (mw *logger) Run(ctx context.Context, next middleware.RunFunc, messages []*message.Message, opts ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	return func(yield func(*message.ResponseUpdate, error) bool) {
 		mw.n++
 		fmt.Printf("===== Run %d =====\n\n", mw.n)
 		for _, msg := range messages {
@@ -102,7 +101,7 @@ func Response(resp fmt.Stringer, err error) {
 	txt := resp.String()
 	if txt != "" {
 		fmt.Print(resp)
-		if _, ok := resp.(*agent.RunResponseUpdate); !ok {
+		if _, ok := resp.(*message.ResponseUpdate); !ok {
 			fmt.Print("\n\n")
 		}
 	}

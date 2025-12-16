@@ -73,12 +73,13 @@ func (cs *Contents) UnmarshalJSON(data []byte) error {
 
 // Text returns the first text content in the response, or empty string.
 func (cs Contents) Text() string {
+	var sb strings.Builder
 	for _, c := range cs {
 		if textContent, ok := c.(*TextContent); ok {
-			return textContent.Text
+			sb.WriteString(textContent.Text)
 		}
 	}
-	return ""
+	return sb.String()
 }
 
 func (cs Contents) Usage() UsageDetails {

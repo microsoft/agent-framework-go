@@ -48,7 +48,7 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		if evt, ok := evt.(agent.RunUpdateEvent); ok {
+		if evt, ok := evt.(workflow.ResponseUpdateEvent); ok {
 			fmt.Printf("%s: %v\n", evt.ExecutorID, evt.Update)
 		}
 	}

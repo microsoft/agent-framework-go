@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"iter"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/a2aproject/a2a-go/a2a"
@@ -71,8 +72,8 @@ func (a *Agent) UnmarshalThread(data []byte) (memory.Thread, error) {
 	return &thread, nil
 }
 
-func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
-	return func(yield func(*agent.RunResponseUpdate, error) bool) {
+func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	return func(yield func(*message.ResponseUpdate, error) bool) {
 		var thread *Thread
 		if v, ok := agentopt.Get(options, agentopt.Thread); !ok {
 			// Aligning with other agent implementations that support background responses, where
@@ -143,7 +144,7 @@ func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ..
 	}
 }
 
-func (a *Agent) sendMsg(ctx context.Context, thread *Thread, streaming bool, params *a2a.MessageSendParams, yield func(*agent.RunResponseUpdate, error) bool) {
+func (a *Agent) sendMsg(ctx context.Context, thread *Thread, streaming bool, params *a2a.MessageSendParams, yield func(*message.ResponseUpdate, error) bool) {
 	var seq iter.Seq2[a2a.Event, error]
 	if streaming {
 		seq = a.Client.SendStreamingMessage(ctx, params)
@@ -169,10 +170,10 @@ func (a *Agent) sendMsg(ctx context.Context, thread *Thread, streaming bool, par
 				return
 			}
 		case *a2a.TaskStatusUpdateEvent:
-			if !yield(&agent.RunResponseUpdate{
+			if !yield(&message.ResponseUpdate{
 				RawRepresentation:    e,
 				AdditionalProperties: e.Metadata,
-				AgentID:              a.iden.ID(),
+				AuthorID:             a.iden.ID(),
 				MessageID:            string(e.TaskID),
 				ResponseID:           string(e.TaskID),
 				Role:                 message.RoleAssistant,
@@ -182,15 +183,15 @@ func (a *Agent) sendMsg(ctx context.Context, thread *Thread, streaming bool, par
 				return
 			}
 		case *a2a.TaskArtifactUpdateEvent:
-			contents, err := partsToContents(e.Artifact.Parts)
+			contents, err := partsToContents(e.Artifact.Parts, nil)
 			if err != nil {
 				yield(nil, err)
 				return
 			}
-			if !yield(&agent.RunResponseUpdate{
+			if !yield(&message.ResponseUpdate{
 				RawRepresentation:    e,
 				AdditionalProperties: e.Metadata,
-				AgentID:              a.iden.ID(),
+				AuthorID:             a.iden.ID(),
 				MessageID:            string(e.Artifact.ID),
 				ResponseID:           string(e.TaskID),
 				Contents:             contents,
@@ -201,7 +202,7 @@ func (a *Agent) sendMsg(ctx context.Context, thread *Thread, streaming bool, par
 				return
 			}
 		case *a2a.Message:
-			contents, err := partsToContents(e.Parts)
+			contents, err := partsToContents(e.Parts, nil)
 			if err != nil {
 				yield(nil, err)
 				return
@@ -210,10 +211,10 @@ func (a *Agent) sendMsg(ctx context.Context, thread *Thread, streaming bool, par
 			if e.Role == a2a.MessageRoleAgent {
 				role = message.RoleAssistant
 			}
-			if !yield(&agent.RunResponseUpdate{
+			if !yield(&message.ResponseUpdate{
 				RawRepresentation:    e,
 				AdditionalProperties: e.Metadata,
-				AgentID:              a.iden.ID(),
+				AuthorID:             a.iden.ID(),
 				MessageID:            e.ID,
 				ResponseID:           e.ID,
 				Role:                 role,
@@ -230,38 +231,40 @@ func (a *Agent) sendMsg(ctx context.Context, thread *Thread, streaming bool, par
 	}
 }
 
-func (a *Agent) yieldTask(yield func(*agent.RunResponseUpdate, error) bool, task *a2a.Task) bool {
+func (a *Agent) yieldTask(yield func(*message.ResponseUpdate, error) bool, task *a2a.Task) bool {
 	now := time.Now()
 	id, name := a.iden.ID(), a.iden.Name()
+	var continuationToken any
+	switch task.Status.State {
+	case a2a.TaskStateSubmitted, a2a.TaskStateWorking:
+		continuationToken = task.ID
+	}
+	timestamp := now
+	if task.Status.Timestamp != nil {
+		timestamp = *task.Status.Timestamp
+	}
+	var contents []message.Content
 	for _, artifact := range task.Artifacts {
-		contents, err := partsToContents(artifact.Parts)
+		var err error
+		contents, err = partsToContents(artifact.Parts, contents)
 		if err != nil {
 			yield(nil, err)
 			return false
 		}
-		timestamp := now
-		if task.Status.Timestamp != nil {
-			timestamp = *task.Status.Timestamp
-		}
-		var continuationToken any
-		switch task.Status.State {
-		case a2a.TaskStateSubmitted, a2a.TaskStateWorking:
-			continuationToken = task.ID
-		}
-		if !yield(&agent.RunResponseUpdate{
-			RawRepresentation:    artifact,
-			AdditionalProperties: artifact.Metadata,
-			AgentID:              id,
-			MessageID:            string(artifact.ID),
-			ResponseID:           string(task.ID),
-			Contents:             contents,
-			ContinuationToken:    continuationToken,
-			Role:                 message.RoleAssistant,
-			CreatedAt:            timestamp,
-			AuthorName:           name,
-		}, nil) {
-			return false
-		}
+	}
+
+	if !yield(&message.ResponseUpdate{
+		RawRepresentation:    task,
+		AdditionalProperties: task.Metadata,
+		AuthorID:             id,
+		ResponseID:           string(task.ID),
+		Contents:             contents,
+		ContinuationToken:    continuationToken,
+		Role:                 message.RoleAssistant,
+		CreatedAt:            timestamp,
+		AuthorName:           name,
+	}, nil) {
+		return false
 	}
 	return true
 }
@@ -280,12 +283,13 @@ func (a *Agent) updateThreadContextID(thread *Thread, contextID, taskID string) 
 	return nil
 }
 
-func partsToContents(parts []a2a.Part) ([]message.Content, error) {
-	contents := make([]message.Content, len(parts))
-	for i, part := range parts {
+func partsToContents(parts []a2a.Part, contents []message.Content) ([]message.Content, error) {
+	contents = slices.Grow(contents, len(parts))
+	for _, part := range parts {
+		var content message.Content
 		switch p := part.(type) {
 		case a2a.TextPart:
-			contents[i] = &message.TextContent{
+			content = &message.TextContent{
 				ContentHeader: message.ContentHeader{
 					AdditionalProperties: p.Metadata,
 					RawRepresentation:    p,
@@ -295,7 +299,7 @@ func partsToContents(parts []a2a.Part) ([]message.Content, error) {
 		case a2a.FilePart:
 			switch f := p.File.(type) {
 			case a2a.FileURI:
-				contents[i] = &message.URIContent{
+				content = &message.URIContent{
 					ContentHeader: message.ContentHeader{
 						AdditionalProperties: p.Metadata,
 						RawRepresentation:    p,
@@ -304,7 +308,7 @@ func partsToContents(parts []a2a.Part) ([]message.Content, error) {
 					URI:       f.URI,
 				}
 			case a2a.FileBytes:
-				contents[i] = &message.DataContent{
+				content = &message.DataContent{
 					ContentHeader: message.ContentHeader{
 						AdditionalProperties: p.Metadata,
 						RawRepresentation:    p,
@@ -318,7 +322,7 @@ func partsToContents(parts []a2a.Part) ([]message.Content, error) {
 			if err != nil {
 				return nil, fmt.Errorf("failed to marshal A2A data part: %w", err)
 			}
-			contents[i] = &message.DataContent{
+			content = &message.DataContent{
 				ContentHeader: message.ContentHeader{
 					AdditionalProperties: p.Metadata,
 					RawRepresentation:    p,
@@ -328,6 +332,9 @@ func partsToContents(parts []a2a.Part) ([]message.Content, error) {
 			}
 		default:
 			return nil, fmt.Errorf("unsupported A2A part type: %T", part)
+		}
+		if content != nil {
+			contents = append(contents, content)
 		}
 	}
 	return contents, nil

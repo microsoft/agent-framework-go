@@ -13,15 +13,6 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow"
 )
 
-type RunUpdateEvent struct {
-	ExecutorID string
-	Update     *RunResponseUpdate
-}
-
-func (e RunUpdateEvent) Data() any {
-	return e.Update
-}
-
 func newExecutor(a Agent, emitEvents bool) *workflow.Executor {
 	var thread memory.Thread
 	var threadStateKey string
@@ -71,13 +62,13 @@ func newExecutor(a Agent, emitEvents bool) *workflow.Executor {
 				// Run the agent in streaming mode only when agent run update events are to be emitted.
 				options = append(options, agentopt.Stream(true))
 			}
-			var updates []*RunResponseUpdate
+			var updates []*message.ResponseUpdate
 			for update, err := range RunStream(ctx, a, messages, options...) {
 				if err != nil {
 					return err
 				}
 				if emitEvents {
-					if err := ctx.AddEvent(RunUpdateEvent{id, update}); err != nil {
+					if err := ctx.AddEvent(workflow.ResponseUpdateEvent{ExecutorID: id, Update: update}); err != nil {
 						return err
 					}
 				}

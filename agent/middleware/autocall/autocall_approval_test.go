@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/agenttest"
 	"github.com/microsoft/agent-framework-go/agent/middleware"
@@ -27,7 +26,7 @@ func expectedMessages(t *testing.T, expected ...*message.Message) func(context.C
 
 // invokeAndAssertApproval is the helper for approval tests
 func invokeAndAssertApproval(t *testing.T, tools []tool.Tool, input []*message.Message,
-	downstreamAgentOutput []*agent.RunResponseUpdate, expectedOutput []*agent.RunResponseUpdate,
+	downstreamAgentOutput []*message.ResponseUpdate, expectedOutput []*message.ResponseUpdate,
 	expectedDownstreamAgentInput []*message.Message, additionalTools []tool.Tool) {
 
 	var cb func(context.Context, []*message.Message, ...agentopt.Option)
@@ -49,7 +48,7 @@ func invokeAndAssertApproval(t *testing.T, tools []tool.Tool, input []*message.M
 // invokeAndAssertApprovalWithAgent performs streaming test execution
 func invokeAndAssertApprovalWithAgent(t *testing.T, next middleware.RunFunc,
 	tools []tool.Tool, input []*message.Message,
-	expectedOutput []*agent.RunResponseUpdate, additionalTools []tool.Tool) {
+	expectedOutput []*message.ResponseUpdate, additionalTools []tool.Tool) {
 
 	autocallOptions := autocall.Options{
 		NewID: func() string { return "" },
@@ -67,7 +66,7 @@ func invokeAndAssertApprovalWithAgent(t *testing.T, next middleware.RunFunc,
 	}
 
 	// Collect all streaming updates into messages
-	var updates []*agent.RunResponseUpdate
+	var updates []*message.ResponseUpdate
 	for update, err := range autocall.New(autocallOptions).Run(ctx, next, input, opts...) {
 		if err != nil {
 			t.Fatalf("StreamingResponse failed: %v", err)
@@ -135,14 +134,14 @@ func TestFunctionInvoking_AllFunctionCallsReplacedWithApprovalsWhenAllRequireApp
 				message.New(&message.TextContent{Text: "hello"}),
 			}
 
-			downstreamAgentOutput := []*agent.RunResponseUpdate{
+			downstreamAgentOutput := []*message.ResponseUpdate{
 				{Role: message.RoleAssistant, Contents: []message.Content{
 					&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
 					&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`},
 				}},
 			}
 
-			expectedOutput := []*agent.RunResponseUpdate{
+			expectedOutput := []*message.ResponseUpdate{
 				{Role: message.RoleAssistant, Contents: []message.Content{
 					&message.FunctionApprovalRequestContent{ID: "callId1", FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
 					&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
@@ -171,14 +170,14 @@ func TestFunctionInvoking_AllFunctionCallsReplacedWithApprovalsWhenAnyRequireApp
 		message.New(&message.TextContent{Text: "hello"}),
 	}
 
-	downstreamAgentOutput := []*agent.RunResponseUpdate{
+	downstreamAgentOutput := []*message.ResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
 			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`},
 		}},
 	}
 
-	expectedOutput := []*agent.RunResponseUpdate{
+	expectedOutput := []*message.ResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionApprovalRequestContent{ID: "callId1", FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
 			&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
@@ -221,14 +220,14 @@ func TestFunctionInvoking_AllFunctionCallsReplacedWithApprovalsWhenAnyRequestOrA
 				message.New(&message.TextContent{Text: "hello"}),
 			}
 
-			downstreamAgentOutput := []*agent.RunResponseUpdate{
+			downstreamAgentOutput := []*message.ResponseUpdate{
 				{Role: message.RoleAssistant, Contents: []message.Content{
 					&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
 					&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`},
 				}},
 			}
 
-			expectedOutput := []*agent.RunResponseUpdate{
+			expectedOutput := []*message.ResponseUpdate{
 				{Role: message.RoleAssistant, Contents: []message.Content{
 					&message.FunctionApprovalRequestContent{ID: "callId1", FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
 					&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
@@ -270,14 +269,14 @@ func TestFunctionInvoking_ApprovedApprovalResponsesAreExecuted(t *testing.T) {
 	}
 
 	// Downstream agent returns a simple text response
-	downstreamAgentOutput := []*agent.RunResponseUpdate{
+	downstreamAgentOutput := []*message.ResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.TextContent{Text: "world"},
 		}},
 	}
 
 	// Final output includes: function calls, function results, and the assistant response
-	expectedOutput := []*agent.RunResponseUpdate{
+	expectedOutput := []*message.ResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
 			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`},
@@ -329,12 +328,12 @@ func TestFunctionInvoking_ApprovedApprovalResponsesFromSeparateFCCMessagesAreExe
 		}},
 	}
 
-	downstreamAgentOutput := []*agent.RunResponseUpdate{
+	downstreamAgentOutput := []*message.ResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "world"}}},
 	}
 
 	// Output includes the function calls, results, and downstream response
-	expectedOutput := []*agent.RunResponseUpdate{
+	expectedOutput := []*message.ResponseUpdate{
 		{MessageID: "resp1", ResponseID: "resp1", Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
 		}},
@@ -378,13 +377,13 @@ func TestFunctionInvoking_RejectedApprovalResponsesAreFailed(t *testing.T) {
 		}},
 	}
 
-	downstreamAgentOutput := []*agent.RunResponseUpdate{
+	downstreamAgentOutput := []*message.ResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.TextContent{Text: "world"},
 		}},
 	}
 
-	expectedOutput := []*agent.RunResponseUpdate{
+	expectedOutput := []*message.ResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
 			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`},
@@ -431,13 +430,13 @@ func TestFunctionInvoking_MixedApprovedAndRejectedApprovalResponsesAreExecutedAn
 		}},
 	}
 
-	downstreamAgentOutput := []*agent.RunResponseUpdate{
+	downstreamAgentOutput := []*message.ResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.TextContent{Text: "world"},
 		}},
 	}
 
-	expectedOutput := []*agent.RunResponseUpdate{
+	expectedOutput := []*message.ResponseUpdate{
 		{MessageID: "resp1", ResponseID: "resp1", Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
 			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`},
@@ -485,14 +484,14 @@ func TestFunctionInvoking_ApprovedInputsAreExecutedAndFunctionResultsAreConverte
 	}
 
 	// Downstream client returns a new FunctionCallContent for Func2 with different arguments
-	downstreamAgentOutput := []*agent.RunResponseUpdate{
+	downstreamAgentOutput := []*message.ResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":3}`},
 		}},
 	}
 
 	// Output includes executed functions and the new approval request for the new Func2 call
-	expectedOutput := []*agent.RunResponseUpdate{
+	expectedOutput := []*message.ResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
 			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`},
@@ -566,14 +565,14 @@ func TestFunctionInvoking_AlreadyExecutedApprovalsAreIgnored(t *testing.T) {
 		}},
 	}
 
-	downstreamAgentOutput := []*agent.RunResponseUpdate{
+	downstreamAgentOutput := []*message.ResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.TextContent{Text: "World"},
 		}},
 	}
 
 	// Output only includes the newly executed approval (not the already-executed ones from history)
-	expectedOutput := []*agent.RunResponseUpdate{
+	expectedOutput := []*message.ResponseUpdate{
 		{MessageID: "resp2", ResponseID: "resp2", Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId3", Name: "Func1"},
 		}},
@@ -618,7 +617,7 @@ func TestFunctionInvoking_MixedApprovalRequiredToolsWithNonApprovalRequiringFunc
 	}
 
 	// Expected output: Func2 call, result, and final response
-	expectedOutput := []*agent.RunResponseUpdate{
+	expectedOutput := []*message.ResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`},
 		}},
@@ -658,13 +657,13 @@ func TestFunctionInvoking_ApprovedApprovalResponsesWithoutApprovalRequestAreExec
 		}},
 	}
 
-	downstreamAgentOutput := []*agent.RunResponseUpdate{
+	downstreamAgentOutput := []*message.ResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.TextContent{Text: "world"},
 		}},
 	}
 
-	expectedOutput := []*agent.RunResponseUpdate{
+	expectedOutput := []*message.ResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
 			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`},
@@ -710,7 +709,7 @@ func TestFunctionInvoking_FunctionCallContentIsYieldedImmediatelyIfNoApprovalReq
 	}
 
 	// Expected output includes function calls, their results, and final response
-	expectedOutput := []*agent.RunResponseUpdate{
+	expectedOutput := []*message.ResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
 		}},
@@ -742,7 +741,7 @@ func TestFunctionInvoking_FunctionCallsAreBufferedUntilApprovalRequirementEncoun
 	}
 
 	// Downstream returns function calls
-	downstreamAgentOutput := []*agent.RunResponseUpdate{
+	downstreamAgentOutput := []*message.ResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
 			&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`},
@@ -750,7 +749,7 @@ func TestFunctionInvoking_FunctionCallsAreBufferedUntilApprovalRequirementEncoun
 	}
 
 	// Since approval is required for at least one function, ALL are converted to approval requests
-	expectedOutput := []*agent.RunResponseUpdate{
+	expectedOutput := []*message.ResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{
 			&message.FunctionApprovalRequestContent{ID: "callId1", FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
 			&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},

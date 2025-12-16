@@ -2,6 +2,8 @@
 
 package workflow
 
+import "github.com/microsoft/agent-framework-go/message"
+
 type Event interface {
 	Data() any
 }
@@ -141,4 +143,15 @@ type RequestInfoEvent struct {
 
 func (e RequestInfoEvent) Data() any {
 	return e.Request
+}
+
+var _ Event = ResponseUpdateEvent{}
+
+type ResponseUpdateEvent struct {
+	ExecutorID string
+	Update     *message.ResponseUpdate
+}
+
+func (e ResponseUpdateEvent) Data() any {
+	return e.Update
 }

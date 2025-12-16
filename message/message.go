@@ -3,6 +3,10 @@
 package message
 
 import (
+	"cmp"
+	"iter"
+	"maps"
+	"strings"
 	"time"
 )
 
@@ -29,7 +33,6 @@ type Message struct {
 	AuthorID             string    `json:",omitzero"`
 	AuthorName           string    `json:",omitzero"`
 	CreatedAt            time.Time `json:",omitzero"`
-	ContinuationToken    any       `json:",omitzero"`
 	RawRepresentation    any       `json:"-"`
 }
 
@@ -51,13 +54,11 @@ func (m *Message) String() string {
 }
 
 func (m *Message) Usage() UsageDetails {
-	var usage UsageDetails
-	for _, c := range m.Contents {
-		if usageContent, ok := c.(*UsageContent); ok {
-			usage.Add(usageContent.Details)
-		}
-	}
-	return usage
+	return m.Contents.Usage()
+}
+
+func (m Message) UserInputRequests() iter.Seq[Content] {
+	return m.Contents.UserInputRequests()
 }
 
 // Clone creates a shallow copy of the message.
@@ -67,4 +68,149 @@ func (m *Message) Clone() *Message {
 	}
 	v := *m
 	return &v
+}
+
+type Response struct {
+	CreatedAt         time.Time `json:",omitzero"`
+	ContinuationToken any       `json:",omitzero"`
+	Messages          []*Message
+}
+
+func (resp *Response) String() string {
+	var sb strings.Builder
+	for _, msg := range resp.Messages {
+		for _, c := range msg.Contents {
+			if textContent, ok := c.(*TextContent); ok {
+				sb.WriteString(textContent.Text)
+			}
+		}
+	}
+	return sb.String()
+}
+
+func (resp *Response) Usage() UsageDetails {
+	var usage UsageDetails
+	for _, msg := range resp.Messages {
+		usage.Add(msg.Usage())
+	}
+	return usage
+}
+
+func (resp *Response) UserInputRequests() iter.Seq[Content] {
+	return func(yield func(Content) bool) {
+		for _, msg := range resp.Messages {
+			for c := range msg.UserInputRequests() {
+				if !yield(c) {
+					return
+				}
+			}
+		}
+	}
+}
+
+func (resp *Response) Coalesce() {
+	for _, msg := range resp.Messages {
+		msg.Contents = CoalesceContents(msg.Contents)
+	}
+}
+
+func (resp *Response) Update(update *ResponseUpdate) {
+	if update == nil {
+		return
+	}
+	// If there is no message created yet, or if the last update we saw had a different
+	// identifying parts, create a new message.
+	isNewMessage := true
+	if len(resp.Messages) > 0 {
+		lastMsg := resp.Messages[len(resp.Messages)-1]
+		isNewMessage = notEmptyNorEqual(update.AuthorName, lastMsg.AuthorName) ||
+			notEmptyNorEqual(update.MessageID, lastMsg.ID) ||
+			notEmptyNorEqual(string(update.Role), string(lastMsg.Role))
+	}
+	// Get the message to target, either a new one or the last ones.
+	var msg *Message
+	if isNewMessage {
+		msg = &Message{
+			Role: RoleAssistant,
+		}
+		resp.Messages = append(resp.Messages, msg)
+	} else {
+		msg = resp.Messages[len(resp.Messages)-1]
+	}
+	// Some members on RunResponseUpdate map to members of Message.
+	// Incorporate those into the latest message; in cases where the message
+	// stores a single value, prefer the latest update's value over anything
+	// stored in the message.
+	msg.AuthorID = cmp.Or(update.AuthorID, msg.AuthorID)
+	msg.AuthorName = cmp.Or(update.AuthorName, msg.AuthorName)
+	msg.Role = cmp.Or(update.Role, msg.Role)
+	msg.ID = cmp.Or(update.MessageID, msg.ID)
+	if msg.CreatedAt.IsZero() || (!update.CreatedAt.IsZero() && update.CreatedAt.After(msg.CreatedAt)) {
+		msg.CreatedAt = update.CreatedAt
+	}
+	msg.Contents = append(msg.Contents, update.Contents...)
+	if msg.CreatedAt.IsZero() || (!update.CreatedAt.IsZero() && update.CreatedAt.After(msg.CreatedAt)) {
+		msg.CreatedAt = update.CreatedAt
+	}
+	if update.AdditionalProperties != nil {
+		if msg.AdditionalProperties == nil {
+			msg.AdditionalProperties = make(map[string]any)
+		}
+		maps.Copy(msg.AdditionalProperties, update.AdditionalProperties)
+	}
+	if msg.RawRepresentation == nil {
+		msg.RawRepresentation = update.RawRepresentation
+	} else if s, ok := msg.RawRepresentation.([]any); ok {
+		msg.RawRepresentation = append(s, update.RawRepresentation)
+	} else {
+		msg.RawRepresentation = []any{msg.RawRepresentation, update.RawRepresentation}
+	}
+
+	// Other members on a RunResponseUpdate map to members of the response.
+	// Update the response object with those, preferring the values from later updates.
+	if update.ContinuationToken == nil {
+		resp.ContinuationToken = nil
+	} else {
+		resp.ContinuationToken = update.ContinuationToken
+	}
+	if resp.CreatedAt.IsZero() || (!update.CreatedAt.IsZero() && update.CreatedAt.After(resp.CreatedAt)) {
+		resp.CreatedAt = update.CreatedAt
+	}
+}
+
+// notEmptyNorEqual returns true if both strings are not empty and not the same as each other.
+func notEmptyNorEqual(s1, s2 string) bool {
+	return s1 != "" && s2 != "" && s1 != s2
+}
+
+type ResponseUpdate struct {
+	RawRepresentation    any            `json:"-"`
+	AdditionalProperties map[string]any `json:",omitzero"`
+	AuthorID             string
+	MessageID            string
+	ResponseID           string
+	AuthorName           string    `json:",omitzero"`
+	Role                 Role      `json:",omitzero"`
+	ContinuationToken    any       `json:",omitzero"`
+	CreatedAt            time.Time `json:",omitzero"`
+	Contents             Contents  `json:",omitzero"`
+}
+
+// String returns the concatenated text contents of the response messages.
+func (r *ResponseUpdate) String() string {
+	var sb strings.Builder
+	for _, c := range r.Contents {
+		if textContent, ok := c.(*TextContent); ok {
+			sb.WriteString(textContent.Text)
+		}
+	}
+	return sb.String()
+}
+
+func (m ResponseUpdate) Usage() UsageDetails {
+	return m.Contents.Usage()
+}
+
+func (r *ResponseUpdate) UserInputRequests() iter.Seq[Content] {
+	return r.Contents.UserInputRequests()
 }

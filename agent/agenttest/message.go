@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
@@ -23,7 +22,7 @@ func MessagesEqual(expected, actual []*message.Message) error {
 	return equal(expected, actual)
 }
 
-func AgentRunResponseUpdatesEqual(expected, actual []*agent.RunResponseUpdate) error {
+func AgentRunResponseUpdatesEqual(expected, actual []*message.ResponseUpdate) error {
 	return equal(expected, actual)
 }
 

@@ -74,7 +74,7 @@ func (a *Agent) UnmarshalThread(data []byte) (memory.Thread, error) {
 	return newThreadFromJSON(data, a.Options.NewMessageStore, a.Options.NewContextProvider)
 }
 
-func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
+func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
 	if a.Options.ChatOptions != nil {
 		for _, tl := range a.Options.ChatOptions.Tools {
 			options = append(options, agentopt.Tool(tl))
@@ -86,8 +86,8 @@ func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ..
 	return middleware.RunChain(ctx, a.run, a.Options.Middlewares, messages, options...)
 }
 
-func (a *Agent) RunOf(ctx context.Context, v any, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
-	return func(yield func(*agent.RunResponseUpdate, error) bool) {
+func (a *Agent) RunOf(ctx context.Context, v any, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	return func(yield func(*message.ResponseUpdate, error) bool) {
 		formatter := a.Client.Capabilities().StructuredOutput
 		if formatter == nil {
 			yield(nil, errors.New("agent does not support structured output"))
@@ -115,8 +115,8 @@ func (a *Agent) RunOf(ctx context.Context, v any, messages []*message.Message, o
 	}
 }
 
-func (a *Agent) run(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
-	return func(yield func(*agent.RunResponseUpdate, error) bool) {
+func (a *Agent) run(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	return func(yield func(*message.ResponseUpdate, error) bool) {
 		originalMessages := messages
 		client := a.Client
 		if fn, ok := agentopt.Get(options, WithNewClient); ok {
@@ -142,8 +142,8 @@ func (a *Agent) run(ctx context.Context, messages []*message.Message, options ..
 			if update != nil {
 				update.AuthorName = cmp.Or(update.AuthorName, a.Identity().Name())
 				updates = append(updates, update)
-				if !yield(&agent.RunResponseUpdate{
-					AgentID:              a.Identity().ID(),
+				if !yield(&message.ResponseUpdate{
+					AuthorID:             a.Identity().ID(),
 					AuthorName:           update.AuthorName,
 					MessageID:            update.MessageID,
 					ResponseID:           update.ResponseID,

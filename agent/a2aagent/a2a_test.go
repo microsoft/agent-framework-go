@@ -257,33 +257,30 @@ func TestRunWithValidUserMessage(t *testing.T) {
 	if result == nil {
 		t.Fatal("result is nil")
 	}
-	if result.AgentID != a.Identity().ID() {
-		t.Errorf("result.AgentID = %q, want %q", result.AgentID, a.Identity().ID())
+	if len(result.Messages) != 1 {
+		t.Fatalf("len(result.Messages) = %d, want 1", len(result.Messages))
 	}
-	if result.ID != "response-123" {
-		t.Errorf("result.ID = %q, want %q", result.ID, "response-123")
+	msg := result.Messages[0]
+	if msg.AuthorID != a.Identity().ID() {
+		t.Errorf("AuthorID = %q, want %q", msg.AuthorID, a.Identity().ID())
+	}
+	if msg.ID != "response-123" {
+		t.Errorf("ID = %q, want %q", msg.ID, "response-123")
 	}
 
-	if result.RawRepresentation == nil {
-		t.Fatal("result.RawRepresentation is nil")
+	if _, ok := msg.RawRepresentation.(*a2a.Message); !ok {
+		t.Errorf("RawRepresentation type = %T, want *a2a.Message", msg.RawRepresentation)
 	}
-	if _, ok := result.RawRepresentation.(*a2a.Message); !ok {
-		t.Errorf("result.RawRepresentation type = %T, want *a2a.Message", result.RawRepresentation)
-	}
-	if rawMsg, ok := result.RawRepresentation.(*a2a.Message); ok {
+	if rawMsg, ok := msg.RawRepresentation.(*a2a.Message); ok {
 		if rawMsg.ID != "response-123" {
 			t.Errorf("raw message ID = %q, want %q", rawMsg.ID, "response-123")
 		}
 	}
-
-	if len(result.Messages) != 1 {
-		t.Fatalf("len(result.Messages) = %d, want 1", len(result.Messages))
+	if msg.Role != message.RoleAssistant {
+		t.Errorf("Role = %q, want %q", msg.Role, message.RoleAssistant)
 	}
-	if result.Messages[0].Role != message.RoleAssistant {
-		t.Errorf("result.Messages[0].Role = %q, want %q", result.Messages[0].Role, message.RoleAssistant)
-	}
-	if result.Messages[0].String() != "Hello! How can I help you today?" {
-		t.Errorf("result.Messages[0].String() = %q, want %q", result.Messages[0].String(), "Hello! How can I help you today?")
+	if msg.String() != "Hello! How can I help you today?" {
+		t.Errorf("String() = %q, want %q", msg.String(), "Hello! How can I help you today?")
 	}
 }
 
@@ -367,7 +364,7 @@ func TestRunStreamingWithValidUserMessage(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	var updates []*agent.RunResponseUpdate
+	var updates []*message.ResponseUpdate
 	for update, err := range agent.RunTextStream(t.Context(), a, "Hello, streaming!") {
 		if err != nil {
 			t.Fatalf("RunStream() error = %v, want nil", err)
@@ -415,8 +412,8 @@ func TestRunStreamingWithValidUserMessage(t *testing.T) {
 	if update.MessageID != "stream-1" {
 		t.Errorf("update.MessageID = %q, want %q", update.MessageID, "stream-1")
 	}
-	if update.AgentID != a.Identity().ID() {
-		t.Errorf("update.AgentID = %q, want %q", update.AgentID, a.Identity().ID())
+	if update.AuthorID != a.Identity().ID() {
+		t.Errorf("update.AuthorID = %q, want %q", update.AuthorID, a.Identity().ID())
 	}
 	if update.ResponseID != "stream-1" {
 		t.Errorf("update.ResponseID = %q, want %q", update.ResponseID, "stream-1")
@@ -753,17 +750,21 @@ func TestRunWithAgentTaskResponse(t *testing.T) {
 	if result == nil {
 		t.Fatal("result is nil")
 	}
-	if result.AgentID != a.Identity().ID() {
-		t.Errorf("result.AgentID = %q, want %q", result.AgentID, a.Identity().ID())
+	if len(result.Messages) != 1 {
+		t.Fatalf("len(result.Messages) = %d, want 1", len(result.Messages))
 	}
-	if result.ID != "task-789" {
-		t.Errorf("result.ID = %q, want %q", result.ID, "task-789")
+	msg := result.Messages[0]
+	if msg.AuthorID != a.Identity().ID() {
+		t.Errorf("AgentID = %q, want %q", msg.AuthorID, a.Identity().ID())
+	}
+	if msg.ID != "" {
+		t.Errorf("ID = %q, want empty", msg.ID)
 	}
 
 	if result.ContinuationToken == nil {
-		t.Error("result.ContinuationToken is nil, want non-nil for submitted task")
+		t.Error("ContinuationToken is nil, want non-nil for submitted task")
 	} else if token, ok := result.ContinuationToken.(a2a.TaskID); !ok {
-		t.Errorf("result.ContinuationToken type = %T, want a2a.TaskID", result.ContinuationToken)
+		t.Errorf("ContinuationToken type = %T, want a2a.TaskID", result.ContinuationToken)
 	} else if string(token) != "task-789" {
 		t.Errorf("continuation token = %q, want %q", token, "task-789")
 	}
@@ -818,14 +819,10 @@ func TestRunWithVariousTaskStates(t *testing.T) {
 				t.Fatalf("Run() error = %v, want nil", err)
 			}
 
-			if tt.expectContinuationToken {
-				if result.ContinuationToken == nil {
-					t.Error("result.ContinuationToken is nil, want non-nil")
-				}
-			} else {
-				if result.ContinuationToken != nil {
-					t.Errorf("result.ContinuationToken = %v, want nil", result.ContinuationToken)
-				}
+			if tt.expectContinuationToken && result.ContinuationToken == nil {
+				t.Error("ContinuationToken is nil, want non-nil")
+			} else if !tt.expectContinuationToken && result.ContinuationToken != nil {
+				t.Errorf("ContinuationToken = %v, want nil", result.ContinuationToken)
 			}
 		})
 	}
@@ -936,7 +933,7 @@ func TestRunStreamingWithAgentMessage(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	var updates []*agent.RunResponseUpdate
+	var updates []*message.ResponseUpdate
 	for update, err := range agent.RunTextStream(t.Context(), a, "Test message") {
 		if err != nil {
 			t.Fatalf("RunStream() error = %v, want nil", err)
@@ -958,8 +955,8 @@ func TestRunStreamingWithAgentMessage(t *testing.T) {
 	if update.ResponseID != messageID {
 		t.Errorf("update.ResponseID = %q, want %q", update.ResponseID, messageID)
 	}
-	if update.AgentID != a.Identity().ID() {
-		t.Errorf("update.AgentID = %q, want %q", update.AgentID, a.Identity().ID())
+	if update.AuthorID != a.Identity().ID() {
+		t.Errorf("update.AuthorID = %q, want %q", update.AuthorID, a.Identity().ID())
 	}
 	if update.String() != messageText {
 		t.Errorf("update.String() = %q, want %q", update.String(), messageText)
@@ -995,7 +992,7 @@ func TestRunStreamingWithAgentTaskYieldsUpdate(t *testing.T) {
 
 	thread := a.NewThread()
 
-	var updates []*agent.RunResponseUpdate
+	var updates []*message.ResponseUpdate
 	for update, err := range agent.RunTextStream(t.Context(), a, "Start long-running task", agentopt.Thread(thread)) {
 		if err != nil {
 			t.Fatalf("RunStream() error = %v, want nil", err)
@@ -1014,11 +1011,11 @@ func TestRunStreamingWithAgentTaskYieldsUpdate(t *testing.T) {
 	if update.ResponseID != taskID {
 		t.Errorf("update.ResponseID = %q, want %q", update.ResponseID, taskID)
 	}
-	if update.AgentID != a.Identity().ID() {
-		t.Errorf("update.AgentID = %q, want %q", update.AgentID, a.Identity().ID())
+	if update.AuthorID != a.Identity().ID() {
+		t.Errorf("update.AuthorID = %q, want %q", update.AuthorID, a.Identity().ID())
 	}
-	if _, ok := update.RawRepresentation.(*a2a.Artifact); !ok {
-		t.Errorf("update.RawRepresentation type = %T, want *a2a.Artifact", update.RawRepresentation)
+	if _, ok := update.RawRepresentation.(*a2a.Task); !ok {
+		t.Errorf("update.RawRepresentation type = %T, want *a2a.Task", update.RawRepresentation)
 	}
 
 	a2aThread, ok := thread.(*a2aagent.Thread)
@@ -1051,7 +1048,7 @@ func TestRunStreamingWithTaskStatusUpdateEvent(t *testing.T) {
 
 	thread := a.NewThread()
 
-	var updates []*agent.RunResponseUpdate
+	var updates []*message.ResponseUpdate
 	for update, err := range agent.RunTextStream(t.Context(), a, "Check task status", agentopt.Thread(thread)) {
 		if err != nil {
 			t.Fatalf("RunStream() error = %v, want nil", err)
@@ -1070,8 +1067,8 @@ func TestRunStreamingWithTaskStatusUpdateEvent(t *testing.T) {
 	if update.ResponseID != taskID {
 		t.Errorf("update.ResponseID = %q, want %q", update.ResponseID, taskID)
 	}
-	if update.AgentID != a.Identity().ID() {
-		t.Errorf("update.AgentID = %q, want %q", update.AgentID, a.Identity().ID())
+	if update.AuthorID != a.Identity().ID() {
+		t.Errorf("update.AuthorID = %q, want %q", update.AuthorID, a.Identity().ID())
 	}
 	if _, ok := update.RawRepresentation.(*a2a.TaskStatusUpdateEvent); !ok {
 		t.Errorf("update.RawRepresentation type = %T, want *a2a.TaskStatusUpdateEvent", update.RawRepresentation)
@@ -1111,7 +1108,7 @@ func TestRunStreamingWithTaskArtifactUpdateEvent(t *testing.T) {
 
 	thread := a.NewThread()
 
-	var updates []*agent.RunResponseUpdate
+	var updates []*message.ResponseUpdate
 	for update, err := range agent.RunTextStream(t.Context(), a, "Process artifact", agentopt.Thread(thread)) {
 		if err != nil {
 			t.Fatalf("RunStream() error = %v, want nil", err)
@@ -1130,8 +1127,8 @@ func TestRunStreamingWithTaskArtifactUpdateEvent(t *testing.T) {
 	if update.ResponseID != taskID {
 		t.Errorf("update.ResponseID = %q, want %q", update.ResponseID, taskID)
 	}
-	if update.AgentID != a.Identity().ID() {
-		t.Errorf("update.AgentID = %q, want %q", update.AgentID, a.Identity().ID())
+	if update.AuthorID != a.Identity().ID() {
+		t.Errorf("update.AuthorID = %q, want %q", update.AuthorID, a.Identity().ID())
 	}
 	if _, ok := update.RawRepresentation.(*a2a.TaskArtifactUpdateEvent); !ok {
 		t.Errorf("update.RawRepresentation type = %T, want *a2a.TaskArtifactUpdateEvent", update.RawRepresentation)

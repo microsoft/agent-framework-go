@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/agenttest"
 	"github.com/microsoft/agent-framework-go/agent/middleware/autocall"
@@ -166,7 +165,7 @@ func invokeAndAssert(t *testing.T, tools []tool.Tool, plan []*message.Message, e
 		}
 		msg := plan[idx]
 		for _, content := range msg.Contents {
-			rb.Add(&agent.RunResponseUpdate{
+			rb.Add(&message.ResponseUpdate{
 				Role:     msg.Role,
 				Contents: []message.Content{content},
 			})
@@ -187,23 +186,20 @@ func invokeAndAssert(t *testing.T, tools []tool.Tool, plan []*message.Message, e
 	}
 
 	// Collect all updates
-	var updates []*agent.RunResponseUpdate
+	var resp message.Response
 	for update, err := range autocall.New(autocallOptions).Run(t.Context(), runner.Run, initialMessages, opts...) {
 		if err != nil {
 			t.Fatalf("unexpected error during streaming: %v", err)
 		}
-		updates = append(updates, update)
+		resp.Update(update)
 	}
 
-	if len(updates) == 0 {
+	if len(resp.Messages) == 0 {
 		t.Fatal("expected at least one update")
 	}
 
-	// Convert streaming updates back to consolidated messages
-	consolidated := agent.NewMessagesFromUpdates(updates)
-
 	// Build actual chat history
-	actual := append(initialMessages, consolidated...)
+	actual := append(initialMessages, resp.Messages...)
 
 	// Assert messages match expected
 	assertMessageListsEqual(t, expected, actual)
@@ -621,7 +617,7 @@ func TestFunctionInvoking_ContinuesWithFailingCallsUntilMaximumConsecutiveErrors
 				}
 				msg := plan[idx]
 				for _, content := range msg.Contents {
-					rb.Add(&agent.RunResponseUpdate{
+					rb.Add(&message.ResponseUpdate{
 						Role:     msg.Role,
 						Contents: []message.Content{content},
 					})
@@ -737,7 +733,7 @@ func TestFunctionInvoking_CanFailOnFirstException(t *testing.T) {
 				}
 				msg := plan[idx]
 				for _, content := range msg.Contents {
-					rb.Add(&agent.RunResponseUpdate{
+					rb.Add(&message.ResponseUpdate{
 						Role:     msg.Role,
 						Contents: []message.Content{content},
 					})
@@ -952,17 +948,17 @@ func TestFunctionInvoking_AllResponseMessagesReturned(t *testing.T) {
 
 	runner := &agenttest.Runner{
 		Responses: agenttest.NewResponseBuilder().
-			Add(&agent.RunResponseUpdate{
+			Add(&message.ResponseUpdate{
 				Role:     message.RoleAssistant,
 				Contents: []message.Content{&message.FunctionCallContent{CallID: "callId0", Name: "Func1"}},
 			}).
 			NewTurn().
-			Add(&agent.RunResponseUpdate{
+			Add(&message.ResponseUpdate{
 				Role:     message.RoleAssistant,
 				Contents: []message.Content{&message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
 			}).
 			NewTurn().
-			Add(&agent.RunResponseUpdate{
+			Add(&message.ResponseUpdate{
 				Role:     message.RoleAssistant,
 				Contents: []message.Content{&message.TextContent{Text: "The answer is 42."}},
 			}).
@@ -975,40 +971,38 @@ func TestFunctionInvoking_AllResponseMessagesReturned(t *testing.T) {
 		opts = append(opts, agentopt.Tool(tool))
 	}
 
-	var updates []*agent.RunResponseUpdate
+	var resp message.Response
 	for update, err := range autocall.New(autocall.Options{}).Run(t.Context(), runner.Run, initialMessages, opts...) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		updates = append(updates, update)
+		resp.Update(update)
 	}
 
-	responseMessages := agent.NewMessagesFromUpdates(updates)
-
-	if len(responseMessages) != 5 {
-		t.Errorf("Expected 5 messages, got %d", len(responseMessages))
+	if len(resp.Messages) != 5 {
+		t.Errorf("Expected 5 messages, got %d", len(resp.Messages))
 	}
 
 	// Check last message text
-	lastMsg := responseMessages[len(responseMessages)-1]
+	lastMsg := resp.Messages[len(resp.Messages)-1]
 	if lastMsg.String() != "The answer is 42." {
 		t.Errorf("Expected text 'The answer is 42.', got %q", lastMsg.String())
 	}
 
 	// Verify message types
-	if _, ok := responseMessages[0].Contents[0].(*message.FunctionCallContent); !ok {
+	if _, ok := resp.Messages[0].Contents[0].(*message.FunctionCallContent); !ok {
 		t.Error("Expected first message to be FunctionCallContent")
 	}
-	if _, ok := responseMessages[1].Contents[0].(*message.FunctionResultContent); !ok {
+	if _, ok := resp.Messages[1].Contents[0].(*message.FunctionResultContent); !ok {
 		t.Error("Expected second message to be FunctionResultContent")
 	}
-	if _, ok := responseMessages[2].Contents[0].(*message.FunctionCallContent); !ok {
+	if _, ok := resp.Messages[2].Contents[0].(*message.FunctionCallContent); !ok {
 		t.Error("Expected third message to be FunctionCallContent")
 	}
-	if _, ok := responseMessages[3].Contents[0].(*message.FunctionResultContent); !ok {
+	if _, ok := resp.Messages[3].Contents[0].(*message.FunctionResultContent); !ok {
 		t.Error("Expected fourth message to be FunctionResultContent")
 	}
-	if _, ok := responseMessages[4].Contents[0].(*message.TextContent); !ok {
+	if _, ok := resp.Messages[4].Contents[0].(*message.TextContent); !ok {
 		t.Error("Expected fifth message to be TextContent")
 	}
 }

@@ -14,7 +14,6 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
-	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/middleware"
 	"github.com/microsoft/agent-framework-go/message"
@@ -46,8 +45,8 @@ func New(options Options) middleware.Middleware {
 	return ac
 }
 
-func (f *autocall) Run(ctx context.Context, next middleware.RunFunc, messages []*message.Message, opts ...agentopt.Option) iter.Seq2[*agent.RunResponseUpdate, error] {
-	return func(yield func(*agent.RunResponseUpdate, error) bool) {
+func (f *autocall) Run(ctx context.Context, next middleware.RunFunc, messages []*message.Message, opts ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	return func(yield func(*message.ResponseUpdate, error) bool) {
 		tools, requiresApproval := f.createToolsMap(agentopt.All(opts, agentopt.Tool))
 
 		// This is a synthetic ID since we're generating the tool messages instead of getting them from
@@ -98,7 +97,7 @@ func (f *autocall) Run(ctx context.Context, next middleware.RunFunc, messages []
 		}
 		// At this point, we've fully handled all approval responses that were part of the original messages,
 		// and we can now enter the main function calling loop.
-		var updates []*agent.RunResponseUpdate
+		var updates []*message.ResponseUpdate
 		var functionCallContents []*message.FunctionCallContent
 		var approvalRequiredFunctions []tool.Tool
 		for i := 0; ; i++ {
@@ -248,8 +247,8 @@ func checkForApprovalRequiringFCC(functionCalls []*message.FunctionCallContent, 
 	return hasApprovalRequiringFcc, lastApprovalCheckedFCCIdx
 }
 
-func convertToolResultMsgToUpdate(msg *message.Message, msgID string) *agent.RunResponseUpdate {
-	return &agent.RunResponseUpdate{
+func convertToolResultMsgToUpdate(msg *message.Message, msgID string) *message.ResponseUpdate {
+	return &message.ResponseUpdate{
 		AdditionalProperties: msg.AdditionalProperties,
 		AuthorName:           msg.AuthorName,
 		Contents:             msg.Contents,
