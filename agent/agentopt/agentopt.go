@@ -21,7 +21,7 @@ type Option interface {
 	Value() any
 }
 
-// An RunOption configures the behavior of an Agent during a Run.
+// A RunOption configures the behavior of an Agent during a Run.
 type RunOption interface {
 	Option
 
