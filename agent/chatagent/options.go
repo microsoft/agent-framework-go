@@ -42,13 +42,13 @@ type opts struct {
 	*ChatOptions
 }
 
-func (opts) AgentOption() {}
+func (opts) RunOption() {}
 
 func (o opts) Value() any {
 	return o.ChatOptions
 }
 
-func WithOptions(options *ChatOptions) agentopt.Option {
+func WithOptions(options *ChatOptions) agentopt.RunOption {
 	return opts{options}
 }
 
@@ -56,12 +56,22 @@ type newClientOpts struct {
 	NewClient func(chatclient.Client) chatclient.Client
 }
 
-func (newClientOpts) AgentOption() {}
+func (newClientOpts) RunOption() {}
 
 func (o newClientOpts) Value() any {
 	return o.NewClient
 }
 
-func WithNewClient(newClient func(chatclient.Client) chatclient.Client) agentopt.Option {
+func WithNewClient(newClient func(chatclient.Client) chatclient.Client) agentopt.RunOption {
 	return newClientOpts{newClient}
+}
+
+type conversationIDOpt string
+
+func (conversationIDOpt) NewThreadOption() {}
+
+func (o conversationIDOpt) Value() any { return string(o) }
+
+func WithConversationID(conversationID string) agentopt.NewThreadOption {
+	return conversationIDOpt(conversationID)
 }

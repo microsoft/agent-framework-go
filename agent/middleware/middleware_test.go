@@ -14,7 +14,7 @@ import (
 func TestChain(t *testing.T) {
 	t.Run("empty middleware chain", func(t *testing.T) {
 		called := false
-		fn := func(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+		fn := func(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 			called = true
 			return func(yield func(*message.ResponseUpdate, error) bool) {}
 		}
@@ -32,7 +32,7 @@ func TestChain(t *testing.T) {
 	t.Run("single middleware", func(t *testing.T) {
 		order := []string{}
 
-		fn := func(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+		fn := func(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 			order = append(order, "base")
 			return func(yield func(*message.ResponseUpdate, error) bool) {}
 		}
@@ -63,7 +63,7 @@ func TestChain(t *testing.T) {
 	t.Run("multiple middlewares", func(t *testing.T) {
 		order := []string{}
 
-		fn := func(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+		fn := func(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 			order = append(order, "base")
 			return func(yield func(*message.ResponseUpdate, error) bool) {}
 		}
@@ -105,9 +105,9 @@ func TestChain(t *testing.T) {
 	})
 
 	t.Run("middleware can modify options", func(t *testing.T) {
-		receivedOpts := []agentopt.Option{}
+		receivedOpts := []agentopt.RunOption{}
 
-		fn := func(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+		fn := func(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 			receivedOpts = options
 			return func(yield func(*message.ResponseUpdate, error) bool) {}
 		}
@@ -116,7 +116,7 @@ func TestChain(t *testing.T) {
 		mw := &testMiddleware{
 			name:  "mw1",
 			onRun: func(name string) {},
-			modifyOpts: func(opts []agentopt.Option) []agentopt.Option {
+			modifyOpts: func(opts []agentopt.RunOption) []agentopt.RunOption {
 				return append(opts, additionalOpt)
 			},
 		}
@@ -139,7 +139,7 @@ func TestChain(t *testing.T) {
 	})
 
 	t.Run("middleware can intercept and modify sequence", func(t *testing.T) {
-		fn := func(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+		fn := func(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 			return func(yield func(*message.ResponseUpdate, error) bool) {
 				if !yield(&message.ResponseUpdate{}, nil) {
 					return
@@ -171,7 +171,7 @@ func TestChain(t *testing.T) {
 		key := contextKey("test")
 
 		var capturedCtx context.Context
-		fn := func(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+		fn := func(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 			capturedCtx = ctx
 			return func(yield func(*message.ResponseUpdate, error) bool) {}
 		}
@@ -199,10 +199,10 @@ func TestChain(t *testing.T) {
 type testMiddleware struct {
 	name       string
 	onRun      func(string)
-	modifyOpts func([]agentopt.Option) []agentopt.Option
+	modifyOpts func([]agentopt.RunOption) []agentopt.RunOption
 }
 
-func (tm *testMiddleware) Run(ctx context.Context, next RunFunc, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (tm *testMiddleware) Run(ctx context.Context, next RunFunc, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	tm.onRun(tm.name)
 
 	opts := options
@@ -218,7 +218,7 @@ type interceptMiddleware struct {
 	interceptCount int
 }
 
-func (im *interceptMiddleware) Run(ctx context.Context, next RunFunc, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (im *interceptMiddleware) Run(ctx context.Context, next RunFunc, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		count := 0
 		for update, err := range next(ctx, messages, options...) {
@@ -238,7 +238,7 @@ type testOption struct {
 	value string
 }
 
-func (to *testOption) AgentOption() {}
+func (to *testOption) RunOption() {}
 
 func (to *testOption) Value() any {
 	return to.value

@@ -50,7 +50,7 @@ func main() {
 	ctx := context.Background()
 
 	// Start a new thread for the agent conversation.
-	thread := a.NewThread()
+	thread := a.NewThread(ctx)
 
 	// Run the agent with the thread that stores conversation history in the disk store.
 	demo.Response(agent.RunText(ctx, a, "Tell me a joke about a pirate.", agentopt.Thread(thread)))

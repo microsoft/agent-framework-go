@@ -31,12 +31,12 @@ func main() {
 	ctx := context.Background()
 
 	// Invoke the agent with a multi-turn conversation, where the context is preserved in the thread object.
-	thread := a.NewThread()
+	thread := a.NewThread(ctx)
 	demo.Response(agent.RunText(ctx, a, "Tell me a joke about a pirate.", agentopt.Thread(thread)))
 	demo.Response(agent.RunText(ctx, a, "Now add some emojis to the joke and tell it in the voice of a pirate's parrot.", agentopt.Thread(thread)))
 
 	// Invoke the agent with a multi-turn conversation and streaming, where the context is preserved in the thread object.
-	thread2 := a.NewThread()
+	thread2 := a.NewThread(ctx)
 	for update, err := range agent.RunTextStream(ctx, a, "Tell me a joke about a pirate.", agentopt.Thread(thread2)) {
 		demo.Response(update, err)
 	}

@@ -11,7 +11,6 @@ import (
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
-	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/openai"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
@@ -40,13 +39,13 @@ func main() {
 		},
 	})
 
-	// Create a thread to maintain conversation history
-	thread := a.NewThread()
-
-	runChatLoop(context.Background(), a, thread)
+	runChatLoop(context.Background(), a)
 }
 
-func runChatLoop(ctx context.Context, a agent.Agent, thread memory.Thread) {
+func runChatLoop(ctx context.Context, a agent.Agent) {
+	// Create a thread to maintain conversation history
+	thread := a.NewThread(ctx)
+
 	scanner := bufio.NewScanner(os.Stdin)
 
 	for {
@@ -72,7 +71,7 @@ func runChatLoop(ctx context.Context, a agent.Agent, thread memory.Thread) {
 		}
 
 		if userInput == "clear" {
-			thread = a.NewThread()
+			thread = a.NewThread(ctx)
 			fmt.Print("\n✨ Conversation cleared!\n\n")
 			continue
 		}

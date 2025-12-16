@@ -43,7 +43,7 @@ func NewLogger(name, description string, metadata ...string) middleware.Middlewa
 	return &logger{}
 }
 
-func (mw *logger) Run(ctx context.Context, next middleware.RunFunc, messages []*message.Message, opts ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (mw *logger) Run(ctx context.Context, next middleware.RunFunc, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		mw.n++
 		fmt.Printf("===== Run %d =====\n\n", mw.n)

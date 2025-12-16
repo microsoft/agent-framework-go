@@ -16,8 +16,8 @@ import (
 	"github.com/microsoft/agent-framework-go/tool/functool"
 )
 
-func expectedMessages(t *testing.T, expected ...*message.Message) func(context.Context, []*message.Message, ...agentopt.Option) {
-	return func(ctx context.Context, messages []*message.Message, opts ...agentopt.Option) {
+func expectedMessages(t *testing.T, expected ...*message.Message) func(context.Context, []*message.Message, ...agentopt.RunOption) {
+	return func(ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) {
 		if err := agenttest.MessagesEqual(expected, messages); err != nil {
 			t.Errorf("Messages not equal: %v", err)
 		}
@@ -29,7 +29,7 @@ func invokeAndAssertApproval(t *testing.T, tools []tool.Tool, input []*message.M
 	downstreamAgentOutput []*message.ResponseUpdate, expectedOutput []*message.ResponseUpdate,
 	expectedDownstreamAgentInput []*message.Message, additionalTools []tool.Tool) {
 
-	var cb func(context.Context, []*message.Message, ...agentopt.Option)
+	var cb func(context.Context, []*message.Message, ...agentopt.RunOption)
 	if expectedDownstreamAgentInput != nil {
 		cb = expectedMessages(t, expectedDownstreamAgentInput...)
 	}
@@ -60,7 +60,7 @@ func invokeAndAssertApprovalWithAgent(t *testing.T, next middleware.RunFunc,
 	ctx := t.Context()
 
 	// Build options
-	var opts []agentopt.Option
+	var opts []agentopt.RunOption
 	for _, tool := range tools {
 		opts = append(opts, agentopt.Tool(tool))
 	}
@@ -85,7 +85,7 @@ func expectApprovalError(t *testing.T, tools []tool.Tool, input []*message.Messa
 	ctx := t.Context()
 
 	// Build options
-	var opts []agentopt.Option
+	var opts []agentopt.RunOption
 	for _, tool := range tools {
 		opts = append(opts, agentopt.Tool(tool))
 	}

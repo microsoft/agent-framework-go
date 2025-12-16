@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"reflect"
 
@@ -16,9 +17,9 @@ import (
 func newExecutor(a Agent, emitEvents bool) *workflow.Executor {
 	var thread memory.Thread
 	var threadStateKey string
-	ensureThread := func() memory.Thread {
+	ensureThread := func(ctx context.Context) memory.Thread {
 		if thread == nil {
-			thread = a.NewThread()
+			thread = a.NewThread(ctx)
 		}
 		threadStateKey = reflect.ValueOf(thread).String()
 		return thread
@@ -56,8 +57,8 @@ func newExecutor(a Agent, emitEvents bool) *workflow.Executor {
 		StateKey: "agent_messages",
 		TakeTurnHandler: func(ctx *workflow.Context, token workflow.TurnToken, messages []*message.Message) error {
 			emitEvents := token.EmitEventsOr(emitEvents)
-			options := make([]agentopt.Option, 0, 1+len(messages))
-			options = append(options, agentopt.Thread(ensureThread()))
+			options := make([]agentopt.RunOption, 0, 1+len(messages))
+			options = append(options, agentopt.Thread(ensureThread(ctx)))
 			if emitEvents {
 				// Run the agent in streaming mode only when agent run update events are to be emitted.
 				options = append(options, agentopt.Stream(true))

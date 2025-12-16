@@ -14,7 +14,7 @@ import (
 )
 
 type Turn struct {
-	Callbacks []func(context.Context, []*message.Message, ...agentopt.Option)
+	Callbacks []func(context.Context, []*message.Message, ...agentopt.RunOption)
 	Responses []Response
 }
 
@@ -22,7 +22,7 @@ type ResponseBuilder struct {
 	turns []Turn
 }
 
-func NewResponseBuilder(firstTurnCallbacks ...func(ctx context.Context, messages []*message.Message, opts ...agentopt.Option)) *ResponseBuilder {
+func NewResponseBuilder(firstTurnCallbacks ...func(ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption)) *ResponseBuilder {
 	return &ResponseBuilder{
 		turns: []Turn{{
 			Responses: []Response{},
@@ -31,7 +31,7 @@ func NewResponseBuilder(firstTurnCallbacks ...func(ctx context.Context, messages
 	}
 }
 
-func (rb *ResponseBuilder) NewTurn(callbacks ...func(ctx context.Context, messages []*message.Message, opts ...agentopt.Option)) *ResponseBuilder {
+func (rb *ResponseBuilder) NewTurn(callbacks ...func(ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption)) *ResponseBuilder {
 	rb.turns = append(rb.turns, Turn{
 		Callbacks: callbacks,
 		Responses: []Response{},
@@ -86,9 +86,11 @@ type Response struct {
 	Error    error
 }
 
+var _ agent.Agent = (*Agent)(nil)
+
 type Agent struct {
 	Iden          agent.Identity
-	NewThreadFunc func() memory.Thread
+	NewThreadFunc func(context.Context, ...agentopt.NewThreadOption) memory.Thread
 	Responses     []Turn
 
 	currentTurn int
@@ -101,7 +103,7 @@ func (a *Agent) Identity() agent.Identity {
 	return a.Iden
 }
 
-func (a *Agent) Run(ctx context.Context, messages []*message.Message, opts ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (a *Agent) Run(ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		defer func() { a.currentTurn++ }()
 		if a.currentTurn >= len(a.Responses) {
@@ -119,9 +121,9 @@ func (a *Agent) Run(ctx context.Context, messages []*message.Message, opts ...ag
 	}
 }
 
-func (a *Agent) NewThread() memory.Thread {
+func (a *Agent) NewThread(ctx context.Context, opts ...agentopt.NewThreadOption) memory.Thread {
 	if a.NewThreadFunc != nil {
-		return a.NewThreadFunc()
+		return a.NewThreadFunc(ctx, opts...)
 	}
 	return &Thread{}
 }
@@ -157,7 +159,7 @@ func (m *Middleware) Called() bool {
 	return m.called
 }
 
-func (m *Middleware) Run(ctx context.Context, next middleware.RunFunc, messages []*message.Message, opts ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (m *Middleware) Run(ctx context.Context, next middleware.RunFunc, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	m.called = true
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		defer func() { m.currentTurn++ }()
@@ -191,7 +193,7 @@ type Runner struct {
 	currentTurn int
 }
 
-func (r *Runner) Run(ctx context.Context, messages []*message.Message, opts ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (r *Runner) Run(ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		defer func() { r.currentTurn++ }()
 		if r.currentTurn >= len(r.Responses) {

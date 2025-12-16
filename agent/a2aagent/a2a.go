@@ -30,6 +30,15 @@ type Options struct {
 	Logger      *slog.Logger
 }
 
+type contextIDOpt struct{ string }
+
+func (contextIDOpt) NewThreadOption() {}
+func (o contextIDOpt) Value() any     { return o.string }
+
+func WithContextID(id string) agentopt.NewThreadOption {
+	return contextIDOpt{id}
+}
+
 var _ agent.Agent = (*Agent)(nil)
 
 type Agent struct {
@@ -54,11 +63,8 @@ func (a *Agent) Identity() agent.Identity {
 	return a.iden
 }
 
-func (a *Agent) NewThread() memory.Thread {
-	return &Thread{}
-}
-
-func (a *Agent) NewThreadWithContextID(contextID string) *Thread {
+func (a *Agent) NewThread(ctx context.Context, options ...agentopt.NewThreadOption) memory.Thread {
+	contextID, _ := agentopt.Get(options, WithContextID)
 	return &Thread{
 		ContextID: contextID,
 	}
@@ -72,7 +78,7 @@ func (a *Agent) UnmarshalThread(data []byte) (memory.Thread, error) {
 	return &thread, nil
 }
 
-func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		var thread *Thread
 		if v, ok := agentopt.Get(options, agentopt.Thread); !ok {
@@ -83,7 +89,7 @@ func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ..
 				yield(nil, errors.New("a thread must be provided when AllowBackgroundResponses is enabled"))
 				return
 			}
-			thread = a.NewThread().(*Thread)
+			thread = a.NewThread(ctx).(*Thread)
 		} else if t, ok := v.(*Thread); ok {
 			thread = t
 		} else {

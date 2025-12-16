@@ -180,7 +180,7 @@ func invokeAndAssert(t *testing.T, tools []tool.Tool, plan []*message.Message, e
 	initialMessages := []*message.Message{plan[0]}
 
 	// Build options
-	var opts []agentopt.Option
+	var opts []agentopt.RunOption
 	for _, tool := range tools {
 		opts = append(opts, agentopt.Tool(tool))
 	}
@@ -632,7 +632,7 @@ func TestFunctionInvoking_ContinuesWithFailingCallsUntilMaximumConsecutiveErrors
 			initialMessages := []*message.Message{plan[0]}
 
 			// Build options
-			var opts []agentopt.Option
+			var opts []agentopt.RunOption
 			for _, tool := range tools {
 				opts = append(opts, agentopt.Tool(tool))
 			}
@@ -748,7 +748,7 @@ func TestFunctionInvoking_CanFailOnFirstException(t *testing.T) {
 			initialMessages := []*message.Message{plan[0]}
 
 			// Build options
-			var opts []agentopt.Option
+			var opts []agentopt.RunOption
 			for _, tool := range tools {
 				opts = append(opts, agentopt.Tool(tool))
 			}
@@ -966,7 +966,7 @@ func TestFunctionInvoking_AllResponseMessagesReturned(t *testing.T) {
 	}
 
 	initialMessages := []*message.Message{messages[0]}
-	var opts []agentopt.Option
+	var opts []agentopt.RunOption
 	for _, tool := range tools {
 		opts = append(opts, agentopt.Tool(tool))
 	}

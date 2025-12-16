@@ -44,14 +44,14 @@ func (iden Identity) Description() string {
 type Agent interface {
 	Identity() Identity
 
-	Run(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error]
+	Run(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error]
 
-	NewThread() memory.Thread
+	NewThread(ctx context.Context, options ...agentopt.NewThreadOption) memory.Thread
 	UnmarshalThread(data []byte) (memory.Thread, error)
 }
 
 type StructuredOutputAgent interface {
 	Agent
 
-	RunOf(ctx context.Context, v any, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error]
+	RunOf(ctx context.Context, v any, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error]
 }

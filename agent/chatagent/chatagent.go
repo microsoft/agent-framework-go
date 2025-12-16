@@ -52,17 +52,10 @@ func (a *Agent) Instructions() string {
 	return a.Options.Instructions
 }
 
-func (a *Agent) NewThread() memory.Thread {
-	return a.newThread("")
-}
-
-func (a *Agent) NewThreadWithConversationID(conversationID string) *Thread {
-	return a.newThread(conversationID)
-}
-
-func (a *Agent) newThread(conversationID string) *Thread {
+func (a *Agent) NewThread(ctx context.Context, opts ...agentopt.NewThreadOption) memory.Thread {
+	convID, _ := agentopt.Get(opts, WithConversationID)
 	thread := &Thread{
-		ConversationID: conversationID,
+		ConversationID: convID,
 	}
 	if a.Options.NewContextProvider != nil {
 		thread.ContextProvider = a.Options.NewContextProvider()
@@ -74,19 +67,19 @@ func (a *Agent) UnmarshalThread(data []byte) (memory.Thread, error) {
 	return newThreadFromJSON(data, a.Options.NewMessageStore, a.Options.NewContextProvider)
 }
 
-func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	if a.Options.ChatOptions != nil {
 		for _, tl := range a.Options.ChatOptions.Tools {
 			options = append(options, agentopt.Tool(tl))
 		}
 	}
 	if _, ok := agentopt.Get(options, agentopt.Thread); !ok {
-		options = append(options, agentopt.Thread(a.NewThread()))
+		options = append(options, agentopt.Thread(a.NewThread(ctx)))
 	}
 	return middleware.RunChain(ctx, a.run, a.Options.Middlewares, messages, options...)
 }
 
-func (a *Agent) RunOf(ctx context.Context, v any, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (a *Agent) RunOf(ctx context.Context, v any, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		formatter := a.Client.Capabilities().StructuredOutput
 		if formatter == nil {
@@ -115,7 +108,7 @@ func (a *Agent) RunOf(ctx context.Context, v any, messages []*message.Message, o
 	}
 }
 
-func (a *Agent) run(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (a *Agent) run(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		originalMessages := messages
 		client := a.Client
@@ -227,7 +220,7 @@ func (a *Agent) updateThreadWithTypeAndConversationID(thread *Thread, convID str
 	return nil
 }
 
-func (a *Agent) prepareThreadAndMessages(ctx context.Context, messages []*message.Message, options []agentopt.Option) (thread *Thread, opts ChatOptions, msgsForClient, ctxMessages []*message.Message, err error) {
+func (a *Agent) prepareThreadAndMessages(ctx context.Context, messages []*message.Message, options []agentopt.RunOption) (thread *Thread, opts ChatOptions, msgsForClient, ctxMessages []*message.Message, err error) {
 	retError := func(e error) (*Thread, ChatOptions, []*message.Message, []*message.Message, error) {
 		return nil, ChatOptions{}, nil, nil, e
 	}
@@ -324,7 +317,7 @@ func validateStreamResumptionAllowed(continuationToken any, thread *Thread) erro
 	return nil
 }
 
-func (a *Agent) createConfiguredChatOptions(options []agentopt.Option) ChatOptions {
+func (a *Agent) createConfiguredChatOptions(options []agentopt.RunOption) ChatOptions {
 	var opts ChatOptions
 	// Try to get ChatOptions from RunOptions
 	if v, ok := agentopt.Get(options, WithOptions); ok {

@@ -45,7 +45,7 @@ func New(options Options) middleware.Middleware {
 	return ac
 }
 
-func (f *autocall) Run(ctx context.Context, next middleware.RunFunc, messages []*message.Message, opts ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (f *autocall) Run(ctx context.Context, next middleware.RunFunc, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		tools, requiresApproval := f.createToolsMap(agentopt.All(opts, agentopt.Tool))
 
@@ -260,7 +260,7 @@ func convertToolResultMsgToUpdate(msg *message.Message, msgID string) *message.R
 	}
 }
 
-func updateOptionsForNextIteration(opts []agentopt.Option) []agentopt.Option {
+func updateOptionsForNextIteration(opts []agentopt.RunOption) []agentopt.RunOption {
 	if v, ok := agentopt.Get(opts, agentopt.ToolMode); ok && v == tool.ToolModeRequired {
 		// We have to reset the tool mode to be non-required after the first iteration,
 		// as otherwise we'll be in an infinite loop.

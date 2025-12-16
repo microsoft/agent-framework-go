@@ -12,14 +12,27 @@ import (
 	"github.com/microsoft/agent-framework-go/tool"
 )
 
-// An Option configures the behavior of an Agent during a Run.
+// An Option is a configuration option for an Agent.
 //
 // Each option must be implemented as its own distinct type.
 // [Get] and [All] use the option's type
 // to uniquely identify each option.
 type Option interface {
-	AgentOption()
 	Value() any
+}
+
+// An RunOption configures the behavior of an Agent during a Run.
+type RunOption interface {
+	Option
+
+	RunOption()
+}
+
+// A NewThreadOption configures the behavior of a new Thread created by an Agent.
+type NewThreadOption interface {
+	Option
+
+	NewThreadOption()
 }
 
 type (
@@ -34,13 +47,13 @@ type (
 	allowBackgroundResponsesOpt bool
 )
 
-func (responseFormatOpt) AgentOption()           {}
-func (threadOpt) AgentOption()                   {}
-func (streamOpt) AgentOption()                   {}
-func (continuationTokenOpt) AgentOption()        {}
-func (allowBackgroundResponsesOpt) AgentOption() {}
-func (toolOpt) AgentOption()                     {}
-func (toolModeOpt) AgentOption()                 {}
+func (responseFormatOpt) RunOption()           {}
+func (threadOpt) RunOption()                   {}
+func (streamOpt) RunOption()                   {}
+func (continuationTokenOpt) RunOption()        {}
+func (allowBackgroundResponsesOpt) RunOption() {}
+func (toolOpt) RunOption()                     {}
+func (toolModeOpt) RunOption()                 {}
 
 func (o responseFormatOpt) Value() any           { return o.Format }
 func (o threadOpt) Value() any                   { return o.Thread }
@@ -51,27 +64,27 @@ func (o toolModeOpt) Value() any                 { return tool.ToolMode(o) }
 func (o toolOpt) Value() any                     { return o.Tool }
 
 // Tool adds a tool to the agent run.
-func Tool(tool tool.Tool) Option {
+func Tool(tool tool.Tool) RunOption {
 	return toolOpt{tool}
 }
 
 // ToolMode sets the tool mode for the agent run.
-func ToolMode(mode tool.ToolMode) Option {
+func ToolMode(mode tool.ToolMode) RunOption {
 	return toolModeOpt(mode)
 }
 
 // Stream sets whether to use streaming responses during the agent run.
-func Stream(stream bool) Option {
+func Stream(stream bool) RunOption {
 	return streamOpt(stream)
 }
 
 // ResponseFormat sets the desired response format for the agent run.
-func ResponseFormat(format format.Format) Option {
+func ResponseFormat(format format.Format) RunOption {
 	return responseFormatOpt{format}
 }
 
 // Thread sets the thread to use during the agent run.
-func Thread(thread memory.Thread) Option {
+func Thread(thread memory.Thread) RunOption {
 	return threadOpt{thread}
 }
 
@@ -84,7 +97,7 @@ func Thread(thread memory.Thread) Option {
 // of an update just before the interruption occurred can be passed to this function to resume the stream from
 // the point of interruption. Non-streamed background responses, such as those returned by [Run], can be polled for
 // completion by obtaining the token from the [RunResponse] continuation token.
-func ContinuationToken(token any) Option {
+func ContinuationToken(token any) RunOption {
 	return continuationTokenOpt{token}
 }
 
@@ -104,13 +117,13 @@ func ContinuationToken(token any) Option {
 //
 // This property only takes effect if the implementation it's used with supports background responses.
 // If the implementation does not support background responses, this property will be ignored.
-func AllowBackgroundResponses(allow bool) Option {
+func AllowBackgroundResponses(allow bool) RunOption {
 	return allowBackgroundResponsesOpt(allow)
 }
 
 // Get returns the value stored in opts with the provided setter,
 // reporting whether the value is present.
-func Get[T any](opts []Option, setter func(T) Option) (T, bool) {
+func Get[T any, O Option](opts []O, setter func(T) O) (T, bool) {
 	var zero T
 	var setterType = reflect.TypeOf(setter(zero))
 	for _, opt := range slices.Backward(opts) {
@@ -122,16 +135,8 @@ func Get[T any](opts []Option, setter func(T) Option) (T, bool) {
 	return zero, false
 }
 
-func Delete[T any](opts []Option, setter func(T) Option) []Option {
-	var zero T
-	var setterType = reflect.TypeOf(setter(zero))
-	return slices.DeleteFunc(opts, func(opt Option) bool {
-		return reflect.TypeOf(opt) == setterType
-	})
-}
-
 // All returns a sequence of all values stored in opts with the provided setter.
-func All[T any](opts []Option, setter func(T) Option) iter.Seq[T] {
+func All[T any](opts []RunOption, setter func(T) RunOption) iter.Seq[T] {
 	return func(yield func(T) bool) {
 		var zero T
 		var setterType = reflect.TypeOf(setter(zero))
