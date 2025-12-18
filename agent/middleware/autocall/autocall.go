@@ -26,7 +26,7 @@ type Options struct {
 	IncludeDetailedErrors              bool
 	TerminateOnUnknownCalls            bool
 	AllowConcurrentInvocations         bool
-	MaximumConsecutiveErrorsPerRequest int // Default: 3
+	MaximumConsecutiveErrorsPerRequest int
 	MaximumIterationsPerRequest        int // Default: 40
 	NewID                              func() string
 }

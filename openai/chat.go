@@ -363,7 +363,7 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 		if len(contents) == 0 {
 			return nil, nil
 		}
-		if len(contents) == 1 && contents[0].Text != "" {
+		if len(contents) == 1 {
 			return []openai.ChatCompletionMessageParamUnion{openai.SystemMessage(contents[0].Text)}, nil
 		}
 		return []openai.ChatCompletionMessageParamUnion{openai.SystemMessage(contents)}, nil
