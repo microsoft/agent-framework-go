@@ -183,6 +183,8 @@ func invokeAndAssert(t *testing.T, tools []tool.Tool, plan []*message.Message, e
 	for _, tool := range tools {
 		opts = append(opts, agentopt.Tool(tool))
 	}
+	// Use a deterministic (empty) ID generator for test reproducibility.
+	// Do not use an empty ID generator in production code, as it breaks message tracking and deduplication.
 	autocallOptions.NewID = func() string {
 		return ""
 	}

@@ -75,7 +75,11 @@ func newChatAgent(isAzure bool, config ClientConfig, options chatagent.Options) 
 		}
 	}
 	if config.APIKey != "" {
-		ops = append(ops, azure.WithAPIKey(config.APIKey))
+		if isAzure {
+			ops = append(ops, azure.WithAPIKey(config.APIKey))
+		} else {
+			ops = append(ops, option.WithAPIKey(config.APIKey))
+		}
 	}
 	if config.HttpClient != nil {
 		ops = append(ops, option.WithHTTPClient(config.HttpClient))
