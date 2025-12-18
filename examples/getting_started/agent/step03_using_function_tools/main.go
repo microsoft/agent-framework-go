@@ -7,12 +7,11 @@ import (
 	"fmt"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
-	"github.com/microsoft/agent-framework-go/agent/chatagent/chatclient"
 	"github.com/microsoft/agent-framework-go/agent/middleware"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/openai"
-	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 )
 
@@ -36,8 +35,8 @@ func main() {
 	}, chatagent.Options{
 		Instructions: "You are a helpful assistant",
 		Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
-		ChatOptions: &chatclient.ChatOptions{
-			Tools: []tool.Tool{weatherTool},
+		RunOptions: []agentopt.RunOption{
+			agentopt.Tool(weatherTool),
 		},
 	})
 

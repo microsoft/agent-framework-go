@@ -8,11 +8,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
+	"net/http"
 	"reflect"
 	"time"
 
+	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
-	"github.com/microsoft/agent-framework-go/agent/chatagent/chatclient"
 	"github.com/microsoft/agent-framework-go/format"
 	"github.com/microsoft/agent-framework-go/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/message"
@@ -43,8 +44,6 @@ func NewWebSearchTool(city, region, country, timezone, searchContextSize string)
 	}
 }
 
-var _ chatclient.Client = (*client)(nil)
-
 type client struct {
 	client openai.Client
 	config ClientConfig
@@ -52,12 +51,13 @@ type client struct {
 
 // ClientConfig contains configuration for [Agent].
 type ClientConfig struct {
-	Model    string
-	APIKey   string // Optional, if not set will use default environment variable
-	Endpoint string // Optional, defaults to OpenAI API
+	Model      string // required
+	APIKey     string
+	Endpoint   string
+	HttpClient *http.Client
 
 	// Only used for Azure OpenAI
-	APIVersion string // Optional, defaults to latest API version
+	APIVersion string
 }
 
 func newChatAgent(isAzure bool, config ClientConfig, options chatagent.Options) *chatagent.Agent {
@@ -69,22 +69,28 @@ func newChatAgent(isAzure bool, config ClientConfig, options chatagent.Options) 
 			apiVersion := cmp.Or(config.APIVersion, "2025-01-01-preview")
 			ops = append(ops, azure.WithEndpoint(config.Endpoint, apiVersion))
 		}
-		if config.APIKey != "" {
-			ops = append(ops, azure.WithAPIKey(config.APIKey))
-		}
 	} else {
-		if config.APIKey != "" {
-			ops = append(ops, option.WithAPIKey(config.APIKey))
-		}
 		if config.Endpoint != "" {
 			ops = append(ops, option.WithBaseURL(config.Endpoint))
 		}
+	}
+	if config.APIKey != "" {
+		ops = append(ops, azure.WithAPIKey(config.APIKey))
+	}
+	if config.HttpClient != nil {
+		ops = append(ops, option.WithHTTPClient(config.HttpClient))
 	}
 	c := &client{
 		client: openai.NewClient(ops...),
 		config: config,
 	}
-	return chatagent.NewAgent(c, options)
+	if options.FormatOfFn == nil {
+		options.FormatOfFn = c.formatOf
+	}
+	if options.UnmarshalFn == nil {
+		options.UnmarshalFn = c.unmarshal
+	}
+	return chatagent.NewAgent(c.run, options)
 }
 
 func NewChatAgent(config ClientConfig, options chatagent.Options) *chatagent.Agent {
@@ -96,36 +102,25 @@ func NewChatAgentAzure(config ClientConfig, options chatagent.Options) *chatagen
 	return newChatAgent(true, config, options)
 }
 
-var _ format.Formatter = (*formatter)(nil)
-
-type formatter struct {
-}
-
-func (formatter) Format(v any) (format.Format, error) {
+func (a *client) formatOf(v any) (format.Format, error) {
 	return jsonformat.ForType(reflect.TypeOf(v))
 }
 
-func (formatter) Unmarshal(data []byte, format format.Format, v any) error {
+func (a *client) unmarshal(format format.Format, data []byte, v any) error {
 	return jsonformat.Unmarshal(format.(*jsonformat.Format), data, v)
 }
 
-func (a *client) Capabilities() chatclient.Capabilities {
-	return chatclient.Capabilities{
-		StructuredOutput: formatter{},
-	}
-}
-
-func (a *client) Response(ctx context.Context, options chatclient.ChatOptions, messages ...*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error] {
-	body, err := a.buildCompletionParams(&options, messages...)
+func (a *client) run(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+	body, err := a.buildCompletionParams(messages, options)
 	if err != nil {
-		return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
+		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(nil, err)
 		}
 	}
-	if !options.Stream.Or(false) {
+	if stream, _ := agentopt.Get(options, agentopt.Stream); !stream {
 		resp, err := a.client.Chat.Completions.New(ctx, body)
 		if err != nil {
-			return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
+			return func(yield func(*message.ResponseUpdate, error) bool) {
 				yield(nil, err)
 			}
 		}
@@ -144,13 +139,15 @@ func (a *client) Response(ctx context.Context, options chatclient.ChatOptions, m
 		if choice.Message.Refusal != "" {
 			contents = append(contents, &message.ErrorContent{Message: choice.Message.Refusal})
 		}
-		return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
-			update := &chatclient.ChatResponseUpdate{
+		if resp.JSON.Usage.Valid() {
+			contents = addUsage(contents, resp.Usage)
+		}
+		return func(yield func(*message.ResponseUpdate, error) bool) {
+			update := &message.ResponseUpdate{
 				Contents:   contents,
 				Role:       message.RoleAssistant,
 				ResponseID: resp.ID,
 				MessageID:  resp.ID,
-				ModelID:    resp.Model,
 				CreatedAt:  time.Unix(resp.Created, 0),
 			}
 			if !yield(update, nil) {
@@ -158,7 +155,7 @@ func (a *client) Response(ctx context.Context, options chatclient.ChatOptions, m
 			}
 		}
 	}
-	return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
+	return func(yield func(*message.ResponseUpdate, error) bool) {
 		stream := a.client.Chat.Completions.NewStreaming(ctx, body)
 		defer stream.Close()
 		var acc openai.ChatCompletionAccumulator
@@ -175,7 +172,7 @@ func (a *client) Response(ctx context.Context, options chatclient.ChatOptions, m
 					Arguments: tc.Arguments,
 				})
 			}
-			var role message.Role
+			role := message.RoleAssistant
 			if len(chunk.Choices) > 0 {
 				choice := chunk.Choices[0]
 				if choice.Delta.Content != "" {
@@ -183,12 +180,14 @@ func (a *client) Response(ctx context.Context, options chatclient.ChatOptions, m
 				}
 				role = mapRole(choice.Delta.Role)
 			}
-			resp := &chatclient.ChatResponseUpdate{
+			if chunk.JSON.Usage.Valid() {
+				contents = addUsage(contents, chunk.Usage)
+			}
+			resp := &message.ResponseUpdate{
 				Contents:   contents,
 				Role:       role,
 				ResponseID: chunk.ID,
 				MessageID:  chunk.ID,
-				ModelID:    chunk.Model,
 				CreatedAt:  time.Unix(chunk.Created, 0),
 			}
 			if !yield(resp, nil) {
@@ -217,29 +216,39 @@ func mapRole(r string) message.Role {
 }
 
 // buildCompletionParams constructs the parameters for the OpenAI chat completion API.
-func (a *client) buildCompletionParams(options *chatclient.ChatOptions, messages ...*message.Message) (openai.ChatCompletionNewParams, error) {
+func (a *client) buildCompletionParams(messages []*message.Message, opts []agentopt.RunOption) (openai.ChatCompletionNewParams, error) {
 	params := openai.ChatCompletionNewParams{
 		Model:    a.config.Model,
 		Messages: make([]openai.ChatCompletionMessageParamUnion, 0, len(messages)+1),
 	}
-	if options.Instructions != "" {
-		params.Messages = append(params.Messages, openai.SystemMessage([]openai.ChatCompletionContentPartTextParam{
-			{Text: options.Instructions},
-		}))
+	if v, ok := agentopt.Get(opts, chatagent.Model); ok && v != "" {
+		params.Model = v
 	}
-	if options.Temperature.Valid() {
-		params.Temperature = openai.Float(options.Temperature.MustValue())
+	if v, ok := agentopt.Get(opts, chatagent.Temperature); ok {
+		params.Temperature = openai.Float(v)
 	}
-	if options.TopP.Valid() {
-		params.TopP = openai.Float(options.TopP.MustValue())
+	if v, ok := agentopt.Get(opts, chatagent.TopP); ok {
+		params.TopP = openai.Float(v)
 	}
-	if options.MaxTokens.Valid() {
-		params.MaxTokens = openai.Int(int64(options.MaxTokens.MustValue()))
+	if v, ok := agentopt.Get(opts, chatagent.MaxOutputTokens); ok {
+		params.MaxCompletionTokens = openai.Int(v)
 	}
-	if options.ResponseFormat != nil {
-		switch options.ResponseFormat.Kind() {
+	if v, ok := agentopt.Get(opts, chatagent.PresencePenalty); ok {
+		params.PresencePenalty = openai.Float(v)
+	}
+	if v, ok := agentopt.Get(opts, chatagent.FrequencyPenalty); ok {
+		params.FrequencyPenalty = openai.Float(v)
+	}
+	if v, ok := agentopt.Get(opts, chatagent.Seed); ok {
+		params.Seed = openai.Int(v)
+	}
+	if v, ok := agentopt.Get(opts, chatagent.StopSequences); ok && len(v) > 0 {
+		params.Stop.OfStringArray = v
+	}
+	if frmt, ok := agentopt.Get(opts, agentopt.ResponseFormat); ok && frmt != nil {
+		switch frmt.Kind() {
 		case "json":
-			if schema, ok := options.ResponseFormat.(format.SchemaFormat); ok {
+			if schema, ok := frmt.(format.SchemaFormat); ok {
 				params.ResponseFormat.OfJSONSchema = &shared.ResponseFormatJSONSchemaParam{
 					JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
 						Name:   schema.Name(),
@@ -259,7 +268,19 @@ func (a *client) buildCompletionParams(options *chatclient.ChatOptions, messages
 			}
 		}
 	}
-	for _, tl := range options.Tools {
+	first := true
+	for tl := range agentopt.All(opts, agentopt.Tool) {
+		if first {
+			first = false
+			if v, ok := agentopt.Get(opts, chatagent.AllowMultipleToolCalls); ok {
+				params.ParallelToolCalls = openai.Bool(v)
+			}
+			if mode, ok := agentopt.Get(opts, agentopt.ToolMode); ok {
+				params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
+					OfAuto: openai.String(string(mode)),
+				}
+			}
+		}
 		switch tl := tl.(type) {
 		case *hostedtool.WebSearch:
 			if location, ok := tl.AdditionalProperties["user_location"]; ok {
@@ -312,11 +333,6 @@ func (a *client) buildCompletionParams(options *chatclient.ChatOptions, messages
 			})
 		}
 	}
-	if options.ToolMode != "" {
-		params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
-			OfAuto: openai.String(string(options.ToolMode)),
-		}
-	}
 	for _, msg := range messages {
 		omsg, err := buildMessageParam(msg)
 		if err != nil {
@@ -335,15 +351,16 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 		var contents []openai.ChatCompletionContentPartTextParam
 		for _, c := range msg.Contents {
 			if tc, ok := c.(*message.TextContent); ok {
-				if tc.Text != "" {
-					contents = append(contents, openai.ChatCompletionContentPartTextParam{
-						Text: tc.Text,
-					})
-				}
+				contents = append(contents, openai.ChatCompletionContentPartTextParam{
+					Text: tc.Text,
+				})
 			}
 		}
 		if len(contents) == 0 {
 			return nil, nil
+		}
+		if len(contents) == 1 && contents[0].Text != "" {
+			return []openai.ChatCompletionMessageParamUnion{openai.SystemMessage(contents[0].Text)}, nil
 		}
 		return []openai.ChatCompletionMessageParamUnion{openai.SystemMessage(contents)}, nil
 
@@ -352,24 +369,32 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 		for _, c := range msg.Contents {
 			switch c := c.(type) {
 			case *message.TextContent:
-				if c.Text != "" {
-					contents = append(contents, openai.TextContentPart(c.Text))
-				}
+				contents = append(contents, openai.TextContentPart(c.Text))
 			case *message.URIContent:
 				switch c.TopLevelMediaType() {
 				case "image":
-					contents = append(contents, openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
-						URL: c.URI,
-					}))
+					contents = append(contents, openai.ChatCompletionContentPartUnionParam{
+						OfImageURL: &openai.ChatCompletionContentPartImageParam{
+							ImageURL: openai.ChatCompletionContentPartImageImageURLParam{
+								URL:    c.URI,
+								Detail: imageDetail(c.AdditionalProperties),
+							},
+						},
+					})
 				default:
 					// For other URI content types, just ignore, they are not supported yet.
 				}
 			case *message.DataContent:
 				switch c.TopLevelMediaType() {
 				case "image":
-					contents = append(contents, openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
-						URL: c.Data,
-					}))
+					contents = append(contents, openai.ChatCompletionContentPartUnionParam{
+						OfImageURL: &openai.ChatCompletionContentPartImageParam{
+							ImageURL: openai.ChatCompletionContentPartImageImageURLParam{
+								URL:    c.URI(),
+								Detail: imageDetail(c.AdditionalProperties),
+							},
+						},
+					})
 				case "audio":
 					var format string
 					switch c.MediaType {
@@ -400,6 +425,9 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 		if len(contents) == 0 {
 			return nil, nil
 		}
+		if len(contents) == 1 && contents[0].OfText != nil {
+			return []openai.ChatCompletionMessageParamUnion{openai.UserMessage(contents[0].OfText.Text)}, nil
+		}
 		return []openai.ChatCompletionMessageParamUnion{openai.UserMessage(contents)}, nil
 
 	case message.RoleAssistant:
@@ -408,13 +436,11 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 		for _, c := range msg.Contents {
 			switch c := c.(type) {
 			case *message.TextContent:
-				if c.Text != "" {
-					contents = append(contents, openai.ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion{
-						OfText: &openai.ChatCompletionContentPartTextParam{
-							Text: c.Text,
-						},
-					})
-				}
+				contents = append(contents, openai.ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion{
+					OfText: &openai.ChatCompletionContentPartTextParam{
+						Text: c.Text,
+					},
+				})
 			case *message.FunctionCallContent:
 				toolCalls = append(toolCalls, openai.ChatCompletionMessageToolCallUnionParam{
 					OfFunction: &openai.ChatCompletionMessageFunctionToolCallParam{
@@ -436,9 +462,15 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 		if len(contents) == 0 && len(toolCalls) == 0 {
 			return nil, nil
 		}
+		var content openai.ChatCompletionAssistantMessageParamContentUnion
+		if len(contents) == 1 && contents[0].OfText != nil {
+			content = openai.ChatCompletionAssistantMessageParamContentUnion{OfString: openai.String(contents[0].OfText.Text)}
+		} else {
+			content = openai.ChatCompletionAssistantMessageParamContentUnion{OfArrayOfContentParts: contents}
+		}
 		return []openai.ChatCompletionMessageParamUnion{{
 			OfAssistant: &openai.ChatCompletionAssistantMessageParam{
-				Content:   openai.ChatCompletionAssistantMessageParamContentUnion{OfArrayOfContentParts: contents},
+				Content:   content,
 				ToolCalls: toolCalls,
 			},
 		}}, nil
@@ -454,10 +486,7 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 				} else if b, ok := ret.(json.RawMessage); ok {
 					ret = string(b)
 				}
-				messages = append(messages, openai.ToolMessage(
-					[]openai.ChatCompletionContentPartTextParam{{Text: fmt.Sprintf("%v", ret)}},
-					funcResult.CallID,
-				))
+				messages = append(messages, openai.ToolMessage(fmt.Sprintf("%v", ret), funcResult.CallID))
 			}
 		}
 		return messages, nil
@@ -465,4 +494,29 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 	default:
 		panic("unknown message role: " + string(msg.Role))
 	}
+}
+
+func addUsage(contents []message.Content, usage openai.CompletionUsage) []message.Content {
+	details := message.UsageDetails{
+		InputTokenCount:       usage.PromptTokens,
+		OutputTokenCount:      usage.CompletionTokens,
+		TotalTokenCount:       usage.TotalTokens,
+		CachedInputTokenCount: usage.PromptTokensDetails.CachedTokens,
+		ReasoningTokenCount:   usage.CompletionTokensDetails.ReasoningTokens,
+		AdditionalCounts:      make(map[string]int64),
+	}
+	details.AdditionalCounts["PromptTokensDetails.AudioTokens"] = usage.PromptTokensDetails.AudioTokens
+	details.AdditionalCounts["CompletionTokensDetails.AudioTokens"] = usage.CompletionTokensDetails.AudioTokens
+	details.AdditionalCounts["CompletionTokensDetails.AcceptedPredictionTokens"] = usage.CompletionTokensDetails.AcceptedPredictionTokens
+	details.AdditionalCounts["CompletionTokensDetails.RejectedPredictionTokens"] = usage.CompletionTokensDetails.RejectedPredictionTokens
+	return append(contents, &message.UsageContent{Details: details})
+}
+
+func imageDetail(props map[string]any) string {
+	if detail, ok := props["detail"]; ok {
+		if v, ok := detail.(string); ok {
+			return v
+		}
+	}
+	return ""
 }

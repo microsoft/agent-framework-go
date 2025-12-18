@@ -17,18 +17,17 @@ import (
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/middleware"
 	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/param"
 	"github.com/microsoft/agent-framework-go/tool"
 )
 
 type Options struct {
 	Logger                             *slog.Logger
 	AdditionalTools                    []tool.Tool
-	IncludeDetailedErrors              param.Opt[bool] // Default: false
-	TerminateOnUnknownCalls            param.Opt[bool] // Default: false
-	AllowConcurrentInvocations         param.Opt[bool] // Default: false
-	MaximumConsecutiveErrorsPerRequest param.Opt[int]  // Default: 3
-	MaximumIterationsPerRequest        param.Opt[int]  // Default: 40
+	IncludeDetailedErrors              bool
+	TerminateOnUnknownCalls            bool
+	AllowConcurrentInvocations         bool
+	MaximumConsecutiveErrorsPerRequest int // Default: 3
+	MaximumIterationsPerRequest        int // Default: 40
 	NewID                              func() string
 }
 
@@ -284,7 +283,7 @@ func (f *autocall) shouldTerminateLoopBasedOnHandleableFunctions(funcCalls []*me
 		// There are functions to call but we have no tools, so we can't handle them.
 		// If we're configured to terminate on unknown call requests, do so now.
 		// Otherwise, processFunctionCalls will handle it by creating a NotFound response message.
-		return f.terminateOnUnknownCalls()
+		return f.TerminateOnUnknownCalls
 	}
 	// At this point, we have both function call requests and some tools.
 	// Look up each function.
@@ -294,7 +293,7 @@ func (f *autocall) shouldTerminateLoopBasedOnHandleableFunctions(funcCalls []*me
 			// The tool couldn't be found. If we're configured to terminate on unknown call requests,
 			// break out of the loop now. Otherwise, processFunctionCalls will handle it by
 			// creating a NotFound response message.
-			if f.terminateOnUnknownCalls() {
+			if f.TerminateOnUnknownCalls {
 				return true
 			}
 			continue
@@ -309,11 +308,10 @@ func (f *autocall) shouldTerminateLoopBasedOnHandleableFunctions(funcCalls []*me
 }
 
 func (f *autocall) maximumIterationsPerRequest() int {
-	return f.MaximumIterationsPerRequest.Or(40)
-}
-
-func (f *autocall) terminateOnUnknownCalls() bool {
-	return f.TerminateOnUnknownCalls.Or(false)
+	if f.MaximumIterationsPerRequest == 0 {
+		return 40
+	}
+	return f.MaximumIterationsPerRequest
 }
 
 func (f *autocall) createToolsMap(tools iter.Seq[tool.Tool]) (mtools map[string]tool.Tool, anyRequiredApproval bool) {
@@ -377,7 +375,7 @@ func (f *autocall) processFunctionCalls(ctx context.Context, tools map[string]to
 	}
 	// Process all functions. If there's more than one and concurrent invocation is enabled, do so in parallel.
 	results := make([]message.Content, len(funcCalls))
-	if len(funcCalls) > 1 && f.AllowConcurrentInvocations.Or(false) {
+	if len(funcCalls) > 1 && f.AllowConcurrentInvocations {
 		// Rather than awaiting each function before invoking the next, invoke all of them
 		// and then await all of them. We avoid forcibly introducing parallelism via Task.Run,
 		// but if a function invocation completes asynchronously, its processing can overlap
@@ -408,7 +406,7 @@ func (f *autocall) processFunctionCalls(ctx context.Context, tools map[string]to
 	// Update consecutive error count
 	if len(errs) > 0 {
 		errCount++
-		if errCount > f.MaximumConsecutiveErrorsPerRequest.Or(3) {
+		if errCount > f.MaximumConsecutiveErrorsPerRequest {
 			return nil, errCount, errors.Join(errs...)
 		}
 	} else {
@@ -459,7 +457,7 @@ func (f *autocall) createFunctionResult(callID string, result any, err error) *m
 
 	// Format errors into Result string for the LLM to see
 	if err != nil {
-		if f.IncludeDetailedErrors.Or(false) {
+		if f.IncludeDetailedErrors {
 			result = fmt.Sprintf("Error: Function failed. Exception: %v", err)
 		} else {
 			result = "Error: Function failed."

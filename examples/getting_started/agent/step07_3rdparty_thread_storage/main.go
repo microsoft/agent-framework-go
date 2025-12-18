@@ -87,7 +87,7 @@ func (d *fsMessageStore) Add(ctx context.Context, msgs ...*message.Message) erro
 	for _, msg := range msgs {
 		if msg.ID == "" {
 			// Skip messages without an ID.
-			return nil
+			continue
 		}
 		if slices.Contains(d.Files, msg.ID) {
 			return fmt.Errorf("duplicated message %q", msg.ID)

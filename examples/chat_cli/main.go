@@ -12,7 +12,6 @@ import (
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/openai"
-	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 )
 
@@ -34,8 +33,8 @@ func main() {
 		Model: "gpt-4o-mini",
 	}, chatagent.Options{
 		Instructions: "You are a helpful assistant with access to weather information. Be concise and friendly.",
-		ChatOptions: &chatagent.ChatOptions{
-			Tools: []tool.Tool{weatherTool},
+		RunOptions: []agentopt.RunOption{
+			agentopt.Tool(weatherTool),
 		},
 	})
 

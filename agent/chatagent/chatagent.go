@@ -10,27 +10,25 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
-	"github.com/microsoft/agent-framework-go/agent/chatagent/chatclient"
 	"github.com/microsoft/agent-framework-go/agent/middleware"
 	"github.com/microsoft/agent-framework-go/agent/middleware/autocall"
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/param"
 )
 
-type ChatOptions = chatclient.ChatOptions
+type RunFunc func(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error]
 
 var _ agent.Agent = (*Agent)(nil)
 
 type Agent struct {
-	Client  chatclient.Client
+	RunFn   RunFunc
 	Options Options
 
 	iden agent.Identity
 }
 
 // NewAgent creates a new chat agent with the given chat client and options.
-func NewAgent(client chatclient.Client, options Options) *Agent {
+func NewAgent(runfn RunFunc, options Options) *Agent {
 	opts := *options.Clone()
 	if !opts.DisableFuncAutoCall {
 		opts.Middlewares = append(opts.Middlewares,
@@ -38,7 +36,7 @@ func NewAgent(client chatclient.Client, options Options) *Agent {
 		)
 	}
 	return &Agent{
-		Client:  client,
+		RunFn:   runfn,
 		Options: opts,
 		iden:    agent.NewIdentity(options.ID, options.Name, options.Description),
 	}
@@ -53,7 +51,7 @@ func (a *Agent) Instructions() string {
 }
 
 func (a *Agent) NewThread(ctx context.Context, opts ...agentopt.NewThreadOption) memory.Thread {
-	convID, _ := agentopt.Get(opts, WithConversationID)
+	convID, _ := agentopt.Get(opts, ConversationID)
 	thread := &Thread{
 		ConversationID: convID,
 	}
@@ -68,11 +66,8 @@ func (a *Agent) UnmarshalThread(data []byte) (memory.Thread, error) {
 }
 
 func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
-	if a.Options.ChatOptions != nil {
-		for _, tl := range a.Options.ChatOptions.Tools {
-			options = append(options, agentopt.Tool(tl))
-		}
-	}
+	// Prepend options from agent configuration.
+	options = append(a.Options.RunOptions, options...)
 	if _, ok := agentopt.Get(options, agentopt.Thread); !ok {
 		options = append(options, agentopt.Thread(a.NewThread(ctx)))
 	}
@@ -81,27 +76,25 @@ func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ..
 
 func (a *Agent) RunOf(ctx context.Context, v any, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
-		formatter := a.Client.Capabilities().StructuredOutput
-		if formatter == nil {
+		if a.Options.FormatOfFn == nil || a.Options.UnmarshalFn == nil {
 			yield(nil, errors.New("agent does not support structured output"))
 			return
 		}
-		format, err := formatter.Format(v)
+		format, err := a.Options.FormatOfFn(v)
 		if err != nil {
 			yield(nil, err)
 			return
 		}
 		options = append(options, agentopt.ResponseFormat(format))
-		var personRaw []byte
+		var data []byte
 		for update, err := range a.Run(ctx, messages, options...) {
 			if err != nil {
 				yield(nil, err)
 				return
 			}
-			personRaw = append(personRaw, update.String()...)
+			data = append(data, update.String()...)
 		}
-		err = formatter.Unmarshal(personRaw, format, &v)
-		if err != nil {
+		if err := a.Options.UnmarshalFn(format, data, v); err != nil {
 			yield(nil, err)
 			return
 		}
@@ -111,22 +104,18 @@ func (a *Agent) RunOf(ctx context.Context, v any, messages []*message.Message, o
 func (a *Agent) run(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		originalMessages := messages
-		client := a.Client
-		if fn, ok := agentopt.Get(options, WithNewClient); ok {
-			// If we have a custom chat client factory, we should use it to create a new chat client with the transformed tools.
-			client = fn(client)
-		}
-		thread, opts, messages, ctxMessages, err := a.prepareThreadAndMessages(ctx, originalMessages, options)
+		thread, options, messages, ctxMessages, err := a.prepareThreadAndMessages(ctx, originalMessages, options)
 		if err != nil {
 			yield(nil, err)
 			return
 		}
-		if err := validateStreamResumptionAllowed(opts.ContinuationToken, thread); err != nil {
+		contToken, _ := agentopt.Get(options, agentopt.ContinuationToken)
+		if err := validateStreamResumptionAllowed(contToken, thread); err != nil {
 			yield(nil, err)
 			return
 		}
-		var updates []*chatclient.ChatResponseUpdate
-		for update, err := range client.Response(ctx, opts, messages...) {
+		var resp message.Response
+		for update, err := range a.RunFn(ctx, messages, options...) {
 			if err != nil {
 				a.notifyContextProviderOfFailure(ctx, thread, err, messages, ctxMessages)
 				yield(nil, err)
@@ -134,7 +123,7 @@ func (a *Agent) run(ctx context.Context, messages []*message.Message, options ..
 			}
 			if update != nil {
 				update.AuthorName = cmp.Or(update.AuthorName, a.Identity().Name())
-				updates = append(updates, update)
+				resp.Update(update)
 				if !yield(&message.ResponseUpdate{
 					AuthorID:             a.Identity().ID(),
 					AuthorName:           update.AuthorName,
@@ -151,24 +140,19 @@ func (a *Agent) run(ctx context.Context, messages []*message.Message, options ..
 				}
 			}
 		}
-		convID := ""
-		if len(updates) > 0 {
-			convID = updates[len(updates)-1].ConversationID
+		resp.Coalesce()
+		if thread.ConversationID == "" && thread.MessageStore == nil && a.Options.NewMessageStore != nil {
+			// If we don't have a conversation ID then we must be managing the message store ourselves.
+			// If we don't have a message store yet and we have a factory, use it to create a new one.
+			thread.MessageStore = a.Options.NewMessageStore()
 		}
-		// We can derive the type of supported thread from whether we have a conversation id,
-		// so let's update it and set the conversation id for the service thread case.
-		if err := a.updateThreadWithTypeAndConversationID(thread, convID); err != nil {
-			yield(nil, err)
-			return
-		}
-		msgs := chatclient.NewMessageFromUpdates(updates)
-		// Only notify the thread of new messages if the chatResponse was successful to avoid inconsistent message state in the thread.
-		if err := thread.MessagesReceived(ctx, append(originalMessages, append(ctxMessages, msgs...)...)...); err != nil {
+		// Only notify the thread of new messages if the response was successful to avoid inconsistent message state in the thread.
+		if err := thread.MessagesReceived(ctx, append(originalMessages, append(ctxMessages, resp.Messages...)...)...); err != nil {
 			yield(nil, err)
 			return
 		}
 		// Notify the ContextProvider of all new messages.
-		if err := a.notifyContextProviderOfSuccess(ctx, thread, messages, ctxMessages, msgs); err != nil {
+		if err := a.notifyContextProviderOfSuccess(ctx, thread, messages, ctxMessages, resp.Messages); err != nil {
 			yield(nil, err)
 			return
 		}
@@ -199,33 +183,11 @@ func (a *Agent) notifyContextProviderOfFailure(ctx context.Context, thread *Thre
 	})
 }
 
-func (a *Agent) updateThreadWithTypeAndConversationID(thread *Thread, convID string) error {
-	if convID == "" && thread.ConversationID != "" {
-		// We were passed a thread that is service managed, but we got no conversation id back from the chat client,
-		// meaning the service doesn't support service managed threads, so the thread cannot be used with this service.
-		return errors.New("service did not return a valid conversation id when using a service managed thread")
+func (a *Agent) prepareThreadAndMessages(ctx context.Context, messages []*message.Message, options []agentopt.RunOption) (thread *Thread, opts []agentopt.RunOption, msgsForClient, ctxMessages []*message.Message, err error) {
+	retError := func(e error) (*Thread, []agentopt.RunOption, []*message.Message, []*message.Message, error) {
+		return nil, nil, nil, nil, e
 	}
-	if thread.ConversationID != "" {
-		// If we got a conversation id back from the chat client, it means that the service supports server side thread storage
-		// so we should update the thread with the new id.
-		thread.ConversationID = convID
-	} else {
-		// If the service doesn't use service side thread storage (i.e. we got no id back from invocation), and
-		// the thread has no MessageStore yet, and we have a custom messages store, we should update the thread
-		// with the custom MessageStore so that it has somewhere to store the chat history.
-		if thread.MessageStore == nil && a.Options.NewMessageStore != nil {
-			thread.MessageStore = a.Options.NewMessageStore()
-		}
-	}
-	return nil
-}
-
-func (a *Agent) prepareThreadAndMessages(ctx context.Context, messages []*message.Message, options []agentopt.RunOption) (thread *Thread, opts ChatOptions, msgsForClient, ctxMessages []*message.Message, err error) {
-	retError := func(e error) (*Thread, ChatOptions, []*message.Message, []*message.Message, error) {
-		return nil, ChatOptions{}, nil, nil, e
-	}
-	opts = a.createConfiguredChatOptions(options)
-	if v, ok := opts.AllowBackgroundResponses.Value(); ok && v && thread == nil {
+	if v, ok := agentopt.Get(options, agentopt.AllowBackgroundResponses); ok && v && thread == nil {
 		return retError(errors.New("a thread must be provided when continuing a background response with a continuation token"))
 	}
 	if v, ok := agentopt.Get(options, agentopt.Thread); ok {
@@ -238,7 +200,7 @@ func (a *Agent) prepareThreadAndMessages(ctx context.Context, messages []*messag
 		// This should never happen because we ensure a thread is always provided in Run.
 		panic("nil thread")
 	}
-	if opts.ContinuationToken != nil {
+	if v, ok := agentopt.Get(options, agentopt.ContinuationToken); ok && v != nil {
 		if len(messages) > 0 {
 			return retError(errors.New("messages are not allowed when continuing a background response using a continuation token"))
 		}
@@ -246,7 +208,18 @@ func (a *Agent) prepareThreadAndMessages(ctx context.Context, messages []*messag
 			return retError(errors.New("continuation tokens are not allowed to be used for initial runs"))
 		}
 	}
-	if opts.ContinuationToken == nil {
+
+	if a.Instructions() != "" {
+		msgsForClient = append(msgsForClient, &message.Message{
+			Role: message.RoleSystem,
+			Contents: []message.Content{
+				&message.TextContent{
+					Text: a.Instructions(),
+				},
+			},
+		})
+	}
+	if v, ok := agentopt.Get(options, agentopt.ContinuationToken); !ok || v == nil {
 		if thread.MessageStore != nil {
 			//  Add any existing messages from the thread to the messages to be sent to the chat client.
 			for msg, err := range thread.MessageStore.All(ctx) {
@@ -269,35 +242,25 @@ func (a *Agent) prepareThreadAndMessages(ctx context.Context, messages []*messag
 			if ctxData != nil {
 				ctxMessages = ctxData.Messages
 				msgsForClient = append(msgsForClient, ctxData.Messages...)
-				if len(ctxData.Tools) > 0 {
-					opts.Tools = append(opts.Tools, ctxData.Tools...)
+				for _, tl := range ctxData.Tools {
+					options = append(options, agentopt.Tool(tl))
 				}
 				if ctxData.Instructions != "" {
-					if opts.Instructions != "" {
-						opts.Instructions += "\n"
-					}
-					opts.Instructions += ctxData.Instructions
+					msgsForClient = append(msgsForClient, &message.Message{
+						Role: message.RoleSystem,
+						Contents: []message.Content{
+							&message.TextContent{
+								Text: ctxData.Instructions,
+							},
+						},
+					})
 				}
 			}
 		}
 		// Add the input messages to the end of thread messages.
 		msgsForClient = append(msgsForClient, messages...)
 	}
-	// If a user provided two different thread ids, via the thread object and options, we should throw
-	// since we don't know which one to use.
-	if thread.ConversationID != "" && opts.ConversationID != "" && thread.ConversationID != opts.ConversationID {
-		return retError(errors.New("conflicting conversation IDs provided in thread and chat options"))
-	}
-	if a.Instructions() != "" {
-		if opts.Instructions != "" {
-			opts.Instructions = "\n" + opts.Instructions
-		}
-		opts.Instructions = a.Instructions() + opts.Instructions
-	}
-	if thread.ConversationID != "" && opts.ConversationID != thread.ConversationID {
-		opts.ConversationID = thread.ConversationID
-	}
-	return thread, opts, msgsForClient, ctxMessages, nil
+	return thread, options, msgsForClient, ctxMessages, nil
 }
 
 func validateStreamResumptionAllowed(continuationToken any, thread *Thread) error {
@@ -315,30 +278,4 @@ func validateStreamResumptionAllowed(continuationToken any, thread *Thread) erro
 		return errors.New("using context provider with streaming resumption is not supported")
 	}
 	return nil
-}
-
-func (a *Agent) createConfiguredChatOptions(options []agentopt.RunOption) ChatOptions {
-	var opts ChatOptions
-	// Try to get ChatOptions from RunOptions
-	if v, ok := agentopt.Get(options, WithOptions); ok {
-		opts = *v.Clone()
-	}
-	// Merge in Agent-level ChatOptions
-	if a.Options.ChatOptions != nil {
-		opts.Copy(a.Options.ChatOptions)
-	}
-	// Merge in RunOptions specific fields
-	if v, ok := agentopt.Get(options, agentopt.AllowBackgroundResponses); ok {
-		opts.AllowBackgroundResponses = param.NewOpt(v)
-	}
-	if v, ok := agentopt.Get(options, agentopt.ContinuationToken); ok {
-		opts.ContinuationToken = v
-	}
-	if v, ok := agentopt.Get(options, agentopt.Stream); ok {
-		opts.Stream = param.NewOpt(v)
-	}
-	if v, ok := agentopt.Get(options, agentopt.ResponseFormat); ok {
-		opts.ResponseFormat = v
-	}
-	return opts
 }

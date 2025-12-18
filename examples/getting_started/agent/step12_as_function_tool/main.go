@@ -9,11 +9,11 @@ import (
 	"fmt"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
 	"github.com/microsoft/agent-framework-go/agent/middleware"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/openai"
-	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 )
 
@@ -39,8 +39,8 @@ func main() {
 		Name:         "WeatherAgent",
 		Description:  "An agent that answers questions about the weather.",
 		Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
-		ChatOptions: &chatagent.ChatOptions{
-			Tools: []tool.Tool{weatherTool},
+		RunOptions: []agentopt.RunOption{
+			agentopt.Tool(weatherTool),
 		},
 	})
 
@@ -49,8 +49,8 @@ func main() {
 		Model: "gpt-5-nano",
 	}, chatagent.Options{
 		Instructions: "You are a helpful assistant who responds in French.",
-		ChatOptions: &chatagent.ChatOptions{
-			Tools: []tool.Tool{agent.FuncTool(weatherAgent, nil)},
+		RunOptions: []agentopt.RunOption{
+			agentopt.Tool(agent.FuncTool(weatherAgent, nil)),
 		},
 	})
 

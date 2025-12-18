@@ -471,16 +471,20 @@ func (t URIContent) kind() contentKind { return "uri" }
 
 // UsageDetails provides usage details about a request/response.
 type UsageDetails struct {
-	AdditionalCounts map[string]int64
-	InputTokenCount  int64
-	OutputTokenCount int64
-	TotalTokenCount  int64
+	AdditionalCounts      map[string]int64
+	InputTokenCount       int64
+	OutputTokenCount      int64
+	TotalTokenCount       int64
+	CachedInputTokenCount int64
+	ReasoningTokenCount   int64
 }
 
 func (u *UsageDetails) Add(other UsageDetails) {
 	u.InputTokenCount += other.InputTokenCount
 	u.OutputTokenCount += other.OutputTokenCount
 	u.TotalTokenCount += other.TotalTokenCount
+	u.CachedInputTokenCount += other.CachedInputTokenCount
+	u.ReasoningTokenCount += other.ReasoningTokenCount
 
 	// Merge additional counts
 	if other.AdditionalCounts != nil {

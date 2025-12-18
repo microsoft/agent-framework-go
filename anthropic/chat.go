@@ -14,14 +14,11 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
-	"github.com/anthropics/anthropic-sdk-go/shared/constant"
+	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
-	"github.com/microsoft/agent-framework-go/agent/chatagent/chatclient"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 )
-
-var _ chatclient.Client = (*client)(nil)
 
 type client struct {
 	client anthropic.Client
@@ -47,24 +44,20 @@ func NewChatAgent(config ClientConfig, options chatagent.Options) *chatagent.Age
 		client: anthropic.NewClient(opts...),
 		config: config,
 	}
-	return chatagent.NewAgent(c, options)
+	return chatagent.NewAgent(c.run, options)
 }
 
-func (a *client) Capabilities() chatclient.Capabilities {
-	return chatclient.Capabilities{}
-}
-
-func (a *client) Response(ctx context.Context, opts chatclient.ChatOptions, messages ...*message.Message) iter.Seq2[*chatclient.ChatResponseUpdate, error] {
-	params, err := a.buildMessageParams(&opts, messages...)
+func (a *client) run(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+	params, err := a.buildMessageParams(messages, options)
 	if err != nil {
-		return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
+		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(nil, err)
 		}
 	}
-	if !opts.Stream.Or(false) {
+	if stream, _ := agentopt.Get(options, agentopt.Stream); !stream {
 		resp, err := a.client.Messages.New(ctx, params)
 		if err != nil {
-			return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
+			return func(yield func(*message.ResponseUpdate, error) bool) {
 				yield(nil, err)
 			}
 		}
@@ -81,26 +74,23 @@ func (a *client) Response(ctx context.Context, opts chatclient.ChatOptions, mess
 		contents = append(contents, &message.UsageContent{
 			Details: toUsageDetails(resp.Usage),
 		})
-		return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
-			yield(&chatclient.ChatResponseUpdate{
+		return func(yield func(*message.ResponseUpdate, error) bool) {
+			yield(&message.ResponseUpdate{
 				Contents:          contents,
 				Role:              message.RoleAssistant,
 				MessageID:         resp.ID,
 				ResponseID:        resp.ID,
-				ModelID:           string(resp.Model),
-				FinishReason:      string(resp.StopReason),
 				CreatedAt:         time.Now(),
 				RawRepresentation: resp,
 			}, nil)
 		}
 	}
-	return func(yield func(*chatclient.ChatResponseUpdate, error) bool) {
+	return func(yield func(*message.ResponseUpdate, error) bool) {
 		stream := a.client.Messages.NewStreaming(ctx, params)
 
 		var messageID string
 		var modelID string
 		var usage message.UsageDetails
-		var finishReason string
 		var functions = make(map[int]*message.FunctionCallContent)
 
 		for stream.Next() {
@@ -113,7 +103,6 @@ func (a *client) Response(ctx context.Context, opts chatclient.ChatOptions, mess
 				modelID = cmp.Or(modelID, string(event.Message.Model))
 				usage.Add(toUsageDetails(event.Message.Usage))
 			case anthropic.MessageDeltaEvent:
-				finishReason = string(event.Delta.StopReason)
 				usage.Add(toUsageDetailsDelta(event.Usage))
 			case anthropic.ContentBlockStartEvent:
 				contents = a.buildBlock(int(event.Index), event.ContentBlock.AsAny(), contents, functions)
@@ -127,24 +116,21 @@ func (a *client) Response(ctx context.Context, opts chatclient.ChatOptions, mess
 				}
 			}
 
-			if !yield(&chatclient.ChatResponseUpdate{
+			if !yield(&message.ResponseUpdate{
 				Contents:          contents,
 				Role:              message.RoleAssistant,
 				ResponseID:        messageID,
 				MessageID:         messageID,
-				ModelID:           modelID,
-				FinishReason:      finishReason,
 				CreatedAt:         time.Now(),
 				RawRepresentation: event,
 			}, nil) {
 				return
 			}
 		}
-		if !yield(&chatclient.ChatResponseUpdate{
-			CreatedAt:    time.Now(),
-			FinishReason: finishReason,
-			Role:         message.RoleAssistant,
-			MessageID:    messageID,
+		if !yield(&message.ResponseUpdate{
+			CreatedAt: time.Now(),
+			Role:      message.RoleAssistant,
+			MessageID: messageID,
 			Contents: []message.Content{
 				&message.UsageContent{
 					Details: usage,
@@ -161,21 +147,16 @@ func (a *client) Response(ctx context.Context, opts chatclient.ChatOptions, mess
 
 func toUsageDetails(usage anthropic.Usage) message.UsageDetails {
 	details := message.UsageDetails{
-		InputTokenCount:  usage.InputTokens,
-		OutputTokenCount: usage.OutputTokens,
-		TotalTokenCount:  usage.InputTokens + usage.OutputTokens,
+		InputTokenCount:       usage.InputTokens,
+		OutputTokenCount:      usage.OutputTokens,
+		TotalTokenCount:       usage.InputTokens + usage.OutputTokens,
+		CachedInputTokenCount: usage.CacheReadInputTokens,
 	}
 	if usage.CacheCreationInputTokens != 0 {
 		if details.AdditionalCounts == nil {
 			details.AdditionalCounts = make(map[string]int64)
 		}
 		details.AdditionalCounts["cache_creation_input_tokens"] = usage.CacheCreationInputTokens
-	}
-	if usage.CacheReadInputTokens != 0 {
-		if details.AdditionalCounts == nil {
-			details.AdditionalCounts = make(map[string]int64)
-		}
-		details.AdditionalCounts["cache_read_input_tokens"] = usage.CacheReadInputTokens
 	}
 	return details
 }
@@ -254,30 +235,25 @@ func (a *client) buildDelta(index int, v any, contents []message.Content, functi
 	return contents
 }
 
-func (a *client) buildMessageParams(options *chatclient.ChatOptions, messages ...*message.Message) (anthropic.MessageNewParams, error) {
+func (a *client) buildMessageParams(messages []*message.Message, opts []agentopt.RunOption) (anthropic.MessageNewParams, error) {
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(a.config.Model),
 		Messages:  []anthropic.MessageParam{},
 		MaxTokens: 1024, // Default max tokens
 	}
 
-	if options.Instructions != "" {
-		params.System = []anthropic.TextBlockParam{
-			{Text: options.Instructions, Type: constant.Text("text")},
-		}
+	if temperature, ok := agentopt.Get(opts, chatagent.Temperature); ok {
+		params.Temperature = anthropic.Float(temperature)
 	}
-	if options.Temperature.Valid() {
-		params.Temperature = anthropic.Float(options.Temperature.MustValue())
+	if topP, ok := agentopt.Get(opts, chatagent.TopP); ok {
+		params.TopP = anthropic.Float(topP)
 	}
-	if options.TopP.Valid() {
-		params.TopP = anthropic.Float(options.TopP.MustValue())
-	}
-	if options.MaxTokens.Valid() {
-		params.MaxTokens = int64(options.MaxTokens.MustValue())
+	if maxTokens, ok := agentopt.Get(opts, chatagent.MaxOutputTokens); ok {
+		params.MaxTokens = maxTokens
 	}
 
 	var tools []anthropic.ToolUnionParam
-	for _, tl := range options.Tools {
+	for tl := range agentopt.All(opts, agentopt.Tool) {
 		if ft, ok := tl.(tool.FuncTool); ok {
 			name, description := ft.Name(), ft.Description()
 			var properties any
@@ -318,7 +294,6 @@ func (a *client) buildMessageParams(options *chatclient.ChatOptions, messages ..
 			}
 
 			schemaParam := anthropic.ToolInputSchemaParam{
-				Type:       constant.Object("object"),
 				Properties: properties,
 				Required:   required,
 			}
@@ -334,38 +309,47 @@ func (a *client) buildMessageParams(options *chatclient.ChatOptions, messages ..
 		params.Tools = tools
 	}
 
-	if options.ToolMode != "" {
-		switch options.ToolMode {
+	if mode, ok := agentopt.Get(opts, agentopt.ToolMode); ok {
+		switch mode {
 		case tool.ToolModeAuto:
 			params.ToolChoice = anthropic.ToolChoiceUnionParam{
-				OfAuto: &anthropic.ToolChoiceAutoParam{Type: constant.Auto("auto")},
+				OfAuto: &anthropic.ToolChoiceAutoParam{},
 			}
 		case tool.ToolModeRequired:
 			params.ToolChoice = anthropic.ToolChoiceUnionParam{
-				OfAny: &anthropic.ToolChoiceAnyParam{Type: constant.Any("any")},
+				OfAny: &anthropic.ToolChoiceAnyParam{},
 			}
 		default:
 			params.ToolChoice = anthropic.ToolChoiceUnionParam{
 				OfTool: &anthropic.ToolChoiceToolParam{
-					Type: constant.Tool("tool"),
-					Name: string(options.ToolMode),
+					Name: string(mode),
 				},
 			}
 		}
 	}
 
-	var msgs []anthropic.MessageParam
 	for _, msg := range messages {
-		amsg, err := buildMessageParam(msg)
-		if err != nil {
-			return anthropic.MessageNewParams{}, err
+		switch msg.Role {
+		case message.RoleUser, message.RoleAssistant, message.RoleTool:
+			amsg, err := buildMessageParam(msg)
+			if err != nil {
+				return anthropic.MessageNewParams{}, err
+			}
+			params.Messages = append(params.Messages, amsg)
+		case message.RoleSystem:
+			for _, c := range msg.Contents {
+				if c, ok := c.(*message.TextContent); ok {
+					if c.Text != "" {
+						params.System = append(params.System, anthropic.TextBlockParam{
+							Text: c.Text,
+						})
+					}
+				}
+			}
+		default:
+			// Ignore
 		}
-		if msg.Role == message.RoleSystem {
-			continue
-		}
-		msgs = append(msgs, amsg)
 	}
-	params.Messages = msgs
 
 	return params, nil
 }

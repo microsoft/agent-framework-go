@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,7 +15,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent/agenttest"
 	"github.com/microsoft/agent-framework-go/agent/middleware/autocall"
 	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/param"
+	"github.com/microsoft/agent-framework-go/message/messagetest"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 )
@@ -133,7 +132,7 @@ func TestFunctionInvoking_SupportsMultipleFunctionCallsPerRequest(t *testing.T) 
 			}
 
 			autocallOptions := autocall.Options{
-				AllowConcurrentInvocations: param.NewOpt(tt.allowConcurrentInvocations),
+				AllowConcurrentInvocations: tt.allowConcurrentInvocations,
 			}
 
 			invokeAndAssert(t, tools, plan, nil, autocallOptions)
@@ -184,6 +183,9 @@ func invokeAndAssert(t *testing.T, tools []tool.Tool, plan []*message.Message, e
 	for _, tool := range tools {
 		opts = append(opts, agentopt.Tool(tool))
 	}
+	autocallOptions.NewID = func() string {
+		return ""
+	}
 
 	// Collect all updates
 	var resp message.Response
@@ -202,102 +204,11 @@ func invokeAndAssert(t *testing.T, tools []tool.Tool, plan []*message.Message, e
 	actual := append(initialMessages, resp.Messages...)
 
 	// Assert messages match expected
-	assertMessageListsEqual(t, expected, actual)
+	if err := messagetest.MessagesEqual(actual, expected); err != nil {
+		t.Error(err)
+	}
 
 	return actual
-}
-
-// assertMessageListsEqual compares two message lists for equality
-func assertMessageListsEqual(t *testing.T, expected, actual []*message.Message) {
-	t.Helper()
-
-	if len(expected) != len(actual) {
-		t.Errorf("message count mismatch: expected %d, got %d", len(expected), len(actual))
-		t.Logf("Expected messages:")
-		for i, msg := range expected {
-			t.Logf("  [%d] role=%s, contents=%d", i, msg.Role, len(msg.Contents))
-		}
-		t.Logf("Actual messages:")
-		for i, msg := range actual {
-			t.Logf("  [%d] role=%s, contents=%d", i, msg.Role, len(msg.Contents))
-		}
-		return
-	}
-
-	for i := range expected {
-		exp := expected[i]
-		act := actual[i]
-
-		if exp.Role != act.Role {
-			t.Errorf("message %d: role mismatch: expected %s, got %s", i, exp.Role, act.Role)
-		}
-
-		if exp.String() != act.String() {
-			t.Errorf("message %d: string representation mismatch:\nexpected: %q\ngot:      %q", i, exp.String(), act.String())
-		}
-
-		if len(exp.Contents) != len(act.Contents) {
-			t.Errorf("message %d: content count mismatch: expected %d, got %d", i, len(exp.Contents), len(act.Contents))
-			continue
-		}
-
-		for j := range exp.Contents {
-			expContent := exp.Contents[j]
-			actContent := act.Contents[j]
-
-			if reflect.TypeOf(expContent) != reflect.TypeOf(actContent) {
-				t.Errorf("message %d, content %d: type mismatch: expected %T, got %T", i, j, expContent, actContent)
-				continue
-			}
-
-			if !reflect.DeepEqual(expContent.Header(), actContent.Header()) {
-				t.Errorf("message %d, content %d: header mismatch: expected %v, got %v", i, j, expContent.Header(), actContent.Header())
-				continue
-			}
-
-			switch expContent := expContent.(type) {
-			case fmt.Stringer:
-				if actContent.(fmt.Stringer).String() != expContent.String() {
-					t.Errorf("message %d, content %d: %T mismatch: expected %q, got %q", i, j, expContent, expContent.String(), actContent.(fmt.Stringer).String())
-				}
-			case *message.FunctionResultContent:
-				act := actContent.(*message.FunctionResultContent)
-				if expContent.CallID != act.CallID {
-					t.Errorf("message %d, content %d: CallID mismatch: expected %q, got %q", i, j, expContent.CallID, act.CallID)
-					break
-				}
-
-				// Compare Error fields
-				if (expContent.Error == nil) != (act.Error == nil) {
-					t.Errorf("message %d, content %d: Error presence mismatch: expected %q, got %q", i, j, expContent.Error, act.Error)
-					break
-				}
-				if expContent.Error != nil && act.Error != nil && expContent.Error.Error() != act.Error.Error() {
-					t.Errorf("message %d, content %d: Error message mismatch: expected %q, got %q", i, j, expContent.Error, act.Error)
-					break
-				}
-
-				// Compare Result - handle json.RawMessage wrapping
-				expResult := expContent.Result
-				actResult := act.Result
-
-				// If actual result is json.RawMessage, try to unmarshal it
-				if actRaw, ok := actResult.(json.RawMessage); ok {
-					var unmarshaled any
-					if err := json.Unmarshal(actRaw, &unmarshaled); err == nil {
-						actResult = unmarshaled
-					}
-				}
-				if !reflect.DeepEqual(expResult, actResult) {
-					t.Errorf("message %d, content %d: Result mismatch:\nexpected: %#v\ngot:      %#v", i, j, expResult, actResult)
-				}
-			default:
-				if !reflect.DeepEqual(expContent, actContent) {
-					t.Errorf("message %d, content %d: content mismatch:\nexpected: %#v\ngot:      %#v", i, j, expContent, actContent)
-				}
-			}
-		}
-	}
 }
 
 // TestFunctionInvoking_SupportsToolsProvidedByAdditionalTools tests AdditionalTools functionality
@@ -467,7 +378,7 @@ func TestFunctionInvoking_ParallelFunctionCallsMayBeInvokedConcurrently(t *testi
 	}
 
 	autocallOptions := autocall.Options{
-		AllowConcurrentInvocations: param.NewOpt(true),
+		AllowConcurrentInvocations: true,
 	}
 
 	invokeAndAssert(t, tools, plan, nil, autocallOptions)
@@ -544,7 +455,7 @@ func TestFunctionInvoking_ContinuesWithSuccessfulCallsUntilMaximumIterations(t *
 	expectedPlan := plan[:maxIterations*2+2]
 
 	autocallOptions := autocall.Options{
-		MaximumIterationsPerRequest: param.NewOpt(maxIterations),
+		MaximumIterationsPerRequest: maxIterations,
 	}
 
 	invokeAndAssert(t, tools, plan, expectedPlan, autocallOptions)
@@ -604,8 +515,8 @@ func TestFunctionInvoking_ContinuesWithFailingCallsUntilMaximumConsecutiveErrors
 			plan = append(plan, createFunctionCallIterationPlan(&callIndex, true, true)...)
 
 			autocallOptions := autocall.Options{
-				MaximumConsecutiveErrorsPerRequest: param.NewOpt(2),
-				AllowConcurrentInvocations:         param.NewOpt(tt.allowConcurrentInvocations),
+				MaximumConsecutiveErrorsPerRequest: 2,
+				AllowConcurrentInvocations:         tt.allowConcurrentInvocations,
 			}
 
 			// The test expects an error to be thrown
@@ -721,8 +632,8 @@ func TestFunctionInvoking_CanFailOnFirstException(t *testing.T) {
 			plan = append(plan, createFunctionCallIterationPlan(&callIndex, true)...)
 
 			autocallOptions := autocall.Options{
-				MaximumConsecutiveErrorsPerRequest: param.NewOpt(0),
-				AllowConcurrentInvocations:         param.NewOpt(tt.allowConcurrentInvocations),
+				MaximumConsecutiveErrorsPerRequest: 0,
+				AllowConcurrentInvocations:         tt.allowConcurrentInvocations,
 			}
 
 			rb := agenttest.NewResponseBuilder()
@@ -861,7 +772,7 @@ func TestFunctionInvoking_TerminateOnUnknownCalls(t *testing.T) {
 			}
 
 			autocallOptions := autocall.Options{
-				TerminateOnUnknownCalls: param.NewOpt(tt.terminateOnUnknownCalls),
+				TerminateOnUnknownCalls: tt.terminateOnUnknownCalls,
 			}
 
 			fullPlan := []*message.Message{
@@ -925,7 +836,8 @@ func TestFunctionInvoking_ExceptionDetailsOnlyReportedWhenRequested(t *testing.T
 			}
 
 			autocallOptions := autocall.Options{
-				IncludeDetailedErrors: param.NewOpt(tt.detailedErrors),
+				MaximumConsecutiveErrorsPerRequest: 3,
+				IncludeDetailedErrors:              tt.detailedErrors,
 			}
 
 			invokeAndAssert(t, tools, plan, nil, autocallOptions)

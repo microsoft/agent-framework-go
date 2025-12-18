@@ -8,8 +8,8 @@ import (
 	"fmt"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
-	"github.com/microsoft/agent-framework-go/agent/chatagent/chatclient"
 	"github.com/microsoft/agent-framework-go/agent/middleware"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/format/jsonformat"
@@ -58,8 +58,8 @@ func main() {
 		Instructions: "You are a helpful assistant.",
 		Name:         "HelpfulAssistant",
 		Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
-		ChatOptions: &chatclient.ChatOptions{
-			ResponseFormat: jsonformat.MustFor[PersonInfo](),
+		RunOptions: []agentopt.RunOption{
+			agentopt.ResponseFormat(jsonformat.MustFor[PersonInfo]()),
 		},
 	})
 
