@@ -12,16 +12,19 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/middleware"
+	"github.com/microsoft/agent-framework-go/internal/slogx"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 )
 
-type Options struct {
+type Config struct {
 	Logger                             *slog.Logger
+	LogSensitiveData                   bool
 	AdditionalTools                    []tool.Tool
 	IncludeDetailedErrors              bool
 	TerminateOnUnknownCalls            bool
@@ -32,14 +35,35 @@ type Options struct {
 }
 
 type autocall struct {
-	Options
+	logger                             slogx.Logger
+	additionalTools                    []tool.Tool
+	includeDetailedErrors              bool
+	terminateOnUnknownCalls            bool
+	allowConcurrentInvocations         bool
+	maximumConsecutiveErrorsPerRequest int
+	maximumIterationsPerRequest        int
+	newID                              func() string
 }
 
 // New creates a new function-invoking chat client that wraps the provided client.
-func New(options Options) middleware.Middleware {
-	ac := &autocall{options}
-	if ac.NewID == nil {
-		ac.NewID = uuid.NewString
+func New(cfg Config) middleware.Middleware {
+	if cfg.NewID == nil {
+		cfg.NewID = uuid.NewString
+	}
+	ac := &autocall{
+		logger: slogx.Logger{
+			Logger:        cfg.Logger,
+			SensitiveData: cfg.LogSensitiveData,
+			Type:          slogx.TypeMiddleware,
+			Name:          "autocall",
+		},
+		additionalTools:                    cfg.AdditionalTools,
+		includeDetailedErrors:              cfg.IncludeDetailedErrors,
+		terminateOnUnknownCalls:            cfg.TerminateOnUnknownCalls,
+		allowConcurrentInvocations:         cfg.AllowConcurrentInvocations,
+		maximumConsecutiveErrorsPerRequest: cfg.MaximumConsecutiveErrorsPerRequest,
+		maximumIterationsPerRequest:        cmp.Or(cfg.MaximumIterationsPerRequest, 40),
+		newID:                              cfg.NewID,
 	}
 	return ac
 }
@@ -53,13 +77,13 @@ func (f *autocall) Run(ctx context.Context, next middleware.RunFunc, messages []
 		// use the same message ID for all of them within a given iteration, as this is a single logical
 		// message with multiple content items. We could also use different message IDs per tool content,
 		// but there's no benefit to doing so.
-		toolMsgID := f.NewID()
+		toolMsgID := f.newID()
 		var errCount int
 		if hasAnyApprovalContent(messages) {
 			messages = slices.Clone(messages)
 			// We also need a synthetic ID for the function call content for approved function calls
 			// where we don't know what the original message id of the function call was.
-			funcCallFallbackMsgID := f.NewID()
+			funcCallFallbackMsgID := f.newID()
 
 			// A previous turn may have translated FunctionCallContents from the inner client into approval requests sent back to the caller,
 			// for any functions that were actually ApprovalRequiredFunctions. If the incoming chat messages include responses to those
@@ -136,7 +160,7 @@ func (f *autocall) Run(ctx context.Context, next middleware.RunFunc, messages []
 							approvalRequiredFunctions = append(approvalRequiredFunctions, tl)
 						}
 					}
-					for _, tl := range f.AdditionalTools {
+					for _, tl := range f.additionalTools {
 						if tl, ok := tl.(tool.ApprovalRequiredTool); ok {
 							approvalRequiredFunctions = append(approvalRequiredFunctions, tl)
 						}
@@ -182,7 +206,7 @@ func (f *autocall) Run(ctx context.Context, next middleware.RunFunc, messages []
 			}
 			// If there's nothing more to do, break out of the loop and allow the handling at the
 			// end to configure the response with aggregated data from previous requests.
-			if i >= f.maximumIterationsPerRequest() || hasApprovalRequiringFcc || f.shouldTerminateLoopBasedOnHandleableFunctions(functionCallContents, tools) {
+			if i >= f.maximumIterationsPerRequest || hasApprovalRequiringFcc || f.shouldTerminateLoopBasedOnHandleableFunctions(functionCallContents, tools) {
 				break
 			}
 
@@ -283,7 +307,7 @@ func (f *autocall) shouldTerminateLoopBasedOnHandleableFunctions(funcCalls []*me
 		// There are functions to call but we have no tools, so we can't handle them.
 		// If we're configured to terminate on unknown call requests, do so now.
 		// Otherwise, processFunctionCalls will handle it by creating a NotFound response message.
-		return f.TerminateOnUnknownCalls
+		return f.terminateOnUnknownCalls
 	}
 	// At this point, we have both function call requests and some tools.
 	// Look up each function.
@@ -293,7 +317,7 @@ func (f *autocall) shouldTerminateLoopBasedOnHandleableFunctions(funcCalls []*me
 			// The tool couldn't be found. If we're configured to terminate on unknown call requests,
 			// break out of the loop now. Otherwise, processFunctionCalls will handle it by
 			// creating a NotFound response message.
-			if f.TerminateOnUnknownCalls {
+			if f.terminateOnUnknownCalls {
 				return true
 			}
 			continue
@@ -305,13 +329,6 @@ func (f *autocall) shouldTerminateLoopBasedOnHandleableFunctions(funcCalls []*me
 		}
 	}
 	return false
-}
-
-func (f *autocall) maximumIterationsPerRequest() int {
-	if f.MaximumIterationsPerRequest == 0 {
-		return 40
-	}
-	return f.MaximumIterationsPerRequest
 }
 
 func (f *autocall) createToolsMap(tools iter.Seq[tool.Tool]) (mtools map[string]tool.Tool, anyRequiredApproval bool) {
@@ -326,7 +343,7 @@ func (f *autocall) createToolsMap(tools iter.Seq[tool.Tool]) (mtools map[string]
 			}
 		}
 	}
-	for _, t := range f.AdditionalTools {
+	for _, t := range f.additionalTools {
 		fn(t)
 	}
 	for t := range tools {
@@ -375,7 +392,7 @@ func (f *autocall) processFunctionCalls(ctx context.Context, tools map[string]to
 	}
 	// Process all functions. If there's more than one and concurrent invocation is enabled, do so in parallel.
 	results := make([]message.Content, len(funcCalls))
-	if len(funcCalls) > 1 && f.AllowConcurrentInvocations {
+	if len(funcCalls) > 1 && f.allowConcurrentInvocations {
 		// Rather than awaiting each function before invoking the next, invoke all of them
 		// and then await all of them. We avoid forcibly introducing parallelism via Task.Run,
 		// but if a function invocation completes asynchronously, its processing can overlap
@@ -406,7 +423,7 @@ func (f *autocall) processFunctionCalls(ctx context.Context, tools map[string]to
 	// Update consecutive error count
 	if len(errs) > 0 {
 		errCount++
-		if errCount > f.MaximumConsecutiveErrorsPerRequest {
+		if errCount > f.maximumConsecutiveErrorsPerRequest {
 			return nil, errCount, errors.Join(errs...)
 		}
 	} else {
@@ -430,6 +447,8 @@ func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]too
 			nil,
 		)
 	}
+	f.logger.Debug(ctx, "calling function", "funcName", funcCall.Name, slogx.SensitiveData("arguments", funcCall.Arguments))
+	start := time.Now()
 	var result any
 	var err error
 	func() {
@@ -444,6 +463,14 @@ func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]too
 		}()
 		result, err = tl.Call(ctx, funcCall.Arguments)
 	}()
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			f.logger.Debug(ctx, "call canceled", "funcName", funcCall.Name)
+		} else {
+			f.logger.Error(ctx, "call failed", "funcName", funcCall.Name, "error", err)
+		}
+	}
+	f.logger.Debug(ctx, "function call completed", "funcName", funcCall.Name, "duration", time.Since(start), slogx.SensitiveData("result", result))
 
 	return f.createFunctionResult(funcCall.CallID, result, err)
 }
@@ -457,7 +484,7 @@ func (f *autocall) createFunctionResult(callID string, result any, err error) *m
 
 	// Format errors into Result string for the LLM to see
 	if err != nil {
-		if f.IncludeDetailedErrors {
+		if f.includeDetailedErrors {
 			result = fmt.Sprintf("Error: Function failed. Exception: %v", err)
 		} else {
 			result = "Error: Function failed."

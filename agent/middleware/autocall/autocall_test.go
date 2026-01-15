@@ -66,7 +66,7 @@ func TestFunctionInvoking_SupportsSingleFunctionCallPerRequest(t *testing.T) {
 		}},
 	}
 
-	invokeAndAssert(t, tools, plan, nil, autocall.Options{})
+	invokeAndAssert(t, tools, plan, nil, autocall.Config{})
 }
 
 func TestFunctionInvoking_SupportsMultipleFunctionCallsPerRequest(t *testing.T) {
@@ -131,7 +131,7 @@ func TestFunctionInvoking_SupportsMultipleFunctionCallsPerRequest(t *testing.T) 
 				}},
 			}
 
-			autocallOptions := autocall.Options{
+			autocallOptions := autocall.Config{
 				AllowConcurrentInvocations: tt.allowConcurrentInvocations,
 			}
 
@@ -145,7 +145,7 @@ func TestFunctionInvoking_SupportsMultipleFunctionCallsPerRequest(t *testing.T) 
 // Returns the final chat history.
 // Plan should start with the initial user message and contain all expected messages.
 // autocallOptions can be nil to use default settings.
-func invokeAndAssert(t *testing.T, tools []tool.Tool, plan []*message.Message, expected []*message.Message, autocallOptions autocall.Options) []*message.Message {
+func invokeAndAssert(t *testing.T, tools []tool.Tool, plan []*message.Message, expected []*message.Message, autocallOptions autocall.Config) []*message.Message {
 	t.Helper()
 
 	if len(plan) == 0 {
@@ -241,7 +241,7 @@ func TestFunctionInvoking_SupportsToolsProvidedByAdditionalTools(t *testing.T) {
 				}
 			}
 
-			autocallOptions := autocall.Options{
+			autocallOptions := autocall.Config{
 				AdditionalTools: []tool.Tool{
 					functool.MustNew(&functool.Func{Name: "Func1"},
 						func(ctx context.Context, args Func1Args) (string, error) {
@@ -301,7 +301,7 @@ func TestFunctionInvoking_PrefersToolsProvidedByOptions(t *testing.T) {
 			}),
 	}
 
-	autocallOptions := autocall.Options{
+	autocallOptions := autocall.Config{
 		AdditionalTools: []tool.Tool{
 			functool.MustNew(&functool.Func{Name: "Func1"},
 				func(ctx context.Context, args struct{}) (string, error) {
@@ -379,7 +379,7 @@ func TestFunctionInvoking_ParallelFunctionCallsMayBeInvokedConcurrently(t *testi
 		}},
 	}
 
-	autocallOptions := autocall.Options{
+	autocallOptions := autocall.Config{
 		AllowConcurrentInvocations: true,
 	}
 
@@ -418,7 +418,7 @@ func TestFunctionInvoking_ConcurrentInvocationOfParallelCallsDisabledByDefault(t
 		}},
 	}
 
-	invokeAndAssert(t, tools, plan, nil, autocall.Options{})
+	invokeAndAssert(t, tools, plan, nil, autocall.Config{})
 }
 
 // TestFunctionInvoking_ContinuesWithSuccessfulCallsUntilMaximumIterations tests MaximumIterationsPerRequest
@@ -456,7 +456,7 @@ func TestFunctionInvoking_ContinuesWithSuccessfulCallsUntilMaximumIterations(t *
 	// The loop runs maxIterations times, each time adding assistant+tool, then stops with one more assistant message
 	expectedPlan := plan[:maxIterations*2+2]
 
-	autocallOptions := autocall.Options{
+	autocallOptions := autocall.Config{
 		MaximumIterationsPerRequest: maxIterations,
 	}
 
@@ -516,7 +516,7 @@ func TestFunctionInvoking_ContinuesWithFailingCallsUntilMaximumConsecutiveErrors
 			// Any more failures will exceed the limit (should throw)
 			plan = append(plan, createFunctionCallIterationPlan(&callIndex, true, true)...)
 
-			autocallOptions := autocall.Options{
+			autocallOptions := autocall.Config{
 				MaximumConsecutiveErrorsPerRequest: 2,
 				AllowConcurrentInvocations:         tt.allowConcurrentInvocations,
 			}
@@ -633,7 +633,7 @@ func TestFunctionInvoking_CanFailOnFirstException(t *testing.T) {
 			}
 			plan = append(plan, createFunctionCallIterationPlan(&callIndex, true)...)
 
-			autocallOptions := autocall.Options{
+			autocallOptions := autocall.Config{
 				MaximumConsecutiveErrorsPerRequest: 0,
 				AllowConcurrentInvocations:         tt.allowConcurrentInvocations,
 			}
@@ -730,7 +730,7 @@ func TestFunctionInvoking_KeepsFunctionCallingContent(t *testing.T) {
 		}},
 	}
 
-	finalChat := invokeAndAssert(t, tools, plan, nil, autocall.Options{})
+	finalChat := invokeAndAssert(t, tools, plan, nil, autocall.Config{})
 	validateFunctionContent(t, finalChat)
 }
 
@@ -773,7 +773,7 @@ func TestFunctionInvoking_TerminateOnUnknownCalls(t *testing.T) {
 					}),
 			}
 
-			autocallOptions := autocall.Options{
+			autocallOptions := autocall.Config{
 				TerminateOnUnknownCalls: tt.terminateOnUnknownCalls,
 			}
 
@@ -837,7 +837,7 @@ func TestFunctionInvoking_ExceptionDetailsOnlyReportedWhenRequested(t *testing.T
 				}},
 			}
 
-			autocallOptions := autocall.Options{
+			autocallOptions := autocall.Config{
 				MaximumConsecutiveErrorsPerRequest: 3,
 				IncludeDetailedErrors:              tt.detailedErrors,
 			}
@@ -886,7 +886,7 @@ func TestFunctionInvoking_AllResponseMessagesReturned(t *testing.T) {
 	}
 
 	var resp message.Response
-	for update, err := range autocall.New(autocall.Options{}).Run(t.Context(), runner.Run, initialMessages, opts...) {
+	for update, err := range autocall.New(autocall.Config{}).Run(t.Context(), runner.Run, initialMessages, opts...) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

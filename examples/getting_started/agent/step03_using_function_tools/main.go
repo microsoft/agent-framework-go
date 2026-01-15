@@ -32,7 +32,7 @@ func main() {
 	// Create the agent, and provide the function tool to the agent.
 	a := openai.NewChatAgent(openai.ClientConfig{
 		Model: "gpt-4o-mini",
-	}, chatagent.Options{
+	}, chatagent.Config{
 		Instructions: "You are a helpful assistant",
 		Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
 		RunOptions: []agentopt.RunOption{

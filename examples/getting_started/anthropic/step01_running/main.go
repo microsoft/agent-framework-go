@@ -22,7 +22,7 @@ func main() {
 	// Create Anthropic agent
 	a := anthropic.NewChatAgent(anthropic.ClientConfig{
 		Model: "claude-sonnet-4-5",
-	}, chatagent.Options{
+	}, chatagent.Config{
 		Instructions: "You are good at telling jokes.",
 		Name:         "Joker",
 		Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions

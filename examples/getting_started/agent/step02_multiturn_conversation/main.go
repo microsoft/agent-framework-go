@@ -22,7 +22,7 @@ var logger = demo.NewLogger(
 func main() {
 	a := openai.NewChatAgent(openai.ClientConfig{
 		Model: "gpt-4o-mini",
-	}, chatagent.Options{
+	}, chatagent.Config{
 		Instructions: "You are good at telling jokes.",
 		Name:         "Joker",
 		Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions

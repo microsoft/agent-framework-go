@@ -7,38 +7,76 @@ import (
 	"context"
 	"errors"
 	"iter"
+	"log/slog"
+	"slices"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/middleware"
 	"github.com/microsoft/agent-framework-go/agent/middleware/autocall"
+	"github.com/microsoft/agent-framework-go/agent/middleware/logger"
+	"github.com/microsoft/agent-framework-go/format"
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
 )
+
+type Config struct {
+	ID          string
+	Name        string
+	Description string
+
+	Instructions string
+
+	Logger           *slog.Logger
+	LogSensitiveData bool
+
+	FormatOfFn  func(v any) (format.Format, error)
+	UnmarshalFn func(format format.Format, data []byte, v any) error
+
+	DisableFuncAutoCall bool
+	Middlewares         []middleware.Middleware
+
+	RunOptions []agentopt.RunOption
+
+	NewMessageStore    func() memory.MessageStore
+	NewContextProvider func() memory.ContextProvider
+}
+
+func (o *Config) Clone() *Config {
+	if o == nil {
+		return nil
+	}
+	clone := *o
+	clone.Middlewares = slices.Clone(o.Middlewares)
+	clone.RunOptions = slices.Clone(o.RunOptions)
+	return &clone
+}
 
 type RunFunc func(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error]
 
 var _ agent.Agent = (*Agent)(nil)
 
 type Agent struct {
-	RunFn   RunFunc
-	Options Options
-
-	iden agent.Identity
+	runFn  RunFunc
+	config Config
+	iden   agent.Identity
 }
 
 // NewAgent creates a new chat agent with the given chat client and options.
-func NewAgent(runfn RunFunc, options Options) *Agent {
-	opts := *options.Clone()
+func NewAgent(runfn RunFunc, cfg Config) *Agent {
+	opts := *cfg.Clone()
 	if !opts.DisableFuncAutoCall {
 		opts.Middlewares = append(opts.Middlewares,
-			autocall.New(autocall.Options{}),
+			autocall.New(autocall.Config{
+				Logger:           opts.Logger,
+				LogSensitiveData: opts.LogSensitiveData,
+			}),
 		)
 	}
 	return &Agent{
-		RunFn:   runfn,
-		Options: opts,
-		iden:    agent.NewIdentity(options.ID, options.Name, options.Description),
+		runFn:  runfn,
+		config: opts,
+		iden:   agent.NewIdentity(cfg.ID, cfg.Name, cfg.Description),
 	}
 }
 
@@ -47,7 +85,7 @@ func (a *Agent) Identity() agent.Identity {
 }
 
 func (a *Agent) Instructions() string {
-	return a.Options.Instructions
+	return a.config.Instructions
 }
 
 func (a *Agent) NewThread(ctx context.Context, opts ...agentopt.NewThreadOption) memory.Thread {
@@ -55,32 +93,33 @@ func (a *Agent) NewThread(ctx context.Context, opts ...agentopt.NewThreadOption)
 	thread := &Thread{
 		ConversationID: convID,
 	}
-	if a.Options.NewContextProvider != nil {
-		thread.ContextProvider = a.Options.NewContextProvider()
+	if a.config.NewContextProvider != nil {
+		thread.ContextProvider = a.config.NewContextProvider()
 	}
 	return thread
 }
 
 func (a *Agent) UnmarshalThread(data []byte) (memory.Thread, error) {
-	return newThreadFromJSON(data, a.Options.NewMessageStore, a.Options.NewContextProvider)
+	return newThreadFromJSON(data, a.config.NewMessageStore, a.config.NewContextProvider)
 }
 
 func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	// Prepend options from agent configuration.
-	options = append(a.Options.RunOptions, options...)
+	options = append(a.config.RunOptions, options...)
 	if _, ok := agentopt.Get(options, agentopt.Thread); !ok {
 		options = append(options, agentopt.Thread(a.NewThread(ctx)))
 	}
-	return middleware.RunChain(ctx, a.run, a.Options.Middlewares, messages, options...)
+	ctx = logger.WithAgentContext(ctx, a.iden.ID(), a.iden.Name())
+	return middleware.RunChain(ctx, a.run, a.config.Middlewares, messages, options...)
 }
 
 func (a *Agent) RunOf(ctx context.Context, v any, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
-		if a.Options.FormatOfFn == nil || a.Options.UnmarshalFn == nil {
+		if a.config.FormatOfFn == nil || a.config.UnmarshalFn == nil {
 			yield(nil, errors.New("agent does not support structured output"))
 			return
 		}
-		format, err := a.Options.FormatOfFn(v)
+		format, err := a.config.FormatOfFn(v)
 		if err != nil {
 			yield(nil, err)
 			return
@@ -94,7 +133,7 @@ func (a *Agent) RunOf(ctx context.Context, v any, messages []*message.Message, o
 			}
 			data = append(data, update.String()...)
 		}
-		if err := a.Options.UnmarshalFn(format, data, v); err != nil {
+		if err := a.config.UnmarshalFn(format, data, v); err != nil {
 			yield(nil, err)
 			return
 		}
@@ -115,7 +154,7 @@ func (a *Agent) run(ctx context.Context, messages []*message.Message, options ..
 			return
 		}
 		var resp message.Response
-		for update, err := range a.RunFn(ctx, messages, options...) {
+		for update, err := range a.runFn(ctx, messages, options...) {
 			if err != nil {
 				a.notifyContextProviderOfFailure(ctx, thread, err, messages, ctxMessages)
 				yield(nil, err)
@@ -141,10 +180,10 @@ func (a *Agent) run(ctx context.Context, messages []*message.Message, options ..
 			}
 		}
 		resp.Coalesce()
-		if thread.ConversationID == "" && thread.MessageStore == nil && a.Options.NewMessageStore != nil {
+		if thread.ConversationID == "" && thread.MessageStore == nil && a.config.NewMessageStore != nil {
 			// If we don't have a conversation ID then we must be managing the message store ourselves.
 			// If we don't have a message store yet and we have a factory, use it to create a new one.
-			thread.MessageStore = a.Options.NewMessageStore()
+			thread.MessageStore = a.config.NewMessageStore()
 		}
 		// Only notify the thread of new messages if the response was successful to avoid inconsistent message state in the thread.
 		if err := thread.MessagesReceived(ctx, append(originalMessages, append(ctxMessages, resp.Messages...)...)...); err != nil {

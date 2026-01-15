@@ -50,7 +50,7 @@ func invokeAndAssertApprovalWithAgent(t *testing.T, next middleware.RunFunc,
 	tools []tool.Tool, input []*message.Message,
 	expectedOutput []*message.ResponseUpdate, additionalTools []tool.Tool) {
 
-	autocallOptions := autocall.Options{
+	autocallOptions := autocall.Config{
 		NewID: func() string { return "" },
 	}
 	if additionalTools != nil {
@@ -91,7 +91,7 @@ func expectApprovalError(t *testing.T, tools []tool.Tool, input []*message.Messa
 	}
 
 	var lastErr error
-	for _, err := range autocall.New(autocall.Options{}).Run(ctx, runner.Run, input, opts...) {
+	for _, err := range autocall.New(autocall.Config{}).Run(ctx, runner.Run, input, opts...) {
 		if err != nil {
 			lastErr = err
 			break

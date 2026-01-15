@@ -35,7 +35,7 @@ func main() {
 	// Note that we are wrapping the function tool with tool.ApprovalRequiredFunc to require user approval before invoking it.
 	a := openai.NewChatAgent(openai.ClientConfig{
 		Model: "gpt-4o-mini",
-	}, chatagent.Options{
+	}, chatagent.Config{
 		Instructions: "You are a helpful assistant",
 		Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
 		RunOptions: []agentopt.RunOption{

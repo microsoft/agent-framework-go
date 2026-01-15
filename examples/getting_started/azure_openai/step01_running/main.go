@@ -26,7 +26,7 @@ func main() {
 	a := openai.NewChatAgentAzure(openai.ClientConfig{
 		Model:      deployment,
 		APIVersion: "2025-01-01-preview",
-	}, chatagent.Options{
+	}, chatagent.Config{
 		Instructions: "You are good at telling jokes.",
 		Name:         "Joker",
 		Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions

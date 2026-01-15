@@ -60,7 +60,7 @@ type ClientConfig struct {
 	APIVersion string
 }
 
-func newChatAgent(isAzure bool, config ClientConfig, options chatagent.Options) *chatagent.Agent {
+func newChatAgent(isAzure bool, config ClientConfig, options chatagent.Config) *chatagent.Agent {
 	ops := make([]option.RequestOption, 0, 2)
 	if isAzure {
 		if config.Endpoint != "" {
@@ -97,12 +97,12 @@ func newChatAgent(isAzure bool, config ClientConfig, options chatagent.Options) 
 	return chatagent.NewAgent(c.run, options)
 }
 
-func NewChatAgent(config ClientConfig, options chatagent.Options) *chatagent.Agent {
+func NewChatAgent(config ClientConfig, options chatagent.Config) *chatagent.Agent {
 	return newChatAgent(false, config, options)
 }
 
 // NewChatAgentAzure creates a new [Agent].
-func NewChatAgentAzure(config ClientConfig, options chatagent.Options) *chatagent.Agent {
+func NewChatAgentAzure(config ClientConfig, options chatagent.Config) *chatagent.Agent {
 	return newChatAgent(true, config, options)
 }
 

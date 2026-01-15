@@ -62,7 +62,7 @@ func newTestServer(t *testing.T, input string, output string) *httptest.Server {
 func newTestClient(server *httptest.Server) agent.Agent {
 	return openai.NewChatAgent(
 		openai.ClientConfig{Model: "gpt-4o-mini", Endpoint: server.URL},
-		chatagent.Options{DisableFuncAutoCall: true},
+		chatagent.Config{DisableFuncAutoCall: true},
 	)
 }
 

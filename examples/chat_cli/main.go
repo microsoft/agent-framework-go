@@ -31,7 +31,7 @@ var weatherTool = functool.MustNew(&functool.Func{
 func main() {
 	a := openai.NewChatAgent(openai.ClientConfig{
 		Model: "gpt-4o-mini",
-	}, chatagent.Options{
+	}, chatagent.Config{
 		Instructions: "You are a helpful assistant with access to weather information. Be concise and friendly.",
 		RunOptions: []agentopt.RunOption{
 			agentopt.Tool(weatherTool),

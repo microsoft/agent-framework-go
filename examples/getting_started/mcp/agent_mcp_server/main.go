@@ -48,7 +48,7 @@ func main() {
 	// In Go, we configure tools as default options that will be used for all runs
 	a := openai.NewChatAgent(openai.ClientConfig{
 		Model: "gpt-4o-mini",
-	}, chatagent.Options{
+	}, chatagent.Config{
 		Name:         "DocsAgent",
 		Instructions: "You are a helpful assistant that can help with microsoft documentation questions.",
 		Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions

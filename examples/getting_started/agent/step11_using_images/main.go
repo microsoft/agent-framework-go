@@ -23,7 +23,7 @@ func main() {
 	// Create the agent.
 	a := openai.NewChatAgent(openai.ClientConfig{
 		Model: "gpt-4o-mini",
-	}, chatagent.Options{
+	}, chatagent.Config{
 		Instructions: "You are a helpful agent that can analyze images.",
 		Name:         "VisionAgent",
 		Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions

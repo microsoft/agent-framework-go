@@ -3,44 +3,8 @@
 package chatagent
 
 import (
-	"log/slog"
-	"slices"
-
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
-	"github.com/microsoft/agent-framework-go/agent/middleware"
-	"github.com/microsoft/agent-framework-go/format"
-	"github.com/microsoft/agent-framework-go/memory"
 )
-
-type Options struct {
-	ID          string
-	Name        string
-	Description string
-
-	Instructions string
-	Logger       *slog.Logger
-
-	FormatOfFn  func(v any) (format.Format, error)
-	UnmarshalFn func(format format.Format, data []byte, v any) error
-
-	DisableFuncAutoCall bool
-	Middlewares         []middleware.Middleware
-
-	RunOptions []agentopt.RunOption
-
-	NewMessageStore    func() memory.MessageStore
-	NewContextProvider func() memory.ContextProvider
-}
-
-func (o *Options) Clone() *Options {
-	if o == nil {
-		return nil
-	}
-	clone := *o
-	clone.Middlewares = slices.Clone(o.Middlewares)
-	clone.RunOptions = slices.Clone(o.RunOptions)
-	return &clone
-}
 
 type (
 	conversationIDOpt         string
