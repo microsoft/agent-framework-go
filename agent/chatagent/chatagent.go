@@ -14,7 +14,6 @@ import (
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/middleware"
 	"github.com/microsoft/agent-framework-go/agent/middleware/autocall"
-	"github.com/microsoft/agent-framework-go/agent/middleware/logger"
 	"github.com/microsoft/agent-framework-go/format"
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
@@ -109,8 +108,7 @@ func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ..
 	if _, ok := agentopt.Get(options, agentopt.Thread); !ok {
 		options = append(options, agentopt.Thread(a.NewThread(ctx)))
 	}
-	ctx = logger.WithAgentContext(ctx, a.iden.ID(), a.iden.Name())
-	return middleware.RunChain(ctx, a.run, a.config.Middlewares, messages, options...)
+	return middleware.RunChain(ctx, a.run, a.config.Middlewares, a, messages, options...)
 }
 
 func (a *Agent) RunOf(ctx context.Context, v any, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
@@ -140,7 +138,7 @@ func (a *Agent) RunOf(ctx context.Context, v any, messages []*message.Message, o
 	}
 }
 
-func (a *Agent) run(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+func (a *Agent) run(ctx context.Context, _ agent.Agent, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		originalMessages := messages
 		thread, options, messages, ctxMessages, err := a.prepareThreadAndMessages(ctx, originalMessages, options)

@@ -159,7 +159,7 @@ func (m *Middleware) Called() bool {
 	return m.called
 }
 
-func (m *Middleware) Run(ctx context.Context, next middleware.RunFunc, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+func (m *Middleware) Run(next middleware.RunFunc, ctx context.Context, a agent.Agent, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	m.called = true
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		defer func() { m.currentTurn++ }()
@@ -171,7 +171,7 @@ func (m *Middleware) Run(ctx context.Context, next middleware.RunFunc, messages 
 				}
 			}
 		}
-		for update, err := range next(ctx, messages, opts...) {
+		for update, err := range next(ctx, a, messages, opts...) {
 			if !yield(update, err) {
 				return
 			}
@@ -193,7 +193,7 @@ type Runner struct {
 	currentTurn int
 }
 
-func (r *Runner) Run(ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+func (r *Runner) Run(ctx context.Context, a agent.Agent, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		defer func() { r.currentTurn++ }()
 		if r.currentTurn >= len(r.Responses) {
