@@ -67,7 +67,7 @@ func invokeAndAssertApprovalWithAgent(t *testing.T, next middleware.RunFunc,
 
 	// Collect all streaming updates into messages
 	var updates []*message.ResponseUpdate
-	for update, err := range autocall.New(autocallOptions).Run(ctx, next, input, opts...) {
+	for update, err := range autocall.New(autocallOptions).Run(next, ctx, nil, input, opts...) {
 		if err != nil {
 			t.Fatalf("StreamingResponse failed: %v", err)
 		}
@@ -91,7 +91,7 @@ func expectApprovalError(t *testing.T, tools []tool.Tool, input []*message.Messa
 	}
 
 	var lastErr error
-	for _, err := range autocall.New(autocall.Config{}).Run(ctx, runner.Run, input, opts...) {
+	for _, err := range autocall.New(autocall.Config{}).Run(runner.Run, ctx, nil, input, opts...) {
 		if err != nil {
 			lastErr = err
 			break

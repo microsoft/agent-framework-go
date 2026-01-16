@@ -8,6 +8,7 @@ import (
 	"iter"
 	"strings"
 
+	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/middleware"
 	"github.com/microsoft/agent-framework-go/message"
@@ -43,7 +44,7 @@ func NewLogger(name, description string, metadata ...string) middleware.Middlewa
 	return &logger{}
 }
 
-func (mw *logger) Run(ctx context.Context, next middleware.RunFunc, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+func (mw *logger) Run(next middleware.RunFunc, ctx context.Context, a agent.Agent, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		mw.n++
 		fmt.Printf("===== Run %d =====\n\n", mw.n)
@@ -53,7 +54,7 @@ func (mw *logger) Run(ctx context.Context, next middleware.RunFunc, messages []*
 			}
 		}
 		first := true
-		for update, err := range next(ctx, messages, opts...) {
+		for update, err := range next(ctx, a, messages, opts...) {
 			if err == nil && update.String() != "" {
 				if first {
 					assistant()

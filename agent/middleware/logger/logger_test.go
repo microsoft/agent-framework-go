@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/middleware"
 	"github.com/microsoft/agent-framework-go/agent/middleware/logger"
@@ -29,7 +30,7 @@ func TestLogger_Run_LogsDebugMessage(t *testing.T) {
 
 	// Create a simple next function
 	nextCalled := false
-	next := func(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+	next := func(ctx context.Context, a agent.Agent, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 		nextCalled = true
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(&message.ResponseUpdate{MessageID: "test-1"}, nil)
@@ -42,7 +43,7 @@ func TestLogger_Run_LogsDebugMessage(t *testing.T) {
 		message.New(&message.TextContent{Text: "test message"}),
 	}
 
-	seq := mw.Run(ctx, next, messages)
+	seq := mw.Run(next, ctx, nil, messages)
 	for range seq {
 	}
 
@@ -72,7 +73,7 @@ func TestLogger_Run_LogsTraceWithDetails(t *testing.T) {
 	mw := logger.New(logger.Config{Logger: log, SensitiveData: true})
 
 	// Create a simple next function
-	next := func(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+	next := func(ctx context.Context, a agent.Agent, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(&message.ResponseUpdate{MessageID: "test-1"}, nil)
 		}
@@ -84,7 +85,7 @@ func TestLogger_Run_LogsTraceWithDetails(t *testing.T) {
 		message.New(&message.TextContent{Text: "test message"}),
 	}
 
-	seq := mw.Run(ctx, next, messages)
+	seq := mw.Run(next, ctx, nil, messages)
 	for range seq {
 	}
 
@@ -116,7 +117,7 @@ func TestLogger_Run_LogsErrors(t *testing.T) {
 
 	// Create a next function that returns an error
 	expectedError := errors.New("test error")
-	next := func(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+	next := func(ctx context.Context, a agent.Agent, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(nil, expectedError)
 		}
@@ -128,7 +129,7 @@ func TestLogger_Run_LogsErrors(t *testing.T) {
 		message.New(&message.TextContent{Text: "test message"}),
 	}
 
-	seq := mw.Run(ctx, next, messages)
+	seq := mw.Run(next, ctx, nil, messages)
 	var receivedError error
 	for _, err := range seq {
 		if err != nil {
@@ -162,7 +163,7 @@ func TestLogger_Run_HandlesMultipleUpdates(t *testing.T) {
 	mw := logger.New(logger.Config{Logger: log, SensitiveData: true})
 
 	// Create a next function that yields multiple updates
-	next := func(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+	next := func(ctx context.Context, a agent.Agent, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			if !yield(&message.ResponseUpdate{MessageID: "test-1"}, nil) {
 				return
@@ -180,7 +181,7 @@ func TestLogger_Run_HandlesMultipleUpdates(t *testing.T) {
 		message.New(&message.TextContent{Text: "test message"}),
 	}
 
-	seq := mw.Run(ctx, next, messages)
+	seq := mw.Run(next, ctx, nil, messages)
 	updateCount := 0
 	for range seq {
 		updateCount++
@@ -211,7 +212,7 @@ func TestLogger_Run_EarlyTermination(t *testing.T) {
 
 	// Create a next function that yields multiple updates
 	yieldCount := 0
-	next := func(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+	next := func(ctx context.Context, a agent.Agent, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			for i := 0; i < 5; i++ {
 				yieldCount++
@@ -228,7 +229,7 @@ func TestLogger_Run_EarlyTermination(t *testing.T) {
 		message.New(&message.TextContent{Text: "test message"}),
 	}
 
-	seq := mw.Run(ctx, next, messages)
+	seq := mw.Run(next, ctx, nil, messages)
 	consumedCount := 0
 	for range seq {
 		consumedCount++
@@ -262,7 +263,7 @@ func TestLogger_Run_PropagatesContext(t *testing.T) {
 	type contextKey string
 	key := contextKey("test-key")
 	var receivedCtx context.Context
-	next := func(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+	next := func(ctx context.Context, a agent.Agent, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 		receivedCtx = ctx
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(&message.ResponseUpdate{MessageID: "test-1"}, nil)
@@ -275,7 +276,7 @@ func TestLogger_Run_PropagatesContext(t *testing.T) {
 		message.New(&message.TextContent{Text: "test message"}),
 	}
 
-	seq := mw.Run(ctx, next, messages)
+	seq := mw.Run(next, ctx, nil, messages)
 	for range seq {
 	}
 
@@ -308,7 +309,7 @@ func TestLogger_Run_WorksInMiddlewareChain(t *testing.T) {
 	}
 
 	// Base function
-	baseFn := func(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+	baseFn := func(ctx context.Context, a agent.Agent, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 		order = append(order, "base")
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(&message.ResponseUpdate{MessageID: "test-1"}, nil)
@@ -321,7 +322,7 @@ func TestLogger_Run_WorksInMiddlewareChain(t *testing.T) {
 		message.New(&message.TextContent{Text: "test message"}),
 	}
 
-	seq := middleware.RunChain(ctx, baseFn, []middleware.Middleware{loggerMw, testMw}, messages)
+	seq := middleware.RunChain(ctx, baseFn, []middleware.Middleware{loggerMw, testMw}, nil, messages)
 	for range seq {
 	}
 
@@ -357,7 +358,7 @@ func TestLogger_Run_ContextCanceled(t *testing.T) {
 	mw := logger.New(logger.Config{Logger: log})
 
 	// Create a next function that checks for context cancellation
-	next := func(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+	next := func(ctx context.Context, a agent.Agent, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			// Yield first update
 			if !yield(&message.ResponseUpdate{MessageID: "test-1"}, nil) {
@@ -383,7 +384,7 @@ func TestLogger_Run_ContextCanceled(t *testing.T) {
 		message.New(&message.TextContent{Text: "test message"}),
 	}
 
-	seq := mw.Run(ctx, next, messages)
+	seq := mw.Run(next, ctx, nil, messages)
 	var receivedError error
 	updateCount := 0
 	for _, err := range seq {
@@ -418,7 +419,7 @@ type testMiddleware struct {
 	onRun func(string)
 }
 
-func (tm *testMiddleware) Run(ctx context.Context, next middleware.RunFunc, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+func (tm *testMiddleware) Run(next middleware.RunFunc, ctx context.Context, a agent.Agent, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	tm.onRun(tm.name)
-	return next(ctx, messages, options...)
+	return next(ctx, nil, messages, options...)
 }
