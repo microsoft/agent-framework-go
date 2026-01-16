@@ -1,7 +1,5 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-// This sample shows how to create and use an Agent as a function tool.
-
 package main
 
 import (
@@ -19,8 +17,8 @@ import (
 )
 
 var logger = demo.NewLogger(
-	"Agent As Function Tool",
-	"Demonstrates how to create and use an Agent as a function tool.",
+	"Custom Middleware",
+	"Demonstrates an agent with custom middleware to enforce guardrails.",
 	"Model", "gpt-4o-mini",
 )
 
