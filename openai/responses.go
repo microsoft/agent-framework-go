@@ -311,7 +311,7 @@ func responsesBuildCompletionParams(model string, messages []*message.Message, o
 					err = json.Unmarshal(data, &funcParams)
 				}
 				if err != nil {
-					return responses.ResponseNewParams{}, fmt.Errorf("failed to convert function tool schema to JSON format: %w", err)
+					return responses.ResponseNewParams{}, fmt.Errorf("failed to convert schema for function tool %q (type %T) to JSON format: %w", name, schema, err)
 				}
 			}
 			params.Tools = append(params.Tools, responses.ToolUnionParam{
