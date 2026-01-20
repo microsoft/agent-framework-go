@@ -64,3 +64,22 @@ func (t *CodeInterpreter) Name() string {
 func (t *CodeInterpreter) Description() string {
 	return ""
 }
+
+type MCPServer struct {
+	AdditionalProperties map[string]any
+
+	ServerName        string
+	ServerDescription string
+	ServerAddress     string
+	Authorization     string
+	AllowedTools      []string
+	Headers           map[string]string
+}
+
+func (t *MCPServer) Name() string {
+	return "mcp"
+}
+
+func (t *MCPServer) Description() string {
+	return ""
+}

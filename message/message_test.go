@@ -265,16 +265,16 @@ func TestResponse_Update_ContinuationToken(t *testing.T) {
 		t.Errorf("expected ContinuationToken %v, got %v", token2, resp.ContinuationToken)
 	}
 
-	// Third update with nil token - should clear
+	// Third update with empty token - should clear
 	update3 := &message.ResponseUpdate{
 		MessageID:         "msg1",
-		ContinuationToken: nil,
+		ContinuationToken: "",
 		Contents:          message.Contents{&message.TextContent{Text: "Third"}},
 	}
 	resp.Update(update3)
 
-	if resp.ContinuationToken != nil {
-		t.Errorf("expected ContinuationToken nil, got %v", resp.ContinuationToken)
+	if resp.ContinuationToken != "" {
+		t.Errorf("expected ContinuationToken empty, got %v", resp.ContinuationToken)
 	}
 }
 

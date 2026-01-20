@@ -97,7 +97,7 @@ func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ..
 			return
 		}
 		stream, _ := agentopt.Get(options, agentopt.Stream)
-		if token, ok := agentopt.Get(options, agentopt.ContinuationToken); ok && token != nil {
+		if token, ok := agentopt.Get(options, agentopt.ContinuationToken); ok && token != "" {
 			if stream {
 				// TODO: support resuming stream responses using continuation tokens.
 				yield(nil, errors.New("reconnecting to task streams using continuation tokens is not supported yet"))
@@ -107,12 +107,7 @@ func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ..
 				yield(nil, errors.New("messages are not allowed when continuing a background response using a continuation token"))
 				return
 			}
-			taskID, ok := token.(a2a.TaskID)
-			if !ok {
-				yield(nil, fmt.Errorf("invalid continuation token type: expected %T but got %T", a2a.TaskID(""), token))
-				return
-			}
-			task, err := a.Client.GetTask(ctx, &a2a.TaskQueryParams{ID: taskID})
+			task, err := a.Client.GetTask(ctx, &a2a.TaskQueryParams{ID: a2a.TaskID(token)})
 			if err != nil {
 				yield(nil, err)
 				return
@@ -240,10 +235,10 @@ func (a *Agent) sendMsg(ctx context.Context, thread *Thread, streaming bool, par
 func (a *Agent) yieldTask(yield func(*message.ResponseUpdate, error) bool, task *a2a.Task) bool {
 	now := time.Now()
 	id, name := a.iden.ID(), a.iden.Name()
-	var continuationToken any
+	var continuationToken string
 	switch task.Status.State {
 	case a2a.TaskStateSubmitted, a2a.TaskStateWorking:
-		continuationToken = task.ID
+		continuationToken = string(task.ID)
 	}
 	timestamp := now
 	if task.Status.Timestamp != nil {

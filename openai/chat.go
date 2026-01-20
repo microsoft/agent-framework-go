@@ -115,7 +115,7 @@ func (a *client) unmarshal(format format.Format, data []byte, v any) error {
 }
 
 func (a *client) run(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
-	body, err := a.buildCompletionParams(messages, options)
+	body, err := buildCompletionParams(a.config.Model, messages, options)
 	if err != nil {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(nil, err)
@@ -220,9 +220,9 @@ func mapRole(r string) message.Role {
 }
 
 // buildCompletionParams constructs the parameters for the OpenAI chat completion API.
-func (a *client) buildCompletionParams(messages []*message.Message, opts []agentopt.RunOption) (openai.ChatCompletionNewParams, error) {
+func buildCompletionParams(model string, messages []*message.Message, opts []agentopt.RunOption) (openai.ChatCompletionNewParams, error) {
 	params := openai.ChatCompletionNewParams{
-		Model:    a.config.Model,
+		Model:    model,
 		Messages: make([]openai.ChatCompletionMessageParamUnion, 0, len(messages)+1),
 	}
 	if v, ok := agentopt.Get(opts, chatagent.Model); ok && v != "" {

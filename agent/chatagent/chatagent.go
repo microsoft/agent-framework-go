@@ -224,9 +224,6 @@ func (a *Agent) prepareThreadAndMessages(ctx context.Context, messages []*messag
 	retError := func(e error) (*Thread, []agentopt.RunOption, []*message.Message, []*message.Message, error) {
 		return nil, nil, nil, nil, e
 	}
-	if v, ok := agentopt.Get(options, agentopt.AllowBackgroundResponses); ok && v && thread == nil {
-		return retError(errors.New("a thread must be provided when continuing a background response with a continuation token"))
-	}
 	if v, ok := agentopt.Get(options, agentopt.Thread); ok {
 		var ok bool
 		thread, ok = v.(*Thread)
@@ -237,7 +234,11 @@ func (a *Agent) prepareThreadAndMessages(ctx context.Context, messages []*messag
 		// This should never happen because we ensure a thread is always provided in Run.
 		panic("nil thread")
 	}
-	if v, ok := agentopt.Get(options, agentopt.ContinuationToken); ok && v != nil {
+	// Now check if AllowBackgroundResponses requires a thread
+	if v, ok := agentopt.Get(options, agentopt.AllowBackgroundResponses); ok && v && thread == nil {
+		return retError(errors.New("a thread must be provided when continuing a background response with a continuation token"))
+	}
+	if v, ok := agentopt.Get(options, agentopt.ContinuationToken); ok && v != "" {
 		if len(messages) > 0 {
 			return retError(errors.New("messages are not allowed when continuing a background response using a continuation token"))
 		}
@@ -256,7 +257,7 @@ func (a *Agent) prepareThreadAndMessages(ctx context.Context, messages []*messag
 			},
 		})
 	}
-	if v, ok := agentopt.Get(options, agentopt.ContinuationToken); !ok || v == nil {
+	if v, ok := agentopt.Get(options, agentopt.ContinuationToken); !ok || v == "" {
 		if thread.MessageStore != nil {
 			//  Add any existing messages from the thread to the messages to be sent to the chat client.
 			for msg, err := range thread.MessageStore.All(ctx) {
@@ -300,8 +301,8 @@ func (a *Agent) prepareThreadAndMessages(ctx context.Context, messages []*messag
 	return thread, options, msgsForClient, ctxMessages, nil
 }
 
-func validateStreamResumptionAllowed(continuationToken any, thread *Thread) error {
-	if continuationToken == nil {
+func validateStreamResumptionAllowed(continuationToken string, thread *Thread) error {
+	if continuationToken == "" {
 		return nil
 	}
 	// Streaming resumption is only supported with chat history managed by the agent service because, currently, there's no good solution

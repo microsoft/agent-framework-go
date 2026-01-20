@@ -636,7 +636,7 @@ func TestRunWithContinuationTokenAndMessages(t *testing.T) {
 	transport := &mockA2ATransport{}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	_, err := agent.RunText(t.Context(), a, "Test message", agentopt.ContinuationToken(a2a.TaskID("task-123")))
+	_, err := agent.RunText(t.Context(), a, "Test message", agentopt.ContinuationToken("task-123"))
 	if err == nil {
 		t.Error("Run() error = nil, want error when continuation token and messages are provided")
 	}
@@ -652,7 +652,7 @@ func TestRunWithContinuationToken(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	_, err := agent.Run(t.Context(), a, nil, agentopt.ContinuationToken(a2a.TaskID("task-123")))
+	_, err := agent.Run(t.Context(), a, nil, agentopt.ContinuationToken("task-123"))
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil", err)
 	}
@@ -761,12 +761,8 @@ func TestRunWithAgentTaskResponse(t *testing.T) {
 		t.Errorf("ID = %q, want empty", msg.ID)
 	}
 
-	if result.ContinuationToken == nil {
-		t.Error("ContinuationToken is nil, want non-nil for submitted task")
-	} else if token, ok := result.ContinuationToken.(a2a.TaskID); !ok {
-		t.Errorf("ContinuationToken type = %T, want a2a.TaskID", result.ContinuationToken)
-	} else if string(token) != "task-789" {
-		t.Errorf("continuation token = %q, want %q", token, "task-789")
+	if result.ContinuationToken != "task-789" {
+		t.Errorf("continuation token = %q, want %q", result.ContinuationToken, "task-789")
 	}
 
 	a2aThread, ok := thread.(*a2aagent.Thread)
@@ -819,10 +815,10 @@ func TestRunWithVariousTaskStates(t *testing.T) {
 				t.Fatalf("Run() error = %v, want nil", err)
 			}
 
-			if tt.expectContinuationToken && result.ContinuationToken == nil {
-				t.Error("ContinuationToken is nil, want non-nil")
-			} else if !tt.expectContinuationToken && result.ContinuationToken != nil {
-				t.Errorf("ContinuationToken = %v, want nil", result.ContinuationToken)
+			if tt.expectContinuationToken && result.ContinuationToken == "" {
+				t.Error("ContinuationToken is empty, want non-empty")
+			} else if !tt.expectContinuationToken && result.ContinuationToken != "" {
+				t.Errorf("ContinuationToken = %v, want empty", result.ContinuationToken)
 			}
 		})
 	}
@@ -834,7 +830,7 @@ func TestRunStreamingWithContinuationTokenAndMessages(t *testing.T) {
 	a := newTestAgent(transport, a2aagent.Options{})
 
 	gotError := false
-	for _, err := range agent.RunTextStream(t.Context(), a, "Test message", agentopt.ContinuationToken(a2a.TaskID("task-123"))) {
+	for _, err := range agent.RunTextStream(t.Context(), a, "Test message", agentopt.ContinuationToken("task-123")) {
 		if err != nil {
 			gotError = true
 			break

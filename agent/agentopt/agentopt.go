@@ -38,7 +38,7 @@ type NewThreadOption interface {
 type (
 	responseFormatOpt    struct{ format.Format }
 	threadOpt            struct{ memory.Thread }
-	continuationTokenOpt struct{ any }
+	continuationTokenOpt string
 
 	toolOpt struct{ tool.Tool }
 
@@ -58,7 +58,7 @@ func (toolModeOpt) RunOption()                 {}
 func (o responseFormatOpt) Value() any           { return o.Format }
 func (o threadOpt) Value() any                   { return o.Thread }
 func (o streamOpt) Value() any                   { return bool(o) }
-func (o continuationTokenOpt) Value() any        { return o.any }
+func (o continuationTokenOpt) Value() any        { return string(o) }
 func (o allowBackgroundResponsesOpt) Value() any { return bool(o) }
 func (o toolModeOpt) Value() any                 { return tool.ToolMode(o) }
 func (o toolOpt) Value() any                     { return o.Tool }
@@ -97,8 +97,8 @@ func Thread(thread memory.Thread) RunOption {
 // of an update just before the interruption occurred can be passed to this function to resume the stream from
 // the point of interruption. Non-streamed background responses, such as those returned by [Run], can be polled for
 // completion by obtaining the token from the [RunResponse] continuation token.
-func ContinuationToken(token any) RunOption {
-	return continuationTokenOpt{token}
+func ContinuationToken(token string) RunOption {
+	return continuationTokenOpt(token)
 }
 
 // AllowBackgroundResponses sets whether to allow background responses during the agent run.

@@ -294,7 +294,7 @@ func updateOptionsForNextIteration(opts []agentopt.RunOption) []agentopt.RunOpti
 	// to signal the inner client to handle function call result rather
 	// than getting the result of the operation.
 	if _, ok := agentopt.Get(opts, agentopt.ContinuationToken); ok {
-		opts = append(opts, agentopt.ContinuationToken(nil))
+		opts = append(opts, agentopt.ContinuationToken(""))
 	}
 	return opts
 }

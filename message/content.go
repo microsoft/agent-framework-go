@@ -519,9 +519,7 @@ func (t *UsageContent) MarshalJSON() ([]byte, error) {
 func (t UsageContent) kind() contentKind { return "usage" }
 
 type FunctionApprovalRequestContent struct {
-	AdditionalProperties map[string]any `json:"-"`
-	Annotations          Annotations    `json:",omitempty"`
-	RawRepresentation    any            `json:"-"`
+	ContentHeader
 
 	ID           string
 	FunctionCall *FunctionCallContent
@@ -541,27 +539,19 @@ func (t *FunctionApprovalRequestContent) MarshalJSON() ([]byte, error) {
 
 func (t FunctionApprovalRequestContent) kind() contentKind { return "functionApprovalRequest" }
 
-func (t FunctionApprovalRequestContent) Header() ContentHeader {
-	return ContentHeader{
-		AdditionalProperties: t.AdditionalProperties,
-		Annotations:          t.Annotations,
-		RawRepresentation:    t.RawRepresentation,
-	}
-}
-
 func (t *FunctionApprovalRequestContent) Response(approved bool) *FunctionApprovalResponseContent {
 	return &FunctionApprovalResponseContent{
-		ID:                   t.ID,
-		Approved:             approved,
-		FunctionCall:         t.FunctionCall,
-		AdditionalProperties: t.AdditionalProperties,
+		ID:           t.ID,
+		Approved:     approved,
+		FunctionCall: t.FunctionCall,
+		ContentHeader: ContentHeader{
+			AdditionalProperties: t.AdditionalProperties,
+		},
 	}
 }
 
 type FunctionApprovalResponseContent struct {
-	AdditionalProperties map[string]any `json:"-"`
-	Annotations          Annotations    `json:",omitempty"`
-	RawRepresentation    any            `json:"-"`
+	ContentHeader
 
 	ID           string
 	Approved     bool
@@ -582,13 +572,47 @@ func (t *FunctionApprovalResponseContent) MarshalJSON() ([]byte, error) {
 
 func (t FunctionApprovalResponseContent) kind() contentKind { return "functionApprovalResponse" }
 
-func (t FunctionApprovalResponseContent) Header() ContentHeader {
-	return ContentHeader{
-		AdditionalProperties: t.AdditionalProperties,
-		Annotations:          t.Annotations,
-		RawRepresentation:    t.RawRepresentation,
-	}
+type CodeInterpreterToolCallContent struct {
+	ContentHeader
+
+	CallID string
+	Inputs Contents
 }
+
+func (t *CodeInterpreterToolCallContent) MarshalJSON() ([]byte, error) {
+	type alias CodeInterpreterToolCallContent
+	tmp := struct {
+		*alias
+		Type contentKind
+	}{
+		alias: (*alias)(t),
+		Type:  t.kind(),
+	}
+	return json.Marshal(tmp)
+}
+
+func (t CodeInterpreterToolCallContent) kind() contentKind { return "code_interpreter_tool_call" }
+
+type CodeInterpreterToolResultContent struct {
+	ContentHeader
+
+	CallID  string
+	Outputs Contents
+}
+
+func (t *CodeInterpreterToolResultContent) MarshalJSON() ([]byte, error) {
+	type alias CodeInterpreterToolResultContent
+	tmp := struct {
+		*alias
+		Type contentKind
+	}{
+		alias: (*alias)(t),
+		Type:  t.kind(),
+	}
+	return json.Marshal(tmp)
+}
+
+func (t CodeInterpreterToolResultContent) kind() contentKind { return "code_interpreter_tool_result" }
 
 // CoalesceContents combines sequential contents elements.
 func CoalesceContents(contents []Content) []Content {

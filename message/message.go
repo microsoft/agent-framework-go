@@ -71,9 +71,10 @@ func (m *Message) Clone() *Message {
 }
 
 type Response struct {
-	CreatedAt         time.Time `json:",omitzero"`
-	ContinuationToken any       `json:",omitzero"`
-	Messages          []*Message
+	AdditionalProperties map[string]any `json:",omitzero"`
+	CreatedAt            time.Time      `json:",omitzero"`
+	ContinuationToken    string         `json:",omitzero"`
+	Messages             []*Message
 }
 
 func (resp *Response) String() string {
@@ -165,13 +166,19 @@ func (resp *Response) Update(update *ResponseUpdate) {
 
 	// Other members on a RunResponseUpdate map to members of the response.
 	// Update the response object with those, preferring the values from later updates.
-	if update.ContinuationToken == nil {
-		resp.ContinuationToken = nil
+	if update.ContinuationToken == "" {
+		resp.ContinuationToken = ""
 	} else {
 		resp.ContinuationToken = update.ContinuationToken
 	}
 	if resp.CreatedAt.IsZero() || (!update.CreatedAt.IsZero() && update.CreatedAt.After(resp.CreatedAt)) {
 		resp.CreatedAt = update.CreatedAt
+	}
+	if update.AdditionalProperties != nil {
+		if resp.AdditionalProperties == nil {
+			resp.AdditionalProperties = make(map[string]any)
+		}
+		maps.Copy(resp.AdditionalProperties, update.AdditionalProperties)
 	}
 }
 
@@ -188,7 +195,7 @@ type ResponseUpdate struct {
 	ResponseID           string
 	AuthorName           string    `json:",omitzero"`
 	Role                 Role      `json:",omitzero"`
-	ContinuationToken    any       `json:",omitzero"`
+	ContinuationToken    string    `json:",omitzero"`
 	CreatedAt            time.Time `json:",omitzero"`
 	Contents             Contents  `json:",omitzero"`
 }
