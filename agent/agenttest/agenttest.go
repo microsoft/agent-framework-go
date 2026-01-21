@@ -4,6 +4,7 @@ package agenttest
 
 import (
 	"context"
+	"encoding/json"
 	"iter"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -141,9 +142,8 @@ func NewThread() *Thread {
 	return &Thread{}
 }
 
-func (t *Thread) MessagesReceived(ctx context.Context, messages ...*message.Message) error {
-	t.messages = append(t.messages, messages...)
-	return nil
+func (t *Thread) MarshalBinary() (data []byte, err error) {
+	return json.Marshal(t.messages)
 }
 
 // Middleware is a test implementation of the Middleware interface

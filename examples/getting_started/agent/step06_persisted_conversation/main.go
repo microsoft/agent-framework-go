@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 
@@ -44,7 +43,7 @@ func main() {
 	demo.Response(agent.RunText(ctx, a, "Tell me a joke about a pirate.", agentopt.Thread(thread)))
 
 	// Serialize the thread state to JSON, so it can be stored for later use.
-	serializedThread, err := json.Marshal(thread)
+	serializedThread, err := thread.MarshalBinary()
 	if err != nil {
 		demo.Panic(err)
 	}

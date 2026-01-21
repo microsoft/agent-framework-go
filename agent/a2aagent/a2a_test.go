@@ -1227,6 +1227,6 @@ func (c *customAgentThread) ID() string {
 	return "custom-thread-id"
 }
 
-func (c *customAgentThread) MessagesReceived(ctx context.Context, messages ...*message.Message) error {
-	return nil
+func (c *customAgentThread) MarshalBinary() (data []byte, err error) {
+	return []byte("{}"), nil
 }

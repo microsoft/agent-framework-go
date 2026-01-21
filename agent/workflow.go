@@ -4,7 +4,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"reflect"
 
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
@@ -34,7 +33,7 @@ func newExecutor(a Agent, emitEvents bool) *workflow.Executor {
 					if thread == nil {
 						return nil
 					}
-					data, err := json.Marshal(thread)
+					data, err := thread.MarshalBinary()
 					if err != nil {
 						return err
 					}

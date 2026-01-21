@@ -50,7 +50,11 @@ func newThreadFromJSON(data []byte, newMessageStore func() memory.MessageStore, 
 	return thread, nil
 }
 
-func (t *Thread) MessagesReceived(ctx context.Context, messages ...*message.Message) error {
+func (t *Thread) MarshalBinary() (data []byte, err error) {
+	return json.Marshal(t)
+}
+
+func (t *Thread) messagesReceived(ctx context.Context, messages ...*message.Message) error {
 	if t.ConversationID != "" {
 		// If the thread messages are stored in the service
 		// there is nothing to do here, since invoking the

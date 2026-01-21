@@ -2,11 +2,7 @@
 
 package memory
 
-import (
-	"context"
-
-	"github.com/microsoft/agent-framework-go/message"
-)
+import "encoding"
 
 // Thread contains the state of a specific conversation with an agent which may include:
 //
@@ -29,6 +25,5 @@ import (
 // To support conversations that may need to survive application restarts or separate service requests,
 // a Thread can be serialized and deserialized, so that it can be saved in a persistent store.
 type Thread interface {
-	// MessagesReceived adds messages to the thread.
-	MessagesReceived(ctx context.Context, messages ...*message.Message) error
+	encoding.BinaryMarshaler
 }

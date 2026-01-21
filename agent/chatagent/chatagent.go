@@ -190,7 +190,7 @@ func (a *Agent) run(ctx context.Context, _ agent.Agent, messages []*message.Mess
 			thread.MessageStore = a.config.NewMessageStore()
 		}
 		// Only notify the thread of new messages if the response was successful to avoid inconsistent message state in the thread.
-		if err := thread.MessagesReceived(ctx, append(originalMessages, append(ctxMessages, resp.Messages...)...)...); err != nil {
+		if err := thread.messagesReceived(ctx, append(originalMessages, append(ctxMessages, resp.Messages...)...)...); err != nil {
 			yield(nil, err)
 			return
 		}
