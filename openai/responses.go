@@ -97,7 +97,6 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 		// Get thread for conversation ID management
 		var thread *chatagent.Thread
 		var keepConversationID bool // true if we should keep the conversation ID unchanged (it's a "conv_" ID)
-		var storeEnabled = true     // by default, store is enabled
 		if t, ok := agentopt.Get(options, agentopt.Thread); ok && t != nil {
 			if typedThread, ok := t.(*chatagent.Thread); ok {
 				thread = typedThread
@@ -109,7 +108,7 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 
 		// Helper to update conversation ID after response completes
 		updateConversationID := func(responseID string) {
-			if thread != nil && !keepConversationID && storeEnabled && responseID != "" {
+			if thread != nil && !keepConversationID && responseID != "" {
 				thread.ConversationID = responseID
 			}
 		}
