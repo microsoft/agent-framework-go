@@ -90,7 +90,7 @@ var _ agent.Agent = (*Agent)(nil)
 
 type Agent struct {
 	Iden          agent.Identity
-	NewThreadFunc func(context.Context, ...agentopt.NewThreadOption) memory.Thread
+	NewThreadFunc func(context.Context, ...agentopt.NewThreadOption) (memory.Thread, error)
 	Responses     []Turn
 
 	currentTurn int
@@ -123,7 +123,7 @@ func (a *Agent) Run(ctx context.Context, messages []*message.Message, opts ...ag
 
 func (a *Agent) NewThread(ctx context.Context, opts ...agentopt.NewThreadOption) (memory.Thread, error) {
 	if a.NewThreadFunc != nil {
-		return a.NewThreadFunc(ctx, opts...), nil
+		return a.NewThreadFunc(ctx, opts...)
 	}
 	return &Thread{}, nil
 }
