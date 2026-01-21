@@ -46,7 +46,10 @@ func main() {
 	ctx := context.Background()
 
 	// Call the agent and check if there are any user input requests to handle.
-	thread := a.NewThread(ctx)
+	thread, err := a.NewThread(ctx)
+	if err != nil {
+		demo.Panic(err)
+	}
 	resp, err := agent.RunText(ctx, a, "What is the weather like in Amsterdam?", agentopt.Thread(thread))
 	if err != nil {
 		panic(err)

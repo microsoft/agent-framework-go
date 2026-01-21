@@ -43,7 +43,10 @@ func main() {
 
 func runChatLoop(ctx context.Context, a agent.Agent) {
 	// Create a thread to maintain conversation history
-	thread := a.NewThread(ctx)
+	thread, err := a.NewThread(ctx)
+	if err != nil {
+		panic(err)
+	}
 
 	scanner := bufio.NewScanner(os.Stdin)
 
@@ -70,7 +73,10 @@ func runChatLoop(ctx context.Context, a agent.Agent) {
 		}
 
 		if userInput == "clear" {
-			thread = a.NewThread(ctx)
+			thread, err = a.NewThread(ctx)
+			if err != nil {
+				panic(err)
+			}
 			fmt.Print("\n✨ Conversation cleared!\n\n")
 			continue
 		}

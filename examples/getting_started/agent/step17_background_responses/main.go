@@ -29,7 +29,10 @@ func main() {
 
 	ctx := context.Background()
 
-	thread := a.NewThread(ctx)
+	thread, err := a.NewThread(ctx)
+	if err != nil {
+		demo.Panic(err)
+	}
 
 	// Start the initial run.
 	resp, err := agent.RunText(ctx, a,

@@ -7,8 +7,8 @@ import (
 	"reflect"
 	"slices"
 
+	"github.com/microsoft/agent-framework-go/agent/memory"
 	"github.com/microsoft/agent-framework-go/format"
-	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/tool"
 )
 

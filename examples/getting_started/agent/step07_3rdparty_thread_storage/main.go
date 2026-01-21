@@ -14,9 +14,9 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
+	"github.com/microsoft/agent-framework-go/agent/memory"
 	"github.com/microsoft/agent-framework-go/agent/middleware"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
-	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/openai"
 )
@@ -50,7 +50,10 @@ func main() {
 	ctx := context.Background()
 
 	// Start a new thread for the agent conversation.
-	thread := a.NewThread(ctx)
+	thread, err := a.NewThread(ctx)
+	if err != nil {
+		demo.Panic(err)
+	}
 
 	// Run the agent with the thread that stores conversation history in the disk store.
 	demo.Response(agent.RunText(ctx, a, "Tell me a joke about a pirate.", agentopt.Thread(thread)))

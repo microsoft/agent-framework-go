@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
-	"github.com/microsoft/agent-framework-go/memory"
+	"github.com/microsoft/agent-framework-go/agent/memory"
 	"github.com/microsoft/agent-framework-go/tool"
 )
 

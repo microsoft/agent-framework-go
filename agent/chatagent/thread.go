@@ -6,7 +6,7 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/microsoft/agent-framework-go/memory"
+	"github.com/microsoft/agent-framework-go/agent/memory"
 	"github.com/microsoft/agent-framework-go/message"
 )
 

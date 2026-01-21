@@ -35,7 +35,10 @@ func main() {
 	ctx := context.Background()
 
 	// Start a new thread for the agent conversation.
-	thread := a.NewThread(ctx)
+	thread, err := a.NewThread(ctx)
+	if err != nil {
+		demo.Panic(err)
+	}
 
 	// Run the agent with a new thread.
 	demo.Response(agent.RunText(ctx, a, "Tell me a joke about a pirate.", agentopt.Thread(thread)))

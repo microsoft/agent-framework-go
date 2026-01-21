@@ -3744,9 +3744,12 @@ func TestResponsesConversationId_AsResponseId_NonStreaming(t *testing.T) {
 	defer server.Close()
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
-	thread := a.NewThread(context.Background(), chatagent.ConversationID("resp_12345"))
+	thread, err := a.NewThread(context.Background(), chatagent.ConversationID("resp_12345"))
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	_, err := agent.RunText(context.Background(), a, "hello",
+	_, err = agent.RunText(context.Background(), a, "hello",
 		chatagent.MaxOutputTokens(20),
 		chatagent.Temperature(0.5),
 		agentopt.Thread(thread),
@@ -3807,9 +3810,12 @@ func TestResponsesConversationId_AsConversationId_NonStreaming(t *testing.T) {
 	defer server.Close()
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
-	thread := a.NewThread(context.Background(), chatagent.ConversationID("conv_12345"))
+	thread, err := a.NewThread(context.Background(), chatagent.ConversationID("conv_12345"))
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	_, err := agent.RunText(context.Background(), a, "hello",
+	_, err = agent.RunText(context.Background(), a, "hello",
 		chatagent.MaxOutputTokens(20),
 		chatagent.Temperature(0.5),
 		agentopt.Thread(thread),
@@ -3875,7 +3881,10 @@ data: {"type":"response.completed","response":{"id":"resp_67890","object":"respo
 	defer server.Close()
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
-	thread := a.NewThread(context.Background(), chatagent.ConversationID("resp_12345"))
+	thread, err := a.NewThread(context.Background(), chatagent.ConversationID("resp_12345"))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	var updates []*message.ResponseUpdate
 	for update, err := range agent.RunTextStream(context.Background(), a, "hello",
@@ -3950,7 +3959,10 @@ data: {"type":"response.completed","response":{"id":"resp_67890","object":"respo
 	defer server.Close()
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
-	thread := a.NewThread(context.Background(), chatagent.ConversationID("conv_12345"))
+	thread, err := a.NewThread(context.Background(), chatagent.ConversationID("conv_12345"))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	var updates []*message.ResponseUpdate
 	for update, err := range agent.RunTextStream(context.Background(), a, "hello",
@@ -4007,7 +4019,10 @@ func TestResponsesBackgroundResponses_FirstCall(t *testing.T) {
 	defer server.Close()
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
-	thread := a.NewThread(context.Background())
+	thread, err := a.NewThread(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	resp, err := agent.RunText(context.Background(), a, "hello",
 		chatagent.MaxOutputTokens(20),
@@ -4088,7 +4103,10 @@ func testResponsesBackgroundPolling(t *testing.T, status string) {
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 	// Create thread with ConversationID to simulate a previous call (polling scenario)
-	thread := a.NewThread(context.Background(), chatagent.ConversationID("resp_68d3d2c9ef7c8195863e4e2b2ec226a205007262ecbbfed8"))
+	thread, err := a.NewThread(context.Background(), chatagent.ConversationID("resp_68d3d2c9ef7c8195863e4e2b2ec226a205007262ecbbfed8"))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Create continuation token
 	ct := continuationToken{
@@ -4215,7 +4233,10 @@ data: {"type":"response.completed","sequence_number":17,"response":{"id":"resp_6
 	defer server.Close()
 
 	a := newTestResponsesClient(server, "gpt-4o-2024-08-06")
-	thread := a.NewThread(context.Background())
+	thread, err := a.NewThread(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	var updates []*message.ResponseUpdate
 	var allText strings.Builder

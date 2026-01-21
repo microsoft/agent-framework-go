@@ -296,8 +296,11 @@ func TestRunWithNewThread(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	thread := a.NewThread(t.Context())
-	_, err := agent.RunText(t.Context(), a, "Test message", agentopt.Thread(thread))
+	thread, err := a.NewThread(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = agent.RunText(t.Context(), a, "Test message", agentopt.Thread(thread))
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil", err)
 	}
@@ -316,9 +319,12 @@ func TestRunWithExistingThread(t *testing.T) {
 	transport := &mockA2ATransport{}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	thread := a.NewThread(t.Context(), a2aagent.WithContextID("existing-context-id"))
+	thread, err := a.NewThread(t.Context(), a2aagent.WithContextID("existing-context-id"))
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	_, err := agent.RunText(t.Context(), a, "Test message", agentopt.Thread(thread))
+	_, err = agent.RunText(t.Context(), a, "Test message", agentopt.Thread(thread))
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil", err)
 	}
@@ -344,9 +350,12 @@ func TestRunWithThreadHavingDifferentContextID(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	thread := a.NewThread(t.Context(), a2aagent.WithContextID("existing-context-id"))
+	thread, err := a.NewThread(t.Context(), a2aagent.WithContextID("existing-context-id"))
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	_, err := agent.RunText(t.Context(), a, "Test message", agentopt.Thread(thread))
+	_, err = agent.RunText(t.Context(), a, "Test message", agentopt.Thread(thread))
 	if err == nil {
 		t.Error("Run() error = nil, want error")
 	}
@@ -444,7 +453,10 @@ func TestRunStreamingWithThread(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	thread := a.NewThread(t.Context())
+	thread, err := a.NewThread(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	for _, err := range agent.RunTextStream(t.Context(), a, "Test streaming", agentopt.Thread(thread)) {
 		if err != nil {
@@ -468,8 +480,10 @@ func TestRunStreamingWithExistingThread(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	thread := a.NewThread(t.Context(), a2aagent.WithContextID("existing-context-id"))
-
+	thread, err := a.NewThread(t.Context(), a2aagent.WithContextID("existing-context-id"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, err := range agent.RunTextStream(t.Context(), a, "Test streaming", agentopt.Thread(thread)) {
 		if err != nil {
 			t.Fatalf("RunStream() error = %v, want nil", err)
@@ -497,7 +511,10 @@ func TestRunStreamingWithThreadHavingDifferentContextID(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	thread := a.NewThread(t.Context(), a2aagent.WithContextID("existing-context-id"))
+	thread, err := a.NewThread(t.Context(), a2aagent.WithContextID("existing-context-id"))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	gotError := false
 	for _, err := range agent.RunTextStream(t.Context(), a, "Test streaming", agentopt.Thread(thread)) {
@@ -671,10 +688,13 @@ func TestRunWithTaskInThreadAndMessage(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	thread := a.NewThread(t.Context()).(*a2aagent.Thread)
-	thread.TaskID = "task-123"
+	thread, err := a.NewThread(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	thread.(*a2aagent.Thread).TaskID = "task-123"
 
-	_, err := agent.RunText(t.Context(), a, "Please make the background transparent", agentopt.Thread(thread))
+	_, err = agent.RunText(t.Context(), a, "Please make the background transparent", agentopt.Thread(thread))
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil", err)
 	}
@@ -703,9 +723,12 @@ func TestRunWithAgentTask(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	thread := a.NewThread(t.Context())
+	thread, err := a.NewThread(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	_, err := agent.RunText(t.Context(), a, "Start a task", agentopt.Thread(thread))
+	_, err = agent.RunText(t.Context(), a, "Start a task", agentopt.Thread(thread))
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil", err)
 	}
@@ -740,7 +763,10 @@ func TestRunWithAgentTaskResponse(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	thread := a.NewThread(t.Context())
+	thread, err := a.NewThread(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	result, err := agent.RunText(t.Context(), a, "Start a long-running task", agentopt.Thread(thread))
 	if err != nil {
@@ -855,8 +881,11 @@ func TestRunStreamingWithTaskInThreadAndMessage(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	thread := a.NewThread(t.Context()).(*a2aagent.Thread)
-	thread.TaskID = "task-123"
+	thread, err := a.NewThread(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	thread.(*a2aagent.Thread).TaskID = "task-123"
 
 	for _, err := range agent.RunTextStream(t.Context(), a, "Please make the background transparent", agentopt.Thread(thread)) {
 		if err != nil {
@@ -894,7 +923,10 @@ func TestRunStreamingWithAgentTaskUpdatesThread(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	thread := a.NewThread(t.Context())
+	thread, err := a.NewThread(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	for _, err := range agent.RunTextStream(t.Context(), a, "Start a task", agentopt.Thread(thread)) {
 		if err != nil {
@@ -986,7 +1018,10 @@ func TestRunStreamingWithAgentTaskYieldsUpdate(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	thread := a.NewThread(t.Context())
+	thread, err := a.NewThread(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	var updates []*message.ResponseUpdate
 	for update, err := range agent.RunTextStream(t.Context(), a, "Start long-running task", agentopt.Thread(thread)) {
@@ -1042,7 +1077,10 @@ func TestRunStreamingWithTaskStatusUpdateEvent(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	thread := a.NewThread(t.Context())
+	thread, err := a.NewThread(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	var updates []*message.ResponseUpdate
 	for update, err := range agent.RunTextStream(t.Context(), a, "Check task status", agentopt.Thread(thread)) {
@@ -1102,7 +1140,10 @@ func TestRunStreamingWithTaskArtifactUpdateEvent(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	thread := a.NewThread(t.Context())
+	thread, err := a.NewThread(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	var updates []*message.ResponseUpdate
 	for update, err := range agent.RunTextStream(t.Context(), a, "Process artifact", agentopt.Thread(thread)) {

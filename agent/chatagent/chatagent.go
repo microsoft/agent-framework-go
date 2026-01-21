@@ -12,10 +12,10 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
+	"github.com/microsoft/agent-framework-go/agent/memory"
 	"github.com/microsoft/agent-framework-go/agent/middleware"
 	"github.com/microsoft/agent-framework-go/agent/middleware/autocall"
 	"github.com/microsoft/agent-framework-go/format"
-	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
@@ -87,7 +87,7 @@ func (a *Agent) Instructions() string {
 	return a.config.Instructions
 }
 
-func (a *Agent) NewThread(ctx context.Context, opts ...agentopt.NewThreadOption) memory.Thread {
+func (a *Agent) NewThread(ctx context.Context, opts ...agentopt.NewThreadOption) (memory.Thread, error) {
 	convID, _ := agentopt.Get(opts, ConversationID)
 	thread := &Thread{
 		ConversationID: convID,
@@ -95,7 +95,7 @@ func (a *Agent) NewThread(ctx context.Context, opts ...agentopt.NewThreadOption)
 	if a.config.NewContextProvider != nil {
 		thread.ContextProvider = a.config.NewContextProvider()
 	}
-	return thread
+	return thread, nil
 }
 
 func (a *Agent) UnmarshalThread(data []byte) (memory.Thread, error) {
@@ -106,7 +106,13 @@ func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ..
 	// Prepend options from agent configuration.
 	options = append(a.config.RunOptions, options...)
 	if _, ok := agentopt.Get(options, agentopt.Thread); !ok {
-		options = append(options, agentopt.Thread(a.NewThread(ctx)))
+		thread, err := a.NewThread(ctx)
+		if err != nil {
+			return func(yield func(*message.ResponseUpdate, error) bool) {
+				yield(nil, err)
+			}
+		}
+		options = append(options, agentopt.Thread(thread))
 	}
 	return middleware.RunChain(ctx, a.run, a.config.Middlewares, a, messages, options...)
 }

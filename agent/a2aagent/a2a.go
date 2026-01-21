@@ -18,7 +18,7 @@ import (
 	"github.com/a2aproject/a2a-go/a2aclient"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
-	"github.com/microsoft/agent-framework-go/memory"
+	"github.com/microsoft/agent-framework-go/agent/memory"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
@@ -63,11 +63,11 @@ func (a *Agent) Identity() agent.Identity {
 	return a.iden
 }
 
-func (a *Agent) NewThread(ctx context.Context, options ...agentopt.NewThreadOption) memory.Thread {
+func (a *Agent) NewThread(ctx context.Context, options ...agentopt.NewThreadOption) (memory.Thread, error) {
 	contextID, _ := agentopt.Get(options, WithContextID)
 	return &Thread{
 		ContextID: contextID,
-	}
+	}, nil
 }
 
 func (a *Agent) UnmarshalThread(data []byte) (memory.Thread, error) {
@@ -89,7 +89,12 @@ func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ..
 				yield(nil, errors.New("a thread must be provided when AllowBackgroundResponses is enabled"))
 				return
 			}
-			thread = a.NewThread(ctx).(*Thread)
+			t, err := a.NewThread(ctx)
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+			thread = t.(*Thread)
 		} else if t, ok := v.(*Thread); ok {
 			thread = t
 		} else {

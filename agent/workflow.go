@@ -8,7 +8,7 @@ import (
 	"reflect"
 
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
-	"github.com/microsoft/agent-framework-go/memory"
+	"github.com/microsoft/agent-framework-go/agent/memory"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/message/messageworkflow"
 	"github.com/microsoft/agent-framework-go/workflow"
@@ -17,12 +17,13 @@ import (
 func newExecutor(a Agent, emitEvents bool) *workflow.Executor {
 	var thread memory.Thread
 	var threadStateKey string
-	ensureThread := func(ctx context.Context) memory.Thread {
+	ensureThread := func(ctx context.Context) (memory.Thread, error) {
+		var err error
 		if thread == nil {
-			thread = a.NewThread(ctx)
+			thread, err = a.NewThread(ctx)
 		}
 		threadStateKey = reflect.ValueOf(thread).String()
-		return thread
+		return thread, err
 	}
 	id := agentDescriptiveID(a)
 	ex := &workflow.Executor{
@@ -58,7 +59,11 @@ func newExecutor(a Agent, emitEvents bool) *workflow.Executor {
 		TakeTurnHandler: func(ctx *workflow.Context, token workflow.TurnToken, messages []*message.Message) error {
 			emitEvents := token.EmitEventsOr(emitEvents)
 			options := make([]agentopt.RunOption, 0, 1+len(messages))
-			options = append(options, agentopt.Thread(ensureThread(ctx)))
+			thread, err := ensureThread(ctx)
+			if err != nil {
+				return err
+			}
+			options = append(options, agentopt.Thread(thread))
 			if emitEvents {
 				// Run the agent in streaming mode only when agent run update events are to be emitted.
 				options = append(options, agentopt.Stream(true))
