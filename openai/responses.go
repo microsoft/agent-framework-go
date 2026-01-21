@@ -114,7 +114,7 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 		}
 
 		// Handle continuation token for resuming background responses
-		if token, ok := agentopt.Get(options, agentopt.ContinuationToken); ok {
+		if token, ok := agentopt.Get(options, agentopt.ContinuationToken); ok && token != "" {
 			if len(messages) > 0 {
 				yield(nil, errors.New("messages are not allowed when continuing a background response using a continuation token"))
 				return
