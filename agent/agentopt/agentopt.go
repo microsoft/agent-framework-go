@@ -45,6 +45,8 @@ type (
 	toolModeOpt                 tool.ToolMode
 	streamOpt                   bool
 	allowBackgroundResponsesOpt bool
+
+	structuredOutputOpt struct{ any }
 )
 
 func (responseFormatOpt) RunOption()           {}
@@ -54,6 +56,7 @@ func (continuationTokenOpt) RunOption()        {}
 func (allowBackgroundResponsesOpt) RunOption() {}
 func (toolOpt) RunOption()                     {}
 func (toolModeOpt) RunOption()                 {}
+func (structuredOutputOpt) RunOption()         {}
 
 func (o responseFormatOpt) Value() any           { return o.Format }
 func (o sessionOpt) Value() any                  { return o.Session }
@@ -62,6 +65,11 @@ func (o continuationTokenOpt) Value() any        { return string(o) }
 func (o allowBackgroundResponsesOpt) Value() any { return bool(o) }
 func (o toolModeOpt) Value() any                 { return tool.ToolMode(o) }
 func (o toolOpt) Value() any                     { return o.Tool }
+func (o structuredOutputOpt) Value() any         { return o.any }
+
+func StructuredOutput(v any) RunOption {
+	return structuredOutputOpt{v}
+}
 
 // Tool adds a tool to the agent run.
 func Tool(tool tool.Tool) RunOption {
@@ -141,6 +149,25 @@ func All[T any](opts []RunOption, setter func(T) RunOption) iter.Seq[T] {
 		var zero T
 		var setterType = reflect.TypeOf(setter(zero))
 		for _, opt := range opts {
+			if reflect.TypeOf(opt) == setterType {
+				v, ok := opt.Value().(T)
+				if !ok {
+					panic("option type mismatch")
+				}
+				if !yield(v) {
+					return
+				}
+			}
+		}
+	}
+}
+
+func AllBackward[T any](opts []RunOption, setter func(T) RunOption) iter.Seq[T] {
+	return func(yield func(T) bool) {
+		var zero T
+		var setterType = reflect.TypeOf(setter(zero))
+		for i := len(opts) - 1; i >= 0; i-- {
+			opt := opts[i]
 			if reflect.TypeOf(opt) == setterType {
 				v, ok := opt.Value().(T)
 				if !ok {

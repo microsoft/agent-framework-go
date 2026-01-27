@@ -14,13 +14,12 @@ import (
 // FuncTool creates a function tool that invokes the given agent.
 // The provided session is used for the agent's context during invocations,
 // or nil to create a new session for each invocation.
-func FuncTool(agent Agent, session memory.Session) tool.FuncTool {
-	iden := agent.Identity()
+func FuncTool(a Agent, session memory.Session) tool.FuncTool {
 	return functool{
-		name:        iden.Name(),
-		description: iden.Description(),
+		name:        a.Name(),
+		description: a.Description(),
 		session:     session,
-		agent:       agent,
+		agent:       a,
 	}
 }
 

@@ -24,7 +24,7 @@ func main() {
 	a := openai.NewResponsesAgent(openai.ClientConfig{
 		Model: "gpt-5-nano",
 	}, chatagent.Config{
-		Middlewares: []middleware.Middleware{logger},
+		RunOptions: []agentopt.RunOption{middleware.With(logger)},
 	})
 
 	ctx := context.Background()

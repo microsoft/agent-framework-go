@@ -43,6 +43,7 @@ func main() {
 	for _, t := range tools {
 		opts = append(opts, agentopt.Tool(t))
 	}
+	opts = append(opts, middleware.With(logger)) // for logging agent interactions
 
 	// Create the Agent with MCP tools
 	// In Go, we configure tools as default options that will be used for all runs
@@ -51,7 +52,6 @@ func main() {
 	}, chatagent.Config{
 		Name:         "DocsAgent",
 		Instructions: "You are a helpful assistant that can help with microsoft documentation questions.",
-		Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
 		RunOptions:   opts,
 	})
 

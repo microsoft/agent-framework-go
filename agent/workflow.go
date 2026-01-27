@@ -89,24 +89,21 @@ func newExecutor(a Agent, emitEvents bool) *workflow.Executor {
 	return ex
 }
 
-func Bind(ag Agent, emitEvents bool) *workflow.ExecutorBinding {
+func Bind(a Agent, emitEvents bool) *workflow.ExecutorBinding {
 	return &workflow.ExecutorBinding{
-		ID:           agentDescriptiveID(ag),
-		ExecutorType: reflect.TypeOf(ag),
-		Raw:          ag,
+		ID:           agentDescriptiveID(a),
+		ExecutorType: reflect.TypeOf(a),
+		Raw:          a,
 		NewExecutor: func(_ string) (*workflow.Executor, error) {
-			return newExecutor(ag, emitEvents), nil
+			return newExecutor(a, emitEvents), nil
 		},
 		SupportsConcurrentSharedExecution: true,
 	}
 }
 
-func agentDescriptiveID(ag Agent) string {
-	iden := ag.Identity()
-	id := iden.ID()
-	name := iden.Name()
-	if name != "" {
-		return name + "_" + id
+func agentDescriptiveID(a Agent) string {
+	if a.Name() != "" {
+		return a.Name() + "_" + a.ID()
 	}
-	return id
+	return a.ID()
 }

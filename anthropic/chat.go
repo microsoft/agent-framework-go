@@ -14,6 +14,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
 	"github.com/microsoft/agent-framework-go/message"
@@ -32,7 +33,7 @@ type ClientConfig struct {
 	BaseURL string // Optional, defaults to Anthropic API
 }
 
-func NewChatAgent(config ClientConfig, options chatagent.Config) *chatagent.Agent {
+func NewChatAgent(config ClientConfig, options chatagent.Config) agent.Agent {
 	opts := []option.RequestOption{}
 	if config.APIKey != "" {
 		opts = append(opts, option.WithAPIKey(config.APIKey))

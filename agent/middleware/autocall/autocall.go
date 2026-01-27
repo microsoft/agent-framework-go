@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/middleware"
 	"github.com/microsoft/agent-framework-go/internal/slogx"
@@ -69,7 +68,7 @@ func New(cfg Config) middleware.Middleware {
 	return ac
 }
 
-func (f *autocall) Run(next middleware.RunFunc, ctx context.Context, a agent.Agent, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+func (f *autocall) Run(next middleware.RunFunc, ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		tools, requiresApproval := f.createToolsMap(agentopt.All(opts, agentopt.Tool))
 
@@ -130,7 +129,7 @@ func (f *autocall) Run(next middleware.RunFunc, ctx context.Context, a agent.Age
 			functionCallContents = functionCallContents[:0]
 			var hasApprovalRequiringFcc bool
 			var lastApprovalCheckedFCCIdx, lastYieldedUpdateIdx int
-			for update, err := range next(ctx, a, messages, opts...) {
+			for update, err := range next(ctx, messages, opts...) {
 				if err != nil {
 					yield(nil, err)
 					return

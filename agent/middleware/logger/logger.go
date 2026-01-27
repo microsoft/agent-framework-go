@@ -34,33 +34,34 @@ type logger struct {
 	l slogx.Logger
 }
 
-func (l *logger) Run(next middleware.RunFunc, ctx context.Context, a agent.Agent, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+func (l *logger) Run(next middleware.RunFunc, ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		start := time.Now()
-		l.log(ctx, a, slog.LevelDebug, "run invoked", slogx.SensitiveData("messages", messages), slogx.SensitiveData("opts", opts))
-		for update, err := range next(ctx, a, messages, opts...) {
+		l.log(ctx, slog.LevelDebug, "run invoked", slogx.SensitiveData("messages", messages), slogx.SensitiveData("opts", opts))
+		for update, err := range next(ctx, messages, opts...) {
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
-					l.log(ctx, a, slog.LevelDebug, "run canceled", "error", err)
+					l.log(ctx, slog.LevelDebug, "run canceled", "error", err)
 				} else {
-					l.log(ctx, a, slog.LevelError, "run failed", "error", err)
+					l.log(ctx, slog.LevelError, "run failed", "error", err)
 				}
 			} else if l.l.SensitiveData {
-				l.log(ctx, a, slog.LevelDebug, "run received update", slogx.SensitiveData("update", update))
+				l.log(ctx, slog.LevelDebug, "run received update", slogx.SensitiveData("update", update))
 			}
 			if !yield(update, err) {
 				return
 			}
 		}
-		l.log(ctx, a, slog.LevelDebug, "run completed", "duration", time.Since(start).String())
+		l.log(ctx, slog.LevelDebug, "run completed", "duration", time.Since(start).String())
 	}
 }
 
-func (l *logger) log(ctx context.Context, a agent.Agent, level slog.Level, msg string, args ...any) {
-	if a != nil {
-		args = append(args, "agentID", a.Identity().ID())
-		if a.Identity().Name() != "" {
-			args = append(args, "agentName", a.Identity().Name())
+func (l *logger) log(ctx context.Context, level slog.Level, msg string, args ...any) {
+	id, name, ok := agent.IdentityFromContext(ctx)
+	if ok {
+		args = append(args, "agentID", id)
+		if name != "" {
+			args = append(args, "agentName", name)
 		}
 	}
 	l.l.Log(ctx, level, msg, args...)

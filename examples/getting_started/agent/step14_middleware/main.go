@@ -27,14 +27,14 @@ func main() {
 		Model: "gpt-5-nano",
 	}, chatagent.Config{
 		Instructions: "You are an AI assistant that helps people find information.",
-		Middlewares:  []middleware.Middleware{logger, middleware.Func(guardrailsMiddleware)},
+		RunOptions:   []agentopt.RunOption{middleware.With(logger), middleware.WithFunc(guardrailsMiddleware)},
 	})
 
 	demo.Response(agent.RunText(context.Background(), a, "Tell me something that contains the word harmful."))
 }
 
 // guardrailsMiddleware enforces guardrails by redacting certain keywords from input and output messages.
-func guardrailsMiddleware(next middleware.RunFunc, ctx context.Context, a agent.Agent, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+func guardrailsMiddleware(next middleware.RunFunc, ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	redact := func(contents message.Contents) message.Contents {
 		// Simple redaction logic for demonstration purposes.
 		for _, c := range contents {
@@ -51,7 +51,7 @@ func guardrailsMiddleware(next middleware.RunFunc, ctx context.Context, a agent.
 			msg.Contents = redact(msg.Contents)
 		}
 		// Call the next middleware/agent in the chain.
-		for update, err := range next(ctx, a, messages, opts...) {
+		for update, err := range next(ctx, messages, opts...) {
 			if err == nil && update != nil {
 				// Redact keywords from output messages
 				update.Contents = redact(update.Contents)

@@ -34,7 +34,7 @@ func main() {
 	}, chatagent.Config{
 		Instructions: "You are a helpful assistant.",
 		Name:         "HelpfulAssistant",
-		Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
+		RunOptions:   []agentopt.RunOption{middleware.With(logger)}, // for logging agent interactions
 	})
 
 	ctx := context.Background()
@@ -57,9 +57,9 @@ func main() {
 	}, chatagent.Config{
 		Instructions: "You are a helpful assistant.",
 		Name:         "HelpfulAssistant",
-		Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
 		RunOptions: []agentopt.RunOption{
 			agentopt.ResponseFormat(jsonformat.MustFor[PersonInfo]()),
+			middleware.With(logger), // for logging agent interactions
 		},
 	})
 

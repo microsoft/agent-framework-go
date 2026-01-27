@@ -4,12 +4,26 @@ package agent
 
 import (
 	"context"
-	"errors"
 	"iter"
 
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/message"
 )
+
+type identityKey struct{}
+
+type identity struct {
+	id   string
+	name string
+}
+
+func IdentityFromContext(ctx context.Context) (id, name string, ok bool) {
+	if v := ctx.Value(identityKey{}); v != nil {
+		ident := v.(identity)
+		return ident.id, ident.name, true
+	}
+	return "", "", false
+}
 
 // Run executes the agent with the given options and returns the response.
 func Run(ctx context.Context, a Agent, messages []*message.Message, opts ...agentopt.RunOption) (*message.Response, error) {
@@ -63,14 +77,7 @@ func RunMessageFor[T any](ctx context.Context, a Agent, msg *message.Message, op
 // RunFor executes the agent with the given messages and returns the result of type T.
 func RunFor[T any](ctx context.Context, a Agent, messages []*message.Message, opts ...agentopt.RunOption) (T, error) {
 	var v T
-	if a, ok := a.(StructuredOutputAgent); ok {
-		for _, err := range a.RunOf(ctx, &v, messages, opts...) {
-			if err != nil {
-				return v, err
-			}
-			// Exhaust the iterator to get the final result.
-		}
-		return v, nil
-	}
-	return v, errors.New("agent does not support structured output")
+	opts = append(opts, agentopt.StructuredOutput(&v))
+	_, err := Run(ctx, a, messages, opts...)
+	return v, err
 }

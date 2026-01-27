@@ -87,30 +87,34 @@ type Response struct {
 	Error    error
 }
 
-var _ agent.Agent = (*Agent)(nil)
-
-type Agent struct {
-	Iden           agent.Identity
-	NewSessionFunc func(context.Context, ...agentopt.NewSessionOption) (memory.Session, error)
-	Responses      []Turn
+type testagent struct {
+	responses []Turn
 
 	currentTurn int
 }
 
-func (a *Agent) Identity() agent.Identity {
-	if a.Iden == (agent.Identity{}) {
-		return agent.NewIdentity("test-agent-id", "TestAgent", "A test agent")
+func NewAgent(responses []Turn) agent.Agent {
+	a := &testagent{
+		responses: responses,
 	}
-	return a.Iden
+	return agent.New(agent.Config{
+		ID:          "test-agent-id",
+		Name:        "TestAgent",
+		Description: "A test agent",
+
+		NewSession:       a.newSession,
+		UnmarshalSession: a.unmarshalSession,
+		Run:              a.run,
+	})
 }
 
-func (a *Agent) Run(ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+func (a *testagent) run(ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		defer func() { a.currentTurn++ }()
-		if a.currentTurn >= len(a.Responses) {
+		if a.currentTurn >= len(a.responses) {
 			panic("no more predefined turns")
 		}
-		turn := a.Responses[a.currentTurn]
+		turn := a.responses[a.currentTurn]
 		for _, cb := range turn.Callbacks {
 			cb(ctx, messages, opts...)
 		}
@@ -122,14 +126,11 @@ func (a *Agent) Run(ctx context.Context, messages []*message.Message, opts ...ag
 	}
 }
 
-func (a *Agent) NewSession(ctx context.Context, opts ...agentopt.NewSessionOption) (memory.Session, error) {
-	if a.NewSessionFunc != nil {
-		return a.NewSessionFunc(ctx, opts...)
-	}
+func (a *testagent) newSession(ctx context.Context, opts ...agentopt.NewSessionOption) (memory.Session, error) {
 	return &Session{}, nil
 }
 
-func (a *Agent) UnmarshalSession(data []byte) (memory.Session, error) {
+func (a *testagent) unmarshalSession(data []byte) (memory.Session, error) {
 	return &Session{}, nil
 }
 
@@ -159,7 +160,7 @@ func (m *Middleware) Called() bool {
 	return m.called
 }
 
-func (m *Middleware) Run(next middleware.RunFunc, ctx context.Context, a agent.Agent, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+func (m *Middleware) Run(next middleware.RunFunc, ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	m.called = true
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		defer func() { m.currentTurn++ }()
@@ -171,7 +172,7 @@ func (m *Middleware) Run(next middleware.RunFunc, ctx context.Context, a agent.A
 				}
 			}
 		}
-		for update, err := range next(ctx, a, messages, opts...) {
+		for update, err := range next(ctx, messages, opts...) {
 			if !yield(update, err) {
 				return
 			}
@@ -193,7 +194,7 @@ type Runner struct {
 	currentTurn int
 }
 
-func (r *Runner) Run(ctx context.Context, a agent.Agent, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+func (r *Runner) Run(ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		defer func() { r.currentTurn++ }()
 		if r.currentTurn >= len(r.Responses) {

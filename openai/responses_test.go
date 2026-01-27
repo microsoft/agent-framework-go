@@ -4462,7 +4462,7 @@ func TestResponsesBackgroundResponses_StreamResumption_WithMessages(t *testing.T
 	token := `{"response_id":"resp_68d40dc671a0819cb0ee920078333451029e611c3cc4a34b","sequence_number":9}`
 
 	// Attempt to resume stream with messages should fail
-	for _, err := range a.Run(context.Background(), []*message.Message{
+	for _, err := range agent.RunStream(context.Background(), a, []*message.Message{
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Please book a hotel for me"}}},
 	},
 		agentopt.AllowBackgroundResponses(true),

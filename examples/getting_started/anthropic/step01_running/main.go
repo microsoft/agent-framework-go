@@ -6,6 +6,7 @@ import (
 	"context"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
 	"github.com/microsoft/agent-framework-go/agent/middleware"
 	"github.com/microsoft/agent-framework-go/anthropic"
@@ -25,7 +26,7 @@ func main() {
 	}, chatagent.Config{
 		Instructions: "You are good at telling jokes.",
 		Name:         "Joker",
-		Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
+		RunOptions:   []agentopt.RunOption{middleware.With(logger)}, // for logging agent interactions
 	})
 
 	ctx := context.Background()

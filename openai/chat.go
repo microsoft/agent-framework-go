@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
 	"github.com/microsoft/agent-framework-go/format"
@@ -60,7 +61,7 @@ type ClientConfig struct {
 	APIVersion string
 }
 
-func newChatAgent(isAzure bool, config ClientConfig, options chatagent.Config) *chatagent.Agent {
+func newChatAgent(isAzure bool, config ClientConfig, options chatagent.Config) agent.Agent {
 	ops := make([]option.RequestOption, 0, 2)
 	if isAzure {
 		if config.Endpoint != "" {
@@ -97,12 +98,12 @@ func newChatAgent(isAzure bool, config ClientConfig, options chatagent.Config) *
 	return chatagent.NewAgent(c.run, options)
 }
 
-func NewChatAgent(config ClientConfig, options chatagent.Config) *chatagent.Agent {
+func NewChatAgent(config ClientConfig, options chatagent.Config) agent.Agent {
 	return newChatAgent(false, config, options)
 }
 
 // NewChatAgentAzure creates a new [Agent].
-func NewChatAgentAzure(config ClientConfig, options chatagent.Config) *chatagent.Agent {
+func NewChatAgentAzure(config ClientConfig, options chatagent.Config) agent.Agent {
 	return newChatAgent(true, config, options)
 }
 

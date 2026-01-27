@@ -37,9 +37,9 @@ func main() {
 		Model: "gpt-4o-mini",
 	}, chatagent.Config{
 		Instructions: "You are a helpful assistant",
-		Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
 		RunOptions: []agentopt.RunOption{
 			agentopt.Tool(tool.ApprovalRequiredFunc(weatherTool)),
+			middleware.With(logger), // for logging agent interactions
 		},
 	})
 
