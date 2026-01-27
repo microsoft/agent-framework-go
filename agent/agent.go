@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/memory"
+	"github.com/microsoft/agent-framework-go/agent/middleware"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
@@ -77,7 +78,47 @@ func (a *agent) Description() string {
 }
 
 func (a *agent) Run(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
-	return a.run(ctx, messages, options...)
+	if len(a.runOptions) != 0 {
+		// Prepend options from agent configuration.
+		options = append(a.runOptions, options...)
+	}
+	// Ensure a session is provided in the options.
+	if _, ok := agentopt.Get(options, agentopt.Session); !ok {
+		session, err := a.NewSession(ctx)
+		if err != nil {
+			return func(yield func(*message.ResponseUpdate, error) bool) {
+				yield(nil, err)
+			}
+		}
+		options = append(options, agentopt.Session(session))
+	}
+	// Middleware to set AuthorID and AuthorName on each ResponseUpdate.
+	options = append(options, middleware.With(middleware.Func(
+		func(next middleware.RunFunc, ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+			return func(yield func(*message.ResponseUpdate, error) bool) {
+				id, name := a.ID(), a.Name()
+				for update, err := range next(ctx, messages, options...) {
+					if update != nil {
+						if update.AuthorID == "" {
+							update.AuthorID = id
+						}
+						if update.AuthorName == "" {
+							update.AuthorName = name
+						}
+					}
+					if !yield(update, err) {
+						return
+					}
+				}
+			}
+		})))
+
+	// Add agent identity to context so that middlewares can log it.
+	ctx = context.WithValue(ctx, identityKey{}, identity{
+		id:   a.ID(),
+		name: a.Name(),
+	})
+	return middleware.RunChain(ctx, a.run, messages, options...)
 }
 
 func (a *agent) NewSession(ctx context.Context, options ...agentopt.NewSessionOption) (memory.Session, error) {
@@ -86,10 +127,6 @@ func (a *agent) NewSession(ctx context.Context, options ...agentopt.NewSessionOp
 
 func (a *agent) UnmarshalSession(data []byte) (memory.Session, error) {
 	return a.unmarshalSession(data)
-}
-
-func (a *agent) RunOptions() []agentopt.RunOption {
-	return a.runOptions
 }
 
 func (a *agent) internal() {}

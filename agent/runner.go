@@ -7,7 +7,6 @@ import (
 	"iter"
 
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
-	"github.com/microsoft/agent-framework-go/agent/middleware"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
@@ -29,7 +28,7 @@ func IdentityFromContext(ctx context.Context) (id, name string, ok bool) {
 // Run executes the agent with the given options and returns the response.
 func Run(ctx context.Context, a Agent, messages []*message.Message, opts ...agentopt.RunOption) (*message.Response, error) {
 	var resp message.Response
-	for update, err := range run(ctx, a, messages, opts...) {
+	for update, err := range a.Run(ctx, messages, opts...) {
 		if err != nil {
 			return nil, err
 		}
@@ -52,7 +51,7 @@ func RunMessage(ctx context.Context, a Agent, msg *message.Message, opts ...agen
 // RunStream executes the agent with the given options and returns a streaming sequence of response updates.
 func RunStream(ctx context.Context, a Agent, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	opts = append(opts, agentopt.Stream(true))
-	return run(ctx, a, messages, opts...)
+	return a.Run(ctx, messages, opts...)
 }
 
 // RunTextStream executes the agent with a single text message and returns a streaming sequence of response updates.
@@ -81,48 +80,4 @@ func RunFor[T any](ctx context.Context, a Agent, messages []*message.Message, op
 	opts = append(opts, agentopt.StructuredOutput(&v))
 	_, err := Run(ctx, a, messages, opts...)
 	return v, err
-}
-
-func run(ctx context.Context, a Agent, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
-	if a, ok := a.(interface{ RunOptions() []agentopt.RunOption }); ok {
-		// Prepend options from agent configuration.
-		options = append(a.RunOptions(), options...)
-	}
-	// Ensure a session is provided in the options.
-	if _, ok := agentopt.Get(options, agentopt.Session); !ok {
-		session, err := a.NewSession(ctx)
-		if err != nil {
-			return func(yield func(*message.ResponseUpdate, error) bool) {
-				yield(nil, err)
-			}
-		}
-		options = append(options, agentopt.Session(session))
-	}
-	// Middleware to set AuthorID and AuthorName on each ResponseUpdate.
-	options = append(options, middleware.With(middleware.Func(
-		func(next middleware.RunFunc, ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
-			return func(yield func(*message.ResponseUpdate, error) bool) {
-				id, name := a.ID(), a.Name()
-				for update, err := range next(ctx, messages, options...) {
-					if update != nil {
-						if update.AuthorID == "" {
-							update.AuthorID = id
-						}
-						if update.AuthorName == "" {
-							update.AuthorName = name
-						}
-					}
-					if !yield(update, err) {
-						return
-					}
-				}
-			}
-		})))
-
-	// Add agent identity to context so that middlewares can log it.
-	ctx = context.WithValue(ctx, identityKey{}, identity{
-		id:   a.ID(),
-		name: a.Name(),
-	})
-	return middleware.RunChain(ctx, a.Run, messages, options...)
 }
