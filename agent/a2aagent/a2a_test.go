@@ -284,8 +284,8 @@ func TestRunWithValidUserMessage(t *testing.T) {
 	}
 }
 
-// TestRunWithNewThread tests that new thread updates context ID
-func TestRunWithNewThread(t *testing.T) {
+// TestRunWithNewSession tests that new session updates context ID
+func TestRunWithNewSession(t *testing.T) {
 	transport := &mockA2ATransport{
 		responseToReturn: &a2a.Message{
 			ID:        "response-123",
@@ -296,35 +296,35 @@ func TestRunWithNewThread(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	thread, err := a.NewThread(t.Context())
+	session, err := a.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = agent.RunText(t.Context(), a, "Test message", agentopt.Thread(thread))
+	_, err = agent.RunText(t.Context(), a, "Test message", agentopt.Session(session))
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil", err)
 	}
 
-	a2aThread, ok := thread.(*a2aagent.Thread)
+	a2aSession, ok := session.(*a2aagent.Session)
 	if !ok {
-		t.Fatalf("thread type = %T, want *a2aagent.Thread", thread)
+		t.Fatalf("session type = %T, want *a2aagent.Session", session)
 	}
-	if a2aThread.ContextID != "new-context-id" {
-		t.Errorf("thread.ContextID = %q, want %q", a2aThread.ContextID, "new-context-id")
+	if a2aSession.ContextID != "new-context-id" {
+		t.Errorf("session.ContextID = %q, want %q", a2aSession.ContextID, "new-context-id")
 	}
 }
 
-// TestRunWithExistingThread tests that existing thread context ID is used
-func TestRunWithExistingThread(t *testing.T) {
+// TestRunWithExistingSession tests that existing session context ID is used
+func TestRunWithExistingSession(t *testing.T) {
 	transport := &mockA2ATransport{}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	thread, err := a.NewThread(t.Context(), a2aagent.WithContextID("existing-context-id"))
+	session, err := a.NewSession(t.Context(), a2aagent.WithContextID("existing-context-id"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	_, err = agent.RunText(t.Context(), a, "Test message", agentopt.Thread(thread))
+	_, err = agent.RunText(t.Context(), a, "Test message", agentopt.Session(session))
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil", err)
 	}
@@ -338,8 +338,8 @@ func TestRunWithExistingThread(t *testing.T) {
 	}
 }
 
-// TestRunWithThreadHavingDifferentContextID tests error when context ID mismatch
-func TestRunWithThreadHavingDifferentContextID(t *testing.T) {
+// TestRunWithSessionHavingDifferentContextID tests error when context ID mismatch
+func TestRunWithSessionHavingDifferentContextID(t *testing.T) {
 	transport := &mockA2ATransport{
 		responseToReturn: &a2a.Message{
 			ID:        "response-123",
@@ -350,12 +350,12 @@ func TestRunWithThreadHavingDifferentContextID(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	thread, err := a.NewThread(t.Context(), a2aagent.WithContextID("existing-context-id"))
+	session, err := a.NewSession(t.Context(), a2aagent.WithContextID("existing-context-id"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	_, err = agent.RunText(t.Context(), a, "Test message", agentopt.Thread(thread))
+	_, err = agent.RunText(t.Context(), a, "Test message", agentopt.Session(session))
 	if err == nil {
 		t.Error("Run() error = nil, want error")
 	}
@@ -441,8 +441,8 @@ func TestRunStreamingWithValidUserMessage(t *testing.T) {
 	}
 }
 
-// TestRunStreamingWithThread tests streaming with thread context ID update
-func TestRunStreamingWithThread(t *testing.T) {
+// TestRunStreamingWithSession tests streaming with session context ID update
+func TestRunStreamingWithSession(t *testing.T) {
 	transport := &mockA2ATransport{
 		streamingResponseToReturn: &a2a.Message{
 			ID:        "stream-1",
@@ -453,38 +453,38 @@ func TestRunStreamingWithThread(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	thread, err := a.NewThread(t.Context())
+	session, err := a.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	for _, err := range agent.RunTextStream(t.Context(), a, "Test streaming", agentopt.Thread(thread)) {
+	for _, err := range agent.RunTextStream(t.Context(), a, "Test streaming", agentopt.Session(session)) {
 		if err != nil {
 			t.Fatalf("RunStream() error = %v, want nil", err)
 		}
 	}
 
-	a2aThread, ok := thread.(*a2aagent.Thread)
+	a2aSession, ok := session.(*a2aagent.Session)
 	if !ok {
-		t.Fatalf("thread type = %T, want *a2aagent.Thread", thread)
+		t.Fatalf("session type = %T, want *a2aagent.Session", session)
 	}
-	if a2aThread.ContextID != "new-stream-context" {
-		t.Errorf("thread.ContextID = %q, want %q", a2aThread.ContextID, "new-stream-context")
+	if a2aSession.ContextID != "new-stream-context" {
+		t.Errorf("session.ContextID = %q, want %q", a2aSession.ContextID, "new-stream-context")
 	}
 }
 
-// TestRunStreamingWithExistingThread tests streaming with existing thread
-func TestRunStreamingWithExistingThread(t *testing.T) {
+// TestRunStreamingWithExistingSession tests streaming with existing session
+func TestRunStreamingWithExistingSession(t *testing.T) {
 	transport := &mockA2ATransport{
 		streamingResponseToReturn: &a2a.Message{},
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	thread, err := a.NewThread(t.Context(), a2aagent.WithContextID("existing-context-id"))
+	session, err := a.NewSession(t.Context(), a2aagent.WithContextID("existing-context-id"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, err := range agent.RunTextStream(t.Context(), a, "Test streaming", agentopt.Thread(thread)) {
+	for _, err := range agent.RunTextStream(t.Context(), a, "Test streaming", agentopt.Session(session)) {
 		if err != nil {
 			t.Fatalf("RunStream() error = %v, want nil", err)
 		}
@@ -499,8 +499,8 @@ func TestRunStreamingWithExistingThread(t *testing.T) {
 	}
 }
 
-// TestRunStreamingWithThreadHavingDifferentContextID tests error on context ID mismatch in streaming
-func TestRunStreamingWithThreadHavingDifferentContextID(t *testing.T) {
+// TestRunStreamingWithSessionHavingDifferentContextID tests error on context ID mismatch in streaming
+func TestRunStreamingWithSessionHavingDifferentContextID(t *testing.T) {
 	transport := &mockA2ATransport{
 		streamingResponseToReturn: &a2a.Message{
 			ID:        "stream-1",
@@ -511,13 +511,13 @@ func TestRunStreamingWithThreadHavingDifferentContextID(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	thread, err := a.NewThread(t.Context(), a2aagent.WithContextID("existing-context-id"))
+	session, err := a.NewSession(t.Context(), a2aagent.WithContextID("existing-context-id"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	gotError := false
-	for _, err := range agent.RunTextStream(t.Context(), a, "Test streaming", agentopt.Thread(thread)) {
+	for _, err := range agent.RunTextStream(t.Context(), a, "Test streaming", agentopt.Session(session)) {
 		if err != nil {
 			gotError = true
 			break
@@ -605,22 +605,22 @@ func TestRunWithHostedFileContent(t *testing.T) {
 	}
 }
 
-// TestRunWithInvalidThreadType tests error when using invalid thread type
-func TestRunWithInvalidThreadType(t *testing.T) {
+// TestRunWithInvalidSessionType tests error when using invalid session type
+func TestRunWithInvalidSessionType(t *testing.T) {
 	transport := &mockA2ATransport{}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	// Create a custom thread type that is not an a2aagent.Thread
-	invalidThread := &customAgentThread{}
+	// Create a custom session type that is not an a2aagent.Session
+	invalidSession := &customAgentSession{}
 
-	_, err := agent.RunText(t.Context(), a, "Test message", agentopt.Thread(invalidThread))
+	_, err := agent.RunText(t.Context(), a, "Test message", agentopt.Session(invalidSession))
 	if err == nil {
-		t.Error("Run() error = nil, want error for invalid thread type")
+		t.Error("Run() error = nil, want error for invalid session type")
 	}
 }
 
-// TestRunStreamingWithInvalidThreadType tests error when using invalid thread type in streaming
-func TestRunStreamingWithInvalidThreadType(t *testing.T) {
+// TestRunStreamingWithInvalidSessionType tests error when using invalid session type in streaming
+func TestRunStreamingWithInvalidSessionType(t *testing.T) {
 	transport := &mockA2ATransport{
 		streamingResponseToReturn: &a2a.Message{
 			ID:   "stream-1",
@@ -632,11 +632,11 @@ func TestRunStreamingWithInvalidThreadType(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	// Create a custom thread type that is not an a2aagent.Thread
-	invalidThread := &customAgentThread{}
+	// Create a custom session type that is not an a2aagent.Session
+	invalidSession := &customAgentSession{}
 
 	gotError := false
-	for _, err := range agent.RunTextStream(t.Context(), a, "Test message", agentopt.Thread(invalidThread)) {
+	for _, err := range agent.RunTextStream(t.Context(), a, "Test message", agentopt.Session(invalidSession)) {
 		if err != nil {
 			gotError = true
 			break
@@ -644,7 +644,7 @@ func TestRunStreamingWithInvalidThreadType(t *testing.T) {
 	}
 
 	if !gotError {
-		t.Error("RunStream() expected error for invalid thread type, got nil")
+		t.Error("RunStream() expected error for invalid session type, got nil")
 	}
 }
 
@@ -675,8 +675,8 @@ func TestRunWithContinuationToken(t *testing.T) {
 	}
 }
 
-// TestRunWithTaskInThreadAndMessage tests that task ID is added as reference
-func TestRunWithTaskInThreadAndMessage(t *testing.T) {
+// TestRunWithTaskInSessionAndMessage tests that task ID is added as reference
+func TestRunWithTaskInSessionAndMessage(t *testing.T) {
 	transport := &mockA2ATransport{
 		responseToReturn: &a2a.Message{
 			ID:   "response-123",
@@ -688,13 +688,13 @@ func TestRunWithTaskInThreadAndMessage(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	thread, err := a.NewThread(t.Context())
+	session, err := a.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	thread.(*a2aagent.Thread).TaskID = "task-123"
+	session.(*a2aagent.Session).TaskID = "task-123"
 
-	_, err = agent.RunText(t.Context(), a, "Please make the background transparent", agentopt.Thread(thread))
+	_, err = agent.RunText(t.Context(), a, "Please make the background transparent", agentopt.Session(session))
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil", err)
 	}
@@ -710,7 +710,7 @@ func TestRunWithTaskInThreadAndMessage(t *testing.T) {
 	}
 }
 
-// TestRunWithAgentTask tests that thread task ID is updated
+// TestRunWithAgentTask tests that session task ID is updated
 func TestRunWithAgentTask(t *testing.T) {
 	transport := &mockA2ATransport{
 		responseToReturn: &a2a.Task{
@@ -723,22 +723,22 @@ func TestRunWithAgentTask(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	thread, err := a.NewThread(t.Context())
+	session, err := a.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	_, err = agent.RunText(t.Context(), a, "Start a task", agentopt.Thread(thread))
+	_, err = agent.RunText(t.Context(), a, "Start a task", agentopt.Session(session))
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil", err)
 	}
 
-	a2aThread, ok := thread.(*a2aagent.Thread)
+	a2aSession, ok := session.(*a2aagent.Session)
 	if !ok {
-		t.Fatalf("thread type = %T, want *a2aagent.Thread", thread)
+		t.Fatalf("session type = %T, want *a2aagent.Session", session)
 	}
-	if a2aThread.TaskID != "task-456" {
-		t.Errorf("thread.TaskID = %q, want %q", a2aThread.TaskID, "task-456")
+	if a2aSession.TaskID != "task-456" {
+		t.Errorf("session.TaskID = %q, want %q", a2aSession.TaskID, "task-456")
 	}
 }
 
@@ -763,12 +763,12 @@ func TestRunWithAgentTaskResponse(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	thread, err := a.NewThread(t.Context())
+	session, err := a.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	result, err := agent.RunText(t.Context(), a, "Start a long-running task", agentopt.Thread(thread))
+	result, err := agent.RunText(t.Context(), a, "Start a long-running task", agentopt.Session(session))
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil", err)
 	}
@@ -791,15 +791,15 @@ func TestRunWithAgentTaskResponse(t *testing.T) {
 		t.Errorf("continuation token = %q, want %q", result.ContinuationToken, "task-789")
 	}
 
-	a2aThread, ok := thread.(*a2aagent.Thread)
+	a2aSession, ok := session.(*a2aagent.Session)
 	if !ok {
-		t.Fatalf("thread type = %T, want *a2aagent.Thread", thread)
+		t.Fatalf("session type = %T, want *a2aagent.Session", session)
 	}
-	if a2aThread.ContextID != "context-456" {
-		t.Errorf("thread.ContextID = %q, want %q", a2aThread.ContextID, "context-456")
+	if a2aSession.ContextID != "context-456" {
+		t.Errorf("session.ContextID = %q, want %q", a2aSession.ContextID, "context-456")
 	}
-	if a2aThread.TaskID != "task-789" {
-		t.Errorf("thread.TaskID = %q, want %q", a2aThread.TaskID, "task-789")
+	if a2aSession.TaskID != "task-789" {
+		t.Errorf("session.TaskID = %q, want %q", a2aSession.TaskID, "task-789")
 	}
 }
 
@@ -868,8 +868,8 @@ func TestRunStreamingWithContinuationTokenAndMessages(t *testing.T) {
 	}
 }
 
-// TestRunStreamingWithTaskInThreadAndMessage tests task reference in streaming
-func TestRunStreamingWithTaskInThreadAndMessage(t *testing.T) {
+// TestRunStreamingWithTaskInSessionAndMessage tests task reference in streaming
+func TestRunStreamingWithTaskInSessionAndMessage(t *testing.T) {
 	transport := &mockA2ATransport{
 		streamingResponseToReturn: &a2a.Message{
 			ID:   "response-123",
@@ -881,13 +881,13 @@ func TestRunStreamingWithTaskInThreadAndMessage(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	thread, err := a.NewThread(t.Context())
+	session, err := a.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	thread.(*a2aagent.Thread).TaskID = "task-123"
+	session.(*a2aagent.Session).TaskID = "task-123"
 
-	for _, err := range agent.RunTextStream(t.Context(), a, "Please make the background transparent", agentopt.Thread(thread)) {
+	for _, err := range agent.RunTextStream(t.Context(), a, "Please make the background transparent", agentopt.Session(session)) {
 		if err != nil {
 			t.Fatalf("RunStream() error = %v, want nil", err)
 		}
@@ -904,8 +904,8 @@ func TestRunStreamingWithTaskInThreadAndMessage(t *testing.T) {
 	}
 }
 
-// TestRunStreamingWithAgentTaskUpdatesThread tests thread task ID update in streaming
-func TestRunStreamingWithAgentTaskUpdatesThread(t *testing.T) {
+// TestRunStreamingWithAgentTaskUpdatesSession tests session task ID update in streaming
+func TestRunStreamingWithAgentTaskUpdatesSession(t *testing.T) {
 	transport := &mockA2ATransport{
 		streamingResponseToReturn: &a2a.Task{
 			ID:        a2a.TaskID("task-456"),
@@ -923,23 +923,23 @@ func TestRunStreamingWithAgentTaskUpdatesThread(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	thread, err := a.NewThread(t.Context())
+	session, err := a.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	for _, err := range agent.RunTextStream(t.Context(), a, "Start a task", agentopt.Thread(thread)) {
+	for _, err := range agent.RunTextStream(t.Context(), a, "Start a task", agentopt.Session(session)) {
 		if err != nil {
 			t.Fatalf("RunStream() error = %v, want nil", err)
 		}
 	}
 
-	a2aThread, ok := thread.(*a2aagent.Thread)
+	a2aSession, ok := session.(*a2aagent.Session)
 	if !ok {
-		t.Fatalf("thread type = %T, want *a2aagent.Thread", thread)
+		t.Fatalf("session type = %T, want *a2aagent.Session", session)
 	}
-	if a2aThread.TaskID != "task-456" {
-		t.Errorf("thread.TaskID = %q, want %q", a2aThread.TaskID, "task-456")
+	if a2aSession.TaskID != "task-456" {
+		t.Errorf("session.TaskID = %q, want %q", a2aSession.TaskID, "task-456")
 	}
 }
 
@@ -1018,13 +1018,13 @@ func TestRunStreamingWithAgentTaskYieldsUpdate(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	thread, err := a.NewThread(t.Context())
+	session, err := a.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	var updates []*message.ResponseUpdate
-	for update, err := range agent.RunTextStream(t.Context(), a, "Start long-running task", agentopt.Thread(thread)) {
+	for update, err := range agent.RunTextStream(t.Context(), a, "Start long-running task", agentopt.Session(session)) {
 		if err != nil {
 			t.Fatalf("RunStream() error = %v, want nil", err)
 		}
@@ -1049,15 +1049,15 @@ func TestRunStreamingWithAgentTaskYieldsUpdate(t *testing.T) {
 		t.Errorf("update.RawRepresentation type = %T, want *a2a.Task", update.RawRepresentation)
 	}
 
-	a2aThread, ok := thread.(*a2aagent.Thread)
+	a2aSession, ok := session.(*a2aagent.Session)
 	if !ok {
-		t.Fatalf("thread type = %T, want *a2aagent.Thread", thread)
+		t.Fatalf("session type = %T, want *a2aagent.Session", session)
 	}
-	if a2aThread.ContextID != contextID {
-		t.Errorf("thread.ContextID = %q, want %q", a2aThread.ContextID, contextID)
+	if a2aSession.ContextID != contextID {
+		t.Errorf("session.ContextID = %q, want %q", a2aSession.ContextID, contextID)
 	}
-	if a2aThread.TaskID != taskID {
-		t.Errorf("thread.TaskID = %q, want %q", a2aThread.TaskID, taskID)
+	if a2aSession.TaskID != taskID {
+		t.Errorf("session.TaskID = %q, want %q", a2aSession.TaskID, taskID)
 	}
 }
 
@@ -1077,13 +1077,13 @@ func TestRunStreamingWithTaskStatusUpdateEvent(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	thread, err := a.NewThread(t.Context())
+	session, err := a.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	var updates []*message.ResponseUpdate
-	for update, err := range agent.RunTextStream(t.Context(), a, "Check task status", agentopt.Thread(thread)) {
+	for update, err := range agent.RunTextStream(t.Context(), a, "Check task status", agentopt.Session(session)) {
 		if err != nil {
 			t.Fatalf("RunStream() error = %v, want nil", err)
 		}
@@ -1108,15 +1108,15 @@ func TestRunStreamingWithTaskStatusUpdateEvent(t *testing.T) {
 		t.Errorf("update.RawRepresentation type = %T, want *a2a.TaskStatusUpdateEvent", update.RawRepresentation)
 	}
 
-	a2aThread, ok := thread.(*a2aagent.Thread)
+	a2aSession, ok := session.(*a2aagent.Session)
 	if !ok {
-		t.Fatalf("thread type = %T, want *a2aagent.Thread", thread)
+		t.Fatalf("session type = %T, want *a2aagent.Session", session)
 	}
-	if a2aThread.ContextID != contextID {
-		t.Errorf("thread.ContextID = %q, want %q", a2aThread.ContextID, contextID)
+	if a2aSession.ContextID != contextID {
+		t.Errorf("session.ContextID = %q, want %q", a2aSession.ContextID, contextID)
 	}
-	if a2aThread.TaskID != taskID {
-		t.Errorf("thread.TaskID = %q, want %q", a2aThread.TaskID, taskID)
+	if a2aSession.TaskID != taskID {
+		t.Errorf("session.TaskID = %q, want %q", a2aSession.TaskID, taskID)
 	}
 }
 
@@ -1140,13 +1140,13 @@ func TestRunStreamingWithTaskArtifactUpdateEvent(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	thread, err := a.NewThread(t.Context())
+	session, err := a.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	var updates []*message.ResponseUpdate
-	for update, err := range agent.RunTextStream(t.Context(), a, "Process artifact", agentopt.Thread(thread)) {
+	for update, err := range agent.RunTextStream(t.Context(), a, "Process artifact", agentopt.Session(session)) {
 		if err != nil {
 			t.Fatalf("RunStream() error = %v, want nil", err)
 		}
@@ -1178,31 +1178,31 @@ func TestRunStreamingWithTaskArtifactUpdateEvent(t *testing.T) {
 		t.Errorf("update.String() = %q, want %q", update.String(), artifactContent)
 	}
 
-	a2aThread, ok := thread.(*a2aagent.Thread)
+	a2aSession, ok := session.(*a2aagent.Session)
 	if !ok {
-		t.Fatalf("thread type = %T, want *a2aagent.Thread", thread)
+		t.Fatalf("session type = %T, want *a2aagent.Session", session)
 	}
-	if a2aThread.ContextID != contextID {
-		t.Errorf("thread.ContextID = %q, want %q", a2aThread.ContextID, contextID)
+	if a2aSession.ContextID != contextID {
+		t.Errorf("session.ContextID = %q, want %q", a2aSession.ContextID, contextID)
 	}
-	if a2aThread.TaskID != taskID {
-		t.Errorf("thread.TaskID = %q, want %q", a2aThread.TaskID, taskID)
+	if a2aSession.TaskID != taskID {
+		t.Errorf("session.TaskID = %q, want %q", a2aSession.TaskID, taskID)
 	}
 }
 
-// TestRunWithAllowBackgroundResponsesAndNoThread tests error when no thread provided
-func TestRunWithAllowBackgroundResponsesAndNoThread(t *testing.T) {
+// TestRunWithAllowBackgroundResponsesAndNoSession tests error when no session provided
+func TestRunWithAllowBackgroundResponsesAndNoSession(t *testing.T) {
 	transport := &mockA2ATransport{}
 	a := newTestAgent(transport, a2aagent.Options{})
 
 	_, err := agent.RunText(t.Context(), a, "Test message", agentopt.AllowBackgroundResponses(true))
 	if err == nil {
-		t.Error("Run() error = nil, want error when AllowBackgroundResponses is true without thread")
+		t.Error("Run() error = nil, want error when AllowBackgroundResponses is true without session")
 	}
 }
 
-// TestRunStreamingWithAllowBackgroundResponsesAndNoThread tests error in streaming mode
-func TestRunStreamingWithAllowBackgroundResponsesAndNoThread(t *testing.T) {
+// TestRunStreamingWithAllowBackgroundResponsesAndNoSession tests error in streaming mode
+func TestRunStreamingWithAllowBackgroundResponsesAndNoSession(t *testing.T) {
 	transport := &mockA2ATransport{}
 	a := newTestAgent(transport, a2aagent.Options{})
 
@@ -1216,17 +1216,17 @@ func TestRunStreamingWithAllowBackgroundResponsesAndNoThread(t *testing.T) {
 	}
 
 	if !gotError {
-		t.Error("RunStream() expected error when AllowBackgroundResponses is true without thread, got nil")
+		t.Error("RunStream() expected error when AllowBackgroundResponses is true without session, got nil")
 	}
 }
 
-// customAgentThread is a custom agent thread for testing invalid thread type scenario
-type customAgentThread struct{}
+// customAgentSession is a custom agent session for testing invalid session type scenario
+type customAgentSession struct{}
 
-func (c *customAgentThread) ID() string {
-	return "custom-thread-id"
+func (c *customAgentSession) ID() string {
+	return "custom-session-id"
 }
 
-func (c *customAgentThread) MarshalBinary() (data []byte, err error) {
+func (c *customAgentSession) MarshalBinary() (data []byte, err error) {
 	return []byte("{}"), nil
 }

@@ -29,7 +29,7 @@ func main() {
 
 	ctx := context.Background()
 
-	thread, err := a.NewThread(ctx)
+	session, err := a.NewSession(ctx)
 	if err != nil {
 		demo.Panic(err)
 	}
@@ -37,7 +37,7 @@ func main() {
 	// Start the initial run.
 	resp, err := agent.RunText(ctx, a,
 		"Write a very long novel about otters in space.",
-		agentopt.Thread(thread),
+		agentopt.Session(session),
 		agentopt.AllowBackgroundResponses(true))
 
 	demo.Response(resp, err)
@@ -49,7 +49,7 @@ func main() {
 
 		// Continue with the token.
 		resp, err = agent.Run(ctx, a, nil,
-			agentopt.Thread(thread),
+			agentopt.Session(session),
 			agentopt.AllowBackgroundResponses(true),
 			agentopt.ContinuationToken(resp.ContinuationToken),
 		)

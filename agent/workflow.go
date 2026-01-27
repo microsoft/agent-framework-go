@@ -14,15 +14,15 @@ import (
 )
 
 func newExecutor(a Agent, emitEvents bool) *workflow.Executor {
-	var thread memory.Thread
-	var threadStateKey string
-	ensureThread := func(ctx context.Context) (memory.Thread, error) {
+	var session memory.Session
+	var sessionStateKey string
+	ensureSession := func(ctx context.Context) (memory.Session, error) {
 		var err error
-		if thread == nil {
-			thread, err = a.NewThread(ctx)
+		if session == nil {
+			session, err = a.NewSession(ctx)
 		}
-		threadStateKey = reflect.ValueOf(thread).String()
-		return thread, err
+		sessionStateKey = reflect.ValueOf(session).String()
+		return session, err
 	}
 	id := agentDescriptiveID(a)
 	ex := &workflow.Executor{
@@ -30,24 +30,24 @@ func newExecutor(a Agent, emitEvents bool) *workflow.Executor {
 		Config: []*workflow.ExecutorConfig{
 			{
 				OnCheckpoint: func(wctx *workflow.Context) error {
-					if thread == nil {
+					if session == nil {
 						return nil
 					}
-					data, err := thread.MarshalBinary()
+					data, err := session.MarshalBinary()
 					if err != nil {
 						return err
 					}
-					return wctx.QueueStateUpdate(threadStateKey, "", data)
+					return wctx.QueueStateUpdate(sessionStateKey, "", data)
 				},
 				OnCheckpointRestored: func(wctx *workflow.Context) error {
-					data, err := wctx.ReadState(threadStateKey, "")
+					data, err := wctx.ReadState(sessionStateKey, "")
 					if err != nil {
 						return err
 					}
 					if data == nil {
 						return nil
 					}
-					thread, err = a.UnmarshalThread(data.([]byte))
+					session, err = a.UnmarshalSession(data.([]byte))
 					return err
 				},
 			},
@@ -58,11 +58,11 @@ func newExecutor(a Agent, emitEvents bool) *workflow.Executor {
 		TakeTurnHandler: func(ctx *workflow.Context, token workflow.TurnToken, messages []*message.Message) error {
 			emitEvents := token.EmitEventsOr(emitEvents)
 			options := make([]agentopt.RunOption, 0, 1+len(messages))
-			thread, err := ensureThread(ctx)
+			session, err := ensureSession(ctx)
 			if err != nil {
 				return err
 			}
-			options = append(options, agentopt.Thread(thread))
+			options = append(options, agentopt.Session(session))
 			if emitEvents {
 				// Run the agent in streaming mode only when agent run update events are to be emitted.
 				options = append(options, agentopt.Stream(true))

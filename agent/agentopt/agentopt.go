@@ -28,16 +28,16 @@ type RunOption interface {
 	RunOption()
 }
 
-// A NewThreadOption configures the behavior of a new Thread created by an Agent.
-type NewThreadOption interface {
+// A NewSessionOption configures the behavior of a new Session created by an Agent.
+type NewSessionOption interface {
 	Option
 
-	NewThreadOption()
+	NewSessionOption()
 }
 
 type (
 	responseFormatOpt    struct{ format.Format }
-	threadOpt            struct{ memory.Thread }
+	sessionOpt           struct{ memory.Session }
 	continuationTokenOpt string
 
 	toolOpt struct{ tool.Tool }
@@ -48,7 +48,7 @@ type (
 )
 
 func (responseFormatOpt) RunOption()           {}
-func (threadOpt) RunOption()                   {}
+func (sessionOpt) RunOption()                  {}
 func (streamOpt) RunOption()                   {}
 func (continuationTokenOpt) RunOption()        {}
 func (allowBackgroundResponsesOpt) RunOption() {}
@@ -56,7 +56,7 @@ func (toolOpt) RunOption()                     {}
 func (toolModeOpt) RunOption()                 {}
 
 func (o responseFormatOpt) Value() any           { return o.Format }
-func (o threadOpt) Value() any                   { return o.Thread }
+func (o sessionOpt) Value() any                  { return o.Session }
 func (o streamOpt) Value() any                   { return bool(o) }
 func (o continuationTokenOpt) Value() any        { return string(o) }
 func (o allowBackgroundResponsesOpt) Value() any { return bool(o) }
@@ -83,9 +83,9 @@ func ResponseFormat(format format.Format) RunOption {
 	return responseFormatOpt{format}
 }
 
-// Thread sets the thread to use during the agent run.
-func Thread(thread memory.Thread) RunOption {
-	return threadOpt{thread}
+// Session sets the session to use during the agent run.
+func Session(session memory.Session) RunOption {
+	return sessionOpt{session}
 }
 
 // ContinuationToken sets the continuation token for resuming and getting the result

@@ -32,10 +32,10 @@ type Options struct {
 
 type contextIDOpt struct{ string }
 
-func (contextIDOpt) NewThreadOption() {}
-func (o contextIDOpt) Value() any     { return o.string }
+func (contextIDOpt) NewSessionOption() {}
+func (o contextIDOpt) Value() any      { return o.string }
 
-func WithContextID(id string) agentopt.NewThreadOption {
+func WithContextID(id string) agentopt.NewSessionOption {
 	return contextIDOpt{id}
 }
 
@@ -63,42 +63,42 @@ func (a *Agent) Identity() agent.Identity {
 	return a.iden
 }
 
-func (a *Agent) NewThread(ctx context.Context, options ...agentopt.NewThreadOption) (memory.Thread, error) {
+func (a *Agent) NewSession(ctx context.Context, options ...agentopt.NewSessionOption) (memory.Session, error) {
 	contextID, _ := agentopt.Get(options, WithContextID)
-	return &Thread{
+	return &Session{
 		ContextID: contextID,
 	}, nil
 }
 
-func (a *Agent) UnmarshalThread(data []byte) (memory.Thread, error) {
-	var thread Thread
-	if err := json.Unmarshal(data, &thread); err != nil {
+func (a *Agent) UnmarshalSession(data []byte) (memory.Session, error) {
+	var session Session
+	if err := json.Unmarshal(data, &session); err != nil {
 		return nil, err
 	}
-	return &thread, nil
+	return &session, nil
 }
 
 func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
-		var thread *Thread
-		if v, ok := agentopt.Get(options, agentopt.Thread); !ok {
+		var session *Session
+		if v, ok := agentopt.Get(options, agentopt.Session); !ok {
 			// Aligning with other agent implementations that support background responses, where
-			// a thread is required for background responses to prevent inconsistent experience
-			// for callers if they forget to provide the thread for initial or follow-up runs.
+			// a session is required for background responses to prevent inconsistent experience
+			// for callers if they forget to provide the session for initial or follow-up runs.
 			if opts, ok := agentopt.Get(options, agentopt.AllowBackgroundResponses); ok && opts {
-				yield(nil, errors.New("a thread must be provided when AllowBackgroundResponses is enabled"))
+				yield(nil, errors.New("a session must be provided when AllowBackgroundResponses is enabled"))
 				return
 			}
-			t, err := a.NewThread(ctx)
+			s, err := a.NewSession(ctx)
 			if err != nil {
 				yield(nil, err)
 				return
 			}
-			thread = t.(*Thread)
-		} else if t, ok := v.(*Thread); ok {
-			thread = t
+			session = s.(*Session)
+		} else if s, ok := v.(*Session); ok {
+			session = s
 		} else {
-			yield(nil, errors.New("the provided thread is not compatible with the agent, only threads created by the agent can be used"))
+			yield(nil, errors.New("the provided session is not compatible with the agent, only sessions created by the agent can be used"))
 			return
 		}
 		stream, _ := agentopt.Get(options, agentopt.Stream)
@@ -117,7 +117,7 @@ func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ..
 				yield(nil, err)
 				return
 			}
-			if err := a.updateThreadContextID(thread, task.ContextID, string(task.ID)); err != nil {
+			if err := a.updateSessionContextID(session, task.ContextID, string(task.ID)); err != nil {
 				yield(nil, err)
 				return
 			}
@@ -133,8 +133,8 @@ func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ..
 				return
 			}
 			var taskIDs []a2a.TaskID
-			if thread.TaskID != "" {
-				taskIDs = append(taskIDs, a2a.TaskID(thread.TaskID))
+			if session.TaskID != "" {
+				taskIDs = append(taskIDs, a2a.TaskID(session.TaskID))
 			}
 			params := &a2a.MessageSendParams{
 				Message: &a2a.Message{
@@ -142,15 +142,15 @@ func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ..
 					Role:           a2a.MessageRoleUser,
 					Parts:          parts,
 					ReferenceTasks: taskIDs,
-					ContextID:      thread.ContextID,
+					ContextID:      session.ContextID,
 				},
 			}
-			a.sendMsg(ctx, thread, stream, params, yield)
+			a.sendMsg(ctx, session, stream, params, yield)
 		}
 	}
 }
 
-func (a *Agent) sendMsg(ctx context.Context, thread *Thread, streaming bool, params *a2a.MessageSendParams, yield func(*message.ResponseUpdate, error) bool) {
+func (a *Agent) sendMsg(ctx context.Context, session *Session, streaming bool, params *a2a.MessageSendParams, yield func(*message.ResponseUpdate, error) bool) {
 	var seq iter.Seq2[a2a.Event, error]
 	if streaming {
 		seq = a.Client.SendStreamingMessage(ctx, params)
@@ -166,7 +166,7 @@ func (a *Agent) sendMsg(ctx context.Context, thread *Thread, streaming bool, par
 			return
 		}
 		taskInfo := e.TaskInfo()
-		if err := a.updateThreadContextID(thread, taskInfo.ContextID, string(taskInfo.TaskID)); err != nil {
+		if err := a.updateSessionContextID(session, taskInfo.ContextID, string(taskInfo.TaskID)); err != nil {
 			yield(nil, err)
 			return
 		}
@@ -275,17 +275,17 @@ func (a *Agent) yieldTask(yield func(*message.ResponseUpdate, error) bool, task 
 	return true
 }
 
-func (a *Agent) updateThreadContextID(thread *Thread, contextID, taskID string) error {
-	if thread == nil {
+func (a *Agent) updateSessionContextID(session *Session, contextID, taskID string) error {
+	if session == nil {
 		return nil
 	}
 	// Surface cases where the A2A agent responds with a response that
-	// has a different context ID than the thread's context ID.
-	if thread.ContextID != "" && thread.ContextID != contextID {
-		return fmt.Errorf("mismatched context ID: thread has %q but A2A response has %q", thread.ContextID, contextID)
+	// has a different context ID than the session's context ID.
+	if session.ContextID != "" && session.ContextID != contextID {
+		return fmt.Errorf("mismatched context ID: session has %q but A2A response has %q", session.ContextID, contextID)
 	}
-	thread.ContextID = contextID
-	thread.TaskID = taskID
+	session.ContextID = contextID
+	session.TaskID = taskID
 	return nil
 }
 

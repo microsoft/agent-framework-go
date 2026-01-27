@@ -10,15 +10,15 @@ import (
 	"github.com/microsoft/agent-framework-go/message"
 )
 
-var _ memory.Thread = (*Thread)(nil)
+var _ memory.Session = (*Session)(nil)
 
-type Thread struct {
+type Session struct {
 	ConversationID  string
 	MessageStore    memory.MessageStore
 	ContextProvider memory.ContextProvider
 }
 
-func newThreadFromJSON(data []byte, newMessageStore func() memory.MessageStore, newContextProvider func() memory.ContextProvider) (*Thread, error) {
+func newSessionFromJSON(data []byte, newMessageStore func() memory.MessageStore, newContextProvider func() memory.ContextProvider) (*Session, error) {
 	var tmp struct {
 		ConversationID  string
 		MessageStore    json.RawMessage // delay unmarshaling until we know the ConversationID is empty
@@ -30,35 +30,35 @@ func newThreadFromJSON(data []byte, newMessageStore func() memory.MessageStore, 
 	if err := json.Unmarshal(data, &tmp); err != nil {
 		return nil, err
 	}
-	thread := &Thread{
+	session := &Session{
 		ConversationID:  tmp.ConversationID,
 		ContextProvider: tmp.ContextProvider,
 	}
 	if tmp.ConversationID != "" {
 		// Since we have an ID, we should not have a chat message store and we can return here.
-		return thread, nil
+		return session, nil
 	}
 
 	if newMessageStore != nil {
-		thread.MessageStore = newMessageStore()
+		session.MessageStore = newMessageStore()
 	} else {
-		thread.MessageStore = &memory.InMemoryMessageStore{}
+		session.MessageStore = &memory.InMemoryMessageStore{}
 	}
-	if err := json.Unmarshal(tmp.MessageStore, thread.MessageStore); err != nil {
+	if err := json.Unmarshal(tmp.MessageStore, session.MessageStore); err != nil {
 		return nil, err
 	}
-	return thread, nil
+	return session, nil
 }
 
-func (t *Thread) MarshalBinary() (data []byte, err error) {
+func (t *Session) MarshalBinary() (data []byte, err error) {
 	return json.Marshal(t)
 }
 
-func (t *Thread) messagesReceived(ctx context.Context, messages ...*message.Message) error {
+func (t *Session) messagesReceived(ctx context.Context, messages ...*message.Message) error {
 	if t.ConversationID != "" {
-		// If the thread messages are stored in the service
+		// If the session messages are stored in the service
 		// there is nothing to do here, since invoking the
-		// service should already update the thread.
+		// service should already update the session.
 		return nil
 	}
 	if t.MessageStore == nil {

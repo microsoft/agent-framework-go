@@ -19,7 +19,7 @@ type (
 	modelOpt                  string
 )
 
-func (conversationIDOpt) NewThreadOption() {}
+func (conversationIDOpt) NewSessionOption() {}
 
 func (temperatureOpt) RunOption()            {}
 func (topPOpt) RunOption()                   {}
@@ -42,7 +42,7 @@ func (o allowMultipleToolCallsOpt) Value() any { return bool(o) }
 func (o stopSequenceOpt) Value() any           { return []string(o) }
 func (o modelOpt) Value() any                  { return string(o) }
 
-func ConversationID(conversationID string) agentopt.NewThreadOption {
+func ConversationID(conversationID string) agentopt.NewSessionOption {
 	return conversationIDOpt(conversationID)
 }
 

@@ -46,8 +46,8 @@ type Agent interface {
 
 	Run(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error]
 
-	NewThread(ctx context.Context, options ...agentopt.NewThreadOption) (memory.Thread, error)
-	UnmarshalThread(data []byte) (memory.Thread, error)
+	NewSession(ctx context.Context, options ...agentopt.NewSessionOption) (memory.Session, error)
+	UnmarshalSession(data []byte) (memory.Session, error)
 }
 
 type StructuredOutputAgent interface {

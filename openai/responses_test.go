@@ -3744,7 +3744,7 @@ func TestResponsesConversationId_AsResponseId_NonStreaming(t *testing.T) {
 	defer server.Close()
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
-	thread, err := a.NewThread(context.Background(), chatagent.ConversationID("resp_12345"))
+	session, err := a.NewSession(context.Background(), chatagent.ConversationID("resp_12345"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3752,17 +3752,17 @@ func TestResponsesConversationId_AsResponseId_NonStreaming(t *testing.T) {
 	_, err = agent.RunText(context.Background(), a, "hello",
 		chatagent.MaxOutputTokens(20),
 		chatagent.Temperature(0.5),
-		agentopt.Thread(thread),
+		agentopt.Session(session),
 	)
 
 	if err != nil {
 		t.Fatalf("RunText() error = %v", err)
 	}
 
-	// After the call, thread.ConversationID should be updated to the new response ID
-	chatThread := thread.(*chatagent.Thread)
-	if chatThread.ConversationID != "resp_67890" {
-		t.Errorf("expected ConversationId resp_67890, got %s", chatThread.ConversationID)
+	// After the call, session.ConversationID should be updated to the new response ID
+	chatSession := session.(*chatagent.Session)
+	if chatSession.ConversationID != "resp_67890" {
+		t.Errorf("expected ConversationId resp_67890, got %s", chatSession.ConversationID)
 	}
 }
 
@@ -3810,7 +3810,7 @@ func TestResponsesConversationId_AsConversationId_NonStreaming(t *testing.T) {
 	defer server.Close()
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
-	thread, err := a.NewThread(context.Background(), chatagent.ConversationID("conv_12345"))
+	session, err := a.NewSession(context.Background(), chatagent.ConversationID("conv_12345"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3818,7 +3818,7 @@ func TestResponsesConversationId_AsConversationId_NonStreaming(t *testing.T) {
 	_, err = agent.RunText(context.Background(), a, "hello",
 		chatagent.MaxOutputTokens(20),
 		chatagent.Temperature(0.5),
-		agentopt.Thread(thread),
+		agentopt.Session(session),
 	)
 
 	if err != nil {
@@ -3826,9 +3826,9 @@ func TestResponsesConversationId_AsConversationId_NonStreaming(t *testing.T) {
 	}
 
 	// When using a conversation ID, it should remain unchanged
-	chatThread := thread.(*chatagent.Thread)
-	if chatThread.ConversationID != "conv_12345" {
-		t.Errorf("expected ConversationId conv_12345, got %s", chatThread.ConversationID)
+	chatSession := session.(*chatagent.Session)
+	if chatSession.ConversationID != "conv_12345" {
+		t.Errorf("expected ConversationId conv_12345, got %s", chatSession.ConversationID)
 	}
 }
 
@@ -3881,7 +3881,7 @@ data: {"type":"response.completed","response":{"id":"resp_67890","object":"respo
 	defer server.Close()
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
-	thread, err := a.NewThread(context.Background(), chatagent.ConversationID("resp_12345"))
+	session, err := a.NewSession(context.Background(), chatagent.ConversationID("resp_12345"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3890,7 +3890,7 @@ data: {"type":"response.completed","response":{"id":"resp_67890","object":"respo
 	for update, err := range agent.RunTextStream(context.Background(), a, "hello",
 		chatagent.MaxOutputTokens(20),
 		chatagent.Temperature(0.5),
-		agentopt.Thread(thread),
+		agentopt.Session(session),
 	) {
 		if err != nil {
 			t.Fatalf("RunTextStream() error = %v", err)
@@ -3904,9 +3904,9 @@ data: {"type":"response.completed","response":{"id":"resp_67890","object":"respo
 		}
 	}
 
-	chatThread := thread.(*chatagent.Thread)
-	if chatThread.ConversationID != "resp_67890" {
-		t.Errorf("expected ConversationId resp_67890, got %s", chatThread.ConversationID)
+	chatSession := session.(*chatagent.Session)
+	if chatSession.ConversationID != "resp_67890" {
+		t.Errorf("expected ConversationId resp_67890, got %s", chatSession.ConversationID)
 	}
 }
 
@@ -3959,7 +3959,7 @@ data: {"type":"response.completed","response":{"id":"resp_67890","object":"respo
 	defer server.Close()
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
-	thread, err := a.NewThread(context.Background(), chatagent.ConversationID("conv_12345"))
+	session, err := a.NewSession(context.Background(), chatagent.ConversationID("conv_12345"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3968,7 +3968,7 @@ data: {"type":"response.completed","response":{"id":"resp_67890","object":"respo
 	for update, err := range agent.RunTextStream(context.Background(), a, "hello",
 		chatagent.MaxOutputTokens(20),
 		chatagent.Temperature(0.5),
-		agentopt.Thread(thread),
+		agentopt.Session(session),
 	) {
 		if err != nil {
 			t.Fatalf("RunTextStream() error = %v", err)
@@ -3982,9 +3982,9 @@ data: {"type":"response.completed","response":{"id":"resp_67890","object":"respo
 		}
 	}
 
-	chatThread := thread.(*chatagent.Thread)
-	if chatThread.ConversationID != "conv_12345" {
-		t.Errorf("expected ConversationId conv_12345, got %s", chatThread.ConversationID)
+	chatSession := session.(*chatagent.Session)
+	if chatSession.ConversationID != "conv_12345" {
+		t.Errorf("expected ConversationId conv_12345, got %s", chatSession.ConversationID)
 	}
 }
 
@@ -4019,7 +4019,7 @@ func TestResponsesBackgroundResponses_FirstCall(t *testing.T) {
 	defer server.Close()
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
-	thread, err := a.NewThread(context.Background())
+	session, err := a.NewSession(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4028,7 +4028,7 @@ func TestResponsesBackgroundResponses_FirstCall(t *testing.T) {
 		chatagent.MaxOutputTokens(20),
 		chatagent.Temperature(0.5),
 		agentopt.AllowBackgroundResponses(true),
-		agentopt.Thread(thread),
+		agentopt.Session(session),
 	)
 	if err != nil {
 		t.Fatalf("RunText() error = %v", err)
@@ -4102,8 +4102,8 @@ func testResponsesBackgroundPolling(t *testing.T, status string) {
 	defer server.Close()
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
-	// Create thread with ConversationID to simulate a previous call (polling scenario)
-	thread, err := a.NewThread(context.Background(), chatagent.ConversationID("resp_68d3d2c9ef7c8195863e4e2b2ec226a205007262ecbbfed8"))
+	// Create session with ConversationID to simulate a previous call (polling scenario)
+	session, err := a.NewSession(context.Background(), chatagent.ConversationID("resp_68d3d2c9ef7c8195863e4e2b2ec226a205007262ecbbfed8"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4118,7 +4118,7 @@ func testResponsesBackgroundPolling(t *testing.T, status string) {
 	resp, err := agent.Run(context.Background(), a, nil,
 		agentopt.ContinuationToken(string(ctJSON)),
 		agentopt.AllowBackgroundResponses(true),
-		agentopt.Thread(thread),
+		agentopt.Session(session),
 	)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -4233,7 +4233,7 @@ data: {"type":"response.completed","sequence_number":17,"response":{"id":"resp_6
 	defer server.Close()
 
 	a := newTestResponsesClient(server, "gpt-4o-2024-08-06")
-	thread, err := a.NewThread(context.Background())
+	session, err := a.NewSession(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4242,7 +4242,7 @@ data: {"type":"response.completed","sequence_number":17,"response":{"id":"resp_6
 	var allText strings.Builder
 	for update, err := range agent.RunTextStream(context.Background(), a, "hello",
 		agentopt.AllowBackgroundResponses(true),
-		agentopt.Thread(thread),
+		agentopt.Session(session),
 	) {
 		if err != nil {
 			t.Fatalf("RunTextStream() error = %v", err)
@@ -4343,8 +4343,8 @@ data: {"type":"response.completed","sequence_number":17,"response":{"truncation"
 	// Emulating resumption of the stream after receiving the first 9 updates that provided the text "Hello! How can I"
 	token := `{"response_id":"resp_68d40dc671a0819cb0ee920078333451029e611c3cc4a34b","sequence_number":9}`
 
-	// Create thread with ConversationID to allow continuation
-	thread := &chatagent.Thread{
+	// Create session with ConversationID to allow continuation
+	session := &chatagent.Session{
 		ConversationID: "resp_68d40dc671a0819cb0ee920078333451029e611c3cc4a34b",
 	}
 
@@ -4353,7 +4353,7 @@ data: {"type":"response.completed","sequence_number":17,"response":{"truncation"
 		agentopt.AllowBackgroundResponses(true),
 		agentopt.ContinuationToken(token),
 		agentopt.Stream(true),
-		agentopt.Thread(thread),
+		agentopt.Session(session),
 	) {
 		if err != nil {
 			t.Fatalf("Run() error = %v", err)

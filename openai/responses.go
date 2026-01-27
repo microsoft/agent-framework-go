@@ -94,22 +94,22 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		stream, _ := agentopt.Get(options, agentopt.Stream)
 
-		// Get thread for conversation ID management
-		var thread *chatagent.Thread
+		// Get session for conversation ID management
+		var session *chatagent.Session
 		var keepConversationID bool // true if we should keep the conversation ID unchanged (it's a "conv_" ID)
-		if t, ok := agentopt.Get(options, agentopt.Thread); ok && t != nil {
-			if typedThread, ok := t.(*chatagent.Thread); ok {
-				thread = typedThread
+		if t, ok := agentopt.Get(options, agentopt.Session); ok && t != nil {
+			if typedSession, ok := t.(*chatagent.Session); ok {
+				session = typedSession
 				// If the conversation ID starts with "conv_", we should keep it unchanged.
 				// Otherwise, we'll update it to the new response ID.
-				keepConversationID = thread.ConversationID != "" && strings.HasPrefix(thread.ConversationID, "conv_")
+				keepConversationID = session.ConversationID != "" && strings.HasPrefix(session.ConversationID, "conv_")
 			}
 		}
 
 		// Helper to update conversation ID after response completes
 		updateConversationID := func(responseID string) {
-			if thread != nil && !keepConversationID && responseID != "" {
-				thread.ConversationID = responseID
+			if session != nil && !keepConversationID && responseID != "" {
+				session.ConversationID = responseID
 			}
 		}
 
@@ -242,20 +242,20 @@ func responsesBuildCompletionParams(model string, messages []*message.Message, o
 	if v, ok := agentopt.Get(opts, agentopt.AllowBackgroundResponses); ok {
 		params.Background = openai.Bool(v)
 	}
-	if thread, ok := agentopt.Get(opts, agentopt.Thread); ok && thread != nil {
-		typedThread, ok := thread.(*chatagent.Thread)
+	if session, ok := agentopt.Get(opts, agentopt.Session); ok && session != nil {
+		typedSession, ok := session.(*chatagent.Session)
 		if !ok {
-			return responses.ResponseNewParams{}, fmt.Errorf("invalid thread type: %T", thread)
+			return responses.ResponseNewParams{}, fmt.Errorf("invalid session type: %T", session)
 		}
-		if typedThread.ConversationID != "" {
+		if typedSession.ConversationID != "" {
 			// Technically, OpenAI's IDs are opaque. However, by convention conversation IDs start with "conv_" and
 			// we can use that to disambiguate whether we're looking at a conversation ID or a response ID.
-			if strings.HasPrefix(typedThread.ConversationID, "conv_") {
+			if strings.HasPrefix(typedSession.ConversationID, "conv_") {
 				params.Conversation = responses.ResponseNewParamsConversationUnion{
-					OfString: openai.String(typedThread.ConversationID),
+					OfString: openai.String(typedSession.ConversationID),
 				}
 			} else {
-				params.PreviousResponseID = openai.String(typedThread.ConversationID)
+				params.PreviousResponseID = openai.String(typedSession.ConversationID)
 			}
 		}
 	}

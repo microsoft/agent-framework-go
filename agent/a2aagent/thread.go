@@ -4,12 +4,12 @@ package a2aagent
 
 import "encoding/json"
 
-// Thread represents a thread identified by a service-managed identifier.
-type Thread struct {
+// Session represents a session identified by a service-managed identifier.
+type Session struct {
 	ContextID string
 	TaskID    string
 }
 
-func (t *Thread) MarshalBinary() (data []byte, err error) {
+func (t *Session) MarshalBinary() (data []byte, err error) {
 	return json.Marshal(t)
 }

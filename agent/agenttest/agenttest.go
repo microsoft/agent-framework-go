@@ -90,9 +90,9 @@ type Response struct {
 var _ agent.Agent = (*Agent)(nil)
 
 type Agent struct {
-	Iden          agent.Identity
-	NewThreadFunc func(context.Context, ...agentopt.NewThreadOption) (memory.Thread, error)
-	Responses     []Turn
+	Iden           agent.Identity
+	NewSessionFunc func(context.Context, ...agentopt.NewSessionOption) (memory.Session, error)
+	Responses      []Turn
 
 	currentTurn int
 }
@@ -122,27 +122,27 @@ func (a *Agent) Run(ctx context.Context, messages []*message.Message, opts ...ag
 	}
 }
 
-func (a *Agent) NewThread(ctx context.Context, opts ...agentopt.NewThreadOption) (memory.Thread, error) {
-	if a.NewThreadFunc != nil {
-		return a.NewThreadFunc(ctx, opts...)
+func (a *Agent) NewSession(ctx context.Context, opts ...agentopt.NewSessionOption) (memory.Session, error) {
+	if a.NewSessionFunc != nil {
+		return a.NewSessionFunc(ctx, opts...)
 	}
-	return &Thread{}, nil
+	return &Session{}, nil
 }
 
-func (a *Agent) UnmarshalThread(data []byte) (memory.Thread, error) {
-	return &Thread{}, nil
+func (a *Agent) UnmarshalSession(data []byte) (memory.Session, error) {
+	return &Session{}, nil
 }
 
-// Thread is a test implementation of the Thread interface
-type Thread struct {
+// Session is a test implementation of the Session interface
+type Session struct {
 	messages []*message.Message
 }
 
-func NewThread() *Thread {
-	return &Thread{}
+func NewSession() *Session {
+	return &Session{}
 }
 
-func (t *Thread) MarshalBinary() (data []byte, err error) {
+func (t *Session) MarshalBinary() (data []byte, err error) {
 	return json.Marshal(t.messages)
 }
 

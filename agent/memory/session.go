@@ -4,26 +4,26 @@ package memory
 
 import "encoding"
 
-// Thread contains the state of a specific conversation with an agent which may include:
+// Session contains the state of a specific conversation with an agent which may include:
 //
 //   - Conversation history or a reference to externally stored conversation history.
 //   - Memories or a reference to externally stored memories.
 //   - Any other state that the agent needs to persist across runs for a conversation.
 //
-// A Thread may also have behaviors attached to it that may include:
+// A Session may also have behaviors attached to it that may include:
 //
 //   - Customized storage of state.
 //   - Data extraction from and injection into a conversation.
 //   - Chat history reduction, e.g. where messages needs to be summarized or truncated to reduce the size.
 //
-// A Thread is always constructed by an [agent.Agent] so that the [agent.Agent] can attach any necessary behaviors to the Thread.
-// See the [agent.Agent.NewThread] and [agent.Agent.UnmarshalThread] methods for more information.
+// A Session is always constructed by an [agent.Agent] so that the [agent.Agent] can attach any necessary behaviors to the Session.
+// See the [agent.Agent.NewSession] and [agent.Agent.UnmarshalSession] methods for more information.
 //
-// Because of these behaviors, a Thread may not be reusable across different agents, since each agent may add different
-// behaviors to the Thread it creates.
+// Because of these behaviors, a Session may not be reusable across different agents, since each agent may add different
+// behaviors to the Session it creates.
 //
 // To support conversations that may need to survive application restarts or separate service requests,
-// a Thread can be serialized and deserialized, so that it can be saved in a persistent store.
-type Thread interface {
+// a Session can be serialized and deserialized, so that it can be saved in a persistent store.
+type Session interface {
 	encoding.BinaryMarshaler
 }

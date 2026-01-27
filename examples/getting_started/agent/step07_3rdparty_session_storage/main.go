@@ -22,7 +22,7 @@ import (
 )
 
 var logger = demo.NewLogger(
-	"3rd-Party Thread Storage",
+	"3rd-Party Session Storage",
 	"Demonstrates how to use a custom message store to persist conversation history to disk.",
 	"Model", "gpt-4o-mini",
 )
@@ -50,13 +50,13 @@ func main() {
 	ctx := context.Background()
 
 	// Start a new thread for the agent conversation.
-	thread, err := a.NewThread(ctx)
+	thread, err := a.NewSession(ctx)
 	if err != nil {
 		demo.Panic(err)
 	}
 
 	// Run the agent with the thread that stores conversation history in the disk store.
-	demo.Response(agent.RunText(ctx, a, "Tell me a joke about a pirate.", agentopt.Thread(thread)))
+	demo.Response(agent.RunText(ctx, a, "Tell me a joke about a pirate.", agentopt.Session(thread)))
 
 	// Serialize the thread state, so it can be stored for later use.
 	// Since the chat history is stored in the disk store, the serialized thread
@@ -72,13 +72,13 @@ func main() {
 	// and loaded again later.
 
 	// Deserialize the thread state after loading from storage.
-	resumedThread, err := a.UnmarshalThread(serializedThread)
+	resumedThread, err := a.UnmarshalSession(serializedThread)
 	if err != nil {
 		demo.Panic(err)
 	}
 
 	// Run the agent with the thread that stores conversation history in the vector store a second time.
-	demo.Response(agent.RunText(ctx, a, "Now tell the same joke in the voice of a pirate, and add some emojis to the joke.", agentopt.Thread(resumedThread)))
+	demo.Response(agent.RunText(ctx, a, "Now tell the same joke in the voice of a pirate, and add some emojis to the joke.", agentopt.Session(resumedThread)))
 }
 
 type fsMessageStore struct {

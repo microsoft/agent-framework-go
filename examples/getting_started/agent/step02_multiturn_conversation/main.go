@@ -15,7 +15,7 @@ import (
 
 var logger = demo.NewLogger(
 	"Multi-Turn Conversation",
-	"Demonstrates how to preserve conversation context with threads.",
+	"Demonstrates how to preserve conversation context with sessions.",
 	"Model", "gpt-4o-mini",
 )
 
@@ -30,23 +30,23 @@ func main() {
 
 	ctx := context.Background()
 
-	// Invoke the agent with a multi-turn conversation, where the context is preserved in the thread object.
-	thread, err := a.NewThread(ctx)
+	// Invoke the agent with a multi-turn conversation, where the context is preserved in the session object.
+	session, err := a.NewSession(ctx)
 	if err != nil {
 		demo.Panic(err)
 	}
-	demo.Response(agent.RunText(ctx, a, "Tell me a joke about a pirate.", agentopt.Thread(thread)))
-	demo.Response(agent.RunText(ctx, a, "Now add some emojis to the joke and tell it in the voice of a pirate's parrot.", agentopt.Thread(thread)))
+	demo.Response(agent.RunText(ctx, a, "Tell me a joke about a pirate.", agentopt.Session(session)))
+	demo.Response(agent.RunText(ctx, a, "Now add some emojis to the joke and tell it in the voice of a pirate's parrot.", agentopt.Session(session)))
 
-	// Invoke the agent with a multi-turn conversation and streaming, where the context is preserved in the thread object.
-	thread2, err := a.NewThread(ctx)
+	// Invoke the agent with a multi-turn conversation and streaming, where the context is preserved in the session object.
+	session2, err := a.NewSession(ctx)
 	if err != nil {
 		demo.Panic(err)
 	}
-	for update, err := range agent.RunTextStream(ctx, a, "Tell me a joke about a pirate.", agentopt.Thread(thread2)) {
+	for update, err := range agent.RunTextStream(ctx, a, "Tell me a joke about a pirate.", agentopt.Session(session2)) {
 		demo.Response(update, err)
 	}
-	for update, err := range agent.RunTextStream(ctx, a, "Now add some emojis to the joke and tell it in the voice of a pirate's parrot.", agentopt.Thread(thread2)) {
+	for update, err := range agent.RunTextStream(ctx, a, "Now add some emojis to the joke and tell it in the voice of a pirate's parrot.", agentopt.Session(session2)) {
 		demo.Response(update, err)
 	}
 }

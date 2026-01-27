@@ -33,43 +33,43 @@ func main() {
 
 	ctx := context.Background()
 
-	// Start a new thread for the agent conversation.
-	thread, err := a.NewThread(ctx)
+	// Start a new session for the agent conversation.
+	session, err := a.NewSession(ctx)
 	if err != nil {
 		demo.Panic(err)
 	}
 
-	// Run the agent with a new thread.
-	demo.Response(agent.RunText(ctx, a, "Tell me a joke about a pirate.", agentopt.Thread(thread)))
+	// Run the agent with a new session.
+	demo.Response(agent.RunText(ctx, a, "Tell me a joke about a pirate.", agentopt.Session(session)))
 
-	// Serialize the thread state so it can be stored for later use.
-	serializedThread, err := thread.MarshalBinary()
+	// Serialize the session state so it can be stored for later use.
+	serializedSession, err := session.MarshalBinary()
 	if err != nil {
 		demo.Panic(err)
 	}
 
-	// Save the serialized thread to a temporary file (for demonstration purposes).
-	tmpDir, err := os.MkdirTemp("", "agent_thread")
+	// Save the serialized session to a temporary file (for demonstration purposes).
+	tmpDir, err := os.MkdirTemp("", "agent_session")
 	if err != nil {
 		demo.Panic(err)
 	}
-	tmpPath := filepath.Join(tmpDir, "thread.json")
-	if err := os.WriteFile(tmpPath, serializedThread, 0644); err != nil {
+	tmpPath := filepath.Join(tmpDir, "session.json")
+	if err := os.WriteFile(tmpPath, serializedSession, 0644); err != nil {
 		demo.Panic(err)
 	}
 
-	// Load the serialized thread from the temporary file (for demonstration purposes).
+	// Load the serialized session from the temporary file (for demonstration purposes).
 	loadedData, err := os.ReadFile(tmpPath)
 	if err != nil {
 		demo.Panic(err)
 	}
 
-	// Deserialize the thread state after loading from storage.
-	resumedThread, err := a.UnmarshalThread(loadedData)
+	// Deserialize the session state after loading from storage.
+	resumedSession, err := a.UnmarshalSession(loadedData)
 	if err != nil {
 		demo.Panic(err)
 	}
 
-	// Run the agent again with the resumed thread.
-	demo.Response(agent.RunText(ctx, a, "Now tell the same joke in the voice of a pirate, and add some emojis to the joke.", agentopt.Thread(resumedThread)))
+	// Run the agent again with the resumed session.
+	demo.Response(agent.RunText(ctx, a, "Now tell the same joke in the voice of a pirate, and add some emojis to the joke.", agentopt.Session(resumedSession)))
 }

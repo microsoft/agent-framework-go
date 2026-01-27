@@ -46,11 +46,11 @@ func main() {
 	ctx := context.Background()
 
 	// Call the agent and check if there are any user input requests to handle.
-	thread, err := a.NewThread(ctx)
+	session, err := a.NewSession(ctx)
 	if err != nil {
 		demo.Panic(err)
 	}
-	resp, err := agent.RunText(ctx, a, "What is the weather like in Amsterdam?", agentopt.Thread(thread))
+	resp, err := agent.RunText(ctx, a, "What is the weather like in Amsterdam?", agentopt.Session(session))
 	if err != nil {
 		panic(err)
 	}
@@ -75,5 +75,5 @@ func main() {
 		return
 	}
 	// Pass the user input responses back to the agent for further processing.
-	demo.Response(agent.RunMessage(ctx, a, message.New(userResponses...), agentopt.Thread(thread)))
+	demo.Response(agent.RunMessage(ctx, a, message.New(userResponses...), agentopt.Session(session)))
 }

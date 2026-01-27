@@ -12,14 +12,14 @@ import (
 )
 
 // FuncTool creates a function tool that invokes the given agent.
-// The provided thread is used for the agent's context during invocations,
-// or nil to create a new thread for each invocation.
-func FuncTool(agent Agent, thread memory.Thread) tool.FuncTool {
+// The provided session is used for the agent's context during invocations,
+// or nil to create a new session for each invocation.
+func FuncTool(agent Agent, session memory.Session) tool.FuncTool {
 	iden := agent.Identity()
 	return functool{
 		name:        iden.Name(),
 		description: iden.Description(),
-		thread:      thread,
+		session:     session,
 		agent:       agent,
 	}
 }
@@ -27,7 +27,7 @@ func FuncTool(agent Agent, thread memory.Thread) tool.FuncTool {
 type functool struct {
 	name        string
 	description string
-	thread      memory.Thread
+	session     memory.Session
 	agent       Agent
 }
 
@@ -68,7 +68,7 @@ func (t functool) Call(ctx context.Context, args string) (any, error) {
 	if err := json.Unmarshal([]byte(args), &in); err != nil {
 		return nil, err
 	}
-	resp, err := RunText(ctx, t.agent, in.Query, agentopt.Thread(t.thread))
+	resp, err := RunText(ctx, t.agent, in.Query, agentopt.Session(t.session))
 	if err != nil {
 		return "", err
 	}
