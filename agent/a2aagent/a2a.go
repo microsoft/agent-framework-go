@@ -39,38 +39,38 @@ func WithContextID(id string) agentopt.NewSessionOption {
 	return contextIDOpt{id}
 }
 
-var _ agent.Agent = (*Agent)(nil)
-
-type Agent struct {
+type a2aagent struct {
 	Client  *a2aclient.Client
 	Options Options
-
-	iden agent.Identity
 }
 
-func NewAgent(client *a2aclient.Client, options Options) *Agent {
+func NewAgent(client *a2aclient.Client, options Options) agent.Agent {
 	if client == nil {
 		panic("client cannot be nil")
 	}
-	return &Agent{
+	a := &a2aagent{
 		Client:  client,
 		Options: options,
-		iden:    agent.NewIdentity(options.ID, options.Name, options.Description),
 	}
+	return agent.New(agent.Config{
+		ID:          options.ID,
+		Name:        options.Name,
+		Description: options.Description,
+
+		NewSession:       a.newSession,
+		UnmarshalSession: a.unmarshalSession,
+		Run:              a.run,
+	})
 }
 
-func (a *Agent) Identity() agent.Identity {
-	return a.iden
-}
-
-func (a *Agent) NewSession(ctx context.Context, options ...agentopt.NewSessionOption) (memory.Session, error) {
+func (a *a2aagent) newSession(ctx context.Context, options ...agentopt.NewSessionOption) (memory.Session, error) {
 	contextID, _ := agentopt.Get(options, WithContextID)
 	return &Session{
 		ContextID: contextID,
 	}, nil
 }
 
-func (a *Agent) UnmarshalSession(data []byte) (memory.Session, error) {
+func (a *a2aagent) unmarshalSession(data []byte) (memory.Session, error) {
 	var session Session
 	if err := json.Unmarshal(data, &session); err != nil {
 		return nil, err
@@ -78,7 +78,7 @@ func (a *Agent) UnmarshalSession(data []byte) (memory.Session, error) {
 	return &session, nil
 }
 
-func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+func (a *a2aagent) run(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		var session *Session
 		if v, ok := agentopt.Get(options, agentopt.Session); !ok {
@@ -89,7 +89,7 @@ func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ..
 				yield(nil, errors.New("a session must be provided when AllowBackgroundResponses is enabled"))
 				return
 			}
-			s, err := a.NewSession(ctx)
+			s, err := a.newSession(ctx)
 			if err != nil {
 				yield(nil, err)
 				return
@@ -117,11 +117,11 @@ func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ..
 				yield(nil, err)
 				return
 			}
-			if err := a.updateSessionContextID(session, task.ContextID, string(task.ID)); err != nil {
+			if err := updateSessionContextID(session, task.ContextID, string(task.ID)); err != nil {
 				yield(nil, err)
 				return
 			}
-			a.yieldTask(yield, task)
+			yieldTask(yield, task)
 			return
 		}
 		var parts []a2a.Part
@@ -145,45 +145,43 @@ func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ..
 					ContextID:      session.ContextID,
 				},
 			}
-			a.sendMsg(ctx, session, stream, params, yield)
+			var seq iter.Seq2[a2a.Event, error]
+			if stream {
+				seq = a.Client.SendStreamingMessage(ctx, params)
+			} else {
+				resp, err := a.Client.SendMessage(ctx, params)
+				seq = func(yield func(a2a.Event, error) bool) {
+					yield(resp, err)
+				}
+			}
+			sendMsg(ctx, session, seq, yield)
 		}
 	}
 }
 
-func (a *Agent) sendMsg(ctx context.Context, session *Session, streaming bool, params *a2a.MessageSendParams, yield func(*message.ResponseUpdate, error) bool) {
-	var seq iter.Seq2[a2a.Event, error]
-	if streaming {
-		seq = a.Client.SendStreamingMessage(ctx, params)
-	} else {
-		resp, err := a.Client.SendMessage(ctx, params)
-		seq = func(yield func(a2a.Event, error) bool) {
-			yield(resp, err)
-		}
-	}
+func sendMsg(ctx context.Context, session *Session, seq iter.Seq2[a2a.Event, error], yield func(*message.ResponseUpdate, error) bool) {
 	for e, err := range seq {
 		if err != nil {
 			yield(nil, err)
 			return
 		}
 		taskInfo := e.TaskInfo()
-		if err := a.updateSessionContextID(session, taskInfo.ContextID, string(taskInfo.TaskID)); err != nil {
+		if err := updateSessionContextID(session, taskInfo.ContextID, string(taskInfo.TaskID)); err != nil {
 			yield(nil, err)
 			return
 		}
 		switch e := e.(type) {
 		case *a2a.Task:
-			if ok := a.yieldTask(yield, e); !ok {
+			if ok := yieldTask(yield, e); !ok {
 				return
 			}
 		case *a2a.TaskStatusUpdateEvent:
 			if !yield(&message.ResponseUpdate{
 				RawRepresentation:    e,
 				AdditionalProperties: e.Metadata,
-				AuthorID:             a.iden.ID(),
 				MessageID:            string(e.TaskID),
 				ResponseID:           string(e.TaskID),
 				Role:                 message.RoleAssistant,
-				AuthorName:           a.iden.Name(),
 				CreatedAt:            time.Now(),
 			}, nil) {
 				return
@@ -197,12 +195,10 @@ func (a *Agent) sendMsg(ctx context.Context, session *Session, streaming bool, p
 			if !yield(&message.ResponseUpdate{
 				RawRepresentation:    e,
 				AdditionalProperties: e.Metadata,
-				AuthorID:             a.iden.ID(),
 				MessageID:            string(e.Artifact.ID),
 				ResponseID:           string(e.TaskID),
 				Contents:             contents,
 				Role:                 message.RoleAssistant,
-				AuthorName:           a.iden.Name(),
 				CreatedAt:            time.Now(),
 			}, nil) {
 				return
@@ -220,12 +216,10 @@ func (a *Agent) sendMsg(ctx context.Context, session *Session, streaming bool, p
 			if !yield(&message.ResponseUpdate{
 				RawRepresentation:    e,
 				AdditionalProperties: e.Metadata,
-				AuthorID:             a.iden.ID(),
 				MessageID:            e.ID,
 				ResponseID:           e.ID,
 				Role:                 role,
 				Contents:             contents,
-				AuthorName:           a.iden.Name(),
 				CreatedAt:            time.Now(),
 			}, nil) {
 				return
@@ -237,9 +231,8 @@ func (a *Agent) sendMsg(ctx context.Context, session *Session, streaming bool, p
 	}
 }
 
-func (a *Agent) yieldTask(yield func(*message.ResponseUpdate, error) bool, task *a2a.Task) bool {
+func yieldTask(yield func(*message.ResponseUpdate, error) bool, task *a2a.Task) bool {
 	now := time.Now()
-	id, name := a.iden.ID(), a.iden.Name()
 	var continuationToken string
 	switch task.Status.State {
 	case a2a.TaskStateSubmitted, a2a.TaskStateWorking:
@@ -262,20 +255,18 @@ func (a *Agent) yieldTask(yield func(*message.ResponseUpdate, error) bool, task 
 	if !yield(&message.ResponseUpdate{
 		RawRepresentation:    task,
 		AdditionalProperties: task.Metadata,
-		AuthorID:             id,
 		ResponseID:           string(task.ID),
 		Contents:             contents,
 		ContinuationToken:    continuationToken,
 		Role:                 message.RoleAssistant,
 		CreatedAt:            timestamp,
-		AuthorName:           name,
 	}, nil) {
 		return false
 	}
 	return true
 }
 
-func (a *Agent) updateSessionContextID(session *Session, contextID, taskID string) error {
+func updateSessionContextID(session *Session, contextID, taskID string) error {
 	if session == nil {
 		return nil
 	}

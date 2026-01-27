@@ -41,7 +41,7 @@ func main() {
 	}, chatagent.Config{
 		Instructions: "You are good at telling jokes.",
 		Name:         "Joker",
-		Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
+		RunOptions:   []agentopt.RunOption{middleware.With(logger)}, // for logging agent interactions
 		NewMessageStore: func() memory.MessageStore {
 			return &fsMessageStore{Dir: tmpDir}
 		},

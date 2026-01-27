@@ -38,9 +38,9 @@ func main() {
 		Instructions: "You answer questions about the weather.",
 		Name:         "WeatherAgent",
 		Description:  "An agent that answers questions about the weather.",
-		Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
 		RunOptions: []agentopt.RunOption{
 			agentopt.Tool(weatherTool),
+			middleware.With(logger), // for logging agent interactions
 		},
 	})
 

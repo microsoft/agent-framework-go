@@ -12,46 +12,84 @@ import (
 	"github.com/microsoft/agent-framework-go/message"
 )
 
-type Identity struct {
-	id          string
-	name        string
-	description string
-}
-
-func NewIdentity(id, name, description string) Identity {
-	if id == "" {
-		id = uuid.NewString()
-	}
-	return Identity{
-		id:          id,
-		name:        name,
-		description: description,
-	}
-}
-
-func (iden Identity) ID() string {
-	return iden.id
-}
-
-func (iden Identity) Name() string {
-	return iden.name
-}
-
-func (iden Identity) Description() string {
-	return iden.description
-}
-
 type Agent interface {
-	Identity() Identity
+	ID() string
+	Name() string
+	Description() string
 
 	Run(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error]
 
 	NewSession(ctx context.Context, options ...agentopt.NewSessionOption) (memory.Session, error)
 	UnmarshalSession(data []byte) (memory.Session, error)
+
+	internal() // unexported method to prevent external implementations
 }
 
-type StructuredOutputAgent interface {
-	Agent
+type Config struct {
+	ID          string
+	Name        string
+	Description string
 
-	RunOf(ctx context.Context, v any, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error]
+	RunOptions []agentopt.RunOption
+
+	NewSession       func(ctx context.Context, options ...agentopt.NewSessionOption) (memory.Session, error)
+	UnmarshalSession func(data []byte) (memory.Session, error)
+	Run              func(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error]
 }
+
+func New(cfg Config) Agent {
+	return &agent{
+		id:               cfg.ID,
+		name:             cfg.Name,
+		description:      cfg.Description,
+		newSession:       cfg.NewSession,
+		unmarshalSession: cfg.UnmarshalSession,
+		run:              cfg.Run,
+		runOptions:       cfg.RunOptions,
+	}
+}
+
+type agent struct {
+	id          string
+	name        string
+	description string
+
+	runOptions []agentopt.RunOption
+
+	newSession       func(ctx context.Context, options ...agentopt.NewSessionOption) (memory.Session, error)
+	unmarshalSession func(data []byte) (memory.Session, error)
+	run              func(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error]
+}
+
+func (a *agent) ID() string {
+	if a.id == "" {
+		a.id = uuid.NewString()
+	}
+	return a.id
+}
+
+func (a *agent) Name() string {
+	return a.name
+}
+
+func (a *agent) Description() string {
+	return a.description
+}
+
+func (a *agent) Run(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+	return a.run(ctx, messages, options...)
+}
+
+func (a *agent) NewSession(ctx context.Context, options ...agentopt.NewSessionOption) (memory.Session, error) {
+	return a.newSession(ctx, options...)
+}
+
+func (a *agent) UnmarshalSession(data []byte) (memory.Session, error) {
+	return a.unmarshalSession(data)
+}
+
+func (a *agent) RunOptions() []agentopt.RunOption {
+	return a.runOptions
+}
+
+func (a *agent) internal() {}

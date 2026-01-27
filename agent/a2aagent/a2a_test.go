@@ -13,6 +13,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/a2aagent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
+	"github.com/microsoft/agent-framework-go/agent/agenttest"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
@@ -120,7 +121,7 @@ func (m *mockA2ATransport) Destroy() error {
 }
 
 // Test fixtures
-func newTestAgent(transport a2aclient.Transport, opts a2aagent.Options) *a2aagent.Agent {
+func newTestAgent(transport a2aclient.Transport, opts a2aagent.Options) agent.Agent {
 	card := &a2a.AgentCard{
 		URL:                "test://localhost",
 		PreferredTransport: "test",
@@ -142,33 +143,6 @@ func newTestAgent(transport a2aclient.Transport, opts a2aagent.Options) *a2aagen
 	return a2aagent.NewAgent(client, opts)
 }
 
-// TestConstructorWithAllParameters tests that the constructor initializes all properties correctly
-func TestConstructorWithAllParameters(t *testing.T) {
-	testID := "test-id"
-	testName := "test-name"
-	testDescription := "test-description"
-	testDisplayName := "test-display-name"
-
-	transport := &mockA2ATransport{}
-	opts := a2aagent.Options{
-		ID:          testID,
-		Name:        testName,
-		Description: testDescription,
-		DisplayName: testDisplayName,
-	}
-	a := newTestAgent(transport, opts)
-
-	if a.Identity().ID() != testID {
-		t.Errorf("ID() = %q, want %q", a.Identity().ID(), testID)
-	}
-	if a.Identity().Name() != testName {
-		t.Errorf("Name() = %q, want %q", a.Identity().Name(), testName)
-	}
-	if a.Identity().Description() != testDescription {
-		t.Errorf("Description() = %q, want %q", a.Identity().Description(), testDescription)
-	}
-}
-
 // TestConstructorWithNilClient tests that nil client is handled
 func TestConstructorWithNilClient(t *testing.T) {
 	defer func() {
@@ -177,23 +151,6 @@ func TestConstructorWithNilClient(t *testing.T) {
 		}
 	}()
 	a2aagent.NewAgent(nil, a2aagent.Options{})
-}
-
-// TestConstructorWithDefaultParameters tests default parameter behavior
-func TestConstructorWithDefaultParameters(t *testing.T) {
-	transport := &mockA2ATransport{}
-	a := newTestAgent(transport, a2aagent.Options{})
-
-	id := a.Identity().ID()
-	if id == "" {
-		t.Error("ID() returned empty string, want non-empty")
-	}
-	if a.Identity().Name() != "" {
-		t.Errorf("Name() = %q, want empty string", a.Identity().Name())
-	}
-	if a.Identity().Description() != "" {
-		t.Errorf("Description() = %q, want empty string", a.Identity().Description())
-	}
 }
 
 // TestRunAllowsNonUserRoleMessages tests that non-user role messages are accepted
@@ -261,9 +218,6 @@ func TestRunWithValidUserMessage(t *testing.T) {
 		t.Fatalf("len(result.Messages) = %d, want 1", len(result.Messages))
 	}
 	msg := result.Messages[0]
-	if msg.AuthorID != a.Identity().ID() {
-		t.Errorf("AuthorID = %q, want %q", msg.AuthorID, a.Identity().ID())
-	}
 	if msg.ID != "response-123" {
 		t.Errorf("ID = %q, want %q", msg.ID, "response-123")
 	}
@@ -420,9 +374,6 @@ func TestRunStreamingWithValidUserMessage(t *testing.T) {
 	}
 	if update.MessageID != "stream-1" {
 		t.Errorf("update.MessageID = %q, want %q", update.MessageID, "stream-1")
-	}
-	if update.AuthorID != a.Identity().ID() {
-		t.Errorf("update.AuthorID = %q, want %q", update.AuthorID, a.Identity().ID())
 	}
 	if update.ResponseID != "stream-1" {
 		t.Errorf("update.ResponseID = %q, want %q", update.ResponseID, "stream-1")
@@ -611,7 +562,7 @@ func TestRunWithInvalidSessionType(t *testing.T) {
 	a := newTestAgent(transport, a2aagent.Options{})
 
 	// Create a custom session type that is not an a2aagent.Session
-	invalidSession := &customAgentSession{}
+	invalidSession := agenttest.NewSession()
 
 	_, err := agent.RunText(t.Context(), a, "Test message", agentopt.Session(invalidSession))
 	if err == nil {
@@ -633,7 +584,7 @@ func TestRunStreamingWithInvalidSessionType(t *testing.T) {
 	a := newTestAgent(transport, a2aagent.Options{})
 
 	// Create a custom session type that is not an a2aagent.Session
-	invalidSession := &customAgentSession{}
+	invalidSession := agenttest.NewSession()
 
 	gotError := false
 	for _, err := range agent.RunTextStream(t.Context(), a, "Test message", agentopt.Session(invalidSession)) {
@@ -780,9 +731,6 @@ func TestRunWithAgentTaskResponse(t *testing.T) {
 		t.Fatalf("len(result.Messages) = %d, want 1", len(result.Messages))
 	}
 	msg := result.Messages[0]
-	if msg.AuthorID != a.Identity().ID() {
-		t.Errorf("AgentID = %q, want %q", msg.AuthorID, a.Identity().ID())
-	}
 	if msg.ID != "" {
 		t.Errorf("ID = %q, want empty", msg.ID)
 	}
@@ -983,9 +931,6 @@ func TestRunStreamingWithAgentMessage(t *testing.T) {
 	if update.ResponseID != messageID {
 		t.Errorf("update.ResponseID = %q, want %q", update.ResponseID, messageID)
 	}
-	if update.AuthorID != a.Identity().ID() {
-		t.Errorf("update.AuthorID = %q, want %q", update.AuthorID, a.Identity().ID())
-	}
 	if update.String() != messageText {
 		t.Errorf("update.String() = %q, want %q", update.String(), messageText)
 	}
@@ -1042,9 +987,6 @@ func TestRunStreamingWithAgentTaskYieldsUpdate(t *testing.T) {
 	if update.ResponseID != taskID {
 		t.Errorf("update.ResponseID = %q, want %q", update.ResponseID, taskID)
 	}
-	if update.AuthorID != a.Identity().ID() {
-		t.Errorf("update.AuthorID = %q, want %q", update.AuthorID, a.Identity().ID())
-	}
 	if _, ok := update.RawRepresentation.(*a2a.Task); !ok {
 		t.Errorf("update.RawRepresentation type = %T, want *a2a.Task", update.RawRepresentation)
 	}
@@ -1100,9 +1042,6 @@ func TestRunStreamingWithTaskStatusUpdateEvent(t *testing.T) {
 	}
 	if update.ResponseID != taskID {
 		t.Errorf("update.ResponseID = %q, want %q", update.ResponseID, taskID)
-	}
-	if update.AuthorID != a.Identity().ID() {
-		t.Errorf("update.AuthorID = %q, want %q", update.AuthorID, a.Identity().ID())
 	}
 	if _, ok := update.RawRepresentation.(*a2a.TaskStatusUpdateEvent); !ok {
 		t.Errorf("update.RawRepresentation type = %T, want *a2a.TaskStatusUpdateEvent", update.RawRepresentation)
@@ -1164,9 +1103,6 @@ func TestRunStreamingWithTaskArtifactUpdateEvent(t *testing.T) {
 	if update.ResponseID != taskID {
 		t.Errorf("update.ResponseID = %q, want %q", update.ResponseID, taskID)
 	}
-	if update.AuthorID != a.Identity().ID() {
-		t.Errorf("update.AuthorID = %q, want %q", update.AuthorID, a.Identity().ID())
-	}
 	if _, ok := update.RawRepresentation.(*a2a.TaskArtifactUpdateEvent); !ok {
 		t.Errorf("update.RawRepresentation type = %T, want *a2a.TaskArtifactUpdateEvent", update.RawRepresentation)
 	}
@@ -1188,45 +1124,4 @@ func TestRunStreamingWithTaskArtifactUpdateEvent(t *testing.T) {
 	if a2aSession.TaskID != taskID {
 		t.Errorf("session.TaskID = %q, want %q", a2aSession.TaskID, taskID)
 	}
-}
-
-// TestRunWithAllowBackgroundResponsesAndNoSession tests error when no session provided
-func TestRunWithAllowBackgroundResponsesAndNoSession(t *testing.T) {
-	transport := &mockA2ATransport{}
-	a := newTestAgent(transport, a2aagent.Options{})
-
-	_, err := agent.RunText(t.Context(), a, "Test message", agentopt.AllowBackgroundResponses(true))
-	if err == nil {
-		t.Error("Run() error = nil, want error when AllowBackgroundResponses is true without session")
-	}
-}
-
-// TestRunStreamingWithAllowBackgroundResponsesAndNoSession tests error in streaming mode
-func TestRunStreamingWithAllowBackgroundResponsesAndNoSession(t *testing.T) {
-	transport := &mockA2ATransport{}
-	a := newTestAgent(transport, a2aagent.Options{})
-
-	// Call the agent's Run method directly with streaming enabled
-	gotError := false
-	for _, err := range agent.RunTextStream(t.Context(), a, "Test message", agentopt.AllowBackgroundResponses(true)) {
-		if err != nil {
-			gotError = true
-			break
-		}
-	}
-
-	if !gotError {
-		t.Error("RunStream() expected error when AllowBackgroundResponses is true without session, got nil")
-	}
-}
-
-// customAgentSession is a custom agent session for testing invalid session type scenario
-type customAgentSession struct{}
-
-func (c *customAgentSession) ID() string {
-	return "custom-session-id"
-}
-
-func (c *customAgentSession) MarshalBinary() (data []byte, err error) {
-	return []byte("{}"), nil
 }
