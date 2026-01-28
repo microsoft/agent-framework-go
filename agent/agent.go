@@ -138,7 +138,7 @@ func (a *Agent) prepareRun(ctx context.Context, stream bool, options []agentopt.
 		options = append(options, agentopt.Session(session))
 	}
 
-	// If Response.All() is called, set the Stream option to true
+	// If Run.All() is called, set the Stream option to true
 	// unless already specified in options.
 	if stream {
 		if _, ok := agentopt.Get(options, agentopt.Stream); !ok {
