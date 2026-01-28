@@ -26,6 +26,9 @@ type Config struct {
 }
 
 func New(cfg Config) *Agent {
+	if cfg.ID == "" {
+		cfg.ID = uuid.NewString()
+	}
 	return &Agent{
 		id:               cfg.ID,
 		name:             cfg.Name,
@@ -75,9 +78,6 @@ type Agent struct {
 }
 
 func (a *Agent) ID() string {
-	if a.id == "" {
-		a.id = uuid.NewString()
-	}
 	return a.id
 }
 
