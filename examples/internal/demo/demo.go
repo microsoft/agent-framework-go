@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"iter"
+	"os"
 	"strings"
 
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
@@ -125,12 +126,14 @@ func Panic(msg any) {
 	printf("%s%s⚠️ %s %s\n",
 		colorYellow, colorBold, colorReset,
 		msg)
+	os.Exit(1)
 }
 
 func Panicf(format string, args ...any) {
 	printf("%s%s⚠️ %s %s\n",
 		colorYellow, colorBold, colorReset,
 		fmt.Sprintf(format, args...))
+	os.Exit(1)
 }
 
 func UserInputRequest(req *message.FunctionApprovalRequestContent) bool {

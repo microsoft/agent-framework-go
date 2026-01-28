@@ -3,26 +3,24 @@
 package chatagent
 
 import (
-	"context"
 	"encoding/json"
 
 	"github.com/microsoft/agent-framework-go/agent/memory"
-	"github.com/microsoft/agent-framework-go/message"
 )
 
 var _ memory.Session = (*Session)(nil)
 
 type Session struct {
-	ConversationID  string
-	MessageStore    memory.MessageStore
-	ContextProvider memory.ContextProvider
+	ConversationID         string
+	MessageHistoryProvider memory.ContextProvider
+	ContextProvider        memory.ContextProvider
 }
 
-func newSessionFromJSON(data []byte, newMessageStore func() memory.MessageStore, newContextProvider func() memory.ContextProvider) (*Session, error) {
+func newSessionFromJSON(data []byte, newMessageHistoryProvider func() memory.ContextProvider, newContextProvider func() memory.ContextProvider) (*Session, error) {
 	var tmp struct {
-		ConversationID  string
-		MessageStore    json.RawMessage // delay unmarshaling until we know the ConversationID is empty
-		ContextProvider memory.ContextProvider
+		ConversationID         string
+		MessageHistoryProvider json.RawMessage // delay unmarshaling until we know the ConversationID is empty
+		ContextProvider        memory.ContextProvider
 	}
 	if newContextProvider != nil {
 		tmp.ContextProvider = newContextProvider()
@@ -39,12 +37,12 @@ func newSessionFromJSON(data []byte, newMessageStore func() memory.MessageStore,
 		return session, nil
 	}
 
-	if newMessageStore != nil {
-		session.MessageStore = newMessageStore()
+	if newMessageHistoryProvider != nil {
+		session.MessageHistoryProvider = newMessageHistoryProvider()
 	} else {
-		session.MessageStore = &memory.InMemoryMessageStore{}
+		session.MessageHistoryProvider = &memory.InMemoryMessageHistoryProvider{}
 	}
-	if err := json.Unmarshal(tmp.MessageStore, session.MessageStore); err != nil {
+	if err := json.Unmarshal(tmp.MessageHistoryProvider, session.MessageHistoryProvider); err != nil {
 		return nil, err
 	}
 	return session, nil
@@ -54,17 +52,17 @@ func (t *Session) MarshalBinary() (data []byte, err error) {
 	return json.Marshal(t)
 }
 
-func (t *Session) messagesReceived(ctx context.Context, messages ...*message.Message) error {
+func (t *Session) messagesReceived(ctx *memory.InvokedContext) error {
 	if t.ConversationID != "" {
 		// If the session messages are stored in the service
 		// there is nothing to do here, since invoking the
 		// service should already update the session.
 		return nil
 	}
-	if t.MessageStore == nil {
+	if t.MessageHistoryProvider == nil {
 		// If there is no conversation id, and no store we
 		// can create a default in memory store and add messages to it.
-		t.MessageStore = &memory.InMemoryMessageStore{}
+		t.MessageHistoryProvider = &memory.InMemoryMessageHistoryProvider{}
 	}
-	return t.MessageStore.Add(ctx, messages...)
+	return t.MessageHistoryProvider.Invoked(ctx)
 }

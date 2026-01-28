@@ -22,7 +22,8 @@ const (
 const requiredPrefix = "required:"
 
 func (m ToolMode) Mode() ToolMode {
-	if m == ToolModeAuto || m == ToolModeNone {
+	switch m {
+	case ToolModeAuto, ToolModeNone, ToolModeRequired:
 		return m
 	}
 	if strings.HasPrefix(string(m), requiredPrefix) {
@@ -32,7 +33,7 @@ func (m ToolMode) Mode() ToolMode {
 }
 
 func (m ToolMode) Required() []string {
-	if m.Mode() == ToolModeRequired {
+	if m != ToolModeRequired && m.Mode() == ToolModeRequired {
 		return strings.Split(strings.TrimPrefix(string(m), requiredPrefix), ",")
 	}
 	return nil

@@ -36,8 +36,8 @@ type Config struct {
 
 	RunOptions []agentopt.RunOption
 
-	NewMessageStore    func() memory.MessageStore
-	NewContextProvider func() memory.ContextProvider
+	NewMessageHistoryProvider func() memory.ContextProvider
+	NewContextProvider        func() memory.ContextProvider
 }
 
 func (o *Config) Clone() *Config {
@@ -56,8 +56,8 @@ type chatagent struct {
 
 	instructions string
 
-	newMessageStore    func() memory.MessageStore
-	newContextProvider func() memory.ContextProvider
+	newMessageHistoryProvider func() memory.ContextProvider
+	newContextProvider        func() memory.ContextProvider
 }
 
 // NewAgent creates a new chat agent with the given chat client and options.
@@ -80,10 +80,10 @@ func NewAgent(runfn RunFunc, cfg Config) *agent.Agent {
 		)
 	}
 	a := &chatagent{
-		runFn:              runfn,
-		instructions:       opts.Instructions,
-		newMessageStore:    opts.NewMessageStore,
-		newContextProvider: opts.NewContextProvider,
+		runFn:                     runfn,
+		instructions:              opts.Instructions,
+		newMessageHistoryProvider: opts.NewMessageHistoryProvider,
+		newContextProvider:        opts.NewContextProvider,
 	}
 	return agent.New(agent.Config{
 		ID:          cfg.ID,
@@ -110,7 +110,7 @@ func (a *chatagent) NewSession(ctx context.Context, opts ...agentopt.NewSessionO
 }
 
 func (a *chatagent) UnmarshalSession(data []byte) (memory.Session, error) {
-	return newSessionFromJSON(data, a.newMessageStore, a.newContextProvider)
+	return newSessionFromJSON(data, a.newMessageHistoryProvider, a.newContextProvider)
 }
 
 func (a *chatagent) Run(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
@@ -150,13 +150,18 @@ func (a *chatagent) Run(ctx context.Context, messages []*message.Message, option
 			}
 		}
 		resp.Coalesce()
-		if session.ConversationID == "" && session.MessageStore == nil && a.newMessageStore != nil {
+		if session.ConversationID == "" && session.MessageHistoryProvider == nil && a.newMessageHistoryProvider != nil {
 			// If we don't have a conversation ID then we must be managing the message store ourselves.
 			// If we don't have a message store yet and we have a factory, use it to create a new one.
-			session.MessageStore = a.newMessageStore()
+			session.MessageHistoryProvider = a.newMessageHistoryProvider()
 		}
 		// Only notify the session of new messages if the response was successful to avoid inconsistent message state in the session.
-		if err := session.messagesReceived(ctx, append(originalMessages, append(ctxMessages, resp.Messages...)...)...); err != nil {
+		if err := session.messagesReceived(&memory.InvokedContext{
+			Context:                 ctx,
+			RequestMessages:         originalMessages,
+			ContextProviderMessages: ctxMessages,
+			ResponsesMessages:       resp.Messages,
+		}); err != nil {
 			yield(nil, err)
 			return
 		}
@@ -214,7 +219,7 @@ func prepareSessionAndMessages(ctx context.Context, instr string, messages []*me
 		if len(messages) > 0 {
 			return retError(errors.New("messages are not allowed when continuing a background response using a continuation token"))
 		}
-		if session.ConversationID == "" && session.MessageStore == nil {
+		if session.ConversationID == "" && session.MessageHistoryProvider == nil {
 			return retError(errors.New("continuation tokens are not allowed to be used for initial runs"))
 		}
 	}
@@ -230,13 +235,17 @@ func prepareSessionAndMessages(ctx context.Context, instr string, messages []*me
 		})
 	}
 	if v, ok := agentopt.Get(options, agentopt.ContinuationToken); !ok || v == "" {
-		if session.MessageStore != nil {
+		if session.MessageHistoryProvider != nil {
 			//  Add any existing messages from the session to the messages to be sent to the chat client.
-			for msg, err := range session.MessageStore.All(ctx) {
-				if err != nil {
-					return retError(err)
-				}
-				msgsForClient = append(msgsForClient, msg)
+			newCtx, err := session.MessageHistoryProvider.Invoking(&memory.InvokingContext{
+				Context:  ctx,
+				Messages: messages,
+			})
+			if err != nil {
+				return retError(err)
+			}
+			if newCtx != nil {
+				msgsForClient = append(msgsForClient, newCtx.Messages...)
 			}
 		}
 		if session.ContextProvider != nil {
