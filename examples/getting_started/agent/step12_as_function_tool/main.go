@@ -49,7 +49,7 @@ func main() {
 	}, chatagent.Config{
 		Instructions: "You are a helpful assistant who responds in French.",
 		RunOptions: []agentopt.RunOption{
-			agentopt.Tool(weatherAgent.FuncTool(nil)),
+			agentopt.Tool(weatherAgent.AsFuncTool()),
 		},
 	})
 

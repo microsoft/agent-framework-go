@@ -7,18 +7,15 @@ import (
 	"encoding/json"
 
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
-	"github.com/microsoft/agent-framework-go/agent/memory"
 	"github.com/microsoft/agent-framework-go/tool"
 )
 
-// FuncTool creates a function tool that invokes the given agent.
-// The provided session is used for the agent's context during invocations,
-// or nil to create a new session for each invocation.
-func (a *Agent) FuncTool(session memory.Session) tool.FuncTool {
+// AsFuncTool creates a function tool that invokes the given agent.
+func (a *Agent) AsFuncTool(options ...agentopt.RunOption) tool.FuncTool {
 	return functool{
 		name:        a.Name(),
 		description: a.Description(),
-		session:     session,
+		opts:        options,
 		agent:       a,
 	}
 }
@@ -26,7 +23,7 @@ func (a *Agent) FuncTool(session memory.Session) tool.FuncTool {
 type functool struct {
 	name        string
 	description string
-	session     memory.Session
+	opts        []agentopt.RunOption
 	agent       *Agent
 }
 
@@ -67,7 +64,7 @@ func (t functool) Call(ctx context.Context, args string) (any, error) {
 	if err := json.Unmarshal([]byte(args), &in); err != nil {
 		return nil, err
 	}
-	resp, err := t.agent.RunText(in.Query, agentopt.Session(t.session)).Collect(ctx)
+	resp, err := t.agent.RunText(in.Query, t.opts...).Collect(ctx)
 	if err != nil {
 		return "", err
 	}

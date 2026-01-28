@@ -15,6 +15,29 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+func AddTool(src *mcp.Server, tl tool.FuncTool) {
+	src.AddTool(&mcp.Tool{
+		Name:        tl.Name(),
+		Description: tl.Description(),
+		InputSchema: tl.Schema(),
+	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		result, err := tl.Call(ctx, string(req.Params.Arguments))
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := result.(string); !ok {
+			return nil, fmt.Errorf("unsupported result type from tool call: %T", result)
+		}
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{
+				&mcp.TextContent{
+					Text: result.(string),
+				},
+			},
+		}, nil
+	})
+}
+
 func Connect(ctx context.Context, transport mcp.Transport) (*mcp.ClientSession, error) {
 	client := mcp.NewClient(&mcp.Implementation{
 		Name:    "agent-framework-go-mcp-client",
