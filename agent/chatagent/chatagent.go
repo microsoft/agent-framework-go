@@ -151,8 +151,8 @@ func (a *chatagent) Run(ctx context.Context, messages []*message.Message, option
 		}
 		resp.Coalesce()
 		if session.ConversationID == "" && session.MessageHistoryProvider == nil && a.newMessageHistoryProvider != nil {
-			// If we don't have a conversation ID then we must be managing the message store ourselves.
-			// If we don't have a message store yet and we have a factory, use it to create a new one.
+			// If we don't have a conversation ID then we must be managing the message history provider ourselves.
+			// If we don't have a message history provider yet and we have a factory, use it to create a new one.
 			session.MessageHistoryProvider = a.newMessageHistoryProvider()
 		}
 		// Only notify the session of new messages if the response was successful to avoid inconsistent message state in the session.

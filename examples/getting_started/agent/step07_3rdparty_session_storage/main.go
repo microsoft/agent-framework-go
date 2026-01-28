@@ -76,7 +76,7 @@ func main() {
 		demo.Panic(err)
 	}
 
-	// Run the agent with the session that stores conversation history in the vector store a second time.
+	// Run the agent with the session that stores conversation history in the disk store a second time.
 	resp, err = a.RunText("Now tell the same joke in the voice of a pirate, and add some emojis to the joke.", agentopt.Session(resumedSession)).Collect(ctx)
 	demo.Response(resp, err)
 }

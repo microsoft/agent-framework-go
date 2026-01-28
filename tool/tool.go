@@ -33,7 +33,7 @@ func (m ToolMode) Mode() ToolMode {
 }
 
 func (m ToolMode) Required() []string {
-	if m != ToolModeRequired && m.Mode() == ToolModeRequired {
+	if strings.HasPrefix(string(m), requiredPrefix) && m != ToolModeRequired {
 		return strings.Split(strings.TrimPrefix(string(m), requiredPrefix), ",")
 	}
 	return nil
