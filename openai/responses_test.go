@@ -59,7 +59,7 @@ func newTestResponsesServerStreaming(t *testing.T, input string, output string) 
 	}))
 }
 
-func newTestResponsesClient(server *httptest.Server, model string) agent.Agent {
+func newTestResponsesClient(server *httptest.Server, model string) *agent.Agent {
 	return openai.NewResponsesAgent(
 		openai.ClientConfig{Model: model, Endpoint: server.URL},
 		chatagent.Config{DisableFuncAutoCall: true},
@@ -163,12 +163,12 @@ func TestResponsesBasicRequestResponse_NonStreaming(t *testing.T) {
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	resp, err := agent.RunText(context.Background(), a, "hello",
+	resp, err := a.RunText("hello",
 		chatagent.MaxOutputTokens(20),
 		chatagent.Temperature(0.5),
-	)
+	).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("RunText() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 	if err := messagetest.MessagesEqual(resp.Messages, want); err != nil {
 		t.Error(err)
@@ -253,12 +253,12 @@ data: {"type":"response.completed","response":{"id":"resp_67d329fbc87c81919f8952
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
 	var updates []*message.ResponseUpdate
-	for update, err := range agent.RunTextStream(context.Background(), a, "hello",
+	for update, err := range a.RunText("hello",
 		chatagent.MaxOutputTokens(20),
 		chatagent.Temperature(0.5),
-	) {
+	).All(t.Context()) {
 		if err != nil {
-			t.Fatalf("RunTextStream() error = %v", err)
+			t.Fatalf("error = %v", err)
 		}
 		updates = append(updates, update)
 	}
@@ -430,9 +430,9 @@ data: {"type":"response.completed","sequence_number":29,"response":{"id":"resp_6
 	a := newTestResponsesClient(server, "o4-mini")
 
 	var updates []*message.ResponseUpdate
-	for update, err := range agent.RunTextStream(context.Background(), a, "Calculate the sum of the first 5 positive integers.") {
+	for update, err := range a.RunText("Calculate the sum of the first 5 positive integers.").All(t.Context()) {
 		if err != nil {
-			t.Fatalf("RunTextStream() error = %v", err)
+			t.Fatalf("error = %v", err)
 		}
 		updates = append(updates, update)
 	}
@@ -543,13 +543,13 @@ func TestResponsesChatOptions_Model_OverridesClientModel_NonStreaming(t *testing
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
 	// Override with gpt-4o in options
-	resp, err := agent.RunText(context.Background(), a, "hello",
+	resp, err := a.RunText("hello",
 		chatagent.MaxOutputTokens(10),
 		chatagent.Temperature(0.5),
 		chatagent.Model("gpt-4o"),
-	)
+	).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("RunText() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 
 	// Verify the response contains the expected content
@@ -643,15 +643,15 @@ func TestResponsesMultipleMessages_NonStreaming(t *testing.T) {
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "i'm good. how are you?"}}},
 	}
 
-	resp, err := agent.Run(context.Background(), a, messages,
+	resp, err := a.Run(messages,
 		chatagent.Temperature(0.25),
 		chatagent.FrequencyPenalty(0.75),
 		chatagent.PresencePenalty(0.5),
 		chatagent.StopSequences([]string{"great"}),
 		chatagent.Seed(42),
-	)
+	).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 	if err := messagetest.MessagesEqual(resp.Messages, want); err != nil {
 		t.Error(err)
@@ -759,9 +759,9 @@ func TestResponsesDataContentMessage_Image_NonStreaming(t *testing.T) {
 		},
 	}
 
-	resp, err := agent.Run(context.Background(), a, messages)
+	resp, err := a.Run(messages).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 	if err := messagetest.MessagesEqual(resp.Messages, want); err != nil {
 		t.Error(err)
@@ -837,9 +837,9 @@ data: {"type":"response.completed","sequence_number":14,"response":{"id":"resp_r
 	a := newTestResponsesClient(server, "o4-mini")
 
 	var updates []*message.ResponseUpdate
-	for update, err := range agent.RunTextStream(context.Background(), a, "Solve this problem step by step.") {
+	for update, err := range a.RunText("Solve this problem step by step.").All(t.Context()) {
 		if err != nil {
-			t.Fatalf("RunTextStream() error = %v", err)
+			t.Fatalf("error = %v", err)
 		}
 		updates = append(updates, update)
 	}
@@ -965,13 +965,13 @@ data: {"type":"response.completed","response":{"id":"resp_streaming123","object"
 
 	var updates []*message.ResponseUpdate
 	// Override with gpt-4o in options
-	for update, err := range agent.RunTextStream(context.Background(), a, "hello",
+	for update, err := range a.RunText("hello",
 		chatagent.MaxOutputTokens(20),
 		chatagent.Temperature(0.5),
 		chatagent.Model("gpt-4o"),
-	) {
+	).All(t.Context()) {
 		if err != nil {
-			t.Fatalf("RunTextStream() error = %v", err)
+			t.Fatalf("error = %v", err)
 		}
 		updates = append(updates, update)
 	}
@@ -1091,12 +1091,12 @@ func TestResponsesMultipleOutputItems_NonStreaming(t *testing.T) {
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	resp, err := agent.RunText(context.Background(), a, "hello",
+	resp, err := a.RunText("hello",
 		chatagent.MaxOutputTokens(20),
 		chatagent.Temperature(0.5),
-	)
+	).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("RunText() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 
 	// Verify we got 2 messages (multiple output items)
@@ -1284,11 +1284,11 @@ func TestResponsesFunctionCallWithResult_NonStreaming(t *testing.T) {
 		Description: "Get the current weather",
 	}, getWeather)
 
-	resp1, err := agent.RunText(context.Background(), a1, "What's the weather in Seattle?",
+	resp1, err := a1.RunText("What's the weather in Seattle?",
 		agentopt.Tool(tool),
-	)
+	).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("RunText() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 
 	// Verify function call
@@ -1335,11 +1335,11 @@ func TestResponsesFunctionCallWithResult_NonStreaming(t *testing.T) {
 		}},
 	}
 
-	resp2, err := agent.Run(context.Background(), a2, messages,
+	resp2, err := a2.Run(messages,
 		agentopt.Tool(tool),
-	)
+	).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 
 	// Verify response
@@ -1410,9 +1410,9 @@ func TestResponsesToolCallResult_SingleTextContent_SerializesCorrectly(t *testin
 		}},
 	}
 
-	resp, err := agent.Run(context.Background(), a, messages)
+	resp, err := a.Run(messages).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 
 	if len(resp.Messages) != 1 {
@@ -1485,9 +1485,9 @@ func TestResponsesToolCallResult_MultipleTextContents_SerializesCorrectly(t *tes
 		}},
 	}
 
-	resp, err := agent.Run(context.Background(), a, messages)
+	resp, err := a.Run(messages).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 
 	if len(resp.Messages) != 1 {
@@ -1530,9 +1530,9 @@ func TestResponsesNonStreamingResponseWithIncompleteReason_MapsFinishReason(t *t
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	resp, err := agent.RunText(context.Background(), a, "test")
+	resp, err := a.RunText("test").Collect(t.Context())
 	if err != nil {
-		t.Fatalf("RunText() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 
 	if len(resp.Messages) != 1 {
@@ -1579,9 +1579,9 @@ data: {"type":"response.completed","response":{"id":"resp_001","object":"respons
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
 	var updates []*message.ResponseUpdate
-	for update, err := range agent.RunTextStream(context.Background(), a, "test") {
+	for update, err := range a.RunText("test").All(t.Context()) {
 		if err != nil {
-			t.Fatalf("RunTextStream() error = %v", err)
+			t.Fatalf("error = %v", err)
 		}
 		updates = append(updates, update)
 	}
@@ -1621,9 +1621,9 @@ data: {"type":"response.failed","response":{"id":"resp_001","object":"response",
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
 	var updates []*message.ResponseUpdate
-	for update, err := range agent.RunTextStream(context.Background(), a, "test") {
+	for update, err := range a.RunText("test").All(t.Context()) {
 		if err != nil {
-			t.Fatalf("RunTextStream() error = %v", err)
+			t.Fatalf("error = %v", err)
 		}
 		updates = append(updates, update)
 	}
@@ -1666,9 +1666,9 @@ data: {"type":"response.completed","response":{"id":"resp_001","object":"respons
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
 	var updates []*message.ResponseUpdate
-	for update, err := range agent.RunTextStream(context.Background(), a, "test") {
+	for update, err := range a.RunText("test").All(t.Context()) {
 		if err != nil {
-			t.Fatalf("RunTextStream() error = %v", err)
+			t.Fatalf("error = %v", err)
 		}
 		updates = append(updates, update)
 	}
@@ -1718,9 +1718,9 @@ data: {"type":"response.completed","response":{"id":"resp_001","object":"respons
 
 	var updates []*message.ResponseUpdate
 	var errorMessages []string
-	for update, err := range agent.RunTextStream(context.Background(), a, "harmful request") {
+	for update, err := range a.RunText("harmful request").All(t.Context()) {
 		if err != nil {
-			t.Fatalf("RunTextStream() error = %v", err)
+			t.Fatalf("error = %v", err)
 		}
 		updates = append(updates, update)
 		// Collect error content
@@ -1805,11 +1805,11 @@ func TestResponsesCodeInterpreterTool_NonStreaming(t *testing.T) {
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	resp, err := agent.RunText(context.Background(), a, "Calculate the sum of numbers from 1 to 5",
+	resp, err := a.RunText("Calculate the sum of numbers from 1 to 5",
 		agentopt.Tool(&hostedtool.CodeInterpreter{}),
-	)
+	).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("RunText() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 
 	// Expected: 1 message with 3 contents (like C#)
@@ -1913,11 +1913,11 @@ data: {"type":"response.completed","response":{"id":"resp_002","object":"respons
 
 	var updates []*message.ResponseUpdate
 	var allText strings.Builder
-	for update, err := range agent.RunTextStream(context.Background(), a, "Calculate 3+3",
+	for update, err := range a.RunText("Calculate 3+3",
 		agentopt.Tool(&hostedtool.CodeInterpreter{}),
-	) {
+	).All(t.Context()) {
 		if err != nil {
-			t.Fatalf("RunTextStream() error = %v", err)
+			t.Fatalf("error = %v", err)
 		}
 		updates = append(updates, update)
 		for _, content := range update.Contents {
@@ -1967,9 +1967,9 @@ data: {"type":"response.incomplete","response":{"id":"resp_001","object":"respon
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
 	var updates []*message.ResponseUpdate
-	for update, err := range agent.RunTextStream(context.Background(), a, "test") {
+	for update, err := range a.RunText("test").All(t.Context()) {
 		if err != nil {
-			t.Fatalf("RunTextStream() error = %v", err)
+			t.Fatalf("error = %v", err)
 		}
 		updates = append(updates, update)
 	}
@@ -2025,9 +2025,9 @@ func TestResponsesResponseWithUsageDetails_ParsesTokenCounts(t *testing.T) {
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	resp, err := agent.RunText(context.Background(), a, "test")
+	resp, err := a.RunText("test").Collect(t.Context())
 	if err != nil {
-		t.Fatalf("RunText() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 
 	// Find usage content
@@ -2075,9 +2075,9 @@ data: {"type":"response.failed","sequence_number":2,"response":{"id":"resp_001",
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
 	var updates []*message.ResponseUpdate
-	for update, err := range agent.RunTextStream(context.Background(), a, "test") {
+	for update, err := range a.RunText("test").All(t.Context()) {
 		if err != nil {
-			t.Fatalf("RunTextStream() error = %v", err)
+			t.Fatalf("error = %v", err)
 		}
 		updates = append(updates, update)
 	}
@@ -2162,9 +2162,9 @@ func TestResponsesUserMessageWithEmptyText_CreatesEmptyInputPart(t *testing.T) {
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: ""}}},
 	}
 
-	resp, err := agent.Run(context.Background(), a, messages)
+	resp, err := a.Run(messages).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 
 	if len(resp.Messages) != 1 {
@@ -2221,9 +2221,9 @@ func TestResponsesResponseWithRefusalContent_ParsesCorrectly(t *testing.T) {
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	resp, err := agent.RunText(context.Background(), a, "harmful request")
+	resp, err := a.RunText("harmful request").Collect(t.Context())
 	if err != nil {
-		t.Fatalf("RunText() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 
 	if len(resp.Messages) != 1 {
@@ -2277,9 +2277,9 @@ data: {"type":"response.completed","response":{"id":"resp_001","object":"respons
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
 	var updates []*message.ResponseUpdate
-	for update, err := range agent.RunTextStream(context.Background(), a, "test") {
+	for update, err := range a.RunText("test").All(t.Context()) {
 		if err != nil {
-			t.Fatalf("RunTextStream() error = %v", err)
+			t.Fatalf("error = %v", err)
 		}
 		updates = append(updates, update)
 	}
@@ -2364,9 +2364,9 @@ func TestResponsesResponseWithInputImageHttpUrl_ParsesAsUriContent(t *testing.T)
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	resp, err := agent.RunText(context.Background(), a, "What is in this image?")
+	resp, err := a.RunText("What is in this image?").Collect(t.Context())
 	if err != nil {
-		t.Fatalf("RunText() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 
 	if len(resp.Messages) != 2 {
@@ -2459,9 +2459,9 @@ func TestResponsesResponseWithInputImageDataUri_ParsesAsDataContent(t *testing.T
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	resp, err := agent.RunText(context.Background(), a, "What is in this image?")
+	resp, err := a.RunText("What is in this image?").Collect(t.Context())
 	if err != nil {
-		t.Fatalf("RunText() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 
 	if len(resp.Messages) != 2 {
@@ -2534,9 +2534,9 @@ func TestResponsesResponseWithEndUserId_IncludesInAdditionalProperties(t *testin
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	resp, err := agent.RunText(context.Background(), a, "test")
+	resp, err := a.RunText("test").Collect(t.Context())
 	if err != nil {
-		t.Fatalf("RunText() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 
 	// Verify response has EndUserId in AdditionalProperties
@@ -2575,9 +2575,9 @@ func TestResponsesResponseWithError_IncludesInAdditionalPropertiesAndMessage(t *
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	resp, err := agent.RunText(context.Background(), a, "test")
+	resp, err := a.RunText("test").Collect(t.Context())
 	if err != nil {
-		t.Fatalf("RunText() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 
 	// Verify response has Error in AdditionalProperties
@@ -2638,7 +2638,7 @@ data: {"type":"response.failed","sequence_number":2,"response":{"id":"resp_002",
 
 	var updates []*message.ResponseUpdate
 	var streamErr error
-	for update, err := range agent.RunTextStream(context.Background(), a, "test") {
+	for update, err := range a.RunText("test").All(t.Context()) {
 		if err != nil {
 			// When there's an error event in the stream, the SDK returns it as a Go error
 			streamErr = err
@@ -2689,9 +2689,9 @@ data: {"type":"response.failed","sequence_number":2,"response":{"id":"resp_003",
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
 	var updates []*message.ResponseUpdate
-	for update, err := range agent.RunTextStream(context.Background(), a, "test") {
+	for update, err := range a.RunText("test").All(t.Context()) {
 		if err != nil {
-			t.Fatalf("RunTextStream() error = %v", err)
+			t.Fatalf("error = %v", err)
 		}
 		updates = append(updates, update)
 	}
@@ -2797,9 +2797,9 @@ func TestResponsesUserMessageWithVariousContentTypes_ConvertsCorrectly(t *testin
 		},
 	}
 
-	resp, err := agent.Run(context.Background(), a, messages)
+	resp, err := a.Run(messages).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 
 	if len(resp.Messages) != 1 {
@@ -2878,9 +2878,9 @@ func TestResponsesToolCallResult_DataContent_SerializesAsInputImage(t *testing.T
 		}},
 	}
 
-	resp, err := agent.Run(context.Background(), a, messages)
+	resp, err := a.Run(messages).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 
 	if len(resp.Messages) != 1 {
@@ -2956,9 +2956,9 @@ func TestResponsesToolCallResult_UriContent_SerializesAsInputImage(t *testing.T)
 		}},
 	}
 
-	resp, err := agent.Run(context.Background(), a, messages)
+	resp, err := a.Run(messages).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 
 	if len(resp.Messages) != 1 {
@@ -3038,9 +3038,9 @@ func TestResponsesToolCallResult_MixedContent_SerializesCorrectly(t *testing.T) 
 		}},
 	}
 
-	resp, err := agent.Run(context.Background(), a, messages)
+	resp, err := a.Run(messages).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 
 	if len(resp.Messages) != 1 {
@@ -3121,9 +3121,9 @@ func TestResponsesToolCallResult_HostedFileContent_SerializesCorrectly(t *testin
 		},
 	}
 
-	resp, err := agent.Run(context.Background(), a, messages)
+	resp, err := a.Run(messages).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 
 	if len(resp.Messages) != 1 {
@@ -3204,9 +3204,9 @@ func TestResponsesToolCallResult_DataContentPDF_SerializesAsInputFile(t *testing
 		},
 	}
 
-	resp, err := agent.Run(context.Background(), a, messages)
+	resp, err := a.Run(messages).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 
 	if len(resp.Messages) != 1 {
@@ -3286,9 +3286,9 @@ func TestResponsesToolCallResult_UriContentNonImage_SerializesAsInputFile(t *tes
 		},
 	}
 
-	resp, err := agent.Run(context.Background(), a, messages)
+	resp, err := a.Run(messages).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 
 	if len(resp.Messages) != 1 {
@@ -3369,9 +3369,9 @@ func TestResponsesToolCallResult_HostedFileContentNonImage_SerializesAsInputFile
 		},
 	}
 
-	resp, err := agent.Run(context.Background(), a, messages)
+	resp, err := a.Run(messages).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 
 	if len(resp.Messages) != 1 {
@@ -3442,9 +3442,9 @@ func TestResponsesToolCallResult_ObjectSerialization_SerializesCorrectly(t *test
 		}},
 	}
 
-	resp, err := agent.Run(context.Background(), a, messages)
+	resp, err := a.Run(messages).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 
 	if len(resp.Messages) != 1 {
@@ -3515,9 +3515,9 @@ func TestResponsesToolCallResult_StringFallback_SerializesCorrectly(t *testing.T
 		}},
 	}
 
-	resp, err := agent.Run(context.Background(), a, messages)
+	resp, err := a.Run(messages).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 
 	if len(resp.Messages) != 1 {
@@ -3588,9 +3588,9 @@ func TestResponsesToolCallResult_TextContentObject_SerializesCorrectly(t *testin
 		}},
 	}
 
-	resp, err := agent.Run(context.Background(), a, messages)
+	resp, err := a.Run(messages).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 
 	if len(resp.Messages) != 1 {
@@ -3667,9 +3667,9 @@ func TestResponsesToolCallResult_MultipleContentObjects_SerializesCorrectly(t *t
 		}},
 	}
 
-	resp, err := agent.Run(context.Background(), a, messages)
+	resp, err := a.Run(messages).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 
 	if len(resp.Messages) != 1 {
@@ -3744,19 +3744,19 @@ func TestResponsesConversationId_AsResponseId_NonStreaming(t *testing.T) {
 	defer server.Close()
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
-	session, err := a.NewSession(context.Background(), chatagent.ConversationID("resp_12345"))
+	session, err := a.NewSession(t.Context(), chatagent.ConversationID("resp_12345"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	_, err = agent.RunText(context.Background(), a, "hello",
+	_, err = a.RunText("hello",
 		chatagent.MaxOutputTokens(20),
 		chatagent.Temperature(0.5),
 		agentopt.Session(session),
-	)
+	).Collect(t.Context())
 
 	if err != nil {
-		t.Fatalf("RunText() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 
 	// After the call, session.ConversationID should be updated to the new response ID
@@ -3810,19 +3810,18 @@ func TestResponsesConversationId_AsConversationId_NonStreaming(t *testing.T) {
 	defer server.Close()
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
-	session, err := a.NewSession(context.Background(), chatagent.ConversationID("conv_12345"))
+	session, err := a.NewSession(t.Context(), chatagent.ConversationID("conv_12345"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	_, err = agent.RunText(context.Background(), a, "hello",
+	_, err = a.RunText("hello",
 		chatagent.MaxOutputTokens(20),
 		chatagent.Temperature(0.5),
 		agentopt.Session(session),
-	)
-
+	).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("RunText() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 
 	// When using a conversation ID, it should remain unchanged
@@ -3881,19 +3880,19 @@ data: {"type":"response.completed","response":{"id":"resp_67890","object":"respo
 	defer server.Close()
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
-	session, err := a.NewSession(context.Background(), chatagent.ConversationID("resp_12345"))
+	session, err := a.NewSession(t.Context(), chatagent.ConversationID("resp_12345"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	var updates []*message.ResponseUpdate
-	for update, err := range agent.RunTextStream(context.Background(), a, "hello",
+	for update, err := range a.RunText("hello",
 		chatagent.MaxOutputTokens(20),
 		chatagent.Temperature(0.5),
 		agentopt.Session(session),
-	) {
+	).All(t.Context()) {
 		if err != nil {
-			t.Fatalf("RunTextStream() error = %v", err)
+			t.Fatalf("error = %v", err)
 		}
 		updates = append(updates, update)
 	}
@@ -3959,19 +3958,19 @@ data: {"type":"response.completed","response":{"id":"resp_67890","object":"respo
 	defer server.Close()
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
-	session, err := a.NewSession(context.Background(), chatagent.ConversationID("conv_12345"))
+	session, err := a.NewSession(t.Context(), chatagent.ConversationID("conv_12345"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	var updates []*message.ResponseUpdate
-	for update, err := range agent.RunTextStream(context.Background(), a, "hello",
+	for update, err := range a.RunText("hello",
 		chatagent.MaxOutputTokens(20),
 		chatagent.Temperature(0.5),
 		agentopt.Session(session),
-	) {
+	).All(t.Context()) {
 		if err != nil {
-			t.Fatalf("RunTextStream() error = %v", err)
+			t.Fatalf("error = %v", err)
 		}
 		updates = append(updates, update)
 	}
@@ -4019,19 +4018,19 @@ func TestResponsesBackgroundResponses_FirstCall(t *testing.T) {
 	defer server.Close()
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
-	session, err := a.NewSession(context.Background())
+	session, err := a.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	resp, err := agent.RunText(context.Background(), a, "hello",
+	resp, err := a.RunText("hello",
 		chatagent.MaxOutputTokens(20),
 		chatagent.Temperature(0.5),
 		agentopt.AllowBackgroundResponses(true),
 		agentopt.Session(session),
-	)
+	).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("RunText() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 
 	if len(resp.Messages) != 1 {
@@ -4103,7 +4102,7 @@ func testResponsesBackgroundPolling(t *testing.T, status string) {
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 	// Create session with ConversationID to simulate a previous call (polling scenario)
-	session, err := a.NewSession(context.Background(), chatagent.ConversationID("resp_68d3d2c9ef7c8195863e4e2b2ec226a205007262ecbbfed8"))
+	session, err := a.NewSession(t.Context(), chatagent.ConversationID("resp_68d3d2c9ef7c8195863e4e2b2ec226a205007262ecbbfed8"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4115,13 +4114,13 @@ func testResponsesBackgroundPolling(t *testing.T, status string) {
 	}
 	ctJSON, _ := json.Marshal(ct)
 
-	resp, err := agent.Run(context.Background(), a, nil,
+	resp, err := a.Run(nil,
 		agentopt.ContinuationToken(string(ctJSON)),
 		agentopt.AllowBackgroundResponses(true),
 		agentopt.Session(session),
-	)
+	).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 
 	switch status {
@@ -4233,19 +4232,19 @@ data: {"type":"response.completed","sequence_number":17,"response":{"id":"resp_6
 	defer server.Close()
 
 	a := newTestResponsesClient(server, "gpt-4o-2024-08-06")
-	session, err := a.NewSession(context.Background())
+	session, err := a.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	var updates []*message.ResponseUpdate
 	var allText strings.Builder
-	for update, err := range agent.RunTextStream(context.Background(), a, "hello",
+	for update, err := range a.RunText("hello",
 		agentopt.AllowBackgroundResponses(true),
 		agentopt.Session(session),
-	) {
+	).All(t.Context()) {
 		if err != nil {
-			t.Fatalf("RunTextStream() error = %v", err)
+			t.Fatalf("error = %v", err)
 		}
 		updates = append(updates, update)
 		for _, content := range update.Contents {
@@ -4349,14 +4348,13 @@ data: {"type":"response.completed","sequence_number":17,"response":{"truncation"
 	}
 
 	var updates []*message.ResponseUpdate
-	for update, err := range a.Run(context.Background(), []*message.Message{},
+	for update, err := range a.Run([]*message.Message{},
 		agentopt.AllowBackgroundResponses(true),
 		agentopt.ContinuationToken(token),
-		agentopt.Stream(true),
 		agentopt.Session(session),
-	) {
+	).All(t.Context()) {
 		if err != nil {
-			t.Fatalf("Run() error = %v", err)
+			t.Fatalf("error = %v", err)
 		}
 		updates = append(updates, update)
 	}
@@ -4419,9 +4417,9 @@ func TestResponsesGetContinuationToken_WithMessages_ThrowsException(t *testing.T
 	token := `{"response_id":"resp_123","sequence_number":0}`
 
 	// Attempt to use continuation token with messages should error
-	_, err := agent.RunText(context.Background(), a, "test",
+	_, err := a.RunText("test",
 		agentopt.ContinuationToken(token),
-	)
+	).Collect(t.Context())
 
 	if err == nil {
 		t.Fatal("expected error when using continuation token with messages")
@@ -4440,10 +4438,10 @@ func TestResponsesBackgroundResponses_PollingCall_WithMessages(t *testing.T) {
 	token := `{"response_id":"resp_68d3d2c9ef7c8195863e4e2b2ec226a205007262ecbbfed8","sequence_number":0}`
 
 	// A try to update a background response with new messages should fail
-	_, err := agent.RunText(context.Background(), a, "Please book hotel as well",
+	_, err := a.RunText("Please book hotel as well",
 		agentopt.ContinuationToken(token),
 		agentopt.AllowBackgroundResponses(true),
-	)
+	).Collect(t.Context())
 
 	if err == nil {
 		t.Fatal("expected error when using continuation token with messages")
@@ -4462,13 +4460,12 @@ func TestResponsesBackgroundResponses_StreamResumption_WithMessages(t *testing.T
 	token := `{"response_id":"resp_68d40dc671a0819cb0ee920078333451029e611c3cc4a34b","sequence_number":9}`
 
 	// Attempt to resume stream with messages should fail
-	for _, err := range agent.RunStream(context.Background(), a, []*message.Message{
+	for _, err := range a.Run([]*message.Message{
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Please book a hotel for me"}}},
 	},
 		agentopt.AllowBackgroundResponses(true),
 		agentopt.ContinuationToken(token),
-		agentopt.Stream(true),
-	) {
+	).All(t.Context()) {
 		if err == nil {
 			t.Fatal("expected error when using continuation token with messages in streaming")
 		}

@@ -14,7 +14,7 @@ import (
 // FuncTool creates a function tool that invokes the given agent.
 // The provided session is used for the agent's context during invocations,
 // or nil to create a new session for each invocation.
-func FuncTool(a Agent, session memory.Session) tool.FuncTool {
+func (a *Agent) FuncTool(session memory.Session) tool.FuncTool {
 	return functool{
 		name:        a.Name(),
 		description: a.Description(),
@@ -27,7 +27,7 @@ type functool struct {
 	name        string
 	description string
 	session     memory.Session
-	agent       Agent
+	agent       *Agent
 }
 
 func (t functool) Name() string {
@@ -67,7 +67,7 @@ func (t functool) Call(ctx context.Context, args string) (any, error) {
 	if err := json.Unmarshal([]byte(args), &in); err != nil {
 		return nil, err
 	}
-	resp, err := RunText(ctx, t.agent, in.Query, agentopt.Session(t.session))
+	resp, err := t.agent.RunText(in.Query, agentopt.Session(t.session)).Collect(ctx)
 	if err != nil {
 		return "", err
 	}

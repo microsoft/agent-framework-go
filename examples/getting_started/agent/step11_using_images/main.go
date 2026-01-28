@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 
-	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
 	"github.com/microsoft/agent-framework-go/agent/middleware"
@@ -39,5 +38,6 @@ func main() {
 		},
 	)
 
-	demo.Response(agent.RunMessage(ctx, a, msg))
+	resp, err := a.RunMessage(msg).Collect(ctx)
+	demo.Response(resp, err)
 }

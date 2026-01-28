@@ -6,7 +6,6 @@ import (
 	"context"
 	"os"
 
-	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
 	"github.com/microsoft/agent-framework-go/agent/middleware"
@@ -36,10 +35,11 @@ func main() {
 	ctx := context.Background()
 
 	// Invoke the agent and output the text result.
-	demo.Response(agent.RunText(ctx, a, "Tell me a joke about a pirate."))
+	resp, err := a.RunText("Tell me a joke about a pirate.").Collect(ctx)
+	demo.Response(resp, err)
 
 	// Invoke the agent with streaming support.
-	for update, err := range agent.RunTextStream(ctx, a, "Tell me a joke about a pirate.") {
+	for update, err := range a.RunText("Tell me a joke about a pirate.").All(ctx) {
 		demo.Response(update, err)
 	}
 }

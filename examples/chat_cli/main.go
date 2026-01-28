@@ -41,7 +41,7 @@ func main() {
 	runChatLoop(context.Background(), a)
 }
 
-func runChatLoop(ctx context.Context, a agent.Agent) {
+func runChatLoop(ctx context.Context, a *agent.Agent) {
 	// Create a session to maintain conversation history
 	session, err := a.NewSession(ctx)
 	if err != nil {
@@ -85,7 +85,7 @@ func runChatLoop(ctx context.Context, a agent.Agent) {
 		fmt.Print("Assistant: ")
 
 		hasError := false
-		for update, err := range agent.RunTextStream(ctx, a, userInput, agentopt.Session(session)) {
+		for update, err := range a.RunText(userInput, agentopt.Session(session)).All(ctx) {
 			if err != nil {
 				fmt.Printf("\n❌ Error: %v\n", err)
 				hasError = true

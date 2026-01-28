@@ -28,6 +28,18 @@ type PersonInfo struct {
 	Occupation string `json:"occupation"`
 }
 
+// runFor executes the agent with the given messages and returns the result of type T.
+func runFor[T any](ctx context.Context, a *agent.Agent, message string, opts ...agentopt.RunOption) (T, error) {
+	var v T
+	opts = append(opts, agentopt.StructuredOutput(&v), agentopt.Stream(false))
+	for _, err := range a.RunText(message, opts...).All(ctx) {
+		if err != nil {
+			return v, err
+		}
+	}
+	return v, nil
+}
+
 func main() {
 	a := openai.NewChatAgent(openai.ClientConfig{
 		Model: "gpt-4o-mini",
@@ -39,8 +51,8 @@ func main() {
 
 	ctx := context.Background()
 
-	// Set PersonInfo as the type parameter of RunTextFor method to specify the expected structured output from the agent and invoke the agent with some unstructured input.
-	person, err := agent.RunTextFor[PersonInfo](ctx, a, "Please provide information about John Smith, who is a 35-year-old software engineer.")
+	// Set PersonInfo as the type parameter of runFor method to specify the expected structured output from the agent and invoke the agent with some unstructured input.
+	person, err := runFor[PersonInfo](ctx, a, "Please provide information about John Smith, who is a 35-year-old software engineer.")
 	if err != nil {
 		demo.Panic(err)
 	}
@@ -65,7 +77,7 @@ func main() {
 
 	// Invoke the agent with some unstructured input while streaming, to extract the structured information from.
 	var personRaw []byte
-	for update, err := range agent.RunTextStream(ctx, a, "Please provide information about John Smith, who is a 35-year-old software engineer.") {
+	for update, err := range a.RunText("Please provide information about John Smith, who is a 35-year-old software engineer.").All(ctx) {
 		demo.Response(update, err)
 		personRaw = append(personRaw, update.String()...)
 	}

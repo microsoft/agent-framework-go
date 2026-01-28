@@ -80,7 +80,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/openai"
 )
 
@@ -96,7 +95,7 @@ func main() {
 		Model:      os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), // e.g., "gpt-4o"
 	}, nil)
 
-  resp, err := agent.RunText(context.Background(), a, "Write a haiku about the Microsoft Agent Framework")
+  resp, err := a.RunText("Write a haiku about the Microsoft Agent Framework").Collect(context.Background())
   if err != nil {
     panic(err)
   }

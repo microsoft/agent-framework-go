@@ -7,7 +7,6 @@ import (
 	"iter"
 	"strings"
 
-	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
 	"github.com/microsoft/agent-framework-go/agent/middleware"
@@ -30,7 +29,8 @@ func main() {
 		RunOptions:   []agentopt.RunOption{middleware.With(logger), middleware.WithFunc(guardrailsMiddleware)},
 	})
 
-	demo.Response(agent.RunText(context.Background(), a, "Tell me something that contains the word harmful."))
+	resp, err := a.RunText("Tell me something that contains the word harmful.").Collect(context.Background())
+	demo.Response(resp, err)
 }
 
 // guardrailsMiddleware enforces guardrails by redacting certain keywords from input and output messages.

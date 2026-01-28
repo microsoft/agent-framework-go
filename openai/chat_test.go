@@ -59,7 +59,7 @@ func newTestServer(t *testing.T, input string, output string) *httptest.Server {
 	}))
 }
 
-func newTestClient(server *httptest.Server) agent.Agent {
+func newTestClient(server *httptest.Server) *agent.Agent {
 	return openai.NewChatAgent(
 		openai.ClientConfig{Model: "gpt-4o-mini", Endpoint: server.URL},
 		chatagent.Config{DisableFuncAutoCall: true},
@@ -140,13 +140,13 @@ func TestChatBasicRequestResponse_NonStreaming(t *testing.T) {
 
 	a := newTestClient(server)
 
-	resp, err := agent.RunText(t.Context(), a, "hello",
+	resp, err := a.RunText("hello",
 		chatagent.AllowMultipleToolCalls(false),
 		chatagent.MaxOutputTokens(10),
 		chatagent.Temperature(0.5),
-	)
+	).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("RunText() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 	if err := messagetest.MessagesEqual(resp.Messages, want); err != nil {
 		t.Error(err)
@@ -241,9 +241,9 @@ data: [DONE]
 	a := newTestClient(server)
 
 	var updates []*message.ResponseUpdate
-	for update, err := range agent.RunTextStream(t.Context(), a, "hello", chatagent.MaxOutputTokens(20), chatagent.Temperature(0.5)) {
+	for update, err := range a.RunText("hello", chatagent.MaxOutputTokens(20), chatagent.Temperature(0.5)).All(t.Context()) {
 		if err != nil {
-			t.Fatalf("RunTextStream() error = %v", err)
+			t.Fatalf("error = %v", err)
 		}
 		updates = append(updates, update)
 	}
@@ -355,15 +355,15 @@ func TestChatMultipleMessages_NonStreaming(t *testing.T) {
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "i'm good. how are you?"}}},
 	}
 
-	resp, err := agent.Run(t.Context(), a, messages,
+	resp, err := a.Run(messages,
 		chatagent.Temperature(0.25),
 		chatagent.FrequencyPenalty(0.75),
 		chatagent.PresencePenalty(0.5),
 		chatagent.StopSequences([]string{"great"}),
 		chatagent.Seed(42),
-	)
+	).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 	if err := messagetest.MessagesEqual(resp.Messages, want); err != nil {
 		t.Error(err)
@@ -468,9 +468,9 @@ func TestChatMultiPartSystemMessage_NonStreaming(t *testing.T) {
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "hello!"}}},
 	}
 
-	resp, err := agent.Run(t.Context(), a, messages)
+	resp, err := a.Run(messages).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 	if err := messagetest.MessagesEqual(resp.Messages, want); err != nil {
 		t.Error(err)
@@ -573,9 +573,9 @@ func TestChatEmptyAssistantMessage_NonStreaming(t *testing.T) {
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "i'm good. how are you?"}}},
 	}
 
-	resp, err := agent.Run(t.Context(), a, messages)
+	resp, err := a.Run(messages).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 	if err := messagetest.MessagesEqual(resp.Messages, want); err != nil {
 		t.Error(err)
@@ -704,11 +704,11 @@ func TestChatFunctionCallContent_NonStreaming(t *testing.T) {
 		Description: "Gets the age of the specified person.",
 	}, getPersonAge)
 
-	resp, err := agent.RunText(t.Context(), a, "How old is Alice?",
+	resp, err := a.RunText("How old is Alice?",
 		agentopt.Tool(tool),
-	)
+	).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("RunText() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 	if err := messagetest.MessagesEqual(resp.Messages, want); err != nil {
 		t.Error(err)
@@ -819,9 +819,9 @@ data: [DONE]
 	}, getPersonAge)
 
 	var updates []*message.ResponseUpdate
-	for update, err := range agent.RunTextStream(t.Context(), a, "How old is Alice?", agentopt.Tool(tool)) {
+	for update, err := range a.RunText("How old is Alice?", agentopt.Tool(tool)).All(t.Context()) {
 		if err != nil {
-			t.Fatalf("RunTextStream() error = %v", err)
+			t.Fatalf("error = %v", err)
 		}
 		updates = append(updates, update)
 	}
@@ -967,9 +967,9 @@ func TestChatAssistantMessageWithBothToolsAndContent_NonStreaming(t *testing.T) 
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Thanks!"}}},
 	}
 
-	resp, err := agent.Run(t.Context(), a, messages)
+	resp, err := a.Run(messages).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 	if err := messagetest.MessagesEqual(resp.Messages, want); err != nil {
 		t.Error(err)
@@ -1018,13 +1018,13 @@ func TestChatOptions_Model_OverridesClientModel_NonStreaming(t *testing.T) {
 	a := newTestClient(server)
 
 	// Override with gpt-4o in options
-	resp, err := agent.RunText(t.Context(), a, "hello",
+	resp, err := a.RunText("hello",
 		chatagent.MaxOutputTokens(10),
 		chatagent.Temperature(0.5),
 		chatagent.Model("gpt-4o"),
-	)
+	).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("RunText() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 
 	// Verify the response contains the expected content
@@ -1068,13 +1068,13 @@ data: [DONE]
 
 	var updates []*message.ResponseUpdate
 	// Override with gpt-4o in options
-	for update, err := range agent.RunTextStream(t.Context(), a, "hello",
+	for update, err := range a.RunText("hello",
 		chatagent.MaxOutputTokens(20),
 		chatagent.Temperature(0.5),
 		chatagent.Model("gpt-4o"),
-	) {
+	).All(t.Context()) {
 		if err != nil {
-			t.Fatalf("RunTextStream() error = %v", err)
+			t.Fatalf("error = %v", err)
 		}
 		updates = append(updates, update)
 	}
@@ -1216,9 +1216,9 @@ func TestChatDataContentMessage_Image_NonStreaming(t *testing.T) {
 		},
 	}
 
-	resp, err := agent.Run(t.Context(), a, messages)
+	resp, err := a.Run(messages).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
 	if err := messagetest.MessagesEqual(resp.Messages, want); err != nil {
 		t.Error(err)

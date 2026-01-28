@@ -44,7 +44,7 @@ type a2aagent struct {
 	Options Options
 }
 
-func NewAgent(client *a2aclient.Client, options Options) agent.Agent {
+func NewAgent(client *a2aclient.Client, options Options) *agent.Agent {
 	if client == nil {
 		panic("client cannot be nil")
 	}

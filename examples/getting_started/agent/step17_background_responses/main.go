@@ -6,7 +6,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
 	"github.com/microsoft/agent-framework-go/agent/middleware"
@@ -28,17 +27,15 @@ func main() {
 	})
 
 	ctx := context.Background()
-
 	session, err := a.NewSession(ctx)
 	if err != nil {
 		demo.Panic(err)
 	}
 
 	// Start the initial run.
-	resp, err := agent.RunText(ctx, a,
-		"Write a very long novel about otters in space.",
+	resp, err := a.RunText("Write a very long novel about otters in space.",
 		agentopt.Session(session),
-		agentopt.AllowBackgroundResponses(true))
+		agentopt.AllowBackgroundResponses(true)).Collect(ctx)
 
 	demo.Response(resp, err)
 
@@ -48,11 +45,11 @@ func main() {
 		time.Sleep(2 * time.Second)
 
 		// Continue with the token.
-		resp, err = agent.Run(ctx, a, nil,
+		resp, err = a.Run(nil,
 			agentopt.Session(session),
 			agentopt.AllowBackgroundResponses(true),
 			agentopt.ContinuationToken(resp.ContinuationToken),
-		)
+		).Collect(ctx)
 		demo.Response(resp, err)
 	}
 }

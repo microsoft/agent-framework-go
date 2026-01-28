@@ -8,7 +8,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
 	"github.com/microsoft/agent-framework-go/agent/middleware"
@@ -50,9 +49,10 @@ func main() {
 	}, chatagent.Config{
 		Instructions: "You are a helpful assistant who responds in French.",
 		RunOptions: []agentopt.RunOption{
-			agentopt.Tool(agent.FuncTool(weatherAgent, nil)),
+			agentopt.Tool(weatherAgent.FuncTool(nil)),
 		},
 	})
 
-	demo.Response(agent.RunText(context.Background(), a, "What is the weather like in Amsterdam?"))
+	resp, err := a.RunText("What is the weather like in Amsterdam?").Collect(context.Background())
+	demo.Response(resp, err)
 }

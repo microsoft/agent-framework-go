@@ -24,9 +24,9 @@ import (
 
 func main() {
 	// Create agents
-	frenchAgent := agent.Bind(newAgent("French"), false)
-	spanishAgent := agent.Bind(newAgent("Spanish"), false)
-	englishAgent := agent.Bind(newAgent("English"), false)
+	frenchAgent := newAgent("French").Bind(false)
+	spanishAgent := newAgent("Spanish").Bind(false)
+	englishAgent := newAgent("English").Bind(false)
 
 	wf, err := workflow.NewBuilder(frenchAgent).
 		AddEdge(frenchAgent, spanishAgent).
@@ -54,7 +54,7 @@ func main() {
 	}
 }
 
-func newAgent(language string) agent.Agent {
+func newAgent(language string) *agent.Agent {
 	return openai.NewChatAgent(openai.ClientConfig{
 		Model: "gpt-5-nano",
 	}, chatagent.Config{

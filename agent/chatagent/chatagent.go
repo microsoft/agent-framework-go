@@ -61,7 +61,7 @@ type chatagent struct {
 }
 
 // NewAgent creates a new chat agent with the given chat client and options.
-func NewAgent(runfn RunFunc, cfg Config) agent.Agent {
+func NewAgent(runfn RunFunc, cfg Config) *agent.Agent {
 	opts := *cfg.Clone()
 	if !opts.DisableFuncAutoCall {
 		opts.RunOptions = append(opts.RunOptions, middleware.With(

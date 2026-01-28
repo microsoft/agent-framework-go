@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
 	"github.com/microsoft/agent-framework-go/agent/middleware"
@@ -50,10 +49,8 @@ func main() {
 	if err != nil {
 		demo.Panic(err)
 	}
-	resp, err := agent.RunText(ctx, a, "What is the weather like in Amsterdam?", agentopt.Session(session))
-	if err != nil {
-		panic(err)
-	}
+	resp, err := a.RunText("What is the weather like in Amsterdam?", agentopt.Session(session)).Collect(ctx)
+	demo.Response(resp, err)
 
 	var userResponses []message.Content
 	var approvedRequests bool
@@ -75,5 +72,6 @@ func main() {
 		return
 	}
 	// Pass the user input responses back to the agent for further processing.
-	demo.Response(agent.RunMessage(ctx, a, message.New(userResponses...), agentopt.Session(session)))
+	resp, err = a.RunMessage(message.New(userResponses...), agentopt.Session(session)).Collect(ctx)
+	demo.Response(resp, err)
 }

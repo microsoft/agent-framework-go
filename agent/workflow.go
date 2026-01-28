@@ -13,7 +13,7 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow"
 )
 
-func newExecutor(a Agent, emitEvents bool) *workflow.Executor {
+func newExecutor(a *Agent, emitEvents bool) *workflow.Executor {
 	var session memory.Session
 	var sessionStateKey string
 	ensureSession := func(ctx context.Context) (memory.Session, error) {
@@ -63,12 +63,10 @@ func newExecutor(a Agent, emitEvents bool) *workflow.Executor {
 				return err
 			}
 			options = append(options, agentopt.Session(session))
-			if emitEvents {
-				// Run the agent in streaming mode only when agent run update events are to be emitted.
-				options = append(options, agentopt.Stream(true))
-			}
+			// Run the agent in streaming mode only when agent run update events are to be emitted.
+			options = append(options, agentopt.Stream(emitEvents))
 			var updates []*message.ResponseUpdate
-			for update, err := range RunStream(ctx, a, messages, options...) {
+			for update, err := range a.Run(messages, options...).All(ctx) {
 				if err != nil {
 					return err
 				}
@@ -89,7 +87,7 @@ func newExecutor(a Agent, emitEvents bool) *workflow.Executor {
 	return ex
 }
 
-func Bind(a Agent, emitEvents bool) *workflow.ExecutorBinding {
+func (a *Agent) Bind(emitEvents bool) *workflow.ExecutorBinding {
 	return &workflow.ExecutorBinding{
 		ID:           agentDescriptiveID(a),
 		ExecutorType: reflect.TypeOf(a),
@@ -101,7 +99,7 @@ func Bind(a Agent, emitEvents bool) *workflow.ExecutorBinding {
 	}
 }
 
-func agentDescriptiveID(a Agent) string {
+func agentDescriptiveID(a *Agent) string {
 	if a.Name() != "" {
 		return a.Name() + "_" + a.ID()
 	}

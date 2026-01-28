@@ -37,7 +37,7 @@ type responsesClient struct {
 	config ClientConfig
 }
 
-func newResponsesAgent(isAzure bool, config ClientConfig, options chatagent.Config) agent.Agent {
+func newResponsesAgent(isAzure bool, config ClientConfig, options chatagent.Config) *agent.Agent {
 	ops := make([]option.RequestOption, 0, 2)
 	if isAzure {
 		if config.Endpoint != "" {
@@ -82,12 +82,12 @@ func (a *responsesClient) unmarshal(format format.Format, data []byte, v any) er
 	return jsonformat.Unmarshal(format.(*jsonformat.Format), data, v)
 }
 
-func NewResponsesAgent(config ClientConfig, options chatagent.Config) agent.Agent {
+func NewResponsesAgent(config ClientConfig, options chatagent.Config) *agent.Agent {
 	return newResponsesAgent(false, config, options)
 }
 
 // NewResponsesAgentAzure creates a new [Agent].
-func NewResponsesAgentAzure(config ClientConfig, options chatagent.Config) agent.Agent {
+func NewResponsesAgentAzure(config ClientConfig, options chatagent.Config) *agent.Agent {
 	return newResponsesAgent(true, config, options)
 }
 

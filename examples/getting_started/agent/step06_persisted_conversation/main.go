@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
 	"github.com/microsoft/agent-framework-go/agent/middleware"
@@ -40,7 +39,8 @@ func main() {
 	}
 
 	// Run the agent with a new session.
-	demo.Response(agent.RunText(ctx, a, "Tell me a joke about a pirate.", agentopt.Session(session)))
+	resp, err := a.RunText("Tell me a joke about a pirate.", agentopt.Session(session)).Collect(ctx)
+	demo.Response(resp, err)
 
 	// Serialize the session state so it can be stored for later use.
 	serializedSession, err := session.MarshalBinary()
@@ -71,5 +71,6 @@ func main() {
 	}
 
 	// Run the agent again with the resumed session.
-	demo.Response(agent.RunText(ctx, a, "Now tell the same joke in the voice of a pirate, and add some emojis to the joke.", agentopt.Session(resumedSession)))
+	resp, err = a.RunText("Now tell the same joke in the voice of a pirate, and add some emojis to the joke.", agentopt.Session(resumedSession)).Collect(ctx)
+	demo.Response(resp, err)
 }

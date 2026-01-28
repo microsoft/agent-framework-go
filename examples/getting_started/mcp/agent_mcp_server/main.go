@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 
-	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
 	"github.com/microsoft/agent-framework-go/agent/middleware"
@@ -56,5 +55,6 @@ func main() {
 	})
 
 	// Invoke the agent and output the text result.
-	demo.Response(agent.RunText(ctx, a, "How to create an Azure storage account using az cli?"))
+	resp, err := a.RunText("How to create an Azure storage account using az cli?").Collect(ctx)
+	demo.Response(resp, err)
 }

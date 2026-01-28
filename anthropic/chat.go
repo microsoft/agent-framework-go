@@ -33,7 +33,7 @@ type ClientConfig struct {
 	BaseURL string // Optional, defaults to Anthropic API
 }
 
-func NewChatAgent(config ClientConfig, options chatagent.Config) agent.Agent {
+func NewChatAgent(config ClientConfig, options chatagent.Config) *agent.Agent {
 	opts := []option.RequestOption{}
 	if config.APIKey != "" {
 		opts = append(opts, option.WithAPIKey(config.APIKey))
