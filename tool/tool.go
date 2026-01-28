@@ -4,6 +4,7 @@ package tool
 
 import (
 	"context"
+	"strings"
 )
 
 // ToolMode represents how tools should be used by the agent.
@@ -17,6 +18,29 @@ const (
 	// ToolModeNone disables tool usage.
 	ToolModeNone ToolMode = "none"
 )
+
+const requiredPrefix = "required:"
+
+func (m ToolMode) Mode() ToolMode {
+	if m == ToolModeAuto || m == ToolModeNone {
+		return m
+	}
+	if strings.HasPrefix(string(m), requiredPrefix) {
+		return ToolModeRequired
+	}
+	return m
+}
+
+func (m ToolMode) Required() []string {
+	if m.Mode() == ToolModeRequired {
+		return strings.Split(strings.TrimPrefix(string(m), requiredPrefix), ",")
+	}
+	return nil
+}
+
+func RequireTools(name ...string) ToolMode {
+	return ToolMode(requiredPrefix + strings.Join(name, ","))
+}
 
 type Tool interface {
 	Name() string

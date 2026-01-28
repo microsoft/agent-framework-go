@@ -106,14 +106,44 @@ func ContentEqual(got, want message.Content) error {
 		return fmt.Errorf("type mismatch: expected %T, got %T", want, got)
 	}
 
-	if !reflect.DeepEqual(want.Header(), got.Header()) {
-		return fmt.Errorf("header mismatch: expected %v, got %v", want.Header(), got.Header())
+	// Compare headers, but ignore RawRepresentation as it's set during parsing
+	gotHeader := got.Header()
+	wantHeader := want.Header()
+
+	// Compare AdditionalProperties
+	if !reflect.DeepEqual(wantHeader.AdditionalProperties, gotHeader.AdditionalProperties) {
+		return fmt.Errorf("header AdditionalProperties mismatch: expected %v, got %v", wantHeader.AdditionalProperties, gotHeader.AdditionalProperties)
 	}
+
+	// Compare Annotations
+	if !reflect.DeepEqual(wantHeader.Annotations, gotHeader.Annotations) {
+		return fmt.Errorf("header Annotations mismatch: expected %v, got %v", wantHeader.Annotations, gotHeader.Annotations)
+	}
+
+	// Note: RawRepresentation is intentionally not compared as it's set during parsing
 
 	switch expContent := want.(type) {
 	case fmt.Stringer:
 		if got.(fmt.Stringer).String() != expContent.String() {
 			return fmt.Errorf("%T mismatch: expected %q, got %q", expContent, expContent.String(), got.(fmt.Stringer).String())
+		}
+	case *message.FunctionCallContent:
+		act := got.(*message.FunctionCallContent)
+		if expContent.CallID != act.CallID {
+			return fmt.Errorf("CallID mismatch: expected %q, got %q", expContent.CallID, act.CallID)
+		}
+		if expContent.Name != act.Name {
+			return fmt.Errorf("Name mismatch: expected %q, got %q", expContent.Name, act.Name)
+		}
+		if expContent.Arguments != act.Arguments {
+			return fmt.Errorf("Arguments mismatch: expected %q, got %q", expContent.Arguments, act.Arguments)
+		}
+		// Compare Error fields
+		if (expContent.Error == nil) != (act.Error == nil) {
+			return fmt.Errorf("Error presence mismatch: expected %v, got %v", expContent.Error, act.Error)
+		}
+		if expContent.Error != nil && act.Error != nil && expContent.Error.Error() != act.Error.Error() {
+			return fmt.Errorf("Error message mismatch: expected %q, got %q", expContent.Error, act.Error)
 		}
 	case *message.FunctionResultContent:
 		act := got.(*message.FunctionResultContent)

@@ -311,20 +311,24 @@ func (a *client) buildMessageParams(messages []*message.Message, opts []agentopt
 	}
 
 	if mode, ok := agentopt.Get(opts, agentopt.ToolMode); ok {
-		switch mode {
-		case tool.ToolModeAuto:
+		switch mode.Mode() {
+		case tool.ToolModeAuto, "":
 			params.ToolChoice = anthropic.ToolChoiceUnionParam{
 				OfAuto: &anthropic.ToolChoiceAutoParam{},
 			}
-		case tool.ToolModeRequired:
+		case tool.ToolModeNone:
 			params.ToolChoice = anthropic.ToolChoiceUnionParam{
-				OfAny: &anthropic.ToolChoiceAnyParam{},
+				OfNone: &anthropic.ToolChoiceNoneParam{},
 			}
-		default:
-			params.ToolChoice = anthropic.ToolChoiceUnionParam{
-				OfTool: &anthropic.ToolChoiceToolParam{
-					Name: string(mode),
-				},
+		case tool.ToolModeRequired:
+			names := mode.Required()
+			if len(names) != 1 {
+				// Anthropic requires either a single tool name or "any" for multiple tools
+				params.ToolChoice = anthropic.ToolChoiceUnionParam{
+					OfAny: &anthropic.ToolChoiceAnyParam{},
+				}
+			} else {
+				params.ToolChoice = anthropic.ToolChoiceParamOfTool(names[0])
 			}
 		}
 	}

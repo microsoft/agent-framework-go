@@ -290,8 +290,42 @@ func responsesBuildCompletionParams(model string, messages []*message.Message, o
 				params.ParallelToolCalls = openai.Bool(v)
 			}
 			if mode, ok := agentopt.Get(opts, agentopt.ToolMode); ok {
-				params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
-					OfToolChoiceMode: param.NewOpt(responses.ToolChoiceOptions(mode)),
+				switch mode.Mode() {
+				case tool.ToolModeAuto, "":
+					params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
+						OfToolChoiceMode: param.NewOpt(responses.ToolChoiceOptionsAuto),
+					}
+				case tool.ToolModeNone:
+					params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
+						OfToolChoiceMode: param.NewOpt(responses.ToolChoiceOptionsNone),
+					}
+				case tool.ToolModeRequired:
+					names := mode.Required()
+					if len(names) == 0 {
+						params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
+							OfToolChoiceMode: param.NewOpt(responses.ToolChoiceOptionsRequired),
+						}
+					} else if len(names) == 1 {
+						params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
+							OfFunctionTool: &responses.ToolChoiceFunctionParam{
+								Name: names[0],
+							},
+						}
+					} else {
+						toolsMap := make([]map[string]any, 0, len(names))
+						for _, name := range names {
+							toolsMap = append(toolsMap, map[string]any{
+								"type": "function",
+								"name": name,
+							})
+						}
+						params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
+							OfAllowedTools: &responses.ToolChoiceAllowedParam{
+								Mode:  responses.ToolChoiceAllowedModeRequired,
+								Tools: toolsMap,
+							},
+						}
+					}
 				}
 			}
 		}

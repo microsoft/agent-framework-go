@@ -281,9 +281,42 @@ func buildCompletionParams(model string, messages []*message.Message, opts []age
 				params.ParallelToolCalls = openai.Bool(v)
 			}
 			if mode, ok := agentopt.Get(opts, agentopt.ToolMode); ok {
-				params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
-					OfAuto: openai.String(string(mode)),
+				switch mode.Mode() {
+				case tool.ToolModeAuto, "":
+					params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
+						OfAuto: openai.String(string(openai.ChatCompletionToolChoiceOptionAutoAuto)),
+					}
+				case tool.ToolModeNone:
+					params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
+						OfAuto: openai.String(string(openai.ChatCompletionToolChoiceOptionAutoNone)),
+					}
+				case tool.ToolModeRequired:
+					names := mode.Required()
+					if len(names) == 0 {
+						params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
+							OfAuto: openai.String(string(openai.ChatCompletionToolChoiceOptionAutoRequired)),
+						}
+					} else if len(names) == 1 {
+						params.ToolChoice = openai.ToolChoiceOptionFunctionToolChoice(openai.ChatCompletionNamedToolChoiceFunctionParam{
+							Name: names[0],
+						})
+					} else {
+						toolsMap := make([]map[string]any, 0, len(names))
+						for _, name := range names {
+							toolsMap = append(toolsMap, map[string]any{
+								"type": "function",
+								"function": map[string]any{
+									"name": name,
+								},
+							})
+						}
+						params.ToolChoice = openai.ToolChoiceOptionAllowedTools(openai.ChatCompletionAllowedToolsParam{
+							Mode:  openai.ChatCompletionAllowedToolsModeRequired,
+							Tools: toolsMap,
+						})
+					}
 				}
+
 			}
 		}
 		switch tl := tl.(type) {

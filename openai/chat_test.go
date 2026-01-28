@@ -18,6 +18,7 @@ import (
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/message/messagetest"
 	"github.com/microsoft/agent-framework-go/openai"
+	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 )
 
@@ -1217,6 +1218,180 @@ func TestChatDataContentMessage_Image_NonStreaming(t *testing.T) {
 	}
 
 	resp, err := a.Run(messages).Collect(t.Context())
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if err := messagetest.MessagesEqual(resp.Messages, want); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestChatMultipleRequiredFunctions(t *testing.T) {
+	const input = `
+            {
+                "tools": [
+                    {
+                        "function": {
+                            "description": "Get the current weather for a location",
+                            "name": "GetWeather",
+                            "parameters": {
+                                "type": "object",
+                                "required": [
+                                    "location"
+                                ],
+                                "properties": {
+                                    "location": {
+                                        "description": "The city and state, e.g. San Francisco, CA",
+                                        "type": "string"
+                                    }
+                                },
+                                "additionalProperties": false
+                            }
+                        },
+                        "type": "function"
+                    },
+                    {
+                        "function": {
+                            "description": "Get the current time for a location",
+                            "name": "GetTime",
+                            "parameters": {
+                                "type": "object",
+                                "required": [
+                                    "location"
+                                ],
+                                "properties": {
+                                    "location": {
+                                        "description": "The city and state, e.g. San Francisco, CA",
+                                        "type": "string"
+                                    }
+                                },
+                                "additionalProperties": false
+                            }
+                        },
+                        "type": "function"
+                    }
+                ],
+                "tool_choice": {
+                    "type": "allowed_tools",
+                    "allowed_tools": {
+                        "mode": "required",
+                        "tools": [
+                            {
+                                "type": "function",
+                                "function": {
+                                    "name": "GetWeather"
+                                }
+                            },
+                            {
+                                "type": "function",
+                                "function": {
+                                    "name": "GetTime"
+                                }
+                            }
+                        ]
+                    }
+                },
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "What's the weather and time in Seattle?"
+                    }
+                ],
+                "model": "gpt-4o-mini"
+            }
+            `
+	const output = `
+            {
+              "id": "chatcmpl-TestMultiRequired123",
+              "object": "chat.completion",
+              "created": 1727900000,
+              "model": "gpt-4o-mini-2024-07-18",
+              "choices": [
+                {
+                  "index": 0,
+                  "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [
+                      {
+                        "id": "call_weather_123",
+                        "type": "function",
+                        "function": {
+                          "name": "GetWeather",
+                          "arguments": "{\"location\":\"Seattle, WA\"}"
+                        }
+                      },
+                      {
+                        "id": "call_time_456",
+                        "type": "function",
+                        "function": {
+                          "name": "GetTime",
+                          "arguments": "{\"location\":\"Seattle, WA\"}"
+                        }
+                      }
+                    ],
+                    "refusal": null
+                  },
+                  "logprobs": null,
+                  "finish_reason": "tool_calls"
+                }
+              ],
+              "system_fingerprint": "fp_test123"
+            }
+            `
+
+	want := []*message.Message{
+		{
+			ID:        "chatcmpl-TestMultiRequired123",
+			Role:      message.RoleAssistant,
+			CreatedAt: time.Unix(1727900000, 0),
+			Contents: []message.Content{
+				&message.FunctionCallContent{
+					CallID:    "call_weather_123",
+					Name:      "GetWeather",
+					Arguments: `{"location":"Seattle, WA"}`,
+				},
+				&message.FunctionCallContent{
+					CallID:    "call_time_456",
+					Name:      "GetTime",
+					Arguments: `{"location":"Seattle, WA"}`,
+				},
+			},
+		},
+	}
+
+	server := newTestServer(t, input, output)
+	defer server.Close()
+
+	a := newTestClient(server)
+
+	type LocationInput struct {
+		Location string `json:"location" jsonschema:"The city and state, e.g. San Francisco, CA"`
+	}
+
+	getWeather := func(ctx context.Context, input LocationInput) (string, error) {
+		return "Sunny, 72°F", nil
+	}
+
+	getTime := func(ctx context.Context, input LocationInput) (string, error) {
+		return "3:45 PM", nil
+	}
+
+	weatherTool := functool.MustNew(&functool.Func{
+		Name:        "GetWeather",
+		Description: "Get the current weather for a location",
+	}, getWeather)
+
+	timeTool := functool.MustNew(&functool.Func{
+		Name:        "GetTime",
+		Description: "Get the current time for a location",
+	}, getTime)
+
+	resp, err := a.RunText("What's the weather and time in Seattle?",
+		agentopt.Tool(weatherTool),
+		agentopt.Tool(timeTool),
+		agentopt.ToolMode(tool.RequireTools("GetWeather", "GetTime")),
+	).Collect(t.Context())
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}

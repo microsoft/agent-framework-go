@@ -18,6 +18,7 @@ import (
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/message/messagetest"
 	"github.com/microsoft/agent-framework-go/openai"
+	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 	"github.com/microsoft/agent-framework-go/tool/hostedtool"
 )
@@ -4475,4 +4476,150 @@ func TestResponsesBackgroundResponses_StreamResumption_WithMessages(t *testing.T
 		return
 	}
 	t.Fatal("expected error but iteration completed without error")
+}
+
+func TestResponsesMultipleRequiredFunctions(t *testing.T) {
+	const input = `
+            {
+                "tools": [
+                    {
+                        "name": "GetWeather",
+                        "description": "Get the current weather for a location",
+                        "type": "function",
+                        "parameters": {
+                            "type": "object",
+                            "required": [
+                                "location"
+                            ],
+                            "properties": {
+                                "location": {
+                                    "description": "The city and state, e.g. San Francisco, CA",
+                                    "type": "string"
+                                }
+                            },
+                            "additionalProperties": false
+                        }
+                    },
+                    {
+                        "name": "GetTime",
+                        "description": "Get the current time for a location",
+                        "type": "function",
+                        "parameters": {
+                            "type": "object",
+                            "required": [
+                                "location"
+                            ],
+                            "properties": {
+                                "location": {
+                                    "description": "The city and state, e.g. San Francisco, CA",
+                                    "type": "string"
+                                }
+                            },
+                            "additionalProperties": false
+                        }
+                    }
+                ],
+                "tool_choice": {
+                    "type": "allowed_tools",
+                    "mode": "required",
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "GetWeather"
+                        },
+                        {
+                            "type": "function",
+                            "name": "GetTime"
+                        }
+                    ]
+                },
+                "model": "gpt-4o-mini",
+                "input": [{
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "What's the weather and time in Seattle?"}]
+                }]
+            }
+            `
+	const output = `
+            {
+              "id": "resp_TestMultiRequired123",
+              "object": "response",
+              "created_at": 1727900000,
+              "status": "completed",
+              "model": "gpt-4o-mini-2024-07-18",
+              "output": [
+                {
+                  "type": "function_call",
+                  "id": "call_weather_123",
+                  "name": "GetWeather",
+                  "arguments": "{\"location\":\"Seattle, WA\"}"
+                },
+                {
+                  "type": "function_call",
+                  "id": "call_time_456",
+                  "name": "GetTime",
+                  "arguments": "{\"location\":\"Seattle, WA\"}"
+                }
+              ]
+            }
+            `
+
+	want := []*message.Message{
+		{
+			Role:      message.RoleAssistant,
+			CreatedAt: time.Unix(1727900000, 0),
+			Contents: []message.Content{
+				&message.FunctionCallContent{
+					CallID:    "call_weather_123",
+					Name:      "GetWeather",
+					Arguments: `{"location":"Seattle, WA"}`,
+				},
+				&message.FunctionCallContent{
+					CallID:    "call_time_456",
+					Name:      "GetTime",
+					Arguments: `{"location":"Seattle, WA"}`,
+				},
+			},
+		},
+	}
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	type LocationInput struct {
+		Location string `json:"location" jsonschema:"The city and state, e.g. San Francisco, CA"`
+	}
+
+	getWeather := func(ctx context.Context, input LocationInput) (string, error) {
+		return "Sunny, 72°F", nil
+	}
+
+	getTime := func(ctx context.Context, input LocationInput) (string, error) {
+		return "3:45 PM", nil
+	}
+
+	weatherTool := functool.MustNew(&functool.Func{
+		Name:        "GetWeather",
+		Description: "Get the current weather for a location",
+	}, getWeather)
+
+	timeTool := functool.MustNew(&functool.Func{
+		Name:        "GetTime",
+		Description: "Get the current time for a location",
+	}, getTime)
+
+	resp, err := a.RunText("What's the weather and time in Seattle?",
+		agentopt.Tool(weatherTool),
+		agentopt.Tool(timeTool),
+		agentopt.ToolMode(tool.RequireTools("GetWeather", "GetTime")),
+	).Collect(t.Context())
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if err := messagetest.MessagesEqual(resp.Messages, want); err != nil {
+		t.Error(err)
+	}
 }
