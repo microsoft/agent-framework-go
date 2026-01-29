@@ -30,7 +30,6 @@ func New(cfg Config) middleware.Middleware {
 	return &mw{
 		tracer: tracer,
 	}
-
 }
 
 const (
