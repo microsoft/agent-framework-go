@@ -215,8 +215,10 @@ func TestAgent_Run_PrependsAgentOptions(t *testing.T) {
 
 	agentOption := agentopt.Stream(true)
 	a := agent.New(agent.Config{
-		ID:         "test",
-		Name:       "test",
+		Metadata: agent.Metadata{
+			ID:   "test",
+			Name: "test",
+		},
 		RunOptions: []agentopt.RunOption{agentOption},
 		NewSession: func(ctx context.Context, opts ...agentopt.NewSessionOption) (memory.Session, error) {
 			return agenttest.NewSession(), nil
@@ -260,7 +262,7 @@ func TestAgent_Run_StreamingResponses(t *testing.T) {
 	}
 }
 
-func TestAgent_Run_AddsIdentityToContext(t *testing.T) {
+func TestAgent_Run_AddsMetadataToContext(t *testing.T) {
 	var capturedCtx context.Context
 	responseBuilder := agenttest.NewResponseBuilder(
 		func(ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) {
@@ -276,17 +278,13 @@ func TestAgent_Run_AddsIdentityToContext(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	id, name, ok := agent.IdentityFromContext(capturedCtx)
+	metadata, ok := agent.MetadataFromContext(capturedCtx)
 	if !ok {
-		t.Fatal("expected identity in context")
+		t.Fatal("expected metadata in context")
 	}
 
-	if id != a.ID() {
-		t.Errorf("expected ID %q, got %q", a.ID(), id)
-	}
-
-	if name != a.Name() {
-		t.Errorf("expected name %q, got %q", a.Name(), name)
+	if metadata != a.Metadata() {
+		t.Errorf("expected metadata %+v, got %+v", a.Metadata(), metadata)
 	}
 }
 

@@ -13,10 +13,15 @@ import (
 	"github.com/microsoft/agent-framework-go/message"
 )
 
+type Metadata struct {
+	ID           string
+	Name         string
+	Description  string
+	ProviderName string
+}
+
 type Config struct {
-	ID          string
-	Name        string
-	Description string
+	Metadata Metadata
 
 	RunOptions []agentopt.RunOption
 
@@ -26,13 +31,11 @@ type Config struct {
 }
 
 func New(cfg Config) *Agent {
-	if cfg.ID == "" {
-		cfg.ID = uuid.NewString()
+	if cfg.Metadata.ID == "" {
+		cfg.Metadata.ID = uuid.NewString()
 	}
 	return &Agent{
-		id:               cfg.ID,
-		name:             cfg.Name,
-		description:      cfg.Description,
+		metadata:         cfg.Metadata,
 		newSession:       cfg.NewSession,
 		unmarshalSession: cfg.UnmarshalSession,
 		run:              cfg.Run,
@@ -66,9 +69,7 @@ func (r Run) Collect(ctx context.Context) (*message.Response, error) {
 }
 
 type Agent struct {
-	id          string
-	name        string
-	description string
+	metadata Metadata
 
 	runOptions []agentopt.RunOption
 
@@ -78,15 +79,15 @@ type Agent struct {
 }
 
 func (a *Agent) ID() string {
-	return a.id
+	return a.metadata.ID
 }
 
 func (a *Agent) Name() string {
-	return a.name
+	return a.metadata.Name
 }
 
-func (a *Agent) Description() string {
-	return a.description
+func (a *Agent) Metadata() Metadata {
+	return a.metadata
 }
 
 func (a *Agent) NewSession(ctx context.Context, options ...agentopt.NewSessionOption) (memory.Session, error) {
@@ -127,7 +128,7 @@ func (a *Agent) prepareRun(ctx context.Context, stream bool, options []agentopt.
 	options = append(options, middleware.With(middleware.Func(a.authorMiddleware)))
 
 	// Add agent identity to context so that middlewares can log it.
-	ctx = context.WithValue(ctx, identityKey{}, identity{a.ID(), a.Name()})
+	ctx = context.WithValue(ctx, metadataKey{}, a.Metadata())
 
 	// Ensure a session is provided in the options.
 	if _, ok := agentopt.Get(options, agentopt.Session); !ok {
@@ -168,17 +169,13 @@ func (a *Agent) authorMiddleware(next middleware.RunFunc, ctx context.Context, m
 	}
 }
 
-type identityKey struct{}
+type metadataKey struct{}
 
-type identity struct {
-	id   string
-	name string
-}
-
-func IdentityFromContext(ctx context.Context) (id, name string, ok bool) {
-	if v := ctx.Value(identityKey{}); v != nil {
-		ident := v.(identity)
-		return ident.id, ident.name, true
+// MetadataFromContext retrieves the agent metadata from the context.
+// Returns the metadata and true if found, or zero value and false otherwise.
+func MetadataFromContext(ctx context.Context) (Metadata, bool) {
+	if v := ctx.Value(metadataKey{}); v != nil {
+		return v.(Metadata), true
 	}
-	return "", "", false
+	return Metadata{}, false
 }

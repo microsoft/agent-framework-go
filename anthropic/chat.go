@@ -45,7 +45,9 @@ func NewChatAgent(config ClientConfig, options chatagent.Config) *agent.Agent {
 		client: anthropic.NewClient(opts...),
 		config: config,
 	}
-	return chatagent.NewAgent(c.run, options)
+	return chatagent.NewAgent(c.run, options, chatagent.ProviderConfig{
+		Name: "anthropic",
+	})
 }
 
 func (a *client) run(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {

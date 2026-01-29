@@ -89,13 +89,11 @@ func newChatAgent(isAzure bool, config ClientConfig, options chatagent.Config) *
 		client: openai.NewClient(ops...),
 		config: config,
 	}
-	if options.FormatOfFn == nil {
-		options.FormatOfFn = c.formatOf
-	}
-	if options.UnmarshalFn == nil {
-		options.UnmarshalFn = c.unmarshal
-	}
-	return chatagent.NewAgent(c.run, options)
+	return chatagent.NewAgent(c.run, options, chatagent.ProviderConfig{
+		Name:        "openai",
+		FormatOfFn:  c.formatOf,
+		UnmarshalFn: c.unmarshal,
+	})
 }
 
 func NewChatAgent(config ClientConfig, options chatagent.Config) *agent.Agent {

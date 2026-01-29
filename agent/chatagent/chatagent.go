@@ -29,15 +29,18 @@ type Config struct {
 	Logger           *slog.Logger
 	LogSensitiveData bool
 
-	FormatOfFn  func(v any) (format.Format, error)
-	UnmarshalFn func(format format.Format, data []byte, v any) error
-
 	DisableFuncAutoCall bool
 
 	RunOptions []agentopt.RunOption
 
 	NewMessageHistoryProvider func() memory.ContextProvider
 	NewContextProvider        func() memory.ContextProvider
+}
+
+type ProviderConfig struct {
+	Name        string
+	FormatOfFn  func(v any) (format.Format, error)
+	UnmarshalFn func(format format.Format, data []byte, v any) error
 }
 
 func (o *Config) Clone() *Config {
@@ -61,7 +64,7 @@ type chatagent struct {
 }
 
 // NewAgent creates a new chat agent with the given chat client and options.
-func NewAgent(runfn RunFunc, cfg Config) *agent.Agent {
+func NewAgent(runfn RunFunc, cfg Config, prov ProviderConfig) *agent.Agent {
 	opts := *cfg.Clone()
 	if !opts.DisableFuncAutoCall {
 		opts.RunOptions = append(opts.RunOptions, middleware.With(
@@ -71,11 +74,11 @@ func NewAgent(runfn RunFunc, cfg Config) *agent.Agent {
 			}),
 		))
 	}
-	if opts.FormatOfFn != nil && opts.UnmarshalFn != nil {
+	if prov.FormatOfFn != nil && prov.UnmarshalFn != nil {
 		opts.RunOptions = append(opts.RunOptions, middleware.With(
 			structuredoutput.New(structuredoutput.Config{
-				Format:    opts.FormatOfFn,
-				Unmarshal: opts.UnmarshalFn,
+				Format:    prov.FormatOfFn,
+				Unmarshal: prov.UnmarshalFn,
 			})),
 		)
 	}
@@ -86,9 +89,12 @@ func NewAgent(runfn RunFunc, cfg Config) *agent.Agent {
 		newContextProvider:        opts.NewContextProvider,
 	}
 	return agent.New(agent.Config{
-		ID:          cfg.ID,
-		Name:        cfg.Name,
-		Description: cfg.Description,
+		Metadata: agent.Metadata{
+			ID:           cfg.ID,
+			Name:         cfg.Name,
+			ProviderName: prov.Name,
+			Description:  cfg.Description,
+		},
 
 		NewSession:       a.NewSession,
 		UnmarshalSession: a.UnmarshalSession,
