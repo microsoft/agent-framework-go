@@ -43,20 +43,20 @@ func New(cfg Config) *Agent {
 	}
 }
 
-// Run represents an execution of the agent.
-type Run struct {
+// ResponseStream represents an execution of the agent.
+type ResponseStream struct {
 	run func(ctx context.Context, stream bool) iter.Seq2[*message.ResponseUpdate, error]
 }
 
 // All returns an iterator over all response updates from the agent run.
 // Streaming will be automatically enabled unless [agentopt.Stream]
 // is explicitly set in the run options.
-func (r Run) All(ctx context.Context) iter.Seq2[*message.ResponseUpdate, error] {
+func (r ResponseStream) All(ctx context.Context) iter.Seq2[*message.ResponseUpdate, error] {
 	return r.run(ctx, true)
 }
 
 // Collect gathers all response updates into a single Response object.
-func (r Run) Collect(ctx context.Context) (*message.Response, error) {
+func (r ResponseStream) Collect(ctx context.Context) (*message.Response, error) {
 	var resp message.Response
 	for update, err := range r.run(ctx, false) {
 		if err != nil {
@@ -98,16 +98,16 @@ func (a *Agent) UnmarshalSession(data []byte) (memory.Session, error) {
 	return a.unmarshalSession(data)
 }
 
-func (a *Agent) RunText(msg string, options ...agentopt.RunOption) Run {
+func (a *Agent) RunText(msg string, options ...agentopt.RunOption) ResponseStream {
 	return a.Run([]*message.Message{message.NewText(msg)}, options...)
 }
 
-func (a *Agent) RunMessage(msg *message.Message, options ...agentopt.RunOption) Run {
+func (a *Agent) RunMessage(msg *message.Message, options ...agentopt.RunOption) ResponseStream {
 	return a.Run([]*message.Message{msg}, options...)
 }
 
-func (a *Agent) Run(messages []*message.Message, options ...agentopt.RunOption) Run {
-	return Run{func(ctx context.Context, stream bool) iter.Seq2[*message.ResponseUpdate, error] {
+func (a *Agent) Run(messages []*message.Message, options ...agentopt.RunOption) ResponseStream {
+	return ResponseStream{func(ctx context.Context, stream bool) iter.Seq2[*message.ResponseUpdate, error] {
 		ctx, options, err := a.prepareRun(ctx, stream, options)
 		if err != nil {
 			return func(yield func(*message.ResponseUpdate, error) bool) {
