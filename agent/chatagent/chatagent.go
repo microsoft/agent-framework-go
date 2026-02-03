@@ -96,7 +96,7 @@ func NewAgent(runfn RunFunc, cfg Config, prov ProviderConfig) *agent.Agent {
 			Description:  cfg.Description,
 		},
 
-		NewSession:       a.NewSession,
+		CreateSession:    a.CreateSession,
 		UnmarshalSession: a.UnmarshalSession,
 		Run:              a.Run,
 
@@ -104,7 +104,7 @@ func NewAgent(runfn RunFunc, cfg Config, prov ProviderConfig) *agent.Agent {
 	})
 }
 
-func (a *chatagent) NewSession(ctx context.Context, opts ...agentopt.NewSessionOption) (memory.Session, error) {
+func (a *chatagent) CreateSession(ctx context.Context, opts ...agentopt.CreateSessionOption) (memory.Session, error) {
 	convID, _ := agentopt.Get(opts, ConversationID)
 	session := &Session{
 		ConversationID: convID,

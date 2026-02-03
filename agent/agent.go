@@ -25,7 +25,7 @@ type Config struct {
 
 	RunOptions []agentopt.RunOption
 
-	NewSession       func(ctx context.Context, options ...agentopt.NewSessionOption) (memory.Session, error)
+	CreateSession    func(ctx context.Context, options ...agentopt.CreateSessionOption) (memory.Session, error)
 	UnmarshalSession func(data []byte) (memory.Session, error)
 	Run              func(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error]
 }
@@ -36,7 +36,7 @@ func New(cfg Config) *Agent {
 	}
 	return &Agent{
 		metadata:         cfg.Metadata,
-		newSession:       cfg.NewSession,
+		createSession:    cfg.CreateSession,
 		unmarshalSession: cfg.UnmarshalSession,
 		run:              cfg.Run,
 		runOptions:       cfg.RunOptions,
@@ -73,7 +73,7 @@ type Agent struct {
 
 	runOptions []agentopt.RunOption
 
-	newSession       func(ctx context.Context, options ...agentopt.NewSessionOption) (memory.Session, error)
+	createSession    func(ctx context.Context, options ...agentopt.CreateSessionOption) (memory.Session, error)
 	unmarshalSession func(data []byte) (memory.Session, error)
 	run              func(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error]
 }
@@ -90,8 +90,8 @@ func (a *Agent) Metadata() Metadata {
 	return a.metadata
 }
 
-func (a *Agent) NewSession(ctx context.Context, options ...agentopt.NewSessionOption) (memory.Session, error) {
-	return a.newSession(ctx, options...)
+func (a *Agent) CreateSession(ctx context.Context, options ...agentopt.CreateSessionOption) (memory.Session, error) {
+	return a.createSession(ctx, options...)
 }
 
 func (a *Agent) UnmarshalSession(data []byte) (memory.Session, error) {
@@ -132,7 +132,7 @@ func (a *Agent) prepareRun(ctx context.Context, stream bool, options []agentopt.
 
 	// Ensure a session is provided in the options.
 	if _, ok := agentopt.Get(options, agentopt.Session); !ok {
-		session, err := a.NewSession(ctx)
+		session, err := a.CreateSession(ctx)
 		if err != nil {
 			return nil, nil, err
 		}

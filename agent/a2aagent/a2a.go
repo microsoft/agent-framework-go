@@ -32,10 +32,10 @@ type Options struct {
 
 type contextIDOpt struct{ string }
 
-func (contextIDOpt) NewSessionOption() {}
-func (o contextIDOpt) Value() any      { return o.string }
+func (contextIDOpt) CreateSessionOption() {}
+func (o contextIDOpt) Value() any         { return o.string }
 
-func WithContextID(id string) agentopt.NewSessionOption {
+func WithContextID(id string) agentopt.CreateSessionOption {
 	return contextIDOpt{id}
 }
 
@@ -60,13 +60,13 @@ func NewAgent(client *a2aclient.Client, options Options) *agent.Agent {
 			Description:  options.Description,
 		},
 
-		NewSession:       a.newSession,
+		CreateSession:    a.createSession,
 		UnmarshalSession: a.unmarshalSession,
 		Run:              a.run,
 	})
 }
 
-func (a *a2aagent) newSession(ctx context.Context, options ...agentopt.NewSessionOption) (memory.Session, error) {
+func (a *a2aagent) createSession(ctx context.Context, options ...agentopt.CreateSessionOption) (memory.Session, error) {
 	contextID, _ := agentopt.Get(options, WithContextID)
 	return &Session{
 		ContextID: contextID,
@@ -92,7 +92,7 @@ func (a *a2aagent) run(ctx context.Context, messages []*message.Message, options
 				yield(nil, errors.New("a session must be provided when AllowBackgroundResponses is enabled"))
 				return
 			}
-			s, err := a.newSession(ctx)
+			s, err := a.createSession(ctx)
 			if err != nil {
 				yield(nil, err)
 				return

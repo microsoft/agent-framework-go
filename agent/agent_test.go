@@ -177,7 +177,7 @@ func TestAgent_Run_UsesProvidedSession(t *testing.T) {
 	a := agenttest.NewAgent(responseBuilder.Build())
 
 	ctx := t.Context()
-	providedSession := agenttest.NewSession()
+	providedSession := agenttest.CreateSession()
 	_, err := a.Run([]*message.Message{message.NewText("test")}, agentopt.Session(providedSession)).Collect(ctx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -220,10 +220,10 @@ func TestAgent_Run_PrependsAgentOptions(t *testing.T) {
 			Name: "test",
 		},
 		RunOptions: []agentopt.RunOption{agentOption},
-		NewSession: func(ctx context.Context, opts ...agentopt.NewSessionOption) (memory.Session, error) {
-			return agenttest.NewSession(), nil
+		CreateSession: func(ctx context.Context, opts ...agentopt.CreateSessionOption) (memory.Session, error) {
+			return agenttest.CreateSession(), nil
 		},
-		UnmarshalSession: func(data []byte) (memory.Session, error) { return agenttest.NewSession(), nil },
+		UnmarshalSession: func(data []byte) (memory.Session, error) { return agenttest.CreateSession(), nil },
 		Run:              runner.Run,
 	})
 

@@ -90,11 +90,11 @@ func TestOtel_Run_SpanHasCorrectAttributes(t *testing.T) {
 			Description:  "A test agent",
 			ProviderName: "test-provider",
 		},
-		NewSession: func(ctx context.Context, options ...agentopt.NewSessionOption) (memory.Session, error) {
-			return agenttest.NewSession(), nil
+		CreateSession: func(ctx context.Context, options ...agentopt.CreateSessionOption) (memory.Session, error) {
+			return agenttest.CreateSession(), nil
 		},
 		UnmarshalSession: func(data []byte) (memory.Session, error) {
-			return agenttest.NewSession(), nil
+			return agenttest.CreateSession(), nil
 		},
 		Run: func(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 			return func(yield func(*message.ResponseUpdate, error) bool) {

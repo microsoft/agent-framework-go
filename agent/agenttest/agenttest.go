@@ -104,7 +104,7 @@ func NewAgent(responses []Turn) *agent.Agent {
 			Description:  "A test agent",
 			ProviderName: "agenttest",
 		},
-		NewSession:       a.newSession,
+		CreateSession:    a.createSession,
 		UnmarshalSession: a.unmarshalSession,
 		Run:              a.run,
 	})
@@ -128,7 +128,7 @@ func (a *testagent) run(ctx context.Context, messages []*message.Message, opts .
 	}
 }
 
-func (a *testagent) newSession(ctx context.Context, opts ...agentopt.NewSessionOption) (memory.Session, error) {
+func (a *testagent) createSession(ctx context.Context, opts ...agentopt.CreateSessionOption) (memory.Session, error) {
 	return &Session{}, nil
 }
 
@@ -141,7 +141,7 @@ type Session struct {
 	messages []*message.Message
 }
 
-func NewSession() *Session {
+func CreateSession() *Session {
 	return &Session{}
 }
 

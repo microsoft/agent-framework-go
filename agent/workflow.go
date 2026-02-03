@@ -19,7 +19,7 @@ func newExecutor(a *Agent, emitEvents bool) *workflow.Executor {
 	ensureSession := func(ctx context.Context) (memory.Session, error) {
 		var err error
 		if session == nil {
-			session, err = a.NewSession(ctx)
+			session, err = a.CreateSession(ctx)
 		}
 		sessionStateKey = reflect.ValueOf(session).String()
 		return session, err

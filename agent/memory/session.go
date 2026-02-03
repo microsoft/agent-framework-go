@@ -17,7 +17,7 @@ import "encoding"
 //   - Chat history reduction, e.g. where messages needs to be summarized or truncated to reduce the size.
 //
 // A Session is always constructed by an [agent.Agent] so that the [agent.Agent] can attach any necessary behaviors to the Session.
-// See the [agent.Agent.NewSession] and [agent.Agent.UnmarshalSession] methods for more information.
+// See the [agent.Agent.CreateSession] and [agent.Agent.UnmarshalSession] methods for more information.
 //
 // Because of these behaviors, a Session may not be reusable across different agents, since each agent may add different
 // behaviors to the Session it creates.

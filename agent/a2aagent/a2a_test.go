@@ -238,8 +238,8 @@ func TestRunWithValidUserMessage(t *testing.T) {
 	}
 }
 
-// TestRunWithNewSession tests that new session updates context ID
-func TestRunWithNewSession(t *testing.T) {
+// TestRunWithCreateSession tests that new session updates context ID
+func TestRunWithCreateSession(t *testing.T) {
 	transport := &mockA2ATransport{
 		responseToReturn: &a2a.Message{
 			ID:        "response-123",
@@ -250,7 +250,7 @@ func TestRunWithNewSession(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	session, err := a.NewSession(t.Context())
+	session, err := a.CreateSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +273,7 @@ func TestRunWithExistingSession(t *testing.T) {
 	transport := &mockA2ATransport{}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	session, err := a.NewSession(t.Context(), a2aagent.WithContextID("existing-context-id"))
+	session, err := a.CreateSession(t.Context(), a2aagent.WithContextID("existing-context-id"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +304,7 @@ func TestRunWithSessionHavingDifferentContextID(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	session, err := a.NewSession(t.Context(), a2aagent.WithContextID("existing-context-id"))
+	session, err := a.CreateSession(t.Context(), a2aagent.WithContextID("existing-context-id"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -404,7 +404,7 @@ func TestRunStreamingWithSession(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	session, err := a.NewSession(t.Context())
+	session, err := a.CreateSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -431,7 +431,7 @@ func TestRunStreamingWithExistingSession(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	session, err := a.NewSession(t.Context(), a2aagent.WithContextID("existing-context-id"))
+	session, err := a.CreateSession(t.Context(), a2aagent.WithContextID("existing-context-id"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -462,7 +462,7 @@ func TestRunStreamingWithSessionHavingDifferentContextID(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	session, err := a.NewSession(t.Context(), a2aagent.WithContextID("existing-context-id"))
+	session, err := a.CreateSession(t.Context(), a2aagent.WithContextID("existing-context-id"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -562,7 +562,7 @@ func TestRunWithInvalidSessionType(t *testing.T) {
 	a := newTestAgent(transport, a2aagent.Options{})
 
 	// Create a custom session type that is not an a2aagent.Session
-	invalidSession := agenttest.NewSession()
+	invalidSession := agenttest.CreateSession()
 
 	_, err := a.RunText("Test message", agentopt.Session(invalidSession)).Collect(t.Context())
 	if err == nil {
@@ -584,7 +584,7 @@ func TestRunStreamingWithInvalidSessionType(t *testing.T) {
 	a := newTestAgent(transport, a2aagent.Options{})
 
 	// Create a custom session type that is not an a2aagent.Session
-	invalidSession := agenttest.NewSession()
+	invalidSession := agenttest.CreateSession()
 
 	gotError := false
 	for _, err := range a.RunText("Test message", agentopt.Session(invalidSession)).All(t.Context()) {
@@ -639,7 +639,7 @@ func TestRunWithTaskInSessionAndMessage(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	session, err := a.NewSession(t.Context())
+	session, err := a.CreateSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -674,7 +674,7 @@ func TestRunWithAgentTask(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	session, err := a.NewSession(t.Context())
+	session, err := a.CreateSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -714,7 +714,7 @@ func TestRunWithAgentTaskResponse(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	session, err := a.NewSession(t.Context())
+	session, err := a.CreateSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -829,7 +829,7 @@ func TestRunStreamingWithTaskInSessionAndMessage(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	session, err := a.NewSession(t.Context())
+	session, err := a.CreateSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -871,7 +871,7 @@ func TestRunStreamingWithAgentTaskUpdatesSession(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	session, err := a.NewSession(t.Context())
+	session, err := a.CreateSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -963,7 +963,7 @@ func TestRunStreamingWithAgentTaskYieldsUpdate(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	session, err := a.NewSession(t.Context())
+	session, err := a.CreateSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1019,7 +1019,7 @@ func TestRunStreamingWithTaskStatusUpdateEvent(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	session, err := a.NewSession(t.Context())
+	session, err := a.CreateSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1079,7 +1079,7 @@ func TestRunStreamingWithTaskArtifactUpdateEvent(t *testing.T) {
 	}
 	a := newTestAgent(transport, a2aagent.Options{})
 
-	session, err := a.NewSession(t.Context())
+	session, err := a.CreateSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}

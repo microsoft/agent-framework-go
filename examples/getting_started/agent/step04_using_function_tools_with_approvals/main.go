@@ -45,7 +45,7 @@ func main() {
 	ctx := context.Background()
 
 	// Call the agent and check if there are any user input requests to handle.
-	session, err := a.NewSession(ctx)
+	session, err := a.CreateSession(ctx)
 	if err != nil {
 		demo.Panic(err)
 	}

@@ -27,7 +27,7 @@ func main() {
 	})
 
 	ctx := context.Background()
-	session, err := a.NewSession(ctx)
+	session, err := a.CreateSession(ctx)
 	if err != nil {
 		demo.Panic(err)
 	}

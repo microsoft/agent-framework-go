@@ -30,7 +30,7 @@ func main() {
 	ctx := context.Background()
 
 	// Invoke the agent with a multi-turn conversation, where the context is preserved in the session object.
-	session, err := a.NewSession(ctx)
+	session, err := a.CreateSession(ctx)
 	if err != nil {
 		demo.Panic(err)
 	}
@@ -40,7 +40,7 @@ func main() {
 	demo.Response(resp, err)
 
 	// Invoke the agent with a multi-turn conversation and streaming, where the context is preserved in the session object.
-	session2, err := a.NewSession(ctx)
+	session2, err := a.CreateSession(ctx)
 	if err != nil {
 		demo.Panic(err)
 	}

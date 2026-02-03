@@ -43,7 +43,7 @@ func main() {
 
 func runChatLoop(ctx context.Context, a *agent.Agent) {
 	// Create a session to maintain conversation history
-	session, err := a.NewSession(ctx)
+	session, err := a.CreateSession(ctx)
 	if err != nil {
 		panic(err)
 	}
@@ -73,7 +73,7 @@ func runChatLoop(ctx context.Context, a *agent.Agent) {
 		}
 
 		if userInput == "clear" {
-			session, err = a.NewSession(ctx)
+			session, err = a.CreateSession(ctx)
 			if err != nil {
 				panic(err)
 			}

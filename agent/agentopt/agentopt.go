@@ -28,11 +28,11 @@ type RunOption interface {
 	RunOption()
 }
 
-// A NewSessionOption configures the behavior of a new Session created by an Agent.
-type NewSessionOption interface {
+// A CreateSessionOption configures the behavior of a new Session created by an Agent.
+type CreateSessionOption interface {
 	Option
 
-	NewSessionOption()
+	CreateSessionOption()
 }
 
 type (

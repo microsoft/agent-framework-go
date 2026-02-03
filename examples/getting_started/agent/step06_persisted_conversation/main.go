@@ -33,7 +33,7 @@ func main() {
 	ctx := context.Background()
 
 	// Start a new session for the agent conversation.
-	session, err := a.NewSession(ctx)
+	session, err := a.CreateSession(ctx)
 	if err != nil {
 		demo.Panic(err)
 	}
