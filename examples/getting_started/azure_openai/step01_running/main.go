@@ -14,6 +14,8 @@ import (
 )
 
 var deployment = os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
+var endpoint = os.Getenv("AZURE_OPENAI_ENDPOINT")
+var apiKey = os.Getenv("AZURE_OPENAI_API_KEY")
 
 var logger = demo.NewLogger(
 	"Basic Run",
@@ -24,6 +26,8 @@ var logger = demo.NewLogger(
 func main() {
 	// Create Azure OpenAI agent with weather tool
 	a := openai.NewChatAgentAzure(openai.ClientConfig{
+		Endpoint:   endpoint,
+		APIKey:     apiKey,
 		Model:      deployment,
 		APIVersion: "2025-01-01-preview",
 	}, chatagent.Config{

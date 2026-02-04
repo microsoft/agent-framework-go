@@ -47,7 +47,7 @@ func NewLogger(name, description string, metadata ...string) middleware.Middlewa
 func (mw *logger) Run(next middleware.RunFunc, ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		mw.n++
-		fmt.Printf("===== Run %d =====\n\n", mw.n)
+		fmt.Printf("%s%s===== Run %d =====%s\n\n", colorYellow, colorBold, mw.n, colorReset)
 		for _, msg := range messages {
 			if msg.Role == message.RoleUser {
 				user(msg.String())
@@ -79,7 +79,7 @@ func welcome(name, description string, kvs []kv) {
 	fmt.Printf("╚%s╝\n", strings.Repeat("═", size))
 	fmt.Printf("%s\n", colorReset)
 	for _, kv := range kvs {
-		fmt.Printf("%s%s:%s %s%s%s\n", colorGray, kv.key, colorReset, colorGreen, kv.value, colorReset)
+		fmt.Printf("%s%s:%s %s%s%s\n", colorGray, kv.key, colorReset, colorMagenta, kv.value, colorReset)
 	}
 	fmt.Printf("%s%s%s\n", colorGray, description, colorReset)
 	fmt.Printf("\n")
@@ -147,7 +147,7 @@ func UserInputRequest(req *message.FunctionApprovalRequestContent) bool {
 	var approval string
 	fmt.Scanln(&approval)
 	fmt.Printf("\n")
-	return approval == "Y"
+	return approval == "Y" || approval == "y"
 }
 
 func assistant() {
