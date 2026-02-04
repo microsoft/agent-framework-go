@@ -4,6 +4,7 @@ package chatagent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"iter"
 	"log/slog"
@@ -96,15 +97,16 @@ func NewAgent(runfn RunFunc, cfg Config, prov ProviderConfig) *agent.Agent {
 			Description:  cfg.Description,
 		},
 
-		CreateSession:    a.CreateSession,
-		UnmarshalSession: a.UnmarshalSession,
-		Run:              a.Run,
+		CreateSession:    a.createSession,
+		MarshalSession:   a.marshalSession,
+		UnmarshalSession: a.unmarshalSession,
+		Run:              a.run,
 
 		RunOptions: opts.RunOptions,
 	})
 }
 
-func (a *chatagent) CreateSession(ctx context.Context, opts ...agentopt.CreateSessionOption) (memory.Session, error) {
+func (a *chatagent) createSession(ctx context.Context, opts ...agentopt.CreateSessionOption) (memory.Session, error) {
 	convID, _ := agentopt.Get(opts, ConversationID)
 	session := &Session{
 		ConversationID: convID,
@@ -115,11 +117,18 @@ func (a *chatagent) CreateSession(ctx context.Context, opts ...agentopt.CreateSe
 	return session, nil
 }
 
-func (a *chatagent) UnmarshalSession(data []byte) (memory.Session, error) {
+func (a *chatagent) marshalSession(session memory.Session) ([]byte, error) {
+	if _, ok := session.(*Session); !ok {
+		return nil, errors.New("the provided session is not compatible with the agent, only sessions created by the agent can be used")
+	}
+	return json.Marshal(session)
+}
+
+func (a *chatagent) unmarshalSession(data []byte) (memory.Session, error) {
 	return newSessionFromJSON(data, a.newMessageHistoryProvider, a.newContextProvider)
 }
 
-func (a *chatagent) Run(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+func (a *chatagent) run(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		originalMessages := messages
 		session, options, messages, ctxMessages, err := prepareSessionAndMessages(ctx, a.instructions, originalMessages, options)

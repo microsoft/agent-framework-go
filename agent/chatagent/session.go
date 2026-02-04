@@ -16,6 +16,8 @@ type Session struct {
 	ContextProvider        memory.ContextProvider
 }
 
+func (t *Session) IsAgentSession() {}
+
 func newSessionFromJSON(data []byte, newMessageHistoryProvider func() memory.ContextProvider, newContextProvider func() memory.ContextProvider) (*Session, error) {
 	var tmp struct {
 		ConversationID         string
@@ -46,10 +48,6 @@ func newSessionFromJSON(data []byte, newMessageHistoryProvider func() memory.Con
 		return nil, err
 	}
 	return session, nil
-}
-
-func (t *Session) MarshalBinary() (data []byte, err error) {
-	return json.Marshal(t)
 }
 
 func (t *Session) messagesReceived(ctx *memory.InvokedContext) error {

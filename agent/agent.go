@@ -25,12 +25,26 @@ type Config struct {
 
 	RunOptions []agentopt.RunOption
 
+	//Required functions
 	CreateSession    func(ctx context.Context, options ...agentopt.CreateSessionOption) (memory.Session, error)
+	MarshalSession   func(session memory.Session) ([]byte, error)
 	UnmarshalSession func(data []byte) (memory.Session, error)
 	Run              func(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error]
 }
 
 func New(cfg Config) *Agent {
+	if cfg.CreateSession == nil {
+		panic("CreateSession function is required")
+	}
+	if cfg.MarshalSession == nil {
+		panic("MarshalSession function is required")
+	}
+	if cfg.UnmarshalSession == nil {
+		panic("UnmarshalSession function is required")
+	}
+	if cfg.Run == nil {
+		panic("Run function is required")
+	}
 	if cfg.Metadata.ID == "" {
 		cfg.Metadata.ID = uuid.NewString()
 	}
@@ -74,6 +88,7 @@ type Agent struct {
 	runOptions []agentopt.RunOption
 
 	createSession    func(ctx context.Context, options ...agentopt.CreateSessionOption) (memory.Session, error)
+	marshalSession   func(session memory.Session) ([]byte, error)
 	unmarshalSession func(data []byte) (memory.Session, error)
 	run              func(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error]
 }
@@ -92,6 +107,10 @@ func (a *Agent) Metadata() Metadata {
 
 func (a *Agent) CreateSession(ctx context.Context, options ...agentopt.CreateSessionOption) (memory.Session, error) {
 	return a.createSession(ctx, options...)
+}
+
+func (a *Agent) MarshalSession(session memory.Session) ([]byte, error) {
+	return a.marshalSession(session)
 }
 
 func (a *Agent) UnmarshalSession(data []byte) (memory.Session, error) {

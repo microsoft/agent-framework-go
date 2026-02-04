@@ -43,7 +43,7 @@ func main() {
 	demo.Response(resp, err)
 
 	// Serialize the session state so it can be stored for later use.
-	serializedSession, err := session.MarshalBinary()
+	serializedSession, err := a.MarshalSession(session)
 	if err != nil {
 		demo.Panic(err)
 	}

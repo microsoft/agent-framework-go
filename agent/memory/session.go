@@ -2,8 +2,6 @@
 
 package memory
 
-import "encoding"
-
 // Session contains the state of a specific conversation with an agent which may include:
 //
 //   - Conversation history or a reference to externally stored conversation history.
@@ -17,7 +15,7 @@ import "encoding"
 //   - Chat history reduction, e.g. where messages needs to be summarized or truncated to reduce the size.
 //
 // A Session is always constructed by an [agent.Agent] so that the [agent.Agent] can attach any necessary behaviors to the Session.
-// See the [agent.Agent.CreateSession] and [agent.Agent.UnmarshalSession] methods for more information.
+// See the [agent.Agent.CreateSession], [agent.Agent.MarshalSession], and [agent.Agent.UnmarshalSession] methods for more information.
 //
 // Because of these behaviors, a Session may not be reusable across different agents, since each agent may add different
 // behaviors to the Session it creates.
@@ -25,5 +23,6 @@ import "encoding"
 // To support conversations that may need to survive application restarts or separate service requests,
 // a Session can be serialized and deserialized, so that it can be saved in a persistent store.
 type Session interface {
-	encoding.BinaryMarshaler
+	// IsAgentSession marks the type as a Session to avoid accidental implementations.
+	IsAgentSession()
 }

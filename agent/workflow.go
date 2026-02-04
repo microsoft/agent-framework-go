@@ -33,7 +33,7 @@ func newExecutor(a *Agent, emitEvents bool) *workflow.Executor {
 					if session == nil {
 						return nil
 					}
-					data, err := session.MarshalBinary()
+					data, err := a.MarshalSession(session)
 					if err != nil {
 						return err
 					}

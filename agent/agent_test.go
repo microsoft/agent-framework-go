@@ -4,6 +4,7 @@ package agent_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -220,6 +221,9 @@ func TestAgent_Run_PrependsAgentOptions(t *testing.T) {
 			Name: "test",
 		},
 		RunOptions: []agentopt.RunOption{agentOption},
+		MarshalSession: func(session memory.Session) ([]byte, error) {
+			return json.Marshal(session)
+		},
 		CreateSession: func(ctx context.Context, opts ...agentopt.CreateSessionOption) (memory.Session, error) {
 			return agenttest.CreateSession(), nil
 		},

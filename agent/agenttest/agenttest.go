@@ -5,6 +5,7 @@ package agenttest
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"iter"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -105,6 +106,7 @@ func NewAgent(responses []Turn) *agent.Agent {
 			ProviderName: "agenttest",
 		},
 		CreateSession:    a.createSession,
+		MarshalSession:   a.marshalSession,
 		UnmarshalSession: a.unmarshalSession,
 		Run:              a.run,
 	})
@@ -132,6 +134,10 @@ func (a *testagent) createSession(ctx context.Context, opts ...agentopt.CreateSe
 	return &Session{}, nil
 }
 
+func (a *testagent) marshalSession(session memory.Session) ([]byte, error) {
+	return json.Marshal(session)
+}
+
 func (a *testagent) unmarshalSession(data []byte) (memory.Session, error) {
 	return &Session{}, nil
 }
@@ -141,12 +147,17 @@ type Session struct {
 	messages []*message.Message
 }
 
+func (t *Session) IsAgentSession() {}
+
 func CreateSession() *Session {
 	return &Session{}
 }
 
-func (t *Session) MarshalBinary() (data []byte, err error) {
-	return json.Marshal(t.messages)
+func MarshalSession(session memory.Session) ([]byte, error) {
+	if _, ok := session.(*Session); !ok {
+		return nil, errors.New("the provided session is not compatible with the test agent, only sessions created by the test agent can be used")
+	}
+	return json.Marshal(session)
 }
 
 // Middleware is a test implementation of the Middleware interface

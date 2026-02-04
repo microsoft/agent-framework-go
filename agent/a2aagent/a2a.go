@@ -59,8 +59,8 @@ func NewAgent(client *a2aclient.Client, options Options) *agent.Agent {
 			ProviderName: "a2a",
 			Description:  options.Description,
 		},
-
 		CreateSession:    a.createSession,
+		MarshalSession:   a.marshalSession,
 		UnmarshalSession: a.unmarshalSession,
 		Run:              a.run,
 	})
@@ -71,6 +71,13 @@ func (a *a2aagent) createSession(ctx context.Context, options ...agentopt.Create
 	return &Session{
 		ContextID: contextID,
 	}, nil
+}
+
+func (a *a2aagent) marshalSession(session memory.Session) ([]byte, error) {
+	if _, ok := session.(*Session); !ok {
+		return nil, errors.New("the provided session is not compatible with the agent, only sessions created by the agent can be used")
+	}
+	return json.Marshal(session)
 }
 
 func (a *a2aagent) unmarshalSession(data []byte) (memory.Session, error) {
