@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"iter"
 	"maps"
 	"reflect"
 	"slices"
@@ -90,19 +89,6 @@ func (cs Contents) Usage() UsageDetails {
 		}
 	}
 	return usage
-}
-
-func (cs Contents) UserInputRequests() iter.Seq[Content] {
-	return func(yield func(Content) bool) {
-		for _, c := range cs {
-			switch c := c.(type) {
-			case *FunctionApprovalRequestContent:
-				if !yield(c) {
-					return
-				}
-			}
-		}
-	}
 }
 
 // TextContent represents plain text content.
