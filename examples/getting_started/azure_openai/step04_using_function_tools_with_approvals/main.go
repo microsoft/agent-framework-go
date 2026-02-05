@@ -62,11 +62,11 @@ func main() {
 
 	var userResponses []message.Content
 	var approvedRequests bool
-	for req := range resp.UserInputRequests() {
+	for c := range resp.Contents() {
 		// Ask the user to approve each function call request.
-		request, ok := req.(*message.FunctionApprovalRequestContent)
+		request, ok := c.(*message.FunctionApprovalRequestContent)
 		if !ok {
-			demo.Panicf("unexpected request type: %T", req)
+			demo.Panicf("unexpected request type: %T", c)
 			continue
 		}
 		approved := demo.UserInputRequest(request)

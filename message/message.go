@@ -57,10 +57,6 @@ func (m *Message) Usage() UsageDetails {
 	return m.Contents.Usage()
 }
 
-func (m Message) UserInputRequests() iter.Seq[Content] {
-	return m.Contents.UserInputRequests()
-}
-
 // Clone creates a shallow copy of the message.
 func (m *Message) Clone() *Message {
 	if m == nil {
@@ -89,24 +85,26 @@ func (resp *Response) String() string {
 	return sb.String()
 }
 
-func (resp *Response) Usage() UsageDetails {
-	var usage UsageDetails
-	for _, msg := range resp.Messages {
-		usage.Add(msg.Usage())
-	}
-	return usage
-}
-
-func (resp *Response) UserInputRequests() iter.Seq[Content] {
+// Contents returns a sequence of all the contents in the response, across all messages.
+// The contents are returned in the order they were added to the response.
+func (resp *Response) Contents() iter.Seq[Content] {
 	return func(yield func(Content) bool) {
 		for _, msg := range resp.Messages {
-			for c := range msg.UserInputRequests() {
+			for _, c := range msg.Contents {
 				if !yield(c) {
 					return
 				}
 			}
 		}
 	}
+}
+
+func (resp *Response) Usage() UsageDetails {
+	var usage UsageDetails
+	for _, msg := range resp.Messages {
+		usage.Add(msg.Usage())
+	}
+	return usage
 }
 
 func (resp *Response) Coalesce() {
@@ -213,8 +211,4 @@ func (r *ResponseUpdate) String() string {
 
 func (m ResponseUpdate) Usage() UsageDetails {
 	return m.Contents.Usage()
-}
-
-func (r *ResponseUpdate) UserInputRequests() iter.Seq[Content] {
-	return r.Contents.UserInputRequests()
 }
