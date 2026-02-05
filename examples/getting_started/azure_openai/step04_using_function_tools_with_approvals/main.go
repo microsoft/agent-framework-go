@@ -66,7 +66,6 @@ func main() {
 		// Ask the user to approve each function call request.
 		request, ok := c.(*message.FunctionApprovalRequestContent)
 		if !ok {
-			demo.Panicf("unexpected request type: %T", c)
 			continue
 		}
 		approved := demo.UserInputRequest(request)
