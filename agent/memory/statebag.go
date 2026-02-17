@@ -21,7 +21,8 @@ type StateBag struct {
 	state sync.Map
 }
 
-// Get returns the value associated with the given key, or nil if the key is not present.
+// Get returns the value associated with the given key and a boolean indicating whether the key was present.
+// The returned value may be nil even when the key exists; callers must check the boolean result.
 func (s *StateBag) Get(key string) (any, bool) {
 	return s.state.Load(key)
 }

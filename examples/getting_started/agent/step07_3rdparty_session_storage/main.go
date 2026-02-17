@@ -80,13 +80,24 @@ func main() {
 }
 
 type fsMessageStore struct {
-	Dir   string
-	Files []string
+	Dir string
+}
+
+func (d *fsMessageStore) getFiles(ctx *memory.InvokingContext) []string {
+	if ctx.Session == nil {
+		return nil
+	}
+	v, ok := ctx.Session.GetStateBag().Get("fsMessageStore.files")
+	if !ok {
+		return nil
+	}
+	files, _ := v.([]string)
+	return files
 }
 
 func (d *fsMessageStore) Invoking(ctx *memory.InvokingContext) (*memory.Context, error) {
 	var msgs []*message.Message
-	for _, file := range d.Files {
+	for _, file := range d.getFiles(ctx) {
 		data, err := os.ReadFile(filepath.Join(d.Dir, file))
 		if err != nil {
 			return nil, err
@@ -105,12 +116,17 @@ func (d *fsMessageStore) Invoked(ctx *memory.InvokedContext) error {
 	if ctx.InvokeError != nil {
 		return nil
 	}
+	var files []string
+	if ctx.Session != nil {
+		v, _ := ctx.Session.GetStateBag().Get("fsMessageStore.files")
+		files, _ = v.([]string)
+	}
 	persist := func(msg *message.Message) error {
 		if msg.ID == "" {
 			// Skip messages without an ID.
 			return nil
 		}
-		if slices.Contains(d.Files, msg.ID) {
+		if slices.Contains(files, msg.ID) {
 			return fmt.Errorf("duplicated message %q", msg.ID)
 		}
 		data, err := json.Marshal(msg)
@@ -120,7 +136,7 @@ func (d *fsMessageStore) Invoked(ctx *memory.InvokedContext) error {
 		if err := os.WriteFile(filepath.Join(d.Dir, msg.ID), data, 0644); err != nil {
 			return err
 		}
-		d.Files = append(d.Files, msg.ID)
+		files = append(files, msg.ID)
 		return nil
 	}
 	for _, msg := range ctx.RequestMessages {
@@ -132,6 +148,9 @@ func (d *fsMessageStore) Invoked(ctx *memory.InvokedContext) error {
 		if err := persist(msg); err != nil {
 			return err
 		}
+	}
+	if ctx.Session != nil {
+		ctx.Session.GetStateBag().Set("fsMessageStore.files", files)
 	}
 	return nil
 }

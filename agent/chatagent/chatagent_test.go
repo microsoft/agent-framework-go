@@ -320,10 +320,6 @@ func TestRun_InvokesMultipleContextProvidersInSequence(t *testing.T) {
 }
 
 func TestRun_ContextProviderReceivesSession(t *testing.T) {
-	var capturedSession memory.Session
-	provider := &testContextProvider{}
-	provider.provideContext = nil
-
 	// Use a custom provider that captures the session
 	customProvider := &sessionCapturingProvider{}
 
@@ -341,7 +337,6 @@ func TestRun_ContextProviderReceivesSession(t *testing.T) {
 	if customProvider.lastSession != session {
 		t.Error("expected context provider to receive the session")
 	}
-	_ = capturedSession
 }
 
 type sessionCapturingProvider struct {

@@ -47,14 +47,17 @@ type InvokingContext struct {
 
 // InvokedContext contains the context information provided to a [ContextProvider.Invoked] call.
 //
-// It provides context about a completed agent invocation, including the accumulated
-// request messages that were used and the response messages that were generated.
-// It also indicates whether the invocation succeeded or failed.
+// It provides context about a completed agent invocation, including the request
+// messages that were sent for this invocation and the response messages that were
+// generated. It also indicates whether the invocation succeeded or failed.
 type InvokedContext struct {
 	context.Context
 
-	// RequestMessages contains the accumulated request messages (user input, chat history
-	// and any others provided by context providers) that were used by the agent.
+	// RequestMessages contains the request messages that were used by the agent for
+	// this invocation (for example, the user's input for this turn and any additional
+	// messages provided by context providers for this turn). Previously stored history
+	// is not required to be included here and may be managed separately (e.g., by a
+	// message history provider).
 	RequestMessages []*message.Message
 
 	// ResponseMessages contains the response messages generated during this invocation,
@@ -85,8 +88,9 @@ type ContextProvider interface {
 	// The returned *Context may be nil even if there is no error and no additional context is provided.
 	Invoking(*InvokingContext) (*Context, error)
 
-	// Invoked is called immediately after an agent has been invoked to process the results.
-	// This method is called regardless of whether the invocation succeeded or failed.
+	// Invoked is called after the model invocation to process the results, even if the
+	// model invocation itself failed. It is not called if [ContextProvider.Invoking] returns
+	// an error (since the model was never invoked in that case).
 	// Implementations should check [InvokedContext.InvokeError] to determine
 	// whether the invocation was successful.
 	Invoked(*InvokedContext) error

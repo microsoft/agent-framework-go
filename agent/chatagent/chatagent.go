@@ -190,9 +190,9 @@ func (a *chatagent) notifyMessageHistoryProvider(ctx context.Context, session *S
 	}
 	provider := a.messageHistoryProvider
 	if provider == nil {
-		// If there is no message history provider, use the default in-memory one.
+		// If there is no message history provider, use a default in-memory one
+		// scoped to this invocation instead of caching it on the agent.
 		provider = &memory.InMemoryMessageHistoryProvider{}
-		a.messageHistoryProvider = provider
 	}
 	return provider.Invoked(&memory.InvokedContext{
 		Context:          ctx,
@@ -254,17 +254,17 @@ func (a *chatagent) prepareSessionAndMessages(ctx context.Context, messages []*m
 		}
 	}
 
-	if a.instructions != "" {
-		msgsForClient = append(msgsForClient, &message.Message{
-			Role: message.RoleSystem,
-			Contents: []message.Content{
-				&message.TextContent{
-					Text: a.instructions,
-				},
-			},
-		})
-	}
 	if v, ok := agentopt.Get(options, agentopt.ContinuationToken); !ok || v == "" {
+		if a.instructions != "" {
+			msgsForClient = append(msgsForClient, &message.Message{
+				Role: message.RoleSystem,
+				Contents: []message.Content{
+					&message.TextContent{
+						Text: a.instructions,
+					},
+				},
+			})
+		}
 		if session.ConversationID == "" && a.messageHistoryProvider != nil {
 			// Add any existing messages from the session to the messages to be sent to the chat client.
 			// Only when the service is not managing the chat history (no ConversationID).
@@ -311,11 +311,20 @@ func (a *chatagent) prepareSessionAndMessages(ctx context.Context, messages []*m
 							},
 						})
 					}
-					// Update accumulated context for the next provider in the pipeline.
+					// Accumulate instructions and tools from all providers.
+					newInstructions := accContext.Instructions
+					if ctxData.Instructions != "" {
+						if newInstructions != "" {
+							newInstructions += "\n"
+						}
+						newInstructions += ctxData.Instructions
+					}
+					newTools := slices.Clone(accContext.Tools)
+					newTools = append(newTools, ctxData.Tools...)
 					accContext = &memory.Context{
-						Instructions: ctxData.Instructions,
+						Instructions: newInstructions,
 						Messages:     append(slices.Clone(msgsForClient), messages...),
-						Tools:        ctxData.Tools,
+						Tools:        newTools,
 					}
 				}
 			}
