@@ -145,9 +145,11 @@ func (a *testagent) unmarshalSession(_ context.Context, data []byte) (memory.Ses
 // Session is a test implementation of the Session interface
 type Session struct {
 	messages []*message.Message
+	State    memory.StateBag
 }
 
-func (t *Session) IsAgentSession() {}
+// GetStateBag returns the session's [memory.StateBag] for storing session-scoped provider state.
+func (t *Session) GetStateBag() *memory.StateBag { return &t.State }
 
 func CreateSession() *Session {
 	return &Session{}

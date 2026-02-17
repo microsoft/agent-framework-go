@@ -25,23 +25,60 @@ type Context struct {
 }
 
 // InvokingContext contains the context information provided to a [ContextProvider.Invoking] call.
+//
+// It provides context about the invocation before the underlying AI model is invoked,
+// including the accumulated [Context] being built by the provider pipeline and the
+// input messages from the caller.
 type InvokingContext struct {
 	context.Context
 
+	// AccContext is the accumulated context being built for the current invocation.
+	// If multiple [ContextProvider] instances are used, each provider will receive
+	// the context returned by the previous provider, allowing them to build on top
+	// of each other's context.
+	AccContext *Context
+
+	// Messages contains the input messages from the caller for this invocation.
 	Messages []*message.Message
+
+	// Session is the agent session associated with this invocation, or nil if none.
+	Session Session
 }
 
 // InvokedContext contains the context information provided to a [ContextProvider.Invoked] call.
+//
+// It provides context about a completed agent invocation, including the accumulated
+// request messages that were used and the response messages that were generated.
+// It also indicates whether the invocation succeeded or failed.
 type InvokedContext struct {
 	context.Context
 
-	RequestMessages         []*message.Message
-	ContextProviderMessages []*message.Message
-	ResponsesMessages       []*message.Message
-	Error                   error
+	// RequestMessages contains the accumulated request messages (user input, chat history
+	// and any others provided by context providers) that were used by the agent.
+	RequestMessages []*message.Message
+
+	// ResponseMessages contains the response messages generated during this invocation,
+	// or nil if the invocation failed.
+	ResponseMessages []*message.Message
+
+	// InvokeError contains the error that caused the invocation to fail,
+	// or nil if the invocation succeeded.
+	InvokeError error
+
+	// Session is the agent session associated with this invocation, or nil if none.
+	Session Session
 }
 
 // ContextProvider defines a contract for components that enhance AI context management during agent invocations.
+//
+// A context provider participates in the agent invocation lifecycle by:
+//   - Listening to changes in conversations
+//   - Providing additional context to agents during invocation
+//   - Supplying additional function tools for enhanced capabilities
+//   - Processing invocation results for state management or learning
+//
+// Context providers operate through a two-phase lifecycle: they are called at the start of invocation via
+// [ContextProvider.Invoking] and at the end via [ContextProvider.Invoked].
 type ContextProvider interface {
 	// Invoking is called before agent invocation. It returns additional context to be used
 	// during the invocation, or an error if context retrieval fails.
@@ -49,5 +86,8 @@ type ContextProvider interface {
 	Invoking(*InvokingContext) (*Context, error)
 
 	// Invoked is called immediately after an agent has been invoked to process the results.
+	// This method is called regardless of whether the invocation succeeded or failed.
+	// Implementations should check [InvokedContext.InvokeError] to determine
+	// whether the invocation was successful.
 	Invoked(*InvokedContext) error
 }

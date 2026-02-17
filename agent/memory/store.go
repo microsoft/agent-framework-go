@@ -22,11 +22,10 @@ func (s *InMemoryMessageHistoryProvider) Invoking(ctx *InvokingContext) (*Contex
 }
 
 func (s *InMemoryMessageHistoryProvider) Invoked(ctx *InvokedContext) error {
-	if ctx.Error != nil {
+	if ctx.InvokeError != nil {
 		return nil
 	}
 	s.Messages = append(s.Messages, ctx.RequestMessages...)
-	s.Messages = append(s.Messages, ctx.ContextProviderMessages...)
-	s.Messages = append(s.Messages, ctx.ResponsesMessages...)
+	s.Messages = append(s.Messages, ctx.ResponseMessages...)
 	return nil
 }

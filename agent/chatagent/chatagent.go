@@ -34,8 +34,15 @@ type Config struct {
 
 	RunOptions []agentopt.RunOption
 
-	NewMessageHistoryProvider func() memory.ContextProvider
-	NewContextProvider        func() memory.ContextProvider
+	// MessageHistoryProvider is the provider used for storing and retrieving chat history.
+	// If nil, an [memory.InMemoryMessageHistoryProvider] will be used when the underlying
+	// service does not manage chat history server-side.
+	MessageHistoryProvider memory.ContextProvider
+
+	// ContextProviders is the list of context providers used for providing additional context
+	// for each agent run. Multiple providers form a pipeline where each provider can build on
+	// top of the previous provider's context.
+	ContextProviders []memory.ContextProvider
 }
 
 type ProviderConfig struct {
@@ -60,8 +67,8 @@ type chatagent struct {
 
 	instructions string
 
-	newMessageHistoryProvider func() memory.ContextProvider
-	newContextProvider        func() memory.ContextProvider
+	messageHistoryProvider memory.ContextProvider
+	contextProviders       []memory.ContextProvider
 }
 
 // NewAgent creates a new chat agent with the given chat client and options.
@@ -84,10 +91,10 @@ func NewAgent(runfn RunFunc, cfg Config, prov ProviderConfig) *agent.Agent {
 		)
 	}
 	a := &chatagent{
-		runFn:                     runfn,
-		instructions:              opts.Instructions,
-		newMessageHistoryProvider: opts.NewMessageHistoryProvider,
-		newContextProvider:        opts.NewContextProvider,
+		runFn:                  runfn,
+		instructions:           opts.Instructions,
+		messageHistoryProvider: opts.MessageHistoryProvider,
+		contextProviders:       opts.ContextProviders,
 	}
 	return agent.New(agent.Config{
 		Metadata: agent.Metadata{
@@ -111,9 +118,6 @@ func (a *chatagent) createSession(ctx context.Context, opts ...agentopt.CreateSe
 	session := &Session{
 		ConversationID: convID,
 	}
-	if a.newContextProvider != nil {
-		session.ContextProvider = a.newContextProvider()
-	}
 	return session, nil
 }
 
@@ -125,26 +129,26 @@ func (a *chatagent) marshalSession(_ context.Context, session memory.Session) ([
 }
 
 func (a *chatagent) unmarshalSession(_ context.Context, data []byte) (memory.Session, error) {
-	return newSessionFromJSON(data, a.newMessageHistoryProvider, a.newContextProvider)
+	return newSessionFromJSON(data)
 }
 
 func (a *chatagent) run(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		originalMessages := messages
-		session, options, messages, ctxMessages, err := prepareSessionAndMessages(ctx, a.instructions, originalMessages, options)
+		session, options, messages, err := a.prepareSessionAndMessages(ctx, originalMessages, options)
 		if err != nil {
 			yield(nil, err)
 			return
 		}
 		contToken, _ := agentopt.Get(options, agentopt.ContinuationToken)
-		if err := validateStreamResumptionAllowed(contToken, session); err != nil {
+		if err := validateStreamResumptionAllowed(contToken, session, a.contextProviders); err != nil {
 			yield(nil, err)
 			return
 		}
 		var resp message.Response
 		for update, err := range a.runFn(ctx, messages, options...) {
 			if err != nil {
-				notifyContextProviderOfFailure(ctx, session, err, messages, ctxMessages)
+				a.notifyContextProvidersOfFailure(ctx, session, err, messages)
 				yield(nil, err)
 				return
 			}
@@ -165,56 +169,67 @@ func (a *chatagent) run(ctx context.Context, messages []*message.Message, option
 			}
 		}
 		resp.Coalesce()
-		if session.ConversationID == "" && session.MessageHistoryProvider == nil && a.newMessageHistoryProvider != nil {
-			// If we don't have a conversation ID then we must be managing the message history provider ourselves.
-			// If we don't have a message history provider yet and we have a factory, use it to create a new one.
-			session.MessageHistoryProvider = a.newMessageHistoryProvider()
+		// Notify the message history provider of new messages if the response was successful.
+		if err := a.notifyMessageHistoryProvider(ctx, session, originalMessages, resp.Messages); err != nil {
+			yield(nil, err)
+			return
 		}
-		// Only notify the session of new messages if the response was successful to avoid inconsistent message state in the session.
-		if err := session.messagesReceived(&memory.InvokedContext{
-			Context:                 ctx,
-			RequestMessages:         originalMessages,
-			ContextProviderMessages: ctxMessages,
-			ResponsesMessages:       resp.Messages,
+		// Notify the context providers of all new messages.
+		if err := a.notifyContextProvidersOfSuccess(ctx, session, messages, resp.Messages); err != nil {
+			yield(nil, err)
+			return
+		}
+	}
+}
+
+func (a *chatagent) notifyMessageHistoryProvider(ctx context.Context, session *Session, requestMessages, responseMessages []*message.Message) error {
+	if session.ConversationID != "" {
+		// If the session messages are stored in the service
+		// there is nothing to do here.
+		return nil
+	}
+	provider := a.messageHistoryProvider
+	if provider == nil {
+		// If there is no message history provider, use the default in-memory one.
+		provider = &memory.InMemoryMessageHistoryProvider{}
+		a.messageHistoryProvider = provider
+	}
+	return provider.Invoked(&memory.InvokedContext{
+		Context:          ctx,
+		RequestMessages:  requestMessages,
+		ResponseMessages: responseMessages,
+		Session:          session,
+	})
+}
+
+func (a *chatagent) notifyContextProvidersOfSuccess(ctx context.Context, session *Session, messages, respMessages []*message.Message) error {
+	for _, provider := range a.contextProviders {
+		if err := provider.Invoked(&memory.InvokedContext{
+			Context:          ctx,
+			RequestMessages:  messages,
+			ResponseMessages: respMessages,
+			Session:          session,
 		}); err != nil {
-			yield(nil, err)
-			return
-		}
-		// Notify the ContextProvider of all new messages.
-		if err := notifyContextProviderOfSuccess(ctx, session, messages, ctxMessages, resp.Messages); err != nil {
-			yield(nil, err)
-			return
+			return err
 		}
 	}
+	return nil
 }
 
-func notifyContextProviderOfSuccess(ctx context.Context, session *Session, messages, contextProviderMessages, respMessages []*message.Message) error {
-	if session.ContextProvider == nil {
-		return nil
+func (a *chatagent) notifyContextProvidersOfFailure(ctx context.Context, session *Session, err error, messages []*message.Message) {
+	for _, provider := range a.contextProviders {
+		_ = provider.Invoked(&memory.InvokedContext{
+			Context:         ctx,
+			InvokeError:     err,
+			RequestMessages: messages,
+			Session:         session,
+		})
 	}
-	return session.ContextProvider.Invoked(&memory.InvokedContext{
-		Context:                 ctx,
-		RequestMessages:         messages,
-		ContextProviderMessages: contextProviderMessages,
-		ResponsesMessages:       respMessages,
-	})
 }
 
-func notifyContextProviderOfFailure(ctx context.Context, session *Session, err error, messages, contextProviderMessages []*message.Message) error {
-	if session.ContextProvider == nil {
-		return nil
-	}
-	return session.ContextProvider.Invoked(&memory.InvokedContext{
-		Context:                 ctx,
-		Error:                   err,
-		RequestMessages:         messages,
-		ContextProviderMessages: contextProviderMessages,
-	})
-}
-
-func prepareSessionAndMessages(ctx context.Context, instr string, messages []*message.Message, options []agentopt.RunOption) (session *Session, opts []agentopt.RunOption, msgsForClient, ctxMessages []*message.Message, err error) {
-	retError := func(e error) (*Session, []agentopt.RunOption, []*message.Message, []*message.Message, error) {
-		return nil, nil, nil, nil, e
+func (a *chatagent) prepareSessionAndMessages(ctx context.Context, messages []*message.Message, options []agentopt.RunOption) (session *Session, opts []agentopt.RunOption, msgsForClient []*message.Message, err error) {
+	retError := func(e error) (*Session, []agentopt.RunOption, []*message.Message, error) {
+		return nil, nil, nil, e
 	}
 	if v, ok := agentopt.Get(options, agentopt.Session); ok {
 		var ok bool
@@ -234,27 +249,29 @@ func prepareSessionAndMessages(ctx context.Context, instr string, messages []*me
 		if len(messages) > 0 {
 			return retError(errors.New("messages are not allowed when continuing a background response using a continuation token"))
 		}
-		if session.ConversationID == "" && session.MessageHistoryProvider == nil {
+		if session.ConversationID == "" && a.messageHistoryProvider == nil {
 			return retError(errors.New("continuation tokens are not allowed to be used for initial runs"))
 		}
 	}
 
-	if instr != "" {
+	if a.instructions != "" {
 		msgsForClient = append(msgsForClient, &message.Message{
 			Role: message.RoleSystem,
 			Contents: []message.Content{
 				&message.TextContent{
-					Text: instr,
+					Text: a.instructions,
 				},
 			},
 		})
 	}
 	if v, ok := agentopt.Get(options, agentopt.ContinuationToken); !ok || v == "" {
-		if session.MessageHistoryProvider != nil {
-			//  Add any existing messages from the session to the messages to be sent to the chat client.
-			newCtx, err := session.MessageHistoryProvider.Invoking(&memory.InvokingContext{
+		if session.ConversationID == "" && a.messageHistoryProvider != nil {
+			// Add any existing messages from the session to the messages to be sent to the chat client.
+			// Only when the service is not managing the chat history (no ConversationID).
+			newCtx, err := a.messageHistoryProvider.Invoking(&memory.InvokingContext{
 				Context:  ctx,
 				Messages: messages,
+				Session:  session,
 			})
 			if err != nil {
 				return retError(err)
@@ -263,41 +280,53 @@ func prepareSessionAndMessages(ctx context.Context, instr string, messages []*me
 				msgsForClient = append(msgsForClient, newCtx.Messages...)
 			}
 		}
-		if session.ContextProvider != nil {
-			// If we have a ContextProvider, we should get context from it, and update our
-			// messages and options with the additional context.
-			ctxData, err := session.ContextProvider.Invoking(&memory.InvokingContext{
-				Context:  ctx,
-				Messages: messages,
-			})
-			if err != nil {
-				return retError(err)
+		if len(a.contextProviders) > 0 {
+			// If we have context providers, call each one in sequence to build up the context.
+			// Each provider receives the accumulated context from previous providers.
+			accContext := &memory.Context{
+				Messages: append(slices.Clone(msgsForClient), messages...),
 			}
-			if ctxData != nil {
-				ctxMessages = ctxData.Messages
-				msgsForClient = append(msgsForClient, ctxData.Messages...)
-				for _, tl := range ctxData.Tools {
-					options = append(options, agentopt.Tool(tl))
+			for _, provider := range a.contextProviders {
+				ctxData, err := provider.Invoking(&memory.InvokingContext{
+					Context:    ctx,
+					Messages:   messages,
+					AccContext: accContext,
+					Session:    session,
+				})
+				if err != nil {
+					return retError(err)
 				}
-				if ctxData.Instructions != "" {
-					msgsForClient = append(msgsForClient, &message.Message{
-						Role: message.RoleSystem,
-						Contents: []message.Content{
-							&message.TextContent{
-								Text: ctxData.Instructions,
+				if ctxData != nil {
+					msgsForClient = append(msgsForClient, ctxData.Messages...)
+					for _, tl := range ctxData.Tools {
+						options = append(options, agentopt.Tool(tl))
+					}
+					if ctxData.Instructions != "" {
+						msgsForClient = append(msgsForClient, &message.Message{
+							Role: message.RoleSystem,
+							Contents: []message.Content{
+								&message.TextContent{
+									Text: ctxData.Instructions,
+								},
 							},
-						},
-					})
+						})
+					}
+					// Update accumulated context for the next provider in the pipeline.
+					accContext = &memory.Context{
+						Instructions: ctxData.Instructions,
+						Messages:     append(slices.Clone(msgsForClient), messages...),
+						Tools:        ctxData.Tools,
+					}
 				}
 			}
 		}
 		// Add the input messages to the end of session messages.
 		msgsForClient = append(msgsForClient, messages...)
 	}
-	return session, options, msgsForClient, ctxMessages, nil
+	return session, options, msgsForClient, nil
 }
 
-func validateStreamResumptionAllowed(continuationToken string, session *Session) error {
+func validateStreamResumptionAllowed(continuationToken string, session *Session, contextProviders []memory.ContextProvider) error {
 	if continuationToken == "" {
 		return nil
 	}
@@ -306,10 +335,10 @@ func validateStreamResumptionAllowed(continuationToken string, session *Session)
 	if session.ConversationID == "" {
 		return errors.New("streaming resumption is only supported when chat history is stored and managed by the underlying service")
 	}
-	// Similarly, streaming resumption is not supported when a context provider is used because, currently, there's no good solution
-	// to collect updates received in failed runs and pass them to the last successful run so it can notify the context provider of the updates.
-	if session.ContextProvider != nil {
-		return errors.New("using context provider with streaming resumption is not supported")
+	// Similarly, streaming resumption is not supported when context providers are used because, currently, there's no good solution
+	// to collect updates received in failed runs and pass them to the last successful run so it can notify the context providers of the updates.
+	if len(contextProviders) > 0 {
+		return errors.New("using context providers with streaming resumption is not supported")
 	}
 	return nil
 }

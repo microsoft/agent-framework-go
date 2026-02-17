@@ -44,12 +44,10 @@ func main() {
 		Model:      deployment,
 		APIVersion: "2025-01-01-preview",
 	}, chatagent.Config{
-		Instructions: "You are good at telling jokes.",
-		Name:         "Joker",
-		RunOptions:   []agentopt.RunOption{middleware.With(logger)}, // for logging agent interactions
-		NewMessageHistoryProvider: func() memory.ContextProvider {
-			return &fsMessageStore{Dir: tmpDir}
-		},
+		Instructions:           "You are good at telling jokes.",
+		Name:                   "Joker",
+		RunOptions:             []agentopt.RunOption{middleware.With(logger)}, // for logging agent interactions
+		MessageHistoryProvider: &fsMessageStore{Dir: tmpDir},
 	})
 
 	ctx := context.Background()
@@ -111,7 +109,7 @@ func (d *fsMessageStore) Invoking(ctx *memory.InvokingContext) (*memory.Context,
 }
 
 func (d *fsMessageStore) Invoked(ctx *memory.InvokedContext) error {
-	if ctx.Error != nil {
+	if ctx.InvokeError != nil {
 		return nil
 	}
 	persist := func(msg *message.Message) error {
@@ -137,12 +135,7 @@ func (d *fsMessageStore) Invoked(ctx *memory.InvokedContext) error {
 			return err
 		}
 	}
-	for _, msg := range ctx.ContextProviderMessages {
-		if err := persist(msg); err != nil {
-			return err
-		}
-	}
-	for _, msg := range ctx.ResponsesMessages {
+	for _, msg := range ctx.ResponseMessages {
 		if err := persist(msg); err != nil {
 			return err
 		}

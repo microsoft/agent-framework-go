@@ -23,6 +23,10 @@ package memory
 // To support conversations that may need to survive application restarts or separate service requests,
 // a Session can be serialized and deserialized, so that it can be saved in a persistent store.
 type Session interface {
-	// IsAgentSession marks the type as a Session to avoid accidental implementations.
-	IsAgentSession()
+	// GetStateBag returns the session's [StateBag] for storing session-scoped provider state.
+	//
+	// Context providers can use the StateBag to persist state across invocations within the same session.
+	// Since a [ContextProvider] may be used with many different sessions, session-specific state should
+	// be stored here rather than in the provider's own fields.
+	GetStateBag() *StateBag
 }

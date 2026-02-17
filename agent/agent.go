@@ -51,6 +51,7 @@ func New(cfg Config) *Agent {
 	return &Agent{
 		metadata:         cfg.Metadata,
 		createSession:    cfg.CreateSession,
+		marshalSession:   cfg.MarshalSession,
 		unmarshalSession: cfg.UnmarshalSession,
 		run:              cfg.Run,
 		runOptions:       cfg.RunOptions,
