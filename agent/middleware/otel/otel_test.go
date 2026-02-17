@@ -93,10 +93,10 @@ func TestOtel_Run_SpanHasCorrectAttributes(t *testing.T) {
 		CreateSession: func(ctx context.Context, options ...agentopt.CreateSessionOption) (memory.Session, error) {
 			return agenttest.CreateSession(), nil
 		},
-		MarshalSession: func(session memory.Session) ([]byte, error) {
+		MarshalSession: func(_ context.Context, session memory.Session) ([]byte, error) {
 			return agenttest.MarshalSession(session)
 		},
-		UnmarshalSession: func(data []byte) (memory.Session, error) {
+		UnmarshalSession: func(_ context.Context, data []byte) (memory.Session, error) {
 			return agenttest.CreateSession(), nil
 		},
 		Run: func(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {

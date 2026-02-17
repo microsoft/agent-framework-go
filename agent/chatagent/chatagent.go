@@ -117,14 +117,14 @@ func (a *chatagent) createSession(ctx context.Context, opts ...agentopt.CreateSe
 	return session, nil
 }
 
-func (a *chatagent) marshalSession(session memory.Session) ([]byte, error) {
+func (a *chatagent) marshalSession(_ context.Context, session memory.Session) ([]byte, error) {
 	if _, ok := session.(*Session); !ok {
 		return nil, errors.New("the provided session is not compatible with the agent, only sessions created by the agent can be used")
 	}
 	return json.Marshal(session)
 }
 
-func (a *chatagent) unmarshalSession(data []byte) (memory.Session, error) {
+func (a *chatagent) unmarshalSession(_ context.Context, data []byte) (memory.Session, error) {
 	return newSessionFromJSON(data, a.newMessageHistoryProvider, a.newContextProvider)
 }
 

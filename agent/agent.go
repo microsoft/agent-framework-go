@@ -27,8 +27,8 @@ type Config struct {
 
 	//Required functions
 	CreateSession    func(ctx context.Context, options ...agentopt.CreateSessionOption) (memory.Session, error)
-	MarshalSession   func(session memory.Session) ([]byte, error)
-	UnmarshalSession func(data []byte) (memory.Session, error)
+	MarshalSession   func(ctx context.Context, session memory.Session) ([]byte, error)
+	UnmarshalSession func(ctx context.Context, data []byte) (memory.Session, error)
 	Run              func(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error]
 }
 
@@ -88,8 +88,8 @@ type Agent struct {
 	runOptions []agentopt.RunOption
 
 	createSession    func(ctx context.Context, options ...agentopt.CreateSessionOption) (memory.Session, error)
-	marshalSession   func(session memory.Session) ([]byte, error)
-	unmarshalSession func(data []byte) (memory.Session, error)
+	marshalSession   func(ctx context.Context, session memory.Session) ([]byte, error)
+	unmarshalSession func(ctx context.Context, data []byte) (memory.Session, error)
 	run              func(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error]
 }
 
@@ -109,12 +109,12 @@ func (a *Agent) CreateSession(ctx context.Context, options ...agentopt.CreateSes
 	return a.createSession(ctx, options...)
 }
 
-func (a *Agent) MarshalSession(session memory.Session) ([]byte, error) {
-	return a.marshalSession(session)
+func (a *Agent) MarshalSession(ctx context.Context, session memory.Session) ([]byte, error) {
+	return a.marshalSession(ctx, session)
 }
 
-func (a *Agent) UnmarshalSession(data []byte) (memory.Session, error) {
-	return a.unmarshalSession(data)
+func (a *Agent) UnmarshalSession(ctx context.Context, data []byte) (memory.Session, error) {
+	return a.unmarshalSession(ctx, data)
 }
 
 func (a *Agent) RunText(msg string, options ...agentopt.RunOption) ResponseStream {

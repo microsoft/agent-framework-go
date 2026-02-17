@@ -73,14 +73,14 @@ func (a *a2aagent) createSession(ctx context.Context, options ...agentopt.Create
 	}, nil
 }
 
-func (a *a2aagent) marshalSession(session memory.Session) ([]byte, error) {
+func (a *a2aagent) marshalSession(_ context.Context, session memory.Session) ([]byte, error) {
 	if _, ok := session.(*Session); !ok {
 		return nil, errors.New("the provided session is not compatible with the agent, only sessions created by the agent can be used")
 	}
 	return json.Marshal(session)
 }
 
-func (a *a2aagent) unmarshalSession(data []byte) (memory.Session, error) {
+func (a *a2aagent) unmarshalSession(_ context.Context, data []byte) (memory.Session, error) {
 	var session Session
 	if err := json.Unmarshal(data, &session); err != nil {
 		return nil, err

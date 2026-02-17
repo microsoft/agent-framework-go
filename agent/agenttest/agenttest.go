@@ -130,15 +130,15 @@ func (a *testagent) run(ctx context.Context, messages []*message.Message, opts .
 	}
 }
 
-func (a *testagent) createSession(ctx context.Context, opts ...agentopt.CreateSessionOption) (memory.Session, error) {
+func (a *testagent) createSession(_ context.Context, opts ...agentopt.CreateSessionOption) (memory.Session, error) {
 	return &Session{}, nil
 }
 
-func (a *testagent) marshalSession(session memory.Session) ([]byte, error) {
+func (a *testagent) marshalSession(_ context.Context, session memory.Session) ([]byte, error) {
 	return json.Marshal(session)
 }
 
-func (a *testagent) unmarshalSession(data []byte) (memory.Session, error) {
+func (a *testagent) unmarshalSession(_ context.Context, data []byte) (memory.Session, error) {
 	return &Session{}, nil
 }
 

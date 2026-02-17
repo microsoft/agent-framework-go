@@ -221,13 +221,13 @@ func TestAgent_Run_PrependsAgentOptions(t *testing.T) {
 			Name: "test",
 		},
 		RunOptions: []agentopt.RunOption{agentOption},
-		MarshalSession: func(session memory.Session) ([]byte, error) {
-			return json.Marshal(session)
-		},
 		CreateSession: func(ctx context.Context, opts ...agentopt.CreateSessionOption) (memory.Session, error) {
 			return agenttest.CreateSession(), nil
 		},
-		UnmarshalSession: func(data []byte) (memory.Session, error) { return agenttest.CreateSession(), nil },
+		MarshalSession: func(_ context.Context, session memory.Session) ([]byte, error) {
+			return json.Marshal(session)
+		},
+		UnmarshalSession: func(_ context.Context, data []byte) (memory.Session, error) { return agenttest.CreateSession(), nil },
 		Run:              runner.Run,
 	})
 

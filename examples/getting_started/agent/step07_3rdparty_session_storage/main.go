@@ -71,7 +71,7 @@ func main() {
 	// and loaded again later.
 
 	// Deserialize the session state after loading from storage.
-	resumedSession, err := a.UnmarshalSession(serializedSession)
+	resumedSession, err := a.UnmarshalSession(ctx, serializedSession)
 	if err != nil {
 		demo.Panic(err)
 	}

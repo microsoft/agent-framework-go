@@ -50,7 +50,7 @@ func main() {
 	demo.Response(resp, err)
 
 	// Serialize the session state so it can be stored for later use.
-	serializedSession, err := a.MarshalSession(session)
+	serializedSession, err := a.MarshalSession(ctx, session)
 	if err != nil {
 		demo.Panic(err)
 	}
@@ -72,7 +72,7 @@ func main() {
 	}
 
 	// Deserialize the session state after loading from storage.
-	resumedSession, err := a.UnmarshalSession(loadedData)
+	resumedSession, err := a.UnmarshalSession(ctx, loadedData)
 	if err != nil {
 		demo.Panic(err)
 	}

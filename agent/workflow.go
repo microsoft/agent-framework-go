@@ -33,7 +33,7 @@ func newExecutor(a *Agent, emitEvents bool) *workflow.Executor {
 					if session == nil {
 						return nil
 					}
-					data, err := a.MarshalSession(session)
+					data, err := a.MarshalSession(wctx, session)
 					if err != nil {
 						return err
 					}
@@ -47,7 +47,7 @@ func newExecutor(a *Agent, emitEvents bool) *workflow.Executor {
 					if data == nil {
 						return nil
 					}
-					session, err = a.UnmarshalSession(data.([]byte))
+					session, err = a.UnmarshalSession(wctx, data.([]byte))
 					return err
 				},
 			},
