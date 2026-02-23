@@ -227,9 +227,23 @@ func (f *autocall) Run(next middleware.RunFunc, ctx context.Context, messages []
 				return
 			}
 
+			// Build an assistant message containing the function calls that were processed.
+			// This is needed because chat APIs (e.g. OpenAI) require tool result messages
+			// to be preceded by an assistant message containing the corresponding tool_calls.
+			assistantContents := make([]message.Content, len(functionCallContents))
+			for i, fcc := range functionCallContents {
+				assistantContents[i] = fcc
+			}
+
 			// Use the augmented history as the new set of messages to send.
+			// We include the original messages, the assistant message with function calls,
+			// and the tool results so that the downstream provider receives a well-formed
+			// conversation (user message → assistant tool_calls → tool results).
 			opts = updateOptionsForNextIteration(opts)
-			messages = []*message.Message{newMsg}
+			messages = append(messages, &message.Message{
+				Role:     message.RoleAssistant,
+				Contents: assistantContents,
+			}, newMsg)
 		}
 	}
 }

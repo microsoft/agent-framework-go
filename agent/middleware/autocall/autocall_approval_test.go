@@ -607,11 +607,15 @@ func TestFunctionInvoking_MixedApprovalRequiredToolsWithNonApprovalRequiringFunc
 	runner := &agenttest.Runner{
 		Responses: agenttest.NewResponseBuilder(expectedMessages(t, input[0])).
 			AddFunctionCall("callId2", "Func2", `{"i":42}`).
-			NewTurn(expectedMessages(t, &message.Message{
-				Role: message.RoleTool, Contents: []message.Content{
+			NewTurn(expectedMessages(t,
+				input[0],
+				&message.Message{Role: message.RoleAssistant, Contents: []message.Content{
+					&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`},
+				}},
+				&message.Message{Role: message.RoleTool, Contents: []message.Content{
 					&message.FunctionResultContent{CallID: "callId2", Result: "Result 2: 42"},
-				},
-			})).
+				}},
+			)).
 			AddText("World again").
 			Build(),
 	}
@@ -698,12 +702,17 @@ func TestFunctionInvoking_FunctionCallContentIsYieldedImmediatelyIfNoApprovalReq
 		Responses: agenttest.NewResponseBuilder(expectedMessages(t, input[0])).
 			AddFunctionCall("callId1", "Func1", "").
 			AddFunctionCall("callId2", "Func2", `{"i":42}`).
-			NewTurn(expectedMessages(t, &message.Message{
-				Role: message.RoleTool, Contents: []message.Content{
+			NewTurn(expectedMessages(t,
+				input[0],
+				&message.Message{Role: message.RoleAssistant, Contents: []message.Content{
+					&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
+					&message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`},
+				}},
+				&message.Message{Role: message.RoleTool, Contents: []message.Content{
 					&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
 					&message.FunctionResultContent{CallID: "callId2", Result: "Result 2: 42"},
-				},
-			})).
+				}},
+			)).
 			AddText("world").
 			Build(),
 	}

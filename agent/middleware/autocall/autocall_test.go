@@ -920,3 +920,94 @@ func TestFunctionInvoking_AllResponseMessagesReturned(t *testing.T) {
 		t.Error("Expected fifth message to be TextContent")
 	}
 }
+
+// TestFunctionInvoking_NextIterationIncludesAssistantFunctionCallMessage verifies that
+// when the autocall middleware invokes the next function for a subsequent iteration,
+// the messages include the assistant message with function calls before the tool result.
+// This is required by chat APIs like OpenAI, which reject tool messages that aren't
+// preceded by an assistant message with matching tool_calls.
+func TestFunctionInvoking_NextIterationIncludesAssistantFunctionCallMessage(t *testing.T) {
+	tools := []tool.Tool{
+		functool.MustNew(&functool.Func{Name: "Func1"},
+			func(ctx context.Context, args struct{}) (string, error) {
+				return "Result 1", nil
+			}),
+	}
+
+	rb := agenttest.NewResponseBuilder()
+	// First turn: model calls a function.
+	rb.Add(&message.ResponseUpdate{
+		Role:     message.RoleAssistant,
+		Contents: []message.Content{&message.FunctionCallContent{CallID: "callId1", Name: "Func1", Arguments: `{}`}},
+	})
+	// Second turn: verify messages, then return final text.
+	rb.NewTurn(func(ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) {
+		// The messages should contain: original user message, assistant with tool_calls, tool result.
+		if len(messages) < 3 {
+			t.Fatalf("expected at least 3 messages in next iteration, got %d", len(messages))
+		}
+		// First message should be the user message.
+		if messages[0].Role != message.RoleUser {
+			t.Errorf("expected first message to be user role, got %s", messages[0].Role)
+		}
+		// Second message should be the assistant with function call content.
+		if messages[len(messages)-2].Role != message.RoleAssistant {
+			t.Errorf("expected second-to-last message to be assistant role, got %s", messages[len(messages)-2].Role)
+		}
+		hasFCC := false
+		for _, c := range messages[len(messages)-2].Contents {
+			if fcc, ok := c.(*message.FunctionCallContent); ok && fcc.CallID == "callId1" {
+				hasFCC = true
+			}
+		}
+		if !hasFCC {
+			t.Error("expected assistant message to contain FunctionCallContent with callId1")
+		}
+		// Last message should be tool result.
+		if messages[len(messages)-1].Role != message.RoleTool {
+			t.Errorf("expected last message to be tool role, got %s", messages[len(messages)-1].Role)
+		}
+		hasFRC := false
+		for _, c := range messages[len(messages)-1].Contents {
+			if frc, ok := c.(*message.FunctionResultContent); ok && frc.CallID == "callId1" {
+				hasFRC = true
+			}
+		}
+		if !hasFRC {
+			t.Error("expected tool message to contain FunctionResultContent with callId1")
+		}
+	})
+	rb.Add(&message.ResponseUpdate{
+		Role:     message.RoleAssistant,
+		Contents: []message.Content{&message.TextContent{Text: "done"}},
+	})
+
+	runner := &agenttest.Runner{Responses: rb.Build()}
+
+	var opts []agentopt.RunOption
+	for _, tool := range tools {
+		opts = append(opts, agentopt.Tool(tool))
+	}
+
+	autocallConfig := autocall.Config{
+		NewID: func() string { return "" },
+	}
+
+	initialMessages := []*message.Message{message.NewText("hello")}
+	var resp message.Response
+	for update, err := range autocall.New(autocallConfig).Run(runner.Run, t.Context(), initialMessages, opts...) {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		resp.Update(update)
+	}
+
+	// Verify final response has function call, tool result, and text.
+	if len(resp.Messages) < 3 {
+		t.Fatalf("expected at least 3 response messages, got %d", len(resp.Messages))
+	}
+	lastMsg := resp.Messages[len(resp.Messages)-1]
+	if lastMsg.String() != "done" {
+		t.Errorf("expected final text 'done', got %q", lastMsg.String())
+	}
+}
