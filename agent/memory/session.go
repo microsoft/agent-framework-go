@@ -24,9 +24,5 @@ package memory
 // a Session can be serialized and deserialized, so that it can be saved in a persistent store.
 type Session interface {
 	// GetStateBag returns the session's [StateBag] for storing session-scoped provider state.
-	//
-	// Middleware can use the StateBag to persist state across invocations within the same session.
-	// Since a middleware instance may be used with many different sessions, session-specific state should
-	// be stored here rather than in middleware instance fields.
 	GetStateBag() *StateBag
 }

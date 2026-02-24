@@ -12,11 +12,6 @@ import (
 // StateBag is a thread-safe key-value store for managing session-scoped state.
 //
 // StateBag enables storing and retrieving arbitrary values associated with a session using string keys.
-// Middleware can use a StateBag to persist state across invocations within the same session.
-//
-// Since middleware may be used with many different sessions, it should not store any
-// session-specific information within its own instance fields. Instead, any session-specific state
-// should be stored in the associated session's StateBag.
 //
 // A StateBag is safe for concurrent use by multiple goroutines.
 type StateBag struct {
