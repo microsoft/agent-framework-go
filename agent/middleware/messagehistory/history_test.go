@@ -111,4 +111,4 @@ func TestInMemory_DoesNothingWithoutSession(t *testing.T) {
 	}
 }
 
-var _ middleware.Middleware = (*InMemory)(nil)
+var _ middleware.Middleware = (*inmemory)(nil)

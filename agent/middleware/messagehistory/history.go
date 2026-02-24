@@ -15,16 +15,16 @@ import (
 
 const stateBagKey = "messagehistory.inmemory.messages"
 
-// InMemory is an in-memory middleware that prepends historical
+// inmemory is an in-memory middleware that prepends historical
 // messages and appends new request/response messages after successful runs.
-type InMemory struct {
+type inmemory struct {
 }
 
-func New() *InMemory {
-	return &InMemory{}
+func New() middleware.Middleware {
+	return inmemory{}
 }
 
-func (s *InMemory) Run(next middleware.RunFunc, ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+func (s inmemory) Run(next middleware.RunFunc, ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	session, _ := agentopt.Get(opts, agentopt.Session)
 	if session == nil {
 		return next(ctx, messages, opts...)
