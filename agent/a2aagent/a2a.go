@@ -30,20 +30,12 @@ type Options struct {
 	Logger      *slog.Logger
 }
 
-type contextIDOpt struct{ string }
 type taskIDOpt struct{ string }
-
-func (contextIDOpt) CreateSessionOption() {}
-func (o contextIDOpt) Value() any         { return o.string }
 
 func (taskIDOpt) CreateSessionOption() {}
 func (o taskIDOpt) Value() any         { return o.string }
 
-func WithContextID(id string) agentopt.CreateSessionOption {
-	return contextIDOpt{id}
-}
-
-func WithTaskID(taskID string) agentopt.CreateSessionOption {
+func TaskID(taskID string) agentopt.CreateSessionOption {
 	return taskIDOpt{taskID}
 }
 
@@ -75,11 +67,10 @@ func NewAgent(client *a2aclient.Client, options Options) *agent.Agent {
 }
 
 func (a *a2aagent) createSession(ctx context.Context, options ...agentopt.CreateSessionOption) (*memory.Session, error) {
-	contextID, _ := agentopt.Get(options, WithContextID)
-	taskID, _ := agentopt.Get(options, WithTaskID)
+	serviceID, _ := agentopt.Get(options, agentopt.ServiceID)
 	session := memory.NewSession("")
-	setContextID(session, contextID)
-	setTaskID(session, taskID)
+	setContextID(session, serviceID)
+	setTaskIDs(session, slices.Collect(agentopt.All(options, TaskID)))
 	return session, nil
 }
 
@@ -128,8 +119,8 @@ func (a *a2aagent) run(ctx context.Context, messages []*message.Message, options
 				yield(nil, err)
 				return
 			}
-			var taskIDs []a2a.TaskID
-			if taskID := getTaskID(session); taskID != "" {
+			taskIDs := make([]a2a.TaskID, 0, 1)
+			for _, taskID := range getTaskIDs(session) {
 				taskIDs = append(taskIDs, a2a.TaskID(taskID))
 			}
 			params := &a2a.MessageSendParams{

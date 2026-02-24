@@ -99,7 +99,7 @@ func NewAgent(runfn RunFunc, cfg Config, prov ProviderConfig) *agent.Agent {
 
 func (a *chatagent) createSession(ctx context.Context, opts ...agentopt.CreateSessionOption) (*memory.Session, error) {
 	session := memory.NewSession("")
-	session.ServiceID, _ = agentopt.Get(opts, ConversationID)
+	session.ServiceID, _ = agentopt.Get(opts, agentopt.ServiceID)
 	return session, nil
 }
 

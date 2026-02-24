@@ -3920,7 +3920,7 @@ func TestResponsesConversationId_AsResponseId_NonStreaming(t *testing.T) {
 	defer server.Close()
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
-	session, err := a.CreateSession(t.Context(), chatagent.ConversationID("resp_12345"))
+	session, err := a.CreateSession(t.Context(), agentopt.ServiceID("resp_12345"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3985,7 +3985,7 @@ func TestResponsesConversationId_AsConversationId_NonStreaming(t *testing.T) {
 	defer server.Close()
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
-	session, err := a.CreateSession(t.Context(), chatagent.ConversationID("conv_12345"))
+	session, err := a.CreateSession(t.Context(), agentopt.ServiceID("conv_12345"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4054,7 +4054,7 @@ data: {"type":"response.completed","response":{"id":"resp_67890","object":"respo
 	defer server.Close()
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
-	session, err := a.CreateSession(t.Context(), chatagent.ConversationID("resp_12345"))
+	session, err := a.CreateSession(t.Context(), agentopt.ServiceID("resp_12345"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4131,7 +4131,7 @@ data: {"type":"response.completed","response":{"id":"resp_67890","object":"respo
 	defer server.Close()
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
-	session, err := a.CreateSession(t.Context(), chatagent.ConversationID("conv_12345"))
+	session, err := a.CreateSession(t.Context(), agentopt.ServiceID("conv_12345"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4274,7 +4274,7 @@ func testResponsesBackgroundPolling(t *testing.T, status string) {
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 	// Create session with ConversationID to simulate a previous call (polling scenario)
-	session, err := a.CreateSession(t.Context(), chatagent.ConversationID("resp_68d3d2c9ef7c8195863e4e2b2ec226a205007262ecbbfed8"))
+	session, err := a.CreateSession(t.Context(), agentopt.ServiceID("resp_68d3d2c9ef7c8195863e4e2b2ec226a205007262ecbbfed8"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4515,7 +4515,7 @@ data: {"type":"response.completed","sequence_number":17,"response":{"truncation"
 	token := `{"response_id":"resp_68d40dc671a0819cb0ee920078333451029e611c3cc4a34b","sequence_number":9}`
 
 	// Create session with ConversationID to allow continuation
-	session, err := a.CreateSession(t.Context(), chatagent.ConversationID("resp_68d40dc671a0819cb0ee920078333451029e611c3cc4a34b"))
+	session, err := a.CreateSession(t.Context(), agentopt.ServiceID("resp_68d40dc671a0819cb0ee920078333451029e611c3cc4a34b"))
 	if err != nil {
 		t.Fatal(err)
 	}

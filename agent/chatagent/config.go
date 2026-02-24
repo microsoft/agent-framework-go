@@ -7,7 +7,6 @@ import (
 )
 
 type (
-	conversationIDOpt         string
 	temperatureOpt            float64
 	topPOpt                   float64
 	maxOutputTokensOpt        int64
@@ -19,8 +18,6 @@ type (
 	modelOpt                  string
 )
 
-func (conversationIDOpt) CreateSessionOption() {}
-
 func (temperatureOpt) RunOption()            {}
 func (topPOpt) RunOption()                   {}
 func (maxOutputTokensOpt) RunOption()        {}
@@ -31,7 +28,6 @@ func (allowMultipleToolCallsOpt) RunOption() {}
 func (stopSequenceOpt) RunOption()           {}
 func (modelOpt) RunOption()                  {}
 
-func (o conversationIDOpt) Value() any         { return string(o) }
 func (o temperatureOpt) Value() any            { return float64(o) }
 func (o topPOpt) Value() any                   { return float64(o) }
 func (o maxOutputTokensOpt) Value() any        { return int64(o) }
@@ -41,10 +37,6 @@ func (o seedOpt) Value() any                   { return int64(o) }
 func (o allowMultipleToolCallsOpt) Value() any { return bool(o) }
 func (o stopSequenceOpt) Value() any           { return []string(o) }
 func (o modelOpt) Value() any                  { return string(o) }
-
-func ConversationID(conversationID string) agentopt.CreateSessionOption {
-	return conversationIDOpt(conversationID)
-}
 
 func Temperature(temperature float64) agentopt.RunOption {
 	return temperatureOpt(temperature)

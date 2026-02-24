@@ -5,38 +5,40 @@ package a2aagent
 import "github.com/microsoft/agent-framework-go/agent/memory"
 
 const (
-	taskIDStateKey = "a2aagent.taskID"
+	taskIDsStateKey = "a2aagent.taskIDs"
 )
 
 func setContextID(session *memory.Session, contextID string) {
-	if session != nil {
-		session.ServiceID = contextID
-	}
+	session.ServiceID = contextID
 }
 
 func getContextID(session *memory.Session) string {
-	if session == nil {
-		return ""
-	}
 	return session.ServiceID
 }
 
 func setTaskID(session *memory.Session, taskID string) {
-	if session != nil {
-		session.Set(taskIDStateKey, taskID)
+	if taskID == "" {
+		return
 	}
+	setTaskIDs(session, append(getTaskIDs(session), taskID))
 }
 
-func getTaskID(session *memory.Session) string {
-	if session == nil {
-		return ""
+func setTaskIDs(session *memory.Session, taskIDs []string) {
+	if len(taskIDs) == 0 {
+		return
 	}
-	var taskID string
-	_, _ = session.Get(taskIDStateKey, &taskID)
-	return taskID
+	session.Set(taskIDsStateKey, taskIDs)
 }
 
-// TaskIDFromSession returns the A2A task ID stored in session state.
-func TaskIDFromSession(session *memory.Session) string {
-	return getTaskID(session)
+func getTaskIDs(session *memory.Session) []string {
+	var taskIDs []string
+	if ok, err := session.Get(taskIDsStateKey, &taskIDs); err != nil || !ok {
+		return nil
+	}
+	return taskIDs
+}
+
+// TaskIDsFromSession returns all known A2A task IDs stored in session state.
+func TaskIDsFromSession(session *memory.Session) []string {
+	return getTaskIDs(session)
 }

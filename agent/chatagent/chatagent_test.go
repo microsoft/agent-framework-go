@@ -22,7 +22,7 @@ func noopRunFunc(_ context.Context, _ []*message.Message, _ ...agentopt.RunOptio
 
 func TestCreateSession_WithConversationID(t *testing.T) {
 	a := NewAgent(noopRunFunc, Config{}, ProviderConfig{})
-	session, err := a.CreateSession(t.Context(), ConversationID("conv-abc"))
+	session, err := a.CreateSession(t.Context(), agentopt.ServiceID("conv-abc"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -33,7 +33,7 @@ func TestCreateSession_WithConversationID(t *testing.T) {
 
 func TestMarshalUnmarshalSession(t *testing.T) {
 	a := NewAgent(noopRunFunc, Config{}, ProviderConfig{})
-	session, err := a.CreateSession(t.Context(), ConversationID("conv-test"))
+	session, err := a.CreateSession(t.Context(), agentopt.ServiceID("conv-test"))
 	if err != nil {
 		t.Fatalf("failed to create session: %v", err)
 	}
