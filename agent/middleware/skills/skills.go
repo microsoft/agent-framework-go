@@ -175,6 +175,8 @@ func (p *skills) Run(next middleware.RunFunc, ctx context.Context, messages []*m
 			currentMessages = append(currentMessages, resp.Messages...)
 			currentMessages = append(currentMessages, toolMsg)
 		}
+
+		p.loader.logger.Warn("Reached maximum skill autocall iterations", "maximumIterations", maximumAutocallIterations)
 	}
 }
 
