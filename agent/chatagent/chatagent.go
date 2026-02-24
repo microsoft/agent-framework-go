@@ -119,7 +119,7 @@ func (a *chatagent) unmarshalSession(_ context.Context, data []byte) (memory.Ses
 
 func (a *chatagent) run(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
-		session, options, messages, err := a.prepareSessionAndMessages(ctx, messages, options)
+		session, options, messages, err := a.prepareSessionAndMessages(messages, options)
 		if err != nil {
 			yield(nil, err)
 			return
@@ -155,7 +155,7 @@ func (a *chatagent) run(ctx context.Context, messages []*message.Message, option
 	}
 }
 
-func (a *chatagent) prepareSessionAndMessages(ctx context.Context, messages []*message.Message, options []agentopt.RunOption) (session *Session, opts []agentopt.RunOption, msgsForClient []*message.Message, err error) {
+func (a *chatagent) prepareSessionAndMessages(messages []*message.Message, options []agentopt.RunOption) (session *Session, opts []agentopt.RunOption, msgsForClient []*message.Message, err error) {
 	retError := func(e error) (*Session, []agentopt.RunOption, []*message.Message, error) {
 		return nil, nil, nil, e
 	}

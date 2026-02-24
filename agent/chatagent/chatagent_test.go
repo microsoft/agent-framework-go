@@ -26,7 +26,7 @@ type prependMiddleware struct {
 func (m *prependMiddleware) Run(next middleware.RunFunc, ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	m.runCalls++
 	if session, ok := agentopt.Get(opts, agentopt.Session); ok {
-		m.lastSession, _ = session.(memory.Session)
+		m.lastSession = session
 	}
 	msgForNext := make([]*message.Message, 0, len(m.prependMessages)+1+len(messages))
 	msgForNext = append(msgForNext, m.prependMessages...)
