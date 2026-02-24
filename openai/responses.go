@@ -19,6 +19,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
+	"github.com/microsoft/agent-framework-go/agent/memory"
 	"github.com/microsoft/agent-framework-go/format"
 	"github.com/microsoft/agent-framework-go/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/message"
@@ -94,21 +95,17 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 		stream, _ := agentopt.Get(options, agentopt.Stream)
 
 		// Get session for conversation ID management
-		var session *chatagent.Session
+		var session *memory.Session
 		var keepConversationID bool // true if we should keep the conversation ID unchanged (it's a "conv_" ID)
 		if t, ok := agentopt.Get(options, agentopt.Session); ok && t != nil {
-			if typedSession, ok := t.(*chatagent.Session); ok {
-				session = typedSession
-				// If the conversation ID starts with "conv_", we should keep it unchanged.
-				// Otherwise, we'll update it to the new response ID.
-				keepConversationID = session.ConversationID != "" && strings.HasPrefix(session.ConversationID, "conv_")
-			}
+			session = t
+			keepConversationID = session.ServiceID != "" && strings.HasPrefix(session.ServiceID, "conv_")
 		}
 
 		// Helper to update conversation ID after response completes
 		updateConversationID := func(responseID string) {
-			if session != nil && !keepConversationID && responseID != "" {
-				session.ConversationID = responseID
+			if !keepConversationID && responseID != "" {
+				session.ServiceID = responseID
 			}
 		}
 
@@ -242,19 +239,15 @@ func responsesBuildCompletionParams(model string, messages []*message.Message, o
 		params.Background = openai.Bool(v)
 	}
 	if session, ok := agentopt.Get(opts, agentopt.Session); ok && session != nil {
-		typedSession, ok := session.(*chatagent.Session)
-		if !ok {
-			return responses.ResponseNewParams{}, fmt.Errorf("invalid session type: %T", session)
-		}
-		if typedSession.ConversationID != "" {
+		if session.ServiceID != "" {
 			// Technically, OpenAI's IDs are opaque. However, by convention conversation IDs start with "conv_" and
 			// we can use that to disambiguate whether we're looking at a conversation ID or a response ID.
-			if strings.HasPrefix(typedSession.ConversationID, "conv_") {
+			if strings.HasPrefix(session.ServiceID, "conv_") {
 				params.Conversation = responses.ResponseNewParamsConversationUnion{
-					OfString: openai.String(typedSession.ConversationID),
+					OfString: openai.String(session.ServiceID),
 				}
 			} else {
-				params.PreviousResponseID = openai.String(typedSession.ConversationID)
+				params.PreviousResponseID = openai.String(session.ServiceID)
 			}
 		}
 	}

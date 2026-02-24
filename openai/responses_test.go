@@ -3935,10 +3935,9 @@ func TestResponsesConversationId_AsResponseId_NonStreaming(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 
-	// After the call, session.ConversationID should be updated to the new response ID
-	chatSession := session.(*chatagent.Session)
-	if chatSession.ConversationID != "resp_67890" {
-		t.Errorf("expected ConversationId resp_67890, got %s", chatSession.ConversationID)
+	// After the call, session conversation id should be updated to the new response ID
+	if got := session.ServiceID; got != "resp_67890" {
+		t.Errorf("expected ConversationId resp_67890, got %s", got)
 	}
 }
 
@@ -4001,9 +4000,8 @@ func TestResponsesConversationId_AsConversationId_NonStreaming(t *testing.T) {
 	}
 
 	// When using a conversation ID, it should remain unchanged
-	chatSession := session.(*chatagent.Session)
-	if chatSession.ConversationID != "conv_12345" {
-		t.Errorf("expected ConversationId conv_12345, got %s", chatSession.ConversationID)
+	if got := session.ServiceID; got != "conv_12345" {
+		t.Errorf("expected ConversationId conv_12345, got %s", got)
 	}
 }
 
@@ -4079,9 +4077,8 @@ data: {"type":"response.completed","response":{"id":"resp_67890","object":"respo
 		}
 	}
 
-	chatSession := session.(*chatagent.Session)
-	if chatSession.ConversationID != "resp_67890" {
-		t.Errorf("expected ConversationId resp_67890, got %s", chatSession.ConversationID)
+	if got := session.ServiceID; got != "resp_67890" {
+		t.Errorf("expected ConversationId resp_67890, got %s", got)
 	}
 }
 
@@ -4157,9 +4154,8 @@ data: {"type":"response.completed","response":{"id":"resp_67890","object":"respo
 		}
 	}
 
-	chatSession := session.(*chatagent.Session)
-	if chatSession.ConversationID != "conv_12345" {
-		t.Errorf("expected ConversationId conv_12345, got %s", chatSession.ConversationID)
+	if got := session.ServiceID; got != "conv_12345" {
+		t.Errorf("expected ConversationId conv_12345, got %s", got)
 	}
 }
 
@@ -4519,8 +4515,9 @@ data: {"type":"response.completed","sequence_number":17,"response":{"truncation"
 	token := `{"response_id":"resp_68d40dc671a0819cb0ee920078333451029e611c3cc4a34b","sequence_number":9}`
 
 	// Create session with ConversationID to allow continuation
-	session := &chatagent.Session{
-		ConversationID: "resp_68d40dc671a0819cb0ee920078333451029e611c3cc4a34b",
+	session, err := a.CreateSession(t.Context(), chatagent.ConversationID("resp_68d40dc671a0819cb0ee920078333451029e611c3cc4a34b"))
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	var updates []*message.ResponseUpdate
@@ -4611,10 +4608,15 @@ func TestResponsesBackgroundResponses_PollingCall_WithMessages(t *testing.T) {
 	defer server.Close()
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
+	session, err := a.CreateSession(t.Context())
+	if err != nil {
+		t.Fatalf("CreateSession failed: %v", err)
+	}
 	token := `{"response_id":"resp_68d3d2c9ef7c8195863e4e2b2ec226a205007262ecbbfed8","sequence_number":0}`
 
 	// A try to update a background response with new messages should fail
-	_, err := a.RunText("Please book hotel as well",
+	_, err = a.RunText("Please book hotel as well",
+		agentopt.Session(session),
 		agentopt.ContinuationToken(token),
 		agentopt.AllowBackgroundResponses(true),
 	).Collect(t.Context())
@@ -4633,12 +4635,17 @@ func TestResponsesBackgroundResponses_StreamResumption_WithMessages(t *testing.T
 	defer server.Close()
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
+	session, err := a.CreateSession(t.Context())
+	if err != nil {
+		t.Fatalf("CreateSession failed: %v", err)
+	}
 	token := `{"response_id":"resp_68d40dc671a0819cb0ee920078333451029e611c3cc4a34b","sequence_number":9}`
 
 	// Attempt to resume stream with messages should fail
 	for _, err := range a.Run([]*message.Message{
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Please book a hotel for me"}}},
 	},
+		agentopt.Session(session),
 		agentopt.AllowBackgroundResponses(true),
 		agentopt.ContinuationToken(token),
 	).All(t.Context()) {

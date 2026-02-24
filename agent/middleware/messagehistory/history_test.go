@@ -1,32 +1,27 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package messagehistory
+package messagehistory_test
 
 import (
 	"context"
+	"errors"
 	"iter"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/memory"
-	"github.com/microsoft/agent-framework-go/agent/middleware"
+	"github.com/microsoft/agent-framework-go/agent/middleware/messagehistory"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
-type testSession struct {
-	state memory.StateBag
-}
+func TestInMemory_PersistsAndLoadsHistory(t *testing.T) {
+	mw := messagehistory.New()
+	session := memory.NewSession("")
+	firstRequest := []*message.Message{message.NewText("hello")}
 
-func (s *testSession) GetStateBag() *memory.StateBag { return &s.state }
-
-func TestInMemory_PersistsHistoryInSessionStateBag(t *testing.T) {
-	mw := New()
-	session := &testSession{}
-	request := []*message.Message{message.NewText("hello")}
-
-	var captured []*message.Message
+	var firstCaptured []*message.Message
 	next := func(_ context.Context, messages []*message.Message, _ ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
-		captured = messages
+		firstCaptured = messages
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(&message.ResponseUpdate{
 				Role:     message.RoleAssistant,
@@ -35,58 +30,40 @@ func TestInMemory_PersistsHistoryInSessionStateBag(t *testing.T) {
 		}
 	}
 
-	for _, err := range mw.Run(next, t.Context(), request, agentopt.Session(session)) {
+	for _, err := range mw.Run(next, t.Context(), firstRequest, agentopt.Session(session)) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	}
 
-	if len(captured) != 1 {
-		t.Fatalf("expected 1 request message passed to next, got %d", len(captured))
+	if len(firstCaptured) != 1 {
+		t.Fatalf("expected 1 request message passed to next in first run, got %d", len(firstCaptured))
 	}
-	var stored []*message.Message
-	ok, err := session.GetStateBag().Get(stateBagKey, &stored)
-	if err != nil {
-		t.Fatalf("unexpected error reading state bag: %v", err)
-	}
-	if !ok {
-		t.Fatal("expected history in session state bag")
-	}
-	if len(stored) != 2 {
-		t.Fatalf("expected 2 stored messages (request + response), got %d", len(stored))
-	}
-}
 
-func TestInMemory_LoadsHistoryFromSessionStateBag(t *testing.T) {
-	mw := New()
-	session := &testSession{}
-	session.GetStateBag().Set(stateBagKey, []*message.Message{message.NewText("previous")})
-
-	var captured []*message.Message
-	next := func(_ context.Context, messages []*message.Message, _ ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
-		captured = messages
+	var secondCaptured []*message.Message
+	secondNext := func(_ context.Context, messages []*message.Message, _ ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+		secondCaptured = messages
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(&message.ResponseUpdate{Role: message.RoleAssistant}, nil)
 		}
 	}
 
-	for _, err := range mw.Run(next, t.Context(), []*message.Message{message.NewText("current")}, agentopt.Session(session)) {
+	for _, err := range mw.Run(secondNext, t.Context(), []*message.Message{message.NewText("current")}, agentopt.Session(session)) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	}
 
-	if len(captured) != 2 {
-		t.Fatalf("expected previous + current messages, got %d", len(captured))
+	if len(secondCaptured) != 3 {
+		t.Fatalf("expected previous run history (2) + current request (1), got %d", len(secondCaptured))
 	}
-	text, _ := captured[0].Contents[0].(*message.TextContent)
-	if text == nil || text.Text != "previous" {
-		t.Fatalf("expected first message to come from state bag history")
+	if secondCaptured[0].String() != "hello" || secondCaptured[1].String() != "world" || secondCaptured[2].String() != "current" {
+		t.Fatalf("unexpected history order: got [%q, %q, %q]", secondCaptured[0].String(), secondCaptured[1].String(), secondCaptured[2].String())
 	}
 }
 
 func TestInMemory_DoesNothingWithoutSession(t *testing.T) {
-	mw := New()
+	mw := messagehistory.New()
 
 	var captured []*message.Message
 	next := func(_ context.Context, messages []*message.Message, _ ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
@@ -111,4 +88,53 @@ func TestInMemory_DoesNothingWithoutSession(t *testing.T) {
 	}
 }
 
-var _ middleware.Middleware = (*inmemory)(nil)
+func TestInMemory_PersistsIntermediateResultsOnError(t *testing.T) {
+	mw := messagehistory.New()
+	session := memory.NewSession("")
+	request := []*message.Message{message.NewText("hello")}
+	wantErr := errors.New("stream failed")
+
+	next := func(_ context.Context, _ []*message.Message, _ ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+		return func(yield func(*message.ResponseUpdate, error) bool) {
+			if !yield(&message.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: []message.Content{&message.TextContent{Text: "partial"}},
+			}, nil) {
+				return
+			}
+			yield(nil, wantErr)
+		}
+	}
+
+	var gotErr error
+	for _, err := range mw.Run(next, t.Context(), request, agentopt.Session(session)) {
+		if err != nil {
+			gotErr = err
+		}
+	}
+
+	if !errors.Is(gotErr, wantErr) {
+		t.Fatalf("expected propagated error %v, got %v", wantErr, gotErr)
+	}
+
+	var replayCaptured []*message.Message
+	replayNext := func(_ context.Context, messages []*message.Message, _ ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+		replayCaptured = messages
+		return func(yield func(*message.ResponseUpdate, error) bool) {
+			yield(&message.ResponseUpdate{Role: message.RoleAssistant}, nil)
+		}
+	}
+
+	for _, err := range mw.Run(replayNext, t.Context(), []*message.Message{message.NewText("current")}, agentopt.Session(session)) {
+		if err != nil {
+			t.Fatalf("unexpected replay error: %v", err)
+		}
+	}
+
+	if len(replayCaptured) != 3 {
+		t.Fatalf("expected replay to include request + partial response + current message, got %d", len(replayCaptured))
+	}
+	if replayCaptured[0].String() != "hello" || replayCaptured[1].String() != "partial" || replayCaptured[2].String() != "current" {
+		t.Fatalf("unexpected replay history order: got [%q, %q, %q]", replayCaptured[0].String(), replayCaptured[1].String(), replayCaptured[2].String())
+	}
+}

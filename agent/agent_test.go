@@ -6,14 +6,97 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"iter"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/agenttest"
 	"github.com/microsoft/agent-framework-go/agent/memory"
+	"github.com/microsoft/agent-framework-go/agent/middleware"
 	"github.com/microsoft/agent-framework-go/message"
 )
+
+type prependMiddleware struct {
+	prependMessages []*message.Message
+	instructions    string
+	runCalls        int
+	lastSession     *memory.Session
+}
+
+func (m *prependMiddleware) Run(next middleware.RunFunc, ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+	m.runCalls++
+	if session, ok := agentopt.Get(opts, agentopt.Session); ok {
+		m.lastSession = session
+	}
+	msgForNext := make([]*message.Message, 0, len(m.prependMessages)+1+len(messages))
+	msgForNext = append(msgForNext, m.prependMessages...)
+	if m.instructions != "" {
+		msgForNext = append(msgForNext, &message.Message{
+			Role: message.RoleSystem,
+			Contents: []message.Content{
+				&message.TextContent{Text: m.instructions},
+			},
+		})
+	}
+	msgForNext = append(msgForNext, messages...)
+	return next(ctx, msgForNext, opts...)
+}
+
+type errorMiddleware struct {
+	err error
+}
+
+func (m *errorMiddleware) Run(_ middleware.RunFunc, _ context.Context, _ []*message.Message, _ ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+	return func(yield func(*message.ResponseUpdate, error) bool) {
+		yield(nil, m.err)
+	}
+}
+
+type trackingMiddleware struct {
+	runCalls int
+	lastErr  error
+}
+
+func (m *trackingMiddleware) Run(next middleware.RunFunc, ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+	m.runCalls++
+	return func(yield func(*message.ResponseUpdate, error) bool) {
+		for update, err := range next(ctx, messages, opts...) {
+			if err != nil {
+				m.lastErr = err
+			}
+			if !yield(update, err) {
+				return
+			}
+		}
+	}
+}
+
+func failRunFunc(runErr error) func(_ context.Context, _ []*message.Message, _ ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+	return func(_ context.Context, _ []*message.Message, _ ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+		return func(yield func(*message.ResponseUpdate, error) bool) {
+			yield(nil, runErr)
+		}
+	}
+}
+
+func newGenericTestAgent(runFn func(context.Context, []*message.Message, ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error], instructions string, runOptions ...agentopt.RunOption) *agent.Agent {
+	return agent.New(agent.Config{
+		Metadata:     agent.Metadata{ID: "test-agent", Name: "test-agent"},
+		Instructions: instructions,
+		RunOptions:   runOptions,
+		CreateSession: func(ctx context.Context, opts ...agentopt.CreateSessionOption) (*memory.Session, error) {
+			return agenttest.CreateSession(), nil
+		},
+		MarshalSession: func(_ context.Context, session *memory.Session) ([]byte, error) {
+			return json.Marshal(session)
+		},
+		UnmarshalSession: func(_ context.Context, data []byte) (*memory.Session, error) {
+			return agenttest.CreateSession(), nil
+		},
+		Run: runFn,
+	})
+}
 
 func TestAgent_RunText(t *testing.T) {
 	var capturedMessages []*message.Message
@@ -140,6 +223,26 @@ func TestAgent_Run(t *testing.T) {
 	}
 }
 
+func TestAgent_Run_RejectsMessagesWithContinuationToken(t *testing.T) {
+	runCalled := false
+	responseBuilder := agenttest.NewResponseBuilder(
+		func(ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) {
+			runCalled = true
+		},
+	).AddText("response")
+
+	a := agenttest.NewAgent(responseBuilder.Build())
+
+	ctx := t.Context()
+	_, err := a.Run([]*message.Message{message.NewText("test")}, agentopt.ContinuationToken("token-123")).Collect(ctx)
+	if err == nil {
+		t.Fatal("expected error when continuation token and messages are both provided")
+	}
+	if runCalled {
+		t.Fatal("expected run function not to be called when validation fails")
+	}
+}
+
 func TestAgent_Run_CreatesSession(t *testing.T) {
 	var capturedOptions []agentopt.RunOption
 	responseBuilder := agenttest.NewResponseBuilder(
@@ -164,6 +267,29 @@ func TestAgent_Run_CreatesSession(t *testing.T) {
 
 	if session == nil {
 		t.Error("expected session to be non-nil")
+	}
+}
+
+func TestAgent_Run_RequiresSessionWhenAllowBackgroundResponsesEnabled(t *testing.T) {
+	runCalled := false
+	responseBuilder := agenttest.NewResponseBuilder(
+		func(ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) {
+			runCalled = true
+		},
+	).AddText("response")
+
+	a := agenttest.NewAgent(responseBuilder.Build())
+
+	ctx := t.Context()
+	_, err := a.Run([]*message.Message{message.NewText("test")}, agentopt.AllowBackgroundResponses(true)).Collect(ctx)
+	if err == nil {
+		t.Fatal("expected error when AllowBackgroundResponses is enabled without a session")
+	}
+	if err.Error() != "a session must be provided when AllowBackgroundResponses is enabled" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if runCalled {
+		t.Fatal("expected run function not to be called when validation fails")
 	}
 }
 
@@ -221,13 +347,13 @@ func TestAgent_Run_PrependsAgentOptions(t *testing.T) {
 			Name: "test",
 		},
 		RunOptions: []agentopt.RunOption{agentOption},
-		CreateSession: func(ctx context.Context, opts ...agentopt.CreateSessionOption) (memory.Session, error) {
+		CreateSession: func(ctx context.Context, opts ...agentopt.CreateSessionOption) (*memory.Session, error) {
 			return agenttest.CreateSession(), nil
 		},
-		MarshalSession: func(_ context.Context, session memory.Session) ([]byte, error) {
+		MarshalSession: func(_ context.Context, session *memory.Session) ([]byte, error) {
 			return json.Marshal(session)
 		},
-		UnmarshalSession: func(_ context.Context, data []byte) (memory.Session, error) { return agenttest.CreateSession(), nil },
+		UnmarshalSession: func(_ context.Context, data []byte) (*memory.Session, error) { return agenttest.CreateSession(), nil },
 		Run:              runner.Run,
 	})
 
@@ -289,6 +415,129 @@ func TestAgent_Run_AddsMetadataToContext(t *testing.T) {
 
 	if metadata != a.Metadata() {
 		t.Errorf("expected metadata %+v, got %+v", a.Metadata(), metadata)
+	}
+}
+
+func TestAgent_Run_InvokesSingleContextMiddleware(t *testing.T) {
+	mw := &prependMiddleware{
+		prependMessages: []*message.Message{{Role: message.RoleSystem, Contents: []message.Content{&message.TextContent{Text: "context message"}}}},
+	}
+
+	var capturedMessages []*message.Message
+	runFn := func(_ context.Context, msgs []*message.Message, _ ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+		capturedMessages = msgs
+		return func(yield func(*message.ResponseUpdate, error) bool) {
+			yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "response"}}}, nil)
+		}
+	}
+
+	a := newGenericTestAgent(runFn, "", middleware.With(mw))
+
+	ctx := t.Context()
+	session := agenttest.CreateSession()
+	_, err := a.Run([]*message.Message{message.NewText("user input")}, agentopt.Session(session)).Collect(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if mw.runCalls != 1 {
+		t.Errorf("expected 1 middleware call, got %d", mw.runCalls)
+	}
+
+	foundContext := false
+	for _, msg := range capturedMessages {
+		for _, c := range msg.Contents {
+			if tc, ok := c.(*message.TextContent); ok && tc.Text == "context message" {
+				foundContext = true
+			}
+		}
+	}
+	if !foundContext {
+		t.Error("expected context message to be included in messages sent to run function")
+	}
+}
+
+func TestAgent_Run_ContextMiddlewareReceivesSession(t *testing.T) {
+	mw := &prependMiddleware{}
+	runFn := func(_ context.Context, _ []*message.Message, _ ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+		return func(yield func(*message.ResponseUpdate, error) bool) {
+			yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "response"}}}, nil)
+		}
+	}
+	a := newGenericTestAgent(runFn, "", middleware.With(mw))
+
+	ctx := t.Context()
+	session := agenttest.CreateSession()
+	_, err := a.Run([]*message.Message{message.NewText("test")}, agentopt.Session(session)).Collect(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if mw.lastSession != session {
+		t.Error("expected middleware to receive the session")
+	}
+}
+
+func TestAgent_Run_ContextMiddlewareCanFailBeforeRun(t *testing.T) {
+	invokeErr := errors.New("middleware failed")
+	runFn := func(_ context.Context, _ []*message.Message, _ ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+		return func(yield func(*message.ResponseUpdate, error) bool) {
+			yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "response"}}}, nil)
+		}
+	}
+	a := newGenericTestAgent(runFn, "", middleware.With(&errorMiddleware{err: invokeErr}))
+
+	ctx := t.Context()
+	_, err := a.Run([]*message.Message{message.NewText("test")}, agentopt.Session(agenttest.CreateSession())).Collect(ctx)
+	if !errors.Is(err, invokeErr) {
+		t.Fatalf("expected %v, got %v", invokeErr, err)
+	}
+}
+
+func TestAgent_Run_MiddlewareObservesRunFailure(t *testing.T) {
+	runErr := errors.New("run failed")
+	tracker := &trackingMiddleware{}
+	a := newGenericTestAgent(failRunFunc(runErr), "", middleware.With(tracker))
+
+	ctx := t.Context()
+	_, err := a.Run([]*message.Message{message.NewText("test")}, agentopt.Session(agenttest.CreateSession())).Collect(ctx)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	if tracker.runCalls != 1 {
+		t.Errorf("expected 1 middleware call, got %d", tracker.runCalls)
+	}
+	if !errors.Is(tracker.lastErr, runErr) {
+		t.Errorf("expected middleware to observe %v, got %v", runErr, tracker.lastErr)
+	}
+}
+
+func TestAgent_Run_IncludesInstructions(t *testing.T) {
+	var capturedMessages []*message.Message
+	runFn := func(_ context.Context, msgs []*message.Message, _ ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+		capturedMessages = msgs
+		return func(yield func(*message.ResponseUpdate, error) bool) {
+			yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "response"}}}, nil)
+		}
+	}
+	a := newGenericTestAgent(runFn, "You are a helpful assistant.")
+
+	ctx := t.Context()
+	_, err := a.Run([]*message.Message{message.NewText("hello")}, agentopt.Session(agenttest.CreateSession())).Collect(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(capturedMessages) == 0 {
+		t.Fatal("expected at least 1 message")
+	}
+	if capturedMessages[0].Role != message.RoleSystem {
+		t.Errorf("expected first message to be system role, got %s", capturedMessages[0].Role)
+	}
+	tc, ok := capturedMessages[0].Contents[0].(*message.TextContent)
+	if !ok || tc.Text != "You are a helpful assistant." {
+		t.Error("expected instructions message as first message")
 	}
 }
 

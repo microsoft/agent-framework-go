@@ -5,7 +5,6 @@ package agenttest
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"iter"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -130,35 +129,27 @@ func (a *testagent) run(ctx context.Context, messages []*message.Message, opts .
 	}
 }
 
-func (a *testagent) createSession(_ context.Context, opts ...agentopt.CreateSessionOption) (memory.Session, error) {
-	return &Session{}, nil
+func (a *testagent) createSession(_ context.Context, opts ...agentopt.CreateSessionOption) (*memory.Session, error) {
+	return memory.NewSession(""), nil
 }
 
-func (a *testagent) marshalSession(_ context.Context, session memory.Session) ([]byte, error) {
+func (a *testagent) marshalSession(_ context.Context, session *memory.Session) ([]byte, error) {
 	return json.Marshal(session)
 }
 
-func (a *testagent) unmarshalSession(_ context.Context, data []byte) (memory.Session, error) {
-	return &Session{}, nil
-}
-
-// Session is a test implementation of the Session interface
-type Session struct {
-	messages []*message.Message
-	State    memory.StateBag
-}
-
-// GetStateBag returns the session's [memory.StateBag] for storing session-scoped provider state.
-func (t *Session) GetStateBag() *memory.StateBag { return &t.State }
-
-func CreateSession() *Session {
-	return &Session{}
-}
-
-func MarshalSession(session memory.Session) ([]byte, error) {
-	if _, ok := session.(*Session); !ok {
-		return nil, errors.New("the provided session is not compatible with the test agent, only sessions created by the test agent can be used")
+func (a *testagent) unmarshalSession(_ context.Context, data []byte) (*memory.Session, error) {
+	var session memory.Session
+	if err := json.Unmarshal(data, &session); err != nil {
+		return nil, err
 	}
+	return &session, nil
+}
+
+func CreateSession() *memory.Session {
+	return memory.NewSession("")
+}
+
+func MarshalSession(session *memory.Session) ([]byte, error) {
 	return json.Marshal(session)
 }
 

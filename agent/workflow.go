@@ -14,14 +14,14 @@ import (
 )
 
 func newExecutor(a *Agent, emitEvents bool) *workflow.Executor {
-	var session memory.Session
+	var session *memory.Session
 	var sessionStateKey string
-	ensureSession := func(ctx context.Context) (memory.Session, error) {
+	ensureSession := func(ctx context.Context) (*memory.Session, error) {
 		var err error
 		if session == nil {
 			session, err = a.CreateSession(ctx)
 		}
-		sessionStateKey = reflect.ValueOf(session).String()
+		sessionStateKey = session.ID()
 		return session, err
 	}
 	id := agentDescriptiveID(a)

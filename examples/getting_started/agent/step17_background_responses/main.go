@@ -21,7 +21,7 @@ var logger = demo.NewLogger(
 
 func main() {
 	a := openai.NewResponsesAgent(openai.ClientConfig{
-		Model: "gpt-5-nano",
+		Model: "gpt-4o-mini",
 	}, chatagent.Config{
 		RunOptions: []agentopt.RunOption{middleware.With(logger)},
 	})

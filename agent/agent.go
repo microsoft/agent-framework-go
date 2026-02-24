@@ -4,6 +4,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"iter"
 
 	"github.com/google/uuid"
@@ -23,12 +24,14 @@ type Metadata struct {
 type Config struct {
 	Metadata Metadata
 
+	Instructions string
+
 	RunOptions []agentopt.RunOption
 
-	//Required functions
-	CreateSession    func(ctx context.Context, options ...agentopt.CreateSessionOption) (memory.Session, error)
-	MarshalSession   func(ctx context.Context, session memory.Session) ([]byte, error)
-	UnmarshalSession func(ctx context.Context, data []byte) (memory.Session, error)
+	// Required functions
+	CreateSession    func(ctx context.Context, options ...agentopt.CreateSessionOption) (*memory.Session, error)
+	MarshalSession   func(ctx context.Context, session *memory.Session) ([]byte, error)
+	UnmarshalSession func(ctx context.Context, data []byte) (*memory.Session, error)
 	Run              func(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error]
 }
 
@@ -50,6 +53,7 @@ func New(cfg Config) *Agent {
 	}
 	return &Agent{
 		metadata:         cfg.Metadata,
+		instructions:     cfg.Instructions,
 		createSession:    cfg.CreateSession,
 		marshalSession:   cfg.MarshalSession,
 		unmarshalSession: cfg.UnmarshalSession,
@@ -84,13 +88,14 @@ func (r ResponseStream) Collect(ctx context.Context) (*message.Response, error) 
 }
 
 type Agent struct {
-	metadata Metadata
+	metadata     Metadata
+	instructions string
 
 	runOptions []agentopt.RunOption
 
-	createSession    func(ctx context.Context, options ...agentopt.CreateSessionOption) (memory.Session, error)
-	marshalSession   func(ctx context.Context, session memory.Session) ([]byte, error)
-	unmarshalSession func(ctx context.Context, data []byte) (memory.Session, error)
+	createSession    func(ctx context.Context, options ...agentopt.CreateSessionOption) (*memory.Session, error)
+	marshalSession   func(ctx context.Context, session *memory.Session) ([]byte, error)
+	unmarshalSession func(ctx context.Context, data []byte) (*memory.Session, error)
 	run              func(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error]
 }
 
@@ -106,15 +111,15 @@ func (a *Agent) Metadata() Metadata {
 	return a.metadata
 }
 
-func (a *Agent) CreateSession(ctx context.Context, options ...agentopt.CreateSessionOption) (memory.Session, error) {
+func (a *Agent) CreateSession(ctx context.Context, options ...agentopt.CreateSessionOption) (*memory.Session, error) {
 	return a.createSession(ctx, options...)
 }
 
-func (a *Agent) MarshalSession(ctx context.Context, session memory.Session) ([]byte, error) {
+func (a *Agent) MarshalSession(ctx context.Context, session *memory.Session) ([]byte, error) {
 	return a.marshalSession(ctx, session)
 }
 
-func (a *Agent) UnmarshalSession(ctx context.Context, data []byte) (memory.Session, error) {
+func (a *Agent) UnmarshalSession(ctx context.Context, data []byte) (*memory.Session, error) {
 	return a.unmarshalSession(ctx, data)
 }
 
@@ -128,20 +133,52 @@ func (a *Agent) RunMessage(msg *message.Message, options ...agentopt.RunOption) 
 
 func (a *Agent) Run(messages []*message.Message, options ...agentopt.RunOption) ResponseStream {
 	return ResponseStream{func(ctx context.Context, stream bool) iter.Seq2[*message.ResponseUpdate, error] {
-		ctx, options, err := a.prepareRun(ctx, stream, options)
+		ctx, preparedMessages, options, err := a.prepareRun(ctx, messages, stream, options)
 		if err != nil {
 			return func(yield func(*message.ResponseUpdate, error) bool) {
 				yield(nil, err)
 			}
 		}
-		return middleware.RunChain(ctx, a.run, messages, options...)
+		return middleware.RunChain(ctx, a.run, preparedMessages, options...)
 	}}
 }
 
-func (a *Agent) prepareRun(ctx context.Context, stream bool, options []agentopt.RunOption) (context.Context, []agentopt.RunOption, error) {
+func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, stream bool, options []agentopt.RunOption) (context.Context, []*message.Message, []agentopt.RunOption, error) {
 	// Prepend options from agent configuration.
 	if len(a.runOptions) != 0 {
 		options = append(a.runOptions, options...)
+	}
+
+	if _, ok := agentopt.Get(options, agentopt.Session); !ok {
+		if allowBackgroundResponses, ok := agentopt.Get(options, agentopt.AllowBackgroundResponses); ok && allowBackgroundResponses {
+			// Background responses require an explicit session to avoid inconsistent
+			// caller experience between initial and follow-up runs.
+			return nil, nil, nil, errors.New("a session must be provided when AllowBackgroundResponses is enabled")
+		}
+		// Ensure a session is provided in the options.
+		session, err := a.CreateSession(ctx)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		options = append(options, agentopt.Session(session))
+	}
+
+	continuationToken, _ := agentopt.Get(options, agentopt.ContinuationToken)
+	if continuationToken != "" && len(messages) > 0 {
+		return nil, nil, nil, errors.New("messages are not allowed when continuing a background response using a continuation token")
+	}
+	if continuationToken == "" {
+		if a.instructions != "" {
+			preparedMessages := make([]*message.Message, 0, len(messages)+1)
+			preparedMessages = append(preparedMessages, &message.Message{
+				Role: message.RoleSystem,
+				Contents: []message.Content{
+					&message.TextContent{Text: a.instructions},
+				},
+			})
+			preparedMessages = append(preparedMessages, messages...)
+			messages = preparedMessages
+		}
 	}
 
 	// Middleware to set AuthorID and AuthorName on each ResponseUpdate.
@@ -149,15 +186,6 @@ func (a *Agent) prepareRun(ctx context.Context, stream bool, options []agentopt.
 
 	// Add agent identity to context so that middlewares can log it.
 	ctx = context.WithValue(ctx, metadataKey{}, a.Metadata())
-
-	// Ensure a session is provided in the options.
-	if _, ok := agentopt.Get(options, agentopt.Session); !ok {
-		session, err := a.CreateSession(ctx)
-		if err != nil {
-			return nil, nil, err
-		}
-		options = append(options, agentopt.Session(session))
-	}
 
 	// If Run.All() is called, set the Stream option to true
 	// unless already specified in options.
@@ -167,7 +195,7 @@ func (a *Agent) prepareRun(ctx context.Context, stream bool, options []agentopt.
 		}
 	}
 
-	return ctx, options, nil
+	return ctx, messages, options, nil
 }
 
 func (a *Agent) authorMiddleware(next middleware.RunFunc, ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {

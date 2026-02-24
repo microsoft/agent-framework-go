@@ -37,7 +37,7 @@ type CreateSessionOption interface {
 
 type (
 	responseFormatOpt    struct{ format.Format }
-	sessionOpt           struct{ memory.Session }
+	sessionOpt           struct{ *memory.Session }
 	continuationTokenOpt string
 
 	toolOpt struct{ tool.Tool }
@@ -92,7 +92,7 @@ func ResponseFormat(format format.Format) RunOption {
 }
 
 // Session sets the session to use during the agent run.
-func Session(session memory.Session) RunOption {
+func Session(session *memory.Session) RunOption {
 	return sessionOpt{session}
 }
 
