@@ -801,8 +801,9 @@ func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func
 			})
 
 		case responses.ResponseFunctionToolCall:
+			callID := cmp.Or(out.CallID, out.ID)
 			currentUpdate.Contents = append(currentUpdate.Contents, &message.FunctionCallContent{
-				CallID:    out.ID,
+				CallID:    callID,
 				Name:      out.Name,
 				Arguments: out.Arguments,
 				ContentHeader: message.ContentHeader{
@@ -1022,9 +1023,10 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 
 		case responses.ResponseFunctionToolCall:
 			// Add function call content
+			callID := cmp.Or(item.CallID, item.ID)
 			u.Contents = []message.Content{
 				&message.FunctionCallContent{
-					CallID:    item.ID,
+					CallID:    callID,
 					Name:      item.Name,
 					Arguments: item.Arguments,
 				},

@@ -1358,6 +1358,181 @@ func TestResponsesFunctionCallWithResult_NonStreaming(t *testing.T) {
 	}
 }
 
+func TestResponsesFunctionCall_UsesCallIDWhenDifferentFromID(t *testing.T) {
+	const input1 = `
+			{
+				"input": [{
+					"type": "message",
+					"role": "user",
+					"content": [{"type": "input_text", "text": "What's the weather in Amsterdam?"}]
+				}],
+				"model": "gpt-4o-mini",
+				"tools": [{
+					"type": "function",
+					"name": "get_weather",
+					"description": "Get the current weather",
+					"parameters": {
+						"type": "object",
+						"required": ["location"],
+						"properties": {
+							"location": {
+								"description": "The city and country",
+								"type": "string"
+							}
+						},
+						"additionalProperties": false
+					}
+				}]
+			}
+			`
+
+	const output1 = `
+			{
+			  "id": "resp_fc_001",
+			  "object": "response",
+			  "created_at": 1727894702,
+			  "status": "completed",
+			  "model": "gpt-4o-mini-2024-07-18",
+			  "output": [{
+				  "type": "function_call",
+				  "id": "fc_001",
+				  "call_id": "call_weather_001",
+				  "name": "get_weather",
+				  "arguments": "{\"location\":\"Amsterdam\"}"
+			  }]
+			}
+			`
+
+	const input2 = `
+			{
+				"input": [
+					{
+						"type": "message",
+						"role": "user",
+						"content": [{"type": "input_text", "text": "What's the weather in Amsterdam?"}]
+					},
+					{
+						"type": "function_call_output",
+						"call_id": "call_weather_001",
+						"output": "Cloudy, 15°C"
+					}
+				],
+				"model": "gpt-4o-mini",
+				"tools": [{
+					"type": "function",
+					"name": "get_weather",
+					"description": "Get the current weather",
+					"parameters": {
+						"type": "object",
+						"required": ["location"],
+						"properties": {
+							"location": {
+								"description": "The city and country",
+								"type": "string"
+							}
+						},
+						"additionalProperties": false
+					}
+				}]
+			}
+			`
+
+	const output2 = `
+			{
+			  "id": "resp_fc_002",
+			  "object": "response",
+			  "created_at": 1727894750,
+			  "status": "completed",
+			  "model": "gpt-4o-mini-2024-07-18",
+			  "output": [{
+				  "type": "message",
+				  "id": "msg_fc_002",
+				  "status": "completed",
+				  "role": "assistant",
+				  "content": [{
+					  "type": "output_text",
+					  "text": "It is cloudy in Amsterdam with a high of 15°C.",
+					  "annotations": []
+				  }]
+			  }]
+			}
+			`
+
+	server1 := newTestResponsesServer(t, input1, output1)
+	defer server1.Close()
+
+	a1 := newTestResponsesClient(server1, "gpt-4o-mini")
+
+	type GetWeatherInput struct {
+		Location string `json:"location" jsonschema:"The city and country"`
+	}
+	getWeather := func(ctx context.Context, input GetWeatherInput) (string, error) {
+		return "Cloudy, 15°C", nil
+	}
+	weatherTool := functool.MustNew(&functool.Func{
+		Name:        "get_weather",
+		Description: "Get the current weather",
+	}, getWeather)
+
+	resp1, err := a1.RunText("What's the weather in Amsterdam?",
+		agentopt.Tool(weatherTool),
+	).Collect(t.Context())
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+
+	if len(resp1.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(resp1.Messages))
+	}
+
+	var funcCall *message.FunctionCallContent
+	for _, content := range resp1.Messages[0].Contents {
+		if fc, ok := content.(*message.FunctionCallContent); ok {
+			funcCall = fc
+			break
+		}
+	}
+	if funcCall == nil {
+		t.Fatal("expected function call content")
+	}
+	if funcCall.CallID != "call_weather_001" {
+		t.Fatalf("expected CallID to use call_id (call_weather_001), got %q", funcCall.CallID)
+	}
+
+	server2 := newTestResponsesServer(t, input2, output2)
+	defer server2.Close()
+
+	a2 := newTestResponsesClient(server2, "gpt-4o-mini")
+
+	messages := []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "What's the weather in Amsterdam?"}}},
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			&message.FunctionCallContent{
+				CallID:    funcCall.CallID,
+				Name:      funcCall.Name,
+				Arguments: funcCall.Arguments,
+			},
+		}},
+		{Role: message.RoleTool, Contents: []message.Content{
+			&message.FunctionResultContent{
+				CallID: funcCall.CallID,
+				Result: "Cloudy, 15°C",
+			},
+		}},
+	}
+
+	resp2, err := a2.Run(messages,
+		agentopt.Tool(weatherTool),
+	).Collect(t.Context())
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+
+	if len(resp2.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(resp2.Messages))
+	}
+}
+
 func TestResponsesToolCallResult_SingleTextContent_SerializesCorrectly(t *testing.T) {
 	const input = `
             {
