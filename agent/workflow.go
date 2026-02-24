@@ -17,12 +17,15 @@ func newExecutor(a *Agent, emitEvents bool) *workflow.Executor {
 	var session *memory.Session
 	var sessionStateKey string
 	ensureSession := func(ctx context.Context) (*memory.Session, error) {
-		var err error
 		if session == nil {
+			var err error
 			session, err = a.CreateSession(ctx)
+			if err != nil {
+				return nil, err
+			}
 		}
 		sessionStateKey = session.ID()
-		return session, err
+		return session, nil
 	}
 	id := agentDescriptiveID(a)
 	ex := &workflow.Executor{
