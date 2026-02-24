@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"iter"
 	"os"
 	"path/filepath"
 	"slices"
@@ -44,10 +45,12 @@ func main() {
 		Model:      deployment,
 		APIVersion: "2025-01-01-preview",
 	}, chatagent.Config{
-		Instructions:           "You are good at telling jokes.",
-		Name:                   "Joker",
-		RunOptions:             []agentopt.RunOption{middleware.With(logger)}, // for logging agent interactions
-		MessageHistoryProvider: &fsMessageStore{Dir: tmpDir},
+		Instructions: "You are good at telling jokes.",
+		Name:         "Joker",
+		RunOptions: []agentopt.RunOption{
+			middleware.With(logger),                       // for logging agent interactions
+			middleware.With(&fsMessageStore{Dir: tmpDir}), // for persistent message history
+		},
 	})
 
 	ctx := context.Background()
@@ -90,21 +93,21 @@ type fsMessageStore struct {
 	Dir string
 }
 
-func (d *fsMessageStore) getFiles(ctx *memory.InvokingContext) []string {
-	if ctx.Session == nil {
+func (d *fsMessageStore) getFiles(session memory.Session) []string {
+	if session == nil {
 		return nil
 	}
-	v, ok := ctx.Session.GetStateBag().Get("fsMessageStore.files")
-	if !ok {
+	var files []string
+	ok, err := session.GetStateBag().Get("fsMessageStore.files", &files)
+	if !ok || err != nil {
 		return nil
 	}
-	files, _ := v.([]string)
 	return files
 }
 
-func (d *fsMessageStore) Invoking(ctx *memory.InvokingContext) (*memory.Context, error) {
+func (d *fsMessageStore) loadMessages(session memory.Session) ([]*message.Message, error) {
 	var msgs []*message.Message
-	for _, file := range d.getFiles(ctx) {
+	for _, file := range d.getFiles(session) {
 		data, err := os.ReadFile(filepath.Join(d.Dir, file))
 		if err != nil {
 			return nil, err
@@ -116,18 +119,12 @@ func (d *fsMessageStore) Invoking(ctx *memory.InvokingContext) (*memory.Context,
 		}
 		msgs = append(msgs, &msg)
 	}
-	return &memory.Context{Messages: msgs}, nil
+	return msgs, nil
 }
 
-func (d *fsMessageStore) Invoked(ctx *memory.InvokedContext) error {
-	if ctx.InvokeError != nil {
-		return nil
-	}
+func (d *fsMessageStore) persistMessages(session memory.Session, requestMessages, responseMessages []*message.Message) error {
 	var files []string
-	if ctx.Session != nil {
-		v, _ := ctx.Session.GetStateBag().Get("fsMessageStore.files")
-		files, _ = v.([]string)
-	}
+	_, _ = session.GetStateBag().Get("fsMessageStore.files", &files)
 	persist := func(msg *message.Message) error {
 		if msg.ID == "" {
 			// Skip messages without an ID.
@@ -146,18 +143,51 @@ func (d *fsMessageStore) Invoked(ctx *memory.InvokedContext) error {
 		files = append(files, msg.ID)
 		return nil
 	}
-	for _, msg := range ctx.RequestMessages {
+	for _, msg := range requestMessages {
 		if err := persist(msg); err != nil {
 			return err
 		}
 	}
-	for _, msg := range ctx.ResponseMessages {
+	for _, msg := range responseMessages {
 		if err := persist(msg); err != nil {
 			return err
 		}
 	}
-	if ctx.Session != nil {
-		ctx.Session.GetStateBag().Set("fsMessageStore.files", files)
-	}
+	session.GetStateBag().Set("fsMessageStore.files", files)
 	return nil
+}
+
+func (d *fsMessageStore) Run(next middleware.RunFunc, ctx context.Context, msgs []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+	var session memory.Session
+	if v, ok := agentopt.Get(opts, agentopt.Session); ok {
+		session = v
+	} else {
+		// If no session is provided, we cannot persist messages, so just pass through to next middleware.
+		return next(ctx, msgs, opts...)
+	}
+	history, err := d.loadMessages(session)
+	if err != nil {
+		return func(yield func(*message.ResponseUpdate, error) bool) {
+			yield(nil, err)
+		}
+	}
+	messagesForClient := append(history, msgs...)
+
+	return func(yield func(*message.ResponseUpdate, error) bool) {
+		var resp message.Response
+		for update, err := range next(ctx, messagesForClient, opts...) {
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+			resp.Update(update)
+			if !yield(update, nil) {
+				return
+			}
+		}
+		resp.Coalesce()
+		if err := d.persistMessages(session, msgs, resp.Messages); err != nil {
+			yield(nil, err)
+		}
+	}
 }

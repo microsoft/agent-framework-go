@@ -4,58 +4,231 @@ package memory
 
 import (
 	"encoding/json"
+	"fmt"
+	"reflect"
 	"sync"
 )
 
 // StateBag is a thread-safe key-value store for managing session-scoped state.
 //
 // StateBag enables storing and retrieving arbitrary values associated with a session using string keys.
-// Context providers can use a StateBag to persist state across invocations within the same session.
+// Middleware can use a StateBag to persist state across invocations within the same session.
 //
-// Since a [ContextProvider] is used with many different sessions, it should not store any
+// Since middleware may be used with many different sessions, it should not store any
 // session-specific information within its own instance fields. Instead, any session-specific state
 // should be stored in the associated session's StateBag.
 //
 // A StateBag is safe for concurrent use by multiple goroutines.
 type StateBag struct {
-	state sync.Map
+	mu    sync.RWMutex
+	state map[string]*stateBagValue
 }
 
-// Get returns the value associated with the given key and a boolean indicating whether the key was present.
-// The returned value may be nil even when the key exists; callers must check the boolean result.
-func (s *StateBag) Get(key string) (any, bool) {
-	return s.state.Load(key)
+// Get decodes the value associated with key into value and reports whether the key was present.
+// value must be a non-nil pointer to the desired destination type.
+func (s *StateBag) Get(key string, value any) (bool, error) {
+	if s == nil {
+		return false, nil
+	}
+	s.mu.RLock()
+	wrapped, ok := s.state[key]
+	s.mu.RUnlock()
+	if !ok {
+		return false, nil
+	}
+	return true, wrapped.readInto(value)
 }
 
 // Set stores a value in the state bag under the given key.
 // If the key already exists, its value is overwritten.
 func (s *StateBag) Set(key string, value any) {
-	s.state.Store(key, value)
+	if s == nil {
+		return
+	}
+	wrapped, ok := value.(*stateBagValue)
+	if !ok {
+		wrapped = newStateBagValue(value)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state == nil {
+		s.state = make(map[string]*stateBagValue)
+	}
+	s.state[key] = wrapped
 }
 
 // Delete removes the value with the given key.
 func (s *StateBag) Delete(key string) {
-	s.state.Delete(key)
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.state, key)
 }
 
 // MarshalJSON serializes the StateBag to JSON.
 func (s *StateBag) MarshalJSON() ([]byte, error) {
-	m := make(map[string]any)
-	s.state.Range(func(k, v any) bool {
-		m[k.(string)] = v
-		return true
-	})
-	return json.Marshal(m)
+	if s == nil {
+		return nil, nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.state == nil {
+		return []byte("{}"), nil
+	}
+	return json.Marshal(s.state)
 }
 
 // UnmarshalJSON deserializes a JSON object into the StateBag.
 func (s *StateBag) UnmarshalJSON(data []byte) error {
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(data, &m); err != nil {
+	if s == nil {
+		return nil
+	}
+	var state map[string]*stateBagValue
+	if err := json.Unmarshal(data, &state); err != nil {
 		return err
 	}
-	for k, v := range m {
-		s.state.Store(k, v)
+	if state == nil {
+		state = make(map[string]*stateBagValue)
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.state = state
+	return nil
+}
+
+// stateBagValue wraps a state bag value in either serialized or deserialized form,
+// and supports lazy deserialization with type-aware caching.
+type stateBagValue struct {
+	mu        sync.Mutex
+	raw       json.RawMessage
+	cached    any
+	cachedTyp reflect.Type
+}
+
+// newStateBagValue creates a new state bag value from a deserialized value.
+func newStateBagValue(value any) *stateBagValue {
+	v := &stateBagValue{}
+	v.setDeserialized(value)
+	return v
+}
+
+// newStateBagValueFromJSON creates a new state bag value from serialized JSON.
+func newStateBagValueFromJSON(raw json.RawMessage) *stateBagValue {
+	copyRaw := append(json.RawMessage(nil), raw...)
+	return &stateBagValue{raw: copyRaw}
+}
+
+// SetDeserialized updates the cached deserialized value.
+func (v *stateBagValue) setDeserialized(value any) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.cached = value
+	v.cachedTyp = reflect.TypeOf(value)
+	v.raw = nil
+}
+
+func (v *stateBagValue) readInto(out any) error {
+	if out == nil {
+		return fmt.Errorf("out must be a non-nil pointer")
+	}
+	outValue := reflect.ValueOf(out)
+	if outValue.Kind() != reflect.Pointer || outValue.IsNil() {
+		return fmt.Errorf("out must be a non-nil pointer")
+	}
+	requestedType := outValue.Elem().Type()
+
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
+	if v.cachedTyp != nil {
+		if v.cachedTyp != requestedType {
+			return fmt.Errorf("cached value type is %v, requested %v", v.cachedTyp, requestedType)
+		}
+		cachedValue := reflect.ValueOf(v.cached)
+		if !cachedValue.IsValid() {
+			outValue.Elem().SetZero()
+			return nil
+		}
+		outValue.Elem().Set(cachedValue)
+		return nil
+	}
+	if v.raw == nil {
+		return fmt.Errorf("value is undefined")
+	}
+	if err := json.Unmarshal(v.raw, out); err != nil {
+		return err
+	}
+	v.cached = outValue.Elem().Interface()
+	v.cachedTyp = requestedType
+	return nil
+}
+
+// tryReadDeserializedValue attempts to read and cache the value as T.
+// It returns false if the value is undefined, type-incompatible, or cannot be deserialized as T.
+func tryReadDeserializedValue[T any](v *stateBagValue) (T, bool) {
+	result, err := readDeserializedValue[T](v)
+	if err != nil {
+		var zero T
+		return zero, false
+	}
+	return result, true
+}
+
+// readDeserializedValue reads and caches the value as T.
+func readDeserializedValue[T any](v *stateBagValue) (T, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
+	requestedType := reflect.TypeFor[T]()
+	if v.cachedTyp != nil {
+		if v.cachedTyp == requestedType {
+			cast, ok := v.cached.(T)
+			if !ok {
+				var zero T
+				return zero, fmt.Errorf("cached value type mismatch for %v", requestedType)
+			}
+			return cast, nil
+		}
+		var zero T
+		return zero, fmt.Errorf("cached value type is %v, requested %v", v.cachedTyp, requestedType)
+	}
+
+	if v.raw == nil {
+		var zero T
+		return zero, fmt.Errorf("value is undefined")
+	}
+
+	var decoded T
+	if err := json.Unmarshal(v.raw, &decoded); err != nil {
+		var zero T
+		return zero, err
+	}
+	v.cached = decoded
+	v.cachedTyp = requestedType
+	return decoded, nil
+}
+
+func (v *stateBagValue) MarshalJSON() ([]byte, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.cachedTyp != nil {
+		return json.Marshal(v.cached)
+	}
+	if v.raw != nil {
+		return append([]byte(nil), v.raw...), nil
+	}
+	return []byte("null"), nil
+}
+
+func (v *stateBagValue) UnmarshalJSON(data []byte) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.raw = append(json.RawMessage(nil), data...)
+	v.cached = nil
+	v.cachedTyp = nil
 	return nil
 }

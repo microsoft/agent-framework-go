@@ -25,8 +25,8 @@ package memory
 type Session interface {
 	// GetStateBag returns the session's [StateBag] for storing session-scoped provider state.
 	//
-	// Context providers can use the StateBag to persist state across invocations within the same session.
-	// Since a [ContextProvider] may be used with many different sessions, session-specific state should
-	// be stored here rather than in the provider's own fields.
+	// Middleware can use the StateBag to persist state across invocations within the same session.
+	// Since a middleware instance may be used with many different sessions, session-specific state should
+	// be stored here rather than in middleware instance fields.
 	GetStateBag() *StateBag
 }

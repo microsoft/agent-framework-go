@@ -10,6 +10,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/chatagent"
 	"github.com/microsoft/agent-framework-go/agent/middleware"
+	"github.com/microsoft/agent-framework-go/agent/middleware/messagehistory"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/openai"
 )
@@ -27,7 +28,10 @@ func main() {
 	}, chatagent.Config{
 		Instructions: "You are good at telling jokes.",
 		Name:         "Joker",
-		RunOptions:   []agentopt.RunOption{middleware.With(logger)}, // for logging agent interactions
+		RunOptions: []agentopt.RunOption{
+			middleware.With(logger),               // for logging agent interactions
+			middleware.With(messagehistory.New()), // for in-memory message history (required for session persistence)
+		},
 	})
 
 	ctx := context.Background()

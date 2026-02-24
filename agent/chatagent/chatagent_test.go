@@ -11,39 +11,64 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
 	"github.com/microsoft/agent-framework-go/agent/memory"
+	"github.com/microsoft/agent-framework-go/agent/middleware"
+	"github.com/microsoft/agent-framework-go/agent/middleware/messagehistory"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
-// testContextProvider is a configurable ContextProvider for testing.
-type testContextProvider struct {
-	provideContext *memory.Context
-	lastInvoked    *memory.InvokedContext
-	invokingCalls  int
-	invokedCalls   int
+type prependMiddleware struct {
+	prependMessages []*message.Message
+	instructions    string
+	runCalls        int
+	lastSession     memory.Session
 }
 
-func (p *testContextProvider) Invoking(ctx *memory.InvokingContext) (*memory.Context, error) {
-	p.invokingCalls++
-	return p.provideContext, nil
+func (m *prependMiddleware) Run(next middleware.RunFunc, ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+	m.runCalls++
+	if session, ok := agentopt.Get(opts, agentopt.Session); ok {
+		m.lastSession, _ = session.(memory.Session)
+	}
+	msgForNext := make([]*message.Message, 0, len(m.prependMessages)+1+len(messages))
+	msgForNext = append(msgForNext, m.prependMessages...)
+	if m.instructions != "" {
+		msgForNext = append(msgForNext, &message.Message{
+			Role: message.RoleSystem,
+			Contents: []message.Content{
+				&message.TextContent{Text: m.instructions},
+			},
+		})
+	}
+	msgForNext = append(msgForNext, messages...)
+	return next(ctx, msgForNext, opts...)
 }
 
-func (p *testContextProvider) Invoked(ctx *memory.InvokedContext) error {
-	p.invokedCalls++
-	p.lastInvoked = ctx
-	return nil
-}
-
-// errorContextProvider always returns an error from Invoking.
-type errorContextProvider struct {
+type errorMiddleware struct {
 	err error
 }
 
-func (p *errorContextProvider) Invoking(ctx *memory.InvokingContext) (*memory.Context, error) {
-	return nil, p.err
+func (m *errorMiddleware) Run(_ middleware.RunFunc, _ context.Context, _ []*message.Message, _ ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+	return func(yield func(*message.ResponseUpdate, error) bool) {
+		yield(nil, m.err)
+	}
 }
 
-func (p *errorContextProvider) Invoked(ctx *memory.InvokedContext) error {
-	return nil
+type trackingMiddleware struct {
+	runCalls int
+	lastErr  error
+}
+
+func (m *trackingMiddleware) Run(next middleware.RunFunc, ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+	m.runCalls++
+	return func(yield func(*message.ResponseUpdate, error) bool) {
+		for update, err := range next(ctx, messages, opts...) {
+			if err != nil {
+				m.lastErr = err
+			}
+			if !yield(update, err) {
+				return
+			}
+		}
+	}
 }
 
 func noopRunFunc(_ context.Context, _ []*message.Message, _ ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
@@ -63,12 +88,8 @@ func failRunFunc(runErr error) RunFunc {
 	}
 }
 
-// --- Session Tests ---
-
 func TestSession_IsLightweight(t *testing.T) {
-	session := &Session{
-		ConversationID: "conv-123",
-	}
+	session := &Session{ConversationID: "conv-123"}
 	if session.ConversationID != "conv-123" {
 		t.Errorf("expected ConversationID 'conv-123', got %q", session.ConversationID)
 	}
@@ -78,9 +99,7 @@ func TestSession_IsLightweight(t *testing.T) {
 }
 
 func TestSession_Serialization_Roundtrip(t *testing.T) {
-	session := &Session{
-		ConversationID: "conv-456",
-	}
+	session := &Session{ConversationID: "conv-456"}
 	session.State.Set("key1", "value1")
 
 	data, err := json.Marshal(session)
@@ -102,9 +121,7 @@ func TestSession_Serialization_Roundtrip(t *testing.T) {
 }
 
 func TestSession_Serialization_WithStateBag(t *testing.T) {
-	session := &Session{
-		ConversationID: "conv-789",
-	}
+	session := &Session{ConversationID: "conv-789"}
 	session.State.Set("greeting", "hello")
 
 	data, err := json.Marshal(session)
@@ -112,7 +129,6 @@ func TestSession_Serialization_WithStateBag(t *testing.T) {
 		t.Fatalf("failed to marshal: %v", err)
 	}
 
-	// Verify JSON structure
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(data, &m); err != nil {
 		t.Fatalf("failed to parse JSON: %v", err)
@@ -138,8 +154,6 @@ func TestSession_Serialization_Empty(t *testing.T) {
 		t.Errorf("expected empty ConversationID, got %q", restored.ConversationID)
 	}
 }
-
-// --- CreateSession Tests ---
 
 func TestCreateSession_ReturnsSessionWithStateBag(t *testing.T) {
 	a := NewAgent(noopRunFunc, Config{}, ProviderConfig{})
@@ -170,31 +184,29 @@ func TestCreateSession_WithConversationID(t *testing.T) {
 	}
 }
 
-func TestCreateSession_DoesNotAttachProviders(t *testing.T) {
-	provider := &testContextProvider{}
+func TestCreateSession_DoesNotAttachMiddlewareState(t *testing.T) {
+	mw := &prependMiddleware{}
 	a := NewAgent(noopRunFunc, Config{
-		ContextProviders: []memory.ContextProvider{provider},
+		RunOptions: []agentopt.RunOption{middleware.With(mw)},
 	}, ProviderConfig{})
 	ctx := t.Context()
 	session, err := a.CreateSession(ctx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Session should be lightweight - only ConversationID and StateBag
 	chatSession := session.(*Session)
 	if chatSession.ConversationID != "" {
 		t.Error("expected empty ConversationID")
 	}
+	if mw.runCalls != 0 {
+		t.Error("middleware should not run during session creation")
+	}
 }
 
-// --- Context Provider Pipeline Tests ---
-
-func TestRun_InvokesSingleContextProvider(t *testing.T) {
-	provider := &testContextProvider{
-		provideContext: &memory.Context{
-			Messages: []*message.Message{
-				{Role: message.RoleSystem, Contents: []message.Content{&message.TextContent{Text: "context message"}}},
-			},
+func TestRun_InvokesSingleContextMiddleware(t *testing.T) {
+	mw := &prependMiddleware{
+		prependMessages: []*message.Message{
+			{Role: message.RoleSystem, Contents: []message.Content{&message.TextContent{Text: "context message"}}},
 		},
 	}
 
@@ -210,8 +222,8 @@ func TestRun_InvokesSingleContextProvider(t *testing.T) {
 	}
 
 	a := NewAgent(runFn, Config{
-		Instructions:     "base instructions",
-		ContextProviders: []memory.ContextProvider{provider},
+		Instructions: "base instructions",
+		RunOptions:   []agentopt.RunOption{middleware.With(mw)},
 	}, ProviderConfig{})
 
 	ctx := t.Context()
@@ -221,15 +233,10 @@ func TestRun_InvokesSingleContextProvider(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Verify provider was called
-	if provider.invokingCalls != 1 {
-		t.Errorf("expected 1 Invoking call, got %d", provider.invokingCalls)
-	}
-	if provider.invokedCalls != 1 {
-		t.Errorf("expected 1 Invoked call, got %d", provider.invokedCalls)
+	if mw.runCalls != 1 {
+		t.Errorf("expected 1 middleware call, got %d", mw.runCalls)
 	}
 
-	// Verify context message was injected
 	foundContext := false
 	for _, msg := range capturedMessages {
 		for _, c := range msg.Contents {
@@ -243,19 +250,15 @@ func TestRun_InvokesSingleContextProvider(t *testing.T) {
 	}
 }
 
-func TestRun_InvokesMultipleContextProvidersInSequence(t *testing.T) {
-	provider1 := &testContextProvider{
-		provideContext: &memory.Context{
-			Messages: []*message.Message{
-				{Role: message.RoleSystem, Contents: []message.Content{&message.TextContent{Text: "provider1 context"}}},
-			},
+func TestRun_InvokesMultipleContextMiddlewaresInSequence(t *testing.T) {
+	mw1 := &prependMiddleware{
+		prependMessages: []*message.Message{
+			{Role: message.RoleSystem, Contents: []message.Content{&message.TextContent{Text: "middleware1 context"}}},
 		},
 	}
-	provider2 := &testContextProvider{
-		provideContext: &memory.Context{
-			Messages: []*message.Message{
-				{Role: message.RoleSystem, Contents: []message.Content{&message.TextContent{Text: "provider2 context"}}},
-			},
+	mw2 := &prependMiddleware{
+		prependMessages: []*message.Message{
+			{Role: message.RoleSystem, Contents: []message.Content{&message.TextContent{Text: "middleware2 context"}}},
 		},
 	}
 
@@ -271,7 +274,7 @@ func TestRun_InvokesMultipleContextProvidersInSequence(t *testing.T) {
 	}
 
 	a := NewAgent(runFn, Config{
-		ContextProviders: []memory.ContextProvider{provider1, provider2},
+		RunOptions: []agentopt.RunOption{middleware.With(mw1), middleware.With(mw2)},
 	}, ProviderConfig{})
 
 	ctx := t.Context()
@@ -281,50 +284,38 @@ func TestRun_InvokesMultipleContextProvidersInSequence(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Both providers should be invoked
-	if provider1.invokingCalls != 1 {
-		t.Errorf("expected 1 Invoking call for provider1, got %d", provider1.invokingCalls)
+	if mw1.runCalls != 1 {
+		t.Errorf("expected 1 middleware call for mw1, got %d", mw1.runCalls)
 	}
-	if provider2.invokingCalls != 1 {
-		t.Errorf("expected 1 Invoking call for provider2, got %d", provider2.invokingCalls)
-	}
-
-	// Both providers should be notified of success
-	if provider1.invokedCalls != 1 {
-		t.Errorf("expected 1 Invoked call for provider1, got %d", provider1.invokedCalls)
-	}
-	if provider2.invokedCalls != 1 {
-		t.Errorf("expected 1 Invoked call for provider2, got %d", provider2.invokedCalls)
+	if mw2.runCalls != 1 {
+		t.Errorf("expected 1 middleware call for mw2, got %d", mw2.runCalls)
 	}
 
-	// Verify both context messages are present
 	found1, found2 := false, false
 	for _, msg := range capturedMessages {
 		for _, c := range msg.Contents {
 			if tc, ok := c.(*message.TextContent); ok {
-				if tc.Text == "provider1 context" {
+				if tc.Text == "middleware1 context" {
 					found1 = true
 				}
-				if tc.Text == "provider2 context" {
+				if tc.Text == "middleware2 context" {
 					found2 = true
 				}
 			}
 		}
 	}
 	if !found1 {
-		t.Error("expected provider1 context message in captured messages")
+		t.Error("expected middleware1 context message in captured messages")
 	}
 	if !found2 {
-		t.Error("expected provider2 context message in captured messages")
+		t.Error("expected middleware2 context message in captured messages")
 	}
 }
 
-func TestRun_ContextProviderReceivesSession(t *testing.T) {
-	// Use a custom provider that captures the session
-	customProvider := &sessionCapturingProvider{}
-
+func TestRun_ContextMiddlewareReceivesSession(t *testing.T) {
+	mw := &prependMiddleware{}
 	a := NewAgent(noopRunFunc, Config{
-		ContextProviders: []memory.ContextProvider{customProvider},
+		RunOptions: []agentopt.RunOption{middleware.With(mw)},
 	}, ProviderConfig{})
 
 	ctx := t.Context()
@@ -334,32 +325,30 @@ func TestRun_ContextProviderReceivesSession(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if customProvider.lastSession != session {
-		t.Error("expected context provider to receive the session")
+	if mw.lastSession != session {
+		t.Error("expected middleware to receive the session")
 	}
 }
 
-type sessionCapturingProvider struct {
-	lastSession memory.Session
+func TestRun_ContextMiddlewareCanFailBeforeRun(t *testing.T) {
+	invokeErr := errors.New("middleware failed")
+	a := NewAgent(noopRunFunc, Config{
+		RunOptions: []agentopt.RunOption{middleware.With(&errorMiddleware{err: invokeErr})},
+	}, ProviderConfig{})
+
+	ctx := t.Context()
+	session, _ := a.CreateSession(ctx)
+	_, err := a.Run([]*message.Message{message.NewText("test")}, agentopt.Session(session)).Collect(ctx)
+	if !errors.Is(err, invokeErr) {
+		t.Fatalf("expected %v, got %v", invokeErr, err)
+	}
 }
 
-func (p *sessionCapturingProvider) Invoking(ctx *memory.InvokingContext) (*memory.Context, error) {
-	p.lastSession = ctx.Session
-	return nil, nil
-}
-
-func (p *sessionCapturingProvider) Invoked(ctx *memory.InvokedContext) error {
-	return nil
-}
-
-// --- Context Provider Failure Notification Tests ---
-
-func TestRun_NotifiesContextProvidersOnFailure(t *testing.T) {
-	provider := &testContextProvider{}
+func TestRun_MiddlewareObservesRunFailure(t *testing.T) {
 	runErr := errors.New("run failed")
-
+	tracker := &trackingMiddleware{}
 	a := NewAgent(failRunFunc(runErr), Config{
-		ContextProviders: []memory.ContextProvider{provider},
+		RunOptions: []agentopt.RunOption{middleware.With(tracker)},
 	}, ProviderConfig{})
 
 	ctx := t.Context()
@@ -369,49 +358,16 @@ func TestRun_NotifiesContextProvidersOnFailure(t *testing.T) {
 		t.Fatal("expected error")
 	}
 
-	if provider.invokedCalls != 1 {
-		t.Errorf("expected 1 Invoked call on failure, got %d", provider.invokedCalls)
+	if tracker.runCalls != 1 {
+		t.Errorf("expected 1 middleware call, got %d", tracker.runCalls)
 	}
-	if provider.lastInvoked == nil {
-		t.Fatal("expected lastInvoked to be set")
-	}
-	if provider.lastInvoked.InvokeError != runErr {
-		t.Errorf("expected InvokeError to be %v, got %v", runErr, provider.lastInvoked.InvokeError)
+	if !errors.Is(tracker.lastErr, runErr) {
+		t.Errorf("expected middleware to observe %v, got %v", runErr, tracker.lastErr)
 	}
 }
 
-func TestRun_NotifiesMultipleContextProvidersOnFailure(t *testing.T) {
-	provider1 := &testContextProvider{}
-	provider2 := &testContextProvider{}
-	runErr := errors.New("run failed")
-
-	a := NewAgent(failRunFunc(runErr), Config{
-		ContextProviders: []memory.ContextProvider{provider1, provider2},
-	}, ProviderConfig{})
-
-	ctx := t.Context()
-	session, _ := a.CreateSession(ctx)
-	_, err := a.Run([]*message.Message{message.NewText("test")}, agentopt.Session(session)).Collect(ctx)
-	if err == nil {
-		t.Fatal("expected error")
-	}
-
-	if provider1.invokedCalls != 1 {
-		t.Errorf("expected 1 Invoked call for provider1, got %d", provider1.invokedCalls)
-	}
-	if provider2.invokedCalls != 1 {
-		t.Errorf("expected 1 Invoked call for provider2, got %d", provider2.invokedCalls)
-	}
-}
-
-// --- Message History Provider Tests ---
-
-func TestRun_UsesMessageHistoryProvider(t *testing.T) {
-	historyProvider := &memory.InMemoryMessageHistoryProvider{
-		Messages: []*message.Message{
-			{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "previous message"}}},
-		},
-	}
+func TestRun_UsesMessageHistoryMiddleware(t *testing.T) {
+	historyMiddleware := messagehistory.New()
 
 	var capturedMessages []*message.Message
 	runFn := func(_ context.Context, msgs []*message.Message, _ ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
@@ -425,17 +381,19 @@ func TestRun_UsesMessageHistoryProvider(t *testing.T) {
 	}
 
 	a := NewAgent(runFn, Config{
-		MessageHistoryProvider: historyProvider,
+		RunOptions: []agentopt.RunOption{middleware.With(historyMiddleware)},
 	}, ProviderConfig{})
 
 	ctx := t.Context()
 	session, _ := a.CreateSession(ctx)
+	session.GetStateBag().Set("messagehistory.inmemory.messages", []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "previous message"}}},
+	})
 	_, err := a.Run([]*message.Message{message.NewText("new message")}, agentopt.Session(session)).Collect(ctx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Verify history message was included
 	foundHistory := false
 	for _, msg := range capturedMessages {
 		for _, c := range msg.Contents {
@@ -449,7 +407,7 @@ func TestRun_UsesMessageHistoryProvider(t *testing.T) {
 	}
 }
 
-func TestRun_DefaultsToInMemoryMessageHistoryProvider(t *testing.T) {
+func TestRun_WorksWithoutMessageHistoryMiddleware(t *testing.T) {
 	a := NewAgent(noopRunFunc, Config{}, ProviderConfig{})
 
 	ctx := t.Context()
@@ -458,76 +416,19 @@ func TestRun_DefaultsToInMemoryMessageHistoryProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
-	// Should not fail — a default InMemoryMessageHistoryProvider should be created.
 }
-
-func TestRun_SkipsMessageHistoryProviderWithConversationID(t *testing.T) {
-	historyProvider := &memory.InMemoryMessageHistoryProvider{
-		Messages: []*message.Message{
-			{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "should not appear"}}},
-		},
-	}
-
-	var capturedMessages []*message.Message
-	runFn := func(_ context.Context, msgs []*message.Message, _ ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
-		capturedMessages = msgs
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{
-				Role:     message.RoleAssistant,
-				Contents: []message.Content{&message.TextContent{Text: "response"}},
-			}, nil)
-		}
-	}
-
-	a := NewAgent(runFn, Config{
-		MessageHistoryProvider: historyProvider,
-	}, ProviderConfig{})
-
-	ctx := t.Context()
-	session, _ := a.CreateSession(ctx, ConversationID("server-managed"))
-	_, err := a.Run([]*message.Message{message.NewText("test")}, agentopt.Session(session)).Collect(ctx)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// History messages should not be included when ConversationID is set
-	// (service manages history)
-	for _, msg := range capturedMessages {
-		for _, c := range msg.Contents {
-			if tc, ok := c.(*message.TextContent); ok && tc.Text == "should not appear" {
-				t.Error("history messages should not be included when ConversationID is set")
-			}
-		}
-	}
-}
-
-// --- Stream Resumption Validation Tests ---
 
 func TestValidateStreamResumption_RejectsWithoutConversationID(t *testing.T) {
 	session := &Session{}
-	err := validateStreamResumptionAllowed("some-token", session, nil)
+	err := validateStreamResumptionAllowed("some-token", session)
 	if err == nil {
 		t.Fatal("expected error for streaming resumption without ConversationID")
 	}
 }
 
-func TestValidateStreamResumption_RejectsWithContextProviders(t *testing.T) {
-	session := &Session{
-		ConversationID: "conv-123",
-	}
-	providers := []memory.ContextProvider{&testContextProvider{}}
-	err := validateStreamResumptionAllowed("some-token", session, providers)
-	if err == nil {
-		t.Fatal("expected error for streaming resumption with context providers")
-	}
-}
-
-func TestValidateStreamResumption_AllowsWithConversationIDAndNoProviders(t *testing.T) {
-	session := &Session{
-		ConversationID: "conv-123",
-	}
-	err := validateStreamResumptionAllowed("some-token", session, nil)
+func TestValidateStreamResumption_AllowsWithConversationID(t *testing.T) {
+	session := &Session{ConversationID: "conv-123"}
+	err := validateStreamResumptionAllowed("some-token", session)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -535,13 +436,11 @@ func TestValidateStreamResumption_AllowsWithConversationIDAndNoProviders(t *test
 
 func TestValidateStreamResumption_AllowsEmptyToken(t *testing.T) {
 	session := &Session{}
-	err := validateStreamResumptionAllowed("", session, nil)
+	err := validateStreamResumptionAllowed("", session)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
-
-// --- Instructions Tests ---
 
 func TestRun_IncludesInstructions(t *testing.T) {
 	var capturedMessages []*message.Message
@@ -570,7 +469,6 @@ func TestRun_IncludesInstructions(t *testing.T) {
 		t.Fatal("expected at least 1 message")
 	}
 
-	// First message should be system instruction
 	if capturedMessages[0].Role != message.RoleSystem {
 		t.Errorf("expected first message to be system role, got %s", capturedMessages[0].Role)
 	}
@@ -580,12 +478,8 @@ func TestRun_IncludesInstructions(t *testing.T) {
 	}
 }
 
-func TestRun_ContextProviderAddsInstructions(t *testing.T) {
-	provider := &testContextProvider{
-		provideContext: &memory.Context{
-			Instructions: "extra instructions from provider",
-		},
-	}
+func TestRun_ContextMiddlewareAddsInstructions(t *testing.T) {
+	mw := &prependMiddleware{instructions: "extra instructions from middleware"}
 
 	var capturedMessages []*message.Message
 	runFn := func(_ context.Context, msgs []*message.Message, _ ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
@@ -599,7 +493,7 @@ func TestRun_ContextProviderAddsInstructions(t *testing.T) {
 	}
 
 	a := NewAgent(runFn, Config{
-		ContextProviders: []memory.ContextProvider{provider},
+		RunOptions: []agentopt.RunOption{middleware.With(mw)},
 	}, ProviderConfig{})
 
 	ctx := t.Context()
@@ -613,20 +507,18 @@ func TestRun_ContextProviderAddsInstructions(t *testing.T) {
 	for _, msg := range capturedMessages {
 		if msg.Role == message.RoleSystem {
 			for _, c := range msg.Contents {
-				if tc, ok := c.(*message.TextContent); ok && tc.Text == "extra instructions from provider" {
+				if tc, ok := c.(*message.TextContent); ok && tc.Text == "extra instructions from middleware" {
 					foundInstruction = true
 				}
 			}
 		}
 	}
 	if !foundInstruction {
-		t.Error("expected context provider instructions to be included as system message")
+		t.Error("expected middleware instructions to be included as system message")
 	}
 }
 
-// --- No Context Providers Tests ---
-
-func TestRun_WorksWithoutContextProviders(t *testing.T) {
+func TestRun_WorksWithoutContextMiddlewares(t *testing.T) {
 	var capturedMessages []*message.Message
 	runFn := func(_ context.Context, msgs []*message.Message, _ ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 		capturedMessages = msgs
@@ -647,13 +539,10 @@ func TestRun_WorksWithoutContextProviders(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Should contain just the user message
 	if len(capturedMessages) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(capturedMessages))
 	}
 }
-
-// --- Marshal/Unmarshal Tests ---
 
 func TestMarshalUnmarshalSession(t *testing.T) {
 	a := NewAgent(noopRunFunc, Config{}, ProviderConfig{})
