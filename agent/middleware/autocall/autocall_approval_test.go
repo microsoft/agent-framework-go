@@ -8,9 +8,9 @@ import (
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent/agentopt"
-	"github.com/microsoft/agent-framework-go/agent/agenttest"
 	"github.com/microsoft/agent-framework-go/agent/middleware"
 	"github.com/microsoft/agent-framework-go/agent/middleware/autocall"
+	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
