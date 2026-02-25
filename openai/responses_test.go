@@ -21,6 +21,8 @@ import (
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 	"github.com/microsoft/agent-framework-go/tool/hostedtool"
+	openaisdk "github.com/openai/openai-go/v3"
+	openairesponses "github.com/openai/openai-go/v3/responses"
 )
 
 // continuationToken represents the structure of a continuation token for background responses
@@ -165,8 +167,10 @@ func TestResponsesBasicRequestResponse_NonStreaming(t *testing.T) {
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
 	resp, err := a.RunText("hello",
-		chatagent.MaxOutputTokens(20),
-		chatagent.Temperature(0.5),
+		openai.ResponsesNewParams(openairesponses.ResponseNewParams{
+			MaxOutputTokens: openaisdk.Int(20),
+			Temperature:     openaisdk.Float(0.5),
+		}),
 	).Collect(t.Context())
 	if err != nil {
 		t.Fatalf("error = %v", err)
@@ -255,8 +259,10 @@ data: {"type":"response.completed","response":{"id":"resp_67d329fbc87c81919f8952
 
 	var updates []*message.ResponseUpdate
 	for update, err := range a.RunText("hello",
-		chatagent.MaxOutputTokens(20),
-		chatagent.Temperature(0.5),
+		openai.ResponsesNewParams(openairesponses.ResponseNewParams{
+			MaxOutputTokens: openaisdk.Int(20),
+			Temperature:     openaisdk.Float(0.5),
+		}),
 	).All(t.Context()) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
@@ -545,9 +551,11 @@ func TestResponsesChatOptions_Model_OverridesClientModel_NonStreaming(t *testing
 
 	// Override with gpt-4o in options
 	resp, err := a.RunText("hello",
-		chatagent.MaxOutputTokens(10),
-		chatagent.Temperature(0.5),
-		chatagent.Model("gpt-4o"),
+		openai.ResponsesNewParams(openairesponses.ResponseNewParams{
+			Model:           "gpt-4o",
+			MaxOutputTokens: openaisdk.Int(10),
+			Temperature:     openaisdk.Float(0.5),
+		}),
 	).Collect(t.Context())
 	if err != nil {
 		t.Fatalf("error = %v", err)
@@ -645,11 +653,9 @@ func TestResponsesMultipleMessages_NonStreaming(t *testing.T) {
 	}
 
 	resp, err := a.Run(messages,
-		chatagent.Temperature(0.25),
-		chatagent.FrequencyPenalty(0.75),
-		chatagent.PresencePenalty(0.5),
-		chatagent.StopSequences([]string{"great"}),
-		chatagent.Seed(42),
+		openai.ResponsesNewParams(openairesponses.ResponseNewParams{
+			Temperature: openaisdk.Float(0.25),
+		}),
 	).Collect(t.Context())
 	if err != nil {
 		t.Fatalf("error = %v", err)
@@ -967,9 +973,11 @@ data: {"type":"response.completed","response":{"id":"resp_streaming123","object"
 	var updates []*message.ResponseUpdate
 	// Override with gpt-4o in options
 	for update, err := range a.RunText("hello",
-		chatagent.MaxOutputTokens(20),
-		chatagent.Temperature(0.5),
-		chatagent.Model("gpt-4o"),
+		openai.ResponsesNewParams(openairesponses.ResponseNewParams{
+			Model:           "gpt-4o",
+			MaxOutputTokens: openaisdk.Int(20),
+			Temperature:     openaisdk.Float(0.5),
+		}),
 	).All(t.Context()) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
@@ -1093,8 +1101,10 @@ func TestResponsesMultipleOutputItems_NonStreaming(t *testing.T) {
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
 	resp, err := a.RunText("hello",
-		chatagent.MaxOutputTokens(20),
-		chatagent.Temperature(0.5),
+		openai.ResponsesNewParams(openairesponses.ResponseNewParams{
+			MaxOutputTokens: openaisdk.Int(20),
+			Temperature:     openaisdk.Float(0.5),
+		}),
 	).Collect(t.Context())
 	if err != nil {
 		t.Fatalf("error = %v", err)
@@ -3926,8 +3936,10 @@ func TestResponsesConversationId_AsResponseId_NonStreaming(t *testing.T) {
 	}
 
 	_, err = a.RunText("hello",
-		chatagent.MaxOutputTokens(20),
-		chatagent.Temperature(0.5),
+		openai.ResponsesNewParams(openairesponses.ResponseNewParams{
+			MaxOutputTokens: openaisdk.Int(20),
+			Temperature:     openaisdk.Float(0.5),
+		}),
 		agentopt.Session(session),
 	).Collect(t.Context())
 
@@ -3991,8 +4003,10 @@ func TestResponsesConversationId_AsConversationId_NonStreaming(t *testing.T) {
 	}
 
 	_, err = a.RunText("hello",
-		chatagent.MaxOutputTokens(20),
-		chatagent.Temperature(0.5),
+		openai.ResponsesNewParams(openairesponses.ResponseNewParams{
+			MaxOutputTokens: openaisdk.Int(20),
+			Temperature:     openaisdk.Float(0.5),
+		}),
 		agentopt.Session(session),
 	).Collect(t.Context())
 	if err != nil {
@@ -4061,8 +4075,10 @@ data: {"type":"response.completed","response":{"id":"resp_67890","object":"respo
 
 	var updates []*message.ResponseUpdate
 	for update, err := range a.RunText("hello",
-		chatagent.MaxOutputTokens(20),
-		chatagent.Temperature(0.5),
+		openai.ResponsesNewParams(openairesponses.ResponseNewParams{
+			MaxOutputTokens: openaisdk.Int(20),
+			Temperature:     openaisdk.Float(0.5),
+		}),
 		agentopt.Session(session),
 	).All(t.Context()) {
 		if err != nil {
@@ -4138,8 +4154,10 @@ data: {"type":"response.completed","response":{"id":"resp_67890","object":"respo
 
 	var updates []*message.ResponseUpdate
 	for update, err := range a.RunText("hello",
-		chatagent.MaxOutputTokens(20),
-		chatagent.Temperature(0.5),
+		openai.ResponsesNewParams(openairesponses.ResponseNewParams{
+			MaxOutputTokens: openaisdk.Int(20),
+			Temperature:     openaisdk.Float(0.5),
+		}),
 		agentopt.Session(session),
 	).All(t.Context()) {
 		if err != nil {
@@ -4196,8 +4214,10 @@ func TestResponsesBackgroundResponses_FirstCall(t *testing.T) {
 	}
 
 	resp, err := a.RunText("hello",
-		chatagent.MaxOutputTokens(20),
-		chatagent.Temperature(0.5),
+		openai.ResponsesNewParams(openairesponses.ResponseNewParams{
+			MaxOutputTokens: openaisdk.Int(20),
+			Temperature:     openaisdk.Float(0.5),
+		}),
 		agentopt.AllowBackgroundResponses(true),
 		agentopt.Session(session),
 	).Collect(t.Context())
