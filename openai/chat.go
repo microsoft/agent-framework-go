@@ -50,6 +50,18 @@ type client struct {
 	config ClientConfig
 }
 
+type chatCompletionNewParamsOpt openai.ChatCompletionNewParams
+
+func (chatCompletionNewParamsOpt) RunOption() {}
+func (o chatCompletionNewParamsOpt) Value() any {
+	return openai.ChatCompletionNewParams(o)
+}
+
+// ChatCompletionNewParams allows passing custom parameters to the underlying OpenAI Chat Completions API calls.
+func ChatCompletionNewParams(params openai.ChatCompletionNewParams) agentopt.RunOption {
+	return chatCompletionNewParamsOpt(params)
+}
+
 // ClientConfig contains configuration for [Agent].
 type ClientConfig struct {
 	Model      string // required
@@ -220,34 +232,11 @@ func mapRole(r string) message.Role {
 
 // buildCompletionParams constructs the parameters for the OpenAI chat completion API.
 func buildCompletionParams(model string, messages []*message.Message, opts []agentopt.RunOption) (openai.ChatCompletionNewParams, error) {
-	params := openai.ChatCompletionNewParams{
-		Model:    model,
-		Messages: make([]openai.ChatCompletionMessageParamUnion, 0, len(messages)+1),
+	var params openai.ChatCompletionNewParams
+	if p, ok := agentopt.Get(opts, ChatCompletionNewParams); ok {
+		params = p
 	}
-	if v, ok := agentopt.Get(opts, chatagent.Model); ok && v != "" {
-		params.Model = v
-	}
-	if v, ok := agentopt.Get(opts, chatagent.Temperature); ok {
-		params.Temperature = openai.Float(v)
-	}
-	if v, ok := agentopt.Get(opts, chatagent.TopP); ok {
-		params.TopP = openai.Float(v)
-	}
-	if v, ok := agentopt.Get(opts, chatagent.MaxOutputTokens); ok {
-		params.MaxCompletionTokens = openai.Int(v)
-	}
-	if v, ok := agentopt.Get(opts, chatagent.PresencePenalty); ok {
-		params.PresencePenalty = openai.Float(v)
-	}
-	if v, ok := agentopt.Get(opts, chatagent.FrequencyPenalty); ok {
-		params.FrequencyPenalty = openai.Float(v)
-	}
-	if v, ok := agentopt.Get(opts, chatagent.Seed); ok {
-		params.Seed = openai.Int(v)
-	}
-	if v, ok := agentopt.Get(opts, chatagent.StopSequences); ok && len(v) > 0 {
-		params.Stop.OfStringArray = v
-	}
+	params.Model = cmp.Or(params.Model, model)
 	if frmt, ok := agentopt.Get(opts, agentopt.ResponseFormat); ok && frmt != nil {
 		switch frmt.Kind() {
 		case "json":
@@ -275,9 +264,6 @@ func buildCompletionParams(model string, messages []*message.Message, opts []age
 	for tl := range agentopt.All(opts, agentopt.Tool) {
 		if first {
 			first = false
-			if v, ok := agentopt.Get(opts, chatagent.AllowMultipleToolCalls); ok {
-				params.ParallelToolCalls = openai.Bool(v)
-			}
 			if mode, ok := agentopt.Get(opts, agentopt.ToolMode); ok {
 				switch mode.Mode() {
 				case tool.ToolModeAuto, "":

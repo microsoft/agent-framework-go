@@ -20,6 +20,7 @@ import (
 	"github.com/microsoft/agent-framework-go/openai"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
+	openaisdk "github.com/openai/openai-go/v3"
 )
 
 func bodyEqual(t *testing.T, got string, want string) {
@@ -142,9 +143,10 @@ func TestChatBasicRequestResponse_NonStreaming(t *testing.T) {
 	a := newTestClient(server)
 
 	resp, err := a.RunText("hello",
-		chatagent.AllowMultipleToolCalls(false),
-		chatagent.MaxOutputTokens(10),
-		chatagent.Temperature(0.5),
+		openai.ChatCompletionNewParams(openaisdk.ChatCompletionNewParams{
+			MaxCompletionTokens: openaisdk.Int(10),
+			Temperature:         openaisdk.Float(0.5),
+		}),
 	).Collect(t.Context())
 	if err != nil {
 		t.Fatalf("error = %v", err)
@@ -242,7 +244,10 @@ data: [DONE]
 	a := newTestClient(server)
 
 	var updates []*message.ResponseUpdate
-	for update, err := range a.RunText("hello", chatagent.MaxOutputTokens(20), chatagent.Temperature(0.5)).All(t.Context()) {
+	for update, err := range a.RunText("hello", openai.ChatCompletionNewParams(openaisdk.ChatCompletionNewParams{
+		MaxCompletionTokens: openaisdk.Int(20),
+		Temperature:         openaisdk.Float(0.5),
+	})).All(t.Context()) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
 		}
@@ -357,11 +362,15 @@ func TestChatMultipleMessages_NonStreaming(t *testing.T) {
 	}
 
 	resp, err := a.Run(messages,
-		chatagent.Temperature(0.25),
-		chatagent.FrequencyPenalty(0.75),
-		chatagent.PresencePenalty(0.5),
-		chatagent.StopSequences([]string{"great"}),
-		chatagent.Seed(42),
+		openai.ChatCompletionNewParams(openaisdk.ChatCompletionNewParams{
+			Temperature:      openaisdk.Float(0.25),
+			FrequencyPenalty: openaisdk.Float(0.75),
+			PresencePenalty:  openaisdk.Float(0.5),
+			Stop: openaisdk.ChatCompletionNewParamsStopUnion{
+				OfStringArray: []string{"great"},
+			},
+			Seed: openaisdk.Int(42),
+		}),
 	).Collect(t.Context())
 	if err != nil {
 		t.Fatalf("error = %v", err)
@@ -1020,9 +1029,11 @@ func TestChatOptions_Model_OverridesClientModel_NonStreaming(t *testing.T) {
 
 	// Override with gpt-4o in options
 	resp, err := a.RunText("hello",
-		chatagent.MaxOutputTokens(10),
-		chatagent.Temperature(0.5),
-		chatagent.Model("gpt-4o"),
+		openai.ChatCompletionNewParams(openaisdk.ChatCompletionNewParams{
+			Model:               "gpt-4o",
+			MaxCompletionTokens: openaisdk.Int(10),
+			Temperature:         openaisdk.Float(0.5),
+		}),
 	).Collect(t.Context())
 	if err != nil {
 		t.Fatalf("error = %v", err)
@@ -1070,9 +1081,11 @@ data: [DONE]
 	var updates []*message.ResponseUpdate
 	// Override with gpt-4o in options
 	for update, err := range a.RunText("hello",
-		chatagent.MaxOutputTokens(20),
-		chatagent.Temperature(0.5),
-		chatagent.Model("gpt-4o"),
+		openai.ChatCompletionNewParams(openaisdk.ChatCompletionNewParams{
+			Model:               "gpt-4o",
+			MaxCompletionTokens: openaisdk.Int(20),
+			Temperature:         openaisdk.Float(0.5),
+		}),
 	).All(t.Context()) {
 		if err != nil {
 			t.Fatalf("error = %v", err)

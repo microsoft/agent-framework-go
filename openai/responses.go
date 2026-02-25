@@ -38,6 +38,18 @@ type responsesClient struct {
 	config ClientConfig
 }
 
+type responsesNewParamsOpt responses.ResponseNewParams
+
+func (responsesNewParamsOpt) RunOption() {}
+func (o responsesNewParamsOpt) Value() any {
+	return responses.ResponseNewParams(o)
+}
+
+// ResponsesNewParams allows passing custom parameters to the underlying OpenAI Responses API calls.
+func ResponsesNewParams(params responses.ResponseNewParams) agentopt.RunOption {
+	return responsesNewParamsOpt(params)
+}
+
 func newResponsesAgent(isAzure bool, config ClientConfig, options chatagent.Config) *agent.Agent {
 	ops := make([]option.RequestOption, 0, 2)
 	if isAzure {
@@ -217,24 +229,11 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 
 // buildCompletionParams constructs the parameters for the OpenAI chat completion API.
 func responsesBuildCompletionParams(model string, messages []*message.Message, opts []agentopt.RunOption) (responses.ResponseNewParams, error) {
-	params := responses.ResponseNewParams{
-		Model: model,
-		Input: responses.ResponseNewParamsInputUnion{
-			OfInputItemList: make(responses.ResponseInputParam, 0, len(messages)+1),
-		},
+	var params responses.ResponseNewParams
+	if p, ok := agentopt.Get(opts, ResponsesNewParams); ok {
+		params = p
 	}
-	if v, ok := agentopt.Get(opts, chatagent.Model); ok && v != "" {
-		params.Model = v
-	}
-	if v, ok := agentopt.Get(opts, chatagent.Temperature); ok {
-		params.Temperature = openai.Float(v)
-	}
-	if v, ok := agentopt.Get(opts, chatagent.TopP); ok {
-		params.TopP = openai.Float(v)
-	}
-	if v, ok := agentopt.Get(opts, chatagent.MaxOutputTokens); ok {
-		params.MaxOutputTokens = openai.Int(v)
-	}
+	params.Model = cmp.Or(params.Model, model)
 	if v, ok := agentopt.Get(opts, agentopt.AllowBackgroundResponses); ok {
 		params.Background = openai.Bool(v)
 	}
@@ -277,9 +276,6 @@ func responsesBuildCompletionParams(model string, messages []*message.Message, o
 	for tl := range agentopt.All(opts, agentopt.Tool) {
 		if first {
 			first = false
-			if v, ok := agentopt.Get(opts, chatagent.AllowMultipleToolCalls); ok {
-				params.ParallelToolCalls = openai.Bool(v)
-			}
 			if mode, ok := agentopt.Get(opts, agentopt.ToolMode); ok {
 				switch mode.Mode() {
 				case tool.ToolModeAuto, "":

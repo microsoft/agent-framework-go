@@ -21,6 +21,16 @@ import (
 	"github.com/microsoft/agent-framework-go/tool"
 )
 
+type messageNewParamsOpt anthropic.MessageNewParams
+
+func (messageNewParamsOpt) RunOption()   {}
+func (o messageNewParamsOpt) Value() any { return anthropic.MessageNewParams(o) }
+
+// MessageNewParams allows passing custom parameters to the underlying anthropic API calls.
+func MessageNewParams(params anthropic.MessageNewParams) agentopt.RunOption {
+	return messageNewParamsOpt(params)
+}
+
 type client struct {
 	client anthropic.Client
 	config ClientConfig
@@ -239,21 +249,12 @@ func (a *client) buildDelta(index int, v any, contents []message.Content, functi
 }
 
 func (a *client) buildMessageParams(messages []*message.Message, opts []agentopt.RunOption) (anthropic.MessageNewParams, error) {
-	params := anthropic.MessageNewParams{
-		Model:     anthropic.Model(a.config.Model),
-		Messages:  []anthropic.MessageParam{},
-		MaxTokens: 1024, // Default max tokens
+	var params anthropic.MessageNewParams
+	if p, ok := agentopt.Get(opts, MessageNewParams); ok {
+		params = p
 	}
-
-	if temperature, ok := agentopt.Get(opts, chatagent.Temperature); ok {
-		params.Temperature = anthropic.Float(temperature)
-	}
-	if topP, ok := agentopt.Get(opts, chatagent.TopP); ok {
-		params.TopP = anthropic.Float(topP)
-	}
-	if maxTokens, ok := agentopt.Get(opts, chatagent.MaxOutputTokens); ok {
-		params.MaxTokens = maxTokens
-	}
+	params.Model = cmp.Or(params.Model, anthropic.Model(a.config.Model))
+	params.MaxTokens = cmp.Or(params.MaxTokens, 4096)
 
 	var tools []anthropic.ToolUnionParam
 	for tl := range agentopt.All(opts, agentopt.Tool) {
