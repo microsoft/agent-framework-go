@@ -144,7 +144,6 @@ func TestChatBasicRequestResponse_NonStreaming(t *testing.T) {
 
 	resp, err := a.RunText("hello",
 		openai.ChatCompletionNewParams(openaisdk.ChatCompletionNewParams{
-			ParallelToolCalls:   openaisdk.Bool(false),
 			MaxCompletionTokens: openaisdk.Int(10),
 			Temperature:         openaisdk.Float(0.5),
 		}),
