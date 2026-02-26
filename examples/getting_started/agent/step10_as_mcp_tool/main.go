@@ -7,8 +7,8 @@ package main
 import (
 	"context"
 
-	"github.com/microsoft/agent-framework-go/agent/chatagent"
-	"github.com/microsoft/agent-framework-go/openai"
+	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/provider/openaichat"
 	"github.com/microsoft/agent-framework-go/tool/mcptool"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -17,12 +17,13 @@ import (
 
 func main() {
 	// Create the agent with the same configuration as the C# example.
-	agent := openai.NewChatAgent(openai.ClientConfig{
+	agent := openaichat.NewAgent(openaichat.Config{
 		Model: "gpt-4o-mini",
-	}, chatagent.Config{
-		Name:         "Joker",
-		Description:  "An agent that tells jokes.",
-		Instructions: "You are good at telling jokes, and you always start each joke with 'Aye aye, captain!'.",
+		Agent: agent.Config{
+			Name:         "Joker",
+			Description:  "An agent that tells jokes.",
+			Instructions: "You are good at telling jokes, and you always start each joke with 'Aye aye, captain!'.",
+		},
 	})
 
 	// Create an MCP server with the agent exposed as a tool.

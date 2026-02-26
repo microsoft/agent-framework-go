@@ -9,12 +9,13 @@ import (
 	"log"
 	"os"
 
-	"github.com/microsoft/agent-framework-go/agent/agentopt"
-	"github.com/microsoft/agent-framework-go/agent/chatagent"
-	"github.com/microsoft/agent-framework-go/agent/middleware"
-	"github.com/microsoft/agent-framework-go/agent/middleware/otel"
+	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/provider/openaichat"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
-	"github.com/microsoft/agent-framework-go/openai"
+	"github.com/microsoft/agent-framework-go/middleware"
+	"github.com/microsoft/agent-framework-go/middleware/otel"
+	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/azure"
 
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -24,6 +25,7 @@ import (
 
 var deployment = os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
 var endpoint = os.Getenv("AZURE_OPENAI_ENDPOINT")
+var apiVersion = os.Getenv("AZURE_OPENAI_API_VERSION")
 var apiKey = os.Getenv("AZURE_OPENAI_API_KEY")
 
 var logger = demo.NewLogger(
@@ -51,17 +53,19 @@ func main() {
 	otellib.SetTracerProvider(tp)
 
 	// Create Azure OpenAI agent, and enable OpenTelemetry instrumentation.
-	a := openai.NewChatAgentAzure(openai.ClientConfig{
-		Endpoint:   endpoint,
-		APIKey:     apiKey,
-		Model:      deployment,
-		APIVersion: "2025-01-01-preview",
-	}, chatagent.Config{
-		Instructions: "You are good at telling jokes.",
-		Name:         "Joker",
-		RunOptions: []agentopt.RunOption{
-			middleware.With(otel.New(otel.Config{})), // for OpenTelemetry observability
-			middleware.With(logger),                  // for logging agent interactions
+	a := openaichat.NewAgent(openaichat.Config{
+		Client: openai.NewClient(
+			azure.WithEndpoint(endpoint, apiVersion),
+			azure.WithAPIKey(apiKey),
+		),
+		Model: deployment,
+		Agent: agent.Config{
+			Instructions: "You are good at telling jokes.",
+			Name:         "Joker",
+			Middlewares: []middleware.Middleware{
+				otel.New(otel.Config{}), // for OpenTelemetry observability
+				logger,                  // for logging agent interactions
+			},
 		},
 	})
 

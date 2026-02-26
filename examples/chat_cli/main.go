@@ -8,10 +8,9 @@ import (
 	"strings"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/agentopt"
-	"github.com/microsoft/agent-framework-go/agent/chatagent"
+	"github.com/microsoft/agent-framework-go/agent/provider/openaichat"
+	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
-	"github.com/microsoft/agent-framework-go/openai"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 )
 
@@ -29,12 +28,13 @@ var weatherTool = functool.MustNew(&functool.Func{
 })
 
 func main() {
-	a := openai.NewChatAgent(openai.ClientConfig{
+	a := openaichat.NewAgent(openaichat.Config{
 		Model: "gpt-4o-mini",
-	}, chatagent.Config{
-		Instructions: "You are a helpful assistant with access to weather information. Be concise and friendly.",
-		RunOptions: []agentopt.RunOption{
-			agentopt.Tool(weatherTool),
+		Agent: agent.Config{
+			Instructions: "You are a helpful assistant with access to weather information. Be concise and friendly.",
+			RunOptions: []agentopt.Option{
+				agentopt.Tool(weatherTool),
+			},
 		},
 	})
 

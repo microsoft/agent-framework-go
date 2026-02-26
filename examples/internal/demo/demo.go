@@ -9,9 +9,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/microsoft/agent-framework-go/agent/agentopt"
-	"github.com/microsoft/agent-framework-go/agent/middleware"
+	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/middleware"
 )
 
 // ANSI color codes
@@ -44,7 +44,7 @@ func NewLogger(name, description string, metadata ...string) middleware.Middlewa
 	return &logger{}
 }
 
-func (mw *logger) Run(next middleware.RunFunc, ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+func (mw *logger) Run(next middleware.RunFunc, ctx context.Context, messages []*message.Message, opts ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		mw.n++
 		fmt.Printf("%s%s===== Run %d =====%s\n\n", colorYellow, colorBold, mw.n, colorReset)

@@ -4,60 +4,92 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"iter"
+	"log/slog"
+	"slices"
 
 	"github.com/google/uuid"
-	"github.com/microsoft/agent-framework-go/agent/agentopt"
-	"github.com/microsoft/agent-framework-go/agent/memory"
-	"github.com/microsoft/agent-framework-go/agent/middleware"
+	"github.com/microsoft/agent-framework-go/agentopt"
+	"github.com/microsoft/agent-framework-go/format"
+	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/middleware"
+	"github.com/microsoft/agent-framework-go/middleware/autocall"
+	"github.com/microsoft/agent-framework-go/middleware/structuredoutput"
 )
 
-type Config struct {
-	ID           string
-	Name         string
-	Description  string
+type ProviderConfig struct {
 	ProviderName string
+
+	// Required functions
+	Run func(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error]
+
+	// Optional functions
+	CreateSession    func(ctx context.Context, options ...agentopt.Option) (*memory.Session, error)
+	MarshalSession   func(ctx context.Context, session *memory.Session) ([]byte, error)
+	UnmarshalSession func(ctx context.Context, data []byte) (*memory.Session, error)
+	FormatOfFn       func(v any) (format.Format, error)
+	UnmarshalFn      func(format format.Format, data []byte, v any) error
+}
+
+type Config struct {
+	ID          string
+	Name        string
+	Description string
 
 	Instructions string
 
-	RunOptions []agentopt.RunOption
+	DisableFuncAutoCall bool
 
-	// Required functions
-	CreateSession    func(ctx context.Context, options ...agentopt.CreateSessionOption) (*memory.Session, error)
-	MarshalSession   func(ctx context.Context, session *memory.Session) ([]byte, error)
-	UnmarshalSession func(ctx context.Context, data []byte) (*memory.Session, error)
-	Run              func(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error]
+	Logger           *slog.Logger
+	LogSensitiveData bool
+
+	Middlewares []middleware.Middleware
+	RunOptions  []agentopt.Option
 }
 
-func New(cfg Config) *Agent {
-	if cfg.CreateSession == nil {
-		panic("CreateSession function is required")
-	}
-	if cfg.MarshalSession == nil {
-		panic("MarshalSession function is required")
-	}
-	if cfg.UnmarshalSession == nil {
-		panic("UnmarshalSession function is required")
-	}
-	if cfg.Run == nil {
+func New(prov ProviderConfig, cfg Config) *Agent {
+	if prov.Run == nil {
 		panic("Run function is required")
 	}
+
 	if cfg.ID == "" {
 		cfg.ID = uuid.NewString()
 	}
+
+	cfg.RunOptions = slices.Clone(cfg.RunOptions)
+	cfg.Middlewares = slices.Clone(cfg.Middlewares)
+	if !cfg.DisableFuncAutoCall {
+		cfg.Middlewares = append(cfg.Middlewares,
+			autocall.New(autocall.Config{
+				Logger:           cfg.Logger,
+				LogSensitiveData: cfg.LogSensitiveData,
+			}),
+		)
+	}
+	if prov.FormatOfFn != nil && prov.UnmarshalFn != nil {
+		cfg.Middlewares = append(cfg.Middlewares,
+			structuredoutput.New(structuredoutput.Config{
+				Format:    prov.FormatOfFn,
+				Unmarshal: prov.UnmarshalFn,
+			}),
+		)
+	}
+	cfg.Middlewares = append(cfg.Middlewares, authorMiddleware(cfg.ID, cfg.Name))
 	return &Agent{
 		id:               cfg.ID,
 		name:             cfg.Name,
 		description:      cfg.Description,
-		providerName:     cfg.ProviderName,
+		providerName:     prov.ProviderName,
 		instructions:     cfg.Instructions,
-		createSession:    cfg.CreateSession,
-		marshalSession:   cfg.MarshalSession,
-		unmarshalSession: cfg.UnmarshalSession,
-		run:              cfg.Run,
+		createSession:    prov.CreateSession,
+		marshalSession:   prov.MarshalSession,
+		unmarshalSession: prov.UnmarshalSession,
+		run:              prov.Run,
 		runOptions:       cfg.RunOptions,
+		middlewares:      cfg.Middlewares,
 	}
 }
 
@@ -94,12 +126,13 @@ type Agent struct {
 
 	instructions string
 
-	runOptions []agentopt.RunOption
+	middlewares []middleware.Middleware
+	runOptions  []agentopt.Option
 
-	createSession    func(ctx context.Context, options ...agentopt.CreateSessionOption) (*memory.Session, error)
+	createSession    func(ctx context.Context, options ...agentopt.Option) (*memory.Session, error)
 	marshalSession   func(ctx context.Context, session *memory.Session) ([]byte, error)
 	unmarshalSession func(ctx context.Context, data []byte) (*memory.Session, error)
-	run              func(ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error]
+	run              func(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error]
 }
 
 func (a *Agent) ID() string {
@@ -130,27 +163,45 @@ func (a *Agent) ProviderName() string {
 	return a.providerName
 }
 
-func (a *Agent) CreateSession(ctx context.Context, options ...agentopt.CreateSessionOption) (*memory.Session, error) {
+func (a *Agent) CreateSession(ctx context.Context, options ...agentopt.Option) (*memory.Session, error) {
+	if a.createSession == nil {
+		session := memory.NewSession("")
+		session.ServiceID, _ = agentopt.Get(options, agentopt.ServiceID)
+		return session, nil
+	}
 	return a.createSession(ctx, options...)
 }
 
 func (a *Agent) MarshalSession(ctx context.Context, session *memory.Session) ([]byte, error) {
+	if a.marshalSession == nil {
+		if session == nil {
+			return nil, errors.New("the provided session is nil")
+		}
+		return json.Marshal(session)
+	}
 	return a.marshalSession(ctx, session)
 }
 
 func (a *Agent) UnmarshalSession(ctx context.Context, data []byte) (*memory.Session, error) {
+	if a.unmarshalSession == nil {
+		var session memory.Session
+		if err := json.Unmarshal(data, &session); err != nil {
+			return nil, err
+		}
+		return &session, nil
+	}
 	return a.unmarshalSession(ctx, data)
 }
 
-func (a *Agent) RunText(msg string, options ...agentopt.RunOption) ResponseStream {
+func (a *Agent) RunText(msg string, options ...agentopt.Option) ResponseStream {
 	return a.Run([]*message.Message{message.NewText(msg)}, options...)
 }
 
-func (a *Agent) RunMessage(msg *message.Message, options ...agentopt.RunOption) ResponseStream {
+func (a *Agent) RunMessage(msg *message.Message, options ...agentopt.Option) ResponseStream {
 	return a.Run([]*message.Message{msg}, options...)
 }
 
-func (a *Agent) Run(messages []*message.Message, options ...agentopt.RunOption) ResponseStream {
+func (a *Agent) Run(messages []*message.Message, options ...agentopt.Option) ResponseStream {
 	return ResponseStream{func(ctx context.Context, stream bool) iter.Seq2[*message.ResponseUpdate, error] {
 		ctx, preparedMessages, options, err := a.prepareRun(ctx, messages, stream, options)
 		if err != nil {
@@ -158,11 +209,11 @@ func (a *Agent) Run(messages []*message.Message, options ...agentopt.RunOption) 
 				yield(nil, err)
 			}
 		}
-		return middleware.RunChain(ctx, a.run, preparedMessages, options...)
+		return middleware.RunChain(ctx, a.run, a.middlewares, preparedMessages, options...)
 	}}
 }
 
-func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, stream bool, options []agentopt.RunOption) (context.Context, []*message.Message, []agentopt.RunOption, error) {
+func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, stream bool, options []agentopt.Option) (context.Context, []*message.Message, []agentopt.Option, error) {
 	// Prepend options from agent configuration.
 	if len(a.runOptions) != 0 {
 		options = append(a.runOptions, options...)
@@ -200,9 +251,6 @@ func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, str
 		}
 	}
 
-	// Middleware to set AuthorID and AuthorName on each ResponseUpdate.
-	options = append(options, middleware.With(middleware.Func(a.authorMiddleware)))
-
 	// Add agent identity to context so that middlewares can log it.
 	ctx = context.WithValue(ctx, agentKey{}, a)
 
@@ -217,23 +265,24 @@ func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, str
 	return ctx, messages, options, nil
 }
 
-func (a *Agent) authorMiddleware(next middleware.RunFunc, ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
-	return func(yield func(*message.ResponseUpdate, error) bool) {
-		id, name := a.ID(), a.Name()
-		for update, err := range next(ctx, messages, options...) {
-			if update != nil {
-				if update.AuthorID == "" {
-					update.AuthorID = id
+func authorMiddleware(id, name string) middleware.Middleware {
+	return middleware.Func(func(next middleware.RunFunc, ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+		return func(yield func(*message.ResponseUpdate, error) bool) {
+			for update, err := range next(ctx, messages, options...) {
+				if update != nil {
+					if update.AuthorID == "" {
+						update.AuthorID = id
+					}
+					if update.AuthorName == "" {
+						update.AuthorName = name
+					}
 				}
-				if update.AuthorName == "" {
-					update.AuthorName = name
+				if !yield(update, err) {
+					return
 				}
-			}
-			if !yield(update, err) {
-				return
 			}
 		}
-	}
+	})
 }
 
 type agentKey struct{}

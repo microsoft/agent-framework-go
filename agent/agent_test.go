@@ -4,17 +4,16 @@ package agent_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"iter"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/agentopt"
-	"github.com/microsoft/agent-framework-go/agent/memory"
-	"github.com/microsoft/agent-framework-go/agent/middleware"
+	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
+	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/middleware"
 )
 
 type prependMiddleware struct {
@@ -24,7 +23,7 @@ type prependMiddleware struct {
 	lastSession     *memory.Session
 }
 
-func (m *prependMiddleware) Run(next middleware.RunFunc, ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+func (m *prependMiddleware) Run(next middleware.RunFunc, ctx context.Context, messages []*message.Message, opts ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
 	m.runCalls++
 	if session, ok := agentopt.Get(opts, agentopt.Session); ok {
 		m.lastSession = session
@@ -47,7 +46,7 @@ type errorMiddleware struct {
 	err error
 }
 
-func (m *errorMiddleware) Run(_ middleware.RunFunc, _ context.Context, _ []*message.Message, _ ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+func (m *errorMiddleware) Run(_ middleware.RunFunc, _ context.Context, _ []*message.Message, _ ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		yield(nil, m.err)
 	}
@@ -58,7 +57,7 @@ type trackingMiddleware struct {
 	lastErr  error
 }
 
-func (m *trackingMiddleware) Run(next middleware.RunFunc, ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+func (m *trackingMiddleware) Run(next middleware.RunFunc, ctx context.Context, messages []*message.Message, opts ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
 	m.runCalls++
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		for update, err := range next(ctx, messages, opts...) {
@@ -72,36 +71,29 @@ func (m *trackingMiddleware) Run(next middleware.RunFunc, ctx context.Context, m
 	}
 }
 
-func failRunFunc(runErr error) func(_ context.Context, _ []*message.Message, _ ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
-	return func(_ context.Context, _ []*message.Message, _ ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+func failRunFunc(runErr error) func(_ context.Context, _ []*message.Message, _ ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	return func(_ context.Context, _ []*message.Message, _ ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(nil, runErr)
 		}
 	}
 }
 
-func newGenericTestAgent(runFn func(context.Context, []*message.Message, ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error], instructions string, runOptions ...agentopt.RunOption) *agent.Agent {
-	return agent.New(agent.Config{
+func newGenericTestAgent(runFn func(context.Context, []*message.Message, ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error], instructions string, middlewares []middleware.Middleware, runOptions ...agentopt.Option) *agent.Agent {
+	return agent.New(agent.ProviderConfig{
+		Run: runFn,
+	}, agent.Config{
 		ID: "test-agent", Name: "test-agent",
 		Instructions: instructions,
+		Middlewares:  middlewares,
 		RunOptions:   runOptions,
-		CreateSession: func(ctx context.Context, opts ...agentopt.CreateSessionOption) (*memory.Session, error) {
-			return agenttest.CreateSession(), nil
-		},
-		MarshalSession: func(_ context.Context, session *memory.Session) ([]byte, error) {
-			return json.Marshal(session)
-		},
-		UnmarshalSession: func(_ context.Context, data []byte) (*memory.Session, error) {
-			return agenttest.CreateSession(), nil
-		},
-		Run: runFn,
 	})
 }
 
 func TestAgent_RunText(t *testing.T) {
 	var capturedMessages []*message.Message
 	responseBuilder := agenttest.NewResponseBuilder(
-		func(ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) {
+		func(ctx context.Context, messages []*message.Message, opts ...agentopt.Option) {
 			capturedMessages = messages
 		},
 	).AddText("Hello, world!")
@@ -152,9 +144,9 @@ func TestAgent_RunText(t *testing.T) {
 
 func TestAgent_RunMessage(t *testing.T) {
 	var capturedMessages []*message.Message
-	var capturedOptions []agentopt.RunOption
+	var capturedOptions []agentopt.Option
 	responseBuilder := agenttest.NewResponseBuilder(
-		func(ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) {
+		func(ctx context.Context, messages []*message.Message, opts ...agentopt.Option) {
 			capturedMessages = messages
 			capturedOptions = opts
 		},
@@ -196,7 +188,7 @@ func TestAgent_RunMessage(t *testing.T) {
 func TestAgent_Run(t *testing.T) {
 	var capturedMessages []*message.Message
 	responseBuilder := agenttest.NewResponseBuilder(
-		func(ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) {
+		func(ctx context.Context, messages []*message.Message, opts ...agentopt.Option) {
 			capturedMessages = messages
 		},
 	).AddText("response")
@@ -226,7 +218,7 @@ func TestAgent_Run(t *testing.T) {
 func TestAgent_Run_RejectsMessagesWithContinuationToken(t *testing.T) {
 	runCalled := false
 	responseBuilder := agenttest.NewResponseBuilder(
-		func(ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) {
+		func(ctx context.Context, messages []*message.Message, opts ...agentopt.Option) {
 			runCalled = true
 		},
 	).AddText("response")
@@ -244,9 +236,9 @@ func TestAgent_Run_RejectsMessagesWithContinuationToken(t *testing.T) {
 }
 
 func TestAgent_Run_CreatesSession(t *testing.T) {
-	var capturedOptions []agentopt.RunOption
+	var capturedOptions []agentopt.Option
 	responseBuilder := agenttest.NewResponseBuilder(
-		func(ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) {
+		func(ctx context.Context, messages []*message.Message, opts ...agentopt.Option) {
 			capturedOptions = opts
 		},
 	).AddText("response")
@@ -273,7 +265,7 @@ func TestAgent_Run_CreatesSession(t *testing.T) {
 func TestAgent_Run_RequiresSessionWhenAllowBackgroundResponsesEnabled(t *testing.T) {
 	runCalled := false
 	responseBuilder := agenttest.NewResponseBuilder(
-		func(ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) {
+		func(ctx context.Context, messages []*message.Message, opts ...agentopt.Option) {
 			runCalled = true
 		},
 	).AddText("response")
@@ -294,9 +286,9 @@ func TestAgent_Run_RequiresSessionWhenAllowBackgroundResponsesEnabled(t *testing
 }
 
 func TestAgent_Run_UsesProvidedSession(t *testing.T) {
-	var capturedOptions []agentopt.RunOption
+	var capturedOptions []agentopt.Option
 	responseBuilder := agenttest.NewResponseBuilder(
-		func(ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) {
+		func(ctx context.Context, messages []*message.Message, opts ...agentopt.Option) {
 			capturedOptions = opts
 		},
 	).AddText("response")
@@ -321,11 +313,11 @@ func TestAgent_Run_UsesProvidedSession(t *testing.T) {
 }
 
 func TestAgent_Run_PrependsAgentOptions(t *testing.T) {
-	var capturedOptions []agentopt.RunOption
+	var capturedOptions []agentopt.Option
 	runner := &agenttest.Runner{
 		Responses: []agenttest.Turn{{
-			Callbacks: []func(context.Context, []*message.Message, ...agentopt.RunOption){
-				func(ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) {
+			Callbacks: []func(context.Context, []*message.Message, ...agentopt.Option){
+				func(ctx context.Context, messages []*message.Message, opts ...agentopt.Option) {
 					capturedOptions = opts
 				},
 			},
@@ -341,18 +333,12 @@ func TestAgent_Run_PrependsAgentOptions(t *testing.T) {
 	}
 
 	agentOption := agentopt.Stream(true)
-	a := agent.New(agent.Config{
+	a := agent.New(agent.ProviderConfig{
+		Run: runner.Run,
+	}, agent.Config{
 		ID:         "test",
 		Name:       "test",
-		RunOptions: []agentopt.RunOption{agentOption},
-		CreateSession: func(ctx context.Context, opts ...agentopt.CreateSessionOption) (*memory.Session, error) {
-			return agenttest.CreateSession(), nil
-		},
-		MarshalSession: func(_ context.Context, session *memory.Session) ([]byte, error) {
-			return json.Marshal(session)
-		},
-		UnmarshalSession: func(_ context.Context, data []byte) (*memory.Session, error) { return agenttest.CreateSession(), nil },
-		Run:              runner.Run,
+		RunOptions: []agentopt.Option{agentOption},
 	})
 
 	ctx := t.Context()
@@ -393,7 +379,7 @@ func TestAgent_Run_StreamingResponses(t *testing.T) {
 func TestAgent_Run_AddsMetadataToContext(t *testing.T) {
 	var capturedCtx context.Context
 	responseBuilder := agenttest.NewResponseBuilder(
-		func(ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) {
+		func(ctx context.Context, messages []*message.Message, opts ...agentopt.Option) {
 			capturedCtx = ctx
 		},
 	).AddText("response")
@@ -422,14 +408,14 @@ func TestAgent_Run_InvokesSingleContextMiddleware(t *testing.T) {
 	}
 
 	var capturedMessages []*message.Message
-	runFn := func(_ context.Context, msgs []*message.Message, _ ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+	runFn := func(_ context.Context, msgs []*message.Message, _ ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		capturedMessages = msgs
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "response"}}}, nil)
 		}
 	}
 
-	a := newGenericTestAgent(runFn, "", middleware.With(mw))
+	a := newGenericTestAgent(runFn, "", []middleware.Middleware{mw})
 
 	ctx := t.Context()
 	session := agenttest.CreateSession()
@@ -457,12 +443,12 @@ func TestAgent_Run_InvokesSingleContextMiddleware(t *testing.T) {
 
 func TestAgent_Run_ContextMiddlewareReceivesSession(t *testing.T) {
 	mw := &prependMiddleware{}
-	runFn := func(_ context.Context, _ []*message.Message, _ ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+	runFn := func(_ context.Context, _ []*message.Message, _ ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "response"}}}, nil)
 		}
 	}
-	a := newGenericTestAgent(runFn, "", middleware.With(mw))
+	a := newGenericTestAgent(runFn, "", []middleware.Middleware{mw})
 
 	ctx := t.Context()
 	session := agenttest.CreateSession()
@@ -478,12 +464,12 @@ func TestAgent_Run_ContextMiddlewareReceivesSession(t *testing.T) {
 
 func TestAgent_Run_ContextMiddlewareCanFailBeforeRun(t *testing.T) {
 	invokeErr := errors.New("middleware failed")
-	runFn := func(_ context.Context, _ []*message.Message, _ ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+	runFn := func(_ context.Context, _ []*message.Message, _ ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "response"}}}, nil)
 		}
 	}
-	a := newGenericTestAgent(runFn, "", middleware.With(&errorMiddleware{err: invokeErr}))
+	a := newGenericTestAgent(runFn, "", []middleware.Middleware{&errorMiddleware{err: invokeErr}})
 
 	ctx := t.Context()
 	_, err := a.Run([]*message.Message{message.NewText("test")}, agentopt.Session(agenttest.CreateSession())).Collect(ctx)
@@ -495,7 +481,7 @@ func TestAgent_Run_ContextMiddlewareCanFailBeforeRun(t *testing.T) {
 func TestAgent_Run_MiddlewareObservesRunFailure(t *testing.T) {
 	runErr := errors.New("run failed")
 	tracker := &trackingMiddleware{}
-	a := newGenericTestAgent(failRunFunc(runErr), "", middleware.With(tracker))
+	a := newGenericTestAgent(failRunFunc(runErr), "", []middleware.Middleware{tracker})
 
 	ctx := t.Context()
 	_, err := a.Run([]*message.Message{message.NewText("test")}, agentopt.Session(agenttest.CreateSession())).Collect(ctx)
@@ -513,13 +499,13 @@ func TestAgent_Run_MiddlewareObservesRunFailure(t *testing.T) {
 
 func TestAgent_Run_IncludesInstructions(t *testing.T) {
 	var capturedMessages []*message.Message
-	runFn := func(_ context.Context, msgs []*message.Message, _ ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+	runFn := func(_ context.Context, msgs []*message.Message, _ ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		capturedMessages = msgs
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "response"}}}, nil)
 		}
 	}
-	a := newGenericTestAgent(runFn, "You are a helpful assistant.")
+	a := newGenericTestAgent(runFn, "You are a helpful assistant.", nil)
 
 	ctx := t.Context()
 	_, err := a.Run([]*message.Message{message.NewText("hello")}, agentopt.Session(agenttest.CreateSession())).Collect(ctx)

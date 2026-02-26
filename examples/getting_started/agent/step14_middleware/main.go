@@ -7,12 +7,12 @@ import (
 	"iter"
 	"strings"
 
-	"github.com/microsoft/agent-framework-go/agent/agentopt"
-	"github.com/microsoft/agent-framework-go/agent/chatagent"
-	"github.com/microsoft/agent-framework-go/agent/middleware"
+	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/provider/openaichat"
+	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/openai"
+	"github.com/microsoft/agent-framework-go/middleware"
 )
 
 var logger = demo.NewLogger(
@@ -22,11 +22,12 @@ var logger = demo.NewLogger(
 )
 
 func main() {
-	a := openai.NewChatAgent(openai.ClientConfig{
+	a := openaichat.NewAgent(openaichat.Config{
 		Model: "gpt-5-nano",
-	}, chatagent.Config{
-		Instructions: "You are an AI assistant that helps people find information.",
-		RunOptions:   []agentopt.RunOption{middleware.With(logger), middleware.WithFunc(guardrailsMiddleware)},
+		Agent: agent.Config{
+			Instructions: "You are an AI assistant that helps people find information.",
+			Middlewares:  []middleware.Middleware{logger, middleware.Func(guardrailsMiddleware)},
+		},
 	})
 
 	resp, err := a.RunText("Tell me something that contains the word harmful.").Collect(context.Background())
@@ -34,7 +35,7 @@ func main() {
 }
 
 // guardrailsMiddleware enforces guardrails by redacting certain keywords from input and output messages.
-func guardrailsMiddleware(next middleware.RunFunc, ctx context.Context, messages []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+func guardrailsMiddleware(next middleware.RunFunc, ctx context.Context, messages []*message.Message, opts ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
 	redact := func(contents message.Contents) message.Contents {
 		// Simple redaction logic for demonstration purposes.
 		for _, c := range contents {

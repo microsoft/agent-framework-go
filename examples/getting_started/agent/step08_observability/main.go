@@ -8,12 +8,11 @@ import (
 	"context"
 	"log"
 
-	"github.com/microsoft/agent-framework-go/agent/agentopt"
-	"github.com/microsoft/agent-framework-go/agent/chatagent"
-	"github.com/microsoft/agent-framework-go/agent/middleware"
-	"github.com/microsoft/agent-framework-go/agent/middleware/otel"
+	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/provider/openaichat"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
-	"github.com/microsoft/agent-framework-go/openai"
+	"github.com/microsoft/agent-framework-go/middleware"
+	"github.com/microsoft/agent-framework-go/middleware/otel"
 
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -46,14 +45,15 @@ func main() {
 	otellib.SetTracerProvider(tp)
 
 	// Create the agent, and enable OpenTelemetry instrumentation.
-	a := openai.NewChatAgent(openai.ClientConfig{
+	a := openaichat.NewAgent(openaichat.Config{
 		Model: "gpt-4o-mini",
-	}, chatagent.Config{
-		Instructions: "You are good at telling jokes.",
-		Name:         "Joker",
-		RunOptions: []agentopt.RunOption{
-			middleware.With(otel.New(otel.Config{})), // for OpenTelemetry observability
-			middleware.With(logger),                  // for logging agent interactions
+		Agent: agent.Config{
+			Instructions: "You are good at telling jokes.",
+			Name:         "Joker",
+			Middlewares: []middleware.Middleware{
+				otel.New(otel.Config{}), // for OpenTelemetry observability
+				logger,                  // for logging agent interactions
+			},
 		},
 	})
 

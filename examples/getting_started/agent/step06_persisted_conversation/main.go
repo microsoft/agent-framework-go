@@ -7,12 +7,12 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/microsoft/agent-framework-go/agent/agentopt"
-	"github.com/microsoft/agent-framework-go/agent/chatagent"
-	"github.com/microsoft/agent-framework-go/agent/middleware"
-	"github.com/microsoft/agent-framework-go/agent/middleware/messagehistory"
+	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/provider/openaichat"
+	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
-	"github.com/microsoft/agent-framework-go/openai"
+	"github.com/microsoft/agent-framework-go/middleware"
+	"github.com/microsoft/agent-framework-go/middleware/messagehistory"
 )
 
 var logger = demo.NewLogger(
@@ -23,14 +23,15 @@ var logger = demo.NewLogger(
 
 func main() {
 	// Create the agent.
-	a := openai.NewChatAgent(openai.ClientConfig{
+	a := openaichat.NewAgent(openaichat.Config{
 		Model: "gpt-4o-mini",
-	}, chatagent.Config{
-		Instructions: "You are good at telling jokes.",
-		Name:         "Joker",
-		RunOptions: []agentopt.RunOption{
-			middleware.With(logger),               // for logging agent interactions
-			middleware.With(messagehistory.New()), // for in-memory message history (required for session persistence)
+		Agent: agent.Config{
+			Instructions: "You are good at telling jokes.",
+			Name:         "Joker",
+			Middlewares: []middleware.Middleware{
+				logger,               // for logging agent interactions
+				messagehistory.New(), // for in-memory message history (required for session persistence)
+			},
 		},
 	})
 

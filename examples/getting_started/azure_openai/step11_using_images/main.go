@@ -6,16 +6,18 @@ import (
 	"context"
 	"os"
 
-	"github.com/microsoft/agent-framework-go/agent/agentopt"
-	"github.com/microsoft/agent-framework-go/agent/chatagent"
-	"github.com/microsoft/agent-framework-go/agent/middleware"
+	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/provider/openaichat"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/openai"
+	"github.com/microsoft/agent-framework-go/middleware"
+	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/azure"
 )
 
 var deployment = os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
 var endpoint = os.Getenv("AZURE_OPENAI_ENDPOINT")
+var apiVersion = os.Getenv("AZURE_OPENAI_API_VERSION")
 var apiKey = os.Getenv("AZURE_OPENAI_API_KEY")
 
 var logger = demo.NewLogger(
@@ -26,15 +28,17 @@ var logger = demo.NewLogger(
 
 func main() {
 	// Create Azure OpenAI agent.
-	a := openai.NewChatAgentAzure(openai.ClientConfig{
-		Endpoint:   endpoint,
-		APIKey:     apiKey,
-		Model:      deployment,
-		APIVersion: "2025-01-01-preview",
-	}, chatagent.Config{
-		Instructions: "You are a helpful agent that can analyze images.",
-		Name:         "VisionAgent",
-		RunOptions:   []agentopt.RunOption{middleware.With(logger)}, // for logging agent interactions
+	a := openaichat.NewAgent(openaichat.Config{
+		Client: openai.NewClient(
+			azure.WithEndpoint(endpoint, apiVersion),
+			azure.WithAPIKey(apiKey),
+		),
+		Model: deployment,
+		Agent: agent.Config{
+			Instructions: "You are a helpful agent that can analyze images.",
+			Name:         "VisionAgent",
+			Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
+		},
 	})
 
 	ctx := context.Background()

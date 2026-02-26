@@ -5,11 +5,11 @@ package main
 import (
 	"context"
 
-	"github.com/microsoft/agent-framework-go/agent/agentopt"
-	"github.com/microsoft/agent-framework-go/agent/chatagent"
-	"github.com/microsoft/agent-framework-go/agent/middleware"
+	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/provider/openaichat"
+	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
-	"github.com/microsoft/agent-framework-go/openai"
+	"github.com/microsoft/agent-framework-go/middleware"
 	"github.com/microsoft/agent-framework-go/tool/mcptool"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -38,20 +38,21 @@ func main() {
 		panic(err)
 	}
 
-	var opts []agentopt.RunOption
+	var opts []agentopt.Option
 	for _, t := range tools {
 		opts = append(opts, agentopt.Tool(t))
 	}
-	opts = append(opts, middleware.With(logger)) // for logging agent interactions
 
 	// Create the Agent with MCP tools
 	// In Go, we configure tools as default options that will be used for all runs
-	a := openai.NewChatAgent(openai.ClientConfig{
+	a := openaichat.NewAgent(openaichat.Config{
 		Model: "gpt-4o-mini",
-	}, chatagent.Config{
-		Name:         "DocsAgent",
-		Instructions: "You are a helpful assistant that can help with microsoft documentation questions.",
-		RunOptions:   opts,
+		Agent: agent.Config{
+			Name:         "DocsAgent",
+			Instructions: "You are a helpful assistant that can help with microsoft documentation questions.",
+			Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
+			RunOptions:   opts,
+		},
 	})
 
 	// Invoke the agent and output the text result.

@@ -5,11 +5,10 @@ package main
 import (
 	"context"
 
-	"github.com/microsoft/agent-framework-go/agent/agentopt"
-	"github.com/microsoft/agent-framework-go/agent/chatagent"
-	"github.com/microsoft/agent-framework-go/agent/middleware"
-	"github.com/microsoft/agent-framework-go/anthropic"
+	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/provider/anthropic"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
+	"github.com/microsoft/agent-framework-go/middleware"
 )
 
 var logger = demo.NewLogger(
@@ -20,12 +19,13 @@ var logger = demo.NewLogger(
 
 func main() {
 	// Create Anthropic agent
-	a := anthropic.NewChatAgent(anthropic.ClientConfig{
+	a := anthropic.NewAgent(anthropic.Config{
 		Model: "claude-sonnet-4-5",
-	}, chatagent.Config{
-		Instructions: "You are good at telling jokes.",
-		Name:         "Joker",
-		RunOptions:   []agentopt.RunOption{middleware.With(logger)}, // for logging agent interactions
+		Agent: agent.Config{
+			Instructions: "You are good at telling jokes.",
+			Name:         "Joker",
+			Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
+		},
 	})
 
 	ctx := context.Background()

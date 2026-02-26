@@ -11,17 +11,20 @@ import (
 	"path/filepath"
 	"slices"
 
-	"github.com/microsoft/agent-framework-go/agent/agentopt"
-	"github.com/microsoft/agent-framework-go/agent/chatagent"
-	"github.com/microsoft/agent-framework-go/agent/memory"
-	"github.com/microsoft/agent-framework-go/agent/middleware"
+	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/provider/openaichat"
+	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
+	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/openai"
+	"github.com/microsoft/agent-framework-go/middleware"
+	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/azure"
 )
 
 var deployment = os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
 var endpoint = os.Getenv("AZURE_OPENAI_ENDPOINT")
+var apiVersion = os.Getenv("AZURE_OPENAI_API_VERSION")
 var apiKey = os.Getenv("AZURE_OPENAI_API_KEY")
 
 var logger = demo.NewLogger(
@@ -39,17 +42,19 @@ func main() {
 	defer os.RemoveAll(tmpDir)
 
 	// Create Azure OpenAI agent with a custom message store that persists messages to disk.
-	a := openai.NewChatAgentAzure(openai.ClientConfig{
-		Endpoint:   endpoint,
-		APIKey:     apiKey,
-		Model:      deployment,
-		APIVersion: "2025-01-01-preview",
-	}, chatagent.Config{
-		Instructions: "You are good at telling jokes.",
-		Name:         "Joker",
-		RunOptions: []agentopt.RunOption{
-			middleware.With(logger),                       // for logging agent interactions
-			middleware.With(&fsMessageStore{Dir: tmpDir}), // for persistent message history
+	a := openaichat.NewAgent(openaichat.Config{
+		Client: openai.NewClient(
+			azure.WithEndpoint(endpoint, apiVersion),
+			azure.WithAPIKey(apiKey),
+		),
+		Model: deployment,
+		Agent: agent.Config{
+			Instructions: "You are good at telling jokes.",
+			Name:         "Joker",
+			Middlewares: []middleware.Middleware{
+				logger,                       // for logging agent interactions
+				&fsMessageStore{Dir: tmpDir}, // for persistent message history
+			},
 		},
 	})
 
@@ -157,7 +162,7 @@ func (d *fsMessageStore) persistMessages(session *memory.Session, requestMessage
 	return nil
 }
 
-func (d *fsMessageStore) Run(next middleware.RunFunc, ctx context.Context, msgs []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+func (d *fsMessageStore) Run(next middleware.RunFunc, ctx context.Context, msgs []*message.Message, opts ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
 	var session *memory.Session
 	if v, ok := agentopt.Get(opts, agentopt.Session); ok {
 		session = v

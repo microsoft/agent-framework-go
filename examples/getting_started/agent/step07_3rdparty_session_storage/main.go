@@ -11,13 +11,13 @@ import (
 	"path/filepath"
 	"slices"
 
-	"github.com/microsoft/agent-framework-go/agent/agentopt"
-	"github.com/microsoft/agent-framework-go/agent/chatagent"
-	"github.com/microsoft/agent-framework-go/agent/memory"
-	"github.com/microsoft/agent-framework-go/agent/middleware"
+	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/provider/openaichat"
+	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
+	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/openai"
+	"github.com/microsoft/agent-framework-go/middleware"
 )
 
 var logger = demo.NewLogger(
@@ -35,14 +35,15 @@ func main() {
 	defer os.RemoveAll(tmpDir)
 
 	// Create the agent with a custom message store that persists messages to disk.
-	a := openai.NewChatAgent(openai.ClientConfig{
+	a := openaichat.NewAgent(openaichat.Config{
 		Model: "gpt-4o-mini",
-	}, chatagent.Config{
-		Instructions: "You are good at telling jokes.",
-		Name:         "Joker",
-		RunOptions: []agentopt.RunOption{
-			middleware.With(logger),                       // for logging agent interactions
-			middleware.With(&fsMessageStore{Dir: tmpDir}), // for persistent message history
+		Agent: agent.Config{
+			Instructions: "You are good at telling jokes.",
+			Name:         "Joker",
+			Middlewares: []middleware.Middleware{
+				logger,                       // for logging agent interactions
+				&fsMessageStore{Dir: tmpDir}, // for persistent message history
+			},
 		},
 	})
 
@@ -150,7 +151,7 @@ func (d *fsMessageStore) persistMessages(session *memory.Session, requestMessage
 	return nil
 }
 
-func (d *fsMessageStore) Run(next middleware.RunFunc, ctx context.Context, msgs []*message.Message, opts ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
+func (d *fsMessageStore) Run(next middleware.RunFunc, ctx context.Context, msgs []*message.Message, opts ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
 	var session *memory.Session
 	if v, ok := agentopt.Get(opts, agentopt.Session); ok {
 		session = v

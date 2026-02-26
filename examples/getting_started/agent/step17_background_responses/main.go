@@ -6,11 +6,11 @@ import (
 	"context"
 	"time"
 
-	"github.com/microsoft/agent-framework-go/agent/agentopt"
-	"github.com/microsoft/agent-framework-go/agent/chatagent"
-	"github.com/microsoft/agent-framework-go/agent/middleware"
+	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/provider/openairesponses"
+	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
-	"github.com/microsoft/agent-framework-go/openai"
+	"github.com/microsoft/agent-framework-go/middleware"
 )
 
 var logger = demo.NewLogger(
@@ -20,10 +20,11 @@ var logger = demo.NewLogger(
 )
 
 func main() {
-	a := openai.NewResponsesAgent(openai.ClientConfig{
+	a := openairesponses.NewAgent(openairesponses.Config{
 		Model: "gpt-4o-mini",
-	}, chatagent.Config{
-		RunOptions: []agentopt.RunOption{middleware.With(logger)},
+		Agent: agent.Config{
+			Middlewares: []middleware.Middleware{logger},
+		},
 	})
 
 	ctx := context.Background()
