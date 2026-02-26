@@ -98,12 +98,10 @@ func NewAgent(responses []Turn) *agent.Agent {
 		responses: responses,
 	}
 	return agent.New(agent.Config{
-		Metadata: agent.Metadata{
-			ID:           "test-agent-id",
-			Name:         "TestAgent",
-			Description:  "A test agent",
-			ProviderName: "agenttest",
-		},
+		ID:               "test-agent-id",
+		Name:             "TestAgent",
+		Description:      "A test agent",
+		ProviderName:     "agenttest",
 		CreateSession:    a.createSession,
 		MarshalSession:   a.marshalSession,
 		UnmarshalSession: a.unmarshalSession,

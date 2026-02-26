@@ -57,11 +57,11 @@ func (l *logger) Run(next middleware.RunFunc, ctx context.Context, messages []*m
 }
 
 func (l *logger) log(ctx context.Context, level slog.Level, msg string, args ...any) {
-	metadata, ok := agent.MetadataFromContext(ctx)
+	a, ok := agent.AgentFromContext(ctx)
 	if ok {
-		args = append(args, "agentID", metadata.ID)
-		if metadata.Name != "" {
-			args = append(args, "agentName", metadata.Name)
+		args = append(args, "agentID", a.ID())
+		if a.Name() != "" {
+			args = append(args, "agentName", a.Name())
 		}
 	}
 	l.l.Log(ctx, level, msg, args...)

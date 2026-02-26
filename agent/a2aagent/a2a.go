@@ -53,12 +53,10 @@ func NewAgent(client *a2aclient.Client, options Options) *agent.Agent {
 		Options: options,
 	}
 	return agent.New(agent.Config{
-		Metadata: agent.Metadata{
-			ID:           options.ID,
-			Name:         options.Name,
-			ProviderName: "a2a",
-			Description:  options.Description,
-		},
+		ID:               options.ID,
+		Name:             options.Name,
+		ProviderName:     "a2a",
+		Description:      options.Description,
 		CreateSession:    a.createSession,
 		MarshalSession:   a.marshalSession,
 		UnmarshalSession: a.unmarshalSession,

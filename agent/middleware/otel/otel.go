@@ -48,13 +48,13 @@ type mw struct {
 
 func (m *mw) Run(next middleware.RunFunc, ctx context.Context, messages []*message.Message, options ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
-		metadata, _ := agent.MetadataFromContext(ctx)
-		ctx, span := m.tracer.Start(ctx, metadata.Name, trace.WithAttributes(
+		a, _ := agent.AgentFromContext(ctx)
+		ctx, span := m.tracer.Start(ctx, a.Name(), trace.WithAttributes(
 			attribute.String(attrKeyOperationName, opInvoke),
-			attribute.String(attrKeyProviderName, cmp.Or(metadata.ProviderName, "unknown")),
-			attribute.String(attrKeyAgentID, metadata.ID),
-			attribute.String(attrKeyAgentName, metadata.Name),
-			attribute.String(attrKeyAgentDesc, metadata.Description),
+			attribute.String(attrKeyProviderName, cmp.Or(a.ProviderName(), "unknown")),
+			attribute.String(attrKeyAgentID, a.ID()),
+			attribute.String(attrKeyAgentName, a.Name()),
+			attribute.String(attrKeyAgentDesc, a.Description()),
 		))
 		defer span.End()
 

@@ -82,7 +82,7 @@ func failRunFunc(runErr error) func(_ context.Context, _ []*message.Message, _ .
 
 func newGenericTestAgent(runFn func(context.Context, []*message.Message, ...agentopt.RunOption) iter.Seq2[*message.ResponseUpdate, error], instructions string, runOptions ...agentopt.RunOption) *agent.Agent {
 	return agent.New(agent.Config{
-		Metadata:     agent.Metadata{ID: "test-agent", Name: "test-agent"},
+		ID: "test-agent", Name: "test-agent",
 		Instructions: instructions,
 		RunOptions:   runOptions,
 		CreateSession: func(ctx context.Context, opts ...agentopt.CreateSessionOption) (*memory.Session, error) {
@@ -342,10 +342,8 @@ func TestAgent_Run_PrependsAgentOptions(t *testing.T) {
 
 	agentOption := agentopt.Stream(true)
 	a := agent.New(agent.Config{
-		Metadata: agent.Metadata{
-			ID:   "test",
-			Name: "test",
-		},
+		ID:         "test",
+		Name:       "test",
 		RunOptions: []agentopt.RunOption{agentOption},
 		CreateSession: func(ctx context.Context, opts ...agentopt.CreateSessionOption) (*memory.Session, error) {
 			return agenttest.CreateSession(), nil
@@ -408,13 +406,13 @@ func TestAgent_Run_AddsMetadataToContext(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	metadata, ok := agent.MetadataFromContext(capturedCtx)
+	actx, ok := agent.AgentFromContext(capturedCtx)
 	if !ok {
 		t.Fatal("expected metadata in context")
 	}
 
-	if metadata != a.Metadata() {
-		t.Errorf("expected metadata %+v, got %+v", a.Metadata(), metadata)
+	if a != actx {
+		t.Errorf("expected agent %+v, got %+v", a, actx)
 	}
 }
 

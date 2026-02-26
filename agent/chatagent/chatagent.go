@@ -79,12 +79,10 @@ func NewAgent(runfn RunFunc, cfg Config, prov ProviderConfig) *agent.Agent {
 		runFn: runfn,
 	}
 	return agent.New(agent.Config{
-		Metadata: agent.Metadata{
-			ID:           cfg.ID,
-			Name:         cfg.Name,
-			ProviderName: prov.Name,
-			Description:  cfg.Description,
-		},
+		ID:           cfg.ID,
+		Name:         cfg.Name,
+		ProviderName: prov.Name,
+		Description:  cfg.Description,
 
 		Instructions: opts.Instructions,
 

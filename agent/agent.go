@@ -14,15 +14,11 @@ import (
 	"github.com/microsoft/agent-framework-go/message"
 )
 
-type Metadata struct {
+type Config struct {
 	ID           string
 	Name         string
 	Description  string
 	ProviderName string
-}
-
-type Config struct {
-	Metadata Metadata
 
 	Instructions string
 
@@ -48,11 +44,14 @@ func New(cfg Config) *Agent {
 	if cfg.Run == nil {
 		panic("Run function is required")
 	}
-	if cfg.Metadata.ID == "" {
-		cfg.Metadata.ID = uuid.NewString()
+	if cfg.ID == "" {
+		cfg.ID = uuid.NewString()
 	}
 	return &Agent{
-		metadata:         cfg.Metadata,
+		id:               cfg.ID,
+		name:             cfg.Name,
+		description:      cfg.Description,
+		providerName:     cfg.ProviderName,
 		instructions:     cfg.Instructions,
 		createSession:    cfg.CreateSession,
 		marshalSession:   cfg.MarshalSession,
@@ -88,7 +87,11 @@ func (r ResponseStream) Collect(ctx context.Context) (*message.Response, error) 
 }
 
 type Agent struct {
-	metadata     Metadata
+	id           string
+	name         string
+	description  string
+	providerName string
+
 	instructions string
 
 	runOptions []agentopt.RunOption
@@ -100,15 +103,31 @@ type Agent struct {
 }
 
 func (a *Agent) ID() string {
-	return a.metadata.ID
+	if a == nil {
+		return ""
+	}
+	return a.id
 }
 
 func (a *Agent) Name() string {
-	return a.metadata.Name
+	if a == nil {
+		return ""
+	}
+	return a.name
 }
 
-func (a *Agent) Metadata() Metadata {
-	return a.metadata
+func (a *Agent) Description() string {
+	if a == nil {
+		return ""
+	}
+	return a.description
+}
+
+func (a *Agent) ProviderName() string {
+	if a == nil {
+		return ""
+	}
+	return a.providerName
 }
 
 func (a *Agent) CreateSession(ctx context.Context, options ...agentopt.CreateSessionOption) (*memory.Session, error) {
@@ -185,7 +204,7 @@ func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, str
 	options = append(options, middleware.With(middleware.Func(a.authorMiddleware)))
 
 	// Add agent identity to context so that middlewares can log it.
-	ctx = context.WithValue(ctx, metadataKey{}, a.Metadata())
+	ctx = context.WithValue(ctx, agentKey{}, a)
 
 	// If Run.All() is called, set the Stream option to true
 	// unless already specified in options.
@@ -217,13 +236,13 @@ func (a *Agent) authorMiddleware(next middleware.RunFunc, ctx context.Context, m
 	}
 }
 
-type metadataKey struct{}
+type agentKey struct{}
 
-// MetadataFromContext retrieves the agent metadata from the context.
-// Returns the metadata and true if found, or zero value and false otherwise.
-func MetadataFromContext(ctx context.Context) (Metadata, bool) {
-	if v := ctx.Value(metadataKey{}); v != nil {
-		return v.(Metadata), true
+// AgentFromContext retrieves the agent that initiated the run from the context.
+// Returns the agent and true if found, or nil and false otherwise.
+func AgentFromContext(ctx context.Context) (*Agent, bool) {
+	if v := ctx.Value(agentKey{}); v != nil {
+		return v.(*Agent), true
 	}
-	return Metadata{}, false
+	return nil, false
 }

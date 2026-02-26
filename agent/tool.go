@@ -14,7 +14,7 @@ import (
 func (a *Agent) AsFuncTool(options ...agentopt.RunOption) tool.FuncTool {
 	return functool{
 		name:        a.Name(),
-		description: a.Metadata().Description,
+		description: a.Description(),
 		opts:        options,
 		agent:       a,
 	}

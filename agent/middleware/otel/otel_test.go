@@ -84,12 +84,10 @@ func TestOtel_Run_SpanHasCorrectAttributes(t *testing.T) {
 
 	// Override the agent metadata for this test
 	a = agent.New(agent.Config{
-		Metadata: agent.Metadata{
-			ID:           "test-agent-id",
-			Name:         "test-agent",
-			Description:  "A test agent",
-			ProviderName: "test-provider",
-		},
+		ID:           "test-agent-id",
+		Name:         "test-agent",
+		Description:  "A test agent",
+		ProviderName: "test-provider",
 		CreateSession: func(ctx context.Context, options ...agentopt.CreateSessionOption) (*memory.Session, error) {
 			return agenttest.CreateSession(), nil
 		},
