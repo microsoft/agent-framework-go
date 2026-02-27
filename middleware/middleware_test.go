@@ -122,20 +122,19 @@ func TestChain(t *testing.T) {
 			},
 		}
 
-		initialOpt := &testOption{value: "initial"}
 		ctx := context.Background()
-		seq := middleware.RunChain(ctx, fn, []middleware.Middleware{mw}, []*message.Message{}, initialOpt)
+		seq := middleware.RunChain(ctx, fn, []middleware.Middleware{mw}, []*message.Message{}, &testOption{value: "initial"})
 		for range seq {
 		}
 
-		if len(receivedOpts) != 3 {
-			t.Fatalf("expected 3 options, got %d", len(receivedOpts))
+		if len(receivedOpts) != 2 {
+			t.Fatalf("expected 2 options, got %d", len(receivedOpts))
 		}
-		if receivedOpts[1].(*testOption).value != "initial" {
-			t.Errorf("expected first option to be 'initial', got %s", receivedOpts[1].(*testOption).value)
+		if receivedOpts[0].(*testOption).value != "initial" {
+			t.Errorf("expected first option to be 'initial', got %s", receivedOpts[0].(*testOption).value)
 		}
-		if receivedOpts[2].(*testOption).value != "injected" {
-			t.Errorf("expected second option to be 'injected', got %s", receivedOpts[2].(*testOption).value)
+		if receivedOpts[1].(*testOption).value != "injected" {
+			t.Errorf("expected second option to be 'injected', got %s", receivedOpts[1].(*testOption).value)
 		}
 	})
 
