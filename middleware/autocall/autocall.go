@@ -492,6 +492,12 @@ func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]too
 // createFunctionResult creates a FunctionResultContent with proper error handling.
 // It formats errors into the Result string and preserves the error for re-throwing when limits are exceeded.
 func (f *autocall) createFunctionResult(callID string, result any, err error) *message.FunctionResultContent {
+	if err == nil {
+		if frc, ok := result.(*message.FunctionResultContent); ok && frc.CallID == callID {
+			return frc
+		}
+	}
+
 	if err == nil && result == nil {
 		result = "Success: Function completed."
 	}

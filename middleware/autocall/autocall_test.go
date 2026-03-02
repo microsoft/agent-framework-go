@@ -213,6 +213,166 @@ func invokeAndAssert(t *testing.T, tools []tool.Tool, plan []*message.Message, e
 	return actual
 }
 
+func TestFunctionInvoking_FunctionReturningFunctionResultContentWithMatchingCallID_UsesItDirectly(t *testing.T) {
+	returnedFrc := &message.FunctionResultContent{
+		CallID: "callId1",
+		Result: "Custom result from function",
+		ContentHeader: message.ContentHeader{
+			RawRepresentation: "CustomRaw",
+		},
+	}
+
+	tools := []tool.Tool{
+		functool.MustNew(&functool.Func{Name: "Func1"},
+			func(ctx context.Context, args struct{}) (any, error) {
+				return returnedFrc, nil
+			}),
+	}
+
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder().
+			Add(&message.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: []message.Content{&message.FunctionCallContent{CallID: "callId1", Name: "Func1", Arguments: `{}`}},
+			}).
+			NewTurn().
+			Add(&message.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: []message.Content{&message.TextContent{Text: "done"}},
+			}).
+			Build(),
+	}
+
+	var opts []agentopt.Option
+	for _, tl := range tools {
+		opts = append(opts, agentopt.Tool(tl))
+	}
+
+	initialMessages := []*message.Message{message.NewText("hello")}
+	var resp message.Response
+	for update, err := range autocall.New(autocall.Config{}).Run(runner.Run, t.Context(), initialMessages, opts...) {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		resp.Update(update)
+	}
+
+	var toolMessage *message.Message
+	for _, msg := range resp.Messages {
+		if msg.Role == message.RoleTool {
+			toolMessage = msg
+			break
+		}
+	}
+	if toolMessage == nil {
+		t.Fatal("expected a tool message in response")
+	}
+
+	var frcs []*message.FunctionResultContent
+	for _, c := range toolMessage.Contents {
+		if frc, ok := c.(*message.FunctionResultContent); ok {
+			frcs = append(frcs, frc)
+		}
+	}
+	if len(frcs) != 1 {
+		t.Fatalf("expected exactly one FunctionResultContent in tool message, got %d", len(frcs))
+	}
+
+	if frcs[0] != returnedFrc {
+		t.Fatalf("expected tool FunctionResultContent to be the same instance returned by tool")
+	}
+	if frcs[0].Result != "Custom result from function" {
+		t.Fatalf("expected result %q, got %v", "Custom result from function", frcs[0].Result)
+	}
+	if frcs[0].RawRepresentation != "CustomRaw" {
+		t.Fatalf("expected RawRepresentation %q, got %v", "CustomRaw", frcs[0].RawRepresentation)
+	}
+	if frcs[0].CallID != "callId1" {
+		t.Fatalf("expected CallID %q, got %q", "callId1", frcs[0].CallID)
+	}
+}
+
+func TestFunctionInvoking_FunctionReturningFunctionResultContentWithMismatchedCallID_WrapsIt(t *testing.T) {
+	returnedFrc := &message.FunctionResultContent{
+		CallID: "differentCallId",
+		Result: "Result from function",
+	}
+
+	tools := []tool.Tool{
+		functool.MustNew(&functool.Func{Name: "Func1"},
+			func(ctx context.Context, args struct{}) (any, error) {
+				return returnedFrc, nil
+			}),
+	}
+
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder().
+			Add(&message.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: []message.Content{&message.FunctionCallContent{CallID: "callId1", Name: "Func1", Arguments: `{}`}},
+			}).
+			NewTurn().
+			Add(&message.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: []message.Content{&message.TextContent{Text: "done"}},
+			}).
+			Build(),
+	}
+
+	var opts []agentopt.Option
+	for _, tl := range tools {
+		opts = append(opts, agentopt.Tool(tl))
+	}
+
+	initialMessages := []*message.Message{message.NewText("hello")}
+	var resp message.Response
+	for update, err := range autocall.New(autocall.Config{}).Run(runner.Run, t.Context(), initialMessages, opts...) {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		resp.Update(update)
+	}
+
+	var toolMessage *message.Message
+	for _, msg := range resp.Messages {
+		if msg.Role == message.RoleTool {
+			toolMessage = msg
+			break
+		}
+	}
+	if toolMessage == nil {
+		t.Fatal("expected a tool message in response")
+	}
+
+	var frcs []*message.FunctionResultContent
+	for _, c := range toolMessage.Contents {
+		if frc, ok := c.(*message.FunctionResultContent); ok {
+			frcs = append(frcs, frc)
+		}
+	}
+	if len(frcs) != 1 {
+		t.Fatalf("expected exactly one FunctionResultContent in tool message, got %d", len(frcs))
+	}
+
+	frc := frcs[0]
+	if frc.CallID != "callId1" {
+		t.Fatalf("expected outer CallID %q, got %q", "callId1", frc.CallID)
+	}
+	inner, ok := frc.Result.(*message.FunctionResultContent)
+	if !ok {
+		t.Fatalf("expected outer Result to be *message.FunctionResultContent, got %T", frc.Result)
+	}
+	if inner != returnedFrc {
+		t.Fatalf("expected wrapped inner FunctionResultContent to be the same instance returned by tool")
+	}
+	if inner.CallID != "differentCallId" {
+		t.Fatalf("expected inner CallID %q, got %q", "differentCallId", inner.CallID)
+	}
+	if inner.Result != "Result from function" {
+		t.Fatalf("expected inner result %q, got %v", "Result from function", inner.Result)
+	}
+}
+
 // TestFunctionInvoking_SupportsToolsProvidedByAdditionalTools tests AdditionalTools functionality
 func TestFunctionInvoking_SupportsToolsProvidedByAdditionalTools(t *testing.T) {
 	type Func1Args struct{}
