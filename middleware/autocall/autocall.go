@@ -475,7 +475,10 @@ func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]too
 				}
 			}
 		}()
-		result, err = tl.Call(ctx, funcCall.Arguments)
+		result, err = tl.Call(tool.Context{
+			Context: ctx,
+			CallID:  funcCall.CallID,
+		}, funcCall.Arguments)
 	}()
 	if err != nil {
 		if errors.Is(err, context.Canceled) {

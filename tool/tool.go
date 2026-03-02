@@ -48,13 +48,19 @@ type Tool interface {
 	Description() string
 }
 
+type Context struct {
+	context.Context
+
+	CallID string
+}
+
 type FuncTool interface {
 	Tool
 
 	Schema() any
 	ReturnSchema() any
 
-	Call(ctx context.Context, args string) (any, error)
+	Call(ctx Context, args string) (any, error)
 }
 
 // ApprovalRequiredTool indicates that a tool requires user approval before invocation.

@@ -3,7 +3,6 @@
 package agent
 
 import (
-	"context"
 	"encoding/json"
 
 	"github.com/microsoft/agent-framework-go/agentopt"
@@ -54,7 +53,7 @@ func (t functool) ReturnSchema() any {
 	}
 }
 
-func (t functool) Call(ctx context.Context, args string) (any, error) {
+func (t functool) Call(ctx tool.Context, args string) (any, error) {
 	var in struct {
 		Query string `json:"query"`
 	}
