@@ -679,7 +679,7 @@ func TestLoadSkill_ReturnsBody(t *testing.T) {
 	_, tools := captureRunContext(t, p)
 	loadTool := findTool(t, tools, "load_skill")
 
-	result, err := loadTool.Call(t.Context(), `{"skillName":"load-test"}`)
+	result, err := loadTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"load-test"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -696,7 +696,7 @@ func TestLoadSkill_NotFound(t *testing.T) {
 	_, tools := captureRunContext(t, p)
 	loadTool := findTool(t, tools, "load_skill")
 
-	_, err := loadTool.Call(t.Context(), `{"skillName":"nonexistent"}`)
+	_, err := loadTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"nonexistent"}`)
 	if err == nil || !strings.HasPrefix(err.Error(), "Error:") {
 		t.Fatalf("expected error, got %v", err)
 	}
@@ -710,7 +710,7 @@ func TestLoadSkill_EmptyName(t *testing.T) {
 	_, tools := captureRunContext(t, p)
 	loadTool := findTool(t, tools, "load_skill")
 
-	_, err := loadTool.Call(t.Context(), `{"skillName":""}`)
+	_, err := loadTool.Call(tool.Context{Context: t.Context()}, `{"skillName":""}`)
 	if err == nil || !strings.HasPrefix(err.Error(), "Error:") {
 		t.Fatalf("expected error, got %v", err)
 	}
@@ -727,7 +727,7 @@ func TestReadResource_ReturnsContent(t *testing.T) {
 	_, tools := captureRunContext(t, p)
 	readTool := findTool(t, tools, "read_skill_resource")
 
-	result, err := readTool.Call(t.Context(), `{"skillName":"res-test","resourceName":"refs/doc.md"}`)
+	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"res-test","resourceName":"refs/doc.md"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -745,7 +745,7 @@ func TestReadResource_DotSlashPrefix(t *testing.T) {
 	_, tools := captureRunContext(t, p)
 	readTool := findTool(t, tools, "read_skill_resource")
 
-	result, err := readTool.Call(t.Context(), `{"skillName":"dotslash-read","resourceName":"./refs/doc.md"}`)
+	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"dotslash-read","resourceName":"./refs/doc.md"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -762,7 +762,7 @@ func TestReadResource_UnregisteredResource(t *testing.T) {
 	_, tools := captureRunContext(t, p)
 	readTool := findTool(t, tools, "read_skill_resource")
 
-	_, err := readTool.Call(t.Context(), `{"skillName":"simple-skill","resourceName":"unknown.md"}`)
+	_, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"simple-skill","resourceName":"unknown.md"}`)
 	if err == nil || !strings.HasPrefix(err.Error(), "Error:") {
 		t.Fatalf("expected error, got %v", err)
 	}
@@ -776,7 +776,7 @@ func TestReadResource_SkillNotFound(t *testing.T) {
 	_, tools := captureRunContext(t, p)
 	readTool := findTool(t, tools, "read_skill_resource")
 
-	_, err := readTool.Call(t.Context(), `{"skillName":"nonexistent","resourceName":"file.md"}`)
+	_, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"nonexistent","resourceName":"file.md"}`)
 	if err == nil || !strings.HasPrefix(err.Error(), "Error:") {
 		t.Fatalf("expected error, got %v", err)
 	}

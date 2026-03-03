@@ -3,7 +3,6 @@
 package openaichat_test
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -709,7 +708,7 @@ func TestChatFunctionCallContent_NonStreaming(t *testing.T) {
 	type GetPersonAgeInput struct {
 		PersonName string `json:"personName" jsonschema:"The person whose age is being requested"`
 	}
-	getPersonAge := func(ctx context.Context, input GetPersonAgeInput) (int, error) {
+	getPersonAge := func(ctx tool.Context, input GetPersonAgeInput) (int, error) {
 		return 42, nil
 	}
 	tool := functool.MustNew(&functool.Func{
@@ -823,7 +822,7 @@ data: [DONE]
 	type GetPersonAgeInput struct {
 		PersonName string `json:"personName"`
 	}
-	getPersonAge := func(ctx context.Context, input GetPersonAgeInput) (int, error) {
+	getPersonAge := func(ctx tool.Context, input GetPersonAgeInput) (int, error) {
 		return 42, nil
 	}
 	tool := functool.MustNew(&functool.Func{
@@ -1385,11 +1384,11 @@ func TestChatMultipleRequiredFunctions(t *testing.T) {
 		Location string `json:"location" jsonschema:"The city and state, e.g. San Francisco, CA"`
 	}
 
-	getWeather := func(ctx context.Context, input LocationInput) (string, error) {
+	getWeather := func(ctx tool.Context, input LocationInput) (string, error) {
 		return "Sunny, 72°F", nil
 	}
 
-	getTime := func(ctx context.Context, input LocationInput) (string, error) {
+	getTime := func(ctx tool.Context, input LocationInput) (string, error) {
 		return "3:45 PM", nil
 	}
 

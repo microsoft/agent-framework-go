@@ -13,6 +13,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/middleware"
+	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 )
 
@@ -25,7 +26,7 @@ var logger = demo.NewLogger(
 var weatherTool = functool.MustNew(&functool.Func{
 	Name:        "weather",
 	Description: "Get the current weather for a given location",
-}, func(_ context.Context, location string) (string, error) {
+}, func(_ tool.Context, location string) (string, error) {
 	return fmt.Sprintf("The weather in %s is cloudy with a high of 15°C.", location), nil
 })
 

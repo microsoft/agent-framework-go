@@ -3,7 +3,6 @@
 package functool
 
 import (
-	"context"
 	"fmt"
 	"reflect"
 
@@ -27,7 +26,7 @@ type Func struct {
 // request or result: the params contain raw arguments, no input validation
 // is performed, and the result is returned to the user as-is, without any
 // validation of the output.
-type Handler func(_ context.Context, args string) (any, error)
+type Handler func(ctx tool.Context, args string) (any, error)
 
 // A HandlerFor handles a call to tools/call with typed arguments and results.
 //
@@ -37,7 +36,7 @@ type Handler func(_ context.Context, args string) (any, error)
 //   - The input value is automatically unmarshaled from req.Params.Arguments.
 //   - The input value is automatically validated against its input schema.
 //     Invalid input is rejected before getting to the handler.
-type HandlerFor[In, Out any] func(context.Context, In) (Out, error)
+type HandlerFor[In, Out any] func(tool.Context, In) (Out, error)
 
 var _ tool.Tool = (*Tool)(nil)
 var _ tool.FuncTool = (*Tool)(nil)
@@ -63,19 +62,11 @@ func (t *Tool) ReturnSchema() any {
 	return t.Func.outputFormat.Schema()
 }
 
-func (t *Tool) Call(ctx context.Context, args string) (any, error) {
+func (t *Tool) Call(ctx tool.Context, args string) (any, error) {
 	if args == "" {
 		args = "{}"
 	}
 	return t.Handler(ctx, args)
-}
-
-func MustNew[In, Out any](fnp *Func, h HandlerFor[In, Out]) *Tool {
-	t, err := New(fnp, h)
-	if err != nil {
-		panic(err)
-	}
-	return t
 }
 
 type inputWrapper[T any] struct {
@@ -93,6 +84,14 @@ func formatFor[T any](needObject bool) (format *jsonformat.Format, wrapped bool,
 	}
 	format, err = jsonformat.ForType(typ)
 	return format, wrapped, err
+}
+
+func MustNew[In, Out any](fnp *Func, h HandlerFor[In, Out]) *Tool {
+	t, err := New(fnp, h)
+	if err != nil {
+		panic(err)
+	}
+	return t
 }
 
 func New[In, Out any](fnp *Func, h HandlerFor[In, Out]) (*Tool, error) {
@@ -113,7 +112,7 @@ func New[In, Out any](fnp *Func, h HandlerFor[In, Out]) (*Tool, error) {
 		return nil, fmt.Errorf("resolving output schema: %w", err)
 	}
 
-	t.Handler = func(ctx context.Context, args string) (any, error) {
+	t.Handler = func(ctx tool.Context, args string) (any, error) {
 		var in In
 		if t.Func.inputWrapped {
 			// Extract wrapped value.

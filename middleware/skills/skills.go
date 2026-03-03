@@ -29,6 +29,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/middleware"
+	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 )
 
@@ -105,7 +106,7 @@ func New(opts *Config, fsys ...fs.FS) middleware.Middleware {
 				Name:        "load_skill",
 				Description: "Loads the full instructions for a specific skill.",
 			},
-			func(_ context.Context, in struct {
+			func(_ tool.Context, in struct {
 				SkillName string `json:"skillName" jsonschema:"The name of the skill to load"`
 			}) (string, error) {
 				return p.loadSkill(in.SkillName)
@@ -116,7 +117,7 @@ func New(opts *Config, fsys ...fs.FS) middleware.Middleware {
 				Name:        "read_skill_resource",
 				Description: "Reads a file associated with a skill, such as references or assets.",
 			},
-			func(_ context.Context, in struct {
+			func(_ tool.Context, in struct {
 				SkillName    string `json:"skillName" jsonschema:"The name of the skill"`
 				ResourceName string `json:"resourceName" jsonschema:"The relative path of the resource file within the skill"`
 			}) (string, error) {
@@ -233,7 +234,10 @@ func (p *skills) autocallSkillTool(ctx context.Context, fcc *message.FunctionCal
 		if tl.Name() != fcc.Name {
 			continue
 		}
-		result, err := tl.Call(ctx, fcc.Arguments)
+		result, err := tl.Call(tool.Context{
+			Context: ctx,
+			CallID:  fcc.CallID,
+		}, fcc.Arguments)
 		if err != nil {
 			return fmt.Sprintf("Error: %v", err), true
 		}
