@@ -147,6 +147,42 @@ func TestHistoryProvider_Invoked_SkipsStoreOnInvokeError(t *testing.T) {
 	}
 }
 
+func TestHistoryProvider_Invoked_StoresOnInvokeErrorWhenEnabled(t *testing.T) {
+	invokeErr := errors.New("invoke failed")
+	keep := message.NewText("keep")
+	history := message.NewText("history")
+	history.SourceType = "message_history"
+	response := message.NewText("response")
+
+	called := false
+	var storedRequest []*message.Message
+	var storedResponse []*message.Message
+
+	provider := &HistoryProvider{
+		StoreOnError: true,
+		Store: func(ctx context.Context, session *Session, requestMessages, responseMessages []*message.Message) error {
+			called = true
+			storedRequest = requestMessages
+			storedResponse = responseMessages
+			return nil
+		},
+	}
+
+	err := provider.Invoked(context.Background(), NewSession(""), []*message.Message{keep, history}, []*message.Message{response}, invokeErr)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !called {
+		t.Fatal("expected Store to be called when StoreOnError is enabled")
+	}
+	if len(storedRequest) != 1 || storedRequest[0] != keep {
+		t.Fatal("expected default store filter to exclude history-sourced request messages")
+	}
+	if len(storedResponse) != 1 || storedResponse[0] != response {
+		t.Fatal("expected response messages to be forwarded to Store")
+	}
+}
+
 func TestHistoryProvider_Invoked_DefaultStoreFilterExcludesHistoryMessages(t *testing.T) {
 	keep := message.NewText("keep")
 	history := message.NewText("history")

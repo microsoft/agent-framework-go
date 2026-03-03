@@ -31,6 +31,9 @@ type HistoryProvider struct {
 
 	// Optional storage hook. Defaults to no-op.
 	Store func(ctx context.Context, session *Session, requestMessages, responseMessages []*message.Message) error
+
+	// If true, history will still be stored even if the agent invocation returns an error. Defaults to false.
+	StoreOnError bool
 }
 
 // Invoking returns the messages to use for the run.
@@ -60,7 +63,7 @@ func (p *HistoryProvider) Invoking(ctx context.Context, session *Session, reques
 
 // Invoked persists new messages after an agent invocation finishes.
 func (p *HistoryProvider) Invoked(ctx context.Context, session *Session, requestMessages, responseMessages []*message.Message, invokeError error) error {
-	if invokeError != nil {
+	if invokeError != nil && !p.StoreOnError {
 		return nil
 	}
 	filter := p.StoreFilter
