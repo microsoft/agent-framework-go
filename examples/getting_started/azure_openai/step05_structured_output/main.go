@@ -39,7 +39,7 @@ type PersonInfo struct {
 func runFor[T any](ctx context.Context, a *agent.Agent, message string, opts ...agentopt.Option) (T, error) {
 	var v T
 	opts = append(opts, agentopt.StructuredOutput(&v), agentopt.Stream(false))
-	for _, err := range a.RunText(message, opts...).All(ctx) {
+	for _, err := range a.RunText(ctx, message, opts...) {
 		if err != nil {
 			return v, err
 		}
@@ -95,7 +95,7 @@ func main() {
 
 	// Invoke the agent with some unstructured input while streaming, to extract the structured information from.
 	var personRaw []byte
-	for update, err := range a.RunText("Please provide information about John Smith, who is a 35-year-old software engineer.").All(ctx) {
+	for update, err := range a.RunText(ctx, "Please provide information about John Smith, who is a 35-year-old software engineer.", agentopt.Stream(true)) {
 		demo.Response(update, err)
 		personRaw = append(personRaw, update.String()...)
 	}

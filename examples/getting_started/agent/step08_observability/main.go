@@ -10,6 +10,7 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichat"
+	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/middleware"
 	"github.com/microsoft/agent-framework-go/middleware/otel"
@@ -60,11 +61,11 @@ func main() {
 	ctx := context.Background()
 
 	// Invoke the agent and output the text result.
-	resp, err := a.RunText("Tell me a joke about a pirate.").Collect(ctx)
+	resp, err := a.RunText(ctx, "Tell me a joke about a pirate.").Collect()
 	demo.Response(resp, err)
 
 	// Invoke the agent with streaming support.
-	for update, err := range a.RunText("Tell me a joke about a pirate.").All(ctx) {
+	for update, err := range a.RunText(ctx, "Tell me a joke about a pirate.", agentopt.Stream(true)) {
 		demo.Response(update, err)
 	}
 }

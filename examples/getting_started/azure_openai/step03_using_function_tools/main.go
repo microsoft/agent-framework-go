@@ -56,11 +56,11 @@ func main() {
 	ctx := context.Background()
 
 	// Non-streaming agent interaction with function tools.
-	resp, err := a.RunText("What is the weather like in Amsterdam?").Collect(ctx)
+	resp, err := a.RunText(ctx, "What is the weather like in Amsterdam?").Collect()
 	demo.Response(resp, err)
 
 	// Invoke the agent with streaming support.
-	for update, err := range a.RunText("What is the weather like in Amsterdam?").All(ctx) {
+	for update, err := range a.RunText(ctx, "What is the weather like in Amsterdam?", agentopt.Stream(true)) {
 		demo.Response(update, err)
 	}
 }

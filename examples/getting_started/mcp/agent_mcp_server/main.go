@@ -56,6 +56,6 @@ func main() {
 	})
 
 	// Invoke the agent and output the text result.
-	resp, err := a.RunText("How to create an Azure storage account using az cli?").Collect(ctx)
+	resp, err := a.RunText(ctx, "How to create an Azure storage account using az cli?").Collect()
 	demo.Response(resp, err)
 }

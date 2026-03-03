@@ -35,9 +35,9 @@ func main() {
 	if err != nil {
 		demo.Panic(err)
 	}
-	resp, err := a.RunText("Tell me a joke about a pirate.", agentopt.Session(session)).Collect(ctx)
+	resp, err := a.RunText(ctx, "Tell me a joke about a pirate.", agentopt.Session(session)).Collect()
 	demo.Response(resp, err)
-	resp, err = a.RunText("Now add some emojis to the joke and tell it in the voice of a pirate's parrot.", agentopt.Session(session)).Collect(ctx)
+	resp, err = a.RunText(ctx, "Now add some emojis to the joke and tell it in the voice of a pirate's parrot.", agentopt.Session(session)).Collect()
 	demo.Response(resp, err)
 
 	// Invoke the agent with a multi-turn conversation and streaming, where the context is preserved in the session object.
@@ -45,10 +45,10 @@ func main() {
 	if err != nil {
 		demo.Panic(err)
 	}
-	for update, err := range a.RunText("Tell me a joke about a pirate.", agentopt.Session(session2)).All(ctx) {
+	for update, err := range a.RunText(ctx, "Tell me a joke about a pirate.", agentopt.Session(session2), agentopt.Stream(true)) {
 		demo.Response(update, err)
 	}
-	for update, err := range a.RunText("Now add some emojis to the joke and tell it in the voice of a pirate's parrot.", agentopt.Session(session2)).All(ctx) {
+	for update, err := range a.RunText(ctx, "Now add some emojis to the joke and tell it in the voice of a pirate's parrot.", agentopt.Session(session2), agentopt.Stream(true)) {
 		demo.Response(update, err)
 	}
 }

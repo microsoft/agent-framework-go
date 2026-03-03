@@ -34,9 +34,9 @@ func main() {
 	}
 
 	// Start the initial run.
-	resp, err := a.RunText("Write a very long novel about otters in space.",
+	resp, err := a.RunText(ctx, "Write a very long novel about otters in space.",
 		agentopt.Session(session),
-		agentopt.AllowBackgroundResponses(true)).Collect(ctx)
+		agentopt.AllowBackgroundResponses(true)).Collect()
 
 	demo.Response(resp, err)
 
@@ -46,11 +46,11 @@ func main() {
 		time.Sleep(2 * time.Second)
 
 		// Continue with the token.
-		resp, err = a.Run(nil,
+		resp, err = a.Run(ctx, nil,
 			agentopt.Session(session),
 			agentopt.AllowBackgroundResponses(true),
 			agentopt.ContinuationToken(resp.ContinuationToken),
-		).Collect(ctx)
+		).Collect()
 		demo.Response(resp, err)
 	}
 }

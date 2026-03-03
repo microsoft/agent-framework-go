@@ -86,7 +86,7 @@ func runChatLoop(ctx context.Context, a *agent.Agent) {
 		fmt.Print("Assistant: ")
 
 		hasError := false
-		for update, err := range a.RunText(userInput, agentopt.Session(session)).All(ctx) {
+		for update, err := range a.RunText(ctx, userInput, agentopt.Session(session), agentopt.Stream(true)) {
 			if err != nil {
 				fmt.Printf("\n❌ Error: %v\n", err)
 				hasError = true

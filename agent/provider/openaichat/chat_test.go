@@ -144,12 +144,12 @@ func TestChatBasicRequestResponse_NonStreaming(t *testing.T) {
 
 	a := newTestClient(server)
 
-	resp, err := a.RunText("hello",
+	resp, err := a.RunText(t.Context(), "hello",
 		openaichat.ChatCompletionNewParams(openai.ChatCompletionNewParams{
 			MaxCompletionTokens: openai.Int(10),
 			Temperature:         openai.Float(0.5),
 		}),
-	).Collect(t.Context())
+	).Collect()
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
@@ -246,10 +246,10 @@ data: [DONE]
 	a := newTestClient(server)
 
 	var updates []*message.ResponseUpdate
-	for update, err := range a.RunText("hello", openaichat.ChatCompletionNewParams(openai.ChatCompletionNewParams{
+	for update, err := range a.RunText(t.Context(), "hello", openaichat.ChatCompletionNewParams(openai.ChatCompletionNewParams{
 		MaxCompletionTokens: openai.Int(20),
 		Temperature:         openai.Float(0.5),
-	})).All(t.Context()) {
+	}), agentopt.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
 		}
@@ -363,7 +363,7 @@ func TestChatMultipleMessages_NonStreaming(t *testing.T) {
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "i'm good. how are you?"}}},
 	}
 
-	resp, err := a.Run(messages,
+	resp, err := a.Run(t.Context(), messages,
 		openaichat.ChatCompletionNewParams(openai.ChatCompletionNewParams{
 			Temperature:      openai.Float(0.25),
 			FrequencyPenalty: openai.Float(0.75),
@@ -373,7 +373,7 @@ func TestChatMultipleMessages_NonStreaming(t *testing.T) {
 			},
 			Seed: openai.Int(42),
 		}),
-	).Collect(t.Context())
+	).Collect()
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
@@ -480,7 +480,7 @@ func TestChatMultiPartSystemMessage_NonStreaming(t *testing.T) {
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "hello!"}}},
 	}
 
-	resp, err := a.Run(messages).Collect(t.Context())
+	resp, err := a.Run(t.Context(), messages).Collect()
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
@@ -585,7 +585,7 @@ func TestChatEmptyAssistantMessage_NonStreaming(t *testing.T) {
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "i'm good. how are you?"}}},
 	}
 
-	resp, err := a.Run(messages).Collect(t.Context())
+	resp, err := a.Run(t.Context(), messages).Collect()
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
@@ -716,9 +716,9 @@ func TestChatFunctionCallContent_NonStreaming(t *testing.T) {
 		Description: "Gets the age of the specified person.",
 	}, getPersonAge)
 
-	resp, err := a.RunText("How old is Alice?",
+	resp, err := a.RunText(t.Context(), "How old is Alice?",
 		agentopt.Tool(tool),
-	).Collect(t.Context())
+	).Collect()
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
@@ -831,7 +831,7 @@ data: [DONE]
 	}, getPersonAge)
 
 	var updates []*message.ResponseUpdate
-	for update, err := range a.RunText("How old is Alice?", agentopt.Tool(tool)).All(t.Context()) {
+	for update, err := range a.RunText(t.Context(), "How old is Alice?", agentopt.Tool(tool), agentopt.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
 		}
@@ -979,7 +979,7 @@ func TestChatAssistantMessageWithBothToolsAndContent_NonStreaming(t *testing.T) 
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Thanks!"}}},
 	}
 
-	resp, err := a.Run(messages).Collect(t.Context())
+	resp, err := a.Run(t.Context(), messages).Collect()
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
@@ -1030,13 +1030,13 @@ func TestChatOptions_Model_OverridesClientModel_NonStreaming(t *testing.T) {
 	a := newTestClient(server)
 
 	// Override with gpt-4o in options
-	resp, err := a.RunText("hello",
+	resp, err := a.RunText(t.Context(), "hello",
 		openaichat.ChatCompletionNewParams(openai.ChatCompletionNewParams{
 			Model:               "gpt-4o",
 			MaxCompletionTokens: openai.Int(10),
 			Temperature:         openai.Float(0.5),
 		}),
-	).Collect(t.Context())
+	).Collect()
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
@@ -1082,13 +1082,13 @@ data: [DONE]
 
 	var updates []*message.ResponseUpdate
 	// Override with gpt-4o in options
-	for update, err := range a.RunText("hello",
+	for update, err := range a.RunText(t.Context(), "hello", agentopt.Stream(true),
 		openaichat.ChatCompletionNewParams(openai.ChatCompletionNewParams{
 			Model:               "gpt-4o",
 			MaxCompletionTokens: openai.Int(20),
 			Temperature:         openai.Float(0.5),
 		}),
-	).All(t.Context()) {
+	) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
 		}
@@ -1232,7 +1232,7 @@ func TestChatDataContentMessage_Image_NonStreaming(t *testing.T) {
 		},
 	}
 
-	resp, err := a.Run(messages).Collect(t.Context())
+	resp, err := a.Run(t.Context(), messages).Collect()
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
@@ -1402,11 +1402,11 @@ func TestChatMultipleRequiredFunctions(t *testing.T) {
 		Description: "Get the current time for a location",
 	}, getTime)
 
-	resp, err := a.RunText("What's the weather and time in Seattle?",
+	resp, err := a.RunText(t.Context(), "What's the weather and time in Seattle?",
 		agentopt.Tool(weatherTool),
 		agentopt.Tool(timeTool),
 		agentopt.ToolMode(tool.RequireTools("GetWeather", "GetTime")),
-	).Collect(t.Context())
+	).Collect()
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}

@@ -69,7 +69,7 @@ func newExecutor(a *Agent, emitEvents bool) *workflow.Executor {
 			// Run the agent in streaming mode only when agent run update events are to be emitted.
 			options = append(options, agentopt.Stream(emitEvents))
 			var updates []*message.ResponseUpdate
-			for update, err := range a.Run(messages, options...).All(ctx) {
+			for update, err := range a.Run(ctx, messages, options...) {
 				if err != nil {
 					return err
 				}

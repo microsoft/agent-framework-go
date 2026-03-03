@@ -101,7 +101,7 @@ func TestAgent_RunText(t *testing.T) {
 	a := agenttest.NewAgent(responseBuilder.Build())
 
 	ctx := t.Context()
-	resp, err := a.RunText("test message").Collect(ctx)
+	resp, err := a.RunText(ctx, "test message").Collect()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestAgent_RunMessage(t *testing.T) {
 	ctx := t.Context()
 	inputMsg := message.NewText("input")
 	customOption := agentopt.Stream(false)
-	resp, err := a.RunMessage(inputMsg, customOption).Collect(ctx)
+	resp, err := a.RunMessage(ctx, inputMsg, customOption).Collect()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestAgent_Run(t *testing.T) {
 	}
 
 	ctx := t.Context()
-	resp, err := a.Run(messages).Collect(ctx)
+	resp, err := a.Run(ctx, messages).Collect()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestAgent_Run_RejectsMessagesWithContinuationToken(t *testing.T) {
 	a := agenttest.NewAgent(responseBuilder.Build())
 
 	ctx := t.Context()
-	_, err := a.Run([]*message.Message{message.NewText("test")}, agentopt.ContinuationToken("token-123")).Collect(ctx)
+	_, err := a.RunText(ctx, "test", agentopt.ContinuationToken("token-123")).Collect()
 	if err == nil {
 		t.Fatal("expected error when continuation token and messages are both provided")
 	}
@@ -246,7 +246,7 @@ func TestAgent_Run_CreatesSession(t *testing.T) {
 	a := agenttest.NewAgent(responseBuilder.Build())
 
 	ctx := t.Context()
-	_, err := a.Run([]*message.Message{message.NewText("test")}).Collect(ctx)
+	_, err := a.RunText(ctx, "test").Collect()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -273,7 +273,7 @@ func TestAgent_Run_RequiresSessionWhenAllowBackgroundResponsesEnabled(t *testing
 	a := agenttest.NewAgent(responseBuilder.Build())
 
 	ctx := t.Context()
-	_, err := a.Run([]*message.Message{message.NewText("test")}, agentopt.AllowBackgroundResponses(true)).Collect(ctx)
+	_, err := a.RunText(ctx, "test", agentopt.AllowBackgroundResponses(true)).Collect()
 	if err == nil {
 		t.Fatal("expected error when AllowBackgroundResponses is enabled without a session")
 	}
@@ -297,7 +297,7 @@ func TestAgent_Run_UsesProvidedSession(t *testing.T) {
 
 	ctx := t.Context()
 	providedSession := agenttest.CreateSession()
-	_, err := a.Run([]*message.Message{message.NewText("test")}, agentopt.Session(providedSession)).Collect(ctx)
+	_, err := a.RunText(ctx, "test", agentopt.Session(providedSession)).Collect()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -343,7 +343,7 @@ func TestAgent_Run_PrependsAgentOptions(t *testing.T) {
 
 	ctx := t.Context()
 	callOption := agentopt.Stream(false)
-	_, err := a.Run([]*message.Message{message.NewText("test")}, callOption).Collect(ctx)
+	_, err := a.RunText(ctx, "test", callOption).Collect()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -364,7 +364,7 @@ func TestAgent_Run_StreamingResponses(t *testing.T) {
 
 	ctx := t.Context()
 	updates := []*message.ResponseUpdate{}
-	for update, err := range a.Run([]*message.Message{message.NewText("test")}).All(ctx) {
+	for update, err := range a.RunText(ctx, "test", agentopt.Stream(true)) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -387,7 +387,7 @@ func TestAgent_Run_AddsMetadataToContext(t *testing.T) {
 	a := agenttest.NewAgent(responseBuilder.Build())
 
 	ctx := t.Context()
-	_, err := a.Run([]*message.Message{message.NewText("test")}).Collect(ctx)
+	_, err := a.RunText(ctx, "test").Collect()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -419,7 +419,7 @@ func TestAgent_Run_InvokesSingleContextMiddleware(t *testing.T) {
 
 	ctx := t.Context()
 	session := agenttest.CreateSession()
-	_, err := a.Run([]*message.Message{message.NewText("user input")}, agentopt.Session(session)).Collect(ctx)
+	_, err := a.RunText(ctx, "user input", agentopt.Session(session)).Collect()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -452,7 +452,7 @@ func TestAgent_Run_ContextMiddlewareReceivesSession(t *testing.T) {
 
 	ctx := t.Context()
 	session := agenttest.CreateSession()
-	_, err := a.Run([]*message.Message{message.NewText("test")}, agentopt.Session(session)).Collect(ctx)
+	_, err := a.RunText(ctx, "test", agentopt.Session(session)).Collect()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -472,7 +472,7 @@ func TestAgent_Run_ContextMiddlewareCanFailBeforeRun(t *testing.T) {
 	a := newGenericTestAgent(runFn, "", []middleware.Middleware{&errorMiddleware{err: invokeErr}})
 
 	ctx := t.Context()
-	_, err := a.Run([]*message.Message{message.NewText("test")}, agentopt.Session(agenttest.CreateSession())).Collect(ctx)
+	_, err := a.RunText(ctx, "test", agentopt.Session(agenttest.CreateSession())).Collect()
 	if !errors.Is(err, invokeErr) {
 		t.Fatalf("expected %v, got %v", invokeErr, err)
 	}
@@ -484,7 +484,7 @@ func TestAgent_Run_MiddlewareObservesRunFailure(t *testing.T) {
 	a := newGenericTestAgent(failRunFunc(runErr), "", []middleware.Middleware{tracker})
 
 	ctx := t.Context()
-	_, err := a.Run([]*message.Message{message.NewText("test")}, agentopt.Session(agenttest.CreateSession())).Collect(ctx)
+	_, err := a.RunText(ctx, "test", agentopt.Session(agenttest.CreateSession())).Collect()
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -508,7 +508,7 @@ func TestAgent_Run_IncludesInstructions(t *testing.T) {
 	a := newGenericTestAgent(runFn, "You are a helpful assistant.", nil)
 
 	ctx := t.Context()
-	_, err := a.Run([]*message.Message{message.NewText("hello")}, agentopt.Session(agenttest.CreateSession())).Collect(ctx)
+	_, err := a.RunText(ctx, "hello", agentopt.Session(agenttest.CreateSession())).Collect()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -533,7 +533,7 @@ func TestRun_Collect(t *testing.T) {
 	a := agenttest.NewAgent(responseBuilder.Build())
 
 	ctx := t.Context()
-	resp, err := a.Run([]*message.Message{message.NewText("test")}).Collect(ctx)
+	resp, err := a.RunText(ctx, "test").Collect()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -557,7 +557,7 @@ func TestRun_Collect_WithError(t *testing.T) {
 	a := agenttest.NewAgent(responseBuilder.Build())
 
 	ctx := t.Context()
-	_, err := a.Run([]*message.Message{message.NewText("test")}).Collect(ctx)
+	_, err := a.RunText(ctx, "test").Collect()
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -577,7 +577,7 @@ func TestRun_All(t *testing.T) {
 
 	ctx := t.Context()
 	updates := []*message.ResponseUpdate{}
-	for update, err := range a.Run([]*message.Message{message.NewText("test")}).All(ctx) {
+	for update, err := range a.RunText(ctx, "test", agentopt.Stream(true)) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -601,7 +601,7 @@ func TestRun_All_WithError(t *testing.T) {
 	ctx := t.Context()
 	updateCount := 0
 	var receivedErr error
-	for _, err := range a.Run([]*message.Message{message.NewText("test")}).All(ctx) {
+	for _, err := range a.RunText(ctx, "test", agentopt.Stream(true)) {
 		if err != nil {
 			receivedErr = err
 			break
@@ -647,7 +647,7 @@ func TestAgent_Run_ProviderMiddleware_SkipsHistoryWhenSessionHasServiceID(t *tes
 
 	session := agenttest.CreateSession()
 	session.ServiceID = "server-managed"
-	_, err := a.Run([]*message.Message{message.NewText("input")}, agentopt.Session(session)).Collect(t.Context())
+	_, err := a.RunText(t.Context(), "input", agentopt.Session(session)).Collect()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -686,7 +686,7 @@ func TestAgent_Run_ProviderMiddleware_SkipsHistoryWithContinuationToken(t *testi
 		HistoryProvider: historyProvider,
 	})
 
-	_, err := a.Run(nil, agentopt.ContinuationToken("ct-1")).Collect(t.Context())
+	_, err := a.Run(t.Context(), nil, agentopt.ContinuationToken("ct-1")).Collect()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -719,7 +719,7 @@ func TestAgent_Run_ProviderMiddleware_PropagatesInvokingError(t *testing.T) {
 		HistoryProvider: historyProvider,
 	})
 
-	_, err := a.Run([]*message.Message{message.NewText("input")}, agentopt.Session(agenttest.CreateSession())).Collect(t.Context())
+	_, err := a.RunText(t.Context(), "input", agentopt.Session(agenttest.CreateSession())).Collect()
 	if !errors.Is(err, expected) {
 		t.Fatalf("expected %v, got %v", expected, err)
 	}
@@ -751,7 +751,7 @@ func TestAgent_Run_ProviderMiddleware_SkipsHistoryWhenSessionAutoCreated(t *test
 		HistoryProvider: historyProvider,
 	})
 
-	_, err := a.Run([]*message.Message{message.NewText("input")}).Collect(t.Context())
+	_, err := a.RunText(t.Context(), "input").Collect()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -799,7 +799,7 @@ func TestAgent_Run_ProviderMiddleware_PersistsHistoryAfterSuccessfulRun(t *testi
 		HistoryProvider: historyProvider,
 	})
 
-	_, err := a.Run([]*message.Message{requestMessage}, agentopt.Session(agenttest.CreateSession())).Collect(t.Context())
+	_, err := a.RunMessage(t.Context(), requestMessage, agentopt.Session(agenttest.CreateSession())).Collect()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -845,7 +845,7 @@ func TestAgent_Run_ProviderMiddleware_DoesNotPersistWithoutResponseMessages(t *t
 		HistoryProvider: historyProvider,
 	})
 
-	_, err := a.Run([]*message.Message{message.NewText("input")}, agentopt.Session(agenttest.CreateSession())).Collect(t.Context())
+	_, err := a.RunText(t.Context(), "input", agentopt.Session(agenttest.CreateSession())).Collect()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -875,7 +875,7 @@ func TestAgent_Run_ProviderMiddleware_PropagatesInvokedError(t *testing.T) {
 		HistoryProvider: historyProvider,
 	})
 
-	_, err := a.Run([]*message.Message{message.NewText("input")}, agentopt.Session(agenttest.CreateSession())).Collect(t.Context())
+	_, err := a.RunText(t.Context(), "input", agentopt.Session(agenttest.CreateSession())).Collect()
 	if !errors.Is(err, expected) {
 		t.Fatalf("expected %v, got %v", expected, err)
 	}
@@ -906,7 +906,7 @@ func TestAgent_Run_ProviderMiddleware_EarlyStopOnErrorSkipsStore(t *testing.T) {
 		HistoryProvider: historyProvider,
 	})
 
-	_, err := a.Run([]*message.Message{message.NewText("input")}, agentopt.Session(agenttest.CreateSession())).Collect(t.Context())
+	_, err := a.RunText(t.Context(), "input", agentopt.Session(agenttest.CreateSession())).Collect()
 	if !errors.Is(err, runErr) {
 		t.Fatalf("expected %v, got %v", runErr, err)
 	}
@@ -939,7 +939,7 @@ func TestAgent_Run_ProviderMiddleware_EarlyStopWithoutErrorStillStores(t *testin
 		HistoryProvider: historyProvider,
 	})
 
-	for _, err := range a.Run([]*message.Message{message.NewText("input")}, agentopt.Session(agenttest.CreateSession())).All(t.Context()) {
+	for _, err := range a.RunText(t.Context(), "input", agentopt.Session(agenttest.CreateSession()), agentopt.Stream(true)) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

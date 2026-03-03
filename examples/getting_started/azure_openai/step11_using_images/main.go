@@ -50,6 +50,6 @@ func main() {
 		},
 	)
 
-	resp, err := a.RunMessage(msg).Collect(ctx)
+	resp, err := a.RunMessage(ctx, msg).Collect()
 	demo.Response(resp, err)
 }

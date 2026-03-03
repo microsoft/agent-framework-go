@@ -52,7 +52,7 @@ func main() {
 	// --- Example 1: Expense policy question (loads FAQ resource) ---
 	fmt.Println("\nExample 1: Checking expense policy FAQ")
 	fmt.Println("---------------------------------------")
-	resp, err := a.RunText("Are tips reimbursable? I left a 25% tip on a taxi ride and want to know if that's covered.").Collect(ctx)
+	resp, err := a.RunText(ctx, "Are tips reimbursable? I left a 25% tip on a taxi ride and want to know if that's covered.").Collect()
 	demo.Response(resp, err)
 
 	// --- Example 2: Filing an expense report (multi-turn with template asset) ---
@@ -62,8 +62,8 @@ func main() {
 	if err != nil {
 		demo.Panic(err)
 	}
-	resp2, err := a.RunText("I had 3 client dinners and a $1,200 flight last week. Return a draft expense report and ask about any missing details.",
+	resp2, err := a.RunText(ctx, "I had 3 client dinners and a $1,200 flight last week. Return a draft expense report and ask about any missing details.",
 		agentopt.Session(session),
-	).Collect(ctx)
+	).Collect()
 	demo.Response(resp2, err)
 }

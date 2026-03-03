@@ -56,6 +56,6 @@ func main() {
 		},
 	})
 
-	resp, err := a.RunText("What is the weather like in Amsterdam?").Collect(context.Background())
+	resp, err := a.RunText(context.Background(), "What is the weather like in Amsterdam?").Collect()
 	demo.Response(resp, err)
 }

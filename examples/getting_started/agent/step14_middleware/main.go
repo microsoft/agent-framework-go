@@ -30,7 +30,7 @@ func main() {
 		},
 	})
 
-	resp, err := a.RunText("Tell me something that contains the word harmful.").Collect(context.Background())
+	resp, err := a.RunText(context.Background(), "Tell me something that contains the word harmful.").Collect()
 	demo.Response(resp, err)
 }
 

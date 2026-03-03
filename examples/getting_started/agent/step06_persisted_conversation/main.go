@@ -40,7 +40,7 @@ func main() {
 	}
 
 	// Run the agent with a new session.
-	resp, err := a.RunText("Tell me a joke about a pirate.", agentopt.Session(session)).Collect(ctx)
+	resp, err := a.RunText(ctx, "Tell me a joke about a pirate.", agentopt.Session(session)).Collect()
 	demo.Response(resp, err)
 
 	// Serialize the session state so it can be stored for later use.
@@ -72,6 +72,6 @@ func main() {
 	}
 
 	// Run the agent again with the resumed session.
-	resp, err = a.RunText("Now tell the same joke in the voice of a pirate, and add some emojis to the joke.", agentopt.Session(resumedSession)).Collect(ctx)
+	resp, err = a.RunText(ctx, "Now tell the same joke in the voice of a pirate, and add some emojis to the joke.", agentopt.Session(resumedSession)).Collect()
 	demo.Response(resp, err)
 }

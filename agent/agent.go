@@ -102,21 +102,12 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 }
 
 // ResponseStream represents an execution of the agent.
-type ResponseStream struct {
-	run func(ctx context.Context, stream bool) iter.Seq2[*message.ResponseUpdate, error]
-}
-
-// All returns an iterator over all response updates from the agent run.
-// Streaming will be automatically enabled unless [agentopt.Stream]
-// is explicitly set in the run options.
-func (r ResponseStream) All(ctx context.Context) iter.Seq2[*message.ResponseUpdate, error] {
-	return r.run(ctx, true)
-}
+type ResponseStream iter.Seq2[*message.ResponseUpdate, error]
 
 // Collect gathers all response updates into a single Response object.
-func (r ResponseStream) Collect(ctx context.Context) (*message.Response, error) {
+func (r ResponseStream) Collect() (*message.Response, error) {
 	var resp message.Response
-	for update, err := range r.run(ctx, false) {
+	for update, err := range r {
 		if err != nil {
 			return nil, err
 		}
@@ -201,27 +192,25 @@ func (a *Agent) UnmarshalSession(ctx context.Context, data []byte) (*memory.Sess
 	return a.unmarshalSession(ctx, data)
 }
 
-func (a *Agent) RunText(msg string, options ...agentopt.Option) ResponseStream {
-	return a.Run([]*message.Message{message.NewText(msg)}, options...)
+func (a *Agent) RunText(ctx context.Context, msg string, options ...agentopt.Option) ResponseStream {
+	return a.Run(ctx, []*message.Message{message.NewText(msg)}, options...)
 }
 
-func (a *Agent) RunMessage(msg *message.Message, options ...agentopt.Option) ResponseStream {
-	return a.Run([]*message.Message{msg}, options...)
+func (a *Agent) RunMessage(ctx context.Context, msg *message.Message, options ...agentopt.Option) ResponseStream {
+	return a.Run(ctx, []*message.Message{msg}, options...)
 }
 
-func (a *Agent) Run(messages []*message.Message, options ...agentopt.Option) ResponseStream {
-	return ResponseStream{func(ctx context.Context, stream bool) iter.Seq2[*message.ResponseUpdate, error] {
-		ctx, preparedMessages, options, err := a.prepareRun(ctx, messages, stream, options)
-		if err != nil {
-			return func(yield func(*message.ResponseUpdate, error) bool) {
-				yield(nil, err)
-			}
+func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ...agentopt.Option) ResponseStream {
+	ctx, preparedMessages, options, err := a.prepareRun(ctx, messages, options)
+	if err != nil {
+		return func(yield func(*message.ResponseUpdate, error) bool) {
+			yield(nil, err)
 		}
-		return middleware.RunChain(ctx, a.run, a.middlewares, preparedMessages, options...)
-	}}
+	}
+	return ResponseStream(middleware.RunChain(ctx, a.run, a.middlewares, preparedMessages, options...))
 }
 
-func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, stream bool, options []agentopt.Option) (context.Context, []*message.Message, []agentopt.Option, error) {
+func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, options []agentopt.Option) (context.Context, []*message.Message, []agentopt.Option, error) {
 	// Prepend options from agent configuration.
 	if len(a.runOptions) != 0 {
 		options = append(a.runOptions, options...)
@@ -261,14 +250,6 @@ func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, str
 
 	// Add agent identity to context so that middlewares can log it.
 	ctx = context.WithValue(ctx, agentKey{}, a)
-
-	// If Run.All() is called, set the Stream option to true
-	// unless already specified in options.
-	if stream {
-		if _, ok := agentopt.Get(options, agentopt.Stream); !ok {
-			options = append(options, agentopt.Stream(stream))
-		}
-	}
 
 	return ctx, messages, options, nil
 }

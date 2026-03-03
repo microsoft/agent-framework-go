@@ -62,7 +62,7 @@ func main() {
 	if err != nil {
 		demo.Panic(err)
 	}
-	resp, err := a.RunText("What is the weather like in Amsterdam?", agentopt.Session(session)).Collect(ctx)
+	resp, err := a.RunText(ctx, "What is the weather like in Amsterdam?", agentopt.Session(session)).Collect()
 	demo.Response(resp, err)
 
 	var userResponses []message.Content
@@ -84,6 +84,6 @@ func main() {
 		return
 	}
 	// Pass the user input responses back to the agent for further processing.
-	resp, err = a.RunMessage(message.New(userResponses...), agentopt.Session(session)).Collect(ctx)
+	resp, err = a.RunMessage(ctx, message.New(userResponses...), agentopt.Session(session)).Collect()
 	demo.Response(resp, err)
 }

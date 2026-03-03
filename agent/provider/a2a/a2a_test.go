@@ -172,7 +172,7 @@ func TestRunAllowsNonUserRoleMessages(t *testing.T) {
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Valid user message"}}},
 	}
 
-	_, err := a.Run(inputMessages).Collect(t.Context())
+	_, err := a.Run(t.Context(), inputMessages).Collect()
 	if err != nil {
 		t.Errorf("error = %v, want nil", err)
 	}
@@ -191,7 +191,7 @@ func TestRunWithValidUserMessage(t *testing.T) {
 	}
 	a := newTestAgent(transport, agent.Config{})
 
-	result, err := a.RunText("Hello, world!").Collect(t.Context())
+	result, err := a.RunText(t.Context(), "Hello, world!").Collect()
 	if err != nil {
 		t.Fatalf("error = %v, want nil", err)
 	}
@@ -262,7 +262,7 @@ func TestRunWithCreateSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = a.RunText("Test message", agentopt.Session(session)).Collect(t.Context())
+	_, err = a.RunText(t.Context(), "Test message", agentopt.Session(session)).Collect()
 	if err != nil {
 		t.Fatalf("error = %v, want nil", err)
 	}
@@ -282,7 +282,7 @@ func TestRunWithExistingSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.RunText("Test message", agentopt.Session(session)).Collect(t.Context())
+	_, err = a.RunText(t.Context(), "Test message", agentopt.Session(session)).Collect()
 	if err != nil {
 		t.Fatalf("error = %v, want nil", err)
 	}
@@ -313,7 +313,7 @@ func TestRunWithSessionHavingDifferentContextID(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.RunText("Test message", agentopt.Session(session)).Collect(t.Context())
+	_, err = a.RunText(t.Context(), "Test message", agentopt.Session(session)).Collect()
 	if err == nil {
 		t.Error("expected error, got nil")
 	}
@@ -332,7 +332,7 @@ func TestRunStreamingWithValidUserMessage(t *testing.T) {
 	a := newTestAgent(transport, agent.Config{})
 
 	var updates []*message.ResponseUpdate
-	for update, err := range a.RunText("Hello, streaming!").All(t.Context()) {
+	for update, err := range a.RunText(t.Context(), "Hello, streaming!", agentopt.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v, want nil", err)
 		}
@@ -413,7 +413,7 @@ func TestRunStreamingWithSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, err := range a.RunText("Test streaming", agentopt.Session(session)).All(t.Context()) {
+	for _, err := range a.RunText(t.Context(), "Test streaming", agentopt.Session(session), agentopt.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v, want nil", err)
 		}
@@ -435,7 +435,7 @@ func TestRunStreamingWithExistingSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, err := range a.RunText("Test streaming", agentopt.Session(session)).All(t.Context()) {
+	for _, err := range a.RunText(t.Context(), "Test streaming", agentopt.Session(session), agentopt.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v, want nil", err)
 		}
@@ -468,7 +468,7 @@ func TestRunStreamingWithSessionHavingDifferentContextID(t *testing.T) {
 	}
 
 	gotError := false
-	for _, err := range a.RunText("Test streaming", agentopt.Session(session)).All(t.Context()) {
+	for _, err := range a.RunText(t.Context(), "Test streaming", agentopt.Session(session), agentopt.Stream(true)) {
 		if err != nil {
 			gotError = true
 			break
@@ -498,7 +498,7 @@ func TestRunStreamingAllowsNonUserRoleMessages(t *testing.T) {
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Valid user message"}}},
 	}
 
-	for _, err := range a.Run(inputMessages).All(t.Context()) {
+	for _, err := range a.Run(t.Context(), inputMessages, agentopt.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v, want nil", err)
 		}
@@ -523,7 +523,7 @@ func TestRunWithHostedFileContent(t *testing.T) {
 		},
 	}
 
-	_, err := a.Run(inputMessages).Collect(t.Context())
+	_, err := a.Run(t.Context(), inputMessages).Collect()
 	if err != nil {
 		t.Fatalf("error = %v, want nil", err)
 	}
@@ -561,7 +561,7 @@ func TestRunWithContinuationTokenAndMessages(t *testing.T) {
 	transport := &mockA2ATransport{}
 	a := newTestAgent(transport, agent.Config{})
 
-	_, err := a.RunText("Test message", agentopt.ContinuationToken("task-123")).Collect(t.Context())
+	_, err := a.RunText(t.Context(), "Test message", agentopt.ContinuationToken("task-123")).Collect()
 	if err == nil {
 		t.Error("error = nil, want error when continuation token and messages are provided")
 	}
@@ -577,7 +577,7 @@ func TestRunWithContinuationToken(t *testing.T) {
 	}
 	a := newTestAgent(transport, agent.Config{})
 
-	_, err := a.Run(nil, agentopt.ContinuationToken("task-123")).Collect(t.Context())
+	_, err := a.Run(t.Context(), nil, agentopt.ContinuationToken("task-123")).Collect()
 	if err != nil {
 		t.Fatalf("error = %v, want nil", err)
 	}
@@ -601,7 +601,7 @@ func TestRunWithTaskInSessionAndMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.RunText("Please make the background transparent", agentopt.Session(session)).Collect(t.Context())
+	_, err = a.RunText(t.Context(), "Please make the background transparent", agentopt.Session(session)).Collect()
 	if err != nil {
 		t.Fatalf("error = %v, want nil", err)
 	}
@@ -634,7 +634,7 @@ func TestRunWithMultipleTaskIDsInSessionAndMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.RunText("Please make the background transparent", agentopt.Session(session)).Collect(t.Context())
+	_, err = a.RunText(t.Context(), "Please make the background transparent", agentopt.Session(session)).Collect()
 	if err != nil {
 		t.Fatalf("error = %v, want nil", err)
 	}
@@ -672,7 +672,7 @@ func TestRunWithAgentTask(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.RunText("Start a task", agentopt.Session(session)).Collect(t.Context())
+	_, err = a.RunText(t.Context(), "Start a task", agentopt.Session(session)).Collect()
 	if err != nil {
 		t.Fatalf("error = %v, want nil", err)
 	}
@@ -708,7 +708,7 @@ func TestRunWithAgentTaskResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := a.RunText("Start a long-running task", agentopt.Session(session)).Collect(t.Context())
+	result, err := a.RunText(t.Context(), "Start a long-running task", agentopt.Session(session)).Collect()
 	if err != nil {
 		t.Fatalf("error = %v, want nil", err)
 	}
@@ -769,7 +769,7 @@ func TestRunWithVariousTaskStates(t *testing.T) {
 			}
 			a := newTestAgent(transport, agent.Config{})
 
-			result, err := a.RunText("Test message").Collect(t.Context())
+			result, err := a.RunText(t.Context(), "Test message").Collect()
 			if err != nil {
 				t.Fatalf("error = %v, want nil", err)
 			}
@@ -789,7 +789,7 @@ func TestRunStreamingWithContinuationTokenAndMessages(t *testing.T) {
 	a := newTestAgent(transport, agent.Config{})
 
 	gotError := false
-	for _, err := range a.RunText("Test message", agentopt.ContinuationToken("task-123")).All(t.Context()) {
+	for _, err := range a.RunText(t.Context(), "Test message", agentopt.ContinuationToken("task-123"), agentopt.Stream(true)) {
 		if err != nil {
 			gotError = true
 			break
@@ -819,7 +819,7 @@ func TestRunStreamingWithTaskInSessionAndMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, err := range a.RunText("Please make the background transparent", agentopt.Session(session)).All(t.Context()) {
+	for _, err := range a.RunText(t.Context(), "Please make the background transparent", agentopt.Session(session), agentopt.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v, want nil", err)
 		}
@@ -860,7 +860,7 @@ func TestRunStreamingWithAgentTaskUpdatesSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, err := range a.RunText("Start a task", agentopt.Session(session)).All(t.Context()) {
+	for _, err := range a.RunText(t.Context(), "Start a task", agentopt.Session(session), agentopt.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v, want nil", err)
 		}
@@ -890,7 +890,7 @@ func TestRunStreamingWithAgentMessage(t *testing.T) {
 	a := newTestAgent(transport, agent.Config{})
 
 	var updates []*message.ResponseUpdate
-	for update, err := range a.RunText("Test message").All(t.Context()) {
+	for update, err := range a.RunText(t.Context(), "Test message", agentopt.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v, want nil", err)
 		}
@@ -949,7 +949,7 @@ func TestRunStreamingWithAgentTaskYieldsUpdate(t *testing.T) {
 	}
 
 	var updates []*message.ResponseUpdate
-	for update, err := range a.RunText("Start long-running task", agentopt.Session(session)).All(t.Context()) {
+	for update, err := range a.RunText(t.Context(), "Start long-running task", agentopt.Session(session), agentopt.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v, want nil", err)
 		}
@@ -1001,7 +1001,7 @@ func TestRunStreamingWithTaskStatusUpdateEvent(t *testing.T) {
 	}
 
 	var updates []*message.ResponseUpdate
-	for update, err := range a.RunText("Check task status", agentopt.Session(session)).All(t.Context()) {
+	for update, err := range a.RunText(t.Context(), "Check task status", agentopt.Session(session), agentopt.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v, want nil", err)
 		}
@@ -1057,7 +1057,7 @@ func TestRunStreamingWithTaskArtifactUpdateEvent(t *testing.T) {
 	}
 
 	var updates []*message.ResponseUpdate
-	for update, err := range a.RunText("Process artifact", agentopt.Session(session)).All(t.Context()) {
+	for update, err := range a.RunText(t.Context(), "Process artifact", agentopt.Session(session), agentopt.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v, want nil", err)
 		}

@@ -63,7 +63,7 @@ func (t functool) Call(ctx tool.Context, args string) (any, error) {
 	if err := json.Unmarshal([]byte(args), &in); err != nil {
 		return nil, err
 	}
-	resp, err := t.agent.RunText(in.Query, t.opts...).Collect(ctx)
+	resp, err := t.agent.RunText(ctx, in.Query, t.opts...).Collect()
 	if err != nil {
 		return "", err
 	}

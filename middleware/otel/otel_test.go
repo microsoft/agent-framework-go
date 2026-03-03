@@ -98,7 +98,7 @@ func TestOtel_Run_SpanHasCorrectAttributes(t *testing.T) {
 	})
 
 	// Run through agent to get metadata in context
-	_, _ = a.Run([]*message.Message{message.NewText("test")}).Collect(t.Context())
+	_, _ = a.RunMessage(t.Context(), message.NewText("test")).Collect()
 
 	_ = capturedCtx // silence unused warning
 
