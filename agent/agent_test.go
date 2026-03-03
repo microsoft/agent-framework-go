@@ -621,3 +621,332 @@ func TestRun_All_WithError(t *testing.T) {
 		t.Errorf("expected 1 update before error, got %d", updateCount)
 	}
 }
+
+func TestAgent_Run_ProviderMiddleware_SkipsHistoryWhenSessionHasServiceID(t *testing.T) {
+	provideCalled := false
+	var capturedMessages []*message.Message
+
+	historyProvider := &memory.HistoryProvider{
+		Provide: func(ctx context.Context, session *memory.Session, requestMessages []*message.Message) ([]*message.Message, error) {
+			provideCalled = true
+			return []*message.Message{message.NewText("history")}, nil
+		},
+	}
+
+	runFn := func(_ context.Context, msgs []*message.Message, _ ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+		capturedMessages = msgs
+		return func(yield func(*message.ResponseUpdate, error) bool) {
+			yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "ok"}}}, nil)
+		}
+	}
+
+	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
+		ID: "test-agent", Name: "test-agent",
+		HistoryProvider: historyProvider,
+	})
+
+	session := agenttest.CreateSession()
+	session.ServiceID = "server-managed"
+	_, err := a.Run([]*message.Message{message.NewText("input")}, agentopt.Session(session)).Collect(t.Context())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if provideCalled {
+		t.Fatal("expected history provider not to be used for service-managed sessions")
+	}
+	if len(capturedMessages) != 1 || capturedMessages[0].SourceType != "" {
+		t.Fatal("expected request to pass through unchanged")
+	}
+}
+
+func TestAgent_Run_ProviderMiddleware_SkipsHistoryWithContinuationToken(t *testing.T) {
+	provideCalled := false
+	runCalled := false
+
+	historyProvider := &memory.HistoryProvider{
+		Provide: func(ctx context.Context, session *memory.Session, requestMessages []*message.Message) ([]*message.Message, error) {
+			provideCalled = true
+			return nil, nil
+		},
+	}
+
+	runFn := func(_ context.Context, msgs []*message.Message, _ ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+		runCalled = true
+		if len(msgs) != 0 {
+			t.Fatalf("expected no messages with continuation token run, got %d", len(msgs))
+		}
+		return func(yield func(*message.ResponseUpdate, error) bool) {
+			yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "ok"}}}, nil)
+		}
+	}
+
+	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
+		ID: "test-agent", Name: "test-agent",
+		HistoryProvider: historyProvider,
+	})
+
+	_, err := a.Run(nil, agentopt.ContinuationToken("ct-1")).Collect(t.Context())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !runCalled {
+		t.Fatal("expected provider run function to be called")
+	}
+	if provideCalled {
+		t.Fatal("expected history provider not to be used with continuation token")
+	}
+}
+
+func TestAgent_Run_ProviderMiddleware_PropagatesInvokingError(t *testing.T) {
+	expected := errors.New("invoking failed")
+	runCalled := false
+
+	historyProvider := &memory.HistoryProvider{
+		Provide: func(ctx context.Context, session *memory.Session, requestMessages []*message.Message) ([]*message.Message, error) {
+			return nil, expected
+		},
+	}
+
+	runFn := func(_ context.Context, msgs []*message.Message, _ ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+		runCalled = true
+		return func(yield func(*message.ResponseUpdate, error) bool) {}
+	}
+
+	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
+		ID: "test-agent", Name: "test-agent",
+		HistoryProvider: historyProvider,
+	})
+
+	_, err := a.Run([]*message.Message{message.NewText("input")}, agentopt.Session(agenttest.CreateSession())).Collect(t.Context())
+	if !errors.Is(err, expected) {
+		t.Fatalf("expected %v, got %v", expected, err)
+	}
+	if runCalled {
+		t.Fatal("expected run function not to be called when invoking fails")
+	}
+}
+
+func TestAgent_Run_ProviderMiddleware_SkipsHistoryWhenSessionAutoCreated(t *testing.T) {
+	provideCalled := false
+	runCalled := false
+
+	historyProvider := &memory.HistoryProvider{
+		Provide: func(ctx context.Context, session *memory.Session, requestMessages []*message.Message) ([]*message.Message, error) {
+			provideCalled = true
+			return nil, errors.New("history should be skipped")
+		},
+	}
+
+	runFn := func(_ context.Context, msgs []*message.Message, _ ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+		runCalled = true
+		return func(yield func(*message.ResponseUpdate, error) bool) {
+			yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "ok"}}}, nil)
+		}
+	}
+
+	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
+		ID: "test-agent", Name: "test-agent",
+		HistoryProvider: historyProvider,
+	})
+
+	_, err := a.Run([]*message.Message{message.NewText("input")}).Collect(t.Context())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !runCalled {
+		t.Fatal("expected run function to be called")
+	}
+	if provideCalled {
+		t.Fatal("expected history provider to be skipped for auto-created session")
+	}
+}
+
+func TestAgent_Run_ProviderMiddleware_PersistsHistoryAfterSuccessfulRun(t *testing.T) {
+	historyMessage := message.NewText("history")
+	requestMessage := message.NewText("input")
+
+	var capturedMessages []*message.Message
+	var storedRequest []*message.Message
+	var storedResponse []*message.Message
+	storeCalled := false
+
+	historyProvider := &memory.HistoryProvider{
+		Provide: func(ctx context.Context, session *memory.Session, requestMessages []*message.Message) ([]*message.Message, error) {
+			return []*message.Message{historyMessage}, nil
+		},
+		Store: func(ctx context.Context, session *memory.Session, requestMessages, responseMessages []*message.Message) error {
+			storeCalled = true
+			storedRequest = requestMessages
+			storedResponse = responseMessages
+			return nil
+		},
+	}
+
+	runFn := func(_ context.Context, msgs []*message.Message, _ ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+		capturedMessages = msgs
+		return func(yield func(*message.ResponseUpdate, error) bool) {
+			if !yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "part1"}}}, nil) {
+				return
+			}
+			yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "part2"}}}, nil)
+		}
+	}
+
+	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
+		ID: "test-agent", Name: "test-agent",
+		HistoryProvider: historyProvider,
+	})
+
+	_, err := a.Run([]*message.Message{requestMessage}, agentopt.Session(agenttest.CreateSession())).Collect(t.Context())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(capturedMessages) != 2 {
+		t.Fatalf("expected history + request to be sent to provider, got %d", len(capturedMessages))
+	}
+	if capturedMessages[0].SourceType != "message_history" {
+		t.Fatal("expected first message to be history-sourced")
+	}
+	if capturedMessages[1] != requestMessage {
+		t.Fatal("expected request message appended after history")
+	}
+	if !storeCalled {
+		t.Fatal("expected store to be called")
+	}
+	if len(storedRequest) != 1 || storedRequest[0] != requestMessage {
+		t.Fatal("expected default store filter to remove history-sourced request")
+	}
+	if len(storedResponse) == 0 {
+		t.Fatal("expected response messages to be persisted")
+	}
+}
+
+func TestAgent_Run_ProviderMiddleware_DoesNotPersistWithoutResponseMessages(t *testing.T) {
+	storeCalled := false
+
+	historyProvider := &memory.HistoryProvider{
+		Store: func(ctx context.Context, session *memory.Session, requestMessages, responseMessages []*message.Message) error {
+			storeCalled = true
+			return nil
+		},
+	}
+
+	runFn := func(_ context.Context, msgs []*message.Message, _ ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+		return func(yield func(*message.ResponseUpdate, error) bool) {
+			yield(nil, nil)
+		}
+	}
+
+	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
+		ID: "test-agent", Name: "test-agent",
+		HistoryProvider: historyProvider,
+	})
+
+	_, err := a.Run([]*message.Message{message.NewText("input")}, agentopt.Session(agenttest.CreateSession())).Collect(t.Context())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if storeCalled {
+		t.Fatal("expected store not to be called when no response messages are produced")
+	}
+}
+
+func TestAgent_Run_ProviderMiddleware_PropagatesInvokedError(t *testing.T) {
+	expected := errors.New("invoked failed")
+
+	historyProvider := &memory.HistoryProvider{
+		Store: func(ctx context.Context, session *memory.Session, requestMessages, responseMessages []*message.Message) error {
+			return expected
+		},
+	}
+
+	runFn := func(_ context.Context, msgs []*message.Message, _ ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+		return func(yield func(*message.ResponseUpdate, error) bool) {
+			yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "response"}}}, nil)
+		}
+	}
+
+	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
+		ID: "test-agent", Name: "test-agent",
+		HistoryProvider: historyProvider,
+	})
+
+	_, err := a.Run([]*message.Message{message.NewText("input")}, agentopt.Session(agenttest.CreateSession())).Collect(t.Context())
+	if !errors.Is(err, expected) {
+		t.Fatalf("expected %v, got %v", expected, err)
+	}
+}
+
+func TestAgent_Run_ProviderMiddleware_EarlyStopOnErrorSkipsStore(t *testing.T) {
+	runErr := errors.New("run failed")
+	storeCalled := false
+
+	historyProvider := &memory.HistoryProvider{
+		Store: func(ctx context.Context, session *memory.Session, requestMessages, responseMessages []*message.Message) error {
+			storeCalled = true
+			return nil
+		},
+	}
+
+	runFn := func(_ context.Context, msgs []*message.Message, _ ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+		return func(yield func(*message.ResponseUpdate, error) bool) {
+			if !yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "before error"}}}, nil) {
+				return
+			}
+			yield(nil, runErr)
+		}
+	}
+
+	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
+		ID: "test-agent", Name: "test-agent",
+		HistoryProvider: historyProvider,
+	})
+
+	_, err := a.Run([]*message.Message{message.NewText("input")}, agentopt.Session(agenttest.CreateSession())).Collect(t.Context())
+	if !errors.Is(err, runErr) {
+		t.Fatalf("expected %v, got %v", runErr, err)
+	}
+	if storeCalled {
+		t.Fatal("expected store to be skipped when run stops on error")
+	}
+}
+
+func TestAgent_Run_ProviderMiddleware_EarlyStopWithoutErrorStillStores(t *testing.T) {
+	storeCalled := false
+
+	historyProvider := &memory.HistoryProvider{
+		Store: func(ctx context.Context, session *memory.Session, requestMessages, responseMessages []*message.Message) error {
+			storeCalled = true
+			return nil
+		},
+	}
+
+	runFn := func(_ context.Context, msgs []*message.Message, _ ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+		return func(yield func(*message.ResponseUpdate, error) bool) {
+			if !yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "first"}}}, nil) {
+				return
+			}
+			yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "second"}}}, nil)
+		}
+	}
+
+	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
+		ID: "test-agent", Name: "test-agent",
+		HistoryProvider: historyProvider,
+	})
+
+	for _, err := range a.Run([]*message.Message{message.NewText("input")}, agentopt.Session(agenttest.CreateSession())).All(t.Context()) {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		break
+	}
+
+	if !storeCalled {
+		t.Fatal("expected store to still be called when iteration stops without an error")
+	}
+}

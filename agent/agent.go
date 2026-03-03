@@ -41,6 +41,8 @@ type Config struct {
 
 	Instructions string
 
+	HistoryProvider *memory.HistoryProvider
+
 	DisableFuncAutoCall bool
 
 	Logger           *slog.Logger
@@ -69,6 +71,12 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 			}),
 		)
 	}
+	if cfg.HistoryProvider == nil {
+		// If no history provider was provided, and we later find out that the underlying service does not manage chat history server-side,
+		// we will use the default in-memory history provider which stores message history in the Session state.
+		// This allows for basic conversation continuity across runs without requiring users to implement their own history management.
+		cfg.HistoryProvider = memory.NewInMemoryHistoryProvider(memory.InMemoryHistoryProviderConfig{})
+	}
 	if prov.FormatOfFn != nil && prov.UnmarshalFn != nil {
 		cfg.Middlewares = append(cfg.Middlewares,
 			structuredoutput.New(structuredoutput.Config{
@@ -77,7 +85,7 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 			}),
 		)
 	}
-	cfg.Middlewares = append(cfg.Middlewares, authorMiddleware(cfg.ID, cfg.Name))
+	cfg.Middlewares = append(cfg.Middlewares, authorMiddleware(cfg.ID, cfg.Name), providerMiddleware(cfg.HistoryProvider))
 	return &Agent{
 		id:               cfg.ID,
 		name:             cfg.Name,
@@ -230,7 +238,7 @@ func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, str
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		options = append(options, agentopt.Session(session))
+		options = append(options, agentopt.Session(session), noSessionProvided(true))
 	}
 
 	continuationToken, _ := agentopt.Get(options, agentopt.ContinuationToken)
@@ -265,6 +273,54 @@ func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, str
 	return ctx, messages, options, nil
 }
 
+func providerMiddleware(historyProvider *memory.HistoryProvider) middleware.Middleware {
+	return middleware.Func(func(next middleware.RunFunc, ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+		if noSession, _ := agentopt.Get(options, noSessionProvided); noSession {
+			// If session was auto-created for this run, skip history persistence because it will not outlive the run.
+			return next(ctx, messages, options...)
+		}
+		session, _ := agentopt.Get(options, agentopt.Session)
+		if session.ServiceID != "" {
+			// If the session has a ServiceID, we skip the history provider as we assume the provider manages history server-side.
+			return next(ctx, messages, options...)
+		}
+		contToken, _ := agentopt.Get(options, agentopt.ContinuationToken)
+		if contToken != "" {
+			// If a continuation token is provided, we skip the history provider as we assume the provider manages background responses server-side.
+			return next(ctx, messages, options...)
+		}
+		return func(yield func(*message.ResponseUpdate, error) bool) {
+			// Retrieve message history.
+			messages, err := historyProvider.Invoking(ctx, session, messages)
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+			var resp message.Response
+			var runErr error
+			for update, err := range next(ctx, messages, options...) {
+				if update != nil && session.ServiceID == "" {
+					resp.Update(update)
+				}
+				if !yield(update, err) {
+					if err != nil {
+						runErr = err
+					}
+					break
+				}
+			}
+			resp.Coalesce()
+			if len(resp.Messages) > 0 {
+				// After the run finishes, persist the messages to history.
+				if err := historyProvider.Invoked(ctx, session, messages, resp.Messages, runErr); err != nil {
+					yield(nil, err)
+					return
+				}
+			}
+		}
+	})
+}
+
 func authorMiddleware(id, name string) middleware.Middleware {
 	return middleware.Func(func(next middleware.RunFunc, ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
@@ -286,6 +342,14 @@ func authorMiddleware(id, name string) middleware.Middleware {
 }
 
 type agentKey struct{}
+
+type noSessionOpt bool
+
+func (o noSessionOpt) Value() any { return bool(o) }
+
+func noSessionProvided(v bool) agentopt.Option {
+	return noSessionOpt(v)
+}
 
 // AgentFromContext retrieves the agent that initiated the run from the context.
 // Returns the agent and true if found, or nil and false otherwise.

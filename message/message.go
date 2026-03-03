@@ -32,6 +32,8 @@ type Message struct {
 	ID                   string
 	AuthorID             string    `json:",omitzero"`
 	AuthorName           string    `json:",omitzero"`
+	SourceID             string    `json:",omitzero"`
+	SourceType           string    `json:",omitzero"`
 	CreatedAt            time.Time `json:",omitzero"`
 	RawRepresentation    any       `json:"-"`
 }
@@ -63,6 +65,7 @@ func (m *Message) Clone() *Message {
 		return nil
 	}
 	v := *m
+	v.AdditionalProperties = maps.Clone(m.AdditionalProperties)
 	return &v
 }
 
