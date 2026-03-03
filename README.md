@@ -95,7 +95,7 @@ func main() {
 		Model:      os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), // e.g., "gpt-4o"
 	}, nil)
 
-  resp, err := a.RunText("Write a haiku about the Microsoft Agent Framework").Collect(context.Background())
+  resp, err := a.RunText(context.Background(), "Write a haiku about the Microsoft Agent Framework").Collect()
   if err != nil {
     panic(err)
   }
