@@ -5,8 +5,9 @@ package main
 import (
 	"context"
 
+	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/provider/anthropic"
+	anthropicagent "github.com/microsoft/agent-framework-go/agent/provider/anthropic"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/middleware"
 )
@@ -19,8 +20,9 @@ var logger = demo.NewLogger(
 
 func main() {
 	// Create Anthropic agent
-	a := anthropic.NewAgent(anthropic.Config{
-		Model: "claude-sonnet-4-5",
+	a := anthropicagent.NewAgent(anthropicagent.Config{
+		Client: anthropic.NewClient(),
+		Model:  "claude-sonnet-4-5",
 		Agent: agent.Config{
 			Instructions: "You are good at telling jokes.",
 			Name:         "Joker",
