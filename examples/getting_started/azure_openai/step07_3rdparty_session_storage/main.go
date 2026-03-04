@@ -3,6 +3,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichat"
 	"github.com/microsoft/agent-framework-go/agentopt"
@@ -22,10 +24,9 @@ import (
 	"github.com/openai/openai-go/v3/azure"
 )
 
-var deployment = os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
+var deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
 var endpoint = os.Getenv("AZURE_OPENAI_ENDPOINT")
-var apiVersion = os.Getenv("AZURE_OPENAI_API_VERSION")
-var apiKey = os.Getenv("AZURE_OPENAI_API_KEY")
+var apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
 
 var logger = demo.NewLogger(
 	"3rd-Party Session Storage",
@@ -34,6 +35,12 @@ var logger = demo.NewLogger(
 )
 
 func main() {
+	demo.CheckAzureEndpoint(endpoint)
+	token, err := azidentity.NewDefaultAzureCredential(nil)
+	if err != nil {
+		panic(err)
+	}
+
 	// Create a temporary directory to store messages.
 	tmpDir, err := os.MkdirTemp("", "agent_session_storage")
 	if err != nil {
@@ -45,7 +52,7 @@ func main() {
 	a := openaichat.NewAgent(openaichat.Config{
 		Client: openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
-			azure.WithAPIKey(apiKey),
+			azure.WithTokenCredential(token),
 		),
 		Model: deployment,
 		Agent: agent.Config{

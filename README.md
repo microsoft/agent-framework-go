@@ -78,22 +78,27 @@ package main
 import (
   "context"
 	"fmt"
-	"os"
 
-	"github.com/microsoft/agent-framework-go/openai"
+	"github.com/microsoft/agent-framework-go/agent/provider/openaichat"
+
+	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
+  openai "github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/azure"
 )
 
 func main() {
-	// Azure OpenAI configuration
-	// You can also set these via environment variables:
-	// - AZURE_OPENAI_API_KEY
-	// - AZURE_OPENAI_ENDPOINT
-	// - AZURE_OPENAI_DEPLOYMENT_NAME
-	a := openai.NewChatAgentAzure(openai.ClientConfig{
-		APIKey:     os.Getenv("AZURE_OPENAI_API_KEY"),         // or set directly
-		Endpoint:   os.Getenv("AZURE_OPENAI_ENDPOINT"),        // e.g., "https://your-resource.openai.azure.com/"
-		Model:      os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), // e.g., "gpt-4o"
-	}, nil)
+  token, err := azidentity.NewDefaultAzureCredential(nil)
+	if err != nil {
+		panic(err)
+	}
+
+	a := openaichat.NewAgent(openaichat.Config{
+		Client: openai.NewClient(
+			azure.WithEndpoint("<endpoint>", "<apiVersion>"), // replace <endpoint> and <apiVersion> with your Azure Foundry endpoint and API version
+			azure.WithTokenCredential(token),
+		),
+		Model: "gpt-4o-mini",
+  })
 
   resp, err := a.RunText(context.Background(), "Write a haiku about the Microsoft Agent Framework").Collect()
   if err != nil {

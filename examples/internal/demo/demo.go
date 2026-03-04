@@ -27,6 +27,12 @@ const (
 	colorBold    = "\033[1m"
 )
 
+func CheckAzureEndpoint(endpoint string) {
+	if endpoint == "" {
+		Panic("AZURE_OPENAI_ENDPOINT environment variable is not set.")
+	}
+}
+
 type kv struct {
 	key, value string
 }
