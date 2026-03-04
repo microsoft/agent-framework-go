@@ -3,22 +3,23 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"os"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichat"
 	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/middleware"
-	"github.com/openai/openai-go/v3"
+	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
 )
 
-var deployment = os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
 var endpoint = os.Getenv("AZURE_OPENAI_ENDPOINT")
-var apiVersion = os.Getenv("AZURE_OPENAI_API_VERSION")
-var apiKey = os.Getenv("AZURE_OPENAI_API_KEY")
+var apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
+var deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
 
 var logger = demo.NewLogger(
 	"Basic Run",
@@ -27,11 +28,18 @@ var logger = demo.NewLogger(
 )
 
 func main() {
+	// Create a token credential using Azure Identity.
+	demo.CheckAzureEndpoint(endpoint)
+	token, err := azidentity.NewDefaultAzureCredential(nil)
+	if err != nil {
+		panic(err)
+	}
+
 	// Create Azure OpenAI agent with weather tool
 	a := openaichat.NewAgent(openaichat.Config{
 		Client: openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
-			azure.WithAPIKey(apiKey),
+			azure.WithTokenCredential(token),
 		),
 		Model: deployment,
 		Agent: agent.Config{
