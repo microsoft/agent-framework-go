@@ -10,7 +10,7 @@ import (
 	"github.com/a2aproject/a2a-go/a2aclient"
 	"github.com/a2aproject/a2a-go/a2aclient/agentcard"
 	"github.com/microsoft/agent-framework-go/agent"
-	a2aagent "github.com/microsoft/agent-framework-go/agent/provider/a2a"
+	"github.com/microsoft/agent-framework-go/agent/provider/a2aagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/middleware"
 	"google.golang.org/grpc"
@@ -42,7 +42,7 @@ func main() {
 		demo.Panicf("Failed to create a client: %v", err)
 	}
 
-	a := a2aagent.NewAgent(a2aagent.Config{
+	a := a2aagent.New(a2aagent.Config{
 		Client: client,
 		Agent: agent.Config{
 			Instructions: "You are good at telling jokes.",

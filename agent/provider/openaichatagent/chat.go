@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package openaichat
+package openaichatagent
 
 import (
 	"cmp"
@@ -62,7 +62,7 @@ func newAgent(config Config) *agent.Agent {
 	}, config.Agent)
 }
 
-func NewAgent(config Config) *agent.Agent {
+func New(config Config) *agent.Agent {
 	return newAgent(config)
 }
 

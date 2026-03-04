@@ -93,7 +93,7 @@ type testagent struct {
 	currentTurn int
 }
 
-func NewAgent(responses []Turn) *agent.Agent {
+func New(responses []Turn) *agent.Agent {
 	a := &testagent{
 		responses: responses,
 	}

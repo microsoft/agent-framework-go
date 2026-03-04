@@ -98,7 +98,7 @@ func TestAgent_RunText(t *testing.T) {
 		},
 	).AddText("Hello, world!")
 
-	a := agenttest.NewAgent(responseBuilder.Build())
+	a := agenttest.New(responseBuilder.Build())
 
 	ctx := t.Context()
 	resp, err := a.RunText(ctx, "test message").Collect()
@@ -152,7 +152,7 @@ func TestAgent_RunMessage(t *testing.T) {
 		},
 	).AddText("response")
 
-	a := agenttest.NewAgent(responseBuilder.Build())
+	a := agenttest.New(responseBuilder.Build())
 
 	ctx := t.Context()
 	inputMsg := message.NewText("input")
@@ -193,7 +193,7 @@ func TestAgent_Run(t *testing.T) {
 		},
 	).AddText("response")
 
-	a := agenttest.NewAgent(responseBuilder.Build())
+	a := agenttest.New(responseBuilder.Build())
 
 	messages := []*message.Message{
 		message.NewText("first"),
@@ -223,7 +223,7 @@ func TestAgent_Run_RejectsMessagesWithContinuationToken(t *testing.T) {
 		},
 	).AddText("response")
 
-	a := agenttest.NewAgent(responseBuilder.Build())
+	a := agenttest.New(responseBuilder.Build())
 
 	ctx := t.Context()
 	_, err := a.RunText(ctx, "test", agentopt.ContinuationToken("token-123")).Collect()
@@ -243,7 +243,7 @@ func TestAgent_Run_CreatesSession(t *testing.T) {
 		},
 	).AddText("response")
 
-	a := agenttest.NewAgent(responseBuilder.Build())
+	a := agenttest.New(responseBuilder.Build())
 
 	ctx := t.Context()
 	_, err := a.RunText(ctx, "test").Collect()
@@ -270,7 +270,7 @@ func TestAgent_Run_RequiresSessionWhenAllowBackgroundResponsesEnabled(t *testing
 		},
 	).AddText("response")
 
-	a := agenttest.NewAgent(responseBuilder.Build())
+	a := agenttest.New(responseBuilder.Build())
 
 	ctx := t.Context()
 	_, err := a.RunText(ctx, "test", agentopt.AllowBackgroundResponses(true)).Collect()
@@ -293,7 +293,7 @@ func TestAgent_Run_UsesProvidedSession(t *testing.T) {
 		},
 	).AddText("response")
 
-	a := agenttest.NewAgent(responseBuilder.Build())
+	a := agenttest.New(responseBuilder.Build())
 
 	ctx := t.Context()
 	providedSession := agenttest.CreateSession()
@@ -360,7 +360,7 @@ func TestAgent_Run_StreamingResponses(t *testing.T) {
 		AddText("chunk 2").
 		AddText("chunk 3")
 
-	a := agenttest.NewAgent(responseBuilder.Build())
+	a := agenttest.New(responseBuilder.Build())
 
 	ctx := t.Context()
 	updates := []*message.ResponseUpdate{}
@@ -384,7 +384,7 @@ func TestAgent_Run_AddsMetadataToContext(t *testing.T) {
 		},
 	).AddText("response")
 
-	a := agenttest.NewAgent(responseBuilder.Build())
+	a := agenttest.New(responseBuilder.Build())
 
 	ctx := t.Context()
 	_, err := a.RunText(ctx, "test").Collect()
@@ -530,7 +530,7 @@ func TestRun_Collect(t *testing.T) {
 		AddText("hello").
 		AddText(" world")
 
-	a := agenttest.NewAgent(responseBuilder.Build())
+	a := agenttest.New(responseBuilder.Build())
 
 	ctx := t.Context()
 	resp, err := a.RunText(ctx, "test").Collect()
@@ -554,7 +554,7 @@ func TestRun_Collect_WithError(t *testing.T) {
 		AddError(expectedErr).
 		AddText("after error")
 
-	a := agenttest.NewAgent(responseBuilder.Build())
+	a := agenttest.New(responseBuilder.Build())
 
 	ctx := t.Context()
 	_, err := a.RunText(ctx, "test").Collect()
@@ -573,7 +573,7 @@ func TestRun_All(t *testing.T) {
 		AddText("chunk 2").
 		AddText("chunk 3")
 
-	a := agenttest.NewAgent(responseBuilder.Build())
+	a := agenttest.New(responseBuilder.Build())
 
 	ctx := t.Context()
 	updates := []*message.ResponseUpdate{}
@@ -596,7 +596,7 @@ func TestRun_All_WithError(t *testing.T) {
 		AddError(expectedErr).
 		AddText("after error")
 
-	a := agenttest.NewAgent(responseBuilder.Build())
+	a := agenttest.New(responseBuilder.Build())
 
 	ctx := t.Context()
 	updateCount := 0

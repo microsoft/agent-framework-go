@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package a2a
+package a2aagent
 
 import (
 	"cmp"
@@ -39,7 +39,7 @@ type a2aagent struct {
 	cfg    Config
 }
 
-func NewAgent(config Config) *agent.Agent {
+func New(config Config) *agent.Agent {
 	if config.Client == nil {
 		panic("client cannot be nil")
 	}

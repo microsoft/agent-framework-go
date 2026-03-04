@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package openairesponses
+package openairesponsesagent
 
 import (
 	"cmp"
@@ -79,7 +79,7 @@ func (a *responsesClient) unmarshal(format format.Format, data []byte, v any) er
 	return jsonformat.Unmarshal(format.(*jsonformat.Format), data, v)
 }
 
-func NewAgent(config Config) *agent.Agent {
+func New(config Config) *agent.Agent {
 	return newAgent(config)
 }
 

@@ -79,10 +79,10 @@ import (
   "context"
 	"fmt"
 
-	"github.com/microsoft/agent-framework-go/agent/provider/openaichat"
+	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
-  openai "github.com/openai/openai-go/v3"
+  "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
 )
 
@@ -92,7 +92,7 @@ func main() {
 		panic(err)
 	}
 
-	a := openaichat.NewAgent(openaichat.Config{
+	a := openaichatagent.NewAgent(openaichatagent.Config{
 		Client: openai.NewClient(
 			azure.WithEndpoint("<endpoint>", "<apiVersion>"), // replace <endpoint> and <apiVersion> with your Azure Foundry endpoint and API version
 			azure.WithTokenCredential(token),

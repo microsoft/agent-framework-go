@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package a2a
+package a2aagent
 
 import "github.com/microsoft/agent-framework-go/memory"
 

@@ -6,7 +6,7 @@ import (
 	"context"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/provider/openaichat"
+	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/middleware"
 )
@@ -18,7 +18,7 @@ var logger = demo.NewLogger(
 )
 
 func main() {
-	a := openaichat.NewAgent(openaichat.Config{
+	a := openaichatagent.New(openaichatagent.Config{
 		Model: "gpt-4o-mini",
 		Agent: agent.Config{
 			Instructions: "You are good at telling jokes.",

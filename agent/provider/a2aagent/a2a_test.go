@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package a2a_test
+package a2aagent_test
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	"github.com/a2aproject/a2a-go/a2a"
 	"github.com/a2aproject/a2a-go/a2aclient"
 	"github.com/microsoft/agent-framework-go/agent"
-	a2a1 "github.com/microsoft/agent-framework-go/agent/provider/a2a"
+	a2a1 "github.com/microsoft/agent-framework-go/agent/provider/a2aagent"
 	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
@@ -140,7 +140,7 @@ func newTestAgent(transport a2aclient.Transport, config agent.Config) *agent.Age
 	if err != nil {
 		panic(err)
 	}
-	return a2a1.NewAgent(a2a1.Config{Client: client, Agent: config})
+	return a2a1.New(a2a1.Config{Client: client, Agent: config})
 }
 
 func latestTaskID(session *memory.Session) string {
@@ -158,7 +158,7 @@ func TestConstructorWithNilClient(t *testing.T) {
 			t.Error("Expected panic when client is nil")
 		}
 	}()
-	a2a1.NewAgent(a2a1.Config{})
+	a2a1.New(a2a1.Config{})
 }
 
 // TestRunAllowsNonUserRoleMessages tests that non-user role messages are accepted

@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package anthropic
+package anthropicagent
 
 import (
 	"cmp"
@@ -33,7 +33,7 @@ type client struct {
 	config Config
 }
 
-// Config contains configuration for [NewAgent].
+// Config contains configuration for [New].
 type Config struct {
 	Model  string
 	Client anthropic.Client
@@ -41,7 +41,7 @@ type Config struct {
 	Agent agent.Config
 }
 
-func NewAgent(config Config) *agent.Agent {
+func New(config Config) *agent.Agent {
 	if len(config.Client.Options) == 0 {
 		config.Client = anthropic.NewClient()
 	}

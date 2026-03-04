@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package openairesponses_test
+package openairesponsesagent_test
 
 import (
 	"encoding/json"
@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/provider/openairesponses"
+	"github.com/microsoft/agent-framework-go/agent/provider/openairesponsesagent"
 	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/message/messagetest"
@@ -63,8 +63,8 @@ func newTestResponsesServerStreaming(t *testing.T, input string, output string) 
 }
 
 func newTestResponsesClient(server *httptest.Server, model string) *agent.Agent {
-	return openairesponses.NewAgent(
-		openairesponses.Config{
+	return openairesponsesagent.New(
+		openairesponsesagent.Config{
 			Model:  model,
 			Client: openai.NewClient(option.WithBaseURL(server.URL)),
 			Agent:  agent.Config{DisableFuncAutoCall: true},
@@ -170,7 +170,7 @@ func TestResponsesBasicRequestResponse_NonStreaming(t *testing.T) {
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
 	resp, err := a.RunText(t.Context(), "hello",
-		openairesponses.ResponsesNewParams(responses.ResponseNewParams{
+		openairesponsesagent.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
 		}),
@@ -262,7 +262,7 @@ data: {"type":"response.completed","response":{"id":"resp_67d329fbc87c81919f8952
 
 	var updates []*message.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "hello", agentopt.Stream(true),
-		openairesponses.ResponsesNewParams(responses.ResponseNewParams{
+		openairesponsesagent.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
 		}),
@@ -554,7 +554,7 @@ func TestResponsesChatOptions_Model_OverridesClientModel_NonStreaming(t *testing
 
 	// Override with gpt-4o in options
 	resp, err := a.RunText(t.Context(), "hello",
-		openairesponses.ResponsesNewParams(responses.ResponseNewParams{
+		openairesponsesagent.ResponsesNewParams(responses.ResponseNewParams{
 			Model:           "gpt-4o",
 			MaxOutputTokens: openai.Int(10),
 			Temperature:     openai.Float(0.5),
@@ -656,7 +656,7 @@ func TestResponsesMultipleMessages_NonStreaming(t *testing.T) {
 	}
 
 	resp, err := a.Run(t.Context(), messages,
-		openairesponses.ResponsesNewParams(responses.ResponseNewParams{
+		openairesponsesagent.ResponsesNewParams(responses.ResponseNewParams{
 			Temperature: openai.Float(0.25),
 		}),
 	).Collect()
@@ -976,7 +976,7 @@ data: {"type":"response.completed","response":{"id":"resp_streaming123","object"
 	var updates []*message.ResponseUpdate
 	// Override with gpt-4o in options
 	for update, err := range a.RunText(t.Context(), "hello", agentopt.Stream(true),
-		openairesponses.ResponsesNewParams(responses.ResponseNewParams{
+		openairesponsesagent.ResponsesNewParams(responses.ResponseNewParams{
 			Model:           "gpt-4o",
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
@@ -1104,7 +1104,7 @@ func TestResponsesMultipleOutputItems_NonStreaming(t *testing.T) {
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
 	resp, err := a.RunText(t.Context(), "hello",
-		openairesponses.ResponsesNewParams(responses.ResponseNewParams{
+		openairesponsesagent.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
 		}),
@@ -3939,7 +3939,7 @@ func TestResponsesConversationId_AsResponseId_NonStreaming(t *testing.T) {
 	}
 
 	_, err = a.RunText(t.Context(), "hello",
-		openairesponses.ResponsesNewParams(responses.ResponseNewParams{
+		openairesponsesagent.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
 		}),
@@ -4006,7 +4006,7 @@ func TestResponsesConversationId_AsConversationId_NonStreaming(t *testing.T) {
 	}
 
 	_, err = a.RunText(t.Context(), "hello",
-		openairesponses.ResponsesNewParams(responses.ResponseNewParams{
+		openairesponsesagent.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
 		}),
@@ -4078,7 +4078,7 @@ data: {"type":"response.completed","response":{"id":"resp_67890","object":"respo
 
 	var updates []*message.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "hello", agentopt.Stream(true),
-		openairesponses.ResponsesNewParams(responses.ResponseNewParams{
+		openairesponsesagent.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
 		}),
@@ -4157,7 +4157,7 @@ data: {"type":"response.completed","response":{"id":"resp_67890","object":"respo
 
 	var updates []*message.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "hello", agentopt.Stream(true),
-		openairesponses.ResponsesNewParams(responses.ResponseNewParams{
+		openairesponsesagent.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
 		}),
@@ -4217,7 +4217,7 @@ func TestResponsesBackgroundResponses_FirstCall(t *testing.T) {
 	}
 
 	resp, err := a.RunText(t.Context(), "hello",
-		openairesponses.ResponsesNewParams(responses.ResponseNewParams{
+		openairesponsesagent.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
 		}),
