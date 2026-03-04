@@ -1,25 +1,13 @@
 package main
 
 import (
-	"cmp"
 	"context"
 	"fmt"
-	"os"
 	"slices"
 	"strings"
 
-	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
-)
-
-var deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
-var endpoint = os.Getenv("AZURE_OPENAI_ENDPOINT")
-var apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
-
-var logger = demo.NewLogger(
-	"First Workflow",
-	"This sample introduces the concepts of executors and edges in a workflow.",
 )
 
 // Workflows are built from executors (processing units) connected by edges (data flow paths).
