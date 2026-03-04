@@ -1,7 +1,5 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-// This sample shows how to create and use an Agent as a function tool.
-
 package main
 
 import (
@@ -18,6 +16,7 @@ import (
 	"github.com/microsoft/agent-framework-go/middleware"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
+
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
 )
@@ -27,8 +26,8 @@ var endpoint = os.Getenv("AZURE_OPENAI_ENDPOINT")
 var apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
 
 var logger = demo.NewLogger(
-	"Agent As Function Tool",
-	"Demonstrates how to create and use an Agent as a function tool.",
+	"Add Tools",
+	"This sample demonstrates how to use an AI agent with function tools.",
 	"Model", deployment,
 )
 
@@ -46,26 +45,7 @@ func main() {
 		panic(err)
 	}
 
-	// Create Azure OpenAI agent and provide the function tool.
-	weatherAgent := openaichatagent.New(openaichatagent.Config{
-		Client: openai.NewClient(
-			azure.WithEndpoint(endpoint, apiVersion),
-			azure.WithTokenCredential(token),
-		),
-		Model: deployment,
-		Agent: agent.Config{
-			Instructions: "You answer questions about the weather.",
-			Name:         "WeatherAgent",
-			Description:  "An agent that answers questions about the weather.",
-			Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
-			RunOptions: []agentopt.Option{
-				agentopt.Tool(weatherTool),
-			},
-		},
-	})
-
-	// Create the main Azure OpenAI agent, and provide the weather agent as a function tool.
-	// Note that the main agent is instructed to respond in French.
+	// Create Azure OpenAI agent, and provide the function tool to the agent.
 	a := openaichatagent.New(openaichatagent.Config{
 		Client: openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
@@ -73,13 +53,20 @@ func main() {
 		),
 		Model: deployment,
 		Agent: agent.Config{
-			Instructions: "You are a helpful assistant who responds in French.",
-			RunOptions: []agentopt.Option{
-				agentopt.Tool(weatherAgent.AsFuncTool()),
-			},
+			Instructions: "You are a helpful assistant",
+			Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
+			RunOptions:   []agentopt.Option{agentopt.Tool(weatherTool)},
 		},
 	})
 
-	resp, err := a.RunText(context.Background(), "What is the weather like in Amsterdam?").Collect()
+	ctx := context.Background()
+
+	// Non-streaming agent interaction with function tools.
+	resp, err := a.RunText(ctx, "What is the weather like in Amsterdam?").Collect()
 	demo.Response(resp, err)
+
+	// Invoke the agent with streaming support.
+	for update, err := range a.RunText(ctx, "What is the weather like in Amsterdam?", agentopt.Stream(true)) {
+		demo.Response(update, err)
+	}
 }

@@ -23,7 +23,7 @@ var apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-previ
 
 var logger = demo.NewLogger(
 	"Multi-Turn Conversation",
-	"Demonstrates how to preserve conversation context with sessions.",
+	"This sample shows how to create and use a simple AI agent with a multi-turn conversation.",
 	"Model", deployment,
 )
 
@@ -42,9 +42,8 @@ func main() {
 		),
 		Model: deployment,
 		Agent: agent.Config{
-			Instructions: "You are good at telling jokes.",
-			Name:         "Joker",
-			Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
+			Instructions: "You are good at telling jokes.", Name: "Joker",
+			Middlewares: []middleware.Middleware{logger}, // for logging agent interactions
 		},
 	})
 
@@ -61,14 +60,14 @@ func main() {
 	demo.Response(resp, err)
 
 	// Invoke the agent with a multi-turn conversation and streaming, where the context is preserved in the session object.
-	session2, err := a.CreateSession(ctx)
+	session, err = a.CreateSession(ctx)
 	if err != nil {
 		demo.Panic(err)
 	}
-	for update, err := range a.RunText(ctx, "Tell me a joke about a pirate.", agentopt.Session(session2), agentopt.Stream(true)) {
+	for update, err := range a.RunText(ctx, "Tell me a joke about a pirate.", agentopt.Session(session), agentopt.Stream(true)) {
 		demo.Response(update, err)
 	}
-	for update, err := range a.RunText(ctx, "Now add some emojis to the joke and tell it in the voice of a pirate's parrot.", agentopt.Session(session2), agentopt.Stream(true)) {
+	for update, err := range a.RunText(ctx, "Now add some emojis to the joke and tell it in the voice of a pirate's parrot.", agentopt.Session(session), agentopt.Stream(true)) {
 		demo.Response(update, err)
 	}
 }

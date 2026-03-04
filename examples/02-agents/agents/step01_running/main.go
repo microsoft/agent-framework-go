@@ -13,28 +13,29 @@ import (
 	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/middleware"
-	"github.com/openai/openai-go/v3"
+	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
 )
 
-var deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
 var endpoint = os.Getenv("AZURE_OPENAI_ENDPOINT")
 var apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
+var deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
 
 var logger = demo.NewLogger(
-	"Multi-Turn Conversation",
-	"Demonstrates how to preserve conversation context with sessions.",
+	"Basic Run",
+	"Demonstrates a simple agent run.",
 	"Model", deployment,
 )
 
 func main() {
+	// Create a token credential using Azure Identity.
 	demo.CheckAzureEndpoint(endpoint)
 	token, err := azidentity.NewDefaultAzureCredential(nil)
 	if err != nil {
 		panic(err)
 	}
 
-	// Create Azure OpenAI agent.
+	// Create Azure OpenAI agent with weather tool
 	a := openaichatagent.New(openaichatagent.Config{
 		Client: openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
@@ -50,25 +51,12 @@ func main() {
 
 	ctx := context.Background()
 
-	// Invoke the agent with a multi-turn conversation, where the context is preserved in the session object.
-	session, err := a.CreateSession(ctx)
-	if err != nil {
-		demo.Panic(err)
-	}
-	resp, err := a.RunText(ctx, "Tell me a joke about a pirate.", agentopt.Session(session)).Collect()
-	demo.Response(resp, err)
-	resp, err = a.RunText(ctx, "Now add some emojis to the joke and tell it in the voice of a pirate's parrot.", agentopt.Session(session)).Collect()
+	// Invoke the agent and output the text result.
+	resp, err := a.RunText(ctx, "Tell me a joke about a pirate.").Collect()
 	demo.Response(resp, err)
 
-	// Invoke the agent with a multi-turn conversation and streaming, where the context is preserved in the session object.
-	session2, err := a.CreateSession(ctx)
-	if err != nil {
-		demo.Panic(err)
-	}
-	for update, err := range a.RunText(ctx, "Tell me a joke about a pirate.", agentopt.Session(session2), agentopt.Stream(true)) {
-		demo.Response(update, err)
-	}
-	for update, err := range a.RunText(ctx, "Now add some emojis to the joke and tell it in the voice of a pirate's parrot.", agentopt.Session(session2), agentopt.Stream(true)) {
+	// Invoke the agent with streaming support.
+	for update, err := range a.RunText(ctx, "Tell me a joke about a pirate.", agentopt.Stream(true)) {
 		demo.Response(update, err)
 	}
 }

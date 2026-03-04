@@ -79,7 +79,7 @@ func TestOtel_Run_SpanHasCorrectAttributes(t *testing.T) {
 		},
 	).AddText("response")
 
-	a := agenttest.NewAgent(responseBuilder.Build())
+	a := agenttest.New(responseBuilder.Build())
 
 	// Override the agent metadata for this test
 	a = agent.New(agent.ProviderConfig{

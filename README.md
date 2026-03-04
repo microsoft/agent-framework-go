@@ -79,10 +79,10 @@ import (
   "context"
 	"fmt"
 
-	"github.com/microsoft/agent-framework-go/agent/provider/openaichat"
+	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
-  openai "github.com/openai/openai-go/v3"
+  "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
 )
 
@@ -92,7 +92,7 @@ func main() {
 		panic(err)
 	}
 
-	a := openaichat.NewAgent(openaichat.Config{
+	a := openaichatagent.NewAgent(openaichatagent.Config{
 		Client: openai.NewClient(
 			azure.WithEndpoint("<endpoint>", "<apiVersion>"), // replace <endpoint> and <apiVersion> with your Azure Foundry endpoint and API version
 			azure.WithTokenCredential(token),
@@ -110,11 +110,9 @@ func main() {
 
 ## More Examples & Samples
 
-### .NET
-
-- [Getting Started with Agents](./samples/getting_started/openai): basic agent creation and tool usage
-- [Agent Provider Samples](./samples/getting_started/openai): samples showing different agent providers
-- [Workflow Samples](./samples/getting_started/workflows): advanced multi-agent patterns and workflow orchestration
+- [Getting Started with Agents](./examples/01-get-started): progressive tutorial from hello-world to hosting
+- [Agent Concepts](./examples/02-agents): deep-dive samples by topic (tools, middleware, providers, etc.)
+- [Getting Started with Workflows](./examples/03-workflows): workflow creation and integration with agents
 
 ## Contributor Resources
 

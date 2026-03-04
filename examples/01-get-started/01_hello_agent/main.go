@@ -10,31 +10,33 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
+	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
-	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/middleware"
-	"github.com/openai/openai-go/v3"
+
+	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
 )
 
-var deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
 var endpoint = os.Getenv("AZURE_OPENAI_ENDPOINT")
 var apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
+var deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
 
 var logger = demo.NewLogger(
-	"Using Images",
-	"Demonstrates how to use Image Multi-Modality with an Agent.",
+	"Hello Agent",
+	"This sample shows how to create and use a simple AI agent with Azure OpenAI as the backend.",
 	"Model", deployment,
 )
 
 func main() {
+	// Create a token credential using Azure Identity.
 	demo.CheckAzureEndpoint(endpoint)
 	token, err := azidentity.NewDefaultAzureCredential(nil)
 	if err != nil {
 		panic(err)
 	}
 
-	// Create Azure OpenAI agent.
+	// Create Azure OpenAI agent
 	a := openaichatagent.New(openaichatagent.Config{
 		Client: openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
@@ -42,21 +44,19 @@ func main() {
 		),
 		Model: deployment,
 		Agent: agent.Config{
-			Instructions: "You are a helpful agent that can analyze images.",
-			Name:         "VisionAgent",
-			Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
+			Instructions: "You are good at telling jokes.", Name: "Joker",
+			Middlewares: []middleware.Middleware{logger}, // for logging agent interactions
 		},
 	})
 
 	ctx := context.Background()
-	msg := message.New(
-		&message.TextContent{Text: "What do you see in this image?"},
-		&message.URIContent{
-			URI:       "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg",
-			MediaType: "image/jpeg",
-		},
-	)
 
-	resp, err := a.RunMessage(ctx, msg).Collect()
+	// Invoke the agent and output the text result.
+	resp, err := a.RunText(ctx, "Tell me a joke about a pirate.").Collect()
 	demo.Response(resp, err)
+
+	// Invoke the agent with streaming support.
+	for update, err := range a.RunText(ctx, "Tell me a joke about a pirate.", agentopt.Stream(true)) {
+		demo.Response(update, err)
+	}
 }
