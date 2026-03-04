@@ -110,11 +110,9 @@ func main() {
 
 ## More Examples & Samples
 
-### .NET
-
-- [Getting Started with Agents](./samples/getting_started/openai): basic agent creation and tool usage
-- [Agent Provider Samples](./samples/getting_started/openai): samples showing different agent providers
-- [Workflow Samples](./samples/getting_started/workflows): advanced multi-agent patterns and workflow orchestration
+- [Getting Started with Agents](./examples/01-get-started): progressive tutorial from hello-world to hosting
+- [Agent Concepts](./examples/02-agents): deep-dive samples by topic (tools, middleware, providers, etc.)
+- [Getting Started with Workflows](./examples/03-workflows): workflow creation and integration with agents
 
 ## Contributor Resources
 

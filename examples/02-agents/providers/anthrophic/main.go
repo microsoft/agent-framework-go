@@ -1,0 +1,34 @@
+// Copyright (c) Microsoft. All rights reserved.
+
+package main
+
+import (
+	"context"
+
+	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/provider/anthropic"
+	"github.com/microsoft/agent-framework-go/examples/internal/demo"
+	"github.com/microsoft/agent-framework-go/middleware"
+)
+
+var logger = demo.NewLogger(
+	"Basic Run",
+	"Demonstrates a simple agent run.",
+	"Model", "claude-sonnet-4-5",
+)
+
+func main() {
+	// Create Anthropic agent
+	a := anthropic.NewAgent(anthropic.Config{
+		Model: "claude-sonnet-4-5",
+		Agent: agent.Config{
+			Instructions: "You are good at telling jokes.",
+			Name:         "Joker",
+			Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
+		},
+	})
+
+	// Invoke the agent and output the text result.
+	resp, err := a.RunText(context.Background(), "Tell me a joke about a pirate.").Collect()
+	demo.Response(resp, err)
+}
