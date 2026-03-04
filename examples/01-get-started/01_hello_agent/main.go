@@ -36,7 +36,7 @@ func main() {
 		panic(err)
 	}
 
-	// Create Azure OpenAI agent with weather tool
+	// Create Azure OpenAI agent
 	a := openaichat.NewAgent(openaichat.Config{
 		Client: openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
