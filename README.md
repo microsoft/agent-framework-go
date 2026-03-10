@@ -76,35 +76,36 @@ Create a simple Azure Chat Agent that writes a haiku about the Microsoft Agent F
 package main
 
 import (
-  "context"
+	"context"
 	"fmt"
 
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
-  "github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
 )
 
 func main() {
-  token, err := azidentity.NewDefaultAzureCredential(nil)
+	// Authenticate to Azure.
+	token, err := azidentity.NewDefaultAzureCredential(nil)
 	if err != nil {
 		panic(err)
 	}
 
+	// Create an Azure OpenAI agent.
+  // Replace <endpoint> and <apiVersion> with your Azure Foundry endpoint and API version.
 	a := openaichatagent.NewAgent(openaichatagent.Config{
 		Client: openai.NewClient(
-			azure.WithEndpoint("<endpoint>", "<apiVersion>"), // replace <endpoint> and <apiVersion> with your Azure Foundry endpoint and API version
+			azure.WithEndpoint("<endpoint>", "<apiVersion>"),
 			azure.WithTokenCredential(token),
 		),
 		Model: "gpt-4o-mini",
-  })
+	})
 
-  resp, err := a.RunText(context.Background(), "Write a haiku about the Microsoft Agent Framework").Collect()
-  if err != nil {
-    panic(err)
-  }
-  fmt.Println(resp)
+	// Run the agent.
+	ctx := context.Background()
+	fmt.Println(a.RunText(ctx, "Write a haiku about the Microsoft Agent Framework").Collect())
 }
 ```
 

@@ -25,9 +25,9 @@ var frontmatterRegex = regexp.MustCompile(`(?ms)\A^---\s*$(.+?)^---\s*$`)
 // Supports optional ./ or ../ prefixes; excludes URLs (no ":" in the path character class).
 var resourceLinkRegex = regexp.MustCompile(`\[.*?\]\((\.?\.?/?[\w][\w\-./]*\.\w+)\)`)
 
-// Matches valid skill names: lowercase letters, numbers, and hyphens,
-// not starting or ending with a hyphen.
-var validNameRegex = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`)
+// Matches valid skill names: lowercase letters, numbers, and single hyphens,
+// not starting or ending with a hyphen, and not containing consecutive hyphens.
+var validNameRegex = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
 // Matches YAML "key: value" lines. Group 1 = key, Group 2 = quoted value, Group 3 = unquoted value.
 var yamlKeyValueRegex = regexp.MustCompile(`(?m)^\s*(\w+)\s*:\s*(?:["'](.+?)["']|(.+?))\s*$`)
@@ -191,8 +191,20 @@ func (l *skillLoader) tryParseSkillDocument(content, skillFilePath string) (*fro
 	if len(name) > maxNameLength || !validNameRegex.MatchString(name) {
 		l.logger.Error("SKILL.md has an invalid 'name' value",
 			"skillFilePath", skillFilePath,
-			"reason", fmt.Sprintf("Must be %d characters or fewer, using only lowercase letters, numbers, and hyphens, and must not start or end with a hyphen.", maxNameLength))
+			"reason", fmt.Sprintf("Must be %d characters or fewer, using only lowercase letters, numbers, and single hyphens, and must not start or end with a hyphen or contain consecutive hyphens.", maxNameLength))
 		return nil, "", false
+	}
+
+	// Enforce that the frontmatter name matches the parent skill directory name when discoverable.
+	if skillFilePath != "." {
+		dirName := path.Base(skillFilePath)
+		if name != dirName {
+			l.logger.Error("SKILL.md name does not match skill directory name",
+				"skillFilePath", skillFilePath,
+				"name", name,
+				"directoryName", dirName)
+			return nil, "", false
+		}
 	}
 
 	if strings.TrimSpace(description) == "" {

@@ -41,7 +41,7 @@ type Config struct {
 
 	Instructions string
 
-	HistoryProvider *memory.HistoryProvider
+	ContextProviders []*memory.ContextProvider
 
 	DisableFuncAutoCall bool
 
@@ -71,11 +71,11 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 			}),
 		)
 	}
-	if cfg.HistoryProvider == nil {
-		// If no history provider was provided, and we later find out that the underlying service does not manage chat history server-side,
-		// we will use the default in-memory history provider which stores message history in the Session state.
-		// This allows for basic conversation continuity across runs without requiring users to implement their own history management.
-		cfg.HistoryProvider = memory.NewInMemoryHistoryProvider(memory.InMemoryHistoryProviderConfig{})
+	providers := make([]*memory.ContextProvider, 0, len(cfg.ContextProviders)+1)
+	for _, provider := range cfg.ContextProviders {
+		if provider != nil {
+			providers = append(providers, provider)
+		}
 	}
 	if prov.FormatOfFn != nil && prov.UnmarshalFn != nil {
 		cfg.Middlewares = append(cfg.Middlewares,
@@ -85,7 +85,8 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 			}),
 		)
 	}
-	cfg.Middlewares = append(cfg.Middlewares, authorMiddleware(cfg.ID, cfg.Name), providerMiddleware(cfg.HistoryProvider))
+	cfg.Middlewares = append([]middleware.Middleware{providerMiddleware(providers)}, cfg.Middlewares...)
+	cfg.Middlewares = append(cfg.Middlewares, authorMiddleware(cfg.ID, cfg.Name))
 	return &Agent{
 		id:               cfg.ID,
 		name:             cfg.Name,
@@ -254,32 +255,54 @@ func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, opt
 	return ctx, messages, options, nil
 }
 
-func providerMiddleware(historyProvider *memory.HistoryProvider) middleware.Middleware {
+func providerMiddleware(contextProviders []*memory.ContextProvider) middleware.Middleware {
 	return middleware.Func(func(next middleware.RunFunc, ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		if noSession, _ := agentopt.Get(options, noSessionProvided); noSession {
-			// If session was auto-created for this run, skip history persistence because it will not outlive the run.
-			return next(ctx, messages, options...)
-		}
 		session, _ := agentopt.Get(options, agentopt.Session)
-		if session.ServiceID != "" {
-			// If the session has a ServiceID, we skip the history provider as we assume the provider manages history server-side.
-			return next(ctx, messages, options...)
-		}
+		noSession, _ := agentopt.Get(options, noSessionProvided)
 		contToken, _ := agentopt.Get(options, agentopt.ContinuationToken)
-		if contToken != "" {
-			// If a continuation token is provided, we skip the history provider as we assume the provider manages background responses server-side.
-			return next(ctx, messages, options...)
+
+		activeProviders := contextProviders
+		if !noSession && contToken == "" && session.ServiceID == "" && len(activeProviders) == 0 {
+			// For local sessions without explicit providers, attach in-memory history at runtime.
+			activeProviders = []*memory.ContextProvider{memory.NewInMemoryHistoryProvider("in-memory")}
 		}
+
 		return func(yield func(*message.ResponseUpdate, error) bool) {
-			// Retrieve message history.
-			messages, err := historyProvider.Invoking(ctx, session, messages)
-			if err != nil {
-				yield(nil, err)
-				return
+			// Retrieve provider context.
+			currentMessages := messages
+			currentTools := slices.Collect(agentopt.All(options, agentopt.Tool))
+			runOptions := options
+			for _, contextProvider := range activeProviders {
+				if contextProvider == nil {
+					continue
+				}
+				providerContext, err := contextProvider.BeforeRun(memory.BeforeRunContext{
+					Context:  ctx,
+					Session:  session,
+					Messages: currentMessages,
+					Tools:    currentTools,
+				})
+				if err != nil {
+					yield(nil, err)
+					return
+				}
+				if len(providerContext.Messages) > 0 {
+					merged := make([]*message.Message, 0, len(providerContext.Messages)+len(currentMessages))
+					merged = append(merged, providerContext.Messages...)
+					merged = append(merged, currentMessages...)
+					currentMessages = merged
+				}
+				if len(providerContext.Tools) > 0 {
+					currentTools = append(currentTools, providerContext.Tools...)
+					for _, tool := range providerContext.Tools {
+						runOptions = append(runOptions, agentopt.Tool(tool))
+					}
+				}
 			}
+			messages = currentMessages
 			var resp message.Response
 			var runErr error
-			for update, err := range next(ctx, messages, options...) {
+			for update, err := range next(ctx, messages, runOptions...) {
 				if update != nil && session.ServiceID == "" {
 					resp.Update(update)
 				}
@@ -291,9 +314,20 @@ func providerMiddleware(historyProvider *memory.HistoryProvider) middleware.Midd
 				}
 			}
 			resp.Coalesce()
-			if len(resp.Messages) > 0 {
-				// After the run finishes, persist the messages to history.
-				if err := historyProvider.Invoked(ctx, session, messages, resp.Messages, runErr); err != nil {
+			// After the run finishes, persist context.
+			for i := len(activeProviders) - 1; i >= 0; i-- {
+				contextProvider := activeProviders[i]
+				if contextProvider == nil {
+					continue
+				}
+				if err := contextProvider.AfterRun(memory.AfterRunContext{
+					Context:          ctx,
+					Session:          session,
+					RequestMessages:  messages,
+					ResponseMessages: resp.Messages,
+					Tools:            currentTools,
+					InvokeError:      runErr,
+				}); err != nil {
 					yield(nil, err)
 					return
 				}

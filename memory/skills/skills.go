@@ -1,39 +1,23 @@
 // Copyright (c) Microsoft. All rights reserved.
 
 // Package skills provides an implementation of the Agent Skills specification
-// (https://agentskills.io/) for discovering and exposing skills from filesystem directories.
-//
-// Skills follow the progressive disclosure pattern:
-//  1. Advertise — skill names and descriptions are injected into the system prompt.
-//  2. Load — the full SKILL.md body is returned via the load_skill tool.
-//  3. Read resources — supplementary files are read from disk on demand via the read_skill_resource tool.
-//
-// Skills are discovered by searching configured directories for SKILL.md files.
-// Referenced resources are validated at initialization; invalid skills are excluded and logged.
-//
-// Security: this provider only reads static content. Skill metadata is XML-escaped
-// before prompt embedding, and resource reads are guarded against path traversal and symlink escape.
-// Only use skills from trusted sources.
+// (https://agentskills.io/) for discovering and exposing skills from filesystem directories
+// via a memory.ContextProvider.
 package skills
 
 import (
-	"context"
 	"encoding/xml"
 	"fmt"
 	"io/fs"
-	"iter"
 	"log/slog"
 	"sort"
 	"strings"
 
-	"github.com/microsoft/agent-framework-go/agentopt"
+	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/middleware"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 )
-
-const maximumAutocallIterations = 40
 
 const defaultSkillsInstructionPrompt = `You have access to skills containing domain-specific knowledge and capabilities.
 Each skill provides specialized instructions, reference documents, and assets for specific tasks.
@@ -49,8 +33,11 @@ When a task aligns with a skill's domain:
 
 Only load what is needed, when it is needed.`
 
-// Config configures the middleware.
+// Config configures the skills context provider.
 type Config struct {
+	// SourceID is the context provider SourceID. Defaults to "skills".
+	SourceID string
+
 	// SkillsInstructionPrompt is a custom system prompt template for advertising skills.
 	// Use %s as the placeholder for the generated skills list.
 	// When empty, a default template is used.
@@ -60,28 +47,20 @@ type Config struct {
 	Logger *slog.Logger
 }
 
-// skills is a [middleware.Middleware] that discovers and exposes Agent Skills
-// from filesystem directories.
-//
-// It implements the progressive disclosure pattern from the Agent Skills specification
-// (https://agentskills.io/):
-//  1. Advertise — skill names and descriptions are injected into the system prompt (~100 tokens per skill).
-//  2. Load — the full SKILL.md body is returned via the load_skill tool.
-//  3. Read resources — supplementary files are read from disk on demand via the read_skill_resource tool.
-type skills struct {
+type provider struct {
 	skills                  map[string]*fileAgentSkill
 	loader                  *skillLoader
-	tools                   []*functool.Tool
+	tools                   []tool.Tool
 	skillsInstructionPrompt string
 }
 
-// New creates a new [middleware.Middleware] that searches the given filesystems for skills.
+// New creates a memory.ContextProvider that searches the given filesystems for skills.
 //
 // Each fs.FS can represent an individual skill folder (containing a SKILL.md file) or a parent folder
 // with skill subdirectories. The provider discovers SKILL.md files up to 2 levels deep.
 //
-// Use [os.DirFS] to create an fs.FS from a directory path on disk.
-func New(opts *Config, fsys ...fs.FS) middleware.Middleware {
+// Use os.DirFS to create an fs.FS from a directory path on disk.
+func New(opts *Config, fsys ...fs.FS) *memory.ContextProvider {
 	if opts == nil {
 		opts = &Config{}
 	}
@@ -94,13 +73,13 @@ func New(opts *Config, fsys ...fs.FS) middleware.Middleware {
 	loaded := loader.discoverAndLoadSkills(fsys)
 	instructionPrompt := buildSkillsInstructionPrompt(opts, loaded)
 
-	p := &skills{
+	p := &provider{
 		skills:                  loaded,
 		loader:                  loader,
 		skillsInstructionPrompt: instructionPrompt,
 	}
 
-	p.tools = []*functool.Tool{
+	p.tools = []tool.Tool{
 		functool.MustNew(
 			&functool.Func{
 				Name:        "load_skill",
@@ -126,149 +105,53 @@ func New(opts *Config, fsys ...fs.FS) middleware.Middleware {
 		),
 	}
 
-	return p
-}
-
-// Run implements [middleware.Middleware].
-func (p *skills) Run(next middleware.RunFunc, ctx context.Context, messages []*message.Message, opts ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
-	runMessages := messages
-	runOpts := opts
-	if len(p.skills) != 0 {
-		if p.skillsInstructionPrompt != "" {
-			runMessages = append([]*message.Message{{
-				Role: message.RoleSystem,
-				Contents: []message.Content{
-					&message.TextContent{Text: p.skillsInstructionPrompt},
-				},
-			}}, runMessages...)
-		}
-		for _, tl := range p.tools {
-			runOpts = append(runOpts, agentopt.Tool(tl))
-		}
+	sourceID := opts.SourceID
+	if sourceID == "" {
+		sourceID = "skills"
 	}
 
-	return func(yield func(*message.ResponseUpdate, error) bool) {
-		currentMessages := append([]*message.Message(nil), runMessages...)
-		for range maximumAutocallIterations {
-			var resp message.Response
-			for update, err := range next(ctx, currentMessages, runOpts...) {
-				if err != nil {
-					yield(nil, err)
-					return
-				}
-				if update != nil {
-					resp.Update(update)
-				}
-				if !yield(update, nil) {
-					return
-				}
+	return &memory.ContextProvider{
+		SourceID: sourceID,
+		Provide: func(_ memory.BeforeRunContext) (memory.Context, error) {
+			if len(p.skills) == 0 {
+				return memory.Context{}, nil
 			}
-			resp.Coalesce()
-
-			toolMsg := p.autocallToolMessage(ctx, resp.Messages)
-			if toolMsg == nil {
-				return
+			out := memory.Context{Tools: p.tools}
+			if p.skillsInstructionPrompt != "" {
+				out.Messages = []*message.Message{{
+					Role: message.RoleSystem,
+					Contents: []message.Content{
+						&message.TextContent{Text: p.skillsInstructionPrompt},
+					},
+				}}
 			}
-			if !yield(&message.ResponseUpdate{Role: toolMsg.Role, Contents: toolMsg.Contents}, nil) {
-				return
-			}
-
-			currentMessages = append(currentMessages, resp.Messages...)
-			currentMessages = append(currentMessages, toolMsg)
-		}
-
-		p.loader.logger.Warn("Reached maximum skill autocall iterations", "maximumIterations", maximumAutocallIterations)
+			return out, nil
+		},
 	}
 }
 
-func (p *skills) autocallToolMessage(ctx context.Context, responseMessages []*message.Message) *message.Message {
-	if len(responseMessages) == 0 {
-		return nil
-	}
-
-	existingResults := make(map[string]struct{})
-	for _, msg := range responseMessages {
-		for _, content := range msg.Contents {
-			if frc, ok := content.(*message.FunctionResultContent); ok {
-				existingResults[frc.CallID] = struct{}{}
-			}
-		}
-	}
-
-	results := make([]message.Content, 0)
-	for _, msg := range responseMessages {
-		for _, content := range msg.Contents {
-			fcc, ok := content.(*message.FunctionCallContent)
-			if !ok {
-				continue
-			}
-			if _, exists := existingResults[fcc.CallID]; exists {
-				continue
-			}
-
-			result, handled := p.autocallSkillTool(ctx, fcc)
-			if !handled {
-				continue
-			}
-
-			results = append(results, &message.FunctionResultContent{
-				CallID: fcc.CallID,
-				Result: result,
-			})
-			existingResults[fcc.CallID] = struct{}{}
-		}
-	}
-
-	if len(results) == 0 {
-		return nil
-	}
-
-	return &message.Message{
-		Role:     message.RoleTool,
-		Contents: results,
-	}
-}
-
-func (p *skills) autocallSkillTool(ctx context.Context, fcc *message.FunctionCallContent) (string, bool) {
-	for _, tl := range p.tools {
-		if tl.Name() != fcc.Name {
-			continue
-		}
-		result, err := tl.Call(tool.Context{
-			Context: ctx,
-			CallID:  fcc.CallID,
-		}, fcc.Arguments)
-		if err != nil {
-			return fmt.Sprintf("Error: %v", err), true
-		}
-		return result.(string), true
-	}
-
-	return "", false
-}
-
-func (p *skills) loadSkill(skillName string) (string, error) {
+func (p *provider) loadSkill(skillName string) (string, error) {
 	if strings.TrimSpace(skillName) == "" {
-		return "", fmt.Errorf("Error: Skill name cannot be empty.")
+		return "Error: Skill name cannot be empty.", nil
 	}
 	skill, ok := p.skills[strings.ToLower(skillName)]
 	if !ok {
-		return "", fmt.Errorf("Error: Skill '%s' not found.", skillName)
+		return fmt.Sprintf("Error: Skill '%s' not found.", skillName), nil
 	}
 	p.loader.logger.Info("Loading skill", "skillName", skillName)
 	return skill.body, nil
 }
 
-func (p *skills) readSkillResource(skillName, resourceName string) (string, error) {
+func (p *provider) readSkillResource(skillName, resourceName string) (string, error) {
 	if strings.TrimSpace(skillName) == "" {
-		return "", fmt.Errorf("Error: Skill name cannot be empty.")
+		return "Error: Skill name cannot be empty.", nil
 	}
 	if strings.TrimSpace(resourceName) == "" {
-		return "", fmt.Errorf("Error: Resource name cannot be empty.")
+		return "Error: Resource name cannot be empty.", nil
 	}
 	skill, ok := p.skills[strings.ToLower(skillName)]
 	if !ok {
-		return "", fmt.Errorf("Error: Skill '%s' not found.", skillName)
+		return fmt.Sprintf("Error: Skill '%s' not found.", skillName), nil
 	}
 	content, err := p.loader.readSkillResource(skill, resourceName)
 	if err != nil {
@@ -276,7 +159,7 @@ func (p *skills) readSkillResource(skillName, resourceName string) (string, erro
 			"resourceName", resourceName,
 			"skillName", skillName,
 			"error", err)
-		return "", fmt.Errorf("Error: Failed to read resource '%s' from skill '%s'.", resourceName, skillName)
+		return fmt.Sprintf("Error: Failed to read resource '%s' from skill '%s'.", resourceName, skillName), nil
 	}
 	return content, nil
 }

@@ -33,7 +33,6 @@ type Message struct {
 	AuthorID             string    `json:",omitzero"`
 	AuthorName           string    `json:",omitzero"`
 	SourceID             string    `json:",omitzero"`
-	SourceType           string    `json:",omitzero"`
 	CreatedAt            time.Time `json:",omitzero"`
 	RawRepresentation    any       `json:"-"`
 }
