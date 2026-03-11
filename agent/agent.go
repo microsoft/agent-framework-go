@@ -320,11 +320,12 @@ func providerMiddleware(contextProviders []*memory.ContextProvider) middleware.M
 				if contextProvider == nil {
 					continue
 				}
+				// Filters may compact slices in-place, so isolate each provider invocation.
 				if err := contextProvider.AfterRun(memory.AfterRunContext{
 					Context:          ctx,
 					Session:          session,
-					RequestMessages:  messages,
-					ResponseMessages: resp.Messages,
+					RequestMessages:  slices.Clone(messages),
+					ResponseMessages: slices.Clone(resp.Messages),
 					Tools:            currentTools,
 					InvokeError:      runErr,
 				}); err != nil {

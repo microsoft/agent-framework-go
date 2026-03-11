@@ -65,13 +65,9 @@ func (p *ContextProvider) BeforeRun(ctx BeforeRunContext) (Context, error) {
 		return Context{}, nil
 	}
 
-	var provided Context
-	if p.Provide != nil {
-		var err error
-		provided, err = p.Provide(ctx)
-		if err != nil {
-			return Context{}, err
-		}
+	provided, err := p.Provide(ctx)
+	if err != nil {
+		return Context{}, err
 	}
 
 	var stampedProvidedMessages []*message.Message

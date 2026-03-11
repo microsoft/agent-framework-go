@@ -117,6 +117,20 @@ func TestDiscovery_ValidSkill(t *testing.T) {
 	}
 }
 
+func TestDiscovery_QuotedFrontmatterValues(t *testing.T) {
+	root := t.TempDir()
+	createSkillDirRaw(t, root, "quoted-skill",
+		"---\nname: 'quoted-skill'\ndescription: \"A quoted description\"\n---\nBody text.")
+
+	p := newProvider(t, root)
+	if !hasSkill(t, p, "quoted-skill") {
+		t.Fatal("expected quoted-skill to be discovered")
+	}
+	if !hasSkill(t, p, "A quoted description") {
+		t.Fatal("expected quoted description in instructions")
+	}
+}
+
 func TestDiscovery_MissingFrontmatter_Excluded(t *testing.T) {
 	root := t.TempDir()
 	createSkillDirRaw(t, root, "bad-skill", "No frontmatter here.")
@@ -125,6 +139,28 @@ func TestDiscovery_MissingFrontmatter_Excluded(t *testing.T) {
 	instructions, tools := captureProviderContext(t, p)
 	if instructions != "" || len(tools) != 0 {
 		t.Fatal("expected no skills when frontmatter is missing")
+	}
+}
+
+func TestDiscovery_MissingNameField_Excluded(t *testing.T) {
+	root := t.TempDir()
+	createSkillDirRaw(t, root, "no-name", "---\ndescription: A skill without a name\n---\nBody.")
+
+	p := newProvider(t, root)
+	instructions, tools := captureProviderContext(t, p)
+	if instructions != "" || len(tools) != 0 {
+		t.Fatal("expected no skills when name is missing")
+	}
+}
+
+func TestDiscovery_MissingDescriptionField_Excluded(t *testing.T) {
+	root := t.TempDir()
+	createSkillDirRaw(t, root, "no-desc", "---\nname: no-desc\n---\nBody.")
+
+	p := newProvider(t, root)
+	instructions, tools := captureProviderContext(t, p)
+	if instructions != "" || len(tools) != 0 {
+		t.Fatal("expected no skills when description is missing")
 	}
 }
 
@@ -148,6 +184,43 @@ func TestDiscovery_NameMustMatchDirectory_ExcludedOnMismatch(t *testing.T) {
 	p := newProvider(t, root)
 	if hasSkill(t, p, "other-name") {
 		t.Fatal("expected skill to be excluded when frontmatter name mismatches directory name")
+	}
+}
+
+func TestDiscovery_NameExceedsMaxLength_Excluded(t *testing.T) {
+	root := t.TempDir()
+	longName := strings.Repeat("a", 65)
+	createSkillDirRaw(t, root, "long-name",
+		"---\nname: "+longName+"\ndescription: A skill\n---\nBody.")
+
+	p := newProvider(t, root)
+	instructions, tools := captureProviderContext(t, p)
+	if instructions != "" || len(tools) != 0 {
+		t.Fatal("expected skill with long name to be excluded")
+	}
+}
+
+func TestDiscovery_DescriptionExceedsMaxLength_Excluded(t *testing.T) {
+	root := t.TempDir()
+	longDesc := strings.Repeat("x", 1025)
+	createSkillDirRaw(t, root, "long-desc",
+		"---\nname: long-desc\ndescription: "+longDesc+"\n---\nBody.")
+
+	p := newProvider(t, root)
+	instructions, tools := captureProviderContext(t, p)
+	if instructions != "" || len(tools) != 0 {
+		t.Fatal("expected skill with long description to be excluded")
+	}
+}
+
+func TestDiscovery_FileWithUtf8Bom(t *testing.T) {
+	root := t.TempDir()
+	createSkillDirRaw(t, root, "bom-skill",
+		"\uFEFF---\nname: bom-skill\ndescription: Skill with BOM\n---\nBody content.")
+
+	p := newProvider(t, root)
+	if !hasSkill(t, p, "bom-skill") {
+		t.Fatal("expected BOM skill to be discovered")
 	}
 }
 
@@ -219,6 +292,40 @@ func TestProvider_SkillNamesAreXmlEscaped(t *testing.T) {
 	}
 }
 
+func TestProvider_MultiplePaths(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, filepath.Join(root, "dir1"), "skill-a", "Skill A", "Body A.")
+	createSkillDir(t, filepath.Join(root, "dir2"), "skill-b", "Skill B", "Body B.")
+
+	p := newProvider(t, filepath.Join(root, "dir1"), filepath.Join(root, "dir2"))
+	if !hasSkill(t, p, "skill-a") {
+		t.Error("expected skill-a")
+	}
+	if !hasSkill(t, p, "skill-b") {
+		t.Error("expected skill-b")
+	}
+}
+
+func TestProvider_SkillsListIsSortedByName(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "zulu-skill", "Zulu skill", "Body Z.")
+	createSkillDir(t, root, "alpha-skill", "Alpha skill", "Body A.")
+	createSkillDir(t, root, "mike-skill", "Mike skill", "Body M.")
+
+	p := newProvider(t, root)
+	instructions, _ := captureProviderContext(t, p)
+
+	alphaIdx := strings.Index(instructions, "alpha-skill")
+	mikeIdx := strings.Index(instructions, "mike-skill")
+	zuluIdx := strings.Index(instructions, "zulu-skill")
+	if alphaIdx >= mikeIdx {
+		t.Error("alpha-skill should appear before mike-skill")
+	}
+	if mikeIdx >= zuluIdx {
+		t.Error("mike-skill should appear before zulu-skill")
+	}
+}
+
 func TestLoadSkill_ReturnsBody(t *testing.T) {
 	root := t.TempDir()
 	createSkillDir(t, root, "load-test", "A skill", "Full instructions here.")
@@ -272,6 +379,24 @@ func TestReadResource_ReturnsContent(t *testing.T) {
 	}
 	if result != "Resource content here." {
 		t.Errorf("expected resource content, got %q", result)
+	}
+}
+
+func TestReadResource_DotSlashPrefix(t *testing.T) {
+	root := t.TempDir()
+	createSkillDirWithResource(t, root, "dotslash-read", "A skill",
+		"See [doc](refs/doc.md).", "refs/doc.md", "Document content.")
+
+	p := newProvider(t, root)
+	_, tools := captureProviderContext(t, p)
+	readTool := findTool(t, tools, "read_skill_resource")
+
+	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"dotslash-read","resourceName":"./refs/doc.md"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "Document content." {
+		t.Errorf("expected 'Document content.', got %q", result)
 	}
 }
 
