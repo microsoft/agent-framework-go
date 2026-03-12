@@ -82,11 +82,12 @@ func (p *provider) run(ctx context.Context, messages []*message.Message, options
 		}
 
 		acc := toolCallAccumulator{pending: map[string]*pendingToolCall{}}
-		for {
+		for frames != nil || errs != nil {
 			select {
 			case frame, ok := <-frames:
 				if !ok {
-					return
+					frames = nil
+					continue
 				}
 				evt, derr := decodeFrame(p.decoder, frame.Data)
 				if derr != nil {
@@ -113,11 +114,15 @@ func (p *provider) run(ctx context.Context, messages []*message.Message, options
 						return
 					}
 				}
-			case err := <-errs:
+			case err, ok := <-errs:
+				if !ok {
+					errs = nil
+					continue
+				}
 				if err != nil {
 					yield(nil, err)
+					return
 				}
-				return
 			}
 		}
 	}
