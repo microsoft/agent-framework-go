@@ -234,6 +234,92 @@ func TestAGUIAgentRun_InvokesTools_WhenFunctionCallsReturned(t *testing.T) {
 	}
 }
 
+func TestAGUIAgentRun_ForwardsAllToolResults_WhenMultipleToolCallsReturned(t *testing.T) {
+	var mu sync.Mutex
+	requestCount := 0
+	type sentMessage struct {
+		Role       string `json:"role"`
+		ToolCallID string `json:"toolCallId"`
+	}
+	sentPayloads := [][]sentMessage{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			Messages []sentMessage `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		mu.Lock()
+		requestCount++
+		current := requestCount
+		sentPayloads = append(sentPayloads, append([]sentMessage{}, input.Messages...))
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		switch current {
+		case 1:
+			writeSSE(t, w, aguiEvents.NewRunStartedEvent("thread-1", "run-1"))
+			writeSSE(t, w, aguiEvents.NewToolCallStartEvent("call-1", "GetWeather"))
+			writeSSE(t, w, aguiEvents.NewToolCallArgsEvent("call-1", `{"location":"Seattle"}`))
+			writeSSE(t, w, aguiEvents.NewToolCallEndEvent("call-1"))
+			writeSSE(t, w, aguiEvents.NewToolCallStartEvent("call-2", "GetTime"))
+			writeSSE(t, w, aguiEvents.NewToolCallArgsEvent("call-2", `{"timezone":"UTC"}`))
+			writeSSE(t, w, aguiEvents.NewToolCallEndEvent("call-2"))
+			writeSSE(t, w, aguiEvents.NewRunFinishedEvent("thread-1", "run-1"))
+		default:
+			writeSSE(t, w, aguiEvents.NewRunStartedEvent("thread-1", "run-2"))
+			writeSSE(t, w, aguiEvents.NewTextMessageStartEvent("msg-2", aguiEvents.WithRole("assistant")))
+			writeSSE(t, w, aguiEvents.NewTextMessageContentEvent("msg-2", "done"))
+			writeSSE(t, w, aguiEvents.NewTextMessageEndEvent("msg-2"))
+			writeSSE(t, w, aguiEvents.NewRunFinishedEvent("thread-1", "run-2"))
+		}
+	}))
+	defer server.Close()
+
+	a := aguiagent.New(aguiagent.Config{Client: newTestClient(server.URL)})
+	weatherInvoked := false
+	timeInvoked := false
+	type weatherInput struct {
+		Location string `json:"location"`
+	}
+	type timeInput struct {
+		Timezone string `json:"timezone"`
+	}
+	weatherTool := functool.MustNew(&functool.Func{Name: "GetWeather", Description: "Get weather"}, func(ctx tool.Context, in weatherInput) (string, error) {
+		weatherInvoked = true
+		return "Sunny", nil
+	})
+	timeTool := functool.MustNew(&functool.Func{Name: "GetTime", Description: "Get time"}, func(ctx tool.Context, in timeInput) (string, error) {
+		timeInvoked = true
+		return "12:00", nil
+	})
+
+	_, err := a.RunText(context.Background(), "Do both", agentopt.Stream(true), agentopt.Tool(weatherTool), agentopt.Tool(timeTool)).Collect()
+	if err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	if !weatherInvoked || !timeInvoked {
+		t.Fatalf("expected both tools invoked, got weather=%v time=%v", weatherInvoked, timeInvoked)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if requestCount < 2 {
+		t.Fatalf("expected at least 2 requests, got %d", requestCount)
+	}
+	toolCalls := map[string]bool{}
+	for _, m := range sentPayloads[1] {
+		if strings.EqualFold(m.Role, "tool") {
+			toolCalls[m.ToolCallID] = true
+		}
+	}
+	if !toolCalls["call-1"] || !toolCalls["call-2"] {
+		t.Fatalf("expected second payload to include tool results for call-1 and call-2, got %+v", toolCalls)
+	}
+}
+
 func TestAGUIAgentRun_ConvertsStateSnapshotEventToDataContent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

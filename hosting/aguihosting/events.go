@@ -13,9 +13,9 @@ import (
 	"github.com/microsoft/agent-framework-go/message"
 )
 
-func filterServerToolsFromMixedInvocations(update *message.ResponseUpdate, clientToolNames map[string]struct{}) *message.ResponseUpdate {
+func filterServerToolsFromMixedInvocations(update *message.ResponseUpdate, clientToolNames map[string]struct{}) (*message.ResponseUpdate, map[string]struct{}) {
 	if update == nil || len(clientToolNames) == 0 || len(update.Contents) == 0 {
-		return update
+		return update, nil
 	}
 
 	containsClient := false
@@ -37,10 +37,11 @@ func filterServerToolsFromMixedInvocations(update *message.ResponseUpdate, clien
 	}
 
 	if !(containsClient && containsServer) {
-		return update
+		return update, nil
 	}
 
 	filtered := make(message.Contents, 0, len(update.Contents))
+	suppressed := map[string]struct{}{}
 	for _, c := range update.Contents {
 		fcc, ok := c.(*message.FunctionCallContent)
 		if !ok {
@@ -49,11 +50,13 @@ func filterServerToolsFromMixedInvocations(update *message.ResponseUpdate, clien
 		}
 		if _, isClient := clientToolNames[fcc.Name]; isClient {
 			filtered = append(filtered, c)
+		} else if fcc.CallID != "" {
+			suppressed[fcc.CallID] = struct{}{}
 		}
 	}
 	clone := *update
 	clone.Contents = filtered
-	return &clone
+	return &clone, suppressed
 }
 
 func updatesToAGUIEvents(
@@ -69,6 +72,7 @@ func updatesToAGUIEvents(
 		}
 
 		var currentMessageID string
+		suppressedCallIDs := map[string]struct{}{}
 		for update, err := range updates {
 			if err != nil {
 				if !yield(aguiEvents.NewRunErrorEvent(err.Error(), aguiEvents.WithRunID(runID)), err) {
@@ -83,7 +87,11 @@ func updatesToAGUIEvents(
 				return
 			}
 
-			update = filterServerToolsFromMixedInvocations(update, clientToolNames)
+			var suppressed map[string]struct{}
+			update, suppressed = filterServerToolsFromMixedInvocations(update, clientToolNames)
+			for callID := range suppressed {
+				suppressedCallIDs[callID] = struct{}{}
+			}
 			if update == nil {
 				continue
 			}
@@ -93,7 +101,7 @@ func updatesToAGUIEvents(
 				msgID = aguiEvents.GenerateMessageID()
 			}
 
-			hasText := hasTextContent(update.Contents)
+			hasText := hasTextLikeContent(update.Contents)
 			if hasText && currentMessageID != msgID {
 				if currentMessageID != "" {
 					if !yield(aguiEvents.NewTextMessageEndEvent(currentMessageID), nil) {
@@ -111,6 +119,11 @@ func updatesToAGUIEvents(
 			}
 
 			for _, c := range update.Contents {
+				if frc, ok := c.(*message.FunctionResultContent); ok {
+					if _, isSuppressed := suppressedCallIDs[frc.CallID]; isSuppressed {
+						continue
+					}
+				}
 				events, convErr := contentToEvents(c, msgID)
 				if convErr != nil {
 					if !yield(aguiEvents.NewRunErrorEvent(convErr.Error(), aguiEvents.WithRunID(runID)), convErr) {
@@ -135,10 +148,14 @@ func updatesToAGUIEvents(
 	}
 }
 
-func hasTextContent(contents message.Contents) bool {
+func hasTextLikeContent(contents message.Contents) bool {
 	for _, c := range contents {
 		text, ok := c.(*message.TextContent)
 		if ok && text.Text != "" {
+			return true
+		}
+		dc, ok := c.(*message.DataContent)
+		if ok && shouldEmitDataContentAsText(dc) {
 			return true
 		}
 	}
@@ -181,13 +198,13 @@ func contentToEvents(content message.Content, messageID string) ([]aguiEvents.Ev
 		}
 		return []aguiEvents.Event{aguiEvents.NewToolCallResultEvent(resultMessageID, callID, contentStr)}, nil
 	case *message.DataContent:
-		return dataContentToEvents(c)
+		return dataContentToEvents(c, messageID)
 	default:
 		return nil, nil
 	}
 }
 
-func dataContentToEvents(content *message.DataContent) ([]aguiEvents.Event, error) {
+func dataContentToEvents(content *message.DataContent, messageID string) ([]aguiEvents.Event, error) {
 	b, err := content.Bytes()
 	if err != nil {
 		return nil, err
@@ -207,8 +224,16 @@ func dataContentToEvents(content *message.DataContent) ([]aguiEvents.Event, erro
 		}
 		return []aguiEvents.Event{aguiEvents.NewStateDeltaEvent(delta)}, nil
 	default:
-		return []aguiEvents.Event{aguiEvents.NewTextMessageContentEvent(aguiEvents.GenerateMessageID(), string(b))}, nil
+		return []aguiEvents.Event{aguiEvents.NewTextMessageContentEvent(messageID, string(b))}, nil
 	}
+}
+
+func shouldEmitDataContentAsText(content *message.DataContent) bool {
+	if content == nil {
+		return false
+	}
+	mediaType := strings.ToLower(strings.TrimSpace(content.MediaType))
+	return mediaType != "application/json" && mediaType != "application/json-patch+json"
 }
 
 func serializeToolResult(result any) (string, error) {

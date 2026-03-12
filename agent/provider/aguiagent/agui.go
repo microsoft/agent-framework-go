@@ -181,6 +181,14 @@ func toAGUIInputMessages(messages []*message.Message) (state any, converted []ag
 				}
 			}
 		}
+		if msg.Role == message.RoleTool {
+			toolMessages, err := toAGUIToolMessages(msg)
+			if err != nil {
+				return nil, nil, err
+			}
+			converted = append(converted, toolMessages...)
+			continue
+		}
 		ag, ok, err := toAGUIMessage(msg)
 		if err != nil {
 			return nil, nil, err
@@ -190,6 +198,50 @@ func toAGUIInputMessages(messages []*message.Message) (state any, converted []ag
 		}
 	}
 	return state, converted, nil
+}
+
+func toAGUIToolMessages(msg *message.Message) ([]aguiTypes.Message, error) {
+	baseID := msg.ID
+	if baseID == "" {
+		baseID = aguiEvents.GenerateMessageID()
+	}
+
+	results := make([]*message.FunctionResultContent, 0, len(msg.Contents))
+	for _, c := range msg.Contents {
+		frc, ok := c.(*message.FunctionResultContent)
+		if !ok {
+			continue
+		}
+		results = append(results, frc)
+	}
+
+	if len(results) == 0 {
+		return []aguiTypes.Message{{
+			ID:      baseID,
+			Role:    aguiTypes.RoleTool,
+			Content: msg.String(),
+		}}, nil
+	}
+
+	out := make([]aguiTypes.Message, 0, len(results))
+	for i, frc := range results {
+		content, err := serializeToolResult(frc.Result)
+		if err != nil {
+			return nil, err
+		}
+		id := baseID
+		if i > 0 {
+			id = aguiEvents.GenerateMessageID()
+		}
+		out = append(out, aguiTypes.Message{
+			ID:         id,
+			Role:       aguiTypes.RoleTool,
+			ToolCallID: frc.CallID,
+			Content:    content,
+		})
+	}
+
+	return out, nil
 }
 
 func extractStateFromMessage(msg *message.Message) (any, bool, error) {
@@ -394,7 +446,14 @@ func parseResultContent(content string) any {
 }
 
 func newJSONDataContent(value any, mediaType string) *message.DataContent {
-	b, _ := json.Marshal(value)
+	b, err := json.Marshal(value)
+	if err != nil {
+		if fallback, err2 := json.Marshal(fmt.Sprint(value)); err2 == nil {
+			b = fallback
+		} else {
+			b = []byte("null")
+		}
+	}
 	return &message.DataContent{MediaType: mediaType, Data: base64.StdEncoding.EncodeToString(b)}
 }
 

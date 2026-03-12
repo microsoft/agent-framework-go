@@ -115,7 +115,7 @@ func contentAsString(content any) string {
 	default:
 		b, err := json.Marshal(value)
 		if err != nil {
-			return ""
+			return fmt.Sprint(value)
 		}
 		return string(b)
 	}
