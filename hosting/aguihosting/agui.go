@@ -26,7 +26,7 @@ type HandlerConfig struct {
 
 func NewHandler(cfg HandlerConfig) http.Handler {
 	if cfg.Agent == nil {
-		panic("aiAgent is required")
+		panic("agent is required")
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.New(slog.DiscardHandler)
