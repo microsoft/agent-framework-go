@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 
 	"github.com/a2aproject/a2a-go/a2a"
@@ -32,7 +33,7 @@ func toAgentMessage(in *a2a.Message) (*message.Message, error) {
 		ID:                   in.ID,
 		Role:                 role,
 		Contents:             contents,
-		AdditionalProperties: mapOrNil(in.Metadata),
+		AdditionalProperties: maps.Clone(in.Metadata),
 		RawRepresentation:    in,
 	}
 	return out, nil
@@ -44,20 +45,20 @@ func partsToContents(parts []a2a.Part) (message.Contents, error) {
 		switch p := part.(type) {
 		case a2a.TextPart:
 			contents = append(contents, &message.TextContent{
-				ContentHeader: message.ContentHeader{AdditionalProperties: mapOrNil(p.Metadata), RawRepresentation: p},
+				ContentHeader: message.ContentHeader{AdditionalProperties: maps.Clone(p.Metadata), RawRepresentation: p},
 				Text:          p.Text,
 			})
 		case a2a.FilePart:
 			switch file := p.File.(type) {
 			case a2a.FileURI:
 				contents = append(contents, &message.URIContent{
-					ContentHeader: message.ContentHeader{AdditionalProperties: mapOrNil(p.Metadata), RawRepresentation: p},
+					ContentHeader: message.ContentHeader{AdditionalProperties: maps.Clone(p.Metadata), RawRepresentation: p},
 					URI:           file.URI,
 					MediaType:     cmp.Or(file.MimeType, "application/octet-stream"),
 				})
 			case a2a.FileBytes:
 				contents = append(contents, &message.DataContent{
-					ContentHeader: message.ContentHeader{AdditionalProperties: mapOrNil(p.Metadata), RawRepresentation: p},
+					ContentHeader: message.ContentHeader{AdditionalProperties: maps.Clone(p.Metadata), RawRepresentation: p},
 					Data:          file.Bytes,
 					MediaType:     cmp.Or(file.MimeType, "application/octet-stream"),
 				})
@@ -70,7 +71,7 @@ func partsToContents(parts []a2a.Part) (message.Contents, error) {
 				return nil, fmt.Errorf("failed to marshal A2A data part: %w", err)
 			}
 			contents = append(contents, &message.DataContent{
-				ContentHeader: message.ContentHeader{AdditionalProperties: mapOrNil(p.Metadata), RawRepresentation: p},
+				ContentHeader: message.ContentHeader{AdditionalProperties: maps.Clone(p.Metadata), RawRepresentation: p},
 				Data:          base64.StdEncoding.EncodeToString(dump),
 				MediaType:     "application/json",
 			})
@@ -96,7 +97,7 @@ func responseToMessage(infoProvider a2a.TaskInfoProvider, resp *message.Response
 	}
 
 	out := a2a.NewMessageForTask(a2a.MessageRoleAgent, infoProvider, parts...)
-	out.Metadata = mapOrNil(resp.AdditionalProperties)
+	out.Metadata = maps.Clone(resp.AdditionalProperties)
 	for _, msg := range slices.Backward(resp.Messages) {
 		if msg != nil && msg.ID != "" {
 			out.ID = msg.ID
@@ -119,7 +120,7 @@ func responseToArtifactEvent(infoProvider a2a.TaskInfoProvider, resp *message.Re
 	}
 	evt := a2a.NewArtifactEvent(infoProvider, parts...)
 	if resp != nil {
-		evt.Metadata = mapOrNil(resp.AdditionalProperties)
+		evt.Metadata = maps.Clone(resp.AdditionalProperties)
 	}
 	return evt, nil
 }
@@ -132,10 +133,10 @@ func contentsToParts(contents message.Contents) ([]a2a.Part, error) {
 			if c.Text == "" {
 				continue
 			}
-			parts = append(parts, a2a.TextPart{Text: c.Text, Metadata: mapOrNil(c.AdditionalProperties)})
+			parts = append(parts, a2a.TextPart{Text: c.Text, Metadata: maps.Clone(c.AdditionalProperties)})
 		case *message.URIContent:
 			parts = append(parts, a2a.FilePart{
-				Metadata: mapOrNil(c.AdditionalProperties),
+				Metadata: maps.Clone(c.AdditionalProperties),
 				File: a2a.FileURI{
 					URI: c.URI,
 					FileMeta: a2a.FileMeta{
@@ -145,7 +146,7 @@ func contentsToParts(contents message.Contents) ([]a2a.Part, error) {
 			})
 		case *message.DataContent:
 			parts = append(parts, a2a.FilePart{
-				Metadata: mapOrNil(c.AdditionalProperties),
+				Metadata: maps.Clone(c.AdditionalProperties),
 				File: a2a.FileBytes{
 					Bytes: c.Data,
 					FileMeta: a2a.FileMeta{
@@ -161,12 +162,12 @@ func contentsToParts(contents message.Contents) ([]a2a.Part, error) {
 				}
 				var value map[string]any
 				if err := json.Unmarshal(bytes, &value); err == nil {
-					parts[len(parts)-1] = a2a.DataPart{Metadata: mapOrNil(c.AdditionalProperties), Data: value}
+					parts[len(parts)-1] = a2a.DataPart{Metadata: maps.Clone(c.AdditionalProperties), Data: value}
 				}
 			}
 		case *message.HostedFileContent:
 			parts = append(parts, a2a.FilePart{
-				Metadata: mapOrNil(c.AdditionalProperties),
+				Metadata: maps.Clone(c.AdditionalProperties),
 				File: a2a.FileURI{
 					URI: c.FileID,
 					FileMeta: a2a.FileMeta{
@@ -190,15 +191,4 @@ func contentsToParts(contents message.Contents) ([]a2a.Part, error) {
 		}
 	}
 	return parts, nil
-}
-
-func mapOrNil(in map[string]any) map[string]any {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]any, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
 }
