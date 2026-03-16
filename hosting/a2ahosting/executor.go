@@ -16,19 +16,23 @@ import (
 
 const continuationTokenMetadataKey = "__a2a__continuationToken"
 
+type ExecutorConfig struct {
+	Agent                    *agent.Agent
+	AllowBackgroundResponses bool
+	// AllowBackgroundResponsesWhen is a callback that determines on a per-message basis whether background responses should be allowed.
+	// If both AllowBackgroundResponses and AllowBackgroundResponsesWhen are set, the callback takes precedence.
+	AllowBackgroundResponsesWhen func(context.Context, *a2asrv.RequestContext) (bool, error)
+
+	Options []a2asrv.RequestHandlerOption
+}
+
 type executor struct {
-	agent   *agent.Agent
-	runMode AgentRunMode
+	cfg ExecutorConfig
 }
 
-func newExecutor(afAgent *agent.Agent, runMode AgentRunMode) *executor {
-	if runMode.value == "" {
-		runMode = DisallowBackground()
-	}
-	return &executor{agent: afAgent, runMode: runMode}
+func NewExecutor(cfg ExecutorConfig) a2asrv.AgentExecutor {
+	return &executor{cfg: cfg}
 }
-
-var _ a2asrv.AgentExecutor = (*executor)(nil)
 
 func (e *executor) Execute(ctx context.Context, reqCtx *a2asrv.RequestContext, queue eventqueue.Queue) error {
 	if reqCtx == nil || reqCtx.Message == nil {
@@ -38,9 +42,7 @@ func (e *executor) Execute(ctx context.Context, reqCtx *a2asrv.RequestContext, q
 		return fmt.Errorf("referenceTaskIds are not supported")
 	}
 
-	allowBackground, err := e.runMode.shouldRunInBackground(ctx, A2ARunDecisionContext{
-		MessageSendParams: &a2a.MessageSendParams{Message: reqCtx.Message, Metadata: mapOrNil(reqCtx.Message.Metadata)},
-	})
+	allowBackground, err := e.shouldRunInBackground(ctx, reqCtx)
 	if err != nil {
 		return err
 	}
@@ -50,7 +52,7 @@ func (e *executor) Execute(ctx context.Context, reqCtx *a2asrv.RequestContext, q
 		return err
 	}
 
-	session, err := e.agent.CreateSession(ctx, agentopt.ServiceID(reqCtx.ContextID))
+	session, err := e.cfg.Agent.CreateSession(ctx, agentopt.ServiceID(reqCtx.ContextID))
 	if err != nil {
 		return err
 	}
@@ -60,7 +62,7 @@ func (e *executor) Execute(ctx context.Context, reqCtx *a2asrv.RequestContext, q
 		agentopt.AllowBackgroundResponses(allowBackground),
 	}
 
-	resp, runErr := e.agent.Run(ctx, messagesIn, runOptions...).Collect()
+	resp, runErr := e.cfg.Agent.Run(ctx, messagesIn, runOptions...).Collect()
 	if runErr != nil {
 		if reqCtx.StoredTask != nil {
 			statusErr := a2a.NewStatusUpdateEvent(reqCtx, a2a.TaskStateFailed, nil)
@@ -162,4 +164,11 @@ func (e *executor) buildMessages(reqCtx *a2asrv.RequestContext) ([]*message.Mess
 	}
 
 	return messages, nil
+}
+
+func (e *executor) shouldRunInBackground(ctx context.Context, decisionContext *a2asrv.RequestContext) (bool, error) {
+	if e.cfg.AllowBackgroundResponsesWhen != nil {
+		return e.cfg.AllowBackgroundResponsesWhen(ctx, decisionContext)
+	}
+	return e.cfg.AllowBackgroundResponses, nil
 }

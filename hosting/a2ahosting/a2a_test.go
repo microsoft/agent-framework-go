@@ -25,7 +25,7 @@ func TestNewRequestHandler_PanicsWithoutAgent(t *testing.T) {
 			t.Fatal("expected panic when agent is nil")
 		}
 	}()
-	_ = a2ahosting.NewRequestHandler(a2ahosting.HandlerConfig{})
+	_ = a2ahosting.NewRequestHandler(a2ahosting.ExecutorConfig{})
 }
 
 func TestRequestHandler_OnSendMessage_ReturnsMessage_WhenBackgroundDisabled(t *testing.T) {
@@ -39,7 +39,7 @@ func TestRequestHandler_OnSendMessage_ReturnsMessage_WhenBackgroundDisabled(t *t
 		}
 	})
 
-	h := a2ahosting.NewRequestHandler(a2ahosting.HandlerConfig{Agent: a})
+	h := a2ahosting.NewRequestHandler(a2ahosting.ExecutorConfig{Agent: a})
 	result, err := h.OnSendMessage(context.Background(), &a2a.MessageSendParams{
 		Message: &a2a.Message{Role: a2a.MessageRoleUser, Parts: []a2a.Part{a2a.TextPart{Text: "ping"}}},
 	})
@@ -73,7 +73,7 @@ func TestRequestHandler_OnSendMessage_WithReferenceTaskIDs_ReturnsError(t *testi
 		}
 	})
 
-	h := a2ahosting.NewRequestHandler(a2ahosting.HandlerConfig{Agent: a})
+	h := a2ahosting.NewRequestHandler(a2ahosting.ExecutorConfig{Agent: a})
 	_, err := h.OnSendMessage(context.Background(), &a2a.MessageSendParams{
 		Message: &a2a.Message{
 			Role:           a2a.MessageRoleUser,
@@ -100,7 +100,7 @@ func TestRequestHandler_OnSendMessage_PreservesContextID(t *testing.T) {
 		}
 	})
 
-	h := a2ahosting.NewRequestHandler(a2ahosting.HandlerConfig{Agent: a})
+	h := a2ahosting.NewRequestHandler(a2ahosting.ExecutorConfig{Agent: a})
 	result, err := h.OnSendMessage(context.Background(), &a2a.MessageSendParams{
 		Message: &a2a.Message{ContextID: "ctx-123", Role: a2a.MessageRoleUser, Parts: []a2a.Part{a2a.TextPart{Text: "ping"}}},
 	})
@@ -134,7 +134,7 @@ func TestRequestHandler_OnSendMessageStream_UsesTaskLifecycle_WhenContinuationTo
 		}
 	})
 
-	h := a2ahosting.NewRequestHandler(a2ahosting.HandlerConfig{Agent: a, RunMode: a2ahosting.AllowBackgroundIfSupported()})
+	h := a2ahosting.NewRequestHandler(a2ahosting.ExecutorConfig{Agent: a, AllowBackgroundResponses: true})
 	stream := h.OnSendMessageStream(context.Background(), &a2a.MessageSendParams{
 		Message: &a2a.Message{Role: a2a.MessageRoleUser, Parts: []a2a.Part{a2a.TextPart{Text: "ping"}}},
 	})
@@ -178,7 +178,7 @@ func TestRequestHandler_OnSendMessageStream_WhenContinuationTokenAndNoMessages_S
 		}
 	})
 
-	h := a2ahosting.NewRequestHandler(a2ahosting.HandlerConfig{Agent: a, RunMode: a2ahosting.AllowBackgroundIfSupported()})
+	h := a2ahosting.NewRequestHandler(a2ahosting.ExecutorConfig{Agent: a, AllowBackgroundResponses: true})
 	stream := h.OnSendMessageStream(context.Background(), &a2a.MessageSendParams{
 		Message: &a2a.Message{Role: a2a.MessageRoleUser, Parts: []a2a.Part{a2a.TextPart{Text: "ping"}}},
 	})
@@ -214,7 +214,7 @@ func TestRequestHandler_OnCancelTask_ReturnsCanceledTask(t *testing.T) {
 			}, nil)
 		}
 	})
-	h := a2ahosting.NewRequestHandler(a2ahosting.HandlerConfig{Agent: a, RunMode: a2ahosting.AllowBackgroundIfSupported()})
+	h := a2ahosting.NewRequestHandler(a2ahosting.ExecutorConfig{Agent: a, AllowBackgroundResponses: true})
 
 	stream := h.OnSendMessageStream(context.Background(), &a2a.MessageSendParams{
 		Message: &a2a.Message{

@@ -131,7 +131,9 @@ func main() {
 		URL:       url,
 	}}
 	mux := http.NewServeMux()
-	mux.Handle("/", a2ahosting.NewHTTPHandler(a2ahosting.HandlerConfig{Agent: hostAgent, AgentCard: card}))
+	mux.Handle("/", a2ahosting.NewHTTPHandler(a2ahosting.ExecutorConfig{
+		Agent: hostAgent,
+	}, a2asrv.WithExtendedAgentCard(card)))
 	mux.Handle(a2asrv.WellKnownAgentCardPath, a2asrv.NewStaticAgentCardHandler(card))
 
 	log.Printf("A2A server listening on :%d for agentType=%s", *port, strings.ToLower(*agentType))
