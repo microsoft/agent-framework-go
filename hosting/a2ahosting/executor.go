@@ -58,7 +58,6 @@ func (e *executor) Execute(ctx context.Context, reqCtx *a2asrv.RequestContext, q
 	runOptions := []agentopt.Option{
 		agentopt.Session(session),
 		agentopt.AllowBackgroundResponses(allowBackground),
-		agentopt.Stream(true),
 	}
 
 	resp, runErr := e.agent.Run(ctx, messagesIn, runOptions...).Collect()

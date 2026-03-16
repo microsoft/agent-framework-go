@@ -144,10 +144,6 @@ func contentsToParts(contents message.Contents) ([]a2a.Part, error) {
 				},
 			})
 		case *message.DataContent:
-			bytes, err := c.Bytes()
-			if err != nil {
-				return nil, err
-			}
 			parts = append(parts, a2a.FilePart{
 				Metadata: mapOrNil(c.AdditionalProperties),
 				File: a2a.FileBytes{
@@ -159,6 +155,10 @@ func contentsToParts(contents message.Contents) ([]a2a.Part, error) {
 				},
 			})
 			if c.MediaType == "application/json" {
+				bytes, err := c.Bytes()
+				if err != nil {
+					return nil, err
+				}
 				var value map[string]any
 				if err := json.Unmarshal(bytes, &value); err == nil {
 					parts[len(parts)-1] = a2a.DataPart{Metadata: mapOrNil(c.AdditionalProperties), Data: value}
