@@ -24,7 +24,7 @@ type HandlerConfig struct {
 	Logger *slog.Logger
 }
 
-func NewHandler(cfg HandlerConfig) http.Handler {
+func NewHTTPHandler(cfg HandlerConfig) http.Handler {
 	if cfg.Agent == nil {
 		panic("agent is required")
 	}

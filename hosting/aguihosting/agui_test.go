@@ -26,7 +26,7 @@ func TestHandler_MethodNotAllowed(t *testing.T) {
 	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {}
 	})
-	h := aguihosting.NewHandler(aguihosting.HandlerConfig{Agent: a})
+	h := aguihosting.NewHTTPHandler(aguihosting.HandlerConfig{Agent: a})
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rr := httptest.NewRecorder()
@@ -41,7 +41,7 @@ func TestHandler_InvalidInput_ReturnsBadRequest(t *testing.T) {
 	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {}
 	})
-	h := aguihosting.NewHandler(aguihosting.HandlerConfig{Agent: a})
+	h := aguihosting.NewHTTPHandler(aguihosting.HandlerConfig{Agent: a})
 
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("{not-json"))
 	rr := httptest.NewRecorder()
@@ -62,7 +62,7 @@ func TestHandler_StreamsSSEText(t *testing.T) {
 			}, nil)
 		}
 	})
-	h := aguihosting.NewHandler(aguihosting.HandlerConfig{Agent: a})
+	h := aguihosting.NewHTTPHandler(aguihosting.HandlerConfig{Agent: a})
 
 	body := `{"threadId":"thread-1","runId":"run-1","messages":[{"id":"u1","role":"user","content":"ping"}]}`
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
@@ -94,7 +94,7 @@ func TestHandler_MixedToolInvocations_OnlyClientToolEmitted(t *testing.T) {
 			}, nil)
 		}
 	})
-	h := aguihosting.NewHandler(aguihosting.HandlerConfig{Agent: a})
+	h := aguihosting.NewHTTPHandler(aguihosting.HandlerConfig{Agent: a})
 
 	body := `{"threadId":"thread-1","runId":"run-1","messages":[{"id":"u1","role":"user","content":"ping"}],"tools":[{"name":"client_tool","description":"client","parameters":{"type":"object"}}]}`
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
@@ -124,7 +124,7 @@ func TestHandler_StateSnapshotEmitsStateEvent(t *testing.T) {
 			}, nil)
 		}
 	})
-	h := aguihosting.NewHandler(aguihosting.HandlerConfig{Agent: a})
+	h := aguihosting.NewHTTPHandler(aguihosting.HandlerConfig{Agent: a})
 
 	body := `{"threadId":"thread-1","runId":"run-1","messages":[{"id":"u1","role":"user","content":"ping"}]}`
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
@@ -158,7 +158,7 @@ func TestHandler_MixedToolInvocations_SuppressesServerToolResults(t *testing.T) 
 			}, nil)
 		}
 	})
-	h := aguihosting.NewHandler(aguihosting.HandlerConfig{Agent: a})
+	h := aguihosting.NewHTTPHandler(aguihosting.HandlerConfig{Agent: a})
 
 	body := `{"threadId":"thread-1","runId":"run-1","messages":[{"id":"u1","role":"user","content":"ping"}],"tools":[{"name":"client_tool","description":"client","parameters":{"type":"object"}}]}`
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
@@ -187,7 +187,7 @@ func TestHandler_UnknownDataContent_UsesCurrentMessageLifecycle(t *testing.T) {
 			}, nil)
 		}
 	})
-	h := aguihosting.NewHandler(aguihosting.HandlerConfig{Agent: a})
+	h := aguihosting.NewHTTPHandler(aguihosting.HandlerConfig{Agent: a})
 
 	body := `{"threadId":"thread-1","runId":"run-1","messages":[{"id":"u1","role":"user","content":"ping"}]}`
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))

@@ -40,7 +40,7 @@ func main() {
 		},
 	})
 	mux := http.NewServeMux()
-	mux.Handle("/", aguihosting.NewHandler(aguihosting.HandlerConfig{Agent: a}))
+	mux.Handle("/", aguihosting.NewHTTPHandler(aguihosting.HandlerConfig{Agent: a}))
 
 	log.Printf("AG-UI server listening on %s", ":8888")
 	if err := http.ListenAndServe(":8888", mux); err != nil {
