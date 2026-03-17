@@ -13,8 +13,8 @@ import (
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/hosting/aguihosting"
 	"github.com/microsoft/agent-framework-go/agentopt"
-	"github.com/microsoft/agent-framework-go/hosting/aguihosting"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
