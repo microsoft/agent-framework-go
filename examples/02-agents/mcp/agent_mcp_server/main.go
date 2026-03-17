@@ -7,7 +7,6 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/middleware"
 	"github.com/microsoft/agent-framework-go/tool/mcptool"
@@ -38,20 +37,14 @@ func main() {
 		panic(err)
 	}
 
-	var opts []agentopt.Option
-	for _, t := range tools {
-		opts = append(opts, agentopt.Tool(t))
-	}
-
 	// Create the Agent with MCP tools
-	// In Go, we configure tools as default options that will be used for all runs
 	a := openaichatagent.New(openaichatagent.Config{
 		Model: "gpt-4o-mini",
 		Agent: agent.Config{
 			Name:         "DocsAgent",
 			Instructions: "You are a helpful assistant that can help with microsoft documentation questions.",
 			Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
-			RunOptions:   opts,
+			Tools:        tools,
 		},
 	})
 

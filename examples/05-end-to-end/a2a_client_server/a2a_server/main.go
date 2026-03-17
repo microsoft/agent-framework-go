@@ -19,7 +19,6 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/hosting/a2ahosting"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
@@ -172,10 +171,10 @@ func buildAgent(agentType, model string) (openaichatagent.Config, *a2a.AgentCard
 			Name:         "InvoiceAgent",
 			Description:  "Handles requests relating to invoices.",
 			Instructions: "You specialize in handling queries related to invoices.",
-			RunOptions: []agentopt.Option{
-				agentopt.Tool(queryInvoices),
-				agentopt.Tool(queryByTransactionID),
-				agentopt.Tool(queryByInvoiceID),
+			Tools: []tool.Tool{
+				queryInvoices,
+				queryByTransactionID,
+				queryByInvoiceID,
 			},
 		}
 		card.Name = "InvoiceAgent"

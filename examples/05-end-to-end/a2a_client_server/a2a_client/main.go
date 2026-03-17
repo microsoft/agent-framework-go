@@ -18,6 +18,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/middleware"
+	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
 )
@@ -45,7 +46,7 @@ func main() {
 		"Agents", strings.Join(urls, ", "),
 	)
 
-	tools := make([]agentopt.Option, 0, len(urls))
+	tools := make([]tool.Tool, 0, len(urls))
 	for _, url := range urls {
 		card, err := agentcard.DefaultResolver.Resolve(ctx, url)
 		if err != nil {
@@ -63,7 +64,7 @@ func main() {
 				Description: card.Description,
 			},
 		})
-		tools = append(tools, agentopt.Tool(remoteAgent.AsFuncTool()))
+		tools = append(tools, remoteAgent.AsFuncTool())
 	}
 
 	host := openaichatagent.New(openaichatagent.Config{
@@ -76,7 +77,7 @@ func main() {
 			Name:         "HostClient",
 			Instructions: "You specialize in handling user queries and using your tools to provide answers.",
 			Middlewares:  []middleware.Middleware{logger},
-			RunOptions:   tools,
+			Tools:        tools,
 		},
 	})
 

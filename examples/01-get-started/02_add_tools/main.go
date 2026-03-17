@@ -55,7 +55,7 @@ func main() {
 		Agent: agent.Config{
 			Instructions: "You are a helpful assistant",
 			Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
-			RunOptions:   []agentopt.Option{agentopt.Tool(weatherTool)},
+			Tools:        []tool.Tool{weatherTool},
 		},
 	})
 

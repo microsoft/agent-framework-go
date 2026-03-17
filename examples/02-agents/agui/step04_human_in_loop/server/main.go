@@ -13,7 +13,6 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/hosting/aguihosting"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
@@ -48,9 +47,7 @@ func main() {
 		Agent: agent.Config{
 			Name:         "AGUIAssistant",
 			Instructions: "You are a helpful assistant in charge of approving expenses.",
-			RunOptions: []agentopt.Option{
-				agentopt.Tool(tool.ApprovalRequiredFunc(approveExpense)),
-			},
+			Tools:        []tool.Tool{tool.ApprovalRequiredFunc(approveExpense)},
 		},
 	})
 	mux := http.NewServeMux()

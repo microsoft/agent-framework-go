@@ -15,7 +15,20 @@ import (
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/middleware"
+	"github.com/microsoft/agent-framework-go/tool"
 )
+
+type stubTool struct {
+	name string
+}
+
+func (t stubTool) Name() string {
+	return t.name
+}
+
+func (t stubTool) Description() string {
+	return t.name
+}
 
 type prependMiddleware struct {
 	prependMessages []*message.Message
@@ -352,6 +365,47 @@ func TestAgent_Run_PrependsAgentOptions(t *testing.T) {
 	// Agent options should be prepended, so call options come after
 	if len(capturedOptions) < 2 {
 		t.Fatalf("expected at least 2 options, got %d", len(capturedOptions))
+	}
+}
+
+func TestAgent_Run_AddsConfigToolsToRunOptions(t *testing.T) {
+	var capturedOptions []agentopt.Option
+	runner := &agenttest.Runner{
+		Responses: []agenttest.Turn{{
+			Callbacks: []func(context.Context, []*message.Message, ...agentopt.Option){
+				func(ctx context.Context, messages []*message.Message, opts ...agentopt.Option) {
+					capturedOptions = opts
+				},
+			},
+			Responses: []agenttest.Response{{
+				Response: &message.ResponseUpdate{
+					Role: message.RoleAssistant,
+					Contents: []message.Content{
+						&message.TextContent{Text: "response"},
+					},
+				},
+			}},
+		}},
+	}
+
+	a := agent.New(agent.ProviderConfig{Run: runner.Run}, agent.Config{
+		ID:    "test",
+		Name:  "test",
+		Tools: []tool.Tool{stubTool{name: "weather"}, stubTool{name: "time"}},
+	})
+
+	_, err := a.RunText(t.Context(), "test").Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var names []string
+	for configuredTool := range agentopt.All(capturedOptions, agentopt.Tool) {
+		names = append(names, configuredTool.Name())
+	}
+
+	if !slices.Equal(names, []string{"weather", "time"}) {
+		t.Fatalf("expected configured tools to be added to run options, got %v", names)
 	}
 }
 

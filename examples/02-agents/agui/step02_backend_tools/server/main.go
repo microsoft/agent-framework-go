@@ -12,7 +12,6 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/hosting/aguihosting"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
@@ -77,9 +76,7 @@ func main() {
 		Agent: agent.Config{
 			Name:         "AGUIAssistant",
 			Instructions: "You are a helpful assistant with access to restaurant information.",
-			RunOptions: []agentopt.Option{
-				agentopt.Tool(searchRestaurants),
-			},
+			Tools:        []tool.Tool{searchRestaurants},
 		},
 	})
 	mux := http.NewServeMux()

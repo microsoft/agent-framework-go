@@ -13,7 +13,6 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/middleware"
 	"github.com/microsoft/agent-framework-go/tool"
@@ -58,9 +57,7 @@ func main() {
 			Name:         "WeatherAgent",
 			Description:  "An agent that answers questions about the weather.",
 			Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
-			RunOptions: []agentopt.Option{
-				agentopt.Tool(weatherTool),
-			},
+			Tools:        []tool.Tool{weatherTool},
 		},
 	})
 
@@ -74,9 +71,7 @@ func main() {
 		Model: deployment,
 		Agent: agent.Config{
 			Instructions: "You are a helpful assistant who responds in French.",
-			RunOptions: []agentopt.Option{
-				agentopt.Tool(weatherAgent.AsFuncTool()),
-			},
+			Tools:        []tool.Tool{weatherAgent.AsFuncTool()},
 		},
 	})
 

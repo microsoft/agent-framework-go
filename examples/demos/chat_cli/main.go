@@ -33,9 +33,7 @@ func main() {
 		Model: "gpt-4o-mini",
 		Agent: agent.Config{
 			Instructions: "You are a helpful assistant with access to weather information. Be concise and friendly.",
-			RunOptions: []agentopt.Option{
-				agentopt.Tool(weatherTool),
-			},
+			Tools:        []tool.Tool{weatherTool},
 		},
 	})
 

@@ -18,6 +18,7 @@ import (
 	"github.com/microsoft/agent-framework-go/middleware"
 	"github.com/microsoft/agent-framework-go/middleware/autocall"
 	"github.com/microsoft/agent-framework-go/middleware/structuredoutput"
+	"github.com/microsoft/agent-framework-go/tool"
 )
 
 type ProviderConfig struct {
@@ -49,6 +50,7 @@ type Config struct {
 	LogSensitiveData bool
 
 	Middlewares []middleware.Middleware
+	Tools       []tool.Tool
 	RunOptions  []agentopt.Option
 }
 
@@ -62,6 +64,12 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 	}
 
 	cfg.RunOptions = slices.Clone(cfg.RunOptions)
+	cfg.Tools = slices.Clone(cfg.Tools)
+	for _, tool := range cfg.Tools {
+		if tool != nil {
+			cfg.RunOptions = append(cfg.RunOptions, agentopt.Tool(tool))
+		}
+	}
 	cfg.Middlewares = slices.Clone(cfg.Middlewares)
 	if !cfg.DisableFuncAutoCall {
 		cfg.Middlewares = append(cfg.Middlewares,

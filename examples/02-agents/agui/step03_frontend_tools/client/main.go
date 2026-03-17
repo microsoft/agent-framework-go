@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	aguiSSEClient "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/client/sse"
+	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/aguiagent"
 	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/message"
@@ -21,12 +22,6 @@ import (
 
 func main() {
 	serverURL := cmp.Or(os.Getenv("AGUI_SERVER_URL"), "http://localhost:8888")
-	a := aguiagent.New(aguiagent.Config{Client: aguiSSEClient.NewClient(aguiSSEClient.Config{Endpoint: serverURL})})
-
-	session, err := a.CreateSession(context.Background())
-	if err != nil {
-		log.Fatal(err)
-	}
 
 	frontendTool := functool.MustNew(&functool.Func{
 		Name:        "get_user_location",
@@ -34,6 +29,18 @@ func main() {
 	}, func(ctx tool.Context, in struct{}) (string, error) {
 		return "Amsterdam, Netherlands (52.37°N, 4.90°E)", nil
 	})
+
+	a := aguiagent.New(aguiagent.Config{
+		Client: aguiSSEClient.NewClient(aguiSSEClient.Config{Endpoint: serverURL}),
+		Agent: agent.Config{
+			Tools: []tool.Tool{frontendTool},
+		},
+	})
+
+	session, err := a.CreateSession(context.Background())
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
@@ -52,7 +59,7 @@ func main() {
 			return
 		}
 
-		for update, err := range a.RunText(context.Background(), input, agentopt.Session(session), agentopt.Stream(true), agentopt.Tool(frontendTool)) {
+		for update, err := range a.RunText(context.Background(), input, agentopt.Session(session), agentopt.Stream(true)) {
 			if err != nil {
 				log.Fatal(err)
 			}
