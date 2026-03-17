@@ -10,8 +10,8 @@ import (
 
 	"github.com/a2aproject/a2a-go/a2a"
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/hosting/a2ahosting"
 	"github.com/microsoft/agent-framework-go/agentopt"
-	"github.com/microsoft/agent-framework-go/hosting/a2ahosting"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
