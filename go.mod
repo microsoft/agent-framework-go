@@ -1,6 +1,6 @@
 module github.com/microsoft/agent-framework-go
 
-go 1.24.4
+go 1.25
 
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.10.1
