@@ -9,15 +9,22 @@ import (
 	"fmt"
 	"iter"
 	"maps"
+	"reflect"
 	"slices"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agentopt"
+	"github.com/microsoft/agent-framework-go/format"
+	"github.com/microsoft/agent-framework-go/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 )
+
+// structuredOutputToolName is the synthetic tool name used to implement structured output
+// via Anthropic's tool-use mechanism.
+const structuredOutputToolName = "__structured_output__"
 
 type messageNewParamsOpt anthropic.MessageNewParams
 
@@ -53,7 +60,21 @@ func New(config Config) *agent.Agent {
 	return agent.New(agent.ProviderConfig{
 		Run:          c.run,
 		ProviderName: "anthropic",
+		FormatOfFn:   formatOf,
+		UnmarshalFn:  unmarshalFormat,
 	}, config.Agent)
+}
+
+func formatOf(v any) (format.Format, error) {
+	rt := reflect.TypeOf(v)
+	if rt != nil && rt.Kind() == reflect.Pointer {
+		rt = rt.Elem()
+	}
+	return jsonformat.ForType(rt)
+}
+
+func unmarshalFormat(_ format.Format, data []byte, v any) error {
+	return json.Unmarshal(data, v)
 }
 
 func (a *client) run(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
@@ -121,7 +142,12 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				indices := slices.Collect(maps.Keys(functions))
 				slices.Sort(indices)
 				for _, id := range indices {
-					contents = append(contents, functions[id])
+					fn := functions[id]
+					if fn.Name == structuredOutputToolName {
+						contents = append(contents, &message.TextContent{Text: fn.Arguments})
+					} else {
+						contents = append(contents, fn)
+					}
 				}
 			}
 
@@ -204,10 +230,19 @@ func (a *client) buildBlock(index int, v any, contents []message.Content, functi
 			},
 		})
 	case anthropic.ToolUseBlock:
-		functions[index] = &message.FunctionCallContent{
-			CallID:    v.ID,
-			Name:      v.Name,
-			Arguments: string(v.Input),
+		if v.Name == structuredOutputToolName {
+			contents = append(contents, &message.TextContent{
+				Text: string(v.Input),
+				ContentHeader: message.ContentHeader{
+					RawRepresentation: v,
+				},
+			})
+		} else {
+			functions[index] = &message.FunctionCallContent{
+				CallID:    v.ID,
+				Name:      v.Name,
+				Arguments: string(v.Input),
+			}
 		}
 	}
 	return contents
@@ -305,6 +340,46 @@ func (a *client) buildMessageParams(messages []*message.Message, opts []agentopt
 			tools = append(tools, toolParam)
 		}
 	}
+	if rf, ok := agentopt.Get(opts, agentopt.ResponseFormat); ok {
+		if sf, ok := rf.(format.SchemaFormat); ok {
+			var schemaMap map[string]any
+			if schemaBytes, err := json.Marshal(sf.Schema()); err == nil {
+				json.Unmarshal(schemaBytes, &schemaMap)
+			}
+			var properties any
+			var required []string
+			if schemaMap != nil {
+				if props, ok := schemaMap["properties"]; ok {
+					properties = props
+				}
+				if reqs, ok := schemaMap["required"]; ok {
+					if reqList, ok := reqs.([]any); ok {
+						for _, r := range reqList {
+							if s, ok := r.(string); ok {
+								required = append(required, s)
+							}
+						}
+					} else if reqList, ok := reqs.([]string); ok {
+						required = reqList
+					}
+				}
+			}
+			schemaParam := anthropic.ToolInputSchemaParam{
+				Properties: properties,
+				Required:   required,
+			}
+			toolParam := anthropic.ToolUnionParamOfTool(schemaParam, structuredOutputToolName)
+			if toolParam.OfTool != nil {
+				desc := sf.Description()
+				if desc != "" {
+					toolParam.OfTool.Description = anthropic.String(desc)
+				}
+			}
+			tools = append(tools, toolParam)
+			params.ToolChoice = anthropic.ToolChoiceParamOfTool(structuredOutputToolName)
+		}
+	}
+
 	if len(tools) > 0 {
 		params.Tools = tools
 	}
