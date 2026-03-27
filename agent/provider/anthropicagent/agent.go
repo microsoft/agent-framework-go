@@ -9,12 +9,15 @@ import (
 	"fmt"
 	"iter"
 	"maps"
+	"reflect"
 	"slices"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agentopt"
+	"github.com/microsoft/agent-framework-go/format"
+	"github.com/microsoft/agent-framework-go/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 )
@@ -53,7 +56,17 @@ func New(config Config) *agent.Agent {
 	return agent.New(agent.ProviderConfig{
 		Run:          c.run,
 		ProviderName: "anthropic",
+		FormatOfFn:   c.formatOf,
+		UnmarshalFn:  c.unmarshal,
 	}, config.Agent)
+}
+
+func (a *client) formatOf(v any) (format.Format, error) {
+	return jsonformat.ForType(reflect.TypeOf(v))
+}
+
+func (a *client) unmarshal(f format.Format, data []byte, v any) error {
+	return jsonformat.Unmarshal(f.(*jsonformat.Format), data, v)
 }
 
 func (a *client) run(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
@@ -328,6 +341,38 @@ func (a *client) buildMessageParams(messages []*message.Message, opts []agentopt
 				}
 			} else {
 				params.ToolChoice = anthropic.ToolChoiceParamOfTool(names[0])
+			}
+		}
+	}
+
+	if frmt, ok := agentopt.Get(opts, agentopt.ResponseFormat); ok && frmt != nil {
+		if frmt.Kind() == "json" {
+			if schemaFmt, ok := frmt.(format.SchemaFormat); ok {
+				var schemaMap map[string]any
+				switch s := schemaFmt.Schema().(type) {
+				case map[string]any:
+					schemaMap = s
+				default:
+					if s != nil {
+						jsonBytes, err := json.Marshal(s)
+						if err != nil {
+							return anthropic.MessageNewParams{}, fmt.Errorf("failed to marshal structured output schema: %w", err)
+						}
+						if err := json.Unmarshal(jsonBytes, &schemaMap); err != nil {
+							return anthropic.MessageNewParams{}, fmt.Errorf("failed to unmarshal structured output schema: %w", err)
+						}
+					}
+				}
+				if schemaMap != nil {
+					// BetaJSONSchemaOutputFormat normalizes the schema for
+					// Anthropic requirements (e.g. adds additionalProperties:false
+					// to every object layer). We reuse its Schema field in the
+					// non-beta JSONOutputFormatParam.
+					normalized := anthropic.BetaJSONSchemaOutputFormat(schemaMap)
+					params.OutputConfig.Format = anthropic.JSONOutputFormatParam{
+						Schema: normalized.Schema,
+					}
+				}
 			}
 		}
 	}
