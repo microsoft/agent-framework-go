@@ -372,7 +372,13 @@ func (a *client) buildMessageParams(messages []*message.Message, opts []agentopt
 					params.OutputConfig.Format = anthropic.JSONOutputFormatParam{
 						Schema: normalized.Schema,
 					}
+				} else {
+					// No usable schema provided; still request generic JSON output.
+					params.OutputConfig.Format = anthropic.JSONOutputFormatParam{}
 				}
+			} else {
+				// JSON format requested without a schema; request generic JSON output.
+				params.OutputConfig.Format = anthropic.JSONOutputFormatParam{}
 			}
 		}
 	}
