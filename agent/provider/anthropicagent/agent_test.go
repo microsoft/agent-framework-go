@@ -131,7 +131,9 @@ func TestStructuredOutput_NonStreaming(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
-			t.Fatalf("read request body: %v", err)
+			t.Errorf("read request body: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
 		}
 		capturedBody = body
 		w.Header().Set("Content-Type", "application/json")
@@ -167,7 +169,9 @@ func TestStructuredOutput_Streaming(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
-			t.Fatalf("read request body: %v", err)
+			t.Errorf("read request body: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
 		}
 		capturedBody = body
 		w.Header().Set("Content-Type", "text/event-stream")
