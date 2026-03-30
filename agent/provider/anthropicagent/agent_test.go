@@ -127,7 +127,7 @@ func minimalStreamingResponse(payload string) string {
 func TestStructuredOutput_NonStreaming(t *testing.T) {
 	const payload = `{"name":"Alice","age":30}`
 
-	var capturedBody []byte
+	bodyCh := make(chan []byte, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -135,7 +135,7 @@ func TestStructuredOutput_NonStreaming(t *testing.T) {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		capturedBody = body
+		bodyCh <- body
 		w.Header().Set("Content-Type", "application/json")
 		io.WriteString(w, minimalMessageResponse(payload))
 	}))
@@ -150,6 +150,7 @@ func TestStructuredOutput_NonStreaming(t *testing.T) {
 		}
 	}
 
+	capturedBody := <-bodyCh
 	assertOutputConfigFormat(t, capturedBody, true /* wantSchema */)
 
 	if out.Name != "Alice" {
@@ -165,7 +166,7 @@ func TestStructuredOutput_NonStreaming(t *testing.T) {
 func TestStructuredOutput_Streaming(t *testing.T) {
 	const payload = `{"name":"Bob","age":25}`
 
-	var capturedBody []byte
+	bodyCh := make(chan []byte, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -173,7 +174,7 @@ func TestStructuredOutput_Streaming(t *testing.T) {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		capturedBody = body
+		bodyCh <- body
 		w.Header().Set("Content-Type", "text/event-stream")
 		io.WriteString(w, minimalStreamingResponse(payload))
 	}))
@@ -188,6 +189,7 @@ func TestStructuredOutput_Streaming(t *testing.T) {
 		}
 	}
 
+	capturedBody := <-bodyCh
 	assertOutputConfigFormat(t, capturedBody, true /* wantSchema */)
 
 	// Streaming requests must include stream:true.
