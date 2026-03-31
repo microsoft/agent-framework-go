@@ -4,6 +4,7 @@ package geminiagent
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"iter"
@@ -148,6 +149,15 @@ func (a *client) buildParams(messages []*message.Message, opts []agentopt.Option
 	cfg := &genai.GenerateContentConfig{}
 	if p, ok := agentopt.Get(opts, GenerateContentConfig); ok {
 		*cfg = p
+		// Clone mutable slice fields so that appending to cfg.Tools or
+		// cfg.SystemInstruction.Parts below never aliases the caller's
+		// backing arrays (the option stores a shallow copy of the struct).
+		cfg.Tools = append([]*genai.Tool(nil), cfg.Tools...)
+		if cfg.SystemInstruction != nil {
+			si := *cfg.SystemInstruction
+			si.Parts = append([]*genai.Part(nil), si.Parts...)
+			cfg.SystemInstruction = &si
+		}
 	}
 
 	// Collect tools from options.
@@ -266,6 +276,15 @@ func buildRequestParts(msg *message.Message, callIDToName map[string]string) ([]
 			if c.Text != "" {
 				parts = append(parts, &genai.Part{Text: c.Text})
 			}
+		case *message.TextReasoningContent:
+			// Pass thought blocks back to the model in multi-turn conversations.
+			part := &genai.Part{Thought: true, Text: c.Text}
+			if c.ProtectedData != "" {
+				if sig, err := base64.StdEncoding.DecodeString(c.ProtectedData); err == nil {
+					part.ThoughtSignature = sig
+				}
+			}
+			parts = append(parts, part)
 		case *message.FunctionCallContent:
 			var args map[string]any
 			if c.Arguments != "" {
@@ -293,7 +312,7 @@ func buildRequestParts(msg *message.Message, callIDToName map[string]string) ([]
 				},
 			})
 		case *message.DataContent:
-			if c.TopLevelMediaType() == "image" || c.TopLevelMediaType() == "audio" || c.TopLevelMediaType() == "video" {
+			if mt := c.TopLevelMediaType(); mt == "image" || mt == "audio" || mt == "video" {
 				data, err := c.Bytes()
 				if err != nil {
 					return nil, fmt.Errorf("geminiagent: failed to decode data content: %w", err)
@@ -312,7 +331,21 @@ func buildRequestParts(msg *message.Message, callIDToName map[string]string) ([]
 
 // buildResponsePart converts a genai Part from a response into framework message content.
 func buildResponsePart(part *genai.Part, contents []message.Content) []message.Content {
-	if part.Text != "" {
+	if part.Thought {
+		// Thinking model: emit TextReasoningContent. Encode ThoughtSignature as
+		// base64 in ProtectedData so it can be passed back in multi-turn requests.
+		protectedData := ""
+		if len(part.ThoughtSignature) > 0 {
+			protectedData = base64.StdEncoding.EncodeToString(part.ThoughtSignature)
+		}
+		contents = append(contents, &message.TextReasoningContent{
+			Text:          part.Text,
+			ProtectedData: protectedData,
+			ContentHeader: message.ContentHeader{
+				RawRepresentation: part,
+			},
+		})
+	} else if part.Text != "" {
 		contents = append(contents, &message.TextContent{
 			Text: part.Text,
 			ContentHeader: message.ContentHeader{
@@ -321,7 +354,11 @@ func buildResponsePart(part *genai.Part, contents []message.Content) []message.C
 		})
 	}
 	if part.FunctionCall != nil {
-		argsJSON, _ := json.Marshal(part.FunctionCall.Args)
+		args := part.FunctionCall.Args
+		if args == nil {
+			args = map[string]any{}
+		}
+		argsJSON, _ := json.Marshal(args)
 		contents = append(contents, &message.FunctionCallContent{
 			CallID:    part.FunctionCall.ID,
 			Name:      part.FunctionCall.Name,

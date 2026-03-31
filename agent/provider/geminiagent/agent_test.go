@@ -3,7 +3,6 @@
 package geminiagent_test
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -29,7 +28,7 @@ type testOutput struct {
 
 func newTestClient(t *testing.T, server *httptest.Server) *agent.Agent {
 	t.Helper()
-	client, err := genai.NewClient(context.Background(), &genai.ClientConfig{
+	client, err := genai.NewClient(t.Context(), &genai.ClientConfig{
 		Backend: genai.BackendGeminiAPI,
 		APIKey:  "test",
 		HTTPOptions: genai.HTTPOptions{
@@ -39,7 +38,7 @@ func newTestClient(t *testing.T, server *httptest.Server) *agent.Agent {
 	if err != nil {
 		t.Fatalf("genai.NewClient: %v", err)
 	}
-	a, err := geminiagent.New(context.Background(), geminiagent.Config{
+	a, err := geminiagent.New(t.Context(), geminiagent.Config{
 		Model:  testModel,
 		Client: client,
 		Agent:  agent.Config{DisableFuncAutoCall: true},
@@ -282,6 +281,10 @@ func TestSystemInstruction(t *testing.T) {
 		parts, _ := si.([]any)
 		if len(parts) == 0 {
 			t.Error("systemInstruction.parts is empty")
+		} else if firstPart, ok := parts[0].(map[string]any); !ok {
+			t.Errorf("systemInstruction.parts[0] is not a JSON object, got %T", parts[0])
+		} else if text, _ := nestedKey(firstPart, "text"); text != "You are helpful." {
+			t.Errorf("systemInstruction.parts[0].text = %q, want %q", text, "You are helpful.")
 		}
 	}
 	contents, _ := req["contents"].([]any)
@@ -297,7 +300,7 @@ func TestSystemInstruction(t *testing.T) {
 // request and that a functionCall part in the response is translated into a
 // FunctionCallContent.
 func TestToolCall_NonStreaming(t *testing.T) {
-	tool := functool.MustNew(&functool.Func{
+	weatherTool := functool.MustNew(&functool.Func{
 		Name:        "get_weather",
 		Description: "Get the weather for a city.",
 	}, func(_ tool.Context, args struct{ City string }) (string, error) {
@@ -331,18 +334,34 @@ func TestToolCall_NonStreaming(t *testing.T) {
 
 	a := newTestClient(t, server)
 
-	resp, err := a.RunText(t.Context(), "what's the weather?", agentopt.Tool(tool)).Collect()
+	resp, err := a.RunText(t.Context(), "what's the weather?", agentopt.Tool(weatherTool)).Collect()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Verify tools were included in the request.
+	// Verify tools were included in the request with the correct declaration.
 	var req map[string]any
 	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
 		t.Fatalf("unmarshal request body: %v", err)
 	}
-	if _, ok := req["tools"]; !ok {
-		t.Error("request missing tools field")
+	toolDecls, _ := nestedKey(req, "tools", "0", "functionDeclarations")
+	if toolDecls == nil {
+		// Gemini API key is "tools" → array of Tool objects
+		tools, _ := req["tools"].([]any)
+		if len(tools) == 0 {
+			t.Error("request missing tools")
+		} else {
+			firstTool, _ := tools[0].(map[string]any)
+			decls, _ := firstTool["functionDeclarations"].([]any)
+			if len(decls) == 0 {
+				t.Error("tools[0].functionDeclarations is empty")
+			} else {
+				decl, _ := decls[0].(map[string]any)
+				if name, _ := decl["name"].(string); name != "get_weather" {
+					t.Errorf("tools[0].functionDeclarations[0].name = %q, want %q", name, "get_weather")
+				}
+			}
+		}
 	}
 
 	// Verify the response contains a FunctionCallContent.
