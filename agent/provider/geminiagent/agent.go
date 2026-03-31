@@ -1,0 +1,376 @@
+// Copyright (c) Microsoft. All rights reserved.
+
+package geminiagent
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"iter"
+	"reflect"
+	"time"
+
+	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agentopt"
+	"github.com/microsoft/agent-framework-go/format"
+	"github.com/microsoft/agent-framework-go/format/jsonformat"
+	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/tool"
+	"google.golang.org/genai"
+)
+
+type generateContentConfigOpt genai.GenerateContentConfig
+
+func (o generateContentConfigOpt) Value() any { return genai.GenerateContentConfig(o) }
+
+// GenerateContentConfig allows passing custom parameters to the underlying genai API calls.
+func GenerateContentConfig(config genai.GenerateContentConfig) agentopt.Option {
+	return generateContentConfigOpt(config)
+}
+
+type client struct {
+	client *genai.Client
+	config Config
+}
+
+// Config contains configuration for [New].
+type Config struct {
+	Model  string
+	Client *genai.Client
+
+	Agent agent.Config
+}
+
+// New creates a new [agent.Agent] backed by the Google Gemini API via the genai client.
+// If Client is nil, [genai.NewClient] is called with nil config, which reads credentials
+// from the GOOGLE_API_KEY or GEMINI_API_KEY environment variables.
+func New(ctx context.Context, config Config) (*agent.Agent, error) {
+	if config.Client == nil {
+		var err error
+		config.Client, err = genai.NewClient(ctx, nil)
+		if err != nil {
+			return nil, fmt.Errorf("geminiagent: failed to create genai client: %w", err)
+		}
+	}
+	c := &client{
+		client: config.Client,
+		config: config,
+	}
+	return agent.New(agent.ProviderConfig{
+		Run:          c.run,
+		ProviderName: "gemini",
+		FormatOfFn:   c.formatOf,
+		UnmarshalFn:  c.unmarshal,
+	}, config.Agent), nil
+}
+
+func (a *client) formatOf(v any) (format.Format, error) {
+	return jsonformat.ForType(reflect.TypeOf(v))
+}
+
+func (a *client) unmarshal(f format.Format, data []byte, v any) error {
+	return jsonformat.Unmarshal(f.(*jsonformat.Format), data, v)
+}
+
+func (a *client) run(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	contents, cfg, err := a.buildParams(messages, options)
+	if err != nil {
+		return func(yield func(*message.ResponseUpdate, error) bool) {
+			yield(nil, err)
+		}
+	}
+
+	if stream, _ := agentopt.Get(options, agentopt.Stream); !stream {
+		resp, err := a.client.Models.GenerateContent(ctx, a.config.Model, contents, cfg)
+		if err != nil {
+			return func(yield func(*message.ResponseUpdate, error) bool) {
+				yield(nil, err)
+			}
+		}
+		var responseContents []message.Content
+		for _, cand := range resp.Candidates {
+			if cand.Content == nil {
+				continue
+			}
+			for _, part := range cand.Content.Parts {
+				responseContents = buildResponsePart(part, responseContents)
+			}
+		}
+		if resp.UsageMetadata != nil {
+			responseContents = append(responseContents, &message.UsageContent{
+				Details: toUsageDetails(resp.UsageMetadata),
+			})
+		}
+		return func(yield func(*message.ResponseUpdate, error) bool) {
+			yield(&message.ResponseUpdate{
+				Contents:          responseContents,
+				Role:              message.RoleAssistant,
+				CreatedAt:         time.Now(),
+				RawRepresentation: resp,
+			}, nil)
+		}
+	}
+
+	return func(yield func(*message.ResponseUpdate, error) bool) {
+		for resp, err := range a.client.Models.GenerateContentStream(ctx, a.config.Model, contents, cfg) {
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+			var streamContents []message.Content
+			for _, cand := range resp.Candidates {
+				if cand.Content == nil {
+					continue
+				}
+				for _, part := range cand.Content.Parts {
+					streamContents = buildResponsePart(part, streamContents)
+				}
+			}
+			if resp.UsageMetadata != nil {
+				streamContents = append(streamContents, &message.UsageContent{
+					Details: toUsageDetails(resp.UsageMetadata),
+				})
+			}
+			if !yield(&message.ResponseUpdate{
+				Contents:          streamContents,
+				Role:              message.RoleAssistant,
+				CreatedAt:         time.Now(),
+				RawRepresentation: resp,
+			}, nil) {
+				return
+			}
+		}
+	}
+}
+
+// buildParams converts framework messages and options into genai API parameters.
+func (a *client) buildParams(messages []*message.Message, opts []agentopt.Option) ([]*genai.Content, *genai.GenerateContentConfig, error) {
+	cfg := &genai.GenerateContentConfig{}
+	if p, ok := agentopt.Get(opts, GenerateContentConfig); ok {
+		*cfg = p
+	}
+
+	// Collect tools from options.
+	var funcDecls []*genai.FunctionDeclaration
+	for tl := range agentopt.All(opts, agentopt.Tool) {
+		if ft, ok := tl.(tool.FuncTool); ok {
+			decl := &genai.FunctionDeclaration{
+				Name:        ft.Name(),
+				Description: ft.Description(),
+			}
+			if schema := ft.Schema(); schema != nil {
+				// Use ParametersJsonSchema to pass through the JSON schema directly.
+				decl.ParametersJsonSchema = schema
+			}
+			funcDecls = append(funcDecls, decl)
+		}
+	}
+	if len(funcDecls) > 0 {
+		cfg.Tools = append(cfg.Tools, &genai.Tool{
+			FunctionDeclarations: funcDecls,
+		})
+	}
+
+	// Apply structured output format.
+	if frmt, ok := agentopt.Get(opts, agentopt.ResponseFormat); ok && frmt != nil {
+		if frmt.Kind() == "json" {
+			cfg.ResponseMIMEType = "application/json"
+			if schemaFmt, ok := frmt.(format.SchemaFormat); ok {
+				if schema := schemaFmt.Schema(); schema != nil {
+					cfg.ResponseJsonSchema = schema
+				}
+			}
+		}
+	}
+
+	// Apply tool mode.
+	if mode, ok := agentopt.Get(opts, agentopt.ToolMode); ok && len(funcDecls) > 0 {
+		fc := &genai.FunctionCallingConfig{}
+		switch mode.Mode() {
+		case tool.ToolModeAuto, "":
+			fc.Mode = genai.FunctionCallingConfigModeAuto
+		case tool.ToolModeNone:
+			fc.Mode = genai.FunctionCallingConfigModeNone
+		case tool.ToolModeRequired:
+			fc.Mode = genai.FunctionCallingConfigModeAny
+			fc.AllowedFunctionNames = mode.Required()
+		}
+		cfg.ToolConfig = &genai.ToolConfig{
+			FunctionCallingConfig: fc,
+		}
+	}
+
+	// Build a map of CallID → function name by scanning all messages first.
+	// This is needed because FunctionResultContent doesn't store the function name,
+	// but genai's FunctionResponse requires it to match the FunctionDeclaration.
+	callIDToName := make(map[string]string)
+	for _, msg := range messages {
+		for _, c := range msg.Contents {
+			if fc, ok := c.(*message.FunctionCallContent); ok && fc.CallID != "" && fc.Name != "" {
+				callIDToName[fc.CallID] = fc.Name
+			}
+		}
+	}
+
+	// Build contents from messages.
+	var contents []*genai.Content
+	for _, msg := range messages {
+		switch msg.Role {
+		case message.RoleSystem:
+			// Gemini uses a single system instruction content.
+			// Concatenate all system text parts.
+			if cfg.SystemInstruction == nil {
+				cfg.SystemInstruction = &genai.Content{Role: genai.RoleUser}
+			}
+			for _, c := range msg.Contents {
+				if tc, ok := c.(*message.TextContent); ok && tc.Text != "" {
+					cfg.SystemInstruction.Parts = append(cfg.SystemInstruction.Parts, &genai.Part{Text: tc.Text})
+				}
+			}
+		case message.RoleUser, message.RoleTool:
+			parts, err := buildRequestParts(msg, callIDToName)
+			if err != nil {
+				return nil, nil, err
+			}
+			if len(parts) > 0 {
+				contents = append(contents, &genai.Content{
+					Role:  genai.RoleUser,
+					Parts: parts,
+				})
+			}
+		case message.RoleAssistant:
+			parts, err := buildRequestParts(msg, callIDToName)
+			if err != nil {
+				return nil, nil, err
+			}
+			if len(parts) > 0 {
+				contents = append(contents, &genai.Content{
+					Role:  genai.RoleModel,
+					Parts: parts,
+				})
+			}
+		}
+	}
+
+	return contents, cfg, nil
+}
+
+// buildRequestParts converts a framework message's contents into genai Parts.
+// callIDToName maps function call IDs to function names, used to populate
+// FunctionResponse.Name which genai requires but FunctionResultContent doesn't store.
+func buildRequestParts(msg *message.Message, callIDToName map[string]string) ([]*genai.Part, error) {
+	var parts []*genai.Part
+	for _, c := range msg.Contents {
+		switch c := c.(type) {
+		case *message.TextContent:
+			if c.Text != "" {
+				parts = append(parts, &genai.Part{Text: c.Text})
+			}
+		case *message.FunctionCallContent:
+			var args map[string]any
+			if c.Arguments != "" {
+				if err := json.Unmarshal([]byte(c.Arguments), &args); err != nil {
+					return nil, fmt.Errorf("geminiagent: failed to unmarshal function call arguments: %w", err)
+				}
+			}
+			parts = append(parts, &genai.Part{
+				FunctionCall: &genai.FunctionCall{
+					ID:   c.CallID,
+					Name: c.Name,
+					Args: args,
+				},
+			})
+		case *message.FunctionResultContent:
+			response, err := toFunctionResponseMap(c)
+			if err != nil {
+				return nil, err
+			}
+			parts = append(parts, &genai.Part{
+				FunctionResponse: &genai.FunctionResponse{
+					ID:       c.CallID,
+					Name:     callIDToName[c.CallID],
+					Response: response,
+				},
+			})
+		case *message.DataContent:
+			if c.TopLevelMediaType() == "image" || c.TopLevelMediaType() == "audio" || c.TopLevelMediaType() == "video" {
+				data, err := c.Bytes()
+				if err != nil {
+					return nil, fmt.Errorf("geminiagent: failed to decode data content: %w", err)
+				}
+				parts = append(parts, &genai.Part{
+					InlineData: &genai.Blob{
+						Data:     data,
+						MIMEType: c.MediaType,
+					},
+				})
+			}
+		}
+	}
+	return parts, nil
+}
+
+// buildResponsePart converts a genai Part from a response into framework message content.
+func buildResponsePart(part *genai.Part, contents []message.Content) []message.Content {
+	if part.Text != "" {
+		contents = append(contents, &message.TextContent{
+			Text: part.Text,
+			ContentHeader: message.ContentHeader{
+				RawRepresentation: part,
+			},
+		})
+	}
+	if part.FunctionCall != nil {
+		argsJSON, _ := json.Marshal(part.FunctionCall.Args)
+		contents = append(contents, &message.FunctionCallContent{
+			CallID:    part.FunctionCall.ID,
+			Name:      part.FunctionCall.Name,
+			Arguments: string(argsJSON),
+			ContentHeader: message.ContentHeader{
+				RawRepresentation: part,
+			},
+		})
+	}
+	return contents
+}
+
+// toFunctionResponseMap converts a FunctionResultContent's result to the map[string]any
+// format required by genai.
+func toFunctionResponseMap(c *message.FunctionResultContent) (map[string]any, error) {
+	if c.Error != nil {
+		return map[string]any{"error": c.Error.Error()}, nil
+	}
+	switch r := c.Result.(type) {
+	case map[string]any:
+		return r, nil
+	case json.RawMessage:
+		var m map[string]any
+		if err := json.Unmarshal(r, &m); err != nil {
+			return map[string]any{"output": string(r)}, nil
+		}
+		return m, nil
+	case string:
+		return map[string]any{"output": r}, nil
+	case []byte:
+		return map[string]any{"output": string(r)}, nil
+	default:
+		data, err := json.Marshal(c.Result)
+		if err != nil {
+			return nil, fmt.Errorf("geminiagent: failed to marshal function result: %w", err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			return map[string]any{"output": string(data)}, nil
+		}
+		return m, nil
+	}
+}
+
+func toUsageDetails(u *genai.GenerateContentResponseUsageMetadata) message.UsageDetails {
+	return message.UsageDetails{
+		InputTokenCount:       int64(u.PromptTokenCount),
+		OutputTokenCount:      int64(u.CandidatesTokenCount),
+		TotalTokenCount:       int64(u.TotalTokenCount),
+		CachedInputTokenCount: int64(u.CachedContentTokenCount),
+	}
+}
