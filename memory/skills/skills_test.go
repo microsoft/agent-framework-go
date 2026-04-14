@@ -224,7 +224,7 @@ func TestDiscovery_FileWithUtf8Bom(t *testing.T) {
 	}
 }
 
-func TestDiscovery_PathTraversal_Excluded(t *testing.T) {
+func TestDiscovery_ResourceOutsideConfiguredDirectory_NotDiscoverable(t *testing.T) {
 	root := t.TempDir()
 	skillDir := filepath.Join(root, "traversal-skill")
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
@@ -238,9 +238,24 @@ func TestDiscovery_PathTraversal_Excluded(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Skill is discovered (body content doesn't affect discovery),
+	// but ../secret.txt is not in any configured resource directory.
 	p := newProvider(t, root)
-	if hasSkill(t, p, "traversal-skill") {
-		t.Fatal("expected traversal skill to be excluded")
+	if !hasSkill(t, p, "traversal-skill") {
+		t.Fatal("expected skill to be discovered")
+	}
+	_, tools := captureProviderContext(t, p)
+	readTool := findTool(t, tools, "read_skill_resource")
+	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"traversal-skill","resourceName":"../secret.txt"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultStr, ok := result.(string)
+	if !ok {
+		t.Fatalf("expected string result, got %T", result)
+	}
+	if !strings.HasPrefix(resultStr, "Error:") {
+		t.Fatal("expected error when reading resource outside configured directories")
 	}
 }
 
@@ -367,13 +382,13 @@ func TestLoadSkill_NotFound(t *testing.T) {
 func TestReadResource_ReturnsContent(t *testing.T) {
 	root := t.TempDir()
 	createSkillDirWithResource(t, root, "res-test", "A skill",
-		"See [doc](refs/doc.md).", "refs/doc.md", "Resource content here.")
+		"See [doc](references/doc.md).", "references/doc.md", "Resource content here.")
 
 	p := newProvider(t, root)
 	_, tools := captureProviderContext(t, p)
 	readTool := findTool(t, tools, "read_skill_resource")
 
-	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"res-test","resourceName":"refs/doc.md"}`)
+	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"res-test","resourceName":"references/doc.md"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,13 +400,13 @@ func TestReadResource_ReturnsContent(t *testing.T) {
 func TestReadResource_DotSlashPrefix(t *testing.T) {
 	root := t.TempDir()
 	createSkillDirWithResource(t, root, "dotslash-read", "A skill",
-		"See [doc](refs/doc.md).", "refs/doc.md", "Document content.")
+		"See [doc](references/doc.md).", "references/doc.md", "Document content.")
 
 	p := newProvider(t, root)
 	_, tools := captureProviderContext(t, p)
 	readTool := findTool(t, tools, "read_skill_resource")
 
-	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"dotslash-read","resourceName":"./refs/doc.md"}`)
+	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"dotslash-read","resourceName":"./references/doc.md"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -418,5 +433,474 @@ func TestReadResource_UnregisteredResource(t *testing.T) {
 	}
 	if !strings.HasPrefix(resultStr, "Error:") {
 		t.Fatalf("expected error text result, got %q", resultStr)
+	}
+}
+
+func newProviderWithConfig(t *testing.T, cfg *skills.Config, roots ...string) *memory.ContextProvider {
+	t.Helper()
+	fsList := make([]fs.FS, len(roots))
+	for i, r := range roots {
+		fsList[i] = os.DirFS(r)
+	}
+	return skills.New(cfg, fsList...)
+}
+
+func TestDiscovery_ResourcesInDefaultDirectories(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "res-skill", "Resource skill", "Body.")
+	skillDir := filepath.Join(root, "res-skill")
+
+	// Create resources in both default directories
+	refsDir := filepath.Join(skillDir, "references")
+	assetsDir := filepath.Join(skillDir, "assets")
+	if err := os.MkdirAll(refsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(assetsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(refsDir, "FAQ.md"), []byte("FAQ content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(assetsDir, "data.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p := newProvider(t, root)
+	_, tools := captureProviderContext(t, p)
+	readTool := findTool(t, tools, "read_skill_resource")
+
+	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"res-skill","resourceName":"references/FAQ.md"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "FAQ content" {
+		t.Errorf("expected FAQ content, got %q", result)
+	}
+
+	result, err = readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"res-skill","resourceName":"assets/data.json"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "{}" {
+		t.Errorf("expected {}, got %q", result)
+	}
+}
+
+func TestDiscovery_ResourceInNonSpecDirectory_NotDiscoveredByDefault(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "non-spec-skill", "Non-spec directory", "Body.")
+	skillDir := filepath.Join(root, "non-spec-skill")
+
+	// Create resource in a non-default directory
+	docsDir := filepath.Join(skillDir, "docs")
+	if err := os.MkdirAll(docsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(docsDir, "readme.md"), []byte("docs content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p := newProvider(t, root)
+	if !hasSkill(t, p, "non-spec-skill") {
+		t.Fatal("expected skill to be discovered")
+	}
+	_, tools := captureProviderContext(t, p)
+	readTool := findTool(t, tools, "read_skill_resource")
+
+	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"non-spec-skill","resourceName":"docs/readme.md"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultStr, ok := result.(string)
+	if !ok {
+		t.Fatalf("expected string result, got %T", result)
+	}
+	if !strings.HasPrefix(resultStr, "Error:") {
+		t.Fatal("expected error for resource in non-default directory")
+	}
+}
+
+func TestDiscovery_ResourceInSkillRoot_NotDiscoveredByDefault(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "root-resource-skill", "Root resource", "Body.")
+	skillDir := filepath.Join(root, "root-resource-skill")
+
+	if err := os.WriteFile(filepath.Join(skillDir, "guide.md"), []byte("guide content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p := newProvider(t, root)
+	_, tools := captureProviderContext(t, p)
+	readTool := findTool(t, tools, "read_skill_resource")
+
+	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"root-resource-skill","resourceName":"guide.md"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultStr, ok := result.(string)
+	if !ok {
+		t.Fatalf("expected string result, got %T", result)
+	}
+	if !strings.HasPrefix(resultStr, "Error:") {
+		t.Fatal("expected error for root-level resource when '.' not configured")
+	}
+}
+
+func TestDiscovery_ResourceInSkillRoot_DiscoveredWhenRootDirectoryConfigured(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "root-opt-in-skill", "Root opt-in", "Body.")
+	skillDir := filepath.Join(root, "root-opt-in-skill")
+
+	if err := os.WriteFile(filepath.Join(skillDir, "guide.md"), []byte("guide content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "config.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p := newProviderWithConfig(t, &skills.Config{
+		ResourceDirectories: []string{"references", "assets", "."},
+	}, root)
+
+	_, tools := captureProviderContext(t, p)
+	readTool := findTool(t, tools, "read_skill_resource")
+
+	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"root-opt-in-skill","resourceName":"guide.md"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "guide content" {
+		t.Errorf("expected guide content, got %q", result)
+	}
+
+	result, err = readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"root-opt-in-skill","resourceName":"config.json"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "{}" {
+		t.Errorf("expected {}, got %q", result)
+	}
+}
+
+func TestDiscovery_SkillMdNotIncludedAsResource(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "selfref-skill", "Self ref test", "Body.")
+
+	// Opt into root scanning — SKILL.md should still be excluded
+	p := newProviderWithConfig(t, &skills.Config{
+		ResourceDirectories: []string{"."},
+	}, root)
+
+	_, tools := captureProviderContext(t, p)
+	readTool := findTool(t, tools, "read_skill_resource")
+
+	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"selfref-skill","resourceName":"SKILL.md"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultStr, ok := result.(string)
+	if !ok {
+		t.Fatalf("expected string result, got %T", result)
+	}
+	if !strings.HasPrefix(resultStr, "Error:") {
+		t.Fatal("expected error — SKILL.md should not be a discoverable resource")
+	}
+}
+
+func TestDiscovery_CustomResourceDirectories_ReplacesDefaults(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "custom-directory-skill", "Custom directory", "Body.")
+	skillDir := filepath.Join(root, "custom-directory-skill")
+
+	docsDir := filepath.Join(skillDir, "docs")
+	refsDir := filepath.Join(skillDir, "references")
+	if err := os.MkdirAll(docsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(refsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(docsDir, "readme.md"), []byte("docs content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(refsDir, "ref.md"), []byte("ref content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Set custom directories — only "docs" should be scanned
+	p := newProviderWithConfig(t, &skills.Config{
+		ResourceDirectories: []string{"docs"},
+	}, root)
+
+	_, tools := captureProviderContext(t, p)
+	readTool := findTool(t, tools, "read_skill_resource")
+
+	// docs/readme.md should be readable
+	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"custom-directory-skill","resourceName":"docs/readme.md"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "docs content" {
+		t.Errorf("expected docs content, got %q", result)
+	}
+
+	// references/ref.md should NOT be readable (defaults replaced)
+	result, err = readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"custom-directory-skill","resourceName":"references/ref.md"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultStr, ok := result.(string)
+	if !ok {
+		t.Fatalf("expected string result, got %T", result)
+	}
+	if !strings.HasPrefix(resultStr, "Error:") {
+		t.Fatal("expected error for resource in replaced default directory")
+	}
+}
+
+func TestDiscovery_ResourceExtensionFiltering(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "ext-skill", "Extension test", "Body.")
+	skillDir := filepath.Join(root, "ext-skill")
+
+	refsDir := filepath.Join(skillDir, "references")
+	if err := os.MkdirAll(refsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(refsDir, "image.png"), []byte("fake image"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(refsDir, "data.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p := newProvider(t, root)
+	_, tools := captureProviderContext(t, p)
+	readTool := findTool(t, tools, "read_skill_resource")
+
+	// .json is allowed by default
+	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"ext-skill","resourceName":"references/data.json"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "{}" {
+		t.Errorf("expected {}, got %q", result)
+	}
+
+	// .png is NOT allowed by default
+	result, err = readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"ext-skill","resourceName":"references/image.png"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultStr, ok := result.(string)
+	if !ok {
+		t.Fatalf("expected string result, got %T", result)
+	}
+	if !strings.HasPrefix(resultStr, "Error:") {
+		t.Fatal("expected error for .png file not in default extensions")
+	}
+}
+
+func TestDiscovery_NestedResourceFiles_NotDiscovered(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "nested-res-skill", "Nested resources", "Body.")
+	skillDir := filepath.Join(root, "nested-res-skill")
+
+	refsDir := filepath.Join(skillDir, "references")
+	if err := os.MkdirAll(refsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(refsDir, "top.md"), []byte("top content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	deepDir := filepath.Join(refsDir, "level1", "level2")
+	if err := os.MkdirAll(deepDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deepDir, "deep.md"), []byte("deep content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p := newProvider(t, root)
+	_, tools := captureProviderContext(t, p)
+	readTool := findTool(t, tools, "read_skill_resource")
+
+	// Top-level file in references/ should be found
+	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"nested-res-skill","resourceName":"references/top.md"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "top content" {
+		t.Errorf("expected top content, got %q", result)
+	}
+
+	// Nested file should NOT be found (non-recursive)
+	result, err = readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"nested-res-skill","resourceName":"references/level1/level2/deep.md"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultStr, ok := result.(string)
+	if !ok {
+		t.Fatalf("expected string result, got %T", result)
+	}
+	if !strings.HasPrefix(resultStr, "Error:") {
+		t.Fatal("expected error for nested file — scanning is non-recursive")
+	}
+}
+
+func TestDiscovery_ResourceDirectoriesWithNestedPath(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "nested-directory-skill", "Nested directory", "Body.")
+	skillDir := filepath.Join(root, "nested-directory-skill")
+
+	nestedDir := filepath.Join(skillDir, "f1", "f2", "f3")
+	if err := os.MkdirAll(nestedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nestedDir, "data.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p := newProviderWithConfig(t, &skills.Config{
+		ResourceDirectories: []string{"f1/f2/f3"},
+	}, root)
+
+	_, tools := captureProviderContext(t, p)
+	readTool := findTool(t, tools, "read_skill_resource")
+
+	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"nested-directory-skill","resourceName":"f1/f2/f3/data.json"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "{}" {
+		t.Errorf("expected {}, got %q", result)
+	}
+}
+
+func TestConfig_InvalidDirectoryName_Skipped(t *testing.T) {
+	tests := []string{"..", "../escape", "sub/../escape", "/absolute"}
+	for _, bad := range tests {
+		t.Run(bad, func(t *testing.T) {
+			// Invalid directories are skipped with a warning, not a panic
+			p := newProviderWithConfig(t, &skills.Config{
+				ResourceDirectories: []string{bad},
+			}, t.TempDir())
+			if p == nil {
+				t.Fatal("expected non-nil provider")
+			}
+		})
+	}
+}
+
+func TestConfig_EmptyDirectoryName_Panics(t *testing.T) {
+	tests := []struct {
+		name string
+		dir  string
+	}{
+		{"empty", ""},
+		{"spaces", "   "},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r == nil {
+					t.Fatal("expected panic for empty/whitespace directory name")
+				}
+			}()
+			newProviderWithConfig(t, &skills.Config{
+				ResourceDirectories: []string{tt.dir},
+			}, t.TempDir())
+		})
+	}
+}
+
+func TestConfig_ValidDirectoryNames(t *testing.T) {
+	tests := []string{"scripts", "my-scripts", "sub/directory", ".", "./scripts", "./scripts/f1", "my..scripts"}
+	for _, valid := range tests {
+		t.Run(valid, func(t *testing.T) {
+			p := newProviderWithConfig(t, &skills.Config{
+				ResourceDirectories: []string{valid},
+			}, t.TempDir())
+			if p == nil {
+				t.Fatal("expected non-nil provider")
+			}
+		})
+	}
+}
+
+func TestDiscovery_DuplicateDirectoriesAfterNormalization_NoDuplicateResources(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "dedup-directory-skill", "Dedup test", "Body.")
+	skillDir := filepath.Join(root, "dedup-directory-skill")
+
+	refsDir := filepath.Join(skillDir, "references")
+	if err := os.MkdirAll(refsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(refsDir, "faq.md"), []byte("FAQ content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// "references" and "./references" should be deduplicated
+	p := newProviderWithConfig(t, &skills.Config{
+		ResourceDirectories: []string{"references", "./references"},
+	}, root)
+
+	_, tools := captureProviderContext(t, p)
+	readTool := findTool(t, tools, "read_skill_resource")
+
+	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"dedup-directory-skill","resourceName":"references/faq.md"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "FAQ content" {
+		t.Errorf("expected FAQ content, got %q", result)
+	}
+}
+
+func TestDiscovery_CustomResourceExtensions(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "custom-ext-skill", "Custom extensions", "Body.")
+	skillDir := filepath.Join(root, "custom-ext-skill")
+
+	refsDir := filepath.Join(skillDir, "references")
+	if err := os.MkdirAll(refsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(refsDir, "data.custom"), []byte("custom data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(refsDir, "data.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p := newProviderWithConfig(t, &skills.Config{
+		AllowedResourceExtensions: []string{".custom"},
+	}, root)
+
+	_, tools := captureProviderContext(t, p)
+	readTool := findTool(t, tools, "read_skill_resource")
+
+	// .custom should be discoverable
+	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"custom-ext-skill","resourceName":"references/data.custom"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "custom data" {
+		t.Errorf("expected custom data, got %q", result)
+	}
+
+	// .json is NOT in custom extensions
+	result, err = readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"custom-ext-skill","resourceName":"references/data.json"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultStr, ok := result.(string)
+	if !ok {
+		t.Fatalf("expected string result, got %T", result)
+	}
+	if !strings.HasPrefix(resultStr, "Error:") {
+		t.Fatal("expected error for .json — not in custom extensions")
 	}
 }

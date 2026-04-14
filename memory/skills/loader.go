@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -16,14 +17,18 @@ const (
 	maxSearchDepth       = 2
 	maxNameLength        = 64
 	maxDescriptionLength = 1024
+
+	// "." means the skill directory root itself (no subdirectory descent constraint).
+	rootDirectoryIndicator = "."
 )
+
+// Standard subdirectory names per https://agentskills.io/specification#directory-structure.
+var defaultResourceDirectories = []string{"references", "assets"}
+
+var defaultResourceExtensions = []string{".md", ".json", ".yaml", ".yml", ".csv", ".xml", ".txt"}
 
 // Matches YAML frontmatter delimited by "---" lines.
 var frontmatterRegex = regexp.MustCompile(`(?ms)\A^---\s*$(.+?)^---\s*$`)
-
-// Matches markdown links to local resource files.
-// Supports optional ./ or ../ prefixes; excludes URLs (no ":" in the path character class).
-var resourceLinkRegex = regexp.MustCompile(`\[.*?\]\((\.?\.?/?[\w][\w\-./]*\.\w+)\)`)
 
 // Matches valid skill names: lowercase letters, numbers, and single hyphens,
 // not starting or ending with a hyphen, and not containing consecutive hyphens.
@@ -33,7 +38,9 @@ var validNameRegex = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 var yamlKeyValueRegex = regexp.MustCompile(`(?m)^\s*(\w+)\s*:\s*(?:["'](.+?)["']|(.+?))\s*$`)
 
 type skillLoader struct {
-	logger *slog.Logger
+	logger                    *slog.Logger
+	resourceDirectories       []string
+	allowedResourceExtensions map[string]bool
 }
 
 // discoveredSkillDir represents a discovered skill directory with its sub-filesystem.
@@ -72,7 +79,7 @@ func (l *skillLoader) discoverAndLoadSkills(filesystems []fs.FS) map[string]*fil
 // readSkillResource reads a resource file from the skill's filesystem.
 // Path traversal is prevented by the [fs.FS] contract, which rejects paths containing "..".
 func (l *skillLoader) readSkillResource(skill *fileAgentSkill, resourceName string) (string, error) {
-	resourceName = normalizeResourcePath(resourceName)
+	resourceName = normalizePath(resourceName)
 
 	found := false
 	for _, r := range skill.resourceNames {
@@ -138,10 +145,7 @@ func (l *skillLoader) parseSkillFile(skillFS fs.FS, logPath string) *fileAgentSk
 		return nil
 	}
 
-	resourceNames := extractResourcePaths(body)
-	if !l.validateResources(skillFS, resourceNames, fm.Name) {
-		return nil
-	}
+	resourceNames := l.discoverResourceFiles(skillFS, fm.Name)
 
 	return &fileAgentSkill{
 		frontmatter:   *fm,
@@ -226,40 +230,134 @@ func (l *skillLoader) tryParseSkillDocument(content, skillFilePath string) (*fro
 	return &frontmatter{Name: name, Description: description}, body, true
 }
 
-// validateResources checks that all referenced resources exist and are accessible
-// within the skill's filesystem.
-func (l *skillLoader) validateResources(skillFS fs.FS, resourceNames []string, skillName string) bool {
-	for _, resourceName := range resourceNames {
-		if _, err := fs.Stat(skillFS, resourceName); err != nil {
-			l.logger.Warn("Excluding skill: resource is not accessible",
-				"skillName", skillName,
-				"resourceName", resourceName,
-				"error", err)
-			return false
-		}
-	}
-	return true
-}
-
-// extractResourcePaths extracts relative resource file paths from markdown link syntax.
-func extractResourcePaths(content string) []string {
+// discoverResourceFiles scans configured resource directories within a skill's filesystem
+// for resource files matching the configured extensions.
+//
+// By default, scans "references/" and "assets/" subdirectories as specified by the
+// Agent Skills specification (https://agentskills.io/specification).
+// Configure [Config.ResourceDirectories] to scan different or additional directories,
+// including "." for the skill root itself.
+// Each directory is scanned non-recursively (only direct children).
+func (l *skillLoader) discoverResourceFiles(skillFS fs.FS, skillName string) []string {
 	seen := make(map[string]bool)
-	var paths []string
-	for _, match := range resourceLinkRegex.FindAllStringSubmatch(content, -1) {
-		path := normalizeResourcePath(match[1])
-		lower := strings.ToLower(path)
-		if !seen[lower] {
-			seen[lower] = true
-			paths = append(paths, path)
+	var resources []string
+
+	for _, dir := range l.resourceDirectories {
+		isRoot := dir == rootDirectoryIndicator
+		fsDir := dir
+		if isRoot {
+			fsDir = "."
+		}
+
+		entries, err := fs.ReadDir(skillFS, fsDir)
+		if err != nil {
+			continue // directory doesn't exist
+		}
+
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+
+			fileName := entry.Name()
+
+			// Exclude SKILL.md itself.
+			if strings.EqualFold(fileName, skillFileName) {
+				continue
+			}
+
+			// Filter by extension.
+			ext := strings.ToLower(path.Ext(fileName))
+			if ext == "" || !l.allowedResourceExtensions[ext] {
+				l.logger.Debug("Skipping file: extension not in the allowed list",
+					"skillName", skillName,
+					"filePath", path.Join(dir, fileName),
+					"extension", ext)
+				continue
+			}
+
+			resourcePath := path.Join(fsDir, fileName)
+			lower := strings.ToLower(resourcePath)
+			if !seen[lower] {
+				seen[lower] = true
+				resources = append(resources, resourcePath)
+			}
 		}
 	}
-	return paths
+
+	return resources
 }
 
-// normalizeResourcePath normalizes a relative resource path by trimming a leading "./" prefix
-// and replacing backslashes with forward slashes.
-func normalizeResourcePath(path string) string {
-	path = strings.ReplaceAll(path, "\\", "/")
-	path = strings.TrimPrefix(path, "./")
-	return path
+// validateAndNormalizeDirectoryNames validates and normalizes directory names.
+// Empty/whitespace names cause a panic (programming error). Absolute paths and
+// paths containing ".." segments are silently skipped with a warning.
+//
+// To additionally prevent symlink escapes out of the directory tree,
+// callers should prefer [os.Root.FS] over [os.DirFS] when constructing the
+// fs.FS passed to [New].
+func validateAndNormalizeDirectoryNames(directories []string, defaults []string, logger *slog.Logger) []string {
+	if directories == nil {
+		return defaults
+	}
+
+	var normalized []string
+	seen := make(map[string]bool)
+
+	for _, dir := range directories {
+		if strings.TrimSpace(dir) == "" {
+			panic("directory names must not be empty or whitespace")
+		}
+
+		// "." is valid — it means the skill root directory.
+		if dir == rootDirectoryIndicator {
+			if !seen[dir] {
+				seen[dir] = true
+				normalized = append(normalized, dir)
+			}
+			continue
+		}
+
+		// Reject absolute paths and any path segments that escape upward.
+		if !filepath.IsLocal(dir) {
+			logger.Warn("Skipping invalid directory name: must be a relative path with no '..' segments",
+				"directoryName", dir)
+			continue
+		}
+
+		norm := normalizePath(dir)
+		if !seen[norm] {
+			seen[norm] = true
+			normalized = append(normalized, norm)
+		}
+	}
+
+	return normalized
+}
+
+// buildExtensionSet creates a set from the given extensions, using defaults if none are provided.
+// Each extension must start with ".".
+func buildExtensionSet(extensions []string, defaults []string) map[string]bool {
+	if extensions == nil {
+		extensions = defaults
+	}
+	validateExtensions(extensions)
+	set := make(map[string]bool, len(extensions))
+	for _, ext := range extensions {
+		set[strings.ToLower(ext)] = true
+	}
+	return set
+}
+
+func validateExtensions(extensions []string) {
+	for _, ext := range extensions {
+		if ext == "" || ext[0] != '.' {
+			panic(fmt.Sprintf("invalid extension %q: must start with '.'", ext))
+		}
+	}
+}
+
+// normalizePath normalizes a relative path or directory name using
+// [filepath.Clean] and converts to forward slashes.
+func normalizePath(p string) string {
+	return filepath.ToSlash(filepath.Clean(p))
 }
