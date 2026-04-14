@@ -37,6 +37,7 @@ func (r *runner) Run(next middleware.RunFunc, ctx context.Context, messages []*m
 
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		currentMessages := messages
+		providerMessages := make([]*message.Message, 0)
 		currentTools := slices.Collect(agentopt.All(options, agentopt.Tool))
 		runOptions := options
 		for _, provider := range r.providers {
@@ -51,9 +52,10 @@ func (r *runner) Run(next middleware.RunFunc, ctx context.Context, messages []*m
 				return
 			}
 			if len(providerContext.Messages) > 0 {
-				merged := make([]*message.Message, 0, len(providerContext.Messages)+len(currentMessages))
-				merged = append(merged, providerContext.Messages...)
-				merged = append(merged, currentMessages...)
+				providerMessages = append(providerMessages, providerContext.Messages...)
+				merged := make([]*message.Message, 0, len(providerMessages)+len(messages))
+				merged = append(merged, providerMessages...)
+				merged = append(merged, messages...)
 				currentMessages = merged
 			}
 			if len(providerContext.Tools) > 0 {
@@ -70,10 +72,10 @@ func (r *runner) Run(next middleware.RunFunc, ctx context.Context, messages []*m
 			if update != nil && session.ServiceID == "" {
 				resp.Update(update)
 			}
+			if err != nil && runErr == nil {
+				runErr = err
+			}
 			if !yield(update, err) {
-				if err != nil {
-					runErr = err
-				}
 				break
 			}
 		}

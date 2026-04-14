@@ -111,6 +111,9 @@ func TestMiddleware_Run_MultipleProviders_CalledInSequence(t *testing.T) {
 	if len(capturedMessages) != 3 {
 		t.Fatalf("expected 3 messages, got %d", len(capturedMessages))
 	}
+	if got := []string{capturedMessages[0].String(), capturedMessages[1].String(), capturedMessages[2].String()}; !slices.Equal(got, []string{"from a", "from b", "hello"}) {
+		t.Fatalf("expected final message order [from a from b hello], got %v", got)
+	}
 }
 
 func TestMiddleware_Run_Provider_EnrichesTools(t *testing.T) {
@@ -193,7 +196,8 @@ func TestMiddleware_Run_OnFailure_AfterRunCalledWithInvokeError(t *testing.T) {
 		},
 	}
 
-	_, err := collectResponse(middleware.RunChain(
+	sawErr := false
+	for _, err := range middleware.RunChain(
 		context.Background(),
 		func(_ context.Context, _ []*message.Message, _ ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
 			return func(yield func(*message.ResponseUpdate, error) bool) {
@@ -203,9 +207,16 @@ func TestMiddleware_Run_OnFailure_AfterRunCalledWithInvokeError(t *testing.T) {
 		[]middleware.Middleware{contextprovider.New(provider)},
 		[]*message.Message{message.NewText("hello")},
 		agentopt.Session(memory.NewSession("")),
-	))
-	if !errors.Is(err, expectedErr) {
-		t.Fatalf("expected %v, got %v", expectedErr, err)
+	) {
+		if err != nil {
+			if !errors.Is(err, expectedErr) {
+				t.Fatalf("expected %v, got %v", expectedErr, err)
+			}
+			sawErr = true
+		}
+	}
+	if !sawErr {
+		t.Fatal("expected the run error to be yielded")
 	}
 	if !afterRunCalled {
 		t.Fatal("expected Store to be called")
