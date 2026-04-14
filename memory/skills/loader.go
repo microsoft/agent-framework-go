@@ -3,6 +3,7 @@
 package skills
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -251,7 +252,13 @@ func (l *skillLoader) discoverResourceFiles(skillFS fs.FS, skillName string) []s
 
 		entries, err := fs.ReadDir(skillFS, fsDir)
 		if err != nil {
-			continue // directory doesn't exist
+			if !errors.Is(err, fs.ErrNotExist) {
+				l.logger.Warn("Failed to read resource directory",
+					"skillName", skillName,
+					"directory", fsDir,
+					"error", err)
+			}
+			continue
 		}
 
 		for _, entry := range entries {
