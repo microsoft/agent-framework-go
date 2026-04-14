@@ -17,6 +17,7 @@ import (
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/middleware"
 	"github.com/microsoft/agent-framework-go/middleware/autocall"
+	"github.com/microsoft/agent-framework-go/middleware/contextprovider"
 	"github.com/microsoft/agent-framework-go/middleware/structuredoutput"
 	"github.com/microsoft/agent-framework-go/tool"
 )
@@ -93,7 +94,14 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 			}),
 		)
 	}
-	cfg.Middlewares = append([]middleware.Middleware{providerMiddleware(providers)}, cfg.Middlewares...)
+	prefixedMiddlewares := make([]middleware.Middleware, 0, 2)
+	if len(providers) == 0 {
+		prefixedMiddlewares = append(prefixedMiddlewares, defaultLocalHistoryMiddleware())
+	}
+	if len(providers) > 0 {
+		prefixedMiddlewares = append(prefixedMiddlewares, contextprovider.New(providers...))
+	}
+	cfg.Middlewares = append(prefixedMiddlewares, cfg.Middlewares...)
 	cfg.Middlewares = append(cfg.Middlewares, authorMiddleware(cfg.ID, cfg.Name))
 	return &Agent{
 		id:               cfg.ID,
@@ -263,85 +271,22 @@ func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, opt
 	return ctx, messages, options, nil
 }
 
-func providerMiddleware(contextProviders []*memory.ContextProvider) middleware.Middleware {
+// defaultLocalHistoryMiddleware attaches an in-memory history provider for local
+// sessions so multi-turn runs keep prior messages without requiring explicit
+// configuration. New prepends it only when Config.ContextProviders is empty.
+// It is bypassed for auto-created sessions on the first run, service-managed
+// sessions, and continuation-token resumes.
+func defaultLocalHistoryMiddleware() middleware.Middleware {
+	history := contextprovider.New(memory.NewInMemoryHistoryProvider("in-memory"))
+
 	return middleware.Func(func(next middleware.RunFunc, ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		session, _ := agentopt.Get(options, agentopt.Session)
 		noSession, _ := agentopt.Get(options, noSessionProvided)
 		contToken, _ := agentopt.Get(options, agentopt.ContinuationToken)
-
-		activeProviders := contextProviders
-		if !noSession && contToken == "" && session.ServiceID == "" && len(activeProviders) == 0 {
-			// For local sessions without explicit providers, attach in-memory history at runtime.
-			activeProviders = []*memory.ContextProvider{memory.NewInMemoryHistoryProvider("in-memory")}
+		if noSession || contToken != "" || session.ServiceID != "" {
+			return next(ctx, messages, options...)
 		}
-
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			// Retrieve provider context.
-			currentMessages := messages
-			currentTools := slices.Collect(agentopt.All(options, agentopt.Tool))
-			runOptions := options
-			for _, contextProvider := range activeProviders {
-				if contextProvider == nil {
-					continue
-				}
-				providerContext, err := contextProvider.BeforeRun(memory.BeforeRunContext{
-					Context:  ctx,
-					Session:  session,
-					Messages: currentMessages,
-					Tools:    currentTools,
-				})
-				if err != nil {
-					yield(nil, err)
-					return
-				}
-				if len(providerContext.Messages) > 0 {
-					merged := make([]*message.Message, 0, len(providerContext.Messages)+len(currentMessages))
-					merged = append(merged, providerContext.Messages...)
-					merged = append(merged, currentMessages...)
-					currentMessages = merged
-				}
-				if len(providerContext.Tools) > 0 {
-					currentTools = append(currentTools, providerContext.Tools...)
-					for _, tool := range providerContext.Tools {
-						runOptions = append(runOptions, agentopt.Tool(tool))
-					}
-				}
-			}
-			messages = currentMessages
-			var resp message.Response
-			var runErr error
-			for update, err := range next(ctx, messages, runOptions...) {
-				if update != nil && session.ServiceID == "" {
-					resp.Update(update)
-				}
-				if !yield(update, err) {
-					if err != nil {
-						runErr = err
-					}
-					break
-				}
-			}
-			resp.Coalesce()
-			// After the run finishes, persist context.
-			for i := len(activeProviders) - 1; i >= 0; i-- {
-				contextProvider := activeProviders[i]
-				if contextProvider == nil {
-					continue
-				}
-				// Filters may compact slices in-place, so isolate each provider invocation.
-				if err := contextProvider.AfterRun(memory.AfterRunContext{
-					Context:          ctx,
-					Session:          session,
-					RequestMessages:  slices.Clone(messages),
-					ResponseMessages: slices.Clone(resp.Messages),
-					Tools:            currentTools,
-					InvokeError:      runErr,
-				}); err != nil {
-					yield(nil, err)
-					return
-				}
-			}
-		}
+		return history.Run(next, ctx, messages, options...)
 	})
 }
 
