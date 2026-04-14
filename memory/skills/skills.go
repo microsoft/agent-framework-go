@@ -43,6 +43,23 @@ type Config struct {
 	// When empty, a default template is used.
 	SkillsInstructionPrompt string
 
+	// ResourceDirectories specifies relative directory paths to scan for resource
+	// files within each skill directory.
+	// Values may be single-segment names (e.g., "references") or multi-segment
+	// relative paths (e.g., "sub/resources"). Use "." to include files directly
+	// at the skill root. Leading "./" prefixes, trailing separators, and
+	// backslashes are normalized automatically; paths containing ".." segments
+	// or absolute paths are rejected.
+	// When nil, defaults to ["references", "assets"] (per the Agent Skills
+	// specification at https://agentskills.io/specification).
+	// When set, replaces the defaults entirely.
+	ResourceDirectories []string
+
+	// AllowedResourceExtensions specifies file extensions for resource file
+	// discovery. Each extension must start with ".".
+	// When nil, defaults to [".md", ".json", ".yaml", ".yml", ".csv", ".xml", ".txt"].
+	AllowedResourceExtensions []string
+
 	// Logger is an optional structured logger for skill loading diagnostics.
 	Logger *slog.Logger
 }
@@ -56,10 +73,10 @@ type provider struct {
 
 // New creates a memory.ContextProvider that searches the given filesystems for skills.
 //
-// Each fs.FS can represent an individual skill folder (containing a SKILL.md file) or a parent folder
-// with skill subdirectories. The provider discovers SKILL.md files up to 2 levels deep.
+// Each fs.FS can represent an individual skill directory (containing a SKILL.md file) or a parent
+// directory with skill subdirectories. The provider discovers SKILL.md files up to 2 levels deep.
 //
-// Use os.DirFS to create an fs.FS from a directory path on disk.
+// To prevent escapes from the tree via symbolic links, callers should prefer [os.Root.FS] over [os.DirFS].
 func New(opts *Config, fsys ...fs.FS) *memory.ContextProvider {
 	if opts == nil {
 		opts = &Config{}
@@ -69,7 +86,11 @@ func New(opts *Config, fsys ...fs.FS) *memory.ContextProvider {
 		logger = slog.New(slog.DiscardHandler)
 	}
 
-	loader := &skillLoader{logger: logger}
+	loader := &skillLoader{
+		logger:                    logger,
+		resourceDirectories:       validateAndNormalizeDirectoryNames(opts.ResourceDirectories, defaultResourceDirectories, logger),
+		allowedResourceExtensions: buildExtensionSet(opts.AllowedResourceExtensions, defaultResourceExtensions),
+	}
 	loaded := loader.discoverAndLoadSkills(fsys)
 	instructionPrompt := buildSkillsInstructionPrompt(opts, loaded)
 

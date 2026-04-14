@@ -40,6 +40,12 @@ func main() {
 		panic(err)
 	}
 
+	skillsRoot, err := os.OpenRoot("skills")
+	if err != nil {
+		panic(err)
+	}
+	defer skillsRoot.Close()
+
 	a := openaichatagent.New(openaichatagent.Config{
 		Client: openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
@@ -50,7 +56,7 @@ func main() {
 			Name:             "SkillsAgent",
 			Instructions:     "You are a helpful assistant.",
 			Middlewares:      []middleware.Middleware{logger},
-			ContextProviders: []*memory.ContextProvider{memskills.New(nil, os.DirFS("skills"))},
+			ContextProviders: []*memory.ContextProvider{memskills.New(nil, skillsRoot.FS())},
 		},
 	})
 
