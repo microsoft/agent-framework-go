@@ -3,46 +3,11 @@
 package skillhelpers
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"math"
 	"strconv"
-
-	"github.com/microsoft/agent-framework-go/memory/skills"
 )
-
-// NewStaticResource creates a resource backed by static content.
-func NewStaticResource(name, description, content string) skills.Resource {
-	return NewFuncResource(name, description, func(context.Context) (any, error) {
-		return content, nil
-	})
-}
-
-// NewFuncResource creates a resource backed by a function.
-func NewFuncResource(name, description string, read func(context.Context) (any, error)) skills.Resource {
-	if read == nil {
-		panic("read is required")
-	}
-	return skills.Resource{Name: name, Description: description, Read: read}
-}
-
-// NewFuncScript creates a script backed by a function.
-func NewFuncScript(name, description string, run func(context.Context, *skills.Skill, map[string]any) (any, error)) skills.Script {
-	if run == nil {
-		panic("run is required")
-	}
-	return skills.Script{
-		Name:        name,
-		Description: description,
-		Run: func(ctx context.Context, owner *skills.Skill, arguments map[string]any) (any, error) {
-			if arguments == nil {
-				arguments = map[string]any{}
-			}
-			return run(ctx, owner, arguments)
-		},
-	}
-}
 
 // NumberArg reads a numeric argument from a tool call argument map.
 func NumberArg(arguments map[string]any, name string) (float64, error) {

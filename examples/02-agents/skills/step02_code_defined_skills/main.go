@@ -48,28 +48,30 @@ var unitConverterSkill = &skills.Skill{
 	},
 	Content: unitConverterInstructions,
 	Resources: []skills.Resource{
-		skillhelpers.NewStaticResource(
-			"conversion-table",
-			"Lookup table of multiplication factors for common unit conversions.",
-			conversionTable,
-		),
-		skillhelpers.NewFuncResource(
-			"conversion-policy",
-			"Formatting and rounding rules generated at runtime.",
-			func(context.Context) (any, error) {
+		{
+			Name:        "conversion-table",
+			Description: "Lookup table of multiplication factors for common unit conversions.",
+			Read: func(context.Context) (any, error) {
+				return conversionTable, nil
+			},
+		},
+		{
+			Name:        "conversion-policy",
+			Description: "Formatting and rounding rules generated at runtime.",
+			Read: func(context.Context) (any, error) {
 				return fmt.Sprintf(`# Conversion Policy
 
 **Decimal places:** 4
 **Format:** Always show both the original and converted values with units
 **Generated at:** %s`, time.Now().UTC().Format(time.RFC3339)), nil
 			},
-		),
+		},
 	},
 	Scripts: []skills.Script{
-		skillhelpers.NewFuncScript(
-			"convert",
-			"Multiplies a value by a conversion factor and returns the result as JSON.",
-			func(_ context.Context, _ *skills.Skill, arguments map[string]any) (any, error) {
+		{
+			Name:        "convert",
+			Description: "Multiplies a value by a conversion factor and returns the result as JSON.",
+			Run: func(_ context.Context, _ *skills.Skill, arguments map[string]any) (any, error) {
 				value, err := skillhelpers.NumberArg(arguments, "value")
 				if err != nil {
 					return nil, err
@@ -80,7 +82,7 @@ var unitConverterSkill = &skills.Skill{
 				}
 				return skillhelpers.MultiplyConversion(value, factor, 4), nil
 			},
-		),
+		},
 	},
 }
 

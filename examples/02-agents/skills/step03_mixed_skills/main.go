@@ -62,17 +62,19 @@ var volumeConverterSkill = &skills.Skill{
 	},
 	Content: volumeConverterInstructions,
 	Resources: []skills.Resource{
-		skillhelpers.NewStaticResource(
-			"volume-conversion-table",
-			"Lookup table of multiplication factors for volume conversions.",
-			volumeConversionTable,
-		),
+		{
+			Name:        "volume-conversion-table",
+			Description: "Lookup table of multiplication factors for volume conversions.",
+			Read: func(context.Context) (any, error) {
+				return volumeConversionTable, nil
+			},
+		},
 	},
 	Scripts: []skills.Script{
-		skillhelpers.NewFuncScript(
-			"convert-volume",
-			"Multiplies a value by a conversion factor and returns the result as JSON.",
-			func(_ context.Context, _ *skills.Skill, arguments map[string]any) (any, error) {
+		{
+			Name:        "convert-volume",
+			Description: "Multiplies a value by a conversion factor and returns the result as JSON.",
+			Run: func(_ context.Context, _ *skills.Skill, arguments map[string]any) (any, error) {
 				value, err := skillhelpers.NumberArg(arguments, "value")
 				if err != nil {
 					return nil, err
@@ -83,7 +85,7 @@ var volumeConverterSkill = &skills.Skill{
 				}
 				return skillhelpers.MultiplyConversion(value, factor, 4), nil
 			},
-		),
+		},
 	},
 }
 
@@ -94,17 +96,19 @@ var temperatureConverterSkill = skills.Skill{
 	},
 	Content: temperatureConverterInstructions,
 	Resources: []skills.Resource{
-		skillhelpers.NewStaticResource(
-			"temperature-conversion-formulas",
-			"Formulas for converting between Fahrenheit, Celsius, and Kelvin.",
-			temperatureConversionFormulas,
-		),
+		{
+			Name:        "temperature-conversion-formulas",
+			Description: "Formulas for converting between Fahrenheit, Celsius, and Kelvin.",
+			Read: func(context.Context) (any, error) {
+				return temperatureConversionFormulas, nil
+			},
+		},
 	},
 	Scripts: []skills.Script{
-		skillhelpers.NewFuncScript(
-			"convert-temperature",
-			"Converts a temperature value from one scale to another.",
-			func(_ context.Context, _ *skills.Skill, arguments map[string]any) (any, error) {
+		{
+			Name:        "convert-temperature",
+			Description: "Converts a temperature value from one scale to another.",
+			Run: func(_ context.Context, _ *skills.Skill, arguments map[string]any) (any, error) {
 				value, err := skillhelpers.NumberArg(arguments, "value")
 				if err != nil {
 					return nil, err
@@ -139,7 +143,7 @@ var temperatureConverterSkill = skills.Skill{
 					"result": result,
 				}, nil
 			},
-		),
+		},
 	},
 }
 
