@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/memory/skills"
@@ -33,6 +35,22 @@ type countingSource struct {
 func (s *countingSource) Skills(context.Context) ([]*skills.Skill, error) {
 	s.count++
 	return s.skills, nil
+}
+
+type panicOnceSource struct {
+	mu       sync.Mutex
+	panicked bool
+	skill    *skills.Skill
+}
+
+func (s *panicOnceSource) Skills(context.Context) ([]*skills.Skill, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.panicked {
+		s.panicked = true
+		panic("boom")
+	}
+	return []*skills.Skill{s.skill}, nil
 }
 
 func TestProvider_CustomPromptTemplate_MissingSkillsPlaceholderPanics(t *testing.T) {
@@ -223,6 +241,64 @@ func TestProvider_DisableCaching_LoadsSourceEachTime(t *testing.T) {
 
 	if source.count < 2 {
 		t.Fatalf("expected source to be loaded at least twice, got %d", source.count)
+	}
+}
+
+func TestProvider_RecoversFromPanickingSourceAndResetsLoading(t *testing.T) {
+	skill := mustInlineSkill(
+		skills.Frontmatter{Name: "recovered-skill", Description: "Recovered skill"},
+		"Instructions.",
+		nil,
+		nil,
+	)
+	source := &panicOnceSource{skill: skill}
+	provider := skills.NewContextProvider(skills.ProviderOptions{Sources: []skills.Source{source}})
+
+	_, err := provider.BeforeRun(memory.BeforeRunContext{Context: t.Context(), Session: memory.NewSession("")})
+	if err == nil {
+		t.Fatal("expected provider to return an error after source panic")
+	}
+	if !strings.Contains(err.Error(), "building skills context panicked: boom") {
+		t.Fatalf("expected recovered panic error, got %v", err)
+	}
+
+	type result struct {
+		ctx memory.Context
+		err error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		ctx, err := provider.BeforeRun(memory.BeforeRunContext{Context: t.Context(), Session: memory.NewSession("")})
+		resultCh <- result{ctx: ctx, err: err}
+	}()
+
+	select {
+	case outcome := <-resultCh:
+		if outcome.err != nil {
+			t.Fatalf("expected second provider call to succeed, got %v", outcome.err)
+		}
+		if len(outcome.ctx.Messages) == 0 {
+			t.Fatal("expected provider to recover and return messages on the second call")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for provider to recover after panic")
+	}
+}
+
+func TestProvider_SkipsNilSkillsReturnedBySource(t *testing.T) {
+	validSkill := mustInlineSkill(
+		skills.Frontmatter{Name: "valid-skill", Description: "Valid skill"},
+		"Instructions.",
+		nil,
+		nil,
+	)
+	provider := skills.NewContextProvider(skills.ProviderOptions{
+		Sources: []skills.Source{&countingSource{skills: []*skills.Skill{nil, validSkill}}},
+	})
+
+	instructions, _ := captureProviderContext(t, provider)
+	if !strings.Contains(instructions, "valid-skill") {
+		t.Fatalf("expected valid skill to remain available, got %q", instructions)
 	}
 }
 

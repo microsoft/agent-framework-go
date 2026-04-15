@@ -149,7 +149,7 @@ func (s *skillSliceSource) Skills(context.Context) ([]*Skill, error) {
 	return s.skills, nil
 }
 
-func (p *providerState) provide(ctx memory.BeforeRunContext) (memory.Context, error) {
+func (p *providerState) provide(ctx memory.BeforeRunContext) (result memory.Context, err error) {
 	if p.options.DisableCaching {
 		return p.buildContext(ctx.Context)
 	}
@@ -177,17 +177,22 @@ func (p *providerState) provide(ctx memory.BeforeRunContext) (memory.Context, er
 	loading := p.loading
 	p.mu.Unlock()
 
-	result, err := p.buildContext(ctx.Context)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("building skills context panicked: %v", recovered)
+		}
 
-	p.mu.Lock()
-	if err == nil {
-		cached := result
-		p.cached = &cached
-	}
-	close(loading)
-	p.loading = nil
-	p.mu.Unlock()
+		p.mu.Lock()
+		if err == nil {
+			cached := result
+			p.cached = &cached
+		}
+		close(loading)
+		p.loading = nil
+		p.mu.Unlock()
+	}()
 
+	result, err = p.buildContext(ctx.Context)
 	return result, err
 }
 
@@ -221,15 +226,21 @@ func (p *providerState) buildContext(ctx context.Context) (memory.Context, error
 
 func (p *providerState) loadSkills(ctx context.Context) ([]*Skill, error) {
 	loaded := make([]*Skill, 0)
-	for _, source := range p.sources {
+	for sourceIndex, source := range p.sources {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		skills, err := source.Skills(ctx)
+		sourceSkills, err := source.Skills(ctx)
 		if err != nil {
 			return nil, err
 		}
-		loaded = append(loaded, skills...)
+		for skillIndex, skill := range sourceSkills {
+			if skill == nil {
+				p.logger.Warn("Skipping nil skill returned by source", "sourceIndex", sourceIndex, "skillIndex", skillIndex)
+				continue
+			}
+			loaded = append(loaded, skill)
+		}
 	}
 	if p.options.DisableSourceDeduplication {
 		return loaded, nil
@@ -412,12 +423,13 @@ func buildProviderSkillsInstructionPrompt(template string, skills []*Skill, incl
 		template = defaultSkillsInstructionPrompt
 	}
 
-	slices.SortFunc(skills, func(left, right *Skill) int {
+	sortedSkills := append([]*Skill(nil), skills...)
+	slices.SortFunc(sortedSkills, func(left, right *Skill) int {
 		return strings.Compare(left.Frontmatter.Name, right.Frontmatter.Name)
 	})
 
 	var sb strings.Builder
-	for _, skill := range skills {
+	for _, skill := range sortedSkills {
 		sb.WriteString("  <skill>\n")
 		sb.WriteString(fmt.Sprintf("    <name>%s</name>\n", xmlEscape(skill.Frontmatter.Name)))
 		sb.WriteString(fmt.Sprintf("    <description>%s</description>\n", xmlEscape(skill.Frontmatter.Description)))
