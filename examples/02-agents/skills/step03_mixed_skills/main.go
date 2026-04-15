@@ -1,0 +1,195 @@
+// Copyright (c) Microsoft. All rights reserved.
+
+// This sample demonstrates an advanced scenario: combining file-based, code-defined,
+// and struct-based skills in a single agent using explicit source composition.
+
+package main
+
+import (
+	"cmp"
+	"context"
+	"fmt"
+	"os"
+	"strings"
+
+	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
+	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
+	"github.com/microsoft/agent-framework-go/examples/02-agents/skills/internal/skillhelpers"
+	"github.com/microsoft/agent-framework-go/examples/internal/demo"
+	"github.com/microsoft/agent-framework-go/memory"
+	"github.com/microsoft/agent-framework-go/memory/skills"
+	"github.com/microsoft/agent-framework-go/memory/skills/fsskills"
+	"github.com/microsoft/agent-framework-go/middleware"
+	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/azure"
+)
+
+const volumeConverterInstructions = `Use this skill when the user asks to convert between gallons and liters.
+
+1. Review the volume-conversion-table resource to find the correct factor.
+2. Use the convert-volume script, passing the value and factor.
+3. Present the result clearly with both units.`
+
+const volumeConversionTable = `# Volume Conversion Table
+
+Formula: **result = value * factor**
+
+| From    | To      | Factor   |
+|---------|---------|----------|
+| gallons | liters  | 3.78541  |
+| liters  | gallons | 0.264172 |`
+
+const temperatureConverterInstructions = `Use this skill when the user asks to convert temperatures.
+
+1. Review the temperature-conversion-formulas resource for the correct formula.
+2. Use the convert-temperature script, passing the value, source scale, and target scale.
+3. Present the result clearly with both temperature scales.`
+
+const temperatureConversionFormulas = `# Temperature Conversion Formulas
+
+| From       | To         | Formula               |
+|------------|------------|-----------------------|
+| Fahrenheit | Celsius    | °C = (°F - 32) * 5/9 |
+| Celsius    | Fahrenheit | °F = (°C * 9/5) + 32 |
+| Celsius    | Kelvin     | K = °C + 273.15      |
+| Kelvin     | Celsius    | °C = K - 273.15      |`
+
+var volumeConverterSkill = &skills.Skill{
+	Frontmatter: skills.Frontmatter{
+		Name:        "volume-converter",
+		Description: "Convert between gallons and liters using a multiplication factor.",
+	},
+	Content: volumeConverterInstructions,
+	Resources: []skills.Resource{
+		skillhelpers.NewStaticResource(
+			"volume-conversion-table",
+			"Lookup table of multiplication factors for volume conversions.",
+			volumeConversionTable,
+		),
+	},
+	Scripts: []skills.Script{
+		skillhelpers.NewFuncScript(
+			"convert-volume",
+			"Multiplies a value by a conversion factor and returns the result as JSON.",
+			func(_ context.Context, _ *skills.Skill, arguments map[string]any) (any, error) {
+				value, err := skillhelpers.NumberArg(arguments, "value")
+				if err != nil {
+					return nil, err
+				}
+				factor, err := skillhelpers.NumberArg(arguments, "factor")
+				if err != nil {
+					return nil, err
+				}
+				return skillhelpers.MultiplyConversion(value, factor, 4), nil
+			},
+		),
+	},
+}
+
+var temperatureConverterSkill = skills.Skill{
+	Frontmatter: skills.Frontmatter{
+		Name:        "temperature-converter",
+		Description: "Convert between temperature scales such as Fahrenheit, Celsius, and Kelvin.",
+	},
+	Content: temperatureConverterInstructions,
+	Resources: []skills.Resource{
+		skillhelpers.NewStaticResource(
+			"temperature-conversion-formulas",
+			"Formulas for converting between Fahrenheit, Celsius, and Kelvin.",
+			temperatureConversionFormulas,
+		),
+	},
+	Scripts: []skills.Script{
+		skillhelpers.NewFuncScript(
+			"convert-temperature",
+			"Converts a temperature value from one scale to another.",
+			func(_ context.Context, _ *skills.Skill, arguments map[string]any) (any, error) {
+				value, err := skillhelpers.NumberArg(arguments, "value")
+				if err != nil {
+					return nil, err
+				}
+				from, err := skillhelpers.StringArg(arguments, "from")
+				if err != nil {
+					return nil, err
+				}
+				to, err := skillhelpers.StringArg(arguments, "to")
+				if err != nil {
+					return nil, err
+				}
+
+				var result float64
+				switch strings.ToUpper(from) + "->" + strings.ToUpper(to) {
+				case "FAHRENHEIT->CELSIUS":
+					result = skillhelpers.Round((value-32)*5.0/9.0, 2)
+				case "CELSIUS->FAHRENHEIT":
+					result = skillhelpers.Round(value*9.0/5.0+32, 2)
+				case "CELSIUS->KELVIN":
+					result = skillhelpers.Round(value+273.15, 2)
+				case "KELVIN->CELSIUS":
+					result = skillhelpers.Round(value-273.15, 2)
+				default:
+					return nil, fmt.Errorf("unsupported conversion: %s -> %s", from, to)
+				}
+
+				return map[string]any{
+					"value":  value,
+					"from":   from,
+					"to":     to,
+					"result": result,
+				}, nil
+			},
+		),
+	},
+}
+
+var logger = demo.NewLogger(
+	"Mixed Skills",
+	"Combining file-based, code-defined, and struct-based Agent Skills with explicit source composition.",
+	"Model", deployment,
+)
+
+var deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-5.4-mini")
+var endpoint = os.Getenv("AZURE_OPENAI_ENDPOINT")
+var apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
+
+func main() {
+	demo.CheckAzureEndpoint(endpoint)
+	token, err := azidentity.NewDefaultAzureCredential(nil)
+	if err != nil {
+		panic(err)
+	}
+
+	skillsRoot, err := os.OpenRoot("skills")
+	if err != nil {
+		panic(err)
+	}
+	defer skillsRoot.Close()
+
+	skillsProvider := skills.NewContextProvider(skills.ProviderOptions{
+		Skills: []*skills.Skill{volumeConverterSkill, &temperatureConverterSkill},
+		Sources: []skills.Source{
+			fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: skillhelpers.RunSubprocessScript}, skillsRoot.FS()),
+		},
+	})
+
+	agent := openaichatagent.New(openaichatagent.Config{
+		Client: openai.NewClient(
+			azure.WithEndpoint(endpoint, apiVersion),
+			azure.WithTokenCredential(token),
+		),
+		Model: deployment,
+		Agent: agent.Config{
+			Name:             "MultiConverterAgent",
+			Instructions:     "You are a helpful assistant that can convert units, volumes, and temperatures.",
+			Middlewares:      []middleware.Middleware{logger},
+			ContextProviders: []*memory.ContextProvider{skillsProvider},
+		},
+	})
+
+	response, err := agent.RunText(
+		context.Background(),
+		"I need three conversions: How many kilometers is a marathon (26.2 miles)? How many liters is a 5-gallon bucket? What is 98.6 Fahrenheit in Celsius?",
+	).Collect()
+	demo.Response(response, err)
+}

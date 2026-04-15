@@ -1,0 +1,406 @@
+// Copyright (c) Microsoft. All rights reserved.
+
+package skills_test
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/microsoft/agent-framework-go/memory"
+	"github.com/microsoft/agent-framework-go/memory/skills"
+	"github.com/microsoft/agent-framework-go/memory/skills/fsskills"
+	"github.com/microsoft/agent-framework-go/tool"
+)
+
+func funcToolPointer(t *testing.T, value tool.FuncTool) uintptr {
+	t.Helper()
+	rv := reflect.ValueOf(value)
+	if rv.Kind() != reflect.Pointer {
+		t.Fatalf("expected pointer-backed tool, got %T", value)
+	}
+	return rv.Pointer()
+}
+
+type countingSource struct {
+	count  int
+	skills []*skills.Skill
+}
+
+func (s *countingSource) Skills(context.Context) ([]*skills.Skill, error) {
+	s.count++
+	return s.skills, nil
+}
+
+func TestProvider_CustomPromptTemplate_MissingSkillsPlaceholderPanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic for template missing {skills}")
+		}
+	}()
+
+	skill := mustInlineSkill(skills.Frontmatter{Name: "inline-skill", Description: "Inline skill"}, "Instructions.", nil, nil)
+	_ = skills.NewContextProvider(skills.ProviderOptions{SkillsInstructionPrompt: "No skills placeholder here {resource_instructions} {script_instructions}", Skills: []*skills.Skill{skill}})
+}
+
+func TestProvider_CustomPromptTemplate_MissingScriptInstructionsPlaceholderPanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic for template missing {script_instructions}")
+		}
+	}()
+
+	skill := mustInlineSkill(skills.Frontmatter{Name: "inline-skill", Description: "Inline skill"}, "Instructions.", nil, nil)
+	_ = skills.NewContextProvider(skills.ProviderOptions{SkillsInstructionPrompt: "Has skills {skills} but no runner instructions {resource_instructions}", Skills: []*skills.Skill{skill}})
+}
+
+func TestProvider_CustomPromptTemplate_MissingResourceInstructionsPlaceholderPanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic for template missing {resource_instructions}")
+		}
+	}()
+
+	skill := mustInlineSkill(skills.Frontmatter{Name: "inline-skill", Description: "Inline skill"}, "Instructions.", nil, nil)
+	_ = skills.NewContextProvider(skills.ProviderOptions{SkillsInstructionPrompt: "Has skills {skills} and runner {script_instructions} but no resource instructions", Skills: []*skills.Skill{skill}})
+}
+
+func providerFromFileSource(source *fsskills.Source, opts *skills.ProviderOptions) *memory.ContextProvider {
+	if opts == nil {
+		return skills.NewContextProvider(skills.ProviderOptions{Sources: []skills.Source{source}})
+	}
+	resolved := *opts
+	resolved.Sources = []skills.Source{source}
+	return skills.NewContextProvider(resolved)
+}
+
+func TestProvider_FromFileSourceWithOptions_DiscoversSkills(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "opts-skill", "Options skill", "Options body.")
+	provider := providerFromFileSource(
+		fsskills.NewSourceOptions(fsskills.SourceOptions{
+			ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, map[string]any) (any, error) {
+				return nil, nil
+			},
+		}, os.DirFS(root)),
+		&skills.ProviderOptions{DisableCaching: true},
+	)
+
+	instructions, _ := captureProviderContext(t, provider)
+	if !strings.Contains(instructions, "opts-skill") {
+		t.Fatalf("expected opts-skill in instructions, got %q", instructions)
+	}
+}
+
+func TestProvider_FromFileSourceWithMultipleFileSystems_DiscoversMultipleSkills(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, filepath.Join(root, "multi-opts-1"), "skill-x", "Skill X", "Body X.")
+	createSkillDir(t, filepath.Join(root, "multi-opts-2"), "skill-y", "Skill Y", "Body Y.")
+	provider := providerFromFileSource(
+		fsskills.NewSourceOptions(fsskills.SourceOptions{
+			ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, map[string]any) (any, error) {
+				return nil, nil
+			},
+		}, os.DirFS(filepath.Join(root, "multi-opts-1")), os.DirFS(filepath.Join(root, "multi-opts-2"))),
+		&skills.ProviderOptions{DisableCaching: true},
+	)
+
+	instructions, _ := captureProviderContext(t, provider)
+	if !strings.Contains(instructions, "skill-x") || !strings.Contains(instructions, "skill-y") {
+		t.Fatalf("expected both skills in instructions, got %q", instructions)
+	}
+}
+
+func TestProvider_WithScriptsNoScriptApproval_DoesNotWrapRunScriptTool(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "no-approval-skill", "No approval test", "Body.")
+	createRelativeFile(t, filepath.Join(root, "no-approval-skill"), "scripts/run.py", "print('hello')")
+	provider := newProviderWithConfig(t, &fileProviderConfig{ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, map[string]any) (any, error) {
+		return "ok", nil
+	}}, root)
+
+	_, tools := captureProviderContext(t, provider)
+	runTool := findTool(t, tools, "run_skill_script")
+	if _, ok := runTool.(tool.ApprovalRequiredTool); ok {
+		t.Fatal("did not expect run_skill_script to require approval by default")
+	}
+}
+
+func TestProvider_MultipleInvocations_ToolsAreSharedWhenCached(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "cached-tools-skill", "Cached tools test", "Body.")
+	provider := newProvider(t, root)
+
+	_, tools1 := captureProviderContext(t, provider)
+	_, tools2 := captureProviderContext(t, provider)
+	ptr1 := funcToolPointer(t, findTool(t, tools1, "load_skill"))
+	ptr2 := funcToolPointer(t, findTool(t, tools2, "load_skill"))
+	if ptr1 != ptr2 {
+		t.Fatal("expected cached provider to reuse the same tool instance")
+	}
+}
+
+func TestProvider_MultipleInvocations_ToolsAreNotSharedWhenCachingDisabled(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "fresh-tools-skill", "Fresh tools test", "Body.")
+	provider := newProviderWithConfig(t, &fileProviderConfig{DisableCaching: true}, root)
+
+	_, tools1 := captureProviderContext(t, provider)
+	_, tools2 := captureProviderContext(t, provider)
+	ptr1 := funcToolPointer(t, findTool(t, tools1, "load_skill"))
+	ptr2 := funcToolPointer(t, findTool(t, tools2, "load_skill"))
+	if ptr1 == ptr2 {
+		t.Fatal("expected uncached provider to rebuild tools on each invocation")
+	}
+}
+
+func TestNew_MultipleDirectories_DeduplicatesSkillsByName(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, filepath.Join(root, "dup1"), "dup-skill", "First", "Body 1.")
+	createSkillDir(t, filepath.Join(root, "dup2"), "dup-skill", "Second", "Body 2.")
+	provider := newProvider(t, filepath.Join(root, "dup1"), filepath.Join(root, "dup2"))
+
+	_, tools := captureProviderContext(t, provider)
+	loadTool := findTool(t, tools, "load_skill")
+	content, err := loadTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"dup-skill"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(content.(string), "Body 1.") {
+		t.Fatalf("expected first duplicate to survive, got %q", content)
+	}
+}
+
+func TestNewProvider_DeduplicatesSkillsByName(t *testing.T) {
+	first := mustInlineSkill(skills.Frontmatter{Name: "dup-inline", Description: "First"}, "First instructions.", nil, nil)
+	second := mustInlineSkill(skills.Frontmatter{Name: "dup-inline", Description: "Second"}, "Second instructions.", nil, nil)
+	provider := skills.NewContextProvider(skills.ProviderOptions{Skills: []*skills.Skill{first, second}})
+
+	_, tools := captureProviderContext(t, provider)
+	loadTool := findTool(t, tools, "load_skill")
+	content, err := loadTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"dup-inline"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(content.(string), "First instructions.") {
+		t.Fatalf("expected first duplicate to survive, got %q", content)
+	}
+}
+
+func TestProvider_DefaultCaching_LoadsSourceOnce(t *testing.T) {
+	skill := mustInlineSkill(
+		skills.Frontmatter{Name: "cached-skill", Description: "Cached skill"},
+		"Instructions.",
+		nil,
+		nil,
+	)
+	source := &countingSource{skills: []*skills.Skill{skill}}
+	provider := skills.NewContextProvider(skills.ProviderOptions{Sources: []skills.Source{source}})
+
+	_, _ = captureProviderContext(t, provider)
+	_, _ = captureProviderContext(t, provider)
+
+	if source.count != 1 {
+		t.Fatalf("expected source to be loaded once, got %d", source.count)
+	}
+}
+
+func TestProvider_DisableCaching_LoadsSourceEachTime(t *testing.T) {
+	skill := mustInlineSkill(
+		skills.Frontmatter{Name: "fresh-skill", Description: "Fresh skill"},
+		"Instructions.",
+		nil,
+		nil,
+	)
+	source := &countingSource{skills: []*skills.Skill{skill}}
+	provider := skills.NewContextProvider(skills.ProviderOptions{Sources: []skills.Source{source}, DisableCaching: true})
+
+	_, _ = captureProviderContext(t, provider)
+	_, _ = captureProviderContext(t, provider)
+
+	if source.count < 2 {
+		t.Fatalf("expected source to be loaded at least twice, got %d", source.count)
+	}
+}
+
+func TestProvider_WithScripts_ExposesRunSkillScriptTool(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "script-skill", "Script skill", "Body.")
+	createRelativeFile(t, filepath.Join(root, "script-skill"), "scripts/run.py", "print('ok')")
+
+	runnerCalled := false
+	provider := newProviderWithConfig(t, &fileProviderConfig{
+		ScriptRunner: func(_ context.Context, skill *skills.Skill, script *skills.Script, arguments map[string]any) (any, error) {
+			runnerCalled = true
+			if skill.Frontmatter.Name != "script-skill" {
+				t.Fatalf("expected script-skill, got %q", skill.Frontmatter.Name)
+			}
+			if script.Name != "scripts/run.py" {
+				t.Fatalf("expected scripts/run.py, got %q", script.Name)
+			}
+			return map[string]any{"status": "ok", "value": arguments["value"]}, nil
+		},
+	}, root)
+
+	_, tools := captureProviderContext(t, provider)
+	runTool := findTool(t, tools, "run_skill_script")
+	result, err := runTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"script-skill","scriptName":"scripts/run.py","arguments":{"value":42}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !runnerCalled {
+		t.Fatal("expected script runner to be called")
+	}
+	if result != `{"status":"ok","value":42}` {
+		t.Fatalf("expected JSON stringified script result, got %q", result)
+	}
+}
+
+func TestProvider_RunSkillScript_RequiresExactName(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "script-skill", "Script skill", "Body.")
+	createRelativeFile(t, filepath.Join(root, "script-skill"), "scripts/run.py", "print('ok')")
+
+	provider := newProviderWithConfig(t, &fileProviderConfig{
+		ScriptRunner: func(_ context.Context, _ *skills.Skill, _ *skills.Script, _ map[string]any) (any, error) {
+			t.Fatal("did not expect script runner to be called")
+			return nil, nil
+		},
+	}, root)
+
+	_, tools := captureProviderContext(t, provider)
+	runTool := findTool(t, tools, "run_skill_script")
+	result, err := runTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"script-skill","scriptName":"./scripts/run.py"}`)
+	if err != nil {
+		t.Fatalf("expected no tool error, got %v", err)
+	}
+	resultStr, ok := result.(string)
+	if !ok {
+		t.Fatalf("expected string result, got %T", result)
+	}
+	if resultStr != "Error: Script './scripts/run.py' not found in skill 'script-skill'." {
+		t.Fatalf("expected exact-name error, got %q", resultStr)
+	}
+}
+
+func TestProvider_ScriptApproval_MarksToolAsApprovalRequired(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "approval-skill", "Approval skill", "Body.")
+	createRelativeFile(t, filepath.Join(root, "approval-skill"), "scripts/run.py", "print('ok')")
+
+	provider := newProviderWithConfig(t, &fileProviderConfig{
+		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, map[string]any) (any, error) {
+			return "ok", nil
+		},
+		ScriptApproval: true,
+	}, root)
+
+	_, tools := captureProviderContext(t, provider)
+	runTool := findTool(t, tools, "run_skill_script")
+	if _, ok := runTool.(tool.ApprovalRequiredTool); !ok {
+		t.Fatal("expected run_skill_script to require approval")
+	}
+}
+
+func TestProvider_FromFileSourceWithRunner_UsesScriptRunner(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "runner-skill", "Runner skill", "Body.")
+	createRelativeFile(t, filepath.Join(root, "runner-skill"), "scripts/run.py", "print('ok')")
+
+	runnerCalled := false
+	provider := providerFromFileSource(
+		fsskills.NewSourceOptions(fsskills.SourceOptions{
+			ScriptRunner: func(_ context.Context, _ *skills.Skill, _ *skills.Script, _ map[string]any) (any, error) {
+				runnerCalled = true
+				return "executed", nil
+			},
+		}, os.DirFS(root)),
+		nil,
+	)
+
+	_, tools := captureProviderContext(t, provider)
+	runTool := findTool(t, tools, "run_skill_script")
+	result, err := runTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"runner-skill","scriptName":"scripts/run.py"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "executed" {
+		t.Fatalf("expected executed, got %q", result)
+	}
+	if !runnerCalled {
+		t.Fatal("expected file-source script runner to be used")
+	}
+}
+
+func TestNewProvider_ProvidesInlineSkills(t *testing.T) {
+	skill := mustInlineSkill(
+		skills.Frontmatter{Name: "inline-skill", Description: "Inline skill"},
+		"Inline instructions.",
+		nil,
+		nil,
+	)
+	provider := skills.NewContextProvider(skills.ProviderOptions{Skills: []*skills.Skill{skill}})
+	instructions, tools := captureProviderContext(t, provider)
+	if !strings.Contains(instructions, "inline-skill") {
+		t.Fatal("expected inline skill to be advertised")
+	}
+	if len(tools) != 1 || tools[0].Name() != "load_skill" {
+		t.Fatal("expected only load_skill tool for inline skills without resources or scripts")
+	}
+}
+
+func TestProvider_WithEmptySource_ReturnsEmptyProvider(t *testing.T) {
+	provider := skills.NewContextProvider(skills.ProviderOptions{})
+	ctx := context.Background()
+	out, err := provider.BeforeRun(memory.BeforeRunContext{Context: ctx, Session: memory.NewSession("")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Messages) != 0 || len(out.Tools) != 0 {
+		t.Fatal("expected empty provider context when no sources are configured")
+	}
+}
+
+func TestProvider_AggregatesMultipleSources(t *testing.T) {
+	fileRoot := t.TempDir()
+	createSkillDir(t, fileRoot, "file-skill", "File skill", "Body.")
+
+	inline := mustInlineSkill(skills.Frontmatter{Name: "inline-skill", Description: "Inline"}, "Inline body.", nil, nil)
+	provider := skills.NewContextProvider(skills.ProviderOptions{
+		Skills: []*skills.Skill{inline},
+		Sources: []skills.Source{
+			fsskills.NewSourceOptions(fsskills.SourceOptions{
+				ScriptDirectories: []string{"unused-scripts"},
+				ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, map[string]any) (any, error) {
+					return "ok", nil
+				},
+			}, os.DirFS(fileRoot)),
+		},
+	})
+
+	instructions, _ := captureProviderContext(t, provider)
+	if !strings.Contains(instructions, "inline-skill") {
+		t.Fatal("expected inline-skill in aggregated instructions")
+	}
+	if !strings.Contains(instructions, "file-skill") {
+		t.Fatal("expected file-skill in aggregated instructions")
+	}
+}
+
+func TestNewProvider_DisableSourceDeduplication_PreservesDuplicateSkillsInInstructions(t *testing.T) {
+	first := mustInlineSkill(skills.Frontmatter{Name: "dup-inline", Description: "First"}, "First instructions.", nil, nil)
+	second := mustInlineSkill(skills.Frontmatter{Name: "dup-inline", Description: "Second"}, "Second instructions.", nil, nil)
+
+	provider := skills.NewContextProvider(skills.ProviderOptions{
+		Skills:                     []*skills.Skill{first, second},
+		DisableSourceDeduplication: true,
+	})
+
+	instructions, _ := captureProviderContext(t, provider)
+	if strings.Count(instructions, "<name>dup-inline</name>") != 2 {
+		t.Fatalf("expected duplicate skills to remain in instructions, got %q", instructions)
+	}
+}

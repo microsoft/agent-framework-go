@@ -12,9 +12,23 @@ import (
 
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/memory/skills"
+	"github.com/microsoft/agent-framework-go/memory/skills/fsskills"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 )
+
+type fileProviderConfig struct {
+	SourceID                   string
+	SkillsInstructionPrompt    string
+	ResourceDirectories        []string
+	ScriptDirectories          []string
+	AllowedResourceExtensions  []string
+	AllowedScriptExtensions    []string
+	ScriptRunner               skills.ScriptRunner
+	ScriptApproval             bool
+	DisableCaching             bool
+	DisableSourceDeduplication bool
+}
 
 func createSkillDir(t *testing.T, root, name, description, body string) {
 	t.Helper()
@@ -52,13 +66,46 @@ func createSkillDirWithResource(t *testing.T, root, name, description, body, res
 	}
 }
 
+func createRelativeFile(t *testing.T, root, relativePath, content string) {
+	t.Helper()
+	fullPath := filepath.Join(root, filepath.FromSlash(relativePath))
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func newProvider(t *testing.T, roots ...string) *memory.ContextProvider {
 	t.Helper()
+	return newProviderWithConfig(t, nil, roots...)
+}
+
+func newProviderWithConfig(t *testing.T, cfg *fileProviderConfig, roots ...string) *memory.ContextProvider {
+	t.Helper()
+	if cfg == nil {
+		cfg = &fileProviderConfig{}
+	}
 	fsList := make([]fs.FS, len(roots))
 	for i, r := range roots {
 		fsList[i] = os.DirFS(r)
 	}
-	return skills.New(nil, fsList...)
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
+		ResourceDirectories:       cfg.ResourceDirectories,
+		ScriptDirectories:         cfg.ScriptDirectories,
+		AllowedResourceExtensions: cfg.AllowedResourceExtensions,
+		AllowedScriptExtensions:   cfg.AllowedScriptExtensions,
+		ScriptRunner:              cfg.ScriptRunner,
+	}, fsList...)
+	return skills.NewContextProvider(skills.ProviderOptions{
+		SourceID:                   cfg.SourceID,
+		Sources:                    []skills.Source{source},
+		SkillsInstructionPrompt:    cfg.SkillsInstructionPrompt,
+		ScriptApproval:             cfg.ScriptApproval,
+		DisableCaching:             cfg.DisableCaching,
+		DisableSourceDeduplication: cfg.DisableSourceDeduplication,
+	})
 }
 
 func captureProviderContext(t *testing.T, provider *memory.ContextProvider) (string, []tool.Tool) {
@@ -96,6 +143,15 @@ func findTool(t *testing.T, tools []tool.Tool, name string) tool.FuncTool {
 	}
 	t.Fatalf("tool %q not found", name)
 	return nil
+}
+
+func hasTool(tools []tool.Tool, name string) bool {
+	for _, tl := range tools {
+		if tl.Name() == name {
+			return true
+		}
+	}
+	return false
 }
 
 func hasSkill(t *testing.T, provider *memory.ContextProvider, name string) bool {
@@ -245,17 +301,8 @@ func TestDiscovery_ResourceOutsideConfiguredDirectory_NotDiscoverable(t *testing
 		t.Fatal("expected skill to be discovered")
 	}
 	_, tools := captureProviderContext(t, p)
-	readTool := findTool(t, tools, "read_skill_resource")
-	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"traversal-skill","resourceName":"../secret.txt"}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resultStr, ok := result.(string)
-	if !ok {
-		t.Fatalf("expected string result, got %T", result)
-	}
-	if !strings.HasPrefix(resultStr, "Error:") {
-		t.Fatal("expected error when reading resource outside configured directories")
+	if hasTool(tools, "read_skill_resource") {
+		t.Fatal("expected no read_skill_resource tool when no resources were discovered")
 	}
 }
 
@@ -265,8 +312,8 @@ func TestProvider_WithSkills_ReturnsInstructionsAndTools(t *testing.T) {
 
 	p := newProvider(t, root)
 	_, tools := captureProviderContext(t, p)
-	if len(tools) != 2 {
-		t.Fatalf("expected 2 tools, got %d", len(tools))
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
 	}
 	toolNames := make(map[string]bool)
 	for _, tl := range tools {
@@ -275,8 +322,8 @@ func TestProvider_WithSkills_ReturnsInstructionsAndTools(t *testing.T) {
 	if !toolNames["load_skill"] {
 		t.Error("expected load_skill tool")
 	}
-	if !toolNames["read_skill_resource"] {
-		t.Error("expected read_skill_resource tool")
+	if toolNames["read_skill_resource"] {
+		t.Error("did not expect read_skill_resource tool without discovered resources")
 	}
 }
 
@@ -284,11 +331,25 @@ func TestProvider_CustomPromptTemplate(t *testing.T) {
 	root := t.TempDir()
 	createSkillDir(t, root, "custom-prompt-skill", "Custom prompt", "Body.")
 
-	p := skills.New(&skills.Config{SkillsInstructionPrompt: "Custom template: %s"}, os.DirFS(root))
+	p := newProviderWithConfig(t, &fileProviderConfig{SkillsInstructionPrompt: "Custom template:\n{skills}\n{resource_instructions}\n{script_instructions}"}, root)
 
 	instructions, _ := captureProviderContext(t, p)
 	if !strings.HasPrefix(instructions, "Custom template:") {
 		t.Errorf("expected custom template prefix, got %q", instructions)
+	}
+}
+
+func TestProvider_DefaultPrompt_UsesDotNetResourceGuidance(t *testing.T) {
+	root := t.TempDir()
+	createSkillDirWithResource(t, root, "resource-guidance", "Resource guidance", "See [guide](references/FAQ.md).", "references/FAQ.md", "Guidance")
+
+	p := newProvider(t, root)
+	instructions, _ := captureProviderContext(t, p)
+	if !strings.Contains(instructions, "- Use `read_skill_resource` to read any referenced resources, using the name exactly as listed") {
+		t.Fatalf("expected exact-name guidance, got %q", instructions)
+	}
+	if !strings.Contains(instructions, "(e.g. `\"style-guide\"` not `\"style-guide.md\"`, `\"references/FAQ.md\"` not `\"FAQ.md\"`).") {
+		t.Fatalf("expected .NET-aligned resource examples, got %q", instructions)
 	}
 }
 
@@ -353,8 +414,9 @@ func TestLoadSkill_ReturnsBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result != "Full instructions here." {
-		t.Errorf("expected body, got %q", result)
+	expected := "---\nname: load-test\ndescription: A skill\n---\nFull instructions here."
+	if result != expected {
+		t.Errorf("expected full SKILL.md content, got %q", result)
 	}
 }
 
@@ -379,6 +441,27 @@ func TestLoadSkill_NotFound(t *testing.T) {
 	}
 }
 
+func TestLoadSkill_RequiresExactName(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "exact-skill", "A skill", "Body.")
+
+	p := newProvider(t, root)
+	_, tools := captureProviderContext(t, p)
+	loadTool := findTool(t, tools, "load_skill")
+
+	result, err := loadTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"Exact-Skill"}`)
+	if err != nil {
+		t.Fatalf("expected no tool error, got %v", err)
+	}
+	resultStr, ok := result.(string)
+	if !ok {
+		t.Fatalf("expected string result, got %T", result)
+	}
+	if resultStr != "Error: Skill 'Exact-Skill' not found." {
+		t.Fatalf("expected exact-name error, got %q", resultStr)
+	}
+}
+
 func TestReadResource_ReturnsContent(t *testing.T) {
 	root := t.TempDir()
 	createSkillDirWithResource(t, root, "res-test", "A skill",
@@ -397,7 +480,7 @@ func TestReadResource_ReturnsContent(t *testing.T) {
 	}
 }
 
-func TestReadResource_DotSlashPrefix(t *testing.T) {
+func TestReadResource_RequiresExactName(t *testing.T) {
 	root := t.TempDir()
 	createSkillDirWithResource(t, root, "dotslash-read", "A skill",
 		"See [doc](references/doc.md).", "references/doc.md", "Document content.")
@@ -408,16 +491,20 @@ func TestReadResource_DotSlashPrefix(t *testing.T) {
 
 	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"dotslash-read","resourceName":"./references/doc.md"}`)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("expected no tool error, got %v", err)
 	}
-	if result != "Document content." {
-		t.Errorf("expected 'Document content.', got %q", result)
+	resultStr, ok := result.(string)
+	if !ok {
+		t.Fatalf("expected string result, got %T", result)
+	}
+	if resultStr != "Error: Resource './references/doc.md' not found in skill 'dotslash-read'." {
+		t.Fatalf("expected exact-name error, got %q", resultStr)
 	}
 }
 
 func TestReadResource_UnregisteredResource(t *testing.T) {
 	root := t.TempDir()
-	createSkillDir(t, root, "simple-skill", "A skill", "No resources.")
+	createSkillDirWithResource(t, root, "simple-skill", "A skill", "See [doc](references/doc.md).", "references/doc.md", "Document content.")
 
 	p := newProvider(t, root)
 	_, tools := captureProviderContext(t, p)
@@ -434,15 +521,6 @@ func TestReadResource_UnregisteredResource(t *testing.T) {
 	if !strings.HasPrefix(resultStr, "Error:") {
 		t.Fatalf("expected error text result, got %q", resultStr)
 	}
-}
-
-func newProviderWithConfig(t *testing.T, cfg *skills.Config, roots ...string) *memory.ContextProvider {
-	t.Helper()
-	fsList := make([]fs.FS, len(roots))
-	for i, r := range roots {
-		fsList[i] = os.DirFS(r)
-	}
-	return skills.New(cfg, fsList...)
 }
 
 func TestDiscovery_ResourcesInDefaultDirectories(t *testing.T) {
@@ -506,18 +584,8 @@ func TestDiscovery_ResourceInNonSpecDirectory_NotDiscoveredByDefault(t *testing.
 		t.Fatal("expected skill to be discovered")
 	}
 	_, tools := captureProviderContext(t, p)
-	readTool := findTool(t, tools, "read_skill_resource")
-
-	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"non-spec-skill","resourceName":"docs/readme.md"}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resultStr, ok := result.(string)
-	if !ok {
-		t.Fatalf("expected string result, got %T", result)
-	}
-	if !strings.HasPrefix(resultStr, "Error:") {
-		t.Fatal("expected error for resource in non-default directory")
+	if hasTool(tools, "read_skill_resource") {
+		t.Fatal("expected no read_skill_resource tool when only non-default resource directories exist")
 	}
 }
 
@@ -532,18 +600,8 @@ func TestDiscovery_ResourceInSkillRoot_NotDiscoveredByDefault(t *testing.T) {
 
 	p := newProvider(t, root)
 	_, tools := captureProviderContext(t, p)
-	readTool := findTool(t, tools, "read_skill_resource")
-
-	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"root-resource-skill","resourceName":"guide.md"}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resultStr, ok := result.(string)
-	if !ok {
-		t.Fatalf("expected string result, got %T", result)
-	}
-	if !strings.HasPrefix(resultStr, "Error:") {
-		t.Fatal("expected error for root-level resource when '.' not configured")
+	if hasTool(tools, "read_skill_resource") {
+		t.Fatal("expected no read_skill_resource tool when only root-level resources exist and '.' is not configured")
 	}
 }
 
@@ -559,7 +617,7 @@ func TestDiscovery_ResourceInSkillRoot_DiscoveredWhenRootDirectoryConfigured(t *
 		t.Fatal(err)
 	}
 
-	p := newProviderWithConfig(t, &skills.Config{
+	p := newProviderWithConfig(t, &fileProviderConfig{
 		ResourceDirectories: []string{"references", "assets", "."},
 	}, root)
 
@@ -588,23 +646,13 @@ func TestDiscovery_SkillMdNotIncludedAsResource(t *testing.T) {
 	createSkillDir(t, root, "selfref-skill", "Self ref test", "Body.")
 
 	// Opt into root scanning — SKILL.md should still be excluded
-	p := newProviderWithConfig(t, &skills.Config{
+	p := newProviderWithConfig(t, &fileProviderConfig{
 		ResourceDirectories: []string{"."},
 	}, root)
 
 	_, tools := captureProviderContext(t, p)
-	readTool := findTool(t, tools, "read_skill_resource")
-
-	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"selfref-skill","resourceName":"SKILL.md"}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resultStr, ok := result.(string)
-	if !ok {
-		t.Fatalf("expected string result, got %T", result)
-	}
-	if !strings.HasPrefix(resultStr, "Error:") {
-		t.Fatal("expected error — SKILL.md should not be a discoverable resource")
+	if hasTool(tools, "read_skill_resource") {
+		t.Fatal("expected no read_skill_resource tool when the only root-level file is SKILL.md")
 	}
 }
 
@@ -629,7 +677,7 @@ func TestDiscovery_CustomResourceDirectories_ReplacesDefaults(t *testing.T) {
 	}
 
 	// Set custom directories — only "docs" should be scanned
-	p := newProviderWithConfig(t, &skills.Config{
+	p := newProviderWithConfig(t, &fileProviderConfig{
 		ResourceDirectories: []string{"docs"},
 	}, root)
 
@@ -735,7 +783,7 @@ func TestDiscovery_NestedResourceFiles_NotDiscovered(t *testing.T) {
 		t.Errorf("expected top content, got %q", result)
 	}
 
-	// Nested file should NOT be found (non-recursive)
+	// Nested files are not discovered; only direct files in the configured directory are scanned.
 	result, err = readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"nested-res-skill","resourceName":"references/level1/level2/deep.md"}`)
 	if err != nil {
 		t.Fatal(err)
@@ -745,7 +793,7 @@ func TestDiscovery_NestedResourceFiles_NotDiscovered(t *testing.T) {
 		t.Fatalf("expected string result, got %T", result)
 	}
 	if !strings.HasPrefix(resultStr, "Error:") {
-		t.Fatal("expected error for nested file — scanning is non-recursive")
+		t.Fatal("expected error for nested file not directly inside the configured resource directory")
 	}
 }
 
@@ -762,7 +810,7 @@ func TestDiscovery_ResourceDirectoriesWithNestedPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p := newProviderWithConfig(t, &skills.Config{
+	p := newProviderWithConfig(t, &fileProviderConfig{
 		ResourceDirectories: []string{"f1/f2/f3"},
 	}, root)
 
@@ -783,7 +831,7 @@ func TestConfig_InvalidDirectoryName_Skipped(t *testing.T) {
 	for _, bad := range tests {
 		t.Run(bad, func(t *testing.T) {
 			// Invalid directories are skipped with a warning, not a panic
-			p := newProviderWithConfig(t, &skills.Config{
+			p := newProviderWithConfig(t, &fileProviderConfig{
 				ResourceDirectories: []string{bad},
 			}, t.TempDir())
 			if p == nil {
@@ -808,7 +856,7 @@ func TestConfig_EmptyDirectoryName_Panics(t *testing.T) {
 					t.Fatal("expected panic for empty/whitespace directory name")
 				}
 			}()
-			newProviderWithConfig(t, &skills.Config{
+			newProviderWithConfig(t, &fileProviderConfig{
 				ResourceDirectories: []string{tt.dir},
 			}, t.TempDir())
 		})
@@ -819,7 +867,7 @@ func TestConfig_ValidDirectoryNames(t *testing.T) {
 	tests := []string{"scripts", "my-scripts", "sub/directory", ".", "./scripts", "./scripts/f1", "my..scripts"}
 	for _, valid := range tests {
 		t.Run(valid, func(t *testing.T) {
-			p := newProviderWithConfig(t, &skills.Config{
+			p := newProviderWithConfig(t, &fileProviderConfig{
 				ResourceDirectories: []string{valid},
 			}, t.TempDir())
 			if p == nil {
@@ -843,7 +891,7 @@ func TestDiscovery_DuplicateDirectoriesAfterNormalization_NoDuplicateResources(t
 	}
 
 	// "references" and "./references" should be deduplicated
-	p := newProviderWithConfig(t, &skills.Config{
+	p := newProviderWithConfig(t, &fileProviderConfig{
 		ResourceDirectories: []string{"references", "./references"},
 	}, root)
 
@@ -875,7 +923,7 @@ func TestDiscovery_CustomResourceExtensions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p := newProviderWithConfig(t, &skills.Config{
+	p := newProviderWithConfig(t, &fileProviderConfig{
 		AllowedResourceExtensions: []string{".custom"},
 	}, root)
 
