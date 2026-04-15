@@ -9,7 +9,9 @@ on:
       types: [opened, synchronize, reopened]
       paths-ignore:
          - '.github/**'
-         - '*'
+         - 'README*'
+         - 'LICENSE*'
+         - '*.md'
    workflow_dispatch:
       inputs:
          pr_number:
@@ -18,8 +20,9 @@ on:
             type: string
 permissions:
    contents: read
-   pull-requests: read
-   issues: read
+   pull-requests: write
+   issues: write
+   copilot-requests: write
 tools:
    github:
       toolsets: [default]
