@@ -372,8 +372,12 @@ func TestProvider_WithScripts_ExposesRunSkillScriptTool(t *testing.T) {
 	if !runnerCalled {
 		t.Fatal("expected script runner to be called")
 	}
-	if result != `{"status":"ok","value":42}` {
-		t.Fatalf("expected JSON stringified script result, got %q", result)
+	resultMap, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected structured script result, got %T", result)
+	}
+	if resultMap["status"] != "ok" || resultMap["value"] != float64(42) {
+		t.Fatalf("expected structured script result, got %#v", resultMap)
 	}
 }
 
@@ -446,7 +450,7 @@ func TestProvider_FromFileSourceWithRunner_UsesScriptRunner(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result != "executed" {
-		t.Fatalf("expected executed, got %q", result)
+		t.Fatalf("expected executed, got %#v", result)
 	}
 	if !runnerCalled {
 		t.Fatal("expected file-source script runner to be used")

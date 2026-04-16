@@ -55,10 +55,16 @@ func (t *Tool) Description() string {
 }
 
 func (t *Tool) Schema() any {
+	if t.Func.inputFormat == nil {
+		return nil
+	}
 	return t.Func.inputFormat.Schema()
 }
 
 func (t *Tool) ReturnSchema() any {
+	if t.Func.outputFormat == nil {
+		return nil
+	}
 	return t.Func.outputFormat.Schema()
 }
 
@@ -73,17 +79,25 @@ type inputWrapper[T any] struct {
 	Arg0 T `json:"arg0"`
 }
 
-func formatFor[T any](needObject bool) (format *jsonformat.Format, wrapped bool, err error) {
+func inputFormatFor[T any]() (format *jsonformat.Format, wrapped bool, err error) {
 	typ := reflect.TypeFor[T]()
 	if typ == reflect.TypeFor[any]() {
-		return jsonformat.Nothing(), false, nil
+		return nil, false, fmt.Errorf("input type any is not supported by HandlerFor; use Handler for dynamic inputs")
 	}
-	if needObject && typ.Kind() != reflect.Struct {
+	if typ.Kind() != reflect.Struct {
 		typ = reflect.TypeFor[inputWrapper[T]]()
 		wrapped = true
 	}
 	format, err = jsonformat.ForType(typ)
 	return format, wrapped, err
+}
+
+func outputFormatFor[T any]() (*jsonformat.Format, error) {
+	typ := reflect.TypeFor[T]()
+	if typ == reflect.TypeFor[any]() {
+		return jsonformat.Any(), nil
+	}
+	return jsonformat.ForType(typ)
 }
 
 func MustNew[In, Out any](fnp *Func, h HandlerFor[In, Out]) *Tool {
@@ -99,15 +113,15 @@ func New[In, Out any](fnp *Func, h HandlerFor[In, Out]) (*Tool, error) {
 		Func: *fnp,
 	}
 	var err error
-	t.Func.inputFormat, t.Func.inputWrapped, err = formatFor[In](true)
+	t.Func.inputFormat, t.Func.inputWrapped, err = inputFormatFor[In]()
 	if err != nil {
 		return nil, fmt.Errorf("input schema: %w", err)
 	}
-	t.Func.outputFormat, _, err = formatFor[Out](false)
+	t.Func.outputFormat, err = outputFormatFor[Out]()
 	if err != nil {
 		return nil, fmt.Errorf("output schema: %w", err)
 	}
-	outResolved, err := t.Func.outputFormat.ResolvedSchema()
+	resolved, err := t.Func.outputFormat.ResolvedSchema()
 	if err != nil {
 		return nil, fmt.Errorf("resolving output schema: %w", err)
 	}
@@ -135,14 +149,14 @@ func New[In, Out any](fnp *Func, h HandlerFor[In, Out]) (*Tool, error) {
 		// Also, validation of structs directly doesn't work - we need to marshal to JSON first.
 		if reflect.TypeFor[Out]() != reflect.TypeFor[struct{}]() {
 			// ApplyDefaults and Validate work on the unmarshaled value
-			if err := outResolved.ApplyDefaults(&out); err != nil {
+			if err := resolved.ApplyDefaults(&out); err != nil {
 				return nil, fmt.Errorf("applying output schema defaults: %w", err)
 			}
 			// Marshal to JSON and unmarshal to map for validation (structs can't be validated directly)
 			// Skip validation for types that contain structs as jsonschema-go can't validate them directly
 			// The schema is still used for documentation purposes
 			if !containsStruct(reflect.TypeOf(out)) {
-				if err := outResolved.Validate(&out); err != nil {
+				if err := resolved.Validate(&out); err != nil {
 					return nil, fmt.Errorf("validating output: %w", err)
 				}
 			}
@@ -163,7 +177,7 @@ func containsStruct(t reflect.Type) bool {
 	switch t.Kind() {
 	case reflect.Struct:
 		return true
-	case reflect.Ptr:
+	case reflect.Pointer:
 		return containsStruct(t.Elem())
 	case reflect.Slice, reflect.Array:
 		return containsStruct(t.Elem())

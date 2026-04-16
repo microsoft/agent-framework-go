@@ -476,7 +476,7 @@ func TestReadResource_ReturnsContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result != "Resource content here." {
-		t.Errorf("expected resource content, got %q", result)
+		t.Errorf("expected resource content, got %#v", result)
 	}
 }
 
@@ -553,7 +553,7 @@ func TestDiscovery_ResourcesInDefaultDirectories(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result != "FAQ content" {
-		t.Errorf("expected FAQ content, got %q", result)
+		t.Errorf("expected FAQ content, got %#v", result)
 	}
 
 	result, err = readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"res-skill","resourceName":"assets/data.json"}`)
@@ -561,7 +561,7 @@ func TestDiscovery_ResourcesInDefaultDirectories(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result != "{}" {
-		t.Errorf("expected {}, got %q", result)
+		t.Errorf("expected {}, got %#v", result)
 	}
 }
 
@@ -629,7 +629,7 @@ func TestDiscovery_ResourceInSkillRoot_DiscoveredWhenRootDirectoryConfigured(t *
 		t.Fatal(err)
 	}
 	if result != "guide content" {
-		t.Errorf("expected guide content, got %q", result)
+		t.Errorf("expected guide content, got %#v", result)
 	}
 
 	result, err = readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"root-opt-in-skill","resourceName":"config.json"}`)
@@ -637,7 +637,7 @@ func TestDiscovery_ResourceInSkillRoot_DiscoveredWhenRootDirectoryConfigured(t *
 		t.Fatal(err)
 	}
 	if result != "{}" {
-		t.Errorf("expected {}, got %q", result)
+		t.Errorf("expected {}, got %#v", result)
 	}
 }
 
@@ -690,7 +690,7 @@ func TestDiscovery_CustomResourceDirectories_ReplacesDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result != "docs content" {
-		t.Errorf("expected docs content, got %q", result)
+		t.Errorf("expected docs content, got %#v", result)
 	}
 
 	// references/ref.md should NOT be readable (defaults replaced)
@@ -733,7 +733,7 @@ func TestDiscovery_ResourceExtensionFiltering(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result != "{}" {
-		t.Errorf("expected {}, got %q", result)
+		t.Errorf("expected {}, got %#v", result)
 	}
 
 	// .png is NOT allowed by default
@@ -780,7 +780,7 @@ func TestDiscovery_NestedResourceFiles_NotDiscovered(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result != "top content" {
-		t.Errorf("expected top content, got %q", result)
+		t.Errorf("expected top content, got %#v", result)
 	}
 
 	// Nested files are not discovered; only direct files in the configured directory are scanned.
@@ -822,7 +822,7 @@ func TestDiscovery_ResourceDirectoriesWithNestedPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result != "{}" {
-		t.Errorf("expected {}, got %q", result)
+		t.Errorf("expected {}, got %#v", result)
 	}
 }
 
@@ -903,7 +903,7 @@ func TestDiscovery_DuplicateDirectoriesAfterNormalization_NoDuplicateResources(t
 		t.Fatal(err)
 	}
 	if result != "FAQ content" {
-		t.Errorf("expected FAQ content, got %q", result)
+		t.Errorf("expected FAQ content, got %#v", result)
 	}
 }
 
@@ -936,7 +936,7 @@ func TestDiscovery_CustomResourceExtensions(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result != "custom data" {
-		t.Errorf("expected custom data, got %q", result)
+		t.Errorf("expected custom data, got %#v", result)
 	}
 
 	// .json is NOT in custom extensions

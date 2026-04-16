@@ -5,7 +5,6 @@ package skills
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"log/slog"
@@ -329,7 +328,7 @@ func (p *providerState) buildTools(skills providedSkillSet, hasResources, hasScr
 			func(callCtx tool.Context, in struct {
 				SkillName    string `json:"skillName" jsonschema:"The name of the skill"`
 				ResourceName string `json:"resourceName" jsonschema:"The exact resource name to read"`
-			}) (string, error) {
+			}) (any, error) {
 				return p.readSkillResource(callCtx.Context, skills, in.SkillName, in.ResourceName), nil
 			},
 		))
@@ -348,7 +347,7 @@ func (p *providerState) buildTools(skills providedSkillSet, hasResources, hasScr
 			SkillName  string         `json:"skillName" jsonschema:"The name of the skill"`
 			ScriptName string         `json:"scriptName" jsonschema:"The exact script name to run"`
 			Arguments  map[string]any `json:"arguments,omitempty" jsonschema:"Optional arguments for the script"`
-		}) (string, error) {
+		}) (any, error) {
 			return p.runSkillScript(callCtx.Context, skills, in.SkillName, in.ScriptName, in.Arguments), nil
 		},
 	)
@@ -371,7 +370,7 @@ func (p *providerState) loadSkill(skills providedSkillSet, skillName string) str
 	return resolved.skill.Content
 }
 
-func (p *providerState) readSkillResource(ctx context.Context, skills providedSkillSet, skillName, resourceName string) string {
+func (p *providerState) readSkillResource(ctx context.Context, skills providedSkillSet, skillName, resourceName string) any {
 	if strings.TrimSpace(skillName) == "" {
 		return "Error: Skill name cannot be empty."
 	}
@@ -395,10 +394,10 @@ func (p *providerState) readSkillResource(ctx context.Context, skills providedSk
 		p.logger.Error("Failed to read resource from skill", "resourceName", resourceName, "skillName", skillName, "error", err)
 		return fmt.Sprintf("Error: Failed to read resource '%s' from skill '%s'.", resourceName, skillName)
 	}
-	return stringifyToolResult(content)
+	return content
 }
 
-func (p *providerState) runSkillScript(ctx context.Context, skills providedSkillSet, skillName, scriptName string, arguments map[string]any) string {
+func (p *providerState) runSkillScript(ctx context.Context, skills providedSkillSet, skillName, scriptName string, arguments map[string]any) any {
 	if strings.TrimSpace(skillName) == "" {
 		return "Error: Skill name cannot be empty."
 	}
@@ -422,7 +421,7 @@ func (p *providerState) runSkillScript(ctx context.Context, skills providedSkill
 		p.logger.Error("Failed to execute script from skill", "scriptName", scriptName, "skillName", skillName, "error", err)
 		return fmt.Sprintf("Error: Failed to execute script '%s' from skill '%s'.", scriptName, skillName)
 	}
-	return stringifyToolResult(result)
+	return result
 }
 
 func buildProviderSkillsInstructionPrompt(template string, skills []*Skill, includeResources, includeScripts bool) string {
@@ -480,21 +479,4 @@ func xmlEscape(s string) string {
 		return s
 	}
 	return sb.String()
-}
-
-func stringifyToolResult(result any) string {
-	switch value := result.(type) {
-	case nil:
-		return "(no output)"
-	case string:
-		return value
-	case []byte:
-		return string(value)
-	default:
-		data, err := json.Marshal(value)
-		if err != nil {
-			return fmt.Sprint(value)
-		}
-		return string(data)
-	}
 }
