@@ -98,7 +98,7 @@ func newProviderWithConfig(t *testing.T, cfg *fileProviderConfig, roots ...strin
 		AllowedScriptExtensions:   cfg.AllowedScriptExtensions,
 		ScriptRunner:              cfg.ScriptRunner,
 	}, fsList...)
-	return skills.NewContextProvider(skills.ProviderOptions{
+	return skills.NewContextProvider(skills.ContextProviderOptions{
 		SourceID:                   cfg.SourceID,
 		Sources:                    []skills.Source{source},
 		SkillsInstructionPrompt:    cfg.SkillsInstructionPrompt,

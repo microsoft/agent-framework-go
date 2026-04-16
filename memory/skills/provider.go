@@ -39,8 +39,10 @@ When a task aligns with a skill's domain, follow these steps in exact order:
 {script_instructions}
 Only load what is needed, when it is needed.`
 
-// ProviderOptions configures a skills-backed memory.ContextProvider.
-type ProviderOptions struct {
+// ContextProviderOptions configures a skills-backed memory.ContextProvider.
+type ContextProviderOptions struct {
+	// SourceID is the identifier for the provider's source in the resulting context.
+	// Defaults to "skills" if not provided.
 	SourceID string
 
 	// Skills provides in-memory skills to register with the provider.
@@ -50,6 +52,7 @@ type ProviderOptions struct {
 	Sources []Source
 
 	// SkillsInstructionPrompt is a custom system prompt template.
+	// When empty, a default template is used.
 	//
 	// The template must contain {skills}, {resource_instructions}, and
 	// {script_instructions}.
@@ -81,7 +84,7 @@ type providedSkillSet struct {
 
 type providerState struct {
 	sources []Source
-	options ProviderOptions
+	options ContextProviderOptions
 	logger  *slog.Logger
 
 	mu      sync.Mutex
@@ -90,7 +93,7 @@ type providerState struct {
 }
 
 // NewContextProvider creates a skills context provider from the configured in-memory skills and sources.
-func NewContextProvider(opts ProviderOptions) *memory.ContextProvider {
+func NewContextProvider(opts ContextProviderOptions) *memory.ContextProvider {
 	if opts.Logger == nil {
 		opts.Logger = slog.New(slog.DiscardHandler)
 	}

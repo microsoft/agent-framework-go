@@ -61,7 +61,7 @@ func TestProvider_CustomPromptTemplate_MissingSkillsPlaceholderPanics(t *testing
 	}()
 
 	skill := mustInlineSkill(skills.Frontmatter{Name: "inline-skill", Description: "Inline skill"}, "Instructions.", nil, nil)
-	_ = skills.NewContextProvider(skills.ProviderOptions{SkillsInstructionPrompt: "No skills placeholder here {resource_instructions} {script_instructions}", Skills: []*skills.Skill{skill}})
+	_ = skills.NewContextProvider(skills.ContextProviderOptions{SkillsInstructionPrompt: "No skills placeholder here {resource_instructions} {script_instructions}", Skills: []*skills.Skill{skill}})
 }
 
 func TestProvider_CustomPromptTemplate_MissingScriptInstructionsPlaceholderPanics(t *testing.T) {
@@ -72,7 +72,7 @@ func TestProvider_CustomPromptTemplate_MissingScriptInstructionsPlaceholderPanic
 	}()
 
 	skill := mustInlineSkill(skills.Frontmatter{Name: "inline-skill", Description: "Inline skill"}, "Instructions.", nil, nil)
-	_ = skills.NewContextProvider(skills.ProviderOptions{SkillsInstructionPrompt: "Has skills {skills} but no runner instructions {resource_instructions}", Skills: []*skills.Skill{skill}})
+	_ = skills.NewContextProvider(skills.ContextProviderOptions{SkillsInstructionPrompt: "Has skills {skills} but no runner instructions {resource_instructions}", Skills: []*skills.Skill{skill}})
 }
 
 func TestProvider_CustomPromptTemplate_MissingResourceInstructionsPlaceholderPanics(t *testing.T) {
@@ -83,12 +83,12 @@ func TestProvider_CustomPromptTemplate_MissingResourceInstructionsPlaceholderPan
 	}()
 
 	skill := mustInlineSkill(skills.Frontmatter{Name: "inline-skill", Description: "Inline skill"}, "Instructions.", nil, nil)
-	_ = skills.NewContextProvider(skills.ProviderOptions{SkillsInstructionPrompt: "Has skills {skills} and runner {script_instructions} but no resource instructions", Skills: []*skills.Skill{skill}})
+	_ = skills.NewContextProvider(skills.ContextProviderOptions{SkillsInstructionPrompt: "Has skills {skills} and runner {script_instructions} but no resource instructions", Skills: []*skills.Skill{skill}})
 }
 
-func providerFromFileSource(source *fsskills.Source, opts *skills.ProviderOptions) *memory.ContextProvider {
+func providerFromFileSource(source *fsskills.Source, opts *skills.ContextProviderOptions) *memory.ContextProvider {
 	if opts == nil {
-		return skills.NewContextProvider(skills.ProviderOptions{Sources: []skills.Source{source}})
+		return skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}})
 	}
 	resolved := *opts
 	resolved.Sources = []skills.Source{source}
@@ -104,7 +104,7 @@ func TestProvider_FromFileSourceWithOptions_DiscoversSkills(t *testing.T) {
 				return nil, nil
 			},
 		}, os.DirFS(root)),
-		&skills.ProviderOptions{DisableCaching: true},
+		&skills.ContextProviderOptions{DisableCaching: true},
 	)
 
 	instructions, _ := captureProviderContext(t, provider)
@@ -123,7 +123,7 @@ func TestProvider_FromFileSourceWithMultipleFileSystems_DiscoversMultipleSkills(
 				return nil, nil
 			},
 		}, os.DirFS(filepath.Join(root, "multi-opts-1")), os.DirFS(filepath.Join(root, "multi-opts-2"))),
-		&skills.ProviderOptions{DisableCaching: true},
+		&skills.ContextProviderOptions{DisableCaching: true},
 	)
 
 	instructions, _ := captureProviderContext(t, provider)
@@ -195,7 +195,7 @@ func TestNew_MultipleDirectories_DeduplicatesSkillsByName(t *testing.T) {
 func TestNewProvider_DeduplicatesSkillsByName(t *testing.T) {
 	first := mustInlineSkill(skills.Frontmatter{Name: "dup-inline", Description: "First"}, "First instructions.", nil, nil)
 	second := mustInlineSkill(skills.Frontmatter{Name: "dup-inline", Description: "Second"}, "Second instructions.", nil, nil)
-	provider := skills.NewContextProvider(skills.ProviderOptions{Skills: []*skills.Skill{first, second}})
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{first, second}})
 
 	_, tools := captureProviderContext(t, provider)
 	loadTool := findTool(t, tools, "load_skill")
@@ -216,7 +216,7 @@ func TestProvider_DefaultCaching_LoadsSourceOnce(t *testing.T) {
 		nil,
 	)
 	source := &countingSource{skills: []*skills.Skill{skill}}
-	provider := skills.NewContextProvider(skills.ProviderOptions{Sources: []skills.Source{source}})
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}})
 
 	_, _ = captureProviderContext(t, provider)
 	_, _ = captureProviderContext(t, provider)
@@ -234,7 +234,7 @@ func TestProvider_DisableCaching_LoadsSourceEachTime(t *testing.T) {
 		nil,
 	)
 	source := &countingSource{skills: []*skills.Skill{skill}}
-	provider := skills.NewContextProvider(skills.ProviderOptions{Sources: []skills.Source{source}, DisableCaching: true})
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}, DisableCaching: true})
 
 	_, _ = captureProviderContext(t, provider)
 	_, _ = captureProviderContext(t, provider)
@@ -252,7 +252,7 @@ func TestProvider_RecoversFromPanickingSourceAndResetsLoading(t *testing.T) {
 		nil,
 	)
 	source := &panicOnceSource{skill: skill}
-	provider := skills.NewContextProvider(skills.ProviderOptions{Sources: []skills.Source{source}})
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}})
 
 	_, err := provider.BeforeRun(memory.BeforeRunContext{Context: t.Context(), Session: memory.NewSession("")})
 	if err == nil {
@@ -292,7 +292,7 @@ func TestProvider_SkipsNilSkillsReturnedBySource(t *testing.T) {
 		nil,
 		nil,
 	)
-	provider := skills.NewContextProvider(skills.ProviderOptions{
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{
 		Sources: []skills.Source{&countingSource{skills: []*skills.Skill{nil, validSkill}}},
 	})
 
@@ -313,7 +313,7 @@ func TestProvider_SkipsSkillsWithInvalidFrontmatterReturnedBySource(t *testing.T
 		Frontmatter: skills.Frontmatter{Name: "MyConverter", Description: "Invalid skill"},
 		Content:     "Should be skipped.",
 	}
-	provider := skills.NewContextProvider(skills.ProviderOptions{
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{
 		Sources: []skills.Source{&countingSource{skills: []*skills.Skill{invalidSkill, validSkill}}},
 	})
 
@@ -336,7 +336,7 @@ func TestNewContextProvider_WithInvalidInlineSkillPanics(t *testing.T) {
 		}
 	}()
 
-	_ = skills.NewContextProvider(skills.ProviderOptions{
+	_ = skills.NewContextProvider(skills.ContextProviderOptions{
 		Skills: []*skills.Skill{{
 			Frontmatter: skills.Frontmatter{Name: "MyConverter", Description: "Invalid skill"},
 			Content:     "Instructions.",
@@ -460,7 +460,7 @@ func TestNewProvider_ProvidesInlineSkills(t *testing.T) {
 		nil,
 		nil,
 	)
-	provider := skills.NewContextProvider(skills.ProviderOptions{Skills: []*skills.Skill{skill}})
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}})
 	instructions, tools := captureProviderContext(t, provider)
 	if !strings.Contains(instructions, "inline-skill") {
 		t.Fatal("expected inline skill to be advertised")
@@ -471,7 +471,7 @@ func TestNewProvider_ProvidesInlineSkills(t *testing.T) {
 }
 
 func TestProvider_WithEmptySource_ReturnsEmptyProvider(t *testing.T) {
-	provider := skills.NewContextProvider(skills.ProviderOptions{})
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{})
 	ctx := context.Background()
 	out, err := provider.BeforeRun(memory.BeforeRunContext{Context: ctx, Session: memory.NewSession("")})
 	if err != nil {
@@ -487,7 +487,7 @@ func TestProvider_AggregatesMultipleSources(t *testing.T) {
 	createSkillDir(t, fileRoot, "file-skill", "File skill", "Body.")
 
 	inline := mustInlineSkill(skills.Frontmatter{Name: "inline-skill", Description: "Inline"}, "Inline body.", nil, nil)
-	provider := skills.NewContextProvider(skills.ProviderOptions{
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{
 		Skills: []*skills.Skill{inline},
 		Sources: []skills.Source{
 			fsskills.NewSourceOptions(fsskills.SourceOptions{
@@ -512,7 +512,7 @@ func TestNewProvider_DisableSourceDeduplication_PreservesDuplicateSkillsInInstru
 	first := mustInlineSkill(skills.Frontmatter{Name: "dup-inline", Description: "First"}, "First instructions.", nil, nil)
 	second := mustInlineSkill(skills.Frontmatter{Name: "dup-inline", Description: "Second"}, "Second instructions.", nil, nil)
 
-	provider := skills.NewContextProvider(skills.ProviderOptions{
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{
 		Skills:                     []*skills.Skill{first, second},
 		DisableSourceDeduplication: true,
 	})
