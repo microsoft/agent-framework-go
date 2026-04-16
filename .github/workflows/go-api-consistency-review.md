@@ -20,9 +20,8 @@ on:
             type: string
 permissions:
    contents: read
-   pull-requests: write
-   issues: write
-   copilot-requests: write
+   pull-requests: read
+   issues: read
 tools:
    github:
       toolsets: [default]

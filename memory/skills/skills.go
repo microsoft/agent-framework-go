@@ -1,250 +1,136 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-// Package skills provides an implementation of the Agent Skills specification
-// (https://agentskills.io/) for discovering and exposing skills from filesystem directories
-// via a memory.ContextProvider.
 package skills
 
 import (
-	"encoding/xml"
+	"context"
 	"fmt"
-	"io/fs"
-	"log/slog"
-	"sort"
 	"strings"
-
-	"github.com/microsoft/agent-framework-go/memory"
-	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/tool"
-	"github.com/microsoft/agent-framework-go/tool/functool"
 )
 
-const defaultSkillsInstructionPrompt = `You have access to skills containing domain-specific knowledge and capabilities.
-Each skill provides specialized instructions, reference documents, and assets for specific tasks.
+const (
+	// maxNameLength is the maximum allowed skill name length.
+	maxNameLength = 64
+	// maxDescriptionLength is the maximum allowed skill description length.
+	maxDescriptionLength = 1024
+	// maxCompatibilityLength is the maximum allowed compatibility length.
+	maxCompatibilityLength = 500
+)
 
-<available_skills>
-%s
-</available_skills>
-
-When a task aligns with a skill's domain:
-1. Use ` + "`load_skill`" + ` to retrieve the skill's instructions
-2. Follow the provided guidance
-3. Use ` + "`read_skill_resource`" + ` to read any references or other files mentioned by the skill
-
-Only load what is needed, when it is needed.`
-
-// Config configures the skills context provider.
-type Config struct {
-	// SourceID is the context provider SourceID. Defaults to "skills".
-	SourceID string
-
-	// SkillsInstructionPrompt is a custom system prompt template for advertising skills.
-	// Use %s as the placeholder for the generated skills list.
-	// When empty, a default template is used.
-	SkillsInstructionPrompt string
-
-	// ResourceDirectories specifies relative directory paths to scan for resource
-	// files within each skill directory.
-	// Values may be single-segment names (e.g., "references") or multi-segment
-	// relative paths (e.g., "sub/resources"). Use "." to include files directly
-	// at the skill root. Leading "./" prefixes, trailing separators, and
-	// backslashes are normalized automatically; paths containing ".." segments
-	// or absolute paths are rejected.
-	// When nil, defaults to ["references", "assets"] (per the Agent Skills
-	// specification at https://agentskills.io/specification).
-	// When set, replaces the defaults entirely.
-	ResourceDirectories []string
-
-	// AllowedResourceExtensions specifies file extensions for resource file
-	// discovery. Each extension must start with ".".
-	// When nil, defaults to [".md", ".json", ".yaml", ".yml", ".csv", ".xml", ".txt"].
-	AllowedResourceExtensions []string
-
-	// Logger is an optional structured logger for skill loading diagnostics.
-	Logger *slog.Logger
+// Frontmatter represents the parsed YAML frontmatter metadata from a SKILL.md file.
+type Frontmatter struct {
+	Name          string
+	Description   string
+	License       string
+	Compatibility string
+	AllowedTools  string
+	Metadata      map[string]any
 }
 
-type provider struct {
-	skills                  map[string]*fileAgentSkill
-	loader                  *skillLoader
-	tools                   []tool.Tool
-	skillsInstructionPrompt string
+// Validate validates the frontmatter according to the Agent Skills specification.
+func (f Frontmatter) Validate() error {
+	if err := validateName(f.Name); err != nil {
+		return err
+	}
+	if err := validateDescription(f.Description); err != nil {
+		return err
+	}
+	if err := validateCompatibility(f.Compatibility); err != nil {
+		return err
+	}
+	return nil
 }
 
-// New creates a memory.ContextProvider that searches the given filesystems for skills.
-//
-// Each fs.FS can represent an individual skill directory (containing a SKILL.md file) or a parent
-// directory with skill subdirectories. The provider discovers SKILL.md files up to 2 levels deep.
-//
-// To prevent escapes from the tree via symbolic links, callers should prefer [os.Root.FS] over [os.DirFS].
-func New(opts *Config, fsys ...fs.FS) *memory.ContextProvider {
-	if opts == nil {
-		opts = &Config{}
-	}
-	logger := opts.Logger
-	if logger == nil {
-		logger = slog.New(slog.DiscardHandler)
-	}
+// Source provides skills from a specific origin.
+type Source interface {
+	Skills(context.Context) ([]*Skill, error)
+}
 
-	loader := &skillLoader{
-		logger:                    logger,
-		resourceDirectories:       validateAndNormalizeDirectoryNames(opts.ResourceDirectories, defaultResourceDirectories, logger),
-		allowedResourceExtensions: buildExtensionSet(opts.AllowedResourceExtensions, defaultResourceExtensions),
-	}
-	loaded := loader.discoverAndLoadSkills(fsys)
-	instructionPrompt := buildSkillsInstructionPrompt(opts, loaded)
+// SourceFunc wraps a function to be used as a Source.
+type SourceFunc func(context.Context) ([]*Skill, error)
 
-	p := &provider{
-		skills:                  loaded,
-		loader:                  loader,
-		skillsInstructionPrompt: instructionPrompt,
-	}
+func (f SourceFunc) Skills(ctx context.Context) ([]*Skill, error) {
+	return f(ctx)
+}
 
-	p.tools = []tool.Tool{
-		functool.MustNew(
-			&functool.Func{
-				Name:        "load_skill",
-				Description: "Loads the full instructions for a specific skill.",
-			},
-			func(_ tool.Context, in struct {
-				SkillName string `json:"skillName" jsonschema:"The name of the skill to load"`
-			}) (string, error) {
-				return p.loadSkill(in.SkillName)
-			},
-		),
-		functool.MustNew(
-			&functool.Func{
-				Name:        "read_skill_resource",
-				Description: "Reads a file associated with a skill, such as references or assets.",
-			},
-			func(_ tool.Context, in struct {
-				SkillName    string `json:"skillName" jsonschema:"The name of the skill"`
-				ResourceName string `json:"resourceName" jsonschema:"The relative path of the resource file within the skill"`
-			}) (string, error) {
-				return p.readSkillResource(in.SkillName, in.ResourceName)
-			},
-		),
-	}
+// Skill describes a domain-specific capability with instructions, resources, and scripts.
+type Skill struct {
+	Frontmatter          Frontmatter
+	Content              string
+	Resources            []Resource
+	Scripts              []Script
+	AdditionalProperties map[string]any
+}
 
-	sourceID := opts.SourceID
-	if sourceID == "" {
-		sourceID = "skills"
-	}
+// Resource is supplementary skill content that can be read on demand.
+type Resource struct {
+	Name                 string
+	Description          string
+	Read                 func(context.Context) (any, error)
+	AdditionalProperties map[string]any
+}
 
-	return &memory.ContextProvider{
-		SourceID: sourceID,
-		Provide: func(_ memory.BeforeRunContext) (memory.Context, error) {
-			if len(p.skills) == 0 {
-				return memory.Context{}, nil
+// Script is executable skill functionality that can be run on demand.
+type Script struct {
+	Name                 string
+	Description          string
+	Run                  func(context.Context, *Skill, map[string]any) (any, error)
+	AdditionalProperties map[string]any
+}
+
+// ScriptRunner defines the function signature for running a script.
+type ScriptRunner func(context.Context, *Skill, *Script, map[string]any) (any, error)
+
+// validateName validates a skill name.
+func validateName(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("skill name is required")
+	}
+	if len(name) > maxNameLength {
+		return fmt.Errorf("skill name must be %d characters or fewer", maxNameLength)
+	}
+	if !isValidSkillName(name) {
+		return fmt.Errorf("skill name must use only lowercase letters, numbers, and single hyphens, and must not start or end with a hyphen or contain consecutive hyphens")
+	}
+	return nil
+}
+
+func isValidSkillName(name string) bool {
+	previousHyphen := false
+	for i, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z':
+			previousHyphen = false
+		case r >= '0' && r <= '9':
+			previousHyphen = false
+		case r == '-':
+			if i == 0 || previousHyphen {
+				return false
 			}
-			out := memory.Context{Tools: p.tools}
-			if p.skillsInstructionPrompt != "" {
-				out.Messages = []*message.Message{{
-					Role: message.RoleSystem,
-					Contents: []message.Content{
-						&message.TextContent{Text: p.skillsInstructionPrompt},
-					},
-				}}
-			}
-			return out, nil
-		},
+			previousHyphen = true
+		default:
+			return false
+		}
 	}
+
+	return !previousHyphen
 }
 
-func (p *provider) loadSkill(skillName string) (string, error) {
-	if strings.TrimSpace(skillName) == "" {
-		return "Error: Skill name cannot be empty.", nil
+// validateDescription validates a skill description.
+func validateDescription(description string) error {
+	if strings.TrimSpace(description) == "" {
+		return fmt.Errorf("skill description is required")
 	}
-	skill, ok := p.skills[strings.ToLower(skillName)]
-	if !ok {
-		return fmt.Sprintf("Error: Skill '%s' not found.", skillName), nil
+	if len(description) > maxDescriptionLength {
+		return fmt.Errorf("skill description must be %d characters or fewer", maxDescriptionLength)
 	}
-	p.loader.logger.Info("Loading skill", "skillName", skillName)
-	return skill.body, nil
+	return nil
 }
 
-func (p *provider) readSkillResource(skillName, resourceName string) (string, error) {
-	if strings.TrimSpace(skillName) == "" {
-		return "Error: Skill name cannot be empty.", nil
+// validateCompatibility validates an optional compatibility value.
+func validateCompatibility(compatibility string) error {
+	if len(compatibility) > maxCompatibilityLength {
+		return fmt.Errorf("skill compatibility must be %d characters or fewer", maxCompatibilityLength)
 	}
-	if strings.TrimSpace(resourceName) == "" {
-		return "Error: Resource name cannot be empty.", nil
-	}
-	skill, ok := p.skills[strings.ToLower(skillName)]
-	if !ok {
-		return fmt.Sprintf("Error: Skill '%s' not found.", skillName), nil
-	}
-	content, err := p.loader.readSkillResource(skill, resourceName)
-	if err != nil {
-		p.loader.logger.Error("Failed to read resource from skill",
-			"resourceName", resourceName,
-			"skillName", skillName,
-			"error", err)
-		return fmt.Sprintf("Error: Failed to read resource '%s' from skill '%s'.", resourceName, skillName), nil
-	}
-	return content, nil
-}
-
-func buildSkillsInstructionPrompt(opts *Config, skills map[string]*fileAgentSkill) string {
-	if len(skills) == 0 {
-		return ""
-	}
-
-	promptTemplate := defaultSkillsInstructionPrompt
-	if opts != nil && opts.SkillsInstructionPrompt != "" {
-		promptTemplate = opts.SkillsInstructionPrompt
-	}
-
-	// Order by name for deterministic prompt output.
-	sorted := make([]*fileAgentSkill, 0, len(skills))
-	for _, skill := range skills {
-		sorted = append(sorted, skill)
-	}
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].frontmatter.Name < sorted[j].frontmatter.Name
-	})
-
-	var sb strings.Builder
-	for _, skill := range sorted {
-		sb.WriteString("  <skill>\n")
-		sb.WriteString(fmt.Sprintf("    <name>%s</name>\n", xmlEscape(skill.frontmatter.Name)))
-		sb.WriteString(fmt.Sprintf("    <description>%s</description>\n", xmlEscape(skill.frontmatter.Description)))
-		sb.WriteString("  </skill>\n")
-	}
-
-	return fmt.Sprintf(promptTemplate, strings.TrimRight(sb.String(), "\n"))
-}
-
-// xmlEscape escapes XML-sensitive characters for safe prompt embedding.
-func xmlEscape(s string) string {
-	var sb strings.Builder
-	if err := xml.EscapeText(&sb, []byte(s)); err != nil {
-		return s
-	}
-	return sb.String()
-}
-
-// frontmatter represents the parsed YAML frontmatter from a SKILL.md file,
-// containing the skill's name and description.
-type frontmatter struct {
-	Name        string
-	Description string
-}
-
-// fileAgentSkill represents a loaded Agent Skill discovered from a filesystem directory.
-//
-// Each skill is backed by a SKILL.md file containing YAML frontmatter (name and description)
-// and a markdown body with instructions. Resource files referenced in the body are validated at
-// discovery time and read from disk on demand.
-type fileAgentSkill struct {
-	// frontmatter is the parsed YAML frontmatter (name and description).
-	frontmatter frontmatter
-	// body is the SKILL.md body content (without the YAML frontmatter).
-	body string
-	// fs is the sub-filesystem rooted at the skill directory.
-	fs fs.FS
-	// sourcePath is the relative path within the parent FS, used for logging.
-	sourcePath string
-	// resourceNames is the relative paths of resource files referenced in the skill body.
-	resourceNames []string
+	return nil
 }

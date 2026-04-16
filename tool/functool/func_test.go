@@ -4,8 +4,10 @@ package functool_test
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 )
@@ -143,6 +145,44 @@ func TestFuncTool_CallNoArg(t *testing.T) {
 	}
 }
 
+func TestFuncTool_CallNoArgRejectsExtraFields(t *testing.T) {
+	tl := functool.MustNew(
+		&functool.Func{
+			Name: "test",
+		},
+		func(ctx tool.Context, _ struct{}) (string, error) {
+			return "hello", nil
+		},
+	)
+
+	_, err := tl.Call(tool.Context{Context: t.Context()}, `{"unexpected":"value"}`)
+	if err == nil {
+		t.Fatal("expected error for unexpected fields")
+	}
+}
+
+func TestFuncTool_NoArgSchema(t *testing.T) {
+	tl := functool.MustNew(
+		&functool.Func{
+			Name: "test",
+		},
+		func(ctx tool.Context, _ struct{}) (string, error) {
+			return "hello", nil
+		},
+	)
+
+	schema, ok := tl.Schema().(*jsonschema.Schema)
+	if !ok {
+		t.Fatalf("expected jsonschema.Schema, got %T", tl.Schema())
+	}
+	if schema.Type != "object" {
+		t.Fatalf("expected object schema, got %#v", schema)
+	}
+	if schema.AdditionalProperties == nil || schema.AdditionalProperties.Not == nil {
+		t.Fatalf("expected additionalProperties=false semantics, got %#v", schema)
+	}
+}
+
 func TestFuncTool_CallNoRet(t *testing.T) {
 	tl := functool.MustNew(
 		&functool.Func{
@@ -159,6 +199,48 @@ func TestFuncTool_CallNoRet(t *testing.T) {
 	}
 	if ret != struct{}{} {
 		t.Errorf("expected empty struct{}, got %v", ret)
+	}
+}
+
+func TestFuncTool_CallAnyOutput(t *testing.T) {
+	tl := functool.MustNew(
+		&functool.Func{
+			Name: "test",
+		},
+		func(ctx tool.Context, _ struct{}) (any, error) {
+			return map[string]any{"status": "ok", "value": 42}, nil
+		},
+	)
+
+	ret, err := tl.Call(tool.Context{Context: t.Context()}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, ok := ret.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map output, got %T", ret)
+	}
+	if !reflect.DeepEqual(out, map[string]any{"status": "ok", "value": 42}) {
+		t.Fatalf("unexpected output: %#v", out)
+	}
+}
+
+func TestFuncTool_ReturnSchemaAnyOutput(t *testing.T) {
+	tl := functool.MustNew(
+		&functool.Func{
+			Name: "test",
+		},
+		func(ctx tool.Context, _ struct{}) (any, error) {
+			return "ok", nil
+		},
+	)
+
+	schema, ok := tl.ReturnSchema().(*jsonschema.Schema)
+	if !ok {
+		t.Fatalf("expected jsonschema.Schema, got %T", tl.ReturnSchema())
+	}
+	if !reflect.DeepEqual(schema, &jsonschema.Schema{}) {
+		t.Fatalf("expected unconstrained schema for any output, got %#v", schema)
 	}
 }
 
@@ -182,5 +264,20 @@ func TestFuncTool_CallError(t *testing.T) {
 	_, err := tl.Call(tool.Context{Context: tool.Context{Context: t.Context()}}, `{"value":"test"}`)
 	if err != expectedErr {
 		t.Errorf("expected error %v, got %v", expectedErr, err)
+	}
+}
+
+func TestFuncTool_NewRejectsAnyInput(t *testing.T) {
+	_, err := functool.New(
+		&functool.Func{Name: "test"},
+		func(ctx tool.Context, input any) (string, error) {
+			return "ok", nil
+		},
+	)
+	if err == nil {
+		t.Fatal("expected error for any input type")
+	}
+	if got := err.Error(); got != "input schema: input type any is not supported by HandlerFor; use Handler for dynamic inputs" {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
