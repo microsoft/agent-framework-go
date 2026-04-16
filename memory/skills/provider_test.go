@@ -302,6 +302,48 @@ func TestProvider_SkipsNilSkillsReturnedBySource(t *testing.T) {
 	}
 }
 
+func TestProvider_SkipsSkillsWithInvalidFrontmatterReturnedBySource(t *testing.T) {
+	validSkill := mustInlineSkill(
+		skills.Frontmatter{Name: "valid-skill", Description: "Valid skill"},
+		"Instructions.",
+		nil,
+		nil,
+	)
+	invalidSkill := &skills.Skill{
+		Frontmatter: skills.Frontmatter{Name: "MyConverter", Description: "Invalid skill"},
+		Content:     "Should be skipped.",
+	}
+	provider := skills.NewContextProvider(skills.ProviderOptions{
+		Sources: []skills.Source{&countingSource{skills: []*skills.Skill{invalidSkill, validSkill}}},
+	})
+
+	instructions, _ := captureProviderContext(t, provider)
+	if strings.Contains(instructions, "MyConverter") {
+		t.Fatalf("expected invalid skill to be skipped, got %q", instructions)
+	}
+	if !strings.Contains(instructions, "valid-skill") {
+		t.Fatalf("expected valid skill to remain available, got %q", instructions)
+	}
+	if strings.Contains(instructions, "Should be skipped.") {
+		t.Fatalf("expected invalid skill content to be skipped, got %q", instructions)
+	}
+}
+
+func TestNewContextProvider_WithInvalidInlineSkillPanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic for inline skill with invalid frontmatter")
+		}
+	}()
+
+	_ = skills.NewContextProvider(skills.ProviderOptions{
+		Skills: []*skills.Skill{{
+			Frontmatter: skills.Frontmatter{Name: "MyConverter", Description: "Invalid skill"},
+			Content:     "Instructions.",
+		}},
+	})
+}
+
 func TestProvider_WithScripts_ExposesRunSkillScriptTool(t *testing.T) {
 	root := t.TempDir()
 	createSkillDir(t, root, "script-skill", "Script skill", "Body.")

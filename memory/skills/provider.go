@@ -141,6 +141,9 @@ func newSkillSliceSource(skills ...*Skill) *skillSliceSource {
 		if skill == nil {
 			panic(fmt.Sprintf("skill %d is nil", i))
 		}
+		if err := skill.Frontmatter.Validate(); err != nil {
+			panic(fmt.Sprintf("skill %d has invalid frontmatter: %v", i, err))
+		}
 	}
 	return &skillSliceSource{skills: cloned}
 }
@@ -237,6 +240,10 @@ func (p *providerState) loadSkills(ctx context.Context) ([]*Skill, error) {
 		for skillIndex, skill := range sourceSkills {
 			if skill == nil {
 				p.logger.Warn("Skipping nil skill returned by source", "sourceIndex", sourceIndex, "skillIndex", skillIndex)
+				continue
+			}
+			if err := skill.Frontmatter.Validate(); err != nil {
+				p.logger.Warn("Skipping skill with invalid frontmatter", "sourceIndex", sourceIndex, "skillIndex", skillIndex, "error", err)
 				continue
 			}
 			loaded = append(loaded, skill)
