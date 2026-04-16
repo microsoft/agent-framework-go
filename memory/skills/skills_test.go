@@ -17,19 +17,6 @@ import (
 	"github.com/microsoft/agent-framework-go/tool"
 )
 
-type fileProviderConfig struct {
-	SourceID                   string
-	SkillsInstructionPrompt    string
-	ResourceDirectories        []string
-	ScriptDirectories          []string
-	AllowedResourceExtensions  []string
-	AllowedScriptExtensions    []string
-	ScriptRunner               skills.ScriptRunner
-	ScriptApproval             bool
-	DisableCaching             bool
-	DisableSourceDeduplication bool
-}
-
 func createSkillDir(t *testing.T, root, name, description, body string) {
 	t.Helper()
 	skillDir := filepath.Join(root, name)
@@ -79,33 +66,25 @@ func createRelativeFile(t *testing.T, root, relativePath, content string) {
 
 func newProvider(t *testing.T, roots ...string) *memory.ContextProvider {
 	t.Helper()
-	return newProviderWithConfig(t, nil, roots...)
+	return newProviderWithConfig(t, nil, nil, roots...)
 }
 
-func newProviderWithConfig(t *testing.T, cfg *fileProviderConfig, roots ...string) *memory.ContextProvider {
+func newProviderWithConfig(t *testing.T, sourceOptions *fsskills.SourceOptions, providerOptions *skills.ContextProviderOptions, roots ...string) *memory.ContextProvider {
 	t.Helper()
-	if cfg == nil {
-		cfg = &fileProviderConfig{}
+	if sourceOptions == nil {
+		sourceOptions = &fsskills.SourceOptions{}
 	}
 	fsList := make([]fs.FS, len(roots))
 	for i, r := range roots {
 		fsList[i] = os.DirFS(r)
 	}
-	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
-		ResourceDirectories:       cfg.ResourceDirectories,
-		ScriptDirectories:         cfg.ScriptDirectories,
-		AllowedResourceExtensions: cfg.AllowedResourceExtensions,
-		AllowedScriptExtensions:   cfg.AllowedScriptExtensions,
-		ScriptRunner:              cfg.ScriptRunner,
-	}, fsList...)
-	return skills.NewContextProvider(skills.ContextProviderOptions{
-		SourceID:                   cfg.SourceID,
-		Sources:                    []skills.Source{source},
-		SkillsInstructionPrompt:    cfg.SkillsInstructionPrompt,
-		ScriptApproval:             cfg.ScriptApproval,
-		DisableCaching:             cfg.DisableCaching,
-		DisableSourceDeduplication: cfg.DisableSourceDeduplication,
-	})
+	source := fsskills.NewSourceOptions(*sourceOptions, fsList...)
+	resolved := skills.ContextProviderOptions{}
+	if providerOptions != nil {
+		resolved = *providerOptions
+	}
+	resolved.Sources = []skills.Source{source}
+	return skills.NewContextProvider(resolved)
 }
 
 func captureProviderContext(t *testing.T, provider *memory.ContextProvider) (string, []tool.Tool) {
@@ -331,7 +310,7 @@ func TestProvider_CustomPromptTemplate(t *testing.T) {
 	root := t.TempDir()
 	createSkillDir(t, root, "custom-prompt-skill", "Custom prompt", "Body.")
 
-	p := newProviderWithConfig(t, &fileProviderConfig{SkillsInstructionPrompt: "Custom template:\n{skills}\n{resource_instructions}\n{script_instructions}"}, root)
+	p := newProviderWithConfig(t, nil, &skills.ContextProviderOptions{SkillsInstructionPrompt: "Custom template:\n{skills}\n{resource_instructions}\n{script_instructions}"}, root)
 
 	instructions, _ := captureProviderContext(t, p)
 	if !strings.HasPrefix(instructions, "Custom template:") {
@@ -617,9 +596,9 @@ func TestDiscovery_ResourceInSkillRoot_DiscoveredWhenRootDirectoryConfigured(t *
 		t.Fatal(err)
 	}
 
-	p := newProviderWithConfig(t, &fileProviderConfig{
+	p := newProviderWithConfig(t, &fsskills.SourceOptions{
 		ResourceDirectories: []string{"references", "assets", "."},
-	}, root)
+	}, nil, root)
 
 	_, tools := captureProviderContext(t, p)
 	readTool := findTool(t, tools, "read_skill_resource")
@@ -646,9 +625,9 @@ func TestDiscovery_SkillMdNotIncludedAsResource(t *testing.T) {
 	createSkillDir(t, root, "selfref-skill", "Self ref test", "Body.")
 
 	// Opt into root scanning — SKILL.md should still be excluded
-	p := newProviderWithConfig(t, &fileProviderConfig{
+	p := newProviderWithConfig(t, &fsskills.SourceOptions{
 		ResourceDirectories: []string{"."},
-	}, root)
+	}, nil, root)
 
 	_, tools := captureProviderContext(t, p)
 	if hasTool(tools, "read_skill_resource") {
@@ -677,9 +656,9 @@ func TestDiscovery_CustomResourceDirectories_ReplacesDefaults(t *testing.T) {
 	}
 
 	// Set custom directories — only "docs" should be scanned
-	p := newProviderWithConfig(t, &fileProviderConfig{
+	p := newProviderWithConfig(t, &fsskills.SourceOptions{
 		ResourceDirectories: []string{"docs"},
-	}, root)
+	}, nil, root)
 
 	_, tools := captureProviderContext(t, p)
 	readTool := findTool(t, tools, "read_skill_resource")
@@ -810,9 +789,9 @@ func TestDiscovery_ResourceDirectoriesWithNestedPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p := newProviderWithConfig(t, &fileProviderConfig{
+	p := newProviderWithConfig(t, &fsskills.SourceOptions{
 		ResourceDirectories: []string{"f1/f2/f3"},
-	}, root)
+	}, nil, root)
 
 	_, tools := captureProviderContext(t, p)
 	readTool := findTool(t, tools, "read_skill_resource")
@@ -831,9 +810,9 @@ func TestConfig_InvalidDirectoryName_Skipped(t *testing.T) {
 	for _, bad := range tests {
 		t.Run(bad, func(t *testing.T) {
 			// Invalid directories are skipped with a warning, not a panic
-			p := newProviderWithConfig(t, &fileProviderConfig{
+			p := newProviderWithConfig(t, &fsskills.SourceOptions{
 				ResourceDirectories: []string{bad},
-			}, t.TempDir())
+			}, nil, t.TempDir())
 			if p == nil {
 				t.Fatal("expected non-nil provider")
 			}
@@ -856,9 +835,9 @@ func TestConfig_EmptyDirectoryName_Panics(t *testing.T) {
 					t.Fatal("expected panic for empty/whitespace directory name")
 				}
 			}()
-			newProviderWithConfig(t, &fileProviderConfig{
+			newProviderWithConfig(t, &fsskills.SourceOptions{
 				ResourceDirectories: []string{tt.dir},
-			}, t.TempDir())
+			}, nil, t.TempDir())
 		})
 	}
 }
@@ -867,9 +846,9 @@ func TestConfig_ValidDirectoryNames(t *testing.T) {
 	tests := []string{"scripts", "my-scripts", "sub/directory", ".", "./scripts", "./scripts/f1", "my..scripts"}
 	for _, valid := range tests {
 		t.Run(valid, func(t *testing.T) {
-			p := newProviderWithConfig(t, &fileProviderConfig{
+			p := newProviderWithConfig(t, &fsskills.SourceOptions{
 				ResourceDirectories: []string{valid},
-			}, t.TempDir())
+			}, nil, t.TempDir())
 			if p == nil {
 				t.Fatal("expected non-nil provider")
 			}
@@ -891,9 +870,9 @@ func TestDiscovery_DuplicateDirectoriesAfterNormalization_NoDuplicateResources(t
 	}
 
 	// "references" and "./references" should be deduplicated
-	p := newProviderWithConfig(t, &fileProviderConfig{
+	p := newProviderWithConfig(t, &fsskills.SourceOptions{
 		ResourceDirectories: []string{"references", "./references"},
-	}, root)
+	}, nil, root)
 
 	_, tools := captureProviderContext(t, p)
 	readTool := findTool(t, tools, "read_skill_resource")
@@ -923,9 +902,9 @@ func TestDiscovery_CustomResourceExtensions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p := newProviderWithConfig(t, &fileProviderConfig{
+	p := newProviderWithConfig(t, &fsskills.SourceOptions{
 		AllowedResourceExtensions: []string{".custom"},
-	}, root)
+	}, nil, root)
 
 	_, tools := captureProviderContext(t, p)
 	readTool := findTool(t, tools, "read_skill_resource")

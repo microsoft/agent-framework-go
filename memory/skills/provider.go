@@ -44,6 +44,10 @@ type ContextProviderOptions struct {
 	// Defaults to "skills" if not provided.
 	SourceID string
 
+	// SkillFilter optionally filters skills loaded from inline skills and sources.
+	// Returning true keeps a skill; returning false excludes it.
+	SkillFilter func(*Skill) bool
+
 	// Skills provides in-memory skills to register with the provider.
 	Skills []*Skill
 
@@ -246,6 +250,10 @@ func (p *providerState) loadSkills(ctx context.Context) ([]*Skill, error) {
 			}
 			if err := skill.Frontmatter.Validate(); err != nil {
 				p.logger.Warn("Skipping skill with invalid frontmatter", "sourceIndex", sourceIndex, "skillIndex", skillIndex, "error", err)
+				continue
+			}
+			if p.options.SkillFilter != nil && !p.options.SkillFilter(skill) {
+				p.logger.Debug("Skill excluded by filter predicate", "skillName", skill.Frontmatter.Name, "sourceIndex", sourceIndex, "skillIndex", skillIndex)
 				continue
 			}
 			loaded = append(loaded, skill)

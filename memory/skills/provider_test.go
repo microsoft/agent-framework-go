@@ -136,9 +136,9 @@ func TestProvider_WithScriptsNoScriptApproval_DoesNotWrapRunScriptTool(t *testin
 	root := t.TempDir()
 	createSkillDir(t, root, "no-approval-skill", "No approval test", "Body.")
 	createRelativeFile(t, filepath.Join(root, "no-approval-skill"), "scripts/run.py", "print('hello')")
-	provider := newProviderWithConfig(t, &fileProviderConfig{ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, map[string]any) (any, error) {
+	provider := newProviderWithConfig(t, &fsskills.SourceOptions{ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, map[string]any) (any, error) {
 		return "ok", nil
-	}}, root)
+	}}, nil, root)
 
 	_, tools := captureProviderContext(t, provider)
 	runTool := findTool(t, tools, "run_skill_script")
@@ -164,7 +164,7 @@ func TestProvider_MultipleInvocations_ToolsAreSharedWhenCached(t *testing.T) {
 func TestProvider_MultipleInvocations_ToolsAreNotSharedWhenCachingDisabled(t *testing.T) {
 	root := t.TempDir()
 	createSkillDir(t, root, "fresh-tools-skill", "Fresh tools test", "Body.")
-	provider := newProviderWithConfig(t, &fileProviderConfig{DisableCaching: true}, root)
+	provider := newProviderWithConfig(t, nil, &skills.ContextProviderOptions{DisableCaching: true}, root)
 
 	_, tools1 := captureProviderContext(t, provider)
 	_, tools2 := captureProviderContext(t, provider)
@@ -350,7 +350,7 @@ func TestProvider_WithScripts_ExposesRunSkillScriptTool(t *testing.T) {
 	createRelativeFile(t, filepath.Join(root, "script-skill"), "scripts/run.py", "print('ok')")
 
 	runnerCalled := false
-	provider := newProviderWithConfig(t, &fileProviderConfig{
+	provider := newProviderWithConfig(t, &fsskills.SourceOptions{
 		ScriptRunner: func(_ context.Context, skill *skills.Skill, script *skills.Script, arguments map[string]any) (any, error) {
 			runnerCalled = true
 			if skill.Frontmatter.Name != "script-skill" {
@@ -361,7 +361,7 @@ func TestProvider_WithScripts_ExposesRunSkillScriptTool(t *testing.T) {
 			}
 			return map[string]any{"status": "ok", "value": arguments["value"]}, nil
 		},
-	}, root)
+	}, nil, root)
 
 	_, tools := captureProviderContext(t, provider)
 	runTool := findTool(t, tools, "run_skill_script")
@@ -386,12 +386,12 @@ func TestProvider_RunSkillScript_RequiresExactName(t *testing.T) {
 	createSkillDir(t, root, "script-skill", "Script skill", "Body.")
 	createRelativeFile(t, filepath.Join(root, "script-skill"), "scripts/run.py", "print('ok')")
 
-	provider := newProviderWithConfig(t, &fileProviderConfig{
+	provider := newProviderWithConfig(t, &fsskills.SourceOptions{
 		ScriptRunner: func(_ context.Context, _ *skills.Skill, _ *skills.Script, _ map[string]any) (any, error) {
 			t.Fatal("did not expect script runner to be called")
 			return nil, nil
 		},
-	}, root)
+	}, nil, root)
 
 	_, tools := captureProviderContext(t, provider)
 	runTool := findTool(t, tools, "run_skill_script")
@@ -413,12 +413,11 @@ func TestProvider_ScriptApproval_MarksToolAsApprovalRequired(t *testing.T) {
 	createSkillDir(t, root, "approval-skill", "Approval skill", "Body.")
 	createRelativeFile(t, filepath.Join(root, "approval-skill"), "scripts/run.py", "print('ok')")
 
-	provider := newProviderWithConfig(t, &fileProviderConfig{
+	provider := newProviderWithConfig(t, &fsskills.SourceOptions{
 		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, map[string]any) (any, error) {
 			return "ok", nil
 		},
-		ScriptApproval: true,
-	}, root)
+	}, &skills.ContextProviderOptions{ScriptApproval: true}, root)
 
 	_, tools := captureProviderContext(t, provider)
 	runTool := findTool(t, tools, "run_skill_script")
@@ -509,6 +508,69 @@ func TestProvider_AggregatesMultipleSources(t *testing.T) {
 	}
 	if !strings.Contains(instructions, "file-skill") {
 		t.Fatal("expected file-skill in aggregated instructions")
+	}
+}
+
+func TestProvider_SkillFilter_FiltersInlineAndSourceSkills(t *testing.T) {
+	fileRoot := t.TempDir()
+	createSkillDir(t, fileRoot, "keep-source", "Keep source", "Keep source body.")
+	createSkillDir(t, fileRoot, "drop-source", "Drop source", "Drop source body.")
+
+	keepInline := mustInlineSkill(skills.Frontmatter{Name: "keep-inline", Description: "Keep inline"}, "Keep inline body.", nil, nil)
+	dropInline := mustInlineSkill(skills.Frontmatter{Name: "drop-inline", Description: "Drop inline"}, "Drop inline body.", nil, nil)
+
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{
+		Skills: []*skills.Skill{keepInline, dropInline},
+		Sources: []skills.Source{
+			fsskills.NewSourceOptions(fsskills.SourceOptions{}, os.DirFS(fileRoot)),
+		},
+		SkillFilter: func(skill *skills.Skill) bool {
+			return strings.HasPrefix(skill.Frontmatter.Name, "keep-")
+		},
+	})
+
+	instructions, tools := captureProviderContext(t, provider)
+	if !strings.Contains(instructions, "keep-inline") || !strings.Contains(instructions, "keep-source") {
+		t.Fatalf("expected kept skills in instructions, got %q", instructions)
+	}
+	if strings.Contains(instructions, "drop-inline") || strings.Contains(instructions, "drop-source") {
+		t.Fatalf("expected filtered skills to be excluded, got %q", instructions)
+	}
+
+	loadTool := findTool(t, tools, "load_skill")
+	result, err := loadTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"drop-inline"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "Error: Skill 'drop-inline' not found." {
+		t.Fatalf("expected filtered inline skill to be unavailable, got %#v", result)
+	}
+
+	result, err = loadTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"drop-source"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "Error: Skill 'drop-source' not found." {
+		t.Fatalf("expected filtered source skill to be unavailable, got %#v", result)
+	}
+}
+
+func TestProvider_SkillFilter_CanFilterOutAllSkills(t *testing.T) {
+	skill := mustInlineSkill(skills.Frontmatter{Name: "inline-skill", Description: "Inline skill"}, "Inline instructions.", nil, nil)
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{
+		Skills: []*skills.Skill{skill},
+		SkillFilter: func(*skills.Skill) bool {
+			return false
+		},
+	})
+
+	ctx := context.Background()
+	out, err := provider.BeforeRun(memory.BeforeRunContext{Context: ctx, Session: memory.NewSession("")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Messages) != 0 || len(out.Tools) != 0 {
+		t.Fatalf("expected empty provider context when filter removes all skills, got %+v", out)
 	}
 }
 
