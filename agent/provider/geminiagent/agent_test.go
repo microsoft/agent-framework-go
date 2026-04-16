@@ -426,3 +426,889 @@ func TestUsageContent(t *testing.T) {
 		t.Errorf("TotalTokenCount = %d, want 15", usage.Details.TotalTokenCount)
 	}
 }
+
+// TestMultiTurnConversation verifies that multi-turn messages are sent to the
+// API in the correct order with the correct roles.
+func TestMultiTurnConversation(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(captureAndRespond(t, bodyCh, "application/json", minimalTextResponse("6")))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	messages := []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "What is 2+2?"}}},
+		{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "4"}}},
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "And what is 3+3?"}}},
+	}
+	resp, err := a.Run(t.Context(), messages).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := resp.String(); got != "6" {
+		t.Errorf("response text = %q, want %q", got, "6")
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	contents, _ := req["contents"].([]any)
+	if len(contents) != 3 {
+		t.Fatalf("expected 3 contents, got %d", len(contents))
+	}
+	roles := make([]string, len(contents))
+	for i, c := range contents {
+		cm, _ := c.(map[string]any)
+		roles[i], _ = cm["role"].(string)
+	}
+	wantRoles := []string{"user", "model", "user"}
+	for i, want := range wantRoles {
+		if roles[i] != want {
+			t.Errorf("contents[%d].role = %q, want %q", i, roles[i], want)
+		}
+	}
+}
+
+// TestMultipleSystemMessages verifies that multiple system text parts are
+// concatenated into a single systemInstruction.
+func TestMultipleSystemMessages(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(captureAndRespond(t, bodyCh, "application/json", minimalTextResponse("ok")))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	messages := []*message.Message{
+		{Role: message.RoleSystem, Contents: []message.Content{
+			&message.TextContent{Text: "You are helpful."},
+			&message.TextContent{Text: "You are concise."},
+		}},
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Tell me something"}}},
+	}
+	_, err := a.Run(t.Context(), messages).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	si, ok := nestedKey(req, "systemInstruction", "parts")
+	if !ok {
+		t.Fatal("request missing systemInstruction.parts")
+	}
+	parts, _ := si.([]any)
+	if len(parts) != 2 {
+		t.Fatalf("systemInstruction.parts length = %d, want 2", len(parts))
+	}
+	for i, want := range []string{"You are helpful.", "You are concise."} {
+		p, _ := parts[i].(map[string]any)
+		if text, _ := p["text"].(string); text != want {
+			t.Errorf("systemInstruction.parts[%d].text = %q, want %q", i, text, want)
+		}
+	}
+}
+
+// TestMultipleContentParts verifies that a user message with multiple text
+// parts sends all parts in the request.
+func TestMultipleContentParts(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(captureAndRespond(t, bodyCh, "application/json", minimalTextResponse("ok")))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	messages := []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{
+			&message.TextContent{Text: "First part."},
+			&message.TextContent{Text: "Second part."},
+		}},
+	}
+	_, err := a.Run(t.Context(), messages).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	contents, _ := req["contents"].([]any)
+	if len(contents) != 1 {
+		t.Fatalf("expected 1 content, got %d", len(contents))
+	}
+	c0, _ := contents[0].(map[string]any)
+	parts, _ := c0["parts"].([]any)
+	if len(parts) != 2 {
+		t.Fatalf("expected 2 parts, got %d", len(parts))
+	}
+	for i, want := range []string{"First part.", "Second part."} {
+		p, _ := parts[i].(map[string]any)
+		if text, _ := p["text"].(string); text != want {
+			t.Errorf("parts[%d].text = %q, want %q", i, text, want)
+		}
+	}
+}
+
+// TestResponseWithMultipleTextParts verifies that multiple text parts in a
+// response are all included in the output.
+func TestResponseWithMultipleTextParts(t *testing.T) {
+	resp := map[string]any{
+		"candidates": []any{
+			map[string]any{
+				"content": map[string]any{
+					"role": "model",
+					"parts": []any{
+						map[string]any{"text": "AI, or Artificial Intelligence, "},
+						map[string]any{"text": "refers to machines that think."},
+					},
+				},
+				"finishReason": "STOP",
+			},
+		},
+		"usageMetadata": map[string]any{
+			"promptTokenCount":     6,
+			"candidatesTokenCount": 10,
+			"totalTokenCount":      16,
+		},
+	}
+	respBody, _ := json.Marshal(resp)
+
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "application/json", string(respBody)))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	result, err := a.RunText(t.Context(), "Tell me about AI").Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := result.String()
+	if got != "AI, or Artificial Intelligence, refers to machines that think." {
+		t.Errorf("response text = %q, want combined text", got)
+	}
+}
+
+// TestFunctionResultMapping verifies that FunctionResultContent is correctly
+// mapped back to the API with the function name resolved from the call ID.
+func TestFunctionResultMapping(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(captureAndRespond(t, bodyCh, "application/json", minimalTextResponse("It's sunny!")))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	messages := []*message.Message{
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			&message.FunctionCallContent{
+				CallID:    "call_123",
+				Name:      "get_weather",
+				Arguments: `{"location":"Seattle"}`,
+			},
+		}},
+		{Role: message.RoleTool, Contents: []message.Content{
+			&message.FunctionResultContent{
+				CallID: "call_123",
+				Result: "sunny",
+			},
+		}},
+	}
+	resp, err := a.Run(t.Context(), messages).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := resp.String(); got != "It's sunny!" {
+		t.Errorf("response text = %q, want %q", got, "It's sunny!")
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	contents, _ := req["contents"].([]any)
+	if len(contents) != 2 {
+		t.Fatalf("expected 2 contents, got %d", len(contents))
+	}
+
+	// Second content should have a functionResponse with name resolved.
+	c1, _ := contents[1].(map[string]any)
+	parts, _ := c1["parts"].([]any)
+	if len(parts) == 0 {
+		t.Fatal("expected parts in function result content")
+	}
+	p0, _ := parts[0].(map[string]any)
+	fr, _ := p0["functionResponse"].(map[string]any)
+	if fr == nil {
+		t.Fatal("expected functionResponse in part")
+	}
+	if name, _ := fr["name"].(string); name != "get_weather" {
+		t.Errorf("functionResponse.name = %q, want %q", name, "get_weather")
+	}
+	if id, _ := fr["id"].(string); id != "call_123" {
+		t.Errorf("functionResponse.id = %q, want %q", id, "call_123")
+	}
+}
+
+// TestFunctionResultMissingCallID verifies that a FunctionResultContent with no
+// matching function call returns an error.
+func TestFunctionResultMissingCallID(t *testing.T) {
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "application/json", minimalTextResponse("ok")))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	messages := []*message.Message{
+		{Role: message.RoleTool, Contents: []message.Content{
+			&message.FunctionResultContent{
+				CallID: "unknown_call",
+				Result: "value",
+			},
+		}},
+	}
+	_, err := a.Run(t.Context(), messages).Collect()
+	if err == nil {
+		t.Fatal("expected error for missing function name, got nil")
+	}
+}
+
+// TestResponseWithThinkingContent verifies that response parts with thought=true
+// are translated into TextReasoningContent.
+func TestResponseWithThinkingContent(t *testing.T) {
+	resp := map[string]any{
+		"candidates": []any{
+			map[string]any{
+				"content": map[string]any{
+					"role": "model",
+					"parts": []any{
+						map[string]any{"thought": true, "text": "Let me think about this..."},
+						map[string]any{"text": "The answer is 42."},
+					},
+				},
+				"finishReason": "STOP",
+			},
+		},
+		"usageMetadata": map[string]any{
+			"promptTokenCount":     10,
+			"candidatesTokenCount": 15,
+			"totalTokenCount":      25,
+		},
+	}
+	respBody, _ := json.Marshal(resp)
+
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "application/json", string(respBody)))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	result, err := a.RunText(t.Context(), "What is the meaning of life?").Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var foundReasoning *message.TextReasoningContent
+	var foundText *message.TextContent
+	for _, msg := range result.Messages {
+		for _, c := range msg.Contents {
+			switch c := c.(type) {
+			case *message.TextReasoningContent:
+				foundReasoning = c
+			case *message.TextContent:
+				foundText = c
+			}
+		}
+	}
+	if foundReasoning == nil {
+		t.Fatal("expected TextReasoningContent in response")
+	}
+	if foundReasoning.Text != "Let me think about this..." {
+		t.Errorf("reasoning text = %q, want %q", foundReasoning.Text, "Let me think about this...")
+	}
+	if foundText == nil {
+		t.Fatal("expected TextContent in response")
+	}
+	if foundText.Text != "The answer is 42." {
+		t.Errorf("text = %q, want %q", foundText.Text, "The answer is 42.")
+	}
+}
+
+// TestResponseWithThoughtSignature verifies that thought signatures in response
+// parts are encoded as base64 in TextReasoningContent.ProtectedData.
+func TestResponseWithThoughtSignature(t *testing.T) {
+	resp := map[string]any{
+		"candidates": []any{
+			map[string]any{
+				"content": map[string]any{
+					"role": "model",
+					"parts": []any{
+						map[string]any{"thought": true, "thoughtSignature": "dGhpbmtpbmcgc2lnbmF0dXJlIGRhdGE="},
+						map[string]any{"text": "7^3 = 343"},
+					},
+				},
+				"finishReason": "STOP",
+			},
+		},
+		"usageMetadata": map[string]any{
+			"promptTokenCount":     8,
+			"candidatesTokenCount": 15,
+			"totalTokenCount":      23,
+		},
+	}
+	respBody, _ := json.Marshal(resp)
+
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "application/json", string(respBody)))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	result, err := a.RunText(t.Context(), "Solve 7^3").Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var foundReasoning *message.TextReasoningContent
+	for _, msg := range result.Messages {
+		for _, c := range msg.Contents {
+			if rc, ok := c.(*message.TextReasoningContent); ok {
+				foundReasoning = rc
+			}
+		}
+	}
+	if foundReasoning != nil && foundReasoning.ProtectedData == "" {
+		t.Error("expected non-empty ProtectedData for thought with signature")
+	}
+}
+
+// TestImageDataInRequest verifies that DataContent with image media type is
+// sent as inlineData in the request.
+func TestImageDataInRequest(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(captureAndRespond(t, bodyCh, "application/json", minimalTextResponse("I see an image.")))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	messages := []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{
+			&message.TextContent{Text: "What's in this image?"},
+			&message.DataContent{
+				Data:      "iVBORw0K",
+				MediaType: "image/png",
+			},
+		}},
+	}
+	resp, err := a.Run(t.Context(), messages).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := resp.String(); got != "I see an image." {
+		t.Errorf("response text = %q, want %q", got, "I see an image.")
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	contents, _ := req["contents"].([]any)
+	if len(contents) != 1 {
+		t.Fatalf("expected 1 content, got %d", len(contents))
+	}
+	c0, _ := contents[0].(map[string]any)
+	parts, _ := c0["parts"].([]any)
+	if len(parts) != 2 {
+		t.Fatalf("expected 2 parts, got %d", len(parts))
+	}
+	p1, _ := parts[1].(map[string]any)
+	inlineData, _ := p1["inlineData"].(map[string]any)
+	if inlineData == nil {
+		t.Fatal("expected inlineData in second part")
+	}
+	if mime, _ := inlineData["mimeType"].(string); mime != "image/png" {
+		t.Errorf("inlineData.mimeType = %q, want %q", mime, "image/png")
+	}
+}
+
+// TestStreamingWithFunctionCall verifies that a function call in a streaming
+// response is correctly translated.
+func TestStreamingWithFunctionCall(t *testing.T) {
+	funcCallResp := map[string]any{
+		"candidates": []any{
+			map[string]any{
+				"content": map[string]any{
+					"role": "model",
+					"parts": []any{
+						map[string]any{
+							"functionCall": map[string]any{
+								"name": "get_weather",
+								"args": map[string]any{"city": "Paris"},
+							},
+						},
+					},
+				},
+				"finishReason": "STOP",
+			},
+		},
+		"usageMetadata": map[string]any{
+			"promptTokenCount":     15,
+			"candidatesTokenCount": 8,
+			"totalTokenCount":      23,
+		},
+	}
+	respBody, _ := json.Marshal(funcCallResp)
+	streamResp := "data:" + string(respBody) + "\n\n"
+
+	weatherTool := functool.MustNew(&functool.Func{
+		Name:        "get_weather",
+		Description: "Gets weather",
+	}, func(_ tool.Context, args struct{ City string }) (string, error) {
+		return "sunny", nil
+	})
+
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "text/event-stream", streamResp))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	resp, err := a.RunText(t.Context(), "Weather in Paris?", agentopt.Stream(true), agentopt.Tool(weatherTool)).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var gotFuncCall *message.FunctionCallContent
+	for _, msg := range resp.Messages {
+		for _, c := range msg.Contents {
+			if fc, ok := c.(*message.FunctionCallContent); ok {
+				gotFuncCall = fc
+			}
+		}
+	}
+	if gotFuncCall == nil {
+		t.Fatal("expected FunctionCallContent in streaming response")
+	}
+	if gotFuncCall.Name != "get_weather" {
+		t.Errorf("FunctionCallContent.Name = %q, want %q", gotFuncCall.Name, "get_weather")
+	}
+}
+
+// TestMultiTurnWithFunctionCalls verifies a multi-turn conversation that
+// includes function call and result round-trips.
+func TestMultiTurnWithFunctionCalls(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(captureAndRespond(t, bodyCh, "application/json", minimalTextResponse("MSFT is at $378.91.")))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	messages := []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{
+			&message.TextContent{Text: "Check the stock price for GOOGL"},
+		}},
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			&message.FunctionCallContent{
+				CallID:    "call_stock_1",
+				Name:      "get_stock_price",
+				Arguments: `{"symbol":"GOOGL"}`,
+			},
+		}},
+		{Role: message.RoleTool, Contents: []message.Content{
+			&message.FunctionResultContent{
+				CallID: "call_stock_1",
+				Result: map[string]any{"symbol": "GOOGL", "price": 142.50},
+			},
+		}},
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			&message.TextContent{Text: "GOOGL is at $142.50."},
+		}},
+		{Role: message.RoleUser, Contents: []message.Content{
+			&message.TextContent{Text: "Now check MSFT"},
+		}},
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			&message.FunctionCallContent{
+				CallID:    "call_stock_2",
+				Name:      "get_stock_price",
+				Arguments: `{"symbol":"MSFT"}`,
+			},
+		}},
+		{Role: message.RoleTool, Contents: []message.Content{
+			&message.FunctionResultContent{
+				CallID: "call_stock_2",
+				Result: map[string]any{"symbol": "MSFT", "price": 378.91},
+			},
+		}},
+	}
+
+	stockTool := functool.MustNew(&functool.Func{
+		Name:        "get_stock_price",
+		Description: "Gets current stock price",
+	}, func(_ tool.Context, args struct{ Symbol string }) (string, error) {
+		return `{"price": 378.91}`, nil
+	})
+
+	resp, err := a.Run(t.Context(), messages, agentopt.Tool(stockTool)).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := resp.String(); got != "MSFT is at $378.91." {
+		t.Errorf("response text = %q, want %q", got, "MSFT is at $378.91.")
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	contents, _ := req["contents"].([]any)
+	if len(contents) != 7 {
+		t.Fatalf("expected 7 contents, got %d", len(contents))
+	}
+
+	// Verify roles alternate correctly.
+	wantRoles := []string{"user", "model", "user", "model", "user", "model", "user"}
+	for i, c := range contents {
+		cm, _ := c.(map[string]any)
+		role, _ := cm["role"].(string)
+		if role != wantRoles[i] {
+			t.Errorf("contents[%d].role = %q, want %q", i, role, wantRoles[i])
+		}
+	}
+}
+
+// TestParallelFunctionCalls verifies that multiple function calls and results
+// can be sent in a single turn.
+func TestParallelFunctionCalls(t *testing.T) {
+	resp := map[string]any{
+		"candidates": []any{
+			map[string]any{
+				"content": map[string]any{
+					"role": "model",
+					"parts": []any{
+						map[string]any{"text": "Weather comparison complete."},
+					},
+				},
+				"finishReason": "STOP",
+			},
+		},
+		"usageMetadata": map[string]any{
+			"promptTokenCount":     75,
+			"candidatesTokenCount": 10,
+			"totalTokenCount":      85,
+		},
+	}
+	respBody, _ := json.Marshal(resp)
+
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(captureAndRespond(t, bodyCh, "application/json", string(respBody)))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	messages := []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{
+			&message.TextContent{Text: "Compare weather in NYC, London, and Tokyo"},
+		}},
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			&message.FunctionCallContent{CallID: "call_w1", Name: "get_weather", Arguments: `{"city":"New York"}`},
+			&message.FunctionCallContent{CallID: "call_w2", Name: "get_weather", Arguments: `{"city":"London"}`},
+			&message.FunctionCallContent{CallID: "call_w3", Name: "get_weather", Arguments: `{"city":"Tokyo"}`},
+		}},
+		{Role: message.RoleTool, Contents: []message.Content{
+			&message.FunctionResultContent{CallID: "call_w1", Result: map[string]any{"city": "New York", "temp": 45}},
+			&message.FunctionResultContent{CallID: "call_w2", Result: map[string]any{"city": "London", "temp": 50}},
+			&message.FunctionResultContent{CallID: "call_w3", Result: map[string]any{"city": "Tokyo", "temp": 65}},
+		}},
+	}
+
+	weatherTool := functool.MustNew(&functool.Func{
+		Name:        "get_weather",
+		Description: "Gets weather for a city",
+	}, func(_ tool.Context, args struct{ City string }) (string, error) {
+		return "sunny", nil
+	})
+
+	result, err := a.Run(t.Context(), messages, agentopt.Tool(weatherTool)).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := result.String(); got != "Weather comparison complete." {
+		t.Errorf("response text = %q, want %q", got, "Weather comparison complete.")
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+
+	// The tool message should have 3 function results as parts.
+	contents, _ := req["contents"].([]any)
+	if len(contents) != 3 {
+		t.Fatalf("expected 3 contents, got %d", len(contents))
+	}
+	toolContent, _ := contents[2].(map[string]any)
+	toolParts, _ := toolContent["parts"].([]any)
+	if len(toolParts) != 3 {
+		t.Errorf("expected 3 tool parts, got %d", len(toolParts))
+	}
+}
+
+// TestThinkingContentRoundTrip verifies that TextReasoningContent sent back to
+// the model includes thought=true and the thought signature.
+func TestThinkingContentRoundTrip(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(captureAndRespond(t, bodyCh, "application/json", minimalTextResponse("done")))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	messages := []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{
+			&message.TextContent{Text: "Think about this"},
+		}},
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			&message.TextReasoningContent{
+				Text:          "Thinking deeply...",
+				ProtectedData: "dGhpbmtpbmcgc2lnbmF0dXJlIGRhdGE=",
+			},
+			&message.TextContent{Text: "Here's my answer."},
+		}},
+		{Role: message.RoleUser, Contents: []message.Content{
+			&message.TextContent{Text: "Continue"},
+		}},
+	}
+	_, err := a.Run(t.Context(), messages).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	contents, _ := req["contents"].([]any)
+	if len(contents) != 3 {
+		t.Fatalf("expected 3 contents, got %d", len(contents))
+	}
+
+	// The assistant message should have thought=true part with signature.
+	assistantContent, _ := contents[1].(map[string]any)
+	parts, _ := assistantContent["parts"].([]any)
+	if len(parts) < 2 {
+		t.Fatalf("expected at least 2 parts in assistant message, got %d", len(parts))
+	}
+	thoughtPart, _ := parts[0].(map[string]any)
+	if thought, _ := thoughtPart["thought"].(bool); !thought {
+		t.Error("expected thought=true in first part")
+	}
+	if sig, _ := thoughtPart["thoughtSignature"].(string); sig == "" {
+		t.Error("expected non-empty thoughtSignature in thought part")
+	}
+}
+
+// TestStreamingBasicResponse verifies that streaming reassembles multiple
+// chunks into the final response and individual updates are received.
+func TestStreamingBasicResponse(t *testing.T) {
+	chunk := func(m map[string]any) string {
+		b, _ := json.Marshal(m)
+		return "data:" + string(b) + "\n\n"
+	}
+	streamResp := chunk(map[string]any{
+		"candidates": []any{map[string]any{
+			"content": map[string]any{
+				"role":  "model",
+				"parts": []any{map[string]any{"text": "Hello"}},
+			},
+		}},
+	}) + chunk(map[string]any{
+		"candidates": []any{map[string]any{
+			"content": map[string]any{
+				"role":  "model",
+				"parts": []any{map[string]any{"text": " there"}},
+			},
+		}},
+	}) + chunk(map[string]any{
+		"candidates": []any{map[string]any{
+			"content": map[string]any{
+				"role":  "model",
+				"parts": []any{map[string]any{"text": "!"}},
+			},
+			"finishReason": "STOP",
+		}},
+		"usageMetadata": map[string]any{
+			"promptTokenCount":     4,
+			"candidatesTokenCount": 3,
+			"totalTokenCount":      7,
+		},
+	})
+
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 2), "text/event-stream", streamResp))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	// Iterate streaming updates and count text chunks.
+	var updateCount int
+	for update, err := range a.RunText(t.Context(), "Say hello", agentopt.Stream(true)) {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		for _, c := range update.Contents {
+			if _, ok := c.(*message.TextContent); ok {
+				updateCount++
+			}
+		}
+	}
+	if updateCount < 3 {
+		t.Fatalf("expected at least 3 text updates, got %d", updateCount)
+	}
+
+	// Verify Collect assembles the text correctly.
+	resp, err := a.RunText(t.Context(), "Say hello", agentopt.Stream(true)).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := resp.String(); got != "Hello there!" {
+		t.Errorf("collected text = %q, want %q", got, "Hello there!")
+	}
+}
+
+// TestStreamingMultipleChunks verifies that streaming with many chunks
+// reassembles correctly.
+func TestStreamingMultipleChunks(t *testing.T) {
+	chunk := func(m map[string]any) string {
+		b, _ := json.Marshal(m)
+		return "data:" + string(b) + "\n\n"
+	}
+
+	var streamResp string
+	texts := []string{"1", ", 2", ", 3", ", 4", ", 5"}
+	for i, text := range texts {
+		c := map[string]any{
+			"candidates": []any{map[string]any{
+				"content": map[string]any{
+					"role":  "model",
+					"parts": []any{map[string]any{"text": text}},
+				},
+			}},
+		}
+		if i == len(texts)-1 {
+			c["candidates"].([]any)[0].(map[string]any)["finishReason"] = "STOP"
+			c["usageMetadata"] = map[string]any{
+				"promptTokenCount":     5,
+				"candidatesTokenCount": 9,
+				"totalTokenCount":      14,
+			}
+		}
+		streamResp += chunk(c)
+	}
+
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "text/event-stream", streamResp))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	resp, err := a.RunText(t.Context(), "Count to five", agentopt.Stream(true)).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := resp.String(); got != "1, 2, 3, 4, 5" {
+		t.Errorf("collected text = %q, want %q", got, "1, 2, 3, 4, 5")
+	}
+}
+
+// TestLongConversationHistory verifies that a long conversation history is
+// correctly sent to the API.
+func TestLongConversationHistory(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(captureAndRespond(t, bodyCh, "application/json", minimalTextResponse("Glad to hear it!")))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	messages := []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Hi"}}},
+		{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "Hello"}}},
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "How are you?"}}},
+		{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "I'm good"}}},
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Great"}}},
+	}
+	resp, err := a.Run(t.Context(), messages).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := resp.String(); got != "Glad to hear it!" {
+		t.Errorf("response text = %q, want %q", got, "Glad to hear it!")
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	contents, _ := req["contents"].([]any)
+	if len(contents) != 5 {
+		t.Fatalf("expected 5 contents, got %d", len(contents))
+	}
+}
+
+// TestEmptyMessage verifies that an empty text message is handled.
+func TestEmptyMessage(t *testing.T) {
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "application/json", minimalTextResponse("Hello!")))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	resp, err := a.RunText(t.Context(), "").Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := resp.String(); got != "Hello!" {
+		t.Errorf("response text = %q, want %q", got, "Hello!")
+	}
+}
+
+// TestGenerateContentConfigOption verifies that the GenerateContentConfig option
+// is applied to the request.
+func TestGenerateContentConfigOption(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(captureAndRespond(t, bodyCh, "application/json", minimalTextResponse("ok")))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	temp := float32(0.5)
+	topP := float32(0.9)
+	topK := float32(20)
+	_, err := a.RunText(t.Context(), "Test",
+		geminiagent.GenerateContentConfig(genai.GenerateContentConfig{
+			Temperature:     &temp,
+			TopP:            &topP,
+			TopK:            &topK,
+			MaxOutputTokens: 100,
+			StopSequences:   []string{"END"},
+		}),
+	).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	gc, ok := req["generationConfig"].(map[string]any)
+	if !ok {
+		t.Fatal("request missing generationConfig")
+	}
+	if temp, _ := gc["temperature"].(float64); temp != 0.5 {
+		t.Errorf("temperature = %v, want 0.5", temp)
+	}
+	if topP, _ := gc["topP"].(float64); topP != 0.9 {
+		t.Errorf("topP = %v, want 0.9", topP)
+	}
+	if maxTokens, _ := gc["maxOutputTokens"].(float64); maxTokens != 100 {
+		t.Errorf("maxOutputTokens = %v, want 100", maxTokens)
+	}
+	stops, _ := gc["stopSequences"].([]any)
+	if len(stops) != 1 || stops[0] != "END" {
+		t.Errorf("stopSequences = %v, want [END]", stops)
+	}
+}
