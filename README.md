@@ -122,3 +122,5 @@ func main() {
 ## Important Notes
 
 If you use the Microsoft Agent Framework to build applications that operate with third-party servers or agents, you do so at your own risk. We recommend reviewing all data being shared with third-party servers or agents and being cognizant of third-party practices for retention and location of data. It is your responsibility to manage whether your data will flow outside of your organization's Azure compliance and geographic boundaries and any related implications.
+
+Microsoft Agent Framework for Go is currently in Private Preview. While it is functional and can be used for development and testing, it may not yet be suitable for production use.
