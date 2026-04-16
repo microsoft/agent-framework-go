@@ -170,7 +170,7 @@ func main() {
 	}
 	defer skillsRoot.Close()
 
-	skillsProvider := skills.NewContextProvider(skills.ProviderOptions{
+	skillsProvider := skills.NewContextProvider(skills.ContextProviderOptions{
 		Skills: []*skills.Skill{volumeConverterSkill, &temperatureConverterSkill},
 		Sources: []skills.Source{
 			fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: skillhelpers.RunSubprocessScript}, skillsRoot.FS()),

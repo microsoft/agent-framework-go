@@ -46,7 +46,7 @@ func main() {
 		panic(err)
 	}
 	defer skillsRoot.Close()
-	skillsProvider := skills.NewContextProvider(skills.ProviderOptions{
+	skillsProvider := skills.NewContextProvider(skills.ContextProviderOptions{
 		Sources: []skills.Source{
 			fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: skillhelpers.RunSubprocessScript}, skillsRoot.FS()),
 		},

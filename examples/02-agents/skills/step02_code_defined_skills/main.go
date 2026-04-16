@@ -103,7 +103,7 @@ func main() {
 		panic(err)
 	}
 
-	skillsProvider := skills.NewContextProvider(skills.ProviderOptions{Skills: []*skills.Skill{unitConverterSkill}})
+	skillsProvider := skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{unitConverterSkill}})
 	agent := openaichatagent.New(openaichatagent.Config{
 		Client: openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
