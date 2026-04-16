@@ -300,6 +300,10 @@ func buildRequestParts(msg *message.Message, callIDToName map[string]string) ([]
 				},
 			})
 		case *message.FunctionResultContent:
+			name, ok := callIDToName[c.CallID]
+			if c.CallID == "" || !ok || name == "" {
+				return nil, fmt.Errorf("geminiagent: missing function name for result with call ID %q", c.CallID)
+			}
 			response, err := toFunctionResponseMap(c)
 			if err != nil {
 				return nil, err
@@ -307,7 +311,7 @@ func buildRequestParts(msg *message.Message, callIDToName map[string]string) ([]
 			parts = append(parts, &genai.Part{
 				FunctionResponse: &genai.FunctionResponse{
 					ID:       c.CallID,
-					Name:     callIDToName[c.CallID],
+					Name:     name,
 					Response: response,
 				},
 			})

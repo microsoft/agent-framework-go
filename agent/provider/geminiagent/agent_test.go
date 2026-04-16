@@ -344,24 +344,25 @@ func TestToolCall_NonStreaming(t *testing.T) {
 	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
 		t.Fatalf("unmarshal request body: %v", err)
 	}
-	toolDecls, _ := nestedKey(req, "tools", "0", "functionDeclarations")
-	if toolDecls == nil {
-		// Gemini API key is "tools" → array of Tool objects
-		tools, _ := req["tools"].([]any)
-		if len(tools) == 0 {
-			t.Error("request missing tools")
-		} else {
-			firstTool, _ := tools[0].(map[string]any)
-			decls, _ := firstTool["functionDeclarations"].([]any)
-			if len(decls) == 0 {
-				t.Error("tools[0].functionDeclarations is empty")
-			} else {
-				decl, _ := decls[0].(map[string]any)
-				if name, _ := decl["name"].(string); name != "get_weather" {
-					t.Errorf("tools[0].functionDeclarations[0].name = %q, want %q", name, "get_weather")
-				}
-			}
-		}
+	// Gemini API key is "tools" → array of Tool objects
+	toolsAny, ok := req["tools"].([]any)
+	if !ok || len(toolsAny) == 0 {
+		t.Fatal("request missing tools or tools is not an array")
+	}
+	firstTool, ok := toolsAny[0].(map[string]any)
+	if !ok {
+		t.Fatal("tools[0] is not an object")
+	}
+	decls, ok := firstTool["functionDeclarations"].([]any)
+	if !ok || len(decls) == 0 {
+		t.Fatal("tools[0].functionDeclarations is missing, not an array, or empty")
+	}
+	decl, ok := decls[0].(map[string]any)
+	if !ok {
+		t.Fatal("tools[0].functionDeclarations[0] is not an object")
+	}
+	if name, _ := decl["name"].(string); name != "get_weather" {
+		t.Errorf("tools[0].functionDeclarations[0].name = %q, want %q", name, "get_weather")
 	}
 
 	// Verify the response contains a FunctionCallContent.
