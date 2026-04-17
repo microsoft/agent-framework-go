@@ -793,9 +793,10 @@ func TestDataInRequest(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		mediaType string
+		wantText  string
 	}{
-		{name: "image", mediaType: "image/png"},
-		{name: "json", mediaType: "application/json"},
+		{name: "image", mediaType: "image/png", wantText: "I see an image."},
+		{name: "json", mediaType: "application/json", wantText: "I see an image."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			messages := []*message.Message{
@@ -811,8 +812,8 @@ func TestDataInRequest(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if got := resp.String(); got != "I see an image." {
-				t.Errorf("response text = %q, want %q", got, "I see an image.")
+			if got := resp.String(); got != tc.wantText {
+				t.Errorf("response text = %q, want %q", got, tc.wantText)
 			}
 
 			var req map[string]any

@@ -94,7 +94,12 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				continue
 			}
 			for _, part := range cand.Content.Parts {
-				responseContents = buildResponsePart(part, responseContents)
+				responseContents, err = buildResponsePart(part, responseContents)
+				if err != nil {
+					return func(yield func(*message.ResponseUpdate, error) bool) {
+						yield(nil, err)
+					}
+				}
 			}
 		}
 		if resp.UsageMetadata != nil {
@@ -124,7 +129,11 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 					continue
 				}
 				for _, part := range cand.Content.Parts {
-					streamContents = buildResponsePart(part, streamContents)
+					streamContents, err = buildResponsePart(part, streamContents)
+					if err != nil {
+						yield(nil, err)
+						return
+					}
 				}
 			}
 			if resp.UsageMetadata != nil {
@@ -332,7 +341,7 @@ func buildRequestParts(msg *message.Message, callIDToName map[string]string) ([]
 }
 
 // buildResponsePart converts a genai Part from a response into framework message content.
-func buildResponsePart(part *genai.Part, contents []message.Content) []message.Content {
+func buildResponsePart(part *genai.Part, contents []message.Content) ([]message.Content, error) {
 	if part.Thought {
 		// Thinking model: emit TextReasoningContent. Encode ThoughtSignature as
 		// base64 in ProtectedData so it can be passed back in multi-turn requests.
@@ -361,22 +370,19 @@ func buildResponsePart(part *genai.Part, contents []message.Content) []message.C
 			args = map[string]any{}
 		}
 		argsJSON, err := json.Marshal(args)
-		content := &message.FunctionCallContent{
+		if err != nil {
+			return nil, fmt.Errorf("geminiagent: failed to marshal function call arguments: %w", err)
+		}
+		contents = append(contents, &message.FunctionCallContent{
 			CallID:    part.FunctionCall.ID,
 			Name:      part.FunctionCall.Name,
+			Arguments: string(argsJSON),
 			ContentHeader: message.ContentHeader{
 				RawRepresentation: part,
 			},
-		}
-		if err != nil {
-			content.Arguments = "{}"
-			content.Error = fmt.Errorf("geminiagent: failed to marshal function call arguments: %w", err)
-		} else {
-			content.Arguments = string(argsJSON)
-		}
-		contents = append(contents, content)
+		})
 	}
-	return contents
+	return contents, nil
 }
 
 // toFunctionResponseMap converts a FunctionResultContent's result to the map[string]any
