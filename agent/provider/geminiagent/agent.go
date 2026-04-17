@@ -227,8 +227,8 @@ func (a *client) buildParams(messages []*message.Message, opts []agentopt.Option
 	for _, msg := range messages {
 		switch msg.Role {
 		case message.RoleSystem:
-			// Gemini uses a single system instruction content.
-			// Concatenate all system text parts.
+			// Gemini uses a single system instruction content that can hold multiple parts.
+			// Add each non-empty system text content as its own part.
 			if cfg.SystemInstruction == nil {
 				cfg.SystemInstruction = &genai.Content{Role: genai.RoleUser}
 			}
@@ -316,18 +316,16 @@ func buildRequestParts(msg *message.Message, callIDToName map[string]string) ([]
 				},
 			})
 		case *message.DataContent:
-			if mt := c.TopLevelMediaType(); mt == "image" || mt == "audio" || mt == "video" {
-				data, err := c.Bytes()
-				if err != nil {
-					return nil, fmt.Errorf("geminiagent: failed to decode data content: %w", err)
-				}
-				parts = append(parts, &genai.Part{
-					InlineData: &genai.Blob{
-						Data:     data,
-						MIMEType: c.MediaType,
-					},
-				})
+			data, err := c.Bytes()
+			if err != nil {
+				return nil, fmt.Errorf("geminiagent: failed to decode data content: %w", err)
 			}
+			parts = append(parts, &genai.Part{
+				InlineData: &genai.Blob{
+					Data:     data,
+					MIMEType: c.MediaType,
+				},
+			})
 		}
 	}
 	return parts, nil
@@ -362,15 +360,21 @@ func buildResponsePart(part *genai.Part, contents []message.Content) []message.C
 		if args == nil {
 			args = map[string]any{}
 		}
-		argsJSON, _ := json.Marshal(args)
-		contents = append(contents, &message.FunctionCallContent{
+		argsJSON, err := json.Marshal(args)
+		content := &message.FunctionCallContent{
 			CallID:    part.FunctionCall.ID,
 			Name:      part.FunctionCall.Name,
-			Arguments: string(argsJSON),
 			ContentHeader: message.ContentHeader{
 				RawRepresentation: part,
 			},
-		})
+		}
+		if err != nil {
+			content.Arguments = "{}"
+			content.Error = fmt.Errorf("geminiagent: failed to marshal function call arguments: %w", err)
+		} else {
+			content.Arguments = string(argsJSON)
+		}
+		contents = append(contents, content)
 	}
 	return contents
 }

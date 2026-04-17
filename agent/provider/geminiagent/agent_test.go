@@ -470,8 +470,8 @@ func TestMultiTurnConversation(t *testing.T) {
 	}
 }
 
-// TestMultipleSystemMessages verifies that multiple system text parts are
-// concatenated into a single systemInstruction.
+// TestMultipleSystemMessages verifies that multiple system text parts are sent
+// in systemInstruction.
 func TestMultipleSystemMessages(t *testing.T) {
 	bodyCh := make(chan []byte, 1)
 	server := httptest.NewServer(captureAndRespond(t, bodyCh, "application/json", minimalTextResponse("ok")))
@@ -781,52 +781,62 @@ func TestResponseWithThoughtSignature(t *testing.T) {
 	}
 }
 
-// TestImageDataInRequest verifies that DataContent with image media type is
-// sent as inlineData in the request.
-func TestImageDataInRequest(t *testing.T) {
+// TestDataInRequest verifies that DataContent is sent as inlineData in the
+// request.
+func TestDataInRequest(t *testing.T) {
 	bodyCh := make(chan []byte, 1)
 	server := httptest.NewServer(captureAndRespond(t, bodyCh, "application/json", minimalTextResponse("I see an image.")))
 	defer server.Close()
 
 	a := newTestClient(t, server)
 
-	messages := []*message.Message{
-		{Role: message.RoleUser, Contents: []message.Content{
-			&message.TextContent{Text: "What's in this image?"},
-			&message.DataContent{
-				Data:      "iVBORw0K",
-				MediaType: "image/png",
-			},
-		}},
-	}
-	resp, err := a.Run(t.Context(), messages).Collect()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got := resp.String(); got != "I see an image." {
-		t.Errorf("response text = %q, want %q", got, "I see an image.")
-	}
+	for _, tc := range []struct {
+		name      string
+		mediaType string
+	}{
+		{name: "image", mediaType: "image/png"},
+		{name: "json", mediaType: "application/json"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			messages := []*message.Message{
+				{Role: message.RoleUser, Contents: []message.Content{
+					&message.TextContent{Text: "What's in this data?"},
+					&message.DataContent{
+						Data:      "eyJrZXkiOiAidmFsdWUifQ==",
+						MediaType: tc.mediaType,
+					},
+				}},
+			}
+			resp, err := a.Run(t.Context(), messages).Collect()
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got := resp.String(); got != "I see an image." {
+				t.Errorf("response text = %q, want %q", got, "I see an image.")
+			}
 
-	var req map[string]any
-	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
-		t.Fatalf("unmarshal request body: %v", err)
-	}
-	contents, _ := req["contents"].([]any)
-	if len(contents) != 1 {
-		t.Fatalf("expected 1 content, got %d", len(contents))
-	}
-	c0, _ := contents[0].(map[string]any)
-	parts, _ := c0["parts"].([]any)
-	if len(parts) != 2 {
-		t.Fatalf("expected 2 parts, got %d", len(parts))
-	}
-	p1, _ := parts[1].(map[string]any)
-	inlineData, _ := p1["inlineData"].(map[string]any)
-	if inlineData == nil {
-		t.Fatal("expected inlineData in second part")
-	}
-	if mime, _ := inlineData["mimeType"].(string); mime != "image/png" {
-		t.Errorf("inlineData.mimeType = %q, want %q", mime, "image/png")
+			var req map[string]any
+			if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+				t.Fatalf("unmarshal request body: %v", err)
+			}
+			contents, _ := req["contents"].([]any)
+			if len(contents) != 1 {
+				t.Fatalf("expected 1 content, got %d", len(contents))
+			}
+			c0, _ := contents[0].(map[string]any)
+			parts, _ := c0["parts"].([]any)
+			if len(parts) != 2 {
+				t.Fatalf("expected 2 parts, got %d", len(parts))
+			}
+			p1, _ := parts[1].(map[string]any)
+			inlineData, _ := p1["inlineData"].(map[string]any)
+			if inlineData == nil {
+				t.Fatal("expected inlineData in second part")
+			}
+			if mime, _ := inlineData["mimeType"].(string); mime != tc.mediaType {
+				t.Errorf("inlineData.mimeType = %q, want %q", mime, tc.mediaType)
+			}
+		})
 	}
 }
 
