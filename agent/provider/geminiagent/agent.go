@@ -45,7 +45,16 @@ type Config struct {
 // New creates a new [agent.Agent] backed by the Google Gemini API via the genai client.
 // If Client is nil, [genai.NewClient] is called with nil config, which reads credentials
 // from the GOOGLE_API_KEY or GEMINI_API_KEY environment variables.
-func New(ctx context.Context, config Config) (*agent.Agent, error) {
+func New(config Config) *agent.Agent {
+	a, err := NewWithContext(context.Background(), config)
+	if err != nil {
+		panic(err)
+	}
+	return a
+}
+
+// NewWithContext is like [New], but allows passing a context when creating a default genai client.
+func NewWithContext(ctx context.Context, config Config) (*agent.Agent, error) {
 	if config.Client == nil {
 		var err error
 		config.Client, err = genai.NewClient(ctx, nil)
@@ -289,9 +298,11 @@ func buildRequestParts(msg *message.Message, callIDToName map[string]string) ([]
 			// Pass thought blocks back to the model in multi-turn conversations.
 			part := &genai.Part{Thought: true, Text: c.Text}
 			if c.ProtectedData != "" {
-				if sig, err := base64.StdEncoding.DecodeString(c.ProtectedData); err == nil {
-					part.ThoughtSignature = sig
+				sig, err := base64.StdEncoding.DecodeString(c.ProtectedData)
+				if err != nil {
+					return nil, fmt.Errorf("geminiagent: failed to decode reasoning protected data: %w", err)
 				}
+				part.ThoughtSignature = sig
 			}
 			parts = append(parts, part)
 		case *message.FunctionCallContent:

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -38,14 +39,11 @@ func newTestClient(t *testing.T, server *httptest.Server) *agent.Agent {
 	if err != nil {
 		t.Fatalf("genai.NewClient: %v", err)
 	}
-	a, err := geminiagent.New(t.Context(), geminiagent.Config{
+	a := geminiagent.New(geminiagent.Config{
 		Model:  testModel,
 		Client: client,
 		Agent:  agent.Config{DisableFuncAutoCall: true},
 	})
-	if err != nil {
-		t.Fatalf("geminiagent.New: %v", err)
-	}
 	return a
 }
 
@@ -737,6 +735,7 @@ func TestResponseWithThinkingContent(t *testing.T) {
 // TestResponseWithThoughtSignature verifies that thought signatures in response
 // parts are encoded as base64 in TextReasoningContent.ProtectedData.
 func TestResponseWithThoughtSignature(t *testing.T) {
+	const wantProtectedData = "dGhpbmtpbmcgc2lnbmF0dXJlIGRhdGE="
 	resp := map[string]any{
 		"candidates": []any{
 			map[string]any{
@@ -776,8 +775,37 @@ func TestResponseWithThoughtSignature(t *testing.T) {
 			}
 		}
 	}
-	if foundReasoning != nil && foundReasoning.ProtectedData == "" {
-		t.Error("expected non-empty ProtectedData for thought with signature")
+	if foundReasoning == nil {
+		t.Fatal("expected TextReasoningContent in response")
+	}
+	if foundReasoning.ProtectedData != wantProtectedData {
+		t.Errorf("reasoning ProtectedData = %q, want %q", foundReasoning.ProtectedData, wantProtectedData)
+	}
+}
+
+// TestInvalidReasoningProtectedData verifies that invalid base64 in
+// TextReasoningContent.ProtectedData returns a clear error.
+func TestInvalidReasoningProtectedData(t *testing.T) {
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "application/json", minimalTextResponse("ok")))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	messages := []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{
+			&message.TextReasoningContent{
+				Text:          "thinking",
+				ProtectedData: "not-base64!!",
+			},
+		}},
+	}
+
+	_, err := a.Run(t.Context(), messages).Collect()
+	if err == nil {
+		t.Fatal("expected error for invalid reasoning protected data, got nil")
+	}
+	if got := err.Error(); got == "" || !strings.Contains(got, "failed to decode reasoning protected data") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
