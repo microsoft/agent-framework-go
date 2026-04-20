@@ -98,15 +98,15 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 			}
 		}
 		var responseContents []message.Content
-		for _, cand := range resp.Candidates {
-			if cand.Content == nil {
-				continue
-			}
-			for _, part := range cand.Content.Parts {
-				responseContents, err = buildResponsePart(part, responseContents)
-				if err != nil {
-					return func(yield func(*message.ResponseUpdate, error) bool) {
-						yield(nil, err)
+		if len(resp.Candidates) > 0 {
+			cand := resp.Candidates[0]
+			if cand.Content != nil {
+				for _, part := range cand.Content.Parts {
+					responseContents, err = buildResponsePart(part, responseContents)
+					if err != nil {
+						return func(yield func(*message.ResponseUpdate, error) bool) {
+							yield(nil, err)
+						}
 					}
 				}
 			}
@@ -133,15 +133,15 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				return
 			}
 			var streamContents []message.Content
-			for _, cand := range resp.Candidates {
-				if cand.Content == nil {
-					continue
-				}
-				for _, part := range cand.Content.Parts {
-					streamContents, err = buildResponsePart(part, streamContents)
-					if err != nil {
-						yield(nil, err)
-						return
+			if len(resp.Candidates) > 0 {
+				cand := resp.Candidates[0]
+				if cand.Content != nil {
+					for _, part := range cand.Content.Parts {
+						streamContents, err = buildResponsePart(part, streamContents)
+						if err != nil {
+							yield(nil, err)
+							return
+						}
 					}
 				}
 			}

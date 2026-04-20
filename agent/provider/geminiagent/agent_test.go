@@ -590,6 +590,43 @@ func TestResponseWithMultipleTextParts(t *testing.T) {
 	}
 }
 
+// TestResponseWithMultipleCandidates_NonStreaming verifies that only the first
+// candidate is used in non-streaming responses.
+func TestResponseWithMultipleCandidates_NonStreaming(t *testing.T) {
+	resp := map[string]any{
+		"candidates": []any{
+			map[string]any{
+				"content": map[string]any{
+					"role":  "model",
+					"parts": []any{map[string]any{"text": "first candidate"}},
+				},
+				"finishReason": "STOP",
+			},
+			map[string]any{
+				"content": map[string]any{
+					"role":  "model",
+					"parts": []any{map[string]any{"text": "second candidate"}},
+				},
+				"finishReason": "STOP",
+			},
+		},
+	}
+	respBody, _ := json.Marshal(resp)
+
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "application/json", string(respBody)))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	result, err := a.RunText(t.Context(), "Pick one candidate").Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := result.String(); got != "first candidate" {
+		t.Errorf("response text = %q, want %q", got, "first candidate")
+	}
+}
+
 // TestFunctionResultMapping verifies that FunctionResultContent is correctly
 // mapped back to the API with the function name resolved from the call ID.
 func TestFunctionResultMapping(t *testing.T) {
@@ -1251,6 +1288,50 @@ func TestStreamingMultipleChunks(t *testing.T) {
 	}
 	if got := resp.String(); got != "1, 2, 3, 4, 5" {
 		t.Errorf("collected text = %q, want %q", got, "1, 2, 3, 4, 5")
+	}
+}
+
+// TestStreamingMultipleCandidatesPerChunk verifies that only the first
+// candidate is used from each streamed chunk.
+func TestStreamingMultipleCandidatesPerChunk(t *testing.T) {
+	chunk := func(m map[string]any) string {
+		b, _ := json.Marshal(m)
+		return "data:" + string(b) + "\n\n"
+	}
+	streamResp := chunk(map[string]any{
+		"candidates": []any{
+			map[string]any{
+				"content": map[string]any{
+					"role":  "model",
+					"parts": []any{map[string]any{"text": "first"}},
+				},
+			},
+			map[string]any{
+				"content": map[string]any{
+					"role":  "model",
+					"parts": []any{map[string]any{"text": "second"}},
+				},
+			},
+		},
+	}) + chunk(map[string]any{
+		"usageMetadata": map[string]any{
+			"promptTokenCount":     4,
+			"candidatesTokenCount": 2,
+			"totalTokenCount":      6,
+		},
+	})
+
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "text/event-stream", streamResp))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	resp, err := a.RunText(t.Context(), "Pick one stream candidate", agentopt.Stream(true)).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := resp.String(); got != "first" {
+		t.Errorf("collected text = %q, want %q", got, "first")
 	}
 }
 
