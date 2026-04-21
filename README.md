@@ -95,12 +95,14 @@ func main() {
 
 	// Create an Azure OpenAI agent.
 	// Replace <endpoint> and <apiVersion> with your Azure Foundry endpoint and API version.
-	a := openaichatagent.NewAgent(openaichatagent.Config{
-		Client: openai.NewClient(
+	a := openaichatagent.New(
+		openai.NewClient(
 			azure.WithEndpoint("<endpoint>", "<apiVersion>"),
 			azure.WithTokenCredential(token),
 		),
-		Model: "gpt-4o-mini",
+		openaichatagent.Config{
+			Model: "gpt-4o-mini",
+		},
 	})
 
 	// Run the agent.
