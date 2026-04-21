@@ -39,12 +39,11 @@ func newTestClient(t *testing.T, server *httptest.Server) *agent.Agent {
 	if err != nil {
 		t.Fatalf("genai.NewClient: %v", err)
 	}
-	a := geminiagent.New(geminiagent.Config{
+	return geminiagent.New(client, geminiagent.Config{
 		Model:  testModel,
 		Client: client,
-		Agent:  agent.Config{DisableFuncAutoCall: true},
+		Config: agent.Config{DisableFuncAutoCall: true},
 	})
-	return a
 }
 
 // captureAndRespond returns a handler that saves the request body to bodyCh and

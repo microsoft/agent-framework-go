@@ -36,34 +36,16 @@ type client struct {
 
 // Config contains configuration for [New].
 type Config struct {
+	agent.Config
+
 	Model  string
 	Client *genai.Client
-
-	Agent agent.Config
 }
 
 // New creates a new [agent.Agent] backed by the Google Gemini API via the genai client.
-// If Client is nil, [genai.NewClient] is called with nil config, which reads credentials
-// from the GOOGLE_API_KEY or GEMINI_API_KEY environment variables.
-func New(config Config) *agent.Agent {
-	a, err := NewWithContext(context.Background(), config)
-	if err != nil {
-		panic(err)
-	}
-	return a
-}
-
-// NewWithContext is like [New], but allows passing a context when creating a default genai client.
-func NewWithContext(ctx context.Context, config Config) (*agent.Agent, error) {
-	if config.Client == nil {
-		var err error
-		config.Client, err = genai.NewClient(ctx, nil)
-		if err != nil {
-			return nil, fmt.Errorf("geminiagent: failed to create genai client: %w", err)
-		}
-	}
+func New(gclient *genai.Client, config Config) *agent.Agent {
 	c := &client{
-		client: config.Client,
+		client: gclient,
 		config: config,
 	}
 	return agent.New(agent.ProviderConfig{
@@ -71,7 +53,7 @@ func NewWithContext(ctx context.Context, config Config) (*agent.Agent, error) {
 		ProviderName: "gemini",
 		FormatOfFn:   c.formatOf,
 		UnmarshalFn:  c.unmarshal,
-	}, config.Agent), nil
+	}, config.Config)
 }
 
 func (a *client) formatOf(v any) (format.Format, error) {

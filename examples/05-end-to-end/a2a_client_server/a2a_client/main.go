@@ -57,29 +57,33 @@ func main() {
 			demo.Panicf("failed to create A2A client for %s: %v", url, err)
 		}
 
-		remoteAgent := a2aagent.New(a2aagent.Config{
-			Client: client,
-			Agent: agent.Config{
-				Name:        card.Name,
-				Description: card.Description,
+		remoteAgent := a2aagent.New(
+			client,
+			a2aagent.Config{
+				Config: agent.Config{
+					Name:        card.Name,
+					Description: card.Description,
+				},
 			},
-		})
+		)
 		tools = append(tools, remoteAgent.AsFuncTool())
 	}
 
-	host := openaichatagent.New(openaichatagent.Config{
-		Client: openai.NewClient(
+	host := openaichatagent.New(
+		openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
 			azure.WithTokenCredential(token),
 		),
-		Model: deployment,
-		Agent: agent.Config{
-			Name:         "HostClient",
-			Instructions: "You specialize in handling user queries and using your tools to provide answers.",
-			Middlewares:  []middleware.Middleware{logger},
-			Tools:        tools,
+		openaichatagent.Config{
+			Model: deployment,
+			Config: agent.Config{
+				Name:         "HostClient",
+				Instructions: "You specialize in handling user queries and using your tools to provide answers.",
+				Middlewares:  []middleware.Middleware{logger},
+				Tools:        tools,
+			},
 		},
-	})
+	)
 
 	session, err := host.CreateSession(ctx)
 	if err != nil {

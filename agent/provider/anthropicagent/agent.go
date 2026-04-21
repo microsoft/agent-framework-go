@@ -38,19 +38,14 @@ type client struct {
 
 // Config contains configuration for [New].
 type Config struct {
-	Model  string
-	Client anthropic.Client
+	agent.Config
 
-	Agent agent.Config
+	Model string
 }
 
-func New(config Config) *agent.Agent {
-	if len(config.Client.Options) == 0 {
-		config.Client = anthropic.NewClient()
-	}
-
+func New(aclient anthropic.Client, config Config) *agent.Agent {
 	c := &client{
-		client: config.Client,
+		client: aclient,
 		config: config,
 	}
 	return agent.New(agent.ProviderConfig{
@@ -58,7 +53,7 @@ func New(config Config) *agent.Agent {
 		ProviderName: "anthropic",
 		FormatOfFn:   c.formatOf,
 		UnmarshalFn:  c.unmarshal,
-	}, config.Agent)
+	}, config.Config)
 }
 
 func (a *client) formatOf(v any) (format.Format, error) {

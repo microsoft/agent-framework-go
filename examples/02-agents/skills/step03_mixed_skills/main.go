@@ -177,19 +177,21 @@ func main() {
 		},
 	})
 
-	agent := openaichatagent.New(openaichatagent.Config{
-		Client: openai.NewClient(
+	agent := openaichatagent.New(
+		openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
 			azure.WithTokenCredential(token),
 		),
-		Model: deployment,
-		Agent: agent.Config{
-			Name:             "MultiConverterAgent",
-			Instructions:     "You are a helpful assistant that can convert units, volumes, and temperatures.",
-			Middlewares:      []middleware.Middleware{logger},
-			ContextProviders: []*memory.ContextProvider{skillsProvider},
+		openaichatagent.Config{
+			Model: deployment,
+			Config: agent.Config{
+				Name:             "MultiConverterAgent",
+				Instructions:     "You are a helpful assistant that can convert units, volumes, and temperatures.",
+				Middlewares:      []middleware.Middleware{logger},
+				ContextProviders: []*memory.ContextProvider{skillsProvider},
+			},
 		},
-	})
+	)
 
 	response, err := agent.RunText(
 		context.Background(),

@@ -52,19 +52,21 @@ func main() {
 		},
 	})
 
-	agent := openaichatagent.New(openaichatagent.Config{
-		Client: openai.NewClient(
+	agent := openaichatagent.New(
+		openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
 			azure.WithTokenCredential(token),
 		),
-		Model: deployment,
-		Agent: agent.Config{
-			Name:             "UnitConverterAgent",
-			Instructions:     "You are a helpful assistant that can convert units.",
-			Middlewares:      []middleware.Middleware{logger},
-			ContextProviders: []*memory.ContextProvider{skillsProvider},
+		openaichatagent.Config{
+			Model: deployment,
+			Config: agent.Config{
+				Name:             "UnitConverterAgent",
+				Instructions:     "You are a helpful assistant that can convert units.",
+				Middlewares:      []middleware.Middleware{logger},
+				ContextProviders: []*memory.ContextProvider{skillsProvider},
+			},
 		},
-	})
+	)
 
 	ctx := context.Background()
 	response, err := agent.RunText(ctx, "How many kilometers is a marathon (26.2 miles)? And how many pounds is 75 kilograms?").Collect()

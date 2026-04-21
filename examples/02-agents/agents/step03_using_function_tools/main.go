@@ -45,18 +45,20 @@ func main() {
 	}
 
 	// Create Azure OpenAI agent, and provide the function tool to the agent.
-	a := openaichatagent.New(openaichatagent.Config{
-		Client: openai.NewClient(
+	a := openaichatagent.New(
+		openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
 			azure.WithTokenCredential(token),
 		),
-		Model: deployment,
-		Agent: agent.Config{
-			Instructions: "You are a helpful assistant",
-			Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
-			Tools:        []tool.Tool{weatherTool},
+		openaichatagent.Config{
+			Model: deployment,
+			Config: agent.Config{
+				Instructions: "You are a helpful assistant",
+				Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
+				Tools:        []tool.Tool{weatherTool},
+			},
 		},
-	})
+	)
 
 	ctx := context.Background()
 

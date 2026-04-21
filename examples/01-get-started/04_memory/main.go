@@ -38,19 +38,21 @@ func main() {
 		panic(err)
 	}
 
-	a := openaichatagent.New(openaichatagent.Config{
-		Client: openai.NewClient(
+	a := openaichatagent.New(
+		openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
 			azure.WithTokenCredential(token),
 		),
-		Model: deployment,
-		Agent: agent.Config{
-			Instructions:     "You are a friendly assistant.",
-			Name:             "MemoryAgent",
-			Middlewares:      []middleware.Middleware{logger}, // for logging agent interactions
-			ContextProviders: []*memory.ContextProvider{newUserMemoryProvider()},
+		openaichatagent.Config{
+			Model: deployment,
+			Config: agent.Config{
+				Instructions:     "You are a friendly assistant.",
+				Name:             "MemoryAgent",
+				Middlewares:      []middleware.Middleware{logger}, // for logging agent interactions
+				ContextProviders: []*memory.ContextProvider{newUserMemoryProvider()},
+			},
 		},
-	})
+	)
 
 	ctx := context.Background()
 	session, err := a.CreateSession(ctx)

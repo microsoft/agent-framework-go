@@ -36,17 +36,19 @@ func main() {
 	}
 
 	// Create Azure OpenAI agent
-	a := openaichatagent.New(openaichatagent.Config{
-		Client: openai.NewClient(
+	a := openaichatagent.New(
+		openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
 			azure.WithTokenCredential(token),
 		),
-		Model: deployment,
-		Agent: agent.Config{
-			Instructions: "You are good at telling jokes.", Name: "Joker",
-			Middlewares: []middleware.Middleware{logger}, // for logging agent interactions
+		openaichatagent.Config{
+			Model: deployment,
+			Config: agent.Config{
+				Instructions: "You are good at telling jokes.", Name: "Joker",
+				Middlewares: []middleware.Middleware{logger}, // for logging agent interactions
+			},
 		},
-	})
+	)
 
 	// Invoke the agent and output the text result.
 	resp, err := a.RunText(context.Background(), "Tell me a joke about a pirate.").Collect()

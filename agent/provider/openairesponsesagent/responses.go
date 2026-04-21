@@ -32,10 +32,23 @@ import (
 
 // Config contains configuration for [Agent].
 type Config struct {
-	Model  string // required
-	Client openai.Client
+	agent.Config
 
-	Agent agent.Config
+	Model string // required
+}
+
+func New(oclient openai.Client, config Config) *agent.Agent {
+	c := &responsesClient{
+		client: oclient,
+		config: config,
+	}
+	return agent.New(
+		agent.ProviderConfig{
+			ProviderName: "openai",
+			FormatOfFn:   c.formatOf,
+			UnmarshalFn:  c.unmarshal,
+			Run:          c.run,
+		}, config.Config)
 }
 
 type responsesClient struct {
@@ -54,33 +67,12 @@ func ResponsesNewParams(params responses.ResponseNewParams) agentopt.Option {
 	return responsesNewParamsOpt(params)
 }
 
-func newAgent(config Config) *agent.Agent {
-	if len(config.Client.Options) == 0 {
-		config.Client = openai.NewClient()
-	}
-	c := &responsesClient{
-		client: config.Client,
-		config: config,
-	}
-	return agent.New(
-		agent.ProviderConfig{
-			ProviderName: "openai",
-			FormatOfFn:   c.formatOf,
-			UnmarshalFn:  c.unmarshal,
-			Run:          c.run,
-		}, config.Agent)
-}
-
 func (a *responsesClient) formatOf(v any) (format.Format, error) {
 	return jsonformat.ForType(reflect.TypeOf(v))
 }
 
 func (a *responsesClient) unmarshal(format format.Format, data []byte, v any) error {
 	return jsonformat.Unmarshal(format.(*jsonformat.Format), data, v)
-}
-
-func New(config Config) *agent.Agent {
-	return newAgent(config)
 }
 
 func (a *responsesClient) run(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {

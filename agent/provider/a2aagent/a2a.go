@@ -22,8 +22,7 @@ import (
 )
 
 type Config struct {
-	Client *a2aclient.Client
-	Agent  agent.Config
+	agent.Config
 }
 
 type taskIDOpt struct{ string }
@@ -39,20 +38,20 @@ type a2aagent struct {
 	cfg    Config
 }
 
-func New(config Config) *agent.Agent {
-	if config.Client == nil {
-		panic("client cannot be nil")
+func New(aclient *a2aclient.Client, config Config) *agent.Agent {
+	if aclient == nil {
+		panic("a2aagent: client cannot be nil")
 	}
 	a := &a2aagent{
-		client: config.Client,
+		client: aclient,
 		cfg:    config,
 	}
-	config.Agent.DisableFuncAutoCall = true // a2a doesn't support tool calls
+	config.DisableFuncAutoCall = true // a2a doesn't support tool calls
 	return agent.New(agent.ProviderConfig{
 		ProviderName:  "a2a",
 		Run:           a.run,
 		CreateSession: a.createSession,
-	}, config.Agent)
+	}, config.Config)
 }
 
 func (a *a2aagent) createSession(ctx context.Context, options ...agentopt.Option) (*memory.Session, error) {

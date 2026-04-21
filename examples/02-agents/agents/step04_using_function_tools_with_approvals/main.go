@@ -47,18 +47,20 @@ func main() {
 
 	// Create Azure OpenAI agent.
 	// Note that we are wrapping the function tool with tool.ApprovalRequiredFunc to require user approval before invoking it.
-	a := openaichatagent.New(openaichatagent.Config{
-		Client: openai.NewClient(
+	a := openaichatagent.New(
+		openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
 			azure.WithTokenCredential(token),
 		),
-		Model: deployment,
-		Agent: agent.Config{
-			Instructions: "You are a helpful assistant",
-			Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
-			Tools:        []tool.Tool{tool.ApprovalRequiredFunc(weatherTool)},
+		openaichatagent.Config{
+			Model: deployment,
+			Config: agent.Config{
+				Instructions: "You are a helpful assistant",
+				Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
+				Tools:        []tool.Tool{tool.ApprovalRequiredFunc(weatherTool)},
+			},
 		},
-	})
+	)
 
 	ctx := context.Background()
 

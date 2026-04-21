@@ -140,7 +140,7 @@ func newTestAgent(transport a2aclient.Transport, config agent.Config) *agent.Age
 	if err != nil {
 		panic(err)
 	}
-	return a2a1.New(a2a1.Config{Client: client, Agent: config})
+	return a2a1.New(client, a2a1.Config{Config: config})
 }
 
 func latestTaskID(session *memory.Session) string {
@@ -158,7 +158,7 @@ func TestConstructorWithNilClient(t *testing.T) {
 			t.Error("Expected panic when client is nil")
 		}
 	}()
-	a2a1.New(a2a1.Config{})
+	a2a1.New(nil, a2a1.Config{})
 }
 
 // TestRunAllowsNonUserRoleMessages tests that non-user role messages are accepted

@@ -64,10 +64,10 @@ func newTestResponsesServerStreaming(t *testing.T, input string, output string) 
 
 func newTestResponsesClient(server *httptest.Server, model string) *agent.Agent {
 	return openairesponsesagent.New(
+		openai.NewClient(option.WithBaseURL(server.URL)),
 		openairesponsesagent.Config{
 			Model:  model,
-			Client: openai.NewClient(option.WithBaseURL(server.URL)),
-			Agent:  agent.Config{DisableFuncAutoCall: true},
+			Config: agent.Config{DisableFuncAutoCall: true},
 		},
 	)
 }

@@ -24,14 +24,15 @@ type testOutput struct {
 
 func newTestClient(t *testing.T, server *httptest.Server) *agent.Agent {
 	t.Helper()
-	return anthropicagent.New(anthropicagent.Config{
-		Model: "claude-3-5-sonnet-20241022",
-		Client: anthropic.NewClient(
+	return anthropicagent.New(
+		anthropic.NewClient(
 			option.WithBaseURL(server.URL),
 			option.WithAPIKey("test"),
 		),
-		Agent: agent.Config{DisableFuncAutoCall: true},
-	})
+		anthropicagent.Config{
+			Model:  "claude-3-5-sonnet-20241022",
+			Config: agent.Config{DisableFuncAutoCall: true},
+		})
 }
 
 // nestedKey traverses a decoded JSON map following the given path of keys and

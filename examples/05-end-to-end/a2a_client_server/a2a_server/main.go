@@ -115,13 +115,14 @@ func main() {
 		"URL", url,
 	)
 
-	cfg, card := buildAgent(*agentType, deployment)
-	cfg.Client = openai.NewClient(
+	oclient := openai.NewClient(
 		azure.WithEndpoint(endpoint, apiVersion),
 		azure.WithTokenCredential(token),
 	)
-	cfg.Agent.Middlewares = append(cfg.Agent.Middlewares, logger)
-	hostAgent := openaichatagent.New(cfg)
+
+	cfg, card := buildAgent(*agentType, deployment)
+	cfg.Middlewares = append(cfg.Middlewares, logger)
+	hostAgent := openaichatagent.New(oclient, cfg)
 
 	card.URL = url
 	card.PreferredTransport = a2a.TransportProtocolJSONRPC
@@ -167,7 +168,7 @@ func buildAgent(agentType, model string) (openaichatagent.Config, *a2a.AgentCard
 			return q.QueryByInvoiceID(invoiceID), nil
 		})
 
-		cfg.Agent = agent.Config{
+		cfg.Config = agent.Config{
 			Name:         "InvoiceAgent",
 			Description:  "Handles requests relating to invoices.",
 			Instructions: "You specialize in handling queries related to invoices.",
@@ -187,7 +188,7 @@ func buildAgent(agentType, model string) (openaichatagent.Config, *a2a.AgentCard
 			Examples:    []string{"List the latest invoices for Contoso."},
 		}}
 	case "POLICY":
-		cfg.Agent = agent.Config{
+		cfg.Config = agent.Config{
 			Name:        "PolicyAgent",
 			Description: "Handles requests relating to policies and customer communications.",
 			Instructions: `You specialize in handling queries related to policies and customer communications.
@@ -204,16 +205,16 @@ original invoice and the credit memo number. Use the 'Formal Credit Notification
 template."`,
 		}
 		card.Name = "PolicyAgent"
-		card.Description = cfg.Agent.Description
+		card.Description = cfg.Config.Description
 		card.Skills = []a2a.AgentSkill{{
 			ID:          "id_policy_agent",
 			Name:        "PolicyAgent",
-			Description: cfg.Agent.Description,
+			Description: cfg.Config.Description,
 			Tags:        []string{"policy", "agent-framework-go"},
 			Examples:    []string{"What is the policy for short shipments?"},
 		}}
 	case "LOGISTICS":
-		cfg.Agent = agent.Config{
+		cfg.Config = agent.Config{
 			Name:        "LogisticsAgent",
 			Description: "Handles requests relating to logistics.",
 			Instructions: `You specialize in handling queries related to logistics.
@@ -225,11 +226,11 @@ Item: TSHIRT-RED-L
 Quantity: 900`,
 		}
 		card.Name = "LogisticsAgent"
-		card.Description = cfg.Agent.Description
+		card.Description = cfg.Config.Description
 		card.Skills = []a2a.AgentSkill{{
 			ID:          "id_logistics_agent",
 			Name:        "LogisticsQuery",
-			Description: cfg.Agent.Description,
+			Description: cfg.Config.Description,
 			Tags:        []string{"logistics", "agent-framework-go"},
 			Examples:    []string{"What is the status for SHPMT-SAP-001"},
 		}}

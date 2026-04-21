@@ -19,7 +19,10 @@ import (
 
 func main() {
 	serverURL := cmp.Or(os.Getenv("AGUI_SERVER_URL"), "http://localhost:8888")
-	a := aguiagent.New(aguiagent.Config{Client: aguiSSEClient.NewClient(aguiSSEClient.Config{Endpoint: serverURL})})
+	a := aguiagent.New(
+		aguiSSEClient.NewClient(aguiSSEClient.Config{Endpoint: serverURL}),
+		aguiagent.Config{},
+	)
 
 	session, err := a.CreateSession(context.Background())
 	if err != nil {

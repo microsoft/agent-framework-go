@@ -33,18 +33,20 @@ func main() {
 	}
 
 	// Create Azure OpenAI agent with the same configuration as the C# example.
-	agent := openaichatagent.New(openaichatagent.Config{
-		Client: openai.NewClient(
+	agent := openaichatagent.New(
+		openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
 			azure.WithTokenCredential(token),
 		),
-		Model: deployment,
-		Agent: agent.Config{
-			Name:         "Joker",
-			Description:  "An agent that tells jokes.",
-			Instructions: "You are good at telling jokes, and you always start each joke with 'Aye aye, captain!'.",
+		openaichatagent.Config{
+			Model: deployment,
+			Config: agent.Config{
+				Name:         "Joker",
+				Description:  "An agent that tells jokes.",
+				Instructions: "You are good at telling jokes, and you always start each joke with 'Aye aye, captain!'.",
+			},
 		},
-	})
+	)
 
 	// Create an MCP server with the agent exposed as a tool.
 	srv := mcp.NewServer(&mcp.Implementation{

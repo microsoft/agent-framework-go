@@ -30,12 +30,14 @@ func main() {
 		return "Amsterdam, Netherlands (52.37°N, 4.90°E)", nil
 	})
 
-	a := aguiagent.New(aguiagent.Config{
-		Client: aguiSSEClient.NewClient(aguiSSEClient.Config{Endpoint: serverURL}),
-		Agent: agent.Config{
-			Tools: []tool.Tool{frontendTool},
+	a := aguiagent.New(
+		aguiSSEClient.NewClient(aguiSSEClient.Config{Endpoint: serverURL}),
+		aguiagent.Config{
+			Config: agent.Config{
+				Tools: []tool.Tool{frontendTool},
+			},
 		},
-	})
+	)
 
 	session, err := a.CreateSession(context.Background())
 	if err != nil {

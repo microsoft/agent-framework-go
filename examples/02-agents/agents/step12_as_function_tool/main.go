@@ -46,34 +46,38 @@ func main() {
 	}
 
 	// Create Azure OpenAI agent and provide the function tool.
-	weatherAgent := openaichatagent.New(openaichatagent.Config{
-		Client: openai.NewClient(
+	weatherAgent := openaichatagent.New(
+		openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
 			azure.WithTokenCredential(token),
 		),
-		Model: deployment,
-		Agent: agent.Config{
-			Instructions: "You answer questions about the weather.",
-			Name:         "WeatherAgent",
-			Description:  "An agent that answers questions about the weather.",
-			Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
-			Tools:        []tool.Tool{weatherTool},
+		openaichatagent.Config{
+			Model: deployment,
+			Config: agent.Config{
+				Instructions: "You answer questions about the weather.",
+				Name:         "WeatherAgent",
+				Description:  "An agent that answers questions about the weather.",
+				Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
+				Tools:        []tool.Tool{weatherTool},
+			},
 		},
-	})
+	)
 
 	// Create the main Azure OpenAI agent, and provide the weather agent as a function tool.
 	// Note that the main agent is instructed to respond in French.
-	a := openaichatagent.New(openaichatagent.Config{
-		Client: openai.NewClient(
+	a := openaichatagent.New(
+		openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
 			azure.WithTokenCredential(token),
 		),
-		Model: deployment,
-		Agent: agent.Config{
-			Instructions: "You are a helpful assistant who responds in French.",
-			Tools:        []tool.Tool{weatherAgent.AsFuncTool()},
+		openaichatagent.Config{
+			Model: deployment,
+			Config: agent.Config{
+				Instructions: "You are a helpful assistant who responds in French.",
+				Tools:        []tool.Tool{weatherAgent.AsFuncTool()},
+			},
 		},
-	})
+	)
 
 	resp, err := a.RunText(context.Background(), "What is the weather like in Amsterdam?").Collect()
 	demo.Response(resp, err)

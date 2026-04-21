@@ -40,18 +40,14 @@ func ChatCompletionNewParams(params openai.ChatCompletionNewParams) agentopt.Opt
 
 // Config contains configuration for [Agent].
 type Config struct {
-	Model  string
-	Client openai.Client
+	agent.Config
 
-	Agent agent.Config
+	Model string
 }
 
-func newAgent(config Config) *agent.Agent {
-	if len(config.Client.Options) == 0 {
-		config.Client = openai.NewClient()
-	}
+func New(oclient openai.Client, config Config) *agent.Agent {
 	c := &client{
-		client: config.Client,
+		client: oclient,
 		config: config,
 	}
 	return agent.New(agent.ProviderConfig{
@@ -59,11 +55,7 @@ func newAgent(config Config) *agent.Agent {
 		FormatOfFn:   c.formatOf,
 		UnmarshalFn:  c.unmarshal,
 		Run:          c.run,
-	}, config.Agent)
-}
-
-func New(config Config) *agent.Agent {
-	return newAgent(config)
+	}, config.Config)
 }
 
 func (a *client) formatOf(v any) (format.Format, error) {

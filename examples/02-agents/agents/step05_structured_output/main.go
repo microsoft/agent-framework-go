@@ -56,18 +56,20 @@ func main() {
 	}
 
 	// Create Azure OpenAI agent.
-	a := openaichatagent.New(openaichatagent.Config{
-		Client: openai.NewClient(
+	a := openaichatagent.New(
+		openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
 			azure.WithTokenCredential(token),
 		),
-		Model: deployment,
-		Agent: agent.Config{
-			Instructions: "You are a helpful assistant.",
-			Name:         "HelpfulAssistant",
-			Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
+		openaichatagent.Config{
+			Model: deployment,
+			Config: agent.Config{
+				Instructions: "You are a helpful assistant.",
+				Name:         "HelpfulAssistant",
+				Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
+			},
 		},
-	})
+	)
 
 	ctx := context.Background()
 
@@ -84,21 +86,23 @@ func main() {
 	fmt.Println()
 
 	// Create the agent with the specified name, instructions, and expected structured output the agent should produce.
-	a = openaichatagent.New(openaichatagent.Config{
-		Client: openai.NewClient(
+	a = openaichatagent.New(
+		openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
 			azure.WithTokenCredential(token),
 		),
-		Model: deployment,
-		Agent: agent.Config{
-			Instructions: "You are a helpful assistant.",
-			Name:         "HelpfulAssistant",
-			Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
-			RunOptions: []agentopt.Option{
-				agentopt.ResponseFormat(jsonformat.MustFor[PersonInfo]()),
+		openaichatagent.Config{
+			Model: deployment,
+			Config: agent.Config{
+				Instructions: "You are a helpful assistant.",
+				Name:         "HelpfulAssistant",
+				Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
+				RunOptions: []agentopt.Option{
+					agentopt.ResponseFormat(jsonformat.MustFor[PersonInfo]()),
+				},
 			},
 		},
-	})
+	)
 
 	// Invoke the agent with some unstructured input while streaming, to extract the structured information from.
 	var personRaw []byte

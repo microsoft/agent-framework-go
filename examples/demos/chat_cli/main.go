@@ -13,6 +13,7 @@ import (
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
+	"github.com/openai/openai-go/v3"
 )
 
 var logger = demo.NewLogger(
@@ -29,13 +30,16 @@ var weatherTool = functool.MustNew(&functool.Func{
 })
 
 func main() {
-	a := openaichatagent.New(openaichatagent.Config{
-		Model: "gpt-4o-mini",
-		Agent: agent.Config{
-			Instructions: "You are a helpful assistant with access to weather information. Be concise and friendly.",
-			Tools:        []tool.Tool{weatherTool},
+	a := openaichatagent.New(
+		openai.NewClient(),
+		openaichatagent.Config{
+			Model: "gpt-4o-mini",
+			Config: agent.Config{
+				Instructions: "You are a helpful assistant with access to weather information. Be concise and friendly.",
+				Tools:        []tool.Tool{weatherTool},
+			},
 		},
-	})
+	)
 
 	runChatLoop(context.Background(), a)
 }

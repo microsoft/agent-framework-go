@@ -11,6 +11,7 @@ import (
 	"github.com/microsoft/agent-framework-go/middleware"
 	"github.com/microsoft/agent-framework-go/tool/mcptool"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/openai/openai-go/v3"
 )
 
 var logger = demo.NewLogger(
@@ -38,15 +39,18 @@ func main() {
 	}
 
 	// Create the Agent with MCP tools
-	a := openaichatagent.New(openaichatagent.Config{
-		Model: "gpt-4o-mini",
-		Agent: agent.Config{
-			Name:         "DocsAgent",
-			Instructions: "You are a helpful assistant that can help with microsoft documentation questions.",
-			Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
-			Tools:        tools,
+	a := openaichatagent.New(
+		openai.NewClient(),
+		openaichatagent.Config{
+			Model: "gpt-4o-mini",
+			Config: agent.Config{
+				Name:         "DocsAgent",
+				Instructions: "You are a helpful assistant that can help with microsoft documentation questions.",
+				Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
+				Tools:        tools,
+			},
 		},
-	})
+	)
 
 	// Invoke the agent and output the text result.
 	resp, err := a.RunText(ctx, "How to create an Azure storage account using az cli?").Collect()

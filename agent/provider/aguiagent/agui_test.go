@@ -34,7 +34,7 @@ func TestAGUIAgentRun_AggregatesStreamingText(t *testing.T) {
 	}))
 	defer server.Close()
 
-	a := aguiagent.New(aguiagent.Config{Client: newTestClient(server.URL)})
+	a := aguiagent.New(newTestClient(server.URL), aguiagent.Config{})
 	resp, err := a.RunText(context.Background(), "hi").Collect()
 	if err != nil {
 		t.Fatalf("run error: %v", err)
@@ -52,7 +52,7 @@ func TestAGUIAgentRun_WithEmptyEventStream_EmitsMetadataUpdate(t *testing.T) {
 	}))
 	defer server.Close()
 
-	a := aguiagent.New(aguiagent.Config{Client: newTestClient(server.URL)})
+	a := aguiagent.New(newTestClient(server.URL), aguiagent.Config{})
 	resp, err := a.RunText(context.Background(), "hi").Collect()
 	if err != nil {
 		t.Fatalf("run error: %v", err)
@@ -68,7 +68,7 @@ func TestAGUIAgentRun_WithEmptyEventStream_EmitsMetadataUpdate(t *testing.T) {
 }
 
 func TestAGUIAgentCreateSession_UsesServiceIDAsThreadID(t *testing.T) {
-	a := aguiagent.New(aguiagent.Config{Client: newTestClient("http://localhost")})
+	a := aguiagent.New(newTestClient("http://localhost"), aguiagent.Config{})
 	s, err := a.CreateSession(context.Background(), agentopt.ServiceID("thread-existing"))
 	if err != nil {
 		t.Fatalf("create session error: %v", err)
@@ -97,7 +97,7 @@ func TestAGUIAgentRun_UsesExistingSessionServiceIDAsThreadID(t *testing.T) {
 	}))
 	defer server.Close()
 
-	a := aguiagent.New(aguiagent.Config{Client: newTestClient(server.URL)})
+	a := aguiagent.New(newTestClient(server.URL), aguiagent.Config{})
 	session, err := a.CreateSession(context.Background(), agentopt.ServiceID("thread-existing"))
 	if err != nil {
 		t.Fatalf("create session error: %v", err)
@@ -134,7 +134,7 @@ func TestAGUIAgentRun_GeneratesUniqueRunIDPerInvocation(t *testing.T) {
 	}))
 	defer server.Close()
 
-	a := aguiagent.New(aguiagent.Config{Client: newTestClient(server.URL)})
+	a := aguiagent.New(newTestClient(server.URL), aguiagent.Config{})
 	_, err := a.RunText(context.Background(), "first").Collect()
 	if err != nil {
 		t.Fatalf("first run error: %v", err)
@@ -194,7 +194,7 @@ func TestAGUIAgentRun_InvokesTools_WhenFunctionCallsReturned(t *testing.T) {
 	}))
 	defer server.Close()
 
-	a := aguiagent.New(aguiagent.Config{Client: newTestClient(server.URL)})
+	a := aguiagent.New(newTestClient(server.URL), aguiagent.Config{})
 	invoked := false
 	type weatherInput struct {
 		Location string `json:"location"`
@@ -278,7 +278,7 @@ func TestAGUIAgentRun_ForwardsAllToolResults_WhenMultipleToolCallsReturned(t *te
 	}))
 	defer server.Close()
 
-	a := aguiagent.New(aguiagent.Config{Client: newTestClient(server.URL)})
+	a := aguiagent.New(newTestClient(server.URL), aguiagent.Config{})
 	weatherInvoked := false
 	timeInvoked := false
 	type weatherInput struct {
@@ -329,7 +329,7 @@ func TestAGUIAgentRun_ConvertsStateSnapshotEventToDataContent(t *testing.T) {
 	}))
 	defer server.Close()
 
-	a := aguiagent.New(aguiagent.Config{Client: newTestClient(server.URL)})
+	a := aguiagent.New(newTestClient(server.URL), aguiagent.Config{})
 	resp, err := a.RunText(context.Background(), "hi").Collect()
 	if err != nil {
 		t.Fatalf("run error: %v", err)
@@ -371,7 +371,7 @@ func TestAGUIAgentRun_WithUnknownEventType_ReturnsError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	a := aguiagent.New(aguiagent.Config{Client: newTestClient(server.URL)})
+	a := aguiagent.New(newTestClient(server.URL), aguiagent.Config{})
 	_, err := a.RunText(context.Background(), "hi").Collect()
 	if err == nil {
 		t.Fatal("expected error for unknown event type")

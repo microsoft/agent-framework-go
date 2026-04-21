@@ -38,18 +38,20 @@ func main() {
 		log.Fatal(err)
 	}
 
-	a := openaichatagent.New(openaichatagent.Config{
-		Client: openai.NewClient(
+	a := openaichatagent.New(
+		openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
 			azure.WithTokenCredential(token),
 		),
-		Model: deployment,
-		Agent: agent.Config{
-			Name:         "AGUIAssistant",
-			Instructions: "You are a helpful assistant in charge of approving expenses.",
-			Tools:        []tool.Tool{tool.ApprovalRequiredFunc(approveExpense)},
+		openaichatagent.Config{
+			Model: deployment,
+			Config: agent.Config{
+				Name:         "AGUIAssistant",
+				Instructions: "You are a helpful assistant in charge of approving expenses.",
+				Tools:        []tool.Tool{tool.ApprovalRequiredFunc(approveExpense)},
+			},
 		},
-	})
+	)
 	mux := http.NewServeMux()
 	mux.Handle("/", aguihosting.NewHTTPHandler(aguihosting.HandlerConfig{Agent: a}))
 

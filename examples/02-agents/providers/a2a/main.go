@@ -42,14 +42,16 @@ func main() {
 		demo.Panicf("Failed to create a client: %v", err)
 	}
 
-	a := a2aagent.New(a2aagent.Config{
-		Client: client,
-		Agent: agent.Config{
-			Instructions: "You are good at telling jokes.",
-			Name:         "Joker",
-			Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
+	a := a2aagent.New(
+		client,
+		a2aagent.Config{
+			Config: agent.Config{
+				Instructions: "You are good at telling jokes.",
+				Name:         "Joker",
+				Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
+			},
 		},
-	})
+	)
 
 	// Invoke the agent and output the text result.
 	resp, err := a.RunText(ctx, "Tell me a joke about a pirate.").Collect()

@@ -23,10 +23,9 @@ import (
 )
 
 type Config struct {
-	Client  *aguiSSEClient.Client
-	Decoder *aguiEvents.EventDecoder
+	agent.Config
 
-	Agent agent.Config
+	Decoder *aguiEvents.EventDecoder
 }
 
 type provider struct {
@@ -35,22 +34,20 @@ type provider struct {
 	cfg     Config
 }
 
-func New(config Config) *agent.Agent {
-	if config.Client == nil {
-		panic("Client is required")
+func New(aclient *aguiSSEClient.Client, config Config) *agent.Agent {
+	p := &provider{
+		cfg:    config,
+		client: aclient,
 	}
-	p := &provider{cfg: config}
-	p.client = config.Client
 	if config.Decoder != nil {
 		p.decoder = config.Decoder
 	} else {
 		p.decoder = aguiEvents.NewEventDecoder(nil)
 	}
-
 	return agent.New(agent.ProviderConfig{
 		ProviderName: "agui",
 		Run:          p.run,
-	}, config.Agent)
+	}, config.Config)
 }
 
 func (p *provider) run(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
