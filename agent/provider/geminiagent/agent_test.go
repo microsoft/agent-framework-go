@@ -41,7 +41,6 @@ func newTestClient(t *testing.T, server *httptest.Server) *agent.Agent {
 	}
 	return geminiagent.New(client, geminiagent.Config{
 		Model:  testModel,
-		Client: client,
 		Config: agent.Config{DisableFuncAutoCall: true},
 	})
 }

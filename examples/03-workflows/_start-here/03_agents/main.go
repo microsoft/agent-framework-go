@@ -9,6 +9,7 @@ import (
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
+	"github.com/openai/openai-go/v3"
 )
 
 // This sample introduces the use of AI agents as executors within a workflow.
@@ -54,10 +55,12 @@ func main() {
 }
 
 func newAgent(language string) *agent.Agent {
-	return openaichatagent.NewAgent(openaichatagent.Config{
-		Model: "gpt-5-nano",
-		Config: agent.Config{
-			Instructions: fmt.Sprintf("You are a helpful assistant who translates text to %s.", language),
-		},
-	})
+	return openaichatagent.New(
+		openai.NewClient(),
+		openaichatagent.Config{
+			Model: "gpt-5-nano",
+			Config: agent.Config{
+				Instructions: fmt.Sprintf("You are a helpful assistant who translates text to %s.", language),
+			},
+		})
 }

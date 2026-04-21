@@ -38,8 +38,7 @@ type client struct {
 type Config struct {
 	agent.Config
 
-	Model  string
-	Client *genai.Client
+	Model string
 }
 
 // New creates a new [agent.Agent] backed by the Google Gemini API via the genai client.
