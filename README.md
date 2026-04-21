@@ -103,7 +103,7 @@ func main() {
 		openaichatagent.Config{
 			Model: "gpt-4o-mini",
 		},
-	})
+	)
 
 	// Run the agent.
 	ctx := context.Background()
