@@ -115,15 +115,13 @@ func (e *executor) Execute(ctx context.Context, execCtx *a2asrv.ExecutorContext)
 			return
 		}
 
-		if len(resp.Messages) > 0 {
-			artifact, err := responseToArtifactEvent(execCtx, resp)
-			if err != nil {
-				yield(nil, err)
-				return
-			}
-			if !yield(artifact, nil) {
-				return
-			}
+		artifact, err := responseToArtifactEvent(execCtx, resp)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		if !yield(artifact, nil) {
+			return
 		}
 
 		yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateCompleted, nil), nil)
