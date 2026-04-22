@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
-	"github.com/a2aproject/a2a-go/a2a"
-	"github.com/a2aproject/a2a-go/a2asrv"
+	"github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/hosting/a2ahosting"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
@@ -124,12 +124,9 @@ func main() {
 	cfg.Middlewares = append(cfg.Middlewares, logger)
 	hostAgent := openaichatagent.New(oclient, cfg)
 
-	card.URL = url
-	card.PreferredTransport = a2a.TransportProtocolJSONRPC
-	card.AdditionalInterfaces = []a2a.AgentInterface{{
-		Transport: a2a.TransportProtocolJSONRPC,
-		URL:       url,
-	}}
+	card.SupportedInterfaces = []*a2a.AgentInterface{
+		a2a.NewAgentInterface(url, a2a.TransportProtocolJSONRPC),
+	}
 	mux := http.NewServeMux()
 	mux.Handle("/", a2ahosting.NewHTTPHandler(a2ahosting.ExecutorConfig{
 		Agent: hostAgent,
@@ -146,7 +143,6 @@ func buildAgent(agentType, model string) (openaichatagent.Config, *a2a.AgentCard
 	t := strings.ToUpper(strings.TrimSpace(agentType))
 	cfg := openaichatagent.Config{Model: model}
 	card := &a2a.AgentCard{
-		ProtocolVersion:    "0.3.0",
 		Version:            "1.0.0",
 		DefaultInputModes:  []string{"text"},
 		DefaultOutputModes: []string{"text"},

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/a2aproject/a2a-go/a2a"
+	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/hosting/a2ahosting"
 	"github.com/microsoft/agent-framework-go/agentopt"
@@ -40,8 +40,8 @@ func TestRequestHandler_OnSendMessage_ReturnsMessage_WhenBackgroundDisabled(t *t
 	})
 
 	h := a2ahosting.NewRequestHandler(a2ahosting.ExecutorConfig{Agent: a})
-	result, err := h.OnSendMessage(context.Background(), &a2a.MessageSendParams{
-		Message: &a2a.Message{Role: a2a.MessageRoleUser, Parts: []a2a.Part{a2a.TextPart{Text: "ping"}}},
+	result, err := h.SendMessage(context.Background(), &a2a.SendMessageRequest{
+		Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("ping")),
 	})
 	if err != nil {
 		t.Fatalf("OnSendMessage returned error: %v", err)
@@ -57,12 +57,8 @@ func TestRequestHandler_OnSendMessage_ReturnsMessage_WhenBackgroundDisabled(t *t
 	if len(msg.Parts) == 0 {
 		t.Fatal("expected at least one message part")
 	}
-	textPart, ok := msg.Parts[0].(a2a.TextPart)
-	if !ok {
-		t.Fatalf("part type = %T, want a2a.TextPart", msg.Parts[0])
-	}
-	if textPart.Text != "hello from agent" {
-		t.Fatalf("text = %q, want %q", textPart.Text, "hello from agent")
+	if got := msg.Parts[0].Text(); got != "hello from agent" {
+		t.Fatalf("text = %q, want %q", got, "hello from agent")
 	}
 }
 
@@ -74,13 +70,9 @@ func TestRequestHandler_OnSendMessage_WithReferenceTaskIDs_ReturnsError(t *testi
 	})
 
 	h := a2ahosting.NewRequestHandler(a2ahosting.ExecutorConfig{Agent: a})
-	_, err := h.OnSendMessage(context.Background(), &a2a.MessageSendParams{
-		Message: &a2a.Message{
-			Role:           a2a.MessageRoleUser,
-			Parts:          []a2a.Part{a2a.TextPart{Text: "ping"}},
-			ReferenceTasks: []a2a.TaskID{"task-123"},
-		},
-	})
+	msg := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("ping"))
+	msg.ReferenceTasks = []a2a.TaskID{"task-123"}
+	_, err := h.SendMessage(context.Background(), &a2a.SendMessageRequest{Message: msg})
 	if err == nil {
 		t.Fatal("expected error for referenceTaskIds")
 	}
@@ -101,9 +93,9 @@ func TestRequestHandler_OnSendMessage_PreservesContextID(t *testing.T) {
 	})
 
 	h := a2ahosting.NewRequestHandler(a2ahosting.ExecutorConfig{Agent: a})
-	result, err := h.OnSendMessage(context.Background(), &a2a.MessageSendParams{
-		Message: &a2a.Message{ContextID: "ctx-123", Role: a2a.MessageRoleUser, Parts: []a2a.Part{a2a.TextPart{Text: "ping"}}},
-	})
+	msg := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("ping"))
+	msg.ContextID = "ctx-123"
+	result, err := h.SendMessage(context.Background(), &a2a.SendMessageRequest{Message: msg})
 	if err != nil {
 		t.Fatalf("OnSendMessage returned error: %v", err)
 	}
@@ -135,8 +127,8 @@ func TestRequestHandler_OnSendMessageStream_UsesTaskLifecycle_WhenContinuationTo
 	})
 
 	h := a2ahosting.NewRequestHandler(a2ahosting.ExecutorConfig{Agent: a, AllowBackgroundResponses: true})
-	stream := h.OnSendMessageStream(context.Background(), &a2a.MessageSendParams{
-		Message: &a2a.Message{Role: a2a.MessageRoleUser, Parts: []a2a.Part{a2a.TextPart{Text: "ping"}}},
+	stream := h.SendStreamingMessage(context.Background(), &a2a.SendMessageRequest{
+		Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("ping")),
 	})
 
 	var submitted, working bool
@@ -179,8 +171,8 @@ func TestRequestHandler_OnSendMessageStream_WhenContinuationTokenAndNoMessages_S
 	})
 
 	h := a2ahosting.NewRequestHandler(a2ahosting.ExecutorConfig{Agent: a, AllowBackgroundResponses: true})
-	stream := h.OnSendMessageStream(context.Background(), &a2a.MessageSendParams{
-		Message: &a2a.Message{Role: a2a.MessageRoleUser, Parts: []a2a.Part{a2a.TextPart{Text: "ping"}}},
+	stream := h.SendStreamingMessage(context.Background(), &a2a.SendMessageRequest{
+		Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("ping")),
 	})
 
 	var working *a2a.TaskStatusUpdateEvent
@@ -216,11 +208,8 @@ func TestRequestHandler_OnCancelTask_ReturnsCanceledTask(t *testing.T) {
 	})
 	h := a2ahosting.NewRequestHandler(a2ahosting.ExecutorConfig{Agent: a, AllowBackgroundResponses: true})
 
-	stream := h.OnSendMessageStream(context.Background(), &a2a.MessageSendParams{
-		Message: &a2a.Message{
-			Role:  a2a.MessageRoleUser,
-			Parts: []a2a.Part{a2a.TextPart{Text: "hi"}},
-		},
+	stream := h.SendStreamingMessage(context.Background(), &a2a.SendMessageRequest{
+		Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("hi")),
 	})
 
 	var taskID a2a.TaskID
@@ -239,7 +228,7 @@ func TestRequestHandler_OnCancelTask_ReturnsCanceledTask(t *testing.T) {
 		t.Fatal("expected task id")
 	}
 
-	canceled, err := h.OnCancelTask(context.Background(), &a2a.TaskIDParams{ID: taskID})
+	canceled, err := h.CancelTask(context.Background(), &a2a.CancelTaskRequest{ID: taskID})
 	if err != nil {
 		t.Fatalf("OnCancelTask returned error: %v", err)
 	}

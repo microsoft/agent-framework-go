@@ -8,8 +8,8 @@ import (
 	"iter"
 	"testing"
 
-	"github.com/a2aproject/a2a-go/a2a"
-	"github.com/a2aproject/a2a-go/a2aclient"
+	"github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/microsoft/agent-framework-go/agent"
 	a2a1 "github.com/microsoft/agent-framework-go/agent/provider/a2aagent"
 	"github.com/microsoft/agent-framework-go/agentopt"
@@ -19,14 +19,14 @@ import (
 
 // mockA2ATransport is a stub that implements a2aclient.Transport for testing
 type mockA2ATransport struct {
-	capturedMessageSendParams  *a2a.MessageSendParams
+	capturedMessageSendParams  *a2a.SendMessageRequest
 	responseToReturn           a2a.SendMessageResult
 	streamingResponseToReturn  a2a.Event
 	sendMessageCalled          bool
 	sendStreamingMessageCalled bool
 }
 
-func (m *mockA2ATransport) SendMessage(ctx context.Context, params *a2a.MessageSendParams) (a2a.SendMessageResult, error) {
+func (m *mockA2ATransport) SendMessage(ctx context.Context, _ a2aclient.ServiceParams, params *a2a.SendMessageRequest) (a2a.SendMessageResult, error) {
 	m.sendMessageCalled = true
 	m.capturedMessageSendParams = params
 	if m.responseToReturn != nil {
@@ -40,7 +40,7 @@ func (m *mockA2ATransport) SendMessage(ctx context.Context, params *a2a.MessageS
 	}, nil
 }
 
-func (m *mockA2ATransport) SendStreamingMessage(ctx context.Context, params *a2a.MessageSendParams) iter.Seq2[a2a.Event, error] {
+func (m *mockA2ATransport) SendStreamingMessage(ctx context.Context, _ a2aclient.ServiceParams, params *a2a.SendMessageRequest) iter.Seq2[a2a.Event, error] {
 	m.sendStreamingMessageCalled = true
 	m.capturedMessageSendParams = params
 	responseToYield := m.streamingResponseToReturn
@@ -77,7 +77,7 @@ func (m *mockA2ATransport) SendStreamingMessage(ctx context.Context, params *a2a
 	}
 }
 
-func (m *mockA2ATransport) GetTask(ctx context.Context, params *a2a.TaskQueryParams) (*a2a.Task, error) {
+func (m *mockA2ATransport) GetTask(ctx context.Context, _ a2aclient.ServiceParams, params *a2a.GetTaskRequest) (*a2a.Task, error) {
 	if m.responseToReturn != nil {
 		if task, ok := m.responseToReturn.(*a2a.Task); ok {
 			return task, nil
@@ -86,33 +86,37 @@ func (m *mockA2ATransport) GetTask(ctx context.Context, params *a2a.TaskQueryPar
 	return nil, errors.New("not implemented")
 }
 
-func (m *mockA2ATransport) CancelTask(ctx context.Context, params *a2a.TaskIDParams) (*a2a.Task, error) {
+func (m *mockA2ATransport) ListTasks(ctx context.Context, _ a2aclient.ServiceParams, _ *a2a.ListTasksRequest) (*a2a.ListTasksResponse, error) {
 	return nil, errors.New("not implemented")
 }
 
-func (m *mockA2ATransport) ResubscribeToTask(ctx context.Context, params *a2a.TaskIDParams) iter.Seq2[a2a.Event, error] {
+func (m *mockA2ATransport) CancelTask(ctx context.Context, _ a2aclient.ServiceParams, _ *a2a.CancelTaskRequest) (*a2a.Task, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockA2ATransport) SubscribeToTask(ctx context.Context, _ a2aclient.ServiceParams, _ *a2a.SubscribeToTaskRequest) iter.Seq2[a2a.Event, error] {
 	return func(yield func(a2a.Event, error) bool) {
 		yield(nil, errors.New("not implemented"))
 	}
 }
 
-func (m *mockA2ATransport) GetTaskPushConfig(ctx context.Context, params *a2a.GetTaskPushConfigParams) (*a2a.TaskPushConfig, error) {
+func (m *mockA2ATransport) GetTaskPushConfig(ctx context.Context, _ a2aclient.ServiceParams, _ *a2a.GetTaskPushConfigRequest) (*a2a.TaskPushConfig, error) {
 	return nil, errors.New("not implemented")
 }
 
-func (m *mockA2ATransport) ListTaskPushConfig(ctx context.Context, params *a2a.ListTaskPushConfigParams) ([]*a2a.TaskPushConfig, error) {
+func (m *mockA2ATransport) ListTaskPushConfigs(ctx context.Context, _ a2aclient.ServiceParams, _ *a2a.ListTaskPushConfigRequest) ([]*a2a.TaskPushConfig, error) {
 	return nil, errors.New("not implemented")
 }
 
-func (m *mockA2ATransport) SetTaskPushConfig(ctx context.Context, config *a2a.TaskPushConfig) (*a2a.TaskPushConfig, error) {
+func (m *mockA2ATransport) CreateTaskPushConfig(ctx context.Context, _ a2aclient.ServiceParams, _ *a2a.CreateTaskPushConfigRequest) (*a2a.TaskPushConfig, error) {
 	return nil, errors.New("not implemented")
 }
 
-func (m *mockA2ATransport) DeleteTaskPushConfig(ctx context.Context, params *a2a.DeleteTaskPushConfigParams) error {
+func (m *mockA2ATransport) DeleteTaskPushConfig(ctx context.Context, _ a2aclient.ServiceParams, _ *a2a.DeleteTaskPushConfigRequest) error {
 	return errors.New("not implemented")
 }
 
-func (m *mockA2ATransport) GetAgentCard(ctx context.Context) (*a2a.AgentCard, error) {
+func (m *mockA2ATransport) GetExtendedAgentCard(ctx context.Context, _ a2aclient.ServiceParams, _ *a2a.GetExtendedAgentCardRequest) (*a2a.AgentCard, error) {
 	return nil, errors.New("not implemented")
 }
 
@@ -123,17 +127,18 @@ func (m *mockA2ATransport) Destroy() error {
 // Test fixtures
 func newTestAgent(transport a2aclient.Transport, config agent.Config) *agent.Agent {
 	card := &a2a.AgentCard{
-		URL:                "test://localhost",
-		PreferredTransport: "test",
 		Capabilities: a2a.AgentCapabilities{
 			Streaming: true,
+		},
+		SupportedInterfaces: []*a2a.AgentInterface{
+			a2a.NewAgentInterface("test://localhost", a2a.TransportProtocol("test")),
 		},
 	}
 	client, err := a2aclient.NewFromCard(
 		context.Background(),
 		card,
 		a2aclient.WithDefaultsDisabled(),
-		a2aclient.WithTransport("test", a2aclient.TransportFactoryFn(func(ctx context.Context, url string, card *a2a.AgentCard) (a2aclient.Transport, error) {
+		a2aclient.WithTransport("test", a2aclient.TransportFactoryFn(func(ctx context.Context, card *a2a.AgentCard, iface *a2a.AgentInterface) (a2aclient.Transport, error) {
 			return transport, nil
 		})),
 	)
@@ -182,11 +187,9 @@ func TestRunAllowsNonUserRoleMessages(t *testing.T) {
 func TestRunWithValidUserMessage(t *testing.T) {
 	transport := &mockA2ATransport{
 		responseToReturn: &a2a.Message{
-			ID:   "response-123",
-			Role: a2a.MessageRoleAgent,
-			Parts: []a2a.Part{
-				a2a.TextPart{Text: "Hello! How can I help you today?"},
-			},
+			ID:    "response-123",
+			Role:  a2a.MessageRoleAgent,
+			Parts: a2a.ContentParts{a2a.NewTextPart("Hello! How can I help you today?")},
 		},
 	}
 	a := newTestAgent(transport, agent.Config{})
@@ -210,12 +213,8 @@ func TestRunWithValidUserMessage(t *testing.T) {
 	if inputMessage.Role != a2a.MessageRoleUser {
 		t.Errorf("captured message role = %q, want %q", inputMessage.Role, a2a.MessageRoleUser)
 	}
-	if textPart, ok := inputMessage.Parts[0].(a2a.TextPart); ok {
-		if textPart.Text != "Hello, world!" {
-			t.Errorf("captured message text = %q, want %q", textPart.Text, "Hello, world!")
-		}
-	} else {
-		t.Errorf("captured message part is not TextPart")
+	if got := inputMessage.Parts[0].Text(); got != "Hello, world!" {
+		t.Errorf("captured message text = %q, want %q", got, "Hello, world!")
 	}
 
 	// Assert response from A2AClient is converted correctly
@@ -252,7 +251,7 @@ func TestRunWithCreateSession(t *testing.T) {
 		responseToReturn: &a2a.Message{
 			ID:        "response-123",
 			Role:      a2a.MessageRoleAgent,
-			Parts:     []a2a.Part{a2a.TextPart{Text: "Response"}},
+			Parts:     a2a.ContentParts{a2a.NewTextPart("Response")},
 			ContextID: "new-context-id",
 		},
 	}
@@ -302,7 +301,7 @@ func TestRunWithSessionHavingDifferentContextID(t *testing.T) {
 		responseToReturn: &a2a.Message{
 			ID:        "response-123",
 			Role:      a2a.MessageRoleAgent,
-			Parts:     []a2a.Part{a2a.TextPart{Text: "Response"}},
+			Parts:     a2a.ContentParts{a2a.NewTextPart("Response")},
 			ContextID: "different-context",
 		},
 	}
@@ -325,7 +324,7 @@ func TestRunStreamingWithValidUserMessage(t *testing.T) {
 		streamingResponseToReturn: &a2a.Message{
 			ID:        "stream-1",
 			Role:      a2a.MessageRoleAgent,
-			Parts:     []a2a.Part{a2a.TextPart{Text: "Hello"}},
+			Parts:     a2a.ContentParts{a2a.NewTextPart("Hello")},
 			ContextID: "stream-context",
 		},
 	}
@@ -362,10 +361,8 @@ func TestRunStreamingWithValidUserMessage(t *testing.T) {
 	if inputMessage.Role != a2a.MessageRoleUser {
 		t.Errorf("captured message role = %q, want %q", inputMessage.Role, a2a.MessageRoleUser)
 	}
-	if textPart, ok := inputMessage.Parts[0].(a2a.TextPart); ok {
-		if textPart.Text != "Hello, streaming!" {
-			t.Errorf("captured message text = %q, want %q", textPart.Text, "Hello, streaming!")
-		}
+	if got := inputMessage.Parts[0].Text(); got != "Hello, streaming!" {
+		t.Errorf("captured message text = %q, want %q", got, "Hello, streaming!")
 	}
 
 	// Assert response from A2AClient is converted correctly
@@ -402,7 +399,7 @@ func TestRunStreamingWithSession(t *testing.T) {
 		streamingResponseToReturn: &a2a.Message{
 			ID:        "stream-1",
 			Role:      a2a.MessageRoleAgent,
-			Parts:     []a2a.Part{a2a.TextPart{Text: "Response"}},
+			Parts:     a2a.ContentParts{a2a.NewTextPart("Response")},
 			ContextID: "new-stream-context",
 		},
 	}
@@ -456,7 +453,7 @@ func TestRunStreamingWithSessionHavingDifferentContextID(t *testing.T) {
 		streamingResponseToReturn: &a2a.Message{
 			ID:        "stream-1",
 			Role:      a2a.MessageRoleAgent,
-			Parts:     []a2a.Part{a2a.TextPart{Text: "Response"}},
+			Parts:     a2a.ContentParts{a2a.NewTextPart("Response")},
 			ContextID: "different-context",
 		},
 	}
@@ -486,7 +483,7 @@ func TestRunStreamingAllowsNonUserRoleMessages(t *testing.T) {
 		streamingResponseToReturn: &a2a.Message{
 			ID:        "stream-1",
 			Role:      a2a.MessageRoleAgent,
-			Parts:     []a2a.Part{a2a.TextPart{Text: "Response"}},
+			Parts:     a2a.ContentParts{a2a.NewTextPart("Response")},
 			ContextID: "new-stream-context",
 		},
 	}
@@ -536,23 +533,13 @@ func TestRunWithHostedFileContent(t *testing.T) {
 		t.Fatalf("len(message.Parts) = %d, want 2", len(capturedMsg.Parts))
 	}
 
-	if textPart, ok := capturedMsg.Parts[0].(a2a.TextPart); !ok {
-		t.Errorf("Parts[0] type = %T, want a2a.TextPart", capturedMsg.Parts[0])
-	} else if textPart.Text != "Check this file:" {
-		t.Errorf("TextPart.Text = %q, want %q", textPart.Text, "Check this file:")
+	if got := capturedMsg.Parts[0].Text(); got != "Check this file:" {
+		t.Errorf("Parts[0].Text() = %q, want %q", got, "Check this file:")
 	}
 
-	if filePart, ok := capturedMsg.Parts[1].(a2a.FilePart); !ok {
-		t.Errorf("Parts[1] type = %T, want a2a.FilePart", capturedMsg.Parts[1])
-	} else {
-		if fileURI, ok := filePart.File.(a2a.FileURI); !ok {
-			t.Errorf("FilePart.File type = %T, want a2a.FileURI", filePart.File)
-		} else {
-			expectedURI := "https://example.com/file.pdf"
-			if fileURI.URI != expectedURI {
-				t.Errorf("FileURI.URI = %q, want %q", fileURI.URI, expectedURI)
-			}
-		}
+	expectedURI := "https://example.com/file.pdf"
+	if got := string(capturedMsg.Parts[1].URL()); got != expectedURI {
+		t.Errorf("Parts[1].URL() = %q, want %q", got, expectedURI)
 	}
 }
 
@@ -587,11 +574,9 @@ func TestRunWithContinuationToken(t *testing.T) {
 func TestRunWithTaskInSessionAndMessage(t *testing.T) {
 	transport := &mockA2ATransport{
 		responseToReturn: &a2a.Message{
-			ID:   "response-123",
-			Role: a2a.MessageRoleAgent,
-			Parts: []a2a.Part{
-				a2a.TextPart{Text: "Response to task"},
-			},
+			ID:    "response-123",
+			Role:  a2a.MessageRoleAgent,
+			Parts: a2a.ContentParts{a2a.NewTextPart("Response to task")},
 		},
 	}
 	a := newTestAgent(transport, agent.Config{})
@@ -620,11 +605,9 @@ func TestRunWithTaskInSessionAndMessage(t *testing.T) {
 func TestRunWithMultipleTaskIDsInSessionAndMessage(t *testing.T) {
 	transport := &mockA2ATransport{
 		responseToReturn: &a2a.Message{
-			ID:   "response-123",
-			Role: a2a.MessageRoleAgent,
-			Parts: []a2a.Part{
-				a2a.TextPart{Text: "Response to tasks"},
-			},
+			ID:    "response-123",
+			Role:  a2a.MessageRoleAgent,
+			Parts: a2a.ContentParts{a2a.NewTextPart("Response to tasks")},
 		},
 	}
 	a := newTestAgent(transport, agent.Config{})
@@ -693,10 +676,8 @@ func TestRunWithAgentTaskResponse(t *testing.T) {
 			},
 			Artifacts: []*a2a.Artifact{
 				{
-					ID: a2a.ArtifactID("art-1"),
-					Parts: []a2a.Part{
-						a2a.TextPart{Text: "Artifact content"},
-					},
+					ID:    a2a.ArtifactID("art-1"),
+					Parts: a2a.ContentParts{a2a.NewTextPart("Artifact content")},
 				},
 			},
 		},
@@ -762,7 +743,7 @@ func TestRunWithVariousTaskStates(t *testing.T) {
 					Artifacts: []*a2a.Artifact{
 						{
 							ID:    a2a.ArtifactID("art-1"),
-							Parts: []a2a.Part{a2a.TextPart{Text: "Content"}},
+							Parts: a2a.ContentParts{a2a.NewTextPart("Content")},
 						},
 					},
 				},
@@ -805,11 +786,9 @@ func TestRunStreamingWithContinuationTokenAndMessages(t *testing.T) {
 func TestRunStreamingWithTaskInSessionAndMessage(t *testing.T) {
 	transport := &mockA2ATransport{
 		streamingResponseToReturn: &a2a.Message{
-			ID:   "response-123",
-			Role: a2a.MessageRoleAgent,
-			Parts: []a2a.Part{
-				a2a.TextPart{Text: "Response to task"},
-			},
+			ID:    "response-123",
+			Role:  a2a.MessageRoleAgent,
+			Parts: a2a.ContentParts{a2a.NewTextPart("Response to task")},
 		},
 	}
 	a := newTestAgent(transport, agent.Config{})
@@ -848,7 +827,7 @@ func TestRunStreamingWithAgentTaskUpdatesSession(t *testing.T) {
 			Artifacts: []*a2a.Artifact{
 				{
 					ID:    a2a.ArtifactID("art-1"),
-					Parts: []a2a.Part{a2a.TextPart{Text: "Task content"}},
+					Parts: a2a.ContentParts{a2a.NewTextPart("Task content")},
 				},
 			},
 		},
@@ -882,9 +861,7 @@ func TestRunStreamingWithAgentMessage(t *testing.T) {
 			ID:        messageID,
 			Role:      a2a.MessageRoleAgent,
 			ContextID: contextID,
-			Parts: []a2a.Part{
-				a2a.TextPart{Text: messageText},
-			},
+			Parts:     a2a.ContentParts{a2a.NewTextPart(messageText)},
 		},
 	}
 	a := newTestAgent(transport, agent.Config{})
@@ -933,10 +910,8 @@ func TestRunStreamingWithAgentTaskYieldsUpdate(t *testing.T) {
 			},
 			Artifacts: []*a2a.Artifact{
 				{
-					ID: a2a.ArtifactID("art-123"),
-					Parts: []a2a.Part{
-						a2a.TextPart{Text: "Task artifact content"},
-					},
+					ID:    a2a.ArtifactID("art-123"),
+					Parts: a2a.ContentParts{a2a.NewTextPart("Task artifact content")},
 				},
 			},
 		},
@@ -1042,10 +1017,8 @@ func TestRunStreamingWithTaskArtifactUpdateEvent(t *testing.T) {
 			TaskID:    a2a.TaskID(taskID),
 			ContextID: contextID,
 			Artifact: &a2a.Artifact{
-				ID: a2a.ArtifactID("artifact-789"),
-				Parts: []a2a.Part{
-					a2a.TextPart{Text: artifactContent},
-				},
+				ID:    a2a.ArtifactID("artifact-789"),
+				Parts: a2a.ContentParts{a2a.NewTextPart(artifactContent)},
 			},
 		},
 	}

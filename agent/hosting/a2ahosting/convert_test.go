@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/a2aproject/a2a-go/a2a"
+	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
@@ -28,7 +28,7 @@ func TestToAgentMessage_Nil_ReturnsNil(t *testing.T) {
 }
 
 func TestToAgentMessage_WithTextPart_MapsToTextContent(t *testing.T) {
-	in := &a2a.Message{ID: "m1", Role: a2a.MessageRoleUser, Parts: []a2a.Part{a2a.TextPart{Text: "hello"}}}
+	in := &a2a.Message{ID: "m1", Role: a2a.MessageRoleUser, Parts: a2a.ContentParts{a2a.NewTextPart("hello")}}
 	got, err := toAgentMessage(in)
 	if err != nil {
 		t.Fatalf("toAgentMessage returned error: %v", err)
@@ -73,12 +73,12 @@ func TestContentsToParts_JSONDataContent_MapsToDataPart(t *testing.T) {
 	if len(parts) != 1 {
 		t.Fatalf("parts len = %d, want 1", len(parts))
 	}
-	dp, ok := parts[0].(a2a.DataPart)
+	gotData, ok := parts[0].Data().(map[string]any)
 	if !ok {
-		t.Fatalf("part type = %T, want a2a.DataPart", parts[0])
+		t.Fatalf("part payload type = %T, want map[string]any", parts[0].Data())
 	}
-	if okValue, _ := dp.Data["ok"].(bool); !okValue {
-		t.Fatalf("unexpected data part payload: %#v", dp.Data)
+	if okValue, _ := gotData["ok"].(bool); !okValue {
+		t.Fatalf("unexpected data part payload: %#v", gotData)
 	}
 }
 

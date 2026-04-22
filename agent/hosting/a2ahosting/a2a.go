@@ -5,7 +5,7 @@ package a2ahosting
 import (
 	"net/http"
 
-	"github.com/a2aproject/a2a-go/a2asrv"
+	"github.com/a2aproject/a2a-go/v2/a2asrv"
 )
 
 func NewRequestHandler(cfg ExecutorConfig, options ...a2asrv.RequestHandlerOption) a2asrv.RequestHandler {

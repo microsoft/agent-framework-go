@@ -10,11 +10,12 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"maps"
 	"slices"
 	"time"
 
-	"github.com/a2aproject/a2a-go/a2a"
-	"github.com/a2aproject/a2a-go/a2aclient"
+	"github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/memory"
@@ -72,7 +73,7 @@ func (a *a2aagent) run(ctx context.Context, messages []*message.Message, options
 				yield(nil, errors.New("reconnecting to task streams using continuation tokens is not supported yet"))
 				return
 			}
-			task, err := a.client.GetTask(ctx, &a2a.TaskQueryParams{ID: a2a.TaskID(token)})
+			task, err := a.client.GetTask(ctx, &a2a.GetTaskRequest{ID: a2a.TaskID(token)})
 			if err != nil {
 				yield(nil, err)
 				return
@@ -84,7 +85,7 @@ func (a *a2aagent) run(ctx context.Context, messages []*message.Message, options
 			yieldTask(yield, task)
 			return
 		}
-		var parts []a2a.Part
+		var parts a2a.ContentParts
 		for _, msg := range messages {
 			parts = parts[:0] // reset parts slice
 			parts, err := contentsToParts(msg.Contents, parts)
@@ -96,15 +97,15 @@ func (a *a2aagent) run(ctx context.Context, messages []*message.Message, options
 			for _, taskID := range getTaskIDs(session) {
 				taskIDs = append(taskIDs, a2a.TaskID(taskID))
 			}
-			params := &a2a.MessageSendParams{
-				Message: &a2a.Message{
-					ID:             msg.ID,
-					Role:           a2a.MessageRoleUser,
-					Parts:          parts,
-					ReferenceTasks: taskIDs,
-					ContextID:      getContextID(session),
-				},
+			userMsg := a2a.NewMessage(a2a.MessageRoleUser, parts...)
+			if msg.ID != "" {
+				userMsg.ID = msg.ID
 			}
+			userMsg.ContextID = getContextID(session)
+			userMsg.ReferenceTasks = taskIDs
+			userMsg.Metadata = maps.Clone(msg.AdditionalProperties)
+
+			params := &a2a.SendMessageRequest{Message: userMsg}
 			var seq iter.Seq2[a2a.Event, error]
 			if stream {
 				seq = a.client.SendStreamingMessage(ctx, params)
@@ -241,104 +242,102 @@ func updateSessionContextID(session *memory.Session, contextID, taskID string) e
 	return nil
 }
 
-func partsToContents(parts []a2a.Part, contents []message.Content) ([]message.Content, error) {
+func partsToContents(parts a2a.ContentParts, contents []message.Content) ([]message.Content, error) {
 	contents = slices.Grow(contents, len(parts))
 	for _, part := range parts {
+		if part == nil {
+			continue
+		}
+
 		var content message.Content
-		switch p := part.(type) {
-		case a2a.TextPart:
+		switch c := part.Content.(type) {
+		case a2a.Text:
 			content = &message.TextContent{
 				ContentHeader: message.ContentHeader{
-					AdditionalProperties: p.Metadata,
-					RawRepresentation:    p,
+					AdditionalProperties: maps.Clone(part.Metadata),
+					RawRepresentation:    part,
 				},
-				Text: p.Text,
+				Text: string(c),
 			}
-		case a2a.FilePart:
-			switch f := p.File.(type) {
-			case a2a.FileURI:
-				content = &message.URIContent{
-					ContentHeader: message.ContentHeader{
-						AdditionalProperties: p.Metadata,
-						RawRepresentation:    p,
-					},
-					MediaType: cmp.Or(f.MimeType, "application/octet-stream"),
-					URI:       f.URI,
-				}
-			case a2a.FileBytes:
-				content = &message.DataContent{
-					ContentHeader: message.ContentHeader{
-						AdditionalProperties: p.Metadata,
-						RawRepresentation:    p,
-					},
-					MediaType: cmp.Or(f.MimeType, "application/octet-stream"),
-					Data:      f.Bytes,
-				}
+		case a2a.URL:
+			content = &message.URIContent{
+				ContentHeader: message.ContentHeader{
+					AdditionalProperties: maps.Clone(part.Metadata),
+					RawRepresentation:    part,
+				},
+				MediaType: cmp.Or(part.MediaType, "application/octet-stream"),
+				URI:       string(c),
 			}
-		case a2a.DataPart:
-			dump, err := json.Marshal(p.Data)
+		case a2a.Raw:
+			content = &message.DataContent{
+				ContentHeader: message.ContentHeader{
+					AdditionalProperties: maps.Clone(part.Metadata),
+					RawRepresentation:    part,
+				},
+				Name:      part.Filename,
+				MediaType: cmp.Or(part.MediaType, "application/octet-stream"),
+				Data:      base64.StdEncoding.EncodeToString([]byte(c)),
+			}
+		case a2a.Data:
+			dump, err := json.Marshal(c.Value)
 			if err != nil {
 				return nil, fmt.Errorf("failed to marshal A2A data part: %w", err)
 			}
 			content = &message.DataContent{
 				ContentHeader: message.ContentHeader{
-					AdditionalProperties: p.Metadata,
-					RawRepresentation:    p,
+					AdditionalProperties: maps.Clone(part.Metadata),
+					RawRepresentation:    part,
 				},
+				Name:      part.Filename,
 				Data:      base64.StdEncoding.EncodeToString(dump),
-				MediaType: "application/json",
+				MediaType: cmp.Or(part.MediaType, "application/json"),
 			}
 		default:
-			return nil, fmt.Errorf("unsupported A2A part type: %T", part)
+			return nil, fmt.Errorf("unsupported A2A part type: %T", c)
 		}
-		if content != nil {
-			contents = append(contents, content)
-		}
+
+		contents = append(contents, content)
 	}
 	return contents, nil
 }
 
-func contentsToParts(contents []message.Content, parts []a2a.Part) ([]a2a.Part, error) {
+func contentsToParts(contents []message.Content, parts a2a.ContentParts) (a2a.ContentParts, error) {
 	for _, content := range contents {
+		var part *a2a.Part
 		switch c := content.(type) {
 		case *message.TextContent:
-			parts = append(parts, a2a.TextPart{
-				Metadata: c.AdditionalProperties,
-				Text:     c.Text,
-			})
+			part = a2a.NewTextPart(c.Text)
 		case *message.URIContent:
-			parts = append(parts, a2a.FilePart{
-				Metadata: c.AdditionalProperties,
-				File: a2a.FileURI{
-					URI: c.URI,
-					FileMeta: a2a.FileMeta{
-						MimeType: c.MediaType,
-					},
-				},
-			})
+			part = a2a.NewFileURLPart(a2a.URL(c.URI), c.MediaType)
 		case *message.DataContent:
-			parts = append(parts, a2a.FilePart{
-				Metadata: c.AdditionalProperties,
-				File: a2a.FileBytes{
-					Bytes: c.Data,
-					FileMeta: a2a.FileMeta{
-						MimeType: c.MediaType,
-					},
-				},
-			})
+			if c.MediaType == "application/json" {
+				bytes, err := c.Bytes()
+				if err != nil {
+					return nil, err
+				}
+				var value any
+				if err := json.Unmarshal(bytes, &value); err == nil {
+					part = a2a.NewDataPart(value)
+				}
+			}
+			if part == nil {
+				bytes, err := c.Bytes()
+				if err != nil {
+					return nil, err
+				}
+				part = a2a.NewRawPart(bytes)
+				part.MediaType = c.MediaType
+			}
+			part.Filename = c.Name
 		case *message.HostedFileContent:
-			parts = append(parts, a2a.FilePart{
-				Metadata: c.AdditionalProperties,
-				File: a2a.FileURI{
-					URI: c.FileID,
-					FileMeta: a2a.FileMeta{
-						MimeType: c.MediaType,
-						Name:     c.Name,
-					},
-				},
-			})
+			part = a2a.NewFileURLPart(a2a.URL(c.FileID), c.MediaType)
+			part.Filename = c.Name
 		default:
 			return nil, fmt.Errorf("unsupported content type: %T", c)
+		}
+		if part != nil {
+			part.Metadata = maps.Clone(content.Header().AdditionalProperties)
+			parts = append(parts, part)
 		}
 	}
 	return parts, nil

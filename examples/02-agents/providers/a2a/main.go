@@ -7,8 +7,9 @@ import (
 	"context"
 	"os"
 
-	"github.com/a2aproject/a2a-go/a2aclient"
-	"github.com/a2aproject/a2a-go/a2aclient/agentcard"
+	"github.com/a2aproject/a2a-go/v2/a2aclient"
+	"github.com/a2aproject/a2a-go/v2/a2aclient/agentcard"
+	a2agrpc "github.com/a2aproject/a2a-go/v2/a2agrpc/v1"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/a2aagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
@@ -34,7 +35,7 @@ func main() {
 	}
 
 	// Insecure connection is used for example purposes
-	withInsecureGRPC := a2aclient.WithGRPCTransport(grpc.WithTransportCredentials(insecure.NewCredentials()))
+	withInsecureGRPC := a2agrpc.WithGRPCTransport(grpc.WithTransportCredentials(insecure.NewCredentials()))
 
 	// Create a client connected to one of the interfaces specified in the AgentCard.
 	client, err := a2aclient.NewFromCard(ctx, card, withInsecureGRPC)
