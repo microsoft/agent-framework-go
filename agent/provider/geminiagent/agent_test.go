@@ -162,7 +162,7 @@ func TestBasicText_Streaming(t *testing.T) {
 	}
 }
 
-// TestStructuredOutput_NonStreaming verifies that passing agent.StructuredOutput
+// TestStructuredOutput_NonStreaming verifies that passing agent.WithStructuredOutput
 // causes the provider to:
 //  1. Send generationConfig with responseMimeType "application/json" and a
 //     responseJsonSchema derived from the Go type.

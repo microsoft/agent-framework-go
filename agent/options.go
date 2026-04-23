@@ -23,7 +23,7 @@ type Option = agentopt.Option
 //
 // Example usage:
 //
-//	v, ok := agent.GetOption(opts, json.WithSession)
+//	v, ok := agent.GetOption(opts, agent.WithSession)
 func GetOption[T any](opts []Option, setter func(T) Option) (T, bool) {
 	return agentopt.GetOption(opts, setter)
 }
@@ -32,7 +32,7 @@ func GetOption[T any](opts []Option, setter func(T) Option) (T, bool) {
 //
 // Example usage:
 //
-//	for v := range agent.AllOptions(opts, json.WithSession) {
+//	for v := range agent.AllOptions(opts, agent.WithSession) {
 //	   // do something with v of type T
 //	}
 func AllOptions[T any](opts []Option, setter func(T) Option) iter.Seq[T] {

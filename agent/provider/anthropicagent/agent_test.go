@@ -119,7 +119,7 @@ func minimalStreamingResponse(payload string) string {
 		`data: {"type":"message_stop"}` + "\n\n"
 }
 
-// TestStructuredOutput_NonStreaming verifies that passing agent.StructuredOutput
+// TestStructuredOutput_NonStreaming verifies that passing agent.WithStructuredOutput
 // with a typed struct causes the provider to:
 //  1. Send output_config.format with type "json_schema" and a schema derived
 //     from the Go type.
