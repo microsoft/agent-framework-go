@@ -128,7 +128,7 @@ func main() {
 		a2a.NewAgentInterface(url, a2a.TransportProtocolJSONRPC),
 	}
 	mux := http.NewServeMux()
-	mux.Handle("/", a2ahosting.NewHTTPHandler(a2ahosting.ExecutorConfig{
+	mux.Handle("/", a2ahosting.NewJSONRPCHandler(a2ahosting.ExecutorConfig{
 		Agent: hostAgent,
 	}, a2asrv.WithExtendedAgentCard(card)))
 	mux.Handle(a2asrv.WellKnownAgentCardPath, a2asrv.NewStaticAgentCardHandler(card))
