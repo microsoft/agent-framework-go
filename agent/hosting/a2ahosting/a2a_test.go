@@ -11,11 +11,10 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/hosting/a2ahosting"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
-func newTestAgent(runFn func(context.Context, []*message.Message, ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error]) *agent.Agent {
+func newTestAgent(runFn func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*message.ResponseUpdate, error]) *agent.Agent {
 	return agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{Name: "test-agent", ID: "test-agent-id"})
 }
 
@@ -29,7 +28,7 @@ func TestNewRequestHandler_PanicsWithoutAgent(t *testing.T) {
 }
 
 func TestRequestHandler_OnSendMessage_ReturnsMessage_WhenBackgroundDisabled(t *testing.T) {
-	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(&message.ResponseUpdate{
 				MessageID: "m1",
@@ -63,7 +62,7 @@ func TestRequestHandler_OnSendMessage_ReturnsMessage_WhenBackgroundDisabled(t *t
 }
 
 func TestRequestHandler_OnSendMessage_WithReferenceTaskIDs_ReturnsError(t *testing.T) {
-	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(&message.ResponseUpdate{Contents: message.Contents{&message.TextContent{Text: "ignored"}}}, nil)
 		}
@@ -82,7 +81,7 @@ func TestRequestHandler_OnSendMessage_WithReferenceTaskIDs_ReturnsError(t *testi
 }
 
 func TestRequestHandler_OnSendMessage_PreservesContextID(t *testing.T) {
-	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(&message.ResponseUpdate{
 				MessageID: "m-context",
@@ -109,8 +108,8 @@ func TestRequestHandler_OnSendMessage_PreservesContextID(t *testing.T) {
 }
 
 func TestRequestHandler_OnSendMessageStream_UsesTaskLifecycle_WhenContinuationTokenPresent(t *testing.T) {
-	a := newTestAgent(func(_ context.Context, _ []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		allowBackground, _ := agentopt.Get(options, agentopt.AllowBackgroundResponses)
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+		allowBackground, _ := agent.GetOption(options, agent.AllowBackgroundResponses)
 		if !allowBackground {
 			return func(yield func(*message.ResponseUpdate, error) bool) {
 				yield(nil, assertErr("expected AllowBackgroundResponses=true"))
@@ -164,7 +163,7 @@ func TestRequestHandler_OnSendMessageStream_UsesTaskLifecycle_WhenContinuationTo
 }
 
 func TestRequestHandler_OnSendMessageStream_WhenContinuationTokenAndNoMessages_StatusMessageIsNil(t *testing.T) {
-	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(&message.ResponseUpdate{ContinuationToken: "token-no-msg"}, nil)
 		}
@@ -196,7 +195,7 @@ func TestRequestHandler_OnSendMessageStream_WhenContinuationTokenAndNoMessages_S
 }
 
 func TestRequestHandler_OnCancelTask_ReturnsCanceledTask(t *testing.T) {
-	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(&message.ResponseUpdate{
 				MessageID:         "m-cancel",

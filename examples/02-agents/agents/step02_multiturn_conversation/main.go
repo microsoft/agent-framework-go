@@ -10,9 +10,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
-	"github.com/microsoft/agent-framework-go/middleware"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
 )
@@ -45,7 +43,7 @@ func main() {
 			Config: agent.Config{
 				Instructions: "You are good at telling jokes.",
 				Name:         "Joker",
-				Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
+				Middlewares:  []agent.Middleware{logger}, // for logging agent interactions
 			},
 		},
 	)
@@ -57,9 +55,9 @@ func main() {
 	if err != nil {
 		demo.Panic(err)
 	}
-	resp, err := a.RunText(ctx, "Tell me a joke about a pirate.", agentopt.Session(session)).Collect()
+	resp, err := a.RunText(ctx, "Tell me a joke about a pirate.", agent.WithSession(session)).Collect()
 	demo.Response(resp, err)
-	resp, err = a.RunText(ctx, "Now add some emojis to the joke and tell it in the voice of a pirate's parrot.", agentopt.Session(session)).Collect()
+	resp, err = a.RunText(ctx, "Now add some emojis to the joke and tell it in the voice of a pirate's parrot.", agent.WithSession(session)).Collect()
 	demo.Response(resp, err)
 
 	// Invoke the agent with a multi-turn conversation and streaming, where the context is preserved in the session object.
@@ -67,10 +65,10 @@ func main() {
 	if err != nil {
 		demo.Panic(err)
 	}
-	for update, err := range a.RunText(ctx, "Tell me a joke about a pirate.", agentopt.Session(session2), agentopt.Stream(true)) {
+	for update, err := range a.RunText(ctx, "Tell me a joke about a pirate.", agent.WithSession(session2), agent.Stream(true)) {
 		demo.Response(update, err)
 	}
-	for update, err := range a.RunText(ctx, "Now add some emojis to the joke and tell it in the voice of a pirate's parrot.", agentopt.Session(session2), agentopt.Stream(true)) {
+	for update, err := range a.RunText(ctx, "Now add some emojis to the joke and tell it in the voice of a pirate's parrot.", agent.WithSession(session2), agent.Stream(true)) {
 		demo.Response(update, err)
 	}
 }

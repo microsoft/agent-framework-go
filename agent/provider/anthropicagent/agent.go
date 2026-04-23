@@ -15,7 +15,6 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/format"
 	"github.com/microsoft/agent-framework-go/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/message"
@@ -27,7 +26,7 @@ type messageNewParamsOpt anthropic.MessageNewParams
 func (o messageNewParamsOpt) Value() any { return anthropic.MessageNewParams(o) }
 
 // MessageNewParams allows passing custom parameters to the underlying anthropic API calls.
-func MessageNewParams(params anthropic.MessageNewParams) agentopt.Option {
+func MessageNewParams(params anthropic.MessageNewParams) agent.Option {
 	return messageNewParamsOpt(params)
 }
 
@@ -64,14 +63,14 @@ func (a *client) unmarshal(f format.Format, data []byte, v any) error {
 	return jsonformat.Unmarshal(f.(*jsonformat.Format), data, v)
 }
 
-func (a *client) run(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (a *client) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 	params, err := a.buildMessageParams(messages, options)
 	if err != nil {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(nil, err)
 		}
 	}
-	if stream, _ := agentopt.Get(options, agentopt.Stream); !stream {
+	if stream, _ := agent.GetOption(options, agent.Stream); !stream {
 		resp, err := a.client.Messages.New(ctx, params)
 		if err != nil {
 			return func(yield func(*message.ResponseUpdate, error) bool) {
@@ -252,16 +251,16 @@ func (a *client) buildDelta(index int, v any, contents []message.Content, functi
 	return contents
 }
 
-func (a *client) buildMessageParams(messages []*message.Message, opts []agentopt.Option) (anthropic.MessageNewParams, error) {
+func (a *client) buildMessageParams(messages []*message.Message, opts []agent.Option) (anthropic.MessageNewParams, error) {
 	var params anthropic.MessageNewParams
-	if p, ok := agentopt.Get(opts, MessageNewParams); ok {
+	if p, ok := agent.GetOption(opts, MessageNewParams); ok {
 		params = p
 	}
 	params.Model = cmp.Or(params.Model, anthropic.Model(a.config.Model))
 	params.MaxTokens = cmp.Or(params.MaxTokens, 4096)
 
 	var tools []anthropic.ToolUnionParam
-	for tl := range agentopt.All(opts, agentopt.Tool) {
+	for tl := range agent.AllOptions(opts, agent.WithTool) {
 		if ft, ok := tl.(tool.FuncTool); ok {
 			name, description := ft.Name(), ft.Description()
 			var properties any
@@ -317,7 +316,7 @@ func (a *client) buildMessageParams(messages []*message.Message, opts []agentopt
 		params.Tools = tools
 	}
 
-	if mode, ok := agentopt.Get(opts, agentopt.ToolMode); ok {
+	if mode, ok := agent.GetOption(opts, agent.WithToolMode); ok {
 		switch mode.Mode() {
 		case tool.ToolModeAuto, "":
 			params.ToolChoice = anthropic.ToolChoiceUnionParam{
@@ -340,7 +339,7 @@ func (a *client) buildMessageParams(messages []*message.Message, opts []agentopt
 		}
 	}
 
-	if frmt, ok := agentopt.Get(opts, agentopt.ResponseFormat); ok && frmt != nil {
+	if frmt, ok := agent.GetOption(opts, agent.WithResponseFormat); ok && frmt != nil {
 		if frmt.Kind() == "json" {
 			if schemaFmt, ok := frmt.(format.SchemaFormat); ok {
 				var schemaMap map[string]any

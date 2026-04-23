@@ -9,11 +9,11 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/microsoft/agent-framework-go/agentopt"
+	"github.com/microsoft/agent-framework-go/agent/internal/agentopt"
+	"github.com/microsoft/agent-framework-go/agent/internal/middleware"
+	"github.com/microsoft/agent-framework-go/agent/internal/middleware/contextprovider"
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/middleware"
-	"github.com/microsoft/agent-framework-go/middleware/contextprovider"
 	"github.com/microsoft/agent-framework-go/tool"
 )
 
@@ -56,7 +56,7 @@ func TestMiddleware_Run_SingleProvider_EnrichesMessages(t *testing.T) {
 		},
 		[]middleware.Middleware{contextprovider.New(provider)},
 		[]*message.Message{message.NewText("hello")},
-		agentopt.Session(memory.NewSession("")),
+		agentopt.WithSession(memory.NewSession("")),
 	))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -99,7 +99,7 @@ func TestMiddleware_Run_MultipleProviders_CalledInSequence(t *testing.T) {
 		},
 		[]middleware.Middleware{contextprovider.New(providerA, providerB)},
 		[]*message.Message{message.NewText("hello")},
-		agentopt.Session(memory.NewSession("")),
+		agentopt.WithSession(memory.NewSession("")),
 	))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -130,13 +130,13 @@ func TestMiddleware_Run_Provider_EnrichesTools(t *testing.T) {
 	_, err := collectResponse(middleware.RunChain(
 		context.Background(),
 		func(_ context.Context, _ []*message.Message, opts ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
-			capturedTools = slices.Collect(agentopt.All(opts, agentopt.Tool))
+			capturedTools = slices.Collect(agentopt.AllOptions(opts, agentopt.WithTool))
 			return singleUpdate("ok")
 		},
 		[]middleware.Middleware{contextprovider.New(provider)},
 		[]*message.Message{message.NewText("hello")},
-		agentopt.Session(memory.NewSession("")),
-		agentopt.Tool(baselineTool),
+		agentopt.WithSession(memory.NewSession("")),
+		agentopt.WithTool(baselineTool),
 	))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -166,7 +166,7 @@ func TestMiddleware_Run_OnSuccess_AfterRunCalled(t *testing.T) {
 		},
 		[]middleware.Middleware{contextprovider.New(provider)},
 		[]*message.Message{message.NewText("hello")},
-		agentopt.Session(memory.NewSession("")),
+		agentopt.WithSession(memory.NewSession("")),
 	))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -206,7 +206,7 @@ func TestMiddleware_Run_OnFailure_AfterRunCalledWithInvokeError(t *testing.T) {
 		},
 		[]middleware.Middleware{contextprovider.New(provider)},
 		[]*message.Message{message.NewText("hello")},
-		agentopt.Session(memory.NewSession("")),
+		agentopt.WithSession(memory.NewSession("")),
 	) {
 		if err != nil {
 			if !errors.Is(err, expectedErr) {
@@ -238,15 +238,15 @@ func TestMiddleware_Run_SharedOptions_ProviderToolsDoNotAccumulateAcrossCalls(t 
 		},
 	}
 	sharedOptions := []agentopt.Option{
-		agentopt.Session(memory.NewSession("")),
-		agentopt.Tool(stubTool{name: "baseline"}),
+		agentopt.WithSession(memory.NewSession("")),
+		agentopt.WithTool(stubTool{name: "baseline"}),
 	}
 
 	for range 3 {
 		_, err := collectResponse(middleware.RunChain(
 			context.Background(),
 			func(_ context.Context, _ []*message.Message, opts ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
-				toolCounts = append(toolCounts, len(slices.Collect(agentopt.All(opts, agentopt.Tool))))
+				toolCounts = append(toolCounts, len(slices.Collect(agentopt.AllOptions(opts, agentopt.WithTool))))
 				return singleUpdate("ok")
 			},
 			[]middleware.Middleware{contextprovider.New(provider)},
@@ -272,8 +272,8 @@ func TestMiddleware_Run_SharedOptions_OriginalToolsNotMutated(t *testing.T) {
 		},
 	}
 	sharedOptions := []agentopt.Option{
-		agentopt.Session(memory.NewSession("")),
-		agentopt.Tool(baselineTool),
+		agentopt.WithSession(memory.NewSession("")),
+		agentopt.WithTool(baselineTool),
 	}
 
 	_, err := collectResponse(middleware.RunChain(
@@ -289,7 +289,7 @@ func TestMiddleware_Run_SharedOptions_OriginalToolsNotMutated(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	originalTools := slices.Collect(agentopt.All(sharedOptions, agentopt.Tool))
+	originalTools := slices.Collect(agentopt.AllOptions(sharedOptions, agentopt.WithTool))
 	if len(originalTools) != 1 {
 		t.Fatalf("expected original shared options to keep 1 tool, got %d", len(originalTools))
 	}

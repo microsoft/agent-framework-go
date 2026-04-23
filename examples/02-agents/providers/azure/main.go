@@ -11,7 +11,6 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
-	"github.com/microsoft/agent-framework-go/middleware"
 
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
@@ -45,7 +44,7 @@ func main() {
 			Model: deployment,
 			Config: agent.Config{
 				Instructions: "You are good at telling jokes.", Name: "Joker",
-				Middlewares: []middleware.Middleware{logger}, // for logging agent interactions
+				Middlewares: []agent.Middleware{logger}, // for logging agent interactions
 			},
 		},
 	)

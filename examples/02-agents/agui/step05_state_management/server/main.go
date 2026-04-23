@@ -17,16 +17,14 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/hosting/aguihosting"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/middleware"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
 )
 
 func main() {
-	stateSnapshotMiddleware := middleware.Func(func(next middleware.RunFunc, ctx context.Context, messages []*message.Message, opts ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	stateSnapshotMiddleware := agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			for update, err := range next(ctx, messages, opts...) {
 				if err != nil {
@@ -91,7 +89,7 @@ func main() {
   }
 }
 Then also provide a concise summary in one sentence.`,
-				Middlewares: []middleware.Middleware{stateSnapshotMiddleware},
+				Middlewares: []agent.Middleware{stateSnapshotMiddleware},
 			},
 		},
 	)

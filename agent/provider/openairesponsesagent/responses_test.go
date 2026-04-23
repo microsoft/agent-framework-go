@@ -14,7 +14,6 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/openairesponsesagent"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/internal/messagetest"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
@@ -261,7 +260,7 @@ data: {"type":"response.completed","response":{"id":"resp_67d329fbc87c81919f8952
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
 	var updates []*message.ResponseUpdate
-	for update, err := range a.RunText(t.Context(), "hello", agentopt.Stream(true),
+	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
 		openairesponsesagent.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
@@ -440,7 +439,7 @@ data: {"type":"response.completed","sequence_number":29,"response":{"id":"resp_6
 	a := newTestResponsesClient(server, "o4-mini")
 
 	var updates []*message.ResponseUpdate
-	for update, err := range a.RunText(t.Context(), "Calculate the sum of the first 5 positive integers.", agentopt.Stream(true)) {
+	for update, err := range a.RunText(t.Context(), "Calculate the sum of the first 5 positive integers.", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
 		}
@@ -847,7 +846,7 @@ data: {"type":"response.completed","sequence_number":14,"response":{"id":"resp_r
 	a := newTestResponsesClient(server, "o4-mini")
 
 	var updates []*message.ResponseUpdate
-	for update, err := range a.RunText(t.Context(), "Solve this problem step by step.", agentopt.Stream(true)) {
+	for update, err := range a.RunText(t.Context(), "Solve this problem step by step.", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
 		}
@@ -975,7 +974,7 @@ data: {"type":"response.completed","response":{"id":"resp_streaming123","object"
 
 	var updates []*message.ResponseUpdate
 	// Override with gpt-4o in options
-	for update, err := range a.RunText(t.Context(), "hello", agentopt.Stream(true),
+	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
 		openairesponsesagent.ResponsesNewParams(responses.ResponseNewParams{
 			Model:           "gpt-4o",
 			MaxOutputTokens: openai.Int(20),
@@ -1299,7 +1298,7 @@ func TestResponsesFunctionCallWithResult_NonStreaming(t *testing.T) {
 	}, getWeather)
 
 	resp1, err := a1.RunText(t.Context(), "What's the weather in Seattle?",
-		agentopt.Tool(tool),
+		agent.WithTool(tool),
 	).Collect()
 	if err != nil {
 		t.Fatalf("error = %v", err)
@@ -1350,7 +1349,7 @@ func TestResponsesFunctionCallWithResult_NonStreaming(t *testing.T) {
 	}
 
 	resp2, err := a2.Run(t.Context(), messages,
-		agentopt.Tool(tool),
+		agent.WithTool(tool),
 	).Collect()
 	if err != nil {
 		t.Fatalf("error = %v", err)
@@ -1488,7 +1487,7 @@ func TestResponsesFunctionCall_UsesCallIDWhenDifferentFromID(t *testing.T) {
 	}, getWeather)
 
 	resp1, err := a1.RunText(t.Context(), "What's the weather in Amsterdam?",
-		agentopt.Tool(weatherTool),
+		agent.WithTool(weatherTool),
 	).Collect()
 	if err != nil {
 		t.Fatalf("error = %v", err)
@@ -1535,7 +1534,7 @@ func TestResponsesFunctionCall_UsesCallIDWhenDifferentFromID(t *testing.T) {
 	}
 
 	resp2, err := a2.Run(t.Context(), messages,
-		agentopt.Tool(weatherTool),
+		agent.WithTool(weatherTool),
 	).Collect()
 	if err != nil {
 		t.Fatalf("error = %v", err)
@@ -1768,7 +1767,7 @@ data: {"type":"response.completed","response":{"id":"resp_001","object":"respons
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
 	var updates []*message.ResponseUpdate
-	for update, err := range a.RunText(t.Context(), "test", agentopt.Stream(true)) {
+	for update, err := range a.RunText(t.Context(), "test", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
 		}
@@ -1810,7 +1809,7 @@ data: {"type":"response.failed","response":{"id":"resp_001","object":"response",
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
 	var updates []*message.ResponseUpdate
-	for update, err := range a.RunText(t.Context(), "test", agentopt.Stream(true)) {
+	for update, err := range a.RunText(t.Context(), "test", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
 		}
@@ -1855,7 +1854,7 @@ data: {"type":"response.completed","response":{"id":"resp_001","object":"respons
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
 	var updates []*message.ResponseUpdate
-	for update, err := range a.RunText(t.Context(), "test", agentopt.Stream(true)) {
+	for update, err := range a.RunText(t.Context(), "test", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
 		}
@@ -1907,7 +1906,7 @@ data: {"type":"response.completed","response":{"id":"resp_001","object":"respons
 
 	var updates []*message.ResponseUpdate
 	var errorMessages []string
-	for update, err := range a.RunText(t.Context(), "harmful request", agentopt.Stream(true)) {
+	for update, err := range a.RunText(t.Context(), "harmful request", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
 		}
@@ -1995,7 +1994,7 @@ func TestResponsesCodeInterpreterTool_NonStreaming(t *testing.T) {
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
 	resp, err := a.RunText(t.Context(), "Calculate the sum of numbers from 1 to 5",
-		agentopt.Tool(&hostedtool.CodeInterpreter{}),
+		agent.WithTool(&hostedtool.CodeInterpreter{}),
 	).Collect()
 	if err != nil {
 		t.Fatalf("error = %v", err)
@@ -2102,8 +2101,8 @@ data: {"type":"response.completed","response":{"id":"resp_002","object":"respons
 
 	var updates []*message.ResponseUpdate
 	var allText strings.Builder
-	for update, err := range a.RunText(t.Context(), "Calculate 3+3", agentopt.Stream(true),
-		agentopt.Tool(&hostedtool.CodeInterpreter{}),
+	for update, err := range a.RunText(t.Context(), "Calculate 3+3", agent.Stream(true),
+		agent.WithTool(&hostedtool.CodeInterpreter{}),
 	) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
@@ -2156,7 +2155,7 @@ data: {"type":"response.incomplete","response":{"id":"resp_001","object":"respon
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
 	var updates []*message.ResponseUpdate
-	for update, err := range a.RunText(t.Context(), "test", agentopt.Stream(true)) {
+	for update, err := range a.RunText(t.Context(), "test", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
 		}
@@ -2264,7 +2263,7 @@ data: {"type":"response.failed","sequence_number":2,"response":{"id":"resp_001",
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
 	var updates []*message.ResponseUpdate
-	for update, err := range a.RunText(t.Context(), "test", agentopt.Stream(true)) {
+	for update, err := range a.RunText(t.Context(), "test", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
 		}
@@ -2466,7 +2465,7 @@ data: {"type":"response.completed","response":{"id":"resp_001","object":"respons
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
 	var updates []*message.ResponseUpdate
-	for update, err := range a.RunText(t.Context(), "test", agentopt.Stream(true)) {
+	for update, err := range a.RunText(t.Context(), "test", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
 		}
@@ -2827,7 +2826,7 @@ data: {"type":"response.failed","sequence_number":2,"response":{"id":"resp_002",
 
 	var updates []*message.ResponseUpdate
 	var streamErr error
-	for update, err := range a.RunText(t.Context(), "test", agentopt.Stream(true)) {
+	for update, err := range a.RunText(t.Context(), "test", agent.Stream(true)) {
 		if err != nil {
 			// When there's an error event in the stream, the SDK returns it as a Go error
 			streamErr = err
@@ -2878,7 +2877,7 @@ data: {"type":"response.failed","sequence_number":2,"response":{"id":"resp_003",
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
 	var updates []*message.ResponseUpdate
-	for update, err := range a.RunText(t.Context(), "test", agentopt.Stream(true)) {
+	for update, err := range a.RunText(t.Context(), "test", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
 		}
@@ -3933,7 +3932,7 @@ func TestResponsesConversationId_AsResponseId_NonStreaming(t *testing.T) {
 	defer server.Close()
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
-	session, err := a.CreateSession(t.Context(), agentopt.ServiceID("resp_12345"))
+	session, err := a.CreateSession(t.Context(), agent.WithServiceID("resp_12345"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3943,7 +3942,7 @@ func TestResponsesConversationId_AsResponseId_NonStreaming(t *testing.T) {
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
 		}),
-		agentopt.Session(session),
+		agent.WithSession(session),
 	).Collect()
 
 	if err != nil {
@@ -4000,7 +3999,7 @@ func TestResponsesConversationId_AsConversationId_NonStreaming(t *testing.T) {
 	defer server.Close()
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
-	session, err := a.CreateSession(t.Context(), agentopt.ServiceID("conv_12345"))
+	session, err := a.CreateSession(t.Context(), agent.WithServiceID("conv_12345"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4010,7 +4009,7 @@ func TestResponsesConversationId_AsConversationId_NonStreaming(t *testing.T) {
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
 		}),
-		agentopt.Session(session),
+		agent.WithSession(session),
 	).Collect()
 	if err != nil {
 		t.Fatalf("error = %v", err)
@@ -4071,18 +4070,18 @@ data: {"type":"response.completed","response":{"id":"resp_67890","object":"respo
 	defer server.Close()
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
-	session, err := a.CreateSession(t.Context(), agentopt.ServiceID("resp_12345"))
+	session, err := a.CreateSession(t.Context(), agent.WithServiceID("resp_12345"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	var updates []*message.ResponseUpdate
-	for update, err := range a.RunText(t.Context(), "hello", agentopt.Stream(true),
+	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
 		openairesponsesagent.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
 		}),
-		agentopt.Session(session),
+		agent.WithSession(session),
 	) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
@@ -4150,18 +4149,18 @@ data: {"type":"response.completed","response":{"id":"resp_67890","object":"respo
 	defer server.Close()
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
-	session, err := a.CreateSession(t.Context(), agentopt.ServiceID("conv_12345"))
+	session, err := a.CreateSession(t.Context(), agent.WithServiceID("conv_12345"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	var updates []*message.ResponseUpdate
-	for update, err := range a.RunText(t.Context(), "hello", agentopt.Stream(true),
+	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
 		openairesponsesagent.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
 		}),
-		agentopt.Session(session),
+		agent.WithSession(session),
 	) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
@@ -4221,8 +4220,8 @@ func TestResponsesBackgroundResponses_FirstCall(t *testing.T) {
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
 		}),
-		agentopt.AllowBackgroundResponses(true),
-		agentopt.Session(session),
+		agent.AllowBackgroundResponses(true),
+		agent.WithSession(session),
 	).Collect()
 	if err != nil {
 		t.Fatalf("error = %v", err)
@@ -4297,7 +4296,7 @@ func testResponsesBackgroundPolling(t *testing.T, status string) {
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 	// Create session with ConversationID to simulate a previous call (polling scenario)
-	session, err := a.CreateSession(t.Context(), agentopt.ServiceID("resp_68d3d2c9ef7c8195863e4e2b2ec226a205007262ecbbfed8"))
+	session, err := a.CreateSession(t.Context(), agent.WithServiceID("resp_68d3d2c9ef7c8195863e4e2b2ec226a205007262ecbbfed8"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4310,9 +4309,9 @@ func testResponsesBackgroundPolling(t *testing.T, status string) {
 	ctJSON, _ := json.Marshal(ct)
 
 	resp, err := a.Run(t.Context(), nil,
-		agentopt.ContinuationToken(string(ctJSON)),
-		agentopt.AllowBackgroundResponses(true),
-		agentopt.Session(session),
+		agent.WithContinuationToken(string(ctJSON)),
+		agent.AllowBackgroundResponses(true),
+		agent.WithSession(session),
 	).Collect()
 	if err != nil {
 		t.Fatalf("error = %v", err)
@@ -4434,9 +4433,9 @@ data: {"type":"response.completed","sequence_number":17,"response":{"id":"resp_6
 
 	var updates []*message.ResponseUpdate
 	var allText strings.Builder
-	for update, err := range a.RunText(t.Context(), "hello", agentopt.Stream(true),
-		agentopt.AllowBackgroundResponses(true),
-		agentopt.Session(session),
+	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
+		agent.AllowBackgroundResponses(true),
+		agent.WithSession(session),
 	) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
@@ -4538,16 +4537,16 @@ data: {"type":"response.completed","sequence_number":17,"response":{"truncation"
 	token := `{"response_id":"resp_68d40dc671a0819cb0ee920078333451029e611c3cc4a34b","sequence_number":9}`
 
 	// Create session with ConversationID to allow continuation
-	session, err := a.CreateSession(t.Context(), agentopt.ServiceID("resp_68d40dc671a0819cb0ee920078333451029e611c3cc4a34b"))
+	session, err := a.CreateSession(t.Context(), agent.WithServiceID("resp_68d40dc671a0819cb0ee920078333451029e611c3cc4a34b"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	var updates []*message.ResponseUpdate
-	for update, err := range a.Run(t.Context(), []*message.Message{}, agentopt.Stream(true),
-		agentopt.AllowBackgroundResponses(true),
-		agentopt.ContinuationToken(token),
-		agentopt.Session(session),
+	for update, err := range a.Run(t.Context(), []*message.Message{}, agent.Stream(true),
+		agent.AllowBackgroundResponses(true),
+		agent.WithContinuationToken(token),
+		agent.WithSession(session),
 	) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
@@ -4614,7 +4613,7 @@ func TestResponsesGetContinuationToken_WithMessages_ThrowsException(t *testing.T
 
 	// Attempt to use continuation token with messages should error
 	_, err := a.RunText(t.Context(), "test",
-		agentopt.ContinuationToken(token),
+		agent.WithContinuationToken(token),
 	).Collect()
 
 	if err == nil {
@@ -4639,9 +4638,9 @@ func TestResponsesBackgroundResponses_PollingCall_WithMessages(t *testing.T) {
 
 	// A try to update a background response with new messages should fail
 	_, err = a.RunText(t.Context(), "Please book hotel as well",
-		agentopt.Session(session),
-		agentopt.ContinuationToken(token),
-		agentopt.AllowBackgroundResponses(true),
+		agent.WithSession(session),
+		agent.WithContinuationToken(token),
+		agent.AllowBackgroundResponses(true),
 	).Collect()
 
 	if err == nil {
@@ -4666,10 +4665,10 @@ func TestResponsesBackgroundResponses_StreamResumption_WithMessages(t *testing.T
 
 	// Attempt to resume stream with messages should fail
 	for _, err := range a.RunText(t.Context(), "Please book a hotel for me",
-		agentopt.Session(session),
-		agentopt.AllowBackgroundResponses(true),
-		agentopt.ContinuationToken(token),
-		agentopt.Stream(true)) {
+		agent.WithSession(session),
+		agent.AllowBackgroundResponses(true),
+		agent.WithContinuationToken(token),
+		agent.Stream(true)) {
 		if err == nil {
 			t.Fatal("expected error when using continuation token with messages in streaming")
 		}
@@ -4815,9 +4814,9 @@ func TestResponsesMultipleRequiredFunctions(t *testing.T) {
 	}, getTime)
 
 	resp, err := a.RunText(t.Context(), "What's the weather and time in Seattle?",
-		agentopt.Tool(weatherTool),
-		agentopt.Tool(timeTool),
-		agentopt.ToolMode(tool.RequireTools("GetWeather", "GetTime")),
+		agent.WithTool(weatherTool),
+		agent.WithTool(timeTool),
+		agent.WithToolMode(tool.RequireTools("GetWeather", "GetTime")),
 	).Collect()
 	if err != nil {
 		t.Fatalf("error = %v", err)

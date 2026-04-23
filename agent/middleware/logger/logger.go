@@ -10,10 +10,8 @@ import (
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/internal/slogx"
 	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/middleware"
 )
 
 type Config struct {
@@ -21,7 +19,7 @@ type Config struct {
 	SensitiveData bool
 }
 
-func New(cfg Config) middleware.Middleware {
+func New(cfg Config) agent.Middleware {
 	return &logger{l: slogx.Logger{
 		Logger:        cfg.Logger,
 		SensitiveData: cfg.SensitiveData,
@@ -34,7 +32,7 @@ type logger struct {
 	l slogx.Logger
 }
 
-func (l *logger) Run(next middleware.RunFunc, ctx context.Context, messages []*message.Message, opts ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (l *logger) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		start := time.Now()
 		l.log(ctx, slog.LevelDebug, "run invoked", slogx.SensitiveData("messages", messages), slogx.SensitiveData("opts", opts))

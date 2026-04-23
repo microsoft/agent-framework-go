@@ -14,7 +14,6 @@ import (
 	aguiSSEClient "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/client/sse"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/aguiagent"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
@@ -61,7 +60,7 @@ func main() {
 			return
 		}
 
-		for update, err := range a.RunText(context.Background(), input, agentopt.Session(session), agentopt.Stream(true)) {
+		for update, err := range a.RunText(context.Background(), input, agent.WithSession(session), agent.Stream(true)) {
 			if err != nil {
 				log.Fatal(err)
 			}

@@ -15,8 +15,8 @@ import (
 	aguiSSEClient "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/client/sse"
 	aguiEvents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	aguiTypes "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
+	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/aguiagent"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
@@ -69,7 +69,7 @@ func TestAGUIAgentRun_WithEmptyEventStream_EmitsMetadataUpdate(t *testing.T) {
 
 func TestAGUIAgentCreateSession_UsesServiceIDAsThreadID(t *testing.T) {
 	a := aguiagent.New(newTestClient("http://localhost"), aguiagent.Config{})
-	s, err := a.CreateSession(context.Background(), agentopt.ServiceID("thread-existing"))
+	s, err := a.CreateSession(context.Background(), agent.WithServiceID("thread-existing"))
 	if err != nil {
 		t.Fatalf("create session error: %v", err)
 	}
@@ -98,11 +98,11 @@ func TestAGUIAgentRun_UsesExistingSessionServiceIDAsThreadID(t *testing.T) {
 	defer server.Close()
 
 	a := aguiagent.New(newTestClient(server.URL), aguiagent.Config{})
-	session, err := a.CreateSession(context.Background(), agentopt.ServiceID("thread-existing"))
+	session, err := a.CreateSession(context.Background(), agent.WithServiceID("thread-existing"))
 	if err != nil {
 		t.Fatalf("create session error: %v", err)
 	}
-	_, err = a.RunText(context.Background(), "hi", agentopt.Session(session)).Collect()
+	_, err = a.RunText(context.Background(), "hi", agent.WithSession(session)).Collect()
 	if err != nil {
 		t.Fatalf("run error: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestAGUIAgentRun_InvokesTools_WhenFunctionCallsReturned(t *testing.T) {
 		return "Sunny", nil
 	})
 
-	resp, err := a.RunText(context.Background(), "What's the weather?", agentopt.Stream(true), agentopt.Tool(weatherTool)).Collect()
+	resp, err := a.RunText(context.Background(), "What's the weather?", agent.Stream(true), agent.WithTool(weatherTool)).Collect()
 	if err != nil {
 		t.Fatalf("run error: %v", err)
 	}
@@ -296,7 +296,7 @@ func TestAGUIAgentRun_ForwardsAllToolResults_WhenMultipleToolCallsReturned(t *te
 		return "12:00", nil
 	})
 
-	_, err := a.RunText(context.Background(), "Do both", agentopt.Stream(true), agentopt.Tool(weatherTool), agentopt.Tool(timeTool)).Collect()
+	_, err := a.RunText(context.Background(), "Do both", agent.Stream(true), agent.WithTool(weatherTool), agent.WithTool(timeTool)).Collect()
 	if err != nil {
 		t.Fatalf("run error: %v", err)
 	}

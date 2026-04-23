@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/format"
 	"github.com/microsoft/agent-framework-go/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/memory"
@@ -63,7 +62,7 @@ func (o responsesNewParamsOpt) Value() any {
 }
 
 // ResponsesNewParams allows passing custom parameters to the underlying OpenAI Responses API calls.
-func ResponsesNewParams(params responses.ResponseNewParams) agentopt.Option {
+func ResponsesNewParams(params responses.ResponseNewParams) agent.Option {
 	return responsesNewParamsOpt(params)
 }
 
@@ -75,14 +74,14 @@ func (a *responsesClient) unmarshal(format format.Format, data []byte, v any) er
 	return jsonformat.Unmarshal(format.(*jsonformat.Format), data, v)
 }
 
-func (a *responsesClient) run(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (a *responsesClient) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
-		stream, _ := agentopt.Get(options, agentopt.Stream)
+		stream, _ := agent.GetOption(options, agent.Stream)
 
 		// Get session for conversation ID management
 		var session *memory.Session
 		var keepConversationID bool // true if we should keep the conversation ID unchanged (it's a "conv_" ID)
-		if t, ok := agentopt.Get(options, agentopt.Session); ok && t != nil {
+		if t, ok := agent.GetOption(options, agent.WithSession); ok && t != nil {
 			session = t
 			keepConversationID = session.ServiceID != "" && strings.HasPrefix(session.ServiceID, "conv_")
 		}
@@ -95,7 +94,7 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 		}
 
 		// Handle continuation token for resuming background responses
-		if token, ok := agentopt.Get(options, agentopt.ContinuationToken); ok && token != "" {
+		if token, ok := agent.GetOption(options, agent.WithContinuationToken); ok && token != "" {
 			if len(messages) > 0 {
 				yield(nil, errors.New("messages are not allowed when continuing a background response using a continuation token"))
 				return
@@ -154,7 +153,7 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 			streamResp := a.client.Responses.NewStreaming(ctx, body)
 			responseID := ""
 			createdAt := time.Time{}
-			isBackground, _ := agentopt.Get(options, agentopt.AllowBackgroundResponses)
+			isBackground, _ := agent.GetOption(options, agent.AllowBackgroundResponses)
 			for streamResp.Next() {
 				update, err := responsesProcessStreamingUpdate(streamResp.Current(), responseID, isBackground)
 				if err != nil {
@@ -201,16 +200,16 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 }
 
 // buildCompletionParams constructs the parameters for the OpenAI chat completion API.
-func responsesBuildCompletionParams(model string, messages []*message.Message, opts []agentopt.Option) (responses.ResponseNewParams, error) {
+func responsesBuildCompletionParams(model string, messages []*message.Message, opts []agent.Option) (responses.ResponseNewParams, error) {
 	var params responses.ResponseNewParams
-	if p, ok := agentopt.Get(opts, ResponsesNewParams); ok {
+	if p, ok := agent.GetOption(opts, ResponsesNewParams); ok {
 		params = p
 	}
 	params.Model = cmp.Or(params.Model, model)
-	if v, ok := agentopt.Get(opts, agentopt.AllowBackgroundResponses); ok {
+	if v, ok := agent.GetOption(opts, agent.AllowBackgroundResponses); ok {
 		params.Background = openai.Bool(v)
 	}
-	if session, ok := agentopt.Get(opts, agentopt.Session); ok && session != nil {
+	if session, ok := agent.GetOption(opts, agent.WithSession); ok && session != nil {
 		if session.ServiceID != "" {
 			// Technically, OpenAI's IDs are opaque. However, by convention conversation IDs start with "conv_" and
 			// we can use that to disambiguate whether we're looking at a conversation ID or a response ID.
@@ -224,7 +223,7 @@ func responsesBuildCompletionParams(model string, messages []*message.Message, o
 		}
 	}
 
-	if frmt, ok := agentopt.Get(opts, agentopt.ResponseFormat); ok && frmt != nil {
+	if frmt, ok := agent.GetOption(opts, agent.WithResponseFormat); ok && frmt != nil {
 		switch frmt.Kind() {
 		case "json":
 			if schema, ok := frmt.(format.SchemaFormat); ok {
@@ -246,10 +245,10 @@ func responsesBuildCompletionParams(model string, messages []*message.Message, o
 		}
 	}
 	first := true
-	for tl := range agentopt.All(opts, agentopt.Tool) {
+	for tl := range agent.AllOptions(opts, agent.WithTool) {
 		if first {
 			first = false
-			if mode, ok := agentopt.Get(opts, agentopt.ToolMode); ok {
+			if mode, ok := agent.GetOption(opts, agent.WithToolMode); ok {
 				switch mode.Mode() {
 				case tool.ToolModeAuto, "":
 					params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{

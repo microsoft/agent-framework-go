@@ -13,7 +13,6 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/internal/messagetest"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
@@ -64,7 +63,7 @@ func newTestClient(server *httptest.Server) *agent.Agent {
 	return openaichatagent.New(
 		openai.NewClient(option.WithBaseURL(server.URL)),
 		openaichatagent.Config{
-			Model: "gpt-4o-mini",
+			Model:  "gpt-4o-mini",
 			Config: agent.Config{DisableFuncAutoCall: true},
 		},
 	)
@@ -249,7 +248,7 @@ data: [DONE]
 	for update, err := range a.RunText(t.Context(), "hello", openaichatagent.ChatCompletionNewParams(openai.ChatCompletionNewParams{
 		MaxCompletionTokens: openai.Int(20),
 		Temperature:         openai.Float(0.5),
-	}), agentopt.Stream(true)) {
+	}), agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
 		}
@@ -717,7 +716,7 @@ func TestChatFunctionCallContent_NonStreaming(t *testing.T) {
 	}, getPersonAge)
 
 	resp, err := a.RunText(t.Context(), "How old is Alice?",
-		agentopt.Tool(tool),
+		agent.WithTool(tool),
 	).Collect()
 	if err != nil {
 		t.Fatalf("error = %v", err)
@@ -831,7 +830,7 @@ data: [DONE]
 	}, getPersonAge)
 
 	var updates []*message.ResponseUpdate
-	for update, err := range a.RunText(t.Context(), "How old is Alice?", agentopt.Tool(tool), agentopt.Stream(true)) {
+	for update, err := range a.RunText(t.Context(), "How old is Alice?", agent.WithTool(tool), agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
 		}
@@ -1082,7 +1081,7 @@ data: [DONE]
 
 	var updates []*message.ResponseUpdate
 	// Override with gpt-4o in options
-	for update, err := range a.RunText(t.Context(), "hello", agentopt.Stream(true),
+	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
 		openaichatagent.ChatCompletionNewParams(openai.ChatCompletionNewParams{
 			Model:               "gpt-4o",
 			MaxCompletionTokens: openai.Int(20),
@@ -1403,9 +1402,9 @@ func TestChatMultipleRequiredFunctions(t *testing.T) {
 	}, getTime)
 
 	resp, err := a.RunText(t.Context(), "What's the weather and time in Seattle?",
-		agentopt.Tool(weatherTool),
-		agentopt.Tool(timeTool),
-		agentopt.ToolMode(tool.RequireTools("GetWeather", "GetTime")),
+		agent.WithTool(weatherTool),
+		agent.WithTool(timeTool),
+		agent.WithToolMode(tool.RequireTools("GetWeather", "GetTime")),
 	).Collect()
 	if err != nil {
 		t.Fatalf("error = %v", err)

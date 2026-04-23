@@ -12,11 +12,9 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/middleware/otel"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
-	"github.com/microsoft/agent-framework-go/middleware"
-	"github.com/microsoft/agent-framework-go/middleware/otel"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
 
@@ -71,7 +69,7 @@ func main() {
 			Config: agent.Config{
 				Instructions: "You are good at telling jokes.",
 				Name:         "Joker",
-				Middlewares: []middleware.Middleware{
+				Middlewares: []agent.Middleware{
 					otel.New(otel.Config{}), // for OpenTelemetry observability
 					logger,                  // for logging agent interactions
 				},
@@ -86,7 +84,7 @@ func main() {
 	demo.Response(resp, err)
 
 	// Invoke the agent with streaming support.
-	for update, err := range a.RunText(ctx, "Tell me a joke about a pirate.", agentopt.Stream(true)) {
+	for update, err := range a.RunText(ctx, "Tell me a joke about a pirate.", agent.Stream(true)) {
 		demo.Response(update, err)
 	}
 }

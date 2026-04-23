@@ -14,16 +14,15 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/hosting/aguihosting"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
-func newTestAgent(runFn func(context.Context, []*message.Message, ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error]) *agent.Agent {
+func newTestAgent(runFn func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*message.ResponseUpdate, error]) *agent.Agent {
 	return agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{Name: "test-agent", ID: "test-agent-id"})
 }
 
 func TestHandler_MethodNotAllowed(t *testing.T) {
-	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {}
 	})
 	h := aguihosting.NewHTTPHandler(aguihosting.HandlerConfig{Agent: a})
@@ -38,7 +37,7 @@ func TestHandler_MethodNotAllowed(t *testing.T) {
 }
 
 func TestHandler_InvalidInput_ReturnsBadRequest(t *testing.T) {
-	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {}
 	})
 	h := aguihosting.NewHTTPHandler(aguihosting.HandlerConfig{Agent: a})
@@ -53,7 +52,7 @@ func TestHandler_InvalidInput_ReturnsBadRequest(t *testing.T) {
 }
 
 func TestHandler_StreamsSSEText(t *testing.T) {
-	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(&message.ResponseUpdate{
 				MessageID: "msg-1",
@@ -82,7 +81,7 @@ func TestHandler_StreamsSSEText(t *testing.T) {
 }
 
 func TestHandler_MixedToolInvocations_OnlyClientToolEmitted(t *testing.T) {
-	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(&message.ResponseUpdate{
 				MessageID: "msg-1",
@@ -111,7 +110,7 @@ func TestHandler_MixedToolInvocations_OnlyClientToolEmitted(t *testing.T) {
 }
 
 func TestHandler_StateSnapshotEmitsStateEvent(t *testing.T) {
-	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			payload := map[string]any{"counter": 42, "status": "active"}
 			b, _ := json.Marshal(payload)
@@ -138,7 +137,7 @@ func TestHandler_StateSnapshotEmitsStateEvent(t *testing.T) {
 }
 
 func TestHandler_MixedToolInvocations_SuppressesServerToolResults(t *testing.T) {
-	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(&message.ResponseUpdate{
 				MessageID: "msg-1",
@@ -175,7 +174,7 @@ func TestHandler_MixedToolInvocations_SuppressesServerToolResults(t *testing.T) 
 }
 
 func TestHandler_UnknownDataContent_UsesCurrentMessageLifecycle(t *testing.T) {
-	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(&message.ResponseUpdate{
 				MessageID: "msg-fallback",

@@ -9,9 +9,7 @@ import (
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/middleware"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -25,7 +23,7 @@ type Config struct {
 }
 
 // New creates a new middleware that adds OpenTelemetry tracing to agent runs.
-func New(cfg Config) middleware.Middleware {
+func New(cfg Config) agent.Middleware {
 	tracer := otel.Tracer(cmp.Or(cfg.SourceName, "github.com/microsoft/agent-framework-go"))
 	return &mw{
 		tracer: tracer,
@@ -46,7 +44,7 @@ type mw struct {
 	tracer trace.Tracer
 }
 
-func (m *mw) Run(next middleware.RunFunc, ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (m *mw) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		a, _ := agent.AgentFromContext(ctx)
 		ctx, span := m.tracer.Start(ctx, a.Name(), trace.WithAttributes(

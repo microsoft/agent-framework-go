@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/format"
 	"github.com/microsoft/agent-framework-go/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/message"
@@ -25,7 +24,7 @@ type generateContentConfigOpt genai.GenerateContentConfig
 func (o generateContentConfigOpt) Value() any { return genai.GenerateContentConfig(o) }
 
 // GenerateContentConfig allows passing custom parameters to the underlying genai API calls.
-func GenerateContentConfig(config genai.GenerateContentConfig) agentopt.Option {
+func GenerateContentConfig(config genai.GenerateContentConfig) agent.Option {
 	return generateContentConfigOpt(config)
 }
 
@@ -63,7 +62,7 @@ func (a *client) unmarshal(f format.Format, data []byte, v any) error {
 	return jsonformat.Unmarshal(f.(*jsonformat.Format), data, v)
 }
 
-func (a *client) run(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (a *client) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 	contents, cfg, err := a.buildParams(messages, options)
 	if err != nil {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
@@ -71,7 +70,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 		}
 	}
 
-	if stream, _ := agentopt.Get(options, agentopt.Stream); !stream {
+	if stream, _ := agent.GetOption(options, agent.Stream); !stream {
 		resp, err := a.client.Models.GenerateContent(ctx, a.config.Model, contents, cfg)
 		if err != nil {
 			return func(yield func(*message.ResponseUpdate, error) bool) {
@@ -144,9 +143,9 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 }
 
 // buildParams converts framework messages and options into genai API parameters.
-func (a *client) buildParams(messages []*message.Message, opts []agentopt.Option) ([]*genai.Content, *genai.GenerateContentConfig, error) {
+func (a *client) buildParams(messages []*message.Message, opts []agent.Option) ([]*genai.Content, *genai.GenerateContentConfig, error) {
 	cfg := &genai.GenerateContentConfig{}
-	if p, ok := agentopt.Get(opts, GenerateContentConfig); ok {
+	if p, ok := agent.GetOption(opts, GenerateContentConfig); ok {
 		*cfg = p
 		// Clone mutable slice fields so that appending to cfg.Tools or
 		// cfg.SystemInstruction.Parts below never aliases the caller's
@@ -161,7 +160,7 @@ func (a *client) buildParams(messages []*message.Message, opts []agentopt.Option
 
 	// Collect tools from options.
 	var funcDecls []*genai.FunctionDeclaration
-	for tl := range agentopt.All(opts, agentopt.Tool) {
+	for tl := range agent.AllOptions(opts, agent.WithTool) {
 		if ft, ok := tl.(tool.FuncTool); ok {
 			decl := &genai.FunctionDeclaration{
 				Name:        ft.Name(),
@@ -181,7 +180,7 @@ func (a *client) buildParams(messages []*message.Message, opts []agentopt.Option
 	}
 
 	// Apply structured output format.
-	if frmt, ok := agentopt.Get(opts, agentopt.ResponseFormat); ok && frmt != nil {
+	if frmt, ok := agent.GetOption(opts, agent.WithResponseFormat); ok && frmt != nil {
 		if frmt.Kind() == "json" {
 			cfg.ResponseMIMEType = "application/json"
 			if schemaFmt, ok := frmt.(format.SchemaFormat); ok {
@@ -193,7 +192,7 @@ func (a *client) buildParams(messages []*message.Message, opts []agentopt.Option
 	}
 
 	// Apply tool mode.
-	if mode, ok := agentopt.Get(opts, agentopt.ToolMode); ok && len(funcDecls) > 0 {
+	if mode, ok := agent.GetOption(opts, agent.WithToolMode); ok && len(funcDecls) > 0 {
 		fc := &genai.FunctionCallingConfig{}
 		switch mode.Mode() {
 		case tool.ToolModeAuto, "":

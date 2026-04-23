@@ -16,7 +16,6 @@ import (
 	aguiEvents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	aguiTypes "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
@@ -50,9 +49,9 @@ func New(aclient *aguiSSEClient.Client, config Config) *agent.Agent {
 	}, config.Config)
 }
 
-func (p *provider) run(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (p *provider) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
-		session, _ := agentopt.Get(options, agentopt.Session)
+		session, _ := agent.GetOption(options, agent.WithSession)
 		threadID := getOrCreateThreadID(session)
 		runID := aguiEvents.GenerateRunID()
 
@@ -67,7 +66,7 @@ func (p *provider) run(ctx context.Context, messages []*message.Message, options
 			RunID:          runID,
 			State:          state,
 			Messages:       convertedMessages,
-			Tools:          toAGUITools(agentopt.All(options, agentopt.Tool)),
+			Tools:          toAGUITools(agent.AllOptions(options, agent.WithTool)),
 			Context:        []aguiTypes.Context{},
 			ForwardedProps: map[string]any{},
 		}

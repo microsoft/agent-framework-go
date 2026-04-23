@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/microsoft/agent-framework-go/agent/internal/middleware/autocall"
 	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/middleware/autocall"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 )

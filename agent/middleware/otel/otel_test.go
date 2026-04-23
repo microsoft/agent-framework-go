@@ -9,11 +9,9 @@ import (
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agentopt"
+	"github.com/microsoft/agent-framework-go/agent/middleware/otel"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/middleware"
-	"github.com/microsoft/agent-framework-go/middleware/otel"
 
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -44,7 +42,7 @@ func TestOtel_Run_CreatesSpan(t *testing.T) {
 	mw := otel.New(otel.Config{})
 
 	nextCalled := false
-	next := func(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	next := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		nextCalled = true
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(&message.ResponseUpdate{MessageID: "test-1"}, nil)
@@ -74,7 +72,7 @@ func TestOtel_Run_SpanHasCorrectAttributes(t *testing.T) {
 
 	var capturedCtx context.Context
 	responseBuilder := agenttest.NewResponseBuilder(
-		func(ctx context.Context, messages []*message.Message, opts ...agentopt.Option) {
+		func(ctx context.Context, messages []*message.Message, opts ...agent.Option) {
 			capturedCtx = ctx
 		},
 	).AddText("response")
@@ -84,7 +82,7 @@ func TestOtel_Run_SpanHasCorrectAttributes(t *testing.T) {
 	// Override the agent metadata for this test
 	a = agent.New(agent.ProviderConfig{
 		ProviderName: "test-provider",
-		Run: func(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+		Run: func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 			return func(yield func(*message.ResponseUpdate, error) bool) {
 				capturedCtx = ctx
 				yield(&message.ResponseUpdate{MessageID: "test-1"}, nil)
@@ -94,7 +92,7 @@ func TestOtel_Run_SpanHasCorrectAttributes(t *testing.T) {
 		ID:          "test-agent-id",
 		Name:        "test-agent",
 		Description: "A test agent",
-		Middlewares: []middleware.Middleware{mw},
+		Middlewares: []agent.Middleware{mw},
 	})
 
 	// Run through agent to get metadata in context
@@ -143,7 +141,7 @@ func TestOtel_Run_RecordsError(t *testing.T) {
 	mw := otel.New(otel.Config{})
 
 	testErr := errors.New("test error")
-	next := func(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	next := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(nil, testErr)
 		}
@@ -191,7 +189,7 @@ func TestOtel_Run_CustomSourceName(t *testing.T) {
 	customSource := "my-custom-source"
 	mw := otel.New(otel.Config{SourceName: customSource})
 
-	next := func(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	next := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(&message.ResponseUpdate{}, nil)
 		}
@@ -217,7 +215,7 @@ func TestOtel_Run_DefaultSourceName(t *testing.T) {
 
 	mw := otel.New(otel.Config{})
 
-	next := func(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	next := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(&message.ResponseUpdate{}, nil)
 		}
@@ -244,7 +242,7 @@ func TestOtel_Run_PropagatesContext(t *testing.T) {
 	mw := otel.New(otel.Config{})
 
 	var capturedCtx context.Context
-	next := func(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	next := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		capturedCtx = ctx
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(&message.ResponseUpdate{}, nil)
@@ -277,7 +275,7 @@ func TestOtel_Run_HandlesMultipleUpdates(t *testing.T) {
 	mw := otel.New(otel.Config{})
 
 	updateCount := 0
-	next := func(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	next := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			for i := 0; i < 5; i++ {
 				if !yield(&message.ResponseUpdate{MessageID: "test"}, nil) {
@@ -308,7 +306,7 @@ func TestOtel_Run_HandlesEarlyBreak(t *testing.T) {
 
 	mw := otel.New(otel.Config{})
 
-	next := func(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	next := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			for i := 0; i < 10; i++ {
 				if !yield(&message.ResponseUpdate{MessageID: "test"}, nil) {
@@ -344,7 +342,7 @@ func TestOtel_Run_UnknownProviderWhenNoMetadata(t *testing.T) {
 
 	mw := otel.New(otel.Config{})
 
-	next := func(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	next := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(&message.ResponseUpdate{}, nil)
 		}
@@ -380,7 +378,7 @@ func TestOtel_Run_RecordsMultipleErrors(t *testing.T) {
 	err2 := errors.New("second error")
 
 	callCount := 0
-	next := func(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	next := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			if !yield(&message.ResponseUpdate{}, err1) {
 				return

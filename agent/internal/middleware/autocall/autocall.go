@@ -15,10 +15,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/microsoft/agent-framework-go/agentopt"
+	"github.com/microsoft/agent-framework-go/agent/internal/agentopt"
+	"github.com/microsoft/agent-framework-go/agent/internal/middleware"
 	"github.com/microsoft/agent-framework-go/internal/slogx"
 	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/middleware"
 	"github.com/microsoft/agent-framework-go/tool"
 )
 
@@ -70,7 +70,7 @@ func New(cfg Config) middleware.Middleware {
 
 func (f *autocall) Run(next middleware.RunFunc, ctx context.Context, messages []*message.Message, opts ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
-		tools, requiresApproval := f.createToolsMap(agentopt.All(opts, agentopt.Tool))
+		tools, requiresApproval := f.createToolsMap(agentopt.AllOptions(opts, agentopt.WithTool))
 
 		// This is a synthetic ID since we're generating the tool messages instead of getting them from
 		// the underlying provider. When emitting the streamed chunks, it's perfectly valid for us to
@@ -155,7 +155,7 @@ func (f *autocall) Run(next middleware.RunFunc, ctx context.Context, messages []
 				// or the first time we get an FCC that requires approval. At that point, we can yield all of the updates buffered thus far
 				// and anything further, replacing FCCs with approval if any required it, or yielding them as is.
 				if requiresApproval && approvalRequiredFunctions == nil && len(functionCallContents) > 0 {
-					for tl := range agentopt.All(opts, agentopt.Tool) {
+					for tl := range agentopt.AllOptions(opts, agentopt.WithTool) {
 						if tl, ok := tl.(tool.ApprovalRequiredTool); ok {
 							approvalRequiredFunctions = append(approvalRequiredFunctions, tl)
 						}
@@ -298,16 +298,16 @@ func convertToolResultMsgToUpdate(msg *message.Message, msgID string) *message.R
 }
 
 func updateOptionsForNextIteration(opts []agentopt.Option) []agentopt.Option {
-	if v, ok := agentopt.Get(opts, agentopt.ToolMode); ok && v == tool.ToolModeRequired {
+	if v, ok := agentopt.GetOption(opts, agentopt.WithToolMode); ok && v == tool.ToolModeRequired {
 		// We have to reset the tool mode to be non-required after the first iteration,
 		// as otherwise we'll be in an infinite loop.
-		opts = append(opts, agentopt.ToolMode(tool.ToolModeAuto))
+		opts = append(opts, agentopt.WithToolMode(tool.ToolModeAuto))
 	}
 	// Reset the continuation token of a background response operation
 	// to signal the inner client to handle function call result rather
 	// than getting the result of the operation.
-	if _, ok := agentopt.Get(opts, agentopt.ContinuationToken); ok {
-		opts = append(opts, agentopt.ContinuationToken(""))
+	if _, ok := agentopt.GetOption(opts, agentopt.WithContinuationToken); ok {
+		opts = append(opts, agentopt.WithContinuationToken(""))
 	}
 	return opts
 }

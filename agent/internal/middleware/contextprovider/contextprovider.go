@@ -7,10 +7,10 @@ import (
 	"iter"
 	"slices"
 
-	"github.com/microsoft/agent-framework-go/agentopt"
+	"github.com/microsoft/agent-framework-go/agent/internal/agentopt"
+	"github.com/microsoft/agent-framework-go/agent/internal/middleware"
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/middleware"
 )
 
 // New returns a middleware that invokes the provided context providers in order
@@ -33,12 +33,12 @@ type runner struct {
 }
 
 func (r *runner) Run(next middleware.RunFunc, ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
-	session, _ := agentopt.Get(options, agentopt.Session)
+	session, _ := agentopt.GetOption(options, agentopt.WithSession)
 
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		currentMessages := messages
 		providerMessages := make([]*message.Message, 0)
-		currentTools := slices.Collect(agentopt.All(options, agentopt.Tool))
+		currentTools := slices.Collect(agentopt.AllOptions(options, agentopt.WithTool))
 		runOptions := options
 		for _, provider := range r.providers {
 			providerContext, err := provider.BeforeRun(memory.BeforeRunContext{
@@ -61,7 +61,7 @@ func (r *runner) Run(next middleware.RunFunc, ctx context.Context, messages []*m
 			if len(providerContext.Tools) > 0 {
 				currentTools = append(currentTools, providerContext.Tools...)
 				for _, tool := range providerContext.Tools {
-					runOptions = append(runOptions, agentopt.Tool(tool))
+					runOptions = append(runOptions, agentopt.WithTool(tool))
 				}
 			}
 		}

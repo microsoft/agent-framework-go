@@ -12,10 +12,8 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/format/jsonformat"
-	"github.com/microsoft/agent-framework-go/middleware"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
 )
@@ -37,9 +35,9 @@ type PersonInfo struct {
 }
 
 // runFor executes the agent with the given messages and returns the result of type T.
-func runFor[T any](ctx context.Context, a *agent.Agent, message string, opts ...agentopt.Option) (T, error) {
+func runFor[T any](ctx context.Context, a *agent.Agent, message string, opts ...agent.Option) (T, error) {
 	var v T
-	opts = append(opts, agentopt.StructuredOutput(&v), agentopt.Stream(false))
+	opts = append(opts, agent.WithStructuredOutput(&v), agent.Stream(false))
 	for _, err := range a.RunText(ctx, message, opts...) {
 		if err != nil {
 			return v, err
@@ -66,7 +64,7 @@ func main() {
 			Config: agent.Config{
 				Instructions: "You are a helpful assistant.",
 				Name:         "HelpfulAssistant",
-				Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
+				Middlewares:  []agent.Middleware{logger}, // for logging agent interactions
 			},
 		},
 	)
@@ -96,9 +94,9 @@ func main() {
 			Config: agent.Config{
 				Instructions: "You are a helpful assistant.",
 				Name:         "HelpfulAssistant",
-				Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
-				RunOptions: []agentopt.Option{
-					agentopt.ResponseFormat(jsonformat.MustFor[PersonInfo]()),
+				Middlewares:  []agent.Middleware{logger}, // for logging agent interactions
+				RunOptions: []agent.Option{
+					agent.WithResponseFormat(jsonformat.MustFor[PersonInfo]()),
 				},
 			},
 		},
@@ -106,7 +104,7 @@ func main() {
 
 	// Invoke the agent with some unstructured input while streaming, to extract the structured information from.
 	var personRaw []byte
-	for update, err := range a.RunText(ctx, "Please provide information about John Smith, who is a 35-year-old software engineer.", agentopt.Stream(true)) {
+	for update, err := range a.RunText(ctx, "Please provide information about John Smith, who is a 35-year-old software engineer.", agent.Stream(true)) {
 		demo.Response(update, err)
 		personRaw = append(personRaw, update.String()...)
 	}

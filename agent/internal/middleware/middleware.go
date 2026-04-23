@@ -6,7 +6,7 @@ import (
 	"context"
 	"iter"
 
-	"github.com/microsoft/agent-framework-go/agentopt"
+	"github.com/microsoft/agent-framework-go/agent/internal/agentopt"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
@@ -14,12 +14,6 @@ type RunFunc = func(ctx context.Context, messages []*message.Message, options ..
 
 type Middleware interface {
 	Run(next RunFunc, ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error]
-}
-
-type Func func(next RunFunc, ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error]
-
-func (mf Func) Run(next RunFunc, ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
-	return mf(next, ctx, messages, options...)
 }
 
 // RunChain applies the given middlewares around the given RunFunc.

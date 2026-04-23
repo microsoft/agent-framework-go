@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/format"
 	"github.com/microsoft/agent-framework-go/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/message"
@@ -34,7 +33,7 @@ func (o chatCompletionNewParamsOpt) Value() any {
 }
 
 // ChatCompletionNewParams allows passing custom parameters to the underlying OpenAI Chat Completions API calls.
-func ChatCompletionNewParams(params openai.ChatCompletionNewParams) agentopt.Option {
+func ChatCompletionNewParams(params openai.ChatCompletionNewParams) agent.Option {
 	return chatCompletionNewParamsOpt(params)
 }
 
@@ -66,14 +65,14 @@ func (a *client) unmarshal(format format.Format, data []byte, v any) error {
 	return jsonformat.Unmarshal(format.(*jsonformat.Format), data, v)
 }
 
-func (a *client) run(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (a *client) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 	body, err := buildCompletionParams(a.config.Model, messages, options)
 	if err != nil {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(nil, err)
 		}
 	}
-	if stream, _ := agentopt.Get(options, agentopt.Stream); !stream {
+	if stream, _ := agent.GetOption(options, agent.Stream); !stream {
 		resp, err := a.client.Chat.Completions.New(ctx, body)
 		if err != nil {
 			return func(yield func(*message.ResponseUpdate, error) bool) {
@@ -172,13 +171,13 @@ func mapRole(r string) message.Role {
 }
 
 // buildCompletionParams constructs the parameters for the OpenAI chat completion API.
-func buildCompletionParams(model string, messages []*message.Message, opts []agentopt.Option) (openai.ChatCompletionNewParams, error) {
+func buildCompletionParams(model string, messages []*message.Message, opts []agent.Option) (openai.ChatCompletionNewParams, error) {
 	var params openai.ChatCompletionNewParams
-	if p, ok := agentopt.Get(opts, ChatCompletionNewParams); ok {
+	if p, ok := agent.GetOption(opts, ChatCompletionNewParams); ok {
 		params = p
 	}
 	params.Model = cmp.Or(params.Model, model)
-	if frmt, ok := agentopt.Get(opts, agentopt.ResponseFormat); ok && frmt != nil {
+	if frmt, ok := agent.GetOption(opts, agent.WithResponseFormat); ok && frmt != nil {
 		switch frmt.Kind() {
 		case "json":
 			if schema, ok := frmt.(format.SchemaFormat); ok {
@@ -202,10 +201,10 @@ func buildCompletionParams(model string, messages []*message.Message, opts []age
 		}
 	}
 	first := true
-	for tl := range agentopt.All(opts, agentopt.Tool) {
+	for tl := range agent.AllOptions(opts, agent.WithTool) {
 		if first {
 			first = false
-			if mode, ok := agentopt.Get(opts, agentopt.ToolMode); ok {
+			if mode, ok := agent.GetOption(opts, agent.WithToolMode); ok {
 				switch mode.Mode() {
 				case tool.ToolModeAuto, "":
 					params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
