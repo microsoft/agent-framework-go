@@ -12,11 +12,9 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/middleware"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
 )
@@ -48,7 +46,7 @@ func main() {
 			Config: agent.Config{
 				Instructions:     "You are a friendly assistant.",
 				Name:             "MemoryAgent",
-				Middlewares:      []middleware.Middleware{logger}, // for logging agent interactions
+				Middlewares:      []agent.Middleware{logger}, // for logging agent interactions
 				ContextProviders: []*memory.ContextProvider{newUserMemoryProvider()},
 			},
 		},
@@ -61,15 +59,15 @@ func main() {
 	}
 
 	// The provider doesn't know the user yet — it will ask for a name
-	resp, err := a.RunText(ctx, "Hello, what is the square root of 9?", agentopt.Session(session)).Collect()
+	resp, err := a.RunText(ctx, "Hello, what is the square root of 9?", agent.WithSession(session)).Collect()
 	demo.Response(resp, err)
 
 	// Teach the provider the user's name.
-	resp, err = a.RunText(ctx, "My name is Alice", agentopt.Session(session)).Collect()
+	resp, err = a.RunText(ctx, "My name is Alice", agent.WithSession(session)).Collect()
 	demo.Response(resp, err)
 
 	// Subsequent calls are personalized using session state.
-	resp, err = a.RunText(ctx, "What is 2 + 2?", agentopt.Session(session)).Collect()
+	resp, err = a.RunText(ctx, "What is 2 + 2?", agent.WithSession(session)).Collect()
 	demo.Response(resp, err)
 
 	// Inspect session state to see what the provider stored.

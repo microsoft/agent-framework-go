@@ -7,9 +7,9 @@ import (
 	"iter"
 	"testing"
 
-	"github.com/microsoft/agent-framework-go/agentopt"
+	"github.com/microsoft/agent-framework-go/agent/internal/agentopt"
+	"github.com/microsoft/agent-framework-go/agent/internal/middleware"
 	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/middleware"
 )
 
 func TestChain(t *testing.T) {

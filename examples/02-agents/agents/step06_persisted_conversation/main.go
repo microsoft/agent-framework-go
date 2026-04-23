@@ -11,9 +11,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
-	"github.com/microsoft/agent-framework-go/middleware"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
 )
@@ -46,7 +44,7 @@ func main() {
 			Config: agent.Config{
 				Instructions: "You are good at telling jokes.",
 				Name:         "Joker",
-				Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
+				Middlewares:  []agent.Middleware{logger}, // for logging agent interactions
 			},
 		},
 	)
@@ -60,7 +58,7 @@ func main() {
 	}
 
 	// Run the agent with a new session.
-	resp, err := a.RunText(ctx, "Tell me a joke about a pirate.", agentopt.Session(session)).Collect()
+	resp, err := a.RunText(ctx, "Tell me a joke about a pirate.", agent.WithSession(session)).Collect()
 	demo.Response(resp, err)
 
 	// Serialize the session state so it can be stored for later use.
@@ -92,6 +90,6 @@ func main() {
 	}
 
 	// Run the agent again with the resumed session.
-	resp, err = a.RunText(ctx, "Now tell the same joke in the voice of a pirate, and add some emojis to the joke.", agentopt.Session(resumedSession)).Collect()
+	resp, err = a.RunText(ctx, "Now tell the same joke in the voice of a pirate, and add some emojis to the joke.", agent.WithSession(resumedSession)).Collect()
 	demo.Response(resp, err)
 }

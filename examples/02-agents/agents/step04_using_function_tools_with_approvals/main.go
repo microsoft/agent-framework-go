@@ -11,10 +11,8 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/middleware"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 	"github.com/openai/openai-go/v3"
@@ -56,7 +54,7 @@ func main() {
 			Model: deployment,
 			Config: agent.Config{
 				Instructions: "You are a helpful assistant",
-				Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
+				Middlewares:  []agent.Middleware{logger}, // for logging agent interactions
 				Tools:        []tool.Tool{tool.ApprovalRequiredFunc(weatherTool)},
 			},
 		},
@@ -69,7 +67,7 @@ func main() {
 	if err != nil {
 		demo.Panic(err)
 	}
-	resp, err := a.RunText(ctx, "What is the weather like in Amsterdam?", agentopt.Session(session)).Collect()
+	resp, err := a.RunText(ctx, "What is the weather like in Amsterdam?", agent.WithSession(session)).Collect()
 	demo.Response(resp, err)
 
 	var userResponses []message.Content
@@ -91,6 +89,6 @@ func main() {
 		return
 	}
 	// Pass the user input responses back to the agent for further processing.
-	resp, err = a.RunMessage(ctx, message.New(userResponses...), agentopt.Session(session)).Collect()
+	resp, err = a.RunMessage(ctx, message.New(userResponses...), agent.WithSession(session)).Collect()
 	demo.Response(resp, err)
 }

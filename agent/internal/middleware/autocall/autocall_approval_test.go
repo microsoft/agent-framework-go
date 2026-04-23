@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/microsoft/agent-framework-go/agentopt"
+	"github.com/microsoft/agent-framework-go/agent/internal/agentopt"
+	"github.com/microsoft/agent-framework-go/agent/internal/middleware"
+	"github.com/microsoft/agent-framework-go/agent/internal/middleware/autocall"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/middleware"
-	"github.com/microsoft/agent-framework-go/middleware/autocall"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 )
@@ -62,7 +62,7 @@ func invokeAndAssertApprovalWithAgent(t *testing.T, next middleware.RunFunc,
 	// Build options
 	var opts []agentopt.Option
 	for _, tool := range tools {
-		opts = append(opts, agentopt.Tool(tool))
+		opts = append(opts, agentopt.WithTool(tool))
 	}
 
 	// Collect all streaming updates into messages
@@ -87,7 +87,7 @@ func expectApprovalError(t *testing.T, tools []tool.Tool, input []*message.Messa
 	// Build options
 	var opts []agentopt.Option
 	for _, tool := range tools {
-		opts = append(opts, agentopt.Tool(tool))
+		opts = append(opts, agentopt.WithTool(tool))
 	}
 
 	var lastErr error

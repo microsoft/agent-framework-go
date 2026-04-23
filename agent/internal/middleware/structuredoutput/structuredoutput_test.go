@@ -9,11 +9,11 @@ import (
 	"iter"
 	"testing"
 
-	"github.com/microsoft/agent-framework-go/agentopt"
+	"github.com/microsoft/agent-framework-go/agent/internal/agentopt"
+	"github.com/microsoft/agent-framework-go/agent/internal/middleware"
+	"github.com/microsoft/agent-framework-go/agent/internal/middleware/structuredoutput"
 	"github.com/microsoft/agent-framework-go/format"
 	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/middleware"
-	"github.com/microsoft/agent-framework-go/middleware/structuredoutput"
 )
 
 type testFormat struct {
@@ -99,7 +99,7 @@ func TestStructuredOutput_NilStructuredOutputOption(t *testing.T) {
 	ctx := context.Background()
 
 	var updates []*message.ResponseUpdate
-	seq := middleware.RunChain(ctx, baseFunc, []middleware.Middleware{mw}, []*message.Message{}, agentopt.StructuredOutput(nil))
+	seq := middleware.RunChain(ctx, baseFunc, []middleware.Middleware{mw}, []*message.Message{}, agentopt.WithStructuredOutput(nil))
 	for update, err := range seq {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -139,7 +139,7 @@ func TestStructuredOutput_MissingFormat(t *testing.T) {
 	ctx := context.Background()
 	output := &struct{ Name string }{}
 
-	seq := middleware.RunChain(ctx, baseFunc, []middleware.Middleware{mw}, []*message.Message{}, agentopt.StructuredOutput(output))
+	seq := middleware.RunChain(ctx, baseFunc, []middleware.Middleware{mw}, []*message.Message{}, agentopt.WithStructuredOutput(output))
 	for _, err := range seq {
 		if err == nil {
 			t.Fatal("expected error for missing Format")
@@ -175,7 +175,7 @@ func TestStructuredOutput_MissingUnmarshal(t *testing.T) {
 	ctx := context.Background()
 	output := &struct{ Name string }{}
 
-	seq := middleware.RunChain(ctx, baseFunc, []middleware.Middleware{mw}, []*message.Message{}, agentopt.StructuredOutput(output))
+	seq := middleware.RunChain(ctx, baseFunc, []middleware.Middleware{mw}, []*message.Message{}, agentopt.WithStructuredOutput(output))
 	for _, err := range seq {
 		if err == nil {
 			t.Fatal("expected error for missing Unmarshal")
@@ -214,7 +214,7 @@ func TestStructuredOutput_FormatError(t *testing.T) {
 	ctx := context.Background()
 	output := &struct{ Name string }{}
 
-	seq := middleware.RunChain(ctx, baseFunc, []middleware.Middleware{mw}, []*message.Message{}, agentopt.StructuredOutput(output))
+	seq := middleware.RunChain(ctx, baseFunc, []middleware.Middleware{mw}, []*message.Message{}, agentopt.WithStructuredOutput(output))
 	for _, err := range seq {
 		if err == nil {
 			t.Fatal("expected error for Format failure")
@@ -232,7 +232,7 @@ func TestStructuredOutput_SuccessfulUnmarshal(t *testing.T) {
 	baseFunc := func(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			// Verify that ResponseFormat option was added
-			v, ok := agentopt.Get(options, agentopt.ResponseFormat)
+			v, ok := agentopt.GetOption(options, agentopt.WithResponseFormat)
 			if !ok {
 				yield(nil, errors.New("ResponseFormat option not found"))
 				return
@@ -281,7 +281,7 @@ func TestStructuredOutput_SuccessfulUnmarshal(t *testing.T) {
 		Age  int    `json:"age"`
 	}{}
 
-	seq := middleware.RunChain(ctx, baseFunc, []middleware.Middleware{mw}, []*message.Message{}, agentopt.StructuredOutput(output))
+	seq := middleware.RunChain(ctx, baseFunc, []middleware.Middleware{mw}, []*message.Message{}, agentopt.WithStructuredOutput(output))
 	for _, err := range seq {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -322,7 +322,7 @@ func TestStructuredOutput_UnmarshalError(t *testing.T) {
 	ctx := context.Background()
 	output := &struct{ Name string }{}
 
-	seq := middleware.RunChain(ctx, baseFunc, []middleware.Middleware{mw}, []*message.Message{}, agentopt.StructuredOutput(output))
+	seq := middleware.RunChain(ctx, baseFunc, []middleware.Middleware{mw}, []*message.Message{}, agentopt.WithStructuredOutput(output))
 	for _, err := range seq {
 		if err == nil {
 			t.Fatal("expected error for Unmarshal failure")
@@ -357,7 +357,7 @@ func TestStructuredOutput_BaseErrorPropagation(t *testing.T) {
 	ctx := context.Background()
 	output := &struct{ Name string }{}
 
-	seq := middleware.RunChain(ctx, baseFunc, []middleware.Middleware{mw}, []*message.Message{}, agentopt.StructuredOutput(output))
+	seq := middleware.RunChain(ctx, baseFunc, []middleware.Middleware{mw}, []*message.Message{}, agentopt.WithStructuredOutput(output))
 	for _, err := range seq {
 		if err == nil {
 			t.Fatal("expected error from base function")
@@ -407,7 +407,7 @@ func TestStructuredOutput_ComplexStructure(t *testing.T) {
 	ctx := context.Background()
 	output := &Person{}
 
-	seq := middleware.RunChain(ctx, baseFunc, []middleware.Middleware{mw}, []*message.Message{}, agentopt.StructuredOutput(output))
+	seq := middleware.RunChain(ctx, baseFunc, []middleware.Middleware{mw}, []*message.Message{}, agentopt.WithStructuredOutput(output))
 	for _, err := range seq {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -458,7 +458,7 @@ func TestStructuredOutput_EmptyResponse(t *testing.T) {
 	ctx := context.Background()
 	output := &struct{ Name string }{}
 
-	seq := middleware.RunChain(ctx, baseFunc, []middleware.Middleware{mw}, []*message.Message{}, agentopt.StructuredOutput(output))
+	seq := middleware.RunChain(ctx, baseFunc, []middleware.Middleware{mw}, []*message.Message{}, agentopt.WithStructuredOutput(output))
 	for _, err := range seq {
 		if err == nil {
 			t.Fatal("expected error for empty response")
@@ -516,7 +516,7 @@ func TestStructuredOutput_MultipleContentTypes(t *testing.T) {
 		Name string `json:"name"`
 	}{}
 
-	seq := middleware.RunChain(ctx, baseFunc, []middleware.Middleware{mw}, []*message.Message{}, agentopt.StructuredOutput(output))
+	seq := middleware.RunChain(ctx, baseFunc, []middleware.Middleware{mw}, []*message.Message{}, agentopt.WithStructuredOutput(output))
 	for _, err := range seq {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)

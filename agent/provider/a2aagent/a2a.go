@@ -17,7 +17,6 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
 )
@@ -30,7 +29,7 @@ type taskIDOpt struct{ string }
 
 func (o taskIDOpt) Value() any { return o.string }
 
-func TaskID(taskID string) agentopt.Option {
+func TaskID(taskID string) agent.Option {
 	return taskIDOpt{taskID}
 }
 
@@ -55,19 +54,19 @@ func New(aclient *a2aclient.Client, config Config) *agent.Agent {
 	}, config.Config)
 }
 
-func (a *a2aagent) createSession(ctx context.Context, options ...agentopt.Option) (*memory.Session, error) {
-	serviceID, _ := agentopt.Get(options, agentopt.ServiceID)
+func (a *a2aagent) createSession(ctx context.Context, options ...agent.Option) (*memory.Session, error) {
+	serviceID, _ := agent.GetOption(options, agent.WithServiceID)
 	session := memory.NewSession("")
 	setContextID(session, serviceID)
-	setTaskIDs(session, slices.Collect(agentopt.All(options, TaskID)))
+	setTaskIDs(session, slices.Collect(agent.AllOptions(options, TaskID)))
 	return session, nil
 }
 
-func (a *a2aagent) run(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (a *a2aagent) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
-		session, _ := agentopt.Get(options, agentopt.Session)
-		stream, _ := agentopt.Get(options, agentopt.Stream)
-		if token, ok := agentopt.Get(options, agentopt.ContinuationToken); ok && token != "" {
+		session, _ := agent.GetOption(options, agent.WithSession)
+		stream, _ := agent.GetOption(options, agent.Stream)
+		if token, ok := agent.GetOption(options, agent.WithContinuationToken); ok && token != "" {
 			if stream {
 				// TODO: support resuming stream responses using continuation tokens.
 				yield(nil, errors.New("reconnecting to task streams using continuation tokens is not supported yet"))

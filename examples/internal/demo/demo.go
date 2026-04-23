@@ -9,9 +9,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/microsoft/agent-framework-go/agentopt"
+	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/middleware"
 )
 
 // ANSI color codes
@@ -41,7 +40,7 @@ type logger struct {
 	n int
 }
 
-func NewLogger(name, description string, metadata ...string) middleware.Middleware {
+func NewLogger(name, description string, metadata ...string) agent.Middleware {
 	var kvs []kv
 	for i := 0; i < len(metadata)-1; i += 2 {
 		kvs = append(kvs, kv{key: metadata[i], value: metadata[i+1]})
@@ -50,7 +49,7 @@ func NewLogger(name, description string, metadata ...string) middleware.Middlewa
 	return &logger{}
 }
 
-func (mw *logger) Run(next middleware.RunFunc, ctx context.Context, messages []*message.Message, opts ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (mw *logger) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		mw.n++
 		fmt.Printf("%s%s===== Run %d =====%s\n\n", colorYellow, colorBold, mw.n, colorReset)
@@ -71,7 +70,7 @@ func (mw *logger) Run(next middleware.RunFunc, ctx context.Context, messages []*
 				break
 			}
 		}
-		if v, _ := agentopt.Get(opts, agentopt.Stream); v {
+		if v, _ := agent.GetOption(opts, agent.Stream); v {
 			fmt.Printf("\n\n")
 		}
 	}

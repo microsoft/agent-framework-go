@@ -11,25 +11,25 @@ import (
 	"slices"
 
 	"github.com/google/uuid"
-	"github.com/microsoft/agent-framework-go/agentopt"
+	"github.com/microsoft/agent-framework-go/agent/internal/middleware/autocall"
+	"github.com/microsoft/agent-framework-go/agent/internal/middleware/contextprovider"
+	"github.com/microsoft/agent-framework-go/agent/internal/middleware/structuredoutput"
 	"github.com/microsoft/agent-framework-go/format"
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/middleware"
-	"github.com/microsoft/agent-framework-go/middleware/autocall"
-	"github.com/microsoft/agent-framework-go/middleware/contextprovider"
-	"github.com/microsoft/agent-framework-go/middleware/structuredoutput"
 	"github.com/microsoft/agent-framework-go/tool"
 )
+
+type RunFunc = func(ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*message.ResponseUpdate, error]
 
 type ProviderConfig struct {
 	ProviderName string
 
 	// Required functions
-	Run func(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error]
+	Run RunFunc
 
 	// Optional functions
-	CreateSession    func(ctx context.Context, options ...agentopt.Option) (*memory.Session, error)
+	CreateSession    func(ctx context.Context, options ...Option) (*memory.Session, error)
 	MarshalSession   func(ctx context.Context, session *memory.Session) ([]byte, error)
 	UnmarshalSession func(ctx context.Context, data []byte) (*memory.Session, error)
 	FormatOfFn       func(v any) (format.Format, error)
@@ -50,9 +50,9 @@ type Config struct {
 	Logger           *slog.Logger
 	LogSensitiveData bool
 
-	Middlewares []middleware.Middleware
+	Middlewares []Middleware
 	Tools       []tool.Tool
-	RunOptions  []agentopt.Option
+	RunOptions  []Option
 }
 
 func New(prov ProviderConfig, cfg Config) *Agent {
@@ -68,7 +68,7 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 	cfg.Tools = slices.Clone(cfg.Tools)
 	for _, tool := range cfg.Tools {
 		if tool != nil {
-			cfg.RunOptions = append(cfg.RunOptions, agentopt.Tool(tool))
+			cfg.RunOptions = append(cfg.RunOptions, WithTool(tool))
 		}
 	}
 	cfg.Middlewares = slices.Clone(cfg.Middlewares)
@@ -94,7 +94,7 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 			}),
 		)
 	}
-	prefixedMiddlewares := make([]middleware.Middleware, 0, 2)
+	prefixedMiddlewares := make([]Middleware, 0, 2)
 	if len(providers) == 0 {
 		prefixedMiddlewares = append(prefixedMiddlewares, defaultLocalHistoryMiddleware())
 	}
@@ -142,13 +142,13 @@ type Agent struct {
 
 	instructions string
 
-	middlewares []middleware.Middleware
-	runOptions  []agentopt.Option
+	middlewares []Middleware
+	runOptions  []Option
 
-	createSession    func(ctx context.Context, options ...agentopt.Option) (*memory.Session, error)
+	createSession    func(ctx context.Context, options ...Option) (*memory.Session, error)
 	marshalSession   func(ctx context.Context, session *memory.Session) ([]byte, error)
 	unmarshalSession func(ctx context.Context, data []byte) (*memory.Session, error)
-	run              func(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error]
+	run              func(ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*message.ResponseUpdate, error]
 }
 
 func (a *Agent) ID() string {
@@ -179,10 +179,10 @@ func (a *Agent) ProviderName() string {
 	return a.providerName
 }
 
-func (a *Agent) CreateSession(ctx context.Context, options ...agentopt.Option) (*memory.Session, error) {
+func (a *Agent) CreateSession(ctx context.Context, options ...Option) (*memory.Session, error) {
 	if a.createSession == nil {
 		session := memory.NewSession("")
-		session.ServiceID, _ = agentopt.Get(options, agentopt.ServiceID)
+		session.ServiceID, _ = GetOption(options, WithServiceID)
 		return session, nil
 	}
 	return a.createSession(ctx, options...)
@@ -209,32 +209,32 @@ func (a *Agent) UnmarshalSession(ctx context.Context, data []byte) (*memory.Sess
 	return a.unmarshalSession(ctx, data)
 }
 
-func (a *Agent) RunText(ctx context.Context, msg string, options ...agentopt.Option) ResponseStream {
+func (a *Agent) RunText(ctx context.Context, msg string, options ...Option) ResponseStream {
 	return a.Run(ctx, []*message.Message{message.NewText(msg)}, options...)
 }
 
-func (a *Agent) RunMessage(ctx context.Context, msg *message.Message, options ...agentopt.Option) ResponseStream {
+func (a *Agent) RunMessage(ctx context.Context, msg *message.Message, options ...Option) ResponseStream {
 	return a.Run(ctx, []*message.Message{msg}, options...)
 }
 
-func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ...agentopt.Option) ResponseStream {
+func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ...Option) ResponseStream {
 	ctx, preparedMessages, options, err := a.prepareRun(ctx, messages, options)
 	if err != nil {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(nil, err)
 		}
 	}
-	return ResponseStream(middleware.RunChain(ctx, a.run, a.middlewares, preparedMessages, options...))
+	return ResponseStream(runChain(ctx, a.run, a.middlewares, preparedMessages, options...))
 }
 
-func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, options []agentopt.Option) (context.Context, []*message.Message, []agentopt.Option, error) {
+func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, options []Option) (context.Context, []*message.Message, []Option, error) {
 	// Prepend options from agent configuration.
 	if len(a.runOptions) != 0 {
 		options = append(a.runOptions, options...)
 	}
 
-	if _, ok := agentopt.Get(options, agentopt.Session); !ok {
-		if allowBackgroundResponses, ok := agentopt.Get(options, agentopt.AllowBackgroundResponses); ok && allowBackgroundResponses {
+	if _, ok := GetOption(options, WithSession); !ok {
+		if allowBackgroundResponses, ok := GetOption(options, AllowBackgroundResponses); ok && allowBackgroundResponses {
 			// Background responses require an explicit session to avoid inconsistent
 			// caller experience between initial and follow-up runs.
 			return nil, nil, nil, errors.New("a session must be provided when AllowBackgroundResponses is enabled")
@@ -244,10 +244,10 @@ func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, opt
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		options = append(options, agentopt.Session(session), noSessionProvided(true))
+		options = append(options, WithSession(session), noSessionProvided(true))
 	}
 
-	continuationToken, _ := agentopt.Get(options, agentopt.ContinuationToken)
+	continuationToken, _ := GetOption(options, WithContinuationToken)
 	if continuationToken != "" && len(messages) > 0 {
 		return nil, nil, nil, errors.New("messages are not allowed when continuing a background response using a continuation token")
 	}
@@ -276,13 +276,13 @@ func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, opt
 // configuration. New prepends it only when Config.ContextProviders is empty.
 // It is bypassed for auto-created sessions on the first run, service-managed
 // sessions, and continuation-token resumes.
-func defaultLocalHistoryMiddleware() middleware.Middleware {
+func defaultLocalHistoryMiddleware() Middleware {
 	history := contextprovider.New(memory.NewInMemoryHistoryProvider("in-memory"))
 
-	return middleware.Func(func(next middleware.RunFunc, ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		session, _ := agentopt.Get(options, agentopt.Session)
-		noSession, _ := agentopt.Get(options, noSessionProvided)
-		contToken, _ := agentopt.Get(options, agentopt.ContinuationToken)
+	return MiddlewareFunc(func(next RunFunc, ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*message.ResponseUpdate, error] {
+		session, _ := GetOption(options, WithSession)
+		noSession, _ := GetOption(options, noSessionProvided)
+		contToken, _ := GetOption(options, WithContinuationToken)
 		if noSession || contToken != "" || session.ServiceID != "" {
 			return next(ctx, messages, options...)
 		}
@@ -290,8 +290,8 @@ func defaultLocalHistoryMiddleware() middleware.Middleware {
 	})
 }
 
-func authorMiddleware(id, name string) middleware.Middleware {
-	return middleware.Func(func(next middleware.RunFunc, ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func authorMiddleware(id, name string) Middleware {
+	return MiddlewareFunc(func(next RunFunc, ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			for update, err := range next(ctx, messages, options...) {
 				if update != nil {
@@ -316,7 +316,7 @@ type noSessionOpt bool
 
 func (o noSessionOpt) Value() any { return bool(o) }
 
-func noSessionProvided(v bool) agentopt.Option {
+func noSessionProvided(v bool) Option {
 	return noSessionOpt(v)
 }
 

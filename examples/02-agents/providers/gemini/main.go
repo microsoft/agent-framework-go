@@ -10,7 +10,6 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/geminiagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
-	"github.com/microsoft/agent-framework-go/middleware"
 	"google.golang.org/genai"
 )
 
@@ -41,7 +40,7 @@ func main() {
 			Config: agent.Config{
 				Instructions: "You are good at telling jokes.",
 				Name:         "Joker",
-				Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
+				Middlewares:  []agent.Middleware{logger}, // for logging agent interactions
 			},
 		},
 	)

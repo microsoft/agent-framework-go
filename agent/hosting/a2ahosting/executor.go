@@ -10,7 +10,6 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
@@ -55,15 +54,15 @@ func (e *executor) Execute(ctx context.Context, execCtx *a2asrv.ExecutorContext)
 			return
 		}
 
-		session, err := e.cfg.Agent.CreateSession(ctx, agentopt.ServiceID(execCtx.ContextID))
+		session, err := e.cfg.Agent.CreateSession(ctx, agent.WithServiceID(execCtx.ContextID))
 		if err != nil {
 			yield(nil, err)
 			return
 		}
 
-		runOptions := []agentopt.Option{
-			agentopt.Session(session),
-			agentopt.AllowBackgroundResponses(allowBackground),
+		runOptions := []agent.Option{
+			agent.WithSession(session),
+			agent.AllowBackgroundResponses(allowBackground),
 		}
 
 		resp, runErr := e.cfg.Agent.Run(ctx, messagesIn, runOptions...).Collect()

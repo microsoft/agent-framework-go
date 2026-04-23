@@ -4,13 +4,11 @@ package agent
 
 import (
 	"context"
-	"reflect"
-
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/message/messageworkflow"
 	"github.com/microsoft/agent-framework-go/workflow"
+	"reflect"
 )
 
 func newExecutor(a *Agent, emitEvents bool) *workflow.Executor {
@@ -60,14 +58,14 @@ func newExecutor(a *Agent, emitEvents bool) *workflow.Executor {
 		StateKey: "agent_messages",
 		TakeTurnHandler: func(ctx *workflow.Context, token workflow.TurnToken, messages []*message.Message) error {
 			emitEvents := token.EmitEventsOr(emitEvents)
-			options := make([]agentopt.Option, 0, 1+len(messages))
+			options := make([]Option, 0, 1+len(messages))
 			session, err := ensureSession(ctx)
 			if err != nil {
 				return err
 			}
-			options = append(options, agentopt.Session(session))
+			options = append(options, WithSession(session))
 			// Run the agent in streaming mode only when agent run update events are to be emitted.
-			options = append(options, agentopt.Stream(emitEvents))
+			options = append(options, Stream(emitEvents))
 			var updates []*message.ResponseUpdate
 			for update, err := range a.Run(ctx, messages, options...) {
 				if err != nil {

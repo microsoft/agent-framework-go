@@ -9,7 +9,6 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
@@ -88,7 +87,7 @@ func runChatLoop(ctx context.Context, a *agent.Agent) {
 		fmt.Print("Assistant: ")
 
 		hasError := false
-		for update, err := range a.RunText(ctx, userInput, agentopt.Session(session), agentopt.Stream(true)) {
+		for update, err := range a.RunText(ctx, userInput, agent.WithSession(session), agent.Stream(true)) {
 			if err != nil {
 				fmt.Printf("\n❌ Error: %v\n", err)
 				hasError = true

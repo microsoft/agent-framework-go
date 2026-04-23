@@ -15,9 +15,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/a2aagent"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
-	"github.com/microsoft/agent-framework-go/middleware"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
@@ -79,7 +77,7 @@ func main() {
 			Config: agent.Config{
 				Name:         "HostClient",
 				Instructions: "You specialize in handling user queries and using your tools to provide answers.",
-				Middlewares:  []middleware.Middleware{logger},
+				Middlewares:  []agent.Middleware{logger},
 				Tools:        tools,
 			},
 		},
@@ -106,7 +104,7 @@ func main() {
 			break
 		}
 
-		resp, runErr := host.RunText(ctx, message, agentopt.Session(session)).Collect()
+		resp, runErr := host.RunText(ctx, message, agent.WithSession(session)).Collect()
 		demo.Response(resp, runErr)
 	}
 }

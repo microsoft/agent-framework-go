@@ -7,10 +7,10 @@ import (
 	"errors"
 	"iter"
 
-	"github.com/microsoft/agent-framework-go/agentopt"
+	"github.com/microsoft/agent-framework-go/agent/internal/agentopt"
+	"github.com/microsoft/agent-framework-go/agent/internal/middleware"
 	"github.com/microsoft/agent-framework-go/format"
 	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/middleware"
 )
 
 type Config struct {
@@ -34,7 +34,7 @@ type so struct {
 
 func (a *so) Run(next middleware.RunFunc, ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
-		v, ok := agentopt.Get(options, agentopt.StructuredOutput)
+		v, ok := agentopt.GetOption(options, agentopt.WithStructuredOutput)
 		if !ok || v == nil {
 			// No structured output requested or nil value, just pass through.
 			for update, err := range next(ctx, messages, options...) {
@@ -53,7 +53,7 @@ func (a *so) Run(next middleware.RunFunc, ctx context.Context, messages []*messa
 			yield(nil, err)
 			return
 		}
-		options = append(options, agentopt.ResponseFormat(format))
+		options = append(options, agentopt.WithResponseFormat(format))
 		var data []byte
 		for update, err := range next(ctx, messages, options...) {
 			if err != nil {

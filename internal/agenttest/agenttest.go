@@ -8,14 +8,12 @@ import (
 	"iter"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/middleware"
 )
 
 type Turn struct {
-	Callbacks []func(context.Context, []*message.Message, ...agentopt.Option)
+	Callbacks []func(context.Context, []*message.Message, ...agent.Option)
 	Responses []Response
 }
 
@@ -23,7 +21,7 @@ type ResponseBuilder struct {
 	turns []Turn
 }
 
-func NewResponseBuilder(firstTurnCallbacks ...func(ctx context.Context, messages []*message.Message, opts ...agentopt.Option)) *ResponseBuilder {
+func NewResponseBuilder(firstTurnCallbacks ...func(ctx context.Context, messages []*message.Message, opts ...agent.Option)) *ResponseBuilder {
 	return &ResponseBuilder{
 		turns: []Turn{{
 			Responses: []Response{},
@@ -32,7 +30,7 @@ func NewResponseBuilder(firstTurnCallbacks ...func(ctx context.Context, messages
 	}
 }
 
-func (rb *ResponseBuilder) NewTurn(callbacks ...func(ctx context.Context, messages []*message.Message, opts ...agentopt.Option)) *ResponseBuilder {
+func (rb *ResponseBuilder) NewTurn(callbacks ...func(ctx context.Context, messages []*message.Message, opts ...agent.Option)) *ResponseBuilder {
 	rb.turns = append(rb.turns, Turn{
 		Callbacks: callbacks,
 		Responses: []Response{},
@@ -110,7 +108,7 @@ func New(responses []Turn) *agent.Agent {
 	})
 }
 
-func (a *testagent) run(ctx context.Context, messages []*message.Message, opts ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (a *testagent) run(ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		defer func() { a.currentTurn++ }()
 		if a.currentTurn >= len(a.responses) {
@@ -128,7 +126,7 @@ func (a *testagent) run(ctx context.Context, messages []*message.Message, opts .
 	}
 }
 
-func (a *testagent) createSession(_ context.Context, opts ...agentopt.Option) (*memory.Session, error) {
+func (a *testagent) createSession(_ context.Context, opts ...agent.Option) (*memory.Session, error) {
 	return memory.NewSession(""), nil
 }
 
@@ -165,7 +163,7 @@ func (m *Middleware) Called() bool {
 	return m.called
 }
 
-func (m *Middleware) Run(next middleware.RunFunc, ctx context.Context, messages []*message.Message, opts ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (m *Middleware) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 	m.called = true
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		defer func() { m.currentTurn++ }()
@@ -199,7 +197,7 @@ type Runner struct {
 	currentTurn int
 }
 
-func (r *Runner) Run(ctx context.Context, messages []*message.Message, opts ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (r *Runner) Run(ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		defer func() { r.currentTurn++ }()
 		if r.currentTurn >= len(r.Responses) {

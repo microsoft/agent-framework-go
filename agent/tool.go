@@ -4,13 +4,11 @@ package agent
 
 import (
 	"encoding/json"
-
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/tool"
 )
 
 // AsFuncTool creates a function tool that invokes the given agent.
-func (a *Agent) AsFuncTool(options ...agentopt.Option) tool.FuncTool {
+func (a *Agent) AsFuncTool(options ...Option) tool.FuncTool {
 	return functool{
 		name:        a.Name(),
 		description: a.Description(),
@@ -22,7 +20,7 @@ func (a *Agent) AsFuncTool(options ...agentopt.Option) tool.FuncTool {
 type functool struct {
 	name        string
 	description string
-	opts        []agentopt.Option
+	opts        []Option
 	agent       *Agent
 }
 

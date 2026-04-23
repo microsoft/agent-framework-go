@@ -11,9 +11,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
-	"github.com/microsoft/agent-framework-go/middleware"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 
@@ -55,7 +53,7 @@ func main() {
 			Model: deployment,
 			Config: agent.Config{
 				Instructions: "You are a helpful assistant",
-				Middlewares:  []middleware.Middleware{logger}, // for logging agent interactions
+				Middlewares:  []agent.Middleware{logger}, // for logging agent interactions
 				Tools:        []tool.Tool{weatherTool},
 			},
 		},
@@ -68,7 +66,7 @@ func main() {
 	demo.Response(resp, err)
 
 	// Invoke the agent with streaming support.
-	for update, err := range a.RunText(ctx, "What is the weather like in Amsterdam?", agentopt.Stream(true)) {
+	for update, err := range a.RunText(ctx, "What is the weather like in Amsterdam?", agent.Stream(true)) {
 		demo.Response(update, err)
 	}
 }

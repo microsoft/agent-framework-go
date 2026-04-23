@@ -15,11 +15,9 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/middleware"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
 )
@@ -59,7 +57,7 @@ func main() {
 			Config: agent.Config{
 				Instructions: "You are good at telling jokes.",
 				Name:         "Joker",
-				Middlewares: []middleware.Middleware{
+				Middlewares: []agent.Middleware{
 					logger,                       // for logging agent interactions
 					&fsMessageStore{Dir: tmpDir}, // for persistent message history
 				},
@@ -76,7 +74,7 @@ func main() {
 	}
 
 	// Run the agent with the session that stores conversation history in the disk store.
-	resp, err := a.RunText(ctx, "Tell me a joke about a pirate.", agentopt.Session(session)).Collect()
+	resp, err := a.RunText(ctx, "Tell me a joke about a pirate.", agent.WithSession(session)).Collect()
 	demo.Response(resp, err)
 
 	// Serialize the session state, so it can be stored for later use.
@@ -99,7 +97,7 @@ func main() {
 	}
 
 	// Run the agent with the session that stores conversation history in the disk store a second time.
-	resp, err = a.RunText(ctx, "Now tell the same joke in the voice of a pirate, and add some emojis to the joke.", agentopt.Session(resumedSession)).Collect()
+	resp, err = a.RunText(ctx, "Now tell the same joke in the voice of a pirate, and add some emojis to the joke.", agent.WithSession(resumedSession)).Collect()
 	demo.Response(resp, err)
 }
 
@@ -171,9 +169,9 @@ func (d *fsMessageStore) persistMessages(session *memory.Session, requestMessage
 	return nil
 }
 
-func (d *fsMessageStore) Run(next middleware.RunFunc, ctx context.Context, msgs []*message.Message, opts ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (d *fsMessageStore) Run(next agent.RunFunc, ctx context.Context, msgs []*message.Message, opts ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 	var session *memory.Session
-	if v, ok := agentopt.Get(opts, agentopt.Session); ok {
+	if v, ok := agent.GetOption(opts, agent.WithSession); ok {
 		session = v
 	} else {
 		// If no session is provided, we cannot persist messages, so just pass through to next middleware.

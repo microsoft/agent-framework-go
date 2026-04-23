@@ -12,7 +12,6 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/geminiagent"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
@@ -154,7 +153,7 @@ func TestBasicText_Streaming(t *testing.T) {
 
 	a := newTestClient(t, server)
 
-	resp, err := a.RunText(t.Context(), "hi", agentopt.Stream(true)).Collect()
+	resp, err := a.RunText(t.Context(), "hi", agent.Stream(true)).Collect()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -163,7 +162,7 @@ func TestBasicText_Streaming(t *testing.T) {
 	}
 }
 
-// TestStructuredOutput_NonStreaming verifies that passing agentopt.StructuredOutput
+// TestStructuredOutput_NonStreaming verifies that passing agent.WithStructuredOutput
 // causes the provider to:
 //  1. Send generationConfig with responseMimeType "application/json" and a
 //     responseJsonSchema derived from the Go type.
@@ -178,7 +177,7 @@ func TestStructuredOutput_NonStreaming(t *testing.T) {
 	a := newTestClient(t, server)
 
 	var out testOutput
-	for _, err := range a.RunText(t.Context(), "get user", agentopt.StructuredOutput(&out)) {
+	for _, err := range a.RunText(t.Context(), "get user", agent.WithStructuredOutput(&out)) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -195,7 +194,7 @@ func TestStructuredOutput_NonStreaming(t *testing.T) {
 }
 
 // TestStructuredOutput_Streaming verifies the same guarantees as
-// TestStructuredOutput_NonStreaming but with agentopt.Stream(true).
+// TestStructuredOutput_NonStreaming but with agent.Stream(true).
 func TestStructuredOutput_Streaming(t *testing.T) {
 	const payload = `{"name":"Bob","age":25}`
 
@@ -206,7 +205,7 @@ func TestStructuredOutput_Streaming(t *testing.T) {
 	a := newTestClient(t, server)
 
 	var out testOutput
-	for _, err := range a.RunText(t.Context(), "get user", agentopt.StructuredOutput(&out), agentopt.Stream(true)) {
+	for _, err := range a.RunText(t.Context(), "get user", agent.WithStructuredOutput(&out), agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -330,7 +329,7 @@ func TestToolCall_NonStreaming(t *testing.T) {
 
 	a := newTestClient(t, server)
 
-	resp, err := a.RunText(t.Context(), "what's the weather?", agentopt.Tool(weatherTool)).Collect()
+	resp, err := a.RunText(t.Context(), "what's the weather?", agent.WithTool(weatherTool)).Collect()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -945,7 +944,7 @@ func TestStreamingWithFunctionCall(t *testing.T) {
 
 	a := newTestClient(t, server)
 
-	resp, err := a.RunText(t.Context(), "Weather in Paris?", agentopt.Stream(true), agentopt.Tool(weatherTool)).Collect()
+	resp, err := a.RunText(t.Context(), "Weather in Paris?", agent.Stream(true), agent.WithTool(weatherTool)).Collect()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1020,7 +1019,7 @@ func TestMultiTurnWithFunctionCalls(t *testing.T) {
 		return `{"price": 378.91}`, nil
 	})
 
-	resp, err := a.Run(t.Context(), messages, agentopt.Tool(stockTool)).Collect()
+	resp, err := a.Run(t.Context(), messages, agent.WithTool(stockTool)).Collect()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1100,7 +1099,7 @@ func TestParallelFunctionCalls(t *testing.T) {
 		return "sunny", nil
 	})
 
-	result, err := a.Run(t.Context(), messages, agentopt.Tool(weatherTool)).Collect()
+	result, err := a.Run(t.Context(), messages, agent.WithTool(weatherTool)).Collect()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1221,7 +1220,7 @@ func TestStreamingBasicResponse(t *testing.T) {
 
 	// Iterate streaming updates and count text chunks.
 	var updateCount int
-	for update, err := range a.RunText(t.Context(), "Say hello", agentopt.Stream(true)) {
+	for update, err := range a.RunText(t.Context(), "Say hello", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1236,7 +1235,7 @@ func TestStreamingBasicResponse(t *testing.T) {
 	}
 
 	// Verify Collect assembles the text correctly.
-	resp, err := a.RunText(t.Context(), "Say hello", agentopt.Stream(true)).Collect()
+	resp, err := a.RunText(t.Context(), "Say hello", agent.Stream(true)).Collect()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1280,7 +1279,7 @@ func TestStreamingMultipleChunks(t *testing.T) {
 
 	a := newTestClient(t, server)
 
-	resp, err := a.RunText(t.Context(), "Count to five", agentopt.Stream(true)).Collect()
+	resp, err := a.RunText(t.Context(), "Count to five", agent.Stream(true)).Collect()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1324,7 +1323,7 @@ func TestStreamingMultipleCandidatesPerChunk(t *testing.T) {
 
 	a := newTestClient(t, server)
 
-	resp, err := a.RunText(t.Context(), "Pick one stream candidate", agentopt.Stream(true)).Collect()
+	resp, err := a.RunText(t.Context(), "Pick one stream candidate", agent.Stream(true)).Collect()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

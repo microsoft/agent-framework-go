@@ -13,7 +13,6 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/anthropicagent"
-	"github.com/microsoft/agent-framework-go/agentopt"
 )
 
 // testOutput is the structured type used across structured output tests.
@@ -120,7 +119,7 @@ func minimalStreamingResponse(payload string) string {
 		`data: {"type":"message_stop"}` + "\n\n"
 }
 
-// TestStructuredOutput_NonStreaming verifies that passing agentopt.StructuredOutput
+// TestStructuredOutput_NonStreaming verifies that passing agent.WithStructuredOutput
 // with a typed struct causes the provider to:
 //  1. Send output_config.format with type "json_schema" and a schema derived
 //     from the Go type.
@@ -145,7 +144,7 @@ func TestStructuredOutput_NonStreaming(t *testing.T) {
 	a := newTestClient(t, server)
 
 	var out testOutput
-	for _, err := range a.RunText(t.Context(), "get user", agentopt.StructuredOutput(&out)) {
+	for _, err := range a.RunText(t.Context(), "get user", agent.WithStructuredOutput(&out)) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -163,7 +162,7 @@ func TestStructuredOutput_NonStreaming(t *testing.T) {
 }
 
 // TestStructuredOutput_Streaming verifies the same guarantees as
-// TestStructuredOutput_NonStreaming but with agentopt.Stream(true).
+// TestStructuredOutput_NonStreaming but with agent.Stream(true).
 func TestStructuredOutput_Streaming(t *testing.T) {
 	const payload = `{"name":"Bob","age":25}`
 
@@ -184,7 +183,7 @@ func TestStructuredOutput_Streaming(t *testing.T) {
 	a := newTestClient(t, server)
 
 	var out testOutput
-	for _, err := range a.RunText(t.Context(), "get user", agentopt.StructuredOutput(&out), agentopt.Stream(true)) {
+	for _, err := range a.RunText(t.Context(), "get user", agent.WithStructuredOutput(&out), agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

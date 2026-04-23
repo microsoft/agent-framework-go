@@ -19,7 +19,6 @@ import (
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/memory/skills"
 	"github.com/microsoft/agent-framework-go/memory/skills/fsskills"
-	"github.com/microsoft/agent-framework-go/middleware"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
 )
@@ -62,7 +61,7 @@ func main() {
 			Config: agent.Config{
 				Name:             "UnitConverterAgent",
 				Instructions:     "You are a helpful assistant that can convert units.",
-				Middlewares:      []middleware.Middleware{logger},
+				Middlewares:      []agent.Middleware{logger},
 				ContextProviders: []*memory.ContextProvider{skillsProvider},
 			},
 		},

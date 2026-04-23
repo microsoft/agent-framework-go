@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/microsoft/agent-framework-go/agentopt"
+	"github.com/microsoft/agent-framework-go/agent/internal/agentopt"
+	"github.com/microsoft/agent-framework-go/agent/internal/middleware/autocall"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/internal/messagetest"
 	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/middleware/autocall"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 )
@@ -181,7 +181,7 @@ func invokeAndAssert(t *testing.T, tools []tool.Tool, plan []*message.Message, e
 	// Build options
 	var opts []agentopt.Option
 	for _, tool := range tools {
-		opts = append(opts, agentopt.Tool(tool))
+		opts = append(opts, agentopt.WithTool(tool))
 	}
 	// Use a deterministic (empty) ID generator for test reproducibility.
 	// Do not use an empty ID generator in production code, as it breaks message tracking and deduplication.
@@ -246,7 +246,7 @@ func TestFunctionInvoking_FunctionReturningFunctionResultContentWithMatchingCall
 
 	var opts []agentopt.Option
 	for _, tl := range tools {
-		opts = append(opts, agentopt.Tool(tl))
+		opts = append(opts, agentopt.WithTool(tl))
 	}
 
 	initialMessages := []*message.Message{message.NewText("hello")}
@@ -322,7 +322,7 @@ func TestFunctionInvoking_FunctionReturningFunctionResultContentWithMismatchedCa
 
 	var opts []agentopt.Option
 	for _, tl := range tools {
-		opts = append(opts, agentopt.Tool(tl))
+		opts = append(opts, agentopt.WithTool(tl))
 	}
 
 	initialMessages := []*message.Message{message.NewText("hello")}
@@ -708,7 +708,7 @@ func TestFunctionInvoking_ContinuesWithFailingCallsUntilMaximumConsecutiveErrors
 			// Build options
 			var opts []agentopt.Option
 			for _, tool := range tools {
-				opts = append(opts, agentopt.Tool(tool))
+				opts = append(opts, agentopt.WithTool(tool))
 			}
 
 			var streamErr error
@@ -824,7 +824,7 @@ func TestFunctionInvoking_CanFailOnFirstException(t *testing.T) {
 			// Build options
 			var opts []agentopt.Option
 			for _, tool := range tools {
-				opts = append(opts, agentopt.Tool(tool))
+				opts = append(opts, agentopt.WithTool(tool))
 			}
 
 			var streamErr error
@@ -1043,7 +1043,7 @@ func TestFunctionInvoking_AllResponseMessagesReturned(t *testing.T) {
 	initialMessages := []*message.Message{messages[0]}
 	var opts []agentopt.Option
 	for _, tool := range tools {
-		opts = append(opts, agentopt.Tool(tool))
+		opts = append(opts, agentopt.WithTool(tool))
 	}
 
 	var resp message.Response
@@ -1147,7 +1147,7 @@ func TestFunctionInvoking_NextIterationIncludesAssistantFunctionCallMessage(t *t
 
 	var opts []agentopt.Option
 	for _, tool := range tools {
-		opts = append(opts, agentopt.Tool(tool))
+		opts = append(opts, agentopt.WithTool(tool))
 	}
 
 	autocallConfig := autocall.Config{

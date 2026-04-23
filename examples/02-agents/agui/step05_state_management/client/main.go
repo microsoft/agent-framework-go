@@ -14,8 +14,8 @@ import (
 	"strings"
 
 	aguiSSEClient "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/client/sse"
+	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/aguiagent"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
@@ -54,7 +54,7 @@ func main() {
 		}
 
 		msg := message.New(&message.TextContent{Text: input}, toStateContent(state))
-		resp, err := a.RunMessage(context.Background(), msg, agentopt.Session(session)).Collect()
+		resp, err := a.RunMessage(context.Background(), msg, agent.WithSession(session)).Collect()
 		if err != nil {
 			log.Fatal(err)
 		}

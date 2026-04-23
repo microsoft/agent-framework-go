@@ -14,7 +14,6 @@ import (
 	aguiTypes "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	aguiSSE "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/encoding/sse"
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agentopt"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
@@ -24,7 +23,7 @@ type HandlerConfig struct {
 	Logger *slog.Logger
 }
 
-func NewHTTPHandler(cfg HandlerConfig) http.Handler {
+func NewJSONHTTPHandler(cfg HandlerConfig) http.Handler {
 	if cfg.Agent == nil {
 		panic("agent is required")
 	}
@@ -64,9 +63,9 @@ func NewHTTPHandler(cfg HandlerConfig) http.Handler {
 		w.Header().Set("Cache-Control", "no-cache,no-store")
 		w.Header().Set("Pragma", "no-cache")
 
-		var runOptions []agentopt.Option
+		var runOptions []agent.Option
 		for _, t := range toDeclarationTools(input.Tools) {
-			runOptions = append(runOptions, agentopt.Tool(t))
+			runOptions = append(runOptions, agent.WithTool(t))
 		}
 		updates := cfg.Agent.Run(r.Context(), messagesIn, runOptions...)
 		updatesSeq := iter.Seq2[*message.ResponseUpdate, error](updates)
