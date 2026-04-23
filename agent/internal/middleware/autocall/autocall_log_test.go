@@ -27,7 +27,7 @@ func TestAutocall_LogsSuccessfulFunctionCall(t *testing.T) {
 	}))
 
 	tools := []tool.Tool{
-		functool.MustNew(&functool.Func{Name: "TestFunc"},
+		functool.MustNew(functool.Config{Name: "TestFunc"},
 			func(ctx tool.Context, args struct{}) (string, error) {
 				return "Success", nil
 			}),
@@ -79,7 +79,7 @@ func TestAutocall_LogsSensitiveData(t *testing.T) {
 	}
 
 	tools := []tool.Tool{
-		functool.MustNew(&functool.Func{Name: "TestFunc"},
+		functool.MustNew(functool.Config{Name: "TestFunc"},
 			func(ctx tool.Context, args TestArgs) (string, error) {
 				return "Result: " + args.Value, nil
 			}),
@@ -132,7 +132,7 @@ func TestAutocall_DoesNotLogSensitiveDataByDefault(t *testing.T) {
 	}
 
 	tools := []tool.Tool{
-		functool.MustNew(&functool.Func{Name: "TestFunc"},
+		functool.MustNew(functool.Config{Name: "TestFunc"},
 			func(ctx tool.Context, args TestArgs) (string, error) {
 				return "Result: " + args.Value, nil
 			}),
@@ -182,7 +182,7 @@ func TestAutocall_LogsFailedFunctionCall(t *testing.T) {
 	}))
 
 	tools := []tool.Tool{
-		functool.MustNew(&functool.Func{Name: "FailingFunc"},
+		functool.MustNew(functool.Config{Name: "FailingFunc"},
 			func(ctx tool.Context, args struct{}) (string, error) {
 				return "", errors.New("something went wrong")
 			}),
@@ -231,7 +231,7 @@ func TestAutocall_LogsCanceledFunctionCall(t *testing.T) {
 	}))
 
 	tools := []tool.Tool{
-		functool.MustNew(&functool.Func{Name: "CancelableFunc"},
+		functool.MustNew(functool.Config{Name: "CancelableFunc"},
 			func(ctx tool.Context, args struct{}) (string, error) {
 				return "", context.Canceled
 			}),
@@ -274,11 +274,11 @@ func TestAutocall_LogsMultipleFunctionCalls(t *testing.T) {
 	}))
 
 	tools := []tool.Tool{
-		functool.MustNew(&functool.Func{Name: "Func1"},
+		functool.MustNew(functool.Config{Name: "Func1"},
 			func(ctx tool.Context, args struct{}) (string, error) {
 				return "Result1", nil
 			}),
-		functool.MustNew(&functool.Func{Name: "Func2"},
+		functool.MustNew(functool.Config{Name: "Func2"},
 			func(ctx tool.Context, args struct{}) (string, error) {
 				return "Result2", nil
 			}),
@@ -327,12 +327,12 @@ func TestAutocall_LoggingWithConcurrentInvocations(t *testing.T) {
 	}))
 
 	tools := []tool.Tool{
-		functool.MustNew(&functool.Func{Name: "SlowFunc1"},
+		functool.MustNew(functool.Config{Name: "SlowFunc1"},
 			func(ctx tool.Context, args struct{}) (string, error) {
 				time.Sleep(10 * time.Millisecond)
 				return "Result1", nil
 			}),
-		functool.MustNew(&functool.Func{Name: "SlowFunc2"},
+		functool.MustNew(functool.Config{Name: "SlowFunc2"},
 			func(ctx tool.Context, args struct{}) (string, error) {
 				time.Sleep(10 * time.Millisecond)
 				return "Result2", nil

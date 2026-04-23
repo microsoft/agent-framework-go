@@ -315,7 +315,7 @@ func (p providedSkillSet) hasResourcesAndScripts() (bool, bool) {
 func (p *providerState) buildTools(skills providedSkillSet, hasResources, hasScripts bool) []tool.Tool {
 	tools := []tool.Tool{
 		functool.MustNew(
-			&functool.Func{
+			functool.Config{
 				Name:        "load_skill",
 				Description: "Loads the full content of a specific skill.",
 			},
@@ -329,7 +329,7 @@ func (p *providerState) buildTools(skills providedSkillSet, hasResources, hasScr
 
 	if hasResources {
 		tools = append(tools, functool.MustNew(
-			&functool.Func{
+			functool.Config{
 				Name:        "read_skill_resource",
 				Description: "Reads a resource associated with a skill, such as references, assets, or dynamic data.",
 			},
@@ -347,7 +347,7 @@ func (p *providerState) buildTools(skills providedSkillSet, hasResources, hasScr
 	}
 
 	runScript := functool.MustNew(
-		&functool.Func{
+		functool.Config{
 			Name:        "run_skill_script",
 			Description: "Runs a script associated with a skill.",
 		},

@@ -71,7 +71,7 @@ func (a *responsesClient) formatOf(v any) (format.Format, error) {
 }
 
 func (a *responsesClient) unmarshal(format format.Format, data []byte, v any) error {
-	return jsonformat.Unmarshal(format.(*jsonformat.Format), data, v)
+	return format.(*jsonformat.Format).Unmarshal(data, v)
 }
 
 func (a *responsesClient) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {

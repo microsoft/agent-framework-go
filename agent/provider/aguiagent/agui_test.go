@@ -199,7 +199,7 @@ func TestAGUIAgentRun_InvokesTools_WhenFunctionCallsReturned(t *testing.T) {
 	type weatherInput struct {
 		Location string `json:"location"`
 	}
-	weatherTool := functool.MustNew(&functool.Func{Name: "GetWeather", Description: "Get weather"}, func(ctx tool.Context, in weatherInput) (string, error) {
+	weatherTool := functool.MustNew(functool.Config{Name: "GetWeather", Description: "Get weather"}, func(ctx tool.Context, in weatherInput) (string, error) {
 		invoked = true
 		return "Sunny", nil
 	})
@@ -287,11 +287,11 @@ func TestAGUIAgentRun_ForwardsAllToolResults_WhenMultipleToolCallsReturned(t *te
 	type timeInput struct {
 		Timezone string `json:"timezone"`
 	}
-	weatherTool := functool.MustNew(&functool.Func{Name: "GetWeather", Description: "Get weather"}, func(ctx tool.Context, in weatherInput) (string, error) {
+	weatherTool := functool.MustNew(functool.Config{Name: "GetWeather", Description: "Get weather"}, func(ctx tool.Context, in weatherInput) (string, error) {
 		weatherInvoked = true
 		return "Sunny", nil
 	})
-	timeTool := functool.MustNew(&functool.Func{Name: "GetTime", Description: "Get time"}, func(ctx tool.Context, in timeInput) (string, error) {
+	timeTool := functool.MustNew(functool.Config{Name: "GetTime", Description: "Get time"}, func(ctx tool.Context, in timeInput) (string, error) {
 		timeInvoked = true
 		return "12:00", nil
 	})

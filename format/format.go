@@ -9,23 +9,21 @@ type Format interface {
 	Kind() string
 }
 
-type simple struct {
-	kind string
-}
+type simple string
 
 func (s simple) Kind() string {
-	return s.kind
+	return string(s)
 }
 
 // JSON represents the JSON format.
 // Use [format/jsonformat] for more advanced JSON schema-based formatting.
 func JSON() Format {
-	return simple{kind: "json"}
+	return simple("json")
 }
 
 // Text represents the plain text format.
 func Text() Format {
-	return simple{kind: "text"}
+	return simple("text")
 }
 
 // SchemaFormat represents a format defined by a schema,
@@ -37,11 +35,6 @@ type SchemaFormat interface {
 	Description() string
 	Strict() bool
 
-	// Schema returns the JSON Schema that defines the format.
+	// Schema returns the Schema that defines the format.
 	Schema() any
-}
-
-type Formatter interface {
-	Format(v any) (Format, error)
-	Unmarshal(data []byte, format Format, v any) error
 }

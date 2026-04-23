@@ -710,7 +710,7 @@ func TestChatFunctionCallContent_NonStreaming(t *testing.T) {
 	getPersonAge := func(ctx tool.Context, input GetPersonAgeInput) (int, error) {
 		return 42, nil
 	}
-	tool := functool.MustNew(&functool.Func{
+	tool := functool.MustNew(functool.Config{
 		Name:        "GetPersonAge",
 		Description: "Gets the age of the specified person.",
 	}, getPersonAge)
@@ -824,7 +824,7 @@ data: [DONE]
 	getPersonAge := func(ctx tool.Context, input GetPersonAgeInput) (int, error) {
 		return 42, nil
 	}
-	tool := functool.MustNew(&functool.Func{
+	tool := functool.MustNew(functool.Config{
 		Name:        "GetPersonAge",
 		Description: "Gets the age of the specified person.",
 	}, getPersonAge)
@@ -1391,12 +1391,12 @@ func TestChatMultipleRequiredFunctions(t *testing.T) {
 		return "3:45 PM", nil
 	}
 
-	weatherTool := functool.MustNew(&functool.Func{
+	weatherTool := functool.MustNew(functool.Config{
 		Name:        "GetWeather",
 		Description: "Get the current weather for a location",
 	}, getWeather)
 
-	timeTool := functool.MustNew(&functool.Func{
+	timeTool := functool.MustNew(functool.Config{
 		Name:        "GetTime",
 		Description: "Get the current time for a location",
 	}, getTime)

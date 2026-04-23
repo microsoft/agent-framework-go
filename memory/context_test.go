@@ -190,11 +190,11 @@ func TestContextProvider_Invoked_PropagatesStoreError(t *testing.T) {
 
 func TestContextProvider_InvokingContext_ReturnsProvidedFields(t *testing.T) {
 	request := message.NewText("request")
-	inputTool := functool.MustNew(&functool.Func{Name: "input_tool"}, func(_ tool.Context, _ struct{}) (struct{}, error) {
+	inputTool := functool.MustNew(functool.Config{Name: "input_tool"}, func(_ tool.Context, _ struct{}) (struct{}, error) {
 		return struct{}{}, nil
 	})
 	providedMsg := message.NewText("provided")
-	providedTool := functool.MustNew(&functool.Func{Name: "provided_tool"}, func(_ tool.Context, _ struct{}) (struct{}, error) {
+	providedTool := functool.MustNew(functool.Config{Name: "provided_tool"}, func(_ tool.Context, _ struct{}) (struct{}, error) {
 		return struct{}{}, nil
 	})
 

@@ -21,7 +21,7 @@ import (
 )
 
 func main() {
-	approveExpense := functool.MustNew(&functool.Func{
+	approveExpense := functool.MustNew(functool.Config{
 		Name:        "approve_expense_report",
 		Description: "Approve the expense report.",
 	}, func(ctx tool.Context, expenseReportID string) (string, error) {

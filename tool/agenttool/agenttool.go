@@ -1,35 +1,38 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package agent
+package agenttool
 
 import (
 	"encoding/json"
+
+	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/tool"
 )
 
-// AsFuncTool creates a function tool that invokes the given agent.
-func (a *Agent) AsFuncTool(options ...Option) tool.FuncTool {
+// Config represents the configuration for [New].
+type Config struct {
+	RunOptions []agent.Option
+}
+
+// New creates a new FuncTool that invokes the given agent with the provided configuration.
+func New(a *agent.Agent, config Config) tool.FuncTool {
 	return functool{
-		name:        a.Name(),
-		description: a.Description(),
-		opts:        options,
-		agent:       a,
+		opts:  config.RunOptions,
+		agent: a,
 	}
 }
 
 type functool struct {
-	name        string
-	description string
-	opts        []Option
-	agent       *Agent
+	opts  []agent.Option
+	agent *agent.Agent
 }
 
 func (t functool) Name() string {
-	return t.name
+	return t.agent.Name()
 }
 
 func (t functool) Description() string {
-	return t.description
+	return t.agent.Description()
 }
 
 func (t functool) Schema() any {

@@ -38,7 +38,7 @@ type restaurantSearchResponse struct {
 }
 
 func main() {
-	searchRestaurants := functool.MustNew(&functool.Func{
+	searchRestaurants := functool.MustNew(functool.Config{
 		Name:        "search_restaurants",
 		Description: "Search for restaurants in a location.",
 	}, func(ctx tool.Context, in restaurantSearchRequest) (restaurantSearchResponse, error) {

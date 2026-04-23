@@ -17,6 +17,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/tool"
+	"github.com/microsoft/agent-framework-go/tool/agenttool"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
 )
@@ -64,7 +65,7 @@ func main() {
 				},
 			},
 		)
-		tools = append(tools, remoteAgent.AsFuncTool())
+		tools = append(tools, agenttool.New(remoteAgent, agenttool.Config{}))
 	}
 
 	host := openaichatagent.New(

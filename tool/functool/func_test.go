@@ -22,12 +22,12 @@ func TestFuncTool_Basic(t *testing.T) {
 		return "output: " + input.Message, nil
 	}
 
-	funcDef := &functool.Func{
+	cfg := functool.Config{
 		Name:        "test_func",
 		Description: "Test function",
 	}
 
-	tl, err := functool.New(funcDef, handler)
+	tl, err := functool.New(cfg, handler)
 	if err != nil {
 		t.Fatalf("expected no error creating FuncTool, got: %v", err)
 	}
@@ -52,12 +52,12 @@ func TestFuncTool_MustNew(t *testing.T) {
 		return "result", nil
 	}
 
-	funcDef := &functool.Func{
+	cfg := functool.Config{
 		Name:        "must_func",
 		Description: "Must function",
 	}
 
-	tl := functool.MustNew(funcDef, handler)
+	tl := functool.MustNew(cfg, handler)
 	if tl == nil {
 		t.Fatal("expected tool, got nil")
 	}
@@ -69,14 +69,13 @@ func TestFuncTool_MustNew(t *testing.T) {
 }
 
 func TestFuncTool_CallMissingArg0(t *testing.T) {
-	tl := functool.MustNew(
-		&functool.Func{
-			Name: "test",
-		},
-		func(ctx tool.Context, input string) (string, error) {
-			return "result", nil
-		},
-	)
+	cfg := functool.Config{
+		Name: "test",
+	}
+
+	tl := functool.MustNew(cfg, func(ctx tool.Context, input string) (string, error) {
+		return "result", nil
+	})
 
 	// Call without required arg0
 	_, err := tl.Call(tool.Context{Context: t.Context()}, `{}`)
@@ -89,14 +88,12 @@ func TestFuncTool_CallStruct(t *testing.T) {
 	type In struct {
 		V string `json:"v"`
 	}
-	tl := functool.MustNew(
-		&functool.Func{
-			Name: "test",
-		},
-		func(ctx tool.Context, input In) (string, error) {
-			return input.V, nil
-		},
-	)
+	cfg := functool.Config{
+		Name: "test",
+	}
+	tl := functool.MustNew(cfg, func(ctx tool.Context, input In) (string, error) {
+		return input.V, nil
+	})
 
 	ret, err := tl.Call(tool.Context{Context: t.Context()}, `{"v":"hello"}`)
 	if err != nil {
@@ -108,16 +105,14 @@ func TestFuncTool_CallStruct(t *testing.T) {
 }
 
 func TestFuncTool_CallString(t *testing.T) {
-	tl := functool.MustNew(
-		&functool.Func{
-			Name: "test",
-		},
-		func(ctx tool.Context, input string) (string, error) {
-			return input, nil
-		},
-	)
+	cfg := functool.Config{
+		Name: "test",
+	}
+	tl := functool.MustNew(cfg, func(ctx tool.Context, input string) (string, error) {
+		return input, nil
+	})
 
-	ret, err := tl.Call(tool.Context{Context: t.Context()}, `{"arg0":"hello"}`)
+	ret, err := tl.Call(tool.Context{Context: t.Context()}, `{"Arg0":"hello"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,14 +122,12 @@ func TestFuncTool_CallString(t *testing.T) {
 }
 
 func TestFuncTool_CallNoArg(t *testing.T) {
-	tl := functool.MustNew(
-		&functool.Func{
-			Name: "test",
-		},
-		func(ctx tool.Context, _ struct{}) (string, error) {
-			return "hello", nil
-		},
-	)
+	cfg := functool.Config{
+		Name: "test",
+	}
+	tl := functool.MustNew(cfg, func(ctx tool.Context, _ struct{}) (string, error) {
+		return "hello", nil
+	})
 
 	ret, err := tl.Call(tool.Context{Context: t.Context()}, "")
 	if err != nil {
@@ -146,14 +139,12 @@ func TestFuncTool_CallNoArg(t *testing.T) {
 }
 
 func TestFuncTool_CallNoArgRejectsExtraFields(t *testing.T) {
-	tl := functool.MustNew(
-		&functool.Func{
-			Name: "test",
-		},
-		func(ctx tool.Context, _ struct{}) (string, error) {
-			return "hello", nil
-		},
-	)
+	cfg := functool.Config{
+		Name: "test",
+	}
+	tl := functool.MustNew(cfg, func(ctx tool.Context, _ struct{}) (string, error) {
+		return "hello", nil
+	})
 
 	_, err := tl.Call(tool.Context{Context: t.Context()}, `{"unexpected":"value"}`)
 	if err == nil {
@@ -162,14 +153,12 @@ func TestFuncTool_CallNoArgRejectsExtraFields(t *testing.T) {
 }
 
 func TestFuncTool_NoArgSchema(t *testing.T) {
-	tl := functool.MustNew(
-		&functool.Func{
-			Name: "test",
-		},
-		func(ctx tool.Context, _ struct{}) (string, error) {
-			return "hello", nil
-		},
-	)
+	cfg := functool.Config{
+		Name: "test",
+	}
+	tl := functool.MustNew(cfg, func(ctx tool.Context, _ struct{}) (string, error) {
+		return "hello", nil
+	})
 
 	schema, ok := tl.Schema().(*jsonschema.Schema)
 	if !ok {
@@ -184,14 +173,12 @@ func TestFuncTool_NoArgSchema(t *testing.T) {
 }
 
 func TestFuncTool_CallNoRet(t *testing.T) {
-	tl := functool.MustNew(
-		&functool.Func{
-			Name: "test",
-		},
-		func(ctx tool.Context, _ struct{}) (struct{}, error) {
-			return struct{}{}, nil
-		},
-	)
+	cfg := functool.Config{
+		Name: "test",
+	}
+	tl := functool.MustNew(cfg, func(ctx tool.Context, _ struct{}) (struct{}, error) {
+		return struct{}{}, nil
+	})
 
 	ret, err := tl.Call(tool.Context{Context: t.Context()}, "")
 	if err != nil {
@@ -203,14 +190,12 @@ func TestFuncTool_CallNoRet(t *testing.T) {
 }
 
 func TestFuncTool_CallAnyOutput(t *testing.T) {
-	tl := functool.MustNew(
-		&functool.Func{
-			Name: "test",
-		},
-		func(ctx tool.Context, _ struct{}) (any, error) {
-			return map[string]any{"status": "ok", "value": 42}, nil
-		},
-	)
+	cfg := functool.Config{
+		Name: "test",
+	}
+	tl := functool.MustNew(cfg, func(ctx tool.Context, _ struct{}) (any, error) {
+		return map[string]any{"status": "ok", "value": 42}, nil
+	})
 
 	ret, err := tl.Call(tool.Context{Context: t.Context()}, "")
 	if err != nil {
@@ -226,14 +211,12 @@ func TestFuncTool_CallAnyOutput(t *testing.T) {
 }
 
 func TestFuncTool_ReturnSchemaAnyOutput(t *testing.T) {
-	tl := functool.MustNew(
-		&functool.Func{
-			Name: "test",
-		},
-		func(ctx tool.Context, _ struct{}) (any, error) {
-			return "ok", nil
-		},
-	)
+	cfg := functool.Config{
+		Name: "test",
+	}
+	tl := functool.MustNew(cfg, func(ctx tool.Context, _ struct{}) (any, error) {
+		return "ok", nil
+	})
 
 	schema, ok := tl.ReturnSchema().(*jsonschema.Schema)
 	if !ok {
@@ -254,12 +237,10 @@ func TestFuncTool_CallError(t *testing.T) {
 		return "", expectedErr
 	}
 
-	tl := functool.MustNew(
-		&functool.Func{
-			Name: "error_func",
-		},
-		handler,
-	)
+	cfg := functool.Config{
+		Name: "error_func",
+	}
+	tl := functool.MustNew(cfg, handler)
 
 	_, err := tl.Call(tool.Context{Context: tool.Context{Context: t.Context()}}, `{"value":"test"}`)
 	if err != expectedErr {
@@ -269,7 +250,7 @@ func TestFuncTool_CallError(t *testing.T) {
 
 func TestFuncTool_NewRejectsAnyInput(t *testing.T) {
 	_, err := functool.New(
-		&functool.Func{Name: "test"},
+		functool.Config{Name: "test"},
 		func(ctx tool.Context, input any) (string, error) {
 			return "ok", nil
 		},

@@ -22,7 +22,7 @@ import (
 func main() {
 	serverURL := cmp.Or(os.Getenv("AGUI_SERVER_URL"), "http://localhost:8888")
 
-	frontendTool := functool.MustNew(&functool.Func{
+	frontendTool := functool.MustNew(functool.Config{
 		Name:        "get_user_location",
 		Description: "Get the user's current location from GPS.",
 	}, func(ctx tool.Context, in struct{}) (string, error) {

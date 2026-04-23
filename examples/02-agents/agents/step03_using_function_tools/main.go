@@ -28,7 +28,7 @@ var logger = demo.NewLogger(
 	"Model", deployment,
 )
 
-var weatherTool = functool.MustNew(&functool.Func{
+var weatherTool = functool.MustNew(functool.Config{
 	Name:        "weather",
 	Description: "Get the current weather for a given location",
 }, func(_ tool.Context, location string) (string, error) {

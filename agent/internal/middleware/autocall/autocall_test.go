@@ -27,15 +27,15 @@ func TestFunctionInvoking_SupportsSingleFunctionCallPerRequest(t *testing.T) {
 	}
 
 	tools := []tool.Tool{
-		functool.MustNew(&functool.Func{Name: "Func1", Description: "Function 1"},
+		functool.MustNew(functool.Config{Name: "Func1", Description: "Function 1"},
 			func(ctx tool.Context, args EmptyArgs) (string, error) {
 				return "Result 1", nil
 			}),
-		functool.MustNew(&functool.Func{Name: "Func2", Description: "Function 2"},
+		functool.MustNew(functool.Config{Name: "Func2", Description: "Function 2"},
 			func(ctx tool.Context, args Func2Args) (string, error) {
 				return "Result 2: 42", nil
 			}),
-		functool.MustNew(&functool.Func{Name: "VoidReturn", Description: "Void return"},
+		functool.MustNew(functool.Config{Name: "VoidReturn", Description: "Void return"},
 			func(ctx tool.Context, args Func2Args) (string, error) {
 				return "Success: Function completed.", nil
 			}),
@@ -88,11 +88,11 @@ func TestFunctionInvoking_SupportsMultipleFunctionCallsPerRequest(t *testing.T) 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tools := []tool.Tool{
-				functool.MustNew(&functool.Func{Name: "Func1"},
+				functool.MustNew(functool.Config{Name: "Func1"},
 					func(ctx tool.Context, args Func1Args) (string, error) {
 						return "Result 1", nil
 					}),
-				functool.MustNew(&functool.Func{Name: "Func2"},
+				functool.MustNew(functool.Config{Name: "Func2"},
 					func(ctx tool.Context, args Func2Args) (string, error) {
 						switch args.I {
 						case 34:
@@ -217,7 +217,7 @@ func TestFunctionInvoking_FunctionReturningFunctionResultContentWithMatchingCall
 	var returnedFrc *message.FunctionResultContent
 
 	tools := []tool.Tool{
-		functool.MustNew(&functool.Func{Name: "Func1"},
+		functool.MustNew(functool.Config{Name: "Func1"},
 			func(ctx tool.Context, args struct{}) (any, error) {
 				returnedFrc = &message.FunctionResultContent{
 					CallID: ctx.CallID,
@@ -300,7 +300,7 @@ func TestFunctionInvoking_FunctionReturningFunctionResultContentWithMismatchedCa
 	}
 
 	tools := []tool.Tool{
-		functool.MustNew(&functool.Func{Name: "Func1"},
+		functool.MustNew(functool.Config{Name: "Func1"},
 			func(ctx tool.Context, args struct{}) (any, error) {
 				return returnedFrc, nil
 			}),
@@ -394,7 +394,7 @@ func TestFunctionInvoking_SupportsToolsProvidedByAdditionalTools(t *testing.T) {
 			var tools []tool.Tool
 			if tt.provideOptions {
 				tools = []tool.Tool{
-					functool.MustNew(&functool.Func{Name: "OptionsFunc"},
+					functool.MustNew(functool.Config{Name: "OptionsFunc"},
 						func(ctx tool.Context, args struct{}) (string, error) {
 							t.Error("OptionsFunc should not be invoked")
 							return "Shouldn't be invoked", nil
@@ -404,15 +404,15 @@ func TestFunctionInvoking_SupportsToolsProvidedByAdditionalTools(t *testing.T) {
 
 			autocallOptions := autocall.Config{
 				AdditionalTools: []tool.Tool{
-					functool.MustNew(&functool.Func{Name: "Func1"},
+					functool.MustNew(functool.Config{Name: "Func1"},
 						func(ctx tool.Context, args Func1Args) (string, error) {
 							return "Result 1", nil
 						}),
-					functool.MustNew(&functool.Func{Name: "Func2"},
+					functool.MustNew(functool.Config{Name: "Func2"},
 						func(ctx tool.Context, args Func2Args) (string, error) {
 							return fmt.Sprintf("Result 2: %d", args.I), nil
 						}),
-					functool.MustNew(&functool.Func{Name: "VoidReturn"},
+					functool.MustNew(functool.Config{Name: "VoidReturn"},
 						func(ctx tool.Context, args Func2Args) (string, error) {
 							return "Success: Function completed.", nil
 						}),
@@ -456,7 +456,7 @@ func TestFunctionInvoking_PrefersToolsProvidedByOptions(t *testing.T) {
 	}
 
 	tools := []tool.Tool{
-		functool.MustNew(&functool.Func{Name: "Func1"},
+		functool.MustNew(functool.Config{Name: "Func1"},
 			func(ctx tool.Context, args struct{}) (string, error) {
 				return "Result 1", nil
 			}),
@@ -464,16 +464,16 @@ func TestFunctionInvoking_PrefersToolsProvidedByOptions(t *testing.T) {
 
 	autocallOptions := autocall.Config{
 		AdditionalTools: []tool.Tool{
-			functool.MustNew(&functool.Func{Name: "Func1"},
+			functool.MustNew(functool.Config{Name: "Func1"},
 				func(ctx tool.Context, args struct{}) (string, error) {
 					t.Error("AdditionalTools Func1 should not be invoked")
 					return "Should never be invoked", nil
 				}),
-			functool.MustNew(&functool.Func{Name: "Func2"},
+			functool.MustNew(functool.Config{Name: "Func2"},
 				func(ctx tool.Context, args Func2Args) (string, error) {
 					return fmt.Sprintf("Result 2: %d", args.I), nil
 				}),
-			functool.MustNew(&functool.Func{Name: "VoidReturn"},
+			functool.MustNew(functool.Config{Name: "VoidReturn"},
 				func(ctx tool.Context, args Func2Args) (string, error) {
 					return "Success: Function completed.", nil
 				}),
@@ -515,7 +515,7 @@ func TestFunctionInvoking_ParallelFunctionCallsMayBeInvokedConcurrently(t *testi
 	done := make(chan bool)
 
 	tools := []tool.Tool{
-		functool.MustNew(&functool.Func{Name: "Func"},
+		functool.MustNew(functool.Config{Name: "Func"},
 			func(ctx tool.Context, args struct{ Arg string }) (string, error) {
 				if remaining.Add(-1) == 0 {
 					close(done)
@@ -552,7 +552,7 @@ func TestFunctionInvoking_ConcurrentInvocationOfParallelCallsDisabledByDefault(t
 	var activeCount atomic.Int32
 
 	tools := []tool.Tool{
-		functool.MustNew(&functool.Func{Name: "Func"},
+		functool.MustNew(functool.Config{Name: "Func"},
 			func(ctx tool.Context, args struct{ Arg string }) (string, error) {
 				activeCount.Add(1)
 				time.Sleep(100 * time.Millisecond)
@@ -588,7 +588,7 @@ func TestFunctionInvoking_ContinuesWithSuccessfulCallsUntilMaximumIterations(t *
 	actualCallCount := 0
 
 	tools := []tool.Tool{
-		functool.MustNew(&functool.Func{Name: "VoidReturn"},
+		functool.MustNew(functool.Config{Name: "VoidReturn"},
 			func(ctx tool.Context, args struct{}) (string, error) {
 				actualCallCount++
 				return "Success: Function completed.", nil
@@ -646,7 +646,7 @@ func TestFunctionInvoking_ContinuesWithFailingCallsUntilMaximumConsecutiveErrors
 			callIndex := 0
 
 			tools := []tool.Tool{
-				functool.MustNew(&functool.Func{Name: "Func"},
+				functool.MustNew(functool.Config{Name: "Func"},
 					func(ctx tool.Context, args struct {
 						ShouldThrow bool `json:"shouldThrow"`
 						CallIndex   int  `json:"callIndex"`
@@ -783,7 +783,7 @@ func TestFunctionInvoking_CanFailOnFirstException(t *testing.T) {
 			callIndex := 0
 
 			tools := []tool.Tool{
-				functool.MustNew(&functool.Func{Name: "Func"},
+				functool.MustNew(functool.Config{Name: "Func"},
 					func(ctx tool.Context, args struct{}) (string, error) {
 						return "", errors.New("It failed")
 					}),
@@ -849,15 +849,15 @@ func TestFunctionInvoking_KeepsFunctionCallingContent(t *testing.T) {
 	}
 
 	tools := []tool.Tool{
-		functool.MustNew(&functool.Func{Name: "Func1"},
+		functool.MustNew(functool.Config{Name: "Func1"},
 			func(ctx tool.Context, args struct{}) (string, error) {
 				return "Result 1", nil
 			}),
-		functool.MustNew(&functool.Func{Name: "Func2"},
+		functool.MustNew(functool.Config{Name: "Func2"},
 			func(ctx tool.Context, args Func2Args) (string, error) {
 				return fmt.Sprintf("Result 2: %d", args.I), nil
 			}),
-		functool.MustNew(&functool.Func{Name: "VoidReturn"},
+		functool.MustNew(functool.Config{Name: "VoidReturn"},
 			func(ctx tool.Context, args Func2Args) (string, error) {
 				return "Success: Function completed.", nil
 			}),
@@ -928,7 +928,7 @@ func TestFunctionInvoking_TerminateOnUnknownCalls(t *testing.T) {
 			}
 
 			tools := []tool.Tool{
-				functool.MustNew(&functool.Func{Name: "KnownFunc"},
+				functool.MustNew(functool.Config{Name: "KnownFunc"},
 					func(ctx tool.Context, args Func2Args) (string, error) {
 						return fmt.Sprintf("Known: %d", args.I), nil
 					}),
@@ -979,7 +979,7 @@ func TestFunctionInvoking_ExceptionDetailsOnlyReportedWhenRequested(t *testing.T
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tools := []tool.Tool{
-				functool.MustNew(&functool.Func{Name: "Func1"},
+				functool.MustNew(functool.Config{Name: "Func1"},
 					func(ctx tool.Context, args struct{}) (string, error) {
 						return "", errors.New("Oh no!")
 					}),
@@ -1011,7 +1011,7 @@ func TestFunctionInvoking_ExceptionDetailsOnlyReportedWhenRequested(t *testing.T
 // TestFunctionInvoking_AllResponseMessagesReturned tests that all response messages are returned
 func TestFunctionInvoking_AllResponseMessagesReturned(t *testing.T) {
 	tools := []tool.Tool{
-		functool.MustNew(&functool.Func{Name: "Func1"},
+		functool.MustNew(functool.Config{Name: "Func1"},
 			func(ctx tool.Context, args struct{}) (string, error) {
 				return "doesn't matter", nil
 			}),
@@ -1089,7 +1089,7 @@ func TestFunctionInvoking_AllResponseMessagesReturned(t *testing.T) {
 // preceded by an assistant message with matching tool_calls.
 func TestFunctionInvoking_NextIterationIncludesAssistantFunctionCallMessage(t *testing.T) {
 	tools := []tool.Tool{
-		functool.MustNew(&functool.Func{Name: "Func1"},
+		functool.MustNew(functool.Config{Name: "Func1"},
 			func(ctx tool.Context, args struct{}) (string, error) {
 				return "Result 1", nil
 			}),

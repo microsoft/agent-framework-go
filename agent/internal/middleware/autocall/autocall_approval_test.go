@@ -790,19 +790,21 @@ func TestFunctionInvoking_ApprovalRequestWithoutApprovalResponseThrows(t *testin
 }
 
 // Helper functions to create test tools
-func createFunc1() *functool.Tool {
-	return functool.MustNew(&functool.Func{Name: "Func1"},
-		func(ctx tool.Context, args struct{}) (string, error) {
-			return "Result 1", nil
-		})
+func createFunc1() tool.FuncTool {
+	return functool.MustNew(functool.Config{
+		Name: "Func1",
+	}, func(ctx tool.Context, args struct{}) (string, error) {
+		return "Result 1", nil
+	})
 }
 
-func createFunc2() *functool.Tool {
+func createFunc2() tool.FuncTool {
 	type Func2Args struct {
 		I int `json:"i"`
 	}
-	return functool.MustNew(&functool.Func{Name: "Func2"},
-		func(ctx tool.Context, args Func2Args) (string, error) {
-			return fmt.Sprintf("Result 2: %d", args.I), nil
-		})
+	return functool.MustNew(functool.Config{
+		Name: "Func2",
+	}, func(ctx tool.Context, args Func2Args) (string, error) {
+		return fmt.Sprintf("Result 2: %d", args.I), nil
+	})
 }

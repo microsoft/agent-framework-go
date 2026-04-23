@@ -44,7 +44,7 @@ func (f *Format) Schema() any {
 	return f.schema
 }
 
-func (f *Format) ResolvedSchema() (*jsonschema.Resolved, error) {
+func (f *Format) resolvedSchema() (*jsonschema.Resolved, error) {
 	f.resolvedOnce.Do(func() {
 		f.resolved, f.resolvedErr = f.schema.Resolve(&jsonschema.ResolveOptions{ValidateDefaults: true})
 	})

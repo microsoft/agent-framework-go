@@ -13,6 +13,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
+	"github.com/microsoft/agent-framework-go/tool/agenttool"
 	"github.com/microsoft/agent-framework-go/tool/mcptool"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/openai/openai-go/v3"
@@ -55,7 +56,7 @@ func main() {
 	}, nil)
 
 	// Register the agent as an MCP tool.
-	mcptool.AddTool(srv, agent.AsFuncTool())
+	mcptool.AddTool(srv, agenttool.New(agent, agenttool.Config{}))
 
 	// Run the MCP server with StdIO transport.
 	if err := srv.Run(context.Background(), &mcp.StdioTransport{}); err != nil {

@@ -11,14 +11,19 @@ import (
 
 // Unmarshal unmarshals data into v according to the provided format,
 // validating against the format's schema.
-func Unmarshal(format *Format, data []byte, v any) error {
-	resolved, err := format.ResolvedSchema()
+func (f *Format) Unmarshal(data []byte, v any) error {
+	resolved, err := f.resolvedSchema()
 	if err != nil {
 		return err
 	}
+	if len(data) == 0 {
+		// Unmarshaling to "null" is the wrong behavior,
+		// better to treat empty input as an empty object.
+		data = []byte("{}")
+	}
 	data, err = applySchema(data, resolved)
 	if err != nil {
-		return fmt.Errorf("validating: %w", err)
+		return err
 	}
 	if err := json.Unmarshal(data, v); err != nil {
 		return fmt.Errorf("unmarshaling: %w", err)
@@ -28,54 +33,74 @@ func Unmarshal(format *Format, data []byte, v any) error {
 
 // Marshal marshals v into JSON according to the provided format,
 // validating against the format's schema.
-func Marshal(format *Format, v any) ([]byte, error) {
-	resolved, err := format.ResolvedSchema()
+func (f *Format) Marshal(v any) ([]byte, error) {
+	resolved, err := f.resolvedSchema()
 	if err != nil {
 		return nil, err
 	}
-	outbytes, err := json.Marshal(v)
+	data, err := json.Marshal(v)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling: %w", err)
 	}
-	// Validate the output JSON, and apply defaults.
-	//
-	// We validate against the JSON, rather than the output value, as
-	// some types may have custom JSON marshalling.
-	outJSON, err := applySchema(json.RawMessage(outbytes), resolved)
-	if err != nil {
-		return nil, fmt.Errorf("validating: %w", err)
-	}
-	return outJSON, nil
+	return applySchema(json.RawMessage(data), resolved)
 }
 
-// applySchema validates whether data is valid JSON according to the provided
-// schema, after applying schema defaults.
+// Normalize applies schema defaults to v and validates it against the format's schema.
 //
-// Returns the JSON value augmented with defaults.
+// v must be a non-nil pointer to the value being normalized.
+func (f *Format) Normalize(v any) error {
+	if v == nil {
+		return fmt.Errorf("normalizing: nil target")
+	}
+
+	resolved, err := f.resolvedSchema()
+	if err != nil {
+		return err
+	}
+	if err := resolved.ApplyDefaults(v); err != nil {
+		return fmt.Errorf("applying schema defaults: %w", err)
+	}
+	if err := validate(v, resolved); err != nil {
+		return fmt.Errorf("normalizing: %w", err)
+	}
+	return nil
+}
+
 func applySchema(data json.RawMessage, resolved *jsonschema.Resolved) (json.RawMessage, error) {
 	var v any
-
-	// For primitive types (non-object, non-array), unmarshal directly into the appropriate type
 	if len(data) > 0 {
 		if err := json.Unmarshal(data, &v); err != nil {
 			return nil, fmt.Errorf("unmarshaling arguments: %w", err)
 		}
 	}
-
-	// ApplyDefaults and Validate work on the unmarshaled value
 	if err := resolved.ApplyDefaults(&v); err != nil {
 		return nil, fmt.Errorf("applying schema defaults: %w", err)
 	}
-
-	if err := resolved.Validate(&v); err != nil {
+	if err := validate(v, resolved); err != nil {
 		return nil, err
 	}
-
-	// We must re-marshal with the default values applied.
-	var err error
-	data, err = json.Marshal(v)
+	data, err := json.Marshal(v)
 	if err != nil {
 		return nil, fmt.Errorf("marshalling with defaults: %w", err)
 	}
 	return data, nil
+}
+
+func validate(v any, resolved *jsonschema.Resolved) error {
+	// Validating against a Go object doesn't work well, better
+	// to marshal back to JSON and validate against that, which also has
+	// the benefit of supporting custom JSON marshalling.
+	// See https://github.com/google/jsonschema-go/issues/23.
+	data, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Errorf("marshaling for validation: %w", err)
+	}
+	var validatedValue any
+	if err := json.Unmarshal(data, &validatedValue); err != nil {
+		return fmt.Errorf("unmarshaling for validation: %w", err)
+	}
+	if err := resolved.Validate(validatedValue); err != nil {
+		return fmt.Errorf("validation error: %w", err)
+	}
+	return nil
 }

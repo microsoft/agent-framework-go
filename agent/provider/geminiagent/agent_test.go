@@ -295,7 +295,7 @@ func TestSystemInstruction(t *testing.T) {
 // request and that a functionCall part in the response is translated into a
 // FunctionCallContent.
 func TestToolCall_NonStreaming(t *testing.T) {
-	weatherTool := functool.MustNew(&functool.Func{
+	weatherTool := functool.MustNew(functool.Config{
 		Name:        "get_weather",
 		Description: "Get the weather for a city.",
 	}, func(_ tool.Context, args struct{ City string }) (string, error) {
@@ -932,7 +932,7 @@ func TestStreamingWithFunctionCall(t *testing.T) {
 	respBody, _ := json.Marshal(funcCallResp)
 	streamResp := "data:" + string(respBody) + "\n\n"
 
-	weatherTool := functool.MustNew(&functool.Func{
+	weatherTool := functool.MustNew(functool.Config{
 		Name:        "get_weather",
 		Description: "Gets weather",
 	}, func(_ tool.Context, args struct{ City string }) (string, error) {
@@ -1012,7 +1012,7 @@ func TestMultiTurnWithFunctionCalls(t *testing.T) {
 		}},
 	}
 
-	stockTool := functool.MustNew(&functool.Func{
+	stockTool := functool.MustNew(functool.Config{
 		Name:        "get_stock_price",
 		Description: "Gets current stock price",
 	}, func(_ tool.Context, args struct{ Symbol string }) (string, error) {
@@ -1092,7 +1092,7 @@ func TestParallelFunctionCalls(t *testing.T) {
 		}},
 	}
 
-	weatherTool := functool.MustNew(&functool.Func{
+	weatherTool := functool.MustNew(functool.Config{
 		Name:        "get_weather",
 		Description: "Gets weather for a city",
 	}, func(_ tool.Context, args struct{ City string }) (string, error) {
