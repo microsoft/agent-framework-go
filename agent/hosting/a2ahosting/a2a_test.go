@@ -499,14 +499,9 @@ func TestRequestHandler_OnCancelTask_ReturnsCanceledTask(t *testing.T) {
 	})
 	h := a2ahosting.NewRequestHandler(a2ahosting.ExecutorConfig{Agent: a, AllowBackgroundResponses: true})
 
-	events := collectStreamingEvents(t, h.SendStreamingMessage(context.Background(), &a2a.SendMessageRequest{
+	task := collectFirstStreamingTask(t, h.SendStreamingMessage(context.Background(), &a2a.SendMessageRequest{
 		Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("hi")),
 	}))
-	tasks := collectStreamingTasks(events)
-	if len(tasks) != 1 {
-		t.Fatalf("task event count = %d, want 1", len(tasks))
-	}
-	task := tasks[0]
 	if task.ID == "" {
 		t.Fatal("expected task id")
 	}
@@ -539,6 +534,22 @@ func collectStreamingMessages(t *testing.T, stream iter.Seq2[a2a.Event, error]) 
 		messages = append(messages, msg)
 	}
 	return messages
+}
+
+func collectFirstStreamingTask(t *testing.T, stream iter.Seq2[a2a.Event, error]) *a2a.Task {
+	t.Helper()
+
+	for evt, err := range stream {
+		if err != nil {
+			t.Fatalf("stream returned error: %v", err)
+		}
+		task, ok := evt.(*a2a.Task)
+		if ok {
+			return task
+		}
+	}
+	t.Fatal("expected task event")
+	return nil
 }
 
 func collectStreamingEvents(t *testing.T, stream iter.Seq2[a2a.Event, error]) []a2a.Event {

@@ -128,6 +128,21 @@ func TestResponseUpdateToMessage_UsesResponseIDWhenMessageIDMissing(t *testing.T
 	}
 }
 
+func TestResponseUpdateToMessage_PrefersMessageIDOverResponseID(t *testing.T) {
+	got, err := responseUpdateToMessage(testTaskInfoProvider{}, &message.ResponseUpdate{
+		MessageID:  "msg-7",
+		ResponseID: "resp-7",
+		Role:       message.RoleAssistant,
+		Contents:   message.Contents{&message.TextContent{Text: "chunk"}},
+	})
+	if err != nil {
+		t.Fatalf("responseUpdateToMessage returned error: %v", err)
+	}
+	if got.ID != "msg-7" {
+		t.Fatalf("id = %q, want %q", got.ID, "msg-7")
+	}
+}
+
 func TestResponseUpdateToWorkingStatusEvent_WithContinuationToken_CopiesMetadata(t *testing.T) {
 	got, err := responseUpdateToWorkingStatusEvent(testTaskInfoProvider{}, &message.ResponseUpdate{
 		ResponseID:        "resp-1",

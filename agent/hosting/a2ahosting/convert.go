@@ -119,7 +119,7 @@ func responseUpdateToMessage(infoProvider a2a.TaskInfoProvider, update *message.
 	}
 	out.Parts = parts
 	out.Metadata = maps.Clone(update.AdditionalProperties)
-	out.ID = cmp.Or(update.ResponseID, update.MessageID, out.ID)
+	out.ID = cmp.Or(update.MessageID, update.ResponseID, out.ID)
 	return out, nil
 }
 
