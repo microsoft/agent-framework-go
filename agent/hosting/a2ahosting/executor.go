@@ -4,7 +4,7 @@ package a2ahosting
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"iter"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
@@ -40,11 +40,14 @@ func NewExecutor(cfg ExecutorConfig) a2asrv.AgentExecutor {
 func (e *executor) Execute(ctx context.Context, execCtx *a2asrv.ExecutorContext) iter.Seq2[a2a.Event, error] {
 	return func(yield func(a2a.Event, error) bool) {
 		if execCtx == nil || execCtx.Message == nil {
-			yield(nil, fmt.Errorf("request message is required"))
+			yield(nil, errors.New("request message is required"))
 			return
 		}
 		if len(execCtx.Message.ReferenceTasks) > 0 {
-			yield(nil, fmt.Errorf("referenceTaskIds are not supported"))
+			// An agent does not support resuming from arbitrary prior tasks.
+			// Return an error explicitly so the client gets a clear error rather than a response
+			// that silently ignores the referenced task context.
+			yield(nil, errors.New("referenceTaskIds is not supported, an agent cannot resume from arbitrary prior task context"))
 			return
 		}
 
