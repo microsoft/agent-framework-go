@@ -15,9 +15,14 @@ import (
 
 const continuationTokenMetadataKey = "__a2a__continuationToken"
 
+// ExecutorConfig defines the configuration for [NewExecutor].
 type ExecutorConfig struct {
-	Agent                    *agent.Agent
+	// The hosted agent that provides the execution logic.
+	Agent *agent.Agent
+
+	// Whether the executor should allow background responses from the agent.
 	AllowBackgroundResponses bool
+
 	// AllowBackgroundResponsesWhen is a callback that determines on a per-message basis whether background responses should be allowed.
 	// If both AllowBackgroundResponses and AllowBackgroundResponsesWhen are set, the callback takes precedence.
 	AllowBackgroundResponsesWhen func(context.Context, *a2asrv.ExecutorContext) (bool, error)
@@ -27,6 +32,7 @@ type executor struct {
 	cfg ExecutorConfig
 }
 
+// NewExecutor creates a new [a2asrv.AgentExecutor] using the provided configuration.
 func NewExecutor(cfg ExecutorConfig) a2asrv.AgentExecutor {
 	return &executor{cfg: cfg}
 }
@@ -42,89 +48,150 @@ func (e *executor) Execute(ctx context.Context, execCtx *a2asrv.ExecutorContext)
 			return
 		}
 
-		allowBackground, err := e.shouldRunInBackground(ctx, execCtx)
-		if err != nil {
-			yield(nil, err)
-			return
-		}
-
-		messagesIn, err := e.buildMessages(execCtx)
-		if err != nil {
-			yield(nil, err)
-			return
-		}
-
-		session, err := e.cfg.Agent.CreateSession(ctx, agent.WithServiceID(execCtx.ContextID))
-		if err != nil {
-			yield(nil, err)
-			return
-		}
-
-		runOptions := []agent.Option{
-			agent.WithSession(session),
-			agent.AllowBackgroundResponses(allowBackground),
-		}
-
-		resp, runErr := e.cfg.Agent.Run(ctx, messagesIn, runOptions...).Collect()
-		if runErr != nil {
-			if execCtx.StoredTask != nil {
-				statusMsg := a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart(runErr.Error()))
-				yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateFailed, statusMsg), nil)
-				return
-			}
-			yield(nil, runErr)
-			return
-		}
-
-		if execCtx.StoredTask == nil && resp.ContinuationToken == "" {
-			msg, err := responseToMessage(execCtx, resp)
-			if err != nil {
+		if execCtx.StoredTask != nil {
+			if err := e.executeTaskUpdate(ctx, execCtx, yield); err != nil {
 				yield(nil, err)
-				return
 			}
-			yield(msg, nil)
 			return
 		}
 
-		if execCtx.StoredTask == nil {
-			if !yield(a2a.NewSubmittedTask(execCtx, execCtx.Message), nil) {
-				return
+		if e.isStreamingRequest(ctx) {
+			if err := e.executeNewMessageStreaming(ctx, execCtx, yield); err != nil {
+				yield(nil, err)
 			}
-			if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateSubmitted, nil), nil) {
-				return
-			}
-		}
-
-		if resp.ContinuationToken != "" {
-			var progressMessage *a2a.Message
-			if len(resp.Messages) > 0 {
-				progressMessage, err = responseToMessage(execCtx, resp)
-				if err != nil {
-					yield(nil, err)
-					return
-				}
-			}
-
-			working := a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateWorking, progressMessage)
-			if working.Metadata == nil {
-				working.Metadata = map[string]any{}
-			}
-			working.Metadata[continuationTokenMetadataKey] = resp.ContinuationToken
-			yield(working, nil)
 			return
 		}
 
-		artifact, err := responseToArtifactEvent(execCtx, resp)
-		if err != nil {
+		if err := e.executeNewMessage(ctx, execCtx, yield); err != nil {
 			yield(nil, err)
-			return
 		}
-		if !yield(artifact, nil) {
-			return
+	}
+}
+
+func (e *executor) executeNewMessage(ctx context.Context, execCtx *a2asrv.ExecutorContext, yield func(a2a.Event, error) bool) error {
+	messagesIn, err := buildNewMessageInputs(execCtx.Message)
+	if err != nil {
+		return err
+	}
+
+	resp, err := e.runResponse(ctx, execCtx, messagesIn)
+	if err != nil {
+		return err
+	}
+
+	if resp.ContinuationToken == "" {
+		msg, err := responseToMessage(execCtx, resp)
+		if err != nil {
+			return err
+		}
+		yield(msg, nil)
+		return nil
+	}
+
+	if !yield(a2a.NewSubmittedTask(execCtx, execCtx.Message), nil) {
+		return nil
+	}
+	if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateSubmitted, nil), nil) {
+		return nil
+	}
+
+	return yieldWorkingStatusFromResponse(execCtx, resp, yield)
+}
+
+func (e *executor) executeTaskUpdate(ctx context.Context, execCtx *a2asrv.ExecutorContext, yield func(a2a.Event, error) bool) error {
+	messagesIn, err := buildTaskUpdateInputs(execCtx)
+	if err != nil {
+		return err
+	}
+
+	resp, runErr := e.runResponse(ctx, execCtx, messagesIn)
+	if runErr != nil {
+		statusMsg := a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart(runErr.Error()))
+		yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateFailed, statusMsg), nil)
+		return nil
+	}
+
+	if resp.ContinuationToken != "" {
+		return yieldWorkingStatusFromResponse(execCtx, resp, yield)
+	}
+
+	artifact, err := responseToArtifactEvent(execCtx, resp)
+	if err != nil {
+		return err
+	}
+	if !yield(artifact, nil) {
+		return nil
+	}
+
+	yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateCompleted, nil), nil)
+	return nil
+}
+
+func (e *executor) executeNewMessageStreaming(ctx context.Context, execCtx *a2asrv.ExecutorContext, yield func(a2a.Event, error) bool) error {
+	messagesIn, err := buildNewMessageInputs(execCtx.Message)
+	if err != nil {
+		return err
+	}
+
+	runOptions, err := e.newRunOptions(ctx, execCtx, true)
+	if err != nil {
+		return err
+	}
+
+	if !yield(a2a.NewSubmittedTask(execCtx, execCtx.Message), nil) {
+		return nil
+	}
+	if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateSubmitted, nil), nil) {
+		return nil
+	}
+
+	var artifactID a2a.ArtifactID
+	var yieldedWorking bool
+	for update, runErr := range e.cfg.Agent.Run(ctx, messagesIn, runOptions...) {
+		if runErr != nil {
+			statusMsg := a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart(runErr.Error()))
+			if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateFailed, statusMsg), nil) {
+				return nil
+			}
+			return nil
+		}
+		if update == nil {
+			continue
+		}
+		if update.ContinuationToken != "" {
+			working, err := responseUpdateToWorkingStatusEvent(execCtx, update)
+			if err != nil {
+				return err
+			}
+			if !yield(working, nil) {
+				return nil
+			}
+			return nil
 		}
 
-		yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateCompleted, nil), nil)
+		artifact, nextArtifactID, err := responseUpdateToArtifactEvent(execCtx, artifactID, update)
+		if err != nil {
+			return err
+		}
+		if artifact == nil {
+			continue
+		}
+		if !yieldedWorking {
+			if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateWorking, nil), nil) {
+				return nil
+			}
+			yieldedWorking = true
+		}
+		artifactID = nextArtifactID
+		if !yield(artifact, nil) {
+			return nil
+		}
 	}
+
+	if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateCompleted, nil), nil) {
+		return nil
+	}
+	return nil
 }
 
 func (e *executor) Cancel(_ context.Context, execCtx *a2asrv.ExecutorContext) iter.Seq2[a2a.Event, error] {
@@ -137,30 +204,90 @@ func (e *executor) Cancel(_ context.Context, execCtx *a2asrv.ExecutorContext) it
 	}
 }
 
-func (e *executor) buildMessages(execCtx *a2asrv.ExecutorContext) ([]*message.Message, error) {
-	messages := make([]*message.Message, 0, 1)
-
-	if execCtx != nil && execCtx.StoredTask != nil && len(execCtx.StoredTask.History) > 0 {
-		for _, m := range execCtx.StoredTask.History {
-			msg, err := toAgentMessage(m)
-			if err != nil {
-				return nil, err
-			}
-			if msg != nil {
-				messages = append(messages, msg)
-			}
-		}
-	}
-
-	incoming, err := toAgentMessage(execCtx.Message)
+func buildNewMessageInputs(in *a2a.Message) ([]*message.Message, error) {
+	incoming, err := toAgentMessage(in)
 	if err != nil {
 		return nil, err
 	}
-	if incoming != nil {
-		messages = append(messages, incoming)
+	if incoming == nil {
+		return nil, nil
+	}
+	return []*message.Message{incoming}, nil
+}
+
+func buildTaskUpdateInputs(execCtx *a2asrv.ExecutorContext) ([]*message.Message, error) {
+	messages := make([]*message.Message, 0, 1)
+	if len(execCtx.StoredTask.History) == 0 {
+		return messages, nil
+	}
+
+	for _, m := range execCtx.StoredTask.History {
+		if execCtx.Message != nil && m != nil && m.ID == execCtx.Message.ID {
+			continue
+		}
+		msg, err := toAgentMessage(m)
+		if err != nil {
+			return nil, err
+		}
+		if msg != nil {
+			messages = append(messages, msg)
+		}
 	}
 
 	return messages, nil
+}
+
+func yieldWorkingStatusFromResponse(execCtx *a2asrv.ExecutorContext, resp *message.Response, yield func(a2a.Event, error) bool) error {
+	var progressMessage *a2a.Message
+	var err error
+	if len(resp.Messages) > 0 {
+		progressMessage, err = responseToMessage(execCtx, resp)
+		if err != nil {
+			return err
+		}
+	}
+
+	working := a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateWorking, progressMessage)
+	if working.Metadata == nil {
+		working.Metadata = map[string]any{}
+	}
+	working.Metadata[continuationTokenMetadataKey] = resp.ContinuationToken
+	yield(working, nil)
+	return nil
+}
+
+func (e *executor) runResponse(ctx context.Context, execCtx *a2asrv.ExecutorContext, messagesIn []*message.Message) (*message.Response, error) {
+	runOptions, err := e.newRunOptions(ctx, execCtx, false)
+	if err != nil {
+		return nil, err
+	}
+	return e.cfg.Agent.Run(ctx, messagesIn, runOptions...).Collect()
+}
+
+func (e *executor) newRunOptions(ctx context.Context, execCtx *a2asrv.ExecutorContext, stream bool) ([]agent.Option, error) {
+	allowBackground, err := e.shouldRunInBackground(ctx, execCtx)
+	if err != nil {
+		return nil, err
+	}
+
+	session, err := e.cfg.Agent.CreateSession(ctx, agent.WithServiceID(execCtx.ContextID))
+	if err != nil {
+		return nil, err
+	}
+
+	runOptions := []agent.Option{
+		agent.WithSession(session),
+		agent.AllowBackgroundResponses(allowBackground),
+	}
+	if stream {
+		runOptions = append(runOptions, agent.Stream(true))
+	}
+	return runOptions, nil
+}
+
+func (e *executor) isStreamingRequest(ctx context.Context) bool {
+	callCtx, ok := a2asrv.CallContextFrom(ctx)
+	return ok && callCtx.Method() == "SendStreamingMessage"
 }
 
 func (e *executor) shouldRunInBackground(ctx context.Context, decisionContext *a2asrv.ExecutorContext) (bool, error) {

@@ -19,10 +19,17 @@ import (
 // mockA2ATransport is a stub that implements a2aclient.Transport for testing
 type mockA2ATransport struct {
 	capturedMessageSendParams  *a2a.SendMessageRequest
+	capturedSubscribeToTaskReq *a2a.SubscribeToTaskRequest
+	capturedGetTaskReq         *a2a.GetTaskRequest
 	responseToReturn           a2a.SendMessageResult
 	streamingResponseToReturn  a2a.Event
+	subscribeResponseToReturn  a2a.Event
+	subscribeErrToReturn       error
+	getTaskErrToReturn         error
 	sendMessageCalled          bool
 	sendStreamingMessageCalled bool
+	subscribeToTaskCalled      bool
+	getTaskCalled              bool
 }
 
 func (m *mockA2ATransport) SendMessage(ctx context.Context, _ a2aclient.ServiceParams, params *a2a.SendMessageRequest) (a2a.SendMessageResult, error) {
@@ -77,6 +84,11 @@ func (m *mockA2ATransport) SendStreamingMessage(ctx context.Context, _ a2aclient
 }
 
 func (m *mockA2ATransport) GetTask(ctx context.Context, _ a2aclient.ServiceParams, params *a2a.GetTaskRequest) (*a2a.Task, error) {
+	m.getTaskCalled = true
+	m.capturedGetTaskReq = params
+	if m.getTaskErrToReturn != nil {
+		return nil, m.getTaskErrToReturn
+	}
 	if m.responseToReturn != nil {
 		if task, ok := m.responseToReturn.(*a2a.Task); ok {
 			return task, nil
@@ -93,9 +105,45 @@ func (m *mockA2ATransport) CancelTask(ctx context.Context, _ a2aclient.ServicePa
 	return nil, errors.New("not implemented")
 }
 
-func (m *mockA2ATransport) SubscribeToTask(ctx context.Context, _ a2aclient.ServiceParams, _ *a2a.SubscribeToTaskRequest) iter.Seq2[a2a.Event, error] {
+func (m *mockA2ATransport) SubscribeToTask(ctx context.Context, _ a2aclient.ServiceParams, params *a2a.SubscribeToTaskRequest) iter.Seq2[a2a.Event, error] {
+	m.subscribeToTaskCalled = true
+	m.capturedSubscribeToTaskReq = params
 	return func(yield func(a2a.Event, error) bool) {
-		yield(nil, errors.New("not implemented"))
+		if m.subscribeErrToReturn != nil {
+			yield(nil, m.subscribeErrToReturn)
+			return
+		}
+
+		responseToYield := m.subscribeResponseToReturn
+		if responseToYield == nil {
+			responseToYield = &a2a.Message{
+				ID:        "default-subscribe-id",
+				Role:      a2a.MessageRoleAgent,
+				TaskID:    params.ID,
+				ContextID: "default-subscribe-context",
+			}
+		}
+
+		switch resp := responseToYield.(type) {
+		case *a2a.Message:
+			if resp.TaskID == "" {
+				resp.TaskID = params.ID
+			}
+		case *a2a.Task:
+			if resp.ID == "" {
+				resp.ID = params.ID
+			}
+		case *a2a.TaskStatusUpdateEvent:
+			if resp.TaskID == "" {
+				resp.TaskID = params.ID
+			}
+		case *a2a.TaskArtifactUpdateEvent:
+			if resp.TaskID == "" {
+				resp.TaskID = params.ID
+			}
+		}
+
+		yield(responseToYield, nil)
 	}
 }
 
@@ -778,6 +826,200 @@ func TestRunStreamingWithContinuationTokenAndMessages(t *testing.T) {
 
 	if !gotError {
 		t.Error("expected error when continuation token used with streaming, got nil")
+	}
+}
+
+func TestRunStreamingWithContinuationToken_UsesSubscribeToTask(t *testing.T) {
+	transport := &mockA2ATransport{
+		subscribeResponseToReturn: &a2a.Message{
+			ID:        "response-123",
+			Role:      a2a.MessageRoleAgent,
+			TaskID:    "task-456",
+			ContextID: "ctx-456",
+			Parts:     a2a.ContentParts{a2a.NewTextPart("Continuation response")},
+		},
+	}
+	a := newTestAgent(transport, agent.Config{})
+
+	var updates []*message.ResponseUpdate
+	for update, err := range a.Run(t.Context(), nil, agent.WithContinuationToken("task-456"), agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("error = %v, want nil", err)
+		}
+		updates = append(updates, update)
+	}
+
+	if len(updates) != 1 {
+		t.Fatalf("len(updates) = %d, want 1", len(updates))
+	}
+	if !transport.subscribeToTaskCalled {
+		t.Fatal("SubscribeToTask was not called")
+	}
+	if transport.sendStreamingMessageCalled {
+		t.Fatal("SendStreamingMessage was called, want SubscribeToTask only")
+	}
+	if got := updates[0].String(); got != "Continuation response" {
+		t.Errorf("update.String() = %q, want %q", got, "Continuation response")
+	}
+}
+
+func TestRunStreamingWithContinuationToken_PassesCorrectTaskID(t *testing.T) {
+	const expectedTaskID = "my-task-789"
+
+	transport := &mockA2ATransport{
+		subscribeResponseToReturn: &a2a.Message{
+			ID:        "response-123",
+			Role:      a2a.MessageRoleAgent,
+			TaskID:    a2a.TaskID(expectedTaskID),
+			ContextID: "ctx-456",
+			Parts:     a2a.ContentParts{a2a.NewTextPart("Continuation response")},
+		},
+	}
+	a := newTestAgent(transport, agent.Config{})
+
+	for _, err := range a.Run(t.Context(), nil, agent.WithContinuationToken(expectedTaskID), agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("error = %v, want nil", err)
+		}
+	}
+
+	if transport.capturedSubscribeToTaskReq == nil {
+		t.Fatal("capturedSubscribeToTaskReq is nil")
+	}
+	if got := string(transport.capturedSubscribeToTaskReq.ID); got != expectedTaskID {
+		t.Errorf("SubscribeToTaskRequest.ID = %q, want %q", got, expectedTaskID)
+	}
+}
+
+func TestRunStreamingWithContinuationTokenWhenSubscribeFailsWithUnsupportedOperationFallsBackToGetTask(t *testing.T) {
+	const taskID = "completed-task-123"
+	const contextID = "ctx-completed"
+
+	transport := &mockA2ATransport{
+		subscribeErrToReturn: a2a.ErrUnsupportedOperation,
+		responseToReturn: &a2a.Task{
+			ID:        a2a.TaskID(taskID),
+			ContextID: contextID,
+			Status: a2a.TaskStatus{
+				State: a2a.TaskStateCompleted,
+			},
+			Artifacts: []*a2a.Artifact{{
+				ID:    a2a.ArtifactID("art-1"),
+				Parts: a2a.ContentParts{a2a.NewTextPart("Final result")},
+			}},
+		},
+	}
+	a := newTestAgent(transport, agent.Config{})
+
+	var updates []*message.ResponseUpdate
+	for update, err := range a.Run(t.Context(), nil, agent.WithContinuationToken(taskID), agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("error = %v, want nil", err)
+		}
+		updates = append(updates, update)
+	}
+
+	if len(updates) != 1 {
+		t.Fatalf("len(updates) = %d, want 1", len(updates))
+	}
+	update := updates[0]
+	if update.ResponseID != taskID {
+		t.Errorf("update.ResponseID = %q, want %q", update.ResponseID, taskID)
+	}
+	if _, ok := update.RawRepresentation.(*a2a.Task); !ok {
+		t.Errorf("update.RawRepresentation type = %T, want *a2a.Task", update.RawRepresentation)
+	}
+	if !transport.subscribeToTaskCalled {
+		t.Fatal("SubscribeToTask was not called")
+	}
+	if !transport.getTaskCalled {
+		t.Fatal("GetTask was not called after SubscribeToTask fallback")
+	}
+}
+
+func TestRunStreamingWithContinuationTokenWhenSubscribeFailsWithUnsupportedOperationUpdatesSession(t *testing.T) {
+	const taskID = "completed-task-456"
+	const contextID = "ctx-completed-456"
+
+	transport := &mockA2ATransport{
+		subscribeErrToReturn: a2a.ErrUnsupportedOperation,
+		responseToReturn: &a2a.Task{
+			ID:        a2a.TaskID(taskID),
+			ContextID: contextID,
+			Status: a2a.TaskStatus{
+				State: a2a.TaskStateCompleted,
+			},
+		},
+	}
+	a := newTestAgent(transport, agent.Config{})
+
+	session, err := a.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, err := range a.Run(t.Context(), nil, agent.WithSession(session), agent.WithContinuationToken(taskID), agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("error = %v, want nil", err)
+		}
+	}
+
+	if got := session.ServiceID; got != contextID {
+		t.Errorf("session.ContextID = %q, want %q", got, contextID)
+	}
+	if got := latestTaskID(session); got != taskID {
+		t.Errorf("session.TaskID = %q, want %q", got, taskID)
+	}
+}
+
+func TestRunStreamingWithContinuationTokenWhenSubscribeFailsWithNonUnsupportedErrorPropagatesWithoutFallback(t *testing.T) {
+	transport := &mockA2ATransport{
+		subscribeErrToReturn: a2a.ErrTaskNotFound,
+	}
+	a := newTestAgent(transport, agent.Config{})
+
+	var gotErr error
+	for _, err := range a.Run(t.Context(), nil, agent.WithContinuationToken("error-task-123"), agent.Stream(true)) {
+		if err != nil {
+			gotErr = err
+			break
+		}
+	}
+
+	if !errors.Is(gotErr, a2a.ErrTaskNotFound) {
+		t.Fatalf("error = %v, want %v", gotErr, a2a.ErrTaskNotFound)
+	}
+	if !transport.subscribeToTaskCalled {
+		t.Fatal("SubscribeToTask was not called")
+	}
+	if transport.getTaskCalled {
+		t.Fatal("GetTask was called, want no fallback for non-unsupported errors")
+	}
+}
+
+func TestRunStreamingWithContinuationTokenWhenSubscribeAndGetTaskBothFailPropagatesError(t *testing.T) {
+	transport := &mockA2ATransport{
+		subscribeErrToReturn: a2a.ErrUnsupportedOperation,
+		getTaskErrToReturn:   a2a.ErrTaskNotFound,
+	}
+	a := newTestAgent(transport, agent.Config{})
+
+	var gotErr error
+	for _, err := range a.Run(t.Context(), nil, agent.WithContinuationToken("failed-task-789"), agent.Stream(true)) {
+		if err != nil {
+			gotErr = err
+			break
+		}
+	}
+
+	if !errors.Is(gotErr, a2a.ErrTaskNotFound) {
+		t.Fatalf("error = %v, want %v", gotErr, a2a.ErrTaskNotFound)
+	}
+	if !transport.subscribeToTaskCalled {
+		t.Fatal("SubscribeToTask was not called")
+	}
+	if !transport.getTaskCalled {
+		t.Fatal("GetTask was not called after SubscribeToTask fallback")
 	}
 }
 

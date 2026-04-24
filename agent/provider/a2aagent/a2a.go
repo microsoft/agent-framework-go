@@ -67,9 +67,12 @@ func (a *a2aagent) run(ctx context.Context, messages []*message.Message, options
 		session, _ := agent.GetOption(options, agent.WithSession)
 		stream, _ := agent.GetOption(options, agent.Stream)
 		if token, ok := agent.GetOption(options, agent.WithContinuationToken); ok && token != "" {
+			if len(messages) > 0 {
+				yield(nil, errors.New("messages are not allowed when continuing a background response using a continuation token"))
+				return
+			}
 			if stream {
-				// TODO: support resuming stream responses using continuation tokens.
-				yield(nil, errors.New("reconnecting to task streams using continuation tokens is not supported yet"))
+				sendMsg(session, a.subscribeToTaskWithFallback(ctx, a2a.TaskID(token)), yield)
 				return
 			}
 			task, err := a.client.GetTask(ctx, &a2a.GetTaskRequest{ID: a2a.TaskID(token)})
@@ -115,6 +118,36 @@ func (a *a2aagent) run(ctx context.Context, messages []*message.Message, options
 				}
 			}
 			sendMsg(session, seq, yield)
+		}
+	}
+}
+
+// subscribeToTaskWithFallback resumes a task stream for a continuation token.
+// It falls back to GetTask when SubscribeToTask returns a2a.ErrUnsupportedOperation,
+// which can happen when the task has already reached a terminal state.
+func (a *a2aagent) subscribeToTaskWithFallback(ctx context.Context, taskID a2a.TaskID) iter.Seq2[a2a.Event, error] {
+	return func(yield func(a2a.Event, error) bool) {
+		for event, err := range a.client.SubscribeToTask(ctx, &a2a.SubscribeToTaskRequest{ID: taskID}) {
+			if err == nil {
+				if !yield(event, nil) {
+					return
+				}
+				continue
+			}
+
+			if !errors.Is(err, a2a.ErrUnsupportedOperation) {
+				yield(nil, err)
+				return
+			}
+
+			task, getTaskErr := a.client.GetTask(ctx, &a2a.GetTaskRequest{ID: taskID})
+			if getTaskErr != nil {
+				yield(nil, getTaskErr)
+				return
+			}
+
+			yield(task, nil)
+			return
 		}
 	}
 }
