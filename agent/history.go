@@ -16,8 +16,11 @@ func NewInMemoryHistoryProvider(sourceID string) *ContextProvider {
 	return &ContextProvider{
 		SourceID:           sourceID,
 		StoreRequestFilter: messagefilter.ExternalOnly,
-		Provide: func(_ context.Context, _ []*message.Message, options ...Option) ([]*message.Message, []Option, error) {
+		Provide: func(_ context.Context, msgs []*message.Message, options ...Option) ([]*message.Message, []Option, error) {
 			session, _ := GetOption(options, WithSession)
+			if session == nil {
+				return msgs, options, nil
+			}
 			var state inmemoryState
 			if _, err := session.Get(sourceID, &state); err != nil {
 				return nil, nil, err
@@ -26,6 +29,9 @@ func NewInMemoryHistoryProvider(sourceID string) *ContextProvider {
 		},
 		Store: func(_ context.Context, requestMessages, responseMessages []*message.Message, options ...Option) error {
 			session, _ := GetOption(options, WithSession)
+			if session == nil {
+				return nil
+			}
 			var state inmemoryState
 			if _, err := session.Get(sourceID, &state); err != nil {
 				return err
