@@ -7,14 +7,16 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/microsoft/agent-framework-go/memory"
-	"github.com/microsoft/agent-framework-go/memory/skills"
-	"github.com/microsoft/agent-framework-go/memory/skills/fsskills"
+	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/skills"
+	"github.com/microsoft/agent-framework-go/agent/skills/fsskills"
+	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 )
 
@@ -86,7 +88,7 @@ func TestProvider_CustomPromptTemplate_MissingResourceInstructionsPlaceholderPan
 	_ = skills.NewContextProvider(skills.ContextProviderOptions{SkillsInstructionPrompt: "Has skills {skills} and runner {script_instructions} but no resource instructions", Skills: []*skills.Skill{skill}})
 }
 
-func providerFromFileSource(source *fsskills.Source, opts *skills.ContextProviderOptions) *memory.ContextProvider {
+func providerFromFileSource(source *fsskills.Source, opts *skills.ContextProviderOptions) *agent.ContextProvider {
 	if opts == nil {
 		return skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}})
 	}
@@ -254,7 +256,7 @@ func TestProvider_RecoversFromPanickingSourceAndResetsLoading(t *testing.T) {
 	source := &panicOnceSource{skill: skill}
 	provider := skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}})
 
-	_, err := provider.BeforeRun(memory.BeforeRunContext{Context: t.Context(), Session: memory.NewSession("")})
+	_, _, err := provider.BeforeRun(t.Context(), nil, agent.WithSession(agent.NewSession("")))
 	if err == nil {
 		t.Fatal("expected provider to return an error after source panic")
 	}
@@ -263,13 +265,13 @@ func TestProvider_RecoversFromPanickingSourceAndResetsLoading(t *testing.T) {
 	}
 
 	type result struct {
-		ctx memory.Context
-		err error
+		messageCount int
+		err          error
 	}
 	resultCh := make(chan result, 1)
 	go func() {
-		ctx, err := provider.BeforeRun(memory.BeforeRunContext{Context: t.Context(), Session: memory.NewSession("")})
-		resultCh <- result{ctx: ctx, err: err}
+		messages, _, err := provider.BeforeRun(t.Context(), nil, agent.WithSession(agent.NewSession("")))
+		resultCh <- result{messageCount: len(messages), err: err}
 	}()
 
 	select {
@@ -277,7 +279,7 @@ func TestProvider_RecoversFromPanickingSourceAndResetsLoading(t *testing.T) {
 		if outcome.err != nil {
 			t.Fatalf("expected second provider call to succeed, got %v", outcome.err)
 		}
-		if len(outcome.ctx.Messages) == 0 {
+		if outcome.messageCount == 0 {
 			t.Fatal("expected provider to recover and return messages on the second call")
 		}
 	case <-time.After(2 * time.Second):
@@ -473,14 +475,48 @@ func TestNewProvider_ProvidesInlineSkills(t *testing.T) {
 	}
 }
 
-func TestProvider_WithEmptySource_ReturnsEmptyProvider(t *testing.T) {
-	provider := skills.NewContextProvider(skills.ContextProviderOptions{})
-	ctx := context.Background()
-	out, err := provider.BeforeRun(memory.BeforeRunContext{Context: ctx, Session: memory.NewSession("")})
+func TestNewProvider_ProvideExtendsInput(t *testing.T) {
+	skill := mustInlineSkill(
+		skills.Frontmatter{Name: "inline-skill", Description: "Inline skill"},
+		"Inline instructions.",
+		nil,
+		nil,
+	)
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}})
+	session := agent.NewSession("")
+	input := message.NewText("input")
+
+	messages, options, err := provider.Provide(t.Context(), []*message.Message{input}, agent.WithSession(session))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(out.Messages) != 0 || len(out.Tools) != 0 {
+	if len(messages) != 2 {
+		t.Fatalf("expected input plus skills message, got %d", len(messages))
+	}
+	if messages[0] != input {
+		t.Fatal("expected original input message to be preserved first")
+	}
+	if messages[1].Role != message.RoleSystem {
+		t.Fatalf("expected skills message to be a system message, got %q", messages[1].Role)
+	}
+	if gotSession, ok := agent.GetOption(options, agent.WithSession); !ok || gotSession != session {
+		t.Fatal("expected original session option to be preserved")
+	}
+	tools := slices.Collect(agent.AllOptions(options, agent.WithTool))
+	if len(tools) != 1 || tools[0].Name() != "load_skill" {
+		t.Fatal("expected skills provider to append load_skill tool")
+	}
+}
+
+func TestProvider_WithEmptySource_ReturnsEmptyProvider(t *testing.T) {
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{})
+	ctx := context.Background()
+	messages, options, err := provider.BeforeRun(ctx, nil, agent.WithSession(agent.NewSession("")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools := slices.Collect(agent.AllOptions(options, agent.WithTool))
+	if len(messages) != 0 || len(tools) != 0 {
 		t.Fatal("expected empty provider context when no sources are configured")
 	}
 }
@@ -565,12 +601,13 @@ func TestProvider_SkillFilter_CanFilterOutAllSkills(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	out, err := provider.BeforeRun(memory.BeforeRunContext{Context: ctx, Session: memory.NewSession("")})
+	messages, options, err := provider.BeforeRun(ctx, nil, agent.WithSession(agent.NewSession("")))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(out.Messages) != 0 || len(out.Tools) != 0 {
-		t.Fatalf("expected empty provider context when filter removes all skills, got %+v", out)
+	tools := slices.Collect(agent.AllOptions(options, agent.WithTool))
+	if len(messages) != 0 || len(tools) != 0 {
+		t.Fatalf("expected empty provider context when filter removes all skills, got messages=%d tools=%d", len(messages), len(tools))
 	}
 }
 

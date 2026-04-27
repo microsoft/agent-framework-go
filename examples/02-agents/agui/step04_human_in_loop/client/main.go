@@ -15,7 +15,6 @@ import (
 	aguiSSEClient "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/client/sse"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/aguiagent"
-	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
@@ -55,7 +54,7 @@ func main() {
 	}
 }
 
-func runWithApprovals(ctx context.Context, a *agent.Agent, session *memory.Session, input *message.Message) error {
+func runWithApprovals(ctx context.Context, a *agent.Agent, session *agent.Session, input *message.Message) error {
 	current := input
 	for {
 		resp, err := a.RunMessage(ctx, current, agent.WithSession(session)).Collect()

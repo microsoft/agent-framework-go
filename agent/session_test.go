@@ -1,11 +1,13 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package memory
+package agent_test
 
 import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/microsoft/agent-framework-go/agent"
 )
 
 type person struct {
@@ -13,7 +15,7 @@ type person struct {
 }
 
 func TestSessionState_Get_NonexistentKey_ReturnsNotFound(t *testing.T) {
-	session := NewSession("")
+	session := agent.NewSession("")
 	var v string
 	ok, err := session.Get("nonexistent", &v)
 	if err != nil {
@@ -25,7 +27,7 @@ func TestSessionState_Get_NonexistentKey_ReturnsNotFound(t *testing.T) {
 }
 
 func TestSessionState_Set_And_Get_Roundtrips(t *testing.T) {
-	session := NewSession("")
+	session := agent.NewSession("")
 	session.Set("key1", "value1")
 
 	var v string
@@ -42,7 +44,7 @@ func TestSessionState_Set_And_Get_Roundtrips(t *testing.T) {
 }
 
 func TestSessionState_Set_OverwritesExistingValue(t *testing.T) {
-	session := NewSession("")
+	session := agent.NewSession("")
 	session.Set("key1", "original")
 	session.Set("key1", "updated")
 
@@ -60,7 +62,7 @@ func TestSessionState_Set_OverwritesExistingValue(t *testing.T) {
 }
 
 func TestSessionState_Delete_ExistingKey(t *testing.T) {
-	session := NewSession("")
+	session := agent.NewSession("")
 	session.Set("key1", "value1")
 	session.Delete("key1")
 
@@ -75,7 +77,7 @@ func TestSessionState_Delete_ExistingKey(t *testing.T) {
 }
 
 func TestSessionState_Set_DifferentValueTypes(t *testing.T) {
-	session := NewSession("")
+	session := agent.NewSession("")
 	session.Set("string", "hello")
 	session.Set("int", 42)
 	session.Set("bool", true)
@@ -95,7 +97,7 @@ func TestSessionState_Set_DifferentValueTypes(t *testing.T) {
 }
 
 func TestSessionState_Get_TypeMismatchReturnsError(t *testing.T) {
-	session := NewSession("")
+	session := agent.NewSession("")
 	session.Set("count", 42)
 
 	var s string
@@ -109,7 +111,7 @@ func TestSessionState_Get_TypeMismatchReturnsError(t *testing.T) {
 }
 
 func TestSessionState_Get_InvalidDestinationReturnsError(t *testing.T) {
-	session := NewSession("")
+	session := agent.NewSession("")
 	session.Set("count", 42)
 
 	var nonPtr int
@@ -123,7 +125,7 @@ func TestSessionState_Get_InvalidDestinationReturnsError(t *testing.T) {
 }
 
 func TestSession_MarshalJSON_EmptyState(t *testing.T) {
-	session := NewSession("")
+	session := agent.NewSession("")
 	data, err := json.Marshal(session)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -134,7 +136,7 @@ func TestSession_MarshalJSON_EmptyState(t *testing.T) {
 }
 
 func TestSession_UnmarshalJSON_WithStateValues(t *testing.T) {
-	var session Session
+	var session agent.Session
 	if err := json.Unmarshal([]byte(`{"State":{"key1":"value1","key2":42}}`), &session); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -150,7 +152,7 @@ func TestSession_UnmarshalJSON_WithStateValues(t *testing.T) {
 }
 
 func TestSessionState_Get_LazyDecodesAndCaches(t *testing.T) {
-	var session Session
+	var session agent.Session
 	if err := json.Unmarshal([]byte(`{"State":{"person":{"Name":"Ada"}}}`), &session); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -165,19 +167,26 @@ func TestSessionState_Get_LazyDecodesAndCaches(t *testing.T) {
 	}
 }
 
-func TestStateValue_TryReadDeserializedValue(t *testing.T) {
-	v := newStateValueFromJSON(json.RawMessage(`{"Name":"Ada"}`))
+func TestSessionState_Get_LazyDecodedValueTypeMismatchReturnsError(t *testing.T) {
+	var session agent.Session
+	if err := json.Unmarshal([]byte(`{"State":{"person":{"Name":"Ada"}}}`), &session); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
-	p, ok := tryReadDeserializedValue[person](v)
-	if !ok {
-		t.Fatal("expected successful decode")
+	var p person
+	if ok, err := session.Get("person", &p); err != nil || !ok {
+		t.Fatalf("expected successful decode, ok=%v err=%v", ok, err)
 	}
 	if p.Name != "Ada" {
 		t.Fatalf("expected Ada, got %q", p.Name)
 	}
 
-	_, ok = tryReadDeserializedValue[int](v)
-	if ok {
+	var n int
+	ok, err := session.Get("person", &n)
+	if !ok {
+		t.Fatal("expected key to exist")
+	}
+	if err == nil {
 		t.Fatal("expected decode failure for incompatible type")
 	}
 }

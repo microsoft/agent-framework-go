@@ -16,7 +16,6 @@ import (
 	aguiEvents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	aguiTypes "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 )
@@ -134,7 +133,7 @@ func decodeFrame(decoder *aguiEvents.EventDecoder, data []byte) (aguiEvents.Even
 	return decoder.DecodeEvent(envelope.Type, data)
 }
 
-func getOrCreateThreadID(session *memory.Session) string {
+func getOrCreateThreadID(session *agent.Session) string {
 	if session != nil && session.ServiceID != "" {
 		return session.ServiceID
 	}

@@ -7,12 +7,13 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
-	"github.com/microsoft/agent-framework-go/memory"
-	"github.com/microsoft/agent-framework-go/memory/skills"
-	"github.com/microsoft/agent-framework-go/memory/skills/fsskills"
+	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/skills"
+	"github.com/microsoft/agent-framework-go/agent/skills/fsskills"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 )
@@ -64,12 +65,12 @@ func createRelativeFile(t *testing.T, root, relativePath, content string) {
 	}
 }
 
-func newProvider(t *testing.T, roots ...string) *memory.ContextProvider {
+func newProvider(t *testing.T, roots ...string) *agent.ContextProvider {
 	t.Helper()
 	return newProviderWithConfig(t, nil, nil, roots...)
 }
 
-func newProviderWithConfig(t *testing.T, sourceOptions *fsskills.SourceOptions, providerOptions *skills.ContextProviderOptions, roots ...string) *memory.ContextProvider {
+func newProviderWithConfig(t *testing.T, sourceOptions *fsskills.SourceOptions, providerOptions *skills.ContextProviderOptions, roots ...string) *agent.ContextProvider {
 	t.Helper()
 	if sourceOptions == nil {
 		sourceOptions = &fsskills.SourceOptions{}
@@ -87,27 +88,23 @@ func newProviderWithConfig(t *testing.T, sourceOptions *fsskills.SourceOptions, 
 	return skills.NewContextProvider(resolved)
 }
 
-func captureProviderContext(t *testing.T, provider *memory.ContextProvider) (string, []tool.Tool) {
+func captureProviderContext(t *testing.T, provider *agent.ContextProvider) (string, []tool.Tool) {
 	t.Helper()
 	ctx := context.Background()
-	out, err := provider.BeforeRun(memory.BeforeRunContext{
-		Context:  ctx,
-		Session:  memory.NewSession(""),
-		Messages: nil,
-		Tools:    nil,
-	})
+	messages, options, err := provider.BeforeRun(ctx, nil, agent.WithSession(agent.NewSession("")))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(out.Messages) == 0 {
-		return "", out.Tools
+	tools := slices.Collect(agent.AllOptions(options, agent.WithTool))
+	if len(messages) == 0 {
+		return "", tools
 	}
-	for _, content := range out.Messages[0].Contents {
+	for _, content := range messages[0].Contents {
 		if txt, ok := content.(*message.TextContent); ok {
-			return txt.Text, out.Tools
+			return txt.Text, tools
 		}
 	}
-	return "", out.Tools
+	return "", tools
 }
 
 func findTool(t *testing.T, tools []tool.Tool, name string) tool.FuncTool {
@@ -134,7 +131,7 @@ func hasTool(tools []tool.Tool, name string) bool {
 	return false
 }
 
-func hasSkill(t *testing.T, provider *memory.ContextProvider, name string) bool {
+func hasSkill(t *testing.T, provider *agent.ContextProvider, name string) bool {
 	t.Helper()
 	instructions, _ := captureProviderContext(t, provider)
 	return strings.Contains(instructions, name)

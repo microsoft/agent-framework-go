@@ -13,7 +13,6 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
-	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
@@ -49,7 +48,7 @@ func main() {
 				Instructions:     "You are a friendly assistant.",
 				Name:             "MemoryAgent",
 				Middlewares:      []agent.Middleware{logger}, // for logging agent interactions
-				ContextProviders: []*memory.ContextProvider{newUserMemoryProvider()},
+				ContextProviders: []*agent.ContextProvider{newUserMemoryProvider()},
 			},
 		},
 	)
@@ -77,8 +76,8 @@ func main() {
 	demo.Assistantf("[Session State] Stored user name: %s", state.UserName)
 }
 
-func newUserMemoryProvider() *memory.ContextProvider {
-	return &memory.ContextProvider{
+func newUserMemoryProvider() *agent.ContextProvider {
+	return &agent.ContextProvider{
 		SourceID: userMemorySourceID,
 		Provide:  provideUserMemory,
 		Store:    storeUserMemory,
@@ -91,7 +90,7 @@ type providerState struct {
 	UserName string `json:"user_name,omitempty"`
 }
 
-func getProviderState(session *memory.Session) providerState {
+func getProviderState(session *agent.Session) providerState {
 	if session == nil {
 		return providerState{}
 	}
@@ -100,23 +99,25 @@ func getProviderState(session *memory.Session) providerState {
 	return state
 }
 
-func provideUserMemory(ctx memory.BeforeRunContext) (memory.Context, error) {
-	state := getProviderState(ctx.Session)
+func provideUserMemory(ctx context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
+	session, _ := agent.GetOption(options, agent.WithSession)
+	state := getProviderState(session)
 	instructions := "You don't know the user's name yet. Ask for it politely."
 	if strings.TrimSpace(state.UserName) != "" {
 		instructions = fmt.Sprintf("The user's name is %s. Always address them by name.", state.UserName)
 	}
-	return memory.Context{Messages: []*message.Message{{
+	return append(messages, &message.Message{
 		Role: message.RoleSystem,
 		Contents: []message.Content{
 			&message.TextContent{Text: instructions},
 		},
-	}}}, nil
+	}), options, nil
 }
 
-func storeUserMemory(ctx memory.AfterRunContext) error {
-	state := getProviderState(ctx.Session)
-	for _, msg := range ctx.RequestMessages {
+func storeUserMemory(ctx context.Context, requestMessages, _ []*message.Message, options ...agent.Option) error {
+	session, _ := agent.GetOption(options, agent.WithSession)
+	state := getProviderState(session)
+	for _, msg := range requestMessages {
 		if msg == nil || msg.Role != message.RoleUser {
 			continue
 		}
@@ -140,6 +141,6 @@ func storeUserMemory(ctx memory.AfterRunContext) error {
 		state.UserName = strings.Trim(parts[0], ".,!?")
 		break
 	}
-	ctx.Session.Set(userMemorySourceID, state)
+	session.Set(userMemorySourceID, state)
 	return nil
 }

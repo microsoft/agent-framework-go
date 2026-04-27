@@ -12,7 +12,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/microsoft/agent-framework-go/memory"
+	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
@@ -38,7 +38,7 @@ When a task aligns with a skill's domain, follow these steps in exact order:
 {script_instructions}
 Only load what is needed, when it is needed.`
 
-// ContextProviderOptions configures a skills-backed memory.ContextProvider.
+// ContextProviderOptions configures a skills-backed agent.ContextProvider.
 type ContextProviderOptions struct {
 	// SourceID is the identifier for the provider's source in the resulting context.
 	// Defaults to "skills" if not provided.
@@ -91,12 +91,17 @@ type providerState struct {
 	logger  *slog.Logger
 
 	mu      sync.Mutex
-	cached  *memory.Context
+	cached  *providerContext
 	loading chan struct{}
 }
 
+type providerContext struct {
+	Messages []*message.Message
+	Options  []agent.Option
+}
+
 // NewContextProvider creates a skills context provider from the configured in-memory skills and sources.
-func NewContextProvider(opts ContextProviderOptions) *memory.ContextProvider {
+func NewContextProvider(opts ContextProviderOptions) *agent.ContextProvider {
 	if opts.Logger == nil {
 		opts.Logger = slog.New(slog.DiscardHandler)
 	}
@@ -112,7 +117,7 @@ func NewContextProvider(opts ContextProviderOptions) *memory.ContextProvider {
 		logger:  opts.Logger,
 	}
 
-	return &memory.ContextProvider{
+	return &agent.ContextProvider{
 		SourceID: cmp.Or(opts.SourceID, "skills"),
 		Provide:  state.provide,
 	}
@@ -158,16 +163,22 @@ func (s *skillSliceSource) Skills(context.Context) ([]*Skill, error) {
 	return s.skills, nil
 }
 
-func (p *providerState) provide(ctx memory.BeforeRunContext) (result memory.Context, err error) {
+func (p *providerState) provide(ctx context.Context, messages []*message.Message, options ...agent.Option) (outMessages []*message.Message, outOptions []agent.Option, err error) {
 	if p.options.DisableCaching {
-		return p.buildContext(ctx.Context)
+		result, err := p.buildContext(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		outMessages, outOptions = extendProviderContext(messages, options, result)
+		return outMessages, outOptions, nil
 	}
 
 	p.mu.Lock()
 	if p.cached != nil {
 		cached := *p.cached
 		p.mu.Unlock()
-		return cached, nil
+		outMessages, outOptions = extendProviderContext(messages, options, cached)
+		return outMessages, outOptions, nil
 	}
 	if p.loading != nil {
 		loading := p.loading
@@ -177,15 +188,22 @@ func (p *providerState) provide(ctx memory.BeforeRunContext) (result memory.Cont
 		p.mu.Lock()
 		defer p.mu.Unlock()
 		if p.cached == nil {
-			return p.buildContext(ctx.Context)
+			result, err := p.buildContext(ctx)
+			if err != nil {
+				return nil, nil, err
+			}
+			outMessages, outOptions = extendProviderContext(messages, options, result)
+			return outMessages, outOptions, nil
 		}
 		cached := *p.cached
-		return cached, nil
+		outMessages, outOptions = extendProviderContext(messages, options, cached)
+		return outMessages, outOptions, nil
 	}
 	p.loading = make(chan struct{})
 	loading := p.loading
 	p.mu.Unlock()
 
+	var result providerContext
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			err = fmt.Errorf("building skills context panicked: %v", recovered)
@@ -201,23 +219,41 @@ func (p *providerState) provide(ctx memory.BeforeRunContext) (result memory.Cont
 		p.mu.Unlock()
 	}()
 
-	result, err = p.buildContext(ctx.Context)
-	return result, err
+	result, err = p.buildContext(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	outMessages, outOptions = extendProviderContext(messages, options, result)
+	return outMessages, outOptions, nil
 }
 
-func (p *providerState) buildContext(ctx context.Context) (memory.Context, error) {
+func extendProviderContext(messages []*message.Message, options []agent.Option, result providerContext) ([]*message.Message, []agent.Option) {
+	outMessages := messages
+	if len(result.Messages) > 0 {
+		outMessages = append(messages, result.Messages...)
+	}
+
+	outOptions := options
+	if len(result.Options) > 0 {
+		outOptions = append(options, result.Options...)
+	}
+
+	return outMessages, outOptions
+}
+
+func (p *providerState) buildContext(ctx context.Context) (providerContext, error) {
 	skills, err := p.loadSkills(ctx)
 	if err != nil {
-		return memory.Context{}, err
+		return providerContext{}, err
 	}
 	if len(skills) == 0 {
-		return memory.Context{}, nil
+		return providerContext{}, nil
 	}
 
 	indexed := indexSkills(skills)
 	hasResources, hasScripts := indexed.hasResourcesAndScripts()
-	out := memory.Context{
-		Tools: p.buildTools(indexed, hasResources, hasScripts),
+	out := providerContext{
+		Options: toolOptions(p.buildTools(indexed, hasResources, hasScripts)),
 	}
 
 	instructions := buildProviderSkillsInstructionPrompt(p.options.SkillsInstructionPrompt, skills, hasResources, hasScripts)
@@ -231,6 +267,17 @@ func (p *providerState) buildContext(ctx context.Context) (memory.Context, error
 	}
 
 	return out, nil
+}
+
+func toolOptions(tools []tool.Tool) []agent.Option {
+	if len(tools) == 0 {
+		return nil
+	}
+	options := make([]agent.Option, 0, len(tools))
+	for _, tool := range tools {
+		options = append(options, agent.WithTool(tool))
+	}
+	return options
 }
 
 func (p *providerState) loadSkills(ctx context.Context) ([]*Skill, error) {

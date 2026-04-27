@@ -11,7 +11,6 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
-	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 )
@@ -32,7 +31,7 @@ type prependMiddleware struct {
 	prependMessages []*message.Message
 	instructions    string
 	runCalls        int
-	lastSession     *memory.Session
+	lastSession     *agent.Session
 }
 
 func (m *prependMiddleware) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
@@ -516,18 +515,18 @@ func TestAgent_Run_ContextMiddlewareReceivesSession(t *testing.T) {
 }
 
 func TestAgent_Run_ContextMiddlewareCanFailBeforeRun(t *testing.T) {
-	invokeErr := errors.New("middleware failed")
+	middlewareErr := errors.New("middleware failed")
 	runFn := func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "response"}}}, nil)
 		}
 	}
-	a := newGenericTestAgent(runFn, "", []agent.Middleware{&errorMiddleware{err: invokeErr}})
+	a := newGenericTestAgent(runFn, "", []agent.Middleware{&errorMiddleware{err: middlewareErr}})
 
 	ctx := t.Context()
 	_, err := a.RunText(ctx, "test", agent.WithSession(agenttest.CreateSession())).Collect()
-	if !errors.Is(err, invokeErr) {
-		t.Fatalf("expected %v, got %v", invokeErr, err)
+	if !errors.Is(err, middlewareErr) {
+		t.Fatalf("expected %v, got %v", middlewareErr, err)
 	}
 }
 
@@ -679,11 +678,11 @@ func TestAgent_Run_ProviderMiddleware_RunsProvidersWhenSessionHasServiceID(t *te
 	provideCalled := false
 	var capturedMessages []*message.Message
 
-	historyProvider := &memory.ContextProvider{
+	historyProvider := &agent.ContextProvider{
 		SourceID: "history",
-		Provide: func(ctx memory.BeforeRunContext) (memory.Context, error) {
+		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
 			provideCalled = true
-			return memory.Context{Messages: []*message.Message{message.NewText("history")}}, nil
+			return append(messages, message.NewText("history")), options, nil
 		},
 	}
 
@@ -696,7 +695,7 @@ func TestAgent_Run_ProviderMiddleware_RunsProvidersWhenSessionHasServiceID(t *te
 
 	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
 		ID: "test-agent", Name: "test-agent",
-		ContextProviders: []*memory.ContextProvider{historyProvider},
+		ContextProviders: []*agent.ContextProvider{historyProvider},
 	})
 
 	session := agenttest.CreateSession()
@@ -710,7 +709,10 @@ func TestAgent_Run_ProviderMiddleware_RunsProvidersWhenSessionHasServiceID(t *te
 		t.Fatal("expected history provider to be used for service-managed sessions")
 	}
 	if len(capturedMessages) != 2 {
-		t.Fatal("expected provider context to be prepended to request")
+		t.Fatal("expected provider context to be appended to request")
+	}
+	if capturedMessages[0].String() != "input" || capturedMessages[1].String() != "history" {
+		t.Fatalf("expected message order [input history], got [%s %s]", capturedMessages[0].String(), capturedMessages[1].String())
 	}
 }
 
@@ -718,11 +720,11 @@ func TestAgent_Run_ProviderMiddleware_RunsProvidersWithContinuationToken(t *test
 	provideCalled := false
 	runCalled := false
 
-	historyProvider := &memory.ContextProvider{
+	historyProvider := &agent.ContextProvider{
 		SourceID: "history",
-		Provide: func(ctx memory.BeforeRunContext) (memory.Context, error) {
+		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
 			provideCalled = true
-			return memory.Context{}, nil
+			return messages, options, nil
 		},
 	}
 
@@ -738,7 +740,7 @@ func TestAgent_Run_ProviderMiddleware_RunsProvidersWithContinuationToken(t *test
 
 	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
 		ID: "test-agent", Name: "test-agent",
-		ContextProviders: []*memory.ContextProvider{historyProvider},
+		ContextProviders: []*agent.ContextProvider{historyProvider},
 	})
 
 	_, err := a.Run(t.Context(), nil, agent.WithContinuationToken("ct-1")).Collect()
@@ -758,11 +760,11 @@ func TestAgent_Run_UsesConfigContextProvider(t *testing.T) {
 	provideCalled := false
 	runCalled := false
 
-	contextProvider := &memory.ContextProvider{
+	contextProvider := &agent.ContextProvider{
 		SourceID: "ctx-provider",
-		Provide: func(ctx memory.BeforeRunContext) (memory.Context, error) {
+		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
 			provideCalled = true
-			return memory.Context{}, nil
+			return messages, options, nil
 		},
 	}
 
@@ -775,7 +777,7 @@ func TestAgent_Run_UsesConfigContextProvider(t *testing.T) {
 
 	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
 		ID: "test-agent", Name: "test-agent",
-		ContextProviders: []*memory.ContextProvider{contextProvider},
+		ContextProviders: []*agent.ContextProvider{contextProvider},
 	})
 
 	_, err := a.RunText(t.Context(), "input", agent.WithSession(agenttest.CreateSession())).Collect()
@@ -794,10 +796,10 @@ func TestAgent_Run_ProviderMiddleware_PropagatesInvokingError(t *testing.T) {
 	expected := errors.New("invoking failed")
 	runCalled := false
 
-	historyProvider := &memory.ContextProvider{
+	historyProvider := &agent.ContextProvider{
 		SourceID: "history",
-		Provide: func(ctx memory.BeforeRunContext) (memory.Context, error) {
-			return memory.Context{}, expected
+		Provide: func(context.Context, []*message.Message, ...agent.Option) ([]*message.Message, []agent.Option, error) {
+			return nil, nil, expected
 		},
 	}
 
@@ -808,7 +810,7 @@ func TestAgent_Run_ProviderMiddleware_PropagatesInvokingError(t *testing.T) {
 
 	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
 		ID: "test-agent", Name: "test-agent",
-		ContextProviders: []*memory.ContextProvider{historyProvider},
+		ContextProviders: []*agent.ContextProvider{historyProvider},
 	})
 
 	_, err := a.RunText(t.Context(), "input", agent.WithSession(agenttest.CreateSession())).Collect()
@@ -824,11 +826,11 @@ func TestAgent_Run_ProviderMiddleware_RunsProvidersWhenSessionAutoCreated(t *tes
 	provideCalled := false
 	runCalled := false
 
-	historyProvider := &memory.ContextProvider{
+	historyProvider := &agent.ContextProvider{
 		SourceID: "history",
-		Provide: func(ctx memory.BeforeRunContext) (memory.Context, error) {
+		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
 			provideCalled = true
-			return memory.Context{}, nil
+			return messages, options, nil
 		},
 	}
 
@@ -841,7 +843,7 @@ func TestAgent_Run_ProviderMiddleware_RunsProvidersWhenSessionAutoCreated(t *tes
 
 	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
 		ID: "test-agent", Name: "test-agent",
-		ContextProviders: []*memory.ContextProvider{historyProvider},
+		ContextProviders: []*agent.ContextProvider{historyProvider},
 	})
 
 	_, err := a.RunText(t.Context(), "input").Collect()
@@ -865,15 +867,15 @@ func TestAgent_Run_ProviderMiddleware_PersistsHistoryAfterSuccessfulRun(t *testi
 	var storedResponse []*message.Message
 	storeCalled := false
 
-	historyProvider := &memory.ContextProvider{
+	historyProvider := &agent.ContextProvider{
 		SourceID: "history",
-		Provide: func(ctx memory.BeforeRunContext) (memory.Context, error) {
-			return memory.Context{Messages: []*message.Message{historyMessage}}, nil
+		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
+			return append(messages, historyMessage), options, nil
 		},
-		Store: func(ctx memory.AfterRunContext) error {
+		Store: func(_ context.Context, requestMessages, responseMessages []*message.Message, _ ...agent.Option) error {
 			storeCalled = true
-			storedRequest = ctx.RequestMessages
-			storedResponse = ctx.ResponseMessages
+			storedRequest = requestMessages
+			storedResponse = responseMessages
 			return nil
 		},
 	}
@@ -890,7 +892,7 @@ func TestAgent_Run_ProviderMiddleware_PersistsHistoryAfterSuccessfulRun(t *testi
 
 	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
 		ID: "test-agent", Name: "test-agent",
-		ContextProviders: []*memory.ContextProvider{historyProvider},
+		ContextProviders: []*agent.ContextProvider{historyProvider},
 	})
 
 	_, err := a.RunMessage(t.Context(), requestMessage, agent.WithSession(agenttest.CreateSession())).Collect()
@@ -916,11 +918,11 @@ func TestAgent_Run_ProviderMiddleware_PersistsWithoutResponseMessages(t *testing
 	storeCalled := false
 	storedResponseCount := -1
 
-	historyProvider := &memory.ContextProvider{
+	historyProvider := &agent.ContextProvider{
 		SourceID: "history",
-		Store: func(ctx memory.AfterRunContext) error {
+		Store: func(_ context.Context, _ []*message.Message, responseMessages []*message.Message, _ ...agent.Option) error {
 			storeCalled = true
-			storedResponseCount = len(ctx.ResponseMessages)
+			storedResponseCount = len(responseMessages)
 			return nil
 		},
 	}
@@ -933,7 +935,7 @@ func TestAgent_Run_ProviderMiddleware_PersistsWithoutResponseMessages(t *testing
 
 	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
 		ID: "test-agent", Name: "test-agent",
-		ContextProviders: []*memory.ContextProvider{historyProvider},
+		ContextProviders: []*agent.ContextProvider{historyProvider},
 	})
 
 	_, err := a.RunText(t.Context(), "input", agent.WithSession(agenttest.CreateSession())).Collect()
@@ -949,12 +951,12 @@ func TestAgent_Run_ProviderMiddleware_PersistsWithoutResponseMessages(t *testing
 	}
 }
 
-func TestAgent_Run_ProviderMiddleware_PropagatesInvokedError(t *testing.T) {
-	expected := errors.New("invoked failed")
+func TestAgent_Run_ProviderMiddleware_PropagatesStoreError(t *testing.T) {
+	expected := errors.New("store failed")
 
-	historyProvider := &memory.ContextProvider{
+	historyProvider := &agent.ContextProvider{
 		SourceID: "history",
-		Store: func(ctx memory.AfterRunContext) error {
+		Store: func(context.Context, []*message.Message, []*message.Message, ...agent.Option) error {
 			return expected
 		},
 	}
@@ -967,7 +969,7 @@ func TestAgent_Run_ProviderMiddleware_PropagatesInvokedError(t *testing.T) {
 
 	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
 		ID: "test-agent", Name: "test-agent",
-		ContextProviders: []*memory.ContextProvider{historyProvider},
+		ContextProviders: []*agent.ContextProvider{historyProvider},
 	})
 
 	_, err := a.RunText(t.Context(), "input", agent.WithSession(agenttest.CreateSession())).Collect()
@@ -979,13 +981,11 @@ func TestAgent_Run_ProviderMiddleware_PropagatesInvokedError(t *testing.T) {
 func TestAgent_Run_ProviderMiddleware_EarlyStopOnErrorStillStores(t *testing.T) {
 	runErr := errors.New("run failed")
 	storeCalled := false
-	var storedErr error
 
-	historyProvider := &memory.ContextProvider{
+	historyProvider := &agent.ContextProvider{
 		SourceID: "history",
-		Store: func(ctx memory.AfterRunContext) error {
+		Store: func(_ context.Context, _ []*message.Message, _ []*message.Message, _ ...agent.Option) error {
 			storeCalled = true
-			storedErr = ctx.InvokeError
 			return nil
 		},
 	}
@@ -1001,7 +1001,7 @@ func TestAgent_Run_ProviderMiddleware_EarlyStopOnErrorStillStores(t *testing.T) 
 
 	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
 		ID: "test-agent", Name: "test-agent",
-		ContextProviders: []*memory.ContextProvider{historyProvider},
+		ContextProviders: []*agent.ContextProvider{historyProvider},
 	})
 
 	_, err := a.RunText(t.Context(), "input", agent.WithSession(agenttest.CreateSession())).Collect()
@@ -1011,17 +1011,14 @@ func TestAgent_Run_ProviderMiddleware_EarlyStopOnErrorStillStores(t *testing.T) 
 	if !storeCalled {
 		t.Fatal("expected store to be called when run stops on error")
 	}
-	if !errors.Is(storedErr, runErr) {
-		t.Fatalf("expected invoke error %v, got %v", runErr, storedErr)
-	}
 }
 
 func TestAgent_Run_ProviderMiddleware_EarlyStopWithoutErrorStillStores(t *testing.T) {
 	storeCalled := false
 
-	historyProvider := &memory.ContextProvider{
+	historyProvider := &agent.ContextProvider{
 		SourceID: "history",
-		Store: func(ctx memory.AfterRunContext) error {
+		Store: func(context.Context, []*message.Message, []*message.Message, ...agent.Option) error {
 			storeCalled = true
 			return nil
 		},
@@ -1038,7 +1035,7 @@ func TestAgent_Run_ProviderMiddleware_EarlyStopWithoutErrorStillStores(t *testin
 
 	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
 		ID: "test-agent", Name: "test-agent",
-		ContextProviders: []*memory.ContextProvider{historyProvider},
+		ContextProviders: []*agent.ContextProvider{historyProvider},
 	})
 
 	for _, err := range a.RunText(t.Context(), "input", agent.WithSession(agenttest.CreateSession()), agent.Stream(true)) {
@@ -1055,32 +1052,35 @@ func TestAgent_Run_ProviderMiddleware_EarlyStopWithoutErrorStillStores(t *testin
 
 func TestAgent_Run_UsesContextProvidersInOrder(t *testing.T) {
 	sequence := make([]string, 0, 4)
-	providerA := &memory.ContextProvider{
+	providerA := &agent.ContextProvider{
 		SourceID: "provider-a",
-		Provide: func(ctx memory.BeforeRunContext) (memory.Context, error) {
+		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
 			sequence = append(sequence, "before-a")
-			return memory.Context{Messages: append([]*message.Message{message.NewText("a")}, ctx.Messages...)}, nil
+			return append(messages, message.NewText("a")), options, nil
 		},
-		Store: func(ctx memory.AfterRunContext) error {
+		Store: func(context.Context, []*message.Message, []*message.Message, ...agent.Option) error {
 			sequence = append(sequence, "after-a")
 			return nil
 		},
 	}
-	providerB := &memory.ContextProvider{
+	providerB := &agent.ContextProvider{
 		SourceID: "provider-b",
-		Provide: func(ctx memory.BeforeRunContext) (memory.Context, error) {
+		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
 			sequence = append(sequence, "before-b")
-			return memory.Context{Messages: append([]*message.Message{message.NewText("b")}, ctx.Messages...)}, nil
+			return append(messages, message.NewText("b")), options, nil
 		},
-		Store: func(ctx memory.AfterRunContext) error {
+		Store: func(context.Context, []*message.Message, []*message.Message, ...agent.Option) error {
 			sequence = append(sequence, "after-b")
 			return nil
 		},
 	}
 
 	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		if len(msgs) < 3 {
-			t.Fatalf("expected providers to prepend messages, got %d", len(msgs))
+		if len(msgs) != 3 {
+			t.Fatalf("expected providers to append 2 messages to request, got %d", len(msgs))
+		}
+		if got := []string{msgs[0].String(), msgs[1].String(), msgs[2].String()}; !slices.Equal(got, []string{"input", "a", "b"}) {
+			t.Fatalf("expected providers to append messages in order, got %v", got)
 		}
 		return func(yield func(*message.ResponseUpdate, error) bool) {
 			yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "ok"}}}, nil)
@@ -1089,7 +1089,7 @@ func TestAgent_Run_UsesContextProvidersInOrder(t *testing.T) {
 
 	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
 		ID: "test-agent", Name: "test-agent",
-		ContextProviders: []*memory.ContextProvider{providerA, providerB},
+		ContextProviders: []*agent.ContextProvider{providerA, providerB},
 	})
 
 	_, err := a.RunText(t.Context(), "input", agent.WithSession(agenttest.CreateSession())).Collect()

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/microsoft/agent-framework-go/memory/skills/fsskills"
+	"github.com/microsoft/agent-framework-go/agent/skills/fsskills"
 )
 
 func TestFileSource_EmptyPaths_ReturnsEmptyList(t *testing.T) {
