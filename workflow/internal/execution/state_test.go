@@ -8,6 +8,13 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow/internal/checkpoint"
 )
 
+func mustSucceed(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestScopeSharedScope_ReadKeys(t *testing.T) {
 	scopeName := "sharedScope"
 	runScopeKeysTest(t, scopeName, true)
@@ -40,7 +47,7 @@ func runScopeKeysTest(t *testing.T, scopeName string, isSharedScope bool) {
 	}
 
 	// Act 1: Write a key from the self executor's view of the shared scope
-	_ = manager.WriteStateByID(sharedScopeSelfView, Key1, "value1")
+	mustSucceed(t, manager.WriteStateByID(sharedScopeSelfView, Key1, "value1"))
 
 	// Assert 1: The self executor should see the key immediately, but the other executor should not
 	selfKeys = manager.ReadKeysByID(sharedScopeSelfView)
@@ -58,7 +65,7 @@ func runScopeKeysTest(t *testing.T, scopeName string, isSharedScope bool) {
 	}
 
 	// Act 2: Publish the updates
-	_ = manager.PublishUpdates(nil)
+	mustSucceed(t, manager.PublishUpdates(nil))
 
 	// Assert 2: Both executors should see the key now, if sharedScope
 	selfKeys = manager.ReadKeysByID(sharedScopeSelfView)
@@ -78,7 +85,7 @@ func runScopeKeysTest(t *testing.T, scopeName string, isSharedScope bool) {
 	}
 
 	// Act 3: Clear the state from the self executor's view of the shared scope
-	_ = manager.ClearStateKeyByID(sharedScopeSelfView, Key1)
+	mustSucceed(t, manager.ClearStateKeyByID(sharedScopeSelfView, Key1))
 
 	// Assert 3: The self executor should not see the key immediately, but the other executor should still see it if sharedScope
 	selfKeys = manager.ReadKeysByID(sharedScopeSelfView)
@@ -98,7 +105,7 @@ func runScopeKeysTest(t *testing.T, scopeName string, isSharedScope bool) {
 	}
 
 	// Act 4: Publish the updates
-	_ = manager.PublishUpdates(nil)
+	mustSucceed(t, manager.PublishUpdates(nil))
 
 	// Assert 4: Neither executor should see the key now
 	selfKeys = manager.ReadKeysByID(sharedScopeSelfView)
@@ -166,7 +173,7 @@ func runValueLifecycleTest(t *testing.T, scopeName string, isSharedScope bool) {
 	checkValue(scopeOtherView, Key2, nil, "there should be no values in an empty StateManager")
 
 	// Act 1: Write a value from the self executor's view of the shared scope
-	_ = manager.WriteStateByID(scopeSelfView, Key1, Value1)
+	mustSucceed(t, manager.WriteStateByID(scopeSelfView, Key1, Value1))
 
 	// Assert 1
 	checkValue(scopeSelfView, Key1, Value1, "writes should be visible immediately to the writing executor")
@@ -175,7 +182,7 @@ func runValueLifecycleTest(t *testing.T, scopeName string, isSharedScope bool) {
 	checkValue(scopeOtherView, Key2, nil, "uninvolved keys' state/value should not change after a write")
 
 	// Act 2: Write a value from the other executor's view of the shared scope
-	_ = manager.WriteStateByID(scopeOtherView, Key2, Value2)
+	mustSucceed(t, manager.WriteStateByID(scopeOtherView, Key2, Value2))
 
 	// Assert 2
 	checkValue(scopeSelfView, Key1, Value1, "uninvolved keys' state/value should not change after a write")
@@ -184,7 +191,7 @@ func runValueLifecycleTest(t *testing.T, scopeName string, isSharedScope bool) {
 	checkValue(scopeOtherView, Key2, Value2, "writes should be visible immediately to the writing executor")
 
 	// Act 3: Publish the updates
-	_ = manager.PublishUpdates(nil)
+	mustSucceed(t, manager.PublishUpdates(nil))
 
 	// Assert 3
 	checkValue(scopeSelfView, Key1, Value1, "published writes should be visible to all executors")
@@ -198,7 +205,7 @@ func runValueLifecycleTest(t *testing.T, scopeName string, isSharedScope bool) {
 	checkValue(scopeOtherView, Key2, Value2, "published writes should be visible to all executors")
 
 	// Act 4: Clear the value from the self executor's view of the shared scope
-	_ = manager.ClearStateByID(scopeSelfView)
+	mustSucceed(t, manager.ClearStateByID(scopeSelfView))
 
 	// Assert 4
 	checkValue(scopeSelfView, Key1, nil, "clears should be visible immediately to the writing executor")
@@ -213,7 +220,7 @@ func runValueLifecycleTest(t *testing.T, scopeName string, isSharedScope bool) {
 	}
 
 	// Act 5: Publish the updates
-	_ = manager.PublishUpdates(nil)
+	mustSucceed(t, manager.PublishUpdates(nil))
 
 	// Assert 5
 	checkValue(scopeSelfView, Key1, nil, "published clears should be visible to all executors")
@@ -226,12 +233,12 @@ func runValueLifecycleTest(t *testing.T, scopeName string, isSharedScope bool) {
 	}
 
 	// Restore the written state of both keys
-	_ = manager.WriteStateByID(scopeSelfView, Key1, Value1)
-	_ = manager.WriteStateByID(scopeOtherView, Key2, Value2)
-	_ = manager.PublishUpdates(nil)
+	mustSucceed(t, manager.WriteStateByID(scopeSelfView, Key1, Value1))
+	mustSucceed(t, manager.WriteStateByID(scopeOtherView, Key2, Value2))
+	mustSucceed(t, manager.PublishUpdates(nil))
 
 	// Act 6: Delete Key1 from the other executor's view of the shared scope
-	_ = manager.ClearStateKeyByID(scopeOtherView, Key1)
+	mustSucceed(t, manager.ClearStateKeyByID(scopeOtherView, Key1))
 
 	// Assert 6
 	if isSharedScope {
@@ -248,7 +255,7 @@ func runValueLifecycleTest(t *testing.T, scopeName string, isSharedScope bool) {
 	checkValue(scopeOtherView, Key2, Value2, "uninvolved keys' state/value should not change after a delete")
 
 	// Act 7: Delete Key2 from the self executor's view of the shared scope
-	_ = manager.ClearStateKeyByID(scopeSelfView, Key2)
+	mustSucceed(t, manager.ClearStateKeyByID(scopeSelfView, Key2))
 
 	// Assert 7
 	if isSharedScope {
@@ -265,7 +272,7 @@ func runValueLifecycleTest(t *testing.T, scopeName string, isSharedScope bool) {
 	}
 
 	// Act 8: Publish the updates
-	_ = manager.PublishUpdates(nil)
+	mustSucceed(t, manager.PublishUpdates(nil))
 
 	// Assert 8
 	if isSharedScope {
@@ -308,8 +315,8 @@ func runConflictingUpdatesTest_WriteVsWrite(t *testing.T, scopeName string, isSh
 	scopeSelfView := workflow.ScopeID{ExecutorID: SelfExecutorId, ScopeName: scopeName}
 	scopeOtherView := workflow.ScopeID{ExecutorID: OtherExecutorId, ScopeName: scopeName}
 
-	_ = manager.WriteStateByID(scopeSelfView, Key1, Value1)
-	_ = manager.WriteStateByID(scopeOtherView, Key1, Value2)
+	mustSucceed(t, manager.WriteStateByID(scopeSelfView, Key1, Value1))
+	mustSucceed(t, manager.WriteStateByID(scopeOtherView, Key1, Value2))
 
 	err := manager.PublishUpdates(nil)
 	if isSharedScope {
@@ -337,12 +344,12 @@ func runConflictingUpdatesTest_WriteVsDelete(t *testing.T, scopeName string, isS
 	scopeSelfView := workflow.ScopeID{ExecutorID: SelfExecutorId, ScopeName: scopeName}
 	scopeOtherView := workflow.ScopeID{ExecutorID: OtherExecutorId, ScopeName: scopeName}
 
-	_ = manager.WriteStateByID(scopeSelfView, Key1, Value1)
-	_ = manager.WriteStateByID(scopeOtherView, Key2, Value2)
-	_ = manager.PublishUpdates(nil)
+	mustSucceed(t, manager.WriteStateByID(scopeSelfView, Key1, Value1))
+	mustSucceed(t, manager.WriteStateByID(scopeOtherView, Key2, Value2))
+	mustSucceed(t, manager.PublishUpdates(nil))
 
-	_ = manager.WriteStateByID(scopeSelfView, Key1, "newValue")
-	_ = manager.ClearStateKeyByID(scopeOtherView, Key1)
+	mustSucceed(t, manager.WriteStateByID(scopeSelfView, Key1, "newValue"))
+	mustSucceed(t, manager.ClearStateKeyByID(scopeOtherView, Key1))
 
 	err := manager.PublishUpdates(nil)
 	if isSharedScope {
@@ -370,12 +377,12 @@ func runConflictingUpdatesTest_WriteVsClear(t *testing.T, scopeName string, isSh
 	scopeSelfView := workflow.ScopeID{ExecutorID: SelfExecutorId, ScopeName: scopeName}
 	scopeOtherView := workflow.ScopeID{ExecutorID: OtherExecutorId, ScopeName: scopeName}
 
-	_ = manager.WriteStateByID(scopeSelfView, Key1, Value1)
-	_ = manager.WriteStateByID(scopeOtherView, Key2, Value2)
-	_ = manager.PublishUpdates(nil)
+	mustSucceed(t, manager.WriteStateByID(scopeSelfView, Key1, Value1))
+	mustSucceed(t, manager.WriteStateByID(scopeOtherView, Key2, Value2))
+	mustSucceed(t, manager.PublishUpdates(nil))
 
-	_ = manager.WriteStateByID(scopeSelfView, Key1, "newValue")
-	_ = manager.ClearStateByID(scopeOtherView)
+	mustSucceed(t, manager.WriteStateByID(scopeSelfView, Key1, "newValue"))
+	mustSucceed(t, manager.ClearStateByID(scopeOtherView))
 
 	err := manager.PublishUpdates(nil)
 	if isSharedScope {
@@ -408,13 +415,13 @@ func testLoadPortableValueState(t *testing.T, publishStateUpdates bool) {
 	PortableValueValue := workflow.AnyPortableValue(StringValue)
 
 	manager := NewStateManager()
-	_ = manager.WriteStateByID(scope, "StringValue", StringValue)
-	_ = manager.WriteStateByID(scope, "IntValue", IntValue)
-	_ = manager.WriteStateByID(scope, "ScopeKey", ScopeKey)
-	_ = manager.WriteStateByID(scope, "PortableValueValue", PortableValueValue)
+	mustSucceed(t, manager.WriteStateByID(scope, "StringValue", StringValue))
+	mustSucceed(t, manager.WriteStateByID(scope, "IntValue", IntValue))
+	mustSucceed(t, manager.WriteStateByID(scope, "ScopeKey", ScopeKey))
+	mustSucceed(t, manager.WriteStateByID(scope, "PortableValueValue", PortableValueValue))
 
 	if publishStateUpdates {
-		_ = manager.PublishUpdates(nil)
+		mustSucceed(t, manager.PublishUpdates(nil))
 	}
 
 	// Act & Assert - Read as the original types
@@ -466,12 +473,12 @@ func TestScopeLoadPortableValueState_AfterSerialization(t *testing.T) {
 	PortableValueValue := workflow.AnyPortableValue(StringValue)
 
 	manager := NewStateManager()
-	_ = manager.WriteStateByID(scope, "StringValue", StringValue)
-	_ = manager.WriteStateByID(scope, "IntValue", IntValue)
-	_ = manager.WriteStateByID(scope, "ScopeKey", ScopeKey)
-	_ = manager.WriteStateByID(scope, "PortableValueValue", PortableValueValue)
+	mustSucceed(t, manager.WriteStateByID(scope, "StringValue", StringValue))
+	mustSucceed(t, manager.WriteStateByID(scope, "IntValue", IntValue))
+	mustSucceed(t, manager.WriteStateByID(scope, "ScopeKey", ScopeKey))
+	mustSucceed(t, manager.WriteStateByID(scope, "PortableValueValue", PortableValueValue))
 
-	_ = manager.PublishUpdates(nil)
+	mustSucceed(t, manager.PublishUpdates(nil))
 
 	exportedState, err := manager.ExportState()
 	if err != nil {
@@ -488,7 +495,7 @@ func TestScopeLoadPortableValueState_AfterSerialization(t *testing.T) {
 	}
 
 	manager = NewStateManager()
-	_ = manager.ImportState(testCheckpoint)
+	mustSucceed(t, manager.ImportState(testCheckpoint))
 
 	// Act & Assert - Read as the original types
 	checkType := func(key string, expected any) {

@@ -141,16 +141,24 @@ func TestExecutor_AccumulatesAndClearsMessagesPerTurn(t *testing.T) {
 	})
 
 	// Send multiple message batches before taking a turn
-	_, _ = executor.Execute(ctx, &message.Message{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Message 1"}}})
-	_, _ = executor.Execute(ctx, []*message.Message{
+	if _, err := executor.Execute(ctx, &message.Message{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Message 1"}}}); err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	if _, err := executor.Execute(ctx, []*message.Message{
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Message 2"}}},
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Message 3"}}},
-	})
+	}); err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
 	// Note: Go doesn't have a separate array type vs slice for this purpose usually, but we can test iter.Seq if we want.
 	// The C# test used array. Here we just use another slice or single message.
-	_, _ = executor.Execute(ctx, &message.Message{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Message 4"}}})
+	if _, err := executor.Execute(ctx, &message.Message{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Message 4"}}}); err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
 
-	_, _ = executor.Execute(ctx, workflow.TurnToken{})
+	if _, err := executor.Execute(ctx, workflow.TurnToken{}); err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
 
 	if len(te.receivedMessages) != 4 {
 		t.Errorf("Expected 4 messages, got %d", len(te.receivedMessages))
@@ -169,10 +177,14 @@ func TestExecutor_AccumulatesAndClearsMessagesPerTurn(t *testing.T) {
 	te.receivedMessages = nil
 
 	// Second turn should process new messages only
-	_, _ = executor.Execute(ctx, []*message.Message{
+	if _, err := executor.Execute(ctx, []*message.Message{
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Second batch"}}},
-	})
-	_, _ = executor.Execute(ctx, workflow.TurnToken{})
+	}); err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	if _, err := executor.Execute(ctx, workflow.TurnToken{}); err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
 
 	if len(te.receivedMessages) != 1 {
 		t.Errorf("Expected 1 message, got %d", len(te.receivedMessages))
@@ -196,7 +208,9 @@ func TestExecutor_WithStringRole_ConvertsStringToMessage(t *testing.T) {
 	if _, err := executor.Execute(ctx, "String message"); err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
-	_, _ = executor.Execute(ctx, workflow.TurnToken{})
+	if _, err := executor.Execute(ctx, workflow.TurnToken{}); err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
 
 	if len(te.receivedMessages) != 1 {
 		t.Errorf("Expected 1 message, got %d", len(te.receivedMessages))
@@ -216,8 +230,12 @@ func TestExecutor_EmptyCollection_HandledCorrectly(t *testing.T) {
 		TakeTurnHandler: te.takeTurn,
 	})
 
-	_, _ = executor.Execute(ctx, []*message.Message{})
-	_, _ = executor.Execute(ctx, workflow.TurnToken{})
+	if _, err := executor.Execute(ctx, []*message.Message{}); err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	if _, err := executor.Execute(ctx, workflow.TurnToken{}); err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
 
 	if len(te.receivedMessages) != 0 {
 		t.Errorf("Expected 0 messages, got %d", len(te.receivedMessages))
@@ -234,15 +252,23 @@ func TestExecutor_MultipleTurns_EachTurnProcessesSeparately(t *testing.T) {
 		TakeTurnHandler: te.takeTurn,
 	})
 
-	_, _ = executor.Execute(ctx, []*message.Message{{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Turn 1"}}}})
-	_, _ = executor.Execute(ctx, workflow.TurnToken{})
+	if _, err := executor.Execute(ctx, []*message.Message{{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Turn 1"}}}}); err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	if _, err := executor.Execute(ctx, workflow.TurnToken{}); err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
 
 	if len(te.receivedMessages) != 1 {
 		t.Errorf("Expected 1 message, got %d", len(te.receivedMessages))
 	}
 
-	_, _ = executor.Execute(ctx, &message.Message{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Turn 2"}}})
-	_, _ = executor.Execute(ctx, workflow.TurnToken{})
+	if _, err := executor.Execute(ctx, &message.Message{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Turn 2"}}}); err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	if _, err := executor.Execute(ctx, workflow.TurnToken{}); err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
 
 	if len(te.receivedMessages) != 2 {
 		t.Errorf("Expected 2 messages, got %d", len(te.receivedMessages))

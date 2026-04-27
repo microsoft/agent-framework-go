@@ -229,7 +229,9 @@ func (r *runner) RunSuperStep(ctx context.Context) (bool, error) {
 
 		if err := r.runSuperstep(ctx, currentStep); err != nil {
 			if !errors.Is(err, context.Canceled) {
-				_ = r.outgoingEvents.Enqueue(ctx, workflow.ErrorEvent{Error: err})
+				if enqErr := r.outgoingEvents.Enqueue(ctx, workflow.ErrorEvent{Error: err}); enqErr != nil {
+					return true, errors.Join(err, enqErr)
+				}
 			}
 		}
 		return true, nil
