@@ -270,7 +270,7 @@ func (r *runner) RestoreCheckpoint(ctx context.Context, checkpointInfo workflow.
 	if err := r.runContext.stateManager.ImportState(cp); err != nil {
 		return err
 	}
-	// Implement full checkpoint restoration in the future.
+	// TODO: Implement full checkpoint restoration
 	return fmt.Errorf("checkpoint restore not yet implemented")
 }
 
@@ -340,8 +340,8 @@ func (r *runner) checkpoint(ctx context.Context) error {
 		return r.runContext.stateManager.PublishUpdates(r.stepTracer)
 	}
 
-	// Implement full checkpoint creation in the future.
-	// This requires implementing WorkflowInfo and state export for all components.
+	// TODO: Implement full checkpoint creation
+	// This requires implementing WorkflowInfo and state export for all components
 
 	return r.runContext.stateManager.PublishUpdates(r.stepTracer)
 }

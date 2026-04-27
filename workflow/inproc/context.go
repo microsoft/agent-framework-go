@@ -131,7 +131,7 @@ func (proc *runnerContext) EnsureExecutor(ctx context.Context, executorID string
 		tracer.TraceActivated(executorID)
 	}
 
-	// Handle special executor types (RequestInfoExecutor, WorkflowHostExecutor) in the future.
+	// TODO: Handle special executor types (RequestInfoExecutor, WorkflowHostExecutor)
 
 	proc.executors[executorID] = executor
 
@@ -278,7 +278,7 @@ func (proc *runnerContext) SendMessage(ctx context.Context, sourceID, targetID s
 		return err
 	}
 
-	// Add OpenTelemetry trace context propagation in the future.
+	// TODO: Add OpenTelemetry trace context propagation
 	envelope, err := execution.NewMessageEnvelope(message, nil, sourceID, targetID)
 	if err != nil {
 		return err

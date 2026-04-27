@@ -234,7 +234,7 @@ func TestInProcessRun_StateShouldPersist_Checkpointed(t *testing.T) {
 		t.Error("Validator should be completed")
 	}
 
-	// Verify checkpoints when implemented.
+	// TODO: Verify checkpoints when implemented
 }
 
 func TestInProcessRun_StateShouldError_TwoExecutors(t *testing.T) {
