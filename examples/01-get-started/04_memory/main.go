@@ -99,19 +99,19 @@ func getProviderState(session *agent.Session) providerState {
 	return state
 }
 
-func provideUserMemory(ctx context.Context, _ []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
+func provideUserMemory(ctx context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
 	session, _ := agent.GetOption(options, agent.WithSession)
 	state := getProviderState(session)
 	instructions := "You don't know the user's name yet. Ask for it politely."
 	if strings.TrimSpace(state.UserName) != "" {
 		instructions = fmt.Sprintf("The user's name is %s. Always address them by name.", state.UserName)
 	}
-	return []*message.Message{{
+	return append(messages, &message.Message{
 		Role: message.RoleSystem,
 		Contents: []message.Content{
 			&message.TextContent{Text: instructions},
 		},
-	}}, nil, nil
+	}), options, nil
 }
 
 func storeUserMemory(ctx context.Context, requestMessages, _ []*message.Message, options ...agent.Option) error {
