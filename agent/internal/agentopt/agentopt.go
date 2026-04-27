@@ -8,7 +8,6 @@ import (
 	"slices"
 
 	"github.com/microsoft/agent-framework-go/format"
-	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/tool"
 )
 
@@ -18,7 +17,6 @@ type Option interface {
 
 type (
 	responseFormatOpt    struct{ format.Format }
-	sessionOpt           struct{ *memory.Session }
 	continuationTokenOpt string
 	serviceIDOpt         string
 
@@ -32,7 +30,6 @@ type (
 )
 
 func (o responseFormatOpt) Value() any           { return o.Format }
-func (o sessionOpt) Value() any                  { return o.Session }
 func (o streamOpt) Value() any                   { return bool(o) }
 func (o continuationTokenOpt) Value() any        { return string(o) }
 func (o allowBackgroundResponsesOpt) Value() any { return bool(o) }
@@ -63,10 +60,6 @@ func Stream(stream bool) Option {
 
 func WithResponseFormat(format format.Format) Option {
 	return responseFormatOpt{format}
-}
-
-func WithSession(session *memory.Session) Option {
-	return sessionOpt{session}
 }
 
 func WithContinuationToken(token string) Option {

@@ -12,7 +12,6 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/microsoft/agent-framework-go/agent"
 	a2a1 "github.com/microsoft/agent-framework-go/agent/provider/a2aagent"
-	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
@@ -195,7 +194,7 @@ func newTestAgent(transport a2aclient.Transport, config agent.Config) *agent.Age
 	return a2a1.New(client, a2a1.Config{Config: config})
 }
 
-func latestTaskID(session *memory.Session) string {
+func latestTaskID(session *agent.Session) string {
 	taskIDs := a2a1.TaskIDsFromSession(session)
 	if len(taskIDs) == 0 {
 		return ""

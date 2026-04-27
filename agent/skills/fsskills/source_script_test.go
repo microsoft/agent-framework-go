@@ -9,8 +9,8 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/microsoft/agent-framework-go/memory/skills"
-	"github.com/microsoft/agent-framework-go/memory/skills/fsskills"
+	"github.com/microsoft/agent-framework-go/agent/skills"
+	"github.com/microsoft/agent-framework-go/agent/skills/fsskills"
 )
 
 func TestFileSource_WithScriptFiles_DiscoversScripts(t *testing.T) {

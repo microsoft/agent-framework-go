@@ -13,7 +13,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/microsoft/agent-framework-go/memory/skills"
+	"github.com/microsoft/agent-framework-go/agent/skills"
 )
 
 const (

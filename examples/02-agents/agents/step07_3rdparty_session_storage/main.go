@@ -16,7 +16,6 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
-	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
@@ -107,7 +106,7 @@ type fsMessageStore struct {
 	Dir string
 }
 
-func (d *fsMessageStore) getFiles(session *memory.Session) []string {
+func (d *fsMessageStore) getFiles(session *agent.Session) []string {
 	if session == nil {
 		return nil
 	}
@@ -119,7 +118,7 @@ func (d *fsMessageStore) getFiles(session *memory.Session) []string {
 	return files
 }
 
-func (d *fsMessageStore) loadMessages(session *memory.Session) ([]*message.Message, error) {
+func (d *fsMessageStore) loadMessages(session *agent.Session) ([]*message.Message, error) {
 	var msgs []*message.Message
 	for _, file := range d.getFiles(session) {
 		data, err := os.ReadFile(filepath.Join(d.Dir, file))
@@ -136,7 +135,7 @@ func (d *fsMessageStore) loadMessages(session *memory.Session) ([]*message.Messa
 	return msgs, nil
 }
 
-func (d *fsMessageStore) persistMessages(session *memory.Session, requestMessages, responseMessages []*message.Message) error {
+func (d *fsMessageStore) persistMessages(session *agent.Session, requestMessages, responseMessages []*message.Message) error {
 	var files []string
 	_, _ = session.Get("fsMessageStore.files", &files)
 	persist := func(msg *message.Message) error {
@@ -172,7 +171,7 @@ func (d *fsMessageStore) persistMessages(session *memory.Session, requestMessage
 }
 
 func (d *fsMessageStore) Run(next agent.RunFunc, ctx context.Context, msgs []*message.Message, opts ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-	var session *memory.Session
+	var session *agent.Session
 	if v, ok := agent.GetOption(opts, agent.WithSession); ok {
 		session = v
 	} else {
