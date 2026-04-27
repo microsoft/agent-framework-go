@@ -17,7 +17,6 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
@@ -54,9 +53,9 @@ func New(aclient *a2aclient.Client, config Config) *agent.Agent {
 	}, config.Config)
 }
 
-func (a *a2aagent) createSession(ctx context.Context, options ...agent.Option) (*memory.Session, error) {
+func (a *a2aagent) createSession(ctx context.Context, options ...agent.Option) (*agent.Session, error) {
 	serviceID, _ := agent.GetOption(options, agent.WithServiceID)
-	session := memory.NewSession("")
+	session := agent.NewSession("")
 	setContextID(session, serviceID)
 	setTaskIDs(session, slices.Collect(agent.AllOptions(options, TaskID)))
 	return session, nil
@@ -152,7 +151,7 @@ func (a *a2aagent) subscribeToTaskWithFallback(ctx context.Context, taskID a2a.T
 	}
 }
 
-func sendMsg(session *memory.Session, seq iter.Seq2[a2a.Event, error], yield func(*message.ResponseUpdate, error) bool) {
+func sendMsg(session *agent.Session, seq iter.Seq2[a2a.Event, error], yield func(*message.ResponseUpdate, error) bool) {
 	for e, err := range seq {
 		if err != nil {
 			yield(nil, err)
@@ -259,7 +258,7 @@ func yieldTask(yield func(*message.ResponseUpdate, error) bool, task *a2a.Task) 
 	return true
 }
 
-func updateSessionContextID(session *memory.Session, contextID, taskID string) error {
+func updateSessionContextID(session *agent.Session, contextID, taskID string) error {
 	if session == nil {
 		return nil
 	}

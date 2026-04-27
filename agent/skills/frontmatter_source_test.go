@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/microsoft/agent-framework-go/memory/skills"
+	"github.com/microsoft/agent-framework-go/agent/skills"
 )
 
 func mustInlineSkill(frontmatter skills.Frontmatter, content string, resources []skills.Resource, scripts []skills.Script) *skills.Skill {

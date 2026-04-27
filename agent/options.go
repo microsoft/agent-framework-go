@@ -7,7 +7,6 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent/internal/agentopt"
 	"github.com/microsoft/agent-framework-go/format"
-	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/tool"
 )
 
@@ -17,6 +16,10 @@ import (
 // [GetOption] and [AllOptions] use the option's type
 // to uniquely identify each option.
 type Option = agentopt.Option
+
+type sessionOpt struct{ *Session }
+
+func (o sessionOpt) Value() any { return o.Session }
 
 // GetOption returns the value stored in opts with the provided setter,
 // reporting whether the value is present.
@@ -70,8 +73,8 @@ func WithResponseFormat(format format.Format) Option {
 }
 
 // WithSession sets the session to use during the agent run.
-func WithSession(session *memory.Session) Option {
-	return agentopt.WithSession(session)
+func WithSession(session *Session) Option {
+	return sessionOpt{session}
 }
 
 // WithContinuationToken sets the continuation token for resuming and getting the result

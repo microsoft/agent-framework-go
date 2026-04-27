@@ -1,10 +1,9 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package memory
+package agent
 
 import (
 	"encoding/json"
-	"sync"
 
 	"github.com/google/uuid"
 )
@@ -21,8 +20,8 @@ import (
 //   - Data extraction from and injection into a conversation.
 //   - Chat history reduction, e.g. where messages needs to be summarized or truncated to reduce the size.
 //
-// A Session is always constructed by an [agent.Agent] so that the [agent.Agent] can attach any necessary behaviors to the Session.
-// See the [agent.Agent.CreateSession], [agent.Agent.MarshalSession], and [agent.Agent.UnmarshalSession] methods for more information.
+// A Session is always constructed by an [Agent] so that the [Agent] can attach any necessary behaviors to the Session.
+// See the [Agent.CreateSession], [Agent.MarshalSession], and [Agent.UnmarshalSession] methods for more information.
 //
 // Because of these behaviors, a Session may not be reusable across different agents, since each agent may add different
 // behaviors to the Session it creates.
@@ -32,11 +31,14 @@ import (
 type Session struct {
 	ServiceID string
 
-	mu    sync.RWMutex
-	state map[string]*stateValue
 	id    string
+	state map[string]*stateValue
 }
 
+// NewSession creates a new Session with the given ID. If the ID is empty, a new UUID is generated.
+//
+// This function is intended to be used by an [Agent] provider.
+// Consumers of the agent framework should use [Agent.CreateSession] to create sessions.
 func NewSession(id string) *Session {
 	if id == "" {
 		id = uuid.NewString()
@@ -56,9 +58,7 @@ func (s *Session) Get(key string, value any) (bool, error) {
 	if s == nil {
 		return false, nil
 	}
-	s.mu.RLock()
 	wrapped, ok := s.state[key]
-	s.mu.RUnlock()
 	if !ok {
 		return false, nil
 	}
@@ -76,8 +76,6 @@ func (s *Session) Set(key string, value any) {
 		wrapped = newStateValue(value)
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.state == nil {
 		s.state = make(map[string]*stateValue)
 	}
@@ -89,8 +87,6 @@ func (s *Session) Delete(key string) {
 	if s == nil {
 		return
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	delete(s.state, key)
 }
 
@@ -104,13 +100,11 @@ func (s *Session) MarshalJSON() ([]byte, error) {
 		ID:        s.id,
 		ServiceID: s.ServiceID,
 	}
-	s.mu.RLock()
 	if s.state == nil {
 		tmp.State = make(map[string]*stateValue)
 	} else {
 		tmp.State = s.state
 	}
-	s.mu.RUnlock()
 	return json.Marshal(tmp)
 }
 
@@ -128,8 +122,6 @@ func (s *Session) UnmarshalJSON(data []byte) error {
 	if tmp.State == nil {
 		tmp.State = make(map[string]*stateValue)
 	}
-	s.mu.Lock()
 	s.state = tmp.State
-	s.mu.Unlock()
 	return nil
 }

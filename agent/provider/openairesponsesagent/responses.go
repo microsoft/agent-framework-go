@@ -19,7 +19,6 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/format"
 	"github.com/microsoft/agent-framework-go/format/jsonformat"
-	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/hostedtool"
@@ -79,7 +78,7 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 		stream, _ := agent.GetOption(options, agent.Stream)
 
 		// Get session for conversation ID management
-		var session *memory.Session
+		var session *agent.Session
 		var keepConversationID bool // true if we should keep the conversation ID unchanged (it's a "conv_" ID)
 		if t, ok := agent.GetOption(options, agent.WithSession); ok && t != nil {
 			session = t

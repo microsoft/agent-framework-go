@@ -8,7 +8,6 @@ import (
 	"iter"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
@@ -126,27 +125,27 @@ func (a *testagent) run(ctx context.Context, messages []*message.Message, opts .
 	}
 }
 
-func (a *testagent) createSession(_ context.Context, opts ...agent.Option) (*memory.Session, error) {
-	return memory.NewSession(""), nil
+func (a *testagent) createSession(_ context.Context, opts ...agent.Option) (*agent.Session, error) {
+	return agent.NewSession(""), nil
 }
 
-func (a *testagent) marshalSession(_ context.Context, session *memory.Session) ([]byte, error) {
+func (a *testagent) marshalSession(_ context.Context, session *agent.Session) ([]byte, error) {
 	return json.Marshal(session)
 }
 
-func (a *testagent) unmarshalSession(_ context.Context, data []byte) (*memory.Session, error) {
-	var session memory.Session
+func (a *testagent) unmarshalSession(_ context.Context, data []byte) (*agent.Session, error) {
+	var session agent.Session
 	if err := json.Unmarshal(data, &session); err != nil {
 		return nil, err
 	}
 	return &session, nil
 }
 
-func CreateSession() *memory.Session {
-	return memory.NewSession("")
+func CreateSession() *agent.Session {
+	return agent.NewSession("")
 }
 
-func MarshalSession(session *memory.Session) ([]byte, error) {
+func MarshalSession(session *agent.Session) ([]byte, error) {
 	return json.Marshal(session)
 }
 

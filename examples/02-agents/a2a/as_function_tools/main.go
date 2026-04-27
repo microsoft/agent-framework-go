@@ -97,7 +97,7 @@ func createSkillTools(remoteAgent *agent.Agent, skills []a2a.AgentSkill) []tool.
 	tools := make([]tool.Tool, 0, len(skills))
 	for _, skill := range skills {
 		skill := skill
-		tools = append(tools, functool.MustNew(&functool.Func{
+		tools = append(tools, functool.MustNew(functool.Config{
 			Name:        sanitizeToolName(cmp.Or(skill.Name, skill.ID, "a2a_skill")),
 			Description: formatSkillDescription(skill),
 		}, func(ctx tool.Context, query string) (string, error) {

@@ -4,17 +4,17 @@ package agent
 
 import (
 	"context"
-	"github.com/microsoft/agent-framework-go/memory"
+	"reflect"
+
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/message/messageworkflow"
 	"github.com/microsoft/agent-framework-go/workflow"
-	"reflect"
 )
 
 func newExecutor(a *Agent, emitEvents bool) *workflow.Executor {
-	var session *memory.Session
+	var session *Session
 	var sessionStateKey string
-	ensureSession := func(ctx context.Context) (*memory.Session, error) {
+	ensureSession := func(ctx context.Context) (*Session, error) {
 		if session == nil {
 			var err error
 			session, err = a.CreateSession(ctx)

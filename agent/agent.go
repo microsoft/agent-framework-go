@@ -12,49 +12,67 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework-go/agent/internal/middleware/autocall"
-	"github.com/microsoft/agent-framework-go/agent/internal/middleware/contextprovider"
 	"github.com/microsoft/agent-framework-go/agent/internal/middleware/structuredoutput"
 	"github.com/microsoft/agent-framework-go/format"
-	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 )
 
+// RunFunc is the provider function that executes an agent invocation.
 type RunFunc = func(ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*message.ResponseUpdate, error]
 
+// ProviderConfig configures the provider-specific implementation behind an Agent.
 type ProviderConfig struct {
+	// ProviderName identifies the underlying provider implementation.
 	ProviderName string
 
-	// Required functions
+	// Run executes a request and streams response updates.
 	Run RunFunc
 
-	// Optional functions
-	CreateSession    func(ctx context.Context, options ...Option) (*memory.Session, error)
-	MarshalSession   func(ctx context.Context, session *memory.Session) ([]byte, error)
-	UnmarshalSession func(ctx context.Context, data []byte) (*memory.Session, error)
-	FormatOfFn       func(v any) (format.Format, error)
-	UnmarshalFn      func(format format.Format, data []byte, v any) error
+	// CreateSession creates a provider-specific session.
+	CreateSession func(ctx context.Context, options ...Option) (*Session, error)
+	// MarshalSession serializes a provider-specific session.
+	MarshalSession func(ctx context.Context, session *Session) ([]byte, error)
+	// UnmarshalSession deserializes a provider-specific session.
+	UnmarshalSession func(ctx context.Context, data []byte) (*Session, error)
+	// FormatOfFn returns the response format for a structured output destination.
+	FormatOfFn func(v any) (format.Format, error)
+	// UnmarshalFn unmarshals provider output into a structured output destination.
+	UnmarshalFn func(format format.Format, data []byte, v any) error
 }
 
+// Config configures an Agent instance.
 type Config struct {
-	ID          string
-	Name        string
+	// ID uniquely identifies the agent. A random UUID is assigned when empty.
+	ID string
+	// Name is the display name used for agent-authored messages.
+	Name string
+	// Description describes the agent's purpose.
 	Description string
 
+	// Instructions are prepended as a system message for each non-continuation run.
 	Instructions string
 
-	ContextProviders []*memory.ContextProvider
+	// ContextProviders inject and persist context around each agent run.
+	ContextProviders []*ContextProvider
 
+	// DisableFuncAutoCall disables automatic function-tool calling middleware.
 	DisableFuncAutoCall bool
 
-	Logger           *slog.Logger
+	// Logger receives middleware and provider diagnostics.
+	Logger *slog.Logger
+	// LogSensitiveData enables logging of sensitive request and response payloads.
 	LogSensitiveData bool
 
+	// Middlewares wrap the provider run function.
 	Middlewares []Middleware
-	Tools       []tool.Tool
-	RunOptions  []Option
+	// Tools are added to every run.
+	Tools []tool.Tool
+	// RunOptions are prepended to the options for every run.
+	RunOptions []Option
 }
 
+// New creates an Agent from provider and runtime configuration.
 func New(prov ProviderConfig, cfg Config) *Agent {
 	if prov.Run == nil {
 		panic("Run function is required")
@@ -80,7 +98,7 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 			}),
 		)
 	}
-	providers := make([]*memory.ContextProvider, 0, len(cfg.ContextProviders)+1)
+	providers := make([]*ContextProvider, 0, len(cfg.ContextProviders)+1)
 	for _, provider := range cfg.ContextProviders {
 		if provider != nil {
 			providers = append(providers, provider)
@@ -99,7 +117,7 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 		prefixedMiddlewares = append(prefixedMiddlewares, defaultLocalHistoryMiddleware())
 	}
 	if len(providers) > 0 {
-		prefixedMiddlewares = append(prefixedMiddlewares, contextprovider.New(providers...))
+		prefixedMiddlewares = append(prefixedMiddlewares, newContextProviderMiddleware(providers...))
 	}
 	cfg.Middlewares = append(prefixedMiddlewares, cfg.Middlewares...)
 	cfg.Middlewares = append(cfg.Middlewares, authorMiddleware(cfg.ID, cfg.Name))
@@ -134,6 +152,7 @@ func (r ResponseStream) Collect() (*message.Response, error) {
 	return &resp, nil
 }
 
+// Agent coordinates message preparation, middleware, sessions, and provider execution.
 type Agent struct {
 	id           string
 	name         string
@@ -145,12 +164,13 @@ type Agent struct {
 	middlewares []Middleware
 	runOptions  []Option
 
-	createSession    func(ctx context.Context, options ...Option) (*memory.Session, error)
-	marshalSession   func(ctx context.Context, session *memory.Session) ([]byte, error)
-	unmarshalSession func(ctx context.Context, data []byte) (*memory.Session, error)
+	createSession    func(ctx context.Context, options ...Option) (*Session, error)
+	marshalSession   func(ctx context.Context, session *Session) ([]byte, error)
+	unmarshalSession func(ctx context.Context, data []byte) (*Session, error)
 	run              func(ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*message.ResponseUpdate, error]
 }
 
+// ID returns the agent's unique identifier.
 func (a *Agent) ID() string {
 	if a == nil {
 		return ""
@@ -158,6 +178,7 @@ func (a *Agent) ID() string {
 	return a.id
 }
 
+// Name returns the agent's display name.
 func (a *Agent) Name() string {
 	if a == nil {
 		return ""
@@ -165,6 +186,7 @@ func (a *Agent) Name() string {
 	return a.name
 }
 
+// Description returns the agent's description.
 func (a *Agent) Description() string {
 	if a == nil {
 		return ""
@@ -172,6 +194,7 @@ func (a *Agent) Description() string {
 	return a.description
 }
 
+// ProviderName returns the name of the provider backing the agent.
 func (a *Agent) ProviderName() string {
 	if a == nil {
 		return ""
@@ -179,16 +202,18 @@ func (a *Agent) ProviderName() string {
 	return a.providerName
 }
 
-func (a *Agent) CreateSession(ctx context.Context, options ...Option) (*memory.Session, error) {
+// CreateSession creates a session for this agent.
+func (a *Agent) CreateSession(ctx context.Context, options ...Option) (*Session, error) {
 	if a.createSession == nil {
-		session := memory.NewSession("")
+		session := NewSession("")
 		session.ServiceID, _ = GetOption(options, WithServiceID)
 		return session, nil
 	}
 	return a.createSession(ctx, options...)
 }
 
-func (a *Agent) MarshalSession(ctx context.Context, session *memory.Session) ([]byte, error) {
+// MarshalSession serializes a session created for this agent.
+func (a *Agent) MarshalSession(ctx context.Context, session *Session) ([]byte, error) {
 	if a.marshalSession == nil {
 		if session == nil {
 			return nil, errors.New("the provided session is nil")
@@ -198,9 +223,10 @@ func (a *Agent) MarshalSession(ctx context.Context, session *memory.Session) ([]
 	return a.marshalSession(ctx, session)
 }
 
-func (a *Agent) UnmarshalSession(ctx context.Context, data []byte) (*memory.Session, error) {
+// UnmarshalSession deserializes a session for this agent.
+func (a *Agent) UnmarshalSession(ctx context.Context, data []byte) (*Session, error) {
 	if a.unmarshalSession == nil {
-		var session memory.Session
+		var session Session
 		if err := json.Unmarshal(data, &session); err != nil {
 			return nil, err
 		}
@@ -209,14 +235,17 @@ func (a *Agent) UnmarshalSession(ctx context.Context, data []byte) (*memory.Sess
 	return a.unmarshalSession(ctx, data)
 }
 
+// RunText runs the agent with a single user text message.
 func (a *Agent) RunText(ctx context.Context, msg string, options ...Option) ResponseStream {
 	return a.Run(ctx, []*message.Message{message.NewText(msg)}, options...)
 }
 
+// RunMessage runs the agent with a single message.
 func (a *Agent) RunMessage(ctx context.Context, msg *message.Message, options ...Option) ResponseStream {
 	return a.Run(ctx, []*message.Message{msg}, options...)
 }
 
+// Run executes the agent with the supplied messages and options.
 func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ...Option) ResponseStream {
 	ctx, preparedMessages, options, err := a.prepareRun(ctx, messages, options)
 	if err != nil {
@@ -277,7 +306,7 @@ func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, opt
 // It is bypassed for auto-created sessions on the first run, service-managed
 // sessions, and continuation-token resumes.
 func defaultLocalHistoryMiddleware() Middleware {
-	history := contextprovider.New(memory.NewInMemoryHistoryProvider("in-memory"))
+	history := newContextProviderMiddleware(NewInMemoryHistoryProvider("in-memory"))
 
 	return MiddlewareFunc(func(next RunFunc, ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*message.ResponseUpdate, error] {
 		session, _ := GetOption(options, WithSession)
