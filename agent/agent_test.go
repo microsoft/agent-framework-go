@@ -680,9 +680,9 @@ func TestAgent_Run_ProviderMiddleware_RunsProvidersWhenSessionHasServiceID(t *te
 
 	historyProvider := &agent.ContextProvider{
 		SourceID: "history",
-		Provide: func(context.Context, []*message.Message, ...agent.Option) ([]*message.Message, []agent.Option, error) {
+		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
 			provideCalled = true
-			return []*message.Message{message.NewText("history")}, nil, nil
+			return append(messages, message.NewText("history")), options, nil
 		},
 	}
 
@@ -722,9 +722,9 @@ func TestAgent_Run_ProviderMiddleware_RunsProvidersWithContinuationToken(t *test
 
 	historyProvider := &agent.ContextProvider{
 		SourceID: "history",
-		Provide: func(context.Context, []*message.Message, ...agent.Option) ([]*message.Message, []agent.Option, error) {
+		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
 			provideCalled = true
-			return nil, nil, nil
+			return messages, options, nil
 		},
 	}
 
@@ -762,9 +762,9 @@ func TestAgent_Run_UsesConfigContextProvider(t *testing.T) {
 
 	contextProvider := &agent.ContextProvider{
 		SourceID: "ctx-provider",
-		Provide: func(context.Context, []*message.Message, ...agent.Option) ([]*message.Message, []agent.Option, error) {
+		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
 			provideCalled = true
-			return nil, nil, nil
+			return messages, options, nil
 		},
 	}
 
@@ -828,9 +828,9 @@ func TestAgent_Run_ProviderMiddleware_RunsProvidersWhenSessionAutoCreated(t *tes
 
 	historyProvider := &agent.ContextProvider{
 		SourceID: "history",
-		Provide: func(context.Context, []*message.Message, ...agent.Option) ([]*message.Message, []agent.Option, error) {
+		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
 			provideCalled = true
-			return nil, nil, nil
+			return messages, options, nil
 		},
 	}
 
@@ -869,8 +869,8 @@ func TestAgent_Run_ProviderMiddleware_PersistsHistoryAfterSuccessfulRun(t *testi
 
 	historyProvider := &agent.ContextProvider{
 		SourceID: "history",
-		Provide: func(context.Context, []*message.Message, ...agent.Option) ([]*message.Message, []agent.Option, error) {
-			return []*message.Message{historyMessage}, nil, nil
+		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
+			return append(messages, historyMessage), options, nil
 		},
 		Store: func(_ context.Context, requestMessages, responseMessages []*message.Message, _ ...agent.Option) error {
 			storeCalled = true
@@ -1054,9 +1054,9 @@ func TestAgent_Run_UsesContextProvidersInOrder(t *testing.T) {
 	sequence := make([]string, 0, 4)
 	providerA := &agent.ContextProvider{
 		SourceID: "provider-a",
-		Provide: func(context.Context, []*message.Message, ...agent.Option) ([]*message.Message, []agent.Option, error) {
+		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
 			sequence = append(sequence, "before-a")
-			return []*message.Message{message.NewText("a")}, nil, nil
+			return append(messages, message.NewText("a")), options, nil
 		},
 		Store: func(context.Context, []*message.Message, []*message.Message, ...agent.Option) error {
 			sequence = append(sequence, "after-a")
@@ -1065,9 +1065,9 @@ func TestAgent_Run_UsesContextProvidersInOrder(t *testing.T) {
 	}
 	providerB := &agent.ContextProvider{
 		SourceID: "provider-b",
-		Provide: func(context.Context, []*message.Message, ...agent.Option) ([]*message.Message, []agent.Option, error) {
+		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
 			sequence = append(sequence, "before-b")
-			return []*message.Message{message.NewText("b")}, nil, nil
+			return append(messages, message.NewText("b")), options, nil
 		},
 		Store: func(context.Context, []*message.Message, []*message.Message, ...agent.Option) error {
 			sequence = append(sequence, "after-b")

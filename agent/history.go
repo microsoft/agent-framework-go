@@ -25,7 +25,10 @@ func NewInMemoryHistoryProvider(sourceID string) *ContextProvider {
 			if _, err := session.Get(sourceID, &state); err != nil {
 				return nil, nil, err
 			}
-			return state.Messages, nil, nil
+			if len(state.Messages) == 0 {
+				return msgs, options, nil
+			}
+			return append(msgs, state.Messages...), options, nil
 		},
 		Store: func(_ context.Context, requestMessages, responseMessages []*message.Message, options ...Option) error {
 			session, _ := GetOption(options, WithSession)

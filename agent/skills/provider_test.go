@@ -16,6 +16,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/skills"
 	"github.com/microsoft/agent-framework-go/agent/skills/fsskills"
+	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 )
 
@@ -471,6 +472,39 @@ func TestNewProvider_ProvidesInlineSkills(t *testing.T) {
 	}
 	if len(tools) != 1 || tools[0].Name() != "load_skill" {
 		t.Fatal("expected only load_skill tool for inline skills without resources or scripts")
+	}
+}
+
+func TestNewProvider_ProvideExtendsInput(t *testing.T) {
+	skill := mustInlineSkill(
+		skills.Frontmatter{Name: "inline-skill", Description: "Inline skill"},
+		"Inline instructions.",
+		nil,
+		nil,
+	)
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}})
+	session := agent.NewSession("")
+	input := message.NewText("input")
+
+	messages, options, err := provider.Provide(t.Context(), []*message.Message{input}, agent.WithSession(session))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("expected input plus skills message, got %d", len(messages))
+	}
+	if messages[0] != input {
+		t.Fatal("expected original input message to be preserved first")
+	}
+	if messages[1].Role != message.RoleSystem {
+		t.Fatalf("expected skills message to be a system message, got %q", messages[1].Role)
+	}
+	if gotSession, ok := agent.GetOption(options, agent.WithSession); !ok || gotSession != session {
+		t.Fatal("expected original session option to be preserved")
+	}
+	tools := slices.Collect(agent.AllOptions(options, agent.WithTool))
+	if len(tools) != 1 || tools[0].Name() != "load_skill" {
+		t.Fatal("expected skills provider to append load_skill tool")
 	}
 }
 

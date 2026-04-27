@@ -25,15 +25,16 @@ type ContextProvider struct {
 	// Defaults to passing all response messages through.
 	StoreResponseFilter messagefilter.Filter
 
-	// Optional retrieval hook that returns additional provider context messages and run options.
-	// Defaults to returning no additional context.
+	// Optional retrieval hook that returns updated provider context messages and run options.
+	// Returned slices should include the original messages and options with any additions appended.
+	// Defaults to returning the original messages and options unchanged.
 	Provide func(context.Context, []*message.Message, ...Option) ([]*message.Message, []Option, error)
 
 	// Optional storage hook. Defaults to no-op.
 	Store func(context.Context, []*message.Message, []*message.Message, ...Option) error
 }
 
-// BeforeRun returns the input messages and options with this provider's additions appended.
+// BeforeRun returns the input messages and options with this provider's additions applied.
 func (p *ContextProvider) BeforeRun(ctx context.Context, messages []*message.Message, options ...Option) ([]*message.Message, []Option, error) {
 	if p.SourceID == "" {
 		panic("SourceID is required")
@@ -42,26 +43,38 @@ func (p *ContextProvider) BeforeRun(ctx context.Context, messages []*message.Mes
 		return messages, options, nil
 	}
 
-	providedMessages, providedOptions, err := p.Provide(ctx, messages, options...)
+	outMessages, outOptions, err := p.Provide(ctx, messages, options...)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	outMessages := messages
-	if len(providedMessages) > 0 {
-		stampedProvidedMessages := make([]*message.Message, 0, len(providedMessages))
-		for _, msg := range providedMessages {
-			stampedProvidedMessages = append(stampedProvidedMessages, p.withAgentRequestMessageSource(msg))
+	if outMessages == nil {
+		outMessages = messages
+	}
+	if messageSliceExtends(outMessages, messages) {
+		outMessages = slices.Clone(outMessages)
+		for i := len(messages); i < len(outMessages); i++ {
+			outMessages[i] = p.withAgentRequestMessageSource(outMessages[i])
 		}
-		outMessages = append(slices.Clone(messages), stampedProvidedMessages...)
 	}
 
-	outOptions := options
-	if len(providedOptions) > 0 {
-		outOptions = append(slices.Clone(options), providedOptions...)
+	if outOptions == nil {
+		outOptions = options
 	}
 
 	return outMessages, outOptions, nil
+}
+
+func messageSliceExtends(out, in []*message.Message) bool {
+	if len(out) < len(in) {
+		return false
+	}
+	for i := range in {
+		if out[i] != in[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // AfterRun persists context-related state after an agent invocation finishes.

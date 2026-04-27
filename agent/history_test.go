@@ -43,6 +43,35 @@ func TestNewInMemoryHistoryProvider_DefaultConfig_RoundTripsHistory(t *testing.T
 	}
 }
 
+func TestNewInMemoryHistoryProvider_ProvideExtendsInput(t *testing.T) {
+	provider := agent.NewInMemoryHistoryProvider("InMemoryHistoryProvider")
+	session := agent.NewSession("")
+	request := message.NewText("request")
+	response := message.NewText("response")
+
+	if err := provider.AfterRun(t.Context(), []*message.Message{request}, []*message.Message{response}, agent.WithSession(session)); err != nil {
+		t.Fatalf("unexpected error storing history: %v", err)
+	}
+
+	newRequest := message.NewText("new request")
+	messages, options, err := provider.Provide(t.Context(), []*message.Message{newRequest}, agent.WithSession(session))
+	if err != nil {
+		t.Fatalf("unexpected error loading history: %v", err)
+	}
+	if len(messages) != 3 {
+		t.Fatalf("expected request plus 2 history messages, got %d", len(messages))
+	}
+	if messages[0] != newRequest {
+		t.Fatal("expected original request message to be preserved first")
+	}
+	if messages[1].String() != "request" || messages[2].String() != "response" {
+		t.Fatalf("unexpected output order/content")
+	}
+	if gotSession, ok := agent.GetOption(options, agent.WithSession); !ok || gotSession != session {
+		t.Fatal("expected original session option to be preserved")
+	}
+}
+
 func TestNewInMemoryHistoryProvider_SourceID_MapsToSessionStateKey(t *testing.T) {
 	session := agent.NewSession("")
 	customProvider := agent.NewInMemoryHistoryProvider("custom")

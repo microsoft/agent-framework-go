@@ -30,8 +30,8 @@ func TestContextProviderMiddleware_Run_ProviderOptionsEnrichTools(t *testing.T) 
 	var capturedTools []tool.Tool
 	provider := &agent.ContextProvider{
 		SourceID: "provider-a",
-		Provide: func(context.Context, []*message.Message, ...agent.Option) ([]*message.Message, []agent.Option, error) {
-			return nil, []agent.Option{agent.WithTool(providerTool)}, nil
+		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
+			return messages, append(options, agent.WithTool(providerTool)), nil
 		},
 	}
 
@@ -58,8 +58,8 @@ func TestContextProviderMiddleware_Run_SharedOptions_ProviderToolsDoNotAccumulat
 	toolCounts := make([]int, 0, 3)
 	provider := &agent.ContextProvider{
 		SourceID: "provider-a",
-		Provide: func(context.Context, []*message.Message, ...agent.Option) ([]*message.Message, []agent.Option, error) {
-			return nil, []agent.Option{agent.WithTool(stubTool{name: "provider"})}, nil
+		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
+			return messages, append(options, agent.WithTool(stubTool{name: "provider"})), nil
 		},
 	}
 	sharedOptions := []agent.Option{
@@ -91,8 +91,8 @@ func TestContextProviderMiddleware_Run_SharedOptions_OriginalToolsNotMutated(t *
 	baselineTool := stubTool{name: "baseline"}
 	provider := &agent.ContextProvider{
 		SourceID: "provider-a",
-		Provide: func(context.Context, []*message.Message, ...agent.Option) ([]*message.Message, []agent.Option, error) {
-			return nil, []agent.Option{agent.WithTool(stubTool{name: "provider"})}, nil
+		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
+			return messages, append(options, agent.WithTool(stubTool{name: "provider"})), nil
 		},
 	}
 	sharedOptions := []agent.Option{

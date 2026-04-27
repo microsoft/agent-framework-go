@@ -163,17 +163,22 @@ func (s *skillSliceSource) Skills(context.Context) ([]*Skill, error) {
 	return s.skills, nil
 }
 
-func (p *providerState) provide(ctx context.Context, _ []*message.Message, _ ...agent.Option) (messages []*message.Message, options []agent.Option, err error) {
+func (p *providerState) provide(ctx context.Context, messages []*message.Message, options ...agent.Option) (outMessages []*message.Message, outOptions []agent.Option, err error) {
 	if p.options.DisableCaching {
 		result, err := p.buildContext(ctx)
-		return result.Messages, result.Options, err
+		if err != nil {
+			return nil, nil, err
+		}
+		outMessages, outOptions = extendProviderContext(messages, options, result)
+		return outMessages, outOptions, nil
 	}
 
 	p.mu.Lock()
 	if p.cached != nil {
 		cached := *p.cached
 		p.mu.Unlock()
-		return cached.Messages, cached.Options, nil
+		outMessages, outOptions = extendProviderContext(messages, options, cached)
+		return outMessages, outOptions, nil
 	}
 	if p.loading != nil {
 		loading := p.loading
@@ -184,10 +189,15 @@ func (p *providerState) provide(ctx context.Context, _ []*message.Message, _ ...
 		defer p.mu.Unlock()
 		if p.cached == nil {
 			result, err := p.buildContext(ctx)
-			return result.Messages, result.Options, err
+			if err != nil {
+				return nil, nil, err
+			}
+			outMessages, outOptions = extendProviderContext(messages, options, result)
+			return outMessages, outOptions, nil
 		}
 		cached := *p.cached
-		return cached.Messages, cached.Options, nil
+		outMessages, outOptions = extendProviderContext(messages, options, cached)
+		return outMessages, outOptions, nil
 	}
 	p.loading = make(chan struct{})
 	loading := p.loading
@@ -210,7 +220,25 @@ func (p *providerState) provide(ctx context.Context, _ []*message.Message, _ ...
 	}()
 
 	result, err = p.buildContext(ctx)
-	return result.Messages, result.Options, err
+	if err != nil {
+		return nil, nil, err
+	}
+	outMessages, outOptions = extendProviderContext(messages, options, result)
+	return outMessages, outOptions, nil
+}
+
+func extendProviderContext(messages []*message.Message, options []agent.Option, result providerContext) ([]*message.Message, []agent.Option) {
+	outMessages := messages
+	if len(result.Messages) > 0 {
+		outMessages = append(messages, result.Messages...)
+	}
+
+	outOptions := options
+	if len(result.Options) > 0 {
+		outOptions = append(options, result.Options...)
+	}
+
+	return outMessages, outOptions
 }
 
 func (p *providerState) buildContext(ctx context.Context) (providerContext, error) {

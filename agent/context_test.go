@@ -48,9 +48,9 @@ func TestContextProvider_Invoking_PassesAllMessagesToProvide(t *testing.T) {
 	var captured []*message.Message
 	provider := &agent.ContextProvider{
 		SourceID: "ctx",
-		Provide: func(_ context.Context, messages []*message.Message, _ ...agent.Option) ([]*message.Message, []agent.Option, error) {
+		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
 			captured = messages
-			return nil, nil, nil
+			return messages, options, nil
 		},
 	}
 
@@ -84,8 +84,8 @@ func TestContextProvider_Invoking_ReturnsProvidedMessagesAndSetsSourceID(t *test
 
 	provider := &agent.ContextProvider{
 		SourceID: "ctx",
-		Provide: func(context.Context, []*message.Message, ...agent.Option) ([]*message.Message, []agent.Option, error) {
-			return []*message.Message{provided}, nil, nil
+		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
+			return append(messages, provided), options, nil
 		},
 	}
 
@@ -110,8 +110,8 @@ func TestContextProvider_Invoking_ReturnsProvidedMessagesAndSetsSourceID(t *test
 func TestContextProvider_Invoking_UsesCustomSourceID(t *testing.T) {
 	provider := &agent.ContextProvider{
 		SourceID: "CustomContextSource",
-		Provide: func(context.Context, []*message.Message, ...agent.Option) ([]*message.Message, []agent.Option, error) {
-			return []*message.Message{message.NewText("ctx")}, nil, nil
+		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
+			return append(messages, message.NewText("ctx")), options, nil
 		},
 	}
 
@@ -199,8 +199,8 @@ func TestContextProvider_InvokingContext_ReturnsProvidedFields(t *testing.T) {
 
 	provider := &agent.ContextProvider{
 		SourceID: "ctx",
-		Provide: func(context.Context, []*message.Message, ...agent.Option) ([]*message.Message, []agent.Option, error) {
-			return []*message.Message{providedMsg}, []agent.Option{agent.WithTool(providedTool)}, nil
+		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
+			return append(messages, providedMsg), append(options, agent.WithTool(providedTool)), nil
 		},
 	}
 
