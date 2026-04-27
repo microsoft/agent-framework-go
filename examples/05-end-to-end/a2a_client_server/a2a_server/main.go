@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/microsoft/agent-framework-go/agent"
@@ -24,6 +23,12 @@ import (
 	"github.com/microsoft/agent-framework-go/tool/functool"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
+)
+
+var (
+	endpoint   = os.Getenv("AZURE_OPENAI_ENDPOINT")
+	apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
+	deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
 )
 
 type Product struct {
@@ -95,15 +100,8 @@ func main() {
 	port := flag.Int("port", 5000, "Port to listen on")
 	flag.Parse()
 
-	deployment := cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
-	endpoint := os.Getenv("AZURE_OPENAI_ENDPOINT")
-	apiVersion := cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
-	demo.CheckAzureEndpoint(endpoint)
-
-	token, err := azidentity.NewDefaultAzureCredential(nil)
-	if err != nil {
-		demo.Panicf("failed to create Azure credential: %v", err)
-	}
+	// Get Azure token credential for authentication with Azure OpenAI.
+	token := demo.AzureTokenCredential()
 
 	url := fmt.Sprintf("http://localhost:%d", *port)
 

@@ -7,7 +7,6 @@ import (
 	"context"
 	"os"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
@@ -17,9 +16,9 @@ import (
 )
 
 var (
-	deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
 	endpoint   = os.Getenv("AZURE_OPENAI_ENDPOINT")
 	apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
+	deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
 )
 
 var logger = demo.NewLogger(
@@ -29,11 +28,8 @@ var logger = demo.NewLogger(
 )
 
 func main() {
-	demo.CheckAzureEndpoint(endpoint)
-	token, err := azidentity.NewDefaultAzureCredential(nil)
-	if err != nil {
-		panic(err)
-	}
+	// Get Azure token credential for authentication with Azure OpenAI.
+	token := demo.AzureTokenCredential()
 
 	// Create Azure OpenAI agent.
 	a := openaichatagent.New(

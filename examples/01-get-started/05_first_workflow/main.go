@@ -19,7 +19,7 @@ import (
 // For input "Hello, World!", the workflow produces "!DLROW ,OLLEH".
 
 func main() {
-	// Create the executors
+	// Create the executors.
 	uppercase := workflow.BindFunc("UppercaseExecutor", true, func(input string) string {
 		return strings.ToUpper(input)
 	})
@@ -29,7 +29,7 @@ func main() {
 		return string(runes)
 	})
 
-	// Build the workflow by connecting executors sequentially
+	// Build the workflow by connecting executors sequentially.
 	wf, err := workflow.NewBuilder(uppercase).
 		AddEdge(uppercase, reverse).
 		WithOutputFrom(reverse).
@@ -38,7 +38,7 @@ func main() {
 		panic(err)
 	}
 
-	// Execute the workflow with sample input
+	// Execute the workflow with sample input.
 	run, err := inproc.Run(context.Background(), wf, "", "Hello, World!")
 	if err != nil {
 		panic(err)

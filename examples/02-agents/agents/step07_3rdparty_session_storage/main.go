@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"slices"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
@@ -22,9 +21,9 @@ import (
 )
 
 var (
-	deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
 	endpoint   = os.Getenv("AZURE_OPENAI_ENDPOINT")
 	apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
+	deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
 )
 
 var logger = demo.NewLogger(
@@ -34,16 +33,13 @@ var logger = demo.NewLogger(
 )
 
 func main() {
-	demo.CheckAzureEndpoint(endpoint)
-	token, err := azidentity.NewDefaultAzureCredential(nil)
-	if err != nil {
-		panic(err)
-	}
+	// Get Azure token credential for authentication with Azure OpenAI.
+	token := demo.AzureTokenCredential()
 
 	// Create a temporary directory to store messages.
 	tmpDir, err := os.MkdirTemp("", "agent_session_storage")
 	if err != nil {
-		panic(err)
+		demo.Panic(err)
 	}
 	defer func() { _ = os.RemoveAll(tmpDir) }()
 
@@ -79,8 +75,8 @@ func main() {
 	demo.Response(resp, err)
 
 	// Serialize the session state, so it can be stored for later use.
-	// Since the chat history is stored in the disk store, the serialized session
-	// only contains the ID that the messages are stored under in the store.
+	// The disk store holds the chat history.
+	// The serialized session only contains the message-store ID.
 	serializedSession, err := json.MarshalIndent(session, "", "\t")
 	if err != nil {
 		demo.Panic(err)
@@ -88,8 +84,7 @@ func main() {
 	fmt.Println("\n--- Serialized session ---")
 	fmt.Println(string(serializedSession))
 
-	// The serialized session can now be saved to a database, file, or any other storage mechanism
-	// and loaded again later.
+	// The serialized session can now be saved and loaded again later.
 
 	// Deserialize the session state after loading from storage.
 	resumedSession, err := a.UnmarshalSession(ctx, serializedSession)

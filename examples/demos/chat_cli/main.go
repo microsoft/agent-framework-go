@@ -37,7 +37,7 @@ func main() {
 }
 
 func runChatLoop(ctx context.Context, a *agent.Agent) {
-	// Create a session to maintain conversation history
+	// Create a session to maintain conversation history.
 	session, err := a.CreateSession(ctx)
 	if err != nil {
 		panic(err)
@@ -46,22 +46,22 @@ func runChatLoop(ctx context.Context, a *agent.Agent) {
 	scanner := bufio.NewScanner(os.Stdin)
 
 	for {
-		// Print user prompt
+		// Print user prompt.
 		fmt.Print("You: ")
 
-		// Read user input
+		// Read user input.
 		if !scanner.Scan() {
 			break
 		}
 
 		userInput := strings.TrimSpace(scanner.Text())
 
-		// Handle empty input
+		// Handle empty input.
 		if userInput == "" {
 			continue
 		}
 
-		// Handle commands
+		// Handle commands.
 		if userInput == "exit" || userInput == "quit" {
 			fmt.Println("\n👋 Goodbye!")
 			return
@@ -76,7 +76,7 @@ func runChatLoop(ctx context.Context, a *agent.Agent) {
 			continue
 		}
 
-		// Get streaming response from agent
+		// Get streaming response from agent.
 		fmt.Print("Assistant: ")
 
 		hasError := false
@@ -86,7 +86,7 @@ func runChatLoop(ctx context.Context, a *agent.Agent) {
 				hasError = true
 				break
 			}
-			// Print streaming text as it arrives
+			// Print streaming text as it arrives.
 			fmt.Print(update)
 		}
 

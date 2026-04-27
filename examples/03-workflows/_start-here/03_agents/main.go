@@ -19,11 +19,11 @@ import (
 // 2. Spanish Agent - translates French text to Spanish
 // 3. English Agent - translates Spanish text back to English
 //
-// The agents are connected sequentially, creating a translation chain that demonstrates
-// how AI-powered components can be seamlessly integrated into workflow pipelines.
+// The agents are connected sequentially, creating a translation chain.
+// This demonstrates how AI-powered components can be integrated into workflow pipelines.
 
 func main() {
-	// Create agents
+	// Create agents.
 	frenchAgent := newAgent("French").Bind(false)
 	spanishAgent := newAgent("Spanish").Bind(false)
 	englishAgent := newAgent("English").Bind(false)
@@ -36,7 +36,7 @@ func main() {
 		panic(err)
 	}
 
-	// Execute the workflow with sample input
+	// Execute the workflow with sample input.
 	run, err := inproc.Stream(context.Background(), wf, "", message.NewText("Hello World"))
 	if err != nil {
 		panic(err)

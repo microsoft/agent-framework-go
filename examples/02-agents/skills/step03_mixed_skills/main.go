@@ -12,7 +12,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
 	"github.com/microsoft/agent-framework-go/agent/skills"
@@ -145,28 +144,25 @@ var temperatureConverterSkill = skills.Skill{
 	},
 }
 
+var (
+	endpoint   = os.Getenv("AZURE_OPENAI_ENDPOINT")
+	apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
+	deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-5.4-mini")
+)
+
 var logger = demo.NewLogger(
 	"Mixed Skills",
 	"Combining file-based, code-defined, and struct-based Agent Skills with explicit source composition.",
 	"Model", deployment,
 )
 
-var (
-	deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-5.4-mini")
-	endpoint   = os.Getenv("AZURE_OPENAI_ENDPOINT")
-	apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
-)
-
 func main() {
-	demo.CheckAzureEndpoint(endpoint)
-	token, err := azidentity.NewDefaultAzureCredential(nil)
-	if err != nil {
-		panic(err)
-	}
+	// Get Azure token credential for authentication with Azure OpenAI.
+	token := demo.AzureTokenCredential()
 
 	skillsRoot, err := os.OpenRoot("skills")
 	if err != nil {
-		panic(err)
+		demo.Panic(err)
 	}
 	defer func() { _ = skillsRoot.Close() }()
 

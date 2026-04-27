@@ -18,8 +18,9 @@ import (
 	"github.com/microsoft/agent-framework-go/message"
 )
 
+var serverURL = cmp.Or(os.Getenv("AGUI_SERVER_URL"), "http://localhost:8888")
+
 func main() {
-	serverURL := cmp.Or(os.Getenv("AGUI_SERVER_URL"), "http://localhost:8888")
 	a := aguiagent.New(
 		aguiSSEClient.NewClient(aguiSSEClient.Config{Endpoint: serverURL}),
 		aguiagent.Config{},

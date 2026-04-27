@@ -27,21 +27,22 @@ var logger = demo.NewLogger(
 func main() {
 	ctx := context.Background()
 
-	// Resolve an AgentCard
+	// Resolve the agent card.
 	card, err := agentcard.DefaultResolver.Resolve(ctx, cardURL)
 	if err != nil {
-		demo.Panicf("Failed to resolve an AgentCard: %v", err)
+		demo.Panicf("failed to resolve agent card: %v", err)
 	}
 
-	// Insecure connection is used for example purposes
+	// Insecure connection is used for example purposes.
 	withInsecureGRPC := a2agrpc.WithGRPCTransport(grpc.WithTransportCredentials(insecure.NewCredentials()))
 
-	// Create a client connected to one of the interfaces specified in the AgentCard.
+	// Create a client connected to one of the interfaces specified in the agent card.
 	client, err := a2aclient.NewFromCard(ctx, card, withInsecureGRPC)
 	if err != nil {
-		demo.Panicf("Failed to create a client: %v", err)
+		demo.Panicf("failed to create A2A client: %v", err)
 	}
 
+	// Create A2A agent.
 	a := a2aagent.New(
 		client,
 		a2aagent.Config{

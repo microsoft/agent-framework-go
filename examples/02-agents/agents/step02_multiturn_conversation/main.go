@@ -7,7 +7,6 @@ import (
 	"context"
 	"os"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
@@ -16,9 +15,9 @@ import (
 )
 
 var (
-	deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
 	endpoint   = os.Getenv("AZURE_OPENAI_ENDPOINT")
 	apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
+	deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
 )
 
 var logger = demo.NewLogger(
@@ -28,11 +27,8 @@ var logger = demo.NewLogger(
 )
 
 func main() {
-	demo.CheckAzureEndpoint(endpoint)
-	token, err := azidentity.NewDefaultAzureCredential(nil)
-	if err != nil {
-		panic(err)
-	}
+	// Get Azure token credential for authentication with Azure OpenAI.
+	token := demo.AzureTokenCredential()
 
 	// Create Azure OpenAI agent.
 	a := openaichatagent.New(
@@ -52,7 +48,7 @@ func main() {
 
 	ctx := context.Background()
 
-	// Invoke the agent with a multi-turn conversation, where the context is preserved in the session object.
+	// Run a multi-turn conversation using the same session.
 	session, err := a.CreateSession(ctx)
 	if err != nil {
 		demo.Panic(err)
@@ -62,7 +58,7 @@ func main() {
 	resp, err = a.RunText(ctx, "Now add some emojis to the joke and tell it in the voice of a pirate's parrot.", agent.WithSession(session)).Collect()
 	demo.Response(resp, err)
 
-	// Invoke the agent with a multi-turn conversation and streaming, where the context is preserved in the session object.
+	// Run a streamed multi-turn conversation using the same session.
 	session2, err := a.CreateSession(ctx)
 	if err != nil {
 		demo.Panic(err)

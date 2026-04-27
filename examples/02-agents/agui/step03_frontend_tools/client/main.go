@@ -19,9 +19,9 @@ import (
 	"github.com/microsoft/agent-framework-go/tool/functool"
 )
 
-func main() {
-	serverURL := cmp.Or(os.Getenv("AGUI_SERVER_URL"), "http://localhost:8888")
+var serverURL = cmp.Or(os.Getenv("AGUI_SERVER_URL"), "http://localhost:8888")
 
+func main() {
 	frontendTool := functool.MustNew(functool.Config{
 		Name:        "get_user_location",
 		Description: "Get the user's current location from GPS.",

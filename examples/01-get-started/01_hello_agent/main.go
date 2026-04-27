@@ -7,12 +7,11 @@ import (
 	"context"
 	"os"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 
-	openai "github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
 )
 
@@ -29,14 +28,10 @@ var logger = demo.NewLogger(
 )
 
 func main() {
-	// Create a token credential using Azure Identity.
-	demo.CheckAzureEndpoint(endpoint)
-	token, err := azidentity.NewDefaultAzureCredential(nil)
-	if err != nil {
-		panic(err)
-	}
+	// Get Azure token credential for authentication with Azure OpenAI.
+	token := demo.AzureTokenCredential()
 
-	// Create Azure OpenAI agent
+	// Create Azure OpenAI agent.
 	a := openaichatagent.New(
 		openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
@@ -45,10 +40,12 @@ func main() {
 		openaichatagent.Config{
 			Model: deployment,
 			Config: agent.Config{
-				Instructions: "You are good at telling jokes.", Name: "Joker",
-				Middlewares: []agent.Middleware{logger}, // for logging agent interactions
+				Instructions: "You are good at telling jokes.",
+				Name:         "Joker",
+				Middlewares:  []agent.Middleware{logger}, // for logging agent interactions
 			},
-		})
+		},
+	)
 
 	ctx := context.Background()
 

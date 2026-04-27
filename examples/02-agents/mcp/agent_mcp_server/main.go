@@ -22,22 +22,22 @@ var logger = demo.NewLogger(
 func main() {
 	ctx := context.Background()
 
-	// Create MCP HTTP tool for Microsoft Learn
+	// Create MCP HTTP tool for Microsoft Learn.
 	session, err := mcptool.Connect(ctx, &mcp.StreamableClientTransport{
 		Endpoint: "https://learn.microsoft.com/api/mcp",
 	})
 	if err != nil {
-		panic(err)
+		demo.Panic(err)
 	}
 	defer func() { _ = session.Close() }()
 
-	// Retrieve the list of tools available on the Microsoft Learn server
+	// Retrieve the list of tools available on the Microsoft Learn server.
 	tools, err := mcptool.ListTools(ctx, session)
 	if err != nil {
-		panic(err)
+		demo.Panic(err)
 	}
 
-	// Create the Agent with MCP tools
+	// Create the agent with MCP tools.
 	a := openaichatagent.New(
 		openai.NewClient(),
 		openaichatagent.Config{

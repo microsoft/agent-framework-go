@@ -18,7 +18,7 @@ var logger = demo.NewLogger(
 )
 
 func main() {
-	// Create Anthropic agent
+	// Create Anthropic agent.
 	a := anthropicagent.New(
 		anthropic.NewClient(),
 		anthropicagent.Config{

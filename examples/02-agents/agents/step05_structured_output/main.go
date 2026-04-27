@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
@@ -19,9 +18,9 @@ import (
 )
 
 var (
-	deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
 	endpoint   = os.Getenv("AZURE_OPENAI_ENDPOINT")
 	apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
+	deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
 )
 
 var logger = demo.NewLogger(
@@ -49,11 +48,8 @@ func runFor[T any](ctx context.Context, a *agent.Agent, message string, opts ...
 }
 
 func main() {
-	demo.CheckAzureEndpoint(endpoint)
-	token, err := azidentity.NewDefaultAzureCredential(nil)
-	if err != nil {
-		panic(err)
-	}
+	// Get Azure token credential for authentication with Azure OpenAI.
+	token := demo.AzureTokenCredential()
 
 	// Create Azure OpenAI agent.
 	a := openaichatagent.New(
@@ -73,7 +69,7 @@ func main() {
 
 	ctx := context.Background()
 
-	// Set PersonInfo as the type parameter of runFor method to specify the expected structured output from the agent and invoke the agent with some unstructured input.
+	// Use PersonInfo as the expected structured output type.
 	person, err := runFor[PersonInfo](ctx, a, "Please provide information about John Smith, who is a 35-year-old software engineer.")
 	if err != nil {
 		demo.Panic(err)
@@ -85,7 +81,7 @@ func main() {
 	fmt.Println("\tOccupation:", person.Occupation)
 	fmt.Println()
 
-	// Create the agent with the specified name, instructions, and expected structured output the agent should produce.
+	// Create an agent with structured output enabled.
 	a = openaichatagent.New(
 		openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
@@ -104,7 +100,7 @@ func main() {
 		},
 	)
 
-	// Invoke the agent with some unstructured input while streaming, to extract the structured information from.
+	// Stream structured output from unstructured input.
 	var personRaw []byte
 	for update, err := range a.RunText(ctx, "Please provide information about John Smith, who is a 35-year-old software engineer.", agent.Stream(true)) {
 		demo.Response(update, err)

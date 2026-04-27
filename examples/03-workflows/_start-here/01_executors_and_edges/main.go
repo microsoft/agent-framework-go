@@ -21,12 +21,12 @@ import (
 // For input "Hello, World!", the workflow produces "!DLROW ,OLLEH".
 
 func main() {
-	// Create the executors
+	// Create the executors.
 	uppercase := workflow.BindFunc("UppercaseExecutor", true, func(input string) string {
 		return strings.ToUpper(input)
 	})
 
-	// Build the workflow by connecting executors sequentially
+	// Build the workflow by connecting executors sequentially.
 	reverse := workflow.BindFunc("ReverseExecutor", true, func(input string) string {
 		runes := []rune(input)
 		slices.Reverse(runes)
@@ -40,7 +40,7 @@ func main() {
 		panic(err)
 	}
 
-	// Execute the workflow with sample input
+	// Execute the workflow with sample input.
 	run, err := inproc.Run(context.Background(), wf, "", "Hello, World!")
 	if err != nil {
 		panic(err)

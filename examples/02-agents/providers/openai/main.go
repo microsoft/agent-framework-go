@@ -18,6 +18,7 @@ var logger = demo.NewLogger(
 )
 
 func main() {
+	// Create OpenAI agent.
 	a := openaichatagent.New(
 		openai.NewClient(),
 		openaichatagent.Config{

@@ -10,23 +10,22 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
 )
 
-// This sample introduces the use of AI agents as executors within a workflow.
+// This sample introduces streaming workflow execution.
 //
-// Instead of simple text processing executors, this workflow uses three translation agents:
-// 1. French Agent - translates input text to French
-// 2. Spanish Agent - translates French text to Spanish
-// 3. English Agent - translates Spanish text back to English
+// Workflows are built from executors (processing units) connected by edges (data flow paths).
+// In this example, we create a simple text processing pipeline that:
+//  1. Takes input text and converts it to uppercase using an UppercaseExecutor
+//  2. Takes the uppercase text and reverses it using a ReverseTextExecutor
 //
-// The agents are connected sequentially, creating a translation chain that demonstrates
-// how AI-powered components can be seamlessly integrated into workflow pipelines.
+// The workflow streams executor completion events as each step finishes.
 
 func main() {
-	// Create the executors
+	// Create the executors.
 	uppercase := workflow.BindFunc("UppercaseExecutor", true, func(input string) string {
 		return strings.ToUpper(input)
 	})
 
-	// Build the workflow by connecting executors sequentially
+	// Build the workflow by connecting executors sequentially.
 	reverse := workflow.BindFunc("ReverseExecutor", true, func(input string) string {
 		runes := []rune(input)
 		slices.Reverse(runes)
@@ -40,7 +39,7 @@ func main() {
 		panic(err)
 	}
 
-	// Execute the workflow with sample input
+	// Execute the workflow with sample input.
 	run, err := inproc.Stream(context.Background(), wf, "", "Hello, World!")
 	if err != nil {
 		panic(err)

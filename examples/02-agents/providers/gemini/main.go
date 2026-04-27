@@ -34,7 +34,7 @@ func main() {
 		demo.Panicf("failed to create Gemini client: %v", err)
 	}
 
-	// Create Gemini agent
+	// Create Gemini agent.
 	a := geminiagent.New(
 		client,
 		geminiagent.Config{
