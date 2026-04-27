@@ -56,7 +56,6 @@ func newInProcessRunnerContext(
 	existingOwnerSignoff any,
 	enableConcurrentRuns bool,
 ) (*runnerContext, error) {
-
 	ctx := &runnerContext{
 		wf:                       wf,
 		runID:                    runID,
@@ -132,7 +131,7 @@ func (proc *runnerContext) EnsureExecutor(ctx context.Context, executorID string
 		tracer.TraceActivated(executorID)
 	}
 
-	// TODO: Handle special executor types (RequestInfoExecutor, WorkflowHostExecutor)
+	// Handle special executor types (RequestInfoExecutor, WorkflowHostExecutor) in the future.
 
 	proc.executors[executorID] = executor
 
@@ -279,7 +278,7 @@ func (proc *runnerContext) SendMessage(ctx context.Context, sourceID, targetID s
 		return err
 	}
 
-	// TODO: Add OpenTelemetry trace context propagation
+	// Add OpenTelemetry trace context propagation in the future.
 	envelope, err := execution.NewMessageEnvelope(message, nil, sourceID, targetID)
 	if err != nil {
 		return err

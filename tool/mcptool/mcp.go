@@ -102,8 +102,10 @@ func mcpContentToAgentContent(mcpContents []mcp.Content) []message.Content {
 	return result
 }
 
-var _ tool.Tool = (*mcpWrapper)(nil)
-var _ tool.FuncTool = (*mcpWrapper)(nil)
+var (
+	_ tool.Tool     = (*mcpWrapper)(nil)
+	_ tool.FuncTool = (*mcpWrapper)(nil)
+)
 
 // mcpWrapper wraps an MCP tool as an agent.Tool.
 type mcpWrapper struct {

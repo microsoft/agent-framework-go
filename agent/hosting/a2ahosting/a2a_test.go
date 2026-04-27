@@ -455,6 +455,7 @@ func TestRequestHandler_OnSendMessageStream_WithNilAdditionalProperties_LeavesAr
 		t.Fatalf("expected nil metadata, got %#v", artifacts[0].Metadata)
 	}
 }
+
 func TestRequestHandler_OnSendMessageStream_WhenAgentYieldsNoUpdates_ReturnsLifecycleOnly(t *testing.T) {
 	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(func(*message.ResponseUpdate, error) bool) {}
@@ -518,23 +519,6 @@ func TestRequestHandler_OnCancelTask_ReturnsCanceledTask(t *testing.T) {
 type assertErr string
 
 func (e assertErr) Error() string { return string(e) }
-
-func collectStreamingMessages(t *testing.T, stream iter.Seq2[a2a.Event, error]) []*a2a.Message {
-	t.Helper()
-
-	var messages []*a2a.Message
-	for evt, err := range stream {
-		if err != nil {
-			t.Fatalf("stream returned error: %v", err)
-		}
-		msg, ok := evt.(*a2a.Message)
-		if !ok {
-			continue
-		}
-		messages = append(messages, msg)
-	}
-	return messages
-}
 
 func collectFirstStreamingTask(t *testing.T, stream iter.Seq2[a2a.Event, error]) *a2a.Task {
 	t.Helper()

@@ -754,7 +754,7 @@ func TestResponsesDataContentMessage_Image_NonStreaming(t *testing.T) {
 		MediaType: "image/png",
 	}
 	// Add "detail" to AdditionalProperties
-	dataContent.ContentHeader.AdditionalProperties = map[string]any{
+	dataContent.AdditionalProperties = map[string]any{
 		"detail": "high",
 	}
 
@@ -3944,7 +3944,6 @@ func TestResponsesConversationId_AsResponseId_NonStreaming(t *testing.T) {
 		}),
 		agent.WithSession(session),
 	).Collect()
-
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
@@ -4847,19 +4846,4 @@ func bodyEqual(t *testing.T, got string, want string) {
 		}
 		t.Errorf("body\ngot %s\nwant %s", gotOut, wantOut)
 	}
-}
-
-func newTestServer(t *testing.T, input string, output string) *httptest.Server {
-	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Fatalf("failed reading request body: %v", err)
-		}
-		bodyEqual(t, string(body), input)
-		w.Header().Set("Content-Type", "application/json")
-		if _, err := io.WriteString(w, output); err != nil {
-			t.Fatalf("failed writing response: %v", err)
-		}
-	}))
 }

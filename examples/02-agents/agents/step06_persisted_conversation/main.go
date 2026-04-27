@@ -16,9 +16,11 @@ import (
 	"github.com/openai/openai-go/v3/azure"
 )
 
-var deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
-var endpoint = os.Getenv("AZURE_OPENAI_ENDPOINT")
-var apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
+var (
+	deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
+	endpoint   = os.Getenv("AZURE_OPENAI_ENDPOINT")
+	apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
+)
 
 var logger = demo.NewLogger(
 	"Persisted Conversation",
@@ -73,7 +75,7 @@ func main() {
 		demo.Panic(err)
 	}
 	tmpPath := filepath.Join(tmpDir, "session.json")
-	if err := os.WriteFile(tmpPath, serializedSession, 0644); err != nil {
+	if err := os.WriteFile(tmpPath, serializedSession, 0o644); err != nil {
 		demo.Panic(err)
 	}
 

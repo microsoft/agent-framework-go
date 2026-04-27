@@ -95,7 +95,7 @@ func (s *Session) Delete(key string) {
 }
 
 func (s *Session) MarshalJSON() ([]byte, error) {
-	var tmp = struct {
+	tmp := struct {
 		State map[string]*stateValue
 
 		ID        string

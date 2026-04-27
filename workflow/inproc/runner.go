@@ -17,8 +17,10 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow/internal/execution"
 )
 
-var _ execution.SuperStepRunner = (*runner)(nil)
-var _ checkpoint.CheckpointingHandle = (*runner)(nil)
+var (
+	_ execution.SuperStepRunner      = (*runner)(nil)
+	_ checkpoint.CheckpointingHandle = (*runner)(nil)
+)
 
 // runner provides a local, in-process runner for executing a workflow.
 // It enables step-by-step execution of a workflow graph entirely within the current process,
@@ -36,8 +38,7 @@ type runner struct {
 
 	knownValidInputTypes map[reflect.Type]struct{}
 
-	workflowInfoCache *checkpoint.WorkflowInfo
-	checkpoints       []workflow.CheckpointInfo
+	checkpoints []workflow.CheckpointInfo
 }
 
 // createTopLevelRunner creates a new top-level InProcessRunner for the given workflow.
@@ -52,21 +53,6 @@ func createTopLevelRunner(
 		runID = uuid.NewString()
 	}
 	return newInProcessRunner(wf, checkpointMgr, runID, nil, enableConcurrentRuns, knownValidInputTypes)
-}
-
-// createSubworkflowRunner creates a new subworkflow InProcessRunner.
-func createSubworkflowRunner(
-	wf *workflow.Workflow,
-	checkpointMgr checkpoint.Manager,
-	runID string,
-	existingOwnerSignoff any,
-	enableConcurrentRuns bool,
-	knownValidInputTypes []reflect.Type,
-) (*runner, error) {
-	if runID == "" {
-		runID = uuid.NewString()
-	}
-	return newInProcessRunner(wf, checkpointMgr, runID, existingOwnerSignoff, enableConcurrentRuns, knownValidInputTypes)
 }
 
 func newInProcessRunner(
@@ -243,7 +229,7 @@ func (r *runner) RunSuperStep(ctx context.Context) (bool, error) {
 
 		if err := r.runSuperstep(ctx, currentStep); err != nil {
 			if !errors.Is(err, context.Canceled) {
-				r.outgoingEvents.Enqueue(ctx, workflow.ErrorEvent{Error: err})
+				_ = r.outgoingEvents.Enqueue(ctx, workflow.ErrorEvent{Error: err})
 			}
 		}
 		return true, nil
@@ -284,7 +270,7 @@ func (r *runner) RestoreCheckpoint(ctx context.Context, checkpointInfo workflow.
 	if err := r.runContext.stateManager.ImportState(cp); err != nil {
 		return err
 	}
-	// TODO: Implement full checkpoint restoration
+	// Implement full checkpoint restoration in the future.
 	return fmt.Errorf("checkpoint restore not yet implemented")
 }
 
@@ -354,8 +340,8 @@ func (r *runner) checkpoint(ctx context.Context) error {
 		return r.runContext.stateManager.PublishUpdates(r.stepTracer)
 	}
 
-	// TODO: Implement full checkpoint creation
-	// This requires implementing WorkflowInfo and state export for all components
+	// Implement full checkpoint creation in the future.
+	// This requires implementing WorkflowInfo and state export for all components.
 
 	return r.runContext.stateManager.PublishUpdates(r.stepTracer)
 }

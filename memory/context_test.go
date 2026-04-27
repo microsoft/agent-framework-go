@@ -153,7 +153,8 @@ func TestContextProvider_Invoked_CallsStoreAndExcludesSameProviderRequestMessage
 		},
 	}
 
-	err := provider.AfterRun(AfterRunContext{Context: context.Background(),
+	err := provider.AfterRun(AfterRunContext{
+		Context:          context.Background(),
 		Session:          NewSession(""),
 		RequestMessages:  []*message.Message{req1, req2},
 		ResponseMessages: []*message.Message{resp},
@@ -208,7 +209,8 @@ func TestContextProvider_InvokingContext_ReturnsProvidedFields(t *testing.T) {
 		},
 	}
 
-	out, err := provider.BeforeRun(BeforeRunContext{Context: context.Background(),
+	out, err := provider.BeforeRun(BeforeRunContext{
+		Context:  context.Background(),
 		Session:  NewSession(""),
 		Messages: []*message.Message{request},
 		Tools:    []tool.Tool{inputTool},

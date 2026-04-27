@@ -133,17 +133,17 @@ func ContentEqual(got, want message.Content) error {
 			return fmt.Errorf("CallID mismatch: expected %q, got %q", expContent.CallID, act.CallID)
 		}
 		if expContent.Name != act.Name {
-			return fmt.Errorf("Name mismatch: expected %q, got %q", expContent.Name, act.Name)
+			return fmt.Errorf("name mismatch: expected %q, got %q", expContent.Name, act.Name)
 		}
 		if expContent.Arguments != act.Arguments {
-			return fmt.Errorf("Arguments mismatch: expected %q, got %q", expContent.Arguments, act.Arguments)
+			return fmt.Errorf("arguments mismatch: expected %q, got %q", expContent.Arguments, act.Arguments)
 		}
 		// Compare Error fields
 		if (expContent.Error == nil) != (act.Error == nil) {
-			return fmt.Errorf("Error presence mismatch: expected %v, got %v", expContent.Error, act.Error)
+			return fmt.Errorf("error presence mismatch: expected %v, got %v", expContent.Error, act.Error)
 		}
 		if expContent.Error != nil && act.Error != nil && expContent.Error.Error() != act.Error.Error() {
-			return fmt.Errorf("Error message mismatch: expected %q, got %q", expContent.Error, act.Error)
+			return fmt.Errorf("error message mismatch: expected %q, got %q", expContent.Error, act.Error)
 		}
 	case *message.FunctionResultContent:
 		act := got.(*message.FunctionResultContent)
@@ -153,10 +153,10 @@ func ContentEqual(got, want message.Content) error {
 
 		// Compare Error fields
 		if (expContent.Error == nil) != (act.Error == nil) {
-			return fmt.Errorf("Error presence mismatch: expected %q, got %q", expContent.Error, act.Error)
+			return fmt.Errorf("error presence mismatch: expected %q, got %q", expContent.Error, act.Error)
 		}
 		if expContent.Error != nil && act.Error != nil && expContent.Error.Error() != act.Error.Error() {
-			return fmt.Errorf("Error message mismatch: expected %q, got %q", expContent.Error, act.Error)
+			return fmt.Errorf("error message mismatch: expected %q, got %q", expContent.Error, act.Error)
 		}
 
 		// Compare Result - handle json.RawMessage wrapping
@@ -171,7 +171,7 @@ func ContentEqual(got, want message.Content) error {
 			}
 		}
 		if !reflect.DeepEqual(expResult, actResult) {
-			return fmt.Errorf("Result mismatch:\nexpected: %#v\ngot:      %#v", expResult, actResult)
+			return fmt.Errorf("result mismatch:\nexpected: %#v\ngot:      %#v", expResult, actResult)
 		}
 	default:
 		if !reflect.DeepEqual(expContent, got) {

@@ -23,8 +23,10 @@ var (
 	Video = fakeSearch("video")
 )
 
-type Result string
-type Search func(ctx context.Context, query string) (Result, error)
+type (
+	Result string
+	Search func(ctx context.Context, query string) (Result, error)
+)
 
 func fakeSearch(kind string) Search {
 	return func(_ context.Context, query string) (Result, error) {
@@ -37,7 +39,7 @@ func fakeSearch(kind string) Search {
 // the sync.WaitGroup example at https://golang.org/pkg/sync/#example_WaitGroup.
 func ExampleGroup_justErrors() {
 	g := new(errgroup.Group)
-	var urls = []string{
+	urls := []string{
 		"http://www.golang.org/",
 		"http://www.google.com/",
 		"http://www.somestupidname.com/",
@@ -49,7 +51,7 @@ func ExampleGroup_justErrors() {
 			// Fetch the URL.
 			resp, err := http.Get(url)
 			if err == nil {
-				resp.Body.Close()
+				_ = resp.Body.Close()
 			}
 			return err
 		})
@@ -199,13 +201,13 @@ func TestTryGo(t *testing.T) {
 			<-ch
 		}
 	}()
-	g.Wait()
+	_ = g.Wait()
 
 	if !g.TryGo(fn) {
 		t.Fatalf("TryGo should success but got fail after all goroutines.")
 	}
 	go func() { <-ch }()
-	g.Wait()
+	_ = g.Wait()
 
 	// Switch limit.
 	g.SetLimit(1)
@@ -216,7 +218,7 @@ func TestTryGo(t *testing.T) {
 		t.Fatalf("TryGo should fail but succeeded.")
 	}
 	go func() { <-ch }()
-	g.Wait()
+	_ = g.Wait()
 
 	// Block all calls.
 	g.SetLimit(0)
@@ -225,7 +227,7 @@ func TestTryGo(t *testing.T) {
 			t.Fatalf("TryGo should fail but got succeeded.")
 		}
 	}
-	g.Wait()
+	_ = g.Wait()
 }
 
 func TestGoLimit(t *testing.T) {
@@ -297,5 +299,5 @@ func BenchmarkGo(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		g.Go(func() error { fn(); return nil })
 	}
-	g.Wait()
+	_ = g.Wait()
 }

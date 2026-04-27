@@ -79,7 +79,7 @@ func AllowBackgroundResponses(allow bool) Option {
 
 func GetOption[T any](opts []Option, setter func(T) Option) (T, bool) {
 	var zero T
-	var setterType = reflect.TypeOf(setter(zero))
+	setterType := reflect.TypeOf(setter(zero))
 	for _, opt := range slices.Backward(opts) {
 		if reflect.TypeOf(opt) == setterType {
 			v, ok := opt.Value().(T)
@@ -92,7 +92,7 @@ func GetOption[T any](opts []Option, setter func(T) Option) (T, bool) {
 func AllOptions[T any](opts []Option, setter func(T) Option) iter.Seq[T] {
 	return func(yield func(T) bool) {
 		var zero T
-		var setterType = reflect.TypeOf(setter(zero))
+		setterType := reflect.TypeOf(setter(zero))
 		for _, opt := range opts {
 			if reflect.TypeOf(opt) == setterType {
 				v, ok := opt.Value().(T)

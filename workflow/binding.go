@@ -60,17 +60,6 @@ func (eb *ExecutorBinding) CreateInstance(runID string) (*Executor, error) {
 	return ex, nil
 }
 
-func newConfiguredExecutorBinding(conf Configured[*Executor], executorType reflect.Type) *ExecutorBinding {
-	return &ExecutorBinding{
-		ID:                                conf.ID,
-		ExecutorType:                      executorType,
-		Raw:                               conf.Raw,
-		NewExecutor:                       conf.NewBound,
-		SupportsConcurrentSharedExecution: true,
-		IsSharedInstance:                  true,
-	}
-}
-
 func newRequestPortExecutor(port RequestPort, allowWrapped bool) *Executor {
 	var e requestPortExecutor
 	return &Executor{
@@ -137,7 +126,6 @@ func (r *requestPortExecutor) handleAsync(ctx *Context, msg any) (any, error) {
 		if r.allowWrapped {
 			if original, ok := r.wrappedRequests[msg.RequestID]; ok {
 				sendMsg = original.Rewrap(msg)
-
 			}
 		}
 		if err := ctx.SendMessage("", sendMsg); err != nil {

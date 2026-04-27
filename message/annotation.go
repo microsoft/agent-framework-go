@@ -9,8 +9,10 @@ import (
 	"github.com/microsoft/agent-framework-go/internal/jsonx"
 )
 
-var supportedAnnotations map[annotationKind]reflect.Type
-var supportedAnnotatedRegions map[annotatedRegionKind]reflect.Type
+var (
+	supportedAnnotations      map[annotationKind]reflect.Type
+	supportedAnnotatedRegions map[annotatedRegionKind]reflect.Type
+)
 
 func init() {
 	supportedAnnotations = make(map[annotationKind]reflect.Type)

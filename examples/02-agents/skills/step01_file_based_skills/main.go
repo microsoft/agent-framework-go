@@ -23,9 +23,11 @@ import (
 	"github.com/openai/openai-go/v3/azure"
 )
 
-var deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-5.4-mini")
-var endpoint = os.Getenv("AZURE_OPENAI_ENDPOINT")
-var apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
+var (
+	deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-5.4-mini")
+	endpoint   = os.Getenv("AZURE_OPENAI_ENDPOINT")
+	apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
+)
 
 var logger = demo.NewLogger(
 	"File-Based Skills",
@@ -44,7 +46,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	defer skillsRoot.Close()
+	defer func() { _ = skillsRoot.Close() }()
 	skillsProvider := skills.NewContextProvider(skills.ContextProviderOptions{
 		Sources: []skills.Source{
 			fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: skillhelpers.RunSubprocessScript}, skillsRoot.FS()),

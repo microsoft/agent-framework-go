@@ -29,7 +29,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	// Retrieve the list of tools available on the Microsoft Learn server
 	tools, err := mcptool.ListTools(ctx, session)

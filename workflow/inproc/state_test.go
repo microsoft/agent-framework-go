@@ -123,10 +123,10 @@ func validateState(t *testing.T, expectedValue int) func(*int) *int {
 	}
 }
 
-func maxTurns(max int) func(any) bool {
+func maxTurns(limit int) func(any) bool {
 	return func(maybeTurn any) bool {
 		if turn, ok := maybeTurn.(TestTurnToken); ok {
-			return turn.Count < max
+			return turn.Count < limit
 		}
 		return false
 	}
@@ -234,7 +234,7 @@ func TestInProcessRun_StateShouldPersist_Checkpointed(t *testing.T) {
 		t.Error("Validator should be completed")
 	}
 
-	// TODO: Verify checkpoints when implemented
+	// Verify checkpoints when implemented.
 }
 
 func TestInProcessRun_StateShouldError_TwoExecutors(t *testing.T) {

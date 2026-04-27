@@ -90,7 +90,8 @@ func newProviderWithConfig(t *testing.T, sourceOptions *fsskills.SourceOptions, 
 func captureProviderContext(t *testing.T, provider *memory.ContextProvider) (string, []tool.Tool) {
 	t.Helper()
 	ctx := context.Background()
-	out, err := provider.BeforeRun(memory.BeforeRunContext{Context: ctx,
+	out, err := provider.BeforeRun(memory.BeforeRunContext{
+		Context:  ctx,
 		Session:  memory.NewSession(""),
 		Messages: nil,
 		Tools:    nil,

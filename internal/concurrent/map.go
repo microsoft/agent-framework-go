@@ -75,8 +75,8 @@ func (m *Map[K, V]) Swap(key K, value V) (V, bool) {
 // CompareAndSwap swaps the old and new values for key
 // if the value stored in the map is equal to old.
 // The old value must be of a comparable type.
-func (m *Map[K, V]) CompareAndSwap(key K, old, new V) (swapped bool) {
-	return m.data.CompareAndSwap(key, old, new)
+func (m *Map[K, V]) CompareAndSwap(key K, old, newVal V) (swapped bool) {
+	return m.data.CompareAndSwap(key, old, newVal)
 }
 
 // CompareAndDelete deletes the entry for key if its value is equal to old.

@@ -10,7 +10,6 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/middleware/otel"
-	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/message"
 
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -71,16 +70,9 @@ func TestOtel_Run_SpanHasCorrectAttributes(t *testing.T) {
 	mw := otel.New(otel.Config{})
 
 	var capturedCtx context.Context
-	responseBuilder := agenttest.NewResponseBuilder(
-		func(ctx context.Context, messages []*message.Message, opts ...agent.Option) {
-			capturedCtx = ctx
-		},
-	).AddText("response")
-
-	a := agenttest.New(responseBuilder.Build())
 
 	// Override the agent metadata for this test
-	a = agent.New(agent.ProviderConfig{
+	a := agent.New(agent.ProviderConfig{
 		ProviderName: "test-provider",
 		Run: func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 			return func(yield func(*message.ResponseUpdate, error) bool) {

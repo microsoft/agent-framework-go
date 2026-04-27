@@ -201,11 +201,11 @@ original invoice and the credit memo number. Use the 'Formal Credit Notification
 template."`,
 		}
 		card.Name = "PolicyAgent"
-		card.Description = cfg.Config.Description
+		card.Description = cfg.Description
 		card.Skills = []a2a.AgentSkill{{
 			ID:          "id_policy_agent",
 			Name:        "PolicyAgent",
-			Description: cfg.Config.Description,
+			Description: cfg.Description,
 			Tags:        []string{"policy", "agent-framework-go"},
 			Examples:    []string{"What is the policy for short shipments?"},
 		}}
@@ -222,11 +222,11 @@ Item: TSHIRT-RED-L
 Quantity: 900`,
 		}
 		card.Name = "LogisticsAgent"
-		card.Description = cfg.Config.Description
+		card.Description = cfg.Description
 		card.Skills = []a2a.AgentSkill{{
 			ID:          "id_logistics_agent",
 			Name:        "LogisticsQuery",
-			Description: cfg.Config.Description,
+			Description: cfg.Description,
 			Tags:        []string{"logistics", "agent-framework-go"},
 			Examples:    []string{"What is the status for SHPMT-SAP-001"},
 		}}
@@ -235,5 +235,4 @@ Quantity: 900`,
 	}
 
 	return cfg, card
-
 }

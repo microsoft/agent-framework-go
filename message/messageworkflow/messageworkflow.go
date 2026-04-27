@@ -42,7 +42,8 @@ func NewExecutorConfig(options *Options) *workflow.ExecutorConfig {
 					return struct{}{}, cache.InvokeWithState(ctx, false, func(ctx *workflow.Context, state []*message.Message) ([]*message.Message, error) {
 						return append(state, &message.Message{
 							Role:     message.Role(options.StringMessageRole),
-							Contents: []message.Content{&message.TextContent{Text: msg.(string)}}},
+							Contents: []message.Content{&message.TextContent{Text: msg.(string)}},
+						},
 						), nil
 					})
 				})

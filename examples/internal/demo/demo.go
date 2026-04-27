@@ -150,7 +150,7 @@ func UserInputRequest(req *message.FunctionApprovalRequestContent) bool {
 	fmt.Printf("Please reply Y to approve.\n\n")
 
 	var approval string
-	fmt.Scanln(&approval)
+	_, _ = fmt.Scanln(&approval)
 	fmt.Printf("\n")
 	return approval == "Y" || approval == "y"
 }
@@ -160,8 +160,8 @@ func assistant() {
 }
 
 func printf(format string, args ...any) {
-	//now := time.Now().Format("15:04:05")
-	//fmt.Printf("%s[%s]%s ", colorGray, now, colorReset)
+	// now := time.Now().Format("15:04:05")
+	// fmt.Printf("%s[%s]%s ", colorGray, now, colorReset)
 	fmt.Printf(format, args...)
 }
 

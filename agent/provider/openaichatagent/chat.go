@@ -112,7 +112,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 	}
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		stream := a.client.Chat.Completions.NewStreaming(ctx, body)
-		defer stream.Close()
+		defer func() { _ = stream.Close() }()
 		var acc openai.ChatCompletionAccumulator
 		for stream.Next() {
 			chunk := stream.Current()
@@ -240,7 +240,6 @@ func buildCompletionParams(model string, messages []*message.Message, opts []age
 						})
 					}
 				}
-
 			}
 		}
 		switch tl := tl.(type) {

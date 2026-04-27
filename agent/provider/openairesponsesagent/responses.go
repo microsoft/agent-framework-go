@@ -818,21 +818,19 @@ func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func
 		}
 	}
 
-	// If there's a pending update that hasn't been added yet (e.g., from function calls or reasoning), add it now
-	if currentUpdate != nil {
-		// Add usage if present
-		if usage := responsesUsageToContent(resp.Usage); usage != nil {
-			currentUpdate.Contents = append(currentUpdate.Contents, usage)
-		}
-		// If there's an error in the response, add an ErrorContent
-		if resp.Error.Message != "" {
-			currentUpdate.Contents = append(currentUpdate.Contents, &message.ErrorContent{
-				Message:   resp.Error.Message,
-				ErrorCode: string(resp.Error.Code),
-			})
-		}
-		yield(currentUpdate, nil)
+	// Add any final data to the pending update (usage, errors), then yield it.
+	// Add usage if present
+	if usage := responsesUsageToContent(resp.Usage); usage != nil {
+		currentUpdate.Contents = append(currentUpdate.Contents, usage)
 	}
+	// If there's an error in the response, add an ErrorContent
+	if resp.Error.Message != "" {
+		currentUpdate.Contents = append(currentUpdate.Contents, &message.ErrorContent{
+			Message:   resp.Error.Message,
+			ErrorCode: string(resp.Error.Code),
+		})
+	}
+	yield(currentUpdate, nil)
 }
 
 func imageURIToMediaType(uri string) string {
@@ -859,11 +857,11 @@ func responsesUsageToContent(usage responses.ResponseUsage) *message.UsageConten
 	}
 	return &message.UsageContent{
 		Details: message.UsageDetails{
-			InputTokenCount:       int64(usage.InputTokens),
-			OutputTokenCount:      int64(usage.OutputTokens),
-			TotalTokenCount:       int64(usage.TotalTokens),
-			CachedInputTokenCount: int64(usage.InputTokensDetails.CachedTokens),
-			ReasoningTokenCount:   int64(usage.OutputTokensDetails.ReasoningTokens),
+			InputTokenCount:       usage.InputTokens,
+			OutputTokenCount:      usage.OutputTokens,
+			TotalTokenCount:       usage.TotalTokens,
+			CachedInputTokenCount: usage.InputTokensDetails.CachedTokens,
+			ReasoningTokenCount:   usage.OutputTokensDetails.ReasoningTokens,
 		},
 	}
 }
@@ -1005,7 +1003,7 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 		case responses.ResponseCodeInterpreterToolCall:
 			// For code interpreter, create a text representation
 			var outputText strings.Builder
-			outputText.WriteString(fmt.Sprintf("[Code Interpreter: %s]\n", item.ID))
+			fmt.Fprintf(&outputText, "[Code Interpreter: %s]\n", item.ID)
 			if item.Code != "" {
 				outputText.WriteString(item.Code)
 				outputText.WriteString("\n")
@@ -1019,7 +1017,7 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 						outputText.WriteString("\n")
 					case responses.ResponseCodeInterpreterToolCallOutputImage:
 						if output.URL != "" {
-							outputText.WriteString(fmt.Sprintf("Image: %s\n", output.URL))
+							fmt.Fprintf(&outputText, "Image: %s\n", output.URL)
 						}
 					}
 				}
@@ -1070,8 +1068,8 @@ func populateAnnotations(anns []responses.ResponseOutputTextAnnotationUnion, con
 
 func responsesPopulateAdditionalProperties(resp *responses.Response) map[string]any {
 	props := make(map[string]any)
-	if resp.User != "" {
-		props["EndUserId"] = resp.User
+	if resp.User != "" { //nolint:staticcheck // SA1019: no replacement available
+		props["EndUserId"] = resp.User //nolint:staticcheck // SA1019: no replacement available
 	}
 	if resp.Error.Message != "" {
 		props["Error"] = resp.Error.Message

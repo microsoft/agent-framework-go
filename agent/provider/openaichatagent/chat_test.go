@@ -1217,7 +1217,7 @@ func TestChatDataContentMessage_Image_NonStreaming(t *testing.T) {
 		MediaType: "image/png",
 	}
 	// Add "detail" to AdditionalProperties
-	dataContent.ContentHeader.AdditionalProperties = map[string]any{
+	dataContent.AdditionalProperties = map[string]any{
 		"detail": "high",
 	}
 

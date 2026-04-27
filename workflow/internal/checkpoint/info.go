@@ -27,7 +27,6 @@ type WorkflowInfo struct {
 	requestPorts      map[workflow.RequestPortInfo]struct{}
 	startExecutorID   string
 	outputExecutorIDs map[string]struct{}
-	inputType         workflow.TypeID
 }
 
 func (w *WorkflowInfo) Match(wf *workflow.Workflow) bool {

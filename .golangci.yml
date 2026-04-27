@@ -1,0 +1,11 @@
+version: "2"
+linters:
+  enable:
+    - bodyclose
+    - godox
+    - nakedret
+    - predeclared
+    - unconvert
+formatters:
+  enable:
+    - gofumpt

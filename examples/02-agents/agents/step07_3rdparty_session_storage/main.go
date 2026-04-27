@@ -22,9 +22,11 @@ import (
 	"github.com/openai/openai-go/v3/azure"
 )
 
-var deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
-var endpoint = os.Getenv("AZURE_OPENAI_ENDPOINT")
-var apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
+var (
+	deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
+	endpoint   = os.Getenv("AZURE_OPENAI_ENDPOINT")
+	apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
+)
 
 var logger = demo.NewLogger(
 	"3rd-Party Session Storage",
@@ -44,7 +46,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	// Create Azure OpenAI agent with a custom message store that persists messages to disk.
 	a := openaichatagent.New(
@@ -149,7 +151,7 @@ func (d *fsMessageStore) persistMessages(session *memory.Session, requestMessage
 		if err != nil {
 			return err
 		}
-		if err := os.WriteFile(filepath.Join(d.Dir, msg.ID), data, 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(d.Dir, msg.ID), data, 0o644); err != nil {
 			return err
 		}
 		files = append(files, msg.ID)

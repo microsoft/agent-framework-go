@@ -101,7 +101,6 @@ func TestBuilder_Validation_AddEdgesOutOfOrderDoesNotImpactReachability(t *testi
 		AddEdge(newNoOpExecutor("not-unreachable"), newNoOpExecutor("also-not-unreachable")).
 		AddEdge(newPlaceholder("start"), newPlaceholder("not-unreachable")).
 		Build()
-
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -129,7 +128,6 @@ func TestBuilder_LateBinding_Executor(t *testing.T) {
 	wf, err := workflow.NewBuilder(newPlaceholder("start")).
 		BindExecutor(newNoOpExecutor("start")).
 		Build()
-
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -156,7 +154,6 @@ func TestBuilder_LateImplicitBinding_Executor(t *testing.T) {
 	wf, err := workflow.NewBuilder(newPlaceholder("start")).
 		AddEdge(start, start).
 		Build()
-
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -199,7 +196,6 @@ func TestBuilder_RebindToSameish_Allowed(t *testing.T) {
 	wf, err := workflow.NewBuilder(newPlaceholder("start")).
 		AddEdge(executor1, executor1).
 		Build()
-
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -228,7 +224,6 @@ func TestBuilder_Workflow_NameAndDescription(t *testing.T) {
 		WithDescription("Test workflow description").
 		BindExecutor(newNoOpExecutor("start")).
 		Build()
-
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -244,7 +239,6 @@ func TestBuilder_Workflow_NameAndDescription(t *testing.T) {
 	wf2, err := workflow.NewBuilder(newPlaceholder("start2")).
 		BindExecutor(newNoOpExecutor("start2")).
 		Build()
-
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -261,7 +255,6 @@ func TestBuilder_Workflow_NameAndDescription(t *testing.T) {
 		WithName("Named Only").
 		BindExecutor(newNoOpExecutor("start3")).
 		Build()
-
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}

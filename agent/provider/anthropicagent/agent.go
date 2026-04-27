@@ -107,7 +107,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 		var messageID string
 		var modelID string
 		var usage message.UsageDetails
-		var functions = make(map[int]*message.FunctionCallContent)
+		functions := make(map[int]*message.FunctionCallContent)
 
 		for stream.Next() {
 			event := stream.Current()
@@ -116,7 +116,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 			switch event := event.AsAny().(type) {
 			case anthropic.MessageStartEvent:
 				messageID = cmp.Or(messageID, event.Message.ID)
-				modelID = cmp.Or(modelID, string(event.Message.Model))
+				modelID = cmp.Or(modelID, event.Message.Model)
 				usage.Add(toUsageDetails(event.Message.Usage))
 			case anthropic.MessageDeltaEvent:
 				usage.Add(toUsageDetailsDelta(event.Usage))
@@ -256,7 +256,7 @@ func (a *client) buildMessageParams(messages []*message.Message, opts []agent.Op
 	if p, ok := agent.GetOption(opts, MessageNewParams); ok {
 		params = p
 	}
-	params.Model = cmp.Or(params.Model, anthropic.Model(a.config.Model))
+	params.Model = cmp.Or(params.Model, a.config.Model)
 	params.MaxTokens = cmp.Or(params.MaxTokens, 4096)
 
 	var tools []anthropic.ToolUnionParam
@@ -278,7 +278,7 @@ func (a *client) buildMessageParams(messages []*message.Message, opts []agent.Op
 				if schema != nil {
 					jsonBytes, err := json.Marshal(schema)
 					if err == nil {
-						json.Unmarshal(jsonBytes, &schemaMap)
+						_ = json.Unmarshal(jsonBytes, &schemaMap)
 					}
 				}
 			}
@@ -444,7 +444,7 @@ func buildMessageParam(msg *message.Message) (anthropic.MessageParam, error) {
 				if mediaType == "" {
 					mediaType = "image/jpeg"
 				}
-				content = append(content, anthropic.NewImageBlockBase64(mediaType, string(c.Data)))
+				content = append(content, anthropic.NewImageBlockBase64(mediaType, c.Data))
 			}
 		}
 	}

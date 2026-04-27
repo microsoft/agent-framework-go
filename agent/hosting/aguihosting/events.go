@@ -36,7 +36,7 @@ func filterServerToolsFromMixedInvocations(update *message.ResponseUpdate, clien
 		}
 	}
 
-	if !(containsClient && containsServer) {
+	if !containsClient || !containsServer {
 		return update, nil
 	}
 

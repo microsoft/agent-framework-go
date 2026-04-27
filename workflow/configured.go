@@ -66,6 +66,7 @@ func (c *ConfiguredOf[T, O]) Memoize() Configured[T] {
 func (c *ConfiguredOf[T, O]) NewBound(runID string) (T, error) {
 	return c.createValidatingMemoizedFunc()(Config{ID: c.ID}, runID)
 }
+
 func (c *ConfiguredOf[T, O]) createValidatingMemoizedFunc() func(Config, string) (T, error) {
 	return func(config Config, runID string) (s T, err error) {
 		if c.ID != config.ID {

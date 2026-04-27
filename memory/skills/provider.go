@@ -321,7 +321,8 @@ func (p *providerState) buildTools(skills providedSkillSet, hasResources, hasScr
 			},
 			func(_ tool.Context, in struct {
 				SkillName string `json:"skillName" jsonschema:"The name of the skill to load"`
-			}) (string, error) {
+			},
+			) (string, error) {
 				return p.loadSkill(skills, in.SkillName), nil
 			},
 		),
@@ -336,7 +337,8 @@ func (p *providerState) buildTools(skills providedSkillSet, hasResources, hasScr
 			func(callCtx tool.Context, in struct {
 				SkillName    string `json:"skillName" jsonschema:"The name of the skill"`
 				ResourceName string `json:"resourceName" jsonschema:"The exact resource name to read"`
-			}) (any, error) {
+			},
+			) (any, error) {
 				return p.readSkillResource(callCtx.Context, skills, in.SkillName, in.ResourceName), nil
 			},
 		))
@@ -355,7 +357,8 @@ func (p *providerState) buildTools(skills providedSkillSet, hasResources, hasScr
 			SkillName  string         `json:"skillName" jsonschema:"The name of the skill"`
 			ScriptName string         `json:"scriptName" jsonschema:"The exact script name to run"`
 			Arguments  map[string]any `json:"arguments,omitempty" jsonschema:"Optional arguments for the script"`
-		}) (any, error) {
+		},
+		) (any, error) {
 			return p.runSkillScript(callCtx.Context, skills, in.SkillName, in.ScriptName, in.Arguments), nil
 		},
 	)
@@ -448,8 +451,8 @@ func buildProviderSkillsInstructionPrompt(template string, skills []*Skill, incl
 	var sb strings.Builder
 	for _, skill := range sortedSkills {
 		sb.WriteString("  <skill>\n")
-		sb.WriteString(fmt.Sprintf("    <name>%s</name>\n", xmlEscape(skill.Frontmatter.Name)))
-		sb.WriteString(fmt.Sprintf("    <description>%s</description>\n", xmlEscape(skill.Frontmatter.Description)))
+		_, _ = fmt.Fprintf(&sb, "    <name>%s</name>\n", xmlEscape(skill.Frontmatter.Name))
+		_, _ = fmt.Fprintf(&sb, "    <description>%s</description>\n", xmlEscape(skill.Frontmatter.Description))
 		sb.WriteString("  </skill>\n")
 	}
 

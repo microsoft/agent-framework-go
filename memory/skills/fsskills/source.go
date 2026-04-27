@@ -24,16 +24,22 @@ const (
 	rootFSPropertyKey = "fsskills.rootFS"
 )
 
-var defaultResourceDirectories = []string{"references", "assets"}
-var defaultScriptDirectories = []string{"scripts"}
+var (
+	defaultResourceDirectories = []string{"references", "assets"}
+	defaultScriptDirectories   = []string{"scripts"}
+)
 
-var defaultResourceExtensions = []string{".md", ".json", ".yaml", ".yml", ".csv", ".xml", ".txt"}
-var defaultScriptExtensions = []string{".py", ".js", ".sh", ".ps1", ".cs", ".csx"}
+var (
+	defaultResourceExtensions = []string{".md", ".json", ".yaml", ".yml", ".csv", ".xml", ".txt"}
+	defaultScriptExtensions   = []string{".py", ".js", ".sh", ".ps1", ".cs", ".csx"}
+)
 
-var frontmatterRegex = regexp.MustCompile(`(?ms)\A^---\s*$(.+?)^---\s*$`)
-var yamlKeyValueRegex = regexp.MustCompile(`(?m)^([\w-]+)\s*:\s*(?:["'](.+?)["']|(.+?))\s*$`)
-var yamlMetadataBlockRegex = regexp.MustCompile(`(?m)^metadata\s*:\s*$\n((?:[ \t]+\S.*\n?)+)`)
-var yamlIndentedKeyValueRegex = regexp.MustCompile(`(?m)^\s+([\w-]+)\s*:\s*(?:["'](.+?)["']|(.+?))\s*$`)
+var (
+	frontmatterRegex          = regexp.MustCompile(`(?ms)\A^---\s*$(.+?)^---\s*$`)
+	yamlKeyValueRegex         = regexp.MustCompile(`(?m)^([\w-]+)\s*:\s*(?:["'](.+?)["']|(.+?))\s*$`)
+	yamlMetadataBlockRegex    = regexp.MustCompile(`(?m)^metadata\s*:\s*$\n((?:[ \t]+\S.*\n?)+)`)
+	yamlIndentedKeyValueRegex = regexp.MustCompile(`(?m)^\s+([\w-]+)\s*:\s*(?:["'](.+?)["']|(.+?))\s*$`)
+)
 
 // SourceOptions configures file-based skill discovery.
 //

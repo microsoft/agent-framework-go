@@ -32,7 +32,6 @@ func main() {
 		AddEdge(frenchAgent, spanishAgent).
 		AddEdge(spanishAgent, englishAgent).
 		Build()
-
 	if err != nil {
 		panic(err)
 	}

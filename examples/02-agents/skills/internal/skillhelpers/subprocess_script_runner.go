@@ -23,7 +23,7 @@ func RunSubprocessScript(ctx context.Context, skill *skills.Skill, script *skill
 	if err != nil {
 		return nil, err
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	if err := materializeSkill(skill, tempDir); err != nil {
 		return nil, err

@@ -57,7 +57,7 @@ func captureAndRespond(t *testing.T, bodyCh chan<- []byte, contentType, response
 		}
 		bodyCh <- body
 		w.Header().Set("Content-Type", contentType)
-		io.WriteString(w, responseBody)
+		_, _ = io.WriteString(w, responseBody)
 	}
 }
 

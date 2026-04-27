@@ -9,16 +9,9 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
-	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 	"github.com/openai/openai-go/v3"
-)
-
-var logger = demo.NewLogger(
-	"Chat CLI - Interactive Mode",
-	"Type your message and press Enter to chat.\nCommands: 'exit' or 'quit' to end, 'clear' to reset conversation",
-	"Model", "gpt-4o-mini",
 )
 
 var weatherTool = functool.MustNew(functool.Config{

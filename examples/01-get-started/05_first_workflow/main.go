@@ -34,7 +34,6 @@ func main() {
 		AddEdge(uppercase, reverse).
 		WithOutputFrom(reverse).
 		Build()
-
 	if err != nil {
 		panic(err)
 	}

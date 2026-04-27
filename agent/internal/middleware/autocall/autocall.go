@@ -380,7 +380,6 @@ func hasAnyApprovalContent(msgs []*message.Message) bool {
 			}
 		})
 	})
-
 }
 
 func (f *autocall) invokeApprovedFunctionApprovalResponses(ctx context.Context, approvals []approvalResultWithRequestMessage, tools map[string]tool.Tool, errCount int) (*message.Message, int, error) {
@@ -668,7 +667,7 @@ func convertToFunctionCallContentMessages(messages []approvalResultWithRequestMe
 		// Don't need to create a dictionary if we already have one or if it's the first iteration.
 		shouldCreateMap := messagesByID == nil && currentMsg != nil &&
 			// Everywhere we have no RequestMessage we use the fallbackMessageID, so in this case there is only one message.
-			!(msg.RequestMessage == nil && currentMsg.ID == fallbackMessageID) &&
+			(msg.RequestMessage != nil || currentMsg.ID != fallbackMessageID) &&
 			// Where we do have a RequestMessage, we can check if its message id differs from the current one.
 			(msg.RequestMessage != nil && currentMsg.ID != msg.RequestMessage.ID)
 		if shouldCreateMap {

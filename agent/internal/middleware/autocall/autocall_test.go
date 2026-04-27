@@ -628,7 +628,6 @@ func TestFunctionInvoking_ContinuesWithSuccessfulCallsUntilMaximumIterations(t *
 	}
 
 	actualCallCount = 0
-
 }
 
 // TestFunctionInvoking_ContinuesWithFailingCallsUntilMaximumConsecutiveErrors tests MaximumConsecutiveErrorsPerRequest
@@ -650,7 +649,8 @@ func TestFunctionInvoking_ContinuesWithFailingCallsUntilMaximumConsecutiveErrors
 					func(ctx tool.Context, args struct {
 						ShouldThrow bool `json:"shouldThrow"`
 						CallIndex   int  `json:"callIndex"`
-					}) (string, error) {
+					},
+					) (string, error) {
 						if args.ShouldThrow {
 							return "", fmt.Errorf("Exception from call %d", args.CallIndex)
 						}

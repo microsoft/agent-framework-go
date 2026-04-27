@@ -137,7 +137,7 @@ func TestStructuredOutput_NonStreaming(t *testing.T) {
 		}
 		bodyCh <- body
 		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, minimalMessageResponse(payload))
+		_, _ = io.WriteString(w, minimalMessageResponse(payload))
 	}))
 	defer server.Close()
 
@@ -176,7 +176,7 @@ func TestStructuredOutput_Streaming(t *testing.T) {
 		}
 		bodyCh <- body
 		w.Header().Set("Content-Type", "text/event-stream")
-		io.WriteString(w, minimalStreamingResponse(payload))
+		_, _ = io.WriteString(w, minimalStreamingResponse(payload))
 	}))
 	defer server.Close()
 

@@ -4,11 +4,12 @@ package agent
 
 import (
 	"context"
+	"reflect"
+
 	"github.com/microsoft/agent-framework-go/memory"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/message/messageworkflow"
 	"github.com/microsoft/agent-framework-go/workflow"
-	"reflect"
 )
 
 func newExecutor(a *Agent, emitEvents bool) *workflow.Executor {

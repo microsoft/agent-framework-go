@@ -27,13 +27,13 @@ func expectedMessages(t *testing.T, expected ...*message.Message) func(context.C
 // invokeAndAssertApproval is the helper for approval tests
 func invokeAndAssertApproval(t *testing.T, tools []tool.Tool, input []*message.Message,
 	downstreamAgentOutput []*message.ResponseUpdate, expectedOutput []*message.ResponseUpdate,
-	expectedDownstreamAgentInput []*message.Message, additionalTools []tool.Tool) {
-
+	expectedDownstreamAgentInput []*message.Message, additionalTools []tool.Tool,
+) {
 	var cb func(context.Context, []*message.Message, ...agentopt.Option)
 	if expectedDownstreamAgentInput != nil {
 		cb = expectedMessages(t, expectedDownstreamAgentInput...)
 	}
-	var rb = agenttest.NewResponseBuilder(cb)
+	rb := agenttest.NewResponseBuilder(cb)
 	for _, resp := range downstreamAgentOutput {
 		rb.Add(resp)
 	}
@@ -48,8 +48,8 @@ func invokeAndAssertApproval(t *testing.T, tools []tool.Tool, input []*message.M
 // invokeAndAssertApprovalWithAgent performs streaming test execution
 func invokeAndAssertApprovalWithAgent(t *testing.T, next middleware.RunFunc,
 	tools []tool.Tool, input []*message.Message,
-	expectedOutput []*message.ResponseUpdate, additionalTools []tool.Tool) {
-
+	expectedOutput []*message.ResponseUpdate, additionalTools []tool.Tool,
+) {
 	autocallOptions := autocall.Config{
 		NewID: func() string { return "" },
 	}

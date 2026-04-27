@@ -38,7 +38,7 @@ func TestEncodingRoundtrip(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Marshal: %v", err)
 			}
-			var v2 any = reflect.New(rt).Interface()
+			v2 := reflect.New(rt).Interface()
 			if err := format.Unmarshal(data, &v2); err != nil {
 				t.Fatalf("Unmarshal: %v", err)
 			}

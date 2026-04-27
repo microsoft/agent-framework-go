@@ -13,8 +13,10 @@ import (
 	"google.golang.org/genai"
 )
 
-var apiKey = os.Getenv("GEMINI_API_KEY")
-var model = cmp.Or(os.Getenv("GEMINI_MODEL"), "gemini-2.5-flash")
+var (
+	apiKey = os.Getenv("GEMINI_API_KEY")
+	model  = cmp.Or(os.Getenv("GEMINI_MODEL"), "gemini-2.5-flash")
+)
 
 var logger = demo.NewLogger(
 	"Basic Run",

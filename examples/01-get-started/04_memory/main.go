@@ -19,9 +19,11 @@ import (
 	"github.com/openai/openai-go/v3/azure"
 )
 
-var deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
-var endpoint = os.Getenv("AZURE_OPENAI_ENDPOINT")
-var apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
+var (
+	deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
+	endpoint   = os.Getenv("AZURE_OPENAI_ENDPOINT")
+	apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
+)
 
 var logger = demo.NewLogger(
 	"Memory",
@@ -94,7 +96,7 @@ func getProviderState(session *memory.Session) providerState {
 		return providerState{}
 	}
 	var state providerState
-	session.Get(userMemorySourceID, &state)
+	_, _ = session.Get(userMemorySourceID, &state)
 	return state
 }
 

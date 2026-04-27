@@ -82,7 +82,7 @@ func decodeInput(r *http.Request) (*aguiTypes.RunAgentInput, error) {
 	if r == nil || r.Body == nil {
 		return nil, errors.New("request body is required")
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	var input aguiTypes.RunAgentInput
 	decoder := json.NewDecoder(r.Body)

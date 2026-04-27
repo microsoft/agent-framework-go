@@ -24,10 +24,12 @@ import (
 	"github.com/openai/openai-go/v3/azure"
 )
 
-var deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
-var endpoint = os.Getenv("AZURE_OPENAI_ENDPOINT")
-var apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
-var cardURL = cmp.Or(os.Getenv("A2A_AGENT_HOST"), "http://127.0.0.1:5000")
+var (
+	deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
+	endpoint   = os.Getenv("AZURE_OPENAI_ENDPOINT")
+	apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
+	cardURL    = cmp.Or(os.Getenv("A2A_AGENT_HOST"), "http://127.0.0.1:5000")
+)
 
 var invalidToolNameChars = regexp.MustCompile(`[^0-9A-Za-z]+`)
 
@@ -97,7 +99,7 @@ func createSkillTools(remoteAgent *agent.Agent, skills []a2a.AgentSkill) []tool.
 	tools := make([]tool.Tool, 0, len(skills))
 	for _, skill := range skills {
 		skill := skill
-		tools = append(tools, functool.MustNew(&functool.Func{
+		tools = append(tools, functool.MustNew(functool.Config{
 			Name:        sanitizeToolName(cmp.Or(skill.Name, skill.ID, "a2a_skill")),
 			Description: formatSkillDescription(skill),
 		}, func(ctx tool.Context, query string) (string, error) {

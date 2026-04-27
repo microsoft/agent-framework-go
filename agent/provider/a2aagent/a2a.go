@@ -245,7 +245,7 @@ func yieldTask(yield func(*message.ResponseUpdate, error) bool, task *a2a.Task) 
 		}
 	}
 
-	if !yield(&message.ResponseUpdate{
+	return yield(&message.ResponseUpdate{
 		RawRepresentation:    task,
 		AdditionalProperties: task.Metadata,
 		ResponseID:           string(task.ID),
@@ -253,10 +253,7 @@ func yieldTask(yield func(*message.ResponseUpdate, error) bool, task *a2a.Task) 
 		ContinuationToken:    continuationToken,
 		Role:                 message.RoleAssistant,
 		CreatedAt:            timestamp,
-	}, nil) {
-		return false
-	}
-	return true
+	}, nil)
 }
 
 func updateSessionContextID(session *memory.Session, contextID, taskID string) error {

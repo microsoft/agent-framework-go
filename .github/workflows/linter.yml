@@ -1,0 +1,22 @@
+name: golangci-lint
+on:
+  push:
+    branches:
+      - "main"
+  pull_request:
+    branches:
+      - "main"
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  golangci:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Run golangci-lint
+        run: docker run --rm -v $(pwd):/app -w /app golangci/golangci-lint:v2.11 golangci-lint run -v

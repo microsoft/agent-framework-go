@@ -14,7 +14,7 @@ type PortableValue struct {
 	_      [0]func() // disallow ==
 	any    any
 	TypeID TypeID
-	// TODO: Optimize small values so they avoid allocations, like in slog.Value.
+	// Optimize small values so they avoid allocations, like in slog.Value.
 }
 
 // AnyPortableValue returns a [PortableValue] for the supplied value.

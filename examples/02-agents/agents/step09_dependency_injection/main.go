@@ -5,5 +5,5 @@
 package main
 
 func main() {
-	// TODO
+	// Not yet implemented.
 }
