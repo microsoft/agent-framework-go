@@ -178,6 +178,38 @@ func TestMessageIndex_UpdateBehaviors(t *testing.T) {
 	}
 }
 
+func TestMessageIndex_UpdatePreservesStateFromCompactedProjection(t *testing.T) {
+	index := compaction.CreateMessageIndex(turnMessages(3), nil)
+	strategy := &compaction.SummarizationStrategy{
+		Trigger:                compaction.GroupsExceed(2),
+		Summarizer:             compaction.SummarizerFunc(func(context.Context, []*message.Message) (string, error) { return "older context", nil }),
+		MinimumPreservedGroups: 2,
+		SummarizationPrompt:    "summarize",
+	}
+
+	compacted, err := strategy.Compact(t.Context(), index)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !compacted {
+		t.Fatal("expected compaction")
+	}
+
+	messages := slices.Clone(index.IncludedMessages())
+	messages = append(messages, textMessage(message.RoleUser, "u4"), textMessage(message.RoleAssistant, "a4"))
+	index.Update(messages)
+
+	if got, want := index.TotalGroupCount(), 9; got != want {
+		t.Fatalf("expected compacted state to be preserved, got %d groups want %d", got, want)
+	}
+	if got, want := messageTexts(index.IncludedMessages()), []string{"[Summary]\nolder context", "u3", "a3", "u4", "a4"}; !slices.Equal(got, want) {
+		t.Fatalf("unexpected included messages: got %v want %v", got, want)
+	}
+	if !index.Groups[1].IsExcluded || !index.Groups[2].IsExcluded {
+		t.Fatal("expected previous exclusion state to be preserved")
+	}
+}
+
 func TestMessageIndex_InsertAndAddGroupComputeCounts(t *testing.T) {
 	index := compaction.CreateMessageIndex([]*message.Message{textMessage(message.RoleUser, "q1")}, nil)
 	turnIndex := 1

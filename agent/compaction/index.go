@@ -77,7 +77,8 @@ func (index *MessageIndex) Update(messages []*message.Message) {
 		index.lastProcessedMessage = nil
 		return
 	}
-	if index.lastProcessedMessage != nil && len(messages) >= index.RawMessageCount() && messageContentEqual(messages[len(messages)-1], index.lastProcessedMessage) {
+	processedMessageCount := index.includedRawMessageCount()
+	if index.lastProcessedMessage != nil && len(messages) >= processedMessageCount && messageContentEqual(messages[len(messages)-1], index.lastProcessedMessage) {
 		return
 	}
 
@@ -90,7 +91,7 @@ func (index *MessageIndex) Update(messages []*message.Message) {
 			}
 		}
 	}
-	if foundIndex < 0 || foundIndex+1 < index.RawMessageCount() {
+	if foundIndex < 0 || foundIndex+1 < processedMessageCount {
 		index.Groups = nil
 		index.currentTurn = 0
 		index.lastProcessedMessage = nil
@@ -303,6 +304,16 @@ func (index *MessageIndex) RawMessageCount() int {
 	var total int
 	for _, group := range index.Groups {
 		if group.Kind != GroupKindSummary {
+			total += group.MessageCount
+		}
+	}
+	return total
+}
+
+func (index *MessageIndex) includedRawMessageCount() int {
+	var total int
+	for _, group := range index.Groups {
+		if !group.IsExcluded && group.Kind != GroupKindSummary {
 			total += group.MessageCount
 		}
 	}

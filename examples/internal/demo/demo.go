@@ -104,6 +104,9 @@ func (mw *Logger) WithAttrs(attrs []slog.Attr) slog.Handler {
 
 // WithGroup returns a handler with name applied to subsequent attrs.
 func (mw *Logger) WithGroup(name string) slog.Handler {
+	if name == "" {
+		return mw
+	}
 	clone := *mw
 	clone.groups = append(slices.Clone(mw.groups), name)
 	return &clone
