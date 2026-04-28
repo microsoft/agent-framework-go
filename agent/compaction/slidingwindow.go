@@ -24,7 +24,7 @@ type SlidingWindowStrategy struct {
 	Target Trigger
 
 	// MinimumPreservedTurns is the minimum number of most-recent user turns to preserve.
-	// Groups with nil turn indexes, such as system messages, are preserved independently of this value.
+	// Groups with nil or non-positive turn indexes are preserved independently of this value.
 	MinimumPreservedTurns int
 }
 
@@ -43,6 +43,9 @@ func (strategy *SlidingWindowStrategy) Compact(_ context.Context, index *Message
 			continue
 		}
 		turnIndex := *group.TurnIndex
+		if turnIndex <= 0 {
+			continue
+		}
 		if _, ok := turnGroups[turnIndex]; !ok {
 			turnOrder = append(turnOrder, turnIndex)
 		}

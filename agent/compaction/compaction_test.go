@@ -122,6 +122,34 @@ func TestSlidingWindowStrategy_ExcludesOldestTurns(t *testing.T) {
 	}
 }
 
+func TestSlidingWindowStrategy_PreservesTurnZeroGroups(t *testing.T) {
+	index := compaction.CreateMessageIndex([]*message.Message{
+		textMessage(message.RoleAssistant, "preface"),
+		textMessage(message.RoleUser, "u1"),
+		textMessage(message.RoleAssistant, "a1"),
+		textMessage(message.RoleUser, "u2"),
+		textMessage(message.RoleAssistant, "a2"),
+	}, nil)
+	strategy := &compaction.SlidingWindowStrategy{
+		Trigger:               compaction.TurnsExceed(1),
+		MinimumPreservedTurns: 1,
+	}
+
+	compacted, err := strategy.Compact(t.Context(), index)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !compacted {
+		t.Fatal("expected compaction")
+	}
+
+	got := messageTexts(index.IncludedMessages())
+	want := []string{"preface", "u2", "a2"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("unexpected included messages: got %v want %v", got, want)
+	}
+}
+
 func TestSlidingWindowStrategy_ZeroValueUsesDefaults(t *testing.T) {
 	index := compaction.CreateMessageIndex(turnMessages(3), nil)
 	strategy := &compaction.SlidingWindowStrategy{}
