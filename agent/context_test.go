@@ -107,6 +107,38 @@ func TestContextProvider_Invoking_ReturnsProvidedMessagesAndSetsSourceID(t *test
 	}
 }
 
+func TestContextProvider_Invoking_SetsSourceIDOnPrependedMessages(t *testing.T) {
+	provided := message.NewText("ctx")
+	request := message.NewText("request")
+
+	provider := &agent.ContextProvider{
+		SourceID: "ctx",
+		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
+			out := make([]*message.Message, 0, len(messages)+1)
+			out = append(out, provided)
+			out = append(out, messages...)
+			return out, options, nil
+		},
+	}
+
+	messages, _, err := provider.BeforeRun(t.Context(), []*message.Message{request}, agent.WithSession(agent.NewSession("")))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("expected provided and original messages, got %d", len(messages))
+	}
+	if messages[0] == provided {
+		t.Fatal("expected prepended message to be cloned")
+	}
+	if messages[0].SourceID != "ctx" {
+		t.Fatalf("expected SourceID=ctx, got %q", messages[0].SourceID)
+	}
+	if messages[1] != request {
+		t.Fatal("expected original message to be preserved")
+	}
+}
+
 func TestContextProvider_Invoking_UsesCustomSourceID(t *testing.T) {
 	provider := &agent.ContextProvider{
 		SourceID: "CustomContextSource",

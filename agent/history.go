@@ -9,9 +9,13 @@ import (
 	"github.com/microsoft/agent-framework-go/message/messagefilter"
 )
 
+const defaultInMemoryHistorySourceID = "in-memory"
+
+// NewInMemoryHistoryProvider creates a context provider that stores conversation history in the session.
+// If sourceID is empty, it defaults to "in-memory".
 func NewInMemoryHistoryProvider(sourceID string) *ContextProvider {
 	if sourceID == "" {
-		panic("sourceID is required")
+		sourceID = defaultInMemoryHistorySourceID
 	}
 	return &ContextProvider{
 		SourceID:           sourceID,
@@ -28,7 +32,10 @@ func NewInMemoryHistoryProvider(sourceID string) *ContextProvider {
 			if len(state.Messages) == 0 {
 				return msgs, options, nil
 			}
-			return append(msgs, state.Messages...), options, nil
+			messages := make([]*message.Message, 0, len(state.Messages)+len(msgs))
+			messages = append(messages, state.Messages...)
+			messages = append(messages, msgs...)
+			return messages, options, nil
 		},
 		Store: func(_ context.Context, requestMessages, responseMessages []*message.Message, options ...Option) error {
 			session, _ := GetOption(options, WithSession)

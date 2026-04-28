@@ -6,7 +6,9 @@ import (
 	"context"
 	"fmt"
 	"iter"
+	"log/slog"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
@@ -31,26 +33,30 @@ type kv struct {
 	key, value string
 }
 
-type logger struct {
-	n int
+// Logger prints friendly demo output and can also be used as a slog handler.
+type Logger struct {
+	n      int
+	attrs  []slog.Attr
+	groups []string
 }
 
-func NewLogger(name, description string, metadata ...string) agent.Middleware {
+func NewLogger(name, description string, metadata ...string) *Logger {
 	var kvs []kv
 	for i := 0; i < len(metadata)-1; i += 2 {
 		kvs = append(kvs, kv{key: metadata[i], value: metadata[i+1]})
 	}
 	welcome(name, description, kvs)
-	return &logger{}
+	return &Logger{}
 }
 
-func (mw *logger) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (mw *Logger) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 	return func(yield func(*message.ResponseUpdate, error) bool) {
 		mw.n++
 		fmt.Printf("%s%s===== Run %d =====%s\n\n", colorYellow, colorBold, mw.n, colorReset)
-		for _, msg := range messages {
+		for _, msg := range slices.Backward(messages) {
 			if msg.Role == message.RoleUser {
 				user(msg.String())
+				break
 			}
 		}
 		first := true
@@ -69,6 +75,63 @@ func (mw *logger) Run(next agent.RunFunc, ctx context.Context, messages []*messa
 			fmt.Printf("\n\n")
 		}
 	}
+}
+
+// Enabled reports whether records at level should be logged.
+func (mw *Logger) Enabled(context.Context, slog.Level) bool { return true }
+
+// Handle writes a slog record using the demo output style.
+func (mw *Logger) Handle(_ context.Context, record slog.Record) error {
+	printf("%s%s%s:%s %s", colorGray, colorBold, record.Level, colorReset, record.Message)
+	prefix := mw.attrPrefix()
+	for _, attr := range mw.attrs {
+		printAttr(prefix, attr)
+	}
+	record.Attrs(func(attr slog.Attr) bool {
+		printAttr(prefix, attr)
+		return true
+	})
+	fmt.Printf("\n\n")
+	return nil
+}
+
+// WithAttrs returns a handler with attrs attached to each record.
+func (mw *Logger) WithAttrs(attrs []slog.Attr) slog.Handler {
+	clone := *mw
+	clone.attrs = append(slices.Clone(mw.attrs), attrs...)
+	return &clone
+}
+
+// WithGroup returns a handler with name applied to subsequent attrs.
+func (mw *Logger) WithGroup(name string) slog.Handler {
+	clone := *mw
+	clone.groups = append(slices.Clone(mw.groups), name)
+	return &clone
+}
+
+func (mw *Logger) attrPrefix() string {
+	if len(mw.groups) == 0 {
+		return ""
+	}
+	return strings.Join(mw.groups, ".") + "."
+}
+
+func printAttr(prefix string, attr slog.Attr) {
+	attr.Value = attr.Value.Resolve()
+	if attr.Equal(slog.Attr{}) {
+		return
+	}
+	if attr.Value.Kind() == slog.KindGroup {
+		groupPrefix := prefix
+		if attr.Key != "" {
+			groupPrefix += attr.Key + "."
+		}
+		for _, groupAttr := range attr.Value.Group() {
+			printAttr(groupPrefix, groupAttr)
+		}
+		return
+	}
+	fmt.Printf(" %s%s%s=%s%v", colorGray, prefix, attr.Key, colorReset, attr.Value.Any())
 }
 
 func welcome(name, description string, kvs []kv) {

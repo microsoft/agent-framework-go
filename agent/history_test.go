@@ -11,9 +11,9 @@ import (
 )
 
 func TestNewInMemoryHistoryProvider_DefaultConfig_RoundTripsHistory(t *testing.T) {
-	provider := agent.NewInMemoryHistoryProvider("InMemoryHistoryProvider")
-	if provider.SourceID != "InMemoryHistoryProvider" {
-		t.Fatalf("expected SourceID=InMemoryHistoryProvider, got %q", provider.SourceID)
+	provider := agent.NewInMemoryHistoryProvider("")
+	if provider.SourceID != "in-memory" {
+		t.Fatalf("expected SourceID=in-memory, got %q", provider.SourceID)
 	}
 
 	session := agent.NewSession("")
@@ -30,20 +30,35 @@ func TestNewInMemoryHistoryProvider_DefaultConfig_RoundTripsHistory(t *testing.T
 		t.Fatalf("unexpected error loading history: %v", err)
 	}
 	if len(messages) != 3 {
-		t.Fatalf("expected request plus 2 history messages, got %d", len(messages))
+		t.Fatalf("expected 2 history messages plus request, got %d", len(messages))
 	}
-	if messages[0] != newRequest {
-		t.Fatal("expected original request message to be preserved first")
+	if messages[2] != newRequest {
+		t.Fatal("expected original request message to be preserved last")
 	}
-	if messages[1].String() != "request" || messages[2].String() != "response" {
+	if messages[0].String() != "request" || messages[1].String() != "response" {
 		t.Fatalf("unexpected output order/content")
 	}
-	if messages[1].SourceID != "InMemoryHistoryProvider" || messages[2].SourceID != "InMemoryHistoryProvider" {
-		t.Fatal("expected history messages to have InMemoryHistoryProvider source ID")
+	if messages[0].SourceID != "in-memory" || messages[1].SourceID != "in-memory" {
+		t.Fatal("expected history messages to have in-memory source ID")
+	}
+
+	newResponse := message.NewText("new response")
+	if err := provider.AfterRun(t.Context(), messages, []*message.Message{newResponse}, agent.WithSession(session)); err != nil {
+		t.Fatalf("unexpected error storing next turn: %v", err)
+	}
+	messages, _, err = provider.BeforeRun(t.Context(), nil, agent.WithSession(session))
+	if err != nil {
+		t.Fatalf("unexpected error loading updated history: %v", err)
+	}
+	if got, want := len(messages), 4; got != want {
+		t.Fatalf("expected history to append only new messages, got %d want %d", got, want)
+	}
+	if messages[0].String() != "request" || messages[1].String() != "response" || messages[2].String() != "new request" || messages[3].String() != "new response" {
+		t.Fatalf("unexpected updated history order/content")
 	}
 }
 
-func TestNewInMemoryHistoryProvider_ProvideExtendsInput(t *testing.T) {
+func TestNewInMemoryHistoryProvider_ProvidePrependsHistory(t *testing.T) {
 	provider := agent.NewInMemoryHistoryProvider("InMemoryHistoryProvider")
 	session := agent.NewSession("")
 	request := message.NewText("request")
@@ -59,12 +74,12 @@ func TestNewInMemoryHistoryProvider_ProvideExtendsInput(t *testing.T) {
 		t.Fatalf("unexpected error loading history: %v", err)
 	}
 	if len(messages) != 3 {
-		t.Fatalf("expected request plus 2 history messages, got %d", len(messages))
+		t.Fatalf("expected 2 history messages plus request, got %d", len(messages))
 	}
-	if messages[0] != newRequest {
-		t.Fatal("expected original request message to be preserved first")
+	if messages[2] != newRequest {
+		t.Fatal("expected original request message to be preserved last")
 	}
-	if messages[1].String() != "request" || messages[2].String() != "response" {
+	if messages[0].String() != "request" || messages[1].String() != "response" {
 		t.Fatalf("unexpected output order/content")
 	}
 	if gotSession, ok := agent.GetOption(options, agent.WithSession); !ok || gotSession != session {

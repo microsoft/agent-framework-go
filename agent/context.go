@@ -26,7 +26,7 @@ type ContextProvider struct {
 	StoreResponseFilter messagefilter.Filter
 
 	// Optional retrieval hook that returns updated provider context messages and run options.
-	// Returned slices should include the original messages and options with any additions appended.
+	// Messages that are not pointer-identical to the original input messages are marked with SourceID.
 	// Defaults to returning the original messages and options unchanged.
 	Provide func(context.Context, []*message.Message, ...Option) ([]*message.Message, []Option, error)
 
@@ -51,30 +51,13 @@ func (p *ContextProvider) BeforeRun(ctx context.Context, messages []*message.Mes
 	if outMessages == nil {
 		outMessages = messages
 	}
-	if messageSliceExtends(outMessages, messages) {
-		outMessages = slices.Clone(outMessages)
-		for i := len(messages); i < len(outMessages); i++ {
-			outMessages[i] = p.withAgentRequestMessageSource(outMessages[i])
-		}
-	}
+	outMessages = p.withProviderSource(outMessages, messages)
 
 	if outOptions == nil {
 		outOptions = options
 	}
 
 	return outMessages, outOptions, nil
-}
-
-func messageSliceExtends(out, in []*message.Message) bool {
-	if len(out) < len(in) {
-		return false
-	}
-	for i := range in {
-		if out[i] != in[i] {
-			return false
-		}
-	}
-	return true
 }
 
 // AfterRun persists context-related state after an agent invocation finishes.
@@ -104,6 +87,35 @@ func (p *ContextProvider) AfterRun(ctx context.Context, requestMessages, respons
 	}
 
 	return p.Store(ctx, filteredRequestMessages, filteredResponseMessages, options...)
+}
+
+func (p *ContextProvider) withProviderSource(outMessages, inMessages []*message.Message) []*message.Message {
+	if len(outMessages) == 0 {
+		return outMessages
+	}
+	originals := make(map[*message.Message]struct{}, len(inMessages))
+	for _, msg := range inMessages {
+		originals[msg] = struct{}{}
+	}
+
+	var cloned []*message.Message
+	for i, msg := range outMessages {
+		if _, ok := originals[msg]; ok {
+			continue
+		}
+		marked := p.withAgentRequestMessageSource(msg)
+		if marked == msg {
+			continue
+		}
+		if cloned == nil {
+			cloned = slices.Clone(outMessages)
+		}
+		cloned[i] = marked
+	}
+	if cloned != nil {
+		return cloned
+	}
+	return outMessages
 }
 
 func (p *ContextProvider) withAgentRequestMessageSource(msg *message.Message) *message.Message {

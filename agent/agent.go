@@ -306,7 +306,7 @@ func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, opt
 // It is bypassed for auto-created sessions on the first run, service-managed
 // sessions, and continuation-token resumes.
 func defaultLocalHistoryMiddleware() Middleware {
-	history := newContextProviderMiddleware(NewInMemoryHistoryProvider("in-memory"))
+	history := newContextProviderMiddleware(NewInMemoryHistoryProvider(""))
 
 	return MiddlewareFunc(func(next RunFunc, ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*message.ResponseUpdate, error] {
 		session, _ := GetOption(options, WithSession)
