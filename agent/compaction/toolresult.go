@@ -32,8 +32,8 @@ type ToolResultStrategy struct {
 	MinimumPreservedGroups int
 
 	// ToolCallFormatter formats a tool-call group as a compact summary string.
-	// If not provided, a default formatter will be used that summarizes each function call
-	// and its corresponding result in a compact textual form.
+	// When nil, DefaultToolCallFormatter is used, which produces a YAML-like block listing
+	// each tool name and its results.
 	ToolCallFormatter func(*MessageGroup) string
 }
 
@@ -69,7 +69,7 @@ func (strategy *ToolResultStrategy) Compact(_ context.Context, index *MessageInd
 
 	formatter := strategy.ToolCallFormatter
 	if formatter == nil {
-		formatter = defaultToolCallFormatter
+		formatter = DefaultToolCallFormatter
 	}
 	compacted := false
 	offset := 0
@@ -98,7 +98,12 @@ func (strategy *ToolResultStrategy) Compact(_ context.Context, index *MessageInd
 	return compacted, nil
 }
 
-func defaultToolCallFormatter(group *MessageGroup) string {
+// DefaultToolCallFormatter produces a YAML-like summary of tool-call groups, including tool names,
+// results, and deduplication counts for repeated tool names.
+//
+// This is the formatter used when no custom ToolCallFormatter is supplied. It can be referenced
+// directly in a custom formatter to augment or wrap the default output.
+func DefaultToolCallFormatter(group *MessageGroup) string {
 	type call struct {
 		id   string
 		name string
