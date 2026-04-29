@@ -190,9 +190,15 @@ func TestHostedAgent_EmitsStreamingUpdatesIfConfigured(t *testing.T) {
 		executorSetting *bool
 		turnSetting     *bool
 	}{
-		{nil, nil}, {nil, boolPtr(true)}, {nil, boolPtr(false)},
-		{boolPtr(true), nil}, {boolPtr(true), boolPtr(true)}, {boolPtr(true), boolPtr(false)},
-		{boolPtr(false), nil}, {boolPtr(false), boolPtr(true)}, {boolPtr(false), boolPtr(false)},
+		{nil, nil},
+		{nil, boolPtr(true)},
+		{nil, boolPtr(false)},
+		{boolPtr(true), nil},
+		{boolPtr(true), boolPtr(true)},
+		{boolPtr(true), boolPtr(false)},
+		{boolPtr(false), nil},
+		{boolPtr(false), boolPtr(true)},
+		{boolPtr(false), boolPtr(false)},
 	}
 
 	expectedContents := expectedReplayUpdateContents()

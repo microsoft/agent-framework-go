@@ -11,8 +11,10 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
 )
 
-type textMessage struct{ Text string }
-type dataMessage struct{ Bytes []byte }
+type (
+	textMessage struct{ Text string }
+	dataMessage struct{ Bytes []byte }
+)
 
 func TestBindFunc_InvokesHandler_NoOutput(t *testing.T) {
 	called := false
