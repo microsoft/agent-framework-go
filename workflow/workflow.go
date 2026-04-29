@@ -236,9 +236,10 @@ type Context struct {
 	// PostRequest raises an [ExternalRequest] from the current executor.
 	// The request becomes a [RequestInfoEvent] in the workflow event stream,
 	// and the matching [ExternalResponse] (sent later by the caller via the
-	// run handle) is delivered back to this executor as a regular message.
-	// The executor is responsible for registering a handler for the
-	// expected response type via its [RouteBuilder].
+	// run handle) is delivered back to this executor as a regular message of
+	// type *[ExternalResponse]. The executor is responsible for registering
+	// a handler for *[ExternalResponse] via its [RouteBuilder] and extracting
+	// the typed payload via [ExternalResponse.Data] and [PortableValue.As].
 	PostRequest func(request *ExternalRequest) error
 
 	// ReadState reads a state value from the workflow's state store. If no scope is provided, the executor's

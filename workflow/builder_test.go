@@ -360,10 +360,6 @@ func TestAddSwitch_RoutesToMatchingCase(t *testing.T) {
 	for _, t := range trace {
 		if t == wantContains {
 			found = true
-		}
-		if t == "odd:abcd" {
-			t := t
-			_ = t
 			break
 		}
 	}

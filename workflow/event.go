@@ -89,7 +89,12 @@ func (e SuperStepCompletedEvent) Data() any {
 
 var _ Event = StartedEvent{}
 
-// StartedEvent is an event triggered when the workflow starts.
+// StartedEvent is emitted at the beginning of each input → processing → halt
+// cycle, immediately before the first [SuperStep] of that cycle runs. It fires
+// once per cycle in which there is actual work to process — typically once at
+// the start of a run and again whenever new messages or external responses
+// arrive after a halt. No event is emitted on cycles that complete without
+// work (e.g. timeout-only loop iterations).
 type StartedEvent struct {
 	Message any
 }
