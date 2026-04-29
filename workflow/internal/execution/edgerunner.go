@@ -22,12 +22,17 @@ type statefulEdgeStateJSON struct {
 }
 
 type statefulEdgeState struct {
+	// mu serializes concurrent calls to processMessage from parallel executor
+	// tasks during superstep execution.
+	mu              sync.Mutex
 	pendingMessages []*checkpoint.PortableMessageEnvelope
 	sourceIDs       []string
 	unseen          map[string]struct{}
 }
 
 func (s *statefulEdgeState) MarshalJSON() ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	unseen := slices.Collect(maps.Keys(s.unseen))
 	slices.Sort(unseen)
 	tmp := statefulEdgeStateJSON{
@@ -43,6 +48,8 @@ func (s *statefulEdgeState) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &tmp); err != nil {
 		return err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.pendingMessages = tmp.PendingMessages
 	s.sourceIDs = tmp.SourceIDs
 	s.unseen = make(map[string]struct{}, len(tmp.Unseen))
@@ -53,25 +60,33 @@ func (s *statefulEdgeState) UnmarshalJSON(data []byte) error {
 }
 
 func (s *statefulEdgeState) processMessage(sourceID string, envelope *MessageEnvelope) []*MessageEnvelope {
+	// Serialize concurrent calls from parallel executor tasks during superstep execution.
+	s.mu.Lock()
 	s.pendingMessages = append(s.pendingMessages, envelope.Portable())
 	delete(s.unseen, sourceID)
 	if len(s.unseen) != 0 {
+		s.mu.Unlock()
 		return nil
 	}
+	taken := s.pendingMessages
+	s.pendingMessages = nil
 	if s.unseen == nil {
-		s.unseen = make(map[string]struct{})
-	} else {
-		clear(s.unseen)
+		s.unseen = make(map[string]struct{}, len(s.sourceIDs))
 	}
 	for _, id := range s.sourceIDs {
 		s.unseen[id] = struct{}{}
 	}
-	taken := make([]*MessageEnvelope, 0, len(s.pendingMessages))
-	for _, env := range s.pendingMessages {
-		taken = append(taken, NewMessageEnvelopeFromPortable(env))
+	s.mu.Unlock()
+
+	if len(taken) == 0 {
+		return nil
 	}
-	clear(s.pendingMessages)
-	return taken
+
+	envelopes := make([]*MessageEnvelope, 0, len(taken))
+	for _, env := range taken {
+		envelopes = append(envelopes, NewMessageEnvelopeFromPortable(env))
+	}
+	return envelopes
 }
 
 // EdgeRunner manages routing of messages through workflow edges.
@@ -231,7 +246,23 @@ func (em *EdgeRunner) PrepareDeliveryForInput(ctx context.Context, envelope *Mes
 	}, nil
 }
 
-// PrepareDeliveryForResponse prepares delivery of an external response.
-func (em *EdgeRunner) PrepareDeliveryForResponse(ctx context.Context, response *workflow.ExternalResponse) (*DeliveryMapping, error) {
-	return em.PrepareDeliveryForInput(ctx, &MessageEnvelope{Message: response})
+// PrepareDeliveryForResponse prepares delivery of an external response to
+// the executor that posted the matching request.
+func (em *EdgeRunner) PrepareDeliveryForResponse(ctx context.Context, response *workflow.ExternalResponse, ownerID string) (*DeliveryMapping, error) {
+	if ownerID == "" {
+		return nil, fmt.Errorf("response %q has no owning executor", response.RequestID)
+	}
+	envelope := &MessageEnvelope{Message: response}
+	target, err := em.ensureExecutor(ctx, ownerID, em.tracer)
+	if err != nil {
+		return nil, err
+	}
+	if !target.CanHandleTypeID(envelope.MessageType()) {
+		// Type mismatch.
+		return nil, nil
+	}
+	return &DeliveryMapping{
+		Targets:   []*workflow.Executor{target},
+		Envelopes: []*MessageEnvelope{envelope},
+	}, nil
 }

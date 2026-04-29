@@ -1,0 +1,358 @@
+// Copyright (c) Microsoft. All rights reserved.
+
+package inproc_test
+
+import (
+	"context"
+	"reflect"
+	"slices"
+	"sync"
+	"sync/atomic"
+	"testing"
+
+	"github.com/microsoft/agent-framework-go/workflow"
+	"github.com/microsoft/agent-framework-go/workflow/inproc"
+)
+
+func minimalEchoBinding(id string) *workflow.ExecutorBinding {
+	binding := &workflow.ExecutorBinding{
+		ID:           id,
+		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+	}
+	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: id,
+			Options: workflow.ExecutorOptions{
+				DisableAutoSendMessageHandlerResultObject: true,
+				DisableAutoYieldOutputHandlerResultObject: true,
+			},
+			Config: []*workflow.ExecutorConfig{{
+				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+					return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(ctx *workflow.Context, _ any) (any, error) {
+						return nil, ctx.YieldOutput("ok")
+					}), nil
+				},
+			}},
+		}, nil
+	}
+	return binding
+}
+
+func TestStartedEvent_EmittedBeforeSuperStepStarted_OffThread(t *testing.T) {
+	ex := minimalEchoBinding("ex")
+	wf, err := workflow.NewBuilder(ex).WithOutputFrom(ex).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	run, err := inproc.Default.Run(context.Background(), wf, "", "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	startedAt := -1
+	stepAt := -1
+	i := 0
+	for evt := range run.OutgoingEvents() {
+		switch evt.(type) {
+		case workflow.StartedEvent:
+			if startedAt < 0 {
+				startedAt = i
+			}
+		case workflow.SuperStepStartedEvent:
+			if stepAt < 0 {
+				stepAt = i
+			}
+		}
+		i++
+	}
+	if startedAt < 0 {
+		t.Fatalf("expected a StartedEvent, got none")
+	}
+	if stepAt < 0 {
+		t.Fatalf("expected a SuperStepStartedEvent, got none")
+	}
+	if startedAt >= stepAt {
+		t.Errorf("StartedEvent at %d should precede SuperStepStartedEvent at %d", startedAt, stepAt)
+	}
+}
+
+func TestStartedEvent_EmittedInLockstepMode(t *testing.T) {
+	ex := minimalEchoBinding("ex")
+	wf, err := workflow.NewBuilder(ex).WithOutputFrom(ex).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	run, err := inproc.Lockstep.Run(context.Background(), wf, "", "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var sawStarted bool
+	for evt := range run.OutgoingEvents() {
+		if _, ok := evt.(workflow.StartedEvent); ok {
+			sawStarted = true
+			break
+		}
+	}
+	if !sawStarted {
+		t.Errorf("expected a StartedEvent in Lockstep mode")
+	}
+}
+
+func TestStartedEvent_NotEmittedWhenNoWork(t *testing.T) {
+	ex := minimalEchoBinding("ex")
+	wf, err := workflow.NewBuilder(ex).WithOutputFrom(ex).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	ctx := context.Background()
+	stream, err := inproc.OpenStream(ctx, wf, "")
+	if err != nil {
+		t.Fatalf("OpenStream: %v", err)
+	}
+	defer stream.Cancel()
+
+	if err := stream.SendMessage(ctx, "first"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	var startedCount int
+	for evt, err := range stream.WatchStream(ctx) {
+		if err != nil {
+			t.Fatalf("watch: %v", err)
+		}
+		if _, ok := evt.(workflow.StartedEvent); ok {
+			startedCount++
+		}
+	}
+	if startedCount != 1 {
+		t.Errorf("expected exactly 1 StartedEvent, got %d", startedCount)
+	}
+}
+
+func TestSuperStep_CompletedEventPerStep(t *testing.T) {
+	starter := &trackingExecutor{id: "Starting", forwardMessages: true}
+	receives := &trackingExecutor{id: "Receives", forwardMessages: false}
+	uninvoked := &trackingExecutor{id: "Uninvoked", forwardMessages: false}
+
+	startBinding := starter.Bind()
+	receivesBinding := receives.Bind()
+	uninvokedBinding := uninvoked.Bind()
+
+	wf, err := workflow.NewBuilder(startBinding).
+		AddEdge(startBinding, receivesBinding).
+		AddEdge(receivesBinding, uninvokedBinding).
+		Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	run, err := inproc.Run(context.Background(), wf, "", "msg")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	events := slices.Collect(run.OutgoingEvents())
+	for _, e := range events {
+		if errEvt, ok := e.(workflow.ErrorEvent); ok {
+			t.Fatalf("workflow produced error event: %v", errEvt.Error)
+		}
+	}
+
+	completed := 0
+	for _, e := range events {
+		if _, ok := e.(workflow.SuperStepCompletedEvent); ok {
+			completed++
+		}
+	}
+	if completed != 2 {
+		t.Errorf("SuperStepCompletedEvent count = %d, want 2", completed)
+	}
+}
+
+func TestSuperStep_StartedPrecedesCompletedPerStep(t *testing.T) {
+	starter := &trackingExecutor{id: "Starting", forwardMessages: true}
+	receives := &trackingExecutor{id: "Receives", forwardMessages: false}
+
+	startBinding := starter.Bind()
+	receivesBinding := receives.Bind()
+
+	wf, err := workflow.NewBuilder(startBinding).
+		AddEdge(startBinding, receivesBinding).
+		Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	run, err := inproc.Run(context.Background(), wf, "", "msg")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	depth := 0
+	maxDepth := 0
+	pairs := 0
+	for evt := range run.OutgoingEvents() {
+		switch evt.(type) {
+		case workflow.SuperStepStartedEvent:
+			depth++
+			if depth > maxDepth {
+				maxDepth = depth
+			}
+		case workflow.SuperStepCompletedEvent:
+			if depth == 0 {
+				t.Errorf("SuperStepCompletedEvent without preceding SuperStepStartedEvent")
+			} else {
+				depth--
+				pairs++
+			}
+		}
+	}
+	if depth != 0 {
+		t.Errorf("unbalanced started/completed events: %d unfinished", depth)
+	}
+	if maxDepth != 1 {
+		t.Errorf("max nesting depth = %d, want 1 (sequential supersteps)", maxDepth)
+	}
+	if pairs != 2 {
+		t.Errorf("started/completed pair count = %d, want 2", pairs)
+	}
+}
+
+type trackingExecutor struct {
+	id              string
+	forwardMessages bool
+
+	deliveryStarting atomic.Int64
+	deliveryFinished atomic.Int64
+
+	mu       sync.Mutex
+	received []string
+}
+
+func (te *trackingExecutor) Bind() *workflow.ExecutorBinding {
+	binding := &workflow.ExecutorBinding{
+		ID:           te.id,
+		ExecutorType: reflect.TypeFor[*trackingExecutor](),
+		Raw:          te,
+	}
+	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: te.id,
+			Options: workflow.ExecutorOptions{
+				DisableAutoSendMessageHandlerResultObject: true,
+				DisableAutoYieldOutputHandlerResultObject: true,
+			},
+			Config: []*workflow.ExecutorConfig{{
+				OnMessageDeliveryStarting: func(_ *workflow.Context) error {
+					te.deliveryStarting.Add(1)
+					return nil
+				},
+				OnMessageDeliveryFinished: func(_ *workflow.Context) error {
+					te.deliveryFinished.Add(1)
+					return nil
+				},
+				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+					return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
+						s := msg.(string)
+						te.mu.Lock()
+						te.received = append(te.received, s)
+						te.mu.Unlock()
+						if te.forwardMessages {
+							return nil, ctx.SendMessage("", s)
+						}
+						return nil, nil
+					}), nil
+				},
+			}},
+		}, nil
+	}
+	return binding
+}
+
+func TestDeliveryEvents_InvokedOncePerExecutorPerSuperstep(t *testing.T) {
+	starter := &trackingExecutor{id: "Starting", forwardMessages: true}
+	receives := &trackingExecutor{id: "Receives", forwardMessages: false}
+	uninvoked := &trackingExecutor{id: "Uninvoked", forwardMessages: false}
+
+	startBinding := starter.Bind()
+	receivesBinding := receives.Bind()
+	uninvokedBinding := uninvoked.Bind()
+
+	wf, err := workflow.NewBuilder(startBinding).
+		AddEdge(startBinding, receivesBinding).
+		AddEdge(receivesBinding, uninvokedBinding).
+		Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	if _, err := inproc.Run(context.Background(), wf, "", "msg"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if got := starter.deliveryStarting.Load(); got != 1 {
+		t.Errorf("starter.deliveryStarting = %d, want 1", got)
+	}
+	if got := starter.deliveryFinished.Load(); got != 1 {
+		t.Errorf("starter.deliveryFinished = %d, want 1", got)
+	}
+	if got := receives.deliveryStarting.Load(); got != 1 {
+		t.Errorf("receives.deliveryStarting = %d, want 1", got)
+	}
+	if got := receives.deliveryFinished.Load(); got != 1 {
+		t.Errorf("receives.deliveryFinished = %d, want 1", got)
+	}
+	if got := uninvoked.deliveryStarting.Load(); got != 0 {
+		t.Errorf("uninvoked.deliveryStarting = %d, want 0", got)
+	}
+	if got := uninvoked.deliveryFinished.Load(); got != 0 {
+		t.Errorf("uninvoked.deliveryFinished = %d, want 0", got)
+	}
+}
+
+func TestDeliveryEvents_FinishedRunsEvenWhenHandlerErrors(t *testing.T) {
+	finishedCalls := atomic.Int64{}
+	id := "boom"
+	binding := &workflow.ExecutorBinding{
+		ID:           id,
+		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+	}
+	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: id,
+			Options: workflow.ExecutorOptions{
+				DisableAutoSendMessageHandlerResultObject: true,
+				DisableAutoYieldOutputHandlerResultObject: true,
+			},
+			Config: []*workflow.ExecutorConfig{{
+				OnMessageDeliveryFinished: func(_ *workflow.Context) error {
+					finishedCalls.Add(1)
+					return nil
+				},
+				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+					return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(_ *workflow.Context, _ any) (any, error) {
+						return nil, errBoom
+					}), nil
+				},
+			}},
+		}, nil
+	}
+	wf, err := workflow.NewBuilder(binding).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if _, err := inproc.Run(context.Background(), wf, "", "x"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := finishedCalls.Load(); got != 1 {
+		t.Errorf("OnMessageDeliveryFinished called %d times, want 1", got)
+	}
+}
+
+var errBoom = &boomError{}
+
+type boomError struct{}
+
+func (*boomError) Error() string { return "boom" }

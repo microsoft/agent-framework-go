@@ -37,7 +37,7 @@ func (s *ConcurrentEventSink) Enqueue(ctx context.Context, evt workflow.Event) e
 }
 
 type SuperStepRunner interface {
-	RunID() string
+	SessionID() string
 	StartExecutorID() string
 	HasUnservicedRequests() bool
 	HasUnprocessedMessages() bool

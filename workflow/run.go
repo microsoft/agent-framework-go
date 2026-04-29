@@ -18,7 +18,7 @@ const (
 )
 
 type Run interface {
-	RunID() string
+	SessionID() string
 	GetStatus(ctx context.Context) (RunStatus, error)
 	OutgoingEvents() iter.Seq[Event]
 	NewEventCount() int
@@ -27,7 +27,7 @@ type Run interface {
 }
 
 type StreamingRun interface {
-	RunID() string
+	SessionID() string
 	GetStatus(ctx context.Context) (RunStatus, error)
 	SendResponse(ctx context.Context, response *ExternalResponse) error
 	SendMessage(ctx context.Context, message any) error

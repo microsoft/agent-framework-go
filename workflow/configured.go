@@ -34,8 +34,8 @@ func (c *Configured[T]) Configuration() Config {
 	}
 }
 
-func (c *Configured[T]) NewBound(runID string) (T, error) {
-	return c.New(c.Configuration(), runID)
+func (c *Configured[T]) NewBound(sessionID string) (T, error) {
+	return c.New(c.Configuration(), sessionID)
 }
 
 // ConfiguredOf represents a preconfigured, lazy-instantiatable instance of T
@@ -63,16 +63,16 @@ func (c *ConfiguredOf[T, O]) Memoize() Configured[T] {
 	}
 }
 
-func (c *ConfiguredOf[T, O]) NewBound(runID string) (T, error) {
-	return c.createValidatingMemoizedFunc()(Config{ID: c.ID}, runID)
+func (c *ConfiguredOf[T, O]) NewBound(sessionID string) (T, error) {
+	return c.createValidatingMemoizedFunc()(Config{ID: c.ID}, sessionID)
 }
 
 func (c *ConfiguredOf[T, O]) createValidatingMemoizedFunc() func(Config, string) (T, error) {
-	return func(config Config, runID string) (s T, err error) {
+	return func(config Config, sessionID string) (s T, err error) {
 		if c.ID != config.ID {
 			return s, fmt.Errorf("requested instance ID %q does not match configured ID %q", config.ID, c.ID)
 		}
-		s, err = c.New(c.Configuration(), runID)
+		s, err = c.New(c.Configuration(), sessionID)
 		if err != nil {
 			return s, err
 		}

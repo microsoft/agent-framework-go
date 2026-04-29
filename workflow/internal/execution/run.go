@@ -82,8 +82,8 @@ func NewRunHandle(sr SuperStepRunner, ch checkpoint.CheckpointingHandle, mode Mo
 	return handle
 }
 
-func (h *RunHandle) RunID() string {
-	return h.stepRunner.RunID()
+func (h *RunHandle) SessionID() string {
+	return h.stepRunner.SessionID()
 }
 
 func (h *RunHandle) Checkpoints() []workflow.CheckpointInfo {
@@ -225,8 +225,8 @@ func NewRun(handle *RunHandle) *Run {
 	}
 }
 
-func (r *Run) RunID() string {
-	return r.runHandle.RunID()
+func (r *Run) SessionID() string {
+	return r.runHandle.SessionID()
 }
 
 func (r *Run) GetStatus(ctx context.Context) (workflow.RunStatus, error) {
@@ -287,8 +287,8 @@ func NewStreamingRun(handle *RunHandle) *StreamingRun {
 	}
 }
 
-func (sr *StreamingRun) RunID() string {
-	return sr.runHandle.RunID()
+func (sr *StreamingRun) SessionID() string {
+	return sr.runHandle.SessionID()
 }
 
 func (sr *StreamingRun) GetStatus(ctx context.Context) (workflow.RunStatus, error) {

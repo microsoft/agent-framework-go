@@ -257,7 +257,7 @@ func TestInProcessRun_StateShouldError_TwoExecutors(t *testing.T) {
 	)
 
 	wf, err := workflow.NewBuilder(forward).
-		AddFanOutEdge(forward, []*workflow.ExecutorBinding{testExecutor.Bind(), testExecutor2.Bind()}, nil).
+		AddFanOutEdge(forward, []*workflow.ExecutorBinding{testExecutor.Bind(), testExecutor2.Bind()}).
 		Build()
 	if err != nil {
 		t.Fatalf("Failed to build workflow: %v", err)

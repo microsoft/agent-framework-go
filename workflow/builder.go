@@ -4,6 +4,7 @@ package workflow
 
 import (
 	"fmt"
+	"iter"
 	"maps"
 	"slices"
 )
@@ -17,8 +18,8 @@ type Builder struct {
 
 	edgeCount                int
 	executorsBindings        map[string]*ExecutorBinding
-	edges                    map[string][]Edge
 	unboundExecutors         map[string]struct{}
+	edges                    map[string][]Edge
 	conditionlessConnections []EdgeConnection
 	inputPorts               map[string]RequestPort
 	outputExecutors          map[string]struct{}
@@ -29,6 +30,10 @@ func NewBuilder(start *ExecutorBinding) *Builder {
 		startExecutorId: start.ID,
 		edges:           make(map[string][]Edge),
 	}
+	// Always track the start binding so even single-node workflows have a
+	// proper ExecutorBindings entry. Without this, Workflow.DescribeProtocol
+	// and other lookups by StartExecutorID dereference a nil binding.
+	bld.track(start)
 	return bld
 }
 
@@ -79,11 +84,11 @@ func (wb *Builder) BindExecutor(binding *ExecutorBinding) *Builder {
 	return wb
 }
 
-func (wb *Builder) AddEdge(source *ExecutorBinding, target *ExecutorBinding) *Builder {
-	return wb.AddDirectEdge(source, target, false, nil)
+func (wb *Builder) AddEdge(source *ExecutorBinding, target *ExecutorBinding, opts ...EdgeOption) *Builder {
+	return wb.AddDirectEdge(source, target, false, nil, opts...)
 }
 
-func (wb *Builder) AddDirectEdge(source *ExecutorBinding, target *ExecutorBinding, idempotent bool, condition func(any) bool) *Builder {
+func (wb *Builder) AddDirectEdge(source *ExecutorBinding, target *ExecutorBinding, idempotent bool, condition func(any) bool, opts ...EdgeOption) *Builder {
 	if wb.err != nil {
 		return wb
 	}
@@ -106,16 +111,22 @@ func (wb *Builder) AddDirectEdge(source *ExecutorBinding, target *ExecutorBindin
 	if !wb.track(source) || !wb.track(target) {
 		return wb
 	}
-	wb.edges[source.ID] = append(wb.edges[source.ID], Edge{
+	edge := Edge{
 		Connection: conn,
 		Condition:  condition,
 		Index:      wb.edgeIdx(),
-	})
+	}
+	applyEdgeOptions(&edge, opts)
+	wb.edges[source.ID] = append(wb.edges[source.ID], edge)
 	wb.conditionlessConnections = append(wb.conditionlessConnections, conn)
 	return wb
 }
 
-func (wb *Builder) AddFanOutEdge(source *ExecutorBinding, targets []*ExecutorBinding, partitioner func(any, int, []int) bool) *Builder {
+// AddFanOutEdge adds a fan-out edge from source to one or more targets.
+//
+// By default the message is delivered to every target. Pass [WithAssigner]
+// to choose a subset of targets per message. See [Edge.Assigner].
+func (wb *Builder) AddFanOutEdge(source *ExecutorBinding, targets []*ExecutorBinding, opts ...EdgeOption) *Builder {
 	if wb.err != nil {
 		return wb
 	}
@@ -133,14 +144,18 @@ func (wb *Builder) AddFanOutEdge(source *ExecutorBinding, targets []*ExecutorBin
 		SourceIDs: []string{source.ID},
 		SinkIDs:   sinkIDs,
 	}
-	wb.edges[source.ID] = append(wb.edges[source.ID], Edge{
+	edge := Edge{
 		Connection: conn,
 		Index:      wb.edgeIdx(),
-	})
+	}
+	applyEdgeOptions(&edge, opts)
+	wb.edges[source.ID] = append(wb.edges[source.ID], edge)
 	return wb
 }
 
-func (wb *Builder) AddFanInEdge(target *ExecutorBinding, sources []*ExecutorBinding) *Builder {
+// AddFanInBarrierEdge adds a fan-in edge that waits for all sources before
+// dispatching to the target.
+func (wb *Builder) AddFanInBarrierEdge(target *ExecutorBinding, sources []*ExecutorBinding, opts ...EdgeOption) *Builder {
 	if wb.err != nil {
 		return wb
 	}
@@ -161,6 +176,7 @@ func (wb *Builder) AddFanInEdge(target *ExecutorBinding, sources []*ExecutorBind
 		},
 		Index: wb.edgeIdx(),
 	}
+	applyEdgeOptions(&edge, opts)
 	for _, id := range sourceIDs {
 		wb.edges[id] = append(wb.edges[id], edge)
 	}
@@ -299,4 +315,142 @@ func (wb *Builder) track(binding *ExecutorBinding) bool {
 		}
 	}
 	return true
+}
+
+// AddChain connects source to each binding in executors in order, producing a
+// linear pipeline source → executors[0] → executors[1] → ...
+//
+// If allowRepetition is false, the same binding may not appear twice in the
+// chain (including the source). Adding the same edge twice is idempotent.
+func (wb *Builder) AddChain(source *ExecutorBinding, executors []*ExecutorBinding, allowRepetition bool) *Builder {
+	if wb.err != nil {
+		return wb
+	}
+	if !wb.checkBinding(source) {
+		return wb
+	}
+	seen := map[string]struct{}{source.ID: {}}
+	current := source
+	for _, exec := range executors {
+		if !wb.checkBinding(exec) {
+			return wb
+		}
+		if !allowRepetition {
+			if _, ok := seen[exec.ID]; ok {
+				wb.err = fmt.Errorf("executor %q is already in the chain", exec.ID)
+				return wb
+			}
+			seen[exec.ID] = struct{}{}
+		}
+		wb.AddDirectEdge(current, exec, true /*idempotent*/, nil)
+		if wb.err != nil {
+			return wb
+		}
+		current = exec
+	}
+	return wb
+}
+
+// SwitchBuilder constructs a case-based fan-out edge. Cases are evaluated in
+// the order they were added; matching cases route the message to that case's
+// targets. If no case matches, the default targets are used.
+type SwitchBuilder struct {
+	source *ExecutorBinding
+
+	// targets aggregates every binding referenced by any case so we can build
+	// a single fan-out edge with stable indexes.
+	targets         []*ExecutorBinding
+	targetIndexByID map[string]int
+
+	cases []switchCase
+
+	// defaultIndices are the target indexes to dispatch to when no case
+	// predicate matches.
+	defaultIndices []int
+}
+
+type switchCase struct {
+	predicate func(any) bool
+	indices   []int
+}
+
+// AddSwitch starts building a switch-style fan-out from source. Configure
+// cases via [SwitchBuilder.AddCase] and an optional default via
+// [SwitchBuilder.WithDefault], then commit by calling
+// [SwitchBuilder.AddToBuilder].
+func (wb *Builder) AddSwitch(source *ExecutorBinding) *SwitchBuilder {
+	return &SwitchBuilder{
+		source:          source,
+		targetIndexByID: map[string]int{},
+	}
+}
+
+// AddCase adds a case branch matching messages of type T satisfying the
+// predicate. The matched message is routed to all bindings in targets.
+func (s *SwitchBuilder) AddCase(predicate func(msg any) bool, targets ...*ExecutorBinding) *SwitchBuilder {
+	indices := s.collectTargets(targets)
+	s.cases = append(s.cases, switchCase{predicate: predicate, indices: indices})
+	return s
+}
+
+// WithDefault sets the targets to dispatch to when no case matches.
+func (s *SwitchBuilder) WithDefault(targets ...*ExecutorBinding) *SwitchBuilder {
+	s.defaultIndices = s.collectTargets(targets)
+	return s
+}
+
+func (s *SwitchBuilder) collectTargets(targets []*ExecutorBinding) []int {
+	out := make([]int, 0, len(targets))
+	for _, t := range targets {
+		if t == nil {
+			continue
+		}
+		idx, ok := s.targetIndexByID[t.ID]
+		if !ok {
+			idx = len(s.targets)
+			s.targets = append(s.targets, t)
+			s.targetIndexByID[t.ID] = idx
+		}
+		out = append(out, idx)
+	}
+	return out
+}
+
+// AddToBuilder commits the configured switch onto wb as a fan-out edge with
+// an assigner that picks targets based on the registered cases.
+func (s *SwitchBuilder) AddToBuilder(wb *Builder) *Builder {
+	if wb.err != nil {
+		return wb
+	}
+	if s.source == nil {
+		wb.err = fmt.Errorf("switch source is required")
+		return wb
+	}
+	if len(s.targets) == 0 {
+		// Nothing to do; return without error to allow no-op switches.
+		return wb
+	}
+
+	cases := slices.Clone(s.cases)
+	defaultIndices := slices.Clone(s.defaultIndices)
+	assigner := func(_ int, msg any) iter.Seq[int] {
+		return func(yield func(int) bool) {
+			for _, c := range cases {
+				if c.predicate(msg) {
+					for _, idx := range c.indices {
+						if !yield(idx) {
+							return
+						}
+					}
+					return
+				}
+			}
+			for _, idx := range defaultIndices {
+				if !yield(idx) {
+					return
+				}
+			}
+		}
+	}
+	return wb.AddFanOutEdge(s.source, s.targets, WithAssigner(assigner))
 }

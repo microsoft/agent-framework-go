@@ -485,7 +485,7 @@ func TestScopeLoadPortableValueState_AfterSerialization(t *testing.T) {
 		t.Fatalf("ExportState failed: %v", err)
 	}
 
-	stateData := hashmap.NewMap[workflow.ScopeKey, workflow.PortableValue](workflow.ScopeKeyHasher)
+	stateData := hashmap.NewMap[workflow.ScopeKey, workflow.PortableValue](ScopeKeyHasher)
 	for k, v := range exportedState {
 		stateData.Set(k, v)
 	}

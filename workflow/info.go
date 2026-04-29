@@ -7,19 +7,20 @@ import (
 )
 
 type CheckpointInfo struct {
-	RunID        string
+	SessionID    string
 	CheckpointID string
 }
 
-func NewCheckpointInfo(runID string) CheckpointInfo {
+func NewCheckpointInfo(sessionID string) CheckpointInfo {
 	return CheckpointInfo{
-		RunID:        runID,
+		SessionID:    sessionID,
 		CheckpointID: uuid.NewString(),
 	}
 }
 
 type EdgeInfo struct {
 	Connection   EdgeConnection
+	Label        string
 	HasCondition bool
 	HasAssigner  bool
 }
@@ -27,6 +28,7 @@ type EdgeInfo struct {
 func NewEdgeInfo(edge Edge) EdgeInfo {
 	return EdgeInfo{
 		Connection:   edge.Connection,
+		Label:        edge.Label,
 		HasCondition: edge.Condition != nil,
 		HasAssigner:  edge.Assigner != nil,
 	}
@@ -34,11 +36,13 @@ func NewEdgeInfo(edge Edge) EdgeInfo {
 
 func (e *EdgeInfo) Match(other Edge) bool {
 	return e.Connection.Equal(other.Connection) &&
+		e.Label == other.Label &&
 		e.HasCondition == (other.Condition != nil) &&
 		e.HasAssigner == (other.Assigner != nil)
 }
 
-// RequestPortInfo contains information about an input port, including its input and output types.
+// RequestPortInfo contains information about a request port, including its
+// request and response types.
 type RequestPortInfo struct {
 	ID           string
 	RequestType  TypeID

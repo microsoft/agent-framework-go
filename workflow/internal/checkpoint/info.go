@@ -62,7 +62,7 @@ func (w *WorkflowInfo) Match(wf *workflow.Workflow) bool {
 		}
 	}
 
-	// Validate the input ports
+	// Validate the request ports
 	if len(wf.Ports) != len(w.requestPorts) {
 		return false
 	}

@@ -15,8 +15,8 @@ type CheckpointingHandle interface {
 }
 
 type Manager interface {
-	Commit(runID string, checkpoint *Checkpoint) (workflow.CheckpointInfo, error)
-	Lookup(runID string) (*Checkpoint, error)
+	Commit(sessionID string, checkpoint *Checkpoint) (workflow.CheckpointInfo, error)
+	Lookup(sessionID string) (*Checkpoint, error)
 }
 
 type Checkpoint struct {
