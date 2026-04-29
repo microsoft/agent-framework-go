@@ -332,4 +332,3 @@ func TestExternalRequest_PreservesProvidedID(t *testing.T) {
 		t.Errorf("ID = %q, want %q", r.ID, "user-supplied")
 	}
 }
-

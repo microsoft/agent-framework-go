@@ -159,7 +159,7 @@ func New(wf *workflow.Workflow, cfg Config) (*agent.Agent, error) {
 	// The hosted workflow handles its own tool-call loop via its inner
 	// executors, so the agent-level autocall middleware would double-process
 	// function calls.
-	cfg.Config.DisableFuncAutoCall = true
+	cfg.DisableFuncAutoCall = true
 	return agent.New(
 		agent.ProviderConfig{
 			ProviderName: "workflow",
