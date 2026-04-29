@@ -3949,7 +3949,7 @@ func TestResponsesConversationId_AsResponseId_NonStreaming(t *testing.T) {
 	}
 
 	// After the call, session conversation id should be updated to the new response ID
-	if got := session.ServiceID; got != "resp_67890" {
+	if got := session.ServiceID(); got != "resp_67890" {
 		t.Errorf("expected ConversationId resp_67890, got %s", got)
 	}
 }
@@ -4015,7 +4015,7 @@ func TestResponsesConversationId_AsConversationId_NonStreaming(t *testing.T) {
 	}
 
 	// When using a conversation ID, it should remain unchanged
-	if got := session.ServiceID; got != "conv_12345" {
+	if got := session.ServiceID(); got != "conv_12345" {
 		t.Errorf("expected ConversationId conv_12345, got %s", got)
 	}
 }
@@ -4094,7 +4094,7 @@ data: {"type":"response.completed","response":{"id":"resp_67890","object":"respo
 		}
 	}
 
-	if got := session.ServiceID; got != "resp_67890" {
+	if got := session.ServiceID(); got != "resp_67890" {
 		t.Errorf("expected ConversationId resp_67890, got %s", got)
 	}
 }
@@ -4173,7 +4173,7 @@ data: {"type":"response.completed","response":{"id":"resp_67890","object":"respo
 		}
 	}
 
-	if got := session.ServiceID; got != "conv_12345" {
+	if got := session.ServiceID(); got != "conv_12345" {
 		t.Errorf("expected ConversationId conv_12345, got %s", got)
 	}
 }

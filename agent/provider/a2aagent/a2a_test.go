@@ -194,7 +194,7 @@ func newTestAgent(transport a2aclient.Transport, config agent.Config) *agent.Age
 	return a2a1.New(client, a2a1.Config{Config: config})
 }
 
-func latestTaskID(session *agent.Session) string {
+func latestTaskID(session agent.Session) string {
 	taskIDs := a2a1.TaskIDsFromSession(session)
 	if len(taskIDs) == 0 {
 		return ""
@@ -312,7 +312,7 @@ func TestRunWithCreateSession(t *testing.T) {
 		t.Fatalf("error = %v, want nil", err)
 	}
 
-	if got := session.ServiceID; got != "new-context-id" {
+	if got := session.ServiceID(); got != "new-context-id" {
 		t.Errorf("session.ServiceID = %q, want %q", got, "new-context-id")
 	}
 }
@@ -462,7 +462,7 @@ func TestRunStreamingWithSession(t *testing.T) {
 		}
 	}
 
-	if got := session.ServiceID; got != "new-stream-context" {
+	if got := session.ServiceID(); got != "new-stream-context" {
 		t.Errorf("session.ContextID = %q, want %q", got, "new-stream-context")
 	}
 }
@@ -755,7 +755,7 @@ func TestRunWithAgentTaskResponse(t *testing.T) {
 		t.Errorf("continuation token = %q, want %q", result.ContinuationToken, "task-789")
 	}
 
-	if got := session.ServiceID; got != "context-456" {
+	if got := session.ServiceID(); got != "context-456" {
 		t.Errorf("session.ContextID = %q, want %q", got, "context-456")
 	}
 	if got := latestTaskID(session); got != "task-789" {
@@ -963,7 +963,7 @@ func TestRunStreamingWithContinuationTokenWhenSubscribeFailsWithUnsupportedOpera
 		}
 	}
 
-	if got := session.ServiceID; got != contextID {
+	if got := session.ServiceID(); got != contextID {
 		t.Errorf("session.ContextID = %q, want %q", got, contextID)
 	}
 	if got := latestTaskID(session); got != taskID {
@@ -1186,7 +1186,7 @@ func TestRunStreamingWithAgentTaskYieldsUpdate(t *testing.T) {
 		t.Errorf("update.RawRepresentation type = %T, want *a2a.Task", update.RawRepresentation)
 	}
 
-	if got := session.ServiceID; got != contextID {
+	if got := session.ServiceID(); got != contextID {
 		t.Errorf("session.ContextID = %q, want %q", got, contextID)
 	}
 	if got := latestTaskID(session); got != taskID {
@@ -1238,7 +1238,7 @@ func TestRunStreamingWithTaskStatusUpdateEvent(t *testing.T) {
 		t.Errorf("update.RawRepresentation type = %T, want *a2a.TaskStatusUpdateEvent", update.RawRepresentation)
 	}
 
-	if got := session.ServiceID; got != contextID {
+	if got := session.ServiceID(); got != contextID {
 		t.Errorf("session.ContextID = %q, want %q", got, contextID)
 	}
 	if got := latestTaskID(session); got != taskID {
@@ -1299,7 +1299,7 @@ func TestRunStreamingWithTaskArtifactUpdateEvent(t *testing.T) {
 		t.Errorf("update.String() = %q, want %q", update.String(), artifactContent)
 	}
 
-	if got := session.ServiceID; got != contextID {
+	if got := session.ServiceID(); got != contextID {
 		t.Errorf("session.ContextID = %q, want %q", got, contextID)
 	}
 	if got := latestTaskID(session); got != taskID {

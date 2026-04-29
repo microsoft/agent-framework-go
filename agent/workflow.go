@@ -11,10 +11,11 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow"
 )
 
+const agentSessionStateKey = "agent_session"
+
 func newExecutor(a *Agent, emitEvents bool) *workflow.Executor {
-	var session *Session
-	var sessionStateKey string
-	ensureSession := func(ctx context.Context) (*Session, error) {
+	var session Session
+	ensureSession := func(ctx context.Context) (Session, error) {
 		if session == nil {
 			var err error
 			session, err = a.CreateSession(ctx)
@@ -22,7 +23,6 @@ func newExecutor(a *Agent, emitEvents bool) *workflow.Executor {
 				return nil, err
 			}
 		}
-		sessionStateKey = session.ID()
 		return session, nil
 	}
 	id := agentDescriptiveID(a)
@@ -38,10 +38,10 @@ func newExecutor(a *Agent, emitEvents bool) *workflow.Executor {
 					if err != nil {
 						return err
 					}
-					return wctx.QueueStateUpdate(sessionStateKey, "", data)
+					return wctx.QueueStateUpdate(agentSessionStateKey, "", data)
 				},
 				OnCheckpointRestored: func(wctx *workflow.Context) error {
-					data, err := wctx.ReadState(sessionStateKey, "")
+					data, err := wctx.ReadState(agentSessionStateKey, "")
 					if err != nil {
 						return err
 					}

@@ -78,17 +78,17 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 		stream, _ := agent.GetOption(options, agent.Stream)
 
 		// Get session for conversation ID management
-		var session *agent.Session
+		var session agent.Session
 		var keepConversationID bool // true if we should keep the conversation ID unchanged (it's a "conv_" ID)
 		if t, ok := agent.GetOption(options, agent.WithSession); ok && t != nil {
 			session = t
-			keepConversationID = session.ServiceID != "" && strings.HasPrefix(session.ServiceID, "conv_")
+			keepConversationID = session.ServiceID() != "" && strings.HasPrefix(session.ServiceID(), "conv_")
 		}
 
 		// Helper to update conversation ID after response completes
 		updateConversationID := func(responseID string) {
-			if !keepConversationID && responseID != "" {
-				session.ServiceID = responseID
+			if session != nil && !keepConversationID && responseID != "" {
+				session.SetServiceID(responseID)
 			}
 		}
 
@@ -209,15 +209,15 @@ func responsesBuildCompletionParams(model string, messages []*message.Message, o
 		params.Background = openai.Bool(v)
 	}
 	if session, ok := agent.GetOption(opts, agent.WithSession); ok && session != nil {
-		if session.ServiceID != "" {
+		if session.ServiceID() != "" {
 			// Technically, OpenAI's IDs are opaque. However, by convention conversation IDs start with "conv_" and
 			// we can use that to disambiguate whether we're looking at a conversation ID or a response ID.
-			if strings.HasPrefix(session.ServiceID, "conv_") {
+			if strings.HasPrefix(session.ServiceID(), "conv_") {
 				params.Conversation = responses.ResponseNewParamsConversationUnion{
-					OfString: openai.String(session.ServiceID),
+					OfString: openai.String(session.ServiceID()),
 				}
 			} else {
-				params.PreviousResponseID = openai.String(session.ServiceID)
+				params.PreviousResponseID = openai.String(session.ServiceID())
 			}
 		}
 	}

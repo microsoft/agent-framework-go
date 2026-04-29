@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
@@ -16,7 +17,7 @@ func TestNewInMemoryHistoryProvider_DefaultConfig_RoundTripsHistory(t *testing.T
 		t.Fatalf("expected SourceID=in-memory, got %q", provider.SourceID)
 	}
 
-	session := agent.NewSession("")
+	session := agenttest.CreateSession()
 	request := message.NewText("request")
 	response := message.NewText("response")
 
@@ -60,7 +61,7 @@ func TestNewInMemoryHistoryProvider_DefaultConfig_RoundTripsHistory(t *testing.T
 
 func TestNewInMemoryHistoryProvider_ProvidePrependsHistory(t *testing.T) {
 	provider := agent.NewInMemoryHistoryProvider("InMemoryHistoryProvider")
-	session := agent.NewSession("")
+	session := agenttest.CreateSession()
 	request := message.NewText("request")
 	response := message.NewText("response")
 
@@ -88,7 +89,7 @@ func TestNewInMemoryHistoryProvider_ProvidePrependsHistory(t *testing.T) {
 }
 
 func TestNewInMemoryHistoryProvider_SourceID_MapsToSessionStateKey(t *testing.T) {
-	session := agent.NewSession("")
+	session := agenttest.CreateSession()
 	customProvider := agent.NewInMemoryHistoryProvider("custom")
 	defaultProvider := agent.NewInMemoryHistoryProvider("InMemoryHistoryProvider")
 
@@ -114,7 +115,7 @@ func TestNewInMemoryHistoryProvider_SourceID_MapsToSessionStateKey(t *testing.T)
 
 func TestNewInMemoryHistoryProvider_DefaultStoreRequestFilter_ExcludesContextProviderMessages(t *testing.T) {
 	provider := agent.NewInMemoryHistoryProvider("k")
-	session := agent.NewSession("")
+	session := agenttest.CreateSession()
 
 	user := message.NewText("user")
 	ctxMsg := message.NewText("ctx")
@@ -138,7 +139,7 @@ func TestNewInMemoryHistoryProvider_SkipStoreRequestMessages(t *testing.T) {
 	provider.StoreRequestFilter = func(ctx context.Context, messages []*message.Message) ([]*message.Message, error) {
 		return nil, nil
 	}
-	session := agent.NewSession("")
+	session := agenttest.CreateSession()
 	request := message.NewText("request")
 	response := message.NewText("response")
 
@@ -160,7 +161,7 @@ func TestNewInMemoryHistoryProvider_SkipStoreResponseMessages(t *testing.T) {
 	provider.StoreResponseFilter = func(ctx context.Context, messages []*message.Message) ([]*message.Message, error) {
 		return nil, nil
 	}
-	session := agent.NewSession("")
+	session := agenttest.CreateSession()
 	request := message.NewText("request")
 	response := message.NewText("response")
 
@@ -188,7 +189,7 @@ func TestNewInMemoryHistoryProvider_StoreContextMessages(t *testing.T) {
 		}
 		return filtered, nil
 	}
-	session := agent.NewSession("")
+	session := agenttest.CreateSession()
 	user := message.NewText("user")
 	ctxMsg := message.NewText("ctx")
 	ctxMsg.SourceID = "provider-A"
@@ -217,7 +218,7 @@ func TestNewInMemoryHistoryProvider_StoreContextMessagesFrom(t *testing.T) {
 		}
 		return filtered, nil
 	}
-	session := agent.NewSession("")
+	session := agenttest.CreateSession()
 	ctxA := message.NewText("ctx-a")
 	ctxA.SourceID = "provider-A"
 	ctxB := message.NewText("ctx-b")
@@ -236,24 +237,38 @@ func TestNewInMemoryHistoryProvider_StoreContextMessagesFrom(t *testing.T) {
 	}
 }
 
-func TestNewInMemoryHistoryProvider_Invoking_ReturnsErrorOnStateDecodeFailure(t *testing.T) {
+func TestNewInMemoryHistoryProvider_Invoking_IgnoresUnreadableState(t *testing.T) {
 	provider := agent.NewInMemoryHistoryProvider("k")
-	session := agent.NewSession("")
+	session := agenttest.CreateSession()
 	session.Set("k", "not-a-history-state")
+	request := []*message.Message{message.NewText("req")}
 
-	_, _, err := provider.BeforeRun(t.Context(), nil, agent.WithSession(session))
-	if err == nil {
-		t.Fatal("expected decode error when state cannot be read as inmemoryState")
+	messages, _, err := provider.BeforeRun(t.Context(), request, agent.WithSession(session))
+	if err != nil {
+		t.Fatalf("unexpected error when state is unreadable: %v", err)
+	}
+	if len(messages) != 1 || messages[0].String() != "req" {
+		t.Fatal("expected unreadable state to be ignored")
 	}
 }
 
-func TestNewInMemoryHistoryProvider_Invoked_ReturnsErrorOnStateDecodeFailure(t *testing.T) {
+func TestNewInMemoryHistoryProvider_Invoked_OverwritesUnreadableState(t *testing.T) {
 	provider := agent.NewInMemoryHistoryProvider("k")
-	session := agent.NewSession("")
+	session := agenttest.CreateSession()
 	session.Set("k", "not-a-history-state")
+	request := message.NewText("r1")
+	response := message.NewText("a1")
 
-	err := provider.AfterRun(t.Context(), []*message.Message{message.NewText("r1")}, nil, agent.WithSession(session))
-	if err == nil {
-		t.Fatal("expected decode error when state cannot be read as inmemoryState")
+	err := provider.AfterRun(t.Context(), []*message.Message{request}, []*message.Message{response}, agent.WithSession(session))
+	if err != nil {
+		t.Fatalf("unexpected error when state is unreadable: %v", err)
+	}
+
+	messages, _, err := provider.BeforeRun(t.Context(), nil, agent.WithSession(session))
+	if err != nil {
+		t.Fatalf("unexpected error reading stored history: %v", err)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("expected 2 stored messages, got %d", len(messages))
 	}
 }

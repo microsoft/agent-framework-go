@@ -164,7 +164,7 @@ func (r *contextProviderRunner) Run(next RunFunc, ctx context.Context, messages 
 		}
 		var resp message.Response
 		for update, err := range next(ctx, messages, options...) {
-			if update != nil && (session == nil || session.ServiceID == "") {
+			if update != nil && (session == nil || session.ServiceID() == "") {
 				resp.Update(update)
 			}
 			if !yield(update, err) {

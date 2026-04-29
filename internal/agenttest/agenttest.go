@@ -4,7 +4,6 @@ package agenttest
 
 import (
 	"context"
-	"encoding/json"
 	"iter"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -95,11 +94,9 @@ func New(responses []Turn) *agent.Agent {
 		responses: responses,
 	}
 	return agent.New(agent.ProviderConfig{
-		ProviderName:     "agenttest",
-		CreateSession:    a.createSession,
-		MarshalSession:   a.marshalSession,
-		UnmarshalSession: a.unmarshalSession,
-		Run:              a.run,
+		ProviderName:  "agenttest",
+		CreateSession: a.createSession,
+		Run:           a.run,
 	}, agent.Config{
 		ID:          "test-agent-id",
 		Name:        "TestAgent",
@@ -125,28 +122,20 @@ func (a *testagent) run(ctx context.Context, messages []*message.Message, opts .
 	}
 }
 
-func (a *testagent) createSession(_ context.Context, opts ...agent.Option) (*agent.Session, error) {
-	return agent.NewSession(""), nil
+func (a *testagent) createSession(_ context.Context, _ agent.Session, opts ...agent.Option) error {
+	return nil
 }
 
-func (a *testagent) marshalSession(_ context.Context, session *agent.Session) ([]byte, error) {
-	return json.Marshal(session)
-}
-
-func (a *testagent) unmarshalSession(_ context.Context, data []byte) (*agent.Session, error) {
-	var session agent.Session
-	if err := json.Unmarshal(data, &session); err != nil {
-		return nil, err
+func CreateSession(options ...agent.Option) agent.Session {
+	session, err := New(nil).CreateSession(context.Background(), options...)
+	if err != nil {
+		panic(err)
 	}
-	return &session, nil
+	return session
 }
 
-func CreateSession() *agent.Session {
-	return agent.NewSession("")
-}
-
-func MarshalSession(session *agent.Session) ([]byte, error) {
-	return json.Marshal(session)
+func MarshalSession(session agent.Session) ([]byte, error) {
+	return New(nil).MarshalSession(context.Background(), session)
 }
 
 // Middleware is a test implementation of the Middleware interface

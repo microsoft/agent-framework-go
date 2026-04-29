@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
@@ -18,7 +19,7 @@ func TestContextProvider_Invoking_WithoutProvide_ReturnsNoAdditions(t *testing.T
 	request := message.NewText("r1")
 	provider := &agent.ContextProvider{SourceID: "ctx"}
 
-	messages, options, err := provider.BeforeRun(t.Context(), []*message.Message{request}, agent.WithSession(agent.NewSession("")))
+	messages, options, err := provider.BeforeRun(t.Context(), []*message.Message{request}, agent.WithSession(agenttest.CreateSession()))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -37,7 +38,7 @@ func TestContextProvider_Invoking_PanicsWithoutSourceID(t *testing.T) {
 			t.Fatal("expected panic")
 		}
 	}()
-	_, _, _ = provider.BeforeRun(t.Context(), nil, agent.WithSession(agent.NewSession("")))
+	_, _, _ = provider.BeforeRun(t.Context(), nil, agent.WithSession(agenttest.CreateSession()))
 }
 
 func TestContextProvider_Invoking_PassesAllMessagesToProvide(t *testing.T) {
@@ -54,7 +55,7 @@ func TestContextProvider_Invoking_PassesAllMessagesToProvide(t *testing.T) {
 		},
 	}
 
-	_, _, err := provider.BeforeRun(t.Context(), []*message.Message{external, history}, agent.WithSession(agent.NewSession("")))
+	_, _, err := provider.BeforeRun(t.Context(), []*message.Message{external, history}, agent.WithSession(agenttest.CreateSession()))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -72,7 +73,7 @@ func TestContextProvider_Invoking_PropagatesProvideError(t *testing.T) {
 		},
 	}
 
-	_, _, err := provider.BeforeRun(t.Context(), []*message.Message{message.NewText("r1")}, agent.WithSession(agent.NewSession("")))
+	_, _, err := provider.BeforeRun(t.Context(), []*message.Message{message.NewText("r1")}, agent.WithSession(agenttest.CreateSession()))
 	if !errors.Is(err, expected) {
 		t.Fatalf("expected Provide error, got %v", err)
 	}
@@ -89,7 +90,7 @@ func TestContextProvider_Invoking_ReturnsProvidedMessagesAndSetsSourceID(t *test
 		},
 	}
 
-	messages, _, err := provider.BeforeRun(t.Context(), []*message.Message{request}, agent.WithSession(agent.NewSession("")))
+	messages, _, err := provider.BeforeRun(t.Context(), []*message.Message{request}, agent.WithSession(agenttest.CreateSession()))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -121,7 +122,7 @@ func TestContextProvider_Invoking_SetsSourceIDOnPrependedMessages(t *testing.T) 
 		},
 	}
 
-	messages, _, err := provider.BeforeRun(t.Context(), []*message.Message{request}, agent.WithSession(agent.NewSession("")))
+	messages, _, err := provider.BeforeRun(t.Context(), []*message.Message{request}, agent.WithSession(agenttest.CreateSession()))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -147,7 +148,7 @@ func TestContextProvider_Invoking_UsesCustomSourceID(t *testing.T) {
 		},
 	}
 
-	messages, _, err := provider.BeforeRun(t.Context(), nil, agent.WithSession(agent.NewSession("")))
+	messages, _, err := provider.BeforeRun(t.Context(), nil, agent.WithSession(agenttest.CreateSession()))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -166,7 +167,7 @@ func TestContextProvider_Invoked_PanicsWithoutSourceID(t *testing.T) {
 			t.Fatal("expected panic")
 		}
 	}()
-	_ = provider.AfterRun(t.Context(), nil, nil, agent.WithSession(agent.NewSession("")))
+	_ = provider.AfterRun(t.Context(), nil, nil, agent.WithSession(agenttest.CreateSession()))
 }
 
 func TestContextProvider_Invoked_CallsStoreAndExcludesSameProviderRequestMessagesByDefault(t *testing.T) {
@@ -189,7 +190,7 @@ func TestContextProvider_Invoked_CallsStoreAndExcludesSameProviderRequestMessage
 		},
 	}
 
-	err := provider.AfterRun(t.Context(), []*message.Message{req1, req2}, []*message.Message{resp}, agent.WithSession(agent.NewSession("")))
+	err := provider.AfterRun(t.Context(), []*message.Message{req1, req2}, []*message.Message{resp}, agent.WithSession(agenttest.CreateSession()))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -213,7 +214,7 @@ func TestContextProvider_Invoked_PropagatesStoreError(t *testing.T) {
 		},
 	}
 
-	err := provider.AfterRun(t.Context(), []*message.Message{message.NewText("r1")}, nil, agent.WithSession(agent.NewSession("")))
+	err := provider.AfterRun(t.Context(), []*message.Message{message.NewText("r1")}, nil, agent.WithSession(agenttest.CreateSession()))
 	if !errors.Is(err, expected) {
 		t.Fatalf("expected store error, got %v", err)
 	}
@@ -236,7 +237,7 @@ func TestContextProvider_InvokingContext_ReturnsProvidedFields(t *testing.T) {
 		},
 	}
 
-	messages, options, err := provider.BeforeRun(t.Context(), []*message.Message{request}, agent.WithSession(agent.NewSession("")), agent.WithTool(inputTool))
+	messages, options, err := provider.BeforeRun(t.Context(), []*message.Message{request}, agent.WithSession(agenttest.CreateSession()), agent.WithTool(inputTool))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

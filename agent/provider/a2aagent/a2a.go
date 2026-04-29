@@ -53,12 +53,9 @@ func New(aclient *a2aclient.Client, config Config) *agent.Agent {
 	}, config.Config)
 }
 
-func (a *a2aagent) createSession(ctx context.Context, options ...agent.Option) (*agent.Session, error) {
-	serviceID, _ := agent.GetOption(options, agent.WithServiceID)
-	session := agent.NewSession("")
-	setContextID(session, serviceID)
+func (a *a2aagent) createSession(ctx context.Context, session agent.Session, options ...agent.Option) error {
 	setTaskIDs(session, slices.Collect(agent.AllOptions(options, TaskID)))
-	return session, nil
+	return nil
 }
 
 func (a *a2aagent) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
@@ -151,7 +148,7 @@ func (a *a2aagent) subscribeToTaskWithFallback(ctx context.Context, taskID a2a.T
 	}
 }
 
-func sendMsg(session *agent.Session, seq iter.Seq2[a2a.Event, error], yield func(*message.ResponseUpdate, error) bool) {
+func sendMsg(session agent.Session, seq iter.Seq2[a2a.Event, error], yield func(*message.ResponseUpdate, error) bool) {
 	for e, err := range seq {
 		if err != nil {
 			yield(nil, err)
@@ -255,7 +252,7 @@ func yieldTask(yield func(*message.ResponseUpdate, error) bool, task *a2a.Task) 
 	}, nil)
 }
 
-func updateSessionContextID(session *agent.Session, contextID, taskID string) error {
+func updateSessionContextID(session agent.Session, contextID, taskID string) error {
 	if session == nil {
 		return nil
 	}

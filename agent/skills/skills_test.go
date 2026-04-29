@@ -14,6 +14,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/skills"
 	"github.com/microsoft/agent-framework-go/agent/skills/fsskills"
+	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 )
@@ -91,7 +92,7 @@ func newProviderWithConfig(t *testing.T, sourceOptions *fsskills.SourceOptions, 
 func captureProviderContext(t *testing.T, provider *agent.ContextProvider) (string, []tool.Tool) {
 	t.Helper()
 	ctx := context.Background()
-	messages, options, err := provider.BeforeRun(ctx, nil, agent.WithSession(agent.NewSession("")))
+	messages, options, err := provider.BeforeRun(ctx, nil, agent.WithSession(agenttest.CreateSession()))
 	if err != nil {
 		t.Fatal(err)
 	}

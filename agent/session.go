@@ -4,8 +4,7 @@ package agent
 
 import (
 	"encoding/json"
-
-	"github.com/google/uuid"
+	"errors"
 )
 
 // Session contains the state of a specific conversation with an agent which may include:
@@ -27,34 +26,46 @@ import (
 // behaviors to the Session it creates.
 //
 // To support conversations that may need to survive application restarts or separate service requests,
-// a Session can be serialized and deserialized, so that it can be saved in a persistent store.
-type Session struct {
-	ServiceID string
+// a Session can be serialized and deserialized through [Agent.MarshalSession] and
+// [Agent.UnmarshalSession], so that it can be saved in a persistent store.
+type Session interface {
+	// Get attempts to read the value associated with key into value.
+	//
+	// It returns ok=true only when the value exists and can be read into the destination type.
+	// It returns ok=false with a nil error when the key is missing or the stored value cannot be read as the
+	// requested type.
+	//
+	// value must be a non-nil pointer to the desired destination type.
+	Get(key string, value any) (ok bool, err error)
 
-	id    string
+	// Set stores a value in the session state under the given key.
+	// If the key already exists, its value is overwritten.
+	Set(key string, value any)
+
+	// Delete removes the value with the given key.
+	Delete(key string)
+
+	// ServiceID returns the provider-specific identifier associated with the session.
+	ServiceID() string
+
+	// SetServiceID sets the provider-specific identifier associated with the session.
+	SetServiceID(id string)
+
+	// sealedSession prevents implementations outside this package so sessions can only
+	// be created by an Agent. This also allows Session to grow with new methods without
+	// breaking existing implementations.
+	sealedSession()
+}
+
+type session struct {
+	serviceID string
+
 	state map[string]*stateValue
 }
 
-// NewSession creates a new Session with the given ID. If the ID is empty, a new UUID is generated.
-//
-// This function is intended to be used by an [Agent] provider.
-// Consumers of the agent framework should use [Agent.CreateSession] to create sessions.
-func NewSession(id string) *Session {
-	if id == "" {
-		id = uuid.NewString()
-	}
-	return &Session{
-		id: id,
-	}
-}
+func (s *session) sealedSession() {}
 
-func (s *Session) ID() string {
-	return s.id
-}
-
-// Get decodes the value associated with key into value and reports whether the key was present.
-// value must be a non-nil pointer to the desired destination type.
-func (s *Session) Get(key string, value any) (bool, error) {
+func (s *session) Get(key string, value any) (bool, error) {
 	if s == nil {
 		return false, nil
 	}
@@ -62,12 +73,10 @@ func (s *Session) Get(key string, value any) (bool, error) {
 	if !ok {
 		return false, nil
 	}
-	return true, wrapped.readInto(value)
+	return wrapped.readInto(value)
 }
 
-// Set stores a value in the session state under the given key.
-// If the key already exists, its value is overwritten.
-func (s *Session) Set(key string, value any) {
+func (s *session) Set(key string, value any) {
 	if s == nil {
 		return
 	}
@@ -82,23 +91,52 @@ func (s *Session) Set(key string, value any) {
 	s.state[key] = wrapped
 }
 
-// Delete removes the value with the given key.
-func (s *Session) Delete(key string) {
+func (s *session) Delete(key string) {
 	if s == nil {
 		return
 	}
 	delete(s.state, key)
 }
 
-func (s *Session) MarshalJSON() ([]byte, error) {
+func (s *session) ServiceID() string {
+	if s == nil {
+		return ""
+	}
+	return s.serviceID
+}
+
+func (s *session) SetServiceID(id string) {
+	if s == nil {
+		return
+	}
+	s.serviceID = id
+}
+
+func (s *session) MarshalJSON() ([]byte, error) {
+	return nil, errors.New("sessions must be marshaled with Agent.MarshalSession")
+}
+
+func (s *session) UnmarshalJSON([]byte) error {
+	return errors.New("sessions must be unmarshaled with Agent.UnmarshalSession")
+}
+
+type sessionData struct {
+	State map[string]*stateValue
+
+	ServiceID string
+}
+
+func marshalSession(sess Session) ([]byte, error) {
+	s, ok := sess.(*session)
+	if !ok || s == nil {
+		return nil, errors.New("the provided session is nil")
+	}
 	tmp := struct {
 		State map[string]*stateValue
 
-		ID        string
 		ServiceID string
 	}{
-		ID:        s.id,
-		ServiceID: s.ServiceID,
+		ServiceID: s.serviceID,
 	}
 	if s.state == nil {
 		tmp.State = make(map[string]*stateValue)
@@ -108,20 +146,16 @@ func (s *Session) MarshalJSON() ([]byte, error) {
 	return json.Marshal(tmp)
 }
 
-func (s *Session) UnmarshalJSON(data []byte) error {
-	var tmp struct {
-		State     map[string]*stateValue
-		ID        string
-		ServiceID string
-	}
+func unmarshalSession(data []byte) (Session, error) {
+	var tmp sessionData
 	if err := json.Unmarshal(data, &tmp); err != nil {
-		return err
+		return nil, err
 	}
-	s.id = tmp.ID
-	s.ServiceID = tmp.ServiceID
 	if tmp.State == nil {
 		tmp.State = make(map[string]*stateValue)
 	}
-	s.state = tmp.State
-	return nil
+	return &session{
+		serviceID: tmp.ServiceID,
+		state:     tmp.State,
+	}, nil
 }

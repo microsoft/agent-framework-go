@@ -133,13 +133,13 @@ func decodeFrame(decoder *aguiEvents.EventDecoder, data []byte) (aguiEvents.Even
 	return decoder.DecodeEvent(envelope.Type, data)
 }
 
-func getOrCreateThreadID(session *agent.Session) string {
-	if session != nil && session.ServiceID != "" {
-		return session.ServiceID
+func getOrCreateThreadID(session agent.Session) string {
+	if session != nil && session.ServiceID() != "" {
+		return session.ServiceID()
 	}
 	threadID := aguiEvents.GenerateThreadID()
 	if session != nil {
-		session.ServiceID = threadID
+		session.SetServiceID(threadID)
 	}
 	return threadID
 }

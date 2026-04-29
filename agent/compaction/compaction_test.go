@@ -4,13 +4,13 @@ package compaction_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"slices"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/compaction"
+	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
@@ -370,7 +370,7 @@ func TestSummarizationStrategy_PropagatesCancellation(t *testing.T) {
 }
 
 func TestNewProvider_CompactsAndPersistsIndex(t *testing.T) {
-	session := agent.NewSession("session")
+	session := agenttest.CreateSession()
 	provider := compaction.NewContextProvider(compaction.ContextProviderConfig{
 		Strategy: &compaction.TruncationStrategy{
 			Trigger:                compaction.GroupsExceed(2),
@@ -390,12 +390,13 @@ func TestNewProvider_CompactsAndPersistsIndex(t *testing.T) {
 	var state struct {
 		MessageGroups []*compaction.MessageGroup `json:"messagegroups,omitempty"`
 	}
-	data, err := json.Marshal(session)
+	a := agenttest.New(nil)
+	data, err := a.MarshalSession(t.Context(), session)
 	if err != nil {
 		t.Fatalf("unexpected marshal error: %v", err)
 	}
-	var restored agent.Session
-	if err := json.Unmarshal(data, &restored); err != nil {
+	restored, err := a.UnmarshalSession(t.Context(), data)
+	if err != nil {
 		t.Fatalf("unexpected unmarshal error: %v", err)
 	}
 	if ok, err := restored.Get("compaction-test", &state); err != nil || !ok {

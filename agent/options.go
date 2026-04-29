@@ -17,7 +17,7 @@ import (
 // to uniquely identify each option.
 type Option = agentopt.Option
 
-type sessionOpt struct{ *Session }
+type sessionOpt struct{ Session }
 
 func (o sessionOpt) Value() any { return o.Session }
 
@@ -73,7 +73,7 @@ func WithResponseFormat(format format.Format) Option {
 }
 
 // WithSession sets the session to use during the agent run.
-func WithSession(session *Session) Option {
+func WithSession(session Session) Option {
 	return sessionOpt{session}
 }
 

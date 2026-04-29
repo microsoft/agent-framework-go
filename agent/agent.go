@@ -4,7 +4,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"iter"
 	"log/slog"
@@ -29,12 +28,12 @@ type ProviderConfig struct {
 	// Run executes a request and streams response updates.
 	Run RunFunc
 
-	// CreateSession creates a provider-specific session.
-	CreateSession func(ctx context.Context, options ...Option) (*Session, error)
-	// MarshalSession serializes a provider-specific session.
-	MarshalSession func(ctx context.Context, session *Session) ([]byte, error)
-	// UnmarshalSession deserializes a provider-specific session.
-	UnmarshalSession func(ctx context.Context, data []byte) (*Session, error)
+	// CreateSession configures a provider-specific session.
+	CreateSession func(ctx context.Context, session Session, options ...Option) error
+	// BeforeMarshalSession configures a provider-specific session before serialization.
+	BeforeMarshalSession func(ctx context.Context, session Session, options ...Option) error
+	// AfterUnmarshalSession configures a deserialized provider-specific session.
+	AfterUnmarshalSession func(ctx context.Context, session Session, options ...Option) error
 	// FormatOfFn returns the response format for a structured output destination.
 	FormatOfFn func(v any) (format.Format, error)
 	// UnmarshalFn unmarshals provider output into a structured output destination.
@@ -122,17 +121,13 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 	cfg.Middlewares = append(prefixedMiddlewares, cfg.Middlewares...)
 	cfg.Middlewares = append(cfg.Middlewares, authorMiddleware(cfg.ID, cfg.Name))
 	return &Agent{
-		id:               cfg.ID,
-		name:             cfg.Name,
-		description:      cfg.Description,
-		providerName:     prov.ProviderName,
-		instructions:     cfg.Instructions,
-		createSession:    prov.CreateSession,
-		marshalSession:   prov.MarshalSession,
-		unmarshalSession: prov.UnmarshalSession,
-		run:              prov.Run,
-		runOptions:       cfg.RunOptions,
-		middlewares:      cfg.Middlewares,
+		id:           cfg.ID,
+		name:         cfg.Name,
+		description:  cfg.Description,
+		provider:     prov,
+		instructions: cfg.Instructions,
+		runOptions:   cfg.RunOptions,
+		middlewares:  cfg.Middlewares,
 	}
 }
 
@@ -154,20 +149,15 @@ func (r ResponseStream) Collect() (*message.Response, error) {
 
 // Agent coordinates message preparation, middleware, sessions, and provider execution.
 type Agent struct {
-	id           string
-	name         string
-	description  string
-	providerName string
+	id          string
+	name        string
+	description string
+	provider    ProviderConfig
 
 	instructions string
 
 	middlewares []Middleware
 	runOptions  []Option
-
-	createSession    func(ctx context.Context, options ...Option) (*Session, error)
-	marshalSession   func(ctx context.Context, session *Session) ([]byte, error)
-	unmarshalSession func(ctx context.Context, data []byte) (*Session, error)
-	run              func(ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*message.ResponseUpdate, error]
 }
 
 // ID returns the agent's unique identifier.
@@ -199,40 +189,48 @@ func (a *Agent) ProviderName() string {
 	if a == nil {
 		return ""
 	}
-	return a.providerName
+	return a.provider.ProviderName
 }
 
 // CreateSession creates a session for this agent.
-func (a *Agent) CreateSession(ctx context.Context, options ...Option) (*Session, error) {
-	if a.createSession == nil {
-		session := NewSession("")
-		session.ServiceID, _ = GetOption(options, WithServiceID)
-		return session, nil
+func (a *Agent) CreateSession(ctx context.Context, options ...Option) (Session, error) {
+	session := &session{}
+	serviceID, _ := GetOption(options, WithServiceID)
+	session.SetServiceID(serviceID)
+	if a.provider.CreateSession != nil {
+		if err := a.provider.CreateSession(ctx, session, options...); err != nil {
+			return nil, err
+		}
 	}
-	return a.createSession(ctx, options...)
+	return session, nil
 }
 
 // MarshalSession serializes a session created for this agent.
-func (a *Agent) MarshalSession(ctx context.Context, session *Session) ([]byte, error) {
-	if a.marshalSession == nil {
-		if session == nil {
-			return nil, errors.New("the provided session is nil")
+//
+// Any provided options are forwarded to the provider's BeforeMarshalSession hook.
+func (a *Agent) MarshalSession(ctx context.Context, session Session, options ...Option) ([]byte, error) {
+	if a.provider.BeforeMarshalSession != nil {
+		if err := a.provider.BeforeMarshalSession(ctx, session, options...); err != nil {
+			return nil, err
 		}
-		return json.Marshal(session)
 	}
-	return a.marshalSession(ctx, session)
+	return marshalSession(session)
 }
 
 // UnmarshalSession deserializes a session for this agent.
-func (a *Agent) UnmarshalSession(ctx context.Context, data []byte) (*Session, error) {
-	if a.unmarshalSession == nil {
-		var session Session
-		if err := json.Unmarshal(data, &session); err != nil {
+//
+// Any provided options are forwarded to the provider's AfterUnmarshalSession hook.
+func (a *Agent) UnmarshalSession(ctx context.Context, data []byte, options ...Option) (Session, error) {
+	session, err := unmarshalSession(data)
+	if err != nil {
+		return nil, err
+	}
+	if a.provider.AfterUnmarshalSession != nil {
+		if err := a.provider.AfterUnmarshalSession(ctx, session, options...); err != nil {
 			return nil, err
 		}
-		return &session, nil
 	}
-	return a.unmarshalSession(ctx, data)
+	return session, nil
 }
 
 // RunText runs the agent with a single user text message.
@@ -253,7 +251,7 @@ func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ..
 			yield(nil, err)
 		}
 	}
-	return ResponseStream(runChain(ctx, a.run, a.middlewares, preparedMessages, options...))
+	return ResponseStream(runChain(ctx, a.provider.Run, a.middlewares, preparedMessages, options...))
 }
 
 func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, options []Option) (context.Context, []*message.Message, []Option, error) {
@@ -269,7 +267,7 @@ func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, opt
 			return nil, nil, nil, errors.New("a session must be provided when AllowBackgroundResponses is enabled")
 		}
 		// Ensure a session is provided in the options.
-		session, err := a.CreateSession(ctx)
+		session, err := a.CreateSession(ctx, options...)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -312,7 +310,7 @@ func defaultLocalHistoryMiddleware() Middleware {
 		session, _ := GetOption(options, WithSession)
 		noSession, _ := GetOption(options, noSessionProvided)
 		contToken, _ := GetOption(options, WithContinuationToken)
-		if noSession || contToken != "" || session.ServiceID != "" {
+		if noSession || contToken != "" || session == nil || session.ServiceID() != "" {
 			return next(ctx, messages, options...)
 		}
 		return history.Run(next, ctx, messages, options...)

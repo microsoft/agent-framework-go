@@ -66,7 +66,7 @@ func NewContextProvider(cfg ContextProviderConfig) *agent.ContextProvider {
 				}
 				return index.IncludedMessages(), options, nil
 			}
-			if session.ServiceID != "" {
+			if session.ServiceID() != "" {
 				if cfg.Logger != nil {
 					cfg.Logger.DebugContext(ctx, "compaction provider skipped", slog.String("reason", "session managed by remote service"))
 				}

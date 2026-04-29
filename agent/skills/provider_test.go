@@ -16,6 +16,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/skills"
 	"github.com/microsoft/agent-framework-go/agent/skills/fsskills"
+	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 )
@@ -256,7 +257,7 @@ func TestProvider_RecoversFromPanickingSourceAndResetsLoading(t *testing.T) {
 	source := &panicOnceSource{skill: skill}
 	provider := skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}})
 
-	_, _, err := provider.BeforeRun(t.Context(), nil, agent.WithSession(agent.NewSession("")))
+	_, _, err := provider.BeforeRun(t.Context(), nil, agent.WithSession(agenttest.CreateSession()))
 	if err == nil {
 		t.Fatal("expected provider to return an error after source panic")
 	}
@@ -270,7 +271,7 @@ func TestProvider_RecoversFromPanickingSourceAndResetsLoading(t *testing.T) {
 	}
 	resultCh := make(chan result, 1)
 	go func() {
-		messages, _, err := provider.BeforeRun(t.Context(), nil, agent.WithSession(agent.NewSession("")))
+		messages, _, err := provider.BeforeRun(t.Context(), nil, agent.WithSession(agenttest.CreateSession()))
 		resultCh <- result{messageCount: len(messages), err: err}
 	}()
 
@@ -483,7 +484,7 @@ func TestNewProvider_ProvideExtendsInput(t *testing.T) {
 		nil,
 	)
 	provider := skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}})
-	session := agent.NewSession("")
+	session := agenttest.CreateSession()
 	input := message.NewText("input")
 
 	messages, options, err := provider.Provide(t.Context(), []*message.Message{input}, agent.WithSession(session))
@@ -511,7 +512,7 @@ func TestNewProvider_ProvideExtendsInput(t *testing.T) {
 func TestProvider_WithEmptySource_ReturnsEmptyProvider(t *testing.T) {
 	provider := skills.NewContextProvider(skills.ContextProviderOptions{})
 	ctx := context.Background()
-	messages, options, err := provider.BeforeRun(ctx, nil, agent.WithSession(agent.NewSession("")))
+	messages, options, err := provider.BeforeRun(ctx, nil, agent.WithSession(agenttest.CreateSession()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -601,7 +602,7 @@ func TestProvider_SkillFilter_CanFilterOutAllSkills(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	messages, options, err := provider.BeforeRun(ctx, nil, agent.WithSession(agent.NewSession("")))
+	messages, options, err := provider.BeforeRun(ctx, nil, agent.WithSession(agenttest.CreateSession()))
 	if err != nil {
 		t.Fatal(err)
 	}

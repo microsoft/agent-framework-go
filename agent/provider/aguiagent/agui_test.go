@@ -73,7 +73,7 @@ func TestAGUIAgentCreateSession_UsesServiceIDAsThreadID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create session error: %v", err)
 	}
-	if got := s.ServiceID; got != "thread-existing" {
+	if got := s.ServiceID(); got != "thread-existing" {
 		t.Fatalf("session.ServiceID = %q, want %q", got, "thread-existing")
 	}
 }

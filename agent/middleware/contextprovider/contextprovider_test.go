@@ -10,6 +10,7 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/middleware/contextprovider"
+	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 )
@@ -42,7 +43,7 @@ func TestContextProviderMiddleware_Run_ProviderOptionsEnrichTools(t *testing.T) 
 		},
 		context.Background(),
 		[]*message.Message{message.NewText("hello")},
-		agent.WithSession(agent.NewSession("")),
+		agent.WithSession(agenttest.CreateSession()),
 		agent.WithTool(baselineTool),
 	))
 	if err != nil {
@@ -63,7 +64,7 @@ func TestContextProviderMiddleware_Run_SharedOptions_ProviderToolsDoNotAccumulat
 		},
 	}
 	sharedOptions := []agent.Option{
-		agent.WithSession(agent.NewSession("")),
+		agent.WithSession(agenttest.CreateSession()),
 		agent.WithTool(stubTool{name: "baseline"}),
 	}
 
@@ -96,7 +97,7 @@ func TestContextProviderMiddleware_Run_SharedOptions_OriginalToolsNotMutated(t *
 		},
 	}
 	sharedOptions := []agent.Option{
-		agent.WithSession(agent.NewSession("")),
+		agent.WithSession(agenttest.CreateSession()),
 		agent.WithTool(baselineTool),
 	}
 
