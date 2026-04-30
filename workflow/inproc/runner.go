@@ -27,7 +27,7 @@ var (
 // without distributed coordination. It is primarily intended for testing, debugging, or
 // scenarios where workflow execution does not require executor distribution.
 type runner struct {
-	runID           string
+	sessionID       string
 	startExecutorID string
 	wf              *workflow.Workflow
 	runContext      *runnerContext
@@ -45,20 +45,20 @@ type runner struct {
 func createTopLevelRunner(
 	wf *workflow.Workflow,
 	checkpointMgr checkpoint.Manager,
-	runID string,
+	sessionID string,
 	enableConcurrentRuns bool,
 	knownValidInputTypes []reflect.Type,
 ) (*runner, error) {
-	if runID == "" {
-		runID = uuid.NewString()
+	if sessionID == "" {
+		sessionID = uuid.NewString()
 	}
-	return newInProcessRunner(wf, checkpointMgr, runID, nil, enableConcurrentRuns, knownValidInputTypes)
+	return newInProcessRunner(wf, checkpointMgr, sessionID, nil, enableConcurrentRuns, knownValidInputTypes)
 }
 
 func newInProcessRunner(
 	wf *workflow.Workflow,
 	checkpointMgr checkpoint.Manager,
-	runID string,
+	sessionID string,
 	existingOwnerSignoff any,
 	enableConcurrentRuns bool,
 	knownValidInputTypes []reflect.Type,
@@ -76,8 +76,8 @@ func newInProcessRunner(
 		}
 		if len(nonConcurrent) > 0 {
 			slices.Sort(nonConcurrent)
+			return nil, fmt.Errorf("workflow must only consist of cross-run share-capable or factory-created executors. Executors not supporting concurrent: %v", nonConcurrent)
 		}
-		return nil, fmt.Errorf("workflow must only consist of cross-run share-capable or factory-created executors. Executors not supporting concurrent: %v", nonConcurrent)
 	}
 
 	stepTracer := new(stepTracer)
@@ -85,7 +85,7 @@ func newInProcessRunner(
 
 	runContext, err := newInProcessRunnerContext(
 		wf,
-		runID,
+		sessionID,
 		checkpointMgr != nil,
 		outgoingEvents,
 		stepTracer,
@@ -99,7 +99,7 @@ func newInProcessRunner(
 	edgeMap := execution.NewEdgeRunner(wf, stepTracer, runContext.EnsureExecutor)
 
 	runner := &runner{
-		runID:                runID,
+		sessionID:            sessionID,
 		startExecutorID:      wf.StartExecutorID,
 		wf:                   wf,
 		runContext:           runContext,
@@ -118,9 +118,9 @@ func newInProcessRunner(
 	return runner, nil
 }
 
-// RunID returns the unique identifier for this run.
-func (r *runner) RunID() string {
-	return r.runID
+// SessionID returns the unique identifier for this run's session.
+func (r *runner) SessionID() string {
+	return r.sessionID
 }
 
 // StartExecutorID returns the ID of the starting executor.
@@ -136,6 +136,12 @@ func (r *runner) OutgoingEvents() *execution.ConcurrentEventSink {
 // HasUnservicedRequests returns true if there are unserviced external requests.
 func (r *runner) HasUnservicedRequests() bool {
 	return r.runContext.HasUnservicedRequests()
+}
+
+// ResponsePortExecutorID returns the executor that handles responses on the
+// given port, or ("", false) if no such port is registered.
+func (r *runner) ResponsePortExecutorID(portID string) (string, bool) {
+	return r.runContext.ResponsePortExecutorID(portID)
 }
 
 // HasUnprocessedMessages returns true if the next step has actions to process.
@@ -259,7 +265,7 @@ func (r *runner) RestoreCheckpoint(ctx context.Context, checkpointInfo workflow.
 		return fmt.Errorf("this runner was not configured with a CheckpointManager, so it cannot restore checkpoints")
 	}
 
-	cp, err := r.checkpointMgr.Lookup(r.runID)
+	cp, err := r.checkpointMgr.Lookup(r.sessionID)
 	if err != nil {
 		return fmt.Errorf("failed to lookup checkpoint: %w", err)
 	}
@@ -311,7 +317,7 @@ func (r *runner) runSuperstep(ctx context.Context, currentStep *execution.StepCo
 	return r.outgoingEvents.Enqueue(ctx, completeEvt)
 }
 
-func (r *runner) deliverMessages(ctx context.Context, receiverID string, envelopes *concurrent.Queue[*execution.MessageEnvelope]) error {
+func (r *runner) deliverMessages(ctx context.Context, receiverID string, envelopes *concurrent.Queue[*execution.MessageEnvelope]) (err error) {
 	executor, err := r.runContext.EnsureExecutor(ctx, receiverID, r.stepTracer)
 	if err != nil {
 		return err
@@ -319,14 +325,27 @@ func (r *runner) deliverMessages(ctx context.Context, receiverID string, envelop
 
 	r.stepTracer.TraceActivated(receiverID)
 
+	// Bind a context with no per-message trace context for delivery-level callbacks.
+	tracelessCtx := r.runContext.Bind(ctx, receiverID, nil)
+	if err := executor.OnMessageDeliveryStarting(tracelessCtx); err != nil {
+		return err
+	}
+	defer func() {
+		// Always run the finished hook even on error / panic, but don't override
+		// any earlier error.
+		if finishErr := executor.OnMessageDeliveryFinished(tracelessCtx); finishErr != nil && err == nil {
+			err = finishErr
+		}
+	}()
+
 	for {
 		envelope, ok := envelopes.Dequeue()
 		if !ok {
 			break
 		}
 		boundCtx := r.runContext.Bind(ctx, receiverID, envelope.TraceContext)
-		if _, err := executor.Execute(boundCtx, envelope.Message); err != nil {
-			return err
+		if _, execErr := executor.Execute(boundCtx, envelope.Message); execErr != nil {
+			return execErr
 		}
 	}
 	return nil

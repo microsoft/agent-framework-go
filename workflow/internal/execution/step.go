@@ -54,7 +54,7 @@ func NewMessageEnvelopeFromPortable(envelope *checkpoint.PortableMessageEnvelope
 }
 
 func (e *MessageEnvelope) MessageType() workflow.TypeID {
-	if e.declaredType.IsZero() {
+	if e.declaredType == (workflow.TypeID{}) {
 		return workflow.NewTypeID(reflect.TypeOf(e.Message))
 	}
 	return e.declaredType

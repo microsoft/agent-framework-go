@@ -23,7 +23,3 @@ func NewTypeID(typ reflect.Type) TypeID {
 func (t TypeID) Match(typ reflect.Type) bool {
 	return NewTypeID(typ) == t
 }
-
-func (t TypeID) IsZero() bool {
-	return t.PackageName == "" && t.TypeName == ""
-}

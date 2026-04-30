@@ -1,0 +1,172 @@
+// Copyright (c) Microsoft. All rights reserved.
+
+package workflow_test
+
+import (
+	"encoding/json"
+	"reflect"
+	"testing"
+
+	"github.com/microsoft/agent-framework-go/workflow"
+)
+
+func TestTypeID_JsonRoundtrip(t *testing.T) {
+	cases := []reflect.Type{
+		reflect.TypeFor[string](),
+		reflect.TypeFor[int](),
+		reflect.TypeFor[*workflow.Executor](),
+		reflect.TypeFor[workflow.RequestPort](),
+		reflect.TypeFor[map[string]int](),
+	}
+	for _, typ := range cases {
+		t.Run(typ.String(), func(t *testing.T) {
+			id := workflow.NewTypeID(typ)
+			data, err := json.Marshal(id)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			var got workflow.TypeID
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatalf("Unmarshal: %v", err)
+			}
+			if got != id {
+				t.Errorf("roundtrip = %+v, want %+v", got, id)
+			}
+			if !got.Match(typ) {
+				t.Errorf("roundtripped TypeID does not match original type %v", typ)
+			}
+		})
+	}
+}
+
+func TestEdgeConnection_JsonRoundtrip(t *testing.T) {
+	cases := []workflow.EdgeConnection{
+		{SourceIDs: []string{"a"}, SinkIDs: []string{"b"}},
+		{SourceIDs: []string{"s1", "s2"}, SinkIDs: []string{"t1"}},
+		{SourceIDs: []string{"src"}, SinkIDs: []string{"sink1", "sink2", "sink3"}},
+	}
+	for i, c := range cases {
+		t.Run("case-"+itoa(i), func(t *testing.T) {
+			data, err := json.Marshal(c)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			var got workflow.EdgeConnection
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatalf("Unmarshal: %v", err)
+			}
+			if !got.Equal(c) {
+				t.Errorf("roundtrip = %+v, want %+v", got, c)
+			}
+		})
+	}
+}
+
+func TestEdgeConnection_NewConnection_RejectsDuplicates(t *testing.T) {
+	if _, err := workflow.NewConnection([]string{"a", "a"}, []string{"b"}); err == nil {
+		t.Error("expected error for duplicate source IDs")
+	}
+	if _, err := workflow.NewConnection([]string{"a"}, []string{"b", "b"}); err == nil {
+		t.Error("expected error for duplicate sink IDs")
+	}
+	if _, err := workflow.NewConnection([]string{"a"}, []string{"a"}); err == nil {
+		t.Error("expected error for source/sink ID collision")
+	}
+	if _, err := workflow.NewConnection([]string{"a", "b"}, []string{"c", "d"}); err != nil {
+		t.Errorf("expected ok for unique IDs, got error: %v", err)
+	}
+}
+
+func TestRequestPortInfo_JsonRoundtrip(t *testing.T) {
+	port := workflow.RequestPort{
+		ID:       "MyPort",
+		Request:  reflect.TypeFor[string](),
+		Response: reflect.TypeFor[int](),
+	}
+	info := workflow.NewRequestPortInfo(port)
+	data, err := json.Marshal(info)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var got workflow.RequestPortInfo
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got.ID != info.ID {
+		t.Errorf("ID = %q, want %q", got.ID, info.ID)
+	}
+	if got.RequestType != info.RequestType {
+		t.Errorf("RequestType = %+v, want %+v", got.RequestType, info.RequestType)
+	}
+	if got.ResponseType != info.ResponseType {
+		t.Errorf("ResponseType = %+v, want %+v", got.ResponseType, info.ResponseType)
+	}
+}
+
+func TestCheckpointInfo_JsonRoundtrip(t *testing.T) {
+	info := workflow.NewCheckpointInfo("session-1")
+	data, err := json.Marshal(info)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var got workflow.CheckpointInfo
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got != info {
+		t.Errorf("roundtrip = %+v, want %+v", got, info)
+	}
+}
+
+func TestEdgeInfo_JsonRoundtrip(t *testing.T) {
+	cases := []workflow.EdgeInfo{
+		{
+			Connection:   workflow.EdgeConnection{SourceIDs: []string{"a"}, SinkIDs: []string{"b"}},
+			Label:        "",
+			HasCondition: false,
+			HasAssigner:  false,
+		},
+		{
+			Connection:   workflow.EdgeConnection{SourceIDs: []string{"a"}, SinkIDs: []string{"b"}},
+			Label:        "labelled",
+			HasCondition: true,
+			HasAssigner:  false,
+		},
+		{
+			Connection:   workflow.EdgeConnection{SourceIDs: []string{"src"}, SinkIDs: []string{"t1", "t2"}},
+			Label:        "",
+			HasCondition: false,
+			HasAssigner:  true,
+		},
+		{
+			Connection:   workflow.EdgeConnection{SourceIDs: []string{"s1", "s2"}, SinkIDs: []string{"t"}},
+			Label:        "fanin",
+			HasCondition: false,
+			HasAssigner:  false,
+		},
+	}
+	for i, c := range cases {
+		t.Run("case-"+itoa(i), func(t *testing.T) {
+			data, err := json.Marshal(c)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			var got workflow.EdgeInfo
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatalf("Unmarshal: %v", err)
+			}
+			if !got.Connection.Equal(c.Connection) {
+				t.Errorf("Connection mismatch: %+v vs %+v", got.Connection, c.Connection)
+			}
+			if got.Label != c.Label {
+				t.Errorf("Label = %q, want %q", got.Label, c.Label)
+			}
+			if got.HasCondition != c.HasCondition {
+				t.Errorf("HasCondition = %v, want %v", got.HasCondition, c.HasCondition)
+			}
+			if got.HasAssigner != c.HasAssigner {
+				t.Errorf("HasAssigner = %v, want %v", got.HasAssigner, c.HasAssigner)
+			}
+		})
+	}
+}

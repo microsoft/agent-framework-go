@@ -5,12 +5,12 @@ package workflow
 import (
 	"context"
 	"errors"
+	"fmt"
 	"hash/maphash"
 	"iter"
+	"maps"
 	"reflect"
 	"sync/atomic"
-
-	"github.com/microsoft/agent-framework-go/internal/hashmap"
 )
 
 type TurnToken struct {
@@ -36,21 +36,6 @@ func (s ScopeKey) Equal(other ScopeKey) bool {
 func (s ScopeKey) Hash(h *maphash.Hash) {
 	s.ID.Hash(h)
 	h.WriteString(s.Key)
-}
-
-type scopeKeyHasher struct{}
-
-var ScopeKeyHasher hashmap.Hasher[ScopeKey] = scopeKeyHasher{}
-
-func (scopeKeyHasher) Hash(s ScopeKey) uint64 {
-	var mh maphash.Hash
-	mh.SetSeed(theSeed)
-	s.Hash(&mh)
-	return mh.Sum64()
-}
-
-func (h scopeKeyHasher) Equal(a, b ScopeKey) bool {
-	return a.Equal(b)
 }
 
 // ScopeID is a unique identifier for a scope within an executor. If a scope name is not provided, it references the
@@ -80,23 +65,6 @@ func (s ScopeID) Hash(h *maphash.Hash) {
 	}
 }
 
-var theSeed = maphash.MakeSeed()
-
-type scopeIDHasher struct{}
-
-var ScopeIDHasher hashmap.Hasher[ScopeID] = scopeIDHasher{}
-
-func (h scopeIDHasher) Hash(s ScopeID) uint64 {
-	var mh maphash.Hash
-	mh.SetSeed(theSeed)
-	s.Hash(&mh)
-	return mh.Sum64()
-}
-
-func (h scopeIDHasher) Equal(a, b ScopeID) bool {
-	return a.Equal(b)
-}
-
 type ProtocolDescriptor struct {
 	Accepts []reflect.Type
 }
@@ -117,11 +85,14 @@ type Workflow struct {
 
 func (w *Workflow) DescribeProtocol() (*ProtocolDescriptor, error) {
 	er := w.ExecutorBindings[w.StartExecutorID]
+	if er == nil {
+		return nil, fmt.Errorf("workflow start executor %q has no registered binding", w.StartExecutorID)
+	}
 	executor, err := er.CreateInstance("")
 	if err != nil {
 		return nil, err
 	}
-	router, err := executor.Router()
+	router, err := executor.router()
 	if err != nil {
 		return nil, err
 	}
@@ -135,6 +106,17 @@ func (w *Workflow) HasResettableExecutors() bool {
 		}
 	}
 	return false
+}
+
+// AllowConcurrent reports whether every bound executor in the workflow
+// supports cross-run shared execution.
+func (w *Workflow) AllowConcurrent() bool {
+	for _, er := range w.ExecutorBindings {
+		if !er.SupportsConcurrentSharedExecution {
+			return false
+		}
+	}
+	return true
 }
 
 func (w *Workflow) TryReset() bool {
@@ -219,6 +201,14 @@ func (w *Workflow) ReflectPorts() map[string]RequestPortInfo {
 	return portInfos
 }
 
+// ReflectExecutors returns a copy of the workflow's executor bindings keyed
+// by ID. Modifying the returned map does not affect the workflow.
+func (w *Workflow) ReflectExecutors() map[string]*ExecutorBinding {
+	out := make(map[string]*ExecutorBinding, len(w.ExecutorBindings))
+	maps.Copy(out, w.ExecutorBindings)
+	return out
+}
+
 // Context provides services for an [Executor] during the execution of a workflow.
 type Context struct {
 	context.Context
@@ -242,6 +232,15 @@ type Context struct {
 
 	// RequestHalt adds a request to "halt" workflow execution at the end of the current [SuperStep].
 	RequestHalt func() error
+
+	// PostRequest raises an [ExternalRequest] from the current executor.
+	// The request becomes a [RequestInfoEvent] in the workflow event stream,
+	// and the matching [ExternalResponse] (sent later by the caller via the
+	// run handle) is delivered back to this executor as a regular message of
+	// type *[ExternalResponse]. The executor is responsible for registering
+	// a handler for *[ExternalResponse] via its [RouteBuilder] and extracting
+	// the typed payload via [ExternalResponse.Data] and [PortableValue.As].
+	PostRequest func(request *ExternalRequest) error
 
 	// ReadState reads a state value from the workflow's state store. If no scope is provided, the executor's
 	// default scope is used.

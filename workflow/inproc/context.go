@@ -13,15 +13,16 @@ import (
 	"unsafe"
 
 	"github.com/google/uuid"
+	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/internal/execution"
 )
 
 // runnerContext manages the execution context for a workflow run.
 type runnerContext struct {
-	wf     *workflow.Workflow
-	runID  string
-	tracer *stepTracer
+	wf        *workflow.Workflow
+	sessionID string
+	tracer    *stepTracer
 
 	edgeMap  *execution.EdgeRunner
 	nextStep *execution.StepContext
@@ -35,8 +36,10 @@ type runnerContext struct {
 	joinedSubworkflowRunners map[string]execution.SuperStepRunner
 	joinedRunnersMu          sync.RWMutex
 
-	externalRequests map[string]*workflow.ExternalRequest
-	requestsMu       sync.RWMutex
+	externalRequests   map[string]*workflow.ExternalRequest
+	requestOwners      map[string]string // requestID -> ownerExecutorID
+	responsePortOwners map[string]string // portID -> ownerExecutorID
+	requestsMu         sync.RWMutex
 
 	stateManager   execution.StateManager
 	outgoingEvents execution.EventSink
@@ -49,7 +52,7 @@ type runnerContext struct {
 // newInProcessRunnerContext creates a new InProcessRunnerContext.
 func newInProcessRunnerContext(
 	wf *workflow.Workflow,
-	runID string,
+	sessionID string,
 	withCheckpointing bool,
 	outgoingEvents execution.EventSink,
 	tracer *stepTracer,
@@ -58,13 +61,15 @@ func newInProcessRunnerContext(
 ) (*runnerContext, error) {
 	ctx := &runnerContext{
 		wf:                       wf,
-		runID:                    runID,
+		sessionID:                sessionID,
 		tracer:                   tracer,
 		nextStep:                 new(execution.StepContext),
 		executors:                make(map[string]*workflow.Executor),
 		queuedExternalDeliveries: make([]func(context.Context) error, 0),
 		joinedSubworkflowRunners: make(map[string]execution.SuperStepRunner),
 		externalRequests:         make(map[string]*workflow.ExternalRequest),
+		requestOwners:            make(map[string]string),
+		responsePortOwners:       make(map[string]string),
 		outgoingEvents:           outgoingEvents,
 		withCheckpointing:        withCheckpointing,
 		concurrentRunsEnabled:    enableConcurrentRuns,
@@ -86,7 +91,7 @@ func newInProcessRunnerContext(
 // checkEnded returns an error if the run has ended.
 func (proc *runnerContext) checkEnded() error {
 	if proc.runEnded.Load() {
-		return fmt.Errorf("workflow run '%s' has been ended, please start a new Run or StreamingRun", proc.runID)
+		return fmt.Errorf("workflow run '%s' has been ended, please start a new Run or StreamingRun", proc.sessionID)
 	}
 	return nil
 }
@@ -118,7 +123,7 @@ func (proc *runnerContext) EnsureExecutor(ctx context.Context, executorID string
 		return nil, fmt.Errorf("executor with ID '%s' is not registered", executorID)
 	}
 
-	executor, err := registration.CreateInstance(proc.runID)
+	executor, err := registration.CreateInstance(proc.sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -176,11 +181,12 @@ func (proc *runnerContext) AddExternalResponse(ctx context.Context, response *wo
 	proc.externalDeliveriesMu.Lock()
 	defer proc.externalDeliveriesMu.Unlock()
 	proc.queuedExternalDeliveries = append(proc.queuedExternalDeliveries, func(ctx context.Context) error {
-		if !proc.CompleteRequest(response.RequestID) {
+		ownerID, existed := proc.CompleteRequest(response.RequestID)
+		if !existed {
 			return fmt.Errorf("no pending request with ID %s found in the workflow context", response.RequestID)
 		}
 
-		mapping, err := proc.edgeMap.PrepareDeliveryForResponse(ctx, response)
+		mapping, err := proc.edgeMap.PrepareDeliveryForResponse(ctx, response, ownerID)
 		if err != nil {
 			return err
 		}
@@ -311,11 +317,20 @@ func (proc *runnerContext) Bind(ctx context.Context, executorID string, traceCon
 		},
 
 		YieldOutput: func(output any) error {
+			// Special-case agent response types so they get translated into typed
+			// events regardless of whether this executor is registered as an
+			// output executor.
+			switch v := output.(type) {
+			case *message.ResponseUpdate:
+				return proc.AddEvent(ctx, workflow.ResponseUpdateEvent{ExecutorID: executorID, Update: v})
+			case *message.Response:
+				return proc.AddEvent(ctx, workflow.ResponseEvent{ExecutorID: executorID, Response: v})
+			}
 			// Check if this executor can output
 			if _, ok := proc.wf.OutputExecutors[executorID]; ok {
 				return proc.AddEvent(ctx, workflow.OutputEvent{
-					SourceID: executorID,
-					Output:   output,
+					ExecutorID: executorID,
+					Output:     output,
 				})
 			}
 			return nil
@@ -323,6 +338,10 @@ func (proc *runnerContext) Bind(ctx context.Context, executorID string, traceCon
 
 		RequestHalt: func() error {
 			return proc.AddEvent(ctx, workflow.RequestHaltEvent{})
+		},
+
+		PostRequest: func(request *workflow.ExternalRequest) error {
+			return proc.Post(ctx, executorID, request)
 		},
 
 		ReadState: func(key string, scope string) (any, error) {
@@ -386,10 +405,15 @@ func (proc *runnerContext) Bind(ctx context.Context, executorID string, traceCon
 	}
 }
 
-// Post posts an external request.
-func (proc *runnerContext) Post(ctx context.Context, request *workflow.ExternalRequest) error {
+// Post raises an external request originating from the executor identified
+// by ownerID. The matching response (delivered later via [AddExternalResponse])
+// will be routed back to that executor as a regular message.
+func (proc *runnerContext) Post(ctx context.Context, ownerID string, request *workflow.ExternalRequest) error {
 	if err := proc.checkEnded(); err != nil {
 		return err
+	}
+	if ownerID == "" {
+		return errors.New("ownerID is required when posting an external request")
 	}
 
 	proc.requestsMu.Lock()
@@ -398,15 +422,18 @@ func (proc *runnerContext) Post(ctx context.Context, request *workflow.ExternalR
 		return fmt.Errorf("pending request with id '%s' already exists", request.ID)
 	}
 	proc.externalRequests[request.ID] = request
+	proc.requestOwners[request.ID] = ownerID
+	proc.responsePortOwners[request.RequestPort.ID] = ownerID
 	proc.requestsMu.Unlock()
 
 	return proc.AddEvent(ctx, workflow.RequestInfoEvent{Request: request})
 }
 
-// CompleteRequest marks a request as completed.
-func (proc *runnerContext) CompleteRequest(requestID string) bool {
+// CompleteRequest marks a request as completed and returns the executor that
+// posted it.
+func (proc *runnerContext) CompleteRequest(requestID string) (string, bool) {
 	if err := proc.checkEnded(); err != nil {
-		return false
+		return "", false
 	}
 
 	proc.requestsMu.Lock()
@@ -414,7 +441,19 @@ func (proc *runnerContext) CompleteRequest(requestID string) bool {
 
 	_, existed := proc.externalRequests[requestID]
 	delete(proc.externalRequests, requestID)
-	return existed
+	owner := proc.requestOwners[requestID]
+	delete(proc.requestOwners, requestID)
+	return owner, existed
+}
+
+// ResponsePortExecutorID returns the executor that handles responses on the
+// given port, or ("", false) if no such port is registered. Mirrors .NET's
+// [EdgeMap.TryGetResponsePortExecutorId].
+func (proc *runnerContext) ResponsePortExecutorID(portID string) (string, bool) {
+	proc.requestsMu.Lock()
+	defer proc.requestsMu.Unlock()
+	owner, ok := proc.responsePortOwners[portID]
+	return owner, ok
 }
 
 // JoinedSubworkflowRunners returns all joined subworkflow runners.

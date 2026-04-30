@@ -3,18 +3,20 @@
 package workflow_test
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/workflow"
+	"github.com/microsoft/agent-framework-go/workflow/inproc"
 )
 
 type noOpExecutor struct {
 	id string
 }
 
-func (n *noOpExecutor) NewExecutor(runID string) (*workflow.Executor, error) {
+func (n *noOpExecutor) NewExecutor(sessionID string) (*workflow.Executor, error) {
 	return &workflow.Executor{
 		ID: n.id,
 		Config: []*workflow.ExecutorConfig{
@@ -42,7 +44,7 @@ type someOtherNoOpExecutor struct {
 	id string
 }
 
-func (n *someOtherNoOpExecutor) NewExecutor(runID string) (*workflow.Executor, error) {
+func (n *someOtherNoOpExecutor) NewExecutor(sessionID string) (*workflow.Executor, error) {
 	return &workflow.Executor{
 		ID: n.id,
 		Config: []*workflow.ExecutorConfig{
@@ -264,5 +266,144 @@ func TestBuilder_Workflow_NameAndDescription(t *testing.T) {
 	}
 	if wf3.Description != "" {
 		t.Errorf("expected empty description, got %s", wf3.Description)
+	}
+}
+
+// recordingBinding builds an executor that records every input it receives in
+// the supplied slice (under mu) and forwards strings downstream unchanged.
+func recordingBinding(id string, sink *[]string) *workflow.ExecutorBinding {
+	binding := &workflow.ExecutorBinding{
+		ID:           id,
+		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+	}
+	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: id,
+			Options: workflow.ExecutorOptions{
+				DisableAutoSendMessageHandlerResultObject: true,
+				DisableAutoYieldOutputHandlerResultObject: true,
+			},
+			Config: []*workflow.ExecutorConfig{{
+				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+					return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
+						*sink = append(*sink, id+":"+msg.(string))
+						return nil, ctx.SendMessage("", msg)
+					}), nil
+				},
+			}},
+		}, nil
+	}
+	return binding
+}
+
+func TestAddChain_ConnectsExecutorsInOrder(t *testing.T) {
+	var trace []string
+	a := recordingBinding("a", &trace)
+	b := recordingBinding("b", &trace)
+	c := recordingBinding("c", &trace)
+
+	wf, err := workflow.NewBuilder(a).
+		AddChain(a, []*workflow.ExecutorBinding{b, c}, false).
+		Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if _, err := inproc.Run(context.Background(), wf, "", "x"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	want := []string{"a:x", "b:x", "c:x"}
+	if !reflect.DeepEqual(trace, want) {
+		t.Errorf("trace = %v, want %v", trace, want)
+	}
+}
+
+func TestAddChain_RejectsRepetitionByDefault(t *testing.T) {
+	a := recordingBinding("a", new([]string))
+	b := recordingBinding("b", new([]string))
+
+	_, err := workflow.NewBuilder(a).
+		AddChain(a, []*workflow.ExecutorBinding{b, b}, false).
+		Build()
+	if err == nil {
+		t.Fatal("expected error for repeated executor")
+	}
+}
+
+func TestAddSwitch_RoutesToMatchingCase(t *testing.T) {
+	var trace []string
+	src := recordingBinding("src", &trace)
+	even := recordingBinding("even", &trace)
+	odd := recordingBinding("odd", &trace)
+
+	bld := workflow.NewBuilder(src)
+	bld.AddSwitch(src).
+		AddCase(func(msg any) bool {
+			s, ok := msg.(string)
+			return ok && len(s)%2 == 0
+		}, even).
+		AddCase(func(msg any) bool {
+			s, ok := msg.(string)
+			return ok && len(s)%2 == 1
+		}, odd).
+		AddToBuilder(bld)
+	wf, err := bld.Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	// "abcd" → len 4 → even
+	if _, err := inproc.Run(context.Background(), wf, "", "abcd"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	wantContains := "even:abcd"
+	var found bool
+	for _, t := range trace {
+		if t == wantContains {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected trace to include %q, got %v", wantContains, trace)
+	}
+	for _, ent := range trace {
+		if ent == "odd:abcd" {
+			t.Errorf("expected odd branch not to receive even-length string; trace=%v", trace)
+		}
+	}
+}
+
+func TestAddSwitch_FallsBackToDefault(t *testing.T) {
+	var trace []string
+	src := recordingBinding("src", &trace)
+	branch := recordingBinding("branch", &trace)
+	def := recordingBinding("def", &trace)
+
+	bld := workflow.NewBuilder(src)
+	bld.AddSwitch(src).
+		AddCase(func(msg any) bool { return msg == "match" }, branch).
+		WithDefault(def).
+		AddToBuilder(bld)
+	wf, err := bld.Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	if _, err := inproc.Run(context.Background(), wf, "", "no-match"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, ent := range trace {
+		if ent == "branch:no-match" {
+			t.Errorf("non-matching message reached branch executor; trace=%v", trace)
+		}
+	}
+	var sawDefault bool
+	for _, ent := range trace {
+		if ent == "def:no-match" {
+			sawDefault = true
+		}
+	}
+	if !sawDefault {
+		t.Errorf("expected default branch to receive non-matching message; trace=%v", trace)
 	}
 }

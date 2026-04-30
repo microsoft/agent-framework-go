@@ -53,11 +53,3 @@ func (r *ExternalRequest) NewResponse(data any) (*ExternalResponse, error) {
 		Data:        AnyPortableValue(data),
 	}, nil
 }
-
-func (r *ExternalRequest) Rewrap(other *ExternalResponse) *ExternalResponse {
-	return &ExternalResponse{
-		RequestID:   other.RequestID,
-		RequestPort: other.RequestPort,
-		Data:        r.Data,
-	}
-}

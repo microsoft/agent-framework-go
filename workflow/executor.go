@@ -8,13 +8,19 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"sync"
 )
 
 // ExecutorOptions holds configuration options for [Executor] behavior.
 type ExecutorOptions struct {
+	// If true, the result of a message handler that returns a value will be sent as a message from the executor.
 	DisableAutoSendMessageHandlerResultObject bool
+
+	// If true, the result of a message handler that returns a value will be yielded as an output of the executor.
 	DisableAutoYieldOutputHandlerResultObject bool
-	CrossRunShareable                         bool
+
+	// If true, the executor may be used simultaneously by multiple runs safely.
+	CrossRunShareable bool
 }
 
 type callResult struct {
@@ -40,6 +46,17 @@ type ExecutorConfig struct {
 	Reset                func() error
 	OnCheckpoint         func(ctx *Context) error
 	OnCheckpointRestored func(ctx *Context) error
+
+	// OnMessageDeliveryStarting is invoked once per superstep, before any
+	// messages are delivered to the executor. It is given a context bound to
+	// this executor with no per-message trace context.
+	OnMessageDeliveryStarting func(ctx *Context) error
+
+	// OnMessageDeliveryFinished is invoked once per superstep, after all
+	// messages have been delivered to the executor (regardless of whether
+	// individual deliveries succeeded). It is given a context bound to this
+	// executor with no per-message trace context.
+	OnMessageDeliveryFinished func(ctx *Context) error
 }
 
 type Executor struct {
@@ -48,8 +65,10 @@ type Executor struct {
 
 	Config []*ExecutorConfig
 
-	router    *messageRouter
-	routerErr error
+	cachedRouter *messageRouter
+	routerErr    error
+
+	canOutputCache sync.Map // reflect.Type -> bool
 }
 
 func (e *Executor) Initialize(ctx *Context) error {
@@ -85,6 +104,34 @@ func (e *Executor) OnCheckpointRestored(ctx *Context) error {
 	return nil
 }
 
+// OnMessageDeliveryStarting invokes all configured OnMessageDeliveryStarting
+// hooks. Returns the first error from any hook.
+func (e *Executor) OnMessageDeliveryStarting(ctx *Context) error {
+	for _, cfg := range e.Config {
+		if cfg.OnMessageDeliveryStarting != nil {
+			if err := cfg.OnMessageDeliveryStarting(ctx); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// OnMessageDeliveryFinished invokes all configured OnMessageDeliveryFinished
+// hooks. All hooks are run; the first non-nil error encountered is returned
+// after all have been invoked.
+func (e *Executor) OnMessageDeliveryFinished(ctx *Context) error {
+	var firstErr error
+	for _, cfg := range e.Config {
+		if cfg.OnMessageDeliveryFinished != nil {
+			if err := cfg.OnMessageDeliveryFinished(ctx); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr
+}
+
 func (e *Executor) Reset() error {
 	for _, cfg := range e.Config {
 		if cfg.Reset != nil {
@@ -96,9 +143,9 @@ func (e *Executor) Reset() error {
 	return nil
 }
 
-func (e *Executor) Router() (*messageRouter, error) {
-	if e.router != nil || e.routerErr != nil {
-		return e.router, e.routerErr
+func (e *Executor) router() (*messageRouter, error) {
+	if e.cachedRouter != nil || e.routerErr != nil {
+		return e.cachedRouter, e.routerErr
 	}
 	if len(e.Config) == 0 {
 		panic(errors.New("executor has no route configuration function"))
@@ -115,15 +162,15 @@ func (e *Executor) Router() (*messageRouter, error) {
 			return nil, err
 		}
 	}
-	e.router, e.routerErr = bld.build()
-	return e.router, e.routerErr
+	e.cachedRouter, e.routerErr = bld.build()
+	return e.cachedRouter, e.routerErr
 }
 
 func (e *Executor) Execute(ctx *Context, message any) (any, error) {
 	if err := ctx.AddEvent(ExecutorInvokedEvent{ExecutorID: e.ID, Message: message}); err != nil {
 		return nil, err
 	}
-	router, err := e.Router()
+	router, err := e.router()
 	if err != nil {
 		return nil, fmt.Errorf("error getting router for executor %q: %w", e.ID, err)
 	}
@@ -161,7 +208,7 @@ func (e *Executor) Execute(ctx *Context, message any) (any, error) {
 }
 
 func (e *Executor) InputTypes() []reflect.Type {
-	router, err := e.Router()
+	router, err := e.router()
 	if err != nil {
 		return nil
 	}
@@ -178,7 +225,7 @@ func (e *Executor) DescribeProtocol() *ProtocolDescriptor {
 }
 
 func (e *Executor) CanHandleTypeID(typ TypeID) bool {
-	router, err := e.Router()
+	router, err := e.router()
 	if err != nil {
 		return false
 	}
@@ -194,7 +241,12 @@ func (e *Executor) CanHandle(v any) bool {
 }
 
 func (e *Executor) CanOutputType(typ reflect.Type) bool {
-	return slices.ContainsFunc(e.OutputTypes(), typ.AssignableTo)
+	if cached, ok := e.canOutputCache.Load(typ); ok {
+		return cached.(bool)
+	}
+	result := slices.ContainsFunc(e.OutputTypes(), typ.AssignableTo)
+	e.canOutputCache.Store(typ, result)
+	return result
 }
 
 type StatefulExecutorCache[T any] struct {

@@ -141,6 +141,36 @@ func (h updateKeyHasher) Equal(a, b UpdateKey) bool {
 	return a.Equal(b)
 }
 
+type scopeIDHasher struct{}
+
+var ScopeIDHasher hashmap.Hasher[workflow.ScopeID] = scopeIDHasher{}
+
+func (scopeIDHasher) Hash(s workflow.ScopeID) uint64 {
+	var mh maphash.Hash
+	mh.SetSeed(theSeed)
+	s.Hash(&mh)
+	return mh.Sum64()
+}
+
+func (scopeIDHasher) Equal(a, b workflow.ScopeID) bool {
+	return a.Equal(b)
+}
+
+type scopeKeyHasher struct{}
+
+var ScopeKeyHasher hashmap.Hasher[workflow.ScopeKey] = scopeKeyHasher{}
+
+func (scopeKeyHasher) Hash(s workflow.ScopeKey) uint64 {
+	var mh maphash.Hash
+	mh.SetSeed(theSeed)
+	s.Hash(&mh)
+	return mh.Sum64()
+}
+
+func (scopeKeyHasher) Equal(a, b workflow.ScopeKey) bool {
+	return a.Equal(b)
+}
+
 // StateManager manages state for all executors in a workflow run.
 // A zero value is valid is ready to use.
 type StateManager struct {
@@ -150,7 +180,7 @@ type StateManager struct {
 
 func NewStateManager() StateManager {
 	return StateManager{
-		scopes:        *concurrent.NewHashMap[workflow.ScopeID, *StateScope](workflow.ScopeIDHasher),
+		scopes:        *concurrent.NewHashMap[workflow.ScopeID, *StateScope](ScopeIDHasher),
 		queuedUpdates: *concurrent.NewHashMap[UpdateKey, StateUpdate](UpdateKeyHasher),
 	}
 }
@@ -331,7 +361,7 @@ func (sm *StateManager) ClearStateKeyByID(scopeID workflow.ScopeID, key string) 
 // PublishUpdates publishes all queued updates to their respective scopes.
 func (sm *StateManager) PublishUpdates(tracer StepTracer) error {
 	// Aggregate updates by scope
-	updatesByScope := hashmap.NewMap[workflow.ScopeID, map[string][]StateUpdate](workflow.ScopeIDHasher)
+	updatesByScope := hashmap.NewMap[workflow.ScopeID, map[string][]StateUpdate](ScopeIDHasher)
 
 	for key, update := range sm.queuedUpdates.All() {
 		if _, ok := updatesByScope.Load(key.ScopeID); !ok {

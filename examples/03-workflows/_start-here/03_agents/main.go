@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/hosting/workflowhosting"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/workflow"
@@ -23,10 +24,15 @@ import (
 // This demonstrates how AI-powered components can be integrated into workflow pipelines.
 
 func main() {
-	// Create agents.
-	frenchAgent := newAgent("French").Bind(false)
-	spanishAgent := newAgent("Spanish").Bind(false)
-	englishAgent := newAgent("English").Bind(false)
+	// Create agents. Disable message forwarding and role reassignment for a
+	// strict pipeline where each agent forwards only its own output.
+	cfg := workflowhosting.Config{
+		DisableMessageForwarding: true,
+		DisableRoleReassignment:  true,
+	}
+	frenchAgent := workflowhosting.New(newAgent("French"), cfg)
+	spanishAgent := workflowhosting.New(newAgent("Spanish"), cfg)
+	englishAgent := workflowhosting.New(newAgent("English"), cfg)
 
 	wf, err := workflow.NewBuilder(frenchAgent).
 		AddEdge(frenchAgent, spanishAgent).

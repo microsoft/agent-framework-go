@@ -8,10 +8,40 @@ import (
 	"slices"
 )
 
+// EdgeOption configures an [Edge] when it is added to a workflow via [Builder].
+type EdgeOption func(*Edge)
+
+// WithLabel sets an optional label on the edge. Labels can be used by
+// visualizers to annotate edges.
+func WithLabel(label string) EdgeOption {
+	return func(e *Edge) { e.Label = label }
+}
+
+// WithAssigner attaches an [Edge.Assigner] callback to a fan-out edge.
+// The assigner is invoked for each message and must return the indexes of
+// the targets that should receive it. Has no effect on direct or fan-in
+// edges.
+func WithAssigner(assigner func(targetCount int, message any) iter.Seq[int]) EdgeOption {
+	return func(e *Edge) { e.Assigner = assigner }
+}
+
+func applyEdgeOptions(e *Edge, opts []EdgeOption) {
+	for _, opt := range opts {
+		if opt != nil {
+			opt(e)
+		}
+	}
+}
+
+// Edge represents a connection or relationship between nodes.
 type Edge struct {
 	Index int
 
 	Connection EdgeConnection
+
+	// Label is an optional label for the edge, allowing arbitrary metadata
+	// to be associated with it (e.g. for visualization purposes).
+	Label string
 
 	// Assigner is an optional function that maps an incoming message to a subset of the target
 	// executor nodes (or optionally all of them).
@@ -34,6 +64,9 @@ func (e Edge) Equal(other Edge) bool {
 	if (e.Assigner == nil) != (other.Assigner == nil) {
 		return false
 	}
+	if e.Label != other.Label {
+		return false
+	}
 	if !e.Connection.Equal(other.Connection) {
 		return false
 	}
@@ -53,14 +86,13 @@ func (c EdgeConnection) Equal(other EdgeConnection) bool {
 
 // NewConnection creates a new Connection ensuring that source and sink IDs are unique.
 func NewConnection(sourceIDs, sinkIDs []string) (EdgeConnection, error) {
-	ids := make(map[string]struct{}, max(len(sourceIDs), len(sinkIDs)))
+	ids := make(map[string]struct{}, len(sourceIDs)+len(sinkIDs))
 	for _, id := range sourceIDs {
 		if _, exists := ids[id]; exists {
 			return EdgeConnection{}, errors.New("sourceIDs must be unique")
 		}
 		ids[id] = struct{}{}
 	}
-	clear(ids)
 	for _, id := range sinkIDs {
 		if _, exists := ids[id]; exists {
 			return EdgeConnection{}, errors.New("sinkIDs must be unique and not overlap with sourceIDs")

@@ -89,7 +89,12 @@ func (e SuperStepCompletedEvent) Data() any {
 
 var _ Event = StartedEvent{}
 
-// StartedEvent is an event triggered when the workflow starts.
+// StartedEvent is emitted at the beginning of each input → processing → halt
+// cycle, immediately before the first [SuperStep] of that cycle runs. It fires
+// once per cycle in which there is actual work to process — typically once at
+// the start of a run and again whenever new messages or external responses
+// arrive after a halt. No event is emitted on cycles that complete without
+// work (e.g. timeout-only loop iterations).
 type StartedEvent struct {
 	Message any
 }
@@ -116,8 +121,9 @@ var _ Event = OutputEvent{}
 
 // OutputEvent is an event triggered when the workflow produces an output.
 type OutputEvent struct {
-	SourceID string
-	Output   any
+	// ExecutorID is the unique identifier of the executor that yielded this output.
+	ExecutorID string
+	Output     any
 }
 
 func (e OutputEvent) Data() any {
@@ -147,6 +153,8 @@ func (e RequestInfoEvent) Data() any {
 
 var _ Event = ResponseUpdateEvent{}
 
+// ResponseUpdateEvent is an event triggered when an agent run produces a streaming response update.
+// This event is also automatically emitted when an executor yields a *message.ResponseUpdate via YieldOutput.
 type ResponseUpdateEvent struct {
 	ExecutorID string
 	Update     *message.ResponseUpdate
@@ -154,4 +162,17 @@ type ResponseUpdateEvent struct {
 
 func (e ResponseUpdateEvent) Data() any {
 	return e.Update
+}
+
+var _ Event = ResponseEvent{}
+
+// ResponseEvent is an event triggered when an agent produces a complete response.
+// This event is automatically emitted when an executor yields a *message.Response via YieldOutput.
+type ResponseEvent struct {
+	ExecutorID string
+	Response   *message.Response
+}
+
+func (e ResponseEvent) Data() any {
+	return e.Response
 }

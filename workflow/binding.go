@@ -17,8 +17,16 @@ type ExecutorBinding struct {
 	IsSharedInstance                  bool
 	SupportsConcurrentSharedExecution bool
 
-	NewExecutor func(runID string) (*Executor, error)
+	NewExecutor func(sessionID string) (*Executor, error)
 	Reset       func() bool
+
+	// Ports lists additional [RequestPort]s that this executor uses to
+	// raise [ExternalRequest]s via [Context.PostRequest]. The builder
+	// registers them in [Workflow.Ports] so they appear in workflow
+	// metadata. Bindings that themselves are a request port boundary
+	// (created via [BindRequestPort]) do not need to set this; the
+	// builder picks the port up from [ExecutorBinding.Raw].
+	Ports []RequestPort
 }
 
 func (eb *ExecutorBinding) String() string {
@@ -43,11 +51,11 @@ func (eb *ExecutorBinding) TryReset() bool {
 	return eb.Reset()
 }
 
-func (eb *ExecutorBinding) CreateInstance(runID string) (*Executor, error) {
+func (eb *ExecutorBinding) CreateInstance(sessionID string) (*Executor, error) {
 	if eb.isPlaceholder() {
 		return nil, errors.New("cannot create executor from placeholder binding")
 	}
-	ex, err := eb.NewExecutor(runID)
+	ex, err := eb.NewExecutor(sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -60,13 +68,29 @@ func (eb *ExecutorBinding) CreateInstance(runID string) (*Executor, error) {
 	return ex, nil
 }
 
-func newRequestPortExecutor(port RequestPort, allowWrapped bool) *Executor {
-	var e requestPortExecutor
+// BindRequestPort returns an [ExecutorBinding] that exposes a [RequestPort]
+// at the workflow boundary. The resulting executor accepts messages of
+// `port.Request` type, raises them as [ExternalRequest]s via
+// [Context.PostRequest], and forwards the matching [ExternalResponse] data to
+// downstream executors.
+func BindRequestPort(p RequestPort) *ExecutorBinding {
+	return &ExecutorBinding{
+		ID:           p.ID,
+		ExecutorType: reflect.TypeFor[RequestPort](),
+		Raw:          p,
+		NewExecutor: func(_ string) (*Executor, error) {
+			return newRequestPortExecutor(p), nil
+		},
+		SupportsConcurrentSharedExecution: true,
+	}
+}
+
+func newRequestPortExecutor(port RequestPort) *Executor {
 	return &Executor{
 		ID: port.ID,
 		Options: ExecutorOptions{
-			// We need to be able to return the ExternalRequest/Result objects so they can be bubbled up
-			// through the event system, but we do not want to forward the Request message.
+			// The executor's handler return values are exposed via PostRequest /
+			// SendMessage explicitly; suppress the default auto-forwarding.
 			DisableAutoSendMessageHandlerResultObject: true,
 			DisableAutoYieldOutputHandlerResultObject: true,
 		},
@@ -74,114 +98,30 @@ func newRequestPortExecutor(port RequestPort, allowWrapped bool) *Executor {
 			{
 				ConfigureRoutes: func(rb *RouteBuilder) (*RouteBuilder, error) {
 					return rb.
-						AddHandler(port.Request, nil, false, e.handleAsync).
-						AddCatchAll(false, e.catchAll), nil
+						AddHandler(port.Request, nil, false, func(ctx *Context, msg any) (any, error) {
+							req, err := NewExternalRequest("", port, msg)
+							if err != nil {
+								return nil, err
+							}
+							if err := ctx.PostRequest(req); err != nil {
+								return nil, err
+							}
+							return nil, nil
+						}).
+						AddHandler(reflect.TypeFor[*ExternalResponse](), nil, false, func(ctx *Context, msg any) (any, error) {
+							resp := msg.(*ExternalResponse)
+							if resp.RequestPort.ID != port.ID {
+								return nil, nil
+							}
+							data, ok := resp.Data.As(port.Response)
+							if !ok {
+								return nil, fmt.Errorf("expected response of type %v, got %T", port.Response, resp.Data.Any())
+							}
+							return nil, ctx.SendMessage("", data)
+						}), nil
 				},
 			},
 		},
-	}
-}
-
-type requestPortExecutor struct {
-	port            RequestPort
-	allowWrapped    bool
-	wrappedRequests map[string]*ExternalRequest
-	requestSink     func(*Context, *ExternalRequest) error
-}
-
-func (r *requestPortExecutor) catchAll(ctx *Context, msg PortableValue) (any, error) {
-	if data, ok := msg.As(r.port.Response); ok {
-		req, err := NewExternalRequest("", r.port, data)
-		if err != nil {
-			return nil, err
-		}
-		if r.requestSink != nil {
-			if err := r.requestSink(ctx, req); err != nil {
-				return nil, err
-			}
-		}
-		return req, nil
-	}
-	if data, ok := msg.As(reflect.TypeFor[*ExternalRequest]()); ok {
-		v, err := r.handleAsync(ctx, data)
-		if err != nil {
-			return nil, err
-		}
-		return v.(*ExternalRequest), nil
-	}
-	return nil, nil
-}
-
-func (r *requestPortExecutor) handleAsync(ctx *Context, msg any) (any, error) {
-	switch msg := msg.(type) {
-	case *ExternalResponse:
-		if r.port.ID != msg.RequestPort.ID {
-			return nil, nil
-		}
-		data, ok := msg.Data.As(r.port.Response)
-		if !ok {
-			return nil, fmt.Errorf("expected response of type %v, got %T", r.port.Response, msg.Data.Any())
-		}
-		sendMsg := msg
-		if r.allowWrapped {
-			if original, ok := r.wrappedRequests[msg.RequestID]; ok {
-				sendMsg = original.Rewrap(msg)
-			}
-		}
-		if err := ctx.SendMessage("", sendMsg); err != nil {
-			return nil, err
-		}
-		if err := ctx.SendMessage("", data); err != nil {
-			return nil, err
-		}
-		return msg, nil
-	case *ExternalRequest:
-		if !r.allowWrapped {
-			panic("not reachable")
-		}
-		if !reflect.TypeOf(msg.Data.Any()).AssignableTo(r.port.Request) {
-			return nil, fmt.Errorf("expected message of type %v, got %T", r.port.Request, msg.Data.Any())
-		}
-		if !reflect.TypeOf(msg.RequestPort.Response).AssignableTo(r.port.Response) {
-			return nil, fmt.Errorf("expected response type of %v, got %v", r.port.Response, msg.RequestPort.Response)
-		}
-		if r.wrappedRequests == nil {
-			r.wrappedRequests = make(map[string]*ExternalRequest)
-		}
-		r.wrappedRequests[msg.ID] = msg
-		req, err := NewExternalRequest(msg.ID, r.port, msg)
-		if err != nil {
-			return nil, err
-		}
-		if r.requestSink != nil {
-			if err = r.requestSink(ctx, req); err != nil {
-				return nil, err
-			}
-		}
-		return req, nil
-	default:
-		req, err := NewExternalRequest("", r.port, msg)
-		if err != nil {
-			return nil, err
-		}
-		if r.requestSink != nil {
-			if err = r.requestSink(ctx, req); err != nil {
-				return nil, err
-			}
-		}
-		return req, nil
-	}
-}
-
-func BindRequestPort(p RequestPort, allowWrapped bool) *ExecutorBinding {
-	return &ExecutorBinding{
-		ID:           p.ID,
-		ExecutorType: reflect.TypeOf(p),
-		Raw:          p,
-		NewExecutor: func(_ string) (*Executor, error) {
-			return newRequestPortExecutor(p, allowWrapped), nil
-		},
-		SupportsConcurrentSharedExecution: true,
 	}
 }
 
@@ -199,7 +139,7 @@ func BindFunc[In, Out any](id string, threadSafe bool, fn func(In) Out) *Executo
 	}
 }
 
-func BindFuncCtx[In, Out any](id string, threadSafe bool, fn func(context.Context, In) Out) *ExecutorBinding {
+func BindFuncContext[In, Out any](id string, threadSafe bool, fn func(context.Context, In) Out) *ExecutorBinding {
 	// Don't set Raw to fn, it is not comparable.
 	return &ExecutorBinding{
 		ID:           id,

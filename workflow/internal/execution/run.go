@@ -82,8 +82,8 @@ func NewRunHandle(sr SuperStepRunner, ch checkpoint.CheckpointingHandle, mode Mo
 	return handle
 }
 
-func (h *RunHandle) RunID() string {
-	return h.stepRunner.RunID()
+func (h *RunHandle) SessionID() string {
+	return h.stepRunner.SessionID()
 }
 
 func (h *RunHandle) Checkpoints() []workflow.CheckpointInfo {
@@ -169,6 +169,10 @@ func (h *RunHandle) EnqueueResponse(ctx context.Context, response *workflow.Exte
 	return nil
 }
 
+func (h *RunHandle) ResponsePortExecutorID(portID string) (string, bool) {
+	return h.stepRunner.ResponsePortExecutorID(portID)
+}
+
 func (h *RunHandle) signalInputToRunLoop() {
 	h.eventStream.SignalInput()
 }
@@ -225,8 +229,8 @@ func NewRun(handle *RunHandle) *Run {
 	}
 }
 
-func (r *Run) RunID() string {
-	return r.runHandle.RunID()
+func (r *Run) SessionID() string {
+	return r.runHandle.SessionID()
 }
 
 func (r *Run) GetStatus(ctx context.Context) (workflow.RunStatus, error) {
@@ -287,8 +291,8 @@ func NewStreamingRun(handle *RunHandle) *StreamingRun {
 	}
 }
 
-func (sr *StreamingRun) RunID() string {
-	return sr.runHandle.RunID()
+func (sr *StreamingRun) SessionID() string {
+	return sr.runHandle.SessionID()
 }
 
 func (sr *StreamingRun) GetStatus(ctx context.Context) (workflow.RunStatus, error) {
@@ -303,8 +307,16 @@ func (sr *StreamingRun) SendMessage(ctx context.Context, message any) error {
 	return sr.runHandle.EnqueueMessage(ctx, message)
 }
 
+func (sr *StreamingRun) ResponsePortExecutorID(portID string) (string, bool) {
+	return sr.runHandle.ResponsePortExecutorID(portID)
+}
+
 func (sr *StreamingRun) WatchStream(ctx context.Context) iter.Seq2[workflow.Event, error] {
 	return sr.runHandle.TakeEventStream(ctx, true)
+}
+
+func (sr *StreamingRun) WatchUntilHalt(ctx context.Context) iter.Seq2[workflow.Event, error] {
+	return sr.runHandle.TakeEventStream(ctx, false)
 }
 
 func (sr *StreamingRun) Cancel() {

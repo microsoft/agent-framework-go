@@ -7,11 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"sync"
 	"sync/atomic"
-	"time"
-	"unsafe"
 
-	"github.com/microsoft/agent-framework-go/internal/concurrent"
 	"github.com/microsoft/agent-framework-go/workflow"
 )
 
@@ -50,19 +48,13 @@ func (iw *inputWaiter) signalInput() {
 	}
 }
 
-// waitForInput: waits for signal or timeout/cancellation
-func (iw *inputWaiter) waitForInput(ctx context.Context, timeout time.Duration) error {
-	var cancel context.CancelFunc
-	if timeout > 0 {
-		ctx, cancel = context.WithTimeout(ctx, timeout)
-		defer cancel()
-	}
-
+// waitForInput: blocks until the input signal fires or ctx is canceled.
+func (iw *inputWaiter) waitForInput(ctx context.Context) error {
 	select {
 	case <-iw.signal:
 		return nil // Got signal
 	case <-ctx.Done():
-		return ctx.Err() // Timeout or cancellation
+		return ctx.Err() // Cancellation
 	}
 }
 
@@ -125,13 +117,14 @@ func (s *streamingRunEventStream) runLoop() {
 		s.onEventRaised,
 	)
 
-	// Wait for the first input before starting
-	// The consumer will call EnqueueMessage which signals the run loop
-	if err := s.inputWaiter.waitForInput(ctx, 0); err != nil {
+	// Wait for the first input before starting.
+	// The consumer will call EnqueueMessage which signals the run loop.
+	// Note: RunHandle also signals here on checkpoint resume when there are
+	// already pending requests, so the first iteration can emit a
+	// PendingRequests halt signal even without unprocessed messages.
+	if err := s.inputWaiter.waitForInput(ctx); err != nil {
 		return
 	}
-
-	s.setStatus(workflow.RunStatusRunning)
 
 	for {
 		select {
@@ -142,18 +135,31 @@ func (s *streamingRunEventStream) runLoop() {
 
 		// Run all available supersteps continuously
 		// Events are streamed out in real-time as they happen via the event handler
-		for s.stepRunner.HasUnprocessedMessages() {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
+		if s.stepRunner.HasUnprocessedMessages() {
+			// Flip to Running only when there's actual work to process.
+			// This is intentionally inside the HasUnprocessedMessages branch so
+			// that stale input signals cannot transiently flip status back to
+			// Running after a prior halt has already been observed by callers
+			// (e.g. Run.RunToNextHalt returning after reading an Idle halt signal).
+			s.setStatus(workflow.RunStatusRunning)
 
-			if _, err := s.stepRunner.RunSuperStep(ctx); err != nil {
-				// Send error event
-				s.sendEvent(ctx, workflow.ErrorEvent{Error: err})
-				cancel()
-				return
+			// Emit StartedEvent only when there's actual work to process,
+			// to avoid spurious events on no-work loop iterations.
+			s.sendEvent(ctx, workflow.StartedEvent{})
+
+			for s.stepRunner.HasUnprocessedMessages() {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+
+				if _, err := s.stepRunner.RunSuperStep(ctx); err != nil {
+					// Send error event
+					s.sendEvent(ctx, workflow.ErrorEvent{Error: err})
+					cancel()
+					return
+				}
 			}
 		}
 
@@ -176,17 +182,12 @@ func (s *streamingRunEventStream) runLoop() {
 			return
 		}
 
-		// Wait for next input from the consumer
-		// Works for both Idle (no work) and PendingRequests (waiting for responses)
-		if err := s.inputWaiter.waitForInput(ctx, time.Second); err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			// Timeout - continue to next iteration
+		// Wait for next input from the consumer.
+		// Works for both Idle (no work) and PendingRequests (waiting for
+		// responses). The wait is unbounded; signals will wake it.
+		if err := s.inputWaiter.waitForInput(ctx); err != nil {
+			return
 		}
-
-		// When signaled, resume running
-		s.setStatus(workflow.RunStatusRunning)
 	}
 }
 
@@ -217,8 +218,18 @@ func (s *streamingRunEventStream) SignalInput() {
 }
 
 func (s *streamingRunEventStream) TakeEventStream(ctx context.Context, blockOnPendingRequest bool) iter.Seq2[workflow.Event, error] {
-	// Get the current epoch - we'll only respond to completion signals from this epoch or later
-	myEpoch := s.completionEpoch.Load() + 1
+	// Decide which completion epoch to expect. If the run loop has fresh
+	// work (or is currently running), we want the *next* completion signal;
+	// otherwise the run has already halted and we should consume the halt
+	// signal that was emitted before this consumer arrived.
+	currentEpoch := s.completionEpoch.Load()
+	expectingFreshWork := s.stepRunner.HasUnprocessedMessages() || s.getStatus() == workflow.RunStatusRunning
+	var myEpoch int64
+	if expectingFreshWork {
+		myEpoch = currentEpoch + 1
+	} else {
+		myEpoch = currentEpoch
+	}
 
 	return func(yield func(workflow.Event, error) bool) {
 		for {
@@ -367,12 +378,18 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 			}
 		}()
 
-		// Event collection queue
-		var eventSink concurrent.Queue[workflow.Event]
+		// Event collection sink. Protected by sinkMu; we drain it after
+		// every superstep by swapping in a fresh slice.
+		var (
+			sinkMu    sync.Mutex
+			eventSink []workflow.Event
+		)
 
 		// Subscribe to events
 		eventHandler := func(ctx context.Context, sender any, evt workflow.Event) error {
-			eventSink.Enqueue(evt)
+			sinkMu.Lock()
+			eventSink = append(eventSink, evt)
+			sinkMu.Unlock()
 			return nil
 		}
 
@@ -399,6 +416,13 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 
 		l.setStatus(workflow.RunStatusRunning)
 
+		// Emit StartedEvent only when there's actual work to process.
+		if l.stepRunner.HasUnprocessedMessages() {
+			sinkMu.Lock()
+			eventSink = append(eventSink, workflow.StartedEvent{})
+			sinkMu.Unlock()
+		}
+
 		for {
 			// Run all available supersteps
 			for l.stepRunner.HasUnprocessedMessages() && linkedCtx.Err() == nil {
@@ -409,14 +433,14 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 					return
 				}
 
-				// Collect and send events
-				events := (*concurrent.Queue[workflow.Event])(atomic.SwapPointer(
-					(*unsafe.Pointer)(unsafe.Pointer(&eventSink)),
-					unsafe.Pointer(new(concurrent.Queue[workflow.Event]))),
-				)
+				// Drain the event sink atomically.
+				sinkMu.Lock()
+				events := eventSink
+				eventSink = nil
+				sinkMu.Unlock()
 
 				var hadRequestHaltEvent bool
-				for evt := range events.All() {
+				for _, evt := range events {
 					if errors.Is(linkedCtx.Err(), context.Canceled) {
 						return // Exit if cancellation is requested
 					}
@@ -449,11 +473,8 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 
 			// If blocking on pending requests and we have pending requests, wait for input
 			if blockOnPendingRequest && status == workflow.RunStatusPendingRequests {
-				if err := l.inputWaiter.waitForInput(linkedCtx, time.Second); err != nil {
-					if linkedCtx.Err() != nil {
-						return
-					}
-					// Timeout - continue
+				if err := l.inputWaiter.waitForInput(linkedCtx); err != nil {
+					return
 				}
 			} else {
 				// No more work to do
