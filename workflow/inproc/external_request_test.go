@@ -12,6 +12,10 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
 )
 
+type requestPortStringer string
+
+func (s requestPortStringer) String() string { return string(s) }
+
 // TestPostRequestFromExecutor verifies that an executor can raise an
 // ExternalRequest via Context.PostRequest, that the matching ExternalResponse
 // is routed back to that executor (not to the start executor), and that the
@@ -240,9 +244,9 @@ func TestExternalResponse_UnsolicitedResponseErrors(t *testing.T) {
 		Response: reflect.TypeFor[int](),
 	}
 	fakeResp := &workflow.ExternalResponse{
-		RequestID:   "no-such-id",
-		RequestPort: port,
-		Data:        workflow.AnyPortableValue(int(7)),
+		RequestID: "no-such-id",
+		PortInfo:  workflow.NewRequestPortInfo(port),
+		Data:      workflow.AnyPortableValue(int(7)),
 	}
 	if err := stream.SendResponse(ctx, fakeResp); err != nil {
 		t.Fatalf("SendResponse: %v", err)
@@ -278,6 +282,20 @@ func TestExternalRequest_NewRequest_TypeValidation(t *testing.T) {
 	}
 }
 
+func TestExternalRequest_NewRequest_AssignableTypeValidation(t *testing.T) {
+	port := workflow.RequestPort{
+		ID:       "p",
+		Request:  reflect.TypeFor[interface{ String() string }](),
+		Response: reflect.TypeFor[int](),
+	}
+	if _, err := workflow.NewExternalRequest("", port, requestPortStringer("ok")); err != nil {
+		t.Errorf("assignable request type should succeed: %v", err)
+	}
+	if _, err := workflow.NewExternalRequest("", port, 42); err == nil {
+		t.Error("non-assignable request type should fail")
+	}
+}
+
 func TestExternalRequest_NewResponse_TypeValidation(t *testing.T) {
 	port := workflow.RequestPort{
 		ID:       "p",
@@ -293,6 +311,28 @@ func TestExternalRequest_NewResponse_TypeValidation(t *testing.T) {
 	}
 	if _, err := req.NewResponse("wrong"); err == nil {
 		t.Error("non-matching response type should fail")
+	}
+}
+
+func TestExternalRequest_UsesPortInfo(t *testing.T) {
+	port := workflow.RequestPort{
+		ID:       "p",
+		Request:  reflect.TypeFor[string](),
+		Response: reflect.TypeFor[int](),
+	}
+	req, err := workflow.NewExternalRequest("rid", port, "hi")
+	if err != nil {
+		t.Fatalf("NewExternalRequest: %v", err)
+	}
+	if got, want := req.PortInfo, workflow.NewRequestPortInfo(port); got != want {
+		t.Fatalf("PortInfo = %#v, want %#v", got, want)
+	}
+	resp, err := req.NewResponse(int(42))
+	if err != nil {
+		t.Fatalf("NewResponse: %v", err)
+	}
+	if got, want := resp.PortInfo, req.PortInfo; got != want {
+		t.Errorf("response PortInfo = %#v, want %#v", got, want)
 	}
 }
 

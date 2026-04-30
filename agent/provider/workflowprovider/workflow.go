@@ -65,7 +65,7 @@ type Config struct {
 // that a matching response content in a subsequent agent run can be
 // translated back to a [workflow.ExternalResponse].
 type pendingReq struct {
-	port              workflow.RequestPort
+	portInfo          workflow.RequestPortInfo
 	externalRequestID string
 	requestContent    message.Content
 }
@@ -320,11 +320,11 @@ func splitResponses(
 				if pr, found := pending[id]; found {
 					responseContent := normalizeResponseContent(c, pr.requestContent)
 					responses = append(responses, &workflow.ExternalResponse{
-						RequestID:   pr.externalRequestID,
-						RequestPort: pr.port,
-						Data:        workflow.AnyPortableValue(responseContent),
+						RequestID: pr.externalRequestID,
+						PortInfo:  pr.portInfo,
+						Data:      workflow.AnyPortableValue(responseContent),
 					})
-					if owner, ok := lookupPortOwner(pr.port.ID); ok && owner == startExecutorID {
+					if owner, ok := lookupPortOwner(pr.portInfo.PortID); ok && owner == startExecutorID {
 						hasMatchedStartResponse = true
 					}
 					delete(pending, id)
@@ -381,11 +381,7 @@ func requestToUpdate(req *workflow.ExternalRequest, responseID string, raw any) 
 	if req == nil {
 		return nil, "", pendingReq{}, false
 	}
-	v, ok := req.Data.As(req.RequestPort.Request)
-	if !ok {
-		return nil, "", pendingReq{}, false
-	}
-	c, ok := v.(message.Content)
+	c, ok := req.Data.Any().(message.Content)
 	if !ok {
 		return nil, "", pendingReq{}, false
 	}
@@ -394,7 +390,7 @@ func requestToUpdate(req *workflow.ExternalRequest, responseID string, raw any) 
 		return nil, "", pendingReq{}, false
 	}
 	return newUpdate(responseID, raw, surfaced), id, pendingReq{
-		port:              req.RequestPort,
+		portInfo:          req.PortInfo,
 		externalRequestID: req.ID,
 		requestContent:    c,
 	}, true

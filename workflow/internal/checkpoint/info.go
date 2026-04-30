@@ -67,7 +67,7 @@ func (w *WorkflowInfo) Match(wf *workflow.Workflow) bool {
 		return false
 	}
 	for port := range w.requestPorts {
-		other, ok := wf.Ports[port.ID]
+		other, ok := wf.Ports[port.PortID]
 		if !ok {
 			return false
 		}

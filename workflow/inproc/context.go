@@ -460,7 +460,7 @@ func (proc *runnerContext) Post(ctx context.Context, ownerID string, request *wo
 	}
 	proc.externalRequests[request.ID] = request
 	proc.requestOwners[request.ID] = ownerID
-	proc.responsePortOwners[request.RequestPort.ID] = ownerID
+	proc.responsePortOwners[request.PortInfo.PortID] = ownerID
 	proc.requestsMu.Unlock()
 
 	return proc.AddEvent(ctx, workflow.RequestInfoEvent{Request: request})

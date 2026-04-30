@@ -177,8 +177,8 @@ func TestRequestPortInfo_FieldsMatchSource(t *testing.T) {
 		Response: reflect.TypeFor[int](),
 	}
 	info := workflow.NewRequestPortInfo(port)
-	if info.ID != port.ID {
-		t.Errorf("ID = %q, want %q", info.ID, port.ID)
+	if info.PortID != port.ID {
+		t.Errorf("ID = %q, want %q", info.PortID, port.ID)
 	}
 	if !info.RequestType.Match(port.Request) {
 		t.Errorf("RequestType does not match string")

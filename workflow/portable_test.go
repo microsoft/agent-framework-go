@@ -19,7 +19,6 @@ func TestPortableValueRoundtrip(t *testing.T) {
 	testRountrip(t, message.NewText("hello"))
 	testRountrip(t, message.RoleAssistant)
 	testRountrip(t, message.ErrorContent{Message: "error message"})
-	testRountrip(t, workflow.AnyPortableValue(0))
 }
 
 func testRountrip[T any](t *testing.T, v T) {
@@ -31,8 +30,11 @@ func testRountrip[T any](t *testing.T, v T) {
 func testNonDelayedRountrip[T any](t *testing.T, v T) {
 	t.Helper()
 	pv := workflow.AnyPortableValue(v)
-	if _, ok := workflow.PortableValueAs[struct{}](pv); ok {
-		t.Errorf("nondelayed: expected not to be struct{}")
+	if got, want := pv.TypeID, portableValueTypeID(v); got != want {
+		t.Errorf("nondelayed: TypeID = %+v, want %+v", got, want)
+	}
+	if _, ok := workflow.PortableValueAs[func()](pv); ok {
+		t.Errorf("nondelayed: expected not to be func()")
 	}
 	got, ok := workflow.PortableValueAs[T](pv)
 	if !ok {
@@ -45,23 +47,83 @@ func testNonDelayedRountrip[T any](t *testing.T, v T) {
 
 func testDelayedRoundtrip[T any](t *testing.T, v T) {
 	t.Helper()
-	data, err := json.Marshal(v)
+	pv := workflow.AnyPortableValue(v)
+	data, err := json.Marshal(pv)
 	if err != nil {
 		t.Error(err)
 	}
-	var raw json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	var delayed workflow.PortableValue
+	if err := json.Unmarshal(data, &delayed); err != nil {
 		t.Error(err)
 	}
-	pv := workflow.AnyPortableValue(v)
-	if _, ok := workflow.PortableValueAs[struct{}](pv); ok {
-		t.Errorf("delayed: expected not to be struct{}")
+	if got, want := delayed.TypeID, portableValueTypeID(v); got != want {
+		t.Errorf("delayed: TypeID = %+v, want %+v", got, want)
 	}
-	got, ok := workflow.PortableValueAs[T](pv)
+	if !delayed.Delayed() {
+		t.Errorf("delayed: expected delayed value after JSON unmarshal")
+	}
+	if _, ok := workflow.PortableValueAs[func()](delayed); ok {
+		t.Errorf("delayed: expected not to be func()")
+	}
+	got, ok := workflow.PortableValueAs[T](delayed)
 	if !ok {
 		t.Errorf("delayed: expected to be able to convert to any")
 	}
 	if !reflect.DeepEqual(v, got) {
 		t.Errorf("delayed: expected value %v, got %v", v, got)
 	}
+	if !delayed.Delayed() {
+		t.Errorf("delayed: by-value conversion should not update the original value cache")
+	}
+	gotAny, ok := delayed.As(reflect.TypeOf(v))
+	if !ok {
+		t.Errorf("delayed: expected pointer-receiver conversion to succeed")
+	}
+	if !reflect.DeepEqual(v, gotAny) {
+		t.Errorf("delayed: expected pointer-receiver value %v, got %v", v, gotAny)
+	}
+	if delayed.Delayed() {
+		t.Errorf("delayed: expected delayed value to use deserialized cache after conversion")
+	}
+}
+
+func TestAnyPortableValue_ReturnsPortableValueUnmodified(t *testing.T) {
+	pv := workflow.AnyPortableValue(0)
+	got := workflow.AnyPortableValue(pv)
+	if got.TypeID != pv.TypeID {
+		t.Fatalf("TypeID = %+v, want %+v", got.TypeID, pv.TypeID)
+	}
+	value, ok := workflow.PortableValueAs[int](got)
+	if !ok {
+		t.Fatal("expected wrapped PortableValue to retain original int value")
+	}
+	if value != 0 {
+		t.Fatalf("value = %d, want 0", value)
+	}
+}
+
+func TestPortableValue_RejectsNil(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic for nil PortableValue")
+		}
+	}()
+	_ = workflow.AnyPortableValue(nil)
+}
+
+func TestPortableValue_RejectsZeroJSON(t *testing.T) {
+	if _, err := json.Marshal(workflow.PortableValue{}); err == nil {
+		t.Fatal("expected marshal error for zero PortableValue")
+	}
+	var got workflow.PortableValue
+	if err := json.Unmarshal([]byte("null"), &got); err == nil {
+		t.Fatal("expected unmarshal error for null PortableValue")
+	}
+}
+
+func portableValueTypeID(v any) workflow.TypeID {
+	if pv, ok := v.(workflow.PortableValue); ok {
+		return pv.TypeID
+	}
+	return workflow.NewTypeID(reflect.TypeOf(v))
 }

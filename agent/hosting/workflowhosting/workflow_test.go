@@ -784,7 +784,7 @@ func TestHostedAgent_InterceptDisabled_PostsExternalRequest(t *testing.T) {
 	var sawExternalRequest bool
 	for evt := range run.OutgoingEvents() {
 		if r, ok := evt.(workflow.RequestInfoEvent); ok {
-			if r.Request != nil && r.Request.RequestPort.ID == host.ID+"_UserInput" {
+			if r.Request != nil && r.Request.PortInfo.PortID == host.ID+"_UserInput" {
 				sawExternalRequest = true
 			}
 		}

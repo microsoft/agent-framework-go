@@ -1,16 +1,26 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/hosting/workflowhosting"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
+	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
 	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/azure"
+)
+
+var (
+	endpoint   = os.Getenv("AZURE_OPENAI_ENDPOINT")
+	apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
+	deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
 )
 
 // This sample introduces the use of AI agents as executors within a workflow.
@@ -62,12 +72,17 @@ func main() {
 }
 
 func newAgent(language string) *agent.Agent {
+	token := demo.AzureTokenCredential()
 	return openaichatagent.New(
-		openai.NewClient(),
+		openai.NewClient(
+			azure.WithEndpoint(endpoint, apiVersion),
+			azure.WithTokenCredential(token),
+		),
 		openaichatagent.Config{
-			Model: "gpt-5-nano",
+			Model: deployment,
 			Config: agent.Config{
 				Instructions: fmt.Sprintf("You are a helpful assistant who translates text to %s.", language),
 			},
-		})
+		},
+	)
 }
