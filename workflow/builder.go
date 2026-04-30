@@ -153,9 +153,9 @@ func (wb *Builder) AddFanOutEdge(source *ExecutorBinding, targets []*ExecutorBin
 	return wb
 }
 
-// AddFanInBarrierEdge adds a fan-in edge that waits for all sources before
-// dispatching to the target.
-func (wb *Builder) AddFanInBarrierEdge(target *ExecutorBinding, sources []*ExecutorBinding, opts ...EdgeOption) *Builder {
+// AddFanInBarrierEdge adds a fan-in edge from sources to target, waiting for
+// all sources before dispatching to the target.
+func (wb *Builder) AddFanInBarrierEdge(sources []*ExecutorBinding, target *ExecutorBinding, opts ...EdgeOption) *Builder {
 	if wb.err != nil {
 		return wb
 	}

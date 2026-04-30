@@ -226,7 +226,7 @@ func TestFanInEdgeRouting_StateResetsAfterDelivery(t *testing.T) {
 
 	wf, err := workflow.NewBuilder(starter).
 		AddFanOutEdge(starter, []*workflow.ExecutorBinding{a, b}).
-		AddFanInBarrierEdge(c, []*workflow.ExecutorBinding{a, b}).
+		AddFanInBarrierEdge([]*workflow.ExecutorBinding{a, b}, c).
 		Build()
 	if err != nil {
 		t.Fatalf("Build: %v", err)
@@ -307,7 +307,7 @@ func TestFanInBarrier_DeliversOnlyAfterAllSourcesProduce(t *testing.T) {
 	starter := emitsExecutor("starter", "kick")
 	wf, err := workflow.NewBuilder(starter).
 		AddFanOutEdge(starter, []*workflow.ExecutorBinding{source1, source2}).
-		AddFanInBarrierEdge(target, []*workflow.ExecutorBinding{source1, source2}).
+		AddFanInBarrierEdge([]*workflow.ExecutorBinding{source1, source2}, target).
 		Build()
 	if err != nil {
 		t.Fatalf("Build: %v", err)
