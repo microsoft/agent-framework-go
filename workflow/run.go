@@ -18,18 +18,33 @@ const (
 )
 
 type Run interface {
+	IsCheckpointingEnabled() bool
+	Checkpoints() []CheckpointInfo
+	LastCheckpoint() (CheckpointInfo, bool)
+	RestoreCheckpoint(ctx context.Context, checkpointInfo CheckpointInfo) error
 	SessionID() string
 	GetStatus(ctx context.Context) (RunStatus, error)
+
 	OutgoingEvents() iter.Seq[Event]
 	NewEventCount() int
 	NewEvents() iter.Seq[Event]
-	Resume(ctx context.Context, responses ...*ExternalResponse) (bool, error)
+	Resume(ctx context.Context, messages ...any) (bool, error)
+	Close(ctx context.Context) error
 }
 
 type StreamingRun interface {
+	IsCheckpointingEnabled() bool
+	Checkpoints() []CheckpointInfo
+	LastCheckpoint() (CheckpointInfo, bool)
+	RestoreCheckpoint(ctx context.Context, checkpointInfo CheckpointInfo) error
 	SessionID() string
 	GetStatus(ctx context.Context) (RunStatus, error)
+
 	SendResponse(ctx context.Context, response *ExternalResponse) error
+
+	// SendMessage sends a message to the workflow. If the message type is not a
+	// valid input type for the workflow, the returned error wraps
+	// [ErrInvalidInputType].
 	SendMessage(ctx context.Context, message any) error
 
 	// WatchStream returns an iterator over workflow events. The iterator
@@ -38,15 +53,30 @@ type StreamingRun interface {
 	// [RunStatusIdle] or [RunStatusEnded] (or its context is canceled).
 	WatchStream(ctx context.Context) iter.Seq2[Event, error]
 
-	// WatchUntilHalt returns an iterator over workflow events that ends
-	// at the next halt boundary, including [RunStatusPendingRequests]. Use
-	// this when the caller wants to observe pending external requests and
-	// resume the run later via [SendResponse].
-	WatchUntilHalt(ctx context.Context) iter.Seq2[Event, error]
+	CancelRun() error
+	Close(ctx context.Context) error
+}
 
-	// ResponsePortExecutorID returns the executor that handles responses
-	// on the given [RequestPort], or ("", false) if no such port is registered.
-	ResponsePortExecutorID(portID string) (string, bool)
+// ExecutionEnvironment defines an environment for running, streaming, and
+// resuming workflows, with optional checkpointing support.
+type ExecutionEnvironment interface {
+	// IsCheckpointingEnabled reports whether checkpointing is configured for
+	// this environment.
+	IsCheckpointingEnabled() bool
 
-	Cancel()
+	// RunStreaming starts a streaming run of the workflow and sends the provided
+	// initial messages. When no messages are provided, the starting executor will
+	// not be invoked until an input message is received.
+	RunStreaming(ctx context.Context, wf *Workflow, sessionID string, msgs ...any) (StreamingRun, error)
+
+	// ResumeStreaming resumes a streaming workflow run from a checkpoint.
+	ResumeStreaming(ctx context.Context, wf *Workflow, fromCheckpoint CheckpointInfo) (StreamingRun, error)
+
+	// Run starts a non-streaming run of the workflow and runs it until its
+	// first halt.
+	Run(ctx context.Context, wf *Workflow, sessionID string, msgs ...any) (Run, error)
+
+	// Resume resumes a non-streaming workflow run from a checkpoint and
+	// runs it until its first halt.
+	Resume(ctx context.Context, wf *Workflow, fromCheckpoint CheckpointInfo) (Run, error)
 }

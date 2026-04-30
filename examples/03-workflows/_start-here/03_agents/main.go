@@ -48,7 +48,9 @@ func main() {
 		panic(err)
 	}
 	emitEvents := true
-	run.SendMessage(context.Background(), workflow.TurnToken{EmitEvents: &emitEvents})
+	if err := run.SendMessage(context.Background(), workflow.TurnToken{EmitEvents: &emitEvents}); err != nil {
+		panic(err)
+	}
 	for evt, err := range run.WatchStream(context.Background()) {
 		if err != nil {
 			panic(err)

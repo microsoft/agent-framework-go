@@ -86,8 +86,20 @@ func (h *RunHandle) SessionID() string {
 	return h.stepRunner.SessionID()
 }
 
+func (h *RunHandle) IsCheckpointingEnabled() bool {
+	return h.checkpointHandle.IsCheckpointingEnabled()
+}
+
 func (h *RunHandle) Checkpoints() []workflow.CheckpointInfo {
 	return h.checkpointHandle.Checkpoints()
+}
+
+func (h *RunHandle) LastCheckpoint() (workflow.CheckpointInfo, bool) {
+	checkpoints := h.Checkpoints()
+	if len(checkpoints) == 0 {
+		return workflow.CheckpointInfo{}, false
+	}
+	return checkpoints[len(checkpoints)-1], true
 }
 
 func (h *RunHandle) GetStatus(ctx context.Context) (workflow.RunStatus, error) {
@@ -143,11 +155,15 @@ func (h *RunHandle) IsValidInputType(ctx context.Context, typ reflect.Type) bool
 }
 
 func (h *RunHandle) EnqueueMessage(ctx context.Context, message any) error {
-	// Check if it's an ExternalResponse
 	if response, ok := message.(*workflow.ExternalResponse); ok {
 		return h.EnqueueResponse(ctx, response)
 	}
-
+	if message == nil {
+		return fmt.Errorf("message cannot be nil")
+	}
+	if !h.IsValidInputType(ctx, reflect.TypeOf(message)) {
+		return fmt.Errorf("message type %v is not a valid input type for this workflow: %w", reflect.TypeOf(message), workflow.ErrInvalidInputType)
+	}
 	if err := h.stepRunner.EnqueueMessage(ctx, message); err != nil {
 		return err
 	}
@@ -233,6 +249,22 @@ func (r *Run) SessionID() string {
 	return r.runHandle.SessionID()
 }
 
+func (r *Run) IsCheckpointingEnabled() bool {
+	return r.runHandle.IsCheckpointingEnabled()
+}
+
+func (r *Run) Checkpoints() []workflow.CheckpointInfo {
+	return r.runHandle.Checkpoints()
+}
+
+func (r *Run) LastCheckpoint() (workflow.CheckpointInfo, bool) {
+	return r.runHandle.LastCheckpoint()
+}
+
+func (r *Run) RestoreCheckpoint(ctx context.Context, checkpointInfo workflow.CheckpointInfo) error {
+	return r.runHandle.RestoreCheckpoint(ctx, checkpointInfo)
+}
+
 func (r *Run) GetStatus(ctx context.Context) (workflow.RunStatus, error) {
 	return r.runHandle.GetStatus(ctx)
 }
@@ -260,13 +292,17 @@ func (r *Run) NewEvents() iter.Seq[workflow.Event] {
 	}
 }
 
-func (r *Run) Resume(ctx context.Context, responses ...*workflow.ExternalResponse) (bool, error) {
-	for _, resp := range responses {
-		if err := r.runHandle.EnqueueResponse(ctx, resp); err != nil {
+func (r *Run) Resume(ctx context.Context, messages ...any) (bool, error) {
+	for _, msg := range messages {
+		if err := r.runHandle.EnqueueMessage(ctx, msg); err != nil {
 			return false, err
 		}
 	}
 	return r.RunToNextHalt(ctx)
+}
+
+func (r *Run) Close(ctx context.Context) error {
+	return r.runHandle.Close(ctx)
 }
 
 func (r *Run) RunToNextHalt(ctx context.Context) (bool, error) {
@@ -295,6 +331,22 @@ func (sr *StreamingRun) SessionID() string {
 	return sr.runHandle.SessionID()
 }
 
+func (sr *StreamingRun) IsCheckpointingEnabled() bool {
+	return sr.runHandle.IsCheckpointingEnabled()
+}
+
+func (sr *StreamingRun) Checkpoints() []workflow.CheckpointInfo {
+	return sr.runHandle.Checkpoints()
+}
+
+func (sr *StreamingRun) LastCheckpoint() (workflow.CheckpointInfo, bool) {
+	return sr.runHandle.LastCheckpoint()
+}
+
+func (sr *StreamingRun) RestoreCheckpoint(ctx context.Context, checkpointInfo workflow.CheckpointInfo) error {
+	return sr.runHandle.RestoreCheckpoint(ctx, checkpointInfo)
+}
+
 func (sr *StreamingRun) GetStatus(ctx context.Context) (workflow.RunStatus, error) {
 	return sr.runHandle.GetStatus(ctx)
 }
@@ -319,6 +371,11 @@ func (sr *StreamingRun) WatchUntilHalt(ctx context.Context) iter.Seq2[workflow.E
 	return sr.runHandle.TakeEventStream(ctx, false)
 }
 
-func (sr *StreamingRun) Cancel() {
+func (sr *StreamingRun) CancelRun() error {
 	sr.runHandle.Cancel()
+	return nil
+}
+
+func (sr *StreamingRun) Close(ctx context.Context) error {
+	return sr.runHandle.Close(ctx)
 }

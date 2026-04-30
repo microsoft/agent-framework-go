@@ -115,18 +115,14 @@ func TestStreamAsync_ExecutesWorkflowWithTurnToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenStream: %v", err)
 	}
-	defer stream.Cancel()
+	defer func() { _ = stream.CancelRun() }()
 
-	if err := stream.SendMessage(ctx, []*message.Message{{
+	sendStreamMessage(t, stream, ctx, []*message.Message{{
 		Role:     message.RoleUser,
 		Contents: []message.Content{&message.TextContent{Text: "Hello"}},
-	}}); err != nil {
-		t.Fatalf("SendMessage: %v", err)
-	}
+	}})
 	emit := true
-	if err := stream.SendMessage(ctx, workflow.TurnToken{EmitEvents: &emit}); err != nil {
-		t.Fatalf("SendMessage(TurnToken): %v", err)
-	}
+	sendStreamMessage(t, stream, ctx, workflow.TurnToken{EmitEvents: &emit})
 
 	var events []workflow.Event
 	for evt, err := range stream.WatchStream(ctx) {
@@ -173,14 +169,10 @@ func TestRunAsyncAndStreamAsync_ProduceSimilarResults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenStream: %v", err)
 	}
-	defer stream.Cancel()
-	if err := stream.SendMessage(ctx, input()); err != nil {
-		t.Fatalf("SendMessage: %v", err)
-	}
+	defer func() { _ = stream.CancelRun() }()
+	sendStreamMessage(t, stream, ctx, input())
 	emit := true
-	if err := stream.SendMessage(ctx, workflow.TurnToken{EmitEvents: &emit}); err != nil {
-		t.Fatalf("SendMessage(TurnToken): %v", err)
-	}
+	sendStreamMessage(t, stream, ctx, workflow.TurnToken{EmitEvents: &emit})
 	var streamingEvents []workflow.Event
 	for evt, err := range stream.WatchStream(ctx) {
 		if err != nil {
@@ -209,18 +201,14 @@ func TestRunStreamingAsync_StatusReachesIdleBeforeWatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenStream: %v", err)
 	}
-	defer stream.Cancel()
+	defer func() { _ = stream.CancelRun() }()
 
-	if err := stream.SendMessage(ctx, []*message.Message{{
+	sendStreamMessage(t, stream, ctx, []*message.Message{{
 		Role:     message.RoleUser,
 		Contents: []message.Content{&message.TextContent{Text: "Hello"}},
-	}}); err != nil {
-		t.Fatalf("SendMessage: %v", err)
-	}
+	}})
 	emit := true
-	if err := stream.SendMessage(ctx, workflow.TurnToken{EmitEvents: &emit}); err != nil {
-		t.Fatalf("SendMessage(TurnToken): %v", err)
-	}
+	sendStreamMessage(t, stream, ctx, workflow.TurnToken{EmitEvents: &emit})
 
 	deadline := 200
 	for deadline > 0 {

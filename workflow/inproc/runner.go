@@ -203,7 +203,7 @@ func (r *runner) EnqueueMessage(ctx context.Context, message any) error {
 
 	messageType := reflect.TypeOf(message)
 	if !r.IsValidInputType(ctx, messageType) {
-		return fmt.Errorf("message type %v is not a valid input type for this workflow", messageType)
+		return fmt.Errorf("message type %v is not a valid input type for this workflow: %w", messageType, workflow.ErrInvalidInputType)
 	}
 
 	return r.runContext.AddExternalMessage(ctx, message, messageType)
@@ -251,6 +251,10 @@ func (r *runner) RequestEndRun(ctx context.Context) error {
 }
 
 // Checkpoints returns the list of created checkpoints.
+func (r *runner) IsCheckpointingEnabled() bool {
+	return r.checkpointMgr != nil
+}
+
 func (r *runner) Checkpoints() []workflow.CheckpointInfo {
 	return r.checkpoints
 }

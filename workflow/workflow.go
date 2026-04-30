@@ -78,9 +78,13 @@ type Workflow struct {
 	OutputExecutors  map[string]struct{}
 	Ports            map[string]RequestPort
 
-	needsReset         atomic.Bool
-	ownerToken         atomic.Value
-	ownedAsSubworkflow bool
+	needsReset atomic.Bool
+	ownerToken atomic.Pointer[workflowOwner]
+}
+
+type workflowOwner struct {
+	token       any
+	subworkflow bool
 }
 
 func (w *Workflow) DescribeProtocol() (*ProtocolDescriptor, error) {
@@ -133,50 +137,77 @@ func (w *Workflow) TryReset() bool {
 }
 
 func (w *Workflow) CheckOwnership(token any) bool {
-	return w.ownerToken.Load() == token
+	owner := w.ownerToken.Load()
+	if owner == nil {
+		return token == nil
+	}
+	return owner.token == token
 }
 
 func (w *Workflow) TakeOwnership(token any, newToken any, subworkflow bool) error {
-	// Perform atomic compare-and-swap
-	ownerToken := w.ownerToken.Load()
-	if ownerToken == nil && token != nil {
-		return errors.New("existing ownership token was provided, but the workflow is unowned")
+	if newToken == nil {
+		return errors.New("new ownership token cannot be nil")
 	}
-	if w.ownerToken.CompareAndSwap(token, newToken) {
-		if ownerToken == nil && w.needsReset.Load() {
-			// There is no owner, but the workflow failed to reset on ownership release
-			// (because there are shared executors).
-			return errors.New("cannot reuse Workflow with shared Executor instances that do not implement IResettableExecutor")
+
+	newOwner := &workflowOwner{token: newToken, subworkflow: subworkflow}
+	for {
+		owner := w.ownerToken.Load()
+		if owner == nil {
+			if token != nil {
+				return errors.New("existing ownership token was provided, but the workflow is unowned")
+			}
+			if w.needsReset.Load() {
+				// There is no owner, but the workflow failed to reset on ownership release
+				// (because there are shared executors).
+				return errors.New("cannot reuse Workflow with shared Executor instances that do not implement IResettableExecutor")
+			}
+			if w.ownerToken.CompareAndSwap(nil, newOwner) {
+				break
+			}
+			continue
 		}
-	} else {
+
+		if owner.token == token || owner.token == newToken {
+			if w.ownerToken.CompareAndSwap(owner, newOwner) {
+				break
+			}
+			continue
+		}
+
 		// Someone else owns the workflow
 		switch {
-		case subworkflow && w.ownedAsSubworkflow:
+		case subworkflow && owner.subworkflow:
 			return errors.New("cannot use a Workflow as a subworkflow of multiple parent workflows")
-		case subworkflow && !w.ownedAsSubworkflow:
+		case subworkflow && !owner.subworkflow:
 			return errors.New("cannot use a running Workflow as a subworkflow")
-		case !subworkflow && w.ownedAsSubworkflow:
-			return errors.New("cannot directly run a Workflow that is a subworkflow of another workflow")
-		case !subworkflow && !w.ownedAsSubworkflow:
+		case !subworkflow && owner.subworkflow:
+			return errors.New("cannot directly run a Workflow that is a subworkflow")
+		case !subworkflow && !owner.subworkflow:
 			return errors.New("cannot use a Workflow that is already owned by another runner or parent workflow")
 		default:
 			panic("unreachable")
 		}
 	}
+
 	// Successfully took ownership (or was already owned by us)
-	w.needsReset.Store(true)
-	w.ownedAsSubworkflow = subworkflow
+	w.needsReset.Store(w.HasResettableExecutors())
 	return nil
 }
 
 func (w *Workflow) ReleaseOwnership(token any) error {
-	ownerToken := w.ownerToken.Load()
-	if ownerToken == nil {
-		return errors.New("attempting to release ownership of a Workflow that is not owned")
+	for {
+		owner := w.ownerToken.Load()
+		if owner == nil {
+			return errors.New("attempting to release ownership of a Workflow that is not owned")
+		}
+		if owner.token != token {
+			return errors.New("attempt to release ownership of a Workflow by non-owner")
+		}
+		if w.ownerToken.CompareAndSwap(owner, nil) {
+			break
+		}
 	}
-	if !w.ownerToken.CompareAndSwap(token, nil) {
-		return errors.New("attempt to release ownership of a Workflow by non-owner")
-	}
+
 	w.TryReset()
 	return nil
 }

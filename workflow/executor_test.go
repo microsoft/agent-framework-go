@@ -68,7 +68,7 @@ func TestStatefulExecutorCache_AggregatesIncrementally(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenStream: %v", err)
 	}
-	defer stream.Cancel()
+	defer func() { _ = stream.CancelRun() }()
 
 	for _, in := range []string{"a", "b", "c"} {
 		if err := stream.SendMessage(ctx, in); err != nil {

@@ -232,7 +232,7 @@ func TestExternalResponse_UnsolicitedResponseErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenStream: %v", err)
 	}
-	defer stream.Cancel()
+	defer func() { _ = stream.CancelRun() }()
 
 	port := workflow.RequestPort{
 		ID:       "p",

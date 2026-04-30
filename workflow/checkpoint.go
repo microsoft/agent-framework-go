@@ -7,6 +7,7 @@ import (
 )
 
 type checkpointingHandle interface {
+	IsCheckpointingEnabled() bool
 	Checkpoints() []CheckpointInfo
 	RestoreCheckpoint(context.Context, CheckpointInfo) error
 }
@@ -25,6 +26,10 @@ func NewCheckpointed[T any](run T, runner checkpointingHandle) *Checkpointed[T] 
 
 func (c *Checkpointed[T]) Run() T {
 	return c.run
+}
+
+func (c *Checkpointed[T]) IsCheckpointingEnabled() bool {
+	return c.runner.IsCheckpointingEnabled()
 }
 
 func (c *Checkpointed[T]) Checkpoints() []CheckpointInfo {

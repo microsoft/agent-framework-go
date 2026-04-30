@@ -10,6 +10,7 @@ import (
 )
 
 type CheckpointingHandle interface {
+	IsCheckpointingEnabled() bool
 	Checkpoints() []workflow.CheckpointInfo
 	RestoreCheckpoint(context.Context, workflow.CheckpointInfo) error
 }

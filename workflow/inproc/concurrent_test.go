@@ -122,9 +122,9 @@ func TestInprocConcurrent_AcceptsAllConcurrentInOpenStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	stream, err := inproc.Concurrent.OpenStream(context.Background(), wf, "")
+	stream, err := inproc.Concurrent.RunStreaming(context.Background(), wf, "")
 	if err != nil {
 		t.Fatalf("Concurrent.OpenStream: %v", err)
 	}
-	stream.Cancel()
+	_ = stream.CancelRun()
 }
