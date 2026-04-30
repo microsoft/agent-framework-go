@@ -124,7 +124,7 @@ func TestInprocConcurrent_AcceptsAllConcurrentInStream(t *testing.T) {
 	}
 	stream, err := inproc.Concurrent.RunStreaming(context.Background(), wf, "")
 	if err != nil {
-		t.Fatalf("Concurrent.OpenStream: %v", err)
+		t.Fatalf("Concurrent.RunStreaming: %v", err)
 	}
 	_ = stream.CancelRun()
 }

@@ -113,7 +113,7 @@ func TestStreamAsync_ExecutesWorkflowWithTurnToken(t *testing.T) {
 	ctx := context.Background()
 	stream, err := inproc.Stream(ctx, wf, "")
 	if err != nil {
-		t.Fatalf("OpenStream: %v", err)
+		t.Fatalf("Stream: %v", err)
 	}
 	defer func() { _ = stream.CancelRun() }()
 
@@ -167,7 +167,7 @@ func TestRunAsyncAndStreamAsync_ProduceSimilarResults(t *testing.T) {
 
 	stream, err := inproc.Stream(ctx, wf2, "")
 	if err != nil {
-		t.Fatalf("OpenStream: %v", err)
+		t.Fatalf("Stream: %v", err)
 	}
 	defer func() { _ = stream.CancelRun() }()
 	sendStreamMessage(t, stream, ctx, input())
@@ -199,7 +199,7 @@ func TestRunStreamingAsync_StatusReachesIdleBeforeWatch(t *testing.T) {
 	ctx := context.Background()
 	stream, err := inproc.Stream(ctx, wf, "")
 	if err != nil {
-		t.Fatalf("OpenStream: %v", err)
+		t.Fatalf("Stream: %v", err)
 	}
 	defer func() { _ = stream.CancelRun() }()
 

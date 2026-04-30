@@ -112,7 +112,7 @@ func TestStartedEvent_NotEmittedWhenNoWork(t *testing.T) {
 	ctx := context.Background()
 	stream, err := inproc.Stream(ctx, wf, "")
 	if err != nil {
-		t.Fatalf("OpenStream: %v", err)
+		t.Fatalf("Stream: %v", err)
 	}
 	defer func() { _ = stream.CancelRun() }()
 
@@ -206,7 +206,7 @@ func TestStreamingRun_SendMessageReturnsErrInvalidInputType(t *testing.T) {
 	ctx := context.Background()
 	stream, err := inproc.Stream(ctx, wf, "")
 	if err != nil {
-		t.Fatalf("OpenStream: %v", err)
+		t.Fatalf("Stream: %v", err)
 	}
 	defer func() { _ = stream.CancelRun() }()
 
@@ -235,7 +235,7 @@ func TestRunAndStreamingRun_CheckpointableDefaults(t *testing.T) {
 
 	stream, err := inproc.Stream(ctx, wf, "")
 	if err != nil {
-		t.Fatalf("OpenStream: %v", err)
+		t.Fatalf("Stream: %v", err)
 	}
 	defer func() { _ = stream.CancelRun() }()
 	assertStreamingRunCheckpointDefaults(t, stream)
