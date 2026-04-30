@@ -115,10 +115,10 @@ func (s *streamingRunEventStream) runLoop() {
 	defer cancel()
 
 	// Subscribe to events - they will flow directly to the channel as they're raised
-	s.stepRunner.OutgoingEvents().EventRaised = append(
-		s.stepRunner.OutgoingEvents().EventRaised,
-		s.onEventRaised,
-	)
+	eventSink := s.stepRunner.OutgoingEvents()
+	eventHandler := s.onEventRaised
+	eventSink.EventRaised = append(eventSink.EventRaised, eventHandler)
+	defer removeEventHandler(eventSink, eventHandler)
 	if err := s.stepRunner.RepublishPendingEvents(ctx); err != nil {
 		s.sendEvent(ctx, workflow.ErrorEvent{Error: err})
 		cancel()
@@ -201,7 +201,21 @@ func (s *streamingRunEventStream) onEventRaised(ctx context.Context, sender any,
 	if err := s.enqueueEvent(ctx, evt); err != nil {
 		return err
 	}
+	if _, ok := evt.(workflow.ErrorEvent); ok {
+		s.runLoopCancel()
+		return nil
+	}
 	return s.runLoopCtx.Err()
+}
+
+func removeEventHandler(eventSink *ConcurrentEventSink, eventHandler func(context.Context, any, workflow.Event) error) {
+	handlers := eventSink.EventRaised
+	for i, handler := range handlers {
+		if fmt.Sprintf("%p", handler) == fmt.Sprintf("%p", eventHandler) {
+			eventSink.EventRaised = append(handlers[:i], handlers[i+1:]...)
+			break
+		}
+	}
 }
 
 func (s *streamingRunEventStream) sendEvent(ctx context.Context, evt workflow.Event) {
