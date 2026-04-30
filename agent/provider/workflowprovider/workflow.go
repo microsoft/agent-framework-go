@@ -20,7 +20,9 @@ import (
 	"iter"
 	"reflect"
 	"slices"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/workflow"
@@ -65,6 +67,7 @@ type Config struct {
 type pendingReq struct {
 	port              workflow.RequestPort
 	externalRequestID string
+	requestContent    message.Content
 }
 
 // providerState holds the workflow run state that survives across multiple
@@ -111,6 +114,8 @@ func New(wf *workflow.Workflow, cfg Config) (*agent.Agent, error) {
 
 	runFn := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 		return func(yield func(*message.ResponseUpdate, error) bool) {
+			responseID := uuid.NewString()
+
 			sess, _ := agent.GetOption(options, agent.WithSession)
 			if sess != nil && sess.ServiceID() == "" {
 				sess.SetServiceID(providerServiceID)
@@ -163,7 +168,7 @@ func New(wf *workflow.Workflow, cfg Config) (*agent.Agent, error) {
 				}
 				switch e := evt.(type) {
 				case workflow.ResponseUpdateEvent:
-					if !yield(e.Update, nil) {
+					if !yield(stampUpdate(e.Update, responseID, e), nil) {
 						return
 					}
 				case workflow.ResponseEvent:
@@ -171,7 +176,7 @@ func New(wf *workflow.Workflow, cfg Config) (*agent.Agent, error) {
 						continue
 					}
 					for _, msg := range e.Response.Messages {
-						if !yield(messageToUpdate(msg), nil) {
+						if !yield(messageToUpdate(msg, responseID, e), nil) {
 							return
 						}
 					}
@@ -181,25 +186,25 @@ func New(wf *workflow.Workflow, cfg Config) (*agent.Agent, error) {
 					}
 					switch out := e.Output.(type) {
 					case *message.Message:
-						if !yield(messageToUpdate(out), nil) {
+						if !yield(messageToUpdate(out, responseID, e), nil) {
 							return
 						}
 					case []*message.Message:
 						for _, msg := range out {
-							if !yield(messageToUpdate(msg), nil) {
+							if !yield(messageToUpdate(msg, responseID, e), nil) {
 								return
 							}
 						}
 					}
 				case workflow.RequestInfoEvent:
-					update, contentID, ok := requestToUpdate(e.Request)
+					update, contentID, pending, ok := requestToUpdate(e.Request, responseID, e)
 					if !ok {
+						if !yield(newUpdate(responseID, e), nil) {
+							return
+						}
 						continue
 					}
-					state.pending[contentID] = pendingReq{
-						port:              e.Request.RequestPort,
-						externalRequestID: e.Request.ID,
-					}
+					state.pending[contentID] = pending
 					if !yield(update, nil) {
 						return
 					}
@@ -208,13 +213,14 @@ func New(wf *workflow.Workflow, cfg Config) (*agent.Agent, error) {
 					if cfg.IncludeErrorDetails && e.Error != nil {
 						text = e.Error.Error()
 					}
-					update := &message.ResponseUpdate{
-						Role: message.RoleAssistant,
-						Contents: []message.Content{&message.ErrorContent{
-							Message: text,
-						}},
-					}
+					update := newUpdate(responseID, e, &message.ErrorContent{
+						Message: text,
+					})
 					if !yield(update, nil) {
+						return
+					}
+				default:
+					if !yield(newUpdate(responseID, e), nil) {
 						return
 					}
 				}
@@ -300,10 +306,11 @@ func splitResponses(
 		for _, c := range m.Contents {
 			if id, ok := responseContentID(c); ok {
 				if pr, found := pending[id]; found {
+					responseContent := normalizeResponseContent(c, pr.requestContent)
 					responses = append(responses, &workflow.ExternalResponse{
 						RequestID:   pr.externalRequestID,
 						RequestPort: pr.port,
-						Data:        workflow.AnyPortableValue(c),
+						Data:        workflow.AnyPortableValue(responseContent),
 					})
 					if owner, ok := lookupPortOwner(pr.port.ID); ok && owner == startExecutorID {
 						hasMatchedStartResponse = true
@@ -335,52 +342,111 @@ func responseContentID(c message.Content) (string, bool) {
 	return "", false
 }
 
+func normalizeResponseContent(response message.Content, originalRequest message.Content) message.Content {
+	switch r := response.(type) {
+	case *message.FunctionResultContent:
+		if req, ok := originalRequest.(*message.FunctionCallContent); ok {
+			clone := *r
+			clone.CallID = req.CallID
+			return &clone
+		}
+	case *message.FunctionApprovalResponseContent:
+		if req, ok := originalRequest.(*message.FunctionApprovalRequestContent); ok {
+			clone := *r
+			clone.ID = req.ID
+			return &clone
+		}
+	}
+	return response
+}
+
 // requestToUpdate translates an [*workflow.ExternalRequest] into a
 // [*message.ResponseUpdate] that surfaces the request content to the caller.
-// The second return value is the request content's matching key (to track
-// in the pending map).
-func requestToUpdate(req *workflow.ExternalRequest) (*message.ResponseUpdate, string, bool) {
+// The exposed content ID is rewritten to the workflow-facing external request
+// ID, while the original content is retained so the matching response can be
+// normalized before it is delivered back into the workflow.
+func requestToUpdate(req *workflow.ExternalRequest, responseID string, raw any) (*message.ResponseUpdate, string, pendingReq, bool) {
 	if req == nil {
-		return nil, "", false
+		return nil, "", pendingReq{}, false
 	}
 	v, ok := req.Data.As(req.RequestPort.Request)
 	if !ok {
-		return nil, "", false
+		return nil, "", pendingReq{}, false
 	}
 	c, ok := v.(message.Content)
 	if !ok {
-		return nil, "", false
+		return nil, "", pendingReq{}, false
 	}
-	id, ok := requestContentID(c)
+	surfaced, id, ok := requestContentForDelivery(req.ID, c)
 	if !ok {
-		return nil, "", false
+		return nil, "", pendingReq{}, false
 	}
-	return &message.ResponseUpdate{
-		Role:     message.RoleAssistant,
-		Contents: []message.Content{c},
-	}, id, true
+	return newUpdate(responseID, raw, surfaced), id, pendingReq{
+		port:              req.RequestPort,
+		externalRequestID: req.ID,
+		requestContent:    c,
+	}, true
 }
 
-// requestContentID returns the matching key for a request content item.
-func requestContentID(c message.Content) (string, bool) {
+// requestContentForDelivery clones a request content item with the
+// workflow-facing external request ID used as its response matching key.
+func requestContentForDelivery(requestID string, c message.Content) (message.Content, string, bool) {
 	switch v := c.(type) {
 	case *message.FunctionCallContent:
-		return v.CallID, true
+		clone := *v
+		clone.CallID = requestID
+		return &clone, clone.CallID, true
 	case *message.FunctionApprovalRequestContent:
-		return v.ID, true
+		clone := *v
+		clone.ID = requestID
+		return &clone, clone.ID, true
 	}
-	return "", false
+	return nil, "", false
 }
 
-func messageToUpdate(m *message.Message) *message.ResponseUpdate {
+func messageToUpdate(m *message.Message, responseID string, raw any) *message.ResponseUpdate {
 	if m == nil {
-		return &message.ResponseUpdate{}
+		return newUpdate(responseID, raw)
 	}
-	return &message.ResponseUpdate{
+	return stampUpdate(&message.ResponseUpdate{
 		Role:       m.Role,
 		Contents:   m.Contents,
 		AuthorID:   m.AuthorID,
 		AuthorName: m.AuthorName,
 		MessageID:  m.ID,
+		CreatedAt:  m.CreatedAt,
+	}, responseID, raw)
+}
+
+func newUpdate(responseID string, raw any, contents ...message.Content) *message.ResponseUpdate {
+	return stampUpdate(&message.ResponseUpdate{
+		Role:              message.RoleAssistant,
+		Contents:          contents,
+		RawRepresentation: raw,
+	}, responseID, raw)
+}
+
+func stampUpdate(update *message.ResponseUpdate, responseID string, raw any) *message.ResponseUpdate {
+	if update == nil {
+		update = &message.ResponseUpdate{}
+	} else {
+		clone := *update
+		update = &clone
 	}
+	if update.Role == "" {
+		update.Role = message.RoleAssistant
+	}
+	if update.MessageID == "" {
+		update.MessageID = uuid.NewString()
+	}
+	if update.ResponseID == "" {
+		update.ResponseID = responseID
+	}
+	if update.CreatedAt.IsZero() {
+		update.CreatedAt = time.Now()
+	}
+	if update.RawRepresentation == nil {
+		update.RawRepresentation = raw
+	}
+	return update
 }

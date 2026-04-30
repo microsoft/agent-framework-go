@@ -95,8 +95,81 @@ func TestNew_StreamsResponseUpdates(t *testing.T) {
 	if len(resp.Messages) == 0 {
 		t.Fatalf("expected at least one response message, got 0")
 	}
-	if got, want := resp.Messages[0].Contents.Text(), "echo:ping"; got != want {
-		t.Errorf("response text = %q, want %q", got, want)
+	var sawEcho bool
+	for _, msg := range resp.Messages {
+		if msg.Contents.Text() == "echo:ping" {
+			sawEcho = true
+		}
+	}
+	if !sawEcho {
+		t.Errorf("expected response text %q, got %+v", "echo:ping", resp)
+	}
+}
+
+func TestNew_EmitsDefaultUpdatesForUnhandledWorkflowEvents(t *testing.T) {
+	binding := echoExecutorBinding("echo")
+	wf, err := workflow.NewBuilder(binding).Build()
+	if err != nil {
+		t.Fatalf("build workflow: %v", err)
+	}
+	ag, err := workflowprovider.New(wf, workflowprovider.Config{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	var sawUnhandled bool
+	for update, err := range ag.RunText(context.Background(), "ping") {
+		if err != nil {
+			t.Fatalf("RunText: %v", err)
+		}
+		if update.RawRepresentation == nil {
+			continue
+		}
+		switch update.RawRepresentation.(type) {
+		case workflow.StartedEvent, workflow.SuperStepStartedEvent, workflow.ExecutorInvokedEvent:
+			if len(update.Contents) == 0 {
+				sawUnhandled = true
+			}
+		}
+	}
+	if !sawUnhandled {
+		t.Fatalf("expected a raw-only update for an unhandled workflow event")
+	}
+}
+
+func TestNew_StampsEverySurfacedUpdate(t *testing.T) {
+	binding := echoExecutorBinding("echo")
+	wf, err := workflow.NewBuilder(binding).
+		WithOutputFrom(binding).
+		Build()
+	if err != nil {
+		t.Fatalf("build workflow: %v", err)
+	}
+	ag, err := workflowprovider.New(wf, workflowprovider.Config{
+		IncludeOutputsInResponse: true,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	updates := 0
+	for update, err := range ag.RunText(context.Background(), "ping") {
+		if err != nil {
+			t.Fatalf("RunText: %v", err)
+		}
+		updates++
+		if update.MessageID == "" {
+			t.Fatalf("update %d MessageID is empty: %+v", updates, update)
+		}
+		if update.ResponseID == "" {
+			t.Fatalf("update %d ResponseID is empty: %+v", updates, update)
+		}
+		if update.CreatedAt.IsZero() {
+			t.Fatalf("update %d CreatedAt is zero: %+v", updates, update)
+		}
+	}
+	if updates == 0 {
+		t.Fatalf("expected at least one update")
 	}
 }
 
@@ -289,6 +362,9 @@ func callRequestExecutorBinding(t *testing.T, id string) *workflow.ExecutorBindi
 								return nil, nil
 							}
 							r := v.(*message.FunctionResultContent)
+							if r.CallID != "abc" {
+								t.Errorf("FunctionResultContent.CallID delivered to workflow = %q, want %q", r.CallID, "abc")
+							}
 							out := &message.Message{
 								Role:     message.RoleAssistant,
 								Contents: []message.Content{&message.TextContent{Text: "got:" + r.Result.(string)}},
@@ -348,15 +424,15 @@ func TestNew_SurfacesRequestInfoAndAcceptsResponse(t *testing.T) {
 	if sawCall == nil {
 		t.Fatalf("first run: expected a FunctionCallContent, got %+v", first)
 	}
-	if sawCall.CallID != "abc" {
-		t.Errorf("FunctionCallContent.CallID = %q, want %q", sawCall.CallID, "abc")
+	if sawCall.CallID != "fcall_FunctionCall:abc" {
+		t.Errorf("FunctionCallContent.CallID = %q, want %q", sawCall.CallID, "fcall_FunctionCall:abc")
 	}
 
 	// Second turn: provide the matching FunctionResultContent.
 	resumeMsg := []*message.Message{{
 		Role: message.RoleTool,
 		Contents: []message.Content{
-			&message.FunctionResultContent{CallID: "abc", Result: "42"},
+			&message.FunctionResultContent{CallID: sawCall.CallID, Result: "42"},
 		},
 	}}
 	second, err := ag.Run(ctx, resumeMsg, agent.WithSession(session)).Collect()
@@ -420,6 +496,9 @@ func approvalRequestExecutorBinding(t *testing.T, id string) *workflow.ExecutorB
 								return nil, nil
 							}
 							r := v.(*message.FunctionApprovalResponseContent)
+							if r.ID != "req-1" {
+								t.Errorf("FunctionApprovalResponseContent.ID delivered to workflow = %q, want %q", r.ID, "req-1")
+							}
 							text := "denied"
 							if r.Approved {
 								text = "approved"
@@ -438,10 +517,10 @@ func approvalRequestExecutorBinding(t *testing.T, id string) *workflow.ExecutorB
 	return binding
 }
 
-// TestNew_PreservesRequestInfoContent verifies that a workflow's emitted
-// FunctionCallContent reaches the agent caller with its CallID and Name
-// preserved in the surfaced ResponseUpdate.
-func TestNew_PreservesRequestInfoContent(t *testing.T) {
+// TestNew_RequestInfoContentUsesExternalRequestID verifies that the provider
+// exposes the workflow-facing external request ID while preserving the rest
+// of the request content.
+func TestNew_RequestInfoContentUsesExternalRequestID(t *testing.T) {
 	binding := callRequestExecutorBinding(t, "preserve")
 	wf, err := workflow.NewBuilder(binding).WithOutputFrom(binding).Build()
 	if err != nil {
@@ -467,8 +546,8 @@ func TestNew_PreservesRequestInfoContent(t *testing.T) {
 	if got == nil {
 		t.Fatalf("expected FunctionCallContent in response, got %+v", resp)
 	}
-	if got.CallID != "abc" {
-		t.Errorf("CallID = %q, want %q", got.CallID, "abc")
+	if got.CallID != "preserve_FunctionCall:abc" {
+		t.Errorf("CallID = %q, want %q", got.CallID, "preserve_FunctionCall:abc")
 	}
 	if got.Name != "do" {
 		t.Errorf("Name = %q, want %q", got.Name, "do")
@@ -512,8 +591,8 @@ func TestNew_ApprovalRoundtrip_ResponseIsProcessed(t *testing.T) {
 	if req == nil {
 		t.Fatalf("expected an approval request, got %+v", first)
 	}
-	if req.ID != "req-1" {
-		t.Errorf("ID = %q, want %q", req.ID, "req-1")
+	if req.ID != "approval_UserInput:req-1" {
+		t.Errorf("ID = %q, want %q", req.ID, "approval_UserInput:req-1")
 	}
 
 	resumeMsg := []*message.Message{{
@@ -621,15 +700,27 @@ func TestNew_MixedResponseAndRegularMessage_BothProcessed(t *testing.T) {
 		t.Fatalf("CreateSession: %v", err)
 	}
 
-	if _, err := ag.RunText(ctx, "kick", agent.WithSession(session)).Collect(); err != nil {
+	first, err := ag.RunText(ctx, "kick", agent.WithSession(session)).Collect()
+	if err != nil {
 		t.Fatalf("first: %v", err)
+	}
+	var requestID string
+	for _, m := range first.Messages {
+		for _, c := range m.Contents {
+			if fc, ok := c.(*message.FunctionCallContent); ok {
+				requestID = fc.CallID
+			}
+		}
+	}
+	if requestID != "mixed_FunctionCall:abc" {
+		t.Fatalf("first run request ID = %q, want %q", requestID, "mixed_FunctionCall:abc")
 	}
 
 	// Resume message: function result + extra regular text in same batch.
 	resumeMsg := []*message.Message{{
 		Role: message.RoleTool,
 		Contents: []message.Content{
-			&message.FunctionResultContent{CallID: "abc", Result: "42"},
+			&message.FunctionResultContent{CallID: requestID, Result: "42"},
 			&message.TextContent{Text: "extra"},
 		},
 	}}
@@ -713,10 +804,12 @@ func TestNew_MatchingResponse_DoesNotCauseExtraTurn(t *testing.T) {
 	for _, m := range first.Messages {
 		for _, c := range m.Contents {
 			if fc, ok := c.(*message.FunctionCallContent); ok {
-				if emitted == nil {
+				if strings.Contains(fc.CallID, "_FunctionCall:") {
+					firstCount++
+				}
+				if emitted == nil && strings.Contains(fc.CallID, "_FunctionCall:") {
 					emitted = fc
 				}
-				firstCount++
 			}
 		}
 	}
@@ -738,7 +831,7 @@ func TestNew_MatchingResponse_DoesNotCauseExtraTurn(t *testing.T) {
 	secondCount := 0
 	for _, m := range second.Messages {
 		for _, c := range m.Contents {
-			if fc, ok := c.(*message.FunctionCallContent); ok && fc.CallID == emitted.CallID {
+			if fc, ok := c.(*message.FunctionCallContent); ok && strings.Contains(fc.CallID, "_FunctionCall:") {
 				secondCount++
 			}
 		}
