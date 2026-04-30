@@ -73,9 +73,10 @@ func NewRunHandle(sr SuperStepRunner, ch checkpoint.CheckpointingHandle, mode Mo
 
 	eventStream.Start()
 
-	// If there are already unprocessed messages (e.g., from a checkpoint restore that happened
-	// before this handle was created), signal the run loop to start processing them
-	if sr.HasUnprocessedMessages() {
+	// If there are already unprocessed messages or unserviced requests (e.g.,
+	// from a checkpoint restore that happened before this handle was created),
+	// signal the run loop to start processing them.
+	if sr.HasUnprocessedMessages() || sr.HasUnservicedRequests() {
 		handle.signalInputToRunLoop()
 	}
 
@@ -215,8 +216,8 @@ func (h *RunHandle) RestoreCheckpoint(ctx context.Context, checkpointInfo workfl
 	// Clear buffered events from the channel BEFORE restoring to discard stale events from supersteps
 	// that occurred after the checkpoint we're restoring to
 	// This must happen BEFORE the restore so that events republished during restore aren't cleared
-	if streamingEventStream, ok := h.eventStream.(*streamingRunEventStream); ok {
-		streamingEventStream.ClearBufferedEvents()
+	if bufferedEventStream, ok := h.eventStream.(interface{ ClearBufferedEvents() }); ok {
+		bufferedEventStream.ClearBufferedEvents()
 	}
 
 	// Restore the workflow state - this will republish unserviced requests as new events

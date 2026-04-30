@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
@@ -131,6 +132,40 @@ func TestStartedEvent_NotEmittedWhenNoWork(t *testing.T) {
 	}
 }
 
+func TestStreamingRun_WaitToTakeStreamDoesNotBlockOffThread(t *testing.T) {
+	ex := minimalEchoBinding("ex")
+	wf, err := workflow.NewBuilder(ex).WithOutputFrom(ex).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	ctx := context.Background()
+	stream, err := inproc.Default.RunStreaming(ctx, wf, "", "go")
+	if err != nil {
+		t.Fatalf("RunStreaming: %v", err)
+	}
+	defer func() { _ = stream.Close(ctx) }()
+
+	if err := waitForRunStatus(ctx, stream, workflow.RunStatusIdle); err != nil {
+		t.Fatalf("wait for idle before watching stream: %v", err)
+	}
+
+	var events []workflow.Event
+	for evt, err := range stream.WatchStream(ctx) {
+		if err != nil {
+			t.Fatalf("watch: %v", err)
+		}
+		events = append(events, evt)
+	}
+	if len(events) == 0 {
+		t.Fatal("expected buffered events after waiting to watch stream, got none")
+	}
+	outputCount := countOutputs(slices.Values(events))
+	if outputCount != 1 {
+		t.Fatalf("buffered output count = %d, want 1", outputCount)
+	}
+}
+
 func TestRun_ResumeAcceptsMessages(t *testing.T) {
 	ex := minimalEchoBinding("ex")
 	wf, err := workflow.NewBuilder(ex).WithOutputFrom(ex).Build()
@@ -220,6 +255,50 @@ func sendStreamingMessage(t *testing.T, stream workflow.StreamingRun, ctx contex
 	t.Helper()
 	if err := stream.SendMessage(ctx, message); err != nil {
 		t.Fatalf("SendMessage: %v", err)
+	}
+}
+
+func waitForRunStatus(ctx context.Context, run workflow.StreamingRun, want workflow.RunStatus) error {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+
+	for {
+		got, err := run.GetStatus(ctx)
+		if err != nil {
+			return err
+		}
+		if got == want {
+			return nil
+		}
+
+		select {
+		case <-ticker.C:
+		case <-deadline.C:
+			got, _ := run.GetStatus(ctx)
+			return errors.New("timed out waiting for run status " + runStatusName(want) + ", last status " + runStatusName(got))
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func runStatusName(status workflow.RunStatus) string {
+	switch status {
+	case workflow.RunStatusNotStarted:
+		return "NotStarted"
+	case workflow.RunStatusIdle:
+		return "Idle"
+	case workflow.RunStatusPendingRequests:
+		return "PendingRequests"
+	case workflow.RunStatusEnded:
+		return "Ended"
+	case workflow.RunStatusRunning:
+		return "Running"
+	default:
+		return "Unknown"
 	}
 }
 

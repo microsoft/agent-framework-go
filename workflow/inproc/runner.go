@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"sync/atomic"
 
 	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework-go/internal/concurrent"
@@ -37,6 +38,7 @@ type runner struct {
 	outgoingEvents  *execution.ConcurrentEventSink
 
 	knownValidInputTypes map[reflect.Type]struct{}
+	needsRepublish       atomic.Bool
 
 	checkpoints []workflow.CheckpointInfo
 }
@@ -149,6 +151,13 @@ func (r *runner) HasUnprocessedMessages() bool {
 	return r.runContext.NextStepHasActions()
 }
 
+func (r *runner) RepublishPendingEvents(ctx context.Context) error {
+	if r.needsRepublish.Swap(false) {
+		return r.runContext.RepublishUnservicedRequests(ctx)
+	}
+	return nil
+}
+
 // IsValidInputType checks if the given type is a valid input type for this workflow.
 func (r *runner) IsValidInputType(ctx context.Context, messageType reflect.Type) bool {
 	if _, known := r.knownValidInputTypes[messageType]; known {
@@ -185,6 +194,7 @@ func (r *runner) resumeStream(ctx context.Context, mode execution.Mode, info wor
 	if err := r.RestoreCheckpoint(ctx, info); err != nil {
 		return nil, err
 	}
+	r.needsRepublish.Store(true)
 	return execution.NewRunHandle(r, r, mode), nil
 }
 

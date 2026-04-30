@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"iter"
 	"reflect"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -243,6 +244,42 @@ func (proc *runnerContext) HasUnservicedRequests() bool {
 		}
 	}
 	return false
+}
+
+// RepublishUnservicedRequests re-emits outstanding external requests after an
+// event stream has subscribed, matching checkpoint-resume behavior.
+func (proc *runnerContext) RepublishUnservicedRequests(ctx context.Context) error {
+	proc.requestsMu.RLock()
+	requestIDs := make([]string, 0, len(proc.externalRequests))
+	for requestID := range proc.externalRequests {
+		requestIDs = append(requestIDs, requestID)
+	}
+	slices.Sort(requestIDs)
+	requests := make([]*workflow.ExternalRequest, 0, len(requestIDs))
+	for _, requestID := range requestIDs {
+		requests = append(requests, proc.externalRequests[requestID])
+	}
+	proc.requestsMu.RUnlock()
+
+	for _, request := range requests {
+		if err := proc.AddEvent(ctx, workflow.RequestInfoEvent{Request: request}); err != nil {
+			return err
+		}
+	}
+
+	proc.joinedRunnersMu.RLock()
+	joinedRunners := make([]execution.SuperStepRunner, 0, len(proc.joinedSubworkflowRunners))
+	for _, runner := range proc.joinedSubworkflowRunners {
+		joinedRunners = append(joinedRunners, runner)
+	}
+	proc.joinedRunnersMu.RUnlock()
+
+	for _, runner := range joinedRunners {
+		if err := runner.RepublishPendingEvents(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Advance advances to the next step, processing all queued external deliveries.

@@ -41,6 +41,7 @@ type SuperStepRunner interface {
 	StartExecutorID() string
 	HasUnservicedRequests() bool
 	HasUnprocessedMessages() bool
+	RepublishPendingEvents(context.Context) error
 
 	EnqueueResponse(context.Context, *workflow.ExternalResponse) error
 	IsValidInputType(context.Context, reflect.Type) bool
