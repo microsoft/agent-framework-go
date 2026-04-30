@@ -111,7 +111,7 @@ func TestStreamAsync_ExecutesWorkflowWithTurnToken(t *testing.T) {
 	wf := buildSequentialWorkflow(t, a)
 
 	ctx := context.Background()
-	stream, err := inproc.OpenStream(ctx, wf, "")
+	stream, err := inproc.Stream(ctx, wf, "")
 	if err != nil {
 		t.Fatalf("OpenStream: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestRunAsyncAndStreamAsync_ProduceSimilarResults(t *testing.T) {
 	}
 	nonStreamingEvents := slices.Collect(run.OutgoingEvents())
 
-	stream, err := inproc.OpenStream(ctx, wf2, "")
+	stream, err := inproc.Stream(ctx, wf2, "")
 	if err != nil {
 		t.Fatalf("OpenStream: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestRunStreamingAsync_StatusReachesIdleBeforeWatch(t *testing.T) {
 	wf := buildSequentialWorkflow(t, a)
 
 	ctx := context.Background()
-	stream, err := inproc.OpenStream(ctx, wf, "")
+	stream, err := inproc.Stream(ctx, wf, "")
 	if err != nil {
 		t.Fatalf("OpenStream: %v", err)
 	}

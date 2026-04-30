@@ -34,10 +34,6 @@ var (
 	Subworkflow = newExecutionEnvironment(execution.ModeSubworkflow, false)
 )
 
-func OpenStream(ctx context.Context, wf *workflow.Workflow, sessionID string) (workflow.StreamingRun, error) {
-	return Default.RunStreaming(ctx, wf, sessionID)
-}
-
 func Stream(ctx context.Context, wf *workflow.Workflow, sessionID string, msgs ...any) (workflow.StreamingRun, error) {
 	return Default.RunStreaming(ctx, wf, sessionID, msgs...)
 }

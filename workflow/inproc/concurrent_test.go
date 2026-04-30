@@ -116,7 +116,7 @@ func TestInprocConcurrent_RejectsNonConcurrentWorkflow(t *testing.T) {
 	}
 }
 
-func TestInprocConcurrent_AcceptsAllConcurrentInOpenStream(t *testing.T) {
+func TestInprocConcurrent_AcceptsAllConcurrentInStream(t *testing.T) {
 	a := factoryConcurrentBinding("a", new([]string), &sync.Mutex{})
 	wf, err := workflow.NewBuilder(a).Build()
 	if err != nil {

@@ -161,7 +161,7 @@ func runHostedAgent(t *testing.T, a *agent.Agent, cfg workflowhosting.Config, to
 	}
 
 	ctx := context.Background()
-	stream, err := inproc.OpenStream(ctx, wf, "")
+	stream, err := inproc.Stream(ctx, wf, "")
 	if err != nil {
 		t.Fatalf("OpenStream: %v", err)
 	}
@@ -443,7 +443,7 @@ func TestHostedAgent_ForwardsIncomingMessages(t *testing.T) {
 			}
 
 			ctx := context.Background()
-			stream, err := inproc.OpenStream(ctx, wf, "")
+			stream, err := inproc.Stream(ctx, wf, "")
 			if err != nil {
 				t.Fatalf("OpenStream: %v", err)
 			}
@@ -662,7 +662,7 @@ func TestHostedAgent_InterceptUserInputRequests(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	stream, err := inproc.OpenStream(ctx, wf, "")
+	stream, err := inproc.Stream(ctx, wf, "")
 	if err != nil {
 		t.Fatalf("OpenStream: %v", err)
 	}
@@ -711,7 +711,7 @@ func TestHostedAgent_InterceptUnterminatedFunctionCalls(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	stream, err := inproc.OpenStream(ctx, wf, "")
+	stream, err := inproc.Stream(ctx, wf, "")
 	if err != nil {
 		t.Fatalf("OpenStream: %v", err)
 	}
@@ -1186,7 +1186,7 @@ func TestHostedAgent_HeldTurnToken_StampsResolvedEmitEvents(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	stream, err := inproc.OpenStream(ctx, wf, "")
+	stream, err := inproc.Stream(ctx, wf, "")
 	if err != nil {
 		t.Fatalf("OpenStream: %v", err)
 	}
@@ -1358,7 +1358,7 @@ func TestHostedAgent_AlreadyPendingRequest_IsIdempotent_InterceptMode(t *testing
 	}
 
 	ctx := context.Background()
-	stream, err := inproc.OpenStream(ctx, wf, "")
+	stream, err := inproc.Stream(ctx, wf, "")
 	if err != nil {
 		t.Fatalf("OpenStream: %v", err)
 	}
