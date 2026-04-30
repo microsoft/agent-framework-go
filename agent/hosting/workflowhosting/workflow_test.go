@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"iter"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -480,5 +481,925 @@ func TestHostedAgent_ForwardsIncomingMessages(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func newApprovalAgent() *agent.Agent {
+	const callID = "call-1"
+	step := 0
+	run := func(ctx context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+		return func(yield func(*message.ResponseUpdate, error) bool) {
+			defer func() { step++ }()
+			if step == 0 {
+				yield(&message.ResponseUpdate{
+					Role: message.RoleAssistant,
+					Contents: []message.Content{&message.FunctionApprovalRequestContent{
+						ID: callID,
+						FunctionCall: &message.FunctionCallContent{
+							CallID: callID,
+							Name:   "do",
+						},
+					}},
+				}, nil)
+				return
+			}
+			var saw *message.FunctionApprovalResponseContent
+			for _, m := range msgs {
+				for _, c := range m.Contents {
+					if r, ok := c.(*message.FunctionApprovalResponseContent); ok {
+						saw = r
+					}
+				}
+			}
+			text := "no-approval"
+			if saw != nil {
+				if saw.Approved {
+					text = "approved"
+				} else {
+					text = "denied"
+				}
+			}
+			yield(&message.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: []message.Content{&message.TextContent{Text: text}},
+			}, nil)
+		}
+	}
+	return agent.New(
+		agent.ProviderConfig{ProviderName: "approval", Run: run},
+		agent.Config{ID: testAgentID, Name: testAgentName, DisableFuncAutoCall: true},
+	)
+}
+
+func newFunctionCallAgent() *agent.Agent {
+	const callID = "call-1"
+	step := 0
+	run := func(ctx context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+		return func(yield func(*message.ResponseUpdate, error) bool) {
+			defer func() { step++ }()
+			if step == 0 {
+				yield(&message.ResponseUpdate{
+					Role: message.RoleAssistant,
+					Contents: []message.Content{&message.FunctionCallContent{
+						CallID: callID,
+						Name:   "do",
+					}},
+				}, nil)
+				return
+			}
+			var saw *message.FunctionResultContent
+			for _, m := range msgs {
+				for _, c := range m.Contents {
+					if r, ok := c.(*message.FunctionResultContent); ok {
+						saw = r
+					}
+				}
+			}
+			text := "no-result"
+			if saw != nil {
+				if rs, ok := saw.Result.(string); ok {
+					text = "got:" + rs
+				}
+			}
+			yield(&message.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: []message.Content{&message.TextContent{Text: text}},
+			}, nil)
+		}
+	}
+	return agent.New(
+		agent.ProviderConfig{ProviderName: "fcall", Run: run},
+		agent.Config{ID: testAgentID, Name: testAgentName, DisableFuncAutoCall: true},
+	)
+}
+
+// approverExecutor is a downstream executor that forwards a fixed
+// FunctionApprovalResponseContent back to the binding it observes a
+// FunctionApprovalRequestContent for.
+func approverExecutor(target *workflow.ExecutorBinding, approve bool) *workflow.ExecutorBinding {
+	id := "approver"
+	binding := &workflow.ExecutorBinding{
+		ID:           id,
+		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+	}
+	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: id,
+			Options: workflow.ExecutorOptions{
+				DisableAutoSendMessageHandlerResultObject: true,
+				DisableAutoYieldOutputHandlerResultObject: true,
+			},
+			Config: []*workflow.ExecutorConfig{{
+				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+					return rb.AddHandler(reflect.TypeFor[*message.FunctionApprovalRequestContent](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
+						req := msg.(*message.FunctionApprovalRequestContent)
+						return nil, ctx.SendMessage(target.ID, req.Response(approve))
+					}), nil
+				},
+			}},
+		}, nil
+	}
+	return binding
+}
+
+// resultExecutor responds to a FunctionCallContent with a FunctionResultContent.
+func resultExecutor(target *workflow.ExecutorBinding, result any) *workflow.ExecutorBinding {
+	id := "executor"
+	binding := &workflow.ExecutorBinding{
+		ID:           id,
+		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+	}
+	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: id,
+			Options: workflow.ExecutorOptions{
+				DisableAutoSendMessageHandlerResultObject: true,
+				DisableAutoYieldOutputHandlerResultObject: true,
+			},
+			Config: []*workflow.ExecutorConfig{{
+				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+					return rb.AddHandler(reflect.TypeFor[*message.FunctionCallContent](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
+						call := msg.(*message.FunctionCallContent)
+						return nil, ctx.SendMessage(target.ID, &message.FunctionResultContent{
+							CallID: call.CallID,
+							Result: result,
+						})
+					}), nil
+				},
+			}},
+		}, nil
+	}
+	return binding
+}
+
+func collectResponseEvents(t *testing.T, ev []workflow.Event) []*message.Response {
+	t.Helper()
+	var out []*message.Response
+	for _, e := range ev {
+		if r, ok := e.(workflow.ResponseEvent); ok {
+			out = append(out, r.Response)
+		}
+	}
+	return out
+}
+
+// TestHostedAgent_InterceptUserInputRequests verifies that when the agent
+// emits a FunctionApprovalRequestContent and the flag is set, the request is
+// dispatched as a workflow message and the response, when routed back to the
+// host, drives a second agent invocation that observes the response.
+func TestHostedAgent_InterceptUserInputRequests(t *testing.T) {
+	host := workflowhosting.New(newApprovalAgent(), workflowhosting.Config{
+		InterceptUserInputRequests: true,
+		EmitResponseEvents:         true,
+	})
+	app := approverExecutor(host, true)
+
+	wf, err := workflow.NewBuilder(host).
+		AddEdge(host, app).
+		AddEdge(app, host).
+		Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	ctx := context.Background()
+	stream, err := inproc.OpenStream(ctx, wf, "")
+	if err != nil {
+		t.Fatalf("OpenStream: %v", err)
+	}
+	defer stream.Cancel()
+
+	if err := stream.SendMessage(ctx, []*message.Message{{
+		Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "go"}},
+	}}); err != nil {
+		t.Fatalf("send msgs: %v", err)
+	}
+	if err := stream.SendMessage(ctx, workflow.TurnToken{}); err != nil {
+		t.Fatalf("send TurnToken: %v", err)
+	}
+
+	var events []workflow.Event
+	for evt, err := range stream.WatchStream(ctx) {
+		if err != nil {
+			t.Fatalf("watch: %v", err)
+		}
+		events = append(events, evt)
+	}
+
+	responses := collectResponseEvents(t, events)
+	if len(responses) < 2 {
+		t.Fatalf("expected >=2 ResponseEvents (initial + post-approval), got %d", len(responses))
+	}
+	last := responses[len(responses)-1]
+	if len(last.Messages) == 0 || last.Messages[0].Contents.Text() != "approved" {
+		t.Errorf("final agent response = %v, want 'approved'", last.Messages[0].Contents)
+	}
+}
+
+// TestHostedAgent_InterceptUnterminatedFunctionCalls verifies that when the
+// agent emits a FunctionCallContent without a matching result and the flag is
+// set, the call is dispatched as a workflow message and the result, when
+// routed back, drives a second agent invocation that observes the result.
+func TestHostedAgent_InterceptUnterminatedFunctionCalls(t *testing.T) {
+	host := workflowhosting.New(newFunctionCallAgent(), workflowhosting.Config{
+		InterceptUnterminatedFunctionCalls: true,
+		EmitResponseEvents:                 true,
+	})
+	exec := resultExecutor(host, "42")
+
+	wf, err := workflow.NewBuilder(host).
+		AddEdge(host, exec).
+		AddEdge(exec, host).
+		Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	ctx := context.Background()
+	stream, err := inproc.OpenStream(ctx, wf, "")
+	if err != nil {
+		t.Fatalf("OpenStream: %v", err)
+	}
+	defer stream.Cancel()
+
+	if err := stream.SendMessage(ctx, []*message.Message{{
+		Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "go"}},
+	}}); err != nil {
+		t.Fatalf("send msgs: %v", err)
+	}
+	if err := stream.SendMessage(ctx, workflow.TurnToken{}); err != nil {
+		t.Fatalf("send TurnToken: %v", err)
+	}
+
+	var events []workflow.Event
+	for evt, err := range stream.WatchStream(ctx) {
+		if err != nil {
+			t.Fatalf("watch: %v", err)
+		}
+		events = append(events, evt)
+	}
+
+	responses := collectResponseEvents(t, events)
+	if len(responses) < 2 {
+		t.Fatalf("expected >=2 ResponseEvents, got %d", len(responses))
+	}
+	last := responses[len(responses)-1]
+	if last.Messages[0].Contents.Text() != "got:42" {
+		t.Errorf("final agent response = %v, want 'got:42'", last.Messages[0].Contents)
+	}
+}
+
+// TestHostedAgent_InterceptDisabled_PostsExternalRequest verifies that when
+// the Intercept flags are not set (the default), the agent's request content
+// is raised as a workflow ExternalRequest via PostRequest rather than being
+// sent as a workflow message of the request content type.
+func TestHostedAgent_InterceptDisabled_PostsExternalRequest(t *testing.T) {
+	host := workflowhosting.New(newApprovalAgent(), workflowhosting.Config{})
+	var sawApprovalRequestMessage bool
+	probeID := "probe"
+	probe := &workflow.ExecutorBinding{
+		ID:           probeID,
+		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+	}
+	probe.NewExecutor = func(_ string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: probeID,
+			Options: workflow.ExecutorOptions{
+				DisableAutoSendMessageHandlerResultObject: true,
+				DisableAutoYieldOutputHandlerResultObject: true,
+			},
+			Config: []*workflow.ExecutorConfig{{
+				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+					return rb.AddHandler(reflect.TypeFor[*message.FunctionApprovalRequestContent](), nil, false, func(_ *workflow.Context, _ any) (any, error) {
+						sawApprovalRequestMessage = true
+						return nil, nil
+					}), nil
+				},
+			}},
+		}, nil
+	}
+
+	wf, err := workflow.NewBuilder(host).AddEdge(host, probe).Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	ctx := context.Background()
+	run, err := inproc.Run(ctx, wf, "", workflow.TurnToken{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var sawExternalRequest bool
+	for evt := range run.OutgoingEvents() {
+		if r, ok := evt.(workflow.RequestInfoEvent); ok {
+			if r.Request != nil && r.Request.RequestPort.ID == host.ID+"_UserInput" {
+				sawExternalRequest = true
+			}
+		}
+	}
+
+	if sawApprovalRequestMessage {
+		t.Errorf("expected no FunctionApprovalRequestContent workflow-message dispatch when InterceptUserInputRequests is false")
+	}
+	if !sawExternalRequest {
+		t.Errorf("expected a RequestInfoEvent for the user-input port when InterceptUserInputRequests is false")
+	}
+
+	status, err := run.GetStatus(ctx)
+	if err != nil {
+		t.Fatalf("GetStatus: %v", err)
+	}
+	if status != workflow.RunStatusPendingRequests {
+		t.Errorf("status = %v, want PendingRequests", status)
+	}
+}
+
+// TestHostedAgent_InterceptDisabled_ResumesWithExternalResponse drives the
+// default port-based path end to end: the agent emits an approval request,
+// the workflow halts at PendingRequests, the caller resumes the run with a
+// matching ExternalResponse, and the agent is re-invoked observing the
+// approval result.
+func TestHostedAgent_InterceptDisabled_ResumesWithExternalResponse(t *testing.T) {
+	host := workflowhosting.New(newApprovalAgent(), workflowhosting.Config{
+		EmitResponseEvents: true,
+	})
+
+	wf, err := workflow.NewBuilder(host).Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	ctx := context.Background()
+	run, err := inproc.Run(ctx, wf, "", workflow.TurnToken{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var req *workflow.ExternalRequest
+	for evt := range run.OutgoingEvents() {
+		if r, ok := evt.(workflow.RequestInfoEvent); ok {
+			req = r.Request
+			break
+		}
+	}
+	if req == nil {
+		t.Fatalf("expected a RequestInfoEvent")
+	}
+
+	// Build the approval response from the request data.
+	reqContent, ok := req.Data.As(reflect.TypeFor[*message.FunctionApprovalRequestContent]())
+	if !ok {
+		t.Fatalf("expected request data to be *FunctionApprovalRequestContent, got %T", req.Data.Any())
+	}
+	approval := reqContent.(*message.FunctionApprovalRequestContent).Response(true)
+	resp, err := req.NewResponse(approval)
+	if err != nil {
+		t.Fatalf("NewResponse: %v", err)
+	}
+	if _, err := run.Resume(ctx, resp); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	var responses []*message.Response
+	for evt := range run.OutgoingEvents() {
+		if r, ok := evt.(workflow.ResponseEvent); ok {
+			responses = append(responses, r.Response)
+		}
+	}
+	if len(responses) == 0 {
+		t.Fatalf("expected at least one ResponseEvent after resume, got 0")
+	}
+	last := responses[len(responses)-1]
+	if last.Messages[0].Contents.Text() != "approved" {
+		t.Errorf("final agent response = %v, want 'approved'", last.Messages[0].Contents)
+	}
+}
+
+// On the first turn it produces totalCount FunctionCallContent items, of which
+// pairedCount have a matching FunctionResultContent in the same response (so
+// they are already "paired" and should not be intercepted). On subsequent
+// turns it counts how many of its previously-unpaired request IDs have been
+// resolved by the messages it sees and emits either "Remaining: N" or "Done".
+type requestAgentSession struct {
+	unpaired    map[string]struct{}
+	hasSentReqs bool
+}
+
+func newRequestAgent(unpaired, paired int) *agent.Agent {
+	state := &requestAgentSession{unpaired: make(map[string]struct{})}
+	run := func(ctx context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+		return func(yield func(*message.ResponseUpdate, error) bool) {
+			if !state.hasSentReqs {
+				total := unpaired + paired
+				if !yield(&message.ResponseUpdate{
+					Role:     message.RoleAssistant,
+					Contents: []message.Content{&message.TextContent{Text: fmt.Sprintf("Creating %d requests, %d paired.", total, paired)}},
+				}, nil) {
+					return
+				}
+
+				// Build interleaved requests: first `unpaired` are unpaired, last
+				// `paired` are immediately resolved by appending matching results.
+				var pairedResults []message.Content
+				for i := 0; i < total; i++ {
+					id := fmt.Sprintf("call-%d", i)
+					call := &message.FunctionCallContent{CallID: id, Name: "TestFunction"}
+					if i < unpaired {
+						state.unpaired[id] = struct{}{}
+					} else {
+						pairedResults = append(pairedResults, &message.FunctionResultContent{CallID: id, Result: "ok"})
+					}
+					if !yield(&message.ResponseUpdate{
+						Role:     message.RoleAssistant,
+						Contents: []message.Content{call},
+					}, nil) {
+						return
+					}
+				}
+				if len(pairedResults) > 0 {
+					if !yield(&message.ResponseUpdate{
+						Role:     message.RoleAssistant,
+						Contents: pairedResults,
+					}, nil) {
+						return
+					}
+				}
+				state.hasSentReqs = true
+				return
+			}
+			// Subsequent invocation: count resolved requests.
+			for _, m := range msgs {
+				for _, c := range m.Contents {
+					if r, ok := c.(*message.FunctionResultContent); ok {
+						delete(state.unpaired, r.CallID)
+					}
+				}
+			}
+			text := "Done"
+			if remaining := len(state.unpaired); remaining > 0 {
+				text = fmt.Sprintf("Remaining: %d", remaining)
+			}
+			yield(&message.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: []message.Content{&message.TextContent{Text: text}},
+			}, nil)
+		}
+	}
+	return agent.New(
+		agent.ProviderConfig{ProviderName: "request", Run: run},
+		agent.Config{ID: testAgentID, Name: testAgentName, DisableFuncAutoCall: true},
+	)
+}
+
+// TestHostedAgent_InterceptsOnlyUnpairedFunctionCalls_PortMode verifies that
+// only FunctionCalls without a matching FunctionResultContent in the same
+// response trigger an ExternalRequest, and that the workflow only emits a
+// final "Done" response after every outstanding call has been resolved via
+// matching ExternalResponses.
+func TestHostedAgent_InterceptsOnlyUnpairedFunctionCalls_PortMode(t *testing.T) {
+	const unpaired, paired = 2, 3
+	host := workflowhosting.New(newRequestAgent(unpaired, paired), workflowhosting.Config{
+		EmitResponseEvents: true,
+	})
+	wf, err := workflow.NewBuilder(host).Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	ctx := context.Background()
+	run, err := inproc.Run(ctx, wf, "", workflow.TurnToken{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var requests []*workflow.ExternalRequest
+	for evt := range run.OutgoingEvents() {
+		if r, ok := evt.(workflow.RequestInfoEvent); ok {
+			requests = append(requests, r.Request)
+		}
+	}
+	if got := len(requests); got != unpaired {
+		t.Fatalf("expected %d external requests (only unpaired), got %d", unpaired, got)
+	}
+
+	// Resume with all but the last response and verify "Remaining: 1".
+	for _, req := range requests[:unpaired-1] {
+		v, _ := req.Data.As(reflect.TypeFor[*message.FunctionCallContent]())
+		call := v.(*message.FunctionCallContent)
+		resp, err := req.NewResponse(&message.FunctionResultContent{CallID: call.CallID, Result: "ok"})
+		if err != nil {
+			t.Fatalf("NewResponse: %v", err)
+		}
+		if _, err := run.Resume(ctx, resp); err != nil {
+			t.Fatalf("Resume: %v", err)
+		}
+	}
+	mid := lastResponseText(t, run)
+	if mid != "Remaining: 1" {
+		t.Errorf("intermediate response = %q, want %q", mid, "Remaining: 1")
+	}
+
+	// Final response.
+	final := requests[unpaired-1]
+	v, _ := final.Data.As(reflect.TypeFor[*message.FunctionCallContent]())
+	call := v.(*message.FunctionCallContent)
+	resp, err := final.NewResponse(&message.FunctionResultContent{CallID: call.CallID, Result: "ok"})
+	if err != nil {
+		t.Fatalf("NewResponse: %v", err)
+	}
+	if _, err := run.Resume(ctx, resp); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	last := lastResponseText(t, run)
+	if last != "Done" {
+		t.Errorf("final response = %q, want %q", last, "Done")
+	}
+}
+
+// lastResponseText drains all currently-available events from the run and
+// returns the text of the last ResponseEvent observed (or "" if none).
+func lastResponseText(t *testing.T, run workflow.Run) string {
+	t.Helper()
+	var text string
+	for evt := range run.OutgoingEvents() {
+		if r, ok := evt.(workflow.ResponseEvent); ok && r.Response != nil && len(r.Response.Messages) > 0 {
+			text = r.Response.Messages[len(r.Response.Messages)-1].Contents.Text()
+		}
+	}
+	return text
+}
+
+// TestHostedAgent_DuplicateRequestID_RaisesError verifies that emitting two
+// FunctionCallContents with the same CallID in a single response is rejected.
+func TestHostedAgent_DuplicateRequestID_RaisesError(t *testing.T) {
+	dup := func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+		return func(yield func(*message.ResponseUpdate, error) bool) {
+			yield(&message.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					&message.FunctionCallContent{CallID: "x", Name: "f"},
+					&message.FunctionCallContent{CallID: "x", Name: "f"},
+				},
+			}, nil)
+		}
+	}
+	a := agent.New(
+		agent.ProviderConfig{ProviderName: "dup", Run: dup},
+		agent.Config{ID: testAgentID, Name: testAgentName, DisableFuncAutoCall: true},
+	)
+	host := workflowhosting.New(a, workflowhosting.Config{
+		InterceptUnterminatedFunctionCalls: true,
+	})
+	wf, err := workflow.NewBuilder(host).Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	ctx := context.Background()
+	run, err := inproc.Run(ctx, wf, "", workflow.TurnToken{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var sawErr bool
+	for evt := range run.OutgoingEvents() {
+		if e, ok := evt.(workflow.ErrorEvent); ok && e.Error != nil &&
+			strings.Contains(e.Error.Error(), "duplicate FunctionCall") {
+			sawErr = true
+		}
+	}
+	if !sawErr {
+		t.Errorf("expected ErrorEvent for duplicate CallID, got none")
+	}
+}
+
+// TestHostedAgent_UnknownResponseID_RaisesError verifies that a
+// FunctionResultContent whose CallID does not match a pending call is
+// surfaced as an ErrorEvent.
+func TestHostedAgent_UnknownResponseID_RaisesError(t *testing.T) {
+	// Agent never produces any FunctionCalls; we route a stray
+	// FunctionResultContent to the host directly.
+	stub := func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+		return func(yield func(*message.ResponseUpdate, error) bool) {
+			yield(&message.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: []message.Content{&message.TextContent{Text: "hi"}},
+			}, nil)
+		}
+	}
+	a := agent.New(
+		agent.ProviderConfig{ProviderName: "stub", Run: stub},
+		agent.Config{ID: testAgentID, Name: testAgentName, DisableFuncAutoCall: true},
+	)
+	host := workflowhosting.New(a, workflowhosting.Config{
+		InterceptUnterminatedFunctionCalls: true,
+	})
+
+	// Sender forwards a stray FunctionResultContent to the host.
+	senderID := "sender"
+	sender := &workflow.ExecutorBinding{
+		ID:           senderID,
+		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+	}
+	sender.NewExecutor = func(_ string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: senderID,
+			Options: workflow.ExecutorOptions{
+				DisableAutoSendMessageHandlerResultObject: true,
+				DisableAutoYieldOutputHandlerResultObject: true,
+			},
+			Config: []*workflow.ExecutorConfig{{
+				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+					return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(ctx *workflow.Context, _ any) (any, error) {
+						return nil, ctx.SendMessage(host.ID, &message.FunctionResultContent{
+							CallID: "no-such-call",
+							Result: "x",
+						})
+					}), nil
+				},
+			}},
+		}, nil
+	}
+
+	wf, err := workflow.NewBuilder(sender).
+		AddEdge(sender, host).
+		Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	ctx := context.Background()
+	run, err := inproc.Run(ctx, wf, "", "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var sawErr bool
+	for evt := range run.OutgoingEvents() {
+		if e, ok := evt.(workflow.ErrorEvent); ok && e.Error != nil &&
+			strings.Contains(e.Error.Error(), "no pending FunctionCall") {
+			sawErr = true
+		}
+	}
+	if !sawErr {
+		t.Errorf("expected ErrorEvent for unknown CallID, got none")
+	}
+}
+
+// TestHostedAgent_HeldTurnToken_StampsResolvedEmitEvents verifies that when
+// a hosting executor holds the TurnToken across an intercepted request and
+// later forwards it downstream, the forwarded TurnToken carries the resolved
+// EmitEvents value (i.e. with EmitEvents != nil) rather than a possibly-nil
+// input EmitEvents.
+func TestHostedAgent_HeldTurnToken_StampsResolvedEmitEvents(t *testing.T) {
+	host := workflowhosting.New(newApprovalAgent(), workflowhosting.Config{
+		EmitUpdateEvents:           true,
+		InterceptUserInputRequests: true,
+	})
+	app := approverExecutor(host, true)
+
+	// Sink records every workflow.TurnToken it observes downstream.
+	sinkID := "sink"
+	var observed []workflow.TurnToken
+	sink := &workflow.ExecutorBinding{
+		ID:           sinkID,
+		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+	}
+	sink.NewExecutor = func(_ string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: sinkID,
+			Options: workflow.ExecutorOptions{
+				DisableAutoSendMessageHandlerResultObject: true,
+				DisableAutoYieldOutputHandlerResultObject: true,
+			},
+			Config: []*workflow.ExecutorConfig{{
+				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+					return rb.AddHandler(reflect.TypeFor[workflow.TurnToken](), nil, false, func(_ *workflow.Context, msg any) (any, error) {
+						observed = append(observed, msg.(workflow.TurnToken))
+						return nil, nil
+					}), nil
+				},
+			}},
+		}, nil
+	}
+
+	wf, err := workflow.NewBuilder(host).
+		AddEdge(host, app).
+		AddEdge(app, host).
+		AddEdge(host, sink).
+		Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	ctx := context.Background()
+	stream, err := inproc.OpenStream(ctx, wf, "")
+	if err != nil {
+		t.Fatalf("OpenStream: %v", err)
+	}
+	defer stream.Cancel()
+
+	// Send a TurnToken with EmitEvents=nil; the executor's EmitUpdateEvents
+	// (true) is the resolved default.
+	if err := stream.SendMessage(ctx, []*message.Message{{
+		Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "go"}},
+	}}); err != nil {
+		t.Fatalf("send msgs: %v", err)
+	}
+	if err := stream.SendMessage(ctx, workflow.TurnToken{}); err != nil {
+		t.Fatalf("send TurnToken: %v", err)
+	}
+	for evt, err := range stream.WatchStream(ctx) {
+		if err != nil {
+			t.Fatalf("watch: %v", err)
+		}
+		_ = evt
+	}
+
+	if len(observed) == 0 {
+		t.Fatalf("expected sink to observe at least one TurnToken downstream")
+	}
+	got := observed[len(observed)-1]
+	if got.EmitEvents == nil {
+		t.Fatalf("forwarded TurnToken.EmitEvents = nil, want non-nil (resolved)")
+	}
+	if !*got.EmitEvents {
+		t.Errorf("forwarded TurnToken.EmitEvents = %v, want true (resolved from executor default)", *got.EmitEvents)
+	}
+}
+
+// TestHostedAgent_RegistersDynamicPorts verifies that the hosting binding
+// declares its UserInput / FunctionCall ports so they appear in
+// Workflow.Ports (and hence in workflow metadata via ReflectPorts).
+func TestHostedAgent_RegistersDynamicPorts(t *testing.T) {
+	a := newReplayAgent()
+	host := workflowhosting.New(a, workflowhosting.Config{})
+
+	wf, err := workflow.NewBuilder(host).Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	wantUserInput := host.ID + "_UserInput"
+	wantFunctionCall := host.ID + "_FunctionCall"
+
+	if _, ok := wf.Ports[wantUserInput]; !ok {
+		t.Errorf("expected Workflow.Ports to contain %q, got %v", wantUserInput, wf.Ports)
+	}
+	if _, ok := wf.Ports[wantFunctionCall]; !ok {
+		t.Errorf("expected Workflow.Ports to contain %q, got %v", wantFunctionCall, wf.Ports)
+	}
+}
+
+// TestHostedAgent_HandledRequestNotReEmitted_PortMode mirrors .NET's
+// Test_AsAgent_FunctionCallRoundtrip_ResponseIsProcessedAsync: after an
+// ExternalResponse matches the executor's emitted FunctionCallContent, the
+// original request must not be re-emitted on subsequent turns.
+func TestHostedAgent_HandledRequestNotReEmitted_PortMode(t *testing.T) {
+	host := workflowhosting.New(newFunctionCallAgent(), workflowhosting.Config{
+		EmitResponseEvents: true,
+	})
+	wf, err := workflow.NewBuilder(host).Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	ctx := context.Background()
+	run, err := inproc.Run(ctx, wf, "", workflow.TurnToken{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var firstReq *workflow.ExternalRequest
+	for evt := range run.NewEvents() {
+		if r, ok := evt.(workflow.RequestInfoEvent); ok && firstReq == nil {
+			firstReq = r.Request
+		}
+	}
+	if firstReq == nil {
+		t.Fatalf("expected first turn to emit a RequestInfoEvent")
+	}
+
+	// Resume with a matching response.
+	v, _ := firstReq.Data.As(reflect.TypeFor[*message.FunctionCallContent]())
+	call := v.(*message.FunctionCallContent)
+	resp, err := firstReq.NewResponse(&message.FunctionResultContent{CallID: call.CallID, Result: "ok"})
+	if err != nil {
+		t.Fatalf("NewResponse: %v", err)
+	}
+	if _, err := run.Resume(ctx, resp); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	// After resume, only NEW events should be observed; the handled
+	// request must not appear among them.
+	for evt := range run.NewEvents() {
+		if r, ok := evt.(workflow.RequestInfoEvent); ok {
+			payload, _ := r.Request.Data.As(reflect.TypeFor[*message.FunctionCallContent]())
+			if c := payload.(*message.FunctionCallContent); c.CallID == call.CallID {
+				t.Errorf("FunctionCallContent for already-handled CallID %q was re-emitted after resume", c.CallID)
+			}
+		}
+	}
+}
+
+// TestHostedAgent_AlreadyPendingRequest_IsIdempotent_InterceptMode covers the
+// across-response idempotent re-emission path: when an agent emits a
+// FunctionApprovalRequestContent whose ID is already pending from a previous
+// response (e.g. a re-emission), the host must not dispatch it twice nor
+// raise an error. Mirrors .NET's
+// AIContentExternalHandler.ProcessRequestContentAsync no-op-on-TryAdd-fail.
+func TestHostedAgent_AlreadyPendingRequest_IsIdempotent_InterceptMode(t *testing.T) {
+	const reqID = "req-1"
+	step := 0
+	run := func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+		return func(yield func(*message.ResponseUpdate, error) bool) {
+			defer func() { step++ }()
+			// Emit the same approval request on every turn.
+			yield(&message.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{&message.FunctionApprovalRequestContent{
+					ID: reqID,
+					FunctionCall: &message.FunctionCallContent{
+						CallID: reqID,
+						Name:   "do",
+					},
+				}},
+			}, nil)
+		}
+	}
+	a := agent.New(
+		agent.ProviderConfig{ProviderName: "rep", Run: run},
+		agent.Config{ID: testAgentID, Name: testAgentName, DisableFuncAutoCall: true},
+	)
+
+	// Probe records every approval-request workflow message it sees.
+	probeID := "probe"
+	var seen []*message.FunctionApprovalRequestContent
+	probe := &workflow.ExecutorBinding{
+		ID:           probeID,
+		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+	}
+	probe.NewExecutor = func(_ string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: probeID,
+			Options: workflow.ExecutorOptions{
+				DisableAutoSendMessageHandlerResultObject: true,
+				DisableAutoYieldOutputHandlerResultObject: true,
+			},
+			Config: []*workflow.ExecutorConfig{{
+				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+					return rb.AddHandler(reflect.TypeFor[*message.FunctionApprovalRequestContent](), nil, false, func(_ *workflow.Context, msg any) (any, error) {
+						seen = append(seen, msg.(*message.FunctionApprovalRequestContent))
+						return nil, nil
+					}), nil
+				},
+			}},
+		}, nil
+	}
+
+	host := workflowhosting.New(a, workflowhosting.Config{
+		InterceptUserInputRequests: true,
+	})
+	wf, err := workflow.NewBuilder(host).
+		AddEdge(host, probe).
+		Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	ctx := context.Background()
+	stream, err := inproc.OpenStream(ctx, wf, "")
+	if err != nil {
+		t.Fatalf("OpenStream: %v", err)
+	}
+	defer stream.Cancel()
+
+	// Two consecutive turns with the same agent => same request ID twice.
+	if err := stream.SendMessage(ctx, workflow.TurnToken{}); err != nil {
+		t.Fatalf("send TurnToken: %v", err)
+	}
+	if err := stream.SendMessage(ctx, workflow.TurnToken{}); err != nil {
+		t.Fatalf("send TurnToken: %v", err)
+	}
+
+	var sawErr bool
+	for evt, err := range stream.WatchStream(ctx) {
+		if err != nil {
+			t.Fatalf("watch: %v", err)
+		}
+		if e, ok := evt.(workflow.ErrorEvent); ok && e.Error != nil &&
+			strings.Contains(e.Error.Error(), "duplicate FunctionApprovalRequest") {
+			sawErr = true
+		}
+	}
+	if sawErr {
+		t.Errorf("re-emission of already-pending request ID should be idempotent, not raise duplicate error")
+	}
+	// Probe should observe the request only once across both turns.
+	if len(seen) != 1 {
+		t.Errorf("probe saw %d approval requests, want 1 (idempotent)", len(seen))
 	}
 }

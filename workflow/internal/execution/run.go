@@ -169,6 +169,10 @@ func (h *RunHandle) EnqueueResponse(ctx context.Context, response *workflow.Exte
 	return nil
 }
 
+func (h *RunHandle) ResponsePortExecutorID(portID string) (string, bool) {
+	return h.stepRunner.ResponsePortExecutorID(portID)
+}
+
 func (h *RunHandle) signalInputToRunLoop() {
 	h.eventStream.SignalInput()
 }
@@ -303,8 +307,16 @@ func (sr *StreamingRun) SendMessage(ctx context.Context, message any) error {
 	return sr.runHandle.EnqueueMessage(ctx, message)
 }
 
+func (sr *StreamingRun) ResponsePortExecutorID(portID string) (string, bool) {
+	return sr.runHandle.ResponsePortExecutorID(portID)
+}
+
 func (sr *StreamingRun) WatchStream(ctx context.Context) iter.Seq2[workflow.Event, error] {
 	return sr.runHandle.TakeEventStream(ctx, true)
+}
+
+func (sr *StreamingRun) WatchUntilHalt(ctx context.Context) iter.Seq2[workflow.Event, error] {
+	return sr.runHandle.TakeEventStream(ctx, false)
 }
 
 func (sr *StreamingRun) Cancel() {

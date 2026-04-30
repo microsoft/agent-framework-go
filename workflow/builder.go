@@ -314,6 +314,12 @@ func (wb *Builder) track(binding *ExecutorBinding) bool {
 			wb.inputPorts[port.ID] = port
 		}
 	}
+	for _, port := range binding.Ports {
+		if wb.inputPorts == nil {
+			wb.inputPorts = make(map[string]RequestPort)
+		}
+		wb.inputPorts[port.ID] = port
+	}
 	return true
 }
 

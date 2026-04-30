@@ -138,6 +138,12 @@ func (r *runner) HasUnservicedRequests() bool {
 	return r.runContext.HasUnservicedRequests()
 }
 
+// ResponsePortExecutorID returns the executor that handles responses on the
+// given port, or ("", false) if no such port is registered.
+func (r *runner) ResponsePortExecutorID(portID string) (string, bool) {
+	return r.runContext.ResponsePortExecutorID(portID)
+}
+
 // HasUnprocessedMessages returns true if the next step has actions to process.
 func (r *runner) HasUnprocessedMessages() bool {
 	return r.runContext.NextStepHasActions()

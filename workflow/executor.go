@@ -13,9 +13,14 @@ import (
 
 // ExecutorOptions holds configuration options for [Executor] behavior.
 type ExecutorOptions struct {
+	// If true, the result of a message handler that returns a value will be sent as a message from the executor.
 	DisableAutoSendMessageHandlerResultObject bool
+
+	// If true, the result of a message handler that returns a value will be yielded as an output of the executor.
 	DisableAutoYieldOutputHandlerResultObject bool
-	CrossRunShareable                         bool
+
+	// If true, the executor may be used simultaneously by multiple runs safely.
+	CrossRunShareable bool
 }
 
 type callResult struct {

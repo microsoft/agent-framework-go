@@ -51,4 +51,8 @@ type SuperStepRunner interface {
 	RunSuperStep(context.Context) (bool, error)
 
 	RequestEndRun(context.Context) error
+
+	// ResponsePortExecutorID returns the executor that handles responses
+	// on the given port, or ("", false) if no such port is registered.
+	ResponsePortExecutorID(portID string) (string, bool)
 }

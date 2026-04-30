@@ -19,6 +19,14 @@ type ExecutorBinding struct {
 
 	NewExecutor func(sessionID string) (*Executor, error)
 	Reset       func() bool
+
+	// Ports lists additional [RequestPort]s that this executor uses to
+	// raise [ExternalRequest]s via [Context.PostRequest]. The builder
+	// registers them in [Workflow.Ports] so they appear in workflow
+	// metadata. Bindings that themselves are a request port boundary
+	// (created via [BindRequestPort]) do not need to set this; the
+	// builder picks the port up from [ExecutorBinding.Raw].
+	Ports []RequestPort
 }
 
 func (eb *ExecutorBinding) String() string {

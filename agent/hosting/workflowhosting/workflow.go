@@ -7,15 +7,24 @@ package workflowhosting
 
 import (
 	"context"
+	"fmt"
+	"maps"
 	"reflect"
+	"slices"
+	"sync"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/message/messageworkflow"
 	"github.com/microsoft/agent-framework-go/workflow"
 )
 
-const agentSessionStateKey = "agent_session"
+const (
+	agentSessionStateKey     = "agent_session"
+	agentTurnEmitStateKey    = "agent_turn_emit"
+	agentBufferedStateKey    = "agent_buffered"
+	pendingApprovalsStateKey = "agent_pending_approvals"
+	pendingCallsStateKey     = "agent_pending_calls"
+)
 
 // Config configures how an [agent.Agent] is hosted as a workflow
 // [workflow.Executor].
@@ -43,6 +52,46 @@ type Config struct {
 	// agents appears, to each agent, as messages from "the user". Set to
 	// true to preserve original roles.
 	DisableRoleReassignment bool
+
+	// InterceptUserInputRequests controls how [message.FunctionApprovalRequestContent]
+	// produced by the agent is dispatched.
+	//
+	// When false (the default), each request is raised as a workflow
+	// [workflow.ExternalRequest] via [workflow.Context.PostRequest], and
+	// the matching [workflow.ExternalResponse] is delivered back to this
+	// executor by the runner.
+	//
+	// When true, each request is sent as a regular workflow message (via
+	// [workflow.Context.SendMessage]) so other executors in the graph can
+	// handle the approval; the matching
+	// [message.FunctionApprovalResponseContent] must be routed back to
+	// this executor as a workflow message.
+	//
+	// In both modes the agent is re-invoked with the response merged into
+	// the conversation, and the [workflow.TurnToken] propagated downstream
+	// after the turn is held until all outstanding requests are resolved.
+	InterceptUserInputRequests bool
+
+	// InterceptUnterminatedFunctionCalls controls how
+	// [message.FunctionCallContent] produced by the agent without a
+	// matching [message.FunctionResultContent] in the same turn is
+	// dispatched.
+	//
+	// When false (the default), each unresolved call is raised as a
+	// workflow [workflow.ExternalRequest] via
+	// [workflow.Context.PostRequest], and the matching
+	// [workflow.ExternalResponse] is delivered back to this executor by
+	// the runner.
+	//
+	// When true, each unresolved call is sent as a regular workflow
+	// message (via [workflow.Context.SendMessage]); the matching
+	// [message.FunctionResultContent] must be routed back to this
+	// executor as a workflow message.
+	//
+	// In both modes the agent is re-invoked with the result merged into
+	// the conversation, and the [workflow.TurnToken] propagated downstream
+	// after the turn is held until all outstanding calls are resolved.
+	InterceptUnterminatedFunctionCalls bool
 }
 
 // agentBindingMarker is an unexported sentinel type used as the
@@ -58,118 +107,501 @@ type agentBindingMarker struct{}
 // [agent.Agent] using the supplied [Config]. The zero value of [Config] is a
 // sensible default.
 func New(a *agent.Agent, cfg Config) *workflow.ExecutorBinding {
+	id := descriptiveID(a)
+	userInputPort, functionCallPort := hostPorts(id)
 	return &workflow.ExecutorBinding{
-		ID:           descriptiveID(a),
+		ID:           id,
 		ExecutorType: reflect.TypeFor[agentBindingMarker](),
 		Raw:          a,
+		Ports:        []workflow.RequestPort{userInputPort, functionCallPort},
 		NewExecutor: func(_ string) (*workflow.Executor, error) {
-			return newExecutor(a, cfg), nil
+			return newHostExecutor(a, cfg).executor(), nil
 		},
+		// Each run gets its own executor instance via NewExecutor so
+		// per-instance turn state is not shared across runs.
 		SupportsConcurrentSharedExecution: true,
 	}
 }
 
-func newExecutor(a *agent.Agent, opts Config) *workflow.Executor {
-	var session agent.Session
-	ensureSession := func(ctx context.Context) (agent.Session, error) {
-		if session == nil {
-			var err error
-			session, err = a.CreateSession(ctx)
-			if err != nil {
-				return nil, err
-			}
-		}
-		return session, nil
+func hostPorts(id string) (userInput, functionCall workflow.RequestPort) {
+	userInput = workflow.RequestPort{
+		ID:       id + "_UserInput",
+		Request:  reflect.TypeFor[*message.FunctionApprovalRequestContent](),
+		Response: reflect.TypeFor[*message.FunctionApprovalResponseContent](),
 	}
+	functionCall = workflow.RequestPort{
+		ID:       id + "_FunctionCall",
+		Request:  reflect.TypeFor[*message.FunctionCallContent](),
+		Response: reflect.TypeFor[*message.FunctionResultContent](),
+	}
+	return
+}
+
+// hostExecutor implements an [agent.Agent] hosted as a workflow executor.
+// All per-run state (buffered turn messages, pending request bookkeeping,
+// agent session) is kept on this struct.
+type hostExecutor struct {
+	id       string
+	selfName string
+	agent    *agent.Agent
+	cfg      Config
+
+	// Ports used to raise external requests when the corresponding
+	// Intercept* flag is false (the default).
+	userInputPort    workflow.RequestPort
+	functionCallPort workflow.RequestPort
+
+	mu       sync.Mutex
+	session  agent.Session
+	buffered []*message.Message
+	// pendingApprovals tracks FunctionApprovalRequestContent IDs that have
+	// been dispatched and are awaiting a matching response.
+	pendingApprovals map[string]struct{}
+	// pendingCalls tracks FunctionCallContent CallIDs that have been
+	// dispatched and are awaiting a matching FunctionResultContent.
+	pendingCalls map[string]struct{}
+	// pendingTurn, when non-nil, is the TurnToken whose downstream
+	// propagation is being held until all outstanding requests resolve.
+	pendingTurn *workflow.TurnToken
+	// currentTurnEmitUpdates is the effective EmitUpdates setting for the
+	// in-flight turn. It applies to subsequent agent re-invocations
+	// triggered by intercepted-request responses.
+	currentTurnEmitUpdates bool
+}
+
+func newHostExecutor(a *agent.Agent, cfg Config) *hostExecutor {
 	id := descriptiveID(a)
-	selfName := a.Name()
-	ex := &workflow.Executor{
-		ID: id,
+	userInputPort, functionCallPort := hostPorts(id)
+	return &hostExecutor{
+		id:               id,
+		selfName:         a.Name(),
+		agent:            a,
+		cfg:              cfg,
+		userInputPort:    userInputPort,
+		functionCallPort: functionCallPort,
+		pendingApprovals: make(map[string]struct{}),
+		pendingCalls:     make(map[string]struct{}),
+	}
+}
+
+func (h *hostExecutor) executor() *workflow.Executor {
+	return &workflow.Executor{
+		ID: h.id,
+		Options: workflow.ExecutorOptions{
+			DisableAutoSendMessageHandlerResultObject: true,
+			DisableAutoYieldOutputHandlerResultObject: true,
+		},
 		Config: []*workflow.ExecutorConfig{
 			{
 				OnCheckpoint: func(wctx *workflow.Context) error {
-					if session == nil {
-						return nil
+					h.mu.Lock()
+					session := h.session
+					emit := h.currentTurnEmitUpdates
+					approvals := slices.Collect(maps.Keys(h.pendingApprovals))
+					calls := slices.Collect(maps.Keys(h.pendingCalls))
+					buffered := slices.Clone(h.buffered)
+					h.mu.Unlock()
+					if session != nil {
+						data, err := h.agent.MarshalSession(wctx, session)
+						if err != nil {
+							return err
+						}
+						if err := wctx.QueueStateUpdate(agentSessionStateKey, "", data); err != nil {
+							return err
+						}
 					}
-					data, err := a.MarshalSession(wctx, session)
-					if err != nil {
+					if err := wctx.QueueStateUpdate(agentTurnEmitStateKey, "", emit); err != nil {
 						return err
 					}
-					return wctx.QueueStateUpdate(agentSessionStateKey, "", data)
+					if err := wctx.QueueStateUpdate(agentBufferedStateKey, "", buffered); err != nil {
+						return err
+					}
+					if err := wctx.QueueStateUpdate(pendingApprovalsStateKey, "", approvals); err != nil {
+						return err
+					}
+					return wctx.QueueStateUpdate(pendingCallsStateKey, "", calls)
 				},
 				OnCheckpointRestored: func(wctx *workflow.Context) error {
-					data, err := wctx.ReadState(agentSessionStateKey, "")
-					if err != nil {
+					if data, err := wctx.ReadState(agentSessionStateKey, ""); err != nil {
 						return err
+					} else if data != nil {
+						session, err := h.agent.UnmarshalSession(wctx, data.([]byte))
+						if err != nil {
+							return err
+						}
+						h.mu.Lock()
+						h.session = session
+						h.mu.Unlock()
 					}
-					if data == nil {
-						return nil
+					if v, err := wctx.ReadState(agentTurnEmitStateKey, ""); err != nil {
+						return err
+					} else if v != nil {
+						if b, ok := v.(bool); ok {
+							h.mu.Lock()
+							h.currentTurnEmitUpdates = b
+							h.mu.Unlock()
+						}
 					}
-					session, err = a.UnmarshalSession(wctx, data.([]byte))
-					return err
+					if v, err := wctx.ReadState(agentBufferedStateKey, ""); err != nil {
+						return err
+					} else if v != nil {
+						if msgs, ok := v.([]*message.Message); ok {
+							h.mu.Lock()
+							h.buffered = msgs
+							h.mu.Unlock()
+						}
+					}
+					if v, err := wctx.ReadState(pendingApprovalsStateKey, ""); err != nil {
+						return err
+					} else if v != nil {
+						if ks, ok := v.([]string); ok {
+							h.mu.Lock()
+							h.pendingApprovals = setFromKeys(ks)
+							h.mu.Unlock()
+						}
+					}
+					if v, err := wctx.ReadState(pendingCallsStateKey, ""); err != nil {
+						return err
+					} else if v != nil {
+						if ks, ok := v.([]string); ok {
+							h.mu.Lock()
+							h.pendingCalls = setFromKeys(ks)
+							h.mu.Unlock()
+						}
+					}
+					return nil
 				},
+				ConfigureRoutes: h.configureRoutes,
 			},
 		},
 	}
-	ex.Config = append(ex.Config, messageworkflow.NewExecutorConfig(&messageworkflow.Options{
-		StateKey: "agent_messages",
-		TakeTurnHandler: func(ctx *workflow.Context, token workflow.TurnToken, messages []*message.Message) error {
-			emitUpdates := token.EmitEventsOr(opts.EmitUpdateEvents)
+}
 
-			// Forward the incoming messages downstream before the agent runs, so that
-			// downstream nodes (e.g. other agents) observe the full conversation.
-			if !opts.DisableMessageForwarding && len(messages) > 0 {
-				if err := ctx.SendMessage("", messages); err != nil {
-					return err
-				}
-			}
+func (h *hostExecutor) configureRoutes(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+	rb = rb.
+		AddHandler(reflect.TypeFor[*message.Message](), nil, false, func(_ *workflow.Context, msg any) (any, error) {
+			h.appendMessages(msg.(*message.Message))
+			return nil, nil
+		}).
+		AddHandler(reflect.TypeFor[[]*message.Message](), nil, false, func(_ *workflow.Context, msgs any) (any, error) {
+			h.appendMessages(msgs.([]*message.Message)...)
+			return nil, nil
+		}).
+		AddHandler(reflect.TypeFor[workflow.TurnToken](), nil, false, func(wctx *workflow.Context, msg any) (any, error) {
+			return nil, h.handleTurnToken(wctx, msg.(workflow.TurnToken))
+		})
 
-			// Optionally reassign non-self assistant messages to user role before
-			// passing them to the agent.
-			agentInput := messages
-			if !opts.DisableRoleReassignment {
-				agentInput = reassignOtherAgentsAsUsers(messages, selfName)
-			}
+	// External-response handler is always installed; it dispatches by port
+	// ID so it serves as the back-channel for both kinds of port-mode
+	// requests. When both flags are true (i.e. neither port is used) the
+	// handler simply never fires.
+	rb = rb.AddHandler(reflect.TypeFor[*workflow.ExternalResponse](), nil, false, func(wctx *workflow.Context, msg any) (any, error) {
+		return nil, h.handleExternalResponse(wctx, msg.(*workflow.ExternalResponse))
+	})
 
-			session, err := ensureSession(ctx)
-			if err != nil {
+	// Workflow-message response handlers are only installed when the
+	// matching flag is true.
+	if h.cfg.InterceptUserInputRequests {
+		rb = rb.AddHandler(reflect.TypeFor[*message.FunctionApprovalResponseContent](), nil, false, func(wctx *workflow.Context, msg any) (any, error) {
+			return nil, h.handleApprovalResponse(wctx, msg.(*message.FunctionApprovalResponseContent))
+		})
+	}
+	if h.cfg.InterceptUnterminatedFunctionCalls {
+		rb = rb.AddHandler(reflect.TypeFor[*message.FunctionResultContent](), nil, false, func(wctx *workflow.Context, msg any) (any, error) {
+			return nil, h.handleFunctionResult(wctx, msg.(*message.FunctionResultContent))
+		})
+	}
+
+	return rb, nil
+}
+
+func (h *hostExecutor) appendMessages(msgs ...*message.Message) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, m := range msgs {
+		if m != nil {
+			h.buffered = append(h.buffered, m)
+		}
+	}
+}
+
+// drainBuffered returns the currently buffered messages and resets the buffer.
+func (h *hostExecutor) drainBuffered() []*message.Message {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	msgs := h.buffered
+	h.buffered = nil
+	return msgs
+}
+
+// hasOutstandingRequests reports whether any dispatched requests are awaiting
+// a response.
+func (h *hostExecutor) hasOutstandingRequests() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.pendingApprovals)+len(h.pendingCalls) > 0
+}
+
+func (h *hostExecutor) handleTurnToken(wctx *workflow.Context, token workflow.TurnToken) error {
+	emitUpdates := token.EmitEventsOr(h.cfg.EmitUpdateEvents)
+	h.mu.Lock()
+	h.currentTurnEmitUpdates = emitUpdates
+	h.pendingTurn = &token
+	h.mu.Unlock()
+	return h.runAgentAndDispatch(wctx)
+}
+
+func (h *hostExecutor) handleApprovalResponse(wctx *workflow.Context, resp *message.FunctionApprovalResponseContent) error {
+	h.mu.Lock()
+	if _, ok := h.pendingApprovals[resp.ID]; !ok {
+		h.mu.Unlock()
+		return fmt.Errorf("workflowhosting: no pending FunctionApprovalRequest with ID %q", resp.ID)
+	}
+	delete(h.pendingApprovals, resp.ID)
+	h.mu.Unlock()
+	wrapped := &message.Message{
+		Role:     message.RoleUser,
+		Contents: []message.Content{resp},
+	}
+	h.appendMessages(wrapped)
+	return h.runAgentAndDispatch(wctx)
+}
+
+func (h *hostExecutor) handleFunctionResult(wctx *workflow.Context, result *message.FunctionResultContent) error {
+	h.mu.Lock()
+	if _, ok := h.pendingCalls[result.CallID]; !ok {
+		h.mu.Unlock()
+		return fmt.Errorf("workflowhosting: no pending FunctionCall with CallID %q", result.CallID)
+	}
+	delete(h.pendingCalls, result.CallID)
+	h.mu.Unlock()
+	wrapped := &message.Message{
+		Role:       message.RoleTool,
+		AuthorName: h.selfName,
+		Contents:   []message.Content{result},
+	}
+	h.appendMessages(wrapped)
+	return h.runAgentAndDispatch(wctx)
+}
+
+// handleExternalResponse routes a port-mode response back to the appropriate
+// content-typed handler.
+func (h *hostExecutor) handleExternalResponse(wctx *workflow.Context, resp *workflow.ExternalResponse) error {
+	switch resp.RequestPort.ID {
+	case h.userInputPort.ID:
+		v, ok := resp.Data.As(h.userInputPort.Response)
+		if !ok {
+			return fmt.Errorf("workflowhosting: expected %v for user input port, got %T", h.userInputPort.Response, resp.Data.Any())
+		}
+		return h.handleApprovalResponse(wctx, v.(*message.FunctionApprovalResponseContent))
+	case h.functionCallPort.ID:
+		v, ok := resp.Data.As(h.functionCallPort.Response)
+		if !ok {
+			return fmt.Errorf("workflowhosting: expected %v for function call port, got %T", h.functionCallPort.Response, resp.Data.Any())
+		}
+		return h.handleFunctionResult(wctx, v.(*message.FunctionResultContent))
+	}
+	return nil
+}
+
+// runAgentAndDispatch invokes the hosted agent with the buffered turn
+// messages, dispatches outputs and any requests, and propagates the held
+// TurnToken downstream when no outstanding requests remain.
+func (h *hostExecutor) runAgentAndDispatch(wctx *workflow.Context) error {
+	messages := h.drainBuffered()
+
+	if !h.cfg.DisableMessageForwarding && len(messages) > 0 {
+		if err := wctx.SendMessage("", messages); err != nil {
+			return err
+		}
+	}
+
+	agentInput := messages
+	if !h.cfg.DisableRoleReassignment {
+		agentInput = reassignOtherAgentsAsUsers(messages, h.selfName)
+	}
+
+	session, err := h.ensureSession(wctx)
+	if err != nil {
+		return err
+	}
+
+	h.mu.Lock()
+	emitUpdates := h.currentTurnEmitUpdates
+	h.mu.Unlock()
+
+	runOpts := []agent.Option{
+		agent.WithSession(session),
+		// Run the agent in streaming mode only when update events are to be emitted.
+		agent.Stream(emitUpdates),
+	}
+
+	var resp message.Response
+	for update, err := range h.agent.Run(wctx, agentInput, runOpts...) {
+		if err != nil {
+			return err
+		}
+		if emitUpdates {
+			if err := wctx.AddEvent(workflow.ResponseUpdateEvent{ExecutorID: h.id, Update: update}); err != nil {
 				return err
 			}
-			runOpts := []agent.Option{
-				agent.WithSession(session),
-				// Run the agent in streaming mode only when update events are to be emitted.
-				agent.Stream(emitUpdates),
+		}
+		resp.Update(update)
+	}
+	resp.Coalesce()
+
+	// Stamp this hosting executor's identity on every aggregated message,
+	// so downstream nodes can identify which hosted agent produced them and
+	// the role-reassignment logic in receiving hosts works correctly.
+	for _, m := range resp.Messages {
+		m.AuthorID = h.agent.ID()
+		m.AuthorName = h.selfName
+	}
+
+	if h.cfg.EmitResponseEvents {
+		if err := wctx.AddEvent(workflow.ResponseEvent{ExecutorID: h.id, Response: &resp}); err != nil {
+			return err
+		}
+	}
+
+	if err := wctx.SendMessage("", resp.Messages); err != nil {
+		return err
+	}
+
+	if err := h.dispatchRequests(wctx, resp.Messages); err != nil {
+		return err
+	}
+
+	// Only release the held TurnToken downstream once all outstanding
+	// requests have been resolved.
+	if !h.hasOutstandingRequests() {
+		h.mu.Lock()
+		held := h.pendingTurn
+		had := held != nil
+		emit := h.currentTurnEmitUpdates
+		h.pendingTurn = nil
+		h.currentTurnEmitUpdates = false
+		h.mu.Unlock()
+		if had {
+			// Forward a fresh TurnToken stamped with the resolved
+			// EmitEvents value so downstream executors observe the
+			// effective per-turn setting (not the possibly-nil input).
+			return wctx.SendMessage("", workflow.TurnToken{EmitEvents: &emit})
+		}
+	}
+	return nil
+}
+
+// dispatchRequests scans the agent's response for request content and
+// dispatches each one — either as a workflow message (when the corresponding
+// Intercept* flag is true) or as an external request via PostRequest (when
+// the flag is false, the default).
+//
+// Within a single response, duplicate IDs are an error. A request whose ID is
+// already pending from a previous response (e.g. a re-emission) is silently
+// skipped (idempotent) so the executor doesn't double-dispatch.
+func (h *hostExecutor) dispatchRequests(wctx *workflow.Context, msgs []*message.Message) error {
+	// Pre-compute the set of FunctionCallContent CallIDs that already have a
+	// matching FunctionResultContent in the same response, so they are not
+	// considered unresolved.
+	resolved := make(map[string]struct{})
+	for _, m := range msgs {
+		for _, c := range m.Contents {
+			if r, ok := c.(*message.FunctionResultContent); ok {
+				resolved[r.CallID] = struct{}{}
 			}
-			var resp message.Response
-			for update, err := range a.Run(ctx, agentInput, runOpts...) {
-				if err != nil {
-					return err
+		}
+	}
+
+	// Track IDs seen so far in this single dispatch to detect within-response
+	// duplicates as errors.
+	seenApprovals := make(map[string]struct{})
+	seenCalls := make(map[string]struct{})
+
+	for _, m := range msgs {
+		for _, c := range m.Contents {
+			switch v := c.(type) {
+			case *message.FunctionApprovalRequestContent:
+				if _, dup := seenApprovals[v.ID]; dup {
+					return fmt.Errorf("workflowhosting: duplicate FunctionApprovalRequest ID %q in same response", v.ID)
 				}
-				if emitUpdates {
-					if err := ctx.AddEvent(workflow.ResponseUpdateEvent{ExecutorID: id, Update: update}); err != nil {
+				seenApprovals[v.ID] = struct{}{}
+				h.mu.Lock()
+				if _, alreadyPending := h.pendingApprovals[v.ID]; alreadyPending {
+					h.mu.Unlock()
+					// Already-pending request: idempotent re-emission, no-op.
+					continue
+				}
+				h.pendingApprovals[v.ID] = struct{}{}
+				h.mu.Unlock()
+				if h.cfg.InterceptUserInputRequests {
+					if err := wctx.SendMessage("", v); err != nil {
+						return err
+					}
+				} else {
+					req, err := workflow.NewExternalRequest(h.userInputPort.ID+":"+v.ID, h.userInputPort, v)
+					if err != nil {
+						return err
+					}
+					if err := wctx.PostRequest(req); err != nil {
 						return err
 					}
 				}
-				resp.Update(update)
-			}
-			resp.Coalesce()
-			// Stamp this hosting executor's identity on every aggregated
-			// message, so downstream nodes can identify which hosted agent
-			// produced them (and so the role-reassignment logic in receiving
-			// hosts works correctly).
-			for _, m := range resp.Messages {
-				m.AuthorID = a.ID()
-				m.AuthorName = selfName
-			}
-			if opts.EmitResponseEvents {
-				if err := ctx.AddEvent(workflow.ResponseEvent{ExecutorID: id, Response: &resp}); err != nil {
-					return err
+			case *message.FunctionCallContent:
+				if _, done := resolved[v.CallID]; done {
+					continue
+				}
+				if _, dup := seenCalls[v.CallID]; dup {
+					return fmt.Errorf("workflowhosting: duplicate FunctionCall CallID %q in same response", v.CallID)
+				}
+				seenCalls[v.CallID] = struct{}{}
+				h.mu.Lock()
+				if _, alreadyPending := h.pendingCalls[v.CallID]; alreadyPending {
+					h.mu.Unlock()
+					// Already-pending call: idempotent re-emission, no-op.
+					continue
+				}
+				h.pendingCalls[v.CallID] = struct{}{}
+				h.mu.Unlock()
+				if h.cfg.InterceptUnterminatedFunctionCalls {
+					if err := wctx.SendMessage("", v); err != nil {
+						return err
+					}
+				} else {
+					req, err := workflow.NewExternalRequest(h.functionCallPort.ID+":"+v.CallID, h.functionCallPort, v)
+					if err != nil {
+						return err
+					}
+					if err := wctx.PostRequest(req); err != nil {
+						return err
+					}
 				}
 			}
-			return ctx.SendMessage("", resp.Messages)
-		},
-	}))
-	return ex
+		}
+	}
+	return nil
+}
+
+func (h *hostExecutor) ensureSession(ctx context.Context) (agent.Session, error) {
+	h.mu.Lock()
+	if h.session != nil {
+		s := h.session
+		h.mu.Unlock()
+		return s, nil
+	}
+	h.mu.Unlock()
+	s, err := h.agent.CreateSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+	h.mu.Lock()
+	if h.session == nil {
+		h.session = s
+	} else {
+		s = h.session
+	}
+	h.mu.Unlock()
+	return s, nil
 }
 
 // reassignOtherAgentsAsUsers returns a copy of msgs in which any RoleAssistant
@@ -203,4 +635,12 @@ func descriptiveID(a *agent.Agent) string {
 		return a.Name() + "_" + a.ID()
 	}
 	return a.ID()
+}
+
+func setFromKeys(ks []string) map[string]struct{} {
+	out := make(map[string]struct{}, len(ks))
+	for _, k := range ks {
+		out[k] = struct{}{}
+	}
+	return out
 }

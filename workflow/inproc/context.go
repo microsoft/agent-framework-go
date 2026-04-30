@@ -36,9 +36,10 @@ type runnerContext struct {
 	joinedSubworkflowRunners map[string]execution.SuperStepRunner
 	joinedRunnersMu          sync.RWMutex
 
-	externalRequests map[string]*workflow.ExternalRequest
-	requestOwners    map[string]string // requestID -> ownerExecutorID
-	requestsMu       sync.RWMutex
+	externalRequests   map[string]*workflow.ExternalRequest
+	requestOwners      map[string]string // requestID -> ownerExecutorID
+	responsePortOwners map[string]string // portID -> ownerExecutorID
+	requestsMu         sync.RWMutex
 
 	stateManager   execution.StateManager
 	outgoingEvents execution.EventSink
@@ -68,6 +69,7 @@ func newInProcessRunnerContext(
 		joinedSubworkflowRunners: make(map[string]execution.SuperStepRunner),
 		externalRequests:         make(map[string]*workflow.ExternalRequest),
 		requestOwners:            make(map[string]string),
+		responsePortOwners:       make(map[string]string),
 		outgoingEvents:           outgoingEvents,
 		withCheckpointing:        withCheckpointing,
 		concurrentRunsEnabled:    enableConcurrentRuns,
@@ -421,6 +423,7 @@ func (proc *runnerContext) Post(ctx context.Context, ownerID string, request *wo
 	}
 	proc.externalRequests[request.ID] = request
 	proc.requestOwners[request.ID] = ownerID
+	proc.responsePortOwners[request.RequestPort.ID] = ownerID
 	proc.requestsMu.Unlock()
 
 	return proc.AddEvent(ctx, workflow.RequestInfoEvent{Request: request})
@@ -441,6 +444,16 @@ func (proc *runnerContext) CompleteRequest(requestID string) (string, bool) {
 	owner := proc.requestOwners[requestID]
 	delete(proc.requestOwners, requestID)
 	return owner, existed
+}
+
+// ResponsePortExecutorID returns the executor that handles responses on the
+// given port, or ("", false) if no such port is registered. Mirrors .NET's
+// [EdgeMap.TryGetResponsePortExecutorId].
+func (proc *runnerContext) ResponsePortExecutorID(portID string) (string, bool) {
+	proc.requestsMu.Lock()
+	defer proc.requestsMu.Unlock()
+	owner, ok := proc.responsePortOwners[portID]
+	return owner, ok
 }
 
 // JoinedSubworkflowRunners returns all joined subworkflow runners.
