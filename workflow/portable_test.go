@@ -102,6 +102,21 @@ func TestAnyPortableValue_ReturnsPortableValueUnmodified(t *testing.T) {
 	}
 }
 
+func TestAnyPortableValue_DereferencesPortableValuePointer(t *testing.T) {
+	pv := workflow.AnyPortableValue(0)
+	got := workflow.AnyPortableValue(&pv)
+	if got.TypeID != pv.TypeID {
+		t.Fatalf("TypeID = %+v, want %+v", got.TypeID, pv.TypeID)
+	}
+	value, ok := workflow.PortableValueAs[int](got)
+	if !ok {
+		t.Fatal("expected wrapped *PortableValue to retain original int value")
+	}
+	if value != 0 {
+		t.Fatalf("value = %d, want 0", value)
+	}
+}
+
 func TestPortableValue_RejectsNil(t *testing.T) {
 	defer func() {
 		if recover() == nil {

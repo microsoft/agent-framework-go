@@ -1,6 +1,8 @@
 package inproc_test
 
 import (
+	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -269,5 +271,46 @@ func TestInProcessRun_StateShouldError_TwoExecutors(t *testing.T) {
 	}
 	if !hadFailure {
 		t.Errorf("Expected error event, but got none")
+	}
+}
+
+func TestInProcessRun_ReadOrInitStateInitializerError(t *testing.T) {
+	const want = "initializer failed"
+	binding := &workflow.ExecutorBinding{
+		ID:           "stateful",
+		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		NewExecutor: func(_ string) (*workflow.Executor, error) {
+			return &workflow.Executor{
+				ID: "stateful",
+				Config: []*workflow.ExecutorConfig{{
+					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+						return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(ctx *workflow.Context, _ any) (any, error) {
+							_, err := ctx.ReadOrInitState("key", "", func(context.Context, string, string) (any, error) {
+								return nil, errors.New(want)
+							})
+							return nil, err
+						}), nil
+					},
+				}},
+			}, nil
+		},
+	}
+	wf, err := workflow.NewBuilder(binding).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	run, err := inproc.Default.Run(t.Context(), wf, "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var sawErr bool
+	for evt := range run.OutgoingEvents() {
+		if evt, ok := evt.(workflow.ErrorEvent); ok && strings.Contains(evt.Error.Error(), want) {
+			sawErr = true
+		}
+	}
+	if !sawErr {
+		t.Fatal("expected initializer error event")
 	}
 }

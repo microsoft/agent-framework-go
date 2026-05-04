@@ -232,6 +232,14 @@ func (proc *runnerContext) ImportState(ctx context.Context, cp *checkpoint.Check
 		return errors.New("checkpoint cannot be nil")
 	}
 
+	proc.executorsMu.Lock()
+	proc.executors = make(map[string]*workflow.Executor, len(cp.RunnerData.InstantiatedExecutors))
+	proc.executorsMu.Unlock()
+
+	proc.joinedRunnersMu.Lock()
+	proc.joinedSubworkflowRunners = make(map[string]execution.SuperStepRunner)
+	proc.joinedRunnersMu.Unlock()
+
 	for executorID := range cp.RunnerData.InstantiatedExecutors {
 		if _, err := proc.EnsureExecutor(ctx, executorID, nil); err != nil {
 			return err
@@ -520,18 +528,22 @@ func (proc *runnerContext) Bind(ctx context.Context, executorID string, traceCon
 		},
 
 		ReadOrInitState: func(key string, scope string, initFunc func(context.Context, string, string) (any, error)) (any, error) {
+			var initErr error
 			value, err := proc.stateManager.ReadOrInitState(executorID, scope, key, func() any {
 				// Call the init function to get the initial value
 				if initFunc != nil {
 					val, err := initFunc(ctx, key, scope)
 					if err != nil {
-						// Note: This error is swallowed by the factory pattern
+						initErr = err
 						return nil
 					}
 					return val
 				}
 				return nil
 			})
+			if initErr != nil {
+				return nil, initErr
+			}
 			if err != nil {
 				return nil, err
 			}

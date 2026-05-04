@@ -27,6 +27,11 @@ func AnyPortableValue(v any) PortableValue {
 	switch val := v.(type) {
 	case PortableValue:
 		return val
+	case *PortableValue:
+		if val == nil {
+			panic("workflow: PortableValue cannot wrap nil")
+		}
+		return *val
 	default:
 		if v == nil {
 			panic("workflow: PortableValue cannot wrap nil")

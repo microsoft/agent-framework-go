@@ -112,6 +112,15 @@ func (w *Workflow) HasResettableExecutors() bool {
 	return false
 }
 
+func (w *Workflow) hasSharedExecutors() bool {
+	for _, er := range w.ExecutorBindings {
+		if er.IsSharedInstance {
+			return true
+		}
+	}
+	return false
+}
+
 // AllowConcurrent reports whether every bound executor in the workflow
 // supports cross-run shared execution.
 func (w *Workflow) AllowConcurrent() bool {
@@ -190,7 +199,7 @@ func (w *Workflow) TakeOwnership(token any, newToken any, subworkflow bool) erro
 	}
 
 	// Successfully took ownership (or was already owned by us)
-	w.needsReset.Store(w.HasResettableExecutors())
+	w.needsReset.Store(w.hasSharedExecutors())
 	return nil
 }
 

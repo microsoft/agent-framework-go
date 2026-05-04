@@ -296,6 +296,26 @@ func TestExternalRequest_NewRequest_AssignableTypeValidation(t *testing.T) {
 	}
 }
 
+func TestExternalRequest_NewRequest_PortableValuePointerStoresUnderlyingValue(t *testing.T) {
+	port := workflow.RequestPort{
+		ID:       "p",
+		Request:  reflect.TypeFor[string](),
+		Response: reflect.TypeFor[int](),
+	}
+	pv := workflow.AnyPortableValue("ok")
+	req, err := workflow.NewExternalRequest("", port, &pv)
+	if err != nil {
+		t.Fatalf("NewExternalRequest: %v", err)
+	}
+	data, ok := req.Data.As(port.Request)
+	if !ok {
+		t.Fatal("request Data could not be read as the request type")
+	}
+	if data != "ok" {
+		t.Fatalf("data = %v, want ok", data)
+	}
+}
+
 func TestExternalRequest_NewResponse_TypeValidation(t *testing.T) {
 	port := workflow.RequestPort{
 		ID:       "p",

@@ -69,7 +69,7 @@ func (m *InMemoryManager) Lookup(sessionID string, checkpointInfo workflow.Check
 	defer m.mu.RUnlock()
 
 	session, ok := m.sessions[sessionID]
-	if !ok || checkpointInfo.SessionID != sessionID {
+	if !ok {
 		return nil, fmt.Errorf("could not retrieve checkpoint with id %s for session %s", checkpointInfo.CheckpointID, sessionID)
 	}
 	cp, ok := session.checkpoints[checkpointInfo.CheckpointID]

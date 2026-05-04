@@ -129,6 +129,30 @@ func TestCheckpoint_ResumeWithRepublishDisabled_DoesNotEmitRequestInfoEvents(t *
 	}
 }
 
+func TestCheckpoint_ResumeWithSessionIDOverrideUsesLookupSession(t *testing.T) {
+	ctx := context.Background()
+	wf, _ := createCheckpointRequestWorkflow(t)
+	manager := inproc.NewInMemoryCheckpointManager()
+	const lookupSession = "lookup-session"
+
+	first, err := inproc.Default.WithCheckpointing(manager).Run(ctx, wf, "Hello", inproc.WithSessionID(lookupSession))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	checkpointInfo, ok := first.LastCheckpoint()
+	if !ok {
+		t.Fatal("expected checkpoint")
+	}
+	if err := first.Close(ctx); err != nil {
+		t.Fatalf("Close first run: %v", err)
+	}
+
+	checkpointInfo.SessionID = "portable-session-id"
+	if _, err := inproc.Default.WithCheckpointing(manager).Resume(ctx, wf, checkpointInfo, inproc.WithSessionID(lookupSession)); err != nil {
+		t.Fatalf("Resume with session override: %v", err)
+	}
+}
+
 func TestCheckpoint_ResumeRespondToPendingRequest_CompletesWithoutDuplicate(t *testing.T) {
 	for _, env := range checkpointTestEnvironments() {
 		t.Run(env.name, func(t *testing.T) {
@@ -329,6 +353,78 @@ func TestCheckpoint_RestoreClearsQueuedExternalResponsesBeforeImport(t *testing.
 	}
 	if status != inproc.RunStatusIdle {
 		t.Fatalf("final status = %v, want Idle", status)
+	}
+}
+
+func TestCheckpoint_RestoreClearsExecutorInstancesBeforeImport(t *testing.T) {
+	ctx := context.Background()
+	manager := inproc.NewInMemoryCheckpointManager()
+	var nextInstanceID int64
+	binding := &workflow.ExecutorBinding{
+		ID:           "counter",
+		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		NewExecutor: func(_ string) (*workflow.Executor, error) {
+			instanceID := atomic.AddInt64(&nextInstanceID, 1)
+			count := 0
+			return &workflow.Executor{
+				ID: "counter",
+				Config: []*workflow.ExecutorConfig{{
+					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+						return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(ctx *workflow.Context, _ any) (any, error) {
+							count++
+							return nil, ctx.YieldOutput(struct {
+								InstanceID int64
+								Count      int
+							}{InstanceID: instanceID, Count: count})
+						}), nil
+					},
+				}},
+			}, nil
+		},
+	}
+	wf, err := workflow.NewBuilder(binding).WithOutputFrom(binding).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	run, err := inproc.Default.WithCheckpointing(manager).Run(ctx, wf, "first")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	checkpointInfo, ok := run.LastCheckpoint()
+	if !ok {
+		t.Fatal("expected checkpoint")
+	}
+	if _, err := run.Resume(ctx, "second"); err != nil {
+		t.Fatalf("Resume second: %v", err)
+	}
+	for range run.NewEvents() {
+	}
+
+	if err := run.RestoreCheckpoint(ctx, checkpointInfo); err != nil {
+		t.Fatalf("RestoreCheckpoint: %v", err)
+	}
+	if _, err := run.Resume(ctx, "third"); err != nil {
+		t.Fatalf("Resume third: %v", err)
+	}
+
+	var got struct {
+		InstanceID int64
+		Count      int
+	}
+	for evt := range run.NewEvents() {
+		if out, ok := evt.(workflow.OutputEvent); ok {
+			got = out.Output.(struct {
+				InstanceID int64
+				Count      int
+			})
+		}
+	}
+	if got.InstanceID == 1 {
+		t.Fatalf("restored run reused stale executor instance: %+v", got)
+	}
+	if got.Count != 1 {
+		t.Fatalf("restored executor count = %d, want 1", got.Count)
 	}
 }
 

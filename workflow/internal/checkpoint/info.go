@@ -4,7 +4,6 @@ package checkpoint
 
 import (
 	"reflect"
-	"slices"
 
 	"github.com/microsoft/agent-framework-go/workflow"
 )
@@ -86,8 +85,8 @@ func (w *WorkflowInfo) Match(wf *workflow.Workflow) bool {
 		if !ok || len(other) != len(edges) {
 			return false
 		}
-		for _, edge := range other {
-			if !slices.ContainsFunc(edges, func(info workflow.EdgeInfo) bool { return info.Match(edge) }) {
+		for i, edge := range edges {
+			if !edge.Match(other[i]) {
 				return false
 			}
 		}
