@@ -11,7 +11,7 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
 )
 
-var logger = demo.NewLogger(
+var _ = demo.NewLogger(
 	"Shared State Workflow",
 	"This sample writes and reads shared workflow state between executors.",
 )

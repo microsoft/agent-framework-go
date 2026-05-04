@@ -13,7 +13,7 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
 )
 
-var logger = demo.NewLogger(
+var _ = demo.NewLogger(
 	"Concurrent Workflow",
 	"This sample fans a question out to multiple executors and aggregates their answers.",
 )
@@ -43,7 +43,7 @@ func main() {
 	if err != nil {
 		demo.Panic(err)
 	}
-	defer run.Close(context.Background())
+	defer func() { _ = run.Close(context.Background()) }()
 
 	for evt, err := range run.WatchStream(context.Background()) {
 		if err != nil {

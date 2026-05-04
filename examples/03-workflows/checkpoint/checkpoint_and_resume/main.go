@@ -11,7 +11,7 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
 )
 
-var logger = demo.NewLogger(
+var _ = demo.NewLogger(
 	"Checkpoint and Resume Workflow",
 	"This sample resumes a workflow from a checkpoint after an external request.",
 )

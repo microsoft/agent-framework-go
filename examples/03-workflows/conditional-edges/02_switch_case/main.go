@@ -11,7 +11,7 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
 )
 
-var logger = demo.NewLogger(
+var _ = demo.NewLogger(
 	"Switch Case Workflow",
 	"This sample routes email with switch-style workflow cases.",
 )

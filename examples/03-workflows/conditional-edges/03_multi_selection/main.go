@@ -13,7 +13,7 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
 )
 
-var logger = demo.NewLogger(
+var _ = demo.NewLogger(
 	"Multi Selection Workflow",
 	"This sample routes one analysis result to multiple workflow executors.",
 )

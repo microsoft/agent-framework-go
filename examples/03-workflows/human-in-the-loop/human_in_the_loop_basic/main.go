@@ -11,7 +11,7 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
 )
 
-var logger = demo.NewLogger(
+var _ = demo.NewLogger(
 	"Human in the Loop Workflow",
 	"This sample pauses a workflow for an external human approval response.",
 )

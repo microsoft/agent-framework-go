@@ -338,7 +338,7 @@ func TestCheckpoint_ExecutorCheckpointHooks(t *testing.T) {
 			ctx := context.Background()
 			fixture := newCheckpointHookFixture()
 			env := inproc.OffThread
-			var manager = inproc.NewInMemoryCheckpointManager()
+			manager := inproc.NewInMemoryCheckpointManager()
 			var run *inproc.Run
 			var err error
 			if useCheckpointing {

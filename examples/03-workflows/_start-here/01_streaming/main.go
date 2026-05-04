@@ -12,7 +12,7 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
 )
 
-var logger = demo.NewLogger(
+var _ = demo.NewLogger(
 	"Workflow Streaming",
 	"This sample streams workflow events from a simple text processing pipeline.",
 )
@@ -39,7 +39,7 @@ func main() {
 	if err != nil {
 		demo.Panic(err)
 	}
-	defer run.Close(context.Background())
+	defer func() { _ = run.Close(context.Background()) }()
 
 	for evt, err := range run.WatchStream(context.Background()) {
 		if err != nil {

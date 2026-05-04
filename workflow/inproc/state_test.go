@@ -222,7 +222,6 @@ func TestInProcessRun_StateShouldPersist_Checkpointed(t *testing.T) {
 	if !validator.Completed {
 		t.Error("Validator should be completed")
 	}
-
 }
 
 func TestInProcessRun_StateShouldError_TwoExecutors(t *testing.T) {

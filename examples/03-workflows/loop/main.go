@@ -12,7 +12,7 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
 )
 
-var logger = demo.NewLogger(
+var _ = demo.NewLogger(
 	"Loop Workflow",
 	"This sample loops through executors until a number guessing workflow converges.",
 )
@@ -42,7 +42,7 @@ func main() {
 	if err != nil {
 		demo.Panic(err)
 	}
-	defer run.Close(context.Background())
+	defer func() { _ = run.Close(context.Background()) }()
 
 	for evt, err := range run.WatchStream(context.Background()) {
 		if err != nil {

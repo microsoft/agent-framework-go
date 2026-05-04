@@ -42,7 +42,7 @@ func main() {
 	if err != nil {
 		demo.Panic(err)
 	}
-	defer run.Close(context.Background())
+	defer func() { _ = run.Close(context.Background()) }()
 
 	emitEvents := true
 	if err := run.SendMessage(context.Background(), workflow.TurnToken{EmitEvents: &emitEvents}); err != nil {
