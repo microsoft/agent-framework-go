@@ -11,7 +11,6 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
-	"unsafe"
 
 	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework-go/message"
@@ -27,7 +26,7 @@ type runnerContext struct {
 	tracer    *stepTracer
 
 	edgeMap  *execution.EdgeRunner
-	nextStep *execution.StepContext
+	nextStep atomic.Pointer[execution.StepContext]
 
 	executors   map[string]*workflow.Executor
 	executorsMu sync.RWMutex
@@ -65,7 +64,6 @@ func newInProcessRunnerContext(
 		wf:                       wf,
 		sessionID:                sessionID,
 		tracer:                   tracer,
-		nextStep:                 new(execution.StepContext),
 		executors:                make(map[string]*workflow.Executor),
 		queuedExternalDeliveries: make([]func(context.Context) error, 0),
 		joinedSubworkflowRunners: make(map[string]execution.SuperStepRunner),
@@ -77,6 +75,7 @@ func newInProcessRunnerContext(
 		concurrentRunsEnabled:    enableConcurrentRuns,
 		stateManager:             execution.NewStateManager(),
 	}
+	ctx.nextStep.Store(new(execution.StepContext))
 
 	ctx.edgeMap = execution.NewEdgeRunner(wf, tracer, ctx.EnsureExecutor)
 	if enableConcurrentRuns {
@@ -88,6 +87,14 @@ func newInProcessRunnerContext(
 	}
 
 	return ctx, nil
+}
+
+func (proc *runnerContext) currentStep() *execution.StepContext {
+	nextStep := proc.nextStep.Load()
+	if nextStep != nil {
+		return nextStep
+	}
+	return new(execution.StepContext)
 }
 
 // checkEnded returns an error if the run has ended.
@@ -210,7 +217,7 @@ func (proc *runnerContext) ExportState() checkpoint.RunnerStateData {
 
 	return checkpoint.RunnerStateData{
 		InstantiatedExecutors: instantiated,
-		QueuedMessages:        proc.nextStep.ExportMessages(),
+		QueuedMessages:        proc.currentStep().ExportMessages(),
 		OutstandingRequests:   outstanding,
 		RequestOwners:         requestOwners,
 		ResponsePortOwners:    responsePortOwners,
@@ -237,10 +244,7 @@ func (proc *runnerContext) ImportState(ctx context.Context, cp *checkpoint.Check
 
 	nextStep := new(execution.StepContext)
 	nextStep.ImportMessages(cp.RunnerData.QueuedMessages)
-	atomic.StorePointer(
-		(*unsafe.Pointer)(unsafe.Pointer(&proc.nextStep)),
-		unsafe.Pointer(nextStep),
-	)
+	proc.nextStep.Store(nextStep)
 
 	proc.requestsMu.Lock()
 	proc.externalRequests = make(map[string]*workflow.ExternalRequest, len(cp.RunnerData.OutstandingRequests))
@@ -292,7 +296,7 @@ func (proc *runnerContext) AddExternalMessage(ctx context.Context, message any, 
 		}
 
 		if mapping != nil {
-			mapping.MapInto(proc.nextStep)
+			mapping.MapInto(proc.currentStep())
 		}
 		return nil
 	})
@@ -319,7 +323,7 @@ func (proc *runnerContext) AddExternalResponse(ctx context.Context, response *wo
 		}
 
 		if mapping != nil {
-			mapping.MapInto(proc.nextStep)
+			mapping.MapInto(proc.currentStep())
 		}
 		return nil
 	})
@@ -348,7 +352,7 @@ func (proc *runnerContext) JoinedRunnersHaveActions() bool {
 
 // NextStepHasActions returns true if the next step has actions to process.
 func (proc *runnerContext) NextStepHasActions() bool {
-	return proc.nextStep.HasMessages() || proc.HasQueuedExternalDeliveries() || proc.JoinedRunnersHaveActions()
+	return proc.currentStep().HasMessages() || proc.HasQueuedExternalDeliveries() || proc.JoinedRunnersHaveActions()
 }
 
 // HasUnservicedRequests returns true if there are unserviced external requests.
@@ -427,10 +431,7 @@ func (proc *runnerContext) Advance(ctx context.Context) (*execution.StepContext,
 	}
 
 	// Swap out the next step
-	return (*execution.StepContext)(atomic.SwapPointer(
-		(*unsafe.Pointer)(unsafe.Pointer(&proc.nextStep)),
-		unsafe.Pointer(new(execution.StepContext))),
-	), nil
+	return proc.nextStep.Swap(new(execution.StepContext)), nil
 }
 
 // AddEvent adds a workflow event to the outgoing event stream.
@@ -459,7 +460,7 @@ func (proc *runnerContext) SendMessage(ctx context.Context, sourceID, targetID s
 			return err
 		}
 		if mapping != nil {
-			mapping.MapInto(proc.nextStep)
+			mapping.MapInto(proc.currentStep())
 		}
 	}
 

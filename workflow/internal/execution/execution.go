@@ -5,6 +5,7 @@ package execution
 import (
 	"context"
 	"reflect"
+	"sync"
 
 	"github.com/microsoft/agent-framework-go/workflow"
 )
@@ -24,11 +25,46 @@ type EventSink interface {
 var _ EventSink = (*ConcurrentEventSink)(nil)
 
 type ConcurrentEventSink struct {
+	mu          sync.RWMutex
 	EventRaised []func(context.Context, any, workflow.Event) error
 }
 
+func (s *ConcurrentEventSink) AddHandler(handler func(context.Context, any, workflow.Event) error) {
+	if handler == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.EventRaised = append(s.EventRaised, handler)
+}
+
+func (s *ConcurrentEventSink) RemoveHandler(handler func(context.Context, any, workflow.Event) error) {
+	if handler == nil {
+		return
+	}
+	target := reflect.ValueOf(handler).Pointer()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, current := range s.EventRaised {
+		if reflect.ValueOf(current).Pointer() == target {
+			s.EventRaised = append(s.EventRaised[:i], s.EventRaised[i+1:]...)
+			return
+		}
+	}
+}
+
+func (s *ConcurrentEventSink) HandlerCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.EventRaised)
+}
+
 func (s *ConcurrentEventSink) Enqueue(ctx context.Context, evt workflow.Event) error {
-	for _, handler := range s.EventRaised {
+	s.mu.RLock()
+	handlers := append([]func(context.Context, any, workflow.Event) error(nil), s.EventRaised...)
+	s.mu.RUnlock()
+
+	for _, handler := range handlers {
 		if err := handler(ctx, nil, evt); err != nil {
 			return err
 		}

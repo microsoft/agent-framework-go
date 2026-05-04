@@ -62,13 +62,13 @@ func waitForEventHandlerCount(t *testing.T, sink *ConcurrentEventSink, want int)
 	defer ticker.Stop()
 
 	for {
-		if got := len(sink.EventRaised); got == want {
+		if got := sink.HandlerCount(); got == want {
 			return
 		}
 		select {
 		case <-ticker.C:
 		case <-deadline:
-			t.Fatalf("EventRaised handler count = %d, want %d", len(sink.EventRaised), want)
+			t.Fatalf("EventRaised handler count = %d, want %d", sink.HandlerCount(), want)
 		}
 	}
 }

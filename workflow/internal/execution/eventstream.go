@@ -5,7 +5,6 @@ package execution
 import (
 	"context"
 	"errors"
-	"fmt"
 	"iter"
 	"sync/atomic"
 
@@ -116,8 +115,8 @@ func (s *streamingRunEventStream) runLoop() {
 	// Subscribe to events - they will flow directly to the channel as they're raised
 	eventSink := s.stepRunner.OutgoingEvents()
 	eventHandler := s.onEventRaised
-	eventSink.EventRaised = append(eventSink.EventRaised, eventHandler)
-	defer removeEventHandler(eventSink, eventHandler)
+	eventSink.AddHandler(eventHandler)
+	defer eventSink.RemoveHandler(eventHandler)
 	if err := s.stepRunner.RepublishPendingEvents(ctx); err != nil {
 		s.sendEvent(ctx, workflow.ErrorEvent{Error: err})
 		cancel()
@@ -205,16 +204,6 @@ func (s *streamingRunEventStream) onEventRaised(ctx context.Context, sender any,
 		return nil
 	}
 	return s.runLoopCtx.Err()
-}
-
-func removeEventHandler(eventSink *ConcurrentEventSink, eventHandler func(context.Context, any, workflow.Event) error) {
-	handlers := eventSink.EventRaised
-	for i, handler := range handlers {
-		if fmt.Sprintf("%p", handler) == fmt.Sprintf("%p", eventHandler) {
-			eventSink.EventRaised = append(handlers[:i], handlers[i+1:]...)
-			break
-		}
-	}
 }
 
 func (s *streamingRunEventStream) sendEvent(ctx context.Context, evt workflow.Event) {
@@ -390,7 +379,7 @@ func newLockstepRunEventStream(stepRunner SuperStepRunner) *lockstepRunEventStre
 		l.eventQueue.Enqueue(evt)
 		return nil
 	}
-	stepRunner.OutgoingEvents().EventRaised = append(stepRunner.OutgoingEvents().EventRaised, l.eventHandler)
+	stepRunner.OutgoingEvents().AddHandler(l.eventHandler)
 	return l
 }
 
@@ -539,7 +528,7 @@ func (l *lockstepRunEventStream) ClearBufferedEvents() {
 
 func (l *lockstepRunEventStream) Stop() {
 	l.stopCancel()
-	removeEventHandler(l.stepRunner.OutgoingEvents(), l.eventHandler)
+	l.stepRunner.OutgoingEvents().RemoveHandler(l.eventHandler)
 	// Close the input waiter
 	l.inputWaiter.close()
 }
