@@ -8,13 +8,12 @@ import (
 	"iter"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/format"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
 type Config struct {
-	Format    func(v any) (format.Format, error)
-	Unmarshal func(format format.Format, data []byte, v any) error
+	Format    func(v any) (agent.ResponseFormat, error)
+	Unmarshal func(format agent.ResponseFormat, data []byte, v any) error
 }
 
 func New(cfg Config) agent.Middleware {
@@ -27,12 +26,12 @@ func New(cfg Config) agent.Middleware {
 var _ agent.Middleware = (*so)(nil)
 
 type so struct {
-	Format    func(v any) (format.Format, error)
-	Unmarshal func(format format.Format, data []byte, v any) error
+	Format    func(v any) (agent.ResponseFormat, error)
+	Unmarshal func(format agent.ResponseFormat, data []byte, v any) error
 }
 
-func (a *so) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-	return func(yield func(*message.ResponseUpdate, error) bool) {
+func (a *so) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		v, ok := agent.GetOption(options, agent.WithStructuredOutput)
 		if !ok || v == nil {
 			// No structured output requested or nil value, just pass through.

@@ -48,43 +48,6 @@ func MessageEqual(got, want *message.Message) error {
 	return errors.Join(errs...)
 }
 
-func ResponseUpdatesEqual(got, want []*message.ResponseUpdate) error {
-	var errs []error
-	if len(want) != len(got) {
-		errs = append(errs, fmt.Errorf("response update count mismatch: expected %d, got %d", len(want), len(got)))
-	}
-	for i := range want {
-		if i >= len(got) {
-			break
-		}
-		if err := ResponseUpdateEqual(got[i], want[i]); err != nil {
-			errs = append(errs, fmt.Errorf("response update %d mismatch: %v", i, err))
-		}
-	}
-	return errors.Join(errs...)
-}
-
-func ResponseUpdateEqual(got, want *message.ResponseUpdate) error {
-	var errs []error
-	if want.MessageID != got.MessageID {
-		errs = append(errs, fmt.Errorf("message ID mismatch: expected %s, got %s", want.MessageID, got.MessageID))
-	}
-	if want.ResponseID != got.ResponseID {
-		errs = append(errs, fmt.Errorf("response ID mismatch: expected %s, got %s", want.ResponseID, got.ResponseID))
-	}
-	if want.Role != got.Role {
-		errs = append(errs, fmt.Errorf("role mismatch: expected %s, got %s", want.Role, got.Role))
-	}
-	if want.CreatedAt != got.CreatedAt {
-		errs = append(errs, fmt.Errorf("created at mismatch: expected %v, got %v", want.CreatedAt, got.CreatedAt))
-	}
-	if want.String() != got.String() {
-		errs = append(errs, fmt.Errorf("string representation mismatch:\nexpected: %q\ngot:      %q", want.String(), got.String()))
-	}
-	errs = append(errs, ContentsEqual(got.Contents, want.Contents))
-	return errors.Join(errs...)
-}
-
 func ContentsEqual(got, want []message.Content) error {
 	var errs []error
 	if len(want) != len(got) {

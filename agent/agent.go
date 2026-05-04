@@ -15,7 +15,7 @@ import (
 )
 
 // RunFunc is the provider function that executes an agent invocation.
-type RunFunc = func(ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*message.ResponseUpdate, error]
+type RunFunc = func(ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error]
 
 // ProviderConfig configures the provider-specific implementation behind an Agent.
 type ProviderConfig struct {
@@ -106,22 +106,6 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 		runOptions:   cfg.RunOptions,
 		middlewares:  cfg.Middlewares,
 	}
-}
-
-// ResponseStream represents an execution of the agent.
-type ResponseStream iter.Seq2[*message.ResponseUpdate, error]
-
-// Collect gathers all response updates into a single Response object.
-func (r ResponseStream) Collect() (*message.Response, error) {
-	var resp message.Response
-	for update, err := range r {
-		if err != nil {
-			return nil, err
-		}
-		resp.Update(update)
-	}
-	resp.Coalesce()
-	return &resp, nil
 }
 
 // Agent coordinates message preparation, middleware, sessions, and provider execution.
@@ -224,7 +208,7 @@ func (a *Agent) RunMessage(ctx context.Context, msg *message.Message, options ..
 func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ...Option) ResponseStream {
 	ctx, preparedMessages, options, err := a.prepareRun(ctx, messages, options)
 	if err != nil {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
+		return func(yield func(*ResponseUpdate, error) bool) {
 			yield(nil, err)
 		}
 	}
@@ -283,7 +267,7 @@ func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, opt
 func defaultLocalHistoryMiddleware() Middleware {
 	history := newContextProviderMiddleware(NewInMemoryHistoryProvider(""))
 
-	return MiddlewareFunc(func(next RunFunc, ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*message.ResponseUpdate, error] {
+	return MiddlewareFunc(func(next RunFunc, ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error] {
 		session, _ := GetOption(options, WithSession)
 		noSession, _ := GetOption(options, noSessionProvided)
 		contToken, _ := GetOption(options, WithContinuationToken)
@@ -295,12 +279,12 @@ func defaultLocalHistoryMiddleware() Middleware {
 }
 
 func authorMiddleware(id, name string) Middleware {
-	return MiddlewareFunc(func(next RunFunc, ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
+	return MiddlewareFunc(func(next RunFunc, ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error] {
+		return func(yield func(*ResponseUpdate, error) bool) {
 			for update, err := range next(ctx, messages, options...) {
 				if update != nil {
-					if update.AuthorID == "" {
-						update.AuthorID = id
+					if update.AgentID == "" {
+						update.AgentID = id
 					}
 					if update.AuthorName == "" {
 						update.AuthorName = name

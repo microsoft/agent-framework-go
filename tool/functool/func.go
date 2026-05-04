@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"reflect"
 
-	"github.com/microsoft/agent-framework-go/format/jsonformat"
+	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/tool"
 )
 
@@ -104,14 +104,14 @@ func (t *funcTool) Schema() any {
 	if t.inputFormat == nil {
 		return nil
 	}
-	return t.inputFormat.Schema()
+	return t.inputFormat.Schema
 }
 
 func (t *funcTool) ReturnSchema() any {
 	if t.outputFormat == nil {
 		return nil
 	}
-	return t.outputFormat.Schema()
+	return t.outputFormat.Schema
 }
 
 func (t *funcTool) Call(ctx tool.Context, args string) (any, error) {
@@ -131,11 +131,19 @@ func inputFormatFor[T any]() (format *jsonformat.Format, wrapped bool, err error
 		typ = reflect.TypeFor[inputWrapper[T]]()
 		wrapped = true
 	}
-	format, err = jsonformat.ForType(typ)
+	responseFormat, err := jsonformat.ForType(typ)
+	if err != nil {
+		return nil, false, err
+	}
+	format, err = jsonformat.FromResponseFormat(responseFormat)
 	return format, wrapped, err
 }
 
 func outputFormatFor[T any]() (*jsonformat.Format, error) {
 	typ := reflect.TypeFor[T]()
-	return jsonformat.ForType(typ)
+	responseFormat, err := jsonformat.ForType(typ)
+	if err != nil {
+		return nil, err
+	}
+	return jsonformat.FromResponseFormat(responseFormat)
 }

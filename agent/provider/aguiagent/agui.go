@@ -57,8 +57,8 @@ func New(aclient *aguiSSEClient.Client, config Config) *agent.Agent {
 	}, config.Config)
 }
 
-func (p *provider) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-	return func(yield func(*message.ResponseUpdate, error) bool) {
+func (p *provider) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		session, _ := agent.GetOption(options, agent.WithSession)
 		threadID := getOrCreateThreadID(session)
 		runID := aguiEvents.GenerateRunID()
@@ -346,10 +346,10 @@ type toolCallAccumulator struct {
 	pending map[string]*pendingToolCall
 }
 
-func (a *toolCallAccumulator) onEvent(evt aguiEvents.Event) ([]*message.ResponseUpdate, error) {
+func (a *toolCallAccumulator) onEvent(evt aguiEvents.Event) ([]*agent.ResponseUpdate, error) {
 	switch e := evt.(type) {
 	case *aguiEvents.RunStartedEvent:
-		return []*message.ResponseUpdate{{
+		return []*agent.ResponseUpdate{{
 			Role:       message.RoleAssistant,
 			ResponseID: e.RunID(),
 			CreatedAt:  eventTime(evt),
@@ -366,21 +366,21 @@ func (a *toolCallAccumulator) onEvent(evt aguiEvents.Event) ([]*message.Response
 		if err != nil {
 			return nil, err
 		}
-		return []*message.ResponseUpdate{{
+		return []*agent.ResponseUpdate{{
 			Role:       message.RoleAssistant,
 			ResponseID: e.RunID(),
 			CreatedAt:  eventTime(evt),
 			Contents:   message.Contents{&message.TextContent{Text: text}},
 		}}, nil
 	case *aguiEvents.RunErrorEvent:
-		return []*message.ResponseUpdate{{
+		return []*agent.ResponseUpdate{{
 			Role:       message.RoleAssistant,
 			ResponseID: e.RunID(),
 			CreatedAt:  eventTime(evt),
 			Contents:   message.Contents{&message.ErrorContent{Message: e.Message, ErrorCode: cmp.Or(deref(e.Code), "RunError")}},
 		}}, nil
 	case *aguiEvents.TextMessageContentEvent:
-		return []*message.ResponseUpdate{{
+		return []*agent.ResponseUpdate{{
 			Role:      message.RoleAssistant,
 			MessageID: e.MessageID,
 			CreatedAt: eventTime(evt),
@@ -400,7 +400,7 @@ func (a *toolCallAccumulator) onEvent(evt aguiEvents.Event) ([]*message.Response
 			return nil, nil
 		}
 		delete(a.pending, e.ToolCallID)
-		return []*message.ResponseUpdate{{
+		return []*agent.ResponseUpdate{{
 			Role:      message.RoleAssistant,
 			MessageID: p.MessageID,
 			CreatedAt: eventTime(evt),
@@ -412,7 +412,7 @@ func (a *toolCallAccumulator) onEvent(evt aguiEvents.Event) ([]*message.Response
 		}}, nil
 	case *aguiEvents.ToolCallResultEvent:
 		result := parseResultContent(e.Content)
-		return []*message.ResponseUpdate{{
+		return []*agent.ResponseUpdate{{
 			Role:      message.RoleTool,
 			MessageID: cmp.Or(e.MessageID, e.ToolCallID),
 			CreatedAt: eventTime(evt),
@@ -422,13 +422,13 @@ func (a *toolCallAccumulator) onEvent(evt aguiEvents.Event) ([]*message.Response
 			}},
 		}}, nil
 	case *aguiEvents.StateSnapshotEvent:
-		return []*message.ResponseUpdate{{
+		return []*agent.ResponseUpdate{{
 			Role:      message.RoleAssistant,
 			CreatedAt: eventTime(evt),
 			Contents:  message.Contents{newJSONDataContent(e.Snapshot, "application/json")},
 		}}, nil
 	case *aguiEvents.StateDeltaEvent:
-		return []*message.ResponseUpdate{{
+		return []*agent.ResponseUpdate{{
 			Role:      message.RoleAssistant,
 			CreatedAt: eventTime(evt),
 			Contents:  message.Contents{newJSONDataContent(e.Delta, "application/json-patch+json")},

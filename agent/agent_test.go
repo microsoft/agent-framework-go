@@ -35,7 +35,7 @@ type prependMiddleware struct {
 	lastSession     agent.Session
 }
 
-func (m *prependMiddleware) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (m *prependMiddleware) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 	m.runCalls++
 	if session, ok := agent.GetOption(opts, agent.WithSession); ok {
 		m.lastSession = session
@@ -58,8 +58,8 @@ type errorMiddleware struct {
 	err error
 }
 
-func (m *errorMiddleware) Run(_ agent.RunFunc, _ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-	return func(yield func(*message.ResponseUpdate, error) bool) {
+func (m *errorMiddleware) Run(_ agent.RunFunc, _ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		yield(nil, m.err)
 	}
 }
@@ -69,9 +69,9 @@ type trackingMiddleware struct {
 	lastErr  error
 }
 
-func (m *trackingMiddleware) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (m *trackingMiddleware) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 	m.runCalls++
-	return func(yield func(*message.ResponseUpdate, error) bool) {
+	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		for update, err := range next(ctx, messages, opts...) {
 			if err != nil {
 				m.lastErr = err
@@ -83,15 +83,15 @@ func (m *trackingMiddleware) Run(next agent.RunFunc, ctx context.Context, messag
 	}
 }
 
-func failRunFunc(runErr error) func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-	return func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
+func failRunFunc(runErr error) func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+	return func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			yield(nil, runErr)
 		}
 	}
 }
 
-func newGenericTestAgent(runFn func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*message.ResponseUpdate, error], instructions string, middlewares []agent.Middleware, runOptions ...agent.Option) *agent.Agent {
+func newGenericTestAgent(runFn func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error], instructions string, middlewares []agent.Middleware, runOptions ...agent.Option) *agent.Agent {
 	return agent.New(agent.ProviderConfig{
 		Run: runFn,
 	}, agent.Config{
@@ -105,8 +105,8 @@ func newGenericTestAgent(runFn func(context.Context, []*message.Message, ...agen
 func TestAgent_UnmarshalSession_CallsAfterUnmarshalSession(t *testing.T) {
 	called := false
 	a := agent.New(agent.ProviderConfig{
-		Run: func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-			return func(yield func(*message.ResponseUpdate, error) bool) {}
+		Run: func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			return func(yield func(*agent.ResponseUpdate, error) bool) {}
 		},
 		AfterUnmarshalSession: func(_ context.Context, session agent.Session, opts ...agent.Option) error {
 			called = true
@@ -146,8 +146,8 @@ func TestAgent_UnmarshalSession_CallsAfterUnmarshalSession(t *testing.T) {
 func TestAgent_MarshalSession_CallsBeforeMarshalSession(t *testing.T) {
 	called := false
 	a := agent.New(agent.ProviderConfig{
-		Run: func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-			return func(yield func(*message.ResponseUpdate, error) bool) {}
+		Run: func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			return func(yield func(*agent.ResponseUpdate, error) bool) {}
 		},
 		BeforeMarshalSession: func(_ context.Context, session agent.Session, opts ...agent.Option) error {
 			called = true
@@ -228,8 +228,8 @@ func TestAgent_RunText(t *testing.T) {
 		t.Errorf("expected role %s, got %s", message.RoleAssistant, resp.Messages[0].Role)
 	}
 
-	if resp.Messages[0].AuthorID != a.ID() {
-		t.Errorf("expected author ID %q, got %q", a.ID(), resp.Messages[0].AuthorID)
+	if resp.AgentID != a.ID() {
+		t.Errorf("expected agent ID %q, got %q", a.ID(), resp.AgentID)
 	}
 
 	if resp.Messages[0].AuthorName != a.Name() {
@@ -417,7 +417,7 @@ func TestAgent_Run_PrependsAgentOptions(t *testing.T) {
 				},
 			},
 			Responses: []agenttest.Response{
-				{Response: &message.ResponseUpdate{
+				{Response: &agent.ResponseUpdate{
 					Role: message.RoleAssistant,
 					Contents: []message.Content{
 						&message.TextContent{Text: "response"},
@@ -456,9 +456,9 @@ func TestAgent_New_DoesNotAutomaticallyInvokeTools(t *testing.T) {
 		return "sunny", nil
 	})
 
-	runFn := func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{
+	runFn := func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
 				Role: message.RoleAssistant,
 				Contents: []message.Content{
 					&message.FunctionCallContent{CallID: "call-1", Name: "GetWeather", Arguments: `{}`},
@@ -493,7 +493,7 @@ func TestAgent_Run_AddsConfigToolsToRunOptions(t *testing.T) {
 				},
 			},
 			Responses: []agenttest.Response{{
-				Response: &message.ResponseUpdate{
+				Response: &agent.ResponseUpdate{
 					Role: message.RoleAssistant,
 					Contents: []message.Content{
 						&message.TextContent{Text: "response"},
@@ -533,7 +533,7 @@ func TestAgent_Run_StreamingResponses(t *testing.T) {
 	a := agenttest.New(responseBuilder.Build())
 
 	ctx := t.Context()
-	updates := []*message.ResponseUpdate{}
+	updates := []*agent.ResponseUpdate{}
 	for update, err := range a.RunText(ctx, "test", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -578,10 +578,10 @@ func TestAgent_Run_InvokesSingleContextMiddleware(t *testing.T) {
 	}
 
 	var capturedMessages []*message.Message
-	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		capturedMessages = msgs
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "response"}}}, nil)
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "response"}}}, nil)
 		}
 	}
 
@@ -613,9 +613,9 @@ func TestAgent_Run_InvokesSingleContextMiddleware(t *testing.T) {
 
 func TestAgent_Run_ContextMiddlewareReceivesSession(t *testing.T) {
 	mw := &prependMiddleware{}
-	runFn := func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "response"}}}, nil)
+	runFn := func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "response"}}}, nil)
 		}
 	}
 	a := newGenericTestAgent(runFn, "", []agent.Middleware{mw})
@@ -634,9 +634,9 @@ func TestAgent_Run_ContextMiddlewareReceivesSession(t *testing.T) {
 
 func TestAgent_Run_ContextMiddlewareCanFailBeforeRun(t *testing.T) {
 	middlewareErr := errors.New("middleware failed")
-	runFn := func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "response"}}}, nil)
+	runFn := func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "response"}}}, nil)
 		}
 	}
 	a := newGenericTestAgent(runFn, "", []agent.Middleware{&errorMiddleware{err: middlewareErr}})
@@ -669,10 +669,10 @@ func TestAgent_Run_MiddlewareObservesRunFailure(t *testing.T) {
 
 func TestAgent_Run_IncludesInstructions(t *testing.T) {
 	var capturedMessages []*message.Message
-	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		capturedMessages = msgs
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "response"}}}, nil)
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "response"}}}, nil)
 		}
 	}
 	a := newGenericTestAgent(runFn, "You are a helpful assistant.", nil)
@@ -746,7 +746,7 @@ func TestRun_All(t *testing.T) {
 	a := agenttest.New(responseBuilder.Build())
 
 	ctx := t.Context()
-	updates := []*message.ResponseUpdate{}
+	updates := []*agent.ResponseUpdate{}
 	for update, err := range a.RunText(ctx, "test", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -804,10 +804,10 @@ func TestAgent_Run_ProviderMiddleware_RunsProvidersWhenSessionHasServiceID(t *te
 		},
 	}
 
-	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		capturedMessages = msgs
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "ok"}}}, nil)
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "ok"}}}, nil)
 		}
 	}
 
@@ -846,13 +846,13 @@ func TestAgent_Run_ProviderMiddleware_RunsProvidersWithContinuationToken(t *test
 		},
 	}
 
-	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		runCalled = true
 		if len(msgs) != 0 {
 			t.Fatalf("expected no messages with continuation token run, got %d", len(msgs))
 		}
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "ok"}}}, nil)
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "ok"}}}, nil)
 		}
 	}
 
@@ -886,10 +886,10 @@ func TestAgent_Run_UsesConfigContextProvider(t *testing.T) {
 		},
 	}
 
-	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		runCalled = true
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "ok"}}}, nil)
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "ok"}}}, nil)
 		}
 	}
 
@@ -921,9 +921,9 @@ func TestAgent_Run_ProviderMiddleware_PropagatesInvokingError(t *testing.T) {
 		},
 	}
 
-	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		runCalled = true
-		return func(yield func(*message.ResponseUpdate, error) bool) {}
+		return func(yield func(*agent.ResponseUpdate, error) bool) {}
 	}
 
 	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
@@ -952,10 +952,10 @@ func TestAgent_Run_ProviderMiddleware_RunsProvidersWhenSessionAutoCreated(t *tes
 		},
 	}
 
-	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		runCalled = true
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "ok"}}}, nil)
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "ok"}}}, nil)
 		}
 	}
 
@@ -998,13 +998,13 @@ func TestAgent_Run_ProviderMiddleware_PersistsHistoryAfterSuccessfulRun(t *testi
 		},
 	}
 
-	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		capturedMessages = msgs
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			if !yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "part1"}}}, nil) {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			if !yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "part1"}}}, nil) {
 				return
 			}
-			yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "part2"}}}, nil)
+			yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "part2"}}}, nil)
 		}
 	}
 
@@ -1045,8 +1045,8 @@ func TestAgent_Run_ProviderMiddleware_PersistsWithoutResponseMessages(t *testing
 		},
 	}
 
-	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
+	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			yield(nil, nil)
 		}
 	}
@@ -1079,9 +1079,9 @@ func TestAgent_Run_ProviderMiddleware_PropagatesStoreError(t *testing.T) {
 		},
 	}
 
-	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "response"}}}, nil)
+	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "response"}}}, nil)
 		}
 	}
 
@@ -1108,9 +1108,9 @@ func TestAgent_Run_ProviderMiddleware_EarlyStopOnErrorStillStores(t *testing.T) 
 		},
 	}
 
-	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			if !yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "before error"}}}, nil) {
+	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			if !yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "before error"}}}, nil) {
 				return
 			}
 			yield(nil, runErr)
@@ -1142,12 +1142,12 @@ func TestAgent_Run_ProviderMiddleware_EarlyStopWithoutErrorStillStores(t *testin
 		},
 	}
 
-	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			if !yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "first"}}}, nil) {
+	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			if !yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "first"}}}, nil) {
 				return
 			}
-			yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "second"}}}, nil)
+			yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "second"}}}, nil)
 		}
 	}
 
@@ -1193,15 +1193,15 @@ func TestAgent_Run_UsesContextProvidersInOrder(t *testing.T) {
 		},
 	}
 
-	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		if len(msgs) != 3 {
 			t.Fatalf("expected providers to append 2 messages to request, got %d", len(msgs))
 		}
 		if got := []string{msgs[0].String(), msgs[1].String(), msgs[2].String()}; !slices.Equal(got, []string{"input", "a", "b"}) {
 			t.Fatalf("expected providers to append messages in order, got %v", got)
 		}
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "ok"}}}, nil)
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "ok"}}}, nil)
 		}
 	}
 

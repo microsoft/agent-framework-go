@@ -259,7 +259,7 @@ data: {"type":"response.completed","response":{"id":"resp_67d329fbc87c81919f8952
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
 		openaiagent.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
@@ -438,7 +438,7 @@ data: {"type":"response.completed","sequence_number":29,"response":{"id":"resp_6
 
 	a := newTestResponsesClient(server, "o4-mini")
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "Calculate the sum of the first 5 positive integers.", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
@@ -845,7 +845,7 @@ data: {"type":"response.completed","sequence_number":14,"response":{"id":"resp_r
 
 	a := newTestResponsesClient(server, "o4-mini")
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "Solve this problem step by step.", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
@@ -972,7 +972,7 @@ data: {"type":"response.completed","response":{"id":"resp_streaming123","object"
 	// Create client with gpt-4o-mini model
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	// Override with gpt-4o in options
 	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
 		openaiagent.ResponsesNewParams(responses.ResponseNewParams{
@@ -1766,7 +1766,7 @@ data: {"type":"response.completed","response":{"id":"resp_001","object":"respons
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "test", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
@@ -1808,7 +1808,7 @@ data: {"type":"response.failed","response":{"id":"resp_001","object":"response",
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "test", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
@@ -1853,7 +1853,7 @@ data: {"type":"response.completed","response":{"id":"resp_001","object":"respons
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "test", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
@@ -1904,7 +1904,7 @@ data: {"type":"response.completed","response":{"id":"resp_001","object":"respons
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	var errorMessages []string
 	for update, err := range a.RunText(t.Context(), "harmful request", agent.Stream(true)) {
 		if err != nil {
@@ -2099,7 +2099,7 @@ data: {"type":"response.completed","response":{"id":"resp_002","object":"respons
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	var allText strings.Builder
 	for update, err := range a.RunText(t.Context(), "Calculate 3+3", agent.Stream(true),
 		agent.WithTool(&hostedtool.CodeInterpreter{}),
@@ -2154,7 +2154,7 @@ data: {"type":"response.incomplete","response":{"id":"resp_001","object":"respon
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "test", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
@@ -2262,7 +2262,7 @@ data: {"type":"response.failed","sequence_number":2,"response":{"id":"resp_001",
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "test", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
@@ -2271,7 +2271,7 @@ data: {"type":"response.failed","sequence_number":2,"response":{"id":"resp_001",
 	}
 
 	// Find error update
-	var errorUpdate *message.ResponseUpdate
+	var errorUpdate *agent.ResponseUpdate
 	for _, update := range updates {
 		for _, content := range update.Contents {
 			if _, ok := content.(*message.ErrorContent); ok {
@@ -2464,7 +2464,7 @@ data: {"type":"response.completed","response":{"id":"resp_001","object":"respons
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "test", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
@@ -2473,7 +2473,7 @@ data: {"type":"response.completed","response":{"id":"resp_001","object":"respons
 	}
 
 	// Find an update with annotations
-	var annotatedUpdate *message.ResponseUpdate
+	var annotatedUpdate *agent.ResponseUpdate
 	for _, update := range updates {
 		for _, content := range update.Contents {
 			if tc, ok := content.(*message.TextContent); ok {
@@ -2824,7 +2824,7 @@ data: {"type":"response.failed","sequence_number":2,"response":{"id":"resp_002",
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	var streamErr error
 	for update, err := range a.RunText(t.Context(), "test", agent.Stream(true)) {
 		if err != nil {
@@ -2876,7 +2876,7 @@ data: {"type":"response.failed","sequence_number":2,"response":{"id":"resp_003",
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "test", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
@@ -2885,7 +2885,7 @@ data: {"type":"response.failed","sequence_number":2,"response":{"id":"resp_003",
 	}
 
 	// Find error update with empty error information
-	var errorUpdate *message.ResponseUpdate
+	var errorUpdate *agent.ResponseUpdate
 	for _, update := range updates {
 		for _, content := range update.Contents {
 			if _, ok := content.(*message.ErrorContent); ok {
@@ -4074,7 +4074,7 @@ data: {"type":"response.completed","response":{"id":"resp_67890","object":"respo
 		t.Fatal(err)
 	}
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
 		openaiagent.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
@@ -4153,7 +4153,7 @@ data: {"type":"response.completed","response":{"id":"resp_67890","object":"respo
 		t.Fatal(err)
 	}
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
 		openaiagent.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
@@ -4430,7 +4430,7 @@ data: {"type":"response.completed","sequence_number":17,"response":{"id":"resp_6
 		t.Fatal(err)
 	}
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	var allText strings.Builder
 	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
 		agent.AllowBackgroundResponses(true),
@@ -4541,7 +4541,7 @@ data: {"type":"response.completed","sequence_number":17,"response":{"truncation"
 		t.Fatal(err)
 	}
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.Run(t.Context(), []*message.Message{}, agent.Stream(true),
 		agent.AllowBackgroundResponses(true),
 		agent.WithContinuationToken(token),

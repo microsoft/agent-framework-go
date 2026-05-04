@@ -37,7 +37,7 @@ func TestContextProviderMiddleware_Run_ProviderOptionsEnrichTools(t *testing.T) 
 	}
 
 	_, err := collectMiddlewareResponse(contextprovider.New(provider).Run(
-		func(_ context.Context, _ []*message.Message, opts ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+		func(_ context.Context, _ []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 			capturedTools = slices.Collect(agent.AllOptions(opts, agent.WithTool))
 			return middlewareSingleUpdate("ok")
 		},
@@ -70,7 +70,7 @@ func TestContextProviderMiddleware_Run_SharedOptions_ProviderToolsDoNotAccumulat
 
 	for range 3 {
 		_, err := collectMiddlewareResponse(contextprovider.New(provider).Run(
-			func(_ context.Context, _ []*message.Message, opts ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+			func(_ context.Context, _ []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 				toolCounts = append(toolCounts, len(slices.Collect(agent.AllOptions(opts, agent.WithTool))))
 				return middlewareSingleUpdate("ok")
 			},
@@ -102,7 +102,7 @@ func TestContextProviderMiddleware_Run_SharedOptions_OriginalToolsNotMutated(t *
 	}
 
 	_, err := collectMiddlewareResponse(contextprovider.New(provider).Run(
-		func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+		func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 			return middlewareSingleUpdate("ok")
 		},
 		context.Background(),
@@ -122,14 +122,14 @@ func TestContextProviderMiddleware_Run_SharedOptions_OriginalToolsNotMutated(t *
 	}
 }
 
-func middlewareSingleUpdate(text string) iter.Seq2[*message.ResponseUpdate, error] {
-	return func(yield func(*message.ResponseUpdate, error) bool) {
-		yield(&message.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: text}}}, nil)
+func middlewareSingleUpdate(text string) iter.Seq2[*agent.ResponseUpdate, error] {
+	return func(yield func(*agent.ResponseUpdate, error) bool) {
+		yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: text}}}, nil)
 	}
 }
 
-func collectMiddlewareResponse(seq iter.Seq2[*message.ResponseUpdate, error]) (*message.Response, error) {
-	var resp message.Response
+func collectMiddlewareResponse(seq iter.Seq2[*agent.ResponseUpdate, error]) (*agent.Response, error) {
+	var resp agent.Response
 	for update, err := range seq {
 		if err != nil {
 			return nil, err

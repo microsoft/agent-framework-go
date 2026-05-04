@@ -11,6 +11,7 @@ import (
 	"slices"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
@@ -82,7 +83,7 @@ func partsToContents(parts a2a.ContentParts) (message.Contents, error) {
 	return contents, nil
 }
 
-func responseToMessage(infoProvider a2a.TaskInfoProvider, resp *message.Response) (*a2a.Message, error) {
+func responseToMessage(infoProvider a2a.TaskInfoProvider, resp *agent.Response) (*a2a.Message, error) {
 	if resp == nil {
 		return a2a.NewMessageForTask(a2a.MessageRoleAgent, infoProvider), nil
 	}
@@ -107,7 +108,7 @@ func responseToMessage(infoProvider a2a.TaskInfoProvider, resp *message.Response
 	return out, nil
 }
 
-func responseUpdateToMessage(infoProvider a2a.TaskInfoProvider, update *message.ResponseUpdate) (*a2a.Message, error) {
+func responseUpdateToMessage(infoProvider a2a.TaskInfoProvider, update *agent.ResponseUpdate) (*a2a.Message, error) {
 	out := a2a.NewMessageForTask(a2a.MessageRoleAgent, infoProvider)
 	if update == nil {
 		return out, nil
@@ -123,7 +124,7 @@ func responseUpdateToMessage(infoProvider a2a.TaskInfoProvider, update *message.
 	return out, nil
 }
 
-func responseUpdateToWorkingStatusEvent(infoProvider a2a.TaskInfoProvider, update *message.ResponseUpdate) (*a2a.TaskStatusUpdateEvent, error) {
+func responseUpdateToWorkingStatusEvent(infoProvider a2a.TaskInfoProvider, update *agent.ResponseUpdate) (*a2a.TaskStatusUpdateEvent, error) {
 	var progressMessage *a2a.Message
 	var err error
 	if update != nil && len(update.Contents) > 0 {
@@ -146,7 +147,7 @@ func responseUpdateToWorkingStatusEvent(infoProvider a2a.TaskInfoProvider, updat
 	return working, nil
 }
 
-func responseUpdateToArtifactEvent(infoProvider a2a.TaskInfoProvider, artifactID a2a.ArtifactID, update *message.ResponseUpdate) (*a2a.TaskArtifactUpdateEvent, a2a.ArtifactID, error) {
+func responseUpdateToArtifactEvent(infoProvider a2a.TaskInfoProvider, artifactID a2a.ArtifactID, update *agent.ResponseUpdate) (*a2a.TaskArtifactUpdateEvent, a2a.ArtifactID, error) {
 	if update == nil {
 		return nil, artifactID, nil
 	}
@@ -176,7 +177,7 @@ func responseUpdateToArtifactEvent(infoProvider a2a.TaskInfoProvider, artifactID
 	return evt, nextArtifactID, nil
 }
 
-func responseToArtifactEvent(infoProvider a2a.TaskInfoProvider, resp *message.Response) (*a2a.TaskArtifactUpdateEvent, error) {
+func responseToArtifactEvent(infoProvider a2a.TaskInfoProvider, resp *agent.Response) (*a2a.TaskArtifactUpdateEvent, error) {
 	parts := make(a2a.ContentParts, 0)
 	if resp != nil {
 		for _, msg := range resp.Messages {

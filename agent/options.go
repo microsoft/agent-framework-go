@@ -7,7 +7,6 @@ import (
 	"reflect"
 	"slices"
 
-	"github.com/microsoft/agent-framework-go/format"
 	"github.com/microsoft/agent-framework-go/tool"
 )
 
@@ -21,7 +20,7 @@ type Option interface {
 }
 
 type (
-	responseFormatOpt    struct{ format.Format }
+	responseFormatOpt    struct{ ResponseFormat }
 	continuationTokenOpt string
 	serviceIDOpt         string
 
@@ -34,7 +33,7 @@ type (
 	structuredOutputOpt struct{ any }
 )
 
-func (o responseFormatOpt) Value() any           { return o.Format }
+func (o responseFormatOpt) Value() any           { return o.ResponseFormat }
 func (o streamOpt) Value() any                   { return bool(o) }
 func (o continuationTokenOpt) Value() any        { return string(o) }
 func (o allowBackgroundResponsesOpt) Value() any { return bool(o) }
@@ -116,7 +115,7 @@ func Stream(stream bool) Option {
 }
 
 // WithResponseFormat sets the desired response format for the agent run.
-func WithResponseFormat(format format.Format) Option {
+func WithResponseFormat(format ResponseFormat) Option {
 	return responseFormatOpt{format}
 }
 

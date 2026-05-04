@@ -16,7 +16,7 @@ import (
 	"github.com/microsoft/agent-framework-go/message"
 )
 
-func newTestAgent(runFn func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*message.ResponseUpdate, error]) *agent.Agent {
+func newTestAgent(runFn func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error]) *agent.Agent {
 	return agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{Name: "test-agent", ID: "test-agent-id"})
 }
 
@@ -30,9 +30,9 @@ func TestNewRequestHandler_PanicsWithoutAgent(t *testing.T) {
 }
 
 func TestRequestHandler_OnSendMessage_ReturnsMessage_WhenBackgroundDisabled(t *testing.T) {
-	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
 				MessageID: "m1",
 				Role:      message.RoleAssistant,
 				Contents:  message.Contents{&message.TextContent{Text: "hello from agent"}},
@@ -64,9 +64,9 @@ func TestRequestHandler_OnSendMessage_ReturnsMessage_WhenBackgroundDisabled(t *t
 }
 
 func TestRequestHandler_OnSendMessage_WithReferenceTaskIDs_ReturnsError(t *testing.T) {
-	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{Contents: message.Contents{&message.TextContent{Text: "ignored"}}}, nil)
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{Contents: message.Contents{&message.TextContent{Text: "ignored"}}}, nil)
 		}
 	})
 
@@ -83,9 +83,9 @@ func TestRequestHandler_OnSendMessage_WithReferenceTaskIDs_ReturnsError(t *testi
 }
 
 func TestRequestHandler_OnSendMessage_PreservesContextID(t *testing.T) {
-	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
 				MessageID: "m-context",
 				Role:      message.RoleAssistant,
 				Contents:  message.Contents{&message.TextContent{Text: "done"}},
@@ -113,16 +113,16 @@ func TestRequestHandler_OnSendMessageContinuation_UsesStoredTaskHistoryOnly(t *t
 	var callCount int
 	var continuationInputs []string
 
-	a := newTestAgent(func(_ context.Context, messagesIn []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	a := newTestAgent(func(_ context.Context, messagesIn []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		callCount++
 		continuationInputs = agentMessageTexts(messagesIn)
 
-		return func(yield func(*message.ResponseUpdate, error) bool) {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			if callCount != 1 {
 				yield(nil, assertErr("unexpected agent invocation"))
 				return
 			}
-			yield(&message.ResponseUpdate{
+			yield(&agent.ResponseUpdate{
 				MessageID: "m-done",
 				Role:      message.RoleAssistant,
 				Contents:  message.Contents{&message.TextContent{Text: "done"}},
@@ -189,17 +189,17 @@ func TestRequestHandler_OnSendStreamingMessageContinuation_UsesTaskUpdatePath(t 
 	var continuationInputs []string
 	var continuationStream bool
 
-	a := newTestAgent(func(_ context.Context, messagesIn []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	a := newTestAgent(func(_ context.Context, messagesIn []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		callCount++
 		continuationInputs = agentMessageTexts(messagesIn)
 		continuationStream, _ = agent.GetOption(options, agent.Stream)
 
-		return func(yield func(*message.ResponseUpdate, error) bool) {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			if callCount != 1 {
 				yield(nil, assertErr("unexpected agent invocation"))
 				return
 			}
-			yield(&message.ResponseUpdate{
+			yield(&agent.ResponseUpdate{
 				MessageID: "m-done",
 				Role:      message.RoleAssistant,
 				Contents:  message.Contents{&message.TextContent{Text: "done"}},
@@ -268,22 +268,22 @@ func TestRequestHandler_OnSendStreamingMessageContinuation_UsesTaskUpdatePath(t 
 }
 
 func TestRequestHandler_OnSendMessageStream_UsesTaskLifecycleAndArtifacts(t *testing.T) {
-	a := newTestAgent(func(_ context.Context, _ []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		stream, _ := agent.GetOption(options, agent.Stream)
 		if !stream {
-			return func(yield func(*message.ResponseUpdate, error) bool) {
+			return func(yield func(*agent.ResponseUpdate, error) bool) {
 				yield(nil, assertErr("expected Stream=true"))
 			}
 		}
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			if !yield(&message.ResponseUpdate{
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			if !yield(&agent.ResponseUpdate{
 				ResponseID: "r1",
 				Role:       message.RoleAssistant,
 				Contents:   message.Contents{&message.TextContent{Text: "chunk 1"}},
 			}, nil) {
 				return
 			}
-			yield(&message.ResponseUpdate{
+			yield(&agent.ResponseUpdate{
 				ResponseID: "r2",
 				Role:       message.RoleAssistant,
 				Contents:   message.Contents{&message.TextContent{Text: "chunk 2"}},
@@ -319,9 +319,9 @@ func TestRequestHandler_OnSendMessageStream_UsesTaskLifecycleAndArtifacts(t *tes
 }
 
 func TestRequestHandler_OnSendMessageStream_UsesProvidedContextID(t *testing.T) {
-	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
 				ResponseID: "r1",
 				Role:       message.RoleAssistant,
 				Contents:   message.Contents{&message.TextContent{Text: "reply"}},
@@ -356,9 +356,9 @@ func TestRequestHandler_OnSendMessageStream_UsesProvidedContextID(t *testing.T) 
 }
 
 func TestRequestHandler_OnSendMessageStream_GeneratesContextIDWhenMissing(t *testing.T) {
-	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
 				ResponseID: "r1",
 				Role:       message.RoleAssistant,
 				Contents:   message.Contents{&message.TextContent{Text: "reply"}},
@@ -381,8 +381,8 @@ func TestRequestHandler_OnSendMessageStream_GeneratesContextIDWhenMissing(t *tes
 }
 
 func TestRequestHandler_OnSendMessageStream_WhenMessageIsNil_ReturnsError(t *testing.T) {
-	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(func(*message.ResponseUpdate, error) bool) {}
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(func(*agent.ResponseUpdate, error) bool) {}
 	})
 
 	h := a2ahosting.NewRequestHandler(a2ahosting.ExecutorConfig{Agent: a})
@@ -402,9 +402,9 @@ func TestRequestHandler_OnSendMessageStream_WhenMessageIsNil_ReturnsError(t *tes
 }
 
 func TestRequestHandler_OnSendMessageStream_WithResponseAdditionalProperties_SetsArtifactMetadata(t *testing.T) {
-	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
 				ResponseID: "r1",
 				Role:       message.RoleAssistant,
 				Contents:   message.Contents{&message.TextContent{Text: "reply"}},
@@ -433,9 +433,9 @@ func TestRequestHandler_OnSendMessageStream_WithResponseAdditionalProperties_Set
 }
 
 func TestRequestHandler_OnSendMessageStream_WithNilAdditionalProperties_LeavesArtifactMetadataNil(t *testing.T) {
-	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
 				ResponseID: "r1",
 				Role:       message.RoleAssistant,
 				Contents:   message.Contents{&message.TextContent{Text: "reply"}},
@@ -457,8 +457,8 @@ func TestRequestHandler_OnSendMessageStream_WithNilAdditionalProperties_LeavesAr
 }
 
 func TestRequestHandler_OnSendMessageStream_WhenAgentYieldsNoUpdates_ReturnsLifecycleOnly(t *testing.T) {
-	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(func(*message.ResponseUpdate, error) bool) {}
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(func(*agent.ResponseUpdate, error) bool) {}
 	})
 
 	h := a2ahosting.NewRequestHandler(a2ahosting.ExecutorConfig{Agent: a})
@@ -482,15 +482,15 @@ func TestRequestHandler_OnSendMessageStream_WhenAgentYieldsNoUpdates_ReturnsLife
 }
 
 func TestRequestHandler_OnCancelTask_ReturnsCanceledTask(t *testing.T) {
-	a := newTestAgent(func(_ context.Context, _ []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		allowBackground, _ := agent.GetOption(options, agent.AllowBackgroundResponses)
 		if !allowBackground {
-			return func(yield func(*message.ResponseUpdate, error) bool) {
+			return func(yield func(*agent.ResponseUpdate, error) bool) {
 				yield(nil, assertErr("expected AllowBackgroundResponses=true"))
 			}
 		}
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
 				MessageID:         "m-cancel",
 				Role:              message.RoleAssistant,
 				Contents:          message.Contents{&message.TextContent{Text: "working"}},

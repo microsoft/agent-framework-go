@@ -240,7 +240,7 @@ func buildTaskUpdateInputs(execCtx *a2asrv.ExecutorContext) ([]*message.Message,
 	return messages, nil
 }
 
-func yieldWorkingStatusFromResponse(execCtx *a2asrv.ExecutorContext, resp *message.Response, yield func(a2a.Event, error) bool) error {
+func yieldWorkingStatusFromResponse(execCtx *a2asrv.ExecutorContext, resp *agent.Response, yield func(a2a.Event, error) bool) error {
 	var progressMessage *a2a.Message
 	var err error
 	if len(resp.Messages) > 0 {
@@ -259,7 +259,7 @@ func yieldWorkingStatusFromResponse(execCtx *a2asrv.ExecutorContext, resp *messa
 	return nil
 }
 
-func (e *executor) runResponse(ctx context.Context, execCtx *a2asrv.ExecutorContext, messagesIn []*message.Message) (*message.Response, error) {
+func (e *executor) runResponse(ctx context.Context, execCtx *a2asrv.ExecutorContext, messagesIn []*message.Message) (*agent.Response, error) {
 	runOptions, err := e.newRunOptions(ctx, execCtx, false)
 	if err != nil {
 		return nil, err

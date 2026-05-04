@@ -57,8 +57,8 @@ func (a *a2aagent) createSession(ctx context.Context, session agent.Session, opt
 	return nil
 }
 
-func (a *a2aagent) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-	return func(yield func(*message.ResponseUpdate, error) bool) {
+func (a *a2aagent) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		session, _ := agent.GetOption(options, agent.WithSession)
 		stream, _ := agent.GetOption(options, agent.Stream)
 		if token, ok := agent.GetOption(options, agent.WithContinuationToken); ok && token != "" {
@@ -147,7 +147,7 @@ func (a *a2aagent) subscribeToTaskWithFallback(ctx context.Context, taskID a2a.T
 	}
 }
 
-func sendMsg(session agent.Session, seq iter.Seq2[a2a.Event, error], yield func(*message.ResponseUpdate, error) bool) {
+func sendMsg(session agent.Session, seq iter.Seq2[a2a.Event, error], yield func(*agent.ResponseUpdate, error) bool) {
 	for e, err := range seq {
 		if err != nil {
 			yield(nil, err)
@@ -164,7 +164,7 @@ func sendMsg(session agent.Session, seq iter.Seq2[a2a.Event, error], yield func(
 				return
 			}
 		case *a2a.TaskStatusUpdateEvent:
-			if !yield(&message.ResponseUpdate{
+			if !yield(&agent.ResponseUpdate{
 				RawRepresentation:    e,
 				AdditionalProperties: e.Metadata,
 				MessageID:            string(e.TaskID),
@@ -180,7 +180,7 @@ func sendMsg(session agent.Session, seq iter.Seq2[a2a.Event, error], yield func(
 				yield(nil, err)
 				return
 			}
-			if !yield(&message.ResponseUpdate{
+			if !yield(&agent.ResponseUpdate{
 				RawRepresentation:    e,
 				AdditionalProperties: e.Metadata,
 				MessageID:            string(e.Artifact.ID),
@@ -201,7 +201,7 @@ func sendMsg(session agent.Session, seq iter.Seq2[a2a.Event, error], yield func(
 			if e.Role == a2a.MessageRoleAgent {
 				role = message.RoleAssistant
 			}
-			if !yield(&message.ResponseUpdate{
+			if !yield(&agent.ResponseUpdate{
 				RawRepresentation:    e,
 				AdditionalProperties: e.Metadata,
 				MessageID:            e.ID,
@@ -219,7 +219,7 @@ func sendMsg(session agent.Session, seq iter.Seq2[a2a.Event, error], yield func(
 	}
 }
 
-func yieldTask(yield func(*message.ResponseUpdate, error) bool, task *a2a.Task) bool {
+func yieldTask(yield func(*agent.ResponseUpdate, error) bool, task *a2a.Task) bool {
 	now := time.Now()
 	var continuationToken string
 	switch task.Status.State {
@@ -240,7 +240,7 @@ func yieldTask(yield func(*message.ResponseUpdate, error) bool, task *a2a.Task) 
 		}
 	}
 
-	return yield(&message.ResponseUpdate{
+	return yield(&agent.ResponseUpdate{
 		RawRepresentation:    task,
 		AdditionalProperties: task.Metadata,
 		ResponseID:           string(task.ID),

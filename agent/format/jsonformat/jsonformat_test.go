@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/microsoft/agent-framework-go/format/jsonformat"
+	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
 )
 
 type Struct struct {
@@ -35,8 +35,8 @@ func TestForType(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if f.Name() != tt.name {
-				t.Fatalf("expected: %v, got: %v", tt.name, f.Name())
+			if f.Name != tt.name {
+				t.Fatalf("expected: %v, got: %v", tt.name, f.Name)
 			}
 		})
 	}
@@ -44,21 +44,21 @@ func TestForType(t *testing.T) {
 
 func TestFormatKind(t *testing.T) {
 	format := jsonformat.MustFor[Struct]()
-	if format.Kind() != "json" {
-		t.Fatalf("expected: %v, got: %v", "json", format.Kind())
+	if format.Kind != "json" {
+		t.Fatalf("expected: %v, got: %v", "json", format.Kind)
 	}
 }
 
 func TestNothing(t *testing.T) {
 	format := jsonformat.Nothing()
-	if format.Kind() != "json" {
-		t.Fatalf("expected: %v, got: %v", "json", format.Kind())
+	if format.Kind != "json" {
+		t.Fatalf("expected: %v, got: %v", "json", format.Kind)
 	}
 }
 
 func TestAny(t *testing.T) {
 	format := jsonformat.Any()
-	if format.Kind() != "json" {
-		t.Fatalf("expected: %v, got: %v", "json", format.Kind())
+	if format.Kind != "json" {
+		t.Fatalf("expected: %v, got: %v", "json", format.Kind)
 	}
 }

@@ -4,7 +4,7 @@
 //
 // The first agent run on a session opens a streaming workflow run; subsequent
 // runs reuse it. Workflow events are translated into agent
-// [message.ResponseUpdate]s as the workflow executes. Pending external
+// [agent.ResponseUpdate]s as the workflow executes. Pending external
 // requests raised by the workflow (via [workflow.RequestInfoEvent]) are
 // surfaced as response updates carrying the request content; the caller can
 // then resume by including the matching response content (e.g.
@@ -112,8 +112,8 @@ func New(wf *workflow.Workflow, cfg Config) (*agent.Agent, error) {
 		}
 	}
 
-	runFn := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
+	runFn := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			responseID := uuid.NewString()
 
 			sess, _ := agent.GetOption(options, agent.WithSession)
@@ -175,8 +175,8 @@ func New(wf *workflow.Workflow, cfg Config) (*agent.Agent, error) {
 					if e.Response == nil {
 						continue
 					}
-					for _, msg := range e.Response.Messages {
-						if !yield(messageToUpdate(msg, responseID, e), nil) {
+					for _, update := range e.Response.ToUpdates() {
+						if !yield(stampUpdate(update, responseID, e), nil) {
 							return
 						}
 					}
@@ -357,11 +357,11 @@ func normalizeResponseContent(response message.Content, originalRequest message.
 }
 
 // requestToUpdate translates an [*workflow.ExternalRequest] into a
-// [*message.ResponseUpdate] that surfaces the request content to the caller.
+// [*agent.ResponseUpdate] that surfaces the request content to the caller.
 // The exposed content ID is rewritten to the workflow-facing external request
 // ID, while the original content is retained so the matching response can be
 // normalized before it is delivered back into the workflow.
-func requestToUpdate(req *workflow.ExternalRequest, responseID string, raw any) (*message.ResponseUpdate, string, pendingReq, bool) {
+func requestToUpdate(req *workflow.ExternalRequest, responseID string, raw any) (*agent.ResponseUpdate, string, pendingReq, bool) {
 	if req == nil {
 		return nil, "", pendingReq{}, false
 	}
@@ -400,31 +400,30 @@ func requestContentForDelivery(requestID string, c message.Content) (message.Con
 	return nil, "", false
 }
 
-func messageToUpdate(m *message.Message, responseID string, raw any) *message.ResponseUpdate {
+func messageToUpdate(m *message.Message, responseID string, raw any) *agent.ResponseUpdate {
 	if m == nil {
 		return newUpdate(responseID, raw)
 	}
-	return stampUpdate(&message.ResponseUpdate{
+	return stampUpdate(&agent.ResponseUpdate{
 		Role:       m.Role,
 		Contents:   m.Contents,
-		AuthorID:   m.AuthorID,
 		AuthorName: m.AuthorName,
 		MessageID:  m.ID,
 		CreatedAt:  m.CreatedAt,
 	}, responseID, raw)
 }
 
-func newUpdate(responseID string, raw any, contents ...message.Content) *message.ResponseUpdate {
-	return stampUpdate(&message.ResponseUpdate{
+func newUpdate(responseID string, raw any, contents ...message.Content) *agent.ResponseUpdate {
+	return stampUpdate(&agent.ResponseUpdate{
 		Role:              message.RoleAssistant,
 		Contents:          contents,
 		RawRepresentation: raw,
 	}, responseID, raw)
 }
 
-func stampUpdate(update *message.ResponseUpdate, responseID string, raw any) *message.ResponseUpdate {
+func stampUpdate(update *agent.ResponseUpdate, responseID string, raw any) *agent.ResponseUpdate {
 	if update == nil {
-		update = &message.ResponseUpdate{}
+		update = &agent.ResponseUpdate{}
 	} else {
 		clone := *update
 		update = &clone

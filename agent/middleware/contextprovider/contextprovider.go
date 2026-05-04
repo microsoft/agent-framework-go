@@ -30,10 +30,10 @@ type contextProviderRunner struct {
 	providers []*agent.ContextProvider
 }
 
-func (r *contextProviderRunner) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (r *contextProviderRunner) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 	session, _ := agent.GetOption(options, agent.WithSession)
 
-	return func(yield func(*message.ResponseUpdate, error) bool) {
+	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		options = slices.Clone(options)
 		for _, provider := range r.providers {
 			var err error
@@ -43,7 +43,7 @@ func (r *contextProviderRunner) Run(next agent.RunFunc, ctx context.Context, mes
 				return
 			}
 		}
-		var resp message.Response
+		var resp agent.Response
 		for update, err := range next(ctx, messages, options...) {
 			if update != nil && (session == nil || session.ServiceID() == "") {
 				resp.Update(update)

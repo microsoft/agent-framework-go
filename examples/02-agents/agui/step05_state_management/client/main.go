@@ -74,7 +74,7 @@ func toStateContent(state any) *message.DataContent {
 	return &message.DataContent{MediaType: "application/json", Data: base64.StdEncoding.EncodeToString(b)}
 }
 
-func extractState(resp *message.Response) (any, bool) {
+func extractState(resp *agent.Response) (any, bool) {
 	for c := range resp.Contents() {
 		dc, ok := c.(*message.DataContent)
 		if !ok || strings.ToLower(strings.TrimSpace(dc.MediaType)) != "application/json" {

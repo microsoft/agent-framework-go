@@ -67,8 +67,8 @@ func New(cfg Config) agent.Middleware {
 	return ac
 }
 
-func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-	return func(yield func(*message.ResponseUpdate, error) bool) {
+func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		tools, requiresApproval := f.createToolsMap(agent.AllOptions(opts, agent.WithTool))
 
 		// This is a synthetic ID since we're generating the tool messages instead of getting them from
@@ -119,7 +119,7 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 		}
 		// At this point, we've fully handled all approval responses that were part of the original messages,
 		// and we can now enter the main function calling loop.
-		var updates []*message.ResponseUpdate
+		var updates []*agent.ResponseUpdate
 		var functionCallContents []*message.FunctionCallContent
 		var approvalRequiredFunctions []tool.Tool
 		for i := 0; ; i++ {
@@ -283,8 +283,8 @@ func checkForApprovalRequiringFCC(functionCalls []*message.FunctionCallContent, 
 	return hasApprovalRequiringFcc, lastApprovalCheckedFCCIdx
 }
 
-func convertToolResultMsgToUpdate(msg *message.Message, msgID string) *message.ResponseUpdate {
-	return &message.ResponseUpdate{
+func convertToolResultMsgToUpdate(msg *message.Message, msgID string) *agent.ResponseUpdate {
+	return &agent.ResponseUpdate{
 		AdditionalProperties: msg.AdditionalProperties,
 		AuthorName:           msg.AuthorName,
 		Contents:             msg.Contents,

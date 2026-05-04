@@ -13,6 +13,7 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaiagent"
+	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/internal/messagetest"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
@@ -212,7 +213,7 @@ data: [DONE]
 
 	msgID := "chatcmpl-ADxFKtX6xIwdWRN42QvBj2u1RZpCK"
 	createdAt := time.Unix(1727889370, 0)
-	want := []*message.ResponseUpdate{
+	want := []*agent.ResponseUpdate{
 		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt},
 		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt, Contents: []message.Content{&message.TextContent{Text: "Hello"}}},
 		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt, Contents: []message.Content{&message.TextContent{Text: "!"}}},
@@ -244,7 +245,7 @@ data: [DONE]
 
 	a := newTestClient(server)
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "hello", openaiagent.ChatCompletionNewParams(openai.ChatCompletionNewParams{
 		MaxCompletionTokens: openai.Int(20),
 		Temperature:         openai.Float(0.5),
@@ -254,7 +255,7 @@ data: [DONE]
 		}
 		updates = append(updates, update)
 	}
-	if err := messagetest.ResponseUpdatesEqual(updates, want); err != nil {
+	if err := agenttest.ResponseUpdatesEqual(updates, want); err != nil {
 		t.Error(err)
 	}
 }
@@ -785,7 +786,7 @@ data: [DONE]
 	msgID := "chatcmpl-ADymNiWWeqCJqHNFXiI1QtRcLuXcl"
 	callID := "call_F9ZaqPWo69u0urxAhVt8meDW"
 	createdAt := time.Unix(1727895263, 0)
-	want := []*message.ResponseUpdate{
+	want := []*agent.ResponseUpdate{
 		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt},
 		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt},
 		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt},
@@ -829,14 +830,14 @@ data: [DONE]
 		Description: "Gets the age of the specified person.",
 	}, getPersonAge)
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "How old is Alice?", agent.WithTool(tool), agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
 		}
 		updates = append(updates, update)
 	}
-	if err := messagetest.ResponseUpdatesEqual(updates, want); err != nil {
+	if err := agenttest.ResponseUpdatesEqual(updates, want); err != nil {
 		t.Error(err)
 	}
 }
@@ -1079,7 +1080,7 @@ data: [DONE]
 	// Create client with gpt-4o-mini model
 	a := newTestClient(server)
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	// Override with gpt-4o in options
 	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
 		openaiagent.ChatCompletionNewParams(openai.ChatCompletionNewParams{

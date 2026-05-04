@@ -14,7 +14,6 @@ import (
 	aguiTypes "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	aguiSSE "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/encoding/sse"
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/message"
 )
 
 type HandlerConfig struct {
@@ -68,7 +67,7 @@ func NewJSONHTTPHandler(cfg HandlerConfig) http.Handler {
 			runOptions = append(runOptions, agent.WithTool(t))
 		}
 		updates := cfg.Agent.Run(r.Context(), messagesIn, runOptions...)
-		updatesSeq := iter.Seq2[*message.ResponseUpdate, error](updates)
+		updatesSeq := iter.Seq2[*agent.ResponseUpdate, error](updates)
 		events := updatesToAGUIEvents(r.Context(), updatesSeq, threadID, runID, toClientToolNames(input.Tools))
 
 		if err := streamEvents(r.Context(), w, writer, events); err != nil {

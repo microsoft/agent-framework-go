@@ -13,10 +13,9 @@ import (
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/agent/middleware/autocall"
 	"github.com/microsoft/agent-framework-go/agent/middleware/structuredoutput"
-	"github.com/microsoft/agent-framework-go/format"
-	"github.com/microsoft/agent-framework-go/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/hostedtool"
@@ -70,25 +69,29 @@ func NewChatCompletions(oclient openai.Client, config Config) *agent.Agent {
 	}, config.Config)
 }
 
-func (a *chatClient) formatOf(v any) (format.Format, error) {
+func (a *chatClient) formatOf(v any) (agent.ResponseFormat, error) {
 	return jsonformat.ForType(reflect.TypeOf(v))
 }
 
-func (a *chatClient) unmarshal(format format.Format, data []byte, v any) error {
-	return format.(*jsonformat.Format).Unmarshal(data, v)
+func (a *chatClient) unmarshal(format agent.ResponseFormat, data []byte, v any) error {
+	jsonFormat, err := jsonformat.FromResponseFormat(format)
+	if err != nil {
+		return err
+	}
+	return jsonFormat.Unmarshal(data, v)
 }
 
-func (a *chatClient) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (a *chatClient) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 	body, err := buildCompletionParams(a.config.Model, messages, options)
 	if err != nil {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			yield(nil, err)
 		}
 	}
 	if stream, _ := agent.GetOption(options, agent.Stream); !stream {
 		resp, err := a.client.Chat.Completions.New(ctx, body)
 		if err != nil {
-			return func(yield func(*message.ResponseUpdate, error) bool) {
+			return func(yield func(*agent.ResponseUpdate, error) bool) {
 				yield(nil, err)
 			}
 		}
@@ -110,8 +113,8 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 		if resp.JSON.Usage.Valid() {
 			contents = addUsage(contents, resp.Usage)
 		}
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			update := &message.ResponseUpdate{
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			update := &agent.ResponseUpdate{
 				Contents:   contents,
 				Role:       message.RoleAssistant,
 				ResponseID: resp.ID,
@@ -123,7 +126,7 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 			}
 		}
 	}
-	return func(yield func(*message.ResponseUpdate, error) bool) {
+	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		stream := a.client.Chat.Completions.NewStreaming(ctx, body)
 		defer func() { _ = stream.Close() }()
 		var acc openai.ChatCompletionAccumulator
@@ -151,7 +154,7 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 			if chunk.JSON.Usage.Valid() {
 				contents = addUsage(contents, chunk.Usage)
 			}
-			resp := &message.ResponseUpdate{
+			resp := &agent.ResponseUpdate{
 				Contents:   contents,
 				Role:       role,
 				ResponseID: chunk.ID,
@@ -190,20 +193,20 @@ func buildCompletionParams(model string, messages []*message.Message, opts []age
 		params = p
 	}
 	params.Model = cmp.Or(params.Model, model)
-	if frmt, ok := agent.GetOption(opts, agent.WithResponseFormat); ok && frmt != nil {
-		switch frmt.Kind() {
+	if frmt, ok := agent.GetOption(opts, agent.WithResponseFormat); ok {
+		switch frmt.Kind {
 		case "json":
-			if schema, ok := frmt.(format.SchemaFormat); ok {
+			if schema := frmt.Schema; schema != nil {
 				params.ResponseFormat.OfJSONSchema = &shared.ResponseFormatJSONSchemaParam{
 					JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
-						Name:   schema.Name(),
-						Schema: schema.Schema(),
+						Name:   frmt.Name,
+						Schema: schema,
 					},
 				}
-				if desc := schema.Description(); desc != "" {
+				if desc := frmt.Description; desc != "" {
 					params.ResponseFormat.OfJSONSchema.JSONSchema.Description = openai.String(desc)
 				}
-				if schema.Strict() {
+				if frmt.Strict {
 					params.ResponseFormat.OfJSONSchema.JSONSchema.Strict = openai.Bool(true)
 				}
 			} else {

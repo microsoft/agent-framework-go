@@ -29,8 +29,8 @@ var (
 )
 
 func main() {
-	stateSnapshotMiddleware := agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
+	stateSnapshotMiddleware := agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			for update, err := range next(ctx, messages, opts...) {
 				if err != nil {
 					yield(nil, err)
@@ -49,7 +49,7 @@ func main() {
 						var snapshot any
 						if json.Unmarshal([]byte(trimmed), &snapshot) == nil {
 							encoded := base64.StdEncoding.EncodeToString([]byte(trimmed))
-							if !yield(&message.ResponseUpdate{Role: update.Role, Contents: message.Contents{&message.DataContent{MediaType: "application/json", Data: encoded}}}, nil) {
+							if !yield(&agent.ResponseUpdate{Role: update.Role, Contents: message.Contents{&message.DataContent{MediaType: "application/json", Data: encoded}}}, nil) {
 								return
 							}
 						}

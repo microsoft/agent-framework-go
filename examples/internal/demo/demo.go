@@ -49,8 +49,8 @@ func NewLogger(name, description string, metadata ...string) *Logger {
 	return &Logger{}
 }
 
-func (mw *Logger) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-	return func(yield func(*message.ResponseUpdate, error) bool) {
+func (mw *Logger) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		mw.n++
 		fmt.Printf("%s%s===== Run %d =====%s\n\n", colorYellow, colorBold, mw.n, colorReset)
 		for _, msg := range slices.Backward(messages) {
@@ -168,7 +168,7 @@ func Response(resp fmt.Stringer, err error) {
 	txt := resp.String()
 	if txt != "" {
 		fmt.Print(resp)
-		if _, ok := resp.(*message.ResponseUpdate); !ok {
+		if _, ok := resp.(*agent.ResponseUpdate); !ok {
 			fmt.Print("\n\n")
 		}
 	}

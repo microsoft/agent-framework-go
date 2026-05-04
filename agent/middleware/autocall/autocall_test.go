@@ -164,7 +164,7 @@ func invokeAndAssert(t *testing.T, tools []tool.Tool, plan []*message.Message, e
 		}
 		msg := plan[idx]
 		for _, content := range msg.Contents {
-			rb.Add(&message.ResponseUpdate{
+			rb.Add(&agent.ResponseUpdate{
 				Role:     msg.Role,
 				Contents: []message.Content{content},
 			})
@@ -190,7 +190,7 @@ func invokeAndAssert(t *testing.T, tools []tool.Tool, plan []*message.Message, e
 	}
 
 	// Collect all updates
-	var resp message.Response
+	var resp agent.Response
 	for update, err := range autocall.New(autocallOptions).Run(runner.Run, t.Context(), initialMessages, opts...) {
 		if err != nil {
 			t.Fatalf("unexpected error during streaming: %v", err)
@@ -232,12 +232,12 @@ func TestFunctionInvoking_FunctionReturningFunctionResultContentWithMatchingCall
 
 	runner := &agenttest.Runner{
 		Responses: agenttest.NewResponseBuilder().
-			Add(&message.ResponseUpdate{
+			Add(&agent.ResponseUpdate{
 				Role:     message.RoleAssistant,
 				Contents: []message.Content{&message.FunctionCallContent{CallID: "callId1", Name: "Func1", Arguments: `{}`}},
 			}).
 			NewTurn().
-			Add(&message.ResponseUpdate{
+			Add(&agent.ResponseUpdate{
 				Role:     message.RoleAssistant,
 				Contents: []message.Content{&message.TextContent{Text: "done"}},
 			}).
@@ -250,7 +250,7 @@ func TestFunctionInvoking_FunctionReturningFunctionResultContentWithMatchingCall
 	}
 
 	initialMessages := []*message.Message{message.NewText("hello")}
-	var resp message.Response
+	var resp agent.Response
 	for update, err := range autocall.New(autocall.Config{}).Run(runner.Run, t.Context(), initialMessages, opts...) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -308,12 +308,12 @@ func TestFunctionInvoking_FunctionReturningFunctionResultContentWithMismatchedCa
 
 	runner := &agenttest.Runner{
 		Responses: agenttest.NewResponseBuilder().
-			Add(&message.ResponseUpdate{
+			Add(&agent.ResponseUpdate{
 				Role:     message.RoleAssistant,
 				Contents: []message.Content{&message.FunctionCallContent{CallID: "callId1", Name: "Func1", Arguments: `{}`}},
 			}).
 			NewTurn().
-			Add(&message.ResponseUpdate{
+			Add(&agent.ResponseUpdate{
 				Role:     message.RoleAssistant,
 				Contents: []message.Content{&message.TextContent{Text: "done"}},
 			}).
@@ -326,7 +326,7 @@ func TestFunctionInvoking_FunctionReturningFunctionResultContentWithMismatchedCa
 	}
 
 	initialMessages := []*message.Message{message.NewText("hello")}
-	var resp message.Response
+	var resp agent.Response
 	for update, err := range autocall.New(autocall.Config{}).Run(runner.Run, t.Context(), initialMessages, opts...) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -691,7 +691,7 @@ func TestFunctionInvoking_ContinuesWithFailingCallsUntilMaximumConsecutiveErrors
 				}
 				msg := plan[idx]
 				for _, content := range msg.Contents {
-					rb.Add(&message.ResponseUpdate{
+					rb.Add(&agent.ResponseUpdate{
 						Role:     msg.Role,
 						Contents: []message.Content{content},
 					})
@@ -807,7 +807,7 @@ func TestFunctionInvoking_CanFailOnFirstException(t *testing.T) {
 				}
 				msg := plan[idx]
 				for _, content := range msg.Contents {
-					rb.Add(&message.ResponseUpdate{
+					rb.Add(&agent.ResponseUpdate{
 						Role:     msg.Role,
 						Contents: []message.Content{content},
 					})
@@ -1023,17 +1023,17 @@ func TestFunctionInvoking_AllResponseMessagesReturned(t *testing.T) {
 
 	runner := &agenttest.Runner{
 		Responses: agenttest.NewResponseBuilder().
-			Add(&message.ResponseUpdate{
+			Add(&agent.ResponseUpdate{
 				Role:     message.RoleAssistant,
 				Contents: []message.Content{&message.FunctionCallContent{CallID: "callId0", Name: "Func1"}},
 			}).
 			NewTurn().
-			Add(&message.ResponseUpdate{
+			Add(&agent.ResponseUpdate{
 				Role:     message.RoleAssistant,
 				Contents: []message.Content{&message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
 			}).
 			NewTurn().
-			Add(&message.ResponseUpdate{
+			Add(&agent.ResponseUpdate{
 				Role:     message.RoleAssistant,
 				Contents: []message.Content{&message.TextContent{Text: "The answer is 42."}},
 			}).
@@ -1046,7 +1046,7 @@ func TestFunctionInvoking_AllResponseMessagesReturned(t *testing.T) {
 		opts = append(opts, agent.WithTool(tool))
 	}
 
-	var resp message.Response
+	var resp agent.Response
 	for update, err := range autocall.New(autocall.Config{}).Run(runner.Run, t.Context(), initialMessages, opts...) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -1097,7 +1097,7 @@ func TestFunctionInvoking_NextIterationIncludesAssistantFunctionCallMessage(t *t
 
 	rb := agenttest.NewResponseBuilder()
 	// First turn: model calls a function.
-	rb.Add(&message.ResponseUpdate{
+	rb.Add(&agent.ResponseUpdate{
 		Role:     message.RoleAssistant,
 		Contents: []message.Content{&message.FunctionCallContent{CallID: "callId1", Name: "Func1", Arguments: `{}`}},
 	})
@@ -1138,7 +1138,7 @@ func TestFunctionInvoking_NextIterationIncludesAssistantFunctionCallMessage(t *t
 			t.Error("expected tool message to contain FunctionResultContent with callId1")
 		}
 	})
-	rb.Add(&message.ResponseUpdate{
+	rb.Add(&agent.ResponseUpdate{
 		Role:     message.RoleAssistant,
 		Contents: []message.Content{&message.TextContent{Text: "done"}},
 	})
@@ -1155,7 +1155,7 @@ func TestFunctionInvoking_NextIterationIncludesAssistantFunctionCallMessage(t *t
 	}
 
 	initialMessages := []*message.Message{message.NewText("hello")}
-	var resp message.Response
+	var resp agent.Response
 	for update, err := range autocall.New(autocallConfig).Run(runner.Run, t.Context(), initialMessages, opts...) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
