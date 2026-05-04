@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
+	"github.com/microsoft/agent-framework-go/agent/provider/openaiagent"
 	"github.com/microsoft/agent-framework-go/agent/skills"
 	"github.com/microsoft/agent-framework-go/examples/02-agents/skills/internal/skillhelpers"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
@@ -100,12 +100,12 @@ func main() {
 	token := demo.AzureTokenCredential()
 
 	skillsProvider := skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{unitConverterSkill}})
-	agent := openaichatagent.New(
+	agent := openaiagent.NewChatCompletions(
 		openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
 			azure.WithTokenCredential(token),
 		),
-		openaichatagent.Config{
+		openaiagent.Config{
 			Model: deployment,
 			Config: agent.Config{
 				Name:             "UnitConverterAgent",

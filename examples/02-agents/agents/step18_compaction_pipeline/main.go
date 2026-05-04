@@ -14,7 +14,7 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/compaction"
-	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
+	"github.com/microsoft/agent-framework-go/agent/provider/openaiagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
@@ -49,9 +49,9 @@ func main() {
 	)
 
 	// Create a separate summarizer agent. In production, this could use a smaller or cheaper model.
-	summarizerAgent := openaichatagent.New(
+	summarizerAgent := openaiagent.NewChatCompletions(
 		client,
-		openaichatagent.Config{
+		openaiagent.Config{
 			Model: deployment,
 			Config: agent.Config{
 				Name: "ConversationSummarizer",
@@ -94,9 +94,9 @@ func main() {
 	}
 
 	// Create Azure OpenAI agent with the compaction pipeline and a price-lookup tool.
-	a := openaichatagent.New(
+	a := openaiagent.NewChatCompletions(
 		client,
-		openaichatagent.Config{
+		openaiagent.Config{
 			Model: deployment,
 			Config: agent.Config{
 				Instructions: `You are a helpful, but long-winded, shopping assistant.

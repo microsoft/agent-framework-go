@@ -13,7 +13,7 @@ import (
 	"slices"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
+	"github.com/microsoft/agent-framework-go/agent/provider/openaiagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/openai/openai-go/v3"
@@ -44,12 +44,12 @@ func main() {
 	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	// Create Azure OpenAI agent with a custom message store that persists messages to disk.
-	a := openaichatagent.New(
+	a := openaiagent.NewChatCompletions(
 		openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
 			azure.WithTokenCredential(token),
 		),
-		openaichatagent.Config{
+		openaiagent.Config{
 			Model: deployment,
 			Config: agent.Config{
 				Instructions: "You are good at telling jokes.",

@@ -8,7 +8,7 @@ import (
 	"os"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
+	"github.com/microsoft/agent-framework-go/agent/provider/openaiagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
@@ -31,12 +31,12 @@ func main() {
 	token := demo.AzureTokenCredential()
 
 	// Create Azure OpenAI agent.
-	a := openaichatagent.New(
+	a := openaiagent.NewChatCompletions(
 		openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
 			azure.WithTokenCredential(token),
 		),
-		openaichatagent.Config{
+		openaiagent.Config{
 			Model: deployment,
 			Config: agent.Config{
 				Instructions: "You are good at telling jokes.",

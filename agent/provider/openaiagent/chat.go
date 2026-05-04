@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package openaichatagent
+package openaiagent
 
 import (
 	"cmp"
@@ -21,7 +21,7 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 )
 
-type client struct {
+type chatClient struct {
 	client openai.Client
 	config Config
 }
@@ -37,15 +37,16 @@ func ChatCompletionNewParams(params openai.ChatCompletionNewParams) agent.Option
 	return chatCompletionNewParamsOpt(params)
 }
 
-// Config contains configuration for [Agent].
+// Config contains configuration for an OpenAI-backed [agent.Agent].
 type Config struct {
 	agent.Config
 
 	Model string
 }
 
-func New(oclient openai.Client, config Config) *agent.Agent {
-	c := &client{
+// NewChatCompletions creates an agent backed by the OpenAI Chat Completions API.
+func NewChatCompletions(oclient openai.Client, config Config) *agent.Agent {
+	c := &chatClient{
 		client: oclient,
 		config: config,
 	}
@@ -57,15 +58,15 @@ func New(oclient openai.Client, config Config) *agent.Agent {
 	}, config.Config)
 }
 
-func (a *client) formatOf(v any) (format.Format, error) {
+func (a *chatClient) formatOf(v any) (format.Format, error) {
 	return jsonformat.ForType(reflect.TypeOf(v))
 }
 
-func (a *client) unmarshal(format format.Format, data []byte, v any) error {
+func (a *chatClient) unmarshal(format format.Format, data []byte, v any) error {
 	return format.(*jsonformat.Format).Unmarshal(data, v)
 }
 
-func (a *client) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (a *chatClient) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 	body, err := buildCompletionParams(a.config.Model, messages, options)
 	if err != nil {
 		return func(yield func(*message.ResponseUpdate, error) bool) {

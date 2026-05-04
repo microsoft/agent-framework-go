@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package openaichatagent_test
+package openaiagent_test
 
 import (
 	"encoding/json"
@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
+	"github.com/microsoft/agent-framework-go/agent/provider/openaiagent"
 	"github.com/microsoft/agent-framework-go/internal/messagetest"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
@@ -60,9 +60,9 @@ func newTestServer(t *testing.T, input string, output string) *httptest.Server {
 }
 
 func newTestClient(server *httptest.Server) *agent.Agent {
-	return openaichatagent.New(
+	return openaiagent.NewChatCompletions(
 		openai.NewClient(option.WithBaseURL(server.URL)),
-		openaichatagent.Config{
+		openaiagent.Config{
 			Model:  "gpt-4o-mini",
 			Config: agent.Config{DisableFuncAutoCall: true},
 		},
@@ -144,7 +144,7 @@ func TestChatBasicRequestResponse_NonStreaming(t *testing.T) {
 	a := newTestClient(server)
 
 	resp, err := a.RunText(t.Context(), "hello",
-		openaichatagent.ChatCompletionNewParams(openai.ChatCompletionNewParams{
+		openaiagent.ChatCompletionNewParams(openai.ChatCompletionNewParams{
 			MaxCompletionTokens: openai.Int(10),
 			Temperature:         openai.Float(0.5),
 		}),
@@ -245,7 +245,7 @@ data: [DONE]
 	a := newTestClient(server)
 
 	var updates []*message.ResponseUpdate
-	for update, err := range a.RunText(t.Context(), "hello", openaichatagent.ChatCompletionNewParams(openai.ChatCompletionNewParams{
+	for update, err := range a.RunText(t.Context(), "hello", openaiagent.ChatCompletionNewParams(openai.ChatCompletionNewParams{
 		MaxCompletionTokens: openai.Int(20),
 		Temperature:         openai.Float(0.5),
 	}), agent.Stream(true)) {
@@ -363,7 +363,7 @@ func TestChatMultipleMessages_NonStreaming(t *testing.T) {
 	}
 
 	resp, err := a.Run(t.Context(), messages,
-		openaichatagent.ChatCompletionNewParams(openai.ChatCompletionNewParams{
+		openaiagent.ChatCompletionNewParams(openai.ChatCompletionNewParams{
 			Temperature:      openai.Float(0.25),
 			FrequencyPenalty: openai.Float(0.75),
 			PresencePenalty:  openai.Float(0.5),
@@ -1030,7 +1030,7 @@ func TestChatOptions_Model_OverridesClientModel_NonStreaming(t *testing.T) {
 
 	// Override with gpt-4o in options
 	resp, err := a.RunText(t.Context(), "hello",
-		openaichatagent.ChatCompletionNewParams(openai.ChatCompletionNewParams{
+		openaiagent.ChatCompletionNewParams(openai.ChatCompletionNewParams{
 			Model:               "gpt-4o",
 			MaxCompletionTokens: openai.Int(10),
 			Temperature:         openai.Float(0.5),
@@ -1082,7 +1082,7 @@ data: [DONE]
 	var updates []*message.ResponseUpdate
 	// Override with gpt-4o in options
 	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
-		openaichatagent.ChatCompletionNewParams(openai.ChatCompletionNewParams{
+		openaiagent.ChatCompletionNewParams(openai.ChatCompletionNewParams{
 			Model:               "gpt-4o",
 			MaxCompletionTokens: openai.Int(20),
 			Temperature:         openai.Float(0.5),

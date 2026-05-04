@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package openairesponsesagent
+package openaiagent
 
 import (
 	"cmp"
@@ -28,14 +28,8 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 )
 
-// Config contains configuration for [Agent].
-type Config struct {
-	agent.Config
-
-	Model string // required
-}
-
-func New(oclient openai.Client, config Config) *agent.Agent {
+// NewResponses creates an agent backed by the OpenAI Responses API.
+func NewResponses(oclient openai.Client, config Config) *agent.Agent {
 	c := &responsesClient{
 		client: oclient,
 		config: config,
@@ -1095,13 +1089,4 @@ func createContinuationToken(responseID string, sequenceNumber int64, status res
 type continuationToken struct {
 	ResponseID     string `json:"response_id"`
 	SequenceNumber int64  `json:"sequence_number"`
-}
-
-func imageDetail(props map[string]any) string {
-	if detail, ok := props["detail"]; ok {
-		if v, ok := detail.(string); ok {
-			return v
-		}
-	}
-	return ""
 }

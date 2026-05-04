@@ -79,7 +79,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
+	"github.com/microsoft/agent-framework-go/agent/provider/openaiagent"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/openai/openai-go/v3"
@@ -95,12 +95,12 @@ func main() {
 
 	// Create an Azure OpenAI agent.
 	// Replace <endpoint> and <apiVersion> with your Azure Foundry endpoint and API version.
-	a := openaichatagent.New(
+	a := openaiagent.NewChatCompletions(
 		openai.NewClient(
 			azure.WithEndpoint("<endpoint>", "<apiVersion>"),
 			azure.WithTokenCredential(token),
 		),
-		openaichatagent.Config{
+		openaiagent.Config{
 			Model: "gpt-4o-mini",
 		},
 	)

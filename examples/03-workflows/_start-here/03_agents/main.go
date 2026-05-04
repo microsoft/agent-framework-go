@@ -6,7 +6,7 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/hosting/workflowhosting"
-	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
+	"github.com/microsoft/agent-framework-go/agent/provider/openaiagent"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
@@ -60,9 +60,9 @@ func main() {
 }
 
 func newAgent(language string) *agent.Agent {
-	return openaichatagent.New(
+	return openaiagent.NewChatCompletions(
 		openai.NewClient(),
-		openaichatagent.Config{
+		openaiagent.Config{
 			Model: "gpt-5-nano",
 			Config: agent.Config{
 				Instructions: fmt.Sprintf("You are a helpful assistant who translates text to %s.", language),

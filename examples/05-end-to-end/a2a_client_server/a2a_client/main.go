@@ -13,7 +13,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2aclient/agentcard"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/a2aagent"
-	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
+	"github.com/microsoft/agent-framework-go/agent/provider/openaiagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/agenttool"
@@ -65,12 +65,12 @@ func main() {
 		tools = append(tools, agenttool.New(remoteAgent, agenttool.Config{}))
 	}
 
-	host := openaichatagent.New(
+	host := openaiagent.NewChatCompletions(
 		openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
 			azure.WithTokenCredential(token),
 		),
-		openaichatagent.Config{
+		openaiagent.Config{
 			Model: deployment,
 			Config: agent.Config{
 				Name:         "HostClient",
