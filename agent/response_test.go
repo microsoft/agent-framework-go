@@ -641,16 +641,13 @@ func TestResponse_ToUpdates_WithNoMessagesProducesEmptySlice(t *testing.T) {
 	}
 }
 
-func TestResponse_ToUpdates_WithFinishReasonOnlyProducesSingleUpdate(t *testing.T) {
+func TestResponse_ToUpdates_WithFinishReasonOnlyProducesEmptySlice(t *testing.T) {
 	resp := &agent.Response{FinishReason: "length"}
 
 	updates := resp.ToUpdates()
 
-	if len(updates) != 1 {
-		t.Fatalf("expected 1 update, got %d", len(updates))
-	}
-	if updates[0].FinishReason != "length" {
-		t.Errorf("expected FinishReason length, got %q", updates[0].FinishReason)
+	if len(updates) != 0 {
+		t.Fatalf("expected no updates, got %d", len(updates))
 	}
 }
 

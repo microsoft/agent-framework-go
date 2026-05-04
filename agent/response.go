@@ -112,7 +112,6 @@ func (resp *Response) ToUpdates() []*ResponseUpdate {
 	usage := resp.Usage()
 	hasUsage := !isZeroUsage(usage)
 	hasAdditionalProperties := resp.AdditionalProperties != nil
-	hasFinishReason := resp.FinishReason != ""
 
 	updates := make([]*ResponseUpdate, 0, len(resp.Messages)+1)
 	for _, msg := range resp.Messages {
@@ -130,7 +129,7 @@ func (resp *Response) ToUpdates() []*ResponseUpdate {
 		})
 	}
 
-	if hasUsage || hasAdditionalProperties || hasFinishReason {
+	if hasUsage || hasAdditionalProperties {
 		extra := &ResponseUpdate{
 			AdditionalProperties: resp.AdditionalProperties,
 			AgentID:              resp.AgentID,
