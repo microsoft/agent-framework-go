@@ -58,6 +58,9 @@ func (a *so) Run(next agent.RunFunc, ctx context.Context, messages []*message.Me
 				yield(nil, err)
 				return
 			}
+			if update == nil {
+				continue
+			}
 			data = append(data, update.String()...)
 		}
 		if err := a.Unmarshal(format, data, v); err != nil {

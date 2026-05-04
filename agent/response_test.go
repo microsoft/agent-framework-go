@@ -279,6 +279,36 @@ func TestResponse_Update_ContinuationToken(t *testing.T) {
 	}
 }
 
+func TestResponse_Update_FinishReason(t *testing.T) {
+	resp := &agent.Response{}
+
+	resp.Update(&agent.ResponseUpdate{
+		MessageID:    "msg1",
+		FinishReason: "tool_calls",
+		Contents:     message.Contents{&message.TextContent{Text: "Calling"}},
+	})
+	if resp.FinishReason != "tool_calls" {
+		t.Fatalf("expected FinishReason tool_calls, got %q", resp.FinishReason)
+	}
+
+	resp.Update(&agent.ResponseUpdate{
+		MessageID: "msg1",
+		Contents:  message.Contents{&message.TextContent{Text: " tools"}},
+	})
+	if resp.FinishReason != "tool_calls" {
+		t.Fatalf("expected empty update to preserve FinishReason, got %q", resp.FinishReason)
+	}
+
+	resp.Update(&agent.ResponseUpdate{
+		MessageID:    "msg1",
+		FinishReason: "stop",
+		Contents:     message.Contents{&message.TextContent{Text: " done"}},
+	})
+	if resp.FinishReason != "stop" {
+		t.Fatalf("expected latest FinishReason stop, got %q", resp.FinishReason)
+	}
+}
+
 func TestResponse_CreatedAt(t *testing.T) {
 	resp := &agent.Response{}
 
@@ -536,6 +566,7 @@ func TestResponse_ToUpdates_ProducesUpdates(t *testing.T) {
 	resp := &agent.Response{
 		AgentID:              "agentId",
 		ID:                   "12345",
+		FinishReason:         "stop",
 		CreatedAt:            createdAt,
 		AdditionalProperties: map[string]any{"key1": "value1", "key2": 42},
 		Messages: []*message.Message{
@@ -562,6 +593,9 @@ func TestResponse_ToUpdates_ProducesUpdates(t *testing.T) {
 	if update0.ResponseID != "12345" {
 		t.Errorf("expected ResponseID 12345, got %q", update0.ResponseID)
 	}
+	if update0.FinishReason != "stop" {
+		t.Errorf("expected FinishReason stop, got %q", update0.FinishReason)
+	}
 	if update0.MessageID != "someMessage" {
 		t.Errorf("expected MessageID someMessage, got %q", update0.MessageID)
 	}
@@ -578,6 +612,9 @@ func TestResponse_ToUpdates_ProducesUpdates(t *testing.T) {
 	update1 := updates[1]
 	if update1.AdditionalProperties["key1"] != "value1" {
 		t.Errorf("expected key1 value1, got %v", update1.AdditionalProperties["key1"])
+	}
+	if update1.FinishReason != "stop" {
+		t.Errorf("expected FinishReason stop, got %q", update1.FinishReason)
 	}
 	if update1.AdditionalProperties["key2"] != 42 {
 		t.Errorf("expected key2 42, got %v", update1.AdditionalProperties["key2"])
@@ -601,6 +638,19 @@ func TestResponse_ToUpdates_WithNoMessagesProducesEmptySlice(t *testing.T) {
 
 	if len(updates) != 0 {
 		t.Fatalf("expected no updates, got %d", len(updates))
+	}
+}
+
+func TestResponse_ToUpdates_WithFinishReasonOnlyProducesSingleUpdate(t *testing.T) {
+	resp := &agent.Response{FinishReason: "length"}
+
+	updates := resp.ToUpdates()
+
+	if len(updates) != 1 {
+		t.Fatalf("expected 1 update, got %d", len(updates))
+	}
+	if updates[0].FinishReason != "length" {
+		t.Errorf("expected FinishReason length, got %q", updates[0].FinishReason)
 	}
 }
 

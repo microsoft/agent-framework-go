@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaiagent"
 	"github.com/microsoft/agent-framework-go/internal/messagetest"
 	"github.com/microsoft/agent-framework-go/message"
@@ -1736,9 +1737,46 @@ func TestResponsesNonStreamingResponseWithIncompleteReason_MapsFinishReason(t *t
 	if responseText != "Partial" {
 		t.Errorf("expected response text 'Partial', got %q", responseText)
 	}
+	if resp.FinishReason != "max_output_tokens" {
+		t.Errorf("expected FinishReason max_output_tokens, got %q", resp.FinishReason)
+	}
+}
 
-	// Note: The Go framework doesn't currently expose FinishReason like C# does
-	// This test validates that incomplete responses are still handled correctly
+func TestResponsesResponseFormatSchemaConvertsJSONSchema(t *testing.T) {
+	type payload struct {
+		Name string `json:"name"`
+	}
+	format, err := jsonformat.For[payload]()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}],
+                "text":{"format":{"type":"json_schema","name":"payload","schema":{"properties":{"name":{"type":"string"}},"type":"object","required":["name"],"additionalProperties":false},"strict":true}}
+            }
+            `
+
+	const output = `
+            {
+              "id":"resp_001",
+              "object":"response",
+              "created_at":1741892091,
+              "status":"completed",
+              "model":"gpt-4o-mini",
+              "output":[{"type":"message","id":"msg_001","status":"completed","role":"assistant","content":[{"type":"output_text","text":"{\"name\":\"Ada\"}","annotations":[]}]}]
+            }
+            `
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+	if _, err := a.RunText(t.Context(), "hello", agent.WithResponseFormat(format)).Collect(); err != nil {
+		t.Fatalf("error = %v", err)
+	}
 }
 
 func TestResponsesStreamingResponseWithQueuedUpdate_HandlesCorrectly(t *testing.T) {

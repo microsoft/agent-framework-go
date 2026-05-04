@@ -53,6 +53,9 @@ func ResponseUpdateEqual(got, want *agent.ResponseUpdate) error {
 	if want.ResponseID != got.ResponseID {
 		errs = append(errs, fmt.Errorf("response ID mismatch: expected %s, got %s", want.ResponseID, got.ResponseID))
 	}
+	if want.FinishReason != got.FinishReason {
+		errs = append(errs, fmt.Errorf("finish reason mismatch: expected %s, got %s", want.FinishReason, got.FinishReason))
+	}
 	if want.Role != got.Role {
 		errs = append(errs, fmt.Errorf("role mismatch: expected %s, got %s", want.Role, got.Role))
 	}

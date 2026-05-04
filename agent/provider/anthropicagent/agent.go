@@ -48,14 +48,14 @@ func New(aclient anthropic.Client, config Config) *agent.Agent {
 		client: aclient,
 		config: config,
 	}
-	config.Config.Middlewares = slices.Clone(config.Config.Middlewares)
-	if !config.Config.DisableFuncAutoCall {
-		config.Config.Middlewares = append(config.Config.Middlewares, autocall.New(autocall.Config{
-			Logger:           config.Config.Logger,
-			LogSensitiveData: config.Config.LogSensitiveData,
+	config.Middlewares = slices.Clone(config.Middlewares)
+	if !config.DisableFuncAutoCall {
+		config.Middlewares = append(config.Middlewares, autocall.New(autocall.Config{
+			Logger:           config.Logger,
+			LogSensitiveData: config.LogSensitiveData,
 		}))
 	}
-	config.Config.Middlewares = append(config.Config.Middlewares, structuredoutput.New(structuredoutput.Config{
+	config.Middlewares = append(config.Middlewares, structuredoutput.New(structuredoutput.Config{
 		Format:    c.formatOf,
 		Unmarshal: c.unmarshal,
 	}))

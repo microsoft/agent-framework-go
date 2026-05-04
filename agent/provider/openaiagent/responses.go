@@ -36,14 +36,14 @@ func NewResponses(oclient openai.Client, config Config) *agent.Agent {
 		client: oclient,
 		config: config,
 	}
-	config.Config.Middlewares = slices.Clone(config.Config.Middlewares)
-	if !config.Config.DisableFuncAutoCall {
-		config.Config.Middlewares = append(config.Config.Middlewares, autocall.New(autocall.Config{
-			Logger:           config.Config.Logger,
-			LogSensitiveData: config.Config.LogSensitiveData,
+	config.Middlewares = slices.Clone(config.Middlewares)
+	if !config.DisableFuncAutoCall {
+		config.Middlewares = append(config.Middlewares, autocall.New(autocall.Config{
+			Logger:           config.Logger,
+			LogSensitiveData: config.LogSensitiveData,
 		}))
 	}
-	config.Config.Middlewares = append(config.Config.Middlewares, structuredoutput.New(structuredoutput.Config{
+	config.Middlewares = append(config.Middlewares, structuredoutput.New(structuredoutput.Config{
 		Format:    c.formatOf,
 		Unmarshal: c.unmarshal,
 	}))
@@ -235,9 +235,13 @@ func responsesBuildCompletionParams(model string, messages []*message.Message, o
 		switch frmt.Kind {
 		case "json":
 			if schema := frmt.Schema; schema != nil {
+				schemaMap, err := schemaToMap(schema)
+				if err != nil {
+					return responses.ResponseNewParams{}, fmt.Errorf("failed to convert response format schema (type %T) to JSON format: %w", schema, err)
+				}
 				params.Text.Format.OfJSONSchema = &responses.ResponseFormatTextJSONSchemaConfigParam{
 					Name:   frmt.Name,
-					Schema: schema.(map[string]any),
+					Schema: schemaMap,
 				}
 				if desc := frmt.Description; desc != "" {
 					params.Text.Format.OfJSONSchema.Description = openai.String(desc)
@@ -703,6 +707,21 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 	return resp, nil
 }
 
+func schemaToMap(schema any) (map[string]any, error) {
+	if schemaMap, ok := schema.(map[string]any); ok {
+		return schemaMap, nil
+	}
+	data, err := json.Marshal(schema)
+	if err != nil {
+		return nil, err
+	}
+	var schemaMap map[string]any
+	if err := json.Unmarshal(data, &schemaMap); err != nil {
+		return nil, err
+	}
+	return schemaMap, nil
+}
+
 func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func(*agent.ResponseUpdate, error) bool) {
 	var contToken string
 	if resp.Background {
@@ -724,6 +743,7 @@ func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func
 
 	currentUpdate := &agent.ResponseUpdate{
 		ResponseID:           resp.ID,
+		FinishReason:         responsesFinishReason(resp),
 		CreatedAt:            time.Unix(int64(resp.CreatedAt), 0),
 		Role:                 message.RoleAssistant,
 		AdditionalProperties: responsesPopulateAdditionalProperties(resp),
@@ -744,6 +764,7 @@ func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func
 			}
 			currentUpdate.MessageID = out.ID
 			currentUpdate.ResponseID = resp.ID
+			currentUpdate.FinishReason = responsesFinishReason(resp)
 			// Only set ContinuationToken if it's not empty
 			if contToken != "" {
 				currentUpdate.ContinuationToken = contToken
@@ -858,6 +879,17 @@ func imageURIToMediaType(uri string) string {
 	}
 }
 
+func responsesFinishReason(resp *responses.Response) string {
+	switch resp.Status {
+	case responses.ResponseStatusCompleted:
+		return "stop"
+	case responses.ResponseStatusIncomplete:
+		return resp.IncompleteDetails.Reason
+	default:
+		return ""
+	}
+}
+
 // responsesUsageToContent converts a Response.Usage object to a UsageContent message
 func responsesUsageToContent(usage responses.ResponseUsage) *message.UsageContent {
 	if usage.InputTokens == 0 && usage.OutputTokens == 0 {
@@ -920,10 +952,21 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 		u = createUpdate(message.RoleAssistant, nil)
 		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
 		u.ResponseID = event.Response.ID
+		u.FinishReason = responsesFinishReason(&event.Response)
 		u.AdditionalProperties = responsesPopulateAdditionalProperties(&event.Response)
 		// Add usage if present
 		if usage := responsesUsageToContent(event.Response.Usage); usage != nil {
 			u.Contents = []message.Content{usage}
+		}
+
+	case responses.ResponseIncompleteEvent:
+		u = createUpdate(message.RoleAssistant, nil)
+		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
+		u.ResponseID = event.Response.ID
+		u.FinishReason = responsesFinishReason(&event.Response)
+		u.AdditionalProperties = responsesPopulateAdditionalProperties(&event.Response)
+		if contToken := createContinuationToken(event.Response.ID, event.SequenceNumber, event.Response.Status, isBackground); contToken != "" {
+			u.ContinuationToken = contToken
 		}
 
 	case responses.ResponseTextDeltaEvent:

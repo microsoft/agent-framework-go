@@ -54,6 +54,11 @@ type Response struct {
 	// or resume streaming, depending on the provider.
 	ContinuationToken string `json:",omitzero"`
 
+	// FinishReason describes why the agent stopped generating. Common values are
+	// "stop", "length", and "tool_calls". It is empty when the provider did not
+	// supply a finish reason.
+	FinishReason string `json:",omitzero"`
+
 	// Messages contains the messages produced by the agent run.
 	Messages []*message.Message
 }
@@ -107,6 +112,7 @@ func (resp *Response) ToUpdates() []*ResponseUpdate {
 	usage := resp.Usage()
 	hasUsage := !isZeroUsage(usage)
 	hasAdditionalProperties := resp.AdditionalProperties != nil
+	hasFinishReason := resp.FinishReason != ""
 
 	updates := make([]*ResponseUpdate, 0, len(resp.Messages)+1)
 	for _, msg := range resp.Messages {
@@ -116,6 +122,7 @@ func (resp *Response) ToUpdates() []*ResponseUpdate {
 			AgentID:              resp.AgentID,
 			MessageID:            msg.ID,
 			ResponseID:           resp.ID,
+			FinishReason:         resp.FinishReason,
 			AuthorName:           msg.AuthorName,
 			Role:                 msg.Role,
 			CreatedAt:            resp.CreatedAt,
@@ -123,11 +130,12 @@ func (resp *Response) ToUpdates() []*ResponseUpdate {
 		})
 	}
 
-	if hasUsage || hasAdditionalProperties {
+	if hasUsage || hasAdditionalProperties || hasFinishReason {
 		extra := &ResponseUpdate{
 			AdditionalProperties: resp.AdditionalProperties,
 			AgentID:              resp.AgentID,
 			ResponseID:           resp.ID,
+			FinishReason:         resp.FinishReason,
 			CreatedAt:            resp.CreatedAt,
 		}
 		if hasUsage {
@@ -200,6 +208,7 @@ func (resp *Response) Update(update *ResponseUpdate) {
 	// Update the response object with those, preferring the values from later updates.
 	resp.AgentID = cmp.Or(update.AgentID, resp.AgentID)
 	resp.ID = cmp.Or(update.ResponseID, resp.ID)
+	resp.FinishReason = cmp.Or(update.FinishReason, resp.FinishReason)
 	if update.ContinuationToken == "" {
 		resp.ContinuationToken = ""
 	} else {
@@ -247,6 +256,11 @@ type ResponseUpdate struct {
 
 	// ResponseID identifies the response of which this update is a part.
 	ResponseID string
+
+	// FinishReason is the reason the generation ended. It is typically set only
+	// on the final update of a stream. Common values are "stop", "length", and
+	// "tool_calls".
+	FinishReason string `json:",omitzero"`
 
 	// AuthorName is the display name of the author or agent that produced this update.
 	AuthorName string `json:",omitzero"`

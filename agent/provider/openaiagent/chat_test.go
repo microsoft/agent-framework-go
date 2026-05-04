@@ -156,6 +156,9 @@ func TestChatBasicRequestResponse_NonStreaming(t *testing.T) {
 	if err := messagetest.MessagesEqual(resp.Messages, want); err != nil {
 		t.Error(err)
 	}
+	if resp.FinishReason != "stop" {
+		t.Errorf("expected FinishReason stop, got %q", resp.FinishReason)
+	}
 }
 
 func newTestServerStreaming(t *testing.T, input string, output string) *httptest.Server {
@@ -224,7 +227,7 @@ data: [DONE]
 		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt, Contents: []message.Content{&message.TextContent{Text: " you"}}},
 		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt, Contents: []message.Content{&message.TextContent{Text: " today"}}},
 		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt, Contents: []message.Content{&message.TextContent{Text: "?"}}},
-		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt},
+		{MessageID: msgID, ResponseID: msgID, FinishReason: "stop", Role: message.RoleAssistant, CreatedAt: createdAt},
 		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt, Contents: []message.Content{&message.UsageContent{Details: message.UsageDetails{
 			InputTokenCount:       8,
 			OutputTokenCount:      9,
@@ -794,7 +797,7 @@ data: [DONE]
 		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt},
 		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt},
 		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt},
-		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt, Contents: []message.Content{
+		{MessageID: msgID, ResponseID: msgID, FinishReason: "tool_calls", Role: message.RoleAssistant, CreatedAt: createdAt, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: callID, Name: "GetPersonAge", Arguments: `{"personName":"Alice"}`},
 		}},
 		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt, Contents: []message.Content{

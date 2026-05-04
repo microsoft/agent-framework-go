@@ -52,14 +52,14 @@ func NewChatCompletions(oclient openai.Client, config Config) *agent.Agent {
 		client: oclient,
 		config: config,
 	}
-	config.Config.Middlewares = slices.Clone(config.Config.Middlewares)
-	if !config.Config.DisableFuncAutoCall {
-		config.Config.Middlewares = append(config.Config.Middlewares, autocall.New(autocall.Config{
-			Logger:           config.Config.Logger,
-			LogSensitiveData: config.Config.LogSensitiveData,
+	config.Middlewares = slices.Clone(config.Middlewares)
+	if !config.DisableFuncAutoCall {
+		config.Middlewares = append(config.Middlewares, autocall.New(autocall.Config{
+			Logger:           config.Logger,
+			LogSensitiveData: config.LogSensitiveData,
 		}))
 	}
-	config.Config.Middlewares = append(config.Config.Middlewares, structuredoutput.New(structuredoutput.Config{
+	config.Middlewares = append(config.Middlewares, structuredoutput.New(structuredoutput.Config{
 		Format:    c.formatOf,
 		Unmarshal: c.unmarshal,
 	}))
@@ -115,11 +115,12 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 		}
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			update := &agent.ResponseUpdate{
-				Contents:   contents,
-				Role:       message.RoleAssistant,
-				ResponseID: resp.ID,
-				MessageID:  resp.ID,
-				CreatedAt:  time.Unix(resp.Created, 0),
+				Contents:     contents,
+				Role:         message.RoleAssistant,
+				ResponseID:   resp.ID,
+				MessageID:    resp.ID,
+				FinishReason: choice.FinishReason,
+				CreatedAt:    time.Unix(resp.Created, 0),
 			}
 			if !yield(update, nil) {
 				return
@@ -154,12 +155,17 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 			if chunk.JSON.Usage.Valid() {
 				contents = addUsage(contents, chunk.Usage)
 			}
+			var finishReason string
+			if len(chunk.Choices) > 0 {
+				finishReason = chunk.Choices[0].FinishReason
+			}
 			resp := &agent.ResponseUpdate{
-				Contents:   contents,
-				Role:       role,
-				ResponseID: chunk.ID,
-				MessageID:  chunk.ID,
-				CreatedAt:  time.Unix(chunk.Created, 0),
+				Contents:     contents,
+				Role:         role,
+				ResponseID:   chunk.ID,
+				MessageID:    chunk.ID,
+				FinishReason: finishReason,
+				CreatedAt:    time.Unix(chunk.Created, 0),
 			}
 			if !yield(resp, nil) {
 				return

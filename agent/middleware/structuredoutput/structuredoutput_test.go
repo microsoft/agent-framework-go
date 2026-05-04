@@ -360,6 +360,44 @@ func TestStructuredOutput_BaseErrorPropagation(t *testing.T) {
 	t.Fatal("expected error to be yielded")
 }
 
+func TestStructuredOutput_SkipsNilUpdates(t *testing.T) {
+	baseFunc := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			if !yield(nil, nil) {
+				return
+			}
+			yield(&agent.ResponseUpdate{
+				Contents: message.Contents{&message.TextContent{Text: `{"name":"Ada"}`}},
+			}, nil)
+		}
+	}
+
+	cfg := structuredoutput.Config{
+		Format: func(v any) (agent.ResponseFormat, error) {
+			return agent.ResponseFormat{Kind: "json"}, nil
+		},
+		Unmarshal: func(format agent.ResponseFormat, data []byte, v any) error {
+			return json.Unmarshal(data, v)
+		},
+	}
+
+	mw := structuredoutput.New(cfg)
+	output := &struct {
+		Name string `json:"name"`
+	}{}
+
+	seq := mw.Run(baseFunc, context.Background(), nil, agent.WithStructuredOutput(output))
+	for _, err := range seq {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+
+	if output.Name != "Ada" {
+		t.Errorf("expected Name Ada, got %q", output.Name)
+	}
+}
+
 func TestStructuredOutput_ComplexStructure(t *testing.T) {
 	// Test with a more complex nested structure
 	type Address struct {
