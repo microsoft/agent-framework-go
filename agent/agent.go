@@ -10,9 +10,6 @@ import (
 	"slices"
 
 	"github.com/google/uuid"
-	"github.com/microsoft/agent-framework-go/agent/internal/middleware/autocall"
-	"github.com/microsoft/agent-framework-go/agent/internal/middleware/structuredoutput"
-	"github.com/microsoft/agent-framework-go/format"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 )
@@ -34,10 +31,6 @@ type ProviderConfig struct {
 	BeforeMarshalSession func(ctx context.Context, session Session, options ...Option) error
 	// AfterUnmarshalSession configures a deserialized provider-specific session.
 	AfterUnmarshalSession func(ctx context.Context, session Session, options ...Option) error
-	// FormatOfFn returns the response format for a structured output destination.
-	FormatOfFn func(v any) (format.Format, error)
-	// UnmarshalFn unmarshals provider output into a structured output destination.
-	UnmarshalFn func(format format.Format, data []byte, v any) error
 }
 
 // Config configures an Agent instance.
@@ -55,7 +48,7 @@ type Config struct {
 	// ContextProviders inject and persist context around each agent run.
 	ContextProviders []*ContextProvider
 
-	// DisableFuncAutoCall disables automatic function-tool calling middleware.
+	// DisableFuncAutoCall tells provider constructors not to add automatic function-tool calling middleware.
 	DisableFuncAutoCall bool
 
 	// Logger receives middleware and provider diagnostics.
@@ -89,27 +82,11 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 		}
 	}
 	cfg.Middlewares = slices.Clone(cfg.Middlewares)
-	if !cfg.DisableFuncAutoCall {
-		cfg.Middlewares = append(cfg.Middlewares,
-			autocall.New(autocall.Config{
-				Logger:           cfg.Logger,
-				LogSensitiveData: cfg.LogSensitiveData,
-			}),
-		)
-	}
 	providers := make([]*ContextProvider, 0, len(cfg.ContextProviders)+1)
 	for _, provider := range cfg.ContextProviders {
 		if provider != nil {
 			providers = append(providers, provider)
 		}
-	}
-	if prov.FormatOfFn != nil && prov.UnmarshalFn != nil {
-		cfg.Middlewares = append(cfg.Middlewares,
-			structuredoutput.New(structuredoutput.Config{
-				Format:    prov.FormatOfFn,
-				Unmarshal: prov.UnmarshalFn,
-			}),
-		)
 	}
 	prefixedMiddlewares := make([]Middleware, 0, 2)
 	if len(providers) == 0 {

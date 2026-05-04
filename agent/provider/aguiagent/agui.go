@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
+	"slices"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	aguiEvents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	aguiTypes "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/middleware/autocall"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 )
@@ -41,6 +43,13 @@ func New(aclient *aguiSSEClient.Client, config Config) *agent.Agent {
 		p.decoder = config.Decoder
 	} else {
 		p.decoder = aguiEvents.NewEventDecoder(nil)
+	}
+	config.Config.Middlewares = slices.Clone(config.Config.Middlewares)
+	if !config.Config.DisableFuncAutoCall {
+		config.Config.Middlewares = append(config.Config.Middlewares, autocall.New(autocall.Config{
+			Logger:           config.Config.Logger,
+			LogSensitiveData: config.Config.LogSensitiveData,
+		}))
 	}
 	return agent.New(agent.ProviderConfig{
 		ProviderName: "agui",

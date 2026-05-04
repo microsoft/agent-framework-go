@@ -4,8 +4,9 @@ package agent
 
 import (
 	"iter"
+	"reflect"
+	"slices"
 
-	"github.com/microsoft/agent-framework-go/agent/internal/agentopt"
 	"github.com/microsoft/agent-framework-go/format"
 	"github.com/microsoft/agent-framework-go/tool"
 )
@@ -15,7 +16,32 @@ import (
 // Each option must be implemented as its own distinct type.
 // [GetOption] and [AllOptions] use the option's type
 // to uniquely identify each option.
-type Option = agentopt.Option
+type Option interface {
+	Value() any
+}
+
+type (
+	responseFormatOpt    struct{ format.Format }
+	continuationTokenOpt string
+	serviceIDOpt         string
+
+	toolOpt struct{ tool.Tool }
+
+	toolModeOpt                 tool.ToolMode
+	streamOpt                   bool
+	allowBackgroundResponsesOpt bool
+
+	structuredOutputOpt struct{ any }
+)
+
+func (o responseFormatOpt) Value() any           { return o.Format }
+func (o streamOpt) Value() any                   { return bool(o) }
+func (o continuationTokenOpt) Value() any        { return string(o) }
+func (o allowBackgroundResponsesOpt) Value() any { return bool(o) }
+func (o toolModeOpt) Value() any                 { return tool.ToolMode(o) }
+func (o toolOpt) Value() any                     { return o.Tool }
+func (o structuredOutputOpt) Value() any         { return o.any }
+func (o serviceIDOpt) Value() any                { return string(o) }
 
 type sessionOpt struct{ Session }
 
@@ -28,7 +54,15 @@ func (o sessionOpt) Value() any { return o.Session }
 //
 //	v, ok := agent.GetOption(opts, agent.WithSession)
 func GetOption[T any](opts []Option, setter func(T) Option) (T, bool) {
-	return agentopt.GetOption(opts, setter)
+	var zero T
+	setterType := reflect.TypeOf(setter(zero))
+	for _, opt := range slices.Backward(opts) {
+		if reflect.TypeOf(opt) == setterType {
+			v, ok := opt.Value().(T)
+			return v, ok
+		}
+	}
+	return zero, false
 }
 
 // AllOptions returns a sequence of all values of type T stored in opts with the provided setter.
@@ -39,37 +73,51 @@ func GetOption[T any](opts []Option, setter func(T) Option) (T, bool) {
 //	   // do something with v of type T
 //	}
 func AllOptions[T any](opts []Option, setter func(T) Option) iter.Seq[T] {
-	return agentopt.AllOptions(opts, setter)
+	return func(yield func(T) bool) {
+		var zero T
+		setterType := reflect.TypeOf(setter(zero))
+		for _, opt := range opts {
+			if reflect.TypeOf(opt) == setterType {
+				v, ok := opt.Value().(T)
+				if !ok {
+					panic("option type mismatch")
+				}
+				if !yield(v) {
+					return
+				}
+			}
+		}
+	}
 }
 
 // WithServiceID sets the service ID for a session.
 func WithServiceID(id string) Option {
-	return agentopt.WithServiceID(id)
+	return serviceIDOpt(id)
 }
 
 // WithStructuredOutput sets the variable pointed to by v to the structured output produced by the agent.
 func WithStructuredOutput(v any) Option {
-	return agentopt.WithStructuredOutput(v)
+	return structuredOutputOpt{v}
 }
 
 // WithTool adds a tool to the agent run.
 func WithTool(tool tool.Tool) Option {
-	return agentopt.WithTool(tool)
+	return toolOpt{tool}
 }
 
 // WithToolMode sets the tool mode for the agent run.
 func WithToolMode(mode tool.ToolMode) Option {
-	return agentopt.WithToolMode(mode)
+	return toolModeOpt(mode)
 }
 
 // Stream sets whether to use streaming responses during the agent run.
 func Stream(stream bool) Option {
-	return agentopt.Stream(stream)
+	return streamOpt(stream)
 }
 
 // WithResponseFormat sets the desired response format for the agent run.
 func WithResponseFormat(format format.Format) Option {
-	return agentopt.WithResponseFormat(format)
+	return responseFormatOpt{format}
 }
 
 // WithSession sets the session to use during the agent run.
@@ -87,7 +135,7 @@ func WithSession(session Session) Option {
 // the point of interruption. Non-streamed background responses, such as those returned by [Run], can be polled for
 // completion by obtaining the token from the [RunResponse] continuation token.
 func WithContinuationToken(token string) Option {
-	return agentopt.WithContinuationToken(token)
+	return continuationTokenOpt(token)
 }
 
 // AllowBackgroundResponses sets whether to allow background responses during the agent run.
@@ -107,5 +155,5 @@ func WithContinuationToken(token string) Option {
 // This property only takes effect if the implementation it's used with supports background responses.
 // If the implementation does not support background responses, this property will be ignored.
 func AllowBackgroundResponses(allow bool) Option {
-	return agentopt.AllowBackgroundResponses(allow)
+	return allowBackgroundResponsesOpt(allow)
 }

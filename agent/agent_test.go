@@ -13,6 +13,7 @@ import (
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
+	"github.com/microsoft/agent-framework-go/tool/functool"
 )
 
 type stubTool struct {
@@ -445,6 +446,40 @@ func TestAgent_Run_PrependsAgentOptions(t *testing.T) {
 	// Agent options should be prepended, so call options come after
 	if len(capturedOptions) < 2 {
 		t.Fatalf("expected at least 2 options, got %d", len(capturedOptions))
+	}
+}
+
+func TestAgent_New_DoesNotAutomaticallyInvokeTools(t *testing.T) {
+	invoked := false
+	weatherTool := functool.MustNew(functool.Config{Name: "GetWeather", Description: "Get weather"}, func(tool.Context, struct{}) (string, error) {
+		invoked = true
+		return "sunny", nil
+	})
+
+	runFn := func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+		return func(yield func(*message.ResponseUpdate, error) bool) {
+			yield(&message.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					&message.FunctionCallContent{CallID: "call-1", Name: "GetWeather", Arguments: `{}`},
+				},
+			}, nil)
+		}
+	}
+
+	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{})
+	resp, err := a.RunText(t.Context(), "weather", agent.WithTool(weatherTool)).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if invoked {
+		t.Fatal("expected agent.New not to invoke tools automatically")
+	}
+	if len(resp.Messages) != 1 || len(resp.Messages[0].Contents) != 1 {
+		t.Fatalf("expected one function-call response message, got %#v", resp.Messages)
+	}
+	if _, ok := resp.Messages[0].Contents[0].(*message.FunctionCallContent); !ok {
+		t.Fatalf("expected function call content to pass through, got %T", resp.Messages[0].Contents[0])
 	}
 }
 

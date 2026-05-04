@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/microsoft/agent-framework-go/agent/internal/agentopt"
-	"github.com/microsoft/agent-framework-go/agent/internal/middleware/autocall"
+	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/middleware/autocall"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/internal/messagetest"
 	"github.com/microsoft/agent-framework-go/message"
@@ -179,9 +179,9 @@ func invokeAndAssert(t *testing.T, tools []tool.Tool, plan []*message.Message, e
 	initialMessages := []*message.Message{plan[0]}
 
 	// Build options
-	var opts []agentopt.Option
+	var opts []agent.Option
 	for _, tool := range tools {
-		opts = append(opts, agentopt.WithTool(tool))
+		opts = append(opts, agent.WithTool(tool))
 	}
 	// Use a deterministic (empty) ID generator for test reproducibility.
 	// Do not use an empty ID generator in production code, as it breaks message tracking and deduplication.
@@ -244,9 +244,9 @@ func TestFunctionInvoking_FunctionReturningFunctionResultContentWithMatchingCall
 			Build(),
 	}
 
-	var opts []agentopt.Option
+	var opts []agent.Option
 	for _, tl := range tools {
-		opts = append(opts, agentopt.WithTool(tl))
+		opts = append(opts, agent.WithTool(tl))
 	}
 
 	initialMessages := []*message.Message{message.NewText("hello")}
@@ -320,9 +320,9 @@ func TestFunctionInvoking_FunctionReturningFunctionResultContentWithMismatchedCa
 			Build(),
 	}
 
-	var opts []agentopt.Option
+	var opts []agent.Option
 	for _, tl := range tools {
-		opts = append(opts, agentopt.WithTool(tl))
+		opts = append(opts, agent.WithTool(tl))
 	}
 
 	initialMessages := []*message.Message{message.NewText("hello")}
@@ -706,9 +706,9 @@ func TestFunctionInvoking_ContinuesWithFailingCallsUntilMaximumConsecutiveErrors
 			initialMessages := []*message.Message{plan[0]}
 
 			// Build options
-			var opts []agentopt.Option
+			var opts []agent.Option
 			for _, tool := range tools {
-				opts = append(opts, agentopt.WithTool(tool))
+				opts = append(opts, agent.WithTool(tool))
 			}
 
 			var streamErr error
@@ -822,9 +822,9 @@ func TestFunctionInvoking_CanFailOnFirstException(t *testing.T) {
 			initialMessages := []*message.Message{plan[0]}
 
 			// Build options
-			var opts []agentopt.Option
+			var opts []agent.Option
 			for _, tool := range tools {
-				opts = append(opts, agentopt.WithTool(tool))
+				opts = append(opts, agent.WithTool(tool))
 			}
 
 			var streamErr error
@@ -1041,9 +1041,9 @@ func TestFunctionInvoking_AllResponseMessagesReturned(t *testing.T) {
 	}
 
 	initialMessages := []*message.Message{messages[0]}
-	var opts []agentopt.Option
+	var opts []agent.Option
 	for _, tool := range tools {
-		opts = append(opts, agentopt.WithTool(tool))
+		opts = append(opts, agent.WithTool(tool))
 	}
 
 	var resp message.Response
@@ -1102,7 +1102,7 @@ func TestFunctionInvoking_NextIterationIncludesAssistantFunctionCallMessage(t *t
 		Contents: []message.Content{&message.FunctionCallContent{CallID: "callId1", Name: "Func1", Arguments: `{}`}},
 	})
 	// Second turn: verify messages, then return final text.
-	rb.NewTurn(func(ctx context.Context, messages []*message.Message, opts ...agentopt.Option) {
+	rb.NewTurn(func(ctx context.Context, messages []*message.Message, opts ...agent.Option) {
 		// The messages should contain: original user message, assistant with tool_calls, tool result.
 		if len(messages) < 3 {
 			t.Fatalf("expected at least 3 messages in next iteration, got %d", len(messages))
@@ -1145,9 +1145,9 @@ func TestFunctionInvoking_NextIterationIncludesAssistantFunctionCallMessage(t *t
 
 	runner := &agenttest.Runner{Responses: rb.Build()}
 
-	var opts []agentopt.Option
+	var opts []agent.Option
 	for _, tool := range tools {
-		opts = append(opts, agentopt.WithTool(tool))
+		opts = append(opts, agent.WithTool(tool))
 	}
 
 	autocallConfig := autocall.Config{

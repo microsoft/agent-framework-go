@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/internal/middleware"
 	"github.com/microsoft/agent-framework-go/agent/middleware/logger"
 	"github.com/microsoft/agent-framework-go/message"
 )
@@ -321,7 +320,10 @@ func TestLogger_Run_WorksInMiddlewareChain(t *testing.T) {
 		message.New(&message.TextContent{Text: "test message"}),
 	}
 
-	seq := middleware.RunChain(ctx, baseFn, []middleware.Middleware{loggerMw, testMw}, messages)
+	next := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+		return testMw.Run(baseFn, ctx, messages, options...)
+	}
+	seq := loggerMw.Run(next, ctx, messages)
 	for range seq {
 	}
 
@@ -418,7 +420,7 @@ type testMiddleware struct {
 	onRun func(string)
 }
 
-func (tm *testMiddleware) Run(next middleware.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (tm *testMiddleware) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
 	tm.onRun(tm.name)
 	return next(ctx, messages, options...)
 }

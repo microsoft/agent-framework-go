@@ -41,7 +41,6 @@ func New(aclient *a2aclient.Client, config Config) *agent.Agent {
 	if aclient == nil {
 		panic("a2aagent: client cannot be nil")
 	}
-	config.DisableFuncAutoCall = true // a2a doesn't support tool calls
 	a := &a2aagent{
 		client: aclient,
 		cfg:    config,

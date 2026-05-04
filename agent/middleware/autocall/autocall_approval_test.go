@@ -7,17 +7,16 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/microsoft/agent-framework-go/agent/internal/agentopt"
-	"github.com/microsoft/agent-framework-go/agent/internal/middleware"
-	"github.com/microsoft/agent-framework-go/agent/internal/middleware/autocall"
+	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/middleware/autocall"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 )
 
-func expectedMessages(t *testing.T, expected ...*message.Message) func(context.Context, []*message.Message, ...agentopt.Option) {
-	return func(ctx context.Context, messages []*message.Message, opts ...agentopt.Option) {
+func expectedMessages(t *testing.T, expected ...*message.Message) func(context.Context, []*message.Message, ...agent.Option) {
+	return func(ctx context.Context, messages []*message.Message, opts ...agent.Option) {
 		if err := agenttest.MessagesEqual(expected, messages); err != nil {
 			t.Errorf("Messages not equal: %v", err)
 		}
@@ -29,7 +28,7 @@ func invokeAndAssertApproval(t *testing.T, tools []tool.Tool, input []*message.M
 	downstreamAgentOutput []*message.ResponseUpdate, expectedOutput []*message.ResponseUpdate,
 	expectedDownstreamAgentInput []*message.Message, additionalTools []tool.Tool,
 ) {
-	var cb func(context.Context, []*message.Message, ...agentopt.Option)
+	var cb func(context.Context, []*message.Message, ...agent.Option)
 	if expectedDownstreamAgentInput != nil {
 		cb = expectedMessages(t, expectedDownstreamAgentInput...)
 	}
@@ -46,7 +45,7 @@ func invokeAndAssertApproval(t *testing.T, tools []tool.Tool, input []*message.M
 }
 
 // invokeAndAssertApprovalWithAgent performs streaming test execution
-func invokeAndAssertApprovalWithAgent(t *testing.T, next middleware.RunFunc,
+func invokeAndAssertApprovalWithAgent(t *testing.T, next agent.RunFunc,
 	tools []tool.Tool, input []*message.Message,
 	expectedOutput []*message.ResponseUpdate, additionalTools []tool.Tool,
 ) {
@@ -60,9 +59,9 @@ func invokeAndAssertApprovalWithAgent(t *testing.T, next middleware.RunFunc,
 	ctx := t.Context()
 
 	// Build options
-	var opts []agentopt.Option
+	var opts []agent.Option
 	for _, tool := range tools {
-		opts = append(opts, agentopt.WithTool(tool))
+		opts = append(opts, agent.WithTool(tool))
 	}
 
 	// Collect all streaming updates into messages
@@ -85,9 +84,9 @@ func expectApprovalError(t *testing.T, tools []tool.Tool, input []*message.Messa
 	ctx := t.Context()
 
 	// Build options
-	var opts []agentopt.Option
+	var opts []agent.Option
 	for _, tool := range tools {
-		opts = append(opts, agentopt.WithTool(tool))
+		opts = append(opts, agent.WithTool(tool))
 	}
 
 	var lastErr error
