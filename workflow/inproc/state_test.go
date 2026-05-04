@@ -157,7 +157,7 @@ func TestInProcessRun_StateShouldPersist_NotCheckpointed(t *testing.T) {
 		t.Fatalf("Failed to build workflow: %v", err)
 	}
 
-	run, err := inproc.Run(t.Context(), wf, "", TestTurnToken{})
+	run, err := inproc.Default.Run(t.Context(), wf, TestTurnToken{})
 	if err != nil {
 		t.Fatalf("Failed to create runner: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestInProcessRun_StateShouldPersist_NotCheckpointed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get run status: %v", err)
 	}
-	if status != workflow.RunStatusIdle {
+	if status != inproc.RunStatusIdle {
 		t.Errorf("Expected run status to be Idle, got %v", status)
 	}
 	if !writer.Completed {
@@ -177,10 +177,6 @@ func TestInProcessRun_StateShouldPersist_NotCheckpointed(t *testing.T) {
 }
 
 func TestInProcessRun_StateShouldPersist_Checkpointed(t *testing.T) {
-	// Checkpointing is not fully implemented in Go runner yet, so this test might fail or be incomplete.
-	// We will implement the structure but expect it might not produce checkpoints as expected.
-	t.SkipNow()
-
 	writer := NewStateTestExecutor(
 		"Writer",
 		workflow.ScopeKey{ID: workflow.ScopeID{ScopeName: "TestScope", ExecutorID: "Writer"}, Key: "TestKey"},
@@ -205,25 +201,18 @@ func TestInProcessRun_StateShouldPersist_Checkpointed(t *testing.T) {
 		t.Fatalf("Failed to build workflow: %v", err)
 	}
 
-	// Mock checkpoint manager (nil for now as we don't have a mock implementation ready and runner doesn't use it fully)
-	// The runner requires a CheckpointManager to enable checkpointing features.
-	// Since we can't easily mock it without implementing the interface, and the runner has TODOs,
-	// we will skip the checkpoint verification part or use a nil manager which disables checkpointing.
-	// But the test name implies checkpointing.
-	// For now, we'll run it without checkpoint manager to ensure logic works, similar to previous test.
-
-	checkpointed, err := inproc.RunWithCheckpoint(t.Context(), wf, "", nil, TestTurnToken{})
+	run, err := inproc.Default.WithCheckpointing(inproc.NewInMemoryCheckpointManager()).Run(t.Context(), wf, TestTurnToken{})
 	if err != nil {
 		t.Fatalf("Failed to create checkpointed runner: %v", err)
 	}
-	if len(checkpointed.Checkpoints()) != 4 {
-		t.Errorf("Expected 4 checkpoints, got %d", len(checkpointed.Checkpoints()))
+	if len(run.Checkpoints()) != 4 {
+		t.Errorf("Expected 4 checkpoints, got %d", len(run.Checkpoints()))
 	}
-	status, err := checkpointed.Run().GetStatus(t.Context())
+	status, err := run.GetStatus(t.Context())
 	if err != nil {
 		t.Fatalf("Failed to get run status: %v", err)
 	}
-	if status != workflow.RunStatusIdle {
+	if status != inproc.RunStatusIdle {
 		t.Errorf("Expected run status to be Idle, got %v", status)
 	}
 
@@ -234,7 +223,6 @@ func TestInProcessRun_StateShouldPersist_Checkpointed(t *testing.T) {
 		t.Error("Validator should be completed")
 	}
 
-	// TODO: Verify checkpoints when implemented
 }
 
 func TestInProcessRun_StateShouldError_TwoExecutors(t *testing.T) {
@@ -263,7 +251,7 @@ func TestInProcessRun_StateShouldError_TwoExecutors(t *testing.T) {
 		t.Fatalf("Failed to build workflow: %v", err)
 	}
 
-	runWithFailure, err := inproc.Run(t.Context(), wf, "", TestTurnToken{})
+	runWithFailure, err := inproc.Default.Run(t.Context(), wf, TestTurnToken{})
 	if err != nil {
 		t.Fatalf("Failed to create runner: %v", err)
 	}

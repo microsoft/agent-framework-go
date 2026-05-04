@@ -46,7 +46,7 @@ type Config struct {
 
 	// Environment is the execution environment used to run the workflow on
 	// each agent turn. Defaults to [inproc.Default] when nil.
-	Environment workflow.ExecutionEnvironment
+	Environment *inproc.ExecutionEnvironment
 
 	// IncludeOutputsInResponse, if true, surfaces [workflow.OutputEvent]
 	// payloads in the agent response stream when the payload is a
@@ -79,14 +79,8 @@ type pendingReq struct {
 // [agent.Agent.MarshalSession] retain the request-tracking metadata but
 // drop the live run.
 type providerState struct {
-	stream  workflow.StreamingRun
+	stream  *inproc.StreamingRun
 	pending map[string]pendingReq // keyed by request content ID (e.g. CallID/RequestID)
-}
-
-type streamingRunInternal interface {
-	workflow.StreamingRun
-	WatchUntilHalt(ctx context.Context) iter.Seq2[workflow.Event, error]
-	ResponsePortExecutorID(portID string) (string, bool)
 }
 
 // New wraps a [*workflow.Workflow] as an [*agent.Agent].
@@ -134,15 +128,9 @@ func New(wf *workflow.Workflow, cfg Config) (*agent.Agent, error) {
 			}
 			defer saveState(sess, state)
 
-			streamInternal, ok := state.stream.(streamingRunInternal)
-			if !ok {
-				yield(nil, errors.New("workflow streaming run does not support internal workflowprovider operations"))
-				return
-			}
-
 			// Split incoming messages into ExternalResponses for pending
 			// requests and the remaining workflow messages.
-			remaining, responses, hasMatchedStartResponse := splitResponses(messages, state.pending, wf.StartExecutorID, streamInternal.ResponsePortExecutorID)
+			remaining, responses, hasMatchedStartResponse := splitResponses(messages, state.pending, wf.StartExecutorID, state.stream.ResponsePortExecutorID)
 
 			for _, resp := range responses {
 				if err := state.stream.SendResponse(ctx, resp); err != nil {
@@ -173,7 +161,7 @@ func New(wf *workflow.Workflow, cfg Config) (*agent.Agent, error) {
 				}
 			}
 
-			for evt, err := range streamInternal.WatchUntilHalt(ctx) {
+			for evt, err := range state.stream.WatchUntilHalt(ctx) {
 				if err != nil {
 					yield(nil, err)
 					return
@@ -258,7 +246,7 @@ func New(wf *workflow.Workflow, cfg Config) (*agent.Agent, error) {
 func loadOrInitState(
 	ctx context.Context,
 	sess agent.Session,
-	env workflow.ExecutionEnvironment,
+	env *inproc.ExecutionEnvironment,
 	wf *workflow.Workflow,
 ) (*providerState, error) {
 	if sess != nil {
@@ -270,7 +258,7 @@ func loadOrInitState(
 			return state, nil
 		}
 	}
-	stream, err := env.RunStreaming(ctx, wf, "")
+	stream, err := env.RunStreaming(ctx, wf, nil)
 	if err != nil {
 		return nil, err
 	}

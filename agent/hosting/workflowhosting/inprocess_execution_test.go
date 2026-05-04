@@ -82,7 +82,7 @@ func TestRunAsync_ExecutesWorkflow(t *testing.T) {
 		Role:     message.RoleUser,
 		Contents: []message.Content{&message.TextContent{Text: "Hello"}},
 	}}
-	run, err := inproc.Run(ctx, wf, "", input)
+	run, err := inproc.Default.Run(ctx, wf, input)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestRunAsync_ExecutesWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetStatus: %v", err)
 	}
-	if status != workflow.RunStatusIdle {
+	if status != inproc.RunStatusIdle {
 		t.Errorf("status = %v, want Idle", status)
 	}
 
@@ -111,7 +111,7 @@ func TestStreamAsync_ExecutesWorkflowWithTurnToken(t *testing.T) {
 	wf := buildSequentialWorkflow(t, a)
 
 	ctx := context.Background()
-	stream, err := inproc.Stream(ctx, wf, "")
+	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestStreamAsync_ExecutesWorkflowWithTurnToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetStatus: %v", err)
 	}
-	if status != workflow.RunStatusIdle {
+	if status != inproc.RunStatusIdle {
 		t.Errorf("status = %v, want Idle", status)
 	}
 	if !containsType[workflow.ResponseUpdateEvent](events) {
@@ -159,13 +159,13 @@ func TestRunAsyncAndStreamAsync_ProduceSimilarResults(t *testing.T) {
 		}}
 	}
 
-	run, err := inproc.Run(ctx, wf1, "", input())
+	run, err := inproc.Default.Run(ctx, wf1, input())
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	nonStreamingEvents := slices.Collect(run.OutgoingEvents())
 
-	stream, err := inproc.Stream(ctx, wf2, "")
+	stream, err := inproc.Default.RunStreaming(ctx, wf2, nil)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestRunStreamingAsync_StatusReachesIdleBeforeWatch(t *testing.T) {
 	wf := buildSequentialWorkflow(t, a)
 
 	ctx := context.Background()
-	stream, err := inproc.Stream(ctx, wf, "")
+	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestRunStreamingAsync_StatusReachesIdleBeforeWatch(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetStatus: %v", err)
 		}
-		if status == workflow.RunStatusIdle {
+		if status == inproc.RunStatusIdle {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
@@ -235,7 +235,7 @@ func TestRunStreamingAsync_StatusReachesIdleBeforeWatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetStatus: %v", err)
 	}
-	if status != workflow.RunStatusIdle {
+	if status != inproc.RunStatusIdle {
 		t.Errorf("status = %v, want Idle", status)
 	}
 	if len(events) == 0 {

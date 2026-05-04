@@ -52,7 +52,7 @@ func TestDirectEdgeRouting_NoCondition_DeliversAlways(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if _, err := inproc.Run(context.Background(), wf, "", "test"); err != nil {
+	if _, err := inproc.Default.Run(context.Background(), wf, "test"); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -81,7 +81,7 @@ func TestDirectEdgeRouting_ConditionTrue_Delivers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if _, err := inproc.Run(context.Background(), wf, "", "match"); err != nil {
+	if _, err := inproc.Default.Run(context.Background(), wf, "match"); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -107,7 +107,7 @@ func TestDirectEdgeRouting_ConditionFalse_DoesNotDeliver(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if _, err := inproc.Run(context.Background(), wf, "", "test"); err != nil {
+	if _, err := inproc.Default.Run(context.Background(), wf, "test"); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -133,7 +133,7 @@ func TestFanOutEdgeRouting_NoAssigner_DeliversToAll(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if _, err := inproc.Run(context.Background(), wf, "", "test"); err != nil {
+	if _, err := inproc.Default.Run(context.Background(), wf, "test"); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -165,7 +165,7 @@ func TestFanOutEdgeRouting_AssignerSelectsSubset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if _, err := inproc.Run(context.Background(), wf, "", "test"); err != nil {
+	if _, err := inproc.Default.Run(context.Background(), wf, "test"); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -202,7 +202,7 @@ func TestFanOutEdgeRouting_AssignerSelectsEmpty_NoDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if _, err := inproc.Run(context.Background(), wf, "", "test"); err != nil {
+	if _, err := inproc.Default.Run(context.Background(), wf, "test"); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -232,7 +232,7 @@ func TestFanInEdgeRouting_StateResetsAfterDelivery(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 
-	if _, err := inproc.Run(context.Background(), wf, "", "round1"); err != nil {
+	if _, err := inproc.Default.Run(context.Background(), wf, "round1"); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -313,7 +313,7 @@ func TestFanInBarrier_DeliversOnlyAfterAllSourcesProduce(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 
-	if _, err := inproc.Run(context.Background(), wf, "", "go"); err != nil {
+	if _, err := inproc.Default.Run(context.Background(), wf, "go"); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -361,7 +361,7 @@ func outputFilterExecutor(id string) *workflow.ExecutorBinding {
 func runWorkflowAndCollect(t *testing.T, wf *workflow.Workflow, input any) []workflow.OutputEvent {
 	t.Helper()
 	ctx := context.Background()
-	run, err := inproc.Run(ctx, wf, "", input)
+	run, err := inproc.Default.Run(ctx, wf, input)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

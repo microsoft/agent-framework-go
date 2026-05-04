@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
+	"strconv"
 	"sync"
 
 	"github.com/microsoft/agent-framework-go/internal/errgroup"
@@ -89,6 +91,21 @@ func (s *statefulEdgeState) processMessage(sourceID string, envelope *MessageEnv
 	return envelopes
 }
 
+func (s *statefulEdgeState) clone() *statefulEdgeState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	unseen := make(map[string]struct{}, len(s.unseen))
+	for id := range s.unseen {
+		unseen[id] = struct{}{}
+	}
+	return &statefulEdgeState{
+		pendingMessages: slices.Clone(s.pendingMessages),
+		sourceIDs:       slices.Clone(s.sourceIDs),
+		unseen:          unseen,
+	}
+}
+
 // EdgeRunner manages routing of messages through workflow edges.
 type EdgeRunner struct {
 	ensureExecutor  func(context.Context, string, StepTracer) (*workflow.Executor, error)
@@ -125,6 +142,40 @@ func NewEdgeRunner(wf *workflow.Workflow, tracer StepTracer, ensureExecutor func
 		statefulEdges:   statefulEdges,
 		tracer:          tracer,
 	}
+}
+
+func (em *EdgeRunner) ExportState() (map[string]workflow.PortableValue, error) {
+	state := make(map[string]workflow.PortableValue, len(em.statefulEdges))
+	for index, edgeState := range em.statefulEdges {
+		state[strconv.Itoa(index)] = workflow.AnyPortableValue(edgeState.clone())
+	}
+	return state, nil
+}
+
+func (em *EdgeRunner) ImportState(cp *checkpoint.Checkpoint) error {
+	if cp == nil {
+		return fmt.Errorf("checkpoint cannot be nil")
+	}
+	for indexString, value := range cp.EdgeStateData {
+		index, err := strconv.Atoi(indexString)
+		if err != nil {
+			return fmt.Errorf("invalid edge state key %q: %w", indexString, err)
+		}
+		state, ok := em.statefulEdges[index]
+		if !ok {
+			return fmt.Errorf("edge state for %d not found", index)
+		}
+		if imported, ok := value.Any().(*statefulEdgeState); ok {
+			em.statefulEdges[index] = imported.clone()
+			continue
+		}
+		if imported, ok := value.As(reflect.TypeFor[*statefulEdgeState]()); ok {
+			em.statefulEdges[index] = imported.(*statefulEdgeState).clone()
+			continue
+		}
+		return fmt.Errorf("unsupported exported state type for edge %d: %T", index, state)
+	}
+	return nil
 }
 
 // PrepareDeliveryForEdge prepares message delivery through an edge.

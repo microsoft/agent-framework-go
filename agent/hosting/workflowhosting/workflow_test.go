@@ -30,7 +30,7 @@ var testReplayMessages = []string{
 	"Quisque dignissim ante odio, at facilisis orci porta a. Duis mi augue, fringilla eu egestas a, pellentesque sed lacus.",
 }
 
-func sendStreamMessage(t *testing.T, stream workflow.StreamingRun, ctx context.Context, message any) {
+func sendStreamMessage(t *testing.T, stream *inproc.StreamingRun, ctx context.Context, message any) {
 	t.Helper()
 	if err := stream.SendMessage(ctx, message); err != nil {
 		t.Fatalf("SendMessage: %v", err)
@@ -161,7 +161,7 @@ func runHostedAgent(t *testing.T, a *agent.Agent, cfg workflowhosting.Config, to
 	}
 
 	ctx := context.Background()
-	stream, err := inproc.Stream(ctx, wf, "")
+	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -443,7 +443,7 @@ func TestHostedAgent_ForwardsIncomingMessages(t *testing.T) {
 			}
 
 			ctx := context.Background()
-			stream, err := inproc.Stream(ctx, wf, "")
+			stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
 			if err != nil {
 				t.Fatalf("Stream: %v", err)
 			}
@@ -662,7 +662,7 @@ func TestHostedAgent_InterceptUserInputRequests(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	stream, err := inproc.Stream(ctx, wf, "")
+	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -711,7 +711,7 @@ func TestHostedAgent_InterceptUnterminatedFunctionCalls(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	stream, err := inproc.Stream(ctx, wf, "")
+	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -776,7 +776,7 @@ func TestHostedAgent_InterceptDisabled_PostsExternalRequest(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	run, err := inproc.Run(ctx, wf, "", workflow.TurnToken{})
+	run, err := inproc.Default.Run(ctx, wf, workflow.TurnToken{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -801,7 +801,7 @@ func TestHostedAgent_InterceptDisabled_PostsExternalRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetStatus: %v", err)
 	}
-	if status != workflow.RunStatusPendingRequests {
+	if status != inproc.RunStatusPendingRequests {
 		t.Errorf("status = %v, want PendingRequests", status)
 	}
 }
@@ -822,7 +822,7 @@ func TestHostedAgent_InterceptDisabled_ResumesWithExternalResponse(t *testing.T)
 	}
 
 	ctx := context.Background()
-	run, err := inproc.Run(ctx, wf, "", workflow.TurnToken{})
+	run, err := inproc.Default.Run(ctx, wf, workflow.TurnToken{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -959,7 +959,7 @@ func TestHostedAgent_InterceptsOnlyUnpairedFunctionCalls_PortMode(t *testing.T) 
 	}
 
 	ctx := context.Background()
-	run, err := inproc.Run(ctx, wf, "", workflow.TurnToken{})
+	run, err := inproc.Default.Run(ctx, wf, workflow.TurnToken{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1011,7 +1011,7 @@ func TestHostedAgent_InterceptsOnlyUnpairedFunctionCalls_PortMode(t *testing.T) 
 
 // lastResponseText drains all currently-available events from the run and
 // returns the text of the last ResponseEvent observed (or "" if none).
-func lastResponseText(t *testing.T, run workflow.Run) string {
+func lastResponseText(t *testing.T, run *inproc.Run) string {
 	t.Helper()
 	var text string
 	for evt := range run.OutgoingEvents() {
@@ -1049,7 +1049,7 @@ func TestHostedAgent_DuplicateRequestID_RaisesError(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	run, err := inproc.Run(ctx, wf, "", workflow.TurnToken{})
+	run, err := inproc.Default.Run(ctx, wf, workflow.TurnToken{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1122,7 +1122,7 @@ func TestHostedAgent_UnknownResponseID_RaisesError(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	run, err := inproc.Run(ctx, wf, "", "go")
+	run, err := inproc.Default.Run(ctx, wf, "go")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1186,7 +1186,7 @@ func TestHostedAgent_HeldTurnToken_StampsResolvedEmitEvents(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	stream, err := inproc.Stream(ctx, wf, "")
+	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -1254,7 +1254,7 @@ func TestHostedAgent_HandledRequestNotReEmitted_PortMode(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	run, err := inproc.Run(ctx, wf, "", workflow.TurnToken{})
+	run, err := inproc.Default.Run(ctx, wf, workflow.TurnToken{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1358,7 +1358,7 @@ func TestHostedAgent_AlreadyPendingRequest_IsIdempotent_InterceptMode(t *testing
 	}
 
 	ctx := context.Background()
-	stream, err := inproc.Stream(ctx, wf, "")
+	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}

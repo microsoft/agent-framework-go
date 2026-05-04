@@ -41,7 +41,7 @@ func TestStreamingRunEventStream_ErrorEventCancelsRunLoop(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("run loop did not stop after ErrorEvent")
 	}
-	if got := stream.getStatus(); got != workflow.RunStatusEnded {
+	if got := stream.getStatus(); got != RunStatusEnded {
 		t.Fatalf("status after ErrorEvent = %v, want Ended", got)
 	}
 

@@ -70,7 +70,7 @@ func TestPostRequestFromExecutor(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	run, err := inproc.Run(ctx, wf, "", "kick")
+	run, err := inproc.Default.Run(ctx, wf, "kick")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestPostRequestRoutingToOwner(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	run, err := inproc.Run(ctx, wf, "", "kick")
+	run, err := inproc.Default.Run(ctx, wf, "kick")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestExternalResponse_UnsolicitedResponseErrors(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	stream, err := inproc.Stream(ctx, wf, "")
+	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}

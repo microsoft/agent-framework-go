@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"iter"
 	"reflect"
-	"slices"
 	"sync/atomic"
 
 	"github.com/microsoft/agent-framework-go/workflow"
@@ -103,7 +102,7 @@ func (h *RunHandle) LastCheckpoint() (workflow.CheckpointInfo, bool) {
 	return checkpoints[len(checkpoints)-1], true
 }
 
-func (h *RunHandle) GetStatus(ctx context.Context) (workflow.RunStatus, error) {
+func (h *RunHandle) GetStatus(ctx context.Context) (RunStatus, error) {
 	return h.eventStream.GetStatus(ctx)
 }
 
@@ -231,152 +230,4 @@ func (h *RunHandle) RestoreCheckpoint(ctx context.Context, checkpointInfo workfl
 	h.signalInputToRunLoop()
 
 	return nil
-}
-
-type Run struct {
-	runHandle *RunHandle
-	eventSink []workflow.Event
-
-	lastBookmark int
-}
-
-func NewRun(handle *RunHandle) *Run {
-	return &Run{
-		runHandle: handle,
-	}
-}
-
-func (r *Run) SessionID() string {
-	return r.runHandle.SessionID()
-}
-
-func (r *Run) IsCheckpointingEnabled() bool {
-	return r.runHandle.IsCheckpointingEnabled()
-}
-
-func (r *Run) Checkpoints() []workflow.CheckpointInfo {
-	return r.runHandle.Checkpoints()
-}
-
-func (r *Run) LastCheckpoint() (workflow.CheckpointInfo, bool) {
-	return r.runHandle.LastCheckpoint()
-}
-
-func (r *Run) RestoreCheckpoint(ctx context.Context, checkpointInfo workflow.CheckpointInfo) error {
-	return r.runHandle.RestoreCheckpoint(ctx, checkpointInfo)
-}
-
-func (r *Run) GetStatus(ctx context.Context) (workflow.RunStatus, error) {
-	return r.runHandle.GetStatus(ctx)
-}
-
-func (r *Run) OutgoingEvents() iter.Seq[workflow.Event] {
-	return slices.Values(r.eventSink)
-}
-
-func (r *Run) NewEventCount() int {
-	return len(r.eventSink) - r.lastBookmark
-}
-
-func (r *Run) NewEvents() iter.Seq[workflow.Event] {
-	if r.lastBookmark >= len(r.eventSink) {
-		return func(yield func(workflow.Event) bool) {}
-	}
-	return func(yield func(workflow.Event) bool) {
-		current := r.lastBookmark
-		r.lastBookmark = len(r.eventSink)
-		for _, evt := range r.eventSink[current:] {
-			if !yield(evt) {
-				return
-			}
-		}
-	}
-}
-
-func (r *Run) Resume(ctx context.Context, messages ...any) (bool, error) {
-	for _, msg := range messages {
-		if err := r.runHandle.EnqueueMessage(ctx, msg); err != nil {
-			return false, err
-		}
-	}
-	return r.RunToNextHalt(ctx)
-}
-
-func (r *Run) Close(ctx context.Context) error {
-	return r.runHandle.Close(ctx)
-}
-
-func (r *Run) RunToNextHalt(ctx context.Context) (bool, error) {
-	var hadEvents bool
-	for evt, err := range r.runHandle.TakeEventStream(ctx, false) {
-		if err != nil {
-			return false, err
-		}
-		hadEvents = true
-		r.eventSink = append(r.eventSink, evt)
-	}
-	return hadEvents, nil
-}
-
-type StreamingRun struct {
-	runHandle *RunHandle
-}
-
-func NewStreamingRun(handle *RunHandle) *StreamingRun {
-	return &StreamingRun{
-		runHandle: handle,
-	}
-}
-
-func (sr *StreamingRun) SessionID() string {
-	return sr.runHandle.SessionID()
-}
-
-func (sr *StreamingRun) IsCheckpointingEnabled() bool {
-	return sr.runHandle.IsCheckpointingEnabled()
-}
-
-func (sr *StreamingRun) Checkpoints() []workflow.CheckpointInfo {
-	return sr.runHandle.Checkpoints()
-}
-
-func (sr *StreamingRun) LastCheckpoint() (workflow.CheckpointInfo, bool) {
-	return sr.runHandle.LastCheckpoint()
-}
-
-func (sr *StreamingRun) RestoreCheckpoint(ctx context.Context, checkpointInfo workflow.CheckpointInfo) error {
-	return sr.runHandle.RestoreCheckpoint(ctx, checkpointInfo)
-}
-
-func (sr *StreamingRun) GetStatus(ctx context.Context) (workflow.RunStatus, error) {
-	return sr.runHandle.GetStatus(ctx)
-}
-
-func (sr *StreamingRun) SendResponse(ctx context.Context, response *workflow.ExternalResponse) error {
-	return sr.runHandle.EnqueueResponse(ctx, response)
-}
-
-func (sr *StreamingRun) SendMessage(ctx context.Context, message any) error {
-	return sr.runHandle.EnqueueMessage(ctx, message)
-}
-
-func (sr *StreamingRun) ResponsePortExecutorID(portID string) (string, bool) {
-	return sr.runHandle.ResponsePortExecutorID(portID)
-}
-
-func (sr *StreamingRun) WatchStream(ctx context.Context) iter.Seq2[workflow.Event, error] {
-	return sr.runHandle.TakeEventStream(ctx, true)
-}
-
-func (sr *StreamingRun) WatchUntilHalt(ctx context.Context) iter.Seq2[workflow.Event, error] {
-	return sr.runHandle.TakeEventStream(ctx, false)
-}
-
-func (sr *StreamingRun) CancelRun() error {
-	sr.runHandle.Cancel()
-	return nil
-}
-
-func (sr *StreamingRun) Close(ctx context.Context) error {
-	return sr.runHandle.Close(ctx)
 }

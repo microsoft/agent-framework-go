@@ -47,7 +47,7 @@ func TestStartedEvent_EmittedBeforeSuperStepStarted_OffThread(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	run, err := inproc.Default.Run(context.Background(), wf, "", "go")
+	run, err := inproc.Default.Run(context.Background(), wf, "go")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestStartedEvent_EmittedInLockstepMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	run, err := inproc.Lockstep.Run(context.Background(), wf, "", "go")
+	run, err := inproc.Lockstep.Run(context.Background(), wf, "go")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestStartedEvent_NotEmittedWhenNoWork(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	stream, err := inproc.Stream(ctx, wf, "")
+	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -140,13 +140,13 @@ func TestStreamingRun_WaitToTakeStreamDoesNotBlockOffThread(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	stream, err := inproc.Default.RunStreaming(ctx, wf, "", "go")
+	stream, err := inproc.Default.RunStreaming(ctx, wf, "go")
 	if err != nil {
 		t.Fatalf("RunStreaming: %v", err)
 	}
 	defer func() { _ = stream.Close(ctx) }()
 
-	if err := waitForRunStatus(ctx, stream, workflow.RunStatusIdle); err != nil {
+	if err := waitForRunStatus(ctx, stream, inproc.RunStatusIdle); err != nil {
 		t.Fatalf("wait for idle before watching stream: %v", err)
 	}
 
@@ -174,7 +174,7 @@ func TestRun_ResumeAcceptsMessages(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	run, err := inproc.Run(ctx, wf, "", "first")
+	run, err := inproc.Default.Run(ctx, wf, "first")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestStreamingRun_SendMessageReturnsErrInvalidInputType(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	stream, err := inproc.Stream(ctx, wf, "")
+	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestRunAndStreamingRun_CheckpointableDefaults(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	run, err := inproc.Run(ctx, wf, "", "go")
+	run, err := inproc.Default.Run(ctx, wf, "go")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -233,7 +233,7 @@ func TestRunAndStreamingRun_CheckpointableDefaults(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	stream, err := inproc.Stream(ctx, wf, "")
+	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -251,14 +251,14 @@ func countOutputs(events iter.Seq[workflow.Event]) int {
 	return count
 }
 
-func sendStreamingMessage(t *testing.T, stream workflow.StreamingRun, ctx context.Context, message any) {
+func sendStreamingMessage(t *testing.T, stream *inproc.StreamingRun, ctx context.Context, message any) {
 	t.Helper()
 	if err := stream.SendMessage(ctx, message); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
 }
 
-func waitForRunStatus(ctx context.Context, run workflow.StreamingRun, want workflow.RunStatus) error {
+func waitForRunStatus(ctx context.Context, run *inproc.StreamingRun, want inproc.RunStatus) error {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -285,24 +285,24 @@ func waitForRunStatus(ctx context.Context, run workflow.StreamingRun, want workf
 	}
 }
 
-func runStatusName(status workflow.RunStatus) string {
+func runStatusName(status inproc.RunStatus) string {
 	switch status {
-	case workflow.RunStatusNotStarted:
+	case inproc.RunStatusNotStarted:
 		return "NotStarted"
-	case workflow.RunStatusIdle:
+	case inproc.RunStatusIdle:
 		return "Idle"
-	case workflow.RunStatusPendingRequests:
+	case inproc.RunStatusPendingRequests:
 		return "PendingRequests"
-	case workflow.RunStatusEnded:
+	case inproc.RunStatusEnded:
 		return "Ended"
-	case workflow.RunStatusRunning:
+	case inproc.RunStatusRunning:
 		return "Running"
 	default:
 		return "Unknown"
 	}
 }
 
-func assertRunCheckpointDefaults(t *testing.T, run workflow.Run) {
+func assertRunCheckpointDefaults(t *testing.T, run *inproc.Run) {
 	t.Helper()
 	if run.IsCheckpointingEnabled() {
 		t.Fatal("IsCheckpointingEnabled() = true, want false")
@@ -315,7 +315,7 @@ func assertRunCheckpointDefaults(t *testing.T, run workflow.Run) {
 	}
 }
 
-func assertStreamingRunCheckpointDefaults(t *testing.T, run workflow.StreamingRun) {
+func assertStreamingRunCheckpointDefaults(t *testing.T, run *inproc.StreamingRun) {
 	t.Helper()
 	if run.IsCheckpointingEnabled() {
 		t.Fatal("IsCheckpointingEnabled() = true, want false")
@@ -345,7 +345,7 @@ func TestSuperStep_CompletedEventPerStep(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 
-	run, err := inproc.Run(context.Background(), wf, "", "msg")
+	run, err := inproc.Default.Run(context.Background(), wf, "msg")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -382,7 +382,7 @@ func TestSuperStep_StartedPrecedesCompletedPerStep(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 
-	run, err := inproc.Run(context.Background(), wf, "", "msg")
+	run, err := inproc.Default.Run(context.Background(), wf, "msg")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -485,7 +485,7 @@ func TestDeliveryEvents_InvokedOncePerExecutorPerSuperstep(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 
-	if _, err := inproc.Run(context.Background(), wf, "", "msg"); err != nil {
+	if _, err := inproc.Default.Run(context.Background(), wf, "msg"); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -540,7 +540,7 @@ func TestDeliveryEvents_FinishedRunsEvenWhenHandlerErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if _, err := inproc.Run(context.Background(), wf, "", "x"); err != nil {
+	if _, err := inproc.Default.Run(context.Background(), wf, "x"); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if got := finishedCalls.Load(); got != 1 {

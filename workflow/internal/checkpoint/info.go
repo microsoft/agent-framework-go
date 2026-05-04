@@ -4,6 +4,7 @@ package checkpoint
 
 import (
 	"reflect"
+	"slices"
 
 	"github.com/microsoft/agent-framework-go/workflow"
 )
@@ -27,6 +28,36 @@ type WorkflowInfo struct {
 	requestPorts      map[workflow.RequestPortInfo]struct{}
 	startExecutorID   string
 	outputExecutorIDs map[string]struct{}
+}
+
+func NewWorkflowInfo(wf *workflow.Workflow) WorkflowInfo {
+	executors := make(map[string]executorInfo, len(wf.ExecutorBindings))
+	for id, binding := range wf.ExecutorBindings {
+		executors[id] = executorInfo{
+			Type:       workflow.NewTypeID(binding.ExecutorType),
+			ExecutorID: binding.ID,
+		}
+	}
+
+	edges := wf.ReflectEdges()
+
+	requestPorts := make(map[workflow.RequestPortInfo]struct{}, len(wf.Ports))
+	for _, port := range wf.Ports {
+		requestPorts[workflow.NewRequestPortInfo(port)] = struct{}{}
+	}
+
+	outputs := make(map[string]struct{}, len(wf.OutputExecutors))
+	for id := range wf.OutputExecutors {
+		outputs[id] = struct{}{}
+	}
+
+	return WorkflowInfo{
+		executors:         executors,
+		edges:             edges,
+		requestPorts:      requestPorts,
+		startExecutorID:   wf.StartExecutorID,
+		outputExecutorIDs: outputs,
+	}
 }
 
 func (w *WorkflowInfo) Match(wf *workflow.Workflow) bool {
@@ -55,8 +86,8 @@ func (w *WorkflowInfo) Match(wf *workflow.Workflow) bool {
 		if !ok || len(other) != len(edges) {
 			return false
 		}
-		for i, edge := range edges {
-			if !edge.Match(other[i]) {
+		for _, edge := range other {
+			if !slices.ContainsFunc(edges, func(info workflow.EdgeInfo) bool { return info.Match(edge) }) {
 				return false
 			}
 		}

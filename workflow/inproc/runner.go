@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework-go/internal/concurrent"
 	"github.com/microsoft/agent-framework-go/internal/errgroup"
+	"github.com/microsoft/agent-framework-go/internal/hashmap"
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/internal/checkpoint"
 	"github.com/microsoft/agent-framework-go/workflow/internal/execution"
@@ -40,7 +41,8 @@ type runner struct {
 	knownValidInputTypes map[reflect.Type]struct{}
 	needsRepublish       atomic.Bool
 
-	checkpoints []workflow.CheckpointInfo
+	checkpoints        []workflow.CheckpointInfo
+	lastCheckpointInfo workflow.CheckpointInfo
 }
 
 // createTopLevelRunner creates a new top-level InProcessRunner for the given workflow.
@@ -184,17 +186,19 @@ func (r *runner) beginStream(_ context.Context, mode execution.Mode) (*execution
 	return execution.NewRunHandle(r, r, mode), nil
 }
 
-func (r *runner) resumeStream(ctx context.Context, mode execution.Mode, info workflow.CheckpointInfo) (*execution.RunHandle, error) {
+func (r *runner) resumeStreamWithRepublish(ctx context.Context, mode execution.Mode, info workflow.CheckpointInfo, republishPendingRequests bool) (*execution.RunHandle, error) {
 	if err := r.runContext.checkEnded(); err != nil {
 		return nil, err
 	}
 	if r.checkpointMgr == nil {
 		return nil, fmt.Errorf("this runner was not configured with a CheckpointManager, so it cannot resume from checkpoints")
 	}
-	if err := r.RestoreCheckpoint(ctx, info); err != nil {
+	if err := r.restoreCheckpointCore(ctx, info); err != nil {
 		return nil, err
 	}
-	r.needsRepublish.Store(true)
+	if republishPendingRequests {
+		r.needsRepublish.Store(true)
+	}
 	return execution.NewRunHandle(r, r, mode), nil
 }
 
@@ -266,11 +270,18 @@ func (r *runner) IsCheckpointingEnabled() bool {
 }
 
 func (r *runner) Checkpoints() []workflow.CheckpointInfo {
-	return r.checkpoints
+	return slices.Clone(r.checkpoints)
 }
 
 // RestoreCheckpoint restores the workflow state from a checkpoint.
 func (r *runner) RestoreCheckpoint(ctx context.Context, checkpointInfo workflow.CheckpointInfo) error {
+	if err := r.restoreCheckpointCore(ctx, checkpointInfo); err != nil {
+		return err
+	}
+	return r.runContext.RepublishUnservicedRequests(ctx)
+}
+
+func (r *runner) restoreCheckpointCore(ctx context.Context, checkpointInfo workflow.CheckpointInfo) error {
 	if err := r.runContext.checkEnded(); err != nil {
 		return err
 	}
@@ -279,7 +290,7 @@ func (r *runner) RestoreCheckpoint(ctx context.Context, checkpointInfo workflow.
 		return fmt.Errorf("this runner was not configured with a CheckpointManager, so it cannot restore checkpoints")
 	}
 
-	cp, err := r.checkpointMgr.Lookup(r.sessionID)
+	cp, err := r.checkpointMgr.Lookup(r.sessionID, checkpointInfo)
 	if err != nil {
 		return fmt.Errorf("failed to lookup checkpoint: %w", err)
 	}
@@ -292,8 +303,23 @@ func (r *runner) RestoreCheckpoint(ctx context.Context, checkpointInfo workflow.
 	if err := r.runContext.stateManager.ImportState(cp); err != nil {
 		return err
 	}
-	// TODO: Implement full checkpoint restoration
-	return fmt.Errorf("checkpoint restore not yet implemented")
+	if err := r.runContext.ImportState(ctx, cp); err != nil {
+		return err
+	}
+	if err := r.runContext.NotifyCheckpointLoaded(ctx); err != nil {
+		return err
+	}
+	if err := r.edgeMap.ImportState(cp); err != nil {
+		return err
+	}
+	index, err := r.checkpointMgr.RetrieveIndex(r.sessionID)
+	if err != nil {
+		return fmt.Errorf("failed to retrieve checkpoint index: %w", err)
+	}
+	r.checkpoints = index
+	r.lastCheckpointInfo = checkpointInfo
+	r.stepTracer.Reload(cp.StepNumber)
+	return nil
 }
 
 func (r *runner) runSuperstep(ctx context.Context, currentStep *execution.StepContext) error {
@@ -375,8 +401,44 @@ func (r *runner) checkpoint(ctx context.Context) error {
 		return r.runContext.stateManager.PublishUpdates(r.stepTracer)
 	}
 
-	// TODO: Implement full checkpoint creation
-	// This requires implementing WorkflowInfo and state export for all components
+	if err := r.runContext.PrepareForCheckpoint(ctx); err != nil {
+		return err
+	}
 
-	return r.runContext.stateManager.PublishUpdates(r.stepTracer)
+	workflowInfo := checkpoint.NewWorkflowInfo(r.wf)
+
+	edgeData, err := r.edgeMap.ExportState()
+	if err != nil {
+		return err
+	}
+
+	if err := r.runContext.stateManager.PublishUpdates(r.stepTracer); err != nil {
+		return err
+	}
+
+	exportedState, err := r.runContext.stateManager.ExportState()
+	if err != nil {
+		return err
+	}
+	stateData := hashmap.NewMap[workflow.ScopeKey, workflow.PortableValue](execution.ScopeKeyHasher)
+	for key, value := range exportedState {
+		stateData.Set(key, value)
+	}
+
+	cp := &checkpoint.Checkpoint{
+		StepNumber:    r.stepTracer.StepNumber(),
+		WorkflowInfo:  workflowInfo,
+		RunnerData:    r.runContext.ExportState(),
+		StateData:     *stateData,
+		EdgeStateData: edgeData,
+		Parent:        r.lastCheckpointInfo,
+	}
+	info, err := r.checkpointMgr.Commit(r.sessionID, cp)
+	if err != nil {
+		return err
+	}
+	r.stepTracer.TraceCheckpointCreated(info)
+	r.checkpoints = append(r.checkpoints, info)
+	r.lastCheckpointInfo = info
+	return nil
 }

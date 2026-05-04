@@ -64,7 +64,7 @@ func TestStatefulExecutorCache_AggregatesIncrementally(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	stream, err := inproc.Stream(ctx, wf, "")
+	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}

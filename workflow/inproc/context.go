@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/workflow"
+	"github.com/microsoft/agent-framework-go/workflow/internal/checkpoint"
 	"github.com/microsoft/agent-framework-go/workflow/internal/execution"
 )
 
@@ -134,7 +135,7 @@ func (proc *runnerContext) EnsureExecutor(ctx context.Context, executorID string
 	}
 
 	if tracer != nil {
-		tracer.TraceActivated(executorID)
+		tracer.TraceInstantiated(executorID)
 	}
 
 	// TODO: Handle special executor types (RequestInfoExecutor, WorkflowHostExecutor)
@@ -142,6 +143,131 @@ func (proc *runnerContext) EnsureExecutor(ctx context.Context, executorID string
 	proc.executors[executorID] = executor
 
 	return executor, nil
+}
+
+func (proc *runnerContext) PrepareForCheckpoint(ctx context.Context) error {
+	if err := proc.checkEnded(); err != nil {
+		return err
+	}
+
+	proc.executorsMu.RLock()
+	executors := make([]*workflow.Executor, 0, len(proc.executors))
+	for _, executor := range proc.executors {
+		executors = append(executors, executor)
+	}
+	proc.executorsMu.RUnlock()
+
+	for _, executor := range executors {
+		if err := executor.OnCheckpoint(proc.Bind(ctx, executor.ID, nil)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (proc *runnerContext) NotifyCheckpointLoaded(ctx context.Context) error {
+	if err := proc.checkEnded(); err != nil {
+		return err
+	}
+
+	proc.executorsMu.RLock()
+	executors := make([]*workflow.Executor, 0, len(proc.executors))
+	for _, executor := range proc.executors {
+		executors = append(executors, executor)
+	}
+	proc.executorsMu.RUnlock()
+
+	for _, executor := range executors {
+		if err := executor.OnCheckpointRestored(proc.Bind(ctx, executor.ID, nil)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (proc *runnerContext) ExportState() checkpoint.RunnerStateData {
+	proc.executorsMu.RLock()
+	instantiated := make(map[string]struct{}, len(proc.executors))
+	for id := range proc.executors {
+		instantiated[id] = struct{}{}
+	}
+	proc.executorsMu.RUnlock()
+
+	proc.requestsMu.RLock()
+	outstanding := make([]*workflow.ExternalRequest, 0, len(proc.externalRequests))
+	for _, request := range proc.externalRequests {
+		outstanding = append(outstanding, request)
+	}
+	requestOwners := make(map[string]string, len(proc.requestOwners))
+	for requestID, ownerID := range proc.requestOwners {
+		requestOwners[requestID] = ownerID
+	}
+	responsePortOwners := make(map[string]string, len(proc.responsePortOwners))
+	for portID, ownerID := range proc.responsePortOwners {
+		responsePortOwners[portID] = ownerID
+	}
+	proc.requestsMu.RUnlock()
+
+	return checkpoint.RunnerStateData{
+		InstantiatedExecutors: instantiated,
+		QueuedMessages:        proc.nextStep.ExportMessages(),
+		OutstandingRequests:   outstanding,
+		RequestOwners:         requestOwners,
+		ResponsePortOwners:    responsePortOwners,
+	}
+}
+
+func (proc *runnerContext) ImportState(ctx context.Context, cp *checkpoint.Checkpoint) error {
+	if err := proc.checkEnded(); err != nil {
+		return err
+	}
+	if cp == nil {
+		return errors.New("checkpoint cannot be nil")
+	}
+
+	for executorID := range cp.RunnerData.InstantiatedExecutors {
+		if _, err := proc.EnsureExecutor(ctx, executorID, nil); err != nil {
+			return err
+		}
+	}
+
+	proc.externalDeliveriesMu.Lock()
+	proc.queuedExternalDeliveries = make([]func(context.Context) error, 0)
+	proc.externalDeliveriesMu.Unlock()
+
+	nextStep := new(execution.StepContext)
+	nextStep.ImportMessages(cp.RunnerData.QueuedMessages)
+	atomic.StorePointer(
+		(*unsafe.Pointer)(unsafe.Pointer(&proc.nextStep)),
+		unsafe.Pointer(nextStep),
+	)
+
+	proc.requestsMu.Lock()
+	proc.externalRequests = make(map[string]*workflow.ExternalRequest, len(cp.RunnerData.OutstandingRequests))
+	proc.requestOwners = make(map[string]string, len(cp.RunnerData.RequestOwners))
+	proc.responsePortOwners = make(map[string]string, len(cp.RunnerData.ResponsePortOwners))
+	for requestID, ownerID := range cp.RunnerData.RequestOwners {
+		proc.requestOwners[requestID] = ownerID
+	}
+	for portID, ownerID := range cp.RunnerData.ResponsePortOwners {
+		proc.responsePortOwners[portID] = ownerID
+	}
+	for _, request := range cp.RunnerData.OutstandingRequests {
+		proc.externalRequests[request.ID] = request
+		if ownerID := proc.requestOwners[request.ID]; ownerID == "" {
+			ownerID = proc.responsePortOwners[request.PortInfo.PortID]
+			if ownerID == "" {
+				ownerID = request.PortInfo.PortID
+			}
+			proc.requestOwners[request.ID] = ownerID
+		}
+		if _, ok := proc.responsePortOwners[request.PortInfo.PortID]; !ok {
+			proc.responsePortOwners[request.PortInfo.PortID] = proc.requestOwners[request.ID]
+		}
+	}
+	proc.requestsMu.Unlock()
+
+	return nil
 }
 
 // AddExternalMessage queues an external message for delivery.
