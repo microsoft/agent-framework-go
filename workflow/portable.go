@@ -4,15 +4,17 @@ package workflow
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
 )
 
 // PortableValue represents a value that can be exported / imported to a workflow,
 // e.g. through an external request/response, or through checkpointing.
-// The zero PortableValue corresponds to nil.
+// The zero PortableValue is invalid.
 type PortableValue struct {
 	_      [0]func() // disallow ==
 	any    any
+	cache  any
 	TypeID TypeID
 	// TODO: Optimize small values so they avoid allocations, like in slog.Value.
 }
@@ -25,8 +27,16 @@ func AnyPortableValue(v any) PortableValue {
 	switch val := v.(type) {
 	case PortableValue:
 		return val
+	case *PortableValue:
+		if val == nil {
+			panic("workflow: PortableValue cannot wrap nil")
+		}
+		return *val
 	default:
-		return PortableValue{any: v}
+		if v == nil {
+			panic("workflow: PortableValue cannot wrap nil")
+		}
+		return PortableValue{any: v, TypeID: NewTypeID(reflect.TypeOf(v))}
 	}
 }
 
@@ -42,12 +52,11 @@ func PortableValueAs[T any](v PortableValue) (T, bool) {
 	return v.Any().(T), true
 }
 
-func (v *PortableValue) IsZero() bool {
-	return v == nil || v.any == nil
-}
-
 // Any returns v's value as an any.
 func (v *PortableValue) Any() any {
+	if v.cache != nil {
+		return v.cache
+	}
 	return v.any
 }
 
@@ -61,32 +70,75 @@ func (v *PortableValue) Is(typ reflect.Type) bool {
 	if typ == reflect.TypeFor[PortableValue]() {
 		return true
 	}
+	if v.cache != nil && reflect.TypeOf(v.cache).AssignableTo(typ) {
+		return true
+	}
 	raw, ok := v.any.(json.RawMessage)
 	if !ok {
 		// not a delayed deserialization
-		return reflect.TypeOf(v.any).AssignableTo(typ)
+		return v.any != nil && reflect.TypeOf(v.any).AssignableTo(typ)
 	}
-	target := reflect.New(typ).Interface()
+	target := reflect.New(typ)
 	// Either we have no cache, or the types are incompatible; see if we can deserialize to the requested type
-	if err := json.Unmarshal(raw, target); err != nil {
+	if err := json.Unmarshal(raw, target.Interface()); err != nil {
 		return false
 	}
-	v.any = target
+	deserialized := target.Elem().Interface()
+	if deserialized == nil || !reflect.TypeOf(deserialized).AssignableTo(typ) {
+		return false
+	}
+	v.cache = deserialized
 	return true
 }
 
 func (v *PortableValue) As(typ reflect.Type) (any, bool) {
 	if v.Is(typ) {
-		return v.any, true
+		return v.Any(), true
 	}
 	return nil, false
 }
 
 // Delayed reports whether the value is stored in a delayed deserialized form.
 func (v *PortableValue) Delayed() bool {
-	if v.any == nil {
+	if v.any == nil || v.cache != nil {
 		return false
 	}
 	_, ok := v.any.(json.RawMessage)
 	return ok
+}
+
+func (v PortableValue) MarshalJSON() ([]byte, error) {
+	if v.any == nil {
+		return nil, errors.New("cannot marshal zero PortableValue")
+	}
+	value := v.Any()
+	if raw, ok := value.(json.RawMessage); ok {
+		return json.Marshal(portableValueJSON{TypeID: v.TypeID, Value: raw})
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	typeID := v.TypeID
+	if typeID == (TypeID{}) {
+		typeID = NewTypeID(reflect.TypeOf(value))
+	}
+	return json.Marshal(portableValueJSON{TypeID: typeID, Value: data})
+}
+
+func (v *PortableValue) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		return errors.New("cannot unmarshal null PortableValue")
+	}
+	var wire portableValueJSON
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	*v = PortableValue{any: wire.Value, TypeID: wire.TypeID}
+	return nil
+}
+
+type portableValueJSON struct {
+	TypeID TypeID
+	Value  json.RawMessage
 }

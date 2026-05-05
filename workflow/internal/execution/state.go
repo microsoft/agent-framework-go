@@ -68,6 +68,8 @@ func (s *StateScope) WriteState(updates map[string][]StateUpdate) error {
 		update := updateList[0]
 		if update.IsDelete {
 			delete(s.stateData, key)
+		} else if update.Value == nil {
+			delete(s.stateData, key)
 		} else {
 			s.stateData[key] = workflow.AnyPortableValue(update.Value)
 		}
@@ -313,6 +315,9 @@ func (sm *StateManager) ReadOrInitStateByID(scopeID workflow.ScopeID, key string
 			return workflow.PortableValue{}, fmt.Errorf("factory function cannot be nil when initializing state")
 		}
 		newValue := factory()
+		if newValue == nil {
+			return workflow.PortableValue{}, nil
+		}
 		if err := sm.WriteStateByID(scopeID, key, newValue); err != nil {
 			return workflow.PortableValue{}, err
 		}

@@ -133,8 +133,8 @@ func (mr *messageRouter) RouteMessage(ctx *Context, msg any) (result callResult,
 	if msg == nil {
 		panic("nil message")
 	}
-	pvalue, ok := msg.(PortableValue)
-	if ok {
+	pvalue, isPortable := msg.(PortableValue)
+	if isPortable {
 		if typ, ok := mr.runtimeTypeMap[pvalue.TypeID]; ok {
 			if v, ok := pvalue.As(typ); ok {
 				// If we found a runtime type, we can use it
@@ -156,7 +156,7 @@ func (mr *messageRouter) RouteMessage(ctx *Context, msg any) (result callResult,
 		return callResult{ret, err}, true
 	}
 	if mr.catchAllFunc != nil {
-		if pvalue.IsZero() {
+		if !isPortable {
 			pvalue = AnyPortableValue(msg)
 		}
 		ret, err := mr.catchAllFunc(ctx, pvalue)

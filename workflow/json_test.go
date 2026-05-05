@@ -92,8 +92,8 @@ func TestRequestPortInfo_JsonRoundtrip(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if got.ID != info.ID {
-		t.Errorf("ID = %q, want %q", got.ID, info.ID)
+	if got.PortID != info.PortID {
+		t.Errorf("ID = %q, want %q", got.PortID, info.PortID)
 	}
 	if got.RequestType != info.RequestType {
 		t.Errorf("RequestType = %+v, want %+v", got.RequestType, info.RequestType)

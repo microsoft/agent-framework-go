@@ -308,7 +308,7 @@ func TestAddChain_ConnectsExecutorsInOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if _, err := inproc.Run(context.Background(), wf, "", "x"); err != nil {
+	if _, err := inproc.Default.Run(context.Background(), wf, "x"); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	want := []string{"a:x", "b:x", "c:x"}
@@ -352,7 +352,7 @@ func TestAddSwitch_RoutesToMatchingCase(t *testing.T) {
 	}
 
 	// "abcd" → len 4 → even
-	if _, err := inproc.Run(context.Background(), wf, "", "abcd"); err != nil {
+	if _, err := inproc.Default.Run(context.Background(), wf, "abcd"); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	wantContains := "even:abcd"
@@ -389,7 +389,7 @@ func TestAddSwitch_FallsBackToDefault(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 
-	if _, err := inproc.Run(context.Background(), wf, "", "no-match"); err != nil {
+	if _, err := inproc.Default.Run(context.Background(), wf, "no-match"); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	for _, ent := range trace {

@@ -4,11 +4,14 @@ package inproc_test
 
 import (
 	"context"
+	"errors"
+	"iter"
 	"reflect"
 	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
@@ -44,7 +47,7 @@ func TestStartedEvent_EmittedBeforeSuperStepStarted_OffThread(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	run, err := inproc.Default.Run(context.Background(), wf, "", "go")
+	run, err := inproc.Default.Run(context.Background(), wf, "go")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -82,7 +85,7 @@ func TestStartedEvent_EmittedInLockstepMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	run, err := inproc.Lockstep.Run(context.Background(), wf, "", "go")
+	run, err := inproc.Lockstep.Run(context.Background(), wf, "go")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -107,15 +110,13 @@ func TestStartedEvent_NotEmittedWhenNoWork(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	stream, err := inproc.OpenStream(ctx, wf, "")
+	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
 	if err != nil {
-		t.Fatalf("OpenStream: %v", err)
+		t.Fatalf("Stream: %v", err)
 	}
-	defer stream.Cancel()
+	defer func() { _ = stream.CancelRun() }()
 
-	if err := stream.SendMessage(ctx, "first"); err != nil {
-		t.Fatalf("SendMessage: %v", err)
-	}
+	sendStreamingMessage(t, stream, ctx, "first")
 
 	var startedCount int
 	for evt, err := range stream.WatchStream(ctx) {
@@ -128,6 +129,202 @@ func TestStartedEvent_NotEmittedWhenNoWork(t *testing.T) {
 	}
 	if startedCount != 1 {
 		t.Errorf("expected exactly 1 StartedEvent, got %d", startedCount)
+	}
+}
+
+func TestStreamingRun_WaitToTakeStreamDoesNotBlockOffThread(t *testing.T) {
+	ex := minimalEchoBinding("ex")
+	wf, err := workflow.NewBuilder(ex).WithOutputFrom(ex).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	ctx := context.Background()
+	stream, err := inproc.Default.RunStreaming(ctx, wf, "go")
+	if err != nil {
+		t.Fatalf("RunStreaming: %v", err)
+	}
+	defer func() { _ = stream.Close(ctx) }()
+
+	if err := waitForRunStatus(ctx, stream, inproc.RunStatusIdle); err != nil {
+		t.Fatalf("wait for idle before watching stream: %v", err)
+	}
+
+	var events []workflow.Event
+	for evt, err := range stream.WatchStream(ctx) {
+		if err != nil {
+			t.Fatalf("watch: %v", err)
+		}
+		events = append(events, evt)
+	}
+	if len(events) == 0 {
+		t.Fatal("expected buffered events after waiting to watch stream, got none")
+	}
+	outputCount := countOutputs(slices.Values(events))
+	if outputCount != 1 {
+		t.Fatalf("buffered output count = %d, want 1", outputCount)
+	}
+}
+
+func TestRun_ResumeAcceptsMessages(t *testing.T) {
+	ex := minimalEchoBinding("ex")
+	wf, err := workflow.NewBuilder(ex).WithOutputFrom(ex).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	ctx := context.Background()
+	run, err := inproc.Default.Run(ctx, wf, "first")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := countOutputs(run.OutgoingEvents()); got != 1 {
+		t.Fatalf("initial output count = %d, want 1", got)
+	}
+	for range run.NewEvents() {
+	}
+
+	hadEvents, err := run.Resume(ctx, "second")
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if !hadEvents {
+		t.Fatal("Resume returned hadEvents=false, want true")
+	}
+	if got := countOutputs(run.NewEvents()); got != 1 {
+		t.Fatalf("new output count = %d, want 1", got)
+	}
+}
+
+func TestStreamingRun_SendMessageReturnsErrInvalidInputType(t *testing.T) {
+	ex := minimalEchoBinding("ex")
+	wf, err := workflow.NewBuilder(ex).WithOutputFrom(ex).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	ctx := context.Background()
+	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer func() { _ = stream.CancelRun() }()
+
+	err = stream.SendMessage(ctx, 42)
+	if !errors.Is(err, workflow.ErrInvalidInputType) {
+		t.Fatalf("SendMessage error = %v, want ErrInvalidInputType", err)
+	}
+}
+
+func TestRunAndStreamingRun_CheckpointableDefaults(t *testing.T) {
+	ex := minimalEchoBinding("ex")
+	wf, err := workflow.NewBuilder(ex).WithOutputFrom(ex).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	ctx := context.Background()
+	run, err := inproc.Default.Run(ctx, wf, "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	assertRunCheckpointDefaults(t, run)
+	if err := run.Close(ctx); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer func() { _ = stream.CancelRun() }()
+	assertStreamingRunCheckpointDefaults(t, stream)
+}
+
+func countOutputs(events iter.Seq[workflow.Event]) int {
+	var count int
+	for evt := range events {
+		if _, ok := evt.(workflow.OutputEvent); ok {
+			count++
+		}
+	}
+	return count
+}
+
+func sendStreamingMessage(t *testing.T, stream *inproc.StreamingRun, ctx context.Context, message any) {
+	t.Helper()
+	if err := stream.SendMessage(ctx, message); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+}
+
+func waitForRunStatus(ctx context.Context, run *inproc.StreamingRun, want inproc.RunStatus) error {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+
+	for {
+		got, err := run.GetStatus(ctx)
+		if err != nil {
+			return err
+		}
+		if got == want {
+			return nil
+		}
+
+		select {
+		case <-ticker.C:
+		case <-deadline.C:
+			got, _ := run.GetStatus(ctx)
+			return errors.New("timed out waiting for run status " + runStatusName(want) + ", last status " + runStatusName(got))
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func runStatusName(status inproc.RunStatus) string {
+	switch status {
+	case inproc.RunStatusNotStarted:
+		return "NotStarted"
+	case inproc.RunStatusIdle:
+		return "Idle"
+	case inproc.RunStatusPendingRequests:
+		return "PendingRequests"
+	case inproc.RunStatusEnded:
+		return "Ended"
+	case inproc.RunStatusRunning:
+		return "Running"
+	default:
+		return "Unknown"
+	}
+}
+
+func assertRunCheckpointDefaults(t *testing.T, run *inproc.Run) {
+	t.Helper()
+	if run.IsCheckpointingEnabled() {
+		t.Fatal("IsCheckpointingEnabled() = true, want false")
+	}
+	if got := run.Checkpoints(); len(got) != 0 {
+		t.Fatalf("Checkpoints() length = %d, want 0", len(got))
+	}
+	if checkpoint, ok := run.LastCheckpoint(); ok {
+		t.Fatalf("LastCheckpoint() = (%v, true), want false", checkpoint)
+	}
+}
+
+func assertStreamingRunCheckpointDefaults(t *testing.T, run *inproc.StreamingRun) {
+	t.Helper()
+	if run.IsCheckpointingEnabled() {
+		t.Fatal("IsCheckpointingEnabled() = true, want false")
+	}
+	if got := run.Checkpoints(); len(got) != 0 {
+		t.Fatalf("Checkpoints() length = %d, want 0", len(got))
+	}
+	if checkpoint, ok := run.LastCheckpoint(); ok {
+		t.Fatalf("LastCheckpoint() = (%v, true), want false", checkpoint)
 	}
 }
 
@@ -148,7 +345,7 @@ func TestSuperStep_CompletedEventPerStep(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 
-	run, err := inproc.Run(context.Background(), wf, "", "msg")
+	run, err := inproc.Default.Run(context.Background(), wf, "msg")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -185,7 +382,7 @@ func TestSuperStep_StartedPrecedesCompletedPerStep(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 
-	run, err := inproc.Run(context.Background(), wf, "", "msg")
+	run, err := inproc.Default.Run(context.Background(), wf, "msg")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -288,7 +485,7 @@ func TestDeliveryEvents_InvokedOncePerExecutorPerSuperstep(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 
-	if _, err := inproc.Run(context.Background(), wf, "", "msg"); err != nil {
+	if _, err := inproc.Default.Run(context.Background(), wf, "msg"); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -343,7 +540,7 @@ func TestDeliveryEvents_FinishedRunsEvenWhenHandlerErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if _, err := inproc.Run(context.Background(), wf, "", "x"); err != nil {
+	if _, err := inproc.Default.Run(context.Background(), wf, "x"); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if got := finishedCalls.Load(); got != 1 {

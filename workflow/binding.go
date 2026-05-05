@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sync"
 )
 
 type ExecutorBinding struct {
@@ -86,6 +87,11 @@ func BindRequestPort(p RequestPort) *ExecutorBinding {
 }
 
 func newRequestPortExecutor(port RequestPort) *Executor {
+	var (
+		wrappedMu       sync.Mutex
+		wrappedRequests = make(map[string]*ExternalRequest)
+	)
+
 	return &Executor{
 		ID: port.ID,
 		Options: ExecutorOptions{
@@ -108,14 +114,49 @@ func newRequestPortExecutor(port RequestPort) *Executor {
 							}
 							return nil, nil
 						}).
+						AddHandler(reflect.TypeFor[*ExternalRequest](), nil, false, func(ctx *Context, msg any) (any, error) {
+							req := msg.(*ExternalRequest)
+							data, ok := req.Data.As(port.Request)
+							if !ok {
+								return nil, fmt.Errorf("message type %v could not be interpreted as request type %v", req.PortInfo.RequestType, port.Request)
+							}
+							if !req.PortInfo.ResponseType.Match(port.Response) {
+								return nil, fmt.Errorf("response type %v is not valid for request port response type %v", port.Response, req.PortInfo.ResponseType)
+							}
+							wrapped, err := NewExternalRequest(req.ID, port, data)
+							if err != nil {
+								return nil, err
+							}
+							wrappedMu.Lock()
+							wrappedRequests[req.ID] = req
+							wrappedMu.Unlock()
+							if err := ctx.PostRequest(wrapped); err != nil {
+								return nil, err
+							}
+							return nil, nil
+						}).
 						AddHandler(reflect.TypeFor[*ExternalResponse](), nil, false, func(ctx *Context, msg any) (any, error) {
 							resp := msg.(*ExternalResponse)
-							if resp.RequestPort.ID != port.ID {
+							if resp.PortInfo.PortID != port.ID {
 								return nil, nil
 							}
 							data, ok := resp.Data.As(port.Response)
 							if !ok {
 								return nil, fmt.Errorf("expected response of type %v, got %T", port.Response, resp.Data.Any())
+							}
+							wrappedMu.Lock()
+							original, wrapped := wrappedRequests[resp.RequestID]
+							delete(wrappedRequests, resp.RequestID)
+							wrappedMu.Unlock()
+							if wrapped {
+								return nil, ctx.SendMessage("", &ExternalResponse{
+									PortInfo:  original.PortInfo,
+									RequestID: resp.RequestID,
+									Data:      resp.Data,
+								})
+							}
+							if err := ctx.SendMessage("", resp); err != nil {
+								return nil, err
 							}
 							return nil, ctx.SendMessage("", data)
 						}), nil

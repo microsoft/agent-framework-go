@@ -4,6 +4,7 @@ package inproc
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"slices"
 
@@ -31,135 +32,150 @@ var (
 	Subworkflow = newExecutionEnvironment(execution.ModeSubworkflow, false)
 )
 
-func OpenStream(ctx context.Context, wf *workflow.Workflow, sessionID string) (workflow.StreamingRun, error) {
-	return Default.OpenStream(ctx, wf, sessionID)
+func NewInMemoryCheckpointManager() checkpoint.Manager {
+	return checkpoint.NewInMemoryManager()
 }
 
-func Stream(ctx context.Context, wf *workflow.Workflow, sessionID string, msgs ...any) (workflow.StreamingRun, error) {
-	return Default.Stream(ctx, wf, sessionID, msgs...)
-}
-
-func StreamWithCheckpoint(ctx context.Context, wf *workflow.Workflow, sessionID string, cm checkpoint.Manager, msgs ...any) (*workflow.Checkpointed[workflow.StreamingRun], error) {
-	return Default.StreamWithCheckpoint(ctx, wf, sessionID, cm, msgs...)
-}
-
-func Run(ctx context.Context, wf *workflow.Workflow, sessionID string, msgs ...any) (workflow.Run, error) {
-	return Default.Run(ctx, wf, sessionID, msgs...)
-}
-
-func RunWithCheckpoint(ctx context.Context, wf *workflow.Workflow, sessionID string, cm checkpoint.Manager, msgs ...any) (*workflow.Checkpointed[workflow.Run], error) {
-	return Default.RunWithCheckpoint(ctx, wf, sessionID, cm, msgs...)
-}
-
-func Resume(ctx context.Context, wf *workflow.Workflow, cm checkpoint.Manager, sessionID string, ch workflow.CheckpointInfo) (*workflow.Checkpointed[workflow.Run], error) {
-	return Default.Resume(ctx, wf, cm, sessionID, ch)
-}
-
+// ExecutionEnvironment provides an in-process workflow execution environment
+// for running, streaming, and checkpointing workflows.
 type ExecutionEnvironment struct {
-	mode                 execution.Mode
+	executionMode        execution.Mode
 	enableConcurrentRuns bool
+	checkpointManager    checkpoint.Manager
 }
 
-func newExecutionEnvironment(mode execution.Mode, enableConcurrentRuns bool) *ExecutionEnvironment {
+func newExecutionEnvironment(mode execution.Mode, enableConcurrentRuns bool, checkpointManager ...checkpoint.Manager) *ExecutionEnvironment {
+	var cm checkpoint.Manager
+	if len(checkpointManager) > 0 {
+		cm = checkpointManager[0]
+	}
 	return &ExecutionEnvironment{
-		mode:                 mode,
+		executionMode:        mode,
 		enableConcurrentRuns: enableConcurrentRuns,
+		checkpointManager:    cm,
 	}
 }
 
-func (e *ExecutionEnvironment) OpenStream(ctx context.Context, wf *workflow.Workflow, sessionID string) (workflow.StreamingRun, error) {
-	handle, err := e.beginStreamRun(ctx, wf, nil, sessionID, nil)
-	if err != nil {
-		return nil, err
-	}
-	return execution.NewStreamingRun(handle), nil
+// WithCheckpointing returns a new execution environment with the same
+// execution settings and the provided checkpoint manager.
+func (e *ExecutionEnvironment) WithCheckpointing(cm checkpoint.Manager) *ExecutionEnvironment {
+	return newExecutionEnvironment(e.executionMode, e.enableConcurrentRuns, cm)
 }
 
-func (e *ExecutionEnvironment) Stream(ctx context.Context, wf *workflow.Workflow, sessionID string, msgs ...any) (workflow.StreamingRun, error) {
-	handle, err := e.beginStreamRun(ctx, wf, nil, sessionID, nil)
+// IsCheckpointingEnabled reports whether checkpointing is configured for
+// this environment.
+func (e *ExecutionEnvironment) IsCheckpointingEnabled() bool {
+	return e.checkpointManager != nil
+}
+
+func (e *ExecutionEnvironment) RunStreaming(ctx context.Context, wf *workflow.Workflow, msg any, opts ...ExecutionOption) (*StreamingRun, error) {
+	options := applyExecutionOptions(opts)
+	handle, err := e.beginRun(ctx, wf, options.SessionID, nil)
 	if err != nil {
 		return nil, err
 	}
-	for _, msg := range msgs {
+	if msg != nil {
 		if err := handle.EnqueueMessage(ctx, msg); err != nil {
 			return nil, err
 		}
 	}
-	return execution.NewStreamingRun(handle), nil
+	return newStreamingRun(handle), nil
 }
 
-func (e *ExecutionEnvironment) StreamWithCheckpoint(ctx context.Context, wf *workflow.Workflow, sessionID string, cm checkpoint.Manager, msgs ...any) (*workflow.Checkpointed[workflow.StreamingRun], error) {
-	handle, err := e.resumeStreamRun(ctx, wf, cm, sessionID, workflow.CheckpointInfo{}, nil)
+func (e *ExecutionEnvironment) ResumeStreaming(ctx context.Context, wf *workflow.Workflow, fromCheckpoint workflow.CheckpointInfo, opts ...ExecutionOption) (*StreamingRun, error) {
+	if err := e.verifyCheckpointingConfigured(); err != nil {
+		return nil, err
+	}
+	handle, err := e.resumeRun(ctx, wf, fromCheckpoint, nil, opts...)
 	if err != nil {
 		return nil, err
 	}
-	for _, msg := range msgs {
-		if err := handle.EnqueueMessage(ctx, msg); err != nil {
-			return nil, err
-		}
-	}
-	return workflow.NewCheckpointed[workflow.StreamingRun](execution.NewStreamingRun(handle), handle), nil
+	return newStreamingRun(handle), nil
 }
 
-func (e *ExecutionEnvironment) Run(ctx context.Context, wf *workflow.Workflow, sessionID string, msgs ...any) (workflow.Run, error) {
-	handle, err := e.beginRun(ctx, wf, nil, sessionID, msgs...)
+func (e *ExecutionEnvironment) Run(ctx context.Context, wf *workflow.Workflow, msg any, opts ...ExecutionOption) (*Run, error) {
+	options := applyExecutionOptions(opts)
+	handle, err := e.beginRunHandlingChatProtocol(ctx, wf, options.SessionID, msg)
 	if err != nil {
 		return nil, err
 	}
-	run := execution.NewRun(handle)
+	run := newRun(handle)
 	if _, err := run.RunToNextHalt(ctx); err != nil {
 		return nil, err
 	}
 	return run, nil
 }
 
-func (e *ExecutionEnvironment) RunWithCheckpoint(ctx context.Context, wf *workflow.Workflow, sessionID string, cm checkpoint.Manager, msgs ...any) (*workflow.Checkpointed[workflow.Run], error) {
-	handle, err := e.beginRun(ctx, wf, cm, sessionID, msgs...)
+func (e *ExecutionEnvironment) Resume(ctx context.Context, wf *workflow.Workflow, fromCheckpoint workflow.CheckpointInfo, opts ...ExecutionOption) (*Run, error) {
+	if err := e.verifyCheckpointingConfigured(); err != nil {
+		return nil, err
+	}
+	handle, err := e.resumeRun(ctx, wf, fromCheckpoint, nil, opts...)
 	if err != nil {
 		return nil, err
 	}
-	run := execution.NewRun(handle)
+	run := newRun(handle)
 	if _, err := run.RunToNextHalt(ctx); err != nil {
 		return nil, err
 	}
-	return workflow.NewCheckpointed[workflow.Run](run, handle), nil
+	return run, nil
 }
 
-func (e *ExecutionEnvironment) Resume(ctx context.Context, wf *workflow.Workflow, cm checkpoint.Manager, sessionID string, ch workflow.CheckpointInfo) (*workflow.Checkpointed[workflow.Run], error) {
-	handle, err := e.resumeStreamRun(ctx, wf, cm, sessionID, ch, nil)
-	if err != nil {
-		return nil, err
+func (e *ExecutionEnvironment) verifyCheckpointingConfigured() error {
+	if e.checkpointManager == nil {
+		return errors.New("checkpointing is not configured for this execution environment; use WithCheckpointing to attach a checkpoint manager")
 	}
-	return workflow.NewCheckpointed[workflow.Run](execution.NewRun(handle), handle), nil
+	return nil
 }
 
-func (e *ExecutionEnvironment) beginStreamRun(ctx context.Context, wf *workflow.Workflow, cm checkpoint.Manager, sessionID string, knownValidInputTypes []reflect.Type) (*execution.RunHandle, error) {
+func (e *ExecutionEnvironment) beginRun(ctx context.Context, wf *workflow.Workflow, sessionID string, knownValidInputTypes []reflect.Type) (*execution.RunHandle, error) {
+	return e.beginRunWithCheckpointManager(ctx, wf, e.checkpointManager, sessionID, knownValidInputTypes)
+}
+
+func (e *ExecutionEnvironment) beginRunWithCheckpointManager(ctx context.Context, wf *workflow.Workflow, cm checkpoint.Manager, sessionID string, knownValidInputTypes []reflect.Type) (*execution.RunHandle, error) {
 	runner, err := createTopLevelRunner(wf, cm, sessionID, e.enableConcurrentRuns, knownValidInputTypes)
 	if err != nil {
 		return nil, err
 	}
-	return runner.beginStream(ctx, e.mode)
+	return runner.beginStream(ctx, e.executionMode)
 }
 
-func (e *ExecutionEnvironment) resumeStreamRun(ctx context.Context, wf *workflow.Workflow, cm checkpoint.Manager, sessionID string, ch workflow.CheckpointInfo, knownValidInputTypes []reflect.Type) (*execution.RunHandle, error) {
+func (e *ExecutionEnvironment) resumeRun(ctx context.Context, wf *workflow.Workflow, fromCheckpoint workflow.CheckpointInfo, knownValidInputTypes []reflect.Type, opts ...ExecutionOption) (*execution.RunHandle, error) {
+	return e.resumeRunWithCheckpointManager(ctx, wf, e.checkpointManager, fromCheckpoint, knownValidInputTypes, opts...)
+}
+
+func (e *ExecutionEnvironment) resumeRunWithCheckpointManager(ctx context.Context, wf *workflow.Workflow, cm checkpoint.Manager, ch workflow.CheckpointInfo, knownValidInputTypes []reflect.Type, opts ...ExecutionOption) (*execution.RunHandle, error) {
+	options := applyExecutionOptions(opts)
+	sessionID := ch.SessionID
+	if options.SessionID != "" {
+		sessionID = options.SessionID
+	}
+	return e.resumeRunWithCheckpointManagerRepublish(ctx, wf, cm, sessionID, ch, knownValidInputTypes, !options.DisablePendingRequestRepublish)
+}
+
+func (e *ExecutionEnvironment) resumeRunWithCheckpointManagerRepublish(ctx context.Context, wf *workflow.Workflow, cm checkpoint.Manager, sessionID string, ch workflow.CheckpointInfo, knownValidInputTypes []reflect.Type, republishPendingRequests bool) (*execution.RunHandle, error) {
 	runner, err := createTopLevelRunner(wf, cm, sessionID, e.enableConcurrentRuns, knownValidInputTypes)
 	if err != nil {
 		return nil, err
 	}
-	return runner.resumeStream(ctx, e.mode, ch)
+	return runner.resumeStreamWithRepublish(ctx, e.executionMode, ch, republishPendingRequests)
 }
 
-func (e *ExecutionEnvironment) beginRun(ctx context.Context, wf *workflow.Workflow, cm checkpoint.Manager, sessionID string, msgs ...any) (*execution.RunHandle, error) {
+func (e *ExecutionEnvironment) beginRunHandlingChatProtocol(ctx context.Context, wf *workflow.Workflow, sessionID string, msg any) (*execution.RunHandle, error) {
+	return e.beginRunHandlingChatProtocolWithCheckpointManager(ctx, wf, e.checkpointManager, sessionID, msg)
+}
+
+func (e *ExecutionEnvironment) beginRunHandlingChatProtocolWithCheckpointManager(ctx context.Context, wf *workflow.Workflow, cm checkpoint.Manager, sessionID string, msg any) (*execution.RunHandle, error) {
 	descriptor, err := wf.DescribeProtocol()
 	if err != nil {
 		return nil, err
 	}
-	handle, err := e.beginStreamRun(ctx, wf, cm, sessionID, descriptor.Accepts)
+	handle, err := e.beginRunWithCheckpointManager(ctx, wf, cm, sessionID, descriptor.Accepts)
 	if err != nil {
 		return nil, err
 	}
 	var hasToken bool
-	for _, msg := range msgs {
+	if msg != nil {
 		if err := handle.EnqueueMessage(ctx, msg); err != nil {
 			return nil, err
 		}

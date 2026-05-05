@@ -39,7 +39,7 @@ func main() {
 	}
 
 	// Execute the workflow with sample input.
-	run, err := inproc.Run(context.Background(), wf, "", "Hello, World!")
+	run, err := inproc.Default.Run(context.Background(), wf, "Hello, World!")
 	if err != nil {
 		panic(err)
 	}
