@@ -13,7 +13,6 @@ import (
 	"sync/atomic"
 
 	"github.com/google/uuid"
-	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/internal/checkpoint"
 	"github.com/microsoft/agent-framework-go/workflow/internal/execution"
@@ -489,15 +488,6 @@ func (proc *runnerContext) Bind(ctx context.Context, executorID string, traceCon
 		},
 
 		YieldOutput: func(output any) error {
-			// Special-case agent response types so they get translated into typed
-			// events regardless of whether this executor is registered as an
-			// output executor.
-			switch v := output.(type) {
-			case *agent.ResponseUpdate:
-				return proc.AddEvent(ctx, workflow.ResponseUpdateEvent{ExecutorID: executorID, Update: v})
-			case *agent.Response:
-				return proc.AddEvent(ctx, workflow.ResponseEvent{ExecutorID: executorID, Response: v})
-			}
 			// Check if this executor can output
 			if _, ok := proc.wf.OutputExecutors[executorID]; ok {
 				return proc.AddEvent(ctx, workflow.OutputEvent{

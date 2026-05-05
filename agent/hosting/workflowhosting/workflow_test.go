@@ -186,7 +186,7 @@ func runHostedAgent(t *testing.T, a *agent.Agent, cfg workflowhosting.Config, to
 func boolPtr(b bool) *bool { return &b }
 
 // TestHostedAgent_EmitsStreamingUpdatesIfConfigured exercises the matrix
-// (executorSetting × turnSetting) for ResponseUpdateEvent emission. The rule:
+// (executorSetting × turnSetting) for streaming response update output emission. The rule:
 // the TurnToken's EmitEvents flag overrides the executor's EmitUpdateEvents
 // when set; otherwise the executor setting applies (default false).
 func TestHostedAgent_EmitsStreamingUpdatesIfConfigured(t *testing.T) {
@@ -220,12 +220,7 @@ func TestHostedAgent_EmitsStreamingUpdatesIfConfigured(t *testing.T) {
 				{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "hi"}}},
 			})
 
-			var updates []workflow.ResponseUpdateEvent
-			for _, e := range events {
-				if u, ok := e.(workflow.ResponseUpdateEvent); ok {
-					updates = append(updates, u)
-				}
-			}
+			updates := collectOutputPayloads[*agent.ResponseUpdate](events)
 
 			expecting := false
 			switch {
@@ -243,14 +238,14 @@ func TestHostedAgent_EmitsStreamingUpdatesIfConfigured(t *testing.T) {
 					if u.ExecutorID == "" {
 						t.Errorf("update[%d] missing ExecutorID", i)
 					}
-					if u.Update.AuthorName != testAgentName {
-						t.Errorf("update[%d] AuthorName = %q, want %q", i, u.Update.AuthorName, testAgentName)
+					if u.Payload.AuthorName != testAgentName {
+						t.Errorf("update[%d] AuthorName = %q, want %q", i, u.Payload.AuthorName, testAgentName)
 					}
-					if len(u.Update.Contents) != 1 {
-						t.Errorf("update[%d] expected 1 content, got %d", i, len(u.Update.Contents))
+					if len(u.Payload.Contents) != 1 {
+						t.Errorf("update[%d] expected 1 content, got %d", i, len(u.Payload.Contents))
 						continue
 					}
-					gotText := u.Update.Contents[0].(*message.TextContent).Text
+					gotText := u.Payload.Contents[0].(*message.TextContent).Text
 					if gotText != expectedContents[i].Text {
 						t.Errorf("update[%d] text = %q, want %q", i, gotText, expectedContents[i].Text)
 					}
@@ -273,7 +268,7 @@ func boolPtrStr(b *bool) string {
 }
 
 // TestHostedAgent_EmitsResponseIfConfigured verifies that the EmitResponseEvents
-// flag controls whether a single aggregated ResponseEvent is produced.
+// flag controls whether a single aggregated response output is produced.
 func TestHostedAgent_EmitsResponseIfConfigured(t *testing.T) {
 	for _, executorSetting := range []bool{true, false} {
 		t.Run(fmt.Sprintf("emit=%v", executorSetting), func(t *testing.T) {
@@ -282,38 +277,33 @@ func TestHostedAgent_EmitsResponseIfConfigured(t *testing.T) {
 				workflow.TurnToken{},
 				[]*message.Message{{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "hi"}}}})
 
-			var responses []workflow.ResponseEvent
-			for _, e := range events {
-				if r, ok := e.(workflow.ResponseEvent); ok {
-					responses = append(responses, r)
-				}
-			}
+			responses := collectOutputPayloads[*agent.Response](events)
 
 			if executorSetting {
 				if len(responses) != 1 {
-					t.Fatalf("expected 1 ResponseEvent, got %d", len(responses))
+					t.Fatalf("expected 1 response output, got %d", len(responses))
 				}
 				resp := responses[0]
 				if resp.ExecutorID == "" {
-					t.Error("ResponseEvent missing ExecutorID")
+					t.Error("response output missing ExecutorID")
 				}
-				if resp.Response == nil {
-					t.Fatal("ResponseEvent.Response is nil")
+				if resp.Payload == nil {
+					t.Fatal("response output payload is nil")
 				}
 				// One *Message per non-empty source message: 3 in the
 				// reference data (the first is empty and produces no updates,
 				// hence no message).
-				if len(resp.Response.Messages) != len(testReplayMessages)-1 {
+				if len(resp.Payload.Messages) != len(testReplayMessages)-1 {
 					t.Errorf("Response.Messages count = %d, want %d",
-						len(resp.Response.Messages), len(testReplayMessages)-1)
+						len(resp.Payload.Messages), len(testReplayMessages)-1)
 				}
-				for _, msg := range resp.Response.Messages {
+				for _, msg := range resp.Payload.Messages {
 					if msg.AuthorName != testAgentName {
 						t.Errorf("message AuthorName = %q, want %q", msg.AuthorName, testAgentName)
 					}
 				}
 			} else if len(responses) != 0 {
-				t.Errorf("expected no ResponseEvents, got %d", len(responses))
+				t.Errorf("expected no response outputs, got %d", len(responses))
 			}
 		})
 	}
@@ -631,13 +621,31 @@ func resultExecutor(target *workflow.ExecutorBinding, result any) *workflow.Exec
 	return binding
 }
 
-func collectResponseEvents(t *testing.T, ev []workflow.Event) []*agent.Response {
+type outputPayload[T any] struct {
+	ExecutorID string
+	Payload    T
+}
+
+func collectOutputPayloads[T any](ev []workflow.Event) []outputPayload[T] {
+	var out []outputPayload[T]
+	for _, e := range ev {
+		o, ok := e.(workflow.OutputEvent)
+		if !ok {
+			continue
+		}
+		payload, ok := o.Output.(T)
+		if ok {
+			out = append(out, outputPayload[T]{ExecutorID: o.ExecutorID, Payload: payload})
+		}
+	}
+	return out
+}
+
+func collectResponseOutputs(t *testing.T, ev []workflow.Event) []*agent.Response {
 	t.Helper()
 	var out []*agent.Response
-	for _, e := range ev {
-		if r, ok := e.(workflow.ResponseEvent); ok {
-			out = append(out, r.Response)
-		}
+	for _, response := range collectOutputPayloads[*agent.Response](ev) {
+		out = append(out, response.Payload)
 	}
 	return out
 }
@@ -681,9 +689,9 @@ func TestHostedAgent_InterceptUserInputRequests(t *testing.T) {
 		events = append(events, evt)
 	}
 
-	responses := collectResponseEvents(t, events)
+	responses := collectResponseOutputs(t, events)
 	if len(responses) < 2 {
-		t.Fatalf("expected >=2 ResponseEvents (initial + post-approval), got %d", len(responses))
+		t.Fatalf("expected >=2 response outputs (initial + post-approval), got %d", len(responses))
 	}
 	last := responses[len(responses)-1]
 	if len(last.Messages) == 0 || last.Messages[0].Contents.Text() != "approved" {
@@ -730,9 +738,9 @@ func TestHostedAgent_InterceptUnterminatedFunctionCalls(t *testing.T) {
 		events = append(events, evt)
 	}
 
-	responses := collectResponseEvents(t, events)
+	responses := collectResponseOutputs(t, events)
 	if len(responses) < 2 {
-		t.Fatalf("expected >=2 ResponseEvents, got %d", len(responses))
+		t.Fatalf("expected >=2 response outputs, got %d", len(responses))
 	}
 	last := responses[len(responses)-1]
 	if last.Messages[0].Contents.Text() != "got:42" {
@@ -854,12 +862,14 @@ func TestHostedAgent_InterceptDisabled_ResumesWithExternalResponse(t *testing.T)
 
 	var responses []*agent.Response
 	for evt := range run.OutgoingEvents() {
-		if r, ok := evt.(workflow.ResponseEvent); ok {
-			responses = append(responses, r.Response)
+		if o, ok := evt.(workflow.OutputEvent); ok {
+			if response, ok := o.Output.(*agent.Response); ok {
+				responses = append(responses, response)
+			}
 		}
 	}
 	if len(responses) == 0 {
-		t.Fatalf("expected at least one ResponseEvent after resume, got 0")
+		t.Fatalf("expected at least one response output after resume, got 0")
 	}
 	last := responses[len(responses)-1]
 	if last.Messages[0].Contents.Text() != "approved" {
@@ -1010,13 +1020,15 @@ func TestHostedAgent_InterceptsOnlyUnpairedFunctionCalls_PortMode(t *testing.T) 
 }
 
 // lastResponseText drains all currently-available events from the run and
-// returns the text of the last ResponseEvent observed (or "" if none).
+// returns the text of the last response output observed (or "" if none).
 func lastResponseText(t *testing.T, run *inproc.Run) string {
 	t.Helper()
 	var text string
 	for evt := range run.OutgoingEvents() {
-		if r, ok := evt.(workflow.ResponseEvent); ok && r.Response != nil && len(r.Response.Messages) > 0 {
-			text = r.Response.Messages[len(r.Response.Messages)-1].Contents.Text()
+		if o, ok := evt.(workflow.OutputEvent); ok {
+			if response, ok := o.Output.(*agent.Response); ok && response != nil && len(response.Messages) > 0 {
+				text = response.Messages[len(response.Messages)-1].Contents.Text()
+			}
 		}
 	}
 	return text
