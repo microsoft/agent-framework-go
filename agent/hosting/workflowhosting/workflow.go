@@ -387,7 +387,7 @@ func (h *hostExecutor) handleFunctionResult(wctx *workflow.Context, result *mess
 // handleExternalResponse routes a port-mode response back to the appropriate
 // content-typed handler.
 func (h *hostExecutor) handleExternalResponse(wctx *workflow.Context, resp *workflow.ExternalResponse) error {
-	switch resp.RequestPort.ID {
+	switch resp.PortInfo.PortID {
 	case h.userInputPort.ID:
 		v, ok := resp.Data.As(h.userInputPort.Response)
 		if !ok {

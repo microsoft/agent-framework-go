@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"iter"
 	"reflect"
-	"slices"
 	"sync/atomic"
 
 	"github.com/microsoft/agent-framework-go/workflow"
@@ -73,9 +72,10 @@ func NewRunHandle(sr SuperStepRunner, ch checkpoint.CheckpointingHandle, mode Mo
 
 	eventStream.Start()
 
-	// If there are already unprocessed messages (e.g., from a checkpoint restore that happened
-	// before this handle was created), signal the run loop to start processing them
-	if sr.HasUnprocessedMessages() {
+	// If there are already unprocessed messages or unserviced requests (e.g.,
+	// from a checkpoint restore that happened before this handle was created),
+	// signal the run loop to start processing them.
+	if sr.HasUnprocessedMessages() || sr.HasUnservicedRequests() {
 		handle.signalInputToRunLoop()
 	}
 
@@ -86,11 +86,23 @@ func (h *RunHandle) SessionID() string {
 	return h.stepRunner.SessionID()
 }
 
+func (h *RunHandle) IsCheckpointingEnabled() bool {
+	return h.checkpointHandle.IsCheckpointingEnabled()
+}
+
 func (h *RunHandle) Checkpoints() []workflow.CheckpointInfo {
 	return h.checkpointHandle.Checkpoints()
 }
 
-func (h *RunHandle) GetStatus(ctx context.Context) (workflow.RunStatus, error) {
+func (h *RunHandle) LastCheckpoint() (workflow.CheckpointInfo, bool) {
+	checkpoints := h.Checkpoints()
+	if len(checkpoints) == 0 {
+		return workflow.CheckpointInfo{}, false
+	}
+	return checkpoints[len(checkpoints)-1], true
+}
+
+func (h *RunHandle) GetStatus(ctx context.Context) (RunStatus, error) {
 	return h.eventStream.GetStatus(ctx)
 }
 
@@ -143,11 +155,15 @@ func (h *RunHandle) IsValidInputType(ctx context.Context, typ reflect.Type) bool
 }
 
 func (h *RunHandle) EnqueueMessage(ctx context.Context, message any) error {
-	// Check if it's an ExternalResponse
 	if response, ok := message.(*workflow.ExternalResponse); ok {
 		return h.EnqueueResponse(ctx, response)
 	}
-
+	if message == nil {
+		return fmt.Errorf("message cannot be nil")
+	}
+	if !h.IsValidInputType(ctx, reflect.TypeOf(message)) {
+		return fmt.Errorf("message type %v is not a valid input type for this workflow: %w", reflect.TypeOf(message), workflow.ErrInvalidInputType)
+	}
 	if err := h.stepRunner.EnqueueMessage(ctx, message); err != nil {
 		return err
 	}
@@ -199,8 +215,8 @@ func (h *RunHandle) RestoreCheckpoint(ctx context.Context, checkpointInfo workfl
 	// Clear buffered events from the channel BEFORE restoring to discard stale events from supersteps
 	// that occurred after the checkpoint we're restoring to
 	// This must happen BEFORE the restore so that events republished during restore aren't cleared
-	if streamingEventStream, ok := h.eventStream.(*streamingRunEventStream); ok {
-		streamingEventStream.ClearBufferedEvents()
+	if bufferedEventStream, ok := h.eventStream.(interface{ ClearBufferedEvents() }); ok {
+		bufferedEventStream.ClearBufferedEvents()
 	}
 
 	// Restore the workflow state - this will republish unserviced requests as new events
@@ -214,111 +230,4 @@ func (h *RunHandle) RestoreCheckpoint(ctx context.Context, checkpointInfo workfl
 	h.signalInputToRunLoop()
 
 	return nil
-}
-
-type Run struct {
-	runHandle *RunHandle
-	eventSink []workflow.Event
-
-	lastBookmark int
-}
-
-func NewRun(handle *RunHandle) *Run {
-	return &Run{
-		runHandle: handle,
-	}
-}
-
-func (r *Run) SessionID() string {
-	return r.runHandle.SessionID()
-}
-
-func (r *Run) GetStatus(ctx context.Context) (workflow.RunStatus, error) {
-	return r.runHandle.GetStatus(ctx)
-}
-
-func (r *Run) OutgoingEvents() iter.Seq[workflow.Event] {
-	return slices.Values(r.eventSink)
-}
-
-func (r *Run) NewEventCount() int {
-	return len(r.eventSink) - r.lastBookmark
-}
-
-func (r *Run) NewEvents() iter.Seq[workflow.Event] {
-	if r.lastBookmark >= len(r.eventSink) {
-		return func(yield func(workflow.Event) bool) {}
-	}
-	return func(yield func(workflow.Event) bool) {
-		current := r.lastBookmark
-		r.lastBookmark = len(r.eventSink)
-		for _, evt := range r.eventSink[current:] {
-			if !yield(evt) {
-				return
-			}
-		}
-	}
-}
-
-func (r *Run) Resume(ctx context.Context, responses ...*workflow.ExternalResponse) (bool, error) {
-	for _, resp := range responses {
-		if err := r.runHandle.EnqueueResponse(ctx, resp); err != nil {
-			return false, err
-		}
-	}
-	return r.RunToNextHalt(ctx)
-}
-
-func (r *Run) RunToNextHalt(ctx context.Context) (bool, error) {
-	var hadEvents bool
-	for evt, err := range r.runHandle.TakeEventStream(ctx, false) {
-		if err != nil {
-			return false, err
-		}
-		hadEvents = true
-		r.eventSink = append(r.eventSink, evt)
-	}
-	return hadEvents, nil
-}
-
-type StreamingRun struct {
-	runHandle *RunHandle
-}
-
-func NewStreamingRun(handle *RunHandle) *StreamingRun {
-	return &StreamingRun{
-		runHandle: handle,
-	}
-}
-
-func (sr *StreamingRun) SessionID() string {
-	return sr.runHandle.SessionID()
-}
-
-func (sr *StreamingRun) GetStatus(ctx context.Context) (workflow.RunStatus, error) {
-	return sr.runHandle.GetStatus(ctx)
-}
-
-func (sr *StreamingRun) SendResponse(ctx context.Context, response *workflow.ExternalResponse) error {
-	return sr.runHandle.EnqueueResponse(ctx, response)
-}
-
-func (sr *StreamingRun) SendMessage(ctx context.Context, message any) error {
-	return sr.runHandle.EnqueueMessage(ctx, message)
-}
-
-func (sr *StreamingRun) ResponsePortExecutorID(portID string) (string, bool) {
-	return sr.runHandle.ResponsePortExecutorID(portID)
-}
-
-func (sr *StreamingRun) WatchStream(ctx context.Context) iter.Seq2[workflow.Event, error] {
-	return sr.runHandle.TakeEventStream(ctx, true)
-}
-
-func (sr *StreamingRun) WatchUntilHalt(ctx context.Context) iter.Seq2[workflow.Event, error] {
-	return sr.runHandle.TakeEventStream(ctx, false)
-}
-
-func (sr *StreamingRun) Cancel() {
-	sr.runHandle.Cancel()
 }

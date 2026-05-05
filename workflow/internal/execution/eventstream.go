@@ -5,11 +5,10 @@ package execution
 import (
 	"context"
 	"errors"
-	"fmt"
 	"iter"
-	"sync"
 	"sync/atomic"
 
+	"github.com/microsoft/agent-framework-go/internal/concurrent"
 	"github.com/microsoft/agent-framework-go/workflow"
 )
 
@@ -18,7 +17,7 @@ type RunEventStream interface {
 	SignalInput()
 	Stop()
 
-	GetStatus(ctx context.Context) (workflow.RunStatus, error)
+	GetStatus(ctx context.Context) (RunStatus, error)
 
 	TakeEventStream(ctx context.Context, blockOnPendingRequest bool) iter.Seq2[workflow.Event, error]
 }
@@ -67,10 +66,12 @@ func (iw *inputWaiter) close() {
 
 var _ RunEventStream = (*streamingRunEventStream)(nil)
 
-// streamingRunEventStream is a modern implementation of RunEventStream that streams events as they are created,
-// using channels for thread-safe coordination.
+// streamingRunEventStream streams events as they are created, buffering them
+// until a consumer reads from the stream.
 type streamingRunEventStream struct {
-	eventChannel    chan workflow.Event
+	eventQueue concurrent.Queue[workflow.Event]
+	eventReady chan struct{}
+
 	stepRunner      SuperStepRunner
 	inputWaiter     inputWaiter
 	runLoopCancel   context.CancelFunc
@@ -90,32 +91,37 @@ func newStreamingRunEventStream(stepRunner SuperStepRunner, disableRunLoop bool)
 		runLoopCtx:     ctx,
 		disableRunLoop: disableRunLoop,
 		runLoopDone:    make(chan struct{}),
-		// Unbounded channel - events never block the producer
-		// This allows events to flow freely during superstep execution
-		eventChannel: make(chan workflow.Event),
+		eventReady:     make(chan struct{}, 1),
 	}
 }
 
 func (s *streamingRunEventStream) Start() {
 	// Start the background run loop that drives superstep execution
-	if !s.disableRunLoop {
-		go s.runLoop()
+	if s.disableRunLoop {
+		close(s.runLoopDone)
+		return
 	}
+	go s.runLoop()
 }
 
 func (s *streamingRunEventStream) runLoop() {
 	defer close(s.runLoopDone)
-	defer close(s.eventChannel)
-	defer s.setStatus(workflow.RunStatusEnded)
+	defer s.runLoopCancel()
+	defer s.setStatus(RunStatusEnded)
 
 	ctx, cancel := context.WithCancel(s.runLoopCtx)
 	defer cancel()
 
 	// Subscribe to events - they will flow directly to the channel as they're raised
-	s.stepRunner.OutgoingEvents().EventRaised = append(
-		s.stepRunner.OutgoingEvents().EventRaised,
-		s.onEventRaised,
-	)
+	eventSink := s.stepRunner.OutgoingEvents()
+	eventHandler := s.onEventRaised
+	eventSink.AddHandler(eventHandler)
+	defer eventSink.RemoveHandler(eventHandler)
+	if err := s.stepRunner.RepublishPendingEvents(ctx); err != nil {
+		s.sendEvent(ctx, workflow.ErrorEvent{Error: err})
+		cancel()
+		return
+	}
 
 	// Wait for the first input before starting.
 	// The consumer will call EnqueueMessage which signals the run loop.
@@ -141,7 +147,7 @@ func (s *streamingRunEventStream) runLoop() {
 			// that stale input signals cannot transiently flip status back to
 			// Running after a prior halt has already been observed by callers
 			// (e.g. Run.RunToNextHalt returning after reading an Idle halt signal).
-			s.setStatus(workflow.RunStatusRunning)
+			s.setStatus(RunStatusRunning)
 
 			// Emit StartedEvent only when there's actual work to process,
 			// to avoid spurious events on no-work loop iterations.
@@ -165,9 +171,9 @@ func (s *streamingRunEventStream) runLoop() {
 
 		// Update status based on what's waiting
 		if s.stepRunner.HasUnservicedRequests() {
-			s.setStatus(workflow.RunStatusPendingRequests)
+			s.setStatus(RunStatusPendingRequests)
 		} else {
-			s.setStatus(workflow.RunStatusIdle)
+			s.setStatus(RunStatusIdle)
 		}
 
 		// Signal completion to consumer so they can check status and decide whether to continue
@@ -176,9 +182,7 @@ func (s *streamingRunEventStream) runLoop() {
 		capturedStatus := s.getStatus()
 
 		// Send internal halt signal
-		select {
-		case s.eventChannel <- &internalHaltSignal{epoch: currentEpoch, status: capturedStatus}:
-		case <-ctx.Done():
+		if err := s.enqueueEvent(ctx, &internalHaltSignal{epoch: currentEpoch, status: capturedStatus}); err != nil {
 			return
 		}
 
@@ -192,22 +196,55 @@ func (s *streamingRunEventStream) runLoop() {
 }
 
 func (s *streamingRunEventStream) onEventRaised(ctx context.Context, sender any, evt workflow.Event) error {
-	// Write event directly to channel - non-blocking with buffered channel
-	select {
-	case s.eventChannel <- evt:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-s.runLoopCtx.Done():
-		return s.runLoopCtx.Err()
+	if err := s.enqueueEvent(ctx, evt); err != nil {
+		return err
 	}
+	if _, ok := evt.(workflow.ErrorEvent); ok {
+		s.runLoopCancel()
+		return nil
+	}
+	return s.runLoopCtx.Err()
 }
 
 func (s *streamingRunEventStream) sendEvent(ctx context.Context, evt workflow.Event) {
+	_ = s.enqueueEvent(ctx, evt)
+}
+
+func (s *streamingRunEventStream) enqueueEvent(ctx context.Context, evt workflow.Event) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if err := s.runLoopCtx.Err(); err != nil {
+		return err
+	}
+	s.eventQueue.Enqueue(evt)
+	s.signalEventReady()
+	return nil
+}
+
+func (s *streamingRunEventStream) signalEventReady() {
 	select {
-	case s.eventChannel <- evt:
-	case <-ctx.Done():
-	case <-s.runLoopCtx.Done():
+	case s.eventReady <- struct{}{}:
+	default:
+	}
+}
+
+func (s *streamingRunEventStream) nextEvent(ctx context.Context) (workflow.Event, bool) {
+	for {
+		if evt, ok := s.eventQueue.Dequeue(); ok {
+			return evt, true
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, false
+		case <-s.eventReady:
+		case <-s.runLoopCtx.Done():
+			if evt, ok := s.eventQueue.Dequeue(); ok {
+				return evt, true
+			}
+			return nil, false
+		}
 	}
 }
 
@@ -223,7 +260,7 @@ func (s *streamingRunEventStream) TakeEventStream(ctx context.Context, blockOnPe
 	// otherwise the run has already halted and we should consume the halt
 	// signal that was emitted before this consumer arrived.
 	currentEpoch := s.completionEpoch.Load()
-	expectingFreshWork := s.stepRunner.HasUnprocessedMessages() || s.getStatus() == workflow.RunStatusRunning
+	expectingFreshWork := s.stepRunner.HasUnprocessedMessages() || s.getStatus() == RunStatusRunning
 	var myEpoch int64
 	if expectingFreshWork {
 		myEpoch = currentEpoch + 1
@@ -233,72 +270,62 @@ func (s *streamingRunEventStream) TakeEventStream(ctx context.Context, blockOnPe
 
 	return func(yield func(workflow.Event, error) bool) {
 		for {
-			select {
-			case <-ctx.Done():
+			evt, ok := s.nextEvent(ctx)
+			if !ok {
 				return
-			case evt, ok := <-s.eventChannel:
-				if !ok {
-					// Channel closed
-					return
-				}
+			}
 
-				// Filter out internal signals used for run loop coordination
-				if signal, ok := evt.(*internalHaltSignal); ok {
-					// Ignore completion signals from previous iterations
-					if signal.epoch < myEpoch {
-						continue
-					}
-
-					// Check if we should stop streaming based on the status captured at completion time
-					// - Idle: Workflow completed, no pending requests
-					// - Ended: Run loop cancelled
-					if signal.status == workflow.RunStatusIdle || signal.status == workflow.RunStatusEnded {
-						return
-					}
-
-					if !blockOnPendingRequest && signal.status == workflow.RunStatusPendingRequests {
-						return
-					}
-
-					// Otherwise continue reading (more events coming after input provided)
+			// Filter out internal signals used for run loop coordination
+			if signal, ok := evt.(*internalHaltSignal); ok {
+				// Ignore completion signals from previous iterations
+				if signal.epoch < myEpoch {
 					continue
 				}
 
-				// Send event to consumer
-				if !yield(evt, nil) {
+				// Check if we should stop streaming based on the status captured at completion time
+				// - Idle: Workflow completed, no pending requests
+				// - Ended: Run loop cancelled
+				if signal.status == RunStatusIdle || signal.status == RunStatusEnded {
 					return
 				}
+
+				if !blockOnPendingRequest && signal.status == RunStatusPendingRequests {
+					return
+				}
+
+				// Otherwise continue reading (more events coming after input provided)
+				continue
+			}
+
+			// Send event to consumer
+			if !yield(evt, nil) {
+				return
 			}
 		}
 	}
 }
 
-func (s *streamingRunEventStream) GetStatus(ctx context.Context) (workflow.RunStatus, error) {
+func (s *streamingRunEventStream) GetStatus(ctx context.Context) (RunStatus, error) {
 	return s.getStatus(), nil
 }
 
-func (s *streamingRunEventStream) getStatus() workflow.RunStatus {
-	return workflow.RunStatus(s.runStatus.Load())
+func (s *streamingRunEventStream) getStatus() RunStatus {
+	return RunStatus(s.runStatus.Load())
 }
 
-func (s *streamingRunEventStream) setStatus(status workflow.RunStatus) {
+func (s *streamingRunEventStream) setStatus(status RunStatus) {
 	s.runStatus.Store(int32(status))
 }
 
-// ClearBufferedEvents clears all buffered events from the channel.
+// ClearBufferedEvents clears all buffered events from the queue.
 // This should be called when restoring a checkpoint to discard stale events from superseded supersteps.
 func (s *streamingRunEventStream) ClearBufferedEvents() {
-	// Drain all events currently in the channel buffer
 	for {
-		select {
-		case <-s.eventChannel:
-			// Discard each event
-		default:
-			// Channel empty
-			s.SignalInput()
-			return
+		if _, ok := s.eventQueue.Dequeue(); !ok {
+			break
 		}
 	}
+	s.SignalInput()
 }
 
 func (s *streamingRunEventStream) Stop() {
@@ -319,7 +346,7 @@ func (s *streamingRunEventStream) Stop() {
 // This is never exposed to consumers.
 type internalHaltSignal struct {
 	epoch  int64
-	status workflow.RunStatus
+	status RunStatus
 }
 
 func (s *internalHaltSignal) Data() any {
@@ -331,36 +358,44 @@ var _ RunEventStream = (*lockstepRunEventStream)(nil)
 // lockstepRunEventStream is a synchronous implementation of RunEventStream that collects events
 // during superstep execution and yields them after each step completes.
 type lockstepRunEventStream struct {
-	stepRunner  SuperStepRunner
-	inputWaiter inputWaiter
-	stopCtx     context.Context
-	stopCancel  context.CancelFunc
-	runStatus   atomic.Int32 // stores RunStatus
+	stepRunner   SuperStepRunner
+	inputWaiter  inputWaiter
+	stopCtx      context.Context
+	stopCancel   context.CancelFunc
+	runStatus    atomic.Int32 // stores RunStatus
+	eventQueue   concurrent.Queue[workflow.Event]
+	eventHandler func(context.Context, any, workflow.Event) error
 }
 
 func newLockstepRunEventStream(stepRunner SuperStepRunner) *lockstepRunEventStream {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &lockstepRunEventStream{
+	l := &lockstepRunEventStream{
 		stepRunner:  stepRunner,
 		inputWaiter: newInputWaiter(),
 		stopCtx:     ctx,
 		stopCancel:  cancel,
 	}
+	l.eventHandler = func(ctx context.Context, sender any, evt workflow.Event) error {
+		l.eventQueue.Enqueue(evt)
+		return nil
+	}
+	stepRunner.OutgoingEvents().AddHandler(l.eventHandler)
+	return l
 }
 
 func (l *lockstepRunEventStream) Start() {
 	// No-op for lockstep execution
 }
 
-func (l *lockstepRunEventStream) GetStatus(ctx context.Context) (workflow.RunStatus, error) {
+func (l *lockstepRunEventStream) GetStatus(ctx context.Context) (RunStatus, error) {
 	return l.getStatus(), nil
 }
 
-func (l *lockstepRunEventStream) getStatus() workflow.RunStatus {
-	return workflow.RunStatus(l.runStatus.Load())
+func (l *lockstepRunEventStream) getStatus() RunStatus {
+	return RunStatus(l.runStatus.Load())
 }
 
-func (l *lockstepRunEventStream) setStatus(status workflow.RunStatus) {
+func (l *lockstepRunEventStream) setStatus(status RunStatus) {
 	l.runStatus.Store(int32(status))
 }
 
@@ -378,49 +413,50 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 			}
 		}()
 
-		// Event collection sink. Protected by sinkMu; we drain it after
-		// every superstep by swapping in a fresh slice.
-		var (
-			sinkMu    sync.Mutex
-			eventSink []workflow.Event
-		)
-
-		// Subscribe to events
-		eventHandler := func(ctx context.Context, sender any, evt workflow.Event) error {
-			sinkMu.Lock()
-			eventSink = append(eventSink, evt)
-			sinkMu.Unlock()
-			return nil
-		}
-
-		l.stepRunner.OutgoingEvents().EventRaised = append(
-			l.stepRunner.OutgoingEvents().EventRaised,
-			eventHandler,
-		)
 		defer func() {
 			// Update status
 			if l.stepRunner.HasUnservicedRequests() {
-				l.setStatus(workflow.RunStatusPendingRequests)
+				l.setStatus(RunStatusPendingRequests)
 			} else {
-				l.setStatus(workflow.RunStatusIdle)
-			}
-			// Remove event handler
-			handlers := l.stepRunner.OutgoingEvents().EventRaised
-			for i, h := range handlers {
-				if fmt.Sprintf("%p", h) == fmt.Sprintf("%p", eventHandler) {
-					l.stepRunner.OutgoingEvents().EventRaised = append(handlers[:i], handlers[i+1:]...)
-					break
-				}
+				l.setStatus(RunStatusIdle)
 			}
 		}()
 
-		l.setStatus(workflow.RunStatusRunning)
+		drainEvents := func() bool {
+			var hadRequestHaltEvent bool
+			for {
+				evt, ok := l.eventQueue.Dequeue()
+				if !ok {
+					break
+				}
+				if errors.Is(linkedCtx.Err(), context.Canceled) {
+					return false
+				}
+				if _, ok := evt.(workflow.RequestHaltEvent); ok {
+					hadRequestHaltEvent = true
+					continue
+				}
+				if !yield(evt, nil) {
+					return false
+				}
+			}
+
+			return !hadRequestHaltEvent && linkedCtx.Err() == nil
+		}
+
+		if err := l.stepRunner.RepublishPendingEvents(linkedCtx); err != nil {
+			yield(nil, err)
+			return
+		}
+		if !drainEvents() {
+			return
+		}
+
+		l.setStatus(RunStatusRunning)
 
 		// Emit StartedEvent only when there's actual work to process.
 		if l.stepRunner.HasUnprocessedMessages() {
-			sinkMu.Lock()
-			eventSink = append(eventSink, workflow.StartedEvent{})
-			sinkMu.Unlock()
+			l.eventQueue.Enqueue(workflow.StartedEvent{})
 		}
 
 		for {
@@ -433,36 +469,16 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 					return
 				}
 
-				// Drain the event sink atomically.
-				sinkMu.Lock()
-				events := eventSink
-				eventSink = nil
-				sinkMu.Unlock()
-
-				var hadRequestHaltEvent bool
-				for _, evt := range events {
-					if errors.Is(linkedCtx.Err(), context.Canceled) {
-						return // Exit if cancellation is requested
-					}
-					if _, ok := evt.(workflow.RequestHaltEvent); ok {
-						hadRequestHaltEvent = true
-						continue
-					}
-					if !yield(evt, nil) {
-						return
-					}
-				}
-
-				if hadRequestHaltEvent || linkedCtx.Err() != nil {
+				if !drainEvents() {
 					return
 				}
 			}
 
 			// Update status
 			if l.stepRunner.HasUnservicedRequests() {
-				l.setStatus(workflow.RunStatusPendingRequests)
+				l.setStatus(RunStatusPendingRequests)
 			} else {
-				l.setStatus(workflow.RunStatusIdle)
+				l.setStatus(RunStatusIdle)
 			}
 
 			// Check if we should break
@@ -472,7 +488,7 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 			}
 
 			// If blocking on pending requests and we have pending requests, wait for input
-			if blockOnPendingRequest && status == workflow.RunStatusPendingRequests {
+			if blockOnPendingRequest && status == RunStatusPendingRequests {
 				if err := l.inputWaiter.waitForInput(linkedCtx); err != nil {
 					return
 				}
@@ -484,14 +500,14 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 	}
 }
 
-func (l *lockstepRunEventStream) shouldBreak(status workflow.RunStatus, blockOnPendingRequest bool, ctx context.Context) bool {
+func (l *lockstepRunEventStream) shouldBreak(status RunStatus, blockOnPendingRequest bool, ctx context.Context) bool {
 	if ctx.Err() != nil {
 		return true
 	}
-	if status == workflow.RunStatusIdle || status == workflow.RunStatusEnded {
+	if status == RunStatusIdle || status == RunStatusEnded {
 		return true
 	}
-	if status == workflow.RunStatusPendingRequests && !blockOnPendingRequest {
+	if status == RunStatusPendingRequests && !blockOnPendingRequest {
 		return true
 	}
 	return false
@@ -502,8 +518,17 @@ func (l *lockstepRunEventStream) SignalInput() {
 	l.inputWaiter.signalInput()
 }
 
+func (l *lockstepRunEventStream) ClearBufferedEvents() {
+	for {
+		if _, ok := l.eventQueue.Dequeue(); !ok {
+			break
+		}
+	}
+}
+
 func (l *lockstepRunEventStream) Stop() {
 	l.stopCancel()
+	l.stepRunner.OutgoingEvents().RemoveHandler(l.eventHandler)
 	// Close the input waiter
 	l.inputWaiter.close()
 }

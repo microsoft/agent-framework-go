@@ -31,7 +31,7 @@ func TestBindFunc_InvokesHandler_NoOutput(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 
-	if _, err := inproc.Run(context.Background(), wf, "", textMessage{Text: "hello"}); err != nil {
+	if _, err := inproc.Default.Run(context.Background(), wf, textMessage{Text: "hello"}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if !called {
@@ -51,7 +51,7 @@ func TestBindFunc_InvokesHandler_WithOutput(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 
-	run, err := inproc.Run(context.Background(), wf, "", textMessage{Text: "abc"})
+	run, err := inproc.Default.Run(context.Background(), wf, textMessage{Text: "abc"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestBindFuncContext_InvokesHandlerWithContext(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 
-	if _, err := inproc.Run(context.Background(), wf, "", textMessage{Text: "hello"}); err != nil {
+	if _, err := inproc.Default.Run(context.Background(), wf, textMessage{Text: "hello"}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	select {
@@ -169,7 +169,7 @@ func TestBindRequestPort_PostsRequestAndForwardsResponse(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	run, err := inproc.Run(ctx, wf, "", "what")
+	run, err := inproc.Default.Run(ctx, wf, "what")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -184,8 +184,8 @@ func TestBindRequestPort_PostsRequestAndForwardsResponse(t *testing.T) {
 	if req == nil {
 		t.Fatalf("expected a RequestInfoEvent, got none")
 	}
-	if req.RequestPort.ID != port.ID {
-		t.Errorf("request port ID = %q, want %q", req.RequestPort.ID, port.ID)
+	if req.PortInfo.PortID != port.ID {
+		t.Errorf("request port ID = %q, want %q", req.PortInfo.PortID, port.ID)
 	}
 	if data, ok := req.Data.As(port.Request); !ok || data.(string) != "what" {
 		t.Errorf("request data = %v, want %q", req.Data.Any(), "what")
@@ -224,7 +224,7 @@ func TestBindRequestPort_RejectsResponseForOtherPort(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	run, err := inproc.Run(ctx, wf, "", "what")
+	run, err := inproc.Default.Run(ctx, wf, "what")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -246,9 +246,9 @@ func TestBindRequestPort_RejectsResponseForOtherPort(t *testing.T) {
 		Response: reflect.TypeFor[int](),
 	}
 	resp := &workflow.ExternalResponse{
-		RequestID:   req.ID,
-		RequestPort: otherPort,
-		Data:        workflow.AnyPortableValue(int(7)),
+		RequestID: req.ID,
+		PortInfo:  workflow.NewRequestPortInfo(otherPort),
+		Data:      workflow.AnyPortableValue(int(7)),
 	}
 	if _, err := run.Resume(ctx, resp); err != nil {
 		t.Fatalf("Resume: %v", err)

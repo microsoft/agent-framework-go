@@ -5,6 +5,7 @@ package workflow_test
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/workflow"
@@ -64,11 +65,11 @@ func TestStatefulExecutorCache_AggregatesIncrementally(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	stream, err := inproc.OpenStream(ctx, wf, "")
+	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
 	if err != nil {
-		t.Fatalf("OpenStream: %v", err)
+		t.Fatalf("Stream: %v", err)
 	}
-	defer stream.Cancel()
+	defer func() { _ = stream.CancelRun() }()
 
 	for _, in := range []string{"a", "b", "c"} {
 		if err := stream.SendMessage(ctx, in); err != nil {
@@ -86,5 +87,46 @@ func TestStatefulExecutorCache_AggregatesIncrementally(t *testing.T) {
 	want := []string{"a", "a+b", "a+b+c"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("aggregation = %v, want %v", got, want)
+	}
+}
+
+func TestWorkflow_RejectsReuseSharedExecutorWithoutReset(t *testing.T) {
+	binding := &workflow.ExecutorBinding{
+		ID:               "shared",
+		ExecutorType:     reflect.TypeFor[*workflow.Executor](),
+		IsSharedInstance: true,
+		NewExecutor: func(_ string) (*workflow.Executor, error) {
+			return &workflow.Executor{
+				ID: "shared",
+				Config: []*workflow.ExecutorConfig{{
+					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+						return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(_ *workflow.Context, _ any) (any, error) {
+							return nil, nil
+						}), nil
+					},
+				}},
+			}, nil
+		},
+	}
+	wf, err := workflow.NewBuilder(binding).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	ctx := context.Background()
+	run, err := inproc.Default.Run(ctx, wf, "first")
+	if err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	if err := run.Close(ctx); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	_, err = inproc.Default.Run(ctx, wf, "second")
+	if err == nil {
+		t.Fatal("expected second run to reject shared executor without Reset")
+	}
+	if !strings.Contains(err.Error(), "cannot reuse Workflow with shared Executor instances") {
+		t.Fatalf("error = %v, want shared executor reuse error", err)
 	}
 }

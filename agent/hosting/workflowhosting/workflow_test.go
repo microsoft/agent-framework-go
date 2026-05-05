@@ -30,6 +30,13 @@ var testReplayMessages = []string{
 	"Quisque dignissim ante odio, at facilisis orci porta a. Duis mi augue, fringilla eu egestas a, pellentesque sed lacus.",
 }
 
+func sendStreamMessage(t *testing.T, stream *inproc.StreamingRun, ctx context.Context, message any) {
+	t.Helper()
+	if err := stream.SendMessage(ctx, message); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+}
+
 // expectedReplayUpdateContents returns the [TextContent] payloads the replay
 // agent will emit, in order. Empty messages contribute zero updates so they
 // can be skipped by callers that count updates.
@@ -154,20 +161,16 @@ func runHostedAgent(t *testing.T, a *agent.Agent, cfg workflowhosting.Config, to
 	}
 
 	ctx := context.Background()
-	stream, err := inproc.OpenStream(ctx, wf, "")
+	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
 	if err != nil {
-		t.Fatalf("OpenStream: %v", err)
+		t.Fatalf("Stream: %v", err)
 	}
-	defer stream.Cancel()
+	defer func() { _ = stream.CancelRun() }()
 
 	if len(msgs) > 0 {
-		if err := stream.SendMessage(ctx, msgs); err != nil {
-			t.Fatalf("SendMessage: %v", err)
-		}
+		sendStreamMessage(t, stream, ctx, msgs)
 	}
-	if err := stream.SendMessage(ctx, token); err != nil {
-		t.Fatalf("send TurnToken: %v", err)
-	}
+	sendStreamMessage(t, stream, ctx, token)
 
 	var events []workflow.Event
 	for evt, err := range stream.WatchStream(ctx) {
@@ -440,23 +443,19 @@ func TestHostedAgent_ForwardsIncomingMessages(t *testing.T) {
 			}
 
 			ctx := context.Background()
-			stream, err := inproc.OpenStream(ctx, wf, "")
+			stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
 			if err != nil {
-				t.Fatalf("OpenStream: %v", err)
+				t.Fatalf("Stream: %v", err)
 			}
-			defer stream.Cancel()
+			defer func() { _ = stream.CancelRun() }()
 
 			input := []*message.Message{{
 				Role:       message.RoleUser,
 				AuthorName: "User",
 				Contents:   []message.Content{&message.TextContent{Text: "ping"}},
 			}}
-			if err := stream.SendMessage(ctx, input); err != nil {
-				t.Fatalf("send msgs: %v", err)
-			}
-			if err := stream.SendMessage(ctx, workflow.TurnToken{}); err != nil {
-				t.Fatalf("send TurnToken: %v", err)
-			}
+			sendStreamMessage(t, stream, ctx, input)
+			sendStreamMessage(t, stream, ctx, workflow.TurnToken{})
 			for range stream.WatchStream(ctx) {
 			}
 
@@ -663,20 +662,16 @@ func TestHostedAgent_InterceptUserInputRequests(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	stream, err := inproc.OpenStream(ctx, wf, "")
+	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
 	if err != nil {
-		t.Fatalf("OpenStream: %v", err)
+		t.Fatalf("Stream: %v", err)
 	}
-	defer stream.Cancel()
+	defer func() { _ = stream.CancelRun() }()
 
-	if err := stream.SendMessage(ctx, []*message.Message{{
+	sendStreamMessage(t, stream, ctx, []*message.Message{{
 		Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "go"}},
-	}}); err != nil {
-		t.Fatalf("send msgs: %v", err)
-	}
-	if err := stream.SendMessage(ctx, workflow.TurnToken{}); err != nil {
-		t.Fatalf("send TurnToken: %v", err)
-	}
+	}})
+	sendStreamMessage(t, stream, ctx, workflow.TurnToken{})
 
 	var events []workflow.Event
 	for evt, err := range stream.WatchStream(ctx) {
@@ -716,20 +711,16 @@ func TestHostedAgent_InterceptUnterminatedFunctionCalls(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	stream, err := inproc.OpenStream(ctx, wf, "")
+	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
 	if err != nil {
-		t.Fatalf("OpenStream: %v", err)
+		t.Fatalf("Stream: %v", err)
 	}
-	defer stream.Cancel()
+	defer func() { _ = stream.CancelRun() }()
 
-	if err := stream.SendMessage(ctx, []*message.Message{{
+	sendStreamMessage(t, stream, ctx, []*message.Message{{
 		Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "go"}},
-	}}); err != nil {
-		t.Fatalf("send msgs: %v", err)
-	}
-	if err := stream.SendMessage(ctx, workflow.TurnToken{}); err != nil {
-		t.Fatalf("send TurnToken: %v", err)
-	}
+	}})
+	sendStreamMessage(t, stream, ctx, workflow.TurnToken{})
 
 	var events []workflow.Event
 	for evt, err := range stream.WatchStream(ctx) {
@@ -785,7 +776,7 @@ func TestHostedAgent_InterceptDisabled_PostsExternalRequest(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	run, err := inproc.Run(ctx, wf, "", workflow.TurnToken{})
+	run, err := inproc.Default.Run(ctx, wf, workflow.TurnToken{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -793,7 +784,7 @@ func TestHostedAgent_InterceptDisabled_PostsExternalRequest(t *testing.T) {
 	var sawExternalRequest bool
 	for evt := range run.OutgoingEvents() {
 		if r, ok := evt.(workflow.RequestInfoEvent); ok {
-			if r.Request != nil && r.Request.RequestPort.ID == host.ID+"_UserInput" {
+			if r.Request != nil && r.Request.PortInfo.PortID == host.ID+"_UserInput" {
 				sawExternalRequest = true
 			}
 		}
@@ -810,7 +801,7 @@ func TestHostedAgent_InterceptDisabled_PostsExternalRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetStatus: %v", err)
 	}
-	if status != workflow.RunStatusPendingRequests {
+	if status != inproc.RunStatusPendingRequests {
 		t.Errorf("status = %v, want PendingRequests", status)
 	}
 }
@@ -831,7 +822,7 @@ func TestHostedAgent_InterceptDisabled_ResumesWithExternalResponse(t *testing.T)
 	}
 
 	ctx := context.Background()
-	run, err := inproc.Run(ctx, wf, "", workflow.TurnToken{})
+	run, err := inproc.Default.Run(ctx, wf, workflow.TurnToken{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -968,7 +959,7 @@ func TestHostedAgent_InterceptsOnlyUnpairedFunctionCalls_PortMode(t *testing.T) 
 	}
 
 	ctx := context.Background()
-	run, err := inproc.Run(ctx, wf, "", workflow.TurnToken{})
+	run, err := inproc.Default.Run(ctx, wf, workflow.TurnToken{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1020,7 +1011,7 @@ func TestHostedAgent_InterceptsOnlyUnpairedFunctionCalls_PortMode(t *testing.T) 
 
 // lastResponseText drains all currently-available events from the run and
 // returns the text of the last ResponseEvent observed (or "" if none).
-func lastResponseText(t *testing.T, run workflow.Run) string {
+func lastResponseText(t *testing.T, run *inproc.Run) string {
 	t.Helper()
 	var text string
 	for evt := range run.OutgoingEvents() {
@@ -1058,7 +1049,7 @@ func TestHostedAgent_DuplicateRequestID_RaisesError(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	run, err := inproc.Run(ctx, wf, "", workflow.TurnToken{})
+	run, err := inproc.Default.Run(ctx, wf, workflow.TurnToken{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1131,7 +1122,7 @@ func TestHostedAgent_UnknownResponseID_RaisesError(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	run, err := inproc.Run(ctx, wf, "", "go")
+	run, err := inproc.Default.Run(ctx, wf, "go")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1195,22 +1186,18 @@ func TestHostedAgent_HeldTurnToken_StampsResolvedEmitEvents(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	stream, err := inproc.OpenStream(ctx, wf, "")
+	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
 	if err != nil {
-		t.Fatalf("OpenStream: %v", err)
+		t.Fatalf("Stream: %v", err)
 	}
-	defer stream.Cancel()
+	defer func() { _ = stream.CancelRun() }()
 
 	// Send a TurnToken with EmitEvents=nil; the executor's EmitUpdateEvents
 	// (true) is the resolved default.
-	if err := stream.SendMessage(ctx, []*message.Message{{
+	sendStreamMessage(t, stream, ctx, []*message.Message{{
 		Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "go"}},
-	}}); err != nil {
-		t.Fatalf("send msgs: %v", err)
-	}
-	if err := stream.SendMessage(ctx, workflow.TurnToken{}); err != nil {
-		t.Fatalf("send TurnToken: %v", err)
-	}
+	}})
+	sendStreamMessage(t, stream, ctx, workflow.TurnToken{})
 	for evt, err := range stream.WatchStream(ctx) {
 		if err != nil {
 			t.Fatalf("watch: %v", err)
@@ -1267,7 +1254,7 @@ func TestHostedAgent_HandledRequestNotReEmitted_PortMode(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	run, err := inproc.Run(ctx, wf, "", workflow.TurnToken{})
+	run, err := inproc.Default.Run(ctx, wf, workflow.TurnToken{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1371,19 +1358,15 @@ func TestHostedAgent_AlreadyPendingRequest_IsIdempotent_InterceptMode(t *testing
 	}
 
 	ctx := context.Background()
-	stream, err := inproc.OpenStream(ctx, wf, "")
+	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
 	if err != nil {
-		t.Fatalf("OpenStream: %v", err)
+		t.Fatalf("Stream: %v", err)
 	}
-	defer stream.Cancel()
+	defer func() { _ = stream.CancelRun() }()
 
 	// Two consecutive turns with the same agent => same request ID twice.
-	if err := stream.SendMessage(ctx, workflow.TurnToken{}); err != nil {
-		t.Fatalf("send TurnToken: %v", err)
-	}
-	if err := stream.SendMessage(ctx, workflow.TurnToken{}); err != nil {
-		t.Fatalf("send TurnToken: %v", err)
-	}
+	sendStreamMessage(t, stream, ctx, workflow.TurnToken{})
+	sendStreamMessage(t, stream, ctx, workflow.TurnToken{})
 
 	var sawErr bool
 	for evt, err := range stream.WatchStream(ctx) {

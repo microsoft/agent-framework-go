@@ -44,14 +44,14 @@ func (e *EdgeInfo) Match(other Edge) bool {
 // RequestPortInfo contains information about a request port, including its
 // request and response types.
 type RequestPortInfo struct {
-	ID           string
+	PortID       string
 	RequestType  TypeID
 	ResponseType TypeID
 }
 
 func NewRequestPortInfo(port RequestPort) RequestPortInfo {
 	return RequestPortInfo{
-		ID:           port.ID,
+		PortID:       port.ID,
 		RequestType:  NewTypeID(port.Request),
 		ResponseType: NewTypeID(port.Response),
 	}

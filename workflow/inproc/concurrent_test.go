@@ -90,7 +90,7 @@ func TestInprocConcurrent_RunsAllConcurrentWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if _, err := inproc.Concurrent.Run(context.Background(), wf, "", "go"); err != nil {
+	if _, err := inproc.Concurrent.Run(context.Background(), wf, "go"); err != nil {
 		t.Fatalf("Concurrent.Run: %v", err)
 	}
 	mu.Lock()
@@ -107,7 +107,7 @@ func TestInprocConcurrent_RejectsNonConcurrentWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	_, err = inproc.Concurrent.Run(context.Background(), wf, "", "go")
+	_, err = inproc.Concurrent.Run(context.Background(), wf, "go")
 	if err == nil {
 		t.Fatalf("Concurrent.Run should reject a workflow with non-concurrent executors")
 	}
@@ -116,15 +116,15 @@ func TestInprocConcurrent_RejectsNonConcurrentWorkflow(t *testing.T) {
 	}
 }
 
-func TestInprocConcurrent_AcceptsAllConcurrentInOpenStream(t *testing.T) {
+func TestInprocConcurrent_AcceptsAllConcurrentInStream(t *testing.T) {
 	a := factoryConcurrentBinding("a", new([]string), &sync.Mutex{})
 	wf, err := workflow.NewBuilder(a).Build()
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	stream, err := inproc.Concurrent.OpenStream(context.Background(), wf, "")
+	stream, err := inproc.Concurrent.RunStreaming(context.Background(), wf, nil)
 	if err != nil {
-		t.Fatalf("Concurrent.OpenStream: %v", err)
+		t.Fatalf("Concurrent.RunStreaming: %v", err)
 	}
-	stream.Cancel()
+	_ = stream.CancelRun()
 }
