@@ -17,13 +17,13 @@ import (
 	"github.com/microsoft/agent-framework-go/message"
 )
 
-func newTestAgent(runFn func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*message.ResponseUpdate, error]) *agent.Agent {
+func newTestAgent(runFn func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error]) *agent.Agent {
 	return agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{Name: "test-agent", ID: "test-agent-id"})
 }
 
 func TestHandler_MethodNotAllowed(t *testing.T) {
-	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {}
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {}
 	})
 	h := aguihosting.NewJSONHTTPHandler(aguihosting.HandlerConfig{Agent: a})
 
@@ -37,8 +37,8 @@ func TestHandler_MethodNotAllowed(t *testing.T) {
 }
 
 func TestHandler_InvalidInput_ReturnsBadRequest(t *testing.T) {
-	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {}
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {}
 	})
 	h := aguihosting.NewJSONHTTPHandler(aguihosting.HandlerConfig{Agent: a})
 
@@ -52,9 +52,9 @@ func TestHandler_InvalidInput_ReturnsBadRequest(t *testing.T) {
 }
 
 func TestHandler_StreamsSSEText(t *testing.T) {
-	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
 				MessageID: "msg-1",
 				Role:      message.RoleAssistant,
 				Contents:  message.Contents{&message.TextContent{Text: "hello agui"}},
@@ -81,9 +81,9 @@ func TestHandler_StreamsSSEText(t *testing.T) {
 }
 
 func TestHandler_MixedToolInvocations_OnlyClientToolEmitted(t *testing.T) {
-	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
 				MessageID: "msg-1",
 				Role:      message.RoleAssistant,
 				Contents: message.Contents{
@@ -110,11 +110,11 @@ func TestHandler_MixedToolInvocations_OnlyClientToolEmitted(t *testing.T) {
 }
 
 func TestHandler_StateSnapshotEmitsStateEvent(t *testing.T) {
-	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			payload := map[string]any{"counter": 42, "status": "active"}
 			b, _ := json.Marshal(payload)
-			yield(&message.ResponseUpdate{
+			yield(&agent.ResponseUpdate{
 				Role: message.RoleAssistant,
 				Contents: message.Contents{&message.DataContent{
 					MediaType: "application/json",
@@ -137,9 +137,9 @@ func TestHandler_StateSnapshotEmitsStateEvent(t *testing.T) {
 }
 
 func TestHandler_MixedToolInvocations_SuppressesServerToolResults(t *testing.T) {
-	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
 				MessageID: "msg-1",
 				Role:      message.RoleAssistant,
 				Contents: message.Contents{
@@ -147,7 +147,7 @@ func TestHandler_MixedToolInvocations_SuppressesServerToolResults(t *testing.T) 
 					&message.FunctionCallContent{CallID: "c2", Name: "server_tool", Arguments: `{}`},
 				},
 			}, nil)
-			yield(&message.ResponseUpdate{
+			yield(&agent.ResponseUpdate{
 				MessageID: "msg-1",
 				Role:      message.RoleTool,
 				Contents: message.Contents{
@@ -174,9 +174,9 @@ func TestHandler_MixedToolInvocations_SuppressesServerToolResults(t *testing.T) 
 }
 
 func TestHandler_UnknownDataContent_UsesCurrentMessageLifecycle(t *testing.T) {
-	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
 				MessageID: "msg-fallback",
 				Role:      message.RoleAssistant,
 				Contents: message.Contents{&message.DataContent{

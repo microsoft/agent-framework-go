@@ -19,8 +19,8 @@ import (
 
 func newEchoAgent(name string) *agent.Agent {
 	const id = "echo-id"
-	run := func(ctx context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
+	run := func(ctx context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			var lastUser string
 			for _, m := range msgs {
 				if m == nil || m.Role != message.RoleUser {
@@ -35,14 +35,14 @@ func newEchoAgent(name string) *agent.Agent {
 				text = "Echo: " + lastUser
 			}
 			messageID := fmt.Sprintf("msg-%s", name)
-			if !yield(&message.ResponseUpdate{
+			if !yield(&agent.ResponseUpdate{
 				Role:       message.RoleAssistant,
 				AuthorName: name,
 				MessageID:  messageID,
 			}, nil) {
 				return
 			}
-			yield(&message.ResponseUpdate{
+			yield(&agent.ResponseUpdate{
 				Role:       message.RoleAssistant,
 				AuthorName: name,
 				MessageID:  messageID,

@@ -376,7 +376,7 @@ func TestRunStreamingWithValidUserMessage(t *testing.T) {
 	}
 	a := newTestAgent(transport, agent.Config{})
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "Hello, streaming!", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v, want nil", err)
@@ -840,7 +840,7 @@ func TestRunStreamingWithContinuationToken_UsesSubscribeToTask(t *testing.T) {
 	}
 	a := newTestAgent(transport, agent.Config{})
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.Run(t.Context(), nil, agent.WithContinuationToken("task-456"), agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v, want nil", err)
@@ -910,7 +910,7 @@ func TestRunStreamingWithContinuationTokenWhenSubscribeFailsWithUnsupportedOpera
 	}
 	a := newTestAgent(transport, agent.Config{})
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.Run(t.Context(), nil, agent.WithContinuationToken(taskID), agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v, want nil", err)
@@ -1106,7 +1106,7 @@ func TestRunStreamingWithAgentMessage(t *testing.T) {
 	}
 	a := newTestAgent(transport, agent.Config{})
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "Test message", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v, want nil", err)
@@ -1163,7 +1163,7 @@ func TestRunStreamingWithAgentTaskYieldsUpdate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "Start long-running task", agent.WithSession(session), agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v, want nil", err)
@@ -1215,7 +1215,7 @@ func TestRunStreamingWithTaskStatusUpdateEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "Check task status", agent.WithSession(session), agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v, want nil", err)
@@ -1269,7 +1269,7 @@ func TestRunStreamingWithTaskArtifactUpdateEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "Process artifact", agent.WithSession(session), agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v, want nil", err)

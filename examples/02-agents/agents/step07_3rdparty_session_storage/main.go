@@ -13,7 +13,7 @@ import (
 	"slices"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
+	"github.com/microsoft/agent-framework-go/agent/provider/openaiagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/openai/openai-go/v3"
@@ -44,12 +44,12 @@ func main() {
 	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	// Create Azure OpenAI agent with a custom message store that persists messages to disk.
-	a := openaichatagent.New(
+	a := openaiagent.NewChatCompletions(
 		openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
 			azure.WithTokenCredential(token),
 		),
-		openaichatagent.Config{
+		openaiagent.Config{
 			Model: deployment,
 			Config: agent.Config{
 				Instructions: "You are good at telling jokes.",
@@ -165,7 +165,7 @@ func (d *fsMessageStore) persistMessages(session agent.Session, requestMessages,
 	return nil
 }
 
-func (d *fsMessageStore) Run(next agent.RunFunc, ctx context.Context, msgs []*message.Message, opts ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (d *fsMessageStore) Run(next agent.RunFunc, ctx context.Context, msgs []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 	var session agent.Session
 	if v, ok := agent.GetOption(opts, agent.WithSession); ok {
 		session = v
@@ -175,14 +175,14 @@ func (d *fsMessageStore) Run(next agent.RunFunc, ctx context.Context, msgs []*me
 	}
 	history, err := d.loadMessages(session)
 	if err != nil {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			yield(nil, err)
 		}
 	}
 	messagesForClient := append(history, msgs...)
 
-	return func(yield func(*message.ResponseUpdate, error) bool) {
-		var resp message.Response
+	return func(yield func(*agent.ResponseUpdate, error) bool) {
+		var resp agent.Response
 		for update, err := range next(ctx, messagesForClient, opts...) {
 			if err != nil {
 				yield(nil, err)

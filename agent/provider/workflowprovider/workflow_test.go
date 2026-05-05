@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/hosting/workflowhosting"
@@ -39,12 +40,12 @@ func echoExecutorBinding(id string) *workflow.ExecutorBinding {
 								text = t
 							}
 						}
-						update := &message.ResponseUpdate{
+						update := &agent.ResponseUpdate{
 							Role: message.RoleAssistant,
 							Contents: []message.Content{
 								&message.TextContent{Text: "echo:" + text},
 							},
-							AuthorID:   id,
+							AgentID:    id,
 							AuthorName: id,
 						}
 						if err := ctx.AddEvent(workflow.ResponseUpdateEvent{
@@ -58,7 +59,6 @@ func echoExecutorBinding(id string) *workflow.ExecutorBinding {
 							Contents: []message.Content{
 								&message.TextContent{Text: "echo:" + text},
 							},
-							AuthorID:   id,
 							AuthorName: id,
 						}
 						return ctx.YieldOutput(out)
@@ -199,6 +199,92 @@ func TestNew_IncludeOutputsInResponse(t *testing.T) {
 	}
 }
 
+func TestNew_ConvertsResponseEventsWithResponseMetadata(t *testing.T) {
+	createdAt := time.Date(2024, 11, 10, 9, 20, 0, 0, time.UTC)
+	binding := &workflow.ExecutorBinding{
+		ID:           "response-yielder",
+		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		Raw:          struct{}{},
+	}
+	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: binding.ID,
+			Config: []*workflow.ExecutorConfig{
+				messageworkflow.NewExecutorConfig(&messageworkflow.Options{
+					StateKey: "response_yielder_msgs",
+					TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, _ []*message.Message) error {
+						return ctx.YieldOutput(&agent.Response{
+							AgentID:              "inner-agent",
+							ID:                   "inner-response",
+							CreatedAt:            createdAt,
+							AdditionalProperties: map[string]any{"trace": "kept"},
+							Messages: []*message.Message{
+								{
+									Role:       message.RoleAssistant,
+									ID:         "inner-message",
+									AuthorName: "inner-author",
+									Contents: message.Contents{
+										&message.TextContent{Text: "from-response"},
+									},
+								},
+							},
+						})
+					},
+				}),
+			},
+		}, nil
+	}
+	wf, err := workflow.NewBuilder(binding).Build()
+	if err != nil {
+		t.Fatalf("build workflow: %v", err)
+	}
+	ag, err := workflowprovider.New(wf, workflowprovider.Config{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	var sawMessage bool
+	var sawMetadata bool
+	for update, err := range ag.RunText(context.Background(), "ping") {
+		if err != nil {
+			t.Fatalf("RunText: %v", err)
+		}
+		if update.String() == "from-response" {
+			sawMessage = true
+			if update.AgentID != "inner-agent" {
+				t.Errorf("expected AgentID inner-agent, got %q", update.AgentID)
+			}
+			if update.ResponseID != "inner-response" {
+				t.Errorf("expected ResponseID inner-response, got %q", update.ResponseID)
+			}
+			if update.MessageID != "inner-message" {
+				t.Errorf("expected MessageID inner-message, got %q", update.MessageID)
+			}
+			if update.AuthorName != "inner-author" {
+				t.Errorf("expected AuthorName inner-author, got %q", update.AuthorName)
+			}
+			if !update.CreatedAt.Equal(createdAt) {
+				t.Errorf("expected CreatedAt %v, got %v", createdAt, update.CreatedAt)
+			}
+		}
+		if update.AdditionalProperties["trace"] == "kept" {
+			sawMetadata = true
+			if update.AgentID != "inner-agent" {
+				t.Errorf("expected metadata AgentID inner-agent, got %q", update.AgentID)
+			}
+			if update.ResponseID != "inner-response" {
+				t.Errorf("expected metadata ResponseID inner-response, got %q", update.ResponseID)
+			}
+		}
+	}
+	if !sawMessage {
+		t.Fatalf("expected response message update")
+	}
+	if !sawMetadata {
+		t.Fatalf("expected response metadata update")
+	}
+}
+
 func TestNew_RejectsIncompatibleWorkflow(t *testing.T) {
 	// A workflow whose start executor handles only string input.
 	id := "string-handler"
@@ -306,7 +392,7 @@ type simulatedAgentFailure struct{}
 
 func (*simulatedAgentFailure) Error() string { return "Simulated agent failure." }
 
-func containsErrorContent(resp *message.Response, msg string) bool {
+func containsErrorContent(resp *agent.Response, msg string) bool {
 	for _, m := range resp.Messages {
 		for _, c := range m.Contents {
 			if ec, ok := c.(*message.ErrorContent); ok && strings.Contains(ec.Message, msg) {
@@ -751,9 +837,9 @@ func TestNew_MixedResponseAndRegularMessage_BothProcessed(t *testing.T) {
 // of the messages it receives. Mirrors .NET's
 // `RequestEmittingAgent(completeOnResponse: false)`.
 func requestEmittingAgent(callID, name string) *agent.Agent {
-	run := func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{
+	run := func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
 				Role: message.RoleAssistant,
 				Contents: []message.Content{
 					&message.FunctionCallContent{CallID: callID, Name: name},

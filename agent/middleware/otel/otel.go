@@ -44,8 +44,8 @@ type mw struct {
 	tracer trace.Tracer
 }
 
-func (m *mw) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-	return func(yield func(*message.ResponseUpdate, error) bool) {
+func (m *mw) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		a, _ := agent.AgentFromContext(ctx)
 		ctx, span := m.tracer.Start(ctx, a.Name(), trace.WithAttributes(
 			attribute.String(attrKeyOperationName, opInvoke),

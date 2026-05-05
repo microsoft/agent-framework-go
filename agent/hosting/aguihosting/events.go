@@ -10,10 +10,11 @@ import (
 	"strings"
 
 	aguiEvents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
-func filterServerToolsFromMixedInvocations(update *message.ResponseUpdate, clientToolNames map[string]struct{}) (*message.ResponseUpdate, map[string]struct{}) {
+func filterServerToolsFromMixedInvocations(update *agent.ResponseUpdate, clientToolNames map[string]struct{}) (*agent.ResponseUpdate, map[string]struct{}) {
 	if update == nil || len(clientToolNames) == 0 || len(update.Contents) == 0 {
 		return update, nil
 	}
@@ -61,7 +62,7 @@ func filterServerToolsFromMixedInvocations(update *message.ResponseUpdate, clien
 
 func updatesToAGUIEvents(
 	ctx context.Context,
-	updates iter.Seq2[*message.ResponseUpdate, error],
+	updates iter.Seq2[*agent.ResponseUpdate, error],
 	threadID string,
 	runID string,
 	clientToolNames map[string]struct{},

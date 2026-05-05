@@ -8,8 +8,18 @@ import (
 	"testing"
 
 	"github.com/google/jsonschema-go/jsonschema"
-	"github.com/microsoft/agent-framework-go/format/jsonformat"
+	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
 )
+
+func requireFormat(t *testing.T, responseFormat agent.ResponseFormat) *jsonformat.Format {
+	t.Helper()
+	format, err := jsonformat.FromResponseFormat(responseFormat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return format
+}
 
 func TestEncodingRoundtrip(t *testing.T) {
 	tests := []struct {
@@ -29,10 +39,11 @@ func TestEncodingRoundtrip(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rt := reflect.TypeOf(tt.v)
-			format, err := jsonformat.ForType(rt)
+			responseFormat, err := jsonformat.ForType(rt)
 			if err != nil {
 				t.Fatal(err)
 			}
+			format := requireFormat(t, responseFormat)
 
 			data, err := format.Marshal(tt.v)
 			if err != nil {
@@ -51,7 +62,7 @@ func TestEncodingRoundtrip(t *testing.T) {
 }
 
 func TestNormalizePreservesInterfaceValues(t *testing.T) {
-	format := jsonformat.Any()
+	format := requireFormat(t, jsonformat.Any())
 	var value any = map[string]any{"status": "ok", "value": 42}
 
 	if err := format.Normalize(&value); err != nil {
@@ -68,7 +79,7 @@ func TestNormalizePreservesInterfaceValues(t *testing.T) {
 }
 
 func TestNormalizeAppliesDefaults(t *testing.T) {
-	format := jsonformat.New("test", "", &jsonschema.Schema{
+	format := requireFormat(t, jsonformat.New("test", "", &jsonschema.Schema{
 		Type: "object",
 		Properties: map[string]*jsonschema.Schema{
 			"count":  {Type: "integer"},
@@ -76,7 +87,7 @@ func TestNormalizeAppliesDefaults(t *testing.T) {
 		},
 		Required:             []string{"count"},
 		AdditionalProperties: &jsonschema.Schema{Not: &jsonschema.Schema{}},
-	})
+	}))
 	value := map[string]any{"count": 1}
 
 	if err := format.Normalize(&value); err != nil {
@@ -93,7 +104,7 @@ func TestNormalizeStructValue(t *testing.T) {
 		Count int `json:"count"`
 	}
 
-	format := jsonformat.MustFor[output]()
+	format := requireFormat(t, jsonformat.MustFor[output]())
 	value := output{Count: 1}
 
 	if err := format.Normalize(&value); err != nil {
@@ -106,7 +117,7 @@ func TestNormalizeInterfaceStructValue(t *testing.T) {
 		Count int `json:"count"`
 	}
 
-	format := jsonformat.MustFor[output]()
+	format := requireFormat(t, jsonformat.MustFor[output]())
 	var value any = output{Count: 1}
 
 	if err := format.Normalize(&value); err != nil {
@@ -115,7 +126,7 @@ func TestNormalizeInterfaceStructValue(t *testing.T) {
 }
 
 func TestNormalizeEmptyStruct(t *testing.T) {
-	format := jsonformat.MustFor[struct{}]()
+	format := requireFormat(t, jsonformat.MustFor[struct{}]())
 	value := struct{}{}
 
 	if err := format.Normalize(&value); err != nil {

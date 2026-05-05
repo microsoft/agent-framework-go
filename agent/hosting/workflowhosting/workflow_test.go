@@ -92,10 +92,10 @@ func newReplayAgent() *agent.Agent {
 			})
 		}
 	}
-	run := func(ctx context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
+	run := func(ctx context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			for _, s := range segments {
-				if !yield(&message.ResponseUpdate{
+				if !yield(&agent.ResponseUpdate{
 					Role:      message.RoleAssistant,
 					MessageID: s.messageID,
 					Contents:  []message.Content{s.content},
@@ -120,8 +120,8 @@ func newReplayAgent() *agent.Agent {
 // own .
 func newRoleCheckAgent() *agent.Agent {
 	selfName := testAgentName
-	run := func(ctx context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
+	run := func(ctx context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			for _, m := range msgs {
 				if m == nil || m.Role != message.RoleAssistant {
 					continue
@@ -131,9 +131,9 @@ func newRoleCheckAgent() *agent.Agent {
 					return
 				}
 			}
-			yield(&message.ResponseUpdate{
+			yield(&agent.ResponseUpdate{
 				Role:       message.RoleAssistant,
-				AuthorID:   testAgentID,
+				AgentID:    testAgentID,
 				AuthorName: selfName,
 				Contents:   []message.Content{&message.TextContent{Text: "Ok"}},
 			}, nil)
@@ -486,11 +486,11 @@ func TestHostedAgent_ForwardsIncomingMessages(t *testing.T) {
 func newApprovalAgent() *agent.Agent {
 	const callID = "call-1"
 	step := 0
-	run := func(ctx context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
+	run := func(ctx context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			defer func() { step++ }()
 			if step == 0 {
-				yield(&message.ResponseUpdate{
+				yield(&agent.ResponseUpdate{
 					Role: message.RoleAssistant,
 					Contents: []message.Content{&message.FunctionApprovalRequestContent{
 						ID: callID,
@@ -518,7 +518,7 @@ func newApprovalAgent() *agent.Agent {
 					text = "denied"
 				}
 			}
-			yield(&message.ResponseUpdate{
+			yield(&agent.ResponseUpdate{
 				Role:     message.RoleAssistant,
 				Contents: []message.Content{&message.TextContent{Text: text}},
 			}, nil)
@@ -533,11 +533,11 @@ func newApprovalAgent() *agent.Agent {
 func newFunctionCallAgent() *agent.Agent {
 	const callID = "call-1"
 	step := 0
-	run := func(ctx context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
+	run := func(ctx context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			defer func() { step++ }()
 			if step == 0 {
-				yield(&message.ResponseUpdate{
+				yield(&agent.ResponseUpdate{
 					Role: message.RoleAssistant,
 					Contents: []message.Content{&message.FunctionCallContent{
 						CallID: callID,
@@ -560,7 +560,7 @@ func newFunctionCallAgent() *agent.Agent {
 					text = "got:" + rs
 				}
 			}
-			yield(&message.ResponseUpdate{
+			yield(&agent.ResponseUpdate{
 				Role:     message.RoleAssistant,
 				Contents: []message.Content{&message.TextContent{Text: text}},
 			}, nil)
@@ -631,9 +631,9 @@ func resultExecutor(target *workflow.ExecutorBinding, result any) *workflow.Exec
 	return binding
 }
 
-func collectResponseEvents(t *testing.T, ev []workflow.Event) []*message.Response {
+func collectResponseEvents(t *testing.T, ev []workflow.Event) []*agent.Response {
 	t.Helper()
-	var out []*message.Response
+	var out []*agent.Response
 	for _, e := range ev {
 		if r, ok := e.(workflow.ResponseEvent); ok {
 			out = append(out, r.Response)
@@ -852,7 +852,7 @@ func TestHostedAgent_InterceptDisabled_ResumesWithExternalResponse(t *testing.T)
 		t.Fatalf("Resume: %v", err)
 	}
 
-	var responses []*message.Response
+	var responses []*agent.Response
 	for evt := range run.OutgoingEvents() {
 		if r, ok := evt.(workflow.ResponseEvent); ok {
 			responses = append(responses, r.Response)
@@ -879,11 +879,11 @@ type requestAgentSession struct {
 
 func newRequestAgent(unpaired, paired int) *agent.Agent {
 	state := &requestAgentSession{unpaired: make(map[string]struct{})}
-	run := func(ctx context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
+	run := func(ctx context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			if !state.hasSentReqs {
 				total := unpaired + paired
-				if !yield(&message.ResponseUpdate{
+				if !yield(&agent.ResponseUpdate{
 					Role:     message.RoleAssistant,
 					Contents: []message.Content{&message.TextContent{Text: fmt.Sprintf("Creating %d requests, %d paired.", total, paired)}},
 				}, nil) {
@@ -901,7 +901,7 @@ func newRequestAgent(unpaired, paired int) *agent.Agent {
 					} else {
 						pairedResults = append(pairedResults, &message.FunctionResultContent{CallID: id, Result: "ok"})
 					}
-					if !yield(&message.ResponseUpdate{
+					if !yield(&agent.ResponseUpdate{
 						Role:     message.RoleAssistant,
 						Contents: []message.Content{call},
 					}, nil) {
@@ -909,7 +909,7 @@ func newRequestAgent(unpaired, paired int) *agent.Agent {
 					}
 				}
 				if len(pairedResults) > 0 {
-					if !yield(&message.ResponseUpdate{
+					if !yield(&agent.ResponseUpdate{
 						Role:     message.RoleAssistant,
 						Contents: pairedResults,
 					}, nil) {
@@ -931,7 +931,7 @@ func newRequestAgent(unpaired, paired int) *agent.Agent {
 			if remaining := len(state.unpaired); remaining > 0 {
 				text = fmt.Sprintf("Remaining: %d", remaining)
 			}
-			yield(&message.ResponseUpdate{
+			yield(&agent.ResponseUpdate{
 				Role:     message.RoleAssistant,
 				Contents: []message.Content{&message.TextContent{Text: text}},
 			}, nil)
@@ -1025,9 +1025,9 @@ func lastResponseText(t *testing.T, run *inproc.Run) string {
 // TestHostedAgent_DuplicateRequestID_RaisesError verifies that emitting two
 // FunctionCallContents with the same CallID in a single response is rejected.
 func TestHostedAgent_DuplicateRequestID_RaisesError(t *testing.T) {
-	dup := func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{
+	dup := func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
 				Role: message.RoleAssistant,
 				Contents: []message.Content{
 					&message.FunctionCallContent{CallID: "x", Name: "f"},
@@ -1072,9 +1072,9 @@ func TestHostedAgent_DuplicateRequestID_RaisesError(t *testing.T) {
 func TestHostedAgent_UnknownResponseID_RaisesError(t *testing.T) {
 	// Agent never produces any FunctionCalls; we route a stray
 	// FunctionResultContent to the host directly.
-	stub := func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{
+	stub := func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
 				Role:     message.RoleAssistant,
 				Contents: []message.Content{&message.TextContent{Text: "hi"}},
 			}, nil)
@@ -1301,11 +1301,11 @@ func TestHostedAgent_HandledRequestNotReEmitted_PortMode(t *testing.T) {
 func TestHostedAgent_AlreadyPendingRequest_IsIdempotent_InterceptMode(t *testing.T) {
 	const reqID = "req-1"
 	step := 0
-	run := func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
+	run := func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			defer func() { step++ }()
 			// Emit the same approval request on every turn.
-			yield(&message.ResponseUpdate{
+			yield(&agent.ResponseUpdate{
 				Role: message.RoleAssistant,
 				Contents: []message.Content{&message.FunctionApprovalRequestContent{
 					ID: reqID,

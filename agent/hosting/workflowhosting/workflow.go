@@ -436,7 +436,7 @@ func (h *hostExecutor) runAgentAndDispatch(wctx *workflow.Context) error {
 		agent.Stream(emitUpdates),
 	}
 
-	var resp message.Response
+	var resp agent.Response
 	for update, err := range h.agent.Run(wctx, agentInput, runOpts...) {
 		if err != nil {
 			return err
@@ -450,11 +450,10 @@ func (h *hostExecutor) runAgentAndDispatch(wctx *workflow.Context) error {
 	}
 	resp.Coalesce()
 
-	// Stamp this hosting executor's identity on every aggregated message,
-	// so downstream nodes can identify which hosted agent produced them and
-	// the role-reassignment logic in receiving hosts works correctly.
+	// Stamp this hosting executor's name on every aggregated message,
+	// so the role-reassignment logic in receiving hosts works correctly.
+	resp.AgentID = h.agent.ID()
 	for _, m := range resp.Messages {
-		m.AuthorID = h.agent.ID()
 		m.AuthorName = h.selfName
 	}
 

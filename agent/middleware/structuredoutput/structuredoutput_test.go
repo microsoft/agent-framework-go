@@ -9,28 +9,18 @@ import (
 	"iter"
 	"testing"
 
-	"github.com/microsoft/agent-framework-go/agent/internal/agentopt"
-	"github.com/microsoft/agent-framework-go/agent/internal/middleware"
-	"github.com/microsoft/agent-framework-go/agent/internal/middleware/structuredoutput"
-	"github.com/microsoft/agent-framework-go/format"
+	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/middleware/structuredoutput"
 	"github.com/microsoft/agent-framework-go/message"
 )
-
-type testFormat struct {
-	kind string
-}
-
-func (t testFormat) Kind() string {
-	return t.kind
-}
 
 func TestStructuredOutput_NoStructuredOutputOption(t *testing.T) {
 	// Test that middleware passes through when no structured output option is provided
 	baseCalled := false
-	baseFunc := func(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	baseFunc := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		baseCalled = true
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
 				Contents: message.Contents{
 					&message.TextContent{Text: "test response"},
 				},
@@ -39,10 +29,10 @@ func TestStructuredOutput_NoStructuredOutputOption(t *testing.T) {
 	}
 
 	cfg := structuredoutput.Config{
-		Format: func(v any) (format.Format, error) {
-			return testFormat{kind: "json"}, nil
+		Format: func(v any) (agent.ResponseFormat, error) {
+			return agent.ResponseFormat{Kind: "json"}, nil
 		},
-		Unmarshal: func(format format.Format, data []byte, v any) error {
+		Unmarshal: func(format agent.ResponseFormat, data []byte, v any) error {
 			return json.Unmarshal(data, v)
 		},
 	}
@@ -50,8 +40,8 @@ func TestStructuredOutput_NoStructuredOutputOption(t *testing.T) {
 	mw := structuredoutput.New(cfg)
 	ctx := context.Background()
 
-	var updates []*message.ResponseUpdate
-	seq := middleware.RunChain(ctx, baseFunc, []middleware.Middleware{mw}, []*message.Message{})
+	var updates []*agent.ResponseUpdate
+	seq := mw.Run(baseFunc, ctx, []*message.Message{})
 	for update, err := range seq {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -75,10 +65,10 @@ func TestStructuredOutput_NoStructuredOutputOption(t *testing.T) {
 func TestStructuredOutput_NilStructuredOutputOption(t *testing.T) {
 	// Test that middleware passes through when structured output option is nil
 	baseCalled := false
-	baseFunc := func(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
+	baseFunc := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		baseCalled = true
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
 				Contents: message.Contents{
 					&message.TextContent{Text: "test response"},
 				},
@@ -87,10 +77,10 @@ func TestStructuredOutput_NilStructuredOutputOption(t *testing.T) {
 	}
 
 	cfg := structuredoutput.Config{
-		Format: func(v any) (format.Format, error) {
-			return testFormat{kind: "json"}, nil
+		Format: func(v any) (agent.ResponseFormat, error) {
+			return agent.ResponseFormat{Kind: "json"}, nil
 		},
-		Unmarshal: func(format format.Format, data []byte, v any) error {
+		Unmarshal: func(format agent.ResponseFormat, data []byte, v any) error {
 			return json.Unmarshal(data, v)
 		},
 	}
@@ -98,8 +88,8 @@ func TestStructuredOutput_NilStructuredOutputOption(t *testing.T) {
 	mw := structuredoutput.New(cfg)
 	ctx := context.Background()
 
-	var updates []*message.ResponseUpdate
-	seq := middleware.RunChain(ctx, baseFunc, []middleware.Middleware{mw}, []*message.Message{}, agentopt.WithStructuredOutput(nil))
+	var updates []*agent.ResponseUpdate
+	seq := mw.Run(baseFunc, ctx, []*message.Message{}, agent.WithStructuredOutput(nil))
 	for update, err := range seq {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -118,9 +108,9 @@ func TestStructuredOutput_NilStructuredOutputOption(t *testing.T) {
 
 func TestStructuredOutput_MissingFormat(t *testing.T) {
 	// Test that middleware returns error when Format is nil
-	baseFunc := func(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{
+	baseFunc := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
 				Contents: message.Contents{
 					&message.TextContent{Text: `{"name":"test"}`},
 				},
@@ -130,7 +120,7 @@ func TestStructuredOutput_MissingFormat(t *testing.T) {
 
 	cfg := structuredoutput.Config{
 		Format: nil, // Missing Format
-		Unmarshal: func(format format.Format, data []byte, v any) error {
+		Unmarshal: func(format agent.ResponseFormat, data []byte, v any) error {
 			return json.Unmarshal(data, v)
 		},
 	}
@@ -139,7 +129,7 @@ func TestStructuredOutput_MissingFormat(t *testing.T) {
 	ctx := context.Background()
 	output := &struct{ Name string }{}
 
-	seq := middleware.RunChain(ctx, baseFunc, []middleware.Middleware{mw}, []*message.Message{}, agentopt.WithStructuredOutput(output))
+	seq := mw.Run(baseFunc, ctx, []*message.Message{}, agent.WithStructuredOutput(output))
 	for _, err := range seq {
 		if err == nil {
 			t.Fatal("expected error for missing Format")
@@ -154,9 +144,9 @@ func TestStructuredOutput_MissingFormat(t *testing.T) {
 
 func TestStructuredOutput_MissingUnmarshal(t *testing.T) {
 	// Test that middleware returns error when Unmarshal is nil
-	baseFunc := func(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{
+	baseFunc := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
 				Contents: message.Contents{
 					&message.TextContent{Text: `{"name":"test"}`},
 				},
@@ -165,8 +155,8 @@ func TestStructuredOutput_MissingUnmarshal(t *testing.T) {
 	}
 
 	cfg := structuredoutput.Config{
-		Format: func(v any) (format.Format, error) {
-			return testFormat{kind: "json"}, nil
+		Format: func(v any) (agent.ResponseFormat, error) {
+			return agent.ResponseFormat{Kind: "json"}, nil
 		},
 		Unmarshal: nil, // Missing Unmarshal
 	}
@@ -175,7 +165,7 @@ func TestStructuredOutput_MissingUnmarshal(t *testing.T) {
 	ctx := context.Background()
 	output := &struct{ Name string }{}
 
-	seq := middleware.RunChain(ctx, baseFunc, []middleware.Middleware{mw}, []*message.Message{}, agentopt.WithStructuredOutput(output))
+	seq := mw.Run(baseFunc, ctx, []*message.Message{}, agent.WithStructuredOutput(output))
 	for _, err := range seq {
 		if err == nil {
 			t.Fatal("expected error for missing Unmarshal")
@@ -190,9 +180,9 @@ func TestStructuredOutput_MissingUnmarshal(t *testing.T) {
 
 func TestStructuredOutput_FormatError(t *testing.T) {
 	// Test that middleware propagates Format errors
-	baseFunc := func(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{
+	baseFunc := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
 				Contents: message.Contents{
 					&message.TextContent{Text: `{"name":"test"}`},
 				},
@@ -202,10 +192,10 @@ func TestStructuredOutput_FormatError(t *testing.T) {
 
 	expectedErr := errors.New("format creation failed")
 	cfg := structuredoutput.Config{
-		Format: func(v any) (format.Format, error) {
-			return nil, expectedErr
+		Format: func(v any) (agent.ResponseFormat, error) {
+			return agent.ResponseFormat{}, expectedErr
 		},
-		Unmarshal: func(format format.Format, data []byte, v any) error {
+		Unmarshal: func(format agent.ResponseFormat, data []byte, v any) error {
 			return json.Unmarshal(data, v)
 		},
 	}
@@ -214,7 +204,7 @@ func TestStructuredOutput_FormatError(t *testing.T) {
 	ctx := context.Background()
 	output := &struct{ Name string }{}
 
-	seq := middleware.RunChain(ctx, baseFunc, []middleware.Middleware{mw}, []*message.Message{}, agentopt.WithStructuredOutput(output))
+	seq := mw.Run(baseFunc, ctx, []*message.Message{}, agent.WithStructuredOutput(output))
 	for _, err := range seq {
 		if err == nil {
 			t.Fatal("expected error for Format failure")
@@ -229,35 +219,35 @@ func TestStructuredOutput_FormatError(t *testing.T) {
 
 func TestStructuredOutput_SuccessfulUnmarshal(t *testing.T) {
 	// Test successful structured output parsing
-	baseFunc := func(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
+	baseFunc := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			// Verify that ResponseFormat option was added
-			v, ok := agentopt.GetOption(options, agentopt.WithResponseFormat)
+			v, ok := agent.GetOption(options, agent.WithResponseFormat)
 			if !ok {
 				yield(nil, errors.New("ResponseFormat option not found"))
 				return
 			}
-			if v.Kind() != "json" {
+			if v.Kind != "json" {
 				yield(nil, errors.New("ResponseFormat is not the expected format"))
 				return
 			}
 
 			// Simulate streaming response in parts
-			if !yield(&message.ResponseUpdate{
+			if !yield(&agent.ResponseUpdate{
 				Contents: message.Contents{
 					&message.TextContent{Text: `{"name":`},
 				},
 			}, nil) {
 				return
 			}
-			if !yield(&message.ResponseUpdate{
+			if !yield(&agent.ResponseUpdate{
 				Contents: message.Contents{
 					&message.TextContent{Text: `"Alice",`},
 				},
 			}, nil) {
 				return
 			}
-			yield(&message.ResponseUpdate{
+			yield(&agent.ResponseUpdate{
 				Contents: message.Contents{
 					&message.TextContent{Text: `"age":30}`},
 				},
@@ -266,10 +256,10 @@ func TestStructuredOutput_SuccessfulUnmarshal(t *testing.T) {
 	}
 
 	cfg := structuredoutput.Config{
-		Format: func(v any) (format.Format, error) {
-			return testFormat{kind: "json"}, nil
+		Format: func(v any) (agent.ResponseFormat, error) {
+			return agent.ResponseFormat{Kind: "json"}, nil
 		},
-		Unmarshal: func(format format.Format, data []byte, v any) error {
+		Unmarshal: func(format agent.ResponseFormat, data []byte, v any) error {
 			return json.Unmarshal(data, v)
 		},
 	}
@@ -281,7 +271,7 @@ func TestStructuredOutput_SuccessfulUnmarshal(t *testing.T) {
 		Age  int    `json:"age"`
 	}{}
 
-	seq := middleware.RunChain(ctx, baseFunc, []middleware.Middleware{mw}, []*message.Message{}, agentopt.WithStructuredOutput(output))
+	seq := mw.Run(baseFunc, ctx, []*message.Message{}, agent.WithStructuredOutput(output))
 	for _, err := range seq {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -298,9 +288,9 @@ func TestStructuredOutput_SuccessfulUnmarshal(t *testing.T) {
 
 func TestStructuredOutput_UnmarshalError(t *testing.T) {
 	// Test that middleware propagates Unmarshal errors
-	baseFunc := func(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{
+	baseFunc := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
 				Contents: message.Contents{
 					&message.TextContent{Text: `{"name":"test"}`},
 				},
@@ -310,10 +300,10 @@ func TestStructuredOutput_UnmarshalError(t *testing.T) {
 
 	expectedErr := errors.New("unmarshal failed")
 	cfg := structuredoutput.Config{
-		Format: func(v any) (format.Format, error) {
-			return testFormat{kind: "json"}, nil
+		Format: func(v any) (agent.ResponseFormat, error) {
+			return agent.ResponseFormat{Kind: "json"}, nil
 		},
-		Unmarshal: func(format format.Format, data []byte, v any) error {
+		Unmarshal: func(format agent.ResponseFormat, data []byte, v any) error {
 			return expectedErr
 		},
 	}
@@ -322,7 +312,7 @@ func TestStructuredOutput_UnmarshalError(t *testing.T) {
 	ctx := context.Background()
 	output := &struct{ Name string }{}
 
-	seq := middleware.RunChain(ctx, baseFunc, []middleware.Middleware{mw}, []*message.Message{}, agentopt.WithStructuredOutput(output))
+	seq := mw.Run(baseFunc, ctx, []*message.Message{}, agent.WithStructuredOutput(output))
 	for _, err := range seq {
 		if err == nil {
 			t.Fatal("expected error for Unmarshal failure")
@@ -338,17 +328,17 @@ func TestStructuredOutput_UnmarshalError(t *testing.T) {
 func TestStructuredOutput_BaseErrorPropagation(t *testing.T) {
 	// Test that errors from the base function are propagated
 	expectedErr := errors.New("base function error")
-	baseFunc := func(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
+	baseFunc := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			yield(nil, expectedErr)
 		}
 	}
 
 	cfg := structuredoutput.Config{
-		Format: func(v any) (format.Format, error) {
-			return testFormat{kind: "json"}, nil
+		Format: func(v any) (agent.ResponseFormat, error) {
+			return agent.ResponseFormat{Kind: "json"}, nil
 		},
-		Unmarshal: func(format format.Format, data []byte, v any) error {
+		Unmarshal: func(format agent.ResponseFormat, data []byte, v any) error {
 			return json.Unmarshal(data, v)
 		},
 	}
@@ -357,7 +347,7 @@ func TestStructuredOutput_BaseErrorPropagation(t *testing.T) {
 	ctx := context.Background()
 	output := &struct{ Name string }{}
 
-	seq := middleware.RunChain(ctx, baseFunc, []middleware.Middleware{mw}, []*message.Message{}, agentopt.WithStructuredOutput(output))
+	seq := mw.Run(baseFunc, ctx, []*message.Message{}, agent.WithStructuredOutput(output))
 	for _, err := range seq {
 		if err == nil {
 			t.Fatal("expected error from base function")
@@ -368,6 +358,44 @@ func TestStructuredOutput_BaseErrorPropagation(t *testing.T) {
 		return
 	}
 	t.Fatal("expected error to be yielded")
+}
+
+func TestStructuredOutput_SkipsNilUpdates(t *testing.T) {
+	baseFunc := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			if !yield(nil, nil) {
+				return
+			}
+			yield(&agent.ResponseUpdate{
+				Contents: message.Contents{&message.TextContent{Text: `{"name":"Ada"}`}},
+			}, nil)
+		}
+	}
+
+	cfg := structuredoutput.Config{
+		Format: func(v any) (agent.ResponseFormat, error) {
+			return agent.ResponseFormat{Kind: "json"}, nil
+		},
+		Unmarshal: func(format agent.ResponseFormat, data []byte, v any) error {
+			return json.Unmarshal(data, v)
+		},
+	}
+
+	mw := structuredoutput.New(cfg)
+	output := &struct {
+		Name string `json:"name"`
+	}{}
+
+	seq := mw.Run(baseFunc, context.Background(), nil, agent.WithStructuredOutput(output))
+	for _, err := range seq {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+
+	if output.Name != "Ada" {
+		t.Errorf("expected Name Ada, got %q", output.Name)
+	}
 }
 
 func TestStructuredOutput_ComplexStructure(t *testing.T) {
@@ -383,10 +411,10 @@ func TestStructuredOutput_ComplexStructure(t *testing.T) {
 		Tags    []string `json:"tags"`
 	}
 
-	baseFunc := func(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
+	baseFunc := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			jsonStr := `{"name":"Bob","age":25,"address":{"street":"123 Main St","city":"Springfield"},"tags":["developer","golang"]}`
-			yield(&message.ResponseUpdate{
+			yield(&agent.ResponseUpdate{
 				Contents: message.Contents{
 					&message.TextContent{Text: jsonStr},
 				},
@@ -395,10 +423,10 @@ func TestStructuredOutput_ComplexStructure(t *testing.T) {
 	}
 
 	cfg := structuredoutput.Config{
-		Format: func(v any) (format.Format, error) {
-			return testFormat{kind: "json"}, nil
+		Format: func(v any) (agent.ResponseFormat, error) {
+			return agent.ResponseFormat{Kind: "json"}, nil
 		},
-		Unmarshal: func(format format.Format, data []byte, v any) error {
+		Unmarshal: func(format agent.ResponseFormat, data []byte, v any) error {
 			return json.Unmarshal(data, v)
 		},
 	}
@@ -407,7 +435,7 @@ func TestStructuredOutput_ComplexStructure(t *testing.T) {
 	ctx := context.Background()
 	output := &Person{}
 
-	seq := middleware.RunChain(ctx, baseFunc, []middleware.Middleware{mw}, []*message.Message{}, agentopt.WithStructuredOutput(output))
+	seq := mw.Run(baseFunc, ctx, []*message.Message{}, agent.WithStructuredOutput(output))
 	for _, err := range seq {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -436,17 +464,17 @@ func TestStructuredOutput_ComplexStructure(t *testing.T) {
 
 func TestStructuredOutput_EmptyResponse(t *testing.T) {
 	// Test with an empty response
-	baseFunc := func(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
+	baseFunc := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			// Empty response
 		}
 	}
 
 	cfg := structuredoutput.Config{
-		Format: func(v any) (format.Format, error) {
-			return testFormat{kind: "json"}, nil
+		Format: func(v any) (agent.ResponseFormat, error) {
+			return agent.ResponseFormat{Kind: "json"}, nil
 		},
-		Unmarshal: func(format format.Format, data []byte, v any) error {
+		Unmarshal: func(format agent.ResponseFormat, data []byte, v any) error {
 			if len(data) == 0 {
 				return errors.New("empty data")
 			}
@@ -458,7 +486,7 @@ func TestStructuredOutput_EmptyResponse(t *testing.T) {
 	ctx := context.Background()
 	output := &struct{ Name string }{}
 
-	seq := middleware.RunChain(ctx, baseFunc, []middleware.Middleware{mw}, []*message.Message{}, agentopt.WithStructuredOutput(output))
+	seq := mw.Run(baseFunc, ctx, []*message.Message{}, agent.WithStructuredOutput(output))
 	for _, err := range seq {
 		if err == nil {
 			t.Fatal("expected error for empty response")
@@ -473,16 +501,16 @@ func TestStructuredOutput_EmptyResponse(t *testing.T) {
 
 func TestStructuredOutput_MultipleContentTypes(t *testing.T) {
 	// Test that only text content is collected for unmarshaling
-	baseFunc := func(ctx context.Context, messages []*message.Message, options ...agentopt.Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			if !yield(&message.ResponseUpdate{
+	baseFunc := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			if !yield(&agent.ResponseUpdate{
 				Contents: message.Contents{
 					&message.TextContent{Text: `{"name":`},
 				},
 			}, nil) {
 				return
 			}
-			if !yield(&message.ResponseUpdate{
+			if !yield(&agent.ResponseUpdate{
 				Contents: message.Contents{
 					&message.FunctionCallContent{
 						CallID:    "call1",
@@ -493,7 +521,7 @@ func TestStructuredOutput_MultipleContentTypes(t *testing.T) {
 			}, nil) {
 				return
 			}
-			yield(&message.ResponseUpdate{
+			yield(&agent.ResponseUpdate{
 				Contents: message.Contents{
 					&message.TextContent{Text: `"Charlie"}`},
 				},
@@ -502,10 +530,10 @@ func TestStructuredOutput_MultipleContentTypes(t *testing.T) {
 	}
 
 	cfg := structuredoutput.Config{
-		Format: func(v any) (format.Format, error) {
-			return testFormat{kind: "json"}, nil
+		Format: func(v any) (agent.ResponseFormat, error) {
+			return agent.ResponseFormat{Kind: "json"}, nil
 		},
-		Unmarshal: func(format format.Format, data []byte, v any) error {
+		Unmarshal: func(format agent.ResponseFormat, data []byte, v any) error {
 			return json.Unmarshal(data, v)
 		},
 	}
@@ -516,7 +544,7 @@ func TestStructuredOutput_MultipleContentTypes(t *testing.T) {
 		Name string `json:"name"`
 	}{}
 
-	seq := middleware.RunChain(ctx, baseFunc, []middleware.Middleware{mw}, []*message.Message{}, agentopt.WithStructuredOutput(output))
+	seq := mw.Run(baseFunc, ctx, []*message.Message{}, agent.WithStructuredOutput(output))
 	for _, err := range seq {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)

@@ -37,7 +37,7 @@ func (rb *ResponseBuilder) NewTurn(callbacks ...func(ctx context.Context, messag
 }
 
 func (rb *ResponseBuilder) AddText(text string) *ResponseBuilder {
-	rb.Add(&message.ResponseUpdate{
+	rb.Add(&agent.ResponseUpdate{
 		Role: message.RoleAssistant,
 		Contents: []message.Content{
 			&message.TextContent{Text: text},
@@ -47,7 +47,7 @@ func (rb *ResponseBuilder) AddText(text string) *ResponseBuilder {
 }
 
 func (rb *ResponseBuilder) AddFunctionCall(callID, name string, arguments string) *ResponseBuilder {
-	rb.Add(&message.ResponseUpdate{
+	rb.Add(&agent.ResponseUpdate{
 		Role: message.RoleAssistant,
 		Contents: []message.Content{
 			&message.FunctionCallContent{
@@ -60,7 +60,7 @@ func (rb *ResponseBuilder) AddFunctionCall(callID, name string, arguments string
 	return rb
 }
 
-func (rb *ResponseBuilder) Add(resp *message.ResponseUpdate) *ResponseBuilder {
+func (rb *ResponseBuilder) Add(resp *agent.ResponseUpdate) *ResponseBuilder {
 	rb.add(Response{Response: resp})
 	return rb
 }
@@ -79,7 +79,7 @@ func (rb *ResponseBuilder) Build() []Turn {
 }
 
 type Response struct {
-	Response *message.ResponseUpdate
+	Response *agent.ResponseUpdate
 	Error    error
 }
 
@@ -104,8 +104,8 @@ func New(responses []Turn) *agent.Agent {
 	})
 }
 
-func (a *testagent) run(ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-	return func(yield func(*message.ResponseUpdate, error) bool) {
+func (a *testagent) run(ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		defer func() { a.currentTurn++ }()
 		if a.currentTurn >= len(a.responses) {
 			panic("no more predefined turns")
@@ -151,9 +151,9 @@ func (m *Middleware) Called() bool {
 	return m.called
 }
 
-func (m *Middleware) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (m *Middleware) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 	m.called = true
-	return func(yield func(*message.ResponseUpdate, error) bool) {
+	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		defer func() { m.currentTurn++ }()
 		if m.currentTurn < len(m.PreResponses) {
 			turn := m.PreResponses[m.currentTurn]
@@ -185,8 +185,8 @@ type Runner struct {
 	currentTurn int
 }
 
-func (r *Runner) Run(ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-	return func(yield func(*message.ResponseUpdate, error) bool) {
+func (r *Runner) Run(ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		defer func() { r.currentTurn++ }()
 		if r.currentTurn >= len(r.Responses) {
 			panic("no more predefined turns")

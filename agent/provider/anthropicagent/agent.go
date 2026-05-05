@@ -15,8 +15,9 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/format"
-	"github.com/microsoft/agent-framework-go/format/jsonformat"
+	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
+	"github.com/microsoft/agent-framework-go/agent/middleware/autocall"
+	"github.com/microsoft/agent-framework-go/agent/middleware/structuredoutput"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 )
@@ -47,33 +48,46 @@ func New(aclient anthropic.Client, config Config) *agent.Agent {
 		client: aclient,
 		config: config,
 	}
+	config.Middlewares = slices.Clone(config.Middlewares)
+	if !config.DisableFuncAutoCall {
+		config.Middlewares = append(config.Middlewares, autocall.New(autocall.Config{
+			Logger:           config.Logger,
+			LogSensitiveData: config.LogSensitiveData,
+		}))
+	}
+	config.Middlewares = append(config.Middlewares, structuredoutput.New(structuredoutput.Config{
+		Format:    c.formatOf,
+		Unmarshal: c.unmarshal,
+	}))
 	return agent.New(agent.ProviderConfig{
 		Run:          c.run,
 		ProviderName: "anthropic",
-		FormatOfFn:   c.formatOf,
-		UnmarshalFn:  c.unmarshal,
 	}, config.Config)
 }
 
-func (a *client) formatOf(v any) (format.Format, error) {
+func (a *client) formatOf(v any) (agent.ResponseFormat, error) {
 	return jsonformat.ForType(reflect.TypeOf(v))
 }
 
-func (a *client) unmarshal(f format.Format, data []byte, v any) error {
-	return f.(*jsonformat.Format).Unmarshal(data, v)
+func (a *client) unmarshal(f agent.ResponseFormat, data []byte, v any) error {
+	format, err := jsonformat.FromResponseFormat(f)
+	if err != nil {
+		return err
+	}
+	return format.Unmarshal(data, v)
 }
 
-func (a *client) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (a *client) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 	params, err := a.buildMessageParams(messages, options)
 	if err != nil {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			yield(nil, err)
 		}
 	}
 	if stream, _ := agent.GetOption(options, agent.Stream); !stream {
 		resp, err := a.client.Messages.New(ctx, params)
 		if err != nil {
-			return func(yield func(*message.ResponseUpdate, error) bool) {
+			return func(yield func(*agent.ResponseUpdate, error) bool) {
 				yield(nil, err)
 			}
 		}
@@ -90,8 +104,8 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 		contents = append(contents, &message.UsageContent{
 			Details: toUsageDetails(resp.Usage),
 		})
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
 				Contents:          contents,
 				Role:              message.RoleAssistant,
 				MessageID:         resp.ID,
@@ -101,7 +115,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 			}, nil)
 		}
 	}
-	return func(yield func(*message.ResponseUpdate, error) bool) {
+	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		stream := a.client.Messages.NewStreaming(ctx, params)
 
 		var messageID string
@@ -132,7 +146,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				}
 			}
 
-			if !yield(&message.ResponseUpdate{
+			if !yield(&agent.ResponseUpdate{
 				Contents:          contents,
 				Role:              message.RoleAssistant,
 				ResponseID:        messageID,
@@ -143,7 +157,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				return
 			}
 		}
-		if !yield(&message.ResponseUpdate{
+		if !yield(&agent.ResponseUpdate{
 			CreatedAt: time.Now(),
 			Role:      message.RoleAssistant,
 			MessageID: messageID,
@@ -339,22 +353,20 @@ func (a *client) buildMessageParams(messages []*message.Message, opts []agent.Op
 		}
 	}
 
-	if frmt, ok := agent.GetOption(opts, agent.WithResponseFormat); ok && frmt != nil {
-		if frmt.Kind() == "json" {
-			if schemaFmt, ok := frmt.(format.SchemaFormat); ok {
+	if frmt, ok := agent.GetOption(opts, agent.WithResponseFormat); ok {
+		if frmt.Kind == "json" {
+			if schema := frmt.Schema; schema != nil {
 				var schemaMap map[string]any
-				switch s := schemaFmt.Schema().(type) {
+				switch s := schema.(type) {
 				case map[string]any:
 					schemaMap = s
 				default:
-					if s != nil {
-						jsonBytes, err := json.Marshal(s)
-						if err != nil {
-							return anthropic.MessageNewParams{}, fmt.Errorf("failed to marshal structured output schema: %w", err)
-						}
-						if err := json.Unmarshal(jsonBytes, &schemaMap); err != nil {
-							return anthropic.MessageNewParams{}, fmt.Errorf("failed to unmarshal structured output schema: %w", err)
-						}
+					jsonBytes, err := json.Marshal(s)
+					if err != nil {
+						return anthropic.MessageNewParams{}, fmt.Errorf("failed to marshal structured output schema: %w", err)
+					}
+					if err := json.Unmarshal(jsonBytes, &schemaMap); err != nil {
+						return anthropic.MessageNewParams{}, fmt.Errorf("failed to unmarshal structured output schema: %w", err)
 					}
 				}
 				if schemaMap != nil {

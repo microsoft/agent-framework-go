@@ -10,15 +10,12 @@ import (
 	"slices"
 
 	"github.com/google/uuid"
-	"github.com/microsoft/agent-framework-go/agent/internal/middleware/autocall"
-	"github.com/microsoft/agent-framework-go/agent/internal/middleware/structuredoutput"
-	"github.com/microsoft/agent-framework-go/format"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 )
 
 // RunFunc is the provider function that executes an agent invocation.
-type RunFunc = func(ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*message.ResponseUpdate, error]
+type RunFunc = func(ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error]
 
 // ProviderConfig configures the provider-specific implementation behind an Agent.
 type ProviderConfig struct {
@@ -34,10 +31,6 @@ type ProviderConfig struct {
 	BeforeMarshalSession func(ctx context.Context, session Session, options ...Option) error
 	// AfterUnmarshalSession configures a deserialized provider-specific session.
 	AfterUnmarshalSession func(ctx context.Context, session Session, options ...Option) error
-	// FormatOfFn returns the response format for a structured output destination.
-	FormatOfFn func(v any) (format.Format, error)
-	// UnmarshalFn unmarshals provider output into a structured output destination.
-	UnmarshalFn func(format format.Format, data []byte, v any) error
 }
 
 // Config configures an Agent instance.
@@ -55,7 +48,7 @@ type Config struct {
 	// ContextProviders inject and persist context around each agent run.
 	ContextProviders []*ContextProvider
 
-	// DisableFuncAutoCall disables automatic function-tool calling middleware.
+	// DisableFuncAutoCall tells provider constructors not to add automatic function-tool calling middleware.
 	DisableFuncAutoCall bool
 
 	// Logger receives middleware and provider diagnostics.
@@ -89,27 +82,11 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 		}
 	}
 	cfg.Middlewares = slices.Clone(cfg.Middlewares)
-	if !cfg.DisableFuncAutoCall {
-		cfg.Middlewares = append(cfg.Middlewares,
-			autocall.New(autocall.Config{
-				Logger:           cfg.Logger,
-				LogSensitiveData: cfg.LogSensitiveData,
-			}),
-		)
-	}
 	providers := make([]*ContextProvider, 0, len(cfg.ContextProviders)+1)
 	for _, provider := range cfg.ContextProviders {
 		if provider != nil {
 			providers = append(providers, provider)
 		}
-	}
-	if prov.FormatOfFn != nil && prov.UnmarshalFn != nil {
-		cfg.Middlewares = append(cfg.Middlewares,
-			structuredoutput.New(structuredoutput.Config{
-				Format:    prov.FormatOfFn,
-				Unmarshal: prov.UnmarshalFn,
-			}),
-		)
 	}
 	prefixedMiddlewares := make([]Middleware, 0, 2)
 	if len(providers) == 0 {
@@ -129,22 +106,6 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 		runOptions:   cfg.RunOptions,
 		middlewares:  cfg.Middlewares,
 	}
-}
-
-// ResponseStream represents an execution of the agent.
-type ResponseStream iter.Seq2[*message.ResponseUpdate, error]
-
-// Collect gathers all response updates into a single Response object.
-func (r ResponseStream) Collect() (*message.Response, error) {
-	var resp message.Response
-	for update, err := range r {
-		if err != nil {
-			return nil, err
-		}
-		resp.Update(update)
-	}
-	resp.Coalesce()
-	return &resp, nil
 }
 
 // Agent coordinates message preparation, middleware, sessions, and provider execution.
@@ -247,7 +208,7 @@ func (a *Agent) RunMessage(ctx context.Context, msg *message.Message, options ..
 func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ...Option) ResponseStream {
 	ctx, preparedMessages, options, err := a.prepareRun(ctx, messages, options)
 	if err != nil {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
+		return func(yield func(*ResponseUpdate, error) bool) {
 			yield(nil, err)
 		}
 	}
@@ -306,7 +267,7 @@ func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, opt
 func defaultLocalHistoryMiddleware() Middleware {
 	history := newContextProviderMiddleware(NewInMemoryHistoryProvider(""))
 
-	return MiddlewareFunc(func(next RunFunc, ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*message.ResponseUpdate, error] {
+	return MiddlewareFunc(func(next RunFunc, ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error] {
 		session, _ := GetOption(options, WithSession)
 		noSession, _ := GetOption(options, noSessionProvided)
 		contToken, _ := GetOption(options, WithContinuationToken)
@@ -318,12 +279,12 @@ func defaultLocalHistoryMiddleware() Middleware {
 }
 
 func authorMiddleware(id, name string) Middleware {
-	return MiddlewareFunc(func(next RunFunc, ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*message.ResponseUpdate, error] {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
+	return MiddlewareFunc(func(next RunFunc, ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error] {
+		return func(yield func(*ResponseUpdate, error) bool) {
 			for update, err := range next(ctx, messages, options...) {
 				if update != nil {
-					if update.AuthorID == "" {
-						update.AuthorID = id
+					if update.AgentID == "" {
+						update.AgentID = id
 					}
 					if update.AuthorName == "" {
 						update.AuthorName = name

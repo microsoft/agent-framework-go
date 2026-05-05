@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
@@ -62,7 +63,7 @@ func TestResponseToMessage_NilResponse_ReturnsAgentMessage(t *testing.T) {
 }
 
 func TestResponseToMessage_WithEmptyAdditionalProperties_PreservesEmptyMetadataMap(t *testing.T) {
-	got, err := responseToMessage(testTaskInfoProvider{}, &message.Response{
+	got, err := responseToMessage(testTaskInfoProvider{}, &agent.Response{
 		AdditionalProperties: map[string]any{},
 		Messages:             []*message.Message{{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: "chunk"}}}},
 	})
@@ -112,7 +113,7 @@ func TestResponseToArtifactEvent_NilResponse_ReturnsArtifactEvent(t *testing.T) 
 }
 
 func TestResponseUpdateToMessage_UsesResponseIDWhenMessageIDMissing(t *testing.T) {
-	got, err := responseUpdateToMessage(testTaskInfoProvider{}, &message.ResponseUpdate{
+	got, err := responseUpdateToMessage(testTaskInfoProvider{}, &agent.ResponseUpdate{
 		ResponseID: "resp-99",
 		Role:       message.RoleAssistant,
 		Contents:   message.Contents{&message.TextContent{Text: "chunk"}},
@@ -129,7 +130,7 @@ func TestResponseUpdateToMessage_UsesResponseIDWhenMessageIDMissing(t *testing.T
 }
 
 func TestResponseUpdateToMessage_PrefersMessageIDOverResponseID(t *testing.T) {
-	got, err := responseUpdateToMessage(testTaskInfoProvider{}, &message.ResponseUpdate{
+	got, err := responseUpdateToMessage(testTaskInfoProvider{}, &agent.ResponseUpdate{
 		MessageID:  "msg-7",
 		ResponseID: "resp-7",
 		Role:       message.RoleAssistant,
@@ -144,7 +145,7 @@ func TestResponseUpdateToMessage_PrefersMessageIDOverResponseID(t *testing.T) {
 }
 
 func TestResponseUpdateToWorkingStatusEvent_WithContinuationToken_CopiesMetadata(t *testing.T) {
-	got, err := responseUpdateToWorkingStatusEvent(testTaskInfoProvider{}, &message.ResponseUpdate{
+	got, err := responseUpdateToWorkingStatusEvent(testTaskInfoProvider{}, &agent.ResponseUpdate{
 		ResponseID:        "resp-1",
 		ContinuationToken: "token-123",
 		Contents:          message.Contents{&message.TextContent{Text: "working"}},
@@ -170,7 +171,7 @@ func TestResponseUpdateToWorkingStatusEvent_WithContinuationToken_CopiesMetadata
 }
 
 func TestResponseUpdateToArtifactEvent_UsesResponseIDAndCopiesMetadata(t *testing.T) {
-	got, artifactID, err := responseUpdateToArtifactEvent(testTaskInfoProvider{}, "", &message.ResponseUpdate{
+	got, artifactID, err := responseUpdateToArtifactEvent(testTaskInfoProvider{}, "", &agent.ResponseUpdate{
 		ResponseID: "resp-42",
 		Contents:   message.Contents{&message.TextContent{Text: "chunk"}},
 		AdditionalProperties: map[string]any{

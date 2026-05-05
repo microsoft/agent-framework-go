@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package openairesponsesagent
+package openaiagent
 
 import (
 	"cmp"
@@ -13,12 +13,14 @@ import (
 	"net/url"
 	"path"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/format"
-	"github.com/microsoft/agent-framework-go/format/jsonformat"
+	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
+	"github.com/microsoft/agent-framework-go/agent/middleware/autocall"
+	"github.com/microsoft/agent-framework-go/agent/middleware/structuredoutput"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/hostedtool"
@@ -28,23 +30,26 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 )
 
-// Config contains configuration for [Agent].
-type Config struct {
-	agent.Config
-
-	Model string // required
-}
-
-func New(oclient openai.Client, config Config) *agent.Agent {
+// NewResponses creates an agent backed by the OpenAI Responses API.
+func NewResponses(oclient openai.Client, config Config) *agent.Agent {
 	c := &responsesClient{
 		client: oclient,
 		config: config,
 	}
+	config.Middlewares = slices.Clone(config.Middlewares)
+	if !config.DisableFuncAutoCall {
+		config.Middlewares = append(config.Middlewares, autocall.New(autocall.Config{
+			Logger:           config.Logger,
+			LogSensitiveData: config.LogSensitiveData,
+		}))
+	}
+	config.Middlewares = append(config.Middlewares, structuredoutput.New(structuredoutput.Config{
+		Format:    c.formatOf,
+		Unmarshal: c.unmarshal,
+	}))
 	return agent.New(
 		agent.ProviderConfig{
 			ProviderName: "openai",
-			FormatOfFn:   c.formatOf,
-			UnmarshalFn:  c.unmarshal,
 			Run:          c.run,
 		}, config.Config)
 }
@@ -65,16 +70,20 @@ func ResponsesNewParams(params responses.ResponseNewParams) agent.Option {
 	return responsesNewParamsOpt(params)
 }
 
-func (a *responsesClient) formatOf(v any) (format.Format, error) {
+func (a *responsesClient) formatOf(v any) (agent.ResponseFormat, error) {
 	return jsonformat.ForType(reflect.TypeOf(v))
 }
 
-func (a *responsesClient) unmarshal(format format.Format, data []byte, v any) error {
-	return format.(*jsonformat.Format).Unmarshal(data, v)
+func (a *responsesClient) unmarshal(format agent.ResponseFormat, data []byte, v any) error {
+	jsonFormat, err := jsonformat.FromResponseFormat(format)
+	if err != nil {
+		return err
+	}
+	return jsonFormat.Unmarshal(data, v)
 }
 
-func (a *responsesClient) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
-	return func(yield func(*message.ResponseUpdate, error) bool) {
+func (a *responsesClient) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		stream, _ := agent.GetOption(options, agent.Stream)
 
 		// Get session for conversation ID management
@@ -222,18 +231,22 @@ func responsesBuildCompletionParams(model string, messages []*message.Message, o
 		}
 	}
 
-	if frmt, ok := agent.GetOption(opts, agent.WithResponseFormat); ok && frmt != nil {
-		switch frmt.Kind() {
+	if frmt, ok := agent.GetOption(opts, agent.WithResponseFormat); ok {
+		switch frmt.Kind {
 		case "json":
-			if schema, ok := frmt.(format.SchemaFormat); ok {
-				params.Text.Format.OfJSONSchema = &responses.ResponseFormatTextJSONSchemaConfigParam{
-					Name:   schema.Name(),
-					Schema: schema.Schema().(map[string]any),
+			if schema := frmt.Schema; schema != nil {
+				schemaMap, err := schemaToMap(schema)
+				if err != nil {
+					return responses.ResponseNewParams{}, fmt.Errorf("failed to convert response format schema (type %T) to JSON format: %w", schema, err)
 				}
-				if desc := schema.Description(); desc != "" {
+				params.Text.Format.OfJSONSchema = &responses.ResponseFormatTextJSONSchemaConfigParam{
+					Name:   frmt.Name,
+					Schema: schemaMap,
+				}
+				if desc := frmt.Description; desc != "" {
 					params.Text.Format.OfJSONSchema.Description = openai.String(desc)
 				}
-				if schema.Strict() {
+				if frmt.Strict {
 					params.Text.Format.OfJSONSchema.Strict = openai.Bool(true)
 				}
 			} else {
@@ -694,7 +707,22 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 	return resp, nil
 }
 
-func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func(*message.ResponseUpdate, error) bool) {
+func schemaToMap(schema any) (map[string]any, error) {
+	if schemaMap, ok := schema.(map[string]any); ok {
+		return schemaMap, nil
+	}
+	data, err := json.Marshal(schema)
+	if err != nil {
+		return nil, err
+	}
+	var schemaMap map[string]any
+	if err := json.Unmarshal(data, &schemaMap); err != nil {
+		return nil, err
+	}
+	return schemaMap, nil
+}
+
+func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func(*agent.ResponseUpdate, error) bool) {
 	var contToken string
 	if resp.Background {
 		// Returns a continuation token for in-progress or queued responses as they are not yet complete.
@@ -713,8 +741,9 @@ func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func
 		}
 	}
 
-	currentUpdate := &message.ResponseUpdate{
+	currentUpdate := &agent.ResponseUpdate{
 		ResponseID:           resp.ID,
+		FinishReason:         responsesFinishReason(resp),
 		CreatedAt:            time.Unix(int64(resp.CreatedAt), 0),
 		Role:                 message.RoleAssistant,
 		AdditionalProperties: responsesPopulateAdditionalProperties(resp),
@@ -731,10 +760,11 @@ func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func
 				if !yield(currentUpdate, nil) {
 					return
 				}
-				currentUpdate = &message.ResponseUpdate{}
+				currentUpdate = &agent.ResponseUpdate{}
 			}
 			currentUpdate.MessageID = out.ID
 			currentUpdate.ResponseID = resp.ID
+			currentUpdate.FinishReason = responsesFinishReason(resp)
 			// Only set ContinuationToken if it's not empty
 			if contToken != "" {
 				currentUpdate.ContinuationToken = contToken
@@ -849,6 +879,17 @@ func imageURIToMediaType(uri string) string {
 	}
 }
 
+func responsesFinishReason(resp *responses.Response) string {
+	switch resp.Status {
+	case responses.ResponseStatusCompleted:
+		return "stop"
+	case responses.ResponseStatusIncomplete:
+		return resp.IncompleteDetails.Reason
+	default:
+		return ""
+	}
+}
+
 // responsesUsageToContent converts a Response.Usage object to a UsageContent message
 func responsesUsageToContent(usage responses.ResponseUsage) *message.UsageContent {
 	if usage.InputTokens == 0 && usage.OutputTokens == 0 {
@@ -866,9 +907,9 @@ func responsesUsageToContent(usage responses.ResponseUsage) *message.UsageConten
 }
 
 // responsesProcessStreamingUpdate processes a streaming update from the Responses API
-func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, responseID string, isBackground bool) (*message.ResponseUpdate, error) {
-	createUpdate := func(role message.Role, contents []message.Content) *message.ResponseUpdate {
-		u := &message.ResponseUpdate{
+func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, responseID string, isBackground bool) (*agent.ResponseUpdate, error) {
+	createUpdate := func(role message.Role, contents []message.Content) *agent.ResponseUpdate {
+		u := &agent.ResponseUpdate{
 			Role:              role,
 			Contents:          contents,
 			ResponseID:        responseID,
@@ -878,7 +919,7 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 	}
 
 	// Handle different event types using AsAny()
-	var u *message.ResponseUpdate
+	var u *agent.ResponseUpdate
 	switch event := update.AsAny().(type) {
 	case responses.ResponseCreatedEvent:
 		u = createUpdate(message.RoleAssistant, nil)
@@ -911,10 +952,21 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 		u = createUpdate(message.RoleAssistant, nil)
 		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
 		u.ResponseID = event.Response.ID
+		u.FinishReason = responsesFinishReason(&event.Response)
 		u.AdditionalProperties = responsesPopulateAdditionalProperties(&event.Response)
 		// Add usage if present
 		if usage := responsesUsageToContent(event.Response.Usage); usage != nil {
 			u.Contents = []message.Content{usage}
+		}
+
+	case responses.ResponseIncompleteEvent:
+		u = createUpdate(message.RoleAssistant, nil)
+		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
+		u.ResponseID = event.Response.ID
+		u.FinishReason = responsesFinishReason(&event.Response)
+		u.AdditionalProperties = responsesPopulateAdditionalProperties(&event.Response)
+		if contToken := createContinuationToken(event.Response.ID, event.SequenceNumber, event.Response.Status, isBackground); contToken != "" {
+			u.ContinuationToken = contToken
 		}
 
 	case responses.ResponseTextDeltaEvent:
@@ -1095,13 +1147,4 @@ func createContinuationToken(responseID string, sequenceNumber int64, status res
 type continuationToken struct {
 	ResponseID     string `json:"response_id"`
 	SequenceNumber int64  `json:"sequence_number"`
-}
-
-func imageDetail(props map[string]any) string {
-	if detail, ok := props["detail"]; ok {
-		if v, ok := detail.(string); ok {
-			return v
-		}
-	}
-	return ""
 }

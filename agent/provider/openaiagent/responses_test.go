@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package openairesponsesagent_test
+package openaiagent_test
 
 import (
 	"encoding/json"
@@ -13,7 +13,8 @@ import (
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/provider/openairesponsesagent"
+	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
+	"github.com/microsoft/agent-framework-go/agent/provider/openaiagent"
 	"github.com/microsoft/agent-framework-go/internal/messagetest"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
@@ -38,7 +39,7 @@ func newTestResponsesServer(t *testing.T, input string, output string) *httptest
 		if err != nil {
 			t.Fatalf("failed reading request body: %v", err)
 		}
-		bodyEqual(t, string(body), input)
+		responsesBodyEqual(t, string(body), input)
 		w.Header().Set("Content-Type", "application/json")
 		if _, err := io.WriteString(w, output); err != nil {
 			t.Fatalf("failed writing response: %v", err)
@@ -53,7 +54,7 @@ func newTestResponsesServerStreaming(t *testing.T, input string, output string) 
 		if err != nil {
 			t.Fatalf("failed reading request body: %v", err)
 		}
-		bodyEqual(t, string(body), input)
+		responsesBodyEqual(t, string(body), input)
 		w.Header().Set("Content-Type", "text/event-stream")
 		if _, err := io.WriteString(w, output); err != nil {
 			t.Fatalf("failed writing response: %v", err)
@@ -62,9 +63,9 @@ func newTestResponsesServerStreaming(t *testing.T, input string, output string) 
 }
 
 func newTestResponsesClient(server *httptest.Server, model string) *agent.Agent {
-	return openairesponsesagent.New(
+	return openaiagent.NewResponses(
 		openai.NewClient(option.WithBaseURL(server.URL)),
-		openairesponsesagent.Config{
+		openaiagent.Config{
 			Model:  model,
 			Config: agent.Config{DisableFuncAutoCall: true},
 		},
@@ -169,7 +170,7 @@ func TestResponsesBasicRequestResponse_NonStreaming(t *testing.T) {
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
 	resp, err := a.RunText(t.Context(), "hello",
-		openairesponsesagent.ResponsesNewParams(responses.ResponseNewParams{
+		openaiagent.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
 		}),
@@ -259,9 +260,9 @@ data: {"type":"response.completed","response":{"id":"resp_67d329fbc87c81919f8952
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
-		openairesponsesagent.ResponsesNewParams(responses.ResponseNewParams{
+		openaiagent.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
 		}),
@@ -438,7 +439,7 @@ data: {"type":"response.completed","sequence_number":29,"response":{"id":"resp_6
 
 	a := newTestResponsesClient(server, "o4-mini")
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "Calculate the sum of the first 5 positive integers.", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
@@ -553,7 +554,7 @@ func TestResponsesChatOptions_Model_OverridesClientModel_NonStreaming(t *testing
 
 	// Override with gpt-4o in options
 	resp, err := a.RunText(t.Context(), "hello",
-		openairesponsesagent.ResponsesNewParams(responses.ResponseNewParams{
+		openaiagent.ResponsesNewParams(responses.ResponseNewParams{
 			Model:           "gpt-4o",
 			MaxOutputTokens: openai.Int(10),
 			Temperature:     openai.Float(0.5),
@@ -655,7 +656,7 @@ func TestResponsesMultipleMessages_NonStreaming(t *testing.T) {
 	}
 
 	resp, err := a.Run(t.Context(), messages,
-		openairesponsesagent.ResponsesNewParams(responses.ResponseNewParams{
+		openaiagent.ResponsesNewParams(responses.ResponseNewParams{
 			Temperature: openai.Float(0.25),
 		}),
 	).Collect()
@@ -845,7 +846,7 @@ data: {"type":"response.completed","sequence_number":14,"response":{"id":"resp_r
 
 	a := newTestResponsesClient(server, "o4-mini")
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "Solve this problem step by step.", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
@@ -972,10 +973,10 @@ data: {"type":"response.completed","response":{"id":"resp_streaming123","object"
 	// Create client with gpt-4o-mini model
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	// Override with gpt-4o in options
 	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
-		openairesponsesagent.ResponsesNewParams(responses.ResponseNewParams{
+		openaiagent.ResponsesNewParams(responses.ResponseNewParams{
 			Model:           "gpt-4o",
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
@@ -1103,7 +1104,7 @@ func TestResponsesMultipleOutputItems_NonStreaming(t *testing.T) {
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
 	resp, err := a.RunText(t.Context(), "hello",
-		openairesponsesagent.ResponsesNewParams(responses.ResponseNewParams{
+		openaiagent.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
 		}),
@@ -1736,9 +1737,46 @@ func TestResponsesNonStreamingResponseWithIncompleteReason_MapsFinishReason(t *t
 	if responseText != "Partial" {
 		t.Errorf("expected response text 'Partial', got %q", responseText)
 	}
+	if resp.FinishReason != "max_output_tokens" {
+		t.Errorf("expected FinishReason max_output_tokens, got %q", resp.FinishReason)
+	}
+}
 
-	// Note: The Go framework doesn't currently expose FinishReason like C# does
-	// This test validates that incomplete responses are still handled correctly
+func TestResponsesResponseFormatSchemaConvertsJSONSchema(t *testing.T) {
+	type payload struct {
+		Name string `json:"name"`
+	}
+	format, err := jsonformat.For[payload]()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}],
+                "text":{"format":{"type":"json_schema","name":"payload","schema":{"properties":{"name":{"type":"string"}},"type":"object","required":["name"],"additionalProperties":false},"strict":true}}
+            }
+            `
+
+	const output = `
+            {
+              "id":"resp_001",
+              "object":"response",
+              "created_at":1741892091,
+              "status":"completed",
+              "model":"gpt-4o-mini",
+              "output":[{"type":"message","id":"msg_001","status":"completed","role":"assistant","content":[{"type":"output_text","text":"{\"name\":\"Ada\"}","annotations":[]}]}]
+            }
+            `
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+	if _, err := a.RunText(t.Context(), "hello", agent.WithResponseFormat(format)).Collect(); err != nil {
+		t.Fatalf("error = %v", err)
+	}
 }
 
 func TestResponsesStreamingResponseWithQueuedUpdate_HandlesCorrectly(t *testing.T) {
@@ -1766,7 +1804,7 @@ data: {"type":"response.completed","response":{"id":"resp_001","object":"respons
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "test", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
@@ -1808,7 +1846,7 @@ data: {"type":"response.failed","response":{"id":"resp_001","object":"response",
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "test", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
@@ -1853,7 +1891,7 @@ data: {"type":"response.completed","response":{"id":"resp_001","object":"respons
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "test", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
@@ -1904,7 +1942,7 @@ data: {"type":"response.completed","response":{"id":"resp_001","object":"respons
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	var errorMessages []string
 	for update, err := range a.RunText(t.Context(), "harmful request", agent.Stream(true)) {
 		if err != nil {
@@ -2099,7 +2137,7 @@ data: {"type":"response.completed","response":{"id":"resp_002","object":"respons
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	var allText strings.Builder
 	for update, err := range a.RunText(t.Context(), "Calculate 3+3", agent.Stream(true),
 		agent.WithTool(&hostedtool.CodeInterpreter{}),
@@ -2154,7 +2192,7 @@ data: {"type":"response.incomplete","response":{"id":"resp_001","object":"respon
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "test", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
@@ -2262,7 +2300,7 @@ data: {"type":"response.failed","sequence_number":2,"response":{"id":"resp_001",
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "test", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
@@ -2271,7 +2309,7 @@ data: {"type":"response.failed","sequence_number":2,"response":{"id":"resp_001",
 	}
 
 	// Find error update
-	var errorUpdate *message.ResponseUpdate
+	var errorUpdate *agent.ResponseUpdate
 	for _, update := range updates {
 		for _, content := range update.Contents {
 			if _, ok := content.(*message.ErrorContent); ok {
@@ -2464,7 +2502,7 @@ data: {"type":"response.completed","response":{"id":"resp_001","object":"respons
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "test", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
@@ -2473,7 +2511,7 @@ data: {"type":"response.completed","response":{"id":"resp_001","object":"respons
 	}
 
 	// Find an update with annotations
-	var annotatedUpdate *message.ResponseUpdate
+	var annotatedUpdate *agent.ResponseUpdate
 	for _, update := range updates {
 		for _, content := range update.Contents {
 			if tc, ok := content.(*message.TextContent); ok {
@@ -2824,7 +2862,7 @@ data: {"type":"response.failed","sequence_number":2,"response":{"id":"resp_002",
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	var streamErr error
 	for update, err := range a.RunText(t.Context(), "test", agent.Stream(true)) {
 		if err != nil {
@@ -2876,7 +2914,7 @@ data: {"type":"response.failed","sequence_number":2,"response":{"id":"resp_003",
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "test", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
@@ -2885,7 +2923,7 @@ data: {"type":"response.failed","sequence_number":2,"response":{"id":"resp_003",
 	}
 
 	// Find error update with empty error information
-	var errorUpdate *message.ResponseUpdate
+	var errorUpdate *agent.ResponseUpdate
 	for _, update := range updates {
 		for _, content := range update.Contents {
 			if _, ok := content.(*message.ErrorContent); ok {
@@ -3938,7 +3976,7 @@ func TestResponsesConversationId_AsResponseId_NonStreaming(t *testing.T) {
 	}
 
 	_, err = a.RunText(t.Context(), "hello",
-		openairesponsesagent.ResponsesNewParams(responses.ResponseNewParams{
+		openaiagent.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
 		}),
@@ -4004,7 +4042,7 @@ func TestResponsesConversationId_AsConversationId_NonStreaming(t *testing.T) {
 	}
 
 	_, err = a.RunText(t.Context(), "hello",
-		openairesponsesagent.ResponsesNewParams(responses.ResponseNewParams{
+		openaiagent.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
 		}),
@@ -4074,9 +4112,9 @@ data: {"type":"response.completed","response":{"id":"resp_67890","object":"respo
 		t.Fatal(err)
 	}
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
-		openairesponsesagent.ResponsesNewParams(responses.ResponseNewParams{
+		openaiagent.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
 		}),
@@ -4153,9 +4191,9 @@ data: {"type":"response.completed","response":{"id":"resp_67890","object":"respo
 		t.Fatal(err)
 	}
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
-		openairesponsesagent.ResponsesNewParams(responses.ResponseNewParams{
+		openaiagent.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
 		}),
@@ -4215,7 +4253,7 @@ func TestResponsesBackgroundResponses_FirstCall(t *testing.T) {
 	}
 
 	resp, err := a.RunText(t.Context(), "hello",
-		openairesponsesagent.ResponsesNewParams(responses.ResponseNewParams{
+		openaiagent.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
 		}),
@@ -4430,7 +4468,7 @@ data: {"type":"response.completed","sequence_number":17,"response":{"id":"resp_6
 		t.Fatal(err)
 	}
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	var allText strings.Builder
 	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
 		agent.AllowBackgroundResponses(true),
@@ -4541,7 +4579,7 @@ data: {"type":"response.completed","sequence_number":17,"response":{"truncation"
 		t.Fatal(err)
 	}
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.Run(t.Context(), []*message.Message{}, agent.Stream(true),
 		agent.AllowBackgroundResponses(true),
 		agent.WithContinuationToken(token),
@@ -4825,7 +4863,7 @@ func TestResponsesMultipleRequiredFunctions(t *testing.T) {
 	}
 }
 
-func bodyEqual(t *testing.T, got string, want string) {
+func responsesBodyEqual(t *testing.T, got string, want string) {
 	t.Helper()
 	var gotObj any
 	if err := json.Unmarshal([]byte(got), &gotObj); err != nil {

@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package openaichatagent_test
+package openaiagent_test
 
 import (
 	"encoding/json"
@@ -12,7 +12,8 @@ import (
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
+	"github.com/microsoft/agent-framework-go/agent/provider/openaiagent"
+	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/internal/messagetest"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
@@ -60,9 +61,9 @@ func newTestServer(t *testing.T, input string, output string) *httptest.Server {
 }
 
 func newTestClient(server *httptest.Server) *agent.Agent {
-	return openaichatagent.New(
+	return openaiagent.NewChatCompletions(
 		openai.NewClient(option.WithBaseURL(server.URL)),
-		openaichatagent.Config{
+		openaiagent.Config{
 			Model:  "gpt-4o-mini",
 			Config: agent.Config{DisableFuncAutoCall: true},
 		},
@@ -144,7 +145,7 @@ func TestChatBasicRequestResponse_NonStreaming(t *testing.T) {
 	a := newTestClient(server)
 
 	resp, err := a.RunText(t.Context(), "hello",
-		openaichatagent.ChatCompletionNewParams(openai.ChatCompletionNewParams{
+		openaiagent.ChatCompletionNewParams(openai.ChatCompletionNewParams{
 			MaxCompletionTokens: openai.Int(10),
 			Temperature:         openai.Float(0.5),
 		}),
@@ -154,6 +155,9 @@ func TestChatBasicRequestResponse_NonStreaming(t *testing.T) {
 	}
 	if err := messagetest.MessagesEqual(resp.Messages, want); err != nil {
 		t.Error(err)
+	}
+	if resp.FinishReason != "stop" {
+		t.Errorf("expected FinishReason stop, got %q", resp.FinishReason)
 	}
 }
 
@@ -212,7 +216,7 @@ data: [DONE]
 
 	msgID := "chatcmpl-ADxFKtX6xIwdWRN42QvBj2u1RZpCK"
 	createdAt := time.Unix(1727889370, 0)
-	want := []*message.ResponseUpdate{
+	want := []*agent.ResponseUpdate{
 		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt},
 		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt, Contents: []message.Content{&message.TextContent{Text: "Hello"}}},
 		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt, Contents: []message.Content{&message.TextContent{Text: "!"}}},
@@ -223,7 +227,7 @@ data: [DONE]
 		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt, Contents: []message.Content{&message.TextContent{Text: " you"}}},
 		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt, Contents: []message.Content{&message.TextContent{Text: " today"}}},
 		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt, Contents: []message.Content{&message.TextContent{Text: "?"}}},
-		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt},
+		{MessageID: msgID, ResponseID: msgID, FinishReason: "stop", Role: message.RoleAssistant, CreatedAt: createdAt},
 		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt, Contents: []message.Content{&message.UsageContent{Details: message.UsageDetails{
 			InputTokenCount:       8,
 			OutputTokenCount:      9,
@@ -244,8 +248,8 @@ data: [DONE]
 
 	a := newTestClient(server)
 
-	var updates []*message.ResponseUpdate
-	for update, err := range a.RunText(t.Context(), "hello", openaichatagent.ChatCompletionNewParams(openai.ChatCompletionNewParams{
+	var updates []*agent.ResponseUpdate
+	for update, err := range a.RunText(t.Context(), "hello", openaiagent.ChatCompletionNewParams(openai.ChatCompletionNewParams{
 		MaxCompletionTokens: openai.Int(20),
 		Temperature:         openai.Float(0.5),
 	}), agent.Stream(true)) {
@@ -254,7 +258,7 @@ data: [DONE]
 		}
 		updates = append(updates, update)
 	}
-	if err := messagetest.ResponseUpdatesEqual(updates, want); err != nil {
+	if err := agenttest.ResponseUpdatesEqual(updates, want); err != nil {
 		t.Error(err)
 	}
 }
@@ -363,7 +367,7 @@ func TestChatMultipleMessages_NonStreaming(t *testing.T) {
 	}
 
 	resp, err := a.Run(t.Context(), messages,
-		openaichatagent.ChatCompletionNewParams(openai.ChatCompletionNewParams{
+		openaiagent.ChatCompletionNewParams(openai.ChatCompletionNewParams{
 			Temperature:      openai.Float(0.25),
 			FrequencyPenalty: openai.Float(0.75),
 			PresencePenalty:  openai.Float(0.5),
@@ -785,7 +789,7 @@ data: [DONE]
 	msgID := "chatcmpl-ADymNiWWeqCJqHNFXiI1QtRcLuXcl"
 	callID := "call_F9ZaqPWo69u0urxAhVt8meDW"
 	createdAt := time.Unix(1727895263, 0)
-	want := []*message.ResponseUpdate{
+	want := []*agent.ResponseUpdate{
 		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt},
 		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt},
 		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt},
@@ -793,7 +797,7 @@ data: [DONE]
 		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt},
 		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt},
 		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt},
-		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt, Contents: []message.Content{
+		{MessageID: msgID, ResponseID: msgID, FinishReason: "tool_calls", Role: message.RoleAssistant, CreatedAt: createdAt, Contents: []message.Content{
 			&message.FunctionCallContent{CallID: callID, Name: "GetPersonAge", Arguments: `{"personName":"Alice"}`},
 		}},
 		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt, Contents: []message.Content{
@@ -829,14 +833,14 @@ data: [DONE]
 		Description: "Gets the age of the specified person.",
 	}, getPersonAge)
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	for update, err := range a.RunText(t.Context(), "How old is Alice?", agent.WithTool(tool), agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
 		}
 		updates = append(updates, update)
 	}
-	if err := messagetest.ResponseUpdatesEqual(updates, want); err != nil {
+	if err := agenttest.ResponseUpdatesEqual(updates, want); err != nil {
 		t.Error(err)
 	}
 }
@@ -1030,7 +1034,7 @@ func TestChatOptions_Model_OverridesClientModel_NonStreaming(t *testing.T) {
 
 	// Override with gpt-4o in options
 	resp, err := a.RunText(t.Context(), "hello",
-		openaichatagent.ChatCompletionNewParams(openai.ChatCompletionNewParams{
+		openaiagent.ChatCompletionNewParams(openai.ChatCompletionNewParams{
 			Model:               "gpt-4o",
 			MaxCompletionTokens: openai.Int(10),
 			Temperature:         openai.Float(0.5),
@@ -1079,10 +1083,10 @@ data: [DONE]
 	// Create client with gpt-4o-mini model
 	a := newTestClient(server)
 
-	var updates []*message.ResponseUpdate
+	var updates []*agent.ResponseUpdate
 	// Override with gpt-4o in options
 	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
-		openaichatagent.ChatCompletionNewParams(openai.ChatCompletionNewParams{
+		openaiagent.ChatCompletionNewParams(openai.ChatCompletionNewParams{
 			Model:               "gpt-4o",
 			MaxCompletionTokens: openai.Int(20),
 			Temperature:         openai.Float(0.5),

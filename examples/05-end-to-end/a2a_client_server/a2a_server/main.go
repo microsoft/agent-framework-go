@@ -17,7 +17,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/hosting/a2ahosting"
-	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
+	"github.com/microsoft/agent-framework-go/agent/provider/openaiagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
@@ -120,7 +120,7 @@ func main() {
 
 	cfg, card := buildAgent(*agentType, deployment)
 	cfg.Middlewares = append(cfg.Middlewares, logger)
-	hostAgent := openaichatagent.New(oclient, cfg)
+	hostAgent := openaiagent.NewChatCompletions(oclient, cfg)
 
 	card.SupportedInterfaces = []*a2a.AgentInterface{
 		a2a.NewAgentInterface(url, a2a.TransportProtocolJSONRPC),
@@ -137,9 +137,9 @@ func main() {
 	}
 }
 
-func buildAgent(agentType, model string) (openaichatagent.Config, *a2a.AgentCard) {
+func buildAgent(agentType, model string) (openaiagent.Config, *a2a.AgentCard) {
 	t := strings.ToUpper(strings.TrimSpace(agentType))
-	cfg := openaichatagent.Config{Model: model}
+	cfg := openaiagent.Config{Model: model}
 	card := &a2a.AgentCard{
 		Version:            "1.0.0",
 		DefaultInputModes:  []string{"text"},

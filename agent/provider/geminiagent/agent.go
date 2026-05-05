@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"iter"
 	"reflect"
+	"slices"
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/format"
-	"github.com/microsoft/agent-framework-go/format/jsonformat"
+	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
+	"github.com/microsoft/agent-framework-go/agent/middleware/autocall"
+	"github.com/microsoft/agent-framework-go/agent/middleware/structuredoutput"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"google.golang.org/genai"
@@ -46,26 +48,39 @@ func New(gclient *genai.Client, config Config) *agent.Agent {
 		client: gclient,
 		config: config,
 	}
+	config.Middlewares = slices.Clone(config.Middlewares)
+	if !config.DisableFuncAutoCall {
+		config.Middlewares = append(config.Middlewares, autocall.New(autocall.Config{
+			Logger:           config.Logger,
+			LogSensitiveData: config.LogSensitiveData,
+		}))
+	}
+	config.Middlewares = append(config.Middlewares, structuredoutput.New(structuredoutput.Config{
+		Format:    c.formatOf,
+		Unmarshal: c.unmarshal,
+	}))
 	return agent.New(agent.ProviderConfig{
 		Run:          c.run,
 		ProviderName: "gemini",
-		FormatOfFn:   c.formatOf,
-		UnmarshalFn:  c.unmarshal,
 	}, config.Config)
 }
 
-func (a *client) formatOf(v any) (format.Format, error) {
+func (a *client) formatOf(v any) (agent.ResponseFormat, error) {
 	return jsonformat.ForType(reflect.TypeOf(v))
 }
 
-func (a *client) unmarshal(f format.Format, data []byte, v any) error {
-	return f.(*jsonformat.Format).Unmarshal(data, v)
+func (a *client) unmarshal(f agent.ResponseFormat, data []byte, v any) error {
+	format, err := jsonformat.FromResponseFormat(f)
+	if err != nil {
+		return err
+	}
+	return format.Unmarshal(data, v)
 }
 
-func (a *client) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*message.ResponseUpdate, error] {
+func (a *client) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 	contents, cfg, err := a.buildParams(messages, options)
 	if err != nil {
-		return func(yield func(*message.ResponseUpdate, error) bool) {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			yield(nil, err)
 		}
 	}
@@ -73,7 +88,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 	if stream, _ := agent.GetOption(options, agent.Stream); !stream {
 		resp, err := a.client.Models.GenerateContent(ctx, a.config.Model, contents, cfg)
 		if err != nil {
-			return func(yield func(*message.ResponseUpdate, error) bool) {
+			return func(yield func(*agent.ResponseUpdate, error) bool) {
 				yield(nil, err)
 			}
 		}
@@ -84,7 +99,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				for _, part := range cand.Content.Parts {
 					responseContents, err = buildResponsePart(part, responseContents)
 					if err != nil {
-						return func(yield func(*message.ResponseUpdate, error) bool) {
+						return func(yield func(*agent.ResponseUpdate, error) bool) {
 							yield(nil, err)
 						}
 					}
@@ -96,8 +111,8 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				Details: toUsageDetails(resp.UsageMetadata),
 			})
 		}
-		return func(yield func(*message.ResponseUpdate, error) bool) {
-			yield(&message.ResponseUpdate{
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
 				Contents:          responseContents,
 				Role:              message.RoleAssistant,
 				CreatedAt:         time.Now(),
@@ -106,7 +121,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 		}
 	}
 
-	return func(yield func(*message.ResponseUpdate, error) bool) {
+	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		for resp, err := range a.client.Models.GenerateContentStream(ctx, a.config.Model, contents, cfg) {
 			if err != nil {
 				yield(nil, err)
@@ -130,7 +145,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 					Details: toUsageDetails(resp.UsageMetadata),
 				})
 			}
-			if !yield(&message.ResponseUpdate{
+			if !yield(&agent.ResponseUpdate{
 				Contents:          streamContents,
 				Role:              message.RoleAssistant,
 				CreatedAt:         time.Now(),
@@ -180,13 +195,11 @@ func (a *client) buildParams(messages []*message.Message, opts []agent.Option) (
 	}
 
 	// Apply structured output format.
-	if frmt, ok := agent.GetOption(opts, agent.WithResponseFormat); ok && frmt != nil {
-		if frmt.Kind() == "json" {
+	if frmt, ok := agent.GetOption(opts, agent.WithResponseFormat); ok {
+		if frmt.Kind == "json" {
 			cfg.ResponseMIMEType = "application/json"
-			if schemaFmt, ok := frmt.(format.SchemaFormat); ok {
-				if schema := schemaFmt.Schema(); schema != nil {
-					cfg.ResponseJsonSchema = schema
-				}
+			if schema := frmt.Schema; schema != nil {
+				cfg.ResponseJsonSchema = schema
 			}
 		}
 	}
