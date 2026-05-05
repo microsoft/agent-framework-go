@@ -98,11 +98,48 @@ func TestRunAsync_ExecutesWorkflow(t *testing.T) {
 	if len(events) == 0 {
 		t.Fatalf("expected events, got 0")
 	}
-	if !containsType[workflow.ResponseUpdateEvent](events) {
-		t.Errorf("expected at least one ResponseUpdateEvent")
+	if !containsOutputPayloadType[*agent.ResponseUpdate](events) {
+		t.Errorf("expected at least one OutputEvent carrying *agent.ResponseUpdate")
 	}
-	if !containsType[workflow.ResponseEvent](events) {
-		t.Errorf("expected at least one ResponseEvent")
+	if !containsOutputPayloadType[*agent.Response](events) {
+		t.Errorf("expected at least one OutputEvent carrying *agent.Response")
+	}
+}
+
+func TestWorkflowBuilderWithHostedAgentsEmitsOutputEventWithoutWithOutputFrom(t *testing.T) {
+	agent1 := workflowhosting.New(newEchoAgent("agent-1"), workflowhosting.Config{})
+	agent2 := workflowhosting.New(newEchoAgent("agent-2"), workflowhosting.Config{})
+	wf, err := workflow.NewBuilder(agent1).
+		AddEdge(agent1, agent2).
+		Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	ctx := context.Background()
+	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer func() { _ = stream.CancelRun() }()
+
+	sendStreamMessage(t, stream, ctx, []*message.Message{{
+		Role:     message.RoleUser,
+		Contents: []message.Content{&message.TextContent{Text: "Hello"}},
+	}})
+	emit := true
+	sendStreamMessage(t, stream, ctx, workflow.TurnToken{EmitEvents: &emit})
+
+	var events []workflow.Event
+	for evt, err := range stream.WatchStream(ctx) {
+		if err != nil {
+			t.Fatalf("watch: %v", err)
+		}
+		events = append(events, evt)
+	}
+
+	if !containsOutputPayloadType[*agent.ResponseUpdate](events) {
+		t.Fatalf("expected at least one OutputEvent carrying *agent.ResponseUpdate")
 	}
 }
 
@@ -139,11 +176,11 @@ func TestStreamAsync_ExecutesWorkflowWithTurnToken(t *testing.T) {
 	if status != inproc.RunStatusIdle {
 		t.Errorf("status = %v, want Idle", status)
 	}
-	if !containsType[workflow.ResponseUpdateEvent](events) {
-		t.Errorf("expected at least one ResponseUpdateEvent")
+	if !containsOutputPayloadType[*agent.ResponseUpdate](events) {
+		t.Errorf("expected at least one OutputEvent carrying *agent.ResponseUpdate")
 	}
-	if !containsType[workflow.ResponseEvent](events) {
-		t.Errorf("expected at least one ResponseEvent")
+	if !containsOutputPayloadType[*agent.Response](events) {
+		t.Errorf("expected at least one OutputEvent carrying *agent.Response")
 	}
 }
 
@@ -187,7 +224,7 @@ func TestRunAsyncAndStreamAsync_ProduceSimilarResults(t *testing.T) {
 	if len(nonStreamingEvents) == 0 {
 		t.Fatalf("non-streaming version produced no events")
 	}
-	if got, want := countType[workflow.ResponseUpdateEvent](nonStreamingEvents), countType[workflow.ResponseUpdateEvent](streamingEvents); got != want {
+	if got, want := countOutputPayloadType[*agent.ResponseUpdate](nonStreamingEvents), countOutputPayloadType[*agent.ResponseUpdate](streamingEvents); got != want {
 		t.Errorf("agent update count: non-streaming=%d, streaming=%d", got, want)
 	}
 }
@@ -241,26 +278,25 @@ func TestRunStreamingAsync_StatusReachesIdleBeforeWatch(t *testing.T) {
 	if len(events) == 0 {
 		t.Fatalf("expected events even after run reached Idle, got 0")
 	}
-	if !containsType[workflow.ResponseUpdateEvent](events) {
-		t.Errorf("expected at least one ResponseUpdateEvent")
+	if !containsOutputPayloadType[*agent.ResponseUpdate](events) {
+		t.Errorf("expected at least one OutputEvent carrying *agent.ResponseUpdate")
 	}
 }
 
-// containsType reports whether any element of events is of type T.
-func containsType[T any](events []workflow.Event) bool {
-	for _, e := range events {
-		if _, ok := e.(T); ok {
-			return true
-		}
-	}
-	return false
+// containsOutputPayloadType reports whether any OutputEvent has payload type T.
+func containsOutputPayloadType[T any](events []workflow.Event) bool {
+	return countOutputPayloadType[T](events) > 0
 }
 
-// countType returns the number of events of type T in events.
-func countType[T any](events []workflow.Event) int {
+// countOutputPayloadType returns the number of OutputEvents with payload type T.
+func countOutputPayloadType[T any](events []workflow.Event) int {
 	n := 0
 	for _, e := range events {
-		if _, ok := e.(T); ok {
+		out, ok := e.(workflow.OutputEvent)
+		if !ok {
+			continue
+		}
+		if _, ok := out.Output.(T); ok {
 			n++
 		}
 	}

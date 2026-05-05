@@ -29,13 +29,13 @@ const (
 // Config configures how an [agent.Agent] is hosted as a workflow
 // [workflow.Executor].
 type Config struct {
-	// EmitUpdateEvents controls whether streaming [workflow.ResponseUpdateEvent]s
+	// EmitUpdateEvents controls whether streaming [agent.ResponseUpdate] outputs
 	// are emitted as the agent runs. A [workflow.TurnToken] with
 	// [workflow.TurnToken.EmitEvents] set overrides this default for that turn.
 	EmitUpdateEvents bool
 
-	// EmitResponseEvents controls whether an aggregated [workflow.ResponseEvent]
-	// is emitted at the end of each turn.
+	// EmitResponseEvents controls whether an aggregated [agent.Response] output is
+	// emitted at the end of each turn.
 	EmitResponseEvents bool
 
 	// DisableMessageForwarding disables forwarding of incoming messages
@@ -442,7 +442,7 @@ func (h *hostExecutor) runAgentAndDispatch(wctx *workflow.Context) error {
 			return err
 		}
 		if emitUpdates {
-			if err := wctx.AddEvent(workflow.ResponseUpdateEvent{ExecutorID: h.id, Update: update}); err != nil {
+			if err := wctx.AddEvent(workflow.OutputEvent{ExecutorID: h.id, Output: update}); err != nil {
 				return err
 			}
 		}
@@ -458,7 +458,7 @@ func (h *hostExecutor) runAgentAndDispatch(wctx *workflow.Context) error {
 	}
 
 	if h.cfg.EmitResponseEvents {
-		if err := wctx.AddEvent(workflow.ResponseEvent{ExecutorID: h.id, Response: &resp}); err != nil {
+		if err := wctx.AddEvent(workflow.OutputEvent{ExecutorID: h.id, Output: &resp}); err != nil {
 			return err
 		}
 	}

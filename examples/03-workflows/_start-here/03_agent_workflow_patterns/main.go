@@ -53,10 +53,12 @@ func main() {
 			demo.Panic(err)
 		}
 		switch e := evt.(type) {
-		case workflow.ResponseUpdateEvent:
-			demo.Assistantf("%s: %s", e.ExecutorID, e.Update.String())
 		case workflow.OutputEvent:
-			demo.Assistantf("Output: %v", e.Output)
+			if update, ok := e.Output.(*agent.ResponseUpdate); ok {
+				demo.Assistantf("%s: %s", e.ExecutorID, update.String())
+			} else {
+				demo.Assistantf("Output: %v", e.Output)
+			}
 		}
 	}
 }

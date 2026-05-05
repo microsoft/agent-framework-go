@@ -65,8 +65,10 @@ func main() {
 		if err != nil {
 			demo.Panic(err)
 		}
-		if update, ok := evt.(workflow.ResponseUpdateEvent); ok {
-			demo.Assistantf("%s: %s", update.ExecutorID, update.Update.String())
+		if out, ok := evt.(workflow.OutputEvent); ok {
+			if update, ok := out.Output.(*agent.ResponseUpdate); ok {
+				demo.Assistantf("%s: %s", out.ExecutorID, update.String())
+			}
 		}
 	}
 }
