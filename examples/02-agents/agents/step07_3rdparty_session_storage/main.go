@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"iter"
 	"os"
 	"path/filepath"
 	"slices"
@@ -52,12 +51,10 @@ func main() {
 		openaiagent.Config{
 			Model: deployment,
 			Config: agent.Config{
-				Instructions: "You are good at telling jokes.",
-				Name:         "Joker",
-				Middlewares: []agent.Middleware{
-					logger,                       // for logging agent interactions
-					&fsMessageStore{Dir: tmpDir}, // for persistent message history
-				},
+				Instructions:    "You are good at telling jokes.",
+				Name:            "Joker",
+				HistoryProvider: newFSHistoryProvider(tmpDir),
+				Middlewares:     []agent.Middleware{logger}, // for logging agent interactions
 			},
 		},
 	)
@@ -77,7 +74,7 @@ func main() {
 	// Serialize the session state, so it can be stored for later use.
 	// The disk store holds the chat history.
 	// The serialized session only contains the message-store ID.
-	serializedSession, err := json.MarshalIndent(session, "", "\t")
+	serializedSession, err := a.MarshalSession(ctx, session)
 	if err != nil {
 		demo.Panic(err)
 	}
@@ -99,6 +96,15 @@ func main() {
 
 type fsMessageStore struct {
 	Dir string
+}
+
+func newFSHistoryProvider(dir string) *agent.HistoryProvider {
+	store := &fsMessageStore{Dir: dir}
+	return &agent.HistoryProvider{
+		SourceID: "fsMessageStore",
+		Provide:  store.provideMessages,
+		Store:    store.persistMessages,
+	}
 }
 
 func (d *fsMessageStore) getFiles(session agent.Session) []string {
@@ -130,7 +136,29 @@ func (d *fsMessageStore) loadMessages(session agent.Session) ([]*message.Message
 	return msgs, nil
 }
 
-func (d *fsMessageStore) persistMessages(session agent.Session, requestMessages, responseMessages []*message.Message) error {
+func (d *fsMessageStore) provideMessages(_ context.Context, msgs []*message.Message, opts ...agent.Option) ([]*message.Message, error) {
+	session, _ := agent.GetOption(opts, agent.WithSession)
+	if session == nil {
+		return msgs, nil
+	}
+	history, err := d.loadMessages(session)
+	if err != nil {
+		return nil, err
+	}
+	if len(history) == 0 {
+		return msgs, nil
+	}
+	messages := make([]*message.Message, 0, len(history)+len(msgs))
+	messages = append(messages, history...)
+	messages = append(messages, msgs...)
+	return messages, nil
+}
+
+func (d *fsMessageStore) persistMessages(_ context.Context, requestMessages, responseMessages []*message.Message, opts ...agent.Option) error {
+	session, _ := agent.GetOption(opts, agent.WithSession)
+	if session == nil {
+		return nil
+	}
 	var files []string
 	_, _ = session.Get("fsMessageStore.files", &files)
 	persist := func(msg *message.Message) error {
@@ -163,39 +191,4 @@ func (d *fsMessageStore) persistMessages(session agent.Session, requestMessages,
 	}
 	session.Set("fsMessageStore.files", files)
 	return nil
-}
-
-func (d *fsMessageStore) Run(next agent.RunFunc, ctx context.Context, msgs []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
-	var session agent.Session
-	if v, ok := agent.GetOption(opts, agent.WithSession); ok {
-		session = v
-	} else {
-		// If no session is provided, we cannot persist messages, so just pass through to next middleware.
-		return next(ctx, msgs, opts...)
-	}
-	history, err := d.loadMessages(session)
-	if err != nil {
-		return func(yield func(*agent.ResponseUpdate, error) bool) {
-			yield(nil, err)
-		}
-	}
-	messagesForClient := append(history, msgs...)
-
-	return func(yield func(*agent.ResponseUpdate, error) bool) {
-		var resp agent.Response
-		for update, err := range next(ctx, messagesForClient, opts...) {
-			if err != nil {
-				yield(nil, err)
-				return
-			}
-			resp.Update(update)
-			if !yield(update, nil) {
-				return
-			}
-		}
-		resp.Coalesce()
-		if err := d.persistMessages(session, msgs, resp.Messages); err != nil {
-			yield(nil, err)
-		}
-	}
 }

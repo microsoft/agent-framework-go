@@ -104,7 +104,6 @@ Help the user look up prices and compare products.
 When responding, be extra descriptive and use as many words as possible without sounding ridiculous.`,
 				Name: "ShoppingAssistant",
 				ContextProviders: []*agent.ContextProvider{
-					agent.NewInMemoryHistoryProvider(""),
 					compaction.NewContextProvider(compaction.ContextProviderConfig{
 						Strategy: compactionPipeline,
 						Logger:   slog.New(logger),

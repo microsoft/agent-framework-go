@@ -45,6 +45,10 @@ type Config struct {
 	// Instructions are prepended as a system message for each non-continuation run.
 	Instructions string
 
+	// HistoryProvider injects and persists conversation history around each agent run.
+	// When nil, New uses a default in-memory history provider for local sessions.
+	HistoryProvider *HistoryProvider
+
 	// ContextProviders inject and persist context around each agent run.
 	ContextProviders []*ContextProvider
 
@@ -89,8 +93,14 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 		}
 	}
 	prefixedMiddlewares := make([]Middleware, 0, 2)
-	if len(providers) == 0 {
-		prefixedMiddlewares = append(prefixedMiddlewares, defaultLocalHistoryMiddleware())
+	historyProvider := cfg.HistoryProvider
+	var useDefaultHistoryHeuristics bool
+	if historyProvider == nil {
+		historyProvider = NewInMemoryHistoryProvider("")
+		useDefaultHistoryHeuristics = true
+	}
+	if historyProvider != nil {
+		prefixedMiddlewares = append(prefixedMiddlewares, newHistoryProviderMiddleware(historyProvider, useDefaultHistoryHeuristics))
 	}
 	if len(providers) > 0 {
 		prefixedMiddlewares = append(prefixedMiddlewares, newContextProviderMiddleware(providers...))
@@ -257,25 +267,6 @@ func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, opt
 	ctx = context.WithValue(ctx, agentKey{}, a)
 
 	return ctx, messages, options, nil
-}
-
-// defaultLocalHistoryMiddleware attaches an in-memory history provider for local
-// sessions so multi-turn runs keep prior messages without requiring explicit
-// configuration. New prepends it only when Config.ContextProviders is empty.
-// It is bypassed for auto-created sessions on the first run, service-managed
-// sessions, and continuation-token resumes.
-func defaultLocalHistoryMiddleware() Middleware {
-	history := newContextProviderMiddleware(NewInMemoryHistoryProvider(""))
-
-	return MiddlewareFunc(func(next RunFunc, ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error] {
-		session, _ := GetOption(options, WithSession)
-		noSession, _ := GetOption(options, noSessionProvided)
-		contToken, _ := GetOption(options, WithContinuationToken)
-		if noSession || contToken != "" || session == nil || session.ServiceID() != "" {
-			return next(ctx, messages, options...)
-		}
-		return history.Run(next, ctx, messages, options...)
-	})
 }
 
 func authorMiddleware(id, name string) Middleware {

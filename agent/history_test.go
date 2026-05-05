@@ -26,7 +26,7 @@ func TestNewInMemoryHistoryProvider_DefaultConfig_RoundTripsHistory(t *testing.T
 	}
 
 	newRequest := message.NewText("new request")
-	messages, _, err := provider.BeforeRun(t.Context(), []*message.Message{newRequest}, agent.WithSession(session))
+	messages, err := provider.BeforeRun(t.Context(), []*message.Message{newRequest}, agent.WithSession(session))
 	if err != nil {
 		t.Fatalf("unexpected error loading history: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestNewInMemoryHistoryProvider_DefaultConfig_RoundTripsHistory(t *testing.T
 	if err := provider.AfterRun(t.Context(), messages, []*message.Message{newResponse}, agent.WithSession(session)); err != nil {
 		t.Fatalf("unexpected error storing next turn: %v", err)
 	}
-	messages, _, err = provider.BeforeRun(t.Context(), nil, agent.WithSession(session))
+	messages, err = provider.BeforeRun(t.Context(), nil, agent.WithSession(session))
 	if err != nil {
 		t.Fatalf("unexpected error loading updated history: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestNewInMemoryHistoryProvider_DefaultConfig_RoundTripsHistory(t *testing.T
 	}
 }
 
-func TestNewInMemoryHistoryProvider_ProvidePrependsHistory(t *testing.T) {
+func TestNewInMemoryHistoryProvider_ProvidePassesOriginalMessages(t *testing.T) {
 	provider := agent.NewInMemoryHistoryProvider("InMemoryHistoryProvider")
 	session := agenttest.CreateSession()
 	request := message.NewText("request")
@@ -70,7 +70,7 @@ func TestNewInMemoryHistoryProvider_ProvidePrependsHistory(t *testing.T) {
 	}
 
 	newRequest := message.NewText("new request")
-	messages, options, err := provider.Provide(t.Context(), []*message.Message{newRequest}, agent.WithSession(session))
+	messages, err := provider.Provide(t.Context(), []*message.Message{newRequest}, agent.WithSession(session))
 	if err != nil {
 		t.Fatalf("unexpected error loading history: %v", err)
 	}
@@ -83,8 +83,21 @@ func TestNewInMemoryHistoryProvider_ProvidePrependsHistory(t *testing.T) {
 	if messages[0].String() != "request" || messages[1].String() != "response" {
 		t.Fatalf("unexpected output order/content")
 	}
-	if gotSession, ok := agent.GetOption(options, agent.WithSession); !ok || gotSession != session {
-		t.Fatal("expected original session option to be preserved")
+	messages, err = provider.BeforeRun(t.Context(), []*message.Message{newRequest}, agent.WithSession(session))
+	if err != nil {
+		t.Fatalf("unexpected error loading history: %v", err)
+	}
+	if len(messages) != 3 {
+		t.Fatalf("expected 2 history messages plus request, got %d", len(messages))
+	}
+	if messages[2] != newRequest {
+		t.Fatal("expected original request message to be preserved last")
+	}
+	if messages[0].String() != "request" || messages[1].String() != "response" {
+		t.Fatalf("unexpected output order/content")
+	}
+	if messages[0].SourceID != "InMemoryHistoryProvider" || messages[1].SourceID != "InMemoryHistoryProvider" {
+		t.Fatal("expected history messages to have provider source ID")
 	}
 }
 
@@ -101,7 +114,7 @@ func TestNewInMemoryHistoryProvider_SourceID_MapsToSessionStateKey(t *testing.T)
 	}
 
 	provider := agent.NewInMemoryHistoryProvider("custom")
-	messages, _, err := provider.BeforeRun(t.Context(), nil, agent.WithSession(session))
+	messages, err := provider.BeforeRun(t.Context(), nil, agent.WithSession(session))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -113,24 +126,26 @@ func TestNewInMemoryHistoryProvider_SourceID_MapsToSessionStateKey(t *testing.T)
 	}
 }
 
-func TestNewInMemoryHistoryProvider_DefaultStoreRequestFilter_ExcludesContextProviderMessages(t *testing.T) {
+func TestNewInMemoryHistoryProvider_DefaultStoreRequestFilter_ExcludesHistoryMessages(t *testing.T) {
 	provider := agent.NewInMemoryHistoryProvider("k")
 	session := agenttest.CreateSession()
 
 	user := message.NewText("user")
+	historyMsg := message.NewText("history")
+	historyMsg.SourceID = "k"
 	ctxMsg := message.NewText("ctx")
 	ctxMsg.SourceID = "provider-A"
 
-	if err := provider.AfterRun(t.Context(), []*message.Message{user, ctxMsg}, nil, agent.WithSession(session)); err != nil {
+	if err := provider.AfterRun(t.Context(), []*message.Message{user, historyMsg, ctxMsg}, nil, agent.WithSession(session)); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	messages, _, err := provider.BeforeRun(t.Context(), nil, agent.WithSession(session))
+	messages, err := provider.BeforeRun(t.Context(), nil, agent.WithSession(session))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(messages) != 1 || messages[0].String() != "user" {
-		t.Fatal("expected default request filter to exclude context-provider messages")
+	if len(messages) != 2 || messages[0].String() != "user" || messages[1].String() != "ctx" {
+		t.Fatal("expected default request filter to exclude only history messages")
 	}
 }
 
@@ -147,7 +162,7 @@ func TestNewInMemoryHistoryProvider_SkipStoreRequestMessages(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	messages, _, err := provider.BeforeRun(t.Context(), nil, agent.WithSession(session))
+	messages, err := provider.BeforeRun(t.Context(), nil, agent.WithSession(session))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -169,7 +184,7 @@ func TestNewInMemoryHistoryProvider_SkipStoreResponseMessages(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	messages, _, err := provider.BeforeRun(t.Context(), nil, agent.WithSession(session))
+	messages, err := provider.BeforeRun(t.Context(), nil, agent.WithSession(session))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -198,7 +213,7 @@ func TestNewInMemoryHistoryProvider_StoreContextMessages(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	messages, _, err := provider.BeforeRun(t.Context(), nil, agent.WithSession(session))
+	messages, err := provider.BeforeRun(t.Context(), nil, agent.WithSession(session))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -228,7 +243,7 @@ func TestNewInMemoryHistoryProvider_StoreContextMessagesFrom(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	messages, _, err := provider.BeforeRun(t.Context(), nil, agent.WithSession(session))
+	messages, err := provider.BeforeRun(t.Context(), nil, agent.WithSession(session))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -243,7 +258,7 @@ func TestNewInMemoryHistoryProvider_Invoking_IgnoresUnreadableState(t *testing.T
 	session.Set("k", "not-a-history-state")
 	request := []*message.Message{message.NewText("req")}
 
-	messages, _, err := provider.BeforeRun(t.Context(), request, agent.WithSession(session))
+	messages, err := provider.BeforeRun(t.Context(), request, agent.WithSession(session))
 	if err != nil {
 		t.Fatalf("unexpected error when state is unreadable: %v", err)
 	}
@@ -264,7 +279,7 @@ func TestNewInMemoryHistoryProvider_Invoked_OverwritesUnreadableState(t *testing
 		t.Fatalf("unexpected error when state is unreadable: %v", err)
 	}
 
-	messages, _, err := provider.BeforeRun(t.Context(), nil, agent.WithSession(session))
+	messages, err := provider.BeforeRun(t.Context(), nil, agent.WithSession(session))
 	if err != nil {
 		t.Fatalf("unexpected error reading stored history: %v", err)
 	}

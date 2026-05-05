@@ -35,9 +35,8 @@ const sessionStateKey = "workflowprovider_state"
 
 // providerServiceID marks sessions managed by this provider. Setting a
 // non-empty ServiceID on the session opts out of the agent package's
-// default in-memory chat history middleware, which would otherwise
-// replay prior messages into the workflow on every call. The workflow
-// itself owns conversational state across turns.
+// default history provider on subsequent calls. The workflow itself owns
+// conversational state across turns.
 const providerServiceID = "workflowprovider"
 
 // Config configures a [workflow.Workflow] hosted as an [agent.Agent] via [New].
