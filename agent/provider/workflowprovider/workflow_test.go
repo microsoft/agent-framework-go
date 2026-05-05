@@ -19,8 +19,8 @@ import (
 )
 
 // echoExecutorBinding builds a workflow executor that, on each TurnToken,
-// emits a single ResponseUpdate echoing the last user message and yields a
-// final aggregated message as workflow output.
+// emits a single response update output echoing the last user message and
+// yields a final aggregated message as workflow output.
 func echoExecutorBinding(id string) *workflow.ExecutorBinding {
 	binding := &workflow.ExecutorBinding{
 		ID:           id,
@@ -48,9 +48,9 @@ func echoExecutorBinding(id string) *workflow.ExecutorBinding {
 							AgentID:    id,
 							AuthorName: id,
 						}
-						if err := ctx.AddEvent(workflow.ResponseUpdateEvent{
+						if err := ctx.AddEvent(workflow.OutputEvent{
 							ExecutorID: id,
-							Update:     update,
+							Output:     update,
 						}); err != nil {
 							return err
 						}
@@ -193,13 +193,13 @@ func TestNew_IncludeOutputsInResponse(t *testing.T) {
 	for range ag.RunText(context.Background(), "ping") {
 		updates++
 	}
-	// One update from ResponseUpdateEvent, one from OutputEvent translation.
+	// One update from *agent.ResponseUpdate output, one from message output translation.
 	if updates < 2 {
 		t.Errorf("expected at least 2 updates with IncludeOutputsInResponse, got %d", updates)
 	}
 }
 
-func TestNew_ConvertsResponseEventsWithResponseMetadata(t *testing.T) {
+func TestNew_ConvertsResponseOutputWithResponseMetadata(t *testing.T) {
 	createdAt := time.Date(2024, 11, 10, 9, 20, 0, 0, time.UTC)
 	binding := &workflow.ExecutorBinding{
 		ID:           "response-yielder",
@@ -234,7 +234,9 @@ func TestNew_ConvertsResponseEventsWithResponseMetadata(t *testing.T) {
 			},
 		}, nil
 	}
-	wf, err := workflow.NewBuilder(binding).Build()
+	wf, err := workflow.NewBuilder(binding).
+		WithOutputFrom(binding).
+		Build()
 	if err != nil {
 		t.Fatalf("build workflow: %v", err)
 	}
@@ -922,7 +924,7 @@ func TestNew_MatchingResponse_DoesNotCauseExtraTurn(t *testing.T) {
 			}
 		}
 	}
-	// One agent turn yields the same FCC via both ResponseUpdateEvent and
+	// One agent turn yields the same FCC via both *agent.ResponseUpdate output and
 	// RequestInfoEvent, so first-turn count is the baseline. An extra
 	// TurnToken-driven turn would double the second-turn count.
 	if secondCount != firstCount {

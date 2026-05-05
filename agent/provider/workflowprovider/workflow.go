@@ -51,8 +51,8 @@ type Config struct {
 	// IncludeOutputsInResponse, if true, surfaces [workflow.OutputEvent]
 	// payloads in the agent response stream when the payload is a
 	// [*message.Message] or [[]*message.Message]. By default outputs are
-	// observed only via [workflow.ResponseUpdateEvent]s emitted by hosted
-	// agents inside the workflow.
+	// observed only when they contain [*agent.ResponseUpdate] or [*agent.Response]
+	// payloads emitted by hosted agents inside the workflow.
 	IncludeOutputsInResponse bool
 
 	// IncludeErrorDetails, if true, surfaces the full error message from
@@ -167,29 +167,32 @@ func New(wf *workflow.Workflow, cfg Config) (*agent.Agent, error) {
 					return
 				}
 				switch e := evt.(type) {
-				case workflow.ResponseUpdateEvent:
-					if !yield(stampUpdate(e.Update, responseID, e), nil) {
-						return
-					}
-				case workflow.ResponseEvent:
-					if e.Response == nil {
-						continue
-					}
-					for _, update := range e.Response.ToUpdates() {
-						if !yield(stampUpdate(update, responseID, e), nil) {
+				case workflow.OutputEvent:
+					switch out := e.Output.(type) {
+					case *agent.ResponseUpdate:
+						if !yield(stampUpdate(out, responseID, e), nil) {
 							return
 						}
-					}
-				case workflow.OutputEvent:
-					if !cfg.IncludeOutputsInResponse {
-						continue
-					}
-					switch out := e.Output.(type) {
+					case *agent.Response:
+						if out == nil {
+							continue
+						}
+						for _, update := range out.ToUpdates() {
+							if !yield(stampUpdate(update, responseID, e), nil) {
+								return
+							}
+						}
 					case *message.Message:
+						if !cfg.IncludeOutputsInResponse {
+							continue
+						}
 						if !yield(messageToUpdate(out, responseID, e), nil) {
 							return
 						}
 					case []*message.Message:
+						if !cfg.IncludeOutputsInResponse {
+							continue
+						}
 						for _, msg := range out {
 							if !yield(messageToUpdate(msg, responseID, e), nil) {
 								return

@@ -2,8 +2,6 @@
 
 package workflow
 
-import "github.com/microsoft/agent-framework-go/agent"
-
 type Event interface {
 	Data() any
 }
@@ -149,30 +147,4 @@ type RequestInfoEvent struct {
 
 func (e RequestInfoEvent) Data() any {
 	return e.Request
-}
-
-var _ Event = ResponseUpdateEvent{}
-
-// ResponseUpdateEvent is an event triggered when an agent run produces a streaming response update.
-// This event is also automatically emitted when an executor yields a *agent.ResponseUpdate via YieldOutput.
-type ResponseUpdateEvent struct {
-	ExecutorID string
-	Update     *agent.ResponseUpdate
-}
-
-func (e ResponseUpdateEvent) Data() any {
-	return e.Update
-}
-
-var _ Event = ResponseEvent{}
-
-// ResponseEvent is an event triggered when an agent produces a complete response.
-// This event is automatically emitted when an executor yields a *agent.Response via YieldOutput.
-type ResponseEvent struct {
-	ExecutorID string
-	Response   *agent.Response
-}
-
-func (e ResponseEvent) Data() any {
-	return e.Response
 }
