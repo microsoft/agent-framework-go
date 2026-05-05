@@ -613,8 +613,8 @@ func TestResponse_ToUpdates_ProducesUpdates(t *testing.T) {
 	if update1.AdditionalProperties["key1"] != "value1" {
 		t.Errorf("expected key1 value1, got %v", update1.AdditionalProperties["key1"])
 	}
-	if update1.FinishReason != "stop" {
-		t.Errorf("expected FinishReason stop, got %q", update1.FinishReason)
+	if update1.FinishReason != "" {
+		t.Errorf("expected empty FinishReason, got %q", update1.FinishReason)
 	}
 	if update1.AdditionalProperties["key2"] != 42 {
 		t.Errorf("expected key2 42, got %v", update1.AdditionalProperties["key2"])

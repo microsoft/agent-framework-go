@@ -134,7 +134,6 @@ func (resp *Response) ToUpdates() []*ResponseUpdate {
 			AdditionalProperties: resp.AdditionalProperties,
 			AgentID:              resp.AgentID,
 			ResponseID:           resp.ID,
-			FinishReason:         resp.FinishReason,
 			CreatedAt:            resp.CreatedAt,
 		}
 		if hasUsage {
