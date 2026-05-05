@@ -42,11 +42,11 @@ func main() {
 			azure.WithTokenCredential(token),
 		),
 		openaiagent.Config{
-			Model: deployment,
+			Model:        deployment,
+			Instructions: "You are a helpful assistant in charge of approving expenses.",
 			Config: agent.Config{
-				Name:         "AGUIAssistant",
-				Instructions: "You are a helpful assistant in charge of approving expenses.",
-				Tools:        []tool.Tool{tool.ApprovalRequiredFunc(approveExpense)},
+				Name:  "AGUIAssistant",
+				Tools: []tool.Tool{tool.ApprovalRequiredFunc(approveExpense)},
 			},
 		},
 	)

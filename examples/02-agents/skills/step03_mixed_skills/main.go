@@ -179,10 +179,10 @@ func main() {
 			azure.WithTokenCredential(token),
 		),
 		openaiagent.Config{
-			Model: deployment,
+			Model:        deployment,
+			Instructions: "You are a helpful assistant that can convert units, volumes, and temperatures.",
 			Config: agent.Config{
 				Name:             "MultiConverterAgent",
-				Instructions:     "You are a helpful assistant that can convert units, volumes, and temperatures.",
 				Middlewares:      []agent.Middleware{logger},
 				ContextProviders: []*agent.ContextProvider{skillsProvider},
 			},

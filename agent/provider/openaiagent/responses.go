@@ -36,6 +36,9 @@ func NewResponses(oclient openai.Client, config Config) *agent.Agent {
 		client: oclient,
 		config: config,
 	}
+	if config.Instructions != "" {
+		config.RunOptions = append(config.RunOptions, agent.WithInstructions(config.Instructions))
+	}
 	config.Middlewares = slices.Clone(config.Middlewares)
 	if !config.DisableFuncAutoCall {
 		config.Middlewares = append(config.Middlewares, autocall.New(autocall.Config{
@@ -214,6 +217,10 @@ func responsesBuildCompletionParams(model string, messages []*message.Message, o
 		params = p
 	}
 	params.Model = cmp.Or(params.Model, model)
+	instructions := slices.Collect(agent.AllOptions(opts, agent.WithInstructions))
+	if len(instructions) > 0 {
+		params.Instructions = openai.String(strings.Join(instructions, "\n"))
+	}
 	if v, ok := agent.GetOption(opts, agent.AllowBackgroundResponses); ok {
 		params.Background = openai.Bool(v)
 	}

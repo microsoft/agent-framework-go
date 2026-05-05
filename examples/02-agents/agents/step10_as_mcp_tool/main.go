@@ -38,11 +38,11 @@ func main() {
 			azure.WithTokenCredential(token),
 		),
 		openaiagent.Config{
-			Model: deployment,
+			Model:        deployment,
+			Instructions: "You are good at telling jokes, and you always start each joke with 'Aye aye, captain!'.",
 			Config: agent.Config{
-				Name:         "Joker",
-				Description:  "An agent that tells jokes.",
-				Instructions: "You are good at telling jokes, and you always start each joke with 'Aye aye, captain!'.",
+				Name:        "Joker",
+				Description: "An agent that tells jokes.",
 			},
 		},
 	)

@@ -38,11 +38,11 @@ func main() {
 			azure.WithTokenCredential(token),
 		),
 		openaiagent.Config{
-			Model: deployment,
+			Model:        deployment,
+			Instructions: "You are a helpful agent that can analyze images.",
 			Config: agent.Config{
-				Instructions: "You are a helpful agent that can analyze images.",
-				Name:         "VisionAgent",
-				Middlewares:  []agent.Middleware{logger}, // for logging agent interactions
+				Name:        "VisionAgent",
+				Middlewares: []agent.Middleware{logger}, // for logging agent interactions
 			},
 		},
 	)

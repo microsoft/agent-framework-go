@@ -96,8 +96,9 @@ type providerState struct {
 }
 
 type providerContext struct {
-	Messages []*message.Message
-	Options  []agent.Option
+	Messages     []*message.Message
+	Options      []agent.Option
+	Instructions string
 }
 
 // NewContextProvider creates a skills context provider from the configured in-memory skills and sources.
@@ -237,6 +238,9 @@ func extendProviderContext(messages []*message.Message, options []agent.Option, 
 	if len(result.Options) > 0 {
 		outOptions = append(options, result.Options...)
 	}
+	if strings.TrimSpace(result.Instructions) != "" {
+		outOptions = append(outOptions, agent.WithInstructions(result.Instructions))
+	}
 
 	return outMessages, outOptions
 }
@@ -258,12 +262,7 @@ func (p *providerState) buildContext(ctx context.Context) (providerContext, erro
 
 	instructions := buildProviderSkillsInstructionPrompt(p.options.SkillsInstructionPrompt, skills, hasResources, hasScripts)
 	if instructions != "" {
-		out.Messages = []*message.Message{{
-			Role: message.RoleSystem,
-			Contents: []message.Content{
-				&message.TextContent{Text: instructions},
-			},
-		}}
+		out.Instructions = instructions
 	}
 
 	return out, nil

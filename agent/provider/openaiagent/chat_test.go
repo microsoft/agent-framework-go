@@ -70,6 +70,48 @@ func newTestClient(server *httptest.Server) *agent.Agent {
 	)
 }
 
+func TestChatConfigInstructions_NonStreaming(t *testing.T) {
+	const input = `
+						{
+								"messages":[
+										{"role":"system","content":"Be concise.\nAnswer warmly."},
+										{"role":"user","content":"hello"}
+								],
+								"model":"gpt-4o-mini"
+						}
+						`
+	const output = `
+						{
+							"id": "chatcmpl-test",
+							"object": "chat.completion",
+							"created": 1727888631,
+							"model": "gpt-4o-mini-2024-07-18",
+							"choices": [{
+								"index": 0,
+								"message": {"role": "assistant", "content": "Hello", "refusal": null},
+								"finish_reason": "stop"
+							}]
+						}
+						`
+	server := newTestServer(t, input, output)
+	defer server.Close()
+
+	a := openaiagent.NewChatCompletions(
+		openai.NewClient(option.WithBaseURL(server.URL)),
+		openaiagent.Config{
+			Model:        "gpt-4o-mini",
+			Instructions: "Be concise.",
+			Config: agent.Config{
+				DisableFuncAutoCall: true,
+			},
+		},
+	)
+
+	if _, err := a.RunText(t.Context(), "hello", agent.WithInstructions("Answer warmly.")).Collect(); err != nil {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestChatBasicRequestResponse_NonStreaming(t *testing.T) {
 	const input = `
             {

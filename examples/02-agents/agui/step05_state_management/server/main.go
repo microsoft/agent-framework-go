@@ -72,21 +72,21 @@ func main() {
 		),
 		openaiagent.Config{
 			Model: deployment,
-			Config: agent.Config{
-				Name: "RecipeAgent",
-				Instructions: `You are a helpful recipe assistant. When users ask for recipes, respond with a JSON object in this shape:
+			Instructions: `You are a helpful recipe assistant. When users ask for recipes, respond with a JSON object in this shape:
 {
-  "recipe": {
-    "title": "...",
-    "cuisine": "...",
-    "ingredients": ["..."],
-    "steps": ["..."],
-    "prep_time_minutes": 10,
-    "cook_time_minutes": 20,
-    "skill_level": "beginner"
-  }
+	"recipe": {
+		"title": "...",
+		"cuisine": "...",
+		"ingredients": ["..."],
+		"steps": ["..."],
+		"prep_time_minutes": 10,
+		"cook_time_minutes": 20,
+		"skill_level": "beginner"
+	}
 }
 Then also provide a concise summary in one sentence.`,
+			Config: agent.Config{
+				Name:        "RecipeAgent",
 				Middlewares: []agent.Middleware{stateSnapshotMiddleware},
 			},
 		},

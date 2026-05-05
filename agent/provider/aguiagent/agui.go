@@ -25,6 +25,9 @@ import (
 type Config struct {
 	agent.Config
 
+	// Instructions are sent to AG-UI as a leading system message for each run.
+	Instructions string
+
 	Decoder *aguiEvents.EventDecoder
 }
 
@@ -38,6 +41,9 @@ func New(aclient *aguiSSEClient.Client, config Config) *agent.Agent {
 	p := &provider{
 		cfg:    config,
 		client: aclient,
+	}
+	if config.Instructions != "" {
+		config.RunOptions = append(config.RunOptions, agent.WithInstructions(config.Instructions))
 	}
 	if config.Decoder != nil {
 		p.decoder = config.Decoder
@@ -67,6 +73,14 @@ func (p *provider) run(ctx context.Context, messages []*message.Message, options
 		if err != nil {
 			yield(nil, err)
 			return
+		}
+		instructions := slices.Collect(agent.AllOptions(options, agent.WithInstructions))
+		if len(instructions) > 0 {
+			convertedMessages = append([]aguiTypes.Message{{
+				ID:      aguiEvents.GenerateMessageID(),
+				Role:    aguiTypes.RoleSystem,
+				Content: strings.Join(instructions, "\n"),
+			}}, convertedMessages...)
 		}
 
 		payload := aguiTypes.RunAgentInput{

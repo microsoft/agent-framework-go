@@ -39,9 +39,9 @@ func main() {
 			azure.WithTokenCredential(token),
 		),
 		openaiagent.Config{
-			Model: deployment,
+			Model:        deployment,
+			Instructions: "You are a friendly assistant.",
 			Config: agent.Config{
-				Instructions:     "You are a friendly assistant.",
 				Name:             "MemoryAgent",
 				Middlewares:      []agent.Middleware{logger}, // for logging agent interactions
 				ContextProviders: []*agent.ContextProvider{newUserMemoryProvider()},
@@ -102,12 +102,7 @@ func provideUserMemory(ctx context.Context, messages []*message.Message, options
 	if strings.TrimSpace(state.UserName) != "" {
 		instructions = fmt.Sprintf("The user's name is %s. Always address them by name.", state.UserName)
 	}
-	return append(messages, &message.Message{
-		Role: message.RoleSystem,
-		Contents: []message.Content{
-			&message.TextContent{Text: instructions},
-		},
-	}), options, nil
+	return messages, append(options, agent.WithInstructions(instructions)), nil
 }
 
 func storeUserMemory(ctx context.Context, requestMessages, _ []*message.Message, options ...agent.Option) error {

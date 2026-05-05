@@ -12,6 +12,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/microsoft/agent-framework-go/agent"
 	a2a1 "github.com/microsoft/agent-framework-go/agent/provider/a2aagent"
+	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
@@ -288,6 +289,29 @@ func TestRunWithValidUserMessage(t *testing.T) {
 	}
 	if msg.String() != "Hello! How can I help you today?" {
 		t.Errorf("String() = %q, want %q", msg.String(), "Hello! How can I help you today?")
+	}
+}
+
+func TestRunIgnoresInstructions(t *testing.T) {
+	transport := &mockA2ATransport{}
+	a := newTestAgent(transport, agent.Config{})
+
+	_, err := a.RunText(t.Context(), "Hello, world!", agent.WithInstructions("Be concise.")).Collect()
+	if err != nil {
+		t.Fatalf("error = %v, want nil", err)
+	}
+	if !transport.sendMessageCalled {
+		t.Fatal("SendMessage was not called")
+	}
+	inputMessage := transport.capturedMessageSendParams.Message
+	if inputMessage == nil {
+		t.Fatal("captured message is nil")
+	}
+	if len(inputMessage.Parts) != 1 {
+		t.Fatalf("captured message parts count = %d, want 1", len(inputMessage.Parts))
+	}
+	if got := inputMessage.Parts[0].Text(); got != "Hello, world!" {
+		t.Errorf("captured message text = %q, want %q", got, "Hello, world!")
 	}
 }
 
@@ -594,7 +618,7 @@ func TestRunWithContinuationTokenAndMessages(t *testing.T) {
 	transport := &mockA2ATransport{}
 	a := newTestAgent(transport, agent.Config{})
 
-	_, err := a.RunText(t.Context(), "Test message", agent.WithContinuationToken("task-123")).Collect()
+	_, err := a.RunText(t.Context(), "Test message", agent.WithContinuationToken(agenttest.NewContinuationToken(t, "task-123"))).Collect()
 	if err == nil {
 		t.Error("error = nil, want error when continuation token and messages are provided")
 	}
@@ -610,7 +634,7 @@ func TestRunWithContinuationToken(t *testing.T) {
 	}
 	a := newTestAgent(transport, agent.Config{})
 
-	_, err := a.Run(t.Context(), nil, agent.WithContinuationToken("task-123")).Collect()
+	_, err := a.Run(t.Context(), nil, agent.WithContinuationToken(agenttest.NewContinuationToken(t, "task-123"))).Collect()
 	if err != nil {
 		t.Fatalf("error = %v, want nil", err)
 	}
@@ -751,8 +775,8 @@ func TestRunWithAgentTaskResponse(t *testing.T) {
 		t.Errorf("ID = %q, want empty", msg.ID)
 	}
 
-	if result.ContinuationToken != "task-789" {
-		t.Errorf("continuation token = %q, want %q", result.ContinuationToken, "task-789")
+	if result.ContinuationToken == "" {
+		t.Error("ContinuationToken is empty, want non-empty")
 	}
 
 	if got := session.ServiceID(); got != "context-456" {
@@ -816,7 +840,7 @@ func TestRunStreamingWithContinuationTokenAndMessages(t *testing.T) {
 	a := newTestAgent(transport, agent.Config{})
 
 	gotError := false
-	for _, err := range a.RunText(t.Context(), "Test message", agent.WithContinuationToken("task-123"), agent.Stream(true)) {
+	for _, err := range a.RunText(t.Context(), "Test message", agent.WithContinuationToken(agenttest.NewContinuationToken(t, "task-123")), agent.Stream(true)) {
 		if err != nil {
 			gotError = true
 			break
@@ -841,7 +865,7 @@ func TestRunStreamingWithContinuationToken_UsesSubscribeToTask(t *testing.T) {
 	a := newTestAgent(transport, agent.Config{})
 
 	var updates []*agent.ResponseUpdate
-	for update, err := range a.Run(t.Context(), nil, agent.WithContinuationToken("task-456"), agent.Stream(true)) {
+	for update, err := range a.Run(t.Context(), nil, agent.WithContinuationToken(agenttest.NewContinuationToken(t, "task-456")), agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v, want nil", err)
 		}
@@ -876,7 +900,7 @@ func TestRunStreamingWithContinuationToken_PassesCorrectTaskID(t *testing.T) {
 	}
 	a := newTestAgent(transport, agent.Config{})
 
-	for _, err := range a.Run(t.Context(), nil, agent.WithContinuationToken(expectedTaskID), agent.Stream(true)) {
+	for _, err := range a.Run(t.Context(), nil, agent.WithContinuationToken(agenttest.NewContinuationToken(t, expectedTaskID)), agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v, want nil", err)
 		}
@@ -911,7 +935,7 @@ func TestRunStreamingWithContinuationTokenWhenSubscribeFailsWithUnsupportedOpera
 	a := newTestAgent(transport, agent.Config{})
 
 	var updates []*agent.ResponseUpdate
-	for update, err := range a.Run(t.Context(), nil, agent.WithContinuationToken(taskID), agent.Stream(true)) {
+	for update, err := range a.Run(t.Context(), nil, agent.WithContinuationToken(agenttest.NewContinuationToken(t, taskID)), agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v, want nil", err)
 		}
@@ -957,7 +981,7 @@ func TestRunStreamingWithContinuationTokenWhenSubscribeFailsWithUnsupportedOpera
 		t.Fatal(err)
 	}
 
-	for _, err := range a.Run(t.Context(), nil, agent.WithSession(session), agent.WithContinuationToken(taskID), agent.Stream(true)) {
+	for _, err := range a.Run(t.Context(), nil, agent.WithSession(session), agent.WithContinuationToken(agenttest.NewContinuationToken(t, taskID)), agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v, want nil", err)
 		}
@@ -978,7 +1002,7 @@ func TestRunStreamingWithContinuationTokenWhenSubscribeFailsWithNonUnsupportedEr
 	a := newTestAgent(transport, agent.Config{})
 
 	var gotErr error
-	for _, err := range a.Run(t.Context(), nil, agent.WithContinuationToken("error-task-123"), agent.Stream(true)) {
+	for _, err := range a.Run(t.Context(), nil, agent.WithContinuationToken(agenttest.NewContinuationToken(t, "error-task-123")), agent.Stream(true)) {
 		if err != nil {
 			gotErr = err
 			break
@@ -1004,7 +1028,7 @@ func TestRunStreamingWithContinuationTokenWhenSubscribeAndGetTaskBothFailPropaga
 	a := newTestAgent(transport, agent.Config{})
 
 	var gotErr error
-	for _, err := range a.Run(t.Context(), nil, agent.WithContinuationToken("failed-task-789"), agent.Stream(true)) {
+	for _, err := range a.Run(t.Context(), nil, agent.WithContinuationToken(agenttest.NewContinuationToken(t, "failed-task-789")), agent.Stream(true)) {
 		if err != nil {
 			gotErr = err
 			break

@@ -49,9 +49,9 @@ func main() {
 			azure.WithTokenCredential(token),
 		),
 		openaiagent.Config{
-			Model: deployment,
+			Model:        deployment,
+			Instructions: "You are good at telling jokes.",
 			Config: agent.Config{
-				Instructions:    "You are good at telling jokes.",
 				Name:            "Joker",
 				HistoryProvider: newFSHistoryProvider(tmpDir),
 				Middlewares:     []agent.Middleware{logger}, // for logging agent interactions

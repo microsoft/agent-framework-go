@@ -4,7 +4,6 @@ package agent
 
 import (
 	"context"
-	"iter"
 	"slices"
 
 	"github.com/microsoft/agent-framework-go/message"
@@ -128,58 +127,4 @@ func (p *ContextProvider) withAgentRequestMessageSource(msg *message.Message) *m
 	out := msg.Clone()
 	out.SourceID = p.SourceID
 	return out
-}
-
-// newContextProviderMiddleware returns a middleware that invokes the provided context providers in order
-// before the wrapped run and persists them in reverse order after the run.
-func newContextProviderMiddleware(providers ...*ContextProvider) Middleware {
-	activeProviders := make([]*ContextProvider, 0, len(providers))
-	for _, provider := range providers {
-		if provider != nil {
-			activeProviders = append(activeProviders, provider)
-		}
-	}
-	if len(activeProviders) == 0 {
-		panic("at least one context provider is required")
-	}
-	return &contextProviderRunner{providers: activeProviders}
-}
-
-type contextProviderRunner struct {
-	providers []*ContextProvider
-}
-
-func (r *contextProviderRunner) Run(next RunFunc, ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error] {
-	session, _ := GetOption(options, WithSession)
-
-	return func(yield func(*ResponseUpdate, error) bool) {
-		options = slices.Clone(options)
-		for _, provider := range r.providers {
-			var err error
-			messages, options, err = provider.BeforeRun(ctx, messages, options...)
-			if err != nil {
-				yield(nil, err)
-				return
-			}
-		}
-		var resp Response
-		for update, err := range next(ctx, messages, options...) {
-			if update != nil && (session == nil || session.ServiceID() == "") {
-				resp.Update(update)
-			}
-			if !yield(update, err) {
-				break
-			}
-		}
-		resp.Coalesce()
-		requestMessages := slices.Clone(messages)
-		responseMessages := slices.Clone(resp.Messages)
-
-		for _, provider := range slices.Backward(r.providers) {
-			if err := provider.AfterRun(ctx, requestMessages, responseMessages, options...); err != nil {
-				yield(nil, err)
-				return
-			}
-		}
-	}
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaiagent"
+	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/internal/messagetest"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
@@ -70,6 +71,56 @@ func newTestResponsesClient(server *httptest.Server, model string) *agent.Agent 
 			Config: agent.Config{DisableFuncAutoCall: true},
 		},
 	)
+}
+
+func TestResponsesConfigInstructions_NonStreaming(t *testing.T) {
+	const input = `
+						{
+								"instructions":"Be concise.",
+								"model":"gpt-4o-mini",
+								"input": [{
+										"type":"message",
+										"role":"user",
+										"content":[{"type":"input_text","text":"hello"}]
+								}]
+						}
+						`
+	const output = `
+						{
+							"id": "resp_test",
+							"object": "response",
+							"created_at": 1741891428,
+							"status": "completed",
+							"error": null,
+							"incomplete_details": null,
+							"instructions": "Be concise.",
+							"model": "gpt-4o-mini",
+							"output": [{
+								"type": "message",
+								"id": "msg_test",
+								"status": "completed",
+								"role": "assistant",
+								"content": [{"type": "output_text", "text": "Hello", "annotations": []}]
+							}]
+						}
+						`
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := openaiagent.NewResponses(
+		openai.NewClient(option.WithBaseURL(server.URL)),
+		openaiagent.Config{
+			Model:        "gpt-4o-mini",
+			Instructions: "Be concise.",
+			Config: agent.Config{
+				DisableFuncAutoCall: true,
+			},
+		},
+	)
+
+	if _, err := a.RunText(t.Context(), "hello").Collect(); err != nil {
+		t.Fatalf("error = %v", err)
+	}
 }
 
 func TestResponsesBasicRequestResponse_NonStreaming(t *testing.T) {
@@ -4271,18 +4322,8 @@ func TestResponsesBackgroundResponses_FirstCall(t *testing.T) {
 	if resp.ContinuationToken == "" {
 		t.Fatal("expected ContinuationToken to be set")
 	}
-
-	// Continuation token is already a JSON string, unmarshal it directly
-	var ct continuationToken
-	if err := json.Unmarshal([]byte(resp.ContinuationToken), &ct); err != nil {
-		t.Fatalf("failed to unmarshal continuation token: %v", err)
-	}
-
-	if ct.ResponseID != "resp_68d3d2c9ef7c8195863e4e2b2ec226a205007262ecbbfed7" {
-		t.Errorf("expected continuation token ResponseID resp_68d3d2c9ef7c8195863e4e2b2ec226a205007262ecbbfed7, got %s", ct.ResponseID)
-	}
-	if ct.SequenceNumber != 0 {
-		t.Errorf("expected continuation token SequenceNumber 0, got %d", ct.SequenceNumber)
+	if got := session.ServiceID(); got != "resp_68d3d2c9ef7c8195863e4e2b2ec226a205007262ecbbfed7" {
+		t.Errorf("expected session ServiceID resp_68d3d2c9ef7c8195863e4e2b2ec226a205007262ecbbfed7, got %s", got)
 	}
 }
 
@@ -4346,7 +4387,7 @@ func testResponsesBackgroundPolling(t *testing.T, status string) {
 	ctJSON, _ := json.Marshal(ct)
 
 	resp, err := a.Run(t.Context(), nil,
-		agent.WithContinuationToken(string(ctJSON)),
+		agent.WithContinuationToken(agenttest.NewContinuationToken(t, string(ctJSON))),
 		agent.AllowBackgroundResponses(true),
 		agent.WithSession(session),
 	).Collect()
@@ -4358,13 +4399,6 @@ func testResponsesBackgroundPolling(t *testing.T, status string) {
 	case "queued", "in_progress":
 		if resp.ContinuationToken == "" {
 			t.Error("expected ContinuationToken to be set for queued/in_progress status")
-		} else {
-			var parsedToken continuationToken
-			if err := json.Unmarshal([]byte(resp.ContinuationToken), &parsedToken); err == nil {
-				if parsedToken.ResponseID != "resp_68d3d2c9ef7c8195863e4e2b2ec226a205007262ecbbfed8" {
-					t.Errorf("expected continuation token ResponseID, got %s", parsedToken.ResponseID)
-				}
-			}
 		}
 
 		if len(resp.Messages) != 1 {
@@ -4383,6 +4417,9 @@ func testResponsesBackgroundPolling(t *testing.T, status string) {
 		if len(resp.Messages) != 1 {
 			t.Fatalf("expected 1 message, got %d", len(resp.Messages))
 		}
+	}
+	if got := session.ServiceID(); got != "resp_68d3d2c9ef7c8195863e4e2b2ec226a205007262ecbbfed8" {
+		t.Errorf("expected session ServiceID resp_68d3d2c9ef7c8195863e4e2b2ec226a205007262ecbbfed8, got %s", got)
 	}
 }
 
@@ -4492,6 +4529,9 @@ data: {"type":"response.completed","sequence_number":17,"response":{"id":"resp_6
 	if len(updates) != 18 {
 		t.Errorf("expected 18 updates, got %d", len(updates))
 	}
+	if got := session.ServiceID(); got != "resp_68d401a7b36c81a288600e95a5a119d4073420ed59d5f559" {
+		t.Errorf("expected session ServiceID resp_68d401a7b36c81a288600e95a5a119d4073420ed59d5f559, got %s", got)
+	}
 
 	// Verify continuation tokens
 	for i := 0; i < len(updates); i++ {
@@ -4503,16 +4543,6 @@ data: {"type":"response.completed","sequence_number":17,"response":{"id":"resp_6
 			// All updates except the last should have continuation token
 			if updates[i].ContinuationToken == "" {
 				t.Errorf("update %d: expected ContinuationToken to be set", i)
-			} else {
-				var ct continuationToken
-				if err := json.Unmarshal([]byte(updates[i].ContinuationToken), &ct); err == nil {
-					if ct.ResponseID != "resp_68d401a7b36c81a288600e95a5a119d4073420ed59d5f559" {
-						t.Errorf("update %d: expected continuation token ResponseID, got %s", i, ct.ResponseID)
-					}
-					if ct.SequenceNumber != int64(i) {
-						t.Errorf("update %d: expected continuation token SequenceNumber %d, got %d", i, i, ct.SequenceNumber)
-					}
-				}
 			}
 		} else {
 			// Last update should not have continuation token
@@ -4571,7 +4601,7 @@ data: {"type":"response.completed","sequence_number":17,"response":{"truncation"
 	a := newTestResponsesClient(server, "gpt-4o-2024-08-06")
 
 	// Emulating resumption of the stream after receiving the first 9 updates that provided the text "Hello! How can I"
-	token := `{"response_id":"resp_68d40dc671a0819cb0ee920078333451029e611c3cc4a34b","sequence_number":9}`
+	token := agenttest.NewContinuationToken(t, `{"response_id":"resp_68d40dc671a0819cb0ee920078333451029e611c3cc4a34b","sequence_number":9}`)
 
 	// Create session with ConversationID to allow continuation
 	session, err := a.CreateSession(t.Context(), agent.WithServiceID("resp_68d40dc671a0819cb0ee920078333451029e611c3cc4a34b"))
@@ -4609,6 +4639,9 @@ data: {"type":"response.completed","sequence_number":17,"response":{"truncation"
 	if fullText.String() != " assist you today?" {
 		t.Errorf("expected text ' assist you today?', got %q", fullText.String())
 	}
+	if got := session.ServiceID(); got != "resp_68d40dc671a0819cb0ee920078333451029e611c3cc4a34b" {
+		t.Errorf("expected session ServiceID resp_68d40dc671a0819cb0ee920078333451029e611c3cc4a34b, got %s", got)
+	}
 
 	// Verify all updates have correct ResponseID
 	for i, update := range updates {
@@ -4617,20 +4650,9 @@ data: {"type":"response.completed","sequence_number":17,"response":{"truncation"
 		}
 
 		// Verify continuation tokens for all but last update
-		sequenceNumber := i + 10
 		if i < len(updates)-1 {
 			if update.ContinuationToken == "" {
 				t.Errorf("update %d: expected ContinuationToken to be set", i)
-			} else {
-				var ct continuationToken
-				if err := json.Unmarshal([]byte(update.ContinuationToken), &ct); err == nil {
-					if ct.ResponseID != "resp_68d40dc671a0819cb0ee920078333451029e611c3cc4a34b" {
-						t.Errorf("update %d: expected continuation token ResponseID, got %s", i, ct.ResponseID)
-					}
-					if ct.SequenceNumber != int64(sequenceNumber) {
-						t.Errorf("update %d: expected continuation token SequenceNumber %d, got %d", i, sequenceNumber, ct.SequenceNumber)
-					}
-				}
 			}
 		} else {
 			// Last update should not have continuation token
@@ -4646,7 +4668,7 @@ func TestResponsesGetContinuationToken_WithMessages_ThrowsException(t *testing.T
 	defer server.Close()
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
-	token := `{"response_id":"resp_123","sequence_number":0}`
+	token := agenttest.NewContinuationToken(t, `{"response_id":"resp_123","sequence_number":0}`)
 
 	// Attempt to use continuation token with messages should error
 	_, err := a.RunText(t.Context(), "test",
@@ -4671,7 +4693,7 @@ func TestResponsesBackgroundResponses_PollingCall_WithMessages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSession failed: %v", err)
 	}
-	token := `{"response_id":"resp_68d3d2c9ef7c8195863e4e2b2ec226a205007262ecbbfed8","sequence_number":0}`
+	token := agenttest.NewContinuationToken(t, `{"response_id":"resp_68d3d2c9ef7c8195863e4e2b2ec226a205007262ecbbfed8","sequence_number":0}`)
 
 	// A try to update a background response with new messages should fail
 	_, err = a.RunText(t.Context(), "Please book hotel as well",
@@ -4698,7 +4720,7 @@ func TestResponsesBackgroundResponses_StreamResumption_WithMessages(t *testing.T
 	if err != nil {
 		t.Fatalf("CreateSession failed: %v", err)
 	}
-	token := `{"response_id":"resp_68d40dc671a0819cb0ee920078333451029e611c3cc4a34b","sequence_number":9}`
+	token := agenttest.NewContinuationToken(t, `{"response_id":"resp_68d40dc671a0819cb0ee920078333451029e611c3cc4a34b","sequence_number":9}`)
 
 	// Attempt to resume stream with messages should fail
 	for _, err := range a.RunText(t.Context(), "Please book a hotel for me",

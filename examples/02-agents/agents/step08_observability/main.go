@@ -63,10 +63,10 @@ func main() {
 			azure.WithTokenCredential(token),
 		),
 		openaiagent.Config{
-			Model: deployment,
+			Model:        deployment,
+			Instructions: "You are good at telling jokes.",
 			Config: agent.Config{
-				Instructions: "You are good at telling jokes.",
-				Name:         "Joker",
+				Name: "Joker",
 				Middlewares: []agent.Middleware{
 					otel.New(otel.Config{}), // for OpenTelemetry observability
 					logger,                  // for logging agent interactions

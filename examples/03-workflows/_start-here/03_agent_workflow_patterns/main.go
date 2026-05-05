@@ -92,11 +92,11 @@ func newTranslationAgent(language string) *agent.Agent {
 			azure.WithTokenCredential(token),
 		),
 		openaichatagent.Config{
-			Model: deployment,
+			Model:        deployment,
+			Instructions: fmt.Sprintf("Translate the user's text to %s. Return only the translation.", language),
 			Config: agent.Config{
-				Name:         language,
-				Instructions: fmt.Sprintf("Translate the user's text to %s. Return only the translation.", language),
-				Middlewares:  []agent.Middleware{logger},
+				Name:        language,
+				Middlewares: []agent.Middleware{logger},
 			},
 		},
 	)

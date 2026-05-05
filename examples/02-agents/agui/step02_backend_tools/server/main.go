@@ -71,11 +71,11 @@ func main() {
 			azure.WithTokenCredential(token),
 		),
 		openaiagent.Config{
-			Model: deployment,
+			Model:        deployment,
+			Instructions: "You are a helpful assistant with access to restaurant information.",
 			Config: agent.Config{
-				Name:         "AGUIAssistant",
-				Instructions: "You are a helpful assistant with access to restaurant information.",
-				Tools:        []tool.Tool{searchRestaurants},
+				Name:  "AGUIAssistant",
+				Tools: []tool.Tool{searchRestaurants},
 			},
 		},
 	)

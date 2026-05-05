@@ -10,6 +10,7 @@ import (
 	"iter"
 	"reflect"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -39,6 +40,9 @@ type client struct {
 type Config struct {
 	agent.Config
 
+	// Instructions are provided to Gemini as system instructions for each run.
+	Instructions string
+
 	Model string
 }
 
@@ -47,6 +51,9 @@ func New(gclient *genai.Client, config Config) *agent.Agent {
 	c := &client{
 		client: gclient,
 		config: config,
+	}
+	if config.Instructions != "" {
+		config.RunOptions = append(config.RunOptions, agent.WithInstructions(config.Instructions))
 	}
 	config.Middlewares = slices.Clone(config.Middlewares)
 	if !config.DisableFuncAutoCall {
@@ -172,6 +179,10 @@ func (a *client) buildParams(messages []*message.Message, opts []agent.Option) (
 			cfg.SystemInstruction = &si
 		}
 	}
+	instructions := slices.Collect(agent.AllOptions(opts, agent.WithInstructions))
+	if len(instructions) > 0 {
+		appendSystemInstruction(cfg, strings.Join(instructions, "\n"))
+	}
 
 	// Collect tools from options.
 	var funcDecls []*genai.FunctionDeclaration
@@ -240,12 +251,9 @@ func (a *client) buildParams(messages []*message.Message, opts []agent.Option) (
 		case message.RoleSystem:
 			// Gemini uses a single system instruction content that can hold multiple parts.
 			// Add each non-empty system text content as its own part.
-			if cfg.SystemInstruction == nil {
-				cfg.SystemInstruction = &genai.Content{Role: genai.RoleUser}
-			}
 			for _, c := range msg.Contents {
 				if tc, ok := c.(*message.TextContent); ok && tc.Text != "" {
-					cfg.SystemInstruction.Parts = append(cfg.SystemInstruction.Parts, &genai.Part{Text: tc.Text})
+					appendSystemInstruction(cfg, tc.Text)
 				}
 			}
 		case message.RoleUser, message.RoleTool:
@@ -274,6 +282,16 @@ func (a *client) buildParams(messages []*message.Message, opts []agent.Option) (
 	}
 
 	return contents, cfg, nil
+}
+
+func appendSystemInstruction(cfg *genai.GenerateContentConfig, text string) {
+	if text == "" {
+		return
+	}
+	if cfg.SystemInstruction == nil {
+		cfg.SystemInstruction = &genai.Content{Role: genai.RoleUser}
+	}
+	cfg.SystemInstruction.Parts = append(cfg.SystemInstruction.Parts, &genai.Part{Text: text})
 }
 
 // buildRequestParts converts a framework message's contents into genai Parts.

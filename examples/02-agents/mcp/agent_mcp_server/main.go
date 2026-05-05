@@ -41,12 +41,12 @@ func main() {
 	a := openaiagent.NewChatCompletions(
 		openai.NewClient(),
 		openaiagent.Config{
-			Model: "gpt-4o-mini",
+			Model:        "gpt-4o-mini",
+			Instructions: "You are a helpful assistant that can help with microsoft documentation questions.",
 			Config: agent.Config{
-				Name:         "DocsAgent",
-				Instructions: "You are a helpful assistant that can help with microsoft documentation questions.",
-				Middlewares:  []agent.Middleware{logger}, // for logging agent interactions
-				Tools:        tools,
+				Name:        "DocsAgent",
+				Middlewares: []agent.Middleware{logger}, // for logging agent interactions
+				Tools:       tools,
 			},
 		},
 	)

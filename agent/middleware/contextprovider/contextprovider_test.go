@@ -122,6 +122,34 @@ func TestContextProviderMiddleware_Run_SharedOptions_OriginalToolsNotMutated(t *
 	}
 }
 
+func TestContextProviderMiddleware_Run_PassesResponseMessagesWithServiceManagedSession(t *testing.T) {
+	session := agenttest.CreateSession()
+	session.SetServiceID("server-managed")
+	var storedResponseMessages []*message.Message
+	provider := &agent.ContextProvider{
+		SourceID: "provider-a",
+		Store: func(_ context.Context, _ []*message.Message, responseMessages []*message.Message, _ ...agent.Option) error {
+			storedResponseMessages = responseMessages
+			return nil
+		},
+	}
+
+	_, err := collectMiddlewareResponse(contextprovider.New(provider).Run(
+		func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			return middlewareSingleUpdate("ok")
+		},
+		context.Background(),
+		[]*message.Message{message.NewText("hello")},
+		agent.WithSession(session),
+	))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := messageStrings(storedResponseMessages); !slices.Equal(got, []string{"ok"}) {
+		t.Fatalf("stored response messages = %v, want [ok]", got)
+	}
+}
+
 func middlewareSingleUpdate(text string) iter.Seq2[*agent.ResponseUpdate, error] {
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: text}}}, nil)
@@ -138,6 +166,14 @@ func collectMiddlewareResponse(seq iter.Seq2[*agent.ResponseUpdate, error]) (*ag
 	}
 	resp.Coalesce()
 	return &resp, nil
+}
+
+func messageStrings(messages []*message.Message) []string {
+	strings := make([]string, 0, len(messages))
+	for _, msg := range messages {
+		strings = append(strings, msg.String())
+	}
+	return strings
 }
 
 type stubTool struct {

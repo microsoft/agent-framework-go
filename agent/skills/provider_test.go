@@ -266,13 +266,14 @@ func TestProvider_RecoversFromPanickingSourceAndResetsLoading(t *testing.T) {
 	}
 
 	type result struct {
-		messageCount int
-		err          error
+		hasInstructions bool
+		err             error
 	}
 	resultCh := make(chan result, 1)
 	go func() {
-		messages, _, err := provider.BeforeRun(t.Context(), nil, agent.WithSession(agenttest.CreateSession()))
-		resultCh <- result{messageCount: len(messages), err: err}
+		_, options, err := provider.BeforeRun(t.Context(), nil, agent.WithSession(agenttest.CreateSession()))
+		instructions, _ := agent.GetOption(options, agent.WithInstructions)
+		resultCh <- result{hasInstructions: strings.Contains(instructions, "recovered-skill"), err: err}
 	}()
 
 	select {
@@ -280,8 +281,8 @@ func TestProvider_RecoversFromPanickingSourceAndResetsLoading(t *testing.T) {
 		if outcome.err != nil {
 			t.Fatalf("expected second provider call to succeed, got %v", outcome.err)
 		}
-		if outcome.messageCount == 0 {
-			t.Fatal("expected provider to recover and return messages on the second call")
+		if !outcome.hasInstructions {
+			t.Fatal("expected provider to recover and return instructions on the second call")
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for provider to recover after panic")
@@ -491,14 +492,14 @@ func TestNewProvider_ProvideExtendsInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(messages) != 2 {
-		t.Fatalf("expected input plus skills message, got %d", len(messages))
+	if len(messages) != 1 {
+		t.Fatalf("expected only input message, got %d", len(messages))
 	}
 	if messages[0] != input {
 		t.Fatal("expected original input message to be preserved first")
 	}
-	if messages[1].Role != message.RoleSystem {
-		t.Fatalf("expected skills message to be a system message, got %q", messages[1].Role)
+	if instructions, ok := agent.GetOption(options, agent.WithInstructions); !ok || !strings.Contains(instructions, "inline-skill") {
+		t.Fatalf("expected skills instructions option, got %q", instructions)
 	}
 	if gotSession, ok := agent.GetOption(options, agent.WithSession); !ok || gotSession != session {
 		t.Fatal("expected original session option to be preserved")

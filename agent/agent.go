@@ -42,12 +42,18 @@ type Config struct {
 	// Description describes the agent's purpose.
 	Description string
 
-	// Instructions are prepended as a system message for each non-continuation run.
-	Instructions string
-
 	// HistoryProvider injects and persists conversation history around each agent run.
 	// When nil, New uses a default in-memory history provider for local sessions.
 	HistoryProvider *HistoryProvider
+	// AllowHistoryProviderConflict prevents returning an error when a configured
+	// HistoryProvider conflicts with service-managed history.
+	AllowHistoryProviderConflict bool
+	// SuppressHistoryProviderConflictWarning prevents logging a warning when a
+	// configured HistoryProvider conflicts with service-managed history.
+	SuppressHistoryProviderConflictWarning bool
+	// KeepHistoryProviderOnConflict prevents clearing the configured HistoryProvider
+	// when it conflicts with service-managed history. Returning an error takes precedence.
+	KeepHistoryProviderOnConflict bool
 
 	// ContextProviders inject and persist context around each agent run.
 	ContextProviders []*ContextProvider
@@ -79,42 +85,40 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 	}
 
 	cfg.RunOptions = slices.Clone(cfg.RunOptions)
-	cfg.Tools = slices.Clone(cfg.Tools)
 	for _, tool := range cfg.Tools {
 		if tool != nil {
 			cfg.RunOptions = append(cfg.RunOptions, WithTool(tool))
 		}
 	}
 	cfg.Middlewares = slices.Clone(cfg.Middlewares)
-	providers := make([]*ContextProvider, 0, len(cfg.ContextProviders)+1)
+	contextProviders := make([]*ContextProvider, 0, len(cfg.ContextProviders))
 	for _, provider := range cfg.ContextProviders {
 		if provider != nil {
-			providers = append(providers, provider)
+			contextProviders = append(contextProviders, provider)
 		}
 	}
-	prefixedMiddlewares := make([]Middleware, 0, 2)
 	historyProvider := cfg.HistoryProvider
-	var useDefaultHistoryHeuristics bool
+	var hasDefaultHistoryProvider bool
 	if historyProvider == nil {
 		historyProvider = NewInMemoryHistoryProvider("")
-		useDefaultHistoryHeuristics = true
+		hasDefaultHistoryProvider = true
 	}
-	if historyProvider != nil {
-		prefixedMiddlewares = append(prefixedMiddlewares, newHistoryProviderMiddleware(historyProvider, useDefaultHistoryHeuristics))
-	}
-	if len(providers) > 0 {
-		prefixedMiddlewares = append(prefixedMiddlewares, newContextProviderMiddleware(providers...))
-	}
-	cfg.Middlewares = append(prefixedMiddlewares, cfg.Middlewares...)
 	cfg.Middlewares = append(cfg.Middlewares, authorMiddleware(cfg.ID, cfg.Name))
 	return &Agent{
-		id:           cfg.ID,
-		name:         cfg.Name,
-		description:  cfg.Description,
-		provider:     prov,
-		instructions: cfg.Instructions,
-		runOptions:   cfg.RunOptions,
-		middlewares:  cfg.Middlewares,
+		id:                        cfg.ID,
+		name:                      cfg.Name,
+		description:               cfg.Description,
+		provider:                  prov,
+		runOptions:                cfg.RunOptions,
+		middlewares:               cfg.Middlewares,
+		logger:                    cfg.Logger,
+		historyProvider:           historyProvider,
+		hasConfiguredHistory:      cfg.HistoryProvider != nil,
+		hasDefaultHistoryProvider: hasDefaultHistoryProvider,
+		allowHistoryConflict:      cfg.AllowHistoryProviderConflict,
+		suppressHistoryWarning:    cfg.SuppressHistoryProviderConflictWarning,
+		keepHistoryOnConflict:     cfg.KeepHistoryProviderOnConflict,
+		contextProviders:          contextProviders,
 	}
 }
 
@@ -125,10 +129,21 @@ type Agent struct {
 	description string
 	provider    ProviderConfig
 
-	instructions string
-
 	middlewares []Middleware
 	runOptions  []Option
+	logger      *slog.Logger
+
+	historyProvider      *HistoryProvider
+	hasConfiguredHistory bool
+	// hasDefaultHistoryProvider is true when New synthesized the in-memory
+	// history provider because Config.HistoryProvider was nil. The synthesized
+	// provider is a local-session convenience and backs off for implicit per-run
+	// sessions and service-managed sessions.
+	hasDefaultHistoryProvider bool
+	allowHistoryConflict      bool
+	suppressHistoryWarning    bool
+	keepHistoryOnConflict     bool
+	contextProviders          []*ContextProvider
 }
 
 // ID returns the agent's unique identifier.
@@ -222,7 +237,225 @@ func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ..
 			yield(nil, err)
 		}
 	}
-	return ResponseStream(runChain(ctx, a.provider.Run, a.middlewares, preparedMessages, options...))
+	return ResponseStream(a.run(ctx, preparedMessages, options...))
+}
+
+func (a *Agent) run(ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error] {
+	return func(yield func(*ResponseUpdate, error) bool) {
+		session, _ := GetOption(options, WithSession)
+		rawContinuationToken, _ := GetOption(options, WithContinuationToken)
+		continuationState, err := parseContinuationToken(rawContinuationToken)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		continuationToken := continuationState.InnerToken
+		if rawContinuationToken != "" && continuationToken != rawContinuationToken {
+			options = append(slices.Clone(options), WithContinuationToken(continuationToken))
+		}
+		noSession, _ := GetOption(options, noSessionProvided)
+		stream, _ := GetOption(options, Stream)
+		inputMessages := slices.Clone(messages)
+		lifecycleOptions := withoutContinuationToken(options)
+
+		historyProvider := a.historyProviderForRun(session, continuationToken, noSession)
+		runContextProviders := continuationToken == "" && len(a.contextProviders) > 0
+		if historyProvider != nil {
+			var err error
+			messages, err = historyProvider.BeforeRun(ctx, messages, lifecycleOptions...)
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+		}
+
+		if runContextProviders {
+			options = slices.Clone(lifecycleOptions)
+			for _, provider := range a.contextProviders {
+				var err error
+				messages, options, err = provider.BeforeRun(ctx, messages, options...)
+				if err != nil {
+					yield(nil, err)
+					return
+				}
+			}
+		}
+
+		requestMessages := slices.Clone(messages)
+		var contextResponse Response
+		var historyResponse Response
+		continuationUpdates := cloneResponseUpdates(continuationState.ResponseUpdates)
+		var runErr error
+		var stopped bool
+
+		for update, err := range runChain(ctx, a.provider.Run, a.middlewares, messages, options...) {
+			if update != nil {
+				continuationUpdates = append(continuationUpdates, cloneResponseUpdate(update))
+				historyResponse.Update(update)
+				if runContextProviders {
+					contextResponse.Update(update)
+				}
+				if update.ContinuationToken != "" {
+					var tokenInputMessages []*message.Message
+					var tokenResponseUpdates []*ResponseUpdate
+					if stream {
+						tokenInputMessages = inputMessagesForContinuation(inputMessages, continuationState)
+						tokenResponseUpdates = continuationUpdates
+					}
+					wrappedToken, err := wrapContinuationToken(update.ContinuationToken, tokenInputMessages, tokenResponseUpdates)
+					if err != nil {
+						if !stopped {
+							yield(nil, err)
+						}
+						return
+					}
+					update.ContinuationToken = wrappedToken
+				}
+			}
+			if err != nil {
+				runErr = err
+				stopped = !yield(update, err)
+				break
+			}
+			if !yield(update, nil) {
+				stopped = true
+				break
+			}
+		}
+
+		historyStoreProvider := historyProvider
+		storeRequestMessages := requestMessages
+		storeResponseMessages := historyResponse.Messages
+		if continuationToken != "" {
+			historyStoreProvider = a.historyProviderForContinuationStore(session, noSession)
+			storeRequestMessages = inputMessagesForContinuation(nil, continuationState)
+			continuationResponse := responseFromUpdates(continuationUpdates)
+			storeResponseMessages = continuationResponse.Messages
+		}
+
+		if runErr == nil && historyStoreProvider != nil {
+			storeHistory, err := a.handleHistoryProviderConflict(ctx, historyStoreProvider, session)
+			if err != nil {
+				if !stopped {
+					yield(nil, err)
+				}
+				return
+			}
+			if storeHistory && a.shouldStoreHistoryProvider(historyStoreProvider, session) {
+				if continuationToken == "" {
+					historyResponse.Coalesce()
+					storeResponseMessages = historyResponse.Messages
+				}
+				if err := historyStoreProvider.AfterRun(ctx, slices.Clone(storeRequestMessages), slices.Clone(storeResponseMessages), withoutContinuationToken(options)...); err != nil {
+					if !stopped {
+						yield(nil, err)
+					}
+					return
+				}
+			}
+		}
+
+		if runContextProviders || continuationToken != "" && len(a.contextProviders) > 0 {
+			contextStoreResponseMessages := contextResponse.Messages
+			if continuationToken != "" {
+				continuationResponse := responseFromUpdates(continuationUpdates)
+				contextStoreResponseMessages = continuationResponse.Messages
+			} else {
+				contextResponse.Coalesce()
+				contextStoreResponseMessages = contextResponse.Messages
+			}
+			for _, provider := range a.contextProviders {
+				if err := provider.AfterRun(ctx, slices.Clone(storeRequestMessages), slices.Clone(contextStoreResponseMessages), withoutContinuationToken(options)...); err != nil {
+					if !stopped {
+						yield(nil, err)
+					}
+					return
+				}
+			}
+		}
+	}
+}
+
+func withoutContinuationToken(options []Option) []Option {
+	if !slices.ContainsFunc(options, func(opt Option) bool {
+		_, ok := opt.(continuationTokenOpt)
+		return ok
+	}) {
+		return options
+	}
+	return slices.DeleteFunc(slices.Clone(options), func(opt Option) bool {
+		_, ok := opt.(continuationTokenOpt)
+		return ok
+	})
+}
+
+func (a *Agent) historyProviderForRun(session Session, continuationToken string, noSession bool) *HistoryProvider {
+	if a.historyProvider == nil || continuationToken != "" || session == nil {
+		return nil
+	}
+	if !a.hasDefaultHistoryProvider {
+		if session.ServiceID() != "" {
+			return nil
+		}
+		return a.historyProvider
+	}
+
+	// The default in-memory provider only owns caller-provided local sessions.
+	// Auto-created sessions are per-run and cannot preserve history across calls;
+	// service-managed sessions use the provider service as the source of history.
+	if noSession || session.ServiceID() != "" {
+		return nil
+	}
+	return a.historyProvider
+}
+
+func (a *Agent) historyProviderForContinuationStore(session Session, noSession bool) *HistoryProvider {
+	if a.historyProvider == nil || session == nil {
+		return nil
+	}
+	if !a.hasDefaultHistoryProvider {
+		if session.ServiceID() != "" {
+			return nil
+		}
+		return a.historyProvider
+	}
+	if noSession || session.ServiceID() != "" {
+		return nil
+	}
+	return a.historyProvider
+}
+
+func (a *Agent) shouldStoreHistoryProvider(provider *HistoryProvider, session Session) bool {
+	if provider == nil {
+		return false
+	}
+	if !a.hasDefaultHistoryProvider {
+		return true
+	}
+
+	// A provider can promote a local session to a service-managed one during the
+	// run. Once that happens, the default in-memory provider should stop storing.
+	return session != nil && session.ServiceID() == ""
+}
+
+func (a *Agent) handleHistoryProviderConflict(ctx context.Context, provider *HistoryProvider, session Session) (bool, error) {
+	if provider == nil || !a.hasConfiguredHistory || session == nil || session.ServiceID() == "" {
+		return true, nil
+	}
+
+	if !a.suppressHistoryWarning && a.logger != nil {
+		a.logger.WarnContext(ctx, "history provider conflicts with service-managed history", slog.String("service_id", session.ServiceID()))
+	}
+	if !a.allowHistoryConflict {
+		return false, errors.New("only Session.ServiceID or HistoryProvider may be used, but not both; the service returned an ID indicating service-managed history while the agent has a HistoryProvider configured")
+	}
+	if !a.keepHistoryOnConflict {
+		if a.historyProvider == provider {
+			a.historyProvider = nil
+		}
+		return false, nil
+	}
+	return true, nil
 }
 
 func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, options []Option) (context.Context, []*message.Message, []Option, error) {
@@ -246,23 +479,14 @@ func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, opt
 	}
 
 	continuationToken, _ := GetOption(options, WithContinuationToken)
+	if continuationToken != "" {
+		if _, err := parseContinuationToken(continuationToken); err != nil {
+			return nil, nil, nil, err
+		}
+	}
 	if continuationToken != "" && len(messages) > 0 {
 		return nil, nil, nil, errors.New("messages are not allowed when continuing a background response using a continuation token")
 	}
-	if continuationToken == "" {
-		if a.instructions != "" {
-			preparedMessages := make([]*message.Message, 0, len(messages)+1)
-			preparedMessages = append(preparedMessages, &message.Message{
-				Role: message.RoleSystem,
-				Contents: []message.Content{
-					&message.TextContent{Text: a.instructions},
-				},
-			})
-			preparedMessages = append(preparedMessages, messages...)
-			messages = preparedMessages
-		}
-	}
-
 	// Add agent identity to context so that middlewares can log it.
 	ctx = context.WithValue(ctx, agentKey{}, a)
 

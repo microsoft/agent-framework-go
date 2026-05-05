@@ -44,6 +44,33 @@ func TestAGUIAgentRun_AggregatesStreamingText(t *testing.T) {
 	}
 }
 
+func TestAGUIAgentRun_ConfigInstructionsBecomeSystemMessage(t *testing.T) {
+	var captured aguiTypes.RunAgentInput
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeSSE(t, w, aguiEvents.NewRunStartedEvent(captured.ThreadID, captured.RunID))
+		writeSSE(t, w, aguiEvents.NewRunFinishedEvent(captured.ThreadID, captured.RunID))
+	}))
+	defer server.Close()
+
+	a := aguiagent.New(newTestClient(server.URL), aguiagent.Config{Instructions: "Be concise."})
+	if _, err := a.RunText(context.Background(), "hi").Collect(); err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	if len(captured.Messages) < 2 {
+		t.Fatalf("messages length = %d, want at least 2", len(captured.Messages))
+	}
+	if captured.Messages[0].Role != aguiTypes.RoleSystem || captured.Messages[0].Content != "Be concise." {
+		t.Fatalf("first message = %#v, want system instructions", captured.Messages[0])
+	}
+	if captured.Messages[1].Role != aguiTypes.RoleUser || captured.Messages[1].Content != "hi" {
+		t.Fatalf("second message = %#v, want user input", captured.Messages[1])
+	}
+}
+
 func TestAGUIAgentRun_WithEmptyEventStream_EmitsMetadataUpdate(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

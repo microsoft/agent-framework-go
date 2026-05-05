@@ -22,11 +22,11 @@ func main() {
 	a := anthropicagent.New(
 		anthropic.NewClient(),
 		anthropicagent.Config{
-			Model: "claude-sonnet-4-5",
+			Model:        "claude-sonnet-4-5",
+			Instructions: "You are good at telling jokes.",
 			Config: agent.Config{
-				Instructions: "You are good at telling jokes.",
-				Name:         "Joker",
-				Middlewares:  []agent.Middleware{logger}, // for logging agent interactions
+				Name:        "Joker",
+				Middlewares: []agent.Middleware{logger}, // for logging agent interactions
 			},
 		},
 	)

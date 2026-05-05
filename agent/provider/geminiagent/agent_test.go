@@ -291,6 +291,56 @@ func TestSystemInstruction(t *testing.T) {
 	}
 }
 
+func TestConfigInstructions(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(captureAndRespond(t, bodyCh, "application/json", minimalTextResponse("ok")))
+	defer server.Close()
+
+	client, err := genai.NewClient(t.Context(), &genai.ClientConfig{
+		Backend: genai.BackendGeminiAPI,
+		APIKey:  "test",
+		HTTPOptions: genai.HTTPOptions{
+			BaseURL: server.URL,
+		},
+	})
+	if err != nil {
+		t.Fatalf("genai.NewClient: %v", err)
+	}
+	a := geminiagent.New(client, geminiagent.Config{
+		Model:        testModel,
+		Instructions: "You are helpful.",
+		Config: agent.Config{
+			DisableFuncAutoCall: true,
+		},
+	})
+
+	_, err = a.RunText(t.Context(), "hi").Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	si, hasSI := nestedKey(req, "systemInstruction", "parts")
+	if !hasSI {
+		t.Fatal("request missing systemInstruction.parts")
+	}
+	parts, _ := si.([]any)
+	if len(parts) != 1 {
+		t.Fatalf("systemInstruction.parts length = %d, want 1", len(parts))
+	}
+	firstPart, _ := parts[0].(map[string]any)
+	if text, _ := nestedKey(firstPart, "text"); text != "You are helpful." {
+		t.Fatalf("systemInstruction text = %q, want %q", text, "You are helpful.")
+	}
+	contents, _ := req["contents"].([]any)
+	if len(contents) != 1 {
+		t.Fatalf("contents length = %d, want 1", len(contents))
+	}
+}
+
 // TestToolCall_NonStreaming verifies that tool definitions are sent in the
 // request and that a functionCall part in the response is translated into a
 // FunctionCallContent.

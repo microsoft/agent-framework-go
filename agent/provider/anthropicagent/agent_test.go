@@ -119,6 +119,55 @@ func minimalStreamingResponse(payload string) string {
 		`data: {"type":"message_stop"}` + "\n\n"
 }
 
+func TestConfigInstructions(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		bodyCh <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, minimalMessageResponse("ok"))
+	}))
+	defer server.Close()
+
+	a := anthropicagent.New(
+		anthropic.NewClient(
+			option.WithBaseURL(server.URL),
+			option.WithAPIKey("test"),
+		),
+		anthropicagent.Config{
+			Model:        "claude-3-5-sonnet-20241022",
+			Instructions: "You are helpful.",
+			Config: agent.Config{
+				DisableFuncAutoCall: true,
+			},
+		})
+
+	if _, err := a.RunText(t.Context(), "hi").Collect(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	system, ok := req["system"].([]any)
+	if !ok || len(system) != 1 {
+		t.Fatalf("system = %#v, want one text block", req["system"])
+	}
+	block, _ := system[0].(map[string]any)
+	if block["text"] != "You are helpful." {
+		t.Fatalf("system text = %q, want %q", block["text"], "You are helpful.")
+	}
+	messages, _ := req["messages"].([]any)
+	if len(messages) != 1 {
+		t.Fatalf("messages length = %d, want 1", len(messages))
+	}
+}
+
 // TestStructuredOutput_NonStreaming verifies that passing agent.WithStructuredOutput
 // with a typed struct causes the provider to:
 //  1. Send output_config.format with type "json_schema" and a schema derived

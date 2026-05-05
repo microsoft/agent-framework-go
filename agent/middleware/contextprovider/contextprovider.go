@@ -11,8 +11,9 @@ import (
 	"github.com/microsoft/agent-framework-go/message"
 )
 
-// New returns a middleware that invokes the provided context providers in order
-// before the wrapped run and persists them in reverse order after the run.
+// New adapts context providers into middleware for callers that explicitly need
+// middleware composition. Agents configured with agent.Config.ContextProviders
+// run providers through the agent lifecycle rather than through this adapter.
 func New(providers ...*agent.ContextProvider) agent.Middleware {
 	activeProviders := make([]*agent.ContextProvider, 0, len(providers))
 	for _, provider := range providers {
@@ -31,8 +32,6 @@ type contextProviderRunner struct {
 }
 
 func (r *contextProviderRunner) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
-	session, _ := agent.GetOption(options, agent.WithSession)
-
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		options = slices.Clone(options)
 		for _, provider := range r.providers {
@@ -43,9 +42,11 @@ func (r *contextProviderRunner) Run(next agent.RunFunc, ctx context.Context, mes
 				return
 			}
 		}
+
+		requestMessages := slices.Clone(messages)
 		var resp agent.Response
 		for update, err := range next(ctx, messages, options...) {
-			if update != nil && (session == nil || session.ServiceID() == "") {
+			if update != nil {
 				resp.Update(update)
 			}
 			if !yield(update, err) {
@@ -53,11 +54,9 @@ func (r *contextProviderRunner) Run(next agent.RunFunc, ctx context.Context, mes
 			}
 		}
 		resp.Coalesce()
-		requestMessages := slices.Clone(messages)
-		responseMessages := slices.Clone(resp.Messages)
 
-		for _, provider := range slices.Backward(r.providers) {
-			if err := provider.AfterRun(ctx, requestMessages, responseMessages, options...); err != nil {
+		for _, provider := range r.providers {
+			if err := provider.AfterRun(ctx, slices.Clone(requestMessages), slices.Clone(resp.Messages), options...); err != nil {
 				yield(nil, err)
 				return
 			}

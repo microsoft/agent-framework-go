@@ -4,7 +4,6 @@ package agent
 
 import (
 	"context"
-	"iter"
 	"slices"
 
 	"github.com/microsoft/agent-framework-go/message"
@@ -155,55 +154,6 @@ func (p *HistoryProvider) withHistorySource(outMessages, inMessages []*message.M
 		return cloned
 	}
 	return outMessages
-}
-
-func newHistoryProviderMiddleware(provider *HistoryProvider, skipAutoCreatedSession bool) Middleware {
-	if provider == nil {
-		panic("history provider is required")
-	}
-	return &historyProviderRunner{provider: provider, skipAutoCreatedSession: skipAutoCreatedSession}
-}
-
-type historyProviderRunner struct {
-	provider               *HistoryProvider
-	skipAutoCreatedSession bool
-}
-
-func (r *historyProviderRunner) Run(next RunFunc, ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error] {
-	session, _ := GetOption(options, WithSession)
-	continuationToken, _ := GetOption(options, WithContinuationToken)
-	noSession, _ := GetOption(options, noSessionProvided)
-	if continuationToken != "" || session == nil || session.ServiceID() != "" || r.skipAutoCreatedSession && noSession {
-		return next(ctx, messages, options...)
-	}
-
-	return func(yield func(*ResponseUpdate, error) bool) {
-		var err error
-		messages, err = r.provider.BeforeRun(ctx, messages, options...)
-		if err != nil {
-			yield(nil, err)
-			return
-		}
-
-		var resp Response
-		for update, err := range next(ctx, messages, options...) {
-			if err != nil {
-				yield(update, err)
-				return
-			}
-			resp.Update(update)
-			if !yield(update, nil) {
-				break
-			}
-		}
-		resp.Coalesce()
-		requestMessages := slices.Clone(messages)
-		responseMessages := slices.Clone(resp.Messages)
-
-		if err := r.provider.AfterRun(ctx, requestMessages, responseMessages, options...); err != nil {
-			yield(nil, err)
-		}
-	}
 }
 
 // NewInMemoryHistoryProvider creates a history provider that stores conversation history in the session.

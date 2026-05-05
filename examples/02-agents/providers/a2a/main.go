@@ -47,9 +47,8 @@ func main() {
 		client,
 		a2aagent.Config{
 			Config: agent.Config{
-				Instructions: "You are good at telling jokes.",
-				Name:         "Joker",
-				Middlewares:  []agent.Middleware{logger}, // for logging agent interactions
+				Name:        "Joker",
+				Middlewares: []agent.Middleware{logger}, // for logging agent interactions
 			},
 		},
 	)

@@ -162,10 +162,10 @@ func buildAgent(agentType, model string) (openaiagent.Config, *a2a.AgentCard) {
 			return q.QueryByInvoiceID(invoiceID), nil
 		})
 
+		cfg.Instructions = "You specialize in handling queries related to invoices."
 		cfg.Config = agent.Config{
-			Name:         "InvoiceAgent",
-			Description:  "Handles requests relating to invoices.",
-			Instructions: "You specialize in handling queries related to invoices.",
+			Name:        "InvoiceAgent",
+			Description: "Handles requests relating to invoices.",
 			Tools: []tool.Tool{
 				queryInvoices,
 				queryByTransactionID,
@@ -182,10 +182,7 @@ func buildAgent(agentType, model string) (openaiagent.Config, *a2a.AgentCard) {
 			Examples:    []string{"List the latest invoices for Contoso."},
 		}}
 	case "POLICY":
-		cfg.Config = agent.Config{
-			Name:        "PolicyAgent",
-			Description: "Handles requests relating to policies and customer communications.",
-			Instructions: `You specialize in handling queries related to policies and customer communications.
+		cfg.Instructions = `You specialize in handling queries related to policies and customer communications.
 
 Always reply with exactly this text:
 
@@ -196,7 +193,10 @@ Summary: "For short shipments reported by customers, first verify internal shipm
 shows fewer items packed than invoiced, issue a credit for the missing items. Document the
 resolution in SAP CRM and notify the customer via email within 2 business days, referencing the
 original invoice and the credit memo number. Use the 'Formal Credit Notification' email
-template."`,
+template."`
+		cfg.Config = agent.Config{
+			Name:        "PolicyAgent",
+			Description: "Handles requests relating to policies and customer communications.",
 		}
 		card.Name = "PolicyAgent"
 		card.Description = cfg.Description
@@ -208,16 +208,16 @@ template."`,
 			Examples:    []string{"What is the policy for short shipments?"},
 		}}
 	case "LOGISTICS":
-		cfg.Config = agent.Config{
-			Name:        "LogisticsAgent",
-			Description: "Handles requests relating to logistics.",
-			Instructions: `You specialize in handling queries related to logistics.
+		cfg.Instructions = `You specialize in handling queries related to logistics.
 
 Always reply with exactly:
 
 Shipment number: SHPMT-SAP-001
 Item: TSHIRT-RED-L
-Quantity: 900`,
+Quantity: 900`
+		cfg.Config = agent.Config{
+			Name:        "LogisticsAgent",
+			Description: "Handles requests relating to logistics.",
 		}
 		card.Name = "LogisticsAgent"
 		card.Description = cfg.Description

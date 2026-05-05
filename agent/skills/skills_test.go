@@ -15,7 +15,6 @@ import (
 	"github.com/microsoft/agent-framework-go/agent/skills"
 	"github.com/microsoft/agent-framework-go/agent/skills/fsskills"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
-	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 )
 
@@ -97,15 +96,11 @@ func captureProviderContext(t *testing.T, provider *agent.ContextProvider) (stri
 		t.Fatal(err)
 	}
 	tools := slices.Collect(agent.AllOptions(options, agent.WithTool))
-	if len(messages) == 0 {
-		return "", tools
+	instructions, _ := agent.GetOption(options, agent.WithInstructions)
+	if len(messages) != 0 {
+		t.Fatalf("expected skills provider not to add messages, got %d", len(messages))
 	}
-	for _, content := range messages[0].Contents {
-		if txt, ok := content.(*message.TextContent); ok {
-			return txt.Text, tools
-		}
-	}
-	return "", tools
+	return instructions, tools
 }
 
 func findTool(t *testing.T, tools []tool.Tool, name string) tool.FuncTool {

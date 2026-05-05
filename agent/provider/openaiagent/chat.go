@@ -10,6 +10,7 @@ import (
 	"iter"
 	"reflect"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -43,6 +44,9 @@ func ChatCompletionNewParams(params openai.ChatCompletionNewParams) agent.Option
 type Config struct {
 	agent.Config
 
+	// Instructions are provided to OpenAI as system instructions for each run.
+	Instructions string
+
 	Model string
 }
 
@@ -51,6 +55,9 @@ func NewChatCompletions(oclient openai.Client, config Config) *agent.Agent {
 	c := &chatClient{
 		client: oclient,
 		config: config,
+	}
+	if config.Instructions != "" {
+		config.RunOptions = append(config.RunOptions, agent.WithInstructions(config.Instructions))
 	}
 	config.Middlewares = slices.Clone(config.Middlewares)
 	if !config.DisableFuncAutoCall {
@@ -315,6 +322,10 @@ func buildCompletionParams(model string, messages []*message.Message, opts []age
 				},
 			})
 		}
+	}
+	instructions := slices.Collect(agent.AllOptions(opts, agent.WithInstructions))
+	if len(instructions) > 0 {
+		params.Messages = append(params.Messages, openai.SystemMessage(strings.Join(instructions, "\n")))
 	}
 	for _, msg := range messages {
 		omsg, err := buildMessageParam(msg)

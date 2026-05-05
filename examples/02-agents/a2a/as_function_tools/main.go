@@ -73,12 +73,12 @@ func main() {
 			azure.WithTokenCredential(token),
 		),
 		openaiagent.Config{
-			Model: deployment,
+			Model:        deployment,
+			Instructions: "You are a helpful assistant that helps people with travel planning.",
 			Config: agent.Config{
-				Name:         "TravelPlanner",
-				Instructions: "You are a helpful assistant that helps people with travel planning.",
-				Middlewares:  []agent.Middleware{logger},
-				Tools:        createSkillTools(remoteAgent, card.Skills),
+				Name:        "TravelPlanner",
+				Middlewares: []agent.Middleware{logger},
+				Tools:       createSkillTools(remoteAgent, card.Skills),
 			},
 		},
 	)

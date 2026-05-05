@@ -6,6 +6,7 @@ import (
 	"iter"
 	"reflect"
 	"slices"
+	"strings"
 
 	"github.com/microsoft/agent-framework-go/tool"
 )
@@ -22,6 +23,7 @@ type Option interface {
 type (
 	responseFormatOpt    struct{ ResponseFormat }
 	continuationTokenOpt string
+	instructionsOpt      string
 	serviceIDOpt         string
 
 	toolOpt struct{ tool.Tool }
@@ -36,6 +38,7 @@ type (
 func (o responseFormatOpt) Value() any           { return o.ResponseFormat }
 func (o streamOpt) Value() any                   { return bool(o) }
 func (o continuationTokenOpt) Value() any        { return string(o) }
+func (o instructionsOpt) Value() any             { return string(o) }
 func (o allowBackgroundResponsesOpt) Value() any { return bool(o) }
 func (o toolModeOpt) Value() any                 { return tool.ToolMode(o) }
 func (o toolOpt) Value() any                     { return o.Tool }
@@ -135,6 +138,12 @@ func WithSession(session Session) Option {
 // completion by obtaining the token from the [RunResponse] continuation token.
 func WithContinuationToken(token string) Option {
 	return continuationTokenOpt(token)
+}
+
+// WithInstructions sets system instructions for an agent run when supported by the provider.
+// Use [AllOptions] to access instructions because multiple instruction values can be supplied.
+func WithInstructions(instructions string) Option {
+	return instructionsOpt(strings.TrimSpace(instructions))
 }
 
 // AllowBackgroundResponses sets whether to allow background responses during the agent run.

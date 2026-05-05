@@ -38,11 +38,11 @@ func main() {
 	a := geminiagent.New(
 		client,
 		geminiagent.Config{
-			Model: model,
+			Model:        model,
+			Instructions: "You are good at telling jokes.",
 			Config: agent.Config{
-				Instructions: "You are good at telling jokes.",
-				Name:         "Joker",
-				Middlewares:  []agent.Middleware{logger}, // for logging agent interactions
+				Name:        "Joker",
+				Middlewares: []agent.Middleware{logger}, // for logging agent interactions
 			},
 		},
 	)

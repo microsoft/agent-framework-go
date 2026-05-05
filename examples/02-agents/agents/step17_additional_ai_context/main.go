@@ -51,10 +51,10 @@ func main() {
 		),
 		openaiagent.Config{
 			Model: deployment,
-			Config: agent.Config{
-				Instructions: `You are a helpful personal assistant.
+			Instructions: `You are a helpful personal assistant.
 You manage a TODO list for the user. When the user has completed one of the tasks it can be removed from the TODO list. Only provide the list of TODO items if asked.
 You remind users of upcoming calendar events when the user interacts with you.`,
+			Config: agent.Config{
 				Name:            "PersonalAssistant",
 				HistoryProvider: newChatHistoryProvider(),
 				ContextProviders: []*agent.ContextProvider{

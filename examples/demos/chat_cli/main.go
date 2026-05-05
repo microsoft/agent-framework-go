@@ -25,10 +25,10 @@ func main() {
 	a := openaiagent.NewChatCompletions(
 		openai.NewClient(),
 		openaiagent.Config{
-			Model: "gpt-4o-mini",
+			Model:        "gpt-4o-mini",
+			Instructions: "You are a helpful assistant with access to weather information. Be concise and friendly.",
 			Config: agent.Config{
-				Instructions: "You are a helpful assistant with access to weather information. Be concise and friendly.",
-				Tools:        []tool.Tool{weatherTool},
+				Tools: []tool.Tool{weatherTool},
 			},
 		},
 	)

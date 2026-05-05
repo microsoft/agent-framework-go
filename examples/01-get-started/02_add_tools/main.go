@@ -48,11 +48,11 @@ func main() {
 			azure.WithTokenCredential(token),
 		),
 		openaiagent.Config{
-			Model: deployment,
+			Model:        deployment,
+			Instructions: "You are a helpful assistant",
 			Config: agent.Config{
-				Instructions: "You are a helpful assistant",
-				Middlewares:  []agent.Middleware{logger}, // for logging agent interactions
-				Tools:        []tool.Tool{weatherTool},
+				Middlewares: []agent.Middleware{logger}, // for logging agent interactions
+				Tools:       []tool.Tool{weatherTool},
 			},
 		},
 	)

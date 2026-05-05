@@ -71,12 +71,12 @@ func main() {
 			azure.WithTokenCredential(token),
 		),
 		openaiagent.Config{
-			Model: deployment,
+			Model:        deployment,
+			Instructions: "You specialize in handling user queries and using your tools to provide answers.",
 			Config: agent.Config{
-				Name:         "HostClient",
-				Instructions: "You specialize in handling user queries and using your tools to provide answers.",
-				Middlewares:  []agent.Middleware{logger},
-				Tools:        tools,
+				Name:        "HostClient",
+				Middlewares: []agent.Middleware{logger},
+				Tools:       tools,
 			},
 		},
 	)

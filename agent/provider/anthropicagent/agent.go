@@ -11,6 +11,7 @@ import (
 	"maps"
 	"reflect"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -40,6 +41,9 @@ type client struct {
 type Config struct {
 	agent.Config
 
+	// Instructions are provided to Anthropic as system instructions for each run.
+	Instructions string
+
 	Model string
 }
 
@@ -47,6 +51,9 @@ func New(aclient anthropic.Client, config Config) *agent.Agent {
 	c := &client{
 		client: aclient,
 		config: config,
+	}
+	if config.Instructions != "" {
+		config.RunOptions = append(config.RunOptions, agent.WithInstructions(config.Instructions))
 	}
 	config.Middlewares = slices.Clone(config.Middlewares)
 	if !config.DisableFuncAutoCall {
@@ -272,6 +279,10 @@ func (a *client) buildMessageParams(messages []*message.Message, opts []agent.Op
 	}
 	params.Model = cmp.Or(params.Model, a.config.Model)
 	params.MaxTokens = cmp.Or(params.MaxTokens, 4096)
+	instructions := slices.Collect(agent.AllOptions(opts, agent.WithInstructions))
+	if len(instructions) > 0 {
+		params.System = append(params.System, anthropic.TextBlockParam{Text: strings.Join(instructions, "\n")})
+	}
 
 	var tools []anthropic.ToolUnionParam
 	for tl := range agent.AllOptions(opts, agent.WithTool) {

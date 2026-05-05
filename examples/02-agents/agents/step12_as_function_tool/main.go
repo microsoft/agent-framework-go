@@ -50,13 +50,13 @@ func main() {
 			azure.WithTokenCredential(token),
 		),
 		openaiagent.Config{
-			Model: deployment,
+			Model:        deployment,
+			Instructions: "You answer questions about the weather.",
 			Config: agent.Config{
-				Instructions: "You answer questions about the weather.",
-				Name:         "WeatherAgent",
-				Description:  "An agent that answers questions about the weather.",
-				Middlewares:  []agent.Middleware{logger}, // for logging agent interactions
-				Tools:        []tool.Tool{weatherTool},
+				Name:        "WeatherAgent",
+				Description: "An agent that answers questions about the weather.",
+				Middlewares: []agent.Middleware{logger}, // for logging agent interactions
+				Tools:       []tool.Tool{weatherTool},
 			},
 		},
 	)
@@ -69,10 +69,10 @@ func main() {
 			azure.WithTokenCredential(token),
 		),
 		openaiagent.Config{
-			Model: deployment,
+			Model:        deployment,
+			Instructions: "You are a helpful assistant who responds in French.",
 			Config: agent.Config{
-				Instructions: "You are a helpful assistant who responds in French.",
-				Tools:        []tool.Tool{agenttool.New(weatherAgent, agenttool.Config{})},
+				Tools: []tool.Tool{agenttool.New(weatherAgent, agenttool.Config{})},
 			},
 		},
 	)

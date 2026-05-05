@@ -32,10 +32,10 @@ func main() {
 			azure.WithTokenCredential(token),
 		),
 		openaiagent.Config{
-			Model: deployment,
+			Model:        deployment,
+			Instructions: "You are a helpful assistant.",
 			Config: agent.Config{
-				Name:         "AGUIAssistant",
-				Instructions: "You are a helpful assistant.",
+				Name: "AGUIAssistant",
 			},
 		},
 	)
