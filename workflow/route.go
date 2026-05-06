@@ -121,6 +121,10 @@ func (mr *messageRouter) DefaultOutputTypes() iter.Seq[reflect.Type] {
 	return maps.Keys(mr.defaultOutputTypes)
 }
 
+func (mr *messageRouter) HasCatchAll() bool {
+	return mr.catchAllFunc != nil
+}
+
 func (mr *messageRouter) CanHandle(typ TypeID) bool {
 	if mr.catchAllFunc != nil {
 		return true
