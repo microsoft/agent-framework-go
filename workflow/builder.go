@@ -5,7 +5,9 @@ package workflow
 import (
 	"fmt"
 	"iter"
+	"log/slog"
 	"maps"
+	"reflect"
 	"slices"
 )
 
@@ -217,6 +219,13 @@ func (wb *Builder) validate(validateOrphans bool) bool {
 		wb.err = fmt.Errorf("workflow cannot be built because there are unbound executors: %v", keys)
 		return false
 	}
+	// Validate that output executors (declared via WithOutputFrom) exist in the graph.
+	for id := range wb.outputExecutors {
+		if _, ok := wb.executorsBindings[id]; !ok {
+			wb.err = fmt.Errorf("output executor %q is not present in the workflow graph", id)
+			return false
+		}
+	}
 	if !validateOrphans || len(wb.executorsBindings) == 0 {
 		return true
 	}
@@ -245,12 +254,134 @@ func (wb *Builder) validate(validateOrphans bool) bool {
 		wb.err = fmt.Errorf("workflow cannot be built because there are orphaned executors: %v", keys)
 		return false
 	}
+	// Warn about self-loops (executor connecting to itself), which may cause infinite
+	// recursion if not gated by a condition.
+	for sourceID, edges := range wb.edges {
+		for _, edge := range edges {
+			for _, sinkID := range edge.Connection.SinkIDs {
+				if sourceID == sinkID {
+					slog.Warn("self-loop detected: executor connects to itself; this may cause infinite recursion if not properly handled with conditions",
+						"executor", sourceID)
+				}
+			}
+		}
+	}
+	// Log dead-end executors (no outgoing edges). These may be intentional final
+	// nodes but are worth flagging for review.
+	executorsWithOutgoing := make(map[string]struct{}, len(wb.edges))
+	for sourceID := range wb.edges {
+		executorsWithOutgoing[sourceID] = struct{}{}
+	}
+	var deadEnds []string
+	for id := range wb.executorsBindings {
+		if _, hasOutgoing := executorsWithOutgoing[id]; !hasOutgoing {
+			deadEnds = append(deadEnds, id)
+		}
+	}
+	if len(deadEnds) > 0 {
+		slices.Sort(deadEnds)
+		slog.Info("dead-end executors detected (no outgoing edges); verify these are intended as final nodes",
+			"executors", deadEnds)
+	}
+	// Validate type compatibility between connected executors. For each edge we
+	// create temporary executor instances, inspect their routers, and verify that
+	// the source's output types overlap with the target's input types. Executors
+	// with a catch-all handler accept any type, so they are always compatible as
+	// targets. If either side has no declared types we skip that edge (dynamic
+	// typing).
+	if err := wb.validateTypeCompatibility(); err != nil {
+		wb.err = err
+		return false
+	}
 	return true
 }
 
 func (wb *Builder) edgeIdx() int {
 	wb.edgeCount++
 	return wb.edgeCount
+}
+
+// validateTypeCompatibility checks that output types of source executors are
+// compatible with input types of target executors for every edge. It creates
+// temporary executor instances to inspect their routers. If an executor cannot
+// be instantiated or has no type metadata (e.g. catch-all or no output type
+// annotations), the edge is silently skipped.
+func (wb *Builder) validateTypeCompatibility() error {
+	type routerInfo struct {
+		router *messageRouter
+		ok     bool
+	}
+	cache := make(map[string]routerInfo, len(wb.executorsBindings))
+	getRouter := func(id string) (*messageRouter, bool) {
+		if ri, cached := cache[id]; cached {
+			return ri.router, ri.ok
+		}
+		binding := wb.executorsBindings[id]
+		if binding == nil || binding.isPlaceholder() {
+			cache[id] = routerInfo{}
+			return nil, false
+		}
+		ex, err := binding.CreateInstance("")
+		if err != nil {
+			cache[id] = routerInfo{}
+			return nil, false
+		}
+		r, err := ex.router()
+		if err != nil {
+			cache[id] = routerInfo{}
+			return nil, false
+		}
+		cache[id] = routerInfo{router: r, ok: true}
+		return r, true
+	}
+
+	for sourceID, edges := range wb.edges {
+		sourceRouter, sourceOK := getRouter(sourceID)
+		if !sourceOK {
+			continue
+		}
+		sourceOutputTypes := slices.Collect(sourceRouter.DefaultOutputTypes())
+		if len(sourceOutputTypes) == 0 {
+			// Source has no declared output types; skip validation.
+			continue
+		}
+		for _, edge := range edges {
+			for _, sinkID := range edge.Connection.SinkIDs {
+				targetRouter, targetOK := getRouter(sinkID)
+				if !targetOK {
+					continue
+				}
+				// Targets with a catch-all accept anything.
+				if targetRouter.HasCatchAll() {
+					continue
+				}
+				targetInputTypes := targetRouter.IncomingTypes()
+				if len(targetInputTypes) == 0 {
+					continue
+				}
+				// Check that at least one source output type matches a target input type.
+				compatible := false
+				for _, outType := range sourceOutputTypes {
+					for _, inType := range targetInputTypes {
+						if outType == inType || outType.AssignableTo(inType) || (inType.Kind() == reflect.Interface && outType.Implements(inType)) {
+							compatible = true
+							break
+						}
+					}
+					if compatible {
+						break
+					}
+				}
+				if !compatible {
+					return fmt.Errorf(
+						"type incompatibility between executors %q -> %q: source outputs %v but target accepts %v",
+						sourceID, sinkID, sourceOutputTypes, targetInputTypes,
+					)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func (wb *Builder) checkBinding(binding *ExecutorBinding) bool {

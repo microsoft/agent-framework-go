@@ -26,6 +26,8 @@ tools:
    github:
       toolsets: [default]
 safe-outputs:
+   noop:
+      report-as-issue: false
    create-pull-request-review-comment:
       max: 10
    add-comment:

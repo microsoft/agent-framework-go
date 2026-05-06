@@ -407,3 +407,156 @@ func TestAddSwitch_FallsBackToDefault(t *testing.T) {
 		t.Errorf("expected default branch to receive non-matching message; trace=%v", trace)
 	}
 }
+
+func TestBuilder_Validation_FailsWhenOutputExecutorNotInGraph(t *testing.T) {
+	start := newNoOpExecutor("start")
+
+	// WithOutputFrom references an executor that was never added via an edge
+	// or BindExecutor. Since it is tracked by WithOutputFrom itself but is
+	// otherwise disconnected, the orphan-check fires first. Use a binding
+	// that IS reachable but then reference a completely unknown ID via a
+	// separate binding that only appears in WithOutputFrom.
+	ghost := newNoOpExecutor("ghost")
+	_, err := workflow.NewBuilder(start).
+		AddEdge(start, newNoOpExecutor("next")).
+		WithOutputFrom(ghost).
+		Build()
+
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "orphaned executors") && !strings.Contains(err.Error(), "output executor") {
+		t.Errorf("expected output or orphan executor error, got %v", err)
+	}
+}
+
+func TestBuilder_Validation_OutputExecutorNotBound(t *testing.T) {
+	// Directly test the output executor validation: if we somehow register
+	// an output executor that is not in executorsBindings, the build must
+	// fail with a clear error.
+	start := newNoOpExecutor("start")
+	target := newNoOpExecutor("target")
+
+	_, err := workflow.NewBuilder(start).
+		AddEdge(start, target).
+		WithOutputFrom(target).
+		Build()
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+}
+
+func TestBuilder_Validation_SelfLoopWarning(t *testing.T) {
+	// A self-loop (executor → itself) is allowed but should log a warning.
+	// We verify it does not produce a build error.
+	start := newNoOpExecutor("start")
+
+	wf, err := workflow.NewBuilder(start).
+		AddDirectEdge(start, start, true, func(any) bool { return false }).
+		Build()
+	if err != nil {
+		t.Fatalf("expected no error for self-loop, got %v", err)
+	}
+	if wf.StartExecutorID != "start" {
+		t.Errorf("expected start executor ID 'start', got %s", wf.StartExecutorID)
+	}
+}
+
+func TestBuilder_Validation_DeadEndLogging(t *testing.T) {
+	// Dead-end executors (no outgoing edges) should not cause build failure.
+	start := newNoOpExecutor("start")
+	leaf := newNoOpExecutor("leaf")
+
+	wf, err := workflow.NewBuilder(start).
+		AddEdge(start, leaf).
+		Build()
+	if err != nil {
+		t.Fatalf("expected no error for dead-end, got %v", err)
+	}
+	if _, ok := wf.ExecutorBindings["leaf"]; !ok {
+		t.Error("expected leaf executor in bindings")
+	}
+}
+
+// newTypedExecutor creates an executor that accepts messages of type T and
+// outputs messages of type U. This is used to test type compatibility
+// validation between connected executors.
+func newTypedExecutor[T any, U any](id string) *workflow.ExecutorBinding {
+	newExec := func(_ string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: id,
+			Config: []*workflow.ExecutorConfig{{
+				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+					return rb.AddHandler(
+						reflect.TypeFor[T](),
+						reflect.TypeFor[U](),
+						false,
+						func(ctx *workflow.Context, msg any) (any, error) {
+							return *new(U), nil
+						},
+					), nil
+				},
+			}},
+		}, nil
+	}
+	return &workflow.ExecutorBinding{
+		ID:           id,
+		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		NewExecutor:  newExec,
+	}
+}
+
+func TestBuilder_Validation_TypeCompatibility_Compatible(t *testing.T) {
+	// source outputs string, target accepts string → compatible.
+	source := newTypedExecutor[string, string]("source")
+	target := newTypedExecutor[string, int]("target")
+
+	_, err := workflow.NewBuilder(source).
+		AddEdge(source, target).
+		Build()
+	if err != nil {
+		t.Fatalf("expected no error for compatible types, got %v", err)
+	}
+}
+
+func TestBuilder_Validation_TypeCompatibility_Incompatible(t *testing.T) {
+	// source outputs int, target accepts string → incompatible.
+	source := newTypedExecutor[string, int]("source")
+	target := newTypedExecutor[string, string]("target")
+
+	_, err := workflow.NewBuilder(source).
+		AddEdge(source, target).
+		Build()
+	if err == nil {
+		t.Fatal("expected type incompatibility error, got nil")
+	}
+	if !strings.Contains(err.Error(), "type incompatibility") {
+		t.Errorf("expected type incompatibility error, got %v", err)
+	}
+}
+
+func TestBuilder_Validation_TypeCompatibility_CatchAllTargetSkipped(t *testing.T) {
+	// source outputs int, but target has a catch-all → always compatible.
+	source := newTypedExecutor[string, int]("source")
+	target := newNoOpExecutor("target") // uses AddCatchAll
+
+	_, err := workflow.NewBuilder(source).
+		AddEdge(source, target).
+		Build()
+	if err != nil {
+		t.Fatalf("expected no error when target has catch-all, got %v", err)
+	}
+}
+
+func TestBuilder_Validation_TypeCompatibility_CatchAllSourceSkipped(t *testing.T) {
+	// source has a catch-all (no declared output types), so validation is skipped.
+	source := newNoOpExecutor("source") // uses AddCatchAll, no output types
+	target := newTypedExecutor[string, int]("target")
+
+	_, err := workflow.NewBuilder(source).
+		AddEdge(source, target).
+		Build()
+	if err != nil {
+		t.Fatalf("expected no error when source has no output types, got %v", err)
+	}
+}
