@@ -463,8 +463,14 @@ func (h *hostExecutor) runAgentAndDispatch(wctx *workflow.Context) error {
 		}
 	}
 
-	if err := wctx.SendMessage("", resp.Messages); err != nil {
-		return err
+	// Filter out server-side artifacts (reasoning tokens, web search calls, etc.)
+	// that are internal to this agent. Forwarding them to other agents in the
+	// workflow can cause invalid request errors when the receiving agent uses an
+	// API that does not accept those output-only item types as input.
+	if forwardableMessages := filterForwardableMessages(resp.Messages); len(forwardableMessages) > 0 {
+		if err := wctx.SendMessage("", forwardableMessages); err != nil {
+			return err
+		}
 	}
 
 	if err := h.dispatchRequests(wctx, resp.Messages); err != nil {
@@ -489,6 +495,51 @@ func (h *hostExecutor) runAgentAndDispatch(wctx *workflow.Context) error {
 		}
 	}
 	return nil
+}
+
+// filterForwardableMessages filters response messages to only include portable
+// conversational content, and strips Message.RawRepresentation so
+// provider-specific output items (for example mcp_list_tools, reasoning, or
+// web_search_call payloads) are not round-tripped as input to another agent.
+func filterForwardableMessages(messages []*message.Message) []*message.Message {
+	result := make([]*message.Message, 0, len(messages))
+	for _, msg := range messages {
+		if msg == nil {
+			continue
+		}
+		contents := filterForwardableContents(msg.Contents)
+		if len(contents) == 0 {
+			continue
+		}
+		clone := msg.Clone()
+		clone.RawRepresentation = nil
+		clone.Contents = contents
+		result = append(result, clone)
+	}
+	return result
+}
+
+// filterForwardableContents keeps content types that represent meaningful
+// conversational content portable across agents. Messages containing only
+// content types outside this set, such as reasoning tokens or usage metadata,
+// are dropped before forwarding.
+func filterForwardableContents(contents message.Contents) message.Contents {
+	result := make(message.Contents, 0, len(contents))
+	for _, content := range contents {
+		switch content.(type) {
+		case *message.TextContent,
+			*message.DataContent,
+			*message.URIContent,
+			*message.FunctionCallContent,
+			*message.FunctionResultContent,
+			*message.FunctionApprovalRequestContent,
+			*message.FunctionApprovalResponseContent,
+			*message.HostedFileContent,
+			*message.ErrorContent:
+			result = append(result, content)
+		}
+	}
+	return result
 }
 
 // dispatchRequests scans the agent's response for request content and

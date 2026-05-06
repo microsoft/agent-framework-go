@@ -149,6 +149,78 @@ func newRoleCheckAgent() *agent.Agent {
 	)
 }
 
+func newContentAgent(updates ...*agent.ResponseUpdate) *agent.Agent {
+	run := func(ctx context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			for _, update := range updates {
+				if !yield(update, nil) {
+					return
+				}
+			}
+		}
+	}
+	return agent.New(
+		agent.ProviderConfig{ProviderName: "content", Run: run},
+		agent.Config{ID: testAgentID, Name: testAgentName, DisableFuncAutoCall: true},
+	)
+}
+
+func collectForwardedResponseMessages(t *testing.T, a *agent.Agent, cfg workflowhosting.Config) []*message.Message {
+	t.Helper()
+	var observed []*message.Message
+	sinkID := "sink"
+	sink := &workflow.ExecutorBinding{
+		ID:           sinkID,
+		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+	}
+	sink.NewExecutor = func(_ string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: sinkID,
+			Options: workflow.ExecutorOptions{
+				DisableAutoSendMessageHandlerResultObject: true,
+				DisableAutoYieldOutputHandlerResultObject: true,
+			},
+			Config: []*workflow.ExecutorConfig{{
+				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+					return rb.AddHandler(reflect.TypeFor[[]*message.Message](), nil, false, func(_ *workflow.Context, msg any) (any, error) {
+						observed = append(observed, msg.([]*message.Message)...)
+						return nil, nil
+					}), nil
+				},
+			}},
+		}, nil
+	}
+
+	hostCfg := cfg
+	hostCfg.DisableMessageForwarding = true
+	binding := workflowhosting.New(a, hostCfg)
+	wf, err := workflow.NewBuilder(binding).
+		AddEdge(binding, sink).
+		Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	ctx := context.Background()
+	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer func() { _ = stream.CancelRun() }()
+
+	sendStreamMessage(t, stream, ctx, []*message.Message{{
+		Role:     message.RoleUser,
+		Contents: []message.Content{&message.TextContent{Text: "go"}},
+	}})
+	sendStreamMessage(t, stream, ctx, workflow.TurnToken{})
+	for _, err := range stream.WatchUntilHalt(ctx) {
+		if err != nil {
+			t.Fatalf("watch: %v", err)
+		}
+	}
+	return observed
+}
+
 // runHostedAgent builds a single-node workflow hosting the agent under cfg,
 // drives it with the given input messages and a TurnToken, and returns the
 // collected workflow events.
@@ -470,6 +542,135 @@ func TestHostedAgent_ForwardsIncomingMessages(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestHostedAgent_FiltersNonPortableContentFromForwardedResponseMessages(t *testing.T) {
+	agent := newContentAgent(
+		&agent.ResponseUpdate{
+			Role:              message.RoleAssistant,
+			MessageID:         "text-message",
+			RawRepresentation: "provider-text",
+			Contents: message.Contents{
+				&message.TextContent{Text: "Useful response text"},
+			},
+		},
+		&agent.ResponseUpdate{
+			Role:              message.RoleAssistant,
+			MessageID:         "reasoning-message",
+			RawRepresentation: "provider-reasoning",
+			Contents: message.Contents{
+				&message.TextReasoningContent{Text: "internal reasoning"},
+			},
+		},
+		&agent.ResponseUpdate{
+			Role:              message.RoleAssistant,
+			MessageID:         "usage-message",
+			RawRepresentation: "provider-usage",
+			Contents: message.Contents{
+				&message.UsageContent{Details: message.UsageDetails{TotalTokenCount: 10}},
+			},
+		},
+	)
+
+	forwarded := collectForwardedResponseMessages(t, agent, workflowhosting.Config{})
+	if len(forwarded) != 1 {
+		t.Fatalf("expected 1 forwarded message, got %d", len(forwarded))
+	}
+	if forwarded[0].ID != "text-message" {
+		t.Fatalf("expected text-message to be forwarded, got %q", forwarded[0].ID)
+	}
+	if len(forwarded[0].Contents) != 1 {
+		t.Fatalf("expected 1 forwarded content item, got %d", len(forwarded[0].Contents))
+	}
+	text, ok := forwarded[0].Contents[0].(*message.TextContent)
+	if !ok {
+		t.Fatalf("expected TextContent, got %T", forwarded[0].Contents[0])
+	}
+	if text.Text != "Useful response text" {
+		t.Fatalf("unexpected forwarded text: %q", text.Text)
+	}
+}
+
+func TestHostedAgent_StripsRawRepresentationFromForwardedResponseMessages(t *testing.T) {
+	text := &message.TextContent{
+		ContentHeader: message.ContentHeader{RawRepresentation: "content-raw"},
+		Text:          "Response",
+	}
+	agent := newContentAgent(&agent.ResponseUpdate{
+		Role:              message.RoleAssistant,
+		MessageID:         "raw-message",
+		RawRepresentation: "message-raw",
+		Contents:          message.Contents{text},
+	})
+
+	forwarded := collectForwardedResponseMessages(t, agent, workflowhosting.Config{})
+	if len(forwarded) != 1 {
+		t.Fatalf("expected 1 forwarded message, got %d", len(forwarded))
+	}
+	if forwarded[0].RawRepresentation != nil {
+		t.Fatalf("expected forwarded message RawRepresentation to be nil, got %#v", forwarded[0].RawRepresentation)
+	}
+	if forwarded[0].AuthorName != testAgentName {
+		t.Fatalf("expected AuthorName %q, got %q", testAgentName, forwarded[0].AuthorName)
+	}
+	forwardedText := forwarded[0].Contents[0].(*message.TextContent)
+	if forwardedText.RawRepresentation != "content-raw" {
+		t.Fatalf("expected content RawRepresentation to be preserved, got %#v", forwardedText.RawRepresentation)
+	}
+}
+
+func TestHostedAgent_PreservesForwardableContentInMixedForwardedResponseMessages(t *testing.T) {
+	agent := newContentAgent(&agent.ResponseUpdate{
+		Role:              message.RoleAssistant,
+		MessageID:         "mixed-message",
+		RawRepresentation: "mixed-raw",
+		Contents: message.Contents{
+			&message.TextContent{Text: "Visible text"},
+			&message.TextReasoningContent{Text: "Hidden reasoning"},
+			&message.FunctionCallContent{CallID: "call-1", Name: "my_function", Arguments: `{"arg":"val"}`},
+		},
+	})
+
+	forwarded := collectForwardedResponseMessages(t, agent, workflowhosting.Config{})
+	if len(forwarded) != 1 {
+		t.Fatalf("expected 1 forwarded message, got %d", len(forwarded))
+	}
+	if len(forwarded[0].Contents) != 2 {
+		t.Fatalf("expected 2 forwarded content items, got %d", len(forwarded[0].Contents))
+	}
+	if _, ok := forwarded[0].Contents[0].(*message.TextContent); !ok {
+		t.Fatalf("expected first content to be TextContent, got %T", forwarded[0].Contents[0])
+	}
+	if _, ok := forwarded[0].Contents[1].(*message.FunctionCallContent); !ok {
+		t.Fatalf("expected second content to be FunctionCallContent, got %T", forwarded[0].Contents[1])
+	}
+	if forwarded[0].RawRepresentation != nil {
+		t.Fatalf("expected forwarded message RawRepresentation to be nil, got %#v", forwarded[0].RawRepresentation)
+	}
+}
+
+func TestHostedAgent_DropsResponseMessagesWithOnlyNonPortableContent(t *testing.T) {
+	agent := newContentAgent(
+		&agent.ResponseUpdate{
+			Role:      message.RoleAssistant,
+			MessageID: "reasoning-message",
+			Contents: message.Contents{
+				&message.TextReasoningContent{Text: "reasoning only"},
+			},
+		},
+		&agent.ResponseUpdate{
+			Role:      message.RoleAssistant,
+			MessageID: "vector-store-message",
+			Contents: message.Contents{
+				&message.HostedVectorStoreContent{VectorStoreID: "vs-1"},
+			},
+		},
+	)
+
+	forwarded := collectForwardedResponseMessages(t, agent, workflowhosting.Config{})
+	if len(forwarded) != 0 {
+		t.Fatalf("expected no forwarded messages, got %d", len(forwarded))
 	}
 }
 
