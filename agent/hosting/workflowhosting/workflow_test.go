@@ -223,7 +223,8 @@ func collectForwardedResponseMessages(t *testing.T, a *agent.Agent, cfg workflow
 
 // runHostedAgent builds a single-node workflow hosting the agent under cfg,
 // drives it with the given input messages and a TurnToken, and returns the
-// collected workflow events.
+// collected workflow events. Lockstep execution keeps these host-behavior
+// assertions independent of off-thread scheduling.
 func runHostedAgent(t *testing.T, a *agent.Agent, cfg workflowhosting.Config, token workflow.TurnToken, msgs []*message.Message) []workflow.Event {
 	t.Helper()
 	binding := workflowhosting.New(a, cfg)
@@ -233,7 +234,7 @@ func runHostedAgent(t *testing.T, a *agent.Agent, cfg workflowhosting.Config, to
 	}
 
 	ctx := context.Background()
-	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
+	stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
