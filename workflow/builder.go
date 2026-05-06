@@ -5,6 +5,7 @@ package workflow
 import (
 	"fmt"
 	"iter"
+	"log/slog"
 	"maps"
 	"slices"
 )
@@ -217,6 +218,13 @@ func (wb *Builder) validate(validateOrphans bool) bool {
 		wb.err = fmt.Errorf("workflow cannot be built because there are unbound executors: %v", keys)
 		return false
 	}
+	// Validate that output executors (declared via WithOutputFrom) exist in the graph.
+	for id := range wb.outputExecutors {
+		if _, ok := wb.executorsBindings[id]; !ok {
+			wb.err = fmt.Errorf("output executor %q is not present in the workflow graph", id)
+			return false
+		}
+	}
 	if !validateOrphans || len(wb.executorsBindings) == 0 {
 		return true
 	}
@@ -244,6 +252,35 @@ func (wb *Builder) validate(validateOrphans bool) bool {
 		slices.Sort(keys)
 		wb.err = fmt.Errorf("workflow cannot be built because there are orphaned executors: %v", keys)
 		return false
+	}
+	// Warn about self-loops (executor connecting to itself), which may cause infinite
+	// recursion if not gated by a condition.
+	for sourceID, edges := range wb.edges {
+		for _, edge := range edges {
+			for _, sinkID := range edge.Connection.SinkIDs {
+				if sourceID == sinkID {
+					slog.Warn("self-loop detected: executor connects to itself; this may cause infinite recursion if not properly handled with conditions",
+						"executor", sourceID)
+				}
+			}
+		}
+	}
+	// Log dead-end executors (no outgoing edges). These may be intentional final
+	// nodes but are worth flagging for review.
+	executorsWithOutgoing := make(map[string]struct{}, len(wb.edges))
+	for sourceID := range wb.edges {
+		executorsWithOutgoing[sourceID] = struct{}{}
+	}
+	var deadEnds []string
+	for id := range wb.executorsBindings {
+		if _, hasOutgoing := executorsWithOutgoing[id]; !hasOutgoing {
+			deadEnds = append(deadEnds, id)
+		}
+	}
+	if len(deadEnds) > 0 {
+		slices.Sort(deadEnds)
+		slog.Info("dead-end executors detected (no outgoing edges); verify these are intended as final nodes",
+			"executors", deadEnds)
 	}
 	return true
 }

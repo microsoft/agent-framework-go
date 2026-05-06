@@ -11,6 +11,9 @@ This framework provides everything from simple chat agents to complex multi-agen
 This repository contains the source code for the the Go implementation of the Microsoft Agent Framework, along with samples and documentation to help you get started.
 The .NET and Python implementations are available at https://github.com/microsoft/agent-framework.
 
+> **Note:** This is a Go implementation of MAF that is currently evolving outside the core codebase.
+> As adoption and feedback grow, we expect closer alignment with the broader MAF ecosystem.
+
 
 <p align="center">
   <a href="https://www.youtube.com/watch?v=AAgdMhftj8w" title="Watch the full Agent Framework introduction (30 min)">
