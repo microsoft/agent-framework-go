@@ -2,7 +2,7 @@
 
 Date: May 5, 2026
 
-This document compares the .NET SDK at `C:\Users\qmuntaldiaz\code\agent-framework\dotnet` with the Go SDK in this repository. It is based on the package, sample, and public API inventory present on this date.
+This document compares the .NET SDK at `microsoft/agent-framework/dotnet` with the Go SDK in this repository. It is based on the package, sample, and public API inventory present on this date.
 
 ## Status Legend
 

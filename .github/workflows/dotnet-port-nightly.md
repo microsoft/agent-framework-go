@@ -171,7 +171,7 @@ After requesting the PR, update `/tmp/gh-aw/cache-memory/state.json` with the up
 
 ## No-Change Requirement
 
-If no useful code, test, example, or doc change is found after both the upstream commit inspection and the Go misalignment pass, do not create a PR. You MUST call `noop` with a message explaining:
+If no useful code, test, example, or doc change is found after both the upstream commit inspection and the Go misalignment pass, do not create a PR. Complete the run successfully without calling `noop`, and include a concise final summary explaining:
 
 - The upstream commit range inspected
 - Why no commits were ported
