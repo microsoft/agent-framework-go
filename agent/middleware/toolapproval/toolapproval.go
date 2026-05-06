@@ -75,7 +75,8 @@ func saveState(opts []agent.Option, s state) {
 
 // New creates a tool-approval middleware that wraps agent runs with
 // human-in-the-loop approval management.
-func New(_ Config) agent.Middleware {
+func New(cfg Config) agent.Middleware {
+	_ = cfg
 	return agent.MiddlewareFunc(run)
 }
 
@@ -268,7 +269,7 @@ func matchesRule(rules []Rule, req *message.ToolApprovalRequestContent) bool {
 
 func serializeArguments(arguments string) map[string]string {
 	if strings.TrimSpace(arguments) == "" {
-		return nil
+		return map[string]string{"$raw": arguments}
 	}
 	var values map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(arguments), &values); err != nil {
