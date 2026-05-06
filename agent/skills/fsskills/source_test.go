@@ -131,6 +131,106 @@ func TestFileSource_MetadataWithQuotedValues_ParsedCorrectly(t *testing.T) {
 	}
 }
 
+func TestFileSource_BlockScalarDescription_ParsesMultilineValue(t *testing.T) {
+	root := t.TempDir()
+	createSkillDirRaw(t, root, "block-scalar-skill", strings.Join([]string{
+		"---",
+		"name: block-scalar-skill",
+		"description: |",
+		"  This is a multiline",
+		"  description for the skill.",
+		"---",
+		"Body text.",
+	}, "\n"))
+	source := fsskills.NewSource(os.DirFS(root))
+
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
+	}
+	if loaded[0].Frontmatter.Description != "This is a multiline\ndescription for the skill." {
+		t.Fatalf("unexpected description: %q", loaded[0].Frontmatter.Description)
+	}
+}
+
+func TestFileSource_FoldedScalarDescription_ParsesMultilineValue(t *testing.T) {
+	root := t.TempDir()
+	createSkillDirRaw(t, root, "folded-scalar-skill", strings.Join([]string{
+		"---",
+		"name: folded-scalar-skill",
+		"description: >",
+		"  This is a multiline",
+		"  description for the skill.",
+		"---",
+		"Body text.",
+	}, "\n"))
+	source := fsskills.NewSource(os.DirFS(root))
+
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
+	}
+	if loaded[0].Frontmatter.Description != "This is a multiline description for the skill." {
+		t.Fatalf("unexpected description: %q", loaded[0].Frontmatter.Description)
+	}
+}
+
+func TestFileSource_ScalarDescriptionWithChompingIndicator_ParsesValue(t *testing.T) {
+	tests := []struct {
+		indicator string
+		expected  string
+	}{
+		{indicator: "|-", expected: "This is a multiline\ndescription for the skill."},
+		{indicator: "|+", expected: "This is a multiline\ndescription for the skill.\n"},
+		{indicator: ">-", expected: "This is a multiline description for the skill."},
+		{indicator: ">+", expected: "This is a multiline description for the skill.\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.indicator, func(t *testing.T) {
+			root := t.TempDir()
+			chomping := "strip"
+			if tt.indicator[1] == '+' {
+				chomping = "keep"
+			}
+			skillName := "chomping-scalar-skill-"
+			if tt.indicator[0] == '|' {
+				skillName += "literal-"
+			} else {
+				skillName += "folded-"
+			}
+			skillName += chomping
+			createSkillDirRaw(t, root, skillName, strings.Join([]string{
+				"---",
+				"name: " + skillName,
+				"description: " + tt.indicator,
+				"  This is a multiline",
+				"  description for the skill.",
+				"---",
+				"Body text.",
+			}, "\n"))
+			source := fsskills.NewSource(os.DirFS(root))
+
+			loaded, err := source.Skills(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(loaded) != 1 {
+				t.Fatalf("expected 1 skill, got %d", len(loaded))
+			}
+			if loaded[0].Frontmatter.Description != tt.expected {
+				t.Fatalf("unexpected description: %q", loaded[0].Frontmatter.Description)
+			}
+		})
+	}
+}
+
 func TestFileSource_ParsesOptionalFrontmatterFields(t *testing.T) {
 	root := t.TempDir()
 	createSkillDirRaw(t, root, "meta-skill", strings.Join([]string{
