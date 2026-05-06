@@ -3,9 +3,13 @@ description: Nightly agent that ports relevant .NET Agent Framework changes into
 tracker-id: dotnet-port-nightly
 features:
    copilot-requests: true
+network:
+   allowed:
+      - defaults
+      - go
 on:
    schedule:
-      - cron: "23 7 * * *"
+   - cron: daily
    workflow_dispatch:
       inputs:
          since_ref:
@@ -50,11 +54,13 @@ tools:
       allowed-extensions: [".md", ".json"]
 safe-outputs:
    max-patch-size: 4096
+   noop:
+      report-as-issue: false
    create-pull-request:
       title-prefix: "[dotnet-port] "
       draft: true
       base-branch: main
-      auto-close-issue: false
+      auto-close-issue: true
       if-no-changes: ignore
       protected-files: allowed
 timeout-minutes: 90
@@ -123,6 +129,7 @@ When you make a change:
 - Add or update tests for behavior changes. Port upstream .NET test intent into Go tests when applicable.
 - Add or update examples when the upstream change introduces or changes a user-facing scenario that should exist in Go.
 - Run `gofmt` on edited Go files.
+- Use the `go` command directly for Go toolchain checks, builds, and tests. Do not invoke absolute Go binary paths such as `/usr/bin/go` or `/usr/local/go/bin/go`.
 - Run targeted `go test` packages for changed code. Run broader `go test ./...` when the change touches shared runtime behavior.
 - Do not edit `.github/`, governance files, or agent workflow files as part of porting work.
 - Update `docs/dotnet-go-sdk-feature-comparison.md` when you port a feature that is currently listed as missing or partially supported, or when you port a behavior that changes the comparison status, or when you detect a misalignment that requires updating the doc to reflect the current state accurately.
@@ -171,7 +178,8 @@ After requesting the PR, update `/tmp/gh-aw/cache-memory/state.json` with the up
 
 ## No-Change Requirement
 
-If no useful code, test, example, or doc change is found after both the upstream commit inspection and the Go misalignment pass, do not create a PR. Complete the run successfully without calling `noop`, and include a concise final summary explaining:
+If no useful code, test, example, or doc change is found after both the upstream commit inspection and the Go misalignment pass, do not create a PR.
+Call `noop` with a concise message explaining:
 
 - The upstream commit range inspected
 - Why no commits were ported
