@@ -42,7 +42,7 @@ type ContextWindowStrategy struct {
 	ToolEvictionThreshold float64
 
 	// TruncationThreshold is the fraction of the input budget at which truncation triggers.
-	// Must be in (0.0, 1.0]. Zero uses the default (0.8).
+	// Must be in (0.0, 1.0] and >= ToolEvictionThreshold. Zero uses the default (0.8).
 	TruncationThreshold float64
 }
 
@@ -69,6 +69,9 @@ func (s *ContextWindowStrategy) Compact(ctx context.Context, index *MessageIndex
 	}
 	if truncation <= 0 || truncation > 1 {
 		return false, fmt.Errorf("compaction: ContextWindowStrategy.TruncationThreshold must be in (0, 1], got %g", truncation)
+	}
+	if truncation < toolEviction {
+		return false, fmt.Errorf("compaction: ContextWindowStrategy.TruncationThreshold (%g) must be >= ToolEvictionThreshold (%g)", truncation, toolEviction)
 	}
 
 	inputBudget := s.MaxContextWindowTokens - s.MaxOutputTokens

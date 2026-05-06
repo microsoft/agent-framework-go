@@ -84,7 +84,7 @@ func TestContextWindowStrategy_InvalidThresholds(t *testing.T) {
 		{"eviction_above_one", 1.1, 1.1, true},
 		{"truncation_negative", 0.5, -0.1, true},
 		{"truncation_above_one", 0.5, 1.1, true},
-		{"truncation_below_eviction", 0.8, 0.5, false}, // independent thresholds are valid
+		{"truncation_below_eviction", 0.8, 0.5, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -184,13 +184,13 @@ func TestContextWindowStrategy_TruncatesWhenOverTruncationThreshold(t *testing.T
 	index := compaction.CreateMessageIndex(msgs, charCounter{})
 	totalTokens := index.IncludedTokenCount()
 
-	// tool-eviction threshold set very high (no tool calls anyway),
+	// tool-eviction threshold set equal to truncation threshold (no tool calls anyway),
 	// truncation threshold set low so it fires.
 	s := &compaction.ContextWindowStrategy{
 		MaxContextWindowTokens: totalTokens + 1,
 		MaxOutputTokens:        0,
-		ToolEvictionThreshold:  0.9,
-		TruncationThreshold:    0.1, // fires immediately
+		ToolEvictionThreshold:  0.1,
+		TruncationThreshold:    0.1, // fires immediately; eviction threshold must be <= truncation
 	}
 	compacted, err := s.Compact(t.Context(), index)
 	if err != nil {
