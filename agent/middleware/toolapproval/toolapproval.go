@@ -27,7 +27,7 @@ const stateKey = "toolApprovalState"
 
 // Rule is a standing approval rule. If Arguments is empty, all invocations
 // of the named tool are auto-approved. Otherwise only invocations with an
-// exact argument match are auto-approved.
+// exact canonical argument match are auto-approved.
 type Rule struct {
 	ToolName  string `json:"toolName"`
 	Arguments string `json:"arguments,omitempty"`
@@ -201,19 +201,26 @@ func prepareInbound(messages []*message.Message, st state) ([]*message.Message, 
 	for i, msg := range messages {
 		var hasApproval bool
 		for _, c := range msg.Contents {
-			if resp, ok := c.(*message.ToolApprovalResponseContent); ok {
+			switch resp := c.(type) {
+			case *message.AlwaysApproveToolApprovalResponseContent:
 				hasApproval = true
-				if fc, ok := resp.ToolCall.(*message.FunctionCallContent); ok && fc != nil {
-					if resp.AlwaysApproveTool {
-						st.Rules = append(st.Rules, Rule{ToolName: fc.Name})
-					} else if resp.AlwaysApproveToolWithArgs {
-						args, _ := json.Marshal(fc.Arguments)
-						st.Rules = append(st.Rules, Rule{
-							ToolName:  fc.Name,
-							Arguments: string(args),
-						})
+				if resp.InnerResponse != nil {
+					if fc, ok := resp.InnerResponse.ToolCall.(*message.FunctionCallContent); ok && fc != nil {
+						if resp.AlwaysApproveTool {
+							addRuleIfNotExists(&st, Rule{ToolName: fc.Name})
+						} else if resp.AlwaysApproveToolWithArguments {
+							addRuleIfNotExists(&st, Rule{
+								ToolName:  fc.Name,
+								Arguments: canonicalizeArguments(fc.Arguments),
+							})
+						}
 					}
 				}
+				if resp.InnerResponse != nil {
+					st.CollectedResponses = append(st.CollectedResponses, resp.InnerResponse)
+				}
+			case *message.ToolApprovalResponseContent:
+				hasApproval = true
 				st.CollectedResponses = append(st.CollectedResponses, resp)
 			}
 		}
@@ -225,7 +232,13 @@ func prepareInbound(messages []*message.Message, st state) ([]*message.Message, 
 			// Strip approval contents from the message, keep the rest.
 			var remaining []message.Content
 			for _, c := range msg.Contents {
-				if _, ok := c.(*message.ToolApprovalResponseContent); !ok {
+				if _, ok := c.(*message.ToolApprovalResponseContent); ok {
+					continue
+				}
+				if _, ok := c.(*message.AlwaysApproveToolApprovalResponseContent); ok {
+					continue
+				}
+				if c != nil {
 					remaining = append(remaining, c)
 				}
 			}
@@ -266,13 +279,34 @@ func matchesRule(rules []Rule, req *message.ToolApprovalRequestContent) bool {
 	if !ok || fc == nil {
 		return false
 	}
-	args, _ := json.Marshal(fc.Arguments)
+	args := canonicalizeArguments(fc.Arguments)
 	for _, r := range rules {
-		if r.matches(fc.Name, string(args)) {
+		if r.matches(fc.Name, args) {
 			return true
 		}
 	}
 	return false
+}
+
+func canonicalizeArguments(arguments string) string {
+	var v any
+	if err := json.Unmarshal([]byte(arguments), &v); err != nil {
+		return arguments
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return arguments
+	}
+	return string(b)
+}
+
+func addRuleIfNotExists(st *state, rule Rule) {
+	for _, existing := range st.Rules {
+		if existing.ToolName == rule.ToolName && existing.Arguments == rule.Arguments {
+			return
+		}
+	}
+	st.Rules = append(st.Rules, rule)
 }
 
 func responseMessage(responses []*message.ToolApprovalResponseContent) *message.Message {

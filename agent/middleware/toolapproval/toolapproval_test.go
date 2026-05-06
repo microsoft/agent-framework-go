@@ -95,7 +95,22 @@ func TestToolApproval_AlwaysApproveToolCreatesRule(t *testing.T) {
 					&message.ToolApprovalRequestContent{RequestID: "r1", ToolCall: fcc},
 				},
 			}).
-			NewTurn().
+			NewTurn(func(_ context.Context, messages []*message.Message, _ ...agent.Option) {
+				var sawResponse bool
+				for _, msg := range messages {
+					for _, c := range msg.Contents {
+						if _, ok := c.(*message.AlwaysApproveToolApprovalResponseContent); ok {
+							t.Fatal("always-approve wrapper should be unwrapped before forwarding to inner agent")
+						}
+						if _, ok := c.(*message.ToolApprovalResponseContent); ok {
+							sawResponse = true
+						}
+					}
+				}
+				if !sawResponse {
+					t.Fatal("expected approval response to be forwarded to inner agent")
+				}
+			}).
 			AddText("done").
 			Build(),
 	}
@@ -202,17 +217,94 @@ func TestToolApproval_QueuedRequestsSurfacedOneAtATime(t *testing.T) {
 	}
 }
 
-func TestToolApproval_AlwaysApproveToolWithArgsResponse(t *testing.T) {
+func TestToolApproval_AlwaysApproveToolWithArgumentsResponse(t *testing.T) {
 	req := &message.ToolApprovalRequestContent{
 		RequestID: "r1",
 		ToolCall:  &message.FunctionCallContent{CallID: "c1", Name: "deploy", Arguments: `{"env":"prod"}`},
 	}
 
-	resp := req.AlwaysApproveToolWithArgsResponse()
-	if !resp.AlwaysApproveToolWithArgs {
-		t.Error("expected AlwaysApproveToolWithArgs to be true")
+	resp := req.AlwaysApproveToolWithArgumentsResponse()
+	if !resp.AlwaysApproveToolWithArguments {
+		t.Error("expected AlwaysApproveToolWithArguments to be true")
 	}
-	if !resp.Approved {
+	if resp.InnerResponse == nil || !resp.InnerResponse.Approved {
 		t.Error("expected Approved to be true")
+	}
+}
+
+func TestToolApproval_AlwaysApproveToolWithArgumentsMatchesByValue(t *testing.T) {
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder().
+			Add(&agent.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					&message.ToolApprovalRequestContent{
+						RequestID: "r1",
+						ToolCall: &message.FunctionCallContent{
+							CallID:    "c1",
+							Name:      "deploy",
+							Arguments: `{"a":1,"b":2}`,
+						},
+					},
+				},
+			}).
+			NewTurn().
+			Add(&agent.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					&message.ToolApprovalRequestContent{
+						RequestID: "r2",
+						ToolCall: &message.FunctionCallContent{
+							CallID:    "c2",
+							Name:      "deploy",
+							Arguments: `{"b":2,"a":1}`,
+						},
+					},
+				},
+			}).
+			NewTurn().
+			AddText("done").
+			Build(),
+	}
+
+	mw := toolapproval.New()
+	session := agenttest.CreateSession()
+	opts := []agent.Option{agent.WithSession(session)}
+
+	updates := collectUpdates(t, mw, runner.Run,
+		[]*message.Message{{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "go"}}}},
+		opts...,
+	)
+
+	var req *message.ToolApprovalRequestContent
+	for _, u := range updates {
+		for _, c := range u.Contents {
+			if r, ok := c.(*message.ToolApprovalRequestContent); ok {
+				req = r
+			}
+		}
+	}
+	if req == nil {
+		t.Fatal("expected approval request in turn 1")
+	}
+
+	updates = collectUpdates(t, mw, runner.Run,
+		[]*message.Message{{Role: message.RoleUser, Contents: []message.Content{req.AlwaysApproveToolWithArgumentsResponse()}}},
+		opts...,
+	)
+
+	var sawDone bool
+	for _, u := range updates {
+		for _, c := range u.Contents {
+			if tc, ok := c.(*message.TextContent); ok && tc.Text == "done" {
+				sawDone = true
+			}
+			if _, ok := c.(*message.ToolApprovalRequestContent); ok {
+				t.Fatal("expected second request to be auto-approved after argument-value match")
+			}
+		}
+	}
+	if !sawDone {
+		t.Fatal("expected done after auto-approval with argument-value match")
 	}
 }

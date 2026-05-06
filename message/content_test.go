@@ -147,6 +147,17 @@ func TestContentEncoding_Roundtrip(t *testing.T) {
 				ServerName: "mcpServer",
 			},
 		},
+		&message.AlwaysApproveToolApprovalResponseContent{
+			InnerResponse: &message.ToolApprovalResponseContent{
+				RequestID: "approval-124",
+				Approved:  true,
+				ToolCall: &message.FunctionCallContent{
+					CallID: "2",
+					Name:   "deploy",
+				},
+			},
+			AlwaysApproveToolWithArguments: true,
+		},
 		&message.MCPServerToolCallContent{
 			CallID:     "mcp-call-123",
 			Arguments:  "{\"arg1\":\"value1\"}",

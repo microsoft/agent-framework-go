@@ -34,6 +34,7 @@ func init() {
 		&UsageContent{},
 		&ToolApprovalRequestContent{},
 		&ToolApprovalResponseContent{},
+		&AlwaysApproveToolApprovalResponseContent{},
 		&MCPServerToolCallContent{},
 	} {
 		supportedContents[c.kind()] = reflect.TypeOf(c).Elem()
@@ -625,19 +626,28 @@ func (t *ToolApprovalRequestContent) CreateResponse(approved bool, reason string
 // AlwaysApproveToolResponse creates a response that approves this tool call and
 // records a standing rule to automatically approve all future calls to the same
 // tool, regardless of arguments.
-func (t *ToolApprovalRequestContent) AlwaysApproveToolResponse() *ToolApprovalResponseContent {
-	resp := t.CreateResponse(true, "")
-	resp.AlwaysApproveTool = true
-	return resp
+func (t *ToolApprovalRequestContent) AlwaysApproveToolResponse() *AlwaysApproveToolApprovalResponseContent {
+	return &AlwaysApproveToolApprovalResponseContent{
+		InnerResponse:     t.CreateResponse(true, ""),
+		AlwaysApproveTool: true,
+		ContentHeader:     ContentHeader{AdditionalProperties: t.AdditionalProperties},
+	}
 }
 
-// AlwaysApproveToolWithArgsResponse creates a response that approves this tool
+// AlwaysApproveToolWithArgumentsResponse creates a response that approves this tool
 // call and records a standing rule to automatically approve future calls to the
 // same tool only when the arguments match exactly.
-func (t *ToolApprovalRequestContent) AlwaysApproveToolWithArgsResponse() *ToolApprovalResponseContent {
-	resp := t.CreateResponse(true, "")
-	resp.AlwaysApproveToolWithArgs = true
-	return resp
+func (t *ToolApprovalRequestContent) AlwaysApproveToolWithArgumentsResponse() *AlwaysApproveToolApprovalResponseContent {
+	return &AlwaysApproveToolApprovalResponseContent{
+		InnerResponse:                  t.CreateResponse(true, ""),
+		AlwaysApproveToolWithArguments: true,
+		ContentHeader:                  ContentHeader{AdditionalProperties: t.AdditionalProperties},
+	}
+}
+
+// AlwaysApproveToolWithArgsResponse is an alias for AlwaysApproveToolWithArgumentsResponse.
+func (t *ToolApprovalRequestContent) AlwaysApproveToolWithArgsResponse() *AlwaysApproveToolApprovalResponseContent {
+	return t.AlwaysApproveToolWithArgumentsResponse()
 }
 
 type serializedToolApprovalResponseContent struct {
@@ -647,9 +657,6 @@ type serializedToolApprovalResponseContent struct {
 	Reason    string `json:",omitempty"`
 	Approved  bool
 	ToolCall  ToolCallContent
-
-	AlwaysApproveTool         bool `json:"alwaysApproveTool,omitempty"`
-	AlwaysApproveToolWithArgs bool `json:"alwaysApproveToolWithArgs,omitempty"`
 
 	Type contentKind
 }
@@ -661,9 +668,6 @@ type serializedToolApprovalResponseContentForUnmarshal struct {
 	Reason    string `json:",omitempty"`
 	Approved  bool
 	ToolCall  json.RawMessage
-
-	AlwaysApproveTool         bool `json:"alwaysApproveTool,omitempty"`
-	AlwaysApproveToolWithArgs bool `json:"alwaysApproveToolWithArgs,omitempty"`
 }
 
 // ToolApprovalResponseContent represents a response to a [ToolApprovalRequestContent].
@@ -674,27 +678,16 @@ type ToolApprovalResponseContent struct {
 	Reason    string `json:",omitempty"`
 	Approved  bool
 	ToolCall  ToolCallContent
-
-	// AlwaysApproveTool, when true, indicates a standing rule to auto-approve
-	// all future calls to the same tool regardless of arguments.
-	AlwaysApproveTool bool `json:"alwaysApproveTool,omitempty"`
-
-	// AlwaysApproveToolWithArgs, when true, indicates a standing rule to
-	// auto-approve future calls to the same tool only when the arguments
-	// match exactly.
-	AlwaysApproveToolWithArgs bool `json:"alwaysApproveToolWithArgs,omitempty"`
 }
 
 func (t *ToolApprovalResponseContent) MarshalJSON() ([]byte, error) {
 	tmp := serializedToolApprovalResponseContent{
-		ContentHeader:             t.ContentHeader,
-		RequestID:                 t.RequestID,
-		Reason:                    t.Reason,
-		Approved:                  t.Approved,
-		ToolCall:                  t.ToolCall,
-		AlwaysApproveTool:         t.AlwaysApproveTool,
-		AlwaysApproveToolWithArgs: t.AlwaysApproveToolWithArgs,
-		Type:                      t.kind(),
+		ContentHeader: t.ContentHeader,
+		RequestID:     t.RequestID,
+		Reason:        t.Reason,
+		Approved:      t.Approved,
+		ToolCall:      t.ToolCall,
+		Type:          t.kind(),
 	}
 	return json.Marshal(tmp)
 }
@@ -713,8 +706,6 @@ func (t *ToolApprovalResponseContent) UnmarshalJSON(data []byte) error {
 	t.Reason = tmp.Reason
 	t.Approved = tmp.Approved
 	t.ToolCall = toolCall
-	t.AlwaysApproveTool = tmp.AlwaysApproveTool
-	t.AlwaysApproveToolWithArgs = tmp.AlwaysApproveToolWithArgs
 	return nil
 }
 
@@ -746,6 +737,39 @@ func unmarshalToolApprovalToolCall(data json.RawMessage) (ToolCallContent, error
 	default:
 		return nil, fmt.Errorf("unsupported tool call content type: %v", header.Type)
 	}
+}
+
+// AlwaysApproveToolApprovalResponseContent wraps a tool approval response and
+// adds standing rule hints for tool-approval middleware.
+type AlwaysApproveToolApprovalResponseContent struct {
+	ContentHeader
+
+	InnerResponse *ToolApprovalResponseContent `json:"innerResponse"`
+
+	// AlwaysApproveTool, when true, indicates a standing rule to auto-approve
+	// all future calls to the same tool regardless of arguments.
+	AlwaysApproveTool bool `json:"alwaysApproveTool,omitempty"`
+
+	// AlwaysApproveToolWithArguments, when true, indicates a standing rule to
+	// auto-approve future calls to the same tool only when the arguments
+	// match exactly.
+	AlwaysApproveToolWithArguments bool `json:"alwaysApproveToolWithArguments,omitempty"`
+}
+
+func (t *AlwaysApproveToolApprovalResponseContent) MarshalJSON() ([]byte, error) {
+	type alias AlwaysApproveToolApprovalResponseContent
+	tmp := struct {
+		*alias
+		Type contentKind
+	}{
+		alias: (*alias)(t),
+		Type:  t.kind(),
+	}
+	return json.Marshal(tmp)
+}
+
+func (t AlwaysApproveToolApprovalResponseContent) kind() contentKind {
+	return "alwaysApproveToolApprovalResponse"
 }
 
 type CodeInterpreterToolCallContent struct {
