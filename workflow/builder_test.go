@@ -441,8 +441,6 @@ func TestBuilder_Validation_OutputExecutorNotBound(t *testing.T) {
 		AddEdge(start, target).
 		WithOutputFrom(target).
 		Build()
-
-	// target IS reachable and bound, so it should succeed.
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
