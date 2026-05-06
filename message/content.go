@@ -610,7 +610,7 @@ func (t *ToolApprovalRequestContent) UnmarshalJSON(data []byte) error {
 
 func (t ToolApprovalRequestContent) kind() contentKind { return "toolApprovalRequest" }
 
-func (t *ToolApprovalRequestContent) Response(approved bool, reason string) *ToolApprovalResponseContent {
+func (t *ToolApprovalRequestContent) CreateResponse(approved bool, reason string) *ToolApprovalResponseContent {
 	return &ToolApprovalResponseContent{
 		RequestID: t.RequestID,
 		Approved:  approved,

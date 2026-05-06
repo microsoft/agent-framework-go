@@ -71,7 +71,7 @@ func runWithApprovals(ctx context.Context, a *agent.Agent, session agent.Session
 			switch v := c.(type) {
 			case *message.ToolApprovalRequestContent:
 				approved := askApproval(v)
-				responses = append(responses, v.Response(approved, ""))
+				responses = append(responses, v.CreateResponse(approved, ""))
 			case *message.FunctionCallContent:
 				if !strings.EqualFold(v.Name, "request_approval") {
 					continue

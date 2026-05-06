@@ -685,7 +685,7 @@ func TestNew_ApprovalRoundtrip_ResponseIsProcessed(t *testing.T) {
 
 	resumeMsg := []*message.Message{{
 		Role:     message.RoleUser,
-		Contents: []message.Content{req.Response(true, "")},
+		Contents: []message.Content{req.CreateResponse(true, "")},
 	}}
 	second, err := ag.Run(ctx, resumeMsg, agent.WithSession(session)).Collect()
 	if err != nil {

@@ -784,7 +784,7 @@ func approverExecutor(target *workflow.ExecutorBinding, approve bool) *workflow.
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
 					return rb.AddHandler(reflect.TypeFor[*message.ToolApprovalRequestContent](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
 						req := msg.(*message.ToolApprovalRequestContent)
-						return nil, ctx.SendMessage(target.ID, req.Response(approve, ""))
+						return nil, ctx.SendMessage(target.ID, req.CreateResponse(approve, ""))
 					}), nil
 				},
 			}},
@@ -1053,7 +1053,7 @@ func TestHostedAgent_InterceptDisabled_ResumesWithExternalResponse(t *testing.T)
 	if !ok {
 		t.Fatalf("expected request data to be *FunctionApprovalRequestContent, got %T", req.Data.Any())
 	}
-	approval := reqContent.(*message.ToolApprovalRequestContent).Response(true, "")
+	approval := reqContent.(*message.ToolApprovalRequestContent).CreateResponse(true, "")
 	resp, err := req.NewResponse(approval)
 	if err != nil {
 		t.Fatalf("NewResponse: %v", err)

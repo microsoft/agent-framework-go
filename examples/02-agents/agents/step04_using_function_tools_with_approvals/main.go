@@ -80,7 +80,7 @@ func main() {
 		if approved {
 			approvedRequests = true
 		}
-		userResponses = append(userResponses, request.Response(approved, ""))
+		userResponses = append(userResponses, request.CreateResponse(approved, ""))
 	}
 	if !approvedRequests {
 		demo.Assistant("User did not approve any function calls.")
