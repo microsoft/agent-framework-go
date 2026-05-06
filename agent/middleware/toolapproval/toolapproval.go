@@ -27,7 +27,8 @@ const stateKey = "toolApprovalState"
 
 // Rule is a standing approval rule. If Arguments is empty, all invocations
 // of the named tool are auto-approved. Otherwise only invocations with an
-// exact canonical argument match are auto-approved.
+// exact canonical argument match are auto-approved, where canonical means JSON
+// normalized to a stable representation independent of object key ordering.
 type Rule struct {
 	ToolName  string `json:"toolName"`
 	Arguments string `json:"arguments,omitempty"`
