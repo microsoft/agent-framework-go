@@ -782,7 +782,7 @@ func TestFunctionInvoking_ApprovalRequestWithoutApprovalResponseThrows(t *testin
 		}},
 	}
 
-	expectedErrorMsg := "FunctionApprovalRequestContent found with FunctionCall.CallId(s) 'callId1' that have no matching FunctionApprovalResponseContent"
+	expectedErrorMsg := "ToolApprovalRequestContent found with ToolCall.CallID(s) 'callId1' that have no matching ToolApprovalResponseContent"
 
 	// Note: We don't pass any downstream client output since the error should occur during approval processing
 	expectApprovalError(t, tools, input, expectedErrorMsg)

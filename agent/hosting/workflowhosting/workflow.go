@@ -53,7 +53,7 @@ type Config struct {
 	// true to preserve original roles.
 	DisableRoleReassignment bool
 
-	// InterceptUserInputRequests controls how [message.FunctionApprovalRequestContent]
+	// InterceptUserInputRequests controls how [message.ToolApprovalRequestContent]
 	// produced by the agent is dispatched.
 	//
 	// When false (the default), each request is raised as a workflow
@@ -64,7 +64,7 @@ type Config struct {
 	// When true, each request is sent as a regular workflow message (via
 	// [workflow.Context.SendMessage]) so other executors in the graph can
 	// handle the approval; the matching
-	// [message.FunctionApprovalResponseContent] must be routed back to
+	// [message.ToolApprovalResponseContent] must be routed back to
 	// this executor as a workflow message.
 	//
 	// In both modes the agent is re-invoked with the response merged into
@@ -154,7 +154,7 @@ type hostExecutor struct {
 	mu       sync.Mutex
 	session  agent.Session
 	buffered []*message.Message
-	// pendingApprovals tracks FunctionApprovalRequestContent IDs that have
+	// pendingApprovals tracks ToolApprovalRequestContent IDs that have
 	// been dispatched and are awaiting a matching response.
 	pendingApprovals map[string]struct{}
 	// pendingCalls tracks FunctionCallContent CallIDs that have been
@@ -573,7 +573,7 @@ func (h *hostExecutor) dispatchRequests(wctx *workflow.Context, msgs []*message.
 			switch v := c.(type) {
 			case *message.ToolApprovalRequestContent:
 				if _, dup := seenApprovals[v.RequestID]; dup {
-					return fmt.Errorf("workflowhosting: duplicate FunctionApprovalRequest ID %q in same response", v.RequestID)
+					return fmt.Errorf("workflowhosting: duplicate ToolApprovalRequest  ID %q in same response", v.RequestID)
 				}
 				seenApprovals[v.RequestID] = struct{}{}
 				h.mu.Lock()

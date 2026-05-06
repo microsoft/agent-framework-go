@@ -69,6 +69,62 @@ func TestFunctionInvoking_SupportsSingleFunctionCallPerRequest(t *testing.T) {
 	invokeAndAssert(t, tools, plan, nil, autocall.Config{})
 }
 
+func TestFunctionInvoking_SkipsNilToolCallApprovalResponse(t *testing.T) {
+	input := []*message.Message{
+		message.New(&message.TextContent{Text: "hello"}),
+		message.New(&message.ToolApprovalResponseContent{
+			RequestID: "missing-tool-call",
+			Approved:  true,
+		}),
+	}
+
+	downstreamAgentOutput := []*agent.ResponseUpdate{
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			&message.TextContent{Text: "world"},
+		}},
+	}
+
+	expectedOutput := []*agent.ResponseUpdate{
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			&message.TextContent{Text: "world"},
+		}},
+	}
+
+	expectedDownstreamAgentInput := []*message.Message{
+		message.New(&message.TextContent{Text: "hello"}),
+	}
+
+	invokeAndAssertApproval(t, nil, input, downstreamAgentOutput, expectedOutput, expectedDownstreamAgentInput, nil)
+}
+
+func TestFunctionInvoking_SkipsNilToolCallRejectedApprovalResponse(t *testing.T) {
+	input := []*message.Message{
+		message.New(&message.TextContent{Text: "hello"}),
+		message.New(&message.ToolApprovalResponseContent{
+			RequestID: "missing-tool-call",
+			Approved:  false,
+		}),
+	}
+
+	downstreamAgentOutput := []*agent.ResponseUpdate{
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			&message.TextContent{Text: "world"},
+		}},
+	}
+
+	expectedOutput := []*agent.ResponseUpdate{
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			&message.TextContent{Text: "world"},
+		}},
+	}
+
+	expectedDownstreamAgentInput := []*message.Message{
+		message.New(&message.TextContent{Text: "hello"}),
+	}
+
+	invokeAndAssertApproval(t, nil, input, downstreamAgentOutput, expectedOutput, expectedDownstreamAgentInput, nil)
+}
+
 func TestFunctionInvoking_SupportsMultipleFunctionCallsPerRequest(t *testing.T) {
 	type Func1Args struct {
 		I *int `json:"i"`
