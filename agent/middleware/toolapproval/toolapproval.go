@@ -288,6 +288,8 @@ func matchesRule(rules []Rule, req *message.ToolApprovalRequestContent) bool {
 	return false
 }
 
+// canonicalizeArguments normalizes JSON argument strings for stable equality
+// matching by unmarshaling and remarshaling them into canonical JSON.
 func canonicalizeArguments(arguments string) string {
 	var v any
 	if err := json.Unmarshal([]byte(arguments), &v); err != nil {
