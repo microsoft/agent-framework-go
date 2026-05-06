@@ -4,6 +4,7 @@ package toolapproval_test
 
 import (
 	"context"
+	"iter"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -29,7 +30,7 @@ func TestToolApproval_PassthroughWithoutApprovalRequests(t *testing.T) {
 		Responses: agenttest.NewResponseBuilder().AddText("hello").Build(),
 	}
 
-	mw := toolapproval.New()
+	mw := toolapproval.New(toolapproval.Config{})
 	updates := collectUpdates(t, mw, runner.Run, []*message.Message{
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "hi"}}},
 	})
@@ -39,6 +40,64 @@ func TestToolApproval_PassthroughWithoutApprovalRequests(t *testing.T) {
 	}
 	if tc, ok := updates[0].Contents[0].(*message.TextContent); !ok || tc.Text != "hello" {
 		t.Errorf("expected text 'hello', got %v", updates[0].Contents)
+	}
+}
+
+func TestToolApproval_StreamsNonApprovalBeforeInnerCompletes(t *testing.T) {
+	innerCompleted := false
+	next := func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			if !yield(&agent.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: []message.Content{&message.TextContent{Text: "progress"}},
+			}, nil) {
+				return
+			}
+			if !yield(&agent.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					&message.TextContent{Text: "needs approval"},
+					&message.ToolApprovalRequestContent{
+						RequestID: "r1",
+						ToolCall: &message.FunctionCallContent{
+							CallID:    "c1",
+							Name:      "deploy",
+							Arguments: `{"env":"prod"}`,
+						},
+					},
+				},
+			}, nil) {
+				return
+			}
+			innerCompleted = true
+		}
+	}
+
+	mw := toolapproval.New(toolapproval.Config{})
+	var updates []*agent.ResponseUpdate
+	for u, err := range mw.Run(next, context.Background(), []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "go"}}},
+	}) {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		updates = append(updates, u)
+		if len(updates) == 1 && innerCompleted {
+			t.Fatal("expected first streamed non-approval update before inner stream completes")
+		}
+	}
+
+	if len(updates) != 3 {
+		t.Fatalf("expected 3 updates, got %d", len(updates))
+	}
+	if tc, ok := updates[0].Contents[0].(*message.TextContent); !ok || tc.Text != "progress" {
+		t.Fatalf("expected first update to be progress text, got %#v", updates[0].Contents)
+	}
+	if tc, ok := updates[1].Contents[0].(*message.TextContent); !ok || tc.Text != "needs approval" {
+		t.Fatalf("expected second update to be stripped text, got %#v", updates[1].Contents)
+	}
+	if _, ok := updates[2].Contents[0].(*message.ToolApprovalRequestContent); !ok {
+		t.Fatalf("expected final update to surface approval request, got %#v", updates[2].Contents)
 	}
 }
 
@@ -58,7 +117,7 @@ func TestToolApproval_SurfacesFirstApprovalRequest(t *testing.T) {
 			Build(),
 	}
 
-	mw := toolapproval.New()
+	mw := toolapproval.New(toolapproval.Config{})
 	session := agenttest.CreateSession()
 	updates := collectUpdates(t, mw, runner.Run,
 		[]*message.Message{{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "go"}}}},
@@ -115,7 +174,7 @@ func TestToolApproval_AlwaysApproveToolCreatesRule(t *testing.T) {
 			Build(),
 	}
 
-	mw := toolapproval.New()
+	mw := toolapproval.New(toolapproval.Config{})
 	session := agenttest.CreateSession()
 	opts := []agent.Option{agent.WithSession(session)}
 
@@ -176,7 +235,7 @@ func TestToolApproval_QueuedRequestsSurfacedOneAtATime(t *testing.T) {
 			Build(),
 	}
 
-	mw := toolapproval.New()
+	mw := toolapproval.New(toolapproval.Config{})
 	session := agenttest.CreateSession()
 	opts := []agent.Option{agent.WithSession(session)}
 
@@ -267,7 +326,7 @@ func TestToolApproval_AlwaysApproveToolWithArgumentsMatchesByValue(t *testing.T)
 			Build(),
 	}
 
-	mw := toolapproval.New()
+	mw := toolapproval.New(toolapproval.Config{})
 	session := agenttest.CreateSession()
 	opts := []agent.Option{agent.WithSession(session)}
 

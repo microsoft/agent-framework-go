@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"iter"
 	"slices"
+	"strings"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/message"
@@ -27,23 +28,22 @@ const stateKey = "toolApprovalState"
 
 // Rule is a standing approval rule. If Arguments is empty, all invocations
 // of the named tool are auto-approved. Otherwise only invocations with an
-// exact canonical argument match are auto-approved, where canonical means JSON
-// normalized to a stable representation independent of object key ordering.
+// exact argument map match are auto-approved.
 type Rule struct {
-	ToolName  string `json:"toolName"`
-	Arguments string `json:"arguments,omitempty"`
+	ToolName  string            `json:"toolName"`
+	Arguments map[string]string `json:"arguments,omitempty"`
 }
 
 // matches reports whether r auto-approves a call to toolName with the given
 // serialized arguments.
-func (r Rule) matches(toolName, arguments string) bool {
+func (r Rule) matches(toolName string, arguments map[string]string) bool {
 	if r.ToolName != toolName {
 		return false
 	}
-	if r.Arguments == "" {
+	if len(r.Arguments) == 0 {
 		return true
 	}
-	return r.Arguments == arguments
+	return argumentMapsEqual(r.Arguments, arguments)
 }
 
 // state is persisted in the session across turns.
@@ -75,9 +75,12 @@ func saveState(opts []agent.Option, s state) {
 
 // New creates a tool-approval middleware that wraps agent runs with
 // human-in-the-loop approval management.
-func New() agent.Middleware {
+func New(_ Config) agent.Middleware {
 	return agent.MiddlewareFunc(run)
 }
+
+// Config configures tool-approval middleware behavior.
+type Config struct{}
 
 func run(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
@@ -110,32 +113,24 @@ func run(next agent.RunFunc, ctx context.Context, messages []*message.Message, o
 				st.CollectedResponses = nil
 			}
 
-			var updates []*agent.ResponseUpdate
+			var approvalRequests []*message.ToolApprovalRequestContent
 			for update, err := range next(ctx, callMessages, opts...) {
 				if err != nil {
 					yield(nil, err)
 					return
 				}
-				updates = append(updates, update)
-			}
-
-			// Collect all approval request contents from the response.
-			var approvalRequests []*message.ToolApprovalRequestContent
-			for _, u := range updates {
-				for _, c := range u.Contents {
-					if req, ok := c.(*message.ToolApprovalRequestContent); ok {
-						approvalRequests = append(approvalRequests, req)
+				stripped, requests := splitApprovalRequestContents(update)
+				approvalRequests = append(approvalRequests, requests...)
+				if stripped != nil {
+					if !yield(stripped, nil) {
+						saveState(opts, st)
+						return
 					}
 				}
 			}
 
 			if len(approvalRequests) == 0 {
-				// No approval requests — yield all updates and return.
-				for _, u := range updates {
-					if !yield(u, nil) {
-						return
-					}
-				}
+				// No approval requests — all streaming updates were already yielded.
 				saveState(opts, st)
 				return
 			}
@@ -157,16 +152,7 @@ func run(next agent.RunFunc, ctx context.Context, messages []*message.Message, o
 				st.QueuedRequests = append(st.QueuedRequests, needsApproval[1:]...)
 				st.CollectedResponses = append(st.CollectedResponses, autoApproved...)
 
-				// Yield non-approval updates, then the first approval request.
-				for _, u := range updates {
-					stripped := stripApprovalContents(u)
-					if stripped != nil {
-						if !yield(stripped, nil) {
-							saveState(opts, st)
-							return
-						}
-					}
-				}
+				// Non-approval updates were already yielded during streaming.
 				if !yield(&agent.ResponseUpdate{
 					Role:     message.RoleAssistant,
 					Contents: []message.Content{first},
@@ -181,16 +167,7 @@ func run(next agent.RunFunc, ctx context.Context, messages []*message.Message, o
 			// All were auto-approved — collect responses and loop to call
 			// inner agent again with the approvals injected.
 			st.CollectedResponses = append(st.CollectedResponses, autoApproved...)
-			// Yield non-approval updates before looping.
-			for _, u := range updates {
-				stripped := stripApprovalContents(u)
-				if stripped != nil {
-					if !yield(stripped, nil) {
-						saveState(opts, st)
-						return
-					}
-				}
-			}
+			// Non-approval updates were already yielded during streaming.
 		}
 	}
 }
@@ -212,7 +189,7 @@ func prepareInbound(messages []*message.Message, st state) ([]*message.Message, 
 						} else if resp.AlwaysApproveToolWithArguments {
 							addRuleIfNotExists(&st, Rule{
 								ToolName:  fc.Name,
-								Arguments: canonicalizeArguments(fc.Arguments),
+								Arguments: serializeArguments(fc.Arguments),
 							})
 						}
 					}
@@ -280,7 +257,7 @@ func matchesRule(rules []Rule, req *message.ToolApprovalRequestContent) bool {
 	if !ok || fc == nil {
 		return false
 	}
-	args := canonicalizeArguments(fc.Arguments)
+	args := serializeArguments(fc.Arguments)
 	for _, r := range rules {
 		if r.matches(fc.Name, args) {
 			return true
@@ -289,23 +266,51 @@ func matchesRule(rules []Rule, req *message.ToolApprovalRequestContent) bool {
 	return false
 }
 
-// canonicalizeArguments normalizes JSON argument strings for stable equality
-// matching by unmarshaling and remarshaling them into canonical JSON.
-func canonicalizeArguments(arguments string) string {
+func serializeArguments(arguments string) map[string]string {
+	if strings.TrimSpace(arguments) == "" {
+		return nil
+	}
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(arguments), &values); err != nil {
+		return map[string]string{"$raw": arguments}
+	}
+	if len(values) == 0 {
+		return nil
+	}
+	serialized := make(map[string]string, len(values))
+	for k, raw := range values {
+		serialized[k] = serializeArgumentValue(raw)
+	}
+	return serialized
+}
+
+func serializeArgumentValue(raw json.RawMessage) string {
 	var v any
-	if err := json.Unmarshal([]byte(arguments), &v); err != nil {
-		return arguments
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return string(raw)
 	}
 	b, err := json.Marshal(v)
 	if err != nil {
-		return arguments
+		return string(raw)
 	}
 	return string(b)
 }
 
+func argumentMapsEqual(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, av := range a {
+		if bv, ok := b[k]; !ok || av != bv {
+			return false
+		}
+	}
+	return true
+}
+
 func addRuleIfNotExists(st *state, rule Rule) {
 	for _, existing := range st.Rules {
-		if existing.ToolName == rule.ToolName && existing.Arguments == rule.Arguments {
+		if existing.ToolName == rule.ToolName && argumentMapsEqual(existing.Arguments, rule.Arguments) {
 			return
 		}
 	}
@@ -323,25 +328,27 @@ func responseMessage(responses []*message.ToolApprovalResponseContent) *message.
 	}
 }
 
-func stripApprovalContents(u *agent.ResponseUpdate) *agent.ResponseUpdate {
+func splitApprovalRequestContents(u *agent.ResponseUpdate) (*agent.ResponseUpdate, []*message.ToolApprovalRequestContent) {
 	var stripped []message.Content
+	var requests []*message.ToolApprovalRequestContent
 	for i, c := range u.Contents {
-		if _, ok := c.(*message.ToolApprovalRequestContent); ok {
+		if req, ok := c.(*message.ToolApprovalRequestContent); ok {
 			if stripped == nil {
 				stripped = make([]message.Content, 0, len(u.Contents))
 				stripped = append(stripped, u.Contents[:i]...)
 			}
+			requests = append(requests, req)
 		} else if stripped != nil {
 			stripped = append(stripped, c)
 		}
 	}
 	if stripped != nil {
 		if len(stripped) == 0 {
-			return nil
+			return nil, requests
 		}
 		clone := *u
 		clone.Contents = stripped
-		return &clone
+		return &clone, requests
 	}
-	return u
+	return u, nil
 }

@@ -749,12 +749,12 @@ type AlwaysApproveToolApprovalResponseContent struct {
 
 	// AlwaysApproveTool, when true, indicates a standing rule to auto-approve
 	// all future calls to the same tool regardless of arguments.
-	AlwaysApproveTool bool `json:"alwaysApproveTool,omitempty"`
+	AlwaysApproveTool bool `json:",omitempty"`
 
 	// AlwaysApproveToolWithArguments, when true, indicates a standing rule to
 	// auto-approve future calls to the same tool only when the arguments
 	// match exactly.
-	AlwaysApproveToolWithArguments bool `json:"alwaysApproveToolWithArguments,omitempty"`
+	AlwaysApproveToolWithArguments bool `json:",omitempty"`
 }
 
 func (t *AlwaysApproveToolApprovalResponseContent) MarshalJSON() ([]byte, error) {
