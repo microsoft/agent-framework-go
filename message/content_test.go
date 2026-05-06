@@ -115,18 +115,43 @@ func TestContentEncoding_Roundtrip(t *testing.T) {
 		&message.HostedVectorStoreContent{
 			VectorStoreID: "store-123",
 		},
-		&message.FunctionApprovalRequestContent{
-			ID: "approval-123",
-			FunctionCall: &message.FunctionCallContent{
+		&message.ToolApprovalRequestContent{
+			RequestID: "approval-123",
+			ToolCall: &message.FunctionCallContent{
 				CallID: "1",
 			},
 		},
-		&message.FunctionApprovalResponseContent{
-			ID:       "approval-123",
-			Approved: true,
-			FunctionCall: &message.FunctionCallContent{
+		&message.ToolApprovalResponseContent{
+			RequestID: "approval-123",
+			Approved:  true,
+			ToolCall: &message.FunctionCallContent{
 				CallID: "1",
 			},
+		},
+		&message.ToolApprovalRequestContent{
+			RequestID: "mcp-approval-123",
+			ToolCall: &message.MCPServerToolCallContent{
+				CallID:     "mcp-call-123",
+				Arguments:  "{\"arg1\":\"value1\"}",
+				Name:       "mcpName",
+				ServerName: "mcpServer",
+			},
+		},
+		&message.ToolApprovalResponseContent{
+			RequestID: "mcp-approval-123",
+			Approved:  true,
+			ToolCall: &message.MCPServerToolCallContent{
+				CallID:     "mcp-call-123",
+				Arguments:  "{\"arg1\":\"value1\"}",
+				Name:       "mcpName",
+				ServerName: "mcpServer",
+			},
+		},
+		&message.MCPServerToolCallContent{
+			CallID:     "mcp-call-123",
+			Arguments:  "{\"arg1\":\"value1\"}",
+			Name:       "mcpName",
+			ServerName: "mcpServer",
 		},
 	}
 	data, err := json.Marshal(contents)
