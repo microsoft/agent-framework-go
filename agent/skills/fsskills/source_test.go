@@ -181,6 +181,33 @@ func TestFileSource_FoldedScalarDescription_ParsesMultilineValue(t *testing.T) {
 	}
 }
 
+func TestFileSource_FoldedScalarDescription_PreservesParagraphBreaks(t *testing.T) {
+	root := t.TempDir()
+	createSkillDirRaw(t, root, "folded-paragraph-skill", strings.Join([]string{
+		"---",
+		"name: folded-paragraph-skill",
+		"description: >",
+		"  First paragraph line one",
+		"  line two",
+		"",
+		"  Second paragraph.",
+		"---",
+		"Body text.",
+	}, "\n"))
+	source := fsskills.NewSource(os.DirFS(root))
+
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
+	}
+	if loaded[0].Frontmatter.Description != "First paragraph line one line two\nSecond paragraph." {
+		t.Fatalf("unexpected description: %q", loaded[0].Frontmatter.Description)
+	}
+}
+
 func TestFileSource_ScalarDescriptionWithChompingIndicator_ParsesValue(t *testing.T) {
 	tests := []struct {
 		indicator string

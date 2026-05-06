@@ -352,19 +352,35 @@ func parseYamlScalarValue(yamlContent string, kv []int) string {
 	if scalarStyle == '|' {
 		parsedValue = strings.Join(normalizedLines, "\n")
 	} else {
-		foldedLines := normalizedLines[:0]
-		for _, line := range normalizedLines {
-			if line != "" {
-				foldedLines = append(foldedLines, line)
-			}
-		}
-		parsedValue = strings.Join(foldedLines, " ")
+		parsedValue = foldYamlLines(normalizedLines)
 	}
 
 	if keepTrailingNewline {
 		return parsedValue + "\n"
 	}
 	return parsedValue
+}
+
+func foldYamlLines(lines []string) string {
+	var builder strings.Builder
+	blankLines := 0
+	for _, line := range lines {
+		if line == "" {
+			blankLines++
+			continue
+		}
+
+		if builder.Len() > 0 {
+			if blankLines > 0 {
+				builder.WriteString(strings.Repeat("\n", blankLines))
+			} else {
+				builder.WriteByte(' ')
+			}
+		}
+		builder.WriteString(line)
+		blankLines = 0
+	}
+	return builder.String()
 }
 
 func leadingWhitespaceCount(line string) int {
