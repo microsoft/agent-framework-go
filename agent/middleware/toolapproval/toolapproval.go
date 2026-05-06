@@ -25,6 +25,7 @@ import (
 )
 
 const stateKey = "toolApprovalState"
+const rawArgumentsKey = "$raw"
 
 // Rule is a standing approval rule. If Arguments is empty, all invocations
 // of the named tool are auto-approved. Otherwise only invocations with an
@@ -76,6 +77,7 @@ func saveState(opts []agent.Option, s state) {
 // New creates a tool-approval middleware that wraps agent runs with
 // human-in-the-loop approval management.
 func New(cfg Config) agent.Middleware {
+	// Config is currently empty and reserved for future extensibility.
 	_ = cfg
 	return agent.MiddlewareFunc(run)
 }
@@ -269,14 +271,14 @@ func matchesRule(rules []Rule, req *message.ToolApprovalRequestContent) bool {
 
 func serializeArguments(arguments string) map[string]string {
 	if strings.TrimSpace(arguments) == "" {
-		return map[string]string{"$raw": arguments}
+		return map[string]string{rawArgumentsKey: arguments}
 	}
 	var values map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(arguments), &values); err != nil {
-		return map[string]string{"$raw": arguments}
+		return map[string]string{rawArgumentsKey: arguments}
 	}
 	if len(values) == 0 {
-		return nil
+		return map[string]string{}
 	}
 	serialized := make(map[string]string, len(values))
 	for k, raw := range values {
