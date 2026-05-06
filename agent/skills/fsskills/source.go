@@ -303,12 +303,12 @@ func parseYamlScalarValue(yamlContent string, kv []int) string {
 	}
 
 	remaining := yamlContent[kv[1]+lineBreak+1:]
-	if strings.HasSuffix(remaining, "\n") {
-		remaining = strings.TrimSuffix(remaining, "\n")
+	if before, ok := strings.CutSuffix(remaining, "\n"); ok {
+		remaining = before
 	}
 
 	var blockLines []string
-	for _, line := range strings.Split(remaining, "\n") {
+	for line := range strings.SplitSeq(remaining, "\n") {
 		line = strings.TrimSuffix(line, "\r")
 		if strings.TrimSpace(line) == "" {
 			blockLines = append(blockLines, "")
