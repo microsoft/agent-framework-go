@@ -400,9 +400,9 @@ func (p *providerState) buildTools(skills providedSkillSet, hasResources, hasScr
 			Description: "Runs a script associated with a skill.",
 		},
 		func(callCtx tool.Context, in struct {
-			SkillName  string         `json:"skillName" jsonschema:"The name of the skill"`
-			ScriptName string         `json:"scriptName" jsonschema:"The exact script name to run"`
-			Arguments  map[string]any `json:"arguments,omitempty" jsonschema:"Optional arguments for the script"`
+			SkillName  string   `json:"skillName" jsonschema:"The name of the skill"`
+			ScriptName string   `json:"scriptName" jsonschema:"The exact script name to run"`
+			Arguments  []string `json:"arguments,omitempty" jsonschema:"Positional CLI-style string arguments for the script, e.g. [\"--value\",\"26.2\",\"--factor\",\"1.60934\"]"`
 		},
 		) (any, error) {
 			return p.runSkillScript(callCtx.Context, skills, in.SkillName, in.ScriptName, in.Arguments), nil
@@ -454,7 +454,7 @@ func (p *providerState) readSkillResource(ctx context.Context, skills providedSk
 	return content
 }
 
-func (p *providerState) runSkillScript(ctx context.Context, skills providedSkillSet, skillName, scriptName string, arguments map[string]any) any {
+func (p *providerState) runSkillScript(ctx context.Context, skills providedSkillSet, skillName, scriptName string, arguments []string) any {
 	if strings.TrimSpace(skillName) == "" {
 		return "Error: Skill name cannot be empty."
 	}

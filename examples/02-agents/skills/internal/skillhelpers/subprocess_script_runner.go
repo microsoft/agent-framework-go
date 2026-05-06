@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/microsoft/agent-framework-go/agent/skills"
@@ -18,7 +17,11 @@ import (
 const rootFSPropertyKey = "fsskills.rootFS"
 
 // RunSubprocessScript materializes a file-backed skill to a temp directory and executes a script from it.
-func RunSubprocessScript(ctx context.Context, skill *skills.Skill, script *skills.Script, arguments map[string]any) (any, error) {
+//
+// The args slice contains positional CLI-style string tokens exactly as sent by the LLM
+// (for example ["--value", "26.2", "--factor", "1.60934"]). They are passed verbatim
+// as subprocess arguments.
+func RunSubprocessScript(ctx context.Context, skill *skills.Skill, script *skills.Script, args []string) (any, error) {
 	tempDir, err := os.MkdirTemp("", "agent-framework-go-skill-")
 	if err != nil {
 		return nil, err
@@ -30,12 +33,12 @@ func RunSubprocessScript(ctx context.Context, skill *skills.Skill, script *skill
 	}
 
 	scriptPath := filepath.Join(tempDir, filepath.FromSlash(script.Name))
-	command, args, err := scriptCommand(scriptPath, arguments)
+	command, scriptArgs, err := scriptCommand(scriptPath, args)
 	if err != nil {
 		return nil, err
 	}
 
-	cmd := exec.CommandContext(ctx, command, args...)
+	cmd := exec.CommandContext(ctx, command, scriptArgs...)
 	cmd.Dir = tempDir
 	output, err := cmd.CombinedOutput()
 	text := strings.TrimSpace(string(output))
@@ -87,45 +90,18 @@ func materializeSkill(skill *skills.Skill, destination string) error {
 	})
 }
 
-func scriptCommand(scriptPath string, arguments map[string]any) (string, []string, error) {
+func scriptCommand(scriptPath string, args []string) (string, []string, error) {
 	ext := strings.ToLower(filepath.Ext(scriptPath))
-	flags := buildCLIFlags(arguments)
 	switch ext {
 	case ".py":
-		return "python", append([]string{scriptPath}, flags...), nil
+		return "python", append([]string{scriptPath}, args...), nil
 	case ".js":
-		return "node", append([]string{scriptPath}, flags...), nil
+		return "node", append([]string{scriptPath}, args...), nil
 	case ".sh":
-		return "bash", append([]string{scriptPath}, flags...), nil
+		return "bash", append([]string{scriptPath}, args...), nil
 	case ".ps1":
-		return "pwsh", append([]string{scriptPath}, flags...), nil
+		return "pwsh", append([]string{scriptPath}, args...), nil
 	default:
 		return "", nil, fmt.Errorf("unsupported script type %q", ext)
 	}
-}
-
-func buildCLIFlags(arguments map[string]any) []string {
-	if len(arguments) == 0 {
-		return nil
-	}
-
-	keys := make([]string, 0, len(arguments))
-	for key := range arguments {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
-	flags := make([]string, 0, len(arguments)*2)
-	for _, key := range keys {
-		flag := "--" + strings.TrimLeft(key, "-")
-		value := arguments[key]
-		if boolean, ok := value.(bool); ok {
-			if boolean {
-				flags = append(flags, flag)
-			}
-			continue
-		}
-		flags = append(flags, flag, fmt.Sprint(value))
-	}
-	return flags
 }

@@ -103,7 +103,7 @@ func TestProvider_FromFileSourceWithOptions_DiscoversSkills(t *testing.T) {
 	createSkillDir(t, root, "opts-skill", "Options skill", "Options body.")
 	provider := providerFromFileSource(
 		fsskills.NewSourceOptions(fsskills.SourceOptions{
-			ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, map[string]any) (any, error) {
+			ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
 				return nil, nil
 			},
 		}, os.DirFS(root)),
@@ -122,7 +122,7 @@ func TestProvider_FromFileSourceWithMultipleFileSystems_DiscoversMultipleSkills(
 	createSkillDir(t, filepath.Join(root, "multi-opts-2"), "skill-y", "Skill Y", "Body Y.")
 	provider := providerFromFileSource(
 		fsskills.NewSourceOptions(fsskills.SourceOptions{
-			ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, map[string]any) (any, error) {
+			ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
 				return nil, nil
 			},
 		}, os.DirFS(filepath.Join(root, "multi-opts-1")), os.DirFS(filepath.Join(root, "multi-opts-2"))),
@@ -139,7 +139,7 @@ func TestProvider_WithScriptsNoScriptApproval_DoesNotWrapRunScriptTool(t *testin
 	root := t.TempDir()
 	createSkillDir(t, root, "no-approval-skill", "No approval test", "Body.")
 	createRelativeFile(t, filepath.Join(root, "no-approval-skill"), "scripts/run.py", "print('hello')")
-	provider := newProviderWithConfig(t, &fsskills.SourceOptions{ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, map[string]any) (any, error) {
+	provider := newProviderWithConfig(t, &fsskills.SourceOptions{ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
 		return "ok", nil
 	}}, nil, root)
 
@@ -355,7 +355,7 @@ func TestProvider_WithScripts_ExposesRunSkillScriptTool(t *testing.T) {
 
 	runnerCalled := false
 	provider := newProviderWithConfig(t, &fsskills.SourceOptions{
-		ScriptRunner: func(_ context.Context, skill *skills.Skill, script *skills.Script, arguments map[string]any) (any, error) {
+		ScriptRunner: func(_ context.Context, skill *skills.Skill, script *skills.Script, arguments []string) (any, error) {
 			runnerCalled = true
 			if skill.Frontmatter.Name != "script-skill" {
 				t.Fatalf("expected script-skill, got %q", skill.Frontmatter.Name)
@@ -363,13 +363,13 @@ func TestProvider_WithScripts_ExposesRunSkillScriptTool(t *testing.T) {
 			if script.Name != "scripts/run.py" {
 				t.Fatalf("expected scripts/run.py, got %q", script.Name)
 			}
-			return map[string]any{"status": "ok", "value": arguments["value"]}, nil
+			return map[string]any{"status": "ok", "args": arguments}, nil
 		},
 	}, nil, root)
 
 	_, tools := captureProviderContext(t, provider)
 	runTool := findTool(t, tools, "run_skill_script")
-	result, err := runTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"script-skill","scriptName":"scripts/run.py","arguments":{"value":42}}`)
+	result, err := runTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"script-skill","scriptName":"scripts/run.py","arguments":["--value","42"]}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,8 +380,9 @@ func TestProvider_WithScripts_ExposesRunSkillScriptTool(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected structured script result, got %T", result)
 	}
-	if resultMap["status"] != "ok" || resultMap["value"] != float64(42) {
-		t.Fatalf("expected structured script result, got %#v", resultMap)
+	args, ok := resultMap["args"].([]string)
+	if !ok || resultMap["status"] != "ok" || len(args) != 2 || args[0] != "--value" || args[1] != "42" {
+		t.Fatalf("expected structured script result with args, got %#v", resultMap)
 	}
 }
 
@@ -391,7 +392,7 @@ func TestProvider_RunSkillScript_RequiresExactName(t *testing.T) {
 	createRelativeFile(t, filepath.Join(root, "script-skill"), "scripts/run.py", "print('ok')")
 
 	provider := newProviderWithConfig(t, &fsskills.SourceOptions{
-		ScriptRunner: func(_ context.Context, _ *skills.Skill, _ *skills.Script, _ map[string]any) (any, error) {
+		ScriptRunner: func(_ context.Context, _ *skills.Skill, _ *skills.Script, _ []string) (any, error) {
 			t.Fatal("did not expect script runner to be called")
 			return nil, nil
 		},
@@ -418,7 +419,7 @@ func TestProvider_ScriptApproval_MarksToolAsApprovalRequired(t *testing.T) {
 	createRelativeFile(t, filepath.Join(root, "approval-skill"), "scripts/run.py", "print('ok')")
 
 	provider := newProviderWithConfig(t, &fsskills.SourceOptions{
-		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, map[string]any) (any, error) {
+		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
 			return "ok", nil
 		},
 	}, &skills.ContextProviderOptions{ScriptApproval: true}, root)
@@ -438,7 +439,7 @@ func TestProvider_FromFileSourceWithRunner_UsesScriptRunner(t *testing.T) {
 	runnerCalled := false
 	provider := providerFromFileSource(
 		fsskills.NewSourceOptions(fsskills.SourceOptions{
-			ScriptRunner: func(_ context.Context, _ *skills.Skill, _ *skills.Script, _ map[string]any) (any, error) {
+			ScriptRunner: func(_ context.Context, _ *skills.Skill, _ *skills.Script, _ []string) (any, error) {
 				runnerCalled = true
 				return "executed", nil
 			},
@@ -533,7 +534,7 @@ func TestProvider_AggregatesMultipleSources(t *testing.T) {
 		Sources: []skills.Source{
 			fsskills.NewSourceOptions(fsskills.SourceOptions{
 				ScriptDirectories: []string{"unused-scripts"},
-				ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, map[string]any) (any, error) {
+				ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
 					return "ok", nil
 				},
 			}, os.DirFS(fileRoot)),

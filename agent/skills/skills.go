@@ -71,15 +71,24 @@ type Resource struct {
 }
 
 // Script is executable skill functionality that can be run on demand.
+//
+// Arguments passed to [Script.Run] are positional CLI-style string tokens, for
+// example ["--value", "26.2", "--factor", "1.60934"]. The LLM is instructed to
+// pass a JSON array of strings, and the run_skill_script tool forwards those
+// strings verbatim. Code-defined scripts may parse the strings however they
+// choose; file-based scripts pass them directly to the subprocess.
 type Script struct {
 	Name                 string
 	Description          string
-	Run                  func(context.Context, *Skill, map[string]any) (any, error)
+	Run                  func(context.Context, *Skill, []string) (any, error)
 	AdditionalProperties map[string]any
 }
 
 // ScriptRunner defines the function signature for running a script.
-type ScriptRunner func(context.Context, *Skill, *Script, map[string]any) (any, error)
+//
+// The args slice contains positional CLI-style string tokens as sent by the LLM
+// (for example ["--value", "26.2", "--factor", "1.60934"]).
+type ScriptRunner func(context.Context, *Skill, *Script, []string) (any, error)
 
 // validateName validates a skill name.
 func validateName(name string) error {

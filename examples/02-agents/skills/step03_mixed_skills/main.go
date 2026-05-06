@@ -25,7 +25,7 @@ import (
 const volumeConverterInstructions = `Use this skill when the user asks to convert between gallons and liters.
 
 1. Review the volume-conversion-table resource to find the correct factor.
-2. Use the convert-volume script, passing the value and factor.
+2. Use the convert-volume script, passing the value and factor as positional arguments: ["<value>", "<factor>"].
 3. Present the result clearly with both units.`
 
 const volumeConversionTable = `# Volume Conversion Table
@@ -40,7 +40,7 @@ Formula: **result = value * factor**
 const temperatureConverterInstructions = `Use this skill when the user asks to convert temperatures.
 
 1. Review the temperature-conversion-formulas resource for the correct formula.
-2. Use the convert-temperature script, passing the value, source scale, and target scale.
+2. Use the convert-temperature script, passing value, source scale, and target scale as positional arguments: ["<value>", "<from>", "<to>"].
 3. Present the result clearly with both temperature scales.`
 
 const temperatureConversionFormulas = `# Temperature Conversion Formulas
@@ -70,13 +70,13 @@ var volumeConverterSkill = &skills.Skill{
 	Scripts: []skills.Script{
 		{
 			Name:        "convert-volume",
-			Description: "Multiplies a value by a conversion factor and returns the result as JSON.",
-			Run: func(_ context.Context, _ *skills.Skill, arguments map[string]any) (any, error) {
-				value, err := skillhelpers.NumberArg(arguments, "value")
+			Description: "Multiplies a value by a conversion factor and returns the result as JSON. Pass value and factor as two positional string arguments: [\"<value>\", \"<factor>\"].",
+			Run: func(_ context.Context, _ *skills.Skill, args []string) (any, error) {
+				value, err := skillhelpers.NumberArg(args, 0)
 				if err != nil {
 					return nil, err
 				}
-				factor, err := skillhelpers.NumberArg(arguments, "factor")
+				factor, err := skillhelpers.NumberArg(args, 1)
 				if err != nil {
 					return nil, err
 				}
@@ -104,17 +104,17 @@ var temperatureConverterSkill = skills.Skill{
 	Scripts: []skills.Script{
 		{
 			Name:        "convert-temperature",
-			Description: "Converts a temperature value from one scale to another.",
-			Run: func(_ context.Context, _ *skills.Skill, arguments map[string]any) (any, error) {
-				value, err := skillhelpers.NumberArg(arguments, "value")
+			Description: "Converts a temperature value from one scale to another. Pass value, source scale, and target scale as three positional string arguments: [\"<value>\", \"<from>\", \"<to>\"].",
+			Run: func(_ context.Context, _ *skills.Skill, args []string) (any, error) {
+				value, err := skillhelpers.NumberArg(args, 0)
 				if err != nil {
 					return nil, err
 				}
-				from, err := skillhelpers.StringArg(arguments, "from")
+				from, err := skillhelpers.StringArg(args, 1)
 				if err != nil {
 					return nil, err
 				}
-				to, err := skillhelpers.StringArg(arguments, "to")
+				to, err := skillhelpers.StringArg(args, 2)
 				if err != nil {
 					return nil, err
 				}

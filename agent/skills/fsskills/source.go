@@ -531,15 +531,12 @@ func validateExtensions(extensions []string) {
 func newScript(name string, fsys fs.FS, runner skills.ScriptRunner) skills.Script {
 	return skills.Script{
 		Name: name,
-		Run: func(ctx context.Context, owner *skills.Skill, arguments map[string]any) (any, error) {
+		Run: func(ctx context.Context, owner *skills.Skill, arguments []string) (any, error) {
 			if _, err := FSFromSkill(owner); err != nil {
 				return nil, fmt.Errorf("file-based script %q requires a skill with a backing fs.FS: %w", name, err)
 			}
 			if runner == nil {
 				return nil, fmt.Errorf("script %q cannot be executed because no file script runner was provided", name)
-			}
-			if arguments == nil {
-				arguments = map[string]any{}
 			}
 			script := &skills.Script{Name: name}
 			return runner(ctx, owner, script, arguments)

@@ -3,58 +3,31 @@
 package skillhelpers
 
 import (
-	"encoding/json"
 	"fmt"
 	"math"
 	"strconv"
 )
 
-// NumberArg reads a numeric argument from a tool call argument map.
-func NumberArg(arguments map[string]any, name string) (float64, error) {
-	value, ok := arguments[name]
-	if !ok {
-		return 0, fmt.Errorf("missing argument %q", name)
+// NumberArg reads a numeric argument from a positional CLI-style string slice.
+// index is the position in the args slice.
+func NumberArg(args []string, index int) (float64, error) {
+	if index < 0 || index >= len(args) {
+		return 0, fmt.Errorf("missing positional argument at index %d (got %d args)", index, len(args))
 	}
-
-	switch typed := value.(type) {
-	case float64:
-		return typed, nil
-	case float32:
-		return float64(typed), nil
-	case int:
-		return float64(typed), nil
-	case int32:
-		return float64(typed), nil
-	case int64:
-		return float64(typed), nil
-	case json.Number:
-		return typed.Float64()
-	case string:
-		parsed, err := strconv.ParseFloat(typed, 64)
-		if err != nil {
-			return 0, fmt.Errorf("argument %q must be numeric: %w", name, err)
-		}
-		return parsed, nil
-	default:
-		return 0, fmt.Errorf("argument %q must be numeric, got %T", name, value)
+	parsed, err := strconv.ParseFloat(args[index], 64)
+	if err != nil {
+		return 0, fmt.Errorf("argument at index %d must be numeric: %w", index, err)
 	}
+	return parsed, nil
 }
 
-// StringArg reads a string argument from a tool call argument map.
-func StringArg(arguments map[string]any, name string) (string, error) {
-	value, ok := arguments[name]
-	if !ok {
-		return "", fmt.Errorf("missing argument %q", name)
+// StringArg reads a string argument from a positional CLI-style string slice.
+// index is the position in the args slice.
+func StringArg(args []string, index int) (string, error) {
+	if index < 0 || index >= len(args) {
+		return "", fmt.Errorf("missing positional argument at index %d (got %d args)", index, len(args))
 	}
-
-	switch typed := value.(type) {
-	case string:
-		return typed, nil
-	case fmt.Stringer:
-		return typed.String(), nil
-	default:
-		return "", fmt.Errorf("argument %q must be a string, got %T", name, value)
-	}
+	return args[index], nil
 }
 
 // Round rounds a float to the given number of decimal places.
