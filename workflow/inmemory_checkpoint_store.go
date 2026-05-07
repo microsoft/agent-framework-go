@@ -11,10 +11,10 @@ import (
 	"github.com/google/uuid"
 )
 
-// InMemoryCheckpointStore is an in-memory implementation of [CheckpointStore]
+// inMemoryCheckpointStore is an in-memory implementation of [CheckpointStore]
 // suitable for development and testing. Checkpoints are not persisted beyond
 // the lifetime of the process.
-type InMemoryCheckpointStore struct {
+type inMemoryCheckpointStore struct {
 	mu       sync.RWMutex
 	sessions map[string]*sessionCache
 }
@@ -29,21 +29,25 @@ type indexEntry struct {
 	Parent *CheckpointInfo
 }
 
-// NewInMemoryCheckpointStore creates a new in-memory checkpoint store.
-func NewInMemoryCheckpointStore() *InMemoryCheckpointStore {
-	return &InMemoryCheckpointStore{
+// newInMemoryCheckpointStore creates a new in-memory checkpoint store.
+func newInMemoryCheckpointStore() *inMemoryCheckpointStore {
+	return &inMemoryCheckpointStore{
 		sessions: make(map[string]*sessionCache),
 	}
 }
 
 // NewInMemoryCheckpointManager creates a [CheckpointManager] backed by an
-// in-memory store. This is a convenience equivalent to
-// NewCheckpointManager(NewInMemoryCheckpointStore()).
+// in-memory store suitable for development and testing.
+//
+// Note: for workflow checkpoint/restore to work correctly, the manager
+// returned by this function should be used with [inproc.ExecutionEnvironment.WithCheckpointing].
 func NewInMemoryCheckpointManager() *CheckpointManager {
-	return NewCheckpointManager(NewInMemoryCheckpointStore())
+	mgr := NewCheckpointManager(newInMemoryCheckpointStore())
+	mgr.inMemory = true
+	return mgr
 }
 
-func (s *InMemoryCheckpointStore) ensureSession(sessionID string) *sessionCache {
+func (s *inMemoryCheckpointStore) ensureSession(sessionID string) *sessionCache {
 	if sess, ok := s.sessions[sessionID]; ok {
 		return sess
 	}
@@ -55,7 +59,7 @@ func (s *InMemoryCheckpointStore) ensureSession(sessionID string) *sessionCache 
 }
 
 // CreateCheckpoint implements [CheckpointStore].
-func (s *InMemoryCheckpointStore) CreateCheckpoint(_ context.Context, sessionID string, data json.RawMessage, parent *CheckpointInfo) (CheckpointInfo, error) {
+func (s *inMemoryCheckpointStore) CreateCheckpoint(_ context.Context, sessionID string, data json.RawMessage, parent *CheckpointInfo) (CheckpointInfo, error) {
 	if sessionID == "" {
 		return CheckpointInfo{}, fmt.Errorf("sessionID cannot be empty")
 	}
@@ -74,7 +78,7 @@ func (s *InMemoryCheckpointStore) CreateCheckpoint(_ context.Context, sessionID 
 }
 
 // RetrieveCheckpoint implements [CheckpointStore].
-func (s *InMemoryCheckpointStore) RetrieveCheckpoint(_ context.Context, sessionID string, info CheckpointInfo) (json.RawMessage, error) {
+func (s *inMemoryCheckpointStore) RetrieveCheckpoint(_ context.Context, sessionID string, info CheckpointInfo) (json.RawMessage, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -90,7 +94,7 @@ func (s *InMemoryCheckpointStore) RetrieveCheckpoint(_ context.Context, sessionI
 }
 
 // RetrieveIndex implements [CheckpointStore].
-func (s *InMemoryCheckpointStore) RetrieveIndex(_ context.Context, sessionID string, withParent *CheckpointInfo) ([]CheckpointInfo, error) {
+func (s *inMemoryCheckpointStore) RetrieveIndex(_ context.Context, sessionID string, withParent *CheckpointInfo) ([]CheckpointInfo, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

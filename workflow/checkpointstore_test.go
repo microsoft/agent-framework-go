@@ -11,7 +11,7 @@ import (
 )
 
 func TestInMemoryCheckpointStore_RoundTrip(t *testing.T) {
-	store := workflow.NewInMemoryCheckpointStore()
+	store := workflow.NewInMemoryCheckpointManager().Store()
 	sessionID := "session-1"
 	data := json.RawMessage(`{"stepNumber":1}`)
 
@@ -36,7 +36,7 @@ func TestInMemoryCheckpointStore_RoundTrip(t *testing.T) {
 }
 
 func TestInMemoryCheckpointStore_RetrieveIndex(t *testing.T) {
-	store := workflow.NewInMemoryCheckpointStore()
+	store := workflow.NewInMemoryCheckpointManager().Store()
 	sessionID := "session-1"
 
 	_, err := store.CreateCheckpoint(context.Background(), sessionID, json.RawMessage(`{"step":0}`), nil)
@@ -61,7 +61,7 @@ func TestInMemoryCheckpointStore_RetrieveIndex(t *testing.T) {
 }
 
 func TestInMemoryCheckpointStore_EmptySession(t *testing.T) {
-	store := workflow.NewInMemoryCheckpointStore()
+	store := workflow.NewInMemoryCheckpointManager().Store()
 
 	index, err := store.RetrieveIndex(context.Background(), "nonexistent", nil)
 	if err != nil {
@@ -73,7 +73,7 @@ func TestInMemoryCheckpointStore_EmptySession(t *testing.T) {
 }
 
 func TestInMemoryCheckpointStore_RetrieveNotFound(t *testing.T) {
-	store := workflow.NewInMemoryCheckpointStore()
+	store := workflow.NewInMemoryCheckpointManager().Store()
 
 	_, err := store.RetrieveCheckpoint(context.Background(), "session-1", workflow.CheckpointInfo{
 		SessionID:    "session-1",
@@ -85,7 +85,7 @@ func TestInMemoryCheckpointStore_RetrieveNotFound(t *testing.T) {
 }
 
 func TestInMemoryCheckpointStore_EmptySessionID(t *testing.T) {
-	store := workflow.NewInMemoryCheckpointStore()
+	store := workflow.NewInMemoryCheckpointManager().Store()
 
 	_, err := store.CreateCheckpoint(context.Background(), "", json.RawMessage(`{}`), nil)
 	if err == nil {
@@ -94,10 +94,9 @@ func TestInMemoryCheckpointStore_EmptySessionID(t *testing.T) {
 }
 
 func TestCheckpointManager_Creation(t *testing.T) {
-	store := workflow.NewInMemoryCheckpointStore()
-	mgr := workflow.NewCheckpointManager(store)
-	if mgr.Store() != store {
-		t.Error("expected Store() to return the original store")
+	mgr := workflow.NewInMemoryCheckpointManager()
+	if mgr.Store() == nil {
+		t.Error("expected non-nil store")
 	}
 }
 
@@ -121,7 +120,7 @@ func TestCheckpointManager_NilStorePanics(t *testing.T) {
 }
 
 func TestInMemoryCheckpointStore_ParentTracking(t *testing.T) {
-	store := workflow.NewInMemoryCheckpointStore()
+	store := workflow.NewInMemoryCheckpointManager().Store()
 	ctx := context.Background()
 	sessionID := "session-parent"
 

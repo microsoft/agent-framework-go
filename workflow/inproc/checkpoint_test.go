@@ -18,7 +18,7 @@ func TestCheckpoint_ResumeWithPendingRequests_RepublishesRequestInfoEvents(t *te
 		t.Run(env.name, func(t *testing.T) {
 			ctx := context.Background()
 			wf, _ := createCheckpointRequestWorkflow(t)
-			manager := inproc.NewInMemoryCheckpointManager()
+			manager := workflow.NewInMemoryCheckpointManager()
 
 			first, err := env.env.WithCheckpointing(manager).Run(ctx, wf, "Hello")
 			if err != nil {
@@ -62,7 +62,7 @@ func TestCheckpoint_ResumeWithPendingRequests_RunStatusIsPendingRequests(t *test
 		t.Run(env.name, func(t *testing.T) {
 			ctx := context.Background()
 			wf, _ := createCheckpointRequestWorkflow(t)
-			manager := inproc.NewInMemoryCheckpointManager()
+			manager := workflow.NewInMemoryCheckpointManager()
 
 			first, err := env.env.WithCheckpointing(manager).Run(ctx, wf, "Hello")
 			if err != nil {
@@ -96,7 +96,7 @@ func TestCheckpoint_ResumeWithRepublishDisabled_DoesNotEmitRequestInfoEvents(t *
 		t.Run(env.name, func(t *testing.T) {
 			ctx := context.Background()
 			wf, _ := createCheckpointRequestWorkflow(t)
-			manager := inproc.NewInMemoryCheckpointManager()
+			manager := workflow.NewInMemoryCheckpointManager()
 
 			first, err := env.env.WithCheckpointing(manager).Run(ctx, wf, "Hello")
 			if err != nil {
@@ -134,7 +134,7 @@ func TestCheckpoint_ResumeWithRepublishDisabled_DoesNotEmitRequestInfoEvents(t *
 func TestCheckpoint_ResumeWithSessionIDOverrideUsesLookupSession(t *testing.T) {
 	ctx := context.Background()
 	wf, _ := createCheckpointRequestWorkflow(t)
-	manager := inproc.NewInMemoryCheckpointManager()
+	manager := workflow.NewInMemoryCheckpointManager()
 	const lookupSession = "lookup-session"
 
 	first, err := inproc.Default.WithCheckpointing(manager).Run(ctx, wf, "Hello", inproc.WithSessionID(lookupSession))
@@ -160,7 +160,7 @@ func TestCheckpoint_ResumeRespondToPendingRequest_CompletesWithoutDuplicate(t *t
 		t.Run(env.name, func(t *testing.T) {
 			ctx := context.Background()
 			wf, received := createCheckpointRequestWorkflow(t)
-			manager := inproc.NewInMemoryCheckpointManager()
+			manager := workflow.NewInMemoryCheckpointManager()
 
 			first, err := env.env.WithCheckpointing(manager).Run(ctx, wf, "Hello")
 			if err != nil {
@@ -232,7 +232,7 @@ func TestCheckpoint_RestoreWithPendingRequests_RepublishesRequestInfoEvents(t *t
 		t.Run(env.name, func(t *testing.T) {
 			ctx := context.Background()
 			wf, received := createCheckpointRequestWorkflow(t)
-			manager := inproc.NewInMemoryCheckpointManager()
+			manager := workflow.NewInMemoryCheckpointManager()
 
 			run, err := env.env.WithCheckpointing(manager).Run(ctx, wf, "Hello")
 			if err != nil {
@@ -294,7 +294,7 @@ func TestCheckpoint_RestoreWithPendingRequests_RepublishesRequestInfoEvents(t *t
 func TestCheckpoint_RestoreClearsQueuedExternalResponsesBeforeImport(t *testing.T) {
 	ctx := context.Background()
 	wf, received := createCheckpointRequestWorkflow(t)
-	manager := inproc.NewInMemoryCheckpointManager()
+	manager := workflow.NewInMemoryCheckpointManager()
 
 	stream, err := inproc.Lockstep.WithCheckpointing(manager).RunStreaming(ctx, wf, "Hello")
 	if err != nil {
@@ -360,7 +360,7 @@ func TestCheckpoint_RestoreClearsQueuedExternalResponsesBeforeImport(t *testing.
 
 func TestCheckpoint_RestoreClearsExecutorInstancesBeforeImport(t *testing.T) {
 	ctx := context.Background()
-	manager := inproc.NewInMemoryCheckpointManager()
+	manager := workflow.NewInMemoryCheckpointManager()
 	var nextInstanceID int64
 	binding := &workflow.ExecutorBinding{
 		ID:           "counter",
@@ -436,7 +436,7 @@ func TestCheckpoint_ExecutorCheckpointHooks(t *testing.T) {
 			ctx := context.Background()
 			fixture := newCheckpointHookFixture()
 			env := inproc.OffThread
-			manager := inproc.NewInMemoryCheckpointManager()
+			manager := workflow.NewInMemoryCheckpointManager()
 			var run *inproc.Run
 			var err error
 			if useCheckpointing {
@@ -473,7 +473,7 @@ func TestCheckpoint_ExecutorRestoreHooks(t *testing.T) {
 	for _, restoreCheckpoint := range []bool{true, false} {
 		t.Run(map[bool]string{true: "restore", false: "no_restore"}[restoreCheckpoint], func(t *testing.T) {
 			ctx := context.Background()
-			manager := inproc.NewInMemoryCheckpointManager()
+			manager := workflow.NewInMemoryCheckpointManager()
 			runFixture := newCheckpointHookFixture()
 			run, err := inproc.OffThread.WithCheckpointing(manager).Run(ctx, runFixture.workflow, "Message")
 			if err != nil {

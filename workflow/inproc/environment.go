@@ -32,13 +32,6 @@ var (
 	Subworkflow = newExecutionEnvironment(execution.ModeSubworkflow, false)
 )
 
-// NewInMemoryCheckpointManager creates an in-memory checkpoint manager.
-//
-// Deprecated: Use [workflow.NewInMemoryCheckpointManager] instead.
-func NewInMemoryCheckpointManager() checkpoint.Manager {
-	return checkpoint.NewInMemoryManager()
-}
-
 // ExecutionEnvironment provides an in-process workflow execution environment
 // for running, streaming, and checkpointing workflows.
 type ExecutionEnvironment struct {
@@ -59,23 +52,27 @@ func newExecutionEnvironment(mode execution.Mode, enableConcurrentRuns bool, che
 	}
 }
 
-// WithCheckpointing returns a new execution environment with the same
-// execution settings and the provided checkpoint manager.
-//
-// Deprecated: Use [WithCheckpointStore] instead.
-func (e *ExecutionEnvironment) WithCheckpointing(cm checkpoint.Manager) *ExecutionEnvironment {
-	return newExecutionEnvironment(e.executionMode, e.enableConcurrentRuns, cm)
-}
-
-// WithCheckpointStore returns a new execution environment configured with
-// the given [workflow.CheckpointManager]. This is the recommended way to
-// attach checkpoint storage and matches the .NET SDK pattern.
-func (e *ExecutionEnvironment) WithCheckpointStore(cm *workflow.CheckpointManager) *ExecutionEnvironment {
+// WithCheckpointing returns a new execution environment configured with
+// the given [workflow.CheckpointManager].
+func (e *ExecutionEnvironment) WithCheckpointing(cm *workflow.CheckpointManager) *ExecutionEnvironment {
 	if cm == nil {
 		return newExecutionEnvironment(e.executionMode, e.enableConcurrentRuns)
 	}
-	adapter := checkpoint.NewStoreAdapter(cm.Store())
-	return newExecutionEnvironment(e.executionMode, e.enableConcurrentRuns, adapter)
+	// Reuse a previously created internal manager if available.
+	if mgr, ok := cm.Internal().(checkpoint.Manager); ok {
+		return newExecutionEnvironment(e.executionMode, e.enableConcurrentRuns, mgr)
+	}
+	// For in-memory stores, use the internal InMemoryManager directly to
+	// avoid JSON serialization round-trips that lose Go type information.
+	// For external stores, use the StoreAdapter which serializes to JSON.
+	var mgr checkpoint.Manager
+	if cm.IsInMemory() {
+		mgr = checkpoint.NewInMemoryManager()
+	} else {
+		mgr = checkpoint.NewStoreAdapter(cm.Store())
+	}
+	cm.SetInternal(mgr)
+	return newExecutionEnvironment(e.executionMode, e.enableConcurrentRuns, mgr)
 }
 
 // IsCheckpointingEnabled reports whether checkpointing is configured for
@@ -139,7 +136,7 @@ func (e *ExecutionEnvironment) Resume(ctx context.Context, wf *workflow.Workflow
 
 func (e *ExecutionEnvironment) verifyCheckpointingConfigured() error {
 	if e.checkpointManager == nil {
-		return errors.New("checkpointing is not configured for this execution environment; use WithCheckpointStore to attach a checkpoint manager")
+		return errors.New("checkpointing is not configured for this execution environment; use WithCheckpointing to attach a checkpoint manager")
 	}
 	return nil
 }

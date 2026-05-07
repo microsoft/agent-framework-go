@@ -13,11 +13,11 @@ import (
 // StoreAdapter implements [Manager] by delegating to a [workflow.CheckpointStore].
 // It serializes/deserializes [Checkpoint] values as JSON.
 type StoreAdapter struct {
-	store workflow.CheckpointStore
+	store workflow.CheckpointStore[json.RawMessage]
 }
 
 // NewStoreAdapter creates a [Manager] backed by the given [workflow.CheckpointStore].
-func NewStoreAdapter(store workflow.CheckpointStore) *StoreAdapter {
+func NewStoreAdapter(store workflow.CheckpointStore[json.RawMessage]) *StoreAdapter {
 	return &StoreAdapter{store: store}
 }
 

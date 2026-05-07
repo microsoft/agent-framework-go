@@ -2,14 +2,26 @@
 
 package workflow
 
+import "encoding/json"
+
 // CheckpointManager provides checkpoint management for workflow execution.
 // Use [NewCheckpointManager] to create an instance backed by a [CheckpointStore],
 // or [NewInMemoryCheckpointManager] for a development/testing store.
-//
-// This mirrors the .NET CheckpointManager pattern: the manager owns
-// serialization and delegates storage to the pluggable store.
 type CheckpointManager struct {
-	store CheckpointStore
+	store    CheckpointStore[json.RawMessage]
+	internal any  // cached internal checkpoint.Manager, set by WithCheckpointing
+	inMemory bool // true when backed by an in-memory store
+}
+
+// SetInternal sets an internal manager implementation to avoid creating
+// a new adapter on each WithCheckpointing call.
+func (m *CheckpointManager) SetInternal(mgr any) {
+	m.internal = mgr
+}
+
+// IsInMemory reports whether this manager is backed by an in-memory store.
+func (m *CheckpointManager) IsInMemory() bool {
+	return m.inMemory
 }
 
 // NewCheckpointManager creates a CheckpointManager backed by the given store.
@@ -17,7 +29,7 @@ type CheckpointManager struct {
 // the framework handles serialization of internal checkpoint structures.
 //
 // Panics if store is nil.
-func NewCheckpointManager(store CheckpointStore) *CheckpointManager {
+func NewCheckpointManager(store CheckpointStore[json.RawMessage]) *CheckpointManager {
 	if store == nil {
 		panic("workflow: CheckpointStore must not be nil")
 	}
@@ -25,6 +37,13 @@ func NewCheckpointManager(store CheckpointStore) *CheckpointManager {
 }
 
 // Store returns the underlying [CheckpointStore].
-func (m *CheckpointManager) Store() CheckpointStore {
+func (m *CheckpointManager) Store() CheckpointStore[json.RawMessage] {
 	return m.store
+}
+
+// Internal returns the internal manager if one was set, or nil.
+// This is used by the execution environment to avoid JSON round-trips
+// for in-memory checkpoint managers.
+func (m *CheckpointManager) Internal() any {
+	return m.internal
 }
