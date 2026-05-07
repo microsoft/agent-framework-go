@@ -16,6 +16,7 @@ package toolapproval
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"iter"
 	"slices"
 	"strings"
@@ -24,10 +25,7 @@ import (
 	"github.com/microsoft/agent-framework-go/message"
 )
 
-const (
-	stateKey        = "toolApprovalState"
-	rawArgumentsKey = "$raw"
-)
+const stateKey = "toolApprovalState"
 
 // Rule is a standing approval rule. If Arguments is empty, all invocations
 // of the named tool are auto-approved. Otherwise only invocations with an
@@ -192,9 +190,14 @@ func prepareInbound(messages []*message.Message, st state) ([]*message.Message, 
 						if resp.AlwaysApproveTool {
 							addRuleIfNotExists(&st, Rule{ToolName: fc.Name})
 						} else if resp.AlwaysApproveToolWithArguments {
+							args, err := serializeArguments(fc.Arguments)
+							if err != nil {
+								// If we can't parse the arguments, skip adding a rule.
+								break
+							}
 							addRuleIfNotExists(&st, Rule{
 								ToolName:  fc.Name,
-								Arguments: serializeArguments(fc.Arguments),
+								Arguments: args,
 							})
 						}
 					}
@@ -262,7 +265,10 @@ func matchesRule(rules []Rule, req *message.ToolApprovalRequestContent) bool {
 	if !ok || fc == nil {
 		return false
 	}
-	args := serializeArguments(fc.Arguments)
+	args, err := serializeArguments(fc.Arguments)
+	if err != nil {
+		return false
+	}
 	for _, r := range rules {
 		if r.matches(fc.Name, args) {
 			return true
@@ -271,34 +277,22 @@ func matchesRule(rules []Rule, req *message.ToolApprovalRequestContent) bool {
 	return false
 }
 
-func serializeArguments(arguments string) map[string]string {
+func serializeArguments(arguments string) (map[string]string, error) {
 	if strings.TrimSpace(arguments) == "" {
-		return map[string]string{rawArgumentsKey: arguments}
+		return nil, nil
 	}
 	var values map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(arguments), &values); err != nil {
-		return map[string]string{rawArgumentsKey: arguments}
+		return nil, fmt.Errorf("failed to parse tool arguments: %w", err)
 	}
 	if len(values) == 0 {
-		return map[string]string{}
+		return map[string]string{}, nil
 	}
 	serialized := make(map[string]string, len(values))
-	for k, raw := range values {
-		serialized[k] = serializeArgumentValue(raw)
+	for k, v := range values {
+		serialized[k] = string(v)
 	}
-	return serialized
-}
-
-func serializeArgumentValue(raw json.RawMessage) string {
-	var v any
-	if err := json.Unmarshal(raw, &v); err != nil {
-		return string(raw)
-	}
-	b, err := json.Marshal(v)
-	if err != nil {
-		return string(raw)
-	}
-	return string(b)
+	return serialized, nil
 }
 
 func argumentMapsEqual(a, b map[string]string) bool {
