@@ -3,6 +3,7 @@
 package checkpoint
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -35,11 +36,11 @@ func (a *StoreAdapter) Commit(sessionID string, cp *Checkpoint) (workflow.Checkp
 	if cp.Parent != (workflow.CheckpointInfo{}) {
 		parent = &cp.Parent
 	}
-	return a.store.CreateCheckpoint(sessionID, data, parent)
+	return a.store.CreateCheckpoint(context.Background(), sessionID, data, parent)
 }
 
 func (a *StoreAdapter) Lookup(sessionID string, info workflow.CheckpointInfo) (*Checkpoint, error) {
-	data, err := a.store.RetrieveCheckpoint(sessionID, info)
+	data, err := a.store.RetrieveCheckpoint(context.Background(), sessionID, info)
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve checkpoint: %w", err)
 	}
@@ -51,5 +52,5 @@ func (a *StoreAdapter) Lookup(sessionID string, info workflow.CheckpointInfo) (*
 }
 
 func (a *StoreAdapter) RetrieveIndex(sessionID string) ([]workflow.CheckpointInfo, error) {
-	return a.store.RetrieveIndex(sessionID, nil)
+	return a.store.RetrieveIndex(context.Background(), sessionID, nil)
 }

@@ -15,7 +15,12 @@ type CheckpointManager struct {
 // NewCheckpointManager creates a CheckpointManager backed by the given store.
 // The store is responsible only for durable persistence of opaque JSON data;
 // the framework handles serialization of internal checkpoint structures.
+//
+// Panics if store is nil.
 func NewCheckpointManager(store CheckpointStore) *CheckpointManager {
+	if store == nil {
+		panic("workflow: CheckpointStore must not be nil")
+	}
 	return &CheckpointManager{store: store}
 }
 

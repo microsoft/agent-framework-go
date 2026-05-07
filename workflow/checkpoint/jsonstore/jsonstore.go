@@ -13,10 +13,12 @@
 package jsonstore
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/google/uuid"
@@ -26,7 +28,7 @@ import (
 // Store is a JSON file-based implementation of [workflow.CheckpointStore].
 type Store struct {
 	rootDir string
-	mu      sync.Mutex
+	mu      sync.RWMutex
 }
 
 // New creates a Store rooted at the given directory path.
@@ -35,7 +37,25 @@ func New(rootDir string) (*Store, error) {
 	if err := os.MkdirAll(rootDir, 0o755); err != nil {
 		return nil, fmt.Errorf("jsonstore: create root dir: %w", err)
 	}
-	return &Store{rootDir: rootDir}, nil
+	abs, err := filepath.Abs(rootDir)
+	if err != nil {
+		return nil, fmt.Errorf("jsonstore: resolve root dir: %w", err)
+	}
+	return &Store{rootDir: abs}, nil
+}
+
+// validateSessionID checks that the session ID does not contain path separators
+// or relative path components that could escape the root directory.
+func validateSessionID(sessionID string) error {
+	if sessionID == "" {
+		return fmt.Errorf("jsonstore: sessionID cannot be empty")
+	}
+	if strings.ContainsAny(sessionID, `/\`) ||
+		sessionID == "." || sessionID == ".." ||
+		strings.Contains(sessionID, "..") {
+		return fmt.Errorf("jsonstore: sessionID contains invalid characters: %q", sessionID)
+	}
+	return nil
 }
 
 func (s *Store) sessionDir(sessionID string) string {
@@ -50,7 +70,12 @@ func (s *Store) checkpointPath(sessionID, checkpointID string) string {
 	return filepath.Join(s.sessionDir(sessionID), checkpointID+".json")
 }
 
-func (s *Store) readIndex(sessionID string) ([]workflow.CheckpointInfo, error) {
+type indexEntry struct {
+	Info   workflow.CheckpointInfo  `json:"Info"`
+	Parent *workflow.CheckpointInfo `json:"Parent,omitempty"`
+}
+
+func (s *Store) readIndex(sessionID string) ([]indexEntry, error) {
 	data, err := os.ReadFile(s.indexPath(sessionID))
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -58,14 +83,14 @@ func (s *Store) readIndex(sessionID string) ([]workflow.CheckpointInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	var index []workflow.CheckpointInfo
+	var index []indexEntry
 	if err := json.Unmarshal(data, &index); err != nil {
 		return nil, err
 	}
 	return index, nil
 }
 
-func (s *Store) writeIndex(sessionID string, index []workflow.CheckpointInfo) error {
+func (s *Store) writeIndex(sessionID string, index []indexEntry) error {
 	data, err := json.Marshal(index)
 	if err != nil {
 		return err
@@ -74,9 +99,9 @@ func (s *Store) writeIndex(sessionID string, index []workflow.CheckpointInfo) er
 }
 
 // CreateCheckpoint implements [workflow.CheckpointStore].
-func (s *Store) CreateCheckpoint(sessionID string, data json.RawMessage, _ *workflow.CheckpointInfo) (workflow.CheckpointInfo, error) {
-	if sessionID == "" {
-		return workflow.CheckpointInfo{}, fmt.Errorf("jsonstore: sessionID cannot be empty")
+func (s *Store) CreateCheckpoint(_ context.Context, sessionID string, data json.RawMessage, parent *workflow.CheckpointInfo) (workflow.CheckpointInfo, error) {
+	if err := validateSessionID(sessionID); err != nil {
+		return workflow.CheckpointInfo{}, err
 	}
 
 	s.mu.Lock()
@@ -100,7 +125,7 @@ func (s *Store) CreateCheckpoint(sessionID string, data json.RawMessage, _ *work
 	if err != nil {
 		return workflow.CheckpointInfo{}, fmt.Errorf("jsonstore: read index: %w", err)
 	}
-	index = append(index, info)
+	index = append(index, indexEntry{Info: info, Parent: parent})
 	if err := s.writeIndex(sessionID, index); err != nil {
 		return workflow.CheckpointInfo{}, fmt.Errorf("jsonstore: write index: %w", err)
 	}
@@ -109,7 +134,10 @@ func (s *Store) CreateCheckpoint(sessionID string, data json.RawMessage, _ *work
 }
 
 // RetrieveCheckpoint implements [workflow.CheckpointStore].
-func (s *Store) RetrieveCheckpoint(sessionID string, info workflow.CheckpointInfo) (json.RawMessage, error) {
+func (s *Store) RetrieveCheckpoint(_ context.Context, sessionID string, info workflow.CheckpointInfo) (json.RawMessage, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	data, err := os.ReadFile(s.checkpointPath(sessionID, info.CheckpointID))
 	if os.IsNotExist(err) {
 		return nil, fmt.Errorf("jsonstore: checkpoint %s not found for session %s", info.CheckpointID, sessionID)
@@ -121,13 +149,23 @@ func (s *Store) RetrieveCheckpoint(sessionID string, info workflow.CheckpointInf
 }
 
 // RetrieveIndex implements [workflow.CheckpointStore].
-func (s *Store) RetrieveIndex(sessionID string, _ *workflow.CheckpointInfo) ([]workflow.CheckpointInfo, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *Store) RetrieveIndex(_ context.Context, sessionID string, withParent *workflow.CheckpointInfo) ([]workflow.CheckpointInfo, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
-	index, err := s.readIndex(sessionID)
+	entries, err := s.readIndex(sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("jsonstore: read index: %w", err)
 	}
-	return index, nil
+
+	var result []workflow.CheckpointInfo
+	for _, entry := range entries {
+		if withParent != nil {
+			if entry.Parent == nil || *entry.Parent != *withParent {
+				continue
+			}
+		}
+		result = append(result, entry.Info)
+	}
+	return result, nil
 }

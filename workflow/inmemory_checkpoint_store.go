@@ -3,6 +3,7 @@
 package workflow
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -19,8 +20,13 @@ type InMemoryCheckpointStore struct {
 }
 
 type sessionCache struct {
-	index       []CheckpointInfo
+	index       []indexEntry
 	checkpoints map[string]json.RawMessage
+}
+
+type indexEntry struct {
+	Info   CheckpointInfo
+	Parent *CheckpointInfo
 }
 
 // NewInMemoryCheckpointStore creates a new in-memory checkpoint store.
@@ -49,7 +55,7 @@ func (s *InMemoryCheckpointStore) ensureSession(sessionID string) *sessionCache 
 }
 
 // CreateCheckpoint implements [CheckpointStore].
-func (s *InMemoryCheckpointStore) CreateCheckpoint(sessionID string, data json.RawMessage, _ *CheckpointInfo) (CheckpointInfo, error) {
+func (s *InMemoryCheckpointStore) CreateCheckpoint(_ context.Context, sessionID string, data json.RawMessage, parent *CheckpointInfo) (CheckpointInfo, error) {
 	if sessionID == "" {
 		return CheckpointInfo{}, fmt.Errorf("sessionID cannot be empty")
 	}
@@ -63,12 +69,12 @@ func (s *InMemoryCheckpointStore) CreateCheckpoint(sessionID string, data json.R
 		CheckpointID: uuid.NewString(),
 	}
 	sess.checkpoints[info.CheckpointID] = append(json.RawMessage(nil), data...)
-	sess.index = append(sess.index, info)
+	sess.index = append(sess.index, indexEntry{Info: info, Parent: parent})
 	return info, nil
 }
 
 // RetrieveCheckpoint implements [CheckpointStore].
-func (s *InMemoryCheckpointStore) RetrieveCheckpoint(sessionID string, info CheckpointInfo) (json.RawMessage, error) {
+func (s *InMemoryCheckpointStore) RetrieveCheckpoint(_ context.Context, sessionID string, info CheckpointInfo) (json.RawMessage, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -84,7 +90,7 @@ func (s *InMemoryCheckpointStore) RetrieveCheckpoint(sessionID string, info Chec
 }
 
 // RetrieveIndex implements [CheckpointStore].
-func (s *InMemoryCheckpointStore) RetrieveIndex(sessionID string, _ *CheckpointInfo) ([]CheckpointInfo, error) {
+func (s *InMemoryCheckpointStore) RetrieveIndex(_ context.Context, sessionID string, withParent *CheckpointInfo) ([]CheckpointInfo, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -92,7 +98,15 @@ func (s *InMemoryCheckpointStore) RetrieveIndex(sessionID string, _ *CheckpointI
 	if !ok {
 		return nil, nil
 	}
-	result := make([]CheckpointInfo, len(sess.index))
-	copy(result, sess.index)
+
+	var result []CheckpointInfo
+	for _, entry := range sess.index {
+		if withParent != nil {
+			if entry.Parent == nil || *entry.Parent != *withParent {
+				continue
+			}
+		}
+		result = append(result, entry.Info)
+	}
 	return result, nil
 }

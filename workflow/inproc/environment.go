@@ -71,6 +71,9 @@ func (e *ExecutionEnvironment) WithCheckpointing(cm checkpoint.Manager) *Executi
 // the given [workflow.CheckpointManager]. This is the recommended way to
 // attach checkpoint storage and matches the .NET SDK pattern.
 func (e *ExecutionEnvironment) WithCheckpointStore(cm *workflow.CheckpointManager) *ExecutionEnvironment {
+	if cm == nil {
+		return newExecutionEnvironment(e.executionMode, e.enableConcurrentRuns)
+	}
 	adapter := checkpoint.NewStoreAdapter(cm.Store())
 	return newExecutionEnvironment(e.executionMode, e.enableConcurrentRuns, adapter)
 }
@@ -136,7 +139,7 @@ func (e *ExecutionEnvironment) Resume(ctx context.Context, wf *workflow.Workflow
 
 func (e *ExecutionEnvironment) verifyCheckpointingConfigured() error {
 	if e.checkpointManager == nil {
-		return errors.New("checkpointing is not configured for this execution environment; use WithCheckpointing to attach a checkpoint manager")
+		return errors.New("checkpointing is not configured for this execution environment; use WithCheckpointStore to attach a checkpoint manager")
 	}
 	return nil
 }
