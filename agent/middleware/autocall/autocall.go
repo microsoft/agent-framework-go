@@ -89,10 +89,10 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 			// approval requests, we need to process them now. This entails removing these manufactured approval requests from the chat message
 			// list and replacing them with the appropriate FunctionCallContents and FunctionResultContents that would have been generated if
 			// the inner client had returned them directly.
-			var notInvokedMsgs []approvalResultWithRequestMessage
+			var notInvokedMsgs []toolApprovalResultWithRequestMessage
 			var preDownstreamCallHistory []*message.Message
 			var err error
-			messages, preDownstreamCallHistory, notInvokedMsgs, err = processFunctionApprovalResponses(messages, toolMsgID, funcCallFallbackMsgID)
+			messages, preDownstreamCallHistory, notInvokedMsgs, err = processToolApprovalResponses(messages, toolMsgID, funcCallFallbackMsgID)
 			if err != nil {
 				yield(nil, err)
 				return
@@ -104,7 +104,7 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 			}
 			// Invoke approved approval responses, which generates some additional FRC wrapped in ChatMessage.
 			var newMsg *message.Message
-			newMsg, errCount, err = f.invokeApprovedFunctionApprovalResponses(ctx, notInvokedMsgs, tools, 0)
+			newMsg, errCount, err = f.invokeApprovedToolApprovalResponses(ctx, notInvokedMsgs, tools, 0)
 			if err != nil {
 				yield(nil, err)
 				return
@@ -254,9 +254,9 @@ func tryReplaceFunctionCallsWithApprovalRequests(contents []message.Content) []m
 			if updated == nil {
 				updated = slices.Clone(contents)
 			}
-			updated[i] = &message.FunctionApprovalRequestContent{
-				FunctionCall: fcc,
-				ID:           fcc.CallID,
+			updated[i] = &message.ToolApprovalRequestContent{
+				ToolCall:  fcc,
+				RequestID: fcc.CallID,
 			}
 		}
 	}
@@ -372,7 +372,7 @@ func hasAnyApprovalContent(msgs []*message.Message) bool {
 		}
 		return slices.ContainsFunc(m.Contents, func(c message.Content) bool {
 			switch c.(type) {
-			case *message.FunctionApprovalRequestContent, *message.FunctionApprovalResponseContent:
+			case *message.ToolApprovalRequestContent, *message.ToolApprovalResponseContent:
 				return true
 			default:
 				return false
@@ -381,17 +381,21 @@ func hasAnyApprovalContent(msgs []*message.Message) bool {
 	})
 }
 
-func (f *autocall) invokeApprovedFunctionApprovalResponses(ctx context.Context, approvals []approvalResultWithRequestMessage, tools map[string]tool.Tool, errCount int) (*message.Message, int, error) {
-	// Check if there are any function calls to do for any approved functions and execute them.
+func (f *autocall) invokeApprovedToolApprovalResponses(ctx context.Context, approvals []toolApprovalResultWithRequestMessage, tools map[string]tool.Tool, errCount int) (*message.Message, int, error) {
+	// Check if there are any function calls to do for any approved tool requests and execute them.
 	if len(approvals) == 0 {
 		return nil, errCount, nil
 	}
-	// Check if there are any function calls to do for any approved functions and execute them.
 	funcCalls := make([]*message.FunctionCallContent, 0, len(approvals))
 	for _, approval := range approvals {
 		if approval.Response != nil {
-			funcCalls = append(funcCalls, approval.Response.FunctionCall)
+			if fcc, ok := approvalToolCallAsFunctionCall(approval.Response.ToolCall); ok {
+				funcCalls = append(funcCalls, fcc)
+			}
 		}
+	}
+	if len(funcCalls) == 0 {
+		return nil, errCount, nil
 	}
 	return f.processFunctionCalls(ctx, tools, funcCalls, errCount)
 }
@@ -519,20 +523,20 @@ func (f *autocall) createFunctionResult(callID string, result any, err error) *m
 	}
 }
 
-// processFunctionApprovalResponses do the following:
-//   - Removes all FunctionApprovalRequestContent and FunctionApprovalResponseContent from msgs.
-//   - Recreates FunctionCallContent for any FunctionApprovalResponseContent that haven't been executed yet.
-//   - Generates failed FunctionResultContent for any rejected FunctionApprovalResponseContent.
+// processToolApprovalResponses do the following:
+//   - Removes all ToolApprovalRequestContent and ToolApprovalResponseContent from msgs.
+//   - Recreates tool call content for any ToolApprovalResponseContent that hasn't been handled yet.
+//   - Generates failed FunctionResultContent for any rejected function tool call.
 //   - Adds all the new content items to originalMessages and returns them as the pre-invocation history.
-func processFunctionApprovalResponses(msgs []*message.Message, toolMsgID, fallbackMsgID string) ([]*message.Message, []*message.Message, []approvalResultWithRequestMessage, error) {
+func processToolApprovalResponses(msgs []*message.Message, toolMsgID, fallbackMsgID string) ([]*message.Message, []*message.Message, []toolApprovalResultWithRequestMessage, error) {
 	// Extract any approval responses where we need to execute or reject the function calls.
 	// The original messages are also modified to remove all approval requests and responses.
-	msgs, approvals, rejections, err := extractAndRemoveApprovalRequestsAndResponses(msgs)
+	msgs, approvals, rejections, err := extractAndRemoveToolApprovalRequestsAndResponses(msgs)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	// Wrap the function call content in message(s).
-	preDownstreamCallHistory := convertToFunctionCallContentMessages(append(rejections, approvals...), fallbackMsgID)
+	// Wrap the tool call content in message(s).
+	preDownstreamCallHistory := convertToToolCallContentMessages(append(rejections, approvals...), fallbackMsgID)
 	// Generate failed function result contents for any rejected requests and wrap it in a message.
 	rejectedFunctionContent := generateRejectedFunctionResults(rejections)
 	var rejectedPreDownstreamCallResultsMsgs *message.Message
@@ -543,8 +547,7 @@ func processFunctionApprovalResponses(msgs []*message.Message, toolMsgID, fallba
 			Contents: rejectedFunctionContent,
 		}
 	}
-	// Add all the FCC that we generated to the pre-downstream-call history so that they can be returned to the caller as part of the next response.
-	// Add all the FRC that we generated to the pre-downstream-call history so that they can be returned to the caller as part of the next response.
+	// Add generated tool call and function result content to the pre-downstream-call history so they can be returned to the caller as part of the next response.
 	// Also, add them into the original messages list so that they are passed to the inner client and can be used to generate a result.
 	if rejectedPreDownstreamCallResultsMsgs != nil {
 		preDownstreamCallHistory = append(preDownstreamCallHistory, rejectedPreDownstreamCallResultsMsgs)
@@ -553,17 +556,22 @@ func processFunctionApprovalResponses(msgs []*message.Message, toolMsgID, fallba
 	return msgs, preDownstreamCallHistory, approvals, nil
 }
 
-type approvalResultWithRequestMessage struct {
-	Response       *message.FunctionApprovalResponseContent
+type toolApprovalResultWithRequestMessage struct {
+	Response       *message.ToolApprovalResponseContent
 	RequestMessage *message.Message
 }
 
-func extractAndRemoveApprovalRequestsAndResponses(msgs []*message.Message) (out []*message.Message, approvals, rejections []approvalResultWithRequestMessage, err error) {
+func approvalToolCallAsFunctionCall(toolCall message.ToolCallContent) (*message.FunctionCallContent, bool) {
+	fcc, ok := toolCall.(*message.FunctionCallContent)
+	return fcc, ok && fcc != nil
+}
+
+func extractAndRemoveToolApprovalRequestsAndResponses(msgs []*message.Message) (out []*message.Message, approvals, rejections []toolApprovalResultWithRequestMessage, err error) {
 	var (
 		allApprovalRequestsMessages map[string]*message.Message
 		approvalRequestCallIDs      map[string]struct{}
 		functionResultCallIds       map[string]struct{}
-		allApprovalResponses        []*message.FunctionApprovalResponseContent
+		allApprovalResponses        []*message.ToolApprovalResponseContent
 	)
 	// 1st iteration, over all messages and content:
 	// - Build a list of all function call ids that are already executed.
@@ -575,19 +583,23 @@ func extractAndRemoveApprovalRequestsAndResponses(msgs []*message.Message) (out 
 		var keptContents []message.Content
 		for _, c := range msg.Contents {
 			switch c := c.(type) {
-			case *message.FunctionApprovalRequestContent:
+			case *message.ToolApprovalRequestContent:
 				// Validation: Capture each call id for each approval request to ensure later we have a matching response.
-				if approvalRequestCallIDs == nil {
-					approvalRequestCallIDs = make(map[string]struct{})
+				if c.ToolCall != nil {
+					if approvalRequestCallIDs == nil {
+						approvalRequestCallIDs = make(map[string]struct{})
+					}
+					approvalRequestCallIDs[c.ToolCall.GetCallID()] = struct{}{}
 				}
-				approvalRequestCallIDs[c.FunctionCall.CallID] = struct{}{}
 				if allApprovalRequestsMessages == nil {
 					allApprovalRequestsMessages = make(map[string]*message.Message)
 				}
-				allApprovalRequestsMessages[c.ID] = msg
-			case *message.FunctionApprovalResponseContent:
+				allApprovalRequestsMessages[c.RequestID] = msg
+			case *message.ToolApprovalResponseContent:
 				// Validation: Remove the call id for each approval response, to check it off the list of requests we need responses for.
-				delete(approvalRequestCallIDs, c.FunctionCall.CallID)
+				if c.ToolCall != nil {
+					delete(approvalRequestCallIDs, c.ToolCall.GetCallID())
+				}
 				allApprovalResponses = append(allApprovalResponses, c)
 			case *message.FunctionResultContent:
 				// Maintain a list of function calls that have already been invoked to avoid invoking them twice.
@@ -630,7 +642,7 @@ func extractAndRemoveApprovalRequestsAndResponses(msgs []*message.Message) (out 
 			callIDs = append(callIDs, callID)
 		}
 		slices.Sort(callIDs) // Sort for consistent error messages
-		return nil, nil, nil, fmt.Errorf("FunctionApprovalRequestContent found with FunctionCall.CallId(s) '%s' that have no matching FunctionApprovalResponseContent", strings.Join(callIDs, "', '"))
+		return nil, nil, nil, fmt.Errorf("ToolApprovalRequestContent found with ToolCall.CallID(s) '%s' that have no matching ToolApprovalResponseContent", strings.Join(callIDs, "', '"))
 	}
 
 	// 2nd iteration, over all approval responses:
@@ -638,13 +650,15 @@ func extractAndRemoveApprovalRequestsAndResponses(msgs []*message.Message) (out 
 	// - Find the matching function approval request for any response (where available).
 	// - Split the approval responses into two lists: approved and rejected, with their request messages (where available).
 	for _, approvalResponse := range allApprovalResponses {
-		if _, found := functionResultCallIds[approvalResponse.FunctionCall.CallID]; found {
-			// Skip any approval responses that have already been processed.
-			continue
+		if approvalResponse.ToolCall != nil {
+			if _, found := functionResultCallIds[approvalResponse.ToolCall.GetCallID()]; found {
+				// Skip any approval responses that have already been processed.
+				continue
+			}
 		}
-		reqMsg := allApprovalRequestsMessages[approvalResponse.ID]
+		reqMsg := allApprovalRequestsMessages[approvalResponse.RequestID]
 		// Split the responses into approved and rejected.
-		newMsg := approvalResultWithRequestMessage{
+		newMsg := toolApprovalResultWithRequestMessage{
 			Response:       approvalResponse,
 			RequestMessage: reqMsg,
 		}
@@ -658,11 +672,15 @@ func extractAndRemoveApprovalRequestsAndResponses(msgs []*message.Message) (out 
 	return msgs, approvals, rejections, nil
 }
 
-func convertToFunctionCallContentMessages(messages []approvalResultWithRequestMessage, fallbackMessageID string) []*message.Message {
+func convertToToolCallContentMessages(messages []toolApprovalResultWithRequestMessage, fallbackMessageID string) []*message.Message {
 	var currentMsg *message.Message
 	var messagesByID map[string]*message.Message
 	var messageOrder []*message.Message // Track insertion order since Go maps don't preserve order
 	for _, msg := range messages {
+		if msg.Response == nil || msg.Response.ToolCall == nil {
+			continue
+		}
+
 		// Don't need to create a dictionary if we already have one or if it's the first iteration.
 		shouldCreateMap := messagesByID == nil && currentMsg != nil &&
 			// Everywhere we have no RequestMessage we use the fallbackMessageID, so in this case there is only one message.
@@ -700,12 +718,12 @@ func convertToFunctionCallContentMessages(messages []approvalResultWithRequestMe
 		}
 
 		if foundMsg == nil {
-			currentMsg = convertToFunctionCallContentMessage(msg, fallbackMessageID)
+			currentMsg = convertToToolCallContentMessage(msg, fallbackMessageID)
 			if messagesByID != nil {
 				messageOrder = append(messageOrder, currentMsg)
 			}
 		} else {
-			foundMsg.Contents = append(foundMsg.Contents, msg.Response.FunctionCall)
+			foundMsg.Contents = append(foundMsg.Contents, msg.Response.ToolCall)
 			currentMsg = foundMsg
 		}
 		if messagesByID != nil {
@@ -722,7 +740,7 @@ func convertToFunctionCallContentMessages(messages []approvalResultWithRequestMe
 	return nil
 }
 
-func convertToFunctionCallContentMessage(msg approvalResultWithRequestMessage, fallbackMessageID string) *message.Message {
+func convertToToolCallContentMessage(msg toolApprovalResultWithRequestMessage, fallbackMessageID string) *message.Message {
 	var newMsg *message.Message
 	if msg.RequestMessage != nil {
 		newMsg = msg.RequestMessage.Clone()
@@ -731,19 +749,23 @@ func convertToFunctionCallContentMessage(msg approvalResultWithRequestMessage, f
 			Role: message.RoleAssistant,
 		}
 	}
-	newMsg.Contents = []message.Content{msg.Response.FunctionCall}
+	newMsg.Contents = []message.Content{msg.Response.ToolCall}
 	newMsg.ID = cmp.Or(newMsg.ID, fallbackMessageID)
 	return newMsg
 }
 
-func generateRejectedFunctionResults(rejections []approvalResultWithRequestMessage) []message.Content {
+func generateRejectedFunctionResults(rejections []toolApprovalResultWithRequestMessage) []message.Content {
 	if len(rejections) == 0 {
 		return nil
 	}
 	contents := make([]message.Content, 0, len(rejections))
 	for _, rej := range rejections {
+		fcc, ok := approvalToolCallAsFunctionCall(rej.Response.ToolCall)
+		if !ok {
+			continue
+		}
 		resultContent := &message.FunctionResultContent{
-			CallID: rej.Response.FunctionCall.CallID,
+			CallID: fcc.CallID,
 			Result: "Error: Tool call invocation was rejected by user.",
 		}
 		contents = append(contents, resultContent)

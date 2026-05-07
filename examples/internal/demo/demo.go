@@ -202,18 +202,33 @@ func Panicf(format string, args ...any) {
 	os.Exit(1)
 }
 
-func UserInputRequest(req *message.FunctionApprovalRequestContent) bool {
+func UserInputRequest(req *message.ToolApprovalRequestContent) bool {
 	assistant()
 	printf("%s%s🔔 Approval Request:%s\n",
 		colorYellow, colorBold, colorReset)
-	fmt.Printf("   The agent wants to call: %s%s%s\n", colorMagenta, req.FunctionCall.Name, colorReset)
-	fmt.Printf("   With arguments: %s%s%s\n\n", colorGray, req.FunctionCall.Arguments, colorReset)
+	name, arguments := approvalToolCallDetails(req.ToolCall)
+	fmt.Printf("   The agent wants to call: %s%s%s\n", colorMagenta, name, colorReset)
+	fmt.Printf("   With arguments: %s%s%s\n\n", colorGray, arguments, colorReset)
 	fmt.Printf("Please reply Y to approve.\n\n")
 
 	var approval string
 	_, _ = fmt.Scanln(&approval)
 	fmt.Printf("\n")
 	return approval == "Y" || approval == "y"
+}
+
+func approvalToolCallDetails(toolCall message.ToolCallContent) (string, string) {
+	switch toolCall := toolCall.(type) {
+	case *message.FunctionCallContent:
+		if toolCall != nil {
+			return toolCall.Name, toolCall.Arguments
+		}
+	case *message.MCPServerToolCallContent:
+		if toolCall != nil {
+			return toolCall.Name, toolCall.Arguments
+		}
+	}
+	return "unknown", ""
 }
 
 func assistant() {

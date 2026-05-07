@@ -53,7 +53,7 @@ type Config struct {
 	// true to preserve original roles.
 	DisableRoleReassignment bool
 
-	// InterceptUserInputRequests controls how [message.FunctionApprovalRequestContent]
+	// InterceptUserInputRequests controls how [message.ToolApprovalRequestContent]
 	// produced by the agent is dispatched.
 	//
 	// When false (the default), each request is raised as a workflow
@@ -64,7 +64,7 @@ type Config struct {
 	// When true, each request is sent as a regular workflow message (via
 	// [workflow.Context.SendMessage]) so other executors in the graph can
 	// handle the approval; the matching
-	// [message.FunctionApprovalResponseContent] must be routed back to
+	// [message.ToolApprovalResponseContent] must be routed back to
 	// this executor as a workflow message.
 	//
 	// In both modes the agent is re-invoked with the response merged into
@@ -126,8 +126,8 @@ func New(a *agent.Agent, cfg Config) *workflow.ExecutorBinding {
 func hostPorts(id string) (userInput, functionCall workflow.RequestPort) {
 	userInput = workflow.RequestPort{
 		ID:       id + "_UserInput",
-		Request:  reflect.TypeFor[*message.FunctionApprovalRequestContent](),
-		Response: reflect.TypeFor[*message.FunctionApprovalResponseContent](),
+		Request:  reflect.TypeFor[*message.ToolApprovalRequestContent](),
+		Response: reflect.TypeFor[*message.ToolApprovalResponseContent](),
 	}
 	functionCall = workflow.RequestPort{
 		ID:       id + "_FunctionCall",
@@ -154,7 +154,7 @@ type hostExecutor struct {
 	mu       sync.Mutex
 	session  agent.Session
 	buffered []*message.Message
-	// pendingApprovals tracks FunctionApprovalRequestContent IDs that have
+	// pendingApprovals tracks ToolApprovalRequestContent IDs that have
 	// been dispatched and are awaiting a matching response.
 	pendingApprovals map[string]struct{}
 	// pendingCalls tracks FunctionCallContent CallIDs that have been
@@ -302,8 +302,8 @@ func (h *hostExecutor) configureRoutes(rb *workflow.RouteBuilder) (*workflow.Rou
 	// Workflow-message response handlers are only installed when the
 	// matching flag is true.
 	if h.cfg.InterceptUserInputRequests {
-		rb = rb.AddHandler(reflect.TypeFor[*message.FunctionApprovalResponseContent](), nil, false, func(wctx *workflow.Context, msg any) (any, error) {
-			return nil, h.handleApprovalResponse(wctx, msg.(*message.FunctionApprovalResponseContent))
+		rb = rb.AddHandler(reflect.TypeFor[*message.ToolApprovalResponseContent](), nil, false, func(wctx *workflow.Context, msg any) (any, error) {
+			return nil, h.handleApprovalResponse(wctx, msg.(*message.ToolApprovalResponseContent))
 		})
 	}
 	if h.cfg.InterceptUnterminatedFunctionCalls {
@@ -351,13 +351,13 @@ func (h *hostExecutor) handleTurnToken(wctx *workflow.Context, token workflow.Tu
 	return h.runAgentAndDispatch(wctx)
 }
 
-func (h *hostExecutor) handleApprovalResponse(wctx *workflow.Context, resp *message.FunctionApprovalResponseContent) error {
+func (h *hostExecutor) handleApprovalResponse(wctx *workflow.Context, resp *message.ToolApprovalResponseContent) error {
 	h.mu.Lock()
-	if _, ok := h.pendingApprovals[resp.ID]; !ok {
+	if _, ok := h.pendingApprovals[resp.RequestID]; !ok {
 		h.mu.Unlock()
-		return fmt.Errorf("workflowhosting: no pending FunctionApprovalRequest with ID %q", resp.ID)
+		return fmt.Errorf("workflowhosting: no pending FunctionApprovalRequest with ID %q", resp.RequestID)
 	}
-	delete(h.pendingApprovals, resp.ID)
+	delete(h.pendingApprovals, resp.RequestID)
 	h.mu.Unlock()
 	wrapped := &message.Message{
 		Role:     message.RoleUser,
@@ -393,7 +393,7 @@ func (h *hostExecutor) handleExternalResponse(wctx *workflow.Context, resp *work
 		if !ok {
 			return fmt.Errorf("workflowhosting: expected %v for user input port, got %T", h.userInputPort.Response, resp.Data.Any())
 		}
-		return h.handleApprovalResponse(wctx, v.(*message.FunctionApprovalResponseContent))
+		return h.handleApprovalResponse(wctx, v.(*message.ToolApprovalResponseContent))
 	case h.functionCallPort.ID:
 		v, ok := resp.Data.As(h.functionCallPort.Response)
 		if !ok {
@@ -532,8 +532,8 @@ func filterForwardableContents(contents message.Contents) message.Contents {
 			*message.URIContent,
 			*message.FunctionCallContent,
 			*message.FunctionResultContent,
-			*message.FunctionApprovalRequestContent,
-			*message.FunctionApprovalResponseContent,
+			*message.ToolApprovalRequestContent,
+			*message.ToolApprovalResponseContent,
 			*message.HostedFileContent,
 			*message.ErrorContent:
 			result = append(result, content)
@@ -571,25 +571,25 @@ func (h *hostExecutor) dispatchRequests(wctx *workflow.Context, msgs []*message.
 	for _, m := range msgs {
 		for _, c := range m.Contents {
 			switch v := c.(type) {
-			case *message.FunctionApprovalRequestContent:
-				if _, dup := seenApprovals[v.ID]; dup {
-					return fmt.Errorf("workflowhosting: duplicate FunctionApprovalRequest ID %q in same response", v.ID)
+			case *message.ToolApprovalRequestContent:
+				if _, dup := seenApprovals[v.RequestID]; dup {
+					return fmt.Errorf("workflowhosting: duplicate ToolApprovalRequest  ID %q in same response", v.RequestID)
 				}
-				seenApprovals[v.ID] = struct{}{}
+				seenApprovals[v.RequestID] = struct{}{}
 				h.mu.Lock()
-				if _, alreadyPending := h.pendingApprovals[v.ID]; alreadyPending {
+				if _, alreadyPending := h.pendingApprovals[v.RequestID]; alreadyPending {
 					h.mu.Unlock()
 					// Already-pending request: idempotent re-emission, no-op.
 					continue
 				}
-				h.pendingApprovals[v.ID] = struct{}{}
+				h.pendingApprovals[v.RequestID] = struct{}{}
 				h.mu.Unlock()
 				if h.cfg.InterceptUserInputRequests {
 					if err := wctx.SendMessage("", v); err != nil {
 						return err
 					}
 				} else {
-					req, err := workflow.NewExternalRequest(h.userInputPort.ID+":"+v.ID, h.userInputPort, v)
+					req, err := workflow.NewExternalRequest(h.userInputPort.ID+":"+v.RequestID, h.userInputPort, v)
 					if err != nil {
 						return err
 					}

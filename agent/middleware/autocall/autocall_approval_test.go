@@ -142,8 +142,8 @@ func TestFunctionInvoking_AllFunctionCallsReplacedWithApprovalsWhenAllRequireApp
 
 			expectedOutput := []*agent.ResponseUpdate{
 				{Role: message.RoleAssistant, Contents: []message.Content{
-					&message.FunctionApprovalRequestContent{ID: "callId1", FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
-					&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
+					&message.ToolApprovalRequestContent{RequestID: "callId1", ToolCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
+					&message.ToolApprovalRequestContent{RequestID: "callId2", ToolCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
 				}},
 			}
 
@@ -178,8 +178,8 @@ func TestFunctionInvoking_AllFunctionCallsReplacedWithApprovalsWhenAnyRequireApp
 
 	expectedOutput := []*agent.ResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{
-			&message.FunctionApprovalRequestContent{ID: "callId1", FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
-			&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
+			&message.ToolApprovalRequestContent{RequestID: "callId1", ToolCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
+			&message.ToolApprovalRequestContent{RequestID: "callId2", ToolCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
 		}},
 	}
 
@@ -228,8 +228,8 @@ func TestFunctionInvoking_AllFunctionCallsReplacedWithApprovalsWhenAnyRequestOrA
 
 			expectedOutput := []*agent.ResponseUpdate{
 				{Role: message.RoleAssistant, Contents: []message.Content{
-					&message.FunctionApprovalRequestContent{ID: "callId1", FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
-					&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
+					&message.ToolApprovalRequestContent{RequestID: "callId1", ToolCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
+					&message.ToolApprovalRequestContent{RequestID: "callId2", ToolCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
 				}},
 			}
 
@@ -249,12 +249,12 @@ func TestFunctionInvoking_ApprovedApprovalResponsesAreExecuted(t *testing.T) {
 	input := []*message.Message{
 		message.New(&message.TextContent{Text: "hello"}),
 		{Role: message.RoleAssistant, Contents: []message.Content{
-			&message.FunctionApprovalRequestContent{ID: "callId1", FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
-			&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
+			&message.ToolApprovalRequestContent{RequestID: "callId1", ToolCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
+			&message.ToolApprovalRequestContent{RequestID: "callId2", ToolCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
 		}},
 		message.New(
-			&message.FunctionApprovalResponseContent{ID: "callId1", Approved: true, FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
-			&message.FunctionApprovalResponseContent{ID: "callId2", Approved: true, FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
+			&message.ToolApprovalResponseContent{RequestID: "callId1", Approved: true, ToolCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
+			&message.ToolApprovalResponseContent{RequestID: "callId2", Approved: true, ToolCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
 		),
 	}
 
@@ -305,16 +305,16 @@ func TestFunctionInvoking_ApprovedApprovalResponsesFromSeparateFCCMessagesAreExe
 	input := []*message.Message{
 		message.New(&message.TextContent{Text: "hello"}),
 		{Role: message.RoleAssistant, ID: "resp1", Contents: []message.Content{
-			&message.FunctionApprovalRequestContent{ID: "callId1", FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
+			&message.ToolApprovalRequestContent{RequestID: "callId1", ToolCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
 		}},
 		{Role: message.RoleAssistant, ID: "resp2", Contents: []message.Content{
-			&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
+			&message.ToolApprovalRequestContent{RequestID: "callId2", ToolCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
 		}},
 		message.New(
-			&message.FunctionApprovalResponseContent{ID: "callId1", Approved: true, FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
+			&message.ToolApprovalResponseContent{RequestID: "callId1", Approved: true, ToolCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
 		),
 		message.New(
-			&message.FunctionApprovalResponseContent{ID: "callId2", Approved: true, FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
+			&message.ToolApprovalResponseContent{RequestID: "callId2", Approved: true, ToolCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
 		),
 	}
 
@@ -359,12 +359,12 @@ func TestFunctionInvoking_RejectedApprovalResponsesAreFailed(t *testing.T) {
 	input := []*message.Message{
 		message.New(&message.TextContent{Text: "hello"}),
 		{Role: message.RoleAssistant, Contents: []message.Content{
-			&message.FunctionApprovalRequestContent{ID: "callId1", FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
-			&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
+			&message.ToolApprovalRequestContent{RequestID: "callId1", ToolCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
+			&message.ToolApprovalRequestContent{RequestID: "callId2", ToolCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
 		}},
 		message.New(
-			&message.FunctionApprovalResponseContent{ID: "callId1", Approved: false, FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
-			&message.FunctionApprovalResponseContent{ID: "callId2", Approved: false, FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
+			&message.ToolApprovalResponseContent{RequestID: "callId1", Approved: false, ToolCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
+			&message.ToolApprovalResponseContent{RequestID: "callId2", Approved: false, ToolCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
 		),
 	}
 
@@ -410,12 +410,12 @@ func TestFunctionInvoking_MixedApprovedAndRejectedApprovalResponsesAreExecutedAn
 	input := []*message.Message{
 		message.New(&message.TextContent{Text: "hello"}),
 		{Role: message.RoleAssistant, ID: "resp1", Contents: []message.Content{
-			&message.FunctionApprovalRequestContent{ID: "callId1", FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
-			&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
+			&message.ToolApprovalRequestContent{RequestID: "callId1", ToolCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
+			&message.ToolApprovalRequestContent{RequestID: "callId2", ToolCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
 		}},
 		message.New(
-			&message.FunctionApprovalResponseContent{ID: "callId1", Approved: false, FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
-			&message.FunctionApprovalResponseContent{ID: "callId2", Approved: true, FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
+			&message.ToolApprovalResponseContent{RequestID: "callId1", Approved: false, ToolCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
+			&message.ToolApprovalResponseContent{RequestID: "callId2", Approved: true, ToolCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
 		),
 	}
 
@@ -465,12 +465,12 @@ func TestFunctionInvoking_ApprovedInputsAreExecutedAndFunctionResultsAreConverte
 	input := []*message.Message{
 		message.New(&message.TextContent{Text: "hello"}),
 		{Role: message.RoleAssistant, Contents: []message.Content{
-			&message.FunctionApprovalRequestContent{ID: "callId1", FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
-			&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
+			&message.ToolApprovalRequestContent{RequestID: "callId1", ToolCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
+			&message.ToolApprovalRequestContent{RequestID: "callId2", ToolCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
 		}},
 		message.New(
-			&message.FunctionApprovalResponseContent{ID: "callId1", Approved: true, FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
-			&message.FunctionApprovalResponseContent{ID: "callId2", Approved: true, FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
+			&message.ToolApprovalResponseContent{RequestID: "callId1", Approved: true, ToolCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
+			&message.ToolApprovalResponseContent{RequestID: "callId2", Approved: true, ToolCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
 		),
 	}
 
@@ -500,7 +500,7 @@ func TestFunctionInvoking_ApprovedInputsAreExecutedAndFunctionResultsAreConverte
 			&message.FunctionResultContent{CallID: "callId2", Result: "Result 2: 42"},
 		}},
 		{Role: message.RoleAssistant, Contents: []message.Content{
-			&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":3}`}},
+			&message.ToolApprovalRequestContent{RequestID: "callId2", ToolCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":3}`}},
 		}},
 	}
 
@@ -520,13 +520,13 @@ func TestFunctionInvoking_AlreadyExecutedApprovalsAreIgnored(t *testing.T) {
 		message.New(&message.TextContent{Text: "hello"}),
 		// Previous turn: approval requests
 		{Role: message.RoleAssistant, ID: "resp1", Contents: []message.Content{
-			&message.FunctionApprovalRequestContent{ID: "callId1", FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
-			&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
+			&message.ToolApprovalRequestContent{RequestID: "callId1", ToolCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
+			&message.ToolApprovalRequestContent{RequestID: "callId2", ToolCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
 		}},
 		// Previous turn: approval responses
 		message.New(
-			&message.FunctionApprovalResponseContent{ID: "callId1", Approved: true, FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
-			&message.FunctionApprovalResponseContent{ID: "callId2", Approved: true, FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
+			&message.ToolApprovalResponseContent{RequestID: "callId1", Approved: true, ToolCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
+			&message.ToolApprovalResponseContent{RequestID: "callId2", Approved: true, ToolCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
 		),
 		// Previous turn: already executed - function calls
 		{Role: message.RoleAssistant, Contents: []message.Content{
@@ -540,11 +540,11 @@ func TestFunctionInvoking_AlreadyExecutedApprovalsAreIgnored(t *testing.T) {
 		}},
 		// Current turn: new approval request
 		{Role: message.RoleAssistant, ID: "resp2", Contents: []message.Content{
-			&message.FunctionApprovalRequestContent{ID: "callId3", FunctionCall: &message.FunctionCallContent{CallID: "callId3", Name: "Func1"}},
+			&message.ToolApprovalRequestContent{RequestID: "callId3", ToolCall: &message.FunctionCallContent{CallID: "callId3", Name: "Func1"}},
 		}},
 		// Current turn: new approval response
 		message.New(
-			&message.FunctionApprovalResponseContent{ID: "callId3", Approved: true, FunctionCall: &message.FunctionCallContent{CallID: "callId3", Name: "Func1"}},
+			&message.ToolApprovalResponseContent{RequestID: "callId3", Approved: true, ToolCall: &message.FunctionCallContent{CallID: "callId3", Name: "Func1"}},
 		),
 	}
 
@@ -647,8 +647,8 @@ func TestFunctionInvoking_ApprovedApprovalResponsesWithoutApprovalRequestAreExec
 	input := []*message.Message{
 		message.New(&message.TextContent{Text: "hello"}),
 		message.New(
-			&message.FunctionApprovalResponseContent{ID: "callId1", Approved: true, FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
-			&message.FunctionApprovalResponseContent{ID: "callId2", Approved: true, FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
+			&message.ToolApprovalResponseContent{RequestID: "callId1", Approved: true, ToolCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
+			&message.ToolApprovalResponseContent{RequestID: "callId2", Approved: true, ToolCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
 		),
 	}
 
@@ -759,8 +759,8 @@ func TestFunctionInvoking_FunctionCallsAreBufferedUntilApprovalRequirementEncoun
 	// Since approval is required for at least one function, ALL are converted to approval requests
 	expectedOutput := []*agent.ResponseUpdate{
 		{Role: message.RoleAssistant, Contents: []message.Content{
-			&message.FunctionApprovalRequestContent{ID: "callId1", FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
-			&message.FunctionApprovalRequestContent{ID: "callId2", FunctionCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
+			&message.ToolApprovalRequestContent{RequestID: "callId1", ToolCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
+			&message.ToolApprovalRequestContent{RequestID: "callId2", ToolCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func2", Arguments: `{"i":42}`}},
 		}},
 	}
 
@@ -778,11 +778,11 @@ func TestFunctionInvoking_ApprovalRequestWithoutApprovalResponseThrows(t *testin
 	input := []*message.Message{
 		message.New(&message.TextContent{Text: "hello"}),
 		{Role: message.RoleAssistant, Contents: []message.Content{
-			&message.FunctionApprovalRequestContent{ID: "callId1", FunctionCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
+			&message.ToolApprovalRequestContent{RequestID: "callId1", ToolCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
 		}},
 	}
 
-	expectedErrorMsg := "FunctionApprovalRequestContent found with FunctionCall.CallId(s) 'callId1' that have no matching FunctionApprovalResponseContent"
+	expectedErrorMsg := "ToolApprovalRequestContent found with ToolCall.CallID(s) 'callId1' that have no matching ToolApprovalResponseContent"
 
 	// Note: We don't pass any downstream client output since the error should occur during approval processing
 	expectApprovalError(t, tools, input, expectedErrorMsg)

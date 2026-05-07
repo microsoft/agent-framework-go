@@ -684,9 +684,9 @@ func newApprovalAgent() *agent.Agent {
 			if step == 0 {
 				yield(&agent.ResponseUpdate{
 					Role: message.RoleAssistant,
-					Contents: []message.Content{&message.FunctionApprovalRequestContent{
-						ID: callID,
-						FunctionCall: &message.FunctionCallContent{
+					Contents: []message.Content{&message.ToolApprovalRequestContent{
+						RequestID: callID,
+						ToolCall: &message.FunctionCallContent{
 							CallID: callID,
 							Name:   "do",
 						},
@@ -694,10 +694,10 @@ func newApprovalAgent() *agent.Agent {
 				}, nil)
 				return
 			}
-			var saw *message.FunctionApprovalResponseContent
+			var saw *message.ToolApprovalResponseContent
 			for _, m := range msgs {
 				for _, c := range m.Contents {
-					if r, ok := c.(*message.FunctionApprovalResponseContent); ok {
+					if r, ok := c.(*message.ToolApprovalResponseContent); ok {
 						saw = r
 					}
 				}
@@ -782,9 +782,9 @@ func approverExecutor(target *workflow.ExecutorBinding, approve bool) *workflow.
 			},
 			Config: []*workflow.ExecutorConfig{{
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[*message.FunctionApprovalRequestContent](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
-						req := msg.(*message.FunctionApprovalRequestContent)
-						return nil, ctx.SendMessage(target.ID, req.Response(approve))
+					return rb.AddHandler(reflect.TypeFor[*message.ToolApprovalRequestContent](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
+						req := msg.(*message.ToolApprovalRequestContent)
+						return nil, ctx.SendMessage(target.ID, req.CreateResponse(approve, ""))
 					}), nil
 				},
 			}},
@@ -971,7 +971,7 @@ func TestHostedAgent_InterceptDisabled_PostsExternalRequest(t *testing.T) {
 			},
 			Config: []*workflow.ExecutorConfig{{
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[*message.FunctionApprovalRequestContent](), nil, false, func(_ *workflow.Context, _ any) (any, error) {
+					return rb.AddHandler(reflect.TypeFor[*message.ToolApprovalRequestContent](), nil, false, func(_ *workflow.Context, _ any) (any, error) {
 						sawApprovalRequestMessage = true
 						return nil, nil
 					}), nil
@@ -1049,11 +1049,11 @@ func TestHostedAgent_InterceptDisabled_ResumesWithExternalResponse(t *testing.T)
 	}
 
 	// Build the approval response from the request data.
-	reqContent, ok := req.Data.As(reflect.TypeFor[*message.FunctionApprovalRequestContent]())
+	reqContent, ok := req.Data.As(reflect.TypeFor[*message.ToolApprovalRequestContent]())
 	if !ok {
 		t.Fatalf("expected request data to be *FunctionApprovalRequestContent, got %T", req.Data.Any())
 	}
-	approval := reqContent.(*message.FunctionApprovalRequestContent).Response(true)
+	approval := reqContent.(*message.ToolApprovalRequestContent).CreateResponse(true, "")
 	resp, err := req.NewResponse(approval)
 	if err != nil {
 		t.Fatalf("NewResponse: %v", err)
@@ -1521,9 +1521,9 @@ func TestHostedAgent_AlreadyPendingRequest_IsIdempotent_InterceptMode(t *testing
 			// Emit the same approval request on every turn.
 			yield(&agent.ResponseUpdate{
 				Role: message.RoleAssistant,
-				Contents: []message.Content{&message.FunctionApprovalRequestContent{
-					ID: reqID,
-					FunctionCall: &message.FunctionCallContent{
+				Contents: []message.Content{&message.ToolApprovalRequestContent{
+					RequestID: reqID,
+					ToolCall: &message.FunctionCallContent{
 						CallID: reqID,
 						Name:   "do",
 					},
@@ -1538,7 +1538,7 @@ func TestHostedAgent_AlreadyPendingRequest_IsIdempotent_InterceptMode(t *testing
 
 	// Probe records every approval-request workflow message it sees.
 	probeID := "probe"
-	var seen []*message.FunctionApprovalRequestContent
+	var seen []*message.ToolApprovalRequestContent
 	probe := &workflow.ExecutorBinding{
 		ID:           probeID,
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
@@ -1552,8 +1552,8 @@ func TestHostedAgent_AlreadyPendingRequest_IsIdempotent_InterceptMode(t *testing
 			},
 			Config: []*workflow.ExecutorConfig{{
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[*message.FunctionApprovalRequestContent](), nil, false, func(_ *workflow.Context, msg any) (any, error) {
-						seen = append(seen, msg.(*message.FunctionApprovalRequestContent))
+					return rb.AddHandler(reflect.TypeFor[*message.ToolApprovalRequestContent](), nil, false, func(_ *workflow.Context, msg any) (any, error) {
+						seen = append(seen, msg.(*message.ToolApprovalRequestContent))
 						return nil, nil
 					}), nil
 				},

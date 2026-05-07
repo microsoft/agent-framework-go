@@ -32,8 +32,9 @@ func init() {
 		&TextReasoningContent{},
 		&URIContent{},
 		&UsageContent{},
-		&FunctionApprovalRequestContent{},
-		&FunctionApprovalResponseContent{},
+		&ToolApprovalRequestContent{},
+		&ToolApprovalResponseContent{},
+		&MCPServerToolCallContent{},
 	} {
 		supportedContents[c.kind()] = reflect.TypeOf(c).Elem()
 	}
@@ -59,6 +60,13 @@ type Content interface {
 	json.Marshaler
 	kind() contentKind
 	Header() ContentHeader
+}
+
+// ToolCallContent represents content that requests a tool call.
+type ToolCallContent interface {
+	Content
+
+	GetCallID() string
 }
 
 // Contents is a slice of Content that supports JSON encoding.
@@ -245,13 +253,50 @@ func (t *ErrorContent) MarshalJSON() ([]byte, error) {
 
 func (t ErrorContent) kind() contentKind { return "error" }
 
+// MCPServerToolCallContent represents a tool call request to a MCP server.
+//
+// This content type is used to represent an invocation of an MCP server tool
+// by a hosted service. It is informational only and may appear as part of an
+// approval request to convey what is being approved, or as a record of which
+// MCP server tool was invoked.
+type MCPServerToolCallContent struct {
+	ContentHeader
+
+	Arguments  string
+	CallID     string
+	Name       string
+	ServerName string `json:",omitempty"`
+}
+
+func (t MCPServerToolCallContent) kind() contentKind { return "mcpServerToolCall" }
+
+func (t *MCPServerToolCallContent) GetCallID() string {
+	if t == nil {
+		return ""
+	}
+	return t.CallID
+}
+
+func (t *MCPServerToolCallContent) MarshalJSON() ([]byte, error) {
+	type alias MCPServerToolCallContent
+	tmp := struct {
+		*alias
+		Type contentKind
+	}{
+		alias: (*alias)(t),
+		Type:  t.kind(),
+	}
+	return json.Marshal(tmp)
+}
+
 type serializedFunctionCallContent struct {
 	ContentHeader
 
-	Arguments string
-	CallID    string
-	Error     string `json:",omitempty"`
-	Name      string `json:",omitempty"`
+	Arguments         string
+	CallID            string
+	Error             string `json:",omitempty"`
+	Name              string
+	InformationalOnly bool
 
 	Type contentKind
 }
@@ -260,19 +305,21 @@ type serializedFunctionCallContent struct {
 type FunctionCallContent struct {
 	ContentHeader
 
-	Arguments string
-	CallID    string
-	Error     error // Error that occurred while mapping the original function call data to this object.
-	Name      string
+	Arguments         string
+	CallID            string
+	Error             error // Error that occurred while mapping the original function call data to this object.
+	Name              string
+	InformationalOnly bool
 }
 
 func (t *FunctionCallContent) MarshalJSON() ([]byte, error) {
 	tmp := serializedFunctionCallContent{
-		ContentHeader: t.ContentHeader,
-		Arguments:     t.Arguments,
-		CallID:        t.CallID,
-		Name:          t.Name,
-		Type:          t.kind(),
+		ContentHeader:     t.ContentHeader,
+		Arguments:         t.Arguments,
+		CallID:            t.CallID,
+		Name:              t.Name,
+		InformationalOnly: t.InformationalOnly,
+		Type:              t.kind(),
 	}
 	if t.Error != nil {
 		tmp.Error = t.Error.Error()
@@ -289,13 +336,21 @@ func (t *FunctionCallContent) UnmarshalJSON(data []byte) error {
 	t.Arguments = tmp.Arguments
 	t.CallID = tmp.CallID
 	t.Name = tmp.Name
+	t.InformationalOnly = tmp.InformationalOnly
 	if tmp.Error != "" {
 		t.Error = errors.New(tmp.Error)
 	}
 	return nil
 }
 
-func (t FunctionCallContent) kind() contentKind { return "function_call" }
+func (t FunctionCallContent) kind() contentKind { return "functionCall" }
+
+func (t *FunctionCallContent) GetCallID() string {
+	if t == nil {
+		return ""
+	}
+	return t.CallID
+}
 
 type serializedFunctionResultContent struct {
 	ContentHeader
@@ -343,7 +398,7 @@ func (t *FunctionResultContent) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func (t FunctionResultContent) kind() contentKind { return "function_result" }
+func (t FunctionResultContent) kind() contentKind { return "functionResult" }
 
 // HostedFileContent represents a file that is hosted by the AI service.
 //
@@ -374,7 +429,7 @@ func (t *HostedFileContent) MarshalJSON() ([]byte, error) {
 	return json.Marshal(tmp)
 }
 
-func (t HostedFileContent) kind() contentKind { return "hosted_file" }
+func (t HostedFileContent) kind() contentKind { return "hostedFile" }
 
 // HostedVectorStoreContent represents a vector store that is hosted by the AI service.
 //
@@ -398,7 +453,7 @@ func (t *HostedVectorStoreContent) MarshalJSON() ([]byte, error) {
 	return json.Marshal(tmp)
 }
 
-func (t HostedVectorStoreContent) kind() contentKind { return "hosted_vector_store" }
+func (t HostedVectorStoreContent) kind() contentKind { return "hostedVectorStore" }
 
 // TextReasoningContent represents text reasoning content in a chat.
 //
@@ -424,7 +479,7 @@ func (t *TextReasoningContent) MarshalJSON() ([]byte, error) {
 	return json.Marshal(tmp)
 }
 
-func (t TextReasoningContent) kind() contentKind { return "text_reasoning" }
+func (t TextReasoningContent) kind() contentKind { return "reasoning" }
 
 // String returns the text of the reasoning content.
 func (t *TextReasoningContent) String() string { return t.Text }
@@ -504,59 +559,157 @@ func (t *UsageContent) MarshalJSON() ([]byte, error) {
 
 func (t UsageContent) kind() contentKind { return "usage" }
 
-type FunctionApprovalRequestContent struct {
+type serializedToolApprovalRequestContent struct {
 	ContentHeader
 
-	ID           string
-	FunctionCall *FunctionCallContent
+	RequestID string
+	ToolCall  ToolCallContent
+
+	Type contentKind
 }
 
-func (t *FunctionApprovalRequestContent) MarshalJSON() ([]byte, error) {
-	type alias FunctionApprovalRequestContent
-	tmp := struct {
-		*alias
-		Type contentKind
-	}{
-		alias: (*alias)(t),
-		Type:  t.kind(),
+type serializedToolApprovalRequestContentForUnmarshal struct {
+	ContentHeader
+
+	RequestID string
+	ToolCall  json.RawMessage
+}
+
+// ToolApprovalRequestContent represents a request for approval to execute a tool.
+type ToolApprovalRequestContent struct {
+	ContentHeader
+
+	RequestID string
+	ToolCall  ToolCallContent
+}
+
+func (t *ToolApprovalRequestContent) MarshalJSON() ([]byte, error) {
+	tmp := serializedToolApprovalRequestContent{
+		ContentHeader: t.ContentHeader,
+		RequestID:     t.RequestID,
+		ToolCall:      t.ToolCall,
+		Type:          t.kind(),
 	}
 	return json.Marshal(tmp)
 }
 
-func (t FunctionApprovalRequestContent) kind() contentKind { return "functionApprovalRequest" }
+func (t *ToolApprovalRequestContent) UnmarshalJSON(data []byte) error {
+	var tmp serializedToolApprovalRequestContentForUnmarshal
+	if err := json.Unmarshal(data, &tmp); err != nil {
+		return err
+	}
+	toolCall, err := unmarshalToolApprovalToolCall(tmp.ToolCall)
+	if err != nil {
+		return err
+	}
+	t.ContentHeader = tmp.ContentHeader
+	t.RequestID = tmp.RequestID
+	t.ToolCall = toolCall
+	return nil
+}
 
-func (t *FunctionApprovalRequestContent) Response(approved bool) *FunctionApprovalResponseContent {
-	return &FunctionApprovalResponseContent{
-		ID:           t.ID,
-		Approved:     approved,
-		FunctionCall: t.FunctionCall,
+func (t ToolApprovalRequestContent) kind() contentKind { return "toolApprovalRequest" }
+
+func (t *ToolApprovalRequestContent) CreateResponse(approved bool, reason string) *ToolApprovalResponseContent {
+	return &ToolApprovalResponseContent{
+		RequestID: t.RequestID,
+		Approved:  approved,
+		Reason:    reason,
+		ToolCall:  t.ToolCall,
 		ContentHeader: ContentHeader{
 			AdditionalProperties: t.AdditionalProperties,
 		},
 	}
 }
 
-type FunctionApprovalResponseContent struct {
+type serializedToolApprovalResponseContent struct {
 	ContentHeader
 
-	ID           string
-	Approved     bool
-	FunctionCall *FunctionCallContent
+	RequestID string
+	Reason    string `json:",omitempty"`
+	Approved  bool
+	ToolCall  ToolCallContent
+
+	Type contentKind
 }
 
-func (t *FunctionApprovalResponseContent) MarshalJSON() ([]byte, error) {
-	type alias FunctionApprovalResponseContent
-	tmp := struct {
-		*alias
-		Type contentKind
-	}{
-		alias: (*alias)(t),
-		Type:  t.kind(),
+type serializedToolApprovalResponseContentForUnmarshal struct {
+	ContentHeader
+
+	RequestID string
+	Reason    string `json:",omitempty"`
+	Approved  bool
+	ToolCall  json.RawMessage
+}
+
+// ToolApprovalResponseContent represents a response to a [ToolApprovalRequestContent].
+type ToolApprovalResponseContent struct {
+	ContentHeader
+
+	RequestID string
+	Reason    string `json:",omitempty"`
+	Approved  bool
+	ToolCall  ToolCallContent
+}
+
+func (t *ToolApprovalResponseContent) MarshalJSON() ([]byte, error) {
+	tmp := serializedToolApprovalResponseContent{
+		ContentHeader: t.ContentHeader,
+		RequestID:     t.RequestID,
+		Reason:        t.Reason,
+		Approved:      t.Approved,
+		ToolCall:      t.ToolCall,
+		Type:          t.kind(),
 	}
 	return json.Marshal(tmp)
 }
 
-func (t FunctionApprovalResponseContent) kind() contentKind { return "functionApprovalResponse" }
+func (t *ToolApprovalResponseContent) UnmarshalJSON(data []byte) error {
+	var tmp serializedToolApprovalResponseContentForUnmarshal
+	if err := json.Unmarshal(data, &tmp); err != nil {
+		return err
+	}
+	toolCall, err := unmarshalToolApprovalToolCall(tmp.ToolCall)
+	if err != nil {
+		return err
+	}
+	t.ContentHeader = tmp.ContentHeader
+	t.RequestID = tmp.RequestID
+	t.Reason = tmp.Reason
+	t.Approved = tmp.Approved
+	t.ToolCall = toolCall
+	return nil
+}
+
+func (t ToolApprovalResponseContent) kind() contentKind { return "toolApprovalResponse" }
+
+func unmarshalToolApprovalToolCall(data json.RawMessage) (ToolCallContent, error) {
+	if len(data) == 0 || string(data) == "null" {
+		return nil, nil
+	}
+	var header struct {
+		Type contentKind
+	}
+	if err := json.Unmarshal(data, &header); err != nil {
+		return nil, err
+	}
+	switch header.Type {
+	case contentKind("functionCall"):
+		var toolCall FunctionCallContent
+		if err := json.Unmarshal(data, &toolCall); err != nil {
+			return nil, err
+		}
+		return &toolCall, nil
+	case contentKind("mcpServerToolCall"):
+		var toolCall MCPServerToolCallContent
+		if err := json.Unmarshal(data, &toolCall); err != nil {
+			return nil, err
+		}
+		return &toolCall, nil
+	default:
+		return nil, fmt.Errorf("unsupported tool call content type: %v", header.Type)
+	}
+}
 
 type CodeInterpreterToolCallContent struct {
 	ContentHeader
@@ -577,7 +730,7 @@ func (t *CodeInterpreterToolCallContent) MarshalJSON() ([]byte, error) {
 	return json.Marshal(tmp)
 }
 
-func (t CodeInterpreterToolCallContent) kind() contentKind { return "code_interpreter_tool_call" }
+func (t CodeInterpreterToolCallContent) kind() contentKind { return "codeInterpreterToolCall" }
 
 type CodeInterpreterToolResultContent struct {
 	ContentHeader
@@ -598,7 +751,7 @@ func (t *CodeInterpreterToolResultContent) MarshalJSON() ([]byte, error) {
 	return json.Marshal(tmp)
 }
 
-func (t CodeInterpreterToolResultContent) kind() contentKind { return "code_interpreter_tool_result" }
+func (t CodeInterpreterToolResultContent) kind() contentKind { return "codeInterpreterToolResult" }
 
 // CoalesceContents combines sequential contents elements.
 func CoalesceContents(contents []Content) []Content {

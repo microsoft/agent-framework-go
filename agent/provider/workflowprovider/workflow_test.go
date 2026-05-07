@@ -546,8 +546,8 @@ func approvalRequestExecutorBinding(t *testing.T, id string) *workflow.ExecutorB
 	t.Helper()
 	port := workflow.RequestPort{
 		ID:       id + "_UserInput",
-		Request:  reflect.TypeFor[*message.FunctionApprovalRequestContent](),
-		Response: reflect.TypeFor[*message.FunctionApprovalResponseContent](),
+		Request:  reflect.TypeFor[*message.ToolApprovalRequestContent](),
+		Response: reflect.TypeFor[*message.ToolApprovalResponseContent](),
 	}
 	step := 0
 	binding := &workflow.ExecutorBinding{
@@ -565,7 +565,7 @@ func approvalRequestExecutorBinding(t *testing.T, id string) *workflow.ExecutorB
 						defer func() { step++ }()
 						if step == 0 {
 							call := &message.FunctionCallContent{CallID: "abc", Name: "do"}
-							ar := &message.FunctionApprovalRequestContent{ID: "req-1", FunctionCall: call}
+							ar := &message.ToolApprovalRequestContent{RequestID: "req-1", ToolCall: call}
 							req, err := workflow.NewExternalRequest(port.ID+":req-1", port, ar)
 							if err != nil {
 								return err
@@ -583,9 +583,9 @@ func approvalRequestExecutorBinding(t *testing.T, id string) *workflow.ExecutorB
 							if !ok {
 								return nil, nil
 							}
-							r := v.(*message.FunctionApprovalResponseContent)
-							if r.ID != "req-1" {
-								t.Errorf("FunctionApprovalResponseContent.ID delivered to workflow = %q, want %q", r.ID, "req-1")
+							r := v.(*message.ToolApprovalResponseContent)
+							if r.RequestID != "req-1" {
+								t.Errorf("FunctionApprovalResponseContent.ID delivered to workflow = %q, want %q", r.RequestID, "req-1")
 							}
 							text := "denied"
 							if r.Approved {
@@ -668,10 +668,10 @@ func TestNew_ApprovalRoundtrip_ResponseIsProcessed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first: %v", err)
 	}
-	var req *message.FunctionApprovalRequestContent
+	var req *message.ToolApprovalRequestContent
 	for _, m := range first.Messages {
 		for _, c := range m.Contents {
-			if r, ok := c.(*message.FunctionApprovalRequestContent); ok {
+			if r, ok := c.(*message.ToolApprovalRequestContent); ok {
 				req = r
 			}
 		}
@@ -679,13 +679,13 @@ func TestNew_ApprovalRoundtrip_ResponseIsProcessed(t *testing.T) {
 	if req == nil {
 		t.Fatalf("expected an approval request, got %+v", first)
 	}
-	if req.ID != "approval_UserInput:req-1" {
-		t.Errorf("ID = %q, want %q", req.ID, "approval_UserInput:req-1")
+	if req.RequestID != "approval_UserInput:req-1" {
+		t.Errorf("ID = %q, want %q", req.RequestID, "approval_UserInput:req-1")
 	}
 
 	resumeMsg := []*message.Message{{
 		Role:     message.RoleUser,
-		Contents: []message.Content{req.Response(true)},
+		Contents: []message.Content{req.CreateResponse(true, "")},
 	}}
 	second, err := ag.Run(ctx, resumeMsg, agent.WithSession(session)).Collect()
 	if err != nil {
