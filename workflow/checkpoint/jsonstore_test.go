@@ -313,6 +313,56 @@ func TestFileSystemJSONStore_ParentTracking(t *testing.T) {
 	}
 }
 
+func TestFileSystemJSONStore_CreateCheckpointRejectsMismatchedParentSession(t *testing.T) {
+	dir := t.TempDir()
+	store := newFileSystemJSONStore(t, dir)
+
+	parent := workflow.CheckpointInfo{SessionID: "other-session", CheckpointID: "parent"}
+	_, err := store.CreateCheckpoint(context.Background(), "session", json.RawMessage(`{}`), &parent)
+	if err == nil {
+		t.Fatal("expected mismatched parent session error")
+	}
+}
+
+func TestFileSystemJSONStore_RetrieveCheckpointRejectsMismatchedSession(t *testing.T) {
+	dir := t.TempDir()
+	store := newFileSystemJSONStore(t, dir)
+
+	info, err := store.CreateCheckpoint(context.Background(), "session", json.RawMessage(`{}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.RetrieveCheckpoint(context.Background(), "other-session", info)
+	if err == nil {
+		t.Fatal("expected mismatched checkpoint session error")
+	}
+}
+
+func TestFileSystemJSONStore_RetrieveIndexRejectsMismatchedParentSession(t *testing.T) {
+	dir := t.TempDir()
+	store := newFileSystemJSONStore(t, dir)
+
+	parent := workflow.CheckpointInfo{SessionID: "other-session", CheckpointID: "parent"}
+	_, err := store.RetrieveIndex(context.Background(), "session", &parent)
+	if err == nil {
+		t.Fatal("expected mismatched parent session error")
+	}
+}
+
+func TestFileSystemJSONStore_RetrieveIndexAllowsZeroParentFilter(t *testing.T) {
+	dir := t.TempDir()
+	store := newFileSystemJSONStore(t, dir)
+
+	var parent workflow.CheckpointInfo
+	index, err := store.RetrieveIndex(context.Background(), "session", &parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(index) != 0 {
+		t.Fatalf("index length = %d, want 0", len(index))
+	}
+}
+
 func runEscapeRootFolderTest(t *testing.T, escapingPath string) {
 	t.Helper()
 

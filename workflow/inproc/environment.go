@@ -50,8 +50,11 @@ func newExecutionEnvironment(mode execution.Mode, enableConcurrentRuns bool, che
 }
 
 // WithCheckpointing returns a new execution environment configured with
-// the given [workflow.CheckpointManager].
+// the given [checkpoint.Manager].
 func (e *ExecutionEnvironment) WithCheckpointing(mgr pcheckpoint.Manager) *ExecutionEnvironment {
+	if mgr == nil {
+		return newExecutionEnvironment(e.executionMode, e.enableConcurrentRuns, nil)
+	}
 	return newExecutionEnvironment(e.executionMode, e.enableConcurrentRuns, mgr.(checkpoint.Manager))
 }
 

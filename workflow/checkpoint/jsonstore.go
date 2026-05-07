@@ -131,6 +131,20 @@ func validateCheckpointInfo(info workflow.CheckpointInfo) error {
 	return nil
 }
 
+func validateCheckpointSession(sessionID string, info workflow.CheckpointInfo) error {
+	if info.SessionID != sessionID {
+		return fmt.Errorf("jsonstore: checkpoint sessionID %q does not match sessionID %q", info.SessionID, sessionID)
+	}
+	return nil
+}
+
+func validateParentSession(sessionID string, parent *workflow.CheckpointInfo) error {
+	if parent != nil && *parent != (workflow.CheckpointInfo{}) && parent.SessionID != sessionID {
+		return fmt.Errorf("jsonstore: parent sessionID %q does not match sessionID %q", parent.SessionID, sessionID)
+	}
+	return nil
+}
+
 func checkpointFileName(sessionID string, info workflow.CheckpointInfo) string {
 	protoPath := sessionID + "_" + info.CheckpointID + ".json"
 	// Escape the proto path so session and checkpoint IDs cannot introduce path
@@ -220,6 +234,9 @@ func (s *FileSystemJSONStore) CreateCheckpoint(_ context.Context, sessionID stri
 	if err := validateSessionID(sessionID); err != nil {
 		return workflow.CheckpointInfo{}, err
 	}
+	if err := validateParentSession(sessionID, parent); err != nil {
+		return workflow.CheckpointInfo{}, err
+	}
 	if !json.Valid(data) {
 		return workflow.CheckpointInfo{}, fmt.Errorf("jsonstore: checkpoint data is not valid JSON")
 	}
@@ -259,6 +276,9 @@ func (s *FileSystemJSONStore) RetrieveCheckpoint(_ context.Context, sessionID st
 	if err := validateCheckpointInfo(info); err != nil {
 		return nil, err
 	}
+	if err := validateCheckpointSession(sessionID, info); err != nil {
+		return nil, err
+	}
 
 	if err := s.checkOpen(); err != nil {
 		return nil, err
@@ -281,6 +301,9 @@ func (s *FileSystemJSONStore) RetrieveCheckpoint(_ context.Context, sessionID st
 // RetrieveIndex implements [Store].
 func (s *FileSystemJSONStore) RetrieveIndex(_ context.Context, sessionID string, withParent *workflow.CheckpointInfo) ([]workflow.CheckpointInfo, error) {
 	if err := validateSessionID(sessionID); err != nil {
+		return nil, err
+	}
+	if err := validateParentSession(sessionID, withParent); err != nil {
 		return nil, err
 	}
 
