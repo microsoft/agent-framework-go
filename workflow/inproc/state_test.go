@@ -203,7 +203,7 @@ func TestInProcessRun_StateShouldPersist_Checkpointed(t *testing.T) {
 		t.Fatalf("Failed to build workflow: %v", err)
 	}
 
-	run, err := inproc.Default.WithCheckpointing(inproc.NewInMemoryCheckpointManager()).Run(t.Context(), wf, TestTurnToken{})
+	run, err := inproc.Default.WithCheckpointing(workflow.NewInMemoryCheckpointManager()).Run(t.Context(), wf, TestTurnToken{})
 	if err != nil {
 		t.Fatalf("Failed to create checkpointed runner: %v", err)
 	}
