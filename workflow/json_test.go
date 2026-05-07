@@ -170,3 +170,41 @@ func TestEdgeInfo_JsonRoundtrip(t *testing.T) {
 		})
 	}
 }
+
+func TestScopeID_JsonRoundtrip(t *testing.T) {
+	cases := []struct {
+		name string
+		id   workflow.ScopeID
+	}{
+		{
+			name: "executor scope",
+			id:   workflow.ScopeID{ExecutorID: "exec-1"},
+		},
+		{
+			name: "named scope",
+			id:   workflow.ScopeID{ScopeName: "shared-state"},
+		},
+		{
+			name: "both fields",
+			id:   workflow.ScopeID{ScopeName: "shared", ExecutorID: "exec-2"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := json.Marshal(tc.id)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			var got workflow.ScopeID
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatalf("Unmarshal: %v", err)
+			}
+			if got.ScopeName != tc.id.ScopeName {
+				t.Errorf("ScopeName = %q, want %q", got.ScopeName, tc.id.ScopeName)
+			}
+			if got.ExecutorID != tc.id.ExecutorID {
+				t.Errorf("ExecutorID = %q, want %q", got.ExecutorID, tc.id.ExecutorID)
+			}
+		})
+	}
+}

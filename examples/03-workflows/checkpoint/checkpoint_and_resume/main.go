@@ -35,7 +35,7 @@ func main() {
 		demo.Panic(err)
 	}
 
-	manager := inproc.NewInMemoryCheckpointManager()
+	manager := workflow.NewInMemoryCheckpointManager()
 	first, err := inproc.Default.WithCheckpointing(manager).Run(context.Background(), wf, "Need deployment approval")
 	if err != nil {
 		demo.Panic(err)

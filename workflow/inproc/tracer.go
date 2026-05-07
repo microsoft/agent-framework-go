@@ -16,7 +16,7 @@ var _ execution.StepTracer = (*stepTracer)(nil)
 type stepTracer struct {
 	stepNumber     int
 	stateUpdated   bool
-	checkpointInfo workflow.CheckpointInfo
+	checkpointInfo *workflow.CheckpointInfo
 
 	instantiated concurrent.Map[string, string]
 	activated    concurrent.Map[string, string]
@@ -33,7 +33,7 @@ func (t *stepTracer) StateUpdated() bool {
 }
 
 // Checkpoint returns the checkpoint info created in this step, if any.
-func (t *stepTracer) Checkpoint() workflow.CheckpointInfo {
+func (t *stepTracer) Checkpoint() *workflow.CheckpointInfo {
 	return t.checkpointInfo
 }
 
@@ -54,7 +54,7 @@ func (t *stepTracer) TraceStatePublished() {
 
 // TraceCheckpointCreated records that a checkpoint was created.
 func (t *stepTracer) TraceCheckpointCreated(cp workflow.CheckpointInfo) {
-	t.checkpointInfo = cp
+	t.checkpointInfo = &cp
 }
 
 // Reload resets the tracer to the specified step number.
@@ -70,7 +70,7 @@ func (t *stepTracer) Advance(step *execution.StepContext) workflow.SuperStepStar
 	t.activated.Clear()
 	t.instantiated.Clear()
 	t.stateUpdated = false
-	t.checkpointInfo = workflow.CheckpointInfo{}
+	t.checkpointInfo = nil
 
 	// Collect sending executors
 	sendingExecutors := make([]string, 0)
