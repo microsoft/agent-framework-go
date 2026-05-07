@@ -69,9 +69,9 @@ func runWithApprovals(ctx context.Context, a *agent.Agent, session agent.Session
 		responses := []message.Content{}
 		for c := range resp.Contents() {
 			switch v := c.(type) {
-			case *message.FunctionApprovalRequestContent:
+			case *message.ToolApprovalRequestContent:
 				approved := askApproval(v)
-				responses = append(responses, v.Response(approved))
+				responses = append(responses, v.CreateResponse(approved, ""))
 			case *message.FunctionCallContent:
 				if !strings.EqualFold(v.Name, "request_approval") {
 					continue
@@ -87,17 +87,31 @@ func runWithApprovals(ctx context.Context, a *agent.Agent, session agent.Session
 	}
 }
 
-func askApproval(req *message.FunctionApprovalRequestContent) bool {
-	call := req.FunctionCall
-	if call == nil {
+func askApproval(req *message.ToolApprovalRequestContent) bool {
+	name, arguments, ok := approvalToolCallDetails(req.ToolCall)
+	if !ok {
 		fmt.Print("Approve this action? (y/n): ")
 	} else {
-		fmt.Printf("Approve tool call %q with args %s? (y/n): ", call.Name, call.Arguments)
+		fmt.Printf("Approve tool call %q with args %s? (y/n): ", name, arguments)
 	}
 	reader := bufio.NewReader(os.Stdin)
 	line, _ := reader.ReadString('\n')
 	line = strings.TrimSpace(strings.ToLower(line))
 	return line == "y" || line == "yes"
+}
+
+func approvalToolCallDetails(toolCall message.ToolCallContent) (string, string, bool) {
+	switch toolCall := toolCall.(type) {
+	case *message.FunctionCallContent:
+		if toolCall != nil {
+			return toolCall.Name, toolCall.Arguments, true
+		}
+	case *message.MCPServerToolCallContent:
+		if toolCall != nil {
+			return toolCall.Name, toolCall.Arguments, true
+		}
+	}
+	return "", "", false
 }
 
 func askToolApproval(call *message.FunctionCallContent) bool {

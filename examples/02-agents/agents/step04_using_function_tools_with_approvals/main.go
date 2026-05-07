@@ -72,7 +72,7 @@ func main() {
 	var approvedRequests bool
 	for c := range resp.Contents() {
 		// Ask the user to approve each function call request.
-		request, ok := c.(*message.FunctionApprovalRequestContent)
+		request, ok := c.(*message.ToolApprovalRequestContent)
 		if !ok {
 			continue
 		}
@@ -80,7 +80,7 @@ func main() {
 		if approved {
 			approvedRequests = true
 		}
-		userResponses = append(userResponses, request.Response(approved))
+		userResponses = append(userResponses, request.CreateResponse(approved, ""))
 	}
 	if !approvedRequests {
 		demo.Assistant("User did not approve any function calls.")

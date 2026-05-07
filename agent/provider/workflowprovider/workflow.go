@@ -8,7 +8,7 @@
 // requests raised by the workflow (via [workflow.RequestInfoEvent]) are
 // surfaced as response updates carrying the request content; the caller can
 // then resume by including the matching response content (e.g.
-// [message.FunctionResultContent] or [message.FunctionApprovalResponseContent])
+// [message.FunctionResultContent] or [message.ToolApprovalResponseContent])
 // in the next agent run, and the provider routes them as
 // [workflow.ExternalResponse]s.
 package workflowprovider
@@ -335,8 +335,8 @@ func responseContentID(c message.Content) (string, bool) {
 	switch v := c.(type) {
 	case *message.FunctionResultContent:
 		return v.CallID, true
-	case *message.FunctionApprovalResponseContent:
-		return v.ID, true
+	case *message.ToolApprovalResponseContent:
+		return v.RequestID, true
 	}
 	return "", false
 }
@@ -349,10 +349,10 @@ func normalizeResponseContent(response message.Content, originalRequest message.
 			clone.CallID = req.CallID
 			return &clone
 		}
-	case *message.FunctionApprovalResponseContent:
-		if req, ok := originalRequest.(*message.FunctionApprovalRequestContent); ok {
+	case *message.ToolApprovalResponseContent:
+		if req, ok := originalRequest.(*message.ToolApprovalRequestContent); ok {
 			clone := *r
-			clone.ID = req.ID
+			clone.RequestID = req.RequestID
 			return &clone
 		}
 	}
@@ -391,10 +391,10 @@ func requestContentForDelivery(requestID string, c message.Content) (message.Con
 		clone := *v
 		clone.CallID = requestID
 		return &clone, clone.CallID, true
-	case *message.FunctionApprovalRequestContent:
+	case *message.ToolApprovalRequestContent:
 		clone := *v
-		clone.ID = requestID
-		return &clone, clone.ID, true
+		clone.RequestID = requestID
+		return &clone, clone.RequestID, true
 	}
 	return nil, "", false
 }
