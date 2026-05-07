@@ -381,13 +381,8 @@ func (a *client) buildMessageParams(messages []*message.Message, opts []agent.Op
 					}
 				}
 				if schemaMap != nil {
-					// BetaJSONSchemaOutputFormat normalizes the schema for
-					// Anthropic requirements (e.g. adds additionalProperties:false
-					// to every object layer). We reuse its Schema field in the
-					// non-beta JSONOutputFormatParam.
-					normalized := anthropic.BetaJSONSchemaOutputFormat(schemaMap)
 					params.OutputConfig.Format = anthropic.JSONOutputFormatParam{
-						Schema: normalized.Schema,
+						Schema: anthropic.BetaJSONSchemaOutputFormat(schemaMap).Schema.(map[string]any),
 					}
 				} else {
 					// No usable schema provided; still request generic JSON output.
