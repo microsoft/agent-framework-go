@@ -17,7 +17,7 @@ import (
 	aguiEvents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	aguiTypes "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/middleware/autocall"
+	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 )
@@ -50,9 +50,9 @@ func New(aclient *aguiSSEClient.Client, config Config) *agent.Agent {
 	} else {
 		p.decoder = aguiEvents.NewEventDecoder(nil)
 	}
-	config.Middlewares = slices.Clone(config.Middlewares)
 	if !config.DisableFuncAutoCall {
-		config.Middlewares = append(config.Middlewares, autocall.New(autocall.Config{
+		config.Middlewares = slices.Clone(config.Middlewares)
+		config.Middlewares = append(config.Middlewares, toolautocall.New(toolautocall.Config{
 			Logger:           config.Logger,
 			LogSensitiveData: config.LogSensitiveData,
 		}))

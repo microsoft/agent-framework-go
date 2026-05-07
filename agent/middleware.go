@@ -9,10 +9,17 @@ import (
 	"github.com/microsoft/agent-framework-go/message"
 )
 
+// Middleware wraps an agent run function to inspect or modify messages, options,
+// response updates, and errors.
+//
+// Use middleware when an extension needs direct control over provider invocation,
+// streaming updates, option propagation, or error handling beyond the
+// request/response message hooks exposed by [ContextProvider].
 type Middleware interface {
 	Run(next RunFunc, ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error]
 }
 
+// MiddlewareFunc adapts a function to the [Middleware] interface.
 type MiddlewareFunc func(next RunFunc, ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error]
 
 func (mf MiddlewareFunc) Run(next RunFunc, ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error] {

@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package autocall_test
+package toolautocall_test
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/middleware/autocall"
+	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/internal/messagetest"
 	"github.com/microsoft/agent-framework-go/message"
@@ -66,7 +66,7 @@ func TestFunctionInvoking_SupportsSingleFunctionCallPerRequest(t *testing.T) {
 		}},
 	}
 
-	invokeAndAssert(t, tools, plan, nil, autocall.Config{})
+	invokeAndAssert(t, tools, plan, nil, toolautocall.Config{})
 }
 
 func TestFunctionInvoking_SkipsNilToolCallApprovalResponse(t *testing.T) {
@@ -187,7 +187,7 @@ func TestFunctionInvoking_SupportsMultipleFunctionCallsPerRequest(t *testing.T) 
 				}},
 			}
 
-			autocallOptions := autocall.Config{
+			autocallOptions := toolautocall.Config{
 				AllowConcurrentInvocations: tt.allowConcurrentInvocations,
 			}
 
@@ -201,7 +201,7 @@ func TestFunctionInvoking_SupportsMultipleFunctionCallsPerRequest(t *testing.T) 
 // Returns the final chat history.
 // Plan should start with the initial user message and contain all expected messages.
 // autocallOptions can be nil to use default settings.
-func invokeAndAssert(t *testing.T, tools []tool.Tool, plan []*message.Message, expected []*message.Message, autocallOptions autocall.Config) []*message.Message {
+func invokeAndAssert(t *testing.T, tools []tool.Tool, plan []*message.Message, expected []*message.Message, autocallOptions toolautocall.Config) []*message.Message {
 	t.Helper()
 
 	if len(plan) == 0 {
@@ -247,7 +247,7 @@ func invokeAndAssert(t *testing.T, tools []tool.Tool, plan []*message.Message, e
 
 	// Collect all updates
 	var resp agent.Response
-	for update, err := range autocall.New(autocallOptions).Run(runner.Run, t.Context(), initialMessages, opts...) {
+	for update, err := range toolautocall.New(autocallOptions).Run(runner.Run, t.Context(), initialMessages, opts...) {
 		if err != nil {
 			t.Fatalf("unexpected error during streaming: %v", err)
 		}
@@ -307,7 +307,7 @@ func TestFunctionInvoking_FunctionReturningFunctionResultContentWithMatchingCall
 
 	initialMessages := []*message.Message{message.NewText("hello")}
 	var resp agent.Response
-	for update, err := range autocall.New(autocall.Config{}).Run(runner.Run, t.Context(), initialMessages, opts...) {
+	for update, err := range toolautocall.New(toolautocall.Config{}).Run(runner.Run, t.Context(), initialMessages, opts...) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -383,7 +383,7 @@ func TestFunctionInvoking_FunctionReturningFunctionResultContentWithMismatchedCa
 
 	initialMessages := []*message.Message{message.NewText("hello")}
 	var resp agent.Response
-	for update, err := range autocall.New(autocall.Config{}).Run(runner.Run, t.Context(), initialMessages, opts...) {
+	for update, err := range toolautocall.New(toolautocall.Config{}).Run(runner.Run, t.Context(), initialMessages, opts...) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -458,7 +458,7 @@ func TestFunctionInvoking_SupportsToolsProvidedByAdditionalTools(t *testing.T) {
 				}
 			}
 
-			autocallOptions := autocall.Config{
+			autocallOptions := toolautocall.Config{
 				AdditionalTools: []tool.Tool{
 					functool.MustNew(functool.Config{Name: "Func1"},
 						func(ctx tool.Context, args Func1Args) (string, error) {
@@ -518,7 +518,7 @@ func TestFunctionInvoking_PrefersToolsProvidedByOptions(t *testing.T) {
 			}),
 	}
 
-	autocallOptions := autocall.Config{
+	autocallOptions := toolautocall.Config{
 		AdditionalTools: []tool.Tool{
 			functool.MustNew(functool.Config{Name: "Func1"},
 				func(ctx tool.Context, args struct{}) (string, error) {
@@ -596,7 +596,7 @@ func TestFunctionInvoking_ParallelFunctionCallsMayBeInvokedConcurrently(t *testi
 		}},
 	}
 
-	autocallOptions := autocall.Config{
+	autocallOptions := toolautocall.Config{
 		AllowConcurrentInvocations: true,
 	}
 
@@ -635,7 +635,7 @@ func TestFunctionInvoking_ConcurrentInvocationOfParallelCallsDisabledByDefault(t
 		}},
 	}
 
-	invokeAndAssert(t, tools, plan, nil, autocall.Config{})
+	invokeAndAssert(t, tools, plan, nil, toolautocall.Config{})
 }
 
 // TestFunctionInvoking_ContinuesWithSuccessfulCallsUntilMaximumIterations tests MaximumIterationsPerRequest
@@ -673,7 +673,7 @@ func TestFunctionInvoking_ContinuesWithSuccessfulCallsUntilMaximumIterations(t *
 	// The loop runs maxIterations times, each time adding assistant+tool, then stops with one more assistant message
 	expectedPlan := plan[:maxIterations*2+2]
 
-	autocallOptions := autocall.Config{
+	autocallOptions := toolautocall.Config{
 		MaximumIterationsPerRequest: maxIterations,
 	}
 
@@ -733,7 +733,7 @@ func TestFunctionInvoking_ContinuesWithFailingCallsUntilMaximumConsecutiveErrors
 			// Any more failures will exceed the limit (should throw)
 			plan = append(plan, createFunctionCallIterationPlan(&callIndex, true, true)...)
 
-			autocallOptions := autocall.Config{
+			autocallOptions := toolautocall.Config{
 				MaximumConsecutiveErrorsPerRequest: 2,
 				AllowConcurrentInvocations:         tt.allowConcurrentInvocations,
 			}
@@ -768,7 +768,7 @@ func TestFunctionInvoking_ContinuesWithFailingCallsUntilMaximumConsecutiveErrors
 			}
 
 			var streamErr error
-			for _, err := range autocall.New(autocallOptions).Run(runner.Run, t.Context(), initialMessages, opts...) {
+			for _, err := range toolautocall.New(autocallOptions).Run(runner.Run, t.Context(), initialMessages, opts...) {
 				if err != nil {
 					streamErr = err
 					break
@@ -850,7 +850,7 @@ func TestFunctionInvoking_CanFailOnFirstException(t *testing.T) {
 			}
 			plan = append(plan, createFunctionCallIterationPlan(&callIndex, true)...)
 
-			autocallOptions := autocall.Config{
+			autocallOptions := toolautocall.Config{
 				MaximumConsecutiveErrorsPerRequest: 0,
 				AllowConcurrentInvocations:         tt.allowConcurrentInvocations,
 			}
@@ -884,7 +884,7 @@ func TestFunctionInvoking_CanFailOnFirstException(t *testing.T) {
 			}
 
 			var streamErr error
-			for _, err := range autocall.New(autocallOptions).Run(runner.Run, t.Context(), initialMessages, opts...) {
+			for _, err := range toolautocall.New(autocallOptions).Run(runner.Run, t.Context(), initialMessages, opts...) {
 				if err != nil {
 					streamErr = err
 					break
@@ -947,7 +947,7 @@ func TestFunctionInvoking_KeepsFunctionCallingContent(t *testing.T) {
 		}},
 	}
 
-	finalChat := invokeAndAssert(t, tools, plan, nil, autocall.Config{})
+	finalChat := invokeAndAssert(t, tools, plan, nil, toolautocall.Config{})
 	validateFunctionContent(t, finalChat)
 }
 
@@ -990,7 +990,7 @@ func TestFunctionInvoking_TerminateOnUnknownCalls(t *testing.T) {
 					}),
 			}
 
-			autocallOptions := autocall.Config{
+			autocallOptions := toolautocall.Config{
 				TerminateOnUnknownCalls: tt.terminateOnUnknownCalls,
 			}
 
@@ -1054,7 +1054,7 @@ func TestFunctionInvoking_ExceptionDetailsOnlyReportedWhenRequested(t *testing.T
 				}},
 			}
 
-			autocallOptions := autocall.Config{
+			autocallOptions := toolautocall.Config{
 				MaximumConsecutiveErrorsPerRequest: 3,
 				IncludeDetailedErrors:              tt.detailedErrors,
 			}
@@ -1103,7 +1103,7 @@ func TestFunctionInvoking_AllResponseMessagesReturned(t *testing.T) {
 	}
 
 	var resp agent.Response
-	for update, err := range autocall.New(autocall.Config{}).Run(runner.Run, t.Context(), initialMessages, opts...) {
+	for update, err := range toolautocall.New(toolautocall.Config{}).Run(runner.Run, t.Context(), initialMessages, opts...) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1206,13 +1206,13 @@ func TestFunctionInvoking_NextIterationIncludesAssistantFunctionCallMessage(t *t
 		opts = append(opts, agent.WithTool(tool))
 	}
 
-	autocallConfig := autocall.Config{
+	autocallConfig := toolautocall.Config{
 		NewID: func() string { return "" },
 	}
 
 	initialMessages := []*message.Message{message.NewText("hello")}
 	var resp agent.Response
-	for update, err := range autocall.New(autocallConfig).Run(runner.Run, t.Context(), initialMessages, opts...) {
+	for update, err := range toolautocall.New(autocallConfig).Run(runner.Run, t.Context(), initialMessages, opts...) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

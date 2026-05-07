@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package logger
+package agent
 
 import (
 	"context"
@@ -9,31 +9,25 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/internal/slogx"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
-type Config struct {
-	Logger        *slog.Logger
-	SensitiveData bool
-}
-
-func New(cfg Config) agent.Middleware {
-	return &logger{l: slogx.Logger{
-		Logger:        cfg.Logger,
-		SensitiveData: cfg.SensitiveData,
+func newRunLoggerMiddleware(logger *slog.Logger, sensitiveData bool) Middleware {
+	return &runLoggerMiddleware{l: slogx.Logger{
+		Logger:        logger,
+		SensitiveData: sensitiveData,
 		Type:          slogx.TypeMiddleware,
 		Name:          "logger",
 	}}
 }
 
-type logger struct {
+type runLoggerMiddleware struct {
 	l slogx.Logger
 }
 
-func (l *logger) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
-	return func(yield func(*agent.ResponseUpdate, error) bool) {
+func (l *runLoggerMiddleware) Run(next RunFunc, ctx context.Context, messages []*message.Message, opts ...Option) iter.Seq2[*ResponseUpdate, error] {
+	return func(yield func(*ResponseUpdate, error) bool) {
 		start := time.Now()
 		l.log(ctx, slog.LevelDebug, "run invoked", slogx.SensitiveData("messages", messages), slogx.SensitiveData("opts", opts))
 		for update, err := range next(ctx, messages, opts...) {
@@ -54,8 +48,8 @@ func (l *logger) Run(next agent.RunFunc, ctx context.Context, messages []*messag
 	}
 }
 
-func (l *logger) log(ctx context.Context, level slog.Level, msg string, args ...any) {
-	a, ok := agent.AgentFromContext(ctx)
+func (l *runLoggerMiddleware) log(ctx context.Context, level slog.Level, msg string, args ...any) {
+	a, ok := AgentFromContext(ctx)
 	if ok {
 		args = append(args, "agentID", a.ID())
 		if a.Name() != "" {

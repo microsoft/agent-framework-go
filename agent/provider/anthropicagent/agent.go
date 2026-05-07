@@ -17,8 +17,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
-	"github.com/microsoft/agent-framework-go/agent/middleware/autocall"
-	"github.com/microsoft/agent-framework-go/agent/middleware/structuredoutput"
+	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 )
@@ -55,20 +54,18 @@ func New(aclient anthropic.Client, config Config) *agent.Agent {
 	if config.Instructions != "" {
 		config.RunOptions = append(config.RunOptions, agent.WithInstructions(config.Instructions))
 	}
-	config.Middlewares = slices.Clone(config.Middlewares)
 	if !config.DisableFuncAutoCall {
-		config.Middlewares = append(config.Middlewares, autocall.New(autocall.Config{
+		config.Middlewares = slices.Clone(config.Middlewares)
+		config.Middlewares = append(config.Middlewares, toolautocall.New(toolautocall.Config{
 			Logger:           config.Logger,
 			LogSensitiveData: config.LogSensitiveData,
 		}))
 	}
-	config.Middlewares = append(config.Middlewares, structuredoutput.New(structuredoutput.Config{
-		Format:    c.formatOf,
-		Unmarshal: c.unmarshal,
-	}))
 	return agent.New(agent.ProviderConfig{
 		Run:          c.run,
 		ProviderName: "anthropic",
+		Format:       c.formatOf,
+		Unmarshal:    c.unmarshal,
 	}, config.Config)
 }
 

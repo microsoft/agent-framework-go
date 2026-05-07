@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package autocall_test
+package toolautocall_test
 
 import (
 	"bytes"
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/microsoft/agent-framework-go/agent/middleware/autocall"
+	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
@@ -46,7 +46,7 @@ func TestAutocall_LogsSuccessfulFunctionCall(t *testing.T) {
 		}},
 	}
 
-	invokeAndAssert(t, tools, plan, nil, autocall.Config{
+	invokeAndAssert(t, tools, plan, nil, toolautocall.Config{
 		Logger: log,
 	})
 
@@ -98,7 +98,7 @@ func TestAutocall_LogsSensitiveData(t *testing.T) {
 		}},
 	}
 
-	invokeAndAssert(t, tools, plan, nil, autocall.Config{
+	invokeAndAssert(t, tools, plan, nil, toolautocall.Config{
 		Logger:           log,
 		LogSensitiveData: true,
 	})
@@ -151,7 +151,7 @@ func TestAutocall_DoesNotLogSensitiveDataByDefault(t *testing.T) {
 		}},
 	}
 
-	invokeAndAssert(t, tools, plan, nil, autocall.Config{
+	invokeAndAssert(t, tools, plan, nil, toolautocall.Config{
 		Logger:           log,
 		LogSensitiveData: false,
 	})
@@ -201,7 +201,7 @@ func TestAutocall_LogsFailedFunctionCall(t *testing.T) {
 		}},
 	}
 
-	invokeAndAssert(t, tools, plan, nil, autocall.Config{
+	invokeAndAssert(t, tools, plan, nil, toolautocall.Config{
 		Logger:                             log,
 		MaximumConsecutiveErrorsPerRequest: 3,
 	})
@@ -250,7 +250,7 @@ func TestAutocall_LogsCanceledFunctionCall(t *testing.T) {
 		}},
 	}
 
-	invokeAndAssert(t, tools, plan, nil, autocall.Config{
+	invokeAndAssert(t, tools, plan, nil, toolautocall.Config{
 		Logger:                             log,
 		MaximumConsecutiveErrorsPerRequest: 3,
 	})
@@ -299,7 +299,7 @@ func TestAutocall_LogsMultipleFunctionCalls(t *testing.T) {
 		}},
 	}
 
-	invokeAndAssert(t, tools, plan, nil, autocall.Config{
+	invokeAndAssert(t, tools, plan, nil, toolautocall.Config{
 		Logger:                     log,
 		AllowConcurrentInvocations: false,
 	})
@@ -354,7 +354,7 @@ func TestAutocall_LoggingWithConcurrentInvocations(t *testing.T) {
 		}},
 	}
 
-	invokeAndAssert(t, tools, plan, nil, autocall.Config{
+	invokeAndAssert(t, tools, plan, nil, toolautocall.Config{
 		Logger:                     log,
 		AllowConcurrentInvocations: true,
 	})
