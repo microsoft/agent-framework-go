@@ -32,6 +32,9 @@ var (
 	Subworkflow = newExecutionEnvironment(execution.ModeSubworkflow, false)
 )
 
+// NewInMemoryCheckpointManager creates an in-memory checkpoint manager.
+//
+// Deprecated: Use [workflow.NewInMemoryCheckpointManager] instead.
 func NewInMemoryCheckpointManager() checkpoint.Manager {
 	return checkpoint.NewInMemoryManager()
 }
@@ -58,8 +61,18 @@ func newExecutionEnvironment(mode execution.Mode, enableConcurrentRuns bool, che
 
 // WithCheckpointing returns a new execution environment with the same
 // execution settings and the provided checkpoint manager.
+//
+// Deprecated: Use [WithCheckpointStore] instead.
 func (e *ExecutionEnvironment) WithCheckpointing(cm checkpoint.Manager) *ExecutionEnvironment {
 	return newExecutionEnvironment(e.executionMode, e.enableConcurrentRuns, cm)
+}
+
+// WithCheckpointStore returns a new execution environment configured with
+// the given [workflow.CheckpointManager]. This is the recommended way to
+// attach checkpoint storage and matches the .NET SDK pattern.
+func (e *ExecutionEnvironment) WithCheckpointStore(cm *workflow.CheckpointManager) *ExecutionEnvironment {
+	adapter := checkpoint.NewStoreAdapter(cm.Store())
+	return newExecutionEnvironment(e.executionMode, e.enableConcurrentRuns, adapter)
 }
 
 // IsCheckpointingEnabled reports whether checkpointing is configured for

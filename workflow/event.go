@@ -70,7 +70,7 @@ type SuperStepCompletionInfo struct {
 	HasPendingMessages    bool
 	HasPendingRequests    bool
 	StateUpdated          bool
-	CheckpointInfo        any // TODO: Use proper CheckpointInfo type
+	CheckpointInfo        *CheckpointInfo
 }
 
 var _ Event = SuperStepCompletedEvent{}

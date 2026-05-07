@@ -1,3 +1,5 @@
+// Copyright (c) Microsoft. All rights reserved.
+
 package inproc_test
 
 import (
@@ -633,8 +635,8 @@ func capturePendingRequestAndCheckpointFromStream(t *testing.T, ctx context.Cont
 			pendingRequest = reqEvt.Request
 		}
 		if stepEvt, ok := evt.(workflow.SuperStepCompletedEvent); ok && stepEvt.CompletionInfo != nil {
-			if checkpoint, ok := stepEvt.CompletionInfo.CheckpointInfo.(workflow.CheckpointInfo); ok {
-				checkpointInfo = checkpoint
+			if stepEvt.CompletionInfo.CheckpointInfo != nil {
+				checkpointInfo = *stepEvt.CompletionInfo.CheckpointInfo
 			}
 		}
 	}
