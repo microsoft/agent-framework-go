@@ -4,14 +4,15 @@
 // operating mode (e.g. "plan" or "execute") in the session state and provides
 // tools for querying and switching modes.
 //
-// This mirrors the .NET AgentModeProvider harness middleware. It enables agents
-// to operate in distinct modes during long-running HITL tasks — for example,
-// an interactive planning mode vs an autonomous execution mode.
+// It enables agents to operate in distinct modes during long-running HITL
+// tasks — for example, an interactive planning mode vs an autonomous
+// execution mode.
 package agentmode
 
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -45,8 +46,8 @@ type state struct {
 	PreviousMode string `json:"previousMode,omitempty"`
 }
 
-// Options configures the agent mode provider.
-type Options struct {
+// Config configures the agent mode provider.
+type Config struct {
 	// Modes is the set of available modes. If empty, defaults to "plan" and "execute".
 	Modes []Mode
 
@@ -71,25 +72,23 @@ var defaultModes = []Mode{
 }
 
 // New creates a new agent mode context provider.
-// If opts is nil, defaults are used (plan/execute modes).
+// A zero-value Config uses defaults (plan/execute modes).
 //
 // Panics if the configuration is invalid (empty modes, duplicate names,
 // empty mode name, or default mode not in the configured set).
-func New(opts *Options) *Provider {
+func New(cfg Config) *Provider {
 	modes := defaultModes
 	defaultMode := ""
 	instructions := defaultInstructions
 
-	if opts != nil {
-		if len(opts.Modes) > 0 {
-			modes = opts.Modes
-		}
-		if opts.DefaultMode != "" {
-			defaultMode = opts.DefaultMode
-		}
-		if opts.Instructions != "" {
-			instructions = opts.Instructions
-		}
+	if len(cfg.Modes) > 0 {
+		modes = cfg.Modes
+	}
+	if cfg.DefaultMode != "" {
+		defaultMode = cfg.DefaultMode
+	}
+	if cfg.Instructions != "" {
+		instructions = cfg.Instructions
 	}
 
 	if len(modes) == 0 {
@@ -122,7 +121,7 @@ func New(opts *Options) *Provider {
 		validModes:   validModes,
 	}
 
-	p.cp = &agent.ContextProvider{
+	p.ContextProvider = agent.ContextProvider{
 		SourceID: "AgentModeProvider",
 		Provide:  p.provide,
 	}
@@ -130,19 +129,14 @@ func New(opts *Options) *Provider {
 }
 
 // Provider is an agent mode context provider.
-// Use [New] to create, then call [Provider.ContextProvider] to get the
-// [agent.ContextProvider] for agent configuration.
+// Use [New] to create. The embedded [agent.ContextProvider] can be used
+// directly in agent configuration.
 type Provider struct {
+	agent.ContextProvider
 	modes        []Mode
 	defaultMode  string
 	instructions string
 	validModes   map[string]struct{}
-	cp           *agent.ContextProvider
-}
-
-// ContextProvider returns the [agent.ContextProvider] for use in agent configuration.
-func (p *Provider) ContextProvider() *agent.ContextProvider {
-	return p.cp
 }
 
 func (p *Provider) loadState(opts []agent.Option) *state {
@@ -171,42 +165,29 @@ func (p *Provider) provide(ctx context.Context, messages []*message.Message, opt
 	p.saveState(opts, st)
 
 	tools := p.createTools(opts, st)
-	outOpts := make([]agent.Option, len(opts))
-	copy(outOpts, opts)
+	outOpts := slices.Clone(opts)
 	for _, t := range tools {
 		outOpts = append(outOpts, agent.WithTool(t))
 	}
 
-	// Build instructions with mode info.
+	// Add instructions with mode info.
 	instructionText := p.buildInstructions(st.CurrentMode)
-	instructionMsg := &message.Message{
-		Role: message.RoleUser,
-		Contents: []message.Content{
-			&message.TextContent{Text: instructionText},
-		},
-	}
+	outOpts = append(outOpts, agent.WithInstructions(instructionText))
 
-	outMessages := make([]*message.Message, 0, len(messages)+2)
-	outMessages = append(outMessages, instructionMsg)
+	outMessages := messages
 
 	// If the mode was changed externally (e.g. via SetMode), inject a notification
 	// so the agent clearly sees the change in conversation context.
 	if st.PreviousMode != "" {
-		notification := &message.Message{
-			Role: message.RoleUser,
-			Contents: []message.Content{
-				&message.TextContent{Text: fmt.Sprintf(
-					"[Mode changed: The operating mode has been switched from %q to %q. You must now adjust your behavior to match the %q mode.]",
-					st.PreviousMode, st.CurrentMode, st.CurrentMode,
-				)},
-			},
-		}
-		outMessages = append(outMessages, notification)
+		outMessages = make([]*message.Message, 0, len(messages)+1)
+		outMessages = append(outMessages, message.NewText(fmt.Sprintf(
+			"[Mode changed: The operating mode has been switched from %q to %q. You must now adjust your behavior to match the %q mode.]",
+			st.PreviousMode, st.CurrentMode, st.CurrentMode,
+		)))
+		outMessages = append(outMessages, messages...)
 		st.PreviousMode = ""
 		p.saveState(opts, st)
 	}
-
-	outMessages = append(outMessages, messages...)
 
 	return outMessages, outOpts, nil
 }

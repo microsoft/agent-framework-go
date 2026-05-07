@@ -3,9 +3,9 @@
 // Package todo provides a context provider that gives agents todo list
 // management tools for tracking work items during long-running complex tasks.
 //
-// This mirrors the .NET TodoProvider harness middleware. The provider exposes
-// five tools to the agent: TodoList_Add, TodoList_Complete, TodoList_Remove,
-// TodoList_GetRemaining, and TodoList_GetAll.
+// The provider exposes five tools to the agent: TodoList_Add,
+// TodoList_Complete, TodoList_Remove, TodoList_GetRemaining, and
+// TodoList_GetAll.
 //
 // Todo state is stored in the agent session and persists across invocations.
 package todo
@@ -13,6 +13,7 @@ package todo
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
@@ -74,14 +75,14 @@ type Options struct {
 }
 
 // Provider is an agent context provider that manages todo items.
-// Use [New] to create, then call [Provider.ContextProvider] to get the
-// [agent.ContextProvider] for agent configuration.
+// Use [New] to create. The embedded [agent.ContextProvider] can be used
+// directly in agent configuration.
 type Provider struct {
+	agent.ContextProvider
 	instructions           string
 	suppressTodoMessage    bool
 	todoListMessageBuilder func([]Item) string
 	mu                     sync.Mutex
-	cp                     *agent.ContextProvider
 }
 
 // New creates a new todo provider with the given options.
@@ -98,16 +99,11 @@ func New(opts *Options) *Provider {
 		p.todoListMessageBuilder = opts.TodoListMessageBuilder
 	}
 
-	p.cp = &agent.ContextProvider{
+	p.ContextProvider = agent.ContextProvider{
 		SourceID: "TodoProvider",
 		Provide:  p.provide,
 	}
 	return p
-}
-
-// ContextProvider returns the [agent.ContextProvider] for use in agent configuration.
-func (p *Provider) ContextProvider() *agent.ContextProvider {
-	return p.cp
 }
 
 // GetAllItems returns all todo items from the session state.
@@ -157,21 +153,15 @@ func (p *Provider) saveState(opts []agent.Option, s *state) {
 func (p *Provider) provide(ctx context.Context, messages []*message.Message, opts ...agent.Option) ([]*message.Message, []agent.Option, error) {
 	tools := p.createTools(opts)
 
-	outOpts := make([]agent.Option, len(opts))
-	copy(outOpts, opts)
+	outOpts := slices.Clone(opts)
 	for _, t := range tools {
 		outOpts = append(outOpts, agent.WithTool(t))
 	}
 
-	outMessages := make([]*message.Message, 0, len(messages)+2)
+	// Add instructions.
+	outOpts = append(outOpts, agent.WithInstructions(p.instructions))
 
-	// Inject instructions message.
-	outMessages = append(outMessages, &message.Message{
-		Role: message.RoleUser,
-		Contents: []message.Content{
-			&message.TextContent{Text: p.instructions},
-		},
-	})
+	outMessages := messages
 
 	// Inject current todo list summary so the agent sees outstanding work.
 	if !p.suppressTodoMessage {
@@ -185,15 +175,10 @@ func (p *Provider) provide(ctx context.Context, messages []*message.Message, opt
 		} else {
 			todoMsg = formatTodoListMessage(st.Items)
 		}
-		outMessages = append(outMessages, &message.Message{
-			Role: message.RoleUser,
-			Contents: []message.Content{
-				&message.TextContent{Text: todoMsg},
-			},
-		})
+		outMessages = make([]*message.Message, 0, len(messages)+1)
+		outMessages = append(outMessages, message.NewText(todoMsg))
+		outMessages = append(outMessages, messages...)
 	}
-
-	outMessages = append(outMessages, messages...)
 
 	return outMessages, outOpts, nil
 }
