@@ -155,7 +155,7 @@ func (m *mockA2ATransport) ListTaskPushConfigs(ctx context.Context, _ a2aclient.
 	return nil, errors.New("not implemented")
 }
 
-func (m *mockA2ATransport) CreateTaskPushConfig(ctx context.Context, _ a2aclient.ServiceParams, _ *a2a.CreateTaskPushConfigRequest) (*a2a.TaskPushConfig, error) {
+func (m *mockA2ATransport) CreateTaskPushConfig(ctx context.Context, _ a2aclient.ServiceParams, _ *a2a.PushConfig) (*a2a.TaskPushConfig, error) {
 	return nil, errors.New("not implemented")
 }
 
