@@ -24,8 +24,10 @@ import (
 	"github.com/microsoft/agent-framework-go/message"
 )
 
-const stateKey = "toolApprovalState"
-const rawArgumentsKey = "$raw"
+const (
+	stateKey        = "toolApprovalState"
+	rawArgumentsKey = "$raw"
+)
 
 // Rule is a standing approval rule. If Arguments is empty, all invocations
 // of the named tool are auto-approved. Otherwise only invocations with an
