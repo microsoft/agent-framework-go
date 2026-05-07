@@ -82,7 +82,8 @@ type Provider struct {
 	instructions           string
 	suppressTodoMessage    bool
 	todoListMessageBuilder func([]Item) string
-	mu                     sync.Mutex
+	sessionLocks           sync.Map // map[sessionKey]*sync.Mutex
+	nullSessionLock        sync.Mutex
 }
 
 // New creates a new todo provider with the given options.
@@ -108,8 +109,9 @@ func New(opts *Options) *Provider {
 
 // GetAllItems returns all todo items from the session state.
 func (p *Provider) GetAllItems(opts ...agent.Option) []Item {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	mu := p.getSessionLock(opts)
+	mu.Lock()
+	defer mu.Unlock()
 	st := p.loadState(opts)
 	result := make([]Item, len(st.Items))
 	copy(result, st.Items)
@@ -118,8 +120,9 @@ func (p *Provider) GetAllItems(opts ...agent.Option) []Item {
 
 // GetRemainingItems returns only the incomplete todo items from the session state.
 func (p *Provider) GetRemainingItems(opts ...agent.Option) []Item {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	mu := p.getSessionLock(opts)
+	mu.Lock()
+	defer mu.Unlock()
 	st := p.loadState(opts)
 	var remaining []Item
 	for _, item := range st.Items {
@@ -133,13 +136,13 @@ func (p *Provider) GetRemainingItems(opts ...agent.Option) []Item {
 func (p *Provider) loadState(opts []agent.Option) *state {
 	session, ok := agent.GetOption(opts, agent.WithSession)
 	if !ok {
-		return &state{NextID: 1}
+		return &state{}
 	}
 	var s state
 	if found, _ := session.Get(stateKey, &s); found {
 		return &s
 	}
-	return &state{NextID: 1}
+	return &state{}
 }
 
 func (p *Provider) saveState(opts []agent.Option, s *state) {
@@ -148,6 +151,22 @@ func (p *Provider) saveState(opts []agent.Option, s *state) {
 		return
 	}
 	session.Set(stateKey, *s)
+}
+
+// getSessionLock returns a per-session mutex. If no session is available,
+// a shared fallback lock is returned. This matches the .NET pattern of
+// per-session SemaphoreSlim via ConditionalWeakTable.
+func (p *Provider) getSessionLock(opts []agent.Option) *sync.Mutex {
+	session, ok := agent.GetOption(opts, agent.WithSession)
+	if !ok {
+		return &p.nullSessionLock
+	}
+	key := session.ServiceID()
+	if key == "" {
+		key = "_default"
+	}
+	v, _ := p.sessionLocks.LoadOrStore(key, &sync.Mutex{})
+	return v.(*sync.Mutex)
 }
 
 func (p *Provider) provide(ctx context.Context, messages []*message.Message, opts ...agent.Option) ([]*message.Message, []agent.Option, error) {
@@ -165,9 +184,10 @@ func (p *Provider) provide(ctx context.Context, messages []*message.Message, opt
 
 	// Inject current todo list summary so the agent sees outstanding work.
 	if !p.suppressTodoMessage {
-		p.mu.Lock()
+		mu := p.getSessionLock(opts)
+		mu.Lock()
 		st := p.loadState(opts)
-		p.mu.Unlock()
+		mu.Unlock()
 
 		var todoMsg string
 		if p.todoListMessageBuilder != nil {
@@ -190,8 +210,9 @@ func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
 			Description: "Add one or more todo items. Each item has a title and an optional description. Returns the list of created todo items.",
 		},
 		func(ctx tool.Context, input []ItemInput) ([]Item, error) {
-			p.mu.Lock()
-			defer p.mu.Unlock()
+			mu := p.getSessionLock(opts)
+			mu.Lock()
+			defer mu.Unlock()
 			st := p.loadState(opts)
 			var created []Item
 			for _, in := range input {
@@ -217,8 +238,9 @@ func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
 			Description: "Mark one or more todo items as complete by their IDs. Returns the number of items that were found and marked complete.",
 		},
 		func(ctx tool.Context, ids []int) (int, error) {
-			p.mu.Lock()
-			defer p.mu.Unlock()
+			mu := p.getSessionLock(opts)
+			mu.Lock()
+			defer mu.Unlock()
 			st := p.loadState(opts)
 			idSet := make(map[int]struct{}, len(ids))
 			for _, id := range ids {
@@ -244,8 +266,9 @@ func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
 			Description: "Remove one or more todo items by their IDs. Returns the number of items that were found and removed.",
 		},
 		func(ctx tool.Context, ids []int) (int, error) {
-			p.mu.Lock()
-			defer p.mu.Unlock()
+			mu := p.getSessionLock(opts)
+			mu.Lock()
+			defer mu.Unlock()
 			st := p.loadState(opts)
 			idSet := make(map[int]struct{}, len(ids))
 			for _, id := range ids {
@@ -274,8 +297,9 @@ func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
 			Description: "Retrieve the list of incomplete todo items.",
 		},
 		func(ctx tool.Context, _ struct{}) ([]Item, error) {
-			p.mu.Lock()
-			defer p.mu.Unlock()
+			mu := p.getSessionLock(opts)
+			mu.Lock()
+			defer mu.Unlock()
 			st := p.loadState(opts)
 			var remaining []Item
 			for _, item := range st.Items {
@@ -293,8 +317,9 @@ func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
 			Description: "Retrieve the full list of todo items, both complete and incomplete.",
 		},
 		func(ctx tool.Context, _ struct{}) ([]Item, error) {
-			p.mu.Lock()
-			defer p.mu.Unlock()
+			mu := p.getSessionLock(opts)
+			mu.Lock()
+			defer mu.Unlock()
 			st := p.loadState(opts)
 			return st.Items, nil
 		},
