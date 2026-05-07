@@ -1,6 +1,6 @@
 # .NET and Go SDK Feature Comparison
 
-Date: May 6, 2026
+Date: May 7, 2026
 
 This document compares the .NET SDK at `microsoft/agent-framework/dotnet` with the Go SDK in this repository. It is based on the package, sample, and public API inventory present on this date.
 
@@ -38,7 +38,7 @@ Within overlapping features, the main misalignments are API shape and ecosystem 
 | Annotations/citations | MEAI annotation/content support through `AIContent`. | `message.Annotation`, citation annotations, annotated text spans. | Aligned | No direct binary compatibility; mapping is provider-specific. |
 | Function tools | `AIFunction`, `AITool`, function tools, plugins, dynamic function tools, tool argument matching in evals. | `tool.Tool`, `tool.FuncTool`, `functool.New`, typed input/output schemas. | Partial | Go has typed function tools but no first-class plugin or dynamic tool sample equivalent to .NET steps 12 and 20. |
 | Tool auto-calling | Provider/tool-call loop and tool approval agent. | `agent/middleware/autocall`, default provider middleware unless disabled. | Aligned | Go implements auto-call as explicit middleware; .NET uses agent/tool abstractions and provider adapters. |
-| Tool approval | Tool approval request/response content, tool approval agent and builder extensions. | `FunctionApprovalRequestContent`, `FunctionApprovalResponseContent`, `ApprovalRequiredFunc`, autocall approval flow, AGUI HITL sample. | Partial | Go supports approval content and middleware, but does not have a dedicated `ToolApprovalAgent` wrapper. |
+| Tool approval | Tool approval request/response content, tool approval agent and builder extensions. | `message.ToolApprovalRequestContent`, `message.ToolApprovalResponseContent`, `tool.ApprovalRequiredFunc`, autocall approval flow, `agent/middleware/toolapproval` middleware for standing-rule approval management, AGUI HITL sample. | Aligned | API shape differs: .NET uses a `ToolApprovalAgent` delegating-agent wrapper with a `.UseToolApproval()` builder extension; Go uses idiomatic middleware (`toolapproval.New`). Standing approval rules, queued-request batching, and `AlwaysApprove*` response content are now present in both SDKs. |
 | Hosted/server-side tools | Foundry/OpenAI samples for code interpreter, file search, web search, OpenAPI, Bing custom search, SharePoint, Microsoft Fabric, memory search, Toolbox, hosted MCP. | `tool/hostedtool` declarations for web search, file search, code interpreter, MCP server. | Partial | Go has declaration types but less provider/sample coverage and fewer service-specific hosted tool integrations. |
 | Agent as function tool | Agents can be converted/bound as tools in samples and workflow builders. | `tool/agenttool.New` wraps an agent as a `FuncTool`. | Aligned | API shape differs; Go exposes a direct package. |
 | Agent as MCP tool/server | .NET sample `Agent_Step07_AsMcpTool` and durable sample for agent as MCP tool. | `tool/mcptool.AddTool`, `examples/02-agents/mcp/agent_mcp_server`, `step10_as_mcp_tool`. | Aligned | Durable MCP hosting is .NET only. |
@@ -80,7 +80,7 @@ Within overlapping features, the main misalignments are API shape and ecosystem 
 | Workflow checkpointing | In-memory and JSON checkpoint managers, custom stores, Cosmos store, checkpoint restore, checkpoint hooks. | In-memory checkpoint manager, `WithCheckpointing`, checkpoint restore, checkpoint hooks, resume pending request republish. | Partial | Go's public API uses an internal checkpoint manager type, which makes custom external stores awkward/impossible outside the module. Go lacks JSON/Cosmos stores. |
 | Workflow state | Shared/private scoped state, state update lifecycle, stateful executors. | Scoped state, `ReadState`, `ReadOrInitState`, `ReadStateKeys`, `QueueStateUpdate`, `ScopeID`, `ScopeKey`, state checkpointing. | Aligned | API naming and state store extensibility differ. |
 | Workflow external requests/HITL | Request ports, external requests/responses, human-in-the-loop samples, wrapped request support. | `RequestPort`, `ExternalRequest`, `ExternalResponse`, `PostRequest`, `BindRequestPort`, HITL sample, pending request republish. | Partial | Go supports the core flow but lacks .NET's broader wrapped-request/host integration surface. |
-| Agent in workflow | `AIAgentBinding`, `AIAgentHostOptions`, response/update events, role reassignment, message forwarding. | `agent/hosting/workflowhosting.New` with update/response events, message forwarding toggle, role reassignment toggle. | Partial | Go names differ and exposes a smaller option set; .NET has intercept user-input/function-call options. |
+| Agent in workflow | `AIAgentBinding`, `AIAgentHostOptions`, response/update events, role reassignment, message forwarding, intercept user-input/function-call requests. | `agent/hosting/workflowhosting.New` with `Config`: update/response events, message forwarding toggle (`DisableMessageForwarding`), role reassignment toggle (`DisableRoleReassignment`), `InterceptUserInputRequests`, `InterceptUnterminatedFunctionCalls`. | Aligned | API shape differs: .NET uses positive-boolean defaults (`ForwardIncomingMessages = true`, `ReassignOtherAgentsAsUsers = true`); Go uses opt-out booleans (`DisableMessageForwarding`, `DisableRoleReassignment`). Feature coverage is equivalent. |
 | Workflow as agent | Workflow host agent / `AsAIAgent`, sample. | `agent/provider/workflowprovider.New`. | Aligned | Go chooses in-process environment based on concurrency; .NET is integrated with `AIAgent` extensions. |
 | Subworkflows | `ConfigureSubWorkflow`, `BindAsExecutor`, subworkflow sample. | Internal subworkflow execution mode; no public binding helper found. | .NET only | Go has implementation pieces but no comparable public feature. |
 | Handoff orchestration | Handoff workflow builder with handoff instructions, tool-call filtering, return-to-previous, response/update events. | No first-class handoff builder. | .NET only | Could be modeled manually with tools/workflows, but no SDK feature. |
@@ -179,6 +179,7 @@ The following Go packages and sample groups were present and accounted for in th
 | `agent/middleware/logger` | Agent logging middleware. |
 | `agent/middleware/otel` | Agent OpenTelemetry middleware. |
 | `agent/middleware/structuredoutput` | Structured output middleware. |
+| `agent/middleware/toolapproval` | Human-in-the-loop tool approval middleware with standing approval rules. |
 | `agent/provider/openaiagent` | OpenAI Chat Completions and Responses, including Azure OpenAI client usage. |
 | `agent/provider/anthropicagent` | Anthropic provider. |
 | `agent/provider/geminiagent` | Gemini provider. |
