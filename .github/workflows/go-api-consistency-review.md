@@ -9,9 +9,12 @@ on:
       types: [opened, synchronize, reopened]
       paths-ignore:
          - '.github/**'
+         - 'docs/**'
          - 'README*'
          - 'LICENSE*'
          - '*.md'
+         - 'go.mod'
+         - 'go.sum'
    workflow_dispatch:
       inputs:
          pr_number:
