@@ -15,7 +15,7 @@ import (
 )
 
 func TestAgentModeProvider_InjectsTools(t *testing.T) {
-	provider := agentmode.New(nil)
+	p := agentmode.New(nil)
 	session := agenttest.CreateSession()
 	opts := []agent.Option{agent.WithSession(session)}
 
@@ -23,7 +23,7 @@ func TestAgentModeProvider_InjectsTools(t *testing.T) {
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "hi"}}},
 	}
 
-	outMessages, outOpts, err := provider.BeforeRun(context.Background(), messages, opts...)
+	outMessages, outOpts, err := p.ContextProvider().BeforeRun(context.Background(), messages, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestAgentModeProvider_InjectsTools(t *testing.T) {
 }
 
 func TestAgentModeProvider_DefaultModePlan(t *testing.T) {
-	provider := agentmode.New(nil)
+	p := agentmode.New(nil)
 	session := agenttest.CreateSession()
 	opts := []agent.Option{agent.WithSession(session)}
 
@@ -63,7 +63,7 @@ func TestAgentModeProvider_DefaultModePlan(t *testing.T) {
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "hi"}}},
 	}
 
-	outMessages, _, err := provider.BeforeRun(context.Background(), messages, opts...)
+	outMessages, _, err := p.ContextProvider().BeforeRun(context.Background(), messages, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestAgentModeProvider_DefaultModePlan(t *testing.T) {
 }
 
 func TestAgentModeProvider_CustomModes(t *testing.T) {
-	provider := agentmode.New(&agentmode.Options{
+	p := agentmode.New(&agentmode.Options{
 		Modes: []agentmode.Mode{
 			{Name: "draft", Description: "Draft mode"},
 			{Name: "review", Description: "Review mode"},
@@ -92,7 +92,7 @@ func TestAgentModeProvider_CustomModes(t *testing.T) {
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "hi"}}},
 	}
 
-	outMessages, _, err := provider.BeforeRun(context.Background(), messages, opts...)
+	outMessages, _, err := p.ContextProvider().BeforeRun(context.Background(), messages, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,15 +107,22 @@ func TestAgentModeProvider_CustomModes(t *testing.T) {
 }
 
 func TestAgentModeProvider_GetSetMode(t *testing.T) {
+	p := agentmode.New(nil)
 	session := agenttest.CreateSession()
 	opts := []agent.Option{agent.WithSession(session)}
 
+	// Initialize state.
+	messages := []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "hi"}}},
+	}
+	_, _, _ = p.ContextProvider().BeforeRun(context.Background(), messages, opts...)
+
 	mode := agentmode.GetMode(opts...)
-	if mode != "" {
-		t.Errorf("expected empty mode before initialization, got %q", mode)
+	if mode != "plan" {
+		t.Errorf("expected mode 'plan', got %q", mode)
 	}
 
-	if err := agentmode.SetMode("execute", opts...); err != nil {
+	if err := p.SetMode("execute", opts...); err != nil {
 		t.Fatal(err)
 	}
 	mode = agentmode.GetMode(opts...)
@@ -124,8 +131,22 @@ func TestAgentModeProvider_GetSetMode(t *testing.T) {
 	}
 }
 
+func TestAgentModeProvider_SetModeValidates(t *testing.T) {
+	p := agentmode.New(nil)
+	session := agenttest.CreateSession()
+	opts := []agent.Option{agent.WithSession(session)}
+
+	err := p.SetMode("nonexistent", opts...)
+	if err == nil {
+		t.Fatal("expected error for invalid mode")
+	}
+	if !strings.Contains(err.Error(), "invalid mode") {
+		t.Errorf("expected 'invalid mode' in error, got: %v", err)
+	}
+}
+
 func TestAgentModeProvider_SetModeRecordsPreviousMode(t *testing.T) {
-	provider := agentmode.New(nil)
+	p := agentmode.New(nil)
 	session := agenttest.CreateSession()
 	opts := []agent.Option{agent.WithSession(session)}
 
@@ -134,23 +155,22 @@ func TestAgentModeProvider_SetModeRecordsPreviousMode(t *testing.T) {
 	}
 
 	// Initialize state with default mode.
-	_, _, err := provider.BeforeRun(context.Background(), messages, opts...)
+	_, _, err := p.ContextProvider().BeforeRun(context.Background(), messages, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Change mode externally.
-	if err := agentmode.SetMode("execute", opts...); err != nil {
+	if err := p.SetMode("execute", opts...); err != nil {
 		t.Fatal(err)
 	}
 
 	// Next provide should inject a mode-change notification.
-	outMessages, _, err := provider.BeforeRun(context.Background(), messages, opts...)
+	outMessages, _, err := p.ContextProvider().BeforeRun(context.Background(), messages, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Look for the notification message.
 	var foundNotification bool
 	for _, msg := range outMessages {
 		text := msg.Contents.Text()
@@ -176,5 +196,34 @@ func TestAgentModeProvider_InvalidDefaultModePanics(t *testing.T) {
 			{Name: "plan", Description: "Plan mode"},
 		},
 		DefaultMode: "nonexistent",
+	})
+}
+
+func TestAgentModeProvider_DuplicateModeNamePanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic for duplicate mode name")
+		}
+	}()
+
+	agentmode.New(&agentmode.Options{
+		Modes: []agentmode.Mode{
+			{Name: "plan", Description: "Plan mode"},
+			{Name: "plan", Description: "Duplicate"},
+		},
+	})
+}
+
+func TestAgentModeProvider_EmptyModeNamePanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic for empty mode name")
+		}
+	}()
+
+	agentmode.New(&agentmode.Options{
+		Modes: []agentmode.Mode{
+			{Name: "", Description: "No name"},
+		},
 	})
 }

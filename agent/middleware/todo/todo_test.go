@@ -15,7 +15,7 @@ import (
 )
 
 func TestTodoProvider_InjectsTools(t *testing.T) {
-	provider := todo.New(nil)
+	p := todo.New(nil)
 	session := agenttest.CreateSession()
 	opts := []agent.Option{agent.WithSession(session)}
 
@@ -23,7 +23,7 @@ func TestTodoProvider_InjectsTools(t *testing.T) {
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "hi"}}},
 	}
 
-	_, outOpts, err := provider.BeforeRun(context.Background(), messages, opts...)
+	_, outOpts, err := p.ContextProvider().BeforeRun(context.Background(), messages, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestTodoProvider_InjectsTools(t *testing.T) {
 }
 
 func TestTodoProvider_InjectsInstructionsAndTodoList(t *testing.T) {
-	provider := todo.New(nil)
+	p := todo.New(nil)
 	session := agenttest.CreateSession()
 	opts := []agent.Option{agent.WithSession(session)}
 
@@ -62,7 +62,7 @@ func TestTodoProvider_InjectsInstructionsAndTodoList(t *testing.T) {
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "hi"}}},
 	}
 
-	outMessages, _, err := provider.BeforeRun(context.Background(), messages, opts...)
+	outMessages, _, err := p.ContextProvider().BeforeRun(context.Background(), messages, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestTodoProvider_InjectsInstructionsAndTodoList(t *testing.T) {
 }
 
 func TestTodoProvider_SuppressTodoListMessage(t *testing.T) {
-	provider := todo.New(&todo.Options{
+	p := todo.New(&todo.Options{
 		SuppressTodoListMessage: true,
 	})
 	session := agenttest.CreateSession()
@@ -93,7 +93,7 @@ func TestTodoProvider_SuppressTodoListMessage(t *testing.T) {
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "hi"}}},
 	}
 
-	outMessages, _, err := provider.BeforeRun(context.Background(), messages, opts...)
+	outMessages, _, err := p.ContextProvider().BeforeRun(context.Background(), messages, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestTodoProvider_SuppressTodoListMessage(t *testing.T) {
 }
 
 func TestTodoProvider_CustomInstructions(t *testing.T) {
-	provider := todo.New(&todo.Options{
+	p := todo.New(&todo.Options{
 		Instructions: "Custom instructions for todo",
 	})
 	session := agenttest.CreateSession()
@@ -114,7 +114,7 @@ func TestTodoProvider_CustomInstructions(t *testing.T) {
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "hi"}}},
 	}
 
-	outMessages, _, err := provider.BeforeRun(context.Background(), messages, opts...)
+	outMessages, _, err := p.ContextProvider().BeforeRun(context.Background(), messages, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestTodoProvider_CustomInstructions(t *testing.T) {
 }
 
 func TestTodoProvider_CustomTodoListMessageBuilder(t *testing.T) {
-	provider := todo.New(&todo.Options{
+	p := todo.New(&todo.Options{
 		TodoListMessageBuilder: func(items []todo.Item) string {
 			return "CUSTOM: empty"
 		},
@@ -138,7 +138,7 @@ func TestTodoProvider_CustomTodoListMessageBuilder(t *testing.T) {
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "hi"}}},
 	}
 
-	outMessages, _, err := provider.BeforeRun(context.Background(), messages, opts...)
+	outMessages, _, err := p.ContextProvider().BeforeRun(context.Background(), messages, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,5 +146,27 @@ func TestTodoProvider_CustomTodoListMessageBuilder(t *testing.T) {
 	secondText := outMessages[1].Contents.Text()
 	if !strings.Contains(secondText, "CUSTOM:") {
 		t.Error("expected custom todo list message builder output")
+	}
+}
+
+func TestTodoProvider_GetAllItems(t *testing.T) {
+	p := todo.New(nil)
+	session := agenttest.CreateSession()
+	opts := []agent.Option{agent.WithSession(session)}
+
+	items := p.GetAllItems(opts...)
+	if len(items) != 0 {
+		t.Fatalf("expected 0 items initially, got %d", len(items))
+	}
+}
+
+func TestTodoProvider_GetRemainingItems(t *testing.T) {
+	p := todo.New(nil)
+	session := agenttest.CreateSession()
+	opts := []agent.Option{agent.WithSession(session)}
+
+	items := p.GetRemainingItems(opts...)
+	if len(items) != 0 {
+		t.Fatalf("expected 0 remaining items initially, got %d", len(items))
 	}
 }

@@ -72,7 +72,10 @@ var defaultModes = []Mode{
 
 // New creates a new agent mode context provider.
 // If opts is nil, defaults are used (plan/execute modes).
-func New(opts *Options) *agent.ContextProvider {
+//
+// Panics if the configuration is invalid (empty modes, duplicate names,
+// empty mode name, or default mode not in the configured set).
+func New(opts *Options) *Provider {
 	modes := defaultModes
 	defaultMode := ""
 	instructions := defaultInstructions
@@ -89,40 +92,60 @@ func New(opts *Options) *agent.ContextProvider {
 		}
 	}
 
+	if len(modes) == 0 {
+		panic("agentmode: at least one mode must be configured")
+	}
+
 	if defaultMode == "" {
 		defaultMode = modes[0].Name
 	}
 
-	// Validate default mode is in the set.
+	// Validate modes: no empty names, no duplicates.
 	validModes := make(map[string]struct{}, len(modes))
-	for _, m := range modes {
+	for i, m := range modes {
+		if strings.TrimSpace(m.Name) == "" {
+			panic(fmt.Sprintf("agentmode: mode at index %d has an empty name", i))
+		}
+		if _, exists := validModes[m.Name]; exists {
+			panic(fmt.Sprintf("agentmode: duplicate mode name %q", m.Name))
+		}
 		validModes[m.Name] = struct{}{}
 	}
 	if _, ok := validModes[defaultMode]; !ok {
 		panic(fmt.Sprintf("agentmode: default mode %q is not in the configured modes list", defaultMode))
 	}
 
-	p := &provider{
+	p := &Provider{
 		modes:        modes,
 		defaultMode:  defaultMode,
 		instructions: instructions,
 		validModes:   validModes,
 	}
 
-	return &agent.ContextProvider{
+	p.cp = &agent.ContextProvider{
 		SourceID: "AgentModeProvider",
 		Provide:  p.provide,
 	}
+	return p
 }
 
-type provider struct {
+// Provider is an agent mode context provider.
+// Use [New] to create, then call [Provider.ContextProvider] to get the
+// [agent.ContextProvider] for agent configuration.
+type Provider struct {
 	modes        []Mode
 	defaultMode  string
 	instructions string
 	validModes   map[string]struct{}
+	cp           *agent.ContextProvider
 }
 
-func (p *provider) loadState(opts []agent.Option) *state {
+// ContextProvider returns the [agent.ContextProvider] for use in agent configuration.
+func (p *Provider) ContextProvider() *agent.ContextProvider {
+	return p.cp
+}
+
+func (p *Provider) loadState(opts []agent.Option) *state {
 	session, ok := agent.GetOption(opts, agent.WithSession)
 	if !ok {
 		return &state{CurrentMode: p.defaultMode}
@@ -134,7 +157,7 @@ func (p *provider) loadState(opts []agent.Option) *state {
 	return &state{CurrentMode: p.defaultMode}
 }
 
-func (p *provider) saveState(opts []agent.Option, s *state) {
+func (p *Provider) saveState(opts []agent.Option, s *state) {
 	session, ok := agent.GetOption(opts, agent.WithSession)
 	if !ok || s == nil {
 		return
@@ -142,7 +165,7 @@ func (p *provider) saveState(opts []agent.Option, s *state) {
 	session.Set(stateKey, *s)
 }
 
-func (p *provider) provide(ctx context.Context, messages []*message.Message, opts ...agent.Option) ([]*message.Message, []agent.Option, error) {
+func (p *Provider) provide(ctx context.Context, messages []*message.Message, opts ...agent.Option) ([]*message.Message, []agent.Option, error) {
 	st := p.loadState(opts)
 	// Persist the initial state so SetMode can read it.
 	p.saveState(opts, st)
@@ -188,7 +211,7 @@ func (p *provider) provide(ctx context.Context, messages []*message.Message, opt
 	return outMessages, outOpts, nil
 }
 
-func (p *provider) buildInstructions(currentMode string) string {
+func (p *Provider) buildInstructions(currentMode string) string {
 	var sb strings.Builder
 	for _, m := range p.modes {
 		fmt.Fprintf(&sb, "- \"%s\": %s\n", m.Name, m.Description)
@@ -200,7 +223,7 @@ func (p *provider) buildInstructions(currentMode string) string {
 	return result
 }
 
-func (p *provider) createTools(opts []agent.Option, st *state) []tool.FuncTool {
+func (p *Provider) createTools(opts []agent.Option, st *state) []tool.FuncTool {
 	modeNames := make([]string, len(p.modes))
 	for i, m := range p.modes {
 		modeNames[i] = m.Name
@@ -249,9 +272,33 @@ func GetMode(opts ...agent.Option) string {
 	return ""
 }
 
-// SetMode sets the operating mode in the session.
-// This can be called externally to change the mode (e.g. via a /mode command).
-// Returns an error if the mode is not in the configured set.
+// SetMode sets the operating mode in the session, validating it against
+// the provider's configured modes. Returns an error if the mode is invalid
+// or no session is available.
+func (p *Provider) SetMode(mode string, opts ...agent.Option) error {
+	if _, ok := p.validModes[mode]; !ok {
+		return fmt.Errorf("agentmode: invalid mode %q", mode)
+	}
+	session, ok := agent.GetOption(opts, agent.WithSession)
+	if !ok {
+		return fmt.Errorf("agentmode: no session available")
+	}
+	var s state
+	if found, _ := session.Get(stateKey, &s); found {
+		if s.CurrentMode != mode {
+			s.PreviousMode = s.CurrentMode
+			s.CurrentMode = mode
+		}
+	} else {
+		s = state{CurrentMode: mode}
+	}
+	session.Set(stateKey, s)
+	return nil
+}
+
+// SetMode is a package-level convenience that sets the mode without validation.
+//
+// Deprecated: Use [Provider.SetMode] for validated mode changes.
 func SetMode(mode string, opts ...agent.Option) error {
 	session, ok := agent.GetOption(opts, agent.WithSession)
 	if !ok {

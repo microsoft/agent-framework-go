@@ -74,16 +74,19 @@ type Options struct {
 }
 
 // Provider is an agent context provider that manages todo items.
+// Use [New] to create, then call [Provider.ContextProvider] to get the
+// [agent.ContextProvider] for agent configuration.
 type Provider struct {
 	instructions           string
 	suppressTodoMessage    bool
 	todoListMessageBuilder func([]Item) string
 	mu                     sync.Mutex
+	cp                     *agent.ContextProvider
 }
 
 // New creates a new todo provider with the given options.
 // If opts is nil, defaults are used.
-func New(opts *Options) *agent.ContextProvider {
+func New(opts *Options) *Provider {
 	p := &Provider{
 		instructions: defaultInstructions,
 	}
@@ -95,10 +98,40 @@ func New(opts *Options) *agent.ContextProvider {
 		p.todoListMessageBuilder = opts.TodoListMessageBuilder
 	}
 
-	return &agent.ContextProvider{
+	p.cp = &agent.ContextProvider{
 		SourceID: "TodoProvider",
 		Provide:  p.provide,
 	}
+	return p
+}
+
+// ContextProvider returns the [agent.ContextProvider] for use in agent configuration.
+func (p *Provider) ContextProvider() *agent.ContextProvider {
+	return p.cp
+}
+
+// GetAllItems returns all todo items from the session state.
+func (p *Provider) GetAllItems(opts ...agent.Option) []Item {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	st := p.loadState(opts)
+	result := make([]Item, len(st.Items))
+	copy(result, st.Items)
+	return result
+}
+
+// GetRemainingItems returns only the incomplete todo items from the session state.
+func (p *Provider) GetRemainingItems(opts ...agent.Option) []Item {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	st := p.loadState(opts)
+	var remaining []Item
+	for _, item := range st.Items {
+		if !item.IsComplete {
+			remaining = append(remaining, item)
+		}
+	}
+	return remaining
 }
 
 func (p *Provider) loadState(opts []agent.Option) *state {
