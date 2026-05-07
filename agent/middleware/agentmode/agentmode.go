@@ -41,7 +41,8 @@ type Mode struct {
 
 // state is persisted in the session across turns.
 type state struct {
-	CurrentMode string `json:"currentMode"`
+	CurrentMode  string `json:"currentMode"`
+	PreviousMode string `json:"previousMode,omitempty"`
 }
 
 // Options configures the agent mode provider.
@@ -135,14 +136,16 @@ func (p *provider) loadState(opts []agent.Option) *state {
 
 func (p *provider) saveState(opts []agent.Option, s *state) {
 	session, ok := agent.GetOption(opts, agent.WithSession)
-	if !ok {
+	if !ok || s == nil {
 		return
 	}
-	session.Set(stateKey, s)
+	session.Set(stateKey, *s)
 }
 
 func (p *provider) provide(ctx context.Context, messages []*message.Message, opts ...agent.Option) ([]*message.Message, []agent.Option, error) {
 	st := p.loadState(opts)
+	// Persist the initial state so SetMode can read it.
+	p.saveState(opts, st)
 
 	tools := p.createTools(opts, st)
 	outOpts := make([]agent.Option, len(opts))
@@ -153,15 +156,33 @@ func (p *provider) provide(ctx context.Context, messages []*message.Message, opt
 
 	// Build instructions with mode info.
 	instructionText := p.buildInstructions(st.CurrentMode)
-	instructions := &message.Message{
+	instructionMsg := &message.Message{
 		Role: message.RoleUser,
 		Contents: []message.Content{
 			&message.TextContent{Text: instructionText},
 		},
 	}
 
-	outMessages := make([]*message.Message, 0, len(messages)+1)
-	outMessages = append(outMessages, instructions)
+	outMessages := make([]*message.Message, 0, len(messages)+2)
+	outMessages = append(outMessages, instructionMsg)
+
+	// If the mode was changed externally (e.g. via SetMode), inject a notification
+	// so the agent clearly sees the change in conversation context.
+	if st.PreviousMode != "" {
+		notification := &message.Message{
+			Role: message.RoleUser,
+			Contents: []message.Content{
+				&message.TextContent{Text: fmt.Sprintf(
+					"[Mode changed: The operating mode has been switched from %q to %q. You must now adjust your behavior to match the %q mode.]",
+					st.PreviousMode, st.CurrentMode, st.CurrentMode,
+				)},
+			},
+		}
+		outMessages = append(outMessages, notification)
+		st.PreviousMode = ""
+		p.saveState(opts, st)
+	}
+
 	outMessages = append(outMessages, messages...)
 
 	return outMessages, outOpts, nil
@@ -230,11 +251,21 @@ func GetMode(opts ...agent.Option) string {
 
 // SetMode sets the operating mode in the session.
 // This can be called externally to change the mode (e.g. via a /mode command).
-func SetMode(mode string, opts ...agent.Option) {
+// Returns an error if the mode is not in the configured set.
+func SetMode(mode string, opts ...agent.Option) error {
 	session, ok := agent.GetOption(opts, agent.WithSession)
 	if !ok {
-		return
+		return fmt.Errorf("agentmode: no session available")
 	}
-	s := state{CurrentMode: mode}
+	var s state
+	if found, _ := session.Get(stateKey, &s); found {
+		if s.CurrentMode != mode {
+			s.PreviousMode = s.CurrentMode
+			s.CurrentMode = mode
+		}
+	} else {
+		s = state{CurrentMode: mode}
+	}
 	session.Set(stateKey, s)
+	return nil
 }

@@ -63,12 +63,22 @@ type state struct {
 type Options struct {
 	// Instructions overrides the default instructions provided to the agent.
 	Instructions string
+
+	// SuppressTodoListMessage, when true, prevents injecting the current todo
+	// list summary message on each invocation.
+	SuppressTodoListMessage bool
+
+	// TodoListMessageBuilder, if set, is used to format the todo list summary
+	// message instead of the default formatter.
+	TodoListMessageBuilder func([]Item) string
 }
 
 // Provider is an agent context provider that manages todo items.
 type Provider struct {
-	instructions string
-	mu           sync.Mutex
+	instructions           string
+	suppressTodoMessage    bool
+	todoListMessageBuilder func([]Item) string
+	mu                     sync.Mutex
 }
 
 // New creates a new todo provider with the given options.
@@ -77,8 +87,12 @@ func New(opts *Options) *agent.ContextProvider {
 	p := &Provider{
 		instructions: defaultInstructions,
 	}
-	if opts != nil && opts.Instructions != "" {
-		p.instructions = opts.Instructions
+	if opts != nil {
+		if opts.Instructions != "" {
+			p.instructions = opts.Instructions
+		}
+		p.suppressTodoMessage = opts.SuppressTodoListMessage
+		p.todoListMessageBuilder = opts.TodoListMessageBuilder
 	}
 
 	return &agent.ContextProvider{
@@ -101,10 +115,10 @@ func (p *Provider) loadState(opts []agent.Option) *state {
 
 func (p *Provider) saveState(opts []agent.Option, s *state) {
 	session, ok := agent.GetOption(opts, agent.WithSession)
-	if !ok {
+	if !ok || s == nil {
 		return
 	}
-	session.Set(stateKey, s)
+	session.Set(stateKey, *s)
 }
 
 func (p *Provider) provide(ctx context.Context, messages []*message.Message, opts ...agent.Option) ([]*message.Message, []agent.Option, error) {
@@ -116,21 +130,36 @@ func (p *Provider) provide(ctx context.Context, messages []*message.Message, opt
 		outOpts = append(outOpts, agent.WithTool(t))
 	}
 
-	// Inject instructions and current todo state as a system message.
-	p.mu.Lock()
-	st := p.loadState(opts)
-	todoMsg := formatTodoListMessage(st.Items)
-	p.mu.Unlock()
+	outMessages := make([]*message.Message, 0, len(messages)+2)
 
-	instructions := &message.Message{
+	// Inject instructions message.
+	outMessages = append(outMessages, &message.Message{
 		Role: message.RoleUser,
 		Contents: []message.Content{
-			&message.TextContent{Text: p.instructions + "\n\n" + todoMsg},
+			&message.TextContent{Text: p.instructions},
 		},
+	})
+
+	// Inject current todo list summary so the agent sees outstanding work.
+	if !p.suppressTodoMessage {
+		p.mu.Lock()
+		st := p.loadState(opts)
+		p.mu.Unlock()
+
+		var todoMsg string
+		if p.todoListMessageBuilder != nil {
+			todoMsg = p.todoListMessageBuilder(st.Items)
+		} else {
+			todoMsg = formatTodoListMessage(st.Items)
+		}
+		outMessages = append(outMessages, &message.Message{
+			Role: message.RoleUser,
+			Contents: []message.Content{
+				&message.TextContent{Text: todoMsg},
+			},
+		})
 	}
 
-	outMessages := make([]*message.Message, 0, len(messages)+1)
-	outMessages = append(outMessages, instructions)
 	outMessages = append(outMessages, messages...)
 
 	return outMessages, outOpts, nil
