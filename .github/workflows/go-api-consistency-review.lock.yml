@@ -50,9 +50,13 @@ name: "Go API Consistency Review Agent"
   pull_request:
     paths-ignore:
     - .github/**
+    - docs/**
     - README*
     - LICENSE*
     - "*.md"
+    - go.mod
+    - go.sum
+    - .golangci.yml
     types:
     - opened
     - synchronize
