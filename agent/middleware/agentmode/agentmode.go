@@ -259,17 +259,17 @@ func (p *Provider) createTools(opts []agent.Option, st *state) []tool.FuncTool {
 }
 
 // GetMode returns the current operating mode from the session.
-// This can be called externally to read the mode without going through the agent.
-func GetMode(opts ...agent.Option) string {
+// If no state has been persisted yet, it returns the configured default mode.
+func (p *Provider) GetMode(opts ...agent.Option) string {
 	session, ok := agent.GetOption(opts, agent.WithSession)
 	if !ok {
-		return ""
+		return p.defaultMode
 	}
 	var s state
 	if found, _ := session.Get(stateKey, &s); found {
 		return s.CurrentMode
 	}
-	return ""
+	return p.defaultMode
 }
 
 // SetMode sets the operating mode in the session, validating it against
@@ -279,27 +279,6 @@ func (p *Provider) SetMode(mode string, opts ...agent.Option) error {
 	if _, ok := p.validModes[mode]; !ok {
 		return fmt.Errorf("agentmode: invalid mode %q", mode)
 	}
-	session, ok := agent.GetOption(opts, agent.WithSession)
-	if !ok {
-		return fmt.Errorf("agentmode: no session available")
-	}
-	var s state
-	if found, _ := session.Get(stateKey, &s); found {
-		if s.CurrentMode != mode {
-			s.PreviousMode = s.CurrentMode
-			s.CurrentMode = mode
-		}
-	} else {
-		s = state{CurrentMode: mode}
-	}
-	session.Set(stateKey, s)
-	return nil
-}
-
-// SetMode is a package-level convenience that sets the mode without validation.
-//
-// Deprecated: Use [Provider.SetMode] for validated mode changes.
-func SetMode(mode string, opts ...agent.Option) error {
 	session, ok := agent.GetOption(opts, agent.WithSession)
 	if !ok {
 		return fmt.Errorf("agentmode: no session available")

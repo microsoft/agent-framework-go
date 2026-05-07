@@ -111,13 +111,19 @@ func TestAgentModeProvider_GetSetMode(t *testing.T) {
 	session := agenttest.CreateSession()
 	opts := []agent.Option{agent.WithSession(session)}
 
+	// Before any invocation, GetMode should return the default.
+	mode := p.GetMode(opts...)
+	if mode != "plan" {
+		t.Errorf("expected default mode 'plan' before init, got %q", mode)
+	}
+
 	// Initialize state.
 	messages := []*message.Message{
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "hi"}}},
 	}
 	_, _, _ = p.ContextProvider().BeforeRun(context.Background(), messages, opts...)
 
-	mode := agentmode.GetMode(opts...)
+	mode = p.GetMode(opts...)
 	if mode != "plan" {
 		t.Errorf("expected mode 'plan', got %q", mode)
 	}
@@ -125,7 +131,7 @@ func TestAgentModeProvider_GetSetMode(t *testing.T) {
 	if err := p.SetMode("execute", opts...); err != nil {
 		t.Fatal(err)
 	}
-	mode = agentmode.GetMode(opts...)
+	mode = p.GetMode(opts...)
 	if mode != "execute" {
 		t.Errorf("expected mode 'execute', got %q", mode)
 	}
