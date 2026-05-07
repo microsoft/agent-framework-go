@@ -16,6 +16,7 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/internal/checkpoint"
 	"github.com/microsoft/agent-framework-go/workflow/internal/execution"
+	"github.com/microsoft/agent-framework-go/workflow/internal/otelutil"
 )
 
 // runnerContext manages the execution context for a workflow run.
@@ -455,11 +456,14 @@ func (proc *runnerContext) SendMessage(ctx context.Context, sourceID, targetID s
 		return err
 	}
 
-	// TODO: Add OpenTelemetry trace context propagation
 	envelope, err := execution.NewMessageEnvelope(message, nil, sourceID, targetID)
 	if err != nil {
 		return err
 	}
+	// Propagate the current OTel trace context into the envelope so that
+	// spans created when the target executor processes the message are
+	// linked to the sending executor's trace.
+	envelope.TraceContext = otelutil.ExtractTraceContext(ctx)
 	edges := proc.wf.Edges[sourceID]
 	for _, edge := range edges {
 		mapping, err := proc.edgeMap.PrepareDeliveryForEdge(ctx, edge, envelope)
@@ -476,21 +480,26 @@ func (proc *runnerContext) SendMessage(ctx context.Context, sourceID, targetID s
 
 // Bind creates a bound workflow context for a specific executor.
 func (proc *runnerContext) Bind(ctx context.Context, executorID string, traceContext map[string]string) *workflow.Context {
+	// Restore the OTel span context from the trace context carried by the
+	// message envelope, so any spans the executor creates are properly
+	// parented under the sending executor's span.
+	boundCtx := otelutil.InjectTraceContext(ctx, traceContext)
+
 	return &workflow.Context{
-		Context: ctx,
+		Context: boundCtx,
 
 		AddEvent: func(event workflow.Event) error {
-			return proc.AddEvent(ctx, event)
+			return proc.AddEvent(boundCtx, event)
 		},
 
 		SendMessage: func(targetID string, message any) error {
-			return proc.SendMessage(ctx, executorID, targetID, message)
+			return proc.SendMessage(boundCtx, executorID, targetID, message)
 		},
 
 		YieldOutput: func(output any) error {
 			// Check if this executor can output
 			if _, ok := proc.wf.OutputExecutors[executorID]; ok {
-				return proc.AddEvent(ctx, workflow.OutputEvent{
+				return proc.AddEvent(boundCtx, workflow.OutputEvent{
 					ExecutorID: executorID,
 					Output:     output,
 				})
@@ -499,11 +508,11 @@ func (proc *runnerContext) Bind(ctx context.Context, executorID string, traceCon
 		},
 
 		RequestHalt: func() error {
-			return proc.AddEvent(ctx, workflow.RequestHaltEvent{})
+			return proc.AddEvent(boundCtx, workflow.RequestHaltEvent{})
 		},
 
 		PostRequest: func(request *workflow.ExternalRequest) error {
-			return proc.Post(ctx, executorID, request)
+			return proc.Post(boundCtx, executorID, request)
 		},
 
 		ReadState: func(key string, scope string) (any, error) {
@@ -522,7 +531,7 @@ func (proc *runnerContext) Bind(ctx context.Context, executorID string, traceCon
 			value, err := proc.stateManager.ReadOrInitState(executorID, scope, key, func() any {
 				// Call the init function to get the initial value
 				if initFunc != nil {
-					val, err := initFunc(ctx, key, scope)
+					val, err := initFunc(boundCtx, key, scope)
 					if err != nil {
 						initErr = err
 						return nil
