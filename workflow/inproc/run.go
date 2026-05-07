@@ -177,8 +177,8 @@ type executionOptions struct {
 }
 
 // WithSessionID sets the workflow session ID for a new run. It is honored by
-// Run and RunStreaming. Resume and ResumeStreaming use it as a checkpoint
-// lookup-session override.
+// Run and RunStreaming. Resume and ResumeStreaming use the session ID from
+// the checkpoint being resumed.
 func WithSessionID(sessionID string) ExecutionOption {
 	return func(options *executionOptions) {
 		options.SessionID = sessionID

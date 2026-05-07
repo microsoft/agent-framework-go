@@ -3,18 +3,20 @@
 package workflow
 
 import (
+	"strings"
+
 	"github.com/google/uuid"
 )
 
 type CheckpointInfo struct {
-	SessionID    string
-	CheckpointID string
+	SessionID    string `json:"sessionId"`
+	CheckpointID string `json:"checkpointId"`
 }
 
 func NewCheckpointInfo(sessionID string) CheckpointInfo {
 	return CheckpointInfo{
 		SessionID:    sessionID,
-		CheckpointID: uuid.NewString(),
+		CheckpointID: strings.ReplaceAll(uuid.NewString(), "-", ""),
 	}
 }
 

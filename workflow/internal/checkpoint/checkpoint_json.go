@@ -39,7 +39,7 @@ type checkpointJSON struct {
 	RunnerData    RunnerStateData
 	StateData     []scopeKeyEntry
 	EdgeStateData map[string]workflow.PortableValue
-	Parent        workflow.CheckpointInfo
+	Parent        *workflow.CheckpointInfo
 }
 
 // MarshalJSON implements [json.Marshaler] for Checkpoint.

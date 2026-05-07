@@ -42,7 +42,7 @@ type runner struct {
 	needsRepublish       atomic.Bool
 
 	checkpoints        []workflow.CheckpointInfo
-	lastCheckpointInfo workflow.CheckpointInfo
+	lastCheckpointInfo *workflow.CheckpointInfo
 }
 
 // createTopLevelRunner creates a new top-level InProcessRunner for the given workflow.
@@ -273,6 +273,17 @@ func (r *runner) Checkpoints() []workflow.CheckpointInfo {
 	return slices.Clone(r.checkpoints)
 }
 
+func checkpointInfoPtr(info workflow.CheckpointInfo) *workflow.CheckpointInfo {
+	return &info
+}
+
+func cloneCheckpointInfoPtr(info *workflow.CheckpointInfo) *workflow.CheckpointInfo {
+	if info == nil {
+		return nil
+	}
+	return checkpointInfoPtr(*info)
+}
+
 // RestoreCheckpoint restores the workflow state from a checkpoint.
 func (r *runner) RestoreCheckpoint(ctx context.Context, checkpointInfo workflow.CheckpointInfo) error {
 	if err := r.restoreCheckpointCore(ctx, checkpointInfo); err != nil {
@@ -290,7 +301,7 @@ func (r *runner) restoreCheckpointCore(ctx context.Context, checkpointInfo workf
 		return fmt.Errorf("this runner was not configured with a CheckpointManager, so it cannot restore checkpoints")
 	}
 
-	cp, err := r.checkpointMgr.Lookup(r.sessionID, checkpointInfo)
+	cp, err := r.checkpointMgr.Lookup(ctx, r.sessionID, checkpointInfo)
 	if err != nil {
 		return fmt.Errorf("failed to lookup checkpoint: %w", err)
 	}
@@ -312,12 +323,12 @@ func (r *runner) restoreCheckpointCore(ctx context.Context, checkpointInfo workf
 	if err := r.edgeMap.ImportState(cp); err != nil {
 		return err
 	}
-	index, err := r.checkpointMgr.RetrieveIndex(r.sessionID)
+	index, err := r.checkpointMgr.RetrieveIndex(ctx, r.sessionID, nil)
 	if err != nil {
 		return fmt.Errorf("failed to retrieve checkpoint index: %w", err)
 	}
 	r.checkpoints = index
-	r.lastCheckpointInfo = checkpointInfo
+	r.lastCheckpointInfo = checkpointInfoPtr(checkpointInfo)
 	r.stepTracer.Reload(cp.StepNumber)
 	return nil
 }
@@ -431,14 +442,14 @@ func (r *runner) checkpoint(ctx context.Context) error {
 		RunnerData:    r.runContext.ExportState(),
 		StateData:     *stateData,
 		EdgeStateData: edgeData,
-		Parent:        r.lastCheckpointInfo,
+		Parent:        cloneCheckpointInfoPtr(r.lastCheckpointInfo),
 	}
-	info, err := r.checkpointMgr.Commit(r.sessionID, cp)
+	info, err := r.checkpointMgr.Commit(ctx, r.sessionID, cp)
 	if err != nil {
 		return err
 	}
 	r.stepTracer.TraceCheckpointCreated(info)
 	r.checkpoints = append(r.checkpoints, info)
-	r.lastCheckpointInfo = info
+	r.lastCheckpointInfo = checkpointInfoPtr(info)
 	return nil
 }
