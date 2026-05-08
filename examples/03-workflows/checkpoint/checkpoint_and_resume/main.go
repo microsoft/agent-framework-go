@@ -8,6 +8,7 @@ import (
 
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/workflow"
+	"github.com/microsoft/agent-framework-go/workflow/checkpoint"
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
 )
 
@@ -35,8 +36,10 @@ func main() {
 		demo.Panic(err)
 	}
 
-	manager := workflow.NewInMemoryCheckpointManager()
-	first, err := inproc.Default.WithCheckpointing(manager).Run(context.Background(), wf, "Need deployment approval")
+	ctx := context.Background()
+
+	manager := checkpoint.NewInMemoryManager()
+	first, err := inproc.Default.WithCheckpointing(manager).Run(ctx, wf, "Need deployment approval")
 	if err != nil {
 		demo.Panic(err)
 	}
@@ -49,11 +52,11 @@ func main() {
 	if request == nil {
 		demo.Panic("expected request")
 	}
-	if err := first.Close(context.Background()); err != nil {
+	if err := first.Close(ctx); err != nil {
 		demo.Panic(err)
 	}
 
-	resumed, err := inproc.Default.WithCheckpointing(manager).Resume(context.Background(), wf, checkpointInfo)
+	resumed, err := inproc.Default.WithCheckpointing(manager).Resume(ctx, wf, checkpointInfo)
 	if err != nil {
 		demo.Panic(err)
 	}
@@ -63,7 +66,7 @@ func main() {
 	if err != nil {
 		demo.Panic(err)
 	}
-	if _, err := resumed.Resume(context.Background(), response); err != nil {
+	if _, err := resumed.Resume(ctx, response); err != nil {
 		demo.Panic(err)
 	}
 	for evt := range resumed.NewEvents() {

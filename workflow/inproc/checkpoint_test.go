@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/workflow"
+	"github.com/microsoft/agent-framework-go/workflow/checkpoint"
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
 )
 
@@ -18,7 +19,7 @@ func TestCheckpoint_ResumeWithPendingRequests_RepublishesRequestInfoEvents(t *te
 		t.Run(env.name, func(t *testing.T) {
 			ctx := context.Background()
 			wf, _ := createCheckpointRequestWorkflow(t)
-			manager := workflow.NewInMemoryCheckpointManager()
+			manager := checkpoint.NewInMemoryManager()
 
 			first, err := env.env.WithCheckpointing(manager).Run(ctx, wf, "Hello")
 			if err != nil {
@@ -62,7 +63,7 @@ func TestCheckpoint_ResumeWithPendingRequests_RunStatusIsPendingRequests(t *test
 		t.Run(env.name, func(t *testing.T) {
 			ctx := context.Background()
 			wf, _ := createCheckpointRequestWorkflow(t)
-			manager := workflow.NewInMemoryCheckpointManager()
+			manager := checkpoint.NewInMemoryManager()
 
 			first, err := env.env.WithCheckpointing(manager).Run(ctx, wf, "Hello")
 			if err != nil {
@@ -96,7 +97,7 @@ func TestCheckpoint_ResumeWithRepublishDisabled_DoesNotEmitRequestInfoEvents(t *
 		t.Run(env.name, func(t *testing.T) {
 			ctx := context.Background()
 			wf, _ := createCheckpointRequestWorkflow(t)
-			manager := workflow.NewInMemoryCheckpointManager()
+			manager := checkpoint.NewInMemoryManager()
 
 			first, err := env.env.WithCheckpointing(manager).Run(ctx, wf, "Hello")
 			if err != nil {
@@ -131,13 +132,13 @@ func TestCheckpoint_ResumeWithRepublishDisabled_DoesNotEmitRequestInfoEvents(t *
 	}
 }
 
-func TestCheckpoint_ResumeWithSessionIDOverrideUsesLookupSession(t *testing.T) {
+func TestCheckpoint_ResumeIgnoresSessionIDOption(t *testing.T) {
 	ctx := context.Background()
 	wf, _ := createCheckpointRequestWorkflow(t)
-	manager := workflow.NewInMemoryCheckpointManager()
-	const lookupSession = "lookup-session"
+	manager := checkpoint.NewInMemoryManager()
+	const checkpointSession = "checkpoint-session"
 
-	first, err := inproc.Default.WithCheckpointing(manager).Run(ctx, wf, "Hello", inproc.WithSessionID(lookupSession))
+	first, err := inproc.Default.WithCheckpointing(manager).Run(ctx, wf, "Hello", inproc.WithSessionID(checkpointSession))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -149,9 +150,12 @@ func TestCheckpoint_ResumeWithSessionIDOverrideUsesLookupSession(t *testing.T) {
 		t.Fatalf("Close first run: %v", err)
 	}
 
-	checkpointInfo.SessionID = "portable-session-id"
-	if _, err := inproc.Default.WithCheckpointing(manager).Resume(ctx, wf, checkpointInfo, inproc.WithSessionID(lookupSession)); err != nil {
-		t.Fatalf("Resume with session override: %v", err)
+	resumed, err := inproc.Default.WithCheckpointing(manager).Resume(ctx, wf, checkpointInfo, inproc.WithSessionID("ignored-session"))
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if got := resumed.SessionID(); got != checkpointSession {
+		t.Fatalf("resumed session ID = %q, want %q", got, checkpointSession)
 	}
 }
 
@@ -160,7 +164,7 @@ func TestCheckpoint_ResumeRespondToPendingRequest_CompletesWithoutDuplicate(t *t
 		t.Run(env.name, func(t *testing.T) {
 			ctx := context.Background()
 			wf, received := createCheckpointRequestWorkflow(t)
-			manager := workflow.NewInMemoryCheckpointManager()
+			manager := checkpoint.NewInMemoryManager()
 
 			first, err := env.env.WithCheckpointing(manager).Run(ctx, wf, "Hello")
 			if err != nil {
@@ -232,7 +236,7 @@ func TestCheckpoint_RestoreWithPendingRequests_RepublishesRequestInfoEvents(t *t
 		t.Run(env.name, func(t *testing.T) {
 			ctx := context.Background()
 			wf, received := createCheckpointRequestWorkflow(t)
-			manager := workflow.NewInMemoryCheckpointManager()
+			manager := checkpoint.NewInMemoryManager()
 
 			run, err := env.env.WithCheckpointing(manager).Run(ctx, wf, "Hello")
 			if err != nil {
@@ -294,7 +298,7 @@ func TestCheckpoint_RestoreWithPendingRequests_RepublishesRequestInfoEvents(t *t
 func TestCheckpoint_RestoreClearsQueuedExternalResponsesBeforeImport(t *testing.T) {
 	ctx := context.Background()
 	wf, received := createCheckpointRequestWorkflow(t)
-	manager := workflow.NewInMemoryCheckpointManager()
+	manager := checkpoint.NewInMemoryManager()
 
 	stream, err := inproc.Lockstep.WithCheckpointing(manager).RunStreaming(ctx, wf, "Hello")
 	if err != nil {
@@ -360,7 +364,7 @@ func TestCheckpoint_RestoreClearsQueuedExternalResponsesBeforeImport(t *testing.
 
 func TestCheckpoint_RestoreClearsExecutorInstancesBeforeImport(t *testing.T) {
 	ctx := context.Background()
-	manager := workflow.NewInMemoryCheckpointManager()
+	manager := checkpoint.NewInMemoryManager()
 	var nextInstanceID int64
 	binding := &workflow.ExecutorBinding{
 		ID:           "counter",
@@ -430,13 +434,128 @@ func TestCheckpoint_RestoreClearsExecutorInstancesBeforeImport(t *testing.T) {
 	}
 }
 
+func TestCheckpoint_FirstCheckpointHasNoParent(t *testing.T) {
+	for _, env := range checkpointTestEnvironments() {
+		t.Run(env.name, func(t *testing.T) {
+			ctx := context.Background()
+			store, manager := newFileSystemJSONCheckpointManager(t)
+			wf := createCheckpointChainWorkflow(t, "a", "b")
+
+			run, err := env.env.WithCheckpointing(manager).Run(ctx, wf, "Hello")
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			checkpoints := run.Checkpoints()
+			if len(checkpoints) == 0 {
+				t.Fatal("expected at least one checkpoint")
+			}
+
+			var zero workflow.CheckpointInfo
+			children, err := store.RetrieveIndex(ctx, checkpoints[0].SessionID, &zero)
+			if err != nil {
+				t.Fatalf("RetrieveIndex: %v", err)
+			}
+			if len(children) != 0 {
+				t.Fatalf("first checkpoint was indexed with zero parent; children of zero parent = %+v", children)
+			}
+		})
+	}
+}
+
+func TestCheckpoint_SubsequentCheckpointsChainParents(t *testing.T) {
+	for _, env := range checkpointTestEnvironments() {
+		t.Run(env.name, func(t *testing.T) {
+			ctx := context.Background()
+			store, manager := newFileSystemJSONCheckpointManager(t)
+			wf := createCheckpointChainWorkflow(t, "a", "b", "c")
+
+			run, err := env.env.WithCheckpointing(manager).Run(ctx, wf, "Hello")
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			checkpoints := run.Checkpoints()
+			if len(checkpoints) < 3 {
+				t.Fatalf("checkpoint count = %d, want at least 3", len(checkpoints))
+			}
+
+			for i := 1; i < 3; i++ {
+				children, err := store.RetrieveIndex(ctx, checkpoints[i].SessionID, &checkpoints[i-1])
+				if err != nil {
+					t.Fatalf("RetrieveIndex parent %d: %v", i-1, err)
+				}
+				if !slices.Contains(children, checkpoints[i]) {
+					t.Fatalf("children of checkpoint %d = %+v, want checkpoint %d %+v", i-1, children, i, checkpoints[i])
+				}
+			}
+		})
+	}
+}
+
+func TestCheckpoint_AfterResumeUsesResumedCheckpointAsParent(t *testing.T) {
+	for _, env := range checkpointTestEnvironments() {
+		t.Run(env.name, func(t *testing.T) {
+			ctx := context.Background()
+			store, manager := newFileSystemJSONCheckpointManager(t)
+			wf, _ := createCheckpointRequestWorkflow(t)
+
+			first, err := env.env.WithCheckpointing(manager).Run(ctx, wf, "Hello")
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			pendingRequest := firstRequest(t, first.OutgoingEvents())
+			resumePoint, ok := first.LastCheckpoint()
+			if !ok {
+				t.Fatal("expected checkpoint")
+			}
+			if err := first.Close(ctx); err != nil {
+				t.Fatalf("Close first run: %v", err)
+			}
+
+			resumed, err := env.env.WithCheckpointing(manager).Resume(ctx, wf, resumePoint)
+			if err != nil {
+				t.Fatalf("Resume: %v", err)
+			}
+			response, err := pendingRequest.NewResponse("World")
+			if err != nil {
+				t.Fatalf("NewResponse: %v", err)
+			}
+			if _, err := resumed.Resume(ctx, response); err != nil {
+				t.Fatalf("Resume with response: %v", err)
+			}
+			var firstResumedCheckpoint workflow.CheckpointInfo
+			for evt := range resumed.NewEvents() {
+				stepEvt, ok := evt.(workflow.SuperStepCompletedEvent)
+				if !ok || stepEvt.CompletionInfo == nil || stepEvt.CompletionInfo.CheckpointInfo == nil {
+					continue
+				}
+				checkpointInfo := *stepEvt.CompletionInfo.CheckpointInfo
+				if checkpointInfo != resumePoint {
+					firstResumedCheckpoint = checkpointInfo
+					break
+				}
+			}
+			if firstResumedCheckpoint == (workflow.CheckpointInfo{}) {
+				t.Fatal("expected checkpoint after resume")
+			}
+
+			children, err := store.RetrieveIndex(ctx, resumePoint.SessionID, &resumePoint)
+			if err != nil {
+				t.Fatalf("RetrieveIndex: %v", err)
+			}
+			if !slices.Contains(children, firstResumedCheckpoint) {
+				t.Fatalf("children of resume point = %+v, want first resumed checkpoint %+v", children, firstResumedCheckpoint)
+			}
+		})
+	}
+}
+
 func TestCheckpoint_ExecutorCheckpointHooks(t *testing.T) {
 	for _, useCheckpointing := range []bool{true, false} {
 		t.Run(map[bool]string{true: "checkpointing", false: "no_checkpointing"}[useCheckpointing], func(t *testing.T) {
 			ctx := context.Background()
 			fixture := newCheckpointHookFixture()
 			env := inproc.OffThread
-			manager := workflow.NewInMemoryCheckpointManager()
+			manager := checkpoint.NewInMemoryManager()
 			var run *inproc.Run
 			var err error
 			if useCheckpointing {
@@ -473,7 +592,7 @@ func TestCheckpoint_ExecutorRestoreHooks(t *testing.T) {
 	for _, restoreCheckpoint := range []bool{true, false} {
 		t.Run(map[bool]string{true: "restore", false: "no_restore"}[restoreCheckpoint], func(t *testing.T) {
 			ctx := context.Background()
-			manager := workflow.NewInMemoryCheckpointManager()
+			manager := checkpoint.NewInMemoryManager()
 			runFixture := newCheckpointHookFixture()
 			run, err := inproc.OffThread.WithCheckpointing(manager).Run(ctx, runFixture.workflow, "Message")
 			if err != nil {
@@ -553,6 +672,62 @@ func createCheckpointRequestWorkflow(t *testing.T) (*workflow.Workflow, *atomic.
 		t.Fatalf("Build: %v", err)
 	}
 	return wf, received
+}
+
+func newFileSystemJSONCheckpointManager(t *testing.T) (*checkpoint.FileSystemJSONStore, checkpoint.Manager) {
+	t.Helper()
+	store, err := checkpoint.NewFileSystemJSONStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileSystemJSONStore: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("Close checkpoint store: %v", err)
+		}
+	})
+	return store, checkpoint.NewJSONManager(store)
+}
+
+func createCheckpointChainWorkflow(t *testing.T, ids ...string) *workflow.Workflow {
+	t.Helper()
+	if len(ids) == 0 {
+		t.Fatal("expected at least one executor ID")
+	}
+
+	bindings := make([]*workflow.ExecutorBinding, 0, len(ids))
+	for _, id := range ids {
+		id := id
+		bindings = append(bindings, &workflow.ExecutorBinding{
+			ID:           id,
+			ExecutorType: reflect.TypeFor[*workflow.Executor](),
+			NewExecutor: func(_ string) (*workflow.Executor, error) {
+				return &workflow.Executor{
+					ID: id,
+					Options: workflow.ExecutorOptions{
+						DisableAutoSendMessageHandlerResultObject: true,
+						DisableAutoYieldOutputHandlerResultObject: true,
+					},
+					Config: []*workflow.ExecutorConfig{{
+						ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+							return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
+								return nil, ctx.SendMessage("", msg)
+							}), nil
+						},
+					}},
+				}, nil
+			},
+		})
+	}
+
+	builder := workflow.NewBuilder(bindings[0])
+	for i := 1; i < len(bindings); i++ {
+		builder = builder.AddEdge(bindings[i-1], bindings[i])
+	}
+	wf, err := builder.Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	return wf
 }
 
 type checkpointTestEnvironment struct {
