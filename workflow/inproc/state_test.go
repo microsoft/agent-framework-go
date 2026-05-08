@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -225,6 +226,239 @@ func TestInProcessRun_StateShouldPersist_Checkpointed(t *testing.T) {
 	if !validator.Completed {
 		t.Error("Validator should be completed")
 	}
+}
+
+func TestInProcessRun_StateShouldPersist_JSONCheckpointed(t *testing.T) {
+	const stateKey = "value"
+	binding := &workflow.ExecutorBinding{
+		ID:           "stateful",
+		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+	}
+	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: binding.ID,
+			Options: workflow.ExecutorOptions{
+				DisableAutoSendMessageHandlerResultObject: true,
+				DisableAutoYieldOutputHandlerResultObject: true,
+			},
+			Config: []*workflow.ExecutorConfig{
+				{
+					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+						return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
+							switch msg.(string) {
+							case "write":
+								return nil, ctx.QueueStateUpdate(stateKey, "", "persisted")
+							case "read":
+								value, err := ctx.ReadState(stateKey, "")
+								if err != nil {
+									return nil, err
+								}
+								return nil, ctx.YieldOutput(value)
+							default:
+								return nil, nil
+							}
+						}), nil
+					},
+				},
+			},
+		}, nil
+	}
+	wf, err := workflow.NewBuilder(binding).WithOutputFrom(binding).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	_, manager := newFileSystemJSONCheckpointManager(t)
+	env := inproc.Default.WithCheckpointing(manager)
+	ctx := context.Background()
+	writeRun, err := env.Run(ctx, wf, "write")
+	if err != nil {
+		t.Fatalf("Run write: %v", err)
+	}
+	checkpointInfo, ok := writeRun.LastCheckpoint()
+	if !ok {
+		t.Fatal("expected a checkpoint after state update")
+	}
+	if err := writeRun.Close(ctx); err != nil {
+		t.Fatalf("Close write run: %v", err)
+	}
+
+	readRun, err := env.ResumeStreaming(ctx, wf, checkpointInfo)
+	if err != nil {
+		t.Fatalf("ResumeStreaming: %v", err)
+	}
+	defer func() {
+		if err := readRun.Close(ctx); err != nil {
+			t.Errorf("Close read run: %v", err)
+		}
+	}()
+	if err := readRun.SendMessage(ctx, "read"); err != nil {
+		t.Fatalf("SendMessage read: %v", err)
+	}
+	var got any
+	for event, err := range readRun.WatchUntilHalt(ctx) {
+		if err != nil {
+			t.Fatalf("WatchUntilHalt: %v", err)
+		}
+		if output, ok := event.(workflow.OutputEvent); ok {
+			got = output.Output
+		}
+	}
+	if got != "persisted" {
+		t.Fatalf("output = %v, want persisted", got)
+	}
+}
+
+func TestInProcessRun_ReadStateKeysLifecycle(t *testing.T) {
+	tests := []struct {
+		name           string
+		scope          string
+		wantAfterWrite []string
+	}{
+		{name: "shared scope", scope: "shared-scope", wantAfterWrite: []string{"key1"}},
+		{name: "private scope", scope: "", wantAfterWrite: nil},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			writer, reader, observed := stateKeysLifecycleBindings(testCase.scope)
+			wf, err := workflow.NewBuilder(writer).
+				AddEdge(writer, reader).
+				WithOutputFrom(writer, reader).
+				Build()
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+
+			ctx := context.Background()
+			stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
+			if err != nil {
+				t.Fatalf("RunStreaming: %v", err)
+			}
+			defer func() { _ = stream.CancelRun() }()
+
+			if err := stream.SendMessage(ctx, "write"); err != nil {
+				t.Fatalf("SendMessage write: %v", err)
+			}
+			for _, err := range stream.WatchUntilHalt(ctx) {
+				if err != nil {
+					t.Fatalf("WatchUntilHalt write: %v", err)
+				}
+			}
+
+			if got := observed["writer:write"]; !slices.Equal(got, []string{"key1"}) {
+				t.Fatalf("writer keys after write = %v, want [key1]", got)
+			}
+			if got := observed["reader:after-write"]; !slices.Equal(got, testCase.wantAfterWrite) {
+				t.Fatalf("reader keys after write = %v, want %v", got, testCase.wantAfterWrite)
+			}
+
+			if err := stream.SendMessage(ctx, "delete"); err != nil {
+				t.Fatalf("SendMessage delete: %v", err)
+			}
+			for _, err := range stream.WatchUntilHalt(ctx) {
+				if err != nil {
+					t.Fatalf("WatchUntilHalt delete: %v", err)
+				}
+			}
+
+			if got := observed["writer:delete"]; len(got) != 0 {
+				t.Fatalf("writer keys after delete = %v, want empty", got)
+			}
+			if got := observed["reader:after-delete"]; len(got) != 0 {
+				t.Fatalf("reader keys after delete = %v, want empty", got)
+			}
+		})
+	}
+}
+
+func stateKeysLifecycleBindings(scope string) (*workflow.ExecutorBinding, *workflow.ExecutorBinding, map[string][]string) {
+	const key = "key1"
+	observed := make(map[string][]string)
+	reader := &workflow.ExecutorBinding{
+		ID:           "reader",
+		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+	}
+
+	writer := &workflow.ExecutorBinding{
+		ID:           "writer",
+		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+	}
+	writer.NewExecutor = func(_ string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: writer.ID,
+			Options: workflow.ExecutorOptions{
+				DisableAutoSendMessageHandlerResultObject: true,
+				DisableAutoYieldOutputHandlerResultObject: true,
+			},
+			Config: []*workflow.ExecutorConfig{{
+				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+					return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(ctx *workflow.Context, message any) (any, error) {
+						switch message.(string) {
+						case "write":
+							if err := ctx.QueueStateUpdate(key, scope, "value1"); err != nil {
+								return nil, err
+							}
+							keys, err := readWorkflowStateKeys(ctx, scope)
+							if err != nil {
+								return nil, err
+							}
+							observed["writer:write"] = keys
+							return nil, ctx.SendMessage(reader.ID, "after-write")
+						case "delete":
+							if err := ctx.QueueStateUpdate(key, scope, nil); err != nil {
+								return nil, err
+							}
+							keys, err := readWorkflowStateKeys(ctx, scope)
+							if err != nil {
+								return nil, err
+							}
+							observed["writer:delete"] = keys
+							return nil, ctx.SendMessage(reader.ID, "after-delete")
+						default:
+							return nil, nil
+						}
+					}), nil
+				},
+			}},
+		}, nil
+	}
+
+	reader.NewExecutor = func(_ string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: reader.ID,
+			Options: workflow.ExecutorOptions{
+				DisableAutoSendMessageHandlerResultObject: true,
+				DisableAutoYieldOutputHandlerResultObject: true,
+			},
+			Config: []*workflow.ExecutorConfig{{
+				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+					return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(ctx *workflow.Context, message any) (any, error) {
+						keys, err := readWorkflowStateKeys(ctx, scope)
+						if err != nil {
+							return nil, err
+						}
+						observed["reader:"+message.(string)] = keys
+						return nil, nil
+					}), nil
+				},
+			}},
+		}, nil
+	}
+
+	return writer, reader, observed
+}
+
+func readWorkflowStateKeys(ctx *workflow.Context, scope string) ([]string, error) {
+	var keys []string
+	for key, err := range ctx.ReadStateKeys(scope) {
+		if err != nil {
+			return nil, err
+		}
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	return keys, nil
 }
 
 func TestInProcessRun_StateShouldError_TwoExecutors(t *testing.T) {

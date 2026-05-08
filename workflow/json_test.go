@@ -103,6 +103,72 @@ func TestRequestPortInfo_JsonRoundtrip(t *testing.T) {
 	}
 }
 
+func TestExternalRequest_JsonRoundtrip(t *testing.T) {
+	port := workflow.RequestPort{
+		ID:       "MyPort",
+		Request:  reflect.TypeFor[string](),
+		Response: reflect.TypeFor[int](),
+	}
+	request, err := workflow.NewExternalRequest("request-1", port, "payload")
+	if err != nil {
+		t.Fatalf("NewExternalRequest: %v", err)
+	}
+
+	data, err := json.Marshal(request)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var got workflow.ExternalRequest
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got.ID != request.ID {
+		t.Fatalf("ID = %q, want %q", got.ID, request.ID)
+	}
+	if got.PortInfo != request.PortInfo {
+		t.Fatalf("PortInfo = %+v, want %+v", got.PortInfo, request.PortInfo)
+	}
+	value, ok := workflow.PortableValueAs[string](got.Data)
+	if !ok || value != "payload" {
+		t.Fatalf("Data = %q, %v; want payload, true", value, ok)
+	}
+}
+
+func TestExternalResponse_JsonRoundtrip(t *testing.T) {
+	port := workflow.RequestPort{
+		ID:       "MyPort",
+		Request:  reflect.TypeFor[string](),
+		Response: reflect.TypeFor[int](),
+	}
+	request, err := workflow.NewExternalRequest("request-1", port, "payload")
+	if err != nil {
+		t.Fatalf("NewExternalRequest: %v", err)
+	}
+	response, err := request.NewResponse(13)
+	if err != nil {
+		t.Fatalf("NewResponse: %v", err)
+	}
+
+	data, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var got workflow.ExternalResponse
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got.RequestID != response.RequestID {
+		t.Fatalf("RequestID = %q, want %q", got.RequestID, response.RequestID)
+	}
+	if got.PortInfo != response.PortInfo {
+		t.Fatalf("PortInfo = %+v, want %+v", got.PortInfo, response.PortInfo)
+	}
+	value, ok := workflow.PortableValueAs[int](got.Data)
+	if !ok || value != 13 {
+		t.Fatalf("Data = %d, %v; want 13, true", value, ok)
+	}
+}
+
 func TestCheckpointInfo_JsonRoundtrip(t *testing.T) {
 	info := workflow.NewCheckpointInfo("session-1")
 	data, err := json.Marshal(info)
@@ -204,6 +270,43 @@ func TestScopeID_JsonRoundtrip(t *testing.T) {
 			}
 			if got.ExecutorID != tc.id.ExecutorID {
 				t.Errorf("ExecutorID = %q, want %q", got.ExecutorID, tc.id.ExecutorID)
+			}
+		})
+	}
+}
+
+func TestScopeKey_JsonRoundtrip(t *testing.T) {
+	cases := []struct {
+		name string
+		key  workflow.ScopeKey
+	}{
+		{
+			name: "executor scope key",
+			key: workflow.ScopeKey{
+				ID:  workflow.ScopeID{ExecutorID: "exec-1"},
+				Key: "state-key",
+			},
+		},
+		{
+			name: "shared scope key",
+			key: workflow.ScopeKey{
+				ID:  workflow.ScopeID{ScopeName: "shared-state"},
+				Key: "state-key",
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := json.Marshal(tc.key)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			var got workflow.ScopeKey
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatalf("Unmarshal: %v", err)
+			}
+			if !got.Equal(tc.key) {
+				t.Fatalf("roundtrip = %+v, want %+v", got, tc.key)
 			}
 		})
 	}

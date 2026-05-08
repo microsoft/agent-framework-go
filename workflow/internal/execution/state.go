@@ -246,7 +246,7 @@ func (sm *StateManager) ClearStateByID(scopeID workflow.ScopeID) error {
 func (sm *StateManager) applyUnpublishedUpdates(scopeID workflow.ScopeID, keys map[string]struct{}) map[string]struct{} {
 	for key := range sm.getUpdatesForScopeStrict(scopeID) {
 		update, _ := sm.queuedUpdates.Load(key)
-		if update.IsDelete {
+		if update.IsDelete || update.Value == nil {
 			delete(keys, update.Key)
 		} else {
 			keys[update.Key] = struct{}{}

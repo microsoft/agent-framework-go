@@ -165,6 +165,83 @@ func newContentAgent(updates ...*agent.ResponseUpdate) *agent.Agent {
 	)
 }
 
+func newNamedNoopAgent(id string, name string) *agent.Agent {
+	run := func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{Role: message.RoleAssistant}, nil)
+		}
+	}
+	return agent.New(
+		agent.ProviderConfig{ProviderName: "noop", Run: run},
+		agent.Config{ID: id, Name: name, DisableFuncAutoCall: true},
+	)
+}
+
+func newRecordingAgent(calls *[][]*message.Message) *agent.Agent {
+	run := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			snapshot := make([]*message.Message, len(msgs))
+			copy(snapshot, msgs)
+			*calls = append(*calls, snapshot)
+			yield(&agent.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: []message.Content{&message.TextContent{Text: "ok"}},
+			}, nil)
+		}
+	}
+	return agent.New(
+		agent.ProviderConfig{ProviderName: "recording", Run: run},
+		agent.Config{
+			ID:                  testAgentID,
+			Name:                testAgentName,
+			DisableFuncAutoCall: true,
+			HistoryProvider:     &agent.HistoryProvider{SourceID: "noop"},
+		},
+	)
+}
+
+func TestHostedAgent_BindingIDUsesAgentNameWhenProvided(t *testing.T) {
+	agentA := workflowhosting.New(newNamedNoopAgent("agent-a-id", "AgentA"), workflowhosting.Config{})
+	agentB := workflowhosting.New(newNamedNoopAgent("agent-b-id", "AgentB"), workflowhosting.Config{})
+	wf, err := workflow.NewBuilder(agentA).AddEdge(agentA, agentB).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	assertHostedAgentBindingID(t, wf, agentA, "AgentA_agent-a-id")
+	assertHostedAgentBindingID(t, wf, agentB, "AgentB_agent-b-id")
+}
+
+func TestHostedAgent_BindingIDUsesAgentIDWhenNameMissing(t *testing.T) {
+	agentA := workflowhosting.New(newNamedNoopAgent("agent-a-id", ""), workflowhosting.Config{})
+	agentB := workflowhosting.New(newNamedNoopAgent("agent-b-id", ""), workflowhosting.Config{})
+	wf, err := workflow.NewBuilder(agentA).AddEdge(agentA, agentB).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	assertHostedAgentBindingID(t, wf, agentA, "agent-a-id")
+	assertHostedAgentBindingID(t, wf, agentB, "agent-b-id")
+}
+
+func assertHostedAgentBindingID(t *testing.T, wf *workflow.Workflow, binding *workflow.ExecutorBinding, want string) {
+	t.Helper()
+	if binding.ID != want {
+		t.Fatalf("binding ID = %q, want %q", binding.ID, want)
+	}
+	executors := wf.ReflectExecutors()
+	if _, ok := executors[want]; !ok {
+		t.Fatalf("workflow executors missing %q; got %v", want, executors)
+	}
+	executor, err := binding.CreateInstance("")
+	if err != nil {
+		t.Fatalf("CreateInstance: %v", err)
+	}
+	if executor.ID != want {
+		t.Fatalf("executor instance ID = %q, want %q", executor.ID, want)
+	}
+}
+
 func collectForwardedResponseMessages(t *testing.T, a *agent.Agent, cfg workflowhosting.Config) []*message.Message {
 	t.Helper()
 	var observed []*message.Message
@@ -543,6 +620,99 @@ func TestHostedAgent_ForwardsIncomingMessages(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestHostedAgent_HandlesSingleMessage(t *testing.T) {
+	var calls [][]*message.Message
+	input := &message.Message{
+		Role:     message.RoleUser,
+		Contents: []message.Content{&message.TextContent{Text: "single message"}},
+	}
+
+	binding := workflowhosting.New(newRecordingAgent(&calls), workflowhosting.Config{})
+	wf, err := workflow.NewBuilder(binding).Build()
+	if err != nil {
+		t.Fatalf("build workflow: %v", err)
+	}
+
+	ctx := context.Background()
+	stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer func() { _ = stream.CancelRun() }()
+
+	sendStreamMessage(t, stream, ctx, input)
+	sendStreamMessage(t, stream, ctx, workflow.TurnToken{})
+	for _, err := range stream.WatchUntilHalt(ctx) {
+		if err != nil {
+			t.Fatalf("watch: %v", err)
+		}
+	}
+
+	if len(calls) != 1 {
+		t.Fatalf("agent invocation count = %d, want 1", len(calls))
+	}
+	if len(calls[0]) != 1 {
+		t.Fatalf("received message count = %d, want 1", len(calls[0]))
+	}
+	if calls[0][0] != input {
+		t.Fatalf("agent received %p, want original message %p", calls[0][0], input)
+	}
+}
+
+func TestHostedAgent_AccumulatesAndClearsMessagesPerTurn(t *testing.T) {
+	var calls [][]*message.Message
+	binding := workflowhosting.New(newRecordingAgent(&calls), workflowhosting.Config{})
+	wf, err := workflow.NewBuilder(binding).Build()
+	if err != nil {
+		t.Fatalf("build workflow: %v", err)
+	}
+
+	ctx := context.Background()
+	stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer func() { _ = stream.CancelRun() }()
+
+	first := &message.Message{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "first"}}}
+	second := &message.Message{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "second"}}}
+	third := &message.Message{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "third"}}}
+	fourth := &message.Message{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "fourth"}}}
+
+	sendStreamMessage(t, stream, ctx, first)
+	sendStreamMessage(t, stream, ctx, []*message.Message{second, third})
+	sendStreamMessage(t, stream, ctx, workflow.TurnToken{})
+	for _, err := range stream.WatchUntilHalt(ctx) {
+		if err != nil {
+			t.Fatalf("watch first turn: %v", err)
+		}
+	}
+
+	sendStreamMessage(t, stream, ctx, []*message.Message{fourth})
+	sendStreamMessage(t, stream, ctx, workflow.TurnToken{})
+	for _, err := range stream.WatchUntilHalt(ctx) {
+		if err != nil {
+			t.Fatalf("watch second turn: %v", err)
+		}
+	}
+
+	if len(calls) != 2 {
+		t.Fatalf("agent invocation count = %d, want 2", len(calls))
+	}
+	if len(calls[0]) != 3 {
+		t.Fatalf("first turn message count = %d, want 3", len(calls[0]))
+	}
+	if calls[0][0] != first || calls[0][1] != second || calls[0][2] != third {
+		t.Fatalf("first turn messages = %#v, want first/second/third", calls[0])
+	}
+	if len(calls[1]) != 1 {
+		t.Fatalf("second turn message count = %d, want 1", len(calls[1]))
+	}
+	if calls[1][0] != fourth {
+		t.Fatalf("second turn message = %p, want fourth %p", calls[1][0], fourth)
 	}
 }
 

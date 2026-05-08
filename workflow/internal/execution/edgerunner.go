@@ -15,6 +15,7 @@ import (
 	"github.com/microsoft/agent-framework-go/internal/errgroup"
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/internal/checkpoint"
+	"github.com/microsoft/agent-framework-go/workflow/internal/observability"
 )
 
 type statefulEdgeStateJSON struct {
@@ -180,9 +181,19 @@ func (em *EdgeRunner) ImportState(cp *checkpoint.Checkpoint) error {
 
 // PrepareDeliveryForEdge prepares message delivery through an edge.
 // Returns nil if the message cannot be routed through this edge.
-func (em *EdgeRunner) PrepareDeliveryForEdge(ctx context.Context, edge workflow.Edge, envelope *MessageEnvelope) (*DeliveryMapping, error) {
+func (em *EdgeRunner) PrepareDeliveryForEdge(ctx context.Context, edge workflow.Edge, envelope *MessageEnvelope) (mapping *DeliveryMapping, err error) {
+	ctx, span := observability.FromContext(ctx).StartEdgeGroupProcess(ctx, edgeGroupMetadata(edge))
+	defer func() {
+		if err != nil {
+			span.CaptureError(err)
+			span.SetDeliveryStatus(observability.DeliveryStatusException)
+		}
+		span.End()
+	}()
+
 	if edge.Condition != nil && !edge.Condition(envelope.Message) {
 		// Condition not met; do not route message.
+		span.SetDeliveryStatus(observability.DeliveryStatusDroppedConditionFalse)
 		return nil, nil
 	}
 	// Determine target executors based on edge configuration.
@@ -202,6 +213,10 @@ func (em *EdgeRunner) PrepareDeliveryForEdge(ctx context.Context, edge workflow.
 		targetIDs = slices.DeleteFunc(targetIDs, func(id string) bool {
 			return id != envelope.TargetID
 		})
+		if len(targetIDs) == 0 {
+			span.SetDeliveryStatus(observability.DeliveryStatusDroppedTargetMismatch)
+			return nil, nil
+		}
 	}
 
 	var envelopes []*MessageEnvelope
@@ -216,6 +231,7 @@ func (em *EdgeRunner) PrepareDeliveryForEdge(ctx context.Context, edge workflow.
 		envelopes = state.processMessage(envelope.SourceID, envelope)
 		if len(envelopes) == 0 {
 			// buffered message; waiting for more.
+			span.SetDeliveryStatus(observability.DeliveryStatusBuffered)
 			return nil, nil
 		}
 	}
@@ -255,6 +271,7 @@ func (em *EdgeRunner) PrepareDeliveryForEdge(ctx context.Context, edge workflow.
 	}
 	if len(targets) == 0 {
 		// Target mismatch.
+		span.SetDeliveryStatus(observability.DeliveryStatusDroppedTargetMismatch)
 		return nil, nil
 	}
 	if len(edge.Connection.SourceIDs) == 1 {
@@ -273,8 +290,10 @@ func (em *EdgeRunner) PrepareDeliveryForEdge(ctx context.Context, edge workflow.
 	}
 	if len(targets) == 0 || len(envelopes) == 0 {
 		// Type mismatch.
+		span.SetDeliveryStatus(observability.DeliveryStatusDroppedTypeMismatch)
 		return nil, nil
 	}
+	span.SetDeliveryStatus(observability.DeliveryStatusDelivered)
 	return &DeliveryMapping{
 		Targets:   targets,
 		Envelopes: envelopes,
@@ -282,15 +301,30 @@ func (em *EdgeRunner) PrepareDeliveryForEdge(ctx context.Context, edge workflow.
 }
 
 // PrepareDeliveryForInput prepares delivery of an external input message.
-func (em *EdgeRunner) PrepareDeliveryForInput(ctx context.Context, envelope *MessageEnvelope) (*DeliveryMapping, error) {
+func (em *EdgeRunner) PrepareDeliveryForInput(ctx context.Context, envelope *MessageEnvelope) (mapping *DeliveryMapping, err error) {
+	ctx, span := observability.FromContext(ctx).StartEdgeGroupProcess(ctx, observability.EdgeGroupMetadata{
+		Type:     "ResponseEdgeRunner",
+		SourceID: envelope.SourceID,
+		TargetID: em.startExecutorID + "[]",
+	})
+	defer func() {
+		if err != nil {
+			span.CaptureError(err)
+			span.SetDeliveryStatus(observability.DeliveryStatusException)
+		}
+		span.End()
+	}()
+
 	target, err := em.ensureExecutor(ctx, em.startExecutorID, em.tracer)
 	if err != nil {
 		return nil, err
 	}
 	if !target.CanHandleTypeID(envelope.MessageType()) {
 		// Type mismatch.
+		span.SetDeliveryStatus(observability.DeliveryStatusDroppedTypeMismatch)
 		return nil, nil
 	}
+	span.SetDeliveryStatus(observability.DeliveryStatusDelivered)
 	return &DeliveryMapping{
 		Targets:   []*workflow.Executor{target},
 		Envelopes: []*MessageEnvelope{envelope},
@@ -299,7 +333,19 @@ func (em *EdgeRunner) PrepareDeliveryForInput(ctx context.Context, envelope *Mes
 
 // PrepareDeliveryForResponse prepares delivery of an external response to
 // the executor that posted the matching request.
-func (em *EdgeRunner) PrepareDeliveryForResponse(ctx context.Context, response *workflow.ExternalResponse, ownerID string) (*DeliveryMapping, error) {
+func (em *EdgeRunner) PrepareDeliveryForResponse(ctx context.Context, response *workflow.ExternalResponse, ownerID string) (mapping *DeliveryMapping, err error) {
+	ctx, span := observability.FromContext(ctx).StartEdgeGroupProcess(ctx, observability.EdgeGroupMetadata{
+		Type:     "ResponseEdgeRunner",
+		TargetID: ownerID + "[" + response.PortInfo.PortID + "]",
+	})
+	defer func() {
+		if err != nil {
+			span.CaptureError(err)
+			span.SetDeliveryStatus(observability.DeliveryStatusException)
+		}
+		span.End()
+	}()
+
 	if ownerID == "" {
 		return nil, fmt.Errorf("response %q has no owning executor", response.RequestID)
 	}
@@ -310,10 +356,44 @@ func (em *EdgeRunner) PrepareDeliveryForResponse(ctx context.Context, response *
 	}
 	if !target.CanHandleTypeID(envelope.MessageType()) {
 		// Type mismatch.
+		span.SetDeliveryStatus(observability.DeliveryStatusDroppedTypeMismatch)
 		return nil, nil
 	}
+	span.SetDeliveryStatus(observability.DeliveryStatusDelivered)
 	return &DeliveryMapping{
 		Targets:   []*workflow.Executor{target},
 		Envelopes: []*MessageEnvelope{envelope},
 	}, nil
+}
+
+func edgeGroupMetadata(edge workflow.Edge) observability.EdgeGroupMetadata {
+	metadata := observability.EdgeGroupMetadata{Type: edgeGroupType(edge)}
+	switch metadata.Type {
+	case "FanInEdgeRunner":
+		if len(edge.Connection.SinkIDs) == 1 {
+			metadata.TargetID = edge.Connection.SinkIDs[0]
+		}
+	case "FanOutEdgeRunner":
+		if len(edge.Connection.SourceIDs) == 1 {
+			metadata.SourceID = edge.Connection.SourceIDs[0]
+		}
+	default:
+		if len(edge.Connection.SourceIDs) == 1 {
+			metadata.SourceID = edge.Connection.SourceIDs[0]
+		}
+		if len(edge.Connection.SinkIDs) == 1 {
+			metadata.TargetID = edge.Connection.SinkIDs[0]
+		}
+	}
+	return metadata
+}
+
+func edgeGroupType(edge workflow.Edge) string {
+	if len(edge.Connection.SourceIDs) > 1 {
+		return "FanInEdgeRunner"
+	}
+	if len(edge.Connection.SinkIDs) > 1 || edge.Assigner != nil {
+		return "FanOutEdgeRunner"
+	}
+	return "DirectEdgeRunner"
 }

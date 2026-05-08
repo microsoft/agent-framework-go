@@ -16,14 +16,14 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/internal/checkpoint"
 	"github.com/microsoft/agent-framework-go/workflow/internal/execution"
+	"github.com/microsoft/agent-framework-go/workflow/internal/observability"
 )
 
 // runnerContext manages the execution context for a workflow run.
 type runnerContext struct {
-	wf              *workflow.Workflow
-	sessionID       string
-	tracer          *stepTracer
-	tracePropagator workflow.TraceContextPropagator
+	wf        *workflow.Workflow
+	sessionID string
+	tracer    *stepTracer
 
 	edgeMap  *execution.EdgeRunner
 	nextStep atomic.Pointer[execution.StepContext]
@@ -59,13 +59,11 @@ func newInProcessRunnerContext(
 	tracer *stepTracer,
 	existingOwnerSignoff any,
 	enableConcurrentRuns bool,
-	tracePropagator workflow.TraceContextPropagator,
 ) (*runnerContext, error) {
 	ctx := &runnerContext{
 		wf:                       wf,
 		sessionID:                sessionID,
 		tracer:                   tracer,
-		tracePropagator:          tracePropagator,
 		executors:                make(map[string]*workflow.Executor),
 		queuedExternalDeliveries: make([]func(context.Context) error, 0),
 		joinedSubworkflowRunners: make(map[string]execution.SuperStepRunner),
@@ -454,24 +452,28 @@ func (proc *runnerContext) AddEvent(ctx context.Context, event workflow.Event) e
 
 // SendMessage sends a message from one executor to another through the workflow edges.
 func (proc *runnerContext) SendMessage(ctx context.Context, sourceID, targetID string, message any) error {
+	telemetry := observability.FromContext(ctx)
+	ctx, span := telemetry.StartMessageSend(ctx, sourceID, targetID, message)
+	defer span.End()
+
 	if err := proc.checkEnded(); err != nil {
+		span.CaptureError(err)
 		return err
 	}
 
 	envelope, err := execution.NewMessageEnvelope(message, nil, sourceID, targetID)
 	if err != nil {
+		span.CaptureError(err)
 		return err
 	}
-	// Propagate the current trace context into the envelope so that
-	// spans created when the target executor processes the message are
-	// linked to the sending executor's trace.
-	if proc.tracePropagator != nil {
-		envelope.TraceContext = proc.tracePropagator.Extract(ctx)
+	if traceContext := telemetry.ExtractTraceContext(ctx); len(traceContext) > 0 {
+		envelope.TraceContext = traceContext
 	}
 	edges := proc.wf.Edges[sourceID]
 	for _, edge := range edges {
 		mapping, err := proc.edgeMap.PrepareDeliveryForEdge(ctx, edge, envelope)
 		if err != nil {
+			span.CaptureError(err)
 			return err
 		}
 		if mapping != nil {
@@ -484,13 +486,9 @@ func (proc *runnerContext) SendMessage(ctx context.Context, sourceID, targetID s
 
 // Bind creates a bound workflow context for a specific executor.
 func (proc *runnerContext) Bind(ctx context.Context, executorID string, traceContext map[string]string) *workflow.Context {
-	// Restore the span context from the trace context carried by the
-	// message envelope, so any spans the executor creates are properly
-	// parented under the sending executor's span.
 	boundCtx := ctx
-	if proc.tracePropagator != nil {
-		boundCtx = proc.tracePropagator.Inject(ctx, traceContext)
-	}
+	telemetry := observability.FromContext(ctx)
+	boundCtx = observability.ContextWithTelemetry(boundCtx, telemetry)
 
 	return &workflow.Context{
 		Context: boundCtx,
@@ -506,6 +504,9 @@ func (proc *runnerContext) Bind(ctx context.Context, executorID string, traceCon
 		YieldOutput: func(output any) error {
 			// Check if this executor can output
 			if _, ok := proc.wf.OutputExecutors[executorID]; ok {
+				if err := proc.validateOutputType(executorID, output); err != nil {
+					return err
+				}
 				return proc.AddEvent(boundCtx, workflow.OutputEvent{
 					ExecutorID: executorID,
 					Output:     output,
@@ -585,6 +586,39 @@ func (proc *runnerContext) Bind(ctx context.Context, executorID string, traceCon
 
 		ConcurrentRunsEnabled: proc.concurrentRunsEnabled,
 	}
+}
+
+func (proc *runnerContext) validateOutputType(executorID string, output any) error {
+	if output == nil {
+		return fmt.Errorf("executor %q cannot output nil", executorID)
+	}
+
+	proc.executorsMu.RLock()
+	executor, ok := proc.executors[executorID]
+	proc.executorsMu.RUnlock()
+	if !ok {
+		return fmt.Errorf("executor %q is not instantiated", executorID)
+	}
+
+	declaredTypes := executor.OutputTypes()
+	if len(declaredTypes) == 0 {
+		return nil
+	}
+
+	outputType := reflect.TypeOf(output)
+	if slices.ContainsFunc(declaredTypes, outputType.AssignableTo) {
+		return nil
+	}
+	return fmt.Errorf("executor %q cannot output object of type %s; expected one of %v", executorID, outputType, sortedTypeNames(declaredTypes))
+}
+
+func sortedTypeNames(types []reflect.Type) []string {
+	names := make([]string, 0, len(types))
+	for _, typ := range types {
+		names = append(names, typ.String())
+	}
+	slices.Sort(names)
+	return names
 }
 
 // Post raises an external request originating from the executor identified

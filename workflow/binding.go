@@ -66,6 +66,7 @@ func (eb *ExecutorBinding) CreateInstance(sessionID string) (*Executor, error) {
 	if want, got := eb.ID, ex.ID; got != want {
 		return nil, fmt.Errorf("Executor ID mismatch: expected %q, but got %q", want, got)
 	}
+	ex.ExecutorType = eb.ExecutorType
 	return ex, nil
 }
 

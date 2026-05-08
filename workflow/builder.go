@@ -3,12 +3,16 @@
 package workflow
 
 import (
+	"context"
 	"fmt"
 	"iter"
 	"log/slog"
 	"maps"
 	"reflect"
 	"slices"
+
+	internalobservability "github.com/microsoft/agent-framework-go/workflow/internal/observability"
+	workflowobservability "github.com/microsoft/agent-framework-go/workflow/observability"
 )
 
 type Builder struct {
@@ -25,6 +29,7 @@ type Builder struct {
 	conditionlessConnections []EdgeConnection
 	inputPorts               map[string]RequestPort
 	outputExecutors          map[string]struct{}
+	telemetry                *internalobservability.Context
 }
 
 func NewBuilder(start *ExecutorBinding) *Builder {
@@ -52,6 +57,15 @@ func (wb *Builder) WithDescription(description string) *Builder {
 		return wb
 	}
 	wb.description = description
+	return wb
+}
+
+// WithTelemetry enables telemetry instrumentation for workflows built by this builder.
+func (wb *Builder) WithTelemetry(tracer workflowobservability.Tracer, options TelemetryOptions) *Builder {
+	if wb.err != nil {
+		return wb
+	}
+	wb.telemetry = internalobservability.New(options.observabilityOptions(tracer))
 	return wb
 }
 
@@ -190,13 +204,26 @@ func (wb *Builder) Build() (*Workflow, error) {
 }
 
 func (wb *Builder) build(validateOrphans bool) (*Workflow, error) {
+	telemetry := wb.telemetry
+	if telemetry == nil {
+		telemetry = internalobservability.Disabled()
+	}
+	_, activity := telemetry.StartWorkflowBuild(context.Background())
+	defer activity.End()
+	activity.AddEvent(internalobservability.EventBuildStarted)
+
 	if wb.err != nil {
+		activity.AddEvent(internalobservability.EventBuildError, internalobservability.BuildErrorAttributes(wb.err)...)
+		activity.CaptureError(wb.err)
 		return nil, wb.err
 	}
 	if !wb.validate(validateOrphans) {
+		activity.AddEvent(internalobservability.EventBuildError, internalobservability.BuildErrorAttributes(wb.err)...)
+		activity.CaptureError(wb.err)
 		return nil, wb.err
 	}
-	return &Workflow{
+	activity.AddEvent(internalobservability.EventBuildValidationCompleted)
+	wf := &Workflow{
 		StartExecutorID:  wb.startExecutorId,
 		Name:             wb.name,
 		Description:      wb.description,
@@ -204,7 +231,11 @@ func (wb *Builder) build(validateOrphans bool) (*Workflow, error) {
 		Ports:            wb.inputPorts,
 		ExecutorBindings: wb.executorsBindings,
 		OutputExecutors:  wb.outputExecutors,
-	}, nil
+		telemetry:        telemetry,
+	}
+	internalobservability.SetBuildWorkflowAttributes(activity, observabilityMetadata(wf, ""), workflowTelemetryDefinitionFrom(wf))
+	activity.AddEvent(internalobservability.EventBuildCompleted)
+	return wf, nil
 }
 
 func (wb *Builder) validate(validateOrphans bool) bool {

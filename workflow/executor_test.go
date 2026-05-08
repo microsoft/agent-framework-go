@@ -90,6 +90,114 @@ func TestStatefulExecutorCache_AggregatesIncrementally(t *testing.T) {
 	}
 }
 
+func TestStatefulExecutorCache_ResetRestartsAggregate(t *testing.T) {
+	var got []string
+	binding := aggregatorBinding("agg", &got)
+	wf, err := workflow.NewBuilder(binding).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	ctx := context.Background()
+	run, err := inproc.Default.Run(ctx, wf, "a")
+	if err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	if _, err := run.Resume(ctx, "b"); err != nil {
+		t.Fatalf("first Resume: %v", err)
+	}
+	if err := run.Close(ctx); err != nil {
+		t.Fatalf("Close first run: %v", err)
+	}
+
+	run, err = inproc.Default.Run(ctx, wf, "c")
+	if err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	if err := run.Close(ctx); err != nil {
+		t.Fatalf("Close second run: %v", err)
+	}
+
+	want := []string{"a", "a+b", "c"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("aggregation = %v, want %v", got, want)
+	}
+}
+
+func TestStatefulExecutorCache_NilStateRestartsAggregate(t *testing.T) {
+	var got []string
+	binding := nullableAggregatorBinding("agg", &got)
+	wf, err := workflow.NewBuilder(binding).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	ctx := context.Background()
+	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer func() { _ = stream.CancelRun() }()
+
+	for _, input := range []string{"a", "clear", "b"} {
+		if err := stream.SendMessage(ctx, input); err != nil {
+			t.Fatalf("SendMessage(%q): %v", input, err)
+		}
+	}
+	for evt, err := range stream.WatchStream(ctx) {
+		if err != nil {
+			t.Fatalf("watch: %v", err)
+		}
+		_ = evt
+	}
+
+	want := []string{"a", "<nil>", "b"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("aggregation = %v, want %v", got, want)
+	}
+}
+
+func nullableAggregatorBinding(id string, results *[]string) *workflow.ExecutorBinding {
+	binding := &workflow.ExecutorBinding{
+		ID:           id,
+		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+	}
+	cache := &workflow.StatefulExecutorCache[*string]{
+		StateKey:            "nullable-aggregate",
+		ScopeName:           "aggregate-scope",
+		InitialStateFactory: func() *string { return nil },
+	}
+	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: id,
+			Options: workflow.ExecutorOptions{
+				DisableAutoSendMessageHandlerResultObject: true,
+				DisableAutoYieldOutputHandlerResultObject: true,
+			},
+			Config: []*workflow.ExecutorConfig{{
+				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+					return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
+						input := msg.(string)
+						return nil, cache.InvokeWithState(ctx, false, func(_ *workflow.Context, state *string) (*string, error) {
+							if input == "clear" {
+								*results = append(*results, "<nil>")
+								return nil, nil
+							}
+							value := input
+							if state != nil {
+								value = *state + "+" + input
+							}
+							*results = append(*results, value)
+							return &value, nil
+						})
+					}), nil
+				},
+			}},
+		}, nil
+	}
+	return binding
+}
+
 func TestWorkflow_RejectsReuseSharedExecutorWithoutReset(t *testing.T) {
 	binding := &workflow.ExecutorBinding{
 		ID:               "shared",

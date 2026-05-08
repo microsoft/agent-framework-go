@@ -10,6 +10,7 @@ import (
 
 	"github.com/microsoft/agent-framework-go/internal/concurrent"
 	"github.com/microsoft/agent-framework-go/workflow"
+	"github.com/microsoft/agent-framework-go/workflow/internal/observability"
 )
 
 type RunEventStream interface {
@@ -20,6 +21,25 @@ type RunEventStream interface {
 	GetStatus(ctx context.Context) (RunStatus, error)
 
 	TakeEventStream(ctx context.Context, blockOnPendingRequest bool) iter.Seq2[workflow.Event, error]
+}
+
+func workflowMetadata(wf *workflow.Workflow, sessionID string) observability.WorkflowMetadata {
+	if wf == nil {
+		return observability.WorkflowMetadata{SessionID: sessionID}
+	}
+	return observability.WorkflowMetadata{
+		ID:          wf.StartExecutorID,
+		Name:        wf.Name,
+		Description: wf.Description,
+		SessionID:   sessionID,
+	}
+}
+
+func contextWithWorkflowTelemetry(ctx context.Context, wf *workflow.Workflow) context.Context {
+	if wf == nil {
+		return observability.ContextWithTelemetry(ctx, nil)
+	}
+	return wf.ContextWithTelemetry(ctx)
 }
 
 type inputWaiter struct {
@@ -105,11 +125,26 @@ func (s *streamingRunEventStream) Start() {
 }
 
 func (s *streamingRunEventStream) runLoop() {
+	wf := s.stepRunner.Workflow()
+	ctx := contextWithWorkflowTelemetry(s.runLoopCtx, wf)
+	telemetry := observability.FromContext(ctx)
+	ctx, sessionActivity := telemetry.StartWorkflowSession(ctx, workflowMetadata(wf, s.stepRunner.SessionID()))
+	var sessionErr error
+	defer func() {
+		if sessionErr != nil {
+			sessionActivity.AddErrorEvent(observability.EventSessionError, sessionErr)
+			sessionActivity.CaptureError(sessionErr)
+		} else {
+			sessionActivity.AddEvent(observability.EventSessionCompleted)
+		}
+		sessionActivity.End()
+	}()
+
 	defer close(s.runLoopDone)
 	defer s.runLoopCancel()
 	defer s.setStatus(RunStatusEnded)
 
-	ctx, cancel := context.WithCancel(s.runLoopCtx)
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	// Subscribe to events - they will flow directly to the channel as they're raised
@@ -118,6 +153,7 @@ func (s *streamingRunEventStream) runLoop() {
 	eventSink.AddHandler(eventHandler)
 	defer eventSink.RemoveHandler(eventHandler)
 	if err := s.stepRunner.RepublishPendingEvents(ctx); err != nil {
+		sessionErr = err
 		s.sendEvent(ctx, workflow.ErrorEvent{Error: err})
 		cancel()
 		return
@@ -139,6 +175,9 @@ func (s *streamingRunEventStream) runLoop() {
 		default:
 		}
 
+		cycleCtx, runActivity := telemetry.StartWorkflowRun(ctx, workflowMetadata(wf, s.stepRunner.SessionID()))
+		runActivity.AddEvent(observability.EventWorkflowStarted)
+
 		// Run all available supersteps continuously
 		// Events are streamed out in real-time as they happen via the event handler
 		if s.stepRunner.HasUnprocessedMessages() {
@@ -151,23 +190,30 @@ func (s *streamingRunEventStream) runLoop() {
 
 			// Emit StartedEvent only when there's actual work to process,
 			// to avoid spurious events on no-work loop iterations.
-			s.sendEvent(ctx, workflow.StartedEvent{})
+			s.sendEvent(cycleCtx, workflow.StartedEvent{})
 
 			for s.stepRunner.HasUnprocessedMessages() {
 				select {
-				case <-ctx.Done():
+				case <-cycleCtx.Done():
+					runActivity.End()
 					return
 				default:
 				}
 
-				if _, err := s.stepRunner.RunSuperStep(ctx); err != nil {
+				if _, err := s.stepRunner.RunSuperStep(cycleCtx); err != nil {
+					runActivity.AddErrorEvent(observability.EventWorkflowError, err)
+					runActivity.CaptureError(err)
+					runActivity.End()
+					sessionErr = err
 					// Send error event
-					s.sendEvent(ctx, workflow.ErrorEvent{Error: err})
+					s.sendEvent(cycleCtx, workflow.ErrorEvent{Error: err})
 					cancel()
 					return
 				}
 			}
 		}
+		runActivity.AddEvent(observability.EventWorkflowCompleted)
+		runActivity.End()
 
 		// Update status based on what's waiting
 		if s.stepRunner.HasUnservicedRequests() {
@@ -401,6 +447,21 @@ func (l *lockstepRunEventStream) setStatus(status RunStatus) {
 
 func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPendingRequest bool) iter.Seq2[workflow.Event, error] {
 	return func(yield func(workflow.Event, error) bool) {
+		wf := l.stepRunner.Workflow()
+		ctx := contextWithWorkflowTelemetry(ctx, wf)
+		telemetry := observability.FromContext(ctx)
+		ctx, sessionActivity := telemetry.StartWorkflowSession(ctx, workflowMetadata(wf, l.stepRunner.SessionID()))
+		var sessionErr error
+		defer func() {
+			if sessionErr != nil {
+				sessionActivity.AddErrorEvent(observability.EventSessionError, sessionErr)
+				sessionActivity.CaptureError(sessionErr)
+			} else {
+				sessionActivity.AddEvent(observability.EventSessionCompleted)
+			}
+			sessionActivity.End()
+		}()
+
 		linkedCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
 
@@ -445,6 +506,7 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 		}
 
 		if err := l.stepRunner.RepublishPendingEvents(linkedCtx); err != nil {
+			sessionErr = err
 			yield(nil, err)
 			return
 		}
@@ -454,6 +516,14 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 
 		l.setStatus(RunStatusRunning)
 
+		var runActivity *observability.Activity
+		cycleCtx := linkedCtx
+		startRunActivity := func() {
+			cycleCtx, runActivity = telemetry.StartWorkflowRun(linkedCtx, workflowMetadata(wf, l.stepRunner.SessionID()))
+			runActivity.AddEvent(observability.EventWorkflowStarted)
+		}
+
+		startRunActivity()
 		// Emit StartedEvent only when there's actual work to process.
 		if l.stepRunner.HasUnprocessedMessages() {
 			l.eventQueue.Enqueue(workflow.StartedEvent{})
@@ -461,8 +531,14 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 
 		for {
 			// Run all available supersteps
-			for l.stepRunner.HasUnprocessedMessages() && linkedCtx.Err() == nil {
-				if _, err := l.stepRunner.RunSuperStep(linkedCtx); err != nil {
+			for l.stepRunner.HasUnprocessedMessages() && cycleCtx.Err() == nil {
+				if _, err := l.stepRunner.RunSuperStep(cycleCtx); err != nil {
+					if runActivity != nil {
+						runActivity.AddErrorEvent(observability.EventWorkflowError, err)
+						runActivity.CaptureError(err)
+						runActivity.End()
+					}
+					sessionErr = err
 					if !errors.Is(err, context.Canceled) {
 						yield(nil, err)
 					}
@@ -472,6 +548,11 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 				if !drainEvents() {
 					return
 				}
+			}
+			if runActivity != nil {
+				runActivity.AddEvent(observability.EventWorkflowCompleted)
+				runActivity.End()
+				runActivity = nil
 			}
 
 			// Update status
@@ -491,6 +572,10 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 			if blockOnPendingRequest && status == RunStatusPendingRequests {
 				if err := l.inputWaiter.waitForInput(linkedCtx); err != nil {
 					return
+				}
+				startRunActivity()
+				if l.stepRunner.HasUnprocessedMessages() {
+					l.eventQueue.Enqueue(workflow.StartedEvent{})
 				}
 			} else {
 				// No more work to do

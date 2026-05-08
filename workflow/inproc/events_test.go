@@ -196,6 +196,67 @@ func TestRun_ResumeAcceptsMessages(t *testing.T) {
 	}
 }
 
+func TestRunAndStreamingRun_ProduceEquivalentOutputs(t *testing.T) {
+	ex := minimalEchoBinding("ex")
+	wf, err := workflow.NewBuilder(ex).WithOutputFrom(ex).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	ctx := context.Background()
+	run, err := inproc.Default.Run(ctx, wf, "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	nonStreamingOutputs := collectOutputValues(run.OutgoingEvents())
+	if err := run.Close(ctx); err != nil {
+		t.Fatalf("Close Run: %v", err)
+	}
+
+	stream, err := inproc.Default.RunStreaming(ctx, wf, "go")
+	if err != nil {
+		t.Fatalf("RunStreaming: %v", err)
+	}
+	defer func() { _ = stream.Close(ctx) }()
+	streamingOutputs := collectStreamingOutputValues(t, ctx, stream)
+
+	if !slices.Equal(nonStreamingOutputs, streamingOutputs) {
+		t.Fatalf("streaming outputs = %v, want %v", streamingOutputs, nonStreamingOutputs)
+	}
+}
+
+func TestStreamingRun_AcceptsSequentialMessages(t *testing.T) {
+	ex := minimalEchoBinding("ex")
+	wf, err := workflow.NewBuilder(ex).WithOutputFrom(ex).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	ctx := context.Background()
+	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
+	if err != nil {
+		t.Fatalf("RunStreaming: %v", err)
+	}
+	defer func() { _ = stream.CancelRun() }()
+
+	for _, message := range []string{"first", "second"} {
+		if err := stream.SendMessage(ctx, message); err != nil {
+			t.Fatalf("SendMessage(%q): %v", message, err)
+		}
+		outputs := collectStreamingOutputValues(t, ctx, stream)
+		if !slices.Equal(outputs, []string{"ok"}) {
+			t.Fatalf("outputs after %q = %v, want [ok]", message, outputs)
+		}
+		status, err := stream.GetStatus(ctx)
+		if err != nil {
+			t.Fatalf("GetStatus after %q: %v", message, err)
+		}
+		if status != inproc.RunStatusIdle {
+			t.Fatalf("status after %q = %v, want Idle", message, status)
+		}
+	}
+}
+
 func TestStreamingRun_SendMessageReturnsErrInvalidInputType(t *testing.T) {
 	ex := minimalEchoBinding("ex")
 	wf, err := workflow.NewBuilder(ex).WithOutputFrom(ex).Build()
@@ -249,6 +310,37 @@ func countOutputs(events iter.Seq[workflow.Event]) int {
 		}
 	}
 	return count
+}
+
+func collectOutputValues(events iter.Seq[workflow.Event]) []string {
+	var outputs []string
+	for evt := range events {
+		if output, ok := evt.(workflow.OutputEvent); ok {
+			value, ok := output.Output.(string)
+			if ok {
+				outputs = append(outputs, value)
+			}
+		}
+	}
+	return outputs
+}
+
+func collectStreamingOutputValues(t *testing.T, ctx context.Context, stream *inproc.StreamingRun) []string {
+	t.Helper()
+	var outputs []string
+	for evt, err := range stream.WatchStream(ctx) {
+		if err != nil {
+			t.Fatalf("WatchStream: %v", err)
+		}
+		if output, ok := evt.(workflow.OutputEvent); ok {
+			value, ok := output.Output.(string)
+			if !ok {
+				t.Fatalf("OutputEvent.Output = %T, want string", output.Output)
+			}
+			outputs = append(outputs, value)
+		}
+	}
+	return outputs
 }
 
 func sendStreamingMessage(t *testing.T, stream *inproc.StreamingRun, ctx context.Context, message any) {

@@ -83,6 +83,10 @@ func newTestSuperStepRunner() *testSuperStepRunner {
 
 func (r *testSuperStepRunner) SessionID() string { return "session" }
 
+func (r *testSuperStepRunner) Workflow() *workflow.Workflow {
+	return &workflow.Workflow{StartExecutorID: "start"}
+}
+
 func (r *testSuperStepRunner) StartExecutorID() string { return "start" }
 
 func (r *testSuperStepRunner) HasUnservicedRequests() bool { return false }

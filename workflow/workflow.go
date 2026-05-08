@@ -11,6 +11,8 @@ import (
 	"maps"
 	"reflect"
 	"sync/atomic"
+
+	"github.com/microsoft/agent-framework-go/workflow/internal/observability"
 )
 
 type TurnToken struct {
@@ -80,6 +82,7 @@ type Workflow struct {
 
 	needsReset atomic.Bool
 	ownerToken atomic.Pointer[workflowOwner]
+	telemetry  *observability.Context
 }
 
 type workflowOwner struct {
@@ -110,6 +113,13 @@ func (w *Workflow) HasResettableExecutors() bool {
 		}
 	}
 	return false
+}
+
+func (w *Workflow) ContextWithTelemetry(ctx context.Context) context.Context {
+	if w == nil {
+		return observability.ContextWithTelemetry(ctx, nil)
+	}
+	return observability.ContextWithTelemetry(ctx, w.telemetry)
 }
 
 func (w *Workflow) hasSharedExecutors() bool {
@@ -310,4 +320,28 @@ func (ctx *Context) GetContext() context.Context {
 		return context.Background()
 	}
 	return ctx.Context
+}
+
+func (ctx *Context) telemetry() *observability.Context {
+	return observability.FromContext(ctx.GetContext())
+}
+
+func (ctx *Context) traceContextStrings() map[string]string {
+	if ctx == nil || ctx.TraceContext == nil {
+		return nil
+	}
+	traceContext := ctx.TraceContext()
+	if len(traceContext) == 0 {
+		return nil
+	}
+	result := make(map[string]string, len(traceContext))
+	for key, value := range traceContext {
+		if str, ok := value.(string); ok {
+			result[key] = str
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
