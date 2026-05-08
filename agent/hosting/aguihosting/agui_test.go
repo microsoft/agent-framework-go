@@ -218,7 +218,7 @@ func TestHandler_ReasoningContent_EmitsReasoningEvents(t *testing.T) {
 	}
 	reasoningEndIdx := strings.Index(content, "REASONING_MESSAGE_END")
 	textStartIdx := strings.Index(content, "TEXT_MESSAGE_START")
-	if reasoningEndIdx == -1 || textStartIdx == -1 || reasoningEndIdx > textStartIdx {
+	if reasoningEndIdx == -1 || textStartIdx == -1 || reasoningEndIdx >= textStartIdx {
 		t.Fatalf("expected REASONING_MESSAGE_END before TEXT_MESSAGE_START, got %q", content)
 	}
 	if !strings.Contains(content, "thinking step one") {
