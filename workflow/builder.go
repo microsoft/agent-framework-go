@@ -266,14 +266,17 @@ func (wb *Builder) validate(validateOrphans bool) bool {
 			}
 		}
 	}
-	// Log dead-end executors (no outgoing edges). These may be intentional final
-	// nodes but are worth flagging for review.
+	// Log dead-end executors (no outgoing edges). Executors declared as outputs
+	// are expected final nodes; other dead ends are worth flagging for review.
 	executorsWithOutgoing := make(map[string]struct{}, len(wb.edges))
 	for sourceID := range wb.edges {
 		executorsWithOutgoing[sourceID] = struct{}{}
 	}
 	var deadEnds []string
 	for id := range wb.executorsBindings {
+		if _, isOutput := wb.outputExecutors[id]; isOutput {
+			continue
+		}
 		if _, hasOutgoing := executorsWithOutgoing[id]; !hasOutgoing {
 			deadEnds = append(deadEnds, id)
 		}
