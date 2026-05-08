@@ -173,6 +173,88 @@ func TestHandler_MixedToolInvocations_SuppressesServerToolResults(t *testing.T) 
 	}
 }
 
+func TestHandler_ReasoningContent_EmitsReasoningEvents(t *testing.T) {
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
+				MessageID: "msg-reason-1",
+				Role:      message.RoleAssistant,
+				Contents: message.Contents{
+					&message.TextReasoningContent{Text: "thinking step one"},
+				},
+			}, nil)
+			yield(&agent.ResponseUpdate{
+				MessageID: "msg-reason-1",
+				Role:      message.RoleAssistant,
+				Contents: message.Contents{
+					&message.TextReasoningContent{Text: " and step two"},
+				},
+			}, nil)
+			yield(&agent.ResponseUpdate{
+				MessageID: "msg-text-1",
+				Role:      message.RoleAssistant,
+				Contents: message.Contents{
+					&message.TextContent{Text: "final answer"},
+				},
+			}, nil)
+		}
+	})
+	h := aguihosting.NewJSONHTTPHandler(aguihosting.HandlerConfig{Agent: a})
+
+	body := `{"threadId":"thread-1","runId":"run-1","messages":[{"id":"u1","role":"user","content":"ping"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	content := rr.Body.String()
+	if !strings.Contains(content, "REASONING_MESSAGE_START") {
+		t.Fatalf("expected REASONING_MESSAGE_START, got %q", content)
+	}
+	if !strings.Contains(content, "REASONING_MESSAGE_CONTENT") {
+		t.Fatalf("expected REASONING_MESSAGE_CONTENT, got %q", content)
+	}
+	if !strings.Contains(content, "REASONING_MESSAGE_END") {
+		t.Fatalf("expected REASONING_MESSAGE_END, got %q", content)
+	}
+	if !strings.Contains(content, "thinking step one") {
+		t.Fatalf("expected reasoning text in events, got %q", content)
+	}
+	if !strings.Contains(content, "TEXT_MESSAGE_START") || !strings.Contains(content, "final answer") {
+		t.Fatalf("expected text message events after reasoning, got %q", content)
+	}
+}
+
+func TestHandler_ReasoningContent_WithEncryptedValue(t *testing.T) {
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
+				MessageID: "msg-enc-1",
+				Role:      message.RoleAssistant,
+				Contents: message.Contents{
+					&message.TextReasoningContent{
+						Text:          "hidden reasoning",
+						ProtectedData: "encrypted-opaque-token",
+					},
+				},
+			}, nil)
+		}
+	})
+	h := aguihosting.NewJSONHTTPHandler(aguihosting.HandlerConfig{Agent: a})
+
+	body := `{"threadId":"thread-1","runId":"run-1","messages":[{"id":"u1","role":"user","content":"ping"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	content := rr.Body.String()
+	if !strings.Contains(content, "REASONING_ENCRYPTED_VALUE") {
+		t.Fatalf("expected REASONING_ENCRYPTED_VALUE event, got %q", content)
+	}
+	if !strings.Contains(content, "encrypted-opaque-token") {
+		t.Fatalf("expected encrypted value in event, got %q", content)
+	}
+}
+
 func TestHandler_UnknownDataContent_UsesCurrentMessageLifecycle(t *testing.T) {
 	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
