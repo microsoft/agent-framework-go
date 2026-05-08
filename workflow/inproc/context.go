@@ -20,9 +20,10 @@ import (
 
 // runnerContext manages the execution context for a workflow run.
 type runnerContext struct {
-	wf        *workflow.Workflow
-	sessionID string
-	tracer    *stepTracer
+	wf              *workflow.Workflow
+	sessionID       string
+	tracer          *stepTracer
+	tracePropagator workflow.TraceContextPropagator
 
 	edgeMap  *execution.EdgeRunner
 	nextStep atomic.Pointer[execution.StepContext]
@@ -58,11 +59,13 @@ func newInProcessRunnerContext(
 	tracer *stepTracer,
 	existingOwnerSignoff any,
 	enableConcurrentRuns bool,
+	tracePropagator workflow.TraceContextPropagator,
 ) (*runnerContext, error) {
 	ctx := &runnerContext{
 		wf:                       wf,
 		sessionID:                sessionID,
 		tracer:                   tracer,
+		tracePropagator:          tracePropagator,
 		executors:                make(map[string]*workflow.Executor),
 		queuedExternalDeliveries: make([]func(context.Context) error, 0),
 		joinedSubworkflowRunners: make(map[string]execution.SuperStepRunner),
@@ -455,10 +458,15 @@ func (proc *runnerContext) SendMessage(ctx context.Context, sourceID, targetID s
 		return err
 	}
 
-	// TODO: Add OpenTelemetry trace context propagation
 	envelope, err := execution.NewMessageEnvelope(message, nil, sourceID, targetID)
 	if err != nil {
 		return err
+	}
+	// Propagate the current trace context into the envelope so that
+	// spans created when the target executor processes the message are
+	// linked to the sending executor's trace.
+	if proc.tracePropagator != nil {
+		envelope.TraceContext = proc.tracePropagator.Extract(ctx)
 	}
 	edges := proc.wf.Edges[sourceID]
 	for _, edge := range edges {
@@ -476,21 +484,29 @@ func (proc *runnerContext) SendMessage(ctx context.Context, sourceID, targetID s
 
 // Bind creates a bound workflow context for a specific executor.
 func (proc *runnerContext) Bind(ctx context.Context, executorID string, traceContext map[string]string) *workflow.Context {
+	// Restore the span context from the trace context carried by the
+	// message envelope, so any spans the executor creates are properly
+	// parented under the sending executor's span.
+	boundCtx := ctx
+	if proc.tracePropagator != nil {
+		boundCtx = proc.tracePropagator.Inject(ctx, traceContext)
+	}
+
 	return &workflow.Context{
-		Context: ctx,
+		Context: boundCtx,
 
 		AddEvent: func(event workflow.Event) error {
-			return proc.AddEvent(ctx, event)
+			return proc.AddEvent(boundCtx, event)
 		},
 
 		SendMessage: func(targetID string, message any) error {
-			return proc.SendMessage(ctx, executorID, targetID, message)
+			return proc.SendMessage(boundCtx, executorID, targetID, message)
 		},
 
 		YieldOutput: func(output any) error {
 			// Check if this executor can output
 			if _, ok := proc.wf.OutputExecutors[executorID]; ok {
-				return proc.AddEvent(ctx, workflow.OutputEvent{
+				return proc.AddEvent(boundCtx, workflow.OutputEvent{
 					ExecutorID: executorID,
 					Output:     output,
 				})
@@ -499,11 +515,11 @@ func (proc *runnerContext) Bind(ctx context.Context, executorID string, traceCon
 		},
 
 		RequestHalt: func() error {
-			return proc.AddEvent(ctx, workflow.RequestHaltEvent{})
+			return proc.AddEvent(boundCtx, workflow.RequestHaltEvent{})
 		},
 
 		PostRequest: func(request *workflow.ExternalRequest) error {
-			return proc.Post(ctx, executorID, request)
+			return proc.Post(boundCtx, executorID, request)
 		},
 
 		ReadState: func(key string, scope string) (any, error) {
@@ -522,7 +538,7 @@ func (proc *runnerContext) Bind(ctx context.Context, executorID string, traceCon
 			value, err := proc.stateManager.ReadOrInitState(executorID, scope, key, func() any {
 				// Call the init function to get the initial value
 				if initFunc != nil {
-					val, err := initFunc(ctx, key, scope)
+					val, err := initFunc(boundCtx, key, scope)
 					if err != nil {
 						initErr = err
 						return nil
