@@ -115,10 +115,11 @@ func (c *Checkpoint) IsInitial() bool {
 }
 
 type PortableMessageEnvelope struct {
-	MessageType workflow.TypeID
-	Message     workflow.PortableValue
-	SourceID    string
-	TargetID    string
+	MessageType  workflow.TypeID
+	Message      workflow.PortableValue
+	SourceID     string
+	TargetID     string
+	TraceContext map[string]string
 }
 
 type RunnerStateData struct {

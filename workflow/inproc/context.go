@@ -16,14 +16,14 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/internal/checkpoint"
 	"github.com/microsoft/agent-framework-go/workflow/internal/execution"
-	"github.com/microsoft/agent-framework-go/workflow/internal/otelutil"
 )
 
 // runnerContext manages the execution context for a workflow run.
 type runnerContext struct {
-	wf        *workflow.Workflow
-	sessionID string
-	tracer    *stepTracer
+	wf              *workflow.Workflow
+	sessionID       string
+	tracer          *stepTracer
+	tracePropagator workflow.TraceContextPropagator
 
 	edgeMap  *execution.EdgeRunner
 	nextStep atomic.Pointer[execution.StepContext]
@@ -59,11 +59,13 @@ func newInProcessRunnerContext(
 	tracer *stepTracer,
 	existingOwnerSignoff any,
 	enableConcurrentRuns bool,
+	tracePropagator workflow.TraceContextPropagator,
 ) (*runnerContext, error) {
 	ctx := &runnerContext{
 		wf:                       wf,
 		sessionID:                sessionID,
 		tracer:                   tracer,
+		tracePropagator:          tracePropagator,
 		executors:                make(map[string]*workflow.Executor),
 		queuedExternalDeliveries: make([]func(context.Context) error, 0),
 		joinedSubworkflowRunners: make(map[string]execution.SuperStepRunner),
@@ -460,10 +462,12 @@ func (proc *runnerContext) SendMessage(ctx context.Context, sourceID, targetID s
 	if err != nil {
 		return err
 	}
-	// Propagate the current OTel trace context into the envelope so that
+	// Propagate the current trace context into the envelope so that
 	// spans created when the target executor processes the message are
 	// linked to the sending executor's trace.
-	envelope.TraceContext = otelutil.ExtractTraceContext(ctx)
+	if proc.tracePropagator != nil {
+		envelope.TraceContext = proc.tracePropagator.Extract(ctx)
+	}
 	edges := proc.wf.Edges[sourceID]
 	for _, edge := range edges {
 		mapping, err := proc.edgeMap.PrepareDeliveryForEdge(ctx, edge, envelope)
@@ -480,10 +484,13 @@ func (proc *runnerContext) SendMessage(ctx context.Context, sourceID, targetID s
 
 // Bind creates a bound workflow context for a specific executor.
 func (proc *runnerContext) Bind(ctx context.Context, executorID string, traceContext map[string]string) *workflow.Context {
-	// Restore the OTel span context from the trace context carried by the
+	// Restore the span context from the trace context carried by the
 	// message envelope, so any spans the executor creates are properly
 	// parented under the sending executor's span.
-	boundCtx := otelutil.InjectTraceContext(ctx, traceContext)
+	boundCtx := ctx
+	if proc.tracePropagator != nil {
+		boundCtx = proc.tracePropagator.Inject(ctx, traceContext)
+	}
 
 	return &workflow.Context{
 		Context: boundCtx,

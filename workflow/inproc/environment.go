@@ -38,6 +38,7 @@ type ExecutionEnvironment struct {
 	executionMode        execution.Mode
 	enableConcurrentRuns bool
 	checkpointManager    checkpoint.Manager
+	tracePropagator      workflow.TraceContextPropagator
 }
 
 func newExecutionEnvironment(mode execution.Mode, enableConcurrentRuns bool, checkpointManager ...checkpoint.Manager) *ExecutionEnvironment {
@@ -56,11 +57,15 @@ func newExecutionEnvironment(mode execution.Mode, enableConcurrentRuns bool, che
 // the given [workflow.CheckpointManager].
 func (e *ExecutionEnvironment) WithCheckpointing(cm *workflow.CheckpointManager) *ExecutionEnvironment {
 	if cm == nil {
-		return newExecutionEnvironment(e.executionMode, e.enableConcurrentRuns)
+		env := newExecutionEnvironment(e.executionMode, e.enableConcurrentRuns)
+		env.tracePropagator = e.tracePropagator
+		return env
 	}
 	// Reuse a previously created internal manager if available.
 	if mgr, ok := cm.Internal().(checkpoint.Manager); ok {
-		return newExecutionEnvironment(e.executionMode, e.enableConcurrentRuns, mgr)
+		env := newExecutionEnvironment(e.executionMode, e.enableConcurrentRuns, mgr)
+		env.tracePropagator = e.tracePropagator
+		return env
 	}
 	// For in-memory stores, use the internal InMemoryManager directly to
 	// avoid JSON serialization round-trips that lose Go type information.
@@ -72,7 +77,24 @@ func (e *ExecutionEnvironment) WithCheckpointing(cm *workflow.CheckpointManager)
 		mgr = checkpoint.NewStoreAdapter(cm.Store())
 	}
 	cm.SetInternal(mgr)
-	return newExecutionEnvironment(e.executionMode, e.enableConcurrentRuns, mgr)
+	env := newExecutionEnvironment(e.executionMode, e.enableConcurrentRuns, mgr)
+	env.tracePropagator = e.tracePropagator
+	return env
+}
+
+// WithTracePropagator returns a new execution environment configured with
+// the given [workflow.TraceContextPropagator]. When set, trace context is
+// propagated across executor boundaries so that spans in downstream executors
+// are parented to the sending executor's span. Pass nil to disable trace
+// propagation.
+func (e *ExecutionEnvironment) WithTracePropagator(tp workflow.TraceContextPropagator) *ExecutionEnvironment {
+	env := &ExecutionEnvironment{
+		executionMode:        e.executionMode,
+		enableConcurrentRuns: e.enableConcurrentRuns,
+		checkpointManager:    e.checkpointManager,
+		tracePropagator:      tp,
+	}
+	return env
 }
 
 // IsCheckpointingEnabled reports whether checkpointing is configured for
@@ -146,7 +168,7 @@ func (e *ExecutionEnvironment) beginRun(ctx context.Context, wf *workflow.Workfl
 }
 
 func (e *ExecutionEnvironment) beginRunWithCheckpointManager(ctx context.Context, wf *workflow.Workflow, cm checkpoint.Manager, sessionID string, knownValidInputTypes []reflect.Type) (*execution.RunHandle, error) {
-	runner, err := createTopLevelRunner(wf, cm, sessionID, e.enableConcurrentRuns, knownValidInputTypes)
+	runner, err := createTopLevelRunner(wf, cm, sessionID, e.enableConcurrentRuns, knownValidInputTypes, e.tracePropagator)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +189,7 @@ func (e *ExecutionEnvironment) resumeRunWithCheckpointManager(ctx context.Contex
 }
 
 func (e *ExecutionEnvironment) resumeRunWithCheckpointManagerRepublish(ctx context.Context, wf *workflow.Workflow, cm checkpoint.Manager, sessionID string, ch workflow.CheckpointInfo, knownValidInputTypes []reflect.Type, republishPendingRequests bool) (*execution.RunHandle, error) {
-	runner, err := createTopLevelRunner(wf, cm, sessionID, e.enableConcurrentRuns, knownValidInputTypes)
+	runner, err := createTopLevelRunner(wf, cm, sessionID, e.enableConcurrentRuns, knownValidInputTypes, e.tracePropagator)
 	if err != nil {
 		return nil, err
 	}

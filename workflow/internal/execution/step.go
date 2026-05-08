@@ -49,7 +49,7 @@ func NewMessageEnvelopeFromPortable(envelope *checkpoint.PortableMessageEnvelope
 		declaredType: envelope.MessageType,
 		SourceID:     envelope.SourceID,
 		TargetID:     envelope.TargetID,
-		TraceContext: nil,
+		TraceContext: envelope.TraceContext,
 	}
 }
 
@@ -62,10 +62,11 @@ func (e *MessageEnvelope) MessageType() workflow.TypeID {
 
 func (e *MessageEnvelope) Portable() *checkpoint.PortableMessageEnvelope {
 	return &checkpoint.PortableMessageEnvelope{
-		MessageType: e.MessageType(),
-		Message:     workflow.AnyPortableValue(e.Message),
-		SourceID:    e.SourceID,
-		TargetID:    e.TargetID,
+		MessageType:  e.MessageType(),
+		Message:      workflow.AnyPortableValue(e.Message),
+		SourceID:     e.SourceID,
+		TargetID:     e.TargetID,
+		TraceContext: e.TraceContext,
 	}
 }
 

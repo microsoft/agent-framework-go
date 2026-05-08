@@ -52,11 +52,12 @@ func createTopLevelRunner(
 	sessionID string,
 	enableConcurrentRuns bool,
 	knownValidInputTypes []reflect.Type,
+	tracePropagator workflow.TraceContextPropagator,
 ) (*runner, error) {
 	if sessionID == "" {
 		sessionID = uuid.NewString()
 	}
-	return newInProcessRunner(wf, checkpointMgr, sessionID, nil, enableConcurrentRuns, knownValidInputTypes)
+	return newInProcessRunner(wf, checkpointMgr, sessionID, nil, enableConcurrentRuns, knownValidInputTypes, tracePropagator)
 }
 
 func newInProcessRunner(
@@ -66,6 +67,7 @@ func newInProcessRunner(
 	existingOwnerSignoff any,
 	enableConcurrentRuns bool,
 	knownValidInputTypes []reflect.Type,
+	tracePropagator workflow.TraceContextPropagator,
 ) (*runner, error) {
 	if wf == nil {
 		return nil, fmt.Errorf("workflow cannot be nil")
@@ -95,6 +97,7 @@ func newInProcessRunner(
 		stepTracer,
 		existingOwnerSignoff,
 		enableConcurrentRuns,
+		tracePropagator,
 	)
 	if err != nil {
 		return nil, err

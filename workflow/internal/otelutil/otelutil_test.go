@@ -16,15 +16,22 @@ func TestExtractInjectRoundTrip(t *testing.T) {
 	// Set up a real tracer and W3C propagator.
 	tp := sdktrace.NewTracerProvider()
 	defer func() { _ = tp.Shutdown(context.Background()) }()
+
+	prevTP := otel.GetTracerProvider()
+	prevProp := otel.GetTextMapPropagator()
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagation.TraceContext{})
+	t.Cleanup(func() {
+		otel.SetTracerProvider(prevTP)
+		otel.SetTextMapPropagator(prevProp)
+	})
 
 	tracer := tp.Tracer("test")
 	ctx, span := tracer.Start(context.Background(), "test-span")
 	defer span.End()
 
 	// Extract the trace context from the context with an active span.
-	tc := ExtractTraceContext(ctx)
+	tc := Propagator.Extract(ctx)
 	if tc == nil {
 		t.Fatal("expected non-nil trace context from active span")
 	}
@@ -33,7 +40,7 @@ func TestExtractInjectRoundTrip(t *testing.T) {
 	}
 
 	// Inject the trace context into a fresh context.
-	restoredCtx := InjectTraceContext(context.Background(), tc)
+	restoredCtx := Propagator.Inject(context.Background(), tc)
 	restoredSpanCtx := trace.SpanContextFromContext(restoredCtx)
 
 	if !restoredSpanCtx.IsValid() {
@@ -45,15 +52,18 @@ func TestExtractInjectRoundTrip(t *testing.T) {
 }
 
 func TestExtractTraceContext_NoSpan(t *testing.T) {
+	prevProp := otel.GetTextMapPropagator()
 	otel.SetTextMapPropagator(propagation.TraceContext{})
-	tc := ExtractTraceContext(context.Background())
+	t.Cleanup(func() { otel.SetTextMapPropagator(prevProp) })
+
+	tc := Propagator.Extract(context.Background())
 	if tc != nil {
 		t.Errorf("expected nil trace context from background context, got %v", tc)
 	}
 }
 
 func TestInjectTraceContext_NilMap(t *testing.T) {
-	ctx := InjectTraceContext(context.Background(), nil)
+	ctx := Propagator.Inject(context.Background(), nil)
 	if ctx != context.Background() {
 		t.Error("expected same context when injecting nil trace context")
 	}
