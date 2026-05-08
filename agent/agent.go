@@ -25,6 +25,11 @@ type ProviderConfig struct {
 	// Run executes a request and streams response updates.
 	Run RunFunc
 
+	// Format creates a provider response format for a structured output value.
+	Format func(v any) (ResponseFormat, error)
+	// Unmarshal decodes provider structured output into v using format.
+	Unmarshal func(format ResponseFormat, data []byte, v any) error
+
 	// CreateSession configures a provider-specific session.
 	CreateSession func(ctx context.Context, session Session, options ...Option) error
 	// BeforeMarshalSession configures a provider-specific session before serialization.
@@ -61,10 +66,12 @@ type Config struct {
 	// DisableFuncAutoCall tells provider constructors not to add automatic function-tool calling middleware.
 	DisableFuncAutoCall bool
 
-	// Logger receives middleware and provider diagnostics.
+	// Logger receives run, middleware, and provider diagnostics.
 	Logger *slog.Logger
 	// LogSensitiveData enables logging of sensitive request and response payloads.
 	LogSensitiveData bool
+	// DisableRunLogs disables automatic run logging when Logger is set.
+	DisableRunLogs bool
 
 	// Middlewares wrap the provider run function.
 	Middlewares []Middleware
@@ -91,6 +98,15 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 		}
 	}
 	cfg.Middlewares = slices.Clone(cfg.Middlewares)
+	if cfg.Logger != nil && !cfg.DisableRunLogs {
+		cfg.Middlewares = append([]Middleware{newRunLoggerMiddleware(cfg.Logger, cfg.LogSensitiveData)}, cfg.Middlewares...)
+	}
+	if prov.Format != nil || prov.Unmarshal != nil {
+		cfg.Middlewares = append(cfg.Middlewares, &structuredOutputMiddleware{
+			format:    prov.Format,
+			unmarshal: prov.Unmarshal,
+		})
+	}
 	contextProviders := make([]*ContextProvider, 0, len(cfg.ContextProviders))
 	for _, provider := range cfg.ContextProviders {
 		if provider != nil {

@@ -9,6 +9,7 @@ import (
 	"slices"
 
 	"github.com/microsoft/agent-framework-go/workflow"
+	pcheckpoint "github.com/microsoft/agent-framework-go/workflow/checkpoint"
 	"github.com/microsoft/agent-framework-go/workflow/internal/checkpoint"
 	"github.com/microsoft/agent-framework-go/workflow/internal/execution"
 )
@@ -18,18 +19,18 @@ var (
 	Default = OffThread
 
 	// OffThread is an environment which will run steps in a background goroutine, streaming events out as they are raised.
-	OffThread = newExecutionEnvironment(execution.ModeOffThread, false)
+	OffThread = newExecutionEnvironment(execution.ModeOffThread, false, nil)
 
 	// Concurrent is like [OffThread], but enables concurrent execution.
-	Concurrent = newExecutionEnvironment(execution.ModeOffThread, true)
+	Concurrent = newExecutionEnvironment(execution.ModeOffThread, true, nil)
 
 	// Lockstep is an environment which will run steps in the event watching tread,
 	// accumulating events during each step and streaming them out after each step is completed.
-	Lockstep = newExecutionEnvironment(execution.ModeLockstep, false)
+	Lockstep = newExecutionEnvironment(execution.ModeLockstep, false, nil)
 
 	// Subworkflow is an environment which will not run steps directly, relying instead
 	// on the hosting workflow to run them directly, while streaming events out as they are raised.
-	Subworkflow = newExecutionEnvironment(execution.ModeSubworkflow, false)
+	Subworkflow = newExecutionEnvironment(execution.ModeSubworkflow, false, nil)
 )
 
 // ExecutionEnvironment provides an in-process workflow execution environment
@@ -41,43 +42,23 @@ type ExecutionEnvironment struct {
 	tracePropagator      workflow.TraceContextPropagator
 }
 
-func newExecutionEnvironment(mode execution.Mode, enableConcurrentRuns bool, checkpointManager ...checkpoint.Manager) *ExecutionEnvironment {
-	var cm checkpoint.Manager
-	if len(checkpointManager) > 0 {
-		cm = checkpointManager[0]
-	}
+func newExecutionEnvironment(mode execution.Mode, enableConcurrentRuns bool, checkpointManager checkpoint.Manager) *ExecutionEnvironment {
 	return &ExecutionEnvironment{
 		executionMode:        mode,
 		enableConcurrentRuns: enableConcurrentRuns,
-		checkpointManager:    cm,
+		checkpointManager:    checkpointManager,
 	}
 }
 
 // WithCheckpointing returns a new execution environment configured with
-// the given [workflow.CheckpointManager].
-func (e *ExecutionEnvironment) WithCheckpointing(cm *workflow.CheckpointManager) *ExecutionEnvironment {
-	if cm == nil {
-		env := newExecutionEnvironment(e.executionMode, e.enableConcurrentRuns)
+// the given [checkpoint.Manager].
+func (e *ExecutionEnvironment) WithCheckpointing(mgr pcheckpoint.Manager) *ExecutionEnvironment {
+	if mgr == nil {
+		env := newExecutionEnvironment(e.executionMode, e.enableConcurrentRuns, nil)
 		env.tracePropagator = e.tracePropagator
 		return env
 	}
-	// Reuse a previously created internal manager if available.
-	if mgr, ok := cm.Internal().(checkpoint.Manager); ok {
-		env := newExecutionEnvironment(e.executionMode, e.enableConcurrentRuns, mgr)
-		env.tracePropagator = e.tracePropagator
-		return env
-	}
-	// For in-memory stores, use the internal InMemoryManager directly to
-	// avoid JSON serialization round-trips that lose Go type information.
-	// For external stores, use the StoreAdapter which serializes to JSON.
-	var mgr checkpoint.Manager
-	if cm.IsInMemory() {
-		mgr = checkpoint.NewInMemoryManager()
-	} else {
-		mgr = checkpoint.NewStoreAdapter(cm.Store())
-	}
-	cm.SetInternal(mgr)
-	env := newExecutionEnvironment(e.executionMode, e.enableConcurrentRuns, mgr)
+	env := newExecutionEnvironment(e.executionMode, e.enableConcurrentRuns, mgr.(checkpoint.Manager))
 	env.tracePropagator = e.tracePropagator
 	return env
 }
@@ -164,11 +145,7 @@ func (e *ExecutionEnvironment) verifyCheckpointingConfigured() error {
 }
 
 func (e *ExecutionEnvironment) beginRun(ctx context.Context, wf *workflow.Workflow, sessionID string, knownValidInputTypes []reflect.Type) (*execution.RunHandle, error) {
-	return e.beginRunWithCheckpointManager(ctx, wf, e.checkpointManager, sessionID, knownValidInputTypes)
-}
-
-func (e *ExecutionEnvironment) beginRunWithCheckpointManager(ctx context.Context, wf *workflow.Workflow, cm checkpoint.Manager, sessionID string, knownValidInputTypes []reflect.Type) (*execution.RunHandle, error) {
-	runner, err := createTopLevelRunner(wf, cm, sessionID, e.enableConcurrentRuns, knownValidInputTypes, e.tracePropagator)
+	runner, err := createTopLevelRunner(wf, e.checkpointManager, sessionID, e.enableConcurrentRuns, knownValidInputTypes, e.tracePropagator)
 	if err != nil {
 		return nil, err
 	}
@@ -176,36 +153,20 @@ func (e *ExecutionEnvironment) beginRunWithCheckpointManager(ctx context.Context
 }
 
 func (e *ExecutionEnvironment) resumeRun(ctx context.Context, wf *workflow.Workflow, fromCheckpoint workflow.CheckpointInfo, knownValidInputTypes []reflect.Type, opts ...ExecutionOption) (*execution.RunHandle, error) {
-	return e.resumeRunWithCheckpointManager(ctx, wf, e.checkpointManager, fromCheckpoint, knownValidInputTypes, opts...)
-}
-
-func (e *ExecutionEnvironment) resumeRunWithCheckpointManager(ctx context.Context, wf *workflow.Workflow, cm checkpoint.Manager, ch workflow.CheckpointInfo, knownValidInputTypes []reflect.Type, opts ...ExecutionOption) (*execution.RunHandle, error) {
 	options := applyExecutionOptions(opts)
-	sessionID := ch.SessionID
-	if options.SessionID != "" {
-		sessionID = options.SessionID
-	}
-	return e.resumeRunWithCheckpointManagerRepublish(ctx, wf, cm, sessionID, ch, knownValidInputTypes, !options.DisablePendingRequestRepublish)
-}
-
-func (e *ExecutionEnvironment) resumeRunWithCheckpointManagerRepublish(ctx context.Context, wf *workflow.Workflow, cm checkpoint.Manager, sessionID string, ch workflow.CheckpointInfo, knownValidInputTypes []reflect.Type, republishPendingRequests bool) (*execution.RunHandle, error) {
-	runner, err := createTopLevelRunner(wf, cm, sessionID, e.enableConcurrentRuns, knownValidInputTypes, e.tracePropagator)
+	runner, err := createTopLevelRunner(wf, e.checkpointManager, fromCheckpoint.SessionID, e.enableConcurrentRuns, knownValidInputTypes, e.tracePropagator)
 	if err != nil {
 		return nil, err
 	}
-	return runner.resumeStreamWithRepublish(ctx, e.executionMode, ch, republishPendingRequests)
+	return runner.resumeStreamWithRepublish(ctx, e.executionMode, fromCheckpoint, !options.DisablePendingRequestRepublish)
 }
 
 func (e *ExecutionEnvironment) beginRunHandlingChatProtocol(ctx context.Context, wf *workflow.Workflow, sessionID string, msg any) (*execution.RunHandle, error) {
-	return e.beginRunHandlingChatProtocolWithCheckpointManager(ctx, wf, e.checkpointManager, sessionID, msg)
-}
-
-func (e *ExecutionEnvironment) beginRunHandlingChatProtocolWithCheckpointManager(ctx context.Context, wf *workflow.Workflow, cm checkpoint.Manager, sessionID string, msg any) (*execution.RunHandle, error) {
 	descriptor, err := wf.DescribeProtocol()
 	if err != nil {
 		return nil, err
 	}
-	handle, err := e.beginRunWithCheckpointManager(ctx, wf, cm, sessionID, descriptor.Accepts)
+	handle, err := e.beginRun(ctx, wf, sessionID, descriptor.Accepts)
 	if err != nil {
 		return nil, err
 	}

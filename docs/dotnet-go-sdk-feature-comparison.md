@@ -15,9 +15,9 @@ This document compares the .NET SDK at `microsoft/agent-framework/dotnet` with t
 
 ## Executive Summary
 
-The Go SDK covers the core agent and workflow model: agents, sessions, history, context providers, streaming response updates, structured output, function tools, tool approvals, A2A, AGUI, MCP, skills, compaction, in-process workflows, checkpoint/resume, human-in-the-loop request ports, state, and workflow-as-agent/agent-in-workflow adapters.
+The Go SDK covers the core agent and workflow model: agents, sessions, history, context providers, streaming response updates, structured output, function tools, tool auto-calling and approvals, initial harness utilities, A2A, AGUI, MCP, skills, compaction, in-process workflows, checkpoint/resume, human-in-the-loop request ports, state, and workflow-as-agent/agent-in-workflow adapters.
 
-The .NET SDK has a much wider integration and product layer. The largest gaps are DevUI/Aspire, evaluation, declarative agents/workflows, durable agents/workflows, Azure Functions and ASP.NET hosting integrations, OpenAI-compatible hosting, Foundry and Azure AI Persistent agents, Copilot Studio, GitHub Copilot, Mem0, Cosmos DB storage, Purview, RAG/harness packages, richer sample coverage, and source-generator/declarative workflow tooling.
+The .NET SDK has a much wider integration and product layer. The largest gaps are DevUI/Aspire, evaluation, declarative agents/workflows, durable agents/workflows, Azure Functions and ASP.NET hosting integrations, OpenAI-compatible hosting, Foundry and Azure AI Persistent agents, Copilot Studio, GitHub Copilot, Mem0, Cosmos DB storage, Purview, RAG, remaining harness utilities such as file access/memory/store and subagents, richer sample coverage, and source-generator/declarative workflow tooling.
 
 Within overlapping features, the main misalignments are API shape and ecosystem integration. .NET is centered on `Microsoft.Extensions.AI` types (`AIAgent`, `AgentRunOptions`, `ChatMessage`, `AIContent`, `AIFunction`, `AITool`, dependency injection, ASP.NET, Durable Task). Go has idiomatic packages and interfaces (`agent.Agent`, `agent.Option`, `message.Message`, `message.Content`, `tool.Tool`, `workflow.Builder`) with less framework hosting and fewer service-specific adapters.
 
@@ -29,16 +29,16 @@ Within overlapping features, the main misalignments are API shape and ecosystem 
 | Agent identity and metadata | `AIAgentMetadata`, agent ID/name/description, source attribution extensions. | Agent ID/name/description, provider name, response author stamping. | Partial | Go does not expose the same request source attribution helpers as .NET. |
 | Sessions | `AgentSession`, `AgentSessionStateBag`, session serialization helpers, provider session state. | `agent.Session`, marshal/unmarshal hooks, provider session hooks, local/service ID support. | Aligned | .NET has a richer typed state bag and extension helpers; Go stores provider/session values through its own session abstraction. |
 | Chat history | `ChatHistoryProvider`, `InMemoryChatHistoryProvider`, per-service-call persistence, reducer triggers. | `HistoryProvider`, default in-memory history for local sessions, third-party storage example. | Partial | Go has the core lifecycle but fewer built-in storage providers and no first-class reducer trigger options on the history provider. |
-| Context providers and memory injection | `AIContextProvider`, `MessageAIContextProvider`, provider invoking/invoked lifecycle. | `agent.ContextProvider`, `agent/middleware/contextprovider`, before/after lifecycle. | Aligned | .NET context providers are integrated with `Microsoft.Extensions.AI`; Go providers directly transform `message.Message` slices and options. |
+| Context providers and memory injection | `AIContextProvider`, `MessageAIContextProvider`, provider invoking/invoked lifecycle. | `agent.ContextProvider`, `(*agent.ContextProvider).Middleware`, before/after lifecycle. | Aligned | .NET context providers are integrated with `Microsoft.Extensions.AI`; Go providers directly transform `message.Message` slices and options. |
 | Memory integrations | Chat history memory, bounded chat history, Mem0, Foundry memory, RAG samples, file memory. | In-memory history/context examples and custom context providers. | .NET only | Go has primitives to build memory, but no Mem0, Foundry memory, RAG, bounded memory package, or file memory provider. |
 | Compaction and chat reduction | Compaction provider, triggers, message index/groups, sliding window, context window, truncation, summarization, tool-result, pipeline, chat reducer adapter. | `agent/compaction` provider, triggers, message index/groups, sliding window, `ContextWindowStrategy`, truncation, summarization, tool-result, pipeline. | Aligned | `IChatReducer` is a .NET-only abstraction that does not exist in Go; all compaction strategies now align. |
-| Structured output | Typed `AgentResponse<T>`, structured output options, provider adapters. | `WithStructuredOutput`, `ResponseFormat`, `agent/format/jsonformat`, typed JSON schema helpers. | Aligned | .NET response typing is part of the response type; Go uses options and caller-side decoding patterns. |
+| Structured output | Typed `AgentResponse<T>`, structured output options, provider adapters. | `WithStructuredOutput`, `ResponseFormat`, provider `Format`/`Unmarshal` hooks, `agent/format/jsonformat`, typed JSON schema helpers. | Aligned | .NET response typing is part of the response type; Go uses options and provider-declared structured output support. |
 | JSON schema/format helpers | Uses `AIJsonUtilities`, `JsonSerializerOptions`, schema helpers through extensions and tools. | `jsonformat.New`, `Any`, `Nothing`, `For[T]`, `MustFor[T]`, `ForType`, validation/normalization. | Partial | Go has a dedicated JSON format package; .NET leans on platform JSON and MEAI tool/function metadata. |
 | Message/content model | `ChatMessage`, `AIContent`, text/data/error/function call/function result/hosted file/vector store/reasoning/code interpreter and durable state wrappers. | `message.Message`, `Content`, text/data/error/function call/function result/hosted file/vector store/reasoning/URI/usage/approval/code interpreter content. | Aligned | Type names and serialization are not interchangeable. Go has its own content model rather than using MEAI. |
 | Annotations/citations | MEAI annotation/content support through `AIContent`. | `message.Annotation`, citation annotations, annotated text spans. | Aligned | No direct binary compatibility; mapping is provider-specific. |
 | Function tools | `AIFunction`, `AITool`, function tools, plugins, dynamic function tools, tool argument matching in evals. | `tool.Tool`, `tool.FuncTool`, `functool.New`, typed input/output schemas. | Partial | Go has typed function tools but no first-class plugin or dynamic tool sample equivalent to .NET steps 12 and 20. |
-| Tool auto-calling | Provider/tool-call loop and tool approval agent. | `agent/middleware/autocall`, default provider middleware unless disabled. | Aligned | Go implements auto-call as explicit middleware; .NET uses agent/tool abstractions and provider adapters. |
-| Tool approval | Tool approval request/response content, tool approval agent and builder extensions. | `message.ToolApprovalRequestContent`, `message.ToolApprovalResponseContent`, `tool.ApprovalRequiredFunc`, autocall approval flow, `agent/middleware/toolapproval` middleware for standing-rule approval management, AGUI HITL sample. | Aligned | API shape differs: .NET uses a `ToolApprovalAgent` delegating-agent wrapper with a `.UseToolApproval()` builder extension; Go uses idiomatic middleware (`toolapproval.New`). Standing approval rules, queued-request batching, and `AlwaysApprove*` response content are now present in both SDKs. |
+| Tool auto-calling | Provider/tool-call loop and tool approval agent. | `agent/harness/toolautocall`, default provider middleware unless disabled. | Aligned | Go implements auto-call as explicit middleware; .NET uses agent/tool abstractions and provider adapters. |
+| Tool approval | Tool approval request/response content, tool approval agent and builder extensions. | `message.ToolApprovalRequestContent`, `message.ToolApprovalResponseContent`, `tool.ApprovalRequiredFunc`, `agent/harness/toolautocall` approval flow, `agent/harness/toolapproval` middleware for standing-rule approval management, AGUI HITL sample. | Aligned | API shape differs: .NET uses a `ToolApprovalAgent` delegating-agent wrapper with a `.UseToolApproval()` builder extension; Go uses idiomatic middleware (`toolapproval.New`). Standing approval rules, queued-request batching, and `AlwaysApprove*` response content are now present in both SDKs. |
 | Hosted/server-side tools | Foundry/OpenAI samples for code interpreter, file search, web search, OpenAPI, Bing custom search, SharePoint, Microsoft Fabric, memory search, Toolbox, hosted MCP. | `tool/hostedtool` declarations for web search, file search, code interpreter, MCP server. | Partial | Go has declaration types but less provider/sample coverage and fewer service-specific hosted tool integrations. |
 | Agent as function tool | Agents can be converted/bound as tools in samples and workflow builders. | `tool/agenttool.New` wraps an agent as a `FuncTool`. | Aligned | API shape differs; Go exposes a direct package. |
 | Agent as MCP tool/server | .NET sample `Agent_Step07_AsMcpTool` and durable sample for agent as MCP tool. | `tool/mcptool.AddTool`, `examples/02-agents/mcp/agent_mcp_server`, `step10_as_mcp_tool`. | Aligned | Durable MCP hosting is .NET only. |
@@ -63,11 +63,11 @@ Within overlapping features, the main misalignments are API shape and ecosystem 
 | DevUI | `Microsoft.Agents.AI.DevUI`, endpoint/service extensions, DevUI samples. | No DevUI package. | .NET only | Go README mentions DevUI at framework level, but no Go DevUI implementation was found. |
 | Aspire integration | `Aspire.Hosting.AgentFramework.DevUI`, Aspire dashboard samples. | No equivalent package. | .NET only | No Go Aspire integration. |
 | Dependency injection | Agent and skill samples using `Microsoft.Extensions.DependencyInjection`; service collection extensions in multiple packages. | Idiomatic construction/config examples, no DI framework package. | Partial | Go does not attempt to mirror .NET DI. |
-| Agent middleware/delegation | `DelegatingAIAgent`, builder extensions, tool approval agent, chat client pipeline integration. | `agent.Middleware`, `MiddlewareFunc`, logger, otel, structured output, context provider, autocall middleware. | Partial | Go has a clearer middleware surface; .NET has deeper integration with MEAI builders and DI. |
-| Logging | Microsoft.Extensions.Logging source-generated logs. | `slog` logger support and logger middleware. | Partial | Logging ecosystems differ. |
-| OpenTelemetry for agents | Agent/workflow observability samples and OpenTelemetry workflow builder extension. | `agent/middleware/otel`, trace context propagation in workflow context. | Partial | Go has agent OTEL middleware but no first-class workflow builder instrumentation equivalent to .NET `WithOpenTelemetry`. |
+| Agent middleware/delegation | `DelegatingAIAgent`, builder extensions, tool approval agent, chat client pipeline integration. | `agent.Middleware`, `MiddlewareFunc`, automatic run logging, automatic provider-backed structured output, `agent/opentelemetry`, `(*agent.ContextProvider).Middleware`, harness auto-call and tool-approval middleware. | Aligned | API shape differs: .NET exposes delegating agents and builder extensions; Go exposes direct run-pipeline middleware. |
+| Logging | Microsoft.Extensions.Logging source-generated logs. | `slog` logger support through `agent.Config.Logger`, automatic agent run logs, and provider/middleware diagnostics. | Partial | Logging ecosystems differ. |
+| OpenTelemetry for agents | Agent/workflow observability samples and OpenTelemetry workflow builder extension. | `agent/opentelemetry`, trace context propagation in workflow context. | Partial | Go has agent OpenTelemetry middleware but no first-class workflow builder instrumentation equivalent to .NET `WithOpenTelemetry`. |
 | Evaluation | Agent evaluation extensions, eval checks, local/function evaluators, conversation splitters, workflow evaluation samples, Foundry quality samples. | No evaluation package. | .NET only | No Go equivalent found. |
-| Harness utilities | Agent mode, file access, file memory, file store, subagents, todo, tool approval harness providers. | No harness package; users can build context providers/tools manually. | .NET only | Go has primitives but not the packaged harness experience. |
+| Harness utilities | Agent mode, file access, file memory, file store, subagents, todo, tool approval harness providers. | `agent/harness/agentmode`, `agent/harness/todo`, `agent/harness/toolapproval`, `agent/harness/toolautocall`. | Partial | Go now has packaged harness support for agent mode, todo tracking, tool approval, and tool auto-call. It still lacks file access, file memory, file store, and subagent harness utilities. |
 | RAG | Basic text RAG, custom vector store RAG, custom data source RAG, Foundry service RAG, Neo4j graph RAG samples. | No RAG package or sample found. | .NET only | Go has data/file/vector content types but no RAG workflow package or samples. |
 | Purview | `Microsoft.Agents.AI.Purview` models and end-to-end sample. | No equivalent package. | .NET only | No Go governance/Purview integration. |
 | Cosmos DB storage | Cosmos chat history provider and workflow checkpoint store. | No built-in Cosmos package. | .NET only | Go only exposes in-memory workflow checkpointing publicly. |
@@ -99,13 +99,13 @@ Within overlapping features, the main misalignments are API shape and ecosystem 
 ### Agent Runtime
 
 - .NET can adapt any `IChatClient` into an `AIAgent`, so provider coverage includes direct packages plus any MEAI-compatible chat client. Go can define any provider through `agent.ProviderConfig`, but there is no common external chat-client adapter layer.
-- .NET agent responses include typed `AgentResponse<T>`; Go keeps structured output as run options and JSON response formats.
+- .NET agent responses include typed `AgentResponse<T>`; Go keeps structured output as run options backed by provider-declared response formatting and unmarshaling hooks.
 - Go supports background/continuation tokens through agent options and OpenAI Responses handling, but .NET has more sample coverage around background responses and provider fallbacks.
 - Both SDKs detect conflicts between local history providers and service-managed sessions, but the session state models and extension points are different.
 
 ### Tools and Hosted Tools
 
-- Go has typed function tools, agent-as-tool, MCP tool wrapping, approval-required tools, and hosted tool declaration structs. .NET has all of those categories plus plugins, dynamic function tool samples, tool approval agent wrappers, and many server-side hosted tool samples.
+- Go has typed function tools, agent-as-tool, MCP tool wrapping, approval-required tools, hosted tool declaration structs, and harness middleware for tool auto-calling and approval management. .NET has all of those categories plus plugins, dynamic function tool samples, tool approval agent wrappers, and many server-side hosted tool samples.
 - Go hosted tools should be treated as provider-dependent declarations. The .NET samples demonstrate more concrete hosted-tool scenarios, especially Foundry and OpenAI Responses server-side tools.
 
 ### Skills
@@ -125,7 +125,7 @@ Within overlapping features, the main misalignments are API shape and ecosystem 
 
 - Go has useful protocol handlers for A2A and AGUI, but .NET goes further with ASP.NET Core endpoint extensions, Azure Functions hosting, OpenAI-compatible hosting, Foundry hosting, DevUI, and Aspire integration.
 - Go has agent OpenTelemetry middleware and workflow trace context plumbing. .NET has richer observability samples and workflow builder instrumentation.
-- .NET includes evaluation and harness packages. Go users would need to build those capabilities using tools, context providers, or test helpers.
+- .NET includes evaluation and a broader harness package set. Go now includes initial harness packages for agent mode, todo tracking, tool approval, and tool auto-call; other harness capabilities still require custom tools, context providers, or test helpers.
 
 ## .NET Feature Checklist
 
@@ -174,12 +174,13 @@ The following Go packages and sample groups were present and accounted for in th
 | `agent` | Core agent runtime, options, sessions, history, context providers, middleware, responses. |
 | `agent/compaction` | Compaction provider, triggers, strategies, message indexing. |
 | `agent/format/jsonformat` | JSON response formats and schema helpers. |
-| `agent/middleware/autocall` | Function-tool auto-calling and approval handling. |
-| `agent/middleware/contextprovider` | Context provider middleware. |
-| `agent/middleware/logger` | Agent logging middleware. |
-| `agent/middleware/otel` | Agent OpenTelemetry middleware. |
-| `agent/middleware/structuredoutput` | Structured output middleware. |
-| `agent/middleware/toolapproval` | Human-in-the-loop tool approval middleware with standing approval rules. |
+| `agent/harness/agentmode` | Agent operating-mode context provider and mode-switching tools. |
+| `agent/harness/todo` | Todo-list context provider and todo management tools. |
+| `agent/harness/toolapproval` | Human-in-the-loop tool approval middleware with standing approval rules. |
+| `agent/harness/toolautocall` | Function-tool auto-calling and approval handling. |
+| `(*agent.ContextProvider).Middleware` | Context provider middleware adapter. |
+| `agent.ProviderConfig` structured output hooks | Automatic structured output middleware when providers supply `Format` and `Unmarshal`. |
+| `agent/opentelemetry` | Agent OpenTelemetry middleware. |
 | `agent/provider/openaiagent` | OpenAI Chat Completions and Responses, including Azure OpenAI client usage. |
 | `agent/provider/anthropicagent` | Anthropic provider. |
 | `agent/provider/geminiagent` | Gemini provider. |

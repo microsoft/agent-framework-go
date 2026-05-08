@@ -12,7 +12,15 @@ import (
 
 const defaultInMemoryHistorySourceID = "in-memory"
 
-// HistoryProvider injects and persists conversation history around an agent invocation.
+// HistoryProvider provides a conversation-history subset of [ContextProvider]
+// behavior around an agent invocation.
+//
+// A history provider can retrieve prior conversation messages, combine and
+// filter them with the current request messages, mark added messages with a
+// SourceID, and persist filtered request and response messages after the run
+// completes. It cannot add or replace run options, tools, instructions, or
+// other non-message context. Use [ContextProvider] when an extension needs to
+// supply options or context that is not only conversation history.
 type HistoryProvider struct {
 	// Unique identifier for this provider instance (required).
 	SourceID string

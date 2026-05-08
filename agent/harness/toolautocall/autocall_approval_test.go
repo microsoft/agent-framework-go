@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package autocall_test
+package toolautocall_test
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/middleware/autocall"
+	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
@@ -49,7 +49,7 @@ func invokeAndAssertApprovalWithAgent(t *testing.T, next agent.RunFunc,
 	tools []tool.Tool, input []*message.Message,
 	expectedOutput []*agent.ResponseUpdate, additionalTools []tool.Tool,
 ) {
-	autocallOptions := autocall.Config{
+	autocallOptions := toolautocall.Config{
 		NewID: func() string { return "" },
 	}
 	if additionalTools != nil {
@@ -66,7 +66,7 @@ func invokeAndAssertApprovalWithAgent(t *testing.T, next agent.RunFunc,
 
 	// Collect all streaming updates into messages
 	var updates []*agent.ResponseUpdate
-	for update, err := range autocall.New(autocallOptions).Run(next, ctx, input, opts...) {
+	for update, err := range toolautocall.New(autocallOptions).Run(next, ctx, input, opts...) {
 		if err != nil {
 			t.Fatalf("StreamingResponse failed: %v", err)
 		}
@@ -90,7 +90,7 @@ func expectApprovalError(t *testing.T, tools []tool.Tool, input []*message.Messa
 	}
 
 	var lastErr error
-	for _, err := range autocall.New(autocall.Config{}).Run(runner.Run, ctx, input, opts...) {
+	for _, err := range toolautocall.New(toolautocall.Config{}).Run(runner.Run, ctx, input, opts...) {
 		if err != nil {
 			lastErr = err
 			break

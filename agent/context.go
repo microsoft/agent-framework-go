@@ -4,14 +4,22 @@ package agent
 
 import (
 	"context"
+	"iter"
 	"slices"
 
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/message/messagefilter"
 )
 
-// ContextProvider provides an extensible implementation for injecting and persisting
-// additional context messages around an agent invocation.
+// ContextProvider provides a structured subset of middleware behavior for
+// injecting and persisting additional context around an agent invocation.
+//
+// A provider can add, replace, or annotate request messages, add run options,
+// and persist filtered request and response messages after the run completes.
+// It does not wrap the provider [RunFunc] directly, so it cannot intercept
+// individual streamed updates, emit replacement updates, retry or replace the
+// provider invocation, or transform provider errors as they occur.
+// Use [Middleware] for those lower-level run-pipeline behaviors.
 type ContextProvider struct {
 	// Unique identifier for this provider instance (required).
 	SourceID string
@@ -31,6 +39,50 @@ type ContextProvider struct {
 
 	// Optional storage hook. Defaults to no-op.
 	Store func(context.Context, []*message.Message, []*message.Message, ...Option) error
+}
+
+// Middleware adapts this context provider into middleware for callers that
+// explicitly need middleware composition. Agents configured with
+// Config.ContextProviders run providers through the agent lifecycle rather than
+// through this adapter.
+func (p *ContextProvider) Middleware() Middleware {
+	if p == nil {
+		panic("context provider is required")
+	}
+	return &contextProviderMiddleware{provider: p}
+}
+
+type contextProviderMiddleware struct {
+	provider *ContextProvider
+}
+
+func (r *contextProviderMiddleware) Run(next RunFunc, ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error] {
+	return func(yield func(*ResponseUpdate, error) bool) {
+		options = slices.Clone(options)
+		var err error
+		messages, options, err = r.provider.BeforeRun(ctx, messages, options...)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+
+		requestMessages := slices.Clone(messages)
+		var resp Response
+		for update, err := range next(ctx, messages, options...) {
+			if update != nil {
+				resp.Update(update)
+			}
+			if !yield(update, err) {
+				break
+			}
+		}
+		resp.Coalesce()
+
+		if err := r.provider.AfterRun(ctx, requestMessages, resp.Messages, options...); err != nil {
+			yield(nil, err)
+			return
+		}
+	}
 }
 
 // BeforeRun returns the input messages and options with this provider's additions applied.

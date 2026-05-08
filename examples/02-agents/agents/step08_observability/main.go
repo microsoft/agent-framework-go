@@ -11,7 +11,7 @@ import (
 	"os"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/middleware/otel"
+	"github.com/microsoft/agent-framework-go/agent/opentelemetry"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaiagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/openai/openai-go/v3"
@@ -68,8 +68,8 @@ func main() {
 			Config: agent.Config{
 				Name: "Joker",
 				Middlewares: []agent.Middleware{
-					otel.New(otel.Config{}), // for OpenTelemetry observability
-					logger,                  // for logging agent interactions
+					opentelemetry.New(opentelemetry.Config{}), // for OpenTelemetry observability
+					logger, // for logging agent interactions
 				},
 			},
 		},

@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package otel_test
+package opentelemetry_test
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/middleware/otel"
+	"github.com/microsoft/agent-framework-go/agent/opentelemetry"
 	"github.com/microsoft/agent-framework-go/message"
 
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -38,7 +38,7 @@ func setupTracer(t *testing.T) *tracetest.InMemoryExporter {
 func TestOtel_Run_CreatesSpan(t *testing.T) {
 	exporter := setupTracer(t)
 
-	mw := otel.New(otel.Config{})
+	mw := opentelemetry.New(opentelemetry.Config{})
 
 	nextCalled := false
 	next := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
@@ -67,7 +67,7 @@ func TestOtel_Run_CreatesSpan(t *testing.T) {
 func TestOtel_Run_SpanHasCorrectAttributes(t *testing.T) {
 	exporter := setupTracer(t)
 
-	mw := otel.New(otel.Config{})
+	mw := opentelemetry.New(opentelemetry.Config{})
 
 	var capturedCtx context.Context
 
@@ -130,7 +130,7 @@ func TestOtel_Run_SpanHasCorrectAttributes(t *testing.T) {
 func TestOtel_Run_RecordsError(t *testing.T) {
 	exporter := setupTracer(t)
 
-	mw := otel.New(otel.Config{})
+	mw := opentelemetry.New(opentelemetry.Config{})
 
 	testErr := errors.New("test error")
 	next := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
@@ -179,7 +179,7 @@ func TestOtel_Run_CustomSourceName(t *testing.T) {
 	exporter := setupTracer(t)
 
 	customSource := "my-custom-source"
-	mw := otel.New(otel.Config{SourceName: customSource})
+	mw := opentelemetry.New(opentelemetry.Config{SourceName: customSource})
 
 	next := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
@@ -205,7 +205,7 @@ func TestOtel_Run_CustomSourceName(t *testing.T) {
 func TestOtel_Run_DefaultSourceName(t *testing.T) {
 	exporter := setupTracer(t)
 
-	mw := otel.New(otel.Config{})
+	mw := opentelemetry.New(opentelemetry.Config{})
 
 	next := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
@@ -231,7 +231,7 @@ func TestOtel_Run_DefaultSourceName(t *testing.T) {
 func TestOtel_Run_PropagatesContext(t *testing.T) {
 	setupTracer(t)
 
-	mw := otel.New(otel.Config{})
+	mw := opentelemetry.New(opentelemetry.Config{})
 
 	var capturedCtx context.Context
 	next := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
@@ -264,7 +264,7 @@ func TestOtel_Run_PropagatesContext(t *testing.T) {
 func TestOtel_Run_HandlesMultipleUpdates(t *testing.T) {
 	exporter := setupTracer(t)
 
-	mw := otel.New(otel.Config{})
+	mw := opentelemetry.New(opentelemetry.Config{})
 
 	updateCount := 0
 	next := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
@@ -296,7 +296,7 @@ func TestOtel_Run_HandlesMultipleUpdates(t *testing.T) {
 func TestOtel_Run_HandlesEarlyBreak(t *testing.T) {
 	exporter := setupTracer(t)
 
-	mw := otel.New(otel.Config{})
+	mw := opentelemetry.New(opentelemetry.Config{})
 
 	next := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
@@ -332,7 +332,7 @@ func TestOtel_Run_HandlesEarlyBreak(t *testing.T) {
 func TestOtel_Run_UnknownProviderWhenNoMetadata(t *testing.T) {
 	exporter := setupTracer(t)
 
-	mw := otel.New(otel.Config{})
+	mw := opentelemetry.New(opentelemetry.Config{})
 
 	next := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
@@ -364,7 +364,7 @@ func TestOtel_Run_UnknownProviderWhenNoMetadata(t *testing.T) {
 func TestOtel_Run_RecordsMultipleErrors(t *testing.T) {
 	exporter := setupTracer(t)
 
-	mw := otel.New(otel.Config{})
+	mw := opentelemetry.New(opentelemetry.Config{})
 
 	err1 := errors.New("first error")
 	err2 := errors.New("second error")

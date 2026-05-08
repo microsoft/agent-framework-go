@@ -3,7 +3,9 @@
 package workflow_test
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"reflect"
 	"strings"
 	"testing"
@@ -467,15 +469,53 @@ func TestBuilder_Validation_DeadEndLogging(t *testing.T) {
 	start := newNoOpExecutor("start")
 	leaf := newNoOpExecutor("leaf")
 
-	wf, err := workflow.NewBuilder(start).
-		AddEdge(start, leaf).
-		Build()
+	var wf *workflow.Workflow
+	var err error
+	logs := captureDefaultSlog(t, func() {
+		wf, err = workflow.NewBuilder(start).
+			AddEdge(start, leaf).
+			Build()
+	})
 	if err != nil {
 		t.Fatalf("expected no error for dead-end, got %v", err)
 	}
 	if _, ok := wf.ExecutorBindings["leaf"]; !ok {
 		t.Error("expected leaf executor in bindings")
 	}
+	if !strings.Contains(logs, "dead-end executors detected") || !strings.Contains(logs, "leaf") {
+		t.Fatalf("expected dead-end log for leaf, got %q", logs)
+	}
+}
+
+func TestBuilder_Validation_OutputExecutorExcludedFromDeadEndLogging(t *testing.T) {
+	start := newNoOpExecutor("start")
+	leaf := newNoOpExecutor("leaf")
+
+	var err error
+	logs := captureDefaultSlog(t, func() {
+		_, err = workflow.NewBuilder(start).
+			AddEdge(start, leaf).
+			WithOutputFrom(leaf).
+			Build()
+	})
+	if err != nil {
+		t.Fatalf("expected no error for output dead-end, got %v", err)
+	}
+	if strings.Contains(logs, "dead-end executors detected") || strings.Contains(logs, "leaf") {
+		t.Fatalf("expected no dead-end log for output executor, got %q", logs)
+	}
+}
+
+func captureDefaultSlog(t *testing.T, fn func()) string {
+	t.Helper()
+
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer slog.SetDefault(previous)
+
+	fn()
+	return buf.String()
 }
 
 // newTypedExecutor creates an executor that accepts messages of type T and

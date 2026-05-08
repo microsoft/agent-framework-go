@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package autocall
+package toolautocall
 
 import (
 	"cmp"
