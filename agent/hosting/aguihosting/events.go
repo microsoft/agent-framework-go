@@ -103,6 +103,13 @@ func updatesToAGUIEvents(
 				msgID = aguiEvents.GenerateMessageID()
 			}
 
+			if currentReasoningMsgID != "" && currentReasoningMsgID != msgID {
+				if !yield(aguiEvents.NewReasoningMessageEndEvent(currentReasoningMsgID), nil) {
+					return
+				}
+				currentReasoningMsgID = ""
+			}
+
 			hasText := hasTextLikeContent(update.Contents)
 			if hasText && currentMessageID != msgID {
 				if currentMessageID != "" {
@@ -127,7 +134,11 @@ func updatesToAGUIEvents(
 						return
 					}
 				}
-				if !yield(aguiEvents.NewReasoningMessageStartEvent(msgID, string(message.RoleAssistant)), nil) {
+				role := string(update.Role)
+				if role == "" {
+					role = string(message.RoleAssistant)
+				}
+				if !yield(aguiEvents.NewReasoningMessageStartEvent(msgID, role), nil) {
 					return
 				}
 				currentReasoningMsgID = msgID
