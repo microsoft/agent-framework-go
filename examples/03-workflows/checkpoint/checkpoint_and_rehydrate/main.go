@@ -53,7 +53,11 @@ func main() {
 	if err != nil {
 		demo.Panic(err)
 	}
-	defer os.RemoveAll(storeDir)
+	defer func() {
+		if err := os.RemoveAll(storeDir); err != nil {
+			demo.Panic(err)
+		}
+	}()
 
 	ctx := context.Background()
 
@@ -112,7 +116,11 @@ func main() {
 	if err != nil {
 		demo.Panic(err)
 	}
-	defer store2.Close()
+	defer func() {
+		if err := store2.Close(); err != nil {
+			demo.Panic(err)
+		}
+	}()
 	manager2 := checkpoint.NewJSONManager(store2)
 
 	// Read back the session ID that was persisted in Phase 1.
