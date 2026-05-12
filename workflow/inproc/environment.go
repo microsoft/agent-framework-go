@@ -39,7 +39,6 @@ type ExecutionEnvironment struct {
 	executionMode        execution.Mode
 	enableConcurrentRuns bool
 	checkpointManager    checkpoint.Manager
-	tracePropagator      workflow.TraceContextPropagator
 }
 
 func newExecutionEnvironment(mode execution.Mode, enableConcurrentRuns bool, checkpointManager checkpoint.Manager) *ExecutionEnvironment {
@@ -54,28 +53,9 @@ func newExecutionEnvironment(mode execution.Mode, enableConcurrentRuns bool, che
 // the given [checkpoint.Manager].
 func (e *ExecutionEnvironment) WithCheckpointing(mgr pcheckpoint.Manager) *ExecutionEnvironment {
 	if mgr == nil {
-		env := newExecutionEnvironment(e.executionMode, e.enableConcurrentRuns, nil)
-		env.tracePropagator = e.tracePropagator
-		return env
+		return newExecutionEnvironment(e.executionMode, e.enableConcurrentRuns, nil)
 	}
-	env := newExecutionEnvironment(e.executionMode, e.enableConcurrentRuns, mgr.(checkpoint.Manager))
-	env.tracePropagator = e.tracePropagator
-	return env
-}
-
-// WithTracePropagator returns a new execution environment configured with
-// the given [workflow.TraceContextPropagator]. When set, trace context is
-// propagated across executor boundaries so that spans in downstream executors
-// are parented to the sending executor's span. Pass nil to disable trace
-// propagation.
-func (e *ExecutionEnvironment) WithTracePropagator(tp workflow.TraceContextPropagator) *ExecutionEnvironment {
-	env := &ExecutionEnvironment{
-		executionMode:        e.executionMode,
-		enableConcurrentRuns: e.enableConcurrentRuns,
-		checkpointManager:    e.checkpointManager,
-		tracePropagator:      tp,
-	}
-	return env
+	return newExecutionEnvironment(e.executionMode, e.enableConcurrentRuns, mgr.(checkpoint.Manager))
 }
 
 // IsCheckpointingEnabled reports whether checkpointing is configured for
@@ -145,7 +125,7 @@ func (e *ExecutionEnvironment) verifyCheckpointingConfigured() error {
 }
 
 func (e *ExecutionEnvironment) beginRun(ctx context.Context, wf *workflow.Workflow, sessionID string, knownValidInputTypes []reflect.Type) (*execution.RunHandle, error) {
-	runner, err := createTopLevelRunner(wf, e.checkpointManager, sessionID, e.enableConcurrentRuns, knownValidInputTypes, e.tracePropagator)
+	runner, err := createTopLevelRunner(wf, e.checkpointManager, sessionID, e.enableConcurrentRuns, knownValidInputTypes)
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +134,7 @@ func (e *ExecutionEnvironment) beginRun(ctx context.Context, wf *workflow.Workfl
 
 func (e *ExecutionEnvironment) resumeRun(ctx context.Context, wf *workflow.Workflow, fromCheckpoint workflow.CheckpointInfo, knownValidInputTypes []reflect.Type, opts ...ExecutionOption) (*execution.RunHandle, error) {
 	options := applyExecutionOptions(opts)
-	runner, err := createTopLevelRunner(wf, e.checkpointManager, fromCheckpoint.SessionID, e.enableConcurrentRuns, knownValidInputTypes, e.tracePropagator)
+	runner, err := createTopLevelRunner(wf, e.checkpointManager, fromCheckpoint.SessionID, e.enableConcurrentRuns, knownValidInputTypes)
 	if err != nil {
 		return nil, err
 	}

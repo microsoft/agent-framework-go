@@ -187,3 +187,54 @@ func TestRequestPortInfo_FieldsMatchSource(t *testing.T) {
 		t.Errorf("ResponseType does not match int")
 	}
 }
+
+func TestReflectPorts_ReturnsCopy(t *testing.T) {
+	portBinding := workflow.BindRequestPort(workflow.RequestPort{
+		ID:       "approval",
+		Request:  reflect.TypeFor[string](),
+		Response: reflect.TypeFor[bool](),
+	})
+	wf, err := workflow.NewBuilder(portBinding).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	got := wf.ReflectPorts()
+	if len(got) != 1 {
+		t.Fatalf("expected 1 reflected port, got %d", len(got))
+	}
+	info, ok := got["approval"]
+	if !ok {
+		t.Fatalf("missing reflected port %q", "approval")
+	}
+	if info.PortID != "approval" {
+		t.Fatalf("PortID = %q, want approval", info.PortID)
+	}
+	delete(got, "approval")
+	if _, ok := wf.Ports["approval"]; !ok {
+		t.Fatal("ReflectPorts did not return a copy: workflow lost port approval")
+	}
+}
+
+func TestScopeID_Equality(t *testing.T) {
+	privateScope1 := workflow.ScopeID{ExecutorID: "executor1"}
+	privateScope2 := workflow.ScopeID{ExecutorID: "executor2"}
+	if !privateScope1.Equal(workflow.ScopeID{ExecutorID: "executor1"}) {
+		t.Fatal("private scope should equal same executor private scope")
+	}
+	if privateScope1.Equal(privateScope2) {
+		t.Fatal("private scopes for different executors should not be equal")
+	}
+
+	sharedScope1 := workflow.ScopeID{ExecutorID: "executor1", ScopeName: "shared"}
+	sharedScope2 := workflow.ScopeID{ExecutorID: "executor2", ScopeName: "shared"}
+	if !sharedScope1.Equal(sharedScope2) {
+		t.Fatal("shared scopes with same name should be equal regardless of executor")
+	}
+	if sharedScope1.Equal(workflow.ScopeID{ExecutorID: "executor1", ScopeName: "different"}) {
+		t.Fatal("shared scopes with different names should not be equal")
+	}
+	if sharedScope1.Equal(privateScope1) {
+		t.Fatal("shared scope should not equal private scope")
+	}
+}

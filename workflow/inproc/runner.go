@@ -52,12 +52,11 @@ func createTopLevelRunner(
 	sessionID string,
 	enableConcurrentRuns bool,
 	knownValidInputTypes []reflect.Type,
-	tracePropagator workflow.TraceContextPropagator,
 ) (*runner, error) {
 	if sessionID == "" {
 		sessionID = uuid.NewString()
 	}
-	return newInProcessRunner(wf, checkpointMgr, sessionID, nil, enableConcurrentRuns, knownValidInputTypes, tracePropagator)
+	return newInProcessRunner(wf, checkpointMgr, sessionID, nil, enableConcurrentRuns, knownValidInputTypes)
 }
 
 func newInProcessRunner(
@@ -67,7 +66,6 @@ func newInProcessRunner(
 	existingOwnerSignoff any,
 	enableConcurrentRuns bool,
 	knownValidInputTypes []reflect.Type,
-	tracePropagator workflow.TraceContextPropagator,
 ) (*runner, error) {
 	if wf == nil {
 		return nil, fmt.Errorf("workflow cannot be nil")
@@ -97,7 +95,6 @@ func newInProcessRunner(
 		stepTracer,
 		existingOwnerSignoff,
 		enableConcurrentRuns,
-		tracePropagator,
 	)
 	if err != nil {
 		return nil, err
@@ -128,6 +125,10 @@ func newInProcessRunner(
 // SessionID returns the unique identifier for this run's session.
 func (r *runner) SessionID() string {
 	return r.sessionID
+}
+
+func (r *runner) Workflow() *workflow.Workflow {
+	return r.wf
 }
 
 // StartExecutorID returns the ID of the starting executor.

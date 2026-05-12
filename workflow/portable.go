@@ -57,7 +57,66 @@ func (v *PortableValue) Any() any {
 	if v.cache != nil {
 		return v.cache
 	}
+	raw, ok := v.any.(json.RawMessage)
+	if !ok {
+		return v.any
+	}
+	if decoded, ok := decodeKnownPortableType(v.TypeID, raw); ok {
+		v.cache = decoded
+		return decoded
+	}
+	var decoded any
+	if err := json.Unmarshal(raw, &decoded); err == nil {
+		v.cache = decoded
+		return decoded
+	}
 	return v.any
+}
+
+func decodeKnownPortableType(typeID TypeID, raw json.RawMessage) (any, bool) {
+	if typeID.PackageName != "" {
+		return nil, false
+	}
+	switch typeID.TypeName {
+	case "string":
+		return decodePortableJSON[string](raw)
+	case "bool":
+		return decodePortableJSON[bool](raw)
+	case "int":
+		return decodePortableJSON[int](raw)
+	case "int8":
+		return decodePortableJSON[int8](raw)
+	case "int16":
+		return decodePortableJSON[int16](raw)
+	case "int32":
+		return decodePortableJSON[int32](raw)
+	case "int64":
+		return decodePortableJSON[int64](raw)
+	case "uint":
+		return decodePortableJSON[uint](raw)
+	case "uint8":
+		return decodePortableJSON[uint8](raw)
+	case "uint16":
+		return decodePortableJSON[uint16](raw)
+	case "uint32":
+		return decodePortableJSON[uint32](raw)
+	case "uint64":
+		return decodePortableJSON[uint64](raw)
+	case "float32":
+		return decodePortableJSON[float32](raw)
+	case "float64":
+		return decodePortableJSON[float64](raw)
+	default:
+		return nil, false
+	}
+}
+
+func decodePortableJSON[T any](raw json.RawMessage) (any, bool) {
+	var decoded T
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return nil, false
+	}
+	return decoded, true
 }
 
 // Is reports whether the value is of the specified type.

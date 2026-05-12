@@ -4,6 +4,7 @@ package workflowprovider_test
 
 import (
 	"context"
+	"fmt"
 	"iter"
 	"reflect"
 	"strings"
@@ -323,6 +324,60 @@ func TestNew_NilWorkflow(t *testing.T) {
 	}
 }
 
+func errorContentExecutorBinding(id string, messageText string) *workflow.ExecutorBinding {
+	binding := &workflow.ExecutorBinding{
+		ID:           id,
+		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+	}
+	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: id,
+			Config: []*workflow.ExecutorConfig{
+				messageworkflow.NewExecutorConfig(&messageworkflow.Options{
+					StateKey: "error_content_msgs",
+					TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, _ []*message.Message) error {
+						return ctx.AddEvent(workflow.OutputEvent{
+							ExecutorID: id,
+							Output: &agent.ResponseUpdate{
+								Role:     message.RoleAssistant,
+								Contents: []message.Content{&message.ErrorContent{Message: messageText}},
+							},
+						})
+					},
+				}),
+			},
+		}, nil
+	}
+	return binding
+}
+
+func TestNew_ErrorContentOutputStreamedOut(t *testing.T) {
+	const want = "Simulated agent failure."
+
+	for _, includeDetails := range []bool{false, true} {
+		t.Run(fmt.Sprintf("includeDetails=%v", includeDetails), func(t *testing.T) {
+			binding := errorContentExecutorBinding("error-content", want)
+			wf, err := workflow.NewBuilder(binding).Build()
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+
+			ag, err := workflowprovider.New(wf, workflowprovider.Config{IncludeErrorDetails: includeDetails})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+
+			resp, err := ag.RunText(context.Background(), "hi").Collect()
+			if err != nil {
+				t.Fatalf("RunText: %v", err)
+			}
+			if !containsErrorContent(resp, want) {
+				t.Errorf("expected ErrorContent with %q, response = %+v", want, resp)
+			}
+		})
+	}
+}
+
 // failingExecutor returns the given error from its handler on every TurnToken.
 func failingExecutor(id string, retErr error) *workflow.ExecutorBinding {
 	binding := &workflow.ExecutorBinding{
@@ -639,6 +694,47 @@ func TestNew_RequestInfoContentUsesExternalRequestID(t *testing.T) {
 	}
 	if got.Name != "do" {
 		t.Errorf("Name = %q, want %q", got.Name, "do")
+	}
+}
+
+func TestNew_ApprovalRequestInfoContentUsesExternalRequestID(t *testing.T) {
+	binding := approvalRequestExecutorBinding(t, "approval-preserve")
+	wf, err := workflow.NewBuilder(binding).WithOutputFrom(binding).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	ag, err := workflowprovider.New(wf, workflowprovider.Config{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	resp, err := ag.RunText(context.Background(), "hi").Collect()
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var got *message.ToolApprovalRequestContent
+	for _, m := range resp.Messages {
+		for _, c := range m.Contents {
+			if req, ok := c.(*message.ToolApprovalRequestContent); ok {
+				got = req
+			}
+		}
+	}
+	if got == nil {
+		t.Fatalf("expected ToolApprovalRequestContent in response, got %+v", resp)
+	}
+	if got.RequestID != "approval-preserve_UserInput:req-1" {
+		t.Errorf("RequestID = %q, want %q", got.RequestID, "approval-preserve_UserInput:req-1")
+	}
+	call, ok := got.ToolCall.(*message.FunctionCallContent)
+	if !ok {
+		t.Fatalf("ToolCall = %T, want *message.FunctionCallContent", got.ToolCall)
+	}
+	if call.CallID != "abc" {
+		t.Errorf("ToolCall.CallID = %q, want %q", call.CallID, "abc")
+	}
+	if call.Name != "do" {
+		t.Errorf("ToolCall.Name = %q, want %q", call.Name, "do")
 	}
 }
 

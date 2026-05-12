@@ -9,6 +9,8 @@ import (
 	"reflect"
 	"slices"
 	"sync"
+
+	"github.com/microsoft/agent-framework-go/workflow/internal/observability"
 )
 
 // ExecutorOptions holds configuration options for [Executor] behavior.
@@ -60,8 +62,9 @@ type ExecutorConfig struct {
 }
 
 type Executor struct {
-	ID      string
-	Options ExecutorOptions
+	ID           string
+	ExecutorType reflect.Type
+	Options      ExecutorOptions
 
 	Config []*ExecutorConfig
 
@@ -166,7 +169,29 @@ func (e *Executor) router() (*messageRouter, error) {
 	return e.cachedRouter, e.routerErr
 }
 
-func (e *Executor) Execute(ctx *Context, message any) (any, error) {
+func (e *Executor) Execute(ctx *Context, message any) (result any, err error) {
+	telemetry := ctx.telemetry()
+	messageType := NewTypeID(reflect.TypeOf(message))
+	spanCtx, span := telemetry.StartExecutorProcess(
+		ctx.GetContext(),
+		e.ID,
+		observability.TypeName(e.ExecutorType),
+		messageType.TypeName,
+		message,
+		ctx.traceContextStrings(),
+	)
+	defer func() {
+		if err != nil {
+			span.CaptureError(err)
+		}
+		span.End()
+	}()
+	if span != nil {
+		bound := *ctx
+		bound.Context = spanCtx
+		ctx = &bound
+	}
+
 	if err := ctx.AddEvent(ExecutorInvokedEvent{ExecutorID: e.ID, Message: message}); err != nil {
 		return nil, err
 	}
@@ -193,6 +218,7 @@ func (e *Executor) Execute(ctx *Context, message any) (any, error) {
 	}
 	// If we had a real return type, raise it as a SendMessage
 	if ret.Result != nil {
+		telemetry.SetExecutorOutput(span, ret.Result)
 		if !e.Options.DisableAutoSendMessageHandlerResultObject {
 			if err := ctx.SendMessage("", ret.Result); err != nil {
 				return nil, err
@@ -216,7 +242,11 @@ func (e *Executor) InputTypes() []reflect.Type {
 }
 
 func (e *Executor) OutputTypes() []reflect.Type {
-	return []reflect.Type{reflect.TypeFor[any]()}
+	router, err := e.router()
+	if err != nil {
+		return nil
+	}
+	return slices.Collect(router.DefaultOutputTypes())
 }
 
 func (e *Executor) DescribeProtocol() *ProtocolDescriptor {

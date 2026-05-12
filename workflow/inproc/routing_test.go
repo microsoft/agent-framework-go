@@ -119,6 +119,41 @@ func TestDirectEdgeRouting_ConditionFalse_DoesNotDeliver(t *testing.T) {
 	}
 }
 
+func TestDirectEdgeRouting_TargetedMessageDeliversOnlyToMatchingSink(t *testing.T) {
+	tests := []struct {
+		name      string
+		targetID  string
+		wantTrace []string
+	}{
+		{name: "matching target", targetID: "b", wantTrace: []string{"a:test", "b:test"}},
+		{name: "non-matching target", targetID: "a", wantTrace: []string{"a:test"}},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			var (
+				mu    sync.Mutex
+				trace []string
+			)
+			a := targetingExecutor("a", testCase.targetID, &trace, &mu)
+			b := captureExecutor("b", &trace, &mu)
+			wf, err := workflow.NewBuilder(a).AddEdge(a, b).Build()
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			if _, err := inproc.Default.Run(context.Background(), wf, "test"); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			if !slices.Equal(trace, testCase.wantTrace) {
+				t.Fatalf("trace = %v, want %v", trace, testCase.wantTrace)
+			}
+		})
+	}
+}
+
 func TestFanOutEdgeRouting_NoAssigner_DeliversToAll(t *testing.T) {
 	var (
 		mu    sync.Mutex
@@ -145,6 +180,45 @@ func TestFanOutEdgeRouting_NoAssigner_DeliversToAll(t *testing.T) {
 	slices.Sort(want)
 	if !slices.Equal(got, want) {
 		t.Errorf("trace = %v, want %v", got, want)
+	}
+}
+
+func TestFanOutEdgeRouting_TargetedMessageDeliversOnlyToMatchingSink(t *testing.T) {
+	tests := []struct {
+		name      string
+		targetID  string
+		wantTrace []string
+	}{
+		{name: "matching first sink", targetID: "b", wantTrace: []string{"a:test", "b:test"}},
+		{name: "matching second sink", targetID: "c", wantTrace: []string{"a:test", "c:test"}},
+		{name: "non-matching target", targetID: "a", wantTrace: []string{"a:test"}},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			var (
+				mu    sync.Mutex
+				trace []string
+			)
+			a := targetingExecutor("a", testCase.targetID, &trace, &mu)
+			b := captureExecutor("b", &trace, &mu)
+			c := captureExecutor("c", &trace, &mu)
+			wf, err := workflow.NewBuilder(a).
+				AddFanOutEdge(a, []*workflow.ExecutorBinding{b, c}).
+				Build()
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			if _, err := inproc.Default.Run(context.Background(), wf, "test"); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			if !slices.Equal(trace, testCase.wantTrace) {
+				t.Fatalf("trace = %v, want %v", trace, testCase.wantTrace)
+			}
+		})
 	}
 }
 
@@ -212,6 +286,33 @@ func TestFanOutEdgeRouting_AssignerSelectsEmpty_NoDelivery(t *testing.T) {
 	if !slices.Equal(trace, want) {
 		t.Errorf("trace = %v, want %v", trace, want)
 	}
+}
+
+func targetingExecutor(id string, targetID string, sink *[]string, mu *sync.Mutex) *workflow.ExecutorBinding {
+	binding := &workflow.ExecutorBinding{
+		ID:           id,
+		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+	}
+	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: id,
+			Options: workflow.ExecutorOptions{
+				DisableAutoSendMessageHandlerResultObject: true,
+				DisableAutoYieldOutputHandlerResultObject: true,
+			},
+			Config: []*workflow.ExecutorConfig{{
+				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+					return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
+						mu.Lock()
+						*sink = append(*sink, id+":"+msg.(string))
+						mu.Unlock()
+						return nil, ctx.SendMessage(targetID, msg)
+					}), nil
+				},
+			}},
+		}, nil
+	}
+	return binding
 }
 
 func TestFanInEdgeRouting_StateResetsAfterDelivery(t *testing.T) {

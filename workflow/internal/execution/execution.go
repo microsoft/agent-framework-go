@@ -73,6 +73,8 @@ func (s *ConcurrentEventSink) Enqueue(ctx context.Context, evt workflow.Event) e
 }
 
 type SuperStepRunner interface {
+	Workflow() *workflow.Workflow
+
 	SessionID() string
 	StartExecutorID() string
 	HasUnservicedRequests() bool

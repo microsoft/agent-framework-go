@@ -73,6 +73,7 @@ func updatesToAGUIEvents(
 		}
 
 		var currentMessageID string
+		var currentReasoningMsgID string
 		suppressedCallIDs := map[string]struct{}{}
 		for update, err := range updates {
 			if err != nil {
@@ -102,6 +103,13 @@ func updatesToAGUIEvents(
 				msgID = aguiEvents.GenerateMessageID()
 			}
 
+			if currentReasoningMsgID != "" && currentReasoningMsgID != msgID {
+				if !yield(aguiEvents.NewReasoningMessageEndEvent(currentReasoningMsgID), nil) {
+					return
+				}
+				currentReasoningMsgID = ""
+			}
+
 			hasText := hasTextLikeContent(update.Contents)
 			if hasText && currentMessageID != msgID {
 				if currentMessageID != "" {
@@ -119,11 +127,41 @@ func updatesToAGUIEvents(
 				currentMessageID = msgID
 			}
 
+			hasReasoning := hasReasoningContent(update.Contents)
+			if hasReasoning && currentReasoningMsgID != msgID {
+				if currentReasoningMsgID != "" {
+					if !yield(aguiEvents.NewReasoningMessageEndEvent(currentReasoningMsgID), nil) {
+						return
+					}
+				}
+				role := string(update.Role)
+				if role == "" {
+					role = string(message.RoleAssistant)
+				}
+				if !yield(aguiEvents.NewReasoningMessageStartEvent(msgID, role), nil) {
+					return
+				}
+				currentReasoningMsgID = msgID
+			}
+
 			for _, c := range update.Contents {
 				if frc, ok := c.(*message.FunctionResultContent); ok {
 					if _, isSuppressed := suppressedCallIDs[frc.CallID]; isSuppressed {
 						continue
 					}
+				}
+				if rc, ok := c.(*message.TextReasoningContent); ok {
+					if rc.Text != "" {
+						if !yield(aguiEvents.NewReasoningMessageContentEvent(currentReasoningMsgID, rc.Text), nil) {
+							return
+						}
+					}
+					if rc.ProtectedData != "" {
+						if !yield(aguiEvents.NewReasoningEncryptedValueEvent(aguiEvents.ReasoningEncryptedValueSubtypeMessage, currentReasoningMsgID, rc.ProtectedData), nil) {
+							return
+						}
+					}
+					continue
 				}
 				events, convErr := contentToEvents(c, msgID)
 				if convErr != nil {
@@ -140,6 +178,11 @@ func updatesToAGUIEvents(
 			}
 		}
 
+		if currentReasoningMsgID != "" {
+			if !yield(aguiEvents.NewReasoningMessageEndEvent(currentReasoningMsgID), nil) {
+				return
+			}
+		}
 		if currentMessageID != "" {
 			if !yield(aguiEvents.NewTextMessageEndEvent(currentMessageID), nil) {
 				return
@@ -157,6 +200,16 @@ func hasTextLikeContent(contents message.Contents) bool {
 		}
 		dc, ok := c.(*message.DataContent)
 		if ok && shouldEmitDataContentAsText(dc) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasReasoningContent(contents message.Contents) bool {
+	for _, c := range contents {
+		rc, ok := c.(*message.TextReasoningContent)
+		if ok && (rc.Text != "" || rc.ProtectedData != "") {
 			return true
 		}
 	}

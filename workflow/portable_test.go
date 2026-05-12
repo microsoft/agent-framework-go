@@ -117,6 +117,21 @@ func TestAnyPortableValue_DereferencesPortableValuePointer(t *testing.T) {
 	}
 }
 
+func TestPortableValueAny_DecodesDelayedPrimitive(t *testing.T) {
+	pv := workflow.AnyPortableValue("hello")
+	data, err := json.Marshal(pv)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var delayed workflow.PortableValue
+	if err := json.Unmarshal(data, &delayed); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got := delayed.Any(); got != "hello" {
+		t.Fatalf("Any() = %v (%T), want hello (string)", got, got)
+	}
+}
+
 func TestPortableValue_RejectsNil(t *testing.T) {
 	defer func() {
 		if recover() == nil {

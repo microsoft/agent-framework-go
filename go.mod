@@ -6,7 +6,7 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.13.1
 	github.com/a2aproject/a2a-go/v2 v2.2.1
 	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260312103001-8e7ab1df34c8
-	github.com/anthropics/anthropic-sdk-go v1.41.0
+	github.com/anthropics/anthropic-sdk-go v1.42.0
 	github.com/gofrs/flock v0.13.0
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
@@ -45,7 +45,7 @@ require (
 	github.com/segmentio/asm v1.1.3 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
-	github.com/standard-webhooks/standard-webhooks/libraries v0.0.0-20260427160145-3afa6683f8b2 // indirect
+	github.com/standard-webhooks/standard-webhooks/libraries v0.0.0-20260508151727-1282bb917829 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.2.0 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
