@@ -7,24 +7,38 @@ package workflowhosting
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"maps"
 	"reflect"
-	"slices"
-	"sync"
+	"regexp"
+	"strings"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/internal/contentexthandler"
 	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/message/messageworkflow"
 	"github.com/microsoft/agent-framework-go/workflow"
 )
 
 const (
-	agentSessionStateKey     = "agent_session"
-	agentTurnEmitStateKey    = "agent_turn_emit"
-	agentBufferedStateKey    = "agent_buffered"
-	pendingApprovalsStateKey = "agent_pending_approvals"
-	pendingCallsStateKey     = "agent_pending_calls"
+	agentHostStateKey        = "AIAgentHostState"
+	agentBufferedStateKey    = "AIAgentHostExecutor.State"
+	pendingApprovalsStateKey = "_userInputHandler_PendingRequests"
+	pendingCallsStateKey     = "_functionCallHandler_PendingRequests"
 )
+
+var invalidDescriptiveIDChars = regexp.MustCompile(`[^0-9A-Za-z]+`)
+
+type agentHostState struct {
+	ThreadState           []byte
+	CurrentTurnEmitEvents *bool
+}
+
+// ResetSignal notifies an agent-hosting executor to reset its agent
+// conversation state and start a new session when appropriate.
+type ResetSignal struct{}
 
 // Config configures how an [agent.Agent] is hosted as a workflow
 // [workflow.Executor].
@@ -117,9 +131,7 @@ func New(a *agent.Agent, cfg Config) *workflow.ExecutorBinding {
 		NewExecutor: func(_ string) (*workflow.Executor, error) {
 			return newHostExecutor(a, cfg).executor(), nil
 		},
-		// Each run gets its own executor instance via NewExecutor so
-		// per-instance turn state is not shared across runs.
-		SupportsConcurrentSharedExecution: true,
+		SupportsConcurrentSharedExecution: false,
 	}
 }
 
@@ -141,50 +153,54 @@ func hostPorts(id string) (userInput, functionCall workflow.RequestPort) {
 // All per-run state (buffered turn messages, pending request bookkeeping,
 // agent session) is kept on this struct.
 type hostExecutor struct {
-	id       string
-	selfName string
-	agent    *agent.Agent
-	cfg      Config
+	id    string
+	agent *agent.Agent
+	cfg   Config
 
-	// Ports used to raise external requests when the corresponding
-	// Intercept* flag is false (the default).
-	userInputPort    workflow.RequestPort
-	functionCallPort workflow.RequestPort
+	session agent.Session
 
-	mu       sync.Mutex
-	session  agent.Session
-	buffered []*message.Message
-	// pendingApprovals tracks ToolApprovalRequestContent IDs that have
-	// been dispatched and are awaiting a matching response.
-	pendingApprovals map[string]struct{}
-	// pendingCalls tracks FunctionCallContent CallIDs that have been
-	// dispatched and are awaiting a matching FunctionResultContent.
-	pendingCalls map[string]struct{}
-	// pendingTurn, when non-nil, is the TurnToken whose downstream
-	// propagation is being held until all outstanding requests resolve.
-	pendingTurn *workflow.TurnToken
-	// currentTurnEmitUpdates is the effective EmitUpdates setting for the
-	// in-flight turn. It applies to subsequent agent re-invocations
-	// triggered by intercepted-request responses.
-	currentTurnEmitUpdates bool
+	messageState    *messageworkflow.MessageState
+	approvalHandler *contentexthandler.Handler[*message.ToolApprovalRequestContent, *message.ToolApprovalResponseContent]
+	callHandler     *contentexthandler.Handler[*message.FunctionCallContent, *message.FunctionResultContent]
+	turnEmitEvents  *bool
 }
 
 func newHostExecutor(a *agent.Agent, cfg Config) *hostExecutor {
 	id := descriptiveID(a)
 	userInputPort, functionCallPort := hostPorts(id)
-	return &hostExecutor{
-		id:               id,
-		selfName:         a.Name(),
-		agent:            a,
-		cfg:              cfg,
-		userInputPort:    userInputPort,
-		functionCallPort: functionCallPort,
-		pendingApprovals: make(map[string]struct{}),
-		pendingCalls:     make(map[string]struct{}),
+	h := &hostExecutor{
+		id:           id,
+		agent:        a,
+		cfg:          cfg,
+		messageState: messageworkflow.NewMessageState(agentBufferedStateKey, ""),
 	}
+	h.approvalHandler = contentexthandler.New(contentexthandler.Options[*message.ToolApprovalRequestContent, *message.ToolApprovalResponseContent]{
+		Port:            userInputPort,
+		StateKey:        pendingApprovalsStateKey,
+		Intercepted:     cfg.InterceptUserInputRequests,
+		RequestID:       func(req *message.ToolApprovalRequestContent) string { return req.RequestID },
+		ResponseID:      func(resp *message.ToolApprovalResponseContent) string { return resp.RequestID },
+		ResponseHandler: h.handleApprovalResponse,
+	})
+	h.callHandler = contentexthandler.New(contentexthandler.Options[*message.FunctionCallContent, *message.FunctionResultContent]{
+		Port:            functionCallPort,
+		StateKey:        pendingCallsStateKey,
+		Intercepted:     cfg.InterceptUnterminatedFunctionCalls,
+		RequestID:       func(req *message.FunctionCallContent) string { return req.CallID },
+		ResponseID:      func(resp *message.FunctionResultContent) string { return resp.CallID },
+		ResponseHandler: h.handleFunctionResult,
+	})
+	return h
 }
 
 func (h *hostExecutor) executor() *workflow.Executor {
+	messageConfig := messageworkflow.NewExecutorConfig(&messageworkflow.Options{
+		StateKey:                 agentBufferedStateKey,
+		TakeTurnHandler:          h.handleTurnToken,
+		StringMessageRole:        string(message.RoleUser),
+		DisableAutoSendTurnToken: true,
+		MessageState:             h.messageState,
+	})
 	return &workflow.Executor{
 		ID: h.id,
 		Options: workflow.ExecutorOptions{
@@ -192,81 +208,53 @@ func (h *hostExecutor) executor() *workflow.Executor {
 			DisableAutoYieldOutputHandlerResultObject: true,
 		},
 		Config: []*workflow.ExecutorConfig{
+			messageConfig,
 			{
 				OnCheckpoint: func(wctx *workflow.Context) error {
-					h.mu.Lock()
-					session := h.session
-					emit := h.currentTurnEmitUpdates
-					approvals := slices.Collect(maps.Keys(h.pendingApprovals))
-					calls := slices.Collect(maps.Keys(h.pendingCalls))
-					buffered := slices.Clone(h.buffered)
-					h.mu.Unlock()
-					if session != nil {
-						data, err := h.agent.MarshalSession(wctx, session)
+					state := agentHostState{CurrentTurnEmitEvents: h.turnEmitEvents}
+					if h.session != nil {
+						data, err := h.agent.MarshalSession(wctx, h.session)
 						if err != nil {
 							return err
 						}
-						if err := wctx.QueueStateUpdate(agentSessionStateKey, "", data); err != nil {
-							return err
-						}
+						state.ThreadState = data
 					}
-					if err := wctx.QueueStateUpdate(agentTurnEmitStateKey, "", emit); err != nil {
+					if err := wctx.QueueStateUpdate(agentHostStateKey, "", state); err != nil {
 						return err
 					}
-					if err := wctx.QueueStateUpdate(agentBufferedStateKey, "", buffered); err != nil {
+					if err := h.approvalHandler.Checkpoint(wctx); err != nil {
 						return err
 					}
-					if err := wctx.QueueStateUpdate(pendingApprovalsStateKey, "", approvals); err != nil {
+					if err := h.callHandler.Checkpoint(wctx); err != nil {
 						return err
 					}
-					return wctx.QueueStateUpdate(pendingCallsStateKey, "", calls)
+					return nil
 				},
 				OnCheckpointRestored: func(wctx *workflow.Context) error {
-					if data, err := wctx.ReadState(agentSessionStateKey, ""); err != nil {
+					h.session = nil
+					h.turnEmitEvents = nil
+					if err := h.approvalHandler.Restore(wctx); err != nil {
 						return err
-					} else if data != nil {
-						session, err := h.agent.UnmarshalSession(wctx, data.([]byte))
-						if err != nil {
-							return err
-						}
-						h.mu.Lock()
-						h.session = session
-						h.mu.Unlock()
 					}
-					if v, err := wctx.ReadState(agentTurnEmitStateKey, ""); err != nil {
+					if err := h.callHandler.Restore(wctx); err != nil {
 						return err
-					} else if v != nil {
-						if b, ok := v.(bool); ok {
-							h.mu.Lock()
-							h.currentTurnEmitUpdates = b
-							h.mu.Unlock()
-						}
 					}
-					if v, err := wctx.ReadState(agentBufferedStateKey, ""); err != nil {
+					data, err := wctx.ReadState(agentHostStateKey, "")
+					if err != nil {
 						return err
-					} else if v != nil {
-						if msgs, ok := v.([]*message.Message); ok {
-							h.mu.Lock()
-							h.buffered = msgs
-							h.mu.Unlock()
-						}
 					}
-					if v, err := wctx.ReadState(pendingApprovalsStateKey, ""); err != nil {
+					state, err := agentHostStateFromAny(data)
+					if err != nil {
 						return err
-					} else if v != nil {
-						if ks, ok := v.([]string); ok {
-							h.mu.Lock()
-							h.pendingApprovals = setFromKeys(ks)
-							h.mu.Unlock()
-						}
 					}
-					if v, err := wctx.ReadState(pendingCallsStateKey, ""); err != nil {
-						return err
-					} else if v != nil {
-						if ks, ok := v.([]string); ok {
-							h.mu.Lock()
-							h.pendingCalls = setFromKeys(ks)
-							h.mu.Unlock()
+					if state != nil {
+						h.turnEmitEvents = state.CurrentTurnEmitEvents
+						if state.ThreadState != nil {
+							session, err := h.agent.UnmarshalSession(wctx, state.ThreadState)
+							if err != nil {
+								return err
+							}
+							h.session = session
 						}
 					}
 					return nil
@@ -278,18 +266,13 @@ func (h *hostExecutor) executor() *workflow.Executor {
 }
 
 func (h *hostExecutor) configureRoutes(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-	rb = rb.
-		AddHandler(reflect.TypeFor[*message.Message](), nil, false, func(_ *workflow.Context, msg any) (any, error) {
-			h.appendMessages(msg.(*message.Message))
-			return nil, nil
-		}).
-		AddHandler(reflect.TypeFor[[]*message.Message](), nil, false, func(_ *workflow.Context, msgs any) (any, error) {
-			h.appendMessages(msgs.([]*message.Message)...)
-			return nil, nil
-		}).
-		AddHandler(reflect.TypeFor[workflow.TurnToken](), nil, false, func(wctx *workflow.Context, msg any) (any, error) {
-			return nil, h.handleTurnToken(wctx, msg.(workflow.TurnToken))
-		})
+	rb = h.approvalHandler.ConfigureRoutes(rb)
+	rb = h.callHandler.ConfigureRoutes(rb)
+	rb = rb.AddHandler(reflect.TypeFor[ResetSignal](), nil, false, func(wctx *workflow.Context, msg any) (any, error) {
+		h.session = nil
+		h.turnEmitEvents = nil
+		return nil, nil
+	})
 
 	// External-response handler is always installed; it dispatches by port
 	// ID so it serves as the back-channel for both kinds of port-mode
@@ -299,107 +282,86 @@ func (h *hostExecutor) configureRoutes(rb *workflow.RouteBuilder) (*workflow.Rou
 		return nil, h.handleExternalResponse(wctx, msg.(*workflow.ExternalResponse))
 	})
 
-	// Workflow-message response handlers are only installed when the
-	// matching flag is true.
-	if h.cfg.InterceptUserInputRequests {
-		rb = rb.AddHandler(reflect.TypeFor[*message.ToolApprovalResponseContent](), nil, false, func(wctx *workflow.Context, msg any) (any, error) {
-			return nil, h.handleApprovalResponse(wctx, msg.(*message.ToolApprovalResponseContent))
-		})
-	}
-	if h.cfg.InterceptUnterminatedFunctionCalls {
-		rb = rb.AddHandler(reflect.TypeFor[*message.FunctionResultContent](), nil, false, func(wctx *workflow.Context, msg any) (any, error) {
-			return nil, h.handleFunctionResult(wctx, msg.(*message.FunctionResultContent))
-		})
-	}
-
 	return rb, nil
 }
 
-func (h *hostExecutor) appendMessages(msgs ...*message.Message) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	for _, m := range msgs {
-		if m != nil {
-			h.buffered = append(h.buffered, m)
-		}
-	}
-}
-
 // drainBuffered returns the currently buffered messages and resets the buffer.
-func (h *hostExecutor) drainBuffered() []*message.Message {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	msgs := h.buffered
-	h.buffered = nil
-	return msgs
+func (h *hostExecutor) drainBuffered(wctx *workflow.Context) ([]*message.Message, error) {
+	var messages []*message.Message
+	err := h.messageState.ProcessTurnMessages(wctx, func(_ *workflow.Context, buffered []*message.Message) ([]*message.Message, error) {
+		messages = buffered
+		return nil, nil
+	})
+	return messages, err
 }
 
-// hasOutstandingRequests reports whether any dispatched requests are awaiting
-// a response.
-func (h *hostExecutor) hasOutstandingRequests() bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return len(h.pendingApprovals)+len(h.pendingCalls) > 0
-}
-
-func (h *hostExecutor) handleTurnToken(wctx *workflow.Context, token workflow.TurnToken) error {
+func (h *hostExecutor) handleTurnToken(wctx *workflow.Context, token workflow.TurnToken, messages []*message.Message) error {
 	emitUpdates := token.EmitEventsOr(h.cfg.EmitUpdateEvents)
-	h.mu.Lock()
-	h.currentTurnEmitUpdates = emitUpdates
-	h.pendingTurn = &token
-	h.mu.Unlock()
-	return h.runAgentAndDispatch(wctx)
+	h.turnEmitEvents = &emitUpdates
+	return h.runAgentAndDispatch(wctx, messages)
 }
 
 func (h *hostExecutor) handleApprovalResponse(wctx *workflow.Context, resp *message.ToolApprovalResponseContent) error {
-	h.mu.Lock()
-	if _, ok := h.pendingApprovals[resp.RequestID]; !ok {
-		h.mu.Unlock()
-		return fmt.Errorf("workflowhosting: no pending FunctionApprovalRequest with ID %q", resp.RequestID)
-	}
-	delete(h.pendingApprovals, resp.RequestID)
-	h.mu.Unlock()
 	wrapped := &message.Message{
-		Role:     message.RoleUser,
-		Contents: []message.Content{resp},
+		ID:        newMessageID(),
+		Role:      message.RoleUser,
+		Contents:  []message.Content{resp},
+		CreatedAt: time.Now().UTC(),
 	}
-	h.appendMessages(wrapped)
-	return h.runAgentAndDispatch(wctx)
+	found, err := h.approvalHandler.MarkRequestAsHandled(wctx, resp)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("workflowhosting: no pending tool approval request with id %q", resp.RequestID)
+	}
+	if err := h.messageState.ProcessTurnMessages(wctx, func(_ *workflow.Context, buffered []*message.Message) ([]*message.Message, error) {
+		return append(buffered, wrapped), nil
+	}); err != nil {
+		return err
+	}
+	messages, err := h.drainBuffered(wctx)
+	if err != nil {
+		return err
+	}
+	return h.runAgentAndDispatch(wctx, messages)
 }
 
 func (h *hostExecutor) handleFunctionResult(wctx *workflow.Context, result *message.FunctionResultContent) error {
-	h.mu.Lock()
-	if _, ok := h.pendingCalls[result.CallID]; !ok {
-		h.mu.Unlock()
-		return fmt.Errorf("workflowhosting: no pending FunctionCall with CallID %q", result.CallID)
-	}
-	delete(h.pendingCalls, result.CallID)
-	h.mu.Unlock()
 	wrapped := &message.Message{
+		ID:         newMessageID(),
 		Role:       message.RoleTool,
-		AuthorName: h.selfName,
+		AuthorName: agentNameOrID(h.agent),
 		Contents:   []message.Content{result},
+		CreatedAt:  time.Now().UTC(),
 	}
-	h.appendMessages(wrapped)
-	return h.runAgentAndDispatch(wctx)
+	found, err := h.callHandler.MarkRequestAsHandled(wctx, result)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("workflowhosting: no pending function call with id %q", result.CallID)
+	}
+	if err := h.messageState.ProcessTurnMessages(wctx, func(_ *workflow.Context, buffered []*message.Message) ([]*message.Message, error) {
+		return append(buffered, wrapped), nil
+	}); err != nil {
+		return err
+	}
+	messages, err := h.drainBuffered(wctx)
+	if err != nil {
+		return err
+	}
+	return h.runAgentAndDispatch(wctx, messages)
 }
 
 // handleExternalResponse routes a port-mode response back to the appropriate
 // content-typed handler.
 func (h *hostExecutor) handleExternalResponse(wctx *workflow.Context, resp *workflow.ExternalResponse) error {
-	switch resp.PortInfo.PortID {
-	case h.userInputPort.ID:
-		v, ok := resp.Data.As(h.userInputPort.Response)
-		if !ok {
-			return fmt.Errorf("workflowhosting: expected %v for user input port, got %T", h.userInputPort.Response, resp.Data.Any())
-		}
-		return h.handleApprovalResponse(wctx, v.(*message.ToolApprovalResponseContent))
-	case h.functionCallPort.ID:
-		v, ok := resp.Data.As(h.functionCallPort.Response)
-		if !ok {
-			return fmt.Errorf("workflowhosting: expected %v for function call port, got %T", h.functionCallPort.Response, resp.Data.Any())
-		}
-		return h.handleFunctionResult(wctx, v.(*message.FunctionResultContent))
+	if handled, err := h.approvalHandler.HandleExternalResponse(wctx, resp); handled || err != nil {
+		return err
+	}
+	if handled, err := h.callHandler.HandleExternalResponse(wctx, resp); handled || err != nil {
+		return err
 	}
 	return nil
 }
@@ -407,9 +369,7 @@ func (h *hostExecutor) handleExternalResponse(wctx *workflow.Context, resp *work
 // runAgentAndDispatch invokes the hosted agent with the buffered turn
 // messages, dispatches outputs and any requests, and propagates the held
 // TurnToken downstream when no outstanding requests remain.
-func (h *hostExecutor) runAgentAndDispatch(wctx *workflow.Context) error {
-	messages := h.drainBuffered()
-
+func (h *hostExecutor) runAgentAndDispatch(wctx *workflow.Context, messages []*message.Message) error {
 	if !h.cfg.DisableMessageForwarding && len(messages) > 0 {
 		if err := wctx.SendMessage("", messages); err != nil {
 			return err
@@ -418,7 +378,7 @@ func (h *hostExecutor) runAgentAndDispatch(wctx *workflow.Context) error {
 
 	agentInput := messages
 	if !h.cfg.DisableRoleReassignment {
-		agentInput = reassignOtherAgentsAsUsers(messages, h.selfName)
+		agentInput = reassignOtherAgentsAsUsers(messages, agentNameOrID(h.agent))
 	}
 
 	session, err := h.ensureSession(wctx)
@@ -426,9 +386,11 @@ func (h *hostExecutor) runAgentAndDispatch(wctx *workflow.Context) error {
 		return err
 	}
 
-	h.mu.Lock()
-	emitUpdates := h.currentTurnEmitUpdates
-	h.mu.Unlock()
+	emitEvents := h.turnEmitEvents
+	emitUpdates := false
+	if emitEvents != nil {
+		emitUpdates = *emitEvents
+	}
 
 	runOpts := []agent.Option{
 		agent.WithSession(session),
@@ -454,13 +416,19 @@ func (h *hostExecutor) runAgentAndDispatch(wctx *workflow.Context) error {
 	// so the role-reassignment logic in receiving hosts works correctly.
 	resp.AgentID = h.agent.ID()
 	for _, m := range resp.Messages {
-		m.AuthorName = h.selfName
+		if m.AuthorName == "" {
+			m.AuthorName = h.agent.Name()
+		}
 	}
 
 	if h.cfg.EmitResponseEvents {
 		if err := wctx.AddEvent(workflow.OutputEvent{ExecutorID: h.id, Output: &resp}); err != nil {
 			return err
 		}
+	}
+
+	if err := h.dispatchRequests(wctx, resp.Messages); err != nil {
+		return err
 	}
 
 	// Filter out server-side artifacts (reasoning tokens, web search calls, etc.)
@@ -473,28 +441,55 @@ func (h *hostExecutor) runAgentAndDispatch(wctx *workflow.Context) error {
 		}
 	}
 
-	if err := h.dispatchRequests(wctx, resp.Messages); err != nil {
+	if err := h.releasePendingTurnIfReady(wctx); err != nil {
 		return err
 	}
-
-	// Only release the held TurnToken downstream once all outstanding
-	// requests have been resolved.
-	if !h.hasOutstandingRequests() {
-		h.mu.Lock()
-		held := h.pendingTurn
-		had := held != nil
-		emit := h.currentTurnEmitUpdates
-		h.pendingTurn = nil
-		h.currentTurnEmitUpdates = false
-		h.mu.Unlock()
-		if had {
-			// Forward a fresh TurnToken stamped with the resolved
-			// EmitEvents value so downstream executors observe the
-			// effective per-turn setting (not the possibly-nil input).
-			return wctx.SendMessage("", workflow.TurnToken{EmitEvents: &emit})
-		}
-	}
 	return nil
+}
+
+// releasePendingTurnIfReady propagates the held TurnToken downstream once all
+// outstanding requests have been resolved.
+func (h *hostExecutor) releasePendingTurnIfReady(wctx *workflow.Context) error {
+	var emit *bool
+	hasApprovals, err := h.approvalHandler.HasPending(wctx)
+	if err != nil {
+		return err
+	}
+	hasCalls, err := h.callHandler.HasPending(wctx)
+	if err != nil {
+		return err
+	}
+	if !hasApprovals && !hasCalls {
+		emit = h.turnEmitEvents
+		h.turnEmitEvents = nil
+	}
+	if emit == nil {
+		return nil
+	}
+	// Forward a fresh TurnToken stamped with the resolved EmitEvents value so
+	// downstream executors observe the effective per-turn setting.
+	return wctx.SendMessage("", workflow.TurnToken{EmitEvents: emit})
+}
+
+func agentHostStateFromAny(value any) (*agentHostState, error) {
+	if value == nil {
+		return nil, nil
+	}
+	switch state := value.(type) {
+	case agentHostState:
+		return &state, nil
+	case *agentHostState:
+		return state, nil
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	var state agentHostState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, err
+	}
+	return &state, nil
 }
 
 // filterForwardableMessages filters response messages to only include portable
@@ -551,106 +546,87 @@ func filterForwardableContents(contents message.Contents) message.Contents {
 // already pending from a previous response (e.g. a re-emission) is silently
 // skipped (idempotent) so the executor doesn't double-dispatch.
 func (h *hostExecutor) dispatchRequests(wctx *workflow.Context, msgs []*message.Message) error {
-	// Pre-compute the set of FunctionCallContent CallIDs that already have a
-	// matching FunctionResultContent in the same response, so they are not
-	// considered unresolved.
-	resolved := make(map[string]struct{})
-	for _, m := range msgs {
-		for _, c := range m.Contents {
-			if r, ok := c.(*message.FunctionResultContent); ok {
-				resolved[r.CallID] = struct{}{}
-			}
-		}
-	}
-
-	// Track IDs seen so far in this single dispatch to detect within-response
-	// duplicates as errors.
-	seenApprovals := make(map[string]struct{})
-	seenCalls := make(map[string]struct{})
+	approvalRequests := make(map[string]*message.ToolApprovalRequestContent)
+	functionCalls := make(map[string]*message.FunctionCallContent)
+	var approvalOrder []string
+	var callOrder []string
 
 	for _, m := range msgs {
 		for _, c := range m.Contents {
 			switch v := c.(type) {
 			case *message.ToolApprovalRequestContent:
-				if _, dup := seenApprovals[v.RequestID]; dup {
-					return fmt.Errorf("workflowhosting: duplicate ToolApprovalRequest  ID %q in same response", v.RequestID)
+				if _, exists := approvalRequests[v.RequestID]; exists {
+					return fmt.Errorf("workflowhosting: duplicate tool approval request id %q", v.RequestID)
 				}
-				seenApprovals[v.RequestID] = struct{}{}
-				h.mu.Lock()
-				if _, alreadyPending := h.pendingApprovals[v.RequestID]; alreadyPending {
-					h.mu.Unlock()
-					// Already-pending request: idempotent re-emission, no-op.
-					continue
-				}
-				h.pendingApprovals[v.RequestID] = struct{}{}
-				h.mu.Unlock()
-				if h.cfg.InterceptUserInputRequests {
-					if err := wctx.SendMessage("", v); err != nil {
-						return err
-					}
-				} else {
-					req, err := workflow.NewExternalRequest(h.userInputPort.ID+":"+v.RequestID, h.userInputPort, v)
-					if err != nil {
-						return err
-					}
-					if err := wctx.PostRequest(req); err != nil {
-						return err
-					}
-				}
+				approvalRequests[v.RequestID] = v
+				approvalOrder = append(approvalOrder, v.RequestID)
+			case *message.ToolApprovalResponseContent:
+				delete(approvalRequests, v.RequestID)
 			case *message.FunctionCallContent:
-				if _, done := resolved[v.CallID]; done {
-					continue
+				if _, exists := functionCalls[v.CallID]; exists {
+					return fmt.Errorf("workflowhosting: duplicate function call id %q", v.CallID)
 				}
-				if _, dup := seenCalls[v.CallID]; dup {
-					return fmt.Errorf("workflowhosting: duplicate FunctionCall CallID %q in same response", v.CallID)
-				}
-				seenCalls[v.CallID] = struct{}{}
-				h.mu.Lock()
-				if _, alreadyPending := h.pendingCalls[v.CallID]; alreadyPending {
-					h.mu.Unlock()
-					// Already-pending call: idempotent re-emission, no-op.
-					continue
-				}
-				h.pendingCalls[v.CallID] = struct{}{}
-				h.mu.Unlock()
-				if h.cfg.InterceptUnterminatedFunctionCalls {
-					if err := wctx.SendMessage("", v); err != nil {
-						return err
-					}
-				} else {
-					req, err := workflow.NewExternalRequest(h.functionCallPort.ID+":"+v.CallID, h.functionCallPort, v)
-					if err != nil {
-						return err
-					}
-					if err := wctx.PostRequest(req); err != nil {
-						return err
-					}
-				}
+				functionCalls[v.CallID] = v
+				callOrder = append(callOrder, v.CallID)
+			case *message.FunctionResultContent:
+				delete(functionCalls, v.CallID)
 			}
+		}
+	}
+
+	var approvalDispatches []*message.ToolApprovalRequestContent
+	var callDispatches []*message.FunctionCallContent
+	for _, id := range approvalOrder {
+		approval, ok := approvalRequests[id]
+		if !ok {
+			continue
+		}
+		delete(approvalRequests, id)
+		added, err := h.approvalHandler.TrackRequest(wctx, approval)
+		if err != nil {
+			return err
+		}
+		if added {
+			approvalDispatches = append(approvalDispatches, approval)
+		}
+	}
+	for _, id := range callOrder {
+		call, ok := functionCalls[id]
+		if !ok {
+			continue
+		}
+		delete(functionCalls, id)
+		added, err := h.callHandler.TrackRequest(wctx, call)
+		if err != nil {
+			return err
+		}
+		if added {
+			callDispatches = append(callDispatches, call)
+		}
+	}
+
+	for _, approval := range approvalDispatches {
+		if err := h.approvalHandler.DispatchRequest(wctx, approval); err != nil {
+			return err
+		}
+	}
+	for _, call := range callDispatches {
+		if err := h.callHandler.DispatchRequest(wctx, call); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
 func (h *hostExecutor) ensureSession(ctx context.Context) (agent.Session, error) {
-	h.mu.Lock()
 	if h.session != nil {
-		s := h.session
-		h.mu.Unlock()
-		return s, nil
+		return h.session, nil
 	}
-	h.mu.Unlock()
 	s, err := h.agent.CreateSession(ctx)
 	if err != nil {
 		return nil, err
 	}
-	h.mu.Lock()
-	if h.session == nil {
-		h.session = s
-	} else {
-		s = h.session
-	}
-	h.mu.Unlock()
+	h.session = s
 	return s, nil
 }
 
@@ -660,7 +636,7 @@ func (h *hostExecutor) ensureSession(ctx context.Context) (agent.Session, error)
 func reassignOtherAgentsAsUsers(msgs []*message.Message, selfName string) []*message.Message {
 	var out []*message.Message
 	for i, m := range msgs {
-		if m == nil || m.Role != message.RoleAssistant || m.AuthorName == selfName {
+		if !shouldReassignAssistantMessage(m, selfName) {
 			if out != nil {
 				out = append(out, m)
 			}
@@ -680,17 +656,35 @@ func reassignOtherAgentsAsUsers(msgs []*message.Message, selfName string) []*mes
 	return out
 }
 
-func descriptiveID(a *agent.Agent) string {
-	if a.Name() != "" {
-		return a.Name() + "_" + a.ID()
+func shouldReassignAssistantMessage(m *message.Message, selfName string) bool {
+	if m == nil || m.Role != message.RoleAssistant || m.AuthorName == selfName {
+		return false
+	}
+	for _, content := range m.Contents {
+		switch content.(type) {
+		case *message.TextContent, *message.DataContent, *message.URIContent, *message.UsageContent:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func agentNameOrID(a *agent.Agent) string {
+	if name := a.Name(); name != "" {
+		return name
 	}
 	return a.ID()
 }
 
-func setFromKeys(ks []string) map[string]struct{} {
-	out := make(map[string]struct{}, len(ks))
-	for _, k := range ks {
-		out[k] = struct{}{}
+func newMessageID() string {
+	return strings.ReplaceAll(uuid.NewString(), "-", "")
+}
+
+func descriptiveID(a *agent.Agent) string {
+	id := a.ID()
+	if a.Name() != "" {
+		id = a.Name() + "_" + id
 	}
-	return out
+	return invalidDescriptiveIDChars.ReplaceAllString(id, "_")
 }

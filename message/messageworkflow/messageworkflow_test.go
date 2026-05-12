@@ -24,6 +24,11 @@ func (e *TestExecutor) takeTurn(ctx *workflow.Context, token workflow.TurnToken,
 }
 
 func createExecutor(options *messageworkflow.Options) (*workflow.Executor, *workflow.Context) {
+	executor, ctx, _ := createExecutorWithSent(options)
+	return executor, ctx
+}
+
+func createExecutorWithSent(options *messageworkflow.Options) (*workflow.Executor, *workflow.Context, *[]any) {
 	config := messageworkflow.NewExecutorConfig(options)
 	executor := &workflow.Executor{
 		ID: "test-executor",
@@ -31,15 +36,17 @@ func createExecutor(options *messageworkflow.Options) (*workflow.Executor, *work
 			config,
 		},
 	}
+	var sent []any
 
 	ctx := &workflow.Context{
 		SendMessage: func(targetID string, message any) error {
+			sent = append(sent, message)
 			return nil
 		},
 		AddEvent: func(event workflow.Event) error { return nil },
 	}
 
-	return executor, ctx
+	return executor, ctx, &sent
 }
 
 func TestExecutor_DescribedProtocol(t *testing.T) {
@@ -223,6 +230,37 @@ func TestExecutor_WithStringRole_ConvertsStringToMessage(t *testing.T) {
 	}
 }
 
+func TestExecutor_UsesSharedMessageState(t *testing.T) {
+	te := &TestExecutor{}
+	state := messageworkflow.NewMessageState("test-state", "")
+	executor, ctx := createExecutor(&messageworkflow.Options{
+		StateKey:        "test-state",
+		TakeTurnHandler: te.takeTurn,
+		MessageState:    state,
+	})
+
+	first := &message.Message{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "buffered"}}}
+	second := &message.Message{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "injected"}}}
+	if _, err := executor.Execute(ctx, first); err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	if err := state.ProcessTurnMessages(ctx, func(_ *workflow.Context, messages []*message.Message) ([]*message.Message, error) {
+		return append(messages, second), nil
+	}); err != nil {
+		t.Fatalf("ProcessTurnMessages: %v", err)
+	}
+	if _, err := executor.Execute(ctx, workflow.TurnToken{}); err != nil {
+		t.Fatalf("Execute turn token failed: %v", err)
+	}
+
+	if len(te.receivedMessages) != 2 {
+		t.Fatalf("received message count = %d, want 2", len(te.receivedMessages))
+	}
+	if te.receivedMessages[0] != first || te.receivedMessages[1] != second {
+		t.Fatalf("received messages = %#v, want first then second", te.receivedMessages)
+	}
+}
+
 func TestExecutor_EmptyCollection_HandledCorrectly(t *testing.T) {
 	te := &TestExecutor{}
 	executor, ctx := createExecutor(&messageworkflow.Options{
@@ -233,6 +271,10 @@ func TestExecutor_EmptyCollection_HandledCorrectly(t *testing.T) {
 	if _, err := executor.Execute(ctx, []*message.Message{}); err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
+	emptySeq := func(yield func(*message.Message) bool) {}
+	if _, err := executor.Execute(ctx, iter.Seq[*message.Message](emptySeq)); err != nil {
+		t.Fatalf("Execute seq failed: %v", err)
+	}
 	if _, err := executor.Execute(ctx, workflow.TurnToken{}); err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -242,6 +284,50 @@ func TestExecutor_EmptyCollection_HandledCorrectly(t *testing.T) {
 	}
 	if te.turnCount != 1 {
 		t.Errorf("Expected 1 turn, got %d", te.turnCount)
+	}
+}
+
+func TestExecutor_RoutesCollectionTypes(t *testing.T) {
+	tests := []struct {
+		name  string
+		input any
+	}{
+		{
+			name: "slice",
+			input: []*message.Message{
+				{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Test message"}}},
+			},
+		},
+		{
+			name: "sequence",
+			input: iter.Seq[*message.Message](func(yield func(*message.Message) bool) {
+				yield(&message.Message{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Test message"}}})
+			}),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			te := &TestExecutor{}
+			executor, ctx := createExecutor(&messageworkflow.Options{
+				StateKey:        "test-state",
+				TakeTurnHandler: te.takeTurn,
+			})
+
+			if _, err := executor.Execute(ctx, tt.input); err != nil {
+				t.Fatalf("Execute failed: %v", err)
+			}
+			if _, err := executor.Execute(ctx, workflow.TurnToken{}); err != nil {
+				t.Fatalf("Execute failed: %v", err)
+			}
+
+			if len(te.receivedMessages) != 1 {
+				t.Fatalf("Expected 1 message, got %d", len(te.receivedMessages))
+			}
+			if te.receivedMessages[0].Contents.Text() != "Test message" {
+				t.Fatalf("message text = %q, want %q", te.receivedMessages[0].Contents.Text(), "Test message")
+			}
+		})
 	}
 }
 
@@ -281,5 +367,72 @@ func TestExecutor_MultipleTurns_EachTurnProcessesSeparately(t *testing.T) {
 	}
 	if te.turnCount != 2 {
 		t.Errorf("Expected 2 turns, got %d", te.turnCount)
+	}
+}
+
+func TestExecutor_InitialWorkflowMessages_RoutedCorrectly(t *testing.T) {
+	te := &TestExecutor{}
+	executor, ctx := createExecutor(&messageworkflow.Options{
+		StateKey:        "test-state",
+		TakeTurnHandler: te.takeTurn,
+	})
+
+	initialMessages := []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Kick off the workflow"}}},
+	}
+	if _, err := executor.Execute(ctx, initialMessages); err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	if _, err := executor.Execute(ctx, workflow.TurnToken{}); err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	if len(te.receivedMessages) != 1 {
+		t.Fatalf("Expected 1 message, got %d", len(te.receivedMessages))
+	}
+	if te.receivedMessages[0].Contents.Text() != "Kick off the workflow" {
+		t.Fatalf("message text = %q, want %q", te.receivedMessages[0].Contents.Text(), "Kick off the workflow")
+	}
+}
+
+func TestExecutor_DefaultAutoSendsTurnToken(t *testing.T) {
+	te := &TestExecutor{}
+	executor, ctx, sent := createExecutorWithSent(&messageworkflow.Options{
+		StateKey:        "test-state",
+		TakeTurnHandler: te.takeTurn,
+	})
+
+	emit := true
+	token := workflow.TurnToken{EmitEvents: &emit}
+	if _, err := executor.Execute(ctx, token); err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	if len(*sent) != 1 {
+		t.Fatalf("sent message count = %d, want 1", len(*sent))
+	}
+	got, ok := (*sent)[0].(workflow.TurnToken)
+	if !ok {
+		t.Fatalf("sent message type = %T, want workflow.TurnToken", (*sent)[0])
+	}
+	if got.EmitEvents == nil || !*got.EmitEvents {
+		t.Fatalf("sent token EmitEvents = %v, want true", got.EmitEvents)
+	}
+}
+
+func TestExecutor_DisableAutoSendTurnToken(t *testing.T) {
+	te := &TestExecutor{}
+	executor, ctx, sent := createExecutorWithSent(&messageworkflow.Options{
+		StateKey:                 "test-state",
+		TakeTurnHandler:          te.takeTurn,
+		DisableAutoSendTurnToken: true,
+	})
+
+	if _, err := executor.Execute(ctx, workflow.TurnToken{}); err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	if len(*sent) != 0 {
+		t.Fatalf("sent message count = %d, want 0", len(*sent))
 	}
 }

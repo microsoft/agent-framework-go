@@ -296,36 +296,107 @@ func (s *StatefulExecutorCache[T]) cache(v T) {
 	s.stateCache = v
 }
 
-func (s *StatefulExecutorCache[T]) InvokeWithState(ctx *Context, skipCache bool, fn func(ctx *Context, state T) (T, error)) error {
-	if !skipCache && !ctx.ConcurrentRunsEnabled {
-		state := s.stateCache
-		if !s.cached {
-			state = s.InitialStateFactory()
-		}
-		newState, err := fn(ctx, state)
+func (s *StatefulExecutorCache[T]) initialState() T {
+	if s.InitialStateFactory == nil {
+		var zero T
+		return zero
+	}
+	return s.InitialStateFactory()
+}
+
+func (s *StatefulExecutorCache[T]) normalizeState(state T) T {
+	if isNilState(state) {
+		return s.initialState()
+	}
+	return state
+}
+
+func (s *StatefulExecutorCache[T]) stateFromAny(v any) (T, error) {
+	if v == nil {
+		return s.initialState(), nil
+	}
+	state, ok := v.(T)
+	if !ok {
+		var zero T
+		return zero, fmt.Errorf("workflow: state %q has type %T, want %v", s.StateKey, v, reflect.TypeFor[T]())
+	}
+	return s.normalizeState(state), nil
+}
+
+func isNilState(v any) bool {
+	if v == nil {
+		return true
+	}
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return rv.IsNil()
+	default:
+		return false
+	}
+}
+
+func (s *StatefulExecutorCache[T]) readOrInitState(ctx *Context) (T, error) {
+	if ctx.ReadOrInitState != nil {
+		state, err := ctx.ReadOrInitState(s.StateKey, s.ScopeName, func(context.Context, string, string) (any, error) {
+			return s.initialState(), nil
+		})
 		if err != nil {
+			var zero T
+			return zero, err
+		}
+		return s.stateFromAny(state)
+	}
+	if ctx.ReadState != nil {
+		state, err := ctx.ReadState(s.StateKey, s.ScopeName)
+		if err != nil {
+			var zero T
+			return zero, err
+		}
+		return s.stateFromAny(state)
+	}
+	return s.initialState(), nil
+}
+
+func (s *StatefulExecutorCache[T]) ReadState(ctx *Context, skipCache bool) (T, error) {
+	if !skipCache && !ctx.ConcurrentRunsEnabled {
+		if s.cached {
+			return s.stateCache, nil
+		}
+		state, err := s.readOrInitState(ctx)
+		if err != nil {
+			var zero T
+			return zero, err
+		}
+		s.cache(state)
+		return state, nil
+	}
+	return s.readOrInitState(ctx)
+}
+
+func (s *StatefulExecutorCache[T]) QueueStateUpdate(ctx *Context, state T) error {
+	state = s.normalizeState(state)
+	if ctx.QueueStateUpdate != nil {
+		if err := ctx.QueueStateUpdate(s.StateKey, s.ScopeName, state); err != nil {
 			return err
 		}
-		if ctx.QueueStateUpdate != nil {
-			if err := ctx.QueueStateUpdate(s.StateKey, s.ScopeName, newState); err != nil {
-				return err
-			}
-		}
-		s.cache(newState)
-		return nil
 	}
-	state, err := ctx.ReadState(s.StateKey, s.ScopeName)
+	if !ctx.ConcurrentRunsEnabled {
+		s.cache(state)
+	}
+	return nil
+}
+
+func (s *StatefulExecutorCache[T]) InvokeWithState(ctx *Context, skipCache bool, fn func(ctx *Context, state T) (T, error)) error {
+	state, err := s.ReadState(ctx, skipCache)
 	if err != nil {
 		return err
 	}
-	newState, err := fn(ctx, state.(T))
+	newState, err := fn(ctx, state)
 	if err != nil {
 		return err
 	}
-	if ctx.QueueStateUpdate == nil {
-		return nil
-	}
-	return ctx.QueueStateUpdate(s.StateKey, s.ScopeName, newState)
+	return s.QueueStateUpdate(ctx, newState)
 }
 
 func (s *StatefulExecutorCache[T]) Reset() error {
