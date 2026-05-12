@@ -22,8 +22,8 @@ github.com/a2aproject/a2a-go/v2 v2.2.1 h1:NAfUoceWAStJ7FnF8TTfWuHejf9mzKgc9QmaKV
 github.com/a2aproject/a2a-go/v2 v2.2.1/go.mod h1:mkZr8y2bUgAVQsjs/5fHK7xrRlAHDybMEyxWh2tKRC8=
 github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260312103001-8e7ab1df34c8 h1:gcgM2iVSJ+5v1Li2O2xBm8jdY9bIo0coZdOlXOd0uLU=
 github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260312103001-8e7ab1df34c8/go.mod h1:ERAMOexUee4AIuoxksuuGoEcHl3aqLwaazjGwlR9ZCI=
-github.com/anthropics/anthropic-sdk-go v1.41.0 h1:D//vDxQMAmWOcOV3QtgESOneIxJOfWxGIHsmJgGGGp4=
-github.com/anthropics/anthropic-sdk-go v1.41.0/go.mod h1:UgnI27pSnfj2Ux2iE6Dkq9o/3MZn0jdalFdQIdWMS+Q=
+github.com/anthropics/anthropic-sdk-go v1.42.0 h1:Zv882/dnrE4OHnwhMAsi9lwVVXRF8GtR3ofiBResYUw=
+github.com/anthropics/anthropic-sdk-go v1.42.0/go.mod h1:r4eaLX9tBolUrXLOrLj7eU8tmeBtoobCkM0kBsivBaY=
 github.com/bahlo/generic-list-go v0.2.0 h1:5sz/EEAK+ls5wF+NeqDpk5+iNdMDXrh3z3nPnH1Wvgk=
 github.com/bahlo/generic-list-go v0.2.0/go.mod h1:2KvAjgMlE5NNynlg/5iLrrCCZ2+5xWbdbCW3pNTGyYg=
 github.com/buger/jsonparser v1.1.2 h1:frqHqw7otoVbk5M8LlE/L7HTnIq2v9RX6EJ48i9AxJk=
@@ -116,8 +116,8 @@ github.com/segmentio/encoding v0.5.4 h1:OW1VRern8Nw6ITAtwSZ7Idrl3MXCFwXHPgqESYfv
 github.com/segmentio/encoding v0.5.4/go.mod h1:HS1ZKa3kSN32ZHVZ7ZLPLXWvOVIiZtyJnO1gPH1sKt0=
 github.com/sirupsen/logrus v1.9.3 h1:dueUQJ1C2q9oE3F7wvmSGAaVtTmUizReu6fjN8uqzbQ=
 github.com/sirupsen/logrus v1.9.3/go.mod h1:naHLuLoDiP4jHNo9R0sCBMtWGeIprob74mVsIT4qYEQ=
-github.com/standard-webhooks/standard-webhooks/libraries v0.0.0-20260427160145-3afa6683f8b2 h1:q/QNlQMqBFYT7z9zt8vjbh0XvbcTXhN4Q+gi7aEBvkY=
-github.com/standard-webhooks/standard-webhooks/libraries v0.0.0-20260427160145-3afa6683f8b2/go.mod h1:L1MQhA6x4dn9r007T033lsaZMv9EmBAdXyU/+EF40fo=
+github.com/standard-webhooks/standard-webhooks/libraries v0.0.0-20260508151727-1282bb917829 h1:zGlGD0Zfk2HaIo4EnUVBRhnXQ+cnGQz5X2PdBcplOyw=
+github.com/standard-webhooks/standard-webhooks/libraries v0.0.0-20260508151727-1282bb917829/go.mod h1:L1MQhA6x4dn9r007T033lsaZMv9EmBAdXyU/+EF40fo=
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
 github.com/stretchr/objx v0.4.0/go.mod h1:YvHI0jy2hoMjB+UWwv71VJQ9isScKT/TqJzVSSt89Yw=
 github.com/stretchr/objx v0.5.0/go.mod h1:Yh+to48EsGEfYuaHDzXPcE3xhTkx73EhmCGUpEOglKo=
