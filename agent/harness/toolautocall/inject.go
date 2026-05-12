@@ -17,7 +17,7 @@ type injectorKey struct{}
 //
 // A MessageInjector is only available when the enclosing [Config] has
 // [Config.EnableMessageInjection] set to true.  Tools retrieve it from the
-// context with [GetMessageInjector].
+// context with [MessageInjectorFromContext].
 //
 // This type is modelled after the .NET MessageInjectingChatClient / EnqueueMessages API.
 type MessageInjector struct {
@@ -25,7 +25,7 @@ type MessageInjector struct {
 	pending []*message.Message
 }
 
-// EnqueueMessages appends msgs to the pending queue.  They will be included
+// EnqueueMessages appends non-nil msgs to the pending queue.  They will be included
 // in the next provider call, after the current round of tool results.
 // This method is safe to call from concurrent goroutines (e.g. when
 // [Config.AllowConcurrentInvocations] is true).
@@ -35,7 +35,11 @@ func (mi *MessageInjector) EnqueueMessages(msgs ...*message.Message) {
 	}
 	mi.mu.Lock()
 	defer mi.mu.Unlock()
-	mi.pending = append(mi.pending, msgs...)
+	for _, msg := range msgs {
+		if msg != nil {
+			mi.pending = append(mi.pending, msg)
+		}
+	}
 }
 
 // drain atomically removes and returns all pending messages.
@@ -47,9 +51,9 @@ func (mi *MessageInjector) drain() []*message.Message {
 	return msgs
 }
 
-// GetMessageInjector returns the [MessageInjector] stored in ctx, or nil if
+// MessageInjectorFromContext returns the [MessageInjector] stored in ctx, or nil if
 // message injection is not enabled for the current run.
-func GetMessageInjector(ctx context.Context) *MessageInjector {
+func MessageInjectorFromContext(ctx context.Context) *MessageInjector {
 	v, _ := ctx.Value(injectorKey{}).(*MessageInjector)
 	return v
 }

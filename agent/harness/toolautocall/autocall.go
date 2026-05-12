@@ -31,8 +31,9 @@ type Config struct {
 	MaximumConsecutiveErrorsPerRequest int
 	MaximumIterationsPerRequest        int // Default: 40
 	NewID                              func() string
+
 	// EnableMessageInjection enables tool implementations to enqueue additional
-	// messages into the function-call loop via [GetMessageInjector].  When true,
+	// messages into the function-call loop via [MessageInjectorFromContext].  When true,
 	// a [MessageInjector] is placed on the context before each round of tool
 	// invocations and drained after all tools have run.  Any queued messages are
 	// appended to the conversation and trigger another provider call, even when
@@ -82,7 +83,7 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 
 		// When message injection is enabled, create a MessageInjector and place it on the
 		// context so that tool implementations can enqueue follow-up messages via
-		// GetMessageInjector(ctx).
+		// MessageInjectorFromContext(ctx).
 		var injector *MessageInjector
 		if f.enableMessageInjection {
 			injector = &MessageInjector{}
@@ -128,10 +129,16 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 				return
 			}
 			if newMsg != nil {
+				opts = updateOptionsForNextIteration(opts)
 				messages = append(messages, newMsg)
 				newMsg.ID = toolMsgID
 				if !yield(convertToolResultMsgToUpdate(newMsg, toolMsgID), nil) {
 					return
+				}
+				if injector != nil {
+					if injected := injector.drain(); len(injected) > 0 {
+						messages = append(messages, injected...)
+					}
 				}
 			}
 		}
@@ -228,7 +235,7 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 				// during this iteration.  If so, add them to the conversation and continue
 				// the loop so the provider sees the new user messages — even though no
 				// further function calls were returned in this round.
-				if injector != nil && len(functionCallContents) == 0 {
+				if i < f.maximumIterationsPerRequest && injector != nil && len(functionCallContents) == 0 {
 					if injected := injector.drain(); len(injected) > 0 {
 						opts = updateOptionsForNextIteration(opts)
 						messages = append(messages, injected...)
