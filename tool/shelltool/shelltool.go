@@ -14,16 +14,16 @@
 //     commands reach the shell. The policy is a UX guardrail, NOT a security
 //     boundary — a determined model can trivially work around regex checks.
 //
-//   - Approval-in-the-loop: [New] returns a [tool.FuncTool] that also
+//   - Approval-in-the-loop: [NewLocal] returns a [tool.FuncTool] that also
 //     implements [tool.ApprovalRequiredTool] so the harness tool-approval
 //     middleware prompts a human before every execution.  This is the primary
-//     security control.  Pass [Options.AcknowledgeUnsafe] = true only when
+//     security control.  Pass [LocalConfig.AcknowledgeUnsafe] = true only when
 //     you have an independent isolation mechanism (e.g. a Docker container)
 //     and understand the risk.
 //
 // # Usage
 //
-//	t := shelltool.New(shelltool.Options{})
+//	t := shelltool.NewLocal(shelltool.LocalConfig{})
 //	cfg := agent.Config{Tools: []tool.Tool{t}}
 package shelltool
 
@@ -48,7 +48,7 @@ import (
 )
 
 // DefaultTimeout is the recommended per-command timeout (30 s). It is not
-// applied by default; pass it via [Options.Timeout] to opt in.
+// applied by default; pass it via [LocalConfig.Timeout] to opt in.
 const DefaultTimeout = 30 * time.Second
 
 // DefaultMaxOutputBytes is the default cap for captured stdout per command (64 KiB).
@@ -193,7 +193,7 @@ func (p *Policy) Evaluate(request ShellRequest) (allowed bool, reason string) {
 }
 
 // --------------------------------------------------------------------------
-// Options
+// LocalConfig
 // --------------------------------------------------------------------------
 
 // Mode controls whether each call spawns a fresh shell or reuses a single
@@ -211,8 +211,8 @@ const (
 	ModeStateless
 )
 
-// Options configures the shell tool returned by [New].
-type Options struct {
+// LocalConfig configures the shell tool returned by [NewLocal].
+type LocalConfig struct {
 	// Shell is an optional override for the shell binary path.  When empty,
 	// the AGENT_FRAMEWORK_SHELL environment variable is consulted; if that is
 	// also unset, the OS default is used (/bin/bash on POSIX, pwsh/cmd on
@@ -248,7 +248,7 @@ type Options struct {
 	AcknowledgeUnsafe bool
 }
 
-func (o Options) maxOutputBytes() int {
+func (o LocalConfig) maxOutputBytes() int {
 	if o.MaxOutputBytes > 0 {
 		return o.MaxOutputBytes
 	}
@@ -259,12 +259,12 @@ func (o Options) maxOutputBytes() int {
 // Public constructor
 // --------------------------------------------------------------------------
 
-// New returns a [tool.FuncTool] that runs shell commands on behalf of an
+// NewLocal returns a [tool.FuncTool] that runs shell commands on behalf of an
 // agent. By default the tool also implements [tool.ApprovalRequiredTool];
-// pass [Options.AcknowledgeUnsafe] = true to opt out.
-func New(opts Options) tool.FuncTool {
-	e := &shellExecutor{opts: opts}
-	t := &shellTool{exec: e}
+// pass [LocalConfig.AcknowledgeUnsafe] = true to opt out.
+func NewLocal(opts LocalConfig) tool.FuncTool {
+	e := &localShellExecutor{opts: opts}
+	t := &localShellTool{exec: e}
 	if opts.AcknowledgeUnsafe {
 		return t
 	}
@@ -272,20 +272,20 @@ func New(opts Options) tool.FuncTool {
 }
 
 // --------------------------------------------------------------------------
-// shellTool — implements tool.FuncTool
+// localShellTool — implements tool.FuncTool
 // --------------------------------------------------------------------------
 
 type shellInput struct {
 	Command string `json:"command"`
 }
 
-type shellTool struct {
-	exec *shellExecutor
+type localShellTool struct {
+	exec *localShellExecutor
 }
 
-func (t *shellTool) Name() string { return "shell" }
+func (t *localShellTool) Name() string { return "shell" }
 
-func (t *shellTool) Description() string {
+func (t *localShellTool) Description() string {
 	shell := resolveShell(t.exec.opts.Shell)
 	return fmt.Sprintf(
 		"Run a shell command using %s and return its output. "+
@@ -294,7 +294,7 @@ func (t *shellTool) Description() string {
 	)
 }
 
-func (t *shellTool) Schema() any {
+func (t *localShellTool) Schema() any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -307,9 +307,9 @@ func (t *shellTool) Schema() any {
 	}
 }
 
-func (t *shellTool) ReturnSchema() any { return nil }
+func (t *localShellTool) ReturnSchema() any { return nil }
 
-func (t *shellTool) Call(ctx tool.Context, args string) (any, error) {
+func (t *localShellTool) Call(ctx tool.Context, args string) (any, error) {
 	var in shellInput
 	if err := json.Unmarshal([]byte(args), &in); err != nil {
 		return nil, fmt.Errorf("shelltool: invalid arguments: %w", err)
@@ -328,26 +328,26 @@ func (t *shellTool) Call(ctx tool.Context, args string) (any, error) {
 	return result.FormatForModel(), nil
 }
 
-var _ tool.FuncTool = (*shellTool)(nil)
+var _ tool.FuncTool = (*localShellTool)(nil)
 
 // --------------------------------------------------------------------------
-// shellExecutor — manages shell lifecycle
+// localShellExecutor — manages shell lifecycle
 // --------------------------------------------------------------------------
 
-type shellExecutor struct {
-	opts    Options
+type localShellExecutor struct {
+	opts    LocalConfig
 	mu      sync.Mutex
 	session *persistentSession
 }
 
-func (e *shellExecutor) run(ctx context.Context, command string) (Result, error) {
+func (e *localShellExecutor) run(ctx context.Context, command string) (Result, error) {
 	if e.opts.Mode == ModePersistent {
 		return e.runPersistent(ctx, command)
 	}
 	return runStateless(ctx, e.opts, command)
 }
 
-func (e *shellExecutor) runPersistent(ctx context.Context, command string) (Result, error) {
+func (e *localShellExecutor) runPersistent(ctx context.Context, command string) (Result, error) {
 	e.mu.Lock()
 	if e.session == nil || e.session.dead {
 		// Replace a dead session (caused by a previous timeout).
@@ -384,7 +384,7 @@ func (e *shellExecutor) runPersistent(ctx context.Context, command string) (Resu
 // stateless execution
 // --------------------------------------------------------------------------
 
-func runStateless(ctx context.Context, opts Options, command string) (Result, error) {
+func runStateless(ctx context.Context, opts LocalConfig, command string) (Result, error) {
 	shell := resolveShell(opts.Shell)
 	argv := shellArgs(shell, command)
 

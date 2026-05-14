@@ -157,8 +157,8 @@ func TestNewPolicy_invalidAllowRegex(t *testing.T) {
 // Tool construction
 // --------------------------------------------------------------------------
 
-func TestNew_returnsApprovalRequired_byDefault(t *testing.T) {
-	ft := shelltool.New(shelltool.Options{})
+func TestNewLocal_returnsApprovalRequired_byDefault(t *testing.T) {
+	ft := shelltool.NewLocal(shelltool.LocalConfig{})
 	// ApprovalRequiredFunc wraps the inner tool; verify the tool is usable.
 	if ft.Name() != "shell" {
 		t.Errorf("expected name 'shell', got %q", ft.Name())
@@ -169,15 +169,15 @@ func TestNew_returnsApprovalRequired_byDefault(t *testing.T) {
 	}
 }
 
-func TestNew_acknowledgeUnsafe_noApproval(t *testing.T) {
-	ft := shelltool.New(shelltool.Options{AcknowledgeUnsafe: true})
+func TestNewLocal_acknowledgeUnsafe_noApproval(t *testing.T) {
+	ft := shelltool.NewLocal(shelltool.LocalConfig{AcknowledgeUnsafe: true})
 	if _, ok := ft.(tool.ApprovalRequiredTool); ok {
 		t.Error("expected no ApprovalRequiredTool when AcknowledgeUnsafe is true")
 	}
 }
 
-func TestNew_schema_hasCommandField(t *testing.T) {
-	ft := shelltool.New(shelltool.Options{AcknowledgeUnsafe: true})
+func TestNewLocal_schema_hasCommandField(t *testing.T) {
+	ft := shelltool.NewLocal(shelltool.LocalConfig{AcknowledgeUnsafe: true})
 	schema := ft.Schema()
 	m, ok := schema.(map[string]any)
 	if !ok {
@@ -213,7 +213,7 @@ func skipIfNotPOSIX(t *testing.T) {
 
 func TestCall_echo_defaultPersistent(t *testing.T) {
 	skipIfNotPOSIX(t)
-	ft := shelltool.New(shelltool.Options{AcknowledgeUnsafe: true})
+	ft := shelltool.NewLocal(shelltool.LocalConfig{AcknowledgeUnsafe: true})
 	ctx := tool.Context{Context: t.Context()}
 	out, err := ft.Call(ctx, `{"command":"echo hello"}`)
 	if err != nil {
@@ -233,7 +233,7 @@ func TestCall_echo_defaultPersistent(t *testing.T) {
 
 func TestCall_nonZeroExit(t *testing.T) {
 	skipIfNotPOSIX(t)
-	ft := shelltool.New(shelltool.Options{AcknowledgeUnsafe: true})
+	ft := shelltool.NewLocal(shelltool.LocalConfig{AcknowledgeUnsafe: true})
 	ctx := tool.Context{Context: t.Context()}
 	out, err := ft.Call(ctx, `{"command":"sh -c 'exit 42'"}`)
 	if err != nil {
@@ -245,7 +245,7 @@ func TestCall_nonZeroExit(t *testing.T) {
 }
 
 func TestCall_emptyCommand_error(t *testing.T) {
-	ft := shelltool.New(shelltool.Options{AcknowledgeUnsafe: true})
+	ft := shelltool.NewLocal(shelltool.LocalConfig{AcknowledgeUnsafe: true})
 	ctx := tool.Context{Context: t.Context()}
 	_, err := ft.Call(ctx, `{"command":""}`)
 	if err == nil {
@@ -255,7 +255,7 @@ func TestCall_emptyCommand_error(t *testing.T) {
 
 func TestCall_policyDeny(t *testing.T) {
 	p, _ := shelltool.NewPolicy(shelltool.PolicyConfig{DenyList: []string{`echo`}})
-	ft := shelltool.New(shelltool.Options{AcknowledgeUnsafe: true, Policy: p})
+	ft := shelltool.NewLocal(shelltool.LocalConfig{AcknowledgeUnsafe: true, Policy: p})
 	ctx := tool.Context{Context: t.Context()}
 	_, err := ft.Call(ctx, `{"command":"echo hello"}`)
 	if err == nil {
@@ -268,7 +268,7 @@ func TestCall_policyDeny(t *testing.T) {
 
 func TestCall_timeout(t *testing.T) {
 	skipIfNotPOSIX(t)
-	ft := shelltool.New(shelltool.Options{
+	ft := shelltool.NewLocal(shelltool.LocalConfig{
 		AcknowledgeUnsafe: true,
 		Timeout:           50 * time.Millisecond,
 	})
@@ -285,7 +285,7 @@ func TestCall_timeout(t *testing.T) {
 
 func TestCall_persistent_statePersists(t *testing.T) {
 	skipIfNotPOSIX(t)
-	ft := shelltool.New(shelltool.Options{
+	ft := shelltool.NewLocal(shelltool.LocalConfig{
 		AcknowledgeUnsafe: true,
 	})
 	ctx := tool.Context{Context: t.Context()}
