@@ -128,6 +128,8 @@ func (s *streamingRunEventStream) runLoop() {
 	wf := s.stepRunner.Workflow()
 	ctx := contextWithWorkflowTelemetry(s.runLoopCtx, wf)
 	telemetry := observability.FromContext(ctx)
+	defer close(s.runLoopDone)
+
 	ctx, sessionActivity := telemetry.StartWorkflowSession(ctx, workflowMetadata(wf, s.stepRunner.SessionID()))
 	var sessionErr error
 	defer func() {
@@ -140,7 +142,6 @@ func (s *streamingRunEventStream) runLoop() {
 		sessionActivity.End()
 	}()
 
-	defer close(s.runLoopDone)
 	defer s.runLoopCancel()
 	defer s.setStatus(RunStatusEnded)
 
