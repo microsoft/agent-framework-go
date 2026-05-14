@@ -8,12 +8,22 @@ on:
 
 jobs:
   test:
-    name: Test Go Code
-    runs-on: ubuntu-latest
+    name: Test Go Code (${{ matrix.target.name }}, Go ${{ matrix.go-version }})
+    runs-on: ${{ matrix.target.runner }}
     
     strategy:
+      fail-fast: false
       matrix:
         go-version: ['1.25', '1.26']
+        target:
+        - name: linux
+          runner: ubuntu-latest
+        - name: windows
+          runner: windows-latest
+        - name: windows-arm64
+          runner: windows-11-arm
+        - name: macos
+          runner: macos-latest
     
     steps:
     - name: Checkout code
@@ -26,7 +36,7 @@ jobs:
         cache-dependency-path: go.sum
     
     - name: Run tests
-      run: go test -v -race -shuffle=on ./...
+      run: go test -v ${{ matrix.target.name != 'windows-arm64' && '-race' || '' }} -shuffle=on ./...
 
   conclusion:
     needs: [test]
