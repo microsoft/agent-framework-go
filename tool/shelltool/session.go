@@ -207,7 +207,7 @@ func (s *persistentSession) run(ctx context.Context, command string, timeout tim
 
 	hardCap := maxBytes * 4
 	if hardCap <= 0 {
-		hardCap = DefaultMaxOutputBytes * 4
+		hardCap = defaultMaxOutputBytes * 4
 	}
 	runCtx := ctx
 	var cancel context.CancelFunc

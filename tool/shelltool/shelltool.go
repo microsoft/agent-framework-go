@@ -27,7 +27,11 @@
 //	if err != nil {
 //		// handle invalid configuration
 //	}
-//	cfg := agent.Config{Tools: []tool.Tool{t}}
+//	env := shelltool.NewEnvironmentProvider(t, shelltool.EnvironmentProviderConfig{})
+//	cfg := agent.Config{
+//		Tools:            []tool.Tool{t},
+//		ContextProviders: []*agent.ContextProvider{env.ContextProvider},
+//	}
 package shelltool
 
 import (

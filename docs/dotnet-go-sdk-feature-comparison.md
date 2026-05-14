@@ -1,6 +1,6 @@
 # .NET and Go SDK Feature Comparison
 
-Date: May 10, 2026
+Date: May 14, 2026
 
 This document compares the .NET SDK at `microsoft/agent-framework/dotnet` with the Go SDK in this repository. It is based on the package, sample, and public API inventory present on this date.
 
@@ -15,7 +15,7 @@ This document compares the .NET SDK at `microsoft/agent-framework/dotnet` with t
 
 ## Executive Summary
 
-The Go SDK covers the core agent and workflow model: agents, sessions, history, context providers, streaming response updates, structured output, function tools, tool auto-calling and approvals, initial harness utilities, A2A, AGUI, MCP, skills, compaction, in-process workflows, checkpoint/resume, human-in-the-loop request ports, state, and workflow-as-agent/agent-in-workflow adapters.
+The Go SDK covers the core agent and workflow model: agents, sessions, history, context providers, streaming response updates, structured output, function tools, shell execution with environment-aware context, tool auto-calling and approvals, initial harness utilities, A2A, AGUI, MCP, skills, compaction, in-process workflows, checkpoint/resume, human-in-the-loop request ports, state, and workflow-as-agent/agent-in-workflow adapters.
 
 The .NET SDK has a much wider integration and product layer. The largest gaps are DevUI/Aspire, evaluation, declarative agents/workflows, durable agents/workflows, Azure Functions and ASP.NET hosting integrations, OpenAI-compatible hosting, Foundry and Azure AI Persistent agents, Copilot Studio, GitHub Copilot, Mem0, Cosmos DB storage, Purview, RAG, remaining harness utilities such as file access/memory/store and subagents, richer sample coverage, and source-generator/declarative workflow tooling.
 
@@ -37,7 +37,7 @@ Within overlapping features, the main misalignments are API shape and ecosystem 
 | Message/content model | `ChatMessage`, `AIContent`, text/data/error/function call/function result/hosted file/vector store/reasoning/code interpreter and durable state wrappers. | `message.Message`, `Content`, text/data/error/function call/function result/hosted file/vector store/reasoning/URI/usage/approval/code interpreter content. | Aligned | Type names and serialization are not interchangeable. Go has its own content model rather than using MEAI. |
 | Annotations/citations | MEAI annotation/content support through `AIContent`. | `message.Annotation`, citation annotations, annotated text spans. | Aligned | No direct binary compatibility; mapping is provider-specific. |
 | Function tools | `AIFunction`, `AITool`, function tools, plugins, dynamic function tools, tool argument matching in evals. | `tool.Tool`, `tool.FuncTool`, `functool.New`, typed input/output schemas. | Partial | Go has typed function tools but no first-class plugin or dynamic tool sample equivalent to .NET steps 12 and 20. |
-| Shell tool | `Microsoft.Agents.AI.Tools.Shell`: `LocalShellTool`, `ShellPolicy` (allow/deny-list), `ShellResult`, stateless and persistent shell execution modes, approval-in-the-loop gate, head-tail output truncation. | `tool/shelltool.NewLocal`, `shelltool.LocalConfig` (mode, timeout, max output, policy, acknowledge unsafe), `shelltool.Policy`, `shelltool.Result.FormatForModel`. | Aligned | Go implementation mirrors the .NET design: policy allow/deny-list, approval-required by default, stateless and persistent modes, head-tail truncation. Docker shell executor not ported (Go has no equivalent `DockerShellExecutor`). |
+| Shell tool and environment context | `Microsoft.Agents.AI.Tools.Shell`: `LocalShellExecutor`, `ShellPolicy` (allow/deny-list), `ShellResult`, stateless and persistent shell execution modes, approval-in-the-loop gate, head-tail output truncation, `ShellEnvironmentProvider`, `ShellEnvironmentSnapshot`, shell-family instructions, common CLI probing. | `tool/shelltool.NewLocal`, `shelltool.LocalConfig` (mode, timeout, max output, policy, acknowledge unsafe), `shelltool.Policy`, `shelltool.Result.FormatForModel`, `shelltool.Executor`, `shelltool.NewEnvironmentProvider`, `EnvironmentProviderConfig`, `ShellEnvironmentSnapshot`, `DefaultShellEnvironmentInstructions`. | Aligned | Go mirrors the .NET design for local execution, policy allow/deny-list, approval-required by default, stateless/persistent modes, output truncation, environment snapshot probing, cached first-probe behavior, refresh, current snapshot access, shell-family prompt instructions, invalid/duplicate probe handling, stderr version fallback, caller cancellation, and probe timeout handling. Docker shell executor not ported (Go has no equivalent `DockerShellExecutor`). Go represents tool-version nullability with `ToolVersion{Found bool}` rather than nullable strings. |
 | Tool auto-calling | Provider/tool-call loop, tool approval agent, and message injection during the function loop (`EnableMessageInjection` / `MessageInjectingChatClient`). | `agent/harness/toolautocall`, default provider middleware unless disabled. Message injection supported via `Config.EnableMessageInjection` and `toolautocall.MessageInjectorFromContext(ctx)`. | Aligned | Go implements auto-call as explicit middleware; .NET uses agent/tool abstractions and provider adapters. |
 | Tool approval | Tool approval request/response content, tool approval agent and builder extensions. | `message.ToolApprovalRequestContent`, `message.ToolApprovalResponseContent`, `tool.ApprovalRequiredFunc`, `agent/harness/toolautocall` approval flow, `agent/harness/toolapproval` middleware for standing-rule approval management, AGUI HITL sample. | Aligned | API shape differs: .NET uses a `ToolApprovalAgent` delegating-agent wrapper with a `.UseToolApproval()` builder extension; Go uses idiomatic middleware (`toolapproval.New`). Standing approval rules, queued-request batching, and `AlwaysApprove*` response content are now present in both SDKs. |
 | Hosted/server-side tools | Foundry/OpenAI samples for code interpreter, file search, web search, OpenAPI, Bing custom search, SharePoint, Microsoft Fabric, memory search, Toolbox, hosted MCP. | `tool/hostedtool` declarations for web search, file search, code interpreter, MCP server. | Partial | Go has declaration types but less provider/sample coverage and fewer service-specific hosted tool integrations. |
@@ -93,7 +93,7 @@ Within overlapping features, the main misalignments are API shape and ecosystem 
 | Workflow visualization | Visualization sample and DevUI serialization extensions. | Reflectors for edges/executors/ports and edge labels; no visualization UI sample found. | Partial | Go can expose metadata but does not ship visualization tooling. |
 | Message filters | Not a prominent standalone package in the scanned .NET public surface. | `message/messagefilter` with `And`, `Or`, `PassThrough`, `None`, source filters. | Go only | Go exposes message filtering as a small public package. |
 | Message workflow adapter | No direct standalone package found. | `message/messageworkflow` creates workflow executor config from message options. | Go only | This is Go-specific glue around the local message model. |
-| Samples and tutorials | Very broad sample set: get started, providers, agents, skills, Foundry, memory, RAG, AGUI, A2A, MCP, declarative, DevUI, evaluation, durable hosting, web chat, Purview, M365. | Focused sample set: get started, providers, agents, A2A, AGUI, MCP server, skills, workflows (including checkpoint-and-resume and checkpoint-and-rehydrate), A2A end-to-end, chat CLI. | Partial | Go samples cover core parity areas but miss many .NET integration scenarios. |
+| Samples and tutorials | Very broad sample set: get started, providers, agents, shell environment, skills, Foundry, memory, RAG, AGUI, A2A, MCP, declarative, DevUI, evaluation, durable hosting, web chat, Purview, M365. | Focused sample set: get started, providers, agents, shell environment, A2A, AGUI, MCP server, skills, workflows (including checkpoint-and-resume and checkpoint-and-rehydrate), A2A end-to-end, chat CLI. | Partial | Go samples cover core parity areas but miss many .NET integration scenarios. |
 
 ## Notable Misalignments Inside Overlapping Features
 
@@ -106,7 +106,7 @@ Within overlapping features, the main misalignments are API shape and ecosystem 
 
 ### Tools and Hosted Tools
 
-- Go has typed function tools, agent-as-tool, MCP tool wrapping, approval-required tools, hosted tool declaration structs, a shell execution tool (`tool/shelltool`), and harness middleware for tool auto-calling and approval management. .NET has all of those categories plus plugins, dynamic function tool samples, tool approval agent wrappers, and many server-side hosted tool samples.
+- Go has typed function tools, agent-as-tool, MCP tool wrapping, approval-required tools, hosted tool declaration structs, a shell execution tool with environment context (`tool/shelltool`), and harness middleware for tool auto-calling and approval management. .NET has all of those categories plus plugins, dynamic function tool samples, tool approval agent wrappers, Docker shell execution, and many server-side hosted tool samples.
 - Go hosted tools should be treated as provider-dependent declarations. The .NET samples demonstrate more concrete hosted-tool scenarios, especially Foundry and OpenAI Responses server-side tools.
 
 ### Skills
@@ -138,6 +138,7 @@ The following .NET source packages were present and accounted for in the matrix:
 | `Microsoft.Agents.AI` | Chat client agent, compaction, evaluation, harness providers, memory, skills. |
 | `Microsoft.Agents.AI.OpenAI` | OpenAI and Azure OpenAI agent adapters. |
 | `Microsoft.Agents.AI.Anthropic` | Anthropic agent adapters. |
+| `Microsoft.Agents.AI.Tools.Shell` | Local shell execution, shell policies, shell results, shell environment provider/snapshots, environment-aware sample parity. |
 | `Microsoft.Agents.AI.A2A` | A2A agent client integration. |
 | `Microsoft.Agents.AI.AGUI` | AGUI chat client and conversions. |
 | `Microsoft.Agents.AI.AzureAI.Persistent` | Azure AI Persistent Agents. |
@@ -164,7 +165,7 @@ The following .NET source packages were present and accounted for in the matrix:
 | `Microsoft.Agents.AI.Workflows.Generators` | Workflow generator tooling. |
 | `Microsoft.Agents.AI.DurableTask` | Durable agents and durable workflows. |
 
-The following .NET sample categories were also accounted for: get started, A2A, AGUI, agent providers, OpenAI/Anthropic/Foundry provider flows, memory, RAG, MCP, skills, DevUI, evaluation, harness, declarative agents, code-first workflows, checkpointing, concurrent workflows, conditional edges, human-in-the-loop, shared state, observability, orchestration/handoff, visualization, durable hosting, Foundry hosted agents, web chat, authorization, Purview, and M365.
+The following .NET sample categories were also accounted for: get started, A2A, AGUI, agent providers, OpenAI/Anthropic/Foundry provider flows, shell environment, memory, RAG, MCP, skills, DevUI, evaluation, harness, declarative agents, code-first workflows, checkpointing, concurrent workflows, conditional edges, human-in-the-loop, shared state, observability, orchestration/handoff, visualization, durable hosting, Foundry hosted agents, web chat, authorization, Purview, and M365.
 
 ## Go Feature Checklist
 
@@ -201,18 +202,18 @@ The following Go packages and sample groups were present and accounted for in th
 | `tool/agenttool` | Agent as function tool. |
 | `tool/hostedtool` | Hosted web search, file search, code interpreter, MCP server declarations. |
 | `tool/mcptool` | MCP tool bridge and MCP server/client helpers. |
-| `tool/shelltool` | Local shell command execution tool with policy allow/deny-list, approval gate, and output truncation. |
+| `tool/shelltool` | Local shell command execution tool with policy allow/deny-list, approval gate, output truncation, raw executor interface, shell environment provider, environment snapshots, shell-family instructions, and common CLI version probing. |
 | `workflow` | Workflow graph builder, executor bindings, edge model, events, protocol, request ports, state context. |
 | `workflow/inproc` | In-process run/streaming/resume/checkpoint execution environments. |
 | `examples/01-get-started` | Hello agent, tools, multi-turn, memory, first workflow. |
-| `examples/02-agents` | Running agents, tools, approvals, structured output, persisted conversation, third-party history, observability, DI-style construction, agent as MCP/tool, images, context providers, compaction, A2A, AGUI, providers, MCP server, skills. |
+| `examples/02-agents` | Running agents, tools, approvals, structured output, persisted conversation, third-party history, observability, DI-style construction, agent as MCP/tool, images, context providers, compaction, shell environment context, A2A, AGUI, providers, MCP server, skills. |
 | `examples/03-workflows` | Streaming, agents in workflows, patterns, checkpoint/resume, concurrent, conditional edges, HITL, loop, shared state. |
 | `examples/05-end-to-end` | A2A client/server. |
 | `examples/demos/chat_cli` | Chat CLI demo. |
 
 ## Highest-Priority Go Parity Opportunities
 
-1. Add public checkpoint store extensibility and JSON/file/Cosmos-like storage examples.
+1. Add Cosmos-like checkpoint/chat history storage integrations and examples.
 2. Add DevUI or at least workflow visualization/export support that consumes existing reflection metadata.
 3. Add evaluation primitives and samples, starting with local function checks and expected-output/tool-call assertions.
 4. Add declarative agent/workflow support only if Go wants parity with .NET's YAML/PowerFx model; otherwise document the intentional code-first stance.

@@ -19,12 +19,13 @@ import (
 	"github.com/microsoft/agent-framework-go/tool"
 )
 
-// DefaultTimeout is the recommended per-command timeout (30 s). It is not
-// applied by default; pass it via [LocalConfig.Timeout] to opt in.
-const DefaultTimeout = 30 * time.Second
+var (
+	errCommandRejected = errors.New("shelltool: command rejected")
+	errCommandIO       = errors.New("shelltool: command I/O failure")
+)
 
-// DefaultMaxOutputBytes is the default cap for captured stdout per command (64 KiB).
-const DefaultMaxOutputBytes = 64 * 1024
+// defaultMaxOutputBytes is the default cap for captured stdout per command (64 KiB).
+const defaultMaxOutputBytes = 64 * 1024
 
 // --------------------------------------------------------------------------
 // LocalConfig
@@ -73,11 +74,11 @@ type LocalConfig struct {
 	CleanEnvironment bool
 
 	// Timeout is the per-command deadline. Zero (the default) means no
-	// timeout. [DefaultTimeout] (30 s) is the recommended value.
+	// timeout. 30s is the recommended value.
 	Timeout time.Duration
 
 	// MaxOutputBytes caps each captured output stream per command.
-	// Defaults to [DefaultMaxOutputBytes]. Output beyond this limit is
+	// Defaults to 64 KiB. Output beyond this limit is
 	// silently truncated and [Result.Truncated] is set.
 	MaxOutputBytes int
 
@@ -97,7 +98,7 @@ func (o LocalConfig) maxOutputBytes() int {
 	if o.MaxOutputBytes > 0 {
 		return o.MaxOutputBytes
 	}
-	return DefaultMaxOutputBytes
+	return defaultMaxOutputBytes
 }
 
 func (o LocalConfig) validate() error {
@@ -172,18 +173,23 @@ func (t *Local) Call(ctx tool.Context, args string) (any, error) {
 	if in.Command == "" {
 		return nil, fmt.Errorf("shelltool: command must not be empty")
 	}
-	if err := t.exec.opts.validate(); err != nil {
-		return nil, err
-	}
-	request := ShellRequest{Command: in.Command, WorkingDirectory: t.exec.opts.WorkingDirectory}
-	if allowed, reason := t.exec.opts.Policy.Evaluate(request); !allowed {
-		return nil, fmt.Errorf("shelltool: %s", reason)
-	}
-	result, err := t.exec.run(ctx.Context, in.Command)
+	result, err := t.Run(ctx.Context, in.Command)
 	if err != nil {
 		return nil, err
 	}
 	return result.FormatForModel(), nil
+}
+
+// Run executes command and returns its raw shell result.
+func (t *Local) Run(ctx context.Context, command string) (Result, error) {
+	if err := t.exec.opts.validate(); err != nil {
+		return Result{}, err
+	}
+	request := ShellRequest{Command: command, WorkingDirectory: t.exec.opts.WorkingDirectory}
+	if allowed, reason := t.exec.opts.Policy.Evaluate(request); !allowed {
+		return Result{}, fmt.Errorf("%w: %s", errCommandRejected, reason)
+	}
+	return t.exec.run(ctx, command)
 }
 
 // Initialize starts a persistent shell early; it is a no-op in stateless mode.
@@ -202,6 +208,7 @@ func (t *Local) ApprovalRequired() bool { return !t.exec.opts.AcknowledgeUnsafe 
 
 var _ tool.FuncTool = (*Local)(nil)
 var _ tool.ApprovalRequiredTool = (*Local)(nil)
+var _ Executor = (*Local)(nil)
 
 // --------------------------------------------------------------------------
 // localShellExecutor — manages shell lifecycle
@@ -274,7 +281,7 @@ func (e *localShellExecutor) runPersistent(ctx context.Context, command string) 
 		})
 		if err != nil {
 			e.mu.Unlock()
-			return Result{}, fmt.Errorf("shelltool: start persistent shell: %w", err)
+			return Result{}, fmt.Errorf("%w: shelltool: start persistent shell: %w", errCommandIO, err)
 		}
 		e.session = sess
 	}
@@ -338,7 +345,7 @@ func runStateless(ctx context.Context, opts LocalConfig, command string) (Result
 	start := time.Now()
 	tree, err := startProcessTree(cmd)
 	if err != nil {
-		return Result{}, fmt.Errorf("shelltool: run: %w", err)
+		return Result{}, fmt.Errorf("%w: shelltool: run: %w", errCommandIO, err)
 	}
 	defer closeProcessTree(tree)
 	waitCh := make(chan error, 1)
@@ -356,7 +363,7 @@ func runStateless(ctx context.Context, opts LocalConfig, command string) (Result
 		if runCtx.Err() == context.DeadlineExceeded {
 			timedOut = true
 		} else {
-			return Result{}, fmt.Errorf("shelltool: run: %w", runCtx.Err())
+			return Result{}, fmt.Errorf("%w: shelltool: run: %w", errCommandIO, runCtx.Err())
 		}
 	}
 	dur := time.Since(start)
@@ -369,7 +376,7 @@ func runStateless(ctx context.Context, opts LocalConfig, command string) (Result
 		if errors.As(runErr, &exitErr) {
 			exitCode = exitErr.ExitCode()
 		} else {
-			return Result{}, fmt.Errorf("shelltool: run: %w", runErr)
+			return Result{}, fmt.Errorf("%w: shelltool: run: %w", errCommandIO, runErr)
 		}
 	}
 

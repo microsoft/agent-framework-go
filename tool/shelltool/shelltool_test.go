@@ -3,15 +3,19 @@
 package shelltool_test
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/shelltool"
 )
@@ -77,6 +81,500 @@ func TestResult_FormatForModel_truncatedButEmptyStdoutOmitsMarker(t *testing.T) 
 	if !strings.Contains(got, "stderr: err") {
 		t.Errorf("expected stderr block, got %q", got)
 	}
+}
+
+// --------------------------------------------------------------------------
+// Shell environment provider
+// --------------------------------------------------------------------------
+
+func TestShellFamily_zeroValueIsUnknown(t *testing.T) {
+	var family shelltool.ShellFamily
+	if family != shelltool.ShellFamilyUnknown {
+		t.Fatalf("zero ShellFamily = %v, want ShellFamilyUnknown", family)
+	}
+	if got := family.String(); got != "Unknown" {
+		t.Fatalf("zero ShellFamily string = %q, want Unknown", got)
+	}
+}
+
+func TestDefaultShellEnvironmentInstructions_powerShell(t *testing.T) {
+	snapshot := shelltool.ShellEnvironmentSnapshot{
+		Family:           shelltool.ShellFamilyPowerShell,
+		OSDescription:    "Windows",
+		ShellVersion:     "7.5.0",
+		WorkingDirectory: `C:\work`,
+		ToolVersions: map[string]shelltool.ToolVersion{
+			"docker": {},
+			"git":    {Version: "git version 2.50.0", Found: true},
+		},
+	}
+
+	got := shelltool.DefaultShellEnvironmentInstructions(snapshot)
+	for _, want := range []string{
+		"## Shell environment",
+		"PowerShell 7.5.0 session on Windows",
+		"Use PowerShell idioms, NOT bash",
+		"Working directory: C:\\work",
+		"Available CLIs: git (git version 2.50.0)",
+		"Not installed: docker",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("instructions missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestDefaultShellEnvironmentInstructions_posix(t *testing.T) {
+	snapshot := shelltool.ShellEnvironmentSnapshot{
+		Family:           shelltool.ShellFamilyPOSIX,
+		OSDescription:    "Ubuntu 22.04",
+		ShellVersion:     "5.2",
+		WorkingDirectory: "/home/user/repo",
+		ToolVersions: map[string]shelltool.ToolVersion{
+			"git": {Version: "git 2.43", Found: true},
+		},
+	}
+
+	got := shelltool.DefaultShellEnvironmentInstructions(snapshot)
+	for _, want := range []string{"POSIX", "export NAME=value", "/home/user/repo"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("instructions missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "$env:") {
+		t.Fatalf("POSIX instructions should not contain PowerShell env syntax:\n%s", got)
+	}
+}
+
+func TestEnvironmentProvider_refreshOnHostReportsDefaultFamily(t *testing.T) {
+	cfg, _ := statelessPlatformConfig(t)
+	ft := newLocal(t, cfg)
+	env := shelltool.NewEnvironmentProvider(ft, shelltool.EnvironmentProviderConfig{
+		ProbeTools: []string{},
+	})
+
+	snapshot, err := env.Refresh(t.Context())
+	if err != nil {
+		t.Fatalf("refresh shell environment: %v", err)
+	}
+	wantFamily := shelltool.ShellFamilyPOSIX
+	if runtime.GOOS == "windows" {
+		wantFamily = shelltool.ShellFamilyPowerShell
+	}
+	if snapshot.Family != wantFamily {
+		t.Fatalf("family = %v, want %v", snapshot.Family, wantFamily)
+	}
+	if snapshot.WorkingDirectory == "" {
+		t.Fatalf("expected working directory, got empty snapshot: %+v", snapshot)
+	}
+	if runtime.GOOS == "windows" && snapshot.ShellVersion == "" {
+		t.Fatalf("expected PowerShell version on Windows, got empty snapshot: %+v", snapshot)
+	}
+}
+
+func TestEnvironmentProvider_missingToolRecordedAsMissing(t *testing.T) {
+	cfg, _ := statelessPlatformConfig(t)
+	ft := newLocal(t, cfg)
+	env := shelltool.NewEnvironmentProvider(ft, shelltool.EnvironmentProviderConfig{
+		ProbeTools:   []string{"definitely-not-a-real-binary-xyz123"},
+		ProbeTimeout: 5 * time.Second,
+	})
+
+	snapshot, err := env.Refresh(t.Context())
+	if err != nil {
+		t.Fatalf("refresh shell environment: %v", err)
+	}
+	version, ok := snapshot.ToolVersions["definitely-not-a-real-binary-xyz123"]
+	if !ok {
+		t.Fatalf("expected missing tool entry, got %#v", snapshot.ToolVersions)
+	}
+	if version.Found {
+		t.Fatalf("expected missing tool, got %#v", version)
+	}
+}
+
+func TestEnvironmentProvider_customFormatterOverridesDefault(t *testing.T) {
+	fake := &environmentTestExecutor{
+		results: []shelltool.Result{{Stdout: "VERSION=1.0\nCWD=/tmp\n", ExitCode: 0}},
+	}
+	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
+		OverrideFamily: shelltool.ShellFamilyPOSIX,
+		ProbeTools:     []string{},
+		InstructionsFormatter: func(snapshot shelltool.ShellEnvironmentSnapshot) string {
+			if snapshot.WorkingDirectory != "/tmp" {
+				t.Fatalf("working directory = %q, want /tmp", snapshot.WorkingDirectory)
+			}
+			return "CUSTOM-INSTRUCTIONS"
+		},
+	})
+
+	_, options, err := env.BeforeRun(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("provide shell environment: %v", err)
+	}
+	instructions := slices.Collect(agent.AllOptions(options, agent.WithInstructions))
+	if !slices.Equal(instructions, []string{"CUSTOM-INSTRUCTIONS"}) {
+		t.Fatalf("instructions = %#v, want custom instructions", instructions)
+	}
+}
+
+func TestEnvironmentProvider_refreshRecomputesSnapshot(t *testing.T) {
+	fake := &environmentTestExecutor{
+		results: []shelltool.Result{
+			{Stdout: "VERSION=1.0\nCWD=/a\n", ExitCode: 0},
+			{Stdout: "VERSION=2.0\nCWD=/b\n", ExitCode: 0},
+		},
+	}
+	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
+		OverrideFamily: shelltool.ShellFamilyPOSIX,
+		ProbeTools:     []string{},
+	})
+
+	first, err := env.Refresh(t.Context())
+	if err != nil {
+		t.Fatalf("first refresh: %v", err)
+	}
+	if first.WorkingDirectory != "/a" {
+		t.Fatalf("first working directory = %q, want /a", first.WorkingDirectory)
+	}
+	probesAfterFirst := fake.runCount
+
+	second, err := env.Refresh(t.Context())
+	if err != nil {
+		t.Fatalf("second refresh: %v", err)
+	}
+	if second.WorkingDirectory != "/b" || second.ShellVersion != "2.0" {
+		t.Fatalf("second snapshot = %+v, want cwd /b and version 2.0", second)
+	}
+	if fake.runCount <= probesAfterFirst {
+		t.Fatalf("Refresh should re-probe each call, runCount = %d after first %d", fake.runCount, probesAfterFirst)
+	}
+}
+
+func TestEnvironmentProvider_providesInstructionsAndSnapshot(t *testing.T) {
+	ft := newLocal(t, shelltool.LocalConfig{AcknowledgeUnsafe: true})
+	env := shelltool.NewEnvironmentProvider(ft, shelltool.EnvironmentProviderConfig{
+		ProbeTools: []string{},
+	})
+
+	_, options, err := env.BeforeRun(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("provide shell environment: %v", err)
+	}
+	instructions := slices.Collect(agent.AllOptions(options, agent.WithInstructions))
+	if len(instructions) != 1 {
+		t.Fatalf("expected one instruction option, got %d", len(instructions))
+	}
+	for _, want := range []string{"## Shell environment", "Working directory:"} {
+		if !strings.Contains(instructions[0], want) {
+			t.Fatalf("instructions missing %q:\n%s", want, instructions[0])
+		}
+	}
+
+	snapshot, ok := env.CurrentSnapshot()
+	if !ok {
+		t.Fatal("expected current snapshot after provider run")
+	}
+	if snapshot.WorkingDirectory == "" {
+		t.Fatalf("expected probed working directory, got empty snapshot: %+v", snapshot)
+	}
+	if len(snapshot.ToolVersions) != 0 {
+		t.Fatalf("expected no tool probes, got %#v", snapshot.ToolVersions)
+	}
+}
+
+func TestEnvironmentProvider_currentSnapshotReturnsCopy(t *testing.T) {
+	ft := newLocal(t, shelltool.LocalConfig{AcknowledgeUnsafe: true})
+	env := shelltool.NewEnvironmentProvider(ft, shelltool.EnvironmentProviderConfig{
+		ProbeTools: []string{"bad;name"},
+	})
+	if _, err := env.Refresh(t.Context()); err != nil {
+		t.Fatalf("refresh shell environment: %v", err)
+	}
+
+	snapshot, ok := env.CurrentSnapshot()
+	if !ok {
+		t.Fatal("expected current snapshot")
+	}
+	snapshot.ToolVersions["bad;name"] = shelltool.ToolVersion{Version: "mutated", Found: true}
+
+	again, ok := env.CurrentSnapshot()
+	if !ok {
+		t.Fatal("expected current snapshot")
+	}
+	if again.ToolVersions["bad;name"].Found {
+		t.Fatalf("expected snapshot map to be defensive copy, got %#v", again.ToolVersions["bad;name"])
+	}
+}
+
+func TestEnvironmentProvider_failedProvideAllowsRetry(t *testing.T) {
+	ft := newLocal(t, shelltool.LocalConfig{AcknowledgeUnsafe: true})
+	env := shelltool.NewEnvironmentProvider(ft, shelltool.EnvironmentProviderConfig{
+		ProbeTools: []string{},
+	})
+
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, _, err := env.BeforeRun(canceled, nil); err == nil {
+		t.Fatal("expected canceled provider run to fail")
+	}
+	if _, ok := env.CurrentSnapshot(); ok {
+		t.Fatal("did not expect snapshot after failed provider run")
+	}
+
+	if _, _, err := env.BeforeRun(t.Context(), nil); err != nil {
+		t.Fatalf("retry provider run: %v", err)
+	}
+	if _, ok := env.CurrentSnapshot(); !ok {
+		t.Fatal("expected snapshot after retry")
+	}
+}
+
+func TestEnvironmentProvider_firstCallFailsNextCallRetriesAndSucceeds(t *testing.T) {
+	boom := errors.New("boom")
+	calls := 0
+	fake := &environmentTestExecutor{
+		run: func(ctx context.Context, command string) (shelltool.Result, error) {
+			calls++
+			if calls == 1 {
+				return shelltool.Result{}, boom
+			}
+			return shelltool.Result{Stdout: "VERSION=2.0\nCWD=/tmp\n", ExitCode: 0}, nil
+		},
+	}
+	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
+		OverrideFamily: shelltool.ShellFamilyPOSIX,
+		ProbeTools:     []string{},
+	})
+
+	if _, _, err := env.BeforeRun(t.Context(), nil); !errors.Is(err, boom) {
+		t.Fatalf("first provider run error = %v, want boom", err)
+	}
+	if _, ok := env.CurrentSnapshot(); ok {
+		t.Fatal("did not expect snapshot after failed provider run")
+	}
+
+	if _, _, err := env.BeforeRun(t.Context(), nil); err != nil {
+		t.Fatalf("retry provider run: %v", err)
+	}
+	snapshot, ok := env.CurrentSnapshot()
+	if !ok {
+		t.Fatal("expected snapshot after retry")
+	}
+	if snapshot.ShellVersion != "2.0" {
+		t.Fatalf("snapshot shell version = %q, want 2.0", snapshot.ShellVersion)
+	}
+}
+
+func TestEnvironmentProvider_firstCallCanceledNextCallSucceeds(t *testing.T) {
+	calls := 0
+	fake := &environmentTestExecutor{
+		run: func(ctx context.Context, command string) (shelltool.Result, error) {
+			calls++
+			if calls == 1 {
+				return shelltool.Result{}, ctx.Err()
+			}
+			return shelltool.Result{Stdout: "VERSION=3.0\nCWD=/x\n", ExitCode: 0}, nil
+		},
+	}
+	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
+		OverrideFamily: shelltool.ShellFamilyPOSIX,
+		ProbeTools:     []string{},
+	})
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	if _, _, err := env.BeforeRun(canceled, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("first provider run error = %v, want context canceled", err)
+	}
+	if _, ok := env.CurrentSnapshot(); ok {
+		t.Fatal("did not expect snapshot after canceled provider run")
+	}
+
+	if _, _, err := env.BeforeRun(t.Context(), nil); err != nil {
+		t.Fatalf("retry provider run: %v", err)
+	}
+	snapshot, ok := env.CurrentSnapshot()
+	if !ok {
+		t.Fatal("expected snapshot after retry")
+	}
+	if snapshot.ShellVersion != "3.0" {
+		t.Fatalf("snapshot shell version = %q, want 3.0", snapshot.ShellVersion)
+	}
+}
+
+func TestEnvironmentProvider_invalidToolNameRecordedMissingWithoutInvokingExecutor(t *testing.T) {
+	fake := &environmentTestExecutor{
+		results: []shelltool.Result{{Stdout: "VERSION=1.0\nCWD=/\n", ExitCode: 0}},
+	}
+	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
+		OverrideFamily: shelltool.ShellFamilyPOSIX,
+		ProbeTools:     []string{"git; rm -rf /", "echo $PATH", "good-tool && bad"},
+	})
+
+	snapshot, err := env.Refresh(t.Context())
+	if err != nil {
+		t.Fatalf("refresh shell environment: %v", err)
+	}
+	if fake.runCount != 1 {
+		t.Fatalf("expected only shell/CWD probe to run, runCount = %d", fake.runCount)
+	}
+	for _, name := range []string{"git; rm -rf /", "echo $PATH", "good-tool && bad"} {
+		version, ok := snapshot.ToolVersions[name]
+		if !ok || version.Found {
+			t.Fatalf("invalid tool %q = %#v, present %v; want missing entry", name, version, ok)
+		}
+	}
+}
+
+func TestEnvironmentProvider_probeToolsDeduplicateCaseInsensitive(t *testing.T) {
+	ft := newLocal(t, shelltool.LocalConfig{AcknowledgeUnsafe: true})
+	env := shelltool.NewEnvironmentProvider(ft, shelltool.EnvironmentProviderConfig{
+		ProbeTools: []string{"bad;name", "BAD;NAME"},
+	})
+
+	snapshot, err := env.Refresh(t.Context())
+	if err != nil {
+		t.Fatalf("refresh shell environment: %v", err)
+	}
+	if len(snapshot.ToolVersions) != 1 {
+		t.Fatalf("expected one de-duplicated probe entry, got %#v", snapshot.ToolVersions)
+	}
+	if _, ok := snapshot.ToolVersions["bad;name"]; !ok {
+		t.Fatalf("expected first probe name to be preserved, got %#v", snapshot.ToolVersions)
+	}
+}
+
+func TestEnvironmentProvider_duplicateProbeToolsCaseInsensitiveProbesOnce(t *testing.T) {
+	fake := &environmentTestExecutor{
+		results: []shelltool.Result{
+			{Stdout: "VERSION=1.0\nCWD=/\n", ExitCode: 0},
+			{Stdout: "git 2.46\n", ExitCode: 0},
+		},
+	}
+	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
+		OverrideFamily: shelltool.ShellFamilyPOSIX,
+		ProbeTools:     []string{"git", "GIT", "Git"},
+	})
+
+	snapshot, err := env.Refresh(t.Context())
+	if err != nil {
+		t.Fatalf("refresh shell environment: %v", err)
+	}
+	if fake.runCount != 2 {
+		t.Fatalf("expected shell probe plus one tool probe, runCount = %d", fake.runCount)
+	}
+	if len(snapshot.ToolVersions) != 1 {
+		t.Fatalf("expected one de-duplicated probe entry, got %#v", snapshot.ToolVersions)
+	}
+	if got := snapshot.ToolVersions["git"]; !got.Found || got.Version != "git 2.46" {
+		t.Fatalf("git version = %#v, want git 2.46", got)
+	}
+}
+
+func TestEnvironmentProvider_toolEmitsVersionToStderrFallsBackToStderr(t *testing.T) {
+	fake := &environmentTestExecutor{
+		results: []shelltool.Result{
+			{Stdout: "VERSION=1.0\nCWD=/\n", ExitCode: 0},
+			{Stderr: "openjdk 21.0.1 2023-10-17\n", ExitCode: 0},
+		},
+	}
+	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
+		OverrideFamily: shelltool.ShellFamilyPOSIX,
+		ProbeTools:     []string{"java"},
+	})
+
+	snapshot, err := env.Refresh(t.Context())
+	if err != nil {
+		t.Fatalf("refresh shell environment: %v", err)
+	}
+	if got := snapshot.ToolVersions["java"]; !got.Found || got.Version != "openjdk 21.0.1 2023-10-17" {
+		t.Fatalf("java version = %#v, want stderr version", got)
+	}
+}
+
+func TestEnvironmentProvider_callerCancellationPropagates(t *testing.T) {
+	fake := &environmentTestExecutor{
+		run: func(ctx context.Context, command string) (shelltool.Result, error) {
+			return shelltool.Result{}, ctx.Err()
+		},
+	}
+	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
+		OverrideFamily: shelltool.ShellFamilyPOSIX,
+		ProbeTools:     []string{},
+	})
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	if _, err := env.Refresh(canceled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("refresh error = %v, want context canceled", err)
+	}
+}
+
+func TestEnvironmentProvider_probeTimeoutRecordedAsMissingFields(t *testing.T) {
+	fake := &environmentTestExecutor{
+		run: func(ctx context.Context, command string) (shelltool.Result, error) {
+			<-ctx.Done()
+			return shelltool.Result{}, ctx.Err()
+		},
+	}
+	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
+		OverrideFamily: shelltool.ShellFamilyPOSIX,
+		ProbeTimeout:   time.Millisecond,
+		ProbeTools:     []string{"git"},
+	})
+
+	snapshot, err := env.Refresh(t.Context())
+	if err != nil {
+		t.Fatalf("refresh shell environment: %v", err)
+	}
+	if snapshot.ShellVersion != "" {
+		t.Fatalf("shell version = %q, want missing", snapshot.ShellVersion)
+	}
+	if got := snapshot.ToolVersions["git"]; got.Found {
+		t.Fatalf("git version = %#v, want missing", got)
+	}
+}
+
+func TestEnvironmentProvider_policyRejectedToolProbeIsMissing(t *testing.T) {
+	policy, err := shelltool.NewPolicy(shelltool.PolicyConfig{DenyList: []string{`--version`}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ft := newLocal(t, shelltool.LocalConfig{AcknowledgeUnsafe: true, Policy: policy})
+	env := shelltool.NewEnvironmentProvider(ft, shelltool.EnvironmentProviderConfig{
+		ProbeTools: []string{"git"},
+	})
+
+	snapshot, err := env.Refresh(t.Context())
+	if err != nil {
+		t.Fatalf("refresh shell environment: %v", err)
+	}
+	if snapshot.ToolVersions["git"].Found {
+		t.Fatalf("expected rejected probe to be recorded as missing, got %#v", snapshot.ToolVersions["git"])
+	}
+}
+
+type environmentTestExecutor struct {
+	results []shelltool.Result
+	run     func(context.Context, string) (shelltool.Result, error)
+
+	runCount int
+}
+
+func (e *environmentTestExecutor) Initialize(context.Context) error { return nil }
+
+func (e *environmentTestExecutor) Run(ctx context.Context, command string) (shelltool.Result, error) {
+	e.runCount++
+	if e.run != nil {
+		return e.run(ctx, command)
+	}
+	if len(e.results) == 0 {
+		return shelltool.Result{}, fmt.Errorf("unexpected probe command %q", command)
+	}
+	result := e.results[0]
+	e.results = e.results[1:]
+	return result, nil
 }
 
 // --------------------------------------------------------------------------
@@ -255,12 +753,6 @@ func TestNewLocal_negativeMaxOutputErrors(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "MaxOutputBytes") {
 		t.Errorf("unexpected error: %v", err)
-	}
-}
-
-func TestDefaultTimeout_isThirtySeconds(t *testing.T) {
-	if shelltool.DefaultTimeout != 30*time.Second {
-		t.Fatalf("DefaultTimeout = %s, want 30s", shelltool.DefaultTimeout)
 	}
 }
 
