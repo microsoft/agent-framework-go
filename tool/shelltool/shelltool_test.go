@@ -3,6 +3,7 @@
 package shelltool_test
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -40,7 +41,7 @@ func TestResult_FormatForModel_stderr(t *testing.T) {
 func TestResult_FormatForModel_truncated(t *testing.T) {
 	r := shelltool.Result{Stdout: "data", Truncated: true, ExitCode: 0}
 	got := r.FormatForModel()
-	if !strings.Contains(got, "[stdout truncated]") {
+	if !strings.Contains(got, "[output truncated]") {
 		t.Errorf("expected truncated marker, got %q", got)
 	}
 }
@@ -143,7 +144,17 @@ func TestNew_schema_hasCommandField(t *testing.T) {
 // Integration: actual shell execution (stateless)
 // --------------------------------------------------------------------------
 
+// skipIfNotPOSIX skips the test on non-POSIX platforms where shell commands
+// like `sleep`, `$VAR` expansion, and `exit N` may not behave as expected.
+func skipIfNotPOSIX(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping POSIX-only test on Windows")
+	}
+}
+
 func TestCall_echo_stateless(t *testing.T) {
+	skipIfNotPOSIX(t)
 	ft := shelltool.New(shelltool.Options{AcknowledgeUnsafe: true})
 	ctx := tool.Context{Context: t.Context()}
 	out, err := ft.Call(ctx, `{"command":"echo hello"}`)
@@ -163,6 +174,7 @@ func TestCall_echo_stateless(t *testing.T) {
 }
 
 func TestCall_nonZeroExit(t *testing.T) {
+	skipIfNotPOSIX(t)
 	ft := shelltool.New(shelltool.Options{AcknowledgeUnsafe: true})
 	ctx := tool.Context{Context: t.Context()}
 	out, err := ft.Call(ctx, `{"command":"exit 42"}`)
@@ -197,6 +209,7 @@ func TestCall_policyDeny(t *testing.T) {
 }
 
 func TestCall_timeout(t *testing.T) {
+	skipIfNotPOSIX(t)
 	ft := shelltool.New(shelltool.Options{
 		AcknowledgeUnsafe: true,
 		Timeout:           50 * time.Millisecond,
@@ -213,6 +226,7 @@ func TestCall_timeout(t *testing.T) {
 }
 
 func TestCall_persistent_statePersists(t *testing.T) {
+	skipIfNotPOSIX(t)
 	ft := shelltool.New(shelltool.Options{
 		AcknowledgeUnsafe: true,
 		Mode:              shelltool.ModePersistent,

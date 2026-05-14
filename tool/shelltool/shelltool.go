@@ -24,13 +24,15 @@
 // # Usage
 //
 //	t := shelltool.New(shelltool.Options{})
-//	cfg := agent.Config{Tools: []tool.FuncTool{t}}
+//	cfg := agent.Config{Tools: []tool.Tool{t}}
 package shelltool
 
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -80,7 +82,7 @@ func (r Result) FormatForModel() string {
 	if r.Stdout != "" {
 		sb.WriteString(r.Stdout)
 		if r.Truncated {
-			sb.WriteString("\n[stdout truncated]")
+			sb.WriteString("\n[output truncated]")
 		}
 		sb.WriteByte('\n')
 	}
@@ -93,7 +95,7 @@ func (r Result) FormatForModel() string {
 		sb.WriteString("[command timed out]\n")
 	}
 	sb.WriteString("exit_code: ")
-	sb.WriteString(fmt.Sprint(r.ExitCode))
+	fmt.Fprint(&sb, r.ExitCode)
 	return sb.String()
 }
 
@@ -295,7 +297,11 @@ func (e *shellExecutor) run(ctx context.Context, command string) (Result, error)
 
 func (e *shellExecutor) runPersistent(ctx context.Context, command string) (Result, error) {
 	e.mu.Lock()
-	if e.session == nil {
+	if e.session == nil || e.session.dead {
+		// Replace a dead session (caused by a previous timeout).
+		if e.session != nil {
+			go e.session.Close()
+		}
 		sess, err := newPersistentSession(resolveShell(e.opts.Shell), e.opts.WorkingDirectory)
 		if err != nil {
 			e.mu.Unlock()
@@ -305,7 +311,21 @@ func (e *shellExecutor) runPersistent(ctx context.Context, command string) (Resu
 	}
 	sess := e.session
 	e.mu.Unlock()
-	return sess.run(ctx, command, e.opts.Timeout, e.opts.maxOutputBytes())
+
+	result, err := sess.run(ctx, command, e.opts.Timeout, e.opts.maxOutputBytes())
+
+	// If the session timed out and marked itself dead, evict it so the next
+	// call gets a fresh shell with clean state.
+	if sess.dead {
+		e.mu.Lock()
+		if e.session == sess {
+			go e.session.Close()
+			e.session = nil
+		}
+		e.mu.Unlock()
+	}
+
+	return result, err
 }
 
 // --------------------------------------------------------------------------
@@ -342,7 +362,7 @@ func runStateless(ctx context.Context, opts Options, command string) (Result, er
 	exitCode := 0
 	if runErr != nil {
 		var exitErr *exec.ExitError
-		if ok := asExitError(runErr, &exitErr); ok {
+		if errors.As(runErr, &exitErr) {
 			exitCode = exitErr.ExitCode()
 		} else if timedOut {
 			exitCode = 124
@@ -361,30 +381,64 @@ func runStateless(ctx context.Context, opts Options, command string) (Result, er
 	}, nil
 }
 
-func asExitError(err error, target **exec.ExitError) bool {
-	if e, ok := err.(*exec.ExitError); ok {
-		*target = e
-		return true
-	}
-	return false
-}
-
 // --------------------------------------------------------------------------
 // persistent shell session (sentinel-protocol)
 // --------------------------------------------------------------------------
 
-const sentinelMarker = "__AGENT_FRAMEWORK_DONE__"
+// maxScanTokenSize is the maximum line length the scanner can handle (1 MiB).
+// This overrides bufio.Scanner's default 64 KiB limit to avoid silent truncation
+// of long output lines in persistent mode.
+const maxScanTokenSize = 1 << 20
 
-// persistentSession wraps a long-lived shell process. A single background
-// goroutine scans stdout lines and forwards them on the lines channel.
-// Callers MUST hold the mutex for the lifetime of each run call.
+// newSentinelToken generates a unique per-invocation sentinel token using
+// crypto/rand. A unique token prevents accidental sentinel matches caused by
+// command output that happens to contain a constant marker string.
+func newSentinelToken() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback: use a static token if crypto/rand is unavailable.
+		return "__AGFW_fallback_sentinel__"
+	}
+	return fmt.Sprintf("__AGFW_%x__", b)
+}
+
+// persistentSession wraps a long-lived shell process. Two background goroutines
+// scan stdout and stderr and forward lines on their respective channels.
+// The session's mutex serialises concurrent run calls. The session is marked
+// dead on timeout so the executor can replace it.
+//
+// Only POSIX-compatible shells (bash, sh, zsh, …) are supported in persistent
+// mode because the sentinel protocol relies on POSIX $? and printf semantics.
 type persistentSession struct {
-	mu    sync.Mutex
-	stdin io.WriteCloser
-	lines chan string
+	mu        sync.Mutex
+	cmd       *exec.Cmd
+	stdin     io.WriteCloser
+	lines     chan string // stdout lines
+	errLines  chan string // stderr lines
+	dead      bool       // true after a timeout; executor must create a new session
+	closeOnce sync.Once
+	closeCh   chan struct{} // closed by Close() to unblock goroutines
+}
+
+// isPOSIXShell reports whether shell names a POSIX-compatible shell.
+// cmd.exe, pwsh, and powershell use incompatible $?/$LASTEXITCODE semantics
+// and are not supported by the persistent-session sentinel protocol.
+func isPOSIXShell(shell string) bool {
+	switch shellBase(shell) {
+	case "cmd", "cmd.exe", "pwsh", "pwsh.exe", "powershell", "powershell.exe":
+		return false
+	}
+	return true
 }
 
 func newPersistentSession(shell, workdir string) (*persistentSession, error) {
+	if !isPOSIXShell(shell) {
+		return nil, fmt.Errorf(
+			"shelltool: persistent mode requires a POSIX-compatible shell (bash/sh/zsh); %q is not supported",
+			shell,
+		)
+	}
+
 	cmd := exec.Command(shell)
 	if workdir != "" {
 		cmd.Dir = workdir
@@ -398,31 +452,72 @@ func newPersistentSession(shell, workdir string) (*persistentSession, error) {
 	if err != nil {
 		return nil, err
 	}
-	cmd.Stderr = io.Discard
+	errPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, err
+	}
 
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
 
 	s := &persistentSession{
-		stdin: stdin,
-		lines: make(chan string, 256),
+		cmd:      cmd,
+		stdin:    stdin,
+		lines:    make(chan string, 256),
+		errLines: make(chan string, 256),
+		closeCh:  make(chan struct{}),
 	}
-	// Single background goroutine reads lines for the lifetime of the session.
-	go func() {
-		scanner := bufio.NewScanner(outPipe)
-		for scanner.Scan() {
-			s.lines <- scanner.Text()
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	scanPipe := func(pipe io.Reader, ch chan<- string) {
+		defer wg.Done()
+		defer close(ch)
+		sc := bufio.NewScanner(pipe)
+		sc.Buffer(make([]byte, maxScanTokenSize), maxScanTokenSize)
+		for sc.Scan() {
+			select {
+			case ch <- sc.Text():
+			case <-s.closeCh:
+				return
+			}
 		}
-		close(s.lines)
+	}
+
+	go scanPipe(outPipe, s.lines)
+	go scanPipe(errPipe, s.errLines)
+
+	// Reap the child process after both pipes have been fully drained.
+	go func() {
+		wg.Wait()
+		_ = cmd.Wait()
 	}()
+
 	return s, nil
 }
 
-// run sends command to the shell and collects output until the sentinel line.
+// Close terminates the persistent session and releases all resources.
+func (s *persistentSession) Close() {
+	s.closeOnce.Do(func() {
+		close(s.closeCh)
+		if s.cmd.Process != nil {
+			_ = s.cmd.Process.Kill()
+		}
+	})
+}
+
+// run sends command to the shell and collects output until unique sentinel
+// lines appear on both stdout and stderr. On timeout the session is marked
+// dead so the executor creates a fresh session on the next call.
 func (s *persistentSession) run(ctx context.Context, command string, timeout time.Duration, maxBytes int) (Result, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.dead {
+		return Result{}, fmt.Errorf("shelltool: persistent session is dead after timeout; retry")
+	}
 
 	runCtx := ctx
 	var cancel context.CancelFunc
@@ -431,43 +526,78 @@ func (s *persistentSession) run(ctx context.Context, command string, timeout tim
 		defer cancel()
 	}
 
+	// Generate a unique per-invocation sentinel so command output cannot
+	// accidentally contain the marker. A leading printf '\n' guarantees the
+	// sentinel starts on its own line even if the command omitted a trailing
+	// newline. The sentinel is echoed to both stdout and stderr so we can
+	// collect and delimit each stream separately.
+	token := newSentinelToken()
 	start := time.Now()
-	script := fmt.Sprintf("%s\necho '%s' $?\n", command, sentinelMarker)
+	script := fmt.Sprintf(
+		"\n{ %s\n}; _AGFW_CODE=$?\nprintf '\\n%s %%d\\n' \"$_AGFW_CODE\"\nprintf '\\n%s %%d\\n' \"$_AGFW_CODE\" >&2\n",
+		command, token, token,
+	)
 	if _, err := io.WriteString(s.stdin, script); err != nil {
 		return Result{}, fmt.Errorf("shelltool: write to shell: %w", err)
 	}
 
 	outBuf := &headTailBuffer{cap: maxBytes}
+	errBuf := &headTailBuffer{cap: maxBytes / 4}
 	exitCode := 0
 	timedOut := false
+	stdoutDone := false
+	stderrDone := false
 
 loop:
-	for {
+	for !stdoutDone || !stderrDone {
 		select {
 		case <-runCtx.Done():
 			timedOut = true
 			exitCode = 124
+			s.dead = true
 			break loop
+
 		case line, ok := <-s.lines:
 			if !ok {
-				break loop
+				stdoutDone = true
+				continue
 			}
-			if strings.HasPrefix(line, sentinelMarker) {
-				parts := strings.Fields(line)
-				if len(parts) >= 2 {
-					fmt.Sscan(parts[1], &exitCode) //nolint:errcheck
-				}
-				break loop
+			if stdoutDone {
+				// Discard post-sentinel stdout lines (e.g. from background jobs).
+				continue
 			}
-			outBuf.Write([]byte(line + "\n")) //nolint:errcheck
+			parts := strings.Fields(line)
+			if len(parts) == 2 && parts[0] == token {
+				fmt.Sscan(parts[1], &exitCode) //nolint:errcheck
+				stdoutDone = true
+			} else {
+				_, _ = outBuf.Write([]byte(line + "\n"))
+			}
+
+		case line, ok := <-s.errLines:
+			if !ok {
+				stderrDone = true
+				continue
+			}
+			if stderrDone {
+				// Discard post-sentinel stderr lines.
+				continue
+			}
+			parts := strings.Fields(line)
+			if len(parts) == 2 && parts[0] == token {
+				stderrDone = true
+			} else {
+				_, _ = errBuf.Write([]byte(line + "\n"))
+			}
 		}
 	}
 
 	return Result{
 		Stdout:    outBuf.String(),
+		Stderr:    errBuf.String(),
 		ExitCode:  exitCode,
 		Duration:  time.Since(start),
-		Truncated: outBuf.truncated,
+		Truncated: outBuf.truncated || errBuf.truncated,
 		TimedOut:  timedOut,
 	}, nil
 }
@@ -495,19 +625,27 @@ func (b *headTailBuffer) Write(p []byte) (int, error) {
 
 	for len(p) > 0 {
 		r, size := utf8.DecodeRune(p)
+		// Preserve invalid UTF-8 bytes as-is: re-encoding RuneError (U+FFFD)
+		// needs 3 bytes but an invalid byte has size==1, which would panic in
+		// utf8.EncodeRune if we allocated only size bytes.
+		var encoded []byte
+		if r == utf8.RuneError && size == 1 {
+			encoded = []byte{p[0]}
+		} else {
+			encoded = make([]byte, size)
+			utf8.EncodeRune(encoded, r)
+		}
 		p = p[size:]
-		encoded := make([]byte, size)
-		utf8.EncodeRune(encoded, r)
 
 		b.totalBytes += size
 
-		if len(b.head)+size <= headCap {
+		if len(b.head)+len(encoded) <= headCap {
 			b.head = append(b.head, encoded...)
 			continue
 		}
 		// Head full — append to tail.
 		b.tail = append(b.tail, encoded)
-		b.tailBytes += size
+		b.tailBytes += len(encoded)
 		// Evict oldest rune-chunk from tail until within budget.
 		for b.tailBytes > tailCap && len(b.tail) > 0 {
 			b.tailBytes -= len(b.tail[0])
@@ -568,11 +706,10 @@ func resolveShell(override string) string {
 // command, following the conventions of the .NET ShellResolver.
 func shellArgs(shell, command string) []string {
 	base := shellBase(shell)
-	switch {
-	case base == "cmd" || base == "cmd.exe":
+	switch base {
+	case "cmd", "cmd.exe":
 		return []string{shell, "/C", command}
-	case base == "pwsh" || base == "pwsh.exe" ||
-		base == "powershell" || base == "powershell.exe":
+	case "pwsh", "pwsh.exe", "powershell", "powershell.exe":
 		return []string{shell, "-NonInteractive", "-Command", command}
 	default: // bash / sh / zsh / …
 		return []string{shell, "-c", command}
