@@ -2,7 +2,7 @@
 
 // Package shelltool provides a shell command execution tool that can be
 // registered with an agent. It mirrors the .NET LocalShellTool / LocalShellExecutor
-// design: approval-in-the-loop is the default security boundary; a deny-list
+// design: approval-in-the-loop is the default security boundary; an allow/deny
 // [Policy] offers a best-effort pre-execution guardrail.
 //
 // # Security
@@ -10,8 +10,8 @@
 // Running agent-generated shell commands is inherently dangerous.  This package
 // provides two complementary controls:
 //
-//   - [Policy]: a deny-list of regular expressions that reject commands before
-//     they reach the shell.  The deny-list is a UX guardrail, NOT a security
+//   - [Policy]: an allow/deny list of regular expressions checked before
+//     commands reach the shell. The policy is a UX guardrail, NOT a security
 //     boundary — a determined model can trivially work around regex checks.
 //
 //   - Approval-in-the-loop: [New] returns a [tool.FuncTool] that also
@@ -103,39 +103,90 @@ func (r Result) FormatForModel() string {
 // Policy
 // --------------------------------------------------------------------------
 
-// Policy is a deny-list that rejects commands whose text matches any of the
-// configured patterns before they reach the shell.
+// ShellRequest is a shell command awaiting a policy decision.
+type ShellRequest struct {
+	// Command is the full command line that the agent wants to run.
+	Command string
+
+	// WorkingDirectory is the optional working directory the command will
+	// execute in, if known.
+	WorkingDirectory string
+}
+
+// Policy is a layered allow/deny pattern filter for shell commands.
 //
-// The deny-list is a UX guardrail, NOT a security boundary. It is intended to
-// prevent obviously dangerous commands (e.g. rm -rf /) while the primary
-// isolation is approval-in-the-loop or container sandboxing.
+// The regex filter is a UX guardrail, NOT a security boundary. It is intended
+// to fast-fail commands operators would rather reject before execution while
+// the primary isolation is approval-in-the-loop or container sandboxing.
+//
+// A policy constructed with no patterns allows any non-empty command. Allow
+// patterns are checked before deny patterns, so an allow match short-circuits
+// evaluation and skips the deny list.
 type Policy struct {
-	deny []*regexp.Regexp
+	denies []policyPattern
+	allows []policyPattern
 }
 
-// NewPolicy creates a [Policy] that denies any command matching one of the
-// provided regular expressions.
-func NewPolicy(denyPatterns ...string) (*Policy, error) {
-	p := &Policy{}
-	for _, pat := range denyPatterns {
-		re, err := regexp.Compile(pat)
-		if err != nil {
-			return nil, fmt.Errorf("shelltool: invalid deny pattern %q: %w", pat, err)
-		}
-		p.deny = append(p.deny, re)
+// PolicyConfig configures a [Policy].
+type PolicyConfig struct {
+	// DenyList contains patterns that trigger a deny outcome. Nil or empty
+	// disables the deny list.
+	DenyList []string
+
+	// AllowList contains explicit-allow patterns. A match here short-circuits
+	// the deny list.
+	AllowList []string
+}
+
+type policyPattern struct {
+	pattern string
+	re      *regexp.Regexp
+}
+
+// NewPolicy creates a [Policy] from cfg. Patterns are matched case-insensitively.
+func NewPolicy(cfg PolicyConfig) (*Policy, error) {
+	denies, err := compilePolicyPatterns("deny", cfg.DenyList)
+	if err != nil {
+		return nil, err
 	}
-	return p, nil
+	allows, err := compilePolicyPatterns("allow", cfg.AllowList)
+	if err != nil {
+		return nil, err
+	}
+	return &Policy{denies: denies, allows: allows}, nil
 }
 
-// Evaluate returns (true, "") if none of the deny patterns match command, or
-// (false, reason) for the first matching pattern.
-func (p *Policy) Evaluate(command string) (allowed bool, reason string) {
+func compilePolicyPatterns(kind string, patterns []string) ([]policyPattern, error) {
+	compiled := make([]policyPattern, 0, len(patterns))
+	for _, pattern := range patterns {
+		re, err := regexp.Compile("(?i:" + pattern + ")")
+		if err != nil {
+			return nil, fmt.Errorf("shelltool: invalid %s pattern %q: %w", kind, pattern, err)
+		}
+		compiled = append(compiled, policyPattern{pattern: pattern, re: re})
+	}
+	return compiled, nil
+}
+
+// Evaluate returns whether request may run and a human-readable reason when
+// one applies. Evaluation order is: empty-command guard, allow patterns, deny
+// patterns, default allow.
+func (p *Policy) Evaluate(request ShellRequest) (allowed bool, reason string) {
 	if p == nil {
 		return true, ""
 	}
-	for _, re := range p.deny {
-		if re.MatchString(command) {
-			return false, "denied by policy pattern: " + re.String()
+	command := strings.TrimSpace(request.Command)
+	if command == "" {
+		return false, "empty command"
+	}
+	for _, allow := range p.allows {
+		if allow.re.MatchString(command) {
+			return true, "matched allow pattern"
+		}
+	}
+	for _, deny := range p.denies {
+		if deny.re.MatchString(command) {
+			return false, "matched deny pattern: " + deny.pattern
 		}
 	}
 	return true, ""
@@ -185,8 +236,8 @@ type Options struct {
 	// silently truncated and [Result.Truncated] is set.
 	MaxOutputBytes int
 
-	// Policy is an optional deny-list checked before the command reaches
-	// the shell. Nil means allow everything.
+	// Policy is an optional allow/deny filter checked before the command
+	// reaches the shell. Nil means allow everything.
 	Policy *Policy
 
 	// AcknowledgeUnsafe opts out of the default approval-required gate.
@@ -266,7 +317,8 @@ func (t *shellTool) Call(ctx tool.Context, args string) (any, error) {
 	if in.Command == "" {
 		return nil, fmt.Errorf("shelltool: command must not be empty")
 	}
-	if allowed, reason := t.exec.opts.Policy.Evaluate(in.Command); !allowed {
+	request := ShellRequest{Command: in.Command, WorkingDirectory: t.exec.opts.WorkingDirectory}
+	if allowed, reason := t.exec.opts.Policy.Evaluate(request); !allowed {
 		return nil, fmt.Errorf("shelltool: %s", reason)
 	}
 	result, err := t.exec.run(ctx.Context, in.Command)

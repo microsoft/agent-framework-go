@@ -63,39 +63,91 @@ func TestResult_FormatForModel_timedOut(t *testing.T) {
 
 func TestPolicy_nil_allowsAll(t *testing.T) {
 	var p *shelltool.Policy
-	allowed, reason := p.Evaluate("rm -rf /")
+	allowed, reason := p.Evaluate(shelltool.ShellRequest{Command: "rm -rf /"})
 	if !allowed {
 		t.Errorf("nil policy should allow, got reason %q", reason)
 	}
 }
 
 func TestPolicy_deny_matchingPattern(t *testing.T) {
-	p, err := shelltool.NewPolicy(`rm\s+-rf`)
+	p, err := shelltool.NewPolicy(shelltool.PolicyConfig{DenyList: []string{`rm\s+-rf`}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	allowed, reason := p.Evaluate("rm -rf /tmp/foo")
+	allowed, reason := p.Evaluate(shelltool.ShellRequest{Command: "rm -rf /tmp/foo"})
 	if allowed {
 		t.Errorf("expected deny, got allowed")
 	}
-	if !strings.Contains(reason, "denied by policy") {
+	if !strings.Contains(reason, "matched deny pattern") {
 		t.Errorf("unexpected reason %q", reason)
 	}
 }
 
 func TestPolicy_deny_noMatch_allows(t *testing.T) {
-	p, err := shelltool.NewPolicy(`rm\s+-rf`)
+	p, err := shelltool.NewPolicy(shelltool.PolicyConfig{DenyList: []string{`rm\s+-rf`}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	allowed, _ := p.Evaluate("echo hello")
+	allowed, _ := p.Evaluate(shelltool.ShellRequest{Command: "echo hello"})
 	if !allowed {
 		t.Errorf("expected allow for non-matching command")
 	}
 }
 
+func TestPolicy_allow_shortCircuitsDeny(t *testing.T) {
+	p, err := shelltool.NewPolicy(shelltool.PolicyConfig{
+		DenyList:  []string{`rm\s+-rf`},
+		AllowList: []string{`^rm\s+-rf\s+/tmp/safe$`},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed, reason := p.Evaluate(shelltool.ShellRequest{Command: "rm -rf /tmp/safe"})
+	if !allowed {
+		t.Fatalf("expected allow-list match to short-circuit deny-list, got reason %q", reason)
+	}
+	if !strings.Contains(reason, "matched allow pattern") {
+		t.Errorf("unexpected reason %q", reason)
+	}
+}
+
+func TestPolicy_patternsAreCaseInsensitive(t *testing.T) {
+	p, err := shelltool.NewPolicy(shelltool.PolicyConfig{DenyList: []string{`remove-item`}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed, reason := p.Evaluate(shelltool.ShellRequest{Command: "Remove-Item -Recurse"})
+	if allowed {
+		t.Fatalf("expected case-insensitive deny match, got allowed")
+	}
+	if !strings.Contains(reason, "matched deny pattern") {
+		t.Errorf("unexpected reason %q", reason)
+	}
+}
+
+func TestPolicy_emptyCommand_denies(t *testing.T) {
+	p, err := shelltool.NewPolicy(shelltool.PolicyConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed, reason := p.Evaluate(shelltool.ShellRequest{Command: "   "})
+	if allowed {
+		t.Fatal("expected empty command to be denied")
+	}
+	if reason != "empty command" {
+		t.Errorf("unexpected reason %q", reason)
+	}
+}
+
 func TestNewPolicy_invalidRegex(t *testing.T) {
-	_, err := shelltool.NewPolicy(`[invalid`)
+	_, err := shelltool.NewPolicy(shelltool.PolicyConfig{DenyList: []string{`[invalid`}})
+	if err == nil {
+		t.Error("expected error for invalid regex")
+	}
+}
+
+func TestNewPolicy_invalidAllowRegex(t *testing.T) {
+	_, err := shelltool.NewPolicy(shelltool.PolicyConfig{AllowList: []string{`[invalid`}})
 	if err == nil {
 		t.Error("expected error for invalid regex")
 	}
@@ -202,14 +254,14 @@ func TestCall_emptyCommand_error(t *testing.T) {
 }
 
 func TestCall_policyDeny(t *testing.T) {
-	p, _ := shelltool.NewPolicy(`echo`)
+	p, _ := shelltool.NewPolicy(shelltool.PolicyConfig{DenyList: []string{`echo`}})
 	ft := shelltool.New(shelltool.Options{AcknowledgeUnsafe: true, Policy: p})
 	ctx := tool.Context{Context: t.Context()}
 	_, err := ft.Call(ctx, `{"command":"echo hello"}`)
 	if err == nil {
 		t.Error("expected error from policy deny")
 	}
-	if !strings.Contains(err.Error(), "denied by policy") {
+	if !strings.Contains(err.Error(), "matched deny pattern") {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
