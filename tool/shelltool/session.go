@@ -484,10 +484,7 @@ func snapshotRange(buf []byte, start, length int) []byte {
 		length += start
 		start = 0
 	}
-	end := start + length
-	if end > len(buf) {
-		end = len(buf)
-	}
+	end := min(start+length, len(buf))
 	if end <= start {
 		return nil
 	}
@@ -522,10 +519,7 @@ func truncateHeadTail(data string, capBytes int) (string, bool) {
 	tailCap := capBytes - headCap
 	head := takePrefixByBytes(data, headCap)
 	tail := takeSuffixByBytes(data, tailCap)
-	dropped := len(data) - len(head) - len(tail)
-	if dropped < 0 {
-		dropped = 0
-	}
+	dropped := max(len(data)-len(head)-len(tail), 0)
 	return fmt.Sprintf("%s\n[... truncated %d bytes ...]\n%s", head, dropped, tail), true
 }
 
@@ -533,8 +527,7 @@ func takePrefixByBytes(data string, maxBytes int) string {
 	if maxBytes <= 0 {
 		return ""
 	}
-	byteCount := 0
-	end := 0
+	var byteCount, end int
 	for end < len(data) {
 		_, n := utf8.DecodeRuneInString(data[end:])
 		if byteCount+n > maxBytes {
@@ -555,8 +548,7 @@ func takeSuffixByBytes(data string, maxBytes int) string {
 		return data
 	}
 	bytesToSkip := totalBytes - maxBytes
-	skipped := 0
-	start := 0
+	var skipped, start int
 	for start < len(data) {
 		_, n := utf8.DecodeRuneInString(data[start:])
 		if skipped+n > bytesToSkip {
