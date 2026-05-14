@@ -180,12 +180,12 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 				// and anything further, replacing FCCs with approval if any required it, or yielding them as is.
 				if requiresApproval && approvalRequiredFunctions == nil && len(functionCallContents) > 0 {
 					for tl := range agent.AllOptions(opts, agent.WithTool) {
-						if tl, ok := tl.(tool.ApprovalRequiredTool); ok {
+						if tl, ok := tl.(tool.ApprovalRequiredTool); ok && tl.ApprovalRequired() {
 							approvalRequiredFunctions = append(approvalRequiredFunctions, tl)
 						}
 					}
 					for _, tl := range f.additionalTools {
-						if tl, ok := tl.(tool.ApprovalRequiredTool); ok {
+						if tl, ok := tl.(tool.ApprovalRequiredTool); ok && tl.ApprovalRequired() {
 							approvalRequiredFunctions = append(approvalRequiredFunctions, tl)
 						}
 					}
@@ -395,7 +395,7 @@ func (f *autocall) createToolsMap(tools iter.Seq[tool.Tool]) (mtools map[string]
 		}
 		mtools[t.Name()] = t
 		if !anyRequiredApproval {
-			if _, ok := t.(tool.ApprovalRequiredTool); ok {
+			if approval, ok := t.(tool.ApprovalRequiredTool); ok && approval.ApprovalRequired() {
 				anyRequiredApproval = true
 			}
 		}

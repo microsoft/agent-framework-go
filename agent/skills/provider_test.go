@@ -145,7 +145,7 @@ func TestProvider_WithScriptsNoScriptApproval_DoesNotWrapRunScriptTool(t *testin
 
 	_, tools := captureProviderContext(t, provider)
 	runTool := findTool(t, tools, "run_skill_script")
-	if _, ok := runTool.(tool.ApprovalRequiredTool); ok {
+	if approval, ok := runTool.(tool.ApprovalRequiredTool); ok && approval.ApprovalRequired() {
 		t.Fatal("did not expect run_skill_script to require approval by default")
 	}
 }
@@ -426,7 +426,8 @@ func TestProvider_ScriptApproval_MarksToolAsApprovalRequired(t *testing.T) {
 
 	_, tools := captureProviderContext(t, provider)
 	runTool := findTool(t, tools, "run_skill_script")
-	if _, ok := runTool.(tool.ApprovalRequiredTool); !ok {
+	approval, ok := runTool.(tool.ApprovalRequiredTool)
+	if !ok || !approval.ApprovalRequired() {
 		t.Fatal("expected run_skill_script to require approval")
 	}
 }

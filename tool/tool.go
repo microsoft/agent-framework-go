@@ -63,22 +63,25 @@ type FuncTool interface {
 	Call(ctx Context, args string) (any, error)
 }
 
-// ApprovalRequiredTool indicates that a tool requires user approval before invocation.
+// ApprovalRequiredTool indicates whether a tool requires user approval before invocation.
 type ApprovalRequiredTool interface {
 	Tool
 
-	ApprovalRequired()
+	ApprovalRequired() bool
 }
 
 type approvalRequiredFunc struct {
 	FuncTool
 }
 
-func (approvalRequiredFunc) ApprovalRequired() {}
+func (approvalRequiredFunc) ApprovalRequired() bool { return true }
 
 // ApprovalRequiredFunc wraps a tool to indicate that it requires user approval before invocation.
 // If the tool already requires approval, it is returned as-is.
 // Not all tools support approval, in which case the original tool is returned.
 func ApprovalRequiredFunc(t FuncTool) FuncTool {
+	if approval, ok := t.(ApprovalRequiredTool); ok && approval.ApprovalRequired() {
+		return t
+	}
 	return approvalRequiredFunc{t}
 }
