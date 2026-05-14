@@ -24,7 +24,7 @@ const (
 	defaultProbeTimeout             = 5 * time.Second
 )
 
-var defaultProbeTools = []string{"git", "dotnet", "node", "python", "docker"}
+var defaultProbeTools = []string{"git", "dotnet", "node", "python", "docker", "go"}
 
 // ShellFamily identifies the shell syntax family in use.
 type ShellFamily int
