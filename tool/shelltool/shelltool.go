@@ -393,13 +393,12 @@ const maxScanTokenSize = 1 << 20
 // newSentinelToken generates a unique per-invocation sentinel token using
 // crypto/rand. A unique token prevents accidental sentinel matches caused by
 // command output that happens to contain a constant marker string.
-func newSentinelToken() string {
+func newSentinelToken() (string, error) {
 	b := make([]byte, 8)
 	if _, err := rand.Read(b); err != nil {
-		// Fallback: use a static token if crypto/rand is unavailable.
-		return "__AGFW_fallback_sentinel__"
+		return "", fmt.Errorf("shelltool: generate sentinel token: %w", err)
 	}
-	return fmt.Sprintf("__AGFW_%x__", b)
+	return fmt.Sprintf("__AGFW_%x__", b), nil
 }
 
 // persistentSession wraps a long-lived shell process. Two background goroutines
@@ -531,17 +530,27 @@ func (s *persistentSession) run(ctx context.Context, command string, timeout tim
 	// sentinel starts on its own line even if the command omitted a trailing
 	// newline. The sentinel is echoed to both stdout and stderr so we can
 	// collect and delimit each stream separately.
-	token := newSentinelToken()
+	token, err := newSentinelToken()
+	if err != nil {
+		return Result{}, err
+	}
 	start := time.Now()
-	script := fmt.Sprintf(
-		"\n{ %s\n}; _AGFW_CODE=$?\nprintf '\\n%s %%d\\n' \"$_AGFW_CODE\"\nprintf '\\n%s %%d\\n' \"$_AGFW_CODE\" >&2\n",
-		command, token, token,
-	)
+
+	// The script:
+	//   1. Run the command in a subshell (isolates $?).
+	//   2. Capture the exit code into _AGFW_CODE.
+	//   3. Emit "TOKEN CODE" to stdout then stderr, each preceded by a
+	//      newline so the sentinel is always on its own line.
+	script := "\n{ " + command + "\n}; _AGFW_CODE=$?\n" +
+		"printf '\\n" + token + " %d\\n' \"$_AGFW_CODE\"\n" +
+		"printf '\\n" + token + " %d\\n' \"$_AGFW_CODE\" >&2\n"
 	if _, err := io.WriteString(s.stdin, script); err != nil {
 		return Result{}, fmt.Errorf("shelltool: write to shell: %w", err)
 	}
 
 	outBuf := &headTailBuffer{cap: maxBytes}
+	// Stderr typically carries short error messages; 1/4 of the stdout
+	// budget keeps total memory usage proportional.
 	errBuf := &headTailBuffer{cap: maxBytes / 4}
 	exitCode := 0
 	timedOut := false
