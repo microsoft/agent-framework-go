@@ -848,7 +848,11 @@ func TestNewLocal_initializePersistent(t *testing.T) {
 	if err := ft.Initialize(t.Context()); err != nil {
 		t.Fatalf("initialize: %v", err)
 	}
-	defer ft.Close()
+	defer func() {
+		if err := ft.Close(); err != nil {
+			t.Errorf("close shell: %v", err)
+		}
+	}()
 	ctx := tool.Context{Context: t.Context()}
 	out, err := ft.Call(ctx, `{"command":"echo initialized"}`)
 	if err != nil {
@@ -1069,6 +1073,9 @@ func TestCall_statelessTimeoutKillsProcessTree(t *testing.T) {
 
 func TestCall_timeout_preservesPersistentSession(t *testing.T) {
 	skipIfNotPOSIX(t)
+	if runtime.GOOS != "linux" {
+		t.Skip("persistent timeout session preservation requires descendant-only interrupt support")
+	}
 	ft := newLocal(t, shelltool.LocalConfig{
 		AcknowledgeUnsafe: true,
 		Timeout:           50 * time.Millisecond,

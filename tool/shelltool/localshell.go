@@ -206,9 +206,11 @@ func (t *Local) Close() error {
 // ApprovalRequired reports whether calls should require human approval.
 func (t *Local) ApprovalRequired() bool { return !t.exec.opts.AcknowledgeUnsafe }
 
-var _ tool.FuncTool = (*Local)(nil)
-var _ tool.ApprovalRequiredTool = (*Local)(nil)
-var _ Executor = (*Local)(nil)
+var (
+	_ tool.FuncTool             = (*Local)(nil)
+	_ tool.ApprovalRequiredTool = (*Local)(nil)
+	_ Executor                  = (*Local)(nil)
+)
 
 // --------------------------------------------------------------------------
 // localShellExecutor — manages shell lifecycle
