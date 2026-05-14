@@ -41,7 +41,7 @@ func TestResult_FormatForModel_stderr(t *testing.T) {
 func TestResult_FormatForModel_truncated(t *testing.T) {
 	r := shelltool.Result{Stdout: "data", Truncated: true, ExitCode: 0}
 	got := r.FormatForModel()
-	if !strings.Contains(got, "[output truncated]") {
+	if !strings.Contains(got, "[stdout truncated]") {
 		t.Errorf("expected truncated marker, got %q", got)
 	}
 }
@@ -140,8 +140,14 @@ func TestNew_schema_hasCommandField(t *testing.T) {
 	}
 }
 
+func TestMode_zeroValueIsPersistent(t *testing.T) {
+	if shelltool.ModePersistent != 0 {
+		t.Fatalf("expected ModePersistent to be the zero value, got %d", shelltool.ModePersistent)
+	}
+}
+
 // --------------------------------------------------------------------------
-// Integration: actual shell execution (stateless)
+// Integration: actual shell execution
 // --------------------------------------------------------------------------
 
 // skipIfNotPOSIX skips the test on non-POSIX platforms where shell commands
@@ -153,7 +159,7 @@ func skipIfNotPOSIX(t *testing.T) {
 	}
 }
 
-func TestCall_echo_stateless(t *testing.T) {
+func TestCall_echo_defaultPersistent(t *testing.T) {
 	skipIfNotPOSIX(t)
 	ft := shelltool.New(shelltool.Options{AcknowledgeUnsafe: true})
 	ctx := tool.Context{Context: t.Context()}
@@ -177,7 +183,7 @@ func TestCall_nonZeroExit(t *testing.T) {
 	skipIfNotPOSIX(t)
 	ft := shelltool.New(shelltool.Options{AcknowledgeUnsafe: true})
 	ctx := tool.Context{Context: t.Context()}
-	out, err := ft.Call(ctx, `{"command":"exit 42"}`)
+	out, err := ft.Call(ctx, `{"command":"sh -c 'exit 42'"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -229,7 +235,6 @@ func TestCall_persistent_statePersists(t *testing.T) {
 	skipIfNotPOSIX(t)
 	ft := shelltool.New(shelltool.Options{
 		AcknowledgeUnsafe: true,
-		Mode:              shelltool.ModePersistent,
 	})
 	ctx := tool.Context{Context: t.Context()}
 

@@ -82,7 +82,7 @@ func (r Result) FormatForModel() string {
 	if r.Stdout != "" {
 		sb.WriteString(r.Stdout)
 		if r.Truncated {
-			sb.WriteString("\n[output truncated]")
+			sb.WriteString("\n[stdout truncated]")
 		}
 		sb.WriteByte('\n')
 	}
@@ -150,14 +150,14 @@ func (p *Policy) Evaluate(command string) (allowed bool, reason string) {
 type Mode int
 
 const (
-	// ModeStateless spawns a new shell process for every command. Safe to
-	// share across concurrent calls; no state leaks between invocations.
-	ModeStateless Mode = iota
 	// ModePersistent keeps a single shell alive across calls so that
 	// directory changes, exported variables, and history persist. A
 	// persistent executor MUST NOT be shared across concurrent users or
 	// agent sessions.
-	ModePersistent
+	ModePersistent Mode = iota
+	// ModeStateless spawns a new shell process for every command. Safe to
+	// share across concurrent calls; no state leaks between invocations.
+	ModeStateless
 )
 
 // Options configures the shell tool returned by [New].
@@ -169,7 +169,7 @@ type Options struct {
 	Shell string
 
 	// Mode selects stateless-per-call or persistent-shell execution.
-	// Defaults to [ModeStateless].
+	// Defaults to [ModePersistent].
 	Mode Mode
 
 	// WorkingDirectory is the initial working directory for the shell.
@@ -414,7 +414,7 @@ type persistentSession struct {
 	stdin     io.WriteCloser
 	lines     chan string // stdout lines
 	errLines  chan string // stderr lines
-	dead      bool       // true after a timeout; executor must create a new session
+	dead      bool        // true after a timeout; executor must create a new session
 	closeOnce sync.Once
 	closeCh   chan struct{} // closed by Close() to unblock goroutines
 }
