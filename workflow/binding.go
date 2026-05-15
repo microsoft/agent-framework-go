@@ -25,8 +25,8 @@ type ExecutorBinding struct {
 	// RawValue optionally carries the comparable source value behind this binding.
 	// When the builder sees another binding with the same ID and [ExecutorType],
 	// it compares RawValue to catch accidental reuse of the ID for a different
-	// source value. RawValue must be nil or comparable because the builder compares
-	// it with ==; leave it nil for non-comparable sources such as function values.
+	// source value. RawValue must be nil or comparable; the builder rejects
+	// non-comparable values. Leave it nil for sources such as function values.
 	RawValue any
 
 	// IsSharedInstance reports whether [NewExecutor] returns a shared executor

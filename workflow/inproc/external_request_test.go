@@ -127,10 +127,8 @@ func TestPostRequestRoutingToOwner(t *testing.T) {
 				SendTypes: []reflect.Type{reflect.TypeFor[string]()},
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
 					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(wctx *workflow.Context, msg any) (any, error) {
-							return nil, wctx.SendMessage("", "go")
-						}),
-
-						nil
+						return nil, wctx.SendMessage("", "go")
+					}), nil
 				},
 			},
 		}, nil

@@ -244,15 +244,17 @@ func (mr *messageRouter) RouteMessage(ctx *Context, msg any) (result callResult,
 		}
 	}()
 	if handler, ok := mr.typedHandlers[reflect.TypeOf(msg)]; ok {
+		handled = true
 		ret, err := handler(ctx, msg)
-		return callResult{ret, err}, true
+		return callResult{ret, err}, handled
 	}
 	if mr.catchAllFunc != nil {
+		handled = true
 		if !isPortable {
 			pvalue = AnyPortableValue(msg)
 		}
 		ret, err := mr.catchAllFunc(ctx, pvalue)
-		return callResult{ret, err}, true
+		return callResult{ret, err}, handled
 	}
 	return callResult{}, false
 }
@@ -261,11 +263,6 @@ func (mr *messageRouter) RouteMessage(ctx *Context, msg any) (result callResult,
 type callResult struct {
 	Result any
 	Error  error
-}
-
-// Handled reports whether a router matched and invoked a handler.
-func (cr callResult) Handled() bool {
-	return cr != callResult{}
 }
 
 // IsVoid reports whether the handler returned the workflow void sentinel.

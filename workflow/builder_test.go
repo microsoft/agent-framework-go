@@ -226,6 +226,19 @@ func TestBuilder_RebindToDifferent_Disallowed(t *testing.T) {
 	}
 }
 
+func TestBuilder_RejectsNonComparableRawValue(t *testing.T) {
+	binding := newNoOpExecutor("start")
+	binding.RawValue = []string{"not-comparable"}
+
+	_, err := workflow.NewBuilder(binding).Build()
+	if err == nil {
+		t.Fatal("expected error for non-comparable RawValue, got nil")
+	}
+	if !strings.Contains(err.Error(), "RawValue") || !strings.Contains(err.Error(), "not comparable") {
+		t.Fatalf("error = %v, want non-comparable RawValue error", err)
+	}
+}
+
 func TestBuilder_RebindToSameish_Allowed(t *testing.T) {
 	executor1 := newNoOpExecutor("start")
 

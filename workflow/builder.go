@@ -423,6 +423,10 @@ func (wb *Builder) track(binding ExecutorBinding) bool {
 	if wb.err != nil {
 		return false
 	}
+	if err := validateRawValue(binding); err != nil {
+		wb.err = err
+		return false
+	}
 	existing, exists := wb.executorsBindings[binding.ID]
 	// If the executor is unbound, create an entry for it, unless it already exists.
 	// Otherwise, update the entry for it, and remove the unbound tag
@@ -467,6 +471,16 @@ func (wb *Builder) track(binding ExecutorBinding) bool {
 		}
 	}
 	return true
+}
+
+func validateRawValue(binding ExecutorBinding) error {
+	if binding.RawValue == nil {
+		return nil
+	}
+	if reflect.TypeOf(binding.RawValue).Comparable() {
+		return nil
+	}
+	return fmt.Errorf("cannot bind executor with ID %q because RawValue of type %T is not comparable", binding.ID, binding.RawValue)
 }
 
 // AddChain connects source to each binding in executors in order, producing a

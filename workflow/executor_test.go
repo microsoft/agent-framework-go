@@ -434,6 +434,38 @@ func TestAddCatchAll_WithHandlerOverwrite(t *testing.T) {
 	}
 }
 
+func TestExecutorExecute_HandlerPanicReportsFailure(t *testing.T) {
+	executor := &workflow.Executor{
+		ID: "panic-handler",
+		Spec: workflow.ExecutorSpec{
+			DisableAutoSendMessageHandlerResultObject: true,
+			DisableAutoYieldOutputHandlerResultObject: true,
+			ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+				return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(*workflow.Context, any) (any, error) {
+					panic("boom")
+				}), nil
+			},
+		},
+	}
+	var events []workflow.Event
+	ctx := &workflow.Context{
+		AddEvent: func(evt workflow.Event) error {
+			events = append(events, evt)
+			return nil
+		},
+	}
+
+	if _, err := executor.Execute(ctx, "input"); err == nil {
+		t.Fatal("Execute returned nil error, want panic failure")
+	}
+	for _, evt := range events {
+		if _, ok := evt.(workflow.ExecutorFailedEvent); ok {
+			return
+		}
+	}
+	t.Fatalf("events = %#v, want ExecutorFailedEvent", events)
+}
+
 func aggregatorBinding(id string, results *[]string) workflow.ExecutorBinding {
 	binding := workflow.ExecutorBinding{
 		ID:           id,
