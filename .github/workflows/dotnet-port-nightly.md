@@ -105,12 +105,16 @@ Before doing new work, check for existing open Go SDK PRs created by this workfl
 
 ## Decision Process
 
+Prefer small, easy-to-review tasks over broad ports. The best nightly PRs usually improve behavior parity for an existing Go implementation, especially when upstream .NET changed that behavior or when the Go implementation was incomplete or incorrect compared with .NET. Favor focused, test-backed behavior alignments over adding large new surface area.
+
 1. Inspect upstream commits that touch `dotnet/` on `microsoft/agent-framework/main` since the selected lower bound.
 2. Identify the associated upstream .NET PRs when possible. Prefer GitHub pull request metadata; otherwise use commit messages and links in commit bodies.
 3. Decide what makes sense to port to Go. Prioritize overlapping SDK concepts already present in this repository: agents, messages, tools, providers, skills, compaction, hosting, workflows, tests, and examples.
 4. Skip upstream changes that are clearly not applicable to the Go SDK, including .NET-only integrations, package metadata, docs that do not map to Go, and features already intentionally omitted here.
-5. If there is nothing new and relevant to port, inspect the Go SDK for misalignments with the current upstream .NET implementation and realign one coherent, reviewable area.
-6. Keep the nightly change small enough to review. Prefer one feature, bug fix, behavior alignment, or example/test parity improvement per PR.
+5. When multiple relevant opportunities exist, choose the smallest coherent behavior-parity improvement in an existing implementation before choosing larger feature work.
+6. If there is nothing new and relevant to port, inspect the Go SDK for misalignments with the current upstream .NET implementation and realign one coherent, reviewable area.
+7. Keep each PR small enough to review. Prefer one behavior alignment, bug fix, test parity improvement, or example parity improvement per PR. Avoid bundling unrelated ports even if they are nearby in the upstream commit range.
+8. If multiple independent opportunities are each small, testable, and easy to review, consider submitting more than one PR in the same run instead of bundling them. Most runs should still create one PR; use multiple PRs only when each PR stands alone and the total reviewer burden stays low.
 
 Use these existing local references when evaluating parity:
 
@@ -138,7 +142,9 @@ The Go SDK is in beta. Breaking changes are allowed when they improve alignment,
 
 ## PR Requirements
 
-If you changed code, tests, examples, or docs, call the `create_pull_request` safe-output tool exactly once.
+If you changed code, tests, examples, or docs, call the `create_pull_request` safe-output tool exactly once for each coherent PR-sized change set.
+
+Most runs should create one PR. If you found multiple independent changes that are each tiny, well-tested, and easy to review, you may create multiple PRs. Do not split one logical change across multiple PRs, and do not create multiple PRs for dependent changes that reviewers would need to understand together.
 
 The PR title should be short and concrete, for example:
 
@@ -174,7 +180,7 @@ Mention skipped upstream changes, known follow-ups, or uncertainty that reviewer
 
 In the PR body, include upstream commit SHAs and links when they materially explain the port. Mention every ported .NET PR you relied on. If no upstream .NET PR was ported, make that clear.
 
-After requesting the PR, update `/tmp/gh-aw/cache-memory/state.json` with the upstream head inspected, the lower bound used, any ported PRs, and a short decision log. Keep the file concise and do not store secrets.
+After requesting the PR or PRs, update `/tmp/gh-aw/cache-memory/state.json` with the upstream head inspected, the lower bound used, any ported PRs, created Go SDK PRs when available, and a short decision log. Keep the file concise and do not store secrets.
 
 ## No-Change Requirement
 
