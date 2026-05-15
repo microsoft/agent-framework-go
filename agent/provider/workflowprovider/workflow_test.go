@@ -22,7 +22,8 @@ import (
 func newMessageSpec(options *messageworkflow.Options) workflow.ExecutorSpec {
 	spec := workflow.ExecutorSpec{}
 	messageworkflow.Configure(&spec, options)
-	spec.YieldTypes = append(spec.YieldTypes,
+	spec.YieldTypes = append(
+		spec.YieldTypes,
 		reflect.TypeFor[*message.Message](),
 		reflect.TypeFor[*agent.Response](),
 	)
@@ -309,7 +310,8 @@ func TestNew_RejectsIncompatibleWorkflow(t *testing.T) {
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
 					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil,
 						func(ctx *workflow.Context, msg any) (any, error) { return nil, nil }), nil
-				}},
+				},
+			},
 		}
 		return ex, nil
 	}

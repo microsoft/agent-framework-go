@@ -33,7 +33,8 @@ func minimalEchoBinding(id string) workflow.ExecutorBinding {
 					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
 						return nil, ctx.YieldOutput("ok")
 					}), nil
-				}},
+				},
+			},
 		}, nil
 	}
 	return binding

@@ -56,7 +56,8 @@ func TestPostRequestFromExecutor(t *testing.T) {
 							data, _ := resp.Data.As(port.Response)
 							return nil, wctx.YieldOutput(data)
 						}), nil
-				}},
+				},
+			},
 		}, nil
 	}
 
@@ -130,7 +131,8 @@ func TestPostRequestRoutingToOwner(t *testing.T) {
 						}),
 
 						nil
-				}},
+				},
+			},
 		}, nil
 	}
 
@@ -161,7 +163,8 @@ func TestPostRequestRoutingToOwner(t *testing.T) {
 							gotResponseAtAsker = true
 							return nil, wctx.YieldOutput("done")
 						}), nil
-				}},
+				},
+			},
 		}, nil
 	}
 
@@ -216,7 +219,8 @@ func TestExternalResponse_UnsolicitedResponseErrors(t *testing.T) {
 					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(_ *workflow.Context, _ any) (any, error) {
 						return nil, nil
 					}), nil
-				}},
+				},
+			},
 		}, nil
 	}
 	wf, err := workflow.NewBuilder(binding).Build()

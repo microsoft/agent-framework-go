@@ -221,9 +221,11 @@ func TestReflectPorts_ReturnsCopy(t *testing.T) {
 	}
 }
 
-type protocolInput struct{}
-type protocolMiddle struct{}
-type protocolOutput struct{}
+type (
+	protocolInput  struct{}
+	protocolMiddle struct{}
+	protocolOutput struct{}
+)
 
 func hasType(types []reflect.Type, typ reflect.Type) bool {
 	for _, candidate := range types {

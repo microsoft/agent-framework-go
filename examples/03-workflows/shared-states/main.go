@@ -76,7 +76,8 @@ func bindContextFunc[In, Out any](id string, fn func(*workflow.Context, In) (Out
 					return rb.AddHandlerRaw(reflect.TypeFor[In](), reflect.TypeFor[Out](), func(ctx *workflow.Context, msg any) (any, error) {
 						return fn(ctx, msg.(In))
 					}), nil
-				}}}, nil
+				},
+			}}, nil
 		},
 	}
 }

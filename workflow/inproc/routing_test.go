@@ -34,7 +34,8 @@ func captureExecutor(id string, sink *[]string, mu *sync.Mutex) workflow.Executo
 						mu.Unlock()
 						return nil, ctx.SendMessage("", msg)
 					}), nil
-				}},
+				},
+			},
 		}, nil
 	}
 	return binding
@@ -306,7 +307,8 @@ func targetingExecutor(id string, targetID string, sink *[]string, mu *sync.Mute
 						mu.Unlock()
 						return nil, ctx.SendMessage(targetID, msg)
 					}), nil
-				}},
+				},
+			},
 		}, nil
 	}
 	return binding
@@ -357,7 +359,8 @@ func emitsExecutor(id string, value string) workflow.ExecutorBinding {
 					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
 						return nil, ctx.SendMessage("", value)
 					}), nil
-				}},
+				},
+			},
 		}, nil
 	}
 	return binding
@@ -381,7 +384,8 @@ func collectingExecutor(id string, deliveries *[][]string, mu *sync.Mutex) workf
 						mu.Unlock()
 						return nil, nil
 					}), nil
-				}},
+				},
+			},
 		}, nil
 	}
 	return binding
@@ -444,7 +448,8 @@ func outputFilterExecutor(id string) workflow.ExecutorBinding {
 						}
 						return nil, ctx.SendMessage("", s)
 					}), nil
-				}},
+				},
+			},
 		}, nil
 	}
 	return binding

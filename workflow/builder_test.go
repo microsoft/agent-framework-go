@@ -26,7 +26,8 @@ func (n *noOpExecutor) NewExecutor(sessionID string) (*workflow.Executor, error)
 				return rb.AddCatchAll(func(ctx *workflow.Context, msg workflow.PortableValue) (any, error) {
 					return nil, ctx.SendMessage("", msg.Any())
 				}), nil
-			}},
+			},
+		},
 	}, nil
 }
 
@@ -51,7 +52,8 @@ func (n *someOtherNoOpExecutor) NewExecutor(sessionID string) (*workflow.Executo
 				return rb.AddCatchAll(func(ctx *workflow.Context, msg workflow.PortableValue) (any, error) {
 					return nil, ctx.SendMessage("", msg.Any())
 				}), nil
-			}},
+			},
+		},
 	}, nil
 }
 
@@ -320,7 +322,8 @@ func recordingBinding(id string, sink *[]string) workflow.ExecutorBinding {
 						*sink = append(*sink, id+":"+msg.(string))
 						return nil, ctx.SendMessage("", msg)
 					}), nil
-				}},
+				},
+			},
 		}, nil
 	}
 	return binding
@@ -558,7 +561,8 @@ func newTypedExecutor[T any, U any](id string) workflow.ExecutorBinding {
 					return rb.AddHandlerRaw(reflect.TypeFor[T](), reflect.TypeFor[U](), func(ctx *workflow.Context, msg any) (any, error) {
 						return *new(U), nil
 					}), nil
-				}},
+				},
+			},
 		}, nil
 	}
 	return workflow.ExecutorBinding{

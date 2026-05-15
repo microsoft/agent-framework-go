@@ -47,7 +47,8 @@ func (e *StateTestExecutor[T]) Bind() workflow.ExecutorBinding {
 						return rb.AddHandlerRaw(reflect.TypeFor[TestTurnToken](), reflect.TypeFor[TestTurnToken](), func(ctx *workflow.Context, msg any) (any, error) {
 							return e.Execute(ctx, msg.(TestTurnToken))
 						}), nil
-					}},
+					},
+				},
 			}, nil
 		},
 		SupportsConcurrentSharedExecution: false,
@@ -253,7 +254,8 @@ func TestInProcessRun_StateShouldPersist_JSONCheckpointed(t *testing.T) {
 							return nil, nil
 						}
 					}), nil
-				}},
+				},
+			},
 		}, nil
 	}
 	wf, err := workflow.NewBuilder(binding).WithOutputFrom(binding).Build()
@@ -411,7 +413,8 @@ func stateKeysLifecycleBindings(scope string) (workflow.ExecutorBinding, workflo
 							return nil, nil
 						}
 					}), nil
-				}},
+				},
+			},
 		}, nil
 	}
 
@@ -430,7 +433,8 @@ func stateKeysLifecycleBindings(scope string) (workflow.ExecutorBinding, workflo
 						observed["reader:"+message.(string)] = keys
 						return nil, nil
 					}), nil
-				}},
+				},
+			},
 		}, nil
 	}
 
@@ -513,7 +517,8 @@ func TestInProcessRun_ReadOrInitStateInitializerError(t *testing.T) {
 							})
 							return nil, err
 						}), nil
-					}},
+					},
+				},
 			}, nil
 		},
 	}

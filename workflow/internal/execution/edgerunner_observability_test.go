@@ -359,7 +359,8 @@ func stringExecutor(id string) *workflow.Executor {
 				return builder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(*workflow.Context, any) (any, error) {
 					return nil, nil
 				}), nil
-			}},
+			},
+		},
 	}
 }
 

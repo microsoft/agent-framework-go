@@ -69,7 +69,8 @@ func bindStep[In any](id string, fn func(*workflow.Context, In) error) workflow.
 						return rb.AddHandlerRaw(reflect.TypeFor[In](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 							return struct{}{}, fn(ctx, msg.(In))
 						}), nil
-					}},
+					},
+				},
 			}, nil
 		},
 		SupportsConcurrentSharedExecution: true,

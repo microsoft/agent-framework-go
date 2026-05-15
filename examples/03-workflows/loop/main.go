@@ -77,7 +77,8 @@ func newGuessNumberExecutor(id string, low int, high int) workflow.ExecutorBindi
 							}
 							return struct{}{}, ctx.SendMessage("", nextGuess())
 						}), nil
-					}},
+					},
+				},
 			}, nil
 		},
 	}
@@ -107,7 +108,8 @@ func newJudgeExecutor(id string, target int) workflow.ExecutorBinding {
 								return struct{}{}, ctx.SendMessage("", Above)
 							}
 						}), nil
-					}},
+					},
+				},
 			}, nil
 		},
 	}

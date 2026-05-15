@@ -89,9 +89,6 @@ func (wb *Builder) BindExecutor(binding ExecutorBinding) *Builder {
 	if wb.err != nil {
 		return wb
 	}
-	if !wb.checkBinding(binding) {
-		return wb
-	}
 	if binding.isPlaceholder() {
 		wb.err = fmt.Errorf("cannot bind executor with ID %q because it is a placeholder registration", binding.ID)
 		return wb
@@ -106,9 +103,6 @@ func (wb *Builder) AddEdge(source ExecutorBinding, target ExecutorBinding, opts 
 
 func (wb *Builder) AddDirectEdge(source ExecutorBinding, target ExecutorBinding, idempotent bool, condition func(any) bool, opts ...EdgeOption) *Builder {
 	if wb.err != nil {
-		return wb
-	}
-	if !wb.checkBinding(source) || !wb.checkBinding(target) {
 		return wb
 	}
 	conn := EdgeConnection{
@@ -418,13 +412,6 @@ func (wb *Builder) validateTypeCompatibility() error {
 	return nil
 }
 
-func (wb *Builder) checkBinding(binding ExecutorBinding) bool {
-	if wb.err != nil {
-		return false
-	}
-	return true
-}
-
 func (wb *Builder) trackInputPort(port RequestPort) {
 	if wb.inputPorts == nil {
 		wb.inputPorts = make(map[string]RequestPort)
@@ -434,9 +421,6 @@ func (wb *Builder) trackInputPort(port RequestPort) {
 
 func (wb *Builder) track(binding ExecutorBinding) bool {
 	if wb.err != nil {
-		return false
-	}
-	if !wb.checkBinding(binding) {
 		return false
 	}
 	existing, exists := wb.executorsBindings[binding.ID]
@@ -494,15 +478,9 @@ func (wb *Builder) AddChain(source ExecutorBinding, executors []ExecutorBinding,
 	if wb.err != nil {
 		return wb
 	}
-	if !wb.checkBinding(source) {
-		return wb
-	}
 	seen := map[string]struct{}{source.ID: {}}
 	current := source
 	for _, exec := range executors {
-		if !wb.checkBinding(exec) {
-			return wb
-		}
 		if !allowRepetition {
 			if _, ok := seen[exec.ID]; ok {
 				wb.err = fmt.Errorf("executor %q is already in the chain", exec.ID)

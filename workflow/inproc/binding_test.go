@@ -208,7 +208,8 @@ func polymorphicOutputBinding(id string, output polymorphicOutput) workflow.Exec
 					return rb.AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[polymorphicOutput](), func(_ *workflow.Context, _ any) (any, error) {
 						return output, nil
 					}), nil
-				}},
+				},
+			},
 		}, nil
 	}
 	return binding
@@ -230,7 +231,8 @@ func unrelatedOutputBinding(id string) workflow.ExecutorBinding {
 					return rb.AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[polymorphicOutput](), func(ctx *workflow.Context, _ any) (any, error) {
 						return nil, ctx.YieldOutput(unrelatedOutput{})
 					}), nil
-				}},
+				},
+			},
 		}, nil
 	}
 	return binding
@@ -381,7 +383,8 @@ func TestFunctionExecutor_ReturnValueAutoSendAndYieldOptions(t *testing.T) {
 								gotAtSink = append(gotAtSink, msg.(dataMessage))
 								return nil, nil
 							}), nil
-						}},
+						},
+					},
 				}, nil
 			}
 
@@ -482,7 +485,8 @@ func TestBindRequestPort_PostsRequestAndForwardsResponse(t *testing.T) {
 						sawAtSink = true
 						return nil, ctx.YieldOutput(msg)
 					}), nil
-				}},
+				},
+			},
 		}, nil
 	}
 
@@ -614,7 +618,8 @@ func TestBindRequestPort_ForwardsExternalRequestAndRestoresOriginalResponse(t *t
 						}
 						return nil, ctx.SendMessage(innerBinding.ID, request)
 					}), nil
-				}},
+				},
+			},
 		}, nil
 	}
 
@@ -634,7 +639,8 @@ func TestBindRequestPort_ForwardsExternalRequestAndRestoresOriginalResponse(t *t
 						gotResponse = msg.(*workflow.ExternalResponse)
 						return nil, nil
 					}), nil
-				}},
+				},
+			},
 		}, nil
 	}
 

@@ -78,7 +78,6 @@ func Configure(spec *workflow.ExecutorSpec, options *Options) {
 						}), nil
 					})
 				})
-
 			}
 			return rb.
 				AddHandlerRaw(reflect.TypeFor[*message.Message](), nil, func(ctx *workflow.Context, msg any) (any, error) {

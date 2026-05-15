@@ -270,7 +270,8 @@ func collectForwardedResponseMessages(t *testing.T, a *agent.Agent, cfg workflow
 						observed = append(observed, msg.([]*message.Message)...)
 						return nil, nil
 					}), nil
-				}},
+				},
+			},
 		}, nil
 	}
 
@@ -602,7 +603,8 @@ func TestHostedAgent_ForwardsIncomingMessages(t *testing.T) {
 								observed = append(observed, msg)
 								return nil, nil
 							}), nil
-						}},
+						},
+					},
 				}, nil
 			}
 
@@ -1091,7 +1093,8 @@ func approverExecutor(target workflow.ExecutorBinding, approve bool) workflow.Ex
 						req := msg.(*message.ToolApprovalRequestContent)
 						return nil, ctx.SendMessage(target.ID, req.CreateResponse(approve, ""))
 					}), nil
-				}},
+				},
+			},
 		}, nil
 	}
 	return binding
@@ -1119,7 +1122,8 @@ func resultExecutor(target workflow.ExecutorBinding, result any) workflow.Execut
 							Result: result,
 						})
 					}), nil
-				}},
+				},
+			},
 		}, nil
 	}
 	return binding
@@ -1354,7 +1358,8 @@ func TestHostedAgent_InterceptDisabled_PostsExternalRequest(t *testing.T) {
 						sawApprovalRequestMessage = true
 						return nil, nil
 					}), nil
-				}},
+				},
+			},
 		}, nil
 	}
 
@@ -1833,7 +1838,8 @@ func TestHostedAgent_UnknownResponseID_RaisesError(t *testing.T) {
 							Result: "x",
 						})
 					}), nil
-				}},
+				},
+			},
 		}, nil
 	}
 
@@ -1892,7 +1898,8 @@ func TestHostedAgent_HeldTurnToken_StampsResolvedEmitEvents(t *testing.T) {
 						observed = append(observed, msg.(workflow.TurnToken))
 						return nil, nil
 					}), nil
-				}},
+				},
+			},
 		}, nil
 	}
 
@@ -2060,7 +2067,8 @@ func TestHostedAgent_AlreadyPendingRequest_IsIdempotent_InterceptMode(t *testing
 						seen = append(seen, msg.(*message.ToolApprovalRequestContent))
 						return nil, nil
 					}), nil
-				}},
+				},
+			},
 		}, nil
 	}
 

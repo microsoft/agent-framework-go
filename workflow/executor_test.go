@@ -278,10 +278,12 @@ func TestExecutorDeclaredSendType_TightensInterfaceMatching(t *testing.T) {
 	}
 }
 
-type executorProtocolInput struct{}
-type executorProtocolOutput struct{}
-type protocolSent struct{}
-type protocolYielded struct{}
+type (
+	executorProtocolInput  struct{}
+	executorProtocolOutput struct{}
+	protocolSent           struct{}
+	protocolYielded        struct{}
+)
 
 type protocolSendInterface interface {
 	ProtocolSendMarker()
@@ -467,7 +469,8 @@ func aggregatorBinding(id string, results *[]string) workflow.ExecutorBinding {
 							return newState, nil
 						})
 					}), nil
-				}},
+				},
+			},
 		}, nil
 	}
 	return binding
@@ -606,7 +609,8 @@ func nullableAggregatorBinding(id string, results *[]string) workflow.ExecutorBi
 							return &value, nil
 						})
 					}), nil
-				}},
+				},
+			},
 		}, nil
 	}
 	return binding
@@ -625,7 +629,8 @@ func TestWorkflow_AllowsReuseSharedExecutorWithoutResetWhenNoResettableExecutors
 						return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(_ *workflow.Context, _ any) (any, error) {
 							return nil, nil
 						}), nil
-					}},
+					},
+				},
 			}, nil
 		},
 	}

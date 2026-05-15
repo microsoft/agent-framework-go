@@ -238,7 +238,8 @@ func newRequestPortExecutor(port RequestPort) *Executor {
 						}
 						return nil, ctx.SendMessage("", data)
 					}), nil
-			}},
+			},
+		},
 	}
 }
 

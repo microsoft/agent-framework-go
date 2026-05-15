@@ -32,7 +32,8 @@ func factoryConcurrentBinding(id string, sink *[]string, mu *sync.Mutex) workflo
 						mu.Unlock()
 						return nil, ctx.SendMessage("", msg)
 					}), nil
-				}},
+				},
+			},
 		}, nil
 	}
 	binding.SupportsConcurrentSharedExecution = true

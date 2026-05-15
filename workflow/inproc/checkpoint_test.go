@@ -387,7 +387,8 @@ func TestCheckpoint_RestoreClearsExecutorInstancesBeforeImport(t *testing.T) {
 								Count      int
 							}{InstanceID: instanceID, Count: count})
 						}), nil
-					}},
+					},
+				},
 			}, nil
 		},
 	}
@@ -660,7 +661,8 @@ func createCheckpointRequestWorkflow(t *testing.T) (*workflow.Workflow, *atomic.
 							received.Add(1)
 							return nil, ctx.YieldOutput(msg)
 						}), nil
-					}},
+					},
+				},
 			}, nil
 		},
 	}
@@ -712,7 +714,8 @@ func createCheckpointChainWorkflow(t *testing.T, ids ...string) *workflow.Workfl
 							return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 								return nil, ctx.SendMessage("", msg)
 							}), nil
-						}},
+						},
+					},
 				}, nil
 			},
 		})
