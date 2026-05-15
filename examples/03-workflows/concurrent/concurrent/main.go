@@ -22,17 +22,17 @@ func main() {
 	start := bindStep[string]("ConcurrentStartExecutor", func(ctx *workflow.Context, question string) error {
 		return ctx.SendMessage("", question)
 	})
-	physics := workflow.BindFunc("Physicist", true, func(question string) string {
+	physics := workflow.BindFunc("Physicist", func(question string) string {
 		return fmt.Sprintf("physics: %s relates to average kinetic energy", strings.TrimSuffix(question, "?"))
 	})
-	chemistry := workflow.BindFunc("Chemist", true, func(question string) string {
+	chemistry := workflow.BindFunc("Chemist", func(question string) string {
 		return fmt.Sprintf("chemistry: %s affects reaction rates and phase changes", strings.TrimSuffix(question, "?"))
 	})
 	aggregate := aggregateStrings("ConcurrentAggregationExecutor")
 
 	wf, err := workflow.NewBuilder(start).
-		AddFanOutEdge(start, []*workflow.ExecutorBinding{physics, chemistry}).
-		AddFanInBarrierEdge([]*workflow.ExecutorBinding{physics, chemistry}, aggregate).
+		AddFanOutEdge(start, []workflow.ExecutorBinding{physics, chemistry}).
+		AddFanInBarrierEdge([]workflow.ExecutorBinding{physics, chemistry}, aggregate).
 		WithOutputFrom(aggregate).
 		Build()
 	if err != nil {
@@ -55,45 +55,40 @@ func main() {
 	}
 }
 
-func bindStep[In any](id string, fn func(*workflow.Context, In) error) *workflow.ExecutorBinding {
-	return &workflow.ExecutorBinding{
+func bindStep[In any](id string, fn func(*workflow.Context, In) error) workflow.ExecutorBinding {
+	return workflow.ExecutorBinding{
 		ID:           id,
 		ExecutorType: reflect.TypeOf(fn),
-		NewExecutor: func(_ string) (*workflow.Executor, error) {
+		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
 			return &workflow.Executor{
 				ID: id,
-				Options: workflow.ExecutorOptions{
+				Spec: workflow.ExecutorSpec{
 					DisableAutoSendMessageHandlerResultObject: true,
 					DisableAutoYieldOutputHandlerResultObject: true,
-				},
-				Config: []*workflow.ExecutorConfig{{
 					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-						return rb.AddHandler(reflect.TypeFor[In](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
+						return rb.AddHandlerRaw(reflect.TypeFor[In](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 							return struct{}{}, fn(ctx, msg.(In))
 						}), nil
-					},
-				}},
+					}},
 			}, nil
 		},
 		SupportsConcurrentSharedExecution: true,
 	}
 }
 
-func aggregateStrings(id string) *workflow.ExecutorBinding {
-	return &workflow.ExecutorBinding{
+func aggregateStrings(id string) workflow.ExecutorBinding {
+	return workflow.ExecutorBinding{
 		ID:           id,
 		ExecutorType: reflect.TypeFor[string](),
-		NewExecutor: func(_ string) (*workflow.Executor, error) {
+		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
 			var messages []string
 			return &workflow.Executor{
 				ID: id,
-				Options: workflow.ExecutorOptions{
+				Spec: workflow.ExecutorSpec{
 					DisableAutoSendMessageHandlerResultObject: true,
 					DisableAutoYieldOutputHandlerResultObject: true,
-				},
-				Config: []*workflow.ExecutorConfig{{
 					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-						return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(_ *workflow.Context, msg any) (any, error) {
+						return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(_ *workflow.Context, msg any) (any, error) {
 							messages = append(messages, msg.(string))
 							return struct{}{}, nil
 						}), nil
@@ -106,7 +101,7 @@ func aggregateStrings(id string) *workflow.ExecutorBinding {
 						messages = nil
 						return ctx.YieldOutput(out)
 					},
-				}},
+				},
 			}, nil
 		},
 		SupportsConcurrentSharedExecution: true,

@@ -39,6 +39,25 @@ func TestTypeID_JsonRoundtrip(t *testing.T) {
 	}
 }
 
+func TestTypeID_String(t *testing.T) {
+	id := workflow.NewTypeID(reflect.TypeFor[workflow.RequestPort]())
+	if got, want := id.String(), "RequestPort, github.com/microsoft/agent-framework-go/workflow"; got != want {
+		t.Fatalf("String() = %q, want %q", got, want)
+	}
+}
+
+func TestTypeID_NilType(t *testing.T) {
+	if got := workflow.NewTypeID(nil); got != (workflow.TypeID{}) {
+		t.Fatalf("NewTypeID(nil) = %+v, want zero TypeID", got)
+	}
+	if (workflow.TypeID{}).Match(nil) {
+		t.Fatal("zero TypeID should not match nil type")
+	}
+	if (workflow.TypeID{}).Match(reflect.TypeFor[string]()) {
+		t.Fatal("zero TypeID should not match concrete type")
+	}
+}
+
 func TestEdgeConnection_JsonRoundtrip(t *testing.T) {
 	cases := []workflow.EdgeConnection{
 		{SourceIDs: []string{"a"}, SinkIDs: []string{"b"}},
@@ -59,21 +78,6 @@ func TestEdgeConnection_JsonRoundtrip(t *testing.T) {
 				t.Errorf("roundtrip = %+v, want %+v", got, c)
 			}
 		})
-	}
-}
-
-func TestEdgeConnection_NewConnection_RejectsDuplicates(t *testing.T) {
-	if _, err := workflow.NewConnection([]string{"a", "a"}, []string{"b"}); err == nil {
-		t.Error("expected error for duplicate source IDs")
-	}
-	if _, err := workflow.NewConnection([]string{"a"}, []string{"b", "b"}); err == nil {
-		t.Error("expected error for duplicate sink IDs")
-	}
-	if _, err := workflow.NewConnection([]string{"a"}, []string{"a"}); err == nil {
-		t.Error("expected error for source/sink ID collision")
-	}
-	if _, err := workflow.NewConnection([]string{"a", "b"}, []string{"c", "d"}); err != nil {
-		t.Errorf("expected ok for unique IDs, got error: %v", err)
 	}
 }
 
@@ -122,8 +126,8 @@ func TestExternalRequest_JsonRoundtrip(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if got.ID != request.ID {
-		t.Fatalf("ID = %q, want %q", got.ID, request.ID)
+	if got.RequestID != request.RequestID {
+		t.Fatalf("ID = %q, want %q", got.RequestID, request.RequestID)
 	}
 	if got.PortInfo != request.PortInfo {
 		t.Fatalf("PortInfo = %+v, want %+v", got.PortInfo, request.PortInfo)

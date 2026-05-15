@@ -4,16 +4,436 @@ package workflow_test
 
 import (
 	"context"
+	"errors"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
 )
 
-func aggregatorBinding(id string, results *[]string) *workflow.ExecutorBinding {
-	binding := &workflow.ExecutorBinding{
+func TestExecutorSpec_ExtendRoutesAndLifecycleInOrder(t *testing.T) {
+	var calls []string
+	ctx := &workflow.Context{
+		AddEvent: func(workflow.Event) error { return nil },
+	}
+	spec := workflow.ExecutorSpec{
+		DisableAutoSendMessageHandlerResultObject: true,
+		DisableAutoYieldOutputHandlerResultObject: true,
+	}
+	spec.Extend(workflow.ExecutorSpec{
+		Initialize: func(*workflow.Context) error {
+			calls = append(calls, "initialize-1")
+			return nil
+		},
+		Reset: func() error {
+			calls = append(calls, "reset-1")
+			return nil
+		},
+		OnCheckpoint: func(*workflow.Context) error {
+			calls = append(calls, "checkpoint-1")
+			return nil
+		},
+		OnCheckpointRestored: func(*workflow.Context) error {
+			calls = append(calls, "restored-1")
+			return nil
+		},
+		OnMessageDeliveryStarting: func(*workflow.Context) error {
+			calls = append(calls, "starting-1")
+			return nil
+		},
+		OnMessageDeliveryFinished: func(*workflow.Context) error {
+			calls = append(calls, "finished-1")
+			return nil
+		},
+		ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+			calls = append(calls, "routes-1")
+			return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(*workflow.Context, any) (any, error) {
+				calls = append(calls, "handler-string")
+				return nil, nil
+			}), nil
+		},
+	})
+	spec.Extend(workflow.ExecutorSpec{
+		Initialize: func(*workflow.Context) error {
+			calls = append(calls, "initialize-2")
+			return nil
+		},
+		Reset: func() error {
+			calls = append(calls, "reset-2")
+			return nil
+		},
+		OnCheckpoint: func(*workflow.Context) error {
+			calls = append(calls, "checkpoint-2")
+			return nil
+		},
+		OnCheckpointRestored: func(*workflow.Context) error {
+			calls = append(calls, "restored-2")
+			return nil
+		},
+		OnMessageDeliveryStarting: func(*workflow.Context) error {
+			calls = append(calls, "starting-2")
+			return nil
+		},
+		OnMessageDeliveryFinished: func(*workflow.Context) error {
+			calls = append(calls, "finished-2")
+			return nil
+		},
+		ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+			calls = append(calls, "routes-2")
+			return rb.AddHandlerRaw(reflect.TypeFor[int](), nil, func(*workflow.Context, any) (any, error) {
+				calls = append(calls, "handler-int")
+				return nil, nil
+			}), nil
+		},
+	})
+	executor := &workflow.Executor{
+		ID:   "composed",
+		Spec: spec,
+	}
+
+	if err := executor.Initialize(ctx); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	if err := executor.OnCheckpoint(ctx); err != nil {
+		t.Fatalf("OnCheckpoint: %v", err)
+	}
+	if err := executor.OnCheckpointRestored(ctx); err != nil {
+		t.Fatalf("OnCheckpointRestored: %v", err)
+	}
+	if err := executor.OnMessageDeliveryStarting(ctx); err != nil {
+		t.Fatalf("OnMessageDeliveryStarting: %v", err)
+	}
+	if _, err := executor.Execute(ctx, "input"); err != nil {
+		t.Fatalf("Execute string: %v", err)
+	}
+	if _, err := executor.Execute(ctx, 1); err != nil {
+		t.Fatalf("Execute int: %v", err)
+	}
+	if err := executor.OnMessageDeliveryFinished(ctx); err != nil {
+		t.Fatalf("OnMessageDeliveryFinished: %v", err)
+	}
+	if err := executor.Reset(); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+
+	want := []string{
+		"initialize-1", "initialize-2",
+		"checkpoint-1", "checkpoint-2",
+		"restored-1", "restored-2",
+		"starting-1", "starting-2",
+		"routes-1", "routes-2",
+		"handler-string", "handler-int",
+		"finished-1", "finished-2",
+		"reset-1", "reset-2",
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls = %v, want %v", calls, want)
+	}
+}
+
+func TestExecutorSpec_ExtendFinishedRunsAllHooksAndReturnsFirstError(t *testing.T) {
+	firstErr := errors.New("first")
+	secondErr := errors.New("second")
+	var calls []string
+	spec := workflow.ExecutorSpec{}
+	spec.Extend(workflow.ExecutorSpec{
+		OnMessageDeliveryFinished: func(*workflow.Context) error {
+			calls = append(calls, "first")
+			return firstErr
+		},
+	})
+	spec.Extend(workflow.ExecutorSpec{
+		OnMessageDeliveryFinished: func(*workflow.Context) error {
+			calls = append(calls, "second")
+			return secondErr
+		},
+	})
+
+	if err := spec.OnMessageDeliveryFinished(&workflow.Context{}); !errors.Is(err, firstErr) {
+		t.Fatalf("OnMessageDeliveryFinished error = %v, want %v", err, firstErr)
+	}
+	want := []string{"first", "second"}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls = %v, want %v", calls, want)
+	}
+}
+
+func TestExecutorDescribeProtocol_RespectsAutoReturnOptions(t *testing.T) {
+	inputType := reflect.TypeFor[executorProtocolInput]()
+	outputType := reflect.TypeFor[executorProtocolOutput]()
+
+	tests := []struct {
+		name      string
+		autoSend  bool
+		autoYield bool
+	}{
+		{name: "send and yield", autoSend: true, autoYield: true},
+		{name: "send only", autoSend: true, autoYield: false},
+		{name: "yield only", autoSend: false, autoYield: true},
+		{name: "neither", autoSend: false, autoYield: false},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			executor := &workflow.Executor{
+				ID: "protocol",
+				Spec: workflow.ExecutorSpec{
+					DisableAutoSendMessageHandlerResultObject: !testCase.autoSend,
+					DisableAutoYieldOutputHandlerResultObject: !testCase.autoYield,
+					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+						return rb.AddHandlerRaw(inputType, outputType, func(*workflow.Context, any) (any, error) {
+							return executorProtocolOutput{}, nil
+						}), nil
+					},
+				},
+			}
+
+			protocol := executor.DescribeProtocol()
+			if !hasReflectType(protocol.Accepts, inputType) {
+				t.Fatalf("Accepts = %v, want %v", protocol.Accepts, inputType)
+			}
+			if got := hasReflectType(protocol.Sends, outputType); got != testCase.autoSend {
+				t.Fatalf("Sends contains output type = %v, want %v; sends=%v", got, testCase.autoSend, protocol.Sends)
+			}
+			if got := hasReflectType(protocol.Yields, outputType); got != testCase.autoYield {
+				t.Fatalf("Yields contains output type = %v, want %v; yields=%v", got, testCase.autoYield, protocol.Yields)
+			}
+		})
+	}
+}
+
+func TestExecutorDescribeProtocol_IncludesExplicitSendAndYieldTypes(t *testing.T) {
+	explicitSend := reflect.TypeFor[protocolSent]()
+	explicitYield := reflect.TypeFor[protocolYielded]()
+	executor := &workflow.Executor{
+		ID: "protocol",
+		Spec: workflow.ExecutorSpec{
+			DisableAutoSendMessageHandlerResultObject: true,
+			DisableAutoYieldOutputHandlerResultObject: true,
+			SendTypes:  []reflect.Type{explicitSend, nil, explicitSend},
+			YieldTypes: []reflect.Type{explicitYield, nil, explicitYield},
+			ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+				return rb.AddHandlerRaw(reflect.TypeFor[executorProtocolInput](), reflect.TypeFor[executorProtocolOutput](), func(*workflow.Context, any) (any, error) {
+					return executorProtocolOutput{}, nil
+				}), nil
+			},
+		},
+	}
+
+	protocol := executor.DescribeProtocol()
+	if !reflect.DeepEqual(protocol.Sends, []reflect.Type{explicitSend}) {
+		t.Fatalf("Sends = %v, want [%v]", protocol.Sends, explicitSend)
+	}
+	if !reflect.DeepEqual(protocol.Yields, []reflect.Type{explicitYield}) {
+		t.Fatalf("Yields = %v, want [%v]", protocol.Yields, explicitYield)
+	}
+}
+
+func TestExecutorDeclaredSendType_IncludesKnownSystemSendTypes(t *testing.T) {
+	executor := executorWithSendTypes()
+	systemTypes := []reflect.Type{
+		reflect.TypeFor[*workflow.ExternalRequest](),
+		reflect.TypeFor[*workflow.ExternalResponse](),
+	}
+
+	for _, systemType := range systemTypes {
+		if got, ok := executor.DeclaredSendType(systemType); !ok || got != systemType {
+			t.Fatalf("DeclaredSendType(%v) = %v, %v; want %v, true", systemType, got, ok, systemType)
+		}
+		if !executor.CanSendType(systemType) {
+			t.Fatalf("CanSendType(%v) = false, want true", systemType)
+		}
+	}
+
+	protocol := executor.DescribeProtocol()
+	for _, systemType := range systemTypes {
+		if hasReflectType(protocol.Sends, systemType) {
+			t.Fatalf("Sends = %v, want no implicit system send type %v", protocol.Sends, systemType)
+		}
+	}
+}
+
+func TestExecutorDeclaredSendType_TightensInterfaceMatching(t *testing.T) {
+	concreteType := reflect.TypeFor[protocolSendConcrete]()
+	interfaceType := reflect.TypeFor[protocolSendInterface]()
+	anyType := reflect.TypeFor[any]()
+
+	exactExecutor := executorWithSendTypes(concreteType)
+	if got, ok := exactExecutor.DeclaredSendType(concreteType); !ok || got != concreteType {
+		t.Fatalf("DeclaredSendType(concrete) = %v, %v; want %v, true", got, ok, concreteType)
+	}
+
+	interfaceExecutor := executorWithSendTypes(interfaceType)
+	if got, ok := interfaceExecutor.DeclaredSendType(concreteType); ok {
+		t.Fatalf("DeclaredSendType(concrete with interface declaration) = %v, true; want false", got)
+	}
+	if got, ok := interfaceExecutor.DeclaredSendType(interfaceType); !ok || got != interfaceType {
+		t.Fatalf("DeclaredSendType(interface) = %v, %v; want %v, true", got, ok, interfaceType)
+	}
+
+	anyExecutor := executorWithSendTypes(anyType)
+	if got, ok := anyExecutor.DeclaredSendType(concreteType); !ok || got != anyType {
+		t.Fatalf("DeclaredSendType(concrete with any declaration) = %v, %v; want %v, true", got, ok, anyType)
+	}
+}
+
+type executorProtocolInput struct{}
+type executorProtocolOutput struct{}
+type protocolSent struct{}
+type protocolYielded struct{}
+
+type protocolSendInterface interface {
+	ProtocolSendMarker()
+}
+
+type protocolSendConcrete struct{}
+
+func (protocolSendConcrete) ProtocolSendMarker() {}
+
+func executorWithSendTypes(sendTypes ...reflect.Type) *workflow.Executor {
+	return &workflow.Executor{
+		ID: "send-protocol",
+		Spec: workflow.ExecutorSpec{
+			DisableAutoSendMessageHandlerResultObject: true,
+			DisableAutoYieldOutputHandlerResultObject: true,
+			SendTypes: sendTypes,
+			ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+				return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(*workflow.Context, any) (any, error) {
+					return nil, nil
+				}), nil
+			},
+		},
+	}
+}
+
+func hasReflectType(types []reflect.Type, typ reflect.Type) bool {
+	for _, candidate := range types {
+		if candidate == typ {
+			return true
+		}
+	}
+	return false
+}
+
+func TestBindExecutor_CopiesCrossRunShareable(t *testing.T) {
+	resetCalled := false
+	executor := &workflow.Executor{
+		ID:                "shared",
+		CrossRunShareable: true,
+		Spec: workflow.ExecutorSpec{
+			Reset: func() error {
+				resetCalled = true
+				return nil
+			},
+		},
+	}
+
+	binding := workflow.BindExecutor(executor)
+	if !binding.IsSharedInstance {
+		t.Fatal("BindExecutor returned non-shared binding")
+	}
+	if !binding.SupportsConcurrentSharedExecution {
+		t.Fatal("SupportsConcurrentSharedExecution = false, want true from Executor.CrossRunShareable")
+	}
+	if binding.RawValue != executor {
+		t.Fatalf("RawValue = %v, want bound executor", binding.RawValue)
+	}
+	if executor.ExecutorType != nil {
+		t.Fatalf("ExecutorType = %v, want nil because BindExecutor should not mutate the shared instance", executor.ExecutorType)
+	}
+	got, err := binding.CreateInstance("session")
+	if err != nil {
+		t.Fatalf("CreateInstance: %v", err)
+	}
+	if got != executor {
+		t.Fatal("CreateInstance did not return the shared executor instance")
+	}
+	if !binding.TryReset() {
+		t.Fatal("TryReset = false, want true")
+	}
+	if !resetCalled {
+		t.Fatal("TryReset did not call executor Reset")
+	}
+}
+
+func TestBindExecutor_DefaultsToNonConcurrentSharedExecution(t *testing.T) {
+	binding := workflow.BindExecutor(&workflow.Executor{ID: "shared"})
+	if binding.SupportsConcurrentSharedExecution {
+		t.Fatal("SupportsConcurrentSharedExecution = true, want false without Executor.CrossRunShareable")
+	}
+
+	wf, err := workflow.NewBuilder(binding).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if wf.AllowConcurrent() {
+		t.Fatal("AllowConcurrent = true, want false for shared executor without CrossRunShareable")
+	}
+}
+
+func TestAddHandlerRaw_WithHandlerOverwrite(t *testing.T) {
+	executor := &workflow.Executor{
+		ID: "overwrite-handler",
+		Spec: workflow.ExecutorSpec{
+			DisableAutoSendMessageHandlerResultObject: true,
+			DisableAutoYieldOutputHandlerResultObject: true,
+			ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+				return rb.
+					AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[string](), func(*workflow.Context, any) (any, error) {
+						return "first", nil
+					}).
+					AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[string](), func(*workflow.Context, any) (any, error) {
+						return "second", nil
+					}, workflow.WithHandlerOverwrite(true)), nil
+			},
+		},
+	}
+	ctx := &workflow.Context{
+		AddEvent: func(workflow.Event) error { return nil },
+	}
+
+	got, err := executor.Execute(ctx, "input")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if got != "second" {
+		t.Fatalf("Execute result = %v, want second", got)
+	}
+}
+
+func TestAddCatchAll_WithHandlerOverwrite(t *testing.T) {
+	executor := &workflow.Executor{
+		ID: "overwrite-catch-all",
+		Spec: workflow.ExecutorSpec{
+			DisableAutoSendMessageHandlerResultObject: true,
+			DisableAutoYieldOutputHandlerResultObject: true,
+			ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+				return rb.
+					AddCatchAll(func(*workflow.Context, workflow.PortableValue) (any, error) {
+						return "first", nil
+					}).
+					AddCatchAll(func(*workflow.Context, workflow.PortableValue) (any, error) {
+						return "second", nil
+					}, workflow.WithHandlerOverwrite(true)), nil
+			},
+		},
+	}
+	ctx := &workflow.Context{
+		AddEvent: func(workflow.Event) error { return nil },
+	}
+
+	got, err := executor.Execute(ctx, "input")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if got != "second" {
+		t.Fatalf("Execute result = %v, want second", got)
+	}
+}
+
+func aggregatorBinding(id string, results *[]string) workflow.ExecutorBinding {
+	binding := workflow.ExecutorBinding{
 		ID:           id,
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 	}
@@ -23,20 +443,18 @@ func aggregatorBinding(id string, results *[]string) *workflow.ExecutorBinding {
 		ScopeName:           "aggregate-scope",
 		InitialStateFactory: func() string { return "" },
 	}
-	binding.Reset = func() bool {
+	binding.ResetFunc = func() bool {
 		_ = cache.Reset()
 		return true
 	}
-	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: id,
-			Options: workflow.ExecutorOptions{
+			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-			},
-			Config: []*workflow.ExecutorConfig{{
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
+					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 						s := msg.(string)
 						return nil, cache.InvokeWithState(ctx, false, func(_ *workflow.Context, state string) (string, error) {
 							var newState string
@@ -49,8 +467,7 @@ func aggregatorBinding(id string, results *[]string) *workflow.ExecutorBinding {
 							return newState, nil
 						})
 					}), nil
-				},
-			}},
+				}},
 		}, nil
 	}
 	return binding
@@ -157,8 +574,8 @@ func TestStatefulExecutorCache_NilStateRestartsAggregate(t *testing.T) {
 	}
 }
 
-func nullableAggregatorBinding(id string, results *[]string) *workflow.ExecutorBinding {
-	binding := &workflow.ExecutorBinding{
+func nullableAggregatorBinding(id string, results *[]string) workflow.ExecutorBinding {
+	binding := workflow.ExecutorBinding{
 		ID:           id,
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 	}
@@ -167,16 +584,14 @@ func nullableAggregatorBinding(id string, results *[]string) *workflow.ExecutorB
 		ScopeName:           "aggregate-scope",
 		InitialStateFactory: func() *string { return nil },
 	}
-	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: id,
-			Options: workflow.ExecutorOptions{
+			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-			},
-			Config: []*workflow.ExecutorConfig{{
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
+					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 						input := msg.(string)
 						return nil, cache.InvokeWithState(ctx, false, func(_ *workflow.Context, state *string) (*string, error) {
 							if input == "clear" {
@@ -191,28 +606,26 @@ func nullableAggregatorBinding(id string, results *[]string) *workflow.ExecutorB
 							return &value, nil
 						})
 					}), nil
-				},
-			}},
+				}},
 		}, nil
 	}
 	return binding
 }
 
-func TestWorkflow_RejectsReuseSharedExecutorWithoutReset(t *testing.T) {
-	binding := &workflow.ExecutorBinding{
+func TestWorkflow_AllowsReuseSharedExecutorWithoutResetWhenNoResettableExecutors(t *testing.T) {
+	binding := workflow.ExecutorBinding{
 		ID:               "shared",
 		ExecutorType:     reflect.TypeFor[*workflow.Executor](),
 		IsSharedInstance: true,
-		NewExecutor: func(_ string) (*workflow.Executor, error) {
+		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
 			return &workflow.Executor{
 				ID: "shared",
-				Config: []*workflow.ExecutorConfig{{
+				Spec: workflow.ExecutorSpec{
 					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-						return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(_ *workflow.Context, _ any) (any, error) {
+						return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(_ *workflow.Context, _ any) (any, error) {
 							return nil, nil
 						}), nil
-					},
-				}},
+					}},
 			}, nil
 		},
 	}
@@ -230,11 +643,11 @@ func TestWorkflow_RejectsReuseSharedExecutorWithoutReset(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	_, err = inproc.Default.Run(ctx, wf, "second")
-	if err == nil {
-		t.Fatal("expected second run to reject shared executor without Reset")
+	run, err = inproc.Default.Run(ctx, wf, "second")
+	if err != nil {
+		t.Fatalf("second Run: %v", err)
 	}
-	if !strings.Contains(err.Error(), "cannot reuse Workflow with shared Executor instances") {
-		t.Fatalf("error = %v, want shared executor reuse error", err)
+	if err := run.Close(ctx); err != nil {
+		t.Fatalf("second Close: %v", err)
 	}
 }

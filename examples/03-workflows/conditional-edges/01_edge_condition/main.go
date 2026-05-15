@@ -23,18 +23,18 @@ type DetectionResult struct {
 }
 
 func main() {
-	detect := workflow.BindFunc("SpamDetectionExecutor", true, func(email string) DetectionResult {
+	detect := workflow.BindFunc("SpamDetectionExecutor", func(email string) DetectionResult {
 		lower := strings.ToLower(email)
 		spam := strings.Contains(lower, "wire transfer") || strings.Contains(lower, "prize")
 		return DetectionResult{Email: email, IsSpam: spam, Reason: "matched suspicious wording"}
 	})
-	assistant := workflow.BindFunc("EmailAssistantExecutor", true, func(result DetectionResult) string {
+	assistant := workflow.BindFunc("EmailAssistantExecutor", func(result DetectionResult) string {
 		return "Draft response: Thanks for your note. I will follow up shortly."
 	})
-	send := workflow.BindFunc("SendEmailExecutor", true, func(response string) string {
+	send := workflow.BindFunc("SendEmailExecutor", func(response string) string {
 		return "Email sent: " + response
 	})
-	spam := workflow.BindFunc("HandleSpamExecutor", true, func(result DetectionResult) string {
+	spam := workflow.BindFunc("HandleSpamExecutor", func(result DetectionResult) string {
 		return "Email marked as spam: " + result.Reason
 	})
 

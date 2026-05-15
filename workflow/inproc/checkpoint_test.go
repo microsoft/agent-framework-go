@@ -187,8 +187,8 @@ func TestCheckpoint_ResumeRespondToPendingRequest_CompletesWithoutDuplicate(t *t
 			for evt := range resumed.NewEvents() {
 				if reqEvt, ok := evt.(workflow.RequestInfoEvent); ok {
 					requestEventCount++
-					if reqEvt.Request.ID != pendingRequest.ID {
-						t.Fatalf("replayed request ID = %q, want %q", reqEvt.Request.ID, pendingRequest.ID)
+					if reqEvt.Request.RequestID != pendingRequest.RequestID {
+						t.Fatalf("replayed request ID = %q, want %q", reqEvt.Request.RequestID, pendingRequest.RequestID)
 					}
 				}
 			}
@@ -266,8 +266,8 @@ func TestCheckpoint_RestoreWithPendingRequests_RepublishesRequestInfoEvents(t *t
 			if len(replayedRequests) != 1 {
 				t.Fatalf("replayed request count = %d, want 1", len(replayedRequests))
 			}
-			if replayedRequests[0].ID != pendingRequest.ID {
-				t.Fatalf("replayed request ID = %q, want %q", replayedRequests[0].ID, pendingRequest.ID)
+			if replayedRequests[0].RequestID != pendingRequest.RequestID {
+				t.Fatalf("replayed request ID = %q, want %q", replayedRequests[0].RequestID, pendingRequest.RequestID)
 			}
 
 			response, err = replayedRequests[0].NewResponse("Again")
@@ -322,8 +322,8 @@ func TestCheckpoint_RestoreClearsQueuedExternalResponsesBeforeImport(t *testing.
 	if len(replayedRequests) != 1 {
 		t.Fatalf("replayed request count = %d, want 1", len(replayedRequests))
 	}
-	if replayedRequests[0].ID != pendingRequest.ID {
-		t.Fatalf("replayed request ID = %q, want %q", replayedRequests[0].ID, pendingRequest.ID)
+	if replayedRequests[0].RequestID != pendingRequest.RequestID {
+		t.Fatalf("replayed request ID = %q, want %q", replayedRequests[0].RequestID, pendingRequest.RequestID)
 	}
 	if hasErrorEvents(restoredEvents) {
 		t.Fatalf("unexpected error events after restore: %#v", restoredEvents)
@@ -366,25 +366,28 @@ func TestCheckpoint_RestoreClearsExecutorInstancesBeforeImport(t *testing.T) {
 	ctx := context.Background()
 	manager := checkpoint.NewInMemoryManager()
 	var nextInstanceID int64
-	binding := &workflow.ExecutorBinding{
+	binding := workflow.ExecutorBinding{
 		ID:           "counter",
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
-		NewExecutor: func(_ string) (*workflow.Executor, error) {
+		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
 			instanceID := atomic.AddInt64(&nextInstanceID, 1)
 			count := 0
 			return &workflow.Executor{
 				ID: "counter",
-				Config: []*workflow.ExecutorConfig{{
+				Spec: workflow.ExecutorSpec{
+					YieldTypes: []reflect.Type{reflect.TypeFor[struct {
+						InstanceID int64
+						Count      int
+					}]()},
 					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-						return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(ctx *workflow.Context, _ any) (any, error) {
+						return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
 							count++
 							return nil, ctx.YieldOutput(struct {
 								InstanceID int64
 								Count      int
 							}{InstanceID: instanceID, Count: count})
 						}), nil
-					},
-				}},
+					}},
 			}, nil
 		},
 	}
@@ -642,24 +645,22 @@ func createCheckpointRequestWorkflow(t *testing.T) (*workflow.Workflow, *atomic.
 	portBinding := workflow.BindRequestPort(port)
 
 	received := &atomic.Int64{}
-	sinkBinding := &workflow.ExecutorBinding{
+	sinkBinding := workflow.ExecutorBinding{
 		ID:           "Processor",
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
-		NewExecutor: func(_ string) (*workflow.Executor, error) {
+		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
 			return &workflow.Executor{
 				ID: "Processor",
-				Options: workflow.ExecutorOptions{
+				Spec: workflow.ExecutorSpec{
 					DisableAutoSendMessageHandlerResultObject: true,
 					DisableAutoYieldOutputHandlerResultObject: true,
-				},
-				Config: []*workflow.ExecutorConfig{{
+					YieldTypes: []reflect.Type{reflect.TypeFor[string]()},
 					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-						return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
+						return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 							received.Add(1)
 							return nil, ctx.YieldOutput(msg)
 						}), nil
-					},
-				}},
+					}},
 			}, nil
 		},
 	}
@@ -694,26 +695,24 @@ func createCheckpointChainWorkflow(t *testing.T, ids ...string) *workflow.Workfl
 		t.Fatal("expected at least one executor ID")
 	}
 
-	bindings := make([]*workflow.ExecutorBinding, 0, len(ids))
+	bindings := make([]workflow.ExecutorBinding, 0, len(ids))
 	for _, id := range ids {
 		id := id
-		bindings = append(bindings, &workflow.ExecutorBinding{
+		bindings = append(bindings, workflow.ExecutorBinding{
 			ID:           id,
 			ExecutorType: reflect.TypeFor[*workflow.Executor](),
-			NewExecutor: func(_ string) (*workflow.Executor, error) {
+			NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
 				return &workflow.Executor{
 					ID: id,
-					Options: workflow.ExecutorOptions{
+					Spec: workflow.ExecutorSpec{
 						DisableAutoSendMessageHandlerResultObject: true,
 						DisableAutoYieldOutputHandlerResultObject: true,
-					},
-					Config: []*workflow.ExecutorConfig{{
+						SendTypes: []reflect.Type{reflect.TypeFor[string]()},
 						ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-							return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
+							return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 								return nil, ctx.SendMessage("", msg)
 							}), nil
-						},
-					}},
+						}},
 				}, nil
 			},
 		})
@@ -776,7 +775,7 @@ func requestsFromEvents(events []workflow.Event) []*workflow.ExternalRequest {
 func requestIDs(requests []*workflow.ExternalRequest) []string {
 	ids := make([]string, 0, len(requests))
 	for _, request := range requests {
-		ids = append(ids, request.ID)
+		ids = append(ids, request.RequestID)
 	}
 	return ids
 }
@@ -853,19 +852,18 @@ type checkpointHookExecutor struct {
 	checkpointRestoredCall atomic.Int64
 }
 
-func (e *checkpointHookExecutor) Bind() *workflow.ExecutorBinding {
-	binding := &workflow.ExecutorBinding{
+func (e *checkpointHookExecutor) Bind() workflow.ExecutorBinding {
+	binding := workflow.ExecutorBinding{
 		ID:           e.id,
 		ExecutorType: reflect.TypeFor[*checkpointHookExecutor](),
-		Raw:          e,
-		NewExecutor: func(_ string) (*workflow.Executor, error) {
+		RawValue:     e,
+		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
 			return &workflow.Executor{
 				ID: e.id,
-				Options: workflow.ExecutorOptions{
+				Spec: workflow.ExecutorSpec{
 					DisableAutoSendMessageHandlerResultObject: true,
 					DisableAutoYieldOutputHandlerResultObject: true,
-				},
-				Config: []*workflow.ExecutorConfig{{
+					SendTypes: []reflect.Type{reflect.TypeFor[string]()},
 					OnCheckpoint: func(_ *workflow.Context) error {
 						e.checkpointingCalls.Add(1)
 						return nil
@@ -875,14 +873,14 @@ func (e *checkpointHookExecutor) Bind() *workflow.ExecutorBinding {
 						return nil
 					},
 					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-						return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
+						return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 							if e.forwardMessages {
 								return nil, ctx.SendMessage("", msg)
 							}
 							return nil, nil
 						}), nil
 					},
-				}},
+				},
 			}, nil
 		},
 	}

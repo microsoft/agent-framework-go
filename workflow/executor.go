@@ -13,40 +13,44 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow/internal/observability"
 )
 
-// ExecutorOptions holds configuration options for [Executor] behavior.
-type ExecutorOptions struct {
-	// If true, the result of a message handler that returns a value will be sent as a message from the executor.
+// ExecutorSpec configures an [Executor].
+//
+// The zero value is an empty spec. An [Executor] must have at least one
+// non-nil route or lifecycle callback before it can build routes. Use
+// [ExecutorSpec.Extend] to add behavior from reusable helpers.
+type ExecutorSpec struct {
+	// If true, the result of a message handler that returns a value will not be
+	// sent as a message from the executor.
 	DisableAutoSendMessageHandlerResultObject bool
 
-	// If true, the result of a message handler that returns a value will be yielded as an output of the executor.
+	// If true, the result of a message handler that returns a value will not be
+	// yielded as workflow output from the executor.
 	DisableAutoYieldOutputHandlerResultObject bool
 
-	// If true, the executor may be used simultaneously by multiple runs safely.
-	CrossRunShareable bool
-}
+	// SendTypes declares message types this executor may send with
+	// [Context.SendMessage], in addition to handler result types automatically
+	// sent when DisableAutoSendMessageHandlerResultObject is false.
+	SendTypes []reflect.Type
 
-type callResult struct {
-	Result any
-	Error  error
-}
+	// YieldTypes declares output types this executor may yield with
+	// [Context.YieldOutput], in addition to handler result types automatically
+	// yielded when DisableAutoYieldOutputHandlerResultObject is false.
+	YieldTypes []reflect.Type
 
-func (cr callResult) Handled() bool {
-	return cr != callResult{}
-}
+	// ConfigureRoutes adds message handlers to the supplied builder.
+	// It may return the same builder or a replacement builder.
+	ConfigureRoutes func(builder *RouteBuilder) (*RouteBuilder, error)
 
-func (cr callResult) IsVoid() bool {
-	return cr.Result != nil && reflect.TypeOf(cr.Result) == reflect.TypeFor[struct{}]()
-}
+	// Initialize is called when the executor instance is created for a run.
+	Initialize func(ctx *Context) error
 
-func (cr callResult) Canceled() bool {
-	return errors.Is(cr.Error, context.Canceled)
-}
+	// Reset clears any executor-local cached state before an instance is reused.
+	Reset func() error
 
-type ExecutorConfig struct {
-	ConfigureRoutes      func(builder *RouteBuilder) (*RouteBuilder, error)
-	Initialize           func(ctx *Context) error
-	Reset                func() error
-	OnCheckpoint         func(ctx *Context) error
+	// OnCheckpoint is called before workflow state is checkpointed.
+	OnCheckpoint func(ctx *Context) error
+
+	// OnCheckpointRestored is called after workflow state is restored.
 	OnCheckpointRestored func(ctx *Context) error
 
 	// OnMessageDeliveryStarting is invoked once per superstep, before any
@@ -61,48 +65,160 @@ type ExecutorConfig struct {
 	OnMessageDeliveryFinished func(ctx *Context) error
 }
 
+// Extend adds spec to s.
+//
+// Existing route configuration and lifecycle hooks run before hooks from spec.
+// Most hooks stop on the first error. OnMessageDeliveryFinished runs every hook
+// and returns the first error encountered.
+//
+// Runtime policy fields are combined conservatively: disabling automatic send
+// or yield in either spec disables it in the receiver.
+func (s *ExecutorSpec) Extend(spec ExecutorSpec) {
+	if s == nil {
+		panic("workflow: cannot extend nil ExecutorSpec")
+	}
+
+	s.DisableAutoSendMessageHandlerResultObject = s.DisableAutoSendMessageHandlerResultObject || spec.DisableAutoSendMessageHandlerResultObject
+	s.DisableAutoYieldOutputHandlerResultObject = s.DisableAutoYieldOutputHandlerResultObject || spec.DisableAutoYieldOutputHandlerResultObject
+	s.SendTypes = appendUniqueTypes(s.SendTypes, spec.SendTypes...)
+	s.YieldTypes = appendUniqueTypes(s.YieldTypes, spec.YieldTypes...)
+
+	s.ConfigureRoutes = extendRoutes(s.ConfigureRoutes, spec.ConfigureRoutes)
+	s.Initialize = extendContextHook(s.Initialize, spec.Initialize)
+	s.Reset = extendResetHook(s.Reset, spec.Reset)
+	s.OnCheckpoint = extendContextHook(s.OnCheckpoint, spec.OnCheckpoint)
+	s.OnCheckpointRestored = extendContextHook(s.OnCheckpointRestored, spec.OnCheckpointRestored)
+	s.OnMessageDeliveryStarting = extendContextHook(s.OnMessageDeliveryStarting, spec.OnMessageDeliveryStarting)
+	s.OnMessageDeliveryFinished = extendFinishedHook(s.OnMessageDeliveryFinished, spec.OnMessageDeliveryFinished)
+}
+
+func appendUniqueTypes(dst []reflect.Type, src ...reflect.Type) []reflect.Type {
+	for _, typ := range src {
+		if typ == nil || slices.Contains(dst, typ) {
+			continue
+		}
+		dst = append(dst, typ)
+	}
+	return dst
+}
+
+func extendRoutes(first, second func(*RouteBuilder) (*RouteBuilder, error)) func(*RouteBuilder) (*RouteBuilder, error) {
+	if first == nil {
+		return second
+	}
+	if second == nil {
+		return first
+	}
+	return func(builder *RouteBuilder) (*RouteBuilder, error) {
+		builder, err := first(builder)
+		if err != nil {
+			return nil, err
+		}
+		return second(builder)
+	}
+}
+
+func extendContextHook(first, second func(*Context) error) func(*Context) error {
+	if first == nil {
+		return second
+	}
+	if second == nil {
+		return first
+	}
+	return func(ctx *Context) error {
+		if err := first(ctx); err != nil {
+			return err
+		}
+		return second(ctx)
+	}
+}
+
+func extendResetHook(first, second func() error) func() error {
+	if first == nil {
+		return second
+	}
+	if second == nil {
+		return first
+	}
+	return func() error {
+		if err := first(); err != nil {
+			return err
+		}
+		return second()
+	}
+}
+
+func extendFinishedHook(first, second func(*Context) error) func(*Context) error {
+	if first == nil {
+		return second
+	}
+	if second == nil {
+		return first
+	}
+	return func(ctx *Context) error {
+		firstErr := first(ctx)
+		if err := second(ctx); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		return firstErr
+	}
+}
+
+func (s ExecutorSpec) isConfigured() bool {
+	return s.ConfigureRoutes != nil ||
+		s.Initialize != nil ||
+		s.Reset != nil ||
+		s.OnCheckpoint != nil ||
+		s.OnCheckpointRestored != nil ||
+		s.OnMessageDeliveryStarting != nil ||
+		s.OnMessageDeliveryFinished != nil
+}
+
+// Executor is a runnable workflow node.
+//
+// Spec defines the executor's runtime behavior, routes, and lifecycle hooks.
+// Executors cache their route table after first use.
 type Executor struct {
-	ID           string
+	// ID is the executor's workflow-unique identifier.
+	ID string
+
+	// ExecutorType identifies the original binding or implementation type for
+	// diagnostics and telemetry.
 	ExecutorType reflect.Type
-	Options      ExecutorOptions
 
-	Config []*ExecutorConfig
+	// CrossRunShareable indicates that this executor instance can be used by
+	// multiple runs at the same time when it is bound as a shared instance.
+	CrossRunShareable bool
 
+	// Spec configures this executor's runtime behavior, routes, and lifecycle
+	// hooks. Use [ExecutorSpec.Extend] to combine multiple spec fragments.
+	Spec ExecutorSpec
+
+	routerMu     sync.Mutex
 	cachedRouter *messageRouter
 	routerErr    error
 
-	canOutputCache sync.Map // reflect.Type -> bool
+	declaredSendTypeCache sync.Map // reflect.Type -> reflect.Type
+	canOutputCache        sync.Map // reflect.Type -> bool
 }
 
 func (e *Executor) Initialize(ctx *Context) error {
-	for _, cfg := range e.Config {
-		if cfg.Initialize != nil {
-			if err := cfg.Initialize(ctx); err != nil {
-				return err
-			}
-		}
+	if e.Spec.Initialize != nil {
+		return e.Spec.Initialize(ctx)
 	}
 	return nil
 }
 
 func (e *Executor) OnCheckpoint(ctx *Context) error {
-	for _, cfg := range e.Config {
-		if cfg.OnCheckpoint != nil {
-			if err := cfg.OnCheckpoint(ctx); err != nil {
-				return err
-			}
-		}
+	if e.Spec.OnCheckpoint != nil {
+		return e.Spec.OnCheckpoint(ctx)
 	}
 	return nil
 }
 
 func (e *Executor) OnCheckpointRestored(ctx *Context) error {
-	for _, cfg := range e.Config {
-		if cfg.OnCheckpointRestored != nil {
-			if err := cfg.OnCheckpointRestored(ctx); err != nil {
-				return err
-			}
-		}
+	if e.Spec.OnCheckpointRestored != nil {
+		return e.Spec.OnCheckpointRestored(ctx)
 	}
 	return nil
 }
@@ -110,12 +226,8 @@ func (e *Executor) OnCheckpointRestored(ctx *Context) error {
 // OnMessageDeliveryStarting invokes all configured OnMessageDeliveryStarting
 // hooks. Returns the first error from any hook.
 func (e *Executor) OnMessageDeliveryStarting(ctx *Context) error {
-	for _, cfg := range e.Config {
-		if cfg.OnMessageDeliveryStarting != nil {
-			if err := cfg.OnMessageDeliveryStarting(ctx); err != nil {
-				return err
-			}
-		}
+	if e.Spec.OnMessageDeliveryStarting != nil {
+		return e.Spec.OnMessageDeliveryStarting(ctx)
 	}
 	return nil
 }
@@ -124,42 +236,33 @@ func (e *Executor) OnMessageDeliveryStarting(ctx *Context) error {
 // hooks. All hooks are run; the first non-nil error encountered is returned
 // after all have been invoked.
 func (e *Executor) OnMessageDeliveryFinished(ctx *Context) error {
-	var firstErr error
-	for _, cfg := range e.Config {
-		if cfg.OnMessageDeliveryFinished != nil {
-			if err := cfg.OnMessageDeliveryFinished(ctx); err != nil && firstErr == nil {
-				firstErr = err
-			}
-		}
+	if e.Spec.OnMessageDeliveryFinished != nil {
+		return e.Spec.OnMessageDeliveryFinished(ctx)
 	}
-	return firstErr
+	return nil
 }
 
 func (e *Executor) Reset() error {
-	for _, cfg := range e.Config {
-		if cfg.Reset != nil {
-			if err := cfg.Reset(); err != nil {
-				return err
-			}
-		}
+	if e.Spec.Reset != nil {
+		return e.Spec.Reset()
 	}
 	return nil
 }
 
 func (e *Executor) router() (*messageRouter, error) {
+	e.routerMu.Lock()
+	defer e.routerMu.Unlock()
+
 	if e.cachedRouter != nil || e.routerErr != nil {
 		return e.cachedRouter, e.routerErr
 	}
-	if len(e.Config) == 0 {
+	if !e.Spec.isConfigured() {
 		panic(errors.New("executor has no route configuration function"))
 	}
 	bld := &RouteBuilder{}
-	for _, cfg := range e.Config {
-		if cfg.ConfigureRoutes == nil {
-			continue
-		}
+	if e.Spec.ConfigureRoutes != nil {
 		var err error
-		bld, err = cfg.ConfigureRoutes(bld)
+		bld, err = e.Spec.ConfigureRoutes(bld)
 		if err != nil {
 			e.routerErr = err
 			return nil, err
@@ -219,12 +322,12 @@ func (e *Executor) Execute(ctx *Context, message any) (result any, err error) {
 	// If we had a real return type, raise it as a SendMessage
 	if ret.Result != nil {
 		telemetry.SetExecutorOutput(span, ret.Result)
-		if !e.Options.DisableAutoSendMessageHandlerResultObject {
+		if !e.Spec.DisableAutoSendMessageHandlerResultObject {
 			if err := ctx.SendMessage("", ret.Result); err != nil {
 				return nil, err
 			}
 		}
-		if !e.Options.DisableAutoYieldOutputHandlerResultObject {
+		if !e.Spec.DisableAutoYieldOutputHandlerResultObject {
 			if err := ctx.YieldOutput(ret.Result); err != nil {
 				return nil, err
 			}
@@ -246,12 +349,95 @@ func (e *Executor) OutputTypes() []reflect.Type {
 	if err != nil {
 		return nil
 	}
-	return slices.Collect(router.DefaultOutputTypes())
+	return e.yieldTypes(router)
+}
+
+// knownSentTypes are workflow system messages that every executor may send.
+// They mirror .NET's MessageTypeTranslator.KnownSentTypes so executors can
+// forward request-port control messages without declaring them as user protocol.
+func knownSentTypes() []reflect.Type {
+	return []reflect.Type{
+		reflect.TypeFor[*ExternalRequest](),
+		reflect.TypeFor[*ExternalResponse](),
+	}
+}
+
+func (e *Executor) sendTypes(router *messageRouter) []reflect.Type {
+	sends := appendUniqueTypes(nil, e.Spec.SendTypes...)
+	if !e.Spec.DisableAutoSendMessageHandlerResultObject {
+		sends = appendUniqueTypes(sends, slices.Collect(router.DefaultOutputTypes())...)
+	}
+	return sends
+}
+
+func (e *Executor) yieldTypes(router *messageRouter) []reflect.Type {
+	yields := appendUniqueTypes(nil, e.Spec.YieldTypes...)
+	if !e.Spec.DisableAutoYieldOutputHandlerResultObject {
+		yields = appendUniqueTypes(yields, slices.Collect(router.DefaultOutputTypes())...)
+	}
+	return yields
+}
+
+// DeclaredSendType returns the protocol type that should be used when sending
+// a message of typ from this executor. It reports false when typ is not allowed
+// by the executor's declared send protocol. Interface send declarations match
+// only that exact interface type, except any, which accepts every non-nil type.
+func (e *Executor) DeclaredSendType(typ reflect.Type) (reflect.Type, bool) {
+	if typ == nil {
+		return nil, false
+	}
+	if cached, ok := e.declaredSendTypeCache.Load(typ); ok {
+		return cached.(reflect.Type), true
+	}
+	router, err := e.router()
+	if err != nil {
+		return nil, false
+	}
+	for _, candidate := range appendUniqueTypes(e.sendTypes(router), knownSentTypes()...) {
+		if declaredSendTypeMatches(typ, candidate) {
+			e.declaredSendTypeCache.Store(typ, candidate)
+			return candidate, true
+		}
+	}
+	return nil, false
+}
+
+func declaredSendTypeMatches(typ reflect.Type, candidate reflect.Type) bool {
+	if typ == nil || candidate == nil {
+		return false
+	}
+	if typ == candidate || candidate == reflect.TypeFor[any]() {
+		return true
+	}
+	return candidate.Kind() != reflect.Interface && typ.AssignableTo(candidate)
+}
+
+// CanSendType reports whether this executor can send messages of typ according
+// to its declared send protocol.
+func (e *Executor) CanSendType(typ reflect.Type) bool {
+	_, ok := e.DeclaredSendType(typ)
+	return ok
+}
+
+func (e *Executor) describeProtocol() (*ProtocolDescriptor, error) {
+	router, err := e.router()
+	if err != nil {
+		return nil, err
+	}
+	return &ProtocolDescriptor{
+		Accepts:    router.IncomingTypes(),
+		Yields:     e.yieldTypes(router),
+		Sends:      e.sendTypes(router),
+		AcceptsAll: router.HasCatchAll(),
+	}, nil
 }
 
 func (e *Executor) DescribeProtocol() *ProtocolDescriptor {
-	types := e.InputTypes()
-	return &ProtocolDescriptor{Accepts: types}
+	protocol, err := e.describeProtocol()
+	if err != nil {
+		return &ProtocolDescriptor{}
+	}
+	return protocol
 }
 
 func (e *Executor) CanHandleTypeID(typ TypeID) bool {
@@ -266,10 +452,6 @@ func (e *Executor) CanHandleType(typ reflect.Type) bool {
 	return e.CanHandleTypeID(NewTypeID(typ))
 }
 
-func (e *Executor) CanHandle(v any) bool {
-	return e.CanHandleType(reflect.TypeOf(v))
-}
-
 func (e *Executor) CanOutputType(typ reflect.Type) bool {
 	if cached, ok := e.canOutputCache.Load(typ); ok {
 		return cached.(bool)
@@ -279,12 +461,19 @@ func (e *Executor) CanOutputType(typ reflect.Type) bool {
 	return result
 }
 
+// StatefulExecutorCache helps an executor read, update, and cache typed state.
+//
+// The cache reads from [Context.ReadOrInitState] when available, falling back
+// to [Context.ReadState]. It caches state within an executor instance unless
+// concurrent runs are enabled or the caller asks to skip the cache.
 type StatefulExecutorCache[T any] struct {
-	// Required fields
-	StateKey            string
+	// StateKey is the workflow state key used for reads and queued updates.
+	StateKey string
+	// InitialStateFactory creates the state value used when no state has been
+	// stored yet, or when a stored pointer/slice/map-like value is nil.
 	InitialStateFactory func() T
 
-	// Optional fields
+	// ScopeName is the optional workflow state scope name.
 	ScopeName string
 
 	stateCache T
@@ -358,6 +547,11 @@ func (s *StatefulExecutorCache[T]) readOrInitState(ctx *Context) (T, error) {
 	return s.initialState(), nil
 }
 
+// ReadState returns the current typed state value.
+//
+// When skipCache is false and concurrent runs are disabled, ReadState uses an
+// executor-local cached value after the first read. When skipCache is true, or
+// concurrent runs are enabled, it reads from workflow state each time.
 func (s *StatefulExecutorCache[T]) ReadState(ctx *Context, skipCache bool) (T, error) {
 	if !skipCache && !ctx.ConcurrentRunsEnabled {
 		if s.cached {
@@ -374,6 +568,11 @@ func (s *StatefulExecutorCache[T]) ReadState(ctx *Context, skipCache bool) (T, e
 	return s.readOrInitState(ctx)
 }
 
+// QueueStateUpdate normalizes and queues a typed state update on the context.
+//
+// When concurrent runs are disabled, the in-memory cache is updated
+// immediately so later reads in the same executor instance observe the new
+// value.
 func (s *StatefulExecutorCache[T]) QueueStateUpdate(ctx *Context, state T) error {
 	state = s.normalizeState(state)
 	if ctx.QueueStateUpdate != nil {
@@ -387,6 +586,8 @@ func (s *StatefulExecutorCache[T]) QueueStateUpdate(ctx *Context, state T) error
 	return nil
 }
 
+// InvokeWithState reads the current state, calls fn, and queues the returned
+// state as an update.
 func (s *StatefulExecutorCache[T]) InvokeWithState(ctx *Context, skipCache bool, fn func(ctx *Context, state T) (T, error)) error {
 	state, err := s.ReadState(ctx, skipCache)
 	if err != nil {
@@ -399,6 +600,7 @@ func (s *StatefulExecutorCache[T]) InvokeWithState(ctx *Context, skipCache bool,
 	return s.QueueStateUpdate(ctx, newState)
 }
 
+// Reset clears the executor-local cached state.
 func (s *StatefulExecutorCache[T]) Reset() error {
 	s.cached = false
 	var zero T

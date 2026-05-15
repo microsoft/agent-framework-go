@@ -66,18 +66,17 @@ func main() {
 	}
 }
 
-func bindContextFunc[In, Out any](id string, fn func(*workflow.Context, In) (Out, error)) *workflow.ExecutorBinding {
-	return &workflow.ExecutorBinding{
+func bindContextFunc[In, Out any](id string, fn func(*workflow.Context, In) (Out, error)) workflow.ExecutorBinding {
+	return workflow.ExecutorBinding{
 		ID:           id,
 		ExecutorType: reflect.TypeOf(fn),
-		NewExecutor: func(_ string) (*workflow.Executor, error) {
-			return &workflow.Executor{ID: id, Config: []*workflow.ExecutorConfig{{
+		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
+			return &workflow.Executor{ID: id, Spec: workflow.ExecutorSpec{
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[In](), reflect.TypeFor[Out](), false, func(ctx *workflow.Context, msg any) (any, error) {
+					return rb.AddHandlerRaw(reflect.TypeFor[In](), reflect.TypeFor[Out](), func(ctx *workflow.Context, msg any) (any, error) {
 						return fn(ctx, msg.(In))
 					}), nil
-				},
-			}}}, nil
+				}}}, nil
 		},
 	}
 }

@@ -13,38 +13,63 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
 )
 
-func factoryConcurrentBinding(id string, sink *[]string, mu *sync.Mutex) *workflow.ExecutorBinding {
-	binding := &workflow.ExecutorBinding{
+func factoryConcurrentBinding(id string, sink *[]string, mu *sync.Mutex) workflow.ExecutorBinding {
+	binding := workflow.ExecutorBinding{
 		ID:           id,
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 	}
-	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: id,
-			Options: workflow.ExecutorOptions{
+			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-			},
-			Config: []*workflow.ExecutorConfig{{
+				SendTypes: []reflect.Type{reflect.TypeFor[string]()},
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
+					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 						mu.Lock()
 						*sink = append(*sink, id+":"+msg.(string))
 						mu.Unlock()
 						return nil, ctx.SendMessage("", msg)
 					}), nil
-				},
-			}},
+				}},
 		}, nil
 	}
 	binding.SupportsConcurrentSharedExecution = true
 	return binding
 }
 
-func nonConcurrentBinding(id string) *workflow.ExecutorBinding {
-	binding := factoryConcurrentBinding(id, new([]string), &sync.Mutex{})
-	binding.SupportsConcurrentSharedExecution = false
-	return binding
+func nonConcurrentBinding(id string) workflow.ExecutorBinding {
+	return workflow.BindExecutor(&workflow.Executor{
+		ID: id,
+		Spec: workflow.ExecutorSpec{
+			DisableAutoSendMessageHandlerResultObject: true,
+			DisableAutoYieldOutputHandlerResultObject: true,
+			ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+				return rb.AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[string](), func(_ *workflow.Context, msg any) (any, error) {
+					return msg, nil
+				}), nil
+			},
+		},
+	})
+}
+
+func TestAllowConcurrent_BindFuncIsFactoryCreated(t *testing.T) {
+	binding := workflow.BindFunc("upper", strings.ToUpper)
+	executor, err := binding.CreateInstance("session")
+	if err != nil {
+		t.Fatalf("CreateInstance: %v", err)
+	}
+	if executor.CrossRunShareable {
+		t.Fatal("BindFunc executor CrossRunShareable = true, want false to match .NET FunctionExecutor default")
+	}
+	wf, err := workflow.NewBuilder(binding).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if !wf.AllowConcurrent() {
+		t.Fatal("AllowConcurrent = false, want true for BindFunc factory-created binding")
+	}
 }
 
 func TestAllowConcurrent_AllExecutorsConcurrent(t *testing.T) {
@@ -113,6 +138,29 @@ func TestInprocConcurrent_RejectsNonConcurrentWorkflow(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "a") {
 		t.Errorf("error should mention the offending executor id 'a'; got %v", err)
+	}
+}
+
+func TestInprocConcurrent_RejectsWorkflowOwnedByAnotherRunner(t *testing.T) {
+	a := factoryConcurrentBinding("a", new([]string), &sync.Mutex{})
+	wf, err := workflow.NewBuilder(a).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	ctx := context.Background()
+	stream, err := inproc.OffThread.RunStreaming(ctx, wf, nil)
+	if err != nil {
+		t.Fatalf("OffThread.RunStreaming: %v", err)
+	}
+	defer func() { _ = stream.CancelRun() }()
+
+	_, err = inproc.Concurrent.RunStreaming(ctx, wf, nil)
+	if err == nil {
+		t.Fatal("Concurrent.RunStreaming should reject a workflow owned by another runner")
+	}
+	if !strings.Contains(err.Error(), "existing ownership") {
+		t.Fatalf("error = %v, want ownership mismatch", err)
 	}
 }
 

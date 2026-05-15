@@ -20,7 +20,7 @@ type (
 func TestBindFunc_InvokesHandler_NoOutput(t *testing.T) {
 	called := false
 	id := "fn"
-	binding := workflow.BindFunc(id, false, func(in textMessage) struct{} {
+	binding := workflow.BindFunc(id, func(in textMessage) struct{} {
 		called = true
 		if in.Text != "hello" {
 			t.Errorf("handler input = %q, want %q", in.Text, "hello")
@@ -42,7 +42,7 @@ func TestBindFunc_InvokesHandler_NoOutput(t *testing.T) {
 
 func TestBindFunc_InvokesHandler_WithOutput(t *testing.T) {
 	id := "fn"
-	binding := workflow.BindFunc(id, false, func(in textMessage) dataMessage {
+	binding := workflow.BindFunc(id, func(in textMessage) dataMessage {
 		return dataMessage{Bytes: []byte(in.Text)}
 	})
 	wf, err := workflow.NewBuilder(binding).
@@ -133,6 +133,49 @@ func TestWorkflowOutput_RejectsValueNotAssignableToDeclaredOutputType(t *testing
 	}
 }
 
+func TestWorkflowOutput_ExplicitYieldTypesValidateContextYieldOutput(t *testing.T) {
+	tests := []struct {
+		name      string
+		output    any
+		wantError bool
+	}{
+		{name: "declared", output: dataMessage{Bytes: []byte("ok")}},
+		{name: "undeclared", output: textMessage{Text: "no"}, wantError: true},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			binding := explicitYieldBinding("yield", testCase.output)
+			wf, err := workflow.NewBuilder(binding).WithOutputFrom(binding).Build()
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+
+			events := runAndCollectEvents(t, wf, "input")
+			outputs := outputEvents(events)
+			errors := errorEvents(events)
+			if testCase.wantError {
+				if len(errors) != 1 {
+					t.Fatalf("error count = %d, want 1; events: %#v", len(errors), events)
+				}
+				if len(outputs) != 0 {
+					t.Fatalf("output count = %d, want 0; outputs: %#v", len(outputs), outputs)
+				}
+				return
+			}
+			if len(errors) != 0 {
+				t.Fatalf("unexpected error events: %#v", errors)
+			}
+			if len(outputs) != 1 {
+				t.Fatalf("output count = %d, want 1; events: %#v", len(outputs), events)
+			}
+			if got, ok := outputs[0].Output.(dataMessage); !ok || string(got.Bytes) != "ok" {
+				t.Fatalf("OutputEvent.Output = %#v, want dataMessage ok", outputs[0].Output)
+			}
+		})
+	}
+}
+
 type polymorphicOutput interface {
 	OutputName() string
 }
@@ -151,48 +194,66 @@ func (grandchildPolymorphicOutput) OutputName() string { return "grandchild" }
 
 type unrelatedOutput struct{}
 
-func polymorphicOutputBinding(id string, output polymorphicOutput) *workflow.ExecutorBinding {
-	binding := &workflow.ExecutorBinding{
+func polymorphicOutputBinding(id string, output polymorphicOutput) workflow.ExecutorBinding {
+	binding := workflow.ExecutorBinding{
 		ID:           id,
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 	}
-	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: id,
-			Options: workflow.ExecutorOptions{
+			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
-			},
-			Config: []*workflow.ExecutorConfig{{
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[string](), reflect.TypeFor[polymorphicOutput](), false, func(_ *workflow.Context, _ any) (any, error) {
+					return rb.AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[polymorphicOutput](), func(_ *workflow.Context, _ any) (any, error) {
 						return output, nil
 					}), nil
-				},
-			}},
+				}},
 		}, nil
 	}
 	return binding
 }
 
-func unrelatedOutputBinding(id string) *workflow.ExecutorBinding {
-	binding := &workflow.ExecutorBinding{
+func unrelatedOutputBinding(id string) workflow.ExecutorBinding {
+	binding := workflow.ExecutorBinding{
 		ID:           id,
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 	}
-	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: id,
-			Options: workflow.ExecutorOptions{
+			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-			},
-			Config: []*workflow.ExecutorConfig{{
+				YieldTypes: []reflect.Type{reflect.TypeFor[polymorphicOutput]()},
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[string](), reflect.TypeFor[polymorphicOutput](), false, func(ctx *workflow.Context, _ any) (any, error) {
+					return rb.AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[polymorphicOutput](), func(ctx *workflow.Context, _ any) (any, error) {
 						return nil, ctx.YieldOutput(unrelatedOutput{})
 					}), nil
+				}},
+		}, nil
+	}
+	return binding
+}
+
+func explicitYieldBinding(id string, output any) workflow.ExecutorBinding {
+	binding := workflow.ExecutorBinding{
+		ID:           id,
+		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+	}
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: id,
+			Spec: workflow.ExecutorSpec{
+				DisableAutoSendMessageHandlerResultObject: true,
+				DisableAutoYieldOutputHandlerResultObject: true,
+				YieldTypes: []reflect.Type{reflect.TypeFor[dataMessage]()},
+				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
+						return nil, ctx.YieldOutput(output)
+					}), nil
 				},
-			}},
+			},
 		}, nil
 	}
 	return binding
@@ -240,7 +301,7 @@ func errorEvents(events []workflow.Event) []workflow.ErrorEvent {
 
 func TestBindFunc_DescribesProtocol(t *testing.T) {
 	id := "fn"
-	binding := workflow.BindFunc(id, false, func(in textMessage) dataMessage {
+	binding := workflow.BindFunc(id, func(in textMessage) dataMessage {
 		return dataMessage{Bytes: []byte(in.Text)}
 	})
 	wf, err := workflow.NewBuilder(binding).Build()
@@ -263,31 +324,27 @@ func TestBindFunc_DescribesProtocol(t *testing.T) {
 	if !foundIn {
 		t.Errorf("descriptor.Accepts = %v, want to contain %v", descriptor.Accepts, wantIn)
 	}
+	executor, err := binding.CreateInstance("")
+	if err != nil {
+		t.Fatalf("CreateInstance: %v", err)
+	}
+	executorDescriptor := executor.DescribeProtocol()
+	wantOut := reflect.TypeFor[dataMessage]()
+	if !containsType(executorDescriptor.Sends, wantOut) {
+		t.Errorf("executor descriptor.Sends = %v, want to contain %v", executorDescriptor.Sends, wantOut)
+	}
+	if !containsType(executorDescriptor.Yields, wantOut) {
+		t.Errorf("executor descriptor.Yields = %v, want to contain %v", executorDescriptor.Yields, wantOut)
+	}
 }
 
-func TestBindFuncContext_InvokesHandlerWithContext(t *testing.T) {
-	id := "fn"
-	got := make(chan context.Context, 1)
-	binding := workflow.BindFuncContext(id, false, func(ctx context.Context, in textMessage) struct{} {
-		got <- ctx
-		return struct{}{}
-	})
-	wf, err := workflow.NewBuilder(binding).Build()
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
-
-	if _, err := inproc.Default.Run(context.Background(), wf, textMessage{Text: "hello"}); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	select {
-	case ctx := <-got:
-		if ctx == nil {
-			t.Fatal("handler received nil context")
+func containsType(types []reflect.Type, want reflect.Type) bool {
+	for _, typ := range types {
+		if typ == want {
+			return true
 		}
-	default:
-		t.Fatal("handler did not receive a context")
 	}
+	return false
 }
 
 func TestFunctionExecutor_ReturnValueAutoSendAndYieldOptions(t *testing.T) {
@@ -304,30 +361,27 @@ func TestFunctionExecutor_ReturnValueAutoSendAndYieldOptions(t *testing.T) {
 
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
-			source := returnedDataBinding("source", workflow.ExecutorOptions{
+			source := returnedDataBinding("source", workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: !testCase.autoSend,
 				DisableAutoYieldOutputHandlerResultObject: !testCase.autoYield,
 			})
-			sink := &workflow.ExecutorBinding{
+			sink := workflow.ExecutorBinding{
 				ID:           "sink",
 				ExecutorType: reflect.TypeFor[*workflow.Executor](),
 			}
 			var gotAtSink []dataMessage
-			sink.NewExecutor = func(_ string) (*workflow.Executor, error) {
+			sink.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 				return &workflow.Executor{
 					ID: sink.ID,
-					Options: workflow.ExecutorOptions{
+					Spec: workflow.ExecutorSpec{
 						DisableAutoSendMessageHandlerResultObject: true,
 						DisableAutoYieldOutputHandlerResultObject: true,
-					},
-					Config: []*workflow.ExecutorConfig{{
 						ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-							return rb.AddHandler(reflect.TypeFor[dataMessage](), nil, false, func(_ *workflow.Context, msg any) (any, error) {
+							return rb.AddHandlerRaw(reflect.TypeFor[dataMessage](), nil, func(_ *workflow.Context, msg any) (any, error) {
 								gotAtSink = append(gotAtSink, msg.(dataMessage))
 								return nil, nil
 							}), nil
-						},
-					}},
+						}},
 				}, nil
 			}
 
@@ -370,23 +424,24 @@ func TestFunctionExecutor_ReturnValueAutoSendAndYieldOptions(t *testing.T) {
 	}
 }
 
-func returnedDataBinding(id string, options workflow.ExecutorOptions) *workflow.ExecutorBinding {
-	binding := &workflow.ExecutorBinding{
+func returnedDataBinding(id string, options workflow.ExecutorSpec) workflow.ExecutorBinding {
+	binding := workflow.ExecutorBinding{
 		ID:           id,
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 	}
-	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
+		spec := options
+		spec.Extend(workflow.ExecutorSpec{
+			ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+				return rb.AddHandlerRaw(reflect.TypeFor[textMessage](), reflect.TypeFor[dataMessage](), func(_ *workflow.Context, msg any) (any, error) {
+					input := msg.(textMessage)
+					return dataMessage{Bytes: []byte(input.Text)}, nil
+				}), nil
+			},
+		})
 		return &workflow.Executor{
-			ID:      id,
-			Options: options,
-			Config: []*workflow.ExecutorConfig{{
-				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[textMessage](), reflect.TypeFor[dataMessage](), false, func(_ *workflow.Context, msg any) (any, error) {
-						input := msg.(textMessage)
-						return dataMessage{Bytes: []byte(input.Text)}, nil
-					}), nil
-				},
-			}},
+			ID:   id,
+			Spec: spec,
 		}, nil
 	}
 	return binding
@@ -408,28 +463,26 @@ func TestBindRequestPort_PostsRequestAndForwardsResponse(t *testing.T) {
 	portBinding := workflow.BindRequestPort(port)
 
 	id := "sink"
-	sinkBinding := &workflow.ExecutorBinding{
+	sinkBinding := workflow.ExecutorBinding{
 		ID:           id,
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 	}
 	var receivedAtSink int
 	var sawAtSink bool
-	sinkBinding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	sinkBinding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: id,
-			Options: workflow.ExecutorOptions{
+			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-			},
-			Config: []*workflow.ExecutorConfig{{
+				YieldTypes: []reflect.Type{reflect.TypeFor[int]()},
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[int](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
+					return rb.AddHandlerRaw(reflect.TypeFor[int](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 						receivedAtSink = msg.(int)
 						sawAtSink = true
 						return nil, ctx.YieldOutput(msg)
 					}), nil
-				},
-			}},
+				}},
 		}, nil
 	}
 
@@ -519,7 +572,7 @@ func TestBindRequestPort_RejectsResponseForOtherPort(t *testing.T) {
 		Response: reflect.TypeFor[int](),
 	}
 	resp := &workflow.ExternalResponse{
-		RequestID: req.ID,
+		RequestID: req.RequestID,
 		PortInfo:  workflow.NewRequestPortInfo(otherPort),
 		Data:      workflow.AnyPortableValue(int(7)),
 	}
@@ -543,51 +596,45 @@ func TestBindRequestPort_ForwardsExternalRequestAndRestoresOriginalResponse(t *t
 	}
 	innerBinding := workflow.BindRequestPort(innerPort)
 
-	forwarder := &workflow.ExecutorBinding{
+	forwarder := workflow.ExecutorBinding{
 		ID:           "forwarder",
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 	}
-	forwarder.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	forwarder.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: forwarder.ID,
-			Options: workflow.ExecutorOptions{
+			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-			},
-			Config: []*workflow.ExecutorConfig{{
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
+					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 						request, err := workflow.NewExternalRequest("original-request", outerPort, msg)
 						if err != nil {
 							return nil, err
 						}
 						return nil, ctx.SendMessage(innerBinding.ID, request)
 					}), nil
-				},
-			}},
+				}},
 		}, nil
 	}
 
-	responseSink := &workflow.ExecutorBinding{
+	responseSink := workflow.ExecutorBinding{
 		ID:           "response-sink",
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 	}
 	var gotResponse *workflow.ExternalResponse
-	responseSink.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	responseSink.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: responseSink.ID,
-			Options: workflow.ExecutorOptions{
+			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-			},
-			Config: []*workflow.ExecutorConfig{{
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[*workflow.ExternalResponse](), nil, false, func(_ *workflow.Context, msg any) (any, error) {
+					return rb.AddHandlerRaw(reflect.TypeFor[*workflow.ExternalResponse](), nil, func(_ *workflow.Context, msg any) (any, error) {
 						gotResponse = msg.(*workflow.ExternalResponse)
 						return nil, nil
 					}), nil
-				},
-			}},
+				}},
 		}, nil
 	}
 
@@ -617,8 +664,8 @@ func TestBindRequestPort_ForwardsExternalRequestAndRestoresOriginalResponse(t *t
 	if request.PortInfo.PortID != innerPort.ID {
 		t.Fatalf("forwarded request port = %q, want %q", request.PortInfo.PortID, innerPort.ID)
 	}
-	if request.ID != "original-request" {
-		t.Fatalf("forwarded request ID = %q, want original-request", request.ID)
+	if request.RequestID != "original-request" {
+		t.Fatalf("forwarded request ID = %q, want original-request", request.RequestID)
 	}
 
 	response, err := request.NewResponse(42)

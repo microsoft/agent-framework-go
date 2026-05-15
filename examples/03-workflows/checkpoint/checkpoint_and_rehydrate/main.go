@@ -35,7 +35,7 @@ func main() {
 		Response: reflect.TypeFor[string](),
 	}
 	approval := workflow.BindRequestPort(approvalPort)
-	finalize := workflow.BindFunc("FinalizeExecutor", true, func(response string) string {
+	finalize := workflow.BindFunc("FinalizeExecutor", func(response string) string {
 		return "Workflow completed after rehydration: " + response
 	})
 

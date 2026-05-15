@@ -54,23 +54,21 @@ func main() {
 	}
 }
 
-func newGuessNumberExecutor(id string, low int, high int) *workflow.ExecutorBinding {
-	return &workflow.ExecutorBinding{
+func newGuessNumberExecutor(id string, low int, high int) workflow.ExecutorBinding {
+	return workflow.ExecutorBinding{
 		ID:           id,
 		ExecutorType: reflect.TypeFor[NumberSignal](),
-		NewExecutor: func(_ string) (*workflow.Executor, error) {
+		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
 			lower := low
 			upper := high
 			nextGuess := func() int { return (lower + upper) / 2 }
 			return &workflow.Executor{
 				ID: id,
-				Options: workflow.ExecutorOptions{
+				Spec: workflow.ExecutorSpec{
 					DisableAutoSendMessageHandlerResultObject: true,
 					DisableAutoYieldOutputHandlerResultObject: true,
-				},
-				Config: []*workflow.ExecutorConfig{{
 					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-						return rb.AddHandler(reflect.TypeFor[NumberSignal](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
+						return rb.AddHandlerRaw(reflect.TypeFor[NumberSignal](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 							switch msg.(NumberSignal) {
 							case Above:
 								upper = nextGuess() - 1
@@ -79,28 +77,25 @@ func newGuessNumberExecutor(id string, low int, high int) *workflow.ExecutorBind
 							}
 							return struct{}{}, ctx.SendMessage("", nextGuess())
 						}), nil
-					},
-				}},
+					}},
 			}, nil
 		},
 	}
 }
 
-func newJudgeExecutor(id string, target int) *workflow.ExecutorBinding {
-	return &workflow.ExecutorBinding{
+func newJudgeExecutor(id string, target int) workflow.ExecutorBinding {
+	return workflow.ExecutorBinding{
 		ID:           id,
 		ExecutorType: reflect.TypeFor[int](),
-		NewExecutor: func(_ string) (*workflow.Executor, error) {
+		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
 			tries := 0
 			return &workflow.Executor{
 				ID: id,
-				Options: workflow.ExecutorOptions{
+				Spec: workflow.ExecutorSpec{
 					DisableAutoSendMessageHandlerResultObject: true,
 					DisableAutoYieldOutputHandlerResultObject: true,
-				},
-				Config: []*workflow.ExecutorConfig{{
 					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-						return rb.AddHandler(reflect.TypeFor[int](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
+						return rb.AddHandlerRaw(reflect.TypeFor[int](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 							guess := msg.(int)
 							tries++
 							switch {
@@ -112,8 +107,7 @@ func newJudgeExecutor(id string, target int) *workflow.ExecutorBinding {
 								return struct{}{}, ctx.SendMessage("", Above)
 							}
 						}), nil
-					},
-				}},
+					}},
 			}, nil
 		},
 	}

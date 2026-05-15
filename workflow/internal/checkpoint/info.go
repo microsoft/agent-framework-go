@@ -17,7 +17,7 @@ func (e *executorInfo) matchType(typ reflect.Type) bool {
 	return e.Type.Match(typ)
 }
 
-func (e *executorInfo) matchBinding(executor *workflow.ExecutorBinding) bool {
+func (e *executorInfo) matchBinding(executor workflow.ExecutorBinding) bool {
 	return e.ExecutorID == executor.ID && e.matchType(executor.ExecutorType)
 }
 

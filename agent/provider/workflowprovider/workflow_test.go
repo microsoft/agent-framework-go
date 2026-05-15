@@ -19,53 +19,61 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow"
 )
 
+func newMessageSpec(options *messageworkflow.Options) workflow.ExecutorSpec {
+	spec := workflow.ExecutorSpec{}
+	messageworkflow.Configure(&spec, options)
+	spec.YieldTypes = append(spec.YieldTypes,
+		reflect.TypeFor[*message.Message](),
+		reflect.TypeFor[*agent.Response](),
+	)
+	return spec
+}
+
 // echoExecutorBinding builds a workflow executor that, on each TurnToken,
 // emits a single response update output echoing the last user message and
 // yields a final aggregated message as workflow output.
-func echoExecutorBinding(id string) *workflow.ExecutorBinding {
-	binding := &workflow.ExecutorBinding{
+func echoExecutorBinding(id string) workflow.ExecutorBinding {
+	binding := workflow.ExecutorBinding{
 		ID:           id,
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
-		Raw:          struct{}{},
+		RawValue:     struct{}{},
 	}
-	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		ex := &workflow.Executor{
 			ID: id,
-			Config: []*workflow.ExecutorConfig{
-				messageworkflow.NewExecutorConfig(&messageworkflow.Options{
-					StateKey: "echo_msgs",
-					TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, messages []*message.Message) error {
-						var text string
-						for _, m := range messages {
-							if t := m.Contents.Text(); t != "" {
-								text = t
-							}
+			Spec: newMessageSpec(&messageworkflow.Options{
+				StateKey: "echo_msgs",
+				TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, messages []*message.Message) error {
+					var text string
+					for _, m := range messages {
+						if t := m.Contents.Text(); t != "" {
+							text = t
 						}
-						update := &agent.ResponseUpdate{
-							Role: message.RoleAssistant,
-							Contents: []message.Content{
-								&message.TextContent{Text: "echo:" + text},
-							},
-							AgentID:    id,
-							AuthorName: id,
-						}
-						if err := ctx.AddEvent(workflow.OutputEvent{
-							ExecutorID: id,
-							Output:     update,
-						}); err != nil {
-							return err
-						}
-						out := &message.Message{
-							Role: message.RoleAssistant,
-							Contents: []message.Content{
-								&message.TextContent{Text: "echo:" + text},
-							},
-							AuthorName: id,
-						}
-						return ctx.YieldOutput(out)
-					},
-				}),
-			},
+					}
+					update := &agent.ResponseUpdate{
+						Role: message.RoleAssistant,
+						Contents: []message.Content{
+							&message.TextContent{Text: "echo:" + text},
+						},
+						AgentID:    id,
+						AuthorName: id,
+					}
+					if err := ctx.AddEvent(workflow.OutputEvent{
+						ExecutorID: id,
+						Output:     update,
+					}); err != nil {
+						return err
+					}
+					out := &message.Message{
+						Role: message.RoleAssistant,
+						Contents: []message.Content{
+							&message.TextContent{Text: "echo:" + text},
+						},
+						AuthorName: id,
+					}
+					return ctx.YieldOutput(out)
+				},
+			}),
 		}
 		return ex, nil
 	}
@@ -202,37 +210,35 @@ func TestNew_IncludeOutputsInResponse(t *testing.T) {
 
 func TestNew_ConvertsResponseOutputWithResponseMetadata(t *testing.T) {
 	createdAt := time.Date(2024, 11, 10, 9, 20, 0, 0, time.UTC)
-	binding := &workflow.ExecutorBinding{
+	binding := workflow.ExecutorBinding{
 		ID:           "response-yielder",
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
-		Raw:          struct{}{},
+		RawValue:     struct{}{},
 	}
-	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: binding.ID,
-			Config: []*workflow.ExecutorConfig{
-				messageworkflow.NewExecutorConfig(&messageworkflow.Options{
-					StateKey: "response_yielder_msgs",
-					TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, _ []*message.Message) error {
-						return ctx.YieldOutput(&agent.Response{
-							AgentID:              "inner-agent",
-							ID:                   "inner-response",
-							CreatedAt:            createdAt,
-							AdditionalProperties: map[string]any{"trace": "kept"},
-							Messages: []*message.Message{
-								{
-									Role:       message.RoleAssistant,
-									ID:         "inner-message",
-									AuthorName: "inner-author",
-									Contents: message.Contents{
-										&message.TextContent{Text: "from-response"},
-									},
+			Spec: newMessageSpec(&messageworkflow.Options{
+				StateKey: "response_yielder_msgs",
+				TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, _ []*message.Message) error {
+					return ctx.YieldOutput(&agent.Response{
+						AgentID:              "inner-agent",
+						ID:                   "inner-response",
+						CreatedAt:            createdAt,
+						AdditionalProperties: map[string]any{"trace": "kept"},
+						Messages: []*message.Message{
+							{
+								Role:       message.RoleAssistant,
+								ID:         "inner-message",
+								AuthorName: "inner-author",
+								Contents: message.Contents{
+									&message.TextContent{Text: "from-response"},
 								},
 							},
-						})
-					},
-				}),
-			},
+						},
+					})
+				},
+			}),
 		}, nil
 	}
 	wf, err := workflow.NewBuilder(binding).
@@ -291,20 +297,19 @@ func TestNew_ConvertsResponseOutputWithResponseMetadata(t *testing.T) {
 func TestNew_RejectsIncompatibleWorkflow(t *testing.T) {
 	// A workflow whose start executor handles only string input.
 	id := "string-handler"
-	binding := &workflow.ExecutorBinding{
+	binding := workflow.ExecutorBinding{
 		ID:           id,
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
-		Raw:          struct{}{},
+		RawValue:     struct{}{},
 	}
-	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		ex := &workflow.Executor{
 			ID: id,
-			Config: []*workflow.ExecutorConfig{{
+			Spec: workflow.ExecutorSpec{
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[string](), nil, false,
+					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil,
 						func(ctx *workflow.Context, msg any) (any, error) { return nil, nil }), nil
-				},
-			}},
+				}},
 		}
 		return ex, nil
 	}
@@ -324,28 +329,26 @@ func TestNew_NilWorkflow(t *testing.T) {
 	}
 }
 
-func errorContentExecutorBinding(id string, messageText string) *workflow.ExecutorBinding {
-	binding := &workflow.ExecutorBinding{
+func errorContentExecutorBinding(id string, messageText string) workflow.ExecutorBinding {
+	binding := workflow.ExecutorBinding{
 		ID:           id,
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 	}
-	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: id,
-			Config: []*workflow.ExecutorConfig{
-				messageworkflow.NewExecutorConfig(&messageworkflow.Options{
-					StateKey: "error_content_msgs",
-					TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, _ []*message.Message) error {
-						return ctx.AddEvent(workflow.OutputEvent{
-							ExecutorID: id,
-							Output: &agent.ResponseUpdate{
-								Role:     message.RoleAssistant,
-								Contents: []message.Content{&message.ErrorContent{Message: messageText}},
-							},
-						})
-					},
-				}),
-			},
+			Spec: newMessageSpec(&messageworkflow.Options{
+				StateKey: "error_content_msgs",
+				TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, _ []*message.Message) error {
+					return ctx.AddEvent(workflow.OutputEvent{
+						ExecutorID: id,
+						Output: &agent.ResponseUpdate{
+							Role:     message.RoleAssistant,
+							Contents: []message.Content{&message.ErrorContent{Message: messageText}},
+						},
+					})
+				},
+			}),
 		}, nil
 	}
 	return binding
@@ -379,22 +382,20 @@ func TestNew_ErrorContentOutputStreamedOut(t *testing.T) {
 }
 
 // failingExecutor returns the given error from its handler on every TurnToken.
-func failingExecutor(id string, retErr error) *workflow.ExecutorBinding {
-	binding := &workflow.ExecutorBinding{
+func failingExecutor(id string, retErr error) workflow.ExecutorBinding {
+	binding := workflow.ExecutorBinding{
 		ID:           id,
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 	}
-	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		ex := &workflow.Executor{
 			ID: id,
-			Config: []*workflow.ExecutorConfig{
-				messageworkflow.NewExecutorConfig(&messageworkflow.Options{
-					StateKey: "fail_msgs",
-					TakeTurnHandler: func(_ *workflow.Context, _ workflow.TurnToken, _ []*message.Message) error {
-						return retErr
-					},
-				}),
-			},
+			Spec: newMessageSpec(&messageworkflow.Options{
+				StateKey: "fail_msgs",
+				TakeTurnHandler: func(_ *workflow.Context, _ workflow.TurnToken, _ []*message.Message) error {
+					return retErr
+				},
+			}),
 		}
 		return ex, nil
 	}
@@ -464,7 +465,7 @@ func containsErrorContent(resp *agent.Response, msg string) bool {
 // turn, posts a *FunctionCallContent as an ExternalRequest via a static port,
 // then on receipt of a *FunctionResultContent (delivered via the matching
 // ExternalResponse) yields a final text reflecting the result.
-func callRequestExecutorBinding(t *testing.T, id string) *workflow.ExecutorBinding {
+func callRequestExecutorBinding(t *testing.T, id string) workflow.ExecutorBinding {
 	t.Helper()
 	port := workflow.RequestPort{
 		ID:       id + "_FunctionCall",
@@ -472,51 +473,50 @@ func callRequestExecutorBinding(t *testing.T, id string) *workflow.ExecutorBindi
 		Response: reflect.TypeFor[*message.FunctionResultContent](),
 	}
 	step := 0
-	binding := &workflow.ExecutorBinding{
+	binding := workflow.ExecutorBinding{
 		ID:           id,
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 		Ports:        []workflow.RequestPort{port},
 	}
-	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
-		return &workflow.Executor{
-			ID: id,
-			Config: []*workflow.ExecutorConfig{
-				messageworkflow.NewExecutorConfig(&messageworkflow.Options{
-					StateKey: "call_msgs",
-					TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, _ []*message.Message) error {
-						defer func() { step++ }()
-						if step == 0 {
-							call := &message.FunctionCallContent{CallID: "abc", Name: "do"}
-							req, err := workflow.NewExternalRequest(port.ID+":abc", port, call)
-							if err != nil {
-								return err
-							}
-							return ctx.PostRequest(req)
-						}
-						return nil
-					},
-				}),
-				{
-					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-						return rb.AddHandler(reflect.TypeFor[*workflow.ExternalResponse](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
-							resp := msg.(*workflow.ExternalResponse)
-							v, ok := resp.Data.As(port.Response)
-							if !ok {
-								return nil, nil
-							}
-							r := v.(*message.FunctionResultContent)
-							if r.CallID != "abc" {
-								t.Errorf("FunctionResultContent.CallID delivered to workflow = %q, want %q", r.CallID, "abc")
-							}
-							out := &message.Message{
-								Role:     message.RoleAssistant,
-								Contents: []message.Content{&message.TextContent{Text: "got:" + r.Result.(string)}},
-							}
-							return nil, ctx.YieldOutput(out)
-						}), nil
-					},
-				},
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
+		spec := newMessageSpec(&messageworkflow.Options{
+			StateKey: "call_msgs",
+			TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, _ []*message.Message) error {
+				defer func() { step++ }()
+				if step == 0 {
+					call := &message.FunctionCallContent{CallID: "abc", Name: "do"}
+					req, err := workflow.NewExternalRequest(port.ID+":abc", port, call)
+					if err != nil {
+						return err
+					}
+					return ctx.PostRequest(req)
+				}
+				return nil
 			},
+		})
+		spec.Extend(workflow.ExecutorSpec{
+			ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+				return rb.AddHandlerRaw(reflect.TypeFor[*workflow.ExternalResponse](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+					resp := msg.(*workflow.ExternalResponse)
+					v, ok := resp.Data.As(port.Response)
+					if !ok {
+						return nil, nil
+					}
+					r := v.(*message.FunctionResultContent)
+					if r.CallID != "abc" {
+						t.Errorf("FunctionResultContent.CallID delivered to workflow = %q, want %q", r.CallID, "abc")
+					}
+					out := &message.Message{
+						Role:     message.RoleAssistant,
+						Contents: []message.Content{&message.TextContent{Text: "got:" + r.Result.(string)}},
+					}
+					return nil, ctx.YieldOutput(out)
+				}), nil
+			},
+		})
+		return &workflow.Executor{
+			ID:   id,
+			Spec: spec,
 		}, nil
 	}
 	return binding
@@ -597,7 +597,7 @@ func TestNew_SurfacesRequestInfoAndAcceptsResponse(t *testing.T) {
 // first turn, posts a *FunctionApprovalRequestContent as an ExternalRequest
 // via a static port; on receipt of a *FunctionApprovalResponseContent it
 // yields a final text reflecting whether the call was approved.
-func approvalRequestExecutorBinding(t *testing.T, id string) *workflow.ExecutorBinding {
+func approvalRequestExecutorBinding(t *testing.T, id string) workflow.ExecutorBinding {
 	t.Helper()
 	port := workflow.RequestPort{
 		ID:       id + "_UserInput",
@@ -605,56 +605,55 @@ func approvalRequestExecutorBinding(t *testing.T, id string) *workflow.ExecutorB
 		Response: reflect.TypeFor[*message.ToolApprovalResponseContent](),
 	}
 	step := 0
-	binding := &workflow.ExecutorBinding{
+	binding := workflow.ExecutorBinding{
 		ID:           id,
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 		Ports:        []workflow.RequestPort{port},
 	}
-	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
-		return &workflow.Executor{
-			ID: id,
-			Config: []*workflow.ExecutorConfig{
-				messageworkflow.NewExecutorConfig(&messageworkflow.Options{
-					StateKey: "approval_msgs",
-					TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, _ []*message.Message) error {
-						defer func() { step++ }()
-						if step == 0 {
-							call := &message.FunctionCallContent{CallID: "abc", Name: "do"}
-							ar := &message.ToolApprovalRequestContent{RequestID: "req-1", ToolCall: call}
-							req, err := workflow.NewExternalRequest(port.ID+":req-1", port, ar)
-							if err != nil {
-								return err
-							}
-							return ctx.PostRequest(req)
-						}
-						return nil
-					},
-				}),
-				{
-					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-						return rb.AddHandler(reflect.TypeFor[*workflow.ExternalResponse](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
-							resp := msg.(*workflow.ExternalResponse)
-							v, ok := resp.Data.As(port.Response)
-							if !ok {
-								return nil, nil
-							}
-							r := v.(*message.ToolApprovalResponseContent)
-							if r.RequestID != "req-1" {
-								t.Errorf("FunctionApprovalResponseContent.ID delivered to workflow = %q, want %q", r.RequestID, "req-1")
-							}
-							text := "denied"
-							if r.Approved {
-								text = "approved"
-							}
-							out := &message.Message{
-								Role:     message.RoleAssistant,
-								Contents: []message.Content{&message.TextContent{Text: text}},
-							}
-							return nil, ctx.YieldOutput(out)
-						}), nil
-					},
-				},
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
+		spec := newMessageSpec(&messageworkflow.Options{
+			StateKey: "approval_msgs",
+			TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, _ []*message.Message) error {
+				defer func() { step++ }()
+				if step == 0 {
+					call := &message.FunctionCallContent{CallID: "abc", Name: "do"}
+					ar := &message.ToolApprovalRequestContent{RequestID: "req-1", ToolCall: call}
+					req, err := workflow.NewExternalRequest(port.ID+":req-1", port, ar)
+					if err != nil {
+						return err
+					}
+					return ctx.PostRequest(req)
+				}
+				return nil
 			},
+		})
+		spec.Extend(workflow.ExecutorSpec{
+			ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+				return rb.AddHandlerRaw(reflect.TypeFor[*workflow.ExternalResponse](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+					resp := msg.(*workflow.ExternalResponse)
+					v, ok := resp.Data.As(port.Response)
+					if !ok {
+						return nil, nil
+					}
+					r := v.(*message.ToolApprovalResponseContent)
+					if r.RequestID != "req-1" {
+						t.Errorf("FunctionApprovalResponseContent.ID delivered to workflow = %q, want %q", r.RequestID, "req-1")
+					}
+					text := "denied"
+					if r.Approved {
+						text = "approved"
+					}
+					out := &message.Message{
+						Role:     message.RoleAssistant,
+						Contents: []message.Content{&message.TextContent{Text: text}},
+					}
+					return nil, ctx.YieldOutput(out)
+				}), nil
+			},
+		})
+		return &workflow.Executor{
+			ID:   id,
+			Spec: spec,
 		}, nil
 	}
 	return binding
@@ -809,61 +808,60 @@ func TestNew_MixedResponseAndRegularMessage_BothProcessed(t *testing.T) {
 		Response: reflect.TypeFor[*message.FunctionResultContent](),
 	}
 	step := 0
-	binding := &workflow.ExecutorBinding{
+	binding := workflow.ExecutorBinding{
 		ID:           id,
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 		Ports:        []workflow.RequestPort{port},
 	}
-	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
-		return &workflow.Executor{
-			ID: id,
-			Config: []*workflow.ExecutorConfig{
-				messageworkflow.NewExecutorConfig(&messageworkflow.Options{
-					StateKey: "mixed_msgs",
-					TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, msgs []*message.Message) error {
-						defer func() { step++ }()
-						if step == 0 {
-							call := &message.FunctionCallContent{CallID: "abc", Name: "do"}
-							req, err := workflow.NewExternalRequest(port.ID+":abc", port, call)
-							if err != nil {
-								return err
-							}
-							return ctx.PostRequest(req)
-						}
-						// On the resume turn, summarize all observed text
-						// from the regular workflow input and yield it.
-						var collected []string
-						for _, m := range msgs {
-							if t := m.Contents.Text(); t != "" {
-								collected = append(collected, t)
-							}
-						}
-						summary := "regular:" + strings.Join(collected, ",")
-						out := &message.Message{
-							Role:     message.RoleAssistant,
-							Contents: []message.Content{&message.TextContent{Text: summary}},
-						}
-						return ctx.YieldOutput(out)
-					},
-				}),
-				{
-					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-						return rb.AddHandler(reflect.TypeFor[*workflow.ExternalResponse](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
-							resp := msg.(*workflow.ExternalResponse)
-							v, ok := resp.Data.As(port.Response)
-							if !ok {
-								return nil, nil
-							}
-							r := v.(*message.FunctionResultContent)
-							out := &message.Message{
-								Role:     message.RoleAssistant,
-								Contents: []message.Content{&message.TextContent{Text: "result:" + r.Result.(string)}},
-							}
-							return nil, ctx.YieldOutput(out)
-						}), nil
-					},
-				},
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
+		spec := newMessageSpec(&messageworkflow.Options{
+			StateKey: "mixed_msgs",
+			TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, msgs []*message.Message) error {
+				defer func() { step++ }()
+				if step == 0 {
+					call := &message.FunctionCallContent{CallID: "abc", Name: "do"}
+					req, err := workflow.NewExternalRequest(port.ID+":abc", port, call)
+					if err != nil {
+						return err
+					}
+					return ctx.PostRequest(req)
+				}
+				// On the resume turn, summarize all observed text
+				// from the regular workflow input and yield it.
+				var collected []string
+				for _, m := range msgs {
+					if t := m.Contents.Text(); t != "" {
+						collected = append(collected, t)
+					}
+				}
+				summary := "regular:" + strings.Join(collected, ",")
+				out := &message.Message{
+					Role:     message.RoleAssistant,
+					Contents: []message.Content{&message.TextContent{Text: summary}},
+				}
+				return ctx.YieldOutput(out)
 			},
+		})
+		spec.Extend(workflow.ExecutorSpec{
+			ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+				return rb.AddHandlerRaw(reflect.TypeFor[*workflow.ExternalResponse](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+					resp := msg.(*workflow.ExternalResponse)
+					v, ok := resp.Data.As(port.Response)
+					if !ok {
+						return nil, nil
+					}
+					r := v.(*message.FunctionResultContent)
+					out := &message.Message{
+						Role:     message.RoleAssistant,
+						Contents: []message.Content{&message.TextContent{Text: "result:" + r.Result.(string)}},
+					}
+					return nil, ctx.YieldOutput(out)
+				}), nil
+			},
+		})
+		return &workflow.Executor{
+			ID:   id,
+			Spec: spec,
 		}, nil
 	}
 

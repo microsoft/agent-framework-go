@@ -21,24 +21,21 @@ type noOpExecutor struct {
 func (n *noOpExecutor) NewExecutor(sessionID string) (*workflow.Executor, error) {
 	return &workflow.Executor{
 		ID: n.id,
-		Config: []*workflow.ExecutorConfig{
-			{
-				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddCatchAll(false, func(ctx *workflow.Context, msg workflow.PortableValue) (any, error) {
-						return nil, ctx.SendMessage("", msg.Any())
-					}), nil
-				},
-			},
-		},
+		Spec: workflow.ExecutorSpec{
+			ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+				return rb.AddCatchAll(func(ctx *workflow.Context, msg workflow.PortableValue) (any, error) {
+					return nil, ctx.SendMessage("", msg.Any())
+				}), nil
+			}},
 	}, nil
 }
 
-func newNoOpExecutor(id string) *workflow.ExecutorBinding {
+func newNoOpExecutor(id string) workflow.ExecutorBinding {
 	n := &noOpExecutor{id: id}
-	return &workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeOf(n),
-		NewExecutor:  n.NewExecutor,
+	return workflow.ExecutorBinding{
+		ID:              id,
+		ExecutorType:    reflect.TypeOf(n),
+		NewExecutorFunc: n.NewExecutor,
 	}
 }
 
@@ -49,29 +46,62 @@ type someOtherNoOpExecutor struct {
 func (n *someOtherNoOpExecutor) NewExecutor(sessionID string) (*workflow.Executor, error) {
 	return &workflow.Executor{
 		ID: n.id,
-		Config: []*workflow.ExecutorConfig{
-			{
-				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddCatchAll(false, func(ctx *workflow.Context, msg workflow.PortableValue) (any, error) {
-						return nil, ctx.SendMessage("", msg.Any())
-					}), nil
-				},
-			},
-		},
+		Spec: workflow.ExecutorSpec{
+			ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+				return rb.AddCatchAll(func(ctx *workflow.Context, msg workflow.PortableValue) (any, error) {
+					return nil, ctx.SendMessage("", msg.Any())
+				}), nil
+			}},
 	}, nil
 }
 
-func newSomeOtherNoOpExecutor(id string) *workflow.ExecutorBinding {
+func newSomeOtherNoOpExecutor(id string) workflow.ExecutorBinding {
 	n := &someOtherNoOpExecutor{id: id}
-	return &workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeOf(n),
-		NewExecutor:  n.NewExecutor,
+	return workflow.ExecutorBinding{
+		ID:              id,
+		ExecutorType:    reflect.TypeOf(n),
+		NewExecutorFunc: n.NewExecutor,
 	}
 }
 
-func newPlaceholder(id string) *workflow.ExecutorBinding {
-	return &workflow.ExecutorBinding{ID: id}
+func newPlaceholder(id string) workflow.ExecutorBinding {
+	return workflow.ExecutorBinding{ID: id}
+}
+
+func TestBuilder_AllowsNilExecutorType(t *testing.T) {
+	binding := workflow.ExecutorBinding{
+		ID: "start",
+		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
+			return &workflow.Executor{
+				ID: "start",
+				Spec: workflow.ExecutorSpec{
+					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+						return rb.AddCatchAll(func(*workflow.Context, workflow.PortableValue) (any, error) {
+							return nil, nil
+						}), nil
+					},
+				},
+			}, nil
+		},
+	}
+
+	wf, err := workflow.NewBuilder(binding).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if got := wf.ExecutorBindings["start"].ExecutorType; got != nil {
+		t.Fatalf("ExecutorType = %v, want nil", got)
+	}
+	if got := wf.ExecutorBindings["start"].String(); got != "start:<unknown>" {
+		t.Fatalf("String() = %q, want start:<unknown>", got)
+	}
+	executor, err := wf.ExecutorBindings["start"].CreateInstance("session")
+	if err != nil {
+		t.Fatalf("CreateInstance: %v", err)
+	}
+	if executor.ExecutorType != nil {
+		t.Fatalf("created ExecutorType = %v, want nil", executor.ExecutorType)
+	}
 }
 
 func TestBuilder_Validation_FailsWhenUnboundExecutors(t *testing.T) {
@@ -273,26 +303,24 @@ func TestBuilder_Workflow_NameAndDescription(t *testing.T) {
 
 // recordingBinding builds an executor that records every input it receives in
 // the supplied slice (under mu) and forwards strings downstream unchanged.
-func recordingBinding(id string, sink *[]string) *workflow.ExecutorBinding {
-	binding := &workflow.ExecutorBinding{
+func recordingBinding(id string, sink *[]string) workflow.ExecutorBinding {
+	binding := workflow.ExecutorBinding{
 		ID:           id,
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 	}
-	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: id,
-			Options: workflow.ExecutorOptions{
+			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-			},
-			Config: []*workflow.ExecutorConfig{{
+				SendTypes: []reflect.Type{reflect.TypeFor[string]()},
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
+					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 						*sink = append(*sink, id+":"+msg.(string))
 						return nil, ctx.SendMessage("", msg)
 					}), nil
-				},
-			}},
+				}},
 		}, nil
 	}
 	return binding
@@ -305,7 +333,7 @@ func TestAddChain_ConnectsExecutorsInOrder(t *testing.T) {
 	c := recordingBinding("c", &trace)
 
 	wf, err := workflow.NewBuilder(a).
-		AddChain(a, []*workflow.ExecutorBinding{b, c}, false).
+		AddChain(a, []workflow.ExecutorBinding{b, c}, false).
 		Build()
 	if err != nil {
 		t.Fatalf("Build: %v", err)
@@ -324,7 +352,7 @@ func TestAddChain_RejectsRepetitionByDefault(t *testing.T) {
 	b := recordingBinding("b", new([]string))
 
 	_, err := workflow.NewBuilder(a).
-		AddChain(a, []*workflow.ExecutorBinding{b, b}, false).
+		AddChain(a, []workflow.ExecutorBinding{b, b}, false).
 		Build()
 	if err == nil {
 		t.Fatal("expected error for repeated executor")
@@ -519,30 +547,47 @@ func captureDefaultSlog(t *testing.T, fn func()) string {
 }
 
 // newTypedExecutor creates an executor that accepts messages of type T and
-// outputs messages of type U. This is used to test type compatibility
+// returns messages of type U. This is used to test type compatibility
 // validation between connected executors.
-func newTypedExecutor[T any, U any](id string) *workflow.ExecutorBinding {
+func newTypedExecutor[T any, U any](id string) workflow.ExecutorBinding {
 	newExec := func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: id,
-			Config: []*workflow.ExecutorConfig{{
+			Spec: workflow.ExecutorSpec{
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(
-						reflect.TypeFor[T](),
-						reflect.TypeFor[U](),
-						false,
-						func(ctx *workflow.Context, msg any) (any, error) {
-							return *new(U), nil
-						},
-					), nil
-				},
-			}},
+					return rb.AddHandlerRaw(reflect.TypeFor[T](), reflect.TypeFor[U](), func(ctx *workflow.Context, msg any) (any, error) {
+						return *new(U), nil
+					}), nil
+				}},
 		}, nil
 	}
-	return &workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
-		NewExecutor:  newExec,
+	return workflow.ExecutorBinding{
+		ID:              id,
+		ExecutorType:    reflect.TypeFor[*workflow.Executor](),
+		NewExecutorFunc: newExec,
+	}
+}
+
+func newDeclaredSendExecutor[T any](id string, sendTypes ...reflect.Type) workflow.ExecutorBinding {
+	newExec := func(_ string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: id,
+			Spec: workflow.ExecutorSpec{
+				DisableAutoSendMessageHandlerResultObject: true,
+				DisableAutoYieldOutputHandlerResultObject: true,
+				SendTypes: sendTypes,
+				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+					return rb.AddHandlerRaw(reflect.TypeFor[T](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+						return nil, nil
+					}), nil
+				},
+			},
+		}, nil
+	}
+	return workflow.ExecutorBinding{
+		ID:              id,
+		ExecutorType:    reflect.TypeFor[*workflow.Executor](),
+		NewExecutorFunc: newExec,
 	}
 }
 
@@ -560,7 +605,7 @@ func TestBuilder_Validation_TypeCompatibility_Compatible(t *testing.T) {
 }
 
 func TestBuilder_Validation_TypeCompatibility_Incompatible(t *testing.T) {
-	// source outputs int, target accepts string → incompatible.
+	// source sends int, target accepts string → incompatible.
 	source := newTypedExecutor[string, int]("source")
 	target := newTypedExecutor[string, string]("target")
 
@@ -575,8 +620,60 @@ func TestBuilder_Validation_TypeCompatibility_Incompatible(t *testing.T) {
 	}
 }
 
+func TestBuilder_Validation_TypeCompatibility_UsesDeclaredSendTypes(t *testing.T) {
+	source := newDeclaredSendExecutor[string]("source", reflect.TypeFor[int]())
+	target := newTypedExecutor[int, string]("target")
+
+	_, err := workflow.NewBuilder(source).
+		AddEdge(source, target).
+		Build()
+	if err != nil {
+		t.Fatalf("expected declared send type to validate edge, got %v", err)
+	}
+}
+
+func TestBuilder_Validation_TypeCompatibility_RejectsIncompatibleDeclaredSendTypes(t *testing.T) {
+	source := newDeclaredSendExecutor[string]("source", reflect.TypeFor[int]())
+	target := newTypedExecutor[string, string]("target")
+
+	_, err := workflow.NewBuilder(source).
+		AddEdge(source, target).
+		Build()
+	if err == nil {
+		t.Fatal("expected type incompatibility error, got nil")
+	}
+	if !strings.Contains(err.Error(), "source sends") {
+		t.Errorf("expected source sends error, got %v", err)
+	}
+}
+
+func TestBuilder_Validation_TypeCompatibility_RespectsAutoSendDisabled(t *testing.T) {
+	source := newTypedExecutor[string, int]("source")
+	source.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: source.ID,
+			Spec: workflow.ExecutorSpec{
+				DisableAutoSendMessageHandlerResultObject: true,
+				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+					return rb.AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[int](), func(ctx *workflow.Context, msg any) (any, error) {
+						return 1, nil
+					}), nil
+				},
+			},
+		}, nil
+	}
+	target := newTypedExecutor[string, string]("target")
+
+	_, err := workflow.NewBuilder(source).
+		AddEdge(source, target).
+		Build()
+	if err != nil {
+		t.Fatalf("expected validation to skip disabled auto-send output type, got %v", err)
+	}
+}
+
 func TestBuilder_Validation_TypeCompatibility_CatchAllTargetSkipped(t *testing.T) {
-	// source outputs int, but target has a catch-all → always compatible.
+	// source sends int, but target has a catch-all → always compatible.
 	source := newTypedExecutor[string, int]("source")
 	target := newNoOpExecutor("target") // uses AddCatchAll
 
@@ -589,8 +686,8 @@ func TestBuilder_Validation_TypeCompatibility_CatchAllTargetSkipped(t *testing.T
 }
 
 func TestBuilder_Validation_TypeCompatibility_CatchAllSourceSkipped(t *testing.T) {
-	// source has a catch-all (no declared output types), so validation is skipped.
-	source := newNoOpExecutor("source") // uses AddCatchAll, no output types
+	// source has a catch-all (no declared send types), so validation is skipped.
+	source := newNoOpExecutor("source") // uses AddCatchAll, no send types
 	target := newTypedExecutor[string, int]("target")
 
 	_, err := workflow.NewBuilder(source).

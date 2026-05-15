@@ -3,71 +3,146 @@
 package workflow
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"reflect"
 	"sync"
 )
 
+// ExecutorBinding describes how a workflow executor ID is bound to an
+// executable [Executor]. Builders store bindings while constructing a
+// [Workflow], and runners use them to instantiate executors for a workflow
+// session.
 type ExecutorBinding struct {
-	ID           string
-	ExecutorType reflect.Type
-	Raw          any
+	// ID is the workflow-unique identifier for the executor. It is also the
+	// address used by edges and messages inside the workflow graph.
+	ID string
 
-	IsSharedInstance                  bool
+	// ExecutorType identifies the executor implementation or source type for
+	// diagnostics, validation, and workflow metadata.
+	ExecutorType reflect.Type
+
+	// RawValue optionally carries the comparable source value behind this binding.
+	// When the builder sees another binding with the same ID and [ExecutorType],
+	// it compares RawValue to catch accidental reuse of the ID for a different
+	// source value. RawValue must be nil or comparable because the builder compares
+	// it with ==; leave it nil for non-comparable sources such as function values.
+	RawValue any
+
+	// IsSharedInstance reports whether [NewExecutor] returns a shared executor
+	// instance rather than creating an independent instance for each session.
+	// Shared instances participate in workflow reset checks through [Reset].
+	IsSharedInstance bool
+
+	// SupportsConcurrentSharedExecution reports whether this binding may be used
+	// by concurrent workflow runs. Shared-instance bindings should copy this from
+	// [Executor.CrossRunShareable]; factory-created bindings should set it when
+	// they can create isolated per-run executor instances.
 	SupportsConcurrentSharedExecution bool
 
-	NewExecutor func(sessionID string) (*Executor, error)
-	Reset       func() bool
-
-	// Ports lists additional [RequestPort]s that this executor uses to
-	// raise [ExternalRequest]s via [Context.PostRequest]. The builder
-	// registers them in [Workflow.Ports] so they appear in workflow
-	// metadata. Bindings that themselves are a request port boundary
-	// (created via [BindRequestPort]) do not need to set this; the
-	// builder picks the port up from [ExecutorBinding.Raw].
+	// Ports lists [RequestPort]s that this binding exposes, either as the
+	// workflow boundary port created by [BindRequestPort] or as additional ports
+	// an executor uses to raise [ExternalRequest]s via [Context.PostRequest]. The
+	// builder registers them in [Workflow.Ports] so they appear in workflow
+	// metadata.
 	Ports []RequestPort
+
+	// NewExecutorFunc creates the executor instance for a workflow session. The
+	// returned executor must have the same ID as this binding; [CreateInstance]
+	// validates that contract and stamps [Executor.ExecutorType] for non-shared
+	// instances.
+	NewExecutorFunc func(sessionID string) (*Executor, error)
+
+	// ResetFunc restores shared resources to their initial state. It is only called
+	// for bindings marked as [IsSharedInstance]. A false return value means the
+	// workflow could not be reset safely.
+	ResetFunc func() bool
 }
 
-func (eb *ExecutorBinding) String() string {
+func bindingTypeName(typ reflect.Type) string {
+	if typ == nil {
+		return "<unknown>"
+	}
+	if name := typ.Name(); name != "" {
+		return name
+	}
+	return typ.String()
+}
+
+// String returns a compact representation of the binding for diagnostics.
+func (eb ExecutorBinding) String() string {
 	if eb.isPlaceholder() {
 		return eb.ID + ":<unbound>"
 	}
-	return eb.ID + ":" + eb.ExecutorType.Name()
+	return eb.ID + ":" + bindingTypeName(eb.ExecutorType)
 }
 
-func (eb *ExecutorBinding) isPlaceholder() bool {
-	return eb.NewExecutor == nil
+// isPlaceholder reports whether this binding only reserves an executor ID.
+func (eb ExecutorBinding) isPlaceholder() bool {
+	return eb.NewExecutorFunc == nil
 }
 
-func (eb *ExecutorBinding) TryReset() bool {
+// TryReset resets this binding if it wraps a shared executor instance.
+// Non-shared bindings are already isolated per session and therefore report
+// success without invoking [ExecutorBinding.Reset].
+func (eb ExecutorBinding) TryReset() bool {
 	if !eb.IsSharedInstance {
 		// Non-shared instances do not need resetting
 		return true
 	}
-	if eb.Reset == nil {
+	if eb.ResetFunc == nil {
 		return false
 	}
-	return eb.Reset()
+	return eb.ResetFunc()
 }
 
-func (eb *ExecutorBinding) CreateInstance(sessionID string) (*Executor, error) {
+// CreateInstance creates the executor for sessionID and validates that the
+// returned executor matches this binding. It returns an error for placeholder
+// bindings, nil executors, factory errors, or executor ID mismatches.
+func (eb ExecutorBinding) CreateInstance(sessionID string) (*Executor, error) {
 	if eb.isPlaceholder() {
 		return nil, errors.New("cannot create executor from placeholder binding")
 	}
-	ex, err := eb.NewExecutor(sessionID)
+	ex, err := eb.NewExecutorFunc(sessionID)
 	if err != nil {
 		return nil, err
 	}
 	if ex == nil {
 		return nil, errors.New("executor binding returned nil executor")
 	}
-	if want, got := eb.ID, ex.ID; got != want {
-		return nil, fmt.Errorf("Executor ID mismatch: expected %q, but got %q", want, got)
+	if ex.ID != eb.ID {
+		return nil, fmt.Errorf("Executor ID mismatch: expected %q, but got %q", eb.ID, ex.ID)
 	}
-	ex.ExecutorType = eb.ExecutorType
+	if !eb.IsSharedInstance && ex.ExecutorType == nil {
+		ex.ExecutorType = eb.ExecutorType
+	}
 	return ex, nil
+}
+
+// BindExecutor returns an [ExecutorBinding] for an existing executor instance.
+// The executor is shared across workflow runs, so concurrent-run support is
+// copied from [Executor.CrossRunShareable].
+func BindExecutor(executor *Executor) ExecutorBinding {
+	if executor == nil {
+		panic("workflow: cannot bind nil Executor")
+	}
+
+	binding := ExecutorBinding{
+		ID:                                executor.ID,
+		ExecutorType:                      executor.ExecutorType,
+		RawValue:                          executor,
+		IsSharedInstance:                  true,
+		SupportsConcurrentSharedExecution: executor.CrossRunShareable,
+		NewExecutorFunc: func(string) (*Executor, error) {
+			return executor, nil
+		},
+	}
+	if executor.Spec.Reset != nil {
+		binding.ResetFunc = func() bool {
+			return executor.Reset() == nil
+		}
+	}
+	return binding
 }
 
 // BindRequestPort returns an [ExecutorBinding] that exposes a [RequestPort]
@@ -75,18 +150,22 @@ func (eb *ExecutorBinding) CreateInstance(sessionID string) (*Executor, error) {
 // `port.Request` type, raises them as [ExternalRequest]s via
 // [Context.PostRequest], and forwards the matching [ExternalResponse] data to
 // downstream executors.
-func BindRequestPort(p RequestPort) *ExecutorBinding {
-	return &ExecutorBinding{
+func BindRequestPort(p RequestPort) ExecutorBinding {
+	return ExecutorBinding{
 		ID:           p.ID,
 		ExecutorType: reflect.TypeFor[RequestPort](),
-		Raw:          p,
-		NewExecutor: func(_ string) (*Executor, error) {
+		RawValue:     p,
+		Ports:        []RequestPort{p},
+		NewExecutorFunc: func(_ string) (*Executor, error) {
 			return newRequestPortExecutor(p), nil
 		},
 		SupportsConcurrentSharedExecution: true,
 	}
 }
 
+// newRequestPortExecutor creates the executor that turns request-port messages
+// into [ExternalRequest]s and routes matching [ExternalResponse]s back into the
+// workflow.
 func newRequestPortExecutor(port RequestPort) *Executor {
 	var (
 		wrappedMu       sync.Mutex
@@ -95,122 +174,94 @@ func newRequestPortExecutor(port RequestPort) *Executor {
 
 	return &Executor{
 		ID: port.ID,
-		Options: ExecutorOptions{
+		Spec: ExecutorSpec{
+			SendTypes: []reflect.Type{port.Response, reflect.TypeFor[*ExternalResponse]()},
 			// The executor's handler return values are exposed via PostRequest /
 			// SendMessage explicitly; suppress the default auto-forwarding.
 			DisableAutoSendMessageHandlerResultObject: true,
 			DisableAutoYieldOutputHandlerResultObject: true,
-		},
-		Config: []*ExecutorConfig{
-			{
-				ConfigureRoutes: func(rb *RouteBuilder) (*RouteBuilder, error) {
-					return rb.
-						AddHandler(port.Request, nil, false, func(ctx *Context, msg any) (any, error) {
-							req, err := NewExternalRequest("", port, msg)
-							if err != nil {
-								return nil, err
-							}
-							if err := ctx.PostRequest(req); err != nil {
-								return nil, err
-							}
+			ConfigureRoutes: func(rb *RouteBuilder) (*RouteBuilder, error) {
+				return rb.
+					AddHandlerRaw(port.Request, nil, func(ctx *Context, msg any) (any, error) {
+						req, err := NewExternalRequest("", port, msg)
+						if err != nil {
+							return nil, err
+						}
+						if err := ctx.PostRequest(req); err != nil {
+							return nil, err
+						}
+						return nil, nil
+					}).
+					AddHandlerRaw(reflect.TypeFor[*ExternalRequest](), nil, func(ctx *Context, msg any) (any, error) {
+						req := msg.(*ExternalRequest)
+						data, ok := req.Data.As(port.Request)
+						if !ok {
+							return nil, fmt.Errorf("message type %v could not be interpreted as request type %v", req.PortInfo.RequestType, port.Request)
+						}
+						if !req.PortInfo.ResponseType.Match(port.Response) {
+							return nil, fmt.Errorf("response type %v is not valid for request port response type %v", port.Response, req.PortInfo.ResponseType)
+						}
+						wrapped, err := NewExternalRequest(req.RequestID, port, data)
+						if err != nil {
+							return nil, err
+						}
+						wrappedMu.Lock()
+						wrappedRequests[req.RequestID] = req
+						wrappedMu.Unlock()
+						if err := ctx.PostRequest(wrapped); err != nil {
+							return nil, err
+						}
+						return nil, nil
+					}).
+					AddHandlerRaw(reflect.TypeFor[*ExternalResponse](), nil, func(ctx *Context, msg any) (any, error) {
+						resp := msg.(*ExternalResponse)
+						if resp.PortInfo.PortID != port.ID {
 							return nil, nil
-						}).
-						AddHandler(reflect.TypeFor[*ExternalRequest](), nil, false, func(ctx *Context, msg any) (any, error) {
-							req := msg.(*ExternalRequest)
-							data, ok := req.Data.As(port.Request)
-							if !ok {
-								return nil, fmt.Errorf("message type %v could not be interpreted as request type %v", req.PortInfo.RequestType, port.Request)
-							}
-							if !req.PortInfo.ResponseType.Match(port.Response) {
-								return nil, fmt.Errorf("response type %v is not valid for request port response type %v", port.Response, req.PortInfo.ResponseType)
-							}
-							wrapped, err := NewExternalRequest(req.ID, port, data)
-							if err != nil {
-								return nil, err
-							}
-							wrappedMu.Lock()
-							wrappedRequests[req.ID] = req
-							wrappedMu.Unlock()
-							if err := ctx.PostRequest(wrapped); err != nil {
-								return nil, err
-							}
-							return nil, nil
-						}).
-						AddHandler(reflect.TypeFor[*ExternalResponse](), nil, false, func(ctx *Context, msg any) (any, error) {
-							resp := msg.(*ExternalResponse)
-							if resp.PortInfo.PortID != port.ID {
-								return nil, nil
-							}
-							data, ok := resp.Data.As(port.Response)
-							if !ok {
-								return nil, fmt.Errorf("expected response of type %v, got %T", port.Response, resp.Data.Any())
-							}
-							wrappedMu.Lock()
-							original, wrapped := wrappedRequests[resp.RequestID]
-							delete(wrappedRequests, resp.RequestID)
-							wrappedMu.Unlock()
-							if wrapped {
-								return nil, ctx.SendMessage("", &ExternalResponse{
-									PortInfo:  original.PortInfo,
-									RequestID: resp.RequestID,
-									Data:      resp.Data,
-								})
-							}
-							if err := ctx.SendMessage("", resp); err != nil {
-								return nil, err
-							}
-							return nil, ctx.SendMessage("", data)
-						}), nil
-				},
-			},
-		},
-	}
-}
-
-func BindFunc[In, Out any](id string, threadSafe bool, fn func(In) Out) *ExecutorBinding {
-	// Don't set Raw to fn, it is not comparable.
-	return &ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeOf(fn),
-		NewExecutor: func(_ string) (*Executor, error) {
-			return funcExecutor(id, nil, func(_ *Context, input In) (Out, error) {
-				return fn(input), nil
-			}), nil
-		},
-		SupportsConcurrentSharedExecution: threadSafe,
-	}
-}
-
-func BindFuncContext[In, Out any](id string, threadSafe bool, fn func(context.Context, In) Out) *ExecutorBinding {
-	// Don't set Raw to fn, it is not comparable.
-	return &ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeOf(fn),
-		NewExecutor: func(_ string) (*Executor, error) {
-			return funcExecutor(id, nil, func(ctx *Context, input In) (Out, error) {
-				return fn(ctx, input), nil
-			}), nil
-		},
-		SupportsConcurrentSharedExecution: threadSafe,
-	}
-}
-
-func funcExecutor[In, Out any](id string, options *ExecutorOptions, handler func(*Context, In) (Out, error)) *Executor {
-	var opts ExecutorOptions
-	if options != nil {
-		opts = *options
-	}
-	return &Executor{
-		ID:      id,
-		Options: opts,
-		Config: []*ExecutorConfig{
-			{
-				ConfigureRoutes: func(rb *RouteBuilder) (*RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[In](), reflect.TypeFor[Out](), false, func(ctx *Context, msg any) (any, error) {
-						return handler(ctx, msg.(In))
+						}
+						data, ok := resp.Data.As(port.Response)
+						if !ok {
+							return nil, fmt.Errorf("expected response of type %v, got %T", port.Response, resp.Data.Any())
+						}
+						wrappedMu.Lock()
+						original, wrapped := wrappedRequests[resp.RequestID]
+						delete(wrappedRequests, resp.RequestID)
+						wrappedMu.Unlock()
+						if wrapped {
+							return nil, ctx.SendMessage("", &ExternalResponse{
+								PortInfo:  original.PortInfo,
+								RequestID: resp.RequestID,
+								Data:      resp.Data,
+							})
+						}
+						if err := ctx.SendMessage("", resp); err != nil {
+							return nil, err
+						}
+						return nil, ctx.SendMessage("", data)
 					}), nil
+			}},
+	}
+}
+
+// BindFunc adapts a function into an [ExecutorBinding]. The input type In
+// becomes the executor's accepted message type and Out becomes its declared
+// output type.
+func BindFunc[In, Out any](id string, fn func(In) Out) ExecutorBinding {
+	return ExecutorBinding{
+		ID:                                id,
+		ExecutorType:                      reflect.TypeOf(fn),
+		RawValue:                          nil,  // don't set RawValue to fn, it is not comparable.
+		SupportsConcurrentSharedExecution: true, // the binding creates an executor wrapper per run.
+		NewExecutorFunc: func(_ string) (*Executor, error) {
+			return &Executor{
+				ID: id,
+				Spec: ExecutorSpec{
+					ConfigureRoutes: func(rb *RouteBuilder) (*RouteBuilder, error) {
+						return rb.AddHandlerRaw(reflect.TypeFor[In](), reflect.TypeFor[Out](), func(_ *Context, msg any) (any, error) {
+							return fn(msg.(In)), nil
+						}), nil
+					},
 				},
-			},
+			}, nil
 		},
 	}
 }

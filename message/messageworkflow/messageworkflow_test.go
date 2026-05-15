@@ -5,6 +5,7 @@ package messageworkflow_test
 import (
 	"iter"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/message"
@@ -29,12 +30,11 @@ func createExecutor(options *messageworkflow.Options) (*workflow.Executor, *work
 }
 
 func createExecutorWithSent(options *messageworkflow.Options) (*workflow.Executor, *workflow.Context, *[]any) {
-	config := messageworkflow.NewExecutorConfig(options)
+	spec := workflow.ExecutorSpec{}
+	messageworkflow.Configure(&spec, options)
 	executor := &workflow.Executor{
-		ID: "test-executor",
-		Config: []*workflow.ExecutorConfig{
-			config,
-		},
+		ID:   "test-executor",
+		Spec: spec,
 	}
 	var sent []any
 
@@ -67,17 +67,17 @@ func TestExecutor_DescribedProtocol(t *testing.T) {
 	}
 
 	for _, expected := range expectedTypes {
-		found := false
-		for _, accepted := range protocol.Accepts {
-			if accepted == expected {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if !containsType(protocol.Accepts, expected) {
 			t.Errorf("Protocol should accept type %v", expected)
 		}
 	}
+	if !containsType(protocol.Sends, reflect.TypeFor[workflow.TurnToken]()) {
+		t.Errorf("Protocol should send type %v", reflect.TypeFor[workflow.TurnToken]())
+	}
+}
+
+func containsType(types []reflect.Type, want reflect.Type) bool {
+	return slices.Contains(types, want)
 }
 
 func TestExecutor_Handles_ListOfMessages(t *testing.T) {
@@ -434,5 +434,9 @@ func TestExecutor_DisableAutoSendTurnToken(t *testing.T) {
 
 	if len(*sent) != 0 {
 		t.Fatalf("sent message count = %d, want 0", len(*sent))
+	}
+	protocol := executor.DescribeProtocol()
+	if containsType(protocol.Sends, reflect.TypeFor[workflow.TurnToken]()) {
+		t.Fatalf("Protocol sends = %v, want no TurnToken when auto-send is disabled", protocol.Sends)
 	}
 }

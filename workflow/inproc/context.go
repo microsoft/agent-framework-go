@@ -47,6 +47,7 @@ type runnerContext struct {
 
 	withCheckpointing     bool
 	concurrentRunsEnabled bool
+	previousOwnership     any
 	runEnded              atomic.Bool
 }
 
@@ -79,11 +80,14 @@ func newInProcessRunnerContext(
 
 	ctx.edgeMap = execution.NewEdgeRunner(wf, tracer, ctx.EnsureExecutor)
 	if enableConcurrentRuns {
-		wf.CheckOwnership(existingOwnerSignoff)
+		if !wf.CheckOwnership(existingOwnerSignoff) {
+			return nil, fmt.Errorf("existing ownership does not match check value")
+		}
 	} else {
 		if err := wf.TakeOwnership(existingOwnerSignoff, ctx, false); err != nil {
 			return nil, err
 		}
+		ctx.previousOwnership = existingOwnerSignoff
 	}
 
 	return ctx, nil
@@ -265,16 +269,16 @@ func (proc *runnerContext) ImportState(ctx context.Context, cp *checkpoint.Check
 		proc.responsePortOwners[portID] = ownerID
 	}
 	for _, request := range cp.RunnerData.OutstandingRequests {
-		proc.externalRequests[request.ID] = request
-		if ownerID := proc.requestOwners[request.ID]; ownerID == "" {
+		proc.externalRequests[request.RequestID] = request
+		if ownerID := proc.requestOwners[request.RequestID]; ownerID == "" {
 			ownerID = proc.responsePortOwners[request.PortInfo.PortID]
 			if ownerID == "" {
 				ownerID = request.PortInfo.PortID
 			}
-			proc.requestOwners[request.ID] = ownerID
+			proc.requestOwners[request.RequestID] = ownerID
 		}
 		if _, ok := proc.responsePortOwners[request.PortInfo.PortID]; !ok {
-			proc.responsePortOwners[request.PortInfo.PortID] = proc.requestOwners[request.ID]
+			proc.responsePortOwners[request.PortInfo.PortID] = proc.requestOwners[request.RequestID]
 		}
 	}
 	proc.requestsMu.Unlock()
@@ -460,8 +464,25 @@ func (proc *runnerContext) SendMessage(ctx context.Context, sourceID, targetID s
 		span.CaptureError(err)
 		return err
 	}
+	messageType := reflect.TypeOf(message)
+	if messageType == nil {
+		err := fmt.Errorf("executor %q cannot send nil", sourceID)
+		span.CaptureError(err)
+		return err
+	}
+	sourceExecutor, err := proc.EnsureExecutor(ctx, sourceID, nil)
+	if err != nil {
+		span.CaptureError(err)
+		return err
+	}
+	declaredType, ok := sourceExecutor.DeclaredSendType(messageType)
+	if !ok {
+		err := fmt.Errorf("executor %q cannot send messages of type %s", sourceID, messageType)
+		span.CaptureError(err)
+		return err
+	}
 
-	envelope, err := execution.NewMessageEnvelope(message, nil, sourceID, targetID)
+	envelope, err := execution.NewMessageEnvelope(message, declaredType, sourceID, targetID)
 	if err != nil {
 		span.CaptureError(err)
 		return err
@@ -502,11 +523,10 @@ func (proc *runnerContext) Bind(ctx context.Context, executorID string, traceCon
 		},
 
 		YieldOutput: func(output any) error {
-			// Check if this executor can output
+			if err := proc.validateOutputType(executorID, output); err != nil {
+				return err
+			}
 			if _, ok := proc.wf.OutputExecutors[executorID]; ok {
-				if err := proc.validateOutputType(executorID, output); err != nil {
-					return err
-				}
 				return proc.AddEvent(boundCtx, workflow.OutputEvent{
 					ExecutorID: executorID,
 					Output:     output,
@@ -601,10 +621,6 @@ func (proc *runnerContext) validateOutputType(executorID string, output any) err
 	}
 
 	declaredTypes := executor.OutputTypes()
-	if len(declaredTypes) == 0 {
-		return nil
-	}
-
 	outputType := reflect.TypeOf(output)
 	if slices.ContainsFunc(declaredTypes, outputType.AssignableTo) {
 		return nil
@@ -633,12 +649,12 @@ func (proc *runnerContext) Post(ctx context.Context, ownerID string, request *wo
 	}
 
 	proc.requestsMu.Lock()
-	if _, exists := proc.externalRequests[request.ID]; exists {
+	if _, exists := proc.externalRequests[request.RequestID]; exists {
 		proc.requestsMu.Unlock()
-		return fmt.Errorf("pending request with id '%s' already exists", request.ID)
+		return fmt.Errorf("pending request with id '%s' already exists", request.RequestID)
 	}
-	proc.externalRequests[request.ID] = request
-	proc.requestOwners[request.ID] = ownerID
+	proc.externalRequests[request.RequestID] = request
+	proc.requestOwners[request.RequestID] = ownerID
 	proc.responsePortOwners[request.PortInfo.PortID] = ownerID
 	proc.requestsMu.Unlock()
 
@@ -712,7 +728,7 @@ func (proc *runnerContext) EndRun(ctx context.Context) error {
 	}
 	if !proc.concurrentRunsEnabled {
 		// Release workflow ownership
-		if err := proc.wf.ReleaseOwnership(proc); err != nil {
+		if err := proc.wf.ReleaseOwnershipTo(proc, proc.previousOwnership); err != nil {
 			return err
 		}
 	}

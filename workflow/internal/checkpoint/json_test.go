@@ -101,7 +101,7 @@ func TestRunnerStateData_JsonRoundtrip(t *testing.T) {
 	if !ok || queuedMessage != "queued" {
 		t.Fatalf("QueuedMessages[next][0].Message = %q, %v; want queued, true", queuedMessage, ok)
 	}
-	if len(got.OutstandingRequests) != 1 || got.OutstandingRequests[0].ID != "request-1" {
+	if len(got.OutstandingRequests) != 1 || got.OutstandingRequests[0].RequestID != "request-1" {
 		t.Fatalf("OutstandingRequests = %+v, want request-1", got.OutstandingRequests)
 	}
 	requestData, ok := workflow.PortableValueAs[string](got.OutstandingRequests[0].Data)

@@ -46,26 +46,31 @@ func (s *MessageState) Reset() error {
 	return s.cache.Reset()
 }
 
-func NewExecutorConfig(options *Options) *workflow.ExecutorConfig {
+// Configure extends spec with chat-message workflow behavior.
+func Configure(spec *workflow.ExecutorSpec, options *Options) {
+	if spec == nil {
+		panic("messageworkflow: spec is required")
+	}
 	if options.StateKey == "" {
 		panic("stateKey is required")
 	}
 	if options.TakeTurnHandler == nil {
 		panic("TakeTurnHandler is required")
 	}
-	autoSendTurnToken := !options.DisableAutoSendTurnToken
 	state := options.MessageState
 	if state == nil {
 		state = NewMessageState(options.StateKey, options.ScopeName)
 	}
-	return &workflow.ExecutorConfig{
+	messageSpec := workflow.ExecutorSpec{
+		DisableAutoSendMessageHandlerResultObject: true,
+		DisableAutoYieldOutputHandlerResultObject: true,
 		Reset: state.Reset,
 		OnCheckpointRestored: func(ctx *workflow.Context) error {
 			return state.Reset()
 		},
 		ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
 			if options.StringMessageRole != "" {
-				rb.AddHandler(reflect.TypeFor[string](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
+				rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 					return struct{}{}, state.ProcessTurnMessages(ctx, func(ctx *workflow.Context, messages []*message.Message) ([]*message.Message, error) {
 						return append(messages, &message.Message{
 							Role:     message.Role(options.StringMessageRole),
@@ -73,19 +78,20 @@ func NewExecutorConfig(options *Options) *workflow.ExecutorConfig {
 						}), nil
 					})
 				})
+
 			}
 			return rb.
-				AddHandler(reflect.TypeFor[*message.Message](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
+				AddHandlerRaw(reflect.TypeFor[*message.Message](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 					return struct{}{}, state.ProcessTurnMessages(ctx, func(ctx *workflow.Context, messages []*message.Message) ([]*message.Message, error) {
 						return append(messages, msg.(*message.Message)), nil
 					})
 				}).
-				AddHandler(reflect.TypeFor[[]*message.Message](), nil, false, func(ctx *workflow.Context, msgs any) (any, error) {
+				AddHandlerRaw(reflect.TypeFor[[]*message.Message](), nil, func(ctx *workflow.Context, msgs any) (any, error) {
 					return struct{}{}, state.ProcessTurnMessages(ctx, func(ctx *workflow.Context, messages []*message.Message) ([]*message.Message, error) {
 						return append(messages, msgs.([]*message.Message)...), nil
 					})
 				}).
-				AddHandler(reflect.TypeFor[iter.Seq[*message.Message]](), nil, false, func(ctx *workflow.Context, msgs any) (any, error) {
+				AddHandlerRaw(reflect.TypeFor[iter.Seq[*message.Message]](), nil, func(ctx *workflow.Context, msgs any) (any, error) {
 					return struct{}{}, state.ProcessTurnMessages(ctx, func(ctx *workflow.Context, messages []*message.Message) ([]*message.Message, error) {
 						for msg := range msgs.(iter.Seq[*message.Message]) {
 							messages = append(messages, msg)
@@ -93,13 +99,13 @@ func NewExecutorConfig(options *Options) *workflow.ExecutorConfig {
 						return messages, nil
 					})
 				}).
-				AddHandler(reflect.TypeFor[workflow.TurnToken](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
+				AddHandlerRaw(reflect.TypeFor[workflow.TurnToken](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 					return struct{}{}, state.ProcessTurnMessages(ctx, func(ctx *workflow.Context, messages []*message.Message) ([]*message.Message, error) {
 						token := msg.(workflow.TurnToken)
 						if err := options.TakeTurnHandler(ctx, token, messages); err != nil {
 							return nil, err
 						}
-						if autoSendTurnToken {
+						if !options.DisableAutoSendTurnToken {
 							if err := ctx.SendMessage("", token); err != nil {
 								return nil, err
 							}
@@ -109,4 +115,8 @@ func NewExecutorConfig(options *Options) *workflow.ExecutorConfig {
 				}), nil
 		},
 	}
+	if !options.DisableAutoSendTurnToken {
+		messageSpec.SendTypes = []reflect.Type{reflect.TypeFor[workflow.TurnToken]()}
+	}
+	spec.Extend(messageSpec)
 }

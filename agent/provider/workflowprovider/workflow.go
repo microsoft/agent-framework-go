@@ -86,7 +86,7 @@ type providerState struct {
 // New wraps a [*workflow.Workflow] as an [*agent.Agent].
 //
 // The workflow's start executor must accept [[]*message.Message] (typically
-// configured via [messageworkflow.NewExecutorConfig]). On the first call to
+// configured via [messageworkflow.Configure]). On the first call to
 // the agent's Run for a given session, a fresh streaming run is started.
 // Subsequent calls reuse that run, sending follow-up messages and
 // [workflow.ExternalResponse]s.
@@ -372,13 +372,13 @@ func requestToUpdate(req *workflow.ExternalRequest, responseID string, raw any) 
 	if !ok {
 		return nil, "", pendingReq{}, false
 	}
-	surfaced, id, ok := requestContentForDelivery(req.ID, c)
+	surfaced, id, ok := requestContentForDelivery(req.RequestID, c)
 	if !ok {
 		return nil, "", pendingReq{}, false
 	}
 	return newUpdate(responseID, raw, surfaced), id, pendingReq{
 		portInfo:          req.PortInfo,
-		externalRequestID: req.ID,
+		externalRequestID: req.RequestID,
 		requestContent:    c,
 	}, true
 }

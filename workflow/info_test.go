@@ -53,7 +53,12 @@ func fanInEdge(srcs []string, dst string) workflow.Edge {
 
 func runEdgeInfoMatch(t *testing.T, name string, edge, comparator workflow.Edge, expect bool) {
 	t.Helper()
-	info := workflow.NewEdgeInfo(edge)
+	info := workflow.EdgeInfo{
+		Connection:   edge.Connection,
+		Label:        edge.Label,
+		HasCondition: edge.Condition != nil,
+		HasAssigner:  edge.Assigner != nil,
+	}
 	if got := info.Match(comparator); got != expect {
 		t.Errorf("%s: Match = %v, want %v", name, got, expect)
 	}
@@ -127,7 +132,7 @@ func TestReflectEdges_ReturnsEdgesPerSource(t *testing.T) {
 	c := newNoOpExecutor("c")
 
 	wf, err := workflow.NewBuilder(a).
-		AddEdge(a, b, workflow.WithLabel("a→b")).
+		AddEdge(a, b, workflow.WithEdgeLabel("a→b")).
 		AddEdge(b, c).
 		Build()
 	if err != nil {
@@ -213,6 +218,173 @@ func TestReflectPorts_ReturnsCopy(t *testing.T) {
 	delete(got, "approval")
 	if _, ok := wf.Ports["approval"]; !ok {
 		t.Fatal("ReflectPorts did not return a copy: workflow lost port approval")
+	}
+}
+
+type protocolInput struct{}
+type protocolMiddle struct{}
+type protocolOutput struct{}
+
+func hasType(types []reflect.Type, typ reflect.Type) bool {
+	for _, candidate := range types {
+		if candidate == typ {
+			return true
+		}
+	}
+	return false
+}
+
+func TestWorkflowDescribeProtocol_IncludesOutputProtocol(t *testing.T) {
+	start := workflow.BindFunc("start", func(protocolInput) protocolMiddle { return protocolMiddle{} })
+	output := workflow.BindFunc("output", func(protocolMiddle) protocolOutput { return protocolOutput{} })
+	wf, err := workflow.NewBuilder(start).
+		AddEdge(start, output).
+		WithOutputFrom(output).
+		Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	descriptor, err := wf.DescribeProtocol()
+	if err != nil {
+		t.Fatalf("DescribeProtocol: %v", err)
+	}
+	if !hasType(descriptor.Accepts, reflect.TypeFor[protocolInput]()) {
+		t.Fatalf("Accepts = %v, want protocolInput", descriptor.Accepts)
+	}
+	if !hasType(descriptor.Yields, reflect.TypeFor[protocolOutput]()) {
+		t.Fatalf("Yields = %v, want protocolOutput", descriptor.Yields)
+	}
+	if len(descriptor.Sends) != 0 {
+		t.Fatalf("Sends = %v, want empty for workflow protocol", descriptor.Sends)
+	}
+	if descriptor.AcceptsAll {
+		t.Fatal("AcceptsAll = true, want false")
+	}
+}
+
+func TestWorkflowDescribeProtocol_PropagatesAcceptsAll(t *testing.T) {
+	binding := workflow.ExecutorBinding{
+		ID:           "start",
+		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		NewExecutorFunc: func(string) (*workflow.Executor, error) {
+			return &workflow.Executor{
+				ID: "start",
+				Spec: workflow.ExecutorSpec{
+					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+						return rb.AddCatchAll(func(*workflow.Context, workflow.PortableValue) (any, error) {
+							return nil, nil
+						}), nil
+					},
+				},
+			}, nil
+		},
+	}
+	wf, err := workflow.NewBuilder(binding).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	descriptor, err := wf.DescribeProtocol()
+	if err != nil {
+		t.Fatalf("DescribeProtocol: %v", err)
+	}
+	if !descriptor.AcceptsAll {
+		t.Fatal("AcceptsAll = false, want true")
+	}
+}
+
+func TestWorkflowOwnership_UsesTokenIdentity(t *testing.T) {
+	wf := &workflow.Workflow{}
+	owner := new(int)
+	other := new(int)
+
+	if err := wf.TakeOwnership(nil, owner, false); err != nil {
+		t.Fatalf("TakeOwnership: %v", err)
+	}
+	if !wf.CheckOwnership(owner) {
+		t.Fatal("CheckOwnership(owner) = false, want true")
+	}
+	if wf.CheckOwnership(other) {
+		t.Fatal("CheckOwnership(other) = true, want false")
+	}
+	if err := wf.ReleaseOwnership(other); err == nil {
+		t.Fatal("ReleaseOwnership(other) succeeded, want non-owner error")
+	}
+	if err := wf.ReleaseOwnership(owner); err != nil {
+		t.Fatalf("ReleaseOwnership(owner): %v", err)
+	}
+}
+
+func TestWorkflowOwnership_RejectsValueToken(t *testing.T) {
+	wf := &workflow.Workflow{}
+	if err := wf.TakeOwnership(nil, "owner", false); err == nil {
+		t.Fatal("TakeOwnership with value token succeeded, want error")
+	}
+}
+
+func TestWorkflowReleaseOwnershipTo_RestoresPreviousOwner(t *testing.T) {
+	wf := &workflow.Workflow{}
+	previous := new(int)
+	runner := new(int)
+
+	if err := wf.TakeOwnership(nil, previous, false); err != nil {
+		t.Fatalf("TakeOwnership previous: %v", err)
+	}
+	if err := wf.TakeOwnership(previous, runner, false); err != nil {
+		t.Fatalf("TakeOwnership runner: %v", err)
+	}
+	if err := wf.ReleaseOwnershipTo(runner, previous); err != nil {
+		t.Fatalf("ReleaseOwnershipTo: %v", err)
+	}
+	if !wf.CheckOwnership(previous) {
+		t.Fatal("CheckOwnership(previous) = false, want restored owner")
+	}
+}
+
+func TestWorkflowReuse_AllowsSharedNonResettableWhenNoResettableExecutors(t *testing.T) {
+	wf := &workflow.Workflow{
+		ExecutorBindings: map[string]workflow.ExecutorBinding{
+			"shared": workflow.BindExecutor(&workflow.Executor{ID: "shared"}),
+		},
+	}
+	firstOwner := new(int)
+	secondOwner := new(int)
+
+	if err := wf.TakeOwnership(nil, firstOwner, false); err != nil {
+		t.Fatalf("TakeOwnership first: %v", err)
+	}
+	if err := wf.ReleaseOwnership(firstOwner); err != nil {
+		t.Fatalf("ReleaseOwnership first: %v", err)
+	}
+	if err := wf.TakeOwnership(nil, secondOwner, false); err != nil {
+		t.Fatalf("TakeOwnership second: %v", err)
+	}
+}
+
+func TestWorkflowReuse_BlocksWhenResetFails(t *testing.T) {
+	wf := &workflow.Workflow{
+		ExecutorBindings: map[string]workflow.ExecutorBinding{
+			"resettable": workflow.BindExecutor(&workflow.Executor{
+				ID: "resettable",
+				Spec: workflow.ExecutorSpec{Reset: func() error {
+					return nil
+				}},
+			}),
+			"shared": workflow.BindExecutor(&workflow.Executor{ID: "shared"}),
+		},
+	}
+	firstOwner := new(int)
+	secondOwner := new(int)
+
+	if err := wf.TakeOwnership(nil, firstOwner, false); err != nil {
+		t.Fatalf("TakeOwnership first: %v", err)
+	}
+	if err := wf.ReleaseOwnership(firstOwner); err != nil {
+		t.Fatalf("ReleaseOwnership first: %v", err)
+	}
+	if err := wf.TakeOwnership(nil, secondOwner, false); err == nil {
+		t.Fatal("TakeOwnership second succeeded, want reset failure")
 	}
 }
 

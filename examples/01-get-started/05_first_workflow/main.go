@@ -20,10 +20,10 @@ import (
 
 func main() {
 	// Create the executors.
-	uppercase := workflow.BindFunc("UppercaseExecutor", true, func(input string) string {
+	uppercase := workflow.BindFunc("UppercaseExecutor", func(input string) string {
 		return strings.ToUpper(input)
 	})
-	reverse := workflow.BindFunc("ReverseExecutor", true, func(input string) string {
+	reverse := workflow.BindFunc("ReverseExecutor", func(input string) string {
 		runes := []rune(input)
 		slices.Reverse(runes)
 		return string(runes)

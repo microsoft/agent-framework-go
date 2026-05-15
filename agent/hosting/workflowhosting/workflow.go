@@ -120,18 +120,18 @@ type agentBindingMarker struct{}
 // New creates a workflow [workflow.ExecutorBinding] that hosts the given
 // [agent.Agent] using the supplied [Config]. The zero value of [Config] is a
 // sensible default.
-func New(a *agent.Agent, cfg Config) *workflow.ExecutorBinding {
+func New(a *agent.Agent, cfg Config) workflow.ExecutorBinding {
 	id := descriptiveID(a)
 	userInputPort, functionCallPort := hostPorts(id)
-	return &workflow.ExecutorBinding{
+	return workflow.ExecutorBinding{
 		ID:           id,
 		ExecutorType: reflect.TypeFor[agentBindingMarker](),
-		Raw:          a,
+		RawValue:     a,
 		Ports:        []workflow.RequestPort{userInputPort, functionCallPort},
-		NewExecutor: func(_ string) (*workflow.Executor, error) {
+		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
 			return newHostExecutor(a, cfg).executor(), nil
 		},
-		SupportsConcurrentSharedExecution: false,
+		SupportsConcurrentSharedExecution: true,
 	}
 }
 
@@ -194,81 +194,87 @@ func newHostExecutor(a *agent.Agent, cfg Config) *hostExecutor {
 }
 
 func (h *hostExecutor) executor() *workflow.Executor {
-	messageConfig := messageworkflow.NewExecutorConfig(&messageworkflow.Options{
+	spec := workflow.ExecutorSpec{}
+	messageworkflow.Configure(&spec, &messageworkflow.Options{
 		StateKey:                 agentBufferedStateKey,
 		TakeTurnHandler:          h.handleTurnToken,
 		StringMessageRole:        string(message.RoleUser),
 		DisableAutoSendTurnToken: true,
 		MessageState:             h.messageState,
 	})
+	spec.Extend(workflow.ExecutorSpec{
+		OnCheckpoint:         h.onCheckpoint,
+		OnCheckpointRestored: h.onCheckpointRestored,
+		SendTypes: []reflect.Type{
+			reflect.TypeFor[[]*message.Message](),
+			reflect.TypeFor[workflow.TurnToken](),
+			reflect.TypeFor[*message.ToolApprovalRequestContent](),
+			reflect.TypeFor[*message.FunctionCallContent](),
+		},
+		ConfigureRoutes: h.configureRoutes,
+	})
+
 	return &workflow.Executor{
-		ID: h.id,
-		Options: workflow.ExecutorOptions{
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
-		},
-		Config: []*workflow.ExecutorConfig{
-			messageConfig,
-			{
-				OnCheckpoint: func(wctx *workflow.Context) error {
-					state := agentHostState{CurrentTurnEmitEvents: h.turnEmitEvents}
-					if h.session != nil {
-						data, err := h.agent.MarshalSession(wctx, h.session)
-						if err != nil {
-							return err
-						}
-						state.ThreadState = data
-					}
-					if err := wctx.QueueStateUpdate(agentHostStateKey, "", state); err != nil {
-						return err
-					}
-					if err := h.approvalHandler.Checkpoint(wctx); err != nil {
-						return err
-					}
-					if err := h.callHandler.Checkpoint(wctx); err != nil {
-						return err
-					}
-					return nil
-				},
-				OnCheckpointRestored: func(wctx *workflow.Context) error {
-					h.session = nil
-					h.turnEmitEvents = nil
-					if err := h.approvalHandler.Restore(wctx); err != nil {
-						return err
-					}
-					if err := h.callHandler.Restore(wctx); err != nil {
-						return err
-					}
-					data, err := wctx.ReadState(agentHostStateKey, "")
-					if err != nil {
-						return err
-					}
-					state, err := agentHostStateFromAny(data)
-					if err != nil {
-						return err
-					}
-					if state != nil {
-						h.turnEmitEvents = state.CurrentTurnEmitEvents
-						if state.ThreadState != nil {
-							session, err := h.agent.UnmarshalSession(wctx, state.ThreadState)
-							if err != nil {
-								return err
-							}
-							h.session = session
-						}
-					}
-					return nil
-				},
-				ConfigureRoutes: h.configureRoutes,
-			},
-		},
+		ID:   h.id,
+		Spec: spec,
 	}
+}
+
+func (h *hostExecutor) onCheckpoint(wctx *workflow.Context) error {
+	state := agentHostState{CurrentTurnEmitEvents: h.turnEmitEvents}
+	if h.session != nil {
+		data, err := h.agent.MarshalSession(wctx, h.session)
+		if err != nil {
+			return err
+		}
+		state.ThreadState = data
+	}
+	if err := wctx.QueueStateUpdate(agentHostStateKey, "", state); err != nil {
+		return err
+	}
+	if err := h.approvalHandler.Checkpoint(wctx); err != nil {
+		return err
+	}
+	if err := h.callHandler.Checkpoint(wctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (h *hostExecutor) onCheckpointRestored(wctx *workflow.Context) error {
+	h.session = nil
+	h.turnEmitEvents = nil
+	if err := h.approvalHandler.Restore(wctx); err != nil {
+		return err
+	}
+	if err := h.callHandler.Restore(wctx); err != nil {
+		return err
+	}
+	data, err := wctx.ReadState(agentHostStateKey, "")
+	if err != nil {
+		return err
+	}
+	state, err := agentHostStateFromAny(data)
+	if err != nil {
+		return err
+	}
+	if state != nil {
+		h.turnEmitEvents = state.CurrentTurnEmitEvents
+		if state.ThreadState != nil {
+			session, err := h.agent.UnmarshalSession(wctx, state.ThreadState)
+			if err != nil {
+				return err
+			}
+			h.session = session
+		}
+	}
+	return nil
 }
 
 func (h *hostExecutor) configureRoutes(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
 	rb = h.approvalHandler.ConfigureRoutes(rb)
 	rb = h.callHandler.ConfigureRoutes(rb)
-	rb = rb.AddHandler(reflect.TypeFor[ResetSignal](), nil, false, func(wctx *workflow.Context, msg any) (any, error) {
+	rb = rb.AddHandlerRaw(reflect.TypeFor[ResetSignal](), nil, func(wctx *workflow.Context, msg any) (any, error) {
 		h.session = nil
 		h.turnEmitEvents = nil
 		return nil, nil
@@ -278,7 +284,7 @@ func (h *hostExecutor) configureRoutes(rb *workflow.RouteBuilder) (*workflow.Rou
 	// ID so it serves as the back-channel for both kinds of port-mode
 	// requests. When both flags are true (i.e. neither port is used) the
 	// handler simply never fires.
-	rb = rb.AddHandler(reflect.TypeFor[*workflow.ExternalResponse](), nil, false, func(wctx *workflow.Context, msg any) (any, error) {
+	rb = rb.AddHandlerRaw(reflect.TypeFor[*workflow.ExternalResponse](), nil, func(wctx *workflow.Context, msg any) (any, error) {
 		return nil, h.handleExternalResponse(wctx, msg.(*workflow.ExternalResponse))
 	})
 

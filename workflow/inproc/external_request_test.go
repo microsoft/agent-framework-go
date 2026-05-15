@@ -31,34 +31,32 @@ func TestPostRequestFromExecutor(t *testing.T) {
 	//   * on string input: posts an ExternalRequest, then halts.
 	//   * on *ExternalResponse: yields the response data as workflow output.
 	id := "asker"
-	binding := &workflow.ExecutorBinding{
+	binding := workflow.ExecutorBinding{
 		ID:           id,
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 	}
-	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: id,
-			Options: workflow.ExecutorOptions{
+			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-			},
-			Config: []*workflow.ExecutorConfig{{
+				YieldTypes: []reflect.Type{reflect.TypeFor[string]()},
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
 					return rb.
-						AddHandler(reflect.TypeFor[string](), nil, false, func(wctx *workflow.Context, msg any) (any, error) {
+						AddHandlerRaw(reflect.TypeFor[string](), nil, func(wctx *workflow.Context, msg any) (any, error) {
 							req, err := workflow.NewExternalRequest("req-1", port, "what is your name?")
 							if err != nil {
 								return nil, err
 							}
 							return nil, wctx.PostRequest(req)
 						}).
-						AddHandler(reflect.TypeFor[*workflow.ExternalResponse](), nil, false, func(wctx *workflow.Context, msg any) (any, error) {
+						AddHandlerRaw(reflect.TypeFor[*workflow.ExternalResponse](), nil, func(wctx *workflow.Context, msg any) (any, error) {
 							resp := msg.(*workflow.ExternalResponse)
 							data, _ := resp.Data.As(port.Response)
 							return nil, wctx.YieldOutput(data)
 						}), nil
-				},
-			}},
+				}},
 		}, nil
 	}
 
@@ -115,57 +113,55 @@ func TestPostRequestRoutingToOwner(t *testing.T) {
 
 	// Start node: forwards an int to the asker.
 	startID := "start"
-	startBinding := &workflow.ExecutorBinding{
+	startBinding := workflow.ExecutorBinding{
 		ID:           startID,
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 	}
-	startBinding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	startBinding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: startID,
-			Options: workflow.ExecutorOptions{
+			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-			},
-			Config: []*workflow.ExecutorConfig{{
+				SendTypes: []reflect.Type{reflect.TypeFor[string]()},
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(wctx *workflow.Context, msg any) (any, error) {
-						return nil, wctx.SendMessage("", "go")
-					}), nil
-				},
-			}},
+					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(wctx *workflow.Context, msg any) (any, error) {
+							return nil, wctx.SendMessage("", "go")
+						}),
+
+						nil
+				}},
 		}, nil
 	}
 
 	// Asker node: a separate, non-start executor that posts and handles the response.
 	gotResponseAtAsker := false
 	askerID := "asker"
-	askerBinding := &workflow.ExecutorBinding{
+	askerBinding := workflow.ExecutorBinding{
 		ID:           askerID,
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 	}
-	askerBinding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	askerBinding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: askerID,
-			Options: workflow.ExecutorOptions{
+			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-			},
-			Config: []*workflow.ExecutorConfig{{
+				YieldTypes: []reflect.Type{reflect.TypeFor[string]()},
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
 					return rb.
-						AddHandler(reflect.TypeFor[string](), nil, false, func(wctx *workflow.Context, msg any) (any, error) {
+						AddHandlerRaw(reflect.TypeFor[string](), nil, func(wctx *workflow.Context, msg any) (any, error) {
 							req, err := workflow.NewExternalRequest("req-2", port, "ping")
 							if err != nil {
 								return nil, err
 							}
 							return nil, wctx.PostRequest(req)
 						}).
-						AddHandler(reflect.TypeFor[*workflow.ExternalResponse](), nil, false, func(wctx *workflow.Context, msg any) (any, error) {
+						AddHandlerRaw(reflect.TypeFor[*workflow.ExternalResponse](), nil, func(wctx *workflow.Context, msg any) (any, error) {
 							gotResponseAtAsker = true
 							return nil, wctx.YieldOutput("done")
 						}), nil
-				},
-			}},
+				}},
 		}, nil
 	}
 
@@ -206,24 +202,21 @@ func TestPostRequestRoutingToOwner(t *testing.T) {
 
 func TestExternalResponse_UnsolicitedResponseErrors(t *testing.T) {
 	id := "noop"
-	binding := &workflow.ExecutorBinding{
+	binding := workflow.ExecutorBinding{
 		ID:           id,
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 	}
-	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: id,
-			Options: workflow.ExecutorOptions{
+			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-			},
-			Config: []*workflow.ExecutorConfig{{
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(_ *workflow.Context, _ any) (any, error) {
+					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(_ *workflow.Context, _ any) (any, error) {
 						return nil, nil
 					}), nil
-				},
-			}},
+				}},
 		}, nil
 	}
 	wf, err := workflow.NewBuilder(binding).Build()
@@ -370,11 +363,11 @@ func TestExternalRequest_AssignsRandomIDWhenEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewExternalRequest: %v", err)
 	}
-	if r1.ID == "" || r2.ID == "" {
-		t.Fatalf("expected non-empty IDs, got %q, %q", r1.ID, r2.ID)
+	if r1.RequestID == "" || r2.RequestID == "" {
+		t.Fatalf("expected non-empty IDs, got %q, %q", r1.RequestID, r2.RequestID)
 	}
-	if r1.ID == r2.ID {
-		t.Errorf("expected unique IDs, got %q twice", r1.ID)
+	if r1.RequestID == r2.RequestID {
+		t.Errorf("expected unique IDs, got %q twice", r1.RequestID)
 	}
 }
 
@@ -388,7 +381,7 @@ func TestExternalRequest_PreservesProvidedID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewExternalRequest: %v", err)
 	}
-	if r.ID != "user-supplied" {
-		t.Errorf("ID = %q, want %q", r.ID, "user-supplied")
+	if r.RequestID != "user-supplied" {
+		t.Errorf("ID = %q, want %q", r.RequestID, "user-supplied")
 	}
 }

@@ -233,7 +233,7 @@ func TestHostedAgent_BindingIDSanitizesNameAndID(t *testing.T) {
 	assertHostedAgentBindingID(t, wf, binding, "Agent_A_agent_id")
 }
 
-func assertHostedAgentBindingID(t *testing.T, wf *workflow.Workflow, binding *workflow.ExecutorBinding, want string) {
+func assertHostedAgentBindingID(t *testing.T, wf *workflow.Workflow, binding workflow.ExecutorBinding, want string) {
 	t.Helper()
 	if binding.ID != want {
 		t.Fatalf("binding ID = %q, want %q", binding.ID, want)
@@ -255,25 +255,22 @@ func collectForwardedResponseMessages(t *testing.T, a *agent.Agent, cfg workflow
 	t.Helper()
 	var observed []*message.Message
 	sinkID := "sink"
-	sink := &workflow.ExecutorBinding{
+	sink := workflow.ExecutorBinding{
 		ID:           sinkID,
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 	}
-	sink.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	sink.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: sinkID,
-			Options: workflow.ExecutorOptions{
+			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-			},
-			Config: []*workflow.ExecutorConfig{{
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[[]*message.Message](), nil, false, func(_ *workflow.Context, msg any) (any, error) {
+					return rb.AddHandlerRaw(reflect.TypeFor[[]*message.Message](), nil, func(_ *workflow.Context, msg any) (any, error) {
 						observed = append(observed, msg.([]*message.Message)...)
 						return nil, nil
 					}), nil
-				},
-			}},
+				}},
 		}, nil
 	}
 
@@ -590,25 +587,22 @@ func TestHostedAgent_ForwardsIncomingMessages(t *testing.T) {
 			// Sink executor simply records what it receives.
 			var observed []any
 			sinkID := "sink"
-			sink := &workflow.ExecutorBinding{
+			sink := workflow.ExecutorBinding{
 				ID:           sinkID,
 				ExecutorType: reflect.TypeFor[*workflow.Executor](),
 			}
-			sink.NewExecutor = func(_ string) (*workflow.Executor, error) {
+			sink.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 				return &workflow.Executor{
 					ID: sinkID,
-					Options: workflow.ExecutorOptions{
+					Spec: workflow.ExecutorSpec{
 						DisableAutoSendMessageHandlerResultObject: true,
 						DisableAutoYieldOutputHandlerResultObject: true,
-					},
-					Config: []*workflow.ExecutorConfig{{
 						ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-							return rb.AddHandler(reflect.TypeFor[[]*message.Message](), nil, false, func(_ *workflow.Context, msg any) (any, error) {
+							return rb.AddHandlerRaw(reflect.TypeFor[[]*message.Message](), nil, func(_ *workflow.Context, msg any) (any, error) {
 								observed = append(observed, msg)
 								return nil, nil
 							}), nil
-						},
-					}},
+						}},
 				}, nil
 			}
 
@@ -1079,57 +1073,53 @@ func newFunctionCallAgent() *agent.Agent {
 // approverExecutor is a downstream executor that forwards a fixed
 // FunctionApprovalResponseContent back to the binding it observes a
 // FunctionApprovalRequestContent for.
-func approverExecutor(target *workflow.ExecutorBinding, approve bool) *workflow.ExecutorBinding {
+func approverExecutor(target workflow.ExecutorBinding, approve bool) workflow.ExecutorBinding {
 	id := "approver"
-	binding := &workflow.ExecutorBinding{
+	binding := workflow.ExecutorBinding{
 		ID:           id,
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 	}
-	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: id,
-			Options: workflow.ExecutorOptions{
+			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-			},
-			Config: []*workflow.ExecutorConfig{{
+				SendTypes: []reflect.Type{reflect.TypeFor[*message.ToolApprovalResponseContent]()},
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[*message.ToolApprovalRequestContent](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
+					return rb.AddHandlerRaw(reflect.TypeFor[*message.ToolApprovalRequestContent](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 						req := msg.(*message.ToolApprovalRequestContent)
 						return nil, ctx.SendMessage(target.ID, req.CreateResponse(approve, ""))
 					}), nil
-				},
-			}},
+				}},
 		}, nil
 	}
 	return binding
 }
 
 // resultExecutor responds to a FunctionCallContent with a FunctionResultContent.
-func resultExecutor(target *workflow.ExecutorBinding, result any) *workflow.ExecutorBinding {
+func resultExecutor(target workflow.ExecutorBinding, result any) workflow.ExecutorBinding {
 	id := "executor"
-	binding := &workflow.ExecutorBinding{
+	binding := workflow.ExecutorBinding{
 		ID:           id,
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 	}
-	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: id,
-			Options: workflow.ExecutorOptions{
+			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-			},
-			Config: []*workflow.ExecutorConfig{{
+				SendTypes: []reflect.Type{reflect.TypeFor[*message.FunctionResultContent]()},
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[*message.FunctionCallContent](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
+					return rb.AddHandlerRaw(reflect.TypeFor[*message.FunctionCallContent](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 						call := msg.(*message.FunctionCallContent)
 						return nil, ctx.SendMessage(target.ID, &message.FunctionResultContent{
 							CallID: call.CallID,
 							Result: result,
 						})
 					}), nil
-				},
-			}},
+				}},
 		}, nil
 	}
 	return binding
@@ -1349,25 +1339,22 @@ func TestHostedAgent_InterceptDisabled_PostsExternalRequest(t *testing.T) {
 	host := workflowhosting.New(newApprovalAgent(), workflowhosting.Config{})
 	var sawApprovalRequestMessage bool
 	probeID := "probe"
-	probe := &workflow.ExecutorBinding{
+	probe := workflow.ExecutorBinding{
 		ID:           probeID,
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 	}
-	probe.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	probe.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: probeID,
-			Options: workflow.ExecutorOptions{
+			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-			},
-			Config: []*workflow.ExecutorConfig{{
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[*message.ToolApprovalRequestContent](), nil, false, func(_ *workflow.Context, _ any) (any, error) {
+					return rb.AddHandlerRaw(reflect.TypeFor[*message.ToolApprovalRequestContent](), nil, func(_ *workflow.Context, _ any) (any, error) {
 						sawApprovalRequestMessage = true
 						return nil, nil
 					}), nil
-				},
-			}},
+				}},
 		}, nil
 	}
 
@@ -1388,7 +1375,7 @@ func TestHostedAgent_InterceptDisabled_PostsExternalRequest(t *testing.T) {
 		if r, ok := evt.(workflow.RequestInfoEvent); ok {
 			if r.Request != nil && r.Request.PortInfo.PortID == host.ID+"_UserInput" {
 				sawExternalRequest = true
-				externalRequestID = r.Request.ID
+				externalRequestID = r.Request.RequestID
 			}
 		}
 	}
@@ -1414,10 +1401,10 @@ func TestHostedAgent_InterceptDisabled_PostsExternalRequest(t *testing.T) {
 	}
 }
 
-func TestHostedAgent_BindingIsNotConcurrentShareable(t *testing.T) {
+func TestHostedAgent_BindingSupportsConcurrentSharedExecution(t *testing.T) {
 	host := workflowhosting.New(newApprovalAgent(), workflowhosting.Config{})
-	if host.SupportsConcurrentSharedExecution {
-		t.Fatal("hosted agent binding is concurrent-shareable; want false to match AIAgentHostExecutor")
+	if !host.SupportsConcurrentSharedExecution {
+		t.Fatal("hosted agent binding is not concurrent-shareable; want true to match AIAgentBinding")
 	}
 }
 
@@ -1828,27 +1815,25 @@ func TestHostedAgent_UnknownResponseID_RaisesError(t *testing.T) {
 
 	// Sender forwards a stray FunctionResultContent to the host.
 	senderID := "sender"
-	sender := &workflow.ExecutorBinding{
+	sender := workflow.ExecutorBinding{
 		ID:           senderID,
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 	}
-	sender.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	sender.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: senderID,
-			Options: workflow.ExecutorOptions{
+			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-			},
-			Config: []*workflow.ExecutorConfig{{
+				SendTypes: []reflect.Type{reflect.TypeFor[*message.FunctionResultContent]()},
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(ctx *workflow.Context, _ any) (any, error) {
+					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
 						return nil, ctx.SendMessage(host.ID, &message.FunctionResultContent{
 							CallID: "no-such-call",
 							Result: "x",
 						})
 					}), nil
-				},
-			}},
+				}},
 		}, nil
 	}
 
@@ -1892,25 +1877,22 @@ func TestHostedAgent_HeldTurnToken_StampsResolvedEmitEvents(t *testing.T) {
 	// Sink records every workflow.TurnToken it observes downstream.
 	sinkID := "sink"
 	var observed []workflow.TurnToken
-	sink := &workflow.ExecutorBinding{
+	sink := workflow.ExecutorBinding{
 		ID:           sinkID,
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 	}
-	sink.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	sink.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: sinkID,
-			Options: workflow.ExecutorOptions{
+			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-			},
-			Config: []*workflow.ExecutorConfig{{
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[workflow.TurnToken](), nil, false, func(_ *workflow.Context, msg any) (any, error) {
+					return rb.AddHandlerRaw(reflect.TypeFor[workflow.TurnToken](), nil, func(_ *workflow.Context, msg any) (any, error) {
 						observed = append(observed, msg.(workflow.TurnToken))
 						return nil, nil
 					}), nil
-				},
-			}},
+				}},
 		}, nil
 	}
 
@@ -2063,25 +2045,22 @@ func TestHostedAgent_AlreadyPendingRequest_IsIdempotent_InterceptMode(t *testing
 	// Probe records every approval-request workflow message it sees.
 	probeID := "probe"
 	var seen []*message.ToolApprovalRequestContent
-	probe := &workflow.ExecutorBinding{
+	probe := workflow.ExecutorBinding{
 		ID:           probeID,
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 	}
-	probe.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	probe.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: probeID,
-			Options: workflow.ExecutorOptions{
+			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-			},
-			Config: []*workflow.ExecutorConfig{{
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[*message.ToolApprovalRequestContent](), nil, false, func(_ *workflow.Context, msg any) (any, error) {
+					return rb.AddHandlerRaw(reflect.TypeFor[*message.ToolApprovalRequestContent](), nil, func(_ *workflow.Context, msg any) (any, error) {
 						seen = append(seen, msg.(*message.ToolApprovalRequestContent))
 						return nil, nil
 					}), nil
-				},
-			}},
+				}},
 		}, nil
 	}
 

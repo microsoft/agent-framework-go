@@ -35,22 +35,19 @@ func NewStateTestExecutor[T any](id string, stateKey workflow.ScopeKey, loop boo
 	}
 }
 
-func (e *StateTestExecutor[T]) Bind() *workflow.ExecutorBinding {
-	return &workflow.ExecutorBinding{
+func (e *StateTestExecutor[T]) Bind() workflow.ExecutorBinding {
+	return workflow.ExecutorBinding{
 		ID:           e.ID,
 		ExecutorType: reflect.TypeOf(e.Execute),
-		NewExecutor: func(_ string) (*workflow.Executor, error) {
+		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
 			return &workflow.Executor{
 				ID: e.ID,
-				Config: []*workflow.ExecutorConfig{
-					{
-						ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-							return rb.AddHandler(reflect.TypeFor[TestTurnToken](), reflect.TypeFor[TestTurnToken](), false, func(ctx *workflow.Context, msg any) (any, error) {
-								return e.Execute(ctx, msg.(TestTurnToken))
-							}), nil
-						},
-					},
-				},
+				Spec: workflow.ExecutorSpec{
+					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+						return rb.AddHandlerRaw(reflect.TypeFor[TestTurnToken](), reflect.TypeFor[TestTurnToken](), func(ctx *workflow.Context, msg any) (any, error) {
+							return e.Execute(ctx, msg.(TestTurnToken))
+						}), nil
+					}},
 			}, nil
 		},
 		SupportsConcurrentSharedExecution: false,
@@ -230,37 +227,33 @@ func TestInProcessRun_StateShouldPersist_Checkpointed(t *testing.T) {
 
 func TestInProcessRun_StateShouldPersist_JSONCheckpointed(t *testing.T) {
 	const stateKey = "value"
-	binding := &workflow.ExecutorBinding{
+	binding := workflow.ExecutorBinding{
 		ID:           "stateful",
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 	}
-	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: binding.ID,
-			Options: workflow.ExecutorOptions{
+			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-			},
-			Config: []*workflow.ExecutorConfig{
-				{
-					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-						return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
-							switch msg.(string) {
-							case "write":
-								return nil, ctx.QueueStateUpdate(stateKey, "", "persisted")
-							case "read":
-								value, err := ctx.ReadState(stateKey, "")
-								if err != nil {
-									return nil, err
-								}
-								return nil, ctx.YieldOutput(value)
-							default:
-								return nil, nil
+				YieldTypes: []reflect.Type{reflect.TypeFor[string]()},
+				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+						switch msg.(string) {
+						case "write":
+							return nil, ctx.QueueStateUpdate(stateKey, "", "persisted")
+						case "read":
+							value, err := ctx.ReadState(stateKey, "")
+							if err != nil {
+								return nil, err
 							}
-						}), nil
-					},
-				},
-			},
+							return nil, ctx.YieldOutput(value)
+						default:
+							return nil, nil
+						}
+					}), nil
+				}},
 		}, nil
 	}
 	wf, err := workflow.NewBuilder(binding).WithOutputFrom(binding).Build()
@@ -372,28 +365,27 @@ func TestInProcessRun_ReadStateKeysLifecycle(t *testing.T) {
 	}
 }
 
-func stateKeysLifecycleBindings(scope string) (*workflow.ExecutorBinding, *workflow.ExecutorBinding, map[string][]string) {
+func stateKeysLifecycleBindings(scope string) (workflow.ExecutorBinding, workflow.ExecutorBinding, map[string][]string) {
 	const key = "key1"
 	observed := make(map[string][]string)
-	reader := &workflow.ExecutorBinding{
+	reader := workflow.ExecutorBinding{
 		ID:           "reader",
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 	}
 
-	writer := &workflow.ExecutorBinding{
+	writer := workflow.ExecutorBinding{
 		ID:           "writer",
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 	}
-	writer.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	writer.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: writer.ID,
-			Options: workflow.ExecutorOptions{
+			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-			},
-			Config: []*workflow.ExecutorConfig{{
+				SendTypes: []reflect.Type{reflect.TypeFor[string]()},
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(ctx *workflow.Context, message any) (any, error) {
+					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, message any) (any, error) {
 						switch message.(string) {
 						case "write":
 							if err := ctx.QueueStateUpdate(key, scope, "value1"); err != nil {
@@ -419,21 +411,18 @@ func stateKeysLifecycleBindings(scope string) (*workflow.ExecutorBinding, *workf
 							return nil, nil
 						}
 					}), nil
-				},
-			}},
+				}},
 		}, nil
 	}
 
-	reader.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	reader.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: reader.ID,
-			Options: workflow.ExecutorOptions{
+			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-			},
-			Config: []*workflow.ExecutorConfig{{
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(ctx *workflow.Context, message any) (any, error) {
+					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, message any) (any, error) {
 						keys, err := readWorkflowStateKeys(ctx, scope)
 						if err != nil {
 							return nil, err
@@ -441,8 +430,7 @@ func stateKeysLifecycleBindings(scope string) (*workflow.ExecutorBinding, *workf
 						observed["reader:"+message.(string)] = keys
 						return nil, nil
 					}), nil
-				},
-			}},
+				}},
 		}, nil
 	}
 
@@ -462,7 +450,7 @@ func readWorkflowStateKeys(ctx *workflow.Context, scope string) ([]string, error
 }
 
 func TestInProcessRun_StateShouldError_TwoExecutors(t *testing.T) {
-	forward := workflow.BindFunc("ForwardMessageExecutor", false, func(t TestTurnToken) TestTurnToken {
+	forward := workflow.BindFunc("ForwardMessageExecutor", func(t TestTurnToken) TestTurnToken {
 		return t
 	})
 
@@ -481,7 +469,7 @@ func TestInProcessRun_StateShouldError_TwoExecutors(t *testing.T) {
 	)
 
 	wf, err := workflow.NewBuilder(forward).
-		AddFanOutEdge(forward, []*workflow.ExecutorBinding{testExecutor.Bind(), testExecutor2.Bind()}).
+		AddFanOutEdge(forward, []workflow.ExecutorBinding{testExecutor.Bind(), testExecutor2.Bind()}).
 		Build()
 	if err != nil {
 		t.Fatalf("Failed to build workflow: %v", err)
@@ -511,22 +499,21 @@ func TestInProcessRun_StateShouldError_TwoExecutors(t *testing.T) {
 
 func TestInProcessRun_ReadOrInitStateInitializerError(t *testing.T) {
 	const want = "initializer failed"
-	binding := &workflow.ExecutorBinding{
+	binding := workflow.ExecutorBinding{
 		ID:           "stateful",
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
-		NewExecutor: func(_ string) (*workflow.Executor, error) {
+		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
 			return &workflow.Executor{
 				ID: "stateful",
-				Config: []*workflow.ExecutorConfig{{
+				Spec: workflow.ExecutorSpec{
 					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-						return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(ctx *workflow.Context, _ any) (any, error) {
+						return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
 							_, err := ctx.ReadOrInitState("key", "", func(context.Context, string, string) (any, error) {
 								return nil, errors.New(want)
 							})
 							return nil, err
 						}), nil
-					},
-				}},
+					}},
 			}, nil
 		},
 	}

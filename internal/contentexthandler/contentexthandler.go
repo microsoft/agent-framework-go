@@ -47,7 +47,7 @@ func (h *Handler[TRequest, TResponse]) ConfigureRoutes(rb *workflow.RouteBuilder
 	if !h.intercepted {
 		return rb
 	}
-	return rb.AddHandler(reflect.TypeFor[TResponse](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
+	return rb.AddHandlerRaw(reflect.TypeFor[TResponse](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 		return nil, h.responseHandler(ctx, msg.(TResponse))
 	})
 }

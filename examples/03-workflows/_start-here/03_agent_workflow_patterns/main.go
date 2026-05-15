@@ -78,7 +78,7 @@ func buildPattern(pattern string) (*workflow.Workflow, error) {
 			Build()
 	case "concurrent":
 		return workflow.NewBuilder(french).
-			AddFanOutEdge(french, []*workflow.ExecutorBinding{spanish, english}).
+			AddFanOutEdge(french, []workflow.ExecutorBinding{spanish, english}).
 			WithOutputFrom(spanish, english).
 			Build()
 	default:

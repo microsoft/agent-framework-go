@@ -354,15 +354,12 @@ type deliveryResult struct {
 func stringExecutor(id string) *workflow.Executor {
 	return &workflow.Executor{
 		ID: id,
-		Config: []*workflow.ExecutorConfig{
-			{
-				ConfigureRoutes: func(builder *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return builder.AddHandler(reflect.TypeFor[string](), nil, false, func(*workflow.Context, any) (any, error) {
-						return nil, nil
-					}), nil
-				},
-			},
-		},
+		Spec: workflow.ExecutorSpec{
+			ConfigureRoutes: func(builder *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+				return builder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(*workflow.Context, any) (any, error) {
+					return nil, nil
+				}), nil
+			}},
 	}
 }
 

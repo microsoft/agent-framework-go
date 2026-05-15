@@ -3,7 +3,6 @@
 package workflow
 
 import (
-	"errors"
 	"iter"
 	"slices"
 )
@@ -11,17 +10,17 @@ import (
 // EdgeOption configures an [Edge] when it is added to a workflow via [Builder].
 type EdgeOption func(*Edge)
 
-// WithLabel sets an optional label on the edge. Labels can be used by
+// WithEdgeLabel sets an optional label on the edge. Labels can be used by
 // visualizers to annotate edges.
-func WithLabel(label string) EdgeOption {
+func WithEdgeLabel(label string) EdgeOption {
 	return func(e *Edge) { e.Label = label }
 }
 
-// WithAssigner attaches an [Edge.Assigner] callback to a fan-out edge.
+// WithEdgeAssigner attaches an [Edge.Assigner] callback to a fan-out edge.
 // The assigner is invoked for each message and must return the indexes of
 // the targets that should receive it. Has no effect on direct or fan-in
 // edges.
-func WithAssigner(assigner func(targetCount int, message any) iter.Seq[int]) EdgeOption {
+func WithEdgeAssigner(assigner func(targetCount int, message any) iter.Seq[int]) EdgeOption {
 	return func(e *Edge) { e.Assigner = assigner }
 }
 
@@ -82,26 +81,4 @@ type EdgeConnection struct {
 
 func (c EdgeConnection) Equal(other EdgeConnection) bool {
 	return slices.Equal(c.SourceIDs, other.SourceIDs) && slices.Equal(c.SinkIDs, other.SinkIDs)
-}
-
-// NewConnection creates a new Connection ensuring that source and sink IDs are unique.
-func NewConnection(sourceIDs, sinkIDs []string) (EdgeConnection, error) {
-	ids := make(map[string]struct{}, len(sourceIDs)+len(sinkIDs))
-	for _, id := range sourceIDs {
-		if _, exists := ids[id]; exists {
-			return EdgeConnection{}, errors.New("sourceIDs must be unique")
-		}
-		ids[id] = struct{}{}
-	}
-	for _, id := range sinkIDs {
-		if _, exists := ids[id]; exists {
-			return EdgeConnection{}, errors.New("sinkIDs must be unique and not overlap with sourceIDs")
-		}
-		ids[id] = struct{}{}
-	}
-
-	return EdgeConnection{
-		SourceIDs: sourceIDs,
-		SinkIDs:   sinkIDs,
-	}, nil
 }

@@ -14,28 +14,27 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
 )
 
-func captureExecutor(id string, sink *[]string, mu *sync.Mutex) *workflow.ExecutorBinding {
-	binding := &workflow.ExecutorBinding{
+func captureExecutor(id string, sink *[]string, mu *sync.Mutex) workflow.ExecutorBinding {
+	binding := workflow.ExecutorBinding{
 		ID:           id,
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 	}
-	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: id,
-			Options: workflow.ExecutorOptions{
+			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-			},
-			Config: []*workflow.ExecutorConfig{{
+				SendTypes:  []reflect.Type{reflect.TypeFor[string]()},
+				YieldTypes: []reflect.Type{reflect.TypeFor[string]()},
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
+					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 						mu.Lock()
 						*sink = append(*sink, id+":"+msg.(string))
 						mu.Unlock()
 						return nil, ctx.SendMessage("", msg)
 					}), nil
-				},
-			}},
+				}},
 		}, nil
 	}
 	return binding
@@ -163,7 +162,7 @@ func TestFanOutEdgeRouting_NoAssigner_DeliversToAll(t *testing.T) {
 	b := captureExecutor("b", &trace, &mu)
 	c := captureExecutor("c", &trace, &mu)
 	wf, err := workflow.NewBuilder(a).
-		AddFanOutEdge(a, []*workflow.ExecutorBinding{b, c}).
+		AddFanOutEdge(a, []workflow.ExecutorBinding{b, c}).
 		Build()
 	if err != nil {
 		t.Fatalf("Build: %v", err)
@@ -204,7 +203,7 @@ func TestFanOutEdgeRouting_TargetedMessageDeliversOnlyToMatchingSink(t *testing.
 			b := captureExecutor("b", &trace, &mu)
 			c := captureExecutor("c", &trace, &mu)
 			wf, err := workflow.NewBuilder(a).
-				AddFanOutEdge(a, []*workflow.ExecutorBinding{b, c}).
+				AddFanOutEdge(a, []workflow.ExecutorBinding{b, c}).
 				Build()
 			if err != nil {
 				t.Fatalf("Build: %v", err)
@@ -234,7 +233,7 @@ func TestFanOutEdgeRouting_AssignerSelectsSubset(t *testing.T) {
 		return func(yield func(int) bool) { yield(0) }
 	}
 	wf, err := workflow.NewBuilder(a).
-		AddFanOutEdge(a, []*workflow.ExecutorBinding{b, c}, workflow.WithAssigner(assigner)).
+		AddFanOutEdge(a, []workflow.ExecutorBinding{b, c}, workflow.WithEdgeAssigner(assigner)).
 		Build()
 	if err != nil {
 		t.Fatalf("Build: %v", err)
@@ -271,7 +270,7 @@ func TestFanOutEdgeRouting_AssignerSelectsEmpty_NoDelivery(t *testing.T) {
 		return func(yield func(int) bool) {}
 	}
 	wf, err := workflow.NewBuilder(a).
-		AddFanOutEdge(a, []*workflow.ExecutorBinding{b, c}, workflow.WithAssigner(assigner)).
+		AddFanOutEdge(a, []workflow.ExecutorBinding{b, c}, workflow.WithEdgeAssigner(assigner)).
 		Build()
 	if err != nil {
 		t.Fatalf("Build: %v", err)
@@ -288,28 +287,26 @@ func TestFanOutEdgeRouting_AssignerSelectsEmpty_NoDelivery(t *testing.T) {
 	}
 }
 
-func targetingExecutor(id string, targetID string, sink *[]string, mu *sync.Mutex) *workflow.ExecutorBinding {
-	binding := &workflow.ExecutorBinding{
+func targetingExecutor(id string, targetID string, sink *[]string, mu *sync.Mutex) workflow.ExecutorBinding {
+	binding := workflow.ExecutorBinding{
 		ID:           id,
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 	}
-	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: id,
-			Options: workflow.ExecutorOptions{
+			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-			},
-			Config: []*workflow.ExecutorConfig{{
+				SendTypes: []reflect.Type{reflect.TypeFor[string]()},
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
+					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 						mu.Lock()
 						*sink = append(*sink, id+":"+msg.(string))
 						mu.Unlock()
 						return nil, ctx.SendMessage(targetID, msg)
 					}), nil
-				},
-			}},
+				}},
 		}, nil
 	}
 	return binding
@@ -326,8 +323,8 @@ func TestFanInEdgeRouting_StateResetsAfterDelivery(t *testing.T) {
 	starter := captureExecutor("starter", &trace, &mu)
 
 	wf, err := workflow.NewBuilder(starter).
-		AddFanOutEdge(starter, []*workflow.ExecutorBinding{a, b}).
-		AddFanInBarrierEdge([]*workflow.ExecutorBinding{a, b}, c).
+		AddFanOutEdge(starter, []workflow.ExecutorBinding{a, b}).
+		AddFanInBarrierEdge([]workflow.ExecutorBinding{a, b}, c).
 		Build()
 	if err != nil {
 		t.Fatalf("Build: %v", err)
@@ -344,52 +341,47 @@ func TestFanInEdgeRouting_StateResetsAfterDelivery(t *testing.T) {
 	mu.Unlock()
 }
 
-func emitsExecutor(id string, value string) *workflow.ExecutorBinding {
-	binding := &workflow.ExecutorBinding{
+func emitsExecutor(id string, value string) workflow.ExecutorBinding {
+	binding := workflow.ExecutorBinding{
 		ID:           id,
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 	}
-	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: id,
-			Options: workflow.ExecutorOptions{
+			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-			},
-			Config: []*workflow.ExecutorConfig{{
+				SendTypes: []reflect.Type{reflect.TypeFor[string]()},
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(ctx *workflow.Context, _ any) (any, error) {
+					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
 						return nil, ctx.SendMessage("", value)
 					}), nil
-				},
-			}},
+				}},
 		}, nil
 	}
 	return binding
 }
 
-func collectingExecutor(id string, deliveries *[][]string, mu *sync.Mutex) *workflow.ExecutorBinding {
-	binding := &workflow.ExecutorBinding{
+func collectingExecutor(id string, deliveries *[][]string, mu *sync.Mutex) workflow.ExecutorBinding {
+	binding := workflow.ExecutorBinding{
 		ID:           id,
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 	}
-	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: id,
-			Options: workflow.ExecutorOptions{
+			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-			},
-			Config: []*workflow.ExecutorConfig{{
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
+					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 						mu.Lock()
 						*deliveries = append(*deliveries, []string{msg.(string)})
 						mu.Unlock()
 						return nil, nil
 					}), nil
-				},
-			}},
+				}},
 		}, nil
 	}
 	return binding
@@ -407,8 +399,8 @@ func TestFanInBarrier_DeliversOnlyAfterAllSourcesProduce(t *testing.T) {
 
 	starter := emitsExecutor("starter", "kick")
 	wf, err := workflow.NewBuilder(starter).
-		AddFanOutEdge(starter, []*workflow.ExecutorBinding{source1, source2}).
-		AddFanInBarrierEdge([]*workflow.ExecutorBinding{source1, source2}, target).
+		AddFanOutEdge(starter, []workflow.ExecutorBinding{source1, source2}).
+		AddFanInBarrierEdge([]workflow.ExecutorBinding{source1, source2}, target).
 		Build()
 	if err != nil {
 		t.Fatalf("Build: %v", err)
@@ -431,29 +423,28 @@ func TestFanInBarrier_DeliversOnlyAfterAllSourcesProduce(t *testing.T) {
 	}
 }
 
-func outputFilterExecutor(id string) *workflow.ExecutorBinding {
-	binding := &workflow.ExecutorBinding{
+func outputFilterExecutor(id string) workflow.ExecutorBinding {
+	binding := workflow.ExecutorBinding{
 		ID:           id,
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 	}
-	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: id,
-			Options: workflow.ExecutorOptions{
+			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-			},
-			Config: []*workflow.ExecutorConfig{{
+				SendTypes:  []reflect.Type{reflect.TypeFor[string]()},
+				YieldTypes: []reflect.Type{reflect.TypeFor[string]()},
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
+					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 						s := msg.(string)
 						if err := ctx.YieldOutput("out:" + id + ":" + s); err != nil {
 							return nil, err
 						}
 						return nil, ctx.SendMessage("", s)
 					}), nil
-				},
-			}},
+				}},
 		}, nil
 	}
 	return binding

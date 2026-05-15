@@ -17,25 +17,23 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
 )
 
-func minimalEchoBinding(id string) *workflow.ExecutorBinding {
-	binding := &workflow.ExecutorBinding{
+func minimalEchoBinding(id string) workflow.ExecutorBinding {
+	binding := workflow.ExecutorBinding{
 		ID:           id,
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 	}
-	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: id,
-			Options: workflow.ExecutorOptions{
+			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-			},
-			Config: []*workflow.ExecutorConfig{{
+				YieldTypes: []reflect.Type{reflect.TypeFor[string]()},
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(ctx *workflow.Context, _ any) (any, error) {
+					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
 						return nil, ctx.YieldOutput("ok")
 					}), nil
-				},
-			}},
+				}},
 		}, nil
 	}
 	return binding
@@ -520,20 +518,19 @@ type trackingExecutor struct {
 	received []string
 }
 
-func (te *trackingExecutor) Bind() *workflow.ExecutorBinding {
-	binding := &workflow.ExecutorBinding{
+func (te *trackingExecutor) Bind() workflow.ExecutorBinding {
+	binding := workflow.ExecutorBinding{
 		ID:           te.id,
 		ExecutorType: reflect.TypeFor[*trackingExecutor](),
-		Raw:          te,
+		RawValue:     te,
 	}
-	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: te.id,
-			Options: workflow.ExecutorOptions{
+			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-			},
-			Config: []*workflow.ExecutorConfig{{
+				SendTypes: []reflect.Type{reflect.TypeFor[string]()},
 				OnMessageDeliveryStarting: func(_ *workflow.Context) error {
 					te.deliveryStarting.Add(1)
 					return nil
@@ -543,7 +540,7 @@ func (te *trackingExecutor) Bind() *workflow.ExecutorBinding {
 					return nil
 				},
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(ctx *workflow.Context, msg any) (any, error) {
+					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 						s := msg.(string)
 						te.mu.Lock()
 						te.received = append(te.received, s)
@@ -554,7 +551,7 @@ func (te *trackingExecutor) Bind() *workflow.ExecutorBinding {
 						return nil, nil
 					}), nil
 				},
-			}},
+			},
 		}, nil
 	}
 	return binding
@@ -604,28 +601,26 @@ func TestDeliveryEvents_InvokedOncePerExecutorPerSuperstep(t *testing.T) {
 func TestDeliveryEvents_FinishedRunsEvenWhenHandlerErrors(t *testing.T) {
 	finishedCalls := atomic.Int64{}
 	id := "boom"
-	binding := &workflow.ExecutorBinding{
+	binding := workflow.ExecutorBinding{
 		ID:           id,
 		ExecutorType: reflect.TypeFor[*workflow.Executor](),
 	}
-	binding.NewExecutor = func(_ string) (*workflow.Executor, error) {
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: id,
-			Options: workflow.ExecutorOptions{
+			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-			},
-			Config: []*workflow.ExecutorConfig{{
 				OnMessageDeliveryFinished: func(_ *workflow.Context) error {
 					finishedCalls.Add(1)
 					return nil
 				},
 				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandler(reflect.TypeFor[string](), nil, false, func(_ *workflow.Context, _ any) (any, error) {
+					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(_ *workflow.Context, _ any) (any, error) {
 						return nil, errBoom
 					}), nil
 				},
-			}},
+			},
 		}, nil
 	}
 	wf, err := workflow.NewBuilder(binding).Build()

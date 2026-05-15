@@ -23,7 +23,7 @@ type Builder struct {
 	err error
 
 	edgeCount                int
-	executorsBindings        map[string]*ExecutorBinding
+	executorsBindings        map[string]ExecutorBinding
 	unboundExecutors         map[string]struct{}
 	edges                    map[string][]Edge
 	conditionlessConnections []EdgeConnection
@@ -32,7 +32,7 @@ type Builder struct {
 	telemetry                *internalobservability.Context
 }
 
-func NewBuilder(start *ExecutorBinding) *Builder {
+func NewBuilder(start ExecutorBinding) *Builder {
 	bld := &Builder{
 		startExecutorId: start.ID,
 		edges:           make(map[string][]Edge),
@@ -69,7 +69,7 @@ func (wb *Builder) WithTelemetry(tracer workflowobservability.Tracer, options Te
 	return wb
 }
 
-func (wb *Builder) WithOutputFrom(bindings ...*ExecutorBinding) *Builder {
+func (wb *Builder) WithOutputFrom(bindings ...ExecutorBinding) *Builder {
 	if wb.err != nil {
 		return wb
 	}
@@ -85,7 +85,7 @@ func (wb *Builder) WithOutputFrom(bindings ...*ExecutorBinding) *Builder {
 	return wb
 }
 
-func (wb *Builder) BindExecutor(binding *ExecutorBinding) *Builder {
+func (wb *Builder) BindExecutor(binding ExecutorBinding) *Builder {
 	if wb.err != nil {
 		return wb
 	}
@@ -100,11 +100,11 @@ func (wb *Builder) BindExecutor(binding *ExecutorBinding) *Builder {
 	return wb
 }
 
-func (wb *Builder) AddEdge(source *ExecutorBinding, target *ExecutorBinding, opts ...EdgeOption) *Builder {
+func (wb *Builder) AddEdge(source ExecutorBinding, target ExecutorBinding, opts ...EdgeOption) *Builder {
 	return wb.AddDirectEdge(source, target, false, nil, opts...)
 }
 
-func (wb *Builder) AddDirectEdge(source *ExecutorBinding, target *ExecutorBinding, idempotent bool, condition func(any) bool, opts ...EdgeOption) *Builder {
+func (wb *Builder) AddDirectEdge(source ExecutorBinding, target ExecutorBinding, idempotent bool, condition func(any) bool, opts ...EdgeOption) *Builder {
 	if wb.err != nil {
 		return wb
 	}
@@ -140,9 +140,9 @@ func (wb *Builder) AddDirectEdge(source *ExecutorBinding, target *ExecutorBindin
 
 // AddFanOutEdge adds a fan-out edge from source to one or more targets.
 //
-// By default the message is delivered to every target. Pass [WithAssigner]
+// By default the message is delivered to every target. Pass [WithEdgeAssigner]
 // to choose a subset of targets per message. See [Edge.Assigner].
-func (wb *Builder) AddFanOutEdge(source *ExecutorBinding, targets []*ExecutorBinding, opts ...EdgeOption) *Builder {
+func (wb *Builder) AddFanOutEdge(source ExecutorBinding, targets []ExecutorBinding, opts ...EdgeOption) *Builder {
 	if wb.err != nil {
 		return wb
 	}
@@ -171,7 +171,7 @@ func (wb *Builder) AddFanOutEdge(source *ExecutorBinding, targets []*ExecutorBin
 
 // AddFanInBarrierEdge adds a fan-in edge from sources to target, waiting for
 // all sources before dispatching to the target.
-func (wb *Builder) AddFanInBarrierEdge(sources []*ExecutorBinding, target *ExecutorBinding, opts ...EdgeOption) *Builder {
+func (wb *Builder) AddFanInBarrierEdge(sources []ExecutorBinding, target ExecutorBinding, opts ...EdgeOption) *Builder {
 	if wb.err != nil {
 		return wb
 	}
@@ -318,11 +318,11 @@ func (wb *Builder) validate(validateOrphans bool) bool {
 			"executors", deadEnds)
 	}
 	// Validate type compatibility between connected executors. For each edge we
-	// create temporary executor instances, inspect their routers, and verify that
-	// the source's output types overlap with the target's input types. Executors
-	// with a catch-all handler accept any type, so they are always compatible as
-	// targets. If either side has no declared types we skip that edge (dynamic
-	// typing).
+	// create temporary executor instances, inspect their protocols, and verify that
+	// the source's sent message types overlap with the target's input types.
+	// Executors with a catch-all handler accept any type, so they are always
+	// compatible as targets. If either side has no declared types we skip that edge
+	// (dynamic typing).
 	if err := wb.validateTypeCompatibility(); err != nil {
 		wb.err = err
 		return false
@@ -335,67 +335,67 @@ func (wb *Builder) edgeIdx() int {
 	return wb.edgeCount
 }
 
-// validateTypeCompatibility checks that output types of source executors are
-// compatible with input types of target executors for every edge. It creates
-// temporary executor instances to inspect their routers. If an executor cannot
-// be instantiated or has no type metadata (e.g. catch-all or no output type
-// annotations), the edge is silently skipped.
+// validateTypeCompatibility checks that sent message types of source executors
+// are compatible with input types of target executors for every edge. It
+// creates temporary executor instances to inspect their protocols. If an
+// executor cannot be instantiated or has no type metadata (e.g. catch-all or no
+// send type annotations), the edge is silently skipped.
 func (wb *Builder) validateTypeCompatibility() error {
-	type routerInfo struct {
-		router *messageRouter
-		ok     bool
+	type protocolInfo struct {
+		protocol *ProtocolDescriptor
+		ok       bool
 	}
-	cache := make(map[string]routerInfo, len(wb.executorsBindings))
-	getRouter := func(id string) (*messageRouter, bool) {
-		if ri, cached := cache[id]; cached {
-			return ri.router, ri.ok
+	cache := make(map[string]protocolInfo, len(wb.executorsBindings))
+	getProtocol := func(id string) (*ProtocolDescriptor, bool) {
+		if info, cached := cache[id]; cached {
+			return info.protocol, info.ok
 		}
-		binding := wb.executorsBindings[id]
-		if binding == nil || binding.isPlaceholder() {
-			cache[id] = routerInfo{}
+		binding, exists := wb.executorsBindings[id]
+		if !exists || binding.isPlaceholder() {
+			cache[id] = protocolInfo{}
 			return nil, false
 		}
 		ex, err := binding.CreateInstance("")
 		if err != nil {
-			cache[id] = routerInfo{}
+			cache[id] = protocolInfo{}
 			return nil, false
 		}
-		r, err := ex.router()
+		protocol, err := ex.describeProtocol()
 		if err != nil {
-			cache[id] = routerInfo{}
+			cache[id] = protocolInfo{}
 			return nil, false
 		}
-		cache[id] = routerInfo{router: r, ok: true}
-		return r, true
+		cache[id] = protocolInfo{protocol: protocol, ok: true}
+		return protocol, true
 	}
 
 	for sourceID, edges := range wb.edges {
-		sourceRouter, sourceOK := getRouter(sourceID)
+		sourceProtocol, sourceOK := getProtocol(sourceID)
 		if !sourceOK {
 			continue
 		}
-		sourceOutputTypes := slices.Collect(sourceRouter.DefaultOutputTypes())
-		if len(sourceOutputTypes) == 0 {
-			// Source has no declared output types; skip validation.
+		sourceSendTypes := sourceProtocol.Sends
+		if len(sourceSendTypes) == 0 {
+			// Source has no declared send types; skip validation.
 			continue
 		}
 		for _, edge := range edges {
 			for _, sinkID := range edge.Connection.SinkIDs {
-				targetRouter, targetOK := getRouter(sinkID)
+				targetProtocol, targetOK := getProtocol(sinkID)
 				if !targetOK {
 					continue
 				}
 				// Targets with a catch-all accept anything.
-				if targetRouter.HasCatchAll() {
+				if targetProtocol.AcceptsAll {
 					continue
 				}
-				targetInputTypes := targetRouter.IncomingTypes()
+				targetInputTypes := targetProtocol.Accepts
 				if len(targetInputTypes) == 0 {
 					continue
 				}
-				// Check that at least one source output type matches a target input type.
+				// Check that at least one source send type matches a target input type.
 				compatible := false
-				for _, outType := range sourceOutputTypes {
+				for _, outType := range sourceSendTypes {
 					for _, inType := range targetInputTypes {
 						if outType == inType || outType.AssignableTo(inType) || (inType.Kind() == reflect.Interface && outType.Implements(inType)) {
 							compatible = true
@@ -408,8 +408,8 @@ func (wb *Builder) validateTypeCompatibility() error {
 				}
 				if !compatible {
 					return fmt.Errorf(
-						"type incompatibility between executors %q -> %q: source outputs %v but target accepts %v",
-						sourceID, sinkID, sourceOutputTypes, targetInputTypes,
+						"type incompatibility between executors %q -> %q: source sends %v but target accepts %v",
+						sourceID, sinkID, sourceSendTypes, targetInputTypes,
 					)
 				}
 			}
@@ -418,18 +418,21 @@ func (wb *Builder) validateTypeCompatibility() error {
 	return nil
 }
 
-func (wb *Builder) checkBinding(binding *ExecutorBinding) bool {
+func (wb *Builder) checkBinding(binding ExecutorBinding) bool {
 	if wb.err != nil {
-		return false
-	}
-	if binding == nil {
-		wb.err = fmt.Errorf("cannot track nil executor binding")
 		return false
 	}
 	return true
 }
 
-func (wb *Builder) track(binding *ExecutorBinding) bool {
+func (wb *Builder) trackInputPort(port RequestPort) {
+	if wb.inputPorts == nil {
+		wb.inputPorts = make(map[string]RequestPort)
+	}
+	wb.inputPorts[port.ID] = port
+}
+
+func (wb *Builder) track(binding ExecutorBinding) bool {
 	if wb.err != nil {
 		return false
 	}
@@ -456,7 +459,7 @@ func (wb *Builder) track(binding *ExecutorBinding) bool {
 				)
 				return false
 			}
-			if existing.Raw != nil && existing.Raw != binding.Raw {
+			if existing.RawValue != nil && existing.RawValue != binding.RawValue {
 				wb.err = fmt.Errorf(
 					"cannot bind executor with ID %q because an executor with the same ID but a different instance is already bound",
 					binding.ID,
@@ -465,25 +468,19 @@ func (wb *Builder) track(binding *ExecutorBinding) bool {
 			}
 		} else {
 			if wb.executorsBindings == nil {
-				wb.executorsBindings = make(map[string]*ExecutorBinding)
+				wb.executorsBindings = make(map[string]ExecutorBinding)
 			}
 			wb.executorsBindings[binding.ID] = binding
 			delete(wb.unboundExecutors, binding.ID)
 		}
 	}
-	if binding.Raw != nil {
-		if port, ok := binding.Raw.(RequestPort); ok {
-			if wb.inputPorts == nil {
-				wb.inputPorts = make(map[string]RequestPort)
-			}
-			wb.inputPorts[port.ID] = port
-		}
-	}
 	for _, port := range binding.Ports {
-		if wb.inputPorts == nil {
-			wb.inputPorts = make(map[string]RequestPort)
+		wb.trackInputPort(port)
+	}
+	if len(binding.Ports) == 0 && binding.RawValue != nil {
+		if port, ok := binding.RawValue.(RequestPort); ok {
+			wb.trackInputPort(port)
 		}
-		wb.inputPorts[port.ID] = port
 	}
 	return true
 }
@@ -493,7 +490,7 @@ func (wb *Builder) track(binding *ExecutorBinding) bool {
 //
 // If allowRepetition is false, the same binding may not appear twice in the
 // chain (including the source). Adding the same edge twice is idempotent.
-func (wb *Builder) AddChain(source *ExecutorBinding, executors []*ExecutorBinding, allowRepetition bool) *Builder {
+func (wb *Builder) AddChain(source ExecutorBinding, executors []ExecutorBinding, allowRepetition bool) *Builder {
 	if wb.err != nil {
 		return wb
 	}
@@ -526,11 +523,12 @@ func (wb *Builder) AddChain(source *ExecutorBinding, executors []*ExecutorBindin
 // the order they were added; matching cases route the message to that case's
 // targets. If no case matches, the default targets are used.
 type SwitchBuilder struct {
-	source *ExecutorBinding
+	source    ExecutorBinding
+	sourceSet bool
 
 	// targets aggregates every binding referenced by any case so we can build
 	// a single fan-out edge with stable indexes.
-	targets         []*ExecutorBinding
+	targets         []ExecutorBinding
 	targetIndexByID map[string]int
 
 	cases []switchCase
@@ -549,33 +547,31 @@ type switchCase struct {
 // cases via [SwitchBuilder.AddCase] and an optional default via
 // [SwitchBuilder.WithDefault], then commit by calling
 // [SwitchBuilder.AddToBuilder].
-func (wb *Builder) AddSwitch(source *ExecutorBinding) *SwitchBuilder {
+func (wb *Builder) AddSwitch(source ExecutorBinding) *SwitchBuilder {
 	return &SwitchBuilder{
 		source:          source,
+		sourceSet:       true,
 		targetIndexByID: map[string]int{},
 	}
 }
 
 // AddCase adds a case branch matching messages of type T satisfying the
 // predicate. The matched message is routed to all bindings in targets.
-func (s *SwitchBuilder) AddCase(predicate func(msg any) bool, targets ...*ExecutorBinding) *SwitchBuilder {
+func (s *SwitchBuilder) AddCase(predicate func(msg any) bool, targets ...ExecutorBinding) *SwitchBuilder {
 	indices := s.collectTargets(targets)
 	s.cases = append(s.cases, switchCase{predicate: predicate, indices: indices})
 	return s
 }
 
 // WithDefault sets the targets to dispatch to when no case matches.
-func (s *SwitchBuilder) WithDefault(targets ...*ExecutorBinding) *SwitchBuilder {
+func (s *SwitchBuilder) WithDefault(targets ...ExecutorBinding) *SwitchBuilder {
 	s.defaultIndices = s.collectTargets(targets)
 	return s
 }
 
-func (s *SwitchBuilder) collectTargets(targets []*ExecutorBinding) []int {
+func (s *SwitchBuilder) collectTargets(targets []ExecutorBinding) []int {
 	out := make([]int, 0, len(targets))
 	for _, t := range targets {
-		if t == nil {
-			continue
-		}
 		idx, ok := s.targetIndexByID[t.ID]
 		if !ok {
 			idx = len(s.targets)
@@ -593,7 +589,7 @@ func (s *SwitchBuilder) AddToBuilder(wb *Builder) *Builder {
 	if wb.err != nil {
 		return wb
 	}
-	if s.source == nil {
+	if !s.sourceSet {
 		wb.err = fmt.Errorf("switch source is required")
 		return wb
 	}
@@ -623,5 +619,5 @@ func (s *SwitchBuilder) AddToBuilder(wb *Builder) *Builder {
 			}
 		}
 	}
-	return wb.AddFanOutEdge(s.source, s.targets, WithAssigner(assigner))
+	return wb.AddFanOutEdge(s.source, s.targets, WithEdgeAssigner(assigner))
 }

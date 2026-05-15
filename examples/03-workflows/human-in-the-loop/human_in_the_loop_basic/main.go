@@ -23,7 +23,7 @@ func main() {
 		Response: reflect.TypeFor[bool](),
 	}
 	approval := workflow.BindRequestPort(approvalPort)
-	finalize := workflow.BindFunc("FinalizeExecutor", true, func(approved bool) string {
+	finalize := workflow.BindFunc("FinalizeExecutor", func(approved bool) string {
 		if approved {
 			return "Request approved by the human reviewer"
 		}

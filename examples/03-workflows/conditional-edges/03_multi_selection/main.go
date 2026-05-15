@@ -36,18 +36,18 @@ type AnalysisResult struct {
 }
 
 func main() {
-	analyze := workflow.BindFunc("EmailAnalysisExecutor", true, analyzeEmail)
-	spam := workflow.BindFunc("HandleSpamExecutor", true, func(result AnalysisResult) string { return "Email marked as spam: " + result.Reason })
-	assistant := workflow.BindFunc("EmailAssistantExecutor", true, func(result AnalysisResult) string {
+	analyze := workflow.BindFunc("EmailAnalysisExecutor", analyzeEmail)
+	spam := workflow.BindFunc("HandleSpamExecutor", func(result AnalysisResult) string { return "Email marked as spam: " + result.Reason })
+	assistant := workflow.BindFunc("EmailAssistantExecutor", func(result AnalysisResult) string {
 		return "Draft response for email length " + fmt.Sprint(result.EmailLength)
 	})
-	summary := workflow.BindFunc("EmailSummaryExecutor", true, func(result AnalysisResult) string { return "Summary: " + firstWords(result.Email, 12) })
-	uncertain := workflow.BindFunc("HandleUncertainExecutor", true, func(result AnalysisResult) string { return "Email queued for review: " + result.Reason })
-	send := workflow.BindFunc("SendEmailExecutor", true, func(response string) string { return "Email sent: " + response })
-	log := workflow.BindFunc("DatabaseAccessExecutor", true, func(value string) string { return "Logged: " + value })
+	summary := workflow.BindFunc("EmailSummaryExecutor", func(result AnalysisResult) string { return "Summary: " + firstWords(result.Email, 12) })
+	uncertain := workflow.BindFunc("HandleUncertainExecutor", func(result AnalysisResult) string { return "Email queued for review: " + result.Reason })
+	send := workflow.BindFunc("SendEmailExecutor", func(response string) string { return "Email sent: " + response })
+	log := workflow.BindFunc("DatabaseAccessExecutor", func(value string) string { return "Logged: " + value })
 
 	b := workflow.NewBuilder(analyze)
-	b.AddFanOutEdge(analyze, []*workflow.ExecutorBinding{spam, assistant, summary, uncertain}, workflow.WithAssigner(routeAnalysis)).
+	b.AddFanOutEdge(analyze, []workflow.ExecutorBinding{spam, assistant, summary, uncertain}, workflow.WithEdgeAssigner(routeAnalysis)).
 		AddEdge(assistant, send).
 		AddEdge(summary, log).
 		AddDirectEdge(analyze, log, false, func(msg any) bool { return msg.(AnalysisResult).EmailLength <= longEmailThreshold }).
