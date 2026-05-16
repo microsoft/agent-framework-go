@@ -103,6 +103,13 @@ func updatesToAGUIEvents(
 				msgID = aguiEvents.GenerateMessageID()
 			}
 
+			// Tool result events must not share the same message ID as the preceding
+			// text/tool-call message to avoid AG-UI message ID collisions (#5800).
+			toolResultMsgID := msgID
+			if hasFunctionResultContent(update.Contents) {
+				toolResultMsgID = aguiEvents.GenerateMessageID()
+			}
+
 			if currentReasoningMsgID != "" && currentReasoningMsgID != msgID {
 				if !yield(aguiEvents.NewReasoningMessageEndEvent(currentReasoningMsgID), nil) {
 					return
@@ -163,7 +170,11 @@ func updatesToAGUIEvents(
 					}
 					continue
 				}
-				events, convErr := contentToEvents(c, msgID)
+				contentMsgID := msgID
+				if _, ok := c.(*message.FunctionResultContent); ok {
+					contentMsgID = toolResultMsgID
+				}
+				events, convErr := contentToEvents(c, contentMsgID)
 				if convErr != nil {
 					if !yield(aguiEvents.NewRunErrorEvent(convErr.Error(), aguiEvents.WithRunID(runID)), convErr) {
 						return
@@ -190,6 +201,15 @@ func updatesToAGUIEvents(
 		}
 		yield(aguiEvents.NewRunFinishedEvent(threadID, runID), nil)
 	}
+}
+
+func hasFunctionResultContent(contents message.Contents) bool {
+	for _, c := range contents {
+		if _, ok := c.(*message.FunctionResultContent); ok {
+			return true
+		}
+	}
+	return false
 }
 
 func hasTextLikeContent(contents message.Contents) bool {

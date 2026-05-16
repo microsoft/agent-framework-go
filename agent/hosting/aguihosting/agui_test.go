@@ -288,3 +288,71 @@ func TestHandler_UnknownDataContent_UsesCurrentMessageLifecycle(t *testing.T) {
 		t.Fatalf("expected fallback text to use current message id/content, got %q", content)
 	}
 }
+
+// TestHandler_ToolResult_HasDistinctMessageID verifies that tool result events get a
+// distinct message ID from the preceding text/tool-call message to avoid AG-UI
+// message ID collisions (mirrors .NET fix in microsoft/agent-framework#5800).
+func TestHandler_ToolResult_HasDistinctMessageID(t *testing.T) {
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
+				MessageID: "msg-stream-1",
+				Role:      message.RoleAssistant,
+				Contents:  message.Contents{&message.TextContent{Text: "Checking weather..."}},
+			}, nil)
+			yield(&agent.ResponseUpdate{
+				MessageID: "msg-stream-1",
+				Role:      message.RoleAssistant,
+				Contents:  message.Contents{&message.FunctionCallContent{CallID: "call-1", Name: "get_weather", Arguments: `{}`}},
+			}, nil)
+			yield(&agent.ResponseUpdate{
+				MessageID: "msg-stream-1",
+				Role:      message.RoleTool,
+				Contents:  message.Contents{&message.FunctionResultContent{CallID: "call-1", Result: "72F and sunny"}},
+			}, nil)
+		}
+	})
+	h := aguihosting.NewJSONHTTPHandler(aguihosting.HandlerConfig{Agent: a})
+
+	body := `{"threadId":"thread-1","runId":"run-1","messages":[{"id":"u1","role":"user","content":"what is the weather?"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	content := rr.Body.String()
+
+	// Tool call result must be present
+	if !strings.Contains(content, `"toolCallId":"call-1"`) {
+		t.Fatalf("expected tool call result event with toolCallId=call-1, got %q", content)
+	}
+
+	// Extract the tool result messageId and the text message start messageId.
+	// They must differ so that the tool result does not collide with the text message.
+	var toolResultMsgID, textStartMsgID string
+	for _, line := range strings.Split(content, "\n") {
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		var evt map[string]any
+		if err := json.Unmarshal([]byte(data), &evt); err != nil {
+			continue
+		}
+		switch evt["type"] {
+		case "TEXT_MESSAGE_START":
+			textStartMsgID, _ = evt["messageId"].(string)
+		case "TOOL_CALL_RESULT":
+			toolResultMsgID, _ = evt["messageId"].(string)
+		}
+	}
+
+	if textStartMsgID == "" {
+		t.Fatal("expected TEXT_MESSAGE_START event")
+	}
+	if toolResultMsgID == "" {
+		t.Fatal("expected TOOL_CALL_RESULT event")
+	}
+	if textStartMsgID == toolResultMsgID {
+		t.Fatalf("tool result message ID %q must differ from text message ID %q", toolResultMsgID, textStartMsgID)
+	}
+}
