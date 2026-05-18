@@ -75,9 +75,8 @@ type pendingReq struct {
 // [agent.Session] under [sessionStateKey].
 //
 // The streaming run is an in-memory object and is not portable across
-// process boundaries; sessions that are persisted via
-// [agent.Agent.MarshalSession] retain the request-tracking metadata but
-// drop the live run.
+// process boundaries; sessions that are persisted via encoding/json retain the
+// request-tracking metadata but drop the live run.
 type providerState struct {
 	stream  *inproc.StreamingRun
 	pending map[string]pendingReq // keyed by request content ID (e.g. CallID/RequestID)
@@ -244,7 +243,7 @@ func New(wf *workflow.Workflow, cfg Config) (*agent.Agent, error) {
 // streaming workflow run on first use.
 func loadOrInitState(
 	ctx context.Context,
-	sess agent.Session,
+	sess *agent.Session,
 	env *inproc.ExecutionEnvironment,
 	wf *workflow.Workflow,
 ) (*providerState, error) {
@@ -264,7 +263,7 @@ func loadOrInitState(
 	return &providerState{stream: stream, pending: make(map[string]pendingReq)}, nil
 }
 
-func saveState(sess agent.Session, state *providerState) {
+func saveState(sess *agent.Session, state *providerState) {
 	if sess == nil || state == nil {
 		return
 	}

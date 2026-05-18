@@ -45,7 +45,7 @@ func (o toolOpt) Value() any                     { return o.Tool }
 func (o structuredOutputOpt) Value() any         { return o.any }
 func (o serviceIDOpt) Value() any                { return string(o) }
 
-type sessionOpt struct{ Session }
+type sessionOpt struct{ *Session }
 
 func (o sessionOpt) Value() any { return o.Session }
 
@@ -123,7 +123,7 @@ func WithResponseFormat(format ResponseFormat) Option {
 }
 
 // WithSession sets the session to use during the agent run.
-func WithSession(session Session) Option {
+func WithSession(session *Session) Option {
 	return sessionOpt{session}
 }
 

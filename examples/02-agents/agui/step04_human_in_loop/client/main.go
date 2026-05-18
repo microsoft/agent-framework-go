@@ -55,7 +55,7 @@ func main() {
 	}
 }
 
-func runWithApprovals(ctx context.Context, a *agent.Agent, session agent.Session, input *message.Message) error {
+func runWithApprovals(ctx context.Context, a *agent.Agent, session *agent.Session, input *message.Message) error {
 	current := input
 	for {
 		resp, err := a.RunMessage(ctx, current, agent.WithSession(session)).Collect()

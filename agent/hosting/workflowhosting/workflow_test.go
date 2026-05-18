@@ -1414,7 +1414,7 @@ func TestHostedAgent_BindingSupportsConcurrentSharedExecution(t *testing.T) {
 }
 
 func TestHostedAgent_ResetSignal_StartsNewSession(t *testing.T) {
-	var sessions []agent.Session
+	var sessions []*agent.Session
 	createSessions := 0
 	run := func(_ context.Context, _ []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
@@ -1434,7 +1434,7 @@ func TestHostedAgent_ResetSignal_StartsNewSession(t *testing.T) {
 		agent.ProviderConfig{
 			ProviderName: "reset-session",
 			Run:          run,
-			CreateSession: func(_ context.Context, _ agent.Session, _ ...agent.Option) error {
+			CreateSession: func(_ context.Context, _ *agent.Session, _ ...agent.Option) error {
 				createSessions++
 				return nil
 			},

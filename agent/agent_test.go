@@ -32,7 +32,7 @@ type prependMiddleware struct {
 	prependMessages []*message.Message
 	instructions    string
 	runCalls        int
-	lastSession     agent.Session
+	lastSession     *agent.Session
 }
 
 func (m *prependMiddleware) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
@@ -115,89 +115,6 @@ func newGenericTestAgent(runFn func(context.Context, []*message.Message, ...agen
 		Middlewares: middlewares,
 		RunOptions:  runOptions,
 	})
-}
-
-func TestAgent_UnmarshalSession_CallsAfterUnmarshalSession(t *testing.T) {
-	called := false
-	a := agent.New(agent.ProviderConfig{
-		Run: func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
-			return func(yield func(*agent.ResponseUpdate, error) bool) {}
-		},
-		AfterUnmarshalSession: func(_ context.Context, session agent.Session, opts ...agent.Option) error {
-			called = true
-			serviceID, ok := agent.GetOption(opts, agent.WithServiceID)
-			if !ok || serviceID != "hook-option" {
-				t.Fatalf("expected hook option service id hook-option, got %q (present=%v)", serviceID, ok)
-			}
-			if got := session.ServiceID(); got != "service-123" {
-				t.Fatalf("session.ServiceID() = %q, want %q", got, "service-123")
-			}
-
-			var value string
-			ok, err := session.Get("key", &value)
-			if err != nil || !ok || value != "value" {
-				t.Fatalf("session.Get() = ok %v, value %q, err %v", ok, value, err)
-			}
-
-			session.Set("provider", "configured")
-			return nil
-		},
-	}, agent.Config{})
-
-	session, err := a.UnmarshalSession(t.Context(), []byte(`{"ServiceID":"service-123","State":{"key":"value"}}`), agent.WithServiceID("hook-option"))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !called {
-		t.Fatal("expected provider AfterUnmarshalSession to be called")
-	}
-
-	var providerValue string
-	if ok, err := session.Get("provider", &providerValue); err != nil || !ok || providerValue != "configured" {
-		t.Fatalf("session.Get(provider) = ok %v, value %q, err %v", ok, providerValue, err)
-	}
-}
-
-func TestAgent_MarshalSession_CallsBeforeMarshalSession(t *testing.T) {
-	called := false
-	a := agent.New(agent.ProviderConfig{
-		Run: func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
-			return func(yield func(*agent.ResponseUpdate, error) bool) {}
-		},
-		BeforeMarshalSession: func(_ context.Context, session agent.Session, opts ...agent.Option) error {
-			called = true
-			serviceID, ok := agent.GetOption(opts, agent.WithServiceID)
-			if !ok || serviceID != "hook-option" {
-				t.Fatalf("expected hook option service id hook-option, got %q (present=%v)", serviceID, ok)
-			}
-			session.Set("provider", "configured")
-			return nil
-		},
-	}, agent.Config{})
-
-	session, err := a.CreateSession(t.Context(), agent.WithServiceID("service-123"))
-	if err != nil {
-		t.Fatalf("unexpected create session error: %v", err)
-	}
-	data, err := a.MarshalSession(t.Context(), session, agent.WithServiceID("hook-option"))
-	if err != nil {
-		t.Fatalf("unexpected marshal error: %v", err)
-	}
-	if !called {
-		t.Fatal("expected provider BeforeMarshalSession to be called")
-	}
-
-	restored, err := a.UnmarshalSession(t.Context(), data)
-	if err != nil {
-		t.Fatalf("unexpected unmarshal error: %v", err)
-	}
-	if got := restored.ServiceID(); got != "service-123" {
-		t.Fatalf("restored.ServiceID() = %q, want %q", got, "service-123")
-	}
-	var providerValue string
-	if ok, err := restored.Get("provider", &providerValue); err != nil || !ok || providerValue != "configured" {
-		t.Fatalf("restored.Get(provider) = ok %v, value %q, err %v", ok, providerValue, err)
-	}
 }
 
 func TestAgent_RunText(t *testing.T) {

@@ -31,11 +31,7 @@ type ProviderConfig struct {
 	Unmarshal func(format ResponseFormat, data []byte, v any) error
 
 	// CreateSession configures a provider-specific session.
-	CreateSession func(ctx context.Context, session Session, options ...Option) error
-	// BeforeMarshalSession configures a provider-specific session before serialization.
-	BeforeMarshalSession func(ctx context.Context, session Session, options ...Option) error
-	// AfterUnmarshalSession configures a deserialized provider-specific session.
-	AfterUnmarshalSession func(ctx context.Context, session Session, options ...Option) error
+	CreateSession func(ctx context.Context, session *Session, options ...Option) error
 }
 
 // Config configures an Agent instance.
@@ -195,40 +191,12 @@ func (a *Agent) ProviderName() string {
 }
 
 // CreateSession creates a session for this agent.
-func (a *Agent) CreateSession(ctx context.Context, options ...Option) (Session, error) {
-	session := &session{}
+func (a *Agent) CreateSession(ctx context.Context, options ...Option) (*Session, error) {
+	session := &Session{}
 	serviceID, _ := GetOption(options, WithServiceID)
 	session.SetServiceID(serviceID)
 	if a.provider.CreateSession != nil {
 		if err := a.provider.CreateSession(ctx, session, options...); err != nil {
-			return nil, err
-		}
-	}
-	return session, nil
-}
-
-// MarshalSession serializes a session created for this agent.
-//
-// Any provided options are forwarded to the provider's BeforeMarshalSession hook.
-func (a *Agent) MarshalSession(ctx context.Context, session Session, options ...Option) ([]byte, error) {
-	if a.provider.BeforeMarshalSession != nil {
-		if err := a.provider.BeforeMarshalSession(ctx, session, options...); err != nil {
-			return nil, err
-		}
-	}
-	return marshalSession(session)
-}
-
-// UnmarshalSession deserializes a session for this agent.
-//
-// Any provided options are forwarded to the provider's AfterUnmarshalSession hook.
-func (a *Agent) UnmarshalSession(ctx context.Context, data []byte, options ...Option) (Session, error) {
-	session, err := unmarshalSession(data)
-	if err != nil {
-		return nil, err
-	}
-	if a.provider.AfterUnmarshalSession != nil {
-		if err := a.provider.AfterUnmarshalSession(ctx, session, options...); err != nil {
 			return nil, err
 		}
 	}
@@ -405,7 +373,7 @@ func withoutContinuationToken(options []Option) []Option {
 	})
 }
 
-func (a *Agent) historyProviderForRun(session Session, continuationToken string, noSession bool) *HistoryProvider {
+func (a *Agent) historyProviderForRun(session *Session, continuationToken string, noSession bool) *HistoryProvider {
 	if a.historyProvider == nil || continuationToken != "" || session == nil {
 		return nil
 	}
@@ -425,7 +393,7 @@ func (a *Agent) historyProviderForRun(session Session, continuationToken string,
 	return a.historyProvider
 }
 
-func (a *Agent) historyProviderForContinuationStore(session Session, noSession bool) *HistoryProvider {
+func (a *Agent) historyProviderForContinuationStore(session *Session, noSession bool) *HistoryProvider {
 	if a.historyProvider == nil || session == nil {
 		return nil
 	}
@@ -441,7 +409,7 @@ func (a *Agent) historyProviderForContinuationStore(session Session, noSession b
 	return a.historyProvider
 }
 
-func (a *Agent) shouldStoreHistoryProvider(provider *HistoryProvider, session Session) bool {
+func (a *Agent) shouldStoreHistoryProvider(provider *HistoryProvider, session *Session) bool {
 	if provider == nil {
 		return false
 	}
@@ -454,7 +422,7 @@ func (a *Agent) shouldStoreHistoryProvider(provider *HistoryProvider, session Se
 	return session != nil && session.ServiceID() == ""
 }
 
-func (a *Agent) handleHistoryProviderConflict(ctx context.Context, provider *HistoryProvider, session Session) (bool, error) {
+func (a *Agent) handleHistoryProviderConflict(ctx context.Context, provider *HistoryProvider, session *Session) (bool, error) {
 	if provider == nil || !a.hasConfiguredHistory || session == nil || session.ServiceID() == "" {
 		return true, nil
 	}

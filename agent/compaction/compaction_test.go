@@ -4,6 +4,7 @@ package compaction_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"testing"
@@ -390,13 +391,12 @@ func TestNewProvider_CompactsAndPersistsIndex(t *testing.T) {
 	var state struct {
 		MessageGroups []*compaction.MessageGroup `json:"messagegroups,omitempty"`
 	}
-	a := agenttest.New(nil)
-	data, err := a.MarshalSession(t.Context(), session)
+	data, err := json.Marshal(session)
 	if err != nil {
 		t.Fatalf("unexpected marshal error: %v", err)
 	}
-	restored, err := a.UnmarshalSession(t.Context(), data)
-	if err != nil {
+	restored := agenttest.CreateSession()
+	if err := json.Unmarshal(data, restored); err != nil {
 		t.Fatalf("unexpected unmarshal error: %v", err)
 	}
 	if ok, err := restored.Get("compaction-test", &state); err != nil || !ok {

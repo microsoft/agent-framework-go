@@ -122,20 +122,16 @@ func (a *testagent) run(ctx context.Context, messages []*message.Message, opts .
 	}
 }
 
-func (a *testagent) createSession(_ context.Context, _ agent.Session, opts ...agent.Option) error {
+func (a *testagent) createSession(_ context.Context, _ *agent.Session, opts ...agent.Option) error {
 	return nil
 }
 
-func CreateSession(options ...agent.Option) agent.Session {
+func CreateSession(options ...agent.Option) *agent.Session {
 	session, err := New(nil).CreateSession(context.Background(), options...)
 	if err != nil {
 		panic(err)
 	}
 	return session
-}
-
-func MarshalSession(session agent.Session) ([]byte, error) {
-	return New(nil).MarshalSession(context.Background(), session)
 }
 
 // Middleware is a test implementation of the Middleware interface

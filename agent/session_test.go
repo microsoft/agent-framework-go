@@ -4,7 +4,6 @@ package agent_test
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -149,45 +148,77 @@ func TestSessionState_Get_InvalidDestinationReturnsError(t *testing.T) {
 
 func TestSession_MarshalJSON_EmptyState(t *testing.T) {
 	session := agenttest.CreateSession()
-	data, err := agenttest.New(nil).MarshalSession(t.Context(), session)
+	data, err := json.Marshal(session)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(string(data), `"State":{}`) {
+	var payload struct {
+		State map[string]json.RawMessage
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("unexpected unmarshal error: %v", err)
+	}
+	if len(payload.State) != 0 {
 		t.Errorf("expected marshaled session to contain empty State, got %q", string(data))
 	}
 }
 
-func TestSession_MarshalJSON_DirectMarshalReturnsError(t *testing.T) {
+func TestSession_MarshalJSON_DirectMarshalIncludesState(t *testing.T) {
 	session := agenttest.CreateSession()
-	if _, err := json.Marshal(session); err == nil {
-		t.Fatal("expected direct JSON marshaling to fail")
-	}
-}
+	session.Set("key1", "value1")
 
-func TestSession_UnmarshalJSON_DirectUnmarshalReturnsError(t *testing.T) {
-	var session agent.Session
-	if err := json.Unmarshal([]byte(`{"State":{"key1":"value1"}}`), &session); err == nil {
-		t.Fatal("expected direct JSON unmarshaling to fail")
-	}
-}
-
-func TestSession_UnmarshalJSON_IntoCreatedSessionReturnsGuardError(t *testing.T) {
-	session := agenttest.CreateSession()
-	err := json.Unmarshal([]byte(`{"State":{"key1":"value1"}}`), session)
-	if err == nil {
-		t.Fatal("expected direct JSON unmarshaling to fail")
-	}
-	if !strings.Contains(err.Error(), "sessions must be unmarshaled with Agent.UnmarshalSession") {
-		t.Fatalf("expected guard error, got %v", err)
-	}
-}
-
-func TestSession_UnmarshalSession_WithStateValues(t *testing.T) {
-	session, err := agenttest.New(nil).UnmarshalSession(t.Context(), []byte(`{"State":{"key1":"value1","key2":42}}`))
+	data, err := json.Marshal(session)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	if got, want := string(data), `{"State":{"key1":"value1"},"ServiceID":""}`; got != want {
+		t.Fatalf("json.Marshal(session) = %s, want %s", got, want)
+	}
+}
+
+func TestSession_UnmarshalJSON_IntoCreatedSession(t *testing.T) {
+	session := agenttest.CreateSession()
+	err := json.Unmarshal([]byte(`{"State":{"key1":"value1"}}`), session)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var value string
+	if ok, err := session.Get("key1", &value); err != nil || !ok || value != "value1" {
+		t.Fatalf("session.Get(key1) = ok %v, value %q, err %v", ok, value, err)
+	}
+}
+
+func TestSession_UnmarshalJSON_IntoZeroValueSession(t *testing.T) {
+	var session agent.Session
+	err := json.Unmarshal([]byte(`{"ServiceID":"service-123","State":{"key1":"value1"}}`), &session)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := session.ServiceID(); got != "service-123" {
+		t.Fatalf("session.ServiceID() = %q, want %q", got, "service-123")
+	}
+
+	var value string
+	if ok, err := session.Get("key1", &value); err != nil || !ok || value != "value1" {
+		t.Fatalf("session.Get(key1) = ok %v, value %q, err %v", ok, value, err)
+	}
+}
+
+func TestSession_MarshalJSON_ZeroValueSession(t *testing.T) {
+	var session agent.Session
+	data, err := json.Marshal(session)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got, want := string(data), `{"State":{},"ServiceID":""}`; got != want {
+		t.Fatalf("json.Marshal(session) = %s, want %s", got, want)
+	}
+}
+
+func TestSession_UnmarshalJSON_WithStateValues(t *testing.T) {
+	session := agenttest.CreateSession()
+	mustUnmarshalJSON(t, []byte(`{"State":{"key1":"value1","key2":42}}`), session)
 
 	var s string
 	if ok, err := session.Get("key1", &s); err != nil || !ok || s != "value1" {
@@ -200,10 +231,8 @@ func TestSession_UnmarshalSession_WithStateValues(t *testing.T) {
 }
 
 func TestSessionState_Get_LazyDecodesAndCaches(t *testing.T) {
-	session, err := agenttest.New(nil).UnmarshalSession(t.Context(), []byte(`{"State":{"person":{"Name":"Ada"}}}`))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	session := agenttest.CreateSession()
+	mustUnmarshalJSON(t, []byte(`{"State":{"person":{"Name":"Ada"}}}`), session)
 
 	var person person
 	ok, err := session.Get("person", &person)
@@ -216,10 +245,8 @@ func TestSessionState_Get_LazyDecodesAndCaches(t *testing.T) {
 }
 
 func TestSessionState_Get_LazyDecodedValueTypeMismatchReturnsError(t *testing.T) {
-	session, err := agenttest.New(nil).UnmarshalSession(t.Context(), []byte(`{"State":{"person":{"Name":"Ada"}}}`))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	session := agenttest.CreateSession()
+	mustUnmarshalJSON(t, []byte(`{"State":{"person":{"Name":"Ada"}}}`), session)
 
 	var p person
 	if ok, err := session.Get("person", &p); err != nil || !ok {
@@ -236,5 +263,12 @@ func TestSessionState_Get_LazyDecodedValueTypeMismatchReturnsError(t *testing.T)
 	}
 	if err != nil {
 		t.Fatalf("expected no error on type mismatch, got %v", err)
+	}
+}
+
+func mustUnmarshalJSON(t *testing.T, data []byte, session *agent.Session) {
+	t.Helper()
+	if err := json.Unmarshal(data, session); err != nil {
+		t.Fatalf("unexpected unmarshal error: %v", err)
 	}
 }

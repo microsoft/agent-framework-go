@@ -86,7 +86,7 @@ You remind users of upcoming calendar events when the user interacts with you.`,
 	}
 
 	// Serialize the session. It contains the chat history plus state serialized by the context providers.
-	serializedSession, err := a.MarshalSession(ctx, session)
+	serializedSession, err := json.Marshal(session)
 	if err != nil {
 		demo.Panic(err)
 	}
@@ -97,10 +97,11 @@ You remind users of upcoming calendar events when the user interacts with you.`,
 	fmt.Println(prettySession.String())
 
 	// The serialized session can be stored long term in a persistent store. Here we deserialize it and continue.
-	session, err = a.UnmarshalSession(ctx, serializedSession)
-	if err != nil {
+	var resumedSession agent.Session
+	if err := json.Unmarshal(serializedSession, &resumedSession); err != nil {
 		demo.Panic(err)
 	}
+	session = &resumedSession
 
 	resp, err := a.RunText(ctx, "Considering my appointments, can you create a plan for my day that plans out when I should complete the items on my todo list?", agent.WithSession(session)).Collect()
 	demo.Response(resp, err)
@@ -154,7 +155,7 @@ func newTodoListContextProvider() *agent.ContextProvider {
 	}
 }
 
-func getTodoListState(session agent.Session) todoListState {
+func getTodoListState(session *agent.Session) todoListState {
 	if session == nil {
 		return todoListState{}
 	}
@@ -163,7 +164,7 @@ func getTodoListState(session agent.Session) todoListState {
 	return state
 }
 
-func setTodoListState(session agent.Session, state todoListState) {
+func setTodoListState(session *agent.Session, state todoListState) {
 	if session != nil {
 		session.Set(todoListSourceID, state)
 	}

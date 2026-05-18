@@ -195,7 +195,7 @@ func newTestAgent(transport a2aclient.Transport, config agent.Config) *agent.Age
 	return a2a1.New(client, a2a1.Config{Config: config})
 }
 
-func latestTaskID(session agent.Session) string {
+func latestTaskID(session *agent.Session) string {
 	taskIDs := a2a1.TaskIDsFromSession(session)
 	if len(taskIDs) == 0 {
 		return ""

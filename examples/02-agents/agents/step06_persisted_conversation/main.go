@@ -5,6 +5,7 @@ package main
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 
@@ -60,7 +61,7 @@ func main() {
 	demo.Response(resp, err)
 
 	// Serialize the session state so it can be stored for later use.
-	serializedSession, err := a.MarshalSession(ctx, session)
+	serializedSession, err := json.Marshal(session)
 	if err != nil {
 		demo.Panic(err)
 	}
@@ -82,12 +83,12 @@ func main() {
 	}
 
 	// Deserialize the session state after loading from storage.
-	resumedSession, err := a.UnmarshalSession(ctx, loadedData)
-	if err != nil {
+	var resumedSession agent.Session
+	if err := json.Unmarshal(loadedData, &resumedSession); err != nil {
 		demo.Panic(err)
 	}
 
 	// Run the agent again with the resumed session.
-	resp, err = a.RunText(ctx, "Now tell the same joke in the voice of a pirate, and add some emojis to the joke.", agent.WithSession(resumedSession)).Collect()
+	resp, err = a.RunText(ctx, "Now tell the same joke in the voice of a pirate, and add some emojis to the joke.", agent.WithSession(&resumedSession)).Collect()
 	demo.Response(resp, err)
 }

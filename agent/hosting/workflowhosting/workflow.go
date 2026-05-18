@@ -157,7 +157,7 @@ type hostExecutor struct {
 	agent *agent.Agent
 	cfg   Config
 
-	session agent.Session
+	session *agent.Session
 
 	messageState    *messageworkflow.MessageState
 	approvalHandler *contentexthandler.Handler[*message.ToolApprovalRequestContent, *message.ToolApprovalResponseContent]
@@ -223,7 +223,7 @@ func (h *hostExecutor) executor() *workflow.Executor {
 func (h *hostExecutor) onCheckpoint(wctx *workflow.Context) error {
 	state := agentHostState{CurrentTurnEmitEvents: h.turnEmitEvents}
 	if h.session != nil {
-		data, err := h.agent.MarshalSession(wctx, h.session)
+		data, err := json.Marshal(h.session)
 		if err != nil {
 			return err
 		}
@@ -261,8 +261,11 @@ func (h *hostExecutor) onCheckpointRestored(wctx *workflow.Context) error {
 	if state != nil {
 		h.turnEmitEvents = state.CurrentTurnEmitEvents
 		if state.ThreadState != nil {
-			session, err := h.agent.UnmarshalSession(wctx, state.ThreadState)
+			session, err := h.agent.CreateSession(wctx)
 			if err != nil {
+				return err
+			}
+			if err := json.Unmarshal(state.ThreadState, session); err != nil {
 				return err
 			}
 			h.session = session
@@ -624,7 +627,7 @@ func (h *hostExecutor) dispatchRequests(wctx *workflow.Context, msgs []*message.
 	return nil
 }
 
-func (h *hostExecutor) ensureSession(ctx context.Context) (agent.Session, error) {
+func (h *hostExecutor) ensureSession(ctx context.Context) (*agent.Session, error) {
 	if h.session != nil {
 		return h.session, nil
 	}

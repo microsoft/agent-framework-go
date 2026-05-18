@@ -87,7 +87,7 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 		stream, _ := agent.GetOption(options, agent.Stream)
 
 		// Get session for conversation ID management
-		var session agent.Session
+		var session *agent.Session
 		var keepConversationID bool // true if we should keep the conversation ID unchanged (it's a "conv_" ID)
 		if t, ok := agent.GetOption(options, agent.WithSession); ok && t != nil {
 			session = t

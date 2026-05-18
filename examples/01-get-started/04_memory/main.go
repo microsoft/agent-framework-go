@@ -86,7 +86,7 @@ type providerState struct {
 	UserName string `json:"user_name,omitempty"`
 }
 
-func getProviderState(session agent.Session) providerState {
+func getProviderState(session *agent.Session) providerState {
 	if session == nil {
 		return providerState{}
 	}

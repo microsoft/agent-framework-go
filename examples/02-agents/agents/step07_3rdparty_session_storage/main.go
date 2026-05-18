@@ -74,7 +74,7 @@ func main() {
 	// Serialize the session state, so it can be stored for later use.
 	// The disk store holds the chat history.
 	// The serialized session only contains the message-store ID.
-	serializedSession, err := a.MarshalSession(ctx, session)
+	serializedSession, err := json.Marshal(session)
 	if err != nil {
 		demo.Panic(err)
 	}
@@ -84,13 +84,13 @@ func main() {
 	// The serialized session can now be saved and loaded again later.
 
 	// Deserialize the session state after loading from storage.
-	resumedSession, err := a.UnmarshalSession(ctx, serializedSession)
-	if err != nil {
+	var resumedSession agent.Session
+	if err := json.Unmarshal(serializedSession, &resumedSession); err != nil {
 		demo.Panic(err)
 	}
 
 	// Run the agent with the session that stores conversation history in the disk store a second time.
-	resp, err = a.RunText(ctx, "Now tell the same joke in the voice of a pirate, and add some emojis to the joke.", agent.WithSession(resumedSession)).Collect()
+	resp, err = a.RunText(ctx, "Now tell the same joke in the voice of a pirate, and add some emojis to the joke.", agent.WithSession(&resumedSession)).Collect()
 	demo.Response(resp, err)
 }
 
@@ -107,7 +107,7 @@ func newFSHistoryProvider(dir string) *agent.HistoryProvider {
 	}
 }
 
-func (d *fsMessageStore) getFiles(session agent.Session) []string {
+func (d *fsMessageStore) getFiles(session *agent.Session) []string {
 	if session == nil {
 		return nil
 	}
@@ -119,7 +119,7 @@ func (d *fsMessageStore) getFiles(session agent.Session) []string {
 	return files
 }
 
-func (d *fsMessageStore) loadMessages(session agent.Session) ([]*message.Message, error) {
+func (d *fsMessageStore) loadMessages(session *agent.Session) ([]*message.Message, error) {
 	var msgs []*message.Message
 	for _, file := range d.getFiles(session) {
 		data, err := os.ReadFile(filepath.Join(d.Dir, file))
