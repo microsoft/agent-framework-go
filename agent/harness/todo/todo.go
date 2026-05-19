@@ -36,7 +36,7 @@ When a user changes the topic or changes their mind, ensure that you update the 
 
 Use these tools to manage your tasks:
 - Use TodoList_Add to break down complex work into trackable items (supports adding one or many at once).
-- Use TodoList_Complete to mark items as done when finished (supports one or many at once).
+- Use TodoList_Complete to mark items as done when finished (supports one or many at once). Include a reason describing how the items were completed.
 - Use TodoList_GetRemaining to check what work is still pending.
 - Use TodoList_GetAll to review the full list including completed items.
 - Use TodoList_Remove to remove items that are no longer needed (supports one or many at once).`
@@ -53,6 +53,13 @@ type Item struct {
 type ItemInput struct {
 	Title       string `json:"title"`
 	Description string `json:"description,omitempty"`
+}
+
+// CompleteInput is the input structure for completing a single todo item.
+// It carries the item ID and a reason describing how or why the item was completed.
+type CompleteInput struct {
+	ID     int    `json:"id"`
+	Reason string `json:"reason"`
 }
 
 type state struct {
@@ -235,16 +242,16 @@ func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
 	completeTool := functool.MustNew(
 		functool.Config{
 			Name:        "TodoList_Complete",
-			Description: "Mark one or more todo items as complete by their IDs. Returns the number of items that were found and marked complete.",
+			Description: "Mark one or more todo items as complete. Each entry has an ID and a reason describing how/why the item was completed. Returns the number of items that were found and marked complete.",
 		},
-		func(ctx tool.Context, ids []int) (int, error) {
+		func(ctx tool.Context, items []CompleteInput) (int, error) {
 			mu := p.getSessionLock(opts)
 			mu.Lock()
 			defer mu.Unlock()
 			st := p.loadState(opts)
-			idSet := make(map[int]struct{}, len(ids))
-			for _, id := range ids {
-				idSet[id] = struct{}{}
+			idSet := make(map[int]struct{}, len(items))
+			for _, item := range items {
+				idSet[item.ID] = struct{}{}
 			}
 			completed := 0
 			for i := range st.Items {
