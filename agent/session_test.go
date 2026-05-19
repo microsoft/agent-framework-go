@@ -171,8 +171,19 @@ func TestSession_MarshalJSON_DirectMarshalIncludesState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got, want := string(data), `{"State":{"key1":"value1"},"ServiceID":""}`; got != want {
-		t.Fatalf("json.Marshal(session) = %s, want %s", got, want)
+
+	var payload struct {
+		ServiceID string
+		State     map[string]string
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("unexpected unmarshal error: %v", err)
+	}
+	if payload.ServiceID != "" {
+		t.Fatalf("ServiceID = %q, want empty string", payload.ServiceID)
+	}
+	if len(payload.State) != 1 || payload.State["key1"] != "value1" {
+		t.Fatalf("State = %#v, want map[string]string{\"key1\": \"value1\"}", payload.State)
 	}
 }
 

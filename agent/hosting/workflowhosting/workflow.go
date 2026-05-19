@@ -261,10 +261,7 @@ func (h *hostExecutor) onCheckpointRestored(wctx *workflow.Context) error {
 	if state != nil {
 		h.turnEmitEvents = state.CurrentTurnEmitEvents
 		if state.ThreadState != nil {
-			session, err := h.agent.CreateSession(wctx)
-			if err != nil {
-				return err
-			}
+			session := &agent.Session{}
 			if err := json.Unmarshal(state.ThreadState, session); err != nil {
 				return err
 			}
