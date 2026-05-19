@@ -245,6 +245,11 @@ func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
 			Description: "Mark one or more todo items as complete. Each entry has an ID and a reason describing how/why the item was completed. Returns the number of items that were found and marked complete.",
 		},
 		func(ctx tool.Context, items []CompleteInput) (int, error) {
+			for _, item := range items {
+				if strings.TrimSpace(item.Reason) == "" {
+					return 0, fmt.Errorf("item %d is missing a completion reason", item.ID)
+				}
+			}
 			mu := p.getSessionLock(opts)
 			mu.Lock()
 			defer mu.Unlock()
