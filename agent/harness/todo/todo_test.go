@@ -630,3 +630,44 @@ func TestCompleteToolDescription_MentionsReason(t *testing.T) {
 	}
 	t.Error("TodoList_Complete tool not found")
 }
+
+// TestCompleteTodos_EmptyReasonIsAccepted verifies that TodoList_Complete allows
+// an empty or omitted reason, matching the upstream .NET behavior where the reason
+// field is prompted for but not enforced at runtime.
+func TestCompleteTodos_EmptyReasonIsAccepted(t *testing.T) {
+	cases := []struct {
+		name     string
+		reason   string
+	}{
+		{"empty reason", ""},
+		{"whitespace reason", "   "},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := todo.New(nil)
+			opts := sessionOpts()
+
+			_, outOpts, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			callTool(t, outOpts, "TodoList_Add", `{"Arg0":[{"title":"Task Z"}]}`)
+			items := p.GetAllItems(opts...)
+			if len(items) != 1 {
+				t.Fatalf("expected 1 item, got %d", len(items))
+			}
+
+			result := callTool(t, outOpts, "TodoList_Complete", fmt.Sprintf(`{"Arg0":[{"id":%d,"reason":%q}]}`, items[0].ID, tc.reason))
+			if !strings.Contains(result, "1") {
+				t.Errorf("expected 1 completed with %q reason, got %s", tc.reason, result)
+			}
+
+			all := p.GetAllItems(opts...)
+			if !all[0].IsComplete {
+				t.Errorf("item should be complete even with %q reason", tc.reason)
+			}
+		})
+	}
+}
