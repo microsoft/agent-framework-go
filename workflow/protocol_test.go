@@ -8,10 +8,12 @@ import (
 	"testing"
 )
 
-type protocolBuilderInput struct{}
-type protocolBuilderOutput struct{}
-type protocolBuilderSend struct{}
-type protocolBuilderYield struct{}
+type (
+	protocolBuilderInput  struct{}
+	protocolBuilderOutput struct{}
+	protocolBuilderSend   struct{}
+	protocolBuilderYield  struct{}
+)
 
 func TestProtocolBuilderBuildIncludesDeclaredAndAutomaticTypes(t *testing.T) {
 	inputType := reflect.TypeFor[protocolBuilderInput]()
