@@ -636,8 +636,8 @@ func TestCompleteToolDescription_MentionsReason(t *testing.T) {
 // field is prompted for but not enforced at runtime.
 func TestCompleteTodos_EmptyReasonIsAccepted(t *testing.T) {
 	cases := []struct {
-		name     string
-		reason   string
+		name   string
+		reason string
 	}{
 		{"empty reason", ""},
 		{"whitespace reason", "   "},
