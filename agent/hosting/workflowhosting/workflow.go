@@ -52,20 +52,20 @@ type Config struct {
 	// emitted at the end of each turn.
 	EmitResponseEvents bool
 
-	// DisableMessageForwarding disables forwarding of incoming messages
+	// DisableForwardIncomingMessages disables forwarding of incoming messages
 	// downstream before the agent runs. By default (zero value), incoming
 	// messages are forwarded so downstream nodes observe the full
 	// conversation. Set to true for strict pipelines where each node should
 	// only forward its own output.
-	DisableMessageForwarding bool
+	DisableForwardIncomingMessages bool
 
-	// DisableRoleReassignment disables rewriting incoming
+	// DisableReassignOtherAgentsAsUsers disables rewriting incoming
 	// [message.RoleAssistant] messages whose [message.Message.AuthorName]
 	// does not match this agent to [message.RoleUser]. By default (zero
 	// value), such messages are reassigned so the conversation between
 	// agents appears, to each agent, as messages from "the user". Set to
 	// true to preserve original roles.
-	DisableRoleReassignment bool
+	DisableReassignOtherAgentsAsUsers bool
 
 	// InterceptUserInputRequests controls how [message.ToolApprovalRequestContent]
 	// produced by the agent is dispatched.
@@ -376,14 +376,14 @@ func (h *hostExecutor) handleExternalResponse(wctx *workflow.Context, resp *work
 // messages, dispatches outputs and any requests, and propagates the held
 // TurnToken downstream when no outstanding requests remain.
 func (h *hostExecutor) runAgentAndDispatch(wctx *workflow.Context, messages []*message.Message) error {
-	if !h.cfg.DisableMessageForwarding && len(messages) > 0 {
+	if !h.cfg.DisableForwardIncomingMessages && len(messages) > 0 {
 		if err := wctx.SendMessage("", messages); err != nil {
 			return err
 		}
 	}
 
 	agentInput := messages
-	if !h.cfg.DisableRoleReassignment {
+	if !h.cfg.DisableReassignOtherAgentsAsUsers {
 		agentInput = reassignOtherAgentsAsUsers(messages, agentNameOrID(h.agent))
 	}
 

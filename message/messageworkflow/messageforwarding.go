@@ -59,8 +59,8 @@ func ConfigureForwarding(spec *workflow.ExecutorSpec, options *ForwardingOptions
 				}).
 				AddHandlerRaw(reflect.TypeFor[iter.Seq[*message.Message]](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 					messages := make([]*message.Message, 0)
-					for message := range msg.(iter.Seq[*message.Message]) {
-						messages = append(messages, message)
+					for msg := range msg.(iter.Seq[*message.Message]) {
+						messages = append(messages, msg)
 					}
 					return struct{}{}, ctx.SendMessage("", messages)
 				}).

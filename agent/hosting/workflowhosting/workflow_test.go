@@ -276,7 +276,7 @@ func collectForwardedResponseMessages(t *testing.T, a *agent.Agent, cfg workflow
 	}
 
 	hostCfg := cfg
-	hostCfg.DisableMessageForwarding = true
+	hostCfg.DisableForwardIncomingMessages = true
 	binding := workflowhosting.New(a, hostCfg)
 	wf, err := workflow.NewBuilder(binding).
 		AddEdge(binding, sink).
@@ -514,7 +514,7 @@ func TestHostedAgent_ReassignsRolesIfConfigured(t *testing.T) {
 		name := fmt.Sprintf("reassign=%v/u=%v/s=%v/o=%v", tc.reassign, tc.includeUser, tc.includeSelf, tc.includeOther)
 		t.Run(name, func(t *testing.T) {
 			cfg := workflowhosting.Config{
-				DisableRoleReassignment: !tc.reassign,
+				DisableReassignOtherAgentsAsUsers: !tc.reassign,
 			}
 			var msgs []*message.Message
 			if tc.includeUser {
@@ -608,7 +608,7 @@ func TestHostedAgent_ForwardsIncomingMessages(t *testing.T) {
 				}, nil
 			}
 
-			binding := workflowhosting.New(newReplayAgent(), workflowhosting.Config{DisableMessageForwarding: disable})
+			binding := workflowhosting.New(newReplayAgent(), workflowhosting.Config{DisableForwardIncomingMessages: disable})
 			wf, err := workflow.NewBuilder(binding).
 				AddEdge(binding, sink).
 				Build()

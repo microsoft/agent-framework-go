@@ -33,8 +33,8 @@ var logger = demo.NewLogger(
 
 func main() {
 	cfg := workflowhosting.Config{
-		DisableMessageForwarding: true,
-		DisableRoleReassignment:  true,
+		DisableForwardIncomingMessages:    true,
+		DisableReassignOtherAgentsAsUsers: true,
 	}
 	french := workflowhosting.New(newTranslationAgent("French"), cfg)
 	spanish := workflowhosting.New(newTranslationAgent("Spanish"), cfg)

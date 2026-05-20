@@ -85,7 +85,7 @@ func BuildConcurrent(name string, agents ...*agent.Agent) (*workflow.Workflow, e
 // output. If aggregator is nil, the default behavior returns the last message
 // in each non-empty batch.
 func BuildConcurrentWithAggregator(name string, aggregator MessageAggregator, agents ...*agent.Agent) (*workflow.Workflow, error) {
-	if err := validateBuilderAgents("BuildConcurrent", agents); err != nil {
+	if err := validateBuilderAgents("BuildConcurrentWithAggregator", agents); err != nil {
 		return nil, err
 	}
 
