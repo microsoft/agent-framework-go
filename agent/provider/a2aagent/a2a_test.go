@@ -707,15 +707,13 @@ func TestRunWithMultipleTaskIDsInSessionAndMessage(t *testing.T) {
 	}
 }
 
-// TestRunWithInputRequiredTask_UsesTaskId tests that when the last task state is InputRequired,
-// the follow-up message uses TaskId (not ReferenceTasks) to link to the waiting task.
-func TestRunWithInputRequiredTask_UsesTaskId(t *testing.T) {
+func assertTaskRoutingAfterFollowUp(t *testing.T, initialTaskID string, initialTaskState a2a.TaskState, wantTaskID string, wantReferenceTask string) {
 	transport := &mockA2ATransport{
 		responseToReturn: &a2a.Task{
-			ID:        a2a.TaskID("task-waiting"),
+			ID:        a2a.TaskID(initialTaskID),
 			ContextID: "ctx-123",
 			Status: a2a.TaskStatus{
-				State: a2a.TaskStateInputRequired,
+				State: initialTaskState,
 			},
 		},
 	}
@@ -726,13 +724,11 @@ func TestRunWithInputRequiredTask_UsesTaskId(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// First run: agent returns InputRequired task.
 	_, err = a.RunText(t.Context(), "Do something", agent.WithSession(session)).Collect()
 	if err != nil {
 		t.Fatalf("first run error = %v, want nil", err)
 	}
 
-	// Now simulate a second message (the user providing input).
 	transport.responseToReturn = &a2a.Message{
 		ID:        "response-final",
 		ContextID: "ctx-123",
@@ -750,65 +746,33 @@ func TestRunWithInputRequiredTask_UsesTaskId(t *testing.T) {
 	if capturedMsg == nil {
 		t.Fatal("capturedMessageSendParams.Message is nil")
 	}
-	if len(capturedMsg.ReferenceTasks) != 0 {
-		t.Errorf("message.ReferenceTasks = %v, want empty (should use TaskId instead)", capturedMsg.ReferenceTasks)
+	if got := string(capturedMsg.TaskID); got != wantTaskID {
+		t.Errorf("message.TaskID = %q, want %q", capturedMsg.TaskID, wantTaskID)
 	}
-	if string(capturedMsg.TaskID) != "task-waiting" {
-		t.Errorf("message.TaskID = %q, want %q", capturedMsg.TaskID, "task-waiting")
+	switch {
+	case wantReferenceTask == "":
+		if len(capturedMsg.ReferenceTasks) != 0 {
+			t.Errorf("message.ReferenceTasks = %v, want empty", capturedMsg.ReferenceTasks)
+		}
+	case len(capturedMsg.ReferenceTasks) == 0:
+		t.Fatalf("message.ReferenceTasks is empty, want %q", wantReferenceTask)
+	default:
+		if got := string(capturedMsg.ReferenceTasks[0]); got != wantReferenceTask {
+			t.Errorf("message.ReferenceTasks[0] = %q, want %q", got, wantReferenceTask)
+		}
 	}
+}
+
+// TestRunWithInputRequiredTask_UsesTaskId tests that when the last task state is InputRequired,
+// the follow-up message uses TaskId (not ReferenceTasks) to link to the waiting task.
+func TestRunWithInputRequiredTask_UsesTaskId(t *testing.T) {
+	assertTaskRoutingAfterFollowUp(t, "task-waiting", a2a.TaskStateInputRequired, "task-waiting", "")
 }
 
 // TestRunWithCompletedTask_UsesReferenceTasks tests that a follow-up after a completed task
 // uses ReferenceTasks (not TaskId).
 func TestRunWithCompletedTask_UsesReferenceTasks(t *testing.T) {
-	transport := &mockA2ATransport{
-		responseToReturn: &a2a.Task{
-			ID:        a2a.TaskID("task-done"),
-			ContextID: "ctx-456",
-			Status: a2a.TaskStatus{
-				State: a2a.TaskStateCompleted,
-			},
-		},
-	}
-	a := newTestAgent(transport, agent.Config{})
-
-	session, err := a.CreateSession(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// First run: agent completes the task.
-	_, err = a.RunText(t.Context(), "Do something", agent.WithSession(session)).Collect()
-	if err != nil {
-		t.Fatalf("first run error = %v, want nil", err)
-	}
-
-	// Follow-up run after completed task should use ReferenceTasks.
-	transport.responseToReturn = &a2a.Message{
-		ID:        "response-followup",
-		ContextID: "ctx-456",
-		Role:      a2a.MessageRoleAgent,
-		Parts:     a2a.ContentParts{a2a.NewTextPart("Follow-up done")},
-	}
-	transport.capturedMessageSendParams = nil
-
-	_, err = a.RunText(t.Context(), "Do a follow-up", agent.WithSession(session)).Collect()
-	if err != nil {
-		t.Fatalf("second run error = %v, want nil", err)
-	}
-
-	capturedMsg := transport.capturedMessageSendParams.Message
-	if capturedMsg == nil {
-		t.Fatal("capturedMessageSendParams.Message is nil")
-	}
-	if string(capturedMsg.TaskID) != "" {
-		t.Errorf("message.TaskID = %q, want empty (should use ReferenceTasks)", capturedMsg.TaskID)
-	}
-	if len(capturedMsg.ReferenceTasks) == 0 {
-		t.Error("message.ReferenceTasks is empty, want task-done")
-	} else if string(capturedMsg.ReferenceTasks[0]) != "task-done" {
-		t.Errorf("message.ReferenceTasks[0] = %q, want %q", capturedMsg.ReferenceTasks[0], "task-done")
-	}
+	assertTaskRoutingAfterFollowUp(t, "task-done", a2a.TaskStateCompleted, "", "task-done")
 }
 
 // TestRunWithAgentTask tests that session task ID is updated

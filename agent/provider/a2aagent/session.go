@@ -48,7 +48,11 @@ func TaskIDsFromSession(session *agent.Session) []string {
 }
 
 func setLastTaskState(session *agent.Session, state a2a.TaskState) {
-	if session == nil || state == a2a.TaskStateUnspecified {
+	if session == nil {
+		return
+	}
+	if state == a2a.TaskStateUnspecified {
+		session.Delete(taskStateKey)
 		return
 	}
 	session.Set(taskStateKey, string(state))
