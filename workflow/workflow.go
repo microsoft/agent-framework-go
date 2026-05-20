@@ -11,6 +11,7 @@ import (
 	"iter"
 	"maps"
 	"reflect"
+	"slices"
 	"sync/atomic"
 
 	"github.com/microsoft/agent-framework-go/workflow/internal/observability"
@@ -129,29 +130,17 @@ type ProtocolDescriptor struct {
 }
 
 // Workflow is an executable graph of bound executors, edges, outputs, and
-// request ports.
+// request ports. Workflows are created by [Builder].
 type Workflow struct {
-	// Name is an optional human-readable workflow name.
-	Name string
+	name        string
+	description string
 
-	// Description is optional human-readable workflow detail.
-	Description string
+	startExecutorID string
 
-	// StartExecutorID is the executor ID that receives the initial input.
-	StartExecutorID string
-
-	// ExecutorBindings contains the workflow's executor bindings keyed by ID.
-	ExecutorBindings map[string]ExecutorBinding
-
-	// Edges contains outgoing edges keyed by source executor ID.
-	Edges map[string][]Edge
-
-	// OutputExecutors contains the executor IDs whose yielded outputs are exposed
-	// as workflow outputs.
-	OutputExecutors map[string]struct{}
-
-	// Ports contains request ports exposed by the workflow keyed by port ID.
-	Ports map[string]RequestPort
+	executorBindings map[string]ExecutorBinding
+	edges            map[string][]Edge
+	outputExecutors  map[string]struct{}
+	ports            map[string]RequestPort
 
 	needsReset atomic.Bool
 	ownerToken atomic.Pointer[workflowOwner]
@@ -193,12 +182,101 @@ func sameOwnershipToken(left any, right any) bool {
 	return leftOK && rightOK && leftType == rightType && leftPtr == rightPtr
 }
 
+// Name returns the optional human-readable workflow name.
+func (w *Workflow) Name() string {
+	if w == nil {
+		return ""
+	}
+	return w.name
+}
+
+// Description returns optional human-readable workflow detail.
+func (w *Workflow) Description() string {
+	if w == nil {
+		return ""
+	}
+	return w.description
+}
+
+// StartExecutorID returns the executor ID that receives the initial input.
+func (w *Workflow) StartExecutorID() string {
+	if w == nil {
+		return ""
+	}
+	return w.startExecutorID
+}
+
+// ExecutorBinding returns the executor binding for id.
+func (w *Workflow) ExecutorBinding(id string) (ExecutorBinding, bool) {
+	if w == nil {
+		return ExecutorBinding{}, false
+	}
+	binding, ok := w.executorBindings[id]
+	return binding, ok
+}
+
+// OutgoingEdges returns the edges whose source is executorID.
+func (w *Workflow) OutgoingEdges(executorID string) []Edge {
+	if w == nil {
+		return nil
+	}
+	return slices.Clone(w.edges[executorID])
+}
+
+// Edges returns a copy of the workflow edges keyed by source executor ID.
+func (w *Workflow) Edges() map[string][]Edge {
+	if w == nil {
+		return nil
+	}
+	out := make(map[string][]Edge, len(w.edges))
+	for sourceID, edges := range w.edges {
+		out[sourceID] = slices.Clone(edges)
+	}
+	return out
+}
+
+// HasOutputExecutor reports whether executorID is exposed as a workflow output.
+func (w *Workflow) HasOutputExecutor(executorID string) bool {
+	if w == nil {
+		return false
+	}
+	_, ok := w.outputExecutors[executorID]
+	return ok
+}
+
+// OutputExecutorIDs returns the executor IDs exposed as workflow outputs.
+func (w *Workflow) OutputExecutorIDs() []string {
+	if w == nil {
+		return nil
+	}
+	return slices.Collect(maps.Keys(w.outputExecutors))
+}
+
+// RequestPort returns the workflow request port with id.
+func (w *Workflow) RequestPort(id string) (RequestPort, bool) {
+	if w == nil {
+		return RequestPort{}, false
+	}
+	port, ok := w.ports[id]
+	return port, ok
+}
+
+// RequestPorts returns a copy of the workflow request ports keyed by port ID.
+func (w *Workflow) RequestPorts() map[string]RequestPort {
+	if w == nil {
+		return nil
+	}
+	out := make(map[string]RequestPort, len(w.ports))
+	maps.Copy(out, w.ports)
+	return out
+}
+
 // DescribeProtocol returns the protocol accepted by the workflow's start
 // executor and yielded by its output executors.
 func (w *Workflow) DescribeProtocol() (*ProtocolDescriptor, error) {
-	er := w.ExecutorBindings[w.StartExecutorID]
-	if _, ok := w.ExecutorBindings[w.StartExecutorID]; !ok {
-		return nil, fmt.Errorf("workflow start executor %q has no registered binding", w.StartExecutorID)
+	er := w.executorBindings[w.startExecutorID]
+	if _, ok := w.executorBindings[w.startExecutorID]; !ok {
+		return nil, fmt.Errorf("workflow start executor %q has no registered binding", w.startExecutorID)
 	}
 	executor, err := er.CreateInstance("")
 	if err != nil {
@@ -210,8 +288,8 @@ func (w *Workflow) DescribeProtocol() (*ProtocolDescriptor, error) {
 	}
 
 	yields := make([]reflect.Type, 0)
-	for executorID := range w.OutputExecutors {
-		binding, ok := w.ExecutorBindings[executorID]
+	for executorID := range w.outputExecutors {
+		binding, ok := w.executorBindings[executorID]
 		if !ok {
 			return nil, fmt.Errorf("workflow output executor %q has no registered binding", executorID)
 		}
@@ -237,7 +315,7 @@ func (w *Workflow) DescribeProtocol() (*ProtocolDescriptor, error) {
 // HasResettableExecutors reports whether any executor binding can reset shared
 // resources between workflow runs.
 func (w *Workflow) HasResettableExecutors() bool {
-	for _, er := range w.ExecutorBindings {
+	for _, er := range w.executorBindings {
 		if er.ResetFunc != nil {
 			return true
 		}
@@ -257,7 +335,7 @@ func (w *Workflow) ContextWithTelemetry(ctx context.Context) context.Context {
 // AllowConcurrent reports whether every bound executor in the workflow
 // supports cross-run shared execution.
 func (w *Workflow) AllowConcurrent() bool {
-	for _, er := range w.ExecutorBindings {
+	for _, er := range w.executorBindings {
 		if !er.SupportsConcurrentSharedExecution {
 			return false
 		}
@@ -271,7 +349,7 @@ func (w *Workflow) TryReset() bool {
 	if !w.HasResettableExecutors() {
 		return false
 	}
-	for _, er := range w.ExecutorBindings {
+	for _, er := range w.executorBindings {
 		if !er.TryReset() {
 			return false
 		}
@@ -384,8 +462,8 @@ func (w *Workflow) ReleaseOwnershipTo(token any, targetToken any) error {
 
 // ReflectEdges returns workflow edge metadata keyed by source executor ID.
 func (w *Workflow) ReflectEdges() map[string][]EdgeInfo {
-	edgeInfos := make(map[string][]EdgeInfo, len(w.Edges))
-	for sourceID, edges := range w.Edges {
+	edgeInfos := make(map[string][]EdgeInfo, len(w.edges))
+	for sourceID, edges := range w.edges {
 		infos := make([]EdgeInfo, 0, len(edges))
 		for _, edge := range edges {
 			infos = append(infos, newEdgeInfo(edge))
@@ -397,8 +475,8 @@ func (w *Workflow) ReflectEdges() map[string][]EdgeInfo {
 
 // ReflectPorts returns workflow request port metadata keyed by port ID.
 func (w *Workflow) ReflectPorts() map[string]RequestPortInfo {
-	portInfos := make(map[string]RequestPortInfo, len(w.Ports))
-	for id, port := range w.Ports {
+	portInfos := make(map[string]RequestPortInfo, len(w.ports))
+	for id, port := range w.ports {
 		portInfos[id] = NewRequestPortInfo(port)
 	}
 	return portInfos
@@ -407,8 +485,8 @@ func (w *Workflow) ReflectPorts() map[string]RequestPortInfo {
 // ReflectExecutors returns a copy of the workflow's executor bindings keyed
 // by ID. Modifying the returned map does not affect the workflow.
 func (w *Workflow) ReflectExecutors() map[string]ExecutorBinding {
-	out := make(map[string]ExecutorBinding, len(w.ExecutorBindings))
-	maps.Copy(out, w.ExecutorBindings)
+	out := make(map[string]ExecutorBinding, len(w.executorBindings))
+	maps.Copy(out, w.executorBindings)
 	return out
 }
 

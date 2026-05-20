@@ -41,9 +41,9 @@ func TestPostRequestFromExecutor(t *testing.T) {
 			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-				YieldTypes: []reflect.Type{reflect.TypeFor[string]()},
-				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.YieldsOutputType(reflect.TypeFor[string]())
+					rb.RouteBuilder.
 						AddHandlerRaw(reflect.TypeFor[string](), nil, func(wctx *workflow.Context, msg any) (any, error) {
 							req, err := workflow.NewExternalRequest("req-1", port, "what is your name?")
 							if err != nil {
@@ -55,7 +55,8 @@ func TestPostRequestFromExecutor(t *testing.T) {
 							resp := msg.(*workflow.ExternalResponse)
 							data, _ := resp.Data.As(port.Response)
 							return nil, wctx.YieldOutput(data)
-						}), nil
+						})
+					return rb, nil
 				},
 			},
 		}, nil
@@ -124,11 +125,12 @@ func TestPostRequestRoutingToOwner(t *testing.T) {
 			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-				SendTypes: []reflect.Type{reflect.TypeFor[string]()},
-				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(wctx *workflow.Context, msg any) (any, error) {
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.SendsMessageType(reflect.TypeFor[string]())
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(wctx *workflow.Context, msg any) (any, error) {
 						return nil, wctx.SendMessage("", "go")
-					}), nil
+					})
+					return rb, nil
 				},
 			},
 		}, nil
@@ -147,9 +149,9 @@ func TestPostRequestRoutingToOwner(t *testing.T) {
 			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-				YieldTypes: []reflect.Type{reflect.TypeFor[string]()},
-				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.YieldsOutputType(reflect.TypeFor[string]())
+					rb.RouteBuilder.
 						AddHandlerRaw(reflect.TypeFor[string](), nil, func(wctx *workflow.Context, msg any) (any, error) {
 							req, err := workflow.NewExternalRequest("req-2", port, "ping")
 							if err != nil {
@@ -160,7 +162,8 @@ func TestPostRequestRoutingToOwner(t *testing.T) {
 						AddHandlerRaw(reflect.TypeFor[*workflow.ExternalResponse](), nil, func(wctx *workflow.Context, msg any) (any, error) {
 							gotResponseAtAsker = true
 							return nil, wctx.YieldOutput("done")
-						}), nil
+						})
+					return rb, nil
 				},
 			},
 		}, nil
@@ -213,10 +216,11 @@ func TestExternalResponse_UnsolicitedResponseErrors(t *testing.T) {
 			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(_ *workflow.Context, _ any) (any, error) {
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(_ *workflow.Context, _ any) (any, error) {
 						return nil, nil
-					}), nil
+					})
+					return rb, nil
 				},
 			},
 		}, nil

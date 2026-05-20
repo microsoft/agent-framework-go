@@ -118,7 +118,7 @@ type EdgeRunner struct {
 // NewEdgeRunner creates a new [EdgeRunner] for the given workflow.
 func NewEdgeRunner(wf *workflow.Workflow, tracer StepTracer, ensureExecutor func(context.Context, string, StepTracer) (*workflow.Executor, error)) *EdgeRunner {
 	var statefulEdges map[int]*statefulEdgeState
-	for _, edges := range wf.Edges {
+	for _, edges := range wf.Edges() {
 		for _, edge := range edges {
 			if len(edge.Connection.SourceIDs) <= 1 {
 				continue
@@ -139,7 +139,7 @@ func NewEdgeRunner(wf *workflow.Workflow, tracer StepTracer, ensureExecutor func
 
 	return &EdgeRunner{
 		ensureExecutor:  ensureExecutor,
-		startExecutorID: wf.StartExecutorID,
+		startExecutorID: wf.StartExecutorID(),
 		statefulEdges:   statefulEdges,
 		tracer:          tracer,
 	}

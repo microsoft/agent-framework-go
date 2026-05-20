@@ -142,7 +142,9 @@ func newAggregateTurnMessagesBinding(id string) workflow.ExecutorBinding {
 		SupportsConcurrentSharedExecution: true,
 		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
 			spec := workflow.ExecutorSpec{
-				SendTypes: []reflect.Type{reflect.TypeFor[[]*message.Message]()},
+				ConfigureProtocol: func(pb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					return pb.SendsMessageType(reflect.TypeFor[[]*message.Message]()), nil
+				},
 			}
 			messageworkflow.Configure(&spec, &messageworkflow.Options{
 				StateKey:                 aggregateTurnMessagesStateKey,
@@ -167,7 +169,9 @@ func newOutputMessagesBinding() workflow.ExecutorBinding {
 		SupportsConcurrentSharedExecution: true,
 		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
 			spec := workflow.ExecutorSpec{
-				YieldTypes: []reflect.Type{reflect.TypeFor[[]*message.Message]()},
+				ConfigureProtocol: func(pb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					return pb.YieldsOutputType(reflect.TypeFor[[]*message.Message]()), nil
+				},
 			}
 			messageworkflow.Configure(&spec, &messageworkflow.Options{
 				StateKey:                 outputMessagesStateKey,
@@ -208,13 +212,13 @@ func newConcurrentEndBinding(expectedInputs int, aggregator MessageAggregator) w
 				Spec: workflow.ExecutorSpec{
 					DisableAutoSendMessageHandlerResultObject: true,
 					DisableAutoYieldOutputHandlerResultObject: true,
-					YieldTypes: []reflect.Type{reflect.TypeFor[[]*message.Message]()},
 					Reset: func() error {
 						reset()
 						return nil
 					},
-					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-						return rb.AddHandlerRaw(reflect.TypeFor[[]*message.Message](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+						rb.YieldsOutputType(reflect.TypeFor[[]*message.Message]())
+						rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[[]*message.Message](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 							allResults = append(allResults, msg.([]*message.Message))
 							remaining--
 							if remaining == 0 {
@@ -225,7 +229,8 @@ func newConcurrentEndBinding(expectedInputs int, aggregator MessageAggregator) w
 								}
 							}
 							return struct{}{}, nil
-						}), nil
+						})
+						return rb, nil
 					},
 				},
 			}, nil

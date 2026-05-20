@@ -51,6 +51,22 @@ func fanInEdge(srcs []string, dst string) workflow.Edge {
 	}
 }
 
+func newTestWorkflow(t *testing.T, bindings ...workflow.ExecutorBinding) *workflow.Workflow {
+	t.Helper()
+	if len(bindings) == 0 {
+		bindings = []workflow.ExecutorBinding{workflow.BindExecutor(&workflow.Executor{ID: "start"})}
+	}
+	builder := workflow.NewBuilder(bindings[0])
+	for _, binding := range bindings[1:] {
+		builder.BindExecutor(binding)
+	}
+	wf, err := builder.Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	return wf
+}
+
 func runEdgeInfoMatch(t *testing.T, name string, edge, comparator workflow.Edge, expect bool) {
 	t.Helper()
 	info := workflow.EdgeInfo{
@@ -170,7 +186,7 @@ func TestReflectExecutors_ReturnsCopy(t *testing.T) {
 		t.Errorf("missing executor b")
 	}
 	delete(got, "a")
-	if _, ok := wf.ExecutorBindings["a"]; !ok {
+	if _, ok := wf.ExecutorBinding("a"); !ok {
 		t.Errorf("ReflectExecutors did not return a copy: workflow lost binding 'a'")
 	}
 }
@@ -216,7 +232,7 @@ func TestReflectPorts_ReturnsCopy(t *testing.T) {
 		t.Fatalf("PortID = %q, want approval", info.PortID)
 	}
 	delete(got, "approval")
-	if _, ok := wf.Ports["approval"]; !ok {
+	if _, ok := wf.RequestPort("approval"); !ok {
 		t.Fatal("ReflectPorts did not return a copy: workflow lost port approval")
 	}
 }
@@ -273,10 +289,11 @@ func TestWorkflowDescribeProtocol_PropagatesAcceptsAll(t *testing.T) {
 			return &workflow.Executor{
 				ID: "start",
 				Spec: workflow.ExecutorSpec{
-					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-						return rb.AddCatchAll(func(*workflow.Context, workflow.PortableValue) (any, error) {
+					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+						rb.RouteBuilder.AddCatchAll(func(*workflow.Context, workflow.PortableValue) (any, error) {
 							return nil, nil
-						}), nil
+						})
+						return rb, nil
 					},
 				},
 			}, nil
@@ -297,7 +314,7 @@ func TestWorkflowDescribeProtocol_PropagatesAcceptsAll(t *testing.T) {
 }
 
 func TestWorkflowOwnership_UsesTokenIdentity(t *testing.T) {
-	wf := &workflow.Workflow{}
+	wf := newTestWorkflow(t)
 	owner := new(int)
 	other := new(int)
 
@@ -319,14 +336,14 @@ func TestWorkflowOwnership_UsesTokenIdentity(t *testing.T) {
 }
 
 func TestWorkflowOwnership_RejectsValueToken(t *testing.T) {
-	wf := &workflow.Workflow{}
+	wf := newTestWorkflow(t)
 	if err := wf.TakeOwnership(nil, "owner", false); err == nil {
 		t.Fatal("TakeOwnership with value token succeeded, want error")
 	}
 }
 
 func TestWorkflowReleaseOwnershipTo_RestoresPreviousOwner(t *testing.T) {
-	wf := &workflow.Workflow{}
+	wf := newTestWorkflow(t)
 	previous := new(int)
 	runner := new(int)
 
@@ -345,11 +362,7 @@ func TestWorkflowReleaseOwnershipTo_RestoresPreviousOwner(t *testing.T) {
 }
 
 func TestWorkflowReuse_AllowsSharedNonResettableWhenNoResettableExecutors(t *testing.T) {
-	wf := &workflow.Workflow{
-		ExecutorBindings: map[string]workflow.ExecutorBinding{
-			"shared": workflow.BindExecutor(&workflow.Executor{ID: "shared"}),
-		},
-	}
+	wf := newTestWorkflow(t, workflow.BindExecutor(&workflow.Executor{ID: "shared"}))
 	firstOwner := new(int)
 	secondOwner := new(int)
 
@@ -365,16 +378,16 @@ func TestWorkflowReuse_AllowsSharedNonResettableWhenNoResettableExecutors(t *tes
 }
 
 func TestWorkflowReuse_BlocksWhenResetFails(t *testing.T) {
-	wf := &workflow.Workflow{
-		ExecutorBindings: map[string]workflow.ExecutorBinding{
-			"resettable": workflow.BindExecutor(&workflow.Executor{
-				ID: "resettable",
-				Spec: workflow.ExecutorSpec{Reset: func() error {
-					return nil
-				}},
-			}),
-			"shared": workflow.BindExecutor(&workflow.Executor{ID: "shared"}),
-		},
+	resettable := workflow.BindExecutor(&workflow.Executor{
+		ID: "resettable",
+		Spec: workflow.ExecutorSpec{Reset: func() error {
+			return nil
+		}},
+	})
+	shared := workflow.BindExecutor(&workflow.Executor{ID: "shared"})
+	wf, err := workflow.NewBuilder(resettable).AddEdge(resettable, shared).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
 	}
 	firstOwner := new(int)
 	secondOwner := new(int)

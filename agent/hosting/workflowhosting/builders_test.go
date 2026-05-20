@@ -303,8 +303,8 @@ func TestBuildSequential_SingleAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildSequential: %v", err)
 	}
-	if wf.Name != "single-agent" {
-		t.Fatalf("workflow name = %q, want %q", wf.Name, "single-agent")
+	if wf.Name() != "single-agent" {
+		t.Fatalf("workflow name = %q, want %q", wf.Name(), "single-agent")
 	}
 
 	texts := collectOutputTexts(runBuiltWorkflow(t, wf))
@@ -323,8 +323,8 @@ func TestBuildSequential_MultiAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildSequential: %v", err)
 	}
-	if wf.Name != "" {
-		t.Fatalf("workflow name = %q, want empty", wf.Name)
+	if wf.Name() != "" {
+		t.Fatalf("workflow name = %q, want empty", wf.Name())
 	}
 
 	texts := collectOutputTexts(runBuiltWorkflow(t, wf))
@@ -407,8 +407,8 @@ func TestBuildConcurrent_SingleAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildConcurrent: %v", err)
 	}
-	if wf.Name != "single-concurrent" {
-		t.Fatalf("workflow name = %q, want %q", wf.Name, "single-concurrent")
+	if wf.Name() != "single-concurrent" {
+		t.Fatalf("workflow name = %q, want %q", wf.Name(), "single-concurrent")
 	}
 
 	events := runBuiltWorkflow(t, wf)

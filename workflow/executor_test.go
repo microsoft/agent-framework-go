@@ -12,7 +12,7 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
 )
 
-func TestExecutorSpec_ExtendRoutesAndLifecycleInOrder(t *testing.T) {
+func TestExecutorSpec_ExtendProtocolAndLifecycleInOrder(t *testing.T) {
 	var calls []string
 	ctx := &workflow.Context{
 		Context:  t.Context(),
@@ -47,12 +47,13 @@ func TestExecutorSpec_ExtendRoutesAndLifecycleInOrder(t *testing.T) {
 			calls = append(calls, "finished-1")
 			return nil
 		},
-		ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 			calls = append(calls, "routes-1")
-			return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(*workflow.Context, any) (any, error) {
+			rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(*workflow.Context, any) (any, error) {
 				calls = append(calls, "handler-string")
 				return nil, nil
-			}), nil
+			})
+			return rb, nil
 		},
 	})
 	spec.Extend(workflow.ExecutorSpec{
@@ -80,12 +81,13 @@ func TestExecutorSpec_ExtendRoutesAndLifecycleInOrder(t *testing.T) {
 			calls = append(calls, "finished-2")
 			return nil
 		},
-		ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 			calls = append(calls, "routes-2")
-			return rb.AddHandlerRaw(reflect.TypeFor[int](), nil, func(*workflow.Context, any) (any, error) {
+			rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[int](), nil, func(*workflow.Context, any) (any, error) {
 				calls = append(calls, "handler-int")
 				return nil, nil
-			}), nil
+			})
+			return rb, nil
 		},
 	})
 	executor := &workflow.Executor{
@@ -182,10 +184,11 @@ func TestExecutorDescribeProtocol_RespectsAutoReturnOptions(t *testing.T) {
 				Spec: workflow.ExecutorSpec{
 					DisableAutoSendMessageHandlerResultObject: !testCase.autoSend,
 					DisableAutoYieldOutputHandlerResultObject: !testCase.autoYield,
-					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-						return rb.AddHandlerRaw(inputType, outputType, func(*workflow.Context, any) (any, error) {
+					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+						rb.RouteBuilder.AddHandlerRaw(inputType, outputType, func(*workflow.Context, any) (any, error) {
 							return executorProtocolOutput{}, nil
-						}), nil
+						})
+						return rb, nil
 					},
 				},
 			}
@@ -212,12 +215,14 @@ func TestExecutorDescribeProtocol_IncludesExplicitSendAndYieldTypes(t *testing.T
 		Spec: workflow.ExecutorSpec{
 			DisableAutoSendMessageHandlerResultObject: true,
 			DisableAutoYieldOutputHandlerResultObject: true,
-			SendTypes:  []reflect.Type{explicitSend, nil, explicitSend},
-			YieldTypes: []reflect.Type{explicitYield, nil, explicitYield},
-			ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-				return rb.AddHandlerRaw(reflect.TypeFor[executorProtocolInput](), reflect.TypeFor[executorProtocolOutput](), func(*workflow.Context, any) (any, error) {
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.
+					SendsMessageType(explicitSend, nil, explicitSend).
+					YieldsOutputType(explicitYield, nil, explicitYield)
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[executorProtocolInput](), reflect.TypeFor[executorProtocolOutput](), func(*workflow.Context, any) (any, error) {
 					return executorProtocolOutput{}, nil
-				}), nil
+				})
+				return rb, nil
 			},
 		},
 	}
@@ -300,11 +305,12 @@ func executorWithSendTypes(sendTypes ...reflect.Type) *workflow.Executor {
 		Spec: workflow.ExecutorSpec{
 			DisableAutoSendMessageHandlerResultObject: true,
 			DisableAutoYieldOutputHandlerResultObject: true,
-			SendTypes: sendTypes,
-			ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-				return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(*workflow.Context, any) (any, error) {
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.SendsMessageType(sendTypes...)
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(*workflow.Context, any) (any, error) {
 					return nil, nil
-				}), nil
+				})
+				return rb, nil
 			},
 		},
 	}
@@ -381,14 +387,15 @@ func TestAddHandlerRaw_WithHandlerOverwrite(t *testing.T) {
 		Spec: workflow.ExecutorSpec{
 			DisableAutoSendMessageHandlerResultObject: true,
 			DisableAutoYieldOutputHandlerResultObject: true,
-			ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-				return rb.
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.RouteBuilder.
 					AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[string](), func(*workflow.Context, any) (any, error) {
 						return "first", nil
 					}).
 					AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[string](), func(*workflow.Context, any) (any, error) {
 						return "second", nil
-					}, workflow.WithHandlerOverwrite(true)), nil
+					}, workflow.WithHandlerOverwrite(true))
+				return rb, nil
 			},
 		},
 	}
@@ -412,14 +419,15 @@ func TestAddCatchAll_WithHandlerOverwrite(t *testing.T) {
 		Spec: workflow.ExecutorSpec{
 			DisableAutoSendMessageHandlerResultObject: true,
 			DisableAutoYieldOutputHandlerResultObject: true,
-			ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-				return rb.
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.RouteBuilder.
 					AddCatchAll(func(*workflow.Context, workflow.PortableValue) (any, error) {
 						return "first", nil
 					}).
 					AddCatchAll(func(*workflow.Context, workflow.PortableValue) (any, error) {
 						return "second", nil
-					}, workflow.WithHandlerOverwrite(true)), nil
+					}, workflow.WithHandlerOverwrite(true))
+				return rb, nil
 			},
 		},
 	}
@@ -443,10 +451,11 @@ func TestExecutorExecute_HandlerPanicReportsFailure(t *testing.T) {
 		Spec: workflow.ExecutorSpec{
 			DisableAutoSendMessageHandlerResultObject: true,
 			DisableAutoYieldOutputHandlerResultObject: true,
-			ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-				return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(*workflow.Context, any) (any, error) {
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(*workflow.Context, any) (any, error) {
 					panic("boom")
-				}), nil
+				})
+				return rb, nil
 			},
 		},
 	}
@@ -491,8 +500,8 @@ func aggregatorBinding(id string, results *[]string) workflow.ExecutorBinding {
 			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 						s := msg.(string)
 						return nil, cache.InvokeWithState(ctx, false, func(_ *workflow.Context, state string) (string, error) {
 							var newState string
@@ -504,7 +513,8 @@ func aggregatorBinding(id string, results *[]string) workflow.ExecutorBinding {
 							*results = append(*results, newState)
 							return newState, nil
 						})
-					}), nil
+					})
+					return rb, nil
 				},
 			},
 		}, nil
@@ -629,8 +639,8 @@ func nullableAggregatorBinding(id string, results *[]string) workflow.ExecutorBi
 			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 						input := msg.(string)
 						return nil, cache.InvokeWithState(ctx, false, func(_ *workflow.Context, state *string) (*string, error) {
 							if input == "clear" {
@@ -644,7 +654,8 @@ func nullableAggregatorBinding(id string, results *[]string) workflow.ExecutorBi
 							*results = append(*results, value)
 							return &value, nil
 						})
-					}), nil
+					})
+					return rb, nil
 				},
 			},
 		}, nil
@@ -661,10 +672,11 @@ func TestWorkflow_AllowsReuseSharedExecutorWithoutResetWhenNoResettableExecutors
 			return &workflow.Executor{
 				ID: "shared",
 				Spec: workflow.ExecutorSpec{
-					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-						return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(_ *workflow.Context, _ any) (any, error) {
+					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+						rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(_ *workflow.Context, _ any) (any, error) {
 							return nil, nil
-						}), nil
+						})
+						return rb, nil
 					},
 				},
 			}, nil

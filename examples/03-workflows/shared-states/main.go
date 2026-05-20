@@ -72,10 +72,11 @@ func bindContextFunc[In, Out any](id string, fn func(*workflow.Context, In) (Out
 		ExecutorType: reflect.TypeOf(fn),
 		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
 			return &workflow.Executor{ID: id, Spec: workflow.ExecutorSpec{
-				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandlerRaw(reflect.TypeFor[In](), reflect.TypeFor[Out](), func(ctx *workflow.Context, msg any) (any, error) {
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[In](), reflect.TypeFor[Out](), func(ctx *workflow.Context, msg any) (any, error) {
 						return fn(ctx, msg.(In))
-					}), nil
+					})
+					return rb, nil
 				},
 			}}, nil
 		},

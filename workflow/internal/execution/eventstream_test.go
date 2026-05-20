@@ -84,7 +84,11 @@ func newTestSuperStepRunner() *testSuperStepRunner {
 func (r *testSuperStepRunner) SessionID() string { return "session" }
 
 func (r *testSuperStepRunner) Workflow() *workflow.Workflow {
-	return &workflow.Workflow{StartExecutorID: "start"}
+	wf, err := workflow.NewBuilder(workflow.BindExecutor(&workflow.Executor{ID: "start"})).Build()
+	if err != nil {
+		panic(err)
+	}
+	return wf
 }
 
 func (r *testSuperStepRunner) StartExecutorID() string { return "start" }

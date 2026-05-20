@@ -68,9 +68,12 @@ func Configure(spec *workflow.ExecutorSpec, options *Options) {
 		OnCheckpointRestored: func(ctx *workflow.Context) error {
 			return state.Reset()
 		},
-		ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+			if !options.DisableAutoSendTurnToken {
+				rb.SendsMessageType(reflect.TypeFor[workflow.TurnToken]())
+			}
 			if options.StringMessageRole != "" {
-				rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 					return struct{}{}, state.ProcessTurnMessages(ctx, func(ctx *workflow.Context, messages []*message.Message) ([]*message.Message, error) {
 						return append(messages, &message.Message{
 							Role:     message.Role(options.StringMessageRole),
@@ -79,7 +82,7 @@ func Configure(spec *workflow.ExecutorSpec, options *Options) {
 					})
 				})
 			}
-			return rb.
+			rb.RouteBuilder.
 				AddHandlerRaw(reflect.TypeFor[*message.Message](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 					return struct{}{}, state.ProcessTurnMessages(ctx, func(ctx *workflow.Context, messages []*message.Message) ([]*message.Message, error) {
 						return append(messages, msg.(*message.Message)), nil
@@ -111,11 +114,9 @@ func Configure(spec *workflow.ExecutorSpec, options *Options) {
 						}
 						return nil, nil
 					})
-				}), nil
+				})
+			return rb, nil
 		},
-	}
-	if !options.DisableAutoSendTurnToken {
-		messageSpec.SendTypes = []reflect.Type{reflect.TypeFor[workflow.TurnToken]()}
 	}
 	spec.Extend(messageSpec)
 }

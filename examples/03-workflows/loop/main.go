@@ -67,8 +67,8 @@ func newGuessNumberExecutor(id string, low int, high int) workflow.ExecutorBindi
 				Spec: workflow.ExecutorSpec{
 					DisableAutoSendMessageHandlerResultObject: true,
 					DisableAutoYieldOutputHandlerResultObject: true,
-					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-						return rb.AddHandlerRaw(reflect.TypeFor[NumberSignal](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+						rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[NumberSignal](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 							switch msg.(NumberSignal) {
 							case Above:
 								upper = nextGuess() - 1
@@ -76,7 +76,8 @@ func newGuessNumberExecutor(id string, low int, high int) workflow.ExecutorBindi
 								lower = nextGuess() + 1
 							}
 							return struct{}{}, ctx.SendMessage("", nextGuess())
-						}), nil
+						})
+						return rb, nil
 					},
 				},
 			}, nil
@@ -95,8 +96,8 @@ func newJudgeExecutor(id string, target int) workflow.ExecutorBinding {
 				Spec: workflow.ExecutorSpec{
 					DisableAutoSendMessageHandlerResultObject: true,
 					DisableAutoYieldOutputHandlerResultObject: true,
-					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-						return rb.AddHandlerRaw(reflect.TypeFor[int](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+						rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[int](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 							guess := msg.(int)
 							tries++
 							switch {
@@ -107,7 +108,8 @@ func newJudgeExecutor(id string, target int) workflow.ExecutorBinding {
 							default:
 								return struct{}{}, ctx.SendMessage("", Above)
 							}
-						}), nil
+						})
+						return rb, nil
 					},
 				},
 			}, nil

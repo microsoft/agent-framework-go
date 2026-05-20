@@ -3,13 +3,14 @@
 package workflow
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"iter"
 	"maps"
 	"reflect"
 	"slices"
+
+	"github.com/microsoft/agent-framework-go/internal/concurrent"
 )
 
 // CatchAllFunc handles messages that do not match a typed route.
@@ -49,7 +50,7 @@ func WithHandlerOverwrite(overwrite bool) AddHandlerOption {
 
 // RouteBuilder configures the message routes for an executor.
 //
-// A RouteBuilder is normally used from [ExecutorSpec.ConfigureRoutes] to
+// A RouteBuilder is normally used from [ExecutorSpec.ConfigureProtocol] to
 // register typed handlers with [RouteBuilder.AddHandlerRaw] and an optional
 // fallback handler with [RouteBuilder.AddCatchAll]. The zero value is ready to
 // use, and registration methods return the builder so calls can be chained.
@@ -168,67 +169,88 @@ func (rb *RouteBuilder) build() (*messageRouter, error) {
 
 // messageRouter resolves runtime messages to their configured handlers.
 //
-// It keeps both reflect.Type keys for in-process values and TypeID keys for
-// portable values restored from serialized workflow state.
+// It keeps exact reflect.Type handlers, indexes handler metadata by TypeID for
+// portable values restored from serialized workflow state, and resolves
+// assignable interface handlers for in-process values.
 type messageRouter struct {
-	typedHandlers      map[reflect.Type]MessageHandlerFunc
-	runtimeTypeMap     map[TypeID]reflect.Type
-	catchAllFunc       CatchAllFunc
-	defaultOutputTypes map[reflect.Type]struct{}
+	typedHandlers     map[reflect.Type]MessageHandlerFunc
+	typeInfos         concurrent.Map[TypeID, typeHandlingInfo]
+	interfaceHandlers []reflect.Type
+	catchAllFunc      CatchAllFunc
+	outputTypes       map[reflect.Type]struct{}
+}
+
+type typeHandlingInfo struct {
+	runtimeType reflect.Type
+	handler     MessageHandlerFunc
 }
 
 // newMessageRouter creates a router and indexes typed handlers by TypeID.
 func newMessageRouter(handlers map[reflect.Type]MessageHandlerFunc, outputTypes map[reflect.Type]struct{}, catchAll CatchAllFunc) *messageRouter {
-	runtimeTypeMap := make(map[TypeID]reflect.Type, len(handlers))
-	for msgType := range handlers {
-		typeID := NewTypeID(msgType)
-		runtimeTypeMap[typeID] = msgType
+	router := &messageRouter{
+		typedHandlers: handlers,
+		catchAllFunc:  catchAll,
+		outputTypes:   outputTypes,
 	}
-	return &messageRouter{
-		typedHandlers:      handlers,
-		runtimeTypeMap:     runtimeTypeMap,
-		catchAllFunc:       catchAll,
-		defaultOutputTypes: outputTypes,
+	for msgType, handler := range handlers {
+		router.typeInfos.Store(NewTypeID(msgType), typeHandlingInfo{runtimeType: msgType, handler: handler})
+		if msgType.Kind() == reflect.Interface {
+			router.interfaceHandlers = append(router.interfaceHandlers, msgType)
+		}
 	}
+	return router
 }
 
-// IncomingTypes returns the concrete message types with typed handlers.
-func (mr *messageRouter) IncomingTypes() []reflect.Type {
+// incomingTypes returns the concrete message types with typed handlers.
+func (mr *messageRouter) incomingTypes() []reflect.Type {
 	return slices.Collect(maps.Keys(mr.typedHandlers))
 }
 
-// DefaultOutputTypes returns the output types declared by typed handlers.
-func (mr *messageRouter) DefaultOutputTypes() iter.Seq[reflect.Type] {
-	return maps.Keys(mr.defaultOutputTypes)
+// defaultOutputTypes returns the output types declared by typed handlers.
+func (mr *messageRouter) defaultOutputTypes() iter.Seq[reflect.Type] {
+	return maps.Keys(mr.outputTypes)
 }
 
-// HasCatchAll reports whether the router has a fallback handler.
-func (mr *messageRouter) HasCatchAll() bool {
+// hasCatchAll reports whether the router has a fallback handler.
+func (mr *messageRouter) hasCatchAll() bool {
 	return mr.catchAllFunc != nil
 }
 
-// CanHandle reports whether typ can be routed by a typed handler or catch-all.
-func (mr *messageRouter) CanHandle(typ TypeID) bool {
+// canHandle reports whether typ can be routed by a typed handler or catch-all.
+func (mr *messageRouter) canHandle(typ TypeID) bool {
 	if mr.catchAllFunc != nil {
 		return true
 	}
-	_, ok := mr.runtimeTypeMap[typ]
+	_, ok := mr.typeInfo(typ)
 	return ok
 }
 
-// RouteMessage invokes the matching typed handler or catch-all handler.
+// canHandleType reports whether typ can be routed by an exact typed handler,
+// an assignable interface handler, or catch-all.
+func (mr *messageRouter) canHandleType(typ reflect.Type) bool {
+	if typ == nil {
+		return false
+	}
+	if mr.catchAllFunc != nil {
+		return true
+	}
+	_, ok := mr.findHandler(typ)
+	return ok
+}
+
+// routeMessage invokes the matching typed handler or catch-all handler.
 //
 // Portable values are unpacked to their registered runtime type when possible.
 // Panics raised by handlers are converted to error call results so executor
 // error handling can treat them like ordinary handler failures.
-func (mr *messageRouter) RouteMessage(ctx *Context, msg any) (result callResult, handled bool) {
+func (mr *messageRouter) routeMessage(ctx *Context, msg any) (result callResult, handled bool) {
 	if msg == nil {
 		panic("nil message")
 	}
 	pvalue, isPortable := msg.(PortableValue)
 	if isPortable {
-		if typ, ok := mr.runtimeTypeMap[pvalue.TypeID]; ok {
-			if v, ok := pvalue.As(typ); ok {
+		if info, ok := mr.typeInfo(pvalue.TypeID); ok {
+			if v, ok := pvalue.As(info.runtimeType); ok {
 				// If we found a runtime type, we can use it
 				msg = v
 			}
@@ -243,7 +265,7 @@ func (mr *messageRouter) RouteMessage(ctx *Context, msg any) (result callResult,
 			result = callResult{Error: err, Result: struct{}{}}
 		}
 	}()
-	if handler, ok := mr.typedHandlers[reflect.TypeOf(msg)]; ok {
+	if handler, ok := mr.findHandler(reflect.TypeOf(msg)); ok {
 		handled = true
 		ret, err := handler(ctx, msg)
 		return callResult{ret, err}, handled
@@ -259,18 +281,44 @@ func (mr *messageRouter) RouteMessage(ctx *Context, msg any) (result callResult,
 	return callResult{}, false
 }
 
+func (mr *messageRouter) typeInfo(typeID TypeID) (typeHandlingInfo, bool) {
+	if typeID == (TypeID{}) {
+		return typeHandlingInfo{}, false
+	}
+	return mr.typeInfos.Load(typeID)
+}
+
+func (mr *messageRouter) findHandler(messageType reflect.Type) (MessageHandlerFunc, bool) {
+	if messageType == nil {
+		return nil, false
+	}
+	if handler, ok := mr.typedHandlers[messageType]; ok {
+		return handler, true
+	}
+
+	typeID := NewTypeID(messageType)
+	if info, ok := mr.typeInfo(typeID); ok {
+		return info.handler, true
+	}
+
+	for _, interfaceType := range mr.interfaceHandlers {
+		if messageType.AssignableTo(interfaceType) {
+			handler := mr.typedHandlers[interfaceType]
+			mr.typeInfos.Store(typeID, typeHandlingInfo{runtimeType: messageType, handler: handler})
+			return handler, true
+		}
+	}
+
+	return nil, false
+}
+
 // callResult captures a handler invocation result and error.
 type callResult struct {
 	Result any
 	Error  error
 }
 
-// IsVoid reports whether the handler returned the workflow void sentinel.
-func (cr callResult) IsVoid() bool {
+// isVoid reports whether the handler returned the workflow void sentinel.
+func (cr callResult) isVoid() bool {
 	return cr.Result != nil && reflect.TypeOf(cr.Result) == reflect.TypeFor[struct{}]()
-}
-
-// Canceled reports whether the handler failed because its context was canceled.
-func (cr callResult) Canceled() bool {
-	return errors.Is(cr.Error, context.Canceled)
 }

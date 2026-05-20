@@ -218,18 +218,26 @@ func (wb *Builder) build(validateOrphans bool) (*Workflow, error) {
 	}
 	activity.AddEvent(internalobservability.EventBuildValidationCompleted)
 	wf := &Workflow{
-		StartExecutorID:  wb.startExecutorId,
-		Name:             wb.name,
-		Description:      wb.description,
-		Edges:            wb.edges,
-		Ports:            wb.inputPorts,
-		ExecutorBindings: wb.executorsBindings,
-		OutputExecutors:  wb.outputExecutors,
+		startExecutorID:  wb.startExecutorId,
+		name:             wb.name,
+		description:      wb.description,
+		edges:            cloneEdges(wb.edges),
+		ports:            maps.Clone(wb.inputPorts),
+		executorBindings: maps.Clone(wb.executorsBindings),
+		outputExecutors:  maps.Clone(wb.outputExecutors),
 		telemetry:        telemetry,
 	}
 	internalobservability.SetBuildWorkflowAttributes(activity, observabilityMetadata(wf, ""), workflowTelemetryDefinitionFrom(wf))
 	activity.AddEvent(internalobservability.EventBuildCompleted)
 	return wf, nil
+}
+
+func cloneEdges(edges map[string][]Edge) map[string][]Edge {
+	out := make(map[string][]Edge, len(edges))
+	for sourceID, sourceEdges := range edges {
+		out[sourceID] = slices.Clone(sourceEdges)
+	}
+	return out
 }
 
 func (wb *Builder) validate(validateOrphans bool) bool {

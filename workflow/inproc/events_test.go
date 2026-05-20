@@ -28,11 +28,12 @@ func minimalEchoBinding(id string) workflow.ExecutorBinding {
 			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-				YieldTypes: []reflect.Type{reflect.TypeFor[string]()},
-				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.YieldsOutputType(reflect.TypeFor[string]())
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
 						return nil, ctx.YieldOutput("ok")
-					}), nil
+					})
+					return rb, nil
 				},
 			},
 		}, nil
@@ -531,7 +532,6 @@ func (te *trackingExecutor) Bind() workflow.ExecutorBinding {
 			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-				SendTypes: []reflect.Type{reflect.TypeFor[string]()},
 				OnMessageDeliveryStarting: func(_ *workflow.Context) error {
 					te.deliveryStarting.Add(1)
 					return nil
@@ -540,8 +540,9 @@ func (te *trackingExecutor) Bind() workflow.ExecutorBinding {
 					te.deliveryFinished.Add(1)
 					return nil
 				},
-				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.SendsMessageType(reflect.TypeFor[string]())
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 						s := msg.(string)
 						te.mu.Lock()
 						te.received = append(te.received, s)
@@ -550,7 +551,8 @@ func (te *trackingExecutor) Bind() workflow.ExecutorBinding {
 							return nil, ctx.SendMessage("", s)
 						}
 						return nil, nil
-					}), nil
+					})
+					return rb, nil
 				},
 			},
 		}, nil
@@ -616,10 +618,11 @@ func TestDeliveryEvents_FinishedRunsEvenWhenHandlerErrors(t *testing.T) {
 					finishedCalls.Add(1)
 					return nil
 				},
-				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(_ *workflow.Context, _ any) (any, error) {
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(_ *workflow.Context, _ any) (any, error) {
 						return nil, errBoom
-					}), nil
+					})
+					return rb, nil
 				},
 			},
 		}, nil

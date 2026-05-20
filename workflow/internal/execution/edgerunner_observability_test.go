@@ -49,7 +49,8 @@ func TestPrepareDeliveryForDirectEdge(t *testing.T) {
 					Connection: workflow.EdgeConnection{SourceIDs: []string{"executor1"}, SinkIDs: []string{"executor2"}},
 					Condition:  condition,
 				}
-				runner := newTestEdgeRunner(edge)
+				runner, builtEdges := newTestEdgeRunner(t, edge)
+				edge = builtEdges[0]
 				mapping, err := runner.PrepareDeliveryForEdge(context.Background(), edge, mustEnvelopeTarget(t, messageVariant1, "executor1", targetID))
 				if err != nil {
 					t.Fatalf("PrepareDeliveryForEdge: %v", err)
@@ -96,7 +97,8 @@ func TestPrepareDeliveryForFanOutEdge(t *testing.T) {
 					Connection: workflow.EdgeConnection{SourceIDs: []string{"executor1"}, SinkIDs: []string{"executor2", "executor3"}},
 					Assigner:   assigner,
 				}
-				runner := newTestEdgeRunner(edge)
+				runner, builtEdges := newTestEdgeRunner(t, edge)
+				edge = builtEdges[0]
 				mapping, err := runner.PrepareDeliveryForEdge(context.Background(), edge, mustEnvelopeTarget(t, "test", "executor1", targetID))
 				if err != nil {
 					t.Fatalf("PrepareDeliveryForEdge: %v", err)
@@ -120,7 +122,8 @@ func TestPrepareDeliveryForFanOutEdge(t *testing.T) {
 
 func TestPrepareDeliveryForFanInEdge(t *testing.T) {
 	edge := workflow.Edge{Index: 42, Connection: workflow.EdgeConnection{SourceIDs: []string{"executor1", "executor2"}, SinkIDs: []string{"executor3"}}}
-	runner := newTestEdgeRunner(edge)
+	runner, builtEdges := newTestEdgeRunner(t, edge)
+	edge = builtEdges[0]
 
 	for iteration := range 2 {
 		t.Run(fmt.Sprintf("iteration-%d", iteration), func(t *testing.T) {
@@ -140,7 +143,8 @@ func TestPrepareDeliveryForFanInEdgeConcurrentProcessing(t *testing.T) {
 		sourceIDs = append(sourceIDs, fmt.Sprintf("source%d", index))
 	}
 	edge := workflow.Edge{Index: 7, Connection: workflow.EdgeConnection{SourceIDs: sourceIDs, SinkIDs: []string{"sink"}}}
-	runner := newTestEdgeRunner(edge)
+	runner, builtEdges := newTestEdgeRunner(t, edge)
+	edge = builtEdges[0]
 
 	for iteration := range iterations {
 		start := make(chan struct{})
@@ -233,15 +237,11 @@ func TestPrepareDeliveryForEdgeRecordsEdgeGroupMetadata(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			tracer := workflowtest.NewRecordingTracer()
 			ctx := runtimeobservability.ContextWithTelemetry(context.Background(), runtimeobservability.New(runtimeobservability.Options{Tracer: tracer}))
-			runner := execution.NewEdgeRunner(&workflow.Workflow{
-				StartExecutorID: "start",
-				Edges:           map[string][]workflow.Edge{"source": {testCase.edge}},
-			}, nil, func(_ context.Context, targetID string, _ execution.StepTracer) (*workflow.Executor, error) {
-				return stringExecutor(targetID), nil
-			})
+			runner, builtEdges := newTestEdgeRunner(t, testCase.edge)
+			edge := builtEdges[0]
 
 			for _, envelope := range testCase.envelopes {
-				if _, err := runner.PrepareDeliveryForEdge(ctx, testCase.edge, envelope); err != nil {
+				if _, err := runner.PrepareDeliveryForEdge(ctx, edge, envelope); err != nil {
 					t.Fatalf("PrepareDeliveryForEdge returned error: %v", err)
 				}
 			}
@@ -268,13 +268,96 @@ func mustEnvelopeTarget(t *testing.T, message string, sourceID string, targetID 
 	return envelope
 }
 
-func newTestEdgeRunner(edges ...workflow.Edge) *execution.EdgeRunner {
-	return execution.NewEdgeRunner(&workflow.Workflow{
-		StartExecutorID: "start",
-		Edges:           map[string][]workflow.Edge{"source": edges},
-	}, nil, func(_ context.Context, targetID string, _ execution.StepTracer) (*workflow.Executor, error) {
+func newTestEdgeRunner(t *testing.T, edges ...workflow.Edge) (*execution.EdgeRunner, []workflow.Edge) {
+	t.Helper()
+	wf, builtEdges := newTestWorkflow(t, edges...)
+	runner := execution.NewEdgeRunner(wf, nil, func(_ context.Context, targetID string, _ execution.StepTracer) (*workflow.Executor, error) {
 		return stringExecutor(targetID), nil
 	})
+	return runner, builtEdges
+}
+
+func newTestWorkflow(t *testing.T, edges ...workflow.Edge) (*workflow.Workflow, []workflow.Edge) {
+	t.Helper()
+	bindings := make(map[string]workflow.ExecutorBinding)
+	binding := func(id string) workflow.ExecutorBinding {
+		if existing, ok := bindings[id]; ok {
+			return existing
+		}
+		binding := workflow.ExecutorBinding{
+			ID: id,
+			NewExecutorFunc: func(string) (*workflow.Executor, error) {
+				return stringExecutor(id), nil
+			},
+		}
+		bindings[id] = binding
+		return binding
+	}
+
+	startID := "start"
+	if len(edges) > 0 && len(edges[0].Connection.SourceIDs) > 0 {
+		startID = edges[0].Connection.SourceIDs[0]
+	}
+	builder := workflow.NewBuilder(binding(startID))
+	for _, edge := range edges {
+		for _, sourceID := range edge.Connection.SourceIDs {
+			binding(sourceID)
+		}
+		for _, sinkID := range edge.Connection.SinkIDs {
+			binding(sinkID)
+		}
+
+		sources := make([]workflow.ExecutorBinding, 0, len(edge.Connection.SourceIDs))
+		for _, sourceID := range edge.Connection.SourceIDs {
+			sources = append(sources, binding(sourceID))
+		}
+		sinks := make([]workflow.ExecutorBinding, 0, len(edge.Connection.SinkIDs))
+		for _, sinkID := range edge.Connection.SinkIDs {
+			sinks = append(sinks, binding(sinkID))
+		}
+		opts := edgeOptions(edge)
+		switch {
+		case len(sources) == 1 && len(sinks) == 1:
+			builder.AddDirectEdge(sources[0], sinks[0], false, edge.Condition, opts...)
+		case len(sources) == 1:
+			builder.AddFanOutEdge(sources[0], sinks, opts...)
+		default:
+			for _, source := range sources[1:] {
+				builder.AddDirectEdge(sources[0], source, true, nil)
+			}
+			builder.AddFanInBarrierEdge(sources, sinks[0], opts...)
+		}
+	}
+	wf, err := builder.Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	workflowEdges := wf.Edges()
+	builtEdges := make([]workflow.Edge, 0, len(edges))
+	for _, edge := range edges {
+		for _, candidate := range workflowEdges[edge.Connection.SourceIDs[0]] {
+			if candidate.Connection.Equal(edge.Connection) {
+				builtEdges = append(builtEdges, candidate)
+				break
+			}
+		}
+	}
+	if len(builtEdges) != len(edges) {
+		t.Fatalf("built edge count = %d, want %d", len(builtEdges), len(edges))
+	}
+	return wf, builtEdges
+}
+
+func edgeOptions(edge workflow.Edge) []workflow.EdgeOption {
+	var opts []workflow.EdgeOption
+	if edge.Label != "" {
+		opts = append(opts, workflow.WithEdgeLabel(edge.Label))
+	}
+	if edge.Assigner != nil {
+		opts = append(opts, workflow.WithEdgeAssigner(edge.Assigner))
+	}
+	return opts
 }
 
 func prepareDelivery(t *testing.T, runner *execution.EdgeRunner, edge workflow.Edge, envelope *execution.MessageEnvelope) *execution.DeliveryMapping {
@@ -355,10 +438,11 @@ func stringExecutor(id string) *workflow.Executor {
 	return &workflow.Executor{
 		ID: id,
 		Spec: workflow.ExecutorSpec{
-			ConfigureRoutes: func(builder *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-				return builder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(*workflow.Context, any) (any, error) {
+			ConfigureProtocol: func(builder *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				builder.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(*workflow.Context, any) (any, error) {
 					return nil, nil
-				}), nil
+				})
+				return builder, nil
 			},
 		},
 	}

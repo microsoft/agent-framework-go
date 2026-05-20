@@ -65,10 +65,11 @@ func bindStep[In any](id string, fn func(*workflow.Context, In) error) workflow.
 				Spec: workflow.ExecutorSpec{
 					DisableAutoSendMessageHandlerResultObject: true,
 					DisableAutoYieldOutputHandlerResultObject: true,
-					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-						return rb.AddHandlerRaw(reflect.TypeFor[In](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+						rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[In](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 							return struct{}{}, fn(ctx, msg.(In))
-						}), nil
+						})
+						return rb, nil
 					},
 				},
 			}, nil
@@ -88,11 +89,12 @@ func aggregateStrings(id string) workflow.ExecutorBinding {
 				Spec: workflow.ExecutorSpec{
 					DisableAutoSendMessageHandlerResultObject: true,
 					DisableAutoYieldOutputHandlerResultObject: true,
-					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-						return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(_ *workflow.Context, msg any) (any, error) {
+					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+						rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(_ *workflow.Context, msg any) (any, error) {
 							messages = append(messages, msg.(string))
 							return struct{}{}, nil
-						}), nil
+						})
+						return rb, nil
 					},
 					OnMessageDeliveryFinished: func(ctx *workflow.Context) error {
 						if len(messages) == 0 {

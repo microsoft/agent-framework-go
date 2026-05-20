@@ -35,22 +35,22 @@ func ConfigureForwarding(spec *workflow.ExecutorSpec, options *ForwardingOptions
 	forwardingSpec := workflow.ExecutorSpec{
 		DisableAutoSendMessageHandlerResultObject: true,
 		DisableAutoYieldOutputHandlerResultObject: true,
-		SendTypes: []reflect.Type{
-			reflect.TypeFor[*message.Message](),
-			reflect.TypeFor[[]*message.Message](),
-			reflect.TypeFor[workflow.TurnToken](),
-		},
 		Reset: func() error { return nil },
-		ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+			rb.SendsMessageType(
+				reflect.TypeFor[*message.Message](),
+				reflect.TypeFor[[]*message.Message](),
+				reflect.TypeFor[workflow.TurnToken](),
+			)
 			if stringMessageRole != "" {
-				rb = rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 					return struct{}{}, ctx.SendMessage("", &message.Message{
 						Role:     stringMessageRole,
 						Contents: []message.Content{&message.TextContent{Text: msg.(string)}},
 					})
 				})
 			}
-			return rb.
+			rb.RouteBuilder.
 				AddHandlerRaw(reflect.TypeFor[*message.Message](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 					return struct{}{}, ctx.SendMessage("", msg.(*message.Message))
 				}).
@@ -66,7 +66,8 @@ func ConfigureForwarding(spec *workflow.ExecutorSpec, options *ForwardingOptions
 				}).
 				AddHandlerRaw(reflect.TypeFor[workflow.TurnToken](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 					return struct{}{}, ctx.SendMessage("", msg.(workflow.TurnToken))
-				}), nil
+				})
+			return rb, nil
 		},
 	}
 	spec.Extend(forwardingSpec)

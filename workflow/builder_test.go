@@ -22,10 +22,11 @@ func (n *noOpExecutor) NewExecutor(sessionID string) (*workflow.Executor, error)
 	return &workflow.Executor{
 		ID: n.id,
 		Spec: workflow.ExecutorSpec{
-			ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-				return rb.AddCatchAll(func(ctx *workflow.Context, msg workflow.PortableValue) (any, error) {
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.RouteBuilder.AddCatchAll(func(ctx *workflow.Context, msg workflow.PortableValue) (any, error) {
 					return nil, ctx.SendMessage("", msg.Any())
-				}), nil
+				})
+				return rb, nil
 			},
 		},
 	}, nil
@@ -48,10 +49,11 @@ func (n *someOtherNoOpExecutor) NewExecutor(sessionID string) (*workflow.Executo
 	return &workflow.Executor{
 		ID: n.id,
 		Spec: workflow.ExecutorSpec{
-			ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-				return rb.AddCatchAll(func(ctx *workflow.Context, msg workflow.PortableValue) (any, error) {
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.RouteBuilder.AddCatchAll(func(ctx *workflow.Context, msg workflow.PortableValue) (any, error) {
 					return nil, ctx.SendMessage("", msg.Any())
-				}), nil
+				})
+				return rb, nil
 			},
 		},
 	}, nil
@@ -77,10 +79,11 @@ func TestBuilder_AllowsNilExecutorType(t *testing.T) {
 			return &workflow.Executor{
 				ID: "start",
 				Spec: workflow.ExecutorSpec{
-					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-						return rb.AddCatchAll(func(*workflow.Context, workflow.PortableValue) (any, error) {
+					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+						rb.RouteBuilder.AddCatchAll(func(*workflow.Context, workflow.PortableValue) (any, error) {
 							return nil, nil
-						}), nil
+						})
+						return rb, nil
 					},
 				},
 			}, nil
@@ -91,13 +94,14 @@ func TestBuilder_AllowsNilExecutorType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if got := wf.ExecutorBindings["start"].ExecutorType; got != nil {
+	bindings := wf.ReflectExecutors()
+	if got := bindings["start"].ExecutorType; got != nil {
 		t.Fatalf("ExecutorType = %v, want nil", got)
 	}
-	if got := wf.ExecutorBindings["start"].String(); got != "start:<unknown>" {
+	if got := bindings["start"].String(); got != "start:<unknown>" {
 		t.Fatalf("String() = %q, want start:<unknown>", got)
 	}
-	executor, err := wf.ExecutorBindings["start"].CreateInstance("session")
+	executor, err := bindings["start"].CreateInstance("session")
 	if err != nil {
 		t.Fatalf("CreateInstance: %v", err)
 	}
@@ -141,19 +145,20 @@ func TestBuilder_Validation_AddEdgesOutOfOrderDoesNotImpactReachability(t *testi
 		t.Fatalf("expected no error, got %v", err)
 	}
 
-	if wf.StartExecutorID != "start" {
-		t.Errorf("expected start executor ID 'start', got %s", wf.StartExecutorID)
+	if wf.StartExecutorID() != "start" {
+		t.Errorf("expected start executor ID 'start', got %s", wf.StartExecutorID())
 	}
 
-	if len(wf.ExecutorBindings) != 3 {
-		t.Errorf("expected 3 executor bindings, got %d", len(wf.ExecutorBindings))
+	bindings := wf.ReflectExecutors()
+	if len(bindings) != 3 {
+		t.Errorf("expected 3 executor bindings, got %d", len(bindings))
 	}
 
 	for _, id := range []string{"start", "not-unreachable", "also-not-unreachable"} {
-		if _, ok := wf.ExecutorBindings[id]; !ok {
+		if _, ok := bindings[id]; !ok {
 			t.Errorf("expected binding for %s", id)
 		} else {
-			if wf.ExecutorBindings[id].ExecutorType != reflect.TypeFor[*noOpExecutor]() {
+			if bindings[id].ExecutorType != reflect.TypeFor[*noOpExecutor]() {
 				t.Errorf("expected executor type *noOpExecutor for %s", id)
 			}
 		}
@@ -168,15 +173,16 @@ func TestBuilder_LateBinding_Executor(t *testing.T) {
 		t.Fatalf("expected no error, got %v", err)
 	}
 
-	if wf.StartExecutorID != "start" {
-		t.Errorf("expected start executor ID 'start', got %s", wf.StartExecutorID)
+	if wf.StartExecutorID() != "start" {
+		t.Errorf("expected start executor ID 'start', got %s", wf.StartExecutorID())
 	}
 
-	if len(wf.ExecutorBindings) != 1 {
-		t.Errorf("expected 1 executor binding, got %d", len(wf.ExecutorBindings))
+	bindings := wf.ReflectExecutors()
+	if len(bindings) != 1 {
+		t.Errorf("expected 1 executor binding, got %d", len(bindings))
 	}
 
-	if binding, ok := wf.ExecutorBindings["start"]; !ok {
+	if binding, ok := bindings["start"]; !ok {
 		t.Error("expected binding for start")
 	} else {
 		if binding.ExecutorType != reflect.TypeFor[*noOpExecutor]() {
@@ -194,15 +200,16 @@ func TestBuilder_LateImplicitBinding_Executor(t *testing.T) {
 		t.Fatalf("expected no error, got %v", err)
 	}
 
-	if wf.StartExecutorID != "start" {
-		t.Errorf("expected start executor ID 'start', got %s", wf.StartExecutorID)
+	if wf.StartExecutorID() != "start" {
+		t.Errorf("expected start executor ID 'start', got %s", wf.StartExecutorID())
 	}
 
-	if len(wf.ExecutorBindings) != 1 {
-		t.Errorf("expected 1 executor binding, got %d", len(wf.ExecutorBindings))
+	bindings := wf.ReflectExecutors()
+	if len(bindings) != 1 {
+		t.Errorf("expected 1 executor binding, got %d", len(bindings))
 	}
 
-	if binding, ok := wf.ExecutorBindings["start"]; !ok {
+	if binding, ok := bindings["start"]; !ok {
 		t.Error("expected binding for start")
 	} else {
 		if binding.ExecutorType != reflect.TypeFor[*noOpExecutor]() {
@@ -249,15 +256,16 @@ func TestBuilder_RebindToSameish_Allowed(t *testing.T) {
 		t.Fatalf("expected no error, got %v", err)
 	}
 
-	if wf.StartExecutorID != "start" {
-		t.Errorf("expected start executor ID 'start', got %s", wf.StartExecutorID)
+	if wf.StartExecutorID() != "start" {
+		t.Errorf("expected start executor ID 'start', got %s", wf.StartExecutorID())
 	}
 
-	if len(wf.ExecutorBindings) != 1 {
-		t.Errorf("expected 1 executor binding, got %d", len(wf.ExecutorBindings))
+	bindings := wf.ReflectExecutors()
+	if len(bindings) != 1 {
+		t.Errorf("expected 1 executor binding, got %d", len(bindings))
 	}
 
-	if binding, ok := wf.ExecutorBindings["start"]; !ok {
+	if binding, ok := bindings["start"]; !ok {
 		t.Error("expected binding for start")
 	} else {
 		if binding.ExecutorType != reflect.TypeFor[*noOpExecutor]() {
@@ -277,11 +285,11 @@ func TestBuilder_Workflow_NameAndDescription(t *testing.T) {
 		t.Fatalf("expected no error, got %v", err)
 	}
 
-	if wf1.Name != "Test Pipeline" {
-		t.Errorf("expected name 'Test Pipeline', got %s", wf1.Name)
+	if wf1.Name() != "Test Pipeline" {
+		t.Errorf("expected name 'Test Pipeline', got %s", wf1.Name())
 	}
-	if wf1.Description != "Test workflow description" {
-		t.Errorf("expected description 'Test workflow description', got %s", wf1.Description)
+	if wf1.Description() != "Test workflow description" {
+		t.Errorf("expected description 'Test workflow description', got %s", wf1.Description())
 	}
 
 	// Test without (defaults to empty string in Go)
@@ -292,11 +300,11 @@ func TestBuilder_Workflow_NameAndDescription(t *testing.T) {
 		t.Fatalf("expected no error, got %v", err)
 	}
 
-	if wf2.Name != "" {
-		t.Errorf("expected empty name, got %s", wf2.Name)
+	if wf2.Name() != "" {
+		t.Errorf("expected empty name, got %s", wf2.Name())
 	}
-	if wf2.Description != "" {
-		t.Errorf("expected empty description, got %s", wf2.Description)
+	if wf2.Description() != "" {
+		t.Errorf("expected empty description, got %s", wf2.Description())
 	}
 
 	// Test with only name (no description)
@@ -308,11 +316,11 @@ func TestBuilder_Workflow_NameAndDescription(t *testing.T) {
 		t.Fatalf("expected no error, got %v", err)
 	}
 
-	if wf3.Name != "Named Only" {
-		t.Errorf("expected name 'Named Only', got %s", wf3.Name)
+	if wf3.Name() != "Named Only" {
+		t.Errorf("expected name 'Named Only', got %s", wf3.Name())
 	}
-	if wf3.Description != "" {
-		t.Errorf("expected empty description, got %s", wf3.Description)
+	if wf3.Description() != "" {
+		t.Errorf("expected empty description, got %s", wf3.Description())
 	}
 }
 
@@ -329,12 +337,13 @@ func recordingBinding(id string, sink *[]string) workflow.ExecutorBinding {
 			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-				SendTypes: []reflect.Type{reflect.TypeFor[string]()},
-				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.SendsMessageType(reflect.TypeFor[string]())
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 						*sink = append(*sink, id+":"+msg.(string))
 						return nil, ctx.SendMessage("", msg)
-					}), nil
+					})
+					return rb, nil
 				},
 			},
 		}, nil
@@ -503,8 +512,8 @@ func TestBuilder_Validation_SelfLoopWarning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error for self-loop, got %v", err)
 	}
-	if wf.StartExecutorID != "start" {
-		t.Errorf("expected start executor ID 'start', got %s", wf.StartExecutorID)
+	if wf.StartExecutorID() != "start" {
+		t.Errorf("expected start executor ID 'start', got %s", wf.StartExecutorID())
 	}
 }
 
@@ -523,7 +532,7 @@ func TestBuilder_Validation_DeadEndLogging(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error for dead-end, got %v", err)
 	}
-	if _, ok := wf.ExecutorBindings["leaf"]; !ok {
+	if _, ok := wf.ExecutorBinding("leaf"); !ok {
 		t.Error("expected leaf executor in bindings")
 	}
 	if !strings.Contains(logs, "dead-end executors detected") || !strings.Contains(logs, "leaf") {
@@ -570,10 +579,11 @@ func newTypedExecutor[T any, U any](id string) workflow.ExecutorBinding {
 		return &workflow.Executor{
 			ID: id,
 			Spec: workflow.ExecutorSpec{
-				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandlerRaw(reflect.TypeFor[T](), reflect.TypeFor[U](), func(ctx *workflow.Context, msg any) (any, error) {
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[T](), reflect.TypeFor[U](), func(ctx *workflow.Context, msg any) (any, error) {
 						return *new(U), nil
-					}), nil
+					})
+					return rb, nil
 				},
 			},
 		}, nil
@@ -592,11 +602,12 @@ func newDeclaredSendExecutor[T any](id string, sendTypes ...reflect.Type) workfl
 			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-				SendTypes: sendTypes,
-				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandlerRaw(reflect.TypeFor[T](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.SendsMessageType(sendTypes...)
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[T](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 						return nil, nil
-					}), nil
+					})
+					return rb, nil
 				},
 			},
 		}, nil
@@ -671,10 +682,11 @@ func TestBuilder_Validation_TypeCompatibility_RespectsAutoSendDisabled(t *testin
 			ID: source.ID,
 			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
-				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[int](), func(ctx *workflow.Context, msg any) (any, error) {
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[int](), func(ctx *workflow.Context, msg any) (any, error) {
 						return 1, nil
-					}), nil
+					})
+					return rb, nil
 				},
 			},
 		}, nil

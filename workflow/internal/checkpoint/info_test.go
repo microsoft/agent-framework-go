@@ -9,31 +9,41 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow"
 )
 
+func testBinding(id string, typ reflect.Type) workflow.ExecutorBinding {
+	return workflow.ExecutorBinding{
+		ID:           id,
+		ExecutorType: typ,
+		NewExecutorFunc: func(string) (*workflow.Executor, error) {
+			return &workflow.Executor{
+				ID:           id,
+				ExecutorType: typ,
+				Spec: workflow.ExecutorSpec{
+					ConfigureProtocol: func(builder *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+						return builder, nil
+					},
+				},
+			}, nil
+		},
+	}
+}
+
 func TestWorkflowInfoMatch_PreservesEdgeMultiplicity(t *testing.T) {
-	bindings := map[string]workflow.ExecutorBinding{
-		"a": {ID: "a", ExecutorType: reflect.TypeFor[struct{}]()},
-		"b": {ID: "b", ExecutorType: reflect.TypeFor[struct{}]()},
-		"c": {ID: "c", ExecutorType: reflect.TypeFor[struct{}]()},
+	a := testBinding("a", reflect.TypeFor[struct{}]())
+	b := testBinding("b", reflect.TypeFor[struct{}]())
+	c := testBinding("c", reflect.TypeFor[struct{}]())
+	recorded, err := workflow.NewBuilder(a).
+		AddEdge(a, b).
+		AddEdge(a, c).
+		Build()
+	if err != nil {
+		t.Fatalf("Build recorded: %v", err)
 	}
-	recorded := &workflow.Workflow{
-		StartExecutorID:  "a",
-		ExecutorBindings: bindings,
-		Edges: map[string][]workflow.Edge{
-			"a": {
-				{Connection: workflow.EdgeConnection{SourceIDs: []string{"a"}, SinkIDs: []string{"b"}}},
-				{Connection: workflow.EdgeConnection{SourceIDs: []string{"a"}, SinkIDs: []string{"c"}}},
-			},
-		},
-	}
-	incompatible := &workflow.Workflow{
-		StartExecutorID:  "a",
-		ExecutorBindings: bindings,
-		Edges: map[string][]workflow.Edge{
-			"a": {
-				{Connection: workflow.EdgeConnection{SourceIDs: []string{"a"}, SinkIDs: []string{"b"}}},
-				{Connection: workflow.EdgeConnection{SourceIDs: []string{"a"}, SinkIDs: []string{"b"}}},
-			},
-		},
+	incompatible, err := workflow.NewBuilder(a).
+		AddEdge(a, b).
+		AddDirectEdge(a, b, false, func(any) bool { return true }).
+		Build()
+	if err != nil {
+		t.Fatalf("Build incompatible: %v", err)
 	}
 
 	info := NewWorkflowInfo(recorded)
@@ -43,11 +53,9 @@ func TestWorkflowInfoMatch_PreservesEdgeMultiplicity(t *testing.T) {
 }
 
 func TestWorkflowInfoMatch_AllowsNilExecutorType(t *testing.T) {
-	recorded := &workflow.Workflow{
-		StartExecutorID: "a",
-		ExecutorBindings: map[string]workflow.ExecutorBinding{
-			"a": {ID: "a"},
-		},
+	recorded, err := workflow.NewBuilder(testBinding("a", nil)).Build()
+	if err != nil {
+		t.Fatalf("Build recorded: %v", err)
 	}
 
 	info := NewWorkflowInfo(recorded)
@@ -55,11 +63,9 @@ func TestWorkflowInfoMatch_AllowsNilExecutorType(t *testing.T) {
 		t.Fatal("expected nil executor type metadata not to match because empty TypeID is unknown")
 	}
 
-	incompatible := &workflow.Workflow{
-		StartExecutorID: "a",
-		ExecutorBindings: map[string]workflow.ExecutorBinding{
-			"a": {ID: "a", ExecutorType: reflect.TypeFor[struct{}]()},
-		},
+	incompatible, err := workflow.NewBuilder(testBinding("a", reflect.TypeFor[struct{}]())).Build()
+	if err != nil {
+		t.Fatalf("Build incompatible: %v", err)
 	}
 	if info.Match(incompatible) {
 		t.Fatal("expected nil executor type metadata not to match concrete executor type")

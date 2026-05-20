@@ -43,10 +43,11 @@ func (e *StateTestExecutor[T]) Bind() workflow.ExecutorBinding {
 			return &workflow.Executor{
 				ID: e.ID,
 				Spec: workflow.ExecutorSpec{
-					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-						return rb.AddHandlerRaw(reflect.TypeFor[TestTurnToken](), reflect.TypeFor[TestTurnToken](), func(ctx *workflow.Context, msg any) (any, error) {
+					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+						rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[TestTurnToken](), reflect.TypeFor[TestTurnToken](), func(ctx *workflow.Context, msg any) (any, error) {
 							return e.Execute(ctx, msg.(TestTurnToken))
-						}), nil
+						})
+						return rb, nil
 					},
 				},
 			}, nil
@@ -238,9 +239,9 @@ func TestInProcessRun_StateShouldPersist_JSONCheckpointed(t *testing.T) {
 			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-				YieldTypes: []reflect.Type{reflect.TypeFor[string]()},
-				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.YieldsOutputType(reflect.TypeFor[string]())
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 						switch msg.(string) {
 						case "write":
 							return nil, ctx.QueueStateUpdate(stateKey, "", "persisted")
@@ -253,7 +254,8 @@ func TestInProcessRun_StateShouldPersist_JSONCheckpointed(t *testing.T) {
 						default:
 							return nil, nil
 						}
-					}), nil
+					})
+					return rb, nil
 				},
 			},
 		}, nil
@@ -385,9 +387,9 @@ func stateKeysLifecycleBindings(scope string) (workflow.ExecutorBinding, workflo
 			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-				SendTypes: []reflect.Type{reflect.TypeFor[string]()},
-				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, message any) (any, error) {
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.SendsMessageType(reflect.TypeFor[string]())
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, message any) (any, error) {
 						switch message.(string) {
 						case "write":
 							if err := ctx.QueueStateUpdate(key, scope, "value1"); err != nil {
@@ -412,7 +414,8 @@ func stateKeysLifecycleBindings(scope string) (workflow.ExecutorBinding, workflo
 						default:
 							return nil, nil
 						}
-					}), nil
+					})
+					return rb, nil
 				},
 			},
 		}, nil
@@ -424,15 +427,16 @@ func stateKeysLifecycleBindings(scope string) (workflow.ExecutorBinding, workflo
 			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, message any) (any, error) {
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, message any) (any, error) {
 						keys, err := readWorkflowStateKeys(ctx, scope)
 						if err != nil {
 							return nil, err
 						}
 						observed["reader:"+message.(string)] = keys
 						return nil, nil
-					}), nil
+					})
+					return rb, nil
 				},
 			},
 		}, nil
@@ -510,13 +514,14 @@ func TestInProcessRun_ReadOrInitStateInitializerError(t *testing.T) {
 			return &workflow.Executor{
 				ID: "stateful",
 				Spec: workflow.ExecutorSpec{
-					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-						return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
+					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+						rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
 							_, err := ctx.ReadOrInitState("key", "", func(context.Context, string, string) (any, error) {
 								return nil, errors.New(want)
 							})
 							return nil, err
-						}), nil
+						})
+						return rb, nil
 					},
 				},
 			}, nil
