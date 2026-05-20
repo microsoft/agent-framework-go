@@ -2,10 +2,14 @@
 
 package a2aagent
 
-import "github.com/microsoft/agent-framework-go/agent"
+import (
+	"github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/microsoft/agent-framework-go/agent"
+)
 
 const (
 	taskIDsStateKey = "a2aagent.taskIDs"
+	taskStateKey    = "a2aagent.taskState"
 )
 
 func setContextID(session *agent.Session, contextID string) {
@@ -41,4 +45,22 @@ func getTaskIDs(session *agent.Session) []string {
 // TaskIDsFromSession returns all known A2A task IDs stored in session state.
 func TaskIDsFromSession(session *agent.Session) []string {
 	return getTaskIDs(session)
+}
+
+func setLastTaskState(session *agent.Session, state a2a.TaskState) {
+	if session == nil || state == a2a.TaskStateUnspecified {
+		return
+	}
+	session.Set(taskStateKey, string(state))
+}
+
+func getLastTaskState(session *agent.Session) a2a.TaskState {
+	if session == nil {
+		return a2a.TaskStateUnspecified
+	}
+	var state string
+	if ok, err := session.Get(taskStateKey, &state); err != nil || !ok {
+		return a2a.TaskStateUnspecified
+	}
+	return a2a.TaskState(state)
 }
