@@ -471,17 +471,8 @@ type Context struct {
 	ConcurrentRunsEnabled bool
 }
 
-// GetContext returns the underlying context or [context.Background] when ctx or
-// its embedded context is nil.
-func (ctx *Context) GetContext() context.Context {
-	if ctx == nil || ctx.Context == nil {
-		return context.Background()
-	}
-	return ctx.Context
-}
-
 func (ctx *Context) telemetry() *observability.Context {
-	return observability.FromContext(ctx.GetContext())
+	return observability.FromContext(ctx)
 }
 
 func (ctx *Context) traceContextStrings() map[string]string {

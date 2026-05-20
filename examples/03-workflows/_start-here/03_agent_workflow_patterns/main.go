@@ -10,7 +10,7 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/hosting/workflowhosting"
-	"github.com/microsoft/agent-framework-go/agent/provider/openaichatagent"
+	"github.com/microsoft/agent-framework-go/agent/provider/openaiagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/workflow"
@@ -38,49 +38,64 @@ func main() {
 		demo.Panic(err)
 	}
 
-	run, err := inproc.Default.RunStreaming(context.Background(), wf, message.NewText("Hello, world!"))
-	if err != nil {
+	if _, err := runWorkflow(context.Background(), wf, []*message.Message{message.NewText("Hello, world!")}); err != nil {
 		demo.Panic(err)
 	}
-	defer func() { _ = run.Close(context.Background()) }()
+}
+
+func runWorkflow(ctx context.Context, wf *workflow.Workflow, messages []*message.Message) ([]*message.Message, error) {
+	run, err := inproc.Default.RunStreaming(ctx, wf, messages)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = run.Close(ctx) }()
 
 	emitEvents := true
-	if err := run.SendMessage(context.Background(), workflow.TurnToken{EmitEvents: &emitEvents}); err != nil {
-		demo.Panic(err)
+	if err := run.SendMessage(ctx, workflow.TurnToken{EmitEvents: &emitEvents}); err != nil {
+		return nil, err
 	}
-	for evt, err := range run.WatchStream(context.Background()) {
+
+	lastExecutorID := ""
+	for evt, err := range run.WatchStream(ctx) {
 		if err != nil {
-			demo.Panic(err)
+			return nil, err
 		}
 		switch e := evt.(type) {
 		case workflow.OutputEvent:
 			if update, ok := e.Output.(*agent.ResponseUpdate); ok {
-				demo.Assistantf("%s: %s", e.ExecutorID, update.String())
-			} else {
-				demo.Assistantf("Output: %v", e.Output)
+				if e.ExecutorID != lastExecutorID {
+					lastExecutorID = e.ExecutorID
+					demo.Assistantf("%s", e.ExecutorID)
+				}
+				if updateText := update.String(); updateText != "" {
+					demo.Assistantf("%s", updateText)
+				}
+				continue
 			}
+			if outputMessages, ok := e.Output.([]*message.Message); ok {
+				return outputMessages, nil
+			}
+		case workflow.ErrorEvent:
+			return nil, e.Error
+		case workflow.ExecutorFailedEvent:
+			return nil, fmt.Errorf("executor %q failed: %v", e.ExecutorID, e.Error)
 		}
 	}
+	return nil, nil
 }
 
 func buildPattern(pattern string) (*workflow.Workflow, error) {
-	cfg := workflowhosting.Config{DisableMessageForwarding: true, DisableRoleReassignment: true}
-	french := workflowhosting.New(newTranslationAgent("French"), cfg)
-	spanish := workflowhosting.New(newTranslationAgent("Spanish"), cfg)
-	english := workflowhosting.New(newTranslationAgent("English"), cfg)
+	agents := []*agent.Agent{
+		newTranslationAgent("French"),
+		newTranslationAgent("Spanish"),
+		newTranslationAgent("English"),
+	}
 
 	switch pattern {
 	case "sequential":
-		return workflow.NewBuilder(french).
-			AddEdge(french, spanish).
-			AddEdge(spanish, english).
-			WithOutputFrom(english).
-			Build()
+		return workflowhosting.BuildSequential("", agents...)
 	case "concurrent":
-		return workflow.NewBuilder(french).
-			AddFanOutEdge(french, []workflow.ExecutorBinding{spanish, english}).
-			WithOutputFrom(spanish, english).
-			Build()
+		return workflowhosting.BuildConcurrent("", agents...)
 	default:
 		return nil, fmt.Errorf("unknown WORKFLOW_PATTERN %q; use sequential or concurrent", pattern)
 	}
@@ -88,14 +103,14 @@ func buildPattern(pattern string) (*workflow.Workflow, error) {
 
 func newTranslationAgent(language string) *agent.Agent {
 	token := demo.AzureTokenCredential()
-	return openaichatagent.New(
+	return openaiagent.NewChatCompletions(
 		openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
 			azure.WithTokenCredential(token),
 		),
-		openaichatagent.Config{
+		openaiagent.Config{
 			Model:        deployment,
-			Instructions: fmt.Sprintf("Translate the user's text to %s. Return only the translation.", language),
+			Instructions: fmt.Sprintf("You are a translation assistant who only responds in %s. Respond to any input by outputting the name of the input language and then translating the input to %s.", language, language),
 			Config: agent.Config{
 				Name:        language,
 				Middlewares: []agent.Middleware{logger},

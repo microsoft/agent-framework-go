@@ -3,6 +3,7 @@
 package messageworkflow_test
 
 import (
+	"context"
 	"iter"
 	"reflect"
 	"slices"
@@ -39,6 +40,7 @@ func createExecutorWithSent(options *messageworkflow.Options) (*workflow.Executo
 	var sent []any
 
 	ctx := &workflow.Context{
+		Context: context.Background(),
 		SendMessage: func(targetID string, message any) error {
 			sent = append(sent, message)
 			return nil

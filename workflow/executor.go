@@ -276,7 +276,7 @@ func (e *Executor) Execute(ctx *Context, message any) (result any, err error) {
 	telemetry := ctx.telemetry()
 	messageType := NewTypeID(reflect.TypeOf(message))
 	spanCtx, span := telemetry.StartExecutorProcess(
-		ctx.GetContext(),
+		ctx,
 		e.ID,
 		observability.TypeName(e.ExecutorType),
 		messageType.TypeName,

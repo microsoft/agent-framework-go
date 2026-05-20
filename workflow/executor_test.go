@@ -15,6 +15,7 @@ import (
 func TestExecutorSpec_ExtendRoutesAndLifecycleInOrder(t *testing.T) {
 	var calls []string
 	ctx := &workflow.Context{
+		Context:  t.Context(),
 		AddEvent: func(workflow.Event) error { return nil },
 	}
 	spec := workflow.ExecutorSpec{
@@ -150,7 +151,7 @@ func TestExecutorSpec_ExtendFinishedRunsAllHooksAndReturnsFirstError(t *testing.
 		},
 	})
 
-	if err := spec.OnMessageDeliveryFinished(&workflow.Context{}); !errors.Is(err, firstErr) {
+	if err := spec.OnMessageDeliveryFinished(&workflow.Context{Context: t.Context()}); !errors.Is(err, firstErr) {
 		t.Fatalf("OnMessageDeliveryFinished error = %v, want %v", err, firstErr)
 	}
 	want := []string{"first", "second"}
@@ -392,6 +393,7 @@ func TestAddHandlerRaw_WithHandlerOverwrite(t *testing.T) {
 		},
 	}
 	ctx := &workflow.Context{
+		Context:  t.Context(),
 		AddEvent: func(workflow.Event) error { return nil },
 	}
 
@@ -422,6 +424,7 @@ func TestAddCatchAll_WithHandlerOverwrite(t *testing.T) {
 		},
 	}
 	ctx := &workflow.Context{
+		Context:  t.Context(),
 		AddEvent: func(workflow.Event) error { return nil },
 	}
 
@@ -449,6 +452,7 @@ func TestExecutorExecute_HandlerPanicReportsFailure(t *testing.T) {
 	}
 	var events []workflow.Event
 	ctx := &workflow.Context{
+		Context: t.Context(),
 		AddEvent: func(evt workflow.Event) error {
 			events = append(events, evt)
 			return nil
