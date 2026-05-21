@@ -205,13 +205,7 @@ func (h *hostExecutor) executor() *workflow.Executor {
 	spec.Extend(workflow.ExecutorSpec{
 		OnCheckpoint:         h.onCheckpoint,
 		OnCheckpointRestored: h.onCheckpointRestored,
-		SendTypes: []reflect.Type{
-			reflect.TypeFor[[]*message.Message](),
-			reflect.TypeFor[workflow.TurnToken](),
-			reflect.TypeFor[*message.ToolApprovalRequestContent](),
-			reflect.TypeFor[*message.FunctionCallContent](),
-		},
-		ConfigureRoutes: h.configureRoutes,
+		ConfigureProtocol:    h.configureRoutes,
 	})
 
 	return &workflow.Executor{
@@ -271,9 +265,17 @@ func (h *hostExecutor) onCheckpointRestored(wctx *workflow.Context) error {
 	return nil
 }
 
-func (h *hostExecutor) configureRoutes(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
+func (h *hostExecutor) configureRoutes(pb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+	pb.SendsMessageType(
+		reflect.TypeFor[[]*message.Message](),
+		reflect.TypeFor[workflow.TurnToken](),
+		reflect.TypeFor[*message.ToolApprovalRequestContent](),
+		reflect.TypeFor[*message.FunctionCallContent](),
+	)
+	rb := &pb.RouteBuilder
 	rb = h.approvalHandler.ConfigureRoutes(rb)
 	rb = h.callHandler.ConfigureRoutes(rb)
+	pb.RouteBuilder = *rb
 	rb = rb.AddHandlerRaw(reflect.TypeFor[ResetSignal](), nil, func(wctx *workflow.Context, msg any) (any, error) {
 		h.session = nil
 		h.turnEmitEvents = nil
@@ -288,7 +290,8 @@ func (h *hostExecutor) configureRoutes(rb *workflow.RouteBuilder) (*workflow.Rou
 		return nil, h.handleExternalResponse(wctx, msg.(*workflow.ExternalResponse))
 	})
 
-	return rb, nil
+	pb.RouteBuilder = *rb
+	return pb, nil
 }
 
 // drainBuffered returns the currently buffered messages and resets the buffer.

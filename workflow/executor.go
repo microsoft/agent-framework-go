@@ -27,19 +27,10 @@ type ExecutorSpec struct {
 	// yielded as workflow output from the executor.
 	DisableAutoYieldOutputHandlerResultObject bool
 
-	// SendTypes declares message types this executor may send with
-	// [Context.SendMessage], in addition to handler result types automatically
-	// sent when DisableAutoSendMessageHandlerResultObject is false.
-	SendTypes []reflect.Type
-
-	// YieldTypes declares output types this executor may yield with
-	// [Context.YieldOutput], in addition to handler result types automatically
-	// yielded when DisableAutoYieldOutputHandlerResultObject is false.
-	YieldTypes []reflect.Type
-
-	// ConfigureRoutes adds message handlers to the supplied builder.
+	// ConfigureProtocol configures message handlers and declared send/yield
+	// message types on the supplied builder.
 	// It may return the same builder or a replacement builder.
-	ConfigureRoutes func(builder *RouteBuilder) (*RouteBuilder, error)
+	ConfigureProtocol func(builder *ProtocolBuilder) (*ProtocolBuilder, error)
 
 	// Initialize is called when the executor instance is created for a run.
 	Initialize func(ctx *Context) error
@@ -67,7 +58,7 @@ type ExecutorSpec struct {
 
 // Extend adds spec to s.
 //
-// Existing route configuration and lifecycle hooks run before hooks from spec.
+// Existing protocol configuration and lifecycle hooks run before hooks from spec.
 // Most hooks stop on the first error. OnMessageDeliveryFinished runs every hook
 // and returns the first error encountered.
 //
@@ -80,10 +71,7 @@ func (s *ExecutorSpec) Extend(spec ExecutorSpec) {
 
 	s.DisableAutoSendMessageHandlerResultObject = s.DisableAutoSendMessageHandlerResultObject || spec.DisableAutoSendMessageHandlerResultObject
 	s.DisableAutoYieldOutputHandlerResultObject = s.DisableAutoYieldOutputHandlerResultObject || spec.DisableAutoYieldOutputHandlerResultObject
-	s.SendTypes = appendUniqueTypes(s.SendTypes, spec.SendTypes...)
-	s.YieldTypes = appendUniqueTypes(s.YieldTypes, spec.YieldTypes...)
-
-	s.ConfigureRoutes = extendRoutes(s.ConfigureRoutes, spec.ConfigureRoutes)
+	s.ConfigureProtocol = extendProtocol(s.ConfigureProtocol, spec.ConfigureProtocol)
 	s.Initialize = extendContextHook(s.Initialize, spec.Initialize)
 	s.Reset = extendResetHook(s.Reset, spec.Reset)
 	s.OnCheckpoint = extendContextHook(s.OnCheckpoint, spec.OnCheckpoint)
@@ -102,14 +90,14 @@ func appendUniqueTypes(dst []reflect.Type, src ...reflect.Type) []reflect.Type {
 	return dst
 }
 
-func extendRoutes(first, second func(*RouteBuilder) (*RouteBuilder, error)) func(*RouteBuilder) (*RouteBuilder, error) {
+func extendProtocol(first, second func(*ProtocolBuilder) (*ProtocolBuilder, error)) func(*ProtocolBuilder) (*ProtocolBuilder, error) {
 	if first == nil {
 		return second
 	}
 	if second == nil {
 		return first
 	}
-	return func(builder *RouteBuilder) (*RouteBuilder, error) {
+	return func(builder *ProtocolBuilder) (*ProtocolBuilder, error) {
 		builder, err := first(builder)
 		if err != nil {
 			return nil, err
@@ -165,7 +153,7 @@ func extendFinishedHook(first, second func(*Context) error) func(*Context) error
 }
 
 func (s ExecutorSpec) isConfigured() bool {
-	return s.ConfigureRoutes != nil ||
+	return s.ConfigureProtocol != nil ||
 		s.Initialize != nil ||
 		s.Reset != nil ||
 		s.OnCheckpoint != nil ||
@@ -194,9 +182,9 @@ type Executor struct {
 	// hooks. Use [ExecutorSpec.Extend] to combine multiple spec fragments.
 	Spec ExecutorSpec
 
-	routerMu     sync.Mutex
-	cachedRouter *messageRouter
-	routerErr    error
+	routerMu       sync.Mutex
+	cachedProtocol *executorProtocol
+	protocolErr    error
 
 	declaredSendTypeCache sync.Map // reflect.Type -> reflect.Type
 	canOutputCache        sync.Map // reflect.Type -> bool
@@ -249,27 +237,39 @@ func (e *Executor) Reset() error {
 	return nil
 }
 
-func (e *Executor) router() (*messageRouter, error) {
+func (e *Executor) protocol() (*executorProtocol, error) {
 	e.routerMu.Lock()
 	defer e.routerMu.Unlock()
 
-	if e.cachedRouter != nil || e.routerErr != nil {
-		return e.cachedRouter, e.routerErr
+	if e.cachedProtocol != nil || e.protocolErr != nil {
+		return e.cachedProtocol, e.protocolErr
 	}
 	if !e.Spec.isConfigured() {
-		panic(errors.New("executor has no route configuration function"))
+		panic(errors.New("executor has no protocol configuration function"))
 	}
-	bld := &RouteBuilder{}
-	if e.Spec.ConfigureRoutes != nil {
+	bld := &ProtocolBuilder{}
+	if e.Spec.ConfigureProtocol != nil {
 		var err error
-		bld, err = e.Spec.ConfigureRoutes(bld)
+		bld, err = e.Spec.ConfigureProtocol(bld)
 		if err != nil {
-			e.routerErr = err
+			e.protocolErr = err
 			return nil, err
 		}
+		if bld == nil {
+			e.protocolErr = errors.New("workflow: protocol configure function returned nil ProtocolBuilder")
+			return nil, e.protocolErr
+		}
 	}
-	e.cachedRouter, e.routerErr = bld.build()
-	return e.cachedRouter, e.routerErr
+	e.cachedProtocol, e.protocolErr = bld.build(e.Spec)
+	return e.cachedProtocol, e.protocolErr
+}
+
+func (e *Executor) router() (*messageRouter, error) {
+	protocol, err := e.protocol()
+	if err != nil {
+		return nil, err
+	}
+	return protocol.router, nil
 }
 
 func (e *Executor) Execute(ctx *Context, message any) (result any, err error) {
@@ -302,7 +302,7 @@ func (e *Executor) Execute(ctx *Context, message any) (result any, err error) {
 	if err != nil {
 		return nil, fmt.Errorf("error getting router for executor %q: %w", e.ID, err)
 	}
-	ret, found := router.RouteMessage(ctx, message)
+	ret, found := router.routeMessage(ctx, message)
 	if !found {
 		return nil, fmt.Errorf("no handler found for message type %T", message)
 	}
@@ -316,7 +316,7 @@ func (e *Executor) Execute(ctx *Context, message any) (result any, err error) {
 			return nil, err
 		}
 	}
-	if ret.IsVoid() {
+	if ret.isVoid() {
 		return nil, nil
 	}
 	// If we had a real return type, raise it as a SendMessage
@@ -341,15 +341,15 @@ func (e *Executor) InputTypes() []reflect.Type {
 	if err != nil {
 		return nil
 	}
-	return router.IncomingTypes()
+	return router.incomingTypes()
 }
 
 func (e *Executor) OutputTypes() []reflect.Type {
-	router, err := e.router()
+	protocol, err := e.protocol()
 	if err != nil {
 		return nil
 	}
-	return e.yieldTypes(router)
+	return appendUniqueTypes(nil, protocol.yields...)
 }
 
 // knownSentTypes are workflow system messages that every executor may send.
@@ -360,22 +360,6 @@ func knownSentTypes() []reflect.Type {
 		reflect.TypeFor[*ExternalRequest](),
 		reflect.TypeFor[*ExternalResponse](),
 	}
-}
-
-func (e *Executor) sendTypes(router *messageRouter) []reflect.Type {
-	sends := appendUniqueTypes(nil, e.Spec.SendTypes...)
-	if !e.Spec.DisableAutoSendMessageHandlerResultObject {
-		sends = appendUniqueTypes(sends, slices.Collect(router.DefaultOutputTypes())...)
-	}
-	return sends
-}
-
-func (e *Executor) yieldTypes(router *messageRouter) []reflect.Type {
-	yields := appendUniqueTypes(nil, e.Spec.YieldTypes...)
-	if !e.Spec.DisableAutoYieldOutputHandlerResultObject {
-		yields = appendUniqueTypes(yields, slices.Collect(router.DefaultOutputTypes())...)
-	}
-	return yields
 }
 
 // DeclaredSendType returns the protocol type that should be used when sending
@@ -389,15 +373,14 @@ func (e *Executor) DeclaredSendType(typ reflect.Type) (reflect.Type, bool) {
 	if cached, ok := e.declaredSendTypeCache.Load(typ); ok {
 		return cached.(reflect.Type), true
 	}
-	router, err := e.router()
+	protocol, err := e.protocol()
 	if err != nil {
 		return nil, false
 	}
-	for _, candidate := range appendUniqueTypes(e.sendTypes(router), knownSentTypes()...) {
-		if declaredSendTypeMatches(typ, candidate) {
-			e.declaredSendTypeCache.Store(typ, candidate)
-			return candidate, true
-		}
+	declaredType, ok := protocol.declaredSendType(typ)
+	if ok {
+		e.declaredSendTypeCache.Store(typ, declaredType)
+		return declaredType, true
 	}
 	return nil, false
 }
@@ -420,16 +403,11 @@ func (e *Executor) CanSendType(typ reflect.Type) bool {
 }
 
 func (e *Executor) describeProtocol() (*ProtocolDescriptor, error) {
-	router, err := e.router()
+	protocol, err := e.protocol()
 	if err != nil {
 		return nil, err
 	}
-	return &ProtocolDescriptor{
-		Accepts:    router.IncomingTypes(),
-		Yields:     e.yieldTypes(router),
-		Sends:      e.sendTypes(router),
-		AcceptsAll: router.HasCatchAll(),
-	}, nil
+	return protocol.describe(), nil
 }
 
 func (e *Executor) DescribeProtocol() *ProtocolDescriptor {
@@ -441,22 +419,30 @@ func (e *Executor) DescribeProtocol() *ProtocolDescriptor {
 }
 
 func (e *Executor) CanHandleTypeID(typ TypeID) bool {
-	router, err := e.router()
+	protocol, err := e.protocol()
 	if err != nil {
 		return false
 	}
-	return router.CanHandle(typ)
+	return protocol.canHandleTypeID(typ)
 }
 
 func (e *Executor) CanHandleType(typ reflect.Type) bool {
-	return e.CanHandleTypeID(NewTypeID(typ))
+	protocol, err := e.protocol()
+	if err != nil {
+		return false
+	}
+	return protocol.canHandleType(typ)
 }
 
 func (e *Executor) CanOutputType(typ reflect.Type) bool {
 	if cached, ok := e.canOutputCache.Load(typ); ok {
 		return cached.(bool)
 	}
-	result := slices.ContainsFunc(e.OutputTypes(), typ.AssignableTo)
+	protocol, err := e.protocol()
+	if err != nil {
+		return false
+	}
+	result := protocol.canOutputType(typ)
 	e.canOutputCache.Store(typ, result)
 	return result
 }

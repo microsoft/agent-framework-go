@@ -46,12 +46,12 @@ func workflowTelemetryDefinitionFrom(wf *Workflow) workflowTelemetryDefinition {
 	if wf == nil {
 		return workflowTelemetryDefinition{}
 	}
-	executors := make(map[string]TypeID, len(wf.ExecutorBindings))
-	for id, binding := range wf.ExecutorBindings {
+	executors := make(map[string]TypeID, len(wf.executorBindings))
+	for id, binding := range wf.executorBindings {
 		executors[id] = NewTypeID(binding.ExecutorType)
 	}
-	ports := make([]RequestPortInfo, 0, len(wf.Ports))
-	for _, port := range wf.Ports {
+	ports := make([]RequestPortInfo, 0, len(wf.ports))
+	for _, port := range wf.ports {
 		ports = append(ports, NewRequestPortInfo(port))
 	}
 	slices.SortFunc(ports, func(left, right RequestPortInfo) int {
@@ -63,8 +63,8 @@ func workflowTelemetryDefinitionFrom(wf *Workflow) workflowTelemetryDefinition {
 		}
 		return 0
 	})
-	outputs := make([]string, 0, len(wf.OutputExecutors))
-	for id := range wf.OutputExecutors {
+	outputs := make([]string, 0, len(wf.outputExecutors))
+	for id := range wf.outputExecutors {
 		outputs = append(outputs, id)
 	}
 	slices.Sort(outputs)
@@ -72,7 +72,7 @@ func workflowTelemetryDefinitionFrom(wf *Workflow) workflowTelemetryDefinition {
 		Executors:         executors,
 		Edges:             wf.ReflectEdges(),
 		RequestPorts:      ports,
-		StartExecutorID:   wf.StartExecutorID,
+		StartExecutorID:   wf.startExecutorID,
 		OutputExecutorIDs: outputs,
 	}
 }
@@ -82,9 +82,9 @@ func observabilityMetadata(wf *Workflow, sessionID string) internalobservability
 		return internalobservability.WorkflowMetadata{SessionID: sessionID}
 	}
 	return internalobservability.WorkflowMetadata{
-		ID:          wf.StartExecutorID,
-		Name:        wf.Name,
-		Description: wf.Description,
+		ID:          wf.startExecutorID,
+		Name:        wf.name,
+		Description: wf.description,
 		SessionID:   sessionID,
 	}
 }

@@ -375,18 +375,19 @@ func TestCheckpoint_RestoreClearsExecutorInstancesBeforeImport(t *testing.T) {
 			return &workflow.Executor{
 				ID: "counter",
 				Spec: workflow.ExecutorSpec{
-					YieldTypes: []reflect.Type{reflect.TypeFor[struct {
-						InstanceID int64
-						Count      int
-					}]()},
-					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-						return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
+					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+						rb.YieldsOutputType(reflect.TypeFor[struct {
+							InstanceID int64
+							Count      int
+						}]())
+						rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
 							count++
 							return nil, ctx.YieldOutput(struct {
 								InstanceID int64
 								Count      int
 							}{InstanceID: instanceID, Count: count})
-						}), nil
+						})
+						return rb, nil
 					},
 				},
 			}, nil
@@ -655,12 +656,13 @@ func createCheckpointRequestWorkflow(t *testing.T) (*workflow.Workflow, *atomic.
 				Spec: workflow.ExecutorSpec{
 					DisableAutoSendMessageHandlerResultObject: true,
 					DisableAutoYieldOutputHandlerResultObject: true,
-					YieldTypes: []reflect.Type{reflect.TypeFor[string]()},
-					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-						return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+						rb.YieldsOutputType(reflect.TypeFor[string]())
+						rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 							received.Add(1)
 							return nil, ctx.YieldOutput(msg)
-						}), nil
+						})
+						return rb, nil
 					},
 				},
 			}, nil
@@ -709,11 +711,12 @@ func createCheckpointChainWorkflow(t *testing.T, ids ...string) *workflow.Workfl
 					Spec: workflow.ExecutorSpec{
 						DisableAutoSendMessageHandlerResultObject: true,
 						DisableAutoYieldOutputHandlerResultObject: true,
-						SendTypes: []reflect.Type{reflect.TypeFor[string]()},
-						ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-							return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+						ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+							rb.SendsMessageType(reflect.TypeFor[string]())
+							rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 								return nil, ctx.SendMessage("", msg)
-							}), nil
+							})
+							return rb, nil
 						},
 					},
 				}, nil
@@ -866,7 +869,6 @@ func (e *checkpointHookExecutor) Bind() workflow.ExecutorBinding {
 				Spec: workflow.ExecutorSpec{
 					DisableAutoSendMessageHandlerResultObject: true,
 					DisableAutoYieldOutputHandlerResultObject: true,
-					SendTypes: []reflect.Type{reflect.TypeFor[string]()},
 					OnCheckpoint: func(_ *workflow.Context) error {
 						e.checkpointingCalls.Add(1)
 						return nil
@@ -875,13 +877,15 @@ func (e *checkpointHookExecutor) Bind() workflow.ExecutorBinding {
 						e.checkpointRestoredCall.Add(1)
 						return nil
 					},
-					ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-						return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+						rb.SendsMessageType(reflect.TypeFor[string]())
+						rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 							if e.forwardMessages {
 								return nil, ctx.SendMessage("", msg)
 							}
 							return nil, nil
-						}), nil
+						})
+						return rb, nil
 					},
 				},
 			}, nil

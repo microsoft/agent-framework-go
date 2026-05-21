@@ -73,7 +73,7 @@ func newInProcessRunner(
 
 	if enableConcurrentRuns {
 		var nonConcurrent []string
-		for _, er := range wf.ExecutorBindings {
+		for _, er := range wf.ReflectExecutors() {
 			if !er.SupportsConcurrentSharedExecution {
 				nonConcurrent = append(nonConcurrent, er.ID)
 			}
@@ -104,7 +104,7 @@ func newInProcessRunner(
 
 	runner := &runner{
 		sessionID:            sessionID,
-		startExecutorID:      wf.StartExecutorID,
+		startExecutorID:      wf.StartExecutorID(),
 		wf:                   wf,
 		runContext:           runContext,
 		checkpointMgr:        checkpointMgr,

@@ -30,8 +30,9 @@ type WorkflowInfo struct {
 }
 
 func NewWorkflowInfo(wf *workflow.Workflow) WorkflowInfo {
-	executors := make(map[string]executorInfo, len(wf.ExecutorBindings))
-	for id, binding := range wf.ExecutorBindings {
+	bindings := wf.ReflectExecutors()
+	executors := make(map[string]executorInfo, len(bindings))
+	for id, binding := range bindings {
 		executors[id] = executorInfo{
 			Type:       workflow.NewTypeID(binding.ExecutorType),
 			ExecutorID: binding.ID,
@@ -40,14 +41,16 @@ func NewWorkflowInfo(wf *workflow.Workflow) WorkflowInfo {
 
 	edges := wf.ReflectEdges()
 
-	requestPorts := make(map[string]workflow.RequestPortInfo, len(wf.Ports))
-	for _, port := range wf.Ports {
+	ports := wf.RequestPorts()
+	requestPorts := make(map[string]workflow.RequestPortInfo, len(ports))
+	for _, port := range ports {
 		info := workflow.NewRequestPortInfo(port)
 		requestPorts[info.PortID] = info
 	}
 
-	outputs := make(map[string]struct{}, len(wf.OutputExecutors))
-	for id := range wf.OutputExecutors {
+	outputIDs := wf.OutputExecutorIDs()
+	outputs := make(map[string]struct{}, len(outputIDs))
+	for _, id := range outputIDs {
 		outputs[id] = struct{}{}
 	}
 
@@ -55,7 +58,7 @@ func NewWorkflowInfo(wf *workflow.Workflow) WorkflowInfo {
 		Executors:         executors,
 		Edges:             edges,
 		RequestPorts:      requestPorts,
-		StartExecutorID:   wf.StartExecutorID,
+		StartExecutorID:   wf.StartExecutorID(),
 		OutputExecutorIDs: outputs,
 	}
 }
@@ -64,25 +67,27 @@ func (w *WorkflowInfo) Match(wf *workflow.Workflow) bool {
 	if wf == nil {
 		return false
 	}
-	if w.StartExecutorID != wf.StartExecutorID {
+	if w.StartExecutorID != wf.StartExecutorID() {
 		return false
 	}
-	if len(wf.ExecutorBindings) != len(w.Executors) {
+	bindings := wf.ReflectExecutors()
+	if len(bindings) != len(w.Executors) {
 		return false
 	}
 	// Validate the executors
 	for _, eb := range w.Executors {
-		binding, ok := wf.ExecutorBindings[eb.ExecutorID]
+		binding, ok := bindings[eb.ExecutorID]
 		if !ok || !eb.matchBinding(binding) {
 			return false
 		}
 	}
 	// Validate the edges
-	if len(wf.Edges) != len(w.Edges) {
+	workflowEdges := wf.Edges()
+	if len(workflowEdges) != len(w.Edges) {
 		return false
 	}
 	for sourceID, edges := range w.Edges {
-		other, ok := wf.Edges[sourceID]
+		other, ok := workflowEdges[sourceID]
 		if !ok || len(other) != len(edges) {
 			return false
 		}
@@ -94,11 +99,12 @@ func (w *WorkflowInfo) Match(wf *workflow.Workflow) bool {
 	}
 
 	// Validate the request ports
-	if len(wf.Ports) != len(w.RequestPorts) {
+	ports := wf.RequestPorts()
+	if len(ports) != len(w.RequestPorts) {
 		return false
 	}
 	for _, port := range w.RequestPorts {
-		other, ok := wf.Ports[port.PortID]
+		other, ok := ports[port.PortID]
 		if !ok {
 			return false
 		}
@@ -108,11 +114,12 @@ func (w *WorkflowInfo) Match(wf *workflow.Workflow) bool {
 	}
 
 	// Validate the outputs
-	if len(wf.OutputExecutors) != len(w.OutputExecutorIDs) {
+	outputIDs := wf.OutputExecutorIDs()
+	if len(outputIDs) != len(w.OutputExecutorIDs) {
 		return false
 	}
 	for outputID := range w.OutputExecutorIDs {
-		if _, ok := wf.OutputExecutors[outputID]; !ok {
+		if !wf.HasOutputExecutor(outputID) {
 			return false
 		}
 	}

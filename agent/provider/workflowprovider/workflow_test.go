@@ -22,11 +22,14 @@ import (
 func newMessageSpec(options *messageworkflow.Options) workflow.ExecutorSpec {
 	spec := workflow.ExecutorSpec{}
 	messageworkflow.Configure(&spec, options)
-	spec.YieldTypes = append(
-		spec.YieldTypes,
-		reflect.TypeFor[*message.Message](),
-		reflect.TypeFor[*agent.Response](),
-	)
+	spec.Extend(workflow.ExecutorSpec{
+		ConfigureProtocol: func(pb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+			return pb.YieldsOutputType(
+				reflect.TypeFor[*message.Message](),
+				reflect.TypeFor[*agent.Response](),
+			), nil
+		},
+	})
 	return spec
 }
 
@@ -307,9 +310,10 @@ func TestNew_RejectsIncompatibleWorkflow(t *testing.T) {
 		ex := &workflow.Executor{
 			ID: id,
 			Spec: workflow.ExecutorSpec{
-				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil,
-						func(ctx *workflow.Context, msg any) (any, error) { return nil, nil }), nil
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil,
+						func(ctx *workflow.Context, msg any) (any, error) { return nil, nil })
+					return rb, nil
 				},
 			},
 		}
@@ -497,8 +501,8 @@ func callRequestExecutorBinding(t *testing.T, id string) workflow.ExecutorBindin
 			},
 		})
 		spec.Extend(workflow.ExecutorSpec{
-			ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-				return rb.AddHandlerRaw(reflect.TypeFor[*workflow.ExternalResponse](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[*workflow.ExternalResponse](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 					resp := msg.(*workflow.ExternalResponse)
 					v, ok := resp.Data.As(port.Response)
 					if !ok {
@@ -513,7 +517,8 @@ func callRequestExecutorBinding(t *testing.T, id string) workflow.ExecutorBindin
 						Contents: []message.Content{&message.TextContent{Text: "got:" + r.Result.(string)}},
 					}
 					return nil, ctx.YieldOutput(out)
-				}), nil
+				})
+				return rb, nil
 			},
 		})
 		return &workflow.Executor{
@@ -630,8 +635,8 @@ func approvalRequestExecutorBinding(t *testing.T, id string) workflow.ExecutorBi
 			},
 		})
 		spec.Extend(workflow.ExecutorSpec{
-			ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-				return rb.AddHandlerRaw(reflect.TypeFor[*workflow.ExternalResponse](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[*workflow.ExternalResponse](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 					resp := msg.(*workflow.ExternalResponse)
 					v, ok := resp.Data.As(port.Response)
 					if !ok {
@@ -650,7 +655,8 @@ func approvalRequestExecutorBinding(t *testing.T, id string) workflow.ExecutorBi
 						Contents: []message.Content{&message.TextContent{Text: text}},
 					}
 					return nil, ctx.YieldOutput(out)
-				}), nil
+				})
+				return rb, nil
 			},
 		})
 		return &workflow.Executor{
@@ -845,8 +851,8 @@ func TestNew_MixedResponseAndRegularMessage_BothProcessed(t *testing.T) {
 			},
 		})
 		spec.Extend(workflow.ExecutorSpec{
-			ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-				return rb.AddHandlerRaw(reflect.TypeFor[*workflow.ExternalResponse](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[*workflow.ExternalResponse](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 					resp := msg.(*workflow.ExternalResponse)
 					v, ok := resp.Data.As(port.Response)
 					if !ok {
@@ -858,7 +864,8 @@ func TestNew_MixedResponseAndRegularMessage_BothProcessed(t *testing.T) {
 						Contents: []message.Content{&message.TextContent{Text: "result:" + r.Result.(string)}},
 					}
 					return nil, ctx.YieldOutput(out)
-				}), nil
+				})
+				return rb, nil
 			},
 		})
 		return &workflow.Executor{

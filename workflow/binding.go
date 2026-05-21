@@ -43,7 +43,7 @@ type ExecutorBinding struct {
 	// Ports lists [RequestPort]s that this binding exposes, either as the
 	// workflow boundary port created by [BindRequestPort] or as additional ports
 	// an executor uses to raise [ExternalRequest]s via [Context.PostRequest]. The
-	// builder registers them in [Workflow.Ports] so they appear in workflow
+	// builder registers them so they appear in [Workflow.ReflectPorts]
 	// metadata.
 	Ports []RequestPort
 
@@ -175,13 +175,13 @@ func newRequestPortExecutor(port RequestPort) *Executor {
 	return &Executor{
 		ID: port.ID,
 		Spec: ExecutorSpec{
-			SendTypes: []reflect.Type{port.Response, reflect.TypeFor[*ExternalResponse]()},
 			// The executor's handler return values are exposed via PostRequest /
 			// SendMessage explicitly; suppress the default auto-forwarding.
 			DisableAutoSendMessageHandlerResultObject: true,
 			DisableAutoYieldOutputHandlerResultObject: true,
-			ConfigureRoutes: func(rb *RouteBuilder) (*RouteBuilder, error) {
-				return rb.
+			ConfigureProtocol: func(rb *ProtocolBuilder) (*ProtocolBuilder, error) {
+				rb.SendsMessageType(port.Response, reflect.TypeFor[*ExternalResponse]())
+				rb.RouteBuilder.
 					AddHandlerRaw(port.Request, nil, func(ctx *Context, msg any) (any, error) {
 						req, err := NewExternalRequest("", port, msg)
 						if err != nil {
@@ -237,7 +237,8 @@ func newRequestPortExecutor(port RequestPort) *Executor {
 							return nil, err
 						}
 						return nil, ctx.SendMessage("", data)
-					}), nil
+					})
+				return rb, nil
 			},
 		},
 	}
@@ -256,10 +257,11 @@ func BindFunc[In, Out any](id string, fn func(In) Out) ExecutorBinding {
 			return &Executor{
 				ID: id,
 				Spec: ExecutorSpec{
-					ConfigureRoutes: func(rb *RouteBuilder) (*RouteBuilder, error) {
-						return rb.AddHandlerRaw(reflect.TypeFor[In](), reflect.TypeFor[Out](), func(_ *Context, msg any) (any, error) {
+					ConfigureProtocol: func(rb *ProtocolBuilder) (*ProtocolBuilder, error) {
+						rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[In](), reflect.TypeFor[Out](), func(_ *Context, msg any) (any, error) {
 							return fn(msg.(In)), nil
-						}), nil
+						})
+						return rb, nil
 					},
 				},
 			}, nil

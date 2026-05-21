@@ -204,10 +204,11 @@ func polymorphicOutputBinding(id string, output polymorphicOutput) workflow.Exec
 			ID: id,
 			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
-				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[polymorphicOutput](), func(_ *workflow.Context, _ any) (any, error) {
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[polymorphicOutput](), func(_ *workflow.Context, _ any) (any, error) {
 						return output, nil
-					}), nil
+					})
+					return rb, nil
 				},
 			},
 		}, nil
@@ -226,11 +227,12 @@ func unrelatedOutputBinding(id string) workflow.ExecutorBinding {
 			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-				YieldTypes: []reflect.Type{reflect.TypeFor[polymorphicOutput]()},
-				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[polymorphicOutput](), func(ctx *workflow.Context, _ any) (any, error) {
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.YieldsOutputType(reflect.TypeFor[polymorphicOutput]())
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[polymorphicOutput](), func(ctx *workflow.Context, _ any) (any, error) {
 						return nil, ctx.YieldOutput(unrelatedOutput{})
-					}), nil
+					})
+					return rb, nil
 				},
 			},
 		}, nil
@@ -249,11 +251,12 @@ func explicitYieldBinding(id string, output any) workflow.ExecutorBinding {
 			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-				YieldTypes: []reflect.Type{reflect.TypeFor[dataMessage]()},
-				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.YieldsOutputType(reflect.TypeFor[dataMessage]())
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
 						return nil, ctx.YieldOutput(output)
-					}), nil
+					})
+					return rb, nil
 				},
 			},
 		}, nil
@@ -378,11 +381,12 @@ func TestFunctionExecutor_ReturnValueAutoSendAndYieldOptions(t *testing.T) {
 					Spec: workflow.ExecutorSpec{
 						DisableAutoSendMessageHandlerResultObject: true,
 						DisableAutoYieldOutputHandlerResultObject: true,
-						ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-							return rb.AddHandlerRaw(reflect.TypeFor[dataMessage](), nil, func(_ *workflow.Context, msg any) (any, error) {
+						ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+							rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[dataMessage](), nil, func(_ *workflow.Context, msg any) (any, error) {
 								gotAtSink = append(gotAtSink, msg.(dataMessage))
 								return nil, nil
-							}), nil
+							})
+							return rb, nil
 						},
 					},
 				}, nil
@@ -435,11 +439,12 @@ func returnedDataBinding(id string, options workflow.ExecutorSpec) workflow.Exec
 	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		spec := options
 		spec.Extend(workflow.ExecutorSpec{
-			ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-				return rb.AddHandlerRaw(reflect.TypeFor[textMessage](), reflect.TypeFor[dataMessage](), func(_ *workflow.Context, msg any) (any, error) {
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[textMessage](), reflect.TypeFor[dataMessage](), func(_ *workflow.Context, msg any) (any, error) {
 					input := msg.(textMessage)
 					return dataMessage{Bytes: []byte(input.Text)}, nil
-				}), nil
+				})
+				return rb, nil
 			},
 		})
 		return &workflow.Executor{
@@ -478,13 +483,14 @@ func TestBindRequestPort_PostsRequestAndForwardsResponse(t *testing.T) {
 			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-				YieldTypes: []reflect.Type{reflect.TypeFor[int]()},
-				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandlerRaw(reflect.TypeFor[int](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.YieldsOutputType(reflect.TypeFor[int]())
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[int](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 						receivedAtSink = msg.(int)
 						sawAtSink = true
 						return nil, ctx.YieldOutput(msg)
-					}), nil
+					})
+					return rb, nil
 				},
 			},
 		}, nil
@@ -610,14 +616,15 @@ func TestBindRequestPort_ForwardsExternalRequestAndRestoresOriginalResponse(t *t
 			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 						request, err := workflow.NewExternalRequest("original-request", outerPort, msg)
 						if err != nil {
 							return nil, err
 						}
 						return nil, ctx.SendMessage(innerBinding.ID, request)
-					}), nil
+					})
+					return rb, nil
 				},
 			},
 		}, nil
@@ -634,11 +641,12 @@ func TestBindRequestPort_ForwardsExternalRequestAndRestoresOriginalResponse(t *t
 			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandlerRaw(reflect.TypeFor[*workflow.ExternalResponse](), nil, func(_ *workflow.Context, msg any) (any, error) {
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[*workflow.ExternalResponse](), nil, func(_ *workflow.Context, msg any) (any, error) {
 						gotResponse = msg.(*workflow.ExternalResponse)
 						return nil, nil
-					}), nil
+					})
+					return rb, nil
 				},
 			},
 		}, nil

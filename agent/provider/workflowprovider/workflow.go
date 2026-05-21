@@ -129,7 +129,7 @@ func New(wf *workflow.Workflow, cfg Config) (*agent.Agent, error) {
 
 			// Split incoming messages into ExternalResponses for pending
 			// requests and the remaining workflow messages.
-			remaining, responses, hasMatchedStartResponse := splitResponses(messages, state.pending, wf.StartExecutorID, state.stream.ResponsePortExecutorID)
+			remaining, responses, hasMatchedStartResponse := splitResponses(messages, state.pending, wf.StartExecutorID(), state.stream.ResponsePortExecutorID)
 
 			for _, resp := range responses {
 				if err := state.stream.SendResponse(ctx, resp); err != nil {

@@ -75,7 +75,7 @@ func (a *a2aagent) run(ctx context.Context, messages []*message.Message, options
 				yield(nil, err)
 				return
 			}
-			if err := updateSessionContextID(session, task.ContextID, string(task.ID)); err != nil {
+			if err := updateSessionContextID(session, task.ContextID, string(task.ID), task.Status.State); err != nil {
 				yield(nil, err)
 				return
 			}
@@ -99,7 +99,15 @@ func (a *a2aagent) run(ctx context.Context, messages []*message.Message, options
 				userMsg.ID = msg.ID
 			}
 			userMsg.ContextID = getContextID(session)
-			userMsg.ReferenceTasks = taskIDs
+			// When the task is waiting for user input (InputRequired), link the message
+			// directly to the task via TaskId so it is treated as input for that task.
+			// Otherwise, use ReferenceTasks to link as a follow-up.
+			// See: https://github.com/a2aproject/A2A/blob/main/docs/topics/life-of-a-task.md#task-refinements
+			if getLastTaskState(session) == a2a.TaskStateInputRequired && len(taskIDs) > 0 {
+				userMsg.TaskID = taskIDs[len(taskIDs)-1]
+			} else {
+				userMsg.ReferenceTasks = taskIDs
+			}
 			userMsg.Metadata = maps.Clone(msg.AdditionalProperties)
 
 			params := &a2a.SendMessageRequest{Message: userMsg}
@@ -154,7 +162,14 @@ func sendMsg(session *agent.Session, seq iter.Seq2[a2a.Event, error], yield func
 			return
 		}
 		taskInfo := e.TaskInfo()
-		if err := updateSessionContextID(session, taskInfo.ContextID, string(taskInfo.TaskID)); err != nil {
+		var taskState a2a.TaskState
+		switch evt := e.(type) {
+		case *a2a.Task:
+			taskState = evt.Status.State
+		case *a2a.TaskStatusUpdateEvent:
+			taskState = evt.Status.State
+		}
+		if err := updateSessionContextID(session, taskInfo.ContextID, string(taskInfo.TaskID), taskState); err != nil {
 			yield(nil, err)
 			return
 		}
@@ -251,7 +266,7 @@ func yieldTask(yield func(*agent.ResponseUpdate, error) bool, task *a2a.Task) bo
 	}, nil)
 }
 
-func updateSessionContextID(session *agent.Session, contextID, taskID string) error {
+func updateSessionContextID(session *agent.Session, contextID, taskID string, taskState a2a.TaskState) error {
 	if session == nil {
 		return nil
 	}
@@ -263,6 +278,7 @@ func updateSessionContextID(session *agent.Session, contextID, taskID string) er
 	}
 	setContextID(session, contextID)
 	setTaskID(session, taskID)
+	setLastTaskState(session, taskState)
 	return nil
 }
 

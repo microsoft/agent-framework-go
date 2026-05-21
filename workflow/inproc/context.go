@@ -131,7 +131,7 @@ func (proc *runnerContext) EnsureExecutor(ctx context.Context, executorID string
 		return executor, nil
 	}
 
-	registration, ok := proc.wf.ExecutorBindings[executorID]
+	registration, ok := proc.wf.ExecutorBinding(executorID)
 	if !ok {
 		return nil, fmt.Errorf("executor with ID '%s' is not registered", executorID)
 	}
@@ -490,7 +490,7 @@ func (proc *runnerContext) SendMessage(ctx context.Context, sourceID, targetID s
 	if traceContext := telemetry.ExtractTraceContext(ctx); len(traceContext) > 0 {
 		envelope.TraceContext = traceContext
 	}
-	edges := proc.wf.Edges[sourceID]
+	edges := proc.wf.OutgoingEdges(sourceID)
 	for _, edge := range edges {
 		mapping, err := proc.edgeMap.PrepareDeliveryForEdge(ctx, edge, envelope)
 		if err != nil {
@@ -526,7 +526,7 @@ func (proc *runnerContext) Bind(ctx context.Context, executorID string, traceCon
 			if err := proc.validateOutputType(executorID, output); err != nil {
 				return err
 			}
-			if _, ok := proc.wf.OutputExecutors[executorID]; ok {
+			if proc.wf.HasOutputExecutor(executorID) {
 				return proc.AddEvent(boundCtx, workflow.OutputEvent{
 					ExecutorID: executorID,
 					Output:     output,

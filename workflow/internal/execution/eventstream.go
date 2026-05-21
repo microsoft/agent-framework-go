@@ -28,9 +28,9 @@ func workflowMetadata(wf *workflow.Workflow, sessionID string) observability.Wor
 		return observability.WorkflowMetadata{SessionID: sessionID}
 	}
 	return observability.WorkflowMetadata{
-		ID:          wf.StartExecutorID,
-		Name:        wf.Name,
-		Description: wf.Description,
+		ID:          wf.StartExecutorID(),
+		Name:        wf.Name(),
+		Description: wf.Description(),
 		SessionID:   sessionID,
 	}
 }

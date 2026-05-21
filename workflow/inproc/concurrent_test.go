@@ -24,14 +24,15 @@ func factoryConcurrentBinding(id string, sink *[]string, mu *sync.Mutex) workflo
 			Spec: workflow.ExecutorSpec{
 				DisableAutoSendMessageHandlerResultObject: true,
 				DisableAutoYieldOutputHandlerResultObject: true,
-				SendTypes: []reflect.Type{reflect.TypeFor[string]()},
-				ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-					return rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.SendsMessageType(reflect.TypeFor[string]())
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 						mu.Lock()
 						*sink = append(*sink, id+":"+msg.(string))
 						mu.Unlock()
 						return nil, ctx.SendMessage("", msg)
-					}), nil
+					})
+					return rb, nil
 				},
 			},
 		}, nil
@@ -46,10 +47,11 @@ func nonConcurrentBinding(id string) workflow.ExecutorBinding {
 		Spec: workflow.ExecutorSpec{
 			DisableAutoSendMessageHandlerResultObject: true,
 			DisableAutoYieldOutputHandlerResultObject: true,
-			ConfigureRoutes: func(rb *workflow.RouteBuilder) (*workflow.RouteBuilder, error) {
-				return rb.AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[string](), func(_ *workflow.Context, msg any) (any, error) {
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[string](), func(_ *workflow.Context, msg any) (any, error) {
 					return msg, nil
-				}), nil
+				})
+				return rb, nil
 			},
 		},
 	})
