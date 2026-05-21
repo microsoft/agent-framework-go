@@ -198,6 +198,50 @@ func TestFunctionInvoking_IgnoresInformationalOnlyApprovalContent(t *testing.T) 
 	invokeAndAssertApproval(t, nil, input, downstreamAgentOutput, expectedOutput, expectedDownstreamAgentInput, nil)
 }
 
+func TestFunctionInvoking_PreservesNilToolCallApprovalContentWhenProcessingOtherApproval(t *testing.T) {
+	tools := []tool.Tool{createFunc1()}
+
+	input := []*message.Message{
+		message.New(&message.TextContent{Text: "hello"}),
+		message.New(
+			&message.ToolApprovalRequestContent{RequestID: "missing-request-tool-call"},
+			&message.ToolApprovalResponseContent{RequestID: "missing-response-tool-call", Approved: true},
+			&message.ToolApprovalResponseContent{RequestID: "ficc_callId1", Approved: true, ToolCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
+		),
+	}
+
+	downstreamAgentOutput := []*agent.ResponseUpdate{
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			&message.TextContent{Text: "world"},
+		}},
+	}
+
+	expectedOutput := []*agent.ResponseUpdate{
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
+		}},
+		{Role: message.RoleTool, Contents: []message.Content{
+			&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
+		}},
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			&message.TextContent{Text: "world"},
+		}},
+	}
+
+	expectedDownstreamAgentInput := []*message.Message{
+		message.New(&message.TextContent{Text: "hello"}),
+		message.New(
+			&message.ToolApprovalRequestContent{RequestID: "missing-request-tool-call"},
+			&message.ToolApprovalResponseContent{RequestID: "missing-response-tool-call", Approved: true},
+		),
+		{Role: message.RoleTool, Contents: []message.Content{
+			&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
+		}},
+	}
+
+	invokeAndAssertApproval(t, tools, input, downstreamAgentOutput, expectedOutput, expectedDownstreamAgentInput, nil)
+}
+
 // TestFunctionInvoking_AllFunctionCallsReplacedWithApprovalsWhenAnyRequireApproval tests that
 // all function calls are replaced with approval requests when any function requires approval
 func TestFunctionInvoking_AllFunctionCallsReplacedWithApprovalsWhenAnyRequireApproval(t *testing.T) {

@@ -297,7 +297,7 @@ func TestFunctionInvoking_SupportsSingleFunctionCallPerRequest(t *testing.T) {
 	invokeAndAssert(t, tools, plan, nil, toolautocall.Config{})
 }
 
-func TestFunctionInvoking_SkipsNilToolCallApprovalResponse(t *testing.T) {
+func TestFunctionInvoking_PreservesNilToolCallApprovalResponse(t *testing.T) {
 	input := []*message.Message{
 		message.New(&message.TextContent{Text: "hello"}),
 		message.New(&message.ToolApprovalResponseContent{
@@ -320,12 +320,16 @@ func TestFunctionInvoking_SkipsNilToolCallApprovalResponse(t *testing.T) {
 
 	expectedDownstreamAgentInput := []*message.Message{
 		message.New(&message.TextContent{Text: "hello"}),
+		message.New(&message.ToolApprovalResponseContent{
+			RequestID: "missing-tool-call",
+			Approved:  true,
+		}),
 	}
 
 	invokeAndAssertApproval(t, nil, input, downstreamAgentOutput, expectedOutput, expectedDownstreamAgentInput, nil)
 }
 
-func TestFunctionInvoking_SkipsNilToolCallRejectedApprovalResponse(t *testing.T) {
+func TestFunctionInvoking_PreservesNilToolCallRejectedApprovalResponse(t *testing.T) {
 	input := []*message.Message{
 		message.New(&message.TextContent{Text: "hello"}),
 		message.New(&message.ToolApprovalResponseContent{
@@ -348,6 +352,10 @@ func TestFunctionInvoking_SkipsNilToolCallRejectedApprovalResponse(t *testing.T)
 
 	expectedDownstreamAgentInput := []*message.Message{
 		message.New(&message.TextContent{Text: "hello"}),
+		message.New(&message.ToolApprovalResponseContent{
+			RequestID: "missing-tool-call",
+			Approved:  false,
+		}),
 	}
 
 	invokeAndAssertApproval(t, nil, input, downstreamAgentOutput, expectedOutput, expectedDownstreamAgentInput, nil)

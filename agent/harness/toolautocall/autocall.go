@@ -587,9 +587,6 @@ func hasAnyApprovalContent(msgs []*message.Message) bool {
 }
 
 func approvalToolCallNeedsProcessing(toolCall message.ToolCallContent) bool {
-	if toolCall == nil {
-		return true
-	}
 	fcc, ok := approvalToolCallAsFunctionCall(toolCall)
 	return ok && !fcc.InformationalOnly
 }
@@ -878,9 +875,6 @@ func (f *autocall) extractAndRemoveToolApprovalRequestsAndResponses(ctx context.
 		for _, c := range msg.Contents {
 			switch c := c.(type) {
 			case *message.ToolApprovalRequestContent:
-				if c.ToolCall == nil {
-					continue
-				}
 				fcc, ok := approvalToolCallAsFunctionCall(c.ToolCall)
 				if !ok || fcc.InformationalOnly {
 					keptContents = append(keptContents, c)
@@ -896,9 +890,6 @@ func (f *autocall) extractAndRemoveToolApprovalRequestsAndResponses(ctx context.
 				}
 				allApprovalRequestsMessages[c.RequestID] = toolApprovalResultWithRequestMessage{Request: c, RequestMessage: msg}
 			case *message.ToolApprovalResponseContent:
-				if c.ToolCall == nil {
-					continue
-				}
 				fcc, ok := approvalToolCallAsFunctionCall(c.ToolCall)
 				if !ok {
 					keptContents = append(keptContents, c)
