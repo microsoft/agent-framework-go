@@ -4,7 +4,6 @@ package tool
 
 import (
 	"context"
-	"errors"
 	"strings"
 )
 
@@ -71,10 +70,6 @@ type SchemaTool interface {
 	// ReturnSchema returns the tool output schema.
 	ReturnSchema() any
 }
-
-// ErrTerminate requests that the current function-calling loop stop after this invocation.
-// Tool implementations can return it directly or wrap it; callers should detect it with errors.Is.
-var ErrTerminate = errors.New("tool requested function-calling loop termination")
 
 // FuncTool describes a schema-aware tool that can be invoked by an agent.
 type FuncTool interface {

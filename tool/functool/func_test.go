@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/google/jsonschema-go/jsonschema"
-	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 )
 
@@ -119,54 +118,6 @@ func TestFuncTool_CallString(t *testing.T) {
 	}
 	if ret.(string) != "hello" {
 		t.Errorf("expected 'hello', got %q", ret.(string))
-	}
-}
-
-func TestFuncTool_CallPreservesOutputWithTerminateError(t *testing.T) {
-	cfg := functool.Config{Name: "test"}
-	tl := functool.MustNew(cfg, func(ctx context.Context, input string) (string, error) {
-		return input + " done", tool.ErrTerminate
-	})
-
-	ret, err := tl.Call(t.Context(), `{"Arg0":"hello"}`)
-	if !errors.Is(err, tool.ErrTerminate) {
-		t.Fatalf("expected ErrTerminate, got %v", err)
-	}
-	if ret.(string) != "hello done" {
-		t.Errorf("expected 'hello done', got %q", ret.(string))
-	}
-}
-
-func TestFuncTool_CallPreservesNilAnyOutputWithTerminateError(t *testing.T) {
-	cfg := functool.Config{Name: "test"}
-	tl := functool.MustNew(cfg, func(ctx context.Context, _ struct{}) (any, error) {
-		return nil, tool.ErrTerminate
-	})
-
-	ret, err := tl.Call(t.Context(), "")
-	if !errors.Is(err, tool.ErrTerminate) {
-		t.Fatalf("expected ErrTerminate, got %v", err)
-	}
-	if ret != nil {
-		t.Errorf("expected nil output, got %#v", ret)
-	}
-}
-
-func TestFuncTool_CallPreservesNilPointerOutputWithTerminateError(t *testing.T) {
-	type output struct {
-		Value string `json:"value"`
-	}
-	cfg := functool.Config{Name: "test"}
-	tl := functool.MustNew(cfg, func(ctx context.Context, _ struct{}) (*output, error) {
-		return nil, tool.ErrTerminate
-	})
-
-	ret, err := tl.Call(t.Context(), "")
-	if !errors.Is(err, tool.ErrTerminate) {
-		t.Fatalf("expected ErrTerminate, got %v", err)
-	}
-	if out, ok := ret.(*output); !ok || out != nil {
-		t.Errorf("expected nil *output, got %#v", ret)
 	}
 }
 

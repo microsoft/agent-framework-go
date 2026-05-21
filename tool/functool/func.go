@@ -4,7 +4,6 @@ package functool
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"reflect"
 
@@ -74,17 +73,13 @@ func New[In, Out any](cfg Config, h HandlerFor[In, Out]) (tool.FuncTool, error) 
 		}
 		// Call typed handler.
 		out, err := h(ctx, in)
-		terminating := errors.Is(err, tool.ErrTerminate)
-		if err != nil && !terminating {
+		if err != nil {
 			return nil, err
-		}
-		if terminating && isNil(out) {
-			return out, err
 		}
 		if err := t.outputFormat.Normalize(&out); err != nil {
 			return nil, fmt.Errorf("normalizing output: %w", err)
 		}
-		return out, err
+		return out, nil
 	}
 	return &t, nil
 }
@@ -152,17 +147,4 @@ func outputFormatFor[T any]() (*jsonformat.Format, error) {
 		return nil, err
 	}
 	return jsonformat.FromResponseFormat(responseFormat)
-}
-
-func isNil[T any](v T) bool {
-	value := reflect.ValueOf(v)
-	if !value.IsValid() {
-		return true
-	}
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return value.IsNil()
-	default:
-		return false
-	}
 }

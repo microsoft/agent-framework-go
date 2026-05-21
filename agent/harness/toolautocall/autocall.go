@@ -174,8 +174,7 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 			}
 			// Invoke approved approval responses, which generates some additional FRC wrapped in ChatMessage.
 			var newMsg *message.Message
-			var shouldTerminate bool
-			newMsg, errCount, shouldTerminate, err = f.invokeApprovedToolApprovalResponses(ctx, notInvokedMsgs, tools, 0)
+			newMsg, errCount, err = f.invokeApprovedToolApprovalResponses(ctx, notInvokedMsgs, tools, 0)
 			if err != nil {
 				yield(nil, err)
 				return
@@ -191,9 +190,6 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 					if injected := injector.drain(); len(injected) > 0 {
 						messages = append(messages, injected...)
 					}
-				}
-				if shouldTerminate {
-					return
 				}
 			}
 		}
@@ -304,9 +300,8 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 
 			// Process all of the functions, adding their results into the history.
 			var newMsg *message.Message
-			var shouldTerminate bool
 			var err error
-			newMsg, errCount, shouldTerminate, err = f.processFunctionCalls(ctx, tools, functionCallContents, errCount)
+			newMsg, errCount, err = f.processFunctionCalls(ctx, tools, functionCallContents, errCount)
 			if err != nil {
 				yield(nil, err)
 				return
@@ -343,9 +338,6 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 				if injected := injector.drain(); len(injected) > 0 {
 					messages = append(messages, injected...)
 				}
-			}
-			if shouldTerminate {
-				break
 			}
 		}
 	}
@@ -591,10 +583,10 @@ func approvalToolCallNeedsProcessing(toolCall message.ToolCallContent) bool {
 	return ok && !fcc.InformationalOnly
 }
 
-func (f *autocall) invokeApprovedToolApprovalResponses(ctx context.Context, approvals []toolApprovalResultWithRequestMessage, tools map[string]tool.SchemaTool, errCount int) (*message.Message, int, bool, error) {
+func (f *autocall) invokeApprovedToolApprovalResponses(ctx context.Context, approvals []toolApprovalResultWithRequestMessage, tools map[string]tool.SchemaTool, errCount int) (*message.Message, int, error) {
 	// Check if there are any function calls to do for any approved tool requests and execute them.
 	if len(approvals) == 0 {
-		return nil, errCount, false, nil
+		return nil, errCount, nil
 	}
 	funcCalls := make([]*message.FunctionCallContent, 0, len(approvals))
 	for _, approval := range approvals {
@@ -605,11 +597,11 @@ func (f *autocall) invokeApprovedToolApprovalResponses(ctx context.Context, appr
 		}
 	}
 	if len(funcCalls) == 0 {
-		return nil, errCount, false, nil
+		return nil, errCount, nil
 	}
-	newMsg, errCount, shouldTerminate, err := f.processFunctionCalls(ctx, tools, funcCalls, errCount)
+	newMsg, errCount, err := f.processFunctionCalls(ctx, tools, funcCalls, errCount)
 	if err != nil {
-		return nil, errCount, shouldTerminate, err
+		return nil, errCount, err
 	}
 
 	// Also mark the request's function call as informational-only to keep serialized
@@ -622,7 +614,7 @@ func (f *autocall) invokeApprovedToolApprovalResponses(ctx context.Context, appr
 		}
 	}
 
-	return newMsg, errCount, shouldTerminate, nil
+	return newMsg, errCount, nil
 }
 
 type functionInvocationStatus int
@@ -634,14 +626,13 @@ const (
 )
 
 type functionInvocationResult struct {
-	status    functionInvocationStatus
-	call      *message.FunctionCallContent
-	result    any
-	err       error
-	terminate bool
+	status functionInvocationStatus
+	call   *message.FunctionCallContent
+	result any
+	err    error
 }
 
-func (f *autocall) processFunctionCalls(ctx context.Context, tools map[string]tool.SchemaTool, funcCalls []*message.FunctionCallContent, errCount int) (*message.Message, int, bool, error) {
+func (f *autocall) processFunctionCalls(ctx context.Context, tools map[string]tool.SchemaTool, funcCalls []*message.FunctionCallContent, errCount int) (*message.Message, int, error) {
 	// We must add a response for every tool call, regardless of whether we successfully executed it or not.
 	// If we successfully execute it, we'll add the result. If we don't, we'll add an error.
 	if len(funcCalls) == 0 { // invariant
@@ -671,28 +662,23 @@ func (f *autocall) processFunctionCalls(ctx context.Context, tools map[string]to
 		for _, fc := range funcCalls {
 			result := f.processFunctionCall(ctx, tools, fc)
 			if !captureCurrentIterationErrors && result.status == functionInvocationStatusException {
-				return nil, errCount, false, result.err
+				return nil, errCount, result.err
 			}
 			results = append(results, result)
-			if result.terminate {
-				break
-			}
 		}
 	}
-	var shouldTerminate bool
 	for _, result := range results {
 		result.call.InformationalOnly = true
-		shouldTerminate = shouldTerminate || result.terminate
 	}
 
 	newMsg := f.createResponseMessage(results)
 	var err error
 	errCount, err = f.updateConsecutiveErrorCountOrThrow(ctx, newMsg, errCount)
 	if err != nil {
-		return nil, errCount, shouldTerminate, err
+		return nil, errCount, err
 	}
 
-	return newMsg, errCount, shouldTerminate, nil
+	return newMsg, errCount, nil
 }
 
 func (f *autocall) updateConsecutiveErrorCountOrThrow(ctx context.Context, added *message.Message, errCount int) (int, error) {
@@ -749,11 +735,6 @@ func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]too
 		}()
 		result, err = tl.Call(ctx, funcCall.Arguments)
 	}()
-	terminate := errors.Is(err, tool.ErrTerminate)
-	if terminate {
-		err = nil
-		f.logger.Debug(ctx, "function requested termination of the processing loop", "funcName", funcCall.Name)
-	}
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			f.logger.Debug(ctx, "call canceled", "funcName", funcCall.Name)
@@ -767,7 +748,7 @@ func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]too
 		return functionInvocationResult{status: functionInvocationStatusException, call: funcCall, err: err}
 	}
 
-	return functionInvocationResult{status: functionInvocationStatusRanToCompletion, call: funcCall, result: result, terminate: terminate}
+	return functionInvocationResult{status: functionInvocationStatusRanToCompletion, call: funcCall, result: result}
 }
 
 func (f *autocall) createResponseMessage(results []functionInvocationResult) *message.Message {

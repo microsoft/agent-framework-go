@@ -369,40 +369,6 @@ func TestAutocall_LogsMaximumIterationReached(t *testing.T) {
 	}
 }
 
-func TestAutocall_LogsFunctionRequestedTermination(t *testing.T) {
-	var buf bytes.Buffer
-	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
-	}))
-
-	tools := []tool.Tool{
-		functool.MustNew(functool.Config{Name: "Stop"},
-			func(ctx context.Context, args struct{}) (string, error) {
-				return "stop result", tool.ErrTerminate
-			}),
-	}
-
-	plan := []*message.Message{
-		message.New(&message.TextContent{Text: "hello"}),
-		{Role: message.RoleAssistant, Contents: []message.Content{
-			&message.FunctionCallContent{CallID: "callId1", Name: "Stop", Arguments: `{}`},
-		}},
-		{Role: message.RoleTool, Contents: []message.Content{
-			&message.FunctionResultContent{CallID: "callId1", Result: "stop result"},
-		}},
-	}
-
-	invokeAndAssert(t, tools, plan, nil, toolautocall.Config{Logger: log})
-
-	output := buf.String()
-	if !strings.Contains(output, "function requested termination of the processing loop") {
-		t.Fatalf("expected log to contain requested termination, got: %s", output)
-	}
-	if !strings.Contains(output, "funcName=Stop") {
-		t.Fatalf("expected log to contain function name, got: %s", output)
-	}
-}
-
 func TestAutocall_LogsFunctionRequiresApproval(t *testing.T) {
 	var buf bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{
