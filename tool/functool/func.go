@@ -3,6 +3,8 @@
 package functool
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"reflect"
 
@@ -22,7 +24,7 @@ type Config struct {
 // request or result: the params contain raw arguments, no input validation
 // is performed, and the result is returned to the user as-is, without any
 // validation of the output.
-type Handler func(ctx tool.Context, args string) (any, error)
+type Handler func(ctx context.Context, args string) (any, error)
 
 // A HandlerFor handles a call to tools/call with typed arguments and results.
 //
@@ -32,7 +34,7 @@ type Handler func(ctx tool.Context, args string) (any, error)
 //   - The input value is automatically unmarshaled from req.Params.Arguments.
 //   - The input value is automatically validated against its input schema.
 //     Invalid input is rejected before getting to the handler.
-type HandlerFor[In, Out any] func(tool.Context, In) (Out, error)
+type HandlerFor[In, Out any] func(context.Context, In) (Out, error)
 
 func MustNew[In, Out any](cfg Config, h HandlerFor[In, Out]) tool.FuncTool {
 	t, err := New(cfg, h)
@@ -56,7 +58,7 @@ func New[In, Out any](cfg Config, h HandlerFor[In, Out]) (tool.FuncTool, error) 
 		return nil, fmt.Errorf("output schema: %w", err)
 	}
 
-	t.handler = func(ctx tool.Context, args string) (any, error) {
+	t.handler = func(ctx context.Context, args string) (any, error) {
 		var in In
 		if t.inputWrapped {
 			// Extract wrapped value.
@@ -72,13 +74,17 @@ func New[In, Out any](cfg Config, h HandlerFor[In, Out]) (tool.FuncTool, error) 
 		}
 		// Call typed handler.
 		out, err := h(ctx, in)
-		if err != nil {
+		terminating := errors.Is(err, tool.ErrTerminate)
+		if err != nil && !terminating {
 			return nil, err
+		}
+		if terminating && isNil(out) {
+			return out, err
 		}
 		if err := t.outputFormat.Normalize(&out); err != nil {
 			return nil, fmt.Errorf("normalizing output: %w", err)
 		}
-		return out, nil
+		return out, err
 	}
 	return &t, nil
 }
@@ -114,7 +120,7 @@ func (t *funcTool) ReturnSchema() any {
 	return t.outputFormat.Schema
 }
 
-func (t *funcTool) Call(ctx tool.Context, args string) (any, error) {
+func (t *funcTool) Call(ctx context.Context, args string) (any, error) {
 	return t.handler(ctx, args)
 }
 
@@ -146,4 +152,17 @@ func outputFormatFor[T any]() (*jsonformat.Format, error) {
 		return nil, err
 	}
 	return jsonformat.FromResponseFormat(responseFormat)
+}
+
+func isNil[T any](v T) bool {
+	value := reflect.ValueOf(v)
+	if !value.IsValid() {
+		return true
+	}
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }

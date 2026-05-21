@@ -32,7 +32,7 @@ var logger = demo.NewLogger(
 var weatherTool = functool.MustNew(functool.Config{
 	Name:        "weather",
 	Description: "Get the current weather for a given location",
-}, func(_ tool.Context, location string) (string, error) {
+}, func(_ context.Context, location string) (string, error) {
 	return fmt.Sprintf("The weather in %s is cloudy with a high of 15°C.", location), nil
 })
 

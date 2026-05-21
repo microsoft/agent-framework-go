@@ -12,7 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
+	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
@@ -28,7 +30,7 @@ func TestAutocall_LogsSuccessfulFunctionCall(t *testing.T) {
 
 	tools := []tool.Tool{
 		functool.MustNew(functool.Config{Name: "TestFunc"},
-			func(ctx tool.Context, args struct{}) (string, error) {
+			func(ctx context.Context, args struct{}) (string, error) {
 				return "Success", nil
 			}),
 	}
@@ -80,7 +82,7 @@ func TestAutocall_LogsSensitiveData(t *testing.T) {
 
 	tools := []tool.Tool{
 		functool.MustNew(functool.Config{Name: "TestFunc"},
-			func(ctx tool.Context, args TestArgs) (string, error) {
+			func(ctx context.Context, args TestArgs) (string, error) {
 				return "Result: " + args.Value, nil
 			}),
 	}
@@ -133,7 +135,7 @@ func TestAutocall_DoesNotLogSensitiveDataByDefault(t *testing.T) {
 
 	tools := []tool.Tool{
 		functool.MustNew(functool.Config{Name: "TestFunc"},
-			func(ctx tool.Context, args TestArgs) (string, error) {
+			func(ctx context.Context, args TestArgs) (string, error) {
 				return "Result: " + args.Value, nil
 			}),
 	}
@@ -183,7 +185,7 @@ func TestAutocall_LogsFailedFunctionCall(t *testing.T) {
 
 	tools := []tool.Tool{
 		functool.MustNew(functool.Config{Name: "FailingFunc"},
-			func(ctx tool.Context, args struct{}) (string, error) {
+			func(ctx context.Context, args struct{}) (string, error) {
 				return "", errors.New("something went wrong")
 			}),
 	}
@@ -232,7 +234,7 @@ func TestAutocall_LogsCanceledFunctionCall(t *testing.T) {
 
 	tools := []tool.Tool{
 		functool.MustNew(functool.Config{Name: "CancelableFunc"},
-			func(ctx tool.Context, args struct{}) (string, error) {
+			func(ctx context.Context, args struct{}) (string, error) {
 				return "", context.Canceled
 			}),
 	}
@@ -265,6 +267,229 @@ func TestAutocall_LogsCanceledFunctionCall(t *testing.T) {
 	}
 }
 
+func TestAutocall_LogsFunctionNotFound(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+
+	plan := []*message.Message{
+		message.New(&message.TextContent{Text: "hello"}),
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			&message.FunctionCallContent{CallID: "callId1", Name: "MissingFunc", Arguments: `{}`},
+		}},
+		{Role: message.RoleTool, Contents: []message.Content{
+			&message.FunctionResultContent{CallID: "callId1", Result: "Error: Requested function \"MissingFunc\" not found."},
+		}},
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			&message.TextContent{Text: "done"},
+		}},
+	}
+
+	invokeAndAssert(t, nil, plan, nil, toolautocall.Config{
+		Logger: log,
+	})
+
+	output := buf.String()
+	if !strings.Contains(output, "function not found") {
+		t.Errorf("expected log to contain 'function not found', got: %s", output)
+	}
+	if !strings.Contains(output, "funcName=MissingFunc") {
+		t.Errorf("expected log to contain 'funcName=MissingFunc', got: %s", output)
+	}
+}
+
+func TestAutocall_LogsNonInvocableFunction(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+
+	tools := []tool.Tool{
+		schemaOnlyTool{Tool: agenttest.NewTool("DeclaredFunc", "declared function")},
+	}
+
+	plan := []*message.Message{
+		message.New(&message.TextContent{Text: "hello"}),
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			&message.FunctionCallContent{CallID: "callId1", Name: "DeclaredFunc", Arguments: `{}`},
+		}},
+	}
+
+	invokeAndAssert(t, tools, plan, nil, toolautocall.Config{
+		Logger: log,
+	})
+
+	output := buf.String()
+	if !strings.Contains(output, "function is not invocable") {
+		t.Errorf("expected log to contain 'function is not invocable', got: %s", output)
+	}
+	if !strings.Contains(output, "funcName=DeclaredFunc") {
+		t.Errorf("expected log to contain 'funcName=DeclaredFunc', got: %s", output)
+	}
+}
+
+func TestAutocall_LogsMaximumIterationReached(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+
+	tools := []tool.Tool{
+		functool.MustNew(functool.Config{Name: "Func"},
+			func(ctx context.Context, args struct{}) (string, error) {
+				return "Result", nil
+			}),
+	}
+
+	plan := []*message.Message{
+		message.New(&message.TextContent{Text: "hello"}),
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			&message.FunctionCallContent{CallID: "callId1", Name: "Func", Arguments: `{}`},
+		}},
+		{Role: message.RoleTool, Contents: []message.Content{
+			&message.FunctionResultContent{CallID: "callId1", Result: "Result"},
+		}},
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			&message.TextContent{Text: "done"},
+		}},
+	}
+
+	invokeAndAssert(t, tools, plan, nil, toolautocall.Config{
+		Logger:                      log,
+		MaximumIterationsPerRequest: 1,
+	})
+
+	output := buf.String()
+	if !strings.Contains(output, "maximum iteration count") {
+		t.Errorf("expected log to contain 'maximum iteration count', got: %s", output)
+	}
+	if !strings.Contains(output, "maximumIterationsPerRequest=1") {
+		t.Errorf("expected log to contain 'maximumIterationsPerRequest=1', got: %s", output)
+	}
+}
+
+func TestAutocall_LogsFunctionRequestedTermination(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+
+	tools := []tool.Tool{
+		functool.MustNew(functool.Config{Name: "Stop"},
+			func(ctx context.Context, args struct{}) (string, error) {
+				return "stop result", tool.ErrTerminate
+			}),
+	}
+
+	plan := []*message.Message{
+		message.New(&message.TextContent{Text: "hello"}),
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			&message.FunctionCallContent{CallID: "callId1", Name: "Stop", Arguments: `{}`},
+		}},
+		{Role: message.RoleTool, Contents: []message.Content{
+			&message.FunctionResultContent{CallID: "callId1", Result: "stop result"},
+		}},
+	}
+
+	invokeAndAssert(t, tools, plan, nil, toolautocall.Config{Logger: log})
+
+	output := buf.String()
+	if !strings.Contains(output, "function requested termination of the processing loop") {
+		t.Fatalf("expected log to contain requested termination, got: %s", output)
+	}
+	if !strings.Contains(output, "funcName=Stop") {
+		t.Fatalf("expected log to contain function name, got: %s", output)
+	}
+}
+
+func TestAutocall_LogsFunctionRequiresApproval(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+
+	testTool := tool.ApprovalRequiredFunc(functool.MustNew(functool.Config{Name: "NeedsApproval"},
+		func(ctx context.Context, args struct{}) (string, error) {
+			return "approved", nil
+		}))
+
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder().
+			Add(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{
+				&message.FunctionCallContent{CallID: "callId1", Name: "NeedsApproval", Arguments: `{}`},
+			}}).
+			Build(),
+	}
+
+	for _, err := range toolautocall.New(toolautocall.Config{Logger: log}).Run(
+		runner.Run,
+		t.Context(),
+		[]*message.Message{message.NewText("hello")},
+		agent.WithTool(testTool),
+	) {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "function requires approval") {
+		t.Errorf("expected log to contain 'function requires approval', got: %s", output)
+	}
+	if !strings.Contains(output, "funcName=NeedsApproval") {
+		t.Errorf("expected log to contain 'funcName=NeedsApproval', got: %s", output)
+	}
+}
+
+func TestAutocall_LogsApprovalResponseAndRejection(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+
+	requestCall := &message.FunctionCallContent{CallID: "callId1", Name: "NeedsApproval", Arguments: `{}`}
+	responseCall := &message.FunctionCallContent{CallID: "callId1", Name: "NeedsApproval", Arguments: `{}`}
+	input := []*message.Message{
+		message.New(&message.ToolApprovalRequestContent{RequestID: "ficc_callId1", ToolCall: requestCall}),
+		message.New(&message.ToolApprovalResponseContent{RequestID: "ficc_callId1", Approved: false, Reason: "not now", ToolCall: responseCall}),
+	}
+
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder().AddText("done").Build(),
+	}
+
+	for _, err := range toolautocall.New(toolautocall.Config{Logger: log, NewID: func() string { return "" }}).Run(
+		runner.Run,
+		t.Context(),
+		input,
+	) {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "processing approval response") {
+		t.Errorf("expected log to contain 'processing approval response', got: %s", output)
+	}
+	if !strings.Contains(output, "approved=false") {
+		t.Errorf("expected log to contain 'approved=false', got: %s", output)
+	}
+	if !strings.Contains(output, "function was rejected") {
+		t.Errorf("expected log to contain 'function was rejected', got: %s", output)
+	}
+	if !strings.Contains(output, "not now") {
+		t.Errorf("expected log to contain rejection reason, got: %s", output)
+	}
+	if !requestCall.InformationalOnly {
+		t.Fatal("expected rejected request FunctionCallContent to be informational-only")
+	}
+	if !responseCall.InformationalOnly {
+		t.Fatal("expected rejected response FunctionCallContent to be informational-only")
+	}
+}
+
 // TestAutocall_LogsMultipleFunctionCalls tests that multiple function calls are all logged
 func TestAutocall_LogsMultipleFunctionCalls(t *testing.T) {
 	// Create a logger that writes to a buffer
@@ -275,11 +500,11 @@ func TestAutocall_LogsMultipleFunctionCalls(t *testing.T) {
 
 	tools := []tool.Tool{
 		functool.MustNew(functool.Config{Name: "Func1"},
-			func(ctx tool.Context, args struct{}) (string, error) {
+			func(ctx context.Context, args struct{}) (string, error) {
 				return "Result1", nil
 			}),
 		functool.MustNew(functool.Config{Name: "Func2"},
-			func(ctx tool.Context, args struct{}) (string, error) {
+			func(ctx context.Context, args struct{}) (string, error) {
 				return "Result2", nil
 			}),
 	}
@@ -328,12 +553,12 @@ func TestAutocall_LoggingWithConcurrentInvocations(t *testing.T) {
 
 	tools := []tool.Tool{
 		functool.MustNew(functool.Config{Name: "SlowFunc1"},
-			func(ctx tool.Context, args struct{}) (string, error) {
+			func(ctx context.Context, args struct{}) (string, error) {
 				time.Sleep(10 * time.Millisecond)
 				return "Result1", nil
 			}),
 		functool.MustNew(functool.Config{Name: "SlowFunc2"},
-			func(ctx tool.Context, args struct{}) (string, error) {
+			func(ctx context.Context, args struct{}) (string, error) {
 				time.Sleep(10 * time.Millisecond)
 				return "Result2", nil
 			}),

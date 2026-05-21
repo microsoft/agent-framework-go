@@ -24,7 +24,7 @@ func AddTool(src *mcp.Server, tl tool.FuncTool) {
 		InputSchema:  tl.Schema(),
 		OutputSchema: objectSchemaOrNil(tl.ReturnSchema()),
 	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		result, err := tl.Call(tool.Context{Context: ctx}, string(req.Params.Arguments))
+		result, err := tl.Call(ctx, string(req.Params.Arguments))
 		if err != nil {
 			callResult := &mcp.CallToolResult{}
 			callResult.SetError(err)
@@ -388,7 +388,7 @@ func (w *mcpWrapper) ReturnSchema() any {
 }
 
 // Call implements the Func-like calling pattern for MCP tools.
-func (w *mcpWrapper) Call(ctx tool.Context, args string) (any, error) {
+func (w *mcpWrapper) Call(ctx context.Context, args string) (any, error) {
 	result, err := w.session.CallTool(ctx, &mcp.CallToolParams{
 		Name:      w.tool.Name,
 		Arguments: json.RawMessage(args),

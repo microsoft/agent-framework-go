@@ -25,7 +25,7 @@ func main() {
 	frontendTool := functool.MustNew(functool.Config{
 		Name:        "get_user_location",
 		Description: "Get the user's current location from GPS.",
-	}, func(ctx tool.Context, in struct{}) (string, error) {
+	}, func(ctx context.Context, in struct{}) (string, error) {
 		return "Amsterdam, Netherlands (52.37°N, 4.90°E)", nil
 	})
 

@@ -36,7 +36,7 @@ func TestMessageInjection_ToolInjectsMessageDuringFunctionLoop(t *testing.T) {
 
 	tools := []tool.Tool{
 		functool.MustNew(functool.Config{Name: "Injecting", Description: "Injects a message"},
-			func(ctx tool.Context, _ EmptyArgs) (string, error) {
+			func(ctx context.Context, _ EmptyArgs) (string, error) {
 				if mi := toolautocall.MessageInjectorFromContext(ctx); mi != nil {
 					mi.EnqueueMessages(nil, message.New(&message.TextContent{Text: injectedText}))
 				}
@@ -97,7 +97,7 @@ func TestMessageInjection_ApprovedApprovalResponseInjectionIsForwarded(t *testin
 
 	tools := []tool.Tool{
 		tool.ApprovalRequiredFunc(functool.MustNew(functool.Config{Name: "Injecting", Description: "Injects a message"},
-			func(ctx tool.Context, _ EmptyArgs) (string, error) {
+			func(ctx context.Context, _ EmptyArgs) (string, error) {
 				if mi := toolautocall.MessageInjectorFromContext(ctx); mi != nil {
 					mi.EnqueueMessages(message.New(&message.TextContent{Text: injectedText}))
 				}
@@ -188,7 +188,7 @@ func TestMessageInjection_DisabledWhenNotConfigured(t *testing.T) {
 
 	tools := []tool.Tool{
 		functool.MustNew(functool.Config{Name: "Check", Description: "Checks injector"},
-			func(ctx tool.Context, _ EmptyArgs) (string, error) {
+			func(ctx context.Context, _ EmptyArgs) (string, error) {
 				gotInjector = toolautocall.MessageInjectorFromContext(ctx)
 				return "ok", nil
 			}),

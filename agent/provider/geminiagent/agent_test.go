@@ -3,6 +3,7 @@
 package geminiagent_test
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -13,7 +14,6 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/provider/geminiagent"
 	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 	"google.golang.org/genai"
 )
@@ -348,7 +348,7 @@ func TestToolCall_NonStreaming(t *testing.T) {
 	weatherTool := functool.MustNew(functool.Config{
 		Name:        "get_weather",
 		Description: "Get the weather for a city.",
-	}, func(_ tool.Context, args struct{ City string }) (string, error) {
+	}, func(_ context.Context, args struct{ City string }) (string, error) {
 		return "sunny", nil
 	})
 
@@ -985,7 +985,7 @@ func TestStreamingWithFunctionCall(t *testing.T) {
 	weatherTool := functool.MustNew(functool.Config{
 		Name:        "get_weather",
 		Description: "Gets weather",
-	}, func(_ tool.Context, args struct{ City string }) (string, error) {
+	}, func(_ context.Context, args struct{ City string }) (string, error) {
 		return "sunny", nil
 	})
 
@@ -1065,7 +1065,7 @@ func TestMultiTurnWithFunctionCalls(t *testing.T) {
 	stockTool := functool.MustNew(functool.Config{
 		Name:        "get_stock_price",
 		Description: "Gets current stock price",
-	}, func(_ tool.Context, args struct{ Symbol string }) (string, error) {
+	}, func(_ context.Context, args struct{ Symbol string }) (string, error) {
 		return `{"price": 378.91}`, nil
 	})
 
@@ -1145,7 +1145,7 @@ func TestParallelFunctionCalls(t *testing.T) {
 	weatherTool := functool.MustNew(functool.Config{
 		Name:        "get_weather",
 		Description: "Gets weather for a city",
-	}, func(_ tool.Context, args struct{ City string }) (string, error) {
+	}, func(_ context.Context, args struct{ City string }) (string, error) {
 		return "sunny", nil
 	})
 

@@ -383,7 +383,7 @@ func TestLoadSkill_ReturnsBody(t *testing.T) {
 	_, tools := captureProviderContext(t, p)
 	loadTool := findTool(t, tools, "load_skill")
 
-	result, err := loadTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"load-test"}`)
+	result, err := loadTool.Call(t.Context(), `{"skillName":"load-test"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -401,7 +401,7 @@ func TestLoadSkill_NotFound(t *testing.T) {
 	_, tools := captureProviderContext(t, p)
 	loadTool := findTool(t, tools, "load_skill")
 
-	result, err := loadTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"nonexistent"}`)
+	result, err := loadTool.Call(t.Context(), `{"skillName":"nonexistent"}`)
 	if err != nil {
 		t.Fatalf("expected no tool error, got %v", err)
 	}
@@ -422,7 +422,7 @@ func TestLoadSkill_RequiresExactName(t *testing.T) {
 	_, tools := captureProviderContext(t, p)
 	loadTool := findTool(t, tools, "load_skill")
 
-	result, err := loadTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"Exact-Skill"}`)
+	result, err := loadTool.Call(t.Context(), `{"skillName":"Exact-Skill"}`)
 	if err != nil {
 		t.Fatalf("expected no tool error, got %v", err)
 	}
@@ -444,7 +444,7 @@ func TestReadResource_ReturnsContent(t *testing.T) {
 	_, tools := captureProviderContext(t, p)
 	readTool := findTool(t, tools, "read_skill_resource")
 
-	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"res-test","resourceName":"references/doc.md"}`)
+	result, err := readTool.Call(t.Context(), `{"skillName":"res-test","resourceName":"references/doc.md"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -462,7 +462,7 @@ func TestReadResource_RequiresExactName(t *testing.T) {
 	_, tools := captureProviderContext(t, p)
 	readTool := findTool(t, tools, "read_skill_resource")
 
-	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"dotslash-read","resourceName":"./references/doc.md"}`)
+	result, err := readTool.Call(t.Context(), `{"skillName":"dotslash-read","resourceName":"./references/doc.md"}`)
 	if err != nil {
 		t.Fatalf("expected no tool error, got %v", err)
 	}
@@ -483,7 +483,7 @@ func TestReadResource_UnregisteredResource(t *testing.T) {
 	_, tools := captureProviderContext(t, p)
 	readTool := findTool(t, tools, "read_skill_resource")
 
-	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"simple-skill","resourceName":"unknown.md"}`)
+	result, err := readTool.Call(t.Context(), `{"skillName":"simple-skill","resourceName":"unknown.md"}`)
 	if err != nil {
 		t.Fatalf("expected no tool error, got %v", err)
 	}
@@ -521,7 +521,7 @@ func TestDiscovery_ResourcesInDefaultDirectories(t *testing.T) {
 	_, tools := captureProviderContext(t, p)
 	readTool := findTool(t, tools, "read_skill_resource")
 
-	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"res-skill","resourceName":"references/FAQ.md"}`)
+	result, err := readTool.Call(t.Context(), `{"skillName":"res-skill","resourceName":"references/FAQ.md"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -529,7 +529,7 @@ func TestDiscovery_ResourcesInDefaultDirectories(t *testing.T) {
 		t.Errorf("expected FAQ content, got %#v", result)
 	}
 
-	result, err = readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"res-skill","resourceName":"assets/data.json"}`)
+	result, err = readTool.Call(t.Context(), `{"skillName":"res-skill","resourceName":"assets/data.json"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -597,7 +597,7 @@ func TestDiscovery_ResourceInSkillRoot_DiscoveredWhenRootDirectoryConfigured(t *
 	_, tools := captureProviderContext(t, p)
 	readTool := findTool(t, tools, "read_skill_resource")
 
-	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"root-opt-in-skill","resourceName":"guide.md"}`)
+	result, err := readTool.Call(t.Context(), `{"skillName":"root-opt-in-skill","resourceName":"guide.md"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -605,7 +605,7 @@ func TestDiscovery_ResourceInSkillRoot_DiscoveredWhenRootDirectoryConfigured(t *
 		t.Errorf("expected guide content, got %#v", result)
 	}
 
-	result, err = readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"root-opt-in-skill","resourceName":"config.json"}`)
+	result, err = readTool.Call(t.Context(), `{"skillName":"root-opt-in-skill","resourceName":"config.json"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -658,7 +658,7 @@ func TestDiscovery_CustomResourceDirectories_ReplacesDefaults(t *testing.T) {
 	readTool := findTool(t, tools, "read_skill_resource")
 
 	// docs/readme.md should be readable
-	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"custom-directory-skill","resourceName":"docs/readme.md"}`)
+	result, err := readTool.Call(t.Context(), `{"skillName":"custom-directory-skill","resourceName":"docs/readme.md"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -667,7 +667,7 @@ func TestDiscovery_CustomResourceDirectories_ReplacesDefaults(t *testing.T) {
 	}
 
 	// references/ref.md should NOT be readable (defaults replaced)
-	result, err = readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"custom-directory-skill","resourceName":"references/ref.md"}`)
+	result, err = readTool.Call(t.Context(), `{"skillName":"custom-directory-skill","resourceName":"references/ref.md"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -701,7 +701,7 @@ func TestDiscovery_ResourceExtensionFiltering(t *testing.T) {
 	readTool := findTool(t, tools, "read_skill_resource")
 
 	// .json is allowed by default
-	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"ext-skill","resourceName":"references/data.json"}`)
+	result, err := readTool.Call(t.Context(), `{"skillName":"ext-skill","resourceName":"references/data.json"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -710,7 +710,7 @@ func TestDiscovery_ResourceExtensionFiltering(t *testing.T) {
 	}
 
 	// .png is NOT allowed by default
-	result, err = readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"ext-skill","resourceName":"references/image.png"}`)
+	result, err = readTool.Call(t.Context(), `{"skillName":"ext-skill","resourceName":"references/image.png"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -748,7 +748,7 @@ func TestDiscovery_NestedResourceFiles_NotDiscovered(t *testing.T) {
 	readTool := findTool(t, tools, "read_skill_resource")
 
 	// Top-level file in references/ should be found
-	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"nested-res-skill","resourceName":"references/top.md"}`)
+	result, err := readTool.Call(t.Context(), `{"skillName":"nested-res-skill","resourceName":"references/top.md"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -757,7 +757,7 @@ func TestDiscovery_NestedResourceFiles_NotDiscovered(t *testing.T) {
 	}
 
 	// Nested files are not discovered; only direct files in the configured directory are scanned.
-	result, err = readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"nested-res-skill","resourceName":"references/level1/level2/deep.md"}`)
+	result, err = readTool.Call(t.Context(), `{"skillName":"nested-res-skill","resourceName":"references/level1/level2/deep.md"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -790,7 +790,7 @@ func TestDiscovery_ResourceDirectoriesWithNestedPath(t *testing.T) {
 	_, tools := captureProviderContext(t, p)
 	readTool := findTool(t, tools, "read_skill_resource")
 
-	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"nested-directory-skill","resourceName":"f1/f2/f3/data.json"}`)
+	result, err := readTool.Call(t.Context(), `{"skillName":"nested-directory-skill","resourceName":"f1/f2/f3/data.json"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -871,7 +871,7 @@ func TestDiscovery_DuplicateDirectoriesAfterNormalization_NoDuplicateResources(t
 	_, tools := captureProviderContext(t, p)
 	readTool := findTool(t, tools, "read_skill_resource")
 
-	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"dedup-directory-skill","resourceName":"references/faq.md"}`)
+	result, err := readTool.Call(t.Context(), `{"skillName":"dedup-directory-skill","resourceName":"references/faq.md"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -904,7 +904,7 @@ func TestDiscovery_CustomResourceExtensions(t *testing.T) {
 	readTool := findTool(t, tools, "read_skill_resource")
 
 	// .custom should be discoverable
-	result, err := readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"custom-ext-skill","resourceName":"references/data.custom"}`)
+	result, err := readTool.Call(t.Context(), `{"skillName":"custom-ext-skill","resourceName":"references/data.custom"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -913,7 +913,7 @@ func TestDiscovery_CustomResourceExtensions(t *testing.T) {
 	}
 
 	// .json is NOT in custom extensions
-	result, err = readTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"custom-ext-skill","resourceName":"references/data.json"}`)
+	result, err = readTool.Call(t.Context(), `{"skillName":"custom-ext-skill","resourceName":"references/data.json"}`)
 	if err != nil {
 		t.Fatal(err)
 	}

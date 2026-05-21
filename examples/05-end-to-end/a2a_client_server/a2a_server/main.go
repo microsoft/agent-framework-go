@@ -4,6 +4,7 @@ package main
 
 import (
 	"cmp"
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -152,13 +153,13 @@ func buildAgent(agentType, model string) (openaiagent.Config, *a2a.AgentCard) {
 	switch t {
 	case "INVOICE":
 		q := newInvoiceQuery()
-		queryInvoices := functool.MustNew(functool.Config{Name: "query_invoices", Description: "Retrieves invoices for a company"}, func(_ tool.Context, companyName string) ([]Invoice, error) {
+		queryInvoices := functool.MustNew(functool.Config{Name: "query_invoices", Description: "Retrieves invoices for a company"}, func(_ context.Context, companyName string) ([]Invoice, error) {
 			return q.QueryInvoices(companyName), nil
 		})
-		queryByTransactionID := functool.MustNew(functool.Config{Name: "query_by_transaction_id", Description: "Retrieves invoices by transaction id"}, func(_ tool.Context, transactionID string) ([]Invoice, error) {
+		queryByTransactionID := functool.MustNew(functool.Config{Name: "query_by_transaction_id", Description: "Retrieves invoices by transaction id"}, func(_ context.Context, transactionID string) ([]Invoice, error) {
 			return q.QueryByTransactionID(transactionID), nil
 		})
-		queryByInvoiceID := functool.MustNew(functool.Config{Name: "query_by_invoice_id", Description: "Retrieves invoices by invoice id"}, func(_ tool.Context, invoiceID string) ([]Invoice, error) {
+		queryByInvoiceID := functool.MustNew(functool.Config{Name: "query_by_invoice_id", Description: "Retrieves invoices by invoice id"}, func(_ context.Context, invoiceID string) ([]Invoice, error) {
 			return q.QueryByInvoiceID(invoiceID), nil
 		})
 

@@ -3,6 +3,7 @@
 package openaiagent_test
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -1341,7 +1342,7 @@ func TestResponsesFunctionCallWithResult_NonStreaming(t *testing.T) {
 	type GetWeatherInput struct {
 		Location string `json:"location" jsonschema:"The city and state"`
 	}
-	getWeather := func(ctx tool.Context, input GetWeatherInput) (map[string]any, error) {
+	getWeather := func(ctx context.Context, input GetWeatherInput) (map[string]any, error) {
 		return map[string]any{"temperature": 72, "condition": "sunny"}, nil
 	}
 	tool := functool.MustNew(functool.Config{
@@ -1530,7 +1531,7 @@ func TestResponsesFunctionCall_UsesCallIDWhenDifferentFromID(t *testing.T) {
 	type GetWeatherInput struct {
 		Location string `json:"location" jsonschema:"The city and country"`
 	}
-	getWeather := func(ctx tool.Context, input GetWeatherInput) (string, error) {
+	getWeather := func(ctx context.Context, input GetWeatherInput) (string, error) {
 		return "Cloudy, 15°C", nil
 	}
 	weatherTool := functool.MustNew(functool.Config{
@@ -4854,11 +4855,11 @@ func TestResponsesMultipleRequiredFunctions(t *testing.T) {
 		Location string `json:"location" jsonschema:"The city and state, e.g. San Francisco, CA"`
 	}
 
-	getWeather := func(ctx tool.Context, input LocationInput) (string, error) {
+	getWeather := func(ctx context.Context, input LocationInput) (string, error) {
 		return "Sunny, 72°F", nil
 	}
 
-	getTime := func(ctx tool.Context, input LocationInput) (string, error) {
+	getTime := func(ctx context.Context, input LocationInput) (string, error) {
 		return "3:45 PM", nil
 	}
 

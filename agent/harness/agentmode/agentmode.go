@@ -216,7 +216,7 @@ func (p *Provider) createTools(opts []agent.Option, st *state) []tool.FuncTool {
 			Name:        "AgentMode_Set",
 			Description: fmt.Sprintf("Switch the agent's operating mode. Supported modes: \"%s\".", modeNamesDisplay),
 		},
-		func(ctx tool.Context, mode string) (string, error) {
+		func(ctx context.Context, mode string) (string, error) {
 			if _, ok := p.validModes[mode]; !ok {
 				return "", fmt.Errorf("invalid mode: %q. Supported modes: \"%s\"", mode, modeNamesDisplay)
 			}
@@ -231,7 +231,7 @@ func (p *Provider) createTools(opts []agent.Option, st *state) []tool.FuncTool {
 			Name:        "AgentMode_Get",
 			Description: "Get the agent's current operating mode.",
 		},
-		func(ctx tool.Context, _ struct{}) (string, error) {
+		func(ctx context.Context, _ struct{}) (string, error) {
 			return st.CurrentMode, nil
 		},
 	)

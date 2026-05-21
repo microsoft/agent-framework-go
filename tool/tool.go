@@ -4,6 +4,7 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"strings"
 )
 
@@ -13,14 +14,19 @@ type ToolMode string
 const (
 	// ToolModeAuto allows the agent to decide when to use tools.
 	ToolModeAuto ToolMode = "auto"
+
 	// ToolModeRequired forces the agent to use at least one tool.
 	ToolModeRequired ToolMode = "required"
+
 	// ToolModeNone disables tool usage.
 	ToolModeNone ToolMode = "none"
 )
 
+// requiredPrefix marks a ToolMode created by RequireTools with specific tool names.
 const requiredPrefix = "required:"
 
+// Mode returns the base tool mode represented by m.
+// Modes created by RequireTools return ToolModeRequired.
 func (m ToolMode) Mode() ToolMode {
 	switch m {
 	case ToolModeAuto, ToolModeNone, ToolModeRequired:
@@ -32,6 +38,8 @@ func (m ToolMode) Mode() ToolMode {
 	return m
 }
 
+// Required returns the specific tool names required by m.
+// It returns nil unless m was created by RequireTools.
 func (m ToolMode) Required() []string {
 	if strings.HasPrefix(string(m), requiredPrefix) && m != ToolModeRequired {
 		return strings.Split(strings.TrimPrefix(string(m), requiredPrefix), ",")
@@ -39,41 +47,57 @@ func (m ToolMode) Required() []string {
 	return nil
 }
 
+// RequireTools returns a ToolMode that requires the named tools to be used.
 func RequireTools(name ...string) ToolMode {
 	return ToolMode(requiredPrefix + strings.Join(name, ","))
 }
 
+// Tool describes a tool that can be made available to an agent.
 type Tool interface {
+	// Name returns the provider-facing tool name.
 	Name() string
+
+	// Description returns the provider-facing tool description.
 	Description() string
 }
 
-type Context struct {
-	context.Context
-
-	CallID string
-}
-
-type FuncTool interface {
+// SchemaTool describes a tool that exposes input and output schemas.
+type SchemaTool interface {
 	Tool
 
+	// Schema returns the tool input schema.
 	Schema() any
-	ReturnSchema() any
 
-	Call(ctx Context, args string) (any, error)
+	// ReturnSchema returns the tool output schema.
+	ReturnSchema() any
+}
+
+// ErrTerminate requests that the current function-calling loop stop after this invocation.
+// Tool implementations can return it directly or wrap it; callers should detect it with errors.Is.
+var ErrTerminate = errors.New("tool requested function-calling loop termination")
+
+// FuncTool describes a schema-aware tool that can be invoked by an agent.
+type FuncTool interface {
+	SchemaTool
+
+	// Call invokes the tool with raw JSON arguments.
+	Call(ctx context.Context, args string) (any, error)
 }
 
 // ApprovalRequiredTool indicates whether a tool requires user approval before invocation.
 type ApprovalRequiredTool interface {
 	Tool
 
+	// ApprovalRequired reports whether the tool requires user approval before invocation.
 	ApprovalRequired() bool
 }
 
+// approvalRequiredFunc wraps a FuncTool and marks it as approval-required.
 type approvalRequiredFunc struct {
 	FuncTool
 }
 
+// ApprovalRequired reports that the wrapped tool requires user approval.
 func (approvalRequiredFunc) ApprovalRequired() bool { return true }
 
 // ApprovalRequiredFunc wraps a tool to indicate that it requires user approval before invocation.

@@ -4,6 +4,7 @@ package main
 
 import (
 	"cmp"
+	"context"
 	"log"
 	"net/http"
 	"os"
@@ -46,7 +47,7 @@ func main() {
 	searchRestaurants := functool.MustNew(functool.Config{
 		Name:        "search_restaurants",
 		Description: "Search for restaurants in a location.",
-	}, func(ctx tool.Context, in restaurantSearchRequest) (restaurantSearchResponse, error) {
+	}, func(ctx context.Context, in restaurantSearchRequest) (restaurantSearchResponse, error) {
 		cuisine := in.Cuisine
 		if cuisine == "" || cuisine == "any" {
 			cuisine = "Italian"

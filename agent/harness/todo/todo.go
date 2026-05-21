@@ -216,7 +216,7 @@ func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
 			Name:        "TodoList_Add",
 			Description: "Add one or more todo items. Each item has a title and an optional description. Returns the list of created todo items.",
 		},
-		func(ctx tool.Context, input []ItemInput) ([]Item, error) {
+		func(ctx context.Context, input []ItemInput) ([]Item, error) {
 			mu := p.getSessionLock(opts)
 			mu.Lock()
 			defer mu.Unlock()
@@ -244,7 +244,7 @@ func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
 			Name:        "TodoList_Complete",
 			Description: "Mark one or more todo items as complete. Each entry has an ID and a reason describing how/why the item was completed. Returns the number of items that were found and marked complete.",
 		},
-		func(ctx tool.Context, items []CompleteInput) (int, error) {
+		func(ctx context.Context, items []CompleteInput) (int, error) {
 			mu := p.getSessionLock(opts)
 			mu.Lock()
 			defer mu.Unlock()
@@ -272,7 +272,7 @@ func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
 			Name:        "TodoList_Remove",
 			Description: "Remove one or more todo items by their IDs. Returns the number of items that were found and removed.",
 		},
-		func(ctx tool.Context, ids []int) (int, error) {
+		func(ctx context.Context, ids []int) (int, error) {
 			mu := p.getSessionLock(opts)
 			mu.Lock()
 			defer mu.Unlock()
@@ -303,7 +303,7 @@ func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
 			Name:        "TodoList_GetRemaining",
 			Description: "Retrieve the list of incomplete todo items.",
 		},
-		func(ctx tool.Context, _ struct{}) ([]Item, error) {
+		func(ctx context.Context, _ struct{}) ([]Item, error) {
 			mu := p.getSessionLock(opts)
 			mu.Lock()
 			defer mu.Unlock()
@@ -323,7 +323,7 @@ func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
 			Name:        "TodoList_GetAll",
 			Description: "Retrieve the full list of todo items, both complete and incomplete.",
 		},
-		func(ctx tool.Context, _ struct{}) ([]Item, error) {
+		func(ctx context.Context, _ struct{}) ([]Item, error) {
 			mu := p.getSessionLock(opts)
 			mu.Lock()
 			defer mu.Unlock()

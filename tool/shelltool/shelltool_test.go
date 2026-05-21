@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/shelltool"
 )
 
@@ -831,7 +830,7 @@ func statelessPlatformConfig(t *testing.T) (shelltool.LocalConfig, func(string) 
 
 func callTool(t *testing.T, ft *shelltool.Local, command string) string {
 	t.Helper()
-	out, err := ft.Call(tool.Context{Context: t.Context()}, fmt.Sprintf(`{"command":%q}`, command))
+	out, err := ft.Call(t.Context(), fmt.Sprintf(`{"command":%q}`, command))
 	if err != nil {
 		t.Fatalf("call %q: %v", command, err)
 	}
@@ -853,7 +852,7 @@ func TestNewLocal_initializePersistent(t *testing.T) {
 			t.Errorf("close shell: %v", err)
 		}
 	}()
-	ctx := tool.Context{Context: t.Context()}
+	ctx := t.Context()
 	out, err := ft.Call(ctx, `{"command":"echo initialized"}`)
 	if err != nil {
 		t.Fatalf("call after initialize: %v", err)
@@ -866,7 +865,7 @@ func TestNewLocal_initializePersistent(t *testing.T) {
 func TestCall_echo_defaultPersistent(t *testing.T) {
 	skipIfNotPOSIX(t)
 	ft := newLocal(t, shelltool.LocalConfig{AcknowledgeUnsafe: true})
-	ctx := tool.Context{Context: t.Context()}
+	ctx := t.Context()
 	out, err := ft.Call(ctx, `{"command":"echo hello"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -888,7 +887,7 @@ func TestCall_defaultPersistentPowerShellOnWindows(t *testing.T) {
 		t.Skip("skipping Windows-only PowerShell test")
 	}
 	ft := newLocal(t, shelltool.LocalConfig{AcknowledgeUnsafe: true})
-	ctx := tool.Context{Context: t.Context()}
+	ctx := t.Context()
 	out, err := ft.Call(ctx, `{"command":"Write-Output hello_windows"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -915,7 +914,7 @@ func TestCall_environmentPowerShellOnWindows(t *testing.T) {
 			"AGFW_TEST_ENV": "hello_env",
 		},
 	})
-	ctx := tool.Context{Context: t.Context()}
+	ctx := t.Context()
 	out, err := ft.Call(ctx, `{"command":"Write-Output $env:AGFW_TEST_ENV"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -936,7 +935,7 @@ func TestCall_environmentRemovalPowerShellOnWindows(t *testing.T) {
 			"AGFW_REMOVE_ME",
 		},
 	})
-	ctx := tool.Context{Context: t.Context()}
+	ctx := t.Context()
 	out, err := ft.Call(ctx, `{"command":"if ($env:AGFW_REMOVE_ME) { Write-Output $env:AGFW_REMOVE_ME } else { Write-Output absent }"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -949,7 +948,7 @@ func TestCall_environmentRemovalPowerShellOnWindows(t *testing.T) {
 func TestCall_nonZeroExit(t *testing.T) {
 	skipIfNotPOSIX(t)
 	ft := newLocal(t, shelltool.LocalConfig{AcknowledgeUnsafe: true})
-	ctx := tool.Context{Context: t.Context()}
+	ctx := t.Context()
 	out, err := ft.Call(ctx, `{"command":"sh -c 'exit 42'"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -961,7 +960,7 @@ func TestCall_nonZeroExit(t *testing.T) {
 
 func TestCall_emptyCommand_error(t *testing.T) {
 	ft := newLocal(t, shelltool.LocalConfig{AcknowledgeUnsafe: true})
-	ctx := tool.Context{Context: t.Context()}
+	ctx := t.Context()
 	_, err := ft.Call(ctx, `{"command":""}`)
 	if err == nil {
 		t.Error("expected error for empty command")
@@ -971,7 +970,7 @@ func TestCall_emptyCommand_error(t *testing.T) {
 func TestCall_policyDeny(t *testing.T) {
 	p, _ := shelltool.NewPolicy(shelltool.PolicyConfig{DenyList: []string{`echo`}})
 	ft := newLocal(t, shelltool.LocalConfig{AcknowledgeUnsafe: true, Policy: p})
-	ctx := tool.Context{Context: t.Context()}
+	ctx := t.Context()
 	_, err := ft.Call(ctx, `{"command":"echo hello"}`)
 	if err == nil {
 		t.Error("expected error from policy deny")
@@ -987,7 +986,7 @@ func TestCall_timeout(t *testing.T) {
 		AcknowledgeUnsafe: true,
 		Timeout:           50 * time.Millisecond,
 	})
-	ctx := tool.Context{Context: t.Context()}
+	ctx := t.Context()
 	out, err := ft.Call(ctx, `{"command":"sleep 10"}`)
 	if err != nil {
 		t.Fatalf("unexpected error (timeout should surface in result, not as error): %v", err)
@@ -1055,7 +1054,7 @@ func TestCall_statelessTimeoutKillsProcessTree(t *testing.T) {
 		Mode:              shelltool.ModeStateless,
 		Timeout:           50 * time.Millisecond,
 	})
-	ctx := tool.Context{Context: t.Context()}
+	ctx := t.Context()
 	out, err := ft.Call(ctx, fmt.Sprintf(`{"command":%q}`, command))
 	if err != nil {
 		t.Fatalf("timeout should surface in result, not as error: %v", err)
@@ -1080,7 +1079,7 @@ func TestCall_timeout_preservesPersistentSession(t *testing.T) {
 		AcknowledgeUnsafe: true,
 		Timeout:           50 * time.Millisecond,
 	})
-	ctx := tool.Context{Context: t.Context()}
+	ctx := t.Context()
 
 	if _, err := ft.Call(ctx, `{"command":"MYVAR=survives_timeout"}`); err != nil {
 		t.Fatalf("set var: %v", err)
@@ -1109,7 +1108,7 @@ func TestCall_workingDirectory_reanchorsPersistentCommands(t *testing.T) {
 		AcknowledgeUnsafe: true,
 		WorkingDirectory:  dir,
 	})
-	ctx := tool.Context{Context: t.Context()}
+	ctx := t.Context()
 
 	if _, err := ft.Call(ctx, `{"command":"cd /"}`); err != nil {
 		t.Fatalf("cd: %v", err)
@@ -1131,7 +1130,7 @@ func TestCall_workingDirectory_canDisableReanchor(t *testing.T) {
 		WorkingDirectory:                   dir,
 		DisableWorkingDirectoryConfinement: true,
 	})
-	ctx := tool.Context{Context: t.Context()}
+	ctx := t.Context()
 
 	if _, err := ft.Call(ctx, `{"command":"cd /"}`); err != nil {
 		t.Fatalf("cd: %v", err)
@@ -1150,7 +1149,7 @@ func TestCall_persistent_statePersists(t *testing.T) {
 	ft := newLocal(t, shelltool.LocalConfig{
 		AcknowledgeUnsafe: true,
 	})
-	ctx := tool.Context{Context: t.Context()}
+	ctx := t.Context()
 
 	// Set a variable in the first call.
 	_, err := ft.Call(ctx, `{"command":"MYVAR=hello_persistent"}`)
@@ -1170,7 +1169,7 @@ func TestCall_persistent_statePersists(t *testing.T) {
 func TestCall_persistent_respawnsAfterUnexpectedExit(t *testing.T) {
 	skipIfNotPOSIX(t)
 	ft := newLocal(t, shelltool.LocalConfig{AcknowledgeUnsafe: true})
-	ctx := tool.Context{Context: t.Context()}
+	ctx := t.Context()
 
 	_, _ = ft.Call(ctx, `{"command":"exit"}`)
 	out, err := ft.Call(ctx, `{"command":"echo after_respawn"}`)

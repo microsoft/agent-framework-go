@@ -404,7 +404,7 @@ func TestAgent_Run_PrependsAgentOptions(t *testing.T) {
 
 func TestAgent_New_DoesNotAutomaticallyInvokeTools(t *testing.T) {
 	invoked := false
-	weatherTool := functool.MustNew(functool.Config{Name: "GetWeather", Description: "Get weather"}, func(tool.Context, struct{}) (string, error) {
+	weatherTool := functool.MustNew(functool.Config{Name: "GetWeather", Description: "Get weather"}, func(context.Context, struct{}) (string, error) {
 		invoked = true
 		return "sunny", nil
 	})

@@ -19,7 +19,7 @@ type stubFuncTool struct {
 	description  string
 	schema       any
 	returnSchema any
-	call         func(tool.Context, string) (any, error)
+	call         func(context.Context, string) (any, error)
 }
 
 func (stub stubFuncTool) Name() string { return stub.name }
@@ -30,7 +30,7 @@ func (stub stubFuncTool) Schema() any { return stub.schema }
 
 func (stub stubFuncTool) ReturnSchema() any { return stub.returnSchema }
 
-func (stub stubFuncTool) Call(ctx tool.Context, args string) (any, error) {
+func (stub stubFuncTool) Call(ctx context.Context, args string) (any, error) {
 	return stub.call(ctx, args)
 }
 
@@ -68,7 +68,7 @@ func TestCallPreservesMCPErrorResult(t *testing.T) {
 		t.Fatalf("listed tool is %T, want tool.FuncTool", tools[0])
 	}
 
-	result, err := funcTool.Call(tool.Context{Context: ctx, CallID: "call-1"}, `{}`)
+	result, err := funcTool.Call(ctx, `{}`)
 	if err != nil {
 		t.Fatalf("Call() error = %v", err)
 	}
@@ -133,7 +133,7 @@ func TestCallConvertsMCPContentTypes(t *testing.T) {
 		t.Fatalf("ListTools() error = %v", err)
 	}
 	funcTool := tools[0].(tool.FuncTool)
-	result, err := funcTool.Call(tool.Context{Context: ctx}, `{}`)
+	result, err := funcTool.Call(ctx, `{}`)
 	if err != nil {
 		t.Fatalf("Call() error = %v", err)
 	}
@@ -367,7 +367,7 @@ func TestCallForwardsArgumentsToMCPTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTools() error = %v", err)
 	}
-	_, err = tools[0].(tool.FuncTool).Call(tool.Context{Context: ctx}, `{"query":"go sdk","limit":3}`)
+	_, err = tools[0].(tool.FuncTool).Call(ctx, `{"query":"go sdk","limit":3}`)
 	if err != nil {
 		t.Fatalf("Call() error = %v", err)
 	}
@@ -384,7 +384,7 @@ func TestAddToolReturnsMCPToolErrorResult(t *testing.T) {
 		description:  "fails as a tool result",
 		schema:       map[string]any{"type": "object"},
 		returnSchema: map[string]any{"type": "object"},
-		call: func(tool.Context, string) (any, error) {
+		call: func(context.Context, string) (any, error) {
 			return nil, errors.New("boom")
 		},
 	})
@@ -418,7 +418,7 @@ func TestAddToolForwardsArgumentsToFuncTool(t *testing.T) {
 		description:  "captures arguments",
 		schema:       map[string]any{"type": "object"},
 		returnSchema: map[string]any{"type": "object"},
-		call: func(_ tool.Context, args string) (any, error) {
+		call: func(_ context.Context, args string) (any, error) {
 			captured = args
 			return "ok", nil
 		},
@@ -446,7 +446,7 @@ func TestAddToolReturnsStructuredResult(t *testing.T) {
 		description:  "returns structured content",
 		schema:       map[string]any{"type": "object"},
 		returnSchema: map[string]any{"type": "object", "properties": map[string]any{"answer": map[string]any{"type": "integer"}}},
-		call: func(tool.Context, string) (any, error) {
+		call: func(context.Context, string) (any, error) {
 			return map[string]any{"answer": 42}, nil
 		},
 	})
@@ -490,7 +490,7 @@ func TestAddToolReturnsErrorContentResults(t *testing.T) {
 			description:  "returns error content",
 			schema:       map[string]any{"type": "object"},
 			returnSchema: map[string]any{"type": "object"},
-			call: func(tool.Context, string) (any, error) {
+			call: func(context.Context, string) (any, error) {
 				return &message.ErrorContent{Message: "tool failed"}, nil
 			},
 		})
@@ -510,7 +510,7 @@ func TestAddToolReturnsErrorContentResults(t *testing.T) {
 			description:  "returns function result error",
 			schema:       map[string]any{"type": "object"},
 			returnSchema: map[string]any{"type": "object"},
-			call: func(tool.Context, string) (any, error) {
+			call: func(context.Context, string) (any, error) {
 				return &message.FunctionResultContent{Result: "partial result", Error: errors.New("failed after partial result")}, nil
 			},
 		})
@@ -530,7 +530,7 @@ func TestAddToolReturnsErrorContentResults(t *testing.T) {
 			description:  "returns function result error only",
 			schema:       map[string]any{"type": "object"},
 			returnSchema: map[string]any{"type": "object"},
-			call: func(tool.Context, string) (any, error) {
+			call: func(context.Context, string) (any, error) {
 				return &message.FunctionResultContent{Error: errors.New("only failure")}, nil
 			},
 		})
@@ -556,7 +556,7 @@ func TestAddToolOmitsNonObjectReturnSchema(t *testing.T) {
 		description:  "returns a string",
 		schema:       map[string]any{"type": "object"},
 		returnSchema: map[string]any{"type": "string"},
-		call: func(tool.Context, string) (any, error) {
+		call: func(context.Context, string) (any, error) {
 			return "ok", nil
 		},
 	})
@@ -608,7 +608,7 @@ func TestAddToolReturnsJSONTextResults(t *testing.T) {
 				description:  "returns json-shaped text",
 				schema:       map[string]any{"type": "object"},
 				returnSchema: map[string]any{"type": "object"},
-				call: func(tool.Context, string) (any, error) {
+				call: func(context.Context, string) (any, error) {
 					return tt.result, nil
 				},
 			})
@@ -647,7 +647,7 @@ func TestAddToolReturnsDataAndMultipleContentResults(t *testing.T) {
 			description:  "returns image content",
 			schema:       map[string]any{"type": "object"},
 			returnSchema: map[string]any{"type": "object"},
-			call: func(tool.Context, string) (any, error) {
+			call: func(context.Context, string) (any, error) {
 				return &message.DataContent{Data: "iVBORw0KGgo=", MediaType: "image/png"}, nil
 			},
 		})
@@ -673,7 +673,7 @@ func TestAddToolReturnsDataAndMultipleContentResults(t *testing.T) {
 			description:  "returns multiple content blocks",
 			schema:       map[string]any{"type": "object"},
 			returnSchema: map[string]any{"type": "object"},
-			call: func(tool.Context, string) (any, error) {
+			call: func(context.Context, string) (any, error) {
 				return []message.Content{
 					&message.TextContent{Text: "First text"},
 					&message.TextContent{Text: `{"nested": true}`},
@@ -710,7 +710,7 @@ func TestAddToolReturnsBinaryDataAsEmbeddedResource(t *testing.T) {
 		description:  "returns binary content",
 		schema:       map[string]any{"type": "object"},
 		returnSchema: map[string]any{"type": "object"},
-		call: func(tool.Context, string) (any, error) {
+		call: func(context.Context, string) (any, error) {
 			return &message.DataContent{Name: "file.bin", Data: "AQIDBA==", MediaType: "application/octet-stream"}, nil
 		},
 	})
@@ -859,7 +859,7 @@ func callMCPResult(t *testing.T, callResult *mcp.CallToolResult) any {
 		t.Fatalf("ListTools() error = %v", err)
 	}
 	funcTool := tools[0].(tool.FuncTool)
-	result, err := funcTool.Call(tool.Context{Context: ctx}, `{}`)
+	result, err := funcTool.Call(ctx, `{}`)
 	if err != nil {
 		t.Fatalf("Call() error = %v", err)
 	}

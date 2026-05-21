@@ -365,7 +365,7 @@ func (p *providerState) buildTools(skills providedSkillSet, hasResources, hasScr
 				Name:        "load_skill",
 				Description: "Loads the full content of a specific skill.",
 			},
-			func(_ tool.Context, in struct {
+			func(_ context.Context, in struct {
 				SkillName string `json:"skillName" jsonschema:"The name of the skill to load"`
 			},
 			) (string, error) {
@@ -380,12 +380,12 @@ func (p *providerState) buildTools(skills providedSkillSet, hasResources, hasScr
 				Name:        "read_skill_resource",
 				Description: "Reads a resource associated with a skill, such as references, assets, or dynamic data.",
 			},
-			func(callCtx tool.Context, in struct {
+			func(callCtx context.Context, in struct {
 				SkillName    string `json:"skillName" jsonschema:"The name of the skill"`
 				ResourceName string `json:"resourceName" jsonschema:"The exact resource name to read"`
 			},
 			) (any, error) {
-				return p.readSkillResource(callCtx.Context, skills, in.SkillName, in.ResourceName), nil
+				return p.readSkillResource(callCtx, skills, in.SkillName, in.ResourceName), nil
 			},
 		))
 	}
@@ -399,13 +399,13 @@ func (p *providerState) buildTools(skills providedSkillSet, hasResources, hasScr
 			Name:        "run_skill_script",
 			Description: "Runs a script associated with a skill.",
 		},
-		func(callCtx tool.Context, in struct {
+		func(callCtx context.Context, in struct {
 			SkillName  string   `json:"skillName" jsonschema:"The name of the skill"`
 			ScriptName string   `json:"scriptName" jsonschema:"The exact script name to run"`
 			Arguments  []string `json:"arguments,omitempty" jsonschema:"Positional CLI-style string arguments for the script, e.g. [\"--value\",\"26.2\",\"--factor\",\"1.60934\"]"`
 		},
 		) (any, error) {
-			return p.runSkillScript(callCtx.Context, skills, in.SkillName, in.ScriptName, in.Arguments), nil
+			return p.runSkillScript(callCtx, skills, in.SkillName, in.ScriptName, in.Arguments), nil
 		},
 	)
 

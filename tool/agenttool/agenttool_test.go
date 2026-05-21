@@ -10,7 +10,6 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/agenttool"
 )
 
@@ -78,7 +77,7 @@ func TestCall_PassesQueryAndRunOptionsAndReturnsResponse(t *testing.T) {
 		RunOptions: []agent.Option{agent.Stream(false)},
 	})
 
-	ret, err := tl.Call(tool.Context{Context: t.Context()}, `{"query":"hello"}`)
+	ret, err := tl.Call(t.Context(), `{"query":"hello"}`)
 	if err != nil {
 		t.Fatalf("Call() error = %v", err)
 	}
@@ -120,7 +119,7 @@ func TestCall_EmptyArgsUsesEmptyQuery(t *testing.T) {
 
 	tl := agenttool.New(a, agenttool.Config{})
 
-	ret, err := tl.Call(tool.Context{Context: t.Context()}, "")
+	ret, err := tl.Call(t.Context(), "")
 	if err != nil {
 		t.Fatalf("Call() error = %v", err)
 	}
@@ -143,7 +142,7 @@ func TestCall_InvalidJSONReturnsError(t *testing.T) {
 	a := agenttest.New(agenttest.NewResponseBuilder().AddText("unused").Build())
 	tl := agenttool.New(a, agenttool.Config{})
 
-	_, err := tl.Call(tool.Context{Context: t.Context()}, "{")
+	_, err := tl.Call(t.Context(), "{")
 	if err == nil {
 		t.Fatal("expected JSON decoding error")
 	}
@@ -154,7 +153,7 @@ func TestCall_PropagatesAgentError(t *testing.T) {
 	a := agenttest.New(agenttest.NewResponseBuilder().AddError(expectedErr).Build())
 	tl := agenttool.New(a, agenttool.Config{})
 
-	_, err := tl.Call(tool.Context{Context: t.Context()}, `{"query":"hello"}`)
+	_, err := tl.Call(t.Context(), `{"query":"hello"}`)
 	if !errors.Is(err, expectedErr) {
 		t.Fatalf("Call() error = %v, want %v", err, expectedErr)
 	}

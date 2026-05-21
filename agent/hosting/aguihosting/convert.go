@@ -3,6 +3,7 @@
 package aguihosting
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -102,7 +103,7 @@ func (t declarationTool) Description() string { return t.description }
 func (t declarationTool) Schema() any         { return t.schema }
 func (t declarationTool) ReturnSchema() any   { return nil }
 
-func (t declarationTool) Call(ctx tool.Context, args string) (any, error) {
+func (t declarationTool) Call(ctx context.Context, args string) (any, error) {
 	return nil, fmt.Errorf("client tool %q cannot be invoked on server", t.name)
 }
 

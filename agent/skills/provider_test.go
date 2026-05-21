@@ -186,7 +186,7 @@ func TestNew_MultipleDirectories_DeduplicatesSkillsByName(t *testing.T) {
 
 	_, tools := captureProviderContext(t, provider)
 	loadTool := findTool(t, tools, "load_skill")
-	content, err := loadTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"dup-skill"}`)
+	content, err := loadTool.Call(t.Context(), `{"skillName":"dup-skill"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func TestNewProvider_DeduplicatesSkillsByName(t *testing.T) {
 
 	_, tools := captureProviderContext(t, provider)
 	loadTool := findTool(t, tools, "load_skill")
-	content, err := loadTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"dup-inline"}`)
+	content, err := loadTool.Call(t.Context(), `{"skillName":"dup-inline"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -369,7 +369,7 @@ func TestProvider_WithScripts_ExposesRunSkillScriptTool(t *testing.T) {
 
 	_, tools := captureProviderContext(t, provider)
 	runTool := findTool(t, tools, "run_skill_script")
-	result, err := runTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"script-skill","scriptName":"scripts/run.py","arguments":["--value","42"]}`)
+	result, err := runTool.Call(t.Context(), `{"skillName":"script-skill","scriptName":"scripts/run.py","arguments":["--value","42"]}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -400,7 +400,7 @@ func TestProvider_RunSkillScript_RequiresExactName(t *testing.T) {
 
 	_, tools := captureProviderContext(t, provider)
 	runTool := findTool(t, tools, "run_skill_script")
-	result, err := runTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"script-skill","scriptName":"./scripts/run.py"}`)
+	result, err := runTool.Call(t.Context(), `{"skillName":"script-skill","scriptName":"./scripts/run.py"}`)
 	if err != nil {
 		t.Fatalf("expected no tool error, got %v", err)
 	}
@@ -450,7 +450,7 @@ func TestProvider_FromFileSourceWithRunner_UsesScriptRunner(t *testing.T) {
 
 	_, tools := captureProviderContext(t, provider)
 	runTool := findTool(t, tools, "run_skill_script")
-	result, err := runTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"runner-skill","scriptName":"scripts/run.py"}`)
+	result, err := runTool.Call(t.Context(), `{"skillName":"runner-skill","scriptName":"scripts/run.py"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -578,7 +578,7 @@ func TestProvider_SkillFilter_FiltersInlineAndSourceSkills(t *testing.T) {
 	}
 
 	loadTool := findTool(t, tools, "load_skill")
-	result, err := loadTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"drop-inline"}`)
+	result, err := loadTool.Call(t.Context(), `{"skillName":"drop-inline"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -586,7 +586,7 @@ func TestProvider_SkillFilter_FiltersInlineAndSourceSkills(t *testing.T) {
 		t.Fatalf("expected filtered inline skill to be unavailable, got %#v", result)
 	}
 
-	result, err = loadTool.Call(tool.Context{Context: t.Context()}, `{"skillName":"drop-source"}`)
+	result, err = loadTool.Call(t.Context(), `{"skillName":"drop-source"}`)
 	if err != nil {
 		t.Fatal(err)
 	}

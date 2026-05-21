@@ -139,7 +139,7 @@ When responding, be extra descriptive and use as many words as possible without 
 	}
 }
 
-func lookupPrice(_ tool.Context, productName string) (string, error) {
+func lookupPrice(_ context.Context, productName string) (string, error) {
 	switch strings.ToUpper(productName) {
 	case "LAPTOP":
 		return "The laptop costs $999.99.", nil

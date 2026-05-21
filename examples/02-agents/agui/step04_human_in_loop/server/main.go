@@ -4,6 +4,7 @@ package main
 
 import (
 	"cmp"
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -29,7 +30,7 @@ func main() {
 	approveExpense := functool.MustNew(functool.Config{
 		Name:        "approve_expense_report",
 		Description: "Approve the expense report.",
-	}, func(ctx tool.Context, expenseReportID string) (string, error) {
+	}, func(ctx context.Context, expenseReportID string) (string, error) {
 		return fmt.Sprintf("Expense report %s approved", expenseReportID), nil
 	})
 

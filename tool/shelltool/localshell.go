@@ -165,7 +165,7 @@ func (t *Local) Schema() any {
 
 func (t *Local) ReturnSchema() any { return nil }
 
-func (t *Local) Call(ctx tool.Context, args string) (any, error) {
+func (t *Local) Call(ctx context.Context, args string) (any, error) {
 	var in shellInput
 	if err := json.Unmarshal([]byte(args), &in); err != nil {
 		return nil, fmt.Errorf("shelltool: invalid arguments: %w", err)
@@ -173,7 +173,7 @@ func (t *Local) Call(ctx tool.Context, args string) (any, error) {
 	if in.Command == "" {
 		return nil, fmt.Errorf("shelltool: command must not be empty")
 	}
-	result, err := t.Run(ctx.Context, in.Command)
+	result, err := t.Run(ctx, in.Command)
 	if err != nil {
 		return nil, err
 	}

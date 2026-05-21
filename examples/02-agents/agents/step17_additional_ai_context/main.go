@@ -21,7 +21,6 @@ import (
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/message/messagefilter"
-	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
@@ -187,7 +186,7 @@ func provideTodoListContext(_ context.Context, messages []*message.Message, opti
 	addTodoItemTool := functool.MustNew(functool.Config{
 		Name:        "AddTodoItem",
 		Description: "Adds an item to the todo list.",
-	}, func(_ tool.Context, args addTodoItemArgs) (string, error) {
+	}, func(_ context.Context, args addTodoItemArgs) (string, error) {
 		if strings.TrimSpace(args.Item) == "" {
 			return "", fmt.Errorf("item must have a value")
 		}
@@ -199,7 +198,7 @@ func provideTodoListContext(_ context.Context, messages []*message.Message, opti
 	removeTodoItemTool := functool.MustNew(functool.Config{
 		Name:        "RemoveTodoItem",
 		Description: "Removes an item from the todo list. Index is zero based.",
-	}, func(_ tool.Context, args removeTodoItemArgs) (string, error) {
+	}, func(_ context.Context, args removeTodoItemArgs) (string, error) {
 		state := getTodoListState(session)
 		if args.Index < 0 || args.Index >= len(state.Items) {
 			return "", fmt.Errorf("todo item index %d is out of range", args.Index)

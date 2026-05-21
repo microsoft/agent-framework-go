@@ -97,7 +97,7 @@ func createSkillTools(remoteAgent *agent.Agent, skills []a2a.AgentSkill) []tool.
 		tools = append(tools, functool.MustNew(functool.Config{
 			Name:        sanitizeToolName(cmp.Or(skill.Name, skill.ID, "a2a_skill")),
 			Description: formatSkillDescription(skill),
-		}, func(ctx tool.Context, query string) (string, error) {
+		}, func(ctx context.Context, query string) (string, error) {
 			resp, err := remoteAgent.RunText(ctx, skillPrompt(skill, query)).Collect()
 			if err != nil {
 				return "", err

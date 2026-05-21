@@ -67,7 +67,7 @@ func callTool(t *testing.T, opts []agent.Option, name string, argsJSON string) s
 			if !ok {
 				t.Fatalf("tool %s is not a FuncTool", name)
 			}
-			result, err := ft.Call(tool.Context{Context: context.Background()}, argsJSON)
+			result, err := ft.Call(context.Background(), argsJSON)
 			if err != nil {
 				t.Fatalf("tool %s call failed: %v", name, err)
 			}
