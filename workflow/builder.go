@@ -344,28 +344,28 @@ func (wb *Builder) edgeIdx() int {
 // send type annotations), the edge is silently skipped.
 func (wb *Builder) validateTypeCompatibility() error {
 	type protocolInfo struct {
-		protocol *ProtocolDescriptor
+		protocol ProtocolDescriptor
 		ok       bool
 	}
 	cache := make(map[string]protocolInfo, len(wb.executorsBindings))
-	getProtocol := func(id string) (*ProtocolDescriptor, bool) {
+	getProtocol := func(id string) (ProtocolDescriptor, bool) {
 		if info, cached := cache[id]; cached {
 			return info.protocol, info.ok
 		}
 		binding, exists := wb.executorsBindings[id]
 		if !exists || binding.isPlaceholder() {
 			cache[id] = protocolInfo{}
-			return nil, false
+			return ProtocolDescriptor{}, false
 		}
 		ex, err := binding.CreateInstance("")
 		if err != nil {
 			cache[id] = protocolInfo{}
-			return nil, false
+			return ProtocolDescriptor{}, false
 		}
 		protocol, err := ex.describeProtocol()
 		if err != nil {
 			cache[id] = protocolInfo{}
-			return nil, false
+			return ProtocolDescriptor{}, false
 		}
 		cache[id] = protocolInfo{protocol: protocol, ok: true}
 		return protocol, true
@@ -399,7 +399,7 @@ func (wb *Builder) validateTypeCompatibility() error {
 				compatible := false
 				for _, outType := range sourceSendTypes {
 					for _, inType := range targetInputTypes {
-						if outType == inType || outType.AssignableTo(inType) || (inType.Kind() == reflect.Interface && outType.Implements(inType)) {
+						if sendTypeCompatibleWithInput(outType, inType) {
 							compatible = true
 							break
 						}
@@ -418,6 +418,16 @@ func (wb *Builder) validateTypeCompatibility() error {
 		}
 	}
 	return nil
+}
+
+func sendTypeCompatibleWithInput(outType, inType reflect.Type) bool {
+	if outType == nil || inType == nil {
+		return false
+	}
+	if outType == reflect.TypeFor[any]() {
+		return true
+	}
+	return outType == inType || outType.AssignableTo(inType) || (inType.Kind() == reflect.Interface && outType.Implements(inType))
 }
 
 func (wb *Builder) trackInputPort(port RequestPort) {

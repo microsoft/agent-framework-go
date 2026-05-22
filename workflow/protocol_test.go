@@ -9,10 +9,11 @@ import (
 )
 
 type (
-	protocolBuilderInput  struct{}
-	protocolBuilderOutput struct{}
-	protocolBuilderSend   struct{}
-	protocolBuilderYield  struct{}
+	protocolBuilderInput     struct{}
+	protocolBuilderOutput    struct{}
+	protocolBuilderSend      struct{}
+	protocolBuilderYield     struct{}
+	protocolBuilderYieldImpl struct{}
 )
 
 func TestProtocolBuilderBuildIncludesDeclaredAndAutomaticTypes(t *testing.T) {
@@ -32,11 +33,30 @@ func TestProtocolBuilderBuildIncludesDeclaredAndAutomaticTypes(t *testing.T) {
 	if !containsReflectType(protocol.describe().Accepts, inputType) {
 		t.Fatalf("Accepts = %v, want %v", protocol.describe().Accepts, inputType)
 	}
-	if got := protocol.sends; !reflect.DeepEqual(got, []reflect.Type{explicitSend, outputType}) {
+	if got := protocol.describe().Sends; !reflect.DeepEqual(got, []reflect.Type{explicitSend, outputType}) {
 		t.Fatalf("sends = %v, want [%v %v]", got, explicitSend, outputType)
 	}
-	if got := protocol.yields; !reflect.DeepEqual(got, []reflect.Type{explicitYield, outputType}) {
+	if got := protocol.describe().Yields; !reflect.DeepEqual(got, []reflect.Type{explicitYield, outputType}) {
 		t.Fatalf("yields = %v, want [%v %v]", got, explicitYield, outputType)
+	}
+}
+
+func TestExecutorProtocolDescribeReturnsCachedDescriptorValue(t *testing.T) {
+	protocol, err := newProtocolBuilderWithHandler(reflect.TypeFor[protocolBuilderInput](), reflect.TypeFor[protocolBuilderOutput]()).
+		SendsMessageType(reflect.TypeFor[protocolBuilderSend]()).
+		YieldsOutputType(reflect.TypeFor[protocolBuilderYield]()).
+		build(ExecutorSpec{})
+	if err != nil {
+		t.Fatalf("build error = %v", err)
+	}
+
+	first := protocol.describe()
+	second := protocol.describe()
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("describe returned different descriptors: %+v != %+v", first, second)
+	}
+	if allocations := testing.AllocsPerRun(1000, func() { _ = protocol.describe() }); allocations != 0 {
+		t.Fatalf("describe allocations = %v, want 0", allocations)
 	}
 }
 
@@ -51,11 +71,11 @@ func TestProtocolBuilderBuildRespectsAutoReturnOptions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build error = %v", err)
 	}
-	if containsReflectType(protocol.sends, outputType) {
-		t.Fatalf("sends = %v, want no automatic output type %v", protocol.sends, outputType)
+	if containsReflectType(protocol.describe().Sends, outputType) {
+		t.Fatalf("sends = %v, want no automatic output type %v", protocol.describe().Sends, outputType)
 	}
-	if containsReflectType(protocol.yields, outputType) {
-		t.Fatalf("yields = %v, want no automatic output type %v", protocol.yields, outputType)
+	if containsReflectType(protocol.describe().Yields, outputType) {
+		t.Fatalf("yields = %v, want no automatic output type %v", protocol.describe().Yields, outputType)
 	}
 }
 

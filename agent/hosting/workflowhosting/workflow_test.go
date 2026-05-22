@@ -1075,8 +1075,8 @@ func newFunctionCallAgent() *agent.Agent {
 }
 
 // approverExecutor is a downstream executor that forwards a fixed
-// FunctionApprovalResponseContent back to the binding it observes a
-// FunctionApprovalRequestContent for.
+// ToolApprovalResponseContent back to the binding it observes a
+// ToolApprovalRequestContent for.
 func approverExecutor(target workflow.ExecutorBinding, approve bool) workflow.ExecutorBinding {
 	id := "approver"
 	binding := workflow.ExecutorBinding{
@@ -1163,7 +1163,7 @@ func collectResponseOutputs(t *testing.T, ev []workflow.Event) []*agent.Response
 }
 
 // TestHostedAgent_InterceptUserInputRequests verifies that when the agent
-// emits a FunctionApprovalRequestContent and the flag is set, the request is
+// emits a ToolApprovalRequestContent and the flag is set, the request is
 // dispatched as a workflow message and the response, when routed back to the
 // host, drives a second agent invocation that observes the response.
 func TestHostedAgent_InterceptUserInputRequests(t *testing.T) {
@@ -1391,7 +1391,7 @@ func TestHostedAgent_InterceptDisabled_PostsExternalRequest(t *testing.T) {
 	}
 
 	if sawApprovalRequestMessage {
-		t.Errorf("expected no FunctionApprovalRequestContent workflow-message dispatch when InterceptUserInputRequests is false")
+		t.Errorf("expected no ToolApprovalRequestContent workflow-message dispatch when InterceptUserInputRequests is false")
 	}
 	if !sawExternalRequest {
 		t.Errorf("expected a RequestInfoEvent for the user-input port when InterceptUserInputRequests is false")
@@ -1526,12 +1526,12 @@ func TestHostedAgent_InterceptDisabled_ResumesWithExternalResponse(t *testing.T)
 	// Build the approval response from the request data.
 	reqContent, ok := req.Data.As(reflect.TypeFor[*message.ToolApprovalRequestContent]())
 	if !ok {
-		t.Fatalf("expected request data to be *FunctionApprovalRequestContent, got %T", req.Data.Any())
+		t.Fatalf("expected request data to be *ToolApprovalRequestContent, got %T", req.Data.Any())
 	}
 	approval := reqContent.(*message.ToolApprovalRequestContent).CreateResponse(true, "")
-	resp, err := req.NewResponse(approval)
+	resp, err := req.CreateResponse(approval)
 	if err != nil {
-		t.Fatalf("NewResponse: %v", err)
+		t.Fatalf("CreateResponse: %v", err)
 	}
 	if _, err := run.Resume(ctx, resp); err != nil {
 		t.Fatalf("Resume: %v", err)
@@ -1665,9 +1665,9 @@ func TestHostedAgent_InterceptsOnlyUnpairedFunctionCalls_PortMode(t *testing.T) 
 	for _, req := range requests[:unpaired-1] {
 		v, _ := req.Data.As(reflect.TypeFor[*message.FunctionCallContent]())
 		call := v.(*message.FunctionCallContent)
-		resp, err := req.NewResponse(&message.FunctionResultContent{CallID: call.CallID, Result: "ok"})
+		resp, err := req.CreateResponse(&message.FunctionResultContent{CallID: call.CallID, Result: "ok"})
 		if err != nil {
-			t.Fatalf("NewResponse: %v", err)
+			t.Fatalf("CreateResponse: %v", err)
 		}
 		if _, err := run.Resume(ctx, resp); err != nil {
 			t.Fatalf("Resume: %v", err)
@@ -1682,9 +1682,9 @@ func TestHostedAgent_InterceptsOnlyUnpairedFunctionCalls_PortMode(t *testing.T) 
 	final := requests[unpaired-1]
 	v, _ := final.Data.As(reflect.TypeFor[*message.FunctionCallContent]())
 	call := v.(*message.FunctionCallContent)
-	resp, err := final.NewResponse(&message.FunctionResultContent{CallID: call.CallID, Result: "ok"})
+	resp, err := final.CreateResponse(&message.FunctionResultContent{CallID: call.CallID, Result: "ok"})
 	if err != nil {
-		t.Fatalf("NewResponse: %v", err)
+		t.Fatalf("CreateResponse: %v", err)
 	}
 	if _, err := run.Resume(ctx, resp); err != nil {
 		t.Fatalf("Resume: %v", err)
@@ -2006,9 +2006,9 @@ func TestHostedAgent_HandledRequestNotReEmitted_PortMode(t *testing.T) {
 	// Resume with a matching response.
 	v, _ := firstReq.Data.As(reflect.TypeFor[*message.FunctionCallContent]())
 	call := v.(*message.FunctionCallContent)
-	resp, err := firstReq.NewResponse(&message.FunctionResultContent{CallID: call.CallID, Result: "ok"})
+	resp, err := firstReq.CreateResponse(&message.FunctionResultContent{CallID: call.CallID, Result: "ok"})
 	if err != nil {
-		t.Fatalf("NewResponse: %v", err)
+		t.Fatalf("CreateResponse: %v", err)
 	}
 	if _, err := run.Resume(ctx, resp); err != nil {
 		t.Fatalf("Resume: %v", err)
@@ -2028,7 +2028,7 @@ func TestHostedAgent_HandledRequestNotReEmitted_PortMode(t *testing.T) {
 
 // TestHostedAgent_AlreadyPendingRequest_IsIdempotent_InterceptMode covers the
 // across-response idempotent re-emission path: when an agent emits a
-// FunctionApprovalRequestContent whose ID is already pending from a previous
+// ToolApprovalRequestContent whose ID is already pending from a previous
 // response (e.g. a re-emission), the host must not dispatch it twice nor
 // raise an error. Mirrors .NET's
 // AIContentExternalHandler.ProcessRequestContentAsync no-op-on-TryAdd-fail.
@@ -2107,7 +2107,7 @@ func TestHostedAgent_AlreadyPendingRequest_IsIdempotent_InterceptMode(t *testing
 			t.Fatalf("watch: %v", err)
 		}
 		if e, ok := evt.(workflow.ErrorEvent); ok && e.Error != nil &&
-			strings.Contains(e.Error.Error(), "duplicate FunctionApprovalRequest") {
+			strings.Contains(e.Error.Error(), "duplicate tool approval request") {
 			sawErr = true
 		}
 	}

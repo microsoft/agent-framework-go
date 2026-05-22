@@ -176,6 +176,27 @@ func TestWorkflowOutput_ExplicitYieldTypesValidateContextYieldOutput(t *testing.
 	}
 }
 
+func TestWorkflowOutput_ExplicitYieldTypeAllowsPointerToDeclaredValueType(t *testing.T) {
+	binding := explicitYieldBinding("yield", &dataMessage{Bytes: []byte("ok")})
+	wf, err := workflow.NewBuilder(binding).WithOutputFrom(binding).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	events := runAndCollectEvents(t, wf, "input")
+	if errors := errorEvents(events); len(errors) != 0 {
+		t.Fatalf("unexpected error events: %#v", errors)
+	}
+	outputs := outputEvents(events)
+	if len(outputs) != 1 {
+		t.Fatalf("output count = %d, want 1; events: %#v", len(outputs), events)
+	}
+	got, ok := outputs[0].Output.(*dataMessage)
+	if !ok || string(got.Bytes) != "ok" {
+		t.Fatalf("OutputEvent.Output = %#v, want *dataMessage ok", outputs[0].Output)
+	}
+}
+
 type polymorphicOutput interface {
 	OutputName() string
 }
@@ -527,9 +548,9 @@ func TestBindRequestPort_PostsRequestAndForwardsResponse(t *testing.T) {
 		t.Errorf("request data = %v, want %q", req.Data.Any(), "what")
 	}
 
-	resp, err := req.NewResponse(int(42))
+	resp, err := req.CreateResponse(int(42))
 	if err != nil {
-		t.Fatalf("NewResponse: %v", err)
+		t.Fatalf("CreateResponse: %v", err)
 	}
 	if _, err := run.Resume(ctx, resp); err != nil {
 		t.Fatalf("Resume: %v", err)
@@ -682,9 +703,9 @@ func TestBindRequestPort_ForwardsExternalRequestAndRestoresOriginalResponse(t *t
 		t.Fatalf("forwarded request ID = %q, want original-request", request.RequestID)
 	}
 
-	response, err := request.NewResponse(42)
+	response, err := request.CreateResponse(42)
 	if err != nil {
-		t.Fatalf("NewResponse: %v", err)
+		t.Fatalf("CreateResponse: %v", err)
 	}
 	if _, err := run.Resume(ctx, response); err != nil {
 		t.Fatalf("Resume: %v", err)

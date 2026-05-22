@@ -4,6 +4,7 @@ package workflowprovider_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"iter"
 	"reflect"
@@ -100,7 +101,7 @@ func TestNew_StreamsResponseUpdates(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	resp, err := ag.RunText(context.Background(), "ping").Collect()
+	resp, err := ag.RunText(t.Context(), "ping").Collect()
 	if err != nil {
 		t.Fatalf("RunText: %v", err)
 	}
@@ -119,6 +120,80 @@ func TestNew_StreamsResponseUpdates(t *testing.T) {
 	}
 }
 
+func TestNew_SerializedSessionResumesFromCheckpoint(t *testing.T) {
+	wf1 := newCallRequestWorkflow(t, "persisted")
+	ag1, err := workflowprovider.New(wf1, workflowprovider.Config{
+		IncludeOutputsInResponse: true,
+	})
+	if err != nil {
+		t.Fatalf("New first agent: %v", err)
+	}
+	session, err := ag1.CreateSession(t.Context())
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	first, err := ag1.RunText(t.Context(), "hi", agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	var requestID string
+	for _, m := range first.Messages {
+		for _, c := range m.Contents {
+			if fc, ok := c.(*message.FunctionCallContent); ok {
+				requestID = fc.CallID
+			}
+		}
+	}
+	if requestID != "persisted_FunctionCall:abc" {
+		t.Fatalf("first run request ID = %q, want %q", requestID, "persisted_FunctionCall:abc")
+	}
+
+	data, err := json.Marshal(session)
+	if err != nil {
+		t.Fatalf("Marshal session: %v", err)
+	}
+	if !strings.Contains(string(data), "checkpointStore") || !strings.Contains(string(data), "lastCheckpoint") {
+		t.Fatalf("serialized session did not include workflow checkpoint state: %s", string(data))
+	}
+	if !strings.Contains(string(data), "\"pending\"") || !strings.Contains(string(data), "\"RequestID\"") || !strings.Contains(string(data), "workflowSessionID") {
+		t.Fatalf("serialized session missing pending ExternalRequest/workflowSessionID: %s", string(data))
+	}
+	if strings.Contains(string(data), "\"requestContent\"") {
+		t.Fatalf("serialized session should store pending ExternalRequest directly without request content cache: %s", string(data))
+	}
+
+	var restored agent.Session
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("Unmarshal session: %v", err)
+	}
+	wf2 := newCallRequestWorkflow(t, "persisted")
+	ag2, err := workflowprovider.New(wf2, workflowprovider.Config{
+		IncludeOutputsInResponse: true,
+	})
+	if err != nil {
+		t.Fatalf("New restored agent: %v", err)
+	}
+	resumeMsg := []*message.Message{{
+		Role: message.RoleTool,
+		Contents: []message.Content{
+			&message.FunctionResultContent{CallID: requestID, Result: "42"},
+		},
+	}}
+	second, err := ag2.Run(t.Context(), resumeMsg, agent.WithSession(&restored)).Collect()
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	var finalText string
+	for _, m := range second.Messages {
+		if t := m.Contents.Text(); strings.HasPrefix(t, "got:") {
+			finalText = t
+		}
+	}
+	if finalText != "got:42" {
+		t.Fatalf("final response text = %q, want %q", finalText, "got:42")
+	}
+}
 func TestNew_EmitsDefaultUpdatesForUnhandledWorkflowEvents(t *testing.T) {
 	binding := echoExecutorBinding("echo")
 	wf, err := workflow.NewBuilder(binding).Build()
@@ -131,7 +206,7 @@ func TestNew_EmitsDefaultUpdatesForUnhandledWorkflowEvents(t *testing.T) {
 	}
 
 	var sawUnhandled bool
-	for update, err := range ag.RunText(context.Background(), "ping") {
+	for update, err := range ag.RunText(t.Context(), "ping") {
 		if err != nil {
 			t.Fatalf("RunText: %v", err)
 		}
@@ -166,7 +241,7 @@ func TestNew_StampsEverySurfacedUpdate(t *testing.T) {
 	}
 
 	updates := 0
-	for update, err := range ag.RunText(context.Background(), "ping") {
+	for update, err := range ag.RunText(t.Context(), "ping") {
 		if err != nil {
 			t.Fatalf("RunText: %v", err)
 		}
@@ -203,7 +278,7 @@ func TestNew_IncludeOutputsInResponse(t *testing.T) {
 	}
 
 	var updates int
-	for range ag.RunText(context.Background(), "ping") {
+	for range ag.RunText(t.Context(), "ping") {
 		updates++
 	}
 	// One update from *agent.ResponseUpdate output, one from message output translation.
@@ -258,7 +333,7 @@ func TestNew_ConvertsResponseOutputWithResponseMetadata(t *testing.T) {
 
 	var sawMessage bool
 	var sawMetadata bool
-	for update, err := range ag.RunText(context.Background(), "ping") {
+	for update, err := range ag.RunText(t.Context(), "ping") {
 		if err != nil {
 			t.Fatalf("RunText: %v", err)
 		}
@@ -376,7 +451,7 @@ func TestNew_ErrorContentOutputStreamedOut(t *testing.T) {
 				t.Fatalf("New: %v", err)
 			}
 
-			resp, err := ag.RunText(context.Background(), "hi").Collect()
+			resp, err := ag.RunText(t.Context(), "hi").Collect()
 			if err != nil {
 				t.Fatalf("RunText: %v", err)
 			}
@@ -419,14 +494,56 @@ func TestNew_ErrorEvent_DefaultMessage(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	resp, err := ag.RunText(context.Background(), "hi").Collect()
+	resp, err := ag.RunText(t.Context(), "hi").Collect()
 	if err != nil {
 		t.Fatalf("RunText: %v", err)
 	}
 
-	const want = "an error occurred while executing the workflow"
+	const want = "An error occurred while executing the workflow."
 	if !containsErrorContent(resp, want) {
 		t.Errorf("expected ErrorContent with %q, response = %+v", want, resp)
+	}
+}
+
+func TestNew_ExecutorFailedEvent_DefaultMessage(t *testing.T) {
+	binding := workflow.ExecutorBinding{
+		ID:           "executor-failed",
+		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+	}
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: binding.ID,
+			Spec: newMessageSpec(&messageworkflow.Options{
+				StateKey: "executor_failed_msgs",
+				TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, _ []*message.Message) error {
+					return ctx.AddEvent(workflow.ExecutorFailedEvent{
+						ExecutorID: "secret-executor",
+						Error:      fmt.Errorf("secret failure details"),
+					})
+				},
+			}),
+		}, nil
+	}
+	wf, err := workflow.NewBuilder(binding).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	ag, err := workflowprovider.New(wf, workflowprovider.Config{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	resp, err := ag.RunText(t.Context(), "hi").Collect()
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+
+	const want = "An error occurred while executing the workflow."
+	if !containsErrorContent(resp, want) {
+		t.Errorf("expected ErrorContent with %q, response = %+v", want, resp)
+	}
+	if containsErrorContent(resp, "secret failure details") || containsErrorContent(resp, "secret-executor") {
+		t.Errorf("default executor failure response exposed details: %+v", resp)
 	}
 }
 
@@ -441,7 +558,7 @@ func TestNew_ErrorEvent_IncludeDetails(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	resp, err := ag.RunText(context.Background(), "hi").Collect()
+	resp, err := ag.RunText(t.Context(), "hi").Collect()
 	if err != nil {
 		t.Fatalf("RunText: %v", err)
 	}
@@ -529,6 +646,18 @@ func callRequestExecutorBinding(t *testing.T, id string) workflow.ExecutorBindin
 	return binding
 }
 
+func newCallRequestWorkflow(t *testing.T, id string) *workflow.Workflow {
+	t.Helper()
+	binding := callRequestExecutorBinding(t, id)
+	wf, err := workflow.NewBuilder(binding).
+		WithOutputFrom(binding).
+		Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	return wf
+}
+
 // TestNew_SurfacesRequestInfoAndAcceptsResponse verifies the multi-turn
 // external-request round trip:
 //
@@ -552,14 +681,13 @@ func TestNew_SurfacesRequestInfoAndAcceptsResponse(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	ctx := context.Background()
-	session, err := ag.CreateSession(ctx)
+	session, err := ag.CreateSession(t.Context())
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
 
 	// First turn.
-	first, err := ag.RunText(ctx, "hi", agent.WithSession(session)).Collect()
+	first, err := ag.RunText(t.Context(), "hi", agent.WithSession(session)).Collect()
 	if err != nil {
 		t.Fatalf("first run: %v", err)
 	}
@@ -585,7 +713,7 @@ func TestNew_SurfacesRequestInfoAndAcceptsResponse(t *testing.T) {
 			&message.FunctionResultContent{CallID: sawCall.CallID, Result: "42"},
 		},
 	}}
-	second, err := ag.Run(ctx, resumeMsg, agent.WithSession(session)).Collect()
+	second, err := ag.Run(t.Context(), resumeMsg, agent.WithSession(session)).Collect()
 	if err != nil {
 		t.Fatalf("second run: %v", err)
 	}
@@ -600,10 +728,106 @@ func TestNew_SurfacesRequestInfoAndAcceptsResponse(t *testing.T) {
 	}
 }
 
+func TestNew_ResponsePortInterfaceTypeIsValidatedPolymorphically(t *testing.T) {
+	const id = "poly-response"
+	port := workflow.RequestPort{
+		ID:       id + "_FunctionCall",
+		Request:  reflect.TypeFor[*message.FunctionCallContent](),
+		Response: reflect.TypeFor[message.Content](),
+	}
+	step := 0
+	binding := workflow.ExecutorBinding{
+		ID:           id,
+		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		Ports:        []workflow.RequestPort{port},
+	}
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
+		spec := newMessageSpec(&messageworkflow.Options{
+			StateKey: "poly_response_msgs",
+			TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, _ []*message.Message) error {
+				defer func() { step++ }()
+				if step == 0 {
+					call := &message.FunctionCallContent{CallID: "abc", Name: "do"}
+					req, err := workflow.NewExternalRequest(port.ID+":abc", port, call)
+					if err != nil {
+						return err
+					}
+					return ctx.PostRequest(req)
+				}
+				return nil
+			},
+		})
+		spec.Extend(workflow.ExecutorSpec{
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[*workflow.ExternalResponse](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+					resp := msg.(*workflow.ExternalResponse)
+					data, ok := resp.Data.As(reflect.TypeFor[*message.FunctionResultContent]())
+					if !ok {
+						return nil, nil
+					}
+					result := data.(*message.FunctionResultContent)
+					out := &message.Message{
+						Role:     message.RoleAssistant,
+						Contents: []message.Content{&message.TextContent{Text: "poly:" + result.Result.(string)}},
+					}
+					return nil, ctx.YieldOutput(out)
+				})
+				return rb, nil
+			},
+		})
+		return &workflow.Executor{ID: id, Spec: spec}, nil
+	}
+	wf, err := workflow.NewBuilder(binding).WithOutputFrom(binding).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	ag, err := workflowprovider.New(wf, workflowprovider.Config{IncludeOutputsInResponse: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	session, err := ag.CreateSession(t.Context())
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	first, err := ag.RunText(t.Context(), "hi", agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	var requestID string
+	for _, msg := range first.Messages {
+		for _, content := range msg.Contents {
+			if call, ok := content.(*message.FunctionCallContent); ok {
+				requestID = call.CallID
+			}
+		}
+	}
+	if requestID != "poly-response_FunctionCall:abc" {
+		t.Fatalf("request ID = %q, want %q", requestID, "poly-response_FunctionCall:abc")
+	}
+	second, err := ag.Run(t.Context(), []*message.Message{{
+		Role: message.RoleTool,
+		Contents: []message.Content{
+			&message.FunctionResultContent{CallID: requestID, Result: "42"},
+		},
+	}}, agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	var finalText string
+	for _, msg := range second.Messages {
+		if text := msg.Contents.Text(); strings.HasPrefix(text, "poly:") {
+			finalText = text
+		}
+	}
+	if finalText != "poly:42" {
+		t.Fatalf("final text = %q, want %q", finalText, "poly:42")
+	}
+}
+
 // approvalRequestExecutorBinding builds a workflow executor that, on its
-// first turn, posts a *FunctionApprovalRequestContent as an ExternalRequest
-// via a static port; on receipt of a *FunctionApprovalResponseContent it
-// yields a final text reflecting whether the call was approved.
+// first turn, posts a *ToolApprovalRequestContent as an ExternalRequest
+// via a static port; on receipt of a *ToolApprovalResponseContent it yields
+// a final text reflecting whether the call was approved.
 func approvalRequestExecutorBinding(t *testing.T, id string) workflow.ExecutorBinding {
 	t.Helper()
 	port := workflow.RequestPort{
@@ -644,7 +868,7 @@ func approvalRequestExecutorBinding(t *testing.T, id string) workflow.ExecutorBi
 					}
 					r := v.(*message.ToolApprovalResponseContent)
 					if r.RequestID != "req-1" {
-						t.Errorf("FunctionApprovalResponseContent.ID delivered to workflow = %q, want %q", r.RequestID, "req-1")
+						t.Errorf("ToolApprovalResponseContent.ID delivered to workflow = %q, want %q", r.RequestID, "req-1")
 					}
 					text := "denied"
 					if r.Approved {
@@ -681,7 +905,7 @@ func TestNew_RequestInfoContentUsesExternalRequestID(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	resp, err := ag.RunText(context.Background(), "hi").Collect()
+	resp, err := ag.RunText(t.Context(), "hi").Collect()
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -715,7 +939,7 @@ func TestNew_ApprovalRequestInfoContentUsesExternalRequestID(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	resp, err := ag.RunText(context.Background(), "hi").Collect()
+	resp, err := ag.RunText(t.Context(), "hi").Collect()
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -745,8 +969,8 @@ func TestNew_ApprovalRequestInfoContentUsesExternalRequestID(t *testing.T) {
 	}
 }
 
-// The workflow raises a FunctionApprovalRequestContent, the caller resumes with the
-// matching FunctionApprovalResponseContent, and the workflow yields a final
+// The workflow raises a ToolApprovalRequestContent, the caller resumes with the
+// matching ToolApprovalResponseContent, and the workflow yields a final
 // text reflecting the approval.
 func TestNew_ApprovalRoundtrip_ResponseIsProcessed(t *testing.T) {
 	binding := approvalRequestExecutorBinding(t, "approval")
@@ -761,13 +985,12 @@ func TestNew_ApprovalRoundtrip_ResponseIsProcessed(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	ctx := context.Background()
-	session, err := ag.CreateSession(ctx)
+	session, err := ag.CreateSession(t.Context())
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
 
-	first, err := ag.RunText(ctx, "hi", agent.WithSession(session)).Collect()
+	first, err := ag.RunText(t.Context(), "hi", agent.WithSession(session)).Collect()
 	if err != nil {
 		t.Fatalf("first: %v", err)
 	}
@@ -790,7 +1013,7 @@ func TestNew_ApprovalRoundtrip_ResponseIsProcessed(t *testing.T) {
 		Role:     message.RoleUser,
 		Contents: []message.Content{req.CreateResponse(true, "")},
 	}}
-	second, err := ag.Run(ctx, resumeMsg, agent.WithSession(session)).Collect()
+	second, err := ag.Run(t.Context(), resumeMsg, agent.WithSession(session)).Collect()
 	if err != nil {
 		t.Fatalf("second: %v", err)
 	}
@@ -885,13 +1108,12 @@ func TestNew_MixedResponseAndRegularMessage_BothProcessed(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	ctx := context.Background()
-	session, err := ag.CreateSession(ctx)
+	session, err := ag.CreateSession(t.Context())
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
 
-	first, err := ag.RunText(ctx, "kick", agent.WithSession(session)).Collect()
+	first, err := ag.RunText(t.Context(), "kick", agent.WithSession(session)).Collect()
 	if err != nil {
 		t.Fatalf("first: %v", err)
 	}
@@ -915,7 +1137,7 @@ func TestNew_MixedResponseAndRegularMessage_BothProcessed(t *testing.T) {
 			&message.TextContent{Text: "extra"},
 		},
 	}}
-	second, err := ag.Run(ctx, resumeMsg, agent.WithSession(session)).Collect()
+	second, err := ag.Run(t.Context(), resumeMsg, agent.WithSession(session)).Collect()
 	if err != nil {
 		t.Fatalf("second: %v", err)
 	}
@@ -938,6 +1160,236 @@ func TestNew_MixedResponseAndRegularMessage_BothProcessed(t *testing.T) {
 	}
 }
 
+func TestNew_MixedResponseDispatchesRegularMessageBeforeResponse(t *testing.T) {
+	id := "order"
+	port := workflow.RequestPort{
+		ID:       id + "_FunctionCall",
+		Request:  reflect.TypeFor[*message.FunctionCallContent](),
+		Response: reflect.TypeFor[*message.FunctionResultContent](),
+	}
+	var postedRequest bool
+	var sawRegularBeforeResponse bool
+	binding := workflow.ExecutorBinding{
+		ID:           id,
+		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		Ports:        []workflow.RequestPort{port},
+	}
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: id,
+			Spec: workflow.ExecutorSpec{
+				ConfigureProtocol: func(pb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					pb.YieldsOutputType(reflect.TypeFor[*message.Message]())
+					pb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[[]*message.Message](), nil, func(_ *workflow.Context, msg any) (any, error) {
+						if !postedRequest {
+							return nil, nil
+						}
+						for _, m := range msg.([]*message.Message) {
+							if m.Contents.Text() == "extra" {
+								sawRegularBeforeResponse = true
+							}
+						}
+						return nil, nil
+					})
+					pb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[workflow.TurnToken](), nil, func(ctx *workflow.Context, _ any) (any, error) {
+						if postedRequest {
+							return nil, nil
+						}
+						postedRequest = true
+						call := &message.FunctionCallContent{CallID: "abc", Name: "do"}
+						req, err := workflow.NewExternalRequest(port.ID+":abc", port, call)
+						if err != nil {
+							return nil, err
+						}
+						return nil, ctx.PostRequest(req)
+					})
+					pb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[*workflow.ExternalResponse](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+						resp := msg.(*workflow.ExternalResponse)
+						if _, ok := resp.Data.As(port.Response); !ok {
+							return nil, nil
+						}
+						text := "response-before-regular"
+						if sawRegularBeforeResponse {
+							text = "regular-before-response"
+						}
+						out := &message.Message{
+							Role:     message.RoleAssistant,
+							Contents: []message.Content{&message.TextContent{Text: text}},
+						}
+						return nil, ctx.YieldOutput(out)
+					})
+					return pb, nil
+				},
+			},
+		}, nil
+	}
+
+	wf, err := workflow.NewBuilder(binding).WithOutputFrom(binding).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	ag, err := workflowprovider.New(wf, workflowprovider.Config{IncludeOutputsInResponse: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	session, err := ag.CreateSession(t.Context())
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	first, err := ag.RunText(t.Context(), "kick", agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	var requestID string
+	for _, m := range first.Messages {
+		for _, c := range m.Contents {
+			if fc, ok := c.(*message.FunctionCallContent); ok {
+				requestID = fc.CallID
+			}
+		}
+	}
+	if requestID != "order_FunctionCall:abc" {
+		t.Fatalf("first run request ID = %q, want %q", requestID, "order_FunctionCall:abc")
+	}
+
+	second, err := ag.Run(t.Context(), []*message.Message{{
+		Role: message.RoleUser,
+		Contents: []message.Content{
+			&message.TextContent{Text: "extra"},
+			&message.FunctionResultContent{CallID: requestID, Result: "42"},
+		},
+	}}, agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	var finalText string
+	for _, m := range second.Messages {
+		if text := m.Contents.Text(); text == "regular-before-response" || text == "response-before-regular" {
+			finalText = text
+		}
+	}
+	if finalText != "regular-before-response" {
+		t.Fatalf("dispatch order output = %q, want %q; response = %+v", finalText, "regular-before-response", second)
+	}
+}
+
+func TestNew_DuplicateMatchedResponseContentIsDropped(t *testing.T) {
+	id := "duplicate"
+	port := workflow.RequestPort{
+		ID:       id + "_FunctionCall",
+		Request:  reflect.TypeFor[*message.FunctionCallContent](),
+		Response: reflect.TypeFor[*message.FunctionResultContent](),
+	}
+	var postedRequest bool
+	var duplicateForwardedAsRegular bool
+	binding := workflow.ExecutorBinding{
+		ID:           id,
+		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		Ports:        []workflow.RequestPort{port},
+	}
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: id,
+			Spec: workflow.ExecutorSpec{
+				ConfigureProtocol: func(pb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					pb.YieldsOutputType(reflect.TypeFor[*message.Message]())
+					pb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[[]*message.Message](), nil, func(_ *workflow.Context, msg any) (any, error) {
+						if !postedRequest {
+							return nil, nil
+						}
+						for _, m := range msg.([]*message.Message) {
+							for _, c := range m.Contents {
+								if r, ok := c.(*message.FunctionResultContent); ok && r.CallID == "duplicate_FunctionCall:abc" {
+									duplicateForwardedAsRegular = true
+								}
+							}
+						}
+						return nil, nil
+					})
+					pb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[workflow.TurnToken](), nil, func(ctx *workflow.Context, _ any) (any, error) {
+						if postedRequest {
+							return nil, nil
+						}
+						postedRequest = true
+						call := &message.FunctionCallContent{CallID: "abc", Name: "do"}
+						req, err := workflow.NewExternalRequest(port.ID+":abc", port, call)
+						if err != nil {
+							return nil, err
+						}
+						return nil, ctx.PostRequest(req)
+					})
+					pb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[*workflow.ExternalResponse](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+						resp := msg.(*workflow.ExternalResponse)
+						if _, ok := resp.Data.As(port.Response); !ok {
+							return nil, nil
+						}
+						text := "duplicate-dropped"
+						if duplicateForwardedAsRegular {
+							text = "duplicate-forwarded"
+						}
+						out := &message.Message{
+							Role:     message.RoleAssistant,
+							Contents: []message.Content{&message.TextContent{Text: text}},
+						}
+						return nil, ctx.YieldOutput(out)
+					})
+					return pb, nil
+				},
+			},
+		}, nil
+	}
+
+	wf, err := workflow.NewBuilder(binding).WithOutputFrom(binding).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	ag, err := workflowprovider.New(wf, workflowprovider.Config{IncludeOutputsInResponse: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	session, err := ag.CreateSession(t.Context())
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	first, err := ag.RunText(t.Context(), "kick", agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	var requestID string
+	for _, m := range first.Messages {
+		for _, c := range m.Contents {
+			if fc, ok := c.(*message.FunctionCallContent); ok {
+				requestID = fc.CallID
+			}
+		}
+	}
+	if requestID != "duplicate_FunctionCall:abc" {
+		t.Fatalf("first run request ID = %q, want %q", requestID, "duplicate_FunctionCall:abc")
+	}
+
+	second, err := ag.Run(t.Context(), []*message.Message{{
+		Role: message.RoleTool,
+		Contents: []message.Content{
+			&message.FunctionResultContent{CallID: requestID, Result: "42"},
+			&message.FunctionResultContent{CallID: requestID, Result: "42"},
+		},
+	}}, agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	var finalText string
+	for _, m := range second.Messages {
+		if text := m.Contents.Text(); text == "duplicate-dropped" || text == "duplicate-forwarded" {
+			finalText = text
+		}
+	}
+	if finalText != "duplicate-dropped" {
+		t.Fatalf("duplicate handling output = %q, want %q; response = %+v", finalText, "duplicate-dropped", second)
+	}
+}
+
 // requestEmittingAgent always emits the same FunctionCallContent, regardless
 // of the messages it receives. Mirrors .NET's
 // `RequestEmittingAgent(completeOnResponse: false)`.
@@ -956,6 +1408,199 @@ func requestEmittingAgent(callID, name string) *agent.Agent {
 		agent.ProviderConfig{ProviderName: "request-emitting", Run: run},
 		agent.Config{ID: "rep-id", Name: "rep-name", DisableFuncAutoCall: true},
 	)
+}
+
+func requestCompletingAgent(callID, name string) *agent.Agent {
+	run := func(_ context.Context, messages []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			if containsFunctionResult(messages) {
+				yield(&agent.ResponseUpdate{
+					Role:     message.RoleAssistant,
+					Contents: []message.Content{&message.TextContent{Text: "Request processed"}},
+				}, nil)
+				return
+			}
+			yield(&agent.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					&message.FunctionCallContent{CallID: callID, Name: name},
+				},
+			}, nil)
+		}
+	}
+	return agent.New(
+		agent.ProviderConfig{ProviderName: "request-completing", Run: run},
+		agent.Config{ID: "complete-id", Name: "complete-name", DisableFuncAutoCall: true},
+	)
+}
+
+func containsFunctionResult(messages []*message.Message) bool {
+	for _, msg := range messages {
+		for _, content := range msg.Contents {
+			if _, ok := content.(*message.FunctionResultContent); ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func kickoffOnStartExecutorBinding(id, downstreamExecutorID, kickoffInputText, kickoffMessageText, regularResumeText, regularProcessedText string) workflow.ExecutorBinding {
+	binding := workflow.ExecutorBinding{
+		ID:           id,
+		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		RawValue:     struct{}{},
+	}
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
+		spec := newMessageSpec(&messageworkflow.Options{
+			StateKey:                 id + "_msgs",
+			DisableAutoSendTurnToken: true,
+			TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, messages []*message.Message) error {
+				if containsTextContent(messages, kickoffInputText) {
+					kickoff := []*message.Message{{
+						Role:     message.RoleUser,
+						Contents: []message.Content{&message.TextContent{Text: kickoffMessageText}},
+					}}
+					if err := ctx.SendMessage(downstreamExecutorID, kickoff); err != nil {
+						return err
+					}
+					if err := ctx.SendMessage(downstreamExecutorID, turnTokenWithEvents()); err != nil {
+						return err
+					}
+				}
+				if containsTextContent(messages, regularResumeText) {
+					return emitTextUpdate(ctx, id, regularProcessedText)
+				}
+				return nil
+			},
+		})
+		spec.Extend(sendMessagesAndTurnTokensSpec())
+		return &workflow.Executor{ID: id, Spec: spec}, nil
+	}
+	return binding
+}
+
+func turnTrackingStartExecutorBinding(id, downstreamExecutorID, activatedMarker string) workflow.ExecutorBinding {
+	binding := workflow.ExecutorBinding{
+		ID:           id,
+		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		RawValue:     struct{}{},
+	}
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
+		spec := newMessageSpec(&messageworkflow.Options{
+			StateKey:                 id + "_msgs",
+			DisableAutoSendTurnToken: true,
+			TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, messages []*message.Message) error {
+				if hasUserMessage(messages) {
+					if err := ctx.SendMessage(downstreamExecutorID, messages); err != nil {
+						return err
+					}
+					if err := ctx.SendMessage(downstreamExecutorID, turnTokenWithEvents()); err != nil {
+						return err
+					}
+				}
+				return emitTextUpdate(ctx, id, activatedMarker)
+			},
+		})
+		spec.Extend(sendMessagesAndTurnTokensSpec())
+		return &workflow.Executor{ID: id, Spec: spec}, nil
+	}
+	return binding
+}
+
+func sendMessagesAndTurnTokensSpec() workflow.ExecutorSpec {
+	return workflow.ExecutorSpec{
+		ConfigureProtocol: func(pb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+			return pb.SendsMessageType(
+				reflect.TypeFor[[]*message.Message](),
+				reflect.TypeFor[workflow.TurnToken](),
+			), nil
+		},
+	}
+}
+
+func containsTextContent(messages []*message.Message, text string) bool {
+	for _, msg := range messages {
+		for _, content := range msg.Contents {
+			if textContent, ok := content.(*message.TextContent); ok && textContent.Text == text {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasUserMessage(messages []*message.Message) bool {
+	for _, msg := range messages {
+		if msg.Role == message.RoleUser {
+			return true
+		}
+	}
+	return false
+}
+
+func turnTokenWithEvents() workflow.TurnToken {
+	emitEvents := true
+	return workflow.TurnToken{EmitEvents: &emitEvents}
+}
+
+func emitTextUpdate(ctx *workflow.Context, executorID, text string) error {
+	return ctx.AddEvent(workflow.OutputEvent{
+		ExecutorID: executorID,
+		Output: &agent.ResponseUpdate{
+			Role:     message.RoleAssistant,
+			Contents: []message.Content{&message.TextContent{Text: text}},
+		},
+	})
+}
+
+func addCrossExecutorEdges(builder *workflow.Builder, startBinding, downstreamBinding workflow.ExecutorBinding) *workflow.Builder {
+	return builder.
+		AddDirectEdge(startBinding, downstreamBinding, false, func(value any) bool {
+			_, ok := value.([]*message.Message)
+			return ok
+		}).
+		AddDirectEdge(startBinding, downstreamBinding, false, func(value any) bool {
+			_, ok := value.(workflow.TurnToken)
+			return ok
+		})
+}
+
+func requireWorkflowFunctionCallID(t *testing.T, response *agent.Response) string {
+	t.Helper()
+	for _, msg := range response.Messages {
+		for _, content := range msg.Contents {
+			if call, ok := content.(*message.FunctionCallContent); ok && strings.Contains(call.CallID, "_FunctionCall:") {
+				return call.CallID
+			}
+		}
+	}
+	t.Fatalf("expected workflow-facing FunctionCallContent in response, got %+v", response)
+	return ""
+}
+
+func responseTexts(response *agent.Response) []string {
+	var texts []string
+	for _, msg := range response.Messages {
+		for _, content := range msg.Contents {
+			if textContent, ok := content.(*message.TextContent); ok {
+				texts = append(texts, textContent.Text)
+			}
+		}
+	}
+	return texts
+}
+
+func responseErrorMessages(response *agent.Response) []string {
+	var messages []string
+	for _, msg := range response.Messages {
+		for _, content := range msg.Contents {
+			if errorContent, ok := content.(*message.ErrorContent); ok {
+				messages = append(messages, errorContent.Message)
+			}
+		}
+	}
+	return messages
 }
 
 // TestNew_MatchingResponse_DoesNotCauseExtraTurn mirrors .NET's
@@ -980,13 +1625,12 @@ func TestNew_MatchingResponse_DoesNotCauseExtraTurn(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	ctx := context.Background()
-	session, err := ag.CreateSession(ctx)
+	session, err := ag.CreateSession(t.Context())
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
 
-	first, err := ag.RunText(ctx, "Start", agent.WithSession(session)).Collect()
+	first, err := ag.RunText(t.Context(), "Start", agent.WithSession(session)).Collect()
 	if err != nil {
 		t.Fatalf("first: %v", err)
 	}
@@ -1014,7 +1658,7 @@ func TestNew_MatchingResponse_DoesNotCauseExtraTurn(t *testing.T) {
 			&message.FunctionResultContent{CallID: emitted.CallID, Result: "tool output"},
 		},
 	}}
-	second, err := ag.Run(ctx, resumeMsg, agent.WithSession(session)).Collect()
+	second, err := ag.Run(t.Context(), resumeMsg, agent.WithSession(session)).Collect()
 	if err != nil {
 		t.Fatalf("second: %v", err)
 	}
@@ -1032,5 +1676,170 @@ func TestNew_MatchingResponse_DoesNotCauseExtraTurn(t *testing.T) {
 	// TurnToken-driven turn would double the second-turn count.
 	if secondCount != firstCount {
 		t.Errorf("FunctionCallContent count: first=%d, second=%d (extra TurnToken-driven turn detected)", firstCount, secondCount)
+	}
+}
+
+func TestNew_UnmatchedResponse_TriggersTurnAndKeepsProgressing(t *testing.T) {
+	host := workflowhosting.New(
+		requestEmittingAgent("unmatched-response-call-id", "unmatchedResponseFunction"),
+		workflowhosting.Config{EmitUpdateEvents: true},
+	)
+	wf, err := workflow.NewBuilder(host).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	ag, err := workflowprovider.New(wf, workflowprovider.Config{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	session, err := ag.CreateSession(t.Context())
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	first, err := ag.RunText(t.Context(), "Start", agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	_ = requireWorkflowFunctionCallID(t, first)
+
+	second, err := ag.Run(t.Context(), []*message.Message{{
+		Role: message.RoleTool,
+		Contents: []message.Content{
+			&message.FunctionResultContent{CallID: "different-call-id", Result: "tool output"},
+		},
+	}}, agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("second: %v", err)
+	}
+
+	functionCallCount := 0
+	for _, msg := range second.Messages {
+		for _, content := range msg.Contents {
+			if call, ok := content.(*message.FunctionCallContent); ok && call.CallID == "unmatched-response-call-id" {
+				functionCallCount++
+			}
+		}
+	}
+	if functionCallCount != 1 {
+		t.Fatalf("FunctionCallContent count = %d, want 1; response = %+v", functionCallCount, second)
+	}
+	if errors := responseErrorMessages(second); len(errors) != 0 {
+		t.Fatalf("unexpected ErrorContent messages: %v", errors)
+	}
+}
+
+func TestNew_MixedResponseAndRegularMessage_CrossExecutorStartExecutorIsReawakened(t *testing.T) {
+	const (
+		startExecutorID    = "start-executor"
+		kickoffInputText   = "Start"
+		kickoffMessageText = "kickoff downstream"
+		resumeRegularText  = "resume regular"
+		resumeProcessed    = "regular message processed"
+	)
+	downstream := workflowhosting.New(
+		requestCompletingAgent("cross-executor-call-id", "crossExecutorFunction"),
+		workflowhosting.Config{EmitUpdateEvents: true},
+	)
+	start := kickoffOnStartExecutorBinding(
+		startExecutorID,
+		downstream.ID,
+		kickoffInputText,
+		kickoffMessageText,
+		resumeRegularText,
+		resumeProcessed,
+	)
+	wf, err := addCrossExecutorEdges(workflow.NewBuilder(start), start, downstream).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	ag, err := workflowprovider.New(wf, workflowprovider.Config{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	session, err := ag.CreateSession(t.Context())
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	first, err := ag.RunText(t.Context(), kickoffInputText, agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	requestID := requireWorkflowFunctionCallID(t, first)
+
+	second, err := ag.Run(t.Context(), []*message.Message{
+		{
+			Role: message.RoleTool,
+			Contents: []message.Content{
+				&message.FunctionResultContent{CallID: requestID, Result: "tool output"},
+			},
+		},
+		{
+			Role:     message.RoleUser,
+			Contents: []message.Content{&message.TextContent{Text: resumeRegularText}},
+		},
+	}, agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("second: %v", err)
+	}
+
+	texts := strings.Join(responseTexts(second), "\n")
+	if !strings.Contains(texts, resumeProcessed) {
+		t.Fatalf("second response text = %q, want %q", texts, resumeProcessed)
+	}
+	if !strings.Contains(texts, "Request processed") {
+		t.Fatalf("second response text = %q, want Request processed", texts)
+	}
+	if errors := responseErrorMessages(second); len(errors) != 0 {
+		t.Fatalf("unexpected ErrorContent messages: %v", errors)
+	}
+}
+
+func TestNew_ResponseOnlyToNonStartExecutor_StartExecutorIsStillActivated(t *testing.T) {
+	const (
+		startExecutorID = "start-executor"
+		activatedMarker = "start-executor-activated"
+	)
+	downstream := workflowhosting.New(
+		requestCompletingAgent("response-only-call-id", "responseOnlyFunction"),
+		workflowhosting.Config{EmitUpdateEvents: true},
+	)
+	start := turnTrackingStartExecutorBinding(startExecutorID, downstream.ID, activatedMarker)
+	wf, err := addCrossExecutorEdges(workflow.NewBuilder(start), start, downstream).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	ag, err := workflowprovider.New(wf, workflowprovider.Config{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	session, err := ag.CreateSession(t.Context())
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	first, err := ag.RunText(t.Context(), "Start", agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	requestID := requireWorkflowFunctionCallID(t, first)
+
+	second, err := ag.Run(t.Context(), []*message.Message{{
+		Role: message.RoleTool,
+		Contents: []message.Content{
+			&message.FunctionResultContent{CallID: requestID, Result: "tool output"},
+		},
+	}}, agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("second: %v", err)
+	}
+
+	texts := strings.Join(responseTexts(second), "\n")
+	if !strings.Contains(texts, "Request processed") {
+		t.Fatalf("second response text = %q, want Request processed", texts)
+	}
+	if !strings.Contains(texts, activatedMarker) {
+		t.Fatalf("second response text = %q, want %q", texts, activatedMarker)
+	}
+	if errors := responseErrorMessages(second); len(errors) != 0 {
+		t.Fatalf("unexpected ErrorContent messages: %v", errors)
 	}
 }

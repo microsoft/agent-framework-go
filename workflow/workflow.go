@@ -273,38 +273,38 @@ func (w *Workflow) RequestPorts() map[string]RequestPort {
 
 // DescribeProtocol returns the protocol accepted by the workflow's start
 // executor and yielded by its output executors.
-func (w *Workflow) DescribeProtocol() (*ProtocolDescriptor, error) {
+func (w *Workflow) DescribeProtocol() (ProtocolDescriptor, error) {
 	er := w.executorBindings[w.startExecutorID]
 	if _, ok := w.executorBindings[w.startExecutorID]; !ok {
-		return nil, fmt.Errorf("workflow start executor %q has no registered binding", w.startExecutorID)
+		return ProtocolDescriptor{}, fmt.Errorf("workflow start executor %q has no registered binding", w.startExecutorID)
 	}
 	executor, err := er.CreateInstance("")
 	if err != nil {
-		return nil, err
+		return ProtocolDescriptor{}, err
 	}
 	inputProtocol, err := executor.describeProtocol()
 	if err != nil {
-		return nil, err
+		return ProtocolDescriptor{}, err
 	}
 
 	yields := make([]reflect.Type, 0)
 	for executorID := range w.outputExecutors {
 		binding, ok := w.executorBindings[executorID]
 		if !ok {
-			return nil, fmt.Errorf("workflow output executor %q has no registered binding", executorID)
+			return ProtocolDescriptor{}, fmt.Errorf("workflow output executor %q has no registered binding", executorID)
 		}
 		outputExecutor, err := binding.CreateInstance("")
 		if err != nil {
-			return nil, err
+			return ProtocolDescriptor{}, err
 		}
 		outputProtocol, err := outputExecutor.describeProtocol()
 		if err != nil {
-			return nil, err
+			return ProtocolDescriptor{}, err
 		}
 		yields = append(yields, outputProtocol.Yields...)
 	}
 
-	return &ProtocolDescriptor{
+	return ProtocolDescriptor{
 		Accepts:    inputProtocol.Accepts,
 		Yields:     yields,
 		Sends:      nil,

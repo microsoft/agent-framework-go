@@ -62,7 +62,7 @@ func main() {
 	}
 	demo.Assistantf("Resumed from checkpoint %s", checkpointInfo.CheckpointID)
 
-	response, err := request.NewResponse("approved")
+	response, err := request.CreateResponse("approved")
 	if err != nil {
 		demo.Panic(err)
 	}

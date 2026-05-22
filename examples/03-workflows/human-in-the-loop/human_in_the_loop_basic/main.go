@@ -54,7 +54,7 @@ func main() {
 		demo.Panic("expected approval request")
 	}
 
-	response, err := request.NewResponse(true)
+	response, err := request.CreateResponse(true)
 	if err != nil {
 		demo.Panic(err)
 	}

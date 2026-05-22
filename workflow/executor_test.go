@@ -236,51 +236,12 @@ func TestExecutorDescribeProtocol_IncludesExplicitSendAndYieldTypes(t *testing.T
 	}
 }
 
-func TestExecutorDeclaredSendType_IncludesKnownSystemSendTypes(t *testing.T) {
-	executor := executorWithSendTypes()
-	systemTypes := []reflect.Type{
-		reflect.TypeFor[*workflow.ExternalRequest](),
-		reflect.TypeFor[*workflow.ExternalResponse](),
-	}
+func TestExecutorDescribeProtocol_ValueReturnIsAllocFreeAfterBuild(t *testing.T) {
+	executor := executorWithSendTypes(reflect.TypeFor[protocolSent]())
+	_ = executor.DescribeProtocol()
 
-	for _, systemType := range systemTypes {
-		if got, ok := executor.DeclaredSendType(systemType); !ok || got != systemType {
-			t.Fatalf("DeclaredSendType(%v) = %v, %v; want %v, true", systemType, got, ok, systemType)
-		}
-		if !executor.CanSendType(systemType) {
-			t.Fatalf("CanSendType(%v) = false, want true", systemType)
-		}
-	}
-
-	protocol := executor.DescribeProtocol()
-	for _, systemType := range systemTypes {
-		if hasReflectType(protocol.Sends, systemType) {
-			t.Fatalf("Sends = %v, want no implicit system send type %v", protocol.Sends, systemType)
-		}
-	}
-}
-
-func TestExecutorDeclaredSendType_TightensInterfaceMatching(t *testing.T) {
-	concreteType := reflect.TypeFor[protocolSendConcrete]()
-	interfaceType := reflect.TypeFor[protocolSendInterface]()
-	anyType := reflect.TypeFor[any]()
-
-	exactExecutor := executorWithSendTypes(concreteType)
-	if got, ok := exactExecutor.DeclaredSendType(concreteType); !ok || got != concreteType {
-		t.Fatalf("DeclaredSendType(concrete) = %v, %v; want %v, true", got, ok, concreteType)
-	}
-
-	interfaceExecutor := executorWithSendTypes(interfaceType)
-	if got, ok := interfaceExecutor.DeclaredSendType(concreteType); ok {
-		t.Fatalf("DeclaredSendType(concrete with interface declaration) = %v, true; want false", got)
-	}
-	if got, ok := interfaceExecutor.DeclaredSendType(interfaceType); !ok || got != interfaceType {
-		t.Fatalf("DeclaredSendType(interface) = %v, %v; want %v, true", got, ok, interfaceType)
-	}
-
-	anyExecutor := executorWithSendTypes(anyType)
-	if got, ok := anyExecutor.DeclaredSendType(concreteType); !ok || got != anyType {
-		t.Fatalf("DeclaredSendType(concrete with any declaration) = %v, %v; want %v, true", got, ok, anyType)
+	if allocations := testing.AllocsPerRun(1000, func() { _ = executor.DescribeProtocol() }); allocations != 0 {
+		t.Fatalf("DescribeProtocol allocations = %v, want 0", allocations)
 	}
 }
 
@@ -290,14 +251,6 @@ type (
 	protocolSent           struct{}
 	protocolYielded        struct{}
 )
-
-type protocolSendInterface interface {
-	ProtocolSendMarker()
-}
-
-type protocolSendConcrete struct{}
-
-func (protocolSendConcrete) ProtocolSendMarker() {}
 
 func executorWithSendTypes(sendTypes ...reflect.Type) *workflow.Executor {
 	return &workflow.Executor{

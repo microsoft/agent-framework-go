@@ -154,6 +154,51 @@ func TestDirectEdgeRouting_TargetedMessageDeliversOnlyToMatchingSink(t *testing.
 	}
 }
 
+func TestDirectEdgeRouting_BroadDeclaredSendTypeRoutesByRuntimeType(t *testing.T) {
+	var (
+		mu    sync.Mutex
+		trace []string
+	)
+	source := workflow.ExecutorBinding{
+		ID:           "source",
+		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+	}
+	source.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: source.ID,
+			Spec: workflow.ExecutorSpec{
+				DisableAutoSendMessageHandlerResultObject: true,
+				DisableAutoYieldOutputHandlerResultObject: true,
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.SendsMessageType(reflect.TypeFor[any]())
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+						return nil, ctx.SendMessage("", msg)
+					})
+					return rb, nil
+				},
+			},
+		}, nil
+	}
+	target := captureExecutor("target", &trace, &mu)
+
+	wf, err := workflow.NewBuilder(source).
+		AddEdge(source, target).
+		Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if _, err := inproc.Default.Run(context.Background(), wf, "hello"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{"target:hello"}
+	if !slices.Equal(trace, want) {
+		t.Fatalf("trace = %v, want %v", trace, want)
+	}
+}
+
 func TestFanOutEdgeRouting_NoAssigner_DeliversToAll(t *testing.T) {
 	var (
 		mu    sync.Mutex

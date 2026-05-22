@@ -7,56 +7,9 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/workflow"
 )
-
-func TestTypeID_JsonRoundtrip(t *testing.T) {
-	cases := []reflect.Type{
-		reflect.TypeFor[string](),
-		reflect.TypeFor[int](),
-		reflect.TypeFor[*workflow.Executor](),
-		reflect.TypeFor[workflow.RequestPort](),
-		reflect.TypeFor[map[string]int](),
-	}
-	for _, typ := range cases {
-		t.Run(typ.String(), func(t *testing.T) {
-			id := workflow.NewTypeID(typ)
-			data, err := json.Marshal(id)
-			if err != nil {
-				t.Fatalf("Marshal: %v", err)
-			}
-			var got workflow.TypeID
-			if err := json.Unmarshal(data, &got); err != nil {
-				t.Fatalf("Unmarshal: %v", err)
-			}
-			if got != id {
-				t.Errorf("roundtrip = %+v, want %+v", got, id)
-			}
-			if !got.Match(typ) {
-				t.Errorf("roundtripped TypeID does not match original type %v", typ)
-			}
-		})
-	}
-}
-
-func TestTypeID_String(t *testing.T) {
-	id := workflow.NewTypeID(reflect.TypeFor[workflow.RequestPort]())
-	if got, want := id.String(), "RequestPort, github.com/microsoft/agent-framework-go/workflow"; got != want {
-		t.Fatalf("String() = %q, want %q", got, want)
-	}
-}
-
-func TestTypeID_NilType(t *testing.T) {
-	if got := workflow.NewTypeID(nil); got != (workflow.TypeID{}) {
-		t.Fatalf("NewTypeID(nil) = %+v, want zero TypeID", got)
-	}
-	if (workflow.TypeID{}).Match(nil) {
-		t.Fatal("zero TypeID should not match nil type")
-	}
-	if (workflow.TypeID{}).Match(reflect.TypeFor[string]()) {
-		t.Fatal("zero TypeID should not match concrete type")
-	}
-}
 
 func TestEdgeConnection_JsonRoundtrip(t *testing.T) {
 	cases := []workflow.EdgeConnection{
@@ -107,6 +60,21 @@ func TestRequestPortInfo_JsonRoundtrip(t *testing.T) {
 	}
 }
 
+func TestRequestPortInfo_CachesRuntimeTypes(t *testing.T) {
+	port := workflow.RequestPort{
+		ID:       "ContentPort",
+		Request:  reflect.TypeFor[*message.FunctionCallContent](),
+		Response: reflect.TypeFor[message.Content](),
+	}
+	info := workflow.NewRequestPortInfo(port)
+
+	if !info.RequestType.Match(reflect.TypeFor[*message.FunctionCallContent]()) {
+		t.Fatal("request TypeID should match pointer request type")
+	}
+	if !info.ResponseType.MatchPolymorphic(reflect.TypeFor[*message.FunctionResultContent]()) {
+		t.Fatal("response TypeID should polymorphically match concrete content")
+	}
+}
 func TestExternalRequest_JsonRoundtrip(t *testing.T) {
 	port := workflow.RequestPort{
 		ID:       "MyPort",
@@ -148,9 +116,9 @@ func TestExternalResponse_JsonRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewExternalRequest: %v", err)
 	}
-	response, err := request.NewResponse(13)
+	response, err := request.CreateResponse(13)
 	if err != nil {
-		t.Fatalf("NewResponse: %v", err)
+		t.Fatalf("CreateResponse: %v", err)
 	}
 
 	data, err := json.Marshal(response)
@@ -170,6 +138,30 @@ func TestExternalResponse_JsonRoundtrip(t *testing.T) {
 	value, ok := workflow.PortableValueAs[int](got.Data)
 	if !ok || value != 13 {
 		t.Fatalf("Data = %d, %v; want 13, true", value, ok)
+	}
+}
+
+func TestExternalRequest_NewResponse_PolymorphicResponseType(t *testing.T) {
+	port := workflow.RequestPort{
+		ID:       "MyPort",
+		Request:  reflect.TypeFor[string](),
+		Response: reflect.TypeFor[message.Content](),
+	}
+	request, err := workflow.NewExternalRequest("request-1", port, "payload")
+	if err != nil {
+		t.Fatalf("NewExternalRequest: %v", err)
+	}
+	response, err := request.CreateResponse(&message.FunctionResultContent{CallID: "call-1", Result: "ok"})
+	if err != nil {
+		t.Fatalf("CreateResponse concrete content for interface port: %v", err)
+	}
+	if _, ok := response.Data.As(reflect.TypeFor[*message.FunctionResultContent]()); !ok {
+		t.Fatal("response data could not be read as *message.FunctionResultContent")
+	}
+
+	portable := workflow.AnyPortableValue(&message.FunctionResultContent{CallID: "call-2", Result: "portable"})
+	if _, err := request.CreateResponse(portable); err == nil {
+		t.Fatal("CreateResponse should validate PortableValue as its concrete wrapper type")
 	}
 }
 

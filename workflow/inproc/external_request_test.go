@@ -16,6 +16,8 @@ type requestPortStringer string
 
 func (s requestPortStringer) String() string { return string(s) }
 
+type requestNilPayload struct{}
+
 // TestPostRequestFromExecutor verifies that an executor can raise an
 // ExternalRequest via Context.PostRequest, that the matching ExternalResponse
 // is routed back to that executor (not to the start executor), and that the
@@ -85,9 +87,9 @@ func TestPostRequestFromExecutor(t *testing.T) {
 	if req == nil {
 		t.Fatalf("expected RequestInfoEvent, got none")
 	}
-	resp, err := req.NewResponse("Alice")
+	resp, err := req.CreateResponse("Alice")
 	if err != nil {
-		t.Fatalf("NewResponse: %v", err)
+		t.Fatalf("CreateResponse: %v", err)
 	}
 	if _, err := run.Resume(ctx, resp); err != nil {
 		t.Fatalf("Resume: %v", err)
@@ -194,7 +196,7 @@ func TestPostRequestRoutingToOwner(t *testing.T) {
 	if req == nil {
 		t.Fatalf("expected a RequestInfoEvent, got none")
 	}
-	resp, _ := req.NewResponse("pong")
+	resp, _ := req.CreateResponse("pong")
 	if _, err := run.Resume(ctx, resp); err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
@@ -281,6 +283,21 @@ func TestExternalRequest_NewRequest_TypeValidation(t *testing.T) {
 	}
 }
 
+func TestExternalRequest_NewRequest_RejectsNil(t *testing.T) {
+	port := workflow.RequestPort{
+		ID:       "p",
+		Request:  reflect.TypeFor[*requestNilPayload](),
+		Response: reflect.TypeFor[int](),
+	}
+	if _, err := workflow.NewExternalRequest("", port, nil); err == nil {
+		t.Fatal("nil request data should fail")
+	}
+	var typedNil *requestNilPayload
+	if _, err := workflow.NewExternalRequest("", port, typedNil); err == nil {
+		t.Fatal("typed nil request data should fail")
+	}
+}
+
 func TestExternalRequest_NewRequest_AssignableTypeValidation(t *testing.T) {
 	port := workflow.RequestPort{
 		ID:       "p",
@@ -295,23 +312,15 @@ func TestExternalRequest_NewRequest_AssignableTypeValidation(t *testing.T) {
 	}
 }
 
-func TestExternalRequest_NewRequest_PortableValuePointerStoresUnderlyingValue(t *testing.T) {
+func TestExternalRequest_NewRequest_PortableValuePointerIsValidatedAsWrapper(t *testing.T) {
 	port := workflow.RequestPort{
 		ID:       "p",
 		Request:  reflect.TypeFor[string](),
 		Response: reflect.TypeFor[int](),
 	}
 	pv := workflow.AnyPortableValue("ok")
-	req, err := workflow.NewExternalRequest("", port, &pv)
-	if err != nil {
-		t.Fatalf("NewExternalRequest: %v", err)
-	}
-	data, ok := req.Data.As(port.Request)
-	if !ok {
-		t.Fatal("request Data could not be read as the request type")
-	}
-	if data != "ok" {
-		t.Fatalf("data = %v, want ok", data)
+	if _, err := workflow.NewExternalRequest("", port, &pv); err == nil {
+		t.Fatal("NewExternalRequest should validate *PortableValue as its concrete wrapper type")
 	}
 }
 
@@ -325,11 +334,30 @@ func TestExternalRequest_NewResponse_TypeValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewExternalRequest: %v", err)
 	}
-	if _, err := req.NewResponse(int(42)); err != nil {
+	if _, err := req.CreateResponse(int(42)); err != nil {
 		t.Errorf("matching response type should succeed: %v", err)
 	}
-	if _, err := req.NewResponse("wrong"); err == nil {
+	if _, err := req.CreateResponse("wrong"); err == nil {
 		t.Error("non-matching response type should fail")
+	}
+}
+
+func TestExternalRequest_NewResponse_RejectsNil(t *testing.T) {
+	port := workflow.RequestPort{
+		ID:       "p",
+		Request:  reflect.TypeFor[string](),
+		Response: reflect.TypeFor[*requestNilPayload](),
+	}
+	req, err := workflow.NewExternalRequest("rid", port, "hi")
+	if err != nil {
+		t.Fatalf("NewExternalRequest: %v", err)
+	}
+	if _, err := req.CreateResponse(nil); err == nil {
+		t.Fatal("nil response data should fail")
+	}
+	var typedNil *requestNilPayload
+	if _, err := req.CreateResponse(typedNil); err == nil {
+		t.Fatal("typed nil response data should fail")
 	}
 }
 
@@ -346,9 +374,9 @@ func TestExternalRequest_UsesPortInfo(t *testing.T) {
 	if got, want := req.PortInfo, workflow.NewRequestPortInfo(port); got != want {
 		t.Fatalf("PortInfo = %#v, want %#v", got, want)
 	}
-	resp, err := req.NewResponse(int(42))
+	resp, err := req.CreateResponse(int(42))
 	if err != nil {
-		t.Fatalf("NewResponse: %v", err)
+		t.Fatalf("CreateResponse: %v", err)
 	}
 	if got, want := resp.PortInfo, req.PortInfo; got != want {
 		t.Errorf("response PortInfo = %#v, want %#v", got, want)

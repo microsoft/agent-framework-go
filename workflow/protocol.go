@@ -92,53 +92,28 @@ func (pb *ProtocolBuilder) build(spec ExecutorSpec) (*executorProtocol, error) {
 	if !spec.DisableAutoSendMessageHandlerResultObject {
 		sendTypes = appendUniqueTypes(sendTypes, slices.Collect(router.defaultOutputTypes())...)
 	}
-
 	yieldTypes := appendUniqueTypes(nil, pb.yieldTypes...)
 	if !spec.DisableAutoYieldOutputHandlerResultObject {
 		yieldTypes = appendUniqueTypes(yieldTypes, slices.Collect(router.defaultOutputTypes())...)
 	}
+	descriptor := ProtocolDescriptor{
+		Accepts:    router.incomingTypes(),
+		Yields:     slices.Clone(yieldTypes),
+		Sends:      slices.Clone(sendTypes),
+		AcceptsAll: router.hasCatchAll(),
+	}
 
 	return &executorProtocol{
-		router: router,
-		sends:  sendTypes,
-		yields: yieldTypes,
+		router:     router,
+		descriptor: descriptor,
 	}, nil
 }
 
 type executorProtocol struct {
-	router *messageRouter
-	sends  []reflect.Type
-	yields []reflect.Type
+	router     *messageRouter
+	descriptor ProtocolDescriptor
 }
 
-func (p *executorProtocol) describe() *ProtocolDescriptor {
-	return &ProtocolDescriptor{
-		Accepts:    p.router.incomingTypes(),
-		Yields:     appendUniqueTypes(nil, p.yields...),
-		Sends:      appendUniqueTypes(nil, p.sends...),
-		AcceptsAll: p.router.hasCatchAll(),
-	}
-}
-
-func (p *executorProtocol) canHandleTypeID(typ TypeID) bool {
-	return p.router.canHandle(typ)
-}
-
-func (p *executorProtocol) canHandleType(typ reflect.Type) bool {
-	return p.router.canHandleType(typ)
-}
-
-func (p *executorProtocol) canOutputType(typ reflect.Type) bool {
-	return slices.ContainsFunc(p.yields, typ.AssignableTo)
-}
-
-func (p *executorProtocol) declaredSendType(typ reflect.Type) (reflect.Type, bool) {
-	candidates := appendUniqueTypes(nil, p.sends...)
-	candidates = appendUniqueTypes(candidates, knownSentTypes()...)
-	for _, candidate := range candidates {
-		if declaredSendTypeMatches(typ, candidate) {
-			return candidate, true
-		}
-	}
-	return nil, false
+func (p *executorProtocol) describe() ProtocolDescriptor {
+	return p.descriptor
 }

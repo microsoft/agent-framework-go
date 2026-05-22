@@ -119,6 +119,42 @@ func TestAnyPortableValue_DereferencesPortableValuePointer(t *testing.T) {
 
 func TestPortableValueAny_DecodesDelayedPrimitive(t *testing.T) {
 	pv := workflow.AnyPortableValue("hello")
+	delayed := delayedPortableValue(t, pv)
+	if got := delayed.Any(); got != "hello" {
+		t.Fatalf("Any() = %v (%T), want hello (string)", got, got)
+	}
+}
+
+func TestPortableValueAny_DecodesDelayedRuntimeType(t *testing.T) {
+	delayed := delayedPortableValue(t, workflow.AnyPortableValue(message.RoleAssistant))
+	got := delayed.Any()
+	role, ok := got.(message.Role)
+	if !ok {
+		t.Fatalf("Any() = %v (%T), want message.Role", got, got)
+	}
+	if role != message.RoleAssistant {
+		t.Fatalf("Any() = %q, want %q", role, message.RoleAssistant)
+	}
+}
+
+func TestPortableValueAny_DecodesDelayedPointerRuntimeType(t *testing.T) {
+	delayed := delayedPortableValue(t, workflow.AnyPortableValue(&message.FunctionCallContent{
+		CallID:    "call-1",
+		Name:      "lookup",
+		Arguments: `{"city":"Seattle"}`,
+	}))
+	got := delayed.Any()
+	call, ok := got.(*message.FunctionCallContent)
+	if !ok {
+		t.Fatalf("Any() = %v (%T), want *message.FunctionCallContent", got, got)
+	}
+	if call.CallID != "call-1" || call.Name != "lookup" || call.Arguments != `{"city":"Seattle"}` {
+		t.Fatalf("Any() = %+v, want decoded function call", call)
+	}
+}
+
+func delayedPortableValue(t *testing.T, pv workflow.PortableValue) workflow.PortableValue {
+	t.Helper()
 	data, err := json.Marshal(pv)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
@@ -127,9 +163,7 @@ func TestPortableValueAny_DecodesDelayedPrimitive(t *testing.T) {
 	if err := json.Unmarshal(data, &delayed); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if got := delayed.Any(); got != "hello" {
-		t.Fatalf("Any() = %v (%T), want hello (string)", got, got)
-	}
+	return delayed
 }
 
 func TestPortableValue_RejectsNil(t *testing.T) {

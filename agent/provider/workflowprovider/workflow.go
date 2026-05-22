@@ -15,6 +15,7 @@ package workflowprovider
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"iter"
@@ -31,14 +32,7 @@ import (
 
 var messagesSliceType = reflect.TypeFor[[]*message.Message]()
 
-const sessionStateKey = "workflowprovider_state"
-
-// providerServiceID marks sessions managed by this provider. Setting a
-// non-empty ServiceID on the session opts out of the agent package's
-// default history provider on subsequent calls. Explicitly configured
-// history providers still run. The workflow itself owns conversational
-// state across turns.
-const providerServiceID = "workflowprovider"
+const workflowErrorMessage = "An error occurred while executing the workflow."
 
 // Config configures a [workflow.Workflow] hosted as an [agent.Agent] via [New].
 type Config struct {
@@ -59,27 +53,6 @@ type Config struct {
 	// [workflow.ErrorEvent]s in the agent response stream. When false, a
 	// generic message is emitted instead.
 	IncludeErrorDetails bool
-}
-
-// pendingReq records a pending external request raised by the workflow so
-// that a matching response content in a subsequent agent run can be
-// translated back to a [workflow.ExternalResponse].
-type pendingReq struct {
-	portInfo          workflow.RequestPortInfo
-	externalRequestID string
-	requestContent    message.Content
-}
-
-// providerState holds the workflow run state that survives across multiple
-// [agent.Agent.Run] invocations on the same session. It is stored on the
-// [agent.Session] under [sessionStateKey].
-//
-// The streaming run is an in-memory object and is not portable across
-// process boundaries; sessions that are persisted via encoding/json retain the
-// request-tracking metadata but drop the live run.
-type providerState struct {
-	stream  *inproc.StreamingRun
-	pending map[string]pendingReq // keyed by request content ID (e.g. CallID/RequestID)
 }
 
 // New wraps a [*workflow.Workflow] as an [*agent.Agent].
@@ -125,23 +98,31 @@ func New(wf *workflow.Workflow, cfg Config) (*agent.Agent, error) {
 				yield(nil, err)
 				return
 			}
-			defer saveState(sess, state)
+			defer func() {
+				_ = state.closeStream(ctx)
+				saveState(sess, state)
+			}()
 
 			// Split incoming messages into ExternalResponses for pending
 			// requests and the remaining workflow messages.
-			remaining, responses, hasMatchedStartResponse := splitResponses(messages, state.pending, wf.StartExecutorID(), state.stream.ResponsePortExecutorID)
-
-			for _, resp := range responses {
-				if err := state.stream.SendResponse(ctx, resp); err != nil {
-					yield(nil, err)
-					return
-				}
+			remaining, responses, hasMatchedStartResponse, err := splitResponses(messages, state.pending, wf.StartExecutorID(), state.stream.ResponsePortExecutorID)
+			if err != nil {
+				yield(nil, err)
+				return
 			}
+
 			if len(remaining) > 0 {
 				if err := state.stream.SendMessage(ctx, remaining); err != nil {
 					yield(nil, err)
 					return
 				}
+			}
+			for _, matched := range responses {
+				if err := state.stream.SendResponse(ctx, matched.response); err != nil {
+					yield(nil, err)
+					return
+				}
+				delete(state.pending, matched.contentID)
 			}
 			// Suppress the TurnToken only when the only activity is a
 			// matched external response addressed to the start executor.
@@ -166,6 +147,13 @@ func New(wf *workflow.Workflow, cfg Config) (*agent.Agent, error) {
 					return
 				}
 				switch e := evt.(type) {
+				case workflow.SuperStepCompletedEvent:
+					if e.CompletionInfo != nil && e.CompletionInfo.CheckpointInfo != nil {
+						state.lastCheckpoint = e.CompletionInfo.CheckpointInfo
+					}
+					if !yield(newUpdate(responseID, e), nil) {
+						return
+					}
 				case workflow.OutputEvent:
 					switch out := e.Output.(type) {
 					case *agent.ResponseUpdate:
@@ -211,13 +199,12 @@ func New(wf *workflow.Workflow, cfg Config) (*agent.Agent, error) {
 						return
 					}
 				case workflow.ErrorEvent:
-					text := "an error occurred while executing the workflow"
-					if cfg.IncludeErrorDetails && e.Error != nil {
-						text = e.Error.Error()
+					update := newUpdate(responseID, e, workflowErrorContent(e.Error, cfg.IncludeErrorDetails))
+					if !yield(update, nil) {
+						return
 					}
-					update := newUpdate(responseID, e, &message.ErrorContent{
-						Message: text,
-					})
+				case workflow.ExecutorFailedEvent:
+					update := newUpdate(responseID, e, workflowErrorContent(e.Error, cfg.IncludeErrorDetails))
 					if !yield(update, nil) {
 						return
 					}
@@ -232,42 +219,25 @@ func New(wf *workflow.Workflow, cfg Config) (*agent.Agent, error) {
 
 	return agent.New(
 		agent.ProviderConfig{
-			ProviderName: "workflow",
-			Run:          runFn,
+			ProviderName:  "workflow",
+			Run:           runFn,
+			CreateSession: createSession,
 		},
 		cfg.Config,
 	), nil
 }
 
-// loadOrInitState fetches the per-session [providerState], creating a fresh
-// streaming workflow run on first use.
-func loadOrInitState(
-	ctx context.Context,
-	sess *agent.Session,
-	env *inproc.ExecutionEnvironment,
-	wf *workflow.Workflow,
-) (*providerState, error) {
-	if sess != nil {
-		var state *providerState
-		if ok, _ := sess.Get(sessionStateKey, &state); ok && state != nil && state.stream != nil {
-			if state.pending == nil {
-				state.pending = make(map[string]pendingReq)
-			}
-			return state, nil
-		}
+func createSession(_ context.Context, sess *agent.Session, _ ...agent.Option) error {
+	if sess != nil && sess.ServiceID() == "" {
+		sess.SetServiceID(providerServiceID)
 	}
-	stream, err := env.RunStreaming(ctx, wf, nil)
-	if err != nil {
-		return nil, err
-	}
-	return &providerState{stream: stream, pending: make(map[string]pendingReq)}, nil
+	saveState(sess, newProviderState())
+	return nil
 }
 
-func saveState(sess *agent.Session, state *providerState) {
-	if sess == nil || state == nil {
-		return
-	}
-	sess.Set(sessionStateKey, state)
+type matchedExternalResponse struct {
+	contentID string
+	response  *workflow.ExternalResponse
 }
 
 // splitResponses scans messages for response content matching pending
@@ -284,16 +254,17 @@ func saveState(sess *agent.Session, state *providerState) {
 // turn). Mirrors .NET's [WorkflowSession.HasMatchedResponseForStartExecutor].
 func splitResponses(
 	messages []*message.Message,
-	pending map[string]pendingReq,
+	pending map[string]*workflow.ExternalRequest,
 	startExecutorID string,
 	lookupPortOwner func(portID string) (string, bool),
-) ([]*message.Message, []*workflow.ExternalResponse, bool) {
+) ([]*message.Message, []matchedExternalResponse, bool, error) {
 	if len(messages) == 0 || len(pending) == 0 {
-		return messages, nil, false
+		return messages, nil, false, nil
 	}
 	var (
-		responses               []*workflow.ExternalResponse
+		responses               []matchedExternalResponse
 		hasMatchedStartResponse bool
+		matchedContentIDs       map[string]struct{}
 	)
 	out := make([]*message.Message, 0, len(messages))
 	for _, m := range messages {
@@ -303,17 +274,32 @@ func splitResponses(
 		var keep []message.Content
 		for _, c := range m.Contents {
 			if id, ok := responseContentID(c); ok {
-				if pr, found := pending[id]; found {
-					responseContent := normalizeResponseContent(c, pr.requestContent)
-					responses = append(responses, &workflow.ExternalResponse{
-						RequestID: pr.externalRequestID,
-						PortInfo:  pr.portInfo,
-						Data:      workflow.AnyPortableValue(responseContent),
+				if _, matched := matchedContentIDs[id]; matched {
+					continue
+				}
+				if request, found := pending[id]; found {
+					if request == nil {
+						return nil, nil, false, fmt.Errorf("workflowprovider: pending response %q has no external request", id)
+					}
+					responseData, err := normalizeResponseData(c, request)
+					if err != nil {
+						return nil, nil, false, err
+					}
+					response, err := request.CreateResponse(responseData)
+					if err != nil {
+						return nil, nil, false, err
+					}
+					responses = append(responses, matchedExternalResponse{
+						contentID: id,
+						response:  response,
 					})
-					if owner, ok := lookupPortOwner(pr.portInfo.PortID); ok && owner == startExecutorID {
+					if owner, ok := lookupPortOwner(request.PortInfo.PortID); ok && owner == startExecutorID {
 						hasMatchedStartResponse = true
 					}
-					delete(pending, id)
+					if matchedContentIDs == nil {
+						matchedContentIDs = make(map[string]struct{})
+					}
+					matchedContentIDs[id] = struct{}{}
 					continue
 				}
 			}
@@ -325,7 +311,7 @@ func splitResponses(
 			out = append(out, &cloned)
 		}
 	}
-	return out, responses, hasMatchedStartResponse
+	return out, responses, hasMatchedStartResponse, nil
 }
 
 // responseContentID returns the matching key for a content item if it is a
@@ -340,46 +326,113 @@ func responseContentID(c message.Content) (string, bool) {
 	return "", false
 }
 
-func normalizeResponseContent(response message.Content, originalRequest message.Content) message.Content {
+func normalizeResponseData(response message.Content, request *workflow.ExternalRequest) (any, error) {
+	if request == nil {
+		return nil, errors.New("workflowprovider: pending request has no external request")
+	}
+	originalRequest, _ := requestDataContent(request)
 	switch r := response.(type) {
 	case *message.FunctionResultContent:
 		if req, ok := originalRequest.(*message.FunctionCallContent); ok {
-			clone := *r
-			clone.CallID = req.CallID
-			return &clone
+			return cloneFunctionResultContent(r, req.CallID), nil
+		}
+		if !request.PortInfo.ResponseType.MatchPolymorphic(reflect.TypeFor[*message.FunctionResultContent]()) {
+			if r.Result == nil {
+				return nil, fmt.Errorf("workflowprovider: null result is not supported for request port %q with response type %v", request.PortInfo.PortID, request.PortInfo.ResponseType)
+			}
+			if request.PortInfo.ResponseType.MatchPolymorphic(reflect.TypeOf(r.Result)) || isPortableValueResult(r.Result) {
+				return r.Result, nil
+			}
+			return nil, fmt.Errorf("workflowprovider: unexpected result type in FunctionResultContent %T; expecting %v", r.Result, request.PortInfo.ResponseType)
 		}
 	case *message.ToolApprovalResponseContent:
 		if req, ok := originalRequest.(*message.ToolApprovalRequestContent); ok {
-			clone := *r
-			clone.RequestID = req.RequestID
-			return &clone
+			return cloneToolApprovalResponseContent(r, req.RequestID), nil
 		}
 	}
-	return response
+	return response, nil
+}
+
+func isPortableValueResult(result any) bool {
+	switch value := result.(type) {
+	case workflow.PortableValue:
+		return true
+	case *workflow.PortableValue:
+		return value != nil
+	default:
+		return false
+	}
 }
 
 // requestToUpdate translates an [*workflow.ExternalRequest] into a
 // [*agent.ResponseUpdate] that surfaces the request content to the caller.
 // The exposed content ID is rewritten to the workflow-facing external request
-// ID, while the original content is retained so the matching response can be
-// normalized before it is delivered back into the workflow.
-func requestToUpdate(req *workflow.ExternalRequest, responseID string, raw any) (*agent.ResponseUpdate, string, pendingReq, bool) {
+// ID. The original request payload stays on the persisted ExternalRequest and
+// is used to normalize the matching response before it is delivered back into
+// the workflow.
+func requestToUpdate(req *workflow.ExternalRequest, responseID string, raw any) (*agent.ResponseUpdate, string, *workflow.ExternalRequest, bool) {
 	if req == nil {
-		return nil, "", pendingReq{}, false
+		return nil, "", nil, false
 	}
-	c, ok := req.Data.Any().(message.Content)
+	c, ok := requestDataContent(req)
 	if !ok {
-		return nil, "", pendingReq{}, false
+		surfaced, err := requestToFunctionCall(req)
+		if err != nil {
+			return nil, "", nil, false
+		}
+		return newUpdate(responseID, raw, surfaced), surfaced.CallID, req, true
 	}
 	surfaced, id, ok := requestContentForDelivery(req.RequestID, c)
 	if !ok {
-		return nil, "", pendingReq{}, false
+		return nil, "", nil, false
 	}
-	return newUpdate(responseID, raw, surfaced), id, pendingReq{
-		portInfo:          req.PortInfo,
-		externalRequestID: req.RequestID,
-		requestContent:    c,
-	}, true
+	return newUpdate(responseID, raw, surfaced), id, req, true
+}
+
+func requestDataContent(req *workflow.ExternalRequest) (message.Content, bool) {
+	if req == nil {
+		return nil, false
+	}
+	if data, ok := req.Data.As(reflect.TypeFor[*message.FunctionCallContent]()); ok {
+		return data.(*message.FunctionCallContent), true
+	}
+	if data, ok := req.Data.As(reflect.TypeFor[*message.ToolApprovalRequestContent]()); ok {
+		return data.(*message.ToolApprovalRequestContent), true
+	}
+	content, ok := req.Data.Any().(message.Content)
+	return content, ok
+}
+
+func cloneFunctionResultContent(content *message.FunctionResultContent, callID string) *message.FunctionResultContent {
+	clone := *content
+	clone.CallID = callID
+	return &clone
+}
+
+func cloneToolApprovalResponseContent(content *message.ToolApprovalResponseContent, requestID string) *message.ToolApprovalResponseContent {
+	clone := *content
+	clone.RequestID = requestID
+	return &clone
+}
+
+func workflowErrorContent(err error, includeDetails bool) *message.ErrorContent {
+	text := workflowErrorMessage
+	if includeDetails && err != nil {
+		text = err.Error()
+	}
+	return &message.ErrorContent{Message: text}
+}
+
+func requestToFunctionCall(req *workflow.ExternalRequest) (*message.FunctionCallContent, error) {
+	arguments, err := json.Marshal(map[string]any{"data": req.Data})
+	if err != nil {
+		return nil, err
+	}
+	return &message.FunctionCallContent{
+		CallID:    req.RequestID,
+		Name:      req.PortInfo.PortID,
+		Arguments: string(arguments),
+	}, nil
 }
 
 // requestContentForDelivery clones a request content item with the

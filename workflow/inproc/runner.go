@@ -175,7 +175,7 @@ func (r *runner) IsValidInputType(ctx context.Context, messageType reflect.Type)
 		return false
 	}
 
-	if startingExecutor.CanHandleType(messageType) {
+	if execution.CanHandleType(startingExecutor, messageType) {
 		r.knownValidInputTypes[messageType] = struct{}{}
 		return true
 	}

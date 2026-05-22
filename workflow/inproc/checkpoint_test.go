@@ -203,9 +203,9 @@ func TestCheckpoint_ResumeRespondToPendingRequest_CompletesWithoutDuplicate(t *t
 				t.Fatalf("status before response = %v, want PendingRequests", status)
 			}
 
-			response, err := pendingRequest.NewResponse("World")
+			response, err := pendingRequest.CreateResponse("World")
 			if err != nil {
-				t.Fatalf("NewResponse: %v", err)
+				t.Fatalf("CreateResponse: %v", err)
 			}
 			if _, err := resumed.Resume(ctx, response); err != nil {
 				t.Fatalf("Resume with response: %v", err)
@@ -248,9 +248,9 @@ func TestCheckpoint_RestoreWithPendingRequests_RepublishesRequestInfoEvents(t *t
 				t.Fatal("expected checkpoint")
 			}
 
-			response, err := pendingRequest.NewResponse("World")
+			response, err := pendingRequest.CreateResponse("World")
 			if err != nil {
-				t.Fatalf("NewResponse: %v", err)
+				t.Fatalf("CreateResponse: %v", err)
 			}
 			if _, err := run.Resume(ctx, response); err != nil {
 				t.Fatalf("Resume with first response: %v", err)
@@ -270,9 +270,9 @@ func TestCheckpoint_RestoreWithPendingRequests_RepublishesRequestInfoEvents(t *t
 				t.Fatalf("replayed request ID = %q, want %q", replayedRequests[0].RequestID, pendingRequest.RequestID)
 			}
 
-			response, err = replayedRequests[0].NewResponse("Again")
+			response, err = replayedRequests[0].CreateResponse("Again")
 			if err != nil {
-				t.Fatalf("NewResponse after restore: %v", err)
+				t.Fatalf("CreateResponse after restore: %v", err)
 			}
 			if _, err := run.Resume(ctx, response); err != nil {
 				t.Fatalf("Resume with restored response: %v", err)
@@ -306,9 +306,9 @@ func TestCheckpoint_RestoreClearsQueuedExternalResponsesBeforeImport(t *testing.
 	}
 	pendingRequest, checkpointInfo := capturePendingRequestAndCheckpointFromStream(t, ctx, stream)
 
-	response, err := pendingRequest.NewResponse("World")
+	response, err := pendingRequest.CreateResponse("World")
 	if err != nil {
-		t.Fatalf("NewResponse: %v", err)
+		t.Fatalf("CreateResponse: %v", err)
 	}
 	if err := stream.SendResponse(ctx, response); err != nil {
 		t.Fatalf("SendResponse before restore: %v", err)
@@ -339,9 +339,9 @@ func TestCheckpoint_RestoreClearsQueuedExternalResponsesBeforeImport(t *testing.
 		t.Fatalf("status after restore = %v, want PendingRequests", status)
 	}
 
-	response, err = replayedRequests[0].NewResponse("Again")
+	response, err = replayedRequests[0].CreateResponse("Again")
 	if err != nil {
-		t.Fatalf("NewResponse after restore: %v", err)
+		t.Fatalf("CreateResponse after restore: %v", err)
 	}
 	if err := stream.SendResponse(ctx, response); err != nil {
 		t.Fatalf("SendResponse after restore: %v", err)
@@ -520,9 +520,9 @@ func TestCheckpoint_AfterResumeUsesResumedCheckpointAsParent(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Resume: %v", err)
 			}
-			response, err := pendingRequest.NewResponse("World")
+			response, err := pendingRequest.CreateResponse("World")
 			if err != nil {
-				t.Fatalf("NewResponse: %v", err)
+				t.Fatalf("CreateResponse: %v", err)
 			}
 			if _, err := resumed.Resume(ctx, response); err != nil {
 				t.Fatalf("Resume with response: %v", err)

@@ -149,8 +149,6 @@ func (proc *runnerContext) EnsureExecutor(ctx context.Context, executorID string
 		tracer.TraceInstantiated(executorID)
 	}
 
-	// TODO: Handle special executor types (RequestInfoExecutor, WorkflowHostExecutor)
-
 	proc.executors[executorID] = executor
 
 	return executor, nil
@@ -475,7 +473,7 @@ func (proc *runnerContext) SendMessage(ctx context.Context, sourceID, targetID s
 		span.CaptureError(err)
 		return err
 	}
-	declaredType, ok := sourceExecutor.DeclaredSendType(messageType)
+	declaredType, ok := execution.DeclaredSendType(sourceExecutor, messageType)
 	if !ok {
 		err := fmt.Errorf("executor %q cannot send messages of type %s", sourceID, messageType)
 		span.CaptureError(err)
@@ -620,9 +618,9 @@ func (proc *runnerContext) validateOutputType(executorID string, output any) err
 		return fmt.Errorf("executor %q is not instantiated", executorID)
 	}
 
-	declaredTypes := executor.OutputTypes()
+	declaredTypes := executor.DescribeProtocol().Yields
 	outputType := reflect.TypeOf(output)
-	if slices.ContainsFunc(declaredTypes, outputType.AssignableTo) {
+	if execution.CanOutputType(executor, outputType) {
 		return nil
 	}
 	return fmt.Errorf("executor %q cannot output object of type %s; expected one of %v", executorID, outputType, sortedTypeNames(declaredTypes))

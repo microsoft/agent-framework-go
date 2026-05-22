@@ -69,14 +69,14 @@ func NewExternalRequest(id string, port RequestPort, data any) (*ExternalRequest
 	}, nil
 }
 
-// NewResponse creates a new [ExternalResponse] corresponding to r, with the
+// CreateResponse creates a new [ExternalResponse] corresponding to r, with the
 // specified data payload.
 //
-// NewResponse returns an error when data does not match the expected response
+// CreateResponse returns an error when data does not match the expected response
 // type.
-func (r *ExternalRequest) NewResponse(data any) (*ExternalResponse, error) {
-	if typ := reflect.TypeOf(data); typ == nil || !r.PortInfo.ResponseType.Match(typ) {
-		return nil, fmt.Errorf("invalid response type: expected %v, got %v", r.PortInfo.ResponseType, typ)
+func (r *ExternalRequest) CreateResponse(data any) (*ExternalResponse, error) {
+	if !valueMatchesTypeID(data, r.PortInfo.ResponseType) {
+		return nil, fmt.Errorf("invalid response type: expected %v, got %v", r.PortInfo.ResponseType, reflect.TypeOf(data))
 	}
 	return &ExternalResponse{
 		PortInfo:  r.PortInfo,
@@ -87,17 +87,30 @@ func (r *ExternalRequest) NewResponse(data any) (*ExternalResponse, error) {
 
 // valueAssignableTo reports whether data can be used as a value of typ.
 //
-// Portable values are checked by their recorded type ID, while ordinary Go
-// values use assignability from their concrete runtime type.
+// Values use assignability from their concrete runtime type.
 func valueAssignableTo(data any, typ reflect.Type) bool {
-	if data == nil || typ == nil {
+	if isNilValue(data) || typ == nil {
 		return false
 	}
-	if value, ok := data.(PortableValue); ok {
-		return value.Is(typ)
-	}
-	if value, ok := data.(*PortableValue); ok {
-		return value.Is(typ)
-	}
 	return reflect.TypeOf(data).AssignableTo(typ)
+}
+
+func valueMatchesTypeID(data any, typeID TypeID) bool {
+	if isNilValue(data) {
+		return false
+	}
+	return typeID.MatchPolymorphic(reflect.TypeOf(data))
+}
+
+func isNilValue(data any) bool {
+	if data == nil {
+		return true
+	}
+	value := reflect.ValueOf(data)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }

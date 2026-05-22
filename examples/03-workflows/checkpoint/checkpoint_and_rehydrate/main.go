@@ -150,7 +150,7 @@ func main() {
 	}
 
 	// Deliver the approval response to the rehydrated run.
-	response, err := request.NewResponse("approved-after-rehydration")
+	response, err := request.CreateResponse("approved-after-rehydration")
 	if err != nil {
 		demo.Panic(err)
 	}

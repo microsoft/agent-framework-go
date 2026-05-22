@@ -276,17 +276,29 @@ func (em *EdgeRunner) PrepareDeliveryForEdge(ctx context.Context, edge workflow.
 	}
 	if len(edge.Connection.SourceIDs) == 1 {
 		// Filter targets that can handle the message type.
+		runtimeType, err := em.messageRuntimeType(ctx, envelope)
+		if err != nil {
+			return nil, err
+		}
 		targets = slices.DeleteFunc(targets, func(target *workflow.Executor) bool {
-			return !target.CanHandleTypeID(envelope.MessageType())
+			return !canHandleRuntimeType(target, runtimeType)
 		})
 	} else {
 		if len(targets) != 1 {
 			panic("stateful edges only support single target executor")
 		}
 		// Filter envelopes whose message type is not handled by any target.
-		envelopes = slices.DeleteFunc(envelopes, func(env *MessageEnvelope) bool {
-			return !targets[0].CanHandleTypeID(env.MessageType())
-		})
+		filtered := envelopes[:0]
+		for _, env := range envelopes {
+			runtimeType, err := em.messageRuntimeType(ctx, env)
+			if err != nil {
+				return nil, err
+			}
+			if canHandleRuntimeType(targets[0], runtimeType) {
+				filtered = append(filtered, env)
+			}
+		}
+		envelopes = filtered
 	}
 	if len(targets) == 0 || len(envelopes) == 0 {
 		// Type mismatch.
@@ -298,6 +310,30 @@ func (em *EdgeRunner) PrepareDeliveryForEdge(ctx context.Context, edge workflow.
 		Targets:   targets,
 		Envelopes: envelopes,
 	}, nil
+}
+
+func (em *EdgeRunner) messageRuntimeType(ctx context.Context, envelope *MessageEnvelope) (reflect.Type, error) {
+	if portable, ok := envelope.Message.(workflow.PortableValue); ok {
+		if envelope.SourceID == "" {
+			return nil, nil
+		}
+		source, err := em.ensureExecutor(ctx, envelope.SourceID, em.tracer)
+		if err != nil {
+			return nil, err
+		}
+		if typ, ok := SentRuntimeType(source, portable.TypeID); ok {
+			return typ, nil
+		}
+		return nil, nil
+	}
+	return reflect.TypeOf(envelope.Message), nil
+}
+
+func canHandleRuntimeType(target *workflow.Executor, runtimeType reflect.Type) bool {
+	if runtimeType != nil {
+		return CanHandleType(target, runtimeType)
+	}
+	return target.DescribeProtocol().AcceptsAll
 }
 
 // PrepareDeliveryForInput prepares delivery of an external input message.
@@ -319,7 +355,7 @@ func (em *EdgeRunner) PrepareDeliveryForInput(ctx context.Context, envelope *Mes
 	if err != nil {
 		return nil, err
 	}
-	if !target.CanHandleTypeID(envelope.MessageType()) {
+	if !CanHandleTypeID(target, envelope.MessageType()) {
 		// Type mismatch.
 		span.SetDeliveryStatus(observability.DeliveryStatusDroppedTypeMismatch)
 		return nil, nil
@@ -354,7 +390,7 @@ func (em *EdgeRunner) PrepareDeliveryForResponse(ctx context.Context, response *
 	if err != nil {
 		return nil, err
 	}
-	if !target.CanHandleTypeID(envelope.MessageType()) {
+	if !CanHandleTypeID(target, envelope.MessageType()) {
 		// Type mismatch.
 		span.SetDeliveryStatus(observability.DeliveryStatusDroppedTypeMismatch)
 		return nil, nil

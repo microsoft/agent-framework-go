@@ -185,9 +185,6 @@ type Executor struct {
 	routerMu       sync.Mutex
 	cachedProtocol *executorProtocol
 	protocolErr    error
-
-	declaredSendTypeCache sync.Map // reflect.Type -> reflect.Type
-	canOutputCache        sync.Map // reflect.Type -> bool
 }
 
 func (e *Executor) Initialize(ctx *Context) error {
@@ -336,115 +333,20 @@ func (e *Executor) Execute(ctx *Context, message any) (result any, err error) {
 	return ret.Result, nil
 }
 
-func (e *Executor) InputTypes() []reflect.Type {
-	router, err := e.router()
-	if err != nil {
-		return nil
-	}
-	return router.incomingTypes()
-}
-
-func (e *Executor) OutputTypes() []reflect.Type {
+func (e *Executor) describeProtocol() (ProtocolDescriptor, error) {
 	protocol, err := e.protocol()
 	if err != nil {
-		return nil
-	}
-	return appendUniqueTypes(nil, protocol.yields...)
-}
-
-// knownSentTypes are workflow system messages that every executor may send.
-// They mirror .NET's MessageTypeTranslator.KnownSentTypes so executors can
-// forward request-port control messages without declaring them as user protocol.
-func knownSentTypes() []reflect.Type {
-	return []reflect.Type{
-		reflect.TypeFor[*ExternalRequest](),
-		reflect.TypeFor[*ExternalResponse](),
-	}
-}
-
-// DeclaredSendType returns the protocol type that should be used when sending
-// a message of typ from this executor. It reports false when typ is not allowed
-// by the executor's declared send protocol. Interface send declarations match
-// only that exact interface type, except any, which accepts every non-nil type.
-func (e *Executor) DeclaredSendType(typ reflect.Type) (reflect.Type, bool) {
-	if typ == nil {
-		return nil, false
-	}
-	if cached, ok := e.declaredSendTypeCache.Load(typ); ok {
-		return cached.(reflect.Type), true
-	}
-	protocol, err := e.protocol()
-	if err != nil {
-		return nil, false
-	}
-	declaredType, ok := protocol.declaredSendType(typ)
-	if ok {
-		e.declaredSendTypeCache.Store(typ, declaredType)
-		return declaredType, true
-	}
-	return nil, false
-}
-
-func declaredSendTypeMatches(typ reflect.Type, candidate reflect.Type) bool {
-	if typ == nil || candidate == nil {
-		return false
-	}
-	if typ == candidate || candidate == reflect.TypeFor[any]() {
-		return true
-	}
-	return candidate.Kind() != reflect.Interface && typ.AssignableTo(candidate)
-}
-
-// CanSendType reports whether this executor can send messages of typ according
-// to its declared send protocol.
-func (e *Executor) CanSendType(typ reflect.Type) bool {
-	_, ok := e.DeclaredSendType(typ)
-	return ok
-}
-
-func (e *Executor) describeProtocol() (*ProtocolDescriptor, error) {
-	protocol, err := e.protocol()
-	if err != nil {
-		return nil, err
+		return ProtocolDescriptor{}, err
 	}
 	return protocol.describe(), nil
 }
 
-func (e *Executor) DescribeProtocol() *ProtocolDescriptor {
+func (e *Executor) DescribeProtocol() ProtocolDescriptor {
 	protocol, err := e.describeProtocol()
 	if err != nil {
-		return &ProtocolDescriptor{}
+		return ProtocolDescriptor{}
 	}
 	return protocol
-}
-
-func (e *Executor) CanHandleTypeID(typ TypeID) bool {
-	protocol, err := e.protocol()
-	if err != nil {
-		return false
-	}
-	return protocol.canHandleTypeID(typ)
-}
-
-func (e *Executor) CanHandleType(typ reflect.Type) bool {
-	protocol, err := e.protocol()
-	if err != nil {
-		return false
-	}
-	return protocol.canHandleType(typ)
-}
-
-func (e *Executor) CanOutputType(typ reflect.Type) bool {
-	if cached, ok := e.canOutputCache.Load(typ); ok {
-		return cached.(bool)
-	}
-	protocol, err := e.protocol()
-	if err != nil {
-		return false
-	}
-	result := protocol.canOutputType(typ)
-	e.canOutputCache.Store(typ, result)
-	return result
 }
 
 // StatefulExecutorCache helps an executor read, update, and cache typed state.
