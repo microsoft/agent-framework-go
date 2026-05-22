@@ -194,6 +194,7 @@ func TestNew_SerializedSessionResumesFromCheckpoint(t *testing.T) {
 		t.Fatalf("final response text = %q, want %q", finalText, "got:42")
 	}
 }
+
 func TestNew_EmitsDefaultUpdatesForUnhandledWorkflowEvents(t *testing.T) {
 	binding := echoExecutorBinding("echo")
 	wf, err := workflow.NewBuilder(binding).Build()
