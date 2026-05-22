@@ -9,11 +9,10 @@ import (
 )
 
 type (
-	protocolBuilderInput     struct{}
-	protocolBuilderOutput    struct{}
-	protocolBuilderSend      struct{}
-	protocolBuilderYield     struct{}
-	protocolBuilderYieldImpl struct{}
+	protocolBuilderInput  struct{}
+	protocolBuilderOutput struct{}
+	protocolBuilderSend   struct{}
+	protocolBuilderYield  struct{}
 )
 
 func TestProtocolBuilderBuildIncludesDeclaredAndAutomaticTypes(t *testing.T) {
