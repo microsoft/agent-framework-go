@@ -141,7 +141,7 @@ func TestExternalResponse_JsonRoundtrip(t *testing.T) {
 	}
 }
 
-func TestExternalRequest_NewResponse_PolymorphicResponseType(t *testing.T) {
+func TestExternalRequest_CreateResponse_PolymorphicResponseType(t *testing.T) {
 	port := workflow.RequestPort{
 		ID:       "MyPort",
 		Request:  reflect.TypeFor[string](),
