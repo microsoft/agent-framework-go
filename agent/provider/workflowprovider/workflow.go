@@ -187,7 +187,14 @@ func New(wf *workflow.Workflow, cfg Config) (*agent.Agent, error) {
 						}
 					}
 				case workflow.RequestInfoEvent:
-					update, contentID, pending, ok := requestToUpdate(e.Request, responseID, e)
+					update, contentID, pending, ok, err := requestToUpdate(e.Request, responseID, e)
+					if err != nil {
+						update := newUpdate(responseID, e, workflowErrorContent(err, cfg.IncludeErrorDetails))
+						if !yield(update, nil) {
+							return
+						}
+						continue
+					}
 					if !ok {
 						if !yield(newUpdate(responseID, e), nil) {
 							return
@@ -370,23 +377,23 @@ func isPortableValueResult(result any) bool {
 // ID. The original request payload stays on the persisted ExternalRequest and
 // is used to normalize the matching response before it is delivered back into
 // the workflow.
-func requestToUpdate(req *workflow.ExternalRequest, responseID string, raw any) (*agent.ResponseUpdate, string, *workflow.ExternalRequest, bool) {
+func requestToUpdate(req *workflow.ExternalRequest, responseID string, raw any) (*agent.ResponseUpdate, string, *workflow.ExternalRequest, bool, error) {
 	if req == nil {
-		return nil, "", nil, false
+		return nil, "", nil, false, nil
 	}
 	c, ok := requestDataContent(req)
 	if !ok {
 		surfaced, err := requestToFunctionCall(req)
 		if err != nil {
-			return nil, "", nil, false
+			return nil, "", nil, false, fmt.Errorf("workflowprovider: failed to surface external request %q: %w", req.RequestID, err)
 		}
-		return newUpdate(responseID, raw, surfaced), surfaced.CallID, req, true
+		return newUpdate(responseID, raw, surfaced), surfaced.CallID, req, true, nil
 	}
 	surfaced, id, ok := requestContentForDelivery(req.RequestID, c)
 	if !ok {
-		return nil, "", nil, false
+		return nil, "", nil, false, nil
 	}
-	return newUpdate(responseID, raw, surfaced), id, req, true
+	return newUpdate(responseID, raw, surfaced), id, req, true, nil
 }
 
 func requestDataContent(req *workflow.ExternalRequest) (message.Content, bool) {

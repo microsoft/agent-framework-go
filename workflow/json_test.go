@@ -75,6 +75,7 @@ func TestRequestPortInfo_CachesRuntimeTypes(t *testing.T) {
 		t.Fatal("response TypeID should polymorphically match concrete content")
 	}
 }
+
 func TestExternalRequest_JsonRoundtrip(t *testing.T) {
 	port := workflow.RequestPort{
 		ID:       "MyPort",

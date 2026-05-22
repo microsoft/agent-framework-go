@@ -728,6 +728,55 @@ func TestNew_SurfacesRequestInfoAndAcceptsResponse(t *testing.T) {
 	}
 }
 
+func TestNew_RequestInfoFallbackMarshalErrorIsObservable(t *testing.T) {
+	const id = "bad-request"
+	port := workflow.RequestPort{
+		ID:       id + "_Any",
+		Request:  reflect.TypeFor[any](),
+		Response: reflect.TypeFor[string](),
+	}
+	binding := workflow.ExecutorBinding{
+		ID:           id,
+		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		Ports:        []workflow.RequestPort{port},
+	}
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: id,
+			Spec: newMessageSpec(&messageworkflow.Options{
+				StateKey: "bad_request_msgs",
+				TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, _ []*message.Message) error {
+					req, err := workflow.NewExternalRequest(port.ID+":chan", port, make(chan int))
+					if err != nil {
+						return err
+					}
+					return ctx.PostRequest(req)
+				},
+			}),
+		}, nil
+	}
+	wf, err := workflow.NewBuilder(binding).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	ag, err := workflowprovider.New(wf, workflowprovider.Config{IncludeErrorDetails: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	resp, err := ag.RunText(t.Context(), "hi").Collect()
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+
+	if !containsErrorContent(resp, "failed to surface external request") {
+		t.Fatalf("expected request surfacing error in response, got %+v", resp)
+	}
+	if !containsErrorContent(resp, "unsupported type: chan int") {
+		t.Fatalf("expected JSON marshal error details in response, got %+v", resp)
+	}
+}
+
 func TestNew_ResponsePortInterfaceTypeIsValidatedPolymorphically(t *testing.T) {
 	const id = "poly-response"
 	port := workflow.RequestPort{
