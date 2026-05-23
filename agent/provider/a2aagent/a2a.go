@@ -179,10 +179,14 @@ func sendMsg(session *agent.Session, seq iter.Seq2[a2a.Event, error], yield func
 				return
 			}
 		case *a2a.TaskStatusUpdateEvent:
+			messageID := string(e.TaskID)
+			if e.Status.Message != nil {
+				messageID = e.Status.Message.ID
+			}
 			if !yield(&agent.ResponseUpdate{
 				RawRepresentation:    e,
 				AdditionalProperties: e.Metadata,
-				MessageID:            string(e.TaskID),
+				MessageID:            messageID,
 				ResponseID:           string(e.TaskID),
 				Role:                 message.RoleAssistant,
 				CreatedAt:            time.Now(),

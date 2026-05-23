@@ -1338,6 +1338,55 @@ func TestRunStreamingWithTaskStatusUpdateEvent(t *testing.T) {
 	}
 }
 
+// TestRunStreamingWithTaskStatusUpdateEvent_WithMessage tests that MessageID is populated
+// from Status.Message.ID when the status update contains a message, aligning with the .NET
+// fix in microsoft/agent-framework#6043.
+func TestRunStreamingWithTaskStatusUpdateEvent_WithMessage(t *testing.T) {
+	const taskID = "task-status-msg-123"
+	const contextID = "ctx-status-msg-456"
+	const msgID = "msg-abc-789"
+
+	transport := &mockA2ATransport{
+		streamingResponseToReturn: &a2a.TaskStatusUpdateEvent{
+			TaskID:    a2a.TaskID(taskID),
+			ContextID: contextID,
+			Status: a2a.TaskStatus{
+				State: a2a.TaskStateWorking,
+				Message: &a2a.Message{
+					ID:   msgID,
+					Role: a2a.MessageRoleAgent,
+				},
+			},
+		},
+	}
+	a := newTestAgent(transport, agent.Config{})
+
+	session, err := a.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var updates []*agent.ResponseUpdate
+	for update, err := range a.RunText(t.Context(), "Check task status", agent.WithSession(session), agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("error = %v, want nil", err)
+		}
+		updates = append(updates, update)
+	}
+
+	if len(updates) != 1 {
+		t.Fatalf("len(updates) = %d, want 1", len(updates))
+	}
+
+	update := updates[0]
+	if update.MessageID != msgID {
+		t.Errorf("update.MessageID = %q, want %q (from Status.Message.ID)", update.MessageID, msgID)
+	}
+	if update.ResponseID != taskID {
+		t.Errorf("update.ResponseID = %q, want %q", update.ResponseID, taskID)
+	}
+}
+
 // TestRunStreamingWithTaskArtifactUpdateEvent tests handling of TaskArtifactUpdateEvent
 func TestRunStreamingWithTaskArtifactUpdateEvent(t *testing.T) {
 	const taskID = "task-artifact-123"
