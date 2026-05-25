@@ -14,13 +14,46 @@ import (
 
 func toAgentMessages(agMessages []aguiTypes.Message) ([]*message.Message, error) {
 	result := make([]*message.Message, 0, len(agMessages))
+
+	// Coalesce consecutive assistant messages that carry tool calls into one.
+	// The AG-UI client creates a separate assistant message per tool call when
+	// ToolCallStartEvent.parentMessageId is empty, but OpenAI requires every
+	// assistant message with tool_calls to be immediately followed by tool
+	// responses for each of its tool_call_ids. Two consecutive single-tool-call
+	// assistant messages without intervening tool results trigger HTTP 400.
+	var pendingMsg *message.Message
+
+	flush := func() {
+		if pendingMsg != nil {
+			result = append(result, pendingMsg)
+			pendingMsg = nil
+		}
+	}
+
 	for _, m := range agMessages {
+		isAssistantWithToolCalls := m.Role == aguiTypes.RoleAssistant && len(m.ToolCalls) > 0
+
+		if !isAssistantWithToolCalls {
+			flush()
+		}
+
 		converted, err := toAgentMessage(m)
 		if err != nil {
 			return nil, err
 		}
-		result = append(result, converted)
+
+		if isAssistantWithToolCalls {
+			if pendingMsg == nil {
+				pendingMsg = converted
+			} else {
+				pendingMsg.Contents = append(pendingMsg.Contents, converted.Contents...)
+			}
+		} else {
+			result = append(result, converted)
+		}
 	}
+	flush()
+
 	return result, nil
 }
 

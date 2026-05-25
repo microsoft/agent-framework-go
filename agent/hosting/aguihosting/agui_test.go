@@ -290,8 +290,8 @@ func TestHandler_UnknownDataContent_UsesCurrentMessageLifecycle(t *testing.T) {
 }
 
 // TestHandler_ToolResult_HasDistinctMessageID verifies that tool result events get a
-// distinct message ID from the preceding text/tool-call message to avoid AG-UI
-// message ID collisions (mirrors .NET fix in microsoft/agent-framework#5800).
+// deterministic message ID in "result-{callID}" format, distinct from the preceding
+// text/tool-call message (mirrors .NET fix in microsoft/agent-framework#5800 and #6009).
 func TestHandler_ToolResult_HasDistinctMessageID(t *testing.T) {
 	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
@@ -327,7 +327,6 @@ func TestHandler_ToolResult_HasDistinctMessageID(t *testing.T) {
 	}
 
 	// Extract the tool result messageId and the text message start messageId.
-	// They must differ so that the tool result does not collide with the text message.
 	var toolResultMsgID, textStartMsgID string
 	for _, line := range strings.Split(content, "\n") {
 		if !strings.HasPrefix(line, "data:") {
@@ -352,7 +351,122 @@ func TestHandler_ToolResult_HasDistinctMessageID(t *testing.T) {
 	if toolResultMsgID == "" {
 		t.Fatal("expected TOOL_CALL_RESULT event")
 	}
+	// Tool result message ID must be "result-{callID}" — deterministic and distinct.
+	if toolResultMsgID != "result-call-1" {
+		t.Fatalf("tool result message ID = %q, want %q", toolResultMsgID, "result-call-1")
+	}
 	if textStartMsgID == toolResultMsgID {
 		t.Fatalf("tool result message ID %q must differ from text message ID %q", toolResultMsgID, textStartMsgID)
+	}
+}
+
+// TestHandler_ParallelToolResults_HaveUniqueMessageIDs verifies that parallel tool
+// results each get a unique deterministic message ID (result-{callID}), so the FE
+// does not collapse them in React reconciliation (mirrors .NET fix #6009 Bug #2).
+func TestHandler_ParallelToolResults_HaveUniqueMessageIDs(t *testing.T) {
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
+				Role: message.RoleTool,
+				Contents: message.Contents{
+					&message.FunctionResultContent{CallID: "c1", Result: "result1"},
+					&message.FunctionResultContent{CallID: "c2", Result: "result2"},
+				},
+			}, nil)
+		}
+	})
+	h := aguihosting.NewJSONHTTPHandler(aguihosting.HandlerConfig{Agent: a})
+
+	body := `{"threadId":"t1","runId":"r1","messages":[]}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	content := rr.Body.String()
+
+	var resultMsgIDs []string
+	for _, line := range strings.Split(content, "\n") {
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		var evt map[string]any
+		if err := json.Unmarshal([]byte(data), &evt); err != nil {
+			continue
+		}
+		if evt["type"] == "TOOL_CALL_RESULT" {
+			id, _ := evt["messageId"].(string)
+			resultMsgIDs = append(resultMsgIDs, id)
+		}
+	}
+
+	if len(resultMsgIDs) != 2 {
+		t.Fatalf("expected 2 TOOL_CALL_RESULT events, got %d", len(resultMsgIDs))
+	}
+	if resultMsgIDs[0] != "result-c1" {
+		t.Errorf("first result messageId = %q, want %q", resultMsgIDs[0], "result-c1")
+	}
+	if resultMsgIDs[1] != "result-c2" {
+		t.Errorf("second result messageId = %q, want %q", resultMsgIDs[1], "result-c2")
+	}
+	if resultMsgIDs[0] == resultMsgIDs[1] {
+		t.Errorf("parallel tool result message IDs must be unique, both = %q", resultMsgIDs[0])
+	}
+}
+
+// TestHandler_ConsecutiveAssistantToolCallMessages_Coalesced verifies that consecutive
+// assistant messages that each carry tool calls are merged into one message before being
+// forwarded to the agent. The AG-UI client produces one assistant message per tool call
+// when parentMessageId is absent; sending them separately would trigger HTTP 400 from
+// OpenAI because tool_call_ids must be immediately followed by tool results.
+// Mirrors .NET fix in microsoft/agent-framework#6009 Bug #3.
+func TestHandler_ConsecutiveAssistantToolCallMessages_Coalesced(t *testing.T) {
+	var receivedMessages []*message.Message
+	a := newTestAgent(func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		receivedMessages = msgs
+		return func(yield func(*agent.ResponseUpdate, error) bool) {}
+	})
+	h := aguihosting.NewJSONHTTPHandler(aguihosting.HandlerConfig{Agent: a})
+
+	// Two consecutive assistant messages, each with one tool call — simulates what the
+	// AG-UI client sends after Bug #1 is fixed on the streaming side.
+	body := `{
+		"threadId":"t1","runId":"r1",
+		"messages":[
+			{"id":"u1","role":"user","content":"do both"},
+			{"id":"a1","role":"assistant","content":"","toolCalls":[{"id":"c1","type":"function","function":{"name":"tool_a","arguments":"{}"}}]},
+			{"id":"a2","role":"assistant","content":"","toolCalls":[{"id":"c2","type":"function","function":{"name":"tool_b","arguments":"{}"}}]},
+			{"id":"r1","role":"tool","content":"res1","toolCallId":"c1"},
+			{"id":"r2","role":"tool","content":"res2","toolCallId":"c2"}
+		]
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	// Find the coalesced assistant message.
+	var assistantMsgs []*message.Message
+	for _, m := range receivedMessages {
+		if m.Role == message.RoleAssistant {
+			assistantMsgs = append(assistantMsgs, m)
+		}
+	}
+
+	if len(assistantMsgs) != 1 {
+		t.Fatalf("expected 1 assistant message after coalescing, got %d", len(assistantMsgs))
+	}
+
+	// The coalesced message must contain both tool calls.
+	var callIDs []string
+	for _, c := range assistantMsgs[0].Contents {
+		if fcc, ok := c.(*message.FunctionCallContent); ok {
+			callIDs = append(callIDs, fcc.CallID)
+		}
+	}
+	if len(callIDs) != 2 {
+		t.Fatalf("expected 2 tool calls in coalesced message, got %d", len(callIDs))
+	}
+	if callIDs[0] != "c1" || callIDs[1] != "c2" {
+		t.Errorf("coalesced tool call IDs = %v, want [c1 c2]", callIDs)
 	}
 }

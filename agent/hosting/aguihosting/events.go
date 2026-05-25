@@ -103,13 +103,6 @@ func updatesToAGUIEvents(
 				msgID = aguiEvents.GenerateMessageID()
 			}
 
-			// Tool result events must not share the same message ID as the preceding
-			// text/tool-call message to avoid AG-UI message ID collisions (#5800).
-			toolResultMsgID := msgID
-			if hasFunctionResultContent(update.Contents) {
-				toolResultMsgID = aguiEvents.GenerateMessageID()
-			}
-
 			if currentReasoningMsgID != "" && currentReasoningMsgID != msgID {
 				if !yield(aguiEvents.NewReasoningMessageEndEvent(currentReasoningMsgID), nil) {
 					return
@@ -170,11 +163,7 @@ func updatesToAGUIEvents(
 					}
 					continue
 				}
-				contentMsgID := msgID
-				if _, ok := c.(*message.FunctionResultContent); ok {
-					contentMsgID = toolResultMsgID
-				}
-				events, convErr := contentToEvents(c, contentMsgID)
+				events, convErr := contentToEvents(c, msgID)
 				if convErr != nil {
 					if !yield(aguiEvents.NewRunErrorEvent(convErr.Error(), aguiEvents.WithRunID(runID)), convErr) {
 						return
@@ -201,15 +190,6 @@ func updatesToAGUIEvents(
 		}
 		yield(aguiEvents.NewRunFinishedEvent(threadID, runID), nil)
 	}
-}
-
-func hasFunctionResultContent(contents message.Contents) bool {
-	for _, c := range contents {
-		if _, ok := c.(*message.FunctionResultContent); ok {
-			return true
-		}
-	}
-	return false
 }
 
 func hasTextLikeContent(contents message.Contents) bool {
@@ -266,11 +246,10 @@ func contentToEvents(content message.Content, messageID string) ([]aguiEvents.Ev
 		if err != nil {
 			return nil, err
 		}
-		resultMessageID := messageID
-		if resultMessageID == "" {
-			resultMessageID = callID
-		}
-		return []aguiEvents.Event{aguiEvents.NewToolCallResultEvent(resultMessageID, callID, contentStr)}, nil
+		// Use result-{callID} so each tool result has a deterministically unique
+		// message ID. MEAI batches all results under a shared MessageId, which
+		// collapses them in FE reconciliation when the same id is reused.
+		return []aguiEvents.Event{aguiEvents.NewToolCallResultEvent("result-"+callID, callID, contentStr)}, nil
 	case *message.DataContent:
 		return dataContentToEvents(c, messageID)
 	default:
