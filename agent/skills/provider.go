@@ -365,11 +365,11 @@ func (p *providerState) buildTools(skills providedSkillSet, hasResources, hasScr
 				Name:        "load_skill",
 				Description: "Loads the full content of a specific skill.",
 			},
-			func(_ context.Context, in struct {
+			func(callCtx context.Context, in struct {
 				SkillName string `json:"skillName" jsonschema:"The name of the skill to load"`
 			},
 			) (string, error) {
-				return p.loadSkill(skills, in.SkillName), nil
+				return p.loadSkill(callCtx, skills, in.SkillName)
 			},
 		),
 	}
@@ -415,16 +415,24 @@ func (p *providerState) buildTools(skills providedSkillSet, hasResources, hasScr
 	return append(tools, runScript)
 }
 
-func (p *providerState) loadSkill(skills providedSkillSet, skillName string) string {
+func (p *providerState) loadSkill(ctx context.Context, skills providedSkillSet, skillName string) (string, error) {
 	if strings.TrimSpace(skillName) == "" {
-		return "Error: Skill name cannot be empty."
+		return "Error: Skill name cannot be empty.", nil
 	}
 	resolved, ok := skills.byName[skillName]
 	if !ok {
-		return fmt.Sprintf("Error: Skill '%s' not found.", skillName)
+		return fmt.Sprintf("Error: Skill '%s' not found.", skillName), nil
 	}
 	p.logger.Info("Loading skill", "skillName", resolved.skill.Frontmatter.Name)
-	return resolved.skill.Content
+	if resolved.skill.GetContent != nil {
+		content, err := resolved.skill.GetContent(ctx)
+		if err != nil {
+			p.logger.Error("Failed to load skill content", "skillName", skillName, "error", err)
+			return fmt.Sprintf("Error: Failed to load skill '%s'.", skillName), nil
+		}
+		return content, nil
+	}
+	return resolved.skill.Content, nil
 }
 
 func (p *providerState) readSkillResource(ctx context.Context, skills providedSkillSet, skillName, resourceName string) any {

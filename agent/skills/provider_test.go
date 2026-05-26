@@ -4,6 +4,7 @@ package skills_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -627,5 +628,69 @@ func TestNewProvider_DisableSourceDeduplication_PreservesDuplicateSkillsInInstru
 	instructions, _ := captureProviderContext(t, provider)
 	if strings.Count(instructions, "<name>dup-inline</name>") != 2 {
 		t.Fatalf("expected duplicate skills to remain in instructions, got %q", instructions)
+	}
+}
+
+func TestLoadSkill_GetContentFunc_UsedOverContentField(t *testing.T) {
+	skill := &skills.Skill{
+		Frontmatter: skills.Frontmatter{Name: "lazy-skill", Description: "Lazy content skill"},
+		Content:     "Static content — should not be returned.",
+		GetContent: func(context.Context) (string, error) {
+			return "Lazy loaded content.", nil
+		},
+	}
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}})
+	_, tools := captureProviderContext(t, provider)
+
+	loadTool := findTool(t, tools, "load_skill")
+	result, err := loadTool.Call(t.Context(), `{"skillName":"lazy-skill"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "Lazy loaded content." {
+		t.Fatalf("expected GetContent result, got %q", result)
+	}
+}
+
+func TestLoadSkill_GetContentFunc_ErrorReturnsErrorMessage(t *testing.T) {
+	skill := &skills.Skill{
+		Frontmatter: skills.Frontmatter{Name: "failing-skill", Description: "Content always fails"},
+		GetContent: func(context.Context) (string, error) {
+			return "", errors.New("backend unavailable")
+		},
+	}
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}})
+	_, tools := captureProviderContext(t, provider)
+
+	loadTool := findTool(t, tools, "load_skill")
+	result, err := loadTool.Call(t.Context(), `{"skillName":"failing-skill"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultStr, ok := result.(string)
+	if !ok {
+		t.Fatalf("expected string result, got %T", result)
+	}
+	if !strings.HasPrefix(resultStr, "Error:") {
+		t.Fatalf("expected error message, got %q", resultStr)
+	}
+}
+
+func TestLoadSkill_GetContentFunc_NilFallsBackToContentField(t *testing.T) {
+	skill := &skills.Skill{
+		Frontmatter: skills.Frontmatter{Name: "static-skill", Description: "Static content skill"},
+		Content:     "Static content body.",
+		GetContent:  nil,
+	}
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}})
+	_, tools := captureProviderContext(t, provider)
+
+	loadTool := findTool(t, tools, "load_skill")
+	result, err := loadTool.Call(t.Context(), `{"skillName":"static-skill"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "Static content body." {
+		t.Fatalf("expected Content field value, got %q", result)
 	}
 }
