@@ -161,7 +161,6 @@ Be concise but specific in your feedback.`, logger)
 		decision.Iteration = state.Iteration
 		return decision, nil
 	}).Bind()
-
 }
 
 func newSummaryExecutor(id string) workflow.ExecutorBinding {
@@ -175,7 +174,6 @@ Simply output the polished content - no additional commentary needed.`, logger)
 		}
 		return textMessage(message.RoleAssistant, content), nil
 	}).Bind()
-
 }
 
 func readFlowState(ctx *workflow.Context) (flowState, error) {

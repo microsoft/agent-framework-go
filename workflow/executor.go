@@ -927,7 +927,7 @@ func (fn reflectExecutorFunc) invoke(ctx *Context, input reflect.Value) (reflect
 	results := fn.fnValue.Call(args[:argCount])
 	if fn.hasError {
 		resultErr := results[len(results)-1]
-		if !(isNilType(resultErr.Type()) && resultErr.IsNil()) {
+		if !isNilType(resultErr.Type()) || !resultErr.IsNil() {
 			return reflect.Value{}, false, resultErr.Interface().(error)
 		}
 		results = results[:len(results)-1]

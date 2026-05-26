@@ -47,7 +47,6 @@ func nonConcurrentBinding(id string) workflow.ExecutorBinding {
 			return rb, nil
 		},
 	}).Bind()
-
 }
 
 func TestAllowConcurrent_AllExecutorsConcurrent(t *testing.T) {

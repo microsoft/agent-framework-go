@@ -33,12 +33,14 @@ type chunkRange struct {
 	End   int
 }
 
-type SplitComplete struct{}
-type MapComplete struct{ FilePath string }
-type ShuffleComplete struct {
-	FilePath  string
-	ReducerID string
-}
+type (
+	SplitComplete   struct{}
+	MapComplete     struct{ FilePath string }
+	ShuffleComplete struct {
+		FilePath  string
+		ReducerID string
+	}
+)
 type ReduceComplete struct{ FilePath string }
 
 func main() {

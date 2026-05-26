@@ -36,7 +36,7 @@ func ExampleNewExecutor_function() {
 
 func ExampleNewExecutor_context() {
 	executor := workflow.NewExecutor("normalize", func(ctx *workflow.Context, input string) (string, error) {
-		if err := ctx.Context.Err(); err != nil {
+		if err := ctx.Err(); err != nil {
 			return "", err
 		}
 		return strings.ToLower(input), nil

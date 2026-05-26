@@ -336,7 +336,7 @@ func TestNewExecutor_PanicsWhenNonFinalErrorCreatesMultipleOutputs(t *testing.T)
 			t.Fatal("NewExecutor did not panic")
 		}
 	}()
-	workflow.NewExecutor("error-output", func(string) (error, string) { return nil, "" })
+	workflow.NewExecutor("error-output", func(string) (error, string) { return nil, "" }) //nolint:staticcheck // intentionally wrong signature to test panic
 }
 
 func TestExecutor_ExtendProtocolAndLifecycleInOrder(t *testing.T) {
