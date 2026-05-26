@@ -57,7 +57,9 @@ var volumeConverterSkill = &skills.Skill{
 		Name:        "volume-converter",
 		Description: "Convert between gallons and liters using a multiplication factor.",
 	},
-	Content: volumeConverterInstructions,
+	GetContent: func(context.Context) (string, error) {
+		return volumeConverterInstructions, nil
+	},
 	Resources: []skills.Resource{
 		{
 			Name:        "volume-conversion-table",
@@ -91,7 +93,9 @@ var temperatureConverterSkill = skills.Skill{
 		Name:        "temperature-converter",
 		Description: "Convert between temperature scales such as Fahrenheit, Celsius, and Kelvin.",
 	},
-	Content: temperatureConverterInstructions,
+	GetContent: func(context.Context) (string, error) {
+		return temperatureConverterInstructions, nil
+	},
 	Resources: []skills.Resource{
 		{
 			Name:        "temperature-conversion-formulas",

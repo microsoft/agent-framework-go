@@ -424,15 +424,16 @@ func (p *providerState) loadSkill(ctx context.Context, skills providedSkillSet, 
 		return fmt.Sprintf("Error: Skill '%s' not found.", skillName), nil
 	}
 	p.logger.Info("Loading skill", "skillName", resolved.skill.Frontmatter.Name)
-	if resolved.skill.GetContent != nil {
-		content, err := resolved.skill.GetContent(ctx)
-		if err != nil {
-			p.logger.Error("Failed to load skill content", "skillName", skillName, "error", err)
-			return fmt.Sprintf("Error: Failed to load skill '%s'.", skillName), nil
-		}
-		return content, nil
+	if resolved.skill.GetContent == nil {
+		p.logger.Error("Failed to load skill content", "skillName", skillName, "error", "skill content loader is nil")
+		return fmt.Sprintf("Error: Failed to load skill '%s'.", skillName), nil
 	}
-	return resolved.skill.Content, nil
+	content, err := resolved.skill.GetContent(ctx)
+	if err != nil {
+		p.logger.Error("Failed to load skill content", "skillName", skillName, "error", err)
+		return fmt.Sprintf("Error: Failed to load skill '%s'.", skillName), nil
+	}
+	return content, nil
 }
 
 func (p *providerState) readSkillResource(ctx context.Context, skills providedSkillSet, skillName, resourceName string) any {

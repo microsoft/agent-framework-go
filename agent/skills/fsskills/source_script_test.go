@@ -360,7 +360,9 @@ func TestFileScript_RunWithNonFileSkill_ReturnsError(t *testing.T) {
 	}
 	nonFileSkill := &skills.Skill{
 		Frontmatter: skills.Frontmatter{Name: "my-skill", Description: "A skill"},
-		Content:     "Instructions.",
+		GetContent: func(context.Context) (string, error) {
+			return "Instructions.", nil
+		},
 	}
 	_, err = loaded[0].Scripts[0].Run(t.Context(), nonFileSkill, nil)
 	if err == nil {

@@ -56,16 +56,9 @@ func (f SourceFunc) Skills(ctx context.Context) ([]*Skill, error) {
 // Skill describes a domain-specific capability with instructions, resources, and scripts.
 type Skill struct {
 	Frontmatter Frontmatter
-	// Content holds the skill's instruction text. For file-based skills this is
-	// the raw SKILL.md file content. For code-defined skills this is a synthesized
-	// document containing name, description, and body.
-	//
-	// When GetContent is also set, the provider prefers GetContent over Content.
-	Content string
-	// GetContent is an optional function that lazily loads the skill's instruction
-	// text. When set, the provider calls GetContent instead of reading Content
-	// directly, which is useful for sources such as MCP where content should be
-	// fetched on demand rather than eagerly at discovery time.
+	// GetContent lazily loads the skill's instruction text. For file-based skills
+	// this is the raw SKILL.md file content. For code-defined skills this may be
+	// a synthesized document containing name, description, and body.
 	GetContent           func(context.Context) (string, error)
 	Resources            []Resource
 	Scripts              []Script

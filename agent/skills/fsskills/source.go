@@ -217,9 +217,11 @@ func (s *Source) parseSkillDirectory(skillFS fs.FS, logPath string) *skills.Skil
 	scripts := s.discoverScriptFiles(skillFS, frontmatter.Name)
 	return &skills.Skill{
 		Frontmatter: frontmatter,
-		Content:     content,
-		Resources:   resources,
-		Scripts:     scripts,
+		GetContent: func(context.Context) (string, error) {
+			return content, nil
+		},
+		Resources: resources,
+		Scripts:   scripts,
 		AdditionalProperties: map[string]any{
 			rootFSPropertyKey: skillFS,
 		},

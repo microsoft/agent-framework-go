@@ -43,7 +43,9 @@ var unitConverterSkill = &skills.Skill{
 		Name:        "unit-converter",
 		Description: "Convert between common units using a multiplication factor. Use when asked to convert miles, kilometers, pounds, or kilograms.",
 	},
-	Content: unitConverterInstructions,
+	GetContent: func(context.Context) (string, error) {
+		return unitConverterInstructions, nil
+	},
 	Resources: []skills.Resource{
 		{
 			Name:        "conversion-table",

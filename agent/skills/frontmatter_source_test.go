@@ -3,6 +3,7 @@
 package skills_test
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -15,9 +16,11 @@ func mustInlineSkill(frontmatter skills.Frontmatter, content string, resources [
 	}
 	return &skills.Skill{
 		Frontmatter: frontmatter,
-		Content:     content,
-		Resources:   append([]skills.Resource(nil), resources...),
-		Scripts:     append([]skills.Script(nil), scripts...),
+		GetContent: func(context.Context) (string, error) {
+			return content, nil
+		},
+		Resources: append([]skills.Resource(nil), resources...),
+		Scripts:   append([]skills.Script(nil), scripts...),
 	}
 }
 
