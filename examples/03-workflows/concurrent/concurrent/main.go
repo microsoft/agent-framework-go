@@ -19,15 +19,23 @@ var _ = demo.NewLogger(
 )
 
 func main() {
-	start := bindStep[string]("ConcurrentStartExecutor", func(ctx *workflow.Context, question string) error {
+	start := workflow.NewExecutor("ConcurrentStartExecutor", func(ctx *workflow.Context, question string) error {
 		return ctx.SendMessage("", question)
-	})
-	physics := workflow.BindFunc("Physicist", func(question string) string {
+	}).Extend(&workflow.Executor{
+		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+			rb.SendsMessageType(reflect.TypeFor[string]())
+			return rb, nil
+		},
+	}).Bind()
+
+	physics := workflow.NewExecutor("Physicist", func(question string) string {
 		return fmt.Sprintf("physics: %s relates to average kinetic energy", strings.TrimSuffix(question, "?"))
-	})
-	chemistry := workflow.BindFunc("Chemist", func(question string) string {
+	}).Bind()
+
+	chemistry := workflow.NewExecutor("Chemist", func(question string) string {
 		return fmt.Sprintf("chemistry: %s affects reaction rates and phase changes", strings.TrimSuffix(question, "?"))
-	})
+	}).Bind()
+
 	aggregate := aggregateStrings("ConcurrentAggregationExecutor")
 
 	wf, err := workflow.NewBuilder(start).
@@ -39,7 +47,7 @@ func main() {
 		demo.Panic(err)
 	}
 
-	run, err := inproc.Concurrent.RunStreaming(context.Background(), wf, "What is temperature?")
+	run, err := inproc.Default.RunStreaming(context.Background(), wf, "What is temperature?")
 	if err != nil {
 		demo.Panic(err)
 	}
@@ -49,64 +57,36 @@ func main() {
 		if err != nil {
 			demo.Panic(err)
 		}
-		if output, ok := evt.(workflow.OutputEvent); ok {
+		switch e := evt.(type) {
+		case workflow.OutputEvent:
+			output := e
 			demo.Assistantf("Workflow completed with results:\n%v", output.Output)
+		case workflow.ErrorEvent:
+			demo.Panic(e.Error)
+		case workflow.ExecutorFailedEvent:
+			demo.Panicf("executor %q failed: %v", e.ExecutorID, e.Error)
 		}
 	}
 }
 
-func bindStep[In any](id string, fn func(*workflow.Context, In) error) workflow.ExecutorBinding {
-	return workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeOf(fn),
-		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
-			return &workflow.Executor{
-				ID: id,
-				Spec: workflow.ExecutorSpec{
-					DisableAutoSendMessageHandlerResultObject: true,
-					DisableAutoYieldOutputHandlerResultObject: true,
-					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-						rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[In](), nil, func(ctx *workflow.Context, msg any) (any, error) {
-							return struct{}{}, fn(ctx, msg.(In))
-						})
-						return rb, nil
-					},
-				},
-			}, nil
-		},
-		SupportsConcurrentSharedExecution: true,
-	}
-}
-
 func aggregateStrings(id string) workflow.ExecutorBinding {
-	return workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeFor[string](),
-		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
-			var messages []string
-			return &workflow.Executor{
-				ID: id,
-				Spec: workflow.ExecutorSpec{
-					DisableAutoSendMessageHandlerResultObject: true,
-					DisableAutoYieldOutputHandlerResultObject: true,
-					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-						rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(_ *workflow.Context, msg any) (any, error) {
-							messages = append(messages, msg.(string))
-							return struct{}{}, nil
-						})
-						return rb, nil
-					},
-					OnMessageDeliveryFinished: func(ctx *workflow.Context) error {
-						if len(messages) == 0 {
-							return nil
-						}
-						out := strings.Join(messages, "\n") + "\n"
-						messages = nil
-						return ctx.YieldOutput(out)
-					},
-				},
-			}, nil
-		},
-		SupportsConcurrentSharedExecution: true,
-	}
+	return workflow.BindNewExecutorFunc(id, func(_ string, executorID string) (*workflow.Executor, error) {
+		var messages []string
+		return workflow.NewExecutor(executorID, func(msg string) {
+			messages = append(messages, msg)
+		}).Extend(&workflow.Executor{
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.YieldsOutputType(reflect.TypeFor[string]())
+				return rb, nil
+			},
+			OnMessageDeliveryFinishedFunc: func(ctx *workflow.Context) error {
+				if len(messages) == 0 {
+					return nil
+				}
+				out := strings.Join(messages, "\n") + "\n"
+				messages = nil
+				return ctx.YieldOutput(out)
+			},
+		}), nil
+	})
 }

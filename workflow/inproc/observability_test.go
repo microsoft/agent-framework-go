@@ -284,16 +284,18 @@ func TestObservability_AllSpansAreEndedAfterWorkflowCompletion(t *testing.T) {
 
 func newTelemetryWorkflow(t *testing.T, tracer observability.Tracer, options workflow.TelemetryOptions) *workflow.Workflow {
 	t.Helper()
-	upper := workflow.BindFunc("upper", func(input string) string {
+	upper := workflow.NewExecutor("upper", func(input string) string {
 		return strings.ToUpper(input)
-	})
-	reverse := workflow.BindFunc("reverse", func(input string) string {
+	}).Bind()
+
+	reverse := workflow.NewExecutor("reverse", func(input string) string {
 		letters := []rune(input)
 		for left, right := 0, len(letters)-1; left < right; left, right = left+1, right-1 {
 			letters[left], letters[right] = letters[right], letters[left]
 		}
 		return string(letters)
-	})
+	}).Bind()
+
 	builder := workflow.NewBuilder(upper).
 		AddEdge(upper, reverse).
 		WithOutputFrom(reverse)

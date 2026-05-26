@@ -23,20 +23,23 @@ type DetectionResult struct {
 }
 
 func main() {
-	detect := workflow.BindFunc("SpamDetectionExecutor", func(email string) DetectionResult {
+	detect := workflow.NewExecutor("SpamDetectionExecutor", func(email string) DetectionResult {
 		lower := strings.ToLower(email)
 		spam := strings.Contains(lower, "wire transfer") || strings.Contains(lower, "prize")
 		return DetectionResult{Email: email, IsSpam: spam, Reason: "matched suspicious wording"}
-	})
-	assistant := workflow.BindFunc("EmailAssistantExecutor", func(result DetectionResult) string {
+	}).Bind()
+
+	assistant := workflow.NewExecutor("EmailAssistantExecutor", func(result DetectionResult) string {
 		return "Draft response: Thanks for your note. I will follow up shortly."
-	})
-	send := workflow.BindFunc("SendEmailExecutor", func(response string) string {
+	}).Bind()
+
+	send := workflow.NewExecutor("SendEmailExecutor", func(response string) string {
 		return "Email sent: " + response
-	})
-	spam := workflow.BindFunc("HandleSpamExecutor", func(result DetectionResult) string {
+	}).Bind()
+
+	spam := workflow.NewExecutor("HandleSpamExecutor", func(result DetectionResult) string {
 		return "Email marked as spam: " + result.Reason
-	})
+	}).Bind()
 
 	wf, err := workflow.NewBuilder(detect).
 		AddDirectEdge(detect, assistant, false, func(msg any) bool { return !msg.(DetectionResult).IsSpam }).

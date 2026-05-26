@@ -20,10 +20,10 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow"
 )
 
-func newMessageSpec(options *messageworkflow.Options) workflow.ExecutorSpec {
-	spec := workflow.ExecutorSpec{}
-	messageworkflow.Configure(&spec, options)
-	spec.Extend(workflow.ExecutorSpec{
+func newMessageExecutor(id string, options *messageworkflow.Options) *workflow.Executor {
+	executor := workflow.Executor{ID: id}
+	messageworkflow.Configure(&executor, options)
+	executor.Extend(&workflow.Executor{
 		ConfigureProtocol: func(pb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 			return pb.YieldsOutputType(
 				reflect.TypeFor[*message.Message](),
@@ -31,7 +31,7 @@ func newMessageSpec(options *messageworkflow.Options) workflow.ExecutorSpec {
 			), nil
 		},
 	})
-	return spec
+	return &executor
 }
 
 // echoExecutorBinding builds a workflow executor that, on each TurnToken,
@@ -39,47 +39,44 @@ func newMessageSpec(options *messageworkflow.Options) workflow.ExecutorSpec {
 // yields a final aggregated message as workflow output.
 func echoExecutorBinding(id string) workflow.ExecutorBinding {
 	binding := workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
-		RawValue:     struct{}{},
+		ID:               id,
+		ImplementationID: "*workflow.Executor",
+		RawValue:         struct{}{},
 	}
 	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
-		ex := &workflow.Executor{
-			ID: id,
-			Spec: newMessageSpec(&messageworkflow.Options{
-				StateKey: "echo_msgs",
-				TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, messages []*message.Message) error {
-					var text string
-					for _, m := range messages {
-						if t := m.Contents.Text(); t != "" {
-							text = t
-						}
+		ex := newMessageExecutor(id, &messageworkflow.Options{
+			StateKey: "echo_msgs",
+			TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, messages []*message.Message) error {
+				var text string
+				for _, m := range messages {
+					if t := m.Contents.Text(); t != "" {
+						text = t
 					}
-					update := &agent.ResponseUpdate{
-						Role: message.RoleAssistant,
-						Contents: []message.Content{
-							&message.TextContent{Text: "echo:" + text},
-						},
-						AgentID:    id,
-						AuthorName: id,
-					}
-					if err := ctx.AddEvent(workflow.OutputEvent{
-						ExecutorID: id,
-						Output:     update,
-					}); err != nil {
-						return err
-					}
-					out := &message.Message{
-						Role: message.RoleAssistant,
-						Contents: []message.Content{
-							&message.TextContent{Text: "echo:" + text},
-						},
-						AuthorName: id,
-					}
-					return ctx.YieldOutput(out)
-				},
-			}),
-		}
+				}
+				update := &agent.ResponseUpdate{
+					Role: message.RoleAssistant,
+					Contents: []message.Content{
+						&message.TextContent{Text: "echo:" + text},
+					},
+					AgentID:    id,
+					AuthorName: id,
+				}
+				if err := ctx.AddEvent(workflow.OutputEvent{
+					ExecutorID: id,
+					Output:     update,
+				}); err != nil {
+					return err
+				}
+				out := &message.Message{
+					Role: message.RoleAssistant,
+					Contents: []message.Content{
+						&message.TextContent{Text: "echo:" + text},
+					},
+					AuthorName: id,
+				}
+				return ctx.YieldOutput(out)
+			},
+		})
 		return ex, nil
 	}
 	return binding
@@ -291,35 +288,32 @@ func TestNew_IncludeOutputsInResponse(t *testing.T) {
 func TestNew_ConvertsResponseOutputWithResponseMetadata(t *testing.T) {
 	createdAt := time.Date(2024, 11, 10, 9, 20, 0, 0, time.UTC)
 	binding := workflow.ExecutorBinding{
-		ID:           "response-yielder",
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
-		RawValue:     struct{}{},
+		ID:               "response-yielder",
+		ImplementationID: "*workflow.Executor",
+		RawValue:         struct{}{},
 	}
 	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
-		return &workflow.Executor{
-			ID: binding.ID,
-			Spec: newMessageSpec(&messageworkflow.Options{
-				StateKey: "response_yielder_msgs",
-				TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, _ []*message.Message) error {
-					return ctx.YieldOutput(&agent.Response{
-						AgentID:              "inner-agent",
-						ID:                   "inner-response",
-						CreatedAt:            createdAt,
-						AdditionalProperties: map[string]any{"trace": "kept"},
-						Messages: []*message.Message{
-							{
-								Role:       message.RoleAssistant,
-								ID:         "inner-message",
-								AuthorName: "inner-author",
-								Contents: message.Contents{
-									&message.TextContent{Text: "from-response"},
-								},
+		return newMessageExecutor(binding.ID, &messageworkflow.Options{
+			StateKey: "response_yielder_msgs",
+			TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, _ []*message.Message) error {
+				return ctx.YieldOutput(&agent.Response{
+					AgentID:              "inner-agent",
+					ID:                   "inner-response",
+					CreatedAt:            createdAt,
+					AdditionalProperties: map[string]any{"trace": "kept"},
+					Messages: []*message.Message{
+						{
+							Role:       message.RoleAssistant,
+							ID:         "inner-message",
+							AuthorName: "inner-author",
+							Contents: message.Contents{
+								&message.TextContent{Text: "from-response"},
 							},
 						},
-					})
-				},
-			}),
-		}, nil
+					},
+				})
+			},
+		}), nil
 	}
 	wf, err := workflow.NewBuilder(binding).
 		WithOutputFrom(binding).
@@ -378,19 +372,18 @@ func TestNew_RejectsIncompatibleWorkflow(t *testing.T) {
 	// A workflow whose start executor handles only string input.
 	id := "string-handler"
 	binding := workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
-		RawValue:     struct{}{},
+		ID:               id,
+		ImplementationID: "*workflow.Executor",
+		RawValue:         struct{}{},
 	}
 	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		ex := &workflow.Executor{
 			ID: id,
-			Spec: workflow.ExecutorSpec{
-				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil,
-						func(ctx *workflow.Context, msg any) (any, error) { return nil, nil })
-					return rb, nil
-				},
+
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil,
+					func(ctx *workflow.Context, msg any) (any, error) { return nil, nil })
+				return rb, nil
 			},
 		}
 		return ex, nil
@@ -413,25 +406,22 @@ func TestNew_NilWorkflow(t *testing.T) {
 
 func errorContentExecutorBinding(id string, messageText string) workflow.ExecutorBinding {
 	binding := workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		ID:               id,
+		ImplementationID: "*workflow.Executor",
 	}
 	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
-		return &workflow.Executor{
-			ID: id,
-			Spec: newMessageSpec(&messageworkflow.Options{
-				StateKey: "error_content_msgs",
-				TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, _ []*message.Message) error {
-					return ctx.AddEvent(workflow.OutputEvent{
-						ExecutorID: id,
-						Output: &agent.ResponseUpdate{
-							Role:     message.RoleAssistant,
-							Contents: []message.Content{&message.ErrorContent{Message: messageText}},
-						},
-					})
-				},
-			}),
-		}, nil
+		return newMessageExecutor(id, &messageworkflow.Options{
+			StateKey: "error_content_msgs",
+			TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, _ []*message.Message) error {
+				return ctx.AddEvent(workflow.OutputEvent{
+					ExecutorID: id,
+					Output: &agent.ResponseUpdate{
+						Role:     message.RoleAssistant,
+						Contents: []message.Content{&message.ErrorContent{Message: messageText}},
+					},
+				})
+			},
+		}), nil
 	}
 	return binding
 }
@@ -466,19 +456,16 @@ func TestNew_ErrorContentOutputStreamedOut(t *testing.T) {
 // failingExecutor returns the given error from its handler on every TurnToken.
 func failingExecutor(id string, retErr error) workflow.ExecutorBinding {
 	binding := workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		ID:               id,
+		ImplementationID: "*workflow.Executor",
 	}
 	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
-		ex := &workflow.Executor{
-			ID: id,
-			Spec: newMessageSpec(&messageworkflow.Options{
-				StateKey: "fail_msgs",
-				TakeTurnHandler: func(_ *workflow.Context, _ workflow.TurnToken, _ []*message.Message) error {
-					return retErr
-				},
-			}),
-		}
+		ex := newMessageExecutor(id, &messageworkflow.Options{
+			StateKey: "fail_msgs",
+			TakeTurnHandler: func(_ *workflow.Context, _ workflow.TurnToken, _ []*message.Message) error {
+				return retErr
+			},
+		})
 		return ex, nil
 	}
 	return binding
@@ -508,22 +495,19 @@ func TestNew_ErrorEvent_DefaultMessage(t *testing.T) {
 
 func TestNew_ExecutorFailedEvent_DefaultMessage(t *testing.T) {
 	binding := workflow.ExecutorBinding{
-		ID:           "executor-failed",
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		ID:               "executor-failed",
+		ImplementationID: "*workflow.Executor",
 	}
 	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
-		return &workflow.Executor{
-			ID: binding.ID,
-			Spec: newMessageSpec(&messageworkflow.Options{
-				StateKey: "executor_failed_msgs",
-				TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, _ []*message.Message) error {
-					return ctx.AddEvent(workflow.ExecutorFailedEvent{
-						ExecutorID: "secret-executor",
-						Error:      fmt.Errorf("secret failure details"),
-					})
-				},
-			}),
-		}, nil
+		return newMessageExecutor(binding.ID, &messageworkflow.Options{
+			StateKey: "executor_failed_msgs",
+			TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, _ []*message.Message) error {
+				return ctx.AddEvent(workflow.ExecutorFailedEvent{
+					ExecutorID: "secret-executor",
+					Error:      fmt.Errorf("secret failure details"),
+				})
+			},
+		}), nil
 	}
 	wf, err := workflow.NewBuilder(binding).Build()
 	if err != nil {
@@ -598,12 +582,12 @@ func callRequestExecutorBinding(t *testing.T, id string) workflow.ExecutorBindin
 	}
 	step := 0
 	binding := workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
-		Ports:        []workflow.RequestPort{port},
+		ID:               id,
+		ImplementationID: "*workflow.Executor",
+		Ports:            []workflow.RequestPort{port},
 	}
 	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
-		spec := newMessageSpec(&messageworkflow.Options{
+		executor := newMessageExecutor(id, &messageworkflow.Options{
 			StateKey: "call_msgs",
 			TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, _ []*message.Message) error {
 				defer func() { step++ }()
@@ -618,7 +602,7 @@ func callRequestExecutorBinding(t *testing.T, id string) workflow.ExecutorBindin
 				return nil
 			},
 		})
-		spec.Extend(workflow.ExecutorSpec{
+		executor.Extend(&workflow.Executor{
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[*workflow.ExternalResponse](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 					resp := msg.(*workflow.ExternalResponse)
@@ -639,10 +623,7 @@ func callRequestExecutorBinding(t *testing.T, id string) workflow.ExecutorBindin
 				return rb, nil
 			},
 		})
-		return &workflow.Executor{
-			ID:   id,
-			Spec: spec,
-		}, nil
+		return executor, nil
 	}
 	return binding
 }
@@ -737,24 +718,21 @@ func TestNew_RequestInfoFallbackMarshalErrorIsObservable(t *testing.T) {
 		Response: reflect.TypeFor[string](),
 	}
 	binding := workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
-		Ports:        []workflow.RequestPort{port},
+		ID:               id,
+		ImplementationID: "*workflow.Executor",
+		Ports:            []workflow.RequestPort{port},
 	}
 	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
-		return &workflow.Executor{
-			ID: id,
-			Spec: newMessageSpec(&messageworkflow.Options{
-				StateKey: "bad_request_msgs",
-				TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, _ []*message.Message) error {
-					req, err := workflow.NewExternalRequest(port.ID+":chan", port, make(chan int))
-					if err != nil {
-						return err
-					}
-					return ctx.PostRequest(req)
-				},
-			}),
-		}, nil
+		return newMessageExecutor(id, &messageworkflow.Options{
+			StateKey: "bad_request_msgs",
+			TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, _ []*message.Message) error {
+				req, err := workflow.NewExternalRequest(port.ID+":chan", port, make(chan int))
+				if err != nil {
+					return err
+				}
+				return ctx.PostRequest(req)
+			},
+		}), nil
 	}
 	wf, err := workflow.NewBuilder(binding).Build()
 	if err != nil {
@@ -787,12 +765,12 @@ func TestNew_ResponsePortInterfaceTypeIsValidatedPolymorphically(t *testing.T) {
 	}
 	step := 0
 	binding := workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
-		Ports:        []workflow.RequestPort{port},
+		ID:               id,
+		ImplementationID: "*workflow.Executor",
+		Ports:            []workflow.RequestPort{port},
 	}
 	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
-		spec := newMessageSpec(&messageworkflow.Options{
+		executor := newMessageExecutor(id, &messageworkflow.Options{
 			StateKey: "poly_response_msgs",
 			TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, _ []*message.Message) error {
 				defer func() { step++ }()
@@ -807,7 +785,7 @@ func TestNew_ResponsePortInterfaceTypeIsValidatedPolymorphically(t *testing.T) {
 				return nil
 			},
 		})
-		spec.Extend(workflow.ExecutorSpec{
+		executor.Extend(&workflow.Executor{
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[*workflow.ExternalResponse](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 					resp := msg.(*workflow.ExternalResponse)
@@ -825,7 +803,7 @@ func TestNew_ResponsePortInterfaceTypeIsValidatedPolymorphically(t *testing.T) {
 				return rb, nil
 			},
 		})
-		return &workflow.Executor{ID: id, Spec: spec}, nil
+		return executor, nil
 	}
 	wf, err := workflow.NewBuilder(binding).WithOutputFrom(binding).Build()
 	if err != nil {
@@ -887,12 +865,12 @@ func approvalRequestExecutorBinding(t *testing.T, id string) workflow.ExecutorBi
 	}
 	step := 0
 	binding := workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
-		Ports:        []workflow.RequestPort{port},
+		ID:               id,
+		ImplementationID: "*workflow.Executor",
+		Ports:            []workflow.RequestPort{port},
 	}
 	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
-		spec := newMessageSpec(&messageworkflow.Options{
+		executor := newMessageExecutor(id, &messageworkflow.Options{
 			StateKey: "approval_msgs",
 			TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, _ []*message.Message) error {
 				defer func() { step++ }()
@@ -908,7 +886,7 @@ func approvalRequestExecutorBinding(t *testing.T, id string) workflow.ExecutorBi
 				return nil
 			},
 		})
-		spec.Extend(workflow.ExecutorSpec{
+		executor.Extend(&workflow.Executor{
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[*workflow.ExternalResponse](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 					resp := msg.(*workflow.ExternalResponse)
@@ -933,10 +911,7 @@ func approvalRequestExecutorBinding(t *testing.T, id string) workflow.ExecutorBi
 				return rb, nil
 			},
 		})
-		return &workflow.Executor{
-			ID:   id,
-			Spec: spec,
-		}, nil
+		return executor, nil
 	}
 	return binding
 }
@@ -1090,12 +1065,12 @@ func TestNew_MixedResponseAndRegularMessage_BothProcessed(t *testing.T) {
 	}
 	step := 0
 	binding := workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
-		Ports:        []workflow.RequestPort{port},
+		ID:               id,
+		ImplementationID: "*workflow.Executor",
+		Ports:            []workflow.RequestPort{port},
 	}
 	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
-		spec := newMessageSpec(&messageworkflow.Options{
+		executor := newMessageExecutor(id, &messageworkflow.Options{
 			StateKey: "mixed_msgs",
 			TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, msgs []*message.Message) error {
 				defer func() { step++ }()
@@ -1123,7 +1098,7 @@ func TestNew_MixedResponseAndRegularMessage_BothProcessed(t *testing.T) {
 				return ctx.YieldOutput(out)
 			},
 		})
-		spec.Extend(workflow.ExecutorSpec{
+		executor.Extend(&workflow.Executor{
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[*workflow.ExternalResponse](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 					resp := msg.(*workflow.ExternalResponse)
@@ -1141,10 +1116,7 @@ func TestNew_MixedResponseAndRegularMessage_BothProcessed(t *testing.T) {
 				return rb, nil
 			},
 		})
-		return &workflow.Executor{
-			ID:   id,
-			Spec: spec,
-		}, nil
+		return executor, nil
 	}
 
 	wf, err := workflow.NewBuilder(binding).WithOutputFrom(binding).Build()
@@ -1220,56 +1192,55 @@ func TestNew_MixedResponseDispatchesRegularMessageBeforeResponse(t *testing.T) {
 	var postedRequest bool
 	var sawRegularBeforeResponse bool
 	binding := workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
-		Ports:        []workflow.RequestPort{port},
+		ID:               id,
+		ImplementationID: "*workflow.Executor",
+		Ports:            []workflow.RequestPort{port},
 	}
 	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: id,
-			Spec: workflow.ExecutorSpec{
-				ConfigureProtocol: func(pb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					pb.YieldsOutputType(reflect.TypeFor[*message.Message]())
-					pb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[[]*message.Message](), nil, func(_ *workflow.Context, msg any) (any, error) {
-						if !postedRequest {
-							return nil, nil
-						}
-						for _, m := range msg.([]*message.Message) {
-							if m.Contents.Text() == "extra" {
-								sawRegularBeforeResponse = true
-							}
-						}
+
+			ConfigureProtocol: func(pb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				pb.YieldsOutputType(reflect.TypeFor[*message.Message]())
+				pb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[[]*message.Message](), nil, func(_ *workflow.Context, msg any) (any, error) {
+					if !postedRequest {
 						return nil, nil
-					})
-					pb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[workflow.TurnToken](), nil, func(ctx *workflow.Context, _ any) (any, error) {
-						if postedRequest {
-							return nil, nil
+					}
+					for _, m := range msg.([]*message.Message) {
+						if m.Contents.Text() == "extra" {
+							sawRegularBeforeResponse = true
 						}
-						postedRequest = true
-						call := &message.FunctionCallContent{CallID: "abc", Name: "do"}
-						req, err := workflow.NewExternalRequest(port.ID+":abc", port, call)
-						if err != nil {
-							return nil, err
-						}
-						return nil, ctx.PostRequest(req)
-					})
-					pb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[*workflow.ExternalResponse](), nil, func(ctx *workflow.Context, msg any) (any, error) {
-						resp := msg.(*workflow.ExternalResponse)
-						if _, ok := resp.Data.As(port.Response); !ok {
-							return nil, nil
-						}
-						text := "response-before-regular"
-						if sawRegularBeforeResponse {
-							text = "regular-before-response"
-						}
-						out := &message.Message{
-							Role:     message.RoleAssistant,
-							Contents: []message.Content{&message.TextContent{Text: text}},
-						}
-						return nil, ctx.YieldOutput(out)
-					})
-					return pb, nil
-				},
+					}
+					return nil, nil
+				})
+				pb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[workflow.TurnToken](), nil, func(ctx *workflow.Context, _ any) (any, error) {
+					if postedRequest {
+						return nil, nil
+					}
+					postedRequest = true
+					call := &message.FunctionCallContent{CallID: "abc", Name: "do"}
+					req, err := workflow.NewExternalRequest(port.ID+":abc", port, call)
+					if err != nil {
+						return nil, err
+					}
+					return nil, ctx.PostRequest(req)
+				})
+				pb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[*workflow.ExternalResponse](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+					resp := msg.(*workflow.ExternalResponse)
+					if _, ok := resp.Data.As(port.Response); !ok {
+						return nil, nil
+					}
+					text := "response-before-regular"
+					if sawRegularBeforeResponse {
+						text = "regular-before-response"
+					}
+					out := &message.Message{
+						Role:     message.RoleAssistant,
+						Contents: []message.Content{&message.TextContent{Text: text}},
+					}
+					return nil, ctx.YieldOutput(out)
+				})
+				return pb, nil
 			},
 		}, nil
 	}
@@ -1334,58 +1305,57 @@ func TestNew_DuplicateMatchedResponseContentIsDropped(t *testing.T) {
 	var postedRequest bool
 	var duplicateForwardedAsRegular bool
 	binding := workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
-		Ports:        []workflow.RequestPort{port},
+		ID:               id,
+		ImplementationID: "*workflow.Executor",
+		Ports:            []workflow.RequestPort{port},
 	}
 	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: id,
-			Spec: workflow.ExecutorSpec{
-				ConfigureProtocol: func(pb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					pb.YieldsOutputType(reflect.TypeFor[*message.Message]())
-					pb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[[]*message.Message](), nil, func(_ *workflow.Context, msg any) (any, error) {
-						if !postedRequest {
-							return nil, nil
-						}
-						for _, m := range msg.([]*message.Message) {
-							for _, c := range m.Contents {
-								if r, ok := c.(*message.FunctionResultContent); ok && r.CallID == "duplicate_FunctionCall:abc" {
-									duplicateForwardedAsRegular = true
-								}
+
+			ConfigureProtocol: func(pb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				pb.YieldsOutputType(reflect.TypeFor[*message.Message]())
+				pb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[[]*message.Message](), nil, func(_ *workflow.Context, msg any) (any, error) {
+					if !postedRequest {
+						return nil, nil
+					}
+					for _, m := range msg.([]*message.Message) {
+						for _, c := range m.Contents {
+							if r, ok := c.(*message.FunctionResultContent); ok && r.CallID == "duplicate_FunctionCall:abc" {
+								duplicateForwardedAsRegular = true
 							}
 						}
+					}
+					return nil, nil
+				})
+				pb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[workflow.TurnToken](), nil, func(ctx *workflow.Context, _ any) (any, error) {
+					if postedRequest {
 						return nil, nil
-					})
-					pb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[workflow.TurnToken](), nil, func(ctx *workflow.Context, _ any) (any, error) {
-						if postedRequest {
-							return nil, nil
-						}
-						postedRequest = true
-						call := &message.FunctionCallContent{CallID: "abc", Name: "do"}
-						req, err := workflow.NewExternalRequest(port.ID+":abc", port, call)
-						if err != nil {
-							return nil, err
-						}
-						return nil, ctx.PostRequest(req)
-					})
-					pb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[*workflow.ExternalResponse](), nil, func(ctx *workflow.Context, msg any) (any, error) {
-						resp := msg.(*workflow.ExternalResponse)
-						if _, ok := resp.Data.As(port.Response); !ok {
-							return nil, nil
-						}
-						text := "duplicate-dropped"
-						if duplicateForwardedAsRegular {
-							text = "duplicate-forwarded"
-						}
-						out := &message.Message{
-							Role:     message.RoleAssistant,
-							Contents: []message.Content{&message.TextContent{Text: text}},
-						}
-						return nil, ctx.YieldOutput(out)
-					})
-					return pb, nil
-				},
+					}
+					postedRequest = true
+					call := &message.FunctionCallContent{CallID: "abc", Name: "do"}
+					req, err := workflow.NewExternalRequest(port.ID+":abc", port, call)
+					if err != nil {
+						return nil, err
+					}
+					return nil, ctx.PostRequest(req)
+				})
+				pb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[*workflow.ExternalResponse](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+					resp := msg.(*workflow.ExternalResponse)
+					if _, ok := resp.Data.As(port.Response); !ok {
+						return nil, nil
+					}
+					text := "duplicate-dropped"
+					if duplicateForwardedAsRegular {
+						text = "duplicate-forwarded"
+					}
+					out := &message.Message{
+						Role:     message.RoleAssistant,
+						Contents: []message.Content{&message.TextContent{Text: text}},
+					}
+					return nil, ctx.YieldOutput(out)
+				})
+				return pb, nil
 			},
 		}, nil
 	}
@@ -1497,12 +1467,12 @@ func containsFunctionResult(messages []*message.Message) bool {
 
 func kickoffOnStartExecutorBinding(id, downstreamExecutorID, kickoffInputText, kickoffMessageText, regularResumeText, regularProcessedText string) workflow.ExecutorBinding {
 	binding := workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
-		RawValue:     struct{}{},
+		ID:               id,
+		ImplementationID: "*workflow.Executor",
+		RawValue:         struct{}{},
 	}
 	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
-		spec := newMessageSpec(&messageworkflow.Options{
+		executor := newMessageExecutor(id, &messageworkflow.Options{
 			StateKey:                 id + "_msgs",
 			DisableAutoSendTurnToken: true,
 			TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, messages []*message.Message) error {
@@ -1524,20 +1494,20 @@ func kickoffOnStartExecutorBinding(id, downstreamExecutorID, kickoffInputText, k
 				return nil
 			},
 		})
-		spec.Extend(sendMessagesAndTurnTokensSpec())
-		return &workflow.Executor{ID: id, Spec: spec}, nil
+		executor.Extend(sendMessagesAndTurnTokensExecutor())
+		return executor, nil
 	}
 	return binding
 }
 
 func turnTrackingStartExecutorBinding(id, downstreamExecutorID, activatedMarker string) workflow.ExecutorBinding {
 	binding := workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
-		RawValue:     struct{}{},
+		ID:               id,
+		ImplementationID: "*workflow.Executor",
+		RawValue:         struct{}{},
 	}
 	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
-		spec := newMessageSpec(&messageworkflow.Options{
+		executor := newMessageExecutor(id, &messageworkflow.Options{
 			StateKey:                 id + "_msgs",
 			DisableAutoSendTurnToken: true,
 			TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, messages []*message.Message) error {
@@ -1552,14 +1522,14 @@ func turnTrackingStartExecutorBinding(id, downstreamExecutorID, activatedMarker 
 				return emitTextUpdate(ctx, id, activatedMarker)
 			},
 		})
-		spec.Extend(sendMessagesAndTurnTokensSpec())
-		return &workflow.Executor{ID: id, Spec: spec}, nil
+		executor.Extend(sendMessagesAndTurnTokensExecutor())
+		return executor, nil
 	}
 	return binding
 }
 
-func sendMessagesAndTurnTokensSpec() workflow.ExecutorSpec {
-	return workflow.ExecutorSpec{
+func sendMessagesAndTurnTokensExecutor() *workflow.Executor {
+	return &workflow.Executor{
 		ConfigureProtocol: func(pb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 			return pb.SendsMessageType(
 				reflect.TypeFor[[]*message.Message](),

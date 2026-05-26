@@ -441,7 +441,8 @@ func (wb *Builder) track(binding ExecutorBinding) bool {
 	if wb.err != nil {
 		return false
 	}
-	if err := validateRawValue(binding); err != nil {
+	binding = binding.withInferredImplementationID()
+	if err := validateBinding(binding); err != nil {
 		wb.err = err
 		return false
 	}
@@ -456,12 +457,12 @@ func (wb *Builder) track(binding ExecutorBinding) bool {
 		wb.unboundExecutors[binding.ID] = struct{}{}
 	} else if !binding.isPlaceholder() {
 		// If there is already a bound executor with this ID, we need to validate (to best efforts)
-		// that the two are matching (at least based on type)
+		// that the two are matching (at least based on implementation ID)
 		if exists {
-			if existing.ExecutorType != binding.ExecutorType {
+			if existing.ImplementationID != binding.ImplementationID {
 				wb.err = fmt.Errorf(
-					"cannot bind executor with ID %q because an executor with the same ID but a different type (%q vs %q) is already bound",
-					binding.ID, existing.ExecutorType, binding.ExecutorType,
+					"cannot bind executor with ID %q because an executor with the same ID but a different implementation ID (%q vs %q) is already bound",
+					binding.ID, existing.ImplementationID, binding.ImplementationID,
 				)
 				return false
 			}
@@ -483,15 +484,10 @@ func (wb *Builder) track(binding ExecutorBinding) bool {
 	for _, port := range binding.Ports {
 		wb.trackInputPort(port)
 	}
-	if len(binding.Ports) == 0 && binding.RawValue != nil {
-		if port, ok := binding.RawValue.(RequestPort); ok {
-			wb.trackInputPort(port)
-		}
-	}
 	return true
 }
 
-func validateRawValue(binding ExecutorBinding) error {
+func validateBinding(binding ExecutorBinding) error {
 	if binding.RawValue == nil {
 		return nil
 	}

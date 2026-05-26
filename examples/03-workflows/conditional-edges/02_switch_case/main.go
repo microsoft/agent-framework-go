@@ -31,13 +31,22 @@ type DetectionResult struct {
 }
 
 func main() {
-	detect := workflow.BindFunc("SpamDetectionExecutor", detectEmail)
-	assistant := workflow.BindFunc("EmailAssistantExecutor", func(result DetectionResult) string {
+	detect := workflow.NewExecutor("SpamDetectionExecutor", func(email string) DetectionResult {
+		return detectEmail(email)
+	}).Bind()
+
+	assistant := workflow.NewExecutor("EmailAssistantExecutor", func(result DetectionResult) string {
 		return "Draft response for: " + result.Email
-	})
-	send := workflow.BindFunc("SendEmailExecutor", func(response string) string { return "Email sent: " + response })
-	spam := workflow.BindFunc("HandleSpamExecutor", func(result DetectionResult) string { return "Email marked as spam: " + result.Reason })
-	uncertain := workflow.BindFunc("HandleUncertainExecutor", func(result DetectionResult) string { return "Email queued for review: " + result.Reason })
+	}).Bind()
+
+	send := workflow.NewExecutor("SendEmailExecutor", func(response string) string { return "Email sent: " + response }).Bind()
+	spam := workflow.NewExecutor("HandleSpamExecutor", func(result DetectionResult) string {
+		return "Email marked as spam: " + result.Reason
+	}).Bind()
+
+	uncertain := workflow.NewExecutor("HandleUncertainExecutor", func(result DetectionResult) string {
+		return "Email queued for review: " + result.Reason
+	}).Bind()
 
 	b := workflow.NewBuilder(detect)
 	b.AddSwitch(detect).

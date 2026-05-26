@@ -285,7 +285,8 @@ func newTestWorkflow(t *testing.T, edges ...workflow.Edge) (*workflow.Workflow, 
 			return existing
 		}
 		binding := workflow.ExecutorBinding{
-			ID: id,
+			ID:               id,
+			ImplementationID: "workflow_test.stringExecutor",
 			NewExecutorFunc: func(string) (*workflow.Executor, error) {
 				return stringExecutor(id), nil
 			},
@@ -437,13 +438,12 @@ type deliveryResult struct {
 func stringExecutor(id string) *workflow.Executor {
 	return &workflow.Executor{
 		ID: id,
-		Spec: workflow.ExecutorSpec{
-			ConfigureProtocol: func(builder *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-				builder.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(*workflow.Context, any) (any, error) {
-					return nil, nil
-				})
-				return builder, nil
-			},
+
+		ConfigureProtocol: func(builder *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+			builder.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(*workflow.Context, any) (any, error) {
+				return nil, nil
+			})
+			return builder, nil
 		},
 	}
 }

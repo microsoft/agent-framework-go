@@ -3,38 +3,26 @@
 package main
 
 import (
-	"cmp"
 	"context"
 	"fmt"
-	"os"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/hosting/workflowhosting"
-	"github.com/microsoft/agent-framework-go/agent/provider/openaiagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
-	"github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/azure"
-)
-
-var (
-	endpoint   = os.Getenv("AZURE_OPENAI_ENDPOINT")
-	apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
-	deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
 )
 
 var logger = demo.NewLogger(
 	"Agents in Workflows",
 	"This sample runs translation agents as workflow executors.",
-	"Model", deployment,
+	"Model", demo.Deployment,
 )
 
 func main() {
 	cfg := workflowhosting.Config{
-		DisableForwardIncomingMessages:    true,
-		DisableReassignOtherAgentsAsUsers: true,
+		DisableForwardIncomingMessages: true,
 	}
 	french := workflowhosting.New(newTranslationAgent("French"), cfg)
 	spanish := workflowhosting.New(newTranslationAgent("Spanish"), cfg)
@@ -74,19 +62,9 @@ func main() {
 }
 
 func newTranslationAgent(language string) *agent.Agent {
-	token := demo.AzureTokenCredential()
-	return openaiagent.NewChatCompletions(
-		openai.NewClient(
-			azure.WithEndpoint(endpoint, apiVersion),
-			azure.WithTokenCredential(token),
-		),
-		openaiagent.Config{
-			Model:        deployment,
-			Instructions: fmt.Sprintf("Translate the user's text to %s. Return only the translation.", language),
-			Config: agent.Config{
-				Name:        language,
-				Middlewares: []agent.Middleware{logger},
-			},
-		},
+	return demo.NewAzureChatAgent(
+		language,
+		fmt.Sprintf("Translate the user's text to %s. Return only the translation.", language),
+		logger,
 	)
 }

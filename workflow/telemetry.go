@@ -35,7 +35,7 @@ func (o TelemetryOptions) observabilityOptions(tracer workflowobservability.Trac
 }
 
 type workflowTelemetryDefinition struct {
-	Executors         map[string]TypeID     `json:"executors"`
+	Executors         map[string]string     `json:"executors"`
 	Edges             map[string][]EdgeInfo `json:"edges"`
 	RequestPorts      []RequestPortInfo     `json:"requestPorts"`
 	StartExecutorID   string                `json:"startExecutorId"`
@@ -46,9 +46,9 @@ func workflowTelemetryDefinitionFrom(wf *Workflow) workflowTelemetryDefinition {
 	if wf == nil {
 		return workflowTelemetryDefinition{}
 	}
-	executors := make(map[string]TypeID, len(wf.executorBindings))
+	executors := make(map[string]string, len(wf.executorBindings))
 	for id, binding := range wf.executorBindings {
-		executors[id] = NewTypeID(binding.ExecutorType)
+		executors[id] = binding.ImplementationID
 	}
 	ports := make([]RequestPortInfo, 0, len(wf.ports))
 	for _, port := range wf.ports {

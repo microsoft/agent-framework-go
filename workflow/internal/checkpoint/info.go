@@ -2,23 +2,15 @@
 
 package checkpoint
 
-import (
-	"reflect"
-
-	"github.com/microsoft/agent-framework-go/workflow"
-)
+import "github.com/microsoft/agent-framework-go/workflow"
 
 type executorInfo struct {
-	Type       workflow.TypeID
-	ExecutorID string
-}
-
-func (e *executorInfo) matchType(typ reflect.Type) bool {
-	return e.Type.Match(typ)
+	ImplementationID string
+	ExecutorID       string
 }
 
 func (e *executorInfo) matchBinding(executor workflow.ExecutorBinding) bool {
-	return e.ExecutorID == executor.ID && e.matchType(executor.ExecutorType)
+	return e.ExecutorID == executor.ID && e.ImplementationID != "" && e.ImplementationID == executor.ImplementationID
 }
 
 type WorkflowInfo struct {
@@ -34,8 +26,8 @@ func NewWorkflowInfo(wf *workflow.Workflow) WorkflowInfo {
 	executors := make(map[string]executorInfo, len(bindings))
 	for id, binding := range bindings {
 		executors[id] = executorInfo{
-			Type:       workflow.NewTypeID(binding.ExecutorType),
-			ExecutorID: binding.ID,
+			ImplementationID: binding.ImplementationID,
+			ExecutorID:       binding.ID,
 		}
 	}
 

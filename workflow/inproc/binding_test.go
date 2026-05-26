@@ -5,6 +5,7 @@ package inproc_test
 import (
 	"context"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -17,16 +18,285 @@ type (
 	dataMessage struct{ Bytes []byte }
 )
 
-func TestBindFunc_InvokesHandler_NoOutput(t *testing.T) {
+func namedExecutorFunc3Implementation(ctx *workflow.Context, in textMessage) error {
+	return ctx.SendMessage("", dataMessage{Bytes: []byte(in.Text)})
+}
+
+func namedExecutorFunc1Implementation(_ textMessage) {}
+
+func namedExecutorFunc2Implementation(in textMessage) dataMessage {
+	return dataMessage{Bytes: []byte(in.Text)}
+}
+
+func namedExecutorFuncImplementation(_ *workflow.Context, in textMessage) (dataMessage, error) {
+	return dataMessage{Bytes: []byte(in.Text)}, nil
+}
+
+func namedNewExecutorFactory(string) (*workflow.Executor, error) {
+	return &workflow.Executor{ID: "factory"}, nil
+}
+
+func namedBoundNewExecutorFactory(_ string, executorID string) (*workflow.Executor, error) {
+	return &workflow.Executor{ID: executorID}, nil
+}
+
+func TestNewExecutor_ContextActionImplementationIDUsesNamedFunction(t *testing.T) {
+	executor := workflow.NewExecutor("fallback", namedExecutorFunc3Implementation)
+	if executor.ImplementationID == "fallback" {
+		t.Fatalf("ImplementationID = %q, want named function", executor.ImplementationID)
+	}
+	if !strings.HasSuffix(executor.ImplementationID, ".namedExecutorFunc3Implementation") {
+		t.Fatalf("ImplementationID = %q, want suffix .namedExecutorFunc3Implementation", executor.ImplementationID)
+	}
+}
+
+func TestNewExecutor_ContextActionImplementationIDUsesIDForAnonymousFunction(t *testing.T) {
+	executor := workflow.NewExecutor("anonymous", func(_ *workflow.Context, _ textMessage) error {
+		return nil
+	})
+	if executor.ImplementationID != "anonymous" {
+		t.Fatalf("ImplementationID = %q, want anonymous", executor.ImplementationID)
+	}
+}
+
+func TestNewExecutor_ActionImplementationIDUsesNamedFunction(t *testing.T) {
+	executor := workflow.NewExecutor("fallback", namedExecutorFunc1Implementation)
+	if executor.ImplementationID == "fallback" {
+		t.Fatalf("ImplementationID = %q, want named function", executor.ImplementationID)
+	}
+	if !strings.HasSuffix(executor.ImplementationID, ".namedExecutorFunc1Implementation") {
+		t.Fatalf("ImplementationID = %q, want suffix .namedExecutorFunc1Implementation", executor.ImplementationID)
+	}
+}
+
+func TestNewExecutor_ActionImplementationIDUsesIDForAnonymousFunction(t *testing.T) {
+	executor := workflow.NewExecutor("anonymous", func(_ textMessage) {})
+	if executor.ImplementationID != "anonymous" {
+		t.Fatalf("ImplementationID = %q, want anonymous", executor.ImplementationID)
+	}
+}
+
+func TestNewExecutor_ValueImplementationIDUsesNamedFunction(t *testing.T) {
+	executor := workflow.NewExecutor("fallback", namedExecutorFunc2Implementation)
+	if executor.ImplementationID == "fallback" {
+		t.Fatalf("ImplementationID = %q, want named function", executor.ImplementationID)
+	}
+	if !strings.HasSuffix(executor.ImplementationID, ".namedExecutorFunc2Implementation") {
+		t.Fatalf("ImplementationID = %q, want suffix .namedExecutorFunc2Implementation", executor.ImplementationID)
+	}
+}
+
+func TestNewExecutor_ValueImplementationIDUsesIDForAnonymousFunction(t *testing.T) {
+	executor := workflow.NewExecutor("anonymous", func(in textMessage) dataMessage {
+		return dataMessage{Bytes: []byte(in.Text)}
+	})
+	if executor.ImplementationID != "anonymous" {
+		t.Fatalf("ImplementationID = %q, want anonymous", executor.ImplementationID)
+	}
+}
+
+func TestNewExecutor_ContextValueImplementationIDUsesNamedFunction(t *testing.T) {
+	executor := workflow.NewExecutor("fallback", namedExecutorFuncImplementation)
+	if executor.ImplementationID == "fallback" {
+		t.Fatalf("ImplementationID = %q, want named function", executor.ImplementationID)
+	}
+	if !strings.HasSuffix(executor.ImplementationID, ".namedExecutorFuncImplementation") {
+		t.Fatalf("ImplementationID = %q, want suffix .namedExecutorFuncImplementation", executor.ImplementationID)
+	}
+}
+
+func TestNewExecutor_ContextValueImplementationIDUsesIDForAnonymousFunction(t *testing.T) {
+	executor := workflow.NewExecutor("anonymous", func(_ *workflow.Context, in textMessage) (dataMessage, error) {
+		return dataMessage{Bytes: []byte(in.Text)}, nil
+	})
+	if executor.ImplementationID != "anonymous" {
+		t.Fatalf("ImplementationID = %q, want anonymous", executor.ImplementationID)
+	}
+}
+
+func TestExecutorBinding_ImplementationIDUsesNamedFactory(t *testing.T) {
+	binding := workflow.ExecutorBinding{ID: "factory", NewExecutorFunc: namedNewExecutorFactory}
+	executor, err := binding.CreateInstance("session")
+	if err != nil {
+		t.Fatalf("CreateInstance: %v", err)
+	}
+	if executor.ImplementationID == "factory" {
+		t.Fatalf("ImplementationID = %q, want named function", executor.ImplementationID)
+	}
+	if !strings.HasSuffix(executor.ImplementationID, ".namedNewExecutorFactory") {
+		t.Fatalf("ImplementationID = %q, want suffix .namedNewExecutorFactory", executor.ImplementationID)
+	}
+}
+
+func TestExecutorBinding_ImplementationIDUsesIDForAnonymousFactory(t *testing.T) {
+	binding := workflow.ExecutorBinding{
+		ID: "anonymous-factory",
+		NewExecutorFunc: func(string) (*workflow.Executor, error) {
+			return &workflow.Executor{ID: "anonymous-factory"}, nil
+		},
+	}
+	executor, err := binding.CreateInstance("session")
+	if err != nil {
+		t.Fatalf("CreateInstance: %v", err)
+	}
+	if executor.ImplementationID != "anonymous-factory" {
+		t.Fatalf("ImplementationID = %q, want anonymous-factory", executor.ImplementationID)
+	}
+}
+
+func TestBindNewExecutorFunc_RecordsFactoryBinding(t *testing.T) {
+	binding := workflow.BindNewExecutorFunc("factory", namedBoundNewExecutorFactory)
+	if binding.ID != "factory" {
+		t.Fatalf("ID = %q, want factory", binding.ID)
+	}
+	if binding.SharedInstance {
+		t.Fatal("SharedInstance = true, want false")
+	}
+	if binding.SupportsConcurrentSharedExecution {
+		t.Fatal("SupportsConcurrentSharedExecution = true, want false")
+	}
+	if !binding.TryReset() {
+		t.Fatal("TryReset = false, want true for non-shared factory binding")
+	}
+	if binding.ImplementationID == "factory" {
+		t.Fatalf("ImplementationID = %q, want named function", binding.ImplementationID)
+	}
+	if !strings.HasSuffix(binding.ImplementationID, ".namedBoundNewExecutorFactory") {
+		t.Fatalf("ImplementationID = %q, want suffix .namedBoundNewExecutorFactory", binding.ImplementationID)
+	}
+
+	executor, err := binding.CreateInstance("session")
+	if err != nil {
+		t.Fatalf("CreateInstance: %v", err)
+	}
+	if executor.ImplementationID != binding.ImplementationID {
+		t.Fatalf("executor ImplementationID = %q, want %q", executor.ImplementationID, binding.ImplementationID)
+	}
+}
+
+func TestBindNewExecutorFunc_StampsAnonymousFactoryIdentity(t *testing.T) {
+	var gotSessionID, gotExecutorID string
+	binding := workflow.BindNewExecutorFunc("anonymous-factory", func(sessionID string, executorID string) (*workflow.Executor, error) {
+		gotSessionID = sessionID
+		gotExecutorID = executorID
+		return workflow.NewExecutor(executorID, namedExecutorFunc1Implementation), nil
+	})
+	executor, err := binding.CreateInstance("session")
+	if err != nil {
+		t.Fatalf("CreateInstance: %v", err)
+	}
+	if gotSessionID != "session" {
+		t.Fatalf("sessionID = %q, want session", gotSessionID)
+	}
+	if gotExecutorID != "anonymous-factory" {
+		t.Fatalf("executorID = %q, want anonymous-factory", gotExecutorID)
+	}
+	if executor.ImplementationID != "anonymous-factory" {
+		t.Fatalf("executor ImplementationID = %q, want anonymous-factory", executor.ImplementationID)
+	}
+}
+
+func TestBindNewExecutorFunc_RejectsMismatchedExecutorID(t *testing.T) {
+	binding := workflow.BindNewExecutorFunc("factory", func(string, string) (*workflow.Executor, error) {
+		return &workflow.Executor{ID: "other"}, nil
+	})
+	_, err := binding.NewExecutorFunc("session")
+	if err == nil {
+		t.Fatal("NewExecutorFunc returned nil error")
+	}
+	if !strings.Contains(err.Error(), `Executor ID mismatch: expected "factory", but got "other"`) {
+		t.Fatalf("error = %q, want executor ID mismatch", err)
+	}
+}
+
+func TestBindNewExecutorFunc_PanicsOnNilFactory(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("BindNewExecutorFunc did not panic")
+		}
+	}()
+	workflow.BindNewExecutorFunc("factory", nil)
+}
+
+func TestFunctionStyleBindings_DefaultToNonConcurrent(t *testing.T) {
+	tests := []struct {
+		name    string
+		binding workflow.ExecutorBinding
+	}{
+		{
+			name:    "NewExecutor func(T)",
+			binding: workflow.NewExecutor("fn0", func(_ textMessage) {}).Bind(),
+		},
+		{
+			name: "NewExecutor func(T) U",
+			binding: workflow.NewExecutor("fn1", func(in textMessage) dataMessage {
+				return dataMessage{Bytes: []byte(in.Text)}
+			}).Bind(),
+		},
+		{
+			name: "NewExecutor func(*Context, T) error",
+			binding: workflow.NewExecutor("fn", func(_ *workflow.Context, _ textMessage) error {
+				return nil
+			}).Bind(),
+		},
+		{
+			name: "NewExecutor func(*Context, T) (U, error)",
+			binding: workflow.NewExecutor("fn-output", func(_ *workflow.Context, in textMessage) (dataMessage, error) {
+				return dataMessage{Bytes: []byte(in.Text)}, nil
+			}).Bind(),
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			if testCase.binding.SupportsConcurrentSharedExecution {
+				t.Fatal("SupportsConcurrentSharedExecution = true, want false")
+			}
+		})
+	}
+}
+
+func TestExecutorBinding_CreateInstanceStampsImplementationID(t *testing.T) {
+	binding := workflow.ExecutorBinding{
+		ID: "factory",
+		NewExecutorFunc: func(string) (*workflow.Executor, error) {
+			return &workflow.Executor{ID: "factory"}, nil
+		},
+	}
+	executor, err := binding.CreateInstance("session")
+	if err != nil {
+		t.Fatalf("CreateInstance: %v", err)
+	}
+	if executor.ImplementationID != "factory" {
+		t.Fatalf("executor ImplementationID = %q, want factory", executor.ImplementationID)
+	}
+}
+
+func TestExecutorBinding_CreateInstanceInfersImplementationID(t *testing.T) {
+	binding := workflow.ExecutorBinding{
+		ID: "direct",
+		NewExecutorFunc: func(string) (*workflow.Executor, error) {
+			return &workflow.Executor{ID: "direct"}, nil
+		},
+	}
+	executor, err := binding.CreateInstance("session")
+	if err != nil {
+		t.Fatalf("CreateInstance: %v", err)
+	}
+	if executor.ImplementationID != "direct" {
+		t.Fatalf("executor ImplementationID = %q, want direct", executor.ImplementationID)
+	}
+}
+
+func TestNewExecutor_ActionInvokesHandlerWithMessage(t *testing.T) {
 	called := false
-	id := "fn"
-	binding := workflow.BindFunc(id, func(in textMessage) struct{} {
-		called = true
+	binding := workflow.NewExecutor("fn0", func(in textMessage) {
 		if in.Text != "hello" {
 			t.Errorf("handler input = %q, want %q", in.Text, "hello")
 		}
-		return struct{}{}
-	})
+		called = true
+	}).Bind()
+
 	wf, err := workflow.NewBuilder(binding).Build()
 	if err != nil {
 		t.Fatalf("Build: %v", err)
@@ -40,11 +310,12 @@ func TestBindFunc_InvokesHandler_NoOutput(t *testing.T) {
 	}
 }
 
-func TestBindFunc_InvokesHandler_WithOutput(t *testing.T) {
-	id := "fn"
-	binding := workflow.BindFunc(id, func(in textMessage) dataMessage {
+func TestNewExecutor_ValueInvokesHandlerWithMessage(t *testing.T) {
+	id := "fn1"
+	binding := workflow.NewExecutor(id, func(in textMessage) dataMessage {
 		return dataMessage{Bytes: []byte(in.Text)}
-	})
+	}).Bind()
+
 	wf, err := workflow.NewBuilder(binding).
 		WithOutputFrom(binding).
 		Build()
@@ -72,6 +343,192 @@ func TestBindFunc_InvokesHandler_WithOutput(t *testing.T) {
 	}
 	if string(got.Bytes) != "abc" {
 		t.Errorf("OutputEvent.Output bytes = %q, want %q", got.Bytes, "abc")
+	}
+}
+
+func TestNewExecutor_ContextActionInvokesHandlerWithMessage(t *testing.T) {
+	called := false
+	binding := workflow.NewExecutor("fn", func(ctx *workflow.Context, in textMessage) error {
+		if ctx == nil || ctx.Context == nil {
+			t.Fatal("handler received nil workflow context")
+		}
+		if in.Text != "hello" {
+			t.Errorf("handler input = %q, want %q", in.Text, "hello")
+		}
+		called = true
+		return nil
+	}).Bind()
+
+	wf, err := workflow.NewBuilder(binding).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	if _, err := inproc.Default.Run(context.Background(), wf, textMessage{Text: "hello"}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !called {
+		t.Fatal("handler was not invoked")
+	}
+}
+
+func TestNewExecutor_ContextValueInvokesHandlerWithMessage(t *testing.T) {
+	id := "fn"
+	binding := workflow.NewExecutor(id, func(ctx *workflow.Context, in textMessage) (dataMessage, error) {
+		if ctx == nil || ctx.Context == nil {
+			t.Fatal("handler received nil workflow context")
+		}
+		return dataMessage{Bytes: []byte(in.Text)}, nil
+	}).Bind()
+
+	wf, err := workflow.NewBuilder(binding).
+		WithOutputFrom(binding).
+		Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	run, err := inproc.Default.Run(context.Background(), wf, textMessage{Text: "abc"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var out *workflow.OutputEvent
+	for evt := range run.OutgoingEvents() {
+		if e, ok := evt.(workflow.OutputEvent); ok {
+			out = &e
+		}
+	}
+	if out == nil {
+		t.Fatal("expected an OutputEvent")
+	}
+	got, ok := out.Output.(dataMessage)
+	if !ok {
+		t.Fatalf("OutputEvent.Output type = %T, want dataMessage", out.Output)
+	}
+	if string(got.Bytes) != "abc" {
+		t.Errorf("OutputEvent.Output bytes = %q, want %q", got.Bytes, "abc")
+	}
+}
+
+func TestActionHandler_SendsDeclaredMessageType(t *testing.T) {
+	executor := &workflow.Executor{
+		ID:               "message-handler",
+		ImplementationID: "test.message-handler",
+		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+			rb.SendsMessageType(reflect.TypeFor[dataMessage]())
+			rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[textMessage](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+				return nil, ctx.SendMessage("", dataMessage{Bytes: []byte(msg.(textMessage).Text)})
+			})
+			return rb, nil
+		},
+	}
+	start := executor.Bind()
+	sink := workflow.NewExecutor("sink", func(in dataMessage) textMessage {
+		return textMessage{Text: string(in.Bytes)}
+	}).Bind()
+
+	wf, err := workflow.NewBuilder(start).
+		AddEdge(start, sink).
+		WithOutputFrom(sink).
+		Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	run, err := inproc.Default.Run(context.Background(), wf, textMessage{Text: "abc"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var out *workflow.OutputEvent
+	for evt := range run.OutgoingEvents() {
+		if e, ok := evt.(workflow.OutputEvent); ok {
+			out = &e
+		}
+	}
+	if out == nil {
+		t.Fatal("expected an OutputEvent")
+	}
+	got, ok := out.Output.(textMessage)
+	if !ok {
+		t.Fatalf("OutputEvent.Output type = %T, want textMessage", out.Output)
+	}
+	if got.Text != "abc" {
+		t.Fatalf("OutputEvent.Output.Text = %q, want abc", got.Text)
+	}
+}
+
+func TestActionHandler_YieldsDeclaredOutputType(t *testing.T) {
+	executor := &workflow.Executor{
+		ID:               "yield-handler",
+		ImplementationID: "test.yield-handler",
+		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+			rb.YieldsOutputType(reflect.TypeFor[dataMessage]())
+			rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[textMessage](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+				return nil, ctx.YieldOutput(dataMessage{Bytes: []byte(msg.(textMessage).Text)})
+			})
+			return rb, nil
+		},
+	}
+	binding := executor.Bind()
+	wf, err := workflow.NewBuilder(binding).
+		WithOutputFrom(binding).
+		Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	run, err := inproc.Default.Run(context.Background(), wf, textMessage{Text: "abc"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var out *workflow.OutputEvent
+	for evt := range run.OutgoingEvents() {
+		if e, ok := evt.(workflow.OutputEvent); ok {
+			out = &e
+		}
+	}
+	if out == nil {
+		t.Fatal("expected an OutputEvent")
+	}
+	got, ok := out.Output.(dataMessage)
+	if !ok {
+		t.Fatalf("OutputEvent.Output type = %T, want dataMessage", out.Output)
+	}
+	if string(got.Bytes) != "abc" {
+		t.Fatalf("OutputEvent.Output.Bytes = %q, want abc", got.Bytes)
+	}
+}
+
+func TestHandlerWithoutOutputTypeDoesNotAutoOutputReturnValue(t *testing.T) {
+	binding := workflow.BindNewExecutorFunc("action", func(_ string, executorID string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: executorID,
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[textMessage](), nil, func(_ *workflow.Context, msg any) (any, error) {
+					return dataMessage{Bytes: []byte(msg.(textMessage).Text)}, nil
+				})
+				return rb, nil
+			},
+		}, nil
+	})
+	wf, err := workflow.NewBuilder(binding).
+		WithOutputFrom(binding).
+		Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	run, err := inproc.Default.Run(context.Background(), wf, textMessage{Text: "abc"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	outputs := outputEvents(slices.Collect(run.OutgoingEvents()))
+	if len(outputs) != 0 {
+		t.Fatalf("output count = %d, want 0; outputs: %#v", len(outputs), outputs)
 	}
 }
 
@@ -216,73 +673,48 @@ func (grandchildPolymorphicOutput) OutputName() string { return "grandchild" }
 type unrelatedOutput struct{}
 
 func polymorphicOutputBinding(id string, output polymorphicOutput) workflow.ExecutorBinding {
-	binding := workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
-	}
-	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
+	return workflow.BindNewExecutorFunc(id, func(_ string, executorID string) (*workflow.Executor, error) {
 		return &workflow.Executor{
-			ID: id,
-			Spec: workflow.ExecutorSpec{
-				DisableAutoSendMessageHandlerResultObject: true,
-				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[polymorphicOutput](), func(_ *workflow.Context, _ any) (any, error) {
-						return output, nil
-					})
-					return rb, nil
-				},
+			ID: executorID,
+			DisableAutoSendMessageHandlerResultObject: true,
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[polymorphicOutput](), func(_ *workflow.Context, _ any) (any, error) {
+					return output, nil
+				})
+				return rb, nil
 			},
 		}, nil
-	}
-	return binding
+	})
 }
 
 func unrelatedOutputBinding(id string) workflow.ExecutorBinding {
-	binding := workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
-	}
-	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
+	return workflow.BindNewExecutorFunc(id, func(_ string, executorID string) (*workflow.Executor, error) {
 		return &workflow.Executor{
-			ID: id,
-			Spec: workflow.ExecutorSpec{
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
-				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					rb.YieldsOutputType(reflect.TypeFor[polymorphicOutput]())
-					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[polymorphicOutput](), func(ctx *workflow.Context, _ any) (any, error) {
-						return nil, ctx.YieldOutput(unrelatedOutput{})
-					})
-					return rb, nil
-				},
+			ID: executorID,
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.YieldsOutputType(reflect.TypeFor[polymorphicOutput]())
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[polymorphicOutput](), func(ctx *workflow.Context, _ any) (any, error) {
+					return nil, ctx.YieldOutput(unrelatedOutput{})
+				})
+				return rb, nil
 			},
 		}, nil
-	}
-	return binding
+	})
 }
 
 func explicitYieldBinding(id string, output any) workflow.ExecutorBinding {
-	binding := workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
-	}
-	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
+	return workflow.BindNewExecutorFunc(id, func(_ string, executorID string) (*workflow.Executor, error) {
 		return &workflow.Executor{
-			ID: id,
-			Spec: workflow.ExecutorSpec{
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
-				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					rb.YieldsOutputType(reflect.TypeFor[dataMessage]())
-					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
-						return nil, ctx.YieldOutput(output)
-					})
-					return rb, nil
-				},
+			ID: executorID,
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.YieldsOutputType(reflect.TypeFor[dataMessage]())
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
+					return nil, ctx.YieldOutput(output)
+				})
+				return rb, nil
 			},
 		}, nil
-	}
-	return binding
+	})
 }
 
 func runAndCollectEvents(t *testing.T, wf *workflow.Workflow, input any) []workflow.Event {
@@ -325,11 +757,12 @@ func errorEvents(events []workflow.Event) []workflow.ErrorEvent {
 	return errors
 }
 
-func TestBindFunc_DescribesProtocol(t *testing.T) {
+func TestNewExecutor_DescribesProtocol(t *testing.T) {
 	id := "fn"
-	binding := workflow.BindFunc(id, func(in textMessage) dataMessage {
+	binding := workflow.NewExecutor(id, func(in textMessage) dataMessage {
 		return dataMessage{Bytes: []byte(in.Text)}
-	})
+	}).Bind()
+
 	wf, err := workflow.NewBuilder(binding).Build()
 	if err != nil {
 		t.Fatalf("Build: %v", err)
@@ -387,31 +820,14 @@ func TestFunctionExecutor_ReturnValueAutoSendAndYieldOptions(t *testing.T) {
 
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
-			source := returnedDataBinding("source", workflow.ExecutorSpec{
+			source := returnedDataBinding("source", &workflow.Executor{
 				DisableAutoSendMessageHandlerResultObject: !testCase.autoSend,
 				DisableAutoYieldOutputHandlerResultObject: !testCase.autoYield,
 			})
-			sink := workflow.ExecutorBinding{
-				ID:           "sink",
-				ExecutorType: reflect.TypeFor[*workflow.Executor](),
-			}
 			var gotAtSink []dataMessage
-			sink.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
-				return &workflow.Executor{
-					ID: sink.ID,
-					Spec: workflow.ExecutorSpec{
-						DisableAutoSendMessageHandlerResultObject: true,
-						DisableAutoYieldOutputHandlerResultObject: true,
-						ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-							rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[dataMessage](), nil, func(_ *workflow.Context, msg any) (any, error) {
-								gotAtSink = append(gotAtSink, msg.(dataMessage))
-								return nil, nil
-							})
-							return rb, nil
-						},
-					},
-				}, nil
-			}
+			sink := workflow.NewExecutor("sink", func(msg dataMessage) {
+				gotAtSink = append(gotAtSink, msg)
+			}).Bind()
 
 			wf, err := workflow.NewBuilder(source).
 				AddEdge(source, sink).
@@ -452,14 +868,11 @@ func TestFunctionExecutor_ReturnValueAutoSendAndYieldOptions(t *testing.T) {
 	}
 }
 
-func returnedDataBinding(id string, options workflow.ExecutorSpec) workflow.ExecutorBinding {
-	binding := workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
-	}
-	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
-		spec := options
-		spec.Extend(workflow.ExecutorSpec{
+func returnedDataBinding(id string, options *workflow.Executor) workflow.ExecutorBinding {
+	return workflow.BindNewExecutorFunc(id, func(_ string, executorID string) (*workflow.Executor, error) {
+		executor := workflow.Executor{ID: executorID}
+		executor.Extend(options)
+		executor.Extend(&workflow.Executor{
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[textMessage](), reflect.TypeFor[dataMessage](), func(_ *workflow.Context, msg any) (any, error) {
 					input := msg.(textMessage)
@@ -468,12 +881,8 @@ func returnedDataBinding(id string, options workflow.ExecutorSpec) workflow.Exec
 				return rb, nil
 			},
 		})
-		return &workflow.Executor{
-			ID:   id,
-			Spec: spec,
-		}, nil
-	}
-	return binding
+		return &executor, nil
+	})
 }
 
 func boolCount(value bool) int {
@@ -483,39 +892,31 @@ func boolCount(value bool) int {
 	return 0
 }
 
-func TestBindRequestPort_PostsRequestAndForwardsResponse(t *testing.T) {
+func TestRequestPortBind_PostsRequestAndForwardsResponse(t *testing.T) {
 	port := workflow.RequestPort{
 		ID:       "ask",
 		Request:  reflect.TypeFor[string](),
 		Response: reflect.TypeFor[int](),
 	}
-	portBinding := workflow.BindRequestPort(port)
+	portBinding := port.Bind()
 
 	id := "sink"
-	sinkBinding := workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
-	}
 	var receivedAtSink int
 	var sawAtSink bool
-	sinkBinding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
+	sinkBinding := workflow.BindNewExecutorFunc(id, func(_ string, executorID string) (*workflow.Executor, error) {
 		return &workflow.Executor{
-			ID: id,
-			Spec: workflow.ExecutorSpec{
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
-				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					rb.YieldsOutputType(reflect.TypeFor[int]())
-					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[int](), nil, func(ctx *workflow.Context, msg any) (any, error) {
-						receivedAtSink = msg.(int)
-						sawAtSink = true
-						return nil, ctx.YieldOutput(msg)
-					})
-					return rb, nil
-				},
+			ID: executorID,
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.YieldsOutputType(reflect.TypeFor[int]())
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[int](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+					receivedAtSink = msg.(int)
+					sawAtSink = true
+					return nil, ctx.YieldOutput(msg)
+				})
+				return rb, nil
 			},
 		}, nil
-	}
+	})
 
 	wf, err := workflow.NewBuilder(portBinding).
 		AddEdge(portBinding, sinkBinding).
@@ -567,13 +968,13 @@ func TestBindRequestPort_PostsRequestAndForwardsResponse(t *testing.T) {
 	}
 }
 
-func TestBindRequestPort_RejectsResponseForOtherPort(t *testing.T) {
+func TestRequestPortBind_RejectsResponseForOtherPort(t *testing.T) {
 	port := workflow.RequestPort{
 		ID:       "ask",
 		Request:  reflect.TypeFor[string](),
 		Response: reflect.TypeFor[int](),
 	}
-	portBinding := workflow.BindRequestPort(port)
+	portBinding := port.Bind()
 
 	wf, err := workflow.NewBuilder(portBinding).Build()
 	if err != nil {
@@ -614,7 +1015,7 @@ func TestBindRequestPort_RejectsResponseForOtherPort(t *testing.T) {
 	}
 }
 
-func TestBindRequestPort_ForwardsExternalRequestAndRestoresOriginalResponse(t *testing.T) {
+func TestRequestPortBind_ForwardsExternalRequestAndRestoresOriginalResponse(t *testing.T) {
 	outerPort := workflow.RequestPort{
 		ID:       "outer",
 		Request:  reflect.TypeFor[string](),
@@ -625,53 +1026,28 @@ func TestBindRequestPort_ForwardsExternalRequestAndRestoresOriginalResponse(t *t
 		Request:  reflect.TypeFor[string](),
 		Response: reflect.TypeFor[int](),
 	}
-	innerBinding := workflow.BindRequestPort(innerPort)
+	innerBinding := innerPort.Bind()
 
-	forwarder := workflow.ExecutorBinding{
-		ID:           "forwarder",
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
-	}
-	forwarder.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
+	forwarder := workflow.BindNewExecutorFunc("forwarder", func(_ string, executorID string) (*workflow.Executor, error) {
 		return &workflow.Executor{
-			ID: forwarder.ID,
-			Spec: workflow.ExecutorSpec{
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
-				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
-						request, err := workflow.NewExternalRequest("original-request", outerPort, msg)
-						if err != nil {
-							return nil, err
-						}
-						return nil, ctx.SendMessage(innerBinding.ID, request)
-					})
-					return rb, nil
-				},
+			ID: executorID,
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+					request, err := workflow.NewExternalRequest("original-request", outerPort, msg)
+					if err != nil {
+						return nil, err
+					}
+					return nil, ctx.SendMessage(innerBinding.ID, request)
+				})
+				return rb, nil
 			},
 		}, nil
-	}
+	})
 
-	responseSink := workflow.ExecutorBinding{
-		ID:           "response-sink",
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
-	}
 	var gotResponse *workflow.ExternalResponse
-	responseSink.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
-		return &workflow.Executor{
-			ID: responseSink.ID,
-			Spec: workflow.ExecutorSpec{
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
-				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[*workflow.ExternalResponse](), nil, func(_ *workflow.Context, msg any) (any, error) {
-						gotResponse = msg.(*workflow.ExternalResponse)
-						return nil, nil
-					})
-					return rb, nil
-				},
-			},
-		}, nil
-	}
+	responseSink := workflow.NewExecutor("response-sink", func(msg *workflow.ExternalResponse) {
+		gotResponse = msg
+	}).Bind()
 
 	wf, err := workflow.NewBuilder(forwarder).
 		AddEdge(forwarder, innerBinding).

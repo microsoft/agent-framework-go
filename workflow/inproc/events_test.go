@@ -19,22 +19,18 @@ import (
 
 func minimalEchoBinding(id string) workflow.ExecutorBinding {
 	binding := workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		ID:               id,
+		ImplementationID: "*workflow.Executor",
 	}
 	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: id,
-			Spec: workflow.ExecutorSpec{
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
-				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					rb.YieldsOutputType(reflect.TypeFor[string]())
-					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
-						return nil, ctx.YieldOutput("ok")
-					})
-					return rb, nil
-				},
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.YieldsOutputType(reflect.TypeFor[string]())
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
+					return nil, ctx.YieldOutput("ok")
+				})
+				return rb, nil
 			},
 		}, nil
 	}
@@ -522,38 +518,34 @@ type trackingExecutor struct {
 
 func (te *trackingExecutor) Bind() workflow.ExecutorBinding {
 	binding := workflow.ExecutorBinding{
-		ID:           te.id,
-		ExecutorType: reflect.TypeFor[*trackingExecutor](),
-		RawValue:     te,
+		ID:               te.id,
+		ImplementationID: "*trackingExecutor",
+		RawValue:         te,
 	}
 	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: te.id,
-			Spec: workflow.ExecutorSpec{
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
-				OnMessageDeliveryStarting: func(_ *workflow.Context) error {
-					te.deliveryStarting.Add(1)
-					return nil
-				},
-				OnMessageDeliveryFinished: func(_ *workflow.Context) error {
-					te.deliveryFinished.Add(1)
-					return nil
-				},
-				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					rb.SendsMessageType(reflect.TypeFor[string]())
-					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
-						s := msg.(string)
-						te.mu.Lock()
-						te.received = append(te.received, s)
-						te.mu.Unlock()
-						if te.forwardMessages {
-							return nil, ctx.SendMessage("", s)
-						}
-						return nil, nil
-					})
-					return rb, nil
-				},
+			OnMessageDeliveryStartingFunc: func(_ *workflow.Context) error {
+				te.deliveryStarting.Add(1)
+				return nil
+			},
+			OnMessageDeliveryFinishedFunc: func(_ *workflow.Context) error {
+				te.deliveryFinished.Add(1)
+				return nil
+			},
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.SendsMessageType(reflect.TypeFor[string]())
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+					s := msg.(string)
+					te.mu.Lock()
+					te.received = append(te.received, s)
+					te.mu.Unlock()
+					if te.forwardMessages {
+						return nil, ctx.SendMessage("", s)
+					}
+					return nil, nil
+				})
+				return rb, nil
 			},
 		}, nil
 	}
@@ -605,25 +597,21 @@ func TestDeliveryEvents_FinishedRunsEvenWhenHandlerErrors(t *testing.T) {
 	finishedCalls := atomic.Int64{}
 	id := "boom"
 	binding := workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		ID:               id,
+		ImplementationID: "*workflow.Executor",
 	}
 	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: id,
-			Spec: workflow.ExecutorSpec{
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
-				OnMessageDeliveryFinished: func(_ *workflow.Context) error {
-					finishedCalls.Add(1)
-					return nil
-				},
-				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(_ *workflow.Context, _ any) (any, error) {
-						return nil, errBoom
-					})
-					return rb, nil
-				},
+			OnMessageDeliveryFinishedFunc: func(_ *workflow.Context) error {
+				finishedCalls.Add(1)
+				return nil
+			},
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(_ *workflow.Context, _ any) (any, error) {
+					return nil, errBoom
+				})
+				return rb, nil
 			},
 		}, nil
 	}

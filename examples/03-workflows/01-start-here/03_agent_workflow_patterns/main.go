@@ -10,25 +10,16 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/hosting/workflowhosting"
-	"github.com/microsoft/agent-framework-go/agent/provider/openaiagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
-	"github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/azure"
-)
-
-var (
-	endpoint   = os.Getenv("AZURE_OPENAI_ENDPOINT")
-	apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
-	deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
 )
 
 var logger = demo.NewLogger(
 	"Agent Workflow Patterns",
 	"This sample switches between sequential and concurrent agent workflow patterns.",
-	"Model", deployment,
+	"Model", demo.Deployment,
 )
 
 func main() {
@@ -102,19 +93,9 @@ func buildPattern(pattern string) (*workflow.Workflow, error) {
 }
 
 func newTranslationAgent(language string) *agent.Agent {
-	token := demo.AzureTokenCredential()
-	return openaiagent.NewChatCompletions(
-		openai.NewClient(
-			azure.WithEndpoint(endpoint, apiVersion),
-			azure.WithTokenCredential(token),
-		),
-		openaiagent.Config{
-			Model:        deployment,
-			Instructions: fmt.Sprintf("You are a translation assistant who only responds in %s. Respond to any input by outputting the name of the input language and then translating the input to %s.", language, language),
-			Config: agent.Config{
-				Name:        language,
-				Middlewares: []agent.Middleware{logger},
-			},
-		},
+	return demo.NewAzureChatAgent(
+		language,
+		fmt.Sprintf("You are a translation assistant who only responds in %s. Respond to any input by outputting the name of the input language and then translating the input to %s.", language, language),
+		logger,
 	)
 }

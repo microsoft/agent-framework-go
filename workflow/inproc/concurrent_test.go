@@ -14,65 +14,40 @@ import (
 )
 
 func factoryConcurrentBinding(id string, sink *[]string, mu *sync.Mutex) workflow.ExecutorBinding {
-	binding := workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
-	}
-	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
+	binding := workflow.BindNewExecutorFunc(id, func(_ string, executorID string) (*workflow.Executor, error) {
 		return &workflow.Executor{
-			ID: id,
-			Spec: workflow.ExecutorSpec{
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
-				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					rb.SendsMessageType(reflect.TypeFor[string]())
-					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
-						mu.Lock()
-						*sink = append(*sink, id+":"+msg.(string))
-						mu.Unlock()
-						return nil, ctx.SendMessage("", msg)
-					})
-					return rb, nil
-				},
+			ID: executorID,
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.SendsMessageType(reflect.TypeFor[string]())
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+					mu.Lock()
+					*sink = append(*sink, executorID+":"+msg.(string))
+					mu.Unlock()
+					return nil, ctx.SendMessage("", msg)
+				})
+				return rb, nil
 			},
 		}, nil
-	}
+	})
 	binding.SupportsConcurrentSharedExecution = true
 	return binding
 }
 
 func nonConcurrentBinding(id string) workflow.ExecutorBinding {
-	return workflow.BindExecutor(&workflow.Executor{
-		ID: id,
-		Spec: workflow.ExecutorSpec{
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
-			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[string](), func(_ *workflow.Context, msg any) (any, error) {
-					return msg, nil
-				})
-				return rb, nil
-			},
-		},
-	})
-}
+	return (&workflow.Executor{
+		ID:               id,
+		ImplementationID: "workflow_test.nonConcurrent",
 
-func TestAllowConcurrent_BindFuncIsFactoryCreated(t *testing.T) {
-	binding := workflow.BindFunc("upper", strings.ToUpper)
-	executor, err := binding.CreateInstance("session")
-	if err != nil {
-		t.Fatalf("CreateInstance: %v", err)
-	}
-	if executor.CrossRunShareable {
-		t.Fatal("BindFunc executor CrossRunShareable = true, want false to match .NET FunctionExecutor default")
-	}
-	wf, err := workflow.NewBuilder(binding).Build()
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
-	if !wf.AllowConcurrent() {
-		t.Fatal("AllowConcurrent = false, want true for BindFunc factory-created binding")
-	}
+		DisableAutoSendMessageHandlerResultObject: true,
+		DisableAutoYieldOutputHandlerResultObject: true,
+		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+			rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[string](), func(_ *workflow.Context, msg any) (any, error) {
+				return msg, nil
+			})
+			return rb, nil
+		},
+	}).Bind()
+
 }
 
 func TestAllowConcurrent_AllExecutorsConcurrent(t *testing.T) {

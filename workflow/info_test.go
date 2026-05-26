@@ -54,7 +54,7 @@ func fanInEdge(srcs []string, dst string) workflow.Edge {
 func newTestWorkflow(t *testing.T, bindings ...workflow.ExecutorBinding) *workflow.Workflow {
 	t.Helper()
 	if len(bindings) == 0 {
-		bindings = []workflow.ExecutorBinding{workflow.BindExecutor(&workflow.Executor{ID: "start"})}
+		bindings = []workflow.ExecutorBinding{(&workflow.Executor{ID: "start", ImplementationID: "workflow_test.start"}).Bind()}
 	}
 	builder := workflow.NewBuilder(bindings[0])
 	for _, binding := range bindings[1:] {
@@ -210,11 +210,11 @@ func TestRequestPortInfo_FieldsMatchSource(t *testing.T) {
 }
 
 func TestReflectPorts_ReturnsCopy(t *testing.T) {
-	portBinding := workflow.BindRequestPort(workflow.RequestPort{
+	portBinding := (workflow.RequestPort{
 		ID:       "approval",
 		Request:  reflect.TypeFor[string](),
 		Response: reflect.TypeFor[bool](),
-	})
+	}).Bind()
 	wf, err := workflow.NewBuilder(portBinding).Build()
 	if err != nil {
 		t.Fatalf("Build: %v", err)
@@ -253,8 +253,8 @@ func hasType(types []reflect.Type, typ reflect.Type) bool {
 }
 
 func TestWorkflowDescribeProtocol_IncludesOutputProtocol(t *testing.T) {
-	start := workflow.BindFunc("start", func(protocolInput) protocolMiddle { return protocolMiddle{} })
-	output := workflow.BindFunc("output", func(protocolMiddle) protocolOutput { return protocolOutput{} })
+	start := workflow.NewExecutor("start", func(protocolInput) protocolMiddle { return protocolMiddle{} }).Bind()
+	output := workflow.NewExecutor("output", func(protocolMiddle) protocolOutput { return protocolOutput{} }).Bind()
 	wf, err := workflow.NewBuilder(start).
 		AddEdge(start, output).
 		WithOutputFrom(output).
@@ -283,18 +283,17 @@ func TestWorkflowDescribeProtocol_IncludesOutputProtocol(t *testing.T) {
 
 func TestWorkflowDescribeProtocol_PropagatesAcceptsAll(t *testing.T) {
 	binding := workflow.ExecutorBinding{
-		ID:           "start",
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		ID:               "start",
+		ImplementationID: "*workflow.Executor",
 		NewExecutorFunc: func(string) (*workflow.Executor, error) {
 			return &workflow.Executor{
 				ID: "start",
-				Spec: workflow.ExecutorSpec{
-					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-						rb.RouteBuilder.AddCatchAll(func(*workflow.Context, workflow.PortableValue) (any, error) {
-							return nil, nil
-						})
-						return rb, nil
-					},
+
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.RouteBuilder.AddCatchAll(func(*workflow.Context, workflow.PortableValue) (any, error) {
+						return nil, nil
+					})
+					return rb, nil
 				},
 			}, nil
 		},
@@ -362,7 +361,7 @@ func TestWorkflowReleaseOwnershipTo_RestoresPreviousOwner(t *testing.T) {
 }
 
 func TestWorkflowReuse_AllowsSharedNonResettableWhenNoResettableExecutors(t *testing.T) {
-	wf := newTestWorkflow(t, workflow.BindExecutor(&workflow.Executor{ID: "shared"}))
+	wf := newTestWorkflow(t, (&workflow.Executor{ID: "shared", ImplementationID: "workflow_test.shared"}).Bind())
 	firstOwner := new(int)
 	secondOwner := new(int)
 
@@ -378,13 +377,15 @@ func TestWorkflowReuse_AllowsSharedNonResettableWhenNoResettableExecutors(t *tes
 }
 
 func TestWorkflowReuse_BlocksWhenResetFails(t *testing.T) {
-	resettable := workflow.BindExecutor(&workflow.Executor{
-		ID: "resettable",
-		Spec: workflow.ExecutorSpec{Reset: func() error {
+	resettable := (&workflow.Executor{
+		ID:               "resettable",
+		ImplementationID: "workflow_test.resettable",
+		ResetFunc: func() error {
 			return nil
-		}},
-	})
-	shared := workflow.BindExecutor(&workflow.Executor{ID: "shared"})
+		},
+	}).Bind()
+
+	shared := (&workflow.Executor{ID: "shared", ImplementationID: "workflow_test.shared"}).Bind()
 	wf, err := workflow.NewBuilder(resettable).AddEdge(resettable, shared).Build()
 	if err != nil {
 		t.Fatalf("Build: %v", err)

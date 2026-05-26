@@ -31,12 +31,8 @@ func createExecutor(options *messageworkflow.Options) (*workflow.Executor, *work
 }
 
 func createExecutorWithSent(options *messageworkflow.Options) (*workflow.Executor, *workflow.Context, *[]any) {
-	spec := workflow.ExecutorSpec{}
-	messageworkflow.Configure(&spec, options)
-	executor := &workflow.Executor{
-		ID:   "test-executor",
-		Spec: spec,
-	}
+	executor := workflow.Executor{ID: "test-executor"}
+	messageworkflow.Configure(&executor, options)
 	var sent []any
 
 	ctx := &workflow.Context{
@@ -48,7 +44,7 @@ func createExecutorWithSent(options *messageworkflow.Options) (*workflow.Executo
 		AddEvent: func(event workflow.Event) error { return nil },
 	}
 
-	return executor, ctx, &sent
+	return &executor, ctx, &sent
 }
 
 func TestExecutor_DescribedProtocol(t *testing.T) {

@@ -367,28 +367,27 @@ func TestCheckpoint_RestoreClearsExecutorInstancesBeforeImport(t *testing.T) {
 	manager := checkpoint.NewInMemoryManager()
 	var nextInstanceID int64
 	binding := workflow.ExecutorBinding{
-		ID:           "counter",
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		ID:               "counter",
+		ImplementationID: "*workflow.Executor",
 		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
 			instanceID := atomic.AddInt64(&nextInstanceID, 1)
 			count := 0
 			return &workflow.Executor{
 				ID: "counter",
-				Spec: workflow.ExecutorSpec{
-					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-						rb.YieldsOutputType(reflect.TypeFor[struct {
+
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.YieldsOutputType(reflect.TypeFor[struct {
+						InstanceID int64
+						Count      int
+					}]())
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
+						count++
+						return nil, ctx.YieldOutput(struct {
 							InstanceID int64
 							Count      int
-						}]())
-						rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
-							count++
-							return nil, ctx.YieldOutput(struct {
-								InstanceID int64
-								Count      int
-							}{InstanceID: instanceID, Count: count})
-						})
-						return rb, nil
-					},
+						}{InstanceID: instanceID, Count: count})
+					})
+					return rb, nil
 				},
 			}, nil
 		},
@@ -644,26 +643,25 @@ func createCheckpointRequestWorkflow(t *testing.T) (*workflow.Workflow, *atomic.
 		Request:  reflect.TypeFor[string](),
 		Response: reflect.TypeFor[string](),
 	}
-	portBinding := workflow.BindRequestPort(port)
+	portBinding := port.Bind()
 
 	received := &atomic.Int64{}
 	sinkBinding := workflow.ExecutorBinding{
-		ID:           "Processor",
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		ID:               "Processor",
+		ImplementationID: "*workflow.Executor",
 		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
 			return &workflow.Executor{
 				ID: "Processor",
-				Spec: workflow.ExecutorSpec{
-					DisableAutoSendMessageHandlerResultObject: true,
-					DisableAutoYieldOutputHandlerResultObject: true,
-					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-						rb.YieldsOutputType(reflect.TypeFor[string]())
-						rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
-							received.Add(1)
-							return nil, ctx.YieldOutput(msg)
-						})
-						return rb, nil
-					},
+
+				DisableAutoSendMessageHandlerResultObject: true,
+				DisableAutoYieldOutputHandlerResultObject: true,
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.YieldsOutputType(reflect.TypeFor[string]())
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+						received.Add(1)
+						return nil, ctx.YieldOutput(msg)
+					})
+					return rb, nil
 				},
 			}, nil
 		},
@@ -703,21 +701,20 @@ func createCheckpointChainWorkflow(t *testing.T, ids ...string) *workflow.Workfl
 	for _, id := range ids {
 		id := id
 		bindings = append(bindings, workflow.ExecutorBinding{
-			ID:           id,
-			ExecutorType: reflect.TypeFor[*workflow.Executor](),
+			ID:               id,
+			ImplementationID: "*workflow.Executor",
 			NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
 				return &workflow.Executor{
 					ID: id,
-					Spec: workflow.ExecutorSpec{
-						DisableAutoSendMessageHandlerResultObject: true,
-						DisableAutoYieldOutputHandlerResultObject: true,
-						ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-							rb.SendsMessageType(reflect.TypeFor[string]())
-							rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
-								return nil, ctx.SendMessage("", msg)
-							})
-							return rb, nil
-						},
+
+					DisableAutoSendMessageHandlerResultObject: true,
+					DisableAutoYieldOutputHandlerResultObject: true,
+					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+						rb.SendsMessageType(reflect.TypeFor[string]())
+						rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+							return nil, ctx.SendMessage("", msg)
+						})
+						return rb, nil
 					},
 				}, nil
 			},
@@ -860,33 +857,32 @@ type checkpointHookExecutor struct {
 
 func (e *checkpointHookExecutor) Bind() workflow.ExecutorBinding {
 	binding := workflow.ExecutorBinding{
-		ID:           e.id,
-		ExecutorType: reflect.TypeFor[*checkpointHookExecutor](),
-		RawValue:     e,
+		ID:               e.id,
+		ImplementationID: "*checkpointHookExecutor",
+		RawValue:         e,
 		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
 			return &workflow.Executor{
 				ID: e.id,
-				Spec: workflow.ExecutorSpec{
-					DisableAutoSendMessageHandlerResultObject: true,
-					DisableAutoYieldOutputHandlerResultObject: true,
-					OnCheckpoint: func(_ *workflow.Context) error {
-						e.checkpointingCalls.Add(1)
-						return nil
-					},
-					OnCheckpointRestored: func(_ *workflow.Context) error {
-						e.checkpointRestoredCall.Add(1)
-						return nil
-					},
-					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-						rb.SendsMessageType(reflect.TypeFor[string]())
-						rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
-							if e.forwardMessages {
-								return nil, ctx.SendMessage("", msg)
-							}
-							return nil, nil
-						})
-						return rb, nil
-					},
+
+				DisableAutoSendMessageHandlerResultObject: true,
+				DisableAutoYieldOutputHandlerResultObject: true,
+				OnCheckpointFunc: func(_ *workflow.Context) error {
+					e.checkpointingCalls.Add(1)
+					return nil
+				},
+				OnCheckpointRestoredFunc: func(_ *workflow.Context) error {
+					e.checkpointRestoredCall.Add(1)
+					return nil
+				},
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.SendsMessageType(reflect.TypeFor[string]())
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+						if e.forwardMessages {
+							return nil, ctx.SendMessage("", msg)
+						}
+						return nil, nil
+					})
+					return rb, nil
 				},
 			}, nil
 		},

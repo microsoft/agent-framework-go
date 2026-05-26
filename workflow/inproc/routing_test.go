@@ -16,25 +16,21 @@ import (
 
 func captureExecutor(id string, sink *[]string, mu *sync.Mutex) workflow.ExecutorBinding {
 	binding := workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		ID:               id,
+		ImplementationID: "*workflow.Executor",
 	}
 	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: id,
-			Spec: workflow.ExecutorSpec{
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
-				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					rb.SendsMessageType(reflect.TypeFor[string]()).YieldsOutputType(reflect.TypeFor[string]())
-					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
-						mu.Lock()
-						*sink = append(*sink, id+":"+msg.(string))
-						mu.Unlock()
-						return nil, ctx.SendMessage("", msg)
-					})
-					return rb, nil
-				},
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.SendsMessageType(reflect.TypeFor[string]()).YieldsOutputType(reflect.TypeFor[string]())
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+					mu.Lock()
+					*sink = append(*sink, id+":"+msg.(string))
+					mu.Unlock()
+					return nil, ctx.SendMessage("", msg)
+				})
+				return rb, nil
 			},
 		}, nil
 	}
@@ -160,22 +156,18 @@ func TestDirectEdgeRouting_BroadDeclaredSendTypeRoutesByRuntimeType(t *testing.T
 		trace []string
 	)
 	source := workflow.ExecutorBinding{
-		ID:           "source",
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		ID:               "source",
+		ImplementationID: "*workflow.Executor",
 	}
 	source.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: source.ID,
-			Spec: workflow.ExecutorSpec{
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
-				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					rb.SendsMessageType(reflect.TypeFor[any]())
-					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
-						return nil, ctx.SendMessage("", msg)
-					})
-					return rb, nil
-				},
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.SendsMessageType(reflect.TypeFor[any]())
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+					return nil, ctx.SendMessage("", msg)
+				})
+				return rb, nil
 			},
 		}, nil
 	}
@@ -335,25 +327,21 @@ func TestFanOutEdgeRouting_AssignerSelectsEmpty_NoDelivery(t *testing.T) {
 
 func targetingExecutor(id string, targetID string, sink *[]string, mu *sync.Mutex) workflow.ExecutorBinding {
 	binding := workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		ID:               id,
+		ImplementationID: "*workflow.Executor",
 	}
 	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: id,
-			Spec: workflow.ExecutorSpec{
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
-				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					rb.SendsMessageType(reflect.TypeFor[string]())
-					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
-						mu.Lock()
-						*sink = append(*sink, id+":"+msg.(string))
-						mu.Unlock()
-						return nil, ctx.SendMessage(targetID, msg)
-					})
-					return rb, nil
-				},
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.SendsMessageType(reflect.TypeFor[string]())
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+					mu.Lock()
+					*sink = append(*sink, id+":"+msg.(string))
+					mu.Unlock()
+					return nil, ctx.SendMessage(targetID, msg)
+				})
+				return rb, nil
 			},
 		}, nil
 	}
@@ -391,22 +379,18 @@ func TestFanInEdgeRouting_StateResetsAfterDelivery(t *testing.T) {
 
 func emitsExecutor(id string, value string) workflow.ExecutorBinding {
 	binding := workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		ID:               id,
+		ImplementationID: "*workflow.Executor",
 	}
 	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: id,
-			Spec: workflow.ExecutorSpec{
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
-				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					rb.SendsMessageType(reflect.TypeFor[string]())
-					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
-						return nil, ctx.SendMessage("", value)
-					})
-					return rb, nil
-				},
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.SendsMessageType(reflect.TypeFor[string]())
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
+					return nil, ctx.SendMessage("", value)
+				})
+				return rb, nil
 			},
 		}, nil
 	}
@@ -415,24 +399,20 @@ func emitsExecutor(id string, value string) workflow.ExecutorBinding {
 
 func collectingExecutor(id string, deliveries *[][]string, mu *sync.Mutex) workflow.ExecutorBinding {
 	binding := workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		ID:               id,
+		ImplementationID: "*workflow.Executor",
 	}
 	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: id,
-			Spec: workflow.ExecutorSpec{
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
-				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
-						mu.Lock()
-						*deliveries = append(*deliveries, []string{msg.(string)})
-						mu.Unlock()
-						return nil, nil
-					})
-					return rb, nil
-				},
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+					mu.Lock()
+					*deliveries = append(*deliveries, []string{msg.(string)})
+					mu.Unlock()
+					return nil, nil
+				})
+				return rb, nil
 			},
 		}, nil
 	}
@@ -477,26 +457,22 @@ func TestFanInBarrier_DeliversOnlyAfterAllSourcesProduce(t *testing.T) {
 
 func outputFilterExecutor(id string) workflow.ExecutorBinding {
 	binding := workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		ID:               id,
+		ImplementationID: "*workflow.Executor",
 	}
 	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: id,
-			Spec: workflow.ExecutorSpec{
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
-				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					rb.SendsMessageType(reflect.TypeFor[string]()).YieldsOutputType(reflect.TypeFor[string]())
-					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
-						s := msg.(string)
-						if err := ctx.YieldOutput("out:" + id + ":" + s); err != nil {
-							return nil, err
-						}
-						return nil, ctx.SendMessage("", s)
-					})
-					return rb, nil
-				},
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.SendsMessageType(reflect.TypeFor[string]()).YieldsOutputType(reflect.TypeFor[string]())
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+					s := msg.(string)
+					if err := ctx.YieldOutput("out:" + id + ":" + s); err != nil {
+						return nil, err
+					}
+					return nil, ctx.SendMessage("", s)
+				})
+				return rb, nil
 			},
 		}, nil
 	}

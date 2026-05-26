@@ -3,24 +3,21 @@
 package checkpoint
 
 import (
-	"reflect"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/workflow"
 )
 
-func testBinding(id string, typ reflect.Type) workflow.ExecutorBinding {
+func testBinding(id string, implementationID string) workflow.ExecutorBinding {
 	return workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: typ,
+		ID:               id,
+		ImplementationID: implementationID,
 		NewExecutorFunc: func(string) (*workflow.Executor, error) {
 			return &workflow.Executor{
-				ID:           id,
-				ExecutorType: typ,
-				Spec: workflow.ExecutorSpec{
-					ConfigureProtocol: func(builder *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-						return builder, nil
-					},
+				ID: id,
+
+				ConfigureProtocol: func(builder *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					return builder, nil
 				},
 			}, nil
 		},
@@ -28,9 +25,9 @@ func testBinding(id string, typ reflect.Type) workflow.ExecutorBinding {
 }
 
 func TestWorkflowInfoMatch_PreservesEdgeMultiplicity(t *testing.T) {
-	a := testBinding("a", reflect.TypeFor[struct{}]())
-	b := testBinding("b", reflect.TypeFor[struct{}]())
-	c := testBinding("c", reflect.TypeFor[struct{}]())
+	a := testBinding("a", "test")
+	b := testBinding("b", "test")
+	c := testBinding("c", "test")
 	recorded, err := workflow.NewBuilder(a).
 		AddEdge(a, b).
 		AddEdge(a, c).
@@ -52,22 +49,16 @@ func TestWorkflowInfoMatch_PreservesEdgeMultiplicity(t *testing.T) {
 	}
 }
 
-func TestWorkflowInfoMatch_AllowsNilExecutorType(t *testing.T) {
-	recorded, err := workflow.NewBuilder(testBinding("a", nil)).Build()
+func TestWorkflowInfoMatch_UsesInferredImplementationID(t *testing.T) {
+	wf, err := workflow.NewBuilder(testBinding("a", "")).Build()
 	if err != nil {
-		t.Fatalf("Build recorded: %v", err)
+		t.Fatalf("Build: %v", err)
 	}
-
-	info := NewWorkflowInfo(recorded)
-	if info.Match(recorded) {
-		t.Fatal("expected nil executor type metadata not to match because empty TypeID is unknown")
+	info := NewWorkflowInfo(wf)
+	if !info.Match(wf) {
+		t.Fatal("expected workflow info to match workflow with inferred implementation ID")
 	}
-
-	incompatible, err := workflow.NewBuilder(testBinding("a", reflect.TypeFor[struct{}]())).Build()
-	if err != nil {
-		t.Fatalf("Build incompatible: %v", err)
-	}
-	if info.Match(incompatible) {
-		t.Fatal("expected nil executor type metadata not to match concrete executor type")
+	if got := info.Executors["a"].ImplementationID; got != "a" {
+		t.Fatalf("ImplementationID = %q, want a", got)
 	}
 }

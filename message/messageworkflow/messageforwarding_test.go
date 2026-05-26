@@ -19,9 +19,9 @@ const (
 )
 
 func newForwardingExecutorForTest(options *messageworkflow.ForwardingOptions) *workflow.Executor {
-	spec := workflow.ExecutorSpec{}
-	messageworkflow.ConfigureForwarding(&spec, options)
-	return &workflow.Executor{ID: "start", Spec: spec}
+	executor := workflow.Executor{ID: "start"}
+	messageworkflow.ConfigureForwarding(&executor, options)
+	return &executor
 }
 
 func runForwardMessageTest(t *testing.T, executor *workflow.Executor, msg any) []any {

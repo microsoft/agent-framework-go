@@ -4,7 +4,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/workflow"
@@ -13,49 +15,68 @@ import (
 
 var _ = demo.NewLogger(
 	"Shared State Workflow",
-	"This sample writes and reads shared workflow state between executors.",
+	"This sample fans out over shared workflow state and aggregates file statistics.",
 )
 
-const stateScope = "EmailState"
+const (
+	fileContentScope = "FileContentState"
+)
 
-type EmailRecord struct {
-	ID      string
-	Subject string
-	Body    string
+type FileStats struct {
+	ParagraphCount int
+	WordCount      int
 }
 
-type EmailDecision struct {
-	EmailID string
-	Spam    bool
-	Reason  string
-}
+const sampleDocument = `Agent Framework workflows coordinate work across executors.
+
+Shared state lets one executor store a value that later executors can read without copying the whole payload through every edge.
+
+Fan-out and fan-in patterns make it natural to compute independent statistics and aggregate them at the end.`
 
 func main() {
-	ingest := bindContextFunc("EmailIngestExecutor", func(ctx *workflow.Context, email string) (EmailDecision, error) {
-		record := EmailRecord{ID: "email-001", Subject: "Planning", Body: email}
-		if err := ctx.QueueStateUpdate(record.ID, stateScope, record); err != nil {
-			return EmailDecision{}, err
-		}
-		return EmailDecision{EmailID: record.ID, Spam: false, Reason: "known sender"}, nil
-	})
-	responder := bindContextFunc("EmailResponderExecutor", func(ctx *workflow.Context, decision EmailDecision) (string, error) {
-		value, err := ctx.ReadState(decision.EmailID, stateScope)
-		if err != nil {
+	fileRead := workflow.NewExecutor("FileReadExecutor", func(ctx *workflow.Context, filename string) (string, error) {
+		fileID := "sample-file"
+		if err := ctx.QueueStateUpdate(fileID, fileContentScope, sampleDocument); err != nil {
 			return "", err
 		}
-		record := value.(EmailRecord)
-		return "Draft response to " + record.Subject + ": thanks for the update", nil
-	})
+		demo.Assistantf("Read %s into shared state as %s", filename, fileID)
+		return fileID, nil
+	}).Bind()
 
-	wf, err := workflow.NewBuilder(ingest).
-		AddEdge(ingest, responder).
-		WithOutputFrom(responder).
+	wordCount := workflow.NewExecutor("WordCountingExecutor", func(ctx *workflow.Context, fileID string) (FileStats, error) {
+		content, err := readFileContent(ctx, fileID)
+		if err != nil {
+			return FileStats{}, err
+		}
+		return FileStats{WordCount: len(strings.Fields(content))}, nil
+	}).Bind()
+
+	paragraphCount := workflow.NewExecutor("ParagraphCountingExecutor", func(ctx *workflow.Context, fileID string) (FileStats, error) {
+		content, err := readFileContent(ctx, fileID)
+		if err != nil {
+			return FileStats{}, err
+		}
+		paragraphs := 0
+		for _, block := range strings.Split(content, "\n\n") {
+			if strings.TrimSpace(block) != "" {
+				paragraphs++
+			}
+		}
+		return FileStats{ParagraphCount: paragraphs}, nil
+	}).Bind()
+
+	aggregate := newAggregationExecutor()
+
+	wf, err := workflow.NewBuilder(fileRead).
+		AddFanOutEdge(fileRead, []workflow.ExecutorBinding{wordCount, paragraphCount}).
+		AddFanInBarrierEdge([]workflow.ExecutorBinding{wordCount, paragraphCount}, aggregate).
+		WithOutputFrom(aggregate).
 		Build()
 	if err != nil {
 		demo.Panic(err)
 	}
 
-	run, err := inproc.Default.Run(context.Background(), wf, "Can we move the planning meeting to Friday?")
+	run, err := inproc.Default.Run(context.Background(), wf, "Lorem_Ipsum.txt")
 	if err != nil {
 		demo.Panic(err)
 	}
@@ -66,19 +87,44 @@ func main() {
 	}
 }
 
-func bindContextFunc[In, Out any](id string, fn func(*workflow.Context, In) (Out, error)) workflow.ExecutorBinding {
-	return workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeOf(fn),
-		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
-			return &workflow.Executor{ID: id, Spec: workflow.ExecutorSpec{
-				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[In](), reflect.TypeFor[Out](), func(ctx *workflow.Context, msg any) (any, error) {
-						return fn(ctx, msg.(In))
-					})
-					return rb, nil
-				},
-			}}, nil
-		},
+func readFileContent(ctx *workflow.Context, fileID string) (string, error) {
+	value, err := ctx.ReadState(fileID, fileContentScope)
+	if err != nil {
+		return "", err
 	}
+	content, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("file content has type %T", value)
+	}
+	return content, nil
+}
+
+type aggregationExecutor struct {
+	collected []FileStats
+}
+
+func newAggregationExecutor() workflow.ExecutorBinding {
+	return workflow.BindNewExecutorFunc("AggregationExecutor", func(_ string, executorID string) (*workflow.Executor, error) {
+		aggregate := &aggregationExecutor{}
+		return workflow.NewExecutor(executorID, aggregate.Handle).Extend(&workflow.Executor{
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.YieldsOutputType(reflect.TypeFor[string]())
+				return rb, nil
+			},
+		}), nil
+	})
+}
+
+func (e *aggregationExecutor) Handle(ctx *workflow.Context, stats FileStats) error {
+	e.collected = append(e.collected, stats)
+	if len(e.collected) != 2 {
+		return nil
+	}
+
+	var total FileStats
+	for _, stats := range e.collected {
+		total.ParagraphCount += stats.ParagraphCount
+		total.WordCount += stats.WordCount
+	}
+	return ctx.YieldOutput(fmt.Sprintf("Total Paragraphs: %d, Total Words: %d", total.ParagraphCount, total.WordCount))
 }

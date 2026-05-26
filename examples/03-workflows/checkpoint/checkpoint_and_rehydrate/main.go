@@ -4,10 +4,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"os"
-	"path/filepath"
-	"reflect"
+	"fmt"
 
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/workflow"
@@ -17,158 +14,232 @@ import (
 
 var _ = demo.NewLogger(
 	"Checkpoint and Rehydrate Workflow",
-	"This sample demonstrates durable checkpointing: checkpoints are persisted to"+
-		" disk so the workflow can be rehydrated in a new process after the original"+
-		" process exits.",
+	"This sample saves workflow checkpoints and rehydrates a new workflow instance from a saved checkpoint.",
 )
 
-// sessionIDFile persists the session ID between phases so the second phase can
-// look up the checkpoint by session ID.
-const sessionIDFile = "session_id.json"
+type NumberSignal int
+
+const (
+	Init NumberSignal = iota
+	Above
+	Below
+)
 
 func main() {
-	// Build a workflow that halts waiting for an external approval, creating a
-	// durable checkpoint on the way.
-	approvalPort := workflow.RequestPort{
-		ID:       "ApprovalPort",
-		Request:  reflect.TypeFor[string](),
-		Response: reflect.TypeFor[string](),
-	}
-	approval := workflow.BindRequestPort(approvalPort)
-	finalize := workflow.BindFunc("FinalizeExecutor", func(response string) string {
-		return "Workflow completed after rehydration: " + response
-	})
-
-	wf, err := workflow.NewBuilder(approval).
-		AddEdge(approval, finalize).
-		WithOutputFrom(finalize).
-		Build()
-	if err != nil {
-		demo.Panic(err)
-	}
-
-	// Use a temporary directory to simulate a durable store that survives process
-	// restarts. In a real application this would be a persistent directory on disk.
-	storeDir, err := os.MkdirTemp("", "checkpoint-rehydrate-*")
-	if err != nil {
-		demo.Panic(err)
-	}
-	defer func() {
-		if err := os.RemoveAll(storeDir); err != nil {
-			demo.Panic(err)
-		}
-	}()
-
+	wf := buildWorkflow()
+	checkpointManager := checkpoint.NewInMemoryManager()
 	ctx := context.Background()
 
-	// ── Phase 1: run the workflow until it halts at the approval request ─────
-
-	demo.Assistantf("Phase 1: starting workflow with durable checkpoint store at %s", storeDir)
-
-	store1, err := checkpoint.NewFileSystemJSONStore(storeDir)
+	var checkpoints []workflow.CheckpointInfo
+	checkpointedRun, err := inproc.Default.WithCheckpointing(checkpointManager).RunStreaming(ctx, wf, Init)
 	if err != nil {
 		demo.Panic(err)
 	}
-	manager1 := checkpoint.NewJSONManager(store1)
+	defer func() { _ = checkpointedRun.Close(ctx) }()
 
-	first, err := inproc.Default.WithCheckpointing(manager1).Run(ctx, wf, "Need deployment approval")
-	if err != nil {
-		demo.Panic(err)
-	}
-
-	checkpointInfo, ok := first.LastCheckpoint()
-	if !ok {
-		demo.Panic("expected checkpoint after first run")
-	}
-	demo.Assistantf("Checkpoint created: session=%s checkpoint=%s",
-		checkpointInfo.SessionID, checkpointInfo.CheckpointID)
-
-	request := firstRequest(first.OutgoingEvents())
-	if request == nil {
-		demo.Panic("expected pending approval request")
-	}
-	if err := first.Close(ctx); err != nil {
-		demo.Panic(err)
-	}
-
-	// Persist the session ID so Phase 2 can locate the checkpoint.
-	sessionJSON, err := json.Marshal(checkpointInfo.SessionID)
-	if err != nil {
-		demo.Panic(err)
-	}
-	if err := os.WriteFile(filepath.Join(storeDir, sessionIDFile), sessionJSON, 0o644); err != nil {
-		demo.Panic(err)
-	}
-
-	// Close the store to release the file lock — simulates the process exiting.
-	if err := store1.Close(); err != nil {
-		demo.Panic(err)
-	}
-	demo.Assistant("Phase 1 complete. Store closed (simulating process exit).")
-
-	// ── Phase 2: rehydrate the workflow in a "new process" ───────────────────
-
-	demo.Assistant("Phase 2: rehydrating workflow from persisted checkpoint...")
-
-	// Reopen the store — in a real process restart this would be the first thing
-	// the new process does after reading the store directory from configuration.
-	store2, err := checkpoint.NewFileSystemJSONStore(storeDir)
-	if err != nil {
-		demo.Panic(err)
-	}
-	defer func() {
-		if err := store2.Close(); err != nil {
+	for evt, err := range checkpointedRun.WatchStream(ctx) {
+		if err != nil {
 			demo.Panic(err)
 		}
-	}()
-	manager2 := checkpoint.NewJSONManager(store2)
+		switch e := evt.(type) {
+		case workflow.ExecutorCompletedEvent:
+			demo.Assistantf("* Executor %s completed.", e.ExecutorID)
+		case workflow.SuperStepCompletedEvent:
+			if e.CompletionInfo != nil && e.CompletionInfo.CheckpointInfo != nil {
+				checkpoints = append(checkpoints, *e.CompletionInfo.CheckpointInfo)
+				demo.Assistantf("** Checkpoint created at step %d.", len(checkpoints))
+			}
+		case workflow.OutputEvent:
+			demo.Assistantf("Workflow completed with result: %v", e.Output)
+		case workflow.ErrorEvent:
+			demo.Panic(e.Error)
+		case workflow.ExecutorFailedEvent:
+			demo.Panicf("executor %q failed: %v", e.ExecutorID, e.Error)
+		}
+	}
 
-	// Read back the session ID that was persisted in Phase 1.
-	sessionData, err := os.ReadFile(filepath.Join(storeDir, sessionIDFile))
-	if err != nil {
-		demo.Panic(err)
-	}
-	var sessionID string
-	if err := json.Unmarshal(sessionData, &sessionID); err != nil {
-		demo.Panic(err)
-	}
-
-	// List all checkpoints for the session and take the most recent one.
-	checkpoints, err := store2.RetrieveIndex(ctx, sessionID, nil)
-	if err != nil {
-		demo.Panic(err)
-	}
 	if len(checkpoints) == 0 {
-		demo.Panic("no checkpoints found in the store")
+		demo.Panic("no checkpoints were created during the workflow execution")
 	}
-	rehydrateFrom := checkpoints[len(checkpoints)-1]
-	demo.Assistantf("Rehydrating from checkpoint: %s", rehydrateFrom.CheckpointID)
+	demo.Assistantf("Number of checkpoints created: %d", len(checkpoints))
 
-	resumed, err := inproc.Default.WithCheckpointing(manager2).Resume(ctx, wf, rehydrateFrom)
+	newWorkflow := buildWorkflow()
+	const checkpointIndex = 5
+	if len(checkpoints) <= checkpointIndex {
+		demo.Panicf("expected at least %d checkpoints", checkpointIndex+1)
+	}
+	demo.Assistantf("Hydrating a new workflow instance from the %dth checkpoint.", checkpointIndex+1)
+	savedCheckpoint := checkpoints[checkpointIndex]
+
+	newCheckpointedRun, err := inproc.Default.WithCheckpointing(checkpointManager).ResumeStreaming(ctx, newWorkflow, savedCheckpoint)
 	if err != nil {
 		demo.Panic(err)
 	}
+	defer func() { _ = newCheckpointedRun.Close(ctx) }()
 
-	// Deliver the approval response to the rehydrated run.
-	response, err := request.CreateResponse("approved-after-rehydration")
-	if err != nil {
-		demo.Panic(err)
-	}
-	if _, err := resumed.Resume(ctx, response); err != nil {
-		demo.Panic(err)
-	}
-	for evt := range resumed.NewEvents() {
-		if output, ok := evt.(workflow.OutputEvent); ok {
-			demo.Assistant(output.Output)
+	for evt, err := range newCheckpointedRun.WatchStream(ctx) {
+		if err != nil {
+			demo.Panic(err)
+		}
+		switch e := evt.(type) {
+		case workflow.ExecutorCompletedEvent:
+			demo.Assistantf("* Executor %s completed.", e.ExecutorID)
+		case workflow.OutputEvent:
+			demo.Assistantf("Workflow completed with result: %v", e.Output)
+		case workflow.ErrorEvent:
+			demo.Panic(e.Error)
+		case workflow.ExecutorFailedEvent:
+			demo.Panicf("executor %q failed: %v", e.ExecutorID, e.Error)
 		}
 	}
 }
 
-func firstRequest(events func(func(workflow.Event) bool)) *workflow.ExternalRequest {
-	for evt := range events {
-		if req, ok := evt.(workflow.RequestInfoEvent); ok {
-			return req.Request
-		}
+func buildWorkflow() *workflow.Workflow {
+	guessNumberExecutor := newGuessNumberExecutor(1, 100).Bind()
+	judgeExecutor := newJudgeExecutor(42).Bind()
+
+	wf, err := workflow.NewBuilder(guessNumberExecutor).
+		AddEdge(guessNumberExecutor, judgeExecutor).
+		AddEdge(judgeExecutor, guessNumberExecutor).
+		WithOutputFrom(judgeExecutor).
+		Build()
+	if err != nil {
+		demo.Panic(err)
 	}
+	return wf
+}
+
+const guessNumberExecutorStateKey = "GuessNumberExecutorState"
+
+type guessNumberExecutorState struct {
+	LowerBound int
+	UpperBound int
+}
+
+type guessNumberExecutor struct {
+	_ workflow.AttrSendsMessage[int]
+
+	initialLowerBound int
+	initialUpperBound int
+	lowerBound        int
+	upperBound        int
+}
+
+func newGuessNumberExecutor(lowerBound int, upperBound int) *workflow.Executor {
+	executor := &guessNumberExecutor{
+		initialLowerBound: lowerBound,
+		initialUpperBound: upperBound,
+	}
+	if err := executor.Reset(); err != nil {
+		demo.Panic(err)
+	}
+	return workflow.NewExecutor("Guess", executor).Extend(&workflow.Executor{
+		ResetFunc:                executor.Reset,
+		OnCheckpointFunc:         executor.OnCheckpoint,
+		OnCheckpointRestoredFunc: executor.OnCheckpointRestored,
+	})
+}
+
+func (g *guessNumberExecutor) Handle(ctx *workflow.Context, signal NumberSignal) error {
+	switch signal {
+	case Init:
+	case Above:
+		g.upperBound = g.nextGuess() - 1
+	case Below:
+		g.lowerBound = g.nextGuess() + 1
+	default:
+		return fmt.Errorf("unsupported number signal %d", signal)
+	}
+	return ctx.SendMessage("", g.nextGuess())
+}
+
+func (g *guessNumberExecutor) Reset() error {
+	g.lowerBound = g.initialLowerBound
+	g.upperBound = g.initialUpperBound
+	return nil
+}
+
+func (g *guessNumberExecutor) OnCheckpoint(ctx *workflow.Context) error {
+	return ctx.QueueStateUpdate(guessNumberExecutorStateKey, "", guessNumberExecutorState{
+		LowerBound: g.lowerBound,
+		UpperBound: g.upperBound,
+	})
+}
+
+func (g *guessNumberExecutor) OnCheckpointRestored(ctx *workflow.Context) error {
+	state, err := ctx.ReadState(guessNumberExecutorStateKey, "")
+	if err != nil {
+		return err
+	}
+	if state == nil {
+		return g.Reset()
+	}
+	restoredState, ok := state.(guessNumberExecutorState)
+	if !ok {
+		return fmt.Errorf("unexpected guess number executor state type %T", state)
+	}
+	g.lowerBound = restoredState.LowerBound
+	g.upperBound = restoredState.UpperBound
+	return nil
+}
+
+func (g *guessNumberExecutor) nextGuess() int {
+	return (g.lowerBound + g.upperBound) / 2
+}
+
+const judgeExecutorStateKey = "JudgeExecutorState"
+
+type judgeExecutor struct {
+	_ workflow.AttrSendsMessage[NumberSignal]
+	_ workflow.AttrYieldsOutput[string]
+
+	targetNumber int
+	tries        int
+}
+
+func newJudgeExecutor(targetNumber int) *workflow.Executor {
+	executor := &judgeExecutor{targetNumber: targetNumber}
+	return workflow.NewExecutor("Judge", executor).Extend(&workflow.Executor{
+		ResetFunc:                executor.Reset,
+		OnCheckpointFunc:         executor.OnCheckpoint,
+		OnCheckpointRestoredFunc: executor.OnCheckpointRestored,
+	})
+}
+
+func (j *judgeExecutor) Handle(ctx *workflow.Context, guess int) error {
+	j.tries++
+	switch {
+	case guess == j.targetNumber:
+		return ctx.YieldOutput(fmt.Sprintf("%d found in %d tries!", j.targetNumber, j.tries))
+	case guess < j.targetNumber:
+		return ctx.SendMessage("", Below)
+	default:
+		return ctx.SendMessage("", Above)
+	}
+}
+
+func (j *judgeExecutor) Reset() error {
+	j.tries = 0
+	return nil
+}
+
+func (j *judgeExecutor) OnCheckpoint(ctx *workflow.Context) error {
+	return ctx.QueueStateUpdate(judgeExecutorStateKey, "", j.tries)
+}
+
+func (j *judgeExecutor) OnCheckpointRestored(ctx *workflow.Context) error {
+	state, err := ctx.ReadState(judgeExecutorStateKey, "")
+	if err != nil {
+		return err
+	}
+	if state == nil {
+		j.tries = 0
+		return nil
+	}
+	tries, ok := state.(int)
+	if !ok {
+		return fmt.Errorf("unexpected judge executor state type %T", state)
+	}
+	j.tries = tries
 	return nil
 }

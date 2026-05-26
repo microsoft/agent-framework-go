@@ -24,7 +24,7 @@ type CatchAllFunc func(*Context, PortableValue) (any, error)
 //
 // The handler receives the concrete message value registered with
 // [RouteBuilder.AddHandlerRaw]. Its return value may be forwarded as a message
-// or yielded as output depending on the executor's [ExecutorSpec].
+// or yielded as output depending on the executor's [Executor].
 type MessageHandlerFunc func(*Context, any) (any, error)
 
 // AddHandlerOption configures handler registration for [RouteBuilder.AddHandlerRaw]
@@ -50,7 +50,7 @@ func WithHandlerOverwrite(overwrite bool) AddHandlerOption {
 
 // RouteBuilder configures the message routes for an executor.
 //
-// A RouteBuilder is normally used from [ExecutorSpec.ConfigureProtocol] to
+// A RouteBuilder is normally used from [Executor.ConfigureProtocol] to
 // register typed handlers with [RouteBuilder.AddHandlerRaw] and an optional
 // fallback handler with [RouteBuilder.AddCatchAll]. The zero value is ready to
 // use, and registration methods return the builder so calls can be chained.
@@ -69,8 +69,9 @@ type RouteBuilder struct {
 //
 // messageType is the concrete message type accepted by handler. outputType, when
 // non-nil, declares the handler result type used for workflow protocol discovery
-// when automatic send or yield of handler return values is enabled. Handler
-// results are still runtime values; outputType is metadata.
+// and automatic send/yield of handler return values. A nil outputType registers
+// an action-style handler: it may use [Context] to send messages or yield
+// outputs manually, but its handler return value is not auto-forwarded.
 //
 // By default, registering a duplicate message type is an error; use
 // [WithHandlerOverwrite] to replace an existing handler.
@@ -159,11 +160,7 @@ func (rb *RouteBuilder) build() (*messageRouter, error) {
 	if rb.err != nil {
 		return nil, rb.err
 	}
-	defaultOutputTypes := make(map[reflect.Type]struct{}, len(rb.outputTypes))
-	for _, outType := range rb.outputTypes {
-		defaultOutputTypes[outType] = struct{}{}
-	}
-	router := newMessageRouter(rb.handlers, defaultOutputTypes, rb.catchAll)
+	router := newMessageRouter(rb.handlers, rb.outputTypes, rb.catchAll)
 	return router, nil
 }
 
@@ -173,7 +170,7 @@ func (rb *RouteBuilder) build() (*messageRouter, error) {
 // portable values restored from serialized workflow state, and resolves
 // assignable interface handlers for in-process values.
 type messageRouter struct {
-	typedHandlers     map[reflect.Type]MessageHandlerFunc
+	typedHandlers     map[reflect.Type]typeHandlingInfo
 	typeInfos         concurrent.Map[TypeID, typeHandlingInfo]
 	interfaceHandlers []reflect.Type
 	catchAllFunc      CatchAllFunc
@@ -183,17 +180,25 @@ type messageRouter struct {
 type typeHandlingInfo struct {
 	runtimeType reflect.Type
 	handler     MessageHandlerFunc
+	autoOutput  bool
 }
 
 // newMessageRouter creates a router and indexes typed handlers by TypeID.
-func newMessageRouter(handlers map[reflect.Type]MessageHandlerFunc, outputTypes map[reflect.Type]struct{}, catchAll CatchAllFunc) *messageRouter {
+func newMessageRouter(handlers map[reflect.Type]MessageHandlerFunc, handlerOutputTypes map[reflect.Type]reflect.Type, catchAll CatchAllFunc) *messageRouter {
+	outputTypes := make(map[reflect.Type]struct{}, len(handlerOutputTypes))
+	for _, outType := range handlerOutputTypes {
+		outputTypes[outType] = struct{}{}
+	}
 	router := &messageRouter{
-		typedHandlers: handlers,
+		typedHandlers: make(map[reflect.Type]typeHandlingInfo, len(handlers)),
 		catchAllFunc:  catchAll,
 		outputTypes:   outputTypes,
 	}
 	for msgType, handler := range handlers {
-		router.typeInfos.Store(NewTypeID(msgType), typeHandlingInfo{runtimeType: msgType, handler: handler})
+		_, autoOutput := handlerOutputTypes[msgType]
+		info := typeHandlingInfo{runtimeType: msgType, handler: handler, autoOutput: autoOutput}
+		router.typedHandlers[msgType] = info
+		router.typeInfos.Store(NewTypeID(msgType), info)
 		if msgType.Kind() == reflect.Interface {
 			router.interfaceHandlers = append(router.interfaceHandlers, msgType)
 		}
@@ -262,13 +267,13 @@ func (mr *messageRouter) routeMessage(ctx *Context, msg any) (result callResult,
 			if !ok {
 				err = fmt.Errorf("panic: %v", r)
 			}
-			result = callResult{Error: err, Result: struct{}{}}
+			result = callResult{err: err, result: struct{}{}}
 		}
 	}()
-	if handler, ok := mr.findHandler(reflect.TypeOf(msg)); ok {
+	if info, ok := mr.findHandler(reflect.TypeOf(msg)); ok {
 		handled = true
-		ret, err := handler(ctx, msg)
-		return callResult{ret, err}, handled
+		ret, err := info.handler(ctx, msg)
+		return callResult{result: ret, err: err, autoOutput: info.autoOutput}, handled
 	}
 	if mr.catchAllFunc != nil {
 		handled = true
@@ -276,7 +281,7 @@ func (mr *messageRouter) routeMessage(ctx *Context, msg any) (result callResult,
 			pvalue = AnyPortableValue(msg)
 		}
 		ret, err := mr.catchAllFunc(ctx, pvalue)
-		return callResult{ret, err}, handled
+		return callResult{result: ret, err: err, autoOutput: true}, handled
 	}
 	return callResult{}, false
 }
@@ -288,37 +293,39 @@ func (mr *messageRouter) typeInfo(typeID TypeID) (typeHandlingInfo, bool) {
 	return mr.typeInfos.Load(typeID)
 }
 
-func (mr *messageRouter) findHandler(messageType reflect.Type) (MessageHandlerFunc, bool) {
+func (mr *messageRouter) findHandler(messageType reflect.Type) (typeHandlingInfo, bool) {
 	if messageType == nil {
-		return nil, false
+		return typeHandlingInfo{}, false
 	}
-	if handler, ok := mr.typedHandlers[messageType]; ok {
-		return handler, true
+	if info, ok := mr.typedHandlers[messageType]; ok {
+		return info, true
 	}
 
 	typeID := NewTypeID(messageType)
 	if info, ok := mr.typeInfo(typeID); ok {
-		return info.handler, true
+		return info, true
 	}
 
 	for _, interfaceType := range mr.interfaceHandlers {
 		if messageType.AssignableTo(interfaceType) {
-			handler := mr.typedHandlers[interfaceType]
-			mr.typeInfos.Store(typeID, typeHandlingInfo{runtimeType: messageType, handler: handler})
-			return handler, true
+			info := mr.typedHandlers[interfaceType]
+			info.runtimeType = messageType
+			mr.typeInfos.Store(typeID, info)
+			return info, true
 		}
 	}
 
-	return nil, false
+	return typeHandlingInfo{}, false
 }
 
 // callResult captures a handler invocation result and error.
 type callResult struct {
-	Result any
-	Error  error
+	result     any
+	err        error
+	autoOutput bool
 }
 
 // isVoid reports whether the handler returned the workflow void sentinel.
 func (cr callResult) isVoid() bool {
-	return cr.Result != nil && reflect.TypeOf(cr.Result) == reflect.TypeFor[struct{}]()
+	return cr.result != nil && reflect.TypeOf(cr.result) == reflect.TypeFor[struct{}]()
 }

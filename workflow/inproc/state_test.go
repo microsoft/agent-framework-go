@@ -37,18 +37,17 @@ func NewStateTestExecutor[T any](id string, stateKey workflow.ScopeKey, loop boo
 
 func (e *StateTestExecutor[T]) Bind() workflow.ExecutorBinding {
 	return workflow.ExecutorBinding{
-		ID:           e.ID,
-		ExecutorType: reflect.TypeOf(e.Execute),
+		ID:               e.ID,
+		ImplementationID: "func",
 		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
 			return &workflow.Executor{
 				ID: e.ID,
-				Spec: workflow.ExecutorSpec{
-					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-						rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[TestTurnToken](), reflect.TypeFor[TestTurnToken](), func(ctx *workflow.Context, msg any) (any, error) {
-							return e.Execute(ctx, msg.(TestTurnToken))
-						})
-						return rb, nil
-					},
+
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[TestTurnToken](), reflect.TypeFor[TestTurnToken](), func(ctx *workflow.Context, msg any) (any, error) {
+						return e.Execute(ctx, msg.(TestTurnToken))
+					})
+					return rb, nil
 				},
 			}, nil
 		},
@@ -230,33 +229,29 @@ func TestInProcessRun_StateShouldPersist_Checkpointed(t *testing.T) {
 func TestInProcessRun_StateShouldPersist_JSONCheckpointed(t *testing.T) {
 	const stateKey = "value"
 	binding := workflow.ExecutorBinding{
-		ID:           "stateful",
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		ID:               "stateful",
+		ImplementationID: "*workflow.Executor",
 	}
 	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: binding.ID,
-			Spec: workflow.ExecutorSpec{
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
-				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					rb.YieldsOutputType(reflect.TypeFor[string]())
-					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
-						switch msg.(string) {
-						case "write":
-							return nil, ctx.QueueStateUpdate(stateKey, "", "persisted")
-						case "read":
-							value, err := ctx.ReadState(stateKey, "")
-							if err != nil {
-								return nil, err
-							}
-							return nil, ctx.YieldOutput(value)
-						default:
-							return nil, nil
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.YieldsOutputType(reflect.TypeFor[string]())
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+					switch msg.(string) {
+					case "write":
+						return nil, ctx.QueueStateUpdate(stateKey, "", "persisted")
+					case "read":
+						value, err := ctx.ReadState(stateKey, "")
+						if err != nil {
+							return nil, err
 						}
-					})
-					return rb, nil
-				},
+						return nil, ctx.YieldOutput(value)
+					default:
+						return nil, nil
+					}
+				})
+				return rb, nil
 			},
 		}, nil
 	}
@@ -373,50 +368,46 @@ func stateKeysLifecycleBindings(scope string) (workflow.ExecutorBinding, workflo
 	const key = "key1"
 	observed := make(map[string][]string)
 	reader := workflow.ExecutorBinding{
-		ID:           "reader",
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		ID:               "reader",
+		ImplementationID: "*workflow.Executor",
 	}
 
 	writer := workflow.ExecutorBinding{
-		ID:           "writer",
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		ID:               "writer",
+		ImplementationID: "*workflow.Executor",
 	}
 	writer.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: writer.ID,
-			Spec: workflow.ExecutorSpec{
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
-				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					rb.SendsMessageType(reflect.TypeFor[string]())
-					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, message any) (any, error) {
-						switch message.(string) {
-						case "write":
-							if err := ctx.QueueStateUpdate(key, scope, "value1"); err != nil {
-								return nil, err
-							}
-							keys, err := readWorkflowStateKeys(ctx, scope)
-							if err != nil {
-								return nil, err
-							}
-							observed["writer:write"] = keys
-							return nil, ctx.SendMessage(reader.ID, "after-write")
-						case "delete":
-							if err := ctx.QueueStateUpdate(key, scope, nil); err != nil {
-								return nil, err
-							}
-							keys, err := readWorkflowStateKeys(ctx, scope)
-							if err != nil {
-								return nil, err
-							}
-							observed["writer:delete"] = keys
-							return nil, ctx.SendMessage(reader.ID, "after-delete")
-						default:
-							return nil, nil
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.SendsMessageType(reflect.TypeFor[string]())
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, message any) (any, error) {
+					switch message.(string) {
+					case "write":
+						if err := ctx.QueueStateUpdate(key, scope, "value1"); err != nil {
+							return nil, err
 						}
-					})
-					return rb, nil
-				},
+						keys, err := readWorkflowStateKeys(ctx, scope)
+						if err != nil {
+							return nil, err
+						}
+						observed["writer:write"] = keys
+						return nil, ctx.SendMessage(reader.ID, "after-write")
+					case "delete":
+						if err := ctx.QueueStateUpdate(key, scope, nil); err != nil {
+							return nil, err
+						}
+						keys, err := readWorkflowStateKeys(ctx, scope)
+						if err != nil {
+							return nil, err
+						}
+						observed["writer:delete"] = keys
+						return nil, ctx.SendMessage(reader.ID, "after-delete")
+					default:
+						return nil, nil
+					}
+				})
+				return rb, nil
 			},
 		}, nil
 	}
@@ -424,20 +415,16 @@ func stateKeysLifecycleBindings(scope string) (workflow.ExecutorBinding, workflo
 	reader.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: reader.ID,
-			Spec: workflow.ExecutorSpec{
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
-				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, message any) (any, error) {
-						keys, err := readWorkflowStateKeys(ctx, scope)
-						if err != nil {
-							return nil, err
-						}
-						observed["reader:"+message.(string)] = keys
-						return nil, nil
-					})
-					return rb, nil
-				},
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, message any) (any, error) {
+					keys, err := readWorkflowStateKeys(ctx, scope)
+					if err != nil {
+						return nil, err
+					}
+					observed["reader:"+message.(string)] = keys
+					return nil, nil
+				})
+				return rb, nil
 			},
 		}, nil
 	}
@@ -458,9 +445,9 @@ func readWorkflowStateKeys(ctx *workflow.Context, scope string) ([]string, error
 }
 
 func TestInProcessRun_StateShouldError_TwoExecutors(t *testing.T) {
-	forward := workflow.BindFunc("ForwardMessageExecutor", func(t TestTurnToken) TestTurnToken {
+	forward := workflow.NewExecutor("ForwardMessageExecutor", func(t TestTurnToken) TestTurnToken {
 		return t
-	})
+	}).Bind()
 
 	testExecutor := NewStateTestExecutor(
 		"StateTestExecutor",
@@ -508,21 +495,20 @@ func TestInProcessRun_StateShouldError_TwoExecutors(t *testing.T) {
 func TestInProcessRun_ReadOrInitStateInitializerError(t *testing.T) {
 	const want = "initializer failed"
 	binding := workflow.ExecutorBinding{
-		ID:           "stateful",
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		ID:               "stateful",
+		ImplementationID: "*workflow.Executor",
 		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
 			return &workflow.Executor{
 				ID: "stateful",
-				Spec: workflow.ExecutorSpec{
-					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-						rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
-							_, err := ctx.ReadOrInitState("key", "", func(context.Context, string, string) (any, error) {
-								return nil, errors.New(want)
-							})
-							return nil, err
+
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
+						_, err := ctx.ReadOrInitState("key", "", func(context.Context, string, string) (any, error) {
+							return nil, errors.New(want)
 						})
-						return rb, nil
-					},
+						return nil, err
+					})
+					return rb, nil
 				},
 			}, nil
 		},

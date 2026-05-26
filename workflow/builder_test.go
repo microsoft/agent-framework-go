@@ -21,13 +21,12 @@ type noOpExecutor struct {
 func (n *noOpExecutor) NewExecutor(sessionID string) (*workflow.Executor, error) {
 	return &workflow.Executor{
 		ID: n.id,
-		Spec: workflow.ExecutorSpec{
-			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-				rb.RouteBuilder.AddCatchAll(func(ctx *workflow.Context, msg workflow.PortableValue) (any, error) {
-					return nil, ctx.SendMessage("", msg.Any())
-				})
-				return rb, nil
-			},
+
+		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+			rb.RouteBuilder.AddCatchAll(func(ctx *workflow.Context, msg workflow.PortableValue) (any, error) {
+				return nil, ctx.SendMessage("", msg.Any())
+			})
+			return rb, nil
 		},
 	}, nil
 }
@@ -35,9 +34,9 @@ func (n *noOpExecutor) NewExecutor(sessionID string) (*workflow.Executor, error)
 func newNoOpExecutor(id string) workflow.ExecutorBinding {
 	n := &noOpExecutor{id: id}
 	return workflow.ExecutorBinding{
-		ID:              id,
-		ExecutorType:    reflect.TypeOf(n),
-		NewExecutorFunc: n.NewExecutor,
+		ID:               id,
+		ImplementationID: "*noOpExecutor",
+		NewExecutorFunc:  n.NewExecutor,
 	}
 }
 
@@ -48,13 +47,12 @@ type someOtherNoOpExecutor struct {
 func (n *someOtherNoOpExecutor) NewExecutor(sessionID string) (*workflow.Executor, error) {
 	return &workflow.Executor{
 		ID: n.id,
-		Spec: workflow.ExecutorSpec{
-			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-				rb.RouteBuilder.AddCatchAll(func(ctx *workflow.Context, msg workflow.PortableValue) (any, error) {
-					return nil, ctx.SendMessage("", msg.Any())
-				})
-				return rb, nil
-			},
+
+		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+			rb.RouteBuilder.AddCatchAll(func(ctx *workflow.Context, msg workflow.PortableValue) (any, error) {
+				return nil, ctx.SendMessage("", msg.Any())
+			})
+			return rb, nil
 		},
 	}, nil
 }
@@ -62,9 +60,9 @@ func (n *someOtherNoOpExecutor) NewExecutor(sessionID string) (*workflow.Executo
 func newSomeOtherNoOpExecutor(id string) workflow.ExecutorBinding {
 	n := &someOtherNoOpExecutor{id: id}
 	return workflow.ExecutorBinding{
-		ID:              id,
-		ExecutorType:    reflect.TypeOf(n),
-		NewExecutorFunc: n.NewExecutor,
+		ID:               id,
+		ImplementationID: "*someOtherNoOpExecutor",
+		NewExecutorFunc:  n.NewExecutor,
 	}
 }
 
@@ -72,19 +70,18 @@ func newPlaceholder(id string) workflow.ExecutorBinding {
 	return workflow.ExecutorBinding{ID: id}
 }
 
-func TestBuilder_AllowsNilExecutorType(t *testing.T) {
+func TestBuilder_InfersEmptyImplementationID(t *testing.T) {
 	binding := workflow.ExecutorBinding{
 		ID: "start",
 		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
 			return &workflow.Executor{
 				ID: "start",
-				Spec: workflow.ExecutorSpec{
-					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-						rb.RouteBuilder.AddCatchAll(func(*workflow.Context, workflow.PortableValue) (any, error) {
-							return nil, nil
-						})
-						return rb, nil
-					},
+
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.RouteBuilder.AddCatchAll(func(*workflow.Context, workflow.PortableValue) (any, error) {
+						return nil, nil
+					})
+					return rb, nil
 				},
 			}, nil
 		},
@@ -95,18 +92,9 @@ func TestBuilder_AllowsNilExecutorType(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 	bindings := wf.ReflectExecutors()
-	if got := bindings["start"].ExecutorType; got != nil {
-		t.Fatalf("ExecutorType = %v, want nil", got)
-	}
-	if got := bindings["start"].String(); got != "start:<unknown>" {
-		t.Fatalf("String() = %q, want start:<unknown>", got)
-	}
-	executor, err := bindings["start"].CreateInstance("session")
-	if err != nil {
-		t.Fatalf("CreateInstance: %v", err)
-	}
-	if executor.ExecutorType != nil {
-		t.Fatalf("created ExecutorType = %v, want nil", executor.ExecutorType)
+	got := bindings["start"].ImplementationID
+	if got != "start" {
+		t.Fatalf("ImplementationID = %q, want start", got)
 	}
 }
 
@@ -158,8 +146,8 @@ func TestBuilder_Validation_AddEdgesOutOfOrderDoesNotImpactReachability(t *testi
 		if _, ok := bindings[id]; !ok {
 			t.Errorf("expected binding for %s", id)
 		} else {
-			if bindings[id].ExecutorType != reflect.TypeFor[*noOpExecutor]() {
-				t.Errorf("expected executor type *noOpExecutor for %s", id)
+			if bindings[id].ImplementationID != "*noOpExecutor" {
+				t.Errorf("expected implementation ID *noOpExecutor for %s", id)
 			}
 		}
 	}
@@ -185,8 +173,8 @@ func TestBuilder_LateBinding_Executor(t *testing.T) {
 	if binding, ok := bindings["start"]; !ok {
 		t.Error("expected binding for start")
 	} else {
-		if binding.ExecutorType != reflect.TypeFor[*noOpExecutor]() {
-			t.Errorf("expected executor type *noOpExecutor")
+		if binding.ImplementationID != "*noOpExecutor" {
+			t.Errorf("expected implementation ID *noOpExecutor")
 		}
 	}
 }
@@ -212,8 +200,8 @@ func TestBuilder_LateImplicitBinding_Executor(t *testing.T) {
 	if binding, ok := bindings["start"]; !ok {
 		t.Error("expected binding for start")
 	} else {
-		if binding.ExecutorType != reflect.TypeFor[*noOpExecutor]() {
-			t.Errorf("expected executor type *noOpExecutor")
+		if binding.ImplementationID != "*noOpExecutor" {
+			t.Errorf("expected implementation ID *noOpExecutor")
 		}
 	}
 }
@@ -228,7 +216,7 @@ func TestBuilder_RebindToDifferent_Disallowed(t *testing.T) {
 
 	if err == nil {
 		t.Error("expected error, got nil")
-	} else if !strings.Contains(err.Error(), "cannot bind executor with ID \"start\" because an executor with the same ID but a different type (\"*workflow_test.noOpExecutor\" vs \"*workflow_test.someOtherNoOpExecutor\") is already bound") {
+	} else if !strings.Contains(err.Error(), "cannot bind executor with ID \"start\" because an executor with the same ID but a different implementation ID (\"*noOpExecutor\" vs \"*someOtherNoOpExecutor\") is already bound") {
 		t.Errorf("expected rebind executors error, got %v", err)
 	}
 }
@@ -268,8 +256,8 @@ func TestBuilder_RebindToSameish_Allowed(t *testing.T) {
 	if binding, ok := bindings["start"]; !ok {
 		t.Error("expected binding for start")
 	} else {
-		if binding.ExecutorType != reflect.TypeFor[*noOpExecutor]() {
-			t.Errorf("expected executor type *noOpExecutor")
+		if binding.ImplementationID != "*noOpExecutor" {
+			t.Errorf("expected implementation ID *noOpExecutor")
 		}
 	}
 }
@@ -328,23 +316,19 @@ func TestBuilder_Workflow_NameAndDescription(t *testing.T) {
 // the supplied slice (under mu) and forwards strings downstream unchanged.
 func recordingBinding(id string, sink *[]string) workflow.ExecutorBinding {
 	binding := workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		ID:               id,
+		ImplementationID: "*workflow.Executor",
 	}
 	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: id,
-			Spec: workflow.ExecutorSpec{
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
-				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					rb.SendsMessageType(reflect.TypeFor[string]())
-					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
-						*sink = append(*sink, id+":"+msg.(string))
-						return nil, ctx.SendMessage("", msg)
-					})
-					return rb, nil
-				},
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.SendsMessageType(reflect.TypeFor[string]())
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+					*sink = append(*sink, id+":"+msg.(string))
+					return nil, ctx.SendMessage("", msg)
+				})
+				return rb, nil
 			},
 		}, nil
 	}
@@ -578,20 +562,19 @@ func newTypedExecutor[T any, U any](id string) workflow.ExecutorBinding {
 	newExec := func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: id,
-			Spec: workflow.ExecutorSpec{
-				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[T](), reflect.TypeFor[U](), func(ctx *workflow.Context, msg any) (any, error) {
-						return *new(U), nil
-					})
-					return rb, nil
-				},
+
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[T](), reflect.TypeFor[U](), func(ctx *workflow.Context, msg any) (any, error) {
+					return *new(U), nil
+				})
+				return rb, nil
 			},
 		}, nil
 	}
 	return workflow.ExecutorBinding{
-		ID:              id,
-		ExecutorType:    reflect.TypeFor[*workflow.Executor](),
-		NewExecutorFunc: newExec,
+		ID:               id,
+		ImplementationID: "*workflow.Executor",
+		NewExecutorFunc:  newExec,
 	}
 }
 
@@ -599,23 +582,19 @@ func newDeclaredSendExecutor[T any](id string, sendTypes ...reflect.Type) workfl
 	newExec := func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: id,
-			Spec: workflow.ExecutorSpec{
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
-				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					rb.SendsMessageType(sendTypes...)
-					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[T](), nil, func(ctx *workflow.Context, msg any) (any, error) {
-						return nil, nil
-					})
-					return rb, nil
-				},
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.SendsMessageType(sendTypes...)
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[T](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+					return nil, nil
+				})
+				return rb, nil
 			},
 		}, nil
 	}
 	return workflow.ExecutorBinding{
-		ID:              id,
-		ExecutorType:    reflect.TypeFor[*workflow.Executor](),
-		NewExecutorFunc: newExec,
+		ID:               id,
+		ImplementationID: "*workflow.Executor",
+		NewExecutorFunc:  newExec,
 	}
 }
 
@@ -680,14 +659,13 @@ func TestBuilder_Validation_TypeCompatibility_RespectsAutoSendDisabled(t *testin
 	source.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: source.ID,
-			Spec: workflow.ExecutorSpec{
-				DisableAutoSendMessageHandlerResultObject: true,
-				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[int](), func(ctx *workflow.Context, msg any) (any, error) {
-						return 1, nil
-					})
-					return rb, nil
-				},
+
+			DisableAutoSendMessageHandlerResultObject: true,
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[int](), func(ctx *workflow.Context, msg any) (any, error) {
+					return 1, nil
+				})
+				return rb, nil
 			},
 		}, nil
 	}

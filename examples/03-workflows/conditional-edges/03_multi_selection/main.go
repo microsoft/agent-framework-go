@@ -36,15 +36,28 @@ type AnalysisResult struct {
 }
 
 func main() {
-	analyze := workflow.BindFunc("EmailAnalysisExecutor", analyzeEmail)
-	spam := workflow.BindFunc("HandleSpamExecutor", func(result AnalysisResult) string { return "Email marked as spam: " + result.Reason })
-	assistant := workflow.BindFunc("EmailAssistantExecutor", func(result AnalysisResult) string {
+	analyze := workflow.NewExecutor("EmailAnalysisExecutor", func(email string) AnalysisResult {
+		return analyzeEmail(email)
+	}).Bind()
+
+	spam := workflow.NewExecutor("HandleSpamExecutor", func(result AnalysisResult) string {
+		return "Email marked as spam: " + result.Reason
+	}).Bind()
+
+	assistant := workflow.NewExecutor("EmailAssistantExecutor", func(result AnalysisResult) string {
 		return "Draft response for email length " + fmt.Sprint(result.EmailLength)
-	})
-	summary := workflow.BindFunc("EmailSummaryExecutor", func(result AnalysisResult) string { return "Summary: " + firstWords(result.Email, 12) })
-	uncertain := workflow.BindFunc("HandleUncertainExecutor", func(result AnalysisResult) string { return "Email queued for review: " + result.Reason })
-	send := workflow.BindFunc("SendEmailExecutor", func(response string) string { return "Email sent: " + response })
-	log := workflow.BindFunc("DatabaseAccessExecutor", func(value string) string { return "Logged: " + value })
+	}).Bind()
+
+	summary := workflow.NewExecutor("EmailSummaryExecutor", func(result AnalysisResult) string {
+		return "Summary: " + firstWords(result.Email, 12)
+	}).Bind()
+
+	uncertain := workflow.NewExecutor("HandleUncertainExecutor", func(result AnalysisResult) string {
+		return "Email queued for review: " + result.Reason
+	}).Bind()
+
+	send := workflow.NewExecutor("SendEmailExecutor", func(response string) string { return "Email sent: " + response }).Bind()
+	log := workflow.NewExecutor("DatabaseAccessExecutor", func(value string) string { return "Logged: " + value }).Bind()
 
 	b := workflow.NewBuilder(analyze)
 	b.AddFanOutEdge(analyze, []workflow.ExecutorBinding{spam, assistant, summary, uncertain}, workflow.WithEdgeAssigner(routeAnalysis)).

@@ -14,10 +14,10 @@ import (
 )
 
 const (
-	aggregateTurnMessagesStateKey = "AggregateTurnMessagesExecutor.State"
-	concurrentEndExecutorID       = "ConcurrentEnd"
-	outputMessagesExecutorID      = "OutputMessages"
-	outputMessagesStateKey        = "OutputMessagesExecutor.State"
+	aggregateTurnMessagesStateKey = "workflowhosting.AggregateTurnMessagesExecutor.State"
+	concurrentEndExecutorID       = "workflowhosting.ConcurrentEnd"
+	outputMessagesExecutorID      = "workflowhosting.OutputMessages"
+	outputMessagesStateKey        = "workflowhosting.OutputMessagesExecutor.State"
 )
 
 // BuildSequential builds a [workflow.Workflow] with the given name that runs agents in order:
@@ -112,25 +112,14 @@ func BuildConcurrentWithAggregator(name string, aggregator MessageAggregator, ag
 	return bld.Build()
 }
 
-type aggregateTurnMessagesMarker struct{}
-
-type messageForwardingMarker struct{}
-
-type outputMessagesMarker struct{}
-
 func newMessageForwardingBinding(id string) workflow.ExecutorBinding {
 	return workflow.ExecutorBinding{
 		ID:                                id,
-		ExecutorType:                      reflect.TypeFor[messageForwardingMarker](),
 		SupportsConcurrentSharedExecution: true,
 		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
-			spec := workflow.ExecutorSpec{}
-			messageworkflow.ConfigureForwarding(&spec, nil)
-			return &workflow.Executor{
-				ID:           id,
-				ExecutorType: reflect.TypeFor[messageForwardingMarker](),
-				Spec:         spec,
-			}, nil
+			executor := workflow.Executor{ID: id}
+			messageworkflow.ConfigureForwarding(&executor, nil)
+			return &executor, nil
 		},
 	}
 }
@@ -138,26 +127,22 @@ func newMessageForwardingBinding(id string) workflow.ExecutorBinding {
 func newAggregateTurnMessagesBinding(id string) workflow.ExecutorBinding {
 	return workflow.ExecutorBinding{
 		ID:                                id,
-		ExecutorType:                      reflect.TypeFor[aggregateTurnMessagesMarker](),
 		SupportsConcurrentSharedExecution: true,
 		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
-			spec := workflow.ExecutorSpec{
+			executor := workflow.Executor{
+				ID: id,
 				ConfigureProtocol: func(pb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 					return pb.SendsMessageType(reflect.TypeFor[[]*message.Message]()), nil
 				},
 			}
-			messageworkflow.Configure(&spec, &messageworkflow.Options{
+			messageworkflow.Configure(&executor, &messageworkflow.Options{
 				StateKey:                 aggregateTurnMessagesStateKey,
 				DisableAutoSendTurnToken: true,
 				TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, messages []*message.Message) error {
 					return ctx.SendMessage("", messages)
 				},
 			})
-			return &workflow.Executor{
-				ID:           id,
-				ExecutorType: reflect.TypeFor[aggregateTurnMessagesMarker](),
-				Spec:         spec,
-			}, nil
+			return &executor, nil
 		},
 	}
 }
@@ -165,31 +150,25 @@ func newAggregateTurnMessagesBinding(id string) workflow.ExecutorBinding {
 func newOutputMessagesBinding() workflow.ExecutorBinding {
 	return workflow.ExecutorBinding{
 		ID:                                outputMessagesExecutorID,
-		ExecutorType:                      reflect.TypeFor[outputMessagesMarker](),
 		SupportsConcurrentSharedExecution: true,
 		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
-			spec := workflow.ExecutorSpec{
+			executor := workflow.Executor{
+				ID: outputMessagesExecutorID,
 				ConfigureProtocol: func(pb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 					return pb.YieldsOutputType(reflect.TypeFor[[]*message.Message]()), nil
 				},
 			}
-			messageworkflow.Configure(&spec, &messageworkflow.Options{
+			messageworkflow.Configure(&executor, &messageworkflow.Options{
 				StateKey:                 outputMessagesStateKey,
 				DisableAutoSendTurnToken: true,
 				TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, messages []*message.Message) error {
 					return ctx.YieldOutput(messages)
 				},
 			})
-			return &workflow.Executor{
-				ID:           outputMessagesExecutorID,
-				ExecutorType: reflect.TypeFor[outputMessagesMarker](),
-				Spec:         spec,
-			}, nil
+			return &executor, nil
 		},
 	}
 }
-
-type concurrentEndMarker struct{}
 
 func newConcurrentEndBinding(expectedInputs int, aggregator MessageAggregator) workflow.ExecutorBinding {
 	if aggregator == nil {
@@ -197,7 +176,6 @@ func newConcurrentEndBinding(expectedInputs int, aggregator MessageAggregator) w
 	}
 	return workflow.ExecutorBinding{
 		ID:                                concurrentEndExecutorID,
-		ExecutorType:                      reflect.TypeFor[concurrentEndMarker](),
 		SupportsConcurrentSharedExecution: true,
 		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
 			allResults := make([][]*message.Message, 0, expectedInputs)
@@ -207,31 +185,26 @@ func newConcurrentEndBinding(expectedInputs int, aggregator MessageAggregator) w
 				remaining = expectedInputs
 			}
 			return &workflow.Executor{
-				ID:           concurrentEndExecutorID,
-				ExecutorType: reflect.TypeFor[concurrentEndMarker](),
-				Spec: workflow.ExecutorSpec{
-					DisableAutoSendMessageHandlerResultObject: true,
-					DisableAutoYieldOutputHandlerResultObject: true,
-					Reset: func() error {
-						reset()
-						return nil
-					},
-					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-						rb.YieldsOutputType(reflect.TypeFor[[]*message.Message]())
-						rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[[]*message.Message](), nil, func(ctx *workflow.Context, msg any) (any, error) {
-							allResults = append(allResults, msg.([]*message.Message))
-							remaining--
-							if remaining == 0 {
-								results := allResults
-								reset()
-								if err := ctx.YieldOutput(aggregator(ctx, results)); err != nil {
-									return nil, err
-								}
+				ID: concurrentEndExecutorID,
+				ResetFunc: func() error {
+					reset()
+					return nil
+				},
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.YieldsOutputType(reflect.TypeFor[[]*message.Message]())
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[[]*message.Message](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+						allResults = append(allResults, msg.([]*message.Message))
+						remaining--
+						if remaining == 0 {
+							results := allResults
+							reset()
+							if err := ctx.YieldOutput(aggregator(ctx, results)); err != nil {
+								return nil, err
 							}
-							return struct{}{}, nil
-						})
-						return rb, nil
-					},
+						}
+						return struct{}{}, nil
+					})
+					return rb, nil
 				},
 			}, nil
 		},

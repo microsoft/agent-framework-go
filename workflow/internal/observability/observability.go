@@ -40,7 +40,7 @@ const (
 	TagErrorMessage            = "error.message"
 	TagSessionID               = "session.id"
 	TagExecutorID              = "executor.id"
-	TagExecutorType            = "executor.type"
+	TagImplementationID        = "executor.implementation.id"
 	TagExecutorInput           = "executor.input"
 	TagExecutorOutput          = "executor.output"
 	TagMessageType             = "message.type"
@@ -207,14 +207,14 @@ func (c *Context) StartWorkflowRun(ctx context.Context, metadata WorkflowMetadat
 	return ctx, span
 }
 
-func (c *Context) StartExecutorProcess(ctx context.Context, executorID, executorType, messageType string, message any, traceContext map[string]string) (context.Context, *Activity) {
+func (c *Context) StartExecutorProcess(ctx context.Context, executorID, implementationID, messageType string, message any, traceContext map[string]string) (context.Context, *Activity) {
 	if c.optionsOrZero().DisableExecutorProcess {
 		return ctx, nil
 	}
 	ctx, span := c.start(ctx, ActivityExecutorProcess+" "+executorID, workflowobservability.SpanOptions{SourceTraceContext: traceContext})
 	span.SetAttributes(
 		workflowobservability.StringAttribute(TagExecutorID, executorID),
-		workflowobservability.StringAttribute(TagExecutorType, executorType),
+		workflowobservability.StringAttribute(TagImplementationID, implementationID),
 		workflowobservability.StringAttribute(TagMessageType, messageType),
 	)
 	if c.optionsOrZero().EnableSensitiveData {
@@ -297,16 +297,6 @@ func ErrorAttributes(err error) []workflowobservability.Attribute {
 
 func SerializedAttribute(key string, value any) workflowobservability.Attribute {
 	return workflowobservability.StringAttribute(key, serialize(value))
-}
-
-func TypeName(typ reflect.Type) string {
-	if typ == nil {
-		return ""
-	}
-	if typ.PkgPath() == "" {
-		return typ.String()
-	}
-	return typ.PkgPath() + "." + typ.Name()
 }
 
 func setWorkflowAttributes(span *Activity, metadata WorkflowMetadata) {

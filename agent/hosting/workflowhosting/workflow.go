@@ -108,15 +108,6 @@ type Config struct {
 	InterceptUnterminatedFunctionCalls bool
 }
 
-// agentBindingMarker is an unexported sentinel type used as the
-// ExecutorBinding.ExecutorType for bindings created by [New].
-//
-// Using a private type ensures that bindings produced by this package can be
-// distinguished from any third-party ExecutorBinding referencing the same
-// agent ID, so the workflow builder will surface a clear "different type"
-// error instead of silently merging incompatible bindings.
-type agentBindingMarker struct{}
-
 // New creates a workflow [workflow.ExecutorBinding] that hosts the given
 // [agent.Agent] using the supplied [Config]. The zero value of [Config] is a
 // sensible default.
@@ -124,10 +115,10 @@ func New(a *agent.Agent, cfg Config) workflow.ExecutorBinding {
 	id := descriptiveID(a)
 	userInputPort, functionCallPort := hostPorts(id)
 	return workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeFor[agentBindingMarker](),
-		RawValue:     a,
-		Ports:        []workflow.RequestPort{userInputPort, functionCallPort},
+		ID:               id,
+		ImplementationID: "workflowhosting.Agent",
+		RawValue:         a,
+		Ports:            []workflow.RequestPort{userInputPort, functionCallPort},
 		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
 			return newHostExecutor(a, cfg).executor(), nil
 		},
@@ -194,24 +185,20 @@ func newHostExecutor(a *agent.Agent, cfg Config) *hostExecutor {
 }
 
 func (h *hostExecutor) executor() *workflow.Executor {
-	spec := workflow.ExecutorSpec{}
-	messageworkflow.Configure(&spec, &messageworkflow.Options{
+	executor := workflow.Executor{ID: h.id}
+	messageworkflow.Configure(&executor, &messageworkflow.Options{
 		StateKey:                 agentBufferedStateKey,
 		TakeTurnHandler:          h.handleTurnToken,
 		StringMessageRole:        string(message.RoleUser),
 		DisableAutoSendTurnToken: true,
 		MessageState:             h.messageState,
 	})
-	spec.Extend(workflow.ExecutorSpec{
-		OnCheckpoint:         h.onCheckpoint,
-		OnCheckpointRestored: h.onCheckpointRestored,
-		ConfigureProtocol:    h.configureRoutes,
+	executor.Extend(&workflow.Executor{
+		OnCheckpointFunc:         h.onCheckpoint,
+		OnCheckpointRestoredFunc: h.onCheckpointRestored,
+		ConfigureProtocol:        h.configureRoutes,
 	})
-
-	return &workflow.Executor{
-		ID:   h.id,
-		Spec: spec,
-	}
+	return &executor
 }
 
 func (h *hostExecutor) onCheckpoint(wctx *workflow.Context) error {

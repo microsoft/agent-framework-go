@@ -46,10 +46,10 @@ func (s *MessageState) Reset() error {
 	return s.cache.Reset()
 }
 
-// Configure extends spec with chat-message workflow behavior.
-func Configure(spec *workflow.ExecutorSpec, options *Options) {
-	if spec == nil {
-		panic("messageworkflow: spec is required")
+// Configure extends executor with chat-message workflow behavior.
+func Configure(executor *workflow.Executor, options *Options) {
+	if executor == nil {
+		panic("messageworkflow: executor is required")
 	}
 	if options.StateKey == "" {
 		panic("stateKey is required")
@@ -61,11 +61,9 @@ func Configure(spec *workflow.ExecutorSpec, options *Options) {
 	if state == nil {
 		state = NewMessageState(options.StateKey, options.ScopeName)
 	}
-	messageSpec := workflow.ExecutorSpec{
-		DisableAutoSendMessageHandlerResultObject: true,
-		DisableAutoYieldOutputHandlerResultObject: true,
-		Reset: state.Reset,
-		OnCheckpointRestored: func(ctx *workflow.Context) error {
+	messageExecutor := workflow.Executor{
+		ResetFunc: state.Reset,
+		OnCheckpointRestoredFunc: func(ctx *workflow.Context) error {
 			return state.Reset()
 		},
 		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
@@ -118,5 +116,5 @@ func Configure(spec *workflow.ExecutorSpec, options *Options) {
 			return rb, nil
 		},
 	}
-	spec.Extend(messageSpec)
+	executor.Extend(&messageExecutor)
 }

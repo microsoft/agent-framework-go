@@ -39,11 +39,11 @@ func TestMessageRouterRoutesAssignableInterfaceHandler(t *testing.T) {
 	if !handled {
 		t.Fatal("RouteMessage handled = false, want true")
 	}
-	if result.Error != nil {
-		t.Fatalf("RouteMessage error = %v", result.Error)
+	if result.err != nil {
+		t.Fatalf("RouteMessage error = %v", result.err)
 	}
-	if result.Result != "handled" {
-		t.Fatalf("RouteMessage result = %v, want handled", result.Result)
+	if result.result != "handled" {
+		t.Fatalf("RouteMessage result = %v, want handled", result.result)
 	}
 }
 
@@ -64,11 +64,11 @@ func TestMessageRouterPrefersExactHandlerOverInterfaceHandler(t *testing.T) {
 	if !handled {
 		t.Fatal("RouteMessage handled = false, want true")
 	}
-	if result.Error != nil {
-		t.Fatalf("RouteMessage error = %v", result.Error)
+	if result.err != nil {
+		t.Fatalf("RouteMessage error = %v", result.err)
 	}
-	if result.Result != "concrete" {
-		t.Fatalf("RouteMessage result = %v, want concrete", result.Result)
+	if result.result != "concrete" {
+		t.Fatalf("RouteMessage result = %v, want concrete", result.result)
 	}
 }
 
@@ -103,10 +103,10 @@ func TestMessageRouterRoutesPortableValueAfterInterfaceMatchIsCached(t *testing.
 	if !handled {
 		t.Fatal("RouteMessage portable handled = false, want true")
 	}
-	if result.Error != nil {
-		t.Fatalf("RouteMessage portable error = %v", result.Error)
+	if result.err != nil {
+		t.Fatalf("RouteMessage portable error = %v", result.err)
 	}
-	if result.Result != "portable" {
-		t.Fatalf("RouteMessage portable result = %v, want portable", result.Result)
+	if result.result != "portable" {
+		t.Fatalf("RouteMessage portable result = %v, want portable", result.result)
 	}
 }

@@ -256,22 +256,21 @@ func collectForwardedResponseMessages(t *testing.T, a *agent.Agent, cfg workflow
 	var observed []*message.Message
 	sinkID := "sink"
 	sink := workflow.ExecutorBinding{
-		ID:           sinkID,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		ID:               sinkID,
+		ImplementationID: "*workflow.Executor",
 	}
 	sink.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: sinkID,
-			Spec: workflow.ExecutorSpec{
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
-				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[[]*message.Message](), nil, func(_ *workflow.Context, msg any) (any, error) {
-						observed = append(observed, msg.([]*message.Message)...)
-						return nil, nil
-					})
-					return rb, nil
-				},
+
+			DisableAutoSendMessageHandlerResultObject: true,
+			DisableAutoYieldOutputHandlerResultObject: true,
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[[]*message.Message](), nil, func(_ *workflow.Context, msg any) (any, error) {
+					observed = append(observed, msg.([]*message.Message)...)
+					return nil, nil
+				})
+				return rb, nil
 			},
 		}, nil
 	}
@@ -590,22 +589,21 @@ func TestHostedAgent_ForwardsIncomingMessages(t *testing.T) {
 			var observed []any
 			sinkID := "sink"
 			sink := workflow.ExecutorBinding{
-				ID:           sinkID,
-				ExecutorType: reflect.TypeFor[*workflow.Executor](),
+				ID:               sinkID,
+				ImplementationID: "*workflow.Executor",
 			}
 			sink.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 				return &workflow.Executor{
 					ID: sinkID,
-					Spec: workflow.ExecutorSpec{
-						DisableAutoSendMessageHandlerResultObject: true,
-						DisableAutoYieldOutputHandlerResultObject: true,
-						ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-							rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[[]*message.Message](), nil, func(_ *workflow.Context, msg any) (any, error) {
-								observed = append(observed, msg)
-								return nil, nil
-							})
-							return rb, nil
-						},
+
+					DisableAutoSendMessageHandlerResultObject: true,
+					DisableAutoYieldOutputHandlerResultObject: true,
+					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+						rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[[]*message.Message](), nil, func(_ *workflow.Context, msg any) (any, error) {
+							observed = append(observed, msg)
+							return nil, nil
+						})
+						return rb, nil
 					},
 				}, nil
 			}
@@ -1080,23 +1078,22 @@ func newFunctionCallAgent() *agent.Agent {
 func approverExecutor(target workflow.ExecutorBinding, approve bool) workflow.ExecutorBinding {
 	id := "approver"
 	binding := workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		ID:               id,
+		ImplementationID: "*workflow.Executor",
 	}
 	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: id,
-			Spec: workflow.ExecutorSpec{
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
-				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					rb.SendsMessageType(reflect.TypeFor[*message.ToolApprovalResponseContent]())
-					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[*message.ToolApprovalRequestContent](), nil, func(ctx *workflow.Context, msg any) (any, error) {
-						req := msg.(*message.ToolApprovalRequestContent)
-						return nil, ctx.SendMessage(target.ID, req.CreateResponse(approve, ""))
-					})
-					return rb, nil
-				},
+
+			DisableAutoSendMessageHandlerResultObject: true,
+			DisableAutoYieldOutputHandlerResultObject: true,
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.SendsMessageType(reflect.TypeFor[*message.ToolApprovalResponseContent]())
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[*message.ToolApprovalRequestContent](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+					req := msg.(*message.ToolApprovalRequestContent)
+					return nil, ctx.SendMessage(target.ID, req.CreateResponse(approve, ""))
+				})
+				return rb, nil
 			},
 		}, nil
 	}
@@ -1107,26 +1104,25 @@ func approverExecutor(target workflow.ExecutorBinding, approve bool) workflow.Ex
 func resultExecutor(target workflow.ExecutorBinding, result any) workflow.ExecutorBinding {
 	id := "executor"
 	binding := workflow.ExecutorBinding{
-		ID:           id,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		ID:               id,
+		ImplementationID: "*workflow.Executor",
 	}
 	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: id,
-			Spec: workflow.ExecutorSpec{
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
-				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					rb.SendsMessageType(reflect.TypeFor[*message.FunctionResultContent]())
-					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[*message.FunctionCallContent](), nil, func(ctx *workflow.Context, msg any) (any, error) {
-						call := msg.(*message.FunctionCallContent)
-						return nil, ctx.SendMessage(target.ID, &message.FunctionResultContent{
-							CallID: call.CallID,
-							Result: result,
-						})
+
+			DisableAutoSendMessageHandlerResultObject: true,
+			DisableAutoYieldOutputHandlerResultObject: true,
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.SendsMessageType(reflect.TypeFor[*message.FunctionResultContent]())
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[*message.FunctionCallContent](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+					call := msg.(*message.FunctionCallContent)
+					return nil, ctx.SendMessage(target.ID, &message.FunctionResultContent{
+						CallID: call.CallID,
+						Result: result,
 					})
-					return rb, nil
-				},
+				})
+				return rb, nil
 			},
 		}, nil
 	}
@@ -1348,22 +1344,21 @@ func TestHostedAgent_InterceptDisabled_PostsExternalRequest(t *testing.T) {
 	var sawApprovalRequestMessage bool
 	probeID := "probe"
 	probe := workflow.ExecutorBinding{
-		ID:           probeID,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		ID:               probeID,
+		ImplementationID: "*workflow.Executor",
 	}
 	probe.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: probeID,
-			Spec: workflow.ExecutorSpec{
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
-				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[*message.ToolApprovalRequestContent](), nil, func(_ *workflow.Context, _ any) (any, error) {
-						sawApprovalRequestMessage = true
-						return nil, nil
-					})
-					return rb, nil
-				},
+
+			DisableAutoSendMessageHandlerResultObject: true,
+			DisableAutoYieldOutputHandlerResultObject: true,
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[*message.ToolApprovalRequestContent](), nil, func(_ *workflow.Context, _ any) (any, error) {
+					sawApprovalRequestMessage = true
+					return nil, nil
+				})
+				return rb, nil
 			},
 		}, nil
 	}
@@ -1826,25 +1821,24 @@ func TestHostedAgent_UnknownResponseID_RaisesError(t *testing.T) {
 	// Sender forwards a stray FunctionResultContent to the host.
 	senderID := "sender"
 	sender := workflow.ExecutorBinding{
-		ID:           senderID,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		ID:               senderID,
+		ImplementationID: "*workflow.Executor",
 	}
 	sender.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: senderID,
-			Spec: workflow.ExecutorSpec{
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
-				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					rb.SendsMessageType(reflect.TypeFor[*message.FunctionResultContent]())
-					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
-						return nil, ctx.SendMessage(host.ID, &message.FunctionResultContent{
-							CallID: "no-such-call",
-							Result: "x",
-						})
+
+			DisableAutoSendMessageHandlerResultObject: true,
+			DisableAutoYieldOutputHandlerResultObject: true,
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.SendsMessageType(reflect.TypeFor[*message.FunctionResultContent]())
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
+					return nil, ctx.SendMessage(host.ID, &message.FunctionResultContent{
+						CallID: "no-such-call",
+						Result: "x",
 					})
-					return rb, nil
-				},
+				})
+				return rb, nil
 			},
 		}, nil
 	}
@@ -1890,22 +1884,21 @@ func TestHostedAgent_HeldTurnToken_StampsResolvedEmitEvents(t *testing.T) {
 	sinkID := "sink"
 	var observed []workflow.TurnToken
 	sink := workflow.ExecutorBinding{
-		ID:           sinkID,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		ID:               sinkID,
+		ImplementationID: "*workflow.Executor",
 	}
 	sink.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: sinkID,
-			Spec: workflow.ExecutorSpec{
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
-				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[workflow.TurnToken](), nil, func(_ *workflow.Context, msg any) (any, error) {
-						observed = append(observed, msg.(workflow.TurnToken))
-						return nil, nil
-					})
-					return rb, nil
-				},
+
+			DisableAutoSendMessageHandlerResultObject: true,
+			DisableAutoYieldOutputHandlerResultObject: true,
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[workflow.TurnToken](), nil, func(_ *workflow.Context, msg any) (any, error) {
+					observed = append(observed, msg.(workflow.TurnToken))
+					return nil, nil
+				})
+				return rb, nil
 			},
 		}, nil
 	}
@@ -2060,22 +2053,21 @@ func TestHostedAgent_AlreadyPendingRequest_IsIdempotent_InterceptMode(t *testing
 	probeID := "probe"
 	var seen []*message.ToolApprovalRequestContent
 	probe := workflow.ExecutorBinding{
-		ID:           probeID,
-		ExecutorType: reflect.TypeFor[*workflow.Executor](),
+		ID:               probeID,
+		ImplementationID: "*workflow.Executor",
 	}
 	probe.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: probeID,
-			Spec: workflow.ExecutorSpec{
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
-				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[*message.ToolApprovalRequestContent](), nil, func(_ *workflow.Context, msg any) (any, error) {
-						seen = append(seen, msg.(*message.ToolApprovalRequestContent))
-						return nil, nil
-					})
-					return rb, nil
-				},
+
+			DisableAutoSendMessageHandlerResultObject: true,
+			DisableAutoYieldOutputHandlerResultObject: true,
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[*message.ToolApprovalRequestContent](), nil, func(_ *workflow.Context, msg any) (any, error) {
+					seen = append(seen, msg.(*message.ToolApprovalRequestContent))
+					return nil, nil
+				})
+				return rb, nil
 			},
 		}, nil
 	}

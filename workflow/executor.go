@@ -7,18 +7,33 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"runtime"
 	"slices"
+	"strings"
 	"sync"
-
-	"github.com/microsoft/agent-framework-go/workflow/internal/observability"
 )
 
-// ExecutorSpec configures an [Executor].
+// Executor is the runnable behavior for a workflow node. It owns the node's
+// message protocol, lifecycle hooks, routing cache, and any executor-local
+// state for one executor instance.
 //
-// The zero value is an empty spec. An [Executor] must have at least one
+// An Executor is not the graph registration used by builders. Use
+// [Executor.Bind] or [BindNewExecutorFunc] to produce an [ExecutorBinding].
+// Bindings carry workflow identity and instance creation/reuse policy; runners
+// call a binding to obtain an Executor for a workflow session.
+//
+// The zero value has no behavior. An [Executor] must have at least one
 // non-nil route or lifecycle callback before it can build routes. Use
-// [ExecutorSpec.Extend] to add behavior from reusable helpers.
-type ExecutorSpec struct {
+// [Executor.Extend] to add behavior from reusable helpers.
+//
+// Executors cache their route table after first use.
+type Executor struct {
+	// ID is the executor's workflow-unique identifier.
+	ID string
+
+	// ImplementationID identifies the implementation or semantic source for this executor.
+	ImplementationID string
+
 	// If true, the result of a message handler that returns a value will not be
 	// sent as a message from the executor.
 	DisableAutoSendMessageHandlerResultObject bool
@@ -27,57 +42,95 @@ type ExecutorSpec struct {
 	// yielded as workflow output from the executor.
 	DisableAutoYieldOutputHandlerResultObject bool
 
+	// CrossRunShareable reports whether this executor instance can be shared
+	// safely by concurrent workflow runs. [Executor.Bind] copies this value to
+	// [ExecutorBinding.SupportsConcurrentSharedExecution].
+	CrossRunShareable bool
+
 	// ConfigureProtocol configures message handlers and declared send/yield
 	// message types on the supplied builder.
 	// It may return the same builder or a replacement builder.
 	ConfigureProtocol func(builder *ProtocolBuilder) (*ProtocolBuilder, error)
 
 	// Initialize is called when the executor instance is created for a run.
-	Initialize func(ctx *Context) error
+	InitializeFunc func(ctx *Context) error
 
 	// Reset clears any executor-local cached state before an instance is reused.
-	Reset func() error
+	ResetFunc func() error
 
 	// OnCheckpoint is called before workflow state is checkpointed.
-	OnCheckpoint func(ctx *Context) error
+	OnCheckpointFunc func(ctx *Context) error
 
 	// OnCheckpointRestored is called after workflow state is restored.
-	OnCheckpointRestored func(ctx *Context) error
+	OnCheckpointRestoredFunc func(ctx *Context) error
 
 	// OnMessageDeliveryStarting is invoked once per superstep, before any
 	// messages are delivered to the executor. It is given a context bound to
 	// this executor with no per-message trace context.
-	OnMessageDeliveryStarting func(ctx *Context) error
+	OnMessageDeliveryStartingFunc func(ctx *Context) error
 
 	// OnMessageDeliveryFinished is invoked once per superstep, after all
 	// messages have been delivered to the executor (regardless of whether
 	// individual deliveries succeeded). It is given a context bound to this
 	// executor with no per-message trace context.
-	OnMessageDeliveryFinished func(ctx *Context) error
+	OnMessageDeliveryFinishedFunc func(ctx *Context) error
+
+	state executorState
 }
 
-// Extend adds spec to s.
+// AttrYieldsOutput marks a struct-based executor as declaring an additional
+// workflow output type T. Use it as a field on a struct passed to [NewExecutor].
+// The field name is not significant; use _ when the field is only a marker.
+type AttrYieldsOutput[T any] struct{ _ [0]*T }
+
+// AttrSendsMessage marks a struct-based executor as declaring an additional
+// sent message type T. Use it as a field on a struct passed to [NewExecutor].
+// The field name is not significant; use _ when the field is only a marker.
+type AttrSendsMessage[T any] struct{ _ [0]*T }
+
+type executorState struct {
+	protocolMu     sync.Mutex
+	cachedProtocol *executorProtocol
+	protocolErr    error
+}
+
+// SetCrossRunShareable sets whether e can be shared safely by concurrent
+// workflow runs and returns e.
+func (e *Executor) SetCrossRunShareable(v bool) *Executor {
+	if e == nil {
+		panic("workflow: cannot configure nil Executor")
+	}
+	e.CrossRunShareable = v
+	return e
+}
+
+// Extend adds behavior from executor to e and returns e.
 //
-// Existing protocol configuration and lifecycle hooks run before hooks from spec.
+// Existing protocol configuration and lifecycle hooks run before hooks from executor.
 // Most hooks stop on the first error. OnMessageDeliveryFinished runs every hook
 // and returns the first error encountered.
 //
 // Runtime policy fields are combined conservatively: disabling automatic send
-// or yield in either spec disables it in the receiver.
-func (s *ExecutorSpec) Extend(spec ExecutorSpec) {
-	if s == nil {
-		panic("workflow: cannot extend nil ExecutorSpec")
+// or yield in either executor disables it in the receiver.
+func (e *Executor) Extend(executor *Executor) *Executor {
+	if e == nil {
+		panic("workflow: cannot extend nil Executor")
+	}
+	if executor == nil {
+		panic("workflow: cannot extend with nil Executor")
 	}
 
-	s.DisableAutoSendMessageHandlerResultObject = s.DisableAutoSendMessageHandlerResultObject || spec.DisableAutoSendMessageHandlerResultObject
-	s.DisableAutoYieldOutputHandlerResultObject = s.DisableAutoYieldOutputHandlerResultObject || spec.DisableAutoYieldOutputHandlerResultObject
-	s.ConfigureProtocol = extendProtocol(s.ConfigureProtocol, spec.ConfigureProtocol)
-	s.Initialize = extendContextHook(s.Initialize, spec.Initialize)
-	s.Reset = extendResetHook(s.Reset, spec.Reset)
-	s.OnCheckpoint = extendContextHook(s.OnCheckpoint, spec.OnCheckpoint)
-	s.OnCheckpointRestored = extendContextHook(s.OnCheckpointRestored, spec.OnCheckpointRestored)
-	s.OnMessageDeliveryStarting = extendContextHook(s.OnMessageDeliveryStarting, spec.OnMessageDeliveryStarting)
-	s.OnMessageDeliveryFinished = extendFinishedHook(s.OnMessageDeliveryFinished, spec.OnMessageDeliveryFinished)
+	e.DisableAutoSendMessageHandlerResultObject = e.DisableAutoSendMessageHandlerResultObject || executor.DisableAutoSendMessageHandlerResultObject
+	e.DisableAutoYieldOutputHandlerResultObject = e.DisableAutoYieldOutputHandlerResultObject || executor.DisableAutoYieldOutputHandlerResultObject
+	e.ConfigureProtocol = extendProtocol(e.ConfigureProtocol, executor.ConfigureProtocol)
+	e.InitializeFunc = extendContextHook(e.InitializeFunc, executor.InitializeFunc)
+	e.ResetFunc = extendResetHook(e.ResetFunc, executor.ResetFunc)
+	e.OnCheckpointFunc = extendContextHook(e.OnCheckpointFunc, executor.OnCheckpointFunc)
+	e.OnCheckpointRestoredFunc = extendContextHook(e.OnCheckpointRestoredFunc, executor.OnCheckpointRestoredFunc)
+	e.OnMessageDeliveryStartingFunc = extendContextHook(e.OnMessageDeliveryStartingFunc, executor.OnMessageDeliveryStartingFunc)
+	e.OnMessageDeliveryFinishedFunc = extendFinishedHook(e.OnMessageDeliveryFinishedFunc, executor.OnMessageDeliveryFinishedFunc)
+	e.state = executorState{}
+	return e
 }
 
 func appendUniqueTypes(dst []reflect.Type, src ...reflect.Type) []reflect.Type {
@@ -152,58 +205,43 @@ func extendFinishedHook(first, second func(*Context) error) func(*Context) error
 	}
 }
 
-func (s ExecutorSpec) isConfigured() bool {
-	return s.ConfigureProtocol != nil ||
-		s.Initialize != nil ||
-		s.Reset != nil ||
-		s.OnCheckpoint != nil ||
-		s.OnCheckpointRestored != nil ||
-		s.OnMessageDeliveryStarting != nil ||
-		s.OnMessageDeliveryFinished != nil
+func (e *Executor) isConfigured() bool {
+	return e.ConfigureProtocol != nil ||
+		e.InitializeFunc != nil ||
+		e.ResetFunc != nil ||
+		e.OnCheckpointFunc != nil ||
+		e.OnCheckpointRestoredFunc != nil ||
+		e.OnMessageDeliveryStartingFunc != nil ||
+		e.OnMessageDeliveryFinishedFunc != nil
 }
 
-// Executor is a runnable workflow node.
-//
-// Spec defines the executor's runtime behavior, routes, and lifecycle hooks.
-// Executors cache their route table after first use.
-type Executor struct {
-	// ID is the executor's workflow-unique identifier.
-	ID string
-
-	// ExecutorType identifies the original binding or implementation type for
-	// diagnostics and telemetry.
-	ExecutorType reflect.Type
-
-	// CrossRunShareable indicates that this executor instance can be used by
-	// multiple runs at the same time when it is bound as a shared instance.
-	CrossRunShareable bool
-
-	// Spec configures this executor's runtime behavior, routes, and lifecycle
-	// hooks. Use [ExecutorSpec.Extend] to combine multiple spec fragments.
-	Spec ExecutorSpec
-
-	routerMu       sync.Mutex
-	cachedProtocol *executorProtocol
-	protocolErr    error
+// implementationID returns the binding implementation ID associated with e.
+// The value is assigned by executor bindings when an executor instance is
+// created, keeping workflow identity metadata read-only to callers.
+func (e *Executor) implementationID() string {
+	if e == nil {
+		return ""
+	}
+	return e.ImplementationID
 }
 
 func (e *Executor) Initialize(ctx *Context) error {
-	if e.Spec.Initialize != nil {
-		return e.Spec.Initialize(ctx)
+	if e.InitializeFunc != nil {
+		return e.InitializeFunc(ctx)
 	}
 	return nil
 }
 
 func (e *Executor) OnCheckpoint(ctx *Context) error {
-	if e.Spec.OnCheckpoint != nil {
-		return e.Spec.OnCheckpoint(ctx)
+	if e.OnCheckpointFunc != nil {
+		return e.OnCheckpointFunc(ctx)
 	}
 	return nil
 }
 
 func (e *Executor) OnCheckpointRestored(ctx *Context) error {
-	if e.Spec.OnCheckpointRestored != nil {
-		return e.Spec.OnCheckpointRestored(ctx)
+	if e.OnCheckpointRestoredFunc != nil {
+		return e.OnCheckpointRestoredFunc(ctx)
 	}
 	return nil
 }
@@ -211,8 +249,8 @@ func (e *Executor) OnCheckpointRestored(ctx *Context) error {
 // OnMessageDeliveryStarting invokes all configured OnMessageDeliveryStarting
 // hooks. Returns the first error from any hook.
 func (e *Executor) OnMessageDeliveryStarting(ctx *Context) error {
-	if e.Spec.OnMessageDeliveryStarting != nil {
-		return e.Spec.OnMessageDeliveryStarting(ctx)
+	if e.OnMessageDeliveryStartingFunc != nil {
+		return e.OnMessageDeliveryStartingFunc(ctx)
 	}
 	return nil
 }
@@ -221,44 +259,45 @@ func (e *Executor) OnMessageDeliveryStarting(ctx *Context) error {
 // hooks. All hooks are run; the first non-nil error encountered is returned
 // after all have been invoked.
 func (e *Executor) OnMessageDeliveryFinished(ctx *Context) error {
-	if e.Spec.OnMessageDeliveryFinished != nil {
-		return e.Spec.OnMessageDeliveryFinished(ctx)
+	if e.OnMessageDeliveryFinishedFunc != nil {
+		return e.OnMessageDeliveryFinishedFunc(ctx)
 	}
 	return nil
 }
 
 func (e *Executor) Reset() error {
-	if e.Spec.Reset != nil {
-		return e.Spec.Reset()
+	if e.ResetFunc != nil {
+		return e.ResetFunc()
 	}
 	return nil
 }
 
 func (e *Executor) protocol() (*executorProtocol, error) {
-	e.routerMu.Lock()
-	defer e.routerMu.Unlock()
+	state := &e.state
+	state.protocolMu.Lock()
+	defer state.protocolMu.Unlock()
 
-	if e.cachedProtocol != nil || e.protocolErr != nil {
-		return e.cachedProtocol, e.protocolErr
+	if state.cachedProtocol != nil || state.protocolErr != nil {
+		return state.cachedProtocol, state.protocolErr
 	}
-	if !e.Spec.isConfigured() {
+	if !e.isConfigured() {
 		panic(errors.New("executor has no protocol configuration function"))
 	}
 	bld := &ProtocolBuilder{}
-	if e.Spec.ConfigureProtocol != nil {
+	if e.ConfigureProtocol != nil {
 		var err error
-		bld, err = e.Spec.ConfigureProtocol(bld)
+		bld, err = e.ConfigureProtocol(bld)
 		if err != nil {
-			e.protocolErr = err
+			state.protocolErr = err
 			return nil, err
 		}
 		if bld == nil {
-			e.protocolErr = errors.New("workflow: protocol configure function returned nil ProtocolBuilder")
-			return nil, e.protocolErr
+			state.protocolErr = errors.New("workflow: protocol configure function returned nil ProtocolBuilder")
+			return nil, state.protocolErr
 		}
 	}
-	e.cachedProtocol, e.protocolErr = bld.build(e.Spec)
-	return e.cachedProtocol, e.protocolErr
+	state.cachedProtocol, state.protocolErr = bld.build(e)
+	return state.cachedProtocol, state.protocolErr
 }
 
 func (e *Executor) router() (*messageRouter, error) {
@@ -275,7 +314,7 @@ func (e *Executor) Execute(ctx *Context, message any) (result any, err error) {
 	spanCtx, span := telemetry.StartExecutorProcess(
 		ctx,
 		e.ID,
-		observability.TypeName(e.ExecutorType),
+		e.implementationID(),
 		messageType.TypeName,
 		message,
 		ctx.traceContextStrings(),
@@ -303,13 +342,13 @@ func (e *Executor) Execute(ctx *Context, message any) (result any, err error) {
 	if !found {
 		return nil, fmt.Errorf("no handler found for message type %T", message)
 	}
-	if ret.Error != nil {
-		if err := ctx.AddEvent(ExecutorFailedEvent{ExecutorID: e.ID, Error: ret.Error}); err != nil {
+	if ret.err != nil {
+		if err := ctx.AddEvent(ExecutorFailedEvent{ExecutorID: e.ID, Error: ret.err}); err != nil {
 			return nil, err
 		}
-		return nil, fmt.Errorf("error invoking handler for message type %T: %w", message, ret.Error)
+		return nil, fmt.Errorf("error invoking handler for message type %T: %w", message, ret.err)
 	} else {
-		if err := ctx.AddEvent(ExecutorCompletedEvent{ExecutorID: e.ID, Result: ret.Result}); err != nil {
+		if err := ctx.AddEvent(ExecutorCompletedEvent{ExecutorID: e.ID, Result: ret.result}); err != nil {
 			return nil, err
 		}
 	}
@@ -317,20 +356,20 @@ func (e *Executor) Execute(ctx *Context, message any) (result any, err error) {
 		return nil, nil
 	}
 	// If we had a real return type, raise it as a SendMessage
-	if ret.Result != nil {
-		telemetry.SetExecutorOutput(span, ret.Result)
-		if !e.Spec.DisableAutoSendMessageHandlerResultObject {
-			if err := ctx.SendMessage("", ret.Result); err != nil {
+	if ret.result != nil && ret.autoOutput {
+		telemetry.SetExecutorOutput(span, ret.result)
+		if !e.DisableAutoSendMessageHandlerResultObject {
+			if err := ctx.SendMessage("", ret.result); err != nil {
 				return nil, err
 			}
 		}
-		if !e.Spec.DisableAutoYieldOutputHandlerResultObject {
-			if err := ctx.YieldOutput(ret.Result); err != nil {
+		if !e.DisableAutoYieldOutputHandlerResultObject {
+			if err := ctx.YieldOutput(ret.result); err != nil {
 				return nil, err
 			}
 		}
 	}
-	return ret.Result, nil
+	return ret.result, nil
 }
 
 func (e *Executor) describeProtocol() (ProtocolDescriptor, error) {
@@ -494,4 +533,416 @@ func (s *StatefulExecutorCache[T]) Reset() error {
 	var zero T
 	s.stateCache = zero
 	return nil
+}
+
+// newRequestPortExecutor creates the executor that turns request-port messages
+// into [ExternalRequest]s and routes matching [ExternalResponse]s back into the
+// workflow.
+func newRequestPortExecutor(port RequestPort) *Executor {
+	var (
+		wrappedMu       sync.Mutex
+		wrappedRequests = make(map[string]*ExternalRequest)
+	)
+
+	return &Executor{
+		ID: port.ID,
+		ConfigureProtocol: func(rb *ProtocolBuilder) (*ProtocolBuilder, error) {
+			rb.SendsMessageType(port.Response, reflect.TypeFor[*ExternalResponse]())
+			rb.RouteBuilder.
+				AddHandlerRaw(port.Request, nil, func(ctx *Context, msg any) (any, error) {
+					req, err := NewExternalRequest("", port, msg)
+					if err != nil {
+						return nil, err
+					}
+					if err := ctx.PostRequest(req); err != nil {
+						return nil, err
+					}
+					return nil, nil
+				}).
+				AddHandlerRaw(reflect.TypeFor[*ExternalRequest](), nil, func(ctx *Context, msg any) (any, error) {
+					req := msg.(*ExternalRequest)
+					data, ok := req.Data.As(port.Request)
+					if !ok {
+						return nil, fmt.Errorf("message type %v could not be interpreted as request type %v", req.PortInfo.RequestType, port.Request)
+					}
+					if !req.PortInfo.ResponseType.Match(port.Response) {
+						return nil, fmt.Errorf("response type %v is not valid for request port response type %v", port.Response, req.PortInfo.ResponseType)
+					}
+					wrapped, err := NewExternalRequest(req.RequestID, port, data)
+					if err != nil {
+						return nil, err
+					}
+					wrappedMu.Lock()
+					wrappedRequests[req.RequestID] = req
+					wrappedMu.Unlock()
+					if err := ctx.PostRequest(wrapped); err != nil {
+						return nil, err
+					}
+					return nil, nil
+				}).
+				AddHandlerRaw(reflect.TypeFor[*ExternalResponse](), nil, func(ctx *Context, msg any) (any, error) {
+					resp := msg.(*ExternalResponse)
+					if resp.PortInfo.PortID != port.ID {
+						return nil, nil
+					}
+					data, ok := resp.Data.As(port.Response)
+					if !ok {
+						return nil, fmt.Errorf("expected response of type %v, got %T", port.Response, resp.Data.Any())
+					}
+					wrappedMu.Lock()
+					original, wrapped := wrappedRequests[resp.RequestID]
+					delete(wrappedRequests, resp.RequestID)
+					wrappedMu.Unlock()
+					if wrapped {
+						return nil, ctx.SendMessage("", &ExternalResponse{
+							PortInfo:  original.PortInfo,
+							RequestID: resp.RequestID,
+							Data:      resp.Data,
+						})
+					}
+					if err := ctx.SendMessage("", resp); err != nil {
+						return nil, err
+					}
+					return nil, ctx.SendMessage("", data)
+				})
+			return rb, nil
+		},
+	}
+}
+
+func bindFuncImplementationID(id string, fn any) string {
+	value := reflect.ValueOf(fn)
+	if value.Kind() != reflect.Func || value.IsNil() {
+		return id
+	}
+	runtimeFunc := runtime.FuncForPC(value.Pointer())
+	if runtimeFunc == nil {
+		return id
+	}
+	name := strings.TrimSuffix(runtimeFunc.Name(), "-fm")
+	if name == "" || isAnonymousFuncName(name) {
+		return id
+	}
+	return name
+}
+
+func isAnonymousFuncName(name string) bool {
+	return containsAnonymousFuncSegment(name, ".func")
+}
+
+func containsAnonymousFuncSegment(name string, marker string) bool {
+	for {
+		idx := strings.Index(name, marker)
+		if idx < 0 {
+			return false
+		}
+		if hasAnonymousFuncOrdinal(name[idx+len(marker):]) {
+			return true
+		}
+		name = name[idx+len(marker):]
+	}
+}
+
+func hasAnonymousFuncOrdinal(s string) bool {
+	if s == "" || s[0] < '0' || s[0] > '9' {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return s[i] == '.'
+		}
+	}
+	return true
+}
+
+// NewExecutor converts v into an [Executor]. The id parameter is the workflow
+// executor ID to assign or validate. If id is empty for an existing executor,
+// the existing executor ID is used.
+//
+// NewExecutor accepts these values:
+//   - *[Executor], which is returned as an executor instance after checking
+//     that a non-empty id matches the executor's ID.
+//   - [RequestPort] or *[RequestPort], which create the executor used by
+//     [RequestPort.Bind].
+//   - [ExecutorBinding], which is instantiated through the binding and must
+//     produce an executor with the binding ID. A non-empty id must match the
+//     binding ID.
+//   - Struct values or pointers to structs with a Handle method. Handle must be
+//     a valid function handler shape accepted by NewExecutor.
+//   - Function handlers must have exactly one typed non-context input parameter
+//     and may return zero or one typed output parameter.
+//   - A *[Context] input is optional; when present, it must be the first input
+//     parameter.
+//   - A final error output is treated as the handler error; a non-final error
+//     output is allowed only as the single ordinary output value.
+//   - Variadic functions are not supported; define an explicit slice or struct
+//     input type instead.
+//   - Function executors register the non-context input type as the accepted
+//     message type and the non-handler-error output type, when present, as an
+//     auto-sent and auto-yielded output type.
+//   - Named functions use their runtime function name as implementation
+//     identity; anonymous functions use id. Struct-based executors use their
+//     struct type name.
+//   - Struct-based executors may declare additional protocol types using
+//     [AttrSendsMessage] and [AttrYieldsOutput] fields. Field names are not
+//     significant; _ is recommended for marker-only fields.
+//
+// NewExecutor panics for nil values, nil functions, unsupported function
+// signatures, or mismatched IDs.
+func NewExecutor(id string, v any) *Executor {
+	if v == nil {
+		panic("workflow: cannot create Executor from nil value")
+	}
+	switch v := v.(type) {
+	case *Executor:
+		if v == nil {
+			panic("workflow: cannot create Executor from nil *Executor")
+		}
+		if id != "" && v.ID != id {
+			panic(fmt.Sprintf("workflow: executor ID %q does not match provided ID %q", v.ID, id))
+		}
+		return v
+	case RequestPort:
+		return newRequestPortExecutor(v)
+	case *RequestPort:
+		if v == nil {
+			panic("workflow: cannot create Executor from nil *RequestPort")
+		}
+		return newRequestPortExecutor(*v)
+	case ExecutorBinding:
+		if id != "" && v.ID != id {
+			panic(fmt.Sprintf("workflow: binding ID %q does not match provided ID %q", v.ID, id))
+		}
+		executor, err := v.CreateInstance(v.ID)
+		if err != nil {
+			panic(fmt.Sprintf("workflow: error creating Executor from binding for ID %q: %v", v.ID, err))
+		}
+		return executor
+	default:
+		value := reflect.ValueOf(v)
+		switch value.Kind() {
+		case reflect.Func:
+			if value.IsNil() {
+				panic("workflow: cannot create Executor from nil function")
+			}
+			fn, err := newReflectExecutorFunc(value)
+			if err != nil {
+				panic(err)
+			}
+			return newReflectFunctionExecutor(id, v, fn)
+		case reflect.Struct, reflect.Pointer:
+			executor, ok, err := newStructHandleExecutor(id, value)
+			if err != nil {
+				panic(err)
+			}
+			if ok {
+				return executor
+			}
+			panic(fmt.Sprintf("workflow: cannot create Executor from value of type %T", v))
+		default:
+			panic(fmt.Sprintf("workflow: cannot create Executor from value of type %T", v))
+		}
+	}
+}
+
+func newReflectFunctionExecutor(id string, source any, fn reflectExecutorFunc) *Executor {
+	return &Executor{
+		ID:               id,
+		ImplementationID: bindFuncImplementationID(id, source),
+		ConfigureProtocol: func(rb *ProtocolBuilder) (*ProtocolBuilder, error) {
+			rb.RouteBuilder.AddHandlerRaw(fn.inputType, fn.outputType, func(ctx *Context, msg any) (any, error) {
+				if msg == nil {
+					if !isNilType(fn.inputType) {
+						return nil, fmt.Errorf("workflow: cannot use nil message as %v", fn.inputType)
+					}
+					output, ok, err := fn.invoke(ctx, reflect.Zero(fn.inputType))
+					if err != nil || !ok {
+						return nil, err
+					}
+					return output.Interface(), nil
+				}
+				input := reflect.ValueOf(msg)
+				if !input.Type().AssignableTo(fn.inputType) {
+					return nil, fmt.Errorf("workflow: message type %T is not assignable to %v", msg, fn.inputType)
+				}
+				output, ok, err := fn.invoke(ctx, input)
+				if err != nil || !ok {
+					return nil, err
+				}
+				return output.Interface(), nil
+			})
+			return rb, nil
+		},
+	}
+}
+
+func newStructHandleExecutor(id string, value reflect.Value) (*Executor, bool, error) {
+	structType, ok, err := structTypeForExecutorValue(value)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	sendTypes, yieldTypes := executorAttrTypes(structType)
+	methodValue := handleMethodValue(value)
+	if !methodValue.IsValid() {
+		if len(sendTypes) != 0 || len(yieldTypes) != 0 {
+			return nil, true, fmt.Errorf("workflow: struct executor type %v has executor attributes but no Handle method", structType)
+		}
+		return nil, false, nil
+	}
+	fn, err := newReflectExecutorFunc(methodValue)
+	if err != nil {
+		return nil, true, err
+	}
+	executor := newReflectFunctionExecutor(id, methodValue.Interface(), fn)
+	executor.ImplementationID = structExecutorImplementationID(structType)
+	if len(sendTypes) == 0 && len(yieldTypes) == 0 {
+		return executor, true, nil
+	}
+	executor.Extend(&Executor{ConfigureProtocol: func(rb *ProtocolBuilder) (*ProtocolBuilder, error) {
+		rb.SendsMessageType(sendTypes...)
+		rb.YieldsOutputType(yieldTypes...)
+		return rb, nil
+	}})
+	return executor, true, nil
+}
+
+func structExecutorImplementationID(structType reflect.Type) string {
+	if name := structType.Name(); name != "" {
+		return name
+	}
+	return structType.String()
+}
+
+func structTypeForExecutorValue(value reflect.Value) (reflect.Type, bool, error) {
+	typ := value.Type()
+	if typ.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return nil, true, fmt.Errorf("workflow: cannot create Executor from nil %v", typ)
+		}
+		typ = typ.Elem()
+	}
+	if typ.Kind() != reflect.Struct {
+		return nil, false, nil
+	}
+	return typ, true, nil
+}
+
+func handleMethodValue(value reflect.Value) reflect.Value {
+	method := value.MethodByName("Handle")
+	if method.IsValid() || value.Kind() != reflect.Struct {
+		return method
+	}
+	ptr := reflect.New(value.Type())
+	ptr.Elem().Set(value)
+	return ptr.MethodByName("Handle")
+}
+
+func executorAttrTypes(structType reflect.Type) (sendTypes []reflect.Type, yieldTypes []reflect.Type) {
+	for i := 0; i < structType.NumField(); i++ {
+		fieldType := structType.Field(i).Type
+		if typ, ok := executorAttrType(fieldType, "AttrSendsMessage"); ok {
+			sendTypes = appendUniqueTypes(sendTypes, typ)
+		}
+		if typ, ok := executorAttrType(fieldType, "AttrYieldsOutput"); ok {
+			yieldTypes = appendUniqueTypes(yieldTypes, typ)
+		}
+	}
+	return sendTypes, yieldTypes
+}
+
+func executorAttrType(typ reflect.Type, name string) (reflect.Type, bool) {
+	if typ.PkgPath() != reflect.TypeFor[AttrYieldsOutput[struct{}]]().PkgPath() || !strings.HasPrefix(typ.Name(), name+"[") || typ.Kind() != reflect.Struct || typ.NumField() != 1 {
+		return nil, false
+	}
+	fieldType := typ.Field(0).Type
+	if fieldType.Kind() != reflect.Array || fieldType.Len() != 0 || fieldType.Elem().Kind() != reflect.Pointer {
+		return nil, false
+	}
+	return fieldType.Elem().Elem(), true
+}
+
+type reflectExecutorFunc struct {
+	fnValue     reflect.Value
+	withContext bool
+	inputType   reflect.Type
+	outputType  reflect.Type
+	hasError    bool
+}
+
+func newReflectExecutorFunc(fnValue reflect.Value) (reflectExecutorFunc, error) {
+	fnType := fnValue.Type()
+	contextType := reflect.TypeFor[*Context]()
+	errorType := reflect.TypeFor[error]()
+
+	withContext := fnType.NumIn() > 0 && fnType.In(0) == contextType
+	for i := 1; i < fnType.NumIn(); i++ {
+		if fnType.In(i) == contextType {
+			return reflectExecutorFunc{}, fmt.Errorf("workflow: *Context must be the first input parameter for function with type %v", fnType)
+		}
+	}
+	inputStart := 0
+	if withContext {
+		inputStart = 1
+	}
+	if fnType.IsVariadic() {
+		return reflectExecutorFunc{}, fmt.Errorf("workflow: variadic functions are not supported for function with type %v", fnType)
+	}
+	if fnType.NumIn()-inputStart != 1 {
+		return reflectExecutorFunc{}, fmt.Errorf("workflow: function with type %v must have exactly one non-context input parameter", fnType)
+	}
+	inputType := fnType.In(inputStart)
+
+	outputEnd := fnType.NumOut()
+	hasError := outputEnd > 0 && fnType.Out(outputEnd-1).AssignableTo(errorType)
+	if hasError {
+		outputEnd--
+	}
+	if outputEnd > 1 {
+		return reflectExecutorFunc{}, fmt.Errorf("workflow: function with type %v must return at most one non-error output parameter", fnType)
+	}
+	var outputType reflect.Type
+	if outputEnd == 1 {
+		outputType = fnType.Out(0)
+	}
+
+	return reflectExecutorFunc{
+		fnValue:     fnValue,
+		withContext: withContext,
+		inputType:   inputType,
+		outputType:  outputType,
+		hasError:    hasError,
+	}, nil
+}
+
+func (fn reflectExecutorFunc) invoke(ctx *Context, input reflect.Value) (reflect.Value, bool, error) {
+	var args [2]reflect.Value
+	argCount := 0
+	if fn.withContext {
+		args[argCount] = reflect.ValueOf(ctx)
+		argCount++
+	}
+	args[argCount] = input
+	argCount++
+
+	results := fn.fnValue.Call(args[:argCount])
+	if fn.hasError {
+		resultErr := results[len(results)-1]
+		if !(isNilType(resultErr.Type()) && resultErr.IsNil()) {
+			return reflect.Value{}, false, resultErr.Interface().(error)
+		}
+		results = results[:len(results)-1]
+	}
+	if len(results) == 0 {
+		return reflect.Value{}, false, nil
+	}
+	return results[0], true, nil
+}
+
+func isNilType(typ reflect.Type) bool {
+	switch typ.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return true
+	default:
+		return false
+	}
 }

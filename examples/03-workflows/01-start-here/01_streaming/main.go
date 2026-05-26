@@ -18,14 +18,15 @@ var _ = demo.NewLogger(
 )
 
 func main() {
-	uppercase := workflow.BindFunc("UppercaseExecutor", true, func(input string) string {
+	uppercase := workflow.NewExecutor("UppercaseExecutor", func(input string) string {
 		return strings.ToUpper(input)
-	})
-	reverse := workflow.BindFunc("ReverseTextExecutor", true, func(input string) string {
+	}).Bind()
+
+	reverse := workflow.NewExecutor("ReverseTextExecutor", func(input string) string {
 		runes := []rune(input)
 		slices.Reverse(runes)
 		return string(runes)
-	})
+	}).Bind()
 
 	wf, err := workflow.NewBuilder(uppercase).
 		AddEdge(uppercase, reverse).

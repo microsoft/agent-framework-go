@@ -22,13 +22,13 @@ func main() {
 		Request:  reflect.TypeFor[string](),
 		Response: reflect.TypeFor[bool](),
 	}
-	approval := workflow.BindRequestPort(approvalPort)
-	finalize := workflow.BindFunc("FinalizeExecutor", func(approved bool) string {
+	approval := approvalPort.Bind()
+	finalize := workflow.NewExecutor("FinalizeExecutor", func(approved bool) string {
 		if approved {
 			return "Request approved by the human reviewer"
 		}
 		return "Request rejected by the human reviewer"
-	})
+	}).Bind()
 
 	wf, err := workflow.NewBuilder(approval).
 		AddEdge(approval, finalize).

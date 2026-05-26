@@ -24,7 +24,7 @@ func TestProtocolBuilderBuildIncludesDeclaredAndAutomaticTypes(t *testing.T) {
 	protocol, err := newProtocolBuilderWithHandler(inputType, outputType).
 		SendsMessageType(explicitSend, nil, explicitSend).
 		YieldsOutputType(explicitYield, nil, explicitYield).
-		build(ExecutorSpec{})
+		build(&Executor{})
 	if err != nil {
 		t.Fatalf("build error = %v", err)
 	}
@@ -44,7 +44,7 @@ func TestExecutorProtocolDescribeReturnsCachedDescriptorValue(t *testing.T) {
 	protocol, err := newProtocolBuilderWithHandler(reflect.TypeFor[protocolBuilderInput](), reflect.TypeFor[protocolBuilderOutput]()).
 		SendsMessageType(reflect.TypeFor[protocolBuilderSend]()).
 		YieldsOutputType(reflect.TypeFor[protocolBuilderYield]()).
-		build(ExecutorSpec{})
+		build(&Executor{})
 	if err != nil {
 		t.Fatalf("build error = %v", err)
 	}
@@ -63,7 +63,7 @@ func TestProtocolBuilderBuildRespectsAutoReturnOptions(t *testing.T) {
 	inputType := reflect.TypeFor[protocolBuilderInput]()
 	outputType := reflect.TypeFor[protocolBuilderOutput]()
 
-	protocol, err := newProtocolBuilderWithHandler(inputType, outputType).build(ExecutorSpec{
+	protocol, err := newProtocolBuilderWithHandler(inputType, outputType).build(&Executor{
 		DisableAutoSendMessageHandlerResultObject: true,
 		DisableAutoYieldOutputHandlerResultObject: true,
 	})
@@ -83,7 +83,7 @@ func TestProtocolBuilderConfigureRoutesErrorReturnsFromBuild(t *testing.T) {
 	var pb ProtocolBuilder
 	_, err := pb.ConfigureRoutes(func(*RouteBuilder) (*RouteBuilder, error) {
 		return nil, wantErr
-	}).build(ExecutorSpec{})
+	}).build(&Executor{})
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("build error = %v, want %v", err, wantErr)
 	}

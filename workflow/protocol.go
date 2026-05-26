@@ -76,7 +76,7 @@ func (pb *ProtocolBuilder) ConfigureRoutes(configure func(*RouteBuilder) (*Route
 	return pb
 }
 
-func (pb *ProtocolBuilder) build(spec ExecutorSpec) (*executorProtocol, error) {
+func (pb *ProtocolBuilder) build(executor *Executor) (*executorProtocol, error) {
 	if pb == nil {
 		return nil, errors.New("workflow: cannot build nil ProtocolBuilder")
 	}
@@ -89,11 +89,11 @@ func (pb *ProtocolBuilder) build(spec ExecutorSpec) (*executorProtocol, error) {
 	}
 
 	sendTypes := appendUniqueTypes(nil, pb.sendTypes...)
-	if !spec.DisableAutoSendMessageHandlerResultObject {
+	if !executor.DisableAutoSendMessageHandlerResultObject {
 		sendTypes = appendUniqueTypes(sendTypes, slices.Collect(router.defaultOutputTypes())...)
 	}
 	yieldTypes := appendUniqueTypes(nil, pb.yieldTypes...)
-	if !spec.DisableAutoYieldOutputHandlerResultObject {
+	if !executor.DisableAutoYieldOutputHandlerResultObject {
 		yieldTypes = appendUniqueTypes(yieldTypes, slices.Collect(router.defaultOutputTypes())...)
 	}
 	descriptor := ProtocolDescriptor{

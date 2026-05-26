@@ -510,7 +510,7 @@ type Context struct {
 	// These outputs will be bubbled out of the workflow using the [SuperStep].
 	//
 	// The type of the output message must match one of the output types declared by the [Executor]. By default, the return
-	// types of registered message handlers are considered output types, unless otherwise specified using [ExecutorSpec].
+	// types of registered message handlers are considered output types, unless otherwise specified using [Executor].
 	YieldOutput func(output any) error
 
 	// RequestHalt adds a request to "halt" workflow execution at the end of the current [SuperStep].

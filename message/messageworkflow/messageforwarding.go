@@ -17,14 +17,14 @@ type ForwardingOptions struct {
 	StringMessageRole message.Role
 }
 
-// ConfigureForwarding extends spec with forwarding behavior for messages and
-// turn tokens. The configured spec accepts
+// ConfigureForwarding extends executor with forwarding behavior for messages and
+// turn tokens. The configured executor accepts
 // [*message.Message], []*message.Message, iter.Seq[*message.Message], and
 // [workflow.TurnToken]. If options.StringMessageRole is set, it also accepts
 // string and forwards it as a single text message with that role.
-func ConfigureForwarding(spec *workflow.ExecutorSpec, options *ForwardingOptions) {
-	if spec == nil {
-		panic("messageworkflow: spec is required")
+func ConfigureForwarding(executor *workflow.Executor, options *ForwardingOptions) {
+	if executor == nil {
+		panic("messageworkflow: executor is required")
 	}
 
 	var stringMessageRole message.Role
@@ -32,10 +32,8 @@ func ConfigureForwarding(spec *workflow.ExecutorSpec, options *ForwardingOptions
 		stringMessageRole = options.StringMessageRole
 	}
 
-	forwardingSpec := workflow.ExecutorSpec{
-		DisableAutoSendMessageHandlerResultObject: true,
-		DisableAutoYieldOutputHandlerResultObject: true,
-		Reset: func() error { return nil },
+	forwardingExecutor := workflow.Executor{
+		ResetFunc: func() error { return nil },
 		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 			rb.SendsMessageType(
 				reflect.TypeFor[*message.Message](),
@@ -70,5 +68,5 @@ func ConfigureForwarding(spec *workflow.ExecutorSpec, options *ForwardingOptions
 			return rb, nil
 		},
 	}
-	spec.Extend(forwardingSpec)
+	executor.Extend(&forwardingExecutor)
 }
