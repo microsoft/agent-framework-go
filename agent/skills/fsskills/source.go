@@ -218,7 +218,11 @@ func (s *Source) parseSkillDirectory(skillFS fs.FS, logPath string) *skills.Skil
 	return &skills.Skill{
 		Frontmatter: frontmatter,
 		GetContent: func(context.Context) (string, error) {
-			return content, nil
+			data, err := fs.ReadFile(skillFS, skillFileName)
+			if err != nil {
+				return "", err
+			}
+			return string(data), nil
 		},
 		Resources: resources,
 		Scripts:   scripts,

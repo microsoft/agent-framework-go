@@ -6,6 +6,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -425,7 +426,7 @@ func (p *providerState) loadSkill(ctx context.Context, skills providedSkillSet, 
 	}
 	p.logger.Info("Loading skill", "skillName", resolved.skill.Frontmatter.Name)
 	if resolved.skill.GetContent == nil {
-		p.logger.Error("Failed to load skill content", "skillName", skillName, "error", "skill content loader is nil")
+		p.logger.Error("Failed to load skill content", "skillName", skillName, "error", errors.New("skill content loader is nil"))
 		return fmt.Sprintf("Error: Failed to load skill '%s'.", skillName), nil
 	}
 	content, err := resolved.skill.GetContent(ctx)
