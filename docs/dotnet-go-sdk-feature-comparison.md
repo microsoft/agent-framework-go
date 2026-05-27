@@ -113,6 +113,7 @@ Within overlapping features, the main misalignments are API shape and ecosystem 
 
 - The file/inline skill model is similar: frontmatter, content, resources, scripts, sources/providers.
 - .NET adds class-based skills, attribute-based resources/scripts, and DI-backed skill construction. Go has programmatic in-memory skills and script runners, but no class/DI reflection equivalent.
+- Both Go and .NET now always register all three skill tools (`load_skill`, `read_skill_resource`, `run_skill_script`) unconditionally; the tools return descriptive errors when the requested resource or script is not found.
 
 ### Workflows
 
