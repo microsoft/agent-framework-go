@@ -372,7 +372,6 @@ func (s *streamingRunEventStream) ClearBufferedEvents() {
 			break
 		}
 	}
-	s.SignalInput()
 }
 
 func (s *streamingRunEventStream) Stop() {

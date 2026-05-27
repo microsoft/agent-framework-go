@@ -238,31 +238,41 @@ func TestCheckpoint_RestoreWithPendingRequests_RepublishesRequestInfoEvents(t *t
 			wf, received := createCheckpointRequestWorkflow(t)
 			manager := checkpoint.NewInMemoryManager()
 
-			run, err := env.env.WithCheckpointing(manager).Run(ctx, wf, "Hello")
+			run, err := env.env.WithCheckpointing(manager).RunStreaming(ctx, wf, "Hello")
 			if err != nil {
-				t.Fatalf("Run: %v", err)
+				t.Fatalf("RunStreaming: %v", err)
 			}
-			pendingRequest := firstRequest(t, run.OutgoingEvents())
-			checkpointInfo, ok := run.LastCheckpoint()
-			if !ok {
-				t.Fatal("expected checkpoint")
-			}
+
+			pendingRequest, checkpointInfo := capturePendingRequestAndCheckpointFromStream(t, ctx, run)
 
 			response, err := pendingRequest.CreateResponse("World")
 			if err != nil {
 				t.Fatalf("CreateResponse: %v", err)
 			}
-			if _, err := run.Resume(ctx, response); err != nil {
-				t.Fatalf("Resume with first response: %v", err)
+			if err := run.SendResponse(ctx, response); err != nil {
+				t.Fatalf("SendResponse with first response: %v", err)
+			}
+			firstCompletionEvents := readStreamToHalt(t, ctx, run)
+			if hasErrorEvents(firstCompletionEvents) {
+				t.Fatalf("unexpected error events after first response: %#v", firstCompletionEvents)
 			}
 			if got := received.Load(); got != 1 {
 				t.Fatalf("sink receive count after first response = %d, want 1", got)
 			}
+			status, err := run.GetStatus(ctx)
+			if err != nil {
+				t.Fatalf("GetStatus after first response: %v", err)
+			}
+			if status != inproc.RunStatusIdle {
+				t.Fatalf("status after first response = %v, want Idle", status)
+			}
+
 			if err := run.RestoreCheckpoint(ctx, checkpointInfo); err != nil {
 				t.Fatalf("RestoreCheckpoint: %v", err)
 			}
 
-			replayedRequests := collectRequests(run.NewEvents())
+			restoredEvents := readStreamToHalt(t, ctx, run)
+			replayedRequests := requestsFromEvents(restoredEvents)
 			if len(replayedRequests) != 1 {
 				t.Fatalf("replayed request count = %d, want 1", len(replayedRequests))
 			}
@@ -274,17 +284,17 @@ func TestCheckpoint_RestoreWithPendingRequests_RepublishesRequestInfoEvents(t *t
 			if err != nil {
 				t.Fatalf("CreateResponse after restore: %v", err)
 			}
-			if _, err := run.Resume(ctx, response); err != nil {
-				t.Fatalf("Resume with restored response: %v", err)
+			if err := run.SendResponse(ctx, response); err != nil {
+				t.Fatalf("SendResponse with restored response: %v", err)
 			}
-			postResponseEvents := collectEvents(run.NewEvents())
-			if hasErrorEvents(postResponseEvents) {
-				t.Fatalf("unexpected error events after restored response: %#v", postResponseEvents)
+			secondCompletionEvents := readStreamToHalt(t, ctx, run)
+			if hasErrorEvents(secondCompletionEvents) {
+				t.Fatalf("unexpected error events after restored response: %#v", secondCompletionEvents)
 			}
 			if got := received.Load(); got != 2 {
 				t.Fatalf("sink receive count after restored response = %d, want 2", got)
 			}
-			status, err := run.GetStatus(ctx)
+			status, err = run.GetStatus(ctx)
 			if err != nil {
 				t.Fatalf("GetStatus: %v", err)
 			}
