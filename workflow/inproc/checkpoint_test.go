@@ -242,6 +242,11 @@ func TestCheckpoint_RestoreWithPendingRequests_RepublishesRequestInfoEvents(t *t
 			if err != nil {
 				t.Fatalf("RunStreaming: %v", err)
 			}
+			t.Cleanup(func() {
+				if err := run.Close(ctx); err != nil {
+					t.Errorf("Close run: %v", err)
+				}
+			})
 
 			pendingRequest, checkpointInfo := capturePendingRequestAndCheckpointFromStream(t, ctx, run)
 
