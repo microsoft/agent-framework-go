@@ -118,15 +118,6 @@ func findTool(t *testing.T, tools []tool.Tool, name string) tool.FuncTool {
 	return nil
 }
 
-func hasTool(tools []tool.Tool, name string) bool {
-	for _, tl := range tools {
-		if tl.Name() == name {
-			return true
-		}
-	}
-	return false
-}
-
 func hasSkill(t *testing.T, provider *agent.ContextProvider, name string) bool {
 	t.Helper()
 	instructions, _ := captureProviderContext(t, provider)
