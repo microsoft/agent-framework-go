@@ -479,8 +479,17 @@ func TestNewProvider_ProvidesInlineSkills(t *testing.T) {
 	if !strings.Contains(instructions, "inline-skill") {
 		t.Fatal("expected inline skill to be advertised")
 	}
-	if len(tools) != 1 || tools[0].Name() != "load_skill" {
-		t.Fatal("expected only load_skill tool for inline skills without resources or scripts")
+	if len(tools) != 3 {
+		t.Fatalf("expected load_skill, read_skill_resource, and run_skill_script tools, got %d tools", len(tools))
+	}
+	toolNames := make([]string, len(tools))
+	for i, t2 := range tools {
+		toolNames[i] = t2.Name()
+	}
+	for _, name := range []string{"load_skill", "read_skill_resource", "run_skill_script"} {
+		if !slices.Contains(toolNames, name) {
+			t.Fatalf("expected %s tool to be present, got %v", name, toolNames)
+		}
 	}
 }
 
@@ -512,8 +521,8 @@ func TestNewProvider_ProvideExtendsInput(t *testing.T) {
 		t.Fatal("expected original session option to be preserved")
 	}
 	tools := slices.Collect(agent.AllOptions(options, agent.WithTool))
-	if len(tools) != 1 || tools[0].Name() != "load_skill" {
-		t.Fatal("expected skills provider to append load_skill tool")
+	if len(tools) != 3 {
+		t.Fatalf("expected 3 skill tools (load_skill, read_skill_resource, run_skill_script), got %d", len(tools))
 	}
 }
 

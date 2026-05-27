@@ -256,12 +256,11 @@ func (p *providerState) buildContext(ctx context.Context) (providerContext, erro
 	}
 
 	indexed := indexSkills(skills)
-	hasResources, hasScripts := indexed.hasResourcesAndScripts()
 	out := providerContext{
-		Options: toolOptions(p.buildTools(indexed, hasResources, hasScripts)),
+		Options: toolOptions(p.buildTools(indexed)),
 	}
 
-	instructions := buildProviderSkillsInstructionPrompt(p.options.SkillsInstructionPrompt, skills, hasResources, hasScripts)
+	instructions := buildProviderSkillsInstructionPrompt(p.options.SkillsInstructionPrompt, skills)
 	if instructions != "" {
 		out.Instructions = instructions
 	}
@@ -343,23 +342,7 @@ func indexSkills(skills []*Skill) providedSkillSet {
 	return providedSkillSet{byName: indexed}
 }
 
-func (p providedSkillSet) hasResourcesAndScripts() (bool, bool) {
-	var hasResources, hasScripts bool
-	for _, skill := range p.byName {
-		if len(skill.resources) > 0 {
-			hasResources = true
-		}
-		if len(skill.scripts) > 0 {
-			hasScripts = true
-		}
-		if hasResources && hasScripts {
-			return true, true
-		}
-	}
-	return hasResources, hasScripts
-}
-
-func (p *providerState) buildTools(skills providedSkillSet, hasResources, hasScripts bool) []tool.Tool {
+func (p *providerState) buildTools(skills providedSkillSet) []tool.Tool {
 	tools := []tool.Tool{
 		functool.MustNew(
 			functool.Config{
@@ -373,10 +356,7 @@ func (p *providerState) buildTools(skills providedSkillSet, hasResources, hasScr
 				return p.loadSkill(callCtx, skills, in.SkillName)
 			},
 		),
-	}
-
-	if hasResources {
-		tools = append(tools, functool.MustNew(
+		functool.MustNew(
 			functool.Config{
 				Name:        "read_skill_resource",
 				Description: "Reads a resource associated with a skill, such as references, assets, or dynamic data.",
@@ -388,11 +368,7 @@ func (p *providerState) buildTools(skills providedSkillSet, hasResources, hasScr
 			) (any, error) {
 				return p.readSkillResource(callCtx, skills, in.SkillName, in.ResourceName), nil
 			},
-		))
-	}
-
-	if !hasScripts {
-		return tools
+		),
 	}
 
 	runScript := functool.MustNew(
@@ -491,7 +467,7 @@ func (p *providerState) runSkillScript(ctx context.Context, skills providedSkill
 	return result
 }
 
-func buildProviderSkillsInstructionPrompt(template string, skills []*Skill, includeResources, includeScripts bool) string {
+func buildProviderSkillsInstructionPrompt(template string, skills []*Skill) string {
 	if len(skills) == 0 {
 		return ""
 	}
@@ -513,15 +489,8 @@ func buildProviderSkillsInstructionPrompt(template string, skills []*Skill, incl
 	}
 
 	skillList := strings.TrimRight(sb.String(), "\n")
-	resourceInstruction := ""
-	if includeResources {
-		resourceInstruction = "- Use `read_skill_resource` to read any referenced resources, using the name exactly as listed\n   (e.g. `\"style-guide\"` not `\"style-guide.md\"`, `\"references/FAQ.md\"` not `\"FAQ.md\"`)."
-	}
-
-	scriptInstruction := ""
-	if includeScripts {
-		scriptInstruction = "- Use `run_skill_script` to run referenced scripts, using the name exactly as listed."
-	}
+	resourceInstruction := "- Use `read_skill_resource` to read any referenced resources, using the name exactly as listed\n   (e.g. `\"style-guide\"` not `\"style-guide.md\"`, `\"references/FAQ.md\"` not `\"FAQ.md\"`)."
+	scriptInstruction := "- Use `run_skill_script` to run referenced scripts, using the name exactly as listed."
 
 	replacer := strings.NewReplacer(
 		skillsPlaceholder, skillList,

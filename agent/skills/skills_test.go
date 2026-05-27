@@ -118,15 +118,6 @@ func findTool(t *testing.T, tools []tool.Tool, name string) tool.FuncTool {
 	return nil
 }
 
-func hasTool(tools []tool.Tool, name string) bool {
-	for _, tl := range tools {
-		if tl.Name() == name {
-			return true
-		}
-	}
-	return false
-}
-
 func hasSkill(t *testing.T, provider *agent.ContextProvider, name string) bool {
 	t.Helper()
 	instructions, _ := captureProviderContext(t, provider)
@@ -274,8 +265,15 @@ func TestDiscovery_ResourceOutsideConfiguredDirectory_NotDiscoverable(t *testing
 		t.Fatal("expected skill to be discovered")
 	}
 	_, tools := captureProviderContext(t, p)
-	if hasTool(tools, "read_skill_resource") {
-		t.Fatal("expected no read_skill_resource tool when no resources were discovered")
+	// read_skill_resource is always registered; ../secret.txt must not be accessible via it.
+	readTool := findTool(t, tools, "read_skill_resource")
+	result, err := readTool.Call(t.Context(), `{"skillName":"traversal-skill","resourceName":"../secret.txt"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultStr, ok := result.(string)
+	if !ok || !strings.HasPrefix(resultStr, "Error:") {
+		t.Fatalf("expected error for inaccessible resource, got %#v", result)
 	}
 }
 
@@ -285,8 +283,8 @@ func TestProvider_WithSkills_ReturnsInstructionsAndTools(t *testing.T) {
 
 	p := newProvider(t, root)
 	_, tools := captureProviderContext(t, p)
-	if len(tools) != 1 {
-		t.Fatalf("expected 1 tool, got %d", len(tools))
+	if len(tools) != 3 {
+		t.Fatalf("expected 3 tools (load_skill, read_skill_resource, run_skill_script), got %d", len(tools))
 	}
 	toolNames := make(map[string]bool)
 	for _, tl := range tools {
@@ -295,8 +293,11 @@ func TestProvider_WithSkills_ReturnsInstructionsAndTools(t *testing.T) {
 	if !toolNames["load_skill"] {
 		t.Error("expected load_skill tool")
 	}
-	if toolNames["read_skill_resource"] {
-		t.Error("did not expect read_skill_resource tool without discovered resources")
+	if !toolNames["read_skill_resource"] {
+		t.Error("expected read_skill_resource tool to always be registered")
+	}
+	if !toolNames["run_skill_script"] {
+		t.Error("expected run_skill_script tool to always be registered")
 	}
 }
 
@@ -557,8 +558,15 @@ func TestDiscovery_ResourceInNonSpecDirectory_NotDiscoveredByDefault(t *testing.
 		t.Fatal("expected skill to be discovered")
 	}
 	_, tools := captureProviderContext(t, p)
-	if hasTool(tools, "read_skill_resource") {
-		t.Fatal("expected no read_skill_resource tool when only non-default resource directories exist")
+	// read_skill_resource is always registered; docs/readme.md is in a non-default dir and must not be accessible.
+	readTool := findTool(t, tools, "read_skill_resource")
+	result, err := readTool.Call(t.Context(), `{"skillName":"non-spec-skill","resourceName":"docs/readme.md"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultStr, ok := result.(string)
+	if !ok || !strings.HasPrefix(resultStr, "Error:") {
+		t.Fatalf("expected error for non-default resource directory, got %#v", result)
 	}
 }
 
@@ -573,8 +581,15 @@ func TestDiscovery_ResourceInSkillRoot_NotDiscoveredByDefault(t *testing.T) {
 
 	p := newProvider(t, root)
 	_, tools := captureProviderContext(t, p)
-	if hasTool(tools, "read_skill_resource") {
-		t.Fatal("expected no read_skill_resource tool when only root-level resources exist and '.' is not configured")
+	// read_skill_resource is always registered; root-level guide.md is not accessible without '.' configured.
+	readTool := findTool(t, tools, "read_skill_resource")
+	result, err := readTool.Call(t.Context(), `{"skillName":"root-resource-skill","resourceName":"guide.md"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultStr, ok := result.(string)
+	if !ok || !strings.HasPrefix(resultStr, "Error:") {
+		t.Fatalf("expected error for root-level resource without '.' configured, got %#v", result)
 	}
 }
 
@@ -624,8 +639,15 @@ func TestDiscovery_SkillMdNotIncludedAsResource(t *testing.T) {
 	}, nil, root)
 
 	_, tools := captureProviderContext(t, p)
-	if hasTool(tools, "read_skill_resource") {
-		t.Fatal("expected no read_skill_resource tool when the only root-level file is SKILL.md")
+	// read_skill_resource is always registered; SKILL.md must not be accessible even with '.' configured.
+	readTool := findTool(t, tools, "read_skill_resource")
+	result, err := readTool.Call(t.Context(), `{"skillName":"selfref-skill","resourceName":"SKILL.md"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultStr, ok := result.(string)
+	if !ok || !strings.HasPrefix(resultStr, "Error:") {
+		t.Fatalf("expected SKILL.md to be excluded from resources, got %#v", result)
 	}
 }
 
