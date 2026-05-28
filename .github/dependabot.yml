@@ -8,6 +8,13 @@ updates:
   directory: "/"
   schedule:
     interval: daily
+  groups:
+    opentelemetry:
+      patterns:
+        - "go.opentelemetry.io/otel"
+        - "go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
+        - "go.opentelemetry.io/otel/sdk"
+        - "go.opentelemetry.io/otel/trace"
   open-pull-requests-limit: 10
 - package-ecosystem: github-actions
   directory: "/"
