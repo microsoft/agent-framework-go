@@ -285,8 +285,8 @@ func collectForwardedResponseMessages(t *testing.T, a *agent.Agent, cfg workflow
 		t.Fatalf("build: %v", err)
 	}
 
-	ctx := context.Background()
-	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
+	ctx := t.Context()
+	stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -317,7 +317,7 @@ func runHostedAgent(t *testing.T, a *agent.Agent, cfg workflowhosting.Config, to
 		t.Fatalf("build workflow: %v", err)
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
@@ -616,8 +616,8 @@ func TestHostedAgent_ForwardsIncomingMessages(t *testing.T) {
 				t.Fatalf("build: %v", err)
 			}
 
-			ctx := context.Background()
-			stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
+			ctx := t.Context()
+			stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
 			if err != nil {
 				t.Fatalf("Stream: %v", err)
 			}
@@ -670,7 +670,7 @@ func TestHostedAgent_HandlesSingleMessage(t *testing.T) {
 		t.Fatalf("build workflow: %v", err)
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
@@ -706,7 +706,7 @@ func TestHostedAgent_QueuesDotNetStateKeys(t *testing.T) {
 
 	queued := make(map[string]any)
 	ctx := &workflow.Context{
-		Context: context.Background(),
+		Context: t.Context(),
 		AddEvent: func(workflow.Event) error {
 			return nil
 		},
@@ -753,7 +753,7 @@ func TestHostedAgent_HandlesStringMessageAsUser(t *testing.T) {
 		t.Fatalf("build workflow: %v", err)
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
@@ -791,7 +791,7 @@ func TestHostedAgent_AccumulatesAndClearsMessagesPerTurn(t *testing.T) {
 		t.Fatalf("build workflow: %v", err)
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
@@ -1177,8 +1177,8 @@ func TestHostedAgent_InterceptUserInputRequests(t *testing.T) {
 		t.Fatalf("build: %v", err)
 	}
 
-	ctx := context.Background()
-	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
+	ctx := t.Context()
+	stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -1226,8 +1226,8 @@ func TestHostedAgent_InterceptUnterminatedFunctionCalls(t *testing.T) {
 		t.Fatalf("build: %v", err)
 	}
 
-	ctx := context.Background()
-	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
+	ctx := t.Context()
+	stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -1293,8 +1293,8 @@ func TestHostedAgent_FunctionResultMessageMetadataMatchesHostedAgent(t *testing.
 		t.Fatalf("build: %v", err)
 	}
 
-	ctx := context.Background()
-	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
+	ctx := t.Context()
+	stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -1368,7 +1368,7 @@ func TestHostedAgent_InterceptDisabled_PostsExternalRequest(t *testing.T) {
 		t.Fatalf("build: %v", err)
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	run, err := inproc.Default.Run(ctx, wf, workflow.TurnToken{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -1447,7 +1447,7 @@ func TestHostedAgent_ResetSignal_StartsNewSession(t *testing.T) {
 		t.Fatalf("build: %v", err)
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
@@ -1501,7 +1501,7 @@ func TestHostedAgent_InterceptDisabled_ResumesWithExternalResponse(t *testing.T)
 		t.Fatalf("build: %v", err)
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	run, err := inproc.Default.Run(ctx, wf, workflow.TurnToken{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -1640,7 +1640,7 @@ func TestHostedAgent_InterceptsOnlyUnpairedFunctionCalls_PortMode(t *testing.T) 
 		t.Fatalf("build: %v", err)
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	run, err := inproc.Default.Run(ctx, wf, workflow.TurnToken{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -1714,7 +1714,7 @@ func TestHostedAgent_ResultBeforeFunctionCall_StillInterceptsCall(t *testing.T) 
 		t.Fatalf("build: %v", err)
 	}
 
-	runResult, err := inproc.Default.Run(context.Background(), wf, workflow.TurnToken{})
+	runResult, err := inproc.Default.Run(t.Context(), wf, workflow.TurnToken{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1778,7 +1778,7 @@ func TestHostedAgent_DuplicateRequestID_RaisesError(t *testing.T) {
 		t.Fatalf("build: %v", err)
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	run, err := inproc.Default.Run(ctx, wf, workflow.TurnToken{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -1850,7 +1850,7 @@ func TestHostedAgent_UnknownResponseID_RaisesError(t *testing.T) {
 		t.Fatalf("build: %v", err)
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	run, err := inproc.Default.Run(ctx, wf, "go")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -1912,8 +1912,8 @@ func TestHostedAgent_HeldTurnToken_StampsResolvedEmitEvents(t *testing.T) {
 		t.Fatalf("build: %v", err)
 	}
 
-	ctx := context.Background()
-	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
+	ctx := t.Context()
+	stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -1980,7 +1980,7 @@ func TestHostedAgent_HandledRequestNotReEmitted_PortMode(t *testing.T) {
 		t.Fatalf("build: %v", err)
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	run, err := inproc.Default.Run(ctx, wf, workflow.TurnToken{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -2082,8 +2082,8 @@ func TestHostedAgent_AlreadyPendingRequest_IsIdempotent_InterceptMode(t *testing
 		t.Fatalf("build: %v", err)
 	}
 
-	ctx := context.Background()
-	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
+	ctx := t.Context()
+	stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
