@@ -25,8 +25,12 @@ type ProviderConfig struct {
 	// Run executes a request and streams response updates.
 	Run RunFunc
 
+	// Middlewares wrap Run after agent history and context providers.
+	Middlewares []Middleware
+
 	// Format creates a provider response format for a structured output value.
 	Format func(v any) (ResponseFormat, error)
+
 	// Unmarshal decodes provider structured output into v using format.
 	Unmarshal func(format ResponseFormat, data []byte, v any) error
 
@@ -46,12 +50,15 @@ type Config struct {
 	// HistoryProvider injects and persists conversation history around each agent run.
 	// When nil, New uses a default in-memory history provider for local sessions.
 	HistoryProvider *HistoryProvider
+
 	// AllowHistoryProviderConflict prevents returning an error when a configured
 	// HistoryProvider conflicts with service-managed history.
 	AllowHistoryProviderConflict bool
+
 	// SuppressHistoryProviderConflictWarning prevents logging a warning when a
 	// configured HistoryProvider conflicts with service-managed history.
 	SuppressHistoryProviderConflictWarning bool
+
 	// KeepHistoryProviderOnConflict prevents clearing the configured HistoryProvider
 	// when it conflicts with service-managed history. Returning an error takes precedence.
 	KeepHistoryProviderOnConflict bool
@@ -64,15 +71,19 @@ type Config struct {
 
 	// Logger receives run, middleware, and provider diagnostics.
 	Logger *slog.Logger
+
 	// LogSensitiveData enables logging of sensitive request and response payloads.
 	LogSensitiveData bool
+
 	// DisableRunLogs disables automatic run logging when Logger is set.
 	DisableRunLogs bool
 
-	// Middlewares wrap the provider run function.
+	// Middlewares wrap the agent lifecycle before history and context providers.
 	Middlewares []Middleware
+
 	// Tools are added to every run.
 	Tools []tool.Tool
+
 	// RunOptions are prepended to the options for every run.
 	RunOptions []Option
 }
@@ -97,8 +108,9 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 	if cfg.Logger != nil && !cfg.DisableRunLogs {
 		cfg.Middlewares = append([]Middleware{newRunLoggerMiddleware(cfg.Logger, cfg.LogSensitiveData)}, cfg.Middlewares...)
 	}
+	prov.Middlewares = slices.Clone(prov.Middlewares)
 	if prov.Format != nil || prov.Unmarshal != nil {
-		cfg.Middlewares = append(cfg.Middlewares, &structuredOutputMiddleware{
+		prov.Middlewares = append(prov.Middlewares, &structuredOutputMiddleware{
 			format:    prov.Format,
 			unmarshal: prov.Unmarshal,
 		})
@@ -115,7 +127,7 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 		historyProvider = NewInMemoryHistoryProvider("")
 		hasDefaultHistoryProvider = true
 	}
-	cfg.Middlewares = append(cfg.Middlewares, authorMiddleware(cfg.ID, cfg.Name))
+	prov.Middlewares = append(prov.Middlewares, authorMiddleware(cfg.ID, cfg.Name))
 	return &Agent{
 		id:                        cfg.ID,
 		name:                      cfg.Name,
@@ -225,6 +237,10 @@ func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ..
 }
 
 func (a *Agent) run(ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error] {
+	return runChain(ctx, a.invoke, a.middlewares, messages, options...)
+}
+
+func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error] {
 	return func(yield func(*ResponseUpdate, error) bool) {
 		session, _ := GetOption(options, WithSession)
 		rawContinuationToken, _ := GetOption(options, WithContinuationToken)
@@ -272,7 +288,7 @@ func (a *Agent) run(ctx context.Context, messages []*message.Message, options ..
 		var runErr error
 		var stopped bool
 
-		for update, err := range runChain(ctx, a.provider.Run, a.middlewares, messages, options...) {
+		for update, err := range runChain(ctx, a.provider.Run, a.provider.Middlewares, messages, options...) {
 			if update != nil {
 				continuationUpdates = append(continuationUpdates, cloneResponseUpdate(update))
 				historyResponse.Update(update)
