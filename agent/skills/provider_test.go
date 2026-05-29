@@ -548,7 +548,6 @@ func TestProvider_AggregatesMultipleSources(t *testing.T) {
 		Skills: []*skills.Skill{inline},
 		Sources: []skills.Source{
 			fsskills.NewSourceOptions(fsskills.SourceOptions{
-				ScriptDirectories: []string{"unused-scripts"},
 				ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
 					return "ok", nil
 				},
