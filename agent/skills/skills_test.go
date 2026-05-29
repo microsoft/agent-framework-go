@@ -592,7 +592,7 @@ func TestDiscovery_ResourceInSkillRoot_DiscoveredByDefault(t *testing.T) {
 	}
 }
 
-func TestDiscovery_ResourceInSkillRoot_ExplicitDepthOne(t *testing.T) {
+func TestDiscovery_ResourceInSkillRoot_AccessibleWithDepthOne(t *testing.T) {
 	root := t.TempDir()
 	createSkillDir(t, root, "root-opt-in-skill", "Root opt-in", "Body.")
 	skillDir := filepath.Join(root, "root-opt-in-skill")
@@ -886,7 +886,7 @@ func TestConfig_ValidExtensions(t *testing.T) {
 	}
 }
 
-func TestDiscovery_DefaultResourceDiscovery_ReferenceResourceReadable(t *testing.T) {
+func TestDiscovery_ReferenceResource_ReadableByDefault(t *testing.T) {
 	root := t.TempDir()
 	createSkillDir(t, root, "dedup-directory-skill", "Dedup test", "Body.")
 	skillDir := filepath.Join(root, "dedup-directory-skill")
