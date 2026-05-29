@@ -108,7 +108,7 @@ func TestFileSource_NoScriptFiles_ReturnsEmptyScripts(t *testing.T) {
 	}
 }
 
-func TestFileSource_ScriptsOutsideScriptsDir_AreNotDiscovered(t *testing.T) {
+func TestFileSource_ScriptsInAnyDirectory_AreDiscovered(t *testing.T) {
 	root := t.TempDir()
 	createSkillDir(t, root, "root-scripts", "Root scripts skill", "Body.")
 	skillDir := filepath.Join(root, "root-scripts")
@@ -122,8 +122,9 @@ func TestFileSource_ScriptsOutsideScriptsDir_AreNotDiscovered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(loaded[0].Scripts) != 0 {
-		t.Fatalf("expected no scripts, got %d", len(loaded[0].Scripts))
+	// With depth-based scanning, scripts in any directory within search depth are discovered.
+	if len(loaded[0].Scripts) != 2 {
+		t.Fatalf("expected 2 scripts, got %d: %v", len(loaded[0].Scripts), loaded[0].Scripts)
 	}
 }
 
@@ -228,12 +229,12 @@ func TestFileSource_ExecutorReceivesArguments(t *testing.T) {
 	}
 }
 
-func TestFileSource_ScriptDirectoriesWithNestedPath_DiscoversScripts(t *testing.T) {
+func TestFileSource_ScriptAtConfigurableDepth_DiscoversWithSearchDepth(t *testing.T) {
 	root := t.TempDir()
 	createSkillDir(t, root, "nested-script-skill", "Nested script directory", "Body.")
 	createRelativeFile(t, filepath.Join(root, "nested-script-skill"), "f1/f2/f3/run.py", "print('nested')")
 	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
-		ScriptDirectories: []string{"f1/f2/f3"},
+		SearchDepth: 4,
 		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
 			return nil, nil
 		},
@@ -252,16 +253,14 @@ func TestFileSource_ScriptDirectoriesWithNestedPath_DiscoversScripts(t *testing.
 	}
 }
 
-func TestFileSource_ScriptDirectoryWithDotSlashPrefix_DiscoversScripts(t *testing.T) {
-	directories := []string{"./scripts", "./scripts/f1", "./f2"}
+func TestFileSource_ScriptsInMultipleSubdirectories_AllDiscovered(t *testing.T) {
 	root := t.TempDir()
-	createSkillDir(t, root, "dotslash-script-skill", "Dot-slash prefix", "Body.")
-	skillDir := filepath.Join(root, "dotslash-script-skill")
-	for _, directory := range directories {
-		createRelativeFile(t, skillDir, directory[2:]+"/run.py", "print('dotslash')")
-	}
+	createSkillDir(t, root, "multidir-script-skill", "Multi-dir scripts", "Body.")
+	skillDir := filepath.Join(root, "multidir-script-skill")
+	// Create scripts at root and one subdirectory level (within default depth 2)
+	createRelativeFile(t, skillDir, "scripts/run.py", "print('scripts')")
+	createRelativeFile(t, skillDir, "f2/run.py", "print('f2')")
 	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
-		ScriptDirectories: directories,
 		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
 			return nil, nil
 		},
@@ -271,20 +270,14 @@ func TestFileSource_ScriptDirectoryWithDotSlashPrefix_DiscoversScripts(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(loaded[0].Scripts) != len(directories) {
-		t.Fatalf("expected %d scripts, got %d", len(directories), len(loaded[0].Scripts))
+	expected := []string{"f2/run.py", "scripts/run.py"}
+	found := make(map[string]bool)
+	for _, s := range loaded[0].Scripts {
+		found[s.Name] = true
 	}
-	for _, directory := range directories {
-		expected := directory[2:] + "/run.py"
-		found := false
-		for _, script := range loaded[0].Scripts {
-			if script.Name == expected {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Fatalf("expected script %q to be discovered", expected)
+	for _, name := range expected {
+		if !found[name] {
+			t.Fatalf("expected script %q to be discovered; got %v", name, loaded[0].Scripts)
 		}
 	}
 }
@@ -299,12 +292,11 @@ func TestFileSource_InvalidScriptExtension_Panics(t *testing.T) {
 	_ = fsskills.NewSourceOptions(fsskills.SourceOptions{AllowedScriptExtensions: []string{"txt"}}, os.DirFS(t.TempDir()))
 }
 
-func TestFileSource_ScriptInSkillRoot_DiscoveredWhenRootDirectoryConfigured(t *testing.T) {
+func TestFileSource_ScriptAtSkillRoot_Discovered(t *testing.T) {
 	root := t.TempDir()
 	createSkillDir(t, root, "root-script-skill", "Root script", "Body.")
 	createRelativeFile(t, filepath.Join(root, "root-script-skill"), "run.py", "print('hello')")
 	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
-		ScriptDirectories: []string{"."},
 		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
 			return nil, nil
 		},
@@ -323,12 +315,15 @@ func TestFileSource_ScriptInSkillRoot_DiscoveredWhenRootDirectoryConfigured(t *t
 	}
 }
 
-func TestFileSource_BackslashDirectoryNormalized_NoDuplicateScripts(t *testing.T) {
+func TestFileSource_ScriptFilter_IncludesOnlyMatchingScripts(t *testing.T) {
 	root := t.TempDir()
-	createSkillDir(t, root, "backslash-skill", "Backslash test", "Body.")
+	createSkillDir(t, root, "backslash-skill", "Script filter test", "Body.")
 	createRelativeFile(t, filepath.Join(root, "backslash-skill"), "scripts/run.py", "print('hello')")
+	createRelativeFile(t, filepath.Join(root, "backslash-skill"), "scripts/skip.py", "print('skip')")
 	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
-		ScriptDirectories: []string{"scripts", ".\\scripts"},
+		ScriptFilter: func(ctx fsskills.FilterContext) bool {
+			return ctx.RelativeFilePath == "scripts/run.py"
+		},
 		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
 			return nil, nil
 		},

@@ -318,42 +318,11 @@ func TestFileSource_NoOptionalFields_DefaultZeroValues(t *testing.T) {
 	}
 }
 
-func TestFileSource_ResourceDirectoryWithDotSlashPrefix_DiscoversResources(t *testing.T) {
-	for _, directory := range []string{"./references", "./assets/docs"} {
-		t.Run(directory, func(t *testing.T) {
-			root := t.TempDir()
-			directoryWithoutDotSlash := directory[2:]
-			createSkillDir(t, root, "dotslash-res-skill", "Dot-slash prefix", "Body.")
-			skillDir := filepath.Join(root, "dotslash-res-skill")
-			targetDir := filepath.Join(skillDir, filepath.FromSlash(directoryWithoutDotSlash))
-			if err := os.MkdirAll(targetDir, 0o755); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(targetDir, "data.json"), []byte("{}"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-
-			source := fsskills.NewSourceOptions(fsskills.SourceOptions{ResourceDirectories: []string{directory}}, os.DirFS(root))
-			loaded, err := source.Skills(t.Context())
-			if err != nil {
-				t.Fatal(err)
-			}
-			resources := loaded[0].Resources
-			if len(resources) != 1 {
-				t.Fatalf("expected 1 resource, got %d", len(resources))
-			}
-			expected := directoryWithoutDotSlash + "/data.json"
-			if resources[0].Name != expected {
-				t.Fatalf("expected %q, got %q", expected, resources[0].Name)
-			}
-		})
-	}
-}
-
-func TestFileSource_TrailingSlashDirectoryNormalized_NoDuplicateResources(t *testing.T) {
+func TestFileSource_ResourcesInSubdirectory_DiscoveredWithDefaultDepth(t *testing.T) {
 	root := t.TempDir()
-	createSkillDir(t, root, "trailing-slash-skill", "Trailing slash test", "Body.")
-	refsDir := filepath.Join(root, "trailing-slash-skill", "references")
+	createSkillDir(t, root, "sub-res-skill", "Subdirectory resources", "Body.")
+	skillDir := filepath.Join(root, "sub-res-skill")
+	refsDir := filepath.Join(skillDir, "references")
 	if err := os.MkdirAll(refsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -361,7 +330,95 @@ func TestFileSource_TrailingSlashDirectoryNormalized_NoDuplicateResources(t *tes
 		t.Fatal(err)
 	}
 
-	source := fsskills.NewSourceOptions(fsskills.SourceOptions{ResourceDirectories: []string{"references", "references/"}}, os.DirFS(root))
+	source := fsskills.NewSource(os.DirFS(root))
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources := loaded[0].Resources
+	if len(resources) != 1 {
+		t.Fatalf("expected 1 resource, got %d", len(resources))
+	}
+	if resources[0].Name != "references/data.json" {
+		t.Fatalf("expected references/data.json, got %q", resources[0].Name)
+	}
+}
+
+func TestFileSource_ResourceFilter_IncludesOnlyMatchingFiles(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "filter-skill", "Filter test", "Body.")
+	skillDir := filepath.Join(root, "filter-skill")
+	refsDir := filepath.Join(skillDir, "references")
+	if err := os.MkdirAll(refsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(refsDir, "keep.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(refsDir, "skip.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
+		ResourceFilter: func(ctx fsskills.FilterContext) bool {
+			return ctx.RelativeFilePath == "references/keep.json"
+		},
+	}, os.DirFS(root))
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources := loaded[0].Resources
+	if len(resources) != 1 {
+		t.Fatalf("expected 1 resource, got %d; resources: %v", len(resources), resources)
+	}
+	if resources[0].Name != "references/keep.json" {
+		t.Fatalf("expected references/keep.json, got %q", resources[0].Name)
+	}
+}
+
+func TestFileSource_SearchDepth1_DoesNotDiscoverSubdirectoryResources(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "depth-skill", "Depth test", "Body.")
+	skillDir := filepath.Join(root, "depth-skill")
+	rootFile := filepath.Join(skillDir, "root.json")
+	subDir := filepath.Join(skillDir, "sub")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(rootFile, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, "nested.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{SearchDepth: 1}, os.DirFS(root))
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources := loaded[0].Resources
+	if len(resources) != 1 {
+		t.Fatalf("expected 1 resource (root only), got %d", len(resources))
+	}
+	if resources[0].Name != "root.json" {
+		t.Fatalf("expected root.json, got %q", resources[0].Name)
+	}
+}
+
+func TestFileSource_NoDuplicateResourcesFromSamePath(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "dedup-skill", "Dedup test", "Body.")
+	refsDir := filepath.Join(root, "dedup-skill", "references")
+	if err := os.MkdirAll(refsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(refsDir, "data.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	source := fsskills.NewSource(os.DirFS(root))
 	loaded, err := source.Skills(t.Context())
 	if err != nil {
 		t.Fatal(err)

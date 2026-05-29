@@ -9,7 +9,6 @@ import (
 	"io/fs"
 	"log/slog"
 	"path"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -18,16 +17,10 @@ import (
 )
 
 const (
-	skillFileName          = "SKILL.md"
-	maxSearchDepth         = 2
-	rootDirectoryIndicator = "."
+	skillFileName      = "SKILL.md"
+	defaultSearchDepth = 2
 
 	rootFSPropertyKey = "fsskills.rootFS"
-)
-
-var (
-	defaultResourceDirectories = []string{"references", "assets"}
-	defaultScriptDirectories   = []string{"scripts"}
 )
 
 var (
@@ -42,37 +35,39 @@ var (
 	yamlIndentedKeyValueRegex = regexp.MustCompile(`(?m)^\s+([\w-]+)\s*:\s*(?:["'](.+?)["']|(.+?))\s*$`)
 )
 
+// FilterContext provides contextual information about a discovered file to the
+// ScriptFilter and ResourceFilter predicates.
+type FilterContext struct {
+	// SkillName is the name of the skill as declared in the SKILL.md frontmatter.
+	SkillName string
+
+	// RelativeFilePath is the path to the file relative to the skill directory,
+	// using forward slashes. For root-level files this is just the filename;
+	// for nested files it includes the subdirectory (e.g. "scripts/run.py").
+	RelativeFilePath string
+}
+
 // SourceOptions configures file-based skill discovery.
 //
 // Use this struct to configure discovery without relying on positional
 // constructor parameters. Additional options can be added here without
 // changing the zero-options NewSource convenience API.
 type SourceOptions struct {
-	// ResourceDirectories specifies relative directory paths to scan for resource
-	// files within each skill directory.
-	//
-	// Values may be single-segment names such as "references" or multi-segment
-	// relative paths such as "sub/resources". Use "." to include files directly
-	// at the skill root. Leading "./" prefixes, trailing separators, and
-	// backslashes are normalized automatically; absolute paths and paths
-	// containing ".." segments are rejected.
-	//
-	// When nil, defaults to "references" and "assets" per the Agent Skills
-	// specification. When set, replaces the defaults entirely.
-	ResourceDirectories []string
+	// SearchDepth controls the maximum depth to search for resource and script
+	// files within each skill directory. A value of 1 searches only the skill
+	// root; a value of 2 (the default) also searches one level of subdirectories.
+	// Values less than 1 are treated as the default.
+	SearchDepth int
 
-	// ScriptDirectories specifies relative directory paths to scan for script
-	// files within each skill directory.
-	//
-	// Values may be single-segment names such as "scripts" or multi-segment
-	// relative paths such as "sub/scripts". Use "." to include files directly
-	// at the skill root. Leading "./" prefixes, trailing separators, and
-	// backslashes are normalized automatically; absolute paths and paths
-	// containing ".." segments are rejected.
-	//
-	// When nil, defaults to "scripts" per the Agent Skills specification. When
-	// set, replaces the defaults entirely.
-	ScriptDirectories []string
+	// ResourceFilter is an optional predicate applied to each candidate resource
+	// file after extension filtering. Return true to include the file or false to
+	// skip it. When nil, all files matching AllowedResourceExtensions are included.
+	ResourceFilter func(FilterContext) bool
+
+	// ScriptFilter is an optional predicate applied to each candidate script file
+	// after extension filtering. Return true to include the file or false to skip
+	// it. When nil, all files matching AllowedScriptExtensions are included.
+	ScriptFilter func(FilterContext) bool
 
 	// AllowedResourceExtensions specifies the allowed file extensions for skill
 	// resources.
@@ -105,8 +100,9 @@ type SourceOptions struct {
 type Source struct {
 	filesystems               []fs.FS
 	logger                    *slog.Logger
-	resourceDirectories       []string
-	scriptDirectories         []string
+	searchDepth               int
+	resourceFilter            func(FilterContext) bool
+	scriptFilter              func(FilterContext) bool
 	allowedResourceExtensions map[string]bool
 	allowedScriptExtensions   map[string]bool
 	scriptRunner              skills.ScriptRunner
@@ -138,11 +134,16 @@ func NewSourceOptions(opts SourceOptions, filesystems ...fs.FS) *Source {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
+	searchDepth := opts.SearchDepth
+	if searchDepth < 1 {
+		searchDepth = defaultSearchDepth
+	}
 	return &Source{
 		filesystems:               append([]fs.FS(nil), filesystems...),
 		logger:                    logger,
-		resourceDirectories:       validateAndNormalizeDirectoryNames(opts.ResourceDirectories, defaultResourceDirectories, logger),
-		scriptDirectories:         validateAndNormalizeDirectoryNames(opts.ScriptDirectories, defaultScriptDirectories, logger),
+		searchDepth:               searchDepth,
+		resourceFilter:            opts.ResourceFilter,
+		scriptFilter:              opts.ScriptFilter,
 		allowedResourceExtensions: buildExtensionSet(opts.AllowedResourceExtensions, defaultResourceExtensions),
 		allowedScriptExtensions:   buildExtensionSet(opts.AllowedScriptExtensions, defaultScriptExtensions),
 		scriptRunner:              opts.ScriptRunner,
@@ -187,7 +188,7 @@ func searchForSkills(filesystem fs.FS, dir string, results *[]discoveredSkillDir
 			*results = append(*results, discoveredSkillDir{fsys: sub, path: dir})
 		}
 	}
-	if currentDepth >= maxSearchDepth {
+	if currentDepth >= defaultSearchDepth {
 		return
 	}
 	entries, err := fs.ReadDir(filesystem, dir)
@@ -410,118 +411,102 @@ func leadingWhitespaceCount(line string) int {
 func (s *Source) discoverResourceFiles(skillFS fs.FS, skillName string) []skills.Resource {
 	seen := make(map[string]bool)
 	var resources []skills.Resource
-	for _, directory := range s.resourceDirectories {
-		for _, fileName := range s.walkConfiguredDirectory(skillFS, directory, skillName, s.allowedResourceExtensions, "resource") {
-			key := strings.ToLower(fileName)
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
-			resources = append(resources, skills.Resource{
-				Name: fileName,
-				Read: func(context.Context) (any, error) {
-					data, err := fs.ReadFile(skillFS, fileName)
-					if err != nil {
-						return nil, err
-					}
-					return string(data), nil
-				},
-			})
+	s.scanForFiles(skillFS, ".", skillName, 1, s.allowedResourceExtensions, s.resourceFilter, "resource", func(filePath string) {
+		key := strings.ToLower(filePath)
+		if seen[key] {
+			return
 		}
-	}
+		seen[key] = true
+		resources = append(resources, skills.Resource{
+			Name: filePath,
+			Read: func(context.Context) (any, error) {
+				data, err := fs.ReadFile(skillFS, filePath)
+				if err != nil {
+					return nil, err
+				}
+				return string(data), nil
+			},
+		})
+	})
 	return resources
 }
 
 func (s *Source) discoverScriptFiles(skillFS fs.FS, skillName string) []skills.Script {
 	seen := make(map[string]bool)
-	scripts := make([]skills.Script, 0)
-	for _, directory := range s.scriptDirectories {
-		for _, fileName := range s.walkConfiguredDirectory(skillFS, directory, skillName, s.allowedScriptExtensions, "script") {
-			key := strings.ToLower(fileName)
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
-			scripts = append(scripts, newScript(fileName, skillFS, s.scriptRunner))
+	var scripts []skills.Script
+	s.scanForFiles(skillFS, ".", skillName, 1, s.allowedScriptExtensions, s.scriptFilter, "script", func(filePath string) {
+		key := strings.ToLower(filePath)
+		if seen[key] {
+			return
 		}
-	}
+		seen[key] = true
+		scripts = append(scripts, newScript(filePath, skillFS, s.scriptRunner))
+	})
 	return scripts
 }
 
-func (s *Source) walkConfiguredDirectory(skillFS fs.FS, directory, skillName string, allowedExtensions map[string]bool, kind string) []string {
-	fsDir := directory
-	if fsDir == rootDirectoryIndicator {
-		fsDir = "."
+// scanForFiles recursively scans the skill filesystem up to searchDepth levels deep,
+// collecting files matching allowedExtensions and the optional predicate filter.
+func (s *Source) scanForFiles(
+	skillFS fs.FS,
+	dir string,
+	skillName string,
+	currentDepth int,
+	allowedExtensions map[string]bool,
+	filter func(FilterContext) bool,
+	kind string,
+	collect func(string),
+) {
+	if currentDepth > s.searchDepth {
+		return
 	}
 
-	if _, err := fs.Stat(skillFS, fsDir); err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
-			s.logger.Warn("Failed to read configured skill directory", "skillName", skillName, "directory", fsDir, "kind", kind, "error", err)
-		}
-		return nil
-	}
-
-	entries, err := fs.ReadDir(skillFS, fsDir)
+	entries, err := fs.ReadDir(skillFS, dir)
 	if err != nil {
-		s.logger.Warn("Failed while scanning configured skill directory", "skillName", skillName, "directory", fsDir, "kind", kind, "error", err)
-		return nil
+		if !errors.Is(err, fs.ErrNotExist) {
+			s.logger.Warn("Failed to read skill directory", "skillName", skillName, "directory", dir, "kind", kind, "error", err)
+		}
+		return
 	}
 
-	files := make([]string, 0, len(entries))
 	for _, entry := range entries {
+		entryPath := path.Join(dir, entry.Name())
 		if entry.IsDir() {
-			continue
-		}
-
-		normalized := normalizePath(path.Join(fsDir, entry.Name()))
-		if strings.EqualFold(path.Base(normalized), skillFileName) {
-			continue
-		}
-
-		ext := strings.ToLower(path.Ext(normalized))
-		if ext == "" || !allowedExtensions[ext] {
-			s.logger.Debug("Skipping file: extension not in the allowed list", "skillName", skillName, "filePath", normalized, "extension", ext, "kind", kind)
-			continue
-		}
-
-		files = append(files, normalized)
-	}
-	return files
-}
-
-func validateAndNormalizeDirectoryNames(directories []string, defaults []string, logger *slog.Logger) []string {
-	if directories == nil {
-		return append([]string(nil), defaults...)
-	}
-
-	normalized := make([]string, 0, len(directories))
-	seen := make(map[string]bool, len(directories))
-	for _, directory := range directories {
-		if strings.TrimSpace(directory) == "" {
-			panic("directory names must not be empty or whitespace")
-		}
-		if directory == rootDirectoryIndicator {
-			if !seen[directory] {
-				seen[directory] = true
-				normalized = append(normalized, directory)
+			if currentDepth < s.searchDepth {
+				s.scanForFiles(skillFS, entryPath, skillName, currentDepth+1, allowedExtensions, filter, kind, collect)
 			}
 			continue
 		}
-		if !filepath.IsLocal(directory) {
-			logger.Warn("Skipping invalid directory name: must be a relative path with no '..' segments", "directoryName", directory)
+
+		// Exclude SKILL.md itself
+		if strings.EqualFold(entry.Name(), skillFileName) {
 			continue
 		}
-		norm := normalizePath(directory)
-		if !seen[norm] {
-			seen[norm] = true
-			normalized = append(normalized, norm)
-		}
-	}
-	return normalized
-}
 
-func normalizePath(value string) string {
-	return path.Clean(filepath.ToSlash(value))
+		ext := strings.ToLower(path.Ext(entry.Name()))
+		if ext == "" || !allowedExtensions[ext] {
+			if ext == "" {
+				s.logger.Debug("Skipping file: extension not in the allowed list", "skillName", skillName, "filePath", entryPath, "extension", "(none)", "kind", kind)
+			} else {
+				s.logger.Debug("Skipping file: extension not in the allowed list", "skillName", skillName, "filePath", entryPath, "extension", ext, "kind", kind)
+			}
+			continue
+		}
+
+		// Compute relative path (strip leading "./" from root)
+		relativePath := entryPath
+		if strings.HasPrefix(relativePath, "./") {
+			relativePath = relativePath[2:]
+		} else if relativePath == "." {
+			relativePath = entry.Name()
+		}
+
+		if filter != nil && !filter(FilterContext{SkillName: skillName, RelativeFilePath: relativePath}) {
+			continue
+		}
+
+		collect(relativePath)
+	}
 }
 
 func buildExtensionSet(extensions []string, defaults []string) map[string]bool {
