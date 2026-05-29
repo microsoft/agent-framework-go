@@ -4,6 +4,7 @@ package skills_test
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -824,7 +825,21 @@ func TestDiscovery_SearchDepth_CanReachDeepNestedPath(t *testing.T) {
 func TestConfig_InvalidSearchDepth_UsesDefault(t *testing.T) {
 	tests := []int{0, -1, -5}
 	for _, depth := range tests {
-		t.Run("depth", func(t *testing.T) {
+		t.Run(fmt.Sprintf("depth_%d", depth), func(t *testing.T) {
+			p := newProviderWithConfig(t, &fsskills.SourceOptions{
+				SearchDepth: depth,
+			}, nil, t.TempDir())
+			if p == nil {
+				t.Fatal("expected non-nil provider")
+			}
+		})
+	}
+}
+
+func TestConfig_ValidSearchDepth(t *testing.T) {
+	tests := []int{1, 2, 4}
+	for _, depth := range tests {
+		t.Run(fmt.Sprintf("depth_%d", depth), func(t *testing.T) {
 			p := newProviderWithConfig(t, &fsskills.SourceOptions{
 				SearchDepth: depth,
 			}, nil, t.TempDir())
