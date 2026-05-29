@@ -493,13 +493,7 @@ func (s *Source) scanForFiles(
 			continue
 		}
 
-		// Compute relative path (strip leading "./" from root)
 		relativePath := entryPath
-		if strings.HasPrefix(relativePath, "./") {
-			relativePath = relativePath[2:]
-		} else if relativePath == "." {
-			relativePath = entry.Name()
-		}
 
 		if filter != nil && !filter(FilterContext{SkillName: skillName, RelativeFilePath: relativePath}) {
 			continue
