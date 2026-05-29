@@ -672,8 +672,8 @@ func TestDiscovery_ResourceFilter_CanRestrictDefaultDiscovery(t *testing.T) {
 
 	// Restrict discovery to only files under docs/
 	p := newProviderWithConfig(t, &fsskills.SourceOptions{
-		ResourceFilter: func(ctx fsskills.FilterContext) bool {
-			return strings.HasPrefix(ctx.RelativeFilePath, "docs/")
+		ResourceFilter: func(filterCtx fsskills.FilterContext) bool {
+			return strings.HasPrefix(filterCtx.RelativeFilePath, "docs/")
 		},
 	}, nil, root)
 
