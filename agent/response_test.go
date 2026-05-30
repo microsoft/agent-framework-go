@@ -631,6 +631,56 @@ func TestResponse_ToUpdates_ProducesUpdates(t *testing.T) {
 	}
 }
 
+func TestResponse_ToUpdates_PropagatesMessageCreatedAt(t *testing.T) {
+	respCreatedAt := time.Date(2024, 11, 10, 9, 20, 0, 0, time.UTC)
+	msgCreatedAt := time.Date(2024, 11, 11, 9, 20, 0, 0, time.UTC)
+	resp := &agent.Response{
+		AgentID:   "agentId",
+		ID:        "12345",
+		CreatedAt: respCreatedAt,
+		Messages: []*message.Message{
+			{
+				Role:      message.Role("customRole"),
+				ID:        "someMessage",
+				CreatedAt: msgCreatedAt,
+				Contents:  message.Contents{&message.TextContent{Text: "Text"}},
+			},
+		},
+	}
+
+	updates := resp.ToUpdates()
+	if len(updates) != 1 {
+		t.Fatalf("expected 1 update, got %d", len(updates))
+	}
+	if !updates[0].CreatedAt.Equal(msgCreatedAt) {
+		t.Errorf("expected update CreatedAt %v (from message), got %v", msgCreatedAt, updates[0].CreatedAt)
+	}
+}
+
+func TestResponse_ToUpdates_FallsBackToResponseCreatedAt(t *testing.T) {
+	respCreatedAt := time.Date(2024, 11, 10, 9, 20, 0, 0, time.UTC)
+	resp := &agent.Response{
+		AgentID:   "agentId",
+		ID:        "12345",
+		CreatedAt: respCreatedAt,
+		Messages: []*message.Message{
+			{
+				Role:     message.Role("customRole"),
+				ID:       "someMessage",
+				Contents: message.Contents{&message.TextContent{Text: "Text"}},
+			},
+		},
+	}
+
+	updates := resp.ToUpdates()
+	if len(updates) != 1 {
+		t.Fatalf("expected 1 update, got %d", len(updates))
+	}
+	if !updates[0].CreatedAt.Equal(respCreatedAt) {
+		t.Errorf("expected update CreatedAt %v (from response), got %v", respCreatedAt, updates[0].CreatedAt)
+	}
+}
+
 func TestResponse_ToUpdates_WithNoMessagesProducesEmptySlice(t *testing.T) {
 	resp := &agent.Response{}
 
