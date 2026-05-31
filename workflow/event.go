@@ -2,6 +2,27 @@
 
 package workflow
 
+// OutputTag identifies the kind of output a [OutputEvent] represents.
+// It is a normalized string value with equality semantics.
+type OutputTag struct {
+	value string
+}
+
+// outputTag constructs an OutputTag with the given value. Internal use only.
+func outputTag(v string) OutputTag { return OutputTag{value: v} }
+
+// OutputTagIntermediate is the well-known tag that marks an output as
+// intermediate — emitted by executors registered via
+// [Builder.WithIntermediateOutputFrom]. Terminal (non-intermediate) outputs
+// carry no tag.
+var OutputTagIntermediate = outputTag("intermediate")
+
+// Value returns the string identifier of the tag.
+func (t OutputTag) Value() string { return t.value }
+
+// String returns the string representation of the tag.
+func (t OutputTag) String() string { return t.value }
+
 type Event interface {
 	Data() any
 }
@@ -122,6 +143,21 @@ type OutputEvent struct {
 	// ExecutorID is the unique identifier of the executor that yielded this output.
 	ExecutorID string
 	Output     any
+
+	// Tags is the set of output tags associated with this event. Empty for
+	// terminal/untagged outputs. The presence of [OutputTagIntermediate]
+	// marks the event as an intermediate output.
+	Tags []OutputTag
+}
+
+// HasTag reports whether the event carries tag.
+func (e OutputEvent) HasTag(tag OutputTag) bool {
+	for _, t := range e.Tags {
+		if t == tag {
+			return true
+		}
+	}
+	return false
 }
 
 func (e OutputEvent) Data() any {

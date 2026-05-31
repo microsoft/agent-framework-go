@@ -524,13 +524,15 @@ func (proc *runnerContext) Bind(ctx context.Context, executorID string, traceCon
 			if err := proc.validateOutputType(executorID, output); err != nil {
 				return err
 			}
-			if proc.wf.HasOutputExecutor(executorID) {
-				return proc.AddEvent(boundCtx, workflow.OutputEvent{
-					ExecutorID: executorID,
-					Output:     output,
-				})
+			tags, ok := proc.wf.OutputExecutorTags(executorID)
+			if !ok {
+				return nil
 			}
-			return nil
+			return proc.AddEvent(boundCtx, workflow.OutputEvent{
+				ExecutorID: executorID,
+				Output:     output,
+				Tags:       tags,
+			})
 		},
 
 		RequestHalt: func() error {

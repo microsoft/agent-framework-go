@@ -298,6 +298,56 @@ func TestRunAndStreamingRun_CheckpointableDefaults(t *testing.T) {
 	assertStreamingRunCheckpointDefaults(t, stream)
 }
 
+func TestOutputEvent_IntermediateTag_AppearsOnEvent(t *testing.T) {
+	ex := minimalEchoBinding("ex")
+	wf, err := workflow.NewBuilder(ex).WithIntermediateOutputFrom(ex).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	run, err := inproc.Default.Run(context.Background(), wf, "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var out *workflow.OutputEvent
+	for evt := range run.OutgoingEvents() {
+		if o, ok := evt.(workflow.OutputEvent); ok {
+			out = &o
+			break
+		}
+	}
+	if out == nil {
+		t.Fatal("expected an OutputEvent, got none")
+	}
+	if !out.HasTag(workflow.OutputTagIntermediate) {
+		t.Errorf("OutputEvent.HasTag(Intermediate) = false, want true; Tags = %v", out.Tags)
+	}
+}
+
+func TestOutputEvent_UntaggedOutput_HasNoTags(t *testing.T) {
+	ex := minimalEchoBinding("ex")
+	wf, err := workflow.NewBuilder(ex).WithOutputFrom(ex).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	run, err := inproc.Default.Run(context.Background(), wf, "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var out *workflow.OutputEvent
+	for evt := range run.OutgoingEvents() {
+		if o, ok := evt.(workflow.OutputEvent); ok {
+			out = &o
+			break
+		}
+	}
+	if out == nil {
+		t.Fatal("expected an OutputEvent, got none")
+	}
+	if len(out.Tags) != 0 {
+		t.Errorf("OutputEvent.Tags = %v, want empty for untagged output", out.Tags)
+	}
+}
+
 func countOutputs(events iter.Seq[workflow.Event]) int {
 	var count int
 	for evt := range events {
