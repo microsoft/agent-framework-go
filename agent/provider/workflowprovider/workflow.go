@@ -124,15 +124,15 @@ func New(wf *workflow.Workflow, cfg Config) (*agent.Agent, error) {
 				}
 				delete(state.pending, matched.contentID)
 			}
-			// Suppress the TurnToken only when the only activity is a
-			// matched external response addressed to the start executor.
+			// Suppress the TurnToken when there is a matched external
+			// response addressed to the start executor.
 			// The start executor's response handler self-emits a
 			// TurnToken when it completes its turn, so an extra one
 			// would drive an additional agent turn (mirrors .NET's
 			// WorkflowSession.shouldSendTurnToken logic). Non-start
 			// owners (e.g. RequestPort executors) do not self-emit a
 			// TurnToken, so we still need to provide one.
-			shouldSendTurnToken := len(responses) == 0 || !hasMatchedStartResponse || len(remaining) > 0
+			shouldSendTurnToken := len(responses) == 0 || !hasMatchedStartResponse
 			if shouldSendTurnToken {
 				emit := true
 				if err := state.stream.SendMessage(ctx, workflow.TurnToken{EmitEvents: &emit}); err != nil {
