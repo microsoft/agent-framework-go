@@ -109,7 +109,7 @@ func TestAddTodos_CreatesSingleItem(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	callTool(t, outOpts, "TodoList_Add", `{"Arg0":[{"title":"Buy milk"}]}`)
+	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Buy milk"}]}`)
 
 	items := p.GetAllItems(opts...)
 	if len(items) != 1 {
@@ -130,7 +130,7 @@ func TestAddTodos_CreatesMultipleItems(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	callTool(t, outOpts, "TodoList_Add", `{"Arg0":[{"title":"Item 1"},{"title":"Item 2"},{"title":"Item 3"}]}`)
+	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Item 1"},{"title":"Item 2"},{"title":"Item 3"}]}`)
 
 	items := p.GetAllItems(opts...)
 	if len(items) != 3 {
@@ -151,11 +151,11 @@ func TestCompleteTodos_MarksItemComplete(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	callTool(t, outOpts, "TodoList_Add", `{"Arg0":[{"title":"Task A"}]}`)
+	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Task A"}]}`)
 	items := p.GetAllItems(opts...)
 	id := items[0].ID
 
-	result := callTool(t, outOpts, "TodoList_Complete", fmt.Sprintf(`{"Arg0":[{"id":%d,"reason":"done"}]}`, id))
+	result := callTool(t, outOpts, "todos_complete", fmt.Sprintf(`{"Arg0":[{"id":%d,"reason":"done"}]}`, id))
 	if !strings.Contains(result, "1") {
 		t.Errorf("expected 1 completed, got %s", result)
 	}
@@ -176,10 +176,10 @@ func TestCompleteTodos_MarksMultipleComplete(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	callTool(t, outOpts, "TodoList_Add", `{"Arg0":[{"title":"A"},{"title":"B"},{"title":"C"}]}`)
+	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"A"},{"title":"B"},{"title":"C"}]}`)
 	items := p.GetAllItems(opts...)
 
-	callTool(t, outOpts, "TodoList_Complete", fmt.Sprintf(`{"Arg0":[{"id":%d,"reason":"done"},{"id":%d,"reason":"done"}]}`, items[0].ID, items[1].ID))
+	callTool(t, outOpts, "todos_complete", fmt.Sprintf(`{"Arg0":[{"id":%d,"reason":"done"},{"id":%d,"reason":"done"}]}`, items[0].ID, items[1].ID))
 
 	remaining := p.GetRemainingItems(opts...)
 	if len(remaining) != 1 {
@@ -200,7 +200,7 @@ func TestCompleteTodos_ReturnsZeroForMissingIds(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := callTool(t, outOpts, "TodoList_Complete", `{"Arg0":[{"id":999,"reason":"done"}]}`)
+	result := callTool(t, outOpts, "todos_complete", `{"Arg0":[{"id":999,"reason":"done"}]}`)
 	if !strings.Contains(result, "0") {
 		t.Errorf("expected 0 completed for missing ID, got %s", result)
 	}
@@ -216,11 +216,11 @@ func TestRemoveTodos_RemovesItem(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	callTool(t, outOpts, "TodoList_Add", `{"Arg0":[{"title":"Remove me"}]}`)
+	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Remove me"}]}`)
 	items := p.GetAllItems(opts...)
 	id := items[0].ID
 
-	callTool(t, outOpts, "TodoList_Remove", fmt.Sprintf(`{"Arg0":[%d]}`, id))
+	callTool(t, outOpts, "todos_remove", fmt.Sprintf(`{"Arg0":[%d]}`, id))
 
 	items = p.GetAllItems(opts...)
 	if len(items) != 0 {
@@ -238,10 +238,10 @@ func TestRemoveTodos_RemovesMultipleItems(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	callTool(t, outOpts, "TodoList_Add", `{"Arg0":[{"title":"A"},{"title":"B"},{"title":"C"}]}`)
+	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"A"},{"title":"B"},{"title":"C"}]}`)
 	items := p.GetAllItems(opts...)
 
-	callTool(t, outOpts, "TodoList_Remove", fmt.Sprintf(`{"Arg0":[%d,%d]}`, items[0].ID, items[1].ID))
+	callTool(t, outOpts, "todos_remove", fmt.Sprintf(`{"Arg0":[%d,%d]}`, items[0].ID, items[1].ID))
 
 	items = p.GetAllItems(opts...)
 	if len(items) != 1 {
@@ -262,7 +262,7 @@ func TestRemoveTodos_ReturnsZeroForMissingIds(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := callTool(t, outOpts, "TodoList_Remove", `{"Arg0":[999]}`)
+	result := callTool(t, outOpts, "todos_remove", `{"Arg0":[999]}`)
 	if !strings.Contains(result, "0") {
 		t.Errorf("expected 0 removed for missing ID, got %s", result)
 	}
@@ -278,9 +278,9 @@ func TestGetRemainingTodos_ReturnsOnlyIncomplete(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	callTool(t, outOpts, "TodoList_Add", `{"Arg0":[{"title":"Done"},{"title":"Pending"}]}`)
+	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Done"},{"title":"Pending"}]}`)
 	items := p.GetAllItems(opts...)
-	callTool(t, outOpts, "TodoList_Complete", fmt.Sprintf(`{"Arg0":[{"id":%d,"reason":"done"}]}`, items[0].ID))
+	callTool(t, outOpts, "todos_complete", fmt.Sprintf(`{"Arg0":[{"id":%d,"reason":"done"}]}`, items[0].ID))
 
 	remaining := p.GetRemainingItems(opts...)
 	if len(remaining) != 1 {
@@ -301,9 +301,9 @@ func TestGetAllTodos_ReturnsAllItems(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	callTool(t, outOpts, "TodoList_Add", `{"Arg0":[{"title":"Done"},{"title":"Pending"}]}`)
+	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Done"},{"title":"Pending"}]}`)
 	items := p.GetAllItems(opts...)
-	callTool(t, outOpts, "TodoList_Complete", fmt.Sprintf(`{"Arg0":[{"id":%d,"reason":"done"}]}`, items[0].ID))
+	callTool(t, outOpts, "todos_complete", fmt.Sprintf(`{"Arg0":[{"id":%d,"reason":"done"}]}`, items[0].ID))
 
 	all := p.GetAllItems(opts...)
 	if len(all) != 2 {
@@ -321,7 +321,7 @@ func TestState_PersistsAcrossInvocations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	callTool(t, outOpts, "TodoList_Add", `{"Arg0":[{"title":"Persist me"}]}`)
+	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Persist me"}]}`)
 
 	// Second invocation: items should still be there.
 	_, outOpts2, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
@@ -349,7 +349,7 @@ func TestPublicGetAllTodos_ReturnsAllItems(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	callTool(t, outOpts, "TodoList_Add", `{"Arg0":[{"title":"X"},{"title":"Y"}]}`)
+	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"X"},{"title":"Y"}]}`)
 
 	all := p.GetAllItems(opts...)
 	if len(all) != 2 {
@@ -367,9 +367,9 @@ func TestPublicGetRemainingTodos_ReturnsOnlyIncomplete(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	callTool(t, outOpts, "TodoList_Add", `{"Arg0":[{"title":"Done"},{"title":"Open"}]}`)
+	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Done"},{"title":"Open"}]}`)
 	items := p.GetAllItems(opts...)
-	callTool(t, outOpts, "TodoList_Complete", fmt.Sprintf(`{"Arg0":[{"id":%d,"reason":"done"}]}`, items[0].ID))
+	callTool(t, outOpts, "todos_complete", fmt.Sprintf(`{"Arg0":[{"id":%d,"reason":"done"}]}`, items[0].ID))
 
 	remaining := p.GetRemainingItems(opts...)
 	if len(remaining) != 1 {
@@ -457,9 +457,9 @@ func TestProvide_InjectsTodoListMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	callTool(t, outOpts, "TodoList_Add", `{"Arg0":[{"title":"Task A"},{"title":"Task B"}]}`)
+	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Task A"},{"title":"Task B"}]}`)
 	items := p.GetAllItems(opts...)
-	callTool(t, outOpts, "TodoList_Complete", fmt.Sprintf(`{"Arg0":[{"id":%d,"reason":"done"}]}`, items[0].ID))
+	callTool(t, outOpts, "todos_complete", fmt.Sprintf(`{"Arg0":[{"id":%d,"reason":"done"}]}`, items[0].ID))
 
 	// Second call should inject todo list message.
 	outMessages, _, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
@@ -574,7 +574,7 @@ func TestToolNames(t *testing.T) {
 		names[i] = tt.Name()
 	}
 
-	expected := []string{"TodoList_Add", "TodoList_Complete", "TodoList_Remove", "TodoList_GetRemaining", "TodoList_GetAll"}
+	expected := []string{"todos_add", "todos_complete", "todos_remove", "todos_get_remaining", "todos_get_all"}
 	for _, name := range expected {
 		if !slices.Contains(names, name) {
 			t.Errorf("expected tool %q not found", name)
@@ -592,13 +592,13 @@ func TestCompleteTodos_WithReason(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	callTool(t, outOpts, "TodoList_Add", `{"Arg0":[{"title":"Task X"}]}`)
+	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Task X"}]}`)
 	items := p.GetAllItems(opts...)
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(items))
 	}
 
-	result := callTool(t, outOpts, "TodoList_Complete", fmt.Sprintf(`{"Arg0":[{"id":%d,"reason":"completed successfully"}]}`, items[0].ID))
+	result := callTool(t, outOpts, "todos_complete", fmt.Sprintf(`{"Arg0":[{"id":%d,"reason":"completed successfully"}]}`, items[0].ID))
 	if !strings.Contains(result, "1") {
 		t.Errorf("expected 1 completed, got %s", result)
 	}
@@ -609,7 +609,7 @@ func TestCompleteTodos_WithReason(t *testing.T) {
 	}
 }
 
-// Verify that TodoList_Complete description mentions reason.
+// Verify that todos_complete description mentions reason.
 func TestCompleteToolDescription_MentionsReason(t *testing.T) {
 	p := todo.New(nil)
 	opts := sessionOpts()
@@ -621,17 +621,17 @@ func TestCompleteToolDescription_MentionsReason(t *testing.T) {
 
 	tools := collectTools(outOpts)
 	for _, tt := range tools {
-		if tt.Name() == "TodoList_Complete" {
+		if tt.Name() == "todos_complete" {
 			if !strings.Contains(tt.Description(), "reason") {
-				t.Errorf("expected TodoList_Complete description to mention 'reason', got: %s", tt.Description())
+				t.Errorf("expected todos_complete description to mention 'reason', got: %s", tt.Description())
 			}
 			return
 		}
 	}
-	t.Error("TodoList_Complete tool not found")
+	t.Error("todos_complete tool not found")
 }
 
-// TestCompleteTodos_EmptyReasonIsAccepted verifies that TodoList_Complete allows
+// TestCompleteTodos_EmptyReasonIsAccepted verifies that todos_complete allows
 // an empty or omitted reason, matching the upstream .NET behavior where the reason
 // field is prompted for but not enforced at runtime.
 func TestCompleteTodos_EmptyReasonIsAccepted(t *testing.T) {
@@ -653,13 +653,13 @@ func TestCompleteTodos_EmptyReasonIsAccepted(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			callTool(t, outOpts, "TodoList_Add", `{"Arg0":[{"title":"Task Z"}]}`)
+			callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Task Z"}]}`)
 			items := p.GetAllItems(opts...)
 			if len(items) != 1 {
 				t.Fatalf("expected 1 item, got %d", len(items))
 			}
 
-			result := callTool(t, outOpts, "TodoList_Complete", fmt.Sprintf(`{"Arg0":[{"id":%d,"reason":%q}]}`, items[0].ID, tc.reason))
+			result := callTool(t, outOpts, "todos_complete", fmt.Sprintf(`{"Arg0":[{"id":%d,"reason":%q}]}`, items[0].ID, tc.reason))
 			if !strings.Contains(result, "1") {
 				t.Errorf("expected 1 completed with %q reason, got %s", tc.reason, result)
 			}

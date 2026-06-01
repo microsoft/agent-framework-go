@@ -3,9 +3,9 @@
 // Package todo provides a context provider that gives agents todo list
 // management tools for tracking work items during long-running complex tasks.
 //
-// The provider exposes five tools to the agent: TodoList_Add,
-// TodoList_Complete, TodoList_Remove, TodoList_GetRemaining, and
-// TodoList_GetAll.
+// The provider exposes five tools to the agent: todos_add,
+// todos_complete, todos_remove, todos_get_remaining, and
+// todos_get_all.
 //
 // Todo state is stored in the agent session and persists across invocations.
 package todo
@@ -35,11 +35,11 @@ During execution, use the todo list to keep track of what needs to be done, mark
 When a user changes the topic or changes their mind, ensure that you update the todo list accordingly by removing irrelevant items or adding new ones as needed.
 
 Use these tools to manage your tasks:
-- Use TodoList_Add to break down complex work into trackable items (supports adding one or many at once).
-- Use TodoList_Complete to mark items as done when finished (supports one or many at once). Include a reason describing how the items were completed.
-- Use TodoList_GetRemaining to check what work is still pending.
-- Use TodoList_GetAll to review the full list including completed items.
-- Use TodoList_Remove to remove items that are no longer needed (supports one or many at once).`
+- Use todos_add to break down complex work into trackable items (supports adding one or many at once).
+- Use todos_complete to mark items as done when finished (supports one or many at once). Include a reason describing how the items were completed.
+- Use todos_get_remaining to check what work is still pending.
+- Use todos_get_all to review the full list including completed items.
+- Use todos_remove to remove items that are no longer needed (supports one or many at once).`
 
 // Item represents a single todo item.
 type Item struct {
@@ -213,7 +213,7 @@ func (p *Provider) provide(ctx context.Context, messages []*message.Message, opt
 func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
 	addTool := functool.MustNew(
 		functool.Config{
-			Name:        "TodoList_Add",
+			Name:        "todos_add",
 			Description: "Add one or more todo items. Each item has a title and an optional description. Returns the list of created todo items.",
 		},
 		func(ctx context.Context, input []ItemInput) ([]Item, error) {
@@ -241,7 +241,7 @@ func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
 
 	completeTool := functool.MustNew(
 		functool.Config{
-			Name:        "TodoList_Complete",
+			Name:        "todos_complete",
 			Description: "Mark one or more todo items as complete. Each entry has an ID and a reason describing how/why the item was completed. Returns the number of items that were found and marked complete.",
 		},
 		func(ctx context.Context, items []CompleteInput) (int, error) {
@@ -269,7 +269,7 @@ func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
 
 	removeTool := functool.MustNew(
 		functool.Config{
-			Name:        "TodoList_Remove",
+			Name:        "todos_remove",
 			Description: "Remove one or more todo items by their IDs. Returns the number of items that were found and removed.",
 		},
 		func(ctx context.Context, ids []int) (int, error) {
@@ -300,7 +300,7 @@ func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
 
 	getRemainingTool := functool.MustNew(
 		functool.Config{
-			Name:        "TodoList_GetRemaining",
+			Name:        "todos_get_remaining",
 			Description: "Retrieve the list of incomplete todo items.",
 		},
 		func(ctx context.Context, _ struct{}) ([]Item, error) {
@@ -320,7 +320,7 @@ func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
 
 	getAllTool := functool.MustNew(
 		functool.Config{
-			Name:        "TodoList_GetAll",
+			Name:        "todos_get_all",
 			Description: "Retrieve the full list of todo items, both complete and incomplete.",
 		},
 		func(ctx context.Context, _ struct{}) ([]Item, error) {
