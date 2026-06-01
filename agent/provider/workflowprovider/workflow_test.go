@@ -1053,10 +1053,10 @@ func TestNew_ApprovalRoundtrip_ResponseIsProcessed(t *testing.T) {
 	}
 }
 
-// A single resume message containing both the matching response content and
-// additional regular content must dispatch the response and forward the
-// regular content into the workflow.
-func TestNew_MixedResponseAndRegularMessage_BothProcessed(t *testing.T) {
+// A single resume message containing both matching response content and
+// additional regular content must dispatch the response without re-emitting
+// the handled external request.
+func TestNew_MixedResponseAndRegularMessage_ResponseProcessed(t *testing.T) {
 	id := "mixed"
 	port := workflow.RequestPort{
 		ID:       id + "_FunctionCall",
