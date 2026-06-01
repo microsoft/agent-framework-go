@@ -115,6 +115,10 @@ func (resp *Response) ToUpdates() []*ResponseUpdate {
 
 	updates := make([]*ResponseUpdate, 0, len(resp.Messages)+1)
 	for _, msg := range resp.Messages {
+		createdAt := msg.CreatedAt
+		if createdAt.IsZero() {
+			createdAt = resp.CreatedAt
+		}
 		updates = append(updates, &ResponseUpdate{
 			RawRepresentation:    msg.RawRepresentation,
 			AdditionalProperties: msg.AdditionalProperties,
@@ -124,7 +128,7 @@ func (resp *Response) ToUpdates() []*ResponseUpdate {
 			FinishReason:         resp.FinishReason,
 			AuthorName:           msg.AuthorName,
 			Role:                 msg.Role,
-			CreatedAt:            resp.CreatedAt,
+			CreatedAt:            createdAt,
 			Contents:             msg.Contents,
 		})
 	}

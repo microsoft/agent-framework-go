@@ -676,6 +676,56 @@ func TestResponse_ToUpdates_WithUsageOnlyProducesSingleUpdate(t *testing.T) {
 	}
 }
 
+func TestResponse_ToUpdates_PropagatesMessageCreatedAtOverResponseCreatedAt(t *testing.T) {
+	responseCreatedAt := time.Date(2024, 11, 10, 9, 20, 0, 0, time.UTC)
+	messageCreatedAt := time.Date(2024, 11, 11, 9, 20, 0, 0, time.UTC)
+	resp := &agent.Response{
+		AgentID:   "agentId",
+		ID:        "12345",
+		CreatedAt: responseCreatedAt,
+		Messages: []*message.Message{
+			{
+				Role:      message.Role("customRole"),
+				ID:        "someMessage",
+				CreatedAt: messageCreatedAt,
+				Contents:  message.Contents{&message.TextContent{Text: "Text"}},
+			},
+		},
+	}
+
+	updates := resp.ToUpdates()
+	if len(updates) != 1 {
+		t.Fatalf("expected 1 update, got %d", len(updates))
+	}
+	if !updates[0].CreatedAt.Equal(messageCreatedAt) {
+		t.Errorf("expected per-message CreatedAt %v, got %v", messageCreatedAt, updates[0].CreatedAt)
+	}
+}
+
+func TestResponse_ToUpdates_FallsBackToResponseCreatedAtWhenMessageCreatedAtIsZero(t *testing.T) {
+	responseCreatedAt := time.Date(2024, 11, 10, 9, 20, 0, 0, time.UTC)
+	resp := &agent.Response{
+		AgentID:   "agentId",
+		ID:        "12345",
+		CreatedAt: responseCreatedAt,
+		Messages: []*message.Message{
+			{
+				Role:     message.Role("customRole"),
+				ID:       "someMessage",
+				Contents: message.Contents{&message.TextContent{Text: "Text"}},
+			},
+		},
+	}
+
+	updates := resp.ToUpdates()
+	if len(updates) != 1 {
+		t.Fatalf("expected 1 update, got %d", len(updates))
+	}
+	if !updates[0].CreatedAt.Equal(responseCreatedAt) {
+		t.Errorf("expected response-level CreatedAt %v, got %v", responseCreatedAt, updates[0].CreatedAt)
+	}
+}
+
 func TestResponse_ToUpdates_WithAdditionalPropertiesOnlyProducesSingleUpdate(t *testing.T) {
 	resp := &agent.Response{
 		AdditionalProperties: map[string]any{"key": "value"},
