@@ -50,9 +50,9 @@ func New(aclient *aguiSSEClient.Client, config Config) *agent.Agent {
 	} else {
 		p.decoder = aguiEvents.NewEventDecoder(nil)
 	}
+	var providerMiddlewares []agent.Middleware
 	if !config.DisableFuncAutoCall {
-		config.Middlewares = slices.Clone(config.Middlewares)
-		config.Middlewares = append(config.Middlewares, toolautocall.New(toolautocall.Config{
+		providerMiddlewares = append(providerMiddlewares, toolautocall.New(toolautocall.Config{
 			Logger:           config.Logger,
 			LogSensitiveData: config.LogSensitiveData,
 		}))
@@ -60,6 +60,7 @@ func New(aclient *aguiSSEClient.Client, config Config) *agent.Agent {
 	return agent.New(agent.ProviderConfig{
 		ProviderName: "agui",
 		Run:          p.run,
+		Middlewares:  providerMiddlewares,
 	}, config.Config)
 }
 

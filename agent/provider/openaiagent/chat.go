@@ -58,9 +58,9 @@ func NewChatCompletions(oclient openai.Client, config Config) *agent.Agent {
 	if config.Instructions != "" {
 		config.RunOptions = append(config.RunOptions, agent.WithInstructions(config.Instructions))
 	}
+	var providerMiddlewares []agent.Middleware
 	if !config.DisableFuncAutoCall {
-		config.Middlewares = slices.Clone(config.Middlewares)
-		config.Middlewares = append(config.Middlewares, toolautocall.New(toolautocall.Config{
+		providerMiddlewares = append(providerMiddlewares, toolautocall.New(toolautocall.Config{
 			Logger:           config.Logger,
 			LogSensitiveData: config.LogSensitiveData,
 		}))
@@ -68,6 +68,7 @@ func NewChatCompletions(oclient openai.Client, config Config) *agent.Agent {
 	return agent.New(agent.ProviderConfig{
 		ProviderName: "openai",
 		Run:          c.run,
+		Middlewares:  providerMiddlewares,
 		Format:       c.formatOf,
 		Unmarshal:    c.unmarshal,
 	}, config.Config)

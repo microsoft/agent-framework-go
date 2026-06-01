@@ -1952,3 +1952,99 @@ func TestAgent_Run_UsesContextProvidersInOrder(t *testing.T) {
 		t.Fatalf("expected sequence %v, got %v", expected, sequence)
 	}
 }
+
+func TestAgent_Run_PipelineOrder_AgentHistoryContextProviderMiddlewareRun(t *testing.T) {
+	contextTool := stubTool{name: "context-tool"}
+	sequence := make([]string, 0, 5)
+	var agentTools []tool.Tool
+	var historyMessages []string
+	var contextMessages []string
+	var providerMessages []string
+	var providerTools []tool.Tool
+	var runMessages []string
+
+	agentMiddleware := agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		sequence = append(sequence, "agent")
+		agentTools = slices.Collect(agent.AllOptions(options, agent.WithTool))
+		messages = append(slices.Clone(messages), message.NewText("agent"))
+		return next(ctx, messages, options...)
+	})
+	historyProvider := &agent.HistoryProvider{
+		SourceID: "history",
+		Provide: func(_ context.Context, messages []*message.Message, _ ...agent.Option) ([]*message.Message, error) {
+			sequence = append(sequence, "history")
+			historyMessages = messageStrings(messages)
+			return append(slices.Clone(messages), message.NewText("history")), nil
+		},
+	}
+	contextProvider := &agent.ContextProvider{
+		SourceID: "context",
+		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
+			sequence = append(sequence, "context")
+			contextMessages = messageStrings(messages)
+			messages = append(slices.Clone(messages), message.NewText("context"))
+			options = append(slices.Clone(options), agent.WithTool(contextTool))
+			return messages, options, nil
+		},
+	}
+	providerMiddleware := agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		sequence = append(sequence, "provider")
+		providerMessages = messageStrings(messages)
+		providerTools = slices.Collect(agent.AllOptions(options, agent.WithTool))
+		return next(ctx, messages, options...)
+	})
+	runFn := func(_ context.Context, messages []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		sequence = append(sequence, "run")
+		runMessages = messageStrings(messages)
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "ok"}}}, nil)
+		}
+	}
+
+	a := agent.New(agent.ProviderConfig{
+		Run:         runFn,
+		Middlewares: []agent.Middleware{providerMiddleware},
+	}, agent.Config{
+		ID:               "test-agent",
+		Name:             "test-agent",
+		Middlewares:      []agent.Middleware{agentMiddleware},
+		HistoryProvider:  historyProvider,
+		ContextProviders: []*agent.ContextProvider{contextProvider},
+	})
+
+	_, err := a.RunText(t.Context(), "input", agent.WithSession(agenttest.CreateSession())).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expectedSequence := []string{"agent", "history", "context", "provider", "run"}
+	if !slices.Equal(sequence, expectedSequence) {
+		t.Fatalf("expected sequence %v, got %v", expectedSequence, sequence)
+	}
+	if len(agentTools) != 0 {
+		t.Fatalf("expected agent middleware not to see context provider tools, got %d", len(agentTools))
+	}
+	if got, want := toolNames(providerTools), []string{"context-tool"}; !slices.Equal(got, want) {
+		t.Fatalf("expected provider middleware tools %v, got %v", want, got)
+	}
+	if got, want := historyMessages, []string{"input", "agent"}; !slices.Equal(got, want) {
+		t.Fatalf("expected history messages %v, got %v", want, got)
+	}
+	if got, want := contextMessages, []string{"input", "agent", "history"}; !slices.Equal(got, want) {
+		t.Fatalf("expected context messages %v, got %v", want, got)
+	}
+	if got, want := providerMessages, []string{"input", "agent", "history", "context"}; !slices.Equal(got, want) {
+		t.Fatalf("expected provider middleware messages %v, got %v", want, got)
+	}
+	if got, want := runMessages, []string{"input", "agent", "history", "context"}; !slices.Equal(got, want) {
+		t.Fatalf("expected run messages %v, got %v", want, got)
+	}
+}
+
+func toolNames(tools []tool.Tool) []string {
+	names := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		names = append(names, tool.Name())
+	}
+	return names
+}
