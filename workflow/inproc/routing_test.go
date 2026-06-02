@@ -539,6 +539,78 @@ func TestOutputFilter_RejectsUnregisteredExecutor(t *testing.T) {
 	}
 }
 
+func TestOutputTag_WithOutputFrom_HasNoTags(t *testing.T) {
+	start := outputFilterExecutor("start")
+	end := outputFilterExecutor("end")
+
+	wf, err := workflow.NewBuilder(start).
+		AddEdge(start, end).
+		WithOutputFrom(end).
+		Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	outs := runWorkflowAndCollect(t, wf, "hello")
+	if len(outs) != 1 {
+		t.Fatalf("expected 1 OutputEvent, got %d", len(outs))
+	}
+	if len(outs[0].Tags) != 0 {
+		t.Errorf("WithOutputFrom should produce untagged output, got tags: %v", outs[0].Tags)
+	}
+	if outs[0].IsIntermediate() {
+		t.Errorf("WithOutputFrom output should not be intermediate")
+	}
+}
+
+func TestOutputTag_WithIntermediateOutputFrom_HasIntermediateTag(t *testing.T) {
+	start := outputFilterExecutor("start")
+	end := outputFilterExecutor("end")
+
+	wf, err := workflow.NewBuilder(start).
+		AddEdge(start, end).
+		WithIntermediateOutputFrom(end).
+		Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	outs := runWorkflowAndCollect(t, wf, "hello")
+	if len(outs) != 1 {
+		t.Fatalf("expected 1 OutputEvent, got %d", len(outs))
+	}
+	if len(outs[0].Tags) != 1 || outs[0].Tags[0] != workflow.OutputTagIntermediate {
+		t.Errorf("Tags = %v, want [%v]", outs[0].Tags, workflow.OutputTagIntermediate)
+	}
+	if !outs[0].IsIntermediate() {
+		t.Errorf("IsIntermediate() = false, want true")
+	}
+}
+
+func TestOutputTag_WithOutputFrom_AndWithIntermediateOutputFrom_MergesTags(t *testing.T) {
+	// Registering the same executor as both a plain output and an intermediate output
+	// should result in a single OutputEvent carrying the intermediate tag.
+	start := outputFilterExecutor("start")
+	end := outputFilterExecutor("end")
+
+	wf, err := workflow.NewBuilder(start).
+		AddEdge(start, end).
+		WithOutputFrom(end).
+		WithIntermediateOutputFrom(end).
+		Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	outs := runWorkflowAndCollect(t, wf, "hello")
+	if len(outs) != 1 {
+		t.Fatalf("expected 1 OutputEvent, got %d", len(outs))
+	}
+	if !outs[0].IsIntermediate() {
+		t.Errorf("IsIntermediate() = false after merging plain+intermediate registration")
+	}
+}
+
 func TestOutputFilter_NoOutputExecutorsRegistered(t *testing.T) {
 	start := outputFilterExecutor("start")
 

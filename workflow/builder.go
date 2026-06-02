@@ -28,7 +28,7 @@ type Builder struct {
 	edges                    map[string][]Edge
 	conditionlessConnections []EdgeConnection
 	inputPorts               map[string]RequestPort
-	outputExecutors          map[string]struct{}
+	outputExecutors          map[string][]OutputTag
 	telemetry                *internalobservability.Context
 }
 
@@ -70,6 +70,20 @@ func (wb *Builder) WithTelemetry(tracer workflowobservability.Tracer, options Te
 }
 
 func (wb *Builder) WithOutputFrom(bindings ...ExecutorBinding) *Builder {
+	return wb.withOutputFrom(nil, bindings...)
+}
+
+// WithIntermediateOutputFrom registers the given executors as output sources and
+// tags their outputs with [OutputTagIntermediate]. Outputs from these executors
+// are emitted as [OutputEvent] values carrying the intermediate tag, allowing
+// callers to distinguish them from terminal outputs.
+//
+// This mirrors .NET's WorkflowBuilderExtensions.WithIntermediateOutputFrom.
+func (wb *Builder) WithIntermediateOutputFrom(bindings ...ExecutorBinding) *Builder {
+	return wb.withOutputFrom([]OutputTag{OutputTagIntermediate}, bindings...)
+}
+
+func (wb *Builder) withOutputFrom(tags []OutputTag, bindings ...ExecutorBinding) *Builder {
 	if wb.err != nil {
 		return wb
 	}
@@ -78,9 +92,23 @@ func (wb *Builder) WithOutputFrom(bindings ...ExecutorBinding) *Builder {
 			return wb
 		}
 		if wb.outputExecutors == nil {
-			wb.outputExecutors = make(map[string]struct{})
+			wb.outputExecutors = make(map[string][]OutputTag)
 		}
-		wb.outputExecutors[binding.ID] = struct{}{}
+		// Merge tags: accumulate across repeated calls.
+		existing := wb.outputExecutors[binding.ID]
+		for _, tag := range tags {
+			alreadyPresent := false
+			for _, e := range existing {
+				if e == tag {
+					alreadyPresent = true
+					break
+				}
+			}
+			if !alreadyPresent {
+				existing = append(existing, tag)
+			}
+		}
+		wb.outputExecutors[binding.ID] = existing
 	}
 	return wb
 }
@@ -224,12 +252,23 @@ func (wb *Builder) build(validateOrphans bool) (*Workflow, error) {
 		edges:            cloneEdges(wb.edges),
 		ports:            maps.Clone(wb.inputPorts),
 		executorBindings: maps.Clone(wb.executorsBindings),
-		outputExecutors:  maps.Clone(wb.outputExecutors),
+		outputExecutors:  cloneOutputExecutors(wb.outputExecutors),
 		telemetry:        telemetry,
 	}
 	internalobservability.SetBuildWorkflowAttributes(activity, observabilityMetadata(wf, ""), workflowTelemetryDefinitionFrom(wf))
 	activity.AddEvent(internalobservability.EventBuildCompleted)
 	return wf, nil
+}
+
+func cloneOutputExecutors(src map[string][]OutputTag) map[string][]OutputTag {
+	if src == nil {
+		return nil
+	}
+	out := make(map[string][]OutputTag, len(src))
+	for id, tags := range src {
+		out[id] = slices.Clone(tags)
+	}
+	return out
 }
 
 func cloneEdges(edges map[string][]Edge) map[string][]Edge {
