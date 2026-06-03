@@ -122,6 +122,19 @@ type OutputEvent struct {
 	// ExecutorID is the unique identifier of the executor that yielded this output.
 	ExecutorID string
 	Output     any
+	// Tags holds the set of [OutputTag] values associated with this output.
+	// An empty slice means the output is untagged (terminal).
+	Tags []OutputTag
+}
+
+// IsIntermediate reports whether the event carries the [OutputTagIntermediate] tag.
+func (e OutputEvent) IsIntermediate() bool {
+	for _, t := range e.Tags {
+		if t == OutputTagIntermediate {
+			return true
+		}
+	}
+	return false
 }
 
 func (e OutputEvent) Data() any {
