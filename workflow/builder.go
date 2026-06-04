@@ -28,7 +28,7 @@ type Builder struct {
 	edges                    map[string][]Edge
 	conditionlessConnections []EdgeConnection
 	inputPorts               map[string]RequestPort
-	outputExecutors          map[string]struct{}
+	outputExecutors          map[string][]OutputTag
 	telemetry                *internalobservability.Context
 }
 
@@ -69,6 +69,9 @@ func (wb *Builder) WithTelemetry(tracer workflowobservability.Tracer, options Te
 	return wb
 }
 
+// WithOutputFrom registers bindings as sources of terminal workflow outputs.
+// Tags accumulate: calling WithOutputFrom then [Builder.WithOutputFrom] with a tag
+// on the same executor adds the tag without replacing the existing registration.
 func (wb *Builder) WithOutputFrom(bindings ...ExecutorBinding) *Builder {
 	if wb.err != nil {
 		return wb
@@ -77,12 +80,62 @@ func (wb *Builder) WithOutputFrom(bindings ...ExecutorBinding) *Builder {
 		if !wb.track(binding) {
 			return wb
 		}
-		if wb.outputExecutors == nil {
-			wb.outputExecutors = make(map[string]struct{})
-		}
-		wb.outputExecutors[binding.ID] = struct{}{}
+		wb.ensureOutputExecutor(binding.ID)
 	}
 	return wb
+}
+
+// WithOutputFromTagged registers bindings as sources of workflow outputs carrying
+// tag. Tags accumulate across repeated calls; the registered executor always
+// exists with the union of all tags applied across calls (and an empty slice if
+// only the untagged [Builder.WithOutputFrom] overload was used).
+//
+// Prefer [Builder.WithIntermediateOutputFrom] for the [Intermediate] tag case.
+func (wb *Builder) WithOutputFromTagged(tag OutputTag, bindings ...ExecutorBinding) *Builder {
+	if wb.err != nil {
+		return wb
+	}
+	for _, binding := range bindings {
+		if !wb.track(binding) {
+			return wb
+		}
+		tags := wb.ensureOutputExecutor(binding.ID)
+		tags = appendTagUnique(tags, tag)
+		wb.outputExecutors[binding.ID] = tags
+	}
+	return wb
+}
+
+// WithIntermediateOutputFrom registers bindings as sources of intermediate workflow
+// outputs. Events yielded by these executors carry [Intermediate] in their
+// [OutputEvent.Tags] set and [OutputEvent.IsIntermediate] returns true. Use this for
+// progress updates, partial results, and other non-terminal emissions that downstream
+// consumers should see distinctly from the workflow's final output.
+func (wb *Builder) WithIntermediateOutputFrom(bindings ...ExecutorBinding) *Builder {
+	return wb.WithOutputFromTagged(Intermediate, bindings...)
+}
+
+// ensureOutputExecutor guarantees that executorID has an entry in outputExecutors and
+// returns the (possibly newly-created) tag slice for it.
+func (wb *Builder) ensureOutputExecutor(executorID string) []OutputTag {
+	if wb.outputExecutors == nil {
+		wb.outputExecutors = make(map[string][]OutputTag)
+	}
+	tags, ok := wb.outputExecutors[executorID]
+	if !ok {
+		wb.outputExecutors[executorID] = nil
+	}
+	return tags
+}
+
+// appendTagUnique appends tag to tags only when it is not already present.
+func appendTagUnique(tags []OutputTag, tag OutputTag) []OutputTag {
+	for _, t := range tags {
+		if t == tag {
+			return tags
+		}
+	}
+	return append(tags, tag)
 }
 
 func (wb *Builder) BindExecutor(binding ExecutorBinding) *Builder {
@@ -224,12 +277,20 @@ func (wb *Builder) build(validateOrphans bool) (*Workflow, error) {
 		edges:            cloneEdges(wb.edges),
 		ports:            maps.Clone(wb.inputPorts),
 		executorBindings: maps.Clone(wb.executorsBindings),
-		outputExecutors:  maps.Clone(wb.outputExecutors),
+		outputExecutors:  cloneOutputExecutors(wb.outputExecutors),
 		telemetry:        telemetry,
 	}
 	internalobservability.SetBuildWorkflowAttributes(activity, observabilityMetadata(wf, ""), workflowTelemetryDefinitionFrom(wf))
 	activity.AddEvent(internalobservability.EventBuildCompleted)
 	return wf, nil
+}
+
+func cloneOutputExecutors(m map[string][]OutputTag) map[string][]OutputTag {
+	out := make(map[string][]OutputTag, len(m))
+	for id, tags := range m {
+		out[id] = slices.Clone(tags)
+	}
+	return out
 }
 
 func cloneEdges(edges map[string][]Edge) map[string][]Edge {

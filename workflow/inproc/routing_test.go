@@ -552,3 +552,89 @@ func TestOutputFilter_NoOutputExecutorsRegistered(t *testing.T) {
 		t.Errorf("expected 0 OutputEvents, got %d: %+v", len(outs), outs)
 	}
 }
+
+func TestOutputTag_TerminalOutputHasNoTags(t *testing.T) {
+	start := outputFilterExecutor("start")
+	end := outputFilterExecutor("end")
+
+	wf, err := workflow.NewBuilder(start).
+		AddEdge(start, end).
+		WithOutputFrom(end).
+		Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	outs := runWorkflowAndCollect(t, wf, "hello")
+	if len(outs) != 1 {
+		t.Fatalf("expected 1 OutputEvent, got %d", len(outs))
+	}
+	if len(outs[0].Tags) != 0 {
+		t.Errorf("Tags = %v, want empty (terminal output)", outs[0].Tags)
+	}
+	if outs[0].IsIntermediate() {
+		t.Error("IsIntermediate() = true, want false for terminal output")
+	}
+}
+
+func TestOutputTag_IntermediateOutputHasTag(t *testing.T) {
+	start := outputFilterExecutor("start")
+	end := outputFilterExecutor("end")
+
+	wf, err := workflow.NewBuilder(start).
+		AddEdge(start, end).
+		WithIntermediateOutputFrom(end).
+		Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	outs := runWorkflowAndCollect(t, wf, "hello")
+	if len(outs) != 1 {
+		t.Fatalf("expected 1 OutputEvent, got %d", len(outs))
+	}
+	if !outs[0].IsIntermediate() {
+		t.Error("IsIntermediate() = false, want true for intermediate output")
+	}
+	if len(outs[0].Tags) != 1 || outs[0].Tags[0] != workflow.Intermediate {
+		t.Errorf("Tags = %v, want [%v]", outs[0].Tags, workflow.Intermediate)
+	}
+}
+
+func TestOutputTag_BothTerminalAndIntermediateExecutors(t *testing.T) {
+	start := outputFilterExecutor("start")
+	middle := outputFilterExecutor("middle")
+	end := outputFilterExecutor("end")
+
+	wf, err := workflow.NewBuilder(start).
+		AddEdge(start, middle).
+		AddEdge(middle, end).
+		WithOutputFrom(end).
+		WithIntermediateOutputFrom(middle).
+		Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	outs := runWorkflowAndCollect(t, wf, "hello")
+	byID := make(map[string]workflow.OutputEvent)
+	for _, o := range outs {
+		byID[o.ExecutorID] = o
+	}
+
+	middleOut, ok := byID["middle"]
+	if !ok {
+		t.Fatal("no OutputEvent from 'middle'")
+	}
+	if !middleOut.IsIntermediate() {
+		t.Error("middle: IsIntermediate() = false, want true")
+	}
+
+	endOut, ok := byID["end"]
+	if !ok {
+		t.Fatal("no OutputEvent from 'end'")
+	}
+	if endOut.IsIntermediate() {
+		t.Error("end: IsIntermediate() = true, want false (terminal)")
+	}
+}

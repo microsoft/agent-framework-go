@@ -122,6 +122,11 @@ type OutputEvent struct {
 	// ExecutorID is the unique identifier of the executor that yielded this output.
 	ExecutorID string
 	Output     any
+
+	// Tags contains the output tags associated with this event.
+	// An empty slice indicates a terminal/regular output.
+	// The presence of [Intermediate] marks this event as an intermediate output.
+	Tags []OutputTag
 }
 
 func (e OutputEvent) Data() any {

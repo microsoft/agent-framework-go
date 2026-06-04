@@ -117,7 +117,8 @@ Within overlapping features, the main misalignments are API shape and ecosystem 
 
 ### Workflows
 
-- Core graph primitives are close: direct, fan-out, fan-in barrier, edge labels, conditions/assigners, output executors, run events, run status, checkpointing, state, and human-in-the-loop request ports.
+- Core graph primitives are close: direct, fan-out, fan-in barrier, edge labels, conditions/assigners, output executors with optional tags, run events, run status, checkpointing, state, and human-in-the-loop request ports.
+- Output tagging is aligned: `OutputTag` (including the `Intermediate` singleton), `WithIntermediateOutputFrom`, `WithOutputFromTagged`, and `OutputEvent.IsIntermediate()` are supported in Go. The .NET `WithOutputFrom(IEnumerable<ExecutorBinding>, OutputTag)` convenience overload maps to `WithOutputFromTagged` in Go.
 - .NET has more convenience builders: sequential/concurrent agent workflows, handoff workflows, group chat workflows, subworkflow binding, and declarative workflows. Go can manually assemble sequential/concurrent graphs, but handoff/group-chat/declarative/subworkflow are not first-class public features.
 - .NET workflow protocol metadata exposes accepted, yielded, sent, and catch-all aspects. Go's public `ProtocolDescriptor` currently exposes accepted input types; output types exist for runtime validation but are not reflected through the same public descriptor.
 - .NET checkpointing supports in-memory, JSON stores, and Cosmos DB. Go supports in-memory checkpointing and resume/restore, but the checkpoint manager interface lives under an internal package, so external custom checkpoint stores are not currently ergonomic as a public SDK feature.

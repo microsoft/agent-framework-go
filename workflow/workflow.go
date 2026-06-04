@@ -139,7 +139,7 @@ type Workflow struct {
 
 	executorBindings map[string]ExecutorBinding
 	edges            map[string][]Edge
-	outputExecutors  map[string]struct{}
+	outputExecutors  map[string][]OutputTag
 	ports            map[string]RequestPort
 
 	needsReset atomic.Bool
@@ -242,6 +242,16 @@ func (w *Workflow) HasOutputExecutor(executorID string) bool {
 	}
 	_, ok := w.outputExecutors[executorID]
 	return ok
+}
+
+// OutputExecutorTags returns the output tags associated with executorID.
+// It returns nil when executorID is not a registered output executor.
+func (w *Workflow) OutputExecutorTags(executorID string) ([]OutputTag, bool) {
+	if w == nil {
+		return nil, false
+	}
+	tags, ok := w.outputExecutors[executorID]
+	return tags, ok
 }
 
 // OutputExecutorIDs returns the executor IDs exposed as workflow outputs.
