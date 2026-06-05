@@ -533,10 +533,9 @@ func validateExtensions(extensions []string) {
 }
 
 func newScript(name string, fsys fs.FS, runner skills.ScriptRunner) skills.Script {
-	schema := defaultFileScriptSchema
 	return skills.Script{
 		Name:             name,
-		ParametersSchema: &schema,
+		ParametersSchema: defaultFileScriptSchema,
 		Run: func(ctx context.Context, owner *skills.Skill, arguments []string) (any, error) {
 			if _, err := FSFromSkill(owner); err != nil {
 				return nil, fmt.Errorf("file-based script %q requires a skill with a backing fs.FS: %w", name, err)
@@ -569,10 +568,10 @@ func buildScriptSchemasBlock(scripts []skills.Script) string {
 	var sb strings.Builder
 	sb.WriteString("\n<script_schemas>\n")
 	for _, script := range scripts {
-		if script.ParametersSchema == nil {
+		if script.ParametersSchema == "" {
 			fmt.Fprintf(&sb, "  <schema script=\"%s\"/>\n", xmlEscapeAttr(script.Name))
 		} else {
-			fmt.Fprintf(&sb, "  <schema script=\"%s\">%s</schema>\n", xmlEscapeAttr(script.Name), xmlEscapeContent(*script.ParametersSchema))
+			fmt.Fprintf(&sb, "  <schema script=\"%s\">%s</schema>\n", xmlEscapeAttr(script.Name), xmlEscapeContent(script.ParametersSchema))
 		}
 	}
 	sb.WriteString("</script_schemas>")

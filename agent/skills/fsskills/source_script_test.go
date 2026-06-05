@@ -377,12 +377,9 @@ func TestFileScript_HasDefaultParametersSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := loaded[0].Scripts[0]
-	if script.ParametersSchema == nil {
-		t.Fatal("expected ParametersSchema to be set on file-based script")
-	}
 	const want = `{"type":"array","items":{"type":"string"}}`
-	if *script.ParametersSchema != want {
-		t.Fatalf("expected ParametersSchema %q, got %q", want, *script.ParametersSchema)
+	if script.ParametersSchema != want {
+		t.Fatalf("expected ParametersSchema %q, got %q", want, script.ParametersSchema)
 	}
 }
 

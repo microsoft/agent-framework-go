@@ -86,7 +86,8 @@ type Script struct {
 	// ParametersSchema is an optional JSON schema string describing the argument
 	// format expected by the script. When set, the schema is included in the
 	// skill's <script_schemas> block so the LLM knows how to format arguments.
-	ParametersSchema     *string
+	// Empty means no schema.
+	ParametersSchema     string
 	Run                  func(context.Context, *Skill, []string) (any, error)
 	AdditionalProperties map[string]any
 }
