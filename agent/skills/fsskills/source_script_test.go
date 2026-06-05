@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent/skills"
@@ -362,5 +363,130 @@ func TestFileScript_RunWithNonFileSkill_ReturnsError(t *testing.T) {
 	_, err = loaded[0].Scripts[0].Run(t.Context(), nonFileSkill, nil)
 	if err == nil {
 		t.Fatal("expected file script to reject non-file skill owner")
+	}
+}
+
+func TestFileScript_HasDefaultParametersSchema(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "schema-skill", "A test skill", "Body.")
+	createRelativeFile(t, filepath.Join(root, "schema-skill"), "scripts/convert.py", "print('hello')")
+	source := fsskills.NewSource(os.DirFS(root))
+
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := loaded[0].Scripts[0]
+	if script.ParametersSchema == nil {
+		t.Fatal("expected ParametersSchema to be set on file-based script")
+	}
+	const want = `{"type":"array","items":{"type":"string"}}`
+	if *script.ParametersSchema != want {
+		t.Fatalf("expected ParametersSchema %q, got %q", want, *script.ParametersSchema)
+	}
+}
+
+func TestFileSkill_WithScripts_ContentIncludesScriptSchemasBlock(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "schema-content-skill", "A test skill", "Instructions here.")
+	createRelativeFile(t, filepath.Join(root, "schema-content-skill"), "build.sh", "echo build")
+	createRelativeFile(t, filepath.Join(root, "schema-content-skill"), "deploy.sh", "echo deploy")
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
+		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+			return nil, nil
+		},
+	}, os.DirFS(root))
+
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := loaded[0].GetContent(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(content, "<script_schemas>") {
+		t.Fatalf("expected <script_schemas> block in content, got: %s", content)
+	}
+	if !strings.Contains(content, `<schema script="build.sh">`) {
+		t.Fatalf("expected <schema script=\"build.sh\"> in content, got: %s", content)
+	}
+	if !strings.Contains(content, `<schema script="deploy.sh">`) {
+		t.Fatalf("expected <schema script=\"deploy.sh\"> in content, got: %s", content)
+	}
+	if !strings.Contains(content, "</script_schemas>") {
+		t.Fatalf("expected </script_schemas> in content, got: %s", content)
+	}
+}
+
+func TestFileSkill_WithScripts_ContentStartsWithOriginalSkillMd(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "original-content-skill", "A test skill", "Original instructions.")
+	createRelativeFile(t, filepath.Join(root, "original-content-skill"), "run.py", "print('run')")
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
+		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+			return nil, nil
+		},
+	}, os.DirFS(root))
+
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := loaded[0].GetContent(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(content, "Original instructions.") {
+		t.Fatalf("expected original SKILL.md content to be preserved, got: %s", content)
+	}
+	if !strings.Contains(content, "<script_schemas>") {
+		t.Fatalf("expected <script_schemas> block appended, got: %s", content)
+	}
+}
+
+func TestFileSkill_WithoutScripts_ContentDoesNotIncludeScriptSchemasBlock(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "no-script-content-skill", "A test skill", "Instructions here.")
+	source := fsskills.NewSource(os.DirFS(root))
+
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := loaded[0].GetContent(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(content, "<script_schemas>") {
+		t.Fatalf("expected no <script_schemas> block when skill has no scripts, got: %s", content)
+	}
+}
+
+func TestFileSkill_ScriptContent_IncludesDefaultArraySchema(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "schema-inline-skill", "A test skill", "Body.")
+	createRelativeFile(t, filepath.Join(root, "schema-inline-skill"), "scripts/search.py", "print('search')")
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
+		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+			return nil, nil
+		},
+	}, os.DirFS(root))
+
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := loaded[0].GetContent(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The default schema {"type":"array","items":{"type":"string"}} should appear in the content.
+	if !strings.Contains(content, `"type":"array"`) {
+		t.Fatalf("expected default array schema in content, got: %s", content)
+	}
+	// Quotes in JSON schema should be preserved (not escaped as &quot;).
+	if strings.Contains(content, "&quot;") {
+		t.Fatalf("expected JSON quotes to be preserved in schema content, got: %s", content)
 	}
 }

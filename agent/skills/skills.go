@@ -81,8 +81,12 @@ type Resource struct {
 // strings verbatim. Code-defined scripts may parse the strings however they
 // choose; file-based scripts pass them directly to the subprocess.
 type Script struct {
-	Name                 string
-	Description          string
+	Name        string
+	Description string
+	// ParametersSchema is an optional JSON schema string describing the argument
+	// format expected by the script. When set, the schema is included in the
+	// skill's <script_schemas> block so the LLM knows how to format arguments.
+	ParametersSchema     *string
 	Run                  func(context.Context, *Skill, []string) (any, error)
 	AdditionalProperties map[string]any
 }
