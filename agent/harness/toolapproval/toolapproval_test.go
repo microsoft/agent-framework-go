@@ -367,3 +367,240 @@ func TestToolApproval_AlwaysApproveToolWithArgumentsMatchesByValue(t *testing.T)
 		t.Fatal("expected done after auto-approval with argument-value match")
 	}
 }
+
+func TestToolApproval_AutoApprovalFunc_ApprovesMatchingTool(t *testing.T) {
+	fcc := &message.FunctionCallContent{CallID: "c1", Name: "ReadTool", Arguments: `{}`}
+
+	// Turn 1: inner returns an approval request.
+	// Turn 2 (triggered automatically after auto-approval): inner returns done.
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder().
+			Add(&agent.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					&message.ToolApprovalRequestContent{RequestID: "r1", ToolCall: fcc},
+				},
+			}).
+			NewTurn().
+			AddText("done").
+			Build(),
+	}
+
+	cfg := toolapproval.Config{
+		AutoApprovalFuncs: []func(*message.FunctionCallContent) bool{
+			func(fc *message.FunctionCallContent) bool { return fc.Name == "ReadTool" },
+		},
+	}
+	mw := toolapproval.New(cfg)
+	session := agenttest.CreateSession()
+
+	updates := collectUpdates(t, mw, runner.Run,
+		[]*message.Message{{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "go"}}}},
+		agent.WithSession(session),
+	)
+
+	// Should receive "done" without any approval request surfaced to the caller.
+	var gotDone bool
+	for _, u := range updates {
+		for _, c := range u.Contents {
+			if tc, ok := c.(*message.TextContent); ok && tc.Text == "done" {
+				gotDone = true
+			}
+			if _, ok := c.(*message.ToolApprovalRequestContent); ok {
+				t.Fatal("expected no approval request to be surfaced when auto-approval func matches")
+			}
+		}
+	}
+	if !gotDone {
+		t.Error("expected 'done' text after auto-approval func approved the tool")
+	}
+}
+
+func TestToolApproval_AutoApprovalFunc_DoesNotMatchSurfacesToCaller(t *testing.T) {
+	fcc := &message.FunctionCallContent{CallID: "c1", Name: "DangerousTool", Arguments: `{}`}
+
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder().
+			Add(&agent.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					&message.ToolApprovalRequestContent{RequestID: "r1", ToolCall: fcc},
+				},
+			}).
+			Build(),
+	}
+
+	cfg := toolapproval.Config{
+		AutoApprovalFuncs: []func(*message.FunctionCallContent) bool{
+			func(fc *message.FunctionCallContent) bool { return fc.Name == "ReadTool" }, // only approves ReadTool
+		},
+	}
+	mw := toolapproval.New(cfg)
+
+	updates := collectUpdates(t, mw, runner.Run,
+		[]*message.Message{{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "go"}}}},
+	)
+
+	var approvalReqs []*message.ToolApprovalRequestContent
+	for _, u := range updates {
+		for _, c := range u.Contents {
+			if req, ok := c.(*message.ToolApprovalRequestContent); ok {
+				approvalReqs = append(approvalReqs, req)
+			}
+		}
+	}
+	if len(approvalReqs) != 1 {
+		t.Fatalf("expected 1 approval request surfaced, got %d", len(approvalReqs))
+	}
+	fc, ok := approvalReqs[0].ToolCall.(*message.FunctionCallContent)
+	if !ok || fc.Name != "DangerousTool" {
+		t.Errorf("expected DangerousTool to be surfaced, got %v", approvalReqs[0].ToolCall)
+	}
+}
+
+func TestToolApproval_MultipleAutoApprovalFuncs_FirstMatchWins(t *testing.T) {
+	fcc := &message.FunctionCallContent{CallID: "c1", Name: "SpecialTool", Arguments: `{}`}
+
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder().
+			Add(&agent.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					&message.ToolApprovalRequestContent{RequestID: "r1", ToolCall: fcc},
+				},
+			}).
+			NewTurn().
+			AddText("done").
+			Build(),
+	}
+
+	rule1Called := false
+	rule2Called := false
+	cfg := toolapproval.Config{
+		AutoApprovalFuncs: []func(*message.FunctionCallContent) bool{
+			func(fc *message.FunctionCallContent) bool {
+				rule1Called = true
+				return fc.Name == "SpecialTool"
+			},
+			func(_ *message.FunctionCallContent) bool {
+				rule2Called = true
+				return true // should not be reached
+			},
+		},
+	}
+	mw := toolapproval.New(cfg)
+	session := agenttest.CreateSession()
+
+	collectUpdates(t, mw, runner.Run,
+		[]*message.Message{{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "go"}}}},
+		agent.WithSession(session),
+	)
+
+	if !rule1Called {
+		t.Error("expected first auto-approval func to be called")
+	}
+	if rule2Called {
+		t.Error("expected second auto-approval func to NOT be called when first already matched")
+	}
+}
+
+func TestToolApproval_StandingRuleTakesPrecedenceOverAutoApprovalFunc(t *testing.T) {
+	fcc := &message.FunctionCallContent{CallID: "c1", Name: "MyTool", Arguments: `{}`}
+
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder().
+			Add(&agent.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					&message.ToolApprovalRequestContent{RequestID: "r1", ToolCall: fcc},
+				},
+			}).
+			NewTurn().
+			AddText("done").
+			Build(),
+	}
+
+	heuristicCalled := false
+	cfg := toolapproval.Config{
+		AutoApprovalFuncs: []func(*message.FunctionCallContent) bool{
+			func(_ *message.FunctionCallContent) bool {
+				heuristicCalled = true
+				return true
+			},
+		},
+	}
+	mw := toolapproval.New(cfg)
+	session := agenttest.CreateSession()
+	opts := []agent.Option{agent.WithSession(session)}
+
+	// Turn 1: auto-approval func is called (no standing rule yet).
+	updates := collectUpdates(t, mw, runner.Run,
+		[]*message.Message{{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "go"}}}},
+		opts...,
+	)
+
+	if !heuristicCalled {
+		t.Error("expected auto-approval func to be called on first turn")
+	}
+
+	var gotDone bool
+	for _, u := range updates {
+		for _, c := range u.Contents {
+			if tc, ok := c.(*message.TextContent); ok && tc.Text == "done" {
+				gotDone = true
+			}
+		}
+	}
+	if !gotDone {
+		t.Error("expected 'done' after auto-approval func approved on first turn")
+	}
+}
+
+func TestToolApproval_AutoApprovalFunc_ApprovesQueuedRequests(t *testing.T) {
+	fcc1 := &message.FunctionCallContent{CallID: "c1", Name: "SafeTool", Arguments: `{}`}
+	fcc2 := &message.FunctionCallContent{CallID: "c2", Name: "DangerousTool", Arguments: `{}`}
+
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder().
+			Add(&agent.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					&message.ToolApprovalRequestContent{RequestID: "r1", ToolCall: fcc1},
+					&message.ToolApprovalRequestContent{RequestID: "r2", ToolCall: fcc2},
+				},
+			}).
+			Build(),
+	}
+
+	// AutoApprovalFunc approves SafeTool but not DangerousTool.
+	cfg := toolapproval.Config{
+		AutoApprovalFuncs: []func(*message.FunctionCallContent) bool{
+			func(fc *message.FunctionCallContent) bool { return fc.Name == "SafeTool" },
+		},
+	}
+	mw := toolapproval.New(cfg)
+	session := agenttest.CreateSession()
+	opts := []agent.Option{agent.WithSession(session)}
+
+	// Turn 1: r1 (SafeTool) is auto-approved; r2 (DangerousTool) is surfaced.
+	updates := collectUpdates(t, mw, runner.Run,
+		[]*message.Message{{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "go"}}}},
+		opts...,
+	)
+
+	var surfacedReqs []*message.ToolApprovalRequestContent
+	for _, u := range updates {
+		for _, c := range u.Contents {
+			if req, ok := c.(*message.ToolApprovalRequestContent); ok {
+				surfacedReqs = append(surfacedReqs, req)
+			}
+		}
+	}
+	if len(surfacedReqs) != 1 {
+		t.Fatalf("expected 1 surfaced request (DangerousTool), got %d", len(surfacedReqs))
+	}
+	fc, ok := surfacedReqs[0].ToolCall.(*message.FunctionCallContent)
+	if !ok || fc.Name != "DangerousTool" {
+		t.Errorf("expected DangerousTool to be surfaced, got %v", surfacedReqs[0].ToolCall)
+	}
+}

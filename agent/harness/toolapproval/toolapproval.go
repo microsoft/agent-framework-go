@@ -77,15 +77,22 @@ func saveState(opts []agent.Option, s state) {
 // New creates a tool-approval middleware that wraps agent runs with
 // human-in-the-loop approval management.
 func New(cfg Config) agent.Middleware {
-	// Config is currently empty and reserved for future extensibility.
-	_ = cfg
-	return agent.MiddlewareFunc(run)
+	return agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return run(cfg, next, ctx, messages, opts...)
+	})
 }
 
 // Config configures tool-approval middleware behavior.
-type Config struct{}
+type Config struct {
+	// AutoApprovalFuncs is an optional list of heuristic functions evaluated after
+	// standing rules (derived from prior user approvals) but before surfacing the
+	// approval request to the caller. Each function receives the tool call and returns
+	// true to auto-approve it. Functions are evaluated in order; the first returning
+	// true causes the request to be auto-approved without prompting the caller.
+	AutoApprovalFuncs []func(*message.FunctionCallContent) bool
+}
 
-func run(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		st := loadState(opts)
 
@@ -94,7 +101,7 @@ func run(next agent.RunFunc, ctx context.Context, messages []*message.Message, o
 
 		// Step 2: If we have queued requests from a previous turn, drain any
 		// that are now auto-approvable and surface the next one.
-		drainAutoApprovable(&st)
+		drainAutoApprovable(cfg, &st)
 		if len(st.QueuedRequests) > 0 {
 			next := st.QueuedRequests[0]
 			st.QueuedRequests = st.QueuedRequests[1:]
@@ -143,6 +150,8 @@ func run(next agent.RunFunc, ctx context.Context, messages []*message.Message, o
 			var needsApproval []*message.ToolApprovalRequestContent
 			for _, req := range approvalRequests {
 				if matchesRule(st.Rules, req) {
+					autoApproved = append(autoApproved, req.CreateResponse(true, ""))
+				} else if matchesAutoApprovalFuncs(cfg.AutoApprovalFuncs, req) {
 					autoApproved = append(autoApproved, req.CreateResponse(true, ""))
 				} else {
 					needsApproval = append(needsApproval, req)
@@ -243,15 +252,18 @@ func prepareInbound(messages []*message.Message, st state) ([]*message.Message, 
 	return messages, st
 }
 
-// drainAutoApprovable removes queued requests that now match a standing rule,
-// adding auto-approve responses to collected.
-func drainAutoApprovable(st *state) {
-	if len(st.QueuedRequests) == 0 || len(st.Rules) == 0 {
+// drainAutoApprovable removes queued requests that now match a standing rule
+// or an auto-approval func, adding auto-approve responses to collected.
+func drainAutoApprovable(cfg Config, st *state) {
+	if len(st.QueuedRequests) == 0 {
+		return
+	}
+	if len(st.Rules) == 0 && len(cfg.AutoApprovalFuncs) == 0 {
 		return
 	}
 	var remaining []*message.ToolApprovalRequestContent
 	for _, req := range st.QueuedRequests {
-		if matchesRule(st.Rules, req) {
+		if matchesRule(st.Rules, req) || matchesAutoApprovalFuncs(cfg.AutoApprovalFuncs, req) {
 			st.CollectedResponses = append(st.CollectedResponses, req.CreateResponse(true, ""))
 		} else {
 			remaining = append(remaining, req)
@@ -271,6 +283,25 @@ func matchesRule(rules []Rule, req *message.ToolApprovalRequestContent) bool {
 	}
 	for _, r := range rules {
 		if r.matches(fc.Name, args) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchesAutoApprovalFuncs returns true if any configured auto-approval func
+// approves the request. Funcs are evaluated in order; the first returning true
+// wins. Returns false when funcs is empty or the request is not a function call.
+func matchesAutoApprovalFuncs(funcs []func(*message.FunctionCallContent) bool, req *message.ToolApprovalRequestContent) bool {
+	if len(funcs) == 0 {
+		return false
+	}
+	fc, ok := req.ToolCall.(*message.FunctionCallContent)
+	if !ok || fc == nil {
+		return false
+	}
+	for _, fn := range funcs {
+		if fn(fc) {
 			return true
 		}
 	}
