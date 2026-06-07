@@ -552,3 +552,104 @@ func TestOutputFilter_NoOutputExecutorsRegistered(t *testing.T) {
 		t.Errorf("expected 0 OutputEvents, got %d: %+v", len(outs), outs)
 	}
 }
+
+func TestOutputTag_WithOutputFrom_HasNoTags(t *testing.T) {
+	start := outputFilterExecutor("start")
+	end := outputFilterExecutor("end")
+
+	wf, err := workflow.NewBuilder(start).
+		AddEdge(start, end).
+		WithOutputFrom(end).
+		Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	outs := runWorkflowAndCollect(t, wf, "hello")
+	if len(outs) != 1 {
+		t.Fatalf("expected 1 OutputEvent, got %d", len(outs))
+	}
+	if len(outs[0].Tags) != 0 {
+		t.Errorf("expected empty Tags for untagged output, got %v", outs[0].Tags)
+	}
+	if outs[0].IsIntermediate() {
+		t.Error("IsIntermediate() = true for untagged output, want false")
+	}
+}
+
+func TestOutputTag_WithIntermediateOutputFrom_IsIntermediate(t *testing.T) {
+	start := outputFilterExecutor("start")
+	intermediate := outputFilterExecutor("intermediate")
+	end := outputFilterExecutor("end")
+
+	wf, err := workflow.NewBuilder(start).
+		AddEdge(start, intermediate).
+		AddEdge(intermediate, end).
+		WithIntermediateOutputFrom(intermediate).
+		WithOutputFrom(end).
+		Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	outs := runWorkflowAndCollect(t, wf, "hello")
+	if len(outs) != 2 {
+		t.Fatalf("expected 2 OutputEvents, got %d", len(outs))
+	}
+
+	var intermediateOut, terminalOut *workflow.OutputEvent
+	for i := range outs {
+		switch outs[i].ExecutorID {
+		case "intermediate":
+			intermediateOut = &outs[i]
+		case "end":
+			terminalOut = &outs[i]
+		}
+	}
+	if intermediateOut == nil {
+		t.Fatal("no OutputEvent from 'intermediate' executor")
+	}
+	if terminalOut == nil {
+		t.Fatal("no OutputEvent from 'end' executor")
+	}
+	if !intermediateOut.IsIntermediate() {
+		t.Errorf("IsIntermediate() = false for intermediate output, want true")
+	}
+	if terminalOut.IsIntermediate() {
+		t.Errorf("IsIntermediate() = true for terminal output, want false")
+	}
+}
+
+func TestOutputTag_IntermediateOutputTag_Value(t *testing.T) {
+	if workflow.IntermediateOutputTag.Value != "intermediate" {
+		t.Errorf("IntermediateOutputTag.Value = %q, want %q", workflow.IntermediateOutputTag.Value, "intermediate")
+	}
+}
+
+func TestOutputTag_WithIntermediateOutputFrom_TagPresent(t *testing.T) {
+	start := outputFilterExecutor("start")
+	mid := outputFilterExecutor("mid")
+
+	wf, err := workflow.NewBuilder(start).
+		WithIntermediateOutputFrom(mid).
+		AddEdge(start, mid).
+		Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	outs := runWorkflowAndCollect(t, wf, "hello")
+	if len(outs) != 1 {
+		t.Fatalf("expected 1 OutputEvent, got %d", len(outs))
+	}
+	found := false
+	for _, tag := range outs[0].Tags {
+		if tag == workflow.IntermediateOutputTag {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("IntermediateOutputTag not found in Tags: %v", outs[0].Tags)
+	}
+}

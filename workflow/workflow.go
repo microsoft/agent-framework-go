@@ -17,6 +17,18 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow/internal/observability"
 )
 
+// OutputTag identifies the kind of output carried by an [OutputEvent].
+// It is a string-value type with equality determined by the string value.
+// The only well-known tag is [IntermediateOutputTag].
+type OutputTag struct {
+	Value string
+}
+
+// IntermediateOutputTag is the tag applied to [OutputEvent]s yielded by
+// executors registered with [Builder.WithIntermediateOutputFrom]. Consumers
+// can check for it with [OutputEvent.IsIntermediate].
+var IntermediateOutputTag = OutputTag{Value: "intermediate"}
+
 // TurnToken is a control message that advances a workflow turn.
 type TurnToken struct {
 	// EmitEvents overrides the workflow's default event-emission behavior for
@@ -139,7 +151,7 @@ type Workflow struct {
 
 	executorBindings map[string]ExecutorBinding
 	edges            map[string][]Edge
-	outputExecutors  map[string]struct{}
+	outputExecutors  map[string][]OutputTag
 	ports            map[string]RequestPort
 
 	needsReset atomic.Bool
@@ -242,6 +254,15 @@ func (w *Workflow) HasOutputExecutor(executorID string) bool {
 	}
 	_, ok := w.outputExecutors[executorID]
 	return ok
+}
+
+// OutputExecutorTags returns the output tags associated with executorID.
+// Returns nil if the executor is not a registered output executor.
+func (w *Workflow) OutputExecutorTags(executorID string) []OutputTag {
+	if w == nil {
+		return nil
+	}
+	return w.outputExecutors[executorID]
 }
 
 // OutputExecutorIDs returns the executor IDs exposed as workflow outputs.

@@ -122,10 +122,25 @@ type OutputEvent struct {
 	// ExecutorID is the unique identifier of the executor that yielded this output.
 	ExecutorID string
 	Output     any
+	// Tags contains the output tags associated with this event, as configured
+	// on the workflow builder. Empty for untagged (terminal) outputs.
+	Tags []OutputTag
 }
 
 func (e OutputEvent) Data() any {
 	return e.Output
+}
+
+// IsIntermediate reports whether this event carries the [IntermediateOutputTag].
+// Intermediate outputs represent progress updates or partial results distinct
+// from the workflow's final terminal output.
+func (e OutputEvent) IsIntermediate() bool {
+	for _, t := range e.Tags {
+		if t == IntermediateOutputTag {
+			return true
+		}
+	}
+	return false
 }
 
 var _ Event = RequestHaltEvent{}

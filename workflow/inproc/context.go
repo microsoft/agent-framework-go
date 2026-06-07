@@ -528,6 +528,7 @@ func (proc *runnerContext) Bind(ctx context.Context, executorID string, traceCon
 				return proc.AddEvent(boundCtx, workflow.OutputEvent{
 					ExecutorID: executorID,
 					Output:     output,
+					Tags:       proc.wf.OutputExecutorTags(executorID),
 				})
 			}
 			return nil
