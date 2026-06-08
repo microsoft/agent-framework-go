@@ -86,8 +86,8 @@ func New(cfg Config) agent.Middleware {
 type Config struct {
 	// AutoApprovalRules is an optional list of heuristic functions evaluated after
 	// standing rules (derived from prior user approvals) but before surfacing the
-	// approval request to the caller. Each function receives the tool call and returns
-	// true to auto-approve it. Functions are evaluated in order; the first returning
+	// approval request to the caller. Each rule receives the tool call and returns
+	// true to auto-approve it. Rules are evaluated in order; the first returning
 	// true causes the request to be auto-approved without prompting the caller.
 	AutoApprovalRules []func(context.Context, *message.FunctionCallContent) bool
 }
