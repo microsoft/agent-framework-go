@@ -11,6 +11,8 @@ import (
 	"github.com/microsoft/agent-framework-go/agent/harness/toolapproval"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/tool"
+	"github.com/microsoft/agent-framework-go/tool/functool"
 )
 
 func collectUpdates(t *testing.T, mw agent.Middleware, next agent.RunFunc, messages []*message.Message, opts ...agent.Option) []*agent.ResponseUpdate {
@@ -365,5 +367,189 @@ func TestToolApproval_AlwaysApproveToolWithArgumentsMatchesByValue(t *testing.T)
 	}
 	if !sawDone {
 		t.Fatal("expected done after auto-approval with argument-value match")
+	}
+}
+
+// newNoopTool creates a named tool that does not require approval.
+func newNoopTool(name string) tool.FuncTool {
+	return functool.MustNew(functool.Config{Name: name},
+		func(_ context.Context, _ struct{}) (string, error) { return "", nil })
+}
+
+// TestToolApproval_NonApprovalRequiredToolAutoApproved verifies that when both
+// approval-required and non-approval-required tools appear as approval requests
+// (as produced by toolautocall when any tool requires approval), the middleware
+// surfaces only the approval-required request and auto-approves the rest.
+func TestToolApproval_NonApprovalRequiredToolAutoApproved(t *testing.T) {
+	deployFCC := &message.FunctionCallContent{CallID: "c-deploy", Name: "deploy"}
+	listFCC := &message.FunctionCallContent{CallID: "c-list", Name: "list"}
+
+	var innerCallMessages []*message.Message
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder().
+			// Turn 1: return two approval requests — one for approval-required deploy,
+			// one for non-approval-required list.
+			Add(&agent.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					&message.ToolApprovalRequestContent{RequestID: "r-deploy", ToolCall: deployFCC},
+					&message.ToolApprovalRequestContent{RequestID: "r-list", ToolCall: listFCC},
+				},
+			}).
+			// Turn 2: inner agent is called with both auto-approved responses.
+			NewTurn(func(_ context.Context, msgs []*message.Message, _ ...agent.Option) {
+				innerCallMessages = msgs
+			}).
+			AddText("done").
+			Build(),
+	}
+
+	mw := toolapproval.New(toolapproval.Config{})
+	session := agenttest.CreateSession()
+	opts := []agent.Option{
+		agent.WithSession(session),
+		agent.WithTool(tool.ApprovalRequiredFunc(newNoopTool("deploy"))),
+		agent.WithTool(newNoopTool("list")), // does NOT require approval
+	}
+
+	// Turn 1: middleware should surface only deploy, auto-approve list.
+	turn1 := collectUpdates(t, mw, runner.Run,
+		[]*message.Message{{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "go"}}}},
+		opts...,
+	)
+
+	var approvalReqs []*message.ToolApprovalRequestContent
+	for _, u := range turn1 {
+		for _, c := range u.Contents {
+			if r, ok := c.(*message.ToolApprovalRequestContent); ok {
+				approvalReqs = append(approvalReqs, r)
+			}
+		}
+	}
+	if len(approvalReqs) != 1 {
+		t.Fatalf("expected exactly 1 approval request (deploy), got %d", len(approvalReqs))
+	}
+	if approvalReqs[0].RequestID != "r-deploy" {
+		t.Errorf("expected deploy approval request, got %q", approvalReqs[0].RequestID)
+	}
+
+	// Turn 2: approve deploy; inner agent should receive responses for both list and deploy.
+	deployResp := approvalReqs[0].CreateResponse(true, "")
+	turn2 := collectUpdates(t, mw, runner.Run,
+		[]*message.Message{{Role: message.RoleUser, Contents: []message.Content{deployResp}}},
+		opts...,
+	)
+
+	var gotDone bool
+	for _, u := range turn2 {
+		for _, c := range u.Contents {
+			if tc, ok := c.(*message.TextContent); ok && tc.Text == "done" {
+				gotDone = true
+			}
+			if r, ok := c.(*message.ToolApprovalRequestContent); ok {
+				t.Errorf("unexpected approval request in turn 2: %q", r.RequestID)
+			}
+		}
+	}
+	if !gotDone {
+		t.Fatal("expected 'done' text after auto-approval of list tool")
+	}
+
+	// The inner agent must have received approval responses for both list and deploy.
+	var sawListApproval, sawDeployApproval bool
+	for _, msg := range innerCallMessages {
+		for _, c := range msg.Contents {
+			if resp, ok := c.(*message.ToolApprovalResponseContent); ok {
+				switch resp.RequestID {
+				case "r-list":
+					sawListApproval = true
+					if !resp.Approved {
+						t.Error("expected list approval response to be approved=true")
+					}
+				case "r-deploy":
+					sawDeployApproval = true
+				}
+			}
+		}
+	}
+	if !sawListApproval {
+		t.Error("inner agent did not receive auto-approval response for non-approval-required list tool")
+	}
+	if !sawDeployApproval {
+		t.Error("inner agent did not receive approval response for deploy tool")
+	}
+}
+
+// TestToolApproval_NonApprovalRequiredQueuedRequestDrained verifies that a
+// queued approval request for a non-approval-required tool is drained
+// automatically on the next turn (even though it was queued when the tool was
+// not registered). This mirrors .NET's NonApprovalRequiredFunctionBypassingChatClient
+// behaviour of re-injecting stored auto-approved calls without requiring human input.
+func TestToolApproval_NonApprovalRequiredQueuedRequestDrained(t *testing.T) {
+	deployFCC := &message.FunctionCallContent{CallID: "c-deploy", Name: "deploy"}
+	listFCC := &message.FunctionCallContent{CallID: "c-list", Name: "list"}
+
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder().
+			// Turn 1 (no tools in opts → both need approval): inner returns two requests.
+			Add(&agent.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					&message.ToolApprovalRequestContent{RequestID: "r-deploy", ToolCall: deployFCC},
+					&message.ToolApprovalRequestContent{RequestID: "r-list", ToolCall: listFCC},
+				},
+			}).
+			// Turn 2 (list now registered as non-approval-required): drain list, get "done".
+			NewTurn().
+			AddText("done").
+			Build(),
+	}
+
+	mw := toolapproval.New(toolapproval.Config{})
+	session := agenttest.CreateSession()
+
+	// Turn 1: no tool options → both deploy and list are treated as requiring approval.
+	turn1 := collectUpdates(t, mw, runner.Run,
+		[]*message.Message{{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "go"}}}},
+		agent.WithSession(session),
+	)
+
+	var deployReq *message.ToolApprovalRequestContent
+	for _, u := range turn1 {
+		for _, c := range u.Contents {
+			if r, ok := c.(*message.ToolApprovalRequestContent); ok && r.RequestID == "r-deploy" {
+				deployReq = r
+			}
+		}
+	}
+	if deployReq == nil {
+		t.Fatal("expected deploy approval request in turn 1")
+	}
+
+	// Turn 2: approve deploy; now register list as non-approval-required.
+	// drainAutoApprovable should drain the queued list request automatically.
+	deployResp := deployReq.CreateResponse(true, "")
+	optsWithList := []agent.Option{
+		agent.WithSession(session),
+		agent.WithTool(newNoopTool("list")), // list does NOT require approval
+	}
+	turn2 := collectUpdates(t, mw, runner.Run,
+		[]*message.Message{{Role: message.RoleUser, Contents: []message.Content{deployResp}}},
+		optsWithList...,
+	)
+
+	var gotDone bool
+	for _, u := range turn2 {
+		for _, c := range u.Contents {
+			if tc, ok := c.(*message.TextContent); ok && tc.Text == "done" {
+				gotDone = true
+			}
+			if r, ok := c.(*message.ToolApprovalRequestContent); ok {
+				t.Errorf("unexpected approval request in turn 2: %q", r.RequestID)
+			}
+		}
+	}
+	if !gotDone {
+		t.Fatal("expected 'done' after queued non-approval-required request was drained")
 	}
 }

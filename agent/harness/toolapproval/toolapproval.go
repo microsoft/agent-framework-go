@@ -23,6 +23,7 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/tool"
 )
 
 const stateKey = "toolApprovalState"
@@ -94,7 +95,7 @@ func run(next agent.RunFunc, ctx context.Context, messages []*message.Message, o
 
 		// Step 2: If we have queued requests from a previous turn, drain any
 		// that are now auto-approvable and surface the next one.
-		drainAutoApprovable(&st)
+		drainAutoApprovable(&st, opts)
 		if len(st.QueuedRequests) > 0 {
 			next := st.QueuedRequests[0]
 			st.QueuedRequests = st.QueuedRequests[1:]
@@ -142,7 +143,7 @@ func run(next agent.RunFunc, ctx context.Context, messages []*message.Message, o
 			var autoApproved []*message.ToolApprovalResponseContent
 			var needsApproval []*message.ToolApprovalRequestContent
 			for _, req := range approvalRequests {
-				if matchesRule(st.Rules, req) {
+				if matchesRule(st.Rules, req) || isNotApprovalRequired(req, opts) {
 					autoApproved = append(autoApproved, req.CreateResponse(true, ""))
 				} else {
 					needsApproval = append(needsApproval, req)
@@ -243,15 +244,16 @@ func prepareInbound(messages []*message.Message, st state) ([]*message.Message, 
 	return messages, st
 }
 
-// drainAutoApprovable removes queued requests that now match a standing rule,
-// adding auto-approve responses to collected.
-func drainAutoApprovable(st *state) {
-	if len(st.QueuedRequests) == 0 || len(st.Rules) == 0 {
+// drainAutoApprovable removes queued requests that now match a standing rule
+// or are for tools that do not require approval, adding auto-approve responses
+// to collected.
+func drainAutoApprovable(st *state, opts []agent.Option) {
+	if len(st.QueuedRequests) == 0 {
 		return
 	}
 	var remaining []*message.ToolApprovalRequestContent
 	for _, req := range st.QueuedRequests {
-		if matchesRule(st.Rules, req) {
+		if matchesRule(st.Rules, req) || isNotApprovalRequired(req, opts) {
 			st.CollectedResponses = append(st.CollectedResponses, req.CreateResponse(true, ""))
 		} else {
 			remaining = append(remaining, req)
@@ -273,6 +275,28 @@ func matchesRule(rules []Rule, req *message.ToolApprovalRequestContent) bool {
 		if r.matches(fc.Name, args) {
 			return true
 		}
+	}
+	return false
+}
+
+// isNotApprovalRequired reports whether the tool referenced by req does not
+// require user approval, based on the tools in opts. It returns false
+// (conservatively requiring approval) when the tool cannot be identified.
+func isNotApprovalRequired(req *message.ToolApprovalRequestContent, opts []agent.Option) bool {
+	fc, ok := req.ToolCall.(*message.FunctionCallContent)
+	if !ok || fc == nil {
+		return false
+	}
+	for t := range agent.AllOptions(opts, agent.WithTool) {
+		st, ok := t.(tool.SchemaTool)
+		if !ok || st.Name() != fc.Name {
+			continue
+		}
+		if at, ok := t.(tool.ApprovalRequiredTool); ok {
+			return !at.ApprovalRequired()
+		}
+		// Tool found but not an ApprovalRequiredTool — does not require approval.
+		return true
 	}
 	return false
 }
