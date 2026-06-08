@@ -4,6 +4,7 @@ package toolapproval_test
 
 import (
 	"context"
+	"errors"
 	"iter"
 	"testing"
 
@@ -387,8 +388,10 @@ func TestToolApproval_AutoApprovalRule_ApprovesMatchingTool(t *testing.T) {
 	}
 
 	cfg := toolapproval.Config{
-		AutoApprovalRules: []func(context.Context, *message.FunctionCallContent) bool{
-			func(_ context.Context, fc *message.FunctionCallContent) bool { return fc.Name == "ReadTool" },
+		AutoApprovalRules: []func(context.Context, *message.FunctionCallContent) (bool, error){
+			func(_ context.Context, fc *message.FunctionCallContent) (bool, error) {
+				return fc.Name == "ReadTool", nil
+			},
 		},
 	}
 	mw := toolapproval.New(cfg)
@@ -431,8 +434,10 @@ func TestToolApproval_AutoApprovalRule_DoesNotMatchSurfacesToCaller(t *testing.T
 	}
 
 	cfg := toolapproval.Config{
-		AutoApprovalRules: []func(context.Context, *message.FunctionCallContent) bool{
-			func(_ context.Context, fc *message.FunctionCallContent) bool { return fc.Name == "ReadTool" }, // only approves ReadTool
+		AutoApprovalRules: []func(context.Context, *message.FunctionCallContent) (bool, error){
+			func(_ context.Context, fc *message.FunctionCallContent) (bool, error) {
+				return fc.Name == "ReadTool", nil
+			}, // only approves ReadTool
 		},
 	}
 	mw := toolapproval.New(cfg)
@@ -477,14 +482,14 @@ func TestToolApproval_MultipleAutoApprovalRules_FirstMatchWins(t *testing.T) {
 	rule1Called := false
 	rule2Called := false
 	cfg := toolapproval.Config{
-		AutoApprovalRules: []func(context.Context, *message.FunctionCallContent) bool{
-			func(_ context.Context, fc *message.FunctionCallContent) bool {
+		AutoApprovalRules: []func(context.Context, *message.FunctionCallContent) (bool, error){
+			func(_ context.Context, fc *message.FunctionCallContent) (bool, error) {
 				rule1Called = true
-				return fc.Name == "SpecialTool"
+				return fc.Name == "SpecialTool", nil
 			},
-			func(_ context.Context, _ *message.FunctionCallContent) bool {
+			func(_ context.Context, _ *message.FunctionCallContent) (bool, error) {
 				rule2Called = true
-				return true // should not be reached
+				return true, nil // should not be reached
 			},
 		},
 	}
@@ -522,10 +527,10 @@ func TestToolApproval_StandingRuleTakesPrecedenceOverAutoApprovalRule(t *testing
 
 	heuristicCalled := false
 	cfg := toolapproval.Config{
-		AutoApprovalRules: []func(context.Context, *message.FunctionCallContent) bool{
-			func(_ context.Context, _ *message.FunctionCallContent) bool {
+		AutoApprovalRules: []func(context.Context, *message.FunctionCallContent) (bool, error){
+			func(_ context.Context, _ *message.FunctionCallContent) (bool, error) {
 				heuristicCalled = true
-				return true
+				return true, nil
 			},
 		},
 	}
@@ -574,8 +579,10 @@ func TestToolApproval_AutoApprovalRule_ApprovesQueuedRequests(t *testing.T) {
 
 	// AutoApprovalRule approves SafeTool but not DangerousTool.
 	cfg := toolapproval.Config{
-		AutoApprovalRules: []func(context.Context, *message.FunctionCallContent) bool{
-			func(_ context.Context, fc *message.FunctionCallContent) bool { return fc.Name == "SafeTool" },
+		AutoApprovalRules: []func(context.Context, *message.FunctionCallContent) (bool, error){
+			func(_ context.Context, fc *message.FunctionCallContent) (bool, error) {
+				return fc.Name == "SafeTool", nil
+			},
 		},
 	}
 	mw := toolapproval.New(cfg)
@@ -602,5 +609,40 @@ func TestToolApproval_AutoApprovalRule_ApprovesQueuedRequests(t *testing.T) {
 	fc, ok := surfacedReqs[0].ToolCall.(*message.FunctionCallContent)
 	if !ok || fc.Name != "DangerousTool" {
 		t.Errorf("expected DangerousTool to be surfaced, got %v", surfacedReqs[0].ToolCall)
+	}
+}
+
+func TestToolApproval_AutoApprovalRule_ErrorFailsRun(t *testing.T) {
+	ruleErr := errors.New("auto-approval rule failed")
+	fcc := &message.FunctionCallContent{CallID: "c1", Name: "ReadTool", Arguments: `{}`}
+
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder().
+			Add(&agent.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					&message.ToolApprovalRequestContent{RequestID: "r1", ToolCall: fcc},
+				},
+			}).
+			Build(),
+	}
+
+	mw := toolapproval.New(toolapproval.Config{
+		AutoApprovalRules: []func(context.Context, *message.FunctionCallContent) (bool, error){
+			func(_ context.Context, _ *message.FunctionCallContent) (bool, error) { return false, ruleErr },
+		},
+	})
+
+	var gotErr error
+	for _, err := range mw.Run(runner.Run, context.Background(), []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "go"}}},
+	}) {
+		if err != nil {
+			gotErr = err
+			break
+		}
+	}
+	if !errors.Is(gotErr, ruleErr) {
+		t.Fatalf("expected rule error %v, got %v", ruleErr, gotErr)
 	}
 }

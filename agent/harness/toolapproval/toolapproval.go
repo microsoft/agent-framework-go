@@ -87,9 +87,11 @@ type Config struct {
 	// AutoApprovalRules is an optional list of heuristic functions evaluated after
 	// standing rules (derived from prior user approvals) but before surfacing the
 	// approval request to the caller. Each rule receives the tool call and returns
-	// true to auto-approve it. Rules are evaluated in order; the first returning
-	// true causes the request to be auto-approved without prompting the caller.
-	AutoApprovalRules []func(context.Context, *message.FunctionCallContent) bool
+	// (approved, error). Returning approved=true auto-approves the request. Rules
+	// are evaluated in order; the first returning approved=true causes the request
+	// to be auto-approved without prompting the caller. Returning an error fails
+	// the current run.
+	AutoApprovalRules []func(context.Context, *message.FunctionCallContent) (bool, error)
 }
 
 func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
@@ -101,7 +103,10 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 
 		// Step 2: If we have queued requests from a previous turn, drain any
 		// that are now auto-approvable and surface the next one.
-		drainAutoApprovable(ctx, cfg, &st)
+		if err := drainAutoApprovable(ctx, cfg, &st); err != nil {
+			yield(nil, err)
+			return
+		}
 		if len(st.QueuedRequests) > 0 {
 			next := st.QueuedRequests[0]
 			st.QueuedRequests = st.QueuedRequests[1:]
@@ -151,10 +156,17 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 			for _, req := range approvalRequests {
 				if matchesRule(st.Rules, req) {
 					autoApproved = append(autoApproved, req.CreateResponse(true, ""))
-				} else if matchesAutoApprovalRules(ctx, cfg.AutoApprovalRules, req) {
-					autoApproved = append(autoApproved, req.CreateResponse(true, ""))
 				} else {
-					needsApproval = append(needsApproval, req)
+					matches, err := matchesAutoApprovalRules(ctx, cfg.AutoApprovalRules, req)
+					if err != nil {
+						yield(nil, err)
+						return
+					}
+					if matches {
+						autoApproved = append(autoApproved, req.CreateResponse(true, ""))
+					} else {
+						needsApproval = append(needsApproval, req)
+					}
 				}
 			}
 
@@ -254,22 +266,27 @@ func prepareInbound(messages []*message.Message, st state) ([]*message.Message, 
 
 // drainAutoApprovable removes queued requests that now match a standing rule
 // or an auto-approval rule, adding auto-approve responses to collected.
-func drainAutoApprovable(ctx context.Context, cfg Config, st *state) {
+func drainAutoApprovable(ctx context.Context, cfg Config, st *state) error {
 	if len(st.QueuedRequests) == 0 {
-		return
+		return nil
 	}
 	if len(st.Rules) == 0 && len(cfg.AutoApprovalRules) == 0 {
-		return
+		return nil
 	}
 	var remaining []*message.ToolApprovalRequestContent
 	for _, req := range st.QueuedRequests {
-		if matchesRule(st.Rules, req) || matchesAutoApprovalRules(ctx, cfg.AutoApprovalRules, req) {
+		matches, err := matchesAutoApprovalRules(ctx, cfg.AutoApprovalRules, req)
+		if err != nil {
+			return err
+		}
+		if matchesRule(st.Rules, req) || matches {
 			st.CollectedResponses = append(st.CollectedResponses, req.CreateResponse(true, ""))
 		} else {
 			remaining = append(remaining, req)
 		}
 	}
 	st.QueuedRequests = remaining
+	return nil
 }
 
 func matchesRule(rules []Rule, req *message.ToolApprovalRequestContent) bool {
@@ -292,20 +309,27 @@ func matchesRule(rules []Rule, req *message.ToolApprovalRequestContent) bool {
 // matchesAutoApprovalRules returns true if any configured auto-approval rule
 // approves the request. Rules are evaluated in order; the first returning true
 // wins. Returns false when rules is empty or the request is not a function call.
-func matchesAutoApprovalRules(ctx context.Context, rules []func(context.Context, *message.FunctionCallContent) bool, req *message.ToolApprovalRequestContent) bool {
+func matchesAutoApprovalRules(ctx context.Context, rules []func(context.Context, *message.FunctionCallContent) (bool, error), req *message.ToolApprovalRequestContent) (bool, error) {
 	if len(rules) == 0 {
-		return false
+		return false, nil
 	}
 	fc, ok := req.ToolCall.(*message.FunctionCallContent)
 	if !ok || fc == nil {
-		return false
+		return false, nil
 	}
 	for _, rule := range rules {
-		if rule != nil && rule(ctx, fc) {
-			return true
+		if rule == nil {
+			continue
+		}
+		matches, err := rule(ctx, fc)
+		if err != nil {
+			return false, err
+		}
+		if matches {
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 func serializeArguments(arguments string) (map[string]string, error) {
