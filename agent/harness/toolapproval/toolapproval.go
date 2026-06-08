@@ -89,6 +89,8 @@ type Config struct {
 	// approval request to the caller. Each function receives the tool call and returns
 	// true to auto-approve it. Functions are evaluated in order; the first returning
 	// true causes the request to be auto-approved without prompting the caller.
+	// Functions are invoked synchronously and should be fast, deterministic, and
+	// non-blocking (no network or disk I/O).
 	AutoApprovalFuncs []func(*message.FunctionCallContent) bool
 }
 
