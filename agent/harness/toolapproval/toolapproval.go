@@ -155,19 +155,15 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 			var autoApproved []*message.ToolApprovalResponseContent
 			var needsApproval []*message.ToolApprovalRequestContent
 			for _, req := range approvalRequests {
-				if matchesRule(st.Rules, req) || isNotApprovalRequired(req, opts) {
+				approved, err := isAutoApprovable(ctx, cfg, st.Rules, opts, req)
+				if err != nil {
+					yield(nil, err)
+					return
+				}
+				if approved {
 					autoApproved = append(autoApproved, req.CreateResponse(true, ""))
 				} else {
-					matches, err := matchesAutoApprovalRules(ctx, cfg.AutoApprovalRules, req)
-					if err != nil {
-						yield(nil, err)
-						return
-					}
-					if matches {
-						autoApproved = append(autoApproved, req.CreateResponse(true, ""))
-					} else {
-						needsApproval = append(needsApproval, req)
-					}
+					needsApproval = append(needsApproval, req)
 				}
 			}
 
@@ -274,11 +270,11 @@ func drainAutoApprovable(ctx context.Context, cfg Config, st *state, opts []agen
 	}
 	var remaining []*message.ToolApprovalRequestContent
 	for _, req := range st.QueuedRequests {
-		matches, err := matchesAutoApprovalRules(ctx, cfg.AutoApprovalRules, req)
+		approved, err := isAutoApprovable(ctx, cfg, st.Rules, opts, req)
 		if err != nil {
 			return err
 		}
-		if matchesRule(st.Rules, req) || isNotApprovalRequired(req, opts) || matches {
+		if approved {
 			st.CollectedResponses = append(st.CollectedResponses, req.CreateResponse(true, ""))
 		} else {
 			remaining = append(remaining, req)
@@ -325,6 +321,19 @@ func isNotApprovalRequired(req *message.ToolApprovalRequestContent, opts []agent
 		return true
 	}
 	return false
+}
+
+// isAutoApprovable reports whether a tool approval request should be automatically approved
+// without surfacing it to the caller.
+//
+// Standing rules and tools not requiring approval are checked first (cheaply), before evaluating
+// configured auto-approval rules. This matches the .NET MatchesRule || MatchesAutoApprovalRule
+// evaluation pattern used in ToolApprovalAgent.
+func isAutoApprovable(ctx context.Context, cfg Config, rules []Rule, opts []agent.Option, req *message.ToolApprovalRequestContent) (bool, error) {
+	if matchesRule(rules, req) || isNotApprovalRequired(req, opts) {
+		return true, nil
+	}
+	return matchesAutoApprovalRules(ctx, cfg.AutoApprovalRules, req)
 }
 
 // matchesAutoApprovalRules returns true if any configured auto-approval rule
