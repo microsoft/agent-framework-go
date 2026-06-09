@@ -832,3 +832,76 @@ func TestToolApproval_AutoApprovalRule_ErrorFailsRun(t *testing.T) {
 		t.Fatalf("expected rule error %v, got %v", ruleErr, gotErr)
 	}
 }
+
+func TestToolApproval_QueuedStandingRuleShortCircuitsAutoApprovalRuleError(t *testing.T) {
+	tool1 := &message.FunctionCallContent{CallID: "c1", Name: "MyTool", Arguments: `{}`}
+	tool2 := &message.FunctionCallContent{CallID: "c2", Name: "MyTool", Arguments: `{}`}
+
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder().
+			Add(&agent.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					&message.ToolApprovalRequestContent{RequestID: "r1", ToolCall: tool1},
+					&message.ToolApprovalRequestContent{RequestID: "r2", ToolCall: tool2},
+				},
+			}).
+			NewTurn().
+			AddText("done").
+			Build(),
+	}
+
+	ruleErr := errors.New("auto-approval rule should be skipped")
+	ruleCalls := 0
+	mw := toolapproval.New(toolapproval.Config{
+		AutoApprovalRules: []func(context.Context, *message.FunctionCallContent) (bool, error){
+			func(_ context.Context, _ *message.FunctionCallContent) (bool, error) {
+				ruleCalls++
+				if ruleCalls <= 2 {
+					return false, nil
+				}
+				return false, ruleErr
+			},
+		},
+	})
+
+	session := agenttest.CreateSession()
+	opts := []agent.Option{agent.WithSession(session)}
+
+	turn1 := collectUpdates(t, mw, runner.Run,
+		[]*message.Message{{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "go"}}}},
+		opts...,
+	)
+
+	var req *message.ToolApprovalRequestContent
+	for _, u := range turn1 {
+		for _, c := range u.Contents {
+			if r, ok := c.(*message.ToolApprovalRequestContent); ok && r.RequestID == "r1" {
+				req = r
+			}
+		}
+	}
+	if req == nil {
+		t.Fatal("expected first approval request to be surfaced")
+	}
+
+	turn2 := collectUpdates(t, mw, runner.Run,
+		[]*message.Message{{Role: message.RoleUser, Contents: []message.Content{req.AlwaysApproveToolResponse()}}},
+		opts...,
+	)
+
+	var gotDone bool
+	for _, u := range turn2 {
+		for _, c := range u.Contents {
+			if tc, ok := c.(*message.TextContent); ok && tc.Text == "done" {
+				gotDone = true
+			}
+		}
+	}
+	if !gotDone {
+		t.Fatal("expected done after queued request was auto-approved by standing rule")
+	}
+	if ruleCalls != 2 {
+		t.Fatalf("expected auto-approval rule to be called only in turn 1, got %d calls", ruleCalls)
+	}
+}
