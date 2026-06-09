@@ -180,6 +180,67 @@ func TestAGUIAgentRun_GeneratesUniqueRunIDPerInvocation(t *testing.T) {
 	}
 }
 
+// TestAGUIAgentRun_WithSession_PreservesHistoryAcrossMultipleTurns verifies
+// that subsequent runs with the same session include the full conversation
+// history, even after the provider assigns a thread ID to the session on the
+// first run. This mirrors the .NET fix in ChatClientAgent (PR #5904) that
+// ensures the ChatHistoryProvider is not discarded when a ConversationId
+// (thread ID) is present for an AGUI provider.
+func TestAGUIAgentRun_WithSession_PreservesHistoryAcrossMultipleTurns(t *testing.T) {
+	var mu sync.Mutex
+	var captured []aguiTypes.RunAgentInput
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var input aguiTypes.RunAgentInput
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		mu.Lock()
+		captured = append(captured, input)
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeSSE(t, w, aguiEvents.NewRunStartedEvent(input.ThreadID, input.RunID))
+		writeSSE(t, w, aguiEvents.NewTextMessageStartEvent("msg-1", aguiEvents.WithRole("assistant")))
+		writeSSE(t, w, aguiEvents.NewTextMessageContentEvent("msg-1", "Hello"))
+		writeSSE(t, w, aguiEvents.NewTextMessageEndEvent("msg-1"))
+		writeSSE(t, w, aguiEvents.NewRunFinishedEvent(input.ThreadID, input.RunID))
+	}))
+	defer server.Close()
+
+	a := aguiagent.New(newTestClient(server.URL), aguiagent.Config{})
+	session, err := a.CreateSession(context.Background())
+	if err != nil {
+		t.Fatalf("create session error: %v", err)
+	}
+
+	if _, err := a.Run(context.Background(), []*message.Message{message.NewText("First")}, agent.WithSession(session)).Collect(); err != nil {
+		t.Fatalf("first run error: %v", err)
+	}
+
+	if _, err := a.Run(context.Background(), []*message.Message{message.NewText("Second")}, agent.WithSession(session)).Collect(); err != nil {
+		t.Fatalf("second run error: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(captured) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(captured))
+	}
+	// First run: only the user message.
+	if len(captured[0].Messages) != 1 {
+		t.Fatalf("first run message count = %d, want 1", len(captured[0].Messages))
+	}
+	// Second run: history (user + assistant) plus new user message = 3.
+	if len(captured[1].Messages) != 3 {
+		t.Fatalf("second run message count = %d, want 3 (history + new message)", len(captured[1].Messages))
+	}
+	// Both runs share the same thread ID.
+	if captured[0].ThreadID == "" || captured[0].ThreadID != captured[1].ThreadID {
+		t.Fatalf("thread IDs do not match: first=%q second=%q", captured[0].ThreadID, captured[1].ThreadID)
+	}
+}
+
 func TestAGUIAgentRun_InvokesTools_WhenFunctionCallsReturned(t *testing.T) {
 	var mu sync.Mutex
 	requestCount := 0

@@ -58,9 +58,10 @@ func New(aclient *aguiSSEClient.Client, config Config) *agent.Agent {
 		}))
 	}
 	return agent.New(agent.ProviderConfig{
-		ProviderName: "agui",
-		Run:          p.run,
-		Middlewares:  providerMiddlewares,
+		ProviderName:                "agui",
+		Run:                         p.run,
+		Middlewares:                 providerMiddlewares,
+		ServiceDoesNotManageHistory: true,
 	}, config.Config)
 }
 
