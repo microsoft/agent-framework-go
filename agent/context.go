@@ -116,31 +116,17 @@ func (p *ContextProvider) AfterRun(ctx context.Context, requestMessages, respons
 	if p.SourceID == "" {
 		panic("SourceID is required")
 	}
-	if p.Store == nil {
-		return nil
-	}
-	requestFilter := p.StoreRequestFilter
-	if requestFilter == nil {
-		requestFilter = messagefilter.NotSources(p.SourceID)
-	}
-	filteredRequestMessages, err := requestFilter(ctx, requestMessages)
-	if err != nil {
-		return err
-	}
-
-	responseFilter := p.StoreResponseFilter
-	if responseFilter == nil {
-		responseFilter = messagefilter.PassThrough
-	}
-	filteredResponseMessages, err := responseFilter(ctx, responseMessages)
-	if err != nil {
-		return err
-	}
-
-	return p.Store(ctx, filteredRequestMessages, filteredResponseMessages, options...)
+	return runStoreHook(ctx, p.SourceID, p.Store, p.StoreRequestFilter, p.StoreResponseFilter, requestMessages, responseMessages, options)
 }
 
 func (p *ContextProvider) withProviderSource(outMessages, inMessages []*message.Message) []*message.Message {
+	return markNewMessages(outMessages, inMessages, p.SourceID)
+}
+
+// markNewMessages marks messages not present in inMessages with sourceID,
+// lazy-cloning the slice the first time a message needs to be updated.
+// Messages already carrying sourceID or present in inMessages are skipped.
+func markNewMessages(outMessages, inMessages []*message.Message, sourceID string) []*message.Message {
 	if len(outMessages) == 0 {
 		return outMessages
 	}
@@ -148,19 +134,19 @@ func (p *ContextProvider) withProviderSource(outMessages, inMessages []*message.
 	for _, msg := range inMessages {
 		originals[msg] = struct{}{}
 	}
-
 	var cloned []*message.Message
 	for i, msg := range outMessages {
 		if _, ok := originals[msg]; ok {
 			continue
 		}
-		marked := p.withAgentRequestMessageSource(msg)
-		if marked == msg {
+		if msg == nil || msg.SourceID == sourceID {
 			continue
 		}
 		if cloned == nil {
 			cloned = slices.Clone(outMessages)
 		}
+		marked := msg.Clone()
+		marked.SourceID = sourceID
 		cloned[i] = marked
 	}
 	if cloned != nil {
@@ -169,14 +155,34 @@ func (p *ContextProvider) withProviderSource(outMessages, inMessages []*message.
 	return outMessages
 }
 
-func (p *ContextProvider) withAgentRequestMessageSource(msg *message.Message) *message.Message {
-	if msg == nil {
+// runStoreHook applies request and response filters then calls store.
+// When store is nil, it is a no-op. A nil requestFilter defaults to
+// messagefilter.NotSources(sourceID); a nil responseFilter defaults to
+// messagefilter.PassThrough.
+func runStoreHook(
+	ctx context.Context,
+	sourceID string,
+	store func(context.Context, []*message.Message, []*message.Message, ...Option) error,
+	requestFilter, responseFilter messagefilter.Filter,
+	requestMessages, responseMessages []*message.Message,
+	options []Option,
+) error {
+	if store == nil {
 		return nil
 	}
-	if msg.SourceID == p.SourceID {
-		return msg
+	if requestFilter == nil {
+		requestFilter = messagefilter.NotSources(sourceID)
 	}
-	out := msg.Clone()
-	out.SourceID = p.SourceID
-	return out
+	if responseFilter == nil {
+		responseFilter = messagefilter.PassThrough
+	}
+	filteredReq, err := requestFilter(ctx, requestMessages)
+	if err != nil {
+		return err
+	}
+	filteredResp, err := responseFilter(ctx, responseMessages)
+	if err != nil {
+		return err
+	}
+	return store(ctx, filteredReq, filteredResp, options...)
 }

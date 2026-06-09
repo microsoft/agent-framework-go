@@ -81,28 +81,7 @@ func (p *HistoryProvider) AfterRun(ctx context.Context, requestMessages, respons
 	if p.SourceID == "" {
 		panic("SourceID is required")
 	}
-	if p.Store == nil {
-		return nil
-	}
-	requestFilter := p.StoreRequestFilter
-	if requestFilter == nil {
-		requestFilter = messagefilter.NotSources(p.SourceID)
-	}
-	filteredRequestMessages, err := requestFilter(ctx, requestMessages)
-	if err != nil {
-		return err
-	}
-
-	responseFilter := p.StoreResponseFilter
-	if responseFilter == nil {
-		responseFilter = messagefilter.PassThrough
-	}
-	filteredResponseMessages, err := responseFilter(ctx, responseMessages)
-	if err != nil {
-		return err
-	}
-
-	return p.Store(ctx, filteredRequestMessages, filteredResponseMessages, options...)
+	return runStoreHook(ctx, p.SourceID, p.Store, p.StoreRequestFilter, p.StoreResponseFilter, requestMessages, responseMessages, options)
 }
 
 func (p *HistoryProvider) filterProvidedMessages(ctx context.Context, outMessages, inMessages []*message.Message) ([]*message.Message, error) {
@@ -135,33 +114,7 @@ func (p *HistoryProvider) filterProvidedMessages(ctx context.Context, outMessage
 }
 
 func (p *HistoryProvider) withHistorySource(outMessages, inMessages []*message.Message) []*message.Message {
-	if len(outMessages) == 0 {
-		return outMessages
-	}
-	originals := make(map[*message.Message]struct{}, len(inMessages))
-	for _, msg := range inMessages {
-		originals[msg] = struct{}{}
-	}
-
-	var cloned []*message.Message
-	for i, msg := range outMessages {
-		if _, ok := originals[msg]; ok {
-			continue
-		}
-		if msg == nil || msg.SourceID == p.SourceID {
-			continue
-		}
-		if cloned == nil {
-			cloned = slices.Clone(outMessages)
-		}
-		marked := msg.Clone()
-		marked.SourceID = p.SourceID
-		cloned[i] = marked
-	}
-	if cloned != nil {
-		return cloned
-	}
-	return outMessages
+	return markNewMessages(outMessages, inMessages, p.SourceID)
 }
 
 // NewInMemoryHistoryProvider creates a history provider that stores conversation history in the session.
