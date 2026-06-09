@@ -108,7 +108,7 @@ Use `upstream-agent-framework/main` as the .NET reference. Inspect commits with 
 
 ## Work Loop
 
-1. Pick a focus area from `${{ inputs.focus }}`, recent .NET commits since `${{ inputs.since_ref }}` or cached state, or one of: workflow, agents, skills, messages, tools, providers, compaction.
+1. Pick a focus area from `${{ inputs.focus }}` (or choose one of: workflow, agents, skills, messages, tools, providers, compaction). Determine the upstream .NET lower bound: use `${{ inputs.since_ref }}` if set; otherwise read `/tmp/gh-aw/cache-memory/state.json` (if present) and use its last inspected upstream commit; if neither exists, inspect a practical recent window and record the baseline you chose in memory.
 2. Check for open `[dotnet-code]` PRs. If one already covers the same target, call `noop` with the PR link.
 3. Make one tiny internal change that helps porting future .NET diffs. Good changes include extracting an unexported helper, consolidating duplicate internal logic, simplifying control flow, table-driving repeated cases, clarifying an unexported name, or adding a preservation test.
 4. Run `gofmt` and targeted `go test` packages. Use broader `go test ./...` for shared runtime changes.
