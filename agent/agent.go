@@ -36,6 +36,14 @@ type ProviderConfig struct {
 
 	// CreateSession configures a provider-specific session.
 	CreateSession func(ctx context.Context, session *Session, options ...Option) error
+
+	// ServiceDoesNotManageHistory indicates that this provider never manages
+	// conversation history server-side, even when a ServiceID is set on the
+	// session. When true, the agent's HistoryProvider is always preserved
+	// regardless of session service ID. Use this for providers like AGUI that
+	// require the caller to supply the full conversation history on every turn
+	// even after the service assigns a session or thread identifier.
+	ServiceDoesNotManageHistory bool
 }
 
 // Config configures an Agent instance.
@@ -129,20 +137,21 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 	}
 	prov.Middlewares = append(prov.Middlewares, authorMiddleware(cfg.ID, cfg.Name))
 	return &Agent{
-		id:                        cfg.ID,
-		name:                      cfg.Name,
-		description:               cfg.Description,
-		provider:                  prov,
-		runOptions:                cfg.RunOptions,
-		middlewares:               cfg.Middlewares,
-		logger:                    cfg.Logger,
-		historyProvider:           historyProvider,
-		hasConfiguredHistory:      cfg.HistoryProvider != nil,
-		hasDefaultHistoryProvider: hasDefaultHistoryProvider,
-		allowHistoryConflict:      cfg.AllowHistoryProviderConflict,
-		suppressHistoryWarning:    cfg.SuppressHistoryProviderConflictWarning,
-		keepHistoryOnConflict:     cfg.KeepHistoryProviderOnConflict,
-		contextProviders:          contextProviders,
+		id:                           cfg.ID,
+		name:                         cfg.Name,
+		description:                  cfg.Description,
+		provider:                     prov,
+		runOptions:                   cfg.RunOptions,
+		middlewares:                  cfg.Middlewares,
+		logger:                       cfg.Logger,
+		historyProvider:              historyProvider,
+		hasConfiguredHistory:         cfg.HistoryProvider != nil,
+		hasDefaultHistoryProvider:    hasDefaultHistoryProvider,
+		allowHistoryConflict:         cfg.AllowHistoryProviderConflict,
+		suppressHistoryWarning:       cfg.SuppressHistoryProviderConflictWarning,
+		keepHistoryOnConflict:        cfg.KeepHistoryProviderOnConflict,
+		providerDoesNotManageHistory: prov.ServiceDoesNotManageHistory,
+		contextProviders:             contextProviders,
 	}
 }
 
@@ -163,11 +172,12 @@ type Agent struct {
 	// history provider because Config.HistoryProvider was nil. The synthesized
 	// provider is a local-session convenience and backs off for implicit per-run
 	// sessions and service-managed sessions.
-	hasDefaultHistoryProvider bool
-	allowHistoryConflict      bool
-	suppressHistoryWarning    bool
-	keepHistoryOnConflict     bool
-	contextProviders          []*ContextProvider
+	hasDefaultHistoryProvider    bool
+	allowHistoryConflict         bool
+	suppressHistoryWarning       bool
+	keepHistoryOnConflict        bool
+	providerDoesNotManageHistory bool
+	contextProviders             []*ContextProvider
 }
 
 // ID returns the agent's unique identifier.
@@ -394,7 +404,7 @@ func (a *Agent) historyProviderForRun(session *Session, continuationToken string
 		return nil
 	}
 	if !a.hasDefaultHistoryProvider {
-		if session.ServiceID() != "" {
+		if session.ServiceID() != "" && !a.providerDoesNotManageHistory {
 			return nil
 		}
 		return a.historyProvider
@@ -403,7 +413,9 @@ func (a *Agent) historyProviderForRun(session *Session, continuationToken string
 	// The default in-memory provider only owns caller-provided local sessions.
 	// Auto-created sessions are per-run and cannot preserve history across calls;
 	// service-managed sessions use the provider service as the source of history.
-	if noSession || session.ServiceID() != "" {
+	// Providers that never manage history server-side (e.g. AGUI) set
+	// providerDoesNotManageHistory so the in-memory provider is kept regardless.
+	if noSession || (session.ServiceID() != "" && !a.providerDoesNotManageHistory) {
 		return nil
 	}
 	return a.historyProvider
@@ -414,12 +426,12 @@ func (a *Agent) historyProviderForContinuationStore(session *Session, noSession 
 		return nil
 	}
 	if !a.hasDefaultHistoryProvider {
-		if session.ServiceID() != "" {
+		if session.ServiceID() != "" && !a.providerDoesNotManageHistory {
 			return nil
 		}
 		return a.historyProvider
 	}
-	if noSession || session.ServiceID() != "" {
+	if noSession || (session.ServiceID() != "" && !a.providerDoesNotManageHistory) {
 		return nil
 	}
 	return a.historyProvider
@@ -432,6 +444,10 @@ func (a *Agent) shouldStoreHistoryProvider(provider *HistoryProvider, session *S
 	if !a.hasDefaultHistoryProvider {
 		return true
 	}
+	if a.providerDoesNotManageHistory {
+		// Provider never uses server-side history; always persist locally.
+		return true
+	}
 
 	// A provider can promote a local session to a service-managed one during the
 	// run. Once that happens, the default in-memory provider should stop storing.
@@ -439,7 +455,7 @@ func (a *Agent) shouldStoreHistoryProvider(provider *HistoryProvider, session *S
 }
 
 func (a *Agent) handleHistoryProviderConflict(ctx context.Context, provider *HistoryProvider, session *Session) (bool, error) {
-	if provider == nil || !a.hasConfiguredHistory || session == nil || session.ServiceID() == "" {
+	if provider == nil || !a.hasConfiguredHistory || session == nil || session.ServiceID() == "" || a.providerDoesNotManageHistory {
 		return true, nil
 	}
 
