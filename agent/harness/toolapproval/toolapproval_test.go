@@ -833,7 +833,7 @@ func TestToolApproval_AutoApprovalRule_ErrorFailsRun(t *testing.T) {
 	}
 }
 
-func TestToolApproval_QueuedStandingRuleShortCircuitsAutoApprovalRuleError(t *testing.T) {
+func TestToolApproval_QueuedStandingRuleShortCircuitsAutoApprovalEvaluation(t *testing.T) {
 	tool1 := &message.FunctionCallContent{CallID: "c1", Name: "MyTool", Arguments: `{}`}
 	tool2 := &message.FunctionCallContent{CallID: "c2", Name: "MyTool", Arguments: `{}`}
 
@@ -885,10 +885,15 @@ func TestToolApproval_QueuedStandingRuleShortCircuitsAutoApprovalRuleError(t *te
 		t.Fatal("expected first approval request to be surfaced")
 	}
 
-	turn2 := collectUpdates(t, mw, runner.Run,
-		[]*message.Message{{Role: message.RoleUser, Contents: []message.Content{req.AlwaysApproveToolResponse()}}},
-		opts...,
-	)
+	var turn2 []*agent.ResponseUpdate
+	for u, err := range mw.Run(runner.Run, context.Background(), []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{req.AlwaysApproveToolResponse()}},
+	}, opts...) {
+		if err != nil {
+			t.Fatalf("expected queued standing-rule match to short-circuit auto-approval rule errors, got %v", err)
+		}
+		turn2 = append(turn2, u)
+	}
 
 	var gotDone bool
 	for _, u := range turn2 {
