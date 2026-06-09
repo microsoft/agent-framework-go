@@ -21,6 +21,11 @@ const (
 	defaultSearchDepth = 2
 
 	rootFSPropertyKey = "fsskills.rootFS"
+
+	// defaultFileScriptSchema is the JSON schema for file-based script arguments.
+	// File-based scripts receive a positional CLI-style string array, matching
+	// the .NET AgentFileSkillScript default schema.
+	defaultFileScriptSchema = `{"type":"array","items":{"type":"string"}}`
 )
 
 var (
@@ -231,7 +236,11 @@ func (s *Source) parseSkillDirectory(skillFS fs.FS, logPath string) *skills.Skil
 					contentErr = err
 					return
 				}
-				cachedContent = string(data)
+				raw := string(data)
+				if schemasBlock := buildScriptSchemasBlock(scripts); schemasBlock != "" {
+					raw += schemasBlock
+				}
+				cachedContent = raw
 			})
 			return cachedContent, contentErr
 		},
@@ -525,7 +534,8 @@ func validateExtensions(extensions []string) {
 
 func newScript(name string, fsys fs.FS, runner skills.ScriptRunner) skills.Script {
 	return skills.Script{
-		Name: name,
+		Name:             name,
+		ParametersSchema: defaultFileScriptSchema,
 		Run: func(ctx context.Context, owner *skills.Skill, arguments []string) (any, error) {
 			if _, err := FSFromSkill(owner); err != nil {
 				return nil, fmt.Errorf("file-based script %q requires a skill with a backing fs.FS: %w", name, err)
@@ -545,4 +555,44 @@ func newScript(name string, fsys fs.FS, runner skills.ScriptRunner) skills.Scrip
 type discoveredSkillDir struct {
 	fsys fs.FS
 	path string
+}
+
+// buildScriptSchemasBlock returns a <script_schemas> XML block listing each
+// script with its parameter schema. Scripts with no schema emit a self-closing
+// element; scripts with a schema emit the JSON inline.
+// Returns an empty string when scripts is empty.
+func buildScriptSchemasBlock(scripts []skills.Script) string {
+	if len(scripts) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("\n<script_schemas>\n")
+	for _, script := range scripts {
+		if script.ParametersSchema == "" {
+			fmt.Fprintf(&sb, "  <schema script=\"%s\"/>\n", xmlEscapeAttr(script.Name))
+		} else {
+			fmt.Fprintf(&sb, "  <schema script=\"%s\">%s</schema>\n", xmlEscapeAttr(script.Name), xmlEscapeContent(script.ParametersSchema))
+		}
+	}
+	sb.WriteString("</script_schemas>")
+	return sb.String()
+}
+
+// xmlEscapeAttr escapes a string for use in an XML attribute value (double-quoted).
+func xmlEscapeAttr(s string) string {
+	s = strings.ReplaceAll(s, "&", "&amp;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, ">", "&gt;")
+	s = strings.ReplaceAll(s, "\"", "&quot;")
+	s = strings.ReplaceAll(s, "'", "&apos;")
+	return s
+}
+
+// xmlEscapeContent escapes a string for use as XML element content.
+// Quotes are intentionally preserved to keep embedded JSON readable.
+func xmlEscapeContent(s string) string {
+	s = strings.ReplaceAll(s, "&", "&amp;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, ">", "&gt;")
+	return s
 }
