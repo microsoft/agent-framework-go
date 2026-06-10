@@ -3,6 +3,9 @@ description: Nightly agent that ports relevant .NET Agent Framework changes into
 tracker-id: dotnet-port-nightly
 features:
    copilot-requests: true
+engine:
+   id: copilot
+   model: "gpt-5.5?effort=high"
 network:
    allowed:
       - defaults
