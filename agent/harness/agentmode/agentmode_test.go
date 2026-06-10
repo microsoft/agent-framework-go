@@ -492,10 +492,47 @@ func TestToolNames(t *testing.T) {
 		names[i] = tt.Name()
 	}
 
-	if !slices.Contains(names, "AgentMode_Set") {
-		t.Error("expected AgentMode_Set tool")
+	if !slices.Contains(names, "mode_set") {
+		t.Error("expected mode_set tool")
 	}
-	if !slices.Contains(names, "AgentMode_Get") {
-		t.Error("expected AgentMode_Get tool")
+	if !slices.Contains(names, "mode_get") {
+		t.Error("expected mode_get tool")
+	}
+}
+
+// Verify default instructions contain mode_set/mode_get tool references and mode-check guidance.
+func TestDefaultInstructions_ContainToolNamesAndModeCheckGuidance(t *testing.T) {
+	p := agentmode.New(agentmode.Config{})
+	opts := sessionOpts()
+
+	_, outOpts, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	instructions := collectInstructions(outOpts)
+	for _, want := range []string{"mode_get", "mode_set", "check the current mode", "Mandatory Mode based Workflow"} {
+		if !strings.Contains(instructions, want) {
+			t.Errorf("expected instructions to contain %q", want)
+		}
+	}
+}
+
+// Verify default mode list uses section headers (#### mode_name) not bullet points.
+func TestDefaultInstructions_ModesSectionHeaderFormat(t *testing.T) {
+	p := agentmode.New(agentmode.Config{})
+	opts := sessionOpts()
+
+	_, outOpts, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	instructions := collectInstructions(outOpts)
+	if !strings.Contains(instructions, "#### plan") {
+		t.Error("expected '#### plan' section header in instructions")
+	}
+	if !strings.Contains(instructions, "#### execute") {
+		t.Error("expected '#### execute' section header in instructions")
 	}
 }

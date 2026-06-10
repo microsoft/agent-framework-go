@@ -25,14 +25,20 @@ const stateKey = "agentModeState"
 
 const defaultInstructions = `## Agent Mode
 
-You can operate in different modes. Depending on the mode you are in, you will be required to follow different processes.
+- You can operate in different modes. Depending on the mode you are in, you will be required to follow different processes.
+- You must check the current mode after any user input, since the user may have changed the mode themselves,
+  e.g. the user may have switched to 'plan' mode after a previous research task finished in 'execute' mode, meaning they want to review a plan first before execution.
 
-Use the AgentMode_Get tool to check your current operating mode.
-Use the AgentMode_Set tool to switch between modes as your work progresses. Only use AgentMode_Set if the user explicitly instructs/allows you to change modes.
+Use the mode_get tool to check your current operating mode.
+Use the mode_set tool to switch between modes as your work progresses. Only use mode_set if the user explicitly instructs/allows you to change modes.
 
-{available_modes}
+You are currently operating in the {current_mode} mode.
 
-You are currently operating in the {current_mode} mode.`
+### Mandatory Mode based Workflow
+
+For every new substantive user request, including short factual questions, your behavior is determined by the mode you are in.
+
+{available_modes}`
 
 // Mode describes a named operating mode with a description of its behavior.
 type Mode struct {
@@ -62,12 +68,32 @@ type Config struct {
 
 var defaultModes = []Mode{
 	{
-		Name:        "plan",
-		Description: "Use this mode when analyzing requirements, breaking down tasks, and creating plans. This is the interactive mode — ask clarifying questions, discuss options, and get user approval before proceeding.",
+		Name: "plan",
+		Description: `Use this mode when analyzing requirements, breaking down tasks, and creating plans. This is the interactive mode — ask clarifying questions, discuss options, and get user approval before proceeding.
+
+Process to follow when in plan mode:
+1. Analyze the request with the purpose of building a research plan.
+2. Create a list of todo items.
+3. If needed, use the provided tools to do some exploratory checks to help build a plan and determine what clarifying questions you may need from the user.
+4. Ask for clarifications from the user where needed.
+  1. Ask each clarification one by one.
+  2. When asking for clarification and you have specific options in mind, present them to the user, so they can choose the option instead of having to retype the entire response.
+  3. Do not proceed until you have received all the needed clarifications.
+  4. Do short exploratory research if it helps with being able to ask sensible clarifications from the user.
+5. Write the plan to a memory file, so that it is retained even if compaction happens. Make sure to update the plan file if the user requests changes.
+6. Present the plan to the user and ask for approval to switch to execute mode and process the plan.
+7. When approval is granted, always switch to execute mode (using the ` + "`mode_set`" + ` tool), and follow the steps for *Execute mode*.`,
 	},
 	{
-		Name:        "execute",
-		Description: "Use this mode when carrying out approved plans. Work autonomously using your best judgement — do not ask the user questions or wait for feedback. Make reasonable decisions on your own so that there is a complete, useful result when the user returns. If you encounter ambiguity, choose the most reasonable option and note your choice.",
+		Name: "execute",
+		Description: `Use this mode when carrying out approved plans. Work autonomously using your best judgment — do not ask the user questions or wait for feedback.
+
+Process to follow when in execute mode:
+1. If you don't have a plan or tasks yet, analyze the user request and create tasks and a plan. (**Skip this step if you came from plan mode**)
+2. Work autonomously — use your best judgment to make decisions and keep progressing without asking the user questions. The goal is to have a complete, useful result ready when the user returns.
+3. If you encounter ambiguity or an unexpected situation during execution, choose the most reasonable option, note your choice, and keep going.
+4. Mark tasks as completed as you finish them.
+5. Continue working, thinking and calling tools until you have the research result for the user.`,
 	},
 }
 
@@ -195,9 +221,9 @@ func (p *Provider) provide(ctx context.Context, messages []*message.Message, opt
 func (p *Provider) buildInstructions(currentMode string) string {
 	var sb strings.Builder
 	for _, m := range p.modes {
-		fmt.Fprintf(&sb, "- \"%s\": %s\n", m.Name, m.Description)
+		fmt.Fprintf(&sb, "#### %s\n\n%s\n\n", m.Name, strings.TrimRight(m.Description, "\n"))
 	}
-	modesText := sb.String()
+	modesText := strings.TrimRight(sb.String(), "\n")
 
 	result := strings.ReplaceAll(p.instructions, "{available_modes}", modesText)
 	result = strings.ReplaceAll(result, "{current_mode}", currentMode)
@@ -213,7 +239,7 @@ func (p *Provider) createTools(opts []agent.Option, st *state) []tool.FuncTool {
 
 	setTool := functool.MustNew(
 		functool.Config{
-			Name:        "AgentMode_Set",
+			Name:        "mode_set",
 			Description: fmt.Sprintf("Switch the agent's operating mode. Supported modes: \"%s\".", modeNamesDisplay),
 		},
 		func(ctx context.Context, mode string) (string, error) {
@@ -228,7 +254,7 @@ func (p *Provider) createTools(opts []agent.Option, st *state) []tool.FuncTool {
 
 	getTool := functool.MustNew(
 		functool.Config{
-			Name:        "AgentMode_Get",
+			Name:        "mode_get",
 			Description: "Get the agent's current operating mode.",
 		},
 		func(ctx context.Context, _ struct{}) (string, error) {
