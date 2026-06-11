@@ -1,8 +1,6 @@
 ---
 description: Reviews PRs to ensure new Go APIs and behaviors stay aligned with the .NET and Python Agent Framework implementations
 tracker-id: go-api-consistency-review
-features:
-   copilot-requests: true
 on:
    roles: all
    pull_request:
@@ -25,6 +23,7 @@ permissions:
    contents: read
    pull-requests: read
    issues: read
+   copilot-requests: write
 tools:
    github:
       toolsets: [default]
