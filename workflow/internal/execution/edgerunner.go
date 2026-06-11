@@ -196,27 +196,10 @@ func (em *EdgeRunner) PrepareDeliveryForEdge(ctx context.Context, edge workflow.
 		span.SetDeliveryStatus(observability.DeliveryStatusDroppedConditionFalse)
 		return nil, nil
 	}
-	// Determine target executors based on edge configuration.
-	targetIDs := edge.Connection.SinkIDs
-	if edge.Assigner != nil {
-		targetIDs = make([]string, 0, len(edge.Connection.SinkIDs))
-		for id := range edge.Assigner(len(edge.Connection.SinkIDs), envelope.Message) {
-			targetIDs = append(targetIDs, edge.Connection.SinkIDs[id])
-		}
-	}
-	// If the envelope specifies a target, filter to that target only.
-	if envelope.TargetID != "" {
-		if edge.Assigner == nil {
-			// Clone target IDs to avoid modifying original slice.
-			targetIDs = slices.Clone(targetIDs)
-		}
-		targetIDs = slices.DeleteFunc(targetIDs, func(id string) bool {
-			return id != envelope.TargetID
-		})
-		if len(targetIDs) == 0 {
-			span.SetDeliveryStatus(observability.DeliveryStatusDroppedTargetMismatch)
-			return nil, nil
-		}
+	targetIDs := selectedTargetIDs(edge, envelope)
+	if len(targetIDs) == 0 {
+		span.SetDeliveryStatus(observability.DeliveryStatusDroppedTargetMismatch)
+		return nil, nil
 	}
 
 	var envelopes []*MessageEnvelope
@@ -236,38 +219,9 @@ func (em *EdgeRunner) PrepareDeliveryForEdge(ctx context.Context, edge workflow.
 		}
 	}
 
-	// Resolve target executors.
-	targets := make([]*workflow.Executor, 0, 1)
-	if len(targetIDs) == 1 {
-		// Optimize for single target case.
-		target, err := em.ensureExecutor(ctx, targetIDs[0], em.tracer)
-		if err != nil {
-			return nil, err
-		}
-		targets = append(targets, target)
-	} else if len(targetIDs) > 1 {
-		var mu sync.Mutex
-		g, ctx := errgroup.WithContext(ctx)
-		for _, targetID := range targetIDs {
-			g.Go(func() error {
-				target, err := em.ensureExecutor(ctx, targetID, em.tracer)
-				if err != nil {
-					return err
-				}
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				default:
-					mu.Lock()
-					targets = append(targets, target)
-					mu.Unlock()
-				}
-				return nil
-			})
-		}
-		if err := g.Wait(); err != nil {
-			return nil, err
-		}
+	targets, err := em.resolveTargets(ctx, targetIDs)
+	if err != nil {
+		return nil, err
 	}
 	if len(targets) == 0 {
 		// Target mismatch.
@@ -310,6 +264,63 @@ func (em *EdgeRunner) PrepareDeliveryForEdge(ctx context.Context, edge workflow.
 		Targets:   targets,
 		Envelopes: envelopes,
 	}, nil
+}
+
+func selectedTargetIDs(edge workflow.Edge, envelope *MessageEnvelope) []string {
+	targetIDs := edge.Connection.SinkIDs
+	if edge.Assigner != nil {
+		targetIDs = make([]string, 0, len(edge.Connection.SinkIDs))
+		for id := range edge.Assigner(len(edge.Connection.SinkIDs), envelope.Message) {
+			targetIDs = append(targetIDs, edge.Connection.SinkIDs[id])
+		}
+	}
+	if envelope.TargetID == "" {
+		return targetIDs
+	}
+	if edge.Assigner == nil {
+		targetIDs = slices.Clone(targetIDs)
+	}
+	return slices.DeleteFunc(targetIDs, func(id string) bool {
+		return id != envelope.TargetID
+	})
+}
+
+func (em *EdgeRunner) resolveTargets(ctx context.Context, targetIDs []string) ([]*workflow.Executor, error) {
+	targets := make([]*workflow.Executor, 0, 1)
+	if len(targetIDs) == 1 {
+		target, err := em.ensureExecutor(ctx, targetIDs[0], em.tracer)
+		if err != nil {
+			return nil, err
+		}
+		return append(targets, target), nil
+	}
+	if len(targetIDs) <= 1 {
+		return targets, nil
+	}
+
+	var mu sync.Mutex
+	g, ctx := errgroup.WithContext(ctx)
+	for _, targetID := range targetIDs {
+		g.Go(func() error {
+			target, err := em.ensureExecutor(ctx, targetID, em.tracer)
+			if err != nil {
+				return err
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+				mu.Lock()
+				targets = append(targets, target)
+				mu.Unlock()
+			}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+	return targets, nil
 }
 
 func (em *EdgeRunner) messageRuntimeType(ctx context.Context, envelope *MessageEnvelope) (reflect.Type, error) {
