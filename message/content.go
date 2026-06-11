@@ -630,10 +630,16 @@ func cloneToolCallContent(toolCall ToolCallContent) ToolCallContent {
 	case nil:
 		return nil
 	case *FunctionCallContent:
+		if toolCall == nil {
+			return nil
+		}
 		cloned := *toolCall
 		cloned.ContentHeader = cloneContentHeader(toolCall.ContentHeader)
 		return &cloned
 	case *MCPServerToolCallContent:
+		if toolCall == nil {
+			return nil
+		}
 		cloned := *toolCall
 		cloned.ContentHeader = cloneContentHeader(toolCall.ContentHeader)
 		return &cloned
