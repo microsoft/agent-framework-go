@@ -31,7 +31,7 @@ func toAgentMessages(agMessages []aguiTypes.Message) ([]*message.Message, error)
 	}
 
 	for _, m := range agMessages {
-		isAssistantWithToolCalls := m.Role == aguiTypes.RoleAssistant && len(m.ToolCalls) > 0
+		isAssistantWithToolCalls := isAssistantMessageWithToolCalls(m)
 
 		if !isAssistantWithToolCalls {
 			flush()
@@ -43,11 +43,7 @@ func toAgentMessages(agMessages []aguiTypes.Message) ([]*message.Message, error)
 		}
 
 		if isAssistantWithToolCalls {
-			if pendingMsg == nil {
-				pendingMsg = converted
-			} else {
-				pendingMsg.Contents = append(pendingMsg.Contents, converted.Contents...)
-			}
+			pendingMsg = appendAssistantToolCallMessage(pendingMsg, converted)
 		} else {
 			result = append(result, converted)
 		}
@@ -55,6 +51,18 @@ func toAgentMessages(agMessages []aguiTypes.Message) ([]*message.Message, error)
 	flush()
 
 	return result, nil
+}
+
+func isAssistantMessageWithToolCalls(m aguiTypes.Message) bool {
+	return m.Role == aguiTypes.RoleAssistant && len(m.ToolCalls) > 0
+}
+
+func appendAssistantToolCallMessage(pending, converted *message.Message) *message.Message {
+	if pending == nil {
+		return converted
+	}
+	pending.Contents = append(pending.Contents, converted.Contents...)
+	return pending
 }
 
 func toAgentMessage(m aguiTypes.Message) (*message.Message, error) {
