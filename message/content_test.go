@@ -183,6 +183,88 @@ func TestContentEncoding_Roundtrip(t *testing.T) {
 	}
 }
 
+func TestToolApprovalRequestContent_CreateResponseSnapshotsFunctionCall(t *testing.T) {
+	toolCall := &message.FunctionCallContent{
+		ContentHeader: message.ContentHeader{
+			AdditionalProperties: map[string]any{"key": "value"},
+		},
+		CallID:    "call-1",
+		Name:      "deploy",
+		Arguments: `{"environment":"prod"}`,
+	}
+	request := &message.ToolApprovalRequestContent{
+		ContentHeader: message.ContentHeader{
+			AdditionalProperties: map[string]any{"request": "value"},
+		},
+		RequestID: "approval-1",
+		ToolCall:  toolCall,
+	}
+
+	response := request.CreateResponse(true, "approved")
+
+	toolCall.Name = "destroy"
+	toolCall.Arguments = `{"environment":"dev"}`
+	toolCall.AdditionalProperties["key"] = "changed"
+	request.AdditionalProperties["request"] = "changed"
+
+	responseToolCall, ok := response.ToolCall.(*message.FunctionCallContent)
+	if !ok {
+		t.Fatalf("expected FunctionCallContent, got %T", response.ToolCall)
+	}
+	if responseToolCall.Name != "deploy" {
+		t.Fatalf("expected response tool name to be snapshotted, got %q", responseToolCall.Name)
+	}
+	if responseToolCall.Arguments != `{"environment":"prod"}` {
+		t.Fatalf("expected response tool arguments to be snapshotted, got %q", responseToolCall.Arguments)
+	}
+	if responseToolCall.AdditionalProperties["key"] != "value" {
+		t.Fatalf("expected response tool additional properties to be snapshotted, got %v", responseToolCall.AdditionalProperties["key"])
+	}
+	if response.AdditionalProperties["request"] != "value" {
+		t.Fatalf("expected response additional properties to be snapshotted, got %v", response.AdditionalProperties["request"])
+	}
+}
+
+func TestToolApprovalRequestContent_CreateResponseSnapshotsMCPServerToolCall(t *testing.T) {
+	toolCall := &message.MCPServerToolCallContent{
+		ContentHeader: message.ContentHeader{
+			AdditionalProperties: map[string]any{"key": "value"},
+		},
+		CallID:     "call-1",
+		Name:       "lookup",
+		ServerName: "server-a",
+		Arguments:  `{"query":"alpha"}`,
+	}
+	request := &message.ToolApprovalRequestContent{
+		RequestID: "approval-1",
+		ToolCall:  toolCall,
+	}
+
+	response := request.CreateResponse(true, "approved")
+
+	toolCall.Name = "delete"
+	toolCall.ServerName = "server-b"
+	toolCall.Arguments = `{"query":"beta"}`
+	toolCall.AdditionalProperties["key"] = "changed"
+
+	responseToolCall, ok := response.ToolCall.(*message.MCPServerToolCallContent)
+	if !ok {
+		t.Fatalf("expected MCPServerToolCallContent, got %T", response.ToolCall)
+	}
+	if responseToolCall.Name != "lookup" {
+		t.Fatalf("expected response tool name to be snapshotted, got %q", responseToolCall.Name)
+	}
+	if responseToolCall.ServerName != "server-a" {
+		t.Fatalf("expected response server name to be snapshotted, got %q", responseToolCall.ServerName)
+	}
+	if responseToolCall.Arguments != `{"query":"alpha"}` {
+		t.Fatalf("expected response tool arguments to be snapshotted, got %q", responseToolCall.Arguments)
+	}
+	if responseToolCall.AdditionalProperties["key"] != "value" {
+		t.Fatalf("expected response tool additional properties to be snapshotted, got %v", responseToolCall.AdditionalProperties["key"])
+	}
+}
+
 func TestCoalesceContents(t *testing.T) {
 	tests := []struct {
 		name     string

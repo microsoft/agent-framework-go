@@ -616,10 +616,37 @@ func (t *ToolApprovalRequestContent) CreateResponse(approved bool, reason string
 		RequestID: t.RequestID,
 		Approved:  approved,
 		Reason:    reason,
-		ToolCall:  t.ToolCall,
+		ToolCall:  cloneToolCallContent(t.ToolCall),
 		ContentHeader: ContentHeader{
-			AdditionalProperties: t.AdditionalProperties,
+			AdditionalProperties: maps.Clone(t.AdditionalProperties),
+			Annotations:          slices.Clone(t.Annotations),
+			RawRepresentation:    t.RawRepresentation,
 		},
+	}
+}
+
+func cloneToolCallContent(toolCall ToolCallContent) ToolCallContent {
+	switch toolCall := toolCall.(type) {
+	case nil:
+		return nil
+	case *FunctionCallContent:
+		cloned := *toolCall
+		cloned.ContentHeader = cloneContentHeader(toolCall.ContentHeader)
+		return &cloned
+	case *MCPServerToolCallContent:
+		cloned := *toolCall
+		cloned.ContentHeader = cloneContentHeader(toolCall.ContentHeader)
+		return &cloned
+	default:
+		return toolCall
+	}
+}
+
+func cloneContentHeader(header ContentHeader) ContentHeader {
+	return ContentHeader{
+		AdditionalProperties: maps.Clone(header.AdditionalProperties),
+		Annotations:          slices.Clone(header.Annotations),
+		RawRepresentation:    header.RawRepresentation,
 	}
 }
 
