@@ -3,7 +3,7 @@ description: Nightly agent that proactively refactors Go internals to make .NET-
 tracker-id: dotnet-code-portability-nightly
 engine:
    id: copilot
-   model: "gpt-5.5?effort=high"
+   model: "gpt-5.5"
 network:
    allowed:
       - defaults
