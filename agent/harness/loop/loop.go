@@ -165,18 +165,19 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 		currentMessages := cloneMessages(messages)
 		currentOpts := slices.Clone(opts)
 		initialSession, hasSession := agent.GetOption(opts, agent.WithSession)
+		var initialSessionSnapshot []byte
 		loopCtx := &Context{
 			InitialMessages:      initialMessages,
 			Options:              slices.Clone(opts),
 			AdditionalProperties: make(map[string]any),
 		}
 		if cfg.FreshContextPerIteration && hasSession {
-			clonedSession, err := cloneSession(initialSession)
+			var err error
+			initialSessionSnapshot, err = snapshotSession(initialSession)
 			if err != nil {
 				yield(nil, err)
 				return
 			}
-			initialSession = clonedSession
 		}
 
 		for {
@@ -214,7 +215,7 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 			var surfacedMessages []*message.Message
 			currentMessages, surfacedMessages = nextMessages(cfg, loopCtx, evaluation)
 			if cfg.FreshContextPerIteration && hasSession {
-				nextSession, err := cloneSession(initialSession)
+				nextSession, err := sessionFromSnapshot(initialSessionSnapshot)
 				if err != nil {
 					yield(nil, err)
 					return
@@ -301,17 +302,24 @@ func cloneMessages(messages []*message.Message) []*message.Message {
 	return out
 }
 
-func cloneSession(session *agent.Session) (*agent.Session, error) {
+func snapshotSession(session *agent.Session) ([]byte, error) {
 	if session == nil {
 		return nil, nil
 	}
 	data, err := json.Marshal(session)
 	if err != nil {
-		return nil, fmt.Errorf("loop: clone session: %w", err)
+		return nil, errors.New("loop: snapshot session")
+	}
+	return data, nil
+}
+
+func sessionFromSnapshot(data []byte) (*agent.Session, error) {
+	if len(data) == 0 {
+		return nil, nil
 	}
 	var cloned agent.Session
 	if err := json.Unmarshal(data, &cloned); err != nil {
-		return nil, fmt.Errorf("loop: clone session: %w", err)
+		return nil, errors.New("loop: restore session snapshot")
 	}
 	return &cloned, nil
 }

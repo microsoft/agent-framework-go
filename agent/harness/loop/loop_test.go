@@ -7,6 +7,7 @@ import (
 	"errors"
 	"iter"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -207,7 +208,7 @@ func TestLoop_FreshContextPerIteration_RebuildsFromInitialAndAggregatedFeedback(
 				if ctx.Iteration >= 3 {
 					return loop.Stop(), nil
 				}
-				return loop.Continue("fb " + string(rune('0'+ctx.Iteration))), nil
+				return loop.Continue("fb " + strconv.Itoa(ctx.Iteration)), nil
 			})},
 		})},
 	})
