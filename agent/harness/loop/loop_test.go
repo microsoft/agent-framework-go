@@ -267,6 +267,123 @@ func TestLoop_FreshContextPerIteration_RecreatesSession(t *testing.T) {
 	}
 }
 
+func TestLoop_FreshContextPerIteration_SessionCreatedCallback(t *testing.T) {
+	capture := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate {
+		return textUpdates("ack")
+	})
+	initialSession := &agent.Session{}
+	var createdSessions []*agent.Session
+	a := agent.New(capture.provider(), agent.Config{
+		Middlewares: []agent.Middleware{loop.New(loop.Config{
+			FreshContextPerIteration: true,
+			MaxIterations:            3,
+			SessionCreatedCallback: func(_ context.Context, s *agent.Session) error {
+				createdSessions = append(createdSessions, s)
+				return nil
+			},
+			Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(context.Context, *loop.Context) (loop.Evaluation, error) {
+				return loop.Continue("again"), nil
+			})},
+		})},
+	})
+
+	_, err := a.RunText(context.Background(), "go", agent.WithSession(initialSession)).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(createdSessions) != 2 {
+		t.Fatalf("created sessions = %d, want 2", len(createdSessions))
+	}
+	if createdSessions[0] != capture.sessionsPerCall[1] {
+		t.Fatal("first callback session should match second call session")
+	}
+	if createdSessions[1] != capture.sessionsPerCall[2] {
+		t.Fatal("second callback session should match third call session")
+	}
+}
+
+func TestLoop_FreshContextPerIteration_SessionCreatedCallbackErrorStopsRun(t *testing.T) {
+	wantErr := errors.New("session callback")
+	capture := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate {
+		return textUpdates("ack")
+	})
+	a := agent.New(capture.provider(), agent.Config{
+		Middlewares: []agent.Middleware{loop.New(loop.Config{
+			FreshContextPerIteration: true,
+			MaxIterations:            3,
+			SessionCreatedCallback: func(context.Context, *agent.Session) error {
+				return wantErr
+			},
+			Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(context.Context, *loop.Context) (loop.Evaluation, error) {
+				return loop.Continue("again"), nil
+			})},
+		})},
+	})
+
+	_, err := a.RunText(context.Background(), "go", agent.WithSession(&agent.Session{})).Collect()
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("err = %v, want %v", err, wantErr)
+	}
+	if capture.callCount != 1 {
+		t.Fatalf("callCount = %d, want 1", capture.callCount)
+	}
+}
+
+func TestLoop_NonStreamingReturnsLastResponseOnly(t *testing.T) {
+	capture := newCaptureAgent(func(call int, _ []*message.Message) []*agent.ResponseUpdate {
+		return textUpdates("iteration " + strconv.Itoa(call))
+	})
+	a := agent.New(capture.provider(), agent.Config{
+		Middlewares: []agent.Middleware{loop.New(loop.Config{
+			NonStreamingReturnsLastResponseOnly: true,
+			Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(_ context.Context, ctx *loop.Context) (loop.Evaluation, error) {
+				if ctx.LastResponse.String() == "iteration 3" {
+					return loop.Stop(), nil
+				}
+				return loop.Continue("follow-up"), nil
+			})},
+		})},
+	})
+
+	resp, err := a.RunText(context.Background(), "go").Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if capture.callCount != 3 {
+		t.Fatalf("callCount = %d, want 3", capture.callCount)
+	}
+	got := messageTexts(resp.Messages)
+	want := []string{"iteration 3"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("messages = %v, want %v", got, want)
+	}
+}
+
+func TestLoop_NonStreamingReturnsLastResponseOnly_IgnoredForStreaming(t *testing.T) {
+	capture := newCaptureAgent(func(call int, _ []*message.Message) []*agent.ResponseUpdate {
+		return textUpdates("iteration " + strconv.Itoa(call))
+	})
+	a := agent.New(capture.provider(), agent.Config{
+		Middlewares: []agent.Middleware{loop.New(loop.Config{
+			NonStreamingReturnsLastResponseOnly: true,
+			MaxIterations:                       2,
+			Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(context.Context, *loop.Context) (loop.Evaluation, error) {
+				return loop.Continue("follow-up"), nil
+			})},
+		})},
+	})
+
+	resp, err := a.RunText(context.Background(), "go", agent.Stream(true)).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := messageTexts(resp.Messages)
+	want := []string{"iteration 1", "follow-up", "iteration 2"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("messages = %v, want %v", got, want)
+	}
+}
+
 func TestLoop_EvaluatorErrorStopsRun(t *testing.T) {
 	wantErr := errors.New("boom")
 	capture := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate {

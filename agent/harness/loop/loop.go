@@ -57,6 +57,14 @@ type Config struct {
 	// input messages plus an aggregated feedback log, and resets the session
 	// to a pristine snapshot taken before the first iteration.
 	FreshContextPerIteration bool
+
+	// NonStreamingReturnsLastResponseOnly causes non-streaming runs (those
+	// without agent.Stream(true)) to surface only the final iteration response.
+	NonStreamingReturnsLastResponseOnly bool
+
+	// SessionCreatedCallback is invoked when the loop creates a fresh session
+	// for reinvocation.
+	SessionCreatedCallback func(context.Context, *agent.Session) error
 }
 
 // Context contains per-run state passed to evaluators.
@@ -164,6 +172,8 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 		initialMessages := cloneMessages(messages)
 		currentMessages := cloneMessages(messages)
 		currentOpts := slices.Clone(opts)
+		stream, _ := agent.GetOption(opts, agent.Stream)
+		returnLastResponseOnly := cfg.NonStreamingReturnsLastResponseOnly && !stream
 		initialSession, hasSession := agent.GetOption(opts, agent.WithSession)
 		var initialSessionSnapshot []byte
 		loopCtx := &Context{
@@ -182,13 +192,20 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 
 		for {
 			var resp agent.Response
+			var iterationUpdates []*agent.ResponseUpdate
 			for update, err := range next(ctx, currentMessages, currentOpts...) {
 				if update != nil {
 					resp.Update(update)
+					if returnLastResponseOnly {
+						iterationUpdates = append(iterationUpdates, cloneResponseUpdate(update))
+					}
 				}
 				if err != nil {
 					yield(update, err)
 					return
+				}
+				if returnLastResponseOnly {
+					continue
 				}
 				if !yield(update, nil) {
 					return
@@ -199,6 +216,11 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 			loopCtx.LastResponse = &resp
 
 			if hasPendingApprovalRequests(&resp) || loopCtx.Iteration >= maxIterations {
+				if returnLastResponseOnly {
+					if !yieldResponseUpdates(yield, iterationUpdates) {
+						return
+					}
+				}
 				return
 			}
 
@@ -208,6 +230,11 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 				return
 			}
 			if !ok {
+				if returnLastResponseOnly {
+					if !yieldResponseUpdates(yield, iterationUpdates) {
+						return
+					}
+				}
 				return
 			}
 
@@ -220,9 +247,15 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 					yield(nil, err)
 					return
 				}
+				if cfg.SessionCreatedCallback != nil {
+					if err := cfg.SessionCreatedCallback(ctx, nextSession); err != nil {
+						yield(nil, err)
+						return
+					}
+				}
 				currentOpts = append(slices.Clone(opts), agent.WithSession(nextSession))
 			}
-			if !cfg.ExcludeOnBehalfOfMessages {
+			if !returnLastResponseOnly && !cfg.ExcludeOnBehalfOfMessages {
 				for i, msg := range surfacedMessages {
 					if !yield(messageToUpdate(msg, fmt.Sprintf("loop-message-%d-%d", loopCtx.Iteration, i)), nil) {
 						return
@@ -300,6 +333,24 @@ func cloneMessages(messages []*message.Message) []*message.Message {
 		out = append(out, msg.Clone())
 	}
 	return out
+}
+
+func cloneResponseUpdate(update *agent.ResponseUpdate) *agent.ResponseUpdate {
+	if update == nil {
+		return nil
+	}
+	out := *update
+	out.Contents = slices.Clone(update.Contents)
+	return &out
+}
+
+func yieldResponseUpdates(yield func(*agent.ResponseUpdate, error) bool, updates []*agent.ResponseUpdate) bool {
+	for _, update := range updates {
+		if !yield(update, nil) {
+			return false
+		}
+	}
+	return true
 }
 
 func snapshotSession(session *agent.Session) ([]byte, error) {
