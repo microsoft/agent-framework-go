@@ -290,7 +290,7 @@ func TestLoop_EvaluatorErrorStopsRun(t *testing.T) {
 }
 
 func TestCompletionMarkerEvaluator(t *testing.T) {
-	evaluator := loop.NewCompletionMarkerEvaluator("DONE", loop.CompletionMarkerConfig{})
+	evaluator := loop.NewCompletionMarkerEvaluator(loop.CompletionMarkerConfig{Marker: "DONE"})
 	stopResponse := "all work finished DONE "
 	stop, err := evaluator.Evaluate(context.Background(), contextWithResponse(stopResponse))
 	if err != nil {
@@ -321,7 +321,8 @@ func TestCompletionMarkerEvaluator(t *testing.T) {
 }
 
 func TestCompletionMarkerEvaluator_CustomTemplateSubstitutesLastResponse(t *testing.T) {
-	evaluator := loop.NewCompletionMarkerEvaluator("FINISHED", loop.CompletionMarkerConfig{
+	evaluator := loop.NewCompletionMarkerEvaluator(loop.CompletionMarkerConfig{
+		Marker:                  "FINISHED",
 		FeedbackMessageTemplate: "Previous: {last_response}. Finish with {completion_marker}.",
 	})
 
@@ -335,12 +336,14 @@ func TestCompletionMarkerEvaluator_CustomTemplateSubstitutesLastResponse(t *test
 	}
 }
 
-func TestCompletionMarkerEvaluator_EmptyMarkerErrorsOnEvaluate(t *testing.T) {
-	evaluator := loop.NewCompletionMarkerEvaluator("   ", loop.CompletionMarkerConfig{})
-	_, err := evaluator.Evaluate(context.Background(), contextWithResponse("still working"))
-	if err == nil {
-		t.Fatal("expected error for empty marker")
-	}
+func TestCompletionMarkerEvaluator_EmptyMarkerPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic for empty marker")
+		}
+	}()
+
+	_ = loop.NewCompletionMarkerEvaluator(loop.CompletionMarkerConfig{})
 }
 
 type captureAgent struct {
