@@ -400,7 +400,18 @@ func withoutContinuationToken(options []Option) []Option {
 }
 
 func (a *Agent) historyProviderForRun(session *Session, continuationToken string, noSession bool) *HistoryProvider {
-	if a.historyProvider == nil || continuationToken != "" || session == nil {
+	if continuationToken != "" {
+		return nil
+	}
+	return a.historyProviderForSession(session, noSession)
+}
+
+func (a *Agent) historyProviderForContinuationStore(session *Session, noSession bool) *HistoryProvider {
+	return a.historyProviderForSession(session, noSession)
+}
+
+func (a *Agent) historyProviderForSession(session *Session, noSession bool) *HistoryProvider {
+	if a.historyProvider == nil || session == nil {
 		return nil
 	}
 	if !a.hasDefaultHistoryProvider {
@@ -415,22 +426,6 @@ func (a *Agent) historyProviderForRun(session *Session, continuationToken string
 	// service-managed sessions use the provider service as the source of history.
 	// Providers that never manage history server-side (e.g. AGUI) set
 	// providerDoesNotManageHistory so the in-memory provider is kept regardless.
-	if noSession || (session.ServiceID() != "" && !a.providerDoesNotManageHistory) {
-		return nil
-	}
-	return a.historyProvider
-}
-
-func (a *Agent) historyProviderForContinuationStore(session *Session, noSession bool) *HistoryProvider {
-	if a.historyProvider == nil || session == nil {
-		return nil
-	}
-	if !a.hasDefaultHistoryProvider {
-		if session.ServiceID() != "" && !a.providerDoesNotManageHistory {
-			return nil
-		}
-		return a.historyProvider
-	}
 	if noSession || (session.ServiceID() != "" && !a.providerDoesNotManageHistory) {
 		return nil
 	}
