@@ -8,11 +8,11 @@ import (
 	"strings"
 )
 
-// CompletionMarkerOptions configures a completion-marker evaluator.
-type CompletionMarkerOptions struct {
+// CompletionMarkerConfig configures a completion-marker evaluator.
+type CompletionMarkerConfig struct {
 	// FeedbackMessageTemplate is used when the marker is absent. The
-	// CompletionMarkerPlaceholder token is replaced when the evaluator is
-	// created, and LastResponsePlaceholder is replaced on each evaluation.
+	// completionMarkerPlaceholder token is replaced when the evaluator is
+	// created, and lastResponsePlaceholder is replaced on each evaluation.
 	FeedbackMessageTemplate string
 }
 
@@ -25,30 +25,16 @@ type CompletionMarkerEvaluator struct {
 
 // NewCompletionMarkerEvaluator creates an evaluator that waits for marker in
 // the latest response text.
-func NewCompletionMarkerEvaluator(marker string, opts *CompletionMarkerOptions) (*CompletionMarkerEvaluator, error) {
-	marker = strings.TrimSpace(marker)
-	if marker == "" {
-		return nil, errors.New("loop: completion marker cannot be empty")
+func NewCompletionMarkerEvaluator(marker string, config CompletionMarkerConfig) *CompletionMarkerEvaluator {
+	template := defaultCompletionMarkerFeedbackTemplate
+	if config.FeedbackMessageTemplate != "" {
+		template = config.FeedbackMessageTemplate
 	}
-	template := DefaultCompletionMarkerFeedbackTemplate
-	if opts != nil && opts.FeedbackMessageTemplate != "" {
-		template = opts.FeedbackMessageTemplate
-	}
-	template = strings.ReplaceAll(template, CompletionMarkerPlaceholder, marker)
+	template = strings.ReplaceAll(template, completionMarkerPlaceholder, strings.TrimSpace(marker))
 	return &CompletionMarkerEvaluator{
 		completionMarker:        marker,
 		feedbackMessageTemplate: template,
-	}, nil
-}
-
-// MustCompletionMarkerEvaluator is like NewCompletionMarkerEvaluator but panics
-// on invalid input.
-func MustCompletionMarkerEvaluator(marker string, opts *CompletionMarkerOptions) *CompletionMarkerEvaluator {
-	evaluator, err := NewCompletionMarkerEvaluator(marker, opts)
-	if err != nil {
-		panic(err)
 	}
-	return evaluator
 }
 
 // Evaluate implements Evaluator.
@@ -59,9 +45,13 @@ func (e *CompletionMarkerEvaluator) Evaluate(_ context.Context, loop *Context) (
 	if loop.LastResponse == nil {
 		return Stop(), errors.New("loop: last response cannot be nil")
 	}
-	if strings.Contains(loop.LastResponse.String(), e.completionMarker) {
+	marker := strings.TrimSpace(e.completionMarker)
+	if marker == "" {
+		return Stop(), errors.New("loop: completion marker cannot be empty")
+	}
+	if strings.HasSuffix(strings.TrimSpace(loop.LastResponse.String()), marker) {
 		return Stop(), nil
 	}
-	feedback := strings.ReplaceAll(e.feedbackMessageTemplate, LastResponsePlaceholder, loop.LastResponse.String())
+	feedback := strings.ReplaceAll(e.feedbackMessageTemplate, lastResponsePlaceholder, loop.LastResponse.String())
 	return Continue(feedback), nil
 }

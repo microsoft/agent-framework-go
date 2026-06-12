@@ -168,6 +168,34 @@ func TestLoop_ContinueWithMessagesSendsMessagesVerbatim(t *testing.T) {
 	}
 }
 
+func TestLoop_ContinueWithMessages_SeparateMessagesInCollectedResponse(t *testing.T) {
+	capture := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate {
+		return textUpdates("ack")
+	})
+	first := message.NewText("first")
+	second := message.NewText("second")
+	a := agent.New(capture.provider(), agent.Config{
+		Middlewares: []agent.Middleware{loop.New(loop.Config{
+			Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(_ context.Context, ctx *loop.Context) (loop.Evaluation, error) {
+				if ctx.Iteration == 1 {
+					return loop.ContinueWithMessages([]*message.Message{first, second}), nil
+				}
+				return loop.Stop(), nil
+			})},
+		})},
+	})
+
+	resp, err := a.RunText(context.Background(), "go").Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := messageTexts(resp.Messages)
+	want := []string{"ack", "first", "second", "ack"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("messages = %v, want %v", got, want)
+	}
+}
+
 func TestLoop_EvaluatorErrorStopsRun(t *testing.T) {
 	wantErr := errors.New("boom")
 	capture := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate {
@@ -191,11 +219,8 @@ func TestLoop_EvaluatorErrorStopsRun(t *testing.T) {
 }
 
 func TestCompletionMarkerEvaluator(t *testing.T) {
-	evaluator, err := loop.NewCompletionMarkerEvaluator("DONE", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	stop, err := evaluator.Evaluate(context.Background(), contextWithResponse("all DONE here"))
+	evaluator := loop.NewCompletionMarkerEvaluator("DONE", loop.CompletionMarkerConfig{})
+	stop, err := evaluator.Evaluate(context.Background(), contextWithResponse("all work finished DONE "))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,21 +228,21 @@ func TestCompletionMarkerEvaluator(t *testing.T) {
 		t.Fatal("expected marker to stop the loop")
 	}
 
-	cont, err := evaluator.Evaluate(context.Background(), contextWithResponse("still working"))
+	cont, err := evaluator.Evaluate(context.Background(), contextWithResponse("mentioning DONE but still working"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !cont.ShouldReinvoke {
 		t.Fatal("expected missing marker to continue")
 	}
-	if !strings.Contains(cont.Feedback, "DONE") || strings.Contains(cont.Feedback, loop.CompletionMarkerPlaceholder) {
+	if !strings.Contains(cont.Feedback, "DONE") || strings.Contains(cont.Feedback, "{completion_marker}") {
 		t.Fatalf("feedback = %q", cont.Feedback)
 	}
 }
 
 func TestCompletionMarkerEvaluator_CustomTemplateSubstitutesLastResponse(t *testing.T) {
-	evaluator := loop.MustCompletionMarkerEvaluator("FINISHED", &loop.CompletionMarkerOptions{
-		FeedbackMessageTemplate: "Previous: " + loop.LastResponsePlaceholder + ". Finish with " + loop.CompletionMarkerPlaceholder + ".",
+	evaluator := loop.NewCompletionMarkerEvaluator("FINISHED", loop.CompletionMarkerConfig{
+		FeedbackMessageTemplate: "Previous: {last_response}. Finish with {completion_marker}.",
 	})
 
 	evaluation, err := evaluator.Evaluate(context.Background(), contextWithResponse("candidate name: NoteNest"))
@@ -227,6 +252,14 @@ func TestCompletionMarkerEvaluator_CustomTemplateSubstitutesLastResponse(t *test
 	want := "Previous: candidate name: NoteNest. Finish with FINISHED."
 	if evaluation.Feedback != want {
 		t.Fatalf("feedback = %q, want %q", evaluation.Feedback, want)
+	}
+}
+
+func TestCompletionMarkerEvaluator_EmptyMarkerErrorsOnEvaluate(t *testing.T) {
+	evaluator := loop.NewCompletionMarkerEvaluator("   ", loop.CompletionMarkerConfig{})
+	_, err := evaluator.Evaluate(context.Background(), contextWithResponse("still working"))
+	if err == nil {
+		t.Fatal("expected error for empty marker")
 	}
 }
 

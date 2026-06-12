@@ -17,26 +17,26 @@ import (
 )
 
 const (
-	// DefaultMaxIterations is the default safety cap for loop runs.
-	DefaultMaxIterations = 10
+	// defaultMaxIterations is the default safety cap for loop runs.
+	defaultMaxIterations = 10
 
-	// CompletionMarkerPlaceholder is replaced by the configured completion
+	// completionMarkerPlaceholder is replaced by the configured completion
 	// marker in completion-marker feedback templates.
-	CompletionMarkerPlaceholder = "{completion_marker}"
+	completionMarkerPlaceholder = "{completion_marker}"
 
-	// LastResponsePlaceholder is replaced by the latest response text in
+	// lastResponsePlaceholder is replaced by the latest response text in
 	// completion-marker feedback templates.
-	LastResponsePlaceholder = "{last_response}"
+	lastResponsePlaceholder = "{last_response}"
 
-	// DefaultCompletionMarkerFeedbackTemplate is used when a completion-marker
+	// defaultCompletionMarkerFeedbackTemplate is used when a completion-marker
 	// evaluator does not receive a custom feedback template.
-	DefaultCompletionMarkerFeedbackTemplate = "Continue working on the request. When you have fully completed the task, end your response with the marker '" +
-		CompletionMarkerPlaceholder + "' to indicate completion."
+	defaultCompletionMarkerFeedbackTemplate = "Continue working on the request. When you have fully completed the task, end your response with the marker '" +
+		completionMarkerPlaceholder + "' to indicate completion."
 )
 
 // Config configures loop middleware.
 type Config struct {
-	// Evaluators decides after each iteration whether the wrapped agent should
+	// Evaluators decide after each iteration whether the wrapped agent should
 	// be re-invoked. Evaluators are checked in order; the first evaluator that
 	// asks to continue wins, and the loop stops only when all evaluators stop.
 	Evaluators []Evaluator
@@ -148,7 +148,7 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 		}
 		maxIterations := cfg.MaxIterations
 		if maxIterations == 0 {
-			maxIterations = DefaultMaxIterations
+			maxIterations = defaultMaxIterations
 		}
 		if maxIterations < 1 {
 			yield(nil, fmt.Errorf("loop: MaxIterations must be at least 1, got %d", cfg.MaxIterations))
@@ -197,8 +197,8 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 			currentMessages = nextMessages(evaluation, cfg.OnBehalfOfAuthorName)
 			loopCtx.Feedback = append(loopCtx.Feedback, evaluation.Feedback)
 			if !cfg.ExcludeOnBehalfOfMessages {
-				for _, msg := range currentMessages {
-					if !yield(messageToUpdate(msg), nil) {
+				for i, msg := range currentMessages {
+					if !yield(messageToUpdate(msg, fmt.Sprintf("loop-message-%d-%d", loopCtx.Iteration, i)), nil) {
 						return
 					}
 				}
@@ -232,19 +232,15 @@ func nextMessages(evaluation Evaluation, authorName string) []*message.Message {
 	return []*message.Message{msg}
 }
 
-func messageToUpdate(msg *message.Message) *agent.ResponseUpdate {
+func messageToUpdate(msg *message.Message, syntheticID string) *agent.ResponseUpdate {
 	if msg == nil {
 		return nil
 	}
-	return &agent.ResponseUpdate{
-		AdditionalProperties: msg.AdditionalProperties,
-		MessageID:            msg.ID,
-		AuthorName:           msg.AuthorName,
-		Role:                 msg.Role,
-		CreatedAt:            msg.CreatedAt,
-		Contents:             slices.Clone(msg.Contents),
-		RawRepresentation:    msg.RawRepresentation,
+	cloned := msg.Clone()
+	if cloned.ID == "" {
+		cloned.ID = syntheticID
 	}
+	return (&agent.Response{Messages: []*message.Message{cloned}}).ToUpdates()[0]
 }
 
 func hasPendingApprovalRequests(resp *agent.Response) bool {
