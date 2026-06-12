@@ -337,13 +337,21 @@ func TestCompletionMarkerEvaluator_CustomTemplateSubstitutesLastResponse(t *test
 }
 
 func TestCompletionMarkerEvaluator_EmptyMarkerPanics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatal("expected panic for empty marker")
-		}
-	}()
+	testCases := []loop.CompletionMarkerConfig{
+		{},
+		{Marker: "   "},
+	}
 
-	_ = loop.NewCompletionMarkerEvaluator(loop.CompletionMarkerConfig{})
+	for _, config := range testCases {
+		t.Run("marker="+strconv.Quote(config.Marker), func(t *testing.T) {
+			defer func() {
+				if r := recover(); r == nil {
+					t.Fatal("expected panic for empty marker")
+				}
+			}()
+			_ = loop.NewCompletionMarkerEvaluator(config)
+		})
+	}
 }
 
 type captureAgent struct {
