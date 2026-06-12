@@ -220,7 +220,7 @@ func TestLoop_EvaluatorErrorStopsRun(t *testing.T) {
 
 func TestCompletionMarkerEvaluator(t *testing.T) {
 	evaluator := loop.NewCompletionMarkerEvaluator("DONE", loop.CompletionMarkerConfig{})
-	stop, err := evaluator.Evaluate(context.Background(), contextWithResponse("all work finished DONE "))
+	stop, err := evaluator.Evaluate(context.Background(), contextWithResponse("all work finished DONE"+" "))
 	if err != nil {
 		t.Fatal(err)
 	}

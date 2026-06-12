@@ -49,9 +49,10 @@ func (e *CompletionMarkerEvaluator) Evaluate(_ context.Context, loop *Context) (
 	if marker == "" {
 		return Stop(), errors.New("loop: completion marker cannot be empty")
 	}
-	if strings.HasSuffix(strings.TrimSpace(loop.LastResponse.String()), marker) {
+	responseText := loop.LastResponse.String()
+	if strings.HasSuffix(strings.TrimSpace(responseText), marker) {
 		return Stop(), nil
 	}
-	feedback := strings.ReplaceAll(e.feedbackMessageTemplate, lastResponsePlaceholder, loop.LastResponse.String())
+	feedback := strings.ReplaceAll(e.feedbackMessageTemplate, lastResponsePlaceholder, responseText)
 	return Continue(feedback), nil
 }
