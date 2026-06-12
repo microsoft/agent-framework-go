@@ -27,6 +27,7 @@ permissions:
 tools:
    github:
       toolsets: [default]
+   cache-memory: true
 safe-outputs:
    noop:
       report-as-issue: false

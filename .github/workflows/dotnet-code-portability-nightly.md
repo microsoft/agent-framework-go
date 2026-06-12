@@ -50,10 +50,7 @@ tools:
       - wc
    github:
       toolsets: [context, repos, issues, pull_requests]
-   cache-memory:
-      key: dotnet-code-portability-nightly
-      retention-days: 30
-      allowed-extensions: [".md", ".json"]
+   cache-memory: true
 safe-outputs:
    max-patch-size: 4096
    noop:
@@ -86,7 +83,6 @@ Your job is to open one small PR that makes future .NET-to-Go ports easier by ma
 ## Setup
 
 - Go SDK checkout: `${{ github.workspace }}`
-- Persistent cache memory: `/tmp/gh-aw/cache-memory/`
 
 Work from the Go SDK checkout:
 
@@ -110,13 +106,13 @@ Use `upstream-agent-framework/main` as the .NET reference. Inspect commits with 
 
 ## Work Loop
 
-1. Pick a focus area from `${{ inputs.focus }}` (or choose one of: workflow, agents, skills, messages, tools, providers, compaction). Determine the upstream .NET lower bound: use `${{ inputs.since_ref }}` if set; otherwise read `/tmp/gh-aw/cache-memory/state.json` (if present) and use its last inspected upstream commit; if neither exists, inspect a practical recent window and record the baseline you chose in memory.
+1. Pick a focus area from `${{ inputs.focus }}` (or choose one of: workflow, agents, skills, messages, tools, providers, compaction). Determine the upstream .NET lower bound: use `${{ inputs.since_ref }}` if set; otherwise read cache-memory (if present) and use its last inspected upstream commit; if neither exists, inspect a practical recent window and record the baseline you chose in memory.
 2. Check for open `[dotnet-code]` PRs. If one already covers the same target, call `noop` with the PR link.
 3. Make one tiny internal change that helps porting future .NET diffs. Good changes include extracting an unexported helper, consolidating duplicate internal logic, simplifying control flow, table-driving repeated cases, clarifying an unexported name, or adding a preservation test.
 4. Run `gofmt` and targeted `go test` packages. Use broader `go test ./...` for shared runtime changes.
 5. Inspect the diff. If it changes public API, intentionally changes behavior, adds a feature, or creates churn, revert that candidate and choose another.
 6. Open exactly one draft PR with `create_pull_request`, or call `noop` after three rejected areas.
-7. Update `/tmp/gh-aw/cache-memory/state.json` with the inspected upstream head, chosen area, PR if created, skipped candidates, and a short decision summary. Do not store secrets.
+7. Update cache-memory (if possible) with the inspected upstream head, chosen area, PR if created, skipped candidates, and a short decision summary. Do not store secrets.
 
 ## PR Body
 

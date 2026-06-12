@@ -50,10 +50,7 @@ tools:
       - wc
    github:
       toolsets: [context, repos, issues, pull_requests]
-   cache-memory:
-      key: dotnet-port-nightly
-      retention-days: 30
-      allowed-extensions: [".md", ".json"]
+   cache-memory: true
 safe-outputs:
    max-patch-size: 4096
    noop:
@@ -79,7 +76,6 @@ Your job is to keep the Go SDK aligned with the upstream .NET Agent Framework im
 - Go SDK checkout: `${{ github.workspace }}`
 - Upstream Agent Framework remote: `upstream-agent-framework` -> `https://github.com/microsoft/agent-framework.git`
 - Upstream .NET subtree: `dotnet/` on `upstream-agent-framework/main`
-- Persistent cache memory: `/tmp/gh-aw/cache-memory/`
 
 Always work from the Go SDK checkout before editing or testing:
 
@@ -101,7 +97,7 @@ Use `upstream-agent-framework/main` as the upstream reference. For example, insp
 - Manual starting point: `${{ inputs.since_ref }}`
 - Manual focus area: `${{ inputs.focus }}`
 
-If `since_ref` is provided, use it as the lower bound for upstream .NET commit inspection. Otherwise, read `/tmp/gh-aw/cache-memory/state.json` if it exists and use its last inspected upstream commit as the lower bound. If no memory exists, inspect recent upstream .NET commits and merged upstream PRs from a practical recent window, then record the baseline you chose in memory.
+If `since_ref` is provided, use it as the lower bound for upstream .NET commit inspection. Otherwise, read cache-memory (if present) and use its last inspected upstream commit as the lower bound. If no memory exists, inspect recent upstream .NET commits and merged upstream PRs from a practical recent window, then record the baseline you chose in memory.
 
 Before doing new work, check for existing open Go SDK PRs created by this workflow with the `[dotnet-port]` title prefix. If an open PR already covers the same upstream commit range or the same misalignment, do not create a duplicate PR; call `noop` with a concise explanation and include the existing PR link.
 
@@ -182,7 +178,7 @@ Mention skipped upstream changes, known follow-ups, or uncertainty that reviewer
 
 In the PR body, include upstream commit SHAs and links when they materially explain the port. Mention every ported .NET PR you relied on. If no upstream .NET PR was ported, make that clear.
 
-After requesting the PR or PRs, update `/tmp/gh-aw/cache-memory/state.json` with the upstream head inspected, the lower bound used, any ported PRs, created Go SDK PRs when available, and a short decision log. Keep the file concise and do not store secrets.
+After requesting the PR or PRs, update cache-memory (if possible) with the upstream head inspected, the lower bound used, any ported PRs, created Go SDK PRs when available, and a short decision log. Keep the file concise and do not store secrets.
 
 ## No-Change Requirement
 
