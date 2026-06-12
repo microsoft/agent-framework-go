@@ -26,11 +26,12 @@ type CompletionMarkerEvaluator struct {
 // NewCompletionMarkerEvaluator creates an evaluator that waits for marker in
 // the latest response text.
 func NewCompletionMarkerEvaluator(marker string, config CompletionMarkerConfig) *CompletionMarkerEvaluator {
+	marker = strings.TrimSpace(marker)
 	template := defaultCompletionMarkerFeedbackTemplate
 	if config.FeedbackMessageTemplate != "" {
 		template = config.FeedbackMessageTemplate
 	}
-	template = strings.ReplaceAll(template, completionMarkerPlaceholder, strings.TrimSpace(marker))
+	template = strings.ReplaceAll(template, completionMarkerPlaceholder, marker)
 	return &CompletionMarkerEvaluator{
 		completionMarker:        marker,
 		feedbackMessageTemplate: template,
@@ -45,12 +46,11 @@ func (e *CompletionMarkerEvaluator) Evaluate(_ context.Context, loop *Context) (
 	if loop.LastResponse == nil {
 		return Stop(), errors.New("loop: last response cannot be nil")
 	}
-	marker := strings.TrimSpace(e.completionMarker)
-	if marker == "" {
+	if e.completionMarker == "" {
 		return Stop(), errors.New("loop: completion marker cannot be empty")
 	}
 	responseText := loop.LastResponse.String()
-	if strings.HasSuffix(strings.TrimSpace(responseText), marker) {
+	if strings.HasSuffix(strings.TrimSpace(responseText), e.completionMarker) {
 		return Stop(), nil
 	}
 	feedback := strings.ReplaceAll(e.feedbackMessageTemplate, lastResponsePlaceholder, responseText)
