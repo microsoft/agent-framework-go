@@ -300,7 +300,15 @@ func TestCompletionMarkerEvaluator(t *testing.T) {
 		t.Fatal("expected marker to stop the loop")
 	}
 
-	cont, err := evaluator.Evaluate(context.Background(), contextWithResponse("mentioning DONE but still working"))
+	stopMid, err := evaluator.Evaluate(context.Background(), contextWithResponse("mentioning DONE but still working"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stopMid.ShouldReinvoke {
+		t.Fatal("expected marker in middle to stop the loop")
+	}
+
+	cont, err := evaluator.Evaluate(context.Background(), contextWithResponse("still working"))
 	if err != nil {
 		t.Fatal(err)
 	}
