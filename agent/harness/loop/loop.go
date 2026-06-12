@@ -6,6 +6,7 @@ package loop
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"iter"
@@ -51,6 +52,11 @@ type Config struct {
 	// ExcludeOnBehalfOfMessages prevents loop-synthesized feedback messages
 	// from being yielded to the caller. They are still sent to the agent.
 	ExcludeOnBehalfOfMessages bool
+
+	// FreshContextPerIteration restarts each reinvocation from the original
+	// input messages plus an aggregated feedback log, and resets the session
+	// to a pristine snapshot taken before the first iteration.
+	FreshContextPerIteration bool
 }
 
 // Context contains per-run state passed to evaluators.
@@ -157,15 +163,25 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 
 		initialMessages := cloneMessages(messages)
 		currentMessages := cloneMessages(messages)
+		currentOpts := slices.Clone(opts)
+		initialSession, hasSession := agent.GetOption(opts, agent.WithSession)
 		loopCtx := &Context{
 			InitialMessages:      initialMessages,
 			Options:              slices.Clone(opts),
 			AdditionalProperties: make(map[string]any),
 		}
+		if cfg.FreshContextPerIteration && hasSession {
+			clonedSession, err := cloneSession(initialSession)
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+			initialSession = clonedSession
+		}
 
 		for {
 			var resp agent.Response
-			for update, err := range next(ctx, currentMessages, opts...) {
+			for update, err := range next(ctx, currentMessages, currentOpts...) {
 				if update != nil {
 					resp.Update(update)
 				}
@@ -194,10 +210,19 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 				return
 			}
 
-			currentMessages = nextMessages(evaluation, cfg.OnBehalfOfAuthorName)
 			loopCtx.Feedback = append(loopCtx.Feedback, evaluation.Feedback)
+			var surfacedMessages []*message.Message
+			currentMessages, surfacedMessages = nextMessages(cfg, loopCtx, evaluation)
+			if cfg.FreshContextPerIteration && hasSession {
+				nextSession, err := cloneSession(initialSession)
+				if err != nil {
+					yield(nil, err)
+					return
+				}
+				currentOpts = append(slices.Clone(opts), agent.WithSession(nextSession))
+			}
 			if !cfg.ExcludeOnBehalfOfMessages {
-				for i, msg := range currentMessages {
+				for i, msg := range surfacedMessages {
 					if !yield(messageToUpdate(msg, fmt.Sprintf("loop-message-%d-%d", loopCtx.Iteration, i)), nil) {
 						return
 					}
@@ -220,16 +245,26 @@ func evaluate(ctx context.Context, evaluators []Evaluator, loopCtx *Context) (Ev
 	return Stop(), false, nil
 }
 
-func nextMessages(evaluation Evaluation, authorName string) []*message.Message {
+func nextMessages(cfg Config, loopCtx *Context, evaluation Evaluation) (messages []*message.Message, surfaced []*message.Message) {
 	if len(evaluation.Messages) > 0 {
-		return cloneMessages(evaluation.Messages)
+		cloned := cloneMessages(evaluation.Messages)
+		return cloned, cloned
+	}
+	if cfg.FreshContextPerIteration {
+		nextMessages := cloneMessages(loopCtx.InitialMessages)
+		feedbackMessage := aggregatedFeedbackMessage(loopCtx.Feedback, cfg.OnBehalfOfAuthorName)
+		if feedbackMessage == nil {
+			return nextMessages, nil
+		}
+		nextMessages = append(nextMessages, feedbackMessage)
+		return nextMessages, []*message.Message{feedbackMessage}
 	}
 	if evaluation.Feedback == "" {
-		return nil
+		return nil, nil
 	}
 	msg := message.NewText(evaluation.Feedback)
-	msg.AuthorName = authorName
-	return []*message.Message{msg}
+	msg.AuthorName = cfg.OnBehalfOfAuthorName
+	return []*message.Message{msg}, []*message.Message{msg}
 }
 
 func messageToUpdate(msg *message.Message, syntheticID string) *agent.ResponseUpdate {
@@ -264,4 +299,37 @@ func cloneMessages(messages []*message.Message) []*message.Message {
 		out = append(out, msg.Clone())
 	}
 	return out
+}
+
+func cloneSession(session *agent.Session) (*agent.Session, error) {
+	if session == nil {
+		return nil, nil
+	}
+	data, err := json.Marshal(session)
+	if err != nil {
+		return nil, fmt.Errorf("loop: clone session: %w", err)
+	}
+	var cloned agent.Session
+	if err := json.Unmarshal(data, &cloned); err != nil {
+		return nil, fmt.Errorf("loop: clone session: %w", err)
+	}
+	return &cloned, nil
+}
+
+func aggregatedFeedbackMessage(feedback []string, authorName string) *message.Message {
+	var builder strings.Builder
+	builder.WriteString("## Feedback\n")
+	for _, entry := range feedback {
+		if entry == "" {
+			continue
+		}
+		builder.WriteString("\n- ")
+		builder.WriteString(entry)
+	}
+	if builder.Len() == len("## Feedback\n") {
+		return nil
+	}
+	msg := message.NewText(builder.String())
+	msg.AuthorName = authorName
+	return msg
 }

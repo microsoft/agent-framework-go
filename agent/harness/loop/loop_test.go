@@ -196,6 +196,76 @@ func TestLoop_ContinueWithMessages_SeparateMessagesInCollectedResponse(t *testin
 	}
 }
 
+func TestLoop_FreshContextPerIteration_RebuildsFromInitialAndAggregatedFeedback(t *testing.T) {
+	capture := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate {
+		return textUpdates("ack")
+	})
+	a := agent.New(capture.provider(), agent.Config{
+		Middlewares: []agent.Middleware{loop.New(loop.Config{
+			FreshContextPerIteration: true,
+			Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(_ context.Context, ctx *loop.Context) (loop.Evaluation, error) {
+				if ctx.Iteration >= 3 {
+					return loop.Stop(), nil
+				}
+				return loop.Continue("fb " + string(rune('0'+ctx.Iteration))), nil
+			})},
+		})},
+	})
+
+	_, err := a.RunText(context.Background(), "original").Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	secondCall := messageTexts(capture.messagesPerCall[1])
+	if len(secondCall) != 2 || secondCall[0] != "original" {
+		t.Fatalf("second call messages = %v, want original + feedback", secondCall)
+	}
+	if !strings.Contains(secondCall[1], "## Feedback") || !strings.Contains(secondCall[1], "fb 1") {
+		t.Fatalf("second call feedback = %q", secondCall[1])
+	}
+
+	thirdCall := messageTexts(capture.messagesPerCall[2])
+	if len(thirdCall) != 2 || thirdCall[0] != "original" {
+		t.Fatalf("third call messages = %v, want original + feedback", thirdCall)
+	}
+	if !strings.Contains(thirdCall[1], "fb 1") || !strings.Contains(thirdCall[1], "fb 2") {
+		t.Fatalf("third call feedback = %q", thirdCall[1])
+	}
+}
+
+func TestLoop_FreshContextPerIteration_RecreatesSession(t *testing.T) {
+	capture := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate {
+		return textUpdates("ack")
+	})
+	a := agent.New(capture.provider(), agent.Config{
+		Middlewares: []agent.Middleware{loop.New(loop.Config{
+			FreshContextPerIteration: true,
+			MaxIterations:            3,
+			Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(context.Context, *loop.Context) (loop.Evaluation, error) {
+				return loop.Continue("again"), nil
+			})},
+		})},
+	})
+
+	_, err := a.RunText(context.Background(), "go").Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(capture.sessionsPerCall) != 3 {
+		t.Fatalf("sessions = %d, want 3", len(capture.sessionsPerCall))
+	}
+	if capture.sessionsPerCall[0] == nil || capture.sessionsPerCall[1] == nil || capture.sessionsPerCall[2] == nil {
+		t.Fatalf("expected sessions on every call, got %v", capture.sessionsPerCall)
+	}
+	if capture.sessionsPerCall[0] == capture.sessionsPerCall[1] {
+		t.Fatal("first and second call should use different sessions")
+	}
+	if capture.sessionsPerCall[1] == capture.sessionsPerCall[2] {
+		t.Fatal("second and third call should use different sessions")
+	}
+}
+
 func TestLoop_EvaluatorErrorStopsRun(t *testing.T) {
 	wantErr := errors.New("boom")
 	capture := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate {
@@ -268,6 +338,7 @@ type captureAgent struct {
 	run             func(call int, messages []*message.Message) []*agent.ResponseUpdate
 	callCount       int
 	messagesPerCall [][]*message.Message
+	sessionsPerCall []*agent.Session
 }
 
 func newCaptureAgent(run func(call int, messages []*message.Message) []*agent.ResponseUpdate) *captureAgent {
@@ -276,10 +347,12 @@ func newCaptureAgent(run func(call int, messages []*message.Message) []*agent.Re
 
 func (c *captureAgent) provider() agent.ProviderConfig {
 	return agent.ProviderConfig{
-		Run: func(_ context.Context, messages []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		Run: func(_ context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 			return func(yield func(*agent.ResponseUpdate, error) bool) {
 				c.callCount++
 				c.messagesPerCall = append(c.messagesPerCall, cloneMessages(messages))
+				session, _ := agent.GetOption(opts, agent.WithSession)
+				c.sessionsPerCall = append(c.sessionsPerCall, session)
 				for _, update := range c.run(c.callCount, messages) {
 					if !yield(update, nil) {
 						return
