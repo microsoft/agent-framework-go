@@ -162,25 +162,7 @@ func (resp *Response) Update(update *ResponseUpdate) {
 	if update == nil {
 		return
 	}
-	// If there is no message created yet, or if the last update we saw had a different
-	// identifying parts, create a new message.
-	isNewMessage := true
-	if len(resp.Messages) > 0 {
-		lastMsg := resp.Messages[len(resp.Messages)-1]
-		isNewMessage = notEmptyNorEqual(update.AuthorName, lastMsg.AuthorName) ||
-			notEmptyNorEqual(update.MessageID, lastMsg.ID) ||
-			notEmptyNorEqual(string(update.Role), string(lastMsg.Role))
-	}
-	// Get the message to target, either a new one or the last ones.
-	var msg *message.Message
-	if isNewMessage {
-		msg = &message.Message{
-			Role: message.RoleAssistant,
-		}
-		resp.Messages = append(resp.Messages, msg)
-	} else {
-		msg = resp.Messages[len(resp.Messages)-1]
-	}
+	msg := resp.targetMessage(update)
 	// Some members on ResponseUpdate map to members of Message.
 	// Incorporate those into the latest message; in cases where the message
 	// stores a single value, prefer the latest update's value over anything
@@ -225,6 +207,27 @@ func (resp *Response) Update(update *ResponseUpdate) {
 		}
 		maps.Copy(resp.AdditionalProperties, update.AdditionalProperties)
 	}
+}
+
+func (resp *Response) targetMessage(update *ResponseUpdate) *message.Message {
+	if len(resp.Messages) > 0 {
+		lastMsg := resp.Messages[len(resp.Messages)-1]
+		if !isDifferentMessage(update, lastMsg) {
+			return lastMsg
+		}
+	}
+
+	msg := &message.Message{
+		Role: message.RoleAssistant,
+	}
+	resp.Messages = append(resp.Messages, msg)
+	return msg
+}
+
+func isDifferentMessage(update *ResponseUpdate, msg *message.Message) bool {
+	return notEmptyNorEqual(update.AuthorName, msg.AuthorName) ||
+		notEmptyNorEqual(update.MessageID, msg.ID) ||
+		notEmptyNorEqual(string(update.Role), string(msg.Role))
 }
 
 // notEmptyNorEqual returns true if both strings are not empty and not the same as each other.
