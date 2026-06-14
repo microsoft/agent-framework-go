@@ -97,7 +97,7 @@ type StateUpdate struct {
 
 // UpdateStateUpdate creates an update operation.
 func UpdateStateUpdate(key string, value any) StateUpdate {
-	return StateUpdate{Key: key, Value: value, IsDelete: false}
+	return StateUpdate{Key: key, Value: value, IsDelete: value == nil}
 }
 
 // DeleteStateUpdate creates a delete operation.

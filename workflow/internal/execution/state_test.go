@@ -15,6 +15,13 @@ func mustSucceed(t *testing.T, err error) {
 	}
 }
 
+func TestUpdateStateUpdateNilValueIsDelete(t *testing.T) {
+	update := UpdateStateUpdate("key", nil)
+	if !update.IsDelete {
+		t.Fatal("nil state update should be marked as delete")
+	}
+}
+
 func TestScopeSharedScope_ReadKeys(t *testing.T) {
 	scopeName := "sharedScope"
 	runScopeKeysTest(t, scopeName, true)
