@@ -179,9 +179,18 @@ func sendMsg(session *agent.Session, seq iter.Seq2[a2a.Event, error], yield func
 				return
 			}
 		case *a2a.TaskStatusUpdateEvent:
-			messageID := string(e.TaskID)
+			var (
+				messageID string
+				contents  []message.Content
+			)
 			if e.Status.Message != nil {
 				messageID = e.Status.Message.ID
+				var err error
+				contents, err = partsToContents(e.Status.Message.Parts, nil)
+				if err != nil {
+					yield(nil, err)
+					return
+				}
 			}
 			if !yield(&agent.ResponseUpdate{
 				RawRepresentation:    e,
@@ -189,6 +198,7 @@ func sendMsg(session *agent.Session, seq iter.Seq2[a2a.Event, error], yield func
 				MessageID:            messageID,
 				ResponseID:           string(e.TaskID),
 				Role:                 message.RoleAssistant,
+				Contents:             contents,
 				CreatedAt:            time.Now(),
 			}, nil) {
 				return

@@ -547,6 +547,80 @@ func TestRunStreamingWithSessionHavingDifferentContextID(t *testing.T) {
 	}
 }
 
+func TestRunStreamingWithTaskStatusUpdateAndMessageIDYieldsMessageID(t *testing.T) {
+	transport := &mockA2ATransport{
+		streamingResponseToReturn: &a2a.TaskStatusUpdateEvent{
+			TaskID:    "task-status-msg-123",
+			ContextID: "ctx-status-msg-456",
+			Status: a2a.TaskStatus{
+				State: a2a.TaskStateWorking,
+				Message: &a2a.Message{
+					ID:    "msg-status-789",
+					Parts: a2a.ContentParts{a2a.NewTextPart("Processing your request...")},
+				},
+			},
+		},
+	}
+	a := newTestAgent(transport, agent.Config{})
+
+	var updates []*agent.ResponseUpdate
+	for update, err := range a.RunText(t.Context(), "Check task status", agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("error = %v, want nil", err)
+		}
+		updates = append(updates, update)
+	}
+
+	if len(updates) != 1 {
+		t.Fatalf("len(updates) = %d, want 1", len(updates))
+	}
+	update := updates[0]
+	if update.MessageID != "msg-status-789" {
+		t.Errorf("update.MessageID = %q, want %q", update.MessageID, "msg-status-789")
+	}
+	if update.ResponseID != "task-status-msg-123" {
+		t.Errorf("update.ResponseID = %q, want %q", update.ResponseID, "task-status-msg-123")
+	}
+	if got := update.String(); got != "Processing your request..." {
+		t.Errorf("update.String() = %q, want %q", got, "Processing your request...")
+	}
+	if _, ok := update.RawRepresentation.(*a2a.TaskStatusUpdateEvent); !ok {
+		t.Errorf("update.RawRepresentation type = %T, want *a2a.TaskStatusUpdateEvent", update.RawRepresentation)
+	}
+}
+
+func TestRunStreamingWithTaskStatusUpdateWithoutMessageLeavesMessageIDEmpty(t *testing.T) {
+	transport := &mockA2ATransport{
+		streamingResponseToReturn: &a2a.TaskStatusUpdateEvent{
+			TaskID:    "task-status-123",
+			ContextID: "ctx-status-456",
+			Status: a2a.TaskStatus{
+				State: a2a.TaskStateWorking,
+			},
+		},
+	}
+	a := newTestAgent(transport, agent.Config{})
+
+	var updates []*agent.ResponseUpdate
+	for update, err := range a.RunText(t.Context(), "Check task status", agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("error = %v, want nil", err)
+		}
+		updates = append(updates, update)
+	}
+
+	if len(updates) != 1 {
+		t.Fatalf("len(updates) = %d, want 1", len(updates))
+	}
+	update := updates[0]
+	if update.MessageID != "" {
+		t.Errorf("update.MessageID = %q, want empty", update.MessageID)
+	}
+	if update.ResponseID != "task-status-123" {
+		t.Errorf("update.ResponseID = %q, want %q", update.ResponseID, "task-status-123")
+	}
+}
+
 // TestRunStreamingAllowsNonUserRoleMessages tests that streaming allows non-user messages
 func TestRunStreamingAllowsNonUserRoleMessages(t *testing.T) {
 	transport := &mockA2ATransport{
