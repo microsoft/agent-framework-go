@@ -114,6 +114,10 @@ func (c *Context) IsEnabled() bool {
 	return c != nil && c.enabled
 }
 
+func (c *Context) activityEnabled(disabled bool) bool {
+	return c.IsEnabled() && !disabled
+}
+
 func (c *Context) optionsOrZero() Options {
 	if c == nil {
 		return Options{}
@@ -182,14 +186,14 @@ func (c *Context) start(ctx context.Context, name string, options workflowobserv
 }
 
 func (c *Context) StartWorkflowBuild(ctx context.Context) (context.Context, *Activity) {
-	if c.optionsOrZero().DisableWorkflowBuild {
+	if !c.activityEnabled(c.optionsOrZero().DisableWorkflowBuild) {
 		return ctx, nil
 	}
 	return c.start(ctx, ActivityWorkflowBuild, workflowobservability.SpanOptions{})
 }
 
 func (c *Context) StartWorkflowSession(ctx context.Context, metadata WorkflowMetadata) (context.Context, *Activity) {
-	if c.optionsOrZero().DisableWorkflowRun {
+	if !c.activityEnabled(c.optionsOrZero().DisableWorkflowRun) {
 		return ctx, nil
 	}
 	ctx, span := c.start(ctx, ActivityWorkflowSession, workflowobservability.SpanOptions{})
@@ -199,7 +203,7 @@ func (c *Context) StartWorkflowSession(ctx context.Context, metadata WorkflowMet
 }
 
 func (c *Context) StartWorkflowRun(ctx context.Context, metadata WorkflowMetadata) (context.Context, *Activity) {
-	if c.optionsOrZero().DisableWorkflowRun {
+	if !c.activityEnabled(c.optionsOrZero().DisableWorkflowRun) {
 		return ctx, nil
 	}
 	ctx, span := c.start(ctx, ActivityWorkflowInvoke, workflowobservability.SpanOptions{})
@@ -208,7 +212,7 @@ func (c *Context) StartWorkflowRun(ctx context.Context, metadata WorkflowMetadat
 }
 
 func (c *Context) StartExecutorProcess(ctx context.Context, executorID, implementationID, messageType string, message any, traceContext map[string]string) (context.Context, *Activity) {
-	if c.optionsOrZero().DisableExecutorProcess {
+	if !c.activityEnabled(c.optionsOrZero().DisableExecutorProcess) {
 		return ctx, nil
 	}
 	ctx, span := c.start(ctx, ActivityExecutorProcess+" "+executorID, workflowobservability.SpanOptions{SourceTraceContext: traceContext})
@@ -230,7 +234,7 @@ func (c *Context) SetExecutorOutput(span *Activity, output any) {
 }
 
 func (c *Context) StartEdgeGroupProcess(ctx context.Context, metadata EdgeGroupMetadata) (context.Context, *Activity) {
-	if c.optionsOrZero().DisableEdgeGroupProcess {
+	if !c.activityEnabled(c.optionsOrZero().DisableEdgeGroupProcess) {
 		return ctx, nil
 	}
 	ctx, span := c.start(ctx, ActivityEdgeGroupProcess, workflowobservability.SpanOptions{})
@@ -249,7 +253,7 @@ func (c *Context) StartEdgeGroupProcess(ctx context.Context, metadata EdgeGroupM
 }
 
 func (c *Context) StartMessageSend(ctx context.Context, sourceID, targetID string, message any) (context.Context, *Activity) {
-	if c.optionsOrZero().DisableMessageSend {
+	if !c.activityEnabled(c.optionsOrZero().DisableMessageSend) {
 		return ctx, nil
 	}
 	ctx, span := c.start(ctx, ActivityMessageSend, workflowobservability.SpanOptions{Kind: workflowobservability.SpanKindProducer})
