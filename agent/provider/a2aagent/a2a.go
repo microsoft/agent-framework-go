@@ -185,11 +185,13 @@ func sendMsg(session *agent.Session, seq iter.Seq2[a2a.Event, error], yield func
 			)
 			if e.Status.Message != nil {
 				messageID = e.Status.Message.ID
-				var err error
-				contents, err = partsToContents(e.Status.Message.Parts, nil)
-				if err != nil {
-					yield(nil, err)
-					return
+				if e.Status.State == a2a.TaskStateInputRequired || e.Status.State.Terminal() {
+					var err error
+					contents, err = partsToContents(e.Status.Message.Parts, nil)
+					if err != nil {
+						yield(nil, err)
+						return
+					}
 				}
 			}
 			if !yield(&agent.ResponseUpdate{

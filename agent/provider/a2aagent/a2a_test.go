@@ -1343,59 +1343,108 @@ func TestRunStreamingWithTaskStatusUpdateEvent(t *testing.T) {
 
 // TestRunStreamingWithTaskStatusUpdateEvent_WithMessage tests that MessageID is populated
 // from Status.Message.ID when the status update contains a message, aligning with the .NET
-// fix in microsoft/agent-framework#6043.
+// fix in microsoft/agent-framework#6043. Contents are only populated for InputRequired or
+// terminal states.
 func TestRunStreamingWithTaskStatusUpdateEvent_WithMessage(t *testing.T) {
 	const taskID = "task-status-msg-123"
 	const contextID = "ctx-status-msg-456"
 	const msgID = "msg-abc-789"
 	const msgText = "Processing your request..."
 
-	transport := &mockA2ATransport{
-		streamingResponseToReturn: &a2a.TaskStatusUpdateEvent{
-			TaskID:    a2a.TaskID(taskID),
-			ContextID: contextID,
-			Status: a2a.TaskStatus{
-				State: a2a.TaskStateWorking,
-				Message: &a2a.Message{
-					ID:    msgID,
-					Role:  a2a.MessageRoleAgent,
-					Parts: a2a.ContentParts{a2a.NewTextPart(msgText)},
+	t.Run("InputRequired_populatesContents", func(t *testing.T) {
+		transport := &mockA2ATransport{
+			streamingResponseToReturn: &a2a.TaskStatusUpdateEvent{
+				TaskID:    a2a.TaskID(taskID),
+				ContextID: contextID,
+				Status: a2a.TaskStatus{
+					State: a2a.TaskStateInputRequired,
+					Message: &a2a.Message{
+						ID:    msgID,
+						Role:  a2a.MessageRoleAgent,
+						Parts: a2a.ContentParts{a2a.NewTextPart(msgText)},
+					},
 				},
 			},
-		},
-	}
-	a := newTestAgent(transport, agent.Config{})
-
-	session, err := a.CreateSession(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var updates []*agent.ResponseUpdate
-	for update, err := range a.RunText(t.Context(), "Check task status", agent.WithSession(session), agent.Stream(true)) {
-		if err != nil {
-			t.Fatalf("error = %v, want nil", err)
 		}
-		updates = append(updates, update)
-	}
+		a := newTestAgent(transport, agent.Config{})
 
-	if len(updates) != 1 {
-		t.Fatalf("len(updates) = %d, want 1", len(updates))
-	}
+		session, err := a.CreateSession(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
 
-	update := updates[0]
-	if update.MessageID != msgID {
-		t.Errorf("update.MessageID = %q, want %q (from Status.Message.ID)", update.MessageID, msgID)
-	}
-	if update.ResponseID != taskID {
-		t.Errorf("update.ResponseID = %q, want %q", update.ResponseID, taskID)
-	}
-	if got := update.String(); got != msgText {
-		t.Errorf("update.String() = %q, want %q", got, msgText)
-	}
-	if _, ok := update.RawRepresentation.(*a2a.TaskStatusUpdateEvent); !ok {
-		t.Errorf("update.RawRepresentation type = %T, want *a2a.TaskStatusUpdateEvent", update.RawRepresentation)
-	}
+		var updates []*agent.ResponseUpdate
+		for update, err := range a.RunText(t.Context(), "Check task status", agent.WithSession(session), agent.Stream(true)) {
+			if err != nil {
+				t.Fatalf("error = %v, want nil", err)
+			}
+			updates = append(updates, update)
+		}
+
+		if len(updates) != 1 {
+			t.Fatalf("len(updates) = %d, want 1", len(updates))
+		}
+
+		update := updates[0]
+		if update.MessageID != msgID {
+			t.Errorf("update.MessageID = %q, want %q (from Status.Message.ID)", update.MessageID, msgID)
+		}
+		if update.ResponseID != taskID {
+			t.Errorf("update.ResponseID = %q, want %q", update.ResponseID, taskID)
+		}
+		if got := update.String(); got != msgText {
+			t.Errorf("update.String() = %q, want %q", got, msgText)
+		}
+		if _, ok := update.RawRepresentation.(*a2a.TaskStatusUpdateEvent); !ok {
+			t.Errorf("update.RawRepresentation type = %T, want *a2a.TaskStatusUpdateEvent", update.RawRepresentation)
+		}
+	})
+
+	t.Run("Working_doesNotPopulateContents", func(t *testing.T) {
+		transport := &mockA2ATransport{
+			streamingResponseToReturn: &a2a.TaskStatusUpdateEvent{
+				TaskID:    a2a.TaskID(taskID),
+				ContextID: contextID,
+				Status: a2a.TaskStatus{
+					State: a2a.TaskStateWorking,
+					Message: &a2a.Message{
+						ID:    msgID,
+						Role:  a2a.MessageRoleAgent,
+						Parts: a2a.ContentParts{a2a.NewTextPart(msgText)},
+					},
+				},
+			},
+		}
+		a := newTestAgent(transport, agent.Config{})
+
+		session, err := a.CreateSession(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var updates []*agent.ResponseUpdate
+		for update, err := range a.RunText(t.Context(), "Check task status", agent.WithSession(session), agent.Stream(true)) {
+			if err != nil {
+				t.Fatalf("error = %v, want nil", err)
+			}
+			updates = append(updates, update)
+		}
+
+		if len(updates) != 1 {
+			t.Fatalf("len(updates) = %d, want 1", len(updates))
+		}
+
+		update := updates[0]
+		if update.MessageID != msgID {
+			t.Errorf("update.MessageID = %q, want %q (from Status.Message.ID)", update.MessageID, msgID)
+		}
+		if len(update.Contents) != 0 {
+			t.Errorf("update.Contents = %v, want empty (Working state should not populate contents)", update.Contents)
+		}
+		if got := update.String(); got != "" {
+			t.Errorf("update.String() = %q, want empty (Working state should not populate contents)", got)
+		}
+	})
 }
 
 // TestRunStreamingWithTaskArtifactUpdateEvent tests handling of TaskArtifactUpdateEvent
