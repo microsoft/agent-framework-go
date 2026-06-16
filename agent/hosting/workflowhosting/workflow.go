@@ -23,10 +23,10 @@ import (
 )
 
 const (
-	agentHostStateKey        = "AIAgentHostState"
-	agentBufferedStateKey    = "AIAgentHostExecutor.State"
-	pendingApprovalsStateKey = "_userInputHandler_PendingRequests"
-	pendingCallsStateKey     = "_functionCallHandler_PendingRequests"
+	agentHostStateKey     = "AIAgentHostState"
+	agentBufferedStateKey = "AIAgentHostExecutor.State"
+	userInputHandlerID    = "_userInputHandler"
+	functionCallHandlerID = "_functionCallHandler"
 )
 
 var invalidDescriptiveIDChars = regexp.MustCompile(`[^0-9A-Za-z]+`)
@@ -166,20 +166,20 @@ func newHostExecutor(a *agent.Agent, cfg Config) *hostExecutor {
 		messageState: messageworkflow.NewMessageState(agentBufferedStateKey, ""),
 	}
 	h.approvalHandler = contentexthandler.New(contentexthandler.Options[*message.ToolApprovalRequestContent, *message.ToolApprovalResponseContent]{
-		Port:            userInputPort,
-		StateKey:        pendingApprovalsStateKey,
-		Intercepted:     cfg.InterceptUserInputRequests,
-		RequestID:       func(req *message.ToolApprovalRequestContent) string { return req.RequestID },
-		ResponseID:      func(resp *message.ToolApprovalResponseContent) string { return resp.RequestID },
-		ResponseHandler: h.handleApprovalResponse,
+		Port:              userInputPort,
+		PendingRequestsID: userInputHandlerID,
+		Intercepted:       cfg.InterceptUserInputRequests,
+		RequestID:         func(req *message.ToolApprovalRequestContent) string { return req.RequestID },
+		ResponseID:        func(resp *message.ToolApprovalResponseContent) string { return resp.RequestID },
+		ResponseHandler:   h.handleApprovalResponse,
 	})
 	h.callHandler = contentexthandler.New(contentexthandler.Options[*message.FunctionCallContent, *message.FunctionResultContent]{
-		Port:            functionCallPort,
-		StateKey:        pendingCallsStateKey,
-		Intercepted:     cfg.InterceptUnterminatedFunctionCalls,
-		RequestID:       func(req *message.FunctionCallContent) string { return req.CallID },
-		ResponseID:      func(resp *message.FunctionResultContent) string { return resp.CallID },
-		ResponseHandler: h.handleFunctionResult,
+		Port:              functionCallPort,
+		PendingRequestsID: functionCallHandlerID,
+		Intercepted:       cfg.InterceptUnterminatedFunctionCalls,
+		RequestID:         func(req *message.FunctionCallContent) string { return req.CallID },
+		ResponseID:        func(resp *message.FunctionResultContent) string { return resp.CallID },
+		ResponseHandler:   h.handleFunctionResult,
 	})
 	return h
 }

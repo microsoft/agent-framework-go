@@ -12,6 +12,12 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow"
 )
 
+const pendingRequestsStateSuffix = "_PendingRequests"
+
+func makePendingRequestsStateKey(id string) string {
+	return id + pendingRequestsStateSuffix
+}
+
 type Handler[TRequest any, TResponse any] struct {
 	port        workflow.RequestPort
 	intercepted bool
@@ -24,19 +30,19 @@ type Handler[TRequest any, TResponse any] struct {
 }
 
 type Options[TRequest any, TResponse any] struct {
-	Port            workflow.RequestPort
-	StateKey        string
-	Intercepted     bool
-	RequestID       func(TRequest) string
-	ResponseID      func(TResponse) string
-	ResponseHandler func(*workflow.Context, TResponse) error
+	Port              workflow.RequestPort
+	PendingRequestsID string
+	Intercepted       bool
+	RequestID         func(TRequest) string
+	ResponseID        func(TResponse) string
+	ResponseHandler   func(*workflow.Context, TResponse) error
 }
 
 func New[TRequest any, TResponse any](options Options[TRequest, TResponse]) *Handler[TRequest, TResponse] {
 	return &Handler[TRequest, TResponse]{
 		port:            options.Port,
 		intercepted:     options.Intercepted,
-		stateKey:        options.StateKey,
+		stateKey:        makePendingRequestsStateKey(options.PendingRequestsID),
 		requestID:       options.RequestID,
 		responseID:      options.ResponseID,
 		responseHandler: options.ResponseHandler,
