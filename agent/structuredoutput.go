@@ -49,6 +49,7 @@ func (m *structuredOutputMiddleware) Run(next RunFunc, ctx context.Context, mess
 			}
 			if !sawUpdate || current.isDifferent(update) {
 				data = data[:0]
+				current = structuredOutputMessageKey{}
 				sawUpdate = true
 			}
 			data = append(data, update.String()...)

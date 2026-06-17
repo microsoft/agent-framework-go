@@ -219,6 +219,60 @@ func TestAgent_StructuredOutput_UsesLastMessageOnly(t *testing.T) {
 	}
 }
 
+func TestAgent_StructuredOutput_NewMessageChunksNotMistakenForDifferentMessage(t *testing.T) {
+	// When a new message starts with only some key fields set (e.g. ResponseID only),
+	// subsequent chunks that introduce additional key fields (e.g. MessageID) must NOT
+	// be treated as a new/different message. Without resetting current on message
+	// boundary, stale key values from the previous message would cause isDifferent to
+	// return true mid-message, clearing data and breaking JSON unmarshalling.
+	a := newStructuredOutputTestAgent(
+		func(v any) (agent.ResponseFormat, error) {
+			return agent.ResponseFormat{Kind: "json"}, nil
+		},
+		func(format agent.ResponseFormat, data []byte, v any) error {
+			return json.Unmarshal(data, v)
+		},
+		func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			return func(yield func(*agent.ResponseUpdate, error) bool) {
+				// First message: both ResponseID and MessageID are set.
+				if !yield(&agent.ResponseUpdate{
+					ResponseID: "response-1",
+					MessageID:  "message-1",
+					Contents:   message.Contents{&message.TextContent{Text: "ignore this"}},
+				}, nil) {
+					return
+				}
+				// Second message starts: only ResponseID changes, MessageID is absent.
+				if !yield(&agent.ResponseUpdate{
+					ResponseID: "response-2",
+					Contents:   message.Contents{&message.TextContent{Text: `{"name":`}},
+				}, nil) {
+					return
+				}
+				// Second message continues: now MessageID appears for the first time.
+				// Without the fix, isDifferent compares "message-2" against "message-1"
+				// (stale from the first message) and wrongly resets data.
+				yield(&agent.ResponseUpdate{
+					ResponseID: "response-2",
+					MessageID:  "message-2",
+					Contents:   message.Contents{&message.TextContent{Text: `"Henry"}`}},
+				}, nil)
+			}
+		},
+	)
+
+	output := &struct {
+		Name string `json:"name"`
+	}{}
+	_, err := a.Run(context.Background(), nil, agent.WithStructuredOutput(output)).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if output.Name != "Henry" {
+		t.Fatalf("expected Name Henry, got %q", output.Name)
+	}
+}
+
 func TestAgent_StructuredOutput_UnmarshalError(t *testing.T) {
 	expectedErr := errors.New("unmarshal failed")
 	a := newStructuredOutputTestAgent(
