@@ -174,6 +174,51 @@ func TestAgent_StructuredOutput_SuccessfulUnmarshal(t *testing.T) {
 	}
 }
 
+func TestAgent_StructuredOutput_UsesLastMessageOnly(t *testing.T) {
+	a := newStructuredOutputTestAgent(
+		func(v any) (agent.ResponseFormat, error) {
+			return agent.ResponseFormat{Kind: "json"}, nil
+		},
+		func(format agent.ResponseFormat, data []byte, v any) error {
+			return json.Unmarshal(data, v)
+		},
+		func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			return func(yield func(*agent.ResponseUpdate, error) bool) {
+				if !yield(&agent.ResponseUpdate{
+					ResponseID: "response-1",
+					MessageID:  "message-1",
+					Contents:   message.Contents{&message.TextContent{Text: "intermediate text"}},
+				}, nil) {
+					return
+				}
+				if !yield(&agent.ResponseUpdate{
+					ResponseID: "response-1",
+					MessageID:  "message-2",
+					Contents:   message.Contents{&message.TextContent{Text: `{"name":`}},
+				}, nil) {
+					return
+				}
+				yield(&agent.ResponseUpdate{
+					ResponseID: "response-1",
+					MessageID:  "message-2",
+					Contents:   message.Contents{&message.TextContent{Text: `"Grace"}`}},
+				}, nil)
+			}
+		},
+	)
+
+	output := &struct {
+		Name string `json:"name"`
+	}{}
+	_, err := a.Run(context.Background(), nil, agent.WithStructuredOutput(output)).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if output.Name != "Grace" {
+		t.Fatalf("expected Name Grace, got %q", output.Name)
+	}
+}
+
 func TestAgent_StructuredOutput_UnmarshalError(t *testing.T) {
 	expectedErr := errors.New("unmarshal failed")
 	a := newStructuredOutputTestAgent(
