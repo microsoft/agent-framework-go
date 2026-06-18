@@ -94,7 +94,8 @@ func (s *ContextWindowStrategy) Compact(ctx context.Context, index *MessageIndex
 }
 
 func validateContextWindowThreshold(name string, value float64) error {
-	if value <= 0 || value > 1 {
+	// Note: NaN comparisons are always false, so we must check it explicitly.
+	if value != value || value <= 0 || value > 1 {
 		return fmt.Errorf("compaction: ContextWindowStrategy.%s must be in (0, 1], got %g", name, value)
 	}
 	return nil
