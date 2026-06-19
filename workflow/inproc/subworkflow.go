@@ -101,7 +101,7 @@ func (h *subworkflowHostExecutor) attachRuntime(runtime any) error {
 	return nil
 }
 
-func (h *subworkflowHostExecutor) ensureRunner(ctx *workflow.Context) (*runner, error) {
+func (h *subworkflowHostExecutor) ensureRunner() (*runner, error) {
 	if h.runner != nil {
 		return h.runner, nil
 	}
@@ -160,7 +160,7 @@ func (h *subworkflowHostExecutor) ensureRunSendMessage(ctx *workflow.Context, in
 		return h.run, nil
 	}
 
-	runner, err := h.ensureRunner(ctx)
+	runner, err := h.ensureRunner()
 	if err != nil {
 		return nil, err
 	}
