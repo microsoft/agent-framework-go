@@ -9,8 +9,8 @@ import (
 	"slices"
 
 	"github.com/microsoft/agent-framework-go/workflow"
-	pcheckpoint "github.com/microsoft/agent-framework-go/workflow/checkpoint"
-	"github.com/microsoft/agent-framework-go/workflow/internal/checkpoint"
+	"github.com/microsoft/agent-framework-go/workflow/checkpoint"
+	internalcheckpoint "github.com/microsoft/agent-framework-go/workflow/internal/checkpoint"
 	"github.com/microsoft/agent-framework-go/workflow/internal/execution"
 )
 
@@ -27,10 +27,6 @@ var (
 	// Lockstep is an environment which will run steps in the event watching tread,
 	// accumulating events during each step and streaming them out after each step is completed.
 	Lockstep = newExecutionEnvironment(execution.ModeLockstep, false, nil)
-
-	// Subworkflow is an environment which will not run steps directly, relying instead
-	// on the hosting workflow to run them directly, while streaming events out as they are raised.
-	Subworkflow = newExecutionEnvironment(execution.ModeSubworkflow, false, nil)
 )
 
 // ExecutionEnvironment provides an in-process workflow execution environment
@@ -38,10 +34,10 @@ var (
 type ExecutionEnvironment struct {
 	executionMode        execution.Mode
 	enableConcurrentRuns bool
-	checkpointManager    checkpoint.Manager
+	checkpointManager    internalcheckpoint.Manager
 }
 
-func newExecutionEnvironment(mode execution.Mode, enableConcurrentRuns bool, checkpointManager checkpoint.Manager) *ExecutionEnvironment {
+func newExecutionEnvironment(mode execution.Mode, enableConcurrentRuns bool, checkpointManager internalcheckpoint.Manager) *ExecutionEnvironment {
 	return &ExecutionEnvironment{
 		executionMode:        mode,
 		enableConcurrentRuns: enableConcurrentRuns,
@@ -51,11 +47,11 @@ func newExecutionEnvironment(mode execution.Mode, enableConcurrentRuns bool, che
 
 // WithCheckpointing returns a new execution environment configured with
 // the given [checkpoint.Manager].
-func (e *ExecutionEnvironment) WithCheckpointing(mgr pcheckpoint.Manager) *ExecutionEnvironment {
+func (e *ExecutionEnvironment) WithCheckpointing(mgr checkpoint.Manager) *ExecutionEnvironment {
 	if mgr == nil {
 		return newExecutionEnvironment(e.executionMode, e.enableConcurrentRuns, nil)
 	}
-	return newExecutionEnvironment(e.executionMode, e.enableConcurrentRuns, mgr.(checkpoint.Manager))
+	return newExecutionEnvironment(e.executionMode, e.enableConcurrentRuns, mgr.(internalcheckpoint.Manager))
 }
 
 // IsCheckpointingEnabled reports whether checkpointing is configured for

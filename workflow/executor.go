@@ -55,8 +55,15 @@ type Executor struct {
 	// Initialize is called when the executor instance is created for a run.
 	InitializeFunc func(ctx *Context) error
 
+	// AttachRuntimeFunc is called by an execution environment to attach
+	// runtime-specific capabilities to this executor instance before Initialize.
+	AttachRuntimeFunc func(runtime any) error
+
 	// Reset clears any executor-local cached state before an instance is reused.
 	ResetFunc func() error
+
+	// Close releases executor-local resources when a workflow run ends.
+	CloseFunc func(ctx context.Context) error
 
 	// OnCheckpoint is called before workflow state is checkpointed.
 	OnCheckpointFunc func(ctx *Context) error
@@ -124,7 +131,9 @@ func (e *Executor) Extend(executor *Executor) *Executor {
 	e.DisableAutoYieldOutputHandlerResultObject = e.DisableAutoYieldOutputHandlerResultObject || executor.DisableAutoYieldOutputHandlerResultObject
 	e.ConfigureProtocol = extendProtocol(e.ConfigureProtocol, executor.ConfigureProtocol)
 	e.InitializeFunc = extendContextHook(e.InitializeFunc, executor.InitializeFunc)
+	e.AttachRuntimeFunc = extendRuntimeHook(e.AttachRuntimeFunc, executor.AttachRuntimeFunc)
 	e.ResetFunc = extendResetHook(e.ResetFunc, executor.ResetFunc)
+	e.CloseFunc = extendCloseHook(e.CloseFunc, executor.CloseFunc)
 	e.OnCheckpointFunc = extendContextHook(e.OnCheckpointFunc, executor.OnCheckpointFunc)
 	e.OnCheckpointRestoredFunc = extendContextHook(e.OnCheckpointRestoredFunc, executor.OnCheckpointRestoredFunc)
 	e.OnMessageDeliveryStartingFunc = extendContextHook(e.OnMessageDeliveryStartingFunc, executor.OnMessageDeliveryStartingFunc)
@@ -174,6 +183,21 @@ func extendContextHook(first, second func(*Context) error) func(*Context) error 
 	}
 }
 
+func extendRuntimeHook(first, second func(any) error) func(any) error {
+	if first == nil {
+		return second
+	}
+	if second == nil {
+		return first
+	}
+	return func(runtime any) error {
+		if err := first(runtime); err != nil {
+			return err
+		}
+		return second(runtime)
+	}
+}
+
 func extendResetHook(first, second func() error) func() error {
 	if first == nil {
 		return second
@@ -186,6 +210,21 @@ func extendResetHook(first, second func() error) func() error {
 			return err
 		}
 		return second()
+	}
+}
+
+func extendCloseHook(first, second func(context.Context) error) func(context.Context) error {
+	if first == nil {
+		return second
+	}
+	if second == nil {
+		return first
+	}
+	return func(ctx context.Context) error {
+		if err := first(ctx); err != nil {
+			return err
+		}
+		return second(ctx)
 	}
 }
 
@@ -208,7 +247,9 @@ func extendFinishedHook(first, second func(*Context) error) func(*Context) error
 func (e *Executor) isConfigured() bool {
 	return e.ConfigureProtocol != nil ||
 		e.InitializeFunc != nil ||
+		e.AttachRuntimeFunc != nil ||
 		e.ResetFunc != nil ||
+		e.CloseFunc != nil ||
 		e.OnCheckpointFunc != nil ||
 		e.OnCheckpointRestoredFunc != nil ||
 		e.OnMessageDeliveryStartingFunc != nil ||
@@ -228,6 +269,13 @@ func (e *Executor) implementationID() string {
 func (e *Executor) Initialize(ctx *Context) error {
 	if e.InitializeFunc != nil {
 		return e.InitializeFunc(ctx)
+	}
+	return nil
+}
+
+func (e *Executor) AttachRuntime(runtime any) error {
+	if e.AttachRuntimeFunc != nil {
+		return e.AttachRuntimeFunc(runtime)
 	}
 	return nil
 }
@@ -268,6 +316,13 @@ func (e *Executor) OnMessageDeliveryFinished(ctx *Context) error {
 func (e *Executor) Reset() error {
 	if e.ResetFunc != nil {
 		return e.ResetFunc()
+	}
+	return nil
+}
+
+func (e *Executor) Close(ctx context.Context) error {
+	if e.CloseFunc != nil {
+		return e.CloseFunc(ctx)
 	}
 	return nil
 }

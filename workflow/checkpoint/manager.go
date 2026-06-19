@@ -9,7 +9,7 @@ import (
 	"slices"
 
 	"github.com/microsoft/agent-framework-go/workflow"
-	internalcheckpoint "github.com/microsoft/agent-framework-go/workflow/internal/checkpoint"
+	"github.com/microsoft/agent-framework-go/workflow/internal/checkpoint"
 )
 
 // A Manager for storing and retrieving workflow execution checkpoints.
@@ -33,24 +33,24 @@ func NewJSONManager(store Store[json.RawMessage]) Manager {
 }
 
 type inMemoryManager struct {
-	Store map[string]*internalcheckpoint.SessionCache[*internalcheckpoint.Checkpoint]
+	Store map[string]*checkpoint.SessionCache[*checkpoint.Checkpoint]
 }
 
 func (s *inMemoryManager) internal() {}
 
-func (s *inMemoryManager) sessionStore(sessionID string) *internalcheckpoint.SessionCache[*internalcheckpoint.Checkpoint] {
+func (s *inMemoryManager) sessionStore(sessionID string) *checkpoint.SessionCache[*checkpoint.Checkpoint] {
 	if s.Store == nil {
-		s.Store = make(map[string]*internalcheckpoint.SessionCache[*internalcheckpoint.Checkpoint])
+		s.Store = make(map[string]*checkpoint.SessionCache[*checkpoint.Checkpoint])
 	}
 	store, ok := s.Store[sessionID]
 	if !ok {
-		store = &internalcheckpoint.SessionCache[*internalcheckpoint.Checkpoint]{}
+		store = &checkpoint.SessionCache[*checkpoint.Checkpoint]{}
 		s.Store[sessionID] = store
 	}
 	return store
 }
 
-func (s *inMemoryManager) Commit(_ context.Context, sessionID string, checkpoint *internalcheckpoint.Checkpoint) (workflow.CheckpointInfo, error) {
+func (s *inMemoryManager) Commit(_ context.Context, sessionID string, checkpoint *checkpoint.Checkpoint) (workflow.CheckpointInfo, error) {
 	if sessionID == "" {
 		return workflow.CheckpointInfo{}, fmt.Errorf("checkpoint: sessionID cannot be empty")
 	}
@@ -65,7 +65,7 @@ func (s *inMemoryManager) Commit(_ context.Context, sessionID string, checkpoint
 	return store.Add(sessionID, checkpoint), nil
 }
 
-func (s *inMemoryManager) Lookup(_ context.Context, sessionID string, checkpointInfo workflow.CheckpointInfo) (*internalcheckpoint.Checkpoint, error) {
+func (s *inMemoryManager) Lookup(_ context.Context, sessionID string, checkpointInfo workflow.CheckpointInfo) (*checkpoint.Checkpoint, error) {
 	if sessionID == "" {
 		return nil, fmt.Errorf("checkpoint: sessionID cannot be empty")
 	}
@@ -111,7 +111,7 @@ type jsonManager struct {
 
 func (s *jsonManager) internal() {}
 
-func (s *jsonManager) Commit(ctx context.Context, sessionID string, checkpoint *internalcheckpoint.Checkpoint) (workflow.CheckpointInfo, error) {
+func (s *jsonManager) Commit(ctx context.Context, sessionID string, checkpoint *checkpoint.Checkpoint) (workflow.CheckpointInfo, error) {
 	if checkpoint == nil {
 		return workflow.CheckpointInfo{}, fmt.Errorf("checkpoint: checkpoint cannot be nil")
 	}
@@ -123,12 +123,12 @@ func (s *jsonManager) Commit(ctx context.Context, sessionID string, checkpoint *
 	return s.store.CreateCheckpoint(ctx, sessionID, v, checkpoint.Parent)
 }
 
-func (s *jsonManager) Lookup(ctx context.Context, sessionID string, checkpointInfo workflow.CheckpointInfo) (*internalcheckpoint.Checkpoint, error) {
-	v, ok := s.store.RetrieveCheckpoint(ctx, sessionID, checkpointInfo)
-	if ok != nil {
-		return nil, fmt.Errorf("could not retrieve checkpoint with ID %s for session %s: %w", checkpointInfo.CheckpointID, sessionID, ok)
+func (s *jsonManager) Lookup(ctx context.Context, sessionID string, checkpointInfo workflow.CheckpointInfo) (*checkpoint.Checkpoint, error) {
+	v, err := s.store.RetrieveCheckpoint(ctx, sessionID, checkpointInfo)
+	if err != nil {
+		return nil, fmt.Errorf("could not retrieve checkpoint with ID %s for session %s: %w", checkpointInfo.CheckpointID, sessionID, err)
 	}
-	var checkpoint internalcheckpoint.Checkpoint
+	var checkpoint checkpoint.Checkpoint
 	if err := json.Unmarshal(v, &checkpoint); err != nil {
 		return nil, fmt.Errorf("failed to deserialize checkpoint data for checkpoint with ID %s for session %s: %w", checkpointInfo.CheckpointID, sessionID, err)
 	}

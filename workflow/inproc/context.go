@@ -141,6 +141,7 @@ func (proc *runnerContext) EnsureExecutor(ctx context.Context, executorID string
 		return nil, err
 	}
 
+	attachSubworkflowRuntime(executor, proc)
 	if err := executor.Initialize(proc.Bind(ctx, executorID, nil)); err != nil {
 		return nil, err
 	}
@@ -403,19 +404,6 @@ func (proc *runnerContext) RepublishUnservicedRequests(ctx context.Context) erro
 
 	for _, request := range requests {
 		if err := proc.AddEvent(ctx, workflow.RequestInfoEvent{Request: request}); err != nil {
-			return err
-		}
-	}
-
-	proc.joinedRunnersMu.RLock()
-	joinedRunners := make([]execution.SuperStepRunner, 0, len(proc.joinedSubworkflowRunners))
-	for _, runner := range proc.joinedSubworkflowRunners {
-		joinedRunners = append(joinedRunners, runner)
-	}
-	proc.joinedRunnersMu.RUnlock()
-
-	for _, runner := range joinedRunners {
-		if err := runner.RepublishPendingEvents(ctx); err != nil {
 			return err
 		}
 	}
@@ -724,11 +712,39 @@ func (proc *runnerContext) EndRun(ctx context.Context) error {
 	if proc.runEnded.Swap(true) {
 		return nil // Already ended
 	}
+	var runErr error
+
+	proc.executorsMu.RLock()
+	executors := make([]*workflow.Executor, 0, len(proc.executors))
+	for _, executor := range proc.executors {
+		executors = append(executors, executor)
+	}
+	proc.executorsMu.RUnlock()
+
+	for _, executor := range executors {
+		if err := executor.Close(ctx); err != nil {
+			runErr = errors.Join(runErr, err)
+		}
+	}
+
+	proc.joinedRunnersMu.Lock()
+	joinedRunners := make([]execution.SuperStepRunner, 0, len(proc.joinedSubworkflowRunners))
+	for _, runner := range proc.joinedSubworkflowRunners {
+		joinedRunners = append(joinedRunners, runner)
+	}
+	proc.joinedSubworkflowRunners = make(map[string]execution.SuperStepRunner)
+	proc.joinedRunnersMu.Unlock()
+
+	for _, runner := range joinedRunners {
+		if err := runner.RequestEndRun(ctx); err != nil {
+			runErr = errors.Join(runErr, err)
+		}
+	}
 	if !proc.concurrentRunsEnabled {
 		// Release workflow ownership
 		if err := proc.wf.ReleaseOwnershipTo(proc, proc.previousOwnership); err != nil {
-			return err
+			runErr = errors.Join(runErr, err)
 		}
 	}
-	return nil
+	return runErr
 }

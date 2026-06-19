@@ -59,6 +59,20 @@ func createTopLevelRunner(
 	return newInProcessRunner(wf, checkpointMgr, sessionID, nil, enableConcurrentRuns, knownValidInputTypes)
 }
 
+func createSubworkflowRunner(
+	wf *workflow.Workflow,
+	checkpointMgr checkpoint.Manager,
+	sessionID string,
+	existingOwnerSignoff any,
+	enableConcurrentRuns bool,
+	knownValidInputTypes []reflect.Type,
+) (*runner, error) {
+	if sessionID == "" {
+		sessionID = uuid.NewString()
+	}
+	return newInProcessRunner(wf, checkpointMgr, sessionID, existingOwnerSignoff, enableConcurrentRuns, knownValidInputTypes)
+}
+
 func newInProcessRunner(
 	wf *workflow.Workflow,
 	checkpointMgr checkpoint.Manager,
@@ -344,11 +358,15 @@ func (r *runner) runSuperstep(ctx context.Context, currentStep *execution.StepCo
 		return err
 	}
 
-	// Deliver messages to receivers concurrently
-	g, gctx := errgroup.WithContext(ctx)
+	// Deliver messages to receivers concurrently. Use a plain errgroup rather
+	// than WithContext: the derived context from WithContext is canceled when
+	// Wait returns, but executors such as subworkflow hosts may legitimately
+	// forward events after their own delivery has completed while the parent
+	// superstep is still running.
+	var g errgroup.Group
 	for _, receiverID := range currentStep.Keys() {
 		g.Go(func() error {
-			return r.deliverMessages(gctx, receiverID, currentStep.MessagesFor(receiverID))
+			return r.deliverMessages(ctx, receiverID, currentStep.MessagesFor(receiverID))
 		})
 	}
 	if err := g.Wait(); err != nil {
