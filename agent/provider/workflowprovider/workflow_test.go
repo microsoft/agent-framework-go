@@ -1193,7 +1193,7 @@ func TestNew_MixedResponseAndRegularMessage_ResponseProcessed(t *testing.T) {
 	}
 }
 
-func TestNew_MixedResponseDispatchesRegularMessageBeforeResponse(t *testing.T) {
+func TestNew_MixedResponseAndRegularMessage_BothProcessed(t *testing.T) {
 	id := "order"
 	port := workflow.RequestPort{
 		ID:       id + "_FunctionCall",
@@ -1201,7 +1201,7 @@ func TestNew_MixedResponseDispatchesRegularMessageBeforeResponse(t *testing.T) {
 		Response: reflect.TypeFor[*message.FunctionResultContent](),
 	}
 	var postedRequest bool
-	var sawRegularBeforeResponse bool
+	var sawRegularMessage bool
 	binding := workflow.ExecutorBinding{
 		ID:               id,
 		ImplementationID: "*workflow.Executor",
@@ -1219,7 +1219,7 @@ func TestNew_MixedResponseDispatchesRegularMessageBeforeResponse(t *testing.T) {
 					}
 					for _, m := range msg.([]*message.Message) {
 						if m.Contents.Text() == "extra" {
-							sawRegularBeforeResponse = true
+							sawRegularMessage = true
 						}
 					}
 					return nil, nil
@@ -1241,13 +1241,9 @@ func TestNew_MixedResponseDispatchesRegularMessageBeforeResponse(t *testing.T) {
 					if _, ok := resp.Data.As(port.Response); !ok {
 						return nil, nil
 					}
-					text := "response-before-regular"
-					if sawRegularBeforeResponse {
-						text = "regular-before-response"
-					}
 					out := &message.Message{
 						Role:     message.RoleAssistant,
-						Contents: []message.Content{&message.TextContent{Text: text}},
+						Contents: []message.Content{&message.TextContent{Text: "response-processed"}},
 					}
 					return nil, ctx.YieldOutput(out)
 				})
@@ -1295,14 +1291,34 @@ func TestNew_MixedResponseDispatchesRegularMessageBeforeResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second: %v", err)
 	}
-	var finalText string
+	var sawResponse, reemittedRequest bool
+	var errors []string
 	for _, m := range second.Messages {
-		if text := m.Contents.Text(); text == "regular-before-response" || text == "response-before-regular" {
-			finalText = text
+		if strings.Contains(m.Contents.Text(), "response-processed") {
+			sawResponse = true
+		}
+		for _, c := range m.Contents {
+			switch content := c.(type) {
+			case *message.FunctionCallContent:
+				if content.CallID == requestID {
+					reemittedRequest = true
+				}
+			case *message.ErrorContent:
+				errors = append(errors, content.Message)
+			}
 		}
 	}
-	if finalText != "regular-before-response" {
-		t.Fatalf("dispatch order output = %q, want %q; response = %+v", finalText, "regular-before-response", second)
+	if !sawRegularMessage {
+		t.Fatalf("expected regular content to be delivered to workflow; response = %+v", second)
+	}
+	if !sawResponse {
+		t.Fatalf("expected response handler output; response = %+v", second)
+	}
+	if reemittedRequest {
+		t.Fatalf("handled external request %q was re-emitted; response = %+v", requestID, second)
+	}
+	if len(errors) > 0 {
+		t.Fatalf("expected no workflow errors; got %v", errors)
 	}
 }
 
