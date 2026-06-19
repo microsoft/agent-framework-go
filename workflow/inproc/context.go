@@ -141,7 +141,9 @@ func (proc *runnerContext) EnsureExecutor(ctx context.Context, executorID string
 		return nil, err
 	}
 
-	attachSubworkflowRuntime(executor, proc)
+	if err := executor.AttachRuntime(proc); err != nil {
+		return nil, err
+	}
 	if err := executor.Initialize(proc.Bind(ctx, executorID, nil)); err != nil {
 		return nil, err
 	}

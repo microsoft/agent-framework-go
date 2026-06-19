@@ -9,7 +9,6 @@ import (
 	"maps"
 	"reflect"
 	"strings"
-	"sync"
 
 	"github.com/microsoft/agent-framework-go/internal/concurrent"
 	"github.com/microsoft/agent-framework-go/workflow"
@@ -48,8 +47,6 @@ func BindSubworkflowAsExecutor(wf *workflow.Workflow, id string) workflow.Execut
 	}
 }
 
-var subworkflowHosts sync.Map
-
 func newSubworkflowExecutor(id string, wf *workflow.Workflow, sessionID string, ownershipToken any) (*workflow.Executor, error) {
 	protocol, err := wf.DescribeProtocol()
 	if err != nil {
@@ -62,17 +59,7 @@ func newSubworkflowExecutor(id string, wf *workflow.Workflow, sessionID string, 
 		ownershipToken: ownershipToken,
 		protocol:       protocol,
 	}
-	executor := host.executor()
-	subworkflowHosts.Store(executor, host)
-	return executor, nil
-}
-
-func attachSubworkflowRuntime(executor *workflow.Executor, joinContext *runnerContext) {
-	value, ok := subworkflowHosts.LoadAndDelete(executor)
-	if !ok {
-		return
-	}
-	value.(*subworkflowHostExecutor).joinContext = joinContext
+	return host.executor(), nil
 }
 
 type subworkflowHostExecutor struct {
@@ -98,10 +85,20 @@ func (h *subworkflowHostExecutor) executor() *workflow.Executor {
 		DisableAutoSendMessageHandlerResultObject: true,
 		DisableAutoYieldOutputHandlerResultObject: true,
 		ConfigureProtocol:                         h.configureProtocol,
+		AttachRuntimeFunc:                         h.attachRuntime,
 		CloseFunc:                                 h.reset,
 		OnCheckpointFunc:                          h.onCheckpoint,
 		OnCheckpointRestoredFunc:                  h.onCheckpointRestored,
 	}
+}
+
+func (h *subworkflowHostExecutor) attachRuntime(runtime any) error {
+	joinContext, ok := runtime.(*runnerContext)
+	if !ok {
+		return errors.New("subworkflow: current execution environment does not support subworkflows")
+	}
+	h.joinContext = joinContext
+	return nil
 }
 
 func (h *subworkflowHostExecutor) ensureRunner(ctx *workflow.Context) (*runner, error) {
