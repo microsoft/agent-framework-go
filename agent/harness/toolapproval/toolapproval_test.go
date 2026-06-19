@@ -4,8 +4,10 @@ package toolapproval_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"iter"
+	"strings"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -368,6 +370,183 @@ func TestToolApproval_AlwaysApproveToolWithArgumentsMatchesByValue(t *testing.T)
 	}
 	if !sawDone {
 		t.Fatal("expected done after auto-approval with argument-value match")
+	}
+}
+
+func TestToolApproval_AlwaysApproveToolWithNoArgumentsDoesNotMatchCallWithArguments(t *testing.T) {
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder().
+			Add(&agent.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					&message.ToolApprovalRequestContent{
+						RequestID: "r1",
+						ToolCall: &message.FunctionCallContent{
+							CallID: "c1",
+							Name:   "send_payment",
+						},
+					},
+				},
+			}).
+			NewTurn().
+			Add(&agent.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					&message.ToolApprovalRequestContent{
+						RequestID: "r2",
+						ToolCall: &message.FunctionCallContent{
+							CallID:    "c2",
+							Name:      "send_payment",
+							Arguments: `{"amount":5000,"recipient":"attacker@example.test"}`,
+						},
+					},
+				},
+			}).
+			Build(),
+	}
+
+	mw := toolapproval.New(toolapproval.Config{})
+	session := agenttest.CreateSession()
+	opts := []agent.Option{agent.WithSession(session)}
+
+	updates := collectUpdates(t, mw, runner.Run,
+		[]*message.Message{{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "go"}}}},
+		opts...,
+	)
+
+	var req *message.ToolApprovalRequestContent
+	for _, u := range updates {
+		for _, c := range u.Contents {
+			if r, ok := c.(*message.ToolApprovalRequestContent); ok {
+				req = r
+			}
+		}
+	}
+	if req == nil {
+		t.Fatal("expected approval request in turn 1")
+	}
+
+	updates = collectUpdates(t, mw, runner.Run,
+		[]*message.Message{{Role: message.RoleUser, Contents: []message.Content{req.AlwaysApproveToolWithArgumentsResponse()}}},
+		opts...,
+	)
+
+	var surfacedReq *message.ToolApprovalRequestContent
+	for _, u := range updates {
+		for _, c := range u.Contents {
+			if r, ok := c.(*message.ToolApprovalRequestContent); ok {
+				surfacedReq = r
+			}
+			if tc, ok := c.(*message.TextContent); ok && tc.Text == "done" {
+				t.Fatal("argument-bearing call was auto-approved by an exact no-argument rule")
+			}
+		}
+	}
+	if surfacedReq == nil || surfacedReq.RequestID != "r2" {
+		t.Fatalf("expected argument-bearing request r2 to be surfaced, got %#v", surfacedReq)
+	}
+}
+
+func TestToolApproval_AlwaysApproveToolWithNoArgumentsMatchesLaterNoArgumentsCall(t *testing.T) {
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder().
+			Add(&agent.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					&message.ToolApprovalRequestContent{
+						RequestID: "r1",
+						ToolCall: &message.FunctionCallContent{
+							CallID: "c1",
+							Name:   "send_payment",
+						},
+					},
+				},
+			}).
+			NewTurn().
+			Add(&agent.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					&message.ToolApprovalRequestContent{
+						RequestID: "r2",
+						ToolCall: &message.FunctionCallContent{
+							CallID: "c2",
+							Name:   "send_payment",
+						},
+					},
+				},
+			}).
+			NewTurn().
+			AddText("done").
+			Build(),
+	}
+
+	mw := toolapproval.New(toolapproval.Config{})
+	session := agenttest.CreateSession()
+	opts := []agent.Option{agent.WithSession(session)}
+
+	updates := collectUpdates(t, mw, runner.Run,
+		[]*message.Message{{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "go"}}}},
+		opts...,
+	)
+
+	var req *message.ToolApprovalRequestContent
+	for _, u := range updates {
+		for _, c := range u.Contents {
+			if r, ok := c.(*message.ToolApprovalRequestContent); ok {
+				req = r
+			}
+		}
+	}
+	if req == nil {
+		t.Fatal("expected approval request in turn 1")
+	}
+
+	updates = collectUpdates(t, mw, runner.Run,
+		[]*message.Message{{Role: message.RoleUser, Contents: []message.Content{req.AlwaysApproveToolWithArgumentsResponse()}}},
+		opts...,
+	)
+
+	var gotDone bool
+	for _, u := range updates {
+		for _, c := range u.Contents {
+			if _, ok := c.(*message.ToolApprovalRequestContent); ok {
+				t.Fatal("expected later no-argument call to be auto-approved by exact no-argument rule")
+			}
+			if tc, ok := c.(*message.TextContent); ok && tc.Text == "done" {
+				gotDone = true
+			}
+		}
+	}
+	if !gotDone {
+		t.Fatal("expected done after auto-approval with exact no-argument match")
+	}
+}
+
+func TestToolApproval_AlwaysApproveToolWithNoArgumentsPersistsEmptyArguments(t *testing.T) {
+	req := &message.ToolApprovalRequestContent{
+		RequestID: "r1",
+		ToolCall: &message.FunctionCallContent{
+			CallID: "c1",
+			Name:   "send_payment",
+		},
+	}
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder().AddText("done").Build(),
+	}
+
+	mw := toolapproval.New(toolapproval.Config{})
+	session := agenttest.CreateSession()
+	collectUpdates(t, mw, runner.Run,
+		[]*message.Message{{Role: message.RoleUser, Contents: []message.Content{req.AlwaysApproveToolWithArgumentsResponse()}}},
+		agent.WithSession(session),
+	)
+
+	data, err := json.Marshal(session)
+	if err != nil {
+		t.Fatalf("marshal session: %v", err)
+	}
+	if !strings.Contains(string(data), `"arguments":{}`) {
+		t.Fatalf("expected exact no-argument rule to persist empty arguments, got %s", data)
 	}
 }
 
