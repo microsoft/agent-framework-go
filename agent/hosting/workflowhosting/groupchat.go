@@ -101,7 +101,7 @@ func NewRoundRobinGroupChatManager(agents []*agent.Agent, opts RoundRobinGroupCh
 }
 
 func (manager *roundRobinGroupChatManager) maxIterationCount() int {
-	if manager == nil || manager.maximumIterationCount == 0 {
+	if manager == nil || manager.maximumIterationCount <= 0 {
 		return defaultGroupChatMaximumIterations
 	}
 	return manager.maximumIterationCount
