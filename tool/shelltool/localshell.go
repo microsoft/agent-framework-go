@@ -670,21 +670,7 @@ func commandEnvironment(clean bool, overrides map[string]string, removals []stri
 	if !clean && len(overrides) == 0 && len(removals) == 0 {
 		return nil
 	}
-	env := make(map[string]string)
-	if clean {
-		for _, name := range preservedEnvironmentVariables {
-			if value, ok := lookupEnvFold(name); ok {
-				env[name] = value
-			}
-		}
-	} else {
-		for _, entry := range os.Environ() {
-			name, value, ok := strings.Cut(entry, "=")
-			if ok {
-				env[name] = value
-			}
-		}
-	}
+	env := inheritedCommandEnvironment(clean)
 
 	for _, name := range removals {
 		deleteEnvironmentValue(env, name)
@@ -705,8 +691,31 @@ func commandEnvironment(clean bool, overrides map[string]string, removals []stri
 	return result
 }
 
-func lookupEnvFold(name string) (string, bool) {
+func inheritedCommandEnvironment(clean bool) map[string]string {
+	env := make(map[string]string)
+	if clean {
+		preserveEnvironmentValues(env, os.Environ())
+		return env
+	}
 	for _, entry := range os.Environ() {
+		name, value, ok := strings.Cut(entry, "=")
+		if ok {
+			env[name] = value
+		}
+	}
+	return env
+}
+
+func preserveEnvironmentValues(env map[string]string, source []string) {
+	for _, name := range preservedEnvironmentVariables {
+		if value, ok := lookupEnvListFold(source, name); ok {
+			env[name] = value
+		}
+	}
+}
+
+func lookupEnvListFold(source []string, name string) (string, bool) {
+	for _, entry := range source {
 		envName, envValue, found := strings.Cut(entry, "=")
 		if found && strings.EqualFold(envName, name) {
 			return envValue, true
