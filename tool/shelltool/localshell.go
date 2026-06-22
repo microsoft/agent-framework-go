@@ -714,10 +714,6 @@ func preserveEnvironmentValues(env map[string]string, source []string) {
 	}
 }
 
-func lookupEnvFold(name string) (string, bool) {
-	return lookupEnvListFold(os.Environ(), name)
-}
-
 func lookupEnvListFold(source []string, name string) (string, bool) {
 	for _, entry := range source {
 		envName, envValue, found := strings.Cut(entry, "=")
