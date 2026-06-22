@@ -4,6 +4,7 @@
 
 [![Microsoft Azure AI Foundry Discord](https://dcbadge.limes.pink/api/server/b5zjErwbQM?style=flat)](https://discord.gg/b5zjErwbQM)
 [![MS Learn Documentation](https://img.shields.io/badge/MS%20Learn-Documentation-blue)](https://learn.microsoft.com/en-us/agent-framework/)
+[![Go Reference](https://pkg.go.dev/badge/github.com/microsoft/agent-framework-go.svg)](https://pkg.go.dev/github.com/microsoft/agent-framework-go)
 
 Welcome to Microsoft's comprehensive multi-language framework for building, orchestrating, and deploying AI agents with support for .NET, Python and Go implementations.
 This framework provides everything from simple chat agents to complex multi-agent workflows with graph-based orchestration.
