@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
-	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -281,10 +280,10 @@ func newGroupChatHostBinding(
 		NewExecutorFunc: func(string) (*workflow.Executor, error) {
 			host := &groupChatHostExecutor{
 				id:                groupChatHostExecutorID,
-				agents:            slices.Clone(agents),
-				participants:      slices.Clone(participants),
-				bindingsByAgent:   maps.Clone(bindingsByAgent),
-				bindingsByAgentID: maps.Clone(bindingsByAgentID),
+				agents:            agents,
+				participants:      participants,
+				bindingsByAgent:   bindingsByAgent,
+				bindingsByAgentID: bindingsByAgentID,
 				managerFactory:    managerFactory,
 				messageState:      messageworkflow.NewMessageState(groupChatHostBufferedStateKey, ""),
 			}
