@@ -20,11 +20,12 @@ const (
 
 // SequentialWorkflowBuilder fluently builds sequential agent workflows.
 type SequentialWorkflowBuilder struct {
-	name               string
-	description        string
-	agents             []*agent.Agent
-	outputDesignations outputDesignations
-	err                error
+	name                    string
+	description             string
+	agents                  []*agent.Agent
+	chainOnlyAgentResponses bool
+	outputDesignations      outputDesignations
+	err                     error
 }
 
 // NewSequentialWorkflowBuilder creates a builder for a sequential agent workflow.
@@ -47,6 +48,17 @@ func (b *SequentialWorkflowBuilder) WithDescription(description string) *Sequent
 		return b
 	}
 	b.description = description
+	return b
+}
+
+// WithChainOnlyAgentResponses controls whether each agent only forwards its own
+// response to the next agent, instead of forwarding the full accumulated
+// conversation. The default is false.
+func (b *SequentialWorkflowBuilder) WithChainOnlyAgentResponses(enabled bool) *SequentialWorkflowBuilder {
+	if b == nil || b.err != nil {
+		return b
+	}
+	b.chainOnlyAgentResponses = enabled
 	return b
 }
 
@@ -80,7 +92,7 @@ func (b *SequentialWorkflowBuilder) Build() (*workflow.Workflow, error) {
 		return nil, err
 	}
 
-	cfg := Config{}
+	cfg := Config{DisableForwardIncomingMessages: b.chainOnlyAgentResponses}
 	bindings := make([]workflow.ExecutorBinding, len(b.agents))
 	bindingsByAgent := make(map[*agent.Agent]workflow.ExecutorBinding, len(b.agents))
 	for index, currentAgent := range b.agents {

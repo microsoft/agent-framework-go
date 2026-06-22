@@ -579,6 +579,15 @@ func TestNewRoundRobinGroupChatManager_DoesNotValidateInputs(t *testing.T) {
 			if got != testCase.want {
 				t.Fatalf("selected agent = %v, want %v", got, testCase.want)
 			}
+			if testCase.opts.MaximumIterationCount < 0 {
+				terminate, err := manager.ShouldTerminate(t.Context(), nil, 0)
+				if err != nil {
+					t.Fatalf("ShouldTerminate: %v", err)
+				}
+				if terminate {
+					t.Fatal("ShouldTerminate at iteration 0 with negative max = true, want false")
+				}
+			}
 		})
 	}
 }

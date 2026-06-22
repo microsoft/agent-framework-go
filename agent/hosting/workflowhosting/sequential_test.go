@@ -221,6 +221,40 @@ func TestSequentialWorkflowBuilder_AgentsRunInOrder(t *testing.T) {
 	}
 }
 
+func TestSequentialWorkflowBuilder_ChainOnlyAgentResponses(t *testing.T) {
+	agents := []*agent.Agent{
+		newDoubleEchoAgent("agent1"),
+		newDoubleEchoAgent("agent2"),
+		newDoubleEchoAgent("agent3"),
+	}
+	wf, err := workflowhosting.NewSequentialWorkflowBuilder(agents...).WithChainOnlyAgentResponses(true).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	const inputText = "abc"
+	events := runBuiltWorkflowWithText(t, wf, inputText)
+	texts := collectOutputTexts(events)
+	want := expectedSequentialChainOnlyDoubleEchoOutputs(len(agents), inputText)
+	if !slices.Equal(texts, want) {
+		t.Fatalf("output texts = %v, want %v", texts, want)
+	}
+
+	resultMessages := collectOutputMessages(events)
+	if gotResultTexts := collectMessageTexts(resultMessages); !slices.Equal(gotResultTexts, []string{want[len(want)-1]}) {
+		t.Fatalf("result texts = %v, want [%s]", gotResultTexts, want[len(want)-1])
+	}
+	if len(resultMessages) != 1 {
+		t.Fatalf("result count = %d, want 1", len(resultMessages))
+	}
+	if resultMessages[0].Role != message.RoleAssistant {
+		t.Fatalf("result[0].Role = %q, want %q", resultMessages[0].Role, message.RoleAssistant)
+	}
+	if resultMessages[0].AuthorName != "agent3" {
+		t.Fatalf("result[0].AuthorName = %q, want agent3", resultMessages[0].AuthorName)
+	}
+}
+
 func expectedSequentialDoubleEchoOutputs(numAgents int, inputText string) []string {
 	transcript := inputText
 	outputs := make([]string, 0, numAgents)
@@ -229,6 +263,18 @@ func expectedSequentialDoubleEchoOutputs(numAgents int, inputText string) []stri
 		outputText := agentID + transcript + transcript
 		outputs = append(outputs, outputText)
 		transcript += outputText
+	}
+	return outputs
+}
+
+func expectedSequentialChainOnlyDoubleEchoOutputs(numAgents int, inputText string) []string {
+	previous := inputText
+	outputs := make([]string, 0, numAgents)
+	for agentNumber := 1; agentNumber <= numAgents; agentNumber++ {
+		agentID := fmt.Sprintf("agent%d", agentNumber)
+		outputText := agentID + previous + previous
+		outputs = append(outputs, outputText)
+		previous = outputText
 	}
 	return outputs
 }
