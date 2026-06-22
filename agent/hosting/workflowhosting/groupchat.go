@@ -351,9 +351,12 @@ func (host *groupChatHostExecutor) handleTurn(ctx *workflow.Context, token workf
 	if err != nil {
 		return err
 	}
+	if nextAgent == nil {
+		return host.complete(ctx)
+	}
 	nextBinding, ok := host.bindingForAgent(nextAgent)
 	if !ok {
-		return host.complete(ctx)
+		return fmt.Errorf("workflowhosting: group chat manager selected non-participant agent %q", agentNameForError(nextAgent))
 	}
 
 	host.iterationCount++
