@@ -2,6 +2,8 @@
 
 package workflow
 
+import "slices"
+
 type Event interface {
 	Data() any
 }
@@ -122,10 +124,21 @@ type OutputEvent struct {
 	// ExecutorID is the unique identifier of the executor that yielded this output.
 	ExecutorID string
 	Output     any
+	Tags       []OutputTag
 }
 
 func (e OutputEvent) Data() any {
 	return e.Output
+}
+
+// HasTag reports whether e carries tag.
+func (e OutputEvent) HasTag(tag OutputTag) bool {
+	return slices.Contains(e.Tags, tag)
+}
+
+// IsIntermediate reports whether e carries [OutputTagIntermediate].
+func (e OutputEvent) IsIntermediate() bool {
+	return e.HasTag(OutputTagIntermediate)
 }
 
 var _ Event = RequestHaltEvent{}

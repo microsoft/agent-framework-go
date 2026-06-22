@@ -14,11 +14,11 @@ func (e *executorInfo) matchBinding(executor workflow.ExecutorBinding) bool {
 }
 
 type WorkflowInfo struct {
-	Executors         map[string]executorInfo
-	Edges             map[string][]workflow.EdgeInfo
-	RequestPorts      map[string]workflow.RequestPortInfo
-	StartExecutorID   string
-	OutputExecutorIDs map[string]struct{}
+	Executors       map[string]executorInfo
+	Edges           map[string][]workflow.EdgeInfo
+	RequestPorts    map[string]workflow.RequestPortInfo
+	StartExecutorID string
+	OutputExecutors map[string][]workflow.OutputTag
 }
 
 func NewWorkflowInfo(wf *workflow.Workflow) WorkflowInfo {
@@ -40,18 +40,12 @@ func NewWorkflowInfo(wf *workflow.Workflow) WorkflowInfo {
 		requestPorts[info.PortID] = info
 	}
 
-	outputIDs := wf.OutputExecutorIDs()
-	outputs := make(map[string]struct{}, len(outputIDs))
-	for _, id := range outputIDs {
-		outputs[id] = struct{}{}
-	}
-
 	return WorkflowInfo{
-		Executors:         executors,
-		Edges:             edges,
-		RequestPorts:      requestPorts,
-		StartExecutorID:   wf.StartExecutorID(),
-		OutputExecutorIDs: outputs,
+		Executors:       executors,
+		Edges:           edges,
+		RequestPorts:    requestPorts,
+		StartExecutorID: wf.StartExecutorID(),
+		OutputExecutors: wf.OutputExecutors(),
 	}
 }
 
@@ -105,13 +99,30 @@ func (w *WorkflowInfo) Match(wf *workflow.Workflow) bool {
 		}
 	}
 
-	// Validate the outputs
-	outputIDs := wf.OutputExecutorIDs()
-	if len(outputIDs) != len(w.OutputExecutorIDs) {
+	otherOutputs := wf.OutputExecutors()
+	if len(otherOutputs) != len(w.OutputExecutors) {
 		return false
 	}
-	for outputID := range w.OutputExecutorIDs {
-		if !wf.HasOutputExecutor(outputID) {
+	for id, tags := range w.OutputExecutors {
+		otherTags, ok := otherOutputs[id]
+		if !ok || !outputTagsEqual(tags, otherTags) {
+			return false
+		}
+	}
+	return true
+}
+
+func outputTagsEqual(left, right []workflow.OutputTag) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	counts := make(map[workflow.OutputTag]int, len(left))
+	for _, tag := range left {
+		counts[tag]++
+	}
+	for _, tag := range right {
+		counts[tag]--
+		if counts[tag] < 0 {
 			return false
 		}
 	}

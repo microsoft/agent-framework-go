@@ -20,11 +20,12 @@ var logger = demo.NewLogger(
 )
 
 func main() {
-	wf, err := workflowhosting.BuildSequential("multi-service-workflow", []*agent.Agent{
+	agents := []*agent.Agent{
 		demo.NewAzureChatAgent("researcher", "Write a concise three-paragraph overview of the user's topic. Include one claim that should be fact checked.", logger),
 		demo.NewAzureChatAgent("fact_checker", "Review the prior essay. Identify supported, questionable, and false claims in concise bullets.", logger),
 		demo.NewAzureChatAgent("reporter", "Write a final single-paragraph summary using only claims that survived the fact check.", logger),
-	}...)
+	}
+	wf, err := workflowhosting.NewSequentialWorkflowBuilder(agents...).WithName("multi-service-workflow").Build()
 	if err != nil {
 		demo.Panic(err)
 	}

@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 
 	"github.com/google/uuid"
+	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/internal/checkpoint"
 	"github.com/microsoft/agent-framework-go/workflow/internal/execution"
@@ -25,8 +26,9 @@ type runnerContext struct {
 	sessionID string
 	tracer    *stepTracer
 
-	edgeMap  *execution.EdgeRunner
-	nextStep atomic.Pointer[execution.StepContext]
+	edgeMap      *execution.EdgeRunner
+	outputFilter *outputFilter
+	nextStep     atomic.Pointer[execution.StepContext]
 
 	executors   map[string]*workflow.Executor
 	executorsMu sync.RWMutex
@@ -79,6 +81,7 @@ func newInProcessRunnerContext(
 	ctx.nextStep.Store(new(execution.StepContext))
 
 	ctx.edgeMap = execution.NewEdgeRunner(wf, tracer, ctx.EnsureExecutor)
+	ctx.outputFilter = newOutputFilter(wf)
 	if enableConcurrentRuns {
 		if !wf.CheckOwnership(existingOwnerSignoff) {
 			return nil, fmt.Errorf("existing ownership does not match check value")
@@ -511,16 +514,7 @@ func (proc *runnerContext) Bind(ctx context.Context, executorID string, traceCon
 		},
 
 		YieldOutput: func(output any) error {
-			if err := proc.validateOutputType(executorID, output); err != nil {
-				return err
-			}
-			if proc.wf.HasOutputExecutor(executorID) {
-				return proc.AddEvent(boundCtx, workflow.OutputEvent{
-					ExecutorID: executorID,
-					Output:     output,
-				})
-			}
-			return nil
+			return proc.yieldOutput(boundCtx, executorID, output)
 		},
 
 		RequestHalt: func() error {
@@ -593,6 +587,40 @@ func (proc *runnerContext) Bind(ctx context.Context, executorID string, traceCon
 		},
 
 		ConcurrentRunsEnabled: proc.concurrentRunsEnabled,
+	}
+}
+
+func (proc *runnerContext) yieldOutput(ctx context.Context, executorID string, output any) error {
+	if output == nil {
+		return fmt.Errorf("executor %q cannot output nil", executorID)
+	}
+
+	isAgentResponseShaped := isAgentResponseOutput(output)
+	if isAgentResponseShaped {
+		if _, err := proc.EnsureExecutor(ctx, executorID, nil); err != nil {
+			return err
+		}
+	} else if err := proc.validateOutputType(executorID, output); err != nil {
+		return err
+	}
+
+	tags, ok := proc.outputFilter.tryGetTags(executorID)
+	if !ok {
+		return nil
+	}
+	return proc.AddEvent(ctx, workflow.OutputEvent{
+		ExecutorID: executorID,
+		Output:     output,
+		Tags:       tags,
+	})
+}
+
+func isAgentResponseOutput(output any) bool {
+	switch output.(type) {
+	case *agent.Response, agent.Response, *agent.ResponseUpdate, agent.ResponseUpdate:
+		return true
+	default:
+		return false
 	}
 }
 

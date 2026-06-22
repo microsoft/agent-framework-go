@@ -72,7 +72,7 @@ Within overlapping features, the main misalignments are API shape and ecosystem 
 | RAG | Basic text RAG, custom vector store RAG, custom data source RAG, Foundry service RAG, Neo4j graph RAG samples. | No RAG package or sample found. | .NET only | Go has data/file/vector content types but no RAG workflow package or samples. |
 | Purview | `Microsoft.Agents.AI.Purview` models and end-to-end sample. | No equivalent package. | .NET only | No Go governance/Purview integration. |
 | Cosmos DB storage | Cosmos chat history provider and workflow checkpoint store. | No built-in Cosmos package. | .NET only | Go only exposes in-memory workflow checkpointing publicly. |
-| Agent workflow builders | Sequential, concurrent, handoff, group chat builders. | `workflowhosting.BuildSequential`, `workflowhosting.BuildConcurrent`; manual builder plus `AddChain`, `AddSwitch`, direct/fan-out/fan-in edges; workflow-as-agent and agents-in-workflows examples. | Partial | Go now has first-class sequential and concurrent builders matching .NET's `AgentWorkflowBuilder.BuildSequential`/`BuildConcurrent`. Handoff and group chat builders are not yet implemented. |
+| Agent workflow builders | Sequential, concurrent, handoff, group chat builders. | `workflowhosting.NewSequentialWorkflowBuilder`, `workflowhosting.NewConcurrentWorkflowBuilder`, `workflowhosting.NewGroupChatWorkflowBuilder`; manual builder plus `AddChain`, `AddSwitch`, direct/fan-out/fan-in edges; workflow-as-agent, group chat, and agents-in-workflows examples. | Partial | Go now has first-class sequential, concurrent, and group chat builders with explicit output designation support. Handoff and Magentic builders are not yet implemented. |
 | Workflow graph builder | `WorkflowBuilder`, direct edges, fan-out, fan-in barrier, labels, conditions, switch/case samples. | `workflow.Builder`, `AddEdge`, `AddDirectEdge`, `AddFanOutEdge`, `AddFanInBarrierEdge`, `WithEdgeLabel`, `WithEdgeAssigner`, `AddSwitch`. | Aligned | .NET has more overloads/extension methods; Go uses simpler methods and option functions. |
 | Workflow executor model | Generic `Executor<TInput>` and `Executor<TInput,TOutput>`, function executors, aggregating executor, protocol builder. | `Executor`, `NewExecutor`, `Executor.Bind`, `Executor.Extend`, `RouteBuilder`, `StatefulExecutorCache`. | Partial | .NET has more overloads and an explicit `AggregatingExecutor`; Go mirrors .NET's executor-level cross-run declaration and binding-level concurrent-run gate, while route configuration and lifecycle hooks live on `Executor`. |
 | Workflow protocol description | Accepts/yields/sends/catch-all protocol descriptor and chat protocol helpers. | `ProtocolDescriptor` exposes accepted, yielded, and sent types plus catch-all acceptance; `messageworkflow.Configure` contributes chat-message protocol metadata. | Aligned | Go now exposes the same protocol shape while keeping chat helpers in the Go-specific message workflow adapter. |
@@ -85,7 +85,7 @@ Within overlapping features, the main misalignments are API shape and ecosystem 
 | Workflow as agent | Workflow host agent / `AsAIAgent`, sample. | `agent/provider/workflowprovider.New`. | Aligned | Go chooses in-process environment based on concurrency; .NET is integrated with `AIAgent` extensions. |
 | Subworkflows | `ConfigureSubWorkflow`, `BindAsExecutor`, subworkflow sample. | `inproc.BindSubworkflowAsExecutor` plus in-process subworkflow execution. | Aligned | Go exposes subworkflow binding from the in-process execution package. |
 | Handoff orchestration | Handoff workflow builder with handoff instructions, tool-call filtering, return-to-previous, response/update events. | No first-class handoff builder. | .NET only | Could be modeled manually with tools/workflows, but no SDK feature. |
-| Group chat orchestration | Group chat manager and group chat workflow builder. | No first-class group chat builder. | .NET only | Go has workflow primitives but not the managed group chat abstraction. |
+| Group chat orchestration | Group chat manager and group chat workflow builder. | `workflowhosting.GroupChatManager`, `workflowhosting.NewRoundRobinGroupChatManager`, `workflowhosting.NewGroupChatWorkflowBuilder`. | Aligned | API shape differs, but Go now has a managed group chat abstraction with manager callbacks and workflow hosting. |
 | Declarative agents | YAML prompt/declarative agent packages, factories, PowerFx helpers. | No equivalent package. | .NET only | Go skills are prompt-like, but not declarative agents. |
 | Declarative workflows | Declarative workflow packages, Foundry/MCP declarative integrations, samples for confirm input, HTTP, code, MCP, function tools, marketing, student/teacher, etc. | No equivalent package. | .NET only | Go workflows are code-first. |
 | Workflow source generators | `Microsoft.Agents.AI.Workflows.Generators`. | No equivalent package. | .NET only | Go relies on generics/reflection without generator tooling. |
@@ -118,7 +118,7 @@ Within overlapping features, the main misalignments are API shape and ecosystem 
 ### Workflows
 
 - Core graph primitives are close: direct, fan-out, fan-in barrier, edge labels, conditions/assigners, output executors, run events, run status, checkpointing, state, and human-in-the-loop request ports.
-- .NET has more convenience builders: sequential/concurrent agent workflows, handoff workflows, group chat workflows, and declarative workflows. Go has first-class sequential/concurrent helpers and subworkflow binding via `workflow/inproc`, while handoff/group-chat/declarative workflows are not first-class public features.
+- .NET has more convenience builders: sequential/concurrent agent workflows, handoff workflows, group chat workflows, and declarative workflows. Go has first-class sequential/concurrent/group chat helpers and subworkflow binding via `workflow/inproc`, while handoff/declarative workflows are not first-class public features.
 - .NET workflow protocol metadata exposes accepted, yielded, sent, and catch-all aspects. Go's public `ProtocolDescriptor` currently exposes accepted input types; output types exist for runtime validation but are not reflected through the same public descriptor.
 - .NET checkpointing supports in-memory, JSON stores, and Cosmos DB. Go supports in-memory checkpointing and resume/restore, but the checkpoint manager interface lives under an internal package, so external custom checkpoint stores are not currently ergonomic as a public SDK feature.
 - .NET Durable Task is a separate durable execution model. Go has no durable equivalent.
@@ -208,7 +208,7 @@ The following Go packages and sample groups were present and accounted for in th
 | `workflow/inproc` | In-process run/streaming/resume/checkpoint execution environments. |
 | `examples/01-get-started` | Hello agent, tools, multi-turn, memory, first workflow. |
 | `examples/02-agents` | Running agents, tools, approvals, structured output, persisted conversation, third-party history, observability, DI-style construction, agent as MCP/tool, images, context providers, compaction, shell environment context, A2A, AGUI, providers, MCP server, skills. |
-| `examples/03-workflows` | Streaming, agents in workflows, patterns, subworkflows, nested subworkflows, checkpoint/resume, concurrent, conditional edges, HITL, loop, shared state. |
+| `examples/03-workflows` | Streaming, agents in workflows, sequential/concurrent/group chat patterns, group chat tool approval, subworkflows, nested subworkflows, checkpoint/resume, concurrent, conditional edges, HITL, loop, shared state. |
 | `examples/05-end-to-end` | A2A client/server. |
 | `examples/demos/chat_cli` | Chat CLI demo. |
 
@@ -218,6 +218,6 @@ The following Go packages and sample groups were present and accounted for in th
 2. Add DevUI or at least workflow visualization/export support that consumes existing reflection metadata.
 3. Add evaluation primitives and samples, starting with local function checks and expected-output/tool-call assertions.
 4. Add declarative agent/workflow support only if Go wants parity with .NET's YAML/PowerFx model; otherwise document the intentional code-first stance.
-5. Add first-class handoff and group chat builders, or document recommended manual workflow patterns.
+5. Add first-class handoff builder support, or document recommended manual workflow patterns.
 6. Expand provider integrations for Foundry, Azure AI Persistent Agents, Copilot Studio, GitHub Copilot, Mem0, Cosmos DB, and Purview if Go intends to match .NET's product surface.
 7. Add OpenAI-compatible, Azure Functions, and richer web hosting adapters if Go should match .NET hosting scenarios.

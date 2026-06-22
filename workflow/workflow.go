@@ -139,7 +139,7 @@ type Workflow struct {
 
 	executorBindings map[string]ExecutorBinding
 	edges            map[string][]Edge
-	outputExecutors  map[string]struct{}
+	outputExecutors  map[string]map[OutputTag]struct{}
 	ports            map[string]RequestPort
 
 	needsReset atomic.Bool
@@ -250,6 +250,18 @@ func (w *Workflow) OutputExecutorIDs() []string {
 		return nil
 	}
 	return slices.Collect(maps.Keys(w.outputExecutors))
+}
+
+// OutputExecutors returns workflow output sources with their tag metadata.
+func (w *Workflow) OutputExecutors() map[string][]OutputTag {
+	if w == nil {
+		return nil
+	}
+	out := make(map[string][]OutputTag, len(w.outputExecutors))
+	for id, tags := range w.outputExecutors {
+		out[id] = outputTagsFromSet(tags)
+	}
+	return out
 }
 
 // RequestPort returns the workflow request port with id.

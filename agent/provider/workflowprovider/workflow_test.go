@@ -285,6 +285,79 @@ func TestNew_IncludeOutputsInResponse(t *testing.T) {
 	}
 }
 
+func TestNew_DoesNotIncludeGenericMessageOutputsByDefault(t *testing.T) {
+	binding := workflow.ExecutorBinding{
+		ID:               "message-yielder",
+		ImplementationID: "*workflow.Executor",
+		RawValue:         struct{}{},
+	}
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
+		return newMessageExecutor(binding.ID, &messageworkflow.Options{
+			StateKey: "message_yielder_msgs",
+			TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, _ []*message.Message) error {
+				return ctx.YieldOutput(&message.Message{
+					Role:     message.RoleAssistant,
+					Contents: message.Contents{&message.TextContent{Text: "generic-output"}},
+				})
+			},
+		}), nil
+	}
+	wf, err := workflow.NewBuilder(binding).
+		WithOutputFrom(binding).
+		Build()
+	if err != nil {
+		t.Fatalf("build workflow: %v", err)
+	}
+	ag, err := workflowprovider.New(wf, workflowprovider.Config{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	resp, err := ag.RunText(t.Context(), "ping").Collect()
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if strings.Contains(resp.String(), "generic-output") {
+		t.Fatalf("generic message output surfaced with IncludeOutputsInResponse=false: %+v", resp)
+	}
+}
+
+func TestNew_ForwardsHostedAgentResponseOutputsByDefault(t *testing.T) {
+	run := func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: message.Contents{&message.TextContent{Text: "hosted-response"}},
+			}, nil)
+		}
+	}
+	host := workflowhosting.New(
+		agent.New(
+			agent.ProviderConfig{ProviderName: "hosted-response", Run: run},
+			agent.Config{ID: "hosted-id", Name: "hosted-name", DisableFuncAutoCall: true},
+		),
+		workflowhosting.Config{EmitResponseEvents: true},
+	)
+	wf, err := workflow.NewBuilder(host).
+		WithOutputFrom(host).
+		Build()
+	if err != nil {
+		t.Fatalf("build workflow: %v", err)
+	}
+	ag, err := workflowprovider.New(wf, workflowprovider.Config{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	resp, err := ag.RunText(t.Context(), "ping").Collect()
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if !strings.Contains(resp.String(), "hosted-response") {
+		t.Fatalf("hosted agent response output was not forwarded by default: %+v", resp)
+	}
+}
+
 func TestNew_ConvertsResponseOutputWithResponseMetadata(t *testing.T) {
 	createdAt := time.Date(2024, 11, 10, 9, 20, 0, 0, time.UTC)
 	binding := workflow.ExecutorBinding{
@@ -1663,7 +1736,7 @@ func TestNew_MatchingResponse_DoesNotCauseExtraTurn(t *testing.T) {
 		requestEmittingAgent("matching-response-call-id", "matchingResponseFunction"),
 		workflowhosting.Config{EmitUpdateEvents: true},
 	)
-	wf, err := workflow.NewBuilder(host).Build()
+	wf, err := workflow.NewBuilder(host).WithOutputFrom(host).Build()
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -1731,7 +1804,7 @@ func TestNew_UnmatchedResponse_TriggersTurnAndKeepsProgressing(t *testing.T) {
 		requestEmittingAgent("unmatched-response-call-id", "unmatchedResponseFunction"),
 		workflowhosting.Config{EmitUpdateEvents: true},
 	)
-	wf, err := workflow.NewBuilder(host).Build()
+	wf, err := workflow.NewBuilder(host).WithOutputFrom(host).Build()
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -1795,7 +1868,9 @@ func TestNew_MixedResponseAndRegularMessage_CrossExecutorStartExecutorIsReawaken
 		resumeRegularText,
 		resumeProcessed,
 	)
-	wf, err := addCrossExecutorEdges(workflow.NewBuilder(start), start, downstream).Build()
+	wf, err := addCrossExecutorEdges(workflow.NewBuilder(start), start, downstream).
+		WithOutputFrom(downstream).
+		Build()
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -1851,7 +1926,9 @@ func TestNew_ResponseOnlyToNonStartExecutor_StartExecutorIsStillActivated(t *tes
 		workflowhosting.Config{EmitUpdateEvents: true},
 	)
 	start := turnTrackingStartExecutorBinding(startExecutorID, downstream.ID, activatedMarker)
-	wf, err := addCrossExecutorEdges(workflow.NewBuilder(start), start, downstream).Build()
+	wf, err := addCrossExecutorEdges(workflow.NewBuilder(start), start, downstream).
+		WithOutputFrom(downstream).
+		Build()
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}

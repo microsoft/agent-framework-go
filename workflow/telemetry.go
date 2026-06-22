@@ -35,11 +35,11 @@ func (o TelemetryOptions) observabilityOptions(tracer workflowobservability.Trac
 }
 
 type workflowTelemetryDefinition struct {
-	Executors         map[string]string     `json:"executors"`
-	Edges             map[string][]EdgeInfo `json:"edges"`
-	RequestPorts      []RequestPortInfo     `json:"requestPorts"`
-	StartExecutorID   string                `json:"startExecutorId"`
-	OutputExecutorIDs []string              `json:"outputExecutorIds,omitempty"`
+	Executors       map[string]string      `json:"executors"`
+	Edges           map[string][]EdgeInfo  `json:"edges"`
+	RequestPorts    []RequestPortInfo      `json:"requestPorts"`
+	StartExecutorID string                 `json:"startExecutorId"`
+	OutputExecutors map[string][]OutputTag `json:"outputExecutors,omitempty"`
 }
 
 func workflowTelemetryDefinitionFrom(wf *Workflow) workflowTelemetryDefinition {
@@ -63,17 +63,16 @@ func workflowTelemetryDefinitionFrom(wf *Workflow) workflowTelemetryDefinition {
 		}
 		return 0
 	})
-	outputs := make([]string, 0, len(wf.outputExecutors))
-	for id := range wf.outputExecutors {
-		outputs = append(outputs, id)
+	outputExecutors := make(map[string][]OutputTag, len(wf.outputExecutors))
+	for id, tags := range wf.outputExecutors {
+		outputExecutors[id] = outputTagsFromSet(tags)
 	}
-	slices.Sort(outputs)
 	return workflowTelemetryDefinition{
-		Executors:         executors,
-		Edges:             wf.ReflectEdges(),
-		RequestPorts:      ports,
-		StartExecutorID:   wf.startExecutorID,
-		OutputExecutorIDs: outputs,
+		Executors:       executors,
+		Edges:           wf.ReflectEdges(),
+		RequestPorts:    ports,
+		StartExecutorID: wf.startExecutorID,
+		OutputExecutors: outputExecutors,
 	}
 }
 

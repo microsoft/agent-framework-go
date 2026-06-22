@@ -283,13 +283,7 @@ func (h *subworkflowHostExecutor) forwardWorkflowEvent(ctx *workflow.Context, ev
 }
 
 func (h *subworkflowHostExecutor) yieldOutput(ctx context.Context, output any) error {
-	if err := h.joinContext.validateOutputType(h.id, output); err != nil {
-		return err
-	}
-	if h.joinContext.wf.HasOutputExecutor(h.id) {
-		return h.joinContext.AddEvent(ctx, workflow.OutputEvent{ExecutorID: h.id, Output: output})
-	}
-	return nil
+	return h.joinContext.yieldOutput(ctx, h.id, output)
 }
 
 func (h *subworkflowHostExecutor) qualifyRequestPortID(request *workflow.ExternalRequest) *workflow.ExternalRequest {

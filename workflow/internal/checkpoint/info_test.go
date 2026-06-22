@@ -3,6 +3,8 @@
 package checkpoint
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/workflow"
@@ -60,5 +62,64 @@ func TestWorkflowInfoMatch_UsesInferredImplementationID(t *testing.T) {
 	}
 	if got := info.Executors["a"].ImplementationID; got != "a" {
 		t.Fatalf("ImplementationID = %q, want a", got)
+	}
+}
+
+func TestWorkflowInfoMatch_RequiresOutputTagsToMatch(t *testing.T) {
+	start := testBinding("a", "test")
+	terminal, err := workflow.NewBuilder(start).
+		WithOutputFrom(start).
+		Build()
+	if err != nil {
+		t.Fatalf("Build terminal: %v", err)
+	}
+	intermediate, err := workflow.NewBuilder(start).
+		WithIntermediateOutputFrom(start).
+		Build()
+	if err != nil {
+		t.Fatalf("Build intermediate: %v", err)
+	}
+
+	info := NewWorkflowInfo(intermediate)
+	if !info.Match(intermediate) {
+		t.Fatal("expected tagged workflow info to match original workflow")
+	}
+	if info.Match(terminal) {
+		t.Fatal("expected tagged workflow info not to match terminal-only workflow")
+	}
+}
+
+func TestWorkflowInfoJSON_RoundTripsTaggedOutputExecutors(t *testing.T) {
+	start := testBinding("a", "test")
+	wf, err := workflow.NewBuilder(start).
+		WithIntermediateOutputFrom(start).
+		Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	data, err := json.Marshal(NewWorkflowInfo(wf))
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if strings.Contains(string(data), "OutputExecutorIDs") {
+		t.Fatalf("WorkflowInfo JSON should not include OutputExecutorIDs: %s", data)
+	}
+	var raw struct {
+		OutputExecutors map[string][]workflow.OutputTag
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal raw: %v", err)
+	}
+	if tags := raw.OutputExecutors["a"]; len(tags) != 1 || tags[0] != workflow.OutputTagIntermediate {
+		t.Fatalf("OutputExecutors[a] = %v, want [intermediate]", tags)
+	}
+
+	var got WorkflowInfo
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal WorkflowInfo: %v", err)
+	}
+	if !got.Match(wf) {
+		t.Fatal("expected JSON round-tripped WorkflowInfo to match workflow")
 	}
 }
