@@ -444,6 +444,62 @@ func readWorkflowStateKeys(ctx *workflow.Context, scope string) ([]string, error
 	return keys, nil
 }
 
+func TestInProcessRun_QueueClearScopeRemovesVisibleKeys(t *testing.T) {
+	const scope = "clear-scope"
+	observed := make(map[string][]string)
+
+	binding := workflow.ExecutorBinding{
+		ID:               "stateful",
+		ImplementationID: "*workflow.Executor",
+		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
+			return &workflow.Executor{
+				ID: "stateful",
+
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, message any) (any, error) {
+						switch message.(string) {
+						case "seed":
+							if err := ctx.QueueStateUpdate("first", scope, "value"); err != nil {
+								return nil, err
+							}
+							if err := ctx.QueueStateUpdate("second", scope, "value"); err != nil {
+								return nil, err
+							}
+							return nil, ctx.SendMessage("", "clear")
+						case "clear":
+							if err := ctx.QueueClearScope(scope); err != nil {
+								return nil, err
+							}
+							keys, err := readWorkflowStateKeys(ctx, scope)
+							if err != nil {
+								return nil, err
+							}
+							observed["after-clear"] = keys
+						}
+						return nil, nil
+					})
+					return rb, nil
+				},
+			}, nil
+		},
+	}
+
+	wf, err := workflow.NewBuilder(binding).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	run, err := inproc.Default.Run(t.Context(), wf, "seed")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for range run.NewEvents() {
+	}
+
+	if got := observed["after-clear"]; len(got) != 0 {
+		t.Fatalf("keys after clear = %v, want empty", got)
+	}
+}
+
 func TestInProcessRun_StateShouldError_TwoExecutors(t *testing.T) {
 	forward := workflow.NewExecutor("ForwardMessageExecutor", func(t TestTurnToken) TestTurnToken {
 		return t

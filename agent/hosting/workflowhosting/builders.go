@@ -4,6 +4,7 @@ package workflowhosting
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/workflow"
@@ -89,10 +90,10 @@ func agentNameForError(a *agent.Agent) string {
 }
 
 func applyBuilderMetadata(bld *workflow.Builder, name string, description string) *workflow.Builder {
-	if name != "" {
+	if strings.TrimSpace(name) != "" {
 		bld = bld.WithName(name)
 	}
-	if description != "" {
+	if strings.TrimSpace(description) != "" {
 		bld = bld.WithDescription(description)
 	}
 	return bld

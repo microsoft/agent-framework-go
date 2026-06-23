@@ -178,7 +178,7 @@ func (h *subworkflowHostExecutor) ensureRunSendMessage(ctx *workflow.Context, in
 		}
 	}
 
-	joinID, err := h.joinContext.AttachSuperstep(ctx, runner)
+	joinID, err := h.joinContext.attachSuperstep(runner)
 	if err != nil {
 		_ = run.Close(ctx)
 		_ = runner.RequestEndRun(ctx)
@@ -234,7 +234,7 @@ func (h *subworkflowHostExecutor) forwardWorkflowEvent(ctx *workflow.Context, ev
 		}
 		if err != nil {
 			if h.joinContext != nil {
-				_ = h.joinContext.AddEvent(ctx, workflow.ErrorEvent{Error: err, SubWorkflowID: h.id})
+				_ = h.joinContext.addEvent(ctx, workflow.ErrorEvent{Error: err, SubWorkflowID: h.id})
 			}
 			err = nil
 		}
@@ -249,13 +249,13 @@ func (h *subworkflowHostExecutor) forwardWorkflowEvent(ctx *workflow.Context, ev
 			return nil
 		}
 		if h.joinContext != nil {
-			return h.joinContext.SendMessage(ctx, h.id, "", request)
+			return h.joinContext.sendMessage(ctx, h.id, "", request)
 		}
 		return nil
 	case workflow.ErrorEvent:
 		event.SubWorkflowID = h.id
 		if h.joinContext != nil {
-			return h.joinContext.AddEvent(ctx, event)
+			return h.joinContext.addEvent(ctx, event)
 		}
 		return nil
 	case workflow.OutputEvent:
@@ -263,7 +263,7 @@ func (h *subworkflowHostExecutor) forwardWorkflowEvent(ctx *workflow.Context, ev
 			return nil
 		}
 		if h.joinContext != nil {
-			if err := h.joinContext.SendMessage(ctx, h.id, "", event.Output); err != nil {
+			if err := h.joinContext.sendMessage(ctx, h.id, "", event.Output); err != nil {
 				return err
 			}
 			return h.yieldOutput(ctx, event.Output)
@@ -271,12 +271,12 @@ func (h *subworkflowHostExecutor) forwardWorkflowEvent(ctx *workflow.Context, ev
 		return nil
 	case workflow.RequestHaltEvent:
 		if h.joinContext != nil {
-			return h.joinContext.AddEvent(ctx, workflow.RequestHaltEvent{})
+			return h.joinContext.addEvent(ctx, workflow.RequestHaltEvent{})
 		}
 		return nil
 	default:
 		if h.joinContext != nil {
-			return h.joinContext.AddEvent(ctx, evt)
+			return h.joinContext.addEvent(ctx, evt)
 		}
 		return nil
 	}
@@ -378,7 +378,7 @@ func (h *subworkflowHostExecutor) reset(ctx context.Context) error {
 	}
 
 	if h.joinContext != nil && h.joinID != "" {
-		h.joinContext.DetachSuperstep(h.joinID)
+		h.joinContext.detachSuperstep(h.joinID)
 		h.joinID = ""
 	}
 	return runErr

@@ -97,6 +97,7 @@ func (resp *Response) Usage() message.UsageDetails {
 	return usage
 }
 
+// Coalesce merges adjacent compatible content items within each message.
 func (resp *Response) Coalesce() {
 	for _, msg := range resp.Messages {
 		msg.Contents = message.CoalesceContents(msg.Contents)

@@ -7,13 +7,15 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"maps"
 	"reflect"
 	"slices"
-	"sync"
+	"strings"
 	"sync/atomic"
 
 	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/internal/concurrent"
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/internal/checkpoint"
 	"github.com/microsoft/agent-framework-go/workflow/internal/execution"
@@ -30,19 +32,15 @@ type runnerContext struct {
 	outputFilter *outputFilter
 	nextStep     atomic.Pointer[execution.StepContext]
 
-	executors   map[string]*workflow.Executor
-	executorsMu sync.RWMutex
+	executors concurrent.Map[string, *executorEntry]
 
-	queuedExternalDeliveries []func(context.Context) error
-	externalDeliveriesMu     sync.Mutex
+	queuedExternalDeliveries concurrent.Queue[func(context.Context) error]
 
-	joinedSubworkflowRunners map[string]execution.SuperStepRunner
-	joinedRunnersMu          sync.RWMutex
+	joinedSubworkflowRunners concurrent.Map[string, execution.SuperStepRunner]
 
-	externalRequests   map[string]*workflow.ExternalRequest
-	requestOwners      map[string]string // requestID -> ownerExecutorID
-	responsePortOwners map[string]string // portID -> ownerExecutorID
-	requestsMu         sync.RWMutex
+	externalRequests   concurrent.Map[string, *workflow.ExternalRequest]
+	requestOwners      concurrent.Map[string, string] // requestID -> ownerExecutorID
+	responsePortOwners concurrent.Map[string, string] // portID -> ownerExecutorID
 
 	stateManager   execution.StateManager
 	outgoingEvents execution.EventSink
@@ -51,6 +49,21 @@ type runnerContext struct {
 	concurrentRunsEnabled bool
 	previousOwnership     any
 	runEnded              atomic.Bool
+}
+
+type executorEntry struct {
+	ready    chan struct{}
+	executor *workflow.Executor
+	err      error
+}
+
+func newExecutorEntry() *executorEntry {
+	return &executorEntry{ready: make(chan struct{})}
+}
+
+func (e *executorEntry) wait() (*workflow.Executor, error) {
+	<-e.ready
+	return e.executor, e.err
 }
 
 // newInProcessRunnerContext creates a new InProcessRunnerContext.
@@ -64,23 +77,17 @@ func newInProcessRunnerContext(
 	enableConcurrentRuns bool,
 ) (*runnerContext, error) {
 	ctx := &runnerContext{
-		wf:                       wf,
-		sessionID:                sessionID,
-		tracer:                   tracer,
-		executors:                make(map[string]*workflow.Executor),
-		queuedExternalDeliveries: make([]func(context.Context) error, 0),
-		joinedSubworkflowRunners: make(map[string]execution.SuperStepRunner),
-		externalRequests:         make(map[string]*workflow.ExternalRequest),
-		requestOwners:            make(map[string]string),
-		responsePortOwners:       make(map[string]string),
-		outgoingEvents:           outgoingEvents,
-		withCheckpointing:        withCheckpointing,
-		concurrentRunsEnabled:    enableConcurrentRuns,
-		stateManager:             execution.NewStateManager(),
+		wf:                    wf,
+		sessionID:             sessionID,
+		tracer:                tracer,
+		outgoingEvents:        outgoingEvents,
+		withCheckpointing:     withCheckpointing,
+		concurrentRunsEnabled: enableConcurrentRuns,
+		stateManager:          execution.NewStateManager(),
 	}
 	ctx.nextStep.Store(new(execution.StepContext))
 
-	ctx.edgeMap = execution.NewEdgeRunner(wf, tracer, ctx.EnsureExecutor)
+	ctx.edgeMap = execution.NewEdgeRunner(wf, tracer, ctx.ensureExecutor)
 	ctx.outputFilter = newOutputFilter(wf)
 	if enableConcurrentRuns {
 		if !wf.CheckOwnership(existingOwnerSignoff) {
@@ -112,42 +119,57 @@ func (proc *runnerContext) checkEnded() error {
 	return nil
 }
 
-// EnsureExecutor ensures an executor is instantiated and initialized.
-func (proc *runnerContext) EnsureExecutor(ctx context.Context, executorID string, tracer execution.StepTracer) (*workflow.Executor, error) {
+func (proc *runnerContext) executorSnapshot() ([]*workflow.Executor, error) {
+	executors := make([]*workflow.Executor, 0)
+	var snapshotErr error
+	for _, entry := range proc.executors.All() {
+		executor, err := entry.wait()
+		if err != nil {
+			snapshotErr = errors.Join(snapshotErr, err)
+		} else if executor != nil {
+			executors = append(executors, executor)
+		}
+	}
+	return executors, snapshotErr
+}
+
+// ensureExecutor ensures an executor is instantiated and initialized.
+func (proc *runnerContext) ensureExecutor(ctx context.Context, executorID string, tracer execution.StepTracer) (*workflow.Executor, error) {
 	if err := proc.checkEnded(); err != nil {
 		return nil, err
 	}
 
-	proc.executorsMu.RLock()
-	if executor, ok := proc.executors[executorID]; ok {
-		proc.executorsMu.RUnlock()
-		return executor, nil
+	if entry, ok := proc.executors.Load(executorID); ok {
+		return entry.wait()
 	}
-	proc.executorsMu.RUnlock()
-
-	// Need to create the executor
-	proc.executorsMu.Lock()
-	defer proc.executorsMu.Unlock()
-
-	// Double-check after acquiring write lock
-	if executor, ok := proc.executors[executorID]; ok {
-		return executor, nil
+	entry := newExecutorEntry()
+	actual, loaded := proc.executors.LoadOrStore(executorID, entry)
+	if loaded {
+		return actual.wait()
 	}
+	defer close(entry.ready)
+	// Mirrors .NET's ConcurrentDictionary<string, Task<Executor>>: the stored
+	// entry represents in-flight or completed initialization, so concurrent
+	// callers wait on the same result instead of initializing twice.
 
 	registration, ok := proc.wf.ExecutorBinding(executorID)
 	if !ok {
-		return nil, fmt.Errorf("executor with ID '%s' is not registered", executorID)
+		entry.err = fmt.Errorf("executor with ID '%s' is not registered", executorID)
+		return nil, entry.err
 	}
 
 	executor, err := registration.CreateInstance(proc.sessionID)
 	if err != nil {
+		entry.err = err
 		return nil, err
 	}
 
 	if err := executor.AttachRuntime(proc); err != nil {
+		entry.err = err
 		return nil, err
 	}
-	if err := executor.Initialize(proc.Bind(ctx, executorID, nil)); err != nil {
+	if err := executor.Initialize(proc.bind(ctx, executorID, nil)); err != nil {
+		entry.err = err
 		return nil, err
 	}
 
@@ -155,73 +177,57 @@ func (proc *runnerContext) EnsureExecutor(ctx context.Context, executorID string
 		tracer.TraceInstantiated(executorID)
 	}
 
-	proc.executors[executorID] = executor
+	entry.executor = executor
 
 	return executor, nil
 }
 
-func (proc *runnerContext) PrepareForCheckpoint(ctx context.Context) error {
+func (proc *runnerContext) prepareForCheckpoint(ctx context.Context) error {
 	if err := proc.checkEnded(); err != nil {
 		return err
 	}
 
-	proc.executorsMu.RLock()
-	executors := make([]*workflow.Executor, 0, len(proc.executors))
-	for _, executor := range proc.executors {
-		executors = append(executors, executor)
+	executors, err := proc.executorSnapshot()
+	if err != nil {
+		return err
 	}
-	proc.executorsMu.RUnlock()
-
 	for _, executor := range executors {
-		if err := executor.OnCheckpoint(proc.Bind(ctx, executor.ID, nil)); err != nil {
+		if err := executor.OnCheckpoint(proc.bind(ctx, executor.ID, nil)); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (proc *runnerContext) NotifyCheckpointLoaded(ctx context.Context) error {
+func (proc *runnerContext) notifyCheckpointLoaded(ctx context.Context) error {
 	if err := proc.checkEnded(); err != nil {
 		return err
 	}
 
-	proc.executorsMu.RLock()
-	executors := make([]*workflow.Executor, 0, len(proc.executors))
-	for _, executor := range proc.executors {
-		executors = append(executors, executor)
+	executors, err := proc.executorSnapshot()
+	if err != nil {
+		return err
 	}
-	proc.executorsMu.RUnlock()
-
 	for _, executor := range executors {
-		if err := executor.OnCheckpointRestored(proc.Bind(ctx, executor.ID, nil)); err != nil {
+		if err := executor.OnCheckpointRestored(proc.bind(ctx, executor.ID, nil)); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (proc *runnerContext) ExportState() checkpoint.RunnerStateData {
-	proc.executorsMu.RLock()
-	instantiated := make(map[string]struct{}, len(proc.executors))
-	for id := range proc.executors {
+func (proc *runnerContext) exportState() checkpoint.RunnerStateData {
+	instantiated := make(map[string]struct{})
+	for id := range proc.executors.All() {
 		instantiated[id] = struct{}{}
 	}
-	proc.executorsMu.RUnlock()
 
-	proc.requestsMu.RLock()
-	outstanding := make([]*workflow.ExternalRequest, 0, len(proc.externalRequests))
-	for _, request := range proc.externalRequests {
+	outstanding := make([]*workflow.ExternalRequest, 0)
+	for _, request := range proc.externalRequests.All() {
 		outstanding = append(outstanding, request)
 	}
-	requestOwners := make(map[string]string, len(proc.requestOwners))
-	for requestID, ownerID := range proc.requestOwners {
-		requestOwners[requestID] = ownerID
-	}
-	responsePortOwners := make(map[string]string, len(proc.responsePortOwners))
-	for portID, ownerID := range proc.responsePortOwners {
-		responsePortOwners[portID] = ownerID
-	}
-	proc.requestsMu.RUnlock()
+	requestOwners := maps.Collect(proc.requestOwners.All())
+	responsePortOwners := maps.Collect(proc.responsePortOwners.All())
 
 	return checkpoint.RunnerStateData{
 		InstantiatedExecutors: instantiated,
@@ -232,7 +238,7 @@ func (proc *runnerContext) ExportState() checkpoint.RunnerStateData {
 	}
 }
 
-func (proc *runnerContext) ImportState(ctx context.Context, cp *checkpoint.Checkpoint) error {
+func (proc *runnerContext) importState(ctx context.Context, cp *checkpoint.Checkpoint) error {
 	if err := proc.checkEnded(); err != nil {
 		return err
 	}
@@ -240,58 +246,53 @@ func (proc *runnerContext) ImportState(ctx context.Context, cp *checkpoint.Check
 		return errors.New("checkpoint cannot be nil")
 	}
 
-	proc.executorsMu.Lock()
-	proc.executors = make(map[string]*workflow.Executor, len(cp.RunnerData.InstantiatedExecutors))
-	proc.executorsMu.Unlock()
-
-	proc.joinedRunnersMu.Lock()
-	proc.joinedSubworkflowRunners = make(map[string]execution.SuperStepRunner)
-	proc.joinedRunnersMu.Unlock()
-
 	for executorID := range cp.RunnerData.InstantiatedExecutors {
-		if _, err := proc.EnsureExecutor(ctx, executorID, nil); err != nil {
-			return err
+		if _, ok := proc.executors.Load(executorID); !ok {
+			if _, err := proc.ensureExecutor(ctx, executorID, nil); err != nil {
+				return err
+			}
 		}
 	}
 
-	proc.externalDeliveriesMu.Lock()
-	proc.queuedExternalDeliveries = make([]func(context.Context) error, 0)
-	proc.externalDeliveriesMu.Unlock()
+	for {
+		if _, ok := proc.queuedExternalDeliveries.Dequeue(); !ok {
+			break
+		}
+	}
 
 	nextStep := new(execution.StepContext)
 	nextStep.ImportMessages(cp.RunnerData.QueuedMessages)
 	proc.nextStep.Store(nextStep)
 
-	proc.requestsMu.Lock()
-	proc.externalRequests = make(map[string]*workflow.ExternalRequest, len(cp.RunnerData.OutstandingRequests))
-	proc.requestOwners = make(map[string]string, len(cp.RunnerData.RequestOwners))
-	proc.responsePortOwners = make(map[string]string, len(cp.RunnerData.ResponsePortOwners))
+	proc.externalRequests.Clear()
+	proc.requestOwners.Clear()
+	proc.responsePortOwners.Clear()
 	for requestID, ownerID := range cp.RunnerData.RequestOwners {
-		proc.requestOwners[requestID] = ownerID
+		proc.requestOwners.Store(requestID, ownerID)
 	}
 	for portID, ownerID := range cp.RunnerData.ResponsePortOwners {
-		proc.responsePortOwners[portID] = ownerID
+		proc.responsePortOwners.Store(portID, ownerID)
 	}
 	for _, request := range cp.RunnerData.OutstandingRequests {
-		proc.externalRequests[request.RequestID] = request
-		if ownerID := proc.requestOwners[request.RequestID]; ownerID == "" {
-			ownerID = proc.responsePortOwners[request.PortInfo.PortID]
+		proc.externalRequests.Store(request.RequestID, request)
+		if ownerID, _ := proc.requestOwners.Load(request.RequestID); ownerID == "" {
+			ownerID, _ = proc.responsePortOwners.Load(request.PortInfo.PortID)
 			if ownerID == "" {
 				ownerID = request.PortInfo.PortID
 			}
-			proc.requestOwners[request.RequestID] = ownerID
+			proc.requestOwners.Store(request.RequestID, ownerID)
 		}
-		if _, ok := proc.responsePortOwners[request.PortInfo.PortID]; !ok {
-			proc.responsePortOwners[request.PortInfo.PortID] = proc.requestOwners[request.RequestID]
+		if _, ok := proc.responsePortOwners.Load(request.PortInfo.PortID); !ok {
+			ownerID, _ := proc.requestOwners.Load(request.RequestID)
+			proc.responsePortOwners.Store(request.PortInfo.PortID, ownerID)
 		}
 	}
-	proc.requestsMu.Unlock()
 
 	return nil
 }
 
-// AddExternalMessage queues an external message for delivery.
-func (proc *runnerContext) AddExternalMessage(ctx context.Context, message any, declaredType reflect.Type) error {
+// addExternalMessage queues an external message for delivery.
+func (proc *runnerContext) addExternalMessage(message any, declaredType reflect.Type) error {
 	if err := proc.checkEnded(); err != nil {
 		return err
 	}
@@ -299,9 +300,7 @@ func (proc *runnerContext) AddExternalMessage(ctx context.Context, message any, 
 		return errors.New("message cannot be nil")
 	}
 
-	proc.externalDeliveriesMu.Lock()
-	defer proc.externalDeliveriesMu.Unlock()
-	proc.queuedExternalDeliveries = append(proc.queuedExternalDeliveries, func(ctx context.Context) error {
+	proc.queuedExternalDeliveries.Enqueue(func(ctx context.Context) error {
 		envelope, err := execution.NewMessageEnvelope(message, declaredType, "", "")
 		if err != nil {
 			return err
@@ -319,16 +318,29 @@ func (proc *runnerContext) AddExternalMessage(ctx context.Context, message any, 
 	return nil
 }
 
-// AddExternalResponse queues an external response for delivery.
-func (proc *runnerContext) AddExternalResponse(ctx context.Context, response *workflow.ExternalResponse) error {
+// addExternalResponse queues an external response for delivery.
+func (proc *runnerContext) addExternalResponse(response *workflow.ExternalResponse) error {
 	if err := proc.checkEnded(); err != nil {
 		return err
 	}
+	if response == nil {
+		return errors.New("response cannot be nil")
+	}
 
-	proc.externalDeliveriesMu.Lock()
-	defer proc.externalDeliveriesMu.Unlock()
-	proc.queuedExternalDeliveries = append(proc.queuedExternalDeliveries, func(ctx context.Context) error {
-		ownerID, existed := proc.CompleteRequest(response.RequestID)
+	proc.queuedExternalDeliveries.Enqueue(func(ctx context.Context) error {
+		pending, existed := proc.externalRequests.Load(response.RequestID)
+		if !existed {
+			return fmt.Errorf("no pending request with ID %s found in the workflow context", response.RequestID)
+		}
+
+		// Reject responses whose PortInfo.PortID does not match the originating request's port to
+		// prevent forged routing into unrelated port-specific execution paths.
+		if pending != nil && pending.PortInfo.PortID != response.PortInfo.PortID {
+			return fmt.Errorf("response port id %q does not match the originating port id for request %s", response.PortInfo.PortID, response.RequestID)
+		}
+
+		// Consume only after validation so a rejected response leaves the legitimate one able to complete.
+		ownerID, existed := proc.completeRequest(response.RequestID)
 		if !existed {
 			return fmt.Errorf("no pending request with ID %s found in the workflow context", response.RequestID)
 		}
@@ -346,19 +358,14 @@ func (proc *runnerContext) AddExternalResponse(ctx context.Context, response *wo
 	return nil
 }
 
-// HasQueuedExternalDeliveries returns true if there are queued external deliveries.
-func (proc *runnerContext) HasQueuedExternalDeliveries() bool {
-	proc.externalDeliveriesMu.Lock()
-	defer proc.externalDeliveriesMu.Unlock()
-	return len(proc.queuedExternalDeliveries) > 0
+// hasQueuedExternalDeliveries returns true if there are queued external deliveries.
+func (proc *runnerContext) hasQueuedExternalDeliveries() bool {
+	return !proc.queuedExternalDeliveries.IsEmpty()
 }
 
-// JoinedRunnersHaveActions returns true if any joined subworkflow has actions.
-func (proc *runnerContext) JoinedRunnersHaveActions() bool {
-	proc.joinedRunnersMu.RLock()
-	defer proc.joinedRunnersMu.RUnlock()
-
-	for _, runner := range proc.joinedSubworkflowRunners {
+// joinedRunnersHaveActions returns true if any joined subworkflow has actions.
+func (proc *runnerContext) joinedRunnersHaveActions() bool {
+	for runner := range proc.joinedSubworkflowRunners.Values() {
 		if runner.HasUnprocessedMessages() {
 			return true
 		}
@@ -366,25 +373,18 @@ func (proc *runnerContext) JoinedRunnersHaveActions() bool {
 	return false
 }
 
-// NextStepHasActions returns true if the next step has actions to process.
-func (proc *runnerContext) NextStepHasActions() bool {
-	return proc.currentStep().HasMessages() || proc.HasQueuedExternalDeliveries() || proc.JoinedRunnersHaveActions()
+// nextStepHasActions returns true if the next step has actions to process.
+func (proc *runnerContext) nextStepHasActions() bool {
+	return proc.currentStep().HasMessages() || proc.hasQueuedExternalDeliveries() || proc.joinedRunnersHaveActions()
 }
 
-// HasUnservicedRequests returns true if there are unserviced external requests.
-func (proc *runnerContext) HasUnservicedRequests() bool {
-	proc.requestsMu.RLock()
-	hasLocal := len(proc.externalRequests) > 0
-	proc.requestsMu.RUnlock()
-
-	if hasLocal {
+// hasUnservicedRequests returns true if there are unserviced external requests.
+func (proc *runnerContext) hasUnservicedRequests() bool {
+	for range proc.externalRequests.All() {
 		return true
 	}
 
-	proc.joinedRunnersMu.RLock()
-	defer proc.joinedRunnersMu.RUnlock()
-
-	for _, runner := range proc.joinedSubworkflowRunners {
+	for runner := range proc.joinedSubworkflowRunners.Values() {
 		if runner.HasUnservicedRequests() {
 			return true
 		}
@@ -394,21 +394,21 @@ func (proc *runnerContext) HasUnservicedRequests() bool {
 
 // RepublishUnservicedRequests re-emits outstanding external requests after an
 // event stream has subscribed, matching checkpoint-resume behavior.
-func (proc *runnerContext) RepublishUnservicedRequests(ctx context.Context) error {
-	proc.requestsMu.RLock()
-	requestIDs := make([]string, 0, len(proc.externalRequests))
-	for requestID := range proc.externalRequests {
+func (proc *runnerContext) republishUnservicedRequests(ctx context.Context) error {
+	requestIDs := make([]string, 0)
+	requestsByID := make(map[string]*workflow.ExternalRequest)
+	for requestID, request := range proc.externalRequests.All() {
 		requestIDs = append(requestIDs, requestID)
+		requestsByID[requestID] = request
 	}
 	slices.Sort(requestIDs)
 	requests := make([]*workflow.ExternalRequest, 0, len(requestIDs))
 	for _, requestID := range requestIDs {
-		requests = append(requests, proc.externalRequests[requestID])
+		requests = append(requests, requestsByID[requestID])
 	}
-	proc.requestsMu.RUnlock()
 
 	for _, request := range requests {
-		if err := proc.AddEvent(ctx, workflow.RequestInfoEvent{Request: request}); err != nil {
+		if err := proc.addEvent(ctx, workflow.RequestInfoEvent{Request: request}); err != nil {
 			return err
 		}
 	}
@@ -416,18 +416,18 @@ func (proc *runnerContext) RepublishUnservicedRequests(ctx context.Context) erro
 }
 
 // Advance advances to the next step, processing all queued external deliveries.
-func (proc *runnerContext) Advance(ctx context.Context) (*execution.StepContext, error) {
+func (proc *runnerContext) advance(ctx context.Context) (*execution.StepContext, error) {
 	if err := proc.checkEnded(); err != nil {
 		return nil, err
 	}
 
-	// Process all queued external deliveries
-	proc.externalDeliveriesMu.Lock()
-	deliveries := proc.queuedExternalDeliveries
-	proc.queuedExternalDeliveries = make([]func(context.Context) error, 0)
-	proc.externalDeliveriesMu.Unlock()
+	for {
+		delivery, ok := proc.queuedExternalDeliveries.Dequeue()
+		if !ok {
+			break
+		}
 
-	for _, delivery := range deliveries {
+		// Deliveries may mutate shared edge state, matching .NET's sequential TryDequeue loop.
 		if err := delivery(ctx); err != nil {
 			return nil, err
 		}
@@ -438,7 +438,7 @@ func (proc *runnerContext) Advance(ctx context.Context) (*execution.StepContext,
 }
 
 // AddEvent adds a workflow event to the outgoing event stream.
-func (proc *runnerContext) AddEvent(ctx context.Context, event workflow.Event) error {
+func (proc *runnerContext) addEvent(ctx context.Context, event workflow.Event) error {
 	if err := proc.checkEnded(); err != nil {
 		return err
 	}
@@ -446,7 +446,7 @@ func (proc *runnerContext) AddEvent(ctx context.Context, event workflow.Event) e
 }
 
 // SendMessage sends a message from one executor to another through the workflow edges.
-func (proc *runnerContext) SendMessage(ctx context.Context, sourceID, targetID string, message any) error {
+func (proc *runnerContext) sendMessage(ctx context.Context, sourceID, targetID string, message any) error {
 	telemetry := observability.FromContext(ctx)
 	ctx, span := telemetry.StartMessageSend(ctx, sourceID, targetID, message)
 	defer span.End()
@@ -461,7 +461,7 @@ func (proc *runnerContext) SendMessage(ctx context.Context, sourceID, targetID s
 		span.CaptureError(err)
 		return err
 	}
-	sourceExecutor, err := proc.EnsureExecutor(ctx, sourceID, nil)
+	sourceExecutor, err := proc.ensureExecutor(ctx, sourceID, nil)
 	if err != nil {
 		span.CaptureError(err)
 		return err
@@ -497,7 +497,7 @@ func (proc *runnerContext) SendMessage(ctx context.Context, sourceID, targetID s
 }
 
 // Bind creates a bound workflow context for a specific executor.
-func (proc *runnerContext) Bind(ctx context.Context, executorID string, traceContext map[string]string) *workflow.Context {
+func (proc *runnerContext) bind(ctx context.Context, executorID string, traceContext map[string]string) *workflow.Context {
 	boundCtx := ctx
 	telemetry := observability.FromContext(ctx)
 	boundCtx = observability.ContextWithTelemetry(boundCtx, telemetry)
@@ -506,11 +506,11 @@ func (proc *runnerContext) Bind(ctx context.Context, executorID string, traceCon
 		Context: boundCtx,
 
 		AddEvent: func(event workflow.Event) error {
-			return proc.AddEvent(boundCtx, event)
+			return proc.addEvent(boundCtx, event)
 		},
 
 		SendMessage: func(targetID string, message any) error {
-			return proc.SendMessage(boundCtx, executorID, targetID, message)
+			return proc.sendMessage(boundCtx, executorID, targetID, message)
 		},
 
 		YieldOutput: func(output any) error {
@@ -518,11 +518,11 @@ func (proc *runnerContext) Bind(ctx context.Context, executorID string, traceCon
 		},
 
 		RequestHalt: func() error {
-			return proc.AddEvent(boundCtx, workflow.RequestHaltEvent{})
+			return proc.addEvent(boundCtx, workflow.RequestHaltEvent{})
 		},
 
 		PostRequest: func(request *workflow.ExternalRequest) error {
-			return proc.Post(boundCtx, executorID, request)
+			return proc.post(boundCtx, executorID, request)
 		},
 
 		ReadState: func(key string, scope string) (any, error) {
@@ -574,6 +574,10 @@ func (proc *runnerContext) Bind(ctx context.Context, executorID string, traceCon
 			return proc.stateManager.WriteState(executorID, scope, key, value)
 		},
 
+		QueueClearScope: func(scope string) error {
+			return proc.stateManager.ClearState(executorID, scope)
+		},
+
 		TraceContext: func() map[string]any {
 			if traceContext == nil {
 				return nil
@@ -591,24 +595,32 @@ func (proc *runnerContext) Bind(ctx context.Context, executorID string, traceCon
 }
 
 func (proc *runnerContext) yieldOutput(ctx context.Context, executorID string, output any) error {
+	if err := proc.checkEnded(); err != nil {
+		return err
+	}
 	if output == nil {
 		return fmt.Errorf("executor %q cannot output nil", executorID)
 	}
 
-	isAgentResponseShaped := isAgentResponseOutput(output)
-	if isAgentResponseShaped {
-		if _, err := proc.EnsureExecutor(ctx, executorID, nil); err != nil {
-			return err
-		}
-	} else if err := proc.validateOutputType(executorID, output); err != nil {
+	sourceExecutor, err := proc.ensureExecutor(ctx, executorID, nil)
+	if err != nil {
 		return err
+	}
+	isAgentResponseShaped := isAgentResponseOutput(output)
+	if !isAgentResponseShaped && !execution.CanOutputType(sourceExecutor, reflect.TypeOf(output)) {
+		expectedTypes := make([]string, 0, len(sourceExecutor.DescribeProtocol().Yields))
+		for _, typ := range sourceExecutor.DescribeProtocol().Yields {
+			expectedTypes = append(expectedTypes, typ.String())
+		}
+		slices.Sort(expectedTypes)
+		return fmt.Errorf("executor %q cannot output object of type %s; expected one of %v", executorID, reflect.TypeOf(output), expectedTypes)
 	}
 
 	tags, ok := proc.outputFilter.tryGetTags(executorID)
 	if !ok {
 		return nil
 	}
-	return proc.AddEvent(ctx, workflow.OutputEvent{
+	return proc.addEvent(ctx, workflow.OutputEvent{
 		ExecutorID: executorID,
 		Output:     output,
 		Tags:       tags,
@@ -624,146 +636,92 @@ func isAgentResponseOutput(output any) bool {
 	}
 }
 
-func (proc *runnerContext) validateOutputType(executorID string, output any) error {
-	if output == nil {
-		return fmt.Errorf("executor %q cannot output nil", executorID)
-	}
-
-	proc.executorsMu.RLock()
-	executor, ok := proc.executors[executorID]
-	proc.executorsMu.RUnlock()
-	if !ok {
-		return fmt.Errorf("executor %q is not instantiated", executorID)
-	}
-
-	declaredTypes := executor.DescribeProtocol().Yields
-	outputType := reflect.TypeOf(output)
-	if execution.CanOutputType(executor, outputType) {
-		return nil
-	}
-	return fmt.Errorf("executor %q cannot output object of type %s; expected one of %v", executorID, outputType, sortedTypeNames(declaredTypes))
-}
-
-func sortedTypeNames(types []reflect.Type) []string {
-	names := make([]string, 0, len(types))
-	for _, typ := range types {
-		names = append(names, typ.String())
-	}
-	slices.Sort(names)
-	return names
-}
-
 // Post raises an external request originating from the executor identified
 // by ownerID. The matching response (delivered later via [AddExternalResponse])
 // will be routed back to that executor as a regular message.
-func (proc *runnerContext) Post(ctx context.Context, ownerID string, request *workflow.ExternalRequest) error {
+func (proc *runnerContext) post(ctx context.Context, ownerID string, request *workflow.ExternalRequest) error {
 	if err := proc.checkEnded(); err != nil {
 		return err
 	}
 	if ownerID == "" {
 		return errors.New("ownerID is required when posting an external request")
 	}
+	if request == nil {
+		return errors.New("request cannot be nil")
+	}
 
-	proc.requestsMu.Lock()
-	if _, exists := proc.externalRequests[request.RequestID]; exists {
-		proc.requestsMu.Unlock()
+	if _, exists := proc.externalRequests.LoadOrStore(request.RequestID, request); exists {
 		return fmt.Errorf("pending request with id '%s' already exists", request.RequestID)
 	}
-	proc.externalRequests[request.RequestID] = request
-	proc.requestOwners[request.RequestID] = ownerID
-	proc.responsePortOwners[request.PortInfo.PortID] = ownerID
-	proc.requestsMu.Unlock()
+	proc.requestOwners.Store(request.RequestID, ownerID)
+	proc.responsePortOwners.Store(request.PortInfo.PortID, ownerID)
 
-	return proc.AddEvent(ctx, workflow.RequestInfoEvent{Request: request})
+	return proc.addEvent(ctx, workflow.RequestInfoEvent{Request: request})
 }
 
-// CompleteRequest marks a request as completed and returns the executor that
+// completeRequest marks a request as completed and returns the executor that
 // posted it.
-func (proc *runnerContext) CompleteRequest(requestID string) (string, bool) {
+func (proc *runnerContext) completeRequest(requestID string) (string, bool) {
 	if err := proc.checkEnded(); err != nil {
 		return "", false
 	}
 
-	proc.requestsMu.Lock()
-	defer proc.requestsMu.Unlock()
-
-	_, existed := proc.externalRequests[requestID]
-	delete(proc.externalRequests, requestID)
-	owner := proc.requestOwners[requestID]
-	delete(proc.requestOwners, requestID)
+	_, existed := proc.externalRequests.LoadAndDelete(requestID)
+	owner, _ := proc.requestOwners.LoadAndDelete(requestID)
 	return owner, existed
 }
 
 // ResponsePortExecutorID returns the executor that handles responses on the
 // given port, or ("", false) if no such port is registered. Mirrors .NET's
 // [EdgeMap.TryGetResponsePortExecutorId].
-func (proc *runnerContext) ResponsePortExecutorID(portID string) (string, bool) {
-	proc.requestsMu.Lock()
-	defer proc.requestsMu.Unlock()
-	owner, ok := proc.responsePortOwners[portID]
-	return owner, ok
+func (proc *runnerContext) responsePortExecutorID(portID string) (string, bool) {
+	return proc.responsePortOwners.Load(portID)
 }
 
-// JoinedSubworkflowRunners returns all joined subworkflow runners.
-func (proc *runnerContext) JoinedSubworkflowRunners() []execution.SuperStepRunner {
-	proc.joinedRunnersMu.RLock()
-	defer proc.joinedRunnersMu.RUnlock()
-
-	runners := make([]execution.SuperStepRunner, 0, len(proc.joinedSubworkflowRunners))
-	for _, runner := range proc.joinedSubworkflowRunners {
+// joinedSubworkflowRunnerSnapshot returns all joined subworkflow runners.
+func (proc *runnerContext) joinedSubworkflowRunnerSnapshot() []execution.SuperStepRunner {
+	runners := make([]execution.SuperStepRunner, 0)
+	for runner := range proc.joinedSubworkflowRunners.Values() {
 		runners = append(runners, runner)
 	}
 	return runners
 }
 
-// AttachSuperstep attaches a subworkflow runner.
-func (proc *runnerContext) AttachSuperstep(ctx context.Context, runner execution.SuperStepRunner) (string, error) {
-	proc.joinedRunnersMu.Lock()
-	defer proc.joinedRunnersMu.Unlock()
-
-	// Generate a unique join ID
-	joinID := uuid.NewString()
-	proc.joinedSubworkflowRunners[joinID] = runner
-	return joinID, nil
+// attachSuperstep attaches a subworkflow runner.
+func (proc *runnerContext) attachSuperstep(runner execution.SuperStepRunner) (string, error) {
+	for {
+		joinID := strings.ReplaceAll(uuid.NewString(), "-", "")
+		if _, exists := proc.joinedSubworkflowRunners.LoadOrStore(joinID, runner); !exists {
+			return joinID, nil
+		}
+	}
 }
 
-// DetachSuperstep detaches a subworkflow runner.
-func (proc *runnerContext) DetachSuperstep(joinID string) bool {
-	proc.joinedRunnersMu.Lock()
-	defer proc.joinedRunnersMu.Unlock()
-
-	_, existed := proc.joinedSubworkflowRunners[joinID]
-	delete(proc.joinedSubworkflowRunners, joinID)
+// detachSuperstep detaches a subworkflow runner.
+func (proc *runnerContext) detachSuperstep(joinID string) bool {
+	_, existed := proc.joinedSubworkflowRunners.LoadAndDelete(joinID)
 	return existed
 }
 
-// EndRun marks the run as ended and cleans up resources.
-func (proc *runnerContext) EndRun(ctx context.Context) error {
+// endRun marks the run as ended and cleans up resources.
+func (proc *runnerContext) endRun(ctx context.Context) error {
 	if proc.runEnded.Swap(true) {
 		return nil // Already ended
 	}
 	var runErr error
 
-	proc.executorsMu.RLock()
-	executors := make([]*workflow.Executor, 0, len(proc.executors))
-	for _, executor := range proc.executors {
-		executors = append(executors, executor)
+	executors, err := proc.executorSnapshot()
+	if err != nil {
+		runErr = errors.Join(runErr, err)
 	}
-	proc.executorsMu.RUnlock()
-
 	for _, executor := range executors {
 		if err := executor.Close(ctx); err != nil {
 			runErr = errors.Join(runErr, err)
 		}
 	}
 
-	proc.joinedRunnersMu.Lock()
-	joinedRunners := make([]execution.SuperStepRunner, 0, len(proc.joinedSubworkflowRunners))
-	for _, runner := range proc.joinedSubworkflowRunners {
-		joinedRunners = append(joinedRunners, runner)
-	}
-	proc.joinedSubworkflowRunners = make(map[string]execution.SuperStepRunner)
-	proc.joinedRunnersMu.Unlock()
+	joinedRunners := slices.Collect(proc.joinedSubworkflowRunners.Values())
+	proc.joinedSubworkflowRunners.Clear()
 
 	for _, runner := range joinedRunners {
 		if err := runner.RequestEndRun(ctx); err != nil {

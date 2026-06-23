@@ -553,6 +553,10 @@ type Context struct {
 	// If no scope is provided, the executor's default scope is used.
 	QueueStateUpdate func(key string, scope string, value any) error
 
+	// QueueClearScope clears all state entries within the specified scope.
+	// If no scope is provided, the executor's default scope is used.
+	QueueClearScope func(scope string) error
+
 	// TraceContext returns the trace context associated with the current message about to be processed by the executor, if any.
 	TraceContext func() map[string]any
 
