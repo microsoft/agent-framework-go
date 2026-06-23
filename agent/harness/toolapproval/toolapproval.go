@@ -382,6 +382,9 @@ func serializeArguments(arguments string) (map[string]string, error) {
 }
 
 func argumentMapsEqual(a, b map[string]string) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
 	if len(a) != len(b) {
 		return false
 	}
