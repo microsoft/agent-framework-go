@@ -1009,9 +1009,30 @@ func TestRequestPortBind_RejectsResponseForOtherPort(t *testing.T) {
 		Data:      workflow.AnyPortableValue(int(7)),
 	}
 	if _, err := run.Resume(ctx, resp); err != nil {
-		t.Fatalf("Resume: %v", err)
+		t.Fatalf("Resume with mismatched response port: %v", err)
 	}
-	for range run.OutgoingEvents() {
+	errorsAfterMismatch := errorEvents(slices.Collect(run.OutgoingEvents()))
+	var sawPortMismatch bool
+	for _, errEvt := range errorsAfterMismatch {
+		if errEvt.Error != nil &&
+			strings.Contains(errEvt.Error.Error(), `response port ID "other"`) &&
+			strings.Contains(errEvt.Error.Error(), req.RequestID) {
+			sawPortMismatch = true
+		}
+	}
+	if !sawPortMismatch {
+		t.Fatal("expected an ErrorEvent for the mismatched response port")
+	}
+
+	legitimate, err := req.CreateResponse(int(7))
+	if err != nil {
+		t.Fatalf("CreateResponse: %v", err)
+	}
+	if _, err := run.Resume(ctx, legitimate); err != nil {
+		t.Fatalf("Resume with legitimate response after rejected mismatch: %v", err)
+	}
+	if got := len(errorEvents(slices.Collect(run.OutgoingEvents()))); got != len(errorsAfterMismatch) {
+		t.Fatalf("legitimate response after rejected mismatch added an error event; got %d errors, want %d", got, len(errorsAfterMismatch))
 	}
 }
 

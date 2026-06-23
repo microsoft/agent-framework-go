@@ -328,9 +328,9 @@ func (proc *runnerContext) AddExternalResponse(ctx context.Context, response *wo
 	proc.externalDeliveriesMu.Lock()
 	defer proc.externalDeliveriesMu.Unlock()
 	proc.queuedExternalDeliveries = append(proc.queuedExternalDeliveries, func(ctx context.Context) error {
-		ownerID, existed := proc.CompleteRequest(response.RequestID)
-		if !existed {
-			return fmt.Errorf("no pending request with ID %s found in the workflow context", response.RequestID)
+		ownerID, err := proc.completeResponse(response)
+		if err != nil {
+			return err
 		}
 
 		mapping, err := proc.edgeMap.PrepareDeliveryForResponse(ctx, response, ownerID)
@@ -677,21 +677,28 @@ func (proc *runnerContext) Post(ctx context.Context, ownerID string, request *wo
 	return proc.AddEvent(ctx, workflow.RequestInfoEvent{Request: request})
 }
 
-// CompleteRequest marks a request as completed and returns the executor that
-// posted it.
-func (proc *runnerContext) CompleteRequest(requestID string) (string, bool) {
+// completeResponse validates and consumes the matching pending request, then
+// returns the executor that posted it.
+func (proc *runnerContext) completeResponse(response *workflow.ExternalResponse) (string, error) {
 	if err := proc.checkEnded(); err != nil {
-		return "", false
+		return "", err
 	}
 
 	proc.requestsMu.Lock()
 	defer proc.requestsMu.Unlock()
 
-	_, existed := proc.externalRequests[requestID]
-	delete(proc.externalRequests, requestID)
-	owner := proc.requestOwners[requestID]
-	delete(proc.requestOwners, requestID)
-	return owner, existed
+	pendingRequest, existed := proc.externalRequests[response.RequestID]
+	if !existed {
+		return "", fmt.Errorf("no pending request with ID %s found in the workflow context", response.RequestID)
+	}
+	if pendingRequest.PortInfo.PortID != response.PortInfo.PortID {
+		return "", fmt.Errorf("response port ID %q does not match the originating port ID for request %s", response.PortInfo.PortID, response.RequestID)
+	}
+
+	delete(proc.externalRequests, response.RequestID)
+	owner := proc.requestOwners[response.RequestID]
+	delete(proc.requestOwners, response.RequestID)
+	return owner, nil
 }
 
 // ResponsePortExecutorID returns the executor that handles responses on the
