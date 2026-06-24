@@ -189,10 +189,11 @@ func searchForSkills(filesystem fs.FS, dir string, results *[]discoveredSkillDir
 	skillPath := path.Join(dir, skillFileName)
 	if _, err := fs.Stat(filesystem, skillPath); err == nil {
 		sub := filesystem
+		var subErr error
 		if dir != "." {
-			sub, err = fs.Sub(filesystem, dir)
+			sub, subErr = fs.Sub(filesystem, dir)
 		}
-		if err == nil {
+		if subErr == nil {
 			*results = append(*results, discoveredSkillDir{fsys: sub, path: dir})
 			return
 		}
