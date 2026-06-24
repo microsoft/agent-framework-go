@@ -1023,6 +1023,13 @@ func TestRequestPortBind_RejectsResponseForOtherPort(t *testing.T) {
 	if !sawPortMismatch {
 		t.Fatal("expected an ErrorEvent for the mismatched response port")
 	}
+	status, err := run.GetStatus(ctx)
+	if err != nil {
+		t.Fatalf("GetStatus after mismatched response: %v", err)
+	}
+	if status == inproc.RunStatusEnded {
+		t.Fatal("run ended after rejected mismatched response")
+	}
 
 	legitimate, err := req.CreateResponse(int(7))
 	if err != nil {

@@ -324,13 +324,16 @@ func (proc *runnerContext) AddExternalResponse(ctx context.Context, response *wo
 	if err := proc.checkEnded(); err != nil {
 		return err
 	}
+	if response == nil {
+		return errors.New("response cannot be nil")
+	}
 
 	proc.externalDeliveriesMu.Lock()
 	defer proc.externalDeliveriesMu.Unlock()
 	proc.queuedExternalDeliveries = append(proc.queuedExternalDeliveries, func(ctx context.Context) error {
 		ownerID, err := proc.completeResponse(response)
 		if err != nil {
-			return err
+			return proc.outgoingEvents.EnqueueNonFatal(ctx, workflow.ErrorEvent{Error: err})
 		}
 
 		mapping, err := proc.edgeMap.PrepareDeliveryForResponse(ctx, response, ownerID)
@@ -683,6 +686,9 @@ func (proc *runnerContext) completeResponse(response *workflow.ExternalResponse)
 	if err := proc.checkEnded(); err != nil {
 		return "", err
 	}
+	if response == nil {
+		return "", errors.New("response cannot be nil")
+	}
 
 	proc.requestsMu.Lock()
 	defer proc.requestsMu.Unlock()
@@ -692,7 +698,7 @@ func (proc *runnerContext) completeResponse(response *workflow.ExternalResponse)
 		return "", fmt.Errorf("no pending request with ID %s found in the workflow context", response.RequestID)
 	}
 	if pendingRequest.PortInfo.PortID != response.PortInfo.PortID {
-		return "", fmt.Errorf("response port ID %q does not match the originating port ID for request %s", response.PortInfo.PortID, response.RequestID)
+		return "", fmt.Errorf("response port ID %q does not match originating port ID %q for request %s", response.PortInfo.PortID, pendingRequest.PortInfo.PortID, response.RequestID)
 	}
 
 	delete(proc.externalRequests, response.RequestID)

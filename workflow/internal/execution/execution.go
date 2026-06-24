@@ -20,6 +20,7 @@ const (
 
 type EventSink interface {
 	Enqueue(context.Context, workflow.Event) error
+	EnqueueNonFatal(context.Context, workflow.Event) error
 }
 
 var _ EventSink = (*ConcurrentEventSink)(nil)
@@ -28,6 +29,8 @@ type ConcurrentEventSink struct {
 	mu          sync.RWMutex
 	EventRaised []func(context.Context, any, workflow.Event) error
 }
+
+type nonFatalEventSender struct{}
 
 func (s *ConcurrentEventSink) AddHandler(handler func(context.Context, any, workflow.Event) error) {
 	if handler == nil {
@@ -60,12 +63,20 @@ func (s *ConcurrentEventSink) HandlerCount() int {
 }
 
 func (s *ConcurrentEventSink) Enqueue(ctx context.Context, evt workflow.Event) error {
+	return s.enqueue(ctx, nil, evt)
+}
+
+func (s *ConcurrentEventSink) EnqueueNonFatal(ctx context.Context, evt workflow.Event) error {
+	return s.enqueue(ctx, nonFatalEventSender{}, evt)
+}
+
+func (s *ConcurrentEventSink) enqueue(ctx context.Context, sender any, evt workflow.Event) error {
 	s.mu.RLock()
 	handlers := append([]func(context.Context, any, workflow.Event) error(nil), s.EventRaised...)
 	s.mu.RUnlock()
 
 	for _, handler := range handlers {
-		if err := handler(ctx, nil, evt); err != nil {
+		if err := handler(ctx, sender, evt); err != nil {
 			return err
 		}
 	}
