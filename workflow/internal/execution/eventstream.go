@@ -247,7 +247,7 @@ func (s *streamingRunEventStream) onEventRaised(ctx context.Context, sender any,
 		return err
 	}
 	if _, ok := evt.(workflow.ErrorEvent); ok {
-		if _, nonFatal := sender.(nonFatalEventSender); !nonFatal {
+		if _, isNonFatal := sender.(nonFatalEventSender); !isNonFatal {
 			s.runLoopCancel()
 		}
 		return nil
