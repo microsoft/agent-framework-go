@@ -194,15 +194,8 @@ func sendMsg(session *agent.Session, seq iter.Seq2[a2a.Event, error], yield func
 					}
 				}
 			}
-			if !yield(&agent.ResponseUpdate{
-				RawRepresentation:    e,
-				AdditionalProperties: e.Metadata,
-				MessageID:            messageID,
-				ResponseID:           string(e.TaskID),
-				Role:                 message.RoleAssistant,
-				Contents:             contents,
-				CreatedAt:            time.Now(),
-			}, nil) {
+			update := newResponseUpdate(e, e.Metadata, string(e.TaskID), messageID, message.RoleAssistant, contents, time.Now())
+			if !yield(update, nil) {
 				return
 			}
 		case *a2a.TaskArtifactUpdateEvent:
@@ -211,15 +204,8 @@ func sendMsg(session *agent.Session, seq iter.Seq2[a2a.Event, error], yield func
 				yield(nil, err)
 				return
 			}
-			if !yield(&agent.ResponseUpdate{
-				RawRepresentation:    e,
-				AdditionalProperties: e.Metadata,
-				MessageID:            string(e.Artifact.ID),
-				ResponseID:           string(e.TaskID),
-				Contents:             contents,
-				Role:                 message.RoleAssistant,
-				CreatedAt:            time.Now(),
-			}, nil) {
+			update := newResponseUpdate(e, e.Metadata, string(e.TaskID), string(e.Artifact.ID), message.RoleAssistant, contents, time.Now())
+			if !yield(update, nil) {
 				return
 			}
 		case *a2a.Message:
@@ -232,21 +218,26 @@ func sendMsg(session *agent.Session, seq iter.Seq2[a2a.Event, error], yield func
 			if e.Role == a2a.MessageRoleAgent {
 				role = message.RoleAssistant
 			}
-			if !yield(&agent.ResponseUpdate{
-				RawRepresentation:    e,
-				AdditionalProperties: e.Metadata,
-				MessageID:            e.ID,
-				ResponseID:           e.ID,
-				Role:                 role,
-				Contents:             contents,
-				CreatedAt:            time.Now(),
-			}, nil) {
+			update := newResponseUpdate(e, e.Metadata, e.ID, e.ID, role, contents, time.Now())
+			if !yield(update, nil) {
 				return
 			}
 		default:
 			yield(nil, fmt.Errorf("unsupported response type: %T", e))
 			return
 		}
+	}
+}
+
+func newResponseUpdate(raw any, additionalProperties map[string]any, responseID, messageID string, role message.Role, contents message.Contents, createdAt time.Time) *agent.ResponseUpdate {
+	return &agent.ResponseUpdate{
+		RawRepresentation:    raw,
+		AdditionalProperties: additionalProperties,
+		ResponseID:           responseID,
+		MessageID:            messageID,
+		Role:                 role,
+		Contents:             contents,
+		CreatedAt:            createdAt,
 	}
 }
 
@@ -271,15 +262,9 @@ func yieldTask(yield func(*agent.ResponseUpdate, error) bool, task *a2a.Task) bo
 		}
 	}
 
-	return yield(&agent.ResponseUpdate{
-		RawRepresentation:    task,
-		AdditionalProperties: task.Metadata,
-		ResponseID:           string(task.ID),
-		Contents:             contents,
-		ContinuationToken:    continuationToken,
-		Role:                 message.RoleAssistant,
-		CreatedAt:            timestamp,
-	}, nil)
+	update := newResponseUpdate(task, task.Metadata, string(task.ID), "", message.RoleAssistant, contents, timestamp)
+	update.ContinuationToken = continuationToken
+	return yield(update, nil)
 }
 
 func updateSessionContextID(session *agent.Session, contextID, taskID string, taskState a2a.TaskState) error {
