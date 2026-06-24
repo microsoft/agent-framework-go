@@ -192,6 +192,7 @@ func searchForSkills(filesystem fs.FS, dir string, results *[]discoveredSkillDir
 		if err == nil {
 			*results = append(*results, discoveredSkillDir{fsys: sub, path: dir})
 		}
+		return
 	}
 	if currentDepth >= defaultSearchDepth {
 		return
