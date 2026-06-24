@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 
 	copilot "github.com/github/copilot-sdk/go"
 	"github.com/microsoft/agent-framework-go/agent"
@@ -77,12 +78,14 @@ func (p *provider) run(ctx context.Context, messages []*message.Message, options
 			return
 		}
 
-		events := make(chan copilot.SessionEvent, 128)
+		events := newSessionEventQueue()
 		eventHandler := func(event copilot.SessionEvent) {
 			select {
-			case events <- event:
 			case <-ctx.Done():
+				return
+			default:
 			}
+			events.push(event)
 		}
 
 		frameworkSession, _ := agent.GetOption(options, agent.WithSession)
@@ -113,48 +116,94 @@ func (p *provider) run(ctx context.Context, messages []*message.Message, options
 		}
 
 		for {
-			select {
-			case event := <-events:
-				var update *agent.ResponseUpdate
-				var done bool
-				var eventErr error
-				switch data := event.Data.(type) {
-				case *copilot.AssistantMessageDeltaData:
-					update = p.assistantMessageDeltaUpdate(event, data)
-				case *copilot.AssistantMessageData:
-					update = p.assistantMessageUpdate(event, data, isStreaming)
-				case *copilot.ToolExecutionStartData:
-					update = p.toolExecutionStartUpdate(event, data)
-				case *copilot.ToolExecutionCompleteData:
-					update = p.toolExecutionCompleteUpdate(event, data)
-				case *copilot.AssistantUsageData:
-					update = p.assistantUsageUpdate(event, data)
-				case *copilot.SessionIdleData:
-					update = rawEventUpdate(event)
-					done = true
-				case *copilot.SessionErrorData:
-					update = rawEventUpdate(event)
-					done = true
-					eventErr = fmt.Errorf("session error: %s", sessionErrorMessage(data))
-				default:
-					update = rawEventUpdate(event)
-				}
-				if update != nil {
-					if !yield(update, nil) {
-						return
-					}
-				}
-				if eventErr != nil {
-					yield(nil, eventErr)
-					return
-				}
-				if done {
-					return
-				}
-			case <-ctx.Done():
-				yield(nil, ctx.Err())
+			event, err := events.pop(ctx)
+			if err != nil {
+				yield(nil, err)
 				return
 			}
+			var update *agent.ResponseUpdate
+			var done bool
+			var eventErr error
+			switch data := event.Data.(type) {
+			case *copilot.AssistantMessageDeltaData:
+				update = p.assistantMessageDeltaUpdate(event, data)
+			case *copilot.AssistantMessageData:
+				update = p.assistantMessageUpdate(event, data, isStreaming)
+			case *copilot.ToolExecutionStartData:
+				update = p.toolExecutionStartUpdate(event, data)
+			case *copilot.ToolExecutionCompleteData:
+				update = p.toolExecutionCompleteUpdate(event, data)
+			case *copilot.AssistantUsageData:
+				update = p.assistantUsageUpdate(event, data)
+			case *copilot.SessionIdleData:
+				update = rawEventUpdate(event)
+				done = true
+			case *copilot.SessionErrorData:
+				update = rawEventUpdate(event)
+				done = true
+				eventErr = fmt.Errorf("session error: %s", sessionErrorMessage(data))
+			default:
+				update = rawEventUpdate(event)
+			}
+			if update != nil {
+				if !yield(update, nil) {
+					return
+				}
+			}
+			if eventErr != nil {
+				yield(nil, eventErr)
+				return
+			}
+			if done {
+				return
+			}
+		}
+	}
+}
+
+type sessionEventQueue struct {
+	mu    sync.Mutex
+	items []copilot.SessionEvent
+	ready chan struct{}
+}
+
+func newSessionEventQueue() *sessionEventQueue {
+	return &sessionEventQueue{ready: make(chan struct{}, 1)}
+}
+
+func (q *sessionEventQueue) push(event copilot.SessionEvent) {
+	q.mu.Lock()
+	wasEmpty := len(q.items) == 0
+	q.items = append(q.items, event)
+	q.mu.Unlock()
+	if wasEmpty {
+		select {
+		case q.ready <- struct{}{}:
+		default:
+		}
+	}
+}
+
+func (q *sessionEventQueue) pop(ctx context.Context) (copilot.SessionEvent, error) {
+	for {
+		q.mu.Lock()
+		if len(q.items) > 0 {
+			event := q.items[0]
+			var zero copilot.SessionEvent
+			q.items[0] = zero
+			q.items = q.items[1:]
+			if len(q.items) == 0 {
+				q.items = nil
+			}
+			q.mu.Unlock()
+			return event, nil
+		}
+		q.mu.Unlock()
+
+		select {
+		case <-q.ready:
+		case <-ctx.Done():
+			return copilot.SessionEvent{}, ctx.Err()
 		}
 	}
 }
@@ -204,9 +253,9 @@ func copySessionConfig(source *copilot.SessionConfig) copilot.SessionConfig {
 	if source == nil {
 		return copilot.SessionConfig{Streaming: copilot.Bool(true)}
 	}
-	copy := *source
-	copy.Streaming = copyBoolDefaultTrue(source.Streaming)
-	return copy
+	clone := *source
+	clone.Streaming = copyBoolDefaultTrue(source.Streaming)
+	return clone
 }
 
 func copyResumeSessionConfig(source *copilot.SessionConfig) copilot.ResumeSessionConfig {
@@ -255,13 +304,13 @@ func systemMessageWithInstructions(base *copilot.SystemMessageConfig, instructio
 			Content: joined,
 		}
 	}
-	copy := *base
-	if copy.Content == "" {
-		copy.Content = joined
+	clone := *base
+	if clone.Content == "" {
+		clone.Content = joined
 	} else {
-		copy.Content += "\n" + joined
+		clone.Content += "\n" + joined
 	}
-	return &copy
+	return &clone
 }
 
 func compactInstructions(instructions []string) []string {
@@ -443,8 +492,8 @@ func saveDataContentAttachment(tempDir string, index int, content *message.DataC
 	if displayName == "." || displayName == string(filepath.Separator) || displayName == "" {
 		displayName = fmt.Sprintf("attachment-%d", index+1)
 	}
-	path := filepath.Join(tempDir, displayName)
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	path := filepath.Join(tempDir, fmt.Sprintf("%d-%s", index+1, displayName))
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return "", "", err
 	}
 	return path, displayName, nil

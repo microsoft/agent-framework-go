@@ -5,6 +5,7 @@ package copilotagent_test
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -527,6 +528,60 @@ func TestRun_WithSessionErrorMissingMessage_ReturnsUnknownError(t *testing.T) {
 	}
 }
 
+func TestRun_WithBurstOfStreamingEvents_Completes(t *testing.T) {
+	const eventCount = 200
+	events := make([]map[string]any, 0, eventCount+1)
+	var expected strings.Builder
+	for range eventCount {
+		expected.WriteString("x")
+		events = append(events, sessionEvent("assistant.message_delta", map[string]any{"messageId": "msg-1", "deltaContent": "x"}))
+	}
+	events = append(events, idleEvent())
+	runtime := newFakeRuntime(t, events...)
+	agent := copilotagent.New(runtime.client(), copilotagent.Config{})
+
+	response, err := runText(t, agent, "hello")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if got := response.String(); got != expected.String() {
+		t.Fatalf("response text length = %d, want %d", len(got), expected.Len())
+	}
+}
+
+func TestBuildMessageOptions_WithDuplicateAttachmentNames_SendsDistinctPaths(t *testing.T) {
+	runtime := newFakeRuntime(t, idleEvent())
+	agent := copilotagent.New(runtime.client(), copilotagent.Config{})
+	contents := []message.Content{
+		dataContent(t, "duplicate.txt", "first"),
+		dataContent(t, "duplicate.txt", "second"),
+	}
+
+	_, err := agent.Run(context.Background(), []*message.Message{message.New(contents...)}).Collect()
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	attachments := runtime.lastSendAttachments(t)
+	if len(attachments) != 2 {
+		t.Fatalf("attachments length = %d, want 2", len(attachments))
+	}
+	if attachments[0]["path"] == attachments[1]["path"] {
+		t.Fatalf("attachment paths are equal: %#v", attachments)
+	}
+	if attachments[0]["displayName"] != "duplicate.txt" || attachments[1]["displayName"] != "duplicate.txt" {
+		t.Fatalf("display names = %#v, want duplicate.txt", attachments)
+	}
+}
+
+func dataContent(t *testing.T, name, value string) *message.DataContent {
+	t.Helper()
+	return &message.DataContent{
+		Name:      name,
+		Data:      base64.StdEncoding.EncodeToString([]byte(value)),
+		MediaType: "text/plain",
+	}
+}
+
 func richSessionConfig() *copilot.SessionConfig {
 	return &copilot.SessionConfig{
 		Model:            "gpt-4o",
@@ -638,6 +693,28 @@ func (r *fakeRuntime) lastResumeRequest(t *testing.T) map[string]any {
 	return r.resumeRequests[len(r.resumeRequests)-1]
 }
 
+func (r *fakeRuntime) lastSendAttachments(t *testing.T) []map[string]any {
+	t.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.sendRequests) == 0 {
+		t.Fatal("no session.send request captured")
+	}
+	attachments, ok := r.sendRequests[len(r.sendRequests)-1]["attachments"].([]any)
+	if !ok {
+		t.Fatalf("attachments = %#v, want slice", r.sendRequests[len(r.sendRequests)-1]["attachments"])
+	}
+	out := make([]map[string]any, 0, len(attachments))
+	for _, attachment := range attachments {
+		typed, ok := attachment.(map[string]any)
+		if !ok {
+			t.Fatalf("attachment = %#v, want object", attachment)
+		}
+		out = append(out, typed)
+	}
+	return out
+}
+
 func (r *fakeRuntime) accept() {
 	for {
 		conn, err := r.listener.Accept()
@@ -649,7 +726,7 @@ func (r *fakeRuntime) accept() {
 }
 
 func (r *fakeRuntime) serve(conn net.Conn) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	reader := bufio.NewReader(conn)
 	for {
 		payload, err := readFrame(reader)
@@ -761,7 +838,7 @@ func readFrame(reader *bufio.Reader) ([]byte, error) {
 
 func writeResponse(t *testing.T, writer io.Writer, id json.RawMessage, result any) {
 	t.Helper()
-	writeFrame(t, writer, map[string]any{"jsonrpc": "2.0", "id": json.RawMessage(id), "result": result})
+	writeFrame(t, writer, map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
 }
 
 func writeNotification(t *testing.T, writer io.Writer, method string, params any) {

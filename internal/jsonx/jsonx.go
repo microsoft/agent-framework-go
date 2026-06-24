@@ -30,15 +30,27 @@ func UnmarshalDiscriminatedUnionSliceWithFallback[T any, K comparable](
 	out := make([]T, 0, len(items))
 	for _, item := range items {
 		var header struct {
-			Type K
+			Type *K
 		}
 		if err := json.Unmarshal(item, &header); err != nil {
 			return nil, err
 		}
-		typ, ok := types[header.Type]
+		if header.Type == nil {
+			if fallback == nil {
+				var zero K
+				return nil, fmt.Errorf("unsupported content type: %v", zero)
+			}
+			value, err := fallback(item)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, value)
+			continue
+		}
+		typ, ok := types[*header.Type]
 		if !ok {
 			if fallback == nil {
-				return nil, fmt.Errorf("unsupported content type: %v", header.Type)
+				return nil, fmt.Errorf("unsupported content type: %v", *header.Type)
 			}
 			value, err := fallback(item)
 			if err != nil {

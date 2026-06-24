@@ -64,6 +64,32 @@ func TestUnmarshalDiscriminatedUnionSliceWithFallback_UsesFallbackForMissingAndU
 	}
 }
 
+func TestUnmarshalDiscriminatedUnionSliceWithFallback_MissingTypeDoesNotMatchZeroValue(t *testing.T) {
+	data := []byte(`[{
+		"Type":"",
+		"Value":"empty"
+	},{
+		"Value":"missing"
+	}]`)
+	types := map[string]reflect.Type{
+		"": reflect.TypeOf(knownUnion{}),
+	}
+	fallback := func(raw json.RawMessage) (testUnion, error) {
+		return &rawUnion{Raw: raw}, nil
+	}
+
+	values, err := UnmarshalDiscriminatedUnionSliceWithFallback(data, types, fallback)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := values[0].(*knownUnion); !ok {
+		t.Fatalf("values[0] = %T, want *knownUnion", values[0])
+	}
+	if _, ok := values[1].(*rawUnion); !ok {
+		t.Fatalf("values[1] = %T, want *rawUnion", values[1])
+	}
+}
+
 func TestUnmarshalDiscriminatedUnionSlice_RejectsUnsupportedType(t *testing.T) {
 	_, err := UnmarshalDiscriminatedUnionSlice[testUnion]([]byte(`[{"Type":"future"}]`), map[string]reflect.Type{})
 	if err == nil {
