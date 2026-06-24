@@ -74,9 +74,20 @@ type ToolCallContent interface {
 type Contents []Content
 
 func (cs *Contents) UnmarshalJSON(data []byte) error {
-	var err error
-	*cs, err = jsonx.UnmarshalDiscriminatedUnionSlice[Content](data, supportedContents)
-	return err
+	out, err := jsonx.UnmarshalDiscriminatedUnionSliceWithFallback(data, supportedContents, unmarshalRawContent)
+	if err != nil {
+		return err
+	}
+	*cs = out
+	return nil
+}
+
+func unmarshalRawContent(data json.RawMessage) (Content, error) {
+	var raw RawContent
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+	return &raw, nil
 }
 
 // Text returns the first text content in the response, or empty string.
@@ -455,6 +466,35 @@ func (t *HostedVectorStoreContent) MarshalJSON() ([]byte, error) {
 }
 
 func (t HostedVectorStoreContent) kind() contentKind { return "hostedVectorStore" }
+
+// RawContent represents provider-specific content that does not fit one of the
+// structured content types. The provider value is available through
+// [ContentHeader.RawRepresentation].
+type RawContent struct {
+	ContentHeader
+}
+
+func (t *RawContent) MarshalJSON() ([]byte, error) {
+	if raw, ok := t.RawRepresentation.(json.RawMessage); ok && len(raw) > 0 {
+		return raw, nil
+	}
+	type alias RawContent
+	return json.Marshal((*alias)(t))
+}
+
+func (t *RawContent) UnmarshalJSON(data []byte) error {
+	if !json.Valid(data) {
+		return fmt.Errorf("invalid raw content JSON")
+	}
+	var header ContentHeader
+	if err := json.Unmarshal(data, &header); err == nil {
+		t.ContentHeader = header
+	}
+	t.RawRepresentation = append(json.RawMessage(nil), data...)
+	return nil
+}
+
+func (t RawContent) kind() contentKind { return "" }
 
 // TextReasoningContent represents text reasoning content in a chat.
 //

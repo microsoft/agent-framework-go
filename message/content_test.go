@@ -183,6 +183,61 @@ func TestContentEncoding_Roundtrip(t *testing.T) {
 	}
 }
 
+func TestContentEncoding_UnmarshalMissingTypeUsesRawContent(t *testing.T) {
+	const rawContent = `{"Provider":"github","Payload":{"value":42}}`
+	data := []byte(`[` + rawContent + `]`)
+
+	var contents message.Contents
+	if err := json.Unmarshal(data, &contents); err != nil {
+		t.Fatal(err)
+	}
+	if len(contents) != 1 {
+		t.Fatalf("expected 1 content, got %d", len(contents))
+	}
+	raw, ok := contents[0].(*message.RawContent)
+	if !ok {
+		t.Fatalf("content = %T, want *message.RawContent", contents[0])
+	}
+	if got := string(raw.Header().RawRepresentation.(json.RawMessage)); got != rawContent {
+		t.Fatalf("RawRepresentation = %s, want %s", got, rawContent)
+	}
+}
+
+func TestContentEncoding_UnmarshalUnknownTypeUsesRawContent(t *testing.T) {
+	const rawContent = `{"Type":"futureContent","Value":42}`
+	data := []byte(`[` + rawContent + `]`)
+
+	var contents message.Contents
+	if err := json.Unmarshal(data, &contents); err != nil {
+		t.Fatal(err)
+	}
+	raw, ok := contents[0].(*message.RawContent)
+	if !ok {
+		t.Fatalf("content = %T, want *message.RawContent", contents[0])
+	}
+	if got := string(raw.Header().RawRepresentation.(json.RawMessage)); got != rawContent {
+		t.Fatalf("RawRepresentation = %s, want %s", got, rawContent)
+	}
+
+	encoded, err := json.Marshal(contents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(encoded); got != string(data) {
+		t.Fatalf("encoded = %s, want %s", got, data)
+	}
+}
+
+func TestContentEncoding_RawContentMarshalHasNoType(t *testing.T) {
+	data, err := json.Marshal(message.Contents{&message.RawContent{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(data), `[{}]`; got != want {
+		t.Fatalf("encoded = %s, want %s", got, want)
+	}
+}
+
 func TestToolApprovalRequestContent_CreateResponseSnapshotsFunctionCall(t *testing.T) {
 	toolCall := &message.FunctionCallContent{
 		ContentHeader: message.ContentHeader{
