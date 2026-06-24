@@ -30,8 +30,8 @@ type ConcurrentEventSink struct {
 	EventRaised []func(context.Context, any, workflow.Event) error
 }
 
-// nonFatalEventSender marks events that should be delivered without cancelling
-// the off-thread run loop.
+// nonFatalEventSender marks validation ErrorEvents that should reach consumers
+// without cancelling the off-thread run loop.
 type nonFatalEventSender struct{}
 
 func (s *ConcurrentEventSink) AddHandler(handler func(context.Context, any, workflow.Event) error) {

@@ -333,6 +333,9 @@ func (proc *runnerContext) AddExternalResponse(ctx context.Context, response *wo
 	proc.queuedExternalDeliveries = append(proc.queuedExternalDeliveries, func(ctx context.Context) error {
 		ownerID, err := proc.completeResponse(response)
 		if err != nil {
+			if proc.runEnded.Load() {
+				return err
+			}
 			return proc.outgoingEvents.EnqueueNonFatal(ctx, workflow.ErrorEvent{Error: err})
 		}
 
