@@ -106,7 +106,7 @@ func TestRunAsync_ExecutesWorkflow(t *testing.T) {
 	}
 }
 
-func TestWorkflowBuilderWithHostedAgentsEmitsOutputEventWithoutWithOutputFrom(t *testing.T) {
+func TestWorkflowBuilderWithHostedAgentsFiltersOutputEventWithoutWithOutputFrom(t *testing.T) {
 	agent1 := workflowhosting.New(newEchoAgent("agent-1"), workflowhosting.Config{})
 	agent2 := workflowhosting.New(newEchoAgent("agent-2"), workflowhosting.Config{})
 	wf, err := workflow.NewBuilder(agent1).
@@ -116,30 +116,36 @@ func TestWorkflowBuilderWithHostedAgentsEmitsOutputEventWithoutWithOutputFrom(t 
 		t.Fatalf("Build: %v", err)
 	}
 
-	ctx := context.Background()
-	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
+	events := runHostedAgentWorkflow(t, wf)
+	if containsOutputPayloadType[*agent.ResponseUpdate](events) {
+		t.Fatalf("expected hosted agent response updates to be filtered without WithOutputFrom")
+	}
+}
+
+func TestWorkflowBuilderWithHostedAgentsTagsIntermediateOutputs(t *testing.T) {
+	binding := workflowhosting.New(newEchoAgent("agent-1"), workflowhosting.Config{
+		EmitResponseEvents: true,
+	})
+	wf, err := workflow.NewBuilder(binding).
+		WithIntermediateOutputFrom(binding).
+		Build()
 	if err != nil {
-		t.Fatalf("Stream: %v", err)
+		t.Fatalf("Build: %v", err)
 	}
-	defer func() { _ = stream.CancelRun() }()
 
-	sendStreamMessage(t, stream, ctx, []*message.Message{{
-		Role:     message.RoleUser,
-		Contents: []message.Content{&message.TextContent{Text: "Hello"}},
-	}})
-	emit := true
-	sendStreamMessage(t, stream, ctx, workflow.TurnToken{EmitEvents: &emit})
-
-	var events []workflow.Event
-	for evt, err := range stream.WatchStream(ctx) {
-		if err != nil {
-			t.Fatalf("watch: %v", err)
+	events := runHostedAgentWorkflow(t, wf)
+	updates := outputEventsWithPayloadType[*agent.ResponseUpdate](events)
+	if len(updates) == 0 {
+		t.Fatal("expected at least one OutputEvent carrying *agent.ResponseUpdate")
+	}
+	responses := outputEventsWithPayloadType[*agent.Response](events)
+	if len(responses) == 0 {
+		t.Fatal("expected at least one OutputEvent carrying *agent.Response")
+	}
+	for _, output := range append(updates, responses...) {
+		if !output.IsIntermediate() {
+			t.Fatalf("OutputEvent tags = %v, want intermediate", output.Tags)
 		}
-		events = append(events, evt)
-	}
-
-	if !containsOutputPayloadType[*agent.ResponseUpdate](events) {
-		t.Fatalf("expected at least one OutputEvent carrying *agent.ResponseUpdate")
 	}
 }
 
@@ -182,6 +188,32 @@ func TestStreamAsync_ExecutesWorkflowWithTurnToken(t *testing.T) {
 	if !containsOutputPayloadType[*agent.Response](events) {
 		t.Errorf("expected at least one OutputEvent carrying *agent.Response")
 	}
+}
+
+func runHostedAgentWorkflow(t *testing.T, wf *workflow.Workflow) []workflow.Event {
+	t.Helper()
+	ctx := context.Background()
+	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer func() { _ = stream.CancelRun() }()
+
+	sendStreamMessage(t, stream, ctx, []*message.Message{{
+		Role:     message.RoleUser,
+		Contents: []message.Content{&message.TextContent{Text: "Hello"}},
+	}})
+	emit := true
+	sendStreamMessage(t, stream, ctx, workflow.TurnToken{EmitEvents: &emit})
+
+	var events []workflow.Event
+	for evt, err := range stream.WatchStream(ctx) {
+		if err != nil {
+			t.Fatalf("watch: %v", err)
+		}
+		events = append(events, evt)
+	}
+	return events
 }
 
 func TestRunAsyncAndStreamAsync_ProduceSimilarResults(t *testing.T) {
@@ -301,4 +333,18 @@ func countOutputPayloadType[T any](events []workflow.Event) int {
 		}
 	}
 	return n
+}
+
+func outputEventsWithPayloadType[T any](events []workflow.Event) []workflow.OutputEvent {
+	var outputs []workflow.OutputEvent
+	for _, e := range events {
+		out, ok := e.(workflow.OutputEvent)
+		if !ok {
+			continue
+		}
+		if _, ok := out.Output.(T); ok {
+			outputs = append(outputs, out)
+		}
+	}
+	return outputs
 }

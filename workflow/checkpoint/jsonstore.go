@@ -138,6 +138,16 @@ func validateCheckpointSession(sessionID string, info workflow.CheckpointInfo) e
 	return nil
 }
 
+func validateCheckpointLookup(sessionID string, info workflow.CheckpointInfo) error {
+	if err := validateSessionID(sessionID); err != nil {
+		return err
+	}
+	if err := validateCheckpointInfo(info); err != nil {
+		return err
+	}
+	return validateCheckpointSession(sessionID, info)
+}
+
 func validateParentSession(sessionID string, parent *workflow.CheckpointInfo) error {
 	if parent != nil && *parent != (workflow.CheckpointInfo{}) && parent.SessionID != sessionID {
 		return fmt.Errorf("jsonstore: parent sessionID %q does not match sessionID %q", parent.SessionID, sessionID)
@@ -257,7 +267,7 @@ func (s *FileSystemJSONStore) CreateCheckpoint(_ context.Context, sessionID stri
 		p := *parent
 		parentCopy = &p
 	}
-	entry := indexEntry{CheckpointInfo: info, FileName: checkpointFileName(sessionID, info), Parent: parentCopy}
+	entry := indexEntry{CheckpointInfo: info, FileName: checkpointName, Parent: parentCopy}
 	if err := s.appendIndexEntry(entry); err != nil {
 		_ = s.root.Remove(checkpointName)
 		return workflow.CheckpointInfo{}, fmt.Errorf("jsonstore: write index: %w", err)
@@ -270,13 +280,7 @@ func (s *FileSystemJSONStore) CreateCheckpoint(_ context.Context, sessionID stri
 
 // RetrieveCheckpoint implements [Store].
 func (s *FileSystemJSONStore) RetrieveCheckpoint(_ context.Context, sessionID string, info workflow.CheckpointInfo) (json.RawMessage, error) {
-	if err := validateSessionID(sessionID); err != nil {
-		return nil, err
-	}
-	if err := validateCheckpointInfo(info); err != nil {
-		return nil, err
-	}
-	if err := validateCheckpointSession(sessionID, info); err != nil {
+	if err := validateCheckpointLookup(sessionID, info); err != nil {
 		return nil, err
 	}
 

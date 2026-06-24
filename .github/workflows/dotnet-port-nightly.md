@@ -4,6 +4,7 @@ tracker-id: dotnet-port-nightly
 engine:
    id: copilot
    model: "gpt-5.5"
+max-ai-credits: 2000
 network:
    allowed:
       - defaults

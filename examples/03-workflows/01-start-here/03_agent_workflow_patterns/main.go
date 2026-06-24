@@ -18,7 +18,7 @@ import (
 
 var logger = demo.NewLogger(
 	"Agent Workflow Patterns",
-	"This sample switches between sequential and concurrent agent workflow patterns.",
+	"This sample switches between sequential, concurrent, and group chat agent workflow patterns.",
 	"Model", demo.Deployment,
 )
 
@@ -84,11 +84,18 @@ func buildPattern(pattern string) (*workflow.Workflow, error) {
 
 	switch pattern {
 	case "sequential":
-		return workflowhosting.BuildSequential("", agents...)
+		return workflowhosting.NewSequentialWorkflowBuilder(agents...).Build()
 	case "concurrent":
-		return workflowhosting.BuildConcurrent("", agents...)
+		return workflowhosting.NewConcurrentWorkflowBuilder(agents...).Build()
+	case "groupchat":
+		return workflowhosting.NewGroupChatWorkflowBuilder(func(agents []*agent.Agent) *workflowhosting.GroupChatManager {
+			return workflowhosting.NewRoundRobinGroupChatManager(agents, workflowhosting.RoundRobinGroupChatOptions{MaximumIterationCount: 5})
+		}, agents...).
+			WithName("Translation Round Robin Workflow").
+			WithDescription("A workflow where three translation agents take turns responding in a round-robin fashion.").
+			Build()
 	default:
-		return nil, fmt.Errorf("unknown WORKFLOW_PATTERN %q; use sequential or concurrent", pattern)
+		return nil, fmt.Errorf("unknown WORKFLOW_PATTERN %q; use sequential, concurrent, or groupchat", pattern)
 	}
 }
 

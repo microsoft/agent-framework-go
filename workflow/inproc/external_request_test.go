@@ -18,6 +18,62 @@ func (s requestPortStringer) String() string { return string(s) }
 
 type requestNilPayload struct{}
 
+func TestPostRequest_NilRejected(t *testing.T) {
+	binding := workflow.ExecutorBinding{
+		ID:               "poster",
+		ImplementationID: "*workflow.Executor",
+		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
+			return &workflow.Executor{
+				ID: "poster",
+
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
+						return nil, ctx.PostRequest(nil)
+					})
+					return rb, nil
+				},
+			}, nil
+		},
+	}
+
+	wf, err := workflow.NewBuilder(binding).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	run, err := inproc.Default.Run(t.Context(), wf, "start")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var gotErr error
+	for evt := range run.OutgoingEvents() {
+		if errEvt, ok := evt.(workflow.ErrorEvent); ok {
+			gotErr = errEvt.Error
+			break
+		}
+	}
+	if gotErr == nil || !strings.Contains(gotErr.Error(), "request cannot be nil") {
+		t.Fatalf("PostRequest(nil) error = %v, want request cannot be nil", gotErr)
+	}
+}
+
+func TestExternalResponse_NilRejectedBeforeRunAdvance(t *testing.T) {
+	binding := workflow.NewExecutor("echo", func(message string) string { return message }).Bind()
+	wf, err := workflow.NewBuilder(binding).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	run, err := inproc.Default.Run(t.Context(), wf, "start")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if _, err := run.Resume(t.Context(), (*workflow.ExternalResponse)(nil)); err == nil || !strings.Contains(err.Error(), "response cannot be nil") {
+		t.Fatalf("Resume(nil ExternalResponse) error = %v, want response cannot be nil", err)
+	}
+}
+
 // TestPostRequestFromExecutor verifies that an executor can raise an
 // ExternalRequest via Context.PostRequest, that the matching ExternalResponse
 // is routed back to that executor (not to the start executor), and that the
@@ -262,6 +318,88 @@ func TestExternalResponse_UnsolicitedResponseErrors(t *testing.T) {
 	}
 	if !sawErr {
 		t.Errorf("expected an ErrorEvent referencing 'no pending request', got none")
+	}
+}
+
+func TestExternalResponse_RejectsForgedPortIDWithoutConsumingRequest(t *testing.T) {
+	portA := workflow.RequestPort{ID: "portA", Request: reflect.TypeFor[string](), Response: reflect.TypeFor[int]()}
+	portB := workflow.RequestPort{ID: "portB", Request: reflect.TypeFor[string](), Response: reflect.TypeFor[int]()}
+
+	id := "asker"
+	binding := workflow.ExecutorBinding{ID: id, ImplementationID: "*workflow.Executor"}
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: id,
+
+			DisableAutoSendMessageHandlerResultObject: true,
+			DisableAutoYieldOutputHandlerResultObject: true,
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.YieldsOutputType(reflect.TypeFor[int]())
+				rb.RouteBuilder.
+					AddHandlerRaw(reflect.TypeFor[string](), nil, func(wctx *workflow.Context, _ any) (any, error) {
+						req, err := workflow.NewExternalRequest("request-1", portA, "data")
+						if err != nil {
+							return nil, err
+						}
+						return nil, wctx.PostRequest(req)
+					}).
+					AddHandlerRaw(reflect.TypeFor[*workflow.ExternalResponse](), nil, func(wctx *workflow.Context, msg any) (any, error) {
+						resp := msg.(*workflow.ExternalResponse)
+						data, _ := resp.Data.As(portA.Response)
+						return nil, wctx.YieldOutput(data)
+					})
+				return rb, nil
+			},
+		}, nil
+	}
+
+	wf, err := workflow.NewBuilder(binding).WithOutputFrom(binding).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	ctx := context.Background()
+	run, err := inproc.Lockstep.Run(ctx, wf, "kick")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var pending *workflow.ExternalRequest
+	for evt := range run.OutgoingEvents() {
+		if requestInfo, ok := evt.(workflow.RequestInfoEvent); ok {
+			pending = requestInfo.Request
+			break
+		}
+	}
+	if pending == nil {
+		t.Fatal("expected pending external request")
+	}
+
+	forged := &workflow.ExternalResponse{
+		PortInfo:  workflow.NewRequestPortInfo(portB),
+		RequestID: pending.RequestID,
+		Data:      workflow.AnyPortableValue(42),
+	}
+	if _, err := run.Resume(ctx, forged); err == nil || !strings.Contains(err.Error(), "response port id") {
+		t.Fatalf("forged response error = %v, want port mismatch", err)
+	}
+
+	legitimate, err := pending.CreateResponse(42)
+	if err != nil {
+		t.Fatalf("CreateResponse: %v", err)
+	}
+	if _, err := run.Resume(ctx, legitimate); err != nil {
+		t.Fatalf("legitimate response after rejected forged response: %v", err)
+	}
+
+	var gotOutput any
+	for evt := range run.NewEvents() {
+		if out, ok := evt.(workflow.OutputEvent); ok {
+			gotOutput = out.Output
+		}
+	}
+	if gotOutput != 42 {
+		t.Fatalf("output = %v, want 42", gotOutput)
 	}
 }
 

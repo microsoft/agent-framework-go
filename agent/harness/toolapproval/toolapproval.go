@@ -28,12 +28,13 @@ import (
 
 const stateKey = "toolApprovalState"
 
-// Rule is a standing approval rule. If Arguments is empty, all invocations
-// of the named tool are auto-approved. Otherwise only invocations with an
-// exact argument map match are auto-approved.
+// Rule is a standing approval rule. If Arguments is nil, all invocations of
+// the named tool are auto-approved. Otherwise only invocations with an exact
+// argument map match are auto-approved. A non-nil empty Arguments map matches
+// only calls with no arguments.
 type Rule struct {
 	ToolName  string            `json:"toolName"`
-	Arguments map[string]string `json:"arguments,omitempty"`
+	Arguments map[string]string `json:"arguments"`
 }
 
 // matches reports whether r auto-approves a call to toolName with the given
@@ -42,7 +43,7 @@ func (r Rule) matches(toolName string, arguments map[string]string) bool {
 	if r.ToolName != toolName {
 		return false
 	}
-	if len(r.Arguments) == 0 {
+	if r.Arguments == nil {
 		return true
 	}
 	return argumentMapsEqual(r.Arguments, arguments)
@@ -364,7 +365,7 @@ func matchesAutoApprovalRules(ctx context.Context, rules []func(context.Context,
 
 func serializeArguments(arguments string) (map[string]string, error) {
 	if strings.TrimSpace(arguments) == "" {
-		return nil, nil
+		return map[string]string{}, nil
 	}
 	var values map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(arguments), &values); err != nil {
@@ -381,6 +382,9 @@ func serializeArguments(arguments string) (map[string]string, error) {
 }
 
 func argumentMapsEqual(a, b map[string]string) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
 	if len(a) != len(b) {
 		return false
 	}

@@ -44,9 +44,9 @@ type Config struct {
 
 	// IncludeOutputsInResponse, if true, surfaces [workflow.OutputEvent]
 	// payloads in the agent response stream when the payload is a
-	// [*message.Message] or [[]*message.Message]. By default outputs are
-	// observed only when they contain [*agent.ResponseUpdate] or [*agent.Response]
-	// payloads emitted by hosted agents inside the workflow.
+	// [*message.Message], [[]*message.Message], or [*agent.Response]. By
+	// default, only [*agent.ResponseUpdate] payloads emitted by hosted agents
+	// inside the workflow are surfaced as response content.
 	IncludeOutputsInResponse bool
 
 	// IncludeErrorDetails, if true, surfaces the full error message from
@@ -66,6 +66,12 @@ func New(wf *workflow.Workflow, cfg Config) (*agent.Agent, error) {
 	if wf == nil {
 		return nil, errors.New("workflow cannot be nil")
 	}
+	if cfg.ID == "" {
+		cfg.ID = uuid.NewString()
+	}
+	agentID := cfg.ID
+	agentName := cfg.Name
+
 	descriptor, err := wf.DescribeProtocol()
 	if err != nil {
 		return nil, fmt.Errorf("workflow start executor protocol could not be determined: %w", err)
@@ -87,6 +93,18 @@ func New(wf *workflow.Workflow, cfg Config) (*agent.Agent, error) {
 	runFn := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			responseID := uuid.NewString()
+			stream, _ := agent.GetOption(options, agent.Stream)
+			merger := newMessageMerger()
+			emitUpdate := func(update *agent.ResponseUpdate) bool {
+				if update == nil {
+					return true
+				}
+				merger.AddUpdate(update)
+				if !stream {
+					return true
+				}
+				return yield(update, nil)
+			}
 
 			sess, _ := agent.GetOption(options, agent.WithSession)
 			if sess != nil && sess.ServiceID() == "" {
@@ -151,21 +169,24 @@ func New(wf *workflow.Workflow, cfg Config) (*agent.Agent, error) {
 					if e.CompletionInfo != nil && e.CompletionInfo.CheckpointInfo != nil {
 						state.lastCheckpoint = e.CompletionInfo.CheckpointInfo
 					}
-					if !yield(newUpdate(responseID, e), nil) {
+					if !emitUpdate(newUpdate(responseID, e)) {
 						return
 					}
 				case workflow.OutputEvent:
 					switch out := e.Output.(type) {
 					case *agent.ResponseUpdate:
-						if !yield(stampUpdate(out, responseID, e), nil) {
+						if !emitUpdate(stampUpdate(out, responseID, e)) {
 							return
 						}
 					case *agent.Response:
+						if !cfg.IncludeOutputsInResponse {
+							continue
+						}
 						if out == nil {
 							continue
 						}
-						for _, update := range out.ToUpdates() {
-							if !yield(stampUpdate(update, responseID, e), nil) {
+						for _, msg := range out.Messages {
+							if !emitUpdate(messageToUpdate(msg, responseID, e)) {
 								return
 							}
 						}
@@ -173,7 +194,7 @@ func New(wf *workflow.Workflow, cfg Config) (*agent.Agent, error) {
 						if !cfg.IncludeOutputsInResponse {
 							continue
 						}
-						if !yield(messageToUpdate(out, responseID, e), nil) {
+						if !emitUpdate(messageToUpdate(out, responseID, e)) {
 							return
 						}
 					case []*message.Message:
@@ -181,7 +202,7 @@ func New(wf *workflow.Workflow, cfg Config) (*agent.Agent, error) {
 							continue
 						}
 						for _, msg := range out {
-							if !yield(messageToUpdate(msg, responseID, e), nil) {
+							if !emitUpdate(messageToUpdate(msg, responseID, e)) {
 								return
 							}
 						}
@@ -190,33 +211,40 @@ func New(wf *workflow.Workflow, cfg Config) (*agent.Agent, error) {
 					update, contentID, pending, ok, err := requestToUpdate(e.Request, responseID, e)
 					if err != nil {
 						update := newUpdate(responseID, e, workflowErrorContent(err, cfg.IncludeErrorDetails))
-						if !yield(update, nil) {
+						if !emitUpdate(update) {
 							return
 						}
 						continue
 					}
 					if !ok {
-						if !yield(newUpdate(responseID, e), nil) {
+						if !emitUpdate(newUpdate(responseID, e)) {
 							return
 						}
 						continue
 					}
 					state.pending[contentID] = pending
-					if !yield(update, nil) {
+					if !emitUpdate(update) {
 						return
 					}
 				case workflow.ErrorEvent:
 					update := newUpdate(responseID, e, workflowErrorContent(e.Error, cfg.IncludeErrorDetails))
-					if !yield(update, nil) {
+					if !emitUpdate(update) {
 						return
 					}
 				case workflow.ExecutorFailedEvent:
 					update := newUpdate(responseID, e, workflowErrorContent(e.Error, cfg.IncludeErrorDetails))
-					if !yield(update, nil) {
+					if !emitUpdate(update) {
 						return
 					}
 				default:
-					if !yield(newUpdate(responseID, e), nil) {
+					if !emitUpdate(newUpdate(responseID, e)) {
+						return
+					}
+				}
+			}
+			if !stream {
+				for _, update := range merger.ComputeMerged(responseID, agentID, agentName).ToUpdates() {
+					if !yield(update, nil) {
 						return
 					}
 				}
@@ -463,11 +491,10 @@ func messageToUpdate(m *message.Message, responseID string, raw any) *agent.Resp
 		return newUpdate(responseID, raw)
 	}
 	return stampUpdate(&agent.ResponseUpdate{
-		Role:       m.Role,
-		Contents:   m.Contents,
-		AuthorName: m.AuthorName,
-		MessageID:  m.ID,
-		CreatedAt:  m.CreatedAt,
+		Role:      m.Role,
+		Contents:  m.Contents,
+		MessageID: m.ID,
+		CreatedAt: m.CreatedAt,
 	}, responseID, raw)
 }
 

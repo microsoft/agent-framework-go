@@ -128,6 +128,34 @@ func TestStartedEvent_NotEmittedWhenNoWork(t *testing.T) {
 	}
 }
 
+func TestStartedEvent_EmittedInLockstepWithoutWork(t *testing.T) {
+	ex := minimalEchoBinding("ex")
+	wf, err := workflow.NewBuilder(ex).WithOutputFrom(ex).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	ctx := context.Background()
+	stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer func() { _ = stream.CancelRun() }()
+
+	var sawStarted bool
+	for evt, err := range stream.WatchUntilHalt(ctx) {
+		if err != nil {
+			t.Fatalf("watch: %v", err)
+		}
+		if _, ok := evt.(workflow.StartedEvent); ok {
+			sawStarted = true
+		}
+	}
+	if !sawStarted {
+		t.Fatal("expected StartedEvent even when lockstep has no queued work")
+	}
+}
+
 func TestStreamingRun_WaitToTakeStreamDoesNotBlockOffThread(t *testing.T) {
 	ex := minimalEchoBinding("ex")
 	wf, err := workflow.NewBuilder(ex).WithOutputFrom(ex).Build()
