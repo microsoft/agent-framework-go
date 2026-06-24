@@ -188,11 +188,14 @@ func discoverSkillDirectories(filesystems []fs.FS) []discoveredSkillDir {
 func searchForSkills(filesystem fs.FS, dir string, results *[]discoveredSkillDir, currentDepth int) {
 	skillPath := path.Join(dir, skillFileName)
 	if _, err := fs.Stat(filesystem, skillPath); err == nil {
-		sub, err := fs.Sub(filesystem, dir)
+		sub := filesystem
+		if dir != "." {
+			sub, err = fs.Sub(filesystem, dir)
+		}
 		if err == nil {
 			*results = append(*results, discoveredSkillDir{fsys: sub, path: dir})
+			return
 		}
-		return
 	}
 	if currentDepth >= defaultSearchDepth {
 		return
