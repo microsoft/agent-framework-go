@@ -17,8 +17,6 @@ jobs:
   golangci:
     name: lint
     runs-on: ubuntu-latest
-    env:
-      GOLANGCI_LINT_VERSION: v2.11.0
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -26,23 +24,10 @@ jobs:
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
         with:
           go-version-file: go.mod
-
-      - name: Cache golangci-lint
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: |
-            ~/go/bin/golangci-lint
-            ~/.cache/golangci-lint
-          key: golangci-lint-${{ runner.os }}-${{ runner.arch }}-${{ env.GOLANGCI_LINT_VERSION }}-${{ hashFiles('.golangci.yml') }}
-          restore-keys: |
-            golangci-lint-${{ runner.os }}-${{ runner.arch }}-${{ env.GOLANGCI_LINT_VERSION }}-
-
-      - name: Install golangci-lint
-        run: |
-          if [ ! -x "$(go env GOPATH)/bin/golangci-lint" ]; then
-            curl -sSfL "https://raw.githubusercontent.com/golangci/golangci-lint/${GOLANGCI_LINT_VERSION}/install.sh" | sh -s -- -b "$(go env GOPATH)/bin" "${GOLANGCI_LINT_VERSION}"
-          fi
+          cache-dependency-path: go.sum
 
       - name: Run golangci-lint
-        run: |
-          "$(go env GOPATH)/bin/golangci-lint" run -v
+        uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9.2.1
+        with:
+          version: v2.11.0
+          args: --verbose
