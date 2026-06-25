@@ -192,7 +192,7 @@ func TestNew_SerializedSessionResumesFromCheckpoint(t *testing.T) {
 	}
 }
 
-func TestNew_EmitsDefaultUpdatesForUnhandledWorkflowEvents(t *testing.T) {
+func TestNew_StreamsUpdatesForUnhandledWorkflowEvents(t *testing.T) {
 	binding := echoExecutorBinding("echo")
 	wf, err := workflow.NewBuilder(binding).Build()
 	if err != nil {
@@ -204,7 +204,7 @@ func TestNew_EmitsDefaultUpdatesForUnhandledWorkflowEvents(t *testing.T) {
 	}
 
 	var sawUnhandled bool
-	for update, err := range ag.RunText(t.Context(), "ping") {
+	for update, err := range ag.RunText(t.Context(), "ping", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("RunText: %v", err)
 		}
@@ -220,6 +220,28 @@ func TestNew_EmitsDefaultUpdatesForUnhandledWorkflowEvents(t *testing.T) {
 	}
 	if !sawUnhandled {
 		t.Fatalf("expected a raw-only update for an unhandled workflow event")
+	}
+}
+
+func TestNew_CollectDropsRawOnlyWorkflowEventMessages(t *testing.T) {
+	binding := echoExecutorBinding("echo")
+	wf, err := workflow.NewBuilder(binding).Build()
+	if err != nil {
+		t.Fatalf("build workflow: %v", err)
+	}
+	ag, err := workflowprovider.New(wf, workflowprovider.Config{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	resp, err := ag.RunText(t.Context(), "ping").Collect()
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	for index, msg := range resp.Messages {
+		if len(msg.Contents) == 0 {
+			t.Fatalf("message %d has no contents after collect: %+v", index, msg)
+		}
 	}
 }
 
@@ -285,7 +307,102 @@ func TestNew_IncludeOutputsInResponse(t *testing.T) {
 	}
 }
 
-func TestNew_ConvertsResponseOutputWithResponseMetadata(t *testing.T) {
+func TestNew_DoesNotIncludeGenericMessageOutputsByDefault(t *testing.T) {
+	binding := workflow.ExecutorBinding{
+		ID:               "message-yielder",
+		ImplementationID: "*workflow.Executor",
+		RawValue:         struct{}{},
+	}
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
+		return newMessageExecutor(binding.ID, &messageworkflow.Options{
+			StateKey: "message_yielder_msgs",
+			TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, _ []*message.Message) error {
+				return ctx.YieldOutput(&message.Message{
+					Role:     message.RoleAssistant,
+					Contents: message.Contents{&message.TextContent{Text: "generic-output"}},
+				})
+			},
+		}), nil
+	}
+	wf, err := workflow.NewBuilder(binding).
+		WithOutputFrom(binding).
+		Build()
+	if err != nil {
+		t.Fatalf("build workflow: %v", err)
+	}
+	ag, err := workflowprovider.New(wf, workflowprovider.Config{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	resp, err := ag.RunText(t.Context(), "ping").Collect()
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if strings.Contains(resp.String(), "generic-output") {
+		t.Fatalf("generic message output surfaced with IncludeOutputsInResponse=false: %+v", resp)
+	}
+}
+
+func TestNew_GatesHostedAgentResponseOutputsByDefault(t *testing.T) {
+	run := func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: message.Contents{&message.TextContent{Text: "hosted-response"}},
+			}, nil)
+		}
+	}
+	host := workflowhosting.New(
+		agent.New(
+			agent.ProviderConfig{ProviderName: "hosted-response", Run: run},
+			agent.Config{ID: "hosted-id", Name: "hosted-name", DisableFuncAutoCall: true},
+		),
+		workflowhosting.Config{EmitResponseEvents: true},
+	)
+	wf, err := workflow.NewBuilder(host).
+		WithOutputFrom(host).
+		Build()
+	if err != nil {
+		t.Fatalf("build workflow: %v", err)
+	}
+	ag, err := workflowprovider.New(wf, workflowprovider.Config{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	for update, err := range ag.RunText(t.Context(), "ping") {
+		if err != nil {
+			t.Fatalf("RunText: %v", err)
+		}
+		if raw, ok := update.RawRepresentation.(workflow.OutputEvent); ok {
+			if _, isResponse := raw.Output.(*agent.Response); isResponse {
+				t.Fatalf("aggregated hosted agent response output was forwarded by default: %+v", update)
+			}
+		}
+	}
+
+	included, err := workflowprovider.New(wf, workflowprovider.Config{IncludeOutputsInResponse: true})
+	if err != nil {
+		t.Fatalf("New included: %v", err)
+	}
+	var sawResponseOutput bool
+	for update, err := range included.RunText(t.Context(), "ping") {
+		if err != nil {
+			t.Fatalf("RunText included: %v", err)
+		}
+		if raw, ok := update.RawRepresentation.(workflow.OutputEvent); ok {
+			if _, isResponse := raw.Output.(*agent.Response); isResponse {
+				sawResponseOutput = true
+			}
+		}
+	}
+	if !sawResponseOutput {
+		t.Fatalf("aggregated hosted agent response output was not forwarded when included")
+	}
+}
+
+func TestNew_ConvertsResponseOutputAsMessageUpdates(t *testing.T) {
 	createdAt := time.Date(2024, 11, 10, 9, 20, 0, 0, time.UTC)
 	binding := workflow.ExecutorBinding{
 		ID:               "response-yielder",
@@ -321,50 +438,43 @@ func TestNew_ConvertsResponseOutputWithResponseMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build workflow: %v", err)
 	}
-	ag, err := workflowprovider.New(wf, workflowprovider.Config{})
+	ag, err := workflowprovider.New(wf, workflowprovider.Config{
+		Config:                   agent.Config{ID: "workflow-agent", Name: "Workflow Agent"},
+		IncludeOutputsInResponse: true,
+	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 
 	var sawMessage bool
-	var sawMetadata bool
 	for update, err := range ag.RunText(t.Context(), "ping") {
 		if err != nil {
 			t.Fatalf("RunText: %v", err)
 		}
 		if update.String() == "from-response" {
 			sawMessage = true
-			if update.AgentID != "inner-agent" {
-				t.Errorf("expected AgentID inner-agent, got %q", update.AgentID)
+			if update.AgentID != "workflow-agent" {
+				t.Errorf("expected workflow agent ID, got %q", update.AgentID)
 			}
-			if update.ResponseID != "inner-response" {
-				t.Errorf("expected ResponseID inner-response, got %q", update.ResponseID)
+			if update.ResponseID == "" || update.ResponseID == "inner-response" {
+				t.Errorf("expected workflow response ID, got %q", update.ResponseID)
 			}
 			if update.MessageID != "inner-message" {
 				t.Errorf("expected MessageID inner-message, got %q", update.MessageID)
 			}
-			if update.AuthorName != "inner-author" {
-				t.Errorf("expected AuthorName inner-author, got %q", update.AuthorName)
+			if update.AuthorName != "Workflow Agent" {
+				t.Errorf("expected workflow agent AuthorName, got %q", update.AuthorName)
 			}
-			if !update.CreatedAt.Equal(createdAt) {
-				t.Errorf("expected CreatedAt %v, got %v", createdAt, update.CreatedAt)
+			if update.CreatedAt.IsZero() || update.CreatedAt.Equal(createdAt) {
+				t.Errorf("expected workflow-created timestamp, got %v", update.CreatedAt)
 			}
-		}
-		if update.AdditionalProperties["trace"] == "kept" {
-			sawMetadata = true
-			if update.AgentID != "inner-agent" {
-				t.Errorf("expected metadata AgentID inner-agent, got %q", update.AgentID)
-			}
-			if update.ResponseID != "inner-response" {
-				t.Errorf("expected metadata ResponseID inner-response, got %q", update.ResponseID)
+			if update.AdditionalProperties != nil {
+				t.Errorf("expected no response-level additional properties, got %v", update.AdditionalProperties)
 			}
 		}
 	}
 	if !sawMessage {
 		t.Fatalf("expected response message update")
-	}
-	if !sawMetadata {
-		t.Fatalf("expected response metadata update")
 	}
 }
 
@@ -1663,7 +1773,7 @@ func TestNew_MatchingResponse_DoesNotCauseExtraTurn(t *testing.T) {
 		requestEmittingAgent("matching-response-call-id", "matchingResponseFunction"),
 		workflowhosting.Config{EmitUpdateEvents: true},
 	)
-	wf, err := workflow.NewBuilder(host).Build()
+	wf, err := workflow.NewBuilder(host).WithOutputFrom(host).Build()
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -1731,7 +1841,7 @@ func TestNew_UnmatchedResponse_TriggersTurnAndKeepsProgressing(t *testing.T) {
 		requestEmittingAgent("unmatched-response-call-id", "unmatchedResponseFunction"),
 		workflowhosting.Config{EmitUpdateEvents: true},
 	)
-	wf, err := workflow.NewBuilder(host).Build()
+	wf, err := workflow.NewBuilder(host).WithOutputFrom(host).Build()
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -1795,7 +1905,9 @@ func TestNew_MixedResponseAndRegularMessage_CrossExecutorStartExecutorIsReawaken
 		resumeRegularText,
 		resumeProcessed,
 	)
-	wf, err := addCrossExecutorEdges(workflow.NewBuilder(start), start, downstream).Build()
+	wf, err := addCrossExecutorEdges(workflow.NewBuilder(start), start, downstream).
+		WithOutputFrom(downstream).
+		Build()
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -1851,7 +1963,9 @@ func TestNew_ResponseOnlyToNonStartExecutor_StartExecutorIsStillActivated(t *tes
 		workflowhosting.Config{EmitUpdateEvents: true},
 	)
 	start := turnTrackingStartExecutorBinding(startExecutorID, downstream.ID, activatedMarker)
-	wf, err := addCrossExecutorEdges(workflow.NewBuilder(start), start, downstream).Build()
+	wf, err := addCrossExecutorEdges(workflow.NewBuilder(start), start, downstream).
+		WithOutputFrom(downstream).
+		Build()
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}

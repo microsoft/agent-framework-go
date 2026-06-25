@@ -108,16 +108,24 @@ func (eb ExecutorBinding) CreateInstance(sessionID string) (*Executor, error) {
 	if err != nil {
 		return nil, err
 	}
-	if ex == nil {
-		return nil, errors.New("executor binding returned nil executor")
-	}
-	if ex.ID != eb.ID {
-		return nil, fmt.Errorf("Executor ID mismatch: expected %q, but got %q", eb.ID, ex.ID)
+	ex, err = checkExecutorBindingID(ex, eb.ID)
+	if err != nil {
+		return nil, err
 	}
 	if ex.ImplementationID == "" {
 		ex.ImplementationID = implementationID
 	} else if ex.ImplementationID != implementationID {
 		return nil, fmt.Errorf("Executor implementation ID mismatch: expected %q, but got %q", implementationID, ex.ImplementationID)
+	}
+	return ex, nil
+}
+
+func checkExecutorBindingID(ex *Executor, id string) (*Executor, error) {
+	if ex == nil {
+		return nil, errors.New("executor binding returned nil executor")
+	}
+	if ex.ID != id {
+		return nil, fmt.Errorf("Executor ID mismatch: expected %q, but got %q", id, ex.ID)
 	}
 	return ex, nil
 }
@@ -190,11 +198,9 @@ func BindNewExecutorFunc(id string, fn func(sessionID string, executorID string)
 			if err != nil {
 				return executor, err
 			}
-			if executor == nil {
-				return nil, errors.New("executor binding returned nil executor")
-			}
-			if executor.ID != id {
-				return nil, fmt.Errorf("Executor ID mismatch: expected %q, but got %q", id, executor.ID)
+			executor, err = checkExecutorBindingID(executor, id)
+			if err != nil {
+				return nil, err
 			}
 			executor.ImplementationID = implementationID
 			return executor, nil

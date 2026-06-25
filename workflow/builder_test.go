@@ -485,6 +485,62 @@ func TestBuilder_Validation_OutputExecutorNotBound(t *testing.T) {
 	}
 }
 
+func TestBuilder_WithIntermediateOutputFromRegistersTags(t *testing.T) {
+	start := newNoOpExecutor("start")
+	leaf := newNoOpExecutor("leaf")
+
+	wf, err := workflow.NewBuilder(start).
+		AddEdge(start, leaf).
+		WithIntermediateOutputFrom(leaf).
+		Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	if !wf.HasOutputExecutor("leaf") {
+		t.Fatal("leaf should be registered as an output executor")
+	}
+	tags := outputExecutorTags(wf, "leaf")
+	if len(tags) != 1 || tags[0] != workflow.OutputTagIntermediate {
+		t.Fatalf("tags = %v, want intermediate", tags)
+	}
+	outputEvent := workflow.OutputEvent{ExecutorID: "leaf", Output: "value", Tags: tags}
+	if !outputEvent.HasTag(workflow.OutputTagIntermediate) || !outputEvent.IsIntermediate() {
+		t.Fatalf("OutputEvent did not report intermediate tag: %v", outputEvent.Tags)
+	}
+}
+
+func TestBuilder_OutputTagsAccumulateWithoutDuplicates(t *testing.T) {
+	start := newNoOpExecutor("start")
+	leaf := newNoOpExecutor("leaf")
+
+	wf, err := workflow.NewBuilder(start).
+		AddEdge(start, leaf).
+		WithOutputFrom(leaf).
+		WithIntermediateOutputFrom(leaf).
+		WithIntermediateOutputFrom(leaf).
+		Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	tags := outputExecutorTags(wf, "leaf")
+	if len(tags) != 1 || tags[0] != workflow.OutputTagIntermediate {
+		t.Fatalf("tags = %v, want intermediate", tags)
+	}
+}
+
+func outputExecutorTags(wf *workflow.Workflow, executorID string) []workflow.OutputTag {
+	if wf == nil {
+		return nil
+	}
+	tags, ok := wf.OutputExecutors()[executorID]
+	if !ok {
+		return nil
+	}
+	return tags
+}
+
 func TestBuilder_Validation_SelfLoopWarning(t *testing.T) {
 	// A self-loop (executor → itself) is allowed but should log a warning.
 	// We verify it does not produce a build error.

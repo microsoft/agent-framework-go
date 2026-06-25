@@ -495,6 +495,15 @@ func runWorkflowAndCollect(t *testing.T, wf *workflow.Workflow, input any) []wor
 	return outs
 }
 
+func runWorkflowAndCollectOne(t *testing.T, wf *workflow.Workflow, input any) workflow.OutputEvent {
+	t.Helper()
+	outs := runWorkflowAndCollect(t, wf, input)
+	if len(outs) != 1 {
+		t.Fatalf("expected 1 OutputEvent, got %d: %+v", len(outs), outs)
+	}
+	return outs[0]
+}
+
 func TestOutputFilter_AllowsRegisteredExecutor(t *testing.T) {
 	start := outputFilterExecutor("start")
 	end := outputFilterExecutor("end")
@@ -507,15 +516,33 @@ func TestOutputFilter_AllowsRegisteredExecutor(t *testing.T) {
 		t.Fatalf("build: %v", err)
 	}
 
-	outs := runWorkflowAndCollect(t, wf, "hello")
-	if len(outs) != 1 {
-		t.Fatalf("expected 1 OutputEvent from registered executor, got %d", len(outs))
+	out := runWorkflowAndCollectOne(t, wf, "hello")
+	if out.ExecutorID != "end" {
+		t.Errorf("ExecutorID = %q, want %q", out.ExecutorID, "end")
 	}
-	if outs[0].ExecutorID != "end" {
-		t.Errorf("ExecutorID = %q, want %q", outs[0].ExecutorID, "end")
-	}
-	if got, want := outs[0].Output, any("out:end:hello"); got != want {
+	if got, want := out.Output, any("out:end:hello"); got != want {
 		t.Errorf("Output = %v, want %v", got, want)
+	}
+	if len(out.Tags) != 0 {
+		t.Fatalf("terminal output tags = %v, want none", out.Tags)
+	}
+}
+
+func TestOutputFilter_TagsIntermediateOutput(t *testing.T) {
+	start := outputFilterExecutor("start")
+	end := outputFilterExecutor("end")
+
+	wf, err := workflow.NewBuilder(start).
+		AddEdge(start, end).
+		WithIntermediateOutputFrom(end).
+		Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	out := runWorkflowAndCollectOne(t, wf, "hello")
+	if !out.IsIntermediate() {
+		t.Fatalf("OutputEvent tags = %v, want intermediate", out.Tags)
 	}
 }
 

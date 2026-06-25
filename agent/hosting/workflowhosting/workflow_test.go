@@ -312,7 +312,7 @@ func collectForwardedResponseMessages(t *testing.T, a *agent.Agent, cfg workflow
 func runHostedAgent(t *testing.T, a *agent.Agent, cfg workflowhosting.Config, token workflow.TurnToken, msgs []*message.Message) []workflow.Event {
 	t.Helper()
 	binding := workflowhosting.New(a, cfg)
-	wf, err := workflow.NewBuilder(binding).Build()
+	wf, err := workflow.NewBuilder(binding).WithOutputFrom(binding).Build()
 	if err != nil {
 		t.Fatalf("build workflow: %v", err)
 	}
@@ -1172,6 +1172,7 @@ func TestHostedAgent_InterceptUserInputRequests(t *testing.T) {
 	wf, err := workflow.NewBuilder(host).
 		AddEdge(host, app).
 		AddEdge(app, host).
+		WithOutputFrom(host).
 		Build()
 	if err != nil {
 		t.Fatalf("build: %v", err)
@@ -1221,6 +1222,7 @@ func TestHostedAgent_InterceptUnterminatedFunctionCalls(t *testing.T) {
 	wf, err := workflow.NewBuilder(host).
 		AddEdge(host, exec).
 		AddEdge(exec, host).
+		WithOutputFrom(host).
 		Build()
 	if err != nil {
 		t.Fatalf("build: %v", err)
@@ -1442,7 +1444,7 @@ func TestHostedAgent_ResetSignal_StartsNewSession(t *testing.T) {
 		agent.Config{ID: testAgentID, Name: testAgentName, DisableFuncAutoCall: true},
 	)
 	host := workflowhosting.New(a, workflowhosting.Config{})
-	wf, err := workflow.NewBuilder(host).Build()
+	wf, err := workflow.NewBuilder(host).WithOutputFrom(host).Build()
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -1496,7 +1498,7 @@ func TestHostedAgent_InterceptDisabled_ResumesWithExternalResponse(t *testing.T)
 		EmitResponseEvents: true,
 	})
 
-	wf, err := workflow.NewBuilder(host).Build()
+	wf, err := workflow.NewBuilder(host).WithOutputFrom(host).Build()
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -1635,7 +1637,7 @@ func TestHostedAgent_InterceptsOnlyUnpairedFunctionCalls_PortMode(t *testing.T) 
 	host := workflowhosting.New(newRequestAgent(unpaired, paired), workflowhosting.Config{
 		EmitResponseEvents: true,
 	})
-	wf, err := workflow.NewBuilder(host).Build()
+	wf, err := workflow.NewBuilder(host).WithOutputFrom(host).Build()
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}

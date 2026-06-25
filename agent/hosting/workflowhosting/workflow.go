@@ -400,7 +400,7 @@ func (h *hostExecutor) runAgentAndDispatch(wctx *workflow.Context, messages []*m
 			return err
 		}
 		if emitUpdates {
-			if err := wctx.AddEvent(workflow.OutputEvent{ExecutorID: h.id, Output: update}); err != nil {
+			if err := wctx.YieldOutput(update); err != nil {
 				return err
 			}
 		}
@@ -418,7 +418,7 @@ func (h *hostExecutor) runAgentAndDispatch(wctx *workflow.Context, messages []*m
 	}
 
 	if h.cfg.EmitResponseEvents {
-		if err := wctx.AddEvent(workflow.OutputEvent{ExecutorID: h.id, Output: &resp}); err != nil {
+		if err := wctx.YieldOutput(&resp); err != nil {
 			return err
 		}
 	}

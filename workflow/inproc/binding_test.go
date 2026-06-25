@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
 )
@@ -587,6 +589,65 @@ func TestWorkflowOutput_RejectsValueNotAssignableToDeclaredOutputType(t *testing
 	}
 	if outputs := outputEvents(events); len(outputs) != 0 {
 		t.Fatalf("output count = %d, want 0; outputs: %#v", len(outputs), outputs)
+	}
+}
+
+func TestWorkflowOutput_AgentResponseUsesOutputFilter(t *testing.T) {
+	binding := workflow.ExecutorBinding{
+		ID:               "agent-output",
+		ImplementationID: "*workflow.Executor",
+		RawValue:         struct{}{},
+	}
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: binding.ID,
+
+			DisableAutoSendMessageHandlerResultObject: true,
+			DisableAutoYieldOutputHandlerResultObject: true,
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(wctx *workflow.Context, _ any) (any, error) {
+					return nil, wctx.YieldOutput(&agent.Response{
+						Messages: []*message.Message{{
+							Role:     message.RoleAssistant,
+							Contents: message.Contents{&message.TextContent{Text: "agent output"}},
+						}},
+					})
+				})
+				return rb, nil
+			},
+		}, nil
+	}
+
+	wf, err := workflow.NewBuilder(binding).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	events := runAndCollectEvents(t, wf, "input")
+	if errors := errorEvents(events); len(errors) != 0 {
+		t.Fatalf("unexpected error events: %#v", errors)
+	}
+	if outputs := outputEvents(events); len(outputs) != 0 {
+		t.Fatalf("output count = %d, want 0 without output designation; outputs: %#v", len(outputs), outputs)
+	}
+
+	wf, err = workflow.NewBuilder(binding).WithIntermediateOutputFrom(binding).Build()
+	if err != nil {
+		t.Fatalf("Build with output: %v", err)
+	}
+	events = runAndCollectEvents(t, wf, "input")
+	if errors := errorEvents(events); len(errors) != 0 {
+		t.Fatalf("unexpected error events with output: %#v", errors)
+	}
+	outputs := outputEvents(events)
+	if len(outputs) != 1 {
+		t.Fatalf("output count = %d, want 1 with output designation; outputs: %#v", len(outputs), outputs)
+	}
+	if _, ok := outputs[0].Output.(*agent.Response); !ok {
+		t.Fatalf("OutputEvent.Output = %T, want *agent.Response", outputs[0].Output)
+	}
+	if !outputs[0].IsIntermediate() {
+		t.Fatalf("OutputEvent tags = %v, want intermediate", outputs[0].Tags)
 	}
 }
 

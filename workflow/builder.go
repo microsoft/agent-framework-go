@@ -28,7 +28,7 @@ type Builder struct {
 	edges                    map[string][]Edge
 	conditionlessConnections []EdgeConnection
 	inputPorts               map[string]RequestPort
-	outputExecutors          map[string]struct{}
+	outputExecutors          map[string]map[OutputTag]struct{}
 	telemetry                *internalobservability.Context
 }
 
@@ -70,6 +70,16 @@ func (wb *Builder) WithTelemetry(tracer workflowobservability.Tracer, options Te
 }
 
 func (wb *Builder) WithOutputFrom(bindings ...ExecutorBinding) *Builder {
+	return wb.withOutputFrom(nil, bindings...)
+}
+
+// WithIntermediateOutputFrom registers bindings as workflow output sources
+// carrying [OutputTagIntermediate].
+func (wb *Builder) WithIntermediateOutputFrom(bindings ...ExecutorBinding) *Builder {
+	return wb.withOutputFrom([]OutputTag{OutputTagIntermediate}, bindings...)
+}
+
+func (wb *Builder) withOutputFrom(tags []OutputTag, bindings ...ExecutorBinding) *Builder {
 	if wb.err != nil {
 		return wb
 	}
@@ -78,9 +88,16 @@ func (wb *Builder) WithOutputFrom(bindings ...ExecutorBinding) *Builder {
 			return wb
 		}
 		if wb.outputExecutors == nil {
-			wb.outputExecutors = make(map[string]struct{})
+			wb.outputExecutors = make(map[string]map[OutputTag]struct{})
 		}
-		wb.outputExecutors[binding.ID] = struct{}{}
+		registeredTags, ok := wb.outputExecutors[binding.ID]
+		if !ok {
+			registeredTags = make(map[OutputTag]struct{})
+			wb.outputExecutors[binding.ID] = registeredTags
+		}
+		for _, tag := range tags {
+			registeredTags[tag] = struct{}{}
+		}
 	}
 	return wb
 }
@@ -224,7 +241,7 @@ func (wb *Builder) build(validateOrphans bool) (*Workflow, error) {
 		edges:            cloneEdges(wb.edges),
 		ports:            maps.Clone(wb.inputPorts),
 		executorBindings: maps.Clone(wb.executorsBindings),
-		outputExecutors:  maps.Clone(wb.outputExecutors),
+		outputExecutors:  cloneOutputExecutors(wb.outputExecutors),
 		telemetry:        telemetry,
 	}
 	internalobservability.SetBuildWorkflowAttributes(activity, observabilityMetadata(wf, ""), workflowTelemetryDefinitionFrom(wf))

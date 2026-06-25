@@ -19,7 +19,7 @@ func main() {
 	french := demo.NewAzureChatAgent("French", "Respond in French. Keep the answer concise.", logger)
 	english := demo.NewAzureChatAgent("English", "Respond in English. Keep the answer concise.", logger)
 
-	wf, err := workflowhosting.BuildConcurrent("bilingual-workflow", french, english)
+	wf, err := workflowhosting.NewConcurrentWorkflowBuilder(french, english).WithName("bilingual-workflow").Build()
 	if err != nil {
 		demo.Panic(err)
 	}

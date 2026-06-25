@@ -453,6 +453,46 @@ func TestResponse_Update_RawRepresentation(t *testing.T) {
 	}
 }
 
+func TestResponse_Coalesce_PreservesEmptyMessagesAndWhitespaceText(t *testing.T) {
+	resp := &agent.Response{}
+	resp.Update(&agent.ResponseUpdate{
+		MessageID:         "metadata-only",
+		RawRepresentation: "raw",
+	})
+	resp.Update(&agent.ResponseUpdate{
+		MessageID: "whitespace",
+		Contents:  message.Contents{&message.TextContent{Text: "  \t\n"}},
+	})
+	resp.Update(&agent.ResponseUpdate{
+		MessageID: "content",
+		Contents:  message.Contents{&message.TextContent{Text: "kept"}},
+	})
+
+	resp.Coalesce()
+
+	if len(resp.Messages) != 3 {
+		t.Fatalf("message count = %d, want 3", len(resp.Messages))
+	}
+	if got := resp.Messages[0].ID; got != "metadata-only" {
+		t.Fatalf("message 0 ID = %q, want metadata-only", got)
+	}
+	if len(resp.Messages[0].Contents) != 0 {
+		t.Fatalf("message 0 contents count = %d, want 0", len(resp.Messages[0].Contents))
+	}
+	if got := resp.Messages[1].ID; got != "whitespace" {
+		t.Fatalf("message 1 ID = %q, want whitespace", got)
+	}
+	if got := resp.Messages[1].Contents.Text(); got != "  \t\n" {
+		t.Fatalf("message 1 text = %q, want whitespace", got)
+	}
+	if got := resp.Messages[2].ID; got != "content" {
+		t.Fatalf("message 2 ID = %q, want content", got)
+	}
+	if got := resp.Messages[2].Contents.Text(); got != "kept" {
+		t.Fatalf("message 2 text = %q, want kept", got)
+	}
+}
+
 func TestResponse_Update_PreferLatestValues(t *testing.T) {
 	resp := &agent.Response{}
 
