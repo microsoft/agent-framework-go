@@ -11,7 +11,7 @@ tips on how you can make reporting your issue as effective as possible.
 
 ### Where to Report
 
-New issues can be reported in our [list of issues](https://github.com/microsoft/agent-framework/issues).
+New issues can be reported in our [list of issues](https://github.com/microsoft/agent-framework-go/issues).
 
 Before filing a new issue, please search the list of issues to make sure it does
 not already exist.
@@ -39,18 +39,25 @@ report should contain the following information:
 
 Project maintainers will merge accepted code changes from contributors.
 
+### Contributor License Agreement
+
+Contributions to Microsoft projects are subject to the Microsoft Contributor
+License Agreement (CLA). When you submit a pull request, a CLA bot will
+determine whether you need to provide a CLA and decorate the PR appropriately.
+You only need to do this once across Microsoft open source projects.
+
 ### DOs and DON'Ts
 
 DO's:
 
 - **DO** follow the standard coding conventions
 
-  - [.NET](https://learn.microsoft.com/dotnet/csharp/fundamentals/coding-style/coding-conventions)
-  - [Python](https://pypi.org/project/black/)
+  - [Go Code Review Comments](https://go.dev/wiki/CodeReviewComments)
+  - [Effective Go](https://go.dev/doc/effective_go)
 
 - **DO** give priority to the current style of the project or file you're changing
   if it diverges from the general guidelines.
-- **DO** use the pre-commit hooks for python to ensure proper formatting.
+- **DO** run `gofmt` on changed Go files.
 - **DO** include tests when adding new features. When fixing bugs, start with
   adding a test that highlights how the current behavior is broken.
 - **DO** keep the discussions focused. When a new or related topic comes up
@@ -101,13 +108,12 @@ We use and recommend the following workflow:
 
 ### Development scripts
 
-The scripts below are used to build, test, and lint within the project.
+The commands below are used to build, test, and lint within the project.
 
-- Python: see [python/DEV_SETUP.md](./python/DEV_SETUP.md).
-- .NET:
-  - Build: `dotnet build`
-  - Test: `dotnet test`
-  - Linting (auto-fix): `dotnet format`
+- Build and test: `go test ./...`
+- Race-enabled tests: `go test -race ./...`
+- Lint: `golangci-lint run`
+- Format changed Go files: `gofmt -w <files>`
 
 ### PR - CI Process
 
