@@ -25,6 +25,7 @@ import (
 const (
 	agentHostStateKey     = "AIAgentHostState"
 	agentBufferedStateKey = "AIAgentHostExecutor.State"
+	agentHostBindingID    = "workflowhosting.Agent"
 	userInputHandlerID    = "_userInputHandler"
 	functionCallHandlerID = "_functionCallHandler"
 )
@@ -113,12 +114,12 @@ type Config struct {
 // sensible default.
 func New(a *agent.Agent, cfg Config) workflow.ExecutorBinding {
 	id := descriptiveID(a)
-	userInputPort, functionCallPort := hostPorts(id)
+	ports := hostPorts(id)
 	return workflow.ExecutorBinding{
 		ID:               id,
-		ImplementationID: "workflowhosting.Agent",
+		ImplementationID: agentHostBindingID,
 		RawValue:         a,
-		Ports:            []workflow.RequestPort{userInputPort, functionCallPort},
+		Ports:            ports.asSlice(),
 		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
 			return newHostExecutor(a, cfg).executor(), nil
 		},
@@ -126,18 +127,28 @@ func New(a *agent.Agent, cfg Config) workflow.ExecutorBinding {
 	}
 }
 
-func hostPorts(id string) (userInput, functionCall workflow.RequestPort) {
-	userInput = workflow.RequestPort{
-		ID:       id + "_UserInput",
-		Request:  reflect.TypeFor[*message.ToolApprovalRequestContent](),
-		Response: reflect.TypeFor[*message.ToolApprovalResponseContent](),
+type hostPortSet struct {
+	userInput    workflow.RequestPort
+	functionCall workflow.RequestPort
+}
+
+func hostPorts(id string) hostPortSet {
+	return hostPortSet{
+		userInput: workflow.RequestPort{
+			ID:       id + "_UserInput",
+			Request:  reflect.TypeFor[*message.ToolApprovalRequestContent](),
+			Response: reflect.TypeFor[*message.ToolApprovalResponseContent](),
+		},
+		functionCall: workflow.RequestPort{
+			ID:       id + "_FunctionCall",
+			Request:  reflect.TypeFor[*message.FunctionCallContent](),
+			Response: reflect.TypeFor[*message.FunctionResultContent](),
+		},
 	}
-	functionCall = workflow.RequestPort{
-		ID:       id + "_FunctionCall",
-		Request:  reflect.TypeFor[*message.FunctionCallContent](),
-		Response: reflect.TypeFor[*message.FunctionResultContent](),
-	}
-	return
+}
+
+func (p hostPortSet) asSlice() []workflow.RequestPort {
+	return []workflow.RequestPort{p.userInput, p.functionCall}
 }
 
 // hostExecutor implements an [agent.Agent] hosted as a workflow executor.
@@ -158,7 +169,7 @@ type hostExecutor struct {
 
 func newHostExecutor(a *agent.Agent, cfg Config) *hostExecutor {
 	id := descriptiveID(a)
-	userInputPort, functionCallPort := hostPorts(id)
+	ports := hostPorts(id)
 	h := &hostExecutor{
 		id:           id,
 		agent:        a,
@@ -166,7 +177,7 @@ func newHostExecutor(a *agent.Agent, cfg Config) *hostExecutor {
 		messageState: messageworkflow.NewMessageState(agentBufferedStateKey, ""),
 	}
 	h.approvalHandler = contentexthandler.New(contentexthandler.Options[*message.ToolApprovalRequestContent, *message.ToolApprovalResponseContent]{
-		Port:              userInputPort,
+		Port:              ports.userInput,
 		PendingRequestsID: userInputHandlerID,
 		Intercepted:       cfg.InterceptUserInputRequests,
 		RequestID:         func(req *message.ToolApprovalRequestContent) string { return req.RequestID },
@@ -174,7 +185,7 @@ func newHostExecutor(a *agent.Agent, cfg Config) *hostExecutor {
 		ResponseHandler:   h.handleApprovalResponse,
 	})
 	h.callHandler = contentexthandler.New(contentexthandler.Options[*message.FunctionCallContent, *message.FunctionResultContent]{
-		Port:              functionCallPort,
+		Port:              ports.functionCall,
 		PendingRequestsID: functionCallHandlerID,
 		Intercepted:       cfg.InterceptUnterminatedFunctionCalls,
 		RequestID:         func(req *message.FunctionCallContent) string { return req.CallID },
