@@ -286,34 +286,13 @@ func (w *Workflow) RequestPorts() map[string]RequestPort {
 // DescribeProtocol returns the protocol accepted by the workflow's start
 // executor and yielded by its output executors.
 func (w *Workflow) DescribeProtocol() (ProtocolDescriptor, error) {
-	er := w.executorBindings[w.startExecutorID]
-	if _, ok := w.executorBindings[w.startExecutorID]; !ok {
-		return ProtocolDescriptor{}, fmt.Errorf("workflow start executor %q has no registered binding", w.startExecutorID)
-	}
-	executor, err := er.CreateInstance("")
+	inputProtocol, err := w.describeExecutorProtocol(w.startExecutorID, "start")
 	if err != nil {
 		return ProtocolDescriptor{}, err
 	}
-	inputProtocol, err := executor.describeProtocol()
+	yields, err := w.describeOutputYields()
 	if err != nil {
 		return ProtocolDescriptor{}, err
-	}
-
-	yields := make([]reflect.Type, 0)
-	for executorID := range w.outputExecutors {
-		binding, ok := w.executorBindings[executorID]
-		if !ok {
-			return ProtocolDescriptor{}, fmt.Errorf("workflow output executor %q has no registered binding", executorID)
-		}
-		outputExecutor, err := binding.CreateInstance("")
-		if err != nil {
-			return ProtocolDescriptor{}, err
-		}
-		outputProtocol, err := outputExecutor.describeProtocol()
-		if err != nil {
-			return ProtocolDescriptor{}, err
-		}
-		yields = append(yields, outputProtocol.Yields...)
 	}
 
 	return ProtocolDescriptor{
@@ -322,6 +301,33 @@ func (w *Workflow) DescribeProtocol() (ProtocolDescriptor, error) {
 		Sends:      nil,
 		AcceptsAll: inputProtocol.AcceptsAll,
 	}, nil
+}
+
+func (w *Workflow) describeExecutorProtocol(executorID string, role string) (ProtocolDescriptor, error) {
+	binding, ok := w.executorBindings[executorID]
+	if !ok {
+		if role == "start" {
+			return ProtocolDescriptor{}, fmt.Errorf("workflow start executor %q has no registered binding", executorID)
+		}
+		return ProtocolDescriptor{}, fmt.Errorf("workflow %s executor %q has no registered binding", role, executorID)
+	}
+	executor, err := binding.CreateInstance("")
+	if err != nil {
+		return ProtocolDescriptor{}, err
+	}
+	return executor.describeProtocol()
+}
+
+func (w *Workflow) describeOutputYields() ([]reflect.Type, error) {
+	yields := make([]reflect.Type, 0)
+	for executorID := range w.outputExecutors {
+		outputProtocol, err := w.describeExecutorProtocol(executorID, "output")
+		if err != nil {
+			return nil, err
+		}
+		yields = append(yields, outputProtocol.Yields...)
+	}
+	return yields, nil
 }
 
 // HasResettableExecutors reports whether any executor binding can reset shared
