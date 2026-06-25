@@ -333,6 +333,19 @@ func (proc *runnerContext) addExternalResponse(response *workflow.ExternalRespon
 			if proc.runEnded.Load() {
 				return err
 			}
+			// Deliberate Go-specific divergence from .NET:
+			// In .NET (InProcessRunnerContext.cs / StreamingRunEventStream.RunLoopAsync),
+			// a port-ID mismatch throws InvalidOperationException inside the queued
+			// delivery, which escapes AdvanceAsync and is caught by the run loop's
+			// outer handler, writing a WorkflowErrorEvent and setting RunStatus.Ended.
+			// Port mismatch is therefore a fatal, run-terminating condition in .NET.
+			//
+			// In Go we intentionally surface the error as a non-fatal ErrorEvent so
+			// the run remains alive and the legitimate pending request can still be
+			// satisfied by a subsequent, correctly-ported response. This is a
+			// resilience improvement over .NET behaviour; see also the test
+			// TestRequestPortBind_RejectsResponseForOtherPort which asserts that
+			// status != RunStatusEnded after a rejected mismatched response.
 			return proc.outgoingEvents.EnqueueNonFatal(ctx, workflow.ErrorEvent{Error: err})
 		}
 
