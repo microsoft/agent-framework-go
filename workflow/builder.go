@@ -144,7 +144,7 @@ func (wb *Builder) AddDirectEdge(source ExecutorBinding, target ExecutorBinding,
 		Index:      wb.edgeIdx(),
 	}
 	applyEdgeOptions(&edge, opts)
-	wb.edges[source.ID] = append(wb.edges[source.ID], edge)
+	wb.addEdgeForSource(source.ID, edge)
 	wb.conditionlessConnections = append(wb.conditionlessConnections, conn)
 	return wb
 }
@@ -176,7 +176,7 @@ func (wb *Builder) AddFanOutEdge(source ExecutorBinding, targets []ExecutorBindi
 		Index:      wb.edgeIdx(),
 	}
 	applyEdgeOptions(&edge, opts)
-	wb.edges[source.ID] = append(wb.edges[source.ID], edge)
+	wb.addEdgeForSource(source.ID, edge)
 	return wb
 }
 
@@ -205,7 +205,7 @@ func (wb *Builder) AddFanInBarrierEdge(sources []ExecutorBinding, target Executo
 	}
 	applyEdgeOptions(&edge, opts)
 	for _, id := range sourceIDs {
-		wb.edges[id] = append(wb.edges[id], edge)
+		wb.addEdgeForSource(id, edge)
 	}
 	return wb
 }
@@ -352,6 +352,10 @@ func (wb *Builder) validate(validateOrphans bool) bool {
 func (wb *Builder) edgeIdx() int {
 	wb.edgeCount++
 	return wb.edgeCount
+}
+
+func (wb *Builder) addEdgeForSource(sourceID string, edge Edge) {
+	wb.edges[sourceID] = append(wb.edges[sourceID], edge)
 }
 
 // validateTypeCompatibility checks that sent message types of source executors
