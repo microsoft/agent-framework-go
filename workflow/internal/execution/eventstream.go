@@ -507,15 +507,6 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 			return !hadRequestHaltEvent && linkedCtx.Err() == nil
 		}
 
-		if err := l.stepRunner.RepublishPendingEvents(linkedCtx); err != nil {
-			sessionErr = err
-			yield(nil, err)
-			return
-		}
-		if !drainEvents() {
-			return
-		}
-
 		l.setStatus(RunStatusRunning)
 
 		var runActivity *observability.Activity
@@ -526,9 +517,15 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 		}
 
 		startRunActivity()
-		// Emit StartedEvent only when there's actual work to process.
-		if l.stepRunner.HasUnprocessedMessages() {
-			l.eventQueue.Enqueue(workflow.StartedEvent{})
+		l.eventQueue.Enqueue(workflow.StartedEvent{})
+
+		if err := l.stepRunner.RepublishPendingEvents(linkedCtx); err != nil {
+			sessionErr = err
+			yield(nil, err)
+			return
+		}
+		if !drainEvents() {
+			return
 		}
 
 		for {
@@ -576,9 +573,6 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 					return
 				}
 				startRunActivity()
-				if l.stepRunner.HasUnprocessedMessages() {
-					l.eventQueue.Enqueue(workflow.StartedEvent{})
-				}
 			} else {
 				// No more work to do
 				return

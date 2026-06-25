@@ -556,6 +556,19 @@ func prefixingWorkflowContext(inner *workflow.Context, prefix string) *workflow.
 			return inner.QueueStateUpdate(wrap(key), scope, value)
 		}
 	}
+	if inner.QueueClearScope != nil && inner.ReadStateKeys != nil && inner.QueueStateUpdate != nil {
+		wrapped.QueueClearScope = func(scope string) error {
+			for key, err := range wrapped.ReadStateKeys(scope) {
+				if err != nil {
+					return err
+				}
+				if err := wrapped.QueueStateUpdate(key, scope, nil); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}
 	return &wrapped
 }
 

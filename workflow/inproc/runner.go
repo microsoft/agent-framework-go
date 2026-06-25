@@ -114,7 +114,7 @@ func newInProcessRunner(
 		return nil, err
 	}
 
-	edgeMap := execution.NewEdgeRunner(wf, stepTracer, runContext.EnsureExecutor)
+	edgeMap := execution.NewEdgeRunner(wf, stepTracer, runContext.ensureExecutor)
 
 	runner := &runner{
 		sessionID:            sessionID,
@@ -157,23 +157,23 @@ func (r *runner) OutgoingEvents() *execution.ConcurrentEventSink {
 
 // HasUnservicedRequests returns true if there are unserviced external requests.
 func (r *runner) HasUnservicedRequests() bool {
-	return r.runContext.HasUnservicedRequests()
+	return r.runContext.hasUnservicedRequests()
 }
 
 // ResponsePortExecutorID returns the executor that handles responses on the
 // given port, or ("", false) if no such port is registered.
 func (r *runner) ResponsePortExecutorID(portID string) (string, bool) {
-	return r.runContext.ResponsePortExecutorID(portID)
+	return r.runContext.responsePortExecutorID(portID)
 }
 
 // HasUnprocessedMessages returns true if the next step has actions to process.
 func (r *runner) HasUnprocessedMessages() bool {
-	return r.runContext.NextStepHasActions()
+	return r.runContext.nextStepHasActions()
 }
 
 func (r *runner) RepublishPendingEvents(ctx context.Context) error {
 	if r.needsRepublish.Swap(false) {
-		return r.runContext.RepublishUnservicedRequests(ctx)
+		return r.runContext.republishUnservicedRequests(ctx)
 	}
 	return nil
 }
@@ -184,7 +184,7 @@ func (r *runner) IsValidInputType(ctx context.Context, messageType reflect.Type)
 		return true
 	}
 
-	startingExecutor, err := r.runContext.EnsureExecutor(ctx, r.startExecutorID, nil)
+	startingExecutor, err := r.runContext.ensureExecutor(ctx, r.startExecutorID, nil)
 	if err != nil {
 		return false
 	}
@@ -230,7 +230,7 @@ func (r *runner) EnqueueMessage(ctx context.Context, message any) error {
 	}
 
 	if response, ok := message.(*workflow.ExternalResponse); ok {
-		return r.runContext.AddExternalResponse(ctx, response)
+		return r.runContext.addExternalResponse(response)
 	}
 
 	messageType := reflect.TypeOf(message)
@@ -238,12 +238,12 @@ func (r *runner) EnqueueMessage(ctx context.Context, message any) error {
 		return fmt.Errorf("message type %v is not a valid input type for this workflow: %w", messageType, workflow.ErrInvalidInputType)
 	}
 
-	return r.runContext.AddExternalMessage(ctx, message, messageType)
+	return r.runContext.addExternalMessage(message, messageType)
 }
 
 // EnqueueResponse enqueues an external response to the workflow.
 func (r *runner) EnqueueResponse(ctx context.Context, response *workflow.ExternalResponse) error {
-	return r.runContext.AddExternalResponse(ctx, response)
+	return r.runContext.addExternalResponse(response)
 }
 
 // RunSuperStep executes a single super step of the workflow.
@@ -256,14 +256,14 @@ func (r *runner) RunSuperStep(ctx context.Context) (bool, error) {
 		return false, ctx.Err()
 	}
 
-	currentStep, err := r.runContext.Advance(ctx)
+	currentStep, err := r.runContext.advance(ctx)
 	if err != nil {
 		return false, err
 	}
 
 	if currentStep.HasMessages() ||
-		r.runContext.HasQueuedExternalDeliveries() ||
-		r.runContext.JoinedRunnersHaveActions() {
+		r.runContext.hasQueuedExternalDeliveries() ||
+		r.runContext.joinedRunnersHaveActions() {
 
 		if err := r.runSuperstep(ctx, currentStep); err != nil {
 			if !errors.Is(err, context.Canceled) {
@@ -279,7 +279,7 @@ func (r *runner) RunSuperStep(ctx context.Context) (bool, error) {
 
 // RequestEndRun requests the workflow run to end.
 func (r *runner) RequestEndRun(ctx context.Context) error {
-	return r.runContext.EndRun(ctx)
+	return r.runContext.endRun(ctx)
 }
 
 // Checkpoints returns the list of created checkpoints.
@@ -307,7 +307,7 @@ func (r *runner) RestoreCheckpoint(ctx context.Context, checkpointInfo workflow.
 	if err := r.restoreCheckpointCore(ctx, checkpointInfo); err != nil {
 		return err
 	}
-	return r.runContext.RepublishUnservicedRequests(ctx)
+	return r.runContext.republishUnservicedRequests(ctx)
 }
 
 func (r *runner) restoreCheckpointCore(ctx context.Context, checkpointInfo workflow.CheckpointInfo) error {
@@ -332,10 +332,10 @@ func (r *runner) restoreCheckpointCore(ctx context.Context, checkpointInfo workf
 	if err := r.runContext.stateManager.ImportState(cp); err != nil {
 		return err
 	}
-	if err := r.runContext.ImportState(ctx, cp); err != nil {
+	if err := r.runContext.importState(ctx, cp); err != nil {
 		return err
 	}
-	if err := r.runContext.NotifyCheckpointLoaded(ctx); err != nil {
+	if err := r.runContext.notifyCheckpointLoaded(ctx); err != nil {
 		return err
 	}
 	if err := r.edgeMap.ImportState(cp); err != nil {
@@ -374,7 +374,7 @@ func (r *runner) runSuperstep(ctx context.Context, currentStep *execution.StepCo
 	}
 
 	// Process subworkflows
-	for _, subRunner := range r.runContext.JoinedSubworkflowRunners() {
+	for _, subRunner := range r.runContext.joinedSubworkflowRunnerSnapshot() {
 		if _, err := subRunner.RunSuperStep(ctx); err != nil {
 			return err
 		}
@@ -386,12 +386,12 @@ func (r *runner) runSuperstep(ctx context.Context, currentStep *execution.StepCo
 	}
 
 	// Raise superstep completed event
-	completeEvt := r.stepTracer.Complete(r.runContext.NextStepHasActions(), r.runContext.HasUnservicedRequests())
+	completeEvt := r.stepTracer.Complete(r.runContext.nextStepHasActions(), r.runContext.hasUnservicedRequests())
 	return r.outgoingEvents.Enqueue(ctx, completeEvt)
 }
 
 func (r *runner) deliverMessages(ctx context.Context, receiverID string, envelopes *concurrent.Queue[*execution.MessageEnvelope]) (err error) {
-	executor, err := r.runContext.EnsureExecutor(ctx, receiverID, r.stepTracer)
+	executor, err := r.runContext.ensureExecutor(ctx, receiverID, r.stepTracer)
 	if err != nil {
 		return err
 	}
@@ -399,7 +399,7 @@ func (r *runner) deliverMessages(ctx context.Context, receiverID string, envelop
 	r.stepTracer.TraceActivated(receiverID)
 
 	// Bind a context with no per-message trace context for delivery-level callbacks.
-	tracelessCtx := r.runContext.Bind(ctx, receiverID, nil)
+	tracelessCtx := r.runContext.bind(ctx, receiverID, nil)
 	if err := executor.OnMessageDeliveryStarting(tracelessCtx); err != nil {
 		return err
 	}
@@ -416,7 +416,7 @@ func (r *runner) deliverMessages(ctx context.Context, receiverID string, envelop
 		if !ok {
 			break
 		}
-		boundCtx := r.runContext.Bind(ctx, receiverID, envelope.TraceContext)
+		boundCtx := r.runContext.bind(ctx, receiverID, envelope.TraceContext)
 		if _, execErr := executor.Execute(boundCtx, envelope.Message); execErr != nil {
 			return execErr
 		}
@@ -434,7 +434,7 @@ func (r *runner) checkpoint(ctx context.Context) error {
 		return r.runContext.stateManager.PublishUpdates(r.stepTracer)
 	}
 
-	if err := r.runContext.PrepareForCheckpoint(ctx); err != nil {
+	if err := r.runContext.prepareForCheckpoint(ctx); err != nil {
 		return err
 	}
 
@@ -461,7 +461,7 @@ func (r *runner) checkpoint(ctx context.Context) error {
 	cp := &checkpoint.Checkpoint{
 		StepNumber:    r.stepTracer.StepNumber(),
 		WorkflowInfo:  workflowInfo,
-		RunnerData:    r.runContext.ExportState(),
+		RunnerData:    r.runContext.exportState(),
 		StateData:     *stateData,
 		EdgeStateData: edgeData,
 		Parent:        cloneCheckpointInfoPtr(r.lastCheckpointInfo),

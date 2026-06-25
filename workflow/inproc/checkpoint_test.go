@@ -377,10 +377,24 @@ func TestCheckpoint_RestoreClearsQueuedExternalResponsesBeforeImport(t *testing.
 	}
 }
 
-func TestCheckpoint_RestoreClearsExecutorInstancesBeforeImport(t *testing.T) {
+func TestCheckpoint_RestorePreservesExecutorInstancesDuringImport(t *testing.T) {
 	ctx := context.Background()
 	manager := checkpoint.NewInMemoryManager()
 	var nextInstanceID int64
+	type counterOutput struct {
+		InstanceID int64
+		Count      int
+	}
+	lastCounterOutput := func(events func(func(workflow.Event) bool)) counterOutput {
+		t.Helper()
+		var got counterOutput
+		for evt := range events {
+			if out, ok := evt.(workflow.OutputEvent); ok {
+				got = out.Output.(counterOutput)
+			}
+		}
+		return got
+	}
 	binding := workflow.ExecutorBinding{
 		ID:               "counter",
 		ImplementationID: "*workflow.Executor",
@@ -391,16 +405,10 @@ func TestCheckpoint_RestoreClearsExecutorInstancesBeforeImport(t *testing.T) {
 				ID: "counter",
 
 				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					rb.YieldsOutputType(reflect.TypeFor[struct {
-						InstanceID int64
-						Count      int
-					}]())
+					rb.YieldsOutputType(reflect.TypeFor[counterOutput]())
 					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
 						count++
-						return nil, ctx.YieldOutput(struct {
-							InstanceID int64
-							Count      int
-						}{InstanceID: instanceID, Count: count})
+						return nil, ctx.YieldOutput(counterOutput{InstanceID: instanceID, Count: count})
 					})
 					return rb, nil
 				},
@@ -420,10 +428,20 @@ func TestCheckpoint_RestoreClearsExecutorInstancesBeforeImport(t *testing.T) {
 	if !ok {
 		t.Fatal("expected checkpoint")
 	}
+	first := lastCounterOutput(run.NewEvents())
+	if first.Count != 1 {
+		t.Fatalf("first count = %d, want 1", first.Count)
+	}
+
 	if _, err := run.Resume(ctx, "second"); err != nil {
 		t.Fatalf("Resume second: %v", err)
 	}
-	for range run.NewEvents() {
+	second := lastCounterOutput(run.NewEvents())
+	if second.InstanceID != first.InstanceID {
+		t.Fatalf("second instance = %d, want first instance %d", second.InstanceID, first.InstanceID)
+	}
+	if second.Count != 2 {
+		t.Fatalf("second count = %d, want 2", second.Count)
 	}
 
 	if err := run.RestoreCheckpoint(ctx, checkpointInfo); err != nil {
@@ -433,23 +451,12 @@ func TestCheckpoint_RestoreClearsExecutorInstancesBeforeImport(t *testing.T) {
 		t.Fatalf("Resume third: %v", err)
 	}
 
-	var got struct {
-		InstanceID int64
-		Count      int
+	third := lastCounterOutput(run.NewEvents())
+	if third.InstanceID != second.InstanceID {
+		t.Fatalf("restored instance = %d, want preserved instance %d", third.InstanceID, second.InstanceID)
 	}
-	for evt := range run.NewEvents() {
-		if out, ok := evt.(workflow.OutputEvent); ok {
-			got = out.Output.(struct {
-				InstanceID int64
-				Count      int
-			})
-		}
-	}
-	if got.InstanceID == 1 {
-		t.Fatalf("restored run reused stale executor instance: %+v", got)
-	}
-	if got.Count != 1 {
-		t.Fatalf("restored executor count = %d, want 1", got.Count)
+	if third.Count != 3 {
+		t.Fatalf("restored executor count = %d, want 3", third.Count)
 	}
 }
 

@@ -192,7 +192,7 @@ func TestNew_SerializedSessionResumesFromCheckpoint(t *testing.T) {
 	}
 }
 
-func TestNew_EmitsDefaultUpdatesForUnhandledWorkflowEvents(t *testing.T) {
+func TestNew_StreamsUpdatesForUnhandledWorkflowEvents(t *testing.T) {
 	binding := echoExecutorBinding("echo")
 	wf, err := workflow.NewBuilder(binding).Build()
 	if err != nil {
@@ -204,7 +204,7 @@ func TestNew_EmitsDefaultUpdatesForUnhandledWorkflowEvents(t *testing.T) {
 	}
 
 	var sawUnhandled bool
-	for update, err := range ag.RunText(t.Context(), "ping") {
+	for update, err := range ag.RunText(t.Context(), "ping", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("RunText: %v", err)
 		}
@@ -220,6 +220,28 @@ func TestNew_EmitsDefaultUpdatesForUnhandledWorkflowEvents(t *testing.T) {
 	}
 	if !sawUnhandled {
 		t.Fatalf("expected a raw-only update for an unhandled workflow event")
+	}
+}
+
+func TestNew_CollectDropsRawOnlyWorkflowEventMessages(t *testing.T) {
+	binding := echoExecutorBinding("echo")
+	wf, err := workflow.NewBuilder(binding).Build()
+	if err != nil {
+		t.Fatalf("build workflow: %v", err)
+	}
+	ag, err := workflowprovider.New(wf, workflowprovider.Config{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	resp, err := ag.RunText(t.Context(), "ping").Collect()
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	for index, msg := range resp.Messages {
+		if len(msg.Contents) == 0 {
+			t.Fatalf("message %d has no contents after collect: %+v", index, msg)
+		}
 	}
 }
 
@@ -322,7 +344,7 @@ func TestNew_DoesNotIncludeGenericMessageOutputsByDefault(t *testing.T) {
 	}
 }
 
-func TestNew_ForwardsHostedAgentResponseOutputsByDefault(t *testing.T) {
+func TestNew_GatesHostedAgentResponseOutputsByDefault(t *testing.T) {
 	run := func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			yield(&agent.ResponseUpdate{
@@ -349,16 +371,38 @@ func TestNew_ForwardsHostedAgentResponseOutputsByDefault(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	resp, err := ag.RunText(t.Context(), "ping").Collect()
-	if err != nil {
-		t.Fatalf("RunText: %v", err)
+	for update, err := range ag.RunText(t.Context(), "ping") {
+		if err != nil {
+			t.Fatalf("RunText: %v", err)
+		}
+		if raw, ok := update.RawRepresentation.(workflow.OutputEvent); ok {
+			if _, isResponse := raw.Output.(*agent.Response); isResponse {
+				t.Fatalf("aggregated hosted agent response output was forwarded by default: %+v", update)
+			}
+		}
 	}
-	if !strings.Contains(resp.String(), "hosted-response") {
-		t.Fatalf("hosted agent response output was not forwarded by default: %+v", resp)
+
+	included, err := workflowprovider.New(wf, workflowprovider.Config{IncludeOutputsInResponse: true})
+	if err != nil {
+		t.Fatalf("New included: %v", err)
+	}
+	var sawResponseOutput bool
+	for update, err := range included.RunText(t.Context(), "ping") {
+		if err != nil {
+			t.Fatalf("RunText included: %v", err)
+		}
+		if raw, ok := update.RawRepresentation.(workflow.OutputEvent); ok {
+			if _, isResponse := raw.Output.(*agent.Response); isResponse {
+				sawResponseOutput = true
+			}
+		}
+	}
+	if !sawResponseOutput {
+		t.Fatalf("aggregated hosted agent response output was not forwarded when included")
 	}
 }
 
-func TestNew_ConvertsResponseOutputWithResponseMetadata(t *testing.T) {
+func TestNew_ConvertsResponseOutputAsMessageUpdates(t *testing.T) {
 	createdAt := time.Date(2024, 11, 10, 9, 20, 0, 0, time.UTC)
 	binding := workflow.ExecutorBinding{
 		ID:               "response-yielder",
@@ -394,50 +438,43 @@ func TestNew_ConvertsResponseOutputWithResponseMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build workflow: %v", err)
 	}
-	ag, err := workflowprovider.New(wf, workflowprovider.Config{})
+	ag, err := workflowprovider.New(wf, workflowprovider.Config{
+		Config:                   agent.Config{ID: "workflow-agent", Name: "Workflow Agent"},
+		IncludeOutputsInResponse: true,
+	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 
 	var sawMessage bool
-	var sawMetadata bool
 	for update, err := range ag.RunText(t.Context(), "ping") {
 		if err != nil {
 			t.Fatalf("RunText: %v", err)
 		}
 		if update.String() == "from-response" {
 			sawMessage = true
-			if update.AgentID != "inner-agent" {
-				t.Errorf("expected AgentID inner-agent, got %q", update.AgentID)
+			if update.AgentID != "workflow-agent" {
+				t.Errorf("expected workflow agent ID, got %q", update.AgentID)
 			}
-			if update.ResponseID != "inner-response" {
-				t.Errorf("expected ResponseID inner-response, got %q", update.ResponseID)
+			if update.ResponseID == "" || update.ResponseID == "inner-response" {
+				t.Errorf("expected workflow response ID, got %q", update.ResponseID)
 			}
 			if update.MessageID != "inner-message" {
 				t.Errorf("expected MessageID inner-message, got %q", update.MessageID)
 			}
-			if update.AuthorName != "inner-author" {
-				t.Errorf("expected AuthorName inner-author, got %q", update.AuthorName)
+			if update.AuthorName != "Workflow Agent" {
+				t.Errorf("expected workflow agent AuthorName, got %q", update.AuthorName)
 			}
-			if !update.CreatedAt.Equal(createdAt) {
-				t.Errorf("expected CreatedAt %v, got %v", createdAt, update.CreatedAt)
+			if update.CreatedAt.IsZero() || update.CreatedAt.Equal(createdAt) {
+				t.Errorf("expected workflow-created timestamp, got %v", update.CreatedAt)
 			}
-		}
-		if update.AdditionalProperties["trace"] == "kept" {
-			sawMetadata = true
-			if update.AgentID != "inner-agent" {
-				t.Errorf("expected metadata AgentID inner-agent, got %q", update.AgentID)
-			}
-			if update.ResponseID != "inner-response" {
-				t.Errorf("expected metadata ResponseID inner-response, got %q", update.ResponseID)
+			if update.AdditionalProperties != nil {
+				t.Errorf("expected no response-level additional properties, got %v", update.AdditionalProperties)
 			}
 		}
 	}
 	if !sawMessage {
 		t.Fatalf("expected response message update")
-	}
-	if !sawMetadata {
-		t.Fatalf("expected response metadata update")
 	}
 }
 
