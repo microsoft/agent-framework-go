@@ -18,6 +18,17 @@ const (
 	ModeSubworkflow
 )
 
+// EventSink is the interface for delivering workflow events to consumers.
+//
+// Enqueue delivers an event and, for ErrorEvent values, signals a fatal
+// condition that cancels the off-thread run loop.
+//
+// EnqueueNonFatal delivers an event without cancelling the run loop, even
+// when the event is a workflow.ErrorEvent. Use this for validation errors
+// (e.g., a mismatched port on an external response) where the run should
+// continue rather than terminate. Consumers that receive an ErrorEvent from
+// EnqueueNonFatal should not assume the run has ended; they must check run
+// status (e.g., via GetStatus) to determine whether to continue processing.
 type EventSink interface {
 	Enqueue(context.Context, workflow.Event) error
 	EnqueueNonFatal(context.Context, workflow.Event) error
@@ -68,6 +79,12 @@ func (s *ConcurrentEventSink) Enqueue(ctx context.Context, evt workflow.Event) e
 	return s.enqueue(ctx, nil, evt)
 }
 
+// EnqueueNonFatal delivers evt to all registered handlers without cancelling
+// the off-thread run loop, even if evt is a workflow.ErrorEvent. It is
+// intended for validation errors (such as a mismatched request port) that
+// should be surfaced to consumers without terminating the run. Consumers that
+// receive a workflow.ErrorEvent via this path must consult run status to
+// determine whether the run is still active rather than assuming it has ended.
 func (s *ConcurrentEventSink) EnqueueNonFatal(ctx context.Context, evt workflow.Event) error {
 	return s.enqueue(ctx, nonFatalEventSender{}, evt)
 }
