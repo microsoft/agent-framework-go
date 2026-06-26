@@ -2,19 +2,18 @@
 
 # Welcome to Microsoft Agent Framework for Go!
 
-[![Microsoft Azure AI Foundry Discord](https://dcbadge.limes.pink/api/server/b5zjErwbQM?style=flat)](https://discord.gg/b5zjErwbQM)
+[![Microsoft Foundry Discord](https://dcbadge.limes.pink/api/server/b5zjErwbQM?style=flat)](https://discord.gg/b5zjErwbQM)
 [![MS Learn Documentation](https://img.shields.io/badge/MS%20Learn-Documentation-blue)](https://learn.microsoft.com/en-us/agent-framework/)
 [![Go Reference](https://pkg.go.dev/badge/github.com/microsoft/agent-framework-go.svg)](https://pkg.go.dev/github.com/microsoft/agent-framework-go)
+[![GitHub stars](https://img.shields.io/github/stars/microsoft/agent-framework-go?style=social)](https://github.com/microsoft/agent-framework-go/stargazers)
 
-Welcome to Microsoft's comprehensive multi-language framework for building, orchestrating, and deploying AI agents with support for .NET, Python and Go implementations.
-This framework provides everything from simple chat agents to complex multi-agent workflows with graph-based orchestration.
+Microsoft Agent Framework (MAF) is an open, multi-language framework for building **production-grade AI agents and multi-agent workflows**. This repository contains the Go implementation of Microsoft Agent Framework, along with Go samples and documentation to help you get started.
 
-This repository contains the source code for the the Go implementation of the Microsoft Agent Framework, along with samples and documentation to help you get started.
-The .NET and Python implementations are available at https://github.com/microsoft/agent-framework.
+Microsoft Agent Framework is built for teams taking agents from prototype to production. It provides a consistent foundation for building, orchestrating, and operating agent systems while keeping architecture choices open as requirements evolve, and supports a broad ecosystem including Microsoft Foundry, Azure OpenAI, OpenAI, Model Context Protocol (MCP), Agent2Agent (A2A), AG-UI, and the GitHub Copilot SDK.
 
-> **Note:** This is a Go implementation of MAF that is currently evolving outside the core codebase.
-> As adoption and feedback grow, we expect closer alignment with the broader MAF ecosystem.
+The .NET and Python implementations are available in the [upstream Microsoft Agent Framework repository](https://github.com/microsoft/agent-framework).
 
+> **Note:** Microsoft Agent Framework for Go is in public preview and is currently evolving outside the core upstream codebase. As adoption and feedback grow, we expect closer alignment with the broader MAF ecosystem.
 
 <p align="center">
   <a href="https://www.youtube.com/watch?v=AAgdMhftj8w" title="Watch the full Agent Framework introduction (30 min)">
@@ -28,53 +27,80 @@ The .NET and Python implementations are available at https://github.com/microsof
   </a>
 </p>
 
-## 📋 Getting Started
+## Is this the right framework for you?
 
-### 📦 Installation
+MAF is a strong fit if you:
+
+- are building agents and workflows you expect to run in production,
+- need orchestration beyond a single prompt or stateless chat loop,
+- want graph-based patterns such as sequential, concurrent, group collaboration, and custom workflow routing,
+- care about checkpointing, restartability, observability, governance, or human-in-the-loop control,
+- need provider flexibility so your architecture can evolve without major rewrites.
+
+## Key Features
+
+Explore new MAF capabilities and real implementation patterns on the [official blog](https://devblogs.microsoft.com/agent-framework/).
+
+- **Go Support**: Go packages, examples, and APIs for building agents and workflows in Go.
+  - [Go reference](https://pkg.go.dev/github.com/microsoft/agent-framework-go) | [Go examples](./examples/)
+- **Multiple Agent Provider Support**: Support for various LLM and agent providers, with more being added continuously.
+  - [Provider examples](./examples/02-agents/providers/) | [Provider packages](./agent/provider/)
+- **Middleware**: Flexible middleware for request/response processing, logging, OpenTelemetry, context providers, tool approval, and automatic tool calling.
+  - [Agent middleware](./agent/middleware.go) | [Agent harness](./agent/harness/)
+- **Orchestration Patterns & Workflows**: Build multi-agent systems with graph-based workflows supporting sequential, concurrent, group collaboration, conditional routing, subworkflows, checkpointing, streaming, human-in-the-loop, and time-travel patterns.
+  - [Workflow examples](./examples/03-workflows/) | [Workflow package](./workflow/)
+- **Observability**: OpenTelemetry integration for distributed tracing, monitoring, and debugging.
+  - [Agent OpenTelemetry](./agent/opentelemetry/) | [Workflow OpenTelemetry](./workflow/observability/opentelemetry/)
+- **Agent Skills**: Build domain-specific knowledge bases from files, inline definitions, and scripts for agents to discover and use.
+  - [Skills examples](./examples/02-agents/skills/) | [Skills package](./agent/skills/)
+- **A2A, AG-UI, and MCP integrations**: Build interoperable agents, agent UIs, MCP tools, and MCP servers.
+  - [A2A examples](./examples/02-agents/a2a/) | [AG-UI examples](./examples/02-agents/agui/) | [MCP examples](./examples/02-agents/mcp/)
+
+## Table of Contents
+
+- [Welcome to Microsoft Agent Framework for Go!](#welcome-to-microsoft-agent-framework-for-go)
+	- [Is this the right framework for you?](#is-this-the-right-framework-for-you)
+	- [Key Features](#key-features)
+	- [Table of Contents](#table-of-contents)
+	- [Getting Started](#getting-started)
+		- [Installation](#installation)
+		- [Learning Resources](#learning-resources)
+		- [Quickstart](#quickstart)
+			- [Basic Agent - Go](#basic-agent---go)
+	- [More Examples \& Samples](#more-examples--samples)
+		- [Go](#go)
+	- [Community \& Feedback](#community--feedback)
+	- [Troubleshooting](#troubleshooting)
+		- [Authentication](#authentication)
+		- [Environment Variables](#environment-variables)
+	- [Contributor Resources](#contributor-resources)
+	- [Important Notes](#important-notes)
+		- [Telemetry and data collection](#telemetry-and-data-collection)
+		- [Preview status](#preview-status)
+		- [Trademarks](#trademarks)
+
+## Getting Started
+
+### Installation
+
+Go
 
 ```bash
 go get github.com/microsoft/agent-framework-go
 ```
 
-### 📚 Documentation
+### Learning Resources
 
 - **[Overview](https://learn.microsoft.com/agent-framework/overview/agent-framework-overview)** - High level overview of the framework
 - **[Quick Start](https://learn.microsoft.com/agent-framework/tutorials/quick-start)** - Get started with a simple agent
 - **[Tutorials](https://learn.microsoft.com/agent-framework/tutorials/overview)** - Step by step tutorials
 - **[User Guide](https://learn.microsoft.com/en-us/agent-framework/user-guide/overview)** - In-depth user guide for building agents and workflows
 
-### ✨ **Highlights**
+### Quickstart
 
-- **Graph-based Workflows**: Connect agents and deterministic functions using data flows with streaming, checkpointing, human-in-the-loop, and time-travel capabilities
-  - [Python workflows](./python/samples/getting_started/workflows/) | [.NET workflows](./dotnet/samples/GettingStarted/Workflows/)
-- **AF Labs**: Experimental packages for cutting-edge features including benchmarking, reinforcement learning, and research initiatives
-  - [Labs directory](./python/packages/lab/)
-- **DevUI**: Interactive developer UI for agent development, testing, and debugging workflows
-  - [DevUI package](./python/packages/devui/)
+#### Basic Agent - Go
 
-<p align="center">
-  <a href="https://www.youtube.com/watch?v=mOAaGY4WPvc">
-    <img src="https://img.youtube.com/vi/mOAaGY4WPvc/hqdefault.jpg" alt="See the DevUI in action" width="480">
-  </a>
-</p>
-<p align="center">
-  <a href="https://www.youtube.com/watch?v=mOAaGY4WPvc">
-    See the DevUI in action (1 min)
-  </a>
-</p>
-
-- **Multiple Agent Provider Support**: Support for various LLM providers with more being added continuously
-  - [Examples](./samples/getting_started)
-
-### 💬 **We want your feedback!**
-
-- For bugs, please file a [GitHub issue](https://github.com/microsoft/agent-framework-go/issues).
-
-## Quickstart
-
-### Basic Agent
-
-Create a simple Azure Chat Agent that writes a haiku about the Microsoft Agent Framework
+Create a simple Azure OpenAI chat agent that writes a haiku about the Microsoft Agent Framework.
 
 ```go
 package main
@@ -117,16 +143,61 @@ func main() {
 
 ## More Examples & Samples
 
-- [Getting Started with Agents](./examples/01-get-started): progressive tutorial from hello-world to hosting
-- [Agent Concepts](./examples/02-agents): deep-dive samples by topic (tools, middleware, providers, etc.)
-- [Getting Started with Workflows](./examples/03-workflows): workflow creation and integration with agents
+### Go
+
+- [Getting Started](./examples/01-get-started): progressive tutorial from hello world to workflows
+- [Agent Concepts](./examples/02-agents): deep-dive samples by topic, including tools, middleware, providers, observability, A2A, AG-UI, MCP, and skills
+- [Workflows](./examples/03-workflows): multi-agent patterns, routing, checkpointing, observability, and workflow orchestration
+- [End-to-End](./examples/05-end-to-end): full applications and demos
+- [Feature Comparison](./docs/dotnet-go-sdk-feature-comparison.md): .NET and Go SDK feature parity notes
+
+## Community & Feedback
+
+- **Found a bug?** File a [GitHub issue](https://github.com/microsoft/agent-framework-go/issues) to help us improve.
+- **Enjoying MAF for Go?** [![GitHub stars](https://img.shields.io/badge/Star-us%20on%20GitHub-yellow)](https://github.com/microsoft/agent-framework-go) to show your support and help others discover the project.
+- **Have questions?** Join our [Discord](https://discord.gg/b5zjErwbQM).
+
+## Troubleshooting
+
+### Authentication
+
+| Problem | Cause | Fix |
+| --- | --- | --- |
+| Authentication errors when using Azure credentials | Not signed in to Azure CLI or another configured credential source | Run `az login` before starting your app, or configure the specific credential your app uses |
+| API key errors | Wrong or missing API key | Verify the key and ensure it is for the correct resource or provider |
+| Provider endpoint errors | Missing or incorrect endpoint, deployment, model, or API version | Check the environment variables and constructor options used by the sample or provider |
+
+> **Tip:** `DefaultAzureCredential` is convenient for development but in production, consider using a specific credential, such as managed identity, to avoid latency issues, unintended credential probing, and potential security risks from fallback mechanisms.
+
+### Environment Variables
+
+For environment variable configuration specific to each sample, refer to the README or source in the sample directory under [examples](./examples/).
 
 ## Contributor Resources
 
 - [Contributing Guide](./CONTRIBUTING.md)
+- [Code of Conduct](./CODE_OF_CONDUCT.md)
+- [Security Policy](./SECURITY.md)
+- [Support Policy](./SUPPORT.md)
+- [Responsible AI Transparency FAQ](./TRANSPARENCY_FAQ.md)
 
 ## Important Notes
 
-If you use the Microsoft Agent Framework to build applications that operate with third-party servers or agents, you do so at your own risk. We recommend reviewing all data being shared with third-party servers or agents and being cognizant of third-party practices for retention and location of data. It is your responsibility to manage whether your data will flow outside of your organization's Azure compliance and geographic boundaries and any related implications.
+> [!IMPORTANT]
+> If you use Microsoft Agent Framework to build applications that operate with any third-party servers, agents, code, or non-Azure Direct models ("Third-Party Systems"), you do so at your own risk. Third-Party Systems are Non-Microsoft Products under the Microsoft Product Terms and are governed by their own third-party license terms. You are responsible for any usage and associated costs.
+>
+> We recommend reviewing all data being shared with and received from Third-Party Systems and being cognizant of third-party practices for handling, sharing, retention, and location of data. It is your responsibility to manage whether your data will flow outside of your organization's Azure compliance and geographic boundaries and any related implications, and that appropriate permissions, boundaries, and approvals are provisioned.
+>
+> You are responsible for carefully reviewing and testing applications you build using Microsoft Agent Framework in the context of your specific use cases, and making all appropriate decisions and customizations. This includes implementing your own responsible AI mitigations such as metaprompt, content filters, or other safety systems, and ensuring your applications meet appropriate quality, reliability, security, and trustworthiness standards. See also: [Transparency FAQ](./TRANSPARENCY_FAQ.md).
 
-The Agent Framework for Go is in public preview. Declarative agents, RAG, CodeAct, and functional workflows are not yet available. File issues on GitHub (https://github.com/microsoft/agent-framework-go/issues).
+### Telemetry and data collection
+
+This repository does not configure Microsoft telemetry collection by default. Some packages and samples include optional OpenTelemetry instrumentation or connect to Microsoft-hosted services. To turn off framework instrumentation, do not configure OpenTelemetry exporters or telemetry middleware in your application. Service telemetry, if any, is governed by the services you choose to call.
+
+### Preview status
+
+The Agent Framework for Go is in public preview. Declarative agents, RAG, CodeAct, and functional workflows are not yet available. File issues on GitHub at https://github.com/microsoft/agent-framework-go/issues.
+
+### Trademarks
+
+This project may contain trademarks or logos for projects, products, or services. Authorized use of Microsoft trademarks or logos is subject to and must follow [Microsoft's Trademark & Brand Guidelines](https://www.microsoft.com/en-us/legal/intellectualproperty/trademarks/usage/general). Use of Microsoft trademarks or logos in modified versions of this project must not cause confusion or imply Microsoft sponsorship. Any use of third-party trademarks or logos is subject to those third-party policies.
