@@ -41,20 +41,24 @@ MAF is a strong fit if you:
 
 Explore new MAF capabilities and real implementation patterns on the [official blog](https://devblogs.microsoft.com/agent-framework/).
 
+For a detailed .NET-to-Go feature comparison, see the [.NET and Go SDK feature comparison](./docs/dotnet-go-sdk-feature-comparison.md). In short, the Go SDK covers core agents, tools, middleware, workflows, observability, and interoperability integrations, while .NET currently has broader product integrations and several features that are not implemented yet in Go.
+
 - **Go Support**: Go packages, examples, and APIs for building agents and workflows in Go.
   - [Go reference](https://pkg.go.dev/github.com/microsoft/agent-framework-go) | [Go examples](./examples/)
 - **Multiple Agent Provider Support**: Support for various LLM and agent providers, with more being added continuously.
   - [Provider examples](./examples/02-agents/providers/) | [Provider packages](./agent/provider/)
 - **Middleware**: Flexible middleware for request/response processing, logging, OpenTelemetry, context providers, tool approval, and automatic tool calling.
   - [Agent middleware](./agent/middleware.go) | [Agent harness](./agent/harness/)
-- **Orchestration Patterns & Workflows**: Build multi-agent systems with graph-based workflows supporting sequential, concurrent, group collaboration, conditional routing, subworkflows, checkpointing, streaming, human-in-the-loop, and time-travel patterns.
+- **Orchestration Patterns & Workflows**: Build multi-agent systems with graph-based workflows supporting sequential, concurrent, group collaboration, conditional routing, subworkflows, checkpointing, streaming, human-in-the-loop, and time-travel patterns. Handoff orchestration is not implemented yet in the Go SDK.
   - [Workflow examples](./examples/03-workflows/) | [Workflow package](./workflow/)
+- **Foundry Hosted Agents (new)**: Not implemented yet in the Go SDK.
 - **Observability**: OpenTelemetry integration for distributed tracing, monitoring, and debugging.
   - [Agent OpenTelemetry](./agent/opentelemetry/) | [Workflow OpenTelemetry](./workflow/observability/opentelemetry/)
+- **Declarative Agents**: Not implemented yet in the Go SDK.
 - **Agent Skills**: Build domain-specific knowledge bases from files, inline definitions, and scripts for agents to discover and use.
   - [Skills examples](./examples/02-agents/skills/) | [Skills package](./agent/skills/)
-- **A2A, AG-UI, and MCP integrations**: Build interoperable agents, agent UIs, MCP tools, and MCP servers.
-  - [A2A examples](./examples/02-agents/a2a/) | [AG-UI examples](./examples/02-agents/agui/) | [MCP examples](./examples/02-agents/mcp/)
+- **AF Labs**: Not implemented yet in the Go SDK.
+- **DevUI**: Not implemented yet in the Go SDK.
 
 ## Table of Contents
 
