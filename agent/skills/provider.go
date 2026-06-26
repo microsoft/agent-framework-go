@@ -20,9 +20,7 @@ import (
 )
 
 const (
-	skillsPlaceholder               = "{skills}"
-	resourceInstructionsPlaceholder = "{resource_instructions}"
-	scriptInstructionsPlaceholder   = "{script_instructions}"
+	skillsPlaceholder = "{skills}"
 )
 
 const defaultSkillsInstructionPrompt = `You have access to skills containing domain-specific knowledge and capabilities.
@@ -35,8 +33,9 @@ Each skill provides specialized instructions, reference documents, and assets fo
 When a task aligns with a skill's domain, follow these steps in exact order:
 - Use ` + "`load_skill`" + ` to retrieve the skill's instructions.
 - Follow the provided guidance.
-{resource_instructions}
-{script_instructions}
+- Use ` + "`read_skill_resource`" + ` to read any referenced resources, using the name exactly as listed
+   (e.g. ` + "`\"style-guide\"` not `\"style-guide.md\"`, `\"references/FAQ.md\"` not `\"FAQ.md\"`" + `).
+- Use ` + "`run_skill_script`" + ` to run referenced scripts, using the name exactly as listed.
 Only load what is needed, when it is needed.`
 
 // ContextProviderOptions configures a skills-backed agent.ContextProvider.
@@ -58,8 +57,7 @@ type ContextProviderOptions struct {
 	// SkillsInstructionPrompt is a custom system prompt template.
 	// When empty, a default template is used.
 	//
-	// The template must contain {skills}, {resource_instructions}, and
-	// {script_instructions}.
+	// The template must contain {skills}.
 	SkillsInstructionPrompt string
 
 	// ScriptApproval marks the run_skill_script tool as requiring approval.
@@ -512,22 +510,15 @@ func buildProviderSkillsInstructionPrompt(template string, skills []*Skill) stri
 	}
 
 	skillList := strings.TrimRight(sb.String(), "\n")
-	resourceInstruction := "- Use `read_skill_resource` to read any referenced resources, using the name exactly as listed\n   (e.g. `\"style-guide\"` not `\"style-guide.md\"`, `\"references/FAQ.md\"` not `\"FAQ.md\"`)."
-	scriptInstruction := "- Use `run_skill_script` to run referenced scripts, using the name exactly as listed."
-
 	replacer := strings.NewReplacer(
 		skillsPlaceholder, skillList,
-		resourceInstructionsPlaceholder, resourceInstruction,
-		scriptInstructionsPlaceholder, scriptInstruction,
 	)
 	return replacer.Replace(template)
 }
 
 func validatePromptTemplate(template string) error {
-	for _, placeholder := range []string{skillsPlaceholder, resourceInstructionsPlaceholder, scriptInstructionsPlaceholder} {
-		if !strings.Contains(template, placeholder) {
-			return fmt.Errorf("custom prompt template must contain the %q placeholder", placeholder)
-		}
+	if !strings.Contains(template, skillsPlaceholder) {
+		return fmt.Errorf("custom prompt template must contain the %q placeholder", skillsPlaceholder)
 	}
 	return nil
 }

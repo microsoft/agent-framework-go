@@ -68,26 +68,33 @@ func TestProvider_CustomPromptTemplate_MissingSkillsPlaceholderPanics(t *testing
 	_ = skills.NewContextProvider(skills.ContextProviderOptions{SkillsInstructionPrompt: "No skills placeholder here {resource_instructions} {script_instructions}", Skills: []*skills.Skill{skill}})
 }
 
-func TestProvider_CustomPromptTemplate_MissingScriptInstructionsPlaceholderPanics(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Fatal("expected panic for template missing {script_instructions}")
-		}
-	}()
-
+func TestProvider_CustomPromptTemplate_MissingLegacyInstructionPlaceholdersAccepted(t *testing.T) {
 	skill := mustInlineSkill(skills.Frontmatter{Name: "inline-skill", Description: "Inline skill"}, "Instructions.", nil, nil)
-	_ = skills.NewContextProvider(skills.ContextProviderOptions{SkillsInstructionPrompt: "Has skills {skills} but no runner instructions {resource_instructions}", Skills: []*skills.Skill{skill}})
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{
+		SkillsInstructionPrompt: "Custom skills:\n{skills}",
+		Skills:                  []*skills.Skill{skill},
+	})
+
+	instructions, _ := captureProviderContext(t, provider)
+	if !strings.Contains(instructions, "<name>inline-skill</name>") {
+		t.Fatalf("expected generated skills list, got %q", instructions)
+	}
+	if strings.Contains(instructions, "read_skill_resource") || strings.Contains(instructions, "run_skill_script") {
+		t.Fatalf("expected custom template not to receive default resource/script guidance, got %q", instructions)
+	}
 }
 
-func TestProvider_CustomPromptTemplate_MissingResourceInstructionsPlaceholderPanics(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Fatal("expected panic for template missing {resource_instructions}")
-		}
-	}()
-
+func TestProvider_CustomPromptTemplate_LegacyInstructionPlaceholdersRemainLiteral(t *testing.T) {
 	skill := mustInlineSkill(skills.Frontmatter{Name: "inline-skill", Description: "Inline skill"}, "Instructions.", nil, nil)
-	_ = skills.NewContextProvider(skills.ContextProviderOptions{SkillsInstructionPrompt: "Has skills {skills} and runner {script_instructions} but no resource instructions", Skills: []*skills.Skill{skill}})
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{
+		SkillsInstructionPrompt: "Custom skills:\n{skills}\n{resource_instructions}\n{script_instructions}",
+		Skills:                  []*skills.Skill{skill},
+	})
+
+	instructions, _ := captureProviderContext(t, provider)
+	if !strings.Contains(instructions, "{resource_instructions}") || !strings.Contains(instructions, "{script_instructions}") {
+		t.Fatalf("expected legacy placeholders to remain literal, got %q", instructions)
+	}
 }
 
 func providerFromFileSource(source *fsskills.Source, opts *skills.ContextProviderOptions) *agent.ContextProvider {
