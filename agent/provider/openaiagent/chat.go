@@ -27,7 +27,7 @@ import (
 )
 
 var telemetryRequestOption = option.WithMiddleware(func(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
-	telemetry.PrependAgentFrameworkToHTTPHeader(req.Header)
+	req.Header = telemetry.PrependAgentFrameworkToHTTPHeader(req.Header)
 	return next(req)
 })
 
