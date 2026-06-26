@@ -306,11 +306,26 @@ func TestProvider_CustomPromptTemplate(t *testing.T) {
 	root := t.TempDir()
 	createSkillDir(t, root, "custom-prompt-skill", "Custom prompt", "Body.")
 
-	p := newProviderWithConfig(t, nil, &skills.ContextProviderOptions{SkillsInstructionPrompt: "Custom template:\n{skills}\n{resource_instructions}\n{script_instructions}"}, root)
+	p := newProviderWithConfig(t, nil, &skills.ContextProviderOptions{SkillsInstructionPrompt: "Custom template:\n{skills}"}, root)
 
 	instructions, _ := captureProviderContext(t, p)
 	if !strings.HasPrefix(instructions, "Custom template:") {
 		t.Errorf("expected custom template prefix, got %q", instructions)
+	}
+}
+
+func TestProvider_CustomPromptTemplate_TreatsInstructionPlaceholdersLiterally(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "literal-placeholder-skill", "Literal placeholder", "Body.")
+
+	p := newProviderWithConfig(t, nil, &skills.ContextProviderOptions{SkillsInstructionPrompt: "Custom template:\n{skills}\n{resource_instructions}\n{script_instructions}"}, root)
+
+	instructions, _ := captureProviderContext(t, p)
+	if !strings.Contains(instructions, "{resource_instructions}") {
+		t.Fatalf("expected resource instructions placeholder to remain literal, got %q", instructions)
+	}
+	if !strings.Contains(instructions, "{script_instructions}") {
+		t.Fatalf("expected script instructions placeholder to remain literal, got %q", instructions)
 	}
 }
 
