@@ -35,12 +35,7 @@ func (strategy *TruncationStrategy) Compact(_ context.Context, index *MessageInd
 	}
 
 	minimumPreservedGroups := cmp.Or(max(strategy.MinimumPreservedGroups, 0), defaultMinimumPreservedTruncationGroups)
-	var removableCount int
-	for _, group := range index.Groups {
-		if !group.IsExcluded && group.Kind != GroupKindSystem {
-			removableCount++
-		}
-	}
+	removableCount := index.IncludedNonSystemGroupCount()
 	maxRemovable := removableCount - minimumPreservedGroups
 	if maxRemovable <= 0 {
 		return false, nil

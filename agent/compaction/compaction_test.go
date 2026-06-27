@@ -85,6 +85,40 @@ func TestTruncationStrategy_ExcludesOldestGroups(t *testing.T) {
 	}
 }
 
+func TestTruncationStrategy_SkipsPreExcludedAndSystemGroups(t *testing.T) {
+	index := compaction.CreateMessageIndex([]*message.Message{
+		textMessage(message.RoleSystem, "system"),
+		textMessage(message.RoleUser, "u1"),
+		textMessage(message.RoleAssistant, "a1"),
+		textMessage(message.RoleUser, "u2"),
+	}, nil)
+	index.Groups[1].IsExcluded = true
+	strategy := &compaction.TruncationStrategy{
+		MinimumPreservedGroups: 1,
+	}
+
+	compacted, err := strategy.Compact(t.Context(), index)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !compacted {
+		t.Fatal("expected compaction")
+	}
+
+	if index.Groups[0].IsExcluded {
+		t.Fatal("expected system group to be preserved")
+	}
+	if !index.Groups[1].IsExcluded {
+		t.Fatal("expected pre-excluded group to remain excluded")
+	}
+	if !index.Groups[2].IsExcluded {
+		t.Fatal("expected oldest removable group to be excluded")
+	}
+	if index.Groups[3].IsExcluded {
+		t.Fatal("expected minimum preserved group to remain included")
+	}
+}
+
 func TestTruncationStrategy_ZeroValueUsesDefaults(t *testing.T) {
 	index := compaction.CreateMessageIndex(turnMessages(17), nil)
 	strategy := &compaction.TruncationStrategy{}
