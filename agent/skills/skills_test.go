@@ -389,7 +389,7 @@ func TestLoadSkill_ReturnsBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected := "---\nname: load-test\ndescription: A skill\n---\nFull instructions here."
+	expected := "---\nname: load-test\ndescription: A skill\n---\nFull instructions here.\n\n<available_resources />\n\n<available_scripts />"
 	if result != expected {
 		t.Errorf("expected full SKILL.md content, got %q", result)
 	}
