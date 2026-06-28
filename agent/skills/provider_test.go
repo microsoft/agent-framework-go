@@ -391,6 +391,63 @@ func TestProvider_WithScripts_ExposesRunSkillScriptTool(t *testing.T) {
 	}
 }
 
+func TestProvider_RunSkillScript_ErrorPropagatesByDefault(t *testing.T) {
+	skill := mustInlineSkill(
+		skills.Frontmatter{Name: "script-skill", Description: "Script skill"},
+		"Instructions.",
+		nil,
+		[]skills.Script{{
+			Name: "convert",
+			Run: func(context.Context, *skills.Skill, []string) (any, error) {
+				return nil, errors.New("invalid conversion factor")
+			},
+		}},
+	)
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}})
+
+	_, tools := captureProviderContext(t, provider)
+	runTool := findTool(t, tools, "run_skill_script")
+	result, err := runTool.Call(t.Context(), `{"skillName":"script-skill","scriptName":"convert"}`)
+	if err == nil {
+		t.Fatal("expected script error to propagate by default")
+	}
+	if result != nil {
+		t.Fatalf("expected no direct result when script error propagates, got %#v", result)
+	}
+	if err.Error() != "invalid conversion factor" {
+		t.Fatalf("expected original script error, got %v", err)
+	}
+}
+
+func TestProvider_RunSkillScript_IncludeDetailedErrorsReturnsErrorMessage(t *testing.T) {
+	skill := mustInlineSkill(
+		skills.Frontmatter{Name: "script-skill", Description: "Script skill"},
+		"Instructions.",
+		nil,
+		[]skills.Script{{
+			Name: "convert",
+			Run: func(context.Context, *skills.Skill, []string) (any, error) {
+				return nil, errors.New("invalid conversion factor")
+			},
+		}},
+	)
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{
+		Skills:                []*skills.Skill{skill},
+		IncludeDetailedErrors: true,
+	})
+
+	_, tools := captureProviderContext(t, provider)
+	runTool := findTool(t, tools, "run_skill_script")
+	result, err := runTool.Call(t.Context(), `{"skillName":"script-skill","scriptName":"convert"}`)
+	if err != nil {
+		t.Fatalf("expected detailed error to be returned as tool result, got %v", err)
+	}
+	const want = "Error: Failed to execute script 'convert' from skill 'script-skill'. Exception: invalid conversion factor"
+	if result != want {
+		t.Fatalf("expected detailed error result %q, got %#v", want, result)
+	}
+}
+
 func TestProvider_RunSkillScript_RequiresExactName(t *testing.T) {
 	root := t.TempDir()
 	createSkillDir(t, root, "script-skill", "Script skill", "Body.")

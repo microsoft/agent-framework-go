@@ -65,6 +65,13 @@ type ContextProviderOptions struct {
 	// ScriptApproval marks the run_skill_script tool as requiring approval.
 	ScriptApproval bool
 
+	// IncludeDetailedErrors controls whether script execution error details are
+	// included in the error message returned to the model. The default is false:
+	// script errors are returned to the caller so tool auto-calling can apply its
+	// own detailed-error policy. Enable this only for trusted skills and scripts;
+	// raw error messages may disclose details or contain prompt-injection text.
+	IncludeDetailedErrors bool
+
 	// DisableCaching rebuilds instructions and tools for every invocation.
 	DisableCaching bool
 
@@ -386,7 +393,7 @@ func (p *providerState) buildTools(skills providedSkillSet) []tool.Tool {
 			Arguments  []string `json:"arguments,omitempty" jsonschema:"Positional CLI-style string arguments for the script, e.g. [\"--value\",\"26.2\",\"--factor\",\"1.60934\"]"`
 		},
 		) (any, error) {
-			return p.runSkillScript(callCtx, skills, in.SkillName, in.ScriptName, in.Arguments), nil
+			return p.runSkillScript(callCtx, skills, in.SkillName, in.ScriptName, in.Arguments)
 		},
 	)
 
@@ -441,31 +448,40 @@ func (p *providerState) readSkillResource(ctx context.Context, skills providedSk
 	return content
 }
 
-func (p *providerState) runSkillScript(ctx context.Context, skills providedSkillSet, skillName, scriptName string, arguments []string) any {
+func (p *providerState) runSkillScript(ctx context.Context, skills providedSkillSet, skillName, scriptName string, arguments []string) (any, error) {
 	if lookupError := validateSkillName(skillName); lookupError != "" {
-		return lookupError
+		return lookupError, nil
 	}
 	if strings.TrimSpace(scriptName) == "" {
-		return "Error: Script name cannot be empty."
+		return "Error: Script name cannot be empty.", nil
 	}
 	resolved, lookupError := skills.lookupSkill(skillName)
 	if lookupError != "" {
-		return lookupError
+		return lookupError, nil
 	}
 	script, ok := resolved.scripts[scriptName]
 	if !ok {
-		return fmt.Sprintf("Error: Script '%s' not found in skill '%s'.", scriptName, skillName)
+		return fmt.Sprintf("Error: Script '%s' not found in skill '%s'.", scriptName, skillName), nil
 	}
 	if script.Run == nil {
-		p.logger.Error("Failed to execute script from skill", "scriptName", scriptName, "skillName", skillName, "error", "script runner is nil")
-		return fmt.Sprintf("Error: Failed to execute script '%s' from skill '%s'.", scriptName, skillName)
+		err := errors.New("script runner is nil")
+		p.logger.Error("Failed to execute script from skill", "scriptName", scriptName, "skillName", skillName, "error", err)
+		return p.scriptExecutionError(skillName, scriptName, err)
 	}
 	result, err := script.Run(ctx, resolved.skill, arguments)
 	if err != nil {
 		p.logger.Error("Failed to execute script from skill", "scriptName", scriptName, "skillName", skillName, "error", err)
-		return fmt.Sprintf("Error: Failed to execute script '%s' from skill '%s'.", scriptName, skillName)
+		return p.scriptExecutionError(skillName, scriptName, err)
 	}
-	return result
+	return result, nil
+}
+
+func (p *providerState) scriptExecutionError(skillName, scriptName string, err error) (any, error) {
+	message := fmt.Sprintf("Error: Failed to execute script '%s' from skill '%s'.", scriptName, skillName)
+	if p.options.IncludeDetailedErrors {
+		return fmt.Sprintf("%s Exception: %v", message, err), nil
+	}
+	return nil, err
 }
 
 func (skills providedSkillSet) resolveSkill(skillName string) (providedSkill, string) {
