@@ -154,6 +154,36 @@ func TestFileSource_ReadResource_ValidResource_ReturnsContent(t *testing.T) {
 	}
 }
 
+func TestFileSkill_WithResources_ContentIncludesAvailableResourcesBlock(t *testing.T) {
+	root := t.TempDir()
+	createSkillDirWithResource(t, root, "resource-content-skill", "A skill", "See docs.", "references/doc.md", "Document content here.")
+	source := fsskills.NewSource(os.DirFS(root))
+
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := loaded[0].GetContent(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resourcesIndex := strings.Index(content, "<available_resources>")
+	scriptsIndex := strings.Index(content, "<available_scripts />")
+	if resourcesIndex < 0 {
+		t.Fatalf("expected <available_resources> block in content, got: %s", content)
+	}
+	if scriptsIndex < 0 {
+		t.Fatalf("expected empty <available_scripts /> block in content, got: %s", content)
+	}
+	if resourcesIndex > scriptsIndex {
+		t.Fatalf("expected resources block to precede scripts block, got: %s", content)
+	}
+	if !strings.Contains(content, `<resource name="references/doc.md"/>`) {
+		t.Fatalf("expected resource entry in content, got: %s", content)
+	}
+}
+
 func TestFileSource_MetadataWithQuotedValues_ParsedCorrectly(t *testing.T) {
 	root := t.TempDir()
 	createSkillDirRaw(t, root, "quoted-meta", strings.Join([]string{

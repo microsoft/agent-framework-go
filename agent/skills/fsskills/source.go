@@ -241,10 +241,9 @@ func (s *Source) parseSkillDirectory(skillFS fs.FS, logPath string) *skills.Skil
 					contentErr = err
 					return
 				}
-				raw := string(data)
-				if schemasBlock := buildScriptSchemasBlock(scripts); schemasBlock != "" {
-					raw += schemasBlock
-				}
+				raw := string(data) +
+					"\n" + buildAvailableResourcesBlock(resources) +
+					"\n" + buildAvailableScriptsBlock(scripts)
 				cachedContent = raw
 			})
 			return cachedContent, contentErr
@@ -562,24 +561,35 @@ type discoveredSkillDir struct {
 	path string
 }
 
-// buildScriptSchemasBlock returns a <script_schemas> XML block listing each
-// script with its parameter schema. Scripts with no schema emit a self-closing
-// element; scripts with a schema emit the JSON inline.
-// Returns an empty string when scripts is empty.
-func buildScriptSchemasBlock(scripts []skills.Script) string {
-	if len(scripts) == 0 {
-		return ""
+func buildAvailableResourcesBlock(resources []skills.Resource) string {
+	if len(resources) == 0 {
+		return "<available_resources />"
 	}
 	var sb strings.Builder
-	sb.WriteString("\n<script_schemas>\n")
+	sb.WriteString("<available_resources>\n")
+	for _, resource := range resources {
+		fmt.Fprintf(&sb, "  <resource name=\"%s\"/>\n", xmlEscapeAttr(resource.Name))
+	}
+	sb.WriteString("</available_resources>")
+	return sb.String()
+}
+
+func buildAvailableScriptsBlock(scripts []skills.Script) string {
+	if len(scripts) == 0 {
+		return "<available_scripts />"
+	}
+	var sb strings.Builder
+	sb.WriteString("<available_scripts>\n")
 	for _, script := range scripts {
 		if script.ParametersSchema == "" {
-			fmt.Fprintf(&sb, "  <schema script=\"%s\"/>\n", xmlEscapeAttr(script.Name))
+			fmt.Fprintf(&sb, "  <script name=\"%s\"/>\n", xmlEscapeAttr(script.Name))
 		} else {
-			fmt.Fprintf(&sb, "  <schema script=\"%s\">%s</schema>\n", xmlEscapeAttr(script.Name), xmlEscapeContent(script.ParametersSchema))
+			fmt.Fprintf(&sb, "  <script name=\"%s\">\n", xmlEscapeAttr(script.Name))
+			fmt.Fprintf(&sb, "    <parameters_schema>%s</parameters_schema>\n", xmlEscapeContent(script.ParametersSchema))
+			sb.WriteString("  </script>\n")
 		}
 	}
-	sb.WriteString("</script_schemas>")
+	sb.WriteString("</available_scripts>")
 	return sb.String()
 }
 

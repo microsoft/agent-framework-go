@@ -57,8 +57,9 @@ func (f SourceFunc) Skills(ctx context.Context) ([]*Skill, error) {
 type Skill struct {
 	Frontmatter Frontmatter
 	// GetContent lazily loads the skill's instruction text. For file-based skills
-	// this is the raw SKILL.md file content. For code-defined skills this may be
-	// a synthesized document containing name, description, and body.
+	// this is the SKILL.md file content with discovered resources and scripts.
+	// For code-defined skills this may be a synthesized document containing
+	// name, description, and body.
 	GetContent           func(context.Context) (string, error)
 	Resources            []Resource
 	Scripts              []Script
@@ -85,7 +86,7 @@ type Script struct {
 	Description string
 	// ParametersSchema is an optional JSON schema string describing the argument
 	// format expected by the script. When set, the schema is included in the
-	// skill's <script_schemas> block so the LLM knows how to format arguments.
+	// skill's <available_scripts> block so the LLM knows how to format arguments.
 	// Empty means no schema.
 	ParametersSchema     string
 	Run                  func(context.Context, *Skill, []string) (any, error)
