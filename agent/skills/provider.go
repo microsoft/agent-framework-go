@@ -82,6 +82,32 @@ type providedSkill struct {
 	scripts   map[string]Script
 }
 
+func newProvidedSkill(skill *Skill) providedSkill {
+	resources := make(map[string]Resource, len(skill.Resources))
+	for _, resource := range skill.Resources {
+		resources[resource.Name] = resource
+	}
+	scripts := make(map[string]Script, len(skill.Scripts))
+	for _, script := range skill.Scripts {
+		scripts[script.Name] = script
+	}
+	return providedSkill{
+		skill:     skill,
+		resources: resources,
+		scripts:   scripts,
+	}
+}
+
+func (skill providedSkill) lookupResource(name string) (Resource, bool) {
+	resource, ok := skill.resources[name]
+	return resource, ok
+}
+
+func (skill providedSkill) lookupScript(name string) (Script, bool) {
+	script, ok := skill.scripts[name]
+	return script, ok
+}
+
 type providedSkillSet struct {
 	byName map[string]providedSkill
 }
@@ -329,19 +355,7 @@ func deduplicateSkillsByName(skills []*Skill, logger *slog.Logger) []*Skill {
 func indexSkills(skills []*Skill) providedSkillSet {
 	indexed := make(map[string]providedSkill, len(skills))
 	for _, skill := range skills {
-		resources := make(map[string]Resource)
-		for _, resource := range skill.Resources {
-			resources[resource.Name] = resource
-		}
-		scripts := make(map[string]Script)
-		for _, script := range skill.Scripts {
-			scripts[script.Name] = script
-		}
-		indexed[skill.Frontmatter.Name] = providedSkill{
-			skill:     skill,
-			resources: resources,
-			scripts:   scripts,
-		}
+		indexed[skill.Frontmatter.Name] = newProvidedSkill(skill)
 	}
 	return providedSkillSet{byName: indexed}
 }
@@ -425,7 +439,7 @@ func (p *providerState) readSkillResource(ctx context.Context, skills providedSk
 	if lookupError != "" {
 		return lookupError
 	}
-	resource, ok := resolved.resources[resourceName]
+	resource, ok := resolved.lookupResource(resourceName)
 	if !ok {
 		return fmt.Sprintf("Error: Resource '%s' not found in skill '%s'.", resourceName, skillName)
 	}
@@ -452,7 +466,7 @@ func (p *providerState) runSkillScript(ctx context.Context, skills providedSkill
 	if lookupError != "" {
 		return lookupError
 	}
-	script, ok := resolved.scripts[scriptName]
+	script, ok := resolved.lookupScript(scriptName)
 	if !ok {
 		return fmt.Sprintf("Error: Script '%s' not found in skill '%s'.", scriptName, skillName)
 	}
