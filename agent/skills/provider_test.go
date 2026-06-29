@@ -443,6 +443,26 @@ func TestProvider_RunSkillScript_PropagatesErrorByDefault(t *testing.T) {
 	}
 }
 
+func TestProvider_RunSkillScript_PropagatesNilRunnerErrorByDefault(t *testing.T) {
+	skill := mustInlineSkill(
+		skills.Frontmatter{Name: "script-skill", Description: "Script skill"},
+		"Body.",
+		nil,
+		[]skills.Script{{Name: "explode"}},
+	)
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}})
+
+	_, tools := captureProviderContext(t, provider)
+	runTool := findTool(t, tools, "run_skill_script")
+	result, err := runTool.Call(t.Context(), `{"skillName":"script-skill","scriptName":"explode"}`)
+	if err == nil {
+		t.Fatalf("expected nil-runner error to propagate, got result %#v", result)
+	}
+	if err.Error() != "script runner is nil" {
+		t.Fatalf("expected script runner is nil error, got %v", err)
+	}
+}
+
 func TestProvider_RunSkillScript_IncludesDetailsWhenEnabled(t *testing.T) {
 	skill := mustInlineSkill(
 		skills.Frontmatter{Name: "script-skill", Description: "Script skill"},
@@ -467,6 +487,30 @@ func TestProvider_RunSkillScript_IncludesDetailsWhenEnabled(t *testing.T) {
 		t.Fatal(err)
 	}
 	const want = "Error: Failed to execute script 'explode' from skill 'script-skill'. Exception: boom-script"
+	if result != want {
+		t.Fatalf("expected detailed script error %q, got %#v", want, result)
+	}
+}
+
+func TestProvider_RunSkillScript_IncludesNilRunnerDetailsWhenEnabled(t *testing.T) {
+	skill := mustInlineSkill(
+		skills.Frontmatter{Name: "script-skill", Description: "Script skill"},
+		"Body.",
+		nil,
+		[]skills.Script{{Name: "explode"}},
+	)
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{
+		Skills:                []*skills.Skill{skill},
+		IncludeDetailedErrors: true,
+	})
+
+	_, tools := captureProviderContext(t, provider)
+	runTool := findTool(t, tools, "run_skill_script")
+	result, err := runTool.Call(t.Context(), `{"skillName":"script-skill","scriptName":"explode"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "Error: Failed to execute script 'explode' from skill 'script-skill'. Exception: script runner is nil"
 	if result != want {
 		t.Fatalf("expected detailed script error %q, got %#v", want, result)
 	}

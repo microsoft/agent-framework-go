@@ -467,8 +467,12 @@ func (p *providerState) runSkillScript(ctx context.Context, skills providedSkill
 		return fmt.Sprintf("Error: Script '%s' not found in skill '%s'.", scriptName, skillName), nil
 	}
 	if script.Run == nil {
-		p.logger.Error("Failed to execute script from skill", "scriptName", scriptName, "skillName", skillName, "error", "script runner is nil")
-		return fmt.Sprintf("Error: Failed to execute script '%s' from skill '%s'.", scriptName, skillName), nil
+		err := errors.New("script runner is nil")
+		p.logger.Error("Failed to execute script from skill", "scriptName", scriptName, "skillName", skillName, "error", err)
+		if p.options.IncludeDetailedErrors {
+			return fmt.Sprintf("Error: Failed to execute script '%s' from skill '%s'. Exception: %s", scriptName, skillName, err.Error()), nil
+		}
+		return nil, err
 	}
 	result, err := script.Run(ctx, resolved.skill, arguments)
 	if err != nil {
