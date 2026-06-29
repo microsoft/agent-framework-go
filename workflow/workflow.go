@@ -286,6 +286,10 @@ func (w *Workflow) RequestPorts() map[string]RequestPort {
 // DescribeProtocol returns the protocol accepted by the workflow's start
 // executor and yielded by its output executors.
 func (w *Workflow) DescribeProtocol() (ProtocolDescriptor, error) {
+	if w == nil {
+		return ProtocolDescriptor{}, fmt.Errorf("workflow is nil")
+	}
+
 	inputProtocol, err := w.describeExecutorProtocol(w.startExecutorID, "start")
 	if err != nil {
 		return ProtocolDescriptor{}, err
@@ -319,7 +323,7 @@ func (w *Workflow) describeExecutorProtocol(executorID string, role string) (Pro
 }
 
 func (w *Workflow) describeOutputYields() ([]reflect.Type, error) {
-	yields := make([]reflect.Type, 0)
+	yields := make([]reflect.Type, 0, len(w.outputExecutors))
 	for executorID := range w.outputExecutors {
 		outputProtocol, err := w.describeExecutorProtocol(executorID, "output")
 		if err != nil {

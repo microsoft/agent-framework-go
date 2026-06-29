@@ -252,6 +252,18 @@ func hasType(types []reflect.Type, typ reflect.Type) bool {
 	return false
 }
 
+func TestWorkflowDescribeProtocol_NilWorkflowReturnsError(t *testing.T) {
+	var wf *workflow.Workflow
+
+	_, err := wf.DescribeProtocol()
+	if err == nil {
+		t.Fatal("DescribeProtocol error = nil, want error")
+	}
+	if err.Error() != "workflow is nil" {
+		t.Fatalf("DescribeProtocol error = %q, want workflow is nil", err)
+	}
+}
+
 func TestWorkflowDescribeProtocol_IncludesOutputProtocol(t *testing.T) {
 	start := workflow.NewExecutor("start", func(protocolInput) protocolMiddle { return protocolMiddle{} }).Bind()
 	output := workflow.NewExecutor("output", func(protocolMiddle) protocolOutput { return protocolOutput{} }).Bind()
