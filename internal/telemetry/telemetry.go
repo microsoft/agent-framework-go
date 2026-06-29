@@ -48,19 +48,6 @@ var userAgent = sync.OnceValue(func() string {
 	return strings.Join(prefixes, "/") + "/" + agentFrameworkUserAgent
 })
 
-// AppInfo returns Agent Framework application metadata for telemetry, or nil when telemetry is disabled.
-func AppInfo() map[string]string {
-	if !userAgentTelemetryEnabled() {
-		return nil
-	}
-	return map[string]string{"agent-framework-version": "go/" + version}
-}
-
-// UserAgent returns the full Agent Framework user-agent string including registered prefixes.
-func UserAgent() string {
-	return userAgent()
-}
-
 // PrependAgentFrameworkToUserAgent prepends the Agent Framework user-agent value to headers.
 func PrependAgentFrameworkToUserAgent(headers map[string]string) map[string]string {
 	if !userAgentTelemetryEnabled() {
@@ -69,7 +56,7 @@ func PrependAgentFrameworkToUserAgent(headers map[string]string) map[string]stri
 	if headers == nil {
 		headers = map[string]string{}
 	}
-	userAgent := UserAgent()
+	userAgent := userAgent()
 	if existing := headers[userAgentKey]; existing != "" {
 		headers[userAgentKey] = userAgent + " " + existing
 	} else {
@@ -86,7 +73,7 @@ func PrependAgentFrameworkToHTTPHeader(headers http.Header) http.Header {
 	if headers == nil {
 		headers = http.Header{}
 	}
-	userAgent := UserAgent()
+	userAgent := userAgent()
 	if existing := headers.Get(userAgentKey); existing != "" {
 		headers.Set(userAgentKey, userAgent+" "+existing)
 	} else {

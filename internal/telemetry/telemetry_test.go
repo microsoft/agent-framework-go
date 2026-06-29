@@ -24,22 +24,7 @@ const (
 func TestVersionHasLeadingV(t *testing.T) {
 	got := runHelper(t, "user-agent", foundryHostingEnvVar+"=", userAgentTelemetryDisabledEnvVar+"=")
 	if !strings.HasPrefix(got, "agent-framework-go/v") {
-		t.Fatalf("UserAgent() = %q, want agent-framework-go/v...", got)
-	}
-}
-
-func TestAppInfo(t *testing.T) {
-	got := runHelper(t, "app-info", userAgentTelemetryDisabledEnvVar+"=")
-	base := runHelper(t, "user-agent", foundryHostingEnvVar+"=", userAgentTelemetryDisabledEnvVar+"=")
-	want := "go/" + strings.TrimPrefix(base, "agent-framework-go/")
-	if got != want {
-		t.Fatalf("AppInfo()[agent-framework-version] = %q, want %q", got, want)
-	}
-}
-
-func TestAppInfoDisabled(t *testing.T) {
-	if got := runHelper(t, "app-info-disabled", userAgentTelemetryDisabledEnvVar+"=true"); got != "nil" {
-		t.Fatalf("AppInfo() = %q, want nil", got)
+		t.Fatalf("User-Agent = %q, want agent-framework-go/v...", got)
 	}
 }
 
@@ -85,7 +70,7 @@ func TestUserAgentHostedEnvironmentPrefix(t *testing.T) {
 	got := runHelper(t, "hosted-prefix", foundryHostingEnvVar+"=1", userAgentTelemetryDisabledEnvVar+"=")
 	want := "foundry-hosting/" + runHelper(t, "user-agent", foundryHostingEnvVar+"=", userAgentTelemetryDisabledEnvVar+"=")
 	if got != want {
-		t.Fatalf("UserAgent() = %q, want %q", got, want)
+		t.Fatalf("User-Agent = %q, want %q", got, want)
 	}
 }
 
@@ -109,15 +94,8 @@ func TestHelperProcess(t *testing.T) {
 	}
 	switch strings.Trim(helperName, "\x00") {
 	case "user-agent":
-		fmt.Print(telemetry.UserAgent())
-	case "app-info":
-		fmt.Print(telemetry.AppInfo()["agent-framework-version"])
-	case "app-info-disabled":
-		if telemetry.AppInfo() == nil {
-			fmt.Print("nil")
-			break
-		}
-		fmt.Print("not nil")
+		headers := telemetry.PrependAgentFrameworkToUserAgent(nil)
+		fmt.Print(headers[userAgentKey])
 	case "prepend-map":
 		headers := telemetry.PrependAgentFrameworkToUserAgent(map[string]string{"User-Agent": "my-app/1.0"})
 		fmt.Print(headers[userAgentKey])
@@ -133,15 +111,18 @@ func TestHelperProcess(t *testing.T) {
 		headers := telemetry.PrependAgentFrameworkToHTTPHeader(http.Header{"User-Agent": []string{"my-app/1.0"}})
 		fmt.Print(headers.Get(userAgentKey))
 	case "telemetry-enabled-cached":
-		fmt.Println(telemetry.AppInfo() != nil)
+		fmt.Println(telemetry.PrependAgentFrameworkToUserAgent(nil) != nil)
 		_ = os.Setenv(userAgentTelemetryDisabledEnvVar, "true")
-		fmt.Print(telemetry.AppInfo() != nil)
+		fmt.Print(telemetry.PrependAgentFrameworkToUserAgent(nil) != nil)
 	case "hosted-prefix":
-		fmt.Print(telemetry.UserAgent())
+		headers := telemetry.PrependAgentFrameworkToUserAgent(nil)
+		fmt.Print(headers[userAgentKey])
 	case "hosted-cached":
-		fmt.Println(telemetry.UserAgent())
+		headers := telemetry.PrependAgentFrameworkToUserAgent(nil)
+		fmt.Println(headers[userAgentKey])
 		_ = os.Setenv(foundryHostingEnvVar, "1")
-		fmt.Print(telemetry.UserAgent())
+		headers = telemetry.PrependAgentFrameworkToUserAgent(nil)
+		fmt.Print(headers[userAgentKey])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown helper %q", helperName)
 		os.Exit(2)
