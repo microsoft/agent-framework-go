@@ -2,7 +2,7 @@
 
 **What is Microsoft Agent Framework?**
 
-Microsoft Agent Framework is a comprehensive multi-language (C#/.NET and Python) framework for building, orchestrating, and deploying AI agents and multi-agent workflows. The system takes user instructions and conversation inputs and produces intelligent responses through AI agents that can integrate with various LLM providers (OpenAI, Azure OpenAI, Azure AI Foundry). It provides both simple chat agents and complex multi-agent workflows with graph-based orchestration.
+Microsoft Agent Framework is a comprehensive multi-language (C#/.NET, Python, and Go) framework for building, orchestrating, and deploying AI agents and multi-agent workflows. The system takes user instructions and conversation inputs and produces intelligent responses through AI agents that can integrate with various LLM providers (OpenAI, Azure OpenAI, Azure AI Foundry, and other configured providers). It provides both simple chat agents and complex multi-agent workflows with graph-based orchestration.
 
 **What can Microsoft Agent Framework do?**
 
@@ -25,7 +25,7 @@ Intended uses include:
 
 **How was Microsoft Agent Framework evaluated? What metrics are used to measure performance?**
 
-Microsoft Agent Framework is a development framework rather than a deployed AI system. The framework undergoes engineering testing for component functionality, integration testing for multi-agent scenarios, and conformance testing across .NET and Python implementations. However, AI performance metrics such as accuracy, helpfulness, and safety are dependent on the underlying LLM providers and specific application implementations. Developers using the framework should conduct application-specific evaluation including performance, safety, and accuracy testing appropriate to their chosen LLM providers, deployment contexts, and use cases.
+Microsoft Agent Framework is a development framework rather than a deployed AI system. The framework undergoes engineering testing for component functionality, integration testing for multi-agent scenarios, and conformance testing across Go, .NET, and Python implementations. However, AI performance metrics such as accuracy, helpfulness, and safety are dependent on the underlying LLM providers and specific application implementations. Developers using the framework should conduct application-specific evaluation including performance, safety, and accuracy testing appropriate to their chosen LLM providers, deployment contexts, and use cases.
 
 **What are the limitations of Microsoft Agent Framework? How can users minimize the impact of Microsoft Agent Framework's limitations when using the system?**
 
@@ -42,9 +42,9 @@ Microsoft Agent Framework relies on existing LLMs. Using the framework retains c
 
 **Framework-Specific Limitations**:
 
-- **Platform Requirements**: Python 3.10+ required, specific .NET versions (.NET 8.0, 9.0, netstandard2.0, net472)
+- **Platform Requirements**: Go version requirements are defined in [go.mod](./go.mod). Provider-specific services may have additional SDK, account, region, or API version requirements.
 - **API Dependencies**: Requires proper configuration of LLM provider keys and endpoints
-- **Orchestration Features**: Advanced orchestration patterns like GroupChat, Sequential, and Concurrent orchestrations are "coming soon" for Python implementation
+- **Implementation Maturity**: The Go implementation is in public preview, and not every .NET or Python framework feature is available in this repository.
 - **Privacy and Data Protection**: The framework allows for human participation in conversations between agents. It is important to ensure that user data and conversations are protected and that developers use appropriate measures to safeguard privacy.
 - **Accountability and Transparency**: The framework involves multiple agents conversing and collaborating, it is important to establish clear accountability and transparency mechanisms. Users should be able to understand and trace the decision-making process of the agents involved in order to ensure accountability and address any potential issues or biases.
 - **Security & unintended consequences**: The use of multi-agent conversations and automation in complex tasks may have unintended consequences. Especially, allowing agents to make changes in external environments through tool calls or function execution could pose significant risks. Developers should carefully consider the potential risks and ensure that appropriate safeguards are in place to prevent harm or negative outcomes, including keeping a human in the loop for decision making.
@@ -90,14 +90,14 @@ Microsoft Agent Framework relies on existing LLMs. Using the framework retains c
 
 **How do I provide feedback on Microsoft Agent Framework?**
 
-- **Bug Reports**: File issues at https://github.com/microsoft/agent-framework/issues
+- **Bug Reports**: File issues at https://github.com/microsoft/agent-framework-go/issues
 
 **What are external services and how does Microsoft Agent Framework use them?**
 
 The framework supports multiple external service types: 
 
-- **Native Functions**: Custom Python/C# functions that agents can invoke
-- **A2A (Agent2Agent)Integration**: Agent-to-agent communication and coordination
+- **Native Functions**: Custom Go functions that agents can invoke
+- **A2A (Agent2Agent) Integration**: Agent-to-agent communication and coordination
 - **Model Context Protocol (MCP)**: External tools and data sources through MCP servers
 - **Tools & External Capabilities**: Agent-invokable external services
 

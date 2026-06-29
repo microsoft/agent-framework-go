@@ -74,6 +74,35 @@ func newTestResponsesClient(server *httptest.Server, model string) *agent.Agent 
 	)
 }
 
+func TestResponsesRequestIncludesAgentFrameworkUserAgent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		userAgent := r.Header.Get("User-Agent")
+		if !strings.HasPrefix(userAgent, "agent-framework-go/") {
+			t.Fatalf("User-Agent = %q, want agent-framework-go prefix", userAgent)
+		}
+		if !strings.Contains(userAgent, "OpenAI/Go") {
+			t.Fatalf("User-Agent = %q, want OpenAI SDK token", userAgent)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"id":"resp_test",
+			"object":"response",
+			"created_at":1741891428,
+			"status":"completed",
+			"error":null,
+			"incomplete_details":null,
+			"model":"gpt-4o-mini",
+			"output":[{"type":"message","id":"msg_test","status":"completed","role":"assistant","content":[{"type":"output_text","text":"hello","annotations":[]}]}]
+		}`)
+	}))
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+	if _, err := a.RunText(t.Context(), "hello").Collect(); err != nil {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestResponsesConfigInstructions_NonStreaming(t *testing.T) {
 	const input = `
 						{

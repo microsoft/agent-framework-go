@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -146,6 +147,8 @@ func TestDefaultShellEnvironmentInstructions_posix(t *testing.T) {
 }
 
 func TestEnvironmentProvider_refreshOnHostReportsDefaultFamily(t *testing.T) {
+	t.Parallel()
+
 	cfg, _ := statelessPlatformConfig(t)
 	ft := newLocal(t, cfg)
 	env := shelltool.NewEnvironmentProvider(ft, shelltool.EnvironmentProviderConfig{
@@ -172,11 +175,15 @@ func TestEnvironmentProvider_refreshOnHostReportsDefaultFamily(t *testing.T) {
 }
 
 func TestEnvironmentProvider_missingToolRecordedAsMissing(t *testing.T) {
-	cfg, _ := statelessPlatformConfig(t)
-	ft := newLocal(t, cfg)
-	env := shelltool.NewEnvironmentProvider(ft, shelltool.EnvironmentProviderConfig{
-		ProbeTools:   []string{"definitely-not-a-real-binary-xyz123"},
-		ProbeTimeout: 5 * time.Second,
+	fake := &environmentTestExecutor{
+		results: []shelltool.Result{
+			{Stdout: "VERSION=1.0\nCWD=/tmp\n", ExitCode: 0},
+			{ExitCode: 127},
+		},
+	}
+	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
+		OverrideFamily: shelltool.ShellFamilyPOSIX,
+		ProbeTools:     []string{"definitely-not-a-real-binary-xyz123"},
 	})
 
 	snapshot, err := env.Refresh(t.Context())
@@ -251,9 +258,12 @@ func TestEnvironmentProvider_refreshRecomputesSnapshot(t *testing.T) {
 }
 
 func TestEnvironmentProvider_providesInstructionsAndSnapshot(t *testing.T) {
-	ft := newLocal(t, shelltool.LocalConfig{AcknowledgeUnsafe: true})
-	env := shelltool.NewEnvironmentProvider(ft, shelltool.EnvironmentProviderConfig{
-		ProbeTools: []string{},
+	fake := &environmentTestExecutor{
+		results: []shelltool.Result{{Stdout: "VERSION=1.0\nCWD=/tmp\n", ExitCode: 0}},
+	}
+	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
+		OverrideFamily: shelltool.ShellFamilyPOSIX,
+		ProbeTools:     []string{},
 	})
 
 	_, options, err := env.BeforeRun(t.Context(), nil)
@@ -283,9 +293,12 @@ func TestEnvironmentProvider_providesInstructionsAndSnapshot(t *testing.T) {
 }
 
 func TestEnvironmentProvider_currentSnapshotReturnsCopy(t *testing.T) {
-	ft := newLocal(t, shelltool.LocalConfig{AcknowledgeUnsafe: true})
-	env := shelltool.NewEnvironmentProvider(ft, shelltool.EnvironmentProviderConfig{
-		ProbeTools: []string{"bad;name"},
+	fake := &environmentTestExecutor{
+		results: []shelltool.Result{{Stdout: "VERSION=1.0\nCWD=/tmp\n", ExitCode: 0}},
+	}
+	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
+		OverrideFamily: shelltool.ShellFamilyPOSIX,
+		ProbeTools:     []string{"bad;name"},
 	})
 	if _, err := env.Refresh(t.Context()); err != nil {
 		t.Fatalf("refresh shell environment: %v", err)
@@ -307,9 +320,17 @@ func TestEnvironmentProvider_currentSnapshotReturnsCopy(t *testing.T) {
 }
 
 func TestEnvironmentProvider_failedProvideAllowsRetry(t *testing.T) {
-	ft := newLocal(t, shelltool.LocalConfig{AcknowledgeUnsafe: true})
-	env := shelltool.NewEnvironmentProvider(ft, shelltool.EnvironmentProviderConfig{
-		ProbeTools: []string{},
+	fake := &environmentTestExecutor{
+		run: func(ctx context.Context, command string) (shelltool.Result, error) {
+			if err := ctx.Err(); err != nil {
+				return shelltool.Result{}, err
+			}
+			return shelltool.Result{Stdout: "VERSION=1.0\nCWD=/tmp\n", ExitCode: 0}, nil
+		},
+	}
+	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
+		OverrideFamily: shelltool.ShellFamilyPOSIX,
+		ProbeTools:     []string{},
 	})
 
 	canceled, cancel := context.WithCancel(t.Context())
@@ -427,9 +448,12 @@ func TestEnvironmentProvider_invalidToolNameRecordedMissingWithoutInvokingExecut
 }
 
 func TestEnvironmentProvider_probeToolsDeduplicateCaseInsensitive(t *testing.T) {
-	ft := newLocal(t, shelltool.LocalConfig{AcknowledgeUnsafe: true})
-	env := shelltool.NewEnvironmentProvider(ft, shelltool.EnvironmentProviderConfig{
-		ProbeTools: []string{"bad;name", "BAD;NAME"},
+	fake := &environmentTestExecutor{
+		results: []shelltool.Result{{Stdout: "VERSION=1.0\nCWD=/tmp\n", ExitCode: 0}},
+	}
+	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
+		OverrideFamily: shelltool.ShellFamilyPOSIX,
+		ProbeTools:     []string{"bad;name", "BAD;NAME"},
 	})
 
 	snapshot, err := env.Refresh(t.Context())
@@ -536,13 +560,17 @@ func TestEnvironmentProvider_probeTimeoutRecordedAsMissingFields(t *testing.T) {
 }
 
 func TestEnvironmentProvider_policyRejectedToolProbeIsMissing(t *testing.T) {
-	policy, err := shelltool.NewPolicy(shelltool.PolicyConfig{DenyList: []string{`--version`}})
-	if err != nil {
-		t.Fatal(err)
+	fake := &environmentTestExecutor{
+		run: func(ctx context.Context, command string) (shelltool.Result, error) {
+			if command == "git --version" {
+				return shelltool.Result{}, rejectedProbeError{}
+			}
+			return shelltool.Result{Stdout: "VERSION=1.0\nCWD=/tmp\n", ExitCode: 0}, nil
+		},
 	}
-	ft := newLocal(t, shelltool.LocalConfig{AcknowledgeUnsafe: true, Policy: policy})
-	env := shelltool.NewEnvironmentProvider(ft, shelltool.EnvironmentProviderConfig{
-		ProbeTools: []string{"git"},
+	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
+		OverrideFamily: shelltool.ShellFamilyPOSIX,
+		ProbeTools:     []string{"git"},
 	})
 
 	snapshot, err := env.Refresh(t.Context())
@@ -559,6 +587,14 @@ type environmentTestExecutor struct {
 	run     func(context.Context, string) (shelltool.Result, error)
 
 	runCount int
+}
+
+type rejectedProbeError struct{}
+
+func (rejectedProbeError) Error() string { return "shelltool: command rejected" }
+
+func (rejectedProbeError) Is(target error) bool {
+	return target != nil && target.Error() == "shelltool: command rejected"
 }
 
 func (e *environmentTestExecutor) Initialize(context.Context) error { return nil }
@@ -805,15 +841,25 @@ func newLocal(t *testing.T, cfg shelltool.LocalConfig) *shelltool.Local {
 	return ft
 }
 
+var (
+	powershellPathOnce sync.Once
+	powershellPath     string
+)
+
 func powershellPathForTest(t *testing.T) string {
 	t.Helper()
-	for _, name := range []string{"pwsh", "powershell"} {
-		if path, err := exec.LookPath(name); err == nil {
-			return path
+	powershellPathOnce.Do(func() {
+		for _, name := range []string{"pwsh", "powershell"} {
+			if path, err := exec.LookPath(name); err == nil {
+				powershellPath = path
+				return
+			}
 		}
+	})
+	if powershellPath == "" {
+		t.Skip("PowerShell is not available")
 	}
-	t.Skip("PowerShell is not available")
-	return ""
+	return powershellPath
 }
 
 func statelessPlatformConfig(t *testing.T) (shelltool.LocalConfig, func(string) string) {
@@ -843,6 +889,8 @@ func callTool(t *testing.T, ft *shelltool.Local, command string) string {
 
 func TestNewLocal_initializePersistent(t *testing.T) {
 	skipIfNotPOSIX(t)
+	t.Parallel()
+
 	ft := newLocal(t, shelltool.LocalConfig{AcknowledgeUnsafe: true})
 	if err := ft.Initialize(t.Context()); err != nil {
 		t.Fatalf("initialize: %v", err)
@@ -852,8 +900,7 @@ func TestNewLocal_initializePersistent(t *testing.T) {
 			t.Errorf("close shell: %v", err)
 		}
 	}()
-	ctx := t.Context()
-	out, err := ft.Call(ctx, `{"command":"echo initialized"}`)
+	out, err := ft.Call(t.Context(), `{"command":"echo initialized"}`)
 	if err != nil {
 		t.Fatalf("call after initialize: %v", err)
 	}
@@ -864,9 +911,10 @@ func TestNewLocal_initializePersistent(t *testing.T) {
 
 func TestCall_echo_defaultPersistent(t *testing.T) {
 	skipIfNotPOSIX(t)
+	t.Parallel()
+
 	ft := newLocal(t, shelltool.LocalConfig{AcknowledgeUnsafe: true})
-	ctx := t.Context()
-	out, err := ft.Call(ctx, `{"command":"echo hello"}`)
+	out, err := ft.Call(t.Context(), `{"command":"echo hello"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -886,9 +934,10 @@ func TestCall_defaultPersistentPowerShellOnWindows(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("skipping Windows-only PowerShell test")
 	}
+	t.Parallel()
+
 	ft := newLocal(t, shelltool.LocalConfig{AcknowledgeUnsafe: true})
-	ctx := t.Context()
-	out, err := ft.Call(ctx, `{"command":"Write-Output hello_windows"}`)
+	out, err := ft.Call(t.Context(), `{"command":"Write-Output hello_windows"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -908,14 +957,17 @@ func TestCall_environmentPowerShellOnWindows(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("skipping Windows-only PowerShell test")
 	}
+	t.Parallel()
+
 	ft := newLocal(t, shelltool.LocalConfig{
 		AcknowledgeUnsafe: true,
+		Mode:              shelltool.ModeStateless,
+		Shell:             powershellPathForTest(t),
 		Environment: map[string]string{
 			"AGFW_TEST_ENV": "hello_env",
 		},
 	})
-	ctx := t.Context()
-	out, err := ft.Call(ctx, `{"command":"Write-Output $env:AGFW_TEST_ENV"}`)
+	out, err := ft.Call(t.Context(), `{"command":"Write-Output $env:AGFW_TEST_ENV"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -931,12 +983,13 @@ func TestCall_environmentRemovalPowerShellOnWindows(t *testing.T) {
 	t.Setenv("AGFW_REMOVE_ME", "visible")
 	ft := newLocal(t, shelltool.LocalConfig{
 		AcknowledgeUnsafe: true,
+		Mode:              shelltool.ModeStateless,
+		Shell:             powershellPathForTest(t),
 		RemoveEnvironment: []string{
 			"AGFW_REMOVE_ME",
 		},
 	})
-	ctx := t.Context()
-	out, err := ft.Call(ctx, `{"command":"if ($env:AGFW_REMOVE_ME) { Write-Output $env:AGFW_REMOVE_ME } else { Write-Output absent }"}`)
+	out, err := ft.Call(t.Context(), `{"command":"if ($env:AGFW_REMOVE_ME) { Write-Output $env:AGFW_REMOVE_ME } else { Write-Output absent }"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -947,9 +1000,10 @@ func TestCall_environmentRemovalPowerShellOnWindows(t *testing.T) {
 
 func TestCall_nonZeroExit(t *testing.T) {
 	skipIfNotPOSIX(t)
+	t.Parallel()
+
 	ft := newLocal(t, shelltool.LocalConfig{AcknowledgeUnsafe: true})
-	ctx := t.Context()
-	out, err := ft.Call(ctx, `{"command":"sh -c 'exit 42'"}`)
+	out, err := ft.Call(t.Context(), `{"command":"sh -c 'exit 42'"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -960,8 +1014,7 @@ func TestCall_nonZeroExit(t *testing.T) {
 
 func TestCall_emptyCommand_error(t *testing.T) {
 	ft := newLocal(t, shelltool.LocalConfig{AcknowledgeUnsafe: true})
-	ctx := t.Context()
-	_, err := ft.Call(ctx, `{"command":""}`)
+	_, err := ft.Call(t.Context(), `{"command":""}`)
 	if err == nil {
 		t.Error("expected error for empty command")
 	}
@@ -970,8 +1023,7 @@ func TestCall_emptyCommand_error(t *testing.T) {
 func TestCall_policyDeny(t *testing.T) {
 	p, _ := shelltool.NewPolicy(shelltool.PolicyConfig{DenyList: []string{`echo`}})
 	ft := newLocal(t, shelltool.LocalConfig{AcknowledgeUnsafe: true, Policy: p})
-	ctx := t.Context()
-	_, err := ft.Call(ctx, `{"command":"echo hello"}`)
+	_, err := ft.Call(t.Context(), `{"command":"echo hello"}`)
 	if err == nil {
 		t.Error("expected error from policy deny")
 	}
@@ -982,12 +1034,13 @@ func TestCall_policyDeny(t *testing.T) {
 
 func TestCall_timeout(t *testing.T) {
 	skipIfNotPOSIX(t)
+	t.Parallel()
+
 	ft := newLocal(t, shelltool.LocalConfig{
 		AcknowledgeUnsafe: true,
 		Timeout:           50 * time.Millisecond,
 	})
-	ctx := t.Context()
-	out, err := ft.Call(ctx, `{"command":"sleep 10"}`)
+	out, err := ft.Call(t.Context(), `{"command":"sleep 10"}`)
 	if err != nil {
 		t.Fatalf("unexpected error (timeout should surface in result, not as error): %v", err)
 	}
@@ -998,6 +1051,8 @@ func TestCall_timeout(t *testing.T) {
 }
 
 func TestCall_statelessOutputTruncationUsesHeadTailFormat(t *testing.T) {
+	t.Parallel()
+
 	cfg, _ := statelessPlatformConfig(t)
 	cfg.MaxOutputBytes = 2048
 	cfg.Timeout = 20 * time.Second
@@ -1015,6 +1070,8 @@ func TestCall_statelessOutputTruncationUsesHeadTailFormat(t *testing.T) {
 }
 
 func TestCall_statelessStderrContentIsCaptured(t *testing.T) {
+	t.Parallel()
+
 	cfg, _ := statelessPlatformConfig(t)
 	command := "printf 'err-from-shell\\n' >&2"
 	if runtime.GOOS == "windows" {
@@ -1047,6 +1104,8 @@ func TestCall_statelessCleanEnvironmentStripsParentVar(t *testing.T) {
 
 func TestCall_statelessTimeoutKillsProcessTree(t *testing.T) {
 	skipIfNotPOSIX(t)
+	t.Parallel()
+
 	marker := filepath.Join(t.TempDir(), "marker")
 	command := fmt.Sprintf("sh -c 'sleep 0.4; printf leaked > %s' & wait", quotePOSIXTest(marker))
 	ft := newLocal(t, shelltool.LocalConfig{
@@ -1054,8 +1113,7 @@ func TestCall_statelessTimeoutKillsProcessTree(t *testing.T) {
 		Mode:              shelltool.ModeStateless,
 		Timeout:           50 * time.Millisecond,
 	})
-	ctx := t.Context()
-	out, err := ft.Call(ctx, fmt.Sprintf(`{"command":%q}`, command))
+	out, err := ft.Call(t.Context(), fmt.Sprintf(`{"command":%q}`, command))
 	if err != nil {
 		t.Fatalf("timeout should surface in result, not as error: %v", err)
 	}
@@ -1075,6 +1133,8 @@ func TestCall_timeout_preservesPersistentSession(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("persistent timeout session preservation requires descendant-only interrupt support")
 	}
+	t.Parallel()
+
 	ft := newLocal(t, shelltool.LocalConfig{
 		AcknowledgeUnsafe: true,
 		Timeout:           50 * time.Millisecond,
@@ -1103,6 +1163,8 @@ func TestCall_timeout_preservesPersistentSession(t *testing.T) {
 
 func TestCall_workingDirectory_reanchorsPersistentCommands(t *testing.T) {
 	skipIfNotPOSIX(t)
+	t.Parallel()
+
 	dir := t.TempDir()
 	ft := newLocal(t, shelltool.LocalConfig{
 		AcknowledgeUnsafe: true,
@@ -1124,6 +1186,8 @@ func TestCall_workingDirectory_reanchorsPersistentCommands(t *testing.T) {
 
 func TestCall_workingDirectory_canDisableReanchor(t *testing.T) {
 	skipIfNotPOSIX(t)
+	t.Parallel()
+
 	dir := t.TempDir()
 	ft := newLocal(t, shelltool.LocalConfig{
 		AcknowledgeUnsafe:                  true,
@@ -1146,6 +1210,8 @@ func TestCall_workingDirectory_canDisableReanchor(t *testing.T) {
 
 func TestCall_persistent_statePersists(t *testing.T) {
 	skipIfNotPOSIX(t)
+	t.Parallel()
+
 	ft := newLocal(t, shelltool.LocalConfig{
 		AcknowledgeUnsafe: true,
 	})
@@ -1168,6 +1234,8 @@ func TestCall_persistent_statePersists(t *testing.T) {
 
 func TestCall_persistent_respawnsAfterUnexpectedExit(t *testing.T) {
 	skipIfNotPOSIX(t)
+	t.Parallel()
+
 	ft := newLocal(t, shelltool.LocalConfig{AcknowledgeUnsafe: true})
 	ctx := t.Context()
 
