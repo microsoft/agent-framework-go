@@ -70,6 +70,56 @@ func TestFileSource_NestedSkillDirectory_DiscoveredWithinDepthLimit(t *testing.T
 	}
 }
 
+func TestFileSource_RootSkillFileWithNestedSkillFile_DoesNotAbortDiscovery(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "SKILL.md"), []byte("---\nname: root-skill\ndescription: Root\n---\nRoot body."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	childDir := filepath.Join(root, "child")
+	if err := os.MkdirAll(childDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(childDir, "SKILL.md"), []byte("---\nname: child\ndescription: Child\n---\nChild body."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	source := fsskills.NewSource(os.DirFS(root))
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
+	}
+	if loaded[0].Frontmatter.Name != "root-skill" {
+		t.Fatalf("expected root-skill, got %q", loaded[0].Frontmatter.Name)
+	}
+}
+
+func TestFileSource_NestedSkillFileUnderSkillRoot_NotDiscoveredAsIndependentSkill(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "parent-skill", "Parent", "Parent body.")
+	childDir := filepath.Join(root, "parent-skill", "child")
+	if err := os.MkdirAll(childDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(childDir, "SKILL.md"), []byte("---\nname: child\ndescription: Child\n---\nChild body."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	source := fsskills.NewSource(os.DirFS(root))
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
+	}
+	if loaded[0].Frontmatter.Name != "parent-skill" {
+		t.Fatalf("expected parent-skill, got %q", loaded[0].Frontmatter.Name)
+	}
+}
+
 func TestFileSource_SkillBeyondMaxDepth_NotDiscovered(t *testing.T) {
 	root := t.TempDir()
 	createSkillDir(t, filepath.Join(root, "l1", "l2", "l3"), "deep-skill", "Too deep", "Body.")

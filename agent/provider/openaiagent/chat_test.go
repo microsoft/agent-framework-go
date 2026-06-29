@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -69,6 +70,32 @@ func newTestClient(server *httptest.Server) *agent.Agent {
 			Config: agent.Config{DisableFuncAutoCall: true},
 		},
 	)
+}
+
+func TestChatRequestIncludesAgentFrameworkUserAgent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		userAgent := r.Header.Get("User-Agent")
+		if !strings.HasPrefix(userAgent, "agent-framework-go/") {
+			t.Fatalf("User-Agent = %q, want agent-framework-go prefix", userAgent)
+		}
+		if !strings.Contains(userAgent, "OpenAI/Go") {
+			t.Fatalf("User-Agent = %q, want OpenAI SDK token", userAgent)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"id":"chatcmpl-test",
+			"object":"chat.completion",
+			"created":1727888631,
+			"model":"gpt-4o-mini",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}]
+		}`)
+	}))
+	defer server.Close()
+
+	a := newTestClient(server)
+	if _, err := a.RunText(t.Context(), "hello").Collect(); err != nil {
+		t.Fatalf("error = %v", err)
+	}
 }
 
 func TestChatConfigInstructions_NonStreaming(t *testing.T) {

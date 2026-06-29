@@ -6,6 +6,8 @@ on:
   pull_request:
     branches:
       - "main"
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read
@@ -18,5 +20,14 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
       - name: Run golangci-lint
-        run: docker run --rm -v $(pwd):/app -w /app golangci/golangci-lint:v2.11 golangci-lint run -v
+        uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9.2.1
+        with:
+          version: latest
+          args: --verbose

@@ -308,18 +308,22 @@ func (p *providerState) loadSkills(ctx context.Context) ([]*Skill, error) {
 	if p.options.DisableSourceDeduplication {
 		return loaded, nil
 	}
-	seen := make(map[string]struct{}, len(loaded))
-	deduplicated := loaded[:0]
-	for _, skill := range loaded {
+	return deduplicateSkillsByName(loaded, p.logger), nil
+}
+
+func deduplicateSkillsByName(skills []*Skill, logger *slog.Logger) []*Skill {
+	seen := make(map[string]struct{}, len(skills))
+	deduplicated := skills[:0]
+	for _, skill := range skills {
 		resolvedKey := strings.ToLower(skill.Frontmatter.Name)
 		if _, ok := seen[resolvedKey]; ok {
-			p.logger.Warn("Duplicate skill name: subsequent skill skipped in favor of first occurrence", "skillName", skill.Frontmatter.Name)
+			logger.Warn("Duplicate skill name: subsequent skill skipped in favor of first occurrence", "skillName", skill.Frontmatter.Name)
 			continue
 		}
 		seen[resolvedKey] = struct{}{}
 		deduplicated = append(deduplicated, skill)
 	}
-	return deduplicated, nil
+	return deduplicated
 }
 
 func indexSkills(skills []*Skill) providedSkillSet {
