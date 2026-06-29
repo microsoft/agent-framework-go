@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
+	"net/http"
 	"reflect"
 	"slices"
 	"strings"
@@ -16,12 +17,19 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/hostedtool"
 	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/shared"
 )
+
+var telemetryRequestOption = option.WithMiddleware(func(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+	req.Header = telemetry.PrependAgentFrameworkToHTTPHeader(req.Header)
+	return next(req)
+})
 
 type chatClient struct {
 	client openai.Client
@@ -94,7 +102,7 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 		}
 	}
 	if stream, _ := agent.GetOption(options, agent.Stream); !stream {
-		resp, err := a.client.Chat.Completions.New(ctx, body)
+		resp, err := a.client.Chat.Completions.New(ctx, body, telemetryRequestOption)
 		if err != nil {
 			return func(yield func(*agent.ResponseUpdate, error) bool) {
 				yield(nil, err)
@@ -133,7 +141,7 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 		}
 	}
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
-		stream := a.client.Chat.Completions.NewStreaming(ctx, body)
+		stream := a.client.Chat.Completions.NewStreaming(ctx, body, telemetryRequestOption)
 		defer func() { _ = stream.Close() }()
 		var acc openai.ChatCompletionAccumulator
 		for stream.Next() {

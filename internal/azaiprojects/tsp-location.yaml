@@ -1,0 +1,5 @@
+directory: specification/ai-foundry/data-plane/Foundry
+commit: da272ab86764e5f9d606243ac115ea09a73ab7f0
+repo: qmuntal/azure-rest-api-specs
+entrypointFile: src/sdk-go-azure-ai-projects/client.tsp
+emitterPackageJsonPath: internal/azaiprojects/emitter-package.json

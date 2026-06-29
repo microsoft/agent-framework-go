@@ -1,3 +1,5 @@
+// Copyright (c) Microsoft. All rights reserved.
+
 package mcptool_test
 
 import (
