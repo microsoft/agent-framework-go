@@ -98,13 +98,13 @@ func newProvidedSkill(skill *Skill) providedSkill {
 	}
 }
 
-func (skill providedSkill) lookupResource(name string) (Resource, bool) {
-	resource, ok := skill.resources[name]
+func (ps providedSkill) lookupResource(name string) (Resource, bool) {
+	resource, ok := ps.resources[name]
 	return resource, ok
 }
 
-func (skill providedSkill) lookupScript(name string) (Script, bool) {
-	script, ok := skill.scripts[name]
+func (ps providedSkill) lookupScript(name string) (Script, bool) {
+	script, ok := ps.scripts[name]
 	return script, ok
 }
 
