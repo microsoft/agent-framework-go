@@ -118,7 +118,7 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 				// Get streaming response
 				streamResp := a.client.Responses.GetStreaming(ctx, ct.ResponseID, responses.ResponseGetParams{
 					StartingAfter: openai.Int(ct.SequenceNumber),
-				})
+				}, telemetryRequestOption)
 				// Update conversation ID when resuming
 				updateConversationID(ct.ResponseID)
 				for streamResp.Next() {
@@ -138,7 +138,7 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 				}
 			} else {
 				// Get complete response
-				resp, err := a.client.Responses.Get(ctx, ct.ResponseID, responses.ResponseGetParams{})
+				resp, err := a.client.Responses.Get(ctx, ct.ResponseID, responses.ResponseGetParams{}, telemetryRequestOption)
 				if err != nil {
 					yield(nil, err)
 					return
@@ -159,7 +159,7 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 
 		if stream {
 			// Create streaming response
-			streamResp := a.client.Responses.NewStreaming(ctx, body)
+			streamResp := a.client.Responses.NewStreaming(ctx, body, telemetryRequestOption)
 			responseID := ""
 			createdAt := time.Time{}
 			isBackground, _ := agent.GetOption(options, agent.AllowBackgroundResponses)
@@ -196,7 +196,7 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 			}
 		} else {
 			// Create complete response
-			resp, err := a.client.Responses.New(ctx, body)
+			resp, err := a.client.Responses.New(ctx, body, telemetryRequestOption)
 			if err != nil {
 				yield(nil, err)
 				return
