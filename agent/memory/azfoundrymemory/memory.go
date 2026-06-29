@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-// Package azmemory provides Azure AI Foundry memory integration for agents.
-package azmemory
+// Package azfoundrymemory provides Azure AI Foundry memory integration for agents.
+package azfoundrymemory
 
 import (
 	"context"
@@ -9,8 +9,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/ai/azaiprojects"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/internal/azaiprojects"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/message/messagefilter"
 )
@@ -18,11 +19,14 @@ import (
 const (
 	defaultMemoryContextPrompt = "## Memories\nConsider the following memories when answering user questions:"
 	defaultMaxMemories         = 5
-	defaultSourceID            = "azmemory"
+	defaultSourceID            = "azfoundrymemory"
 )
 
 // Config configures a Foundry memory provider.
 type Config struct {
+	// ClientOptions configures the underlying Azure AI Projects client.
+	ClientOptions azcore.ClientOptions
+
 	// Logger receives provider diagnostics.
 	Logger *slog.Logger
 
@@ -32,6 +36,10 @@ type Config struct {
 
 	// MaxMemories limits the number of memories returned by search. The default is 5.
 	MaxMemories int32
+
+	// SearchInputFilter filters messages used to search for relevant memories. The
+	// default is [messagefilter.ExternalOnly].
+	SearchInputFilter messagefilter.Filter
 
 	// UpdateDelay controls Foundry memory extraction delay in seconds. The default is 0,
 	// which submits memory updates immediately.
@@ -53,11 +61,25 @@ type Provider struct {
 //
 //	agent.Config{ContextProviders: []*agent.ContextProvider{provider.ContextProvider()}}
 //
-// The client must be a project-scoped azaiprojects memory stores client, and memoryStoreName
-// must name an existing Foundry memory store. The scope callback is invoked for each run and
-// must return the Foundry memory scope that partitions stored memories, such as a user or
-// tenant identifier. A blank scope is treated as a configuration error and panics when used.
-func NewProvider(client *azaiprojects.MemoryStoresClient, memoryStoreName string, scope func(*agent.Session) string, config Config) *Provider {
+// The endpoint must be a project-scoped Azure AI Foundry endpoint, and memoryStoreName must
+// name an existing Foundry memory store. The scope callback is invoked for each run and must
+// return the Foundry memory scope that partitions stored memories, such as a user or tenant
+// identifier. A blank scope is treated as a configuration error and panics when used.
+func NewProvider(endpoint string, credential azcore.TokenCredential, memoryStoreName string, scope func(*agent.Session) string, config Config) *Provider {
+	if strings.TrimSpace(endpoint) == "" {
+		panic("endpoint is required")
+	}
+	if credential == nil {
+		panic("credential is required")
+	}
+	client, err := azaiprojects.NewClient(endpoint, credential, &azaiprojects.ClientOptions{ClientOptions: config.ClientOptions})
+	if err != nil {
+		panic("failed to create Azure AI Projects client: " + err.Error())
+	}
+	return newProvider(client.NewMemoryStoresClient(), memoryStoreName, scope, config)
+}
+
+func newProvider(client *azaiprojects.MemoryStoresClient, memoryStoreName string, scope func(*agent.Session) string, config Config) *Provider {
 	if client == nil {
 		panic("memory stores client is required")
 	}
@@ -72,6 +94,9 @@ func NewProvider(client *azaiprojects.MemoryStoresClient, memoryStoreName string
 	}
 	if config.MaxMemories == 0 {
 		config.MaxMemories = defaultMaxMemories
+	}
+	if config.SearchInputFilter == nil {
+		config.SearchInputFilter = messagefilter.ExternalOnly
 	}
 	p := &Provider{
 		client:          client,
@@ -97,7 +122,11 @@ func (p *Provider) ContextProvider() *agent.ContextProvider {
 }
 
 func (p *Provider) provide(ctx context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
-	items := memoryItems(messages)
+	searchMessages, err := p.config.SearchInputFilter(ctx, slices.Clone(messages))
+	if err != nil {
+		return nil, nil, err
+	}
+	items := searchMemoryItems(searchMessages)
 	if len(items) == 0 {
 		return messages, options, nil
 	}
@@ -111,11 +140,11 @@ func (p *Provider) provide(ctx context.Context, messages []*message.Message, opt
 	}
 	result, err := p.client.SearchMemories(ctx, p.memoryStoreName, scope, searchOptions)
 	if err != nil {
-		p.log(ctx, slog.LevelError, "azmemory: failed to search memories", "memory_store", p.memoryStoreName, "error", err)
+		p.log(ctx, slog.LevelError, "azfoundrymemory: failed to search memories", "memory_store", p.memoryStoreName, "error", err)
 		return messages, options, nil
 	}
 	memories := memoryContents(result.Memories)
-	p.log(ctx, slog.LevelInfo, "azmemory: retrieved memories", "memory_store", p.memoryStoreName, "count", len(memories))
+	p.log(ctx, slog.LevelInfo, "azfoundrymemory: retrieved memories", "memory_store", p.memoryStoreName, "count", len(memories))
 	if len(memories) == 0 {
 		return messages, options, nil
 	}
@@ -126,8 +155,8 @@ func (p *Provider) provide(ctx context.Context, messages []*message.Message, opt
 }
 
 func (p *Provider) store(ctx context.Context, requestMessages, responseMessages []*message.Message, options ...agent.Option) error {
-	items := memoryItems(requestMessages)
-	items = append(items, memoryItems(responseMessages)...)
+	items := updateMemoryItems(requestMessages)
+	items = append(items, updateMemoryItems(responseMessages)...)
 	if len(items) == 0 {
 		return nil
 	}
@@ -138,10 +167,10 @@ func (p *Provider) store(ctx context.Context, requestMessages, responseMessages 
 		UpdateDelay: &p.config.UpdateDelay,
 	}
 	if _, err := p.client.BeginUpdateMemories(ctx, p.memoryStoreName, scope, updateOptions); err != nil {
-		p.log(ctx, slog.LevelError, "azmemory: failed to update memories", "memory_store", p.memoryStoreName, "count", len(items), "error", err)
+		p.log(ctx, slog.LevelError, "azfoundrymemory: failed to update memories", "memory_store", p.memoryStoreName, "count", len(items), "error", err)
 		return nil
 	}
-	p.log(ctx, slog.LevelInfo, "azmemory: submitted memory update", "memory_store", p.memoryStoreName, "count", len(items))
+	p.log(ctx, slog.LevelInfo, "azfoundrymemory: submitted memory update", "memory_store", p.memoryStoreName, "count", len(items))
 	return nil
 }
 
@@ -159,7 +188,7 @@ func (p *Provider) scope(session *agent.Session) string {
 	panic("memory scope must not be empty")
 }
 
-func memoryItems(messages []*message.Message) []map[string]any {
+func searchMemoryItems(messages []*message.Message) []map[string]any {
 	items := make([]map[string]any, 0, len(messages))
 	for _, msg := range messages {
 		if msg == nil {
@@ -169,19 +198,46 @@ func memoryItems(messages []*message.Message) []map[string]any {
 		if text == "" {
 			continue
 		}
-		switch msg.Role {
-		case message.RoleUser, message.RoleAssistant, message.RoleSystem:
-			items = append(items, map[string]any{
-				"type": "message",
-				"role": string(msg.Role),
-				"content": []map[string]any{{
-					"type": "input_text",
-					"text": text,
-				}},
-			})
+		items = append(items, toResponseItem(msg.Role, text))
+	}
+	return items
+}
+
+func updateMemoryItems(messages []*message.Message) []map[string]any {
+	items := make([]map[string]any, 0, len(messages))
+	for _, msg := range messages {
+		if msg == nil {
+			continue
+		}
+		text := strings.TrimSpace(msg.String())
+		if text == "" {
+			continue
+		}
+		if isAllowedRole(msg.Role) {
+			items = append(items, toResponseItem(msg.Role, text))
 		}
 	}
 	return items
+}
+
+func toResponseItem(role message.Role, text string) map[string]any {
+	switch role {
+	case message.RoleAssistant, message.RoleSystem:
+	default:
+		role = message.RoleUser
+	}
+	return map[string]any{
+		"type": "message",
+		"role": string(role),
+		"content": []map[string]any{{
+			"type": "input_text",
+			"text": text,
+		}},
+	}
+}
+
+func isAllowedRole(role message.Role) bool {
+	return role == message.RoleUser || role == message.RoleAssistant || role == message.RoleSystem
 }
 
 func memoryContents(memories []azaiprojects.MemorySearchItem) []string {

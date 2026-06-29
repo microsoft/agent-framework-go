@@ -3,7 +3,6 @@ module github.com/microsoft/agent-framework-go
 go 1.25.0
 
 require (
-	github.com/Azure/azure-sdk-for-go/sdk/ai/azaiprojects v0.0.0
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.22.0
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.0
 	github.com/a2aproject/a2a-go/v2 v2.3.1
@@ -22,8 +21,6 @@ require (
 	google.golang.org/genai v1.62.0
 	google.golang.org/grpc v1.81.1
 )
-
-replace github.com/Azure/azure-sdk-for-go/sdk/ai/azaiprojects => ../azure-sdk-for-go/sdk/ai/azaiprojects
 
 require (
 	cloud.google.com/go v0.116.0 // indirect

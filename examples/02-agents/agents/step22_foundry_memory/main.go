@@ -9,12 +9,12 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/ai/azaiprojects"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/memory/azmemory"
+	"github.com/microsoft/agent-framework-go/agent/memory/azfoundrymemory"
 	"github.com/microsoft/agent-framework-go/agent/provider/openaiagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
+	"github.com/microsoft/agent-framework-go/internal/azaiprojects"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
 )
@@ -45,22 +45,23 @@ func main() {
 	ctx := context.Background()
 	token := demo.AzureTokenCredential()
 
-	projectClient, err := azaiprojects.NewClient(foundryEndpoint, token, nil)
-	if err != nil {
-		demo.Panicf("failed to create Foundry project client: %v", err)
-	}
-	memoryStoresClient := projectClient.NewMemoryStoresClient()
-
-	memoryProvider := azmemory.NewProvider(
-		memoryStoresClient,
+	// Connect Agent Framework's context provider pipeline to a Foundry memory store.
+	// The scope isolates memories for this demo user; real apps should use a stable
+	// user, tenant, or conversation partition key.
+	memoryProvider := azfoundrymemory.NewProvider(
+		foundryEndpoint,
+		token,
 		memoryStoreName,
 		func(*agent.Session) string { return memoryScope },
-		azmemory.Config{
+		azfoundrymemory.Config{
 			Logger:      slog.New(logger),
 			UpdateDelay: 0,
 		},
 	)
 
+	// Attach the memory provider to a chat agent. Before each run, the provider can
+	// retrieve relevant Foundry memories and add them as context; after each run, it
+	// submits the conversation content for memory extraction.
 	a := openaiagent.NewChatCompletions(
 		openai.NewClient(
 			azure.WithEndpoint(azureOpenAIEndpoint, apiVersion),
@@ -82,7 +83,7 @@ func main() {
 		demo.Panic(err)
 	}
 
-	setupFoundryMemoryStore(ctx, memoryStoresClient)
+	setupFoundryMemoryStore(ctx, foundryEndpoint, token)
 
 	resp, err := a.RunText(ctx, "Hi there! My name is Taylor and I'm planning a hiking trip to Patagonia in November.", agent.WithSession(session)).Collect()
 	demo.Response(resp, err)
@@ -106,7 +107,16 @@ func stringPtr(value string) *string {
 	return &value
 }
 
-func setupFoundryMemoryStore(ctx context.Context, client *azaiprojects.MemoryStoresClient) {
+// setupFoundryMemoryStore prepares a sample memory store so the demo can run
+// repeatedly. Regular apps should provision Foundry resources outside the app;
+// this helper uses Agent Framework's temporary internal Foundry SDK for setup.
+func setupFoundryMemoryStore(ctx context.Context, foundryEndpoint string, token azcore.TokenCredential) {
+	projectClient, err := azaiprojects.NewClient(foundryEndpoint, token, nil)
+	if err != nil {
+		demo.Panicf("failed to create Foundry project client: %v", err)
+	}
+	client := projectClient.NewMemoryStoresClient()
+
 	// Ensure the memory store exists (creates it with the specified models if needed).
 	if _, err := client.GetMemoryStore(ctx, memoryStoreName, nil); err != nil {
 		demo.Assistant("Setting up Foundry memory store")
