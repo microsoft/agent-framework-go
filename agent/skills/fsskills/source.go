@@ -568,7 +568,12 @@ func buildAvailableResourcesBlock(resources []skills.Resource) string {
 	var sb strings.Builder
 	sb.WriteString("\n<available_resources>\n")
 	for _, resource := range resources {
-		fmt.Fprintf(&sb, "  <resource name=\"%s\"/>\n", xmlEscapeAttr(resource.Name))
+		if resource.Description != "" {
+			fmt.Fprintf(&sb, "  <resource name=\"%s\" description=\"%s\"/>\n",
+				xmlEscapeAttr(resource.Name), xmlEscapeAttr(resource.Description))
+		} else {
+			fmt.Fprintf(&sb, "  <resource name=\"%s\"/>\n", xmlEscapeAttr(resource.Name))
+		}
 	}
 	sb.WriteString("</available_resources>")
 	return sb.String()
@@ -581,10 +586,14 @@ func buildAvailableScriptsBlock(scripts []skills.Script) string {
 	var sb strings.Builder
 	sb.WriteString("\n<available_scripts>\n")
 	for _, script := range scripts {
+		namePart := fmt.Sprintf("  <script name=\"%s\"", xmlEscapeAttr(script.Name))
+		if script.Description != "" {
+			namePart += fmt.Sprintf(" description=\"%s\"", xmlEscapeAttr(script.Description))
+		}
 		if script.ParametersSchema == "" {
-			fmt.Fprintf(&sb, "  <script name=\"%s\"/>\n", xmlEscapeAttr(script.Name))
+			fmt.Fprintf(&sb, "%s/>\n", namePart)
 		} else {
-			fmt.Fprintf(&sb, "  <script name=\"%s\">\n", xmlEscapeAttr(script.Name))
+			fmt.Fprintf(&sb, "%s>\n", namePart)
 			fmt.Fprintf(&sb, "    <parameters_schema>%s</parameters_schema>\n", xmlEscapeContent(script.ParametersSchema))
 			sb.WriteString("  </script>\n")
 		}
