@@ -128,9 +128,9 @@ func newChatHistoryProvider() *agent.HistoryProvider {
 	// In this case, we explicitly exclude messages from chat history and AI context providers.
 	// You may want to store these messages, depending on their content and your requirements.
 	historyProvider.StoreRequestFilter = messagefilter.NotSources(
-		chatHistorySourceID,
-		todoListSourceID,
-		calendarSearchSourceID,
+		message.Source{Type: agent.SourceTypeHistoryProvider, ID: chatHistorySourceID},
+		message.Source{Type: agent.SourceTypeContextProvider, ID: todoListSourceID},
+		message.Source{Type: agent.SourceTypeContextProvider, ID: calendarSearchSourceID},
 	)
 	return historyProvider
 }

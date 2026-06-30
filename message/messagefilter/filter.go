@@ -77,38 +77,39 @@ func None(_ context.Context, messages []*message.Message) ([]*message.Message, e
 	return messages[:0], nil
 }
 
-// ExternalOnly returns only messages without a SourceID.
+// ExternalOnly returns only messages whose source type is external.
 //
+// A zero source type is considered external.
 // The filter operates in place by compacting the input slice.
 func ExternalOnly(_ context.Context, messages []*message.Message) ([]*message.Message, error) {
 	return slices.DeleteFunc(messages, func(msg *message.Message) bool {
 		if msg == nil {
 			return false
 		}
-		return msg.SourceID != ""
+		return msg.Source.Type != message.SourceTypeExternal
 	}), nil
 }
 
-// Sources returns only messages whose SourceID is in the provided allow list.
-func Sources(sourceIDs ...string) Filter {
+// Sources returns only messages whose source is in the provided allow list.
+func Sources(sources ...message.Source) Filter {
 	return func(_ context.Context, messages []*message.Message) ([]*message.Message, error) {
 		return slices.DeleteFunc(messages, func(msg *message.Message) bool {
 			if msg == nil {
 				return false
 			}
-			return !slices.Contains(sourceIDs, msg.SourceID)
+			return !slices.Contains(sources, msg.Source)
 		}), nil
 	}
 }
 
-// NotSources returns messages whose SourceID is not in the provided deny list.
-func NotSources(sourceIDs ...string) Filter {
+// NotSources returns messages whose source is not in the provided deny list.
+func NotSources(sources ...message.Source) Filter {
 	return func(_ context.Context, messages []*message.Message) ([]*message.Message, error) {
 		return slices.DeleteFunc(messages, func(msg *message.Message) bool {
 			if msg == nil {
 				return false
 			}
-			return slices.Contains(sourceIDs, msg.SourceID)
+			return slices.Contains(sources, msg.Source)
 		}), nil
 	}
 }

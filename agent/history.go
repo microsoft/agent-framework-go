@@ -10,15 +10,18 @@ import (
 	"github.com/microsoft/agent-framework-go/message/messagefilter"
 )
 
+// SourceTypeHistoryProvider represents a message that originated from a history provider.
+const SourceTypeHistoryProvider message.SourceType = "history-provider"
+
 const defaultInMemoryHistorySourceID = "in-memory"
 
 // HistoryProvider provides a conversation-history subset of [ContextProvider]
 // behavior around an agent invocation.
 //
 // A history provider can retrieve prior conversation messages, combine and
-// filter them with the current request messages, mark added messages with a
-// SourceID, and persist filtered request and response messages after the run
-// completes. It cannot add or replace run options, tools, instructions, or
+// filter them with the current request messages, mark added messages with this
+// provider's source, and persist filtered request and response messages after
+// the run completes. It cannot add or replace run options, tools, instructions, or
 // other non-message context. Use [ContextProvider] when an extension needs to
 // supply options or context that is not only conversation history.
 type HistoryProvider struct {
@@ -30,7 +33,7 @@ type HistoryProvider struct {
 	ProvideFilter messagefilter.Filter
 
 	// Optional filter applied to request messages before Store.
-	// Defaults to messages that did not come from this history provider.
+	// Defaults to messages that did not come from a history provider.
 	StoreRequestFilter messagefilter.Filter
 
 	// Optional filter applied to response messages before Store.
@@ -38,7 +41,7 @@ type HistoryProvider struct {
 	StoreResponseFilter messagefilter.Filter
 
 	// Optional retrieval hook that returns updated history and request messages.
-	// Messages that are not pointer-identical to the original input messages are marked with SourceID.
+	// Messages that are not pointer-identical to the original input messages are marked with this provider's source.
 	// Defaults to returning the original messages unchanged.
 	Provide func(context.Context, []*message.Message, ...Option) ([]*message.Message, error)
 
@@ -71,7 +74,7 @@ func (p *HistoryProvider) BeforeRun(ctx context.Context, messages []*message.Mes
 		}
 	}
 
-	outMessages = p.withHistorySource(outMessages, messages)
+	markNewMessagesWithSource(outMessages, messages, message.Source{Type: SourceTypeHistoryProvider, ID: p.SourceID}, true)
 
 	return outMessages, nil
 }
@@ -81,7 +84,22 @@ func (p *HistoryProvider) AfterRun(ctx context.Context, requestMessages, respons
 	if p.SourceID == "" {
 		panic("SourceID is required")
 	}
-	return runStoreHook(ctx, p.SourceID, p.Store, p.StoreRequestFilter, p.StoreResponseFilter, requestMessages, responseMessages, options)
+	requestFilter := p.StoreRequestFilter
+	if requestFilter == nil {
+		requestFilter = notSourceTypes(SourceTypeHistoryProvider)
+	}
+	return runStoreHook(ctx, p.Store, requestFilter, p.StoreResponseFilter, requestMessages, responseMessages, options)
+}
+
+func notSourceTypes(sourceTypes ...message.SourceType) messagefilter.Filter {
+	return func(_ context.Context, messages []*message.Message) ([]*message.Message, error) {
+		return slices.DeleteFunc(messages, func(msg *message.Message) bool {
+			if msg == nil {
+				return false
+			}
+			return slices.Contains(sourceTypes, msg.Source.Type)
+		}), nil
+	}
 }
 
 func (p *HistoryProvider) filterProvidedMessages(ctx context.Context, outMessages, inMessages []*message.Message) ([]*message.Message, error) {
@@ -111,10 +129,6 @@ func (p *HistoryProvider) filterProvidedMessages(ctx context.Context, outMessage
 		_, ok := kept[msg]
 		return !ok
 	}), nil
-}
-
-func (p *HistoryProvider) withHistorySource(outMessages, inMessages []*message.Message) []*message.Message {
-	return markNewMessages(outMessages, inMessages, p.SourceID)
 }
 
 // NewInMemoryHistoryProvider creates a history provider that stores conversation history in the session.

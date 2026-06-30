@@ -37,10 +37,6 @@ type MemoryProviderConfig struct {
 	// MaxMemories limits the number of memories returned by search. The default is 5.
 	MaxMemories int32
 
-	// SearchInputFilter filters messages used to search for relevant memories. The
-	// default is [messagefilter.ExternalOnly].
-	SearchInputFilter messagefilter.Filter
-
 	// UpdateDelay controls Foundry memory extraction delay in seconds. The default is 0,
 	// which submits memory updates immediately.
 	UpdateDelay int32
@@ -95,9 +91,6 @@ func newMemoryProvider(client *azaiprojects.MemoryStoresClient, memoryStoreName 
 	if config.MaxMemories == 0 {
 		config.MaxMemories = defaultMaxMemories
 	}
-	if config.SearchInputFilter == nil {
-		config.SearchInputFilter = messagefilter.ExternalOnly
-	}
 	p := &MemoryProvider{
 		client:          client,
 		memoryStoreName: memoryStoreName,
@@ -122,7 +115,7 @@ func (p *MemoryProvider) ContextProvider() *agent.ContextProvider {
 }
 
 func (p *MemoryProvider) provide(ctx context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
-	searchMessages, err := p.config.SearchInputFilter(ctx, slices.Clone(messages))
+	searchMessages, err := messagefilter.ExternalOnly(ctx, slices.Clone(messages))
 	if err != nil {
 		return nil, nil, err
 	}

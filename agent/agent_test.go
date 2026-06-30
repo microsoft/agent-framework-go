@@ -564,6 +564,72 @@ func TestAgent_Run_InvokesSingleContextMiddleware(t *testing.T) {
 	}
 }
 
+func TestAgent_Run_MarksMiddlewareAddedMessagesWithSource(t *testing.T) {
+	added := message.NewText("middleware")
+	mw := agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		messages = append(slices.Clone(messages), added)
+		return next(ctx, messages, opts...)
+	})
+
+	var capturedMessages []*message.Message
+	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		capturedMessages = msgs
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "response"}}}, nil)
+		}
+	}
+	a := newGenericTestAgent(runFn, []agent.Middleware{mw})
+
+	_, err := a.RunText(t.Context(), "input", agent.WithSession(agenttest.CreateSession())).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(capturedMessages) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(capturedMessages))
+	}
+	if capturedMessages[1] == added {
+		t.Fatal("expected middleware message to be cloned before source stamping")
+	}
+	if capturedMessages[1].Source != (message.Source{Type: agent.SourceTypeMiddleware}) {
+		t.Fatalf("middleware message source = %#v, want middleware source", capturedMessages[1].Source)
+	}
+}
+
+func TestAgent_Run_PreservesMiddlewareAddedMessagesWithSource(t *testing.T) {
+	source := message.Source{Type: agent.SourceTypeContextProvider, ID: "ctx"}
+	added := message.NewText("context")
+	added.Source = source
+	mw := agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		messages = append(slices.Clone(messages), added)
+		return next(ctx, messages, opts...)
+	})
+
+	var capturedMessages []*message.Message
+	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		capturedMessages = msgs
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "response"}}}, nil)
+		}
+	}
+	a := newGenericTestAgent(runFn, []agent.Middleware{mw})
+
+	_, err := a.RunText(t.Context(), "input", agent.WithSession(agenttest.CreateSession())).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(capturedMessages) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(capturedMessages))
+	}
+	if capturedMessages[1] != added {
+		t.Fatal("expected middleware message with existing source to be preserved")
+	}
+	if capturedMessages[1].Source != source {
+		t.Fatalf("middleware message source = %#v, want %#v", capturedMessages[1].Source, source)
+	}
+}
+
 func TestAgent_Run_ContextMiddlewareReceivesSession(t *testing.T) {
 	mw := &prependMiddleware{}
 	runFn := func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
@@ -1283,8 +1349,8 @@ func TestAgent_Run_UsesConfigHistoryProvider(t *testing.T) {
 						if got := messageStrings(messages); !slices.Equal(got, []string{"first", "one", "second"}) {
 							t.Fatalf("second turn messages = %v, want [first one second]", got)
 						}
-						if messages[0].SourceID != "in-memory" || messages[1].SourceID != "in-memory" || messages[2].SourceID != "" {
-							t.Fatalf("unexpected source IDs: [%q %q %q]", messages[0].SourceID, messages[1].SourceID, messages[2].SourceID)
+						if messages[0].Source.ID != "in-memory" || messages[1].Source.ID != "in-memory" || messages[2].Source.ID != "" {
+							t.Fatalf("unexpected source IDs: [%q %q %q]", messages[0].Source.ID, messages[1].Source.ID, messages[2].Source.ID)
 						}
 					},
 				},
@@ -1544,8 +1610,8 @@ func TestAgent_Run_UsesHistoryBeforeContextProviders(t *testing.T) {
 		if got := messageStrings(msgs); !slices.Equal(got, []string{"history", "input", "context"}) {
 			t.Fatalf("messages = %v, want [history input context]", got)
 		}
-		if msgs[0].SourceID != "history" || msgs[1].SourceID != "" || msgs[2].SourceID != "ctx" {
-			t.Fatalf("unexpected source IDs: [%q %q %q]", msgs[0].SourceID, msgs[1].SourceID, msgs[2].SourceID)
+		if msgs[0].Source.ID != "history" || msgs[1].Source.ID != "" || msgs[2].Source.ID != "ctx" {
+			t.Fatalf("unexpected source IDs: [%q %q %q]", msgs[0].Source.ID, msgs[1].Source.ID, msgs[2].Source.ID)
 		}
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "ok"}}}, nil)
@@ -1828,7 +1894,7 @@ func TestAgent_Run_ProviderMiddleware_PropagatesStoreError(t *testing.T) {
 	}
 }
 
-func TestAgent_Run_ProviderMiddleware_EarlyStopOnErrorStillStores(t *testing.T) {
+func TestAgent_Run_ProviderMiddleware_SkipsStoreAfterRunError(t *testing.T) {
 	runErr := errors.New("run failed")
 	storeCalled := false
 
@@ -1858,8 +1924,8 @@ func TestAgent_Run_ProviderMiddleware_EarlyStopOnErrorStillStores(t *testing.T) 
 	if !errors.Is(err, runErr) {
 		t.Fatalf("expected %v, got %v", runErr, err)
 	}
-	if !storeCalled {
-		t.Fatal("expected store to be called when run stops on error")
+	if storeCalled {
+		t.Fatal("expected store to be skipped when run stops on error")
 	}
 }
 

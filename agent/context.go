@@ -11,6 +11,9 @@ import (
 	"github.com/microsoft/agent-framework-go/message/messagefilter"
 )
 
+// SourceTypeContextProvider represents a message that originated from a context provider.
+const SourceTypeContextProvider message.SourceType = "context-provider"
+
 // ContextProvider provides a structured subset of middleware behavior for
 // injecting and persisting additional context around an agent invocation.
 //
@@ -25,7 +28,7 @@ type ContextProvider struct {
 	SourceID string
 
 	// Optional filter applied to request messages before Store.
-	// Defaults to excluding messages from the same provider SourceID.
+	// Defaults to [messagefilter.ExternalOnly].
 	StoreRequestFilter messagefilter.Filter
 
 	// Optional filter applied to response messages before Store.
@@ -33,8 +36,9 @@ type ContextProvider struct {
 	StoreResponseFilter messagefilter.Filter
 
 	// Optional retrieval hook that returns updated provider context messages and run options.
-	// Messages that are not pointer-identical to the original input messages are marked with SourceID.
-	// Defaults to returning the original messages and options unchanged.
+	// Messages that are not pointer-identical to the messages passed to Provide are marked with this provider's source.
+	// If unset, the original messages and options are returned unchanged.
+	// If set, the returned messages and options are used as-is.
 	Provide func(context.Context, []*message.Message, ...Option) ([]*message.Message, []Option, error)
 
 	// Optional storage hook. Defaults to no-op.
@@ -68,15 +72,22 @@ func (r *contextProviderMiddleware) Run(next RunFunc, ctx context.Context, messa
 
 		requestMessages := slices.Clone(messages)
 		var resp Response
+		var runErr error
 		for update, err := range next(ctx, messages, options...) {
 			if update != nil {
 				resp.Update(update)
+			}
+			if err != nil {
+				runErr = err
 			}
 			if !yield(update, err) {
 				break
 			}
 		}
 		resp.Coalesce()
+		if runErr != nil {
+			return
+		}
 
 		if err := r.provider.AfterRun(ctx, requestMessages, resp.Messages, options...); err != nil {
 			yield(nil, err)
@@ -94,21 +105,14 @@ func (p *ContextProvider) BeforeRun(ctx context.Context, messages []*message.Mes
 		return messages, options, nil
 	}
 
-	outMessages, outOptions, err := p.Provide(ctx, messages, options...)
+	inputMessages := slices.Clone(messages)
+	messages, options, err := p.Provide(ctx, messages, options...)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	if outMessages == nil {
-		outMessages = messages
-	}
-	outMessages = p.withProviderSource(outMessages, messages)
-
-	if outOptions == nil {
-		outOptions = options
-	}
-
-	return outMessages, outOptions, nil
+	markNewMessagesWithSource(messages, inputMessages, message.Source{Type: SourceTypeContextProvider, ID: p.SourceID}, true)
+	return messages, options, nil
 }
 
 // AfterRun persists context-related state after an agent invocation finishes.
@@ -116,52 +120,44 @@ func (p *ContextProvider) AfterRun(ctx context.Context, requestMessages, respons
 	if p.SourceID == "" {
 		panic("SourceID is required")
 	}
-	return runStoreHook(ctx, p.SourceID, p.Store, p.StoreRequestFilter, p.StoreResponseFilter, requestMessages, responseMessages, options)
-}
-
-func (p *ContextProvider) withProviderSource(outMessages, inMessages []*message.Message) []*message.Message {
-	return markNewMessages(outMessages, inMessages, p.SourceID)
-}
-
-// markNewMessages marks messages not present in inMessages with sourceID,
-// lazy-cloning the slice the first time a message needs to be updated.
-// Messages already carrying sourceID or present in inMessages are skipped.
-func markNewMessages(outMessages, inMessages []*message.Message, sourceID string) []*message.Message {
-	if len(outMessages) == 0 {
-		return outMessages
+	requestFilter := p.StoreRequestFilter
+	if requestFilter == nil {
+		requestFilter = messagefilter.ExternalOnly
 	}
+	return runStoreHook(ctx, p.Store, requestFilter, p.StoreResponseFilter, requestMessages, responseMessages, options)
+}
+
+// markNewMessagesWithSource marks messages in outMessages that are not pointer-identical
+// to messages in inMessages with source. Marked messages are cloned before source is set.
+// When overwrite is false, messages that already have any source are preserved as-is.
+// Messages that are nil, already have source, or are present in inMessages are skipped.
+func markNewMessagesWithSource(outMessages, inMessages []*message.Message, source message.Source, overwrite bool) {
 	originals := make(map[*message.Message]struct{}, len(inMessages))
 	for _, msg := range inMessages {
 		originals[msg] = struct{}{}
 	}
-	var cloned []*message.Message
+	if len(outMessages) == 0 {
+		return
+	}
 	for i, msg := range outMessages {
 		if _, ok := originals[msg]; ok {
 			continue
 		}
-		if msg == nil || msg.SourceID == sourceID {
+		if msg == nil || msg.Source == source || !overwrite && msg.Source != (message.Source{}) {
 			continue
 		}
-		if cloned == nil {
-			cloned = slices.Clone(outMessages)
-		}
 		marked := msg.Clone()
-		marked.SourceID = sourceID
-		cloned[i] = marked
+		marked.Source = source
+		outMessages[i] = marked
 	}
-	if cloned != nil {
-		return cloned
-	}
-	return outMessages
 }
 
 // runStoreHook applies request and response filters then calls store.
 // When store is nil, it is a no-op. A nil requestFilter defaults to
-// messagefilter.NotSources(sourceID); a nil responseFilter defaults to
+// messagefilter.PassThrough; a nil responseFilter defaults to
 // messagefilter.PassThrough.
 func runStoreHook(
 	ctx context.Context,
-	sourceID string,
 	store func(context.Context, []*message.Message, []*message.Message, ...Option) error,
 	requestFilter, responseFilter messagefilter.Filter,
 	requestMessages, responseMessages []*message.Message,
@@ -171,7 +167,7 @@ func runStoreHook(
 		return nil
 	}
 	if requestFilter == nil {
-		requestFilter = messagefilter.NotSources(sourceID)
+		requestFilter = messagefilter.PassThrough
 	}
 	if responseFilter == nil {
 		responseFilter = messagefilter.PassThrough

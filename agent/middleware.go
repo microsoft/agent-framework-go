@@ -9,12 +9,17 @@ import (
 	"github.com/microsoft/agent-framework-go/message"
 )
 
+// SourceTypeMiddleware represents a message that originated from a middleware component.
+const SourceTypeMiddleware message.SourceType = "middleware"
+
 // Middleware wraps an agent run function to inspect or modify messages, options,
 // response updates, and errors.
 //
 // Use middleware when an extension needs direct control over provider invocation,
 // streaming updates, option propagation, or error handling beyond the
 // request/response message hooks exposed by [ContextProvider].
+// Messages passed to next that were not present in the middleware input are
+// marked with [SourceTypeMiddleware] when they do not already carry a source.
 type Middleware interface {
 	Run(next RunFunc, ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error]
 }
@@ -45,5 +50,9 @@ type middlewareRunner struct {
 }
 
 func (mr middlewareRunner) Run(ctx context.Context, messages []*message.Message, opts ...Option) iter.Seq2[*ResponseUpdate, error] {
-	return mr.Middleware.Run(mr.next, ctx, messages, opts...)
+	next := func(ctx context.Context, outMessages []*message.Message, opts ...Option) iter.Seq2[*ResponseUpdate, error] {
+		markNewMessagesWithSource(outMessages, messages, message.Source{Type: SourceTypeMiddleware}, false)
+		return mr.next(ctx, outMessages, opts...)
+	}
+	return mr.Middleware.Run(next, ctx, messages, opts...)
 }

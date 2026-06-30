@@ -39,7 +39,7 @@ func TestNewInMemoryHistoryProvider_DefaultConfig_RoundTripsHistory(t *testing.T
 	if messages[0].String() != "request" || messages[1].String() != "response" {
 		t.Fatalf("unexpected output order/content")
 	}
-	if messages[0].SourceID != "in-memory" || messages[1].SourceID != "in-memory" {
+	if messages[0].Source.ID != "in-memory" || messages[1].Source.ID != "in-memory" {
 		t.Fatal("expected history messages to have in-memory source ID")
 	}
 
@@ -96,7 +96,7 @@ func TestNewInMemoryHistoryProvider_ProvidePassesOriginalMessages(t *testing.T) 
 	if messages[0].String() != "request" || messages[1].String() != "response" {
 		t.Fatalf("unexpected output order/content")
 	}
-	if messages[0].SourceID != "InMemoryHistoryProvider" || messages[1].SourceID != "InMemoryHistoryProvider" {
+	if messages[0].Source.ID != "InMemoryHistoryProvider" || messages[1].Source.ID != "InMemoryHistoryProvider" {
 		t.Fatal("expected history messages to have provider source ID")
 	}
 }
@@ -132,11 +132,13 @@ func TestNewInMemoryHistoryProvider_DefaultStoreRequestFilter_ExcludesHistoryMes
 
 	user := message.NewText("user")
 	historyMsg := message.NewText("history")
-	historyMsg.SourceID = "k"
+	historyMsg.Source = message.Source{Type: agent.SourceTypeHistoryProvider, ID: "k"}
+	otherHistoryMsg := message.NewText("other history")
+	otherHistoryMsg.Source = message.Source{Type: agent.SourceTypeHistoryProvider, ID: "other"}
 	ctxMsg := message.NewText("ctx")
-	ctxMsg.SourceID = "provider-A"
+	ctxMsg.Source = message.Source{Type: agent.SourceTypeContextProvider, ID: "provider-A"}
 
-	if err := provider.AfterRun(t.Context(), []*message.Message{user, historyMsg, ctxMsg}, nil, agent.WithSession(session)); err != nil {
+	if err := provider.AfterRun(t.Context(), []*message.Message{user, historyMsg, otherHistoryMsg, ctxMsg}, nil, agent.WithSession(session)); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -145,7 +147,7 @@ func TestNewInMemoryHistoryProvider_DefaultStoreRequestFilter_ExcludesHistoryMes
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(messages) != 2 || messages[0].String() != "user" || messages[1].String() != "ctx" {
-		t.Fatal("expected default request filter to exclude only history messages")
+		t.Fatal("expected default request filter to exclude all history-provider messages")
 	}
 }
 
@@ -198,7 +200,7 @@ func TestNewInMemoryHistoryProvider_StoreContextMessages(t *testing.T) {
 	provider.StoreRequestFilter = func(ctx context.Context, messages []*message.Message) ([]*message.Message, error) {
 		filtered := make([]*message.Message, 0, len(messages))
 		for _, msg := range messages {
-			if msg.SourceID == "" || msg.SourceID == "provider-A" {
+			if msg.Source.ID == "" || msg.Source.ID == "provider-A" {
 				filtered = append(filtered, msg)
 			}
 		}
@@ -207,7 +209,7 @@ func TestNewInMemoryHistoryProvider_StoreContextMessages(t *testing.T) {
 	session := agenttest.CreateSession()
 	user := message.NewText("user")
 	ctxMsg := message.NewText("ctx")
-	ctxMsg.SourceID = "provider-A"
+	ctxMsg.Source = message.Source{ID: "provider-A"}
 
 	if err := provider.AfterRun(t.Context(), []*message.Message{user, ctxMsg}, nil, agent.WithSession(session)); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -227,7 +229,7 @@ func TestNewInMemoryHistoryProvider_StoreContextMessagesFrom(t *testing.T) {
 	provider.StoreRequestFilter = func(ctx context.Context, messages []*message.Message) ([]*message.Message, error) {
 		filtered := make([]*message.Message, 0, len(messages))
 		for _, msg := range messages {
-			if msg.SourceID == "provider-A" {
+			if msg.Source.ID == "provider-A" {
 				filtered = append(filtered, msg)
 			}
 		}
@@ -235,9 +237,9 @@ func TestNewInMemoryHistoryProvider_StoreContextMessagesFrom(t *testing.T) {
 	}
 	session := agenttest.CreateSession()
 	ctxA := message.NewText("ctx-a")
-	ctxA.SourceID = "provider-A"
+	ctxA.Source = message.Source{ID: "provider-A"}
 	ctxB := message.NewText("ctx-b")
-	ctxB.SourceID = "provider-B"
+	ctxB.Source = message.Source{ID: "provider-B"}
 
 	if err := provider.AfterRun(t.Context(), []*message.Message{ctxA, ctxB}, nil, agent.WithSession(session)); err != nil {
 		t.Fatalf("unexpected error: %v", err)

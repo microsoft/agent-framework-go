@@ -13,7 +13,7 @@ import (
 func TestPassThrough(t *testing.T) {
 	m1 := message.NewText("a")
 	m2 := message.NewText("b")
-	out, err := PassThrough(context.Background(), []*message.Message{m1, m2})
+	out, err := PassThrough(t.Context(), []*message.Message{m1, m2})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -23,7 +23,7 @@ func TestPassThrough(t *testing.T) {
 }
 
 func TestNone(t *testing.T) {
-	out, err := None(context.Background(), []*message.Message{message.NewText("a")})
+	out, err := None(t.Context(), []*message.Message{message.NewText("a")})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -34,9 +34,10 @@ func TestNone(t *testing.T) {
 
 func TestExternalOnly(t *testing.T) {
 	external := message.NewText("external")
+	external.Source.ID = "external-system"
 	internal := message.NewText("internal")
-	internal.SourceID = "provider"
-	out, err := ExternalOnly(context.Background(), []*message.Message{external, internal})
+	internal.Source = message.Source{Type: message.SourceType("provider"), ID: "provider-id"}
+	out, err := ExternalOnly(t.Context(), []*message.Message{external, internal})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -46,29 +47,33 @@ func TestExternalOnly(t *testing.T) {
 }
 
 func TestSources(t *testing.T) {
+	source := message.Source{Type: message.SourceType("provider"), ID: "a"}
 	allowed := message.NewText("allowed")
-	allowed.SourceID = "a"
+	allowed.Source = source
 	blocked := message.NewText("blocked")
-	blocked.SourceID = "b"
+	blocked.Source = message.Source{Type: message.SourceType("provider"), ID: "b"}
+	sameIDDifferentType := message.NewText("same id")
+	sameIDDifferentType.Source = message.Source{ID: "a"}
 
-	filter := Sources("a")
-	out, err := filter(context.Background(), []*message.Message{allowed, blocked})
+	filter := Sources(source)
+	out, err := filter(t.Context(), []*message.Message{allowed, blocked, sameIDDifferentType})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(out) != 1 || out[0] != allowed {
-		t.Fatal("expected only allowed SourceID messages")
+		t.Fatal("expected only allowed source messages")
 	}
 }
 
 func TestNotSources(t *testing.T) {
+	source := message.Source{Type: message.SourceType("provider"), ID: "b"}
 	keep := message.NewText("keep")
-	keep.SourceID = "a"
+	keep.Source = message.Source{Type: message.SourceType("provider"), ID: "a"}
 	blocked := message.NewText("blocked")
-	blocked.SourceID = "b"
+	blocked.Source = source
 
-	filter := NotSources("b")
-	out, err := filter(context.Background(), []*message.Message{keep, blocked})
+	filter := NotSources(source)
+	out, err := filter(t.Context(), []*message.Message{keep, blocked})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -79,13 +84,15 @@ func TestNotSources(t *testing.T) {
 
 func TestOr_ExternalOnlyOrSources(t *testing.T) {
 	external := message.NewText("external")
+	source := message.Source{Type: message.SourceType("provider"), ID: "a"}
 	allowed := message.NewText("allowed")
-	allowed.SourceID = "a"
+	allowed.Source = source
 	blocked := message.NewText("blocked")
-	blocked.SourceID = "b"
+	blocked.Source.Type = "provider"
+	blocked.Source.ID = "b"
 
-	filter := Or(ExternalOnly, Sources("a"))
-	out, err := filter(context.Background(), []*message.Message{external, allowed, blocked})
+	filter := Or(ExternalOnly, Sources(source))
+	out, err := filter(t.Context(), []*message.Message{external, allowed, blocked})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -96,20 +103,21 @@ func TestOr_ExternalOnlyOrSources(t *testing.T) {
 
 func TestBuiltInFilters_DoNotAddMessages(t *testing.T) {
 	m1 := message.NewText("a")
+	source := message.Source{Type: message.SourceType("provider"), ID: "x"}
 	m2 := message.NewText("b")
-	m2.SourceID = "x"
+	m2.Source = source
 	messages := []*message.Message{m1, m2}
 
 	filters := []Filter{
 		PassThrough,
 		None,
 		ExternalOnly,
-		NotSources("x"),
-		Or(ExternalOnly, Sources("x")),
+		NotSources(source),
+		Or(ExternalOnly, Sources(source)),
 	}
 
 	for _, filter := range filters {
-		out, err := filter(context.Background(), append([]*message.Message(nil), messages...))
+		out, err := filter(t.Context(), append([]*message.Message(nil), messages...))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -123,13 +131,15 @@ func TestBuiltInFilters_DoNotAddMessages(t *testing.T) {
 
 func TestAnd_AppliesFiltersInOrder(t *testing.T) {
 	m1 := message.NewText("external")
+	sourceA := message.Source{Type: message.SourceType("provider"), ID: "a"}
 	m2 := message.NewText("allowed")
-	m2.SourceID = "a"
+	m2.Source = sourceA
 	m3 := message.NewText("blocked")
-	m3.SourceID = "b"
+	m3.Source.Type = "provider"
+	m3.Source.ID = "b"
 
-	filter := And(PassThrough, Or(ExternalOnly, Sources("a")))
-	out, err := filter(context.Background(), []*message.Message{m1, m2, m3})
+	filter := And(PassThrough, Or(ExternalOnly, Sources(sourceA)))
+	out, err := filter(t.Context(), []*message.Message{m1, m2, m3})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -141,7 +151,7 @@ func TestAnd_AppliesFiltersInOrder(t *testing.T) {
 func TestAnd_SkipsNilFilters(t *testing.T) {
 	m1 := message.NewText("external")
 	filter := And(nil, PassThrough, nil)
-	out, err := filter(context.Background(), []*message.Message{m1})
+	out, err := filter(t.Context(), []*message.Message{m1})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -163,7 +173,7 @@ func TestAnd_StopsOnError(t *testing.T) {
 		},
 	)
 
-	_, err := filter(context.Background(), []*message.Message{message.NewText("a")})
+	_, err := filter(t.Context(), []*message.Message{message.NewText("a")})
 	if !errors.Is(err, expected) {
 		t.Fatalf("expected %v, got %v", expected, err)
 	}
@@ -174,13 +184,15 @@ func TestAnd_StopsOnError(t *testing.T) {
 
 func TestOr_AppliesUnion(t *testing.T) {
 	external := message.NewText("external")
+	sourceA := message.Source{Type: message.SourceType("provider"), ID: "a"}
 	allowed := message.NewText("allowed")
-	allowed.SourceID = "a"
+	allowed.Source = sourceA
 	blocked := message.NewText("blocked")
-	blocked.SourceID = "b"
+	blocked.Source.Type = "provider"
+	blocked.Source.ID = "b"
 
-	filter := Or(ExternalOnly, Sources("a"))
-	out, err := filter(context.Background(), []*message.Message{external, allowed, blocked})
+	filter := Or(ExternalOnly, Sources(sourceA))
+	out, err := filter(t.Context(), []*message.Message{external, allowed, blocked})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -192,7 +204,7 @@ func TestOr_AppliesUnion(t *testing.T) {
 func TestOr_SkipsNilFilters(t *testing.T) {
 	external := message.NewText("external")
 	filter := Or(nil, ExternalOnly, nil)
-	out, err := filter(context.Background(), []*message.Message{external})
+	out, err := filter(t.Context(), []*message.Message{external})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -214,7 +226,7 @@ func TestOr_StopsOnError(t *testing.T) {
 		},
 	)
 
-	_, err := filter(context.Background(), []*message.Message{message.NewText("a")})
+	_, err := filter(t.Context(), []*message.Message{message.NewText("a")})
 	if !errors.Is(err, expected) {
 		t.Fatalf("expected %v, got %v", expected, err)
 	}
@@ -224,7 +236,7 @@ func TestOr_StopsOnError(t *testing.T) {
 }
 
 func TestOr_WithoutFilters_ReturnsNone(t *testing.T) {
-	out, err := Or()(context.Background(), []*message.Message{message.NewText("a")})
+	out, err := Or()(t.Context(), []*message.Message{message.NewText("a")})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

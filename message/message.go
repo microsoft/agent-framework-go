@@ -21,6 +21,21 @@ const (
 	RoleTool Role = "tool"
 )
 
+// SourceType represents the type of component that generated a message.
+type SourceType string
+
+// SourceTypeExternal is the zero source type for messages that originated outside the agent pipeline.
+const SourceTypeExternal SourceType = ""
+
+// Source represents attribution information for the source of a message.
+type Source struct {
+	// ID is the unique identifier of the source that generated the message.
+	ID string `json:",omitzero"`
+
+	// Type identifies the kind of component that generated the message.
+	Type SourceType `json:",omitzero"`
+}
+
 // Message represents a message in a conversation.
 type Message struct {
 	AdditionalProperties map[string]any `json:",omitzero"`
@@ -28,7 +43,7 @@ type Message struct {
 	Role                 Role
 	ID                   string
 	AuthorName           string    `json:",omitzero"`
-	SourceID             string    `json:",omitzero"`
+	Source               Source    `json:",omitzero"`
 	CreatedAt            time.Time `json:",omitzero"`
 	RawRepresentation    any       `json:"-"`
 }

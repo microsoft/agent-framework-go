@@ -168,6 +168,35 @@ func TestContextProviderMiddleware_Run_PassesResponseMessagesWithServiceManagedS
 	}
 }
 
+func TestContextProviderMiddleware_Run_SkipsStoreAfterRunError(t *testing.T) {
+	expected := errors.New("run failed")
+	storeCalled := false
+	provider := &agent.ContextProvider{
+		SourceID: "provider-a",
+		Store: func(context.Context, []*message.Message, []*message.Message, ...agent.Option) error {
+			storeCalled = true
+			return nil
+		},
+	}
+
+	_, err := collectContextProviderMiddlewareResponse(provider.Middleware().Run(
+		func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			return func(yield func(*agent.ResponseUpdate, error) bool) {
+				yield(nil, expected)
+			}
+		},
+		context.Background(),
+		[]*message.Message{message.NewText("hello")},
+		agent.WithSession(agenttest.CreateSession()),
+	))
+	if !errors.Is(err, expected) {
+		t.Fatalf("expected %v, got %v", expected, err)
+	}
+	if storeCalled {
+		t.Fatal("expected store to be skipped after run error")
+	}
+}
+
 func contextProviderMiddlewareSingleUpdate(text string) iter.Seq2[*agent.ResponseUpdate, error] {
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: text}}}, nil)
@@ -196,26 +225,48 @@ func TestContextProvider_Invoking_PanicsWithoutSourceID(t *testing.T) {
 	_, _, _ = provider.BeforeRun(t.Context(), nil, agent.WithSession(agenttest.CreateSession()))
 }
 
-func TestContextProvider_Invoking_PassesAllMessagesToProvide(t *testing.T) {
-	external := message.NewText("external")
-	history := message.NewText("history")
-	history.SourceID = "other"
-
-	var captured []*message.Message
+func TestContextProvider_Invoking_MarksMessagesReplacedByProvide(t *testing.T) {
+	replacement := message.NewText("replacement")
 	provider := &agent.ContextProvider{
 		SourceID: "ctx",
 		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
-			captured = messages
+			messages[0] = replacement
 			return messages, options, nil
 		},
 	}
 
-	_, _, err := provider.BeforeRun(t.Context(), []*message.Message{external, history}, agent.WithSession(agenttest.CreateSession()))
+	messages, _, err := provider.BeforeRun(t.Context(), []*message.Message{message.NewText("request")}, agent.WithSession(agenttest.CreateSession()))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(captured) != 2 || captured[0] != external || captured[1] != history {
-		t.Fatal("expected Provide to receive all input messages by default")
+	if len(messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(messages))
+	}
+	if messages[0] == replacement {
+		t.Fatal("expected replaced message to be cloned")
+	}
+	if messages[0].Source != (message.Source{Type: agent.SourceTypeContextProvider, ID: "ctx"}) {
+		t.Fatalf("replaced message source = %#v, want context provider source", messages[0].Source)
+	}
+}
+
+func TestContextProvider_Invoking_HonorsNilProvideOutputs(t *testing.T) {
+	provider := &agent.ContextProvider{
+		SourceID: "ctx",
+		Provide: func(context.Context, []*message.Message, ...agent.Option) ([]*message.Message, []agent.Option, error) {
+			return nil, nil, nil
+		},
+	}
+
+	messages, options, err := provider.BeforeRun(t.Context(), []*message.Message{message.NewText("r1")}, agent.WithSession(agenttest.CreateSession()))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if messages != nil {
+		t.Fatalf("expected nil messages returned by Provide to be honored, got %v", messageStrings(messages))
+	}
+	if options != nil {
+		t.Fatalf("expected nil options returned by Provide to be honored, got %d", len(options))
 	}
 }
 
@@ -258,8 +309,8 @@ func TestContextProvider_Invoking_ReturnsProvidedMessagesAndSetsSourceID(t *test
 	if messages[1] == provided {
 		t.Fatal("expected provided message to be cloned")
 	}
-	if messages[1].SourceID != "ctx" {
-		t.Fatalf("expected SourceID=ctx, got %q", messages[1].SourceID)
+	if messages[1].Source.ID != "ctx" {
+		t.Fatalf("expected SourceID=ctx, got %q", messages[1].Source.ID)
 	}
 }
 
@@ -287,8 +338,8 @@ func TestContextProvider_Invoking_SetsSourceIDOnPrependedMessages(t *testing.T) 
 	if messages[0] == provided {
 		t.Fatal("expected prepended message to be cloned")
 	}
-	if messages[0].SourceID != "ctx" {
-		t.Fatalf("expected SourceID=ctx, got %q", messages[0].SourceID)
+	if messages[0].Source.ID != "ctx" {
+		t.Fatalf("expected SourceID=ctx, got %q", messages[0].Source.ID)
 	}
 	if messages[1] != request {
 		t.Fatal("expected original message to be preserved")
@@ -310,8 +361,8 @@ func TestContextProvider_Invoking_UsesCustomSourceID(t *testing.T) {
 	if len(messages) != 1 {
 		t.Fatalf("expected 1 provided message, got %d", len(messages))
 	}
-	if messages[0].SourceID != "CustomContextSource" {
-		t.Fatalf("expected custom source ID, got %q", messages[0].SourceID)
+	if messages[0].Source.ID != "CustomContextSource" {
+		t.Fatalf("expected custom source ID, got %q", messages[0].Source.ID)
 	}
 }
 
@@ -325,10 +376,13 @@ func TestContextProvider_Invoked_PanicsWithoutSourceID(t *testing.T) {
 	_ = provider.AfterRun(t.Context(), nil, nil, agent.WithSession(agenttest.CreateSession()))
 }
 
-func TestContextProvider_Invoked_CallsStoreAndExcludesSameProviderRequestMessagesByDefault(t *testing.T) {
+func TestContextProvider_Invoked_CallsStoreAndIncludesExternalRequestMessagesByDefault(t *testing.T) {
 	req1 := message.NewText("request1")
+	req1.Source.ID = "ctx"
 	req2 := message.NewText("request2")
-	req2.SourceID = "ctx"
+	req2.Source = message.Source{Type: agent.SourceTypeContextProvider, ID: "ctx"}
+	req3 := message.NewText("request3")
+	req3.Source = message.Source{Type: agent.SourceTypeHistoryProvider, ID: "history"}
 	resp := message.NewText("response")
 
 	called := false
@@ -345,7 +399,7 @@ func TestContextProvider_Invoked_CallsStoreAndExcludesSameProviderRequestMessage
 		},
 	}
 
-	err := provider.AfterRun(t.Context(), []*message.Message{req1, req2}, []*message.Message{resp}, agent.WithSession(agenttest.CreateSession()))
+	err := provider.AfterRun(t.Context(), []*message.Message{req1, req2, req3}, []*message.Message{resp}, agent.WithSession(agenttest.CreateSession()))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -353,7 +407,7 @@ func TestContextProvider_Invoked_CallsStoreAndExcludesSameProviderRequestMessage
 		t.Fatal("expected Store to be called")
 	}
 	if len(storedRequest) != 1 || storedRequest[0] != req1 {
-		t.Fatal("expected default request filter to exclude same-provider messages")
+		t.Fatal("expected default request filter to keep only external messages")
 	}
 	if len(storedResponse) != 1 || storedResponse[0] != resp {
 		t.Fatal("expected response messages to pass through unchanged")
@@ -405,7 +459,7 @@ func TestContextProvider_InvokingContext_ReturnsProvidedFields(t *testing.T) {
 	if messages[1].String() != "provided" {
 		t.Fatal("expected provided message to be appended")
 	}
-	if messages[1].SourceID != "ctx" {
+	if messages[1].Source.ID != "ctx" {
 		t.Fatal("expected provided message to be source-stamped with provider SourceID")
 	}
 	tools := slices.Collect(agent.AllOptions(options, agent.WithTool))

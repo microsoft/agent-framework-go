@@ -365,7 +365,7 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 			}
 		}
 
-		if runContextProviders || continuationToken != "" && len(a.contextProviders) > 0 {
+		if runErr == nil && (runContextProviders || continuationToken != "" && len(a.contextProviders) > 0) {
 			var contextStoreResponseMessages []*message.Message
 			if continuationToken != "" {
 				continuationResponse := responseFromUpdates(continuationUpdates)
