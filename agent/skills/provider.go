@@ -58,6 +58,13 @@ type ContextProviderOptions struct {
 	// When empty, a default template is used.
 	//
 	// The template must contain {skills}.
+	//
+	// Cross-language note: the Python SkillsProvider additionally treats
+	// {resource_instructions} and {runner_instructions} as optional
+	// placeholders in custom templates, substituting built-in guidance when
+	// present and silently omitting them when absent.  Go (aligned with .NET)
+	// does not substitute those tokens — they pass through literally if
+	// included in a custom template.
 	SkillsInstructionPrompt string
 
 	// ScriptApproval marks the run_skill_script tool as requiring approval.
