@@ -383,7 +383,7 @@ func TestFileScript_HasDefaultParametersSchema(t *testing.T) {
 	}
 }
 
-func TestFileSkill_WithScripts_ContentIncludesScriptSchemasBlock(t *testing.T) {
+func TestFileSkill_WithScripts_ContentIncludesAvailableScriptsBlock(t *testing.T) {
 	root := t.TempDir()
 	createSkillDir(t, root, "schema-content-skill", "A test skill", "Instructions here.")
 	createRelativeFile(t, filepath.Join(root, "schema-content-skill"), "build.sh", "echo build")
@@ -402,17 +402,20 @@ func TestFileSkill_WithScripts_ContentIncludesScriptSchemasBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(content, "<script_schemas>") {
-		t.Fatalf("expected <script_schemas> block in content, got: %s", content)
+	if !strings.Contains(content, "<available_scripts>") {
+		t.Fatalf("expected <available_scripts> block in content, got: %s", content)
 	}
-	if !strings.Contains(content, `<schema script="build.sh">`) {
-		t.Fatalf("expected <schema script=\"build.sh\"> in content, got: %s", content)
+	if !strings.Contains(content, `<script name="build.sh">`) {
+		t.Fatalf("expected <script name=\"build.sh\"> in content, got: %s", content)
 	}
-	if !strings.Contains(content, `<schema script="deploy.sh">`) {
-		t.Fatalf("expected <schema script=\"deploy.sh\"> in content, got: %s", content)
+	if !strings.Contains(content, `<script name="deploy.sh">`) {
+		t.Fatalf("expected <script name=\"deploy.sh\"> in content, got: %s", content)
 	}
-	if !strings.Contains(content, "</script_schemas>") {
-		t.Fatalf("expected </script_schemas> in content, got: %s", content)
+	if !strings.Contains(content, "<parameters_schema>") {
+		t.Fatalf("expected <parameters_schema> in content, got: %s", content)
+	}
+	if !strings.Contains(content, "</available_scripts>") {
+		t.Fatalf("expected </available_scripts> in content, got: %s", content)
 	}
 }
 
@@ -437,12 +440,15 @@ func TestFileSkill_WithScripts_ContentStartsWithOriginalSkillMd(t *testing.T) {
 	if !strings.Contains(content, "Original instructions.") {
 		t.Fatalf("expected original SKILL.md content to be preserved, got: %s", content)
 	}
-	if !strings.Contains(content, "<script_schemas>") {
-		t.Fatalf("expected <script_schemas> block appended, got: %s", content)
+	if !strings.Contains(content, "<available_resources />") {
+		t.Fatalf("expected empty <available_resources /> block appended, got: %s", content)
+	}
+	if !strings.Contains(content, "<available_scripts>") {
+		t.Fatalf("expected <available_scripts> block appended, got: %s", content)
 	}
 }
 
-func TestFileSkill_WithoutScripts_ContentDoesNotIncludeScriptSchemasBlock(t *testing.T) {
+func TestFileSkill_WithoutScripts_ContentIncludesEmptyAvailableScriptsBlock(t *testing.T) {
 	root := t.TempDir()
 	createSkillDir(t, root, "no-script-content-skill", "A test skill", "Instructions here.")
 	source := fsskills.NewSource(os.DirFS(root))
@@ -455,8 +461,8 @@ func TestFileSkill_WithoutScripts_ContentDoesNotIncludeScriptSchemasBlock(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(content, "<script_schemas>") {
-		t.Fatalf("expected no <script_schemas> block when skill has no scripts, got: %s", content)
+	if !strings.Contains(content, "<available_scripts />") {
+		t.Fatalf("expected empty <available_scripts /> block when skill has no scripts, got: %s", content)
 	}
 }
 

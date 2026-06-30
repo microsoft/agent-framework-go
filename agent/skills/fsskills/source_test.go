@@ -53,6 +53,52 @@ func TestFileSource_NoResourceFiles_ReturnsEmptyResources(t *testing.T) {
 	}
 }
 
+func TestFileSkill_WithoutResources_ContentIncludesEmptyAvailableResourcesBlock(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "no-resource-content", "A skill", "No resources here.")
+	source := fsskills.NewSource(os.DirFS(root))
+
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := loaded[0].GetContent(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(content, "<available_resources />") {
+		t.Fatalf("expected empty <available_resources /> block when skill has no resources, got: %s", content)
+	}
+}
+
+func TestFileSkill_WithResources_ContentIncludesAvailableResourcesBlock(t *testing.T) {
+	root := t.TempDir()
+	createSkillDirWithResource(t, root, "resource-content", "A skill", "Use these resources.", "references/doc.md", "Document content.")
+	createRelativeFile(t, filepath.Join(root, "resource-content"), "assets/config.json", "{}")
+	source := fsskills.NewSource(os.DirFS(root))
+
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := loaded[0].GetContent(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(content, "<available_resources>") {
+		t.Fatalf("expected <available_resources> block in content, got: %s", content)
+	}
+	if !strings.Contains(content, `<resource name="assets/config.json"/>`) {
+		t.Fatalf("expected assets/config.json resource in content, got: %s", content)
+	}
+	if !strings.Contains(content, `<resource name="references/doc.md"/>`) {
+		t.Fatalf("expected references/doc.md resource in content, got: %s", content)
+	}
+	if !strings.Contains(content, "</available_resources>") {
+		t.Fatalf("expected </available_resources> in content, got: %s", content)
+	}
+}
+
 func TestFileSource_NestedSkillDirectory_DiscoveredWithinDepthLimit(t *testing.T) {
 	root := t.TempDir()
 	createSkillDir(t, filepath.Join(root, "level1"), "nested-skill", "Nested", "Nested body.")
