@@ -121,30 +121,7 @@ func (p *provider) run(ctx context.Context, messages []*message.Message, options
 				yield(nil, err)
 				return
 			}
-			var update *agent.ResponseUpdate
-			var done bool
-			var eventErr error
-			switch data := event.Data.(type) {
-			case *copilot.AssistantMessageDeltaData:
-				update = p.assistantMessageDeltaUpdate(event, data)
-			case *copilot.AssistantMessageData:
-				update = p.assistantMessageUpdate(event, data, isStreaming)
-			case *copilot.ToolExecutionStartData:
-				update = p.toolExecutionStartUpdate(event, data)
-			case *copilot.ToolExecutionCompleteData:
-				update = p.toolExecutionCompleteUpdate(event, data)
-			case *copilot.AssistantUsageData:
-				update = p.assistantUsageUpdate(event, data)
-			case *copilot.SessionIdleData:
-				update = rawEventUpdate(event)
-				done = true
-			case *copilot.SessionErrorData:
-				update = rawEventUpdate(event)
-				done = true
-				eventErr = fmt.Errorf("session error: %s", sessionErrorMessage(data))
-			default:
-				update = rawEventUpdate(event)
-			}
+			update, done, eventErr := p.responseUpdateForSessionEvent(event, isStreaming)
 			if update != nil {
 				if !yield(update, nil) {
 					return
@@ -158,6 +135,27 @@ func (p *provider) run(ctx context.Context, messages []*message.Message, options
 				return
 			}
 		}
+	}
+}
+
+func (p *provider) responseUpdateForSessionEvent(event copilot.SessionEvent, isStreaming bool) (*agent.ResponseUpdate, bool, error) {
+	switch data := event.Data.(type) {
+	case *copilot.AssistantMessageDeltaData:
+		return p.assistantMessageDeltaUpdate(event, data), false, nil
+	case *copilot.AssistantMessageData:
+		return p.assistantMessageUpdate(event, data, isStreaming), false, nil
+	case *copilot.ToolExecutionStartData:
+		return p.toolExecutionStartUpdate(event, data), false, nil
+	case *copilot.ToolExecutionCompleteData:
+		return p.toolExecutionCompleteUpdate(event, data), false, nil
+	case *copilot.AssistantUsageData:
+		return p.assistantUsageUpdate(event, data), false, nil
+	case *copilot.SessionIdleData:
+		return rawEventUpdate(event), true, nil
+	case *copilot.SessionErrorData:
+		return rawEventUpdate(event), true, fmt.Errorf("session error: %s", sessionErrorMessage(data))
+	default:
+		return rawEventUpdate(event), false, nil
 	}
 }
 
