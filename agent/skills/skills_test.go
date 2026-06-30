@@ -306,7 +306,7 @@ func TestProvider_CustomPromptTemplate(t *testing.T) {
 	root := t.TempDir()
 	createSkillDir(t, root, "custom-prompt-skill", "Custom prompt", "Body.")
 
-	p := newProviderWithConfig(t, nil, &skills.ContextProviderOptions{SkillsInstructionPrompt: "Custom template:\n{skills}\n{resource_instructions}\n{script_instructions}"}, root)
+	p := newProviderWithConfig(t, nil, &skills.ContextProviderOptions{SkillsInstructionPrompt: "Custom template:\n{skills}"}, root)
 
 	instructions, _ := captureProviderContext(t, p)
 	if !strings.HasPrefix(instructions, "Custom template:") {
