@@ -11,7 +11,7 @@ network:
       - go
 on:
    schedule:
-   - cron: daily
+   - cron: "19 5 * * 1-5"
    workflow_dispatch:
 checkout:
    fetch-depth: 0
@@ -87,7 +87,7 @@ Use `upstream-agent-framework/main` as the upstream reference. For example, insp
 
 Inspect recent upstream .NET commits and merged upstream PRs from a practical recent window. Use the commits themselves as the source of truth for choosing the inspection scope.
 
-Before doing new work, check for existing open Go SDK PRs created by the porting workflows with the `[dotnet-port-api]` or `[dotnet-port-fixes]` title prefix. If an open PR already covers the same upstream commit range or the same misalignment, do not create a duplicate PR; call `noop` with a concise explanation and include the existing PR link.
+Before doing new work, check existing Go SDK issues and pull requests — both open and recently closed — created by the porting workflows with the `[dotnet-port-api]` or `[dotnet-port-fixes]` title prefix. These workflows run with read-only permissions and report results as tracking issues that link the proposed PR, so search issues (not only pull requests). If either workflow has already addressed the same upstream commit, the same .NET PR, or the same Go package or behavior — whether through an upstream port or a Go-misalignment fallback — do not duplicate it; select a different candidate or call `noop` with a concise explanation that links the existing issue or PR. When in doubt about whether a candidate belongs to this workflow or to `[dotnet-port-fixes]`, apply the litmus test above and defer rather than risk a duplicate.
 
 ## Decision Process
 
@@ -186,6 +186,7 @@ Prioritize changes that introduce or change public API or features mapping to ex
 Own the full selection decision:
 
 - Validate candidate applicability with targeted inspection of the upstream .NET files and nearby Go implementation.
+- Deduplicate against the sibling `[dotnet-port-fixes]` workflow: skip any candidate — including a Go-misalignment fallback — already covered by an open or recently closed issue or PR from either porting workflow (results are reported as prefixed tracking issues, so search issues too), and prefer candidates that clearly fall on this workflow's side of the litmus test.
 - When multiple relevant opportunities exist, choose the smallest coherent public-API or feature-parity improvement before larger feature work.
 - If there is nothing new and relevant to port, inspect the Go SDK for one coherent misalignment with the current upstream .NET implementation and recommend that instead.
 - Keep each recommended PR small enough to review. Prefer one API addition, feature alignment, or option/capability parity improvement per PR.
