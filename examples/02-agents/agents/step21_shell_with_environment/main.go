@@ -15,8 +15,8 @@ import (
 	"os"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/provider/openaiagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
+	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/shelltool"
 	"github.com/openai/openai-go/v3"
@@ -80,9 +80,9 @@ func runShellEnvironmentDemo(ctx context.Context, client openai.Client, mode she
 	}()
 
 	envProvider := shelltool.NewEnvironmentProvider(shell, shelltool.EnvironmentProviderConfig{})
-	a := openaiagent.NewChatCompletions(
+	a := openaiprovider.NewAgent(
 		client,
-		openaiagent.Config{
+		openaiprovider.AgentConfig{
 			Model:        deployment,
 			Instructions: instructions,
 			Config: agent.Config{

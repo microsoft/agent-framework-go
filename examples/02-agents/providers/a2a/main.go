@@ -11,8 +11,8 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2aclient/agentcard"
 	a2agrpc "github.com/a2aproject/a2a-go/v2/a2agrpc/v1"
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/provider/a2aagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
+	"github.com/microsoft/agent-framework-go/provider/a2aprovider"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -43,9 +43,9 @@ func main() {
 	}
 
 	// Create A2A agent.
-	a := a2aagent.New(
+	a := a2aprovider.NewAgent(
 		client,
-		a2aagent.Config{
+		a2aprovider.AgentConfig{
 			Config: agent.Config{
 				Name:        "Joker",
 				Middlewares: []agent.Middleware{logger}, // for logging agent interactions

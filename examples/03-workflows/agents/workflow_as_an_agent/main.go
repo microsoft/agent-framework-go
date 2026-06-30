@@ -6,9 +6,8 @@ import (
 	"context"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/hosting/workflowhosting"
-	"github.com/microsoft/agent-framework-go/agent/provider/workflowprovider"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
+	"github.com/microsoft/agent-framework-go/workflow/agentworkflow"
 )
 
 var logger = demo.NewLogger(
@@ -21,11 +20,11 @@ func main() {
 	french := demo.NewAzureChatAgent("French", "Respond in French. Keep the answer concise.", logger)
 	english := demo.NewAzureChatAgent("English", "Respond in English. Keep the answer concise.", logger)
 
-	wf, err := workflowhosting.NewConcurrentWorkflowBuilder(french, english).WithName("bilingual-workflow").Build()
+	wf, err := agentworkflow.NewConcurrentWorkflowBuilder(french, english).WithName("bilingual-workflow").Build()
 	if err != nil {
 		demo.Panic(err)
 	}
-	wfAgent, err := workflowprovider.New(wf, workflowprovider.Config{
+	wfAgent, err := agentworkflow.NewAgent(wf, agentworkflow.AgentConfig{
 		IncludeOutputsInResponse: true,
 		Config: agent.Config{
 			Name: "BilingualWorkflowAgent",

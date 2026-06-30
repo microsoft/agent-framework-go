@@ -18,7 +18,7 @@ const (
 	moduleVersion = "v0.1.0"
 )
 
-// ServiceName is the [cloud.ServiceName] for Azure AI Foundry Projects.
+// ServiceName is the [cloud.ServiceName] for Microsoft Foundry Projects.
 const ServiceName cloud.ServiceName = moduleName
 
 func init() {

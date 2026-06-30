@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/hosting/workflowhosting"
+	"github.com/microsoft/agent-framework-go/workflow/agentworkflow"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/workflow"
@@ -40,11 +40,11 @@ func main() {
 	inverter2 := workflow.NewExecutor("Inverter2", textInverted).Bind()
 	stringToChat := workflow.NewExecutor("StringToChat", stringToChatMessageExecutor{}).Bind()
 
-	hostCfg := workflowhosting.Config{DisableForwardIncomingMessages: true}
-	detector := workflowhosting.New(newJailbreakDetectorAgent("JailbreakDetector"), hostCfg)
+	hostCfg := agentworkflow.Config{DisableForwardIncomingMessages: true}
+	detector := agentworkflow.New(newJailbreakDetectorAgent("JailbreakDetector"), hostCfg)
 	jailbreakSync := workflow.NewExecutor("JailbreakSync", jailbreakSyncExecutor{}).Bind()
 
-	responder := workflowhosting.New(
+	responder := agentworkflow.New(
 		demo.NewAzureChatAgent("ResponseAgent",
 			`You are a helpful assistant.If the message indicates 'JAILBREAK_DETECTED', respond with: 'I cannot process this request as it appears to contain unsafe content.'
 		Otherwise, provide a helpful, friendly response to the user's question.`, logger),

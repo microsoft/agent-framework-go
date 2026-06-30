@@ -11,9 +11,9 @@ import (
 	"os"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/opentelemetry"
-	"github.com/microsoft/agent-framework-go/agent/provider/openaiagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
+	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
+	"github.com/microsoft/agent-framework-go/provider/otelprovider"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
 
@@ -57,18 +57,18 @@ func main() {
 	otellib.SetTracerProvider(tp)
 
 	// Create Azure OpenAI agent with OpenTelemetry instrumentation.
-	a := openaiagent.NewChatCompletions(
+	a := openaiprovider.NewAgent(
 		openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
 			azure.WithTokenCredential(token),
 		),
-		openaiagent.Config{
+		openaiprovider.AgentConfig{
 			Model:        deployment,
 			Instructions: "You are good at telling jokes.",
 			Config: agent.Config{
 				Name: "Joker",
 				Middlewares: []agent.Middleware{
-					opentelemetry.New(opentelemetry.Config{}), // for OpenTelemetry observability
+					otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{}), // for OpenTelemetry observability
 					logger, // for logging agent interactions
 				},
 			},

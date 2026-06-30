@@ -6,7 +6,7 @@ import (
 	"context"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/hosting/workflowhosting"
+	"github.com/microsoft/agent-framework-go/workflow/agentworkflow"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/workflow"
@@ -27,7 +27,7 @@ func main() {
 		demo.NewAzureChatAgent("fact_checker", "Review the prior essay. Identify supported, questionable, and false claims in concise bullets.", logger),
 		demo.NewAzureChatAgent("reporter", "Write a final single-paragraph summary using only claims that survived the fact check.", logger),
 	}
-	wf, err := workflowhosting.NewSequentialWorkflowBuilder(agents...).WithName("multi-service-workflow").Build()
+	wf, err := agentworkflow.NewSequentialWorkflowBuilder(agents...).WithName("multi-service-workflow").Build()
 	if err != nil {
 		demo.Panic(err)
 	}

@@ -17,9 +17,9 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/hosting/a2ahosting"
-	"github.com/microsoft/agent-framework-go/agent/provider/openaiagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
+	"github.com/microsoft/agent-framework-go/provider/a2aprovider"
+	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 	"github.com/openai/openai-go/v3"
@@ -121,15 +121,17 @@ func main() {
 
 	cfg, card := buildAgent(*agentType, deployment)
 	cfg.Middlewares = append(cfg.Middlewares, logger)
-	hostAgent := openaiagent.NewChatCompletions(oclient, cfg)
+	hostAgent := openaiprovider.NewAgent(oclient, cfg)
 
 	card.SupportedInterfaces = []*a2a.AgentInterface{
 		a2a.NewAgentInterface(url, a2a.TransportProtocolJSONRPC),
 	}
 	mux := http.NewServeMux()
-	mux.Handle("/", a2ahosting.NewJSONRPCHandler(a2ahosting.ExecutorConfig{
-		Agent: hostAgent,
-	}, a2asrv.WithExtendedAgentCard(card)))
+	requestHandler := a2asrv.NewHandler(
+		a2aprovider.NewExecutor(hostAgent, a2aprovider.ExecutorConfig{}),
+		a2asrv.WithExtendedAgentCard(card),
+	)
+	mux.Handle("/", a2asrv.NewJSONRPCHandler(requestHandler))
 	mux.Handle(a2asrv.WellKnownAgentCardPath, a2asrv.NewStaticAgentCardHandler(card))
 
 	log.Printf("A2A server listening on :%d for agentType=%s", *port, strings.ToLower(*agentType))
@@ -138,9 +140,9 @@ func main() {
 	}
 }
 
-func buildAgent(agentType, model string) (openaiagent.Config, *a2a.AgentCard) {
+func buildAgent(agentType, model string) (openaiprovider.AgentConfig, *a2a.AgentCard) {
 	t := strings.ToUpper(strings.TrimSpace(agentType))
-	cfg := openaiagent.Config{Model: model}
+	cfg := openaiprovider.AgentConfig{Model: model}
 	card := &a2a.AgentCard{
 		Version:            "1.0.0",
 		DefaultInputModes:  []string{"text"},

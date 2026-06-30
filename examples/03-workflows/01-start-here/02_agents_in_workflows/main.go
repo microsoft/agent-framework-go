@@ -7,7 +7,7 @@ import (
 	"fmt"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/hosting/workflowhosting"
+	"github.com/microsoft/agent-framework-go/workflow/agentworkflow"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/workflow"
@@ -21,12 +21,12 @@ var logger = demo.NewLogger(
 )
 
 func main() {
-	cfg := workflowhosting.Config{
+	cfg := agentworkflow.Config{
 		DisableForwardIncomingMessages: true,
 	}
-	french := workflowhosting.New(newTranslationAgent("French"), cfg)
-	spanish := workflowhosting.New(newTranslationAgent("Spanish"), cfg)
-	english := workflowhosting.New(newTranslationAgent("English"), cfg)
+	french := agentworkflow.New(newTranslationAgent("French"), cfg)
+	spanish := agentworkflow.New(newTranslationAgent("Spanish"), cfg)
+	english := agentworkflow.New(newTranslationAgent("English"), cfg)
 
 	wf, err := workflow.NewBuilder(french).
 		AddEdge(french, spanish).

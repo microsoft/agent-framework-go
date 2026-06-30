@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/provider/openaiagent"
+	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
 )
@@ -35,9 +35,9 @@ func NewAzureOpenAIClient() openai.Client {
 }
 
 func NewAzureChatAgent(name string, instructions string, middlewares ...agent.Middleware) *agent.Agent {
-	return openaiagent.NewChatCompletions(
+	return openaiprovider.NewAgent(
 		NewAzureOpenAIClient(),
-		openaiagent.Config{
+		openaiprovider.AgentConfig{
 			Model:        Deployment,
 			Instructions: instructions,
 			Config: agent.Config{

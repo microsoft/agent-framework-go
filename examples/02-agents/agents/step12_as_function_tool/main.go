@@ -11,8 +11,8 @@ import (
 	"os"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/provider/openaiagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
+	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/agenttool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
@@ -44,12 +44,12 @@ func main() {
 	token := demo.AzureTokenCredential()
 
 	// Create Azure OpenAI agent with the function tool.
-	weatherAgent := openaiagent.NewChatCompletions(
+	weatherAgent := openaiprovider.NewAgent(
 		openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
 			azure.WithTokenCredential(token),
 		),
-		openaiagent.Config{
+		openaiprovider.AgentConfig{
 			Model:        deployment,
 			Instructions: "You answer questions about the weather.",
 			Config: agent.Config{
@@ -63,12 +63,12 @@ func main() {
 
 	// Create the main Azure OpenAI agent with the weather agent as a function tool.
 	// Note that the main agent is instructed to respond in French.
-	a := openaiagent.NewChatCompletions(
+	a := openaiprovider.NewAgent(
 		openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
 			azure.WithTokenCredential(token),
 		),
-		openaiagent.Config{
+		openaiprovider.AgentConfig{
 			Model:        deployment,
 			Instructions: "You are a helpful assistant who responds in French.",
 			Config: agent.Config{

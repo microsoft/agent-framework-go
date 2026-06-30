@@ -14,16 +14,16 @@ import (
 
 	aguiSSEClient "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/client/sse"
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/provider/aguiagent"
 	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/provider/aguiprovider"
 )
 
 var serverURL = cmp.Or(os.Getenv("AGUI_SERVER_URL"), "http://localhost:8888")
 
 func main() {
-	a := aguiagent.New(
+	a := aguiprovider.NewAgent(
 		aguiSSEClient.NewClient(aguiSSEClient.Config{Endpoint: serverURL}),
-		aguiagent.Config{},
+		aguiprovider.AgentConfig{},
 	)
 
 	session, err := a.CreateSession(context.Background())

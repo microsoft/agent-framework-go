@@ -6,8 +6,8 @@ import (
 	"context"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/provider/openaiagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
+	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
 	"github.com/openai/openai-go/v3"
 )
 
@@ -19,9 +19,9 @@ var logger = demo.NewLogger(
 
 func main() {
 	// Create OpenAI agent.
-	a := openaiagent.NewChatCompletions(
+	a := openaiprovider.NewAgent(
 		openai.NewClient(),
-		openaiagent.Config{
+		openaiprovider.AgentConfig{
 			Model:        "gpt-4o-mini",
 			Instructions: "You are good at telling jokes.",
 			Config: agent.Config{

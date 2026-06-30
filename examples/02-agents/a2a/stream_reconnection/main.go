@@ -10,8 +10,8 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/a2aproject/a2a-go/v2/a2aclient/agentcard"
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/provider/a2aagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
+	"github.com/microsoft/agent-framework-go/provider/a2aprovider"
 )
 
 var cardURL = cmp.Or(os.Getenv("A2A_AGENT_HOST"), "http://127.0.0.1:5000")
@@ -35,9 +35,9 @@ func main() {
 		demo.Panicf("failed to create A2A client: %v", err)
 	}
 
-	remoteAgent := a2aagent.New(
+	remoteAgent := a2aprovider.NewAgent(
 		client,
-		a2aagent.Config{
+		a2aprovider.AgentConfig{
 			Config: agent.Config{
 				Name:        cmp.Or(card.Name, "RemoteA2AAgent"),
 				Description: card.Description,

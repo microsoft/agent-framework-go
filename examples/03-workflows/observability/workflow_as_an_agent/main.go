@@ -6,10 +6,9 @@ import (
 	"context"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/hosting/workflowhosting"
-	"github.com/microsoft/agent-framework-go/agent/provider/workflowprovider"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/workflow"
+	"github.com/microsoft/agent-framework-go/workflow/agentworkflow"
 	workflowotel "github.com/microsoft/agent-framework-go/workflow/observability/opentelemetry"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
@@ -36,8 +35,8 @@ func main() {
 
 	french := demo.NewAzureChatAgent("French", "Answer in French, concisely.", logger)
 	english := demo.NewAzureChatAgent("English", "Answer in English, concisely.", logger)
-	frenchBinding := workflowhosting.New(french, workflowhosting.Config{})
-	englishBinding := workflowhosting.New(english, workflowhosting.Config{})
+	frenchBinding := agentworkflow.New(french, agentworkflow.Config{})
+	englishBinding := agentworkflow.New(english, agentworkflow.Config{})
 	wf, err := workflow.NewBuilder(frenchBinding).
 		AddEdge(frenchBinding, englishBinding).
 		WithOutputFrom(englishBinding).
@@ -47,7 +46,7 @@ func main() {
 		demo.Panic(err)
 	}
 
-	wfAgent, err := workflowprovider.New(wf, workflowprovider.Config{IncludeOutputsInResponse: true})
+	wfAgent, err := agentworkflow.NewAgent(wf, agentworkflow.AgentConfig{IncludeOutputsInResponse: true})
 	if err != nil {
 		demo.Panic(err)
 	}

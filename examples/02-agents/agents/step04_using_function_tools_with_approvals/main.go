@@ -9,9 +9,9 @@ import (
 	"os"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/provider/openaiagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 	"github.com/openai/openai-go/v3"
@@ -43,12 +43,12 @@ func main() {
 
 	// Create Azure OpenAI agent.
 	// Note that we are wrapping the function tool with tool.ApprovalRequiredFunc to require user approval before invoking it.
-	a := openaiagent.NewChatCompletions(
+	a := openaiprovider.NewAgent(
 		openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
 			azure.WithTokenCredential(token),
 		),
-		openaiagent.Config{
+		openaiprovider.AgentConfig{
 			Model:        deployment,
 			Instructions: "You are a helpful assistant",
 			Config: agent.Config{

@@ -12,8 +12,8 @@ import (
 	copilot "github.com/github/copilot-sdk/go"
 	"github.com/github/copilot-sdk/go/rpc"
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/provider/copilotagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
+	"github.com/microsoft/agent-framework-go/provider/copilotprovider"
 )
 
 var logger = demo.NewLogger(
@@ -32,9 +32,9 @@ func main() {
 	}
 	defer func() { _ = copilotClient.Stop() }()
 
-	a := copilotagent.New(
+	a := copilotprovider.NewAgent(
 		copilotClient,
-		copilotagent.Config{
+		copilotprovider.AgentConfig{
 			SessionConfig: &copilot.SessionConfig{
 				OnPermissionRequest: promptPermission,
 			},

@@ -17,10 +17,10 @@ import (
 	"strings"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/provider/openaiagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/message/messagefilter"
+	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
@@ -43,12 +43,12 @@ func main() {
 	token := demo.AzureTokenCredential()
 
 	// Create Azure OpenAI agent with multiple context providers.
-	a := openaiagent.NewChatCompletions(
+	a := openaiprovider.NewAgent(
 		openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
 			azure.WithTokenCredential(token),
 		),
-		openaiagent.Config{
+		openaiprovider.AgentConfig{
 			Model: deployment,
 			Instructions: `You are a helpful personal assistant.
 You manage a TODO list for the user. When the user has completed one of the tasks it can be removed from the TODO list. Only provide the list of TODO items if asked.

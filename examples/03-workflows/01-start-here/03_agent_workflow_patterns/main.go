@@ -9,7 +9,7 @@ import (
 	"os"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/hosting/workflowhosting"
+	"github.com/microsoft/agent-framework-go/workflow/agentworkflow"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/workflow"
@@ -84,12 +84,12 @@ func buildPattern(pattern string) (*workflow.Workflow, error) {
 
 	switch pattern {
 	case "sequential":
-		return workflowhosting.NewSequentialWorkflowBuilder(agents...).Build()
+		return agentworkflow.NewSequentialWorkflowBuilder(agents...).Build()
 	case "concurrent":
-		return workflowhosting.NewConcurrentWorkflowBuilder(agents...).Build()
+		return agentworkflow.NewConcurrentWorkflowBuilder(agents...).Build()
 	case "groupchat":
-		return workflowhosting.NewGroupChatWorkflowBuilder(func(agents []*agent.Agent) *workflowhosting.GroupChatManager {
-			return workflowhosting.NewRoundRobinGroupChatManager(agents, workflowhosting.RoundRobinGroupChatOptions{MaximumIterationCount: 5})
+		return agentworkflow.NewGroupChatWorkflowBuilder(func(agents []*agent.Agent) *agentworkflow.GroupChatManager {
+			return agentworkflow.NewRoundRobinGroupChatManager(agents, agentworkflow.RoundRobinGroupChatOptions{MaximumIterationCount: 5})
 		}, agents...).
 			WithName("Translation Round Robin Workflow").
 			WithDescription("A workflow where three translation agents take turns responding in a round-robin fashion.").

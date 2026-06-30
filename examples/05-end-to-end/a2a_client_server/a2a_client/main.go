@@ -12,9 +12,9 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/a2aproject/a2a-go/v2/a2aclient/agentcard"
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/provider/a2aagent"
-	"github.com/microsoft/agent-framework-go/agent/provider/openaiagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
+	"github.com/microsoft/agent-framework-go/provider/a2aprovider"
+	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/agenttool"
 	"github.com/openai/openai-go/v3"
@@ -53,9 +53,9 @@ func main() {
 			demo.Panicf("failed to create A2A client for %s: %v", url, err)
 		}
 
-		remoteAgent := a2aagent.New(
+		remoteAgent := a2aprovider.NewAgent(
 			client,
-			a2aagent.Config{
+			a2aprovider.AgentConfig{
 				Config: agent.Config{
 					Name:        card.Name,
 					Description: card.Description,
@@ -65,12 +65,12 @@ func main() {
 		tools = append(tools, agenttool.New(remoteAgent, agenttool.Config{}))
 	}
 
-	host := openaiagent.NewChatCompletions(
+	host := openaiprovider.NewAgent(
 		openai.NewClient(
 			azure.WithEndpoint(endpoint, apiVersion),
 			azure.WithTokenCredential(token),
 		),
-		openaiagent.Config{
+		openaiprovider.AgentConfig{
 			Model:        deployment,
 			Instructions: "You specialize in handling user queries and using your tools to provide answers.",
 			Config: agent.Config{

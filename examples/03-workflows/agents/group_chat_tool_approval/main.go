@@ -8,10 +8,10 @@ import (
 	"strings"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/hosting/workflowhosting"
-	"github.com/microsoft/agent-framework-go/agent/provider/openaiagent"
+	"github.com/microsoft/agent-framework-go/workflow/agentworkflow"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 	"github.com/microsoft/agent-framework-go/workflow"
@@ -79,7 +79,7 @@ func main() {
 		tool.ApprovalRequiredFunc(deployToProductionTool),
 	)
 
-	wf, err := workflowhosting.NewGroupChatWorkflowBuilder(newDeploymentGroupChatManager, qaEngineer, devopsEngineer).
+	wf, err := agentworkflow.NewGroupChatWorkflowBuilder(newDeploymentGroupChatManager, qaEngineer, devopsEngineer).
 		WithName("Software Deployment Group Chat").
 		Build()
 	if err != nil {
@@ -110,9 +110,9 @@ func main() {
 }
 
 func newDeploymentAgent(name string, instructions string, tools ...tool.Tool) *agent.Agent {
-	return openaiagent.NewChatCompletions(
+	return openaiprovider.NewAgent(
 		demo.NewAzureOpenAIClient(),
-		openaiagent.Config{
+		openaiprovider.AgentConfig{
 			Model:        demo.Deployment,
 			Instructions: instructions,
 			Config: agent.Config{
@@ -124,9 +124,9 @@ func newDeploymentAgent(name string, instructions string, tools ...tool.Tool) *a
 	)
 }
 
-func newDeploymentGroupChatManager(agents []*agent.Agent) *workflowhosting.GroupChatManager {
+func newDeploymentGroupChatManager(agents []*agent.Agent) *agentworkflow.GroupChatManager {
 	manager := &deploymentGroupChatManager{agents: agents}
-	return &workflowhosting.GroupChatManager{
+	return &agentworkflow.GroupChatManager{
 		SelectNextAgent: manager.selectNextAgent,
 		ShouldTerminate: func(_ context.Context, _ []*message.Message, iterationCount int) (bool, error) {
 			return iterationCount >= 4, nil

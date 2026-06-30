@@ -13,8 +13,8 @@ import (
 
 	aguiSSEClient "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/client/sse"
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/provider/aguiagent"
 	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/provider/aguiprovider"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 )
@@ -29,9 +29,9 @@ func main() {
 		return "Amsterdam, Netherlands (52.37°N, 4.90°E)", nil
 	})
 
-	a := aguiagent.New(
+	a := aguiprovider.NewAgent(
 		aguiSSEClient.NewClient(aguiSSEClient.Config{Endpoint: serverURL}),
-		aguiagent.Config{
+		aguiprovider.AgentConfig{
 			Config: agent.Config{
 				Tools: []tool.Tool{frontendTool},
 			},

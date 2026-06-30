@@ -8,8 +8,8 @@ import (
 	"os"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/provider/geminiagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
+	"github.com/microsoft/agent-framework-go/provider/geminiprovider"
 	"google.golang.org/genai"
 )
 
@@ -35,9 +35,9 @@ func main() {
 	}
 
 	// Create Gemini agent.
-	a := geminiagent.New(
+	a := geminiprovider.NewAgent(
 		client,
-		geminiagent.Config{
+		geminiprovider.AgentConfig{
 			Model:        model,
 			Instructions: "You are good at telling jokes.",
 			Config: agent.Config{

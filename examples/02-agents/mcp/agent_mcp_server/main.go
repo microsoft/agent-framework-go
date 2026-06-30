@@ -6,8 +6,8 @@ import (
 	"context"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/provider/openaiagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
+	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
 	"github.com/microsoft/agent-framework-go/tool/mcptool"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/openai/openai-go/v3"
@@ -38,9 +38,9 @@ func main() {
 	}
 
 	// Create the agent with MCP tools.
-	a := openaiagent.NewChatCompletions(
+	a := openaiprovider.NewAgent(
 		openai.NewClient(),
-		openaiagent.Config{
+		openaiprovider.AgentConfig{
 			Model:        "gpt-4o-mini",
 			Instructions: "You are a helpful assistant that can help with microsoft documentation questions.",
 			Config: agent.Config{

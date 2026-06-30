@@ -46,14 +46,14 @@ For a detailed .NET-to-Go feature comparison, see the [.NET and Go SDK feature c
 - **Go Support**: Go packages, examples, and APIs for building agents and workflows in Go.
   - [Go reference](https://pkg.go.dev/github.com/microsoft/agent-framework-go) | [Go examples](./examples/)
 - **Multiple Agent Provider Support**: Support for various LLM and agent providers, with more being added continuously.
-  - [Provider examples](./examples/02-agents/providers/) | [Provider packages](./agent/provider/)
+  - [Provider examples](./examples/02-agents/providers/) | [Provider packages](./provider/)
 - **Middleware**: Flexible middleware for request/response processing, logging, OpenTelemetry, context providers, tool approval, and automatic tool calling.
   - [Agent middleware](./agent/middleware.go) | [Agent harness](./agent/harness/)
 - **Orchestration Patterns & Workflows**: Build multi-agent systems with graph-based workflows supporting sequential, concurrent, group collaboration, conditional routing, subworkflows, checkpointing, streaming, human-in-the-loop, and time-travel patterns. Handoff orchestration is not implemented yet in the Go SDK.
   - [Workflow examples](./examples/03-workflows/) | [Workflow package](./workflow/)
 - **Foundry Hosted Agents (new)**: Not implemented yet in the Go SDK.
 - **Observability**: OpenTelemetry integration for distributed tracing, monitoring, and debugging.
-  - [Agent OpenTelemetry](./agent/opentelemetry/) | [Workflow OpenTelemetry](./workflow/observability/opentelemetry/)
+  - [Agent OpenTelemetry](./provider/otelprovider/) | [Workflow OpenTelemetry](./workflow/observability/opentelemetry/)
 - **Declarative Agents**: Not implemented yet in the Go SDK.
 - **Agent Skills**: Build domain-specific knowledge bases from files, inline definitions, and scripts for agents to discover and use.
   - [Skills examples](./examples/02-agents/skills/) | [Skills package](./agent/skills/)
@@ -113,7 +113,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/microsoft/agent-framework-go/agent/provider/openaiagent"
+	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/openai/openai-go/v3"
@@ -128,13 +128,13 @@ func main() {
 	}
 
 	// Create an Azure OpenAI agent.
-	// Replace <endpoint> and <apiVersion> with your Azure Foundry endpoint and API version.
-	a := openaiagent.NewChatCompletions(
+	// Replace <endpoint> and <apiVersion> with your Microsoft Foundry endpoint and API version.
+	a := openaiprovider.NewAgent(
 		openai.NewClient(
 			azure.WithEndpoint("<endpoint>", "<apiVersion>"),
 			azure.WithTokenCredential(token),
 		),
-		openaiagent.Config{
+		openaiprovider.AgentConfig{
 			Model: "gpt-4o-mini",
 		},
 	)

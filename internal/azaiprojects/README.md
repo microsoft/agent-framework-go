@@ -1,6 +1,6 @@
-# Azure AI Foundry Projects SDK
+# Microsoft Foundry Projects SDK
 
-This package contains a temporary, internal Go SDK for the Azure AI Foundry Projects data-plane APIs used by Agent Framework.
+This package contains a temporary, internal Go SDK for the Microsoft Foundry Projects data-plane APIs used by Agent Framework.
 
 We keep this SDK in-tree because the official Azure SDK for Go does not yet provide the AI Foundry Projects client surface needed by this repository. Once the official SDK supports these APIs, this package should be removed and callers should move back to the official Azure SDK module.
 

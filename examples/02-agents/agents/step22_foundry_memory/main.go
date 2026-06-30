@@ -11,10 +11,10 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/memory/azfoundrymemory"
-	"github.com/microsoft/agent-framework-go/agent/provider/openaiagent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/internal/azaiprojects"
+	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
+	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
 )
@@ -48,12 +48,12 @@ func main() {
 	// Connect Agent Framework's context provider pipeline to a Foundry memory store.
 	// The scope isolates memories for this demo user; real apps should use a stable
 	// user, tenant, or conversation partition key.
-	memoryProvider := azfoundrymemory.NewProvider(
+	memoryProvider := foundryprovider.NewMemoryProvider(
 		foundryEndpoint,
 		token,
 		memoryStoreName,
 		func(*agent.Session) string { return memoryScope },
-		azfoundrymemory.Config{
+		foundryprovider.MemoryProviderConfig{
 			Logger:      slog.New(logger),
 			UpdateDelay: 0,
 		},
@@ -62,12 +62,12 @@ func main() {
 	// Attach the memory provider to a chat agent. Before each run, the provider can
 	// retrieve relevant Foundry memories and add them as context; after each run, it
 	// submits the conversation content for memory extraction.
-	a := openaiagent.NewChatCompletions(
+	a := openaiprovider.NewAgent(
 		openai.NewClient(
 			azure.WithEndpoint(azureOpenAIEndpoint, apiVersion),
 			azure.WithTokenCredential(token),
 		),
-		openaiagent.Config{
+		openaiprovider.AgentConfig{
 			Model:        chatDeployment,
 			Instructions: "You are a friendly travel assistant. Use known memories about the user when responding, and do not invent details.",
 			Config: agent.Config{
