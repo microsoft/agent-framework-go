@@ -38,7 +38,7 @@ type ContextProvider struct {
 	// Optional retrieval hook that returns updated provider context messages and run options.
 	// Messages that are not pointer-identical to the messages passed to Provide are marked with this provider's source.
 	// If unset, the original messages and options are returned unchanged.
-	// If set, the returned messages and options are used as-is.
+	// If set, returned options are used as-is; returned messages are source-stamped as described above.
 	Provide func(context.Context, []*message.Message, ...Option) ([]*message.Message, []Option, error)
 
 	// Optional storage hook. Defaults to no-op.

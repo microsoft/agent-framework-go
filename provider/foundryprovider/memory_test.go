@@ -82,11 +82,31 @@ func TestNewMemoryProviderDefaultsMatchFoundryMemoryOptions(t *testing.T) {
 	if provider.config.UpdateDelay != 0 {
 		t.Fatalf("UpdateDelay = %d, want immediate", provider.config.UpdateDelay)
 	}
+	if provider.config.SearchInputFilter == nil {
+		t.Fatal("SearchInputFilter was not defaulted")
+	}
 	if provider.ContextProvider().StoreRequestFilter == nil {
 		t.Fatal("StoreRequestFilter was not defaulted")
 	}
 	if provider.ContextProvider().SourceID != defaultSourceID {
 		t.Fatalf("SourceID = %q, want %q", provider.ContextProvider().SourceID, defaultSourceID)
+	}
+}
+
+func TestNewMemoryProviderUsesCustomSearchInputFilter(t *testing.T) {
+	called := false
+	filter := func(context.Context, []*message.Message) ([]*message.Message, error) {
+		called = true
+		return nil, nil
+	}
+	provider := NewMemoryProvider(validEndpoint, validCredential, "memory", validScope, MemoryProviderConfig{SearchInputFilter: filter})
+
+	_, _, err := provider.provide(context.Background(), []*message.Message{message.NewText("hello")})
+	if err != nil {
+		t.Fatalf("provide error = %v", err)
+	}
+	if !called {
+		t.Fatal("custom search input filter was not called")
 	}
 }
 
