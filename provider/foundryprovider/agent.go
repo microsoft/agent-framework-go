@@ -15,8 +15,10 @@ import (
 	"github.com/openai/openai-go/v3/option"
 )
 
-const azureAIResourceScope = "https://ai.azure.com/.default"
-const foundryDataPlaneAPIVersion = "v1"
+const (
+	azureAIResourceScope       = "https://ai.azure.com/.default"
+	foundryDataPlaneAPIVersion = "v1"
+)
 
 // AgentConfig contains configuration for Foundry-backed agents.
 type AgentConfig struct {
@@ -126,7 +128,7 @@ func newFoundryAgent(credential azcore.TokenCredential, config AgentConfig, mode
 	openAIOptions = append(openAIOptions, config.OpenAIOptions...)
 	openAIOptions = append(openAIOptions, clientHeadersRequestOption())
 	openAIOptions = append(openAIOptions, servedModelRequestOption())
-	config.Config.Middlewares = append([]agent.Middleware{clientHeadersMiddleware{}, servedModelMiddleware{}}, config.Config.Middlewares...)
+	config.Middlewares = append([]agent.Middleware{clientHeadersMiddleware{}, servedModelMiddleware{}}, config.Middlewares...)
 
 	return openaiprovider.NewResponsesAgent(openai.NewClient(openAIOptions...), openaiprovider.AgentConfig{
 		Config:       config.Config,
