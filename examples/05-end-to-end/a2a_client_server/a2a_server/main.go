@@ -3,14 +3,12 @@
 package main
 
 import (
-	"cmp"
 	"context"
 	"flag"
 	"fmt"
 	"log"
 	"math/rand"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -19,17 +17,13 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/provider/a2aprovider"
-	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
+	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
-	"github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/azure"
 )
 
 var (
-	endpoint   = os.Getenv("AZURE_OPENAI_ENDPOINT")
-	apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
-	deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
+	deployment = demo.FoundryModel
 )
 
 type Product struct {
@@ -101,8 +95,7 @@ func main() {
 	port := flag.Int("port", 5000, "Port to listen on")
 	flag.Parse()
 
-	// Get Azure token credential for authentication with Azure OpenAI.
-	token := demo.AzureTokenCredential()
+	token := demo.FoundryTokenCredential()
 
 	url := fmt.Sprintf("http://localhost:%d", *port)
 
@@ -114,14 +107,14 @@ func main() {
 		"URL", url,
 	)
 
-	oclient := openai.NewClient(
-		azure.WithEndpoint(endpoint, apiVersion),
-		azure.WithTokenCredential(token),
-	)
-
 	cfg, card := buildAgent(*agentType, deployment)
 	cfg.Middlewares = append(cfg.Middlewares, logger)
-	hostAgent := openaiprovider.NewAgent(oclient, cfg)
+	hostAgent := foundryprovider.NewAgent(
+		demo.FoundryProjectEndpoint,
+		token,
+		foundryprovider.ModelDeployment(deployment),
+		cfg,
+	)
 
 	card.SupportedInterfaces = []*a2a.AgentInterface{
 		a2a.NewAgentInterface(url, a2a.TransportProtocolJSONRPC),
@@ -140,9 +133,9 @@ func main() {
 	}
 }
 
-func buildAgent(agentType, model string) (openaiprovider.AgentConfig, *a2a.AgentCard) {
+func buildAgent(agentType, model string) (foundryprovider.AgentConfig, *a2a.AgentCard) {
 	t := strings.ToUpper(strings.TrimSpace(agentType))
-	cfg := openaiprovider.AgentConfig{Model: model}
+	cfg := foundryprovider.AgentConfig{}
 	card := &a2a.AgentCard{
 		Version:            "1.0.0",
 		DefaultInputModes:  []string{"text"},

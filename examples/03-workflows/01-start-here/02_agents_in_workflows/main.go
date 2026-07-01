@@ -9,6 +9,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/agentworkflow"
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
@@ -17,7 +18,7 @@ import (
 var logger = demo.NewLogger(
 	"Agents in Workflows",
 	"This sample runs translation agents as workflow executors.",
-	"Model", demo.Deployment,
+	"Model", demo.FoundryModel,
 )
 
 func main() {
@@ -62,9 +63,16 @@ func main() {
 }
 
 func newTranslationAgent(language string) *agent.Agent {
-	return demo.NewAzureChatAgent(
-		language,
-		fmt.Sprintf("Translate the user's text to %s. Return only the translation.", language),
-		logger,
+	return foundryprovider.NewAgent(
+		demo.FoundryProjectEndpoint,
+		demo.FoundryTokenCredential(),
+		foundryprovider.ModelDeployment(demo.FoundryModel),
+		foundryprovider.AgentConfig{
+			Instructions: fmt.Sprintf("Translate the user's text to %s. Return only the translation.", language),
+			Config: agent.Config{
+				Name:        language,
+				Middlewares: []agent.Middleware{logger},
+			},
+		},
 	)
 }

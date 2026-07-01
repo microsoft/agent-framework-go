@@ -8,6 +8,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/agentworkflow"
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
@@ -17,15 +18,50 @@ const topic = "Electric bicycles make city commuting better."
 
 var logger = demo.NewLogger(
 	"Multi Service Workflow",
-	"This sample coordinates several Azure OpenAI agents with distinct roles in one workflow.",
-	"Model", demo.Deployment,
+	"This sample coordinates several Microsoft Foundry agents with distinct roles in one workflow.",
+	"Model", demo.FoundryModel,
 )
 
 func main() {
+	token := demo.FoundryTokenCredential()
+
 	agents := []*agent.Agent{
-		demo.NewAzureChatAgent("researcher", "Write a concise three-paragraph overview of the user's topic. Include one claim that should be fact checked.", logger),
-		demo.NewAzureChatAgent("fact_checker", "Review the prior essay. Identify supported, questionable, and false claims in concise bullets.", logger),
-		demo.NewAzureChatAgent("reporter", "Write a final single-paragraph summary using only claims that survived the fact check.", logger),
+		foundryprovider.NewAgent(
+			demo.FoundryProjectEndpoint,
+			token,
+			foundryprovider.ModelDeployment(demo.FoundryModel),
+			foundryprovider.AgentConfig{
+				Instructions: "Write a concise three-paragraph overview of the user's topic. Include one claim that should be fact checked.",
+				Config: agent.Config{
+					Name:        "researcher",
+					Middlewares: []agent.Middleware{logger},
+				},
+			},
+		),
+		foundryprovider.NewAgent(
+			demo.FoundryProjectEndpoint,
+			token,
+			foundryprovider.ModelDeployment(demo.FoundryModel),
+			foundryprovider.AgentConfig{
+				Instructions: "Review the prior essay. Identify supported, questionable, and false claims in concise bullets.",
+				Config: agent.Config{
+					Name:        "fact_checker",
+					Middlewares: []agent.Middleware{logger},
+				},
+			},
+		),
+		foundryprovider.NewAgent(
+			demo.FoundryProjectEndpoint,
+			token,
+			foundryprovider.ModelDeployment(demo.FoundryModel),
+			foundryprovider.AgentConfig{
+				Instructions: "Write a final single-paragraph summary using only claims that survived the fact check.",
+				Config: agent.Config{
+					Name:        "reporter",
+					Middlewares: []agent.Middleware{logger},
+				},
+			},
+		),
 	}
 	wf, err := agentworkflow.NewSequentialWorkflowBuilder(agents...).WithName("multi-service-workflow").Build()
 	if err != nil {

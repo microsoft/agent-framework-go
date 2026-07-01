@@ -16,17 +16,13 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/provider/a2aprovider"
-	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
+	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
-	"github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/azure"
 )
 
 var (
-	endpoint   = os.Getenv("AZURE_OPENAI_ENDPOINT")
-	apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
-	deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
+	deployment = demo.FoundryModel
 	cardURL    = cmp.Or(os.Getenv("A2A_AGENT_HOST"), "http://127.0.0.1:5000")
 )
 
@@ -41,8 +37,7 @@ var logger = demo.NewLogger(
 
 func main() {
 	ctx := context.Background()
-	// Get Azure token credential for authentication with Azure OpenAI.
-	token := demo.AzureTokenCredential()
+	token := demo.FoundryTokenCredential()
 
 	card, err := agentcard.DefaultResolver.Resolve(ctx, cardURL)
 	if err != nil {
@@ -67,13 +62,11 @@ func main() {
 		},
 	)
 
-	hostAgent := openaiprovider.NewAgent(
-		openai.NewClient(
-			azure.WithEndpoint(endpoint, apiVersion),
-			azure.WithTokenCredential(token),
-		),
-		openaiprovider.AgentConfig{
-			Model:        deployment,
+	hostAgent := foundryprovider.NewAgent(
+		demo.FoundryProjectEndpoint,
+		token,
+		foundryprovider.ModelDeployment(deployment),
+		foundryprovider.AgentConfig{
 			Instructions: "You are a helpful assistant that helps people with travel planning.",
 			Config: agent.Config{
 				Name:        "TravelPlanner",

@@ -6,7 +6,6 @@
 package main
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 	"os"
@@ -17,9 +16,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent/skills/fsskills"
 	"github.com/microsoft/agent-framework-go/examples/02-agents/skills/internal/skillhelpers"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
-	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
-	"github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/azure"
+	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
 )
 
 const volumeConverterInstructions = `Use this skill when the user asks to convert between gallons and liters.
@@ -149,9 +146,7 @@ var temperatureConverterSkill = skills.Skill{
 }
 
 var (
-	endpoint   = os.Getenv("AZURE_OPENAI_ENDPOINT")
-	apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
-	deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-5.4-mini")
+	deployment = demo.FoundryModel
 )
 
 var logger = demo.NewLogger(
@@ -161,8 +156,7 @@ var logger = demo.NewLogger(
 )
 
 func main() {
-	// Get Azure token credential for authentication with Azure OpenAI.
-	token := demo.AzureTokenCredential()
+	token := demo.FoundryTokenCredential()
 
 	skillsRoot, err := os.OpenRoot("skills")
 	if err != nil {
@@ -177,13 +171,11 @@ func main() {
 		},
 	})
 
-	agent := openaiprovider.NewAgent(
-		openai.NewClient(
-			azure.WithEndpoint(endpoint, apiVersion),
-			azure.WithTokenCredential(token),
-		),
-		openaiprovider.AgentConfig{
-			Model:        deployment,
+	agent := foundryprovider.NewAgent(
+		demo.FoundryProjectEndpoint,
+		token,
+		foundryprovider.ModelDeployment(deployment),
+		foundryprovider.AgentConfig{
 			Instructions: "You are a helpful assistant that can convert units, volumes, and temperatures.",
 			Config: agent.Config{
 				Name:             "MultiConverterAgent",

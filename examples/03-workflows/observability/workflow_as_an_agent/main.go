@@ -7,6 +7,7 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
+	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/agentworkflow"
 	workflowotel "github.com/microsoft/agent-framework-go/workflow/observability/opentelemetry"
@@ -20,7 +21,7 @@ const sourceName = "Workflow.Sample.WorkflowAsAgent"
 var logger = demo.NewLogger(
 	"Observable Workflow as Agent",
 	"This sample wraps a telemetry-enabled workflow as an agent.",
-	"Model", demo.Deployment,
+	"Model", demo.FoundryModel,
 )
 
 func main() {
@@ -33,8 +34,31 @@ func main() {
 	defer func() { _ = provider.Shutdown(ctx) }()
 	otel.SetTracerProvider(provider)
 
-	french := demo.NewAzureChatAgent("French", "Answer in French, concisely.", logger)
-	english := demo.NewAzureChatAgent("English", "Answer in English, concisely.", logger)
+	token := demo.FoundryTokenCredential()
+	french := foundryprovider.NewAgent(
+		demo.FoundryProjectEndpoint,
+		token,
+		foundryprovider.ModelDeployment(demo.FoundryModel),
+		foundryprovider.AgentConfig{
+			Instructions: "Answer in French, concisely.",
+			Config: agent.Config{
+				Name:        "French",
+				Middlewares: []agent.Middleware{logger},
+			},
+		},
+	)
+	english := foundryprovider.NewAgent(
+		demo.FoundryProjectEndpoint,
+		token,
+		foundryprovider.ModelDeployment(demo.FoundryModel),
+		foundryprovider.AgentConfig{
+			Instructions: "Answer in English, concisely.",
+			Config: agent.Config{
+				Name:        "English",
+				Middlewares: []agent.Middleware{logger},
+			},
+		},
+	)
 	frenchBinding := agentworkflow.New(french, agentworkflow.Config{})
 	englishBinding := agentworkflow.New(english, agentworkflow.Config{})
 	wf, err := workflow.NewBuilder(frenchBinding).

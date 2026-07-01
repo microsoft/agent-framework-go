@@ -14,24 +14,19 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/provider/a2aprovider"
-	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
+	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/agenttool"
-	"github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/azure"
 )
 
 var (
-	endpoint     = os.Getenv("AZURE_OPENAI_ENDPOINT")
-	apiVersion   = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
-	deployment   = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
+	deployment   = demo.FoundryModel
 	agentURLsEnv = cmp.Or(os.Getenv("A2A_AGENT_URLS"), "http://localhost:5000;http://localhost:5001;http://localhost:5002")
 )
 
 func main() {
 	ctx := context.Background()
-	// Get Azure token credential for authentication with Azure OpenAI.
-	token := demo.AzureTokenCredential()
+	token := demo.FoundryTokenCredential()
 
 	urls := splitURLs(agentURLsEnv)
 
@@ -65,13 +60,11 @@ func main() {
 		tools = append(tools, agenttool.New(remoteAgent, agenttool.Config{}))
 	}
 
-	host := openaiprovider.NewAgent(
-		openai.NewClient(
-			azure.WithEndpoint(endpoint, apiVersion),
-			azure.WithTokenCredential(token),
-		),
-		openaiprovider.AgentConfig{
-			Model:        deployment,
+	host := foundryprovider.NewAgent(
+		demo.FoundryProjectEndpoint,
+		token,
+		foundryprovider.ModelDeployment(deployment),
+		foundryprovider.AgentConfig{
 			Instructions: "You specialize in handling user queries and using your tools to provide answers.",
 			Config: agent.Config{
 				Name:        "HostClient",

@@ -10,10 +10,10 @@ import (
 	"strings"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
+	"github.com/microsoft/agent-framework-go/examples/internal/demo"
+	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
-	"github.com/openai/openai-go/v3"
 )
 
 var weatherTool = functool.MustNew(functool.Config{
@@ -24,10 +24,13 @@ var weatherTool = functool.MustNew(functool.Config{
 })
 
 func main() {
-	a := openaiprovider.NewAgent(
-		openai.NewClient(),
-		openaiprovider.AgentConfig{
-			Model:        "gpt-4o-mini",
+	token := demo.FoundryTokenCredential()
+
+	a := foundryprovider.NewAgent(
+		demo.FoundryProjectEndpoint,
+		token,
+		foundryprovider.ModelDeployment(demo.FoundryModel),
+		foundryprovider.AgentConfig{
 			Instructions: "You are a helpful assistant with access to weather information. Be concise and friendly.",
 			Config: agent.Config{
 				Tools: []tool.Tool{weatherTool},

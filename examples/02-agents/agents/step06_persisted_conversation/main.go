@@ -3,7 +3,6 @@
 package main
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"os"
@@ -11,35 +10,24 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
-	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
-	"github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/azure"
-)
-
-var (
-	endpoint   = os.Getenv("AZURE_OPENAI_ENDPOINT")
-	apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
-	deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
+	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
 )
 
 var logger = demo.NewLogger(
 	"Persisted Conversation",
 	"Demonstrates how to persist a conversation to disk and resume it later.",
-	"Model", deployment,
+	"Model", demo.FoundryModel,
 )
 
 func main() {
-	// Get Azure token credential for authentication with Azure OpenAI.
-	token := demo.AzureTokenCredential()
+	token := demo.FoundryTokenCredential()
 
-	// Create Azure OpenAI agent.
-	a := openaiprovider.NewAgent(
-		openai.NewClient(
-			azure.WithEndpoint(endpoint, apiVersion),
-			azure.WithTokenCredential(token),
-		),
-		openaiprovider.AgentConfig{
-			Model:        deployment,
+	// Create Microsoft Foundry agent.
+	a := foundryprovider.NewAgent(
+		demo.FoundryProjectEndpoint,
+		token,
+		foundryprovider.ModelDeployment(demo.FoundryModel),
+		foundryprovider.AgentConfig{
 			Instructions: "You are good at telling jokes.",
 			Config: agent.Config{
 				Name:        "Joker",

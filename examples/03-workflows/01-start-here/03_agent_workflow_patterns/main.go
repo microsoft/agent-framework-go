@@ -11,6 +11,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/agentworkflow"
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
@@ -19,7 +20,7 @@ import (
 var logger = demo.NewLogger(
 	"Agent Workflow Patterns",
 	"This sample switches between sequential, concurrent, and group chat agent workflow patterns.",
-	"Model", demo.Deployment,
+	"Model", demo.FoundryModel,
 )
 
 func main() {
@@ -100,9 +101,16 @@ func buildPattern(pattern string) (*workflow.Workflow, error) {
 }
 
 func newTranslationAgent(language string) *agent.Agent {
-	return demo.NewAzureChatAgent(
-		language,
-		fmt.Sprintf("You are a translation assistant who only responds in %s. Respond to any input by outputting the name of the input language and then translating the input to %s.", language, language),
-		logger,
+	return foundryprovider.NewAgent(
+		demo.FoundryProjectEndpoint,
+		demo.FoundryTokenCredential(),
+		foundryprovider.ModelDeployment(demo.FoundryModel),
+		foundryprovider.AgentConfig{
+			Instructions: fmt.Sprintf("You are a translation assistant who only responds in %s. Respond to any input by outputting the name of the input language and then translating the input to %s.", language, language),
+			Config: agent.Config{
+				Name:        language,
+				Middlewares: []agent.Middleware{logger},
+			},
+		},
 	)
 }

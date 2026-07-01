@@ -14,16 +14,10 @@ import (
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/internal/azaiprojects"
 	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
-	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
-	"github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/azure"
 )
 
 var (
-	foundryEndpoint     = os.Getenv("FOUNDRY_PROJECT_ENDPOINT")
-	azureOpenAIEndpoint = os.Getenv("AZURE_OPENAI_ENDPOINT")
-	apiVersion          = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
-	chatDeployment      = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-5.4-mini")
+	chatDeployment      = demo.FoundryModel
 	memoryStoreName     = cmp.Or(os.Getenv("AZURE_AI_MEMORY_STORE_ID"), "memory-store-sample")
 	embeddingDeployment = cmp.Or(os.Getenv("AZURE_AI_EMBEDDING_DEPLOYMENT_NAME"), "text-embedding-ada-002")
 )
@@ -32,24 +26,20 @@ const memoryScope = "sample-user-123"
 
 var logger = demo.NewLogger(
 	"Foundry Memory",
-	"Demonstrates Azure OpenAI agent runs with Microsoft Foundry memory.",
+	"Demonstrates Microsoft Foundry agent runs with Microsoft Foundry memory.",
 	"Model", chatDeployment,
 	"Memory Store", memoryStoreName,
 )
 
 func main() {
-	if foundryEndpoint == "" {
-		demo.Panic("FOUNDRY_PROJECT_ENDPOINT environment variable is not set.")
-	}
-
 	ctx := context.Background()
-	token := demo.AzureTokenCredential()
+	token := demo.FoundryTokenCredential()
 
 	// Connect Agent Framework's context provider pipeline to a Foundry memory store.
 	// The scope isolates memories for this demo user; real apps should use a stable
 	// user, tenant, or conversation partition key.
 	memoryProvider := foundryprovider.NewMemoryProvider(
-		foundryEndpoint,
+		demo.FoundryProjectEndpoint,
 		token,
 		memoryStoreName,
 		func(*agent.Session) string { return memoryScope },
@@ -59,16 +49,14 @@ func main() {
 		},
 	)
 
-	// Attach the memory provider to a chat agent. Before each run, the provider can
+	// Attach the memory provider to a Foundry agent. Before each run, the provider can
 	// retrieve relevant Foundry memories and add them as context; after each run, it
 	// submits the conversation content for memory extraction.
-	a := openaiprovider.NewAgent(
-		openai.NewClient(
-			azure.WithEndpoint(azureOpenAIEndpoint, apiVersion),
-			azure.WithTokenCredential(token),
-		),
-		openaiprovider.AgentConfig{
-			Model:        chatDeployment,
+	a := foundryprovider.NewAgent(
+		demo.FoundryProjectEndpoint,
+		token,
+		foundryprovider.ModelDeployment(chatDeployment),
+		foundryprovider.AgentConfig{
 			Instructions: "You are a friendly travel assistant. Use known memories about the user when responding, and do not invent details.",
 			Config: agent.Config{
 				Name:             "TravelAssistantWithFoundryMemory",
@@ -83,7 +71,7 @@ func main() {
 		demo.Panic(err)
 	}
 
-	setupFoundryMemoryStore(ctx, foundryEndpoint, token)
+	setupFoundryMemoryStore(ctx, demo.FoundryProjectEndpoint, token)
 
 	resp, err := a.RunText(ctx, "Hi there! My name is Taylor and I'm planning a hiking trip to Patagonia in November.", agent.WithSession(session)).Collect()
 	demo.Response(resp, err)

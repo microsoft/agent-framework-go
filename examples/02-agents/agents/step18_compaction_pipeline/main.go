@@ -5,34 +5,24 @@
 package main
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/compaction"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
+	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
-	"github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/azure"
-)
-
-var (
-	endpoint   = os.Getenv("AZURE_OPENAI_ENDPOINT")
-	apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
-	deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
 )
 
 var logger = demo.NewLogger(
 	"Compaction Pipeline",
 	"Demonstrates how to chain compaction strategies for long-running conversations.",
-	"Model", deployment,
+	"Model", demo.FoundryModel,
 )
 
 var lookupPriceTool = functool.MustNew(functool.Config{
@@ -41,18 +31,14 @@ var lookupPriceTool = functool.MustNew(functool.Config{
 }, lookupPrice)
 
 func main() {
-	// Get Azure token credential for authentication with Azure OpenAI.
-	token := demo.AzureTokenCredential()
-	client := openai.NewClient(
-		azure.WithEndpoint(endpoint, apiVersion),
-		azure.WithTokenCredential(token),
-	)
+	token := demo.FoundryTokenCredential()
 
 	// Create a separate summarizer agent. In production, this could use a smaller or cheaper model.
-	summarizerAgent := openaiprovider.NewAgent(
-		client,
-		openaiprovider.AgentConfig{
-			Model: deployment,
+	summarizerAgent := foundryprovider.NewAgent(
+		demo.FoundryProjectEndpoint,
+		token,
+		foundryprovider.ModelDeployment(demo.FoundryModel),
+		foundryprovider.AgentConfig{
 			Config: agent.Config{
 				Name: "ConversationSummarizer",
 			},
@@ -93,11 +79,12 @@ func main() {
 		},
 	}
 
-	// Create Azure OpenAI agent with the compaction pipeline and a price-lookup tool.
-	a := openaiprovider.NewAgent(
-		client,
-		openaiprovider.AgentConfig{
-			Model: deployment,
+	// Create Microsoft Foundry agent with the compaction pipeline and a price-lookup tool.
+	a := foundryprovider.NewAgent(
+		demo.FoundryProjectEndpoint,
+		token,
+		foundryprovider.ModelDeployment(demo.FoundryModel),
+		foundryprovider.AgentConfig{
 			Instructions: `You are a helpful, but long-winded, shopping assistant.
 Help the user look up prices and compare products.
 When responding, be extra descriptive and use as many words as possible without sounding ridiculous.`,

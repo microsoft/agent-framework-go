@@ -1,21 +1,17 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-// This sample shows how to create and use a simple Agent with Azure OpenAI as the backend that logs telemetry using OpenTelemetry.
+// This sample shows how to create and use a simple Agent with Microsoft Foundry as the backend that logs telemetry using OpenTelemetry.
 
 package main
 
 import (
-	"cmp"
 	"context"
 	"log"
-	"os"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
-	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
+	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
 	"github.com/microsoft/agent-framework-go/provider/otelprovider"
-	"github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/azure"
 
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -23,21 +19,14 @@ import (
 	otellib "go.opentelemetry.io/otel"
 )
 
-var (
-	endpoint   = os.Getenv("AZURE_OPENAI_ENDPOINT")
-	apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
-	deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
-)
-
 var logger = demo.NewLogger(
 	"OpenTelemetry Observability",
 	"Demonstrates how to use OpenTelemetry for observability in the agent framework.",
-	"Model", deployment,
+	"Model", demo.FoundryModel,
 )
 
 func main() {
-	// Get Azure token credential for authentication with Azure OpenAI.
-	token := demo.AzureTokenCredential()
+	token := demo.FoundryTokenCredential()
 
 	// Create TracerProvider with console exporter.
 	// This will output the telemetry data to the console.
@@ -56,14 +45,12 @@ func main() {
 	}()
 	otellib.SetTracerProvider(tp)
 
-	// Create Azure OpenAI agent with OpenTelemetry instrumentation.
-	a := openaiprovider.NewAgent(
-		openai.NewClient(
-			azure.WithEndpoint(endpoint, apiVersion),
-			azure.WithTokenCredential(token),
-		),
-		openaiprovider.AgentConfig{
-			Model:        deployment,
+	// Create Microsoft Foundry agent with OpenTelemetry instrumentation.
+	a := foundryprovider.NewAgent(
+		demo.FoundryProjectEndpoint,
+		token,
+		foundryprovider.ModelDeployment(demo.FoundryModel),
+		foundryprovider.AgentConfig{
 			Instructions: "You are good at telling jokes.",
 			Config: agent.Config{
 				Name: "Joker",

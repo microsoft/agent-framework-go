@@ -9,30 +9,21 @@
 package main
 
 import (
-	"cmp"
 	"context"
 	"fmt"
-	"os"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
-	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
+	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/shelltool"
-	"github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/azure"
-)
-
-var (
-	endpoint   = os.Getenv("AZURE_OPENAI_ENDPOINT")
-	apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
-	deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
 )
 
 var logger = demo.NewLogger(
 	"Shell With Environment",
 	"Demonstrates shell tool calls with live shell environment instructions.",
-	"Model", deployment,
+	"Model", demo.FoundryModel,
 )
 
 const instructions = `You are an agent with a single tool: run_shell. Use it to satisfy the user's request.
@@ -40,15 +31,11 @@ Do not describe what you would do; actually run the commands. Reply with the fin
 
 func main() {
 	ctx := context.Background()
-	token := demo.AzureTokenCredential()
-	client := openai.NewClient(
-		azure.WithEndpoint(endpoint, apiVersion),
-		azure.WithTokenCredential(token),
-	)
+	token := demo.FoundryTokenCredential()
 
 	fmt.Println("### Stateless mode")
 	fmt.Println()
-	runShellEnvironmentDemo(ctx, client, shelltool.ModeStateless, []string{
+	runShellEnvironmentDemo(ctx, token, shelltool.ModeStateless, []string{
 		"Print the current working directory.",
 		"Change directory into the system temp folder, then print the current working directory.",
 		"In a NEW shell call, print the current working directory again. Tell me whether it matches the temp folder from the previous call.",
@@ -57,7 +44,7 @@ func main() {
 	fmt.Println()
 	fmt.Println("### Persistent mode")
 	fmt.Println()
-	runShellEnvironmentDemo(ctx, client, shelltool.ModePersistent, []string{
+	runShellEnvironmentDemo(ctx, token, shelltool.ModePersistent, []string{
 		"Change directory into the system temp folder, then print the current working directory.",
 		"In a NEW shell call, print the current working directory again. Tell me whether it still matches the temp folder.",
 		"Set the environment variable DEMO_TOKEN to the value 'hello-world'.",
@@ -65,7 +52,7 @@ func main() {
 	})
 }
 
-func runShellEnvironmentDemo(ctx context.Context, client openai.Client, mode shelltool.Mode, prompts []string) {
+func runShellEnvironmentDemo(ctx context.Context, token azcore.TokenCredential, mode shelltool.Mode, prompts []string) {
 	shell, err := shelltool.NewLocal(shelltool.LocalConfig{
 		Mode:              mode,
 		AcknowledgeUnsafe: true,
@@ -80,10 +67,11 @@ func runShellEnvironmentDemo(ctx context.Context, client openai.Client, mode she
 	}()
 
 	envProvider := shelltool.NewEnvironmentProvider(shell, shelltool.EnvironmentProviderConfig{})
-	a := openaiprovider.NewAgent(
-		client,
-		openaiprovider.AgentConfig{
-			Model:        deployment,
+	a := foundryprovider.NewAgent(
+		demo.FoundryProjectEndpoint,
+		token,
+		foundryprovider.ModelDeployment(demo.FoundryModel),
+		foundryprovider.AgentConfig{
 			Instructions: instructions,
 			Config: agent.Config{
 				Tools:            []tool.Tool{shell},

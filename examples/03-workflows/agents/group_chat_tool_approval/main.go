@@ -10,7 +10,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/message"
-	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
+	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 	"github.com/microsoft/agent-framework-go/workflow"
@@ -21,7 +21,7 @@ import (
 var logger = demo.NewLogger(
 	"Group Chat Tool Approval",
 	"This sample runs a QA and DevOps group chat where production deployment requires approval.",
-	"Model", demo.Deployment,
+	"Model", demo.FoundryModel,
 )
 
 type runTestsInput struct {
@@ -110,10 +110,11 @@ func main() {
 }
 
 func newDeploymentAgent(name string, instructions string, tools ...tool.Tool) *agent.Agent {
-	return openaiprovider.NewAgent(
-		demo.NewAzureOpenAIClient(),
-		openaiprovider.AgentConfig{
-			Model:        demo.Deployment,
+	return foundryprovider.NewAgent(
+		demo.FoundryProjectEndpoint,
+		demo.FoundryTokenCredential(),
+		foundryprovider.ModelDeployment(demo.FoundryModel),
+		foundryprovider.AgentConfig{
 			Instructions: instructions,
 			Config: agent.Config{
 				Name:        name,

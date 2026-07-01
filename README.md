@@ -105,38 +105,35 @@ go get github.com/microsoft/agent-framework-go
 
 #### Basic Agent - Go
 
-Create a simple Azure OpenAI chat agent that writes a haiku about the Microsoft Agent Framework.
+Create a simple Microsoft Foundry agent that writes a haiku about the Microsoft Agent Framework.
 
 ```go
 package main
 
 import (
+	"cmp"
 	"context"
 	"fmt"
-
-	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
+	"os"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
-	"github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/azure"
+	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
 )
 
 func main() {
-	// Authenticate to Azure.
+	endpoint := os.Getenv("FOUNDRY_PROJECT_ENDPOINT")
+	model := cmp.Or(os.Getenv("FOUNDRY_MODEL"), "gpt-4o-mini")
+
+	// Authenticate to Microsoft Foundry.
 	token, err := azidentity.NewDefaultAzureCredential(nil)
 	if err != nil {
 		panic(err)
 	}
 
-	// Create an Azure OpenAI agent.
-	// Replace <endpoint> and <apiVersion> with your Azure OpenAI endpoint and API version.
-	a := openaiprovider.NewAgent(
-		openai.NewClient(
-			azure.WithEndpoint("<endpoint>", "<apiVersion>"),
-			azure.WithTokenCredential(token),
-		),
-		openaiprovider.AgentConfig{
-			Model: "gpt-4o-mini",
+	// Create a Microsoft Foundry agent.
+	a := foundryprovider.NewAgent(endpoint, token, foundryprovider.ModelDeployment(model),
+		foundryprovider.AgentConfig{
+			Instructions: "You are a helpful assistant.",
 		},
 	)
 

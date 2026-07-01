@@ -11,6 +11,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
 )
@@ -24,7 +25,7 @@ const (
 var logger = demo.NewLogger(
 	"Writer Critic Workflow",
 	"This sample iterates between writer and critic agents until content is approved.",
-	"Model", demo.Deployment,
+	"Model", demo.FoundryModel,
 )
 
 type CriticDecision struct {
@@ -81,9 +82,21 @@ func main() {
 }
 
 func newWriterExecutor(id string) workflow.ExecutorBinding {
-	ag := demo.NewAzureChatAgent(id, `You are a skilled writer. Create clear, engaging content.
+	token := demo.FoundryTokenCredential()
+	ag := foundryprovider.NewAgent(
+		demo.FoundryProjectEndpoint,
+		token,
+		foundryprovider.ModelDeployment(demo.FoundryModel),
+		foundryprovider.AgentConfig{
+			Instructions: `You are a skilled writer. Create clear, engaging content.
 If you receive feedback, carefully revise the content to address all concerns.
-Maintain the same topic and length requirements.`, logger)
+Maintain the same topic and length requirements.`,
+			Config: agent.Config{
+				Name:        id,
+				Middlewares: []agent.Middleware{logger},
+			},
+		},
+	)
 	return workflow.BindNewExecutorFunc(id, func(_ string, executorID string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: executorID,
@@ -124,7 +137,13 @@ func runWriter(ctx *workflow.Context, ag *agent.Agent, prompt *message.Message, 
 }
 
 func newCriticExecutor(id string) workflow.ExecutorBinding {
-	ag := demo.NewAzureChatAgent(id, `You are a constructive critic. Review the content and provide specific feedback.
+	token := demo.FoundryTokenCredential()
+	ag := foundryprovider.NewAgent(
+		demo.FoundryProjectEndpoint,
+		token,
+		foundryprovider.ModelDeployment(demo.FoundryModel),
+		foundryprovider.AgentConfig{
+			Instructions: `You are a constructive critic. Review the content and provide specific feedback.
 Always try to provide actionable suggestions for improvement and strive to identify improvement points.
 Only approve if the content is high quality, clear, and meets the original requirements and you see no improvement points.
 
@@ -132,7 +151,13 @@ Provide your decision as structured output with:
 - approved: true if content is good, false if revisions needed
 - feedback: specific improvements needed (empty if approved)
 
-Be concise but specific in your feedback.`, logger)
+Be concise but specific in your feedback.`,
+			Config: agent.Config{
+				Name:        id,
+				Middlewares: []agent.Middleware{logger},
+			},
+		},
+	)
 	return workflow.NewExecutor(id, func(ctx *workflow.Context, content *message.Message) (CriticDecision, error) {
 		state, err := readFlowState(ctx)
 		if err != nil {
@@ -166,8 +191,20 @@ Be concise but specific in your feedback.`, logger)
 }
 
 func newSummaryExecutor(id string) workflow.ExecutorBinding {
-	ag := demo.NewAzureChatAgent(id, `You present the final approved content to the user.
-Simply output the polished content - no additional commentary needed.`, logger)
+	token := demo.FoundryTokenCredential()
+	ag := foundryprovider.NewAgent(
+		demo.FoundryProjectEndpoint,
+		token,
+		foundryprovider.ModelDeployment(demo.FoundryModel),
+		foundryprovider.AgentConfig{
+			Instructions: `You present the final approved content to the user.
+Simply output the polished content - no additional commentary needed.`,
+			Config: agent.Config{
+				Name:        id,
+				Middlewares: []agent.Middleware{logger},
+			},
+		},
+	)
 	return workflow.NewExecutor(id, func(ctx *workflow.Context, decision CriticDecision) (*message.Message, error) {
 		demo.Assistant("=== Summary ===")
 		content, err := demo.AgentText(ctx, ag, "Present this approved content:\n\n"+decision.Content, agent.Stream(true))
@@ -177,7 +214,6 @@ Simply output the polished content - no additional commentary needed.`, logger)
 		return textMessage(message.RoleAssistant, content), nil
 	}).Bind()
 }
-
 func readFlowState(ctx *workflow.Context) (flowState, error) {
 	value, err := ctx.ReadOrInitState(flowStateKey, flowStateScope, func(context.Context, string, string) (any, error) {
 		return flowState{Iteration: 1}, nil

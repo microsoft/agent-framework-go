@@ -7,18 +7,42 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
+	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
 	"github.com/microsoft/agent-framework-go/workflow/agentworkflow"
 )
 
 var logger = demo.NewLogger(
 	"Workflow as an Agent",
 	"This sample wraps a concurrent workflow so callers interact with it as one agent.",
-	"Model", demo.Deployment,
+	"Model", demo.FoundryModel,
 )
 
 func main() {
-	french := demo.NewAzureChatAgent("French", "Respond in French. Keep the answer concise.", logger)
-	english := demo.NewAzureChatAgent("English", "Respond in English. Keep the answer concise.", logger)
+	token := demo.FoundryTokenCredential()
+	french := foundryprovider.NewAgent(
+		demo.FoundryProjectEndpoint,
+		token,
+		foundryprovider.ModelDeployment(demo.FoundryModel),
+		foundryprovider.AgentConfig{
+			Instructions: "Respond in French. Keep the answer concise.",
+			Config: agent.Config{
+				Name:        "French",
+				Middlewares: []agent.Middleware{logger},
+			},
+		},
+	)
+	english := foundryprovider.NewAgent(
+		demo.FoundryProjectEndpoint,
+		token,
+		foundryprovider.ModelDeployment(demo.FoundryModel),
+		foundryprovider.AgentConfig{
+			Instructions: "Respond in English. Keep the answer concise.",
+			Config: agent.Config{
+				Name:        "English",
+				Middlewares: []agent.Middleware{logger},
+			},
+		},
+	)
 
 	wf, err := agentworkflow.NewConcurrentWorkflowBuilder(french, english).WithName("bilingual-workflow").Build()
 	if err != nil {

@@ -9,14 +9,15 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
+	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
 )
 
 var logger = demo.NewLogger(
 	"Custom Agent Executors",
-	"This sample wraps Azure OpenAI agents in custom workflow executors with loop control.",
-	"Model", demo.Deployment,
+	"This sample wraps Microsoft Foundry agents in custom workflow executors with loop control.",
+	"Model", demo.FoundryModel,
 )
 
 type SloganResult struct {
@@ -77,7 +78,19 @@ func main() {
 }
 
 func newSloganWriter(id string) workflow.ExecutorBinding {
-	ag := demo.NewAzureChatAgent(id, "You are a professional slogan writer. Return structured output with task and slogan.", logger)
+	token := demo.FoundryTokenCredential()
+	ag := foundryprovider.NewAgent(
+		demo.FoundryProjectEndpoint,
+		token,
+		foundryprovider.ModelDeployment(demo.FoundryModel),
+		foundryprovider.AgentConfig{
+			Instructions: "You are a professional slogan writer. Return structured output with task and slogan.",
+			Config: agent.Config{
+				Name:        id,
+				Middlewares: []agent.Middleware{logger},
+			},
+		},
+	)
 	return workflow.BindNewExecutorFunc(id, func(_ string, executorID string) (*workflow.Executor, error) {
 		return &workflow.Executor{
 			ID: executorID,
@@ -113,7 +126,19 @@ func writeSlogan(ctx *workflow.Context, ag *agent.Agent, prompt string) (SloganR
 }
 
 func newFeedbackProvider(id string, minimumRating int, maxAttempts int) workflow.ExecutorBinding {
-	ag := demo.NewAzureChatAgent(id, "You are a professional editor. Return structured output with comments, rating from 1 to 10, and actions.", logger)
+	token := demo.FoundryTokenCredential()
+	ag := foundryprovider.NewAgent(
+		demo.FoundryProjectEndpoint,
+		token,
+		foundryprovider.ModelDeployment(demo.FoundryModel),
+		foundryprovider.AgentConfig{
+			Instructions: "You are a professional editor. Return structured output with comments, rating from 1 to 10, and actions.",
+			Config: agent.Config{
+				Name:        id,
+				Middlewares: []agent.Middleware{logger},
+			},
+		},
+	)
 	return workflow.BindNewExecutorFunc(id, func(_ string, executorID string) (*workflow.Executor, error) {
 		attempts := 0
 		return &workflow.Executor{

@@ -7,20 +7,20 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
-	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
+	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
 	"github.com/microsoft/agent-framework-go/tool/mcptool"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/openai/openai-go/v3"
 )
 
 var logger = demo.NewLogger(
 	"MCP Tools",
 	"Demonstrates how to create and use an Agent with tools from an MCP Server.",
-	"Model", "gpt-4o-mini",
+	"Model", demo.FoundryModel,
 )
 
 func main() {
 	ctx := context.Background()
+	token := demo.FoundryTokenCredential()
 
 	// Create MCP HTTP tool for Microsoft Learn.
 	session, err := mcptool.Connect(ctx, &mcp.StreamableClientTransport{
@@ -38,10 +38,11 @@ func main() {
 	}
 
 	// Create the agent with MCP tools.
-	a := openaiprovider.NewAgent(
-		openai.NewClient(),
-		openaiprovider.AgentConfig{
-			Model:        "gpt-4o-mini",
+	a := foundryprovider.NewAgent(
+		demo.FoundryProjectEndpoint,
+		token,
+		foundryprovider.ModelDeployment(demo.FoundryModel),
+		foundryprovider.AgentConfig{
 			Instructions: "You are a helpful assistant that can help with microsoft documentation questions.",
 			Config: agent.Config{
 				Name:        "DocsAgent",

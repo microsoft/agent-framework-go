@@ -10,12 +10,11 @@ It demonstrates:
 ## Prerequisites
 
 - Go 1.24+
-- Azure OpenAI environment and authentication:
+- Microsoft Foundry project environment and authentication:
 
 ```powershell
-$env:AZURE_OPENAI_ENDPOINT="https://<your-resource>.openai.azure.com"
-$env:AZURE_OPENAI_DEPLOYMENT_NAME="gpt-4o-mini" # your deployment name
-$env:AZURE_OPENAI_API_VERSION="2025-01-01-preview" # optional
+$env:FOUNDRY_PROJECT_ENDPOINT="https://<your-foundry-service>.services.ai.azure.com/api/projects/<your-project>"
+$env:FOUNDRY_MODEL="gpt-4o-mini" # optional, defaults to gpt-4o-mini
 az login
 ```
 

@@ -5,31 +5,21 @@
 package main
 
 import (
-	"cmp"
 	"context"
 	"fmt"
-	"os"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
-	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
+	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/agenttool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
-	"github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/azure"
-)
-
-var (
-	endpoint   = os.Getenv("AZURE_OPENAI_ENDPOINT")
-	apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
-	deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
 )
 
 var logger = demo.NewLogger(
 	"Agent As Function Tool",
 	"Demonstrates how to create and use an Agent as a function tool.",
-	"Model", deployment,
+	"Model", demo.FoundryModel,
 )
 
 var weatherTool = functool.MustNew(functool.Config{
@@ -40,17 +30,14 @@ var weatherTool = functool.MustNew(functool.Config{
 })
 
 func main() {
-	// Get Azure token credential for authentication with Azure OpenAI.
-	token := demo.AzureTokenCredential()
+	token := demo.FoundryTokenCredential()
 
-	// Create Azure OpenAI agent with the function tool.
-	weatherAgent := openaiprovider.NewAgent(
-		openai.NewClient(
-			azure.WithEndpoint(endpoint, apiVersion),
-			azure.WithTokenCredential(token),
-		),
-		openaiprovider.AgentConfig{
-			Model:        deployment,
+	// Create Microsoft Foundry agent with the function tool.
+	weatherAgent := foundryprovider.NewAgent(
+		demo.FoundryProjectEndpoint,
+		token,
+		foundryprovider.ModelDeployment(demo.FoundryModel),
+		foundryprovider.AgentConfig{
 			Instructions: "You answer questions about the weather.",
 			Config: agent.Config{
 				Name:        "WeatherAgent",
@@ -61,15 +48,13 @@ func main() {
 		},
 	)
 
-	// Create the main Azure OpenAI agent with the weather agent as a function tool.
+	// Create the main Microsoft Foundry agent with the weather agent as a function tool.
 	// Note that the main agent is instructed to respond in French.
-	a := openaiprovider.NewAgent(
-		openai.NewClient(
-			azure.WithEndpoint(endpoint, apiVersion),
-			azure.WithTokenCredential(token),
-		),
-		openaiprovider.AgentConfig{
-			Model:        deployment,
+	a := foundryprovider.NewAgent(
+		demo.FoundryProjectEndpoint,
+		token,
+		foundryprovider.ModelDeployment(demo.FoundryModel),
+		foundryprovider.AgentConfig{
 			Instructions: "You are a helpful assistant who responds in French.",
 			Config: agent.Config{
 				Tools: []tool.Tool{agenttool.New(weatherAgent, agenttool.Config{})},
