@@ -81,9 +81,7 @@ var unitConverterSkill = &skills.Skill{
 	},
 }
 
-var (
-	deployment = demo.FoundryModel
-)
+var deployment = demo.FoundryModel
 
 var logger = demo.NewLogger(
 	"Code-Defined Skills",

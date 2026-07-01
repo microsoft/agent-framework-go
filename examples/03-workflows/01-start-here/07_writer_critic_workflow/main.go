@@ -214,6 +214,7 @@ Simply output the polished content - no additional commentary needed.`,
 		return textMessage(message.RoleAssistant, content), nil
 	}).Bind()
 }
+
 func readFlowState(ctx *workflow.Context) (flowState, error) {
 	value, err := ctx.ReadOrInitState(flowStateKey, flowStateScope, func(context.Context, string, string) (any, error) {
 		return flowState{Iteration: 1}, nil

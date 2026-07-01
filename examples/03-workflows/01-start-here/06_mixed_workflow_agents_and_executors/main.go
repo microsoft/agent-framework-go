@@ -191,6 +191,7 @@ func (jailbreakSyncExecutor) Handle(ctx *workflow.Context, messages []*message.M
 	emitEvents := true
 	return ctx.SendMessage("", workflow.TurnToken{EmitEvents: &emitEvents})
 }
+
 func messagesText(messages []*message.Message) string {
 	var sb strings.Builder
 	for i, msg := range messages {

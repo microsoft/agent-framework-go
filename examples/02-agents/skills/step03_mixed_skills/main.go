@@ -145,9 +145,7 @@ var temperatureConverterSkill = skills.Skill{
 	},
 }
 
-var (
-	deployment = demo.FoundryModel
-)
+var deployment = demo.FoundryModel
 
 var logger = demo.NewLogger(
 	"Mixed Skills",

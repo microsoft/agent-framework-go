@@ -22,9 +22,7 @@ import (
 	"github.com/microsoft/agent-framework-go/tool/functool"
 )
 
-var (
-	deployment = demo.FoundryModel
-)
+var deployment = demo.FoundryModel
 
 type Product struct {
 	Name     string  `json:"name"`
