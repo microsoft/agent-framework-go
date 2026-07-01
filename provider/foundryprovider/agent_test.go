@@ -100,6 +100,24 @@ func TestNewAgentRunsAgainstFoundryAgentEndpoint(t *testing.T) {
 	}
 }
 
+func TestNewAgentEscapesServerAgentNameInEndpoint(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.EscapedPath(); got != "/projects/proj/agents/my%2Fagent/endpoint/protocols/openai/responses" {
+			t.Fatalf("escaped path = %q", got)
+		}
+		writeResponsesOK(w)
+	}))
+	defer server.Close()
+
+	foundryAgent := newFoundryAgent(t, server, foundryprovider.ServerAgent("my/agent"), foundryprovider.AgentConfig{
+		Config: agent.Config{DisableFuncAutoCall: true},
+	})
+
+	if _, err := foundryAgent.RunText(t.Context(), "hello").Collect(); err != nil {
+		t.Fatalf("RunText error = %v", err)
+	}
+}
+
 func TestNewAgentPanicsWithInvalidArguments(t *testing.T) {
 	tests := []struct {
 		name string

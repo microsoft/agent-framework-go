@@ -92,13 +92,11 @@ func projectOpenAIBaseURL(projectEndpoint string) string {
 }
 
 func serverAgentEndpoint(projectEndpoint string, agentName string) string {
-	endpoint, err := url.Parse(projectEndpoint)
+	endpoint, err := url.JoinPath(projectEndpoint, "agents", url.PathEscape(agentName), "endpoint", "protocols", "openai")
 	if err != nil {
 		panic(fmt.Sprintf("invalid project endpoint %q: %v", projectEndpoint, err))
 	}
-	endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/agents/" + agentName + "/endpoint/protocols/openai"
-	endpoint.RawPath = ""
-	return endpoint.String()
+	return endpoint
 }
 
 type foundryAgentMode struct {
