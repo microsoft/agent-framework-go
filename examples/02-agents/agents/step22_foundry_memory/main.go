@@ -73,7 +73,7 @@ func main() {
 			Config: agent.Config{
 				Name:             "TravelAssistantWithFoundryMemory",
 				Middlewares:      []agent.Middleware{logger},
-				ContextProviders: []*agent.ContextProvider{memoryProvider.ContextProvider()},
+				ContextProviders: []agent.ContextProvider{memoryProvider},
 			},
 		},
 	)

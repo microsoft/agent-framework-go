@@ -66,12 +66,12 @@ func createRelativeFile(t *testing.T, root, relativePath, content string) {
 	}
 }
 
-func newProvider(t *testing.T, roots ...string) *agent.ContextProvider {
+func newProvider(t *testing.T, roots ...string) agent.ContextProvider {
 	t.Helper()
 	return newProviderWithConfig(t, nil, nil, roots...)
 }
 
-func newProviderWithConfig(t *testing.T, sourceOptions *fsskills.SourceOptions, providerOptions *skills.ContextProviderOptions, roots ...string) *agent.ContextProvider {
+func newProviderWithConfig(t *testing.T, sourceOptions *fsskills.SourceOptions, providerOptions *skills.ContextProviderOptions, roots ...string) agent.ContextProvider {
 	t.Helper()
 	if sourceOptions == nil {
 		sourceOptions = &fsskills.SourceOptions{}
@@ -89,10 +89,10 @@ func newProviderWithConfig(t *testing.T, sourceOptions *fsskills.SourceOptions, 
 	return skills.NewContextProvider(resolved)
 }
 
-func captureProviderContext(t *testing.T, provider *agent.ContextProvider) (string, []tool.Tool) {
+func captureProviderContext(t *testing.T, provider agent.ContextProvider) (string, []tool.Tool) {
 	t.Helper()
 	ctx := context.Background()
-	messages, options, err := provider.BeforeRun(ctx, nil, agent.WithSession(agenttest.CreateSession()))
+	messages, options, err := invokeProvider(provider, ctx, nil, agent.WithSession(agenttest.CreateSession()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func findTool(t *testing.T, tools []tool.Tool, name string) tool.FuncTool {
 	return nil
 }
 
-func hasSkill(t *testing.T, provider *agent.ContextProvider, name string) bool {
+func hasSkill(t *testing.T, provider agent.ContextProvider, name string) bool {
 	t.Helper()
 	instructions, _ := captureProviderContext(t, provider)
 	return strings.Contains(instructions, name)

@@ -15,6 +15,10 @@ import (
 	"github.com/microsoft/agent-framework-go/message"
 )
 
+func invokeProvider(provider agent.ContextProvider, ctx context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
+	return provider.Invoking(ctx, agent.InvokingContext{Messages: messages, Options: options})
+}
+
 func TestMessageIndex_GroupsToolCallsAtomically(t *testing.T) {
 	messages := []*message.Message{
 		textMessage(message.RoleSystem, "system"),
@@ -414,7 +418,7 @@ func TestNewProvider_CompactsAndPersistsIndex(t *testing.T) {
 		SourceID: "compaction-test",
 	})
 
-	compactedMessages, _, err := provider.BeforeRun(t.Context(), turnMessages(3), agent.WithSession(session))
+	compactedMessages, _, err := invokeProvider(provider, t.Context(), turnMessages(3), agent.WithSession(session))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -441,6 +445,31 @@ func TestNewProvider_CompactsAndPersistsIndex(t *testing.T) {
 	}
 }
 
+func TestNewProvider_SourceStampsGeneratedMessages(t *testing.T) {
+	provider := compaction.NewContextProvider(compaction.ContextProviderConfig{
+		Strategy: &compaction.SummarizationStrategy{
+			Trigger:                compaction.GroupsExceed(2),
+			Summarizer:             compaction.SummarizerFunc(func(context.Context, []*message.Message) (string, error) { return "older context", nil }),
+			MinimumPreservedGroups: 2,
+		},
+		SourceID: "compaction-test",
+	})
+
+	compactedMessages, _, err := invokeProvider(provider, t.Context(), turnMessages(3))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got, want := messageTexts(compactedMessages), []string{"[Summary]\nolder context", "u3", "a3"}; !slices.Equal(got, want) {
+		t.Fatalf("unexpected compacted messages: got %v want %v", got, want)
+	}
+	if got, want := compactedMessages[0].Source, (message.Source{Type: agent.SourceTypeContextProvider, ID: "compaction-test"}); got != want {
+		t.Fatalf("summary source = %#v, want %#v", got, want)
+	}
+	if compactedMessages[1].Source != (message.Source{}) || compactedMessages[2].Source != (message.Source{}) {
+		t.Fatalf("expected preserved messages to keep original sources, got %#v and %#v", compactedMessages[1].Source, compactedMessages[2].Source)
+	}
+}
+
 func TestNewProvider_CompactsWithoutSession(t *testing.T) {
 	provider := compaction.NewContextProvider(compaction.ContextProviderConfig{
 		Strategy: &compaction.TruncationStrategy{
@@ -449,7 +478,7 @@ func TestNewProvider_CompactsWithoutSession(t *testing.T) {
 		},
 	})
 
-	compactedMessages, _, err := provider.BeforeRun(t.Context(), turnMessages(3))
+	compactedMessages, _, err := invokeProvider(provider, t.Context(), turnMessages(3))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

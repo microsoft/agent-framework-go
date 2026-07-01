@@ -24,6 +24,10 @@ func sessionOpts() []agent.Option {
 	return []agent.Option{agent.WithSession(agenttest.CreateSession())}
 }
 
+func invokeProvider(provider *todo.Provider, ctx context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
+	return provider.Invoking(ctx, agent.InvokingContext{Messages: messages, Options: options})
+}
+
 func collectTools(opts []agent.Option) []tool.Tool {
 	var tools []tool.Tool
 	for _, opt := range opts {
@@ -46,12 +50,12 @@ func collectInstructions(opts []agent.Option) string {
 }
 
 // addItems is a helper that uses the public API to set up todo items via session state.
-// It calls BeforeRun to initialize tools, then uses GetAllItems to verify.
+// It calls Invoking to initialize tools, then uses GetAllItems to verify.
 // Since we can't call tools directly, we manipulate state through the provider's public methods.
-// Instead, we add items by calling BeforeRun which creates tools bound to the session,
-// then we inspect state. For actual item creation, we rely on integration through BeforeRun.
+// Instead, we add items by calling Invoking which creates tools bound to the session,
+// then we inspect state. For actual item creation, we rely on integration through Invoking.
 //
-// For tests that need items, we'll use a workaround: call BeforeRun to get the tools,
+// For tests that need items, we'll use a workaround: call Invoking to get the tools,
 // then invoke the tools via their Call method.
 func callTool(t *testing.T, opts []agent.Option, name string, argsJSON string) string {
 	t.Helper()
@@ -83,7 +87,7 @@ func TestProvide_ReturnsToolsAndInstructions(t *testing.T) {
 	p := todo.New(nil)
 	opts := sessionOpts()
 
-	_, outOpts, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +108,7 @@ func TestAddTodos_CreatesSingleItem(t *testing.T) {
 	p := todo.New(nil)
 	opts := sessionOpts()
 
-	_, outOpts, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +129,7 @@ func TestAddTodos_CreatesMultipleItems(t *testing.T) {
 	p := todo.New(nil)
 	opts := sessionOpts()
 
-	_, outOpts, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +150,7 @@ func TestCompleteTodos_MarksItemComplete(t *testing.T) {
 	p := todo.New(nil)
 	opts := sessionOpts()
 
-	_, outOpts, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +175,7 @@ func TestCompleteTodos_MarksMultipleComplete(t *testing.T) {
 	p := todo.New(nil)
 	opts := sessionOpts()
 
-	_, outOpts, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +199,7 @@ func TestCompleteTodos_ReturnsZeroForMissingIds(t *testing.T) {
 	p := todo.New(nil)
 	opts := sessionOpts()
 
-	_, outOpts, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +215,7 @@ func TestRemoveTodos_RemovesItem(t *testing.T) {
 	p := todo.New(nil)
 	opts := sessionOpts()
 
-	_, outOpts, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +237,7 @@ func TestRemoveTodos_RemovesMultipleItems(t *testing.T) {
 	p := todo.New(nil)
 	opts := sessionOpts()
 
-	_, outOpts, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +261,7 @@ func TestRemoveTodos_ReturnsZeroForMissingIds(t *testing.T) {
 	p := todo.New(nil)
 	opts := sessionOpts()
 
-	_, outOpts, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +277,7 @@ func TestGetRemainingTodos_ReturnsOnlyIncomplete(t *testing.T) {
 	p := todo.New(nil)
 	opts := sessionOpts()
 
-	_, outOpts, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,7 +300,7 @@ func TestGetAllTodos_ReturnsAllItems(t *testing.T) {
 	p := todo.New(nil)
 	opts := sessionOpts()
 
-	_, outOpts, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,14 +321,14 @@ func TestState_PersistsAcrossInvocations(t *testing.T) {
 	opts := sessionOpts()
 
 	// First invocation: add items.
-	_, outOpts, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
 	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Persist me"}]}`)
 
 	// Second invocation: items should still be there.
-	_, outOpts2, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	_, outOpts2, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +348,7 @@ func TestPublicGetAllTodos_ReturnsAllItems(t *testing.T) {
 	p := todo.New(nil)
 	opts := sessionOpts()
 
-	_, outOpts, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,7 +366,7 @@ func TestPublicGetRemainingTodos_ReturnsOnlyIncomplete(t *testing.T) {
 	p := todo.New(nil)
 	opts := sessionOpts()
 
-	_, outOpts, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +402,7 @@ func TestCustomInstructions_OverridesDefault(t *testing.T) {
 	})
 	opts := sessionOpts()
 
-	_, outOpts, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -414,7 +418,7 @@ func TestNilOptions_UsesDefaultInstructions(t *testing.T) {
 	p := todo.New(nil)
 	opts := sessionOpts()
 
-	_, outOpts, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -430,7 +434,7 @@ func TestProvide_InjectsEmptyTodoMessage(t *testing.T) {
 	p := todo.New(nil)
 	opts := sessionOpts()
 
-	outMessages, _, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	outMessages, _, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -453,7 +457,7 @@ func TestProvide_InjectsTodoListMessage(t *testing.T) {
 	opts := sessionOpts()
 
 	// First call to get tools and add items.
-	_, outOpts, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -462,7 +466,7 @@ func TestProvide_InjectsTodoListMessage(t *testing.T) {
 	callTool(t, outOpts, "todos_complete", fmt.Sprintf(`{"Arg0":[{"id":%d,"reason":"done"}]}`, items[0].ID))
 
 	// Second call should inject todo list message.
-	outMessages, _, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	outMessages, _, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -494,7 +498,7 @@ func TestProvide_SuppressTodoListMessage(t *testing.T) {
 	opts := sessionOpts()
 	msgs := newMessages("hi")
 
-	outMessages, _, err := p.BeforeRun(context.Background(), msgs, opts...)
+	outMessages, _, err := invokeProvider(p, context.Background(), msgs, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -515,7 +519,7 @@ func TestProvide_CustomTodoListMessageBuilder(t *testing.T) {
 	})
 	opts := sessionOpts()
 
-	outMessages, _, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	outMessages, _, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -543,7 +547,7 @@ func TestProvide_SuppressWinsOverBuilder(t *testing.T) {
 	opts := sessionOpts()
 	msgs := newMessages("hi")
 
-	outMessages, _, err := p.BeforeRun(context.Background(), msgs, opts...)
+	outMessages, _, err := invokeProvider(p, context.Background(), msgs, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -563,7 +567,7 @@ func TestToolNames(t *testing.T) {
 	p := todo.New(nil)
 	opts := sessionOpts()
 
-	_, outOpts, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -587,7 +591,7 @@ func TestCompleteTodos_WithReason(t *testing.T) {
 	p := todo.New(nil)
 	opts := sessionOpts()
 
-	_, outOpts, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -614,7 +618,7 @@ func TestCompleteToolDescription_MentionsReason(t *testing.T) {
 	p := todo.New(nil)
 	opts := sessionOpts()
 
-	_, outOpts, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -648,7 +652,7 @@ func TestCompleteTodos_EmptyReasonIsAccepted(t *testing.T) {
 			p := todo.New(nil)
 			opts := sessionOpts()
 
-			_, outOpts, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+			_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 			if err != nil {
 				t.Fatal(err)
 			}

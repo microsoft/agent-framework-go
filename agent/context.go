@@ -14,42 +14,180 @@ import (
 // SourceTypeContextProvider represents a message that originated from a context provider.
 const SourceTypeContextProvider message.SourceType = "context-provider"
 
-// ContextProvider provides a structured subset of middleware behavior for
-// injecting and persisting additional context around an agent invocation.
+// ContextProvider participates in an agent invocation lifecycle by supplying
+// additional context before a run and processing context after a run completes.
 //
-// A provider can add, replace, or annotate request messages, add run options,
-// and persist filtered request and response messages after the run completes.
-// It does not wrap the provider [RunFunc] directly, so it cannot intercept
-// individual streamed updates, emit replacement updates, retry or replace the
-// provider invocation, or transform provider errors as they occur.
-// Use [Middleware] for those lower-level run-pipeline behaviors.
-type ContextProvider struct {
+// Context providers can retrieve relevant information, add instructions, inject
+// contextual messages, provide tools for the current invocation, and persist or
+// learn from request and response messages after successful runs.
+//
+// Prefer creating providers with [NewContextProvider]. Implement [ContextProvider]
+// directly when a provider needs custom filtering, merging, source attribution,
+// failure handling, or non-additive behavior such as compaction or truncation.
+//
+// # Security considerations
+//
+// Context providers may inject messages with any role, including system, which has
+// the highest trust level and directly shapes LLM behavior. Developers must ensure
+// that all providers attached to an agent are trusted. Agent Framework does not
+// validate or filter the data returned by providers — it is accepted as-is and
+// merged into the request context. If a provider retrieves data from an external
+// source (e.g., a vector database or memory service), be aware that a compromised
+// data source could introduce adversarial content designed to manipulate LLM behavior
+// via indirect prompt injection. Implementers should validate and sanitize data
+// retrieved from external sources before returning it.
+type ContextProvider interface {
+	// Invoking returns the input messages and options with provider-specific additions applied.
+	Invoking(context.Context, InvokingContext) ([]*message.Message, []Option, error)
+
+	// Invoked persists context-related state after an agent invocation finishes.
+	Invoked(context.Context, InvokedContext) error
+}
+
+// InvokingContext contains the agent invocation context available to a
+// [ContextProvider] before the provider run starts.
+type InvokingContext struct {
+	// Messages are the request messages currently being prepared for the invocation.
+	Messages []*message.Message
+
+	// Options are the run options currently being prepared for the invocation.
+	Options []Option
+}
+
+// InvokedContext contains the agent invocation context available to a
+// [ContextProvider] after a provider run completes.
+type InvokedContext struct {
+	// RequestMessages are the messages used for the invocation.
+	RequestMessages []*message.Message
+
+	// ResponseMessages are the messages produced by the invocation.
+	ResponseMessages []*message.Message
+
+	// Options are the run options used for the invocation.
+	Options []Option
+
+	// Err is the error returned by the invocation, if any.
+	Err error
+}
+
+// ContextProviderConfig configures the provider created by [NewContextProvider].
+type ContextProviderConfig struct {
 	// Unique identifier for this provider instance (required).
 	SourceID string
 
+	// Optional filter applied to request messages before Provide.
+	// Defaults to [messagefilter.ExternalOnly].
+	ProvideInputMessageFilter messagefilter.Filter
+
 	// Optional filter applied to request messages before Store.
 	// Defaults to [messagefilter.ExternalOnly].
-	StoreRequestFilter messagefilter.Filter
+	StoreInputRequestMessageFilter messagefilter.Filter
 
 	// Optional filter applied to response messages before Store.
 	// Defaults to passing all response messages through.
-	StoreResponseFilter messagefilter.Filter
+	StoreInputResponseMessageFilter messagefilter.Filter
 
-	// Optional retrieval hook that returns updated provider context messages and run options.
-	// Messages that are not pointer-identical to the messages passed to Provide are marked with this provider's source.
-	// If unset, the original messages and options are returned unchanged.
-	// If set, returned options are used as-is; returned messages are source-stamped as described above.
-	Provide func(context.Context, []*message.Message, ...Option) ([]*message.Message, []Option, error)
+	// Optional retrieval hook that returns additional provider context messages and run options.
+	Provide func(context.Context, InvokingContext) ([]*message.Message, []Option, error)
 
 	// Optional storage hook. Defaults to no-op.
-	Store func(context.Context, []*message.Message, []*message.Message, ...Option) error
+	Store func(context.Context, InvokedContext) error
 }
 
-// Middleware adapts this context provider into middleware for callers that
-// explicitly need middleware composition. Agents configured with
+type defaultContextProvider struct {
+	config ContextProviderConfig
+}
+
+// NewContextProvider creates the default additive context provider.
+//
+// The provider filters input messages before invoking Provide, treats Provide
+// results as additive, source-stamps provided messages, appends provided
+// messages and options to the original invocation context, filters stored
+// request and response messages, and skips Store when the run fails.
+func NewContextProvider(config ContextProviderConfig) ContextProvider {
+	return &defaultContextProvider{config: config}
+}
+
+// Invoking returns the input messages and options with this provider's additions applied.
+func (p *defaultContextProvider) Invoking(ctx context.Context, invoking InvokingContext) ([]*message.Message, []Option, error) {
+	if p.config.SourceID == "" {
+		panic("SourceID is required")
+	}
+	if p.config.Provide == nil {
+		return invoking.Messages, invoking.Options, nil
+	}
+
+	provideFilter := p.config.ProvideInputMessageFilter
+	if provideFilter == nil {
+		provideFilter = messagefilter.ExternalOnly
+	}
+	provideMessages, err := provideFilter(ctx, slices.Clone(invoking.Messages))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	providedMessages, providedOptions, err := p.config.Provide(ctx, InvokingContext{Messages: provideMessages, Options: invoking.Options})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	outMessages := invoking.Messages
+	if len(providedMessages) > 0 {
+		source := message.Source{Type: SourceTypeContextProvider, ID: p.config.SourceID}
+		for i, msg := range providedMessages {
+			if msg == nil || msg.Source == source {
+				continue
+			}
+			marked := msg.Clone()
+			marked.Source = source
+			providedMessages[i] = marked
+		}
+		outMessages = append(outMessages, providedMessages...)
+	}
+
+	outOptions := invoking.Options
+	if len(providedOptions) > 0 {
+		outOptions = append(outOptions, providedOptions...)
+	}
+
+	return outMessages, outOptions, nil
+}
+
+// Invoked persists context-related state after an agent invocation finishes.
+func (p *defaultContextProvider) Invoked(ctx context.Context, invoked InvokedContext) error {
+	if p.config.SourceID == "" {
+		panic("SourceID is required")
+	}
+	if invoked.Err != nil {
+		return nil
+	}
+	if p.config.Store == nil {
+		return nil
+	}
+	requestFilter := p.config.StoreInputRequestMessageFilter
+	if requestFilter == nil {
+		requestFilter = messagefilter.ExternalOnly
+	}
+	responseFilter := p.config.StoreInputResponseMessageFilter
+	if responseFilter == nil {
+		responseFilter = messagefilter.PassThrough
+	}
+	filteredReq, err := requestFilter(ctx, invoked.RequestMessages)
+	if err != nil {
+		return err
+	}
+	filteredResp, err := responseFilter(ctx, invoked.ResponseMessages)
+	if err != nil {
+		return err
+	}
+	return p.config.Store(ctx, InvokedContext{RequestMessages: filteredReq, ResponseMessages: filteredResp, Options: invoked.Options, Err: invoked.Err})
+}
+
+// ContextProviderMiddleware adapts a context provider into middleware for
+// callers that explicitly need middleware composition. Agents configured with
 // Config.ContextProviders run providers through the agent lifecycle rather than
 // through this adapter.
-func (p *ContextProvider) Middleware() Middleware {
+func ContextProviderMiddleware(p ContextProvider) Middleware {
 	if p == nil {
 		panic("context provider is required")
 	}
@@ -57,14 +195,14 @@ func (p *ContextProvider) Middleware() Middleware {
 }
 
 type contextProviderMiddleware struct {
-	provider *ContextProvider
+	provider ContextProvider
 }
 
 func (r *contextProviderMiddleware) Run(next RunFunc, ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error] {
 	return func(yield func(*ResponseUpdate, error) bool) {
 		options = slices.Clone(options)
 		var err error
-		messages, options, err = r.provider.BeforeRun(ctx, messages, options...)
+		messages, options, err = r.provider.Invoking(ctx, InvokingContext{Messages: messages, Options: options})
 		if err != nil {
 			yield(nil, err)
 			return
@@ -72,113 +210,23 @@ func (r *contextProviderMiddleware) Run(next RunFunc, ctx context.Context, messa
 
 		requestMessages := slices.Clone(messages)
 		var resp Response
-		var runErr error
+		var invokeErr error
 		for update, err := range next(ctx, messages, options...) {
 			if update != nil {
 				resp.Update(update)
 			}
 			if err != nil {
-				runErr = err
+				invokeErr = err
 			}
 			if !yield(update, err) {
 				break
 			}
 		}
 		resp.Coalesce()
-		if runErr != nil {
-			return
-		}
 
-		if err := r.provider.AfterRun(ctx, requestMessages, resp.Messages, options...); err != nil {
+		if err := r.provider.Invoked(ctx, InvokedContext{RequestMessages: requestMessages, ResponseMessages: resp.Messages, Options: options, Err: invokeErr}); err != nil {
 			yield(nil, err)
 			return
 		}
 	}
-}
-
-// BeforeRun returns the input messages and options with this provider's additions applied.
-func (p *ContextProvider) BeforeRun(ctx context.Context, messages []*message.Message, options ...Option) ([]*message.Message, []Option, error) {
-	if p.SourceID == "" {
-		panic("SourceID is required")
-	}
-	if p.Provide == nil {
-		return messages, options, nil
-	}
-
-	inputMessages := slices.Clone(messages)
-	messages, options, err := p.Provide(ctx, messages, options...)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	markNewMessagesWithSource(messages, inputMessages, message.Source{Type: SourceTypeContextProvider, ID: p.SourceID}, true)
-	return messages, options, nil
-}
-
-// AfterRun persists context-related state after an agent invocation finishes.
-func (p *ContextProvider) AfterRun(ctx context.Context, requestMessages, responseMessages []*message.Message, options ...Option) error {
-	if p.SourceID == "" {
-		panic("SourceID is required")
-	}
-	requestFilter := p.StoreRequestFilter
-	if requestFilter == nil {
-		requestFilter = messagefilter.ExternalOnly
-	}
-	return runStoreHook(ctx, p.Store, requestFilter, p.StoreResponseFilter, requestMessages, responseMessages, options)
-}
-
-// markNewMessagesWithSource marks messages in outMessages that are not pointer-identical
-// to messages in inMessages with source. Marked messages are cloned before source is set.
-// When overwrite is false, messages that already have any source are preserved as-is.
-// Messages that are nil, already have source, or are present in inMessages are skipped.
-func markNewMessagesWithSource(outMessages, inMessages []*message.Message, source message.Source, overwrite bool) {
-	originals := make(map[*message.Message]struct{}, len(inMessages))
-	for _, msg := range inMessages {
-		originals[msg] = struct{}{}
-	}
-	if len(outMessages) == 0 {
-		return
-	}
-	for i, msg := range outMessages {
-		if _, ok := originals[msg]; ok {
-			continue
-		}
-		if msg == nil || msg.Source == source || !overwrite && msg.Source != (message.Source{}) {
-			continue
-		}
-		marked := msg.Clone()
-		marked.Source = source
-		outMessages[i] = marked
-	}
-}
-
-// runStoreHook applies request and response filters then calls store.
-// When store is nil, it is a no-op. A nil requestFilter defaults to
-// messagefilter.PassThrough; a nil responseFilter defaults to
-// messagefilter.PassThrough.
-func runStoreHook(
-	ctx context.Context,
-	store func(context.Context, []*message.Message, []*message.Message, ...Option) error,
-	requestFilter, responseFilter messagefilter.Filter,
-	requestMessages, responseMessages []*message.Message,
-	options []Option,
-) error {
-	if store == nil {
-		return nil
-	}
-	if requestFilter == nil {
-		requestFilter = messagefilter.PassThrough
-	}
-	if responseFilter == nil {
-		responseFilter = messagefilter.PassThrough
-	}
-	filteredReq, err := requestFilter(ctx, requestMessages)
-	if err != nil {
-		return err
-	}
-	filteredResp, err := responseFilter(ctx, responseMessages)
-	if err != nil {
-		return err
-	}
-	return store(ctx, filteredReq, filteredResp, options...)
 }

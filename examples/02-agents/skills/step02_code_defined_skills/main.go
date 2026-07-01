@@ -113,7 +113,7 @@ func main() {
 			Config: agent.Config{
 				Name:             "UnitConverterAgent",
 				Middlewares:      []agent.Middleware{logger},
-				ContextProviders: []*agent.ContextProvider{skillsProvider},
+				ContextProviders: []agent.ContextProvider{skillsProvider},
 			},
 		},
 	)

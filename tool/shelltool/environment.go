@@ -99,10 +99,9 @@ type EnvironmentProviderConfig struct {
 // EnvironmentProvider probes a local shell and injects shell-specific
 // instructions through an [agent.ContextProvider].
 type EnvironmentProvider struct {
-	*agent.ContextProvider
-
 	executor Executor
 	config   EnvironmentProviderConfig
+	provider agent.ContextProvider
 
 	mu           sync.Mutex
 	current      *ShellEnvironmentSnapshot
@@ -125,11 +124,19 @@ func NewEnvironmentProvider(executor Executor, config EnvironmentProviderConfig)
 	if sourceID == "" {
 		sourceID = defaultShellEnvironmentSourceID
 	}
-	p.ContextProvider = &agent.ContextProvider{
+	p.provider = agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: sourceID,
 		Provide:  p.provide,
-	}
+	})
 	return p
+}
+
+func (p *EnvironmentProvider) Invoking(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+	return p.provider.Invoking(ctx, invoking)
+}
+
+func (p *EnvironmentProvider) Invoked(ctx context.Context, invoked agent.InvokedContext) error {
+	return p.provider.Invoked(ctx, invoked)
 }
 
 // CurrentSnapshot returns the most recently captured snapshot, if one exists.
@@ -159,7 +166,7 @@ func (p *EnvironmentProvider) Refresh(ctx context.Context) (ShellEnvironmentSnap
 	return cloneShellEnvironmentSnapshot(snapshot), nil
 }
 
-func (p *EnvironmentProvider) provide(ctx context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
+func (p *EnvironmentProvider) provide(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
 	snapshot, err := p.snapshot(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -169,7 +176,7 @@ func (p *EnvironmentProvider) provide(ctx context.Context, messages []*message.M
 		formatter = DefaultShellEnvironmentInstructions
 	}
 	instructions := formatter(snapshot)
-	return messages, append(options, agent.WithInstructions(instructions)), nil
+	return nil, []agent.Option{agent.WithInstructions(instructions)}, nil
 }
 
 func (p *EnvironmentProvider) snapshot(ctx context.Context) (ShellEnvironmentSnapshot, error) {

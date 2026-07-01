@@ -103,7 +103,7 @@ Help the user look up prices and compare products.
 When responding, be extra descriptive and use as many words as possible without sounding ridiculous.`,
 			Config: agent.Config{
 				Name: "ShoppingAssistant",
-				ContextProviders: []*agent.ContextProvider{
+				ContextProviders: []agent.ContextProvider{
 					compaction.NewContextProvider(compaction.ContextProviderConfig{
 						Strategy: compactionPipeline,
 						Logger:   slog.New(logger),

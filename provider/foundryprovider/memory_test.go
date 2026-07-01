@@ -63,9 +63,6 @@ func TestNewMemoryProviderSucceedsWithValidParameters(t *testing.T) {
 	if provider == nil {
 		t.Fatal("provider is nil")
 	}
-	if provider.ContextProvider() == nil {
-		t.Fatal("context provider is nil")
-	}
 	if got := provider.scope(nil); got != "user-456" {
 		t.Fatalf("scope = %q, want user-456", got)
 	}
@@ -85,11 +82,11 @@ func TestNewMemoryProviderDefaultsMatchFoundryMemoryOptions(t *testing.T) {
 	if provider.config.SearchInputFilter == nil {
 		t.Fatal("SearchInputFilter was not defaulted")
 	}
-	if provider.ContextProvider().StoreRequestFilter == nil {
-		t.Fatal("StoreRequestFilter was not defaulted")
+	if provider.providerConfig.StoreInputRequestMessageFilter == nil {
+		t.Fatal("StoreInputRequestMessageFilter was not defaulted")
 	}
-	if provider.ContextProvider().SourceID != defaultSourceID {
-		t.Fatalf("SourceID = %q, want %q", provider.ContextProvider().SourceID, defaultSourceID)
+	if provider.providerConfig.SourceID != defaultSourceID {
+		t.Fatalf("SourceID = %q, want %q", provider.providerConfig.SourceID, defaultSourceID)
 	}
 }
 
@@ -101,7 +98,7 @@ func TestNewMemoryProviderUsesCustomSearchInputFilter(t *testing.T) {
 	}
 	provider := NewMemoryProvider(validEndpoint, validCredential, "memory", validScope, MemoryProviderConfig{SearchInputFilter: filter})
 
-	_, _, err := provider.provide(context.Background(), []*message.Message{message.NewText("hello")})
+	_, _, err := provider.Invoking(t.Context(), agent.InvokingContext{Messages: []*message.Message{message.NewText("hello")}})
 	if err != nil {
 		t.Fatalf("provide error = %v", err)
 	}
@@ -128,7 +125,7 @@ func TestStoreLogsUpdateFailureAndDoesNotReturnError(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	provider := NewMemoryProvider(validEndpoint, validCredential, "memory", validScope, MemoryProviderConfig{ClientOptions: clientOptions, Logger: logger})
 
-	err := provider.store(context.Background(), []*message.Message{message.NewText("remember me")}, nil)
+	err := provider.store(t.Context(), agent.InvokedContext{RequestMessages: []*message.Message{message.NewText("remember me")}})
 	if err != nil {
 		t.Fatalf("store error = %v", err)
 	}

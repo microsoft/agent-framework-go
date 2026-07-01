@@ -651,7 +651,7 @@ func TestAgent_Run_ContextMiddlewareReceivesSession(t *testing.T) {
 	}
 }
 
-func TestAgent_Run_ContextMiddlewareCanFailBeforeRun(t *testing.T) {
+func TestAgent_Run_ContextMiddlewareCanFailBeforeInvokingNext(t *testing.T) {
 	middlewareErr := errors.New("middleware failed")
 	runFn := func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
@@ -828,22 +828,22 @@ func TestRun_All_WithError(t *testing.T) {
 	}
 }
 
-func TestAgent_Run_ProviderMiddleware_RunsProvidersWhenSessionHasServiceID(t *testing.T) {
+func TestAgent_Run_ContextProvider_RunsWithServiceManagedSession(t *testing.T) {
 	provideCalled := false
 	var capturedMessages []*message.Message
 	var storedResponseMessages []*message.Message
 
-	historyProvider := &agent.ContextProvider{
+	historyProvider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "history",
-		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
+		Provide: func(_ context.Context, _ agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
 			provideCalled = true
-			return append(messages, message.NewText("history")), options, nil
+			return []*message.Message{message.NewText("history")}, nil, nil
 		},
-		Store: func(_ context.Context, _ []*message.Message, responseMessages []*message.Message, _ ...agent.Option) error {
-			storedResponseMessages = responseMessages
+		Store: func(_ context.Context, invoked agent.InvokedContext) error {
+			storedResponseMessages = invoked.ResponseMessages
 			return nil
 		},
-	}
+	})
 
 	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		capturedMessages = msgs
@@ -854,7 +854,7 @@ func TestAgent_Run_ProviderMiddleware_RunsProvidersWhenSessionHasServiceID(t *te
 
 	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
 		ID: "test-agent", Name: "test-agent",
-		ContextProviders: []*agent.ContextProvider{historyProvider},
+		ContextProviders: []agent.ContextProvider{historyProvider},
 	})
 
 	session := agenttest.CreateSession()
@@ -882,13 +882,13 @@ func TestAgent_Run_ContextProviders_SkipWithContinuationToken(t *testing.T) {
 	provideCalled := false
 	runCalled := false
 
-	historyProvider := &agent.ContextProvider{
+	historyProvider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "history",
-		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
+		Provide: func(_ context.Context, _ agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
 			provideCalled = true
-			return messages, options, nil
+			return nil, nil, nil
 		},
-	}
+	})
 
 	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		runCalled = true
@@ -902,7 +902,7 @@ func TestAgent_Run_ContextProviders_SkipWithContinuationToken(t *testing.T) {
 
 	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
 		ID: "test-agent", Name: "test-agent",
-		ContextProviders: []*agent.ContextProvider{historyProvider},
+		ContextProviders: []agent.ContextProvider{historyProvider},
 	})
 
 	token := agenttest.NewContinuationToken(t, "ct-1")
@@ -997,22 +997,22 @@ func TestAgent_Run_ContinuationToken_PersistsSavedResponseUpdates(t *testing.T) 
 	var contextResponseMessages []*message.Message
 	var historyStoreSawContinuationToken bool
 	var contextStoreSawContinuationToken bool
-	historyProvider := &agent.HistoryProvider{
+	historyProvider := agent.NewHistoryProvider(agent.HistoryProviderConfig{
 		SourceID: "history",
-		Store: func(_ context.Context, _ []*message.Message, responseMessages []*message.Message, options ...agent.Option) error {
-			historyResponseMessages = responseMessages
-			_, historyStoreSawContinuationToken = agent.GetOption(options, agent.WithContinuationToken)
+		Store: func(_ context.Context, invoked agent.InvokedContext) error {
+			historyResponseMessages = invoked.ResponseMessages
+			_, historyStoreSawContinuationToken = agent.GetOption(invoked.Options, agent.WithContinuationToken)
 			return nil
 		},
-	}
-	contextProvider := &agent.ContextProvider{
+	})
+	contextProvider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "ctx",
-		Store: func(_ context.Context, _ []*message.Message, responseMessages []*message.Message, options ...agent.Option) error {
-			contextResponseMessages = responseMessages
-			_, contextStoreSawContinuationToken = agent.GetOption(options, agent.WithContinuationToken)
+		Store: func(_ context.Context, invoked agent.InvokedContext) error {
+			contextResponseMessages = invoked.ResponseMessages
+			_, contextStoreSawContinuationToken = agent.GetOption(invoked.Options, agent.WithContinuationToken)
 			return nil
 		},
-	}
+	})
 	runFn := func(_ context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		if len(messages) != 0 {
 			t.Fatalf("resume messages = %v, want none", messageStrings(messages))
@@ -1034,7 +1034,7 @@ func TestAgent_Run_ContinuationToken_PersistsSavedResponseUpdates(t *testing.T) 
 		ID:               "test-agent",
 		Name:             "test-agent",
 		HistoryProvider:  historyProvider,
-		ContextProviders: []*agent.ContextProvider{contextProvider},
+		ContextProviders: []agent.ContextProvider{contextProvider},
 	})
 	token := agenttest.EncodeContinuationToken(t, agenttest.ContinuationToken{
 		Type:       agenttest.ContinuationTokenType,
@@ -1065,20 +1065,20 @@ func TestAgent_Run_ContinuationToken_PersistsSavedResponseUpdates(t *testing.T) 
 func TestAgent_Run_ContinuationToken_PersistsSavedInputMessages(t *testing.T) {
 	var historyRequestMessages []*message.Message
 	var contextRequestMessages []*message.Message
-	historyProvider := &agent.HistoryProvider{
+	historyProvider := agent.NewHistoryProvider(agent.HistoryProviderConfig{
 		SourceID: "history",
-		Store: func(_ context.Context, requestMessages []*message.Message, _ []*message.Message, _ ...agent.Option) error {
-			historyRequestMessages = requestMessages
+		Store: func(_ context.Context, invoked agent.InvokedContext) error {
+			historyRequestMessages = invoked.RequestMessages
 			return nil
 		},
-	}
-	contextProvider := &agent.ContextProvider{
+	})
+	contextProvider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "ctx",
-		Store: func(_ context.Context, requestMessages []*message.Message, _ []*message.Message, _ ...agent.Option) error {
-			contextRequestMessages = requestMessages
+		Store: func(_ context.Context, invoked agent.InvokedContext) error {
+			contextRequestMessages = invoked.RequestMessages
 			return nil
 		},
-	}
+	})
 	runFn := func(_ context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		if len(messages) != 0 {
 			t.Fatalf("resume messages = %v, want none", messageStrings(messages))
@@ -1092,7 +1092,7 @@ func TestAgent_Run_ContinuationToken_PersistsSavedInputMessages(t *testing.T) {
 		ID:               "test-agent",
 		Name:             "test-agent",
 		HistoryProvider:  historyProvider,
-		ContextProviders: []*agent.ContextProvider{contextProvider},
+		ContextProviders: []agent.ContextProvider{contextProvider},
 	})
 	token := agenttest.EncodeContinuationToken(t, agenttest.ContinuationToken{
 		Type:          agenttest.ContinuationTokenType,
@@ -1116,13 +1116,13 @@ func TestAgent_Run_UsesConfigContextProvider(t *testing.T) {
 	provideCalled := false
 	runCalled := false
 
-	contextProvider := &agent.ContextProvider{
+	contextProvider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "ctx-provider",
-		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
+		Provide: func(_ context.Context, _ agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
 			provideCalled = true
-			return messages, options, nil
+			return nil, nil, nil
 		},
-	}
+	})
 
 	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		runCalled = true
@@ -1133,7 +1133,7 @@ func TestAgent_Run_UsesConfigContextProvider(t *testing.T) {
 
 	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
 		ID: "test-agent", Name: "test-agent",
-		ContextProviders: []*agent.ContextProvider{contextProvider},
+		ContextProviders: []agent.ContextProvider{contextProvider},
 	})
 
 	_, err := a.RunText(t.Context(), "input", agent.WithSession(agenttest.CreateSession())).Collect()
@@ -1285,12 +1285,12 @@ func TestAgent_Run_DefaultHistoryProvider_UsesExplicitLocalSession(t *testing.T)
 }
 
 func TestAgent_Run_DefaultHistoryProvider_RunsWithContextProviders(t *testing.T) {
-	contextProvider := &agent.ContextProvider{
+	contextProvider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "ctx",
-		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
-			return append(messages, message.NewText("context")), options, nil
+		Provide: func(_ context.Context, _ agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+			return []*message.Message{message.NewText("context")}, nil, nil
 		},
-	}
+	})
 	runner := &agenttest.Runner{
 		Responses: []agenttest.Turn{
 			{
@@ -1318,7 +1318,7 @@ func TestAgent_Run_DefaultHistoryProvider_RunsWithContextProviders(t *testing.T)
 	a := agent.New(agent.ProviderConfig{Run: runner.Run}, agent.Config{
 		ID:               "test-agent",
 		Name:             "test-agent",
-		ContextProviders: []*agent.ContextProvider{contextProvider},
+		ContextProviders: []agent.ContextProvider{contextProvider},
 	})
 	session := agenttest.CreateSession()
 
@@ -1361,7 +1361,7 @@ func TestAgent_Run_UsesConfigHistoryProvider(t *testing.T) {
 	a := agent.New(agent.ProviderConfig{Run: runner.Run}, agent.Config{
 		ID:              "test-agent",
 		Name:            "test-agent",
-		HistoryProvider: agent.NewInMemoryHistoryProvider(""),
+		HistoryProvider: agent.NewInMemoryHistoryProvider(agent.InMemoryHistoryProviderConfig{}),
 	})
 	session := agenttest.CreateSession()
 
@@ -1377,17 +1377,17 @@ func TestAgent_Run_HistoryProvider_SkipsWhenSessionHasServiceID(t *testing.T) {
 	provideCalled := false
 	storeCalled := false
 	var capturedMessages []*message.Message
-	historyProvider := &agent.HistoryProvider{
+	historyProvider := agent.NewHistoryProvider(agent.HistoryProviderConfig{
 		SourceID: "history",
-		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, error) {
+		Provide: func(_ context.Context, invoking agent.InvokingContext) ([]*message.Message, error) {
 			provideCalled = true
-			return append([]*message.Message{message.NewText("history")}, messages...), nil
+			return []*message.Message{message.NewText("history")}, nil
 		},
-		Store: func(context.Context, []*message.Message, []*message.Message, ...agent.Option) error {
+		Store: func(context.Context, agent.InvokedContext) error {
 			storeCalled = true
 			return nil
 		},
-	}
+	})
 	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		capturedMessages = msgs
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
@@ -1413,17 +1413,17 @@ func TestAgent_Run_HistoryProvider_SkipsWhenSessionHasServiceID(t *testing.T) {
 func TestAgent_Run_HistoryProvider_ThrowsWhenServiceIDReturnedByDefault(t *testing.T) {
 	provideCalled := false
 	storeCalled := false
-	historyProvider := &agent.HistoryProvider{
+	historyProvider := agent.NewHistoryProvider(agent.HistoryProviderConfig{
 		SourceID: "history",
-		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, error) {
+		Provide: func(_ context.Context, invoking agent.InvokingContext) ([]*message.Message, error) {
 			provideCalled = true
-			return messages, nil
+			return nil, nil
 		},
-		Store: func(context.Context, []*message.Message, []*message.Message, ...agent.Option) error {
+		Store: func(context.Context, agent.InvokedContext) error {
 			storeCalled = true
 			return nil
 		},
-	}
+	})
 	runFn := func(_ context.Context, _ []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		session, _ := agent.GetOption(options, agent.WithSession)
 		session.SetServiceID("server-managed")
@@ -1451,17 +1451,17 @@ func TestAgent_Run_HistoryProvider_ThrowsWhenServiceIDReturnedByDefault(t *testi
 func TestAgent_Run_HistoryProvider_ClearsWhenThrowDisabledAndClearEnabled(t *testing.T) {
 	provideCalls := 0
 	storeCalled := false
-	historyProvider := &agent.HistoryProvider{
+	historyProvider := agent.NewHistoryProvider(agent.HistoryProviderConfig{
 		SourceID: "history",
-		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, error) {
+		Provide: func(_ context.Context, invoking agent.InvokingContext) ([]*message.Message, error) {
 			provideCalls++
-			return messages, nil
+			return nil, nil
 		},
-		Store: func(context.Context, []*message.Message, []*message.Message, ...agent.Option) error {
+		Store: func(context.Context, agent.InvokedContext) error {
 			storeCalled = true
 			return nil
 		},
-	}
+	})
 	runCalls := 0
 	runFn := func(_ context.Context, _ []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		runCalls++
@@ -1500,17 +1500,17 @@ func TestAgent_Run_HistoryProvider_ClearsWhenThrowDisabledAndClearEnabled(t *tes
 func TestAgent_Run_HistoryProvider_KeepsWhenThrowAndClearDisabled(t *testing.T) {
 	provideCalls := 0
 	storeCalls := 0
-	historyProvider := &agent.HistoryProvider{
+	historyProvider := agent.NewHistoryProvider(agent.HistoryProviderConfig{
 		SourceID: "history",
-		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, error) {
+		Provide: func(_ context.Context, invoking agent.InvokingContext) ([]*message.Message, error) {
 			provideCalls++
-			return messages, nil
+			return nil, nil
 		},
-		Store: func(context.Context, []*message.Message, []*message.Message, ...agent.Option) error {
+		Store: func(context.Context, agent.InvokedContext) error {
 			storeCalls++
 			return nil
 		},
-	}
+	})
 	runCalls := 0
 	runFn := func(_ context.Context, _ []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		runCalls++
@@ -1548,13 +1548,13 @@ func TestAgent_Run_HistoryProvider_KeepsWhenThrowAndClearDisabled(t *testing.T) 
 func TestAgent_Run_HistoryProvider_SkipsWithContinuationToken(t *testing.T) {
 	provideCalled := false
 	runCalled := false
-	historyProvider := &agent.HistoryProvider{
+	historyProvider := agent.NewHistoryProvider(agent.HistoryProviderConfig{
 		SourceID: "history",
-		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, error) {
+		Provide: func(_ context.Context, invoking agent.InvokingContext) ([]*message.Message, error) {
 			provideCalled = true
-			return messages, nil
+			return nil, nil
 		},
-	}
+	})
 	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		runCalled = true
 		if len(msgs) != 0 {
@@ -1582,29 +1582,29 @@ func TestAgent_Run_HistoryProvider_SkipsWithContinuationToken(t *testing.T) {
 func TestAgent_Run_UsesHistoryBeforeContextProviders(t *testing.T) {
 	sequence := make([]string, 0, 5)
 	var storedRequestMessages []*message.Message
-	historyProvider := &agent.HistoryProvider{
+	historyProvider := agent.NewHistoryProvider(agent.HistoryProviderConfig{
 		SourceID: "history",
-		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, error) {
+		Provide: func(_ context.Context, invoking agent.InvokingContext) ([]*message.Message, error) {
 			sequence = append(sequence, "history-before")
-			return append([]*message.Message{message.NewText("history")}, messages...), nil
+			return []*message.Message{message.NewText("history")}, nil
 		},
-		Store: func(_ context.Context, requestMessages []*message.Message, _ []*message.Message, _ ...agent.Option) error {
+		Store: func(_ context.Context, invoked agent.InvokedContext) error {
 			sequence = append(sequence, "history-after")
-			storedRequestMessages = requestMessages
+			storedRequestMessages = invoked.RequestMessages
 			return nil
 		},
-	}
-	contextProvider := &agent.ContextProvider{
+	})
+	contextProvider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "ctx",
-		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
+		Provide: func(_ context.Context, _ agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
 			sequence = append(sequence, "context-before")
-			return append(messages, message.NewText("context")), options, nil
+			return []*message.Message{message.NewText("context")}, nil, nil
 		},
-		Store: func(context.Context, []*message.Message, []*message.Message, ...agent.Option) error {
+		Store: func(context.Context, agent.InvokedContext) error {
 			sequence = append(sequence, "context-after")
 			return nil
 		},
-	}
+	})
 	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		sequence = append(sequence, "run")
 		if got := messageStrings(msgs); !slices.Equal(got, []string{"history", "input", "context"}) {
@@ -1621,7 +1621,7 @@ func TestAgent_Run_UsesHistoryBeforeContextProviders(t *testing.T) {
 		ID:               "test-agent",
 		Name:             "test-agent",
 		HistoryProvider:  historyProvider,
-		ContextProviders: []*agent.ContextProvider{contextProvider},
+		ContextProviders: []agent.ContextProvider{contextProvider},
 	})
 
 	_, err := a.RunText(t.Context(), "input", agent.WithSession(agenttest.CreateSession())).Collect()
@@ -1640,13 +1640,13 @@ func TestAgent_Run_UsesHistoryBeforeContextProviders(t *testing.T) {
 func TestAgent_Run_HistoryProvider_DoesNotStoreInstructions(t *testing.T) {
 	var storedRequestMessages []*message.Message
 	var capturedInstructions []string
-	historyProvider := &agent.HistoryProvider{
+	historyProvider := agent.NewHistoryProvider(agent.HistoryProviderConfig{
 		SourceID: "history",
-		Store: func(_ context.Context, requestMessages []*message.Message, _ []*message.Message, _ ...agent.Option) error {
-			storedRequestMessages = requestMessages
+		Store: func(_ context.Context, invoked agent.InvokedContext) error {
+			storedRequestMessages = invoked.RequestMessages
 			return nil
 		},
-	}
+	})
 	runFn := func(_ context.Context, msgs []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		capturedInstructions = slices.Collect(agent.AllOptions(opts, agent.WithInstructions))
 		if got := messageStrings(msgs); !slices.Equal(got, []string{"input"}) {
@@ -1675,19 +1675,19 @@ func TestAgent_Run_HistoryProvider_DoesNotStoreInstructions(t *testing.T) {
 	}
 }
 
-func TestAgent_Run_HistoryProvider_SkipsStoreAfterRunError(t *testing.T) {
+func TestAgent_Run_HistoryProvider_SkipsStoreOnRunError(t *testing.T) {
 	expected := errors.New("run failed")
 	storeCalled := false
-	historyProvider := &agent.HistoryProvider{
+	historyProvider := agent.NewHistoryProvider(agent.HistoryProviderConfig{
 		SourceID: "history",
-		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, error) {
-			return messages, nil
+		Provide: func(_ context.Context, invoking agent.InvokingContext) ([]*message.Message, error) {
+			return nil, nil
 		},
-		Store: func(context.Context, []*message.Message, []*message.Message, ...agent.Option) error {
+		Store: func(context.Context, agent.InvokedContext) error {
 			storeCalled = true
 			return nil
 		},
-	}
+	})
 	runFn := func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			yield(nil, expected)
@@ -1708,16 +1708,16 @@ func TestAgent_Run_HistoryProvider_SkipsStoreAfterRunError(t *testing.T) {
 	}
 }
 
-func TestAgent_Run_ProviderMiddleware_PropagatesInvokingError(t *testing.T) {
+func TestAgent_Run_ContextProvider_PropagatesInvokingError(t *testing.T) {
 	expected := errors.New("invoking failed")
 	runCalled := false
 
-	historyProvider := &agent.ContextProvider{
+	historyProvider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "history",
-		Provide: func(context.Context, []*message.Message, ...agent.Option) ([]*message.Message, []agent.Option, error) {
+		Provide: func(context.Context, agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
 			return nil, nil, expected
 		},
-	}
+	})
 
 	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		runCalled = true
@@ -1726,7 +1726,7 @@ func TestAgent_Run_ProviderMiddleware_PropagatesInvokingError(t *testing.T) {
 
 	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
 		ID: "test-agent", Name: "test-agent",
-		ContextProviders: []*agent.ContextProvider{historyProvider},
+		ContextProviders: []agent.ContextProvider{historyProvider},
 	})
 
 	_, err := a.RunText(t.Context(), "input", agent.WithSession(agenttest.CreateSession())).Collect()
@@ -1738,17 +1738,17 @@ func TestAgent_Run_ProviderMiddleware_PropagatesInvokingError(t *testing.T) {
 	}
 }
 
-func TestAgent_Run_ProviderMiddleware_RunsProvidersWhenSessionAutoCreated(t *testing.T) {
+func TestAgent_Run_ContextProvider_RunsWithAutoCreatedSession(t *testing.T) {
 	provideCalled := false
 	runCalled := false
 
-	historyProvider := &agent.ContextProvider{
+	historyProvider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "history",
-		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
+		Provide: func(_ context.Context, _ agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
 			provideCalled = true
-			return messages, options, nil
+			return nil, nil, nil
 		},
-	}
+	})
 
 	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		runCalled = true
@@ -1759,7 +1759,7 @@ func TestAgent_Run_ProviderMiddleware_RunsProvidersWhenSessionAutoCreated(t *tes
 
 	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
 		ID: "test-agent", Name: "test-agent",
-		ContextProviders: []*agent.ContextProvider{historyProvider},
+		ContextProviders: []agent.ContextProvider{historyProvider},
 	})
 
 	_, err := a.RunText(t.Context(), "input").Collect()
@@ -1774,7 +1774,7 @@ func TestAgent_Run_ProviderMiddleware_RunsProvidersWhenSessionAutoCreated(t *tes
 	}
 }
 
-func TestAgent_Run_ProviderMiddleware_PersistsHistoryAfterSuccessfulRun(t *testing.T) {
+func TestAgent_Run_ContextProvider_PersistsAfterSuccessfulRun(t *testing.T) {
 	historyMessage := message.NewText("history")
 	requestMessage := message.NewText("input")
 
@@ -1783,18 +1783,18 @@ func TestAgent_Run_ProviderMiddleware_PersistsHistoryAfterSuccessfulRun(t *testi
 	var storedResponse []*message.Message
 	storeCalled := false
 
-	historyProvider := &agent.ContextProvider{
+	historyProvider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "history",
-		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
-			return append(messages, historyMessage), options, nil
+		Provide: func(_ context.Context, _ agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+			return []*message.Message{historyMessage}, nil, nil
 		},
-		Store: func(_ context.Context, requestMessages, responseMessages []*message.Message, _ ...agent.Option) error {
+		Store: func(_ context.Context, invoked agent.InvokedContext) error {
 			storeCalled = true
-			storedRequest = requestMessages
-			storedResponse = responseMessages
+			storedRequest = invoked.RequestMessages
+			storedResponse = invoked.ResponseMessages
 			return nil
 		},
-	}
+	})
 
 	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		capturedMessages = msgs
@@ -1808,7 +1808,7 @@ func TestAgent_Run_ProviderMiddleware_PersistsHistoryAfterSuccessfulRun(t *testi
 
 	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
 		ID: "test-agent", Name: "test-agent",
-		ContextProviders: []*agent.ContextProvider{historyProvider},
+		ContextProviders: []agent.ContextProvider{historyProvider},
 	})
 
 	_, err := a.RunMessage(t.Context(), requestMessage, agent.WithSession(agenttest.CreateSession())).Collect()
@@ -1830,18 +1830,18 @@ func TestAgent_Run_ProviderMiddleware_PersistsHistoryAfterSuccessfulRun(t *testi
 	}
 }
 
-func TestAgent_Run_ProviderMiddleware_PersistsWithoutResponseMessages(t *testing.T) {
+func TestAgent_Run_ContextProvider_PersistsWithoutResponseMessages(t *testing.T) {
 	storeCalled := false
 	storedResponseCount := -1
 
-	historyProvider := &agent.ContextProvider{
+	historyProvider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "history",
-		Store: func(_ context.Context, _ []*message.Message, responseMessages []*message.Message, _ ...agent.Option) error {
+		Store: func(_ context.Context, invoked agent.InvokedContext) error {
 			storeCalled = true
-			storedResponseCount = len(responseMessages)
+			storedResponseCount = len(invoked.ResponseMessages)
 			return nil
 		},
-	}
+	})
 
 	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
@@ -1851,7 +1851,7 @@ func TestAgent_Run_ProviderMiddleware_PersistsWithoutResponseMessages(t *testing
 
 	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
 		ID: "test-agent", Name: "test-agent",
-		ContextProviders: []*agent.ContextProvider{historyProvider},
+		ContextProviders: []agent.ContextProvider{historyProvider},
 	})
 
 	_, err := a.RunText(t.Context(), "input", agent.WithSession(agenttest.CreateSession())).Collect()
@@ -1867,15 +1867,15 @@ func TestAgent_Run_ProviderMiddleware_PersistsWithoutResponseMessages(t *testing
 	}
 }
 
-func TestAgent_Run_ProviderMiddleware_PropagatesStoreError(t *testing.T) {
+func TestAgent_Run_ContextProvider_PropagatesStoreError(t *testing.T) {
 	expected := errors.New("store failed")
 
-	historyProvider := &agent.ContextProvider{
+	historyProvider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "history",
-		Store: func(context.Context, []*message.Message, []*message.Message, ...agent.Option) error {
+		Store: func(context.Context, agent.InvokedContext) error {
 			return expected
 		},
-	}
+	})
 
 	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
@@ -1885,7 +1885,7 @@ func TestAgent_Run_ProviderMiddleware_PropagatesStoreError(t *testing.T) {
 
 	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
 		ID: "test-agent", Name: "test-agent",
-		ContextProviders: []*agent.ContextProvider{historyProvider},
+		ContextProviders: []agent.ContextProvider{historyProvider},
 	})
 
 	_, err := a.RunText(t.Context(), "input", agent.WithSession(agenttest.CreateSession())).Collect()
@@ -1894,17 +1894,17 @@ func TestAgent_Run_ProviderMiddleware_PropagatesStoreError(t *testing.T) {
 	}
 }
 
-func TestAgent_Run_ProviderMiddleware_SkipsStoreAfterRunError(t *testing.T) {
+func TestAgent_Run_ContextProvider_SkipsDefaultStoreOnRunError(t *testing.T) {
 	runErr := errors.New("run failed")
 	storeCalled := false
 
-	historyProvider := &agent.ContextProvider{
+	historyProvider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "history",
-		Store: func(_ context.Context, _ []*message.Message, _ []*message.Message, _ ...agent.Option) error {
+		Store: func(_ context.Context, invoked agent.InvokedContext) error {
 			storeCalled = true
 			return nil
 		},
-	}
+	})
 
 	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
@@ -1917,7 +1917,7 @@ func TestAgent_Run_ProviderMiddleware_SkipsStoreAfterRunError(t *testing.T) {
 
 	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
 		ID: "test-agent", Name: "test-agent",
-		ContextProviders: []*agent.ContextProvider{historyProvider},
+		ContextProviders: []agent.ContextProvider{historyProvider},
 	})
 
 	_, err := a.RunText(t.Context(), "input", agent.WithSession(agenttest.CreateSession())).Collect()
@@ -1929,16 +1929,46 @@ func TestAgent_Run_ProviderMiddleware_SkipsStoreAfterRunError(t *testing.T) {
 	}
 }
 
-func TestAgent_Run_ProviderMiddleware_EarlyStopWithoutErrorStillStores(t *testing.T) {
-	storeCalled := false
-
-	historyProvider := &agent.ContextProvider{
-		SourceID: "history",
-		Store: func(context.Context, []*message.Message, []*message.Message, ...agent.Option) error {
-			storeCalled = true
+func TestAgent_Run_ContextProvider_InvokedReceivesRunError(t *testing.T) {
+	runErr := errors.New("run failed")
+	var invokedErr error
+	contextProvider := contextProviderFunc{
+		invoked: func(_ context.Context, invoked agent.InvokedContext) error {
+			invokedErr = invoked.Err
 			return nil
 		},
 	}
+
+	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(nil, runErr)
+		}
+	}
+
+	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
+		ID: "test-agent", Name: "test-agent",
+		ContextProviders: []agent.ContextProvider{contextProvider},
+	})
+
+	_, err := a.RunText(t.Context(), "input", agent.WithSession(agenttest.CreateSession())).Collect()
+	if !errors.Is(err, runErr) {
+		t.Fatalf("expected %v, got %v", runErr, err)
+	}
+	if !errors.Is(invokedErr, runErr) {
+		t.Fatalf("expected invoked error %v, got %v", runErr, invokedErr)
+	}
+}
+
+func TestAgent_Run_ContextProvider_EarlyStopWithoutErrorStillStores(t *testing.T) {
+	storeCalled := false
+
+	historyProvider := agent.NewContextProvider(agent.ContextProviderConfig{
+		SourceID: "history",
+		Store: func(context.Context, agent.InvokedContext) error {
+			storeCalled = true
+			return nil
+		},
+	})
 
 	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
@@ -1951,7 +1981,7 @@ func TestAgent_Run_ProviderMiddleware_EarlyStopWithoutErrorStillStores(t *testin
 
 	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
 		ID: "test-agent", Name: "test-agent",
-		ContextProviders: []*agent.ContextProvider{historyProvider},
+		ContextProviders: []agent.ContextProvider{historyProvider},
 	})
 
 	for _, err := range a.RunText(t.Context(), "input", agent.WithSession(agenttest.CreateSession()), agent.Stream(true)) {
@@ -1968,28 +1998,28 @@ func TestAgent_Run_ProviderMiddleware_EarlyStopWithoutErrorStillStores(t *testin
 
 func TestAgent_Run_UsesContextProvidersInOrder(t *testing.T) {
 	sequence := make([]string, 0, 4)
-	providerA := &agent.ContextProvider{
+	providerA := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "provider-a",
-		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
+		Provide: func(_ context.Context, _ agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
 			sequence = append(sequence, "before-a")
-			return append(messages, message.NewText("a")), options, nil
+			return []*message.Message{message.NewText("a")}, nil, nil
 		},
-		Store: func(context.Context, []*message.Message, []*message.Message, ...agent.Option) error {
+		Store: func(context.Context, agent.InvokedContext) error {
 			sequence = append(sequence, "after-a")
 			return nil
 		},
-	}
-	providerB := &agent.ContextProvider{
+	})
+	providerB := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "provider-b",
-		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
+		Provide: func(_ context.Context, _ agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
 			sequence = append(sequence, "before-b")
-			return append(messages, message.NewText("b")), options, nil
+			return []*message.Message{message.NewText("b")}, nil, nil
 		},
-		Store: func(context.Context, []*message.Message, []*message.Message, ...agent.Option) error {
+		Store: func(context.Context, agent.InvokedContext) error {
 			sequence = append(sequence, "after-b")
 			return nil
 		},
-	}
+	})
 
 	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		if len(msgs) != 3 {
@@ -2005,7 +2035,7 @@ func TestAgent_Run_UsesContextProvidersInOrder(t *testing.T) {
 
 	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
 		ID: "test-agent", Name: "test-agent",
-		ContextProviders: []*agent.ContextProvider{providerA, providerB},
+		ContextProviders: []agent.ContextProvider{providerA, providerB},
 	})
 
 	_, err := a.RunText(t.Context(), "input", agent.WithSession(agenttest.CreateSession())).Collect()
@@ -2035,24 +2065,22 @@ func TestAgent_Run_PipelineOrder_AgentHistoryContextProviderMiddlewareRun(t *tes
 		messages = append(slices.Clone(messages), message.NewText("agent"))
 		return next(ctx, messages, options...)
 	})
-	historyProvider := &agent.HistoryProvider{
+	historyProvider := agent.NewHistoryProvider(agent.HistoryProviderConfig{
 		SourceID: "history",
-		Provide: func(_ context.Context, messages []*message.Message, _ ...agent.Option) ([]*message.Message, error) {
+		Provide: func(_ context.Context, invoking agent.InvokingContext) ([]*message.Message, error) {
 			sequence = append(sequence, "history")
-			historyMessages = messageStrings(messages)
-			return append(slices.Clone(messages), message.NewText("history")), nil
+			historyMessages = messageStrings(invoking.Messages)
+			return []*message.Message{message.NewText("history")}, nil
 		},
-	}
-	contextProvider := &agent.ContextProvider{
+	})
+	contextProvider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "context",
-		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
+		Provide: func(_ context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
 			sequence = append(sequence, "context")
-			contextMessages = messageStrings(messages)
-			messages = append(slices.Clone(messages), message.NewText("context"))
-			options = append(slices.Clone(options), agent.WithTool(contextTool))
-			return messages, options, nil
+			contextMessages = messageStrings(invoking.Messages)
+			return []*message.Message{message.NewText("context")}, []agent.Option{agent.WithTool(contextTool)}, nil
 		},
-	}
+	})
 	providerMiddleware := agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		sequence = append(sequence, "provider")
 		providerMessages = messageStrings(messages)
@@ -2075,7 +2103,7 @@ func TestAgent_Run_PipelineOrder_AgentHistoryContextProviderMiddlewareRun(t *tes
 		Name:             "test-agent",
 		Middlewares:      []agent.Middleware{agentMiddleware},
 		HistoryProvider:  historyProvider,
-		ContextProviders: []*agent.ContextProvider{contextProvider},
+		ContextProviders: []agent.ContextProvider{contextProvider},
 	})
 
 	_, err := a.RunText(t.Context(), "input", agent.WithSession(agenttest.CreateSession())).Collect()
@@ -2096,13 +2124,13 @@ func TestAgent_Run_PipelineOrder_AgentHistoryContextProviderMiddlewareRun(t *tes
 	if got, want := historyMessages, []string{"input", "agent"}; !slices.Equal(got, want) {
 		t.Fatalf("expected history messages %v, got %v", want, got)
 	}
-	if got, want := contextMessages, []string{"input", "agent", "history"}; !slices.Equal(got, want) {
+	if got, want := contextMessages, []string{"input"}; !slices.Equal(got, want) {
 		t.Fatalf("expected context messages %v, got %v", want, got)
 	}
-	if got, want := providerMessages, []string{"input", "agent", "history", "context"}; !slices.Equal(got, want) {
+	if got, want := providerMessages, []string{"history", "input", "agent", "context"}; !slices.Equal(got, want) {
 		t.Fatalf("expected provider middleware messages %v, got %v", want, got)
 	}
-	if got, want := runMessages, []string{"input", "agent", "history", "context"}; !slices.Equal(got, want) {
+	if got, want := runMessages, []string{"history", "input", "agent", "context"}; !slices.Equal(got, want) {
 		t.Fatalf("expected run messages %v, got %v", want, got)
 	}
 }

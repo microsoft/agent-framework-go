@@ -6,7 +6,6 @@ package foundryprovider
 import (
 	"context"
 	"log/slog"
-	"slices"
 	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
@@ -52,14 +51,15 @@ type MemoryProvider struct {
 	memoryStoreName string
 	scopeFunc       func(*agent.Session) string
 	config          MemoryProviderConfig
-	provider        *agent.ContextProvider
+	providerConfig  agent.ContextProviderConfig
+	provider        agent.ContextProvider
 }
 
 // NewMemoryProvider creates a Foundry memory provider backed by a Microsoft Foundry Projects memory store.
 //
 // The returned provider is attached to an agent with:
 //
-//	agent.Config{ContextProviders: []*agent.ContextProvider{provider.ContextProvider()}}
+//	agent.Config{ContextProviders: []agent.ContextProvider{provider}}
 //
 // The endpoint must be a project-scoped Microsoft Foundry endpoint, and memoryStoreName must
 // name an existing Foundry memory store. The scope callback is invoked for each run and must
@@ -98,39 +98,38 @@ func newMemoryProvider(client *azaiprojects.MemoryStoresClient, memoryStoreName 
 	if config.SearchInputFilter == nil {
 		config.SearchInputFilter = messagefilter.ExternalOnly
 	}
+	providerConfig := agent.ContextProviderConfig{
+		ProvideInputMessageFilter:      config.SearchInputFilter,
+		SourceID:                       defaultSourceID,
+		StoreInputRequestMessageFilter: messagefilter.ExternalOnly,
+	}
 	p := &MemoryProvider{
 		client:          client,
 		memoryStoreName: memoryStoreName,
 		scopeFunc:       scope,
 		config:          config,
+		providerConfig:  providerConfig,
 	}
-	p.provider = &agent.ContextProvider{
-		SourceID:           defaultSourceID,
-		StoreRequestFilter: messagefilter.ExternalOnly,
-		Provide:            p.provide,
-		Store:              p.store,
-	}
+	p.providerConfig.Provide = p.provide
+	p.providerConfig.Store = p.store
+	p.provider = agent.NewContextProvider(p.providerConfig)
 	return p
 }
 
-// ContextProvider returns the Agent Framework context provider.
-func (p *MemoryProvider) ContextProvider() *agent.ContextProvider {
-	if p == nil {
-		return nil
-	}
-	return p.provider
+func (p *MemoryProvider) Invoking(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+	return p.provider.Invoking(ctx, invoking)
 }
 
-func (p *MemoryProvider) provide(ctx context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
-	searchMessages, err := p.config.SearchInputFilter(ctx, slices.Clone(messages))
-	if err != nil {
-		return nil, nil, err
-	}
-	items := searchMemoryItems(searchMessages)
+func (p *MemoryProvider) Invoked(ctx context.Context, invoked agent.InvokedContext) error {
+	return p.provider.Invoked(ctx, invoked)
+}
+
+func (p *MemoryProvider) provide(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+	items := searchMemoryItems(invoking.Messages)
 	if len(items) == 0 {
-		return messages, options, nil
+		return nil, nil, nil
 	}
-	session, _ := agent.GetOption(options, agent.WithSession)
+	session, _ := agent.GetOption(invoking.Options, agent.WithSession)
 	scope := p.scope(session)
 	searchOptions := &azaiprojects.MemoryStoresClientSearchMemoriesOptions{
 		Items: items,
@@ -141,26 +140,24 @@ func (p *MemoryProvider) provide(ctx context.Context, messages []*message.Messag
 	result, err := p.client.SearchMemories(ctx, p.memoryStoreName, scope, searchOptions)
 	if err != nil {
 		p.log(ctx, slog.LevelError, "foundrymemory: failed to search memories", "memory_store", p.memoryStoreName, "error", err)
-		return messages, options, nil
+		return nil, nil, nil
 	}
 	memories := memoryContents(result.Memories)
 	p.log(ctx, slog.LevelInfo, "foundrymemory: retrieved memories", "memory_store", p.memoryStoreName, "count", len(memories))
 	if len(memories) == 0 {
-		return messages, options, nil
+		return nil, nil, nil
 	}
 	contextMessage := message.NewText(p.config.ContextPrompt + "\n" + strings.Join(memories, "\n"))
-	out := slices.Clone(messages)
-	out = append(out, contextMessage)
-	return out, options, nil
+	return []*message.Message{contextMessage}, nil, nil
 }
 
-func (p *MemoryProvider) store(ctx context.Context, requestMessages, responseMessages []*message.Message, options ...agent.Option) error {
-	items := updateMemoryItems(requestMessages)
-	items = append(items, updateMemoryItems(responseMessages)...)
+func (p *MemoryProvider) store(ctx context.Context, invoked agent.InvokedContext) error {
+	items := updateMemoryItems(invoked.RequestMessages)
+	items = append(items, updateMemoryItems(invoked.ResponseMessages)...)
 	if len(items) == 0 {
 		return nil
 	}
-	session, _ := agent.GetOption(options, agent.WithSession)
+	session, _ := agent.GetOption(invoked.Options, agent.WithSession)
 	scope := p.scope(session)
 	updateOptions := &azaiprojects.MemoryStoresClientBeginUpdateMemoriesOptions{
 		Items:       items,

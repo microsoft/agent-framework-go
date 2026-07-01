@@ -87,7 +87,7 @@ func runShellEnvironmentDemo(ctx context.Context, client openai.Client, mode she
 			Instructions: instructions,
 			Config: agent.Config{
 				Tools:            []tool.Tool{shell},
-				ContextProviders: []*agent.ContextProvider{envProvider.ContextProvider},
+				ContextProviders: []agent.ContextProvider{envProvider},
 				Middlewares:      []agent.Middleware{logger},
 			},
 		},

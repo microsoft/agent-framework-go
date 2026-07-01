@@ -36,6 +36,10 @@ type countingSource struct {
 	skills []*skills.Skill
 }
 
+func invokeProvider(provider agent.ContextProvider, ctx context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
+	return provider.Invoking(ctx, agent.InvokingContext{Messages: messages, Options: options})
+}
+
 func (s *countingSource) Skills(context.Context) ([]*skills.Skill, error) {
 	s.count++
 	return s.skills, nil
@@ -97,7 +101,7 @@ func TestProvider_CustomPromptTemplate_LegacyInstructionPlaceholdersRemainLitera
 	}
 }
 
-func providerFromFileSource(source *fsskills.Source, opts *skills.ContextProviderOptions) *agent.ContextProvider {
+func providerFromFileSource(source *fsskills.Source, opts *skills.ContextProviderOptions) agent.ContextProvider {
 	if opts == nil {
 		return skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}})
 	}
@@ -265,7 +269,7 @@ func TestProvider_RecoversFromPanickingSourceAndResetsLoading(t *testing.T) {
 	source := &panicOnceSource{skill: skill}
 	provider := skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}})
 
-	_, _, err := provider.BeforeRun(t.Context(), nil, agent.WithSession(agenttest.CreateSession()))
+	_, _, err := invokeProvider(provider, t.Context(), nil, agent.WithSession(agenttest.CreateSession()))
 	if err == nil {
 		t.Fatal("expected provider to return an error after source panic")
 	}
@@ -279,7 +283,7 @@ func TestProvider_RecoversFromPanickingSourceAndResetsLoading(t *testing.T) {
 	}
 	resultCh := make(chan result, 1)
 	go func() {
-		_, options, err := provider.BeforeRun(t.Context(), nil, agent.WithSession(agenttest.CreateSession()))
+		_, options, err := invokeProvider(provider, t.Context(), nil, agent.WithSession(agenttest.CreateSession()))
 		instructions, _ := agent.GetOption(options, agent.WithInstructions)
 		resultCh <- result{hasInstructions: strings.Contains(instructions, "recovered-skill"), err: err}
 	}()
@@ -609,7 +613,7 @@ func TestNewProvider_ProvideExtendsInput(t *testing.T) {
 	session := agenttest.CreateSession()
 	input := message.NewText("input")
 
-	messages, options, err := provider.Provide(t.Context(), []*message.Message{input}, agent.WithSession(session))
+	messages, options, err := invokeProvider(provider, t.Context(), []*message.Message{input}, agent.WithSession(session))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -634,7 +638,7 @@ func TestNewProvider_ProvideExtendsInput(t *testing.T) {
 func TestProvider_WithEmptySource_ReturnsEmptyProvider(t *testing.T) {
 	provider := skills.NewContextProvider(skills.ContextProviderOptions{})
 	ctx := context.Background()
-	messages, options, err := provider.BeforeRun(ctx, nil, agent.WithSession(agenttest.CreateSession()))
+	messages, options, err := invokeProvider(provider, ctx, nil, agent.WithSession(agenttest.CreateSession()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -723,7 +727,7 @@ func TestProvider_SkillFilter_CanFilterOutAllSkills(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	messages, options, err := provider.BeforeRun(ctx, nil, agent.WithSession(agenttest.CreateSession()))
+	messages, options, err := invokeProvider(provider, ctx, nil, agent.WithSession(agenttest.CreateSession()))
 	if err != nil {
 		t.Fatal(err)
 	}

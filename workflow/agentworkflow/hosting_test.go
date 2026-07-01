@@ -195,7 +195,7 @@ func newRecordingAgent(calls *[][]*message.Message) *agent.Agent {
 			ID:                  testAgentID,
 			Name:                testAgentName,
 			DisableFuncAutoCall: true,
-			HistoryProvider:     &agent.HistoryProvider{SourceID: "noop"},
+			HistoryProvider:     agent.NewHistoryProvider(agent.HistoryProviderConfig{SourceID: "noop"}),
 		},
 	)
 }
@@ -1283,7 +1283,7 @@ func TestHostedAgent_FunctionResultMessageMetadataMatchesHostedAgent(t *testing.
 	}
 	a := agent.New(
 		agent.ProviderConfig{ProviderName: "metadata", Run: run},
-		agent.Config{ID: agentID, DisableFuncAutoCall: true, HistoryProvider: &agent.HistoryProvider{SourceID: "noop"}},
+		agent.Config{ID: agentID, DisableFuncAutoCall: true, HistoryProvider: agent.NewHistoryProvider(agent.HistoryProviderConfig{SourceID: "noop"})},
 	)
 	host := agentworkflow.New(a, agentworkflow.Config{InterceptUnterminatedFunctionCalls: true})
 	exec := resultExecutor(host, "42")

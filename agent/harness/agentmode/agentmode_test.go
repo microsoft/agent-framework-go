@@ -23,6 +23,10 @@ func sessionOpts() []agent.Option {
 	return []agent.Option{agent.WithSession(agenttest.CreateSession())}
 }
 
+func invokeProvider(provider *agentmode.Provider, ctx context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
+	return provider.Invoking(ctx, agent.InvokingContext{Messages: messages, Options: options})
+}
+
 func collectTools(opts []agent.Option) []tool.Tool {
 	var tools []tool.Tool
 	for _, opt := range opts {
@@ -49,7 +53,7 @@ func TestProvide_ReturnsToolsAndInstructions(t *testing.T) {
 	p := agentmode.New(agentmode.Config{})
 	opts := sessionOpts()
 
-	_, outOpts, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +74,7 @@ func TestProvide_InstructionsIncludeCurrentMode(t *testing.T) {
 	p := agentmode.New(agentmode.Config{})
 	opts := sessionOpts()
 
-	_, outOpts, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +178,7 @@ func TestCustomModes_AppearInInstructions(t *testing.T) {
 	})
 	opts := sessionOpts()
 
-	_, outOpts, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +234,7 @@ func TestExternalModeChange_InjectsNotification(t *testing.T) {
 	msgs := newMessages("hi")
 
 	// Initialize state.
-	_, _, err := p.BeforeRun(context.Background(), msgs, opts...)
+	_, _, err := invokeProvider(p, context.Background(), msgs, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +245,7 @@ func TestExternalModeChange_InjectsNotification(t *testing.T) {
 	}
 
 	// Next provide should inject notification.
-	outMessages, _, err := p.BeforeRun(context.Background(), msgs, opts...)
+	outMessages, _, err := invokeProvider(p, context.Background(), msgs, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,11 +268,11 @@ func TestExternalModeChange_NotificationClearedAfterFirstRead(t *testing.T) {
 	opts := sessionOpts()
 	msgs := newMessages("hi")
 
-	_, _, _ = p.BeforeRun(context.Background(), msgs, opts...)
+	_, _, _ = invokeProvider(p, context.Background(), msgs, opts...)
 	_ = p.SetMode("execute", opts...)
 
 	// First read: should have notification.
-	outMessages, _, _ := p.BeforeRun(context.Background(), msgs, opts...)
+	outMessages, _, _ := invokeProvider(p, context.Background(), msgs, opts...)
 	hasNotification := false
 	for _, msg := range outMessages {
 		if strings.Contains(msg.Contents.Text(), "Mode changed") {
@@ -281,7 +285,7 @@ func TestExternalModeChange_NotificationClearedAfterFirstRead(t *testing.T) {
 	}
 
 	// Second read: notification should be cleared.
-	outMessages2, _, _ := p.BeforeRun(context.Background(), msgs, opts...)
+	outMessages2, _, _ := invokeProvider(p, context.Background(), msgs, opts...)
 	for _, msg := range outMessages2 {
 		if strings.Contains(msg.Contents.Text(), "Mode changed") {
 			t.Error("notification should have been cleared after first read")
@@ -295,12 +299,12 @@ func TestExternalModeChange_SameMode_NoNotification(t *testing.T) {
 	opts := sessionOpts()
 	msgs := newMessages("hi")
 
-	_, _, _ = p.BeforeRun(context.Background(), msgs, opts...)
+	_, _, _ = invokeProvider(p, context.Background(), msgs, opts...)
 
 	// Set to same mode.
 	_ = p.SetMode("plan", opts...)
 
-	outMessages, _, _ := p.BeforeRun(context.Background(), msgs, opts...)
+	outMessages, _, _ := invokeProvider(p, context.Background(), msgs, opts...)
 	for _, msg := range outMessages {
 		if strings.Contains(msg.Contents.Text(), "Mode changed") {
 			t.Error("should not inject notification when setting same mode")
@@ -313,7 +317,7 @@ func TestSetMode_ChangesMode(t *testing.T) {
 	p := agentmode.New(agentmode.Config{})
 	opts := sessionOpts()
 
-	_, _, _ = p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	_, _, _ = invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 
 	if err := p.SetMode("execute", opts...); err != nil {
 		t.Fatal(err)
@@ -328,10 +332,10 @@ func TestSetMode_ReflectedInInstructions(t *testing.T) {
 	p := agentmode.New(agentmode.Config{})
 	opts := sessionOpts()
 
-	_, _, _ = p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	_, _, _ = invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	_ = p.SetMode("execute", opts...)
 
-	_, outOpts, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -420,7 +424,7 @@ func TestPublicSetMode_ReflectedInInstructions(t *testing.T) {
 
 	_ = p.SetMode("execute", opts...)
 
-	_, outOpts, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,11 +440,11 @@ func TestState_PersistsAcrossInvocations(t *testing.T) {
 	p := agentmode.New(agentmode.Config{})
 	opts := sessionOpts()
 
-	_, _, _ = p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	_, _, _ = invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	_ = p.SetMode("execute", opts...)
 
 	// Second invocation — mode should persist.
-	_, outOpts, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -462,7 +466,7 @@ func TestCustomInstructions_OverridesDefault(t *testing.T) {
 	})
 	opts := sessionOpts()
 
-	_, outOpts, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -481,7 +485,7 @@ func TestToolNames(t *testing.T) {
 	p := agentmode.New(agentmode.Config{})
 	opts := sessionOpts()
 
-	_, outOpts, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -505,7 +509,7 @@ func TestDefaultInstructions_ContainToolNamesAndModeCheckGuidance(t *testing.T) 
 	p := agentmode.New(agentmode.Config{})
 	opts := sessionOpts()
 
-	_, outOpts, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -523,7 +527,7 @@ func TestDefaultInstructions_ModesSectionHeaderFormat(t *testing.T) {
 	p := agentmode.New(agentmode.Config{})
 	opts := sessionOpts()
 
-	_, outOpts, err := p.BeforeRun(context.Background(), newMessages("hi"), opts...)
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -12,15 +12,16 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/message/messagefilter"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 )
 
 func TestContextProvider_Invoking_WithoutProvide_ReturnsNoAdditions(t *testing.T) {
 	request := message.NewText("r1")
-	provider := &agent.ContextProvider{SourceID: "ctx"}
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{SourceID: "ctx"})
 
-	messages, options, err := provider.BeforeRun(t.Context(), []*message.Message{request}, agent.WithSession(agenttest.CreateSession()))
+	messages, options, err := invokeContextProvider(provider, t.Context(), []*message.Message{request}, agent.WithSession(agenttest.CreateSession()))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -39,22 +40,22 @@ func TestContextProvider_Middleware_PanicsWithNilProvider(t *testing.T) {
 		}
 	}()
 
-	var provider *agent.ContextProvider
-	_ = provider.Middleware()
+	var provider agent.ContextProvider
+	_ = agent.ContextProviderMiddleware(provider)
 }
 
 func TestContextProviderMiddleware_Run_ProviderOptionsEnrichTools(t *testing.T) {
 	baselineTool := stubTool{name: "baseline"}
 	providerTool := stubTool{name: "provider"}
 	var capturedTools []tool.Tool
-	provider := &agent.ContextProvider{
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "provider-a",
-		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
-			return messages, append(options, agent.WithTool(providerTool)), nil
+		Provide: func(_ context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+			return nil, []agent.Option{agent.WithTool(providerTool)}, nil
 		},
-	}
+	})
 
-	_, err := collectContextProviderMiddlewareResponse(provider.Middleware().Run(
+	_, err := collectContextProviderMiddlewareResponse(agent.ContextProviderMiddleware(provider).Run(
 		func(_ context.Context, _ []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 			capturedTools = slices.Collect(agent.AllOptions(opts, agent.WithTool))
 			return contextProviderMiddlewareSingleUpdate("ok")
@@ -75,19 +76,19 @@ func TestContextProviderMiddleware_Run_ProviderOptionsEnrichTools(t *testing.T) 
 
 func TestContextProviderMiddleware_Run_SharedOptions_ProviderToolsDoNotAccumulateAcrossCalls(t *testing.T) {
 	toolCounts := make([]int, 0, 3)
-	provider := &agent.ContextProvider{
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "provider-a",
-		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
-			return messages, append(options, agent.WithTool(stubTool{name: "provider"})), nil
+		Provide: func(_ context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+			return nil, []agent.Option{agent.WithTool(stubTool{name: "provider"})}, nil
 		},
-	}
+	})
 	sharedOptions := []agent.Option{
 		agent.WithSession(agenttest.CreateSession()),
 		agent.WithTool(stubTool{name: "baseline"}),
 	}
 
 	for range 3 {
-		_, err := collectContextProviderMiddlewareResponse(provider.Middleware().Run(
+		_, err := collectContextProviderMiddlewareResponse(agent.ContextProviderMiddleware(provider).Run(
 			func(_ context.Context, _ []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 				toolCounts = append(toolCounts, len(slices.Collect(agent.AllOptions(opts, agent.WithTool))))
 				return contextProviderMiddlewareSingleUpdate("ok")
@@ -108,18 +109,18 @@ func TestContextProviderMiddleware_Run_SharedOptions_ProviderToolsDoNotAccumulat
 
 func TestContextProviderMiddleware_Run_SharedOptions_OriginalToolsNotMutated(t *testing.T) {
 	baselineTool := stubTool{name: "baseline"}
-	provider := &agent.ContextProvider{
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "provider-a",
-		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
-			return messages, append(options, agent.WithTool(stubTool{name: "provider"})), nil
+		Provide: func(_ context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+			return nil, []agent.Option{agent.WithTool(stubTool{name: "provider"})}, nil
 		},
-	}
+	})
 	sharedOptions := []agent.Option{
 		agent.WithSession(agenttest.CreateSession()),
 		agent.WithTool(baselineTool),
 	}
 
-	_, err := collectContextProviderMiddlewareResponse(provider.Middleware().Run(
+	_, err := collectContextProviderMiddlewareResponse(agent.ContextProviderMiddleware(provider).Run(
 		func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 			return contextProviderMiddlewareSingleUpdate("ok")
 		},
@@ -144,15 +145,15 @@ func TestContextProviderMiddleware_Run_PassesResponseMessagesWithServiceManagedS
 	session := agenttest.CreateSession()
 	session.SetServiceID("server-managed")
 	var storedResponseMessages []*message.Message
-	provider := &agent.ContextProvider{
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "provider-a",
-		Store: func(_ context.Context, _ []*message.Message, responseMessages []*message.Message, _ ...agent.Option) error {
-			storedResponseMessages = responseMessages
+		Store: func(_ context.Context, invoked agent.InvokedContext) error {
+			storedResponseMessages = invoked.ResponseMessages
 			return nil
 		},
-	}
+	})
 
-	_, err := collectContextProviderMiddlewareResponse(provider.Middleware().Run(
+	_, err := collectContextProviderMiddlewareResponse(agent.ContextProviderMiddleware(provider).Run(
 		func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 			return contextProviderMiddlewareSingleUpdate("ok")
 		},
@@ -168,18 +169,18 @@ func TestContextProviderMiddleware_Run_PassesResponseMessagesWithServiceManagedS
 	}
 }
 
-func TestContextProviderMiddleware_Run_SkipsStoreAfterRunError(t *testing.T) {
+func TestContextProviderMiddleware_Run_SkipsDefaultStoreOnRunError(t *testing.T) {
 	expected := errors.New("run failed")
 	storeCalled := false
-	provider := &agent.ContextProvider{
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "provider-a",
-		Store: func(context.Context, []*message.Message, []*message.Message, ...agent.Option) error {
+		Store: func(context.Context, agent.InvokedContext) error {
 			storeCalled = true
 			return nil
 		},
-	}
+	})
 
-	_, err := collectContextProviderMiddlewareResponse(provider.Middleware().Run(
+	_, err := collectContextProviderMiddlewareResponse(agent.ContextProviderMiddleware(provider).Run(
 		func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 			return func(yield func(*agent.ResponseUpdate, error) bool) {
 				yield(nil, expected)
@@ -194,6 +195,37 @@ func TestContextProviderMiddleware_Run_SkipsStoreAfterRunError(t *testing.T) {
 	}
 	if storeCalled {
 		t.Fatal("expected store to be skipped after run error")
+	}
+}
+
+func TestContextProviderMiddleware_Run_PassesRunErrorToCustomProvider(t *testing.T) {
+	expected := errors.New("run failed")
+	var invokedErr error
+	provider := contextProviderFunc{
+		invoking: func(_ context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+			return invoking.Messages, invoking.Options, nil
+		},
+		invoked: func(_ context.Context, invoked agent.InvokedContext) error {
+			invokedErr = invoked.Err
+			return nil
+		},
+	}
+
+	_, err := collectContextProviderMiddlewareResponse(agent.ContextProviderMiddleware(provider).Run(
+		func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			return func(yield func(*agent.ResponseUpdate, error) bool) {
+				yield(nil, expected)
+			}
+		},
+		context.Background(),
+		[]*message.Message{message.NewText("hello")},
+		agent.WithSession(agenttest.CreateSession()),
+	))
+	if !errors.Is(err, expected) {
+		t.Fatalf("expected %v, got %v", expected, err)
+	}
+	if !errors.Is(invokedErr, expected) {
+		t.Fatalf("expected invoked error %v, got %v", expected, invokedErr)
 	}
 }
 
@@ -215,73 +247,151 @@ func collectContextProviderMiddlewareResponse(seq iter.Seq2[*agent.ResponseUpdat
 	return &resp, nil
 }
 
+func invokeContextProvider(provider agent.ContextProvider, ctx context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
+	return provider.Invoking(ctx, agent.InvokingContext{Messages: messages, Options: options})
+}
+
+func invokeContextProviderInvoked(provider agent.ContextProvider, ctx context.Context, requestMessages, responseMessages []*message.Message, options ...agent.Option) error {
+	return provider.Invoked(ctx, agent.InvokedContext{RequestMessages: requestMessages, ResponseMessages: responseMessages, Options: options})
+}
+
+type contextProviderFunc struct {
+	invoking func(context.Context, agent.InvokingContext) ([]*message.Message, []agent.Option, error)
+	invoked  func(context.Context, agent.InvokedContext) error
+}
+
+func (p contextProviderFunc) Invoking(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+	if p.invoking == nil {
+		return invoking.Messages, invoking.Options, nil
+	}
+	return p.invoking(ctx, invoking)
+}
+
+func (p contextProviderFunc) Invoked(ctx context.Context, invoked agent.InvokedContext) error {
+	if p.invoked == nil {
+		return nil
+	}
+	return p.invoked(ctx, invoked)
+}
+
 func TestContextProvider_Invoking_PanicsWithoutSourceID(t *testing.T) {
-	provider := &agent.ContextProvider{}
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{})
 	defer func() {
 		if recover() == nil {
 			t.Fatal("expected panic")
 		}
 	}()
-	_, _, _ = provider.BeforeRun(t.Context(), nil, agent.WithSession(agenttest.CreateSession()))
+	_, _, _ = invokeContextProvider(provider, t.Context(), nil, agent.WithSession(agenttest.CreateSession()))
 }
 
-func TestContextProvider_Invoking_MarksMessagesReplacedByProvide(t *testing.T) {
-	replacement := message.NewText("replacement")
-	provider := &agent.ContextProvider{
+func TestContextProvider_Invoking_SourceStampsProvidedMessages(t *testing.T) {
+	provided := message.NewText("provided")
+	request := message.NewText("request")
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "ctx",
-		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
-			messages[0] = replacement
-			return messages, options, nil
+		Provide: func(_ context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+			return []*message.Message{provided}, nil, nil
 		},
-	}
+	})
 
-	messages, _, err := provider.BeforeRun(t.Context(), []*message.Message{message.NewText("request")}, agent.WithSession(agenttest.CreateSession()))
+	messages, _, err := invokeContextProvider(provider, t.Context(), []*message.Message{request}, agent.WithSession(agenttest.CreateSession()))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(messages))
+	if len(messages) != 2 {
+		t.Fatalf("expected original and provided messages, got %d", len(messages))
 	}
-	if messages[0] == replacement {
-		t.Fatal("expected replaced message to be cloned")
+	if messages[0] != request {
+		t.Fatal("expected original request message to be preserved")
 	}
-	if messages[0].Source != (message.Source{Type: agent.SourceTypeContextProvider, ID: "ctx"}) {
-		t.Fatalf("replaced message source = %#v, want context provider source", messages[0].Source)
+	if messages[1] == provided {
+		t.Fatal("expected provided message to be cloned")
+	}
+	if messages[1].Source != (message.Source{Type: agent.SourceTypeContextProvider, ID: "ctx"}) {
+		t.Fatalf("provided message source = %#v, want context provider source", messages[1].Source)
 	}
 }
 
 func TestContextProvider_Invoking_HonorsNilProvideOutputs(t *testing.T) {
-	provider := &agent.ContextProvider{
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "ctx",
-		Provide: func(context.Context, []*message.Message, ...agent.Option) ([]*message.Message, []agent.Option, error) {
+		Provide: func(context.Context, agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
 			return nil, nil, nil
 		},
-	}
+	})
 
-	messages, options, err := provider.BeforeRun(t.Context(), []*message.Message{message.NewText("r1")}, agent.WithSession(agenttest.CreateSession()))
+	messages, options, err := invokeContextProvider(provider, t.Context(), []*message.Message{message.NewText("r1")}, agent.WithSession(agenttest.CreateSession()))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if messages != nil {
-		t.Fatalf("expected nil messages returned by Provide to be honored, got %v", messageStrings(messages))
+	if got := messageStrings(messages); !slices.Equal(got, []string{"r1"}) {
+		t.Fatalf("expected original messages to be preserved, got %v", got)
 	}
-	if options != nil {
-		t.Fatalf("expected nil options returned by Provide to be honored, got %d", len(options))
+	if len(options) != 1 {
+		t.Fatalf("expected original options to be preserved, got %d", len(options))
 	}
 }
 
 func TestContextProvider_Invoking_PropagatesProvideError(t *testing.T) {
 	expected := errors.New("provide failed")
-	provider := &agent.ContextProvider{
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "ctx",
-		Provide: func(context.Context, []*message.Message, ...agent.Option) ([]*message.Message, []agent.Option, error) {
+		Provide: func(context.Context, agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
 			return nil, nil, expected
 		},
-	}
+	})
 
-	_, _, err := provider.BeforeRun(t.Context(), []*message.Message{message.NewText("r1")}, agent.WithSession(agenttest.CreateSession()))
+	_, _, err := invokeContextProvider(provider, t.Context(), []*message.Message{message.NewText("r1")}, agent.WithSession(agenttest.CreateSession()))
 	if !errors.Is(err, expected) {
 		t.Fatalf("expected Provide error, got %v", err)
+	}
+}
+
+func TestContextProvider_Invoking_FiltersInputMessagesBeforeProvide(t *testing.T) {
+	request := message.NewText("request")
+	ctxMessage := message.NewText("ctx")
+	ctxMessage.Source = message.Source{Type: agent.SourceTypeContextProvider, ID: "other"}
+	var providedInput []*message.Message
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{
+		SourceID: "ctx",
+		Provide: func(_ context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+			providedInput = invoking.Messages
+			return nil, nil, nil
+		},
+	})
+
+	messages, _, err := invokeContextProvider(provider, t.Context(), []*message.Message{request, ctxMessage}, agent.WithSession(agenttest.CreateSession()))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := messageStrings(providedInput); !slices.Equal(got, []string{"request"}) {
+		t.Fatalf("provided input messages = %v, want [request]", got)
+	}
+	if got := messageStrings(messages); !slices.Equal(got, []string{"request", "ctx"}) {
+		t.Fatalf("output messages = %v, want original unfiltered messages", got)
+	}
+}
+
+func TestContextProvider_Invoking_UsesCustomProvideInputMessageFilter(t *testing.T) {
+	request := message.NewText("request")
+	ctxMessage := message.NewText("ctx")
+	ctxMessage.Source = message.Source{Type: agent.SourceTypeContextProvider, ID: "other"}
+	var providedInput []*message.Message
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{
+		SourceID:                  "ctx",
+		ProvideInputMessageFilter: messagefilter.PassThrough,
+		Provide: func(_ context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+			providedInput = invoking.Messages
+			return nil, nil, nil
+		},
+	})
+
+	_, _, err := invokeContextProvider(provider, t.Context(), []*message.Message{request, ctxMessage}, agent.WithSession(agenttest.CreateSession()))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := messageStrings(providedInput); !slices.Equal(got, []string{"request", "ctx"}) {
+		t.Fatalf("provided input messages = %v, want unfiltered input", got)
 	}
 }
 
@@ -289,14 +399,14 @@ func TestContextProvider_Invoking_ReturnsProvidedMessagesAndSetsSourceID(t *test
 	provided := message.NewText("ctx")
 	request := message.NewText("request")
 
-	provider := &agent.ContextProvider{
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "ctx",
-		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
-			return append(messages, provided), options, nil
+		Provide: func(_ context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+			return []*message.Message{provided}, nil, nil
 		},
-	}
+	})
 
-	messages, _, err := provider.BeforeRun(t.Context(), []*message.Message{request}, agent.WithSession(agenttest.CreateSession()))
+	messages, _, err := invokeContextProvider(provider, t.Context(), []*message.Message{request}, agent.WithSession(agenttest.CreateSession()))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -314,47 +424,44 @@ func TestContextProvider_Invoking_ReturnsProvidedMessagesAndSetsSourceID(t *test
 	}
 }
 
-func TestContextProvider_Invoking_SetsSourceIDOnPrependedMessages(t *testing.T) {
+func TestContextProvider_Invoking_AppendsProvidedMessages(t *testing.T) {
 	provided := message.NewText("ctx")
 	request := message.NewText("request")
 
-	provider := &agent.ContextProvider{
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "ctx",
-		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
-			out := make([]*message.Message, 0, len(messages)+1)
-			out = append(out, provided)
-			out = append(out, messages...)
-			return out, options, nil
+		Provide: func(_ context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+			return []*message.Message{provided}, nil, nil
 		},
-	}
+	})
 
-	messages, _, err := provider.BeforeRun(t.Context(), []*message.Message{request}, agent.WithSession(agenttest.CreateSession()))
+	messages, _, err := invokeContextProvider(provider, t.Context(), []*message.Message{request}, agent.WithSession(agenttest.CreateSession()))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(messages) != 2 {
-		t.Fatalf("expected provided and original messages, got %d", len(messages))
+		t.Fatalf("expected original and provided messages, got %d", len(messages))
 	}
-	if messages[0] == provided {
-		t.Fatal("expected prepended message to be cloned")
+	if messages[0] != request {
+		t.Fatal("expected original message to be preserved first")
 	}
-	if messages[0].Source.ID != "ctx" {
-		t.Fatalf("expected SourceID=ctx, got %q", messages[0].Source.ID)
+	if messages[1] == provided {
+		t.Fatal("expected provided message to be cloned")
 	}
-	if messages[1] != request {
-		t.Fatal("expected original message to be preserved")
+	if messages[1].Source.ID != "ctx" {
+		t.Fatalf("expected SourceID=ctx, got %q", messages[1].Source.ID)
 	}
 }
 
 func TestContextProvider_Invoking_UsesCustomSourceID(t *testing.T) {
-	provider := &agent.ContextProvider{
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "CustomContextSource",
-		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
-			return append(messages, message.NewText("ctx")), options, nil
+		Provide: func(_ context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+			return []*message.Message{message.NewText("ctx")}, nil, nil
 		},
-	}
+	})
 
-	messages, _, err := provider.BeforeRun(t.Context(), nil, agent.WithSession(agenttest.CreateSession()))
+	messages, _, err := invokeContextProvider(provider, t.Context(), nil, agent.WithSession(agenttest.CreateSession()))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -367,13 +474,13 @@ func TestContextProvider_Invoking_UsesCustomSourceID(t *testing.T) {
 }
 
 func TestContextProvider_Invoked_PanicsWithoutSourceID(t *testing.T) {
-	provider := &agent.ContextProvider{}
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{})
 	defer func() {
 		if recover() == nil {
 			t.Fatal("expected panic")
 		}
 	}()
-	_ = provider.AfterRun(t.Context(), nil, nil, agent.WithSession(agenttest.CreateSession()))
+	_ = invokeContextProviderInvoked(provider, t.Context(), nil, nil, agent.WithSession(agenttest.CreateSession()))
 }
 
 func TestContextProvider_Invoked_CallsStoreAndIncludesExternalRequestMessagesByDefault(t *testing.T) {
@@ -389,17 +496,17 @@ func TestContextProvider_Invoked_CallsStoreAndIncludesExternalRequestMessagesByD
 	var storedRequest []*message.Message
 	var storedResponse []*message.Message
 
-	provider := &agent.ContextProvider{
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "ctx",
-		Store: func(_ context.Context, requestMessages, responseMessages []*message.Message, _ ...agent.Option) error {
+		Store: func(_ context.Context, invoked agent.InvokedContext) error {
 			called = true
-			storedRequest = requestMessages
-			storedResponse = responseMessages
+			storedRequest = invoked.RequestMessages
+			storedResponse = invoked.ResponseMessages
 			return nil
 		},
-	}
+	})
 
-	err := provider.AfterRun(t.Context(), []*message.Message{req1, req2, req3}, []*message.Message{resp}, agent.WithSession(agenttest.CreateSession()))
+	err := invokeContextProviderInvoked(provider, t.Context(), []*message.Message{req1, req2, req3}, []*message.Message{resp}, agent.WithSession(agenttest.CreateSession()))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -416,14 +523,14 @@ func TestContextProvider_Invoked_CallsStoreAndIncludesExternalRequestMessagesByD
 
 func TestContextProvider_Invoked_PropagatesStoreError(t *testing.T) {
 	expected := errors.New("store failed")
-	provider := &agent.ContextProvider{
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "ctx",
-		Store: func(context.Context, []*message.Message, []*message.Message, ...agent.Option) error {
+		Store: func(context.Context, agent.InvokedContext) error {
 			return expected
 		},
-	}
+	})
 
-	err := provider.AfterRun(t.Context(), []*message.Message{message.NewText("r1")}, nil, agent.WithSession(agenttest.CreateSession()))
+	err := invokeContextProviderInvoked(provider, t.Context(), []*message.Message{message.NewText("r1")}, nil, agent.WithSession(agenttest.CreateSession()))
 	if !errors.Is(err, expected) {
 		t.Fatalf("expected store error, got %v", err)
 	}
@@ -439,14 +546,14 @@ func TestContextProvider_InvokingContext_ReturnsProvidedFields(t *testing.T) {
 		return struct{}{}, nil
 	})
 
-	provider := &agent.ContextProvider{
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "ctx",
-		Provide: func(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
-			return append(messages, providedMsg), append(options, agent.WithTool(providedTool)), nil
+		Provide: func(_ context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+			return []*message.Message{providedMsg}, []agent.Option{agent.WithTool(providedTool)}, nil
 		},
-	}
+	})
 
-	messages, options, err := provider.BeforeRun(t.Context(), []*message.Message{request}, agent.WithSession(agenttest.CreateSession()), agent.WithTool(inputTool))
+	messages, options, err := invokeContextProvider(provider, t.Context(), []*message.Message{request}, agent.WithSession(agenttest.CreateSession()), agent.WithTool(inputTool))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

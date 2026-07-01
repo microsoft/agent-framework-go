@@ -13,7 +13,6 @@ package todo
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strings"
 	"sync"
 
@@ -82,10 +81,9 @@ type Options struct {
 }
 
 // Provider is an agent context provider that manages todo items.
-// Use [New] to create. The embedded [agent.ContextProvider] can be used
-// directly in agent configuration.
+// Use [New] to create. Provider can be used directly in agent configuration.
 type Provider struct {
-	agent.ContextProvider
+	provider               agent.ContextProvider
 	instructions           string
 	suppressTodoMessage    bool
 	todoListMessageBuilder func([]Item) string
@@ -107,11 +105,19 @@ func New(opts *Options) *Provider {
 		p.todoListMessageBuilder = opts.TodoListMessageBuilder
 	}
 
-	p.ContextProvider = agent.ContextProvider{
+	p.provider = agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "TodoProvider",
 		Provide:  p.provide,
-	}
+	})
 	return p
+}
+
+func (p *Provider) Invoking(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+	return p.provider.Invoking(ctx, invoking)
+}
+
+func (p *Provider) Invoked(ctx context.Context, invoked agent.InvokedContext) error {
+	return p.provider.Invoked(ctx, invoked)
 }
 
 // GetAllItems returns all todo items from the session state.
@@ -176,10 +182,11 @@ func (p *Provider) getSessionLock(opts []agent.Option) *sync.Mutex {
 	return v.(*sync.Mutex)
 }
 
-func (p *Provider) provide(ctx context.Context, messages []*message.Message, opts ...agent.Option) ([]*message.Message, []agent.Option, error) {
+func (p *Provider) provide(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+	opts := invoking.Options
 	tools := p.createTools(opts)
 
-	outOpts := slices.Clone(opts)
+	var outOpts []agent.Option
 	for _, t := range tools {
 		outOpts = append(outOpts, agent.WithTool(t))
 	}
@@ -187,7 +194,7 @@ func (p *Provider) provide(ctx context.Context, messages []*message.Message, opt
 	// Add instructions.
 	outOpts = append(outOpts, agent.WithInstructions(p.instructions))
 
-	outMessages := messages
+	var outMessages []*message.Message
 
 	// Inject current todo list summary so the agent sees outstanding work.
 	if !p.suppressTodoMessage {
@@ -202,9 +209,7 @@ func (p *Provider) provide(ctx context.Context, messages []*message.Message, opt
 		} else {
 			todoMsg = formatTodoListMessage(st.Items)
 		}
-		outMessages = make([]*message.Message, 0, len(messages)+1)
 		outMessages = append(outMessages, message.NewText(todoMsg))
-		outMessages = append(outMessages, messages...)
 	}
 
 	return outMessages, outOpts, nil

@@ -44,7 +44,7 @@ func main() {
 			Config: agent.Config{
 				Name:             "MemoryAgent",
 				Middlewares:      []agent.Middleware{logger}, // for logging agent interactions
-				ContextProviders: []*agent.ContextProvider{newUserMemoryProvider()},
+				ContextProviders: []agent.ContextProvider{newUserMemoryProvider()},
 			},
 		},
 	)
@@ -72,12 +72,12 @@ func main() {
 	demo.Assistantf("[Session State] Stored user name: %s", state.UserName)
 }
 
-func newUserMemoryProvider() *agent.ContextProvider {
-	return &agent.ContextProvider{
+func newUserMemoryProvider() agent.ContextProvider {
+	return agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: userMemorySourceID,
 		Provide:  provideUserMemory,
 		Store:    storeUserMemory,
-	}
+	})
 }
 
 const userMemorySourceID = "user_memory"
@@ -95,20 +95,20 @@ func getProviderState(session *agent.Session) providerState {
 	return state
 }
 
-func provideUserMemory(ctx context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
-	session, _ := agent.GetOption(options, agent.WithSession)
+func provideUserMemory(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+	session, _ := agent.GetOption(invoking.Options, agent.WithSession)
 	state := getProviderState(session)
 	instructions := "You don't know the user's name yet. Ask for it politely."
 	if strings.TrimSpace(state.UserName) != "" {
 		instructions = fmt.Sprintf("The user's name is %s. Always address them by name.", state.UserName)
 	}
-	return messages, append(options, agent.WithInstructions(instructions)), nil
+	return nil, []agent.Option{agent.WithInstructions(instructions)}, nil
 }
 
-func storeUserMemory(ctx context.Context, requestMessages, _ []*message.Message, options ...agent.Option) error {
-	session, _ := agent.GetOption(options, agent.WithSession)
+func storeUserMemory(ctx context.Context, invoked agent.InvokedContext) error {
+	session, _ := agent.GetOption(invoked.Options, agent.WithSession)
 	state := getProviderState(session)
-	for _, msg := range requestMessages {
+	for _, msg := range invoked.RequestMessages {
 		if msg == nil || msg.Role != message.RoleUser {
 			continue
 		}

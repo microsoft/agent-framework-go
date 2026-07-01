@@ -137,7 +137,7 @@ type providerContext struct {
 }
 
 // NewContextProvider creates a skills context provider from the configured in-memory skills and sources.
-func NewContextProvider(opts ContextProviderOptions) *agent.ContextProvider {
+func NewContextProvider(opts ContextProviderOptions) agent.ContextProvider {
 	if opts.Logger == nil {
 		opts.Logger = slog.New(slog.DiscardHandler)
 	}
@@ -153,10 +153,10 @@ func NewContextProvider(opts ContextProviderOptions) *agent.ContextProvider {
 		logger:  opts.Logger,
 	}
 
-	return &agent.ContextProvider{
+	return agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: cmp.Or(opts.SourceID, "skills"),
 		Provide:  state.provide,
-	}
+	})
 }
 
 // NewInMemorySource creates a skills source backed by the provided in-memory skills.
@@ -199,13 +199,13 @@ func (s *skillSliceSource) Skills(context.Context) ([]*Skill, error) {
 	return s.skills, nil
 }
 
-func (p *providerState) provide(ctx context.Context, messages []*message.Message, options ...agent.Option) (outMessages []*message.Message, outOptions []agent.Option, err error) {
+func (p *providerState) provide(ctx context.Context, invoking agent.InvokingContext) (outMessages []*message.Message, outOptions []agent.Option, err error) {
 	if p.options.DisableCaching {
 		result, err := p.buildContext(ctx)
 		if err != nil {
 			return nil, nil, err
 		}
-		outMessages, outOptions = extendProviderContext(messages, options, result)
+		outMessages, outOptions = providedContext(result)
 		return outMessages, outOptions, nil
 	}
 
@@ -213,7 +213,7 @@ func (p *providerState) provide(ctx context.Context, messages []*message.Message
 	if p.cached != nil {
 		cached := *p.cached
 		p.mu.Unlock()
-		outMessages, outOptions = extendProviderContext(messages, options, cached)
+		outMessages, outOptions = providedContext(cached)
 		return outMessages, outOptions, nil
 	}
 	if p.loading != nil {
@@ -228,11 +228,11 @@ func (p *providerState) provide(ctx context.Context, messages []*message.Message
 			if err != nil {
 				return nil, nil, err
 			}
-			outMessages, outOptions = extendProviderContext(messages, options, result)
+			outMessages, outOptions = providedContext(result)
 			return outMessages, outOptions, nil
 		}
 		cached := *p.cached
-		outMessages, outOptions = extendProviderContext(messages, options, cached)
+		outMessages, outOptions = providedContext(cached)
 		return outMessages, outOptions, nil
 	}
 	p.loading = make(chan struct{})
@@ -259,19 +259,15 @@ func (p *providerState) provide(ctx context.Context, messages []*message.Message
 	if err != nil {
 		return nil, nil, err
 	}
-	outMessages, outOptions = extendProviderContext(messages, options, result)
+	outMessages, outOptions = providedContext(result)
 	return outMessages, outOptions, nil
 }
 
-func extendProviderContext(messages []*message.Message, options []agent.Option, result providerContext) ([]*message.Message, []agent.Option) {
-	outMessages := messages
-	if len(result.Messages) > 0 {
-		outMessages = append(messages, result.Messages...)
-	}
-
-	outOptions := options
+func providedContext(result providerContext) ([]*message.Message, []agent.Option) {
+	outMessages := result.Messages
+	var outOptions []agent.Option
 	if len(result.Options) > 0 {
-		outOptions = append(options, result.Options...)
+		outOptions = append(outOptions, result.Options...)
 	}
 	if strings.TrimSpace(result.Instructions) != "" {
 		outOptions = append(outOptions, agent.WithInstructions(result.Instructions))

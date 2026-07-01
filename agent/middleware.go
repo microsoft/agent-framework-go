@@ -51,7 +51,21 @@ type middlewareRunner struct {
 
 func (mr middlewareRunner) Run(ctx context.Context, messages []*message.Message, opts ...Option) iter.Seq2[*ResponseUpdate, error] {
 	next := func(ctx context.Context, outMessages []*message.Message, opts ...Option) iter.Seq2[*ResponseUpdate, error] {
-		markNewMessagesWithSource(outMessages, messages, message.Source{Type: SourceTypeMiddleware}, false)
+		originals := make(map[*message.Message]struct{}, len(messages))
+		for _, msg := range messages {
+			originals[msg] = struct{}{}
+		}
+		for i, msg := range outMessages {
+			if _, ok := originals[msg]; ok {
+				continue
+			}
+			if msg == nil || msg.Source != (message.Source{}) {
+				continue
+			}
+			marked := msg.Clone()
+			marked.Source = message.Source{Type: SourceTypeMiddleware}
+			outMessages[i] = marked
+		}
 		return mr.next(ctx, outMessages, opts...)
 	}
 	return mr.Middleware.Run(next, ctx, messages, opts...)

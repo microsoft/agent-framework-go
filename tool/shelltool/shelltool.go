@@ -30,7 +30,7 @@
 //	env := shelltool.NewEnvironmentProvider(t, shelltool.EnvironmentProviderConfig{})
 //	cfg := agent.Config{
 //		Tools:            []tool.Tool{t},
-//		ContextProviders: []*agent.ContextProvider{env.ContextProvider},
+//		ContextProviders: []agent.ContextProvider{env},
 //	}
 package shelltool
 

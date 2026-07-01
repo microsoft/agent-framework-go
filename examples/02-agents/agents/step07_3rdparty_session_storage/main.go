@@ -98,13 +98,13 @@ type fsMessageStore struct {
 	Dir string
 }
 
-func newFSHistoryProvider(dir string) *agent.HistoryProvider {
+func newFSHistoryProvider(dir string) agent.HistoryProvider {
 	store := &fsMessageStore{Dir: dir}
-	return &agent.HistoryProvider{
+	return agent.NewHistoryProvider(agent.HistoryProviderConfig{
 		SourceID: "fsMessageStore",
 		Provide:  store.provideMessages,
 		Store:    store.persistMessages,
-	}
+	})
 }
 
 func (d *fsMessageStore) getFiles(session *agent.Session) []string {
@@ -136,26 +136,20 @@ func (d *fsMessageStore) loadMessages(session *agent.Session) ([]*message.Messag
 	return msgs, nil
 }
 
-func (d *fsMessageStore) provideMessages(_ context.Context, msgs []*message.Message, opts ...agent.Option) ([]*message.Message, error) {
-	session, _ := agent.GetOption(opts, agent.WithSession)
+func (d *fsMessageStore) provideMessages(_ context.Context, invoking agent.InvokingContext) ([]*message.Message, error) {
+	session, _ := agent.GetOption(invoking.Options, agent.WithSession)
 	if session == nil {
-		return msgs, nil
+		return nil, nil
 	}
 	history, err := d.loadMessages(session)
 	if err != nil {
 		return nil, err
 	}
-	if len(history) == 0 {
-		return msgs, nil
-	}
-	messages := make([]*message.Message, 0, len(history)+len(msgs))
-	messages = append(messages, history...)
-	messages = append(messages, msgs...)
-	return messages, nil
+	return history, nil
 }
 
-func (d *fsMessageStore) persistMessages(_ context.Context, requestMessages, responseMessages []*message.Message, opts ...agent.Option) error {
-	session, _ := agent.GetOption(opts, agent.WithSession)
+func (d *fsMessageStore) persistMessages(_ context.Context, invoked agent.InvokedContext) error {
+	session, _ := agent.GetOption(invoked.Options, agent.WithSession)
 	if session == nil {
 		return nil
 	}
@@ -179,12 +173,12 @@ func (d *fsMessageStore) persistMessages(_ context.Context, requestMessages, res
 		files = append(files, msg.ID)
 		return nil
 	}
-	for _, msg := range requestMessages {
+	for _, msg := range invoked.RequestMessages {
 		if err := persist(msg); err != nil {
 			return err
 		}
 	}
-	for _, msg := range responseMessages {
+	for _, msg := range invoked.ResponseMessages {
 		if err := persist(msg); err != nil {
 			return err
 		}

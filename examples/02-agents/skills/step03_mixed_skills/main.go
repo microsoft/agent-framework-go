@@ -188,7 +188,7 @@ func main() {
 			Config: agent.Config{
 				Name:             "MultiConverterAgent",
 				Middlewares:      []agent.Middleware{logger},
-				ContextProviders: []*agent.ContextProvider{skillsProvider},
+				ContextProviders: []agent.ContextProvider{skillsProvider},
 			},
 		},
 	)

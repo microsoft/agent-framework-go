@@ -652,7 +652,7 @@ func newGroupChatDoubleEchoAgent(id string) *agent.Agent {
 	}
 	return agent.New(
 		agent.ProviderConfig{ProviderName: "group-chat-double-echo", Run: run},
-		agent.Config{ID: id, Name: id, DisableFuncAutoCall: true, HistoryProvider: &agent.HistoryProvider{SourceID: "noop-history"}},
+		agent.Config{ID: id, Name: id, DisableFuncAutoCall: true, HistoryProvider: agent.NewHistoryProvider(agent.HistoryProviderConfig{SourceID: "noop-history"})},
 	)
 }
 
@@ -743,7 +743,7 @@ func newGroupChatApprovalAgent(id string) *groupChatApprovalAgent {
 	}
 	agentState.Agent = agent.New(
 		agent.ProviderConfig{ProviderName: "group-chat-approval", Run: run},
-		agent.Config{ID: id, Name: id, DisableFuncAutoCall: true, HistoryProvider: &agent.HistoryProvider{SourceID: "noop-history"}},
+		agent.Config{ID: id, Name: id, DisableFuncAutoCall: true, HistoryProvider: agent.NewHistoryProvider(agent.HistoryProviderConfig{SourceID: "noop-history"})},
 	)
 	return agentState
 }
@@ -797,7 +797,7 @@ func newGroupChatFunctionCallAgent(id string) *groupChatFunctionCallAgent {
 	}
 	agentState.Agent = agent.New(
 		agent.ProviderConfig{ProviderName: "group-chat-function-call", Run: run},
-		agent.Config{ID: id, Name: id, DisableFuncAutoCall: true, HistoryProvider: &agent.HistoryProvider{SourceID: "noop-history"}},
+		agent.Config{ID: id, Name: id, DisableFuncAutoCall: true, HistoryProvider: agent.NewHistoryProvider(agent.HistoryProviderConfig{SourceID: "noop-history"})},
 	)
 	return agentState
 }
@@ -823,7 +823,7 @@ func newGroupChatRecordingAgent(name string) *groupChatRecordingAgent {
 		agent.Config{
 			ID:              name,
 			Name:            name,
-			HistoryProvider: &agent.HistoryProvider{SourceID: "noop-history"},
+			HistoryProvider: agent.NewHistoryProvider(agent.HistoryProviderConfig{SourceID: "noop-history"}),
 		},
 	)
 	return recorder

@@ -12,7 +12,6 @@ package agentmode
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -147,22 +146,29 @@ func New(cfg Config) *Provider {
 		validModes:   validModes,
 	}
 
-	p.ContextProvider = agent.ContextProvider{
+	p.provider = agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "AgentModeProvider",
 		Provide:  p.provide,
-	}
+	})
 	return p
 }
 
 // Provider is an agent mode context provider.
-// Use [New] to create. The embedded [agent.ContextProvider] can be used
-// directly in agent configuration.
+// Use [New] to create. Provider can be used directly in agent configuration.
 type Provider struct {
-	agent.ContextProvider
+	provider     agent.ContextProvider
 	modes        []Mode
 	defaultMode  string
 	instructions string
 	validModes   map[string]struct{}
+}
+
+func (p *Provider) Invoking(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+	return p.provider.Invoking(ctx, invoking)
+}
+
+func (p *Provider) Invoked(ctx context.Context, invoked agent.InvokedContext) error {
+	return p.provider.Invoked(ctx, invoked)
 }
 
 func (p *Provider) loadState(opts []agent.Option) *state {
@@ -185,13 +191,14 @@ func (p *Provider) saveState(opts []agent.Option, s *state) {
 	session.Set(stateKey, *s)
 }
 
-func (p *Provider) provide(ctx context.Context, messages []*message.Message, opts ...agent.Option) ([]*message.Message, []agent.Option, error) {
+func (p *Provider) provide(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+	opts := invoking.Options
 	st := p.loadState(opts)
 	// Persist the initial state so SetMode can read it.
 	p.saveState(opts, st)
 
 	tools := p.createTools(opts, st)
-	outOpts := slices.Clone(opts)
+	var outOpts []agent.Option
 	for _, t := range tools {
 		outOpts = append(outOpts, agent.WithTool(t))
 	}
@@ -200,17 +207,15 @@ func (p *Provider) provide(ctx context.Context, messages []*message.Message, opt
 	instructionText := p.buildInstructions(st.CurrentMode)
 	outOpts = append(outOpts, agent.WithInstructions(instructionText))
 
-	outMessages := messages
+	var outMessages []*message.Message
 
 	// If the mode was changed externally (e.g. via SetMode), inject a notification
 	// so the agent clearly sees the change in conversation context.
 	if st.PreviousMode != "" {
-		outMessages = make([]*message.Message, 0, len(messages)+1)
 		outMessages = append(outMessages, message.NewText(fmt.Sprintf(
 			"[Mode changed: The operating mode has been switched from %q to %q. You must now adjust your behavior to match the %q mode.]",
 			st.PreviousMode, st.CurrentMode, st.CurrentMode,
 		)))
-		outMessages = append(outMessages, messages...)
 		st.PreviousMode = ""
 		p.saveState(opts, st)
 	}

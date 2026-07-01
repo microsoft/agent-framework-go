@@ -56,7 +56,7 @@ You remind users of upcoming calendar events when the user interacts with you.`,
 			Config: agent.Config{
 				Name:            "PersonalAssistant",
 				HistoryProvider: newChatHistoryProvider(),
-				ContextProviders: []*agent.ContextProvider{
+				ContextProviders: []agent.ContextProvider{
 					newTodoListContextProvider(),
 					newCalendarSearchContextProvider(loadNextThreeCalendarEvents),
 				},
@@ -121,18 +121,19 @@ const (
 	calendarSearchSourceID = "calendar_search"
 )
 
-func newChatHistoryProvider() *agent.HistoryProvider {
-	historyProvider := agent.NewInMemoryHistoryProvider(chatHistorySourceID)
-	// Use StoreRequestFilter to provide a custom filter for request messages stored in chat history.
+func newChatHistoryProvider() agent.HistoryProvider {
+	// Use StoreInputRequestMessageFilter to provide a custom filter for request messages stored in chat history.
 	// By default, the history provider stores request messages that did not come from chat history.
 	// In this case, we explicitly exclude messages from chat history and AI context providers.
 	// You may want to store these messages, depending on their content and your requirements.
-	historyProvider.StoreRequestFilter = messagefilter.NotSources(
-		message.Source{Type: agent.SourceTypeHistoryProvider, ID: chatHistorySourceID},
-		message.Source{Type: agent.SourceTypeContextProvider, ID: todoListSourceID},
-		message.Source{Type: agent.SourceTypeContextProvider, ID: calendarSearchSourceID},
-	)
-	return historyProvider
+	return agent.NewInMemoryHistoryProvider(agent.InMemoryHistoryProviderConfig{
+		SourceID: chatHistorySourceID,
+		StoreInputRequestMessageFilter: messagefilter.NotSources(
+			message.Source{Type: agent.SourceTypeHistoryProvider, ID: chatHistorySourceID},
+			message.Source{Type: agent.SourceTypeContextProvider, ID: todoListSourceID},
+			message.Source{Type: agent.SourceTypeContextProvider, ID: calendarSearchSourceID},
+		),
+	})
 }
 
 type todoListState struct {
@@ -147,11 +148,11 @@ type removeTodoItemArgs struct {
 	Index int `json:"index"`
 }
 
-func newTodoListContextProvider() *agent.ContextProvider {
-	return &agent.ContextProvider{
+func newTodoListContextProvider() agent.ContextProvider {
+	return agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: todoListSourceID,
 		Provide:  provideTodoListContext,
-	}
+	})
 }
 
 func getTodoListState(session *agent.Session) todoListState {
@@ -169,8 +170,8 @@ func setTodoListState(session *agent.Session, state todoListState) {
 	}
 }
 
-func provideTodoListContext(_ context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
-	session, _ := agent.GetOption(options, agent.WithSession)
+func provideTodoListContext(_ context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+	session, _ := agent.GetOption(invoking.Options, agent.WithSession)
 	state := getTodoListState(session)
 
 	var output strings.Builder
@@ -209,20 +210,13 @@ func provideTodoListContext(_ context.Context, messages []*message.Message, opti
 		return fmt.Sprintf("Removed todo item: %s", removed), nil
 	})
 
-	messages = append(messages, &message.Message{
-		Role: message.RoleUser,
-		Contents: []message.Content{
-			&message.TextContent{Text: output.String()},
-		},
-	})
-	options = append(options, agent.WithTool(addTodoItemTool), agent.WithTool(removeTodoItemTool))
-	return messages, options, nil
+	return []*message.Message{message.NewText(output.String())}, []agent.Option{agent.WithTool(addTodoItemTool), agent.WithTool(removeTodoItemTool)}, nil
 }
 
-func newCalendarSearchContextProvider(loadNextThreeCalendarEvents func(context.Context) ([]string, error)) *agent.ContextProvider {
-	return &agent.ContextProvider{
+func newCalendarSearchContextProvider(loadNextThreeCalendarEvents func(context.Context) ([]string, error)) agent.ContextProvider {
+	return agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: calendarSearchSourceID,
-		Provide: func(ctx context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
+		Provide: func(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
 			events, err := loadNextThreeCalendarEvents(ctx)
 			if err != nil {
 				return nil, nil, err
@@ -234,13 +228,7 @@ func newCalendarSearchContextProvider(loadNextThreeCalendarEvents func(context.C
 				_, _ = fmt.Fprintf(&output, " - %s\n", calendarEvent)
 			}
 
-			messages = append(messages, &message.Message{
-				Role: message.RoleUser,
-				Contents: []message.Content{
-					&message.TextContent{Text: output.String()},
-				},
-			})
-			return messages, options, nil
+			return []*message.Message{message.NewText(output.String())}, nil, nil
 		},
-	}
+	})
 }

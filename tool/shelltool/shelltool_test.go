@@ -17,8 +17,13 @@ import (
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool/shelltool"
 )
+
+func invokeProvider(provider *shelltool.EnvironmentProvider, ctx context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
+	return provider.Invoking(ctx, agent.InvokingContext{Messages: messages, Options: options})
+}
 
 // --------------------------------------------------------------------------
 // Result.FormatForModel
@@ -214,7 +219,7 @@ func TestEnvironmentProvider_customFormatterOverridesDefault(t *testing.T) {
 		},
 	})
 
-	_, options, err := env.BeforeRun(t.Context(), nil)
+	_, options, err := invokeProvider(env, t.Context(), nil)
 	if err != nil {
 		t.Fatalf("provide shell environment: %v", err)
 	}
@@ -266,7 +271,7 @@ func TestEnvironmentProvider_providesInstructionsAndSnapshot(t *testing.T) {
 		ProbeTools:     []string{},
 	})
 
-	_, options, err := env.BeforeRun(t.Context(), nil)
+	_, options, err := invokeProvider(env, t.Context(), nil)
 	if err != nil {
 		t.Fatalf("provide shell environment: %v", err)
 	}
@@ -335,14 +340,14 @@ func TestEnvironmentProvider_failedProvideAllowsRetry(t *testing.T) {
 
 	canceled, cancel := context.WithCancel(t.Context())
 	cancel()
-	if _, _, err := env.BeforeRun(canceled, nil); err == nil {
+	if _, _, err := invokeProvider(env, canceled, nil); err == nil {
 		t.Fatal("expected canceled provider run to fail")
 	}
 	if _, ok := env.CurrentSnapshot(); ok {
 		t.Fatal("did not expect snapshot after failed provider run")
 	}
 
-	if _, _, err := env.BeforeRun(t.Context(), nil); err != nil {
+	if _, _, err := invokeProvider(env, t.Context(), nil); err != nil {
 		t.Fatalf("retry provider run: %v", err)
 	}
 	if _, ok := env.CurrentSnapshot(); !ok {
@@ -367,14 +372,14 @@ func TestEnvironmentProvider_firstCallFailsNextCallRetriesAndSucceeds(t *testing
 		ProbeTools:     []string{},
 	})
 
-	if _, _, err := env.BeforeRun(t.Context(), nil); !errors.Is(err, boom) {
+	if _, _, err := invokeProvider(env, t.Context(), nil); !errors.Is(err, boom) {
 		t.Fatalf("first provider run error = %v, want boom", err)
 	}
 	if _, ok := env.CurrentSnapshot(); ok {
 		t.Fatal("did not expect snapshot after failed provider run")
 	}
 
-	if _, _, err := env.BeforeRun(t.Context(), nil); err != nil {
+	if _, _, err := invokeProvider(env, t.Context(), nil); err != nil {
 		t.Fatalf("retry provider run: %v", err)
 	}
 	snapshot, ok := env.CurrentSnapshot()
@@ -404,14 +409,14 @@ func TestEnvironmentProvider_firstCallCanceledNextCallSucceeds(t *testing.T) {
 	canceled, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	if _, _, err := env.BeforeRun(canceled, nil); !errors.Is(err, context.Canceled) {
+	if _, _, err := invokeProvider(env, canceled, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("first provider run error = %v, want context canceled", err)
 	}
 	if _, ok := env.CurrentSnapshot(); ok {
 		t.Fatal("did not expect snapshot after canceled provider run")
 	}
 
-	if _, _, err := env.BeforeRun(t.Context(), nil); err != nil {
+	if _, _, err := invokeProvider(env, t.Context(), nil); err != nil {
 		t.Fatalf("retry provider run: %v", err)
 	}
 	snapshot, ok := env.CurrentSnapshot()
