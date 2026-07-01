@@ -3,51 +3,39 @@
 package main
 
 import (
-	"cmp"
 	"context"
-	"os"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
-
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
 )
 
-var (
-	endpoint   = os.Getenv("AZURE_OPENAI_ENDPOINT")
-	apiVersion = cmp.Or(os.Getenv("AZURE_OPENAI_API_VERSION"), "2025-01-01-preview")
-	deployment = cmp.Or(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME"), "gpt-4o-mini")
-)
-
 var logger = demo.NewLogger(
-	"Basic Run",
-	"Demonstrates a simple agent run.",
-	"Model", deployment,
+	"Azure OpenAI Chat Completions",
+	"Demonstrates an Azure OpenAI chat-completions backed agent.",
+	"Model", demo.Deployment,
 )
 
 func main() {
-	// Get Azure token credential for authentication with Azure OpenAI.
 	token := demo.AzureTokenCredential()
 
-	// Create Azure OpenAI agent.
-	a := openaiprovider.NewAgent(
+	a := openaiprovider.NewChatCompletionsAgent(
 		openai.NewClient(
-			azure.WithEndpoint(endpoint, apiVersion),
+			azure.WithEndpoint(demo.Endpoint, demo.APIVersion),
 			azure.WithTokenCredential(token),
 		),
 		openaiprovider.AgentConfig{
-			Model:        deployment,
+			Model:        demo.Deployment,
 			Instructions: "You are good at telling jokes.",
 			Config: agent.Config{
 				Name:        "Joker",
-				Middlewares: []agent.Middleware{logger}, // for logging agent interactions
+				Middlewares: []agent.Middleware{logger},
 			},
 		},
 	)
 
-	// Invoke the agent and output the text result.
 	resp, err := a.RunText(context.Background(), "Tell me a joke about a pirate.").Collect()
 	demo.Response(resp, err)
 }

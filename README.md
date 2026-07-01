@@ -51,7 +51,8 @@ For a detailed .NET-to-Go feature comparison, see the [.NET and Go SDK feature c
   - [Agent middleware](./agent/middleware.go) | [Agent harness](./agent/harness/)
 - **Orchestration Patterns & Workflows**: Build multi-agent systems with graph-based workflows supporting sequential, concurrent, group collaboration, conditional routing, subworkflows, checkpointing, streaming, human-in-the-loop, and time-travel patterns. Handoff orchestration is not implemented yet in the Go SDK.
   - [Workflow examples](./examples/03-workflows/) | [Workflow package](./workflow/)
-- **Foundry Hosted Agents (new)**: Not implemented yet in the Go SDK.
+- **Microsoft Foundry Agents**: Build project-backed Foundry agents, invoke existing server-side Foundry agents, pass Foundry client headers, capture served-model metadata, and use Foundry memory. Foundry-hosted deployment is not implemented yet in the Go SDK.
+  - [Foundry examples](./examples/02-agents/providers/foundry/) | [Foundry provider](./provider/foundryprovider/)
 - **Observability**: OpenTelemetry integration for distributed tracing, monitoring, and debugging.
   - [Agent OpenTelemetry](./provider/otelprovider/) | [Workflow OpenTelemetry](./workflow/observability/opentelemetry/)
 - **Declarative Agents**: Not implemented yet in the Go SDK.
@@ -128,7 +129,7 @@ func main() {
 	}
 
 	// Create an Azure OpenAI agent.
-	// Replace <endpoint> and <apiVersion> with your Microsoft Foundry endpoint and API version.
+	// Replace <endpoint> and <apiVersion> with your Azure OpenAI endpoint and API version.
 	a := openaiprovider.NewAgent(
 		openai.NewClient(
 			azure.WithEndpoint("<endpoint>", "<apiVersion>"),
