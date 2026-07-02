@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"log"
 	"net/http"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -13,6 +12,18 @@ import (
 	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
+)
+
+const (
+	addr      = ":8888"
+	serverURL = "http://localhost:8888"
+)
+
+var _ = demo.NewLogger(
+	"AG-UI Backend Tools Server",
+	"Serves a Foundry agent with backend tools through the AG-UI JSON HTTP handler.",
+	"Model", demo.FoundryModel,
+	"URL", serverURL,
 )
 
 type restaurantSearchRequest struct {
@@ -70,8 +81,9 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/", aguiprovider.NewJSONHTTPHandler(a, aguiprovider.HandlerConfig{}))
 
-	log.Printf("AG-UI server listening on %s", ":8888")
-	if err := http.ListenAndServe(":8888", mux); err != nil {
-		log.Fatal(err)
+	demo.Assistantf("AG-UI server listening at %s", serverURL)
+	demo.Assistantf("Run the matching client with AGUI_SERVER_URL=%s if needed.", serverURL)
+	if err := http.ListenAndServe(addr, mux); err != nil {
+		demo.Panicf("AG-UI server failed on %s: %v", addr, err)
 	}
 }

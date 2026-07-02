@@ -112,7 +112,7 @@ func newSloganWriter(id string) workflow.ExecutorBinding {
 
 func writeSlogan(ctx *workflow.Context, ag *agent.Agent, prompt string) (SloganResult, error) {
 	var result SloganResult
-	_, err := demo.AgentText(ctx, ag, prompt, agent.WithStructuredOutput(&result))
+	_, err := ag.RunText(ctx, prompt, agent.WithStructuredOutput(&result)).Collect()
 	if err != nil {
 		return SloganResult{}, err
 	}
@@ -150,7 +150,7 @@ func newFeedbackProvider(id string, minimumRating int, maxAttempts int) workflow
 					slogan := msg.(SloganResult)
 					prompt := fmt.Sprintf("Task: %s\nSlogan: %s\nProvide feedback.", slogan.Task, slogan.Slogan)
 					var feedback FeedbackResult
-					_, err := demo.AgentText(ctx, ag, prompt, agent.WithStructuredOutput(&feedback))
+					_, err := ag.RunText(ctx, prompt, agent.WithStructuredOutput(&feedback)).Collect()
 					if err != nil {
 						return struct{}{}, err
 					}

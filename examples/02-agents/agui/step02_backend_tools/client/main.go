@@ -7,17 +7,24 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 
 	aguiSSEClient "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/client/sse"
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/provider/aguiprovider"
 )
 
-var serverURL = cmp.Or(os.Getenv("AGUI_SERVER_URL"), "http://localhost:8888")
+var (
+	serverURL = cmp.Or(os.Getenv("AGUI_SERVER_URL"), "http://localhost:8888")
+	_         = demo.NewLogger(
+		"AG-UI Backend Tools Client",
+		"Connects to an AG-UI server over SSE. Start the matching server first.",
+		"Server", serverURL,
+	)
+)
 
 func main() {
 	a := aguiprovider.NewAgent(
@@ -27,7 +34,7 @@ func main() {
 
 	session, err := a.CreateSession(context.Background())
 	if err != nil {
-		log.Fatal(err)
+		demo.Panicf("failed to connect to AG-UI server at %s: %v", serverURL, err)
 	}
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -35,7 +42,7 @@ func main() {
 		fmt.Print("\nUser (:q to quit): ")
 		if !scanner.Scan() {
 			if err := scanner.Err(); err != nil {
-				log.Fatal(err)
+				demo.Panicf("failed to read input: %v", err)
 			}
 			return
 		}
@@ -47,9 +54,10 @@ func main() {
 			return
 		}
 
+		fmt.Print("Assistant: ")
 		for update, err := range a.RunText(context.Background(), input, agent.WithSession(session), agent.Stream(true)) {
 			if err != nil {
-				log.Fatal(err)
+				demo.Panicf("agent run failed: %v", err)
 			}
 			for _, c := range update.Contents {
 				if text, ok := c.(*message.TextContent); ok {

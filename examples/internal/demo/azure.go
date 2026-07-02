@@ -10,14 +10,18 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 )
 
-var (
-	FoundryProjectEndpoint = strings.TrimSpace(os.Getenv("FOUNDRY_PROJECT_ENDPOINT"))
-	FoundryModel           = cmp.Or(strings.TrimSpace(os.Getenv("FOUNDRY_MODEL")), DefaultDeployment)
+const (
+	DefaultDeployment = "gpt-4o-mini"
 )
 
-func FoundryTokenCredential() *azidentity.DefaultAzureCredential {
-	if FoundryProjectEndpoint == "" {
-		Panic("FOUNDRY_PROJECT_ENDPOINT environment variable is not set.")
+var (
+	Endpoint   = strings.TrimSpace(os.Getenv("AZURE_OPENAI_ENDPOINT"))
+	Deployment = cmp.Or(strings.TrimSpace(os.Getenv("AZURE_OPENAI_DEPLOYMENT_NAME")), DefaultDeployment)
+)
+
+func AzureTokenCredential() *azidentity.DefaultAzureCredential {
+	if os.Getenv("AZURE_OPENAI_ENDPOINT") == "" {
+		Panic("AZURE_OPENAI_ENDPOINT environment variable is not set.")
 	}
 	// azidentity.NewDefaultAzureCredential is convenient for development but requires careful consideration in production.
 	// In production, consider using a specific credential, such as `azidentity.NewManagedIdentityCredential`,

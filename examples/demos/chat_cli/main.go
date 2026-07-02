@@ -23,6 +23,12 @@ var weatherTool = functool.MustNew(functool.Config{
 	return fmt.Sprintf("The weather in %s is cloudy with a high of 15°C.", location), nil
 })
 
+var _ = demo.NewLogger(
+	"Chat CLI",
+	"Runs an interactive Foundry-backed chat loop with a weather tool.",
+	"Model", demo.FoundryModel,
+)
+
 func main() {
 	token := demo.FoundryTokenCredential()
 
@@ -45,8 +51,10 @@ func runChatLoop(ctx context.Context, a *agent.Agent) {
 	// Create a session to maintain conversation history.
 	session, err := a.CreateSession(ctx)
 	if err != nil {
-		panic(err)
+		demo.Panicf("failed to create chat session: %v", err)
 	}
+
+	demo.Assistant("Type 'clear' to reset the conversation or 'quit' to exit.")
 
 	scanner := bufio.NewScanner(os.Stdin)
 
@@ -75,7 +83,7 @@ func runChatLoop(ctx context.Context, a *agent.Agent) {
 		if userInput == "clear" {
 			session, err = a.CreateSession(ctx)
 			if err != nil {
-				panic(err)
+				demo.Panicf("failed to create chat session: %v", err)
 			}
 			fmt.Print("\n✨ Conversation cleared!\n\n")
 			continue
@@ -102,6 +110,6 @@ func runChatLoop(ctx context.Context, a *agent.Agent) {
 	}
 
 	if err := scanner.Err(); err != nil {
-		fmt.Printf("\n❌ Error reading input: %v\n", err)
+		demo.Panicf("failed to read input: %v", err)
 	}
 }

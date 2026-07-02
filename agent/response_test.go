@@ -3,6 +3,7 @@
 package agent_test
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -15,6 +16,13 @@ func TestResponse_Update_NilUpdate(t *testing.T) {
 	resp.Update(nil)
 	if len(resp.Messages) != 0 {
 		t.Errorf("expected no messages, got %d", len(resp.Messages))
+	}
+}
+
+func TestResponseUpdate_Usage_NilUpdate(t *testing.T) {
+	var update *agent.ResponseUpdate
+	if got := update.Usage(); !reflect.DeepEqual(got, message.UsageDetails{}) {
+		t.Fatalf("expected zero usage for nil update, got %+v", got)
 	}
 }
 

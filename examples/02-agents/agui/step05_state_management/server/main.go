@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"iter"
-	"log"
 	"net/http"
 	"strings"
 
@@ -16,6 +15,18 @@ import (
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/provider/aguiprovider"
 	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
+)
+
+const (
+	addr      = ":8888"
+	serverURL = "http://localhost:8888"
+)
+
+var _ = demo.NewLogger(
+	"AG-UI State Management Server",
+	"Serves a Foundry agent with state snapshots through the AG-UI JSON HTTP handler.",
+	"Model", demo.FoundryModel,
+	"URL", serverURL,
 )
 
 func main() {
@@ -81,8 +92,9 @@ Then also provide a concise summary in one sentence.`,
 	mux := http.NewServeMux()
 	mux.Handle("/", aguiprovider.NewJSONHTTPHandler(a, aguiprovider.HandlerConfig{}))
 
-	log.Printf("AG-UI server listening on %s", ":8888")
-	if err := http.ListenAndServe(":8888", mux); err != nil {
-		log.Fatal(err)
+	demo.Assistantf("AG-UI server listening at %s", serverURL)
+	demo.Assistantf("Run the matching client with AGUI_SERVER_URL=%s if needed.", serverURL)
+	if err := http.ListenAndServe(addr, mux); err != nil {
+		demo.Panicf("AG-UI server failed on %s: %v", addr, err)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
+	"github.com/openai/openai-go/v3/option"
 )
 
 var logger = demo.NewLogger(
@@ -23,7 +24,7 @@ func main() {
 
 	a := openaiprovider.NewChatCompletionsAgent(
 		openai.NewClient(
-			azure.WithEndpoint(demo.Endpoint, demo.APIVersion),
+			option.WithBaseURL(demo.Endpoint),
 			azure.WithTokenCredential(token),
 		),
 		openaiprovider.AgentConfig{

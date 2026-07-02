@@ -122,10 +122,11 @@ func runWriter(ctx *workflow.Context, ag *agent.Agent, prompt *message.Message, 
 		return nil, err
 	}
 	demo.Assistantf("=== Writer (Iteration %d) ===", state.Iteration)
-	content, err := demo.AgentText(ctx, ag, prompt.String(), agent.Stream(true))
+	resp, err := ag.RunText(ctx, prompt.String(), agent.Stream(true)).Collect()
 	if err != nil {
 		return nil, err
 	}
+	content := resp.String()
 	if strings.TrimSpace(content) == "" {
 		content = priorContent
 	}
@@ -207,10 +208,11 @@ Simply output the polished content - no additional commentary needed.`,
 	)
 	return workflow.NewExecutor(id, func(ctx *workflow.Context, decision CriticDecision) (*message.Message, error) {
 		demo.Assistant("=== Summary ===")
-		content, err := demo.AgentText(ctx, ag, "Present this approved content:\n\n"+decision.Content, agent.Stream(true))
+		resp, err := ag.RunText(ctx, "Present this approved content:\n\n"+decision.Content, agent.Stream(true)).Collect()
 		if err != nil {
 			return nil, err
 		}
+		content := resp.String()
 		return textMessage(message.RoleAssistant, content), nil
 	}).Bind()
 }

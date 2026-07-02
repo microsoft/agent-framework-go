@@ -6,7 +6,6 @@ package main
 
 import (
 	"context"
-	"log"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
@@ -32,7 +31,7 @@ func main() {
 	// This will output the telemetry data to the console.
 	exporter, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
 	if err != nil {
-		log.Fatalf("failed to create stdout exporter: %v", err)
+		demo.Panicf("failed to create stdout exporter: %v", err)
 	}
 
 	tp := sdktrace.NewTracerProvider(
@@ -40,7 +39,7 @@ func main() {
 	)
 	defer func() {
 		if err := tp.Shutdown(context.Background()); err != nil {
-			log.Printf("failed to shutdown tracer provider: %v", err)
+			demo.Assistantf("Warning: failed to shutdown tracer provider: %v", err)
 		}
 	}()
 	otellib.SetTracerProvider(tp)

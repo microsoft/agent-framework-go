@@ -6,7 +6,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"math/rand"
 	"net/http"
 	"strings"
@@ -95,6 +94,7 @@ func main() {
 
 	token := demo.FoundryTokenCredential()
 
+	addr := fmt.Sprintf(":%d", *port)
 	url := fmt.Sprintf("http://localhost:%d", *port)
 
 	logger := demo.NewLogger(
@@ -125,9 +125,10 @@ func main() {
 	mux.Handle("/", a2asrv.NewJSONRPCHandler(requestHandler))
 	mux.Handle(a2asrv.WellKnownAgentCardPath, a2asrv.NewStaticAgentCardHandler(card))
 
-	log.Printf("A2A server listening on :%d for agentType=%s", *port, strings.ToLower(*agentType))
-	if err := http.ListenAndServe(fmt.Sprintf(":%d", *port), mux); err != nil {
-		demo.Panicf("server failed: %v", err)
+	demo.Assistantf("A2A server listening at %s for agentType=%s", url, strings.ToLower(*agentType))
+	demo.Assistant("Start one server per agent type, then run the A2A client with A2A_AGENT_URLS set to those URLs.")
+	if err := http.ListenAndServe(addr, mux); err != nil {
+		demo.Panicf("A2A server failed on %s: %v", addr, err)
 	}
 }
 

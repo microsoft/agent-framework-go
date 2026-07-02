@@ -64,6 +64,9 @@ type Response struct {
 }
 
 func (resp *Response) String() string {
+	if resp == nil {
+		return ""
+	}
 	var sb strings.Builder
 	for _, msg := range resp.Messages {
 		for _, c := range msg.Contents {
@@ -79,6 +82,9 @@ func (resp *Response) String() string {
 // The contents are returned in the order they were added to the response.
 func (resp *Response) Contents() iter.Seq[message.Content] {
 	return func(yield func(message.Content) bool) {
+		if resp == nil {
+			return
+		}
 		for _, msg := range resp.Messages {
 			for _, c := range msg.Contents {
 				if !yield(c) {
@@ -91,6 +97,9 @@ func (resp *Response) Contents() iter.Seq[message.Content] {
 
 func (resp *Response) Usage() message.UsageDetails {
 	var usage message.UsageDetails
+	if resp == nil {
+		return usage
+	}
 	for _, msg := range resp.Messages {
 		usage.Add(msg.Usage())
 	}
@@ -99,6 +108,9 @@ func (resp *Response) Usage() message.UsageDetails {
 
 // Coalesce merges adjacent compatible content items within each message.
 func (resp *Response) Coalesce() {
+	if resp == nil {
+		return
+	}
 	for _, msg := range resp.Messages {
 		msg.Contents = message.CoalesceContents(msg.Contents)
 	}
@@ -110,6 +122,9 @@ func (resp *Response) Coalesce() {
 // Each message in the response becomes a separate update. Response-level usage
 // and additional properties are included as an additional update when present.
 func (resp *Response) ToUpdates() []*ResponseUpdate {
+	if resp == nil {
+		return nil
+	}
 	usage := resp.Usage()
 	hasUsage := !isZeroUsage(usage)
 	hasAdditionalProperties := resp.AdditionalProperties != nil
@@ -289,6 +304,9 @@ type ResponseUpdate struct {
 
 // String returns the concatenated text contents of the response messages.
 func (r *ResponseUpdate) String() string {
+	if r == nil {
+		return ""
+	}
 	var sb strings.Builder
 	for _, c := range r.Contents {
 		if textContent, ok := c.(*message.TextContent); ok {
@@ -298,6 +316,9 @@ func (r *ResponseUpdate) String() string {
 	return sb.String()
 }
 
-func (m ResponseUpdate) Usage() message.UsageDetails {
+func (m *ResponseUpdate) Usage() message.UsageDetails {
+	if m == nil || m.Contents == nil {
+		return message.UsageDetails{}
+	}
 	return m.Contents.Usage()
 }

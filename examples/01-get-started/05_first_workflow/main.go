@@ -4,12 +4,17 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"slices"
 	"strings"
 
+	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
+)
+
+var _ = demo.NewLogger(
+	"First Workflow",
+	"Runs a sample string through uppercase and reverse executors.",
 )
 
 // Workflows are built from executors (processing units) connected by edges (data flow paths).
@@ -38,17 +43,19 @@ func main() {
 		WithOutputFrom(reverse).
 		Build()
 	if err != nil {
-		panic(err)
+		demo.Panicf("failed to build workflow: %v", err)
 	}
 
 	// Execute the workflow with sample input.
-	run, err := inproc.Default.Run(context.Background(), wf, "Hello, World!")
+	sampleInput := "Hello, World!"
+	demo.Assistantf("Input: %q", sampleInput)
+	run, err := inproc.Default.Run(context.Background(), wf, sampleInput)
 	if err != nil {
-		panic(err)
+		demo.Panicf("failed to run workflow: %v", err)
 	}
 	for evt := range run.NewEvents() {
 		if evt, ok := evt.(workflow.ExecutorCompletedEvent); ok {
-			fmt.Printf("%s: %v\n", evt.ExecutorID, evt.Result)
+			demo.Assistantf("%s: %v", evt.ExecutorID, evt.Result)
 		}
 	}
 }
