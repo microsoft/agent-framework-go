@@ -3,7 +3,7 @@ description: Nightly agent that ports .NET Agent Framework bug fixes and test pa
 tracker-id: dotnet-port-fixes-nightly
 engine:
    id: copilot
-   model: "gpt-4.4"
+   model: "gpt-5.4"
 max-ai-credits: 2000
 network:
    allowed:
@@ -175,7 +175,7 @@ Call `noop` with a concise message explaining:
 ## agent: `port-candidate-selector`
 ---
 description: Selects a small .NET-to-Go bug-fix or test-parity port candidate from recent upstream commits
-model: gpt-4.4
+model: gpt-5.4
 ---
 You select one small, high-confidence .NET Agent Framework change that is a bug fix, behavior correction, or test worth porting to the Go SDK without changing the public API.
 

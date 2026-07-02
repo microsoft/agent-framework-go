@@ -3,7 +3,7 @@ description: Nightly agent that ports new or changed .NET Agent Framework public
 tracker-id: dotnet-port-api-nightly
 engine:
    id: copilot
-   model: "gpt-4.4"
+   model: "gpt-5.4"
 max-ai-credits: 2000
 network:
    allowed:
@@ -175,7 +175,7 @@ Call `noop` with a concise message explaining:
 ## agent: `port-candidate-selector`
 ---
 description: Selects a small .NET-to-Go public-API or feature-parity port candidate from recent upstream commits
-model: gpt-4.4
+model: gpt-5.4
 ---
 You select one small, high-confidence .NET Agent Framework change that adds or changes public API or user-facing feature surface worth porting to the Go SDK.
 
