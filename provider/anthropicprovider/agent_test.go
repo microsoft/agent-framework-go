@@ -12,6 +12,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/provider/anthropicprovider"
 )
 
@@ -165,6 +166,69 @@ func TestConfigInstructions(t *testing.T) {
 	messages, _ := req["messages"].([]any)
 	if len(messages) != 1 {
 		t.Fatalf("messages length = %d, want 1", len(messages))
+	}
+}
+
+func TestTextCitationsBecomeAnnotations(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"id":"msg_citations",
+			"type":"message",
+			"role":"assistant",
+			"model":"claude-3-5-sonnet-20241022",
+			"stop_reason":"end_turn",
+			"stop_sequence":null,
+			"content":[{
+				"type":"text",
+				"text":"The answer cites the docs.",
+				"citations":[{
+					"type":"web_search_result_location",
+					"cited_text":"source excerpt",
+					"encrypted_index":"enc_123",
+					"title":"Example Source",
+					"url":"https://example.com/source"
+				}]
+			}],
+			"usage":{"input_tokens":10,"output_tokens":5}
+		}`)
+	}))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+	resp, err := a.RunText(t.Context(), "cite something").Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var text *message.TextContent
+	for content := range resp.Contents() {
+		if tc, ok := content.(*message.TextContent); ok {
+			text = tc
+			break
+		}
+	}
+	if text == nil {
+		t.Fatal("expected text content")
+	}
+	if len(text.Annotations) != 1 {
+		t.Fatalf("annotations length = %d, want 1", len(text.Annotations))
+	}
+	citation, ok := text.Annotations[0].(*message.CitationAnnotation)
+	if !ok {
+		t.Fatalf("annotation type = %T, want *message.CitationAnnotation", text.Annotations[0])
+	}
+	if citation.URL != "https://example.com/source" {
+		t.Errorf("citation URL = %q, want %q", citation.URL, "https://example.com/source")
+	}
+	if citation.Title != "Example Source" {
+		t.Errorf("citation Title = %q, want %q", citation.Title, "Example Source")
+	}
+	if citation.Snippet != "source excerpt" {
+		t.Errorf("citation Snippet = %q, want %q", citation.Snippet, "source excerpt")
+	}
+	if citation.RawRepresentation == nil {
+		t.Error("citation RawRepresentation is nil")
 	}
 }
 

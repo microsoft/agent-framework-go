@@ -208,9 +208,20 @@ func toUsageDetailsDelta(usage anthropic.MessageDeltaUsage) message.UsageDetails
 func (a *client) buildBlock(index int, v any, contents []message.Content, functions map[int]*message.FunctionCallContent) []message.Content {
 	switch v := v.(type) {
 	case anthropic.TextBlock:
+		var annotations []message.Annotation
+		for _, citation := range v.Citations {
+			annotations = append(annotations, &message.CitationAnnotation{
+				FileID:            citation.FileID,
+				Snippet:           citation.CitedText,
+				Title:             cmp.Or(citation.DocumentTitle, citation.Title),
+				URL:               citation.URL,
+				RawRepresentation: citation,
+			})
+		}
 		contents = append(contents, &message.TextContent{
 			Text: v.Text,
 			ContentHeader: message.ContentHeader{
+				Annotations:       annotations,
 				RawRepresentation: v,
 			},
 		})

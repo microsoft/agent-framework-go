@@ -194,6 +194,9 @@ func (a *client) buildParams(messages []*message.Message, opts []agent.Option) (
 				// Use ParametersJsonSchema to pass through the JSON schema directly.
 				decl.ParametersJsonSchema = schema
 			}
+			if schema := ft.ReturnSchema(); schema != nil {
+				decl.ResponseJsonSchema = schema
+			}
 			funcDecls = append(funcDecls, decl)
 		}
 	}
@@ -355,6 +358,20 @@ func buildRequestParts(msg *message.Message, callIDToName map[string]string) ([]
 					MIMEType: c.MediaType,
 				},
 			})
+		case *message.URIContent:
+			parts = append(parts, &genai.Part{
+				FileData: &genai.FileData{
+					FileURI:  c.URI,
+					MIMEType: c.MediaType,
+				},
+			})
+		case *message.HostedFileContent:
+			parts = append(parts, &genai.Part{
+				FileData: &genai.FileData{
+					FileURI:  c.FileID,
+					MIMEType: c.MediaType,
+				},
+			})
 		}
 	}
 	return parts, nil
@@ -402,7 +419,65 @@ func buildResponsePart(part *genai.Part, contents []message.Content) ([]message.
 			},
 		})
 	}
+	if part.InlineData != nil {
+		contents = append(contents, &message.DataContent{
+			ContentHeader: message.ContentHeader{RawRepresentation: part},
+			Data:          base64.StdEncoding.EncodeToString(part.InlineData.Data),
+			MediaType:     part.InlineData.MIMEType,
+		})
+	}
+	if part.FileData != nil {
+		header := message.ContentHeader{RawRepresentation: part}
+		if part.FileData.DisplayName != "" {
+			header.AdditionalProperties = map[string]any{"displayName": part.FileData.DisplayName}
+		}
+		contents = append(contents, &message.URIContent{
+			ContentHeader: header,
+			URI:           part.FileData.FileURI,
+			MediaType:     part.FileData.MIMEType,
+		})
+	}
+	if part.ExecutableCode != nil {
+		contents = append(contents, &message.CodeInterpreterToolCallContent{
+			ContentHeader: message.ContentHeader{RawRepresentation: part},
+			CallID:        part.ExecutableCode.ID,
+			Inputs: message.Contents{&message.DataContent{
+				Data:      base64.StdEncoding.EncodeToString([]byte(part.ExecutableCode.Code)),
+				MediaType: geminiCodeMediaType(part.ExecutableCode.Language),
+			}},
+		})
+	}
+	if part.CodeExecutionResult != nil {
+		contents = append(contents, codeExecutionResultContent(part))
+	}
 	return contents, nil
+}
+
+func geminiCodeMediaType(language genai.Language) string {
+	if language == genai.LanguagePython {
+		return "text/x-python"
+	}
+	return "text/plain"
+}
+
+func codeExecutionResultContent(part *genai.Part) *message.CodeInterpreterToolResultContent {
+	result := part.CodeExecutionResult
+	output := message.Content(&message.TextContent{
+		Text:          result.Output,
+		ContentHeader: message.ContentHeader{RawRepresentation: part},
+	})
+	if result.Outcome != "" && result.Outcome != genai.OutcomeOK {
+		output = &message.ErrorContent{
+			ContentHeader: message.ContentHeader{RawRepresentation: part},
+			Message:       result.Output,
+			ErrorCode:     string(result.Outcome),
+		}
+	}
+	return &message.CodeInterpreterToolResultContent{
+		ContentHeader: message.ContentHeader{RawRepresentation: part},
+		CallID:        result.ID,
+		Outputs:       message.Contents{output},
+	}
 }
 
 // toFunctionResponseMap converts a FunctionResultContent's result to the map[string]any

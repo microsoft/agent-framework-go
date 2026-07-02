@@ -1865,6 +1865,121 @@ func TestResponsesNonStreamingResponseWithIncompleteReason_MapsFinishReason(t *t
 	}
 }
 
+func TestResponsesNonStreamingMCPApprovalRequest_MapsApprovalContent(t *testing.T) {
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"test"}]}]
+            }
+            `
+
+	const output = `
+            {
+              "id":"resp_001",
+              "object":"response",
+              "created_at":1741892091,
+              "status":"completed",
+              "model":"gpt-4o-mini",
+              "output":[{
+                "type":"mcp_approval_request",
+                "id":"approval_123",
+                "server_label":"github",
+                "name":"create_issue",
+                "arguments":"{\"title\":\"Bug\"}"
+              }]
+            }
+            `
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+	resp, err := a.RunText(t.Context(), "test").Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+
+	approval := firstToolApprovalRequest(t, resp)
+	if approval.RequestID != "approval_123" {
+		t.Errorf("RequestID = %q, want %q", approval.RequestID, "approval_123")
+	}
+	mcpCall, ok := approval.ToolCall.(*message.MCPServerToolCallContent)
+	if !ok {
+		t.Fatalf("ToolCall = %T, want *message.MCPServerToolCallContent", approval.ToolCall)
+	}
+	if mcpCall.ServerName != "github" {
+		t.Errorf("ServerName = %q, want %q", mcpCall.ServerName, "github")
+	}
+	if mcpCall.Name != "create_issue" {
+		t.Errorf("Name = %q, want %q", mcpCall.Name, "create_issue")
+	}
+	if mcpCall.Arguments != `{"title":"Bug"}` {
+		t.Errorf("Arguments = %q, want title JSON", mcpCall.Arguments)
+	}
+	if approval.RawRepresentation == nil || mcpCall.RawRepresentation == nil {
+		t.Error("RawRepresentation is nil")
+	}
+}
+
+func TestResponsesStreamingMCPApprovalRequest_MapsApprovalContent(t *testing.T) {
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"test"}]}],
+                "stream":true
+            }
+            `
+
+	const output = `event: response.created
+data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_001","object":"response","created_at":1741892091,"status":"in_progress","model":"gpt-4o-mini","output":[]}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":1,"output_index":0,"item":{"type":"mcp_approval_request","id":"approval_123","server_label":"github","name":"create_issue","arguments":"{\"title\":\"Bug\"}"}}
+
+event: response.completed
+data: {"type":"response.completed","sequence_number":2,"response":{"id":"resp_001","object":"response","created_at":1741892091,"status":"completed","model":"gpt-4o-mini","output":[]}}
+
+`
+
+	server := newTestResponsesServerStreaming(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+	var approval *message.ToolApprovalRequestContent
+	for update, err := range a.RunText(t.Context(), "test", agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("error = %v", err)
+		}
+		for _, content := range update.Contents {
+			if req, ok := content.(*message.ToolApprovalRequestContent); ok {
+				approval = req
+			}
+		}
+	}
+
+	if approval == nil {
+		t.Fatal("expected ToolApprovalRequestContent")
+	}
+	mcpCall, ok := approval.ToolCall.(*message.MCPServerToolCallContent)
+	if !ok {
+		t.Fatalf("ToolCall = %T, want *message.MCPServerToolCallContent", approval.ToolCall)
+	}
+	if approval.RequestID != "approval_123" || mcpCall.ServerName != "github" || mcpCall.Name != "create_issue" {
+		t.Fatalf("approval = %#v, tool call = %#v", approval, mcpCall)
+	}
+}
+
+func firstToolApprovalRequest(t *testing.T, resp *agent.Response) *message.ToolApprovalRequestContent {
+	t.Helper()
+	for content := range resp.Contents() {
+		if req, ok := content.(*message.ToolApprovalRequestContent); ok {
+			return req
+		}
+	}
+	t.Fatal("expected ToolApprovalRequestContent")
+	return nil
+}
+
 func TestResponsesResponseFormatSchemaConvertsJSONSchema(t *testing.T) {
 	type payload struct {
 		Name string `json:"name"`
@@ -3098,7 +3213,10 @@ func TestResponsesUserMessageWithVariousContentTypes_ConvertsCorrectly(t *testin
                         "role":"user",
                         "content":[
                             {"type":"input_text","text":"Here is some text"},
-                            {"type":"input_image","image_url":"https://example.com/image.jpg","detail":"high"}
+							{"type":"input_image","image_url":"https://example.com/image.jpg","detail":"high"},
+							{"type":"input_file","file_url":"https://example.com/document.pdf"},
+							{"type":"input_file","file_data":"data:application/pdf;base64,cGRmZGF0YQ==","filename":"report.pdf"},
+							{"type":"input_file","file_id":"file_123","filename":"hosted.pdf"}
                         ]
                     }
                 ]
@@ -3142,6 +3260,20 @@ func TestResponsesUserMessageWithVariousContentTypes_ConvertsCorrectly(t *testin
 						AdditionalProperties: map[string]any{"detail": "high"},
 					},
 				},
+				&message.URIContent{
+					URI:       "https://example.com/document.pdf",
+					MediaType: "application/pdf",
+				},
+				&message.DataContent{
+					Data:      "cGRmZGF0YQ==",
+					MediaType: "application/pdf",
+					Name:      "report.pdf",
+				},
+				&message.HostedFileContent{
+					FileID:    "file_123",
+					Name:      "hosted.pdf",
+					MediaType: "application/pdf",
+				},
 			},
 		},
 	}
@@ -3164,6 +3296,111 @@ func TestResponsesUserMessageWithVariousContentTypes_ConvertsCorrectly(t *testin
 	if responseText != "Processed" {
 		t.Errorf("expected response text 'Processed', got %q", responseText)
 	}
+}
+
+func TestResponsesNonStreamingImageGenerationCall_MapsToDataContent(t *testing.T) {
+	const imageBase64 = "iVBORw0KGgo="
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"draw"}]}]
+            }
+            `
+
+	const output = `
+            {
+              "id":"resp_001",
+              "object":"response",
+              "created_at":1741892091,
+              "status":"completed",
+              "model":"gpt-4o-mini",
+              "output":[{
+                "type":"image_generation_call",
+                "id":"ig_123",
+                "status":"completed",
+                "result":"` + imageBase64 + `"
+              }]
+            }
+            `
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+	resp, err := a.RunText(t.Context(), "draw").Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+
+	image := firstDataContent(t, resp)
+	if image.Data != imageBase64 {
+		t.Errorf("Data = %q, want %q", image.Data, imageBase64)
+	}
+	if image.MediaType != "image/png" {
+		t.Errorf("MediaType = %q, want %q", image.MediaType, "image/png")
+	}
+	if image.Name != "ig_123.png" {
+		t.Errorf("Name = %q, want %q", image.Name, "ig_123.png")
+	}
+	if image.RawRepresentation == nil {
+		t.Error("RawRepresentation is nil")
+	}
+}
+
+func TestResponsesStreamingImageGenerationCall_MapsToDataContent(t *testing.T) {
+	const imageBase64 = "iVBORw0KGgo="
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"draw"}]}],
+                "stream":true
+            }
+            `
+
+	const output = `event: response.created
+data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_001","object":"response","created_at":1741892091,"status":"in_progress","model":"gpt-4o-mini","output":[]}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":1,"output_index":0,"item":{"type":"image_generation_call","id":"ig_123","status":"completed","result":"` + imageBase64 + `"}}
+
+event: response.completed
+data: {"type":"response.completed","sequence_number":2,"response":{"id":"resp_001","object":"response","created_at":1741892091,"status":"completed","model":"gpt-4o-mini","output":[]}}
+
+`
+
+	server := newTestResponsesServerStreaming(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+	var image *message.DataContent
+	for update, err := range a.RunText(t.Context(), "draw", agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("error = %v", err)
+		}
+		for _, content := range update.Contents {
+			if data, ok := content.(*message.DataContent); ok {
+				image = data
+			}
+		}
+	}
+
+	if image == nil {
+		t.Fatal("expected DataContent")
+	}
+	if image.Data != imageBase64 || image.MediaType != "image/png" || image.Name != "ig_123.png" {
+		t.Fatalf("image content = %#v", image)
+	}
+}
+
+func firstDataContent(t *testing.T, resp *agent.Response) *message.DataContent {
+	t.Helper()
+	for content := range resp.Contents() {
+		if data, ok := content.(*message.DataContent); ok {
+			return data
+		}
+	}
+	t.Fatal("expected DataContent")
+	return nil
 }
 
 func TestResponsesToolCallResult_DataContent_SerializesAsInputImage(t *testing.T) {
