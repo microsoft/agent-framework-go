@@ -241,6 +241,46 @@ func TestAGUIAgentRun_WithSession_PreservesHistoryAcrossMultipleTurns(t *testing
 	}
 }
 
+func TestAGUIAgentRun_MapsReasoningEvents(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var input aguiTypes.RunAgentInput
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeSSE(t, w, aguiEvents.NewRunStartedEvent(input.ThreadID, input.RunID))
+		writeSSE(t, w, aguiEvents.NewReasoningMessageStartEvent("reasoning-1", "assistant"))
+		writeSSE(t, w, aguiEvents.NewReasoningMessageContentEvent("reasoning-1", "thinking"))
+		writeSSE(t, w, aguiEvents.NewReasoningEncryptedValueEvent(aguiEvents.ReasoningEncryptedValueSubtypeMessage, "reasoning-1", "protected"))
+		writeSSE(t, w, aguiEvents.NewReasoningMessageEndEvent("reasoning-1"))
+		writeSSE(t, w, aguiEvents.NewRunFinishedEvent(input.ThreadID, input.RunID))
+	}))
+	defer server.Close()
+
+	a := aguiprovider.NewAgent(newTestClient(server.URL), aguiprovider.AgentConfig{})
+	resp, err := a.Run(context.Background(), []*message.Message{message.NewText("hi")}).Collect()
+	if err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+
+	var reasoning []message.TextReasoningContent
+	for content := range resp.Contents() {
+		if rc, ok := content.(*message.TextReasoningContent); ok {
+			reasoning = append(reasoning, *rc)
+		}
+	}
+	if len(reasoning) != 1 {
+		t.Fatalf("reasoning content count = %d, want 1", len(reasoning))
+	}
+	if reasoning[0].Text != "thinking" {
+		t.Errorf("reasoning text = %q, want %q", reasoning[0].Text, "thinking")
+	}
+	if reasoning[0].ProtectedData != "protected" {
+		t.Errorf("reasoning protected data = %q, want %q", reasoning[0].ProtectedData, "protected")
+	}
+}
+
 func TestAGUIAgentRun_InvokesTools_WhenFunctionCallsReturned(t *testing.T) {
 	var mu sync.Mutex
 	requestCount := 0

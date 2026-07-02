@@ -470,7 +470,11 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 						},
 					})
 				default:
-					// For other URI content types, just ignore, they are not supported yet.
+					contents = append(contents, responses.ResponseInputContentUnionParam{
+						OfInputFile: &responses.ResponseInputFileParam{
+							FileURL: openai.String(c.URI),
+						},
+					})
 				}
 			case *message.DataContent:
 				switch c.TopLevelMediaType() {
@@ -481,12 +485,22 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 							Detail:   responses.ResponseInputImageDetail(imageDetail(c.AdditionalProperties)),
 						},
 					})
+				default:
+					file := responses.ResponseInputFileParam{
+						FileData: openai.String(c.URI()),
+					}
+					if c.Name != "" {
+						file.Filename = openai.String(c.Name)
+					}
+					contents = append(contents, responses.ResponseInputContentUnionParam{OfInputFile: &file})
 				}
 			case *message.HostedFileContent:
+				file := responses.ResponseInputFileParam{FileID: openai.String(c.FileID)}
+				if c.Name != "" {
+					file.Filename = openai.String(c.Name)
+				}
 				contents = append(contents, responses.ResponseInputContentUnionParam{
-					OfInputFile: &responses.ResponseInputFileParam{
-						FileID: openai.String(c.FileID),
-					},
+					OfInputFile: &file,
 				})
 			}
 		}
@@ -856,6 +870,14 @@ func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func
 				}
 			}
 			currentUpdate.Contents = append(currentUpdate.Contents, &output)
+
+		case responses.ResponseOutputItemMcpApprovalRequest:
+			currentUpdate.Contents = append(currentUpdate.Contents, mcpApprovalRequestContent(out))
+
+		case responses.ResponseOutputItemImageGenerationCall:
+			if content := imageGenerationContent(out); content != nil {
+				currentUpdate.Contents = append(currentUpdate.Contents, content)
+			}
 		}
 	}
 
@@ -1088,6 +1110,12 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 			content := &message.TextContent{Text: outputText.String()}
 			content.RawRepresentation = item
 			u.Contents = []message.Content{content}
+		case responses.ResponseOutputItemMcpApprovalRequest:
+			u.Contents = []message.Content{mcpApprovalRequestContent(item)}
+		case responses.ResponseOutputItemImageGenerationCall:
+			if content := imageGenerationContent(item); content != nil {
+				u.Contents = []message.Content{content}
+			}
 		default:
 			u = createUpdate(message.RoleAssistant, nil)
 		}
@@ -1110,6 +1138,36 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 	}
 
 	return u, nil
+}
+
+func mcpApprovalRequestContent(item responses.ResponseOutputItemMcpApprovalRequest) *message.ToolApprovalRequestContent {
+	return &message.ToolApprovalRequestContent{
+		ContentHeader: message.ContentHeader{RawRepresentation: item},
+		RequestID:     item.ID,
+		ToolCall: &message.MCPServerToolCallContent{
+			ContentHeader: message.ContentHeader{RawRepresentation: item},
+			Arguments:     item.Arguments,
+			CallID:        item.ID,
+			Name:          item.Name,
+			ServerName:    item.ServerLabel,
+		},
+	}
+}
+
+func imageGenerationContent(item responses.ResponseOutputItemImageGenerationCall) *message.DataContent {
+	if item.Result == "" {
+		return nil
+	}
+	name := ""
+	if item.ID != "" {
+		name = item.ID + ".png"
+	}
+	return &message.DataContent{
+		ContentHeader: message.ContentHeader{RawRepresentation: item},
+		Data:          item.Result,
+		MediaType:     "image/png",
+		Name:          name,
+	}
 }
 
 func populateAnnotations(anns []responses.ResponseOutputTextAnnotationUnion, content *message.TextContent) {

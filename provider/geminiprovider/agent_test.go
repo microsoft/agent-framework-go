@@ -409,6 +409,13 @@ func TestToolCall_NonStreaming(t *testing.T) {
 	if name, _ := decl["name"].(string); name != "get_weather" {
 		t.Errorf("tools[0].functionDeclarations[0].name = %q, want %q", name, "get_weather")
 	}
+	responseSchema, ok := decl["responseJsonSchema"].(map[string]any)
+	if !ok {
+		t.Fatalf("tools[0].functionDeclarations[0].responseJsonSchema = %T, want object", decl["responseJsonSchema"])
+	}
+	if responseType, _ := responseSchema["type"].(string); responseType != "string" {
+		t.Errorf("responseJsonSchema.type = %q, want %q", responseType, "string")
+	}
 
 	// Verify the response contains a FunctionCallContent.
 	var gotFuncCall *message.FunctionCallContent
@@ -950,6 +957,147 @@ func TestDataInRequest(t *testing.T) {
 				t.Errorf("inlineData.mimeType = %q, want %q", mime, tc.mediaType)
 			}
 		})
+	}
+}
+
+func TestURIAndHostedFileInRequest(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(captureAndRespond(t, bodyCh, "application/json", minimalTextResponse("ok")))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+	messages := []*message.Message{{
+		Role: message.RoleUser,
+		Contents: []message.Content{
+			&message.URIContent{URI: "gs://bucket/image.png", MediaType: "image/png"},
+			&message.HostedFileContent{FileID: "gs://bucket/doc.pdf", Name: "doc.pdf", MediaType: "application/pdf"},
+		},
+	}}
+	if _, err := a.Run(t.Context(), messages).Collect(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	contents, _ := req["contents"].([]any)
+	if len(contents) != 1 {
+		t.Fatalf("contents length = %d, want 1", len(contents))
+	}
+	content0, _ := contents[0].(map[string]any)
+	parts, _ := content0["parts"].([]any)
+	if len(parts) != 2 {
+		t.Fatalf("parts length = %d, want 2", len(parts))
+	}
+	for i, wantURI := range []string{"gs://bucket/image.png", "gs://bucket/doc.pdf"} {
+		part, _ := parts[i].(map[string]any)
+		fileData, _ := part["fileData"].(map[string]any)
+		if fileData == nil {
+			t.Fatalf("parts[%d].fileData missing", i)
+		}
+		if fileURI, _ := fileData["fileUri"].(string); fileURI != wantURI {
+			t.Errorf("parts[%d].fileData.fileUri = %q, want %q", i, fileURI, wantURI)
+		}
+	}
+}
+
+func TestResponseWithFileAndInlineData(t *testing.T) {
+	resp := map[string]any{
+		"candidates": []any{
+			map[string]any{
+				"content": map[string]any{
+					"role": "model",
+					"parts": []any{
+						map[string]any{"inlineData": map[string]any{"mimeType": "image/png", "data": "aW1hZ2U="}},
+						map[string]any{"fileData": map[string]any{"displayName": "doc.pdf", "mimeType": "application/pdf", "fileUri": "gs://bucket/doc.pdf"}},
+					},
+				},
+				"finishReason": "STOP",
+			},
+		},
+	}
+	respBody, _ := json.Marshal(resp)
+
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "application/json", string(respBody)))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+	result, err := a.RunText(t.Context(), "return media").Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var data *message.DataContent
+	var uri *message.URIContent
+	for content := range result.Contents() {
+		switch c := content.(type) {
+		case *message.DataContent:
+			data = c
+		case *message.URIContent:
+			uri = c
+		}
+	}
+	if data == nil || data.Data != "aW1hZ2U=" || data.MediaType != "image/png" {
+		t.Fatalf("data content = %#v", data)
+	}
+	if uri == nil || uri.URI != "gs://bucket/doc.pdf" || uri.MediaType != "application/pdf" {
+		t.Fatalf("uri content = %#v", uri)
+	}
+	if uri.AdditionalProperties["displayName"] != "doc.pdf" {
+		t.Fatalf("uri displayName = %#v, want doc.pdf", uri.AdditionalProperties["displayName"])
+	}
+}
+
+func TestResponseWithCodeExecutionParts(t *testing.T) {
+	resp := map[string]any{
+		"candidates": []any{
+			map[string]any{
+				"content": map[string]any{
+					"role": "model",
+					"parts": []any{
+						map[string]any{"executableCode": map[string]any{"id": "code_1", "language": "PYTHON", "code": "print(1)"}},
+						map[string]any{"codeExecutionResult": map[string]any{"id": "code_1", "outcome": "OUTCOME_OK", "output": "1\n"}},
+					},
+				},
+				"finishReason": "STOP",
+			},
+		},
+	}
+	respBody, _ := json.Marshal(resp)
+
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "application/json", string(respBody)))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+	result, err := a.RunText(t.Context(), "run code").Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var call *message.CodeInterpreterToolCallContent
+	var codeResult *message.CodeInterpreterToolResultContent
+	for content := range result.Contents() {
+		switch c := content.(type) {
+		case *message.CodeInterpreterToolCallContent:
+			call = c
+		case *message.CodeInterpreterToolResultContent:
+			codeResult = c
+		}
+	}
+	if call == nil || call.CallID != "code_1" || len(call.Inputs) != 1 {
+		t.Fatalf("code call = %#v", call)
+	}
+	input, ok := call.Inputs[0].(*message.DataContent)
+	if !ok || input.MediaType != "text/x-python" {
+		t.Fatalf("code input = %#v", call.Inputs[0])
+	}
+	if codeResult == nil || codeResult.CallID != "code_1" || len(codeResult.Outputs) != 1 {
+		t.Fatalf("code result = %#v", codeResult)
+	}
+	output, ok := codeResult.Outputs[0].(*message.TextContent)
+	if !ok || output.Text != "1\n" {
+		t.Fatalf("code output = %#v", codeResult.Outputs[0])
 	}
 }
 

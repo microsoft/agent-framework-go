@@ -402,6 +402,23 @@ func (a *toolCallAccumulator) onEvent(evt aguiEvents.Event) ([]*agent.ResponseUp
 			CreatedAt: eventTime(evt),
 			Contents:  message.Contents{&message.TextContent{Text: e.Delta}},
 		}}, nil
+	case *aguiEvents.ReasoningMessageContentEvent:
+		return []*agent.ResponseUpdate{{
+			Role:      message.RoleAssistant,
+			MessageID: e.MessageID,
+			CreatedAt: eventTime(evt),
+			Contents:  message.Contents{&message.TextReasoningContent{Text: e.Delta}},
+		}}, nil
+	case *aguiEvents.ReasoningEncryptedValueEvent:
+		if e.Subtype != aguiEvents.ReasoningEncryptedValueSubtypeMessage {
+			return nil, nil
+		}
+		return []*agent.ResponseUpdate{{
+			Role:      message.RoleAssistant,
+			MessageID: e.EntityID,
+			CreatedAt: eventTime(evt),
+			Contents:  message.Contents{&message.TextReasoningContent{ProtectedData: e.EncryptedValue}},
+		}}, nil
 	case *aguiEvents.ToolCallStartEvent:
 		a.pending[e.ToolCallID] = &pendingToolCall{Name: e.ToolCallName, MessageID: cmp.Or(deref(e.ParentMessageID), e.ToolCallID)}
 		return nil, nil
