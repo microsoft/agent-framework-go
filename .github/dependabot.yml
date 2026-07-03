@@ -1,18 +1,22 @@
-updates:
-- directory: /
-  groups:
-    opentelemetry:
-      patterns:
-      - go.opentelemetry.io/*
-  open-pull-requests-limit: 10
-  package-ecosystem: gomod
-  schedule:
-    interval: daily
-- directory: /.github/workflows
-  ignore:
-  - dependency-name: "github/gh-aw-actions*" # Managed by gh aw compile. Version-locked to the gh-aw compiler; do not bump.
-  open-pull-requests-limit: 10
-  package-ecosystem: github-actions
-  schedule:
-    interval: daily
 version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: daily
+    open-pull-requests-limit: 10
+    groups:
+      opentelemetry:
+        patterns:
+          - go.opentelemetry.io/*
+  - package-ecosystem: github-actions
+    directory: /.github/workflows
+    schedule:
+      interval: daily
+    open-pull-requests-limit: 10
+    ignore:
+      - dependency-name: "github/gh-aw-actions*" # Managed by gh aw compile. Version-locked to the gh-aw compiler; do not bump.
+    groups:
+      codeql-action:
+        patterns:
+          - "github/codeql-action/*"
