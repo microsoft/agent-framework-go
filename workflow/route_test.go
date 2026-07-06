@@ -110,3 +110,35 @@ func TestMessageRouterRoutesPortableValueAfterInterfaceMatchIsCached(t *testing.
 		t.Fatalf("RouteMessage portable result = %v, want portable", result.result)
 	}
 }
+
+func TestMessageRouterCachedInterfaceHandlerPreservesAutoOutput(t *testing.T) {
+	var rb RouteBuilder
+	rb.AddHandlerRaw(reflect.TypeFor[routeTestMessage](), reflect.TypeFor[string](), func(_ *Context, msg any) (any, error) {
+		message, ok := msg.(routeTestMessage)
+		if !ok {
+			t.Fatalf("handler message = %T, want routeTestMessage", msg)
+		}
+		return message.routeMarker(), nil
+	})
+	router, err := rb.build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	if _, handled := router.routeMessage(&Context{Context: context.Background()}, routeTestConcrete{value: "first"}); !handled {
+		t.Fatal("RouteMessage concrete handled = false, want true")
+	}
+	result, handled := router.routeMessage(&Context{Context: context.Background()}, AnyPortableValue(routeTestConcrete{value: "portable"}))
+	if !handled {
+		t.Fatal("RouteMessage portable handled = false, want true")
+	}
+	if result.err != nil {
+		t.Fatalf("RouteMessage portable error = %v", result.err)
+	}
+	if !result.autoOutput {
+		t.Fatal("RouteMessage portable autoOutput = false, want true")
+	}
+	if result.result != "portable" {
+		t.Fatalf("RouteMessage portable result = %v, want portable", result.result)
+	}
+}
