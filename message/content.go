@@ -533,6 +533,18 @@ type URIContent struct {
 	URI       string
 }
 
+func NewURIContent(uri string, mediaType string) (*URIContent, error) {
+	if err := validateURIContentURI(uri); err != nil {
+		return nil, err
+	}
+	if mediaType == "" {
+		mediaType = inferMediaTypeFromURI(uri)
+	} else if !isValidMediaType(mediaType) {
+		return nil, fmt.Errorf("invalid media type: %s", mediaType)
+	}
+	return &URIContent{URI: uri, MediaType: mediaType}, nil
+}
+
 func (t *URIContent) TopLevelMediaType() string {
 	return topLevelMediaType(t.MediaType)
 }

@@ -38,7 +38,8 @@ func main() {
 		token,
 		foundryprovider.ModelDeployment(demo.FoundryModel),
 		foundryprovider.AgentConfig{
-			Instructions: "You are good at telling jokes.",
+			Instructions:       "You are good at telling jokes.",
+			DisableStoreOutput: true,
 			Config: agent.Config{
 				Name:            "Joker",
 				HistoryProvider: newFSHistoryProvider(tmpDir),

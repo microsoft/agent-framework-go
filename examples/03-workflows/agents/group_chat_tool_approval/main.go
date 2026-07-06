@@ -68,12 +68,14 @@ var deployToProductionTool = functool.MustNew(functool.Config{
 func main() {
 	qaEngineer := newDeploymentAgent(
 		"QAEngineer",
-		"You are a QA engineer responsible for running tests before deployment. Use RunTests for the release test suite and report the result clearly.",
+		"QA engineer who runs tests",
+		"You are a QA engineer responsible for running tests before deployment. Run the appropriate test suites and report the results clearly in your response, including pass/fail counts.",
 		runTestsTool,
 	)
 	devopsEngineer := newDeploymentAgent(
 		"DevOpsEngineer",
-		"You are a DevOps engineer responsible for deployments. Check staging status, create a rollback plan for version 2.4.0, then deploy version 2.4.0 to production. Use the provided tools and report each step.",
+		"DevOps engineer who handles deployments",
+		"You are a DevOps engineer responsible for deployments. Call CheckStagingStatus, then CreateRollbackPlan, then DeployToProduction - in that order. Do not ask for confirmation before deploying; deployment approval is handled automatically by the system. After all tools complete, summarize each step and its result in your text response.",
 		checkStagingStatusTool,
 		createRollbackPlanTool,
 		tool.ApprovalRequiredFunc(deployToProductionTool),
@@ -88,6 +90,7 @@ func main() {
 
 	demo.Assistant("Starting group chat workflow for software deployment...")
 	demo.Assistantf("Agents: [%s, %s]", qaEngineer.Name(), devopsEngineer.Name())
+	fmt.Println(strings.Repeat("-", 60))
 
 	ctx := context.Background()
 	run, err := inproc.Default.RunStreaming(ctx, wf, []*message.Message{
@@ -106,10 +109,13 @@ func main() {
 	if err := watchDeploymentWorkflow(ctx, run); err != nil {
 		demo.Panic(err)
 	}
-	demo.Assistant("Deployment workflow completed successfully.")
+	fmt.Println()
+	fmt.Println(strings.Repeat("-", 60))
+	demo.Assistant("Deployment workflow completed successfully!")
+	demo.Assistant("All agents have finished their tasks.")
 }
 
-func newDeploymentAgent(name string, instructions string, tools ...tool.Tool) *agent.Agent {
+func newDeploymentAgent(name string, description string, instructions string, tools ...tool.Tool) *agent.Agent {
 	return foundryprovider.NewAgent(
 		demo.FoundryProjectEndpoint,
 		demo.FoundryTokenCredential(),
@@ -118,6 +124,7 @@ func newDeploymentAgent(name string, instructions string, tools ...tool.Tool) *a
 			Instructions: instructions,
 			Config: agent.Config{
 				Name:        name,
+				Description: description,
 				Middlewares: []agent.Middleware{logger},
 				Tools:       tools,
 			},
@@ -129,24 +136,37 @@ func newDeploymentGroupChatManager(agents []*agent.Agent) *agentworkflow.GroupCh
 	manager := &deploymentGroupChatManager{agents: agents}
 	return &agentworkflow.GroupChatManager{
 		SelectNextAgent: manager.selectNextAgent,
-		ShouldTerminate: func(_ context.Context, _ []*message.Message, iterationCount int) (bool, error) {
-			return iterationCount >= 4, nil
-		},
+		ShouldTerminate: manager.shouldTerminate,
+		Reset:           manager.reset,
 	}
 }
 
 type deploymentGroupChatManager struct {
-	agents []*agent.Agent
+	agents        []*agent.Agent
+	selectedTurns int
 }
 
 func (m *deploymentGroupChatManager) selectNextAgent(_ context.Context, history []*message.Message) (*agent.Agent, error) {
 	if len(history) == 0 {
 		return nil, fmt.Errorf("conversation is empty; cannot select next speaker")
 	}
-	if !hasAssistantMessage(history) {
+	if m.selectedTurns == 0 {
+		m.selectedTurns++
 		return m.agentByName("QAEngineer")
 	}
+	m.selectedTurns++
 	return m.agentByName("DevOpsEngineer")
+}
+
+func (m *deploymentGroupChatManager) shouldTerminate(_ context.Context, history []*message.Message, iterationCount int) (bool, error) {
+	if iterationCount >= 2 && hasDeploymentSummary(history) {
+		return true, nil
+	}
+	return iterationCount >= 4, nil
+}
+
+func (m *deploymentGroupChatManager) reset() {
+	m.selectedTurns = 0
 }
 
 func (m *deploymentGroupChatManager) agentByName(name string) (*agent.Agent, error) {
@@ -156,15 +176,6 @@ func (m *deploymentGroupChatManager) agentByName(name string) (*agent.Agent, err
 		}
 	}
 	return nil, fmt.Errorf("agent %q is not part of the deployment group chat", name)
-}
-
-func hasAssistantMessage(messages []*message.Message) bool {
-	for _, msg := range messages {
-		if msg.Role == message.RoleAssistant {
-			return true
-		}
-	}
-	return false
 }
 
 func watchDeploymentWorkflow(ctx context.Context, run *inproc.StreamingRun) error {
@@ -198,13 +209,15 @@ func watchDeploymentWorkflow(ctx context.Context, run *inproc.StreamingRun) erro
 func approveToolRequest(ctx context.Context, run *inproc.StreamingRun, request *workflow.ExternalRequest) error {
 	approvalRequest, ok := workflow.PortableValueAs[*message.ToolApprovalRequestContent](request.Data)
 	if !ok {
-		return fmt.Errorf("request %q is %T, want *message.ToolApprovalRequestContent", request.RequestID, request.Data.Any())
+		return fmt.Errorf("request %q did not contain ToolApprovalRequestContent, got %T", request.RequestID, request.Data.Any())
 	}
 	toolName, arguments := approvalToolCallDetails(approvalRequest.ToolCall)
-	demo.Assistantf("Approval required from %s", request.PortInfo.PortID)
-	demo.Assistantf("Tool: %s", toolName)
-	demo.Assistantf("Arguments: %s", arguments)
-	demo.Assistantf("Tool %s approved", toolName)
+	fmt.Println()
+	demo.Assistantf("[APPROVAL REQUIRED] From agent: %s", request.PortInfo.PortID)
+	demo.Assistantf("  Tool: %s", toolName)
+	demo.Assistantf("  Arguments: %s", arguments)
+	fmt.Println()
+	demo.Assistantf("Tool: %s approved", toolName)
 
 	response, err := request.CreateResponse(approvalRequest.CreateResponse(true, "Approved for sample deployment."))
 	if err != nil {
@@ -235,12 +248,24 @@ func printAgentUpdate(executorID string, update *agent.ResponseUpdate, lastExecu
 		if *lastExecutorID != "" {
 			fmt.Println()
 		}
-		demo.Assistantf("%s", executorID)
+		fmt.Printf("- %s:\n", executorID)
 		*lastExecutorID = executorID
 	}
 	if text := update.String(); strings.TrimSpace(text) != "" {
-		demo.Assistantf("%s", text)
+		fmt.Print(text)
 	}
+}
+
+func hasDeploymentSummary(messages []*message.Message) bool {
+	if len(messages) == 0 {
+		return false
+	}
+	last := messages[len(messages)-1]
+	if last == nil || last.Role != message.RoleAssistant {
+		return false
+	}
+	text := strings.ToLower(last.String())
+	return strings.Contains(text, "deployment") && strings.Contains(text, "production") && strings.Contains(text, "2.4.0")
 }
 
 func printTranscript(messages []*message.Message) {

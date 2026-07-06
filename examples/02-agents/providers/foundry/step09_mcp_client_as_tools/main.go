@@ -40,7 +40,7 @@ func main() {
 		token,
 		foundryprovider.ModelDeployment(demo.FoundryModel),
 		foundryprovider.AgentConfig{
-			Instructions: "You are a helpful assistant that can help with Microsoft documentation questions.",
+			Instructions: "You are a helpful assistant that can help with Microsoft documentation questions. Use the Microsoft Learn MCP tool to search for documentation. In the output, indicate which tool you used if any.",
 			Config: agent.Config{
 				Name:        "DocsAgent",
 				Middlewares: []agent.Middleware{logger},

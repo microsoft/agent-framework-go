@@ -54,6 +54,12 @@ type AgentConfig struct {
 	// Instructions are provided to OpenAI as system instructions for each run.
 	Instructions string
 
+	// DisableStoreOutput is used only by [NewResponsesAgent]. It disables
+	// service-side output storage and prevents response IDs from being saved into
+	// agent sessions for later continuation.
+	// It is ignored by [NewChatCompletionsAgent].
+	DisableStoreOutput bool
+
 	Model string
 }
 

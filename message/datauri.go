@@ -6,10 +6,16 @@ import (
 	"encoding/base64"
 	"fmt"
 	"mime"
+	"net/url"
+	"path"
 	"strings"
 )
 
-const dataURIScheme = "data:"
+const (
+	dataURIScheme              = "data:"
+	dataURIDefaultMediaType    = "text/plain;charset=US-ASCII"
+	uriContentDefaultMediaType = "application/octet-stream"
+)
 
 // dataURI represents a parsed data URI with its components.
 // Based on RFC 2397: https://datatracker.ietf.org/doc/html/rfc2397
@@ -50,13 +56,15 @@ func parseDataURI(uri string) (*dataURI, error) {
 
 	// Validate the media type, if present
 	mediaType := strings.TrimSpace(metadata)
-	if mediaType != "" && !isValidMediaType(mediaType) {
+	if mediaType == "" {
+		mediaType = dataURIDefaultMediaType
+	} else if !isValidMediaType(mediaType) {
 		return nil, fmt.Errorf("invalid data URI format: the media type is not valid")
 	}
 	return &dataURI{
 		Data:      data,
 		IsBase64:  isBase64,
-		MediaType: strings.ToLower(mediaType),
+		MediaType: mediaType,
 	}, nil
 }
 
@@ -65,7 +73,11 @@ func (d *dataURI) data() string {
 	if d.IsBase64 {
 		return d.Data
 	}
-	return base64.StdEncoding.EncodeToString([]byte(d.Data))
+	data, err := url.PathUnescape(d.Data)
+	if err != nil {
+		data = d.Data
+	}
+	return base64.StdEncoding.EncodeToString([]byte(data))
 }
 
 // isValidMediaType validates that a media type is valid.
@@ -76,7 +88,8 @@ func isValidMediaType(mediaType string) bool {
 
 	// Check for common known media types for fast path
 	switch mediaType {
-	case "application/json", "application/octet-stream", "application/pdf", "application/xml",
+	case dataURIDefaultMediaType,
+		"application/json", "application/octet-stream", "application/pdf", "application/xml",
 		"audio/mpeg", "audio/ogg", "audio/wav",
 		"image/apng", "image/avif", "image/bmp", "image/gif", "image/jpeg", "image/png",
 		"image/svg+xml", "image/tiff", "image/webp",
@@ -95,14 +108,51 @@ func topLevelMediaType(mediaType string) string {
 	if mediaType == "" {
 		return ""
 	}
-	slashIndex := strings.IndexByte(mediaType, '/')
+	before, _, ok := strings.Cut(mediaType, "/")
 	var topLevel string
-	if slashIndex < 0 {
+	if !ok {
 		topLevel = mediaType
 	} else {
-		topLevel = mediaType[:slashIndex]
+		topLevel = before
 	}
 	return strings.ToLower(strings.TrimSpace(topLevel))
+}
+
+func validateURIContentURI(rawURI string) error {
+	parsed, err := url.Parse(rawURI)
+	if err != nil {
+		return fmt.Errorf("invalid uri: %w", err)
+	}
+	if parsed == nil || !parsed.IsAbs() {
+		return fmt.Errorf("invalid uri: uri must be absolute")
+	}
+	if (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host == "" {
+		return fmt.Errorf("invalid uri: host is required for %s uri", parsed.Scheme)
+	}
+	return nil
+}
+
+func inferMediaTypeFromURI(rawURI string) string {
+	pathPart := rawURI
+	if parsed, err := url.Parse(rawURI); err == nil {
+		if parsed.Path != "" {
+			pathPart = parsed.Path
+		} else if parsed.Opaque != "" {
+			pathPart = parsed.Opaque
+		}
+	}
+	if i := strings.IndexAny(pathPart, "?#"); i >= 0 {
+		pathPart = pathPart[:i]
+	}
+	if ext := path.Ext(pathPart); ext != "" {
+		if mediaType := mime.TypeByExtension(ext); mediaType != "" {
+			if parsed, _, err := mime.ParseMediaType(mediaType); err == nil {
+				return parsed
+			}
+			return mediaType
+		}
+	}
+	return uriContentDefaultMediaType
 }
 
 // isValidBase64Data tests whether the value is a valid base64 string without whitespace.

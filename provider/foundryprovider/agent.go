@@ -28,6 +28,10 @@ type AgentConfig struct {
 	// They are ignored for server-side Foundry prompt agents, whose instructions are owned by the service.
 	Instructions string
 
+	// DisableStoreOutput disables service-side Responses output storage.
+	// Use this when local session history providers own conversation state.
+	DisableStoreOutput bool
+
 	// OpenAIOptions are appended to the OpenAI-compatible per-agent client options.
 	OpenAIOptions []option.RequestOption
 }
@@ -117,7 +121,6 @@ func newFoundryAgent(credential azcore.TokenCredential, config AgentConfig, mode
 	if mode.agentName != "" {
 		instructions = ""
 	}
-
 	openAIOptions := []option.RequestOption{
 		option.WithBaseURL(mode.baseURL),
 		azure.WithTokenCredential(credential, azure.WithTokenCredentialScopes([]string{azureAIResourceScope})),
@@ -129,9 +132,10 @@ func newFoundryAgent(credential azcore.TokenCredential, config AgentConfig, mode
 	config.Middlewares = append([]agent.Middleware{clientHeadersMiddleware{}, servedModelMiddleware{}}, config.Middlewares...)
 
 	return openaiprovider.NewResponsesAgent(openai.NewClient(openAIOptions...), openaiprovider.AgentConfig{
-		Config:       config.Config,
-		Instructions: instructions,
-		Model:        mode.model,
+		Config:             config.Config,
+		Instructions:       instructions,
+		Model:              mode.model,
+		DisableStoreOutput: config.DisableStoreOutput,
 	})
 }
 

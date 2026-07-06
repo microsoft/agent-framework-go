@@ -183,6 +183,80 @@ func TestContentEncoding_Roundtrip(t *testing.T) {
 	}
 }
 
+func TestDataContentUnmarshalDefaultsMissingMediaType(t *testing.T) {
+	var content message.DataContent
+	if err := json.Unmarshal([]byte(`{"Type":"data","URI":"data:,hello%20world+literal"}`), &content); err != nil {
+		t.Fatal(err)
+	}
+	if content.MediaType != "text/plain;charset=US-ASCII" {
+		t.Fatalf("MediaType = %q, want text/plain;charset=US-ASCII", content.MediaType)
+	}
+	data, err := content.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "hello world+literal" {
+		t.Fatalf("data = %q, want hello world+literal", string(data))
+	}
+}
+
+func TestDataContentUnmarshalPreservesInvalidPercentEscapes(t *testing.T) {
+	var content message.DataContent
+	if err := json.Unmarshal([]byte(`{"Type":"data","URI":"data:,hello%20%ZZ+there"}`), &content); err != nil {
+		t.Fatal(err)
+	}
+	data, err := content.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "hello%20%ZZ+there" {
+		t.Fatalf("data = %q, want original invalid URL data", string(data))
+	}
+}
+
+func TestNewURIContentInfersMediaType(t *testing.T) {
+	content, err := message.NewURIContent("https://example.com/images/chart.png?size=large", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if content.MediaType != "image/png" {
+		t.Fatalf("MediaType = %q, want image/png", content.MediaType)
+	}
+
+	content, err = message.NewURIContent("https://example.com/download", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if content.MediaType != "application/octet-stream" {
+		t.Fatalf("MediaType = %q, want application/octet-stream", content.MediaType)
+	}
+}
+
+func TestNewURIContentValidatesURI(t *testing.T) {
+	if _, err := message.NewURIContent("relative/path.png", ""); err == nil {
+		t.Fatal("expected relative URI to fail")
+	}
+	if _, err := message.NewURIContent("https://exa mple.com/image.png", ""); err == nil {
+		t.Fatal("expected invalid host URI to fail")
+	}
+	if _, err := message.NewURIContent("https://example.com/%ZZ.png", ""); err == nil {
+		t.Fatal("expected invalid percent escape URI to fail")
+	}
+}
+
+func TestNewURIContentUsesExplicitMediaType(t *testing.T) {
+	content, err := message.NewURIContent("https://example.com/image.png", "image/jpeg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if content.MediaType != "image/jpeg" {
+		t.Fatalf("MediaType = %q, want image/jpeg", content.MediaType)
+	}
+	if _, err := message.NewURIContent("https://example.com/image.png", "not a media type"); err == nil {
+		t.Fatal("expected invalid media type to fail")
+	}
+}
+
 func TestContentEncoding_UnmarshalMissingTypeUsesRawContent(t *testing.T) {
 	const rawContent = `{"Provider":"github","Payload":{"value":42}}`
 	data := []byte(`[` + rawContent + `]`)

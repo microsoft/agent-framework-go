@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -623,13 +624,7 @@ func (s resolvedShell) persistentArgv() ([]string, error) {
 }
 
 func combineArgv(extra, suffix []string) []string {
-	if len(extra) == 0 {
-		return append([]string(nil), suffix...)
-	}
-	combined := make([]string, 0, len(extra)+len(suffix))
-	combined = append(combined, extra...)
-	combined = append(combined, suffix...)
-	return combined
+	return slices.Concat(extra, suffix)
 }
 
 func classifyShellKind(shell string) shellKind {

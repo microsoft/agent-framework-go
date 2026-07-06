@@ -101,9 +101,13 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 			session = t
 			keepConversationID = session.ServiceID() != "" && strings.HasPrefix(session.ServiceID(), "conv_")
 		}
+		disableStoreOutput := responsesDisableStoreOutput(a.config, options)
 
 		// Helper to update conversation ID after response completes
 		updateConversationID := func(responseID string) {
+			if disableStoreOutput {
+				return
+			}
 			if session != nil && !keepConversationID && responseID != "" {
 				session.SetServiceID(responseID)
 			}
@@ -158,7 +162,7 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 		}
 
 		// Build request parameters
-		body, err := responsesBuildCompletionParams(a.config.Model, messages, options)
+		body, err := responsesBuildCompletionParams(a.config, messages, options)
 		if err != nil {
 			yield(nil, err)
 			return
@@ -216,12 +220,20 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 }
 
 // buildCompletionParams constructs the parameters for the OpenAI chat completion API.
-func responsesBuildCompletionParams(model string, messages []*message.Message, opts []agent.Option) (responses.ResponseNewParams, error) {
+func responsesBuildCompletionParams(config AgentConfig, messages []*message.Message, opts []agent.Option) (responses.ResponseNewParams, error) {
 	var params responses.ResponseNewParams
 	if p, ok := agent.GetOption(opts, ResponsesNewParams); ok {
 		params = p
 	}
-	params.Model = cmp.Or(params.Model, model)
+	if responsesDisableStoreOutput(config, opts) {
+		if param.IsOmitted(params.Store) {
+			params.Store = openai.Bool(false)
+		}
+		if !slices.Contains(params.Include, responses.ResponseIncludableReasoningEncryptedContent) {
+			params.Include = append(params.Include, responses.ResponseIncludableReasoningEncryptedContent)
+		}
+	}
+	params.Model = cmp.Or(params.Model, config.Model)
 	instructions := slices.Collect(agent.AllOptions(opts, agent.WithInstructions))
 	if len(instructions) > 0 {
 		params.Instructions = openai.String(strings.Join(instructions, "\n"))
@@ -440,6 +452,13 @@ func responsesBuildCompletionParams(model string, messages []*message.Message, o
 	return params, nil
 }
 
+func responsesDisableStoreOutput(config AgentConfig, opts []agent.Option) bool {
+	if p, ok := agent.GetOption(opts, ResponsesNewParams); ok && !param.IsOmitted(p.Store) {
+		return !p.Store.Or(true)
+	}
+	return config.DisableStoreOutput
+}
+
 // responsesBuildMessageParam converts an agent.Message to one or more OpenAI message parameters.
 // Returns a slice because some agent messages (like RoleTool) need to be split into multiple OpenAI messages.
 func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInputParam) (responses.ResponseInputParam, error) {
@@ -506,15 +525,32 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 		}
 
 	case message.RoleAssistant:
+		var outputContents []responses.ResponseOutputMessageContentUnionParam
+		outputGroup := 0
+		flushOutputContents := func() {
+			if len(outputContents) == 0 {
+				return
+			}
+			id := msg.ID
+			if id == "" || outputGroup > 0 {
+				id = fmt.Sprintf("msg_local_%d", len(resp))
+			}
+			resp = append(resp, responses.ResponseInputItemParamOfOutputMessage(outputContents, id, responses.ResponseOutputMessageStatusCompleted))
+			outputContents = nil
+			outputGroup++
+		}
 		for _, c := range msg.Contents {
 			switch c := c.(type) {
 			case *message.TextContent:
-				contents = append(contents, responses.ResponseInputContentUnionParam{
-					OfInputText: &responses.ResponseInputTextParam{
-						Text: c.Text,
+				outputContents = append(outputContents, responses.ResponseOutputMessageContentUnionParam{
+					OfOutputText: &responses.ResponseOutputTextParam{
+						// TODO: Convert message annotations back to Responses output-text annotations.
+						Annotations: []responses.ResponseOutputTextAnnotationUnionParam{},
+						Text:        c.Text,
 					},
 				})
 			case *message.TextReasoningContent:
+				flushOutputContents()
 				// Reasoning content is added as a separate input item
 				var reasoning responses.ResponseReasoningItemParam
 				if c.ProtectedData != "" {
@@ -527,10 +563,11 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 					OfReasoning: &reasoning,
 				})
 			case *message.FunctionCallContent:
-				// Function calls from assistant messages are NOT sent as input
-				// Only function call outputs (from tool role) are sent
+				flushOutputContents()
+				resp = append(resp, responses.ResponseInputItemParamOfFunctionCall(c.Arguments, c.CallID, c.Name))
 			}
 		}
+		flushOutputContents()
 
 	case message.RoleTool:
 		for _, c := range msg.Contents {

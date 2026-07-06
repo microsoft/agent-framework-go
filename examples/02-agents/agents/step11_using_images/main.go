@@ -4,6 +4,8 @@ package main
 
 import (
 	"context"
+	_ "embed" // Embed import required by go:embed for []byte target
+	"encoding/base64"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
@@ -16,6 +18,9 @@ var logger = demo.NewLogger(
 	"Demonstrates how to use Image Multi-Modality with an Agent.",
 	"Model", demo.FoundryModel,
 )
+
+//go:embed assets/walkway.jpg
+var walkwayImage []byte
 
 func main() {
 	token := demo.FoundryTokenCredential()
@@ -37,8 +42,9 @@ func main() {
 	ctx := context.Background()
 	msg := message.New(
 		&message.TextContent{Text: "What do you see in this image?"},
-		&message.URIContent{
-			URI:       "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg",
+		&message.DataContent{
+			Name:      "walkway.jpg",
+			Data:      base64.StdEncoding.EncodeToString(walkwayImage),
 			MediaType: "image/jpeg",
 		},
 	)

@@ -82,6 +82,22 @@ func TestNotSources(t *testing.T) {
 	}
 }
 
+func TestNotSourceTypes(t *testing.T) {
+	keep := message.NewText("keep")
+	keep.Source = message.Source{Type: message.SourceType("provider-a"), ID: "same-id"}
+	blocked := message.NewText("blocked")
+	blocked.Source = message.Source{Type: message.SourceType("provider-b"), ID: "same-id"}
+
+	filter := NotSourceTypes(message.SourceType("provider-b"))
+	out, err := filter(t.Context(), []*message.Message{keep, blocked})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(out) != 1 || out[0] != keep {
+		t.Fatal("expected messages not in denied source type")
+	}
+}
+
 func TestOr_ExternalOnlyOrSources(t *testing.T) {
 	external := message.NewText("external")
 	source := message.Source{Type: message.SourceType("provider"), ID: "a"}
