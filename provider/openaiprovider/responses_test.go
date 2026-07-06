@@ -707,7 +707,9 @@ func TestResponsesMultipleMessages_NonStreaming(t *testing.T) {
                     {
                         "type": "message",
                         "role": "assistant",
-                        "content": [{"type": "input_text", "text": "hi, how are you?"}]
+						"content": [{"type": "output_text", "text": "hi, how are you?", "annotations": []}],
+						"id": "msg_local_1",
+						"status": "completed"
                     },
                     {
                         "type": "message",
@@ -1353,6 +1355,12 @@ func TestResponsesFunctionCallWithResult_NonStreaming(t *testing.T) {
                         "content": [{"type": "input_text", "text": "What's the weather in Seattle?"}]
                     },
                     {
+						"type": "function_call",
+						"call_id": "call_abc123",
+						"name": "get_weather",
+						"arguments": "{\"location\":\"Seattle, WA\"}"
+					},
+					{
                         "type": "function_call_output",
                         "call_id": "call_abc123",
                         "output": "{\"temperature\":72,\"condition\":\"sunny\"}"
@@ -1546,6 +1554,12 @@ func TestResponsesFunctionCall_UsesCallIDWhenDifferentFromID(t *testing.T) {
 						"type": "message",
 						"role": "user",
 						"content": [{"type": "input_text", "text": "What's the weather in Amsterdam?"}]
+					},
+					{
+						"type": "function_call",
+						"call_id": "call_weather_001",
+						"name": "get_weather",
+						"arguments": "{\"location\":\"Amsterdam\"}"
 					},
 					{
 						"type": "function_call_output",
@@ -4349,6 +4363,72 @@ func TestResponsesConversationId_AsResponseId_NonStreaming(t *testing.T) {
 	// After the call, session conversation id should be updated to the new response ID
 	if got := session.ServiceID(); got != "resp_67890" {
 		t.Errorf("expected ConversationId resp_67890, got %s", got)
+	}
+}
+
+func TestDisableStoreOutputDoesNotUseOrUpdateResponseID(t *testing.T) {
+	const input = `
+						{
+								"store":false,
+								"model":"gpt-4o-mini",
+								"input":[{
+										"type":"message",
+										"role":"user",
+										"content":[{"type":"input_text","text":"hello"}]
+								}]
+						}
+						`
+
+	const output = `
+						{
+							"id": "resp_67890",
+							"object": "response",
+							"created_at": 1741891428,
+							"status": "completed",
+							"model": "gpt-4o-mini-2024-07-18",
+							"output": [
+								{
+									"type": "message",
+									"id": "msg_67d32764fcdc8191bcf2e444d4088804058a5e08c46a181d",
+									"status": "completed",
+									"role": "assistant",
+									"content": [
+										{
+											"type": "output_text",
+											"text": "Hello!",
+											"annotations": []
+										}
+									]
+								}
+							]
+						}
+						`
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := openaiprovider.NewResponsesAgent(
+		openai.NewClient(option.WithBaseURL(server.URL)),
+		openaiprovider.AgentConfig{
+			Model:              "gpt-4o-mini",
+			DisableStoreOutput: true,
+			Config:             agent.Config{DisableFuncAutoCall: true},
+		},
+	)
+	session, err := a.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = a.RunText(t.Context(), "hello",
+		agent.WithSession(session),
+	).Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+
+	if got := session.ServiceID(); got != "" {
+		t.Errorf("session ServiceID = %q, want empty", got)
 	}
 }
 

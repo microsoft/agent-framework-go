@@ -52,6 +52,35 @@ func TestNewAgentUsesProjectResponsesEndpointAndConfig(t *testing.T) {
 	}
 }
 
+func TestNewAgentDisableStoreOutputSetsStoreFalse(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := jsonMap(t, mustReadBody(t, r))
+		if body["store"] != false {
+			t.Fatalf("store = %#v, want false", body["store"])
+		}
+		writeResponsesOK(w)
+	}))
+	defer server.Close()
+
+	foundryAgent := newFoundryAgent(t, server, foundryprovider.ModelDeployment("gpt-4o-mini"), foundryprovider.AgentConfig{
+		DisableStoreOutput: true,
+		Config: agent.Config{
+			DisableFuncAutoCall: true,
+		},
+	})
+	session, err := foundryAgent.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := foundryAgent.RunText(t.Context(), "hello", agent.WithSession(session)).Collect(); err != nil {
+		t.Fatalf("RunText error = %v", err)
+	}
+	if got := session.ServiceID(); got != "" {
+		t.Fatalf("session ServiceID = %q, want empty", got)
+	}
+}
+
 func TestNewAgentRunsAgainstFoundryAgentEndpoint(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/projects/proj/agents/my-agent/endpoint/protocols/openai/responses" {

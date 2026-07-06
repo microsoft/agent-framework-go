@@ -40,6 +40,7 @@ func main() {
 			Instructions: `You are a helpful personal assistant.
 You manage a TODO list for the user. When the user has completed one of the tasks it can be removed from the TODO list. Only provide the list of TODO items if asked.
 You remind users of upcoming calendar events when the user interacts with you.`,
+			DisableStoreOutput: true,
 			Config: agent.Config{
 				Name:            "PersonalAssistant",
 				HistoryProvider: newChatHistoryProvider(),
@@ -115,10 +116,9 @@ func newChatHistoryProvider() agent.HistoryProvider {
 	// You may want to store these messages, depending on their content and your requirements.
 	return agent.NewInMemoryHistoryProvider(agent.InMemoryHistoryProviderConfig{
 		SourceID: chatHistorySourceID,
-		StoreInputRequestMessageFilter: messagefilter.NotSources(
-			message.Source{Type: agent.SourceTypeHistoryProvider, ID: chatHistorySourceID},
-			message.Source{Type: agent.SourceTypeContextProvider, ID: todoListSourceID},
-			message.Source{Type: agent.SourceTypeContextProvider, ID: calendarSearchSourceID},
+		StoreInputRequestMessageFilter: messagefilter.NotSourceTypes(
+			agent.SourceTypeHistoryProvider,
+			agent.SourceTypeContextProvider,
 		),
 	})
 }

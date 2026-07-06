@@ -102,6 +102,18 @@ func Sources(sources ...message.Source) Filter {
 	}
 }
 
+// NotSourceTypes returns messages whose source type is not in the provided deny list.
+func NotSourceTypes(sourceTypes ...message.SourceType) Filter {
+	return func(_ context.Context, messages []*message.Message) ([]*message.Message, error) {
+		return slices.DeleteFunc(messages, func(msg *message.Message) bool {
+			if msg == nil {
+				return false
+			}
+			return slices.Contains(sourceTypes, msg.Source.Type)
+		}), nil
+	}
+}
+
 // NotSources returns messages whose source is not in the provided deny list.
 func NotSources(sources ...message.Source) Filter {
 	return func(_ context.Context, messages []*message.Message) ([]*message.Message, error) {
