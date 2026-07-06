@@ -101,10 +101,11 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 			session = t
 			keepConversationID = session.ServiceID() != "" && strings.HasPrefix(session.ServiceID(), "conv_")
 		}
+		disableStoreOutput := responsesDisableStoreOutput(a.config, options)
 
 		// Helper to update conversation ID after response completes
 		updateConversationID := func(responseID string) {
-			if a.config.DisableStoreOutput {
+			if disableStoreOutput {
 				return
 			}
 			if session != nil && !keepConversationID && responseID != "" {
@@ -224,10 +225,7 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 	if p, ok := agent.GetOption(opts, ResponsesNewParams); ok {
 		params = p
 	}
-	if !param.IsOmitted(params.Store) {
-		return responses.ResponseNewParams{}, fmt.Errorf("openaiprovider: per-run ResponsesNewParams.Store is not supported; use AgentConfig.DisableStoreOutput")
-	}
-	if config.DisableStoreOutput {
+	if config.DisableStoreOutput && param.IsOmitted(params.Store) {
 		params.Store = openai.Bool(false)
 	}
 	params.Model = cmp.Or(params.Model, config.Model)
@@ -447,6 +445,13 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 		}
 	}
 	return params, nil
+}
+
+func responsesDisableStoreOutput(config AgentConfig, opts []agent.Option) bool {
+	if p, ok := agent.GetOption(opts, ResponsesNewParams); ok && !param.IsOmitted(p.Store) {
+		return !p.Store.Or(true)
+	}
+	return config.DisableStoreOutput
 }
 
 // responsesBuildMessageParam converts an agent.Message to one or more OpenAI message parameters.

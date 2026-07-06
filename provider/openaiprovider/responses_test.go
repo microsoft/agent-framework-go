@@ -4494,10 +4494,45 @@ func TestDisableStoreOutputDoesNotUseOrUpdateResponseID(t *testing.T) {
 	}
 }
 
-func TestResponsesNewParamsStoreIsUnsupportedPerRun(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		t.Fatal("unexpected request")
-	}))
+func TestResponsesNewParamsStoreOverridesDisableStoreOutput(t *testing.T) {
+	const input = `
+		{
+			"store":true,
+			"model":"gpt-4o-mini",
+			"input":[{
+				"type":"message",
+				"role":"user",
+				"content":[{"type":"input_text","text":"hello"}]
+			}]
+		}
+		`
+
+	const output = `
+		{
+			"id": "resp_67890",
+			"object": "response",
+			"created_at": 1741891428,
+			"status": "completed",
+			"model": "gpt-4o-mini-2024-07-18",
+			"output": [
+				{
+					"type": "message",
+					"id": "msg_67d32764fcdc8191bcf2e444d4088804058a5e08c46a181d",
+					"status": "completed",
+					"role": "assistant",
+					"content": [
+						{
+							"type": "output_text",
+							"text": "Hello!",
+							"annotations": []
+						}
+					]
+				}
+			]
+		}
+		`
+
+	server := newTestResponsesServer(t, input, output)
 	defer server.Close()
 
 	a := openaiprovider.NewResponsesAgent(
@@ -4508,15 +4543,87 @@ func TestResponsesNewParamsStoreIsUnsupportedPerRun(t *testing.T) {
 			Config:             agent.Config{DisableFuncAutoCall: true},
 		},
 	)
+	session, err := a.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	_, err := a.RunText(t.Context(), "hello",
+	_, err = a.RunText(t.Context(), "hello",
+		agent.WithSession(session),
+		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{Store: openai.Bool(true)}),
+	).Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+
+	if got := session.ServiceID(); got != "resp_67890" {
+		t.Errorf("session ServiceID = %q, want resp_67890", got)
+	}
+}
+
+func TestResponsesNewParamsStoreFalseDoesNotUpdateResponseID(t *testing.T) {
+	const input = `
+		{
+			"store":false,
+			"model":"gpt-4o-mini",
+			"input":[{
+				"type":"message",
+				"role":"user",
+				"content":[{"type":"input_text","text":"hello"}]
+			}]
+		}
+		`
+
+	const output = `
+		{
+			"id": "resp_67890",
+			"object": "response",
+			"created_at": 1741891428,
+			"status": "completed",
+			"model": "gpt-4o-mini-2024-07-18",
+			"output": [
+				{
+					"type": "message",
+					"id": "msg_67d32764fcdc8191bcf2e444d4088804058a5e08c46a181d",
+					"status": "completed",
+					"role": "assistant",
+					"content": [
+						{
+							"type": "output_text",
+							"text": "Hello!",
+							"annotations": []
+						}
+					]
+				}
+			]
+		}
+		`
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := openaiprovider.NewResponsesAgent(
+		openai.NewClient(option.WithBaseURL(server.URL)),
+		openaiprovider.AgentConfig{
+			Model:  "gpt-4o-mini",
+			Config: agent.Config{DisableFuncAutoCall: true},
+		},
+	)
+	session, err := a.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = a.RunText(t.Context(), "hello",
+		agent.WithSession(session),
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{Store: openai.Bool(false)}),
 	).Collect()
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if !strings.Contains(err.Error(), "per-run ResponsesNewParams.Store is not supported") {
+	if err != nil {
 		t.Fatalf("error = %v", err)
+	}
+
+	if got := session.ServiceID(); got != "" {
+		t.Errorf("session ServiceID = %q, want empty", got)
 	}
 }
 
