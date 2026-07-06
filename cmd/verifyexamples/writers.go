@@ -111,7 +111,9 @@ func (w *LogFileWriter) append(text string) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() {
+		_ = file.Close()
+	}()
 	_, err = file.WriteString(text)
 	return err
 }
@@ -121,7 +123,9 @@ func writeCSV(path string, orderedResults []VerificationResult, skipped []Skippe
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() {
+		_ = file.Close()
+	}()
 
 	pathLookup := map[string]string{}
 	for _, example := range examples {

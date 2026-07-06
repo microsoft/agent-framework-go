@@ -443,27 +443,6 @@ var agentsExamples = []ExampleDefinition{
 		},
 	},
 	{
-		Name:                         "02_agents_providers_foundry_step18_bing_custom_search",
-		ProjectPath:                  "examples/02-agents/providers/foundry/step18_bing_custom_search",
-		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT", "AZURE_AI_CUSTOM_SEARCH_CONNECTION_ID", "AZURE_AI_CUSTOM_SEARCH_INSTANCE_NAME"},
-		OptionalEnvironmentVariables: []string{"FOUNDRY_MODEL"},
-		SkipReason:                   "Requires Bing Custom Search connection.",
-	},
-	{
-		Name:                         "02_agents_providers_foundry_step19_sharepoint",
-		ProjectPath:                  "examples/02-agents/providers/foundry/step19_sharepoint",
-		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT", "SHAREPOINT_PROJECT_CONNECTION_ID"},
-		OptionalEnvironmentVariables: []string{"FOUNDRY_MODEL"},
-		SkipReason:                   "Requires SharePoint connection.",
-	},
-	{
-		Name:                         "02_agents_providers_foundry_step20_microsoft_fabric",
-		ProjectPath:                  "examples/02-agents/providers/foundry/step20_microsoft_fabric",
-		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT", "FABRIC_PROJECT_CONNECTION_ID"},
-		OptionalEnvironmentVariables: []string{"FOUNDRY_MODEL"},
-		SkipReason:                   "Requires Microsoft Fabric connection.",
-	},
-	{
 		Name:                         "02_agents_providers_foundry_step21_web_search",
 		ProjectPath:                  "examples/02-agents/providers/foundry/step21_web_search",
 		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},

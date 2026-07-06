@@ -21,7 +21,7 @@ func NewConsoleReporter(w io.Writer) *ConsoleReporter {
 func (r *ConsoleReporter) WriteLineWithPrefix(exampleName string, message string) {
 	r.lock.Lock()
 	defer r.lock.Unlock()
-	fmt.Fprintf(r.w, "[%s] %s\n", exampleName, message)
+	_, _ = fmt.Fprintf(r.w, "[%s] %s\n", exampleName, message)
 }
 
 func (r *ConsoleReporter) PrintSummary(orderedResults []VerificationResult, skipped []SkippedExample, elapsed time.Duration) {
@@ -35,26 +35,26 @@ func (r *ConsoleReporter) PrintSummary(orderedResults []VerificationResult, skip
 		}
 	}
 
-	fmt.Fprintln(r.w)
-	fmt.Fprintln(r.w, "────────────────────────────────────────────────────────────")
-	fmt.Fprintln(r.w, "SUMMARY")
+	_, _ = fmt.Fprintln(r.w)
+	_, _ = fmt.Fprintln(r.w, "────────────────────────────────────────────────────────────")
+	_, _ = fmt.Fprintln(r.w, "SUMMARY")
 	for _, result := range orderedResults {
 		marker := "✗"
 		if result.Passed {
 			marker = "✓"
 		}
-		fmt.Fprintf(r.w, "  %s %s: %s\n", marker, result.ExampleName, result.Summary)
+		_, _ = fmt.Fprintf(r.w, "  %s %s: %s\n", marker, result.ExampleName, result.Summary)
 	}
 	for _, skippedExample := range skipped {
-		fmt.Fprintf(r.w, "  ○ %s: Skipped — %s\n", skippedExample.Name, skippedExample.Reason)
+		_, _ = fmt.Fprintf(r.w, "  ○ %s: Skipped — %s\n", skippedExample.Name, skippedExample.Reason)
 	}
 
-	fmt.Fprintf(r.w, "\nResults: %d passed", passCount)
+	_, _ = fmt.Fprintf(r.w, "\nResults: %d passed", passCount)
 	if failCount > 0 {
-		fmt.Fprintf(r.w, ", %d failed", failCount)
+		_, _ = fmt.Fprintf(r.w, ", %d failed", failCount)
 	}
 	if len(skipped) > 0 {
-		fmt.Fprintf(r.w, ", %d skipped", len(skipped))
+		_, _ = fmt.Fprintf(r.w, ", %d skipped", len(skipped))
 	}
-	fmt.Fprintf(r.w, "\nElapsed: %02d:%02d:%02d\n", int(elapsed.Hours()), int(elapsed.Minutes())%60, int(elapsed.Seconds())%60)
+	_, _ = fmt.Fprintf(r.w, "\nElapsed: %02d:%02d:%02d\n", int(elapsed.Hours()), int(elapsed.Minutes())%60, int(elapsed.Seconds())%60)
 }

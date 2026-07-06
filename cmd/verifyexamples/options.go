@@ -47,7 +47,7 @@ func parseOptions(args []string, stderr io.Writer) (VerifyOptions, bool) {
 	if parallelArg != "" {
 		p, err := strconv.Atoi(parallelArg)
 		if err != nil || p <= 0 {
-			fmt.Fprintf(stderr, "Invalid value for --parallel: %s.\n", parallelArg)
+			_, _ = fmt.Fprintf(stderr, "Invalid value for --parallel: %s.\n", parallelArg)
 			return VerifyOptions{}, false
 		}
 		maxParallelism = p
@@ -57,7 +57,7 @@ func parseOptions(args []string, stderr io.Writer) (VerifyOptions, bool) {
 	if categoryFilter != "" {
 		categoryList, ok := lookupExampleSet(categoryFilter)
 		if !ok {
-			fmt.Fprintf(stderr, "Unknown category %q. Available: %s\n", categoryFilter, strings.Join(availableCategories(), ", "))
+			_, _ = fmt.Fprintf(stderr, "Unknown category %q. Available: %s\n", categoryFilter, strings.Join(availableCategories(), ", "))
 			return VerifyOptions{}, false
 		}
 		examples = categoryList
@@ -85,7 +85,7 @@ func parseOptions(args []string, stderr io.Writer) (VerifyOptions, bool) {
 		for _, example := range allExamples() {
 			names = append(names, example.Name)
 		}
-		fmt.Fprintf(stderr, "No matching examples found. Available: %s\n", strings.Join(names, ", "))
+		_, _ = fmt.Fprintf(stderr, "No matching examples found. Available: %s\n", strings.Join(names, ", "))
 		return VerifyOptions{}, false
 	}
 
@@ -105,7 +105,7 @@ func extractArg(args *[]string, flag string, stderr io.Writer) (string, bool) {
 			continue
 		}
 		if i+1 >= len(*args) {
-			fmt.Fprintf(stderr, "Missing value for %s.\n", flag)
+			_, _ = fmt.Fprintf(stderr, "Missing value for %s.\n", flag)
 			*args = append((*args)[:i], (*args)[i+1:]...)
 			return "", false
 		}

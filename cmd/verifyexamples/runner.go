@@ -81,7 +81,9 @@ func runExample(ctx context.Context, projectPath string, timeout time.Duration, 
 }
 
 func feedInputs(ctx context.Context, stdin io.WriteCloser, inputs []*string, inputDelay time.Duration) {
-	defer stdin.Close()
+	defer func() {
+		_ = stdin.Close()
+	}()
 	for _, input := range inputs {
 		select {
 		case <-ctx.Done():
