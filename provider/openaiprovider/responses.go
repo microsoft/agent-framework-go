@@ -225,8 +225,13 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 	if p, ok := agent.GetOption(opts, ResponsesNewParams); ok {
 		params = p
 	}
-	if config.DisableStoreOutput && param.IsOmitted(params.Store) {
-		params.Store = openai.Bool(false)
+	if responsesDisableStoreOutput(config, opts) {
+		if param.IsOmitted(params.Store) {
+			params.Store = openai.Bool(false)
+		}
+		if !slices.Contains(params.Include, responses.ResponseIncludableReasoningEncryptedContent) {
+			params.Include = append(params.Include, responses.ResponseIncludableReasoningEncryptedContent)
+		}
 	}
 	params.Model = cmp.Or(params.Model, config.Model)
 	instructions := slices.Collect(agent.AllOptions(opts, agent.WithInstructions))
