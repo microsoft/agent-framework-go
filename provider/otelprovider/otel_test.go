@@ -9,8 +9,12 @@ import (
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
+	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/provider/otelprovider"
+	"github.com/microsoft/agent-framework-go/tool"
+	"github.com/microsoft/agent-framework-go/tool/functool"
 
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -291,6 +295,82 @@ func TestOtel_Run_HandlesMultipleUpdates(t *testing.T) {
 	if len(spans) != 1 {
 		t.Errorf("expected 1 span, got %d", len(spans))
 	}
+}
+
+func TestOtel_Run_EmitsExecuteToolSpanForAutocall(t *testing.T) {
+	exporter := setupTracer(t)
+
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder().
+			Add(&agent.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					&message.FunctionCallContent{CallID: "call-1", Name: "get_weather", Arguments: `{}`},
+				},
+			}).
+			NewTurn().
+			AddText("sunny").
+			Build(),
+	}
+
+	var toolSpanContext trace.SpanContext
+	getWeather := functool.MustNew(functool.Config{Name: "get_weather"},
+		func(ctx context.Context, args struct{}) (string, error) {
+			toolSpanContext = trace.SpanContextFromContext(ctx)
+			return "sunny", nil
+		},
+	)
+
+	a := agent.New(agent.ProviderConfig{
+		Run: runner.Run,
+	}, agent.Config{
+		ID:   "test-agent-id",
+		Name: "test-agent",
+		Middlewares: []agent.Middleware{
+			otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{SourceName: "test-source"}),
+			toolautocall.New(toolautocall.Config{}),
+		},
+		Tools: []tool.Tool{getWeather},
+	})
+
+	_, err := a.RunMessage(t.Context(), message.NewText("weather?")).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !toolSpanContext.IsValid() {
+		t.Fatal("expected tool call to observe a valid span context")
+	}
+
+	spans := exporter.GetSpans()
+	if len(spans) != 2 {
+		t.Fatalf("expected 2 spans, got %d", len(spans))
+	}
+
+	invokeSpan := findSpanByOperation(t, spans, "invoke_agent")
+	executeToolSpan := findSpanByOperation(t, spans, "execute_tool")
+
+	if executeToolSpan.InstrumentationScope.Name != "test-source" {
+		t.Fatalf("expected execute_tool span scope %q, got %q", "test-source", executeToolSpan.InstrumentationScope.Name)
+	}
+	if executeToolSpan.Parent.SpanID() != invokeSpan.SpanContext.SpanID() {
+		t.Fatalf("expected execute_tool parent %s, got %s", invokeSpan.SpanContext.SpanID(), executeToolSpan.Parent.SpanID())
+	}
+	if executeToolSpan.Name != "execute_tool get_weather" {
+		t.Fatalf("expected execute_tool span name %q, got %q", "execute_tool get_weather", executeToolSpan.Name)
+	}
+}
+
+func findSpanByOperation(t *testing.T, spans []tracetest.SpanStub, operation string) tracetest.SpanStub {
+	t.Helper()
+	for _, span := range spans {
+		for _, attr := range span.Attributes {
+			if string(attr.Key) == "gen_ai.operation.name" && attr.Value.AsString() == operation {
+				return span
+			}
+		}
+	}
+	t.Fatalf("expected span with operation %q", operation)
+	return tracetest.SpanStub{}
 }
 
 func TestOtel_Run_HandlesEarlyBreak(t *testing.T) {

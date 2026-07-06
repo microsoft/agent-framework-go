@@ -16,14 +16,23 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/internal/otelx"
 	"github.com/microsoft/agent-framework-go/internal/slogx"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
 	defaultMaximumConsecutiveErrorsPerRequest = 3
 	defaultMaximumIterationsPerRequest        = 40
+	opExecuteTool                             = "execute_tool"
+
+	attrKeyOperationName = "gen_ai.operation.name"
+	attrKeyToolName      = "gen_ai.tool.name"
 )
 
 // Config configures the automatic tool invocation middleware.
@@ -721,6 +730,10 @@ func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]too
 	}
 	f.logger.Debug(ctx, "calling function", "funcName", funcCall.Name, slogx.SensitiveData("arguments", funcCall.Arguments))
 	start := time.Now()
+	ctx, span := startToolSpan(ctx, funcCall)
+	if span != nil {
+		defer span.End()
+	}
 	var result any
 	var err error
 	func() {
@@ -736,6 +749,10 @@ func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]too
 		result, err = tl.Call(ctx, funcCall.Arguments)
 	}()
 	if err != nil {
+		if span != nil {
+			span.RecordError(err, trace.WithTimestamp(time.Now()))
+			span.SetStatus(codes.Error, err.Error())
+		}
 		if errors.Is(err, context.Canceled) {
 			f.logger.Debug(ctx, "call canceled", "funcName", funcCall.Name)
 		} else {
@@ -749,6 +766,21 @@ func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]too
 	}
 
 	return functionInvocationResult{status: functionInvocationStatusRanToCompletion, call: funcCall, result: result}
+}
+
+func startToolSpan(ctx context.Context, funcCall *message.FunctionCallContent) (context.Context, trace.Span) {
+	tracer, ok := otelx.TracerFromContext(ctx)
+	if !ok || funcCall == nil {
+		return ctx, nil
+	}
+	name := opExecuteTool
+	if funcCall.Name != "" {
+		name += " " + funcCall.Name
+	}
+	return tracer.Start(ctx, name, trace.WithAttributes(
+		attribute.String(attrKeyOperationName, opExecuteTool),
+		attribute.String(attrKeyToolName, funcCall.Name),
+	))
 }
 
 func (f *autocall) createResponseMessage(results []functionInvocationResult) *message.Message {

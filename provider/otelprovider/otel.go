@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/internal/otelx"
 	"github.com/microsoft/agent-framework-go/message"
 
 	"go.opentelemetry.io/otel"
@@ -54,6 +55,7 @@ func (m *mw) Run(next agent.RunFunc, ctx context.Context, messages []*message.Me
 			attribute.String(attrKeyAgentName, a.Name()),
 			attribute.String(attrKeyAgentDesc, a.Description()),
 		))
+		ctx = otelx.WithTracer(ctx, m.tracer)
 		defer span.End()
 
 		for update, err := range next(ctx, messages, options...) {
