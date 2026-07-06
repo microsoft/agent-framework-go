@@ -42,9 +42,15 @@ jobs:
         run: gh aw compile
 
       - name: Fail if lock files are out of date
+        shell: bash
         run: |
-          if ! git diff --exit-code -- '.github/workflows/*.lock.yml'; then
-            echo "::error::Agentic workflow lock files are out of date."
+          # Use `git status --porcelain` (not `git diff`) so newly generated but
+          # uncommitted (untracked) lock files -- e.g. when a PR adds a new *.md
+          # workflow -- also fail the job, not just modifications to tracked files.
+          changes="$(git status --porcelain -- '.github/workflows/*.lock.yml')"
+          if [[ -n "$changes" ]]; then
+            echo "::error::Agentic workflow lock files are out of date (modified or uncommitted):"
+            echo "$changes"
             echo "Run 'gh aw compile' with gh-aw ${GH_AW_VERSION} and commit the regenerated *.lock.yml files."
             exit 1
           fi
