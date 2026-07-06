@@ -1542,8 +1542,33 @@ jobs:
           script: |
             const { setupGlobals } = require('${{ runner.temp }}/gh-aw/actions/setup_globals.cjs');
             setupGlobals(core, github, context, exec, io, getOctokit);
-            const { main } = require('${{ runner.temp }}/gh-aw/actions/extract_base_branch_from_agent_output.cjs');
-            await main();
+            const fs = require('fs');
+            const agentOutputPath = process.env.GH_AW_AGENT_OUTPUT || '/tmp/gh-aw/agent_output.json';
+            if (!fs.existsSync(agentOutputPath)) {
+              core.info(`Agent output file not found at ${agentOutputPath}; skipping base branch extraction.`);
+              return;
+            }
+
+            let parsed;
+            try {
+              parsed = JSON.parse(fs.readFileSync(agentOutputPath, 'utf8'));
+            } catch (err) {
+              core.warning(`Unable to parse agent output JSON from ${agentOutputPath}: ${err.message}`);
+              return;
+            }
+
+            const baseBranch =
+              parsed?.create_pull_request?.base_branch ??
+              parsed?.create_pull_request?.base ??
+              parsed?.base_branch ??
+              parsed?.baseBranch;
+            if (!baseBranch || typeof baseBranch !== 'string') {
+              core.info('No base branch found in agent output.');
+              return;
+            }
+
+            core.setOutput('base_branch', baseBranch.trim());
+            core.info(`Extracted base branch from agent output: ${baseBranch.trim()}`);
       - name: Checkout repository (trusted default branch for comment events)
         if: (!cancelled()) && needs.agent.result != 'skipped' && contains(needs.agent.outputs.output_types, 'create_pull_request') && (github.event_name == 'issue_comment' || github.event_name == 'pull_request_review_comment')
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -1611,4 +1636,3 @@ jobs:
             /tmp/gh-aw/safe-output-items.jsonl
             /tmp/gh-aw/temporary-id-map.json
           if-no-files-found: ignore
-
