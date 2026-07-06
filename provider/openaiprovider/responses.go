@@ -224,6 +224,9 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 	if p, ok := agent.GetOption(opts, ResponsesNewParams); ok {
 		params = p
 	}
+	if !param.IsOmitted(params.Store) {
+		return responses.ResponseNewParams{}, fmt.Errorf("openaiprovider: per-run ResponsesNewParams.Store is not supported; use AgentConfig.DisableStoreOutput")
+	}
 	if config.DisableStoreOutput {
 		params.Store = openai.Bool(false)
 	}
@@ -513,6 +516,19 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 
 	case message.RoleAssistant:
 		var outputContents []responses.ResponseOutputMessageContentUnionParam
+		outputGroup := 0
+		flushOutputContents := func() {
+			if len(outputContents) == 0 {
+				return
+			}
+			id := msg.ID
+			if id == "" || outputGroup > 0 {
+				id = fmt.Sprintf("msg_local_%d", len(resp))
+			}
+			resp = append(resp, responses.ResponseInputItemParamOfOutputMessage(outputContents, id, responses.ResponseOutputMessageStatusCompleted))
+			outputContents = nil
+			outputGroup++
+		}
 		for _, c := range msg.Contents {
 			switch c := c.(type) {
 			case *message.TextContent:
@@ -524,6 +540,7 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 					},
 				})
 			case *message.TextReasoningContent:
+				flushOutputContents()
 				// Reasoning content is added as a separate input item
 				var reasoning responses.ResponseReasoningItemParam
 				if c.ProtectedData != "" {
@@ -536,16 +553,11 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 					OfReasoning: &reasoning,
 				})
 			case *message.FunctionCallContent:
+				flushOutputContents()
 				resp = append(resp, responses.ResponseInputItemParamOfFunctionCall(c.Arguments, c.CallID, c.Name))
 			}
 		}
-		if len(outputContents) > 0 {
-			id := msg.ID
-			if id == "" {
-				id = fmt.Sprintf("msg_local_%d", len(resp))
-			}
-			resp = append(resp, responses.ResponseInputItemParamOfOutputMessage(outputContents, id, responses.ResponseOutputMessageStatusCompleted))
-		}
+		flushOutputContents()
 
 	case message.RoleTool:
 		for _, c := range msg.Contents {

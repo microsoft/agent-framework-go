@@ -793,6 +793,68 @@ func TestResponsesMultipleMessages_NonStreaming(t *testing.T) {
 	}
 }
 
+func TestResponsesAssistantReplayPreservesContentOrder(t *testing.T) {
+	const input = `
+			{
+				"input": [
+					{
+						"type": "message",
+						"role": "assistant",
+						"content": [{"type": "output_text", "text": "Before tool.", "annotations": []}],
+						"id": "msg_local_0",
+						"status": "completed"
+					},
+					{
+						"type": "function_call",
+						"call_id": "call_abc123",
+						"name": "get_weather",
+						"arguments": "{\"location\":\"Seattle\"}"
+					},
+					{
+						"type": "message",
+						"role": "assistant",
+						"content": [{"type": "output_text", "text": "After tool.", "annotations": []}],
+						"id": "msg_local_2",
+						"status": "completed"
+					}
+				],
+				"model": "gpt-4o-mini"
+			}
+			`
+	const output = `
+			{
+			  "id": "resp_test",
+			  "object": "response",
+			  "created_at": 1727894187,
+			  "status": "completed",
+			  "model": "gpt-4o-mini-2024-07-18",
+			  "output": [{
+				  "type": "message",
+				  "id": "msg_test",
+				  "status": "completed",
+				  "role": "assistant",
+				  "content": [{"type": "output_text", "text": "done", "annotations": []}]
+			  }]
+			}
+			`
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+	messages := []*message.Message{
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			&message.TextContent{Text: "Before tool."},
+			&message.FunctionCallContent{CallID: "call_abc123", Name: "get_weather", Arguments: `{"location":"Seattle"}`},
+			&message.TextContent{Text: "After tool."},
+		}},
+	}
+
+	if _, err := a.Run(t.Context(), messages).Collect(); err != nil {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestResponsesDataContentMessage_Image_NonStreaming(t *testing.T) {
 	// A minimal 1x1 PNG image as a data URI (red pixel)
 	_ = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
@@ -4429,6 +4491,32 @@ func TestDisableStoreOutputDoesNotUseOrUpdateResponseID(t *testing.T) {
 
 	if got := session.ServiceID(); got != "" {
 		t.Errorf("session ServiceID = %q, want empty", got)
+	}
+}
+
+func TestResponsesNewParamsStoreIsUnsupportedPerRun(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("unexpected request")
+	}))
+	defer server.Close()
+
+	a := openaiprovider.NewResponsesAgent(
+		openai.NewClient(option.WithBaseURL(server.URL)),
+		openaiprovider.AgentConfig{
+			Model:              "gpt-4o-mini",
+			DisableStoreOutput: true,
+			Config:             agent.Config{DisableFuncAutoCall: true},
+		},
+	)
+
+	_, err := a.RunText(t.Context(), "hello",
+		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{Store: openai.Bool(false)}),
+	).Collect()
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "per-run ResponsesNewParams.Store is not supported") {
+		t.Fatalf("error = %v", err)
 	}
 }
 
