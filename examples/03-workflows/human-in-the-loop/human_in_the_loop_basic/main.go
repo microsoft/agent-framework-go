@@ -125,14 +125,26 @@ type judgeExecutor struct {
 	_ workflow.AttrYieldsOutput[string]
 
 	target int
-	tries  int
 }
 
 func (j *judgeExecutor) Handle(ctx *workflow.Context, guess int) error {
-	j.tries++
+	value, err := ctx.ReadOrInitState("tries", "", func(context.Context, string, string) (any, error) {
+		return 0, nil
+	})
+	if err != nil {
+		return err
+	}
+	tries, ok := value.(int)
+	if !ok {
+		return fmt.Errorf("unexpected tries state type %T", value)
+	}
+	tries++
+	if err := ctx.QueueStateUpdate("tries", "", tries); err != nil {
+		return err
+	}
 	switch {
 	case guess == j.target:
-		return ctx.YieldOutput(fmt.Sprintf("%d found in %d tries!", j.target, j.tries))
+		return ctx.YieldOutput(fmt.Sprintf("%d found in %d tries!", j.target, tries))
 	case guess < j.target:
 		return ctx.SendMessage("", Below)
 	default:

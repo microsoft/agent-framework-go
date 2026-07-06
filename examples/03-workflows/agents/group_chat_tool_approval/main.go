@@ -209,7 +209,7 @@ func watchDeploymentWorkflow(ctx context.Context, run *inproc.StreamingRun) erro
 func approveToolRequest(ctx context.Context, run *inproc.StreamingRun, request *workflow.ExternalRequest) error {
 	approvalRequest, ok := workflow.PortableValueAs[*message.ToolApprovalRequestContent](request.Data)
 	if !ok {
-		return fmt.Errorf("request %q did not contain ToolApprovalRequestContent", request.RequestID)
+		return fmt.Errorf("request %q did not contain ToolApprovalRequestContent, got %T", request.RequestID, request.Data.Any())
 	}
 	toolName, arguments := approvalToolCallDetails(approvalRequest.ToolCall)
 	fmt.Println()
@@ -248,7 +248,7 @@ func printAgentUpdate(executorID string, update *agent.ResponseUpdate, lastExecu
 		if *lastExecutorID != "" {
 			fmt.Println()
 		}
-		fmt.Printf("- %s: \n", executorID)
+		fmt.Printf("- %s:\n", executorID)
 		*lastExecutorID = executorID
 	}
 	if text := update.String(); strings.TrimSpace(text) != "" {

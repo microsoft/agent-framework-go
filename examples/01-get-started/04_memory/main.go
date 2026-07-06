@@ -150,7 +150,7 @@ func storeUserMemory(ctx context.Context, invoked agent.InvokedContext) error {
 			}
 		}
 		if state.UserAge == 0 {
-			if age, ok := extractAge(text); ok {
+			if age, ok := extractAge(lower); ok {
 				state.UserAge = age
 			}
 		}
@@ -172,12 +172,30 @@ func extractName(text, lower string) (string, bool) {
 	return strings.Trim(parts[0], ".,!?"), true
 }
 
-func extractAge(text string) (int, bool) {
-	for field := range strings.FieldsSeq(text) {
+func extractAge(lower string) (int, bool) {
+	fields := strings.Fields(lower)
+	for i, field := range fields {
 		value, err := strconv.Atoi(strings.Trim(field, ".,!?"))
-		if err == nil && value > 0 {
+		if err != nil || value <= 0 {
+			continue
+		}
+		if i >= 2 && fields[i-2] == "i" && fields[i-1] == "am" && followedByYear(fields, i) {
+			return value, true
+		}
+		if i >= 1 && fields[i-1] == "i'm" && followedByYear(fields, i) {
+			return value, true
+		}
+		if i >= 3 && fields[i-3] == "my" && fields[i-2] == "age" && fields[i-1] == "is" {
 			return value, true
 		}
 	}
 	return 0, false
+}
+
+func followedByYear(fields []string, numberIndex int) bool {
+	if numberIndex+1 >= len(fields) {
+		return false
+	}
+	next := strings.Trim(fields[numberIndex+1], ".,!? ")
+	return next == "year" || next == "years"
 }
