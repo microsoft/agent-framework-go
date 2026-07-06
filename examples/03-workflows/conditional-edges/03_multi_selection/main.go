@@ -29,10 +29,11 @@ const (
 )
 
 type AnalysisResult struct {
-	Email       string
-	Decision    SpamDecision
-	Reason      string
-	EmailLength int
+	Email        string
+	Decision     SpamDecision
+	Reason       string
+	EmailLength  int
+	EmailSummary string
 }
 
 func main() {
@@ -48,8 +49,9 @@ func main() {
 		return "Draft response for email length " + fmt.Sprint(result.EmailLength)
 	}).Bind()
 
-	summary := workflow.NewExecutor("EmailSummaryExecutor", func(result AnalysisResult) string {
-		return "Summary: " + firstWords(result.Email, 12)
+	summary := workflow.NewExecutor("EmailSummaryExecutor", func(result AnalysisResult) AnalysisResult {
+		result.EmailSummary = firstWords(result.Email, 12)
+		return result
 	}).Bind()
 
 	uncertain := workflow.NewExecutor("HandleUncertainExecutor", func(result AnalysisResult) string {
@@ -57,13 +59,18 @@ func main() {
 	}).Bind()
 
 	send := workflow.NewExecutor("SendEmailExecutor", func(response string) string { return "Email sent: " + response }).Bind()
-	log := workflow.NewExecutor("DatabaseAccessExecutor", func(value string) string { return "Logged: " + value }).Bind()
+	log := workflow.NewExecutor("DatabaseAccessExecutor", func(result AnalysisResult) string {
+		if result.EmailSummary != "" {
+			return "Logged: Summary: " + result.EmailSummary
+		}
+		return "Logged: Analysis: " + result.Reason
+	}).Bind()
 
 	b := workflow.NewBuilder(analyze)
 	b.AddFanOutEdge(analyze, []workflow.ExecutorBinding{spam, assistant, summary, uncertain}, workflow.WithEdgeAssigner(routeAnalysis)).
 		AddEdge(assistant, send).
-		AddEdge(summary, log).
 		AddDirectEdge(analyze, log, false, func(msg any) bool { return msg.(AnalysisResult).EmailLength <= longEmailThreshold }).
+		AddEdge(summary, log).
 		WithOutputFrom(spam, send, uncertain, log)
 
 	wf, err := b.Build()
