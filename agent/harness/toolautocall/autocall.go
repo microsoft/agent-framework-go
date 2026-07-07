@@ -33,6 +33,8 @@ const (
 
 	attrKeyOperationName = "gen_ai.operation.name"
 	attrKeyToolName      = "gen_ai.tool.name"
+	attrKeyToolCallID    = "gen_ai.tool.call.id"
+	attrKeyToolType      = "gen_ai.tool.type"
 )
 
 // Config configures the automatic tool invocation middleware.
@@ -780,6 +782,8 @@ func startToolSpan(ctx context.Context, funcCall *message.FunctionCallContent) (
 	return tracer.Start(ctx, name, trace.WithAttributes(
 		attribute.String(attrKeyOperationName, opExecuteTool),
 		attribute.String(attrKeyToolName, funcCall.Name),
+		attribute.String(attrKeyToolCallID, funcCall.CallID),
+		attribute.String(attrKeyToolType, "function"),
 	))
 }
 

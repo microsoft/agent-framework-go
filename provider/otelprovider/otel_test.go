@@ -358,6 +358,17 @@ func TestOtel_Run_EmitsExecuteToolSpanForAutocall(t *testing.T) {
 	if executeToolSpan.Name != "execute_tool get_weather" {
 		t.Fatalf("expected execute_tool span name %q, got %q", "execute_tool get_weather", executeToolSpan.Name)
 	}
+
+	executeToolAttrs := make(map[string]string)
+	for _, attr := range executeToolSpan.Attributes {
+		executeToolAttrs[string(attr.Key)] = attr.Value.AsString()
+	}
+	if executeToolAttrs["gen_ai.tool.call.id"] != "call-1" {
+		t.Errorf("expected gen_ai.tool.call.id %q, got %q", "call-1", executeToolAttrs["gen_ai.tool.call.id"])
+	}
+	if executeToolAttrs["gen_ai.tool.type"] != "function" {
+		t.Errorf("expected gen_ai.tool.type %q, got %q", "function", executeToolAttrs["gen_ai.tool.type"])
+	}
 }
 
 func findSpanByOperation(t *testing.T, spans []tracetest.SpanStub, operation string) tracetest.SpanStub {
