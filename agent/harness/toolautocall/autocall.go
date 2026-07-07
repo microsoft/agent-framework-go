@@ -31,11 +31,11 @@ const (
 	defaultMaximumIterationsPerRequest        = 40
 	opExecuteTool                             = "execute_tool"
 
-	attrKeyOperationName  = "gen_ai.operation.name"
-	attrKeyToolName       = "gen_ai.tool.name"
-	attrKeyToolCallID     = "gen_ai.tool.call.id"
-	attrKeyToolType       = "gen_ai.tool.type"
-	attrKeyToolDesc       = "gen_ai.tool.description"
+	attrKeyOperationName = "gen_ai.operation.name"
+	attrKeyToolName      = "gen_ai.tool.name"
+	attrKeyToolCallID    = "gen_ai.tool.call.id"
+	attrKeyToolType      = "gen_ai.tool.type"
+	attrKeyToolDesc      = "gen_ai.tool.description"
 )
 
 // Config configures the automatic tool invocation middleware.
