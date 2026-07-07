@@ -31,10 +31,11 @@ const (
 	defaultMaximumIterationsPerRequest        = 40
 	opExecuteTool                             = "execute_tool"
 
-	attrKeyOperationName = "gen_ai.operation.name"
-	attrKeyToolName      = "gen_ai.tool.name"
-	attrKeyToolCallID    = "gen_ai.tool.call.id"
-	attrKeyToolType      = "gen_ai.tool.type"
+	attrKeyOperationName  = "gen_ai.operation.name"
+	attrKeyToolName       = "gen_ai.tool.name"
+	attrKeyToolCallID     = "gen_ai.tool.call.id"
+	attrKeyToolType       = "gen_ai.tool.type"
+	attrKeyToolDesc       = "gen_ai.tool.description"
 )
 
 // Config configures the automatic tool invocation middleware.
@@ -732,7 +733,7 @@ func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]too
 	}
 	f.logger.Debug(ctx, "calling function", "funcName", funcCall.Name, slogx.SensitiveData("arguments", funcCall.Arguments))
 	start := time.Now()
-	ctx, span := startToolSpan(ctx, funcCall)
+	ctx, span := startToolSpan(ctx, funcCall, declaration)
 	if span != nil {
 		defer span.End()
 	}
@@ -770,7 +771,7 @@ func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]too
 	return functionInvocationResult{status: functionInvocationStatusRanToCompletion, call: funcCall, result: result}
 }
 
-func startToolSpan(ctx context.Context, funcCall *message.FunctionCallContent) (context.Context, trace.Span) {
+func startToolSpan(ctx context.Context, funcCall *message.FunctionCallContent, tl tool.Tool) (context.Context, trace.Span) {
 	tracer, ok := otelx.TracerFromContext(ctx)
 	if !ok || funcCall == nil {
 		return ctx, nil
@@ -779,12 +780,18 @@ func startToolSpan(ctx context.Context, funcCall *message.FunctionCallContent) (
 	if funcCall.Name != "" {
 		name += " " + funcCall.Name
 	}
-	return tracer.Start(ctx, name, trace.WithAttributes(
+	attrs := []attribute.KeyValue{
 		attribute.String(attrKeyOperationName, opExecuteTool),
 		attribute.String(attrKeyToolName, funcCall.Name),
-		attribute.String(attrKeyToolCallID, funcCall.CallID),
+		attribute.String(attrKeyToolCallID, cmp.Or(funcCall.CallID, "unknown")),
 		attribute.String(attrKeyToolType, "function"),
-	))
+	}
+	if tl != nil {
+		if desc := tl.Description(); desc != "" {
+			attrs = append(attrs, attribute.String(attrKeyToolDesc, desc))
+		}
+	}
+	return tracer.Start(ctx, name, trace.WithAttributes(attrs...))
 }
 
 func (f *autocall) createResponseMessage(results []functionInvocationResult) *message.Message {

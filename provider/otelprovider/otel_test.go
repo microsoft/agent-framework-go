@@ -314,7 +314,7 @@ func TestOtel_Run_EmitsExecuteToolSpanForAutocall(t *testing.T) {
 	}
 
 	var toolSpanContext trace.SpanContext
-	getWeather := functool.MustNew(functool.Config{Name: "get_weather"},
+	getWeather := functool.MustNew(functool.Config{Name: "get_weather", Description: "Returns the current weather"},
 		func(ctx context.Context, args struct{}) (string, error) {
 			toolSpanContext = trace.SpanContextFromContext(ctx)
 			return "sunny", nil
@@ -368,6 +368,63 @@ func TestOtel_Run_EmitsExecuteToolSpanForAutocall(t *testing.T) {
 	}
 	if executeToolAttrs["gen_ai.tool.type"] != "function" {
 		t.Errorf("expected gen_ai.tool.type %q, got %q", "function", executeToolAttrs["gen_ai.tool.type"])
+	}
+	if executeToolAttrs["gen_ai.tool.description"] != "Returns the current weather" {
+		t.Errorf("expected gen_ai.tool.description %q, got %q", "Returns the current weather", executeToolAttrs["gen_ai.tool.description"])
+	}
+}
+
+func TestOtel_Run_ExecuteToolSpan_EmptyCallIDFallsBackToUnknown(t *testing.T) {
+	exporter := setupTracer(t)
+
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder().
+			Add(&agent.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					// No CallID set — simulates an LLM that omits the call ID field.
+					&message.FunctionCallContent{Name: "get_weather", Arguments: `{}`},
+				},
+			}).
+			NewTurn().
+			AddText("sunny").
+			Build(),
+	}
+
+	getWeather := functool.MustNew(functool.Config{Name: "get_weather"},
+		func(ctx context.Context, args struct{}) (string, error) {
+			return "sunny", nil
+		},
+	)
+
+	a := agent.New(agent.ProviderConfig{
+		Run: runner.Run,
+	}, agent.Config{
+		Name: "test-agent",
+		Middlewares: []agent.Middleware{
+			otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{SourceName: "test-source"}),
+			toolautocall.New(toolautocall.Config{}),
+		},
+		Tools: []tool.Tool{getWeather},
+	})
+
+	_, err := a.RunMessage(t.Context(), message.NewText("weather?")).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	spans := exporter.GetSpans()
+	executeToolSpan := findSpanByOperation(t, spans, "execute_tool")
+
+	attrs := make(map[string]string)
+	for _, attr := range executeToolSpan.Attributes {
+		attrs[string(attr.Key)] = attr.Value.AsString()
+	}
+	if attrs["gen_ai.tool.call.id"] != "unknown" {
+		t.Errorf("expected gen_ai.tool.call.id %q when CallID is empty, got %q", "unknown", attrs["gen_ai.tool.call.id"])
+	}
+	if _, hasDesc := attrs["gen_ai.tool.description"]; hasDesc {
+		t.Errorf("expected gen_ai.tool.description to be absent when tool has no description")
 	}
 }
 
