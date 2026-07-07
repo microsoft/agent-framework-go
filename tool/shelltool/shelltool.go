@@ -113,12 +113,17 @@ type ShellRequest struct {
 // to fast-fail commands operators would rather reject before execution while
 // the primary isolation is approval-in-the-loop or container sandboxing.
 //
-// A policy constructed with no patterns allows any non-empty command. Allow
-// patterns are checked before deny patterns, so an allow match short-circuits
-// evaluation and skips the deny list.
+// A policy constructed with no patterns allows any non-empty command. Deny
+// patterns are checked first. If an allow list is supplied, it is exclusive:
+// any command that matches none of the allow patterns is denied. Supplying an
+// empty allow list therefore denies every command, while leaving it nil
+// disables allow-list checks entirely. A custom callback runs last and may
+// override the default allow; it cannot re-enable a command already rejected
+// by the deny list or allow list.
 type Policy struct {
 	denies []policyPattern
 	allows []policyPattern
+	custom func(ShellRequest) (allowed bool, reason string, ok bool)
 }
 
 // PolicyConfig configures a [Policy].
@@ -127,9 +132,16 @@ type PolicyConfig struct {
 	// disables the deny list.
 	DenyList []string
 
-	// AllowList contains explicit-allow patterns. A match here short-circuits
-	// the deny list.
+	// AllowList contains optional allow-list patterns. When nil, allow-list
+	// checks are disabled. When supplied, including as an empty slice, any
+	// command that matches none of the patterns is denied.
 	AllowList []string
+
+	// Custom optionally overrides the default allow after the deny list and
+	// allow list pass. Returning ok=false leaves the default allow in place.
+	// This callback cannot re-enable a command already rejected earlier in
+	// evaluation.
+	Custom func(ShellRequest) (allowed bool, reason string, ok bool)
 }
 
 type policyPattern struct {
@@ -143,11 +155,14 @@ func NewPolicy(cfg PolicyConfig) (*Policy, error) {
 	if err != nil {
 		return nil, err
 	}
-	allows, err := compilePolicyPatterns("allow", cfg.AllowList)
-	if err != nil {
-		return nil, err
+	var allows []policyPattern
+	if cfg.AllowList != nil {
+		allows, err = compilePolicyPatterns("allow", cfg.AllowList)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return &Policy{denies: denies, allows: allows}, nil
+	return &Policy{denies: denies, allows: allows, custom: cfg.Custom}, nil
 }
 
 func compilePolicyPatterns(kind string, patterns []string) ([]policyPattern, error) {
@@ -163,8 +178,9 @@ func compilePolicyPatterns(kind string, patterns []string) ([]policyPattern, err
 }
 
 // Evaluate returns whether request may run and a human-readable reason when
-// one applies. Evaluation order is: empty-command guard, allow patterns, deny
-// patterns, default allow.
+// one applies. Evaluation order is: empty-command guard, deny patterns,
+// allow-list denial when supplied and unmatched, custom override, default
+// allow.
 func (p *Policy) Evaluate(request ShellRequest) (allowed bool, reason string) {
 	if p == nil {
 		return true, ""
@@ -173,14 +189,26 @@ func (p *Policy) Evaluate(request ShellRequest) (allowed bool, reason string) {
 	if command == "" {
 		return false, "empty command"
 	}
-	for _, allow := range p.allows {
-		if allow.re.MatchString(command) {
-			return true, "matched allow pattern"
-		}
-	}
 	for _, deny := range p.denies {
 		if deny.re.MatchString(command) {
 			return false, "matched deny pattern: " + deny.pattern
+		}
+	}
+	if p.allows != nil {
+		matched := false
+		for _, allow := range p.allows {
+			if allow.re.MatchString(command) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false, "command does not match allow list"
+		}
+	}
+	if p.custom != nil {
+		if allowed, reason, ok := p.custom(request); ok {
+			return allowed, reason
 		}
 	}
 	return true, ""

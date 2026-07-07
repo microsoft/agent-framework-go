@@ -654,20 +654,157 @@ func TestPolicy_deny_noMatch_allows(t *testing.T) {
 	}
 }
 
-func TestPolicy_allow_shortCircuitsDeny(t *testing.T) {
+func TestPolicy_denyList_takesPrecedenceOverAllowList(t *testing.T) {
 	p, err := shelltool.NewPolicy(shelltool.PolicyConfig{
-		DenyList:  []string{`rm\s+-rf`},
-		AllowList: []string{`^rm\s+-rf\s+/tmp/safe$`},
+		DenyList:  []string{`echo`},
+		AllowList: []string{`^echo `},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	allowed, reason := p.Evaluate(shelltool.ShellRequest{Command: "rm -rf /tmp/safe"})
-	if !allowed {
-		t.Fatalf("expected allow-list match to short-circuit deny-list, got reason %q", reason)
+	allowed, reason := p.Evaluate(shelltool.ShellRequest{Command: "echo hello"})
+	if allowed {
+		t.Fatalf("expected deny-list to win, got allowed")
 	}
-	if !strings.Contains(reason, "matched allow pattern") {
+	if !strings.Contains(reason, "matched deny pattern") {
 		t.Errorf("unexpected reason %q", reason)
+	}
+}
+
+func TestPolicy_broadDenyList_overridesSpecificAllowList(t *testing.T) {
+	p, err := shelltool.NewPolicy(shelltool.PolicyConfig{
+		DenyList:  []string{`git push`},
+		AllowList: []string{`^git push origin main$`},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed, reason := p.Evaluate(shelltool.ShellRequest{Command: "git push origin main"})
+	if allowed {
+		t.Fatal("expected broad deny-list to override specific allow-list")
+	}
+	if !strings.Contains(reason, "matched deny pattern") {
+		t.Errorf("unexpected reason %q", reason)
+	}
+}
+
+func TestPolicy_allowList_match_allows(t *testing.T) {
+	p, err := shelltool.NewPolicy(shelltool.PolicyConfig{AllowList: []string{`^echo `}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed, reason := p.Evaluate(shelltool.ShellRequest{Command: "echo hello"})
+	if !allowed {
+		t.Fatalf("expected allow-list match to allow command, got reason %q", reason)
+	}
+	if reason != "" {
+		t.Errorf("expected empty reason on allow-list success, got %q", reason)
+	}
+}
+
+func TestPolicy_allowList_nonMatch_denies(t *testing.T) {
+	p, err := shelltool.NewPolicy(shelltool.PolicyConfig{AllowList: []string{`^echo `}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed, reason := p.Evaluate(shelltool.ShellRequest{Command: "ls -la"})
+	if allowed {
+		t.Fatal("expected allow-list non-match to deny command")
+	}
+	if !strings.Contains(reason, "allow list") {
+		t.Errorf("unexpected reason %q", reason)
+	}
+}
+
+func TestPolicy_emptyAllowList_deniesEverything(t *testing.T) {
+	p, err := shelltool.NewPolicy(shelltool.PolicyConfig{AllowList: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed, reason := p.Evaluate(shelltool.ShellRequest{Command: "echo hello"})
+	if allowed {
+		t.Fatal("expected empty allow-list to deny every command")
+	}
+	if !strings.Contains(reason, "allow list") {
+		t.Errorf("unexpected reason %q", reason)
+	}
+}
+
+func TestPolicy_nilAllowList_disablesAllowList(t *testing.T) {
+	p, err := shelltool.NewPolicy(shelltool.PolicyConfig{AllowList: nil})
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed, reason := p.Evaluate(shelltool.ShellRequest{Command: "echo hello"})
+	if !allowed {
+		t.Fatalf("expected nil allow-list to disable allow-list checks, got reason %q", reason)
+	}
+}
+
+func TestPolicy_custom_canOverrideDefaultAllowToDeny(t *testing.T) {
+	p, err := shelltool.NewPolicy(shelltool.PolicyConfig{
+		Custom: func(request shelltool.ShellRequest) (bool, string, bool) {
+			if strings.Contains(request.Command, "secret") {
+				return false, "custom blocked", true
+			}
+			return false, "", false
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed, _ := p.Evaluate(shelltool.ShellRequest{Command: "echo hello"})
+	if !allowed {
+		t.Fatal("expected custom callback to leave default allow in place")
+	}
+	allowed, reason := p.Evaluate(shelltool.ShellRequest{Command: "cat secret.txt"})
+	if allowed {
+		t.Fatal("expected custom callback to deny matching command")
+	}
+	if reason != "custom blocked" {
+		t.Errorf("unexpected reason %q", reason)
+	}
+}
+
+func TestPolicy_custom_doesNotRunWhenDenyListMatches(t *testing.T) {
+	ran := false
+	p, err := shelltool.NewPolicy(shelltool.PolicyConfig{
+		DenyList: []string{`echo`},
+		Custom: func(request shelltool.ShellRequest) (bool, string, bool) {
+			ran = true
+			return true, "", true
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed, _ := p.Evaluate(shelltool.ShellRequest{Command: "echo hello"})
+	if allowed {
+		t.Fatal("expected deny-list to reject command before custom callback")
+	}
+	if ran {
+		t.Fatal("expected deny-list rejection to skip custom callback")
+	}
+}
+
+func TestPolicy_custom_doesNotOverrideAllowListDenial(t *testing.T) {
+	ran := false
+	p, err := shelltool.NewPolicy(shelltool.PolicyConfig{
+		AllowList: []string{`^echo `},
+		Custom: func(request shelltool.ShellRequest) (bool, string, bool) {
+			ran = true
+			return true, "", true
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed, _ := p.Evaluate(shelltool.ShellRequest{Command: "ls -la"})
+	if allowed {
+		t.Fatal("expected allow-list rejection to deny command")
+	}
+	if ran {
+		t.Fatal("expected allow-list rejection to skip custom callback")
 	}
 }
 
