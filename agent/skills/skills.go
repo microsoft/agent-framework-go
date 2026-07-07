@@ -6,6 +6,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/microsoft/agent-framework-go/agent"
 )
 
 const (
@@ -41,16 +43,25 @@ func (f Frontmatter) Validate() error {
 	return nil
 }
 
+// SourceContext contains invocation-aware information for skill-source lookups.
+type SourceContext struct {
+	// Agent is the agent requesting skills, if available.
+	Agent *agent.Agent
+
+	// Session is the session associated with the request, if any.
+	Session *agent.Session
+}
+
 // Source provides skills from a specific origin.
 type Source interface {
-	Skills(context.Context) ([]*Skill, error)
+	Skills(context.Context, SourceContext) ([]*Skill, error)
 }
 
 // SourceFunc wraps a function to be used as a Source.
-type SourceFunc func(context.Context) ([]*Skill, error)
+type SourceFunc func(context.Context, SourceContext) ([]*Skill, error)
 
-func (f SourceFunc) Skills(ctx context.Context) ([]*Skill, error) {
-	return f(ctx)
+func (f SourceFunc) Skills(ctx context.Context, sourceContext SourceContext) ([]*Skill, error) {
+	return f(ctx, sourceContext)
 }
 
 // Skill describes a domain-specific capability with instructions, resources, and scripts.

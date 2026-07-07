@@ -20,7 +20,8 @@ import (
 )
 
 const (
-	skillsPlaceholder = "{skills}"
+	skillsPlaceholder    = "{skills}"
+	sharedSkillsCacheKey = "\x00shared"
 )
 
 const defaultSkillsInstructionPrompt = `You have access to skills containing domain-specific knowledge and capabilities.
@@ -46,7 +47,7 @@ type ContextProviderOptions struct {
 
 	// SkillFilter optionally filters skills loaded from inline skills and sources.
 	// Returning true keeps a skill; returning false excludes it.
-	SkillFilter func(*Skill) bool
+	SkillFilter func(*Skill, SourceContext) bool
 
 	// Skills provides in-memory skills to register with the provider.
 	Skills []*Skill
@@ -75,6 +76,15 @@ type ContextProviderOptions struct {
 
 	// DisableCaching rebuilds instructions and tools for every invocation.
 	DisableCaching bool
+
+	// CacheIsolationKeySelector optionally chooses a dedicated cache bucket for a
+	// source invocation. When nil, or when it returns ok=false, the provider uses
+	// the shared cache bucket. When it returns ok=true, the provider caches the
+	// result under the returned key, including the empty string.
+	//
+	// Prefer low-cardinality, stable keys. High-cardinality keys (for example,
+	// per-request IDs) can cause the cache to grow without bound.
+	CacheIsolationKeySelector func(SourceContext) (key string, ok bool)
 
 	// DisableSourceDeduplication preserves duplicate skill names from the configured
 	// skills and sources instead of removing later duplicates.
@@ -126,8 +136,8 @@ type providerState struct {
 	logger  *slog.Logger
 
 	mu      sync.Mutex
-	cached  *providerContext
-	loading chan struct{}
+	cached  map[string]*providerContext
+	loading map[string]chan struct{}
 }
 
 type providerContext struct {
@@ -195,13 +205,14 @@ func newSkillSliceSource(skills ...*Skill) *skillSliceSource {
 	return &skillSliceSource{skills: cloned}
 }
 
-func (s *skillSliceSource) Skills(context.Context) ([]*Skill, error) {
+func (s *skillSliceSource) Skills(context.Context, SourceContext) ([]*Skill, error) {
 	return s.skills, nil
 }
 
 func (p *providerState) provide(ctx context.Context, invoking agent.InvokingContext) (outMessages []*message.Message, outOptions []agent.Option, err error) {
+	sourceContext := sourceContextForInvocation(ctx, invoking.Options)
 	if p.options.DisableCaching {
-		result, err := p.buildContext(ctx)
+		result, err := p.buildContext(ctx, sourceContext)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -209,34 +220,43 @@ func (p *providerState) provide(ctx context.Context, invoking agent.InvokingCont
 		return outMessages, outOptions, nil
 	}
 
+	cacheKey := p.cacheKey(sourceContext)
 	p.mu.Lock()
 	if p.cached != nil {
-		cached := *p.cached
-		p.mu.Unlock()
-		outMessages, outOptions = providedContext(cached)
-		return outMessages, outOptions, nil
+		if cached, ok := p.cached[cacheKey]; ok {
+			resolved := *cached
+			p.mu.Unlock()
+			outMessages, outOptions = providedContext(resolved)
+			return outMessages, outOptions, nil
+		}
 	}
 	if p.loading != nil {
-		loading := p.loading
-		p.mu.Unlock()
-		<-loading
+		if loading, ok := p.loading[cacheKey]; ok {
+			p.mu.Unlock()
+			<-loading
 
-		p.mu.Lock()
-		defer p.mu.Unlock()
-		if p.cached == nil {
-			result, err := p.buildContext(ctx)
+			p.mu.Lock()
+			defer p.mu.Unlock()
+			if p.cached != nil {
+				if cached, ok := p.cached[cacheKey]; ok {
+					resolved := *cached
+					outMessages, outOptions = providedContext(resolved)
+					return outMessages, outOptions, nil
+				}
+			}
+			result, err := p.buildContext(ctx, sourceContext)
 			if err != nil {
 				return nil, nil, err
 			}
 			outMessages, outOptions = providedContext(result)
 			return outMessages, outOptions, nil
 		}
-		cached := *p.cached
-		outMessages, outOptions = providedContext(cached)
-		return outMessages, outOptions, nil
 	}
-	p.loading = make(chan struct{})
-	loading := p.loading
+	if p.loading == nil {
+		p.loading = make(map[string]chan struct{})
+	}
+	loading := make(chan struct{})
+	p.loading[cacheKey] = loading
 	p.mu.Unlock()
 
 	var result providerContext
@@ -248,19 +268,44 @@ func (p *providerState) provide(ctx context.Context, invoking agent.InvokingCont
 		p.mu.Lock()
 		if err == nil {
 			cached := result
-			p.cached = &cached
+			if p.cached == nil {
+				p.cached = make(map[string]*providerContext)
+			}
+			p.cached[cacheKey] = &cached
 		}
 		close(loading)
-		p.loading = nil
+		delete(p.loading, cacheKey)
+		if len(p.loading) == 0 {
+			p.loading = nil
+		}
 		p.mu.Unlock()
 	}()
 
-	result, err = p.buildContext(ctx)
+	result, err = p.buildContext(ctx, sourceContext)
 	if err != nil {
 		return nil, nil, err
 	}
 	outMessages, outOptions = providedContext(result)
 	return outMessages, outOptions, nil
+}
+
+func sourceContextForInvocation(ctx context.Context, options []agent.Option) SourceContext {
+	agentValue, _ := agent.AgentFromContext(ctx)
+	session, _ := agent.GetOption(options, agent.WithSession)
+	return SourceContext{
+		Agent:   agentValue,
+		Session: session,
+	}
+}
+
+func (p *providerState) cacheKey(sourceContext SourceContext) string {
+	if p.options.CacheIsolationKeySelector == nil {
+		return sharedSkillsCacheKey
+	}
+	if key, ok := p.options.CacheIsolationKeySelector(sourceContext); ok {
+		return "isolated:" + key
+	}
+	return sharedSkillsCacheKey
 }
 
 func providedContext(result providerContext) ([]*message.Message, []agent.Option) {
@@ -276,8 +321,8 @@ func providedContext(result providerContext) ([]*message.Message, []agent.Option
 	return outMessages, outOptions
 }
 
-func (p *providerState) buildContext(ctx context.Context) (providerContext, error) {
-	skills, err := p.loadSkills(ctx)
+func (p *providerState) buildContext(ctx context.Context, sourceContext SourceContext) (providerContext, error) {
+	skills, err := p.loadSkills(ctx, sourceContext)
 	if err != nil {
 		return providerContext{}, err
 	}
@@ -309,13 +354,13 @@ func toolOptions(tools []tool.Tool) []agent.Option {
 	return options
 }
 
-func (p *providerState) loadSkills(ctx context.Context) ([]*Skill, error) {
+func (p *providerState) loadSkills(ctx context.Context, sourceContext SourceContext) ([]*Skill, error) {
 	loaded := make([]*Skill, 0)
 	for sourceIndex, source := range p.sources {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		sourceSkills, err := source.Skills(ctx)
+		sourceSkills, err := source.Skills(ctx, sourceContext)
 		if err != nil {
 			return nil, err
 		}
@@ -328,7 +373,7 @@ func (p *providerState) loadSkills(ctx context.Context) ([]*Skill, error) {
 				p.logger.Warn("Skipping skill with invalid frontmatter", "sourceIndex", sourceIndex, "skillIndex", skillIndex, "error", err)
 				continue
 			}
-			if p.options.SkillFilter != nil && !p.options.SkillFilter(skill) {
+			if p.options.SkillFilter != nil && !p.options.SkillFilter(skill, sourceContext) {
 				p.logger.Debug("Skill excluded by filter predicate", "skillName", skill.Frontmatter.Name, "sourceIndex", sourceIndex, "skillIndex", skillIndex)
 				continue
 			}

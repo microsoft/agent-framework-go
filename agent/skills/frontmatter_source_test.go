@@ -106,7 +106,7 @@ func TestInMemorySource_ValidSkills_ReturnsAll(t *testing.T) {
 		mustInlineSkill(skills.Frontmatter{Name: "another", Description: "Another valid skill."}, "More instructions.", nil, nil),
 	)
 
-	result, err := source.Skills(t.Context())
+	result, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
