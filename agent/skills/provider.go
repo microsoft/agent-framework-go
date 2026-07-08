@@ -178,27 +178,6 @@ func newProviderSources(skills []*Skill, sources []Source) []Source {
 	return combined
 }
 
-type skillSliceSource struct {
-	skills []*Skill
-}
-
-func newSkillSliceSource(skills ...*Skill) *skillSliceSource {
-	cloned := append([]*Skill(nil), skills...)
-	for i, skill := range cloned {
-		if skill == nil {
-			panic(fmt.Sprintf("skill %d is nil", i))
-		}
-		if err := skill.Frontmatter.Validate(); err != nil {
-			panic(fmt.Sprintf("skill %d has invalid frontmatter: %v", i, err))
-		}
-	}
-	return &skillSliceSource{skills: cloned}
-}
-
-func (s *skillSliceSource) Skills(context.Context) ([]*Skill, error) {
-	return s.skills, nil
-}
-
 func (p *providerState) provide(ctx context.Context, invoking agent.InvokingContext) (outMessages []*message.Message, outOptions []agent.Option, err error) {
 	if p.options.DisableCaching {
 		result, err := p.buildContext(ctx)
@@ -339,21 +318,6 @@ func (p *providerState) loadSkills(ctx context.Context) ([]*Skill, error) {
 		return loaded, nil
 	}
 	return deduplicateSkillsByName(loaded, p.logger), nil
-}
-
-func deduplicateSkillsByName(skills []*Skill, logger *slog.Logger) []*Skill {
-	seen := make(map[string]struct{}, len(skills))
-	deduplicated := skills[:0]
-	for _, skill := range skills {
-		resolvedKey := strings.ToLower(skill.Frontmatter.Name)
-		if _, ok := seen[resolvedKey]; ok {
-			logger.Warn("Duplicate skill name: subsequent skill skipped in favor of first occurrence", "skillName", skill.Frontmatter.Name)
-			continue
-		}
-		seen[resolvedKey] = struct{}{}
-		deduplicated = append(deduplicated, skill)
-	}
-	return deduplicated
 }
 
 func indexSkills(skills []*Skill) providedSkillSet {
