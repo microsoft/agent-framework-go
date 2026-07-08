@@ -36,6 +36,7 @@ const (
 	attrKeyToolCallID    = "gen_ai.tool.call.id"
 	attrKeyToolType      = "gen_ai.tool.type"
 	attrKeyToolDesc      = "gen_ai.tool.description"
+	attrKeyErrorType     = "error.type"
 )
 
 // Config configures the automatic tool invocation middleware.
@@ -753,6 +754,7 @@ func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]too
 	}()
 	if err != nil {
 		if span != nil {
+			span.SetAttributes(attribute.String(attrKeyErrorType, fmt.Sprintf("%T", err)))
 			span.RecordError(err, trace.WithTimestamp(time.Now()))
 			span.SetStatus(codes.Error, err.Error())
 		}
