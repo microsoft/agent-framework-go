@@ -21,7 +21,7 @@ type processor struct {
 func (p *processor) handle(ctx context.Context, iss issue) error {
 	spec, err := parseFallbackIssue(iss.Body, iss.Title)
 	if err != nil {
-		p.logf("skip  #%d %q: %v", iss.Number, iss.Title, err)
+		p.logf("skip #%d %q: %v", iss.Number, iss.Title, err)
 		return nil
 	}
 
@@ -90,7 +90,7 @@ func (p *processor) commentLink(ctx context.Context, issueNumber int, prURL stri
 			return nil // already linked
 		}
 	}
-	comment := fmt.Sprintf("Opened pull request %s, which will close this issue when merged.", prURL)
+	comment := fmt.Sprintf("Pull request %s is linked to this issue and will close it when merged.", prURL)
 	if err := p.client.commentIssue(ctx, issueNumber, comment); err != nil {
 		return fmt.Errorf("commenting on issue #%d: %w", issueNumber, err)
 	}

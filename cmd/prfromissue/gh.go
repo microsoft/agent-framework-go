@@ -27,9 +27,22 @@ func execGH(ctx context.Context, args ...string) (string, error) {
 		if msg == "" {
 			msg = err.Error()
 		}
-		return stdout.String(), fmt.Errorf("gh %s: %s", strings.Join(args, " "), msg)
+		return stdout.String(), fmt.Errorf("gh %s: %s", strings.Join(redactGHArgs(args), " "), msg)
 	}
 	return stdout.String(), nil
+}
+
+func redactGHArgs(args []string) []string {
+	redacted := append([]string(nil), args...)
+	for i, arg := range redacted {
+		switch {
+		case arg == "--body" && i+1 < len(redacted):
+			redacted[i+1] = "<redacted>"
+		case strings.HasPrefix(arg, "--body="):
+			redacted[i] = "--body=<redacted>"
+		}
+	}
+	return redacted
 }
 
 // ghClient wraps the gh CLI, scoped to a single repository when repo is set.

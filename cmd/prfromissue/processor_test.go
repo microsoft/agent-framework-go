@@ -142,7 +142,7 @@ func TestHandle_ExistingPRAlreadyLinked(t *testing.T) {
 			URL:    "https://github.com/microsoft/agent-framework-go/pull/55",
 			Body:   "Body.\n\nCloses #42",
 		},
-		comments: []string{"Opened pull request https://github.com/microsoft/agent-framework-go/pull/55, which will close this issue when merged."},
+		comments: []string{"Pull request https://github.com/microsoft/agent-framework-go/pull/55 is linked to this issue and will close it when merged."},
 	}
 	proc, _ := newProcessor(fake, false)
 
@@ -183,7 +183,7 @@ func TestHandle_UnparseableIssueIsSkipped(t *testing.T) {
 	if len(fake.calls) != 0 {
 		t.Errorf("expected no calls for an unparseable issue, got %v", fake.calls)
 	}
-	if !strings.Contains(out.String(), "skip  #7") {
+	if !strings.Contains(out.String(), "skip #7") {
 		t.Errorf("expected a skip log line, got: %s", out.String())
 	}
 }
