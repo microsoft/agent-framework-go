@@ -236,6 +236,7 @@ func (p *provider) sessionConfig(streaming bool, options []agent.Option) copilot
 	cfg.Streaming = copilot.Bool(streaming)
 	cfg.SystemMessage = systemMessageWithInstructions(cfg.SystemMessage, slices.Collect(agent.AllOptions(options, agent.WithInstructions)))
 	cfg.Tools = append(cfg.Tools, copilotTools(options)...)
+	cfg.Hooks = sessionHooksWithApprovalRequests(cfg.Tools, cfg.Hooks)
 	return cfg
 }
 
@@ -244,6 +245,7 @@ func (p *provider) resumeSessionConfig(streaming bool, options []agent.Option) c
 	cfg.Streaming = copilot.Bool(streaming)
 	cfg.SystemMessage = systemMessageWithInstructions(cfg.SystemMessage, slices.Collect(agent.AllOptions(options, agent.WithInstructions)))
 	cfg.Tools = append(cfg.Tools, copilotTools(options)...)
+	cfg.Hooks = sessionHooksWithApprovalRequests(cfg.Tools, cfg.Hooks)
 	return cfg
 }
 
@@ -252,6 +254,7 @@ func copySessionConfig(source *copilot.SessionConfig) copilot.SessionConfig {
 		return copilot.SessionConfig{Streaming: copilot.Bool(true)}
 	}
 	clone := *source
+	clone.Tools = slices.Clone(source.Tools)
 	clone.Streaming = copyBoolDefaultTrue(source.Streaming)
 	return clone
 }
@@ -263,7 +266,7 @@ func copyResumeSessionConfig(source *copilot.SessionConfig) copilot.ResumeSessio
 	return copilot.ResumeSessionConfig{
 		Model:               source.Model,
 		ReasoningEffort:     source.ReasoningEffort,
-		Tools:               source.Tools,
+		Tools:               slices.Clone(source.Tools),
 		SystemMessage:       source.SystemMessage,
 		AvailableTools:      source.AvailableTools,
 		ExcludedTools:       source.ExcludedTools,
@@ -288,6 +291,49 @@ func copyBoolDefaultTrue(source *bool) *bool {
 	}
 	value := *source
 	return &value
+}
+
+func sessionHooksWithApprovalRequests(tools []copilot.Tool, hooks *copilot.SessionHooks) *copilot.SessionHooks {
+	if hooks != nil && hooks.OnPreToolUse != nil {
+		return hooks
+	}
+	approvalRequiredToolNames := approvalRequiredToolNames(tools)
+	if len(approvalRequiredToolNames) == 0 {
+		return hooks
+	}
+	clone := cloneSessionHooks(hooks)
+	clone.OnPreToolUse = func(input copilot.PreToolUseHookInput, _ copilot.HookInvocation) (*copilot.PreToolUseHookOutput, error) {
+		if _, ok := approvalRequiredToolNames[input.ToolName]; !ok {
+			return nil, nil
+		}
+		return &copilot.PreToolUseHookOutput{
+			PermissionDecision:       "ask",
+			PermissionDecisionReason: fmt.Sprintf("Tool %q requires approval before it can run.", input.ToolName),
+		}, nil
+	}
+	return clone
+}
+
+func approvalRequiredToolNames(tools []copilot.Tool) map[string]struct{} {
+	var names map[string]struct{}
+	for _, tl := range tools {
+		if tl.Name == "" || tl.SkipPermission {
+			continue
+		}
+		if names == nil {
+			names = make(map[string]struct{})
+		}
+		names[tl.Name] = struct{}{}
+	}
+	return names
+}
+
+func cloneSessionHooks(source *copilot.SessionHooks) *copilot.SessionHooks {
+	if source == nil {
+		return &copilot.SessionHooks{}
+	}
+	clone := *source
+	return &clone
 }
 
 func systemMessageWithInstructions(base *copilot.SystemMessageConfig, instructions []string) *copilot.SystemMessageConfig {
