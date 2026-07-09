@@ -177,6 +177,15 @@ func TestOtel_Run_RecordsError(t *testing.T) {
 	if span.Status.Description != "test error" {
 		t.Errorf("expected span status description to be 'test error', got %s", span.Status.Description)
 	}
+
+	// Check error.type attribute is set (parity with Python capture_exception)
+	attrs := make(map[string]string)
+	for _, attr := range span.Attributes {
+		attrs[string(attr.Key)] = attr.Value.AsString()
+	}
+	if attrs["error.type"] != "*errors.errorString" {
+		t.Errorf("expected error.type %q, got %q", "*errors.errorString", attrs["error.type"])
+	}
 }
 
 func TestOtel_Run_CustomSourceName(t *testing.T) {

@@ -5,6 +5,7 @@ package otelprovider
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"iter"
 	"time"
 
@@ -39,6 +40,7 @@ const (
 	attrKeyAgentName     = "gen_ai.agent.name"
 	attrKeyAgentDesc     = "gen_ai.agent.description"
 	attrKeyOperationName = "gen_ai.operation.name"
+	attrKeyErrorType     = "error.type"
 )
 
 type mw struct {
@@ -60,6 +62,7 @@ func (m *mw) Run(next agent.RunFunc, ctx context.Context, messages []*message.Me
 
 		for update, err := range next(ctx, messages, options...) {
 			if err != nil {
+				span.SetAttributes(attribute.String(attrKeyErrorType, fmt.Sprintf("%T", err)))
 				span.RecordError(err, trace.WithTimestamp(time.Now()))
 				span.SetStatus(codes.Error, err.Error())
 			}
