@@ -793,6 +793,9 @@ func startToolSpan(ctx context.Context, funcCall *message.FunctionCallContent, t
 			attrs = append(attrs, attribute.String(attrKeyToolDesc, desc))
 		}
 	}
+	// TODO: add gen_ai.tool.call.arguments and gen_ai.tool.call.result when an
+	// opt-in EnableSensitiveData flag is available on Config (parity with Python's
+	// get_function_span_attributes and .NET's OpenTelemetryAgent.EnableSensitiveData).
 	return tracer.Start(ctx, name, trace.WithAttributes(attrs...))
 }
 
