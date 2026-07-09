@@ -60,8 +60,19 @@ type ContextProviderOptions struct {
 	// The template must contain {skills}.
 	SkillsInstructionPrompt string
 
-	// ScriptApproval marks the run_skill_script tool as requiring approval.
-	ScriptApproval bool
+	// DisableLoadSkillApproval disables approval for the load_skill tool.
+	// When false (the default), invoking load_skill requires approval.
+	DisableLoadSkillApproval bool
+
+	// DisableReadSkillResourceApproval disables approval for the
+	// read_skill_resource tool. When false (the default), invoking
+	// read_skill_resource requires approval.
+	DisableReadSkillResourceApproval bool
+
+	// DisableRunSkillScriptApproval disables approval for the
+	// run_skill_script tool. When false (the default), invoking
+	// run_skill_script requires approval.
+	DisableRunSkillScriptApproval bool
 
 	// IncludeDetailedErrors includes script execution error details in the
 	// run_skill_script result returned to the model.
@@ -365,33 +376,31 @@ func indexSkills(skills []*Skill) providedSkillSet {
 }
 
 func (p *providerState) buildTools(skills providedSkillSet) []tool.Tool {
-	tools := []tool.Tool{
-		functool.MustNew(
-			functool.Config{
-				Name:        "load_skill",
-				Description: "Loads the full content of a specific skill.",
-			},
-			func(callCtx context.Context, in struct {
-				SkillName string `json:"skillName" jsonschema:"The name of the skill to load"`
-			},
-			) (string, error) {
-				return p.loadSkill(callCtx, skills, in.SkillName)
-			},
-		),
-		functool.MustNew(
-			functool.Config{
-				Name:        "read_skill_resource",
-				Description: "Reads a resource associated with a skill, such as references, assets, or dynamic data.",
-			},
-			func(callCtx context.Context, in struct {
-				SkillName    string `json:"skillName" jsonschema:"The name of the skill"`
-				ResourceName string `json:"resourceName" jsonschema:"The exact resource name to read"`
-			},
-			) (any, error) {
-				return p.readSkillResource(callCtx, skills, in.SkillName, in.ResourceName), nil
-			},
-		),
-	}
+	loadSkillTool := functool.MustNew(
+		functool.Config{
+			Name:        "load_skill",
+			Description: "Loads the full content of a specific skill.",
+		},
+		func(callCtx context.Context, in struct {
+			SkillName string `json:"skillName" jsonschema:"The name of the skill to load"`
+		},
+		) (string, error) {
+			return p.loadSkill(callCtx, skills, in.SkillName)
+		},
+	)
+	readSkillResourceTool := functool.MustNew(
+		functool.Config{
+			Name:        "read_skill_resource",
+			Description: "Reads a resource associated with a skill, such as references, assets, or dynamic data.",
+		},
+		func(callCtx context.Context, in struct {
+			SkillName    string `json:"skillName" jsonschema:"The name of the skill"`
+			ResourceName string `json:"resourceName" jsonschema:"The exact resource name to read"`
+		},
+		) (any, error) {
+			return p.readSkillResource(callCtx, skills, in.SkillName, in.ResourceName), nil
+		},
+	)
 
 	runScript := functool.MustNew(
 		functool.Config{
@@ -408,10 +417,17 @@ func (p *providerState) buildTools(skills providedSkillSet) []tool.Tool {
 		},
 	)
 
-	if p.options.ScriptApproval {
-		return append(tools, tool.ApprovalRequiredFunc(runScript))
+	if !p.options.DisableLoadSkillApproval {
+		loadSkillTool = tool.ApprovalRequiredFunc(loadSkillTool)
 	}
-	return append(tools, runScript)
+	if !p.options.DisableReadSkillResourceApproval {
+		readSkillResourceTool = tool.ApprovalRequiredFunc(readSkillResourceTool)
+	}
+	if !p.options.DisableRunSkillScriptApproval {
+		runScript = tool.ApprovalRequiredFunc(runScript)
+	}
+
+	return []tool.Tool{loadSkillTool, readSkillResourceTool, runScript}
 }
 
 func (p *providerState) loadSkill(ctx context.Context, skills providedSkillSet, skillName string) (string, error) {

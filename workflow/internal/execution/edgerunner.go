@@ -241,18 +241,10 @@ func (em *EdgeRunner) PrepareDeliveryForEdge(ctx context.Context, edge workflow.
 		if len(targets) != 1 {
 			panic("stateful edges only support single target executor")
 		}
-		// Filter envelopes whose message type is not handled by any target.
-		filtered := envelopes[:0]
-		for _, env := range envelopes {
-			runtimeType, err := em.messageRuntimeType(ctx, env)
-			if err != nil {
-				return nil, err
-			}
-			if canHandleRuntimeType(targets[0], runtimeType) {
-				filtered = append(filtered, env)
-			}
+		envelopes, err = em.filterEnvelopesForTarget(ctx, envelopes, targets[0])
+		if err != nil {
+			return nil, err
 		}
-		envelopes = filtered
 	}
 	if len(targets) == 0 || len(envelopes) == 0 {
 		// Type mismatch.
@@ -264,6 +256,20 @@ func (em *EdgeRunner) PrepareDeliveryForEdge(ctx context.Context, edge workflow.
 		Targets:   targets,
 		Envelopes: envelopes,
 	}, nil
+}
+
+func (em *EdgeRunner) filterEnvelopesForTarget(ctx context.Context, envelopes []*MessageEnvelope, target *workflow.Executor) ([]*MessageEnvelope, error) {
+	filtered := envelopes[:0]
+	for _, env := range envelopes {
+		runtimeType, err := em.messageRuntimeType(ctx, env)
+		if err != nil {
+			return nil, err
+		}
+		if canHandleRuntimeType(target, runtimeType) {
+			filtered = append(filtered, env)
+		}
+	}
+	return filtered, nil
 }
 
 func selectedTargetIDs(edge workflow.Edge, envelope *MessageEnvelope) []string {

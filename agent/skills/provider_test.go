@@ -24,11 +24,35 @@ import (
 
 func funcToolPointer(t *testing.T, value tool.FuncTool) uintptr {
 	t.Helper()
-	rv := reflect.ValueOf(value)
-	if rv.Kind() != reflect.Pointer {
-		t.Fatalf("expected pointer-backed tool, got %T", value)
+	current := value
+	for {
+		rv := reflect.ValueOf(current)
+		if rv.Kind() == reflect.Pointer {
+			return rv.Pointer()
+		}
+		if rv.Kind() != reflect.Struct || rv.NumField() != 1 {
+			t.Fatalf("expected pointer-backed tool, got %T", current)
+		}
+		embedded, ok := rv.Field(0).Interface().(tool.FuncTool)
+		if !ok {
+			t.Fatalf("expected pointer-backed tool, got %T", current)
+		}
+		current = embedded
 	}
-	return rv.Pointer()
+}
+
+func assertToolApprovalRequired(t *testing.T, value tool.FuncTool, want bool) {
+	t.Helper()
+	approval, ok := value.(tool.ApprovalRequiredTool)
+	if !ok {
+		if want {
+			t.Fatalf("expected %q to implement ApprovalRequiredTool", value.Name())
+		}
+		return
+	}
+	if got := approval.ApprovalRequired(); got != want {
+		t.Fatalf("expected %q approval requirement to be %t, got %t", value.Name(), want, got)
+	}
 }
 
 type countingSource struct {
@@ -147,18 +171,18 @@ func TestProvider_FromFileSourceWithMultipleFileSystems_DiscoversMultipleSkills(
 	}
 }
 
-func TestProvider_WithScriptsNoScriptApproval_DoesNotWrapRunScriptTool(t *testing.T) {
+func TestProvider_DefaultApproval_RequiresAllSkillTools(t *testing.T) {
 	root := t.TempDir()
-	createSkillDir(t, root, "no-approval-skill", "No approval test", "Body.")
-	createRelativeFile(t, filepath.Join(root, "no-approval-skill"), "scripts/run.py", "print('hello')")
+	createSkillDir(t, root, "approval-skill", "Approval test", "Body.")
+	createRelativeFile(t, filepath.Join(root, "approval-skill"), "docs/readme.md", "hello")
+	createRelativeFile(t, filepath.Join(root, "approval-skill"), "scripts/run.py", "print('hello')")
 	provider := newProviderWithConfig(t, &fsskills.SourceOptions{ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
 		return "ok", nil
 	}}, nil, root)
 
 	_, tools := captureProviderContext(t, provider)
-	runTool := findTool(t, tools, "run_skill_script")
-	if approval, ok := runTool.(tool.ApprovalRequiredTool); ok && approval.ApprovalRequired() {
-		t.Fatal("did not expect run_skill_script to require approval by default")
+	for _, name := range []string{"load_skill", "read_skill_resource", "run_skill_script"} {
+		assertToolApprovalRequired(t, findTool(t, tools, name), true)
 	}
 }
 
@@ -527,22 +551,81 @@ func TestProvider_RunSkillScript_IncludesNilRunnerDetailsWhenEnabled(t *testing.
 	}
 }
 
-func TestProvider_ScriptApproval_MarksToolAsApprovalRequired(t *testing.T) {
+func TestProvider_DisableSkillToolApprovalOptions_DisableApprovalPerTool(t *testing.T) {
 	root := t.TempDir()
 	createSkillDir(t, root, "approval-skill", "Approval skill", "Body.")
 	createRelativeFile(t, filepath.Join(root, "approval-skill"), "scripts/run.py", "print('ok')")
+	createRelativeFile(t, filepath.Join(root, "approval-skill"), "docs/readme.md", "docs")
 
 	provider := newProviderWithConfig(t, &fsskills.SourceOptions{
 		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
 			return "ok", nil
 		},
-	}, &skills.ContextProviderOptions{ScriptApproval: true}, root)
+	}, &skills.ContextProviderOptions{
+		DisableLoadSkillApproval:         true,
+		DisableReadSkillResourceApproval: true,
+		DisableRunSkillScriptApproval:    true,
+	}, root)
 
 	_, tools := captureProviderContext(t, provider)
-	runTool := findTool(t, tools, "run_skill_script")
-	approval, ok := runTool.(tool.ApprovalRequiredTool)
-	if !ok || !approval.ApprovalRequired() {
-		t.Fatal("expected run_skill_script to require approval")
+	for _, name := range []string{"load_skill", "read_skill_resource", "run_skill_script"} {
+		assertToolApprovalRequired(t, findTool(t, tools, name), false)
+	}
+}
+
+func TestProvider_DisableSkillToolApprovalOptions_AffectOnlyTargetTool(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "approval-skill", "Approval skill", "Body.")
+	createRelativeFile(t, filepath.Join(root, "approval-skill"), "scripts/run.py", "print('ok')")
+	createRelativeFile(t, filepath.Join(root, "approval-skill"), "docs/readme.md", "docs")
+
+	tests := []struct {
+		name string
+		opts skills.ContextProviderOptions
+		want map[string]bool
+	}{
+		{
+			name: "load_skill",
+			opts: skills.ContextProviderOptions{DisableLoadSkillApproval: true},
+			want: map[string]bool{
+				"load_skill":          false,
+				"read_skill_resource": true,
+				"run_skill_script":    true,
+			},
+		},
+		{
+			name: "read_skill_resource",
+			opts: skills.ContextProviderOptions{DisableReadSkillResourceApproval: true},
+			want: map[string]bool{
+				"load_skill":          true,
+				"read_skill_resource": false,
+				"run_skill_script":    true,
+			},
+		},
+		{
+			name: "run_skill_script",
+			opts: skills.ContextProviderOptions{DisableRunSkillScriptApproval: true},
+			want: map[string]bool{
+				"load_skill":          true,
+				"read_skill_resource": true,
+				"run_skill_script":    false,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := newProviderWithConfig(t, &fsskills.SourceOptions{
+				ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+					return "ok", nil
+				},
+			}, &tt.opts, root)
+
+			_, tools := captureProviderContext(t, provider)
+			for name, want := range tt.want {
+				assertToolApprovalRequired(t, findTool(t, tools, name), want)
+			}
+		})
 	}
 }
 
