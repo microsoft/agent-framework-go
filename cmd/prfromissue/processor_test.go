@@ -59,7 +59,7 @@ func newProcessor(fake *fakeGH, dryRun bool) (*processor, *bytes.Buffer) {
 	return &processor{
 		client: &ghClient{run: fake.run},
 		out:    out,
-		draft:  true,
+		draft:  false,
 		dryRun: dryRun,
 	}, out
 }
@@ -88,10 +88,13 @@ func TestHandle_OpensAndLinksNewPR(t *testing.T) {
 		t.Fatalf("expected 1 pr create call, got %d (%v)", len(creates), fake.calls)
 	}
 	create := creates[0]
-	for _, want := range []string{"--base main", "--head dotnet-port-api-nightly-abc123", "--draft", "Closes #42"} {
+	for _, want := range []string{"--base main", "--head dotnet-port-api-nightly-abc123", "Closes #42"} {
 		if !strings.Contains(create, want) {
 			t.Errorf("pr create call missing %q: %s", want, create)
 		}
+	}
+	if strings.Contains(create, "--draft") {
+		t.Errorf("pr create call should not be a draft by default: %s", create)
 	}
 	comments := callsContaining(fake.calls, "issue comment:")
 	if len(comments) != 1 {
@@ -102,6 +105,21 @@ func TestHandle_OpensAndLinksNewPR(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "opened https://github.com/microsoft/agent-framework-go/pull/101") {
 		t.Errorf("unexpected log output: %s", out.String())
+	}
+}
+
+func TestHandle_DraftOpensDraftPR(t *testing.T) {
+	fake := &fakeGH{createURL: "https://github.com/microsoft/agent-framework-go/pull/101"}
+	proc, _ := newProcessor(fake, false)
+	proc.draft = true
+
+	iss := issue{Number: 42, Title: "[dotnet-port-api] Add ChatOptions.Foo", Body: permissionDeniedIssueBody}
+	if err := proc.handle(context.Background(), iss); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	creates := callsContaining(fake.calls, "pr create:")
+	if len(creates) != 1 || !strings.Contains(creates[0], "--draft") {
+		t.Errorf("expected a draft pr create call, got %v", fake.calls)
 	}
 }
 

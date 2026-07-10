@@ -49,7 +49,7 @@ func parseOptions(args []string) (options, bool) {
 	fs.StringVar(&opts.prefix, "prefix", "", "required: only act on open issues whose title starts with this prefix (e.g. \"[dotnet-port-api]\")")
 	fs.StringVar(&opts.repo, "repo", "", "target repository as owner/repo (defaults to the repository in the current directory)")
 	fs.IntVar(&opts.limit, "limit", 100, "maximum number of open issues to scan")
-	fs.BoolVar(&opts.draft, "draft", true, "open the pull request as a draft")
+	fs.BoolVar(&opts.draft, "draft", false, "open the pull request as a draft")
 	fs.BoolVar(&opts.dryRun, "dry-run", false, "print the actions that would be taken without changing anything")
 	if err := fs.Parse(args); err != nil {
 		return options{}, false

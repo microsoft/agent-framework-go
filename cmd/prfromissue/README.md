@@ -30,8 +30,8 @@ go run ./cmd/prfromissue -prefix "[dotnet-port-api]"
 # Preview without making any changes
 go run ./cmd/prfromissue -prefix "[dotnet-port-fixes]" -dry-run
 
-# Target a specific repo and open non-draft PRs
-go run ./cmd/prfromissue -prefix "[dotnet-port-api]" -repo microsoft/agent-framework-go -draft=false
+# Target a specific repo and open the PRs as drafts
+go run ./cmd/prfromissue -prefix "[dotnet-port-api]" -repo microsoft/agent-framework-go -draft
 ```
 
 ### Flags
@@ -41,16 +41,5 @@ go run ./cmd/prfromissue -prefix "[dotnet-port-api]" -repo microsoft/agent-frame
 | `-prefix`  | —       | Required. Only act on issues whose title starts with this prefix.  |
 | `-repo`    | ""      | `owner/repo`; defaults to the repository in the current directory. |
 | `-limit`   | 100     | Maximum number of open issues to scan.                             |
-| `-draft`   | true    | Open the pull request as a draft.                                  |
+| `-draft`   | false   | Open the pull request as a draft.                                  |
 | `-dry-run` | false   | Print the actions that would be taken without changing anything.   |
-
-## CI
-
-The same binary runs in a workflow. Provide a PAT with pull-request permissions via
-`GH_TOKEN`, then invoke it on a schedule or `workflow_dispatch`:
-
-```yaml
-- run: go run ./cmd/prfromissue -prefix "[dotnet-port-api]"
-  env:
-    GH_TOKEN: ${{ secrets.GH_AW_GITHUB_TOKEN }}
-```
