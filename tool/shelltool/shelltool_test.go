@@ -750,6 +750,26 @@ func TestNewLocal_schema_hasCommandField(t *testing.T) {
 	}
 }
 
+func TestNewLocal_customToolName(t *testing.T) {
+	ft := newLocal(t, shelltool.LocalConfig{
+		AcknowledgeUnsafe: true,
+		ToolName:          "exec_terminal",
+	})
+	if ft.Name() != "exec_terminal" {
+		t.Errorf("expected custom tool name, got %q", ft.Name())
+	}
+}
+
+func TestNewLocal_customToolDescription(t *testing.T) {
+	ft := newLocal(t, shelltool.LocalConfig{
+		AcknowledgeUnsafe: true,
+		ToolDescription:   "Run a local shell command in the current workspace.",
+	})
+	if got := ft.Description(); got != "Run a local shell command in the current workspace." {
+		t.Errorf("expected custom description, got %q", got)
+	}
+}
+
 func TestMode_zeroValueIsPersistent(t *testing.T) {
 	if shelltool.ModePersistent != 0 {
 		t.Fatalf("expected ModePersistent to be the zero value, got %d", shelltool.ModePersistent)

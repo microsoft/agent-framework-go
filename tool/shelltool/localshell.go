@@ -83,6 +83,15 @@ type LocalConfig struct {
 	// silently truncated and [Result.Truncated] is set.
 	MaxOutputBytes int
 
+	// ToolName overrides the provider-facing tool name. When empty, NewLocal
+	// uses the default name "run_shell".
+	ToolName string
+
+	// ToolDescription overrides the provider-facing tool description. When
+	// empty, NewLocal uses a default description derived from the shell
+	// configuration.
+	ToolDescription string
+
 	// Policy is an optional allow/deny filter checked before the command
 	// reaches the shell. Nil means allow everything.
 	Policy *Policy
@@ -145,10 +154,10 @@ type Local struct {
 	exec *localShellExecutor
 }
 
-func (t *Local) Name() string { return "run_shell" }
+func (t *Local) Name() string { return t.exec.opts.toolName() }
 
 func (t *Local) Description() string {
-	return t.exec.opts.defaultDescription()
+	return t.exec.opts.toolDescription()
 }
 
 func (t *Local) Schema() any {
@@ -565,6 +574,20 @@ func (o LocalConfig) defaultDescription() string {
 		sb.WriteString("The user reviews and approves every call.")
 	}
 	return sb.String()
+}
+
+func (o LocalConfig) toolName() string {
+	if o.ToolName != "" {
+		return o.ToolName
+	}
+	return "run_shell"
+}
+
+func (o LocalConfig) toolDescription() string {
+	if o.ToolDescription != "" {
+		return o.ToolDescription
+	}
+	return o.defaultDescription()
 }
 
 func localOSName() string {
