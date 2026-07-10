@@ -11,9 +11,10 @@
 // comments the PR link back on the issue. When a PR already exists for the branch
 // it links the two instead of opening a duplicate.
 //
-// By default it targets microsoft/agent-framework-go, processes every porting
-// title-prefix, and only acts on issues opened by app/github-actions (the account
-// that files the fallback issues). Each of these can be overridden with a flag.
+// By default it targets microsoft/agent-framework-go and acts on every open issue
+// opened by app/github-actions (the account that files the fallback issues);
+// issues that do not parse as a fallback are skipped. Use -prefix to narrow to a
+// single workflow's issues, or -issue-author to change/disable the author check.
 //
 // Authentication uses the gh CLI: `gh auth login` locally, or the
 // GH_TOKEN / GITHUB_TOKEN environment variable in CI.
@@ -21,7 +22,7 @@
 // Usage:
 //
 //	go install github.com/microsoft/agent-framework-go/cmd/prfromissue@latest
-//	prfromissue                           # open + link PRs for all porting issues
+//	prfromissue                           # open + link PRs for all fallback issues
 //	prfromissue -dry-run                  # preview without making changes
 //	prfromissue -prefix "[dotnet-code]"   # limit to one workflow's issues
 //	prfromissue -draft                    # open the PRs as drafts
@@ -49,10 +50,6 @@ const defaultRepo = "microsoft/agent-framework-go"
 // a matching title cannot drive it to open a pull request.
 const defaultIssueAuthor = "app/github-actions"
 
-// defaultPrefixes are the title-prefixes used by the porting workflows' fallback
-// issues. Keep in sync with the title-prefix values in .github/workflows/*.md.
-var defaultPrefixes = []string{"[dotnet-port-api]", "[dotnet-port-fixes]", "[dotnet-code]"}
-
 type options struct {
 	prefix      string
 	repo        string
@@ -66,7 +63,7 @@ func parseOptions(args []string) (options, bool) {
 	fs := flag.NewFlagSet("prfromissue", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	var opts options
-	fs.StringVar(&opts.prefix, "prefix", "", "only act on issues whose title starts with this prefix; empty processes all porting prefixes")
+	fs.StringVar(&opts.prefix, "prefix", "", "only act on issues whose title starts with this prefix; empty processes every matching issue")
 	fs.StringVar(&opts.repo, "repo", defaultRepo, "target repository as owner/repo")
 	fs.StringVar(&opts.issueAuthor, "issue-author", defaultIssueAuthor, "only act on issues opened by this login; empty disables the author check")
 	fs.IntVar(&opts.limit, "limit", 100, "maximum number of open issues to scan")
@@ -79,7 +76,11 @@ func parseOptions(args []string) (options, bool) {
 }
 
 // matchesAnyPrefix reports whether title starts with any of the given prefixes.
+// An empty prefix list matches every title.
 func matchesAnyPrefix(title string, prefixes []string) bool {
+	if len(prefixes) == 0 {
+		return true
+	}
 	for _, p := range prefixes {
 		if strings.HasPrefix(title, p) {
 			return true
@@ -88,8 +89,8 @@ func matchesAnyPrefix(title string, prefixes []string) bool {
 	return false
 }
 
-// selectIssues returns the issues to act on: those opened by author (when set)
-// whose title matches one of the prefixes.
+// selectIssues returns the issues to act on: those opened by author (when set),
+// optionally narrowed to titles matching one of the prefixes.
 func selectIssues(issues []issue, prefixes []string, author string) []issue {
 	var selected []issue
 	for _, iss := range issues {
@@ -109,7 +110,7 @@ func run(args []string) int {
 		return 2
 	}
 
-	prefixes := defaultPrefixes
+	var prefixes []string
 	if opts.prefix != "" {
 		prefixes = []string{opts.prefix}
 	}

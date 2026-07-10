@@ -15,10 +15,10 @@ opens the pull request from the pushed branch with a `Closes #<issue>` body, and
 comments the PR link back on the issue. If a pull request already exists for the
 branch, it links the two instead of opening a duplicate.
 
-By default it targets `microsoft/agent-framework-go`, processes every porting
-title-prefix (`[dotnet-port-api]`, `[dotnet-port-fixes]`, `[dotnet-code]`), and only
-acts on issues opened by `app/github-actions` — the account that files the fallback
-issues — so an unrelated issue with a matching title cannot drive it to open a PR.
+By default it targets `microsoft/agent-framework-go` and acts on every open issue
+opened by `app/github-actions` — the account that files the fallback issues — so an
+issue opened by anyone else cannot drive it to open a PR. Issues that do not parse as
+a fallback are skipped. Use `-prefix` to narrow to a single workflow's issues.
 
 ## Authentication
 
@@ -33,7 +33,7 @@ Install it once and run it from anywhere:
 ```sh
 go install github.com/microsoft/agent-framework-go/cmd/prfromissue@latest
 
-# Open + link PRs for every open porting tracking issue
+# Open + link PRs for every open fallback tracking issue
 prfromissue
 
 # Preview without making any changes
@@ -48,7 +48,7 @@ prfromissue -draft
 
 | Flag            | Default                     | Description                                                             |
 | --------------- | --------------------------- | ----------------------------------------------------------------------- |
-| `-prefix`       | "" (all porting prefixes)   | Only act on issues whose title starts with this prefix.                 |
+| `-prefix`       | "" (all matching issues)    | Only act on issues whose title starts with this prefix.                 |
 | `-repo`         | `microsoft/agent-framework-go` | Target repository as `owner/repo`.                                   |
 | `-issue-author` | `app/github-actions`        | Only act on issues opened by this login; empty disables the check.      |
 | `-limit`        | 100                         | Maximum number of open issues to scan.                                  |

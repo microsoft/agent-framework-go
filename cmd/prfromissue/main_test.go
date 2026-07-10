@@ -21,6 +21,9 @@ func TestMatchesAnyPrefix(t *testing.T) {
 	if matchesAnyPrefix("no prefix", prefixes) {
 		t.Error("did not expect an unprefixed title to match")
 	}
+	if !matchesAnyPrefix("anything at all", nil) {
+		t.Error("an empty prefix list should match every title")
+	}
 }
 
 func TestSelectIssues_FiltersByAuthorAndPrefix(t *testing.T) {
@@ -33,7 +36,8 @@ func TestSelectIssues_FiltersByAuthorAndPrefix(t *testing.T) {
 		issueWith("Some unrelated issue", "app/github-actions"),
 	}
 
-	selected := selectIssues(issues, defaultPrefixes, defaultIssueAuthor)
+	prefixes := []string{"[dotnet-port-api]", "[dotnet-port-fixes]", "[dotnet-code]"}
+	selected := selectIssues(issues, prefixes, defaultIssueAuthor)
 	if len(selected) != 2 {
 		t.Fatalf("expected 2 selected issues, got %d: %+v", len(selected), selected)
 	}
@@ -44,11 +48,23 @@ func TestSelectIssues_FiltersByAuthorAndPrefix(t *testing.T) {
 	}
 }
 
+func TestSelectIssues_NoPrefixMatchesAllFromAuthor(t *testing.T) {
+	issues := []issue{
+		issueWith("[dotnet-port-api] Real port", "app/github-actions"),
+		issueWith("Some other automated issue", "app/github-actions"),
+		issueWith("[dotnet-code] From a random user", "randomuser"),
+	}
+	selected := selectIssues(issues, nil, defaultIssueAuthor)
+	if len(selected) != 2 {
+		t.Fatalf("expected both author-owned issues, got %d: %+v", len(selected), selected)
+	}
+}
+
 func TestSelectIssues_EmptyAuthorDisablesCheck(t *testing.T) {
 	issues := []issue{
 		issueWith("[dotnet-code] From a human", "someone"),
 	}
-	if got := selectIssues(issues, defaultPrefixes, ""); len(got) != 1 {
+	if got := selectIssues(issues, nil, ""); len(got) != 1 {
 		t.Fatalf("empty author should disable the check; got %d", len(got))
 	}
 }
