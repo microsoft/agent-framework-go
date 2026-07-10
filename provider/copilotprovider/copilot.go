@@ -295,17 +295,24 @@ func copyBoolDefaultTrue(source *bool) *bool {
 }
 
 func sessionHooksWithApprovalRequests(tools []copilot.Tool, hooks *copilot.SessionHooks) *copilot.SessionHooks {
-	approvalRequiredToolNames := approvalRequiredToolNames(tools)
+	var names map[string]struct{}
+	approvalRequiredNames := func() map[string]struct{} {
+		if names == nil {
+			names = approvalRequiredToolNames(tools)
+		}
+		return names
+	}
 	if hooks != nil && hooks.OnPreToolUse != nil {
-		logApprovalGatingSkipped(approvalRequiredToolNames)
+		logApprovalGatingSkipped(approvalRequiredNames())
 		return hooks
 	}
-	if len(approvalRequiredToolNames) == 0 {
+	names = approvalRequiredNames()
+	if len(names) == 0 {
 		return hooks
 	}
 	clone := cloneSessionHooks(hooks)
 	clone.OnPreToolUse = func(input copilot.PreToolUseHookInput, _ copilot.HookInvocation) (*copilot.PreToolUseHookOutput, error) {
-		if _, ok := approvalRequiredToolNames[input.ToolName]; !ok {
+		if _, ok := names[input.ToolName]; !ok {
 			return nil, nil
 		}
 		return &copilot.PreToolUseHookOutput{
