@@ -79,6 +79,13 @@ type EdgeConnection struct {
 	SinkIDs   []string
 }
 
+func newEdgeConnection(sourceIDs []string, sinkIDs []string) EdgeConnection {
+	return EdgeConnection{
+		SourceIDs: sourceIDs,
+		SinkIDs:   sinkIDs,
+	}
+}
+
 func (c EdgeConnection) Equal(other EdgeConnection) bool {
 	return slices.Equal(c.SourceIDs, other.SourceIDs) && slices.Equal(c.SinkIDs, other.SinkIDs)
 }
