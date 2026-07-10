@@ -114,15 +114,13 @@ func newInProcessRunner(
 		return nil, err
 	}
 
-	edgeMap := execution.NewEdgeRunner(wf, stepTracer, runContext.ensureExecutor)
-
 	runner := &runner{
 		sessionID:            sessionID,
 		startExecutorID:      wf.StartExecutorID(),
 		wf:                   wf,
 		runContext:           runContext,
 		checkpointMgr:        checkpointMgr,
-		edgeMap:              edgeMap,
+		edgeMap:              runContext.edgeMap,
 		stepTracer:           stepTracer,
 		outgoingEvents:       outgoingEvents,
 		knownValidInputTypes: make(map[reflect.Type]struct{}),

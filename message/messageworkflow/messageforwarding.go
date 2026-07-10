@@ -41,32 +41,48 @@ func ConfigureForwarding(executor *workflow.Executor, options *ForwardingOptions
 				reflect.TypeFor[workflow.TurnToken](),
 			)
 			if stringMessageRole != "" {
-				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
-					return struct{}{}, ctx.SendMessage("", &message.Message{
-						Role:     stringMessageRole,
-						Contents: []message.Content{&message.TextContent{Text: msg.(string)}},
-					})
-				})
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, forwardStringMessage(stringMessageRole))
 			}
 			rb.RouteBuilder.
-				AddHandlerRaw(reflect.TypeFor[*message.Message](), nil, func(ctx *workflow.Context, msg any) (any, error) {
-					return struct{}{}, ctx.SendMessage("", msg.(*message.Message))
-				}).
-				AddHandlerRaw(reflect.TypeFor[[]*message.Message](), nil, func(ctx *workflow.Context, msg any) (any, error) {
-					return struct{}{}, ctx.SendMessage("", msg.([]*message.Message))
-				}).
-				AddHandlerRaw(reflect.TypeFor[iter.Seq[*message.Message]](), nil, func(ctx *workflow.Context, msg any) (any, error) {
-					messages := make([]*message.Message, 0)
-					for msg := range msg.(iter.Seq[*message.Message]) {
-						messages = append(messages, msg)
-					}
-					return struct{}{}, ctx.SendMessage("", messages)
-				}).
-				AddHandlerRaw(reflect.TypeFor[workflow.TurnToken](), nil, func(ctx *workflow.Context, msg any) (any, error) {
-					return struct{}{}, ctx.SendMessage("", msg.(workflow.TurnToken))
-				})
+				AddHandlerRaw(reflect.TypeFor[*message.Message](), nil, forwardMessage).
+				AddHandlerRaw(reflect.TypeFor[[]*message.Message](), nil, forwardMessages).
+				AddHandlerRaw(reflect.TypeFor[iter.Seq[*message.Message]](), nil, forwardMessageSeq).
+				AddHandlerRaw(reflect.TypeFor[workflow.TurnToken](), nil, forwardTurnToken)
 			return rb, nil
 		},
 	}
 	executor.Extend(&forwardingExecutor)
+}
+
+func forwardStringMessage(role message.Role) func(*workflow.Context, any) (any, error) {
+	return func(ctx *workflow.Context, msg any) (any, error) {
+		return struct{}{}, ctx.SendMessage("", &message.Message{
+			Role:     role,
+			Contents: []message.Content{&message.TextContent{Text: msg.(string)}},
+		})
+	}
+}
+
+func forwardMessage(ctx *workflow.Context, msg any) (any, error) {
+	return struct{}{}, ctx.SendMessage("", msg.(*message.Message))
+}
+
+func forwardMessages(ctx *workflow.Context, msg any) (any, error) {
+	return struct{}{}, ctx.SendMessage("", msg.([]*message.Message))
+}
+
+func forwardMessageSeq(ctx *workflow.Context, msg any) (any, error) {
+	return struct{}{}, ctx.SendMessage("", messageSeqToSlice(msg.(iter.Seq[*message.Message])))
+}
+
+func forwardTurnToken(ctx *workflow.Context, msg any) (any, error) {
+	return struct{}{}, ctx.SendMessage("", msg.(workflow.TurnToken))
+}
+
+func messageSeqToSlice(seq iter.Seq[*message.Message]) []*message.Message {
+	messages := make([]*message.Message, 0)
+	for msg := range seq {
+		messages = append(messages, msg)
+	}
+	return messages
 }
