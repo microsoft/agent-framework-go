@@ -57,6 +57,9 @@ type issue struct {
 	Title  string `json:"title"`
 	Body   string `json:"body"`
 	URL    string `json:"url"`
+	Author struct {
+		Login string `json:"login"`
+	} `json:"author"`
 }
 
 // pullRequest is the subset of PR fields the tool reads.
@@ -80,7 +83,7 @@ func (c *ghClient) listOpenIssues(ctx context.Context, limit int) ([]issue, erro
 		"issue", "list",
 		"--state", "open",
 		"--limit", fmt.Sprintf("%d", limit),
-		"--json", "number,title,body,url",
+		"--json", "number,title,body,url,author",
 	)...)
 	if err != nil {
 		return nil, err
