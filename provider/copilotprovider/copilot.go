@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -294,10 +295,11 @@ func copyBoolDefaultTrue(source *bool) *bool {
 }
 
 func sessionHooksWithApprovalRequests(tools []copilot.Tool, hooks *copilot.SessionHooks) *copilot.SessionHooks {
+	approvalRequiredToolNames := approvalRequiredToolNames(tools)
 	if hooks != nil && hooks.OnPreToolUse != nil {
+		logApprovalGatingSkipped(approvalRequiredToolNames)
 		return hooks
 	}
-	approvalRequiredToolNames := approvalRequiredToolNames(tools)
 	if len(approvalRequiredToolNames) == 0 {
 		return hooks
 	}
@@ -326,6 +328,22 @@ func approvalRequiredToolNames(tools []copilot.Tool) map[string]struct{} {
 		names[tl.Name] = struct{}{}
 	}
 	return names
+}
+
+func logApprovalGatingSkipped(names map[string]struct{}) {
+	if len(names) == 0 {
+		return
+	}
+	toolNames := make([]string, 0, len(names))
+	for name := range names {
+		toolNames = append(toolNames, name)
+	}
+	slices.Sort(toolNames)
+	slog.Warn(
+		"A custom OnPreToolUse hook is configured, so approval-required tools will not be automatically gated.",
+		"approvalRequiredToolCount", len(toolNames),
+		"approvalRequiredTools", strings.Join(toolNames, ", "),
+	)
 }
 
 func cloneSessionHooks(source *copilot.SessionHooks) *copilot.SessionHooks {

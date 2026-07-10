@@ -3,7 +3,10 @@
 package copilotprovider
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"testing"
 
 	copilot "github.com/github/copilot-sdk/go"
@@ -95,6 +98,40 @@ func TestSessionConfig_WithExistingPreToolUseHook_PreservesCallerHook(t *testing
 	}
 	if got != expected {
 		t.Fatalf("permission decision = %#v, want %#v", got, expected)
+	}
+}
+
+func TestSessionConfig_WithExistingPreToolUseHookAndApprovalTools_LogsWarning(t *testing.T) {
+	var logs bytes.Buffer
+	defaultLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() {
+		slog.SetDefault(defaultLogger)
+	})
+
+	source := &copilot.SessionConfig{
+		Hooks: &copilot.SessionHooks{
+			OnPreToolUse: func(copilot.PreToolUseHookInput, copilot.HookInvocation) (*copilot.PreToolUseHookOutput, error) {
+				return nil, nil
+			},
+		},
+	}
+	p := &provider{cfg: AgentConfig{SessionConfig: source}}
+
+	_ = p.sessionConfig(true, []agent.Option{
+		agent.WithTool(tool.ApprovalRequiredFunc(testFuncTool(t, "dangerous-a"))),
+		agent.WithTool(tool.ApprovalRequiredFunc(testFuncTool(t, "dangerous-b"))),
+	})
+
+	logOutput := logs.String()
+	if !strings.Contains(logOutput, "not be automatically gated") {
+		t.Fatalf("expected warning log for skipped approval gating, got %q", logOutput)
+	}
+	if !strings.Contains(logOutput, "approvalRequiredToolCount=2") {
+		t.Fatalf("expected tool count in warning log, got %q", logOutput)
+	}
+	if !strings.Contains(logOutput, "dangerous-a, dangerous-b") {
+		t.Fatalf("expected tool names in warning log, got %q", logOutput)
 	}
 }
 
