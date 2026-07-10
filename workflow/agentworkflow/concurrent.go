@@ -156,7 +156,7 @@ func newAggregateTurnMessagesBinding(id string) workflow.ExecutorBinding {
 				StateKey:                 aggregateTurnMessagesStateKey,
 				DisableAutoSendTurnToken: true,
 				TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, messages []*message.Message) error {
-					return sendAggregatedTurnMessages(ctx, messages)
+					return sendAggregateTurnMessages(ctx, messages)
 				},
 			})
 			return &executor, nil
@@ -164,7 +164,7 @@ func newAggregateTurnMessagesBinding(id string) workflow.ExecutorBinding {
 	}
 }
 
-func sendAggregatedTurnMessages(ctx *workflow.Context, messages []*message.Message) error {
+func sendAggregateTurnMessages(ctx *workflow.Context, messages []*message.Message) error {
 	return ctx.SendMessage("", messages)
 }
 
