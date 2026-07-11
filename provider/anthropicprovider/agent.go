@@ -127,6 +127,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 		var modelID string
 		var usage message.UsageDetails
 		functions := make(map[int]*message.FunctionCallContent)
+		inputPlaceholders := make(map[int]string)
 
 		for stream.Next() {
 			event := stream.Current()
@@ -141,13 +142,27 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				usage.Add(toUsageDetailsDelta(event.Usage))
 			case anthropic.ContentBlockStartEvent:
 				contents = a.buildBlock(int(event.Index), event.ContentBlock.AsAny(), contents, functions)
+				// A streamed tool_use start event carries only an input
+				// placeholder; the arguments arrive as input_json_delta
+				// events. Set the placeholder aside so deltas accumulate
+				// from scratch, and restore it on stop if no deltas came.
+				if fn, ok := functions[int(event.Index)]; ok {
+					inputPlaceholders[int(event.Index)] = fn.Arguments
+					fn.Arguments = ""
+				}
 			case anthropic.ContentBlockDeltaEvent:
 				contents = a.buildDelta(int(event.Index), event.Delta.AsAny(), contents, functions)
 			case anthropic.ContentBlockStopEvent:
-				indices := slices.Collect(maps.Keys(functions))
-				slices.Sort(indices)
-				for _, id := range indices {
-					contents = append(contents, functions[id])
+				// Emit only the function call whose block just finished;
+				// earlier blocks were already emitted by their own stop
+				// events.
+				if fn, ok := functions[int(event.Index)]; ok {
+					if fn.Arguments == "" {
+						fn.Arguments = inputPlaceholders[int(event.Index)]
+					}
+					contents = append(contents, fn)
+					delete(functions, int(event.Index))
+					delete(inputPlaceholders, int(event.Index))
 				}
 			}
 

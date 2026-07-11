@@ -32,7 +32,8 @@ func newTestClient(t *testing.T, server *httptest.Server) *agent.Agent {
 		anthropicprovider.AgentConfig{
 			Model:  "claude-3-5-sonnet-20241022",
 			Config: agent.Config{DisableFuncAutoCall: true},
-		})
+		},
+	)
 }
 
 // nestedKey traverses a decoded JSON map following the given path of keys and
@@ -146,7 +147,8 @@ func TestConfigInstructions(t *testing.T) {
 			Config: agent.Config{
 				DisableFuncAutoCall: true,
 			},
-		})
+		},
+	)
 
 	if _, err := a.RunText(t.Context(), "hi").Collect(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -319,5 +321,81 @@ func TestStructuredOutput_Streaming(t *testing.T) {
 	}
 	if out.Age != 25 {
 		t.Errorf("out.Age = %d, want %d", out.Age, 25)
+	}
+}
+
+// parallelToolUseStreamingResponse returns an SSE stream that delivers two
+// tool_use content blocks, mirroring how the API streams parallel tool calls.
+func parallelToolUseStreamingResponse() string {
+	return "" +
+		"event: message_start\n" +
+		`data: {"type":"message_start","message":{"id":"msg_stream02","type":"message","role":"assistant","content":[],"model":"claude-3-5-sonnet-20241022","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}` + "\n\n" +
+		"event: content_block_start\n" +
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_01","name":"get_weather","input":{}}}` + "\n\n" +
+		"event: content_block_delta\n" +
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"city\":"}}` + "\n\n" +
+		"event: content_block_delta\n" +
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\"Paris\"}"}}` + "\n\n" +
+		"event: content_block_stop\n" +
+		`data: {"type":"content_block_stop","index":0}` + "\n\n" +
+		"event: content_block_start\n" +
+		`data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_02","name":"get_time","input":{}}}` + "\n\n" +
+		"event: content_block_delta\n" +
+		`data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"zone\":\"CET\"}"}}` + "\n\n" +
+		"event: content_block_stop\n" +
+		`data: {"type":"content_block_stop","index":1}` + "\n\n" +
+		"event: message_delta\n" +
+		`data: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":5}}` + "\n\n" +
+		"event: message_stop\n" +
+		`data: {"type":"message_stop"}` + "\n\n"
+}
+
+// TestStreaming_ParallelToolCalls_NoDuplicates verifies that each streamed
+// tool_use block yields exactly one FunctionCallContent. A content_block_stop
+// event must only emit the function call for the block that stopped, not
+// re-emit previously completed ones.
+func TestStreaming_ParallelToolCalls_NoDuplicates(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, parallelToolUseStreamingResponse())
+	}))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	calls := make(map[string]int)
+	arguments := make(map[string]string)
+	for update, err := range a.RunText(t.Context(), "weather and time in Paris", agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if update == nil {
+			continue
+		}
+		for _, c := range update.Contents {
+			if fcc, ok := c.(*message.FunctionCallContent); ok {
+				calls[fcc.CallID]++
+				arguments[fcc.CallID] = fcc.Arguments
+			}
+		}
+	}
+
+	want := map[string]int{"toolu_01": 1, "toolu_02": 1}
+	for id, wantCount := range want {
+		if calls[id] != wantCount {
+			t.Errorf("FunctionCallContent for %s yielded %d times, want %d", id, calls[id], wantCount)
+		}
+	}
+	for id := range calls {
+		if _, ok := want[id]; !ok {
+			t.Errorf("unexpected FunctionCallContent with CallID %s", id)
+		}
+	}
+
+	if got, want := arguments["toolu_01"], `{"city":"Paris"}`; got != want {
+		t.Errorf("toolu_01 arguments = %q, want %q", got, want)
+	}
+	if got, want := arguments["toolu_02"], `{"zone":"CET"}`; got != want {
+		t.Errorf("toolu_02 arguments = %q, want %q", got, want)
 	}
 }
