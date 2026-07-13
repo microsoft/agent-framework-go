@@ -12,23 +12,12 @@ import (
 func TestValidateToolboxNamePathSegment(t *testing.T) {
 	t.Parallel()
 
-	endpoint := "https://example.test/base"
 	validNames := []string{
 		"toolbox",
 		"tool.box",
 		"toolbox:v1@prod",
 		"toolbox(name)",
 	}
-	for _, name := range validNames {
-		t.Run("valid/"+name, func(t *testing.T) {
-			t.Parallel()
-
-			if err := validateToolboxNamePathSegment(endpoint, name); err != nil {
-				t.Fatalf("validateToolboxNamePathSegment(%q) error = %v", name, err)
-			}
-		})
-	}
-
 	invalidNames := []string{
 		".",
 		"..",
@@ -42,13 +31,39 @@ func TestValidateToolboxNamePathSegment(t *testing.T) {
 		"toolbox\\sub",
 		"toolbox%5Csub",
 	}
-	for _, name := range invalidNames {
-		t.Run("invalid/"+name, func(t *testing.T) {
+
+	endpoints := []string{
+		"https://example.test/base",
+		"",
+		"not-a-valid-url",
+	}
+
+	for _, endpoint := range endpoints {
+		endpoint := endpoint
+		t.Run("endpoint="+endpoint, func(t *testing.T) {
 			t.Parallel()
 
-			err := validateToolboxNamePathSegment(endpoint, name)
-			if !errors.Is(err, errToolboxNameMustBeSinglePathSegment) {
-				t.Fatalf("validateToolboxNamePathSegment(%q) error = %v, want %v", name, err, errToolboxNameMustBeSinglePathSegment)
+			for _, name := range validNames {
+				name := name
+				t.Run("valid/"+name, func(t *testing.T) {
+					t.Parallel()
+
+					if err := validateToolboxNamePathSegment(endpoint, name); err != nil {
+						t.Fatalf("validateToolboxNamePathSegment(%q) error = %v", name, err)
+					}
+				})
+			}
+
+			for _, name := range invalidNames {
+				name := name
+				t.Run("invalid/"+name, func(t *testing.T) {
+					t.Parallel()
+
+					err := validateToolboxNamePathSegment(endpoint, name)
+					if !errors.Is(err, errToolboxNameMustBeSinglePathSegment) {
+						t.Fatalf("validateToolboxNamePathSegment(%q) error = %v, want %v", name, err, errToolboxNameMustBeSinglePathSegment)
+					}
+				})
 			}
 		})
 	}
