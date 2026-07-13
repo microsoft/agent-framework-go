@@ -42,7 +42,11 @@ func newStatefulEdgeState(sourceIDs []string) *statefulEdgeState {
 }
 
 func (s *statefulEdgeState) resetUnseen() {
-	s.unseen = make(map[string]struct{}, len(s.sourceIDs))
+	if s.unseen == nil {
+		s.unseen = make(map[string]struct{}, len(s.sourceIDs))
+	} else {
+		clear(s.unseen)
+	}
 	for _, id := range s.sourceIDs {
 		s.unseen[id] = struct{}{}
 	}
