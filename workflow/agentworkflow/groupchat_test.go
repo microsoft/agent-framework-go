@@ -494,6 +494,35 @@ func TestRoundRobinGroupChatManager_CheckpointRestoresCursor(t *testing.T) {
 	}
 }
 
+func TestPrefixingWorkflowContext_QueueClearScopeClearsOnlyPrefixedState(t *testing.T) {
+	state := map[string]any{
+		groupChatManagerStateKey:                                      groupChatManagerState{IterationCount: 3},
+		groupChatManagerSubclassStateKeyPref + "next_index":           roundRobinGroupChatManagerState{NextIndex: 1},
+		groupChatManagerSubclassStateKeyPref + "custom_manager_state": "clear",
+		"other_state": "keep",
+	}
+	ctx := prefixingWorkflowContext(newGroupChatStateContext(t.Context(), state), groupChatManagerSubclassStateKeyPref)
+
+	if ctx.QueueClearScope == nil {
+		t.Fatal("QueueClearScope = nil, want prefixed clear implementation")
+	}
+	if err := ctx.QueueClearScope(""); err != nil {
+		t.Fatalf("QueueClearScope: %v", err)
+	}
+	if _, ok := state[groupChatManagerSubclassStateKeyPref+"next_index"]; ok {
+		t.Fatal("prefixed next_index state was not cleared")
+	}
+	if _, ok := state[groupChatManagerSubclassStateKeyPref+"custom_manager_state"]; ok {
+		t.Fatal("prefixed custom manager state was not cleared")
+	}
+	if _, ok := state[groupChatManagerStateKey]; !ok {
+		t.Fatalf("base manager state %q was cleared", groupChatManagerStateKey)
+	}
+	if got := state["other_state"]; got != "keep" {
+		t.Fatalf("other state = %v, want keep", got)
+	}
+}
+
 func TestRoundRobinGroupChatManager_SelectNextAgentCyclesAndWraps(t *testing.T) {
 	agentA := newGroupChatLabelAgent("a", "A", "from-a")
 	agentB := newGroupChatLabelAgent("b", "B", "from-b")
@@ -1051,6 +1080,12 @@ func newGroupChatStateContext(ctx context.Context, state map[string]any) *workfl
 				return nil
 			}
 			state[key] = value
+			return nil
+		},
+		QueueClearScope: func(string) error {
+			for key := range state {
+				delete(state, key)
+			}
 			return nil
 		},
 	}
