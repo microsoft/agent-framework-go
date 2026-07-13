@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -594,37 +593,42 @@ func shellKindDescription(shell resolvedShell) string {
 }
 
 func (s resolvedShell) statelessArgvForCommand(command string) []string {
-	var suffix []string
 	switch s.kind {
 	case shellKindPowerShell:
-		suffix = []string{"-NoProfile", "-NoLogo", "-NonInteractive", "-Command", command}
+		return s.argvWithExtra([]string{"-NoProfile", "-NoLogo", "-NonInteractive", "-Command", command})
 	case shellKindCmd:
-		suffix = []string{"/d", "/c", command}
+		return s.argvWithExtra([]string{"/d", "/c", command})
 	case shellKindBash:
-		suffix = []string{"--noprofile", "--norc", "-c", command}
+		return s.argvWithExtra([]string{"--noprofile", "--norc", "-c", command})
 	default:
-		suffix = []string{"-c", command}
+		return s.argvWithExtra([]string{"-c", command})
 	}
-	return combineArgv(s.extraArgv, suffix)
 }
 
 func (s resolvedShell) persistentArgv() ([]string, error) {
-	var suffix []string
 	switch s.kind {
 	case shellKindPowerShell:
-		suffix = []string{"-NoProfile", "-NoLogo", "-NonInteractive", "-Command", "-"}
+		return s.launchArgv([]string{"-NoProfile", "-NoLogo", "-NonInteractive", "-Command", "-"}), nil
 	case shellKindCmd:
 		return nil, fmt.Errorf("persistent mode is not supported for cmd.exe; use pwsh, powershell, or a POSIX shell")
 	case shellKindBash:
-		suffix = []string{"--noprofile", "--norc"}
+		return s.launchArgv([]string{"--noprofile", "--norc"}), nil
 	default:
-		suffix = nil
+		return s.launchArgv(nil), nil
 	}
-	return append([]string{s.binary}, combineArgv(s.extraArgv, suffix)...), nil
 }
 
-func combineArgv(extra, suffix []string) []string {
-	return slices.Concat(extra, suffix)
+func (s resolvedShell) launchArgv(suffix []string) []string {
+	return append([]string{s.binary}, s.argvWithExtra(suffix)...)
+}
+
+func (s resolvedShell) argvWithExtra(suffix []string) []string {
+	if len(s.extraArgv) == 0 {
+		return suffix
+	}
+	argv := make([]string, 0, len(s.extraArgv)+len(suffix))
+	argv = append(argv, s.extraArgv...)
+	return append(argv, suffix...)
 }
 
 func classifyShellKind(shell string) shellKind {
