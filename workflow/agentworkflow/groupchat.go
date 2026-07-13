@@ -515,16 +515,15 @@ func restoreGroupChatManagerCheckpoint(ctx *workflow.Context, manager *GroupChat
 
 func prefixingWorkflowContext(inner *workflow.Context, prefix string) *workflow.Context {
 	wrapped := *inner
-	wrap := func(key string) string { return prefix + key }
 
 	if inner.ReadState != nil {
 		wrapped.ReadState = func(key string, scope string) (any, error) {
-			return inner.ReadState(wrap(key), scope)
+			return inner.ReadState(prefixWorkflowStateKey(prefix, key), scope)
 		}
 	}
 	if inner.ReadOrInitState != nil {
 		wrapped.ReadOrInitState = func(key string, scope string, initFunc func(context.Context, string, string) (any, error)) (any, error) {
-			return inner.ReadOrInitState(wrap(key), scope, func(ctx context.Context, wrappedKey string, wrappedScope string) (any, error) {
+			return inner.ReadOrInitState(prefixWorkflowStateKey(prefix, key), scope, func(ctx context.Context, wrappedKey string, wrappedScope string) (any, error) {
 				if initFunc == nil {
 					return nil, nil
 				}
@@ -553,23 +552,29 @@ func prefixingWorkflowContext(inner *workflow.Context, prefix string) *workflow.
 	}
 	if inner.QueueStateUpdate != nil {
 		wrapped.QueueStateUpdate = func(key string, scope string, value any) error {
-			return inner.QueueStateUpdate(wrap(key), scope, value)
+			return inner.QueueStateUpdate(prefixWorkflowStateKey(prefix, key), scope, value)
 		}
 	}
 	if inner.QueueClearScope != nil && inner.ReadStateKeys != nil && inner.QueueStateUpdate != nil {
 		wrapped.QueueClearScope = func(scope string) error {
-			for key, err := range wrapped.ReadStateKeys(scope) {
+			for key, err := range inner.ReadStateKeys(scope) {
 				if err != nil {
 					return err
 				}
-				if err := wrapped.QueueStateUpdate(key, scope, nil); err != nil {
-					return err
+				if strings.HasPrefix(key, prefix) {
+					if err := inner.QueueStateUpdate(key, scope, nil); err != nil {
+						return err
+					}
 				}
 			}
 			return nil
 		}
 	}
 	return &wrapped
+}
+
+func prefixWorkflowStateKey(prefix string, key string) string {
+	return prefix + key
 }
 
 func readMessageSliceState(ctx *workflow.Context, key string) ([]*message.Message, error) {
