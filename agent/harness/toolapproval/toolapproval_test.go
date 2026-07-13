@@ -734,6 +734,66 @@ func TestToolApproval_NonApprovalRequiredQueuedRequestDrained(t *testing.T) {
 	}
 }
 
+func TestToolApproval_DisableNonApprovalRequiredToolBypassing_SurfacesQueuedNonApprovalRequest(t *testing.T) {
+	deployFCC := &message.FunctionCallContent{CallID: "c-deploy", Name: "deploy"}
+	listFCC := &message.FunctionCallContent{CallID: "c-list", Name: "list"}
+
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder().
+			Add(&agent.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					&message.ToolApprovalRequestContent{RequestID: "r-deploy", ToolCall: deployFCC},
+					&message.ToolApprovalRequestContent{RequestID: "r-list", ToolCall: listFCC},
+				},
+			}).
+			Build(),
+	}
+
+	mw := toolapproval.New(toolapproval.Config{
+		DisableNonApprovalRequiredToolBypassing: true,
+	})
+	session := agenttest.CreateSession()
+
+	turn1 := collectUpdates(t, mw, runner.Run,
+		[]*message.Message{{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "go"}}}},
+		agent.WithSession(session),
+	)
+
+	var deployReq *message.ToolApprovalRequestContent
+	for _, u := range turn1 {
+		for _, c := range u.Contents {
+			if r, ok := c.(*message.ToolApprovalRequestContent); ok && r.RequestID == "r-deploy" {
+				deployReq = r
+			}
+		}
+	}
+	if deployReq == nil {
+		t.Fatal("expected deploy approval request in turn 1")
+	}
+
+	turn2 := collectUpdates(t, mw, runner.Run,
+		[]*message.Message{{Role: message.RoleUser, Contents: []message.Content{deployReq.CreateResponse(true, "")}}},
+		agent.WithSession(session),
+		agent.WithTool(newNoopTool("list")),
+	)
+
+	var approvalReqs []*message.ToolApprovalRequestContent
+	for _, u := range turn2 {
+		for _, c := range u.Contents {
+			if req, ok := c.(*message.ToolApprovalRequestContent); ok {
+				approvalReqs = append(approvalReqs, req)
+			}
+			if tc, ok := c.(*message.TextContent); ok && tc.Text == "done" {
+				t.Fatal("expected queued non-approval-required request to be surfaced before inner agent resumed")
+			}
+		}
+	}
+	if len(approvalReqs) != 1 || approvalReqs[0].RequestID != "r-list" {
+		t.Fatalf("expected queued list approval request to be surfaced, got %#v", approvalReqs)
+	}
+}
+
 func TestToolApproval_AutoApprovalRule_ApprovesMatchingTool(t *testing.T) {
 	fcc := &message.FunctionCallContent{CallID: "c1", Name: "ReadTool", Arguments: `{}`}
 

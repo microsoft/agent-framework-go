@@ -94,6 +94,13 @@ type Config struct {
 	// to be auto-approved without prompting the caller. Returning an error fails
 	// the current run.
 	AutoApprovalRules []func(context.Context, *message.FunctionCallContent) (bool, error)
+
+	// DisableNonApprovalRequiredToolBypassing disables the default behavior that
+	// auto-approves requests for tools that do not actually require approval when
+	// they are surfaced alongside approval-required tools. When true, all such
+	// requests are surfaced to the caller instead of being transparently
+	// re-injected as approved on the next turn.
+	DisableNonApprovalRequiredToolBypassing bool
 }
 
 func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
@@ -331,7 +338,10 @@ func isNotApprovalRequired(req *message.ToolApprovalRequestContent, opts []agent
 // configured auto-approval rules. This matches the .NET MatchesRule || MatchesAutoApprovalRule
 // evaluation pattern used in ToolApprovalAgent.
 func isAutoApprovable(ctx context.Context, cfg Config, rules []Rule, opts []agent.Option, req *message.ToolApprovalRequestContent) (bool, error) {
-	if matchesRule(rules, req) || isNotApprovalRequired(req, opts) {
+	if matchesRule(rules, req) {
+		return true, nil
+	}
+	if !cfg.DisableNonApprovalRequiredToolBypassing && isNotApprovalRequired(req, opts) {
 		return true, nil
 	}
 	return matchesAutoApprovalRules(ctx, cfg.AutoApprovalRules, req)
