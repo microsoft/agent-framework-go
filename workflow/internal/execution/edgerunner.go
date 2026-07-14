@@ -33,6 +33,25 @@ type statefulEdgeState struct {
 	unseen          map[string]struct{}
 }
 
+func newStatefulEdgeState(sourceIDs []string) *statefulEdgeState {
+	state := &statefulEdgeState{
+		sourceIDs: sourceIDs,
+	}
+	state.resetUnseen()
+	return state
+}
+
+func (s *statefulEdgeState) resetUnseen() {
+	if s.unseen == nil {
+		s.unseen = make(map[string]struct{}, len(s.sourceIDs))
+	} else {
+		clear(s.unseen)
+	}
+	for _, id := range s.sourceIDs {
+		s.unseen[id] = struct{}{}
+	}
+}
+
 func (s *statefulEdgeState) MarshalJSON() ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -73,12 +92,7 @@ func (s *statefulEdgeState) processMessage(sourceID string, envelope *MessageEnv
 	}
 	taken := s.pendingMessages
 	s.pendingMessages = nil
-	if s.unseen == nil {
-		s.unseen = make(map[string]struct{}, len(s.sourceIDs))
-	}
-	for _, id := range s.sourceIDs {
-		s.unseen[id] = struct{}{}
-	}
+	s.resetUnseen()
 	s.mu.Unlock()
 
 	if len(taken) == 0 {
@@ -126,14 +140,7 @@ func NewEdgeRunner(wf *workflow.Workflow, tracer StepTracer, ensureExecutor func
 			if statefulEdges == nil {
 				statefulEdges = make(map[int]*statefulEdgeState)
 			}
-			unseen := make(map[string]struct{}, len(edge.Connection.SourceIDs))
-			for _, id := range edge.Connection.SourceIDs {
-				unseen[id] = struct{}{}
-			}
-			statefulEdges[edge.Index] = &statefulEdgeState{
-				sourceIDs: edge.Connection.SourceIDs,
-				unseen:    unseen,
-			}
+			statefulEdges[edge.Index] = newStatefulEdgeState(edge.Connection.SourceIDs)
 		}
 	}
 
