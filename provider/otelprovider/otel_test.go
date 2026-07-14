@@ -183,8 +183,8 @@ func TestOtel_Run_RecordsError(t *testing.T) {
 	for _, attr := range span.Attributes {
 		attrs[string(attr.Key)] = attr.Value.AsString()
 	}
-	if attrs["error.type"] != "*errors.errorString" {
-		t.Errorf("expected error.type %q, got %q", "*errors.errorString", attrs["error.type"])
+	if attrs["error.type"] != "errorString" {
+		t.Errorf("expected error.type %q, got %q", "errorString", attrs["error.type"])
 	}
 }
 
@@ -487,8 +487,8 @@ func TestOtel_Run_ExecuteToolSpan_SetsErrorTypeOnToolError(t *testing.T) {
 	for _, attr := range executeToolSpan.Attributes {
 		attrs[string(attr.Key)] = attr.Value.AsString()
 	}
-	if attrs["error.type"] != "*errors.errorString" {
-		t.Errorf("expected error.type %q, got %q", "*errors.errorString", attrs["error.type"])
+	if attrs["error.type"] != "errorString" {
+		t.Errorf("expected error.type %q, got %q", "errorString", attrs["error.type"])
 	}
 
 	hasErrorEvent := false

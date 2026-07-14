@@ -754,7 +754,7 @@ func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]too
 	}()
 	if err != nil {
 		if span != nil {
-			span.SetAttributes(attribute.String(attrKeyErrorType, fmt.Sprintf("%T", err)))
+			span.SetAttributes(attribute.String(attrKeyErrorType, errorTypeName(err)))
 			span.RecordError(err, trace.WithTimestamp(time.Now()))
 			span.SetStatus(codes.Error, err.Error())
 		}
@@ -797,6 +797,16 @@ func startToolSpan(ctx context.Context, funcCall *message.FunctionCallContent, t
 	// opt-in EnableSensitiveData flag is available on Config (parity with Python's
 	// get_function_span_attributes and .NET's OpenTelemetryAgent.EnableSensitiveData).
 	return tracer.Start(ctx, name, trace.WithAttributes(attrs...))
+}
+
+// errorTypeName returns the short (unqualified) type name of err, matching
+// Python's type(exception).__name__ for cross-SDK parity on the error.type span attribute.
+func errorTypeName(err error) string {
+	t := fmt.Sprintf("%T", err)
+	if i := strings.LastIndexByte(t, '.'); i >= 0 {
+		t = t[i+1:]
+	}
+	return t
 }
 
 func (f *autocall) createResponseMessage(results []functionInvocationResult) *message.Message {
