@@ -5,9 +5,7 @@ package otelprovider
 import (
 	"cmp"
 	"context"
-	"fmt"
 	"iter"
-	"strings"
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -63,7 +61,7 @@ func (m *mw) Run(next agent.RunFunc, ctx context.Context, messages []*message.Me
 
 		for update, err := range next(ctx, messages, options...) {
 			if err != nil {
-				span.SetAttributes(attribute.String(attrKeyErrorType, errorTypeName(err)))
+				span.SetAttributes(attribute.String(attrKeyErrorType, otelx.ErrorTypeName(err)))
 				span.RecordError(err, trace.WithTimestamp(time.Now()))
 				span.SetStatus(codes.Error, err.Error())
 			}
@@ -72,14 +70,4 @@ func (m *mw) Run(next agent.RunFunc, ctx context.Context, messages []*message.Me
 			}
 		}
 	}
-}
-
-// errorTypeName returns the short (unqualified) type name of err, matching
-// Python's type(exception).__name__ for cross-SDK parity on the error.type span attribute.
-func errorTypeName(err error) string {
-	t := fmt.Sprintf("%T", err)
-	if i := strings.LastIndexByte(t, '.'); i >= 0 {
-		t = t[i+1:]
-	}
-	return t
 }
