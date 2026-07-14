@@ -91,7 +91,7 @@ func (rb *RouteBuilder) AddHandlerRaw(messageType reflect.Type, outputType refle
 	if rb.err != nil {
 		return rb
 	}
-	if reflect.TypeOf(messageType) == reflect.TypeFor[PortableValue]() {
+	if messageType == reflect.TypeFor[PortableValue]() {
 		rb.err = errors.New("cannot register a handler for PortableValue. Use AddCatchAll() instead")
 		return rb
 	}

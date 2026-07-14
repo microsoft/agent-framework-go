@@ -5,6 +5,7 @@ package workflow
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -44,6 +45,20 @@ func TestMessageRouterRoutesAssignableInterfaceHandler(t *testing.T) {
 	}
 	if result.result != "handled" {
 		t.Fatalf("RouteMessage result = %v, want handled", result.result)
+	}
+}
+
+func TestAddHandlerRawRejectsPortableValue(t *testing.T) {
+	var rb RouteBuilder
+	rb.AddHandlerRaw(reflect.TypeFor[PortableValue](), nil, func(_ *Context, _ any) (any, error) {
+		return nil, nil
+	})
+	_, err := rb.build()
+	if err == nil {
+		t.Fatal("build() error = nil, want error rejecting a PortableValue handler")
+	}
+	if !strings.Contains(err.Error(), "PortableValue") {
+		t.Fatalf("build() error = %q, want mention of PortableValue", err)
 	}
 }
 
