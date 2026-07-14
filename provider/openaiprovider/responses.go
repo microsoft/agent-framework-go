@@ -327,21 +327,10 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 		switch tl := tl.(type) {
 		case tool.FuncTool:
 			name, description := tl.Name(), tl.Description()
-			var funcParams map[string]any
-			switch schema := tl.Schema().(type) {
-			case map[string]any:
-				funcParams = schema
-			default:
-				if schema == nil {
-					break
-				}
-				data, err := json.Marshal(schema)
-				if err == nil {
-					err = json.Unmarshal(data, &funcParams)
-				}
-				if err != nil {
-					return responses.ResponseNewParams{}, fmt.Errorf("failed to convert schema for function tool %q (type %T) to JSON format: %w", name, schema, err)
-				}
+			schema := tl.Schema()
+			funcParams, err := schemaToMap(schema)
+			if err != nil {
+				return responses.ResponseNewParams{}, fmt.Errorf("failed to convert schema for function tool %q (type %T) to JSON format: %w", name, schema, err)
 			}
 			params.Tools = append(params.Tools, responses.ToolUnionParam{
 				OfFunction: &responses.FunctionToolParam{

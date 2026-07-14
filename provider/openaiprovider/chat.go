@@ -308,21 +308,10 @@ func buildCompletionParams(model string, messages []*message.Message, opts []age
 			}
 		case tool.FuncTool:
 			name, description := tl.Name(), tl.Description()
-			var funcParams map[string]any
-			switch schema := tl.Schema().(type) {
-			case map[string]any:
-				funcParams = schema
-			default:
-				if schema == nil {
-					break
-				}
-				data, err := json.Marshal(schema)
-				if err == nil {
-					err = json.Unmarshal(data, &funcParams)
-				}
-				if err != nil {
-					return openai.ChatCompletionNewParams{}, fmt.Errorf("failed to convert function tool schema to JSON format: %w", err)
-				}
+			schema := tl.Schema()
+			funcParams, err := schemaToMap(schema)
+			if err != nil {
+				return openai.ChatCompletionNewParams{}, fmt.Errorf("failed to convert function tool schema to JSON format: %w", err)
 			}
 			params.Tools = append(params.Tools, openai.ChatCompletionToolUnionParam{
 				OfFunction: &openai.ChatCompletionFunctionToolParam{
