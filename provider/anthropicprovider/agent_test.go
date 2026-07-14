@@ -4,9 +4,11 @@ package anthropicprovider_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -118,6 +120,55 @@ func minimalStreamingResponse(payload string) string {
 		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}` + "\n\n" +
 		"event: message_stop\n" +
 		`data: {"type":"message_stop"}` + "\n\n"
+}
+
+func streamingToolCallResponse(events string) string {
+	return "" +
+		"event: message_start\n" +
+		`data: {"type":"message_start","message":{"id":"msg_tool01","type":"message","role":"assistant","content":[],"model":"claude-3-5-sonnet-20241022","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}` + "\n\n" +
+		events +
+		"event: message_delta\n" +
+		`data: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":5}}` + "\n\n" +
+		"event: message_stop\n" +
+		`data: {"type":"message_stop"}` + "\n\n"
+}
+
+func streamingToolStart(index int, callID, name string) string {
+	return "event: content_block_start\n" +
+		fmt.Sprintf(`data: {"type":"content_block_start","index":%d,"content_block":{"type":"tool_use","id":%q,"name":%q,"input":{}}}`, index, callID, name) + "\n\n"
+}
+
+func streamingToolDelta(index int, partialJSON string) string {
+	partial, _ := json.Marshal(partialJSON)
+	return "event: content_block_delta\n" +
+		fmt.Sprintf(`data: {"type":"content_block_delta","index":%d,"delta":{"type":"input_json_delta","partial_json":%s}}`, index, partial) + "\n\n"
+}
+
+func streamingToolStop(index int) string {
+	return "event: content_block_stop\n" +
+		fmt.Sprintf(`data: {"type":"content_block_stop","index":%d}`, index) + "\n\n"
+}
+
+func collectStreamingToolCalls(t *testing.T, events string) []*message.FunctionCallContent {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, streamingToolCallResponse(events))
+	}))
+	defer server.Close()
+
+	resp, err := newTestClient(t, server).RunText(t.Context(), "call tools", agent.Stream(true)).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var calls []*message.FunctionCallContent
+	for content := range resp.Contents() {
+		if call, ok := content.(*message.FunctionCallContent); ok {
+			calls = append(calls, call)
+		}
+	}
+	return calls
 }
 
 func TestConfigInstructions(t *testing.T) {
@@ -319,5 +370,88 @@ func TestStructuredOutput_Streaming(t *testing.T) {
 	}
 	if out.Age != 25 {
 		t.Errorf("out.Age = %d, want %d", out.Age, 25)
+	}
+}
+
+func TestStreamingToolCallArgumentsExcludeStartPlaceholder(t *testing.T) {
+	events := streamingToolStart(0, "toolu_01", "get_weather") +
+		streamingToolDelta(0, `{"city":`) +
+		streamingToolDelta(0, `"Seattle"}`) +
+		streamingToolStop(0)
+	calls := collectStreamingToolCalls(t, events)
+	if len(calls) != 1 {
+		t.Fatalf("function call count = %d, want 1", len(calls))
+	}
+	if calls[0].Arguments != `{"city":"Seattle"}` {
+		t.Errorf("arguments = %q, want %q", calls[0].Arguments, `{"city":"Seattle"}`)
+	}
+}
+
+func TestStreamingToolCallAccumulatesFragmentedArguments(t *testing.T) {
+	want := `{"name":"tool_value","count":1,"description":"fragmented arguments"}`
+	var events strings.Builder
+	events.WriteString(streamingToolStart(0, "toolu_fragmented", "fragmented_tool"))
+	for i := 0; i < len(want); i += 3 {
+		end := min(i+3, len(want))
+		events.WriteString(streamingToolDelta(0, want[i:end]))
+	}
+	events.WriteString(streamingToolStop(0))
+
+	calls := collectStreamingToolCalls(t, events.String())
+	if len(calls) != 1 {
+		t.Fatalf("function call count = %d, want 1", len(calls))
+	}
+	if calls[0].Arguments != want {
+		t.Errorf("arguments = %q, want %q", calls[0].Arguments, want)
+	}
+}
+
+func TestStreamingMultipleToolCallsAreNotDuplicated(t *testing.T) {
+	var events strings.Builder
+	for i, arg := range []string{"a", "b", "c"} {
+		events.WriteString(streamingToolStart(i, fmt.Sprintf("toolu_%d", i), fmt.Sprintf("tool_%s", arg)))
+		events.WriteString(streamingToolDelta(i, fmt.Sprintf(`{"arg":%q}`, arg)))
+		events.WriteString(streamingToolStop(i))
+	}
+
+	calls := collectStreamingToolCalls(t, events.String())
+	if len(calls) != 3 {
+		t.Fatalf("function call count = %d, want 3", len(calls))
+	}
+	for i, call := range calls {
+		want := fmt.Sprintf(`{"arg":%q}`, string(rune('a'+i)))
+		if call.Arguments != want {
+			t.Errorf("call %d arguments = %q, want %q", i, call.Arguments, want)
+		}
+	}
+}
+
+func TestStreamingToolCallsSupportInterleavedDeltas(t *testing.T) {
+	events := streamingToolStart(0, "toolu_alpha", "tool_alpha") +
+		streamingToolStart(1, "toolu_beta", "tool_beta") +
+		streamingToolStart(2, "toolu_gamma", "tool_gamma") +
+		streamingToolDelta(0, `{"city":`) +
+		streamingToolDelta(1, `{"query":`) +
+		streamingToolDelta(2, `{"id":`) +
+		streamingToolDelta(0, `"San Francisco"}`) +
+		streamingToolDelta(1, `"weather forecast"}`) +
+		streamingToolDelta(2, `123,"active":true}`) +
+		streamingToolStop(0) +
+		streamingToolStop(1) +
+		streamingToolStop(2)
+
+	calls := collectStreamingToolCalls(t, events)
+	if len(calls) != 3 {
+		t.Fatalf("function call count = %d, want 3", len(calls))
+	}
+	want := map[string]string{
+		"toolu_alpha": `{"city":"San Francisco"}`,
+		"toolu_beta":  `{"query":"weather forecast"}`,
+		"toolu_gamma": `{"id":123,"active":true}`,
+	}
+	for _, call := range calls {
+		if call.Arguments != want[call.CallID] {
+			t.Errorf("call %q arguments = %q, want %q", call.CallID, call.Arguments, want[call.CallID])
+		}
 	}
 }
