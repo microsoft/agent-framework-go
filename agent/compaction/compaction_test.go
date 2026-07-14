@@ -67,6 +67,42 @@ func TestMessageIndex_GroupsToolCallsAtomically(t *testing.T) {
 	}
 }
 
+func TestMessageIndex_SummaryPropertyKeyIsRespected(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    any
+		expected compaction.GroupKind
+	}{
+		{name: "missing", expected: compaction.GroupKindAssistantText},
+		{name: "bool false", value: false, expected: compaction.GroupKindAssistantText},
+		{name: "raw false", value: json.RawMessage(`false`), expected: compaction.GroupKindAssistantText},
+		{name: "raw null", value: json.RawMessage(`null`), expected: compaction.GroupKindAssistantText},
+		{name: "raw string", value: json.RawMessage(`"Unexpected string"`), expected: compaction.GroupKindAssistantText},
+		{name: "bool true", value: true, expected: compaction.GroupKindSummary},
+		{name: "raw true", value: json.RawMessage(`true`), expected: compaction.GroupKindSummary},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := textMessage(message.RoleAssistant, "Hello")
+			if tt.name != "missing" {
+				msg.AdditionalProperties = map[string]any{
+					"_is_summary": tt.value,
+				}
+			}
+
+			index := compaction.CreateMessageIndex([]*message.Message{msg}, nil)
+
+			if len(index.Groups) != 1 {
+				t.Fatalf("expected one group, got %d", len(index.Groups))
+			}
+			if got := index.Groups[0].Kind; got != tt.expected {
+				t.Fatalf("group kind = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestTruncationStrategy_ExcludesOldestGroups(t *testing.T) {
 	index := compaction.CreateMessageIndex(turnMessages(3), nil)
 	strategy := &compaction.TruncationStrategy{
