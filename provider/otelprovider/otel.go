@@ -108,7 +108,11 @@ func (m *mw) Run(next agent.RunFunc, ctx context.Context, messages []*message.Me
 // tokens should be distinguishable from one that reports none, and an attribute that
 // is always present but always zero trains people to ignore it.
 func setUsage(span trace.Span, usage message.UsageDetails) {
-	if usage.InputTokenCount == 0 && usage.OutputTokenCount == 0 && usage.TotalTokenCount == 0 {
+	// "Did we observe ANY usage?" -- and that must consider every counter, not just the
+	// three required ones. Guarding on input/output/total alone would silently drop the
+	// whole attribute set for a provider that reported only cached or reasoning tokens,
+	// which is the exact silent-drop this function exists to avoid.
+	if !hasUsage(usage) {
 		return
 	}
 
@@ -124,4 +128,15 @@ func setUsage(span trace.Span, usage message.UsageDetails) {
 		attrs = append(attrs, attribute.Int64(attrKeyUsageReasoningTokens, usage.ReasoningTokenCount))
 	}
 	span.SetAttributes(attrs...)
+}
+
+// hasUsage reports whether any counter was populated. UsageDetails carries a map
+// (AdditionalCounts) so it is not comparable with ==; the fields are checked directly.
+func hasUsage(u message.UsageDetails) bool {
+	return u.InputTokenCount != 0 ||
+		u.OutputTokenCount != 0 ||
+		u.TotalTokenCount != 0 ||
+		u.CachedInputTokenCount != 0 ||
+		u.ReasoningTokenCount != 0 ||
+		len(u.AdditionalCounts) > 0
 }

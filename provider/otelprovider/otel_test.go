@@ -678,8 +678,8 @@ func TestOtel_Run_RecordsTokenUsage(t *testing.T) {
 		t.Fatal("expected at least 1 span")
 	}
 	attrs := map[string]any{}
-	for _, a := range spans[len(spans)-1].Attributes {
-		attrs[string(a.Key)] = a.Value.AsInterface()
+	for _, attr := range spans[len(spans)-1].Attributes {
+		attrs[string(attr.Key)] = attr.Value.AsInterface()
 	}
 
 	for key, want := range map[string]int64{
@@ -724,9 +724,52 @@ func TestOtel_Run_NoUsageAttributesWhenProviderReportsNone(t *testing.T) {
 	if len(spans) == 0 {
 		t.Fatal("expected at least 1 span")
 	}
-	for _, a := range spans[len(spans)-1].Attributes {
-		if strings.HasPrefix(string(a.Key), "gen_ai.usage.") {
-			t.Fatalf("unexpected usage attribute %s on a run with no usage reported", a.Key)
+	for _, attr := range spans[len(spans)-1].Attributes {
+		if strings.HasPrefix(string(attr.Key), "gen_ai.usage.") {
+			t.Fatalf("unexpected usage attribute %s on a run with no usage reported", attr.Key)
 		}
+	}
+}
+
+// Regression for the guard bug caught in review: setUsage originally returned early when
+// input/output/total were all zero, which silently dropped the ENTIRE attribute set for a
+// provider that reported only cached (or only reasoning) tokens. "Did we see any usage?"
+// has to consider every counter, not just the three required ones.
+func TestOtel_Run_RecordsUsageWhenOnlyOptionalCountersReported(t *testing.T) {
+	exporter := setupTracer(t)
+
+	mw := otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{})
+	a := agent.New(agent.ProviderConfig{
+		ProviderName: "test-provider",
+		Run: func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			return func(yield func(*agent.ResponseUpdate, error) bool) {
+				yield(&agent.ResponseUpdate{
+					MessageID: "cached-only",
+					Contents: []message.Content{&message.UsageContent{
+						// Only a cached count. input/output/total all zero.
+						Details: message.UsageDetails{CachedInputTokenCount: 42},
+					}},
+				}, nil)
+			}
+		},
+	}, agent.Config{ID: "id", Name: "n", Middlewares: []agent.Middleware{mw}})
+
+	_, _ = a.RunMessage(t.Context(), message.NewText("test")).Collect()
+
+	spans := exporter.GetSpans()
+	if len(spans) == 0 {
+		t.Fatal("expected at least 1 span")
+	}
+	attrs := map[string]any{}
+	for _, attr := range spans[len(spans)-1].Attributes {
+		attrs[string(attr.Key)] = attr.Value.AsInterface()
+	}
+
+	got, ok := attrs["gen_ai.usage.cached_input_tokens"]
+	if !ok {
+		t.Fatal("cached_input_tokens was dropped when it was the only counter reported")
+	}
+	if got != int64(42) {
+		t.Fatalf("cached_input_tokens = %v, want 42", got)
 	}
 }
