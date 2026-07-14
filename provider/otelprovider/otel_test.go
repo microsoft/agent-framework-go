@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"iter"
+	"strings"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -626,5 +627,106 @@ func TestOtel_Run_RecordsMultipleErrors(t *testing.T) {
 
 	if errorCount != 2 {
 		t.Errorf("expected 2 exception events, got %d", errorCount)
+	}
+}
+
+func TestOtel_Run_RecordsTokenUsage(t *testing.T) {
+	exporter := setupTracer(t)
+
+	mw := otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{})
+
+	// Two updates, each carrying usage -- an agent that makes several LLM round-trips
+	// emits one UsageContent per round-trip. The span must report the SUM, not the last
+	// one, or a multi-turn agent under-reports what it actually spent.
+	a := agent.New(agent.ProviderConfig{
+		ProviderName: "test-provider",
+		Run: func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			return func(yield func(*agent.ResponseUpdate, error) bool) {
+				yield(&agent.ResponseUpdate{
+					MessageID: "turn-1",
+					Contents: []message.Content{&message.UsageContent{
+						Details: message.UsageDetails{
+							InputTokenCount:       100,
+							OutputTokenCount:      10,
+							TotalTokenCount:       110,
+							CachedInputTokenCount: 5,
+						},
+					}},
+				}, nil)
+				yield(&agent.ResponseUpdate{
+					MessageID: "turn-2",
+					Contents: []message.Content{&message.UsageContent{
+						Details: message.UsageDetails{
+							InputTokenCount:  200,
+							OutputTokenCount: 20,
+							TotalTokenCount:  220,
+						},
+					}},
+				}, nil)
+			}
+		},
+	}, agent.Config{
+		ID:          "test-agent-id",
+		Name:        "test-agent",
+		Middlewares: []agent.Middleware{mw},
+	})
+
+	_, _ = a.RunMessage(t.Context(), message.NewText("test")).Collect()
+
+	spans := exporter.GetSpans()
+	if len(spans) == 0 {
+		t.Fatal("expected at least 1 span")
+	}
+	attrs := map[string]any{}
+	for _, a := range spans[len(spans)-1].Attributes {
+		attrs[string(a.Key)] = a.Value.AsInterface()
+	}
+
+	for key, want := range map[string]int64{
+		"gen_ai.usage.input_tokens":        300, // 100 + 200
+		"gen_ai.usage.output_tokens":       30,  // 10 + 20
+		"gen_ai.usage.total_tokens":        330, // 110 + 220
+		"gen_ai.usage.cached_input_tokens": 5,
+	} {
+		got, ok := attrs[key]
+		if !ok {
+			t.Fatalf("span is missing %s", key)
+		}
+		if got != want {
+			t.Fatalf("%s = %v, want %d", key, got, want)
+		}
+	}
+
+	// A provider that reports no reasoning tokens must not get a zero-valued attribute:
+	// "absent" and "zero" mean different things, and an always-present always-zero
+	// attribute trains people to ignore it.
+	if _, ok := attrs["gen_ai.usage.reasoning_tokens"]; ok {
+		t.Fatal("reasoning_tokens should be omitted when the provider reports none")
+	}
+}
+
+func TestOtel_Run_NoUsageAttributesWhenProviderReportsNone(t *testing.T) {
+	exporter := setupTracer(t)
+
+	mw := otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{})
+	a := agent.New(agent.ProviderConfig{
+		ProviderName: "test-provider",
+		Run: func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			return func(yield func(*agent.ResponseUpdate, error) bool) {
+				yield(&agent.ResponseUpdate{MessageID: "no-usage"}, nil)
+			}
+		},
+	}, agent.Config{ID: "id", Name: "n", Middlewares: []agent.Middleware{mw}})
+
+	_, _ = a.RunMessage(t.Context(), message.NewText("test")).Collect()
+
+	spans := exporter.GetSpans()
+	if len(spans) == 0 {
+		t.Fatal("expected at least 1 span")
+	}
+	for _, a := range spans[len(spans)-1].Attributes {
+		if strings.HasPrefix(string(a.Key), "gen_ai.usage.") {
+			t.Fatalf("unexpected usage attribute %s on a run with no usage reported", a.Key)
+		}
 	}
 }
