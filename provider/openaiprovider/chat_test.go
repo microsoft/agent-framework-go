@@ -1503,7 +1503,9 @@ func TestChatEmptyChoices_NonStreaming(t *testing.T) {
             `
 	// Azure OpenAI returns HTTP 200 with an empty choices array when the
 	// prompt is blocked by a content filter; the response carries
-	// prompt_filter_results instead of choices.
+	// prompt_filter_results and usage instead of choices. This must be
+	// tolerated (no panic, no error) and surface the response metadata and
+	// usage, matching the streaming path and .NET behavior.
 	const output = `
             {
               "id": "chatcmpl-empty",
@@ -1511,6 +1513,11 @@ func TestChatEmptyChoices_NonStreaming(t *testing.T) {
               "created": 1727888631,
               "model": "gpt-4o-mini-2024-07-18",
               "choices": [],
+              "usage": {
+                "prompt_tokens": 12,
+                "completion_tokens": 0,
+                "total_tokens": 12
+              },
               "prompt_filter_results": [
                 {
                   "prompt_index": 0,
@@ -1527,11 +1534,20 @@ func TestChatEmptyChoices_NonStreaming(t *testing.T) {
 
 	a := newTestClient(server)
 
-	_, err := a.RunText(t.Context(), "hello").Collect()
-	if err == nil {
-		t.Fatal("expected error for chat completion response with no choices, got nil")
+	resp, err := a.RunText(t.Context(), "hello").Collect()
+	if err != nil {
+		t.Fatalf("expected no error for choice-less response, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "no choices") {
-		t.Errorf("error = %v, want mention of missing choices", err)
+	if got := resp.String(); got != "" {
+		t.Errorf("expected empty text for choice-less response, got %q", got)
+	}
+	if len(resp.Messages) != 1 {
+		t.Fatalf("expected 1 message carrying response metadata, got %d", len(resp.Messages))
+	}
+	if resp.Messages[0].ID != "chatcmpl-empty" {
+		t.Errorf("expected message ID chatcmpl-empty, got %q", resp.Messages[0].ID)
+	}
+	if usage := resp.Usage(); usage.InputTokenCount != 12 || usage.TotalTokenCount != 12 {
+		t.Errorf("expected usage input=12 total=12 to be surfaced, got %+v", usage)
 	}
 }
