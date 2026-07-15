@@ -540,20 +540,31 @@ func newScript(name string, fsys fs.FS, runner skills.ScriptRunner) skills.Scrip
 	return skills.Script{
 		Name:             name,
 		ParametersSchema: defaultFileScriptSchema,
-		Run: func(ctx context.Context, owner *skills.Skill, arguments []string) (any, error) {
-			if _, err := FSFromSkill(owner); err != nil {
-				return nil, fmt.Errorf("file-based script %q requires a skill with a backing fs.FS: %w", name, err)
-			}
-			if runner == nil {
-				return nil, fmt.Errorf("script %q cannot be executed because no file script runner was provided", name)
-			}
-			script := &skills.Script{Name: name}
-			return runner(ctx, owner, script, arguments)
-		},
+		Run:              newFileScriptRunFunc(name, runner),
 		AdditionalProperties: map[string]any{
 			"fsskills.scriptFS": fsys,
 		},
 	}
+}
+
+func newFileScriptRunFunc(name string, runner skills.ScriptRunner) func(context.Context, *skills.Skill, []string) (any, error) {
+	return func(ctx context.Context, owner *skills.Skill, arguments []string) (any, error) {
+		if err := requireFileSkill(name, owner); err != nil {
+			return nil, err
+		}
+		if runner == nil {
+			return nil, fmt.Errorf("script %q cannot be executed because no file script runner was provided", name)
+		}
+		script := &skills.Script{Name: name}
+		return runner(ctx, owner, script, arguments)
+	}
+}
+
+func requireFileSkill(scriptName string, skill *skills.Skill) error {
+	if _, err := FSFromSkill(skill); err != nil {
+		return fmt.Errorf("file-based script %q requires a skill with a backing fs.FS: %w", scriptName, err)
+	}
+	return nil
 }
 
 type discoveredSkillDir struct {
