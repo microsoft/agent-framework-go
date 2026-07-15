@@ -124,7 +124,6 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 		stream := a.client.Messages.NewStreaming(ctx, params)
 
 		var messageID string
-		var modelID string
 		var usage message.UsageDetails
 		var accumulated anthropic.Message
 
@@ -139,7 +138,6 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 			switch event := event.AsAny().(type) {
 			case anthropic.MessageStartEvent:
 				messageID = cmp.Or(messageID, event.Message.ID)
-				modelID = cmp.Or(modelID, event.Message.Model)
 				usage.Add(toUsageDetails(event.Message.Usage))
 			case anthropic.MessageDeltaEvent:
 				usage.Add(toUsageDetailsDelta(event.Usage))
