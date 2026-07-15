@@ -12,8 +12,10 @@ package agentmode
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"strings"
 	"sync"
+	"weak"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/message"
@@ -163,25 +165,43 @@ type Provider struct {
 	instructions string
 	validModes   map[string]struct{}
 
-	sessionLocks    sync.Map // map[sessionKey]*sync.Mutex
+	sessionLocks    sync.Map // map[weak.Pointer[agent.Session]]*sync.Mutex
 	nullSessionLock sync.Mutex
 }
 
-// getSessionLock returns a per-session mutex. If no session is available,
-// a shared lock is returned so state access is still serialized. This guards
-// the session state against concurrent tool invocations, which toolautocall
-// runs on separate goroutines when AllowConcurrentInvocations is enabled.
+// getSessionLock returns a per-session mutex that guards the session state
+// against concurrent tool invocations, which toolautocall runs on separate
+// goroutines when AllowConcurrentInvocations is enabled.
+//
+// The registry is keyed by session object identity via a weak pointer, not by
+// Session.ServiceID(): a service ID may be empty (causing unrelated sessions to
+// collide), shared across distinct sessions, or mutated during a session's
+// lifetime — any of which would break the guarantee that a given session always
+// maps to the same lock. When no session is available, a shared fallback lock is
+// returned so state access is still serialized.
+//
+// Weak keys do not keep sessions alive and do not remove map entries on their
+// own, so a runtime cleanup deletes the entry once the session is collected,
+// keeping the registry from growing unbounded.
 func (p *Provider) getSessionLock(opts []agent.Option) *sync.Mutex {
 	session, ok := agent.GetOption(opts, agent.WithSession)
-	if !ok {
+	if !ok || session == nil {
 		return &p.nullSessionLock
 	}
-	key := session.ServiceID()
-	if key == "" {
-		key = "_default"
+	key := weak.Make(session)
+	if existing, ok := p.sessionLocks.Load(key); ok {
+		return existing.(*sync.Mutex)
 	}
-	v, _ := p.sessionLocks.LoadOrStore(key, &sync.Mutex{})
-	return v.(*sync.Mutex)
+	actual, loaded := p.sessionLocks.LoadOrStore(key, &sync.Mutex{})
+	if !loaded {
+		// First registration for this session: arrange to drop the entry when
+		// the session is garbage collected. The cleanup must not capture the
+		// session itself (only the weak key), or it would keep it alive.
+		runtime.AddCleanup(session, func(k weak.Pointer[agent.Session]) {
+			p.sessionLocks.Delete(k)
+		}, key)
+	}
+	return actual.(*sync.Mutex)
 }
 
 func (p *Provider) Invoking(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
