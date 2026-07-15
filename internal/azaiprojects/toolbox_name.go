@@ -47,13 +47,6 @@ func validateToolboxName(name string) error {
 // isSafeToolboxSegment reports whether s is a single, intact URL path segment:
 // non-empty, not a "."/".." traversal segment, and free of the separators and
 // delimiters ("/", "\", "?", "#") that would move the request target.
-//
-// TODO(learning): implement this predicate. Consider:
-//   - the empty string and the traversal segments "." and ".." must be rejected;
-//   - a separator or delimiter anywhere in s ends the segment early or starts a
-//     new one — strings.ContainsAny with the set `/\?#` is the concise check;
-//   - keep it forgiving otherwise (":", "@", "~", or an interior dot are fine),
-//     so legitimate names are not blocked.
 func isSafeToolboxSegment(s string) bool {
 	if s == "" || s == "." || s == ".." {
 		return false
