@@ -48,11 +48,14 @@ const (
 	// stream -- so the numbers pass through here on their way to the caller and were
 	// simply never recorded. Token count is cost, and cost is the main reason to trace
 	// an agent at all.
-	attrKeyUsageInputTokens       = "gen_ai.usage.input_tokens"
-	attrKeyUsageOutputTokens      = "gen_ai.usage.output_tokens"
-	attrKeyUsageTotalTokens       = "gen_ai.usage.total_tokens"
-	attrKeyUsageCachedInputTokens = "gen_ai.usage.cached_input_tokens"
-	attrKeyUsageReasoningTokens   = "gen_ai.usage.reasoning_tokens"
+	//
+	// Names are the exact ids from the GenAI semantic-conventions registry. The registry
+	// namespaces the cache/reasoning counters (they are not `<x>_tokens`) and defines no
+	// total; do not infer these from the input/output shape.
+	attrKeyUsageInputTokens     = "gen_ai.usage.input_tokens"
+	attrKeyUsageOutputTokens    = "gen_ai.usage.output_tokens"
+	attrKeyUsageCacheReadTokens = "gen_ai.usage.cache_read.input_tokens"
+	attrKeyUsageReasoningTokens = "gen_ai.usage.reasoning.output_tokens"
 )
 
 type mw struct {
@@ -83,13 +86,9 @@ func (m *mw) Run(next agent.RunFunc, ctx context.Context, messages []*message.Me
 				span.RecordError(err, trace.WithTimestamp(time.Now()))
 				span.SetStatus(codes.Error, err.Error())
 			}
-			if update != nil {
-				for _, content := range update.Contents {
-					if u, ok := content.(*message.UsageContent); ok {
-						usage.Add(u.Details)
-					}
-				}
-			}
+			// update.Usage() sums this update's UsageContent (nil-safe), so accumulate
+			// its total into the run rather than iterating Contents by hand.
+			usage.Add(update.Usage())
 			if !yield(update, err) {
 				// Set what we have before bailing. A caller that stops reading early
 				// still ran (and paid for) the tokens counted so far, and a span that
@@ -116,13 +115,15 @@ func setUsage(span trace.Span, usage message.UsageDetails) {
 		return
 	}
 
+	// input + output are the only usage-token attributes the registry defines (no
+	// total); cache_read is a subset of input and reasoning a subset of output, so
+	// consumers sum rather than reading a provider-side total.
 	attrs := []attribute.KeyValue{
 		attribute.Int64(attrKeyUsageInputTokens, usage.InputTokenCount),
 		attribute.Int64(attrKeyUsageOutputTokens, usage.OutputTokenCount),
-		attribute.Int64(attrKeyUsageTotalTokens, usage.TotalTokenCount),
 	}
 	if usage.CachedInputTokenCount > 0 {
-		attrs = append(attrs, attribute.Int64(attrKeyUsageCachedInputTokens, usage.CachedInputTokenCount))
+		attrs = append(attrs, attribute.Int64(attrKeyUsageCacheReadTokens, usage.CachedInputTokenCount))
 	}
 	if usage.ReasoningTokenCount > 0 {
 		attrs = append(attrs, attribute.Int64(attrKeyUsageReasoningTokens, usage.ReasoningTokenCount))

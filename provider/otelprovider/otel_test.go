@@ -683,10 +683,9 @@ func TestOtel_Run_RecordsTokenUsage(t *testing.T) {
 	}
 
 	for key, want := range map[string]int64{
-		"gen_ai.usage.input_tokens":        300, // 100 + 200
-		"gen_ai.usage.output_tokens":       30,  // 10 + 20
-		"gen_ai.usage.total_tokens":        330, // 110 + 220
-		"gen_ai.usage.cached_input_tokens": 5,
+		"gen_ai.usage.input_tokens":            300, // 100 + 200
+		"gen_ai.usage.output_tokens":           30,  // 10 + 20
+		"gen_ai.usage.cache_read.input_tokens": 5,
 	} {
 		got, ok := attrs[key]
 		if !ok {
@@ -700,8 +699,8 @@ func TestOtel_Run_RecordsTokenUsage(t *testing.T) {
 	// A provider that reports no reasoning tokens must not get a zero-valued attribute:
 	// "absent" and "zero" mean different things, and an always-present always-zero
 	// attribute trains people to ignore it.
-	if _, ok := attrs["gen_ai.usage.reasoning_tokens"]; ok {
-		t.Fatal("reasoning_tokens should be omitted when the provider reports none")
+	if _, ok := attrs["gen_ai.usage.reasoning.output_tokens"]; ok {
+		t.Fatal("reasoning.output_tokens should be omitted when the provider reports none")
 	}
 }
 
@@ -765,11 +764,11 @@ func TestOtel_Run_RecordsUsageWhenOnlyOptionalCountersReported(t *testing.T) {
 		attrs[string(attr.Key)] = attr.Value.AsInterface()
 	}
 
-	got, ok := attrs["gen_ai.usage.cached_input_tokens"]
+	got, ok := attrs["gen_ai.usage.cache_read.input_tokens"]
 	if !ok {
-		t.Fatal("cached_input_tokens was dropped when it was the only counter reported")
+		t.Fatal("cache_read.input_tokens was dropped when it was the only counter reported")
 	}
 	if got != int64(42) {
-		t.Fatalf("cached_input_tokens = %v, want 42", got)
+		t.Fatalf("cache_read.input_tokens = %v, want 42", got)
 	}
 }
