@@ -124,30 +124,37 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 		stream := a.client.Messages.NewStreaming(ctx, params)
 
 		var messageID string
-		var modelID string
 		var usage message.UsageDetails
-		functions := make(map[int]*message.FunctionCallContent)
+		var accumulated anthropic.Message
 
 		for stream.Next() {
 			event := stream.Current()
+			if err := accumulated.Accumulate(event); err != nil {
+				yield(nil, err)
+				return
+			}
 
 			var contents []message.Content
 			switch event := event.AsAny().(type) {
 			case anthropic.MessageStartEvent:
 				messageID = cmp.Or(messageID, event.Message.ID)
-				modelID = cmp.Or(modelID, event.Message.Model)
 				usage.Add(toUsageDetails(event.Message.Usage))
 			case anthropic.MessageDeltaEvent:
 				usage.Add(toUsageDetailsDelta(event.Usage))
 			case anthropic.ContentBlockStartEvent:
-				contents = a.buildBlock(int(event.Index), event.ContentBlock.AsAny(), contents, functions)
+				block := event.ContentBlock.AsAny()
+				if _, isToolUse := block.(anthropic.ToolUseBlock); !isToolUse {
+					contents = a.buildBlock(int(event.Index), block, contents, nil)
+				}
 			case anthropic.ContentBlockDeltaEvent:
-				contents = a.buildDelta(int(event.Index), event.Delta.AsAny(), contents, functions)
+				contents = a.buildDelta(event.Delta.AsAny(), contents)
 			case anthropic.ContentBlockStopEvent:
-				indices := slices.Collect(maps.Keys(functions))
-				slices.Sort(indices)
-				for _, id := range indices {
-					contents = append(contents, functions[id])
+				if block, ok := accumulated.Content[event.Index].AsAny().(anthropic.ToolUseBlock); ok {
+					contents = append(contents, &message.FunctionCallContent{
+						CallID:    block.ID,
+						Name:      block.Name,
+						Arguments: string(block.Input),
+					})
 				}
 			}
 
@@ -250,7 +257,7 @@ func (a *client) buildBlock(index int, v any, contents []message.Content, functi
 	return contents
 }
 
-func (a *client) buildDelta(index int, v any, contents []message.Content, functions map[int]*message.FunctionCallContent) []message.Content {
+func (a *client) buildDelta(v any, contents []message.Content) []message.Content {
 	switch d := v.(type) {
 	case anthropic.TextDelta:
 		contents = append(contents, &message.TextContent{
@@ -259,10 +266,6 @@ func (a *client) buildDelta(index int, v any, contents []message.Content, functi
 				RawRepresentation: d,
 			},
 		})
-	case anthropic.InputJSONDelta:
-		if fnContent, ok := functions[index]; ok {
-			fnContent.Arguments += d.PartialJSON
-		}
 	case anthropic.ThinkingDelta:
 		contents = append(contents, &message.TextReasoningContent{
 			Text: d.Thinking,
