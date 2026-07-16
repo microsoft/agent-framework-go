@@ -127,6 +127,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 	}
 
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
+		var latestUsage *genai.GenerateContentResponseUsageMetadata
 		for resp, err := range a.client.Models.GenerateContentStream(ctx, a.config.Model, contents, cfg) {
 			if err != nil {
 				yield(nil, err)
@@ -145,10 +146,12 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 					}
 				}
 			}
+			// Gemini reports usageMetadata cumulatively across chunks, with the
+			// final chunk authoritative. Emitting a UsageContent per chunk would
+			// make the downstream Usage() aggregation sum the running totals, so
+			// remember the latest and emit it once after the stream ends.
 			if resp.UsageMetadata != nil {
-				streamContents = append(streamContents, &message.UsageContent{
-					Details: toUsageDetails(resp.UsageMetadata),
-				})
+				latestUsage = resp.UsageMetadata
 			}
 			if !yield(&agent.ResponseUpdate{
 				Contents:          streamContents,
@@ -158,6 +161,13 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 			}, nil) {
 				return
 			}
+		}
+		if latestUsage != nil {
+			yield(&agent.ResponseUpdate{
+				Contents:  []message.Content{&message.UsageContent{Details: toUsageDetails(latestUsage)}},
+				Role:      message.RoleAssistant,
+				CreatedAt: time.Now(),
+			}, nil)
 		}
 	}
 }
