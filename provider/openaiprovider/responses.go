@@ -827,6 +827,11 @@ func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func
 			currentUpdate.RawRepresentation = out
 			currentUpdate.Role = message.Role(out.Role)
 			currentUpdate.CreatedAt = time.Unix(int64(resp.CreatedAt), 0)
+			// Repopulate response-level properties: currentUpdate is reset to a
+			// fresh value for each output message after the first, which would
+			// otherwise drop AdditionalProperties (e.g. EndUserId) on the second
+			// and later messages.
+			currentUpdate.AdditionalProperties = responsesPopulateAdditionalProperties(resp)
 			for _, c := range out.Content {
 				switch c := c.AsAny().(type) {
 				case responses.ResponseOutputText:
