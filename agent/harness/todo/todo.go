@@ -137,13 +137,7 @@ func (p *Provider) GetRemainingItems(opts ...agent.Option) []Item {
 	mu.Lock()
 	defer mu.Unlock()
 	st := p.loadState(opts)
-	var remaining []Item
-	for _, item := range st.Items {
-		if !item.IsComplete {
-			remaining = append(remaining, item)
-		}
-	}
-	return remaining
+	return remainingItems(st.Items)
 }
 
 func (p *Provider) loadState(opts []agent.Option) *state {
@@ -313,13 +307,7 @@ func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
 			mu.Lock()
 			defer mu.Unlock()
 			st := p.loadState(opts)
-			var remaining []Item
-			for _, item := range st.Items {
-				if !item.IsComplete {
-					remaining = append(remaining, item)
-				}
-			}
-			return remaining, nil
+			return remainingItems(st.Items), nil
 		},
 	)
 
@@ -338,6 +326,16 @@ func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
 	)
 
 	return []tool.FuncTool{addTool, completeTool, removeTool, getRemainingTool, getAllTool}
+}
+
+func remainingItems(items []Item) []Item {
+	var remaining []Item
+	for _, item := range items {
+		if !item.IsComplete {
+			remaining = append(remaining, item)
+		}
+	}
+	return remaining
 }
 
 func formatTodoListMessage(items []Item) string {
