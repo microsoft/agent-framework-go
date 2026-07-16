@@ -37,7 +37,19 @@ func TestBuilder_ConditionalEdgeDoesNotDropIdempotentConditionlessEdge(t *testin
 	if err != nil {
 		t.Fatalf("unexpected build error: %v", err)
 	}
-	if wf == nil {
-		t.Fatal("expected a workflow")
+
+	// The idempotent conditionless edge must actually be present, not silently
+	// dropped by the poisoned dedup set: expect both a conditional and a
+	// conditionless edge from start.
+	var conditional, conditionless int
+	for _, e := range wf.Edges()["start"] {
+		if e.Condition == nil {
+			conditionless++
+		} else {
+			conditional++
+		}
+	}
+	if conditional != 1 || conditionless != 1 {
+		t.Fatalf("edges from start: conditional=%d conditionless=%d, want 1 and 1", conditional, conditionless)
 	}
 }
