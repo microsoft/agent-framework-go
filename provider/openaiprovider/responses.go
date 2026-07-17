@@ -760,6 +760,9 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 }
 
 func schemaToMap(schema any) (map[string]any, error) {
+	if schema == nil {
+		return nil, nil
+	}
 	if schemaMap, ok := schema.(map[string]any); ok {
 		return schemaMap, nil
 	}
