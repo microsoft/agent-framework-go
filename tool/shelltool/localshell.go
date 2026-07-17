@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -626,7 +627,7 @@ func (s resolvedShell) argvWithExtra(suffix []string) []string {
 	if len(s.extraArgv) == 0 {
 		return suffix
 	}
-	return append(append([]string{}, s.extraArgv...), suffix...)
+	return append(slices.Clone(s.extraArgv), suffix...)
 }
 
 func classifyShellKind(shell string) shellKind {
