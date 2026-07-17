@@ -67,7 +67,9 @@ func TestMessageIndex_GroupsToolCallsAtomically(t *testing.T) {
 	}
 }
 
-func TestMessageIndex_SummaryPropertyKeyIsRespected(t *testing.T) {
+func TestMessageIndex_SummaryPropertyValueParsing(t *testing.T) {
+	rawFalse := json.RawMessage(`false`)
+	rawTrue := json.RawMessage(`true`)
 	tests := []struct {
 		name     string
 		value    any
@@ -80,6 +82,12 @@ func TestMessageIndex_SummaryPropertyKeyIsRespected(t *testing.T) {
 		{name: "raw string", value: json.RawMessage(`"Unexpected string"`), expected: compaction.GroupKindAssistantText},
 		{name: "bool true", value: true, expected: compaction.GroupKindSummary},
 		{name: "raw true", value: json.RawMessage(`true`), expected: compaction.GroupKindSummary},
+		{name: "ptr raw nil", value: (*json.RawMessage)(nil), expected: compaction.GroupKindAssistantText},
+		{name: "ptr raw false", value: &rawFalse, expected: compaction.GroupKindAssistantText},
+		{name: "ptr raw true", value: &rawTrue, expected: compaction.GroupKindSummary},
+		{name: "bytes false", value: []byte(`false`), expected: compaction.GroupKindAssistantText},
+		{name: "bytes null", value: []byte(`null`), expected: compaction.GroupKindAssistantText},
+		{name: "bytes true", value: []byte(`true`), expected: compaction.GroupKindSummary},
 	}
 
 	for _, tt := range tests {
