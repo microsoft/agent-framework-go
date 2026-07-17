@@ -62,6 +62,12 @@ type SourceOptions struct {
 	// files within each skill directory. A value of 1 searches only the skill
 	// root; a value of 2 (the default) also searches one level of subdirectories.
 	// Values less than 1 are treated as the default.
+	//
+	// SearchDepth applies only to resource and script discovery within a skill
+	// directory. It does not affect the discovery of skill directories
+	// themselves (those containing a SKILL.md), which is bounded independently.
+	// This mirrors the .NET SDK, where the two concerns are configured
+	// separately.
 	SearchDepth int
 
 	// ResourceFilter is an optional predicate applied to each candidate resource
@@ -185,6 +191,11 @@ func discoverSkillDirectories(filesystems []fs.FS) []discoveredSkillDir {
 	return results
 }
 
+// searchForSkills locates skill directories (those containing a SKILL.md).
+// This discovery is intentionally bounded by defaultSearchDepth and is
+// independent of SourceOptions.SearchDepth, which governs only resource and
+// script discovery within an already-discovered skill directory. This matches
+// the .NET SDK, which bounds the two concerns separately.
 func searchForSkills(filesystem fs.FS, dir string, results *[]discoveredSkillDir, currentDepth int) {
 	skillPath := path.Join(dir, skillFileName)
 	if _, err := fs.Stat(filesystem, skillPath); err == nil {
