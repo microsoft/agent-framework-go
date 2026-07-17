@@ -167,7 +167,7 @@ func mergeResponseList(responses []*agent.Response) *agent.Response {
 		}
 		current.AgentID = cmp.Or(incoming.AgentID, current.AgentID)
 		current.AdditionalProperties = mergeProperties(current.AdditionalProperties, incoming.AdditionalProperties)
-		if !incoming.CreatedAt.IsZero() {
+		if !incoming.CreatedAt.IsZero() && (current.CreatedAt.IsZero() || incoming.CreatedAt.After(current.CreatedAt)) {
 			current.CreatedAt = incoming.CreatedAt
 		}
 		current.FinishReason = cmp.Or(incoming.FinishReason, current.FinishReason)

@@ -115,6 +115,26 @@ func TestMessageMerger_PreservesIdentifierlessMessageOrder(t *testing.T) {
 	}
 }
 
+func TestMessageMerger_StampsZeroCreatedAtWithMaxTimestamp(t *testing.T) {
+	responseID := "response"
+	older := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	newer := older.Add(time.Hour)
+
+	merger := newMessageMerger()
+	// message-1 has the newest timestamp; message-2 has no timestamp; message-3 is older.
+	// Without max-tracking, "last-wins" would stamp message-2 with `older` instead of `newer`.
+	addTextUpdate(merger, responseID, "first", "message-1", newer)
+	addTextUpdate(merger, responseID, "second", "message-2", time.Time{})
+	addTextUpdate(merger, responseID, "third", "message-3", older)
+
+	response := merger.ComputeMerged(responseID, "", "")
+
+	assertMessageTexts(t, response.Messages, "first", "second", "third")
+	if got := response.Messages[1].CreatedAt; !got.Equal(newer) {
+		t.Fatalf("zero-timestamp message stamped with %v, want max timestamp %v", got, newer)
+	}
+}
+
 func TestMessageMerger_SeparatesIdentifierlessSegments(t *testing.T) {
 	merger := newMessageMerger()
 	merger.AddUpdate(&agent.ResponseUpdate{
