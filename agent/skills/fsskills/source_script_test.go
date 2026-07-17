@@ -493,3 +493,35 @@ func TestFileSkill_ScriptContent_IncludesDefaultArraySchema(t *testing.T) {
 		t.Fatalf("expected JSON quotes to be preserved in schema content, got: %s", content)
 	}
 }
+
+// The runner-facing *Script must carry the same metadata as the discovered
+// Script (parameters schema and the fsskills.scriptFS backing FS), otherwise a
+// runner that inspects those fields to locate/execute the file sees empty values.
+func TestFileSource_Runner_ReceivesScriptMetadata(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "meta-skill", "Metadata test", "Body.")
+	createRelativeFile(t, filepath.Join(root, "meta-skill"), "scripts/test.py", "print('ok')")
+
+	var gotSchema string
+	var gotFS any
+	var hasFSKey bool
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: func(_ context.Context, _ *skills.Skill, script *skills.Script, _ []string) (any, error) {
+		gotSchema = script.ParametersSchema
+		gotFS, hasFSKey = script.AdditionalProperties["fsskills.scriptFS"]
+		return "ok", nil
+	}}, os.DirFS(root))
+
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loaded[0].Scripts[0].Run(t.Context(), loaded[0], nil); err != nil {
+		t.Fatal(err)
+	}
+	if gotSchema == "" {
+		t.Errorf("runner received empty ParametersSchema; want the discovered script's schema")
+	}
+	if !hasFSKey || gotFS == nil {
+		t.Errorf("runner received no fsskills.scriptFS in AdditionalProperties (hasKey=%v value=%v)", hasFSKey, gotFS)
+	}
+}
