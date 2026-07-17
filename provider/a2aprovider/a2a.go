@@ -90,27 +90,7 @@ func (a *a2aProvider) run(ctx context.Context, messages []*message.Message, opti
 				yield(nil, err)
 				return
 			}
-			taskIDs := make([]a2a.TaskID, 0, 1)
-			for _, taskID := range getTaskIDs(session) {
-				taskIDs = append(taskIDs, a2a.TaskID(taskID))
-			}
-			userMsg := a2a.NewMessage(a2a.MessageRoleUser, parts...)
-			if msg.ID != "" {
-				userMsg.ID = msg.ID
-			}
-			userMsg.ContextID = getContextID(session)
-			// When the task is waiting for user input (InputRequired), link the message
-			// directly to the task via TaskId so it is treated as input for that task.
-			// Otherwise, use ReferenceTasks to link as a follow-up.
-			// See: https://github.com/a2aproject/A2A/blob/main/docs/topics/life-of-a-task.md#task-refinements
-			if getLastTaskState(session) == a2a.TaskStateInputRequired && len(taskIDs) > 0 {
-				userMsg.TaskID = taskIDs[len(taskIDs)-1]
-			} else {
-				userMsg.ReferenceTasks = taskIDs
-			}
-			userMsg.Metadata = maps.Clone(msg.AdditionalProperties)
-
-			params := &a2a.SendMessageRequest{Message: userMsg}
+			params := &a2a.SendMessageRequest{Message: createA2AMessage(session, msg, parts)}
 			var seq iter.Seq2[a2a.Event, error]
 			if stream {
 				seq = a.client.SendStreamingMessage(ctx, params)
@@ -123,6 +103,26 @@ func (a *a2aProvider) run(ctx context.Context, messages []*message.Message, opti
 			sendMsg(session, seq, yield)
 		}
 	}
+}
+
+func createA2AMessage(session *agent.Session, msg *message.Message, parts a2a.ContentParts) *a2a.Message {
+	taskIDs := make([]a2a.TaskID, 0, 1)
+	for _, taskID := range getTaskIDs(session) {
+		taskIDs = append(taskIDs, a2a.TaskID(taskID))
+	}
+
+	a2aMessage := a2a.NewMessage(a2a.MessageRoleUser, parts...)
+	if msg.ID != "" {
+		a2aMessage.ID = msg.ID
+	}
+	a2aMessage.ContextID = getContextID(session)
+	if getLastTaskState(session) == a2a.TaskStateInputRequired && len(taskIDs) > 0 {
+		a2aMessage.TaskID = taskIDs[len(taskIDs)-1]
+	} else {
+		a2aMessage.ReferenceTasks = taskIDs
+	}
+	a2aMessage.Metadata = maps.Clone(msg.AdditionalProperties)
+	return a2aMessage
 }
 
 // subscribeToTaskWithFallback resumes a task stream for a continuation token.
