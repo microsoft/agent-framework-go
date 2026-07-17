@@ -626,9 +626,7 @@ func (s resolvedShell) argvWithExtra(suffix []string) []string {
 	if len(s.extraArgv) == 0 {
 		return suffix
 	}
-	argv := make([]string, 0, len(s.extraArgv)+len(suffix))
-	argv = append(argv, s.extraArgv...)
-	return append(argv, suffix...)
+	return append(append([]string{}, s.extraArgv...), suffix...)
 }
 
 func classifyShellKind(shell string) shellKind {
