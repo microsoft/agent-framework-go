@@ -575,3 +575,143 @@ func TestToolUseEmptyArgumentsSerializeAsObject(t *testing.T) {
 		t.Fatal("tool_use block for toolu_1 not found in request")
 	}
 }
+
+// --- Prompt caching (cache_control), BGB/PR #496 ----------------------------
+//
+// These are black-box wire-format tests: they mark content with the exported
+// WithCacheControl and assert the cache_control breakpoint on the captured
+// outbound request, exercising the public agent path rather than internals.
+// The exhaustive "every SDK union variant" invariant lives in
+// caching_internal_test.go, which is unreachable through the public API (the
+// message package produces only a handful of the SDK's block variants).
+
+// captureCacheRequest runs msgs through the agent against a stub server and
+// returns the outbound Anthropic request decoded as JSON.
+func captureCacheRequest(t *testing.T, msgs []*message.Message) map[string]any {
+	t.Helper()
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+		}
+		bodyCh <- body
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintln(w, `{"id":"msg","type":"message","role":"assistant","model":"m","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+	if _, err := a.Run(t.Context(), msgs).Collect(); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(<-bodyCh, &out); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	return out
+}
+
+// lastMessageContentBlocks returns the decoded content blocks of the final
+// request message.
+func lastMessageContentBlocks(t *testing.T, out map[string]any) []any {
+	t.Helper()
+	msgs, _ := out["messages"].([]any)
+	if len(msgs) == 0 {
+		t.Fatal("expected at least one message")
+	}
+	blocks, _ := msgs[len(msgs)-1].(map[string]any)["content"].([]any)
+	if len(blocks) == 0 {
+		t.Fatal("expected content blocks on the last message")
+	}
+	return blocks
+}
+
+// Opt-in, not default: an unmarked content must produce no cache_control anywhere.
+// A cache WRITE costs more than a plain input token, so caching must never turn
+// itself on and quietly raise the bill for a short single-turn agent.
+func TestCacheControl_AbsentWhenUnmarked(t *testing.T) {
+	msg := &message.Message{Role: message.RoleUser, Contents: []message.Content{
+		&message.TextContent{Text: "hi"},
+	}}
+	out := captureCacheRequest(t, []*message.Message{msg})
+	raw, _ := json.Marshal(out)
+	if strings.Contains(string(raw), "cache_control") {
+		t.Fatalf("cache_control present on an unmarked request:\n%s", raw)
+	}
+}
+
+// A text content marked with WithCacheControl must produce a cache_control
+// breakpoint on exactly the block built from it, defaulting to the 5-minute tier
+// (no ttl on the wire).
+func TestCacheControl_MarksTextBlock(t *testing.T) {
+	msg := &message.Message{Role: message.RoleUser, Contents: []message.Content{
+		anthropicprovider.WithCacheControl(&message.TextContent{Text: "cache me"}),
+	}}
+	out := captureCacheRequest(t, []*message.Message{msg})
+
+	blocks := lastMessageContentBlocks(t, out)
+	last, _ := blocks[len(blocks)-1].(map[string]any)
+	cc, ok := last["cache_control"].(map[string]any)
+	if !ok {
+		t.Fatalf("no cache_control on the marked text block: %v", last)
+	}
+	if cc["type"] != "ephemeral" {
+		t.Fatalf("cache_control type = %v, want ephemeral", cc["type"])
+	}
+	if _, present := cc["ttl"]; present {
+		t.Fatalf("default breakpoint should carry no ttl, got %v", cc["ttl"])
+	}
+}
+
+// TTL flows through: an explicit 1-hour marker lands ttl=1h on the wire, and the
+// explicit 5-minute tier is a distinct real value.
+func TestCacheControl_TTLFlowsThrough(t *testing.T) {
+	msg1h := &message.Message{Role: message.RoleUser, Contents: []message.Content{
+		anthropicprovider.WithCacheControl(&message.TextContent{Text: "an hour"}, anthropicprovider.WithTTL(anthropicprovider.Ephemeral1h)),
+	}}
+	out1h := captureCacheRequest(t, []*message.Message{msg1h})
+	blocks1h := lastMessageContentBlocks(t, out1h)
+	cc1h, _ := blocks1h[len(blocks1h)-1].(map[string]any)["cache_control"].(map[string]any)
+	if cc1h["ttl"] != "1h" {
+		t.Fatalf("cache_control ttl = %v, want 1h", cc1h["ttl"])
+	}
+
+	msg5m := &message.Message{Role: message.RoleUser, Contents: []message.Content{
+		anthropicprovider.WithCacheControl(&message.TextContent{Text: "five minutes"}, anthropicprovider.WithTTL(anthropicprovider.Ephemeral5m)),
+	}}
+	out5m := captureCacheRequest(t, []*message.Message{msg5m})
+	blocks5m := lastMessageContentBlocks(t, out5m)
+	cc5m, _ := blocks5m[len(blocks5m)-1].(map[string]any)["cache_control"].(map[string]any)
+	if cc5m["ttl"] != "5m" {
+		t.Fatalf("explicit 5m ttl = %v, want 5m", cc5m["ttl"])
+	}
+}
+
+// text and image blocks marked with WithCacheControl each carry the breakpoint on
+// the wire. (tool_use and tool_result variants, and every other SDK union variant,
+// are covered exhaustively by the internal union-coverage test.)
+func TestCacheControl_MarksUserBlockTypes(t *testing.T) {
+	cases := []struct {
+		name     string
+		content  message.Content
+		wantType string
+	}{
+		{"text", anthropicprovider.WithCacheControl(&message.TextContent{Text: "hi"}), "text"},
+		{"image", anthropicprovider.WithCacheControl(&message.DataContent{MediaType: "image/png", Data: "aGVsbG8="}), "image"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			msg := &message.Message{Role: message.RoleUser, Contents: []message.Content{tc.content}}
+			out := captureCacheRequest(t, []*message.Message{msg})
+			blocks := lastMessageContentBlocks(t, out)
+			last, _ := blocks[len(blocks)-1].(map[string]any)
+			if last["type"] != tc.wantType {
+				t.Fatalf("block type = %v, want %v", last["type"], tc.wantType)
+			}
+			if _, ok := last["cache_control"]; !ok {
+				t.Fatalf("no cache_control on the marked %s block: %v", tc.wantType, last)
+			}
+		})
+	}
+}

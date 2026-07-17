@@ -443,9 +443,14 @@ func buildMessageParam(msg *message.Message) (anthropic.MessageParam, error) {
 	var content []anthropic.ContentBlockParamUnion
 
 	for _, c := range msg.Contents {
+		var (
+			block anthropic.ContentBlockParamUnion
+			built bool
+		)
 		switch c := c.(type) {
 		case *message.TextContent:
-			content = append(content, anthropic.NewTextBlock(c.Text))
+			block = anthropic.NewTextBlock(c.Text)
+			built = true
 		case *message.FunctionCallContent:
 			// Parse the JSON string arguments into a map for Anthropic SDK
 			var args map[string]any
@@ -460,7 +465,8 @@ func buildMessageParam(msg *message.Message) (anthropic.MessageParam, error) {
 				// for a tool call with empty or absent arguments.
 				args = map[string]any{}
 			}
-			content = append(content, anthropic.NewToolUseBlock(c.CallID, args, c.Name))
+			block = anthropic.NewToolUseBlock(c.CallID, args, c.Name)
+			built = true
 		case *message.FunctionResultContent:
 			resStr := ""
 			switch r := c.Result.(type) {
@@ -479,16 +485,28 @@ func buildMessageParam(msg *message.Message) (anthropic.MessageParam, error) {
 					resStr = string(jsonBytes)
 				}
 			}
-			content = append(content, anthropic.NewToolResultBlock(c.CallID, resStr, c.Error != nil))
+			block = anthropic.NewToolResultBlock(c.CallID, resStr, c.Error != nil)
+			built = true
 		case *message.DataContent:
 			if c.TopLevelMediaType() == "image" {
 				mediaType := c.MediaType
 				if mediaType == "" {
 					mediaType = "image/jpeg"
 				}
-				content = append(content, anthropic.NewImageBlockBase64(mediaType, c.Data))
+				block = anthropic.NewImageBlockBase64(mediaType, c.Data)
+				built = true
 			}
 		}
+		if !built {
+			continue
+		}
+		// Opt-in cache_control: if the source content was marked via WithCacheControl,
+		// carry that breakpoint onto the block just built for it. A content with no marker
+		// is left untouched, so caching never turns itself on silently. This runs for every
+		// block type -- text, image, document, tool-use, tool-result -- because the marker
+		// lives on the message.Content, not on any particular Anthropic wire type.
+		applyContentCacheControl(c, &block)
+		content = append(content, block)
 	}
 
 	switch msg.Role {
