@@ -492,10 +492,8 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 				ret := funcResult.Result
 				if funcResult.Error != nil {
 					ret = funcResult.Error
-				} else if b, ok := ret.(json.RawMessage); ok {
-					ret = string(b)
 				}
-				messages = append(messages, openai.ToolMessage(fmt.Sprintf("%v", ret), funcResult.CallID))
+				messages = append(messages, openai.ToolMessage(toolResultText(ret), funcResult.CallID))
 			}
 		}
 		return messages, nil
@@ -503,6 +501,29 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 	default:
 		panic("unknown message role: " + string(msg.Role))
 	}
+}
+
+// toolResultText renders a function-tool result for the OpenAI wire format. A
+// non-string, non-raw result (e.g. a struct or map returned by a typed
+// functool) is JSON-encoded rather than rendered with Go's %v, which would send
+// an unparseable Go representation like "{Paris 20}" to the model.
+func toolResultText(ret any) string {
+	switch v := ret.(type) {
+	case nil:
+		return ""
+	case string:
+		return v
+	case json.RawMessage:
+		return string(v)
+	case []byte:
+		return string(v)
+	case error:
+		return v.Error()
+	}
+	if b, err := json.Marshal(ret); err == nil {
+		return string(b)
+	}
+	return fmt.Sprintf("%v", ret)
 }
 
 func addUsage(contents []message.Content, usage openai.CompletionUsage) []message.Content {

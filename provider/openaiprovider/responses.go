@@ -735,10 +735,11 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 						outputContent,
 					))
 				} else {
-					// Default case - convert to string
+					// Default case - convert to string (JSON-encode structured
+					// results rather than rendering them with Go's %v).
 					resp = append(resp, responses.ResponseInputItemParamOfFunctionCallOutput(
 						funcResult.CallID,
-						fmt.Sprintf("%v", ret),
+						toolResultText(ret),
 					))
 				}
 

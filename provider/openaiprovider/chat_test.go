@@ -1595,3 +1595,41 @@ func TestChatEmptyChoices_NonStreaming(t *testing.T) {
 		t.Errorf("expected usage input=12 total=12 to be surfaced, got %+v", usage)
 	}
 }
+
+// A structured (non-string) function-tool result — e.g. a struct returned by a
+// typed functool — must be JSON-encoded in the request, not rendered with Go's
+// %v, which would send an unparseable representation like "{Paris 20}" to the model.
+func TestChatToolResult_StructSerializedAsJSON_NonStreaming(t *testing.T) {
+	var captured string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		captured = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"x","object":"chat.completion","created":1,"model":"gpt-4o-mini","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
+	}))
+	defer server.Close()
+	a := newTestClient(server)
+
+	type weather struct {
+		City  string `json:"city"`
+		TempC int    `json:"temp_c"`
+	}
+	messages := []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "weather?"}}},
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			&message.FunctionCallContent{CallID: "c1", Name: "GetWeather", Arguments: "{}"},
+		}},
+		{Role: message.RoleTool, Contents: []message.Content{
+			&message.FunctionResultContent{CallID: "c1", Result: weather{City: "Paris", TempC: 20}},
+		}},
+	}
+	if _, err := a.Run(t.Context(), messages).Collect(); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if strings.Contains(captured, "{Paris 20}") {
+		t.Errorf("tool result rendered with Go %%v instead of JSON:\n%s", captured)
+	}
+	if !strings.Contains(captured, "temp_c") {
+		t.Errorf("tool result was not JSON-encoded (missing field temp_c):\n%s", captured)
+	}
+}
