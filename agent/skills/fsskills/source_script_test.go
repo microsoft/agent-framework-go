@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/microsoft/agent-framework-go/agent/skills"
 	"github.com/microsoft/agent-framework-go/agent/skills/fsskills"
@@ -491,5 +492,36 @@ func TestFileSkill_ScriptContent_IncludesDefaultArraySchema(t *testing.T) {
 	// Quotes in JSON schema should be preserved (not escaped as &quot;).
 	if strings.Contains(content, "&quot;") {
 		t.Fatalf("expected JSON quotes to be preserved in schema content, got: %s", content)
+	}
+}
+
+// On a case-sensitive filesystem, two files in the same skill directory that
+// differ only in case (e.g. Data.json and data.json) are distinct files and
+// must both be discovered. Deduping on a lowercased path collapsed them.
+func TestFileSource_CaseSensitiveFS_KeepsDistinctlyCasedFiles(t *testing.T) {
+	// fstest.MapFS keys are case-sensitive regardless of the host filesystem.
+	fsys := fstest.MapFS{
+		"case-skill/SKILL.md":  {Data: []byte("---\nname: case-skill\ndescription: d\n---\nbody")},
+		"case-skill/Data.json": {Data: []byte("A")},
+		"case-skill/data.json": {Data: []byte("B")},
+		"case-skill/Run.py":    {Data: []byte("A")},
+		"case-skill/run.py":    {Data: []byte("B")},
+	}
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
+		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) { return nil, nil },
+	}, fsys)
+
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
+	}
+	if got := len(loaded[0].Resources); got != 2 {
+		t.Errorf("expected 2 resources (Data.json + data.json) on a case-sensitive FS, got %d", got)
+	}
+	if got := len(loaded[0].Scripts); got != 2 {
+		t.Errorf("expected 2 scripts (Run.py + run.py) on a case-sensitive FS, got %d", got)
 	}
 }

@@ -443,11 +443,14 @@ func (s *Source) discoverResourceFiles(skillFS fs.FS, skillName string) []skills
 	seen := make(map[string]bool)
 	var resources []skills.Resource
 	s.scanForFiles(skillFS, ".", skillName, 1, s.allowedResourceExtensions, s.resourceFilter, "resource", func(filePath string) {
-		key := strings.ToLower(filePath)
-		if seen[key] {
+		// Dedup by the exact path (guards against the same file being visited
+		// twice), not a case-folded key, which would wrongly collapse two
+		// distinct files (e.g. Data.json and data.json) on a case-sensitive
+		// filesystem and silently drop one.
+		if seen[filePath] {
 			return
 		}
-		seen[key] = true
+		seen[filePath] = true
 		resources = append(resources, skills.Resource{
 			Name: filePath,
 			Read: func(context.Context) (any, error) {
@@ -466,11 +469,13 @@ func (s *Source) discoverScriptFiles(skillFS fs.FS, skillName string) []skills.S
 	seen := make(map[string]bool)
 	var scripts []skills.Script
 	s.scanForFiles(skillFS, ".", skillName, 1, s.allowedScriptExtensions, s.scriptFilter, "script", func(filePath string) {
-		key := strings.ToLower(filePath)
-		if seen[key] {
+		// Dedup by the exact path (not a case-folded key) so two distinct
+		// files differing only in case are both kept on a case-sensitive
+		// filesystem. See discoverResourceFiles for details.
+		if seen[filePath] {
 			return
 		}
-		seen[key] = true
+		seen[filePath] = true
 		scripts = append(scripts, newScript(filePath, skillFS, s.scriptRunner))
 	})
 	return scripts
