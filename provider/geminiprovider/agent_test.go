@@ -793,12 +793,22 @@ func TestResponseWithEmptyThoughtPartOmitted(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	var foundText string
 	for _, msg := range result.Messages {
 		for _, c := range msg.Contents {
-			if rc, ok := c.(*message.TextReasoningContent); ok {
-				t.Errorf("expected no reasoning content for an empty thought part, got Text=%q ProtectedData=%q", rc.Text, rc.ProtectedData)
+			switch content := c.(type) {
+			case *message.TextReasoningContent:
+				t.Errorf("expected no reasoning content for an empty thought part, got Text=%q ProtectedData=%q", content.Text, content.ProtectedData)
+			case *message.TextContent:
+				foundText += content.Text
 			}
 		}
+	}
+	// The normal (non-thought) text part must still be emitted; asserting it
+	// guards against a regression that drops all parts rather than just the
+	// empty thought.
+	if foundText != "The answer is 42." {
+		t.Errorf("text content = %q, want %q", foundText, "The answer is 42.")
 	}
 }
 
