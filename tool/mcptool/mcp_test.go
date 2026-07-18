@@ -928,3 +928,43 @@ func connectInMemory(t *testing.T, ctx context.Context, server *mcp.Server) *mcp
 	t.Cleanup(func() { _ = clientSession.Close() })
 	return clientSession
 }
+
+// A tool exposed via AddTool may return a typed-nil message.Content (e.g. a
+// (*message.ErrorContent)(nil)). Converting that to an MCP result must not
+// panic the server handler; it degrades to a "null" text result.
+func TestAddToolTypedNilContentDoesNotPanic(t *testing.T) {
+	ctx := context.Background()
+	server := mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "1.0.0"}, nil)
+	mcptool.AddTool(server, stubFuncTool{
+		name:        "typednil",
+		description: "returns a typed-nil content",
+		schema:      map[string]any{"type": "object"},
+		call: func(context.Context, string) (any, error) {
+			var ec *message.ErrorContent
+			return ec, nil // typed-nil message.Content
+		},
+	})
+
+	session := connectInMemory(t, ctx, server)
+	tools, err := mcptool.ListTools(ctx, session)
+	if err != nil {
+		t.Fatalf("ListTools() error = %v", err)
+	}
+	funcTool, ok := tools[0].(tool.FuncTool)
+	if !ok {
+		t.Fatalf("listed tool is %T, want tool.FuncTool", tools[0])
+	}
+
+	result, err := funcTool.Call(ctx, `{}`) // must not panic or error
+	if err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+	contents, ok := result.([]message.Content)
+	if !ok || len(contents) != 1 {
+		t.Fatalf("Call() result = %#v, want one content item", result)
+	}
+	text, ok := contents[0].(*message.TextContent)
+	if !ok || !strings.Contains(text.Text, "null") {
+		t.Fatalf("content = %#v, want a TextContent containing \"null\"", contents[0])
+	}
+}

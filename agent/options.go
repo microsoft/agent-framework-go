@@ -82,7 +82,11 @@ func AllOptions[T any](opts []Option, setter func(T) Option) iter.Seq[T] {
 			if reflect.TypeOf(opt) == setterType {
 				v, ok := opt.Value().(T)
 				if !ok {
-					panic("option type mismatch")
+					// Skip an option whose value is absent for T (e.g. a
+					// WithTool(nil) whose Value() is a nil tool.Tool), mirroring
+					// GetOption's graceful (zero, false) handling rather than
+					// panicking and aborting the entire collection.
+					continue
 				}
 				if !yield(v) {
 					return

@@ -324,33 +324,45 @@ func isJSONObject(data []byte) bool {
 }
 
 func agentContentToMCPContent(contentValue message.Content) mcp.Content {
-	switch contentValue := contentValue.(type) {
+	// Each case returns only for a non-nil concrete value. A typed-nil pointer
+	// (e.g. a tool returning (*message.ErrorContent)(nil)) still satisfies the
+	// message.Content interface, so it would otherwise reach a field
+	// dereference below and panic; instead it falls through to the JSON
+	// fallback, where a typed-nil pointer marshals to "null".
+	switch c := contentValue.(type) {
 	case *message.TextContent:
-		return &mcp.TextContent{Text: contentValue.Text}
-	case *message.ErrorContent:
-		return &mcp.TextContent{Text: contentValue.Message}
-	case *message.DataContent:
-		data, err := base64.StdEncoding.DecodeString(contentValue.Data)
-		if err != nil {
-			return &mcp.TextContent{Text: fmt.Sprintf("[Invalid data content: %v]", err)}
+		if c != nil {
+			return &mcp.TextContent{Text: c.Text}
 		}
-		switch contentValue.TopLevelMediaType() {
-		case "image":
-			return &mcp.ImageContent{Data: data, MIMEType: contentValue.MediaType}
-		case "audio":
-			return &mcp.AudioContent{Data: data, MIMEType: contentValue.MediaType}
-		default:
-			return &mcp.EmbeddedResource{Resource: &mcp.ResourceContents{
-				URI:      contentValue.Name,
-				MIMEType: contentValue.MediaType,
-				Blob:     data,
-			}}
+	case *message.ErrorContent:
+		if c != nil {
+			return &mcp.TextContent{Text: c.Message}
+		}
+	case *message.DataContent:
+		if c != nil {
+			data, err := base64.StdEncoding.DecodeString(c.Data)
+			if err != nil {
+				return &mcp.TextContent{Text: fmt.Sprintf("[Invalid data content: %v]", err)}
+			}
+			switch c.TopLevelMediaType() {
+			case "image":
+				return &mcp.ImageContent{Data: data, MIMEType: c.MediaType}
+			case "audio":
+				return &mcp.AudioContent{Data: data, MIMEType: c.MediaType}
+			default:
+				return &mcp.EmbeddedResource{Resource: &mcp.ResourceContents{
+					URI:      c.Name,
+					MIMEType: c.MediaType,
+					Blob:     data,
+				}}
+			}
 		}
 	case *message.URIContent:
-		return &mcp.ResourceLink{URI: contentValue.URI, MIMEType: contentValue.MediaType}
-	default:
-		return &mcp.TextContent{Text: jsonText(contentValue)}
+		if c != nil {
+			return &mcp.ResourceLink{URI: c.URI, MIMEType: c.MediaType}
+		}
 	}
+	return &mcp.TextContent{Text: jsonText(contentValue)}
 }
 
 var (
