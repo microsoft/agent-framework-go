@@ -208,32 +208,8 @@ func prepareInbound(messages []*message.Message, st state) ([]*message.Message, 
 	for i, msg := range messages {
 		var hasApproval bool
 		for _, c := range msg.Contents {
-			switch resp := c.(type) {
-			case *message.AlwaysApproveToolApprovalResponseContent:
+			if collectInboundApproval(&st, c) {
 				hasApproval = true
-				if resp.InnerResponse != nil {
-					if fc, ok := resp.InnerResponse.ToolCall.(*message.FunctionCallContent); ok && fc != nil {
-						if resp.AlwaysApproveTool {
-							addRuleIfNotExists(&st, Rule{ToolName: fc.Name})
-						} else if resp.AlwaysApproveToolWithArguments {
-							args, err := serializeArguments(fc.Arguments)
-							if err != nil {
-								// If we can't parse the arguments, skip adding a rule.
-								break
-							}
-							addRuleIfNotExists(&st, Rule{
-								ToolName:  fc.Name,
-								Arguments: args,
-							})
-						}
-					}
-				}
-				if resp.InnerResponse != nil {
-					st.CollectedApprovalResponses = append(st.CollectedApprovalResponses, resp.InnerResponse)
-				}
-			case *message.ToolApprovalResponseContent:
-				hasApproval = true
-				st.CollectedApprovalResponses = append(st.CollectedApprovalResponses, resp)
 			}
 		}
 		if hasApproval {
@@ -244,10 +220,7 @@ func prepareInbound(messages []*message.Message, st state) ([]*message.Message, 
 			// Strip approval contents from the message, keep the rest.
 			var remaining []message.Content
 			for _, c := range msg.Contents {
-				if _, ok := c.(*message.ToolApprovalResponseContent); ok {
-					continue
-				}
-				if _, ok := c.(*message.AlwaysApproveToolApprovalResponseContent); ok {
+				if isInboundApprovalContent(c) {
 					continue
 				}
 				if c != nil {
@@ -267,6 +240,48 @@ func prepareInbound(messages []*message.Message, st state) ([]*message.Message, 
 		return cleaned, st
 	}
 	return messages, st
+}
+
+func collectInboundApproval(st *state, c message.Content) bool {
+	switch resp := c.(type) {
+	case *message.AlwaysApproveToolApprovalResponseContent:
+		collectAlwaysApproveResponse(st, resp)
+		return true
+	case *message.ToolApprovalResponseContent:
+		st.CollectedApprovalResponses = append(st.CollectedApprovalResponses, resp)
+		return true
+	default:
+		return false
+	}
+}
+
+func collectAlwaysApproveResponse(st *state, resp *message.AlwaysApproveToolApprovalResponseContent) {
+	if resp.InnerResponse == nil {
+		return
+	}
+	if fc, ok := resp.InnerResponse.ToolCall.(*message.FunctionCallContent); ok && fc != nil {
+		if resp.AlwaysApproveTool {
+			addRuleIfNotExists(st, Rule{ToolName: fc.Name})
+		} else if resp.AlwaysApproveToolWithArguments {
+			args, err := serializeArguments(fc.Arguments)
+			if err == nil {
+				addRuleIfNotExists(st, Rule{
+					ToolName:  fc.Name,
+					Arguments: args,
+				})
+			}
+		}
+	}
+	st.CollectedApprovalResponses = append(st.CollectedApprovalResponses, resp.InnerResponse)
+}
+
+func isInboundApprovalContent(c message.Content) bool {
+	switch c.(type) {
+	case *message.AlwaysApproveToolApprovalResponseContent, *message.ToolApprovalResponseContent:
+		return true
+	default:
+		return false
+	}
 }
 
 // drainAutoApprovable removes queued requests that now match a standing rule,
