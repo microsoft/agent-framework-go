@@ -763,6 +763,45 @@ func TestFunctionResultMissingCallID(t *testing.T) {
 	}
 }
 
+// TestResponseWithEmptyThoughtPartOmitted verifies that a thought part carrying
+// neither text nor a signature does not produce an empty TextReasoningContent.
+func TestResponseWithEmptyThoughtPartOmitted(t *testing.T) {
+	resp := map[string]any{
+		"candidates": []any{
+			map[string]any{
+				"content": map[string]any{
+					"role": "model",
+					"parts": []any{
+						map[string]any{"thought": true}, // empty thought: no text, no signature
+						map[string]any{"text": "The answer is 42."},
+					},
+				},
+				"finishReason": "STOP",
+			},
+		},
+		"usageMetadata": map[string]any{"promptTokenCount": 10, "candidatesTokenCount": 15, "totalTokenCount": 25},
+	}
+	respBody, _ := json.Marshal(resp)
+
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "application/json", string(respBody)))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	result, err := a.RunText(t.Context(), "hi").Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for _, msg := range result.Messages {
+		for _, c := range msg.Contents {
+			if rc, ok := c.(*message.TextReasoningContent); ok {
+				t.Errorf("expected no reasoning content for an empty thought part, got Text=%q ProtectedData=%q", rc.Text, rc.ProtectedData)
+			}
+		}
+	}
+}
+
 // TestResponseWithThinkingContent verifies that response parts with thought=true
 // are translated into TextReasoningContent.
 func TestResponseWithThinkingContent(t *testing.T) {
@@ -1592,7 +1631,8 @@ func TestGenerateContentConfigOption(t *testing.T) {
 	temp := float32(0.5)
 	topP := float32(0.9)
 	topK := float32(20)
-	_, err := a.RunText(t.Context(), "Test",
+	_, err := a.RunText(
+		t.Context(), "Test",
 		geminiprovider.GenerateContentConfig(genai.GenerateContentConfig{
 			Temperature:     &temp,
 			TopP:            &topP,
