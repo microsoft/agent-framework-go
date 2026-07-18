@@ -283,8 +283,15 @@ func selectedTargetIDs(edge workflow.Edge, envelope *MessageEnvelope) []string {
 	targetIDs := edge.Connection.SinkIDs
 	if edge.Assigner != nil {
 		targetIDs = make([]string, 0, len(edge.Connection.SinkIDs))
-		for id := range edge.Assigner(len(edge.Connection.SinkIDs), envelope.Message) {
-			targetIDs = append(targetIDs, edge.Connection.SinkIDs[id])
+		// Assigner is caller-supplied (WithEdgeAssigner). Guard against both a
+		// nil sequence (ranging over a nil iter.Seq panics) and out-of-range
+		// indices, so a misbehaving assigner cannot crash the workflow runtime.
+		if seq := edge.Assigner(len(edge.Connection.SinkIDs), envelope.Message); seq != nil {
+			for id := range seq {
+				if id >= 0 && id < len(edge.Connection.SinkIDs) {
+					targetIDs = append(targetIDs, edge.Connection.SinkIDs[id])
+				}
+			}
 		}
 	}
 	if envelope.TargetID == "" {
