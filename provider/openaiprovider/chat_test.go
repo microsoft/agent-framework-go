@@ -1600,10 +1600,10 @@ func TestChatEmptyChoices_NonStreaming(t *testing.T) {
 // typed functool — must be JSON-encoded in the request, not rendered with Go's
 // %v, which would send an unparseable representation like "{Paris 20}" to the model.
 func TestChatToolResult_StructSerializedAsJSON_NonStreaming(t *testing.T) {
-	var captured string
+	capturedCh := make(chan string, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
-		captured = string(b)
+		capturedCh <- string(b)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"id":"x","object":"chat.completion","created":1,"model":"gpt-4o-mini","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
 	}))
@@ -1626,6 +1626,7 @@ func TestChatToolResult_StructSerializedAsJSON_NonStreaming(t *testing.T) {
 	if _, err := a.Run(t.Context(), messages).Collect(); err != nil {
 		t.Fatalf("run: %v", err)
 	}
+	captured := <-capturedCh
 	if strings.Contains(captured, "{Paris 20}") {
 		t.Errorf("tool result rendered with Go %%v instead of JSON:\n%s", captured)
 	}
