@@ -59,7 +59,8 @@ func NewResponsesAgent(oclient openai.Client, config AgentConfig) *agent.Agent {
 			Middlewares:  providerMiddlewares,
 			Format:       c.formatOf,
 			Unmarshal:    c.unmarshal,
-		}, config.Config)
+		}, config.Config,
+	)
 }
 
 type responsesClient struct {
@@ -1030,6 +1031,22 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 		u.AdditionalProperties = responsesPopulateAdditionalProperties(&event.Response)
 		if contToken := createContinuationToken(event.Response.ID, event.SequenceNumber, event.Response.Status, isBackground); contToken != "" {
 			u.ContinuationToken = contToken
+		}
+
+	case responses.ResponseFailedEvent:
+		// A failed response carries its error on the response object rather than
+		// as a top-level ResponseErrorEvent; surface it as ErrorContent instead
+		// of letting it fall through to the default (empty) update.
+		u = createUpdate(message.RoleAssistant, nil)
+		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
+		u.ResponseID = event.Response.ID
+		u.FinishReason = responsesFinishReason(&event.Response)
+		u.AdditionalProperties = responsesPopulateAdditionalProperties(&event.Response)
+		if event.Response.Error.Message != "" {
+			u.Contents = []message.Content{&message.ErrorContent{
+				Message:   event.Response.Error.Message,
+				ErrorCode: string(event.Response.Error.Code),
+			}}
 		}
 
 	case responses.ResponseTextDeltaEvent:

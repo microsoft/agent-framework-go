@@ -5546,3 +5546,47 @@ func responsesBodyEqual(t *testing.T, got string, want string) {
 		t.Errorf("body\ngot %s\nwant %s", gotOut, wantOut)
 	}
 }
+
+// TestResponsesStreamingFailedResponseSurfacesError verifies that a streamed
+// response.failed event surfaces its error as ErrorContent rather than an
+// empty update.
+func TestResponsesStreamingFailedResponseSurfacesError(t *testing.T) {
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"test"}]}],
+                "stream":true
+            }
+            `
+	const output = `event: response.created
+data: {"type":"response.created","response":{"id":"resp_001","object":"response","created_at":1741892091,"status":"in_progress","model":"gpt-4o-mini","output":[]}}
+
+event: response.failed
+data: {"type":"response.failed","response":{"id":"resp_001","object":"response","created_at":1741892091,"status":"failed","model":"gpt-4o-mini","output":[],"error":{"code":"server_error","message":"Internal error"}}}
+
+`
+	server := newTestResponsesServerStreaming(t, input, output)
+	defer server.Close()
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	var errContent *message.ErrorContent
+	for update, err := range a.RunText(t.Context(), "test", agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("error = %v", err)
+		}
+		for _, c := range update.Contents {
+			if ec, ok := c.(*message.ErrorContent); ok {
+				errContent = ec
+			}
+		}
+	}
+	if errContent == nil {
+		t.Fatal("expected an ErrorContent for the failed response, got none")
+	}
+	if errContent.Message != "Internal error" {
+		t.Errorf("error message = %q, want %q", errContent.Message, "Internal error")
+	}
+	if errContent.ErrorCode != "server_error" {
+		t.Errorf("error code = %q, want %q", errContent.ErrorCode, "server_error")
+	}
+}
