@@ -23,7 +23,10 @@ type Map[K, V any] struct {
 	// entries maps each key hash to the bucket of entries sharing that hash.
 	// Buckets disambiguate hash collisions via the Hasher's Equal method.
 	entries map[uint64][]entry[K, V]
-	h       Hasher[K]
+	// count is the total number of entries across all buckets, kept so Len is
+	// O(1) rather than summing bucket lengths.
+	count int
+	h     Hasher[K]
 }
 
 // NewMap returns a new mapping.
@@ -62,15 +65,20 @@ func (m *Map[K, V]) Load(key K) (V, bool) {
 func (m *Map[K, V]) Delete(key K) bool {
 	hash := m.h.Hash(key)
 	bucket := m.entries[hash]
-	for i, entry := range bucket {
-		if !m.h.Equal(entry.key, key) {
+	for i, e := range bucket {
+		if !m.h.Equal(e.key, key) {
 			continue
 		}
 		if len(bucket) == 1 {
 			delete(m.entries, hash)
 		} else {
-			m.entries[hash] = append(bucket[:i], bucket[i+1:]...)
+			// Shift the tail down and clear the vacated slot so the removed
+			// entry's key/value are not retained by the backing array.
+			copy(bucket[i:], bucket[i+1:])
+			bucket[len(bucket)-1] = entry[K, V]{}
+			m.entries[hash] = bucket[:len(bucket)-1]
 		}
+		m.count--
 		return true
 	}
 	return false
@@ -104,11 +112,7 @@ func (m *Map[K, V]) Values() iter.Seq[V] {
 
 // Len returns the number of map entries.
 func (m *Map[K, V]) Len() int {
-	n := 0
-	for _, bucket := range m.entries {
-		n += len(bucket)
-	}
-	return n
+	return m.count
 }
 
 // Set updates the map entry for key to value, and returns the previous entry, if any.
@@ -123,11 +127,13 @@ func (m *Map[K, V]) Set(key K, value V) (prev V) {
 		}
 	}
 	m.entries[hash] = append(bucket, entry[K, V]{key, value})
+	m.count++
 	return prev
 }
 
 func (m *Map[K, V]) Clear() {
 	clear(m.entries)
+	m.count = 0
 }
 
 // String returns a string representation of the map's entries in unspecified order.
