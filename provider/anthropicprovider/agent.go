@@ -448,6 +448,12 @@ func buildMessageParam(msg *message.Message) (anthropic.MessageParam, error) {
 					return anthropic.MessageParam{}, fmt.Errorf("failed to unmarshal tool arguments: %w", err)
 				}
 			}
+			if args == nil {
+				// Anthropic requires a tool_use block's input to be an object; a
+				// nil map serializes to null (rejected by the API), so send {}
+				// for a tool call with empty or absent arguments.
+				args = map[string]any{}
+			}
 			content = append(content, anthropic.NewToolUseBlock(c.CallID, args, c.Name))
 		case *message.FunctionResultContent:
 			resStr := ""

@@ -34,7 +34,8 @@ func newTestClient(t *testing.T, server *httptest.Server) *agent.Agent {
 		anthropicprovider.AgentConfig{
 			Model:  "claude-3-5-sonnet-20241022",
 			Config: agent.Config{DisableFuncAutoCall: true},
-		})
+		},
+	)
 }
 
 // nestedKey traverses a decoded JSON map following the given path of keys and
@@ -197,7 +198,8 @@ func TestConfigInstructions(t *testing.T) {
 			Config: agent.Config{
 				DisableFuncAutoCall: true,
 			},
-		})
+		},
+	)
 
 	if _, err := a.RunText(t.Context(), "hi").Collect(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -453,5 +455,76 @@ func TestStreamingToolCallsSupportInterleavedDeltas(t *testing.T) {
 		if call.Arguments != want[call.CallID] {
 			t.Errorf("call %q arguments = %q, want %q", call.CallID, call.Arguments, want[call.CallID])
 		}
+	}
+}
+
+// A tool call with empty Arguments must serialize to an object input ({}), not
+// null: Anthropic rejects a tool_use block whose input is null.
+func TestToolUseEmptyArgumentsSerializeAsObject(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		bodyCh <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, minimalMessageResponse("ok"))
+	}))
+	defer server.Close()
+
+	a := anthropicprovider.NewAgent(
+		anthropic.NewClient(option.WithBaseURL(server.URL), option.WithAPIKey("test")),
+		anthropicprovider.AgentConfig{
+			Model:  "claude-3-5-sonnet-20241022",
+			Config: agent.Config{DisableFuncAutoCall: true},
+		},
+	)
+
+	msgs := []*message.Message{
+		{Role: message.RoleUser, Contents: message.Contents{&message.TextContent{Text: "what time is it?"}}},
+		{Role: message.RoleAssistant, Contents: message.Contents{&message.FunctionCallContent{CallID: "toolu_1", Name: "get_time", Arguments: ""}}},
+		{Role: message.RoleTool, Contents: message.Contents{&message.FunctionResultContent{CallID: "toolu_1", Result: "12:00"}}},
+	}
+	if _, err := a.Run(t.Context(), msgs).Collect(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	messages, ok := req["messages"].([]any)
+	if !ok {
+		t.Fatalf("request messages = %#v, want a JSON array", req["messages"])
+	}
+	found := false
+	for _, m := range messages {
+		msg, ok := m.(map[string]any)
+		if !ok {
+			continue
+		}
+		blocks, ok := msg["content"].([]any)
+		if !ok {
+			continue
+		}
+		for _, b := range blocks {
+			block, ok := b.(map[string]any)
+			if !ok {
+				continue
+			}
+			if block["type"] != "tool_use" || block["id"] != "toolu_1" {
+				continue
+			}
+			found = true
+			if _, isObject := block["input"].(map[string]any); !isObject {
+				t.Errorf("tool_use input = %#v (%T), want an object", block["input"], block["input"])
+			}
+		}
+	}
+	if !found {
+		t.Fatal("tool_use block for toolu_1 not found in request")
 	}
 }
