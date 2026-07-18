@@ -29,15 +29,23 @@ const (
 // The first agent passed to [NewHandoffWorkflowBuilder] is the entry agent that
 // receives the initial input. A turn in which the speaking agent calls no
 // handoff tool ends the workflow and yields the accumulated conversation.
+//
+// Participant agents must have automatic function-tool calling enabled (the
+// default; that is, [agent.Config.DisableFuncAutoCall] must be false) so the
+// injected handoff tools execute and the resulting tool call is recorded in the
+// conversation for routing. An agent that surfaces a handoff call without
+// executing it would instead raise it as an unresolved function call and stall
+// the run.
 type HandoffWorkflowBuilder struct {
-	name               string
-	description        string
-	agents             []*agent.Agent
-	entry              *agent.Agent
-	handoffs           map[*agent.Agent][]*agent.Agent
-	handoffOrder       []*agent.Agent
-	outputDesignations outputDesignations
-	err                error
+	name                  string
+	description           string
+	agents                []*agent.Agent
+	entry                 *agent.Agent
+	handoffs              map[*agent.Agent][]*agent.Agent
+	handoffOrder          []*agent.Agent
+	outputDesignations    outputDesignations
+	maximumIterationCount int
+	err                   error
 }
 
 // NewHandoffWorkflowBuilder creates a builder for a handoff workflow. The first
@@ -95,6 +103,17 @@ func (b *HandoffWorkflowBuilder) WithHandoff(from *agent.Agent, targets ...*agen
 	return b
 }
 
+// WithMaximumIterationCount caps the number of agent turns before the workflow
+// ends, guarding against handoff loops (for example two agents that keep handing
+// off to each other). A non-positive value uses the default of 40.
+func (b *HandoffWorkflowBuilder) WithMaximumIterationCount(count int) *HandoffWorkflowBuilder {
+	if b == nil || b.err != nil {
+		return b
+	}
+	b.maximumIterationCount = count
+	return b
+}
+
 // WithOutputFrom designates agents as terminal workflow output sources.
 func (b *HandoffWorkflowBuilder) WithOutputFrom(agents ...*agent.Agent) *HandoffWorkflowBuilder {
 	if b == nil || b.err != nil {
@@ -140,6 +159,9 @@ func (b *HandoffWorkflowBuilder) Build() (*workflow.Workflow, error) {
 		}
 		seen := make(map[*agent.Agent]struct{})
 		for _, target := range b.handoffs[from] {
+			if target == from {
+				return nil, fmt.Errorf("agentworkflow: agent %q cannot hand off to itself", agentNameForError(from))
+			}
 			if _, ok := members[target]; !ok {
 				return nil, fmt.Errorf("agentworkflow: handoff target %q is not a participant in this handoff workflow", agentNameForError(target))
 			}
@@ -172,8 +194,11 @@ func (b *HandoffWorkflowBuilder) Build() (*workflow.Workflow, error) {
 	}
 
 	entry := b.entry
+	maximumIterationCount := b.maximumIterationCount
+	// The participant set is fixed at build time, so the factory closes over the
+	// entry agent and handoff routing table and ignores its agents argument.
 	managerFactory := func([]*agent.Agent) *GroupChatManager {
-		return newHandoffManager(entry, toolTargets)
+		return newHandoffManager(entry, toolTargets, maximumIterationCount)
 	}
 
 	host := newGroupChatHostBinding(participants, participantBindings, bindingsByAgent, bindingsByAgentID, managerFactory)
@@ -239,22 +264,32 @@ func newHandoffTool(target *agent.Agent, name string) tool.Tool {
 // handoffManager is a [GroupChatManager] whose SelectNextAgent routes to the
 // target of the most recent handoff tool call produced by the previous speaker.
 type handoffManager struct {
-	manager     GroupChatManager
-	entry       *agent.Agent
-	toolTargets map[string]*agent.Agent
-	started     bool
-	cursor      int
+	manager               GroupChatManager
+	entry                 *agent.Agent
+	toolTargets           map[string]*agent.Agent
+	maximumIterationCount int
+	started               bool
+	cursor                int
 }
 
-func newHandoffManager(entry *agent.Agent, toolTargets map[string]*agent.Agent) *GroupChatManager {
-	m := &handoffManager{entry: entry, toolTargets: toolTargets}
+func newHandoffManager(entry *agent.Agent, toolTargets map[string]*agent.Agent, maximumIterationCount int) *GroupChatManager {
+	m := &handoffManager{entry: entry, toolTargets: toolTargets, maximumIterationCount: maximumIterationCount}
 	m.manager = GroupChatManager{
 		SelectNextAgent:      m.selectNextAgent,
+		ShouldTerminate:      m.shouldTerminate,
 		Reset:                m.reset,
 		OnCheckpoint:         m.onCheckpoint,
 		OnCheckpointRestored: m.onCheckpointRestored,
 	}
 	return &m.manager
+}
+
+func (m *handoffManager) shouldTerminate(_ context.Context, _ []*message.Message, iterationCount int) (bool, error) {
+	limit := m.maximumIterationCount
+	if limit <= 0 {
+		limit = defaultGroupChatMaximumIterations
+	}
+	return iterationCount >= limit, nil
 }
 
 func (m *handoffManager) selectNextAgent(_ context.Context, history []*message.Message) (*agent.Agent, error) {
@@ -267,8 +302,14 @@ func (m *handoffManager) selectNextAgent(_ context.Context, history []*message.M
 		return m.entry, nil
 	}
 	start := m.cursor
-	if start < 0 || start > len(history) {
+	if start < 0 {
 		start = 0
+	}
+	if start > len(history) {
+		// A cursor beyond the history (only reachable from an inconsistent
+		// restore) means there are no new messages to inspect; end cleanly
+		// rather than rescanning the whole history and routing on a stale call.
+		start = len(history)
 	}
 	m.cursor = len(history)
 	// The most recent handoff call in the previous speaker's turn wins; a turn

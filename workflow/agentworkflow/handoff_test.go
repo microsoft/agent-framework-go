@@ -153,6 +153,15 @@ func TestHandoffWorkflow_BuildValidation(t *testing.T) {
 		{name: "non-participant target", build: func() (*workflow.Workflow, error) {
 			return NewHandoffWorkflowBuilder(a, b).WithHandoff(a, stranger).Build()
 		}, wantErr: true},
+		{name: "self handoff", build: func() (*workflow.Workflow, error) {
+			return NewHandoffWorkflowBuilder(a, b).WithHandoff(a, a).Build()
+		}, wantErr: true},
+		{name: "colliding tool names", build: func() (*workflow.Workflow, error) {
+			// "dup name" and "dup_name" both sanitize to handoff_to_dup_name.
+			dup1 := newScriptedHandoffAgent("d1", "dup name", nil)
+			dup2 := newScriptedHandoffAgent("d2", "dup_name", nil)
+			return NewHandoffWorkflowBuilder(a, dup1, dup2).WithHandoff(a, dup1, dup2).Build()
+		}, wantErr: true},
 		{name: "valid", build: func() (*workflow.Workflow, error) {
 			return NewHandoffWorkflowBuilder(a, b).WithHandoff(a, b).Build()
 		}, wantErr: false},
@@ -180,7 +189,7 @@ func TestHandoffManager_CheckpointRestoresState(t *testing.T) {
 	triage := newScriptedHandoffAgent("triage", "triage", nil)
 	billing := newScriptedHandoffAgent("billing", "billing", nil)
 	toolTargets := map[string]*agent.Agent{"handoff_to_billing": billing}
-	manager := newHandoffManager(triage, toolTargets)
+	manager := newHandoffManager(triage, toolTargets, 0)
 
 	// First selection returns the entry agent and marks the manager started.
 	userTurn := []*message.Message{{Role: message.RoleUser, Contents: []message.Content{handoffTextContent("hi")}}}
@@ -199,7 +208,7 @@ func TestHandoffManager_CheckpointRestoresState(t *testing.T) {
 	// A fresh manager restored from the checkpoint must resume in the started
 	// state: the next turn's handoff call routes to the target rather than
 	// re-selecting the entry agent.
-	restored := newHandoffManager(triage, toolTargets)
+	restored := newHandoffManager(triage, toolTargets, 0)
 	if _, err := restoreGroupChatManagerCheckpoint(newGroupChatStateContext(t.Context(), state), restored); err != nil {
 		t.Fatalf("restoreGroupChatManagerCheckpoint: %v", err)
 	}
@@ -210,5 +219,77 @@ func TestHandoffManager_CheckpointRestoresState(t *testing.T) {
 	}
 	if next != billing {
 		t.Fatalf("restored manager routed to %v, want billing (checkpoint did not restore started state)", next)
+	}
+}
+
+func TestHandoffWorkflow_LastHandoffCallWins(t *testing.T) {
+	// triage emits two handoff calls in one turn; the most recent (billing) wins.
+	triage := newScriptedHandoffAgent("triage", "triage", [][]message.Content{
+		append(slices.Clone(handoffTurn("", "handoff_to_refunds")), handoffTurn("", "handoff_to_billing")...),
+	})
+	billing := newScriptedHandoffAgent("billing", "billing", [][]message.Content{answerTurn("billing handled it")})
+	refunds := newScriptedHandoffAgent("refunds", "refunds", [][]message.Content{answerTurn("refunds handled it")})
+
+	wf, err := NewHandoffWorkflowBuilder(triage, billing, refunds).
+		WithHandoff(triage, billing, refunds).
+		Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	texts := collectGroupChatOutputTexts(runGroupChatWorkflowTurn(t, wf, "start"))
+	if !slices.Contains(texts, "billing handled it") {
+		t.Fatalf("expected the last handoff (billing) to win, got: %v", texts)
+	}
+	if slices.Contains(texts, "refunds handled it") {
+		t.Fatalf("did not expect refunds (the earlier handoff) to run, got: %v", texts)
+	}
+}
+
+func TestHandoffWorkflow_UnknownHandoffCallIgnored(t *testing.T) {
+	// triage answers and emits a handoff call for a tool it was never granted;
+	// it must be ignored and the workflow must end with triage's answer.
+	triage := newScriptedHandoffAgent("triage", "triage", [][]message.Content{
+		append(slices.Clone(answerTurn("triage responded")), handoffTurn("", "handoff_to_ghost")...),
+	})
+	billing := newScriptedHandoffAgent("billing", "billing", [][]message.Content{answerTurn("billing handled it")})
+
+	wf, err := NewHandoffWorkflowBuilder(triage, billing).
+		WithHandoff(triage, billing).
+		Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	texts := collectGroupChatOutputTexts(runGroupChatWorkflowTurn(t, wf, "start"))
+	if slices.Contains(texts, "billing handled it") {
+		t.Fatalf("an unknown handoff tool must not route to billing, got: %v", texts)
+	}
+	if !slices.Contains(texts, "triage responded") {
+		t.Fatalf("expected triage's answer in the output, got: %v", texts)
+	}
+}
+
+func TestHandoffWorkflow_MaximumIterationCountCapsLoops(t *testing.T) {
+	// ping and pong hand off to each other forever; a cap of 1 must stop the run
+	// after the entry agent's single turn, before pong ever runs.
+	ping := newScriptedHandoffAgent("ping", "ping", [][]message.Content{handoffTurn("ping ran", "handoff_to_pong")})
+	pong := newScriptedHandoffAgent("pong", "pong", [][]message.Content{handoffTurn("pong ran", "handoff_to_ping")})
+
+	wf, err := NewHandoffWorkflowBuilder(ping, pong).
+		WithHandoff(ping, pong).
+		WithHandoff(pong, ping).
+		WithMaximumIterationCount(1).
+		Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	texts := collectGroupChatOutputTexts(runGroupChatWorkflowTurn(t, wf, "start"))
+	if !slices.Contains(texts, "ping ran") {
+		t.Fatalf("expected ping to run once, got: %v", texts)
+	}
+	if slices.Contains(texts, "pong ran") {
+		t.Fatalf("iteration cap of 1 should have stopped the loop before pong ran, got: %v", texts)
 	}
 }
