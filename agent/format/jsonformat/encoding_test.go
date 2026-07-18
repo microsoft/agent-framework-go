@@ -149,3 +149,14 @@ func TestFormat_Unmarshal_PreservesLargeIntegerPrecision(t *testing.T) {
 		t.Errorf("N = %d, want 9007199254740993 (large-integer precision lost)", out.N)
 	}
 }
+
+func TestFormat_Unmarshal_RejectsTrailingData(t *testing.T) {
+	type output struct {
+		N int `json:"n"`
+	}
+	format := requireFormat(t, jsonformat.MustFor[output]())
+	var out output
+	if err := format.Unmarshal([]byte(`{"n":1} {"n":2}`), &out); err == nil {
+		t.Fatal("expected an error for trailing data after the JSON value, got nil")
+	}
+}
