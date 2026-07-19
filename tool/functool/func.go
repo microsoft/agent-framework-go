@@ -57,6 +57,18 @@ func New[In, Out any](cfg Config, h HandlerFor[In, Out]) (tool.FuncTool, error) 
 		return nil, fmt.Errorf("output schema: %w", err)
 	}
 
+	// When Out is a pointer type, a handler may legitimately return a typed-nil
+	// pointer to mean "no result". A typed nil marshals to JSON null, which fails
+	// validation against the (non-nullable, object-rooted) output schema derived
+	// from the pointed-to type. Substitute the zero value of the element type in
+	// that case, mirroring the MCP go-sdk's HandlerFor behavior.
+	var elemZero Out
+	outType := reflect.TypeFor[Out]()
+	hasPointerOut := outType != nil && outType.Kind() == reflect.Pointer
+	if hasPointerOut {
+		elemZero = reflect.New(outType.Elem()).Interface().(Out)
+	}
+
 	t.handler = func(ctx context.Context, args string) (any, error) {
 		var in In
 		if t.inputWrapped {
@@ -75,6 +87,9 @@ func New[In, Out any](cfg Config, h HandlerFor[In, Out]) (tool.FuncTool, error) 
 		out, err := h(ctx, in)
 		if err != nil {
 			return nil, err
+		}
+		if hasPointerOut && reflect.ValueOf(out).IsNil() {
+			out = elemZero
 		}
 		if err := t.outputFormat.Normalize(&out); err != nil {
 			return nil, fmt.Errorf("normalizing output: %w", err)
