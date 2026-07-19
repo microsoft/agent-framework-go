@@ -458,6 +458,53 @@ func TestStreamingToolCallsSupportInterleavedDeltas(t *testing.T) {
 	}
 }
 
+// Building the request must not mutate the caller's MessageNewParams slices.
+// The provider appends system instructions to params.System; if it shares the
+// caller's backing array (spare capacity), the append corrupts the caller's data.
+func TestBuildMessageParams_DoesNotMutateCallerSystemSlice(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"m","type":"message","role":"assistant","model":"claude","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	defer server.Close()
+	a := newTestClient(t, server)
+
+	// Caller-supplied System slice with spare capacity.
+	system := make([]anthropic.TextBlockParam, 1, 4)
+	system[0] = anthropic.TextBlockParam{Text: "s0"}
+	opt := anthropicprovider.MessageNewParams(anthropic.MessageNewParams{System: system})
+
+	if _, err := a.RunText(t.Context(), "hi", agent.WithInstructions("added"), opt).Collect(); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if full := system[:cap(system)]; full[1].Text != "" {
+		t.Errorf("provider mutated the caller's System backing array: spare slot = %q", full[1].Text)
+	}
+}
+
+func TestBuildMessageParams_DoesNotMutateCallerMessagesSlice(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"m","type":"message","role":"assistant","model":"claude","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	defer server.Close()
+	a := newTestClient(t, server)
+
+	// Caller-supplied Messages slice with spare capacity. The provider appends
+	// the run's messages to params.Messages; with aliasing that append lands in
+	// the caller's spare slot instead of a cloned slice.
+	messages := make([]anthropic.MessageParam, 1, 4)
+	messages[0] = anthropic.NewUserMessage(anthropic.NewTextBlock("seeded"))
+	opt := anthropicprovider.MessageNewParams(anthropic.MessageNewParams{Messages: messages})
+
+	if _, err := a.RunText(t.Context(), "hi", opt).Collect(); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if full := messages[:cap(messages)]; len(full[1].Content) != 0 {
+		t.Errorf("provider mutated the caller's Messages backing array: spare slot has %d content block(s)", len(full[1].Content))
+	}
+}
+
 // A tool call with empty Arguments must serialize to an object input ({}), not
 // null: Anthropic rejects a tool_use block whose input is null.
 func TestToolUseEmptyArgumentsSerializeAsObject(t *testing.T) {
