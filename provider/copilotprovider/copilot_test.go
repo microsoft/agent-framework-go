@@ -336,6 +336,31 @@ func TestConvertToAgentResponseUpdate_ToolExecutionStartEvent_WithNullArguments_
 	}
 }
 
+func TestConvertToAgentResponseUpdate_UsageEvent_SurfacesReasoningTokens(t *testing.T) {
+	runtime := newFakeRuntime(t,
+		sessionEvent("assistant.usage", map[string]any{
+			"model":           "gpt-5",
+			"inputTokens":     10,
+			"outputTokens":    20,
+			"reasoningTokens": 8,
+		}),
+		idleEvent(),
+	)
+	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
+
+	response, err := runText(t, agent, "hello")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	usage := firstContent[*message.UsageContent](t, response)
+	if usage.Details.ReasoningTokenCount != 8 {
+		t.Fatalf("ReasoningTokenCount = %d, want 8", usage.Details.ReasoningTokenCount)
+	}
+	if usage.Details.OutputTokenCount != 20 {
+		t.Fatalf("OutputTokenCount = %d, want 20", usage.Details.OutputTokenCount)
+	}
+}
+
 func TestConvertToAgentResponseUpdate_ToolExecutionStartEvent_WithNullData_ProducesEmptyFunctionCall(t *testing.T) {
 	runtime := newFakeRuntime(t,
 		sessionEvent("tool.execution_start", nil),
