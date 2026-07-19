@@ -93,13 +93,7 @@ func (b *SequentialWorkflowBuilder) Build() (*workflow.Workflow, error) {
 	}
 
 	cfg := Config{DisableForwardIncomingMessages: b.chainOnlyAgentResponses}
-	bindings := make([]workflow.ExecutorBinding, len(b.agents))
-	bindingsByAgent := make(map[*agent.Agent]workflow.ExecutorBinding, len(b.agents))
-	for index, currentAgent := range b.agents {
-		binding := New(currentAgent, cfg)
-		bindings[index] = binding
-		bindingsByAgent[currentAgent] = binding
-	}
+	bindings, bindingsByAgent := newAgentBindings(b.agents, cfg)
 
 	bld := applyBuilderMetadata(workflow.NewBuilder(bindings[0]), b.name, b.description)
 	previous := bindings[0]

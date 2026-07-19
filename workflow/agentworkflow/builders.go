@@ -22,6 +22,17 @@ func validateBuilderAgents(builderName string, agents []*agent.Agent) error {
 	return nil
 }
 
+func newAgentBindings(agents []*agent.Agent, cfg Config) ([]workflow.ExecutorBinding, map[*agent.Agent]workflow.ExecutorBinding) {
+	bindings := make([]workflow.ExecutorBinding, len(agents))
+	bindingsByAgent := make(map[*agent.Agent]workflow.ExecutorBinding, len(agents))
+	for index, currentAgent := range agents {
+		binding := New(currentAgent, cfg)
+		bindings[index] = binding
+		bindingsByAgent[currentAgent] = binding
+	}
+	return bindings, bindingsByAgent
+}
+
 type outputDesignations map[*agent.Agent]map[workflow.OutputTag]struct{}
 
 func (d outputDesignations) explicit() bool {

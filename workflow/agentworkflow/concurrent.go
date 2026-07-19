@@ -95,13 +95,7 @@ func (b *ConcurrentWorkflowBuilder) Build() (*workflow.Workflow, error) {
 	}
 
 	cfg := Config{}
-	bindings := make([]workflow.ExecutorBinding, len(b.agents))
-	bindingsByAgent := make(map[*agent.Agent]workflow.ExecutorBinding, len(b.agents))
-	for index, currentAgent := range b.agents {
-		binding := New(currentAgent, cfg)
-		bindings[index] = binding
-		bindingsByAgent[currentAgent] = binding
-	}
+	bindings, bindingsByAgent := newAgentBindings(b.agents, cfg)
 
 	start := newMessageForwardingBinding("Start")
 	accumulators := make([]workflow.ExecutorBinding, len(bindings))
