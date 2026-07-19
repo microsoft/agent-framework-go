@@ -7,6 +7,8 @@ import (
 	"errors"
 	"iter"
 	"slices"
+	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -105,6 +107,44 @@ func updateStrings(updates []*agent.ResponseUpdate) []string {
 		strings = append(strings, update.String())
 	}
 	return strings
+}
+
+// TestAgent_ConcurrentRunsDoNotShareRunOptions guards against prepareRun
+// mutating the Agent's shared runOptions slice. New builds runOptions with
+// slices.Clone followed by a per-tool append, which leaves spare capacity, so a
+// naive append(a.runOptions, options...) writes each run's per-run options into
+// the shared backing array — a data race (and cross-run option corruption) when
+// the same Agent serves concurrent runs. Run with -race.
+func TestAgent_ConcurrentRunsDoNotShareRunOptions(t *testing.T) {
+	run := func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{Contents: []message.Content{&message.TextContent{Text: "ok"}}}, nil)
+		}
+	}
+	a := agent.New(agent.ProviderConfig{Run: run}, agent.Config{
+		ID: "test-agent",
+		Tools: []tool.Tool{
+			stubTool{name: "t1"}, stubTool{name: "t2"}, stubTool{name: "t3"},
+		},
+		DisableFuncAutoCall: true,
+	})
+
+	var wg sync.WaitGroup
+	for i := 0; i < 64; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			session, err := a.CreateSession(context.Background(), agent.WithServiceID("svc-"+strconv.Itoa(i)))
+			if err != nil {
+				t.Errorf("CreateSession: %v", err)
+				return
+			}
+			if _, err := a.RunText(context.Background(), "hi", agent.WithSession(session)).Collect(); err != nil {
+				t.Errorf("run: %v", err)
+			}
+		}(i)
+	}
+	wg.Wait()
 }
 
 func newGenericTestAgent(runFn func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error], middlewares []agent.Middleware, runOptions ...agent.Option) *agent.Agent {
