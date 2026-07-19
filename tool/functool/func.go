@@ -66,7 +66,10 @@ func New[In, Out any](cfg Config, h HandlerFor[In, Out]) (tool.FuncTool, error) 
 	outType := reflect.TypeFor[Out]()
 	hasPointerOut := outType != nil && outType.Kind() == reflect.Pointer
 	if hasPointerOut {
-		elemZero = reflect.New(outType.Elem()).Interface().(Out)
+		// Convert to outType before asserting: for a named pointer type
+		// (e.g. type P *T), reflect.New yields an unnamed *T that is not
+		// directly assertable to P.
+		elemZero = reflect.New(outType.Elem()).Convert(outType).Interface().(Out)
 	}
 
 	t.handler = func(ctx context.Context, args string) (any, error) {
