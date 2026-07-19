@@ -104,6 +104,62 @@ func minimalMessageResponse(payload string) string {
 	return string(b)
 }
 
+// TestUsageReasoningTokens verifies that Anthropic thinking tokens are surfaced
+// as ReasoningTokenCount, mirroring the OpenAI, Gemini, and Copilot providers,
+// instead of being dropped from usage accounting.
+func TestUsageReasoningTokens(t *testing.T) {
+	resp := map[string]any{
+		"id":            "msg_think01",
+		"type":          "message",
+		"role":          "assistant",
+		"model":         "claude-3-5-sonnet-20241022",
+		"stop_reason":   "end_turn",
+		"stop_sequence": nil,
+		"content": []any{
+			map[string]any{"type": "text", "text": "answer"},
+		},
+		"usage": map[string]any{
+			"input_tokens":  10,
+			"output_tokens": 50,
+			"output_tokens_details": map[string]any{
+				"thinking_tokens": 35,
+			},
+		},
+	}
+	body, _ := json.Marshal(resp)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, string(body))
+	}))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	out, err := a.RunText(t.Context(), "think about it").Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var usage *message.UsageContent
+	for _, msg := range out.Messages {
+		for _, c := range msg.Contents {
+			if uc, ok := c.(*message.UsageContent); ok {
+				usage = uc
+			}
+		}
+	}
+	if usage == nil {
+		t.Fatal("expected UsageContent, got none")
+	}
+	if usage.Details.ReasoningTokenCount != 35 {
+		t.Errorf("ReasoningTokenCount = %d, want 35", usage.Details.ReasoningTokenCount)
+	}
+	if usage.Details.OutputTokenCount != 50 {
+		t.Errorf("OutputTokenCount = %d, want 50", usage.Details.OutputTokenCount)
+	}
+}
+
 // minimalStreamingResponse returns an SSE stream that delivers payload as a
 // single text delta.
 func minimalStreamingResponse(payload string) string {
