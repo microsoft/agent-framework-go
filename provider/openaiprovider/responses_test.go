@@ -5590,3 +5590,47 @@ data: {"type":"response.failed","response":{"id":"resp_001","object":"response",
 		t.Errorf("error code = %q, want %q", errContent.ErrorCode, "server_error")
 	}
 }
+
+// TestResponsesStreamingFailedResponseSurfacesCodeOnlyError guards the case where a
+// failed response carries an error code but no message. The failure must still be
+// surfaced as ErrorContent rather than collapsing into an empty update.
+func TestResponsesStreamingFailedResponseSurfacesCodeOnlyError(t *testing.T) {
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"test"}]}],
+                "stream":true
+            }
+            `
+	const output = `event: response.created
+data: {"type":"response.created","response":{"id":"resp_001","object":"response","created_at":1741892091,"status":"in_progress","model":"gpt-4o-mini","output":[]}}
+
+event: response.failed
+data: {"type":"response.failed","response":{"id":"resp_001","object":"response","created_at":1741892091,"status":"failed","model":"gpt-4o-mini","output":[],"error":{"code":"server_error"}}}
+
+`
+	server := newTestResponsesServerStreaming(t, input, output)
+	defer server.Close()
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	var errContent *message.ErrorContent
+	for update, err := range a.RunText(t.Context(), "test", agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("error = %v", err)
+		}
+		for _, c := range update.Contents {
+			if ec, ok := c.(*message.ErrorContent); ok {
+				errContent = ec
+			}
+		}
+	}
+	if errContent == nil {
+		t.Fatal("expected an ErrorContent for the code-only failed response, got none")
+	}
+	if errContent.ErrorCode != "server_error" {
+		t.Errorf("error code = %q, want %q", errContent.ErrorCode, "server_error")
+	}
+	if errContent.Message != "" {
+		t.Errorf("error message = %q, want empty", errContent.Message)
+	}
+}

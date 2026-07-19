@@ -1042,7 +1042,7 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 		u.ResponseID = event.Response.ID
 		u.FinishReason = responsesFinishReason(&event.Response)
 		u.AdditionalProperties = responsesPopulateAdditionalProperties(&event.Response)
-		if event.Response.Error.Message != "" {
+		if event.Response.Error.Message != "" || event.Response.Error.Code != "" {
 			u.Contents = []message.Content{&message.ErrorContent{
 				Message:   event.Response.Error.Message,
 				ErrorCode: string(event.Response.Error.Code),
