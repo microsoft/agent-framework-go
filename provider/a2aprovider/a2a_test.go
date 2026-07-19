@@ -921,6 +921,41 @@ func TestRunWithAgentTaskResponse(t *testing.T) {
 	}
 }
 
+// TestRunWithInputRequiredTaskMessage verifies that a non-streaming Task response
+// in an InputRequired state surfaces the text carried in Status.Message (when the
+// task has no artifacts), matching the streaming TaskStatusUpdateEvent path.
+func TestRunWithInputRequiredTaskMessage(t *testing.T) {
+	const question = "What color should the background be?"
+	transport := &mockA2ATransport{
+		responseToReturn: &a2a.Task{
+			ID:        a2a.TaskID("task-1"),
+			ContextID: "context-1",
+			Status: a2a.TaskStatus{
+				State: a2a.TaskStateInputRequired,
+				Message: &a2a.Message{
+					ID:    "msg-1",
+					Role:  a2a.MessageRoleAgent,
+					Parts: a2a.ContentParts{a2a.NewTextPart(question)},
+				},
+			},
+		},
+	}
+	a := newTestAgent(transport, agent.Config{})
+
+	session, err := a.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := a.RunText(t.Context(), "make the background transparent", agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("error = %v, want nil", err)
+	}
+	if got := result.String(); got != question {
+		t.Errorf("response text = %q, want %q", got, question)
+	}
+}
+
 // TestRunWithVariousTaskStates tests continuation token behavior for different task states
 func TestRunWithVariousTaskStates(t *testing.T) {
 	tests := []struct {

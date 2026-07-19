@@ -264,6 +264,22 @@ func yieldTask(yield func(*agent.ResponseUpdate, error) bool, task *a2a.Task) bo
 		timestamp = *task.Status.Timestamp
 	}
 	var contents []message.Content
+	messageID := ""
+	if task.Status.Message != nil {
+		messageID = task.Status.Message.ID
+		// Mirror the streaming TaskStatusUpdateEvent path: surface the status
+		// message text for states where it carries the agent's response (an
+		// input-required follow-up question or a terminal summary), rather than
+		// dropping it when the task has no artifacts.
+		if task.Status.State == a2a.TaskStateInputRequired || task.Status.State.Terminal() {
+			var err error
+			contents, err = partsToContents(task.Status.Message.Parts, contents)
+			if err != nil {
+				yield(nil, err)
+				return false
+			}
+		}
+	}
 	for _, artifact := range task.Artifacts {
 		var err error
 		contents, err = partsToContents(artifact.Parts, contents)
@@ -273,7 +289,7 @@ func yieldTask(yield func(*agent.ResponseUpdate, error) bool, task *a2a.Task) bo
 		}
 	}
 
-	update := newResponseUpdate(task, task.Metadata, string(task.ID), "", message.RoleAssistant, contents, timestamp)
+	update := newResponseUpdate(task, task.Metadata, string(task.ID), messageID, message.RoleAssistant, contents, timestamp)
 	update.ContinuationToken = continuationToken
 	return yield(update, nil)
 }
