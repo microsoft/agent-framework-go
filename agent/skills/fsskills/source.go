@@ -52,6 +52,13 @@ type FilterContext struct {
 	RelativeFilePath string
 }
 
+func newFilterContext(skillName, relativeFilePath string) FilterContext {
+	return FilterContext{
+		SkillName:        skillName,
+		RelativeFilePath: relativeFilePath,
+	}
+}
+
 // SourceOptions configures file-based skill discovery.
 //
 // Use this struct to configure discovery without relying on positional
@@ -519,7 +526,7 @@ func (s *Source) scanForFiles(
 
 		relativePath := entryPath
 
-		if filter != nil && !filter(FilterContext{SkillName: skillName, RelativeFilePath: relativePath}) {
+		if filter != nil && !filter(newFilterContext(skillName, relativePath)) {
 			continue
 		}
 
