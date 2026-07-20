@@ -91,17 +91,37 @@ func NewAgent(wf *workflow.Workflow, cfg AgentConfig) (*agent.Agent, error) {
 			env = inproc.OffThread
 		}
 	}
+	terminalOutputExecutors := make(map[string]struct{})
+	for executorID, tags := range wf.OutputExecutors() {
+		if !slices.Contains(tags, workflow.OutputTagIntermediate) {
+			terminalOutputExecutors[executorID] = struct{}{}
+		}
+	}
+	isTerminalWorkflowOutput := func(evt workflow.OutputEvent) bool {
+		if evt.IsIntermediate() {
+			return false
+		}
+		if _, ok := terminalOutputExecutors[evt.ExecutorID]; !ok {
+			return false
+		}
+		switch evt.Output.(type) {
+		case *agent.ResponseUpdate, *agent.Response:
+			return false
+		default:
+			return true
+		}
+	}
 
 	runFn := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			responseID := uuid.NewString()
 			stream, _ := agent.GetOption(options, agent.Stream)
-			merger := newMessageMerger()
-			emitUpdate := func(update *agent.ResponseUpdate) bool {
+			mergeState := newCollectedResponseMergeState()
+			emitUpdate := func(update *agent.ResponseUpdate, terminalWorkflowOutput bool) bool {
 				if update == nil {
 					return true
 				}
-				merger.AddUpdate(update)
+				mergeState.AddUpdate(update, terminalWorkflowOutput)
 				if !stream {
 					return true
 				}
@@ -171,13 +191,13 @@ func NewAgent(wf *workflow.Workflow, cfg AgentConfig) (*agent.Agent, error) {
 					if e.CompletionInfo != nil && e.CompletionInfo.CheckpointInfo != nil {
 						state.lastCheckpoint = e.CompletionInfo.CheckpointInfo
 					}
-					if !emitUpdate(newUpdate(responseID, e)) {
+					if !emitUpdate(newUpdate(responseID, e), false) {
 						return
 					}
 				case workflow.OutputEvent:
 					switch out := e.Output.(type) {
 					case *agent.ResponseUpdate:
-						if !emitUpdate(stampUpdate(out, responseID, e)) {
+						if !emitUpdate(stampUpdate(out, responseID, e), false) {
 							return
 						}
 					case *agent.Response:
@@ -188,7 +208,7 @@ func NewAgent(wf *workflow.Workflow, cfg AgentConfig) (*agent.Agent, error) {
 							continue
 						}
 						for _, msg := range out.Messages {
-							if !emitUpdate(messageToUpdate(msg, responseID, e)) {
+							if !emitUpdate(messageToUpdate(msg, responseID, e), false) {
 								return
 							}
 						}
@@ -196,15 +216,16 @@ func NewAgent(wf *workflow.Workflow, cfg AgentConfig) (*agent.Agent, error) {
 						if !cfg.IncludeOutputsInResponse {
 							continue
 						}
-						if !emitUpdate(messageToUpdate(out, responseID, e)) {
+						if !emitUpdate(messageToUpdate(out, responseID, e), isTerminalWorkflowOutput(e)) {
 							return
 						}
 					case []*message.Message:
 						if !cfg.IncludeOutputsInResponse {
 							continue
 						}
+						terminalWorkflowOutput := isTerminalWorkflowOutput(e)
 						for _, msg := range out {
-							if !emitUpdate(messageToUpdate(msg, responseID, e)) {
+							if !emitUpdate(messageToUpdate(msg, responseID, e), terminalWorkflowOutput) {
 								return
 							}
 						}
@@ -213,39 +234,39 @@ func NewAgent(wf *workflow.Workflow, cfg AgentConfig) (*agent.Agent, error) {
 					update, contentID, pending, ok, err := requestToUpdate(e.Request, responseID, e)
 					if err != nil {
 						update := newUpdate(responseID, e, workflowErrorContent(err, cfg.IncludeErrorDetails))
-						if !emitUpdate(update) {
+						if !emitUpdate(update, false) {
 							return
 						}
 						continue
 					}
 					if !ok {
-						if !emitUpdate(newUpdate(responseID, e)) {
+						if !emitUpdate(newUpdate(responseID, e), false) {
 							return
 						}
 						continue
 					}
 					state.pending[contentID] = pending
-					if !emitUpdate(update) {
+					if !emitUpdate(update, false) {
 						return
 					}
 				case workflow.ErrorEvent:
 					update := newUpdate(responseID, e, workflowErrorContent(e.Error, cfg.IncludeErrorDetails))
-					if !emitUpdate(update) {
+					if !emitUpdate(update, false) {
 						return
 					}
 				case workflow.ExecutorFailedEvent:
 					update := newUpdate(responseID, e, workflowErrorContent(e.Error, cfg.IncludeErrorDetails))
-					if !emitUpdate(update) {
+					if !emitUpdate(update, false) {
 						return
 					}
 				default:
-					if !emitUpdate(newUpdate(responseID, e)) {
+					if !emitUpdate(newUpdate(responseID, e), false) {
 						return
 					}
 				}
 			}
 			if !stream {
-				for _, update := range merger.ComputeMerged(responseID, agentID, agentName).ToUpdates() {
+				for _, update := range mergeState.ComputeMerged(responseID, agentID, agentName).ToUpdates() {
 					if !yield(update, nil) {
 						return
 					}

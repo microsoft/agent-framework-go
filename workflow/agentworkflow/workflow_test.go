@@ -81,6 +81,65 @@ func echoExecutorBinding(id string) workflow.ExecutorBinding {
 	return binding
 }
 
+func fixedTextAgent(id, name, text string) *agent.Agent {
+	run := func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
+				Role:       message.RoleAssistant,
+				AgentID:    id,
+				AuthorName: name,
+				MessageID:  id + "-message",
+				Contents: []message.Content{
+					&message.TextContent{Text: text},
+				},
+			}, nil)
+		}
+	}
+	return agent.New(
+		agent.ProviderConfig{ProviderName: "fixed-text", Run: run},
+		agent.Config{
+			ID:                  id,
+			Name:                name,
+			DisableFuncAutoCall: true,
+		},
+	)
+}
+
+func uppercaseLatestTextBinding(id string) workflow.ExecutorBinding {
+	binding := workflow.ExecutorBinding{
+		ID:               id,
+		ImplementationID: "*workflow.Executor",
+		RawValue:         struct{}{},
+	}
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
+		return newMessageExecutor(id, &messageworkflow.Options{
+			StateKey: id + "_msgs",
+			TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, messages []*message.Message) error {
+				var latest string
+				for _, current := range messages {
+					if current == nil {
+						continue
+					}
+					if text := strings.TrimSpace(current.Contents.Text()); text != "" {
+						latest = text
+					}
+				}
+				if latest == "" {
+					return nil
+				}
+				return ctx.YieldOutput(&message.Message{
+					Role:       message.RoleAssistant,
+					AuthorName: id,
+					Contents: []message.Content{
+						&message.TextContent{Text: strings.ToUpper(latest)},
+					},
+				})
+			},
+		}), nil
+	}
+	return binding
+}
+
 func TestNew_StreamsResponseUpdates(t *testing.T) {
 	binding := echoExecutorBinding("echo")
 	wf, err := workflow.NewBuilder(binding).
@@ -297,10 +356,10 @@ func TestNew_IncludeOutputsInResponse(t *testing.T) {
 	}
 
 	var updates int
-	for range ag.RunText(t.Context(), "ping") {
+	for range ag.RunText(t.Context(), "ping", agent.Stream(true)) {
 		updates++
 	}
-	// One update from *agent.ResponseUpdate output, one from message output translation.
+	// Streaming keeps both the hosted update and the translated workflow output visible.
 	if updates < 2 {
 		t.Errorf("expected at least 2 updates with IncludeOutputsInResponse, got %d", updates)
 	}
@@ -398,6 +457,50 @@ func TestNew_GatesHostedAgentResponseOutputsByDefault(t *testing.T) {
 	}
 	if !sawResponseOutput {
 		t.Fatalf("aggregated hosted agent response output was not forwarded when included")
+	}
+}
+
+func TestNew_CollectPrefersTerminalWorkflowOutputOverIntermediateHostedAgentUpdates(t *testing.T) {
+	first := agentworkflow.New(
+		fixedTextAgent("first-agent", "First Agent", "first answer"),
+		agentworkflow.Config{
+			DisableForwardIncomingMessages: true,
+			EmitUpdateEvents:               true,
+		},
+	)
+	second := agentworkflow.New(
+		fixedTextAgent("second-agent", "Second Agent", "second answer"),
+		agentworkflow.Config{
+			DisableForwardIncomingMessages: true,
+			EmitUpdateEvents:               true,
+		},
+	)
+	uppercase := uppercaseLatestTextBinding("uppercase")
+
+	wf, err := workflow.NewBuilder(first).
+		AddEdge(first, second).
+		AddEdge(second, uppercase).
+		WithIntermediateOutputFrom(first, second).
+		WithOutputFrom(uppercase).
+		Build()
+	if err != nil {
+		t.Fatalf("build workflow: %v", err)
+	}
+
+	ag, err := agentworkflow.NewAgent(wf, agentworkflow.AgentConfig{
+		IncludeOutputsInResponse: true,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	resp, err := ag.RunText(t.Context(), "hello").Collect()
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+
+	if got, want := responseTexts(resp), []string{"SECOND ANSWER"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("response texts = %v, want %v; response = %+v", got, want, resp)
 	}
 }
 
