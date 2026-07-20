@@ -216,6 +216,20 @@ var agentsExamples = []ExampleDefinition{
 		},
 	},
 	{
+		Name:                         "02_agents_agents_step13_middleware",
+		ProjectPath:                  "examples/02-agents/agents/step13_middleware",
+		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
+		OptionalEnvironmentVariables: []string{"FOUNDRY_MODEL"},
+		MustContain: []string{
+			"I can't help with that request.",
+		},
+		ExpectedOutputDescription: []string{
+			"The blocked request should be refused with 'I can't help with that request.' by the guardrail middleware, without a model answer.",
+			"The allowed request should produce a joke about a pirate.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
 		Name:                         "02_agents_agents_step17_additional_ai_context",
 		ProjectPath:                  "examples/02-agents/agents/step17_additional_ai_context",
 		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
