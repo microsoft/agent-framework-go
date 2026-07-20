@@ -180,7 +180,6 @@ var agentsExamples = []ExampleDefinition{
 		ProjectPath:                  "examples/02-agents/agents/step09_dependency_injection",
 		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
 		OptionalEnvironmentVariables: []string{"FOUNDRY_MODEL"},
-		SkipReason:                   "Example is currently a TODO placeholder and produces no output.",
 		ExpectedOutputDescription: []string{
 			"The output should contain a joke about a pirate.",
 			"The output should not contain error messages or stack traces.",
