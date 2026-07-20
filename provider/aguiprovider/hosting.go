@@ -16,10 +16,15 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 )
 
+// HandlerConfig contains configuration for [NewJSONHTTPHandler].
 type HandlerConfig struct {
+	// Logger receives handler diagnostics. When nil, logs are discarded.
 	Logger *slog.Logger
 }
 
+// NewJSONHTTPHandler returns an [http.Handler] that hosts hostedAgent behind the
+// AG-UI protocol: it accepts POSTed AG-UI run input and streams the agent's
+// response back as AG-UI Server-Sent Events. It panics if hostedAgent is nil.
 func NewJSONHTTPHandler(hostedAgent *agent.Agent, cfg HandlerConfig) http.Handler {
 	if hostedAgent == nil {
 		panic("agent is required")

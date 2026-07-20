@@ -22,12 +22,14 @@ import (
 	"github.com/microsoft/agent-framework-go/tool"
 )
 
+// AgentConfig contains configuration for [NewAgent].
 type AgentConfig struct {
 	agent.Config
 
 	// Instructions are sent to AG-UI as a leading system message for each run.
 	Instructions string
 
+	// Decoder decodes the AG-UI event stream. When nil, a default decoder is used.
 	Decoder *aguiEvents.EventDecoder
 }
 
@@ -37,6 +39,8 @@ type provider struct {
 	cfg     AgentConfig
 }
 
+// NewAgent creates a new [agent.Agent] backed by a remote agent that speaks the
+// AG-UI protocol over Server-Sent Events via the AG-UI client.
 func NewAgent(aclient *aguiSSEClient.Client, config AgentConfig) *agent.Agent {
 	p := &provider{
 		cfg:    config,

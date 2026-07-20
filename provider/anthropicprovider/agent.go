@@ -46,6 +46,7 @@ type AgentConfig struct {
 	Model string
 }
 
+// NewAgent creates a new [agent.Agent] backed by the Anthropic Messages API via the anthropic client.
 func NewAgent(aclient anthropic.Client, config AgentConfig) *agent.Agent {
 	c := &client{
 		client: aclient,
