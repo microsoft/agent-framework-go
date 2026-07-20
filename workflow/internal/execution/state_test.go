@@ -24,6 +24,33 @@ func TestUpdateStateUpdateNilValueIsDelete(t *testing.T) {
 	}
 }
 
+// TestStateManager_ClearByIDDropsUnpublishedWriteOnFreshScope verifies that
+// clearing a scope also removes writes still queued (unpublished) when the
+// scope has never been materialized in sm.scopes. Writing then clearing the
+// same scope within a superstep must not leave the write readable, nor commit
+// it on publish.
+func TestStateManager_ClearByIDDropsUnpublishedWriteOnFreshScope(t *testing.T) {
+	manager := NewStateManager()
+	scope := workflow.ScopeID{ExecutorID: "executor1", ScopeName: ""}
+
+	mustSucceed(t, manager.WriteStateByID(scope, "key1", "value1"))
+	mustSucceed(t, manager.ClearStateByID(scope))
+
+	if _, ok, err := manager.ReadStateByID(scope, "key1"); err != nil {
+		t.Fatalf("ReadStateByID: %v", err)
+	} else if ok {
+		t.Fatal("cleared key should be absent, but the queued write survived the clear")
+	}
+
+	mustSucceed(t, manager.PublishUpdates(nil))
+
+	if _, ok, err := manager.ReadStateByID(scope, "key1"); err != nil {
+		t.Fatalf("ReadStateByID after publish: %v", err)
+	} else if ok {
+		t.Fatal("cleared key must not be committed on publish")
+	}
+}
+
 func TestScopeSharedScope_ReadKeys(t *testing.T) {
 	scopeName := "sharedScope"
 	runScopeKeysTest(t, scopeName, true)

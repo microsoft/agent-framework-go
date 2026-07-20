@@ -218,12 +218,15 @@ func (sm *StateManager) ClearState(executorID string, scopeName string) error {
 
 // ClearStateByID clears all state for the given scope ID.
 func (sm *StateManager) ClearStateByID(scopeID workflow.ScopeID) error {
-	scope, exists := sm.scopes.Load(scopeID)
-	if !exists {
-		return nil
+	// A scope only materializes in sm.scopes once published, but writes made in
+	// the current superstep live in queuedUpdates. Do not early-return when the
+	// scope is unpublished: the loop below must still turn those pending writes
+	// into deletes, otherwise a write-then-clear on a fresh scope silently keeps
+	// (and later commits) the write.
+	keysToDelete := map[string]struct{}{}
+	if scope, exists := sm.scopes.Load(scopeID); exists {
+		keysToDelete = scope.ReadKeys()
 	}
-
-	keysToDelete := scope.ReadKeys()
 
 	// Mark existing updates as deletes
 	for updateKey := range sm.getUpdatesForScopeStrict(scopeID) {
