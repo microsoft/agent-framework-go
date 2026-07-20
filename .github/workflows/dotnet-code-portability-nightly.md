@@ -10,7 +10,7 @@ network:
       - go
 on:
    schedule:
-   - cron: daily
+   - cron: "19 22 * * 1-5"
    workflow_dispatch:
 checkout:
    fetch-depth: 0
