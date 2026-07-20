@@ -62,6 +62,12 @@ type SourceOptions struct {
 	// files within each skill directory. A value of 1 searches only the skill
 	// root; a value of 2 (the default) also searches one level of subdirectories.
 	// Values less than 1 are treated as the default.
+	//
+	// SearchDepth applies only to resource and script discovery within a skill
+	// directory. It does not affect the discovery of skill directories
+	// themselves (those containing a SKILL.md), which is bounded independently.
+	// This mirrors the .NET SDK, where the two concerns are configured
+	// separately.
 	SearchDepth int
 
 	// ResourceFilter is an optional predicate applied to each candidate resource
@@ -185,6 +191,11 @@ func discoverSkillDirectories(filesystems []fs.FS) []discoveredSkillDir {
 	return results
 }
 
+// searchForSkills locates skill directories (those containing a SKILL.md).
+// This discovery is intentionally bounded by defaultSearchDepth and is
+// independent of SourceOptions.SearchDepth, which governs only resource and
+// script discovery within an already-discovered skill directory. This matches
+// the .NET SDK, which bounds the two concerns separately.
 func searchForSkills(filesystem fs.FS, dir string, results *[]discoveredSkillDir, currentDepth int) {
 	skillPath := path.Join(dir, skillFileName)
 	if _, err := fs.Stat(filesystem, skillPath); err == nil {
@@ -540,20 +551,31 @@ func newScript(name string, fsys fs.FS, runner skills.ScriptRunner) skills.Scrip
 	return skills.Script{
 		Name:             name,
 		ParametersSchema: defaultFileScriptSchema,
-		Run: func(ctx context.Context, owner *skills.Skill, arguments []string) (any, error) {
-			if _, err := FSFromSkill(owner); err != nil {
-				return nil, fmt.Errorf("file-based script %q requires a skill with a backing fs.FS: %w", name, err)
-			}
-			if runner == nil {
-				return nil, fmt.Errorf("script %q cannot be executed because no file script runner was provided", name)
-			}
-			script := &skills.Script{Name: name}
-			return runner(ctx, owner, script, arguments)
-		},
+		Run:              newFileScriptRunFunc(name, runner),
 		AdditionalProperties: map[string]any{
 			"fsskills.scriptFS": fsys,
 		},
 	}
+}
+
+func newFileScriptRunFunc(name string, runner skills.ScriptRunner) func(context.Context, *skills.Skill, []string) (any, error) {
+	return func(ctx context.Context, owner *skills.Skill, arguments []string) (any, error) {
+		if err := requireFileSkill(name, owner); err != nil {
+			return nil, err
+		}
+		if runner == nil {
+			return nil, fmt.Errorf("script %q cannot be executed because no file script runner was provided", name)
+		}
+		script := &skills.Script{Name: name}
+		return runner(ctx, owner, script, arguments)
+	}
+}
+
+func requireFileSkill(scriptName string, skill *skills.Skill) error {
+	if _, err := FSFromSkill(skill); err != nil {
+		return fmt.Errorf("file-based script %q requires a skill with a backing fs.FS: %w", scriptName, err)
+	}
+	return nil
 }
 
 type discoveredSkillDir struct {

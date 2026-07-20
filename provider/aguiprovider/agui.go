@@ -22,12 +22,14 @@ import (
 	"github.com/microsoft/agent-framework-go/tool"
 )
 
+// AgentConfig contains configuration for [NewAgent].
 type AgentConfig struct {
 	agent.Config
 
 	// Instructions are sent to AG-UI as a leading system message for each run.
 	Instructions string
 
+	// Decoder decodes the AG-UI event stream. When nil, a default decoder is used.
 	Decoder *aguiEvents.EventDecoder
 }
 
@@ -37,6 +39,8 @@ type provider struct {
 	cfg     AgentConfig
 }
 
+// NewAgent creates a new [agent.Agent] backed by a remote agent that speaks the
+// AG-UI protocol over Server-Sent Events via the AG-UI client.
 func NewAgent(aclient *aguiSSEClient.Client, config AgentConfig) *agent.Agent {
 	p := &provider{
 		cfg:    config,
@@ -95,7 +99,16 @@ func (p *provider) run(ctx context.Context, messages []*message.Message, options
 			ForwardedProps: map[string]any{},
 		}
 
-		frames, errs, err := p.client.Stream(aguiSSEClient.StreamOptions{Context: ctx, Payload: payload})
+		// Derive a cancellable context so that any early return from this
+		// closure — the consumer stopping mid-stream, or a decode/event error —
+		// tears down the SSE request and releases the client's reader goroutine
+		// and HTTP response body. agent.Run does not supply a cancellable
+		// context, so without this the reader goroutine leaks until the client's
+		// ReadTimeout (or indefinitely when ReadTimeout is 0).
+		streamCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		frames, errs, err := p.client.Stream(aguiSSEClient.StreamOptions{Context: streamCtx, Payload: payload})
 		if err != nil {
 			yield(nil, err)
 			return

@@ -6,6 +6,7 @@ import (
 	"context"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -46,6 +47,67 @@ func collectInstructions(opts []agent.Option) string {
 		sb.WriteString(inst)
 	}
 	return sb.String()
+}
+
+// TestConcurrentToolInvocations_NoDataRace mirrors toolautocall with
+// AllowConcurrentInvocations enabled, which invokes multiple tool calls from a
+// single model response on separate goroutines that share one session. The
+// mode_set/mode_get tools must therefore be safe for concurrent use. Run with
+// -race to surface unsynchronized session/state access.
+func TestConcurrentToolInvocations_NoDataRace(t *testing.T) {
+	p := agentmode.New(agentmode.Config{})
+	opts := sessionOpts()
+
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var setTool, getTool tool.FuncTool
+	for _, tt := range collectTools(outOpts) {
+		ft, ok := tt.(tool.FuncTool)
+		if !ok {
+			continue
+		}
+		switch ft.Name() {
+		case "mode_set":
+			setTool = ft
+		case "mode_get":
+			getTool = ft
+		}
+	}
+	if setTool == nil || getTool == nil {
+		t.Fatalf("expected mode_set and mode_get tools, got set=%v get=%v", setTool, getTool)
+	}
+
+	const n = 50
+	var wg sync.WaitGroup
+	wg.Add(n * 2)
+	// Each goroutine records its error in a distinct slot so the slice itself
+	// is not a source of races; assert them all after the goroutines finish so
+	// a functional regression (e.g. argument-decode failure) fails the test
+	// deterministically, independent of the race detector.
+	errs := make([]error, n*2)
+	for i := 0; i < n; i++ {
+		mode := "plan"
+		if i%2 == 0 {
+			mode = "execute"
+		}
+		go func(idx int, mode string) {
+			defer wg.Done()
+			_, errs[idx] = setTool.Call(context.Background(), `{"Arg0":"`+mode+`"}`)
+		}(i*2, mode)
+		go func(idx int) {
+			defer wg.Done()
+			_, errs[idx] = getTool.Call(context.Background(), "")
+		}(i*2 + 1)
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent tool call failed: %v", err)
+		}
+	}
 }
 
 // 1. ProvideAIContextAsync_ReturnsToolsAndInstructions

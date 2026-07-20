@@ -398,14 +398,17 @@ func runStateless(ctx context.Context, opts LocalConfig, command string) (Result
 // --------------------------------------------------------------------------
 
 // headTailBuffer keeps up to cap bytes: the first half as head and the most
-// recent half as a rolling tail. When the total exceeds cap, the middle is
-// dropped and [Result.Truncated] is set. This mirrors the .NET HeadTailBuffer.
+// recent half as a rolling tail. Once a complete rune no longer fits in the
+// head, it and all later runes stay in the tail so the final output keeps the
+// original UTF-8 ordering. When the total exceeds cap, the middle is dropped
+// and [Result.Truncated] is set. This mirrors the .NET HeadTailBuffer.
 type headTailBuffer struct {
 	cap        int
 	head       []byte
 	tail       [][]byte // queue of complete rune-byte slices
 	tailBytes  int
 	totalBytes int
+	headSealed bool
 	truncated  bool
 }
 
@@ -430,15 +433,16 @@ func (b *headTailBuffer) Write(p []byte) (int, error) {
 
 		b.totalBytes += size
 
-		if len(b.head)+len(encoded) <= headCap {
+		if !b.headSealed && len(b.head)+len(encoded) <= headCap {
 			b.head = append(b.head, encoded...)
 			continue
 		}
-		// Head full — append to tail.
+		// Once a complete rune cannot fit in the head, all later runes stay in the tail.
+		b.headSealed = true
 		b.tail = append(b.tail, encoded)
 		b.tailBytes += len(encoded)
 		// Evict oldest rune-chunk from tail until within budget.
-		for b.tailBytes > tailCap && len(b.tail) > 0 {
+		for b.totalBytes > b.cap && b.tailBytes > tailCap && len(b.tail) > 0 {
 			b.tailBytes -= len(b.tail[0])
 			b.tail = b.tail[1:]
 			b.truncated = true
@@ -594,37 +598,40 @@ func shellKindDescription(shell resolvedShell) string {
 }
 
 func (s resolvedShell) statelessArgvForCommand(command string) []string {
-	var suffix []string
 	switch s.kind {
 	case shellKindPowerShell:
-		suffix = []string{"-NoProfile", "-NoLogo", "-NonInteractive", "-Command", command}
+		return s.argvWithExtra([]string{"-NoProfile", "-NoLogo", "-NonInteractive", "-Command", command})
 	case shellKindCmd:
-		suffix = []string{"/d", "/c", command}
+		return s.argvWithExtra([]string{"/d", "/c", command})
 	case shellKindBash:
-		suffix = []string{"--noprofile", "--norc", "-c", command}
+		return s.argvWithExtra([]string{"--noprofile", "--norc", "-c", command})
 	default:
-		suffix = []string{"-c", command}
+		return s.argvWithExtra([]string{"-c", command})
 	}
-	return combineArgv(s.extraArgv, suffix)
 }
 
 func (s resolvedShell) persistentArgv() ([]string, error) {
-	var suffix []string
 	switch s.kind {
 	case shellKindPowerShell:
-		suffix = []string{"-NoProfile", "-NoLogo", "-NonInteractive", "-Command", "-"}
+		return s.launchArgv([]string{"-NoProfile", "-NoLogo", "-NonInteractive", "-Command", "-"}), nil
 	case shellKindCmd:
 		return nil, fmt.Errorf("persistent mode is not supported for cmd.exe; use pwsh, powershell, or a POSIX shell")
 	case shellKindBash:
-		suffix = []string{"--noprofile", "--norc"}
+		return s.launchArgv([]string{"--noprofile", "--norc"}), nil
 	default:
-		suffix = nil
+		return s.launchArgv(nil), nil
 	}
-	return append([]string{s.binary}, combineArgv(s.extraArgv, suffix)...), nil
 }
 
-func combineArgv(extra, suffix []string) []string {
-	return slices.Concat(extra, suffix)
+func (s resolvedShell) launchArgv(suffix []string) []string {
+	return append([]string{s.binary}, s.argvWithExtra(suffix)...)
+}
+
+func (s resolvedShell) argvWithExtra(suffix []string) []string {
+	if len(s.extraArgv) == 0 {
+		return suffix
+	}
+	return append(slices.Clone(s.extraArgv), suffix...)
 }
 
 func classifyShellKind(shell string) shellKind {

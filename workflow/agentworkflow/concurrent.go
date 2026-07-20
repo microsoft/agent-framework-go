@@ -156,12 +156,16 @@ func newAggregateTurnMessagesBinding(id string) workflow.ExecutorBinding {
 				StateKey:                 aggregateTurnMessagesStateKey,
 				DisableAutoSendTurnToken: true,
 				TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, messages []*message.Message) error {
-					return ctx.SendMessage("", messages)
+					return sendAggregateTurnMessages(ctx, messages)
 				},
 			})
 			return &executor, nil
 		},
 	}
+}
+
+func sendAggregateTurnMessages(ctx *workflow.Context, messages []*message.Message) error {
+	return ctx.SendMessage("", messages)
 }
 
 func newConcurrentEndBinding(expectedInputs int, aggregator MessageAggregator) workflow.ExecutorBinding {

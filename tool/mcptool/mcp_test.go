@@ -706,6 +706,35 @@ func TestAddToolReturnsDataAndMultipleContentResults(t *testing.T) {
 	})
 }
 
+// A text-typed DataContent whose bytes are not valid UTF-8 must fall back to a
+// binary Blob resource; putting invalid UTF-8 in Text corrupts it on transport.
+func TestAddToolReturnsInvalidUTF8TextAsBlob(t *testing.T) {
+	result := callAddedTool(t, stubFuncTool{
+		name:         "bad-utf8-result",
+		description:  "returns text media type with non-UTF-8 bytes",
+		schema:       map[string]any{"type": "object"},
+		returnSchema: map[string]any{"type": "object"},
+		call: func(context.Context, string) (any, error) {
+			// "//4=" is base64 for {0xff, 0xfe}, which is not valid UTF-8.
+			return &message.DataContent{Name: "note.txt", Data: "//4=", MediaType: "text/plain"}, nil
+		},
+	})
+
+	if len(result.Content) != 1 {
+		t.Fatalf("expected one content item, got %d", len(result.Content))
+	}
+	embedded, ok := result.Content[0].(*mcp.EmbeddedResource)
+	if !ok {
+		t.Fatalf("content is %T, want *mcp.EmbeddedResource", result.Content[0])
+	}
+	if embedded.Resource.Text != "" {
+		t.Errorf("Resource.Text = %q, want empty (non-UTF-8 must not be placed in Text)", embedded.Resource.Text)
+	}
+	if len(embedded.Resource.Blob) == 0 {
+		t.Error("Resource.Blob is empty, want the raw non-UTF-8 bytes")
+	}
+}
+
 func TestAddToolReturnsBinaryDataAsEmbeddedResource(t *testing.T) {
 	result := callAddedTool(t, stubFuncTool{
 		name:         "binary-result",
@@ -729,6 +758,35 @@ func TestAddToolReturnsBinaryDataAsEmbeddedResource(t *testing.T) {
 	}
 	if string(embedded.Resource.Blob) != string([]byte{1, 2, 3, 4}) {
 		t.Fatalf("blob = %#v, want [1 2 3 4]", embedded.Resource.Blob)
+	}
+}
+
+// A text DataContent must be surfaced as an MCP text resource (Resource.Text),
+// not a binary Blob; the reverse mapping reads Resource.Text for text resources.
+func TestAddToolReturnsTextDataAsTextResource(t *testing.T) {
+	result := callAddedTool(t, stubFuncTool{
+		name:         "text-result",
+		description:  "returns text content",
+		schema:       map[string]any{"type": "object"},
+		returnSchema: map[string]any{"type": "object"},
+		call: func(context.Context, string) (any, error) {
+			// "hello" base64-encoded, with a text media type.
+			return &message.DataContent{Name: "note.txt", Data: "aGVsbG8=", MediaType: "text/plain"}, nil
+		},
+	})
+
+	if len(result.Content) != 1 {
+		t.Fatalf("expected one content item, got %d", len(result.Content))
+	}
+	embedded, ok := result.Content[0].(*mcp.EmbeddedResource)
+	if !ok {
+		t.Fatalf("content is %T, want *mcp.EmbeddedResource", result.Content[0])
+	}
+	if embedded.Resource.Text != "hello" {
+		t.Errorf("resource Text = %q, want %q", embedded.Resource.Text, "hello")
+	}
+	if len(embedded.Resource.Blob) != 0 {
+		t.Errorf("text resource must not use Blob, got %#v", embedded.Resource.Blob)
 	}
 }
 
@@ -927,4 +985,44 @@ func connectInMemory(t *testing.T, ctx context.Context, server *mcp.Server) *mcp
 	}
 	t.Cleanup(func() { _ = clientSession.Close() })
 	return clientSession
+}
+
+// A tool exposed via AddTool may return a typed-nil message.Content (e.g. a
+// (*message.ErrorContent)(nil)). Converting that to an MCP result must not
+// panic the server handler; it degrades to a "null" text result.
+func TestAddToolTypedNilContentDoesNotPanic(t *testing.T) {
+	ctx := context.Background()
+	server := mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "1.0.0"}, nil)
+	mcptool.AddTool(server, stubFuncTool{
+		name:        "typednil",
+		description: "returns a typed-nil content",
+		schema:      map[string]any{"type": "object"},
+		call: func(context.Context, string) (any, error) {
+			var ec *message.ErrorContent
+			return ec, nil // typed-nil message.Content
+		},
+	})
+
+	session := connectInMemory(t, ctx, server)
+	tools, err := mcptool.ListTools(ctx, session)
+	if err != nil {
+		t.Fatalf("ListTools() error = %v", err)
+	}
+	funcTool, ok := tools[0].(tool.FuncTool)
+	if !ok {
+		t.Fatalf("listed tool is %T, want tool.FuncTool", tools[0])
+	}
+
+	result, err := funcTool.Call(ctx, `{}`) // must not panic or error
+	if err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+	contents, ok := result.([]message.Content)
+	if !ok || len(contents) != 1 {
+		t.Fatalf("Call() result = %#v, want one content item", result)
+	}
+	text, ok := contents[0].(*message.TextContent)
+	if !ok || !strings.Contains(text.Text, "null") {
+		t.Fatalf("content = %#v, want a TextContent containing \"null\"", contents[0])
+	}
 }
