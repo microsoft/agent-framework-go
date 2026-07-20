@@ -145,7 +145,12 @@ func (wb *Builder) AddDirectEdge(source ExecutorBinding, target ExecutorBinding,
 	}
 	applyEdgeOptions(&edge, opts)
 	wb.addEdgeForSource(source.ID, edge)
-	wb.conditionlessConnections = append(wb.conditionlessConnections, conn)
+	// Only conditionless edges participate in the conditionless-edge dedup set;
+	// appending conditional edges here would wrongly make a later conditionless
+	// edge on the same source→target pair look like a duplicate.
+	if condition == nil {
+		wb.conditionlessConnections = append(wb.conditionlessConnections, conn)
+	}
 	return wb
 }
 

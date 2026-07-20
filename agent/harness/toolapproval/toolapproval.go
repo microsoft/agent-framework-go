@@ -51,9 +51,9 @@ func (r Rule) matches(toolName string, arguments map[string]string) bool {
 
 // state is persisted in the session across turns.
 type state struct {
-	Rules              []Rule                                 `json:"rules,omitempty"`
-	CollectedResponses []*message.ToolApprovalResponseContent `json:"collectedResponses,omitempty"`
-	QueuedRequests     []*message.ToolApprovalRequestContent  `json:"queuedRequests,omitempty"`
+	Rules                      []Rule                                 `json:"rules,omitempty"`
+	CollectedApprovalResponses []*message.ToolApprovalResponseContent `json:"collectedResponses,omitempty"`
+	QueuedApprovalRequests     []*message.ToolApprovalRequestContent  `json:"queuedRequests,omitempty"`
 }
 
 func loadState(opts []agent.Option) state {
@@ -109,9 +109,9 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 			yield(nil, err)
 			return
 		}
-		if len(st.QueuedRequests) > 0 {
-			next := st.QueuedRequests[0]
-			st.QueuedRequests = st.QueuedRequests[1:]
+		if len(st.QueuedApprovalRequests) > 0 {
+			next := st.QueuedApprovalRequests[0]
+			st.QueuedApprovalRequests = st.QueuedApprovalRequests[1:]
 			saveState(opts, st)
 			yield(&agent.ResponseUpdate{
 				Role:     message.RoleAssistant,
@@ -124,10 +124,10 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 		for {
 			// Inject collected approval responses as user messages.
 			callMessages := messages
-			if len(st.CollectedResponses) > 0 {
-				injected := responseMessage(st.CollectedResponses)
+			if len(st.CollectedApprovalResponses) > 0 {
+				injected := responseMessage(st.CollectedApprovalResponses)
 				callMessages = append(slices.Clone(messages), injected)
-				st.CollectedResponses = nil
+				st.CollectedApprovalResponses = nil
 			}
 
 			var approvalRequests []*message.ToolApprovalRequestContent
@@ -135,6 +135,13 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 				if err != nil {
 					yield(nil, err)
 					return
+				}
+				if update == nil {
+					if !yield(nil, nil) {
+						saveState(opts, st)
+						return
+					}
+					continue
 				}
 				stripped, requests := splitApprovalRequestContents(update)
 				approvalRequests = append(approvalRequests, requests...)
@@ -171,8 +178,8 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 			if len(needsApproval) > 0 {
 				// Surface the first unapproved request, queue the rest.
 				first := needsApproval[0]
-				st.QueuedRequests = append(st.QueuedRequests, needsApproval[1:]...)
-				st.CollectedResponses = append(st.CollectedResponses, autoApproved...)
+				st.QueuedApprovalRequests = append(st.QueuedApprovalRequests, needsApproval[1:]...)
+				st.CollectedApprovalResponses = append(st.CollectedApprovalResponses, autoApproved...)
 
 				// Non-approval updates were already yielded during streaming.
 				if !yield(&agent.ResponseUpdate{
@@ -188,7 +195,7 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 
 			// All were auto-approved — collect responses and loop to call
 			// inner agent again with the approvals injected.
-			st.CollectedResponses = append(st.CollectedResponses, autoApproved...)
+			st.CollectedApprovalResponses = append(st.CollectedApprovalResponses, autoApproved...)
 			// Non-approval updates were already yielded during streaming.
 		}
 	}
@@ -222,11 +229,11 @@ func prepareInbound(messages []*message.Message, st state) ([]*message.Message, 
 					}
 				}
 				if resp.InnerResponse != nil {
-					st.CollectedResponses = append(st.CollectedResponses, resp.InnerResponse)
+					st.CollectedApprovalResponses = append(st.CollectedApprovalResponses, resp.InnerResponse)
 				}
 			case *message.ToolApprovalResponseContent:
 				hasApproval = true
-				st.CollectedResponses = append(st.CollectedResponses, resp)
+				st.CollectedApprovalResponses = append(st.CollectedApprovalResponses, resp)
 			}
 		}
 		if hasApproval {
@@ -266,22 +273,22 @@ func prepareInbound(messages []*message.Message, st state) ([]*message.Message, 
 // are for tools that do not require approval, or match an auto-approval rule,
 // adding auto-approve responses to collected.
 func drainAutoApprovable(ctx context.Context, cfg Config, st *state, opts []agent.Option) error {
-	if len(st.QueuedRequests) == 0 {
+	if len(st.QueuedApprovalRequests) == 0 {
 		return nil
 	}
 	var remaining []*message.ToolApprovalRequestContent
-	for _, req := range st.QueuedRequests {
+	for _, req := range st.QueuedApprovalRequests {
 		approved, err := isAutoApprovable(ctx, cfg, st.Rules, opts, req)
 		if err != nil {
 			return err
 		}
 		if approved {
-			st.CollectedResponses = append(st.CollectedResponses, req.CreateResponse(true, ""))
+			st.CollectedApprovalResponses = append(st.CollectedApprovalResponses, req.CreateResponse(true, ""))
 		} else {
 			remaining = append(remaining, req)
 		}
 	}
-	st.QueuedRequests = remaining
+	st.QueuedApprovalRequests = remaining
 	return nil
 }
 

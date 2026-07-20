@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -673,5 +674,49 @@ func TestCompleteTodos_EmptyReasonIsAccepted(t *testing.T) {
 				t.Errorf("item should be complete even with %q reason", tc.reason)
 			}
 		})
+	}
+}
+
+// Concurrent tool invocations and public reads on a shared session must be
+// serialized by the per-session lock rather than race on the session's todo
+// state. Run under -race.
+func TestTodo_ConcurrentSessionAccess_NoDataRace(t *testing.T) {
+	p := todo.New(nil)
+	opts := sessionOpts()
+
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var addTool tool.FuncTool
+	for _, tt := range collectTools(outOpts) {
+		if tt.Name() == "todos_add" {
+			addTool, _ = tt.(tool.FuncTool)
+		}
+	}
+	if addTool == nil {
+		t.Fatal("todos_add tool not found")
+	}
+
+	const n = 50
+	var wg sync.WaitGroup
+	wg.Add(n * 2)
+	errs := make([]error, n*2)
+	for i := 0; i < n; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			_, errs[idx] = addTool.Call(context.Background(), fmt.Sprintf(`{"Arg0":[{"title":"item-%d"}]}`, idx))
+		}(i * 2)
+		go func(idx int) {
+			defer wg.Done()
+			_ = p.GetAllItems(opts...)
+			_ = p.GetRemainingItems(opts...)
+		}(i*2 + 1)
+	}
+	wg.Wait()
+	for _, e := range errs {
+		if e != nil {
+			t.Fatalf("concurrent todos_add failed: %v", e)
+		}
 	}
 }

@@ -114,20 +114,31 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 				yield(nil, err)
 			}
 		}
-		choice := resp.Choices[0]
-		contents := make([]message.Content, 0, 1+len(choice.Message.ToolCalls))
-		for _, tc := range choice.Message.ToolCalls {
-			contents = append(contents, &message.FunctionCallContent{
-				CallID:    tc.ID,
-				Name:      tc.Function.Name,
-				Arguments: tc.Function.Arguments,
-			})
-		}
-		if choice.Message.Content != "" {
-			contents = append(contents, &message.TextContent{Text: choice.Message.Content})
-		}
-		if choice.Message.Refusal != "" {
-			contents = append(contents, &message.ErrorContent{Message: choice.Message.Refusal})
+		// Some services return a successful response with no choices, e.g.
+		// Azure OpenAI when the prompt is blocked by a content filter (the
+		// response carries prompt_filter_results and usage instead). Tolerate
+		// this by emitting an update with whatever metadata and usage are
+		// present rather than indexing into an empty Choices slice, mirroring
+		// the streaming path below.
+		var contents []message.Content
+		var finishReason string
+		if len(resp.Choices) > 0 {
+			choice := resp.Choices[0]
+			contents = make([]message.Content, 0, 1+len(choice.Message.ToolCalls))
+			for _, tc := range choice.Message.ToolCalls {
+				contents = append(contents, &message.FunctionCallContent{
+					CallID:    tc.ID,
+					Name:      tc.Function.Name,
+					Arguments: tc.Function.Arguments,
+				})
+			}
+			if choice.Message.Content != "" {
+				contents = append(contents, &message.TextContent{Text: choice.Message.Content})
+			}
+			if choice.Message.Refusal != "" {
+				contents = append(contents, &message.ErrorContent{Message: choice.Message.Refusal})
+			}
+			finishReason = choice.FinishReason
 		}
 		if resp.JSON.Usage.Valid() {
 			contents = addUsage(contents, resp.Usage)
@@ -138,7 +149,7 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 				Role:         message.RoleAssistant,
 				ResponseID:   resp.ID,
 				MessageID:    resp.ID,
-				FinishReason: choice.FinishReason,
+				FinishReason: finishReason,
 				CreatedAt:    time.Unix(resp.Created, 0),
 			}
 			if !yield(update, nil) {

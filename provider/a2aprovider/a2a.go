@@ -20,6 +20,7 @@ import (
 	"github.com/microsoft/agent-framework-go/message"
 )
 
+// AgentConfig contains configuration for [NewAgent].
 type AgentConfig struct {
 	agent.Config
 }
@@ -28,6 +29,8 @@ type taskIDOpt struct{ string }
 
 func (o taskIDOpt) Value() any { return o.string }
 
+// TaskID returns an [agent.Option] that associates the run with an existing A2A
+// task, so the request continues that task rather than starting a new one.
 func TaskID(taskID string) agent.Option {
 	return taskIDOpt{taskID}
 }
@@ -37,6 +40,9 @@ type a2aProvider struct {
 	cfg    AgentConfig
 }
 
+// NewAgent creates a new [agent.Agent] that delegates runs to a remote agent
+// over the A2A (Agent-to-Agent) protocol via the a2a client. It panics if
+// aclient is nil.
 func NewAgent(aclient *a2aclient.Client, config AgentConfig) *agent.Agent {
 	if aclient == nil {
 		panic("a2aprovider: client cannot be nil")

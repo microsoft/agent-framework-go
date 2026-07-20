@@ -3,6 +3,7 @@
 package compaction
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 
@@ -421,8 +422,24 @@ func isSummaryMessage(msg *message.Message) bool {
 	if !ok {
 		return false
 	}
-	if boolValue, ok := value.(bool); ok {
-		return boolValue
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case json.RawMessage:
+		return rawSummaryMessageValue(typed)
+	case *json.RawMessage:
+		return typed != nil && rawSummaryMessageValue(*typed)
+	case []byte:
+		return rawSummaryMessageValue(typed)
+	default:
+		return false
 	}
-	return false
+}
+
+func rawSummaryMessageValue(value []byte) bool {
+	var boolValue bool
+	if err := json.Unmarshal(value, &boolValue); err != nil {
+		return false
+	}
+	return boolValue
 }

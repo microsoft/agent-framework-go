@@ -587,6 +587,7 @@ func (p *provider) assistantUsageUpdate(event copilot.SessionEvent, data *copilo
 		OutputTokenCount:      outputTokens,
 		TotalTokenCount:       inputTokens + outputTokens,
 		CachedInputTokenCount: int64Value(data.CacheReadTokens),
+		ReasoningTokenCount:   int64Value(data.ReasoningTokens),
 		AdditionalCounts:      additionalUsageCounts(data),
 	}
 	update := &agent.ResponseUpdate{

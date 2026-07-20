@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/internal/otelx"
 	"github.com/microsoft/agent-framework-go/message"
 
 	"go.opentelemetry.io/otel"
@@ -38,6 +39,23 @@ const (
 	attrKeyAgentName     = "gen_ai.agent.name"
 	attrKeyAgentDesc     = "gen_ai.agent.description"
 	attrKeyOperationName = "gen_ai.operation.name"
+	attrKeyErrorType     = "error.type"
+
+	// Token usage, per the OpenTelemetry GenAI semantic conventions.
+	//
+	// Providers already emit message.UsageContent into the response stream (see
+	// provider/anthropicprovider/agent.go), and this middleware already iterates that
+	// stream -- so the numbers pass through here on their way to the caller and were
+	// simply never recorded. Token count is cost, and cost is the main reason to trace
+	// an agent at all.
+	//
+	// Names are the exact ids from the GenAI semantic-conventions registry. The registry
+	// namespaces the cache/reasoning counters (they are not `<x>_tokens`) and defines no
+	// total; do not infer these from the input/output shape.
+	attrKeyUsageInputTokens     = "gen_ai.usage.input_tokens"
+	attrKeyUsageOutputTokens    = "gen_ai.usage.output_tokens"
+	attrKeyUsageCacheReadTokens = "gen_ai.usage.cache_read.input_tokens"
+	attrKeyUsageReasoningTokens = "gen_ai.usage.reasoning.output_tokens"
 )
 
 type mw struct {
@@ -54,16 +72,72 @@ func (m *mw) Run(next agent.RunFunc, ctx context.Context, messages []*message.Me
 			attribute.String(attrKeyAgentName, a.Name()),
 			attribute.String(attrKeyAgentDesc, a.Description()),
 		))
+		ctx = otelx.WithTracer(ctx, m.tracer)
 		defer span.End()
+
+		// Accumulated across the whole run. An agent that makes several LLM round-trips
+		// emits one UsageContent per round-trip, so summing them gives the true cost of
+		// the agent rather than the cost of its final call.
+		var usage message.UsageDetails
 
 		for update, err := range next(ctx, messages, options...) {
 			if err != nil {
+				span.SetAttributes(attribute.String(attrKeyErrorType, otelx.ErrorTypeName(err)))
 				span.RecordError(err, trace.WithTimestamp(time.Now()))
 				span.SetStatus(codes.Error, err.Error())
 			}
+			// update.Usage() sums this update's UsageContent (nil-safe), so accumulate
+			// its total into the run rather than iterating Contents by hand.
+			usage.Add(update.Usage())
 			if !yield(update, err) {
-				break
+				// Set what we have before bailing. A caller that stops reading early
+				// still ran (and paid for) the tokens counted so far, and a span that
+				// silently reports none of them understates real spend.
+				setUsage(span, usage)
+				return
 			}
 		}
+
+		setUsage(span, usage)
 	}
+}
+
+// setUsage records token counts on the span. Zero-valued optional counters are left
+// off rather than written as 0: a provider that does not report cached or reasoning
+// tokens should be distinguishable from one that reports none, and an attribute that
+// is always present but always zero trains people to ignore it.
+func setUsage(span trace.Span, usage message.UsageDetails) {
+	// "Did we observe ANY usage?" -- and that must consider every counter, not just the
+	// three required ones. Guarding on input/output/total alone would silently drop the
+	// whole attribute set for a provider that reported only cached or reasoning tokens,
+	// which is the exact silent-drop this function exists to avoid.
+	if !hasUsage(usage) {
+		return
+	}
+
+	// input + output are the only usage-token attributes the registry defines (no
+	// total); cache_read is a subset of input and reasoning a subset of output, so
+	// consumers sum rather than reading a provider-side total.
+	attrs := []attribute.KeyValue{
+		attribute.Int64(attrKeyUsageInputTokens, usage.InputTokenCount),
+		attribute.Int64(attrKeyUsageOutputTokens, usage.OutputTokenCount),
+	}
+	if usage.CachedInputTokenCount > 0 {
+		attrs = append(attrs, attribute.Int64(attrKeyUsageCacheReadTokens, usage.CachedInputTokenCount))
+	}
+	if usage.ReasoningTokenCount > 0 {
+		attrs = append(attrs, attribute.Int64(attrKeyUsageReasoningTokens, usage.ReasoningTokenCount))
+	}
+	span.SetAttributes(attrs...)
+}
+
+// hasUsage reports whether any counter was populated. UsageDetails carries a map
+// (AdditionalCounts) so it is not comparable with ==; the fields are checked directly.
+func hasUsage(u message.UsageDetails) bool {
+	return u.InputTokenCount != 0 ||
+		u.OutputTokenCount != 0 ||
+		u.TotalTokenCount != 0 ||
+		u.CachedInputTokenCount != 0 ||
+		u.ReasoningTokenCount != 0 ||
+		len(u.AdditionalCounts) > 0
 }
