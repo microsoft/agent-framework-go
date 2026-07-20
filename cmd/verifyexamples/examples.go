@@ -274,6 +274,16 @@ var agentsExamples = []ExampleDefinition{
 		},
 	},
 	{
+		Name:                         "02_agents_providers_azure_openai_responses_background",
+		ProjectPath:                  "examples/02-agents/providers/azure/openai_responses_background",
+		RequiredEnvironmentVariables: []string{"AZURE_OPENAI_ENDPOINT"},
+		OptionalEnvironmentVariables: []string{"AZURE_OPENAI_DEPLOYMENT_NAME"},
+		ExpectedOutputDescription: []string{
+			"The output should contain a concise explanation of the theory of relativity.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
 		Name:                         "02_agents_providers_azure_ai_project",
 		ProjectPath:                  "examples/02-agents/providers/azure/ai_project",
 		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
