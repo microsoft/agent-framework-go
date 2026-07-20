@@ -3,6 +3,7 @@
 package shelltool
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -14,6 +15,7 @@ func TestPreserveEnvironmentValuesKeepsOnlyAllowlist(t *testing.T) {
 		"AF_SHELL_PARENT_VAR=should-not-leak",
 		"tmp=/tmp/test",
 	}
+
 	env := make(map[string]string)
 
 	preserveEnvironmentValues(env, source)
@@ -73,5 +75,25 @@ func TestHeadTailBuffer_MultiByteUTF8OverflowPreservesHeadTailOrder(t *testing.T
 	}
 	if strings.ContainsRune(got, '\uFFFD') {
 		t.Fatalf("String() = %q, should not contain replacement rune", got)
+	}
+}
+
+func TestResolvedShellArgvIncludesExtraArgv(t *testing.T) {
+	shell := resolvedShell{
+		binary:    "/custom/bash",
+		kind:      shellKindBash,
+		extraArgv: []string{"--login"},
+	}
+
+	if got, want := shell.statelessArgvForCommand("echo hi"), []string{"--login", "--noprofile", "--norc", "-c", "echo hi"}; !slices.Equal(got, want) {
+		t.Fatalf("statelessArgvForCommand = %v, want %v", got, want)
+	}
+
+	got, err := shell.persistentArgv()
+	if err != nil {
+		t.Fatalf("persistentArgv: %v", err)
+	}
+	if want := []string{"/custom/bash", "--login", "--noprofile", "--norc"}; !slices.Equal(got, want) {
+		t.Fatalf("persistentArgv = %v, want %v", got, want)
 	}
 }

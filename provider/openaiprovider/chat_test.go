@@ -214,7 +214,8 @@ func TestChatBasicRequestResponse_NonStreaming(t *testing.T) {
 
 	a := newTestClient(server)
 
-	resp, err := a.RunText(t.Context(), "hello",
+	resp, err := a.RunText(
+		t.Context(), "hello",
 		openaiprovider.ChatCompletionNewParams(openai.ChatCompletionNewParams{
 			MaxCompletionTokens: openai.Int(10),
 			Temperature:         openai.Float(0.5),
@@ -436,7 +437,8 @@ func TestChatMultipleMessages_NonStreaming(t *testing.T) {
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "i'm good. how are you?"}}},
 	}
 
-	resp, err := a.Run(t.Context(), messages,
+	resp, err := a.Run(
+		t.Context(), messages,
 		openaiprovider.ChatCompletionNewParams(openai.ChatCompletionNewParams{
 			Temperature:      openai.Float(0.25),
 			FrequencyPenalty: openai.Float(0.75),
@@ -789,7 +791,8 @@ func TestChatFunctionCallContent_NonStreaming(t *testing.T) {
 		Description: "Gets the age of the specified person.",
 	}, getPersonAge)
 
-	resp, err := a.RunText(t.Context(), "How old is Alice?",
+	resp, err := a.RunText(
+		t.Context(), "How old is Alice?",
 		agent.WithTool(tool),
 	).Collect()
 	if err != nil {
@@ -1103,7 +1106,8 @@ func TestChatOptions_Model_OverridesClientModel_NonStreaming(t *testing.T) {
 	a := newTestClient(server)
 
 	// Override with gpt-4o in options
-	resp, err := a.RunText(t.Context(), "hello",
+	resp, err := a.RunText(
+		t.Context(), "hello",
 		openaiprovider.ChatCompletionNewParams(openai.ChatCompletionNewParams{
 			Model:               "gpt-4o",
 			MaxCompletionTokens: openai.Int(10),
@@ -1155,7 +1159,8 @@ data: [DONE]
 
 	var updates []*agent.ResponseUpdate
 	// Override with gpt-4o in options
-	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
+	for update, err := range a.RunText(
+		t.Context(), "hello", agent.Stream(true),
 		openaiprovider.ChatCompletionNewParams(openai.ChatCompletionNewParams{
 			Model:               "gpt-4o",
 			MaxCompletionTokens: openai.Int(20),
@@ -1475,7 +1480,8 @@ func TestChatMultipleRequiredFunctions(t *testing.T) {
 		Description: "Get the current time for a location",
 	}, getTime)
 
-	resp, err := a.RunText(t.Context(), "What's the weather and time in Seattle?",
+	resp, err := a.RunText(
+		t.Context(), "What's the weather and time in Seattle?",
 		agent.WithTool(weatherTool),
 		agent.WithTool(timeTool),
 		agent.WithToolMode(tool.RequireTools("GetWeather", "GetTime")),
@@ -1485,5 +1491,63 @@ func TestChatMultipleRequiredFunctions(t *testing.T) {
 	}
 	if err := messagetest.MessagesEqual(resp.Messages, want); err != nil {
 		t.Error(err)
+	}
+}
+
+func TestChatEmptyChoices_NonStreaming(t *testing.T) {
+	const input = `
+            {
+                "messages":[{"role":"user","content":"hello"}],
+                "model":"gpt-4o-mini"
+            }
+            `
+	// Azure OpenAI returns HTTP 200 with an empty choices array when the
+	// prompt is blocked by a content filter; the response carries
+	// prompt_filter_results and usage instead of choices. This must be
+	// tolerated (no panic, no error) and surface the response metadata and
+	// usage, matching the streaming path and .NET behavior.
+	const output = `
+            {
+              "id": "chatcmpl-empty",
+              "object": "chat.completion",
+              "created": 1727888631,
+              "model": "gpt-4o-mini-2024-07-18",
+              "choices": [],
+              "usage": {
+                "prompt_tokens": 12,
+                "completion_tokens": 0,
+                "total_tokens": 12
+              },
+              "prompt_filter_results": [
+                {
+                  "prompt_index": 0,
+                  "content_filter_results": {
+                    "jailbreak": {"filtered": true, "detected": true}
+                  }
+                }
+              ]
+            }
+            `
+
+	server := newTestServer(t, input, output)
+	defer server.Close()
+
+	a := newTestClient(server)
+
+	resp, err := a.RunText(t.Context(), "hello").Collect()
+	if err != nil {
+		t.Fatalf("expected no error for choice-less response, got %v", err)
+	}
+	if got := resp.String(); got != "" {
+		t.Errorf("expected empty text for choice-less response, got %q", got)
+	}
+	if len(resp.Messages) != 1 {
+		t.Fatalf("expected 1 message carrying response metadata, got %d", len(resp.Messages))
+	}
+	if resp.Messages[0].ID != "chatcmpl-empty" {
+		t.Errorf("expected message ID chatcmpl-empty, got %q", resp.Messages[0].ID)
+	}
+	if usage := resp.Usage(); usage.InputTokenCount != 12 || usage.TotalTokenCount != 12 {
+		t.Errorf("expected usage input=12 total=12 to be surfaced, got %+v", usage)
 	}
 }

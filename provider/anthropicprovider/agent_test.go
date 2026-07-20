@@ -34,7 +34,8 @@ func newTestClient(t *testing.T, server *httptest.Server) *agent.Agent {
 		anthropicprovider.AgentConfig{
 			Model:  "claude-3-5-sonnet-20241022",
 			Config: agent.Config{DisableFuncAutoCall: true},
-		})
+		},
+	)
 }
 
 // nestedKey traverses a decoded JSON map following the given path of keys and
@@ -197,7 +198,8 @@ func TestConfigInstructions(t *testing.T) {
 			Config: agent.Config{
 				DisableFuncAutoCall: true,
 			},
-		})
+		},
+	)
 
 	if _, err := a.RunText(t.Context(), "hi").Collect(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -453,5 +455,123 @@ func TestStreamingToolCallsSupportInterleavedDeltas(t *testing.T) {
 		if call.Arguments != want[call.CallID] {
 			t.Errorf("call %q arguments = %q, want %q", call.CallID, call.Arguments, want[call.CallID])
 		}
+	}
+}
+
+// Building the request must not mutate the caller's MessageNewParams slices.
+// The provider appends system instructions to params.System; if it shares the
+// caller's backing array (spare capacity), the append corrupts the caller's data.
+func TestBuildMessageParams_DoesNotMutateCallerSystemSlice(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"m","type":"message","role":"assistant","model":"claude","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	defer server.Close()
+	a := newTestClient(t, server)
+
+	// Caller-supplied System slice with spare capacity.
+	system := make([]anthropic.TextBlockParam, 1, 4)
+	system[0] = anthropic.TextBlockParam{Text: "s0"}
+	opt := anthropicprovider.MessageNewParams(anthropic.MessageNewParams{System: system})
+
+	if _, err := a.RunText(t.Context(), "hi", agent.WithInstructions("added"), opt).Collect(); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if full := system[:cap(system)]; full[1].Text != "" {
+		t.Errorf("provider mutated the caller's System backing array: spare slot = %q", full[1].Text)
+	}
+}
+
+func TestBuildMessageParams_DoesNotMutateCallerMessagesSlice(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"m","type":"message","role":"assistant","model":"claude","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	defer server.Close()
+	a := newTestClient(t, server)
+
+	// Caller-supplied Messages slice with spare capacity. The provider appends
+	// the run's messages to params.Messages; with aliasing that append lands in
+	// the caller's spare slot instead of a cloned slice.
+	messages := make([]anthropic.MessageParam, 1, 4)
+	messages[0] = anthropic.NewUserMessage(anthropic.NewTextBlock("seeded"))
+	opt := anthropicprovider.MessageNewParams(anthropic.MessageNewParams{Messages: messages})
+
+	if _, err := a.RunText(t.Context(), "hi", opt).Collect(); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if full := messages[:cap(messages)]; len(full[1].Content) != 0 {
+		t.Errorf("provider mutated the caller's Messages backing array: spare slot has %d content block(s)", len(full[1].Content))
+	}
+}
+
+// A tool call with empty Arguments must serialize to an object input ({}), not
+// null: Anthropic rejects a tool_use block whose input is null.
+func TestToolUseEmptyArgumentsSerializeAsObject(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		bodyCh <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, minimalMessageResponse("ok"))
+	}))
+	defer server.Close()
+
+	a := anthropicprovider.NewAgent(
+		anthropic.NewClient(option.WithBaseURL(server.URL), option.WithAPIKey("test")),
+		anthropicprovider.AgentConfig{
+			Model:  "claude-3-5-sonnet-20241022",
+			Config: agent.Config{DisableFuncAutoCall: true},
+		},
+	)
+
+	msgs := []*message.Message{
+		{Role: message.RoleUser, Contents: message.Contents{&message.TextContent{Text: "what time is it?"}}},
+		{Role: message.RoleAssistant, Contents: message.Contents{&message.FunctionCallContent{CallID: "toolu_1", Name: "get_time", Arguments: ""}}},
+		{Role: message.RoleTool, Contents: message.Contents{&message.FunctionResultContent{CallID: "toolu_1", Result: "12:00"}}},
+	}
+	if _, err := a.Run(t.Context(), msgs).Collect(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	messages, ok := req["messages"].([]any)
+	if !ok {
+		t.Fatalf("request messages = %#v, want a JSON array", req["messages"])
+	}
+	found := false
+	for _, m := range messages {
+		msg, ok := m.(map[string]any)
+		if !ok {
+			continue
+		}
+		blocks, ok := msg["content"].([]any)
+		if !ok {
+			continue
+		}
+		for _, b := range blocks {
+			block, ok := b.(map[string]any)
+			if !ok {
+				continue
+			}
+			if block["type"] != "tool_use" || block["id"] != "toolu_1" {
+				continue
+			}
+			found = true
+			if _, isObject := block["input"].(map[string]any); !isObject {
+				t.Errorf("tool_use input = %#v (%T), want an object", block["input"], block["input"])
+			}
+		}
+	}
+	if !found {
+		t.Fatal("tool_use block for toolu_1 not found in request")
 	}
 }

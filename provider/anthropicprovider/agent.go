@@ -288,6 +288,11 @@ func (a *client) buildMessageParams(messages []*message.Message, opts []agent.Op
 	var params anthropic.MessageNewParams
 	if p, ok := agent.GetOption(opts, MessageNewParams); ok {
 		params = p
+		// Clone the mutable slice fields appended to below so we never mutate
+		// the caller's backing arrays (the option stores a shallow copy of the
+		// struct); the gemini provider clones for the same reason.
+		params.System = slices.Clone(params.System)
+		params.Messages = slices.Clone(params.Messages)
 	}
 	params.Model = cmp.Or(params.Model, a.config.Model)
 	params.MaxTokens = cmp.Or(params.MaxTokens, 4096)
@@ -447,6 +452,12 @@ func buildMessageParam(msg *message.Message) (anthropic.MessageParam, error) {
 				if err := json.Unmarshal([]byte(c.Arguments), &args); err != nil {
 					return anthropic.MessageParam{}, fmt.Errorf("failed to unmarshal tool arguments: %w", err)
 				}
+			}
+			if args == nil {
+				// Anthropic requires a tool_use block's input to be an object; a
+				// nil map serializes to null (rejected by the API), so send {}
+				// for a tool call with empty or absent arguments.
+				args = map[string]any{}
 			}
 			content = append(content, anthropic.NewToolUseBlock(c.CallID, args, c.Name))
 		case *message.FunctionResultContent:
