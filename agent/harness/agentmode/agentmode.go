@@ -184,8 +184,12 @@ type Provider struct {
 // own, so a runtime cleanup deletes the entry once the session is collected,
 // keeping the registry from growing unbounded.
 func (p *Provider) getSessionLock(opts []agent.Option) *sync.Mutex {
-	session, ok := agent.GetOption(opts, agent.WithSession)
-	if !ok || session == nil {
+	session, _ := agent.GetOption(opts, agent.WithSession)
+	return p.getSessionLockForSession(session)
+}
+
+func (p *Provider) getSessionLockForSession(session *agent.Session) *sync.Mutex {
+	if session == nil {
 		return &p.nullSessionLock
 	}
 	key := weak.Make(session)
@@ -204,17 +208,8 @@ func (p *Provider) getSessionLock(opts []agent.Option) *sync.Mutex {
 	return actual.(*sync.Mutex)
 }
 
-func (p *Provider) Invoking(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
-	return p.provider.Invoking(ctx, invoking)
-}
-
-func (p *Provider) Invoked(ctx context.Context, invoked agent.InvokedContext) error {
-	return p.provider.Invoked(ctx, invoked)
-}
-
-func (p *Provider) loadState(opts []agent.Option) *state {
-	session, ok := agent.GetOption(opts, agent.WithSession)
-	if !ok {
+func (p *Provider) loadStateForSession(session *agent.Session) *state {
+	if session == nil {
 		return &state{CurrentMode: p.defaultMode}
 	}
 	var s state
@@ -224,12 +219,29 @@ func (p *Provider) loadState(opts []agent.Option) *state {
 	return &state{CurrentMode: p.defaultMode}
 }
 
-func (p *Provider) saveState(opts []agent.Option, s *state) {
-	session, ok := agent.GetOption(opts, agent.WithSession)
-	if !ok || s == nil {
+func (p *Provider) saveStateForSession(session *agent.Session, s *state) {
+	if session == nil || s == nil {
 		return
 	}
 	session.Set(stateKey, *s)
+}
+
+func (p *Provider) Invoking(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+	return p.provider.Invoking(ctx, invoking)
+}
+
+func (p *Provider) Invoked(ctx context.Context, invoked agent.InvokedContext) error {
+	return p.provider.Invoked(ctx, invoked)
+}
+
+func (p *Provider) loadState(opts []agent.Option) *state {
+	session, _ := agent.GetOption(opts, agent.WithSession)
+	return p.loadStateForSession(session)
+}
+
+func (p *Provider) saveState(opts []agent.Option, s *state) {
+	session, _ := agent.GetOption(opts, agent.WithSession)
+	p.saveStateForSession(session, s)
 }
 
 func (p *Provider) provide(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
@@ -324,46 +336,48 @@ func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
 	return []tool.FuncTool{setTool, getTool}
 }
 
-// GetMode returns the current operating mode from the session.
+// GetModeForSession returns the current operating mode from session state.
 // If no state has been persisted yet, it returns the configured default mode.
-func (p *Provider) GetMode(opts ...agent.Option) string {
-	mu := p.getSessionLock(opts)
+func (p *Provider) GetModeForSession(session *agent.Session) string {
+	mu := p.getSessionLockForSession(session)
 	mu.Lock()
 	defer mu.Unlock()
-	session, ok := agent.GetOption(opts, agent.WithSession)
-	if !ok {
-		return p.defaultMode
-	}
-	var s state
-	if found, _ := session.Get(stateKey, &s); found {
-		return s.CurrentMode
-	}
-	return p.defaultMode
+	return p.loadStateForSession(session).CurrentMode
 }
 
-// SetMode sets the operating mode in the session, validating it against
-// the provider's configured modes. Returns an error if the mode is invalid
-// or no session is available.
-func (p *Provider) SetMode(mode string, opts ...agent.Option) error {
+// GetMode returns the current operating mode from the session option.
+// If no state has been persisted yet, it returns the configured default mode.
+func (p *Provider) GetMode(opts ...agent.Option) string {
+	session, _ := agent.GetOption(opts, agent.WithSession)
+	return p.GetModeForSession(session)
+}
+
+// SetModeForSession sets the operating mode in session state, validating it
+// against the provider's configured modes. Returns an error if the mode is
+// invalid or no session is available.
+func (p *Provider) SetModeForSession(session *agent.Session, mode string) error {
 	if _, ok := p.validModes[mode]; !ok {
 		return fmt.Errorf("agentmode: invalid mode %q", mode)
 	}
-	mu := p.getSessionLock(opts)
+	mu := p.getSessionLockForSession(session)
 	mu.Lock()
 	defer mu.Unlock()
-	session, ok := agent.GetOption(opts, agent.WithSession)
-	if !ok {
+	if session == nil {
 		return fmt.Errorf("agentmode: no session available")
 	}
-	var s state
-	if found, _ := session.Get(stateKey, &s); found {
-		if s.CurrentMode != mode {
-			s.PreviousMode = s.CurrentMode
-			s.CurrentMode = mode
-		}
-	} else {
-		s = state{CurrentMode: mode}
+	s := p.loadStateForSession(session)
+	if s.CurrentMode != mode {
+		s.PreviousMode = s.CurrentMode
+		s.CurrentMode = mode
 	}
-	session.Set(stateKey, s)
+	p.saveStateForSession(session, s)
 	return nil
+}
+
+// SetMode sets the operating mode in the session option, validating it against
+// the provider's configured modes. Returns an error if the mode is invalid or
+// no session is available.
+func (p *Provider) SetMode(mode string, opts ...agent.Option) error {
+	session, _ := agent.GetOption(opts, agent.WithSession)
+	return p.SetModeForSession(session, mode)
 }
