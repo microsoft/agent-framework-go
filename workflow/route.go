@@ -183,6 +183,11 @@ type typeHandlingInfo struct {
 	autoOutput  bool
 }
 
+func (info typeHandlingInfo) forRuntimeType(runtimeType reflect.Type) typeHandlingInfo {
+	info.runtimeType = runtimeType
+	return info
+}
+
 // newMessageRouter creates a router and indexes typed handlers by TypeID.
 func newMessageRouter(handlers map[reflect.Type]MessageHandlerFunc, handlerOutputTypes map[reflect.Type]reflect.Type, catchAll CatchAllFunc) *messageRouter {
 	outputTypes := make(map[reflect.Type]struct{}, len(handlerOutputTypes))
@@ -309,7 +314,7 @@ func (mr *messageRouter) findHandler(messageType reflect.Type) (typeHandlingInfo
 	for _, interfaceType := range mr.interfaceHandlers {
 		if messageType.AssignableTo(interfaceType) {
 			info := mr.typedHandlers[interfaceType]
-			info.runtimeType = messageType
+			info = info.forRuntimeType(messageType)
 			mr.typeInfos.Store(typeID, info)
 			return info, true
 		}

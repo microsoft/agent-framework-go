@@ -10,24 +10,14 @@ updates:
         patterns:
           - go.opentelemetry.io/*
   - package-ecosystem: github-actions
-    directory: /.github/workflows
+    directory: /
     schedule:
       interval: daily
     open-pull-requests-limit: 10
-    # The actions below are pinned inside the generated *.lock.yml files by
-    # `gh aw compile` and must stay in lockstep with the gh-aw compiler version.
-    # Dependabot bumping them desyncs a lock from the compiler that produced it
-    # (which breaks the workflow or trips the verify-aw-locks gate). Advance these
-    # by bumping the gh-aw compiler and recompiling, not via Dependabot.
-    # Note: actions/checkout is also used in the hand-authored workflows; ignoring
-    # it here freezes it there too (bump manually or via a gh-aw compiler upgrade).
-    ignore:
-      - dependency-name: "github/gh-aw-actions*" # Managed by gh aw compile. Version-locked to the gh-aw compiler; do not bump.
-      - dependency-name: "actions/checkout"
-      - dependency-name: "actions/download-artifact"
-      - dependency-name: "actions/github-script"
-      - dependency-name: "actions/setup-node"
-      - dependency-name: "actions/upload-artifact"
+    # *.lock.yml action pins are managed by `gh aw compile`; let them advance via
+    # compiler upgrades, not Dependabot (see the verify-aw-locks gate).
+    exclude-paths:
+      - ".github/workflows/*.lock.yml" # gh aw managed workflows
     groups:
       codeql-action:
         patterns:
