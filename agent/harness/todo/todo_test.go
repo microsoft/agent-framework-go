@@ -362,6 +362,24 @@ func TestPublicGetAllTodos_ReturnsAllItems(t *testing.T) {
 	}
 }
 
+func TestPublicGetAllTodosFromSession_ReturnsAllItems(t *testing.T) {
+	p := todo.New(nil)
+	session := agenttest.CreateSession()
+	opts := []agent.Option{agent.WithSession(session)}
+
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"X"},{"title":"Y"}]}`)
+
+	all := p.GetAllTodos(session)
+	if len(all) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(all))
+	}
+}
+
 // 14. PublicGetRemainingTodos_ReturnsOnlyIncomplete
 func TestPublicGetRemainingTodos_ReturnsOnlyIncomplete(t *testing.T) {
 	p := todo.New(nil)
@@ -385,6 +403,29 @@ func TestPublicGetRemainingTodos_ReturnsOnlyIncomplete(t *testing.T) {
 	}
 }
 
+func TestPublicGetRemainingTodosFromSession_ReturnsOnlyIncomplete(t *testing.T) {
+	p := todo.New(nil)
+	session := agenttest.CreateSession()
+	opts := []agent.Option{agent.WithSession(session)}
+
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Done"},{"title":"Open"}]}`)
+	items := p.GetAllTodos(session)
+	callTool(t, outOpts, "todos_complete", fmt.Sprintf(`{"Arg0":[{"id":%d,"reason":"done"}]}`, items[0].ID))
+
+	remaining := p.GetRemainingTodos(session)
+	if len(remaining) != 1 {
+		t.Fatalf("expected 1 remaining, got %d", len(remaining))
+	}
+	if remaining[0].Title != "Open" {
+		t.Errorf("expected 'Open', got %q", remaining[0].Title)
+	}
+}
+
 // 15. PublicGetAllTodos_ReturnsEmptyForNewSession
 func TestPublicGetAllTodos_ReturnsEmptyForNewSession(t *testing.T) {
 	p := todo.New(nil)
@@ -393,6 +434,15 @@ func TestPublicGetAllTodos_ReturnsEmptyForNewSession(t *testing.T) {
 	items := p.GetAllItems(opts...)
 	if len(items) != 0 {
 		t.Fatalf("expected 0 items for new session, got %d", len(items))
+	}
+}
+
+func TestPublicGetAllTodosFromNilSession_ReturnsEmpty(t *testing.T) {
+	p := todo.New(nil)
+
+	items := p.GetAllTodos(nil)
+	if len(items) != 0 {
+		t.Fatalf("expected 0 items for nil session, got %d", len(items))
 	}
 }
 
@@ -682,7 +732,8 @@ func TestCompleteTodos_EmptyReasonIsAccepted(t *testing.T) {
 // state. Run under -race.
 func TestTodo_ConcurrentSessionAccess_NoDataRace(t *testing.T) {
 	p := todo.New(nil)
-	opts := sessionOpts()
+	session := agenttest.CreateSession()
+	opts := []agent.Option{agent.WithSession(session)}
 
 	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
@@ -711,6 +762,8 @@ func TestTodo_ConcurrentSessionAccess_NoDataRace(t *testing.T) {
 			defer wg.Done()
 			_ = p.GetAllItems(opts...)
 			_ = p.GetRemainingItems(opts...)
+			_ = p.GetAllTodos(session)
+			_ = p.GetRemainingTodos(session)
 		}(i*2 + 1)
 	}
 	wg.Wait()
