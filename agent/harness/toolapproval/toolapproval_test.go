@@ -380,6 +380,86 @@ func TestToolApproval_AlwaysApproveToolWithArgumentsMatchesByValue(t *testing.T)
 	}
 }
 
+func TestToolApproval_AlwaysApproveToolWithArgumentsDoesNotForwardOnSerializeFailure(t *testing.T) {
+	fcc := &message.FunctionCallContent{CallID: "c1", Name: "deploy", Arguments: `{"env":"prod"}`}
+
+	var innerCallMessages []*message.Message
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder().
+			Add(&agent.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					&message.ToolApprovalRequestContent{RequestID: "r1", ToolCall: fcc},
+				},
+			}).
+			NewTurn(func(_ context.Context, messages []*message.Message, _ ...agent.Option) {
+				innerCallMessages = messages
+			}).
+			Add(&agent.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					&message.ToolApprovalRequestContent{RequestID: "r1", ToolCall: fcc},
+				},
+			}).
+			Build(),
+	}
+
+	mw := toolapproval.New(toolapproval.Config{})
+	session := agenttest.CreateSession()
+	opts := []agent.Option{agent.WithSession(session)}
+
+	turn1 := collectUpdates(
+		t, mw, runner.Run,
+		[]*message.Message{{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "go"}}}},
+		opts...,
+	)
+
+	var req *message.ToolApprovalRequestContent
+	for _, u := range turn1 {
+		for _, c := range u.Contents {
+			if r, ok := c.(*message.ToolApprovalRequestContent); ok {
+				req = r
+			}
+		}
+	}
+	if req == nil {
+		t.Fatal("expected approval request in turn 1")
+	}
+
+	resp := req.AlwaysApproveToolWithArgumentsResponse()
+	fc, ok := resp.InnerResponse.ToolCall.(*message.FunctionCallContent)
+	if !ok || fc == nil {
+		t.Fatal("expected function call in approval response")
+	}
+	fc.Arguments = "{"
+
+	turn2 := collectUpdates(
+		t, mw, runner.Run,
+		[]*message.Message{{Role: message.RoleUser, Contents: []message.Content{resp}}},
+		opts...,
+	)
+
+	for _, msg := range innerCallMessages {
+		for _, c := range msg.Contents {
+			if _, ok := c.(*message.ToolApprovalResponseContent); ok {
+				t.Fatal("expected malformed always-approve response not to be forwarded to inner agent")
+			}
+		}
+	}
+
+	var surfacedReq *message.ToolApprovalRequestContent
+	for _, u := range turn2 {
+		for _, c := range u.Contents {
+			if r, ok := c.(*message.ToolApprovalRequestContent); ok {
+				surfacedReq = r
+			}
+		}
+	}
+	if surfacedReq == nil || surfacedReq.RequestID != "r1" {
+		t.Fatalf("expected original approval request to be surfaced again, got %#v", surfacedReq)
+	}
+}
+
 func TestToolApproval_AlwaysApproveToolWithNoArgumentsDoesNotMatchCallWithArguments(t *testing.T) {
 	runner := &agenttest.Runner{
 		Responses: agenttest.NewResponseBuilder().

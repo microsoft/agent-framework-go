@@ -264,12 +264,13 @@ func collectAlwaysApproveResponse(st *state, resp *message.AlwaysApproveToolAppr
 			addRuleIfNotExists(st, Rule{ToolName: fc.Name})
 		} else if resp.AlwaysApproveToolWithArguments {
 			args, err := serializeArguments(fc.Arguments)
-			if err == nil {
-				addRuleIfNotExists(st, Rule{
-					ToolName:  fc.Name,
-					Arguments: args,
-				})
+			if err != nil {
+				return
 			}
+			addRuleIfNotExists(st, Rule{
+				ToolName:  fc.Name,
+				Arguments: args,
+			})
 		}
 	}
 	st.CollectedApprovalResponses = append(st.CollectedApprovalResponses, resp.InnerResponse)
