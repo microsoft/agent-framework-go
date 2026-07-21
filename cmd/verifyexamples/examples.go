@@ -221,11 +221,12 @@ var agentsExamples = []ExampleDefinition{
 		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
 		OptionalEnvironmentVariables: []string{"FOUNDRY_MODEL"},
 		MustContain: []string{
-			"I can't help with that request.",
+			">> Guardrail middleware: filtered input messages",
+			">> PII middleware: filtered input messages",
 		},
 		ExpectedOutputDescription: []string{
-			"The blocked request should be refused with 'I can't help with that request.' by the guardrail middleware, without a model answer.",
-			"The allowed request should produce a joke about a pirate.",
+			"The output should show the Guardrail and PII middleware filtering messages before and after each run.",
+			"The responses should not contain the blocked keyword 'harmful', nor the raw email or phone number, since the middleware redacts them.",
 			"The output should not contain error messages or stack traces.",
 		},
 	},
