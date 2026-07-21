@@ -66,6 +66,7 @@ func (m *messageMerger) ComputeMerged(primaryResponseID string, primaryAgentID s
 	}
 
 	messages = append(messages, m.danglingState.computeFlattened()...)
+	messages = foldIdentifierlessMessages(messages)
 	messages = cleanupMergedMessages(messages)
 
 	response := &agent.Response{
@@ -188,6 +189,32 @@ func messagesWithCreatedAt(response *agent.Response) []*message.Message {
 			clone.CreatedAt = response.CreatedAt
 		}
 		messages = append(messages, clone)
+	}
+	return messages
+}
+
+func foldIdentifierlessMessages(messages []*message.Message) []*message.Message {
+	for i := len(messages) - 1; i > 0; i-- {
+		current := messages[i-1]
+		next := messages[i]
+		if current == nil || next == nil {
+			continue
+		}
+		if current.ID != "" || next.ID == "" || current.Role != next.Role {
+			continue
+		}
+
+		merged := next.Clone()
+		merged.AuthorName = cmp.Or(next.AuthorName, current.AuthorName)
+		if merged.CreatedAt.IsZero() {
+			merged.CreatedAt = current.CreatedAt
+		}
+		merged.Contents = append(slices.Clone(current.Contents), next.Contents...)
+		if merged.Source == (message.Source{}) {
+			merged.Source = current.Source
+		}
+		messages[i] = merged
+		messages = append(messages[:i-1], messages[i:]...)
 	}
 	return messages
 }
