@@ -237,6 +237,40 @@ func TestMessageMerger_DoesNotFoldIdentifierlessReasoningIntoDifferentRole(t *te
 	}
 }
 
+func TestMessageMerger_DoesNotFoldIdentifierlessAssistantFunctionCallIntoFollowingMessage(t *testing.T) {
+	const (
+		responseID = "response"
+		messageID  = "msg-answer"
+		callID     = "call-1"
+	)
+
+	merger := newMessageMerger()
+	merger.AddUpdate(&agent.ResponseUpdate{
+		ResponseID: responseID,
+		Role:       message.RoleAssistant,
+		Contents:   []message.Content{&message.FunctionCallContent{CallID: callID, Name: "handoff"}},
+	})
+	merger.AddUpdate(&agent.ResponseUpdate{
+		ResponseID: responseID,
+		MessageID:  messageID,
+		Role:       message.RoleAssistant,
+		Contents:   []message.Content{&message.TextContent{Text: "answer"}},
+	})
+
+	response := merger.ComputeMerged(responseID, "", "")
+
+	if len(response.Messages) != 2 {
+		t.Fatalf("message count = %d, want 2", len(response.Messages))
+	}
+	if _, ok := response.Messages[0].Contents[0].(*message.FunctionCallContent); !ok {
+		t.Fatalf("first content = %T, want *message.FunctionCallContent", response.Messages[0].Contents[0])
+	}
+	if response.Messages[1].ID != messageID {
+		t.Fatalf("second message ID = %q, want %q", response.Messages[1].ID, messageID)
+	}
+	assertTextContent(t, response.Messages[1].Contents[0], "answer")
+}
+
 func TestMessageMerger_PreservesMessageOrderWhenReasoningLacksCreatedAt(t *testing.T) {
 	responseID := "response"
 	answerTime := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
@@ -311,6 +345,44 @@ func TestMessageMerger_MergesReasoningAndTextIntoSingleMessageWhenReasoningLacks
 	}
 	assertTextReasoningContent(t, msg.Contents[0], "Thinking about the question")
 	assertTextContent(t, msg.Contents[1], "Here is the answer.")
+}
+
+func TestMessageMerger_FoldsIdentifierlessReasoningMergesAdditionalProperties(t *testing.T) {
+	const (
+		responseID = "response"
+		messageID  = "msg-answer"
+	)
+
+	merger := newMessageMerger()
+	merger.AddUpdate(&agent.ResponseUpdate{
+		ResponseID:           responseID,
+		Role:                 message.RoleAssistant,
+		AdditionalProperties: map[string]any{"reasoning_key": "reasoning", "shared": "reasoning"},
+		Contents:             []message.Content{&message.TextReasoningContent{Text: "thinking"}},
+	})
+	merger.AddUpdate(&agent.ResponseUpdate{
+		ResponseID:           responseID,
+		MessageID:            messageID,
+		Role:                 message.RoleAssistant,
+		AdditionalProperties: map[string]any{"answer_key": "answer", "shared": "answer"},
+		Contents:             []message.Content{&message.TextContent{Text: "final"}},
+	})
+
+	response := merger.ComputeMerged(responseID, "", "")
+
+	if len(response.Messages) != 1 {
+		t.Fatalf("message count = %d, want 1", len(response.Messages))
+	}
+	msg := response.Messages[0]
+	if msg.AdditionalProperties["reasoning_key"] != "reasoning" {
+		t.Fatalf("reasoning additional property = %v, want reasoning", msg.AdditionalProperties["reasoning_key"])
+	}
+	if msg.AdditionalProperties["answer_key"] != "answer" {
+		t.Fatalf("answer additional property = %v, want answer", msg.AdditionalProperties["answer_key"])
+	}
+	if msg.AdditionalProperties["shared"] != "answer" {
+		t.Fatalf("shared additional property = %v, want answer", msg.AdditionalProperties["shared"])
+	}
 }
 
 func TestMessageMerger_FoldsIdentifierlessReasoningIntoFollowingMessageAcrossResponseBuckets(t *testing.T) {

@@ -200,12 +200,13 @@ func foldIdentifierlessMessages(messages []*message.Message) []*message.Message 
 		if current == nil || next == nil {
 			continue
 		}
-		if current.ID != "" || next.ID == "" || current.Role != next.Role {
+		if !isIdentifierlessAssistantReasoningMessage(current) || next.ID == "" || current.Role != next.Role {
 			continue
 		}
 
 		merged := next.Clone()
 		merged.AuthorName = cmp.Or(next.AuthorName, current.AuthorName)
+		merged.AdditionalProperties = mergeProperties(current.AdditionalProperties, merged.AdditionalProperties)
 		if merged.CreatedAt.IsZero() {
 			merged.CreatedAt = current.CreatedAt
 		}
@@ -217,6 +218,18 @@ func foldIdentifierlessMessages(messages []*message.Message) []*message.Message 
 		messages = append(messages[:i-1], messages[i:]...)
 	}
 	return messages
+}
+
+func isIdentifierlessAssistantReasoningMessage(msg *message.Message) bool {
+	if msg == nil || msg.ID != "" || msg.Role != message.RoleAssistant || len(msg.Contents) == 0 {
+		return false
+	}
+	for _, content := range msg.Contents {
+		if _, ok := content.(*message.TextReasoningContent); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func mergeProperties(current, incoming map[string]any) map[string]any {
