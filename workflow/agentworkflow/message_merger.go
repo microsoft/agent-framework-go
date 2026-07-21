@@ -87,6 +87,37 @@ func (m *messageMerger) ComputeMerged(primaryResponseID string, primaryAgentID s
 	return response
 }
 
+type collectedResponseMergeState struct {
+	allUpdates             *messageMerger
+	terminalWorkflowOutput *messageMerger
+	hasTerminalOutput      bool
+}
+
+func newCollectedResponseMergeState() *collectedResponseMergeState {
+	return &collectedResponseMergeState{
+		allUpdates:             newMessageMerger(),
+		terminalWorkflowOutput: newMessageMerger(),
+	}
+}
+
+func (s *collectedResponseMergeState) AddUpdate(update *agent.ResponseUpdate, terminalWorkflowOutput bool) {
+	if s == nil {
+		return
+	}
+	s.allUpdates.AddUpdate(update)
+	if terminalWorkflowOutput {
+		s.terminalWorkflowOutput.AddUpdate(update)
+		s.hasTerminalOutput = true
+	}
+}
+
+func (s *collectedResponseMergeState) ComputeMerged(primaryResponseID string, primaryAgentID string, primaryAgentName string) *agent.Response {
+	if s != nil && s.hasTerminalOutput {
+		return s.terminalWorkflowOutput.ComputeMerged(primaryResponseID, primaryAgentID, primaryAgentName)
+	}
+	return s.allUpdates.ComputeMerged(primaryResponseID, primaryAgentID, primaryAgentName)
+}
+
 type responseMergeState struct {
 	responseID        string
 	messageStatesByID map[string]*messageMergeState
