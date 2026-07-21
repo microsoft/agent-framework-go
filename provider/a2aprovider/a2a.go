@@ -116,6 +116,11 @@ func createA2AMessage(session *agent.Session, msg *message.Message, parts a2a.Co
 		a2aMessage.ID = msg.ID
 	}
 	a2aMessage.ContextID = getContextID(session)
+
+	// When the task is waiting for user input (InputRequired), link the message
+	// directly to the task via TaskID so it is treated as input for that task.
+	// Otherwise, use ReferenceTasks to link as a follow-up.
+	// See: https://github.com/a2aproject/A2A/blob/main/docs/topics/life-of-a-task.md#task-refinements
 	if getLastTaskState(session) == a2a.TaskStateInputRequired && len(taskIDs) > 0 {
 		a2aMessage.TaskID = taskIDs[len(taskIDs)-1]
 	} else {
