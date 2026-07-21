@@ -237,7 +237,7 @@ func (p *provider) sessionConfig(streaming bool, options []agent.Option) copilot
 	cfg.Streaming = copilot.Bool(streaming)
 	cfg.SystemMessage = systemMessageWithInstructions(cfg.SystemMessage, slices.Collect(agent.AllOptions(options, agent.WithInstructions)))
 	cfg.Tools = append(cfg.Tools, copilotTools(options)...)
-	cfg.Hooks = sessionHooksWithApprovalRequests(cfg.Tools, cfg.Hooks)
+	cfg.Hooks = sessionHooksWithApprovalRequests(approvalRequiredToolNames(options), cfg.Hooks)
 	return cfg
 }
 
@@ -246,7 +246,7 @@ func (p *provider) resumeSessionConfig(streaming bool, options []agent.Option) c
 	cfg.Streaming = copilot.Bool(streaming)
 	cfg.SystemMessage = systemMessageWithInstructions(cfg.SystemMessage, slices.Collect(agent.AllOptions(options, agent.WithInstructions)))
 	cfg.Tools = append(cfg.Tools, copilotTools(options)...)
-	cfg.Hooks = sessionHooksWithApprovalRequests(cfg.Tools, cfg.Hooks)
+	cfg.Hooks = sessionHooksWithApprovalRequests(approvalRequiredToolNames(options), cfg.Hooks)
 	return cfg
 }
 
@@ -294,19 +294,11 @@ func copyBoolDefaultTrue(source *bool) *bool {
 	return &value
 }
 
-func sessionHooksWithApprovalRequests(tools []copilot.Tool, hooks *copilot.SessionHooks) *copilot.SessionHooks {
-	var names map[string]struct{}
-	approvalRequiredNames := func() map[string]struct{} {
-		if names == nil {
-			names = approvalRequiredToolNames(tools)
-		}
-		return names
-	}
+func sessionHooksWithApprovalRequests(names map[string]struct{}, hooks *copilot.SessionHooks) *copilot.SessionHooks {
 	if hooks != nil && hooks.OnPreToolUse != nil {
-		logApprovalGatingSkipped(approvalRequiredNames())
+		logApprovalGatingSkipped(names)
 		return hooks
 	}
-	names = approvalRequiredNames()
 	if len(names) == 0 {
 		return hooks
 	}
@@ -323,16 +315,22 @@ func sessionHooksWithApprovalRequests(tools []copilot.Tool, hooks *copilot.Sessi
 	return clone
 }
 
-func approvalRequiredToolNames(tools []copilot.Tool) map[string]struct{} {
+// approvalRequiredToolNames returns the names of the option-provided tools that
+// are explicitly marked approval-required via tool.ApprovalRequiredTool. This
+// mirrors .NET's ApprovalRequiredAIFunction detection and is intentionally
+// independent of copilot.Tool.SkipPermission: raw copilot.Tool values supplied
+// through SessionConfig.Tools carry no approval marker and are never auto-gated.
+func approvalRequiredToolNames(options []agent.Option) map[string]struct{} {
 	var names map[string]struct{}
-	for _, tl := range tools {
-		if tl.Name == "" || tl.SkipPermission {
+	for tl := range agent.AllOptions(options, agent.WithTool) {
+		funcTool, ok := tl.(tool.FuncTool)
+		if !ok || !approvalRequired(funcTool) {
 			continue
 		}
 		if names == nil {
 			names = make(map[string]struct{})
 		}
-		names[tl.Name] = struct{}{}
+		names[funcTool.Name()] = struct{}{}
 	}
 	return names
 }
@@ -413,10 +411,9 @@ func toCopilotTool(funcTool tool.FuncTool) (copilot.Tool, error) {
 		return copilot.Tool{}, err
 	}
 	converted := copilot.Tool{
-		Name:           funcTool.Name(),
-		Description:    funcTool.Description(),
-		Parameters:     parameters,
-		SkipPermission: !approvalRequired(funcTool),
+		Name:        funcTool.Name(),
+		Description: funcTool.Description(),
+		Parameters:  parameters,
 		Handler: func(invocation copilot.ToolInvocation) (copilot.ToolResult, error) {
 			arguments, err := toolArguments(invocation.Arguments)
 			if err != nil {

@@ -46,14 +46,20 @@ func TestSessionConfig_WithApprovalRequiredTool_InstallsAskPreToolUseHook(t *tes
 	}
 }
 
-func TestSessionConfig_WithSessionConfigToolRequiringApproval_InstallsHookWithoutMutatingSource(t *testing.T) {
+func TestSessionConfig_RawSessionConfigToolNotGatedButFrameworkApprovalToolIs(t *testing.T) {
+	// A raw copilot.Tool supplied via SessionConfig.Tools carries no approval
+	// marker, so it must not be auto-gated. Only tools explicitly marked
+	// approval-required via tool.ApprovalRequiredFunc are gated, mirroring .NET's
+	// ApprovalRequiredAIFunction (SkipPermission is a separate, orthogonal concept).
 	source := &copilot.SessionConfig{
 		Tools: []copilot.Tool{{Name: "dangerous"}},
 		Hooks: &copilot.SessionHooks{},
 	}
 	p := &provider{cfg: AgentConfig{SessionConfig: source}}
 
-	cfg := p.sessionConfig(true, []agent.Option{agent.WithTool(testFuncTool(t, "plain"))})
+	cfg := p.sessionConfig(true, []agent.Option{
+		agent.WithTool(tool.ApprovalRequiredFunc(testFuncTool(t, "fw-dangerous"))),
+	})
 
 	if source.Hooks.OnPreToolUse != nil {
 		t.Fatal("source hooks were mutated")
@@ -67,12 +73,23 @@ func TestSessionConfig_WithSessionConfigToolRequiringApproval_InstallsHookWithou
 	if cfg.Hooks == nil || cfg.Hooks == source.Hooks {
 		t.Fatal("session hooks were not cloned")
 	}
-	decision, err := cfg.Hooks.OnPreToolUse(copilot.PreToolUseHookInput{ToolName: "dangerous"}, copilot.HookInvocation{})
+
+	// The explicitly-marked framework tool is gated.
+	fw, err := cfg.Hooks.OnPreToolUse(copilot.PreToolUseHookInput{ToolName: "fw-dangerous"}, copilot.HookInvocation{})
+	if err != nil {
+		t.Fatalf("OnPreToolUse(fw-dangerous): %v", err)
+	}
+	if fw == nil || fw.PermissionDecision != "ask" {
+		t.Fatalf("fw-dangerous permission decision = %#v, want ask", fw)
+	}
+
+	// The raw SessionConfig tool carries no approval marker and must not be gated.
+	raw, err := cfg.Hooks.OnPreToolUse(copilot.PreToolUseHookInput{ToolName: "dangerous"}, copilot.HookInvocation{})
 	if err != nil {
 		t.Fatalf("OnPreToolUse(dangerous): %v", err)
 	}
-	if decision == nil || decision.PermissionDecision != "ask" {
-		t.Fatalf("dangerous permission decision = %#v, want ask", decision)
+	if raw != nil {
+		t.Fatalf("raw session-config tool should not be gated, got %#v", raw)
 	}
 }
 
