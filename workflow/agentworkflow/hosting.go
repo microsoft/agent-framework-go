@@ -109,10 +109,11 @@ type Config struct {
 	InterceptUnterminatedFunctionCalls bool
 
 	// RunOptions are additional [agent.Option] values passed to the hosted
-	// agent on every run, appended after the host's own options (session and
-	// streaming mode). They let a workflow builder inject per-agent behavior —
+	// agent on every run. They let a workflow builder inject per-agent behavior —
 	// for example the handoff tools added by [NewHandoffWorkflowBuilder] — that
-	// is not part of the agent's own configuration.
+	// is not part of the agent's own configuration. They are applied before the
+	// host's own session and streaming options, which are resolved last and take
+	// precedence, so RunOptions cannot override the managed session or stream mode.
 	RunOptions []agent.Option
 }
 
@@ -406,12 +407,16 @@ func (h *hostExecutor) runAgentAndDispatch(wctx *workflow.Context, messages []*m
 		emitUpdates = *emitEvents
 	}
 
-	runOpts := []agent.Option{
+	// Apply the configured RunOptions first, then the host's own session and
+	// streaming options, so the host options are resolved last and take
+	// precedence — RunOptions cannot override the managed session or stream mode.
+	runOpts := make([]agent.Option, 0, len(h.cfg.RunOptions)+2)
+	runOpts = append(runOpts, h.cfg.RunOptions...)
+	runOpts = append(runOpts,
 		agent.WithSession(session),
 		// Run the agent in streaming mode only when update events are to be emitted.
 		agent.Stream(emitUpdates),
-	}
-	runOpts = append(runOpts, h.cfg.RunOptions...)
+	)
 
 	var resp agent.Response
 	for update, err := range h.agent.Run(wctx, agentInput, runOpts...) {
