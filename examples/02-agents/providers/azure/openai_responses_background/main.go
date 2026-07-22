@@ -27,7 +27,11 @@ var logger = demo.NewLogger(
 )
 
 func main() {
-	ctx := context.Background()
+	// Bound the whole sample so a run that never completes (stuck queued, a bad
+	// continuation token, etc.) cannot hang indefinitely.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
 	token := demo.AzureTokenCredential()
 
 	client := openai.NewClient(
@@ -70,7 +74,13 @@ func main() {
 	// continuation token. Continuation runs must not carry any messages, so use
 	// Run with a nil message slice.
 	for resp.ContinuationToken != "" {
-		time.Sleep(2 * time.Second)
+		// Wait between polls, but stop promptly if the context is cancelled or
+		// its deadline is reached rather than sleeping through it.
+		select {
+		case <-ctx.Done():
+			demo.Panic(ctx.Err())
+		case <-time.After(2 * time.Second):
+		}
 		resp, err = researcher.Run(ctx, nil,
 			agent.WithSession(session),
 			agent.WithContinuationToken(resp.ContinuationToken),
