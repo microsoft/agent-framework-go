@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
+	"maps"
 	"slices"
 	"strings"
 
@@ -51,21 +52,22 @@ func (r Rule) matches(toolName string, arguments map[string]string) bool {
 
 // state is persisted in the session across turns.
 type state struct {
-	Rules                      []Rule                                 `json:"rules,omitempty"`
-	CollectedApprovalResponses []*message.ToolApprovalResponseContent `json:"collectedResponses,omitempty"`
-	QueuedApprovalRequests     []*message.ToolApprovalRequestContent  `json:"queuedRequests,omitempty"`
+	Rules                      []Rule                                         `json:"rules,omitempty"`
+	CollectedApprovalResponses []*message.ToolApprovalResponseContent         `json:"collectedResponses,omitempty"`
+	QueuedApprovalRequests     []*message.ToolApprovalRequestContent          `json:"queuedRequests,omitempty"`
+	SurfacedApprovalRequests   map[string]*message.ToolApprovalRequestContent `json:"surfacedRequests,omitempty"`
 }
 
 func loadState(opts []agent.Option) state {
 	session, ok := agent.GetOption(opts, agent.WithSession)
 	if !ok {
-		return state{}
+		return normalizedState(state{})
 	}
 	var s state
 	if found, _ := session.Get(stateKey, &s); found {
-		return s
+		return normalizedState(s)
 	}
-	return state{}
+	return normalizedState(state{})
 }
 
 func saveState(opts []agent.Option, s state) {
@@ -94,6 +96,15 @@ type Config struct {
 	// to be auto-approved without prompting the caller. Returning an error fails
 	// the current run.
 	AutoApprovalRules []func(context.Context, *message.FunctionCallContent) (bool, error)
+
+	// DisableApprovalResponseBinding disables rebinding inbound approval responses
+	// to the tool approval requests previously surfaced by this middleware.
+	//
+	// When false (the default), only approval responses tied to a surfaced or
+	// history-carried approval request are honored, and the recorded request's tool
+	// call is injected downstream so an approved call matches what was surfaced for
+	// approval. When true, inbound approval responses are forwarded unchanged.
+	DisableApprovalResponseBinding bool
 }
 
 func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
@@ -101,7 +112,7 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 		st := loadState(opts)
 
 		// Step 1: Process inbound approval responses from the caller.
-		messages, st = prepareInbound(messages, st)
+		messages, st = prepareInbound(messages, st, !cfg.DisableApprovalResponseBinding)
 
 		// Step 2: If we have queued requests from a previous turn, drain any
 		// that are now auto-approvable and surface the next one.
@@ -112,6 +123,9 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 		if len(st.QueuedApprovalRequests) > 0 {
 			next := st.QueuedApprovalRequests[0]
 			st.QueuedApprovalRequests = st.QueuedApprovalRequests[1:]
+			if !cfg.DisableApprovalResponseBinding {
+				recordSurfacedApprovalRequests(&st, next)
+			}
 			saveState(opts, st)
 			yield(&agent.ResponseUpdate{
 				Role:     message.RoleAssistant,
@@ -180,6 +194,9 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 				first := needsApproval[0]
 				st.QueuedApprovalRequests = append(st.QueuedApprovalRequests, needsApproval[1:]...)
 				st.CollectedApprovalResponses = append(st.CollectedApprovalResponses, autoApproved...)
+				if !cfg.DisableApprovalResponseBinding {
+					recordSurfacedApprovalRequests(&st, first)
+				}
 
 				// Non-approval updates were already yielded during streaming.
 				if !yield(&agent.ResponseUpdate{
@@ -203,56 +220,35 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 
 // prepareInbound processes caller messages, extracting approval responses
 // and any "always approve" flags into standing rules.
-func prepareInbound(messages []*message.Message, st state) ([]*message.Message, state) {
+func prepareInbound(messages []*message.Message, st state, bindApprovalResponses bool) ([]*message.Message, state) {
+	knownRequests := make(map[string]*message.ToolApprovalRequestContent)
+	if bindApprovalResponses {
+		knownRequests = knownApprovalRequests(messages, st)
+	}
+
 	var cleaned []*message.Message
 	for i, msg := range messages {
 		var hasApproval bool
+		var remaining []message.Content
 		for _, c := range msg.Contents {
 			switch resp := c.(type) {
 			case *message.AlwaysApproveToolApprovalResponseContent:
 				hasApproval = true
-				if resp.InnerResponse != nil {
-					if fc, ok := resp.InnerResponse.ToolCall.(*message.FunctionCallContent); ok && fc != nil {
-						if resp.AlwaysApproveTool {
-							addRuleIfNotExists(&st, Rule{ToolName: fc.Name})
-						} else if resp.AlwaysApproveToolWithArguments {
-							args, err := serializeArguments(fc.Arguments)
-							if err != nil {
-								// If we can't parse the arguments, skip adding a rule.
-								break
-							}
-							addRuleIfNotExists(&st, Rule{
-								ToolName:  fc.Name,
-								Arguments: args,
-							})
-						}
-					}
-				}
-				if resp.InnerResponse != nil {
-					st.CollectedApprovalResponses = append(st.CollectedApprovalResponses, resp.InnerResponse)
-				}
+				bound := bindApprovalResponse(resp.InnerResponse, &st, knownRequests, bindApprovalResponses)
+				addApprovalRuleFromResponse(&st, resp, bound)
 			case *message.ToolApprovalResponseContent:
 				hasApproval = true
-				st.CollectedApprovalResponses = append(st.CollectedApprovalResponses, resp)
+				bindApprovalResponse(resp, &st, knownRequests, bindApprovalResponses)
+			default:
+				if c != nil {
+					remaining = append(remaining, c)
+				}
 			}
 		}
 		if hasApproval {
 			if cleaned == nil {
 				cleaned = make([]*message.Message, 0, len(messages))
 				cleaned = append(cleaned, messages[:i]...)
-			}
-			// Strip approval contents from the message, keep the rest.
-			var remaining []message.Content
-			for _, c := range msg.Contents {
-				if _, ok := c.(*message.ToolApprovalResponseContent); ok {
-					continue
-				}
-				if _, ok := c.(*message.AlwaysApproveToolApprovalResponseContent); ok {
-					continue
-				}
-				if c != nil {
-					remaining = append(remaining, c)
-				}
 			}
 			if len(remaining) > 0 {
 				clone := msg.Clone()
@@ -267,6 +263,94 @@ func prepareInbound(messages []*message.Message, st state) ([]*message.Message, 
 		return cleaned, st
 	}
 	return messages, st
+}
+
+func normalizedState(s state) state {
+	if s.SurfacedApprovalRequests == nil {
+		s.SurfacedApprovalRequests = make(map[string]*message.ToolApprovalRequestContent)
+	}
+	return s
+}
+
+func knownApprovalRequests(messages []*message.Message, st state) map[string]*message.ToolApprovalRequestContent {
+	known := make(map[string]*message.ToolApprovalRequestContent, len(st.SurfacedApprovalRequests))
+	for requestID, req := range st.SurfacedApprovalRequests {
+		if req != nil {
+			known[requestID] = req
+		}
+	}
+	for _, msg := range messages {
+		for _, c := range msg.Contents {
+			req, ok := c.(*message.ToolApprovalRequestContent)
+			if !ok || req == nil || req.RequestID == "" {
+				continue
+			}
+			known[req.RequestID] = req
+		}
+	}
+	return known
+}
+
+func bindApprovalResponse(resp *message.ToolApprovalResponseContent, st *state, knownRequests map[string]*message.ToolApprovalRequestContent, bind bool) *message.ToolApprovalResponseContent {
+	if resp == nil {
+		return nil
+	}
+	if !bind {
+		st.CollectedApprovalResponses = append(st.CollectedApprovalResponses, resp)
+		return resp
+	}
+
+	matchedRequest, ok := knownRequests[resp.RequestID]
+	if !ok || matchedRequest == nil {
+		return nil
+	}
+
+	delete(knownRequests, resp.RequestID)
+	delete(st.SurfacedApprovalRequests, resp.RequestID)
+
+	bound := &message.ToolApprovalResponseContent{
+		ContentHeader: cloneContentHeader(resp.ContentHeader),
+		RequestID:     resp.RequestID,
+		Reason:        resp.Reason,
+		Approved:      resp.Approved,
+		ToolCall:      cloneToolCallContent(matchedRequest.ToolCall),
+	}
+	st.CollectedApprovalResponses = append(st.CollectedApprovalResponses, bound)
+	return bound
+}
+
+func addApprovalRuleFromResponse(st *state, resp *message.AlwaysApproveToolApprovalResponseContent, bound *message.ToolApprovalResponseContent) {
+	if resp == nil || bound == nil {
+		return
+	}
+	fc, ok := bound.ToolCall.(*message.FunctionCallContent)
+	if !ok || fc == nil {
+		return
+	}
+	if resp.AlwaysApproveTool {
+		addRuleIfNotExists(st, Rule{ToolName: fc.Name})
+		return
+	}
+	if !resp.AlwaysApproveToolWithArguments {
+		return
+	}
+	args, err := serializeArguments(fc.Arguments)
+	if err != nil {
+		return
+	}
+	addRuleIfNotExists(st, Rule{
+		ToolName:  fc.Name,
+		Arguments: args,
+	})
+}
+
+func recordSurfacedApprovalRequests(st *state, requests ...*message.ToolApprovalRequestContent) {
+	for _, req := range requests {
+		if req == nil || req.RequestID == "" {
+			continue
+		}
+		st.SurfacedApprovalRequests[req.RequestID] = snapshotToolApprovalRequest(req)
+	}
 }
 
 // drainAutoApprovable removes queued requests that now match a standing rule,
@@ -410,6 +494,48 @@ func addRuleIfNotExists(st *state, rule Rule) {
 		}
 	}
 	st.Rules = append(st.Rules, rule)
+}
+
+func snapshotToolApprovalRequest(req *message.ToolApprovalRequestContent) *message.ToolApprovalRequestContent {
+	if req == nil {
+		return nil
+	}
+	return &message.ToolApprovalRequestContent{
+		ContentHeader: cloneContentHeader(req.ContentHeader),
+		RequestID:     req.RequestID,
+		ToolCall:      cloneToolCallContent(req.ToolCall),
+	}
+}
+
+func cloneToolCallContent(content message.ToolCallContent) message.ToolCallContent {
+	switch content := content.(type) {
+	case nil:
+		return nil
+	case *message.FunctionCallContent:
+		if content == nil {
+			return nil
+		}
+		cloned := *content
+		cloned.ContentHeader = cloneContentHeader(content.ContentHeader)
+		return &cloned
+	case *message.MCPServerToolCallContent:
+		if content == nil {
+			return nil
+		}
+		cloned := *content
+		cloned.ContentHeader = cloneContentHeader(content.ContentHeader)
+		return &cloned
+	default:
+		return content
+	}
+}
+
+func cloneContentHeader(header message.ContentHeader) message.ContentHeader {
+	return message.ContentHeader{
+		AdditionalProperties: maps.Clone(header.AdditionalProperties),
+		Annotations:          slices.Clone(header.Annotations),
+		RawRepresentation:    header.RawRepresentation,
+	}
 }
 
 func responseMessage(responses []*message.ToolApprovalResponseContent) *message.Message {
