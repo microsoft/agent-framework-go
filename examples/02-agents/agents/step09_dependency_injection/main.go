@@ -25,8 +25,8 @@ var logger = demo.NewLogger(
 )
 
 // container registers the application's shared dependencies once — the Go
-// equivalent of configuring a DI container. Services resolve what they need
-// from it instead of constructing their dependencies themselves.
+// equivalent of configuring a DI container. The composition root (main) reads
+// dependencies from it and injects them into the services that need them.
 type container struct {
 	agent *agent.Agent
 }
@@ -71,7 +71,10 @@ func (s *chatService) run(ctx context.Context, prompts ...string) {
 	}
 	for _, prompt := range prompts {
 		resp, err := s.agent.RunText(ctx, prompt, agent.WithSession(session)).Collect()
-		demo.Response(resp, err)
+		if err != nil {
+			demo.Panic(err)
+		}
+		demo.Response(resp, nil)
 	}
 }
 
