@@ -597,7 +597,7 @@ func captureCacheRequest(t *testing.T, msgs []*message.Message) map[string]any {
 		}
 		bodyCh <- body
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintln(w, `{"id":"msg","type":"message","role":"assistant","model":"m","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
+		_, _ = fmt.Fprintln(w, `{"id":"msg","type":"message","role":"assistant","model":"m","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
 	}))
 	defer server.Close()
 
