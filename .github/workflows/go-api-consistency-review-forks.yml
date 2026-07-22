@@ -1,0 +1,47 @@
+name: Dispatch fork API consistency reviews
+
+# Fork pull_request runs cannot access the credentials needed by the agent's
+# safe-output jobs. Dispatch the review from the trusted base branch instead,
+# without checking out or executing code from the fork.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+    paths-ignore:
+      - '.github/**'
+      - 'docs/**'
+      - 'README*'
+      - 'LICENSE*'
+      - '*.md'
+      - 'go.mod'
+      - 'go.sum'
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: dispatch-fork-api-consistency-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  dispatch:
+    if: github.event.repository.fork == false && github.event.pull_request.head.repo.id != github.repository_id
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch API consistency review
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          TARGET_REF: ${{ github.event.repository.default_branch }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'go-api-consistency-review.lock.yml',
+              ref: process.env.TARGET_REF,
+              inputs: {
+                pr_number: process.env.PR_NUMBER,
+              },
+            });

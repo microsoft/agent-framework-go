@@ -19,6 +19,9 @@ on:
             description: "PR number to review"
             required: true
             type: string
+concurrency:
+   group: "gh-aw-${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number || github.ref || github.run_id }}"
+   cancel-in-progress: true
 permissions:
    contents: read
    pull-requests: read
@@ -33,10 +36,20 @@ safe-outputs:
       report-as-issue: false
    create-pull-request-review-comment:
       max: 10
+      target: "${{ github.event.pull_request.number || inputs.pr_number }}"
    add-comment:
       max: 1
+      target: "${{ github.event.pull_request.number || inputs.pr_number }}"
       hide-older-comments: true
       allowed-reasons: [outdated]
+   add-labels:
+      allowed: [parity-approved]
+      max: 1
+      target: "${{ github.event.pull_request.number || inputs.pr_number }}"
+   remove-labels:
+      allowed: [parity-approved]
+      max: 1
+      target: "${{ github.event.pull_request.number || inputs.pr_number }}"
 timeout-minutes: 20
 ---
 
@@ -155,5 +168,6 @@ If a PR improves Go performance, refactors unexported helpers, or changes intern
 
 ## Output Format
 
-- **If consistency issues are found**: Add specific inline review comments on the changed Go lines and one summary comment that names the upstream Python and/or .NET surfaces that appear out of sync
-- **If no issues are found**: Add a brief summary comment confirming that the PR either preserves cross-repo parity or only changes Go-internal implementation details
+- Target every comment, review comment, and label operation at PR `${{ github.event.pull_request.number || inputs.pr_number }}` explicitly. The input is used when a fork PR is routed through `workflow_dispatch`.
+- **If consistency issues are found**: Add specific inline review comments on the changed Go lines and one summary comment that names the upstream Python and/or .NET surfaces that appear out of sync. Remove the `parity-approved` label if it is present so a previous green review cannot remain stale.
+- **If no issues are found**: Add a brief summary comment confirming that the PR either preserves cross-repo parity or only changes Go-internal implementation details, then add the `parity-approved` label to mark the parity review green.
