@@ -36,6 +36,7 @@ func init() {
 		&ToolApprovalResponseContent{},
 		&AlwaysApproveToolApprovalResponseContent{},
 		&MCPServerToolCallContent{},
+		&MCPServerToolResultContent{},
 	} {
 		supportedContents[c.kind()] = reflect.TypeOf(c).Elem()
 	}
@@ -291,6 +292,35 @@ func (t *MCPServerToolCallContent) GetCallID() string {
 
 func (t *MCPServerToolCallContent) MarshalJSON() ([]byte, error) {
 	type alias MCPServerToolCallContent
+	tmp := struct {
+		*alias
+		Type contentKind
+	}{
+		alias: (*alias)(t),
+		Type:  t.kind(),
+	}
+	return json.Marshal(tmp)
+}
+
+// MCPServerToolResultContent represents the result of a tool call executed by
+// a hosted MCP server.
+//
+// It mirrors MCPServerToolCallContent and conveys the outputs (and any error)
+// produced when a hosted service runs an MCP server tool.
+type MCPServerToolResultContent struct {
+	ContentHeader
+
+	CallID     string
+	Name       string   `json:",omitempty"`
+	ServerName string   `json:",omitempty"`
+	Outputs    Contents `json:",omitempty"`
+	Error      string   `json:",omitempty"`
+}
+
+func (t MCPServerToolResultContent) kind() contentKind { return "mcpServerToolResult" }
+
+func (t *MCPServerToolResultContent) MarshalJSON() ([]byte, error) {
+	type alias MCPServerToolResultContent
 	tmp := struct {
 		*alias
 		Type contentKind
