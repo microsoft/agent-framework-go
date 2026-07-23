@@ -252,6 +252,7 @@ func copySessionConfig(source *copilot.SessionConfig) copilot.SessionConfig {
 		return copilot.SessionConfig{Streaming: copilot.Bool(true)}
 	}
 	clone := *source
+	clone.Tools = slices.Clone(source.Tools)
 	clone.Streaming = copyBoolDefaultTrue(source.Streaming)
 	return clone
 }
@@ -263,7 +264,7 @@ func copyResumeSessionConfig(source *copilot.SessionConfig) copilot.ResumeSessio
 	return copilot.ResumeSessionConfig{
 		Model:               source.Model,
 		ReasoningEffort:     source.ReasoningEffort,
-		Tools:               source.Tools,
+		Tools:               slices.Clone(source.Tools),
 		SystemMessage:       source.SystemMessage,
 		AvailableTools:      source.AvailableTools,
 		ExcludedTools:       source.ExcludedTools,
