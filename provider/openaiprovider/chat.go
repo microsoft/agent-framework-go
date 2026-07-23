@@ -157,6 +157,13 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 			}
 		}
 	}
+	// Request usage in the final stream chunk. OpenAI omits the usage chunk for
+	// streamed completions unless stream_options.include_usage is set, so without
+	// this a streamed run reports zero token usage, unlike the non-streaming path.
+	// Respect an explicit caller value if one was already supplied.
+	if !body.StreamOptions.IncludeUsage.Valid() {
+		body.StreamOptions.IncludeUsage = openai.Bool(true)
+	}
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		stream := a.client.Chat.Completions.NewStreaming(ctx, body, telemetryRequestOption)
 		defer func() { _ = stream.Close() }()

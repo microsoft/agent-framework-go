@@ -254,6 +254,7 @@ func TestChatBasicRequestResponse_Streaming(t *testing.T) {
                 "messages":[{"role":"user","content":"hello"}],
                 "model":"gpt-4o-mini",
                 "stream":true,
+                "stream_options":{"include_usage":true},
                 "max_completion_tokens":20
             }
             `
@@ -342,7 +343,8 @@ func TestChatStreamingRefusal_SurfacesErrorContent(t *testing.T) {
             {
                 "messages":[{"role":"user","content":"do something disallowed"}],
                 "model":"gpt-4o-mini",
-                "stream":true
+                "stream":true,
+                "stream_options":{"include_usage":true}
             }
             `
 	const output = `data: {"id":"chatcmpl-refusal01","object":"chat.completion.chunk","created":1727889370,"model":"gpt-4o-mini-2024-07-18","choices":[{"index":0,"delta":{"role":"assistant","refusal":"I'm sorry, I can't "},"finish_reason":null}],"usage":null}
@@ -375,6 +377,41 @@ data: [DONE]
 	}
 	if refusal.Message != "I'm sorry, I can't help with that." {
 		t.Errorf("refusal message = %q, want full accumulated refusal", refusal.Message)
+	}
+}
+
+// TestChatStreamingIncludeUsage_RespectsCallerOverride verifies that when the
+// caller explicitly sets stream_options.include_usage the provider does not
+// override it with the default true value.
+func TestChatStreamingIncludeUsage_RespectsCallerOverride(t *testing.T) {
+	const input = `
+            {
+                "messages":[{"role":"user","content":"hello"}],
+                "model":"gpt-4o-mini",
+                "stream":true,
+                "stream_options":{"include_usage":false}
+            }
+            `
+	const output = `data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1727889370,"model":"gpt-4o-mini-2024-07-18","choices":[{"index":0,"delta":{"role":"assistant","content":"Hi"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1727889370,"model":"gpt-4o-mini-2024-07-18","choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"stop"}]}
+
+data: [DONE]
+
+`
+	server := newTestServerStreaming(t, input, output)
+	defer server.Close()
+
+	a := newTestClient(server)
+
+	for _, err := range a.RunText(t.Context(), "hello", openaiprovider.ChatCompletionNewParams(openai.ChatCompletionNewParams{
+		StreamOptions: openai.ChatCompletionStreamOptionsParam{
+			IncludeUsage: openai.Bool(false),
+		},
+	}), agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("error = %v", err)
+		}
 	}
 }
 
@@ -878,7 +915,8 @@ func TestChatFunctionCallContent_Streaming(t *testing.T) {
                     }
                 ],
                 "model": "gpt-4o-mini",
-                "stream": true
+                "stream": true,
+                "stream_options": {"include_usage": true}
             }
             `
 	const output = `data: {"id":"chatcmpl-ADymNiWWeqCJqHNFXiI1QtRcLuXcl","object":"chat.completion.chunk","created":1727895263,"model":"gpt-4o-mini-2024-07-18","system_fingerprint":"fp_f85bea6784","choices":[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_F9ZaqPWo69u0urxAhVt8meDW","type":"function","function":{"name":"GetPersonAge","arguments":""}}],"refusal":null},"logprobs":null,"finish_reason":null}],"usage":null}
@@ -1178,6 +1216,7 @@ func TestChatOptions_Model_OverridesClientModel_Streaming(t *testing.T) {
                 "messages":[{"role":"user","content":"hello"}],
                 "model":"gpt-4o",
                 "stream":true,
+                "stream_options":{"include_usage":true},
                 "max_completion_tokens":20
             }
             `
