@@ -388,18 +388,22 @@ func (a *toolCallAccumulator) onEvent(evt aguiEvents.Event) ([]*agent.ResponseUp
 			},
 		}}, nil
 	case *aguiEvents.RunFinishedEvent:
-		if e.Result == nil {
-			return nil, nil
+		// Mirror the Python reference (_handle_run_finished): the structured run
+		// result is surfaced only as metadata, never as visible assistant text.
+		// The assistant text has already been streamed via TEXT_MESSAGE_CONTENT,
+		// so emitting the result as an extra TextContent would duplicate it.
+		props := map[string]any{
+			"agui_thread_id": e.ThreadID(),
+			"agui_run_id":    e.RunID(),
 		}
-		text, err := serializeToolResult(e.Result)
-		if err != nil {
-			return nil, err
+		if e.Result != nil {
+			props["result"] = e.Result
 		}
 		return []*agent.ResponseUpdate{{
-			Role:       message.RoleAssistant,
-			ResponseID: e.RunID(),
-			CreatedAt:  eventTime(evt),
-			Contents:   message.Contents{&message.TextContent{Text: text}},
+			Role:                 message.RoleAssistant,
+			ResponseID:           e.RunID(),
+			CreatedAt:            eventTime(evt),
+			AdditionalProperties: props,
 		}}, nil
 	case *aguiEvents.RunErrorEvent:
 		return []*agent.ResponseUpdate{{

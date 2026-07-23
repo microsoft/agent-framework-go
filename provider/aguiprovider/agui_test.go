@@ -43,6 +43,53 @@ func TestAGUIAgentRun_AggregatesStreamingText(t *testing.T) {
 	}
 }
 
+func TestAGUIAgentRun_RunFinishedResultBecomesMetadataNotText(t *testing.T) {
+	result := map[string]any{"answer": "42"}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeSSE(t, w, aguiEvents.NewRunStartedEvent("thread-1", "run-1"))
+		writeSSE(t, w, aguiEvents.NewTextMessageStartEvent("msg-1", aguiEvents.WithRole("assistant")))
+		writeSSE(t, w, aguiEvents.NewTextMessageContentEvent("msg-1", "Hello World"))
+		writeSSE(t, w, aguiEvents.NewTextMessageEndEvent("msg-1"))
+		writeSSE(t, w, aguiEvents.NewRunFinishedEventWithOptions("thread-1", "run-1", aguiEvents.WithResult(result)))
+	}))
+	defer server.Close()
+
+	a := aguiprovider.NewAgent(newTestClient(server.URL), aguiprovider.AgentConfig{})
+	resp, err := a.RunText(context.Background(), "hi").Collect()
+	if err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+
+	// The streamed assistant text is the only visible text; the structured run
+	// result must not be duplicated into an extra TextContent.
+	if got := resp.String(); got != "Hello World" {
+		t.Fatalf("response text = %q, want %q", got, "Hello World")
+	}
+	for c := range resp.Contents() {
+		tc, ok := c.(*message.TextContent)
+		if !ok {
+			continue
+		}
+		if strings.Contains(tc.Text, "answer") || strings.Contains(tc.Text, "42") {
+			t.Fatalf("run result leaked into assistant text content: %q", tc.Text)
+		}
+	}
+
+	// The result is surfaced only as metadata under the "result" key.
+	raw, ok := resp.AdditionalProperties["result"]
+	if !ok {
+		t.Fatalf("expected result in AdditionalProperties, got %#v", resp.AdditionalProperties)
+	}
+	m, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("result metadata = %#v, want map", raw)
+	}
+	if m["answer"] != "42" {
+		t.Fatalf("result answer = %v, want 42", m["answer"])
+	}
+}
+
 func TestAGUIAgentRun_ConfigInstructionsBecomeSystemMessage(t *testing.T) {
 	var captured aguiTypes.RunAgentInput
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
