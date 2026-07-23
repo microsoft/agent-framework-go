@@ -20,6 +20,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
+	"github.com/microsoft/agent-framework-go/tool/hostedtool"
 )
 
 type messageNewParamsOpt anthropic.MessageNewParams
@@ -304,6 +305,12 @@ func (a *client) buildMessageParams(messages []*message.Message, opts []agent.Op
 
 	var tools []anthropic.ToolUnionParam
 	for tl := range agent.AllOptions(opts, agent.WithTool) {
+		if ws, ok := tl.(*hostedtool.WebSearch); ok {
+			tools = append(tools, anthropic.ToolUnionParam{
+				OfWebSearchTool20250305: buildWebSearchTool(ws),
+			})
+			continue
+		}
 		if ft, ok := tl.(tool.FuncTool); ok {
 			name, description := ft.Name(), ft.Description()
 			var properties any
@@ -437,6 +444,86 @@ func (a *client) buildMessageParams(messages []*message.Message, opts []agent.Op
 	}
 
 	return params, nil
+}
+
+// buildWebSearchTool maps a hosted WebSearch tool to the Anthropic
+// web_search_20250305 tool request, populating the optional MaxUses,
+// AllowedDomains, BlockedDomains and UserLocation fields from the tool's
+// AdditionalProperties when present. This mirrors the OpenAI providers, which
+// already surface *hostedtool.WebSearch, and the Python
+// agent_framework_anthropic client, whose get_web_search_tool emits
+// web_search_20250305.
+func buildWebSearchTool(ws *hostedtool.WebSearch) *anthropic.WebSearchTool20250305Param {
+	param := &anthropic.WebSearchTool20250305Param{}
+	props := ws.AdditionalProperties
+	if props == nil {
+		return param
+	}
+	if v, ok := props["max_uses"]; ok {
+		if n, ok := toInt64(v); ok {
+			param.MaxUses = anthropic.Int(n)
+		}
+	}
+	if v, ok := props["allowed_domains"]; ok {
+		if domains, ok := toStringSlice(v); ok {
+			param.AllowedDomains = domains
+		}
+	}
+	if v, ok := props["blocked_domains"]; ok {
+		if domains, ok := toStringSlice(v); ok {
+			param.BlockedDomains = domains
+		}
+	}
+	if v, ok := props["user_location"]; ok {
+		if loc, ok := v.(map[string]string); ok {
+			if city := loc["city"]; city != "" {
+				param.UserLocation.City = anthropic.String(city)
+			}
+			if region := loc["region"]; region != "" {
+				param.UserLocation.Region = anthropic.String(region)
+			}
+			if country := loc["country"]; country != "" {
+				param.UserLocation.Country = anthropic.String(country)
+			}
+			if timezone := loc["timezone"]; timezone != "" {
+				param.UserLocation.Timezone = anthropic.String(timezone)
+			}
+		}
+	}
+	return param
+}
+
+// toInt64 coerces the numeric types JSON decoding and callers commonly produce
+// into an int64.
+func toInt64(v any) (int64, bool) {
+	switch n := v.(type) {
+	case int:
+		return int64(n), true
+	case int64:
+		return n, true
+	case float64:
+		return int64(n), true
+	}
+	return 0, false
+}
+
+// toStringSlice coerces a []string or a []any of strings into a []string.
+func toStringSlice(v any) ([]string, bool) {
+	switch s := v.(type) {
+	case []string:
+		return s, true
+	case []any:
+		out := make([]string, 0, len(s))
+		for _, e := range s {
+			str, ok := e.(string)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, str)
+		}
+		return out, true
+	}
+	return nil, false
 }
 
 func buildMessageParam(msg *message.Message) (anthropic.MessageParam, error) {

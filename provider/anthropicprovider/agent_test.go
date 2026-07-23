@@ -16,6 +16,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/provider/anthropicprovider"
+	"github.com/microsoft/agent-framework-go/tool/hostedtool"
 )
 
 // testOutput is the structured type used across structured output tests.
@@ -573,5 +574,116 @@ func TestToolUseEmptyArgumentsSerializeAsObject(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("tool_use block for toolu_1 not found in request")
+	}
+}
+
+// A hosted WebSearch tool must be mapped to the Anthropic web_search_20250305
+// tool request, with MaxUses/AllowedDomains/UserLocation carried across from
+// AdditionalProperties. This mirrors the OpenAI providers and the Python
+// agent_framework_anthropic client (get_web_search_tool -> web_search_20250305).
+func TestWebSearchHostedToolMapping(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		bodyCh <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, minimalMessageResponse("ok"))
+	}))
+	defer server.Close()
+
+	ws := &hostedtool.WebSearch{
+		AdditionalProperties: map[string]any{
+			"max_uses":        5,
+			"allowed_domains": []string{"example.com", "docs.example.com"},
+			"user_location": map[string]string{
+				"city":    "Seattle",
+				"country": "US",
+			},
+		},
+	}
+
+	if _, err := newTestClient(t, server).RunText(t.Context(), "search the web", agent.WithTool(ws)).Collect(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	tools, ok := req["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("tools = %#v, want one tool", req["tools"])
+	}
+	tl, _ := tools[0].(map[string]any)
+	if tl["type"] != "web_search_20250305" {
+		t.Fatalf("tool type = %v, want web_search_20250305", tl["type"])
+	}
+	if got := tl["max_uses"]; got != float64(5) {
+		t.Errorf("max_uses = %#v, want 5", got)
+	}
+	domains, _ := tl["allowed_domains"].([]any)
+	if len(domains) != 2 || domains[0] != "example.com" || domains[1] != "docs.example.com" {
+		t.Errorf("allowed_domains = %#v, want [example.com docs.example.com]", tl["allowed_domains"])
+	}
+	if _, present := tl["blocked_domains"]; present {
+		t.Errorf("blocked_domains should be omitted, got %#v", tl["blocked_domains"])
+	}
+	loc, ok := tl["user_location"].(map[string]any)
+	if !ok {
+		t.Fatalf("user_location = %#v, want an object", tl["user_location"])
+	}
+	if loc["city"] != "Seattle" {
+		t.Errorf("user_location.city = %v, want Seattle", loc["city"])
+	}
+	if loc["country"] != "US" {
+		t.Errorf("user_location.country = %v, want US", loc["country"])
+	}
+	if _, present := loc["region"]; present {
+		t.Errorf("user_location.region should be omitted, got %#v", loc["region"])
+	}
+}
+
+// A hosted WebSearch tool with no AdditionalProperties must still map to the
+// web_search_20250305 request, with all optional fields omitted.
+func TestWebSearchHostedToolMappingWithoutProperties(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		bodyCh <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, minimalMessageResponse("ok"))
+	}))
+	defer server.Close()
+
+	if _, err := newTestClient(t, server).RunText(t.Context(), "search the web", agent.WithTool(&hostedtool.WebSearch{})).Collect(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	tools, ok := req["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("tools = %#v, want one tool", req["tools"])
+	}
+	tl, _ := tools[0].(map[string]any)
+	if tl["type"] != "web_search_20250305" {
+		t.Fatalf("tool type = %v, want web_search_20250305", tl["type"])
+	}
+	for _, k := range []string{"max_uses", "allowed_domains", "blocked_domains", "user_location"} {
+		if _, present := tl[k]; present {
+			t.Errorf("%s should be omitted, got %#v", k, tl[k])
+		}
 	}
 }
