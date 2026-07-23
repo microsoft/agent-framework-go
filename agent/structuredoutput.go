@@ -54,6 +54,9 @@ func (m *structuredOutputMiddleware) Run(next RunFunc, ctx context.Context, mess
 			}
 			data = append(data, update.String()...)
 			current.update(update)
+			if !yield(update, nil) {
+				return
+			}
 		}
 		if err := m.unmarshal(format, data, v); err != nil {
 			yield(nil, err)

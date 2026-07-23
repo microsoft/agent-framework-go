@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
@@ -162,7 +163,7 @@ func TestAgent_StructuredOutput_SuccessfulUnmarshal(t *testing.T) {
 		Name string `json:"name"`
 		Age  int    `json:"age"`
 	}{}
-	_, err := a.Run(context.Background(), nil, agent.WithStructuredOutput(output)).Collect()
+	resp, err := a.Run(context.Background(), nil, agent.WithStructuredOutput(output)).Collect()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -171,6 +172,12 @@ func TestAgent_StructuredOutput_SuccessfulUnmarshal(t *testing.T) {
 	}
 	if output.Age != 30 {
 		t.Fatalf("expected Age 30, got %d", output.Age)
+	}
+	// The middleware must forward the provider updates so the assistant response is
+	// surfaced alongside the deserialized value, matching .NET AgentRunResponse<T>
+	// which keeps Messages/Text next to the parsed Result.
+	if got := resp.String(); got != `{"name":"Alice","age":30}` {
+		t.Fatalf("expected response text to equal the JSON payload, got %q", got)
 	}
 }
 
@@ -448,6 +455,54 @@ func TestAgent_StructuredOutput_MultipleContentTypes(t *testing.T) {
 	}
 	if output.Name != "Charlie" {
 		t.Fatalf("expected Name Charlie, got %q", output.Name)
+	}
+}
+
+func TestAgent_StructuredOutput_StoresAssistantMessages(t *testing.T) {
+	var stored []*message.Message
+	historyProvider := agent.NewHistoryProvider(agent.HistoryProviderConfig{
+		SourceID: "structured-output-history",
+		Store: func(ctx context.Context, invoked agent.InvokedContext) error {
+			stored = append(stored, invoked.ResponseMessages...)
+			return nil
+		},
+	})
+	a := agent.New(agent.ProviderConfig{
+		Run: func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			return singleStructuredOutputTestUpdate(`{"name":"Ivy"}`)
+		},
+		Format: func(v any) (agent.ResponseFormat, error) {
+			return agent.ResponseFormat{Kind: "json"}, nil
+		},
+		Unmarshal: func(format agent.ResponseFormat, data []byte, v any) error {
+			return json.Unmarshal(data, v)
+		},
+	}, agent.Config{ID: "structured-output-store-agent", HistoryProvider: historyProvider})
+
+	output := &struct {
+		Name string `json:"name"`
+	}{}
+	_, err := a.Run(context.Background(), nil,
+		agent.WithStructuredOutput(output),
+		agent.WithSession(agenttest.CreateSession()),
+	).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if output.Name != "Ivy" {
+		t.Fatalf("expected Name Ivy, got %q", output.Name)
+	}
+	// The middleware must forward provider updates so the run persists the assistant
+	// response. Without forwarding, historyResponse stays empty and nothing is stored.
+	if len(stored) == 0 {
+		t.Fatal("expected assistant response messages to be stored, got none")
+	}
+	var text string
+	for _, msg := range stored {
+		text += msg.String()
+	}
+	if text != `{"name":"Ivy"}` {
+		t.Fatalf("expected stored assistant text to equal the JSON payload, got %q", text)
 	}
 }
 
