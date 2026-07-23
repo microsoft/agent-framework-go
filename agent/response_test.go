@@ -679,6 +679,51 @@ func TestResponse_ToUpdates_ProducesUpdates(t *testing.T) {
 	}
 }
 
+func TestResponse_ToUpdates_RoundTripDoesNotDoubleCountUsage(t *testing.T) {
+	resp := &agent.Response{
+		Messages: []*message.Message{
+			{
+				Role: message.RoleAssistant,
+				Contents: message.Contents{
+					&message.TextContent{Text: "Text"},
+					&message.UsageContent{Details: message.UsageDetails{TotalTokenCount: 100}},
+				},
+			},
+		},
+	}
+
+	updates := resp.ToUpdates()
+	if len(updates) != 2 {
+		t.Fatalf("expected 2 updates, got %d", len(updates))
+	}
+
+	// The per-message update must not carry the UsageContent; otherwise the
+	// trailing aggregate update would cause Collect to double-count usage.
+	for _, c := range updates[0].Contents {
+		if _, ok := c.(*message.UsageContent); ok {
+			t.Errorf("expected per-message update to omit UsageContent, but found one")
+		}
+	}
+	// The trailing update carries the aggregate usage exactly once.
+	if got := updates[1].Usage().TotalTokenCount; got != 100 {
+		t.Errorf("expected trailing update usage 100, got %d", got)
+	}
+
+	collected, err := agent.ResponseStream(func(yield func(*agent.ResponseUpdate, error) bool) {
+		for _, u := range updates {
+			if !yield(u, nil) {
+				return
+			}
+		}
+	}).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error collecting updates: %v", err)
+	}
+	if got := collected.Usage().TotalTokenCount; got != 100 {
+		t.Errorf("expected collected usage 100, got %d", got)
+	}
+}
+
 func TestResponse_ToUpdates_WithNoMessagesProducesEmptySlice(t *testing.T) {
 	resp := &agent.Response{}
 
