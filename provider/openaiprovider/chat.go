@@ -391,40 +391,20 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 						},
 					})
 				default:
-					// For other URI content types, just ignore, they are not supported yet.
+					// A data: URI carries the bytes inline, so audio/PDF (and other
+					// non-image) content can be mapped to input_audio/file exactly like
+					// DataContent. Non-data http(s) audio/file URLs have no
+					// chat-completions mapping, so they are still dropped.
+					if data, ok := dataURIPayload(c.URI); ok {
+						contents = append(contents, dataContentPart(&message.DataContent{
+							ContentHeader: c.ContentHeader,
+							MediaType:     c.MediaType,
+							Data:          data,
+						}))
+					}
 				}
 			case *message.DataContent:
-				switch c.TopLevelMediaType() {
-				case "image":
-					contents = append(contents, openai.ChatCompletionContentPartUnionParam{
-						OfImageURL: &openai.ChatCompletionContentPartImageParam{
-							ImageURL: openai.ChatCompletionContentPartImageImageURLParam{
-								URL:    c.URI(),
-								Detail: imageDetail(c.AdditionalProperties),
-							},
-						},
-					})
-				case "audio":
-					var format string
-					switch c.MediaType {
-					case "audio/wav":
-						format = "wav"
-					case "audio/mp3", "audio/mpeg":
-						format = "mp3"
-					default:
-						// Default to mp3
-						format = "mp3"
-					}
-					contents = append(contents, openai.InputAudioContentPart(openai.ChatCompletionContentPartInputAudioInputAudioParam{
-						Data:   c.Data,
-						Format: format,
-					}))
-				default:
-					contents = append(contents, openai.FileContentPart(openai.ChatCompletionContentPartFileFileParam{
-						FileData: openai.String(c.Data),
-						Filename: openai.String(c.Name),
-					}))
-				}
+				contents = append(contents, dataContentPart(c))
 			case *message.HostedFileContent:
 				contents = append(contents, openai.FileContentPart(openai.ChatCompletionContentPartFileFileParam{
 					FileID: openai.String(c.FileID),
@@ -528,4 +508,56 @@ func imageDetail(props map[string]any) string {
 		}
 	}
 	return ""
+}
+
+// dataContentPart maps in-memory content to the matching chat completions
+// content part: images become an image URL, audio becomes input_audio, and
+// everything else becomes a file. It is shared by the DataContent and the
+// data: URIContent branches so both stay symmetric, matching the Python SDK.
+func dataContentPart(c *message.DataContent) openai.ChatCompletionContentPartUnionParam {
+	switch c.TopLevelMediaType() {
+	case "image":
+		return openai.ChatCompletionContentPartUnionParam{
+			OfImageURL: &openai.ChatCompletionContentPartImageParam{
+				ImageURL: openai.ChatCompletionContentPartImageImageURLParam{
+					URL:    c.URI(),
+					Detail: imageDetail(c.AdditionalProperties),
+				},
+			},
+		}
+	case "audio":
+		var format string
+		switch c.MediaType {
+		case "audio/wav":
+			format = "wav"
+		case "audio/mp3", "audio/mpeg":
+			format = "mp3"
+		default:
+			// Default to mp3
+			format = "mp3"
+		}
+		return openai.InputAudioContentPart(openai.ChatCompletionContentPartInputAudioInputAudioParam{
+			Data:   c.Data,
+			Format: format,
+		})
+	default:
+		return openai.FileContentPart(openai.ChatCompletionContentPartFileFileParam{
+			FileData: openai.String(c.Data),
+			Filename: openai.String(c.Name),
+		})
+	}
+}
+
+// dataURIPayload returns the base64-encoded payload of a data: URI, reporting
+// false for any other (e.g. http/https) URI. OpenAI chat completions cannot
+// accept audio or file content by URL, so only inline data: URIs are mappable.
+func dataURIPayload(uri string) (string, bool) {
+	if !strings.HasPrefix(strings.ToLower(uri), "data:") {
+		return "", false
+	}
+	_, data, ok := strings.Cut(uri, ",")
+	if !ok {
+		return "", false
+	}
+	return data, true
 }

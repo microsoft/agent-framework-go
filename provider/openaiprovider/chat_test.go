@@ -1363,6 +1363,102 @@ func TestChatDataContentMessage_Image_NonStreaming(t *testing.T) {
 	}
 }
 
+func TestChatURIContentMessage_DataURI_NonStreaming(t *testing.T) {
+	// A data: URIContent carries the bytes inline, so audio/PDF content must map
+	// to input_audio/file exactly like the equivalent DataContent (Python keys
+	// audio/application on both data and uri). Plain http(s) audio/file URLs have
+	// no chat-completions mapping and are still dropped.
+	const input = `
+            {
+              "messages": [
+                {
+                  "role": "user",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "Transcribe and summarize the attachments."
+                    },
+                    {
+                      "type": "input_audio",
+                      "input_audio": {
+                        "data": "QUJDRA==",
+                        "format": "wav"
+                      }
+                    },
+                    {
+                      "type": "file",
+                      "file": {
+                        "file_data": "JVBERg==",
+                        "filename": ""
+                      }
+                    }
+                  ]
+                }
+              ],
+              "model": "gpt-4o-mini"
+            }
+            `
+	const output = `
+            {
+              "choices": [
+                {
+                  "finish_reason": "stop",
+                  "index": 0,
+                  "logprobs": null,
+                  "message": {
+                    "content": "Done.",
+                    "refusal": null,
+                    "role": "assistant"
+                  }
+                }
+              ],
+              "created": 1743531271,
+              "id": "chatcmpl-uri-data",
+              "model": "gpt-4o-mini-2024-07-18",
+              "object": "chat.completion"
+            }
+            `
+
+	want := []*message.Message{
+		{
+			ID:        "chatcmpl-uri-data",
+			Role:      message.RoleAssistant,
+			CreatedAt: time.Unix(1743531271, 0),
+			Contents: []message.Content{
+				&message.TextContent{Text: "Done."},
+			},
+		},
+	}
+
+	server := newTestServer(t, input, output)
+	defer server.Close()
+
+	a := newTestClient(server)
+
+	messages := []*message.Message{
+		{
+			Role: message.RoleUser,
+			Contents: []message.Content{
+				&message.TextContent{Text: "Transcribe and summarize the attachments."},
+				// data: audio -> input_audio
+				&message.URIContent{URI: "data:audio/wav;base64,QUJDRA==", MediaType: "audio/wav"},
+				// data: PDF -> file
+				&message.URIContent{URI: "data:application/pdf;base64,JVBERg==", MediaType: "application/pdf"},
+				// plain https audio URL -> dropped (no chat-completions mapping)
+				&message.URIContent{URI: "https://example.com/clip.wav", MediaType: "audio/wav"},
+			},
+		},
+	}
+
+	resp, err := a.Run(t.Context(), messages).Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if err := messagetest.MessagesEqual(resp.Messages, want); err != nil {
+		t.Error(err)
+	}
+}
+
 func TestChatMultipleRequiredFunctions(t *testing.T) {
 	const input = `
             {
