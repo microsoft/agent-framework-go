@@ -7,7 +7,6 @@ import (
 	"cmp"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"maps"
 	"reflect"
@@ -306,7 +305,6 @@ type serializedFunctionCallContent struct {
 
 	Arguments         string
 	CallID            string
-	Error             string `json:",omitempty"`
 	Name              string
 	InformationalOnly bool
 
@@ -333,9 +331,6 @@ func (t *FunctionCallContent) MarshalJSON() ([]byte, error) {
 		InformationalOnly: t.InformationalOnly,
 		Type:              t.kind(),
 	}
-	if t.Error != nil {
-		tmp.Error = t.Error.Error()
-	}
 	return json.Marshal(tmp)
 }
 
@@ -349,9 +344,6 @@ func (t *FunctionCallContent) UnmarshalJSON(data []byte) error {
 	t.CallID = tmp.CallID
 	t.Name = tmp.Name
 	t.InformationalOnly = tmp.InformationalOnly
-	if tmp.Error != "" {
-		t.Error = errors.New(tmp.Error)
-	}
 	return nil
 }
 
@@ -368,7 +360,6 @@ type serializedFunctionResultContent struct {
 	ContentHeader
 
 	CallID string
-	Error  string `json:",omitempty"`
 	Result any    `json:",omitempty"`
 
 	Type contentKind
@@ -390,9 +381,6 @@ func (t *FunctionResultContent) MarshalJSON() ([]byte, error) {
 		Result:        t.Result,
 		Type:          t.kind(),
 	}
-	if t.Error != nil {
-		tmp.Error = t.Error.Error()
-	}
 	return json.Marshal(tmp)
 }
 
@@ -404,9 +392,6 @@ func (t *FunctionResultContent) UnmarshalJSON(data []byte) error {
 	t.ContentHeader = tmp.ContentHeader
 	t.CallID = tmp.CallID
 	t.Result = tmp.Result
-	if tmp.Error != "" {
-		t.Error = errors.New(tmp.Error)
-	}
 	return nil
 }
 

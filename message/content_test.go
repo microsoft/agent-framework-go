@@ -87,7 +87,6 @@ func TestContentEncoding_Roundtrip(t *testing.T) {
 		&message.FunctionResultContent{
 			CallID: "call-123",
 			Result: map[string]any{"key": "value"},
-			Error:  errors.New("sample error"),
 		},
 		&message.URIContent{
 			URI: "https://example.com/resource",
@@ -180,6 +179,61 @@ func TestContentEncoding_Roundtrip(t *testing.T) {
 		if !reflect.DeepEqual(v, decoded[i]) {
 			t.Errorf("[%d]: expected content %v, got %v", i, v, decoded[i])
 		}
+	}
+}
+
+func TestFunctionCallContent_ErrorNotSerialized(t *testing.T) {
+	content := &message.FunctionCallContent{
+		CallID:    "call-1",
+		Name:      "doThing",
+		Arguments: `{"a":1}`,
+		Error:     errors.New("mapping failed"),
+	}
+	data, err := json.Marshal(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := raw["Error"]; ok {
+		t.Fatalf("Error must not be serialized, got %s", data)
+	}
+
+	var decoded message.FunctionCallContent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Error != nil {
+		t.Fatalf("Error must be nil after unmarshal, got %v", decoded.Error)
+	}
+}
+
+func TestFunctionResultContent_ErrorNotSerialized(t *testing.T) {
+	content := &message.FunctionResultContent{
+		CallID: "call-1",
+		Result: "ok",
+		Error:  errors.New("function failed"),
+	}
+	data, err := json.Marshal(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := raw["Error"]; ok {
+		t.Fatalf("Error must not be serialized, got %s", data)
+	}
+
+	var decoded message.FunctionResultContent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Error != nil {
+		t.Fatalf("Error must be nil after unmarshal, got %v", decoded.Error)
 	}
 }
 
