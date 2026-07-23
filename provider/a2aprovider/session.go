@@ -15,6 +15,9 @@ const (
 )
 
 func setContextID(session *agent.Session, contextID string) {
+	if contextID == "" {
+		return
+	}
 	session.SetServiceID(contextID)
 }
 

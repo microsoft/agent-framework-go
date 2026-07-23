@@ -30,6 +30,10 @@ type mockA2ATransport struct {
 	sendStreamingMessageCalled bool
 	subscribeToTaskCalled      bool
 	getTaskCalled              bool
+	// rawStreamingResponse yields streamingResponseToReturn verbatim, without
+	// backfilling an empty ContextID from the request. It lets tests exercise
+	// bare streamed messages that carry no context ID.
+	rawStreamingResponse bool
 }
 
 func (m *mockA2ATransport) SendMessage(ctx context.Context, _ a2aclient.ServiceParams, params *a2a.SendMessageRequest) (a2a.SendMessageResult, error) {
@@ -50,6 +54,11 @@ func (m *mockA2ATransport) SendStreamingMessage(ctx context.Context, _ a2aclient
 	m.sendStreamingMessageCalled = true
 	m.capturedMessageSendParams = params
 	responseToYield := m.streamingResponseToReturn
+	if m.rawStreamingResponse {
+		return func(yield func(a2a.Event, error) bool) {
+			yield(responseToYield, nil)
+		}
+	}
 	if responseToYield == nil {
 		// Return default empty message with context ID from request
 		responseToYield = &a2a.Message{
@@ -544,6 +553,69 @@ func TestRunStreamingWithSessionHavingDifferentContextID(t *testing.T) {
 
 	if !gotError {
 		t.Error("expected error, got nil")
+	}
+}
+
+// TestRunStreamingWithEmptyContextIDKeepsSessionContext verifies that a bare
+// streamed message carrying an empty context ID neither errors the run nor
+// clobbers the context ID already stored in the session. This mirrors the .NET
+// behavior where ContextId is only assigned when currently unset
+// (ContextId ??= contextId).
+func TestRunStreamingWithEmptyContextIDKeepsSessionContext(t *testing.T) {
+	transport := &mockA2ATransport{
+		rawStreamingResponse: true,
+		streamingResponseToReturn: &a2a.Message{
+			ID:    "stream-1",
+			Role:  a2a.MessageRoleAgent,
+			Parts: a2a.ContentParts{a2a.NewTextPart("Response")},
+			// No ContextID: a bare streamed message chunk.
+		},
+	}
+	a := newTestAgent(transport, agent.Config{})
+
+	session, err := a.CreateSession(t.Context(), agent.WithServiceID("ctx-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, err := range a.RunText(t.Context(), "Test streaming", agent.WithSession(session), agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("error = %v, want nil", err)
+		}
+	}
+
+	if got := session.ServiceID(); got != "ctx-1" {
+		t.Errorf("session.ServiceID = %q, want %q", got, "ctx-1")
+	}
+}
+
+// TestRunStreamingWithEmptyInitialContextStoresResponseContext verifies that when
+// the session has no context ID yet, the first streamed event's context ID is stored.
+func TestRunStreamingWithEmptyInitialContextStoresResponseContext(t *testing.T) {
+	transport := &mockA2ATransport{
+		rawStreamingResponse: true,
+		streamingResponseToReturn: &a2a.Message{
+			ID:        "stream-1",
+			Role:      a2a.MessageRoleAgent,
+			Parts:     a2a.ContentParts{a2a.NewTextPart("Response")},
+			ContextID: "ctx-1",
+		},
+	}
+	a := newTestAgent(transport, agent.Config{})
+
+	session, err := a.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, err := range a.RunText(t.Context(), "Test streaming", agent.WithSession(session), agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("error = %v, want nil", err)
+		}
+	}
+
+	if got := session.ServiceID(); got != "ctx-1" {
+		t.Errorf("session.ServiceID = %q, want %q", got, "ctx-1")
 	}
 }
 
