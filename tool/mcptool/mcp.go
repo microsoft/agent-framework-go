@@ -393,17 +393,42 @@ var (
 type mcpWrapper struct {
 	session *mcp.ClientSession
 	tool    *mcp.Tool
+	// name is the normalized tool name surfaced to providers and used as the
+	// autocall map key. tool.Name retains the original remote name used when
+	// invoking the MCP server.
+	name string
 }
 
 func newMCPToolWrapper(session *mcp.ClientSession, tool *mcp.Tool) *mcpWrapper {
 	return &mcpWrapper{
 		session: session,
 		tool:    tool,
+		name:    normalizeMCPName(tool.Name),
 	}
 }
 
+// normalizeMCPName replaces every rune that is not a valid function-name
+// character with a dash. Providers such as OpenAI reject tool names that do not
+// match the [A-Za-z0-9_.-] identifier pattern, but MCP server tool names may
+// contain arbitrary characters (spaces, slashes, colons). This mirrors the
+// Python SDK's _normalize_mcp_name so the same remote tool surfaces under the
+// same name across SDKs.
+func normalizeMCPName(name string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'A' && r <= 'Z',
+			r >= 'a' && r <= 'z',
+			r >= '0' && r <= '9',
+			r == '_', r == '.', r == '-':
+			return r
+		default:
+			return '-'
+		}
+	}, name)
+}
+
 func (w *mcpWrapper) Name() string {
-	return w.tool.Name
+	return w.name
 }
 
 func (w *mcpWrapper) Description() string {

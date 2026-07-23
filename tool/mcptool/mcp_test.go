@@ -349,6 +349,45 @@ func TestListToolsPreservesMCPToolMetadata(t *testing.T) {
 	}
 }
 
+func TestListToolsNormalizesInvalidToolName(t *testing.T) {
+	ctx := context.Background()
+	server := mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "1.0.0"}, nil)
+	const remoteName = "search files/v2:beta"
+	var called bool
+	server.AddTool(&mcp.Tool{
+		Name:        remoteName,
+		Description: "tool with an invalid provider name",
+		InputSchema: map[string]any{"type": "object"},
+	}, func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		called = true
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "ok"}}}, nil
+	})
+
+	session := connectInMemory(t, ctx, server)
+	tools, err := mcptool.ListTools(ctx, session)
+	if err != nil {
+		t.Fatalf("ListTools() error = %v", err)
+	}
+	if len(tools) != 1 {
+		t.Fatalf("expected one tool, got %d", len(tools))
+	}
+	funcTool, ok := tools[0].(tool.FuncTool)
+	if !ok {
+		t.Fatalf("listed tool is %T, want tool.FuncTool", tools[0])
+	}
+	// Name() must be normalized to the provider-safe pattern.
+	if got, want := funcTool.Name(), "search-files-v2-beta"; got != want {
+		t.Fatalf("Name() = %q, want %q", got, want)
+	}
+	// Call() must still invoke the server under the original remote name.
+	if _, err := funcTool.Call(ctx, `{}`); err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+	if !called {
+		t.Fatalf("server tool %q was not invoked with the original remote name", remoteName)
+	}
+}
+
 func TestCallForwardsArgumentsToMCPTool(t *testing.T) {
 	ctx := context.Background()
 	server := mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "1.0.0"}, nil)
