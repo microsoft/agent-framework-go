@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -1667,5 +1668,133 @@ func TestUsageContent_Streaming_CumulativeUsageNotSummed(t *testing.T) {
 	}
 	if usage.OutputTokenCount != 5 {
 		t.Errorf("OutputTokenCount = %d, want 5", usage.OutputTokenCount)
+	}
+}
+
+// TestFunctionCallWithoutID verifies that when Gemini returns a functionCall part
+// without an ID (the standard generateContent behavior, since genai marks the ID
+// omitempty), the provider synthesizes a fallback CallID. Without an ID the
+// framework tool loop cannot correlate the call with its result, and the follow-up
+// turn errors on the empty-CallID function response. This test auto-invokes a tool
+// and continues to a second turn to prove the round-trip succeeds.
+func TestFunctionCallWithoutID(t *testing.T) {
+	funcCallResp := map[string]any{
+		"candidates": []any{
+			map[string]any{
+				"content": map[string]any{
+					"role": "model",
+					"parts": []any{
+						map[string]any{
+							// Note: no "id" field, mirroring real Gemini responses.
+							"functionCall": map[string]any{
+								"name": "get_weather",
+								"args": map[string]any{"City": "Seattle"},
+							},
+						},
+					},
+				},
+				"finishReason": "STOP",
+			},
+		},
+	}
+	funcCallBody, _ := json.Marshal(funcCallResp)
+
+	var calls atomic.Int32
+	bodyCh := make(chan []byte, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		bodyCh <- body
+		w.Header().Set("Content-Type", "application/json")
+		if calls.Add(1) == 1 {
+			// First turn: the model requests a tool call with no ID.
+			_, _ = w.Write(funcCallBody)
+			return
+		}
+		// Second turn: the model produces the final answer.
+		_, _ = io.WriteString(w, minimalTextResponse("It's sunny in Seattle."))
+	}))
+	defer server.Close()
+
+	client, err := genai.NewClient(t.Context(), &genai.ClientConfig{
+		Backend: genai.BackendGeminiAPI,
+		APIKey:  "test",
+		HTTPOptions: genai.HTTPOptions{
+			BaseURL: server.URL,
+		},
+	})
+	if err != nil {
+		t.Fatalf("genai.NewClient: %v", err)
+	}
+	// Auto function calling enabled (the default) so the tool loop runs a second turn.
+	a := geminiprovider.NewAgent(client, geminiprovider.AgentConfig{Model: testModel})
+
+	weatherTool := functool.MustNew(functool.Config{
+		Name:        "get_weather",
+		Description: "Get the weather for a city.",
+	}, func(_ context.Context, args struct{ City string }) (string, error) {
+		return "sunny", nil
+	})
+
+	resp, err := a.RunText(t.Context(), "what's the weather in Seattle?", agent.WithTool(weatherTool)).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("expected 2 model calls (tool round-trip), got %d", calls.Load())
+	}
+	if got := resp.String(); got != "It's sunny in Seattle." {
+		t.Errorf("response text = %q, want %q", got, "It's sunny in Seattle.")
+	}
+
+	// The synthesized FunctionCallContent must carry a non-empty CallID.
+	var gotFuncCall *message.FunctionCallContent
+	for _, msg := range resp.Messages {
+		for _, c := range msg.Contents {
+			if fc, ok := c.(*message.FunctionCallContent); ok {
+				gotFuncCall = fc
+			}
+		}
+	}
+	if gotFuncCall == nil {
+		t.Fatal("expected FunctionCallContent in response, got none")
+	}
+	if gotFuncCall.CallID == "" {
+		t.Fatal("expected synthesized non-empty CallID for function call without an ID")
+	}
+
+	// Drain the captured request bodies; the second turn must include a
+	// functionResponse whose id matches the synthesized call id.
+	<-bodyCh
+	var secondReq map[string]any
+	if err := json.Unmarshal(<-bodyCh, &secondReq); err != nil {
+		t.Fatalf("unmarshal second request body: %v", err)
+	}
+	contents, _ := secondReq["contents"].([]any)
+	var foundResult bool
+	for _, c := range contents {
+		cm, _ := c.(map[string]any)
+		parts, _ := cm["parts"].([]any)
+		for _, p := range parts {
+			pm, _ := p.(map[string]any)
+			fr, _ := pm["functionResponse"].(map[string]any)
+			if fr == nil {
+				continue
+			}
+			foundResult = true
+			if id, _ := fr["id"].(string); id != gotFuncCall.CallID {
+				t.Errorf("functionResponse.id = %q, want %q", id, gotFuncCall.CallID)
+			}
+			if name, _ := fr["name"].(string); name != "get_weather" {
+				t.Errorf("functionResponse.name = %q, want %q", name, "get_weather")
+			}
+		}
+	}
+	if !foundResult {
+		t.Error("expected a functionResponse part in the second-turn request")
 	}
 }
