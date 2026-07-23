@@ -30,6 +30,10 @@ permissions:
 tools:
    github:
       toolsets: [default]
+      # Lower the automatic "approved" lockdown so fork-PR content is readable
+      # for parity review. unapproved covers CONTRIBUTOR / FIRST_TIME_CONTRIBUTOR
+      # (typical fork PRs) while still filtering fully anonymous (none) authors.
+      min-integrity: unapproved
    cache-memory: true
 safe-outputs:
    noop:
