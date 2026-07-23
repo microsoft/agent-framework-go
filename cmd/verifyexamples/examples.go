@@ -472,6 +472,16 @@ var agentsExamples = []ExampleDefinition{
 		},
 	},
 	{
+		Name:                         "02_agents_providers_openai_reasoning",
+		ProjectPath:                  "examples/02-agents/providers/openai/reasoning",
+		RequiredEnvironmentVariables: []string{"OPENAI_API_KEY"},
+		ExpectedOutputDescription: []string{
+			"The output should solve the chickens-and-rabbits puzzle, concluding there are 23 chickens and 12 rabbits.",
+			"The output should include a reasoning summary section separate from the final answer.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
 		Name:                         "02_agents_providers_gemini",
 		ProjectPath:                  "examples/02-agents/providers/gemini",
 		RequiredEnvironmentVariables: []string{"GEMINI_API_KEY"},
