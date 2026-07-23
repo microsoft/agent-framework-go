@@ -482,6 +482,17 @@ var agentsExamples = []ExampleDefinition{
 		},
 	},
 	{
+		Name:                         "02_agents_providers_gemini_thinking",
+		ProjectPath:                  "examples/02-agents/providers/gemini/thinking",
+		RequiredEnvironmentVariables: []string{"GEMINI_API_KEY"},
+		OptionalEnvironmentVariables: []string{"GEMINI_MODEL"},
+		ExpectedOutputDescription: []string{
+			"The output should contain a reasoning summary labeled with [reasoning] followed by the final answer.",
+			"The final answer should indicate that 9 sheep are left.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
 		Name:                         "02_agents_providers_anthropic",
 		ProjectPath:                  "examples/02-agents/providers/anthrophic",
 		RequiredEnvironmentVariables: []string{"ANTHROPIC_API_KEY"},
