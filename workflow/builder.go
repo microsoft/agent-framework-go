@@ -15,6 +15,8 @@ import (
 	workflowobservability "github.com/microsoft/agent-framework-go/workflow/observability"
 )
 
+// Builder assembles a Workflow graph from executors, edges, and
+// request/response ports, then produces an immutable Workflow via Build.
 type Builder struct {
 	startExecutorId string
 	name            string
@@ -32,6 +34,8 @@ type Builder struct {
 	telemetry                *internalobservability.Context
 }
 
+// NewBuilder returns a Builder rooted at the given start executor binding,
+// which becomes the workflow entry point.
 func NewBuilder(start ExecutorBinding) *Builder {
 	bld := &Builder{
 		startExecutorId: start.ID,

@@ -4,6 +4,8 @@ package workflow
 
 import "slices"
 
+// Event is implemented by every workflow run event. Data returns the event
+// payload.
 type Event interface {
 	Data() any
 }
@@ -143,6 +145,8 @@ func (e OutputEvent) IsIntermediate() bool {
 
 var _ Event = RequestHaltEvent{}
 
+// RequestHaltEvent signals that the workflow requested a halt, carrying an
+// optional Result payload.
 type RequestHaltEvent struct {
 	Result any
 }
