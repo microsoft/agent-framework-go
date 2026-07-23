@@ -575,3 +575,79 @@ func TestToolUseEmptyArgumentsSerializeAsObject(t *testing.T) {
 		t.Fatal("tool_use block for toolu_1 not found in request")
 	}
 }
+
+// A URIContent image URL and a DataContent application/pdf must be forwarded to
+// Anthropic as an image block with a URL source and a document block. Before the
+// fix these inputs fell through the content switch and were silently dropped,
+// diverging from the OpenAI chat provider which maps all three multimodal inputs.
+func TestBuildMessageParam_ImageURLAndPDFAreForwarded(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		bodyCh <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, minimalMessageResponse("ok"))
+	}))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	msgs := []*message.Message{
+		{Role: message.RoleUser, Contents: message.Contents{
+			&message.URIContent{URI: "https://example.com/cat.png", MediaType: "image/png"},
+			&message.DataContent{Data: "JVBERi0xLjQK", MediaType: "application/pdf"},
+		}},
+	}
+	if _, err := a.Run(t.Context(), msgs).Collect(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	messages, ok := req["messages"].([]any)
+	if !ok {
+		t.Fatalf("request messages = %#v, want a JSON array", req["messages"])
+	}
+
+	var imageURL, documentBase64 bool
+	for _, m := range messages {
+		msg, ok := m.(map[string]any)
+		if !ok {
+			continue
+		}
+		blocks, ok := msg["content"].([]any)
+		if !ok {
+			continue
+		}
+		for _, b := range blocks {
+			block, ok := b.(map[string]any)
+			if !ok {
+				continue
+			}
+			source, _ := block["source"].(map[string]any)
+			switch block["type"] {
+			case "image":
+				if source["type"] == "url" && source["url"] == "https://example.com/cat.png" {
+					imageURL = true
+				}
+			case "document":
+				if source["type"] == "base64" && source["media_type"] == "application/pdf" && source["data"] == "JVBERi0xLjQK" {
+					documentBase64 = true
+				}
+			}
+		}
+	}
+	if !imageURL {
+		t.Error("image block with a URL source not found in request")
+	}
+	if !documentBase64 {
+		t.Error("document block with a base64 application/pdf source not found in request")
+	}
+}

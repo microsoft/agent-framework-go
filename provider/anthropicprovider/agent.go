@@ -481,13 +481,30 @@ func buildMessageParam(msg *message.Message) (anthropic.MessageParam, error) {
 			}
 			content = append(content, anthropic.NewToolResultBlock(c.CallID, resStr, c.Error != nil))
 		case *message.DataContent:
-			if c.TopLevelMediaType() == "image" {
+			switch {
+			case c.TopLevelMediaType() == "image":
 				mediaType := c.MediaType
 				if mediaType == "" {
 					mediaType = "image/jpeg"
 				}
 				content = append(content, anthropic.NewImageBlockBase64(mediaType, c.Data))
+			case c.MediaType == "application/pdf":
+				content = append(content, anthropic.NewDocumentBlock(anthropic.Base64PDFSourceParam{
+					Data: c.Data,
+				}))
 			}
+		case *message.URIContent:
+			switch {
+			case c.TopLevelMediaType() == "image":
+				content = append(content, anthropic.NewImageBlock(anthropic.URLImageSourceParam{URL: c.URI}))
+			case c.MediaType == "application/pdf":
+				content = append(content, anthropic.NewDocumentBlock(anthropic.URLPDFSourceParam{URL: c.URI}))
+			}
+		case *message.HostedFileContent:
+			// The stable Anthropic Messages API used here (anthropic.MessageNewParams)
+			// has no file-id image/document source in anthropic-sdk-go v1.58.1; only
+			// the Beta API exposes BetaFileImageSourceParam/BetaFileDocumentSourceParam.
+			// A hosted file reference therefore cannot be forwarded yet.
 		}
 	}
 
