@@ -1473,10 +1473,15 @@ func TestFunctionInvoking_NextIterationIncludesAssistantFunctionCallMessage(t *t
 	}
 
 	rb := agenttest.NewResponseBuilder()
-	// First turn: model calls a function.
+	// First turn: model emits reasoning and text alongside the function call in a
+	// single assistant update.
 	rb.Add(&agent.ResponseUpdate{
-		Role:     message.RoleAssistant,
-		Contents: []message.Content{&message.FunctionCallContent{CallID: "callId1", Name: "Func1", Arguments: `{}`}},
+		Role: message.RoleAssistant,
+		Contents: []message.Content{
+			&message.TextReasoningContent{Text: "thinking about it"},
+			&message.TextContent{Text: "let me look that up"},
+			&message.FunctionCallContent{CallID: "callId1", Name: "Func1", Arguments: `{}`},
+		},
 	})
 	// Second turn: verify messages, then return final text.
 	rb.NewTurn(func(ctx context.Context, messages []*message.Message, opts ...agent.Option) {
@@ -1493,13 +1498,34 @@ func TestFunctionInvoking_NextIterationIncludesAssistantFunctionCallMessage(t *t
 			t.Errorf("expected second-to-last message to be assistant role, got %s", messages[len(messages)-2].Role)
 		}
 		hasFCC := false
+		hasText := false
+		hasReasoning := false
 		for _, c := range messages[len(messages)-2].Contents {
-			if fcc, ok := c.(*message.FunctionCallContent); ok && fcc.CallID == "callId1" {
-				hasFCC = true
+			switch c := c.(type) {
+			case *message.FunctionCallContent:
+				if c.CallID == "callId1" {
+					hasFCC = true
+				}
+			case *message.TextContent:
+				if c.Text == "let me look that up" {
+					hasText = true
+				}
+			case *message.TextReasoningContent:
+				if c.Text == "thinking about it" {
+					hasReasoning = true
+				}
 			}
 		}
 		if !hasFCC {
 			t.Error("expected assistant message to contain FunctionCallContent with callId1")
+		}
+		// The assistant text and reasoning emitted with the tool call must survive into
+		// the reconstructed turn (parity with .NET augmentedHistory.AddMessages(response)).
+		if !hasText {
+			t.Error("expected assistant message to preserve the emitted TextContent")
+		}
+		if !hasReasoning {
+			t.Error("expected assistant message to preserve the emitted TextReasoningContent")
 		}
 		// Last message should be tool result.
 		if messages[len(messages)-1].Role != message.RoleTool {

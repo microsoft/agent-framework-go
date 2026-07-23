@@ -326,13 +326,34 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 				return
 			}
 
-			// Build an assistant message containing the function calls that were processed.
-			// This is needed because chat APIs (e.g. OpenAI) require tool result messages
-			// to be preceded by an assistant message containing the corresponding tool_calls.
+			// Build an assistant message containing the text, reasoning, and function
+			// calls that were produced this iteration. This is needed because chat APIs
+			// (e.g. OpenAI) require tool result messages to be preceded by an assistant
+			// message containing the corresponding tool_calls. Preserving the assistant's
+			// text and reasoning content keeps the turn intact for the next provider call,
+			// matching .NET's FunctionInvokingChatClient, which does
+			// augmentedHistory.AddMessages(response) rather than reconstructing from the
+			// function calls alone.
 			processedFunctionCalls := functionCallContents[:len(newMsg.Contents)]
-			assistantContents := make([]message.Content, len(processedFunctionCalls))
-			for i, fcc := range processedFunctionCalls {
-				assistantContents[i] = fcc
+
+			// Coalesce the buffered updates for this iteration so streamed text/reasoning
+			// fragments merge, then carry the text and reasoning over alongside the
+			// processed (non-informational) function calls, preserving the natural
+			// assistant order of reasoning → text → tool_calls.
+			var iterationContents []message.Content
+			for _, u := range updates {
+				iterationContents = append(iterationContents, u.Contents...)
+			}
+			iterationContents = message.CoalesceContents(iterationContents)
+			assistantContents := make([]message.Content, 0, len(iterationContents)+len(processedFunctionCalls))
+			for _, c := range iterationContents {
+				switch c.(type) {
+				case *message.TextContent, *message.TextReasoningContent:
+					assistantContents = append(assistantContents, c)
+				}
+			}
+			for _, fcc := range processedFunctionCalls {
+				assistantContents = append(assistantContents, fcc)
 			}
 
 			// Use the augmented history as the new set of messages to send.
