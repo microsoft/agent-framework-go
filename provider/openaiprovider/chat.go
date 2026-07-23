@@ -136,7 +136,7 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 				contents = append(contents, &message.TextContent{Text: choice.Message.Content})
 			}
 			if choice.Message.Refusal != "" {
-				contents = append(contents, &message.ErrorContent{Message: choice.Message.Refusal})
+				contents = append(contents, &message.ErrorContent{Message: choice.Message.Refusal, ErrorCode: "Refusal"})
 			}
 			finishReason = choice.FinishReason
 		}
