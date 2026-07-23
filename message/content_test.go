@@ -20,6 +20,36 @@ func TestTextContent_String(t *testing.T) {
 	}
 }
 
+func TestContentsText(t *testing.T) {
+	tests := []struct {
+		name     string
+		contents message.Contents
+		want     string
+	}{
+		{
+			name:     "empty",
+			contents: message.Contents{},
+			want:     "",
+		},
+		{
+			name: "concatenates all text contents in order",
+			contents: message.Contents{
+				&message.TextContent{Text: "foo"},
+				&message.TextReasoningContent{Text: "ignored"},
+				&message.TextContent{Text: "bar"},
+			},
+			want: "foobar",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.contents.Text(); got != tt.want {
+				t.Errorf("Text() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // Test TextReasoningContent
 func TestTextReasoningContent_String(t *testing.T) {
 	trc := &message.TextReasoningContent{Text: "reasoning text"}
