@@ -216,6 +216,17 @@ var agentsExamples = []ExampleDefinition{
 		},
 	},
 	{
+		Name:                         "02_agents_agents_message_injection",
+		ProjectPath:                  "examples/02-agents/agents/message-injection",
+		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
+		OptionalEnvironmentVariables: []string{"FOUNDRY_MODEL"},
+		ExpectedOutputDescription: []string{
+			"The output should report the status of order A-1234.",
+			"The final answer should incorporate the injected shipping update (out for delivery, expected today by 6pm), showing that the tool folded late context into the same run.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
 		Name:                         "02_agents_agents_step17_additional_ai_context",
 		ProjectPath:                  "examples/02-agents/agents/step17_additional_ai_context",
 		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
