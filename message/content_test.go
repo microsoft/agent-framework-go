@@ -658,6 +658,164 @@ func TestCoalesceContents(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "code interpreter tool call with same call id coalesced and inputs merged",
+			input: []message.Content{
+				&message.CodeInterpreterToolCallContent{
+					CallID: "call-1",
+					Inputs: message.Contents{
+						&message.TextContent{Text: "hello"},
+						&message.TextContent{Text: " world"},
+					},
+				},
+				&message.CodeInterpreterToolCallContent{
+					CallID: "call-1",
+					Inputs: message.Contents{
+						&message.TextContent{Text: "!"},
+					},
+				},
+			},
+			expected: []message.Content{
+				&message.CodeInterpreterToolCallContent{
+					CallID: "call-1",
+					Inputs: message.Contents{
+						&message.TextContent{Text: "hello world!"},
+					},
+				},
+			},
+		},
+		{
+			name: "code interpreter tool call with different call ids not coalesced but inputs still merged",
+			input: []message.Content{
+				&message.CodeInterpreterToolCallContent{
+					CallID: "call-1",
+					Inputs: message.Contents{
+						&message.TextContent{Text: "a"},
+						&message.TextContent{Text: "b"},
+					},
+				},
+				&message.CodeInterpreterToolCallContent{
+					CallID: "call-2",
+					Inputs: message.Contents{
+						&message.TextContent{Text: "c"},
+						&message.TextContent{Text: "d"},
+					},
+				},
+			},
+			expected: []message.Content{
+				&message.CodeInterpreterToolCallContent{
+					CallID: "call-1",
+					Inputs: message.Contents{
+						&message.TextContent{Text: "ab"},
+					},
+				},
+				&message.CodeInterpreterToolCallContent{
+					CallID: "call-2",
+					Inputs: message.Contents{
+						&message.TextContent{Text: "cd"},
+					},
+				},
+			},
+		},
+		{
+			name: "single code interpreter tool call still coalesces nested inputs",
+			input: []message.Content{
+				&message.CodeInterpreterToolCallContent{
+					CallID: "call-1",
+					Inputs: message.Contents{
+						&message.TextContent{Text: "foo"},
+						&message.TextContent{Text: "bar"},
+					},
+				},
+			},
+			expected: []message.Content{
+				&message.CodeInterpreterToolCallContent{
+					CallID: "call-1",
+					Inputs: message.Contents{
+						&message.TextContent{Text: "foobar"},
+					},
+				},
+			},
+		},
+		{
+			name: "code interpreter tool result with same call id coalesced and outputs merged",
+			input: []message.Content{
+				&message.CodeInterpreterToolResultContent{
+					CallID: "call-1",
+					Outputs: message.Contents{
+						&message.TextContent{Text: "res"},
+						&message.TextContent{Text: "ult"},
+					},
+				},
+				&message.CodeInterpreterToolResultContent{
+					CallID: "call-1",
+					Outputs: message.Contents{
+						&message.TextContent{Text: "!"},
+					},
+				},
+			},
+			expected: []message.Content{
+				&message.CodeInterpreterToolResultContent{
+					CallID: "call-1",
+					Outputs: message.Contents{
+						&message.TextContent{Text: "result!"},
+					},
+				},
+			},
+		},
+		{
+			name: "code interpreter tool result with different call ids not coalesced but outputs still merged",
+			input: []message.Content{
+				&message.CodeInterpreterToolResultContent{
+					CallID: "call-1",
+					Outputs: message.Contents{
+						&message.TextContent{Text: "a"},
+						&message.TextContent{Text: "b"},
+					},
+				},
+				&message.CodeInterpreterToolResultContent{
+					CallID: "call-2",
+					Outputs: message.Contents{
+						&message.TextContent{Text: "c"},
+						&message.TextContent{Text: "d"},
+					},
+				},
+			},
+			expected: []message.Content{
+				&message.CodeInterpreterToolResultContent{
+					CallID: "call-1",
+					Outputs: message.Contents{
+						&message.TextContent{Text: "ab"},
+					},
+				},
+				&message.CodeInterpreterToolResultContent{
+					CallID: "call-2",
+					Outputs: message.Contents{
+						&message.TextContent{Text: "cd"},
+					},
+				},
+			},
+		},
+		{
+			name: "single code interpreter tool result still coalesces nested outputs",
+			input: []message.Content{
+				&message.CodeInterpreterToolResultContent{
+					CallID: "call-1",
+					Outputs: message.Contents{
+						&message.TextContent{Text: "foo"},
+						&message.TextContent{Text: "bar"},
+					},
+				},
+			},
+			expected: []message.Content{
+				&message.CodeInterpreterToolResultContent{
+					CallID: "call-1",
+					Outputs: message.Contents{
+						&message.TextContent{Text: "foobar"},
+					},
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {

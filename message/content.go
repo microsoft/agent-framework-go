@@ -971,6 +971,40 @@ func CoalesceContents(contents []Content) []Content {
 			}
 		})
 
+	contents = coalesce(contents, true,
+		func(a, b *CodeInterpreterToolCallContent) bool { return a.CallID == b.CallID },
+		func(contents []Content, start, end int) *CodeInterpreterToolCallContent {
+			first := contents[start].(*CodeInterpreterToolCallContent)
+			var inputs Contents
+			for _, c := range contents[start:end] {
+				inputs = append(inputs, c.(*CodeInterpreterToolCallContent).Inputs...)
+			}
+			return &CodeInterpreterToolCallContent{
+				ContentHeader: ContentHeader{
+					AdditionalProperties: maps.Clone(first.AdditionalProperties),
+				},
+				CallID: first.CallID,
+				Inputs: CoalesceContents(inputs),
+			}
+		})
+
+	contents = coalesce(contents, true,
+		func(a, b *CodeInterpreterToolResultContent) bool { return a.CallID == b.CallID },
+		func(contents []Content, start, end int) *CodeInterpreterToolResultContent {
+			first := contents[start].(*CodeInterpreterToolResultContent)
+			var outputs Contents
+			for _, c := range contents[start:end] {
+				outputs = append(outputs, c.(*CodeInterpreterToolResultContent).Outputs...)
+			}
+			return &CodeInterpreterToolResultContent{
+				ContentHeader: ContentHeader{
+					AdditionalProperties: maps.Clone(first.AdditionalProperties),
+				},
+				CallID:  first.CallID,
+				Outputs: CoalesceContents(outputs),
+			}
+		})
+
 	return contents
 }
 
