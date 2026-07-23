@@ -3,6 +3,7 @@
 package anthropicprovider_test
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/provider/anthropicprovider"
+	"github.com/microsoft/agent-framework-go/tool/hostedtool"
 )
 
 // testOutput is the structured type used across structured output tests.
@@ -573,5 +575,160 @@ func TestToolUseEmptyArgumentsSerializeAsObject(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("tool_use block for toolu_1 not found in request")
+	}
+}
+
+// TestCodeInterpreterToolMapsToCodeExecution verifies that passing the hosted
+// *hostedtool.CodeInterpreter marker causes the provider to include Anthropic's
+// server-side code_execution tool in the request, mirroring the OpenAI Responses
+// provider's code_interpreter mapping.
+func TestCodeInterpreterToolMapsToCodeExecution(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		bodyCh <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, minimalMessageResponse("ok"))
+	}))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+	if _, err := a.RunText(t.Context(), "run some code",
+		agent.WithTool(&hostedtool.CodeInterpreter{}),
+	).Collect(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	tools, ok := req["tools"].([]any)
+	if !ok {
+		t.Fatalf("request tools = %#v, want a JSON array", req["tools"])
+	}
+	found := false
+	for _, tl := range tools {
+		tool, ok := tl.(map[string]any)
+		if !ok {
+			continue
+		}
+		if tool["type"] == "code_execution_20250825" && tool["name"] == "code_execution" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("code_execution tool not found in request tools: %#v", tools)
+	}
+}
+
+// TestCodeInterpreterResultBlocksBecomeStructuredContent verifies that Anthropic
+// server_tool_use (code_execution) and code_execution_tool_result response blocks
+// are surfaced as structured message.CodeInterpreterToolCallContent /
+// CodeInterpreterToolResultContent, mirroring the OpenAI Responses mapping.
+func TestCodeInterpreterResultBlocksBecomeStructuredContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"id":"msg_code_exec",
+			"type":"message",
+			"role":"assistant",
+			"model":"claude-3-5-sonnet-20241022",
+			"stop_reason":"end_turn",
+			"stop_sequence":null,
+			"content":[
+				{
+					"type":"server_tool_use",
+					"id":"srvtoolu_1",
+					"name":"code_execution",
+					"input":{"code":"print(sum(range(1, 6)))"}
+				},
+				{
+					"type":"code_execution_tool_result",
+					"tool_use_id":"srvtoolu_1",
+					"content":{
+						"type":"code_execution_result",
+						"stdout":"15\n",
+						"stderr":"",
+						"return_code":0,
+						"content":[{"type":"code_execution_output","file_id":"file_abc"}]
+					}
+				},
+				{"type":"text","text":"The sum is 15."}
+			],
+			"usage":{"input_tokens":10,"output_tokens":5}
+		}`)
+	}))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+	resp, err := a.RunText(t.Context(), "run some code",
+		agent.WithTool(&hostedtool.CodeInterpreter{}),
+	).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var call *message.CodeInterpreterToolCallContent
+	var result *message.CodeInterpreterToolResultContent
+	for content := range resp.Contents() {
+		switch c := content.(type) {
+		case *message.CodeInterpreterToolCallContent:
+			call = c
+		case *message.CodeInterpreterToolResultContent:
+			result = c
+		}
+	}
+
+	if call == nil {
+		t.Fatal("expected a CodeInterpreterToolCallContent")
+	}
+	if call.CallID != "srvtoolu_1" {
+		t.Errorf("call CallID = %q, want %q", call.CallID, "srvtoolu_1")
+	}
+	if len(call.Inputs) != 1 {
+		t.Fatalf("call Inputs length = %d, want 1", len(call.Inputs))
+	}
+	data, ok := call.Inputs[0].(*message.DataContent)
+	if !ok {
+		t.Fatalf("call input type = %T, want *message.DataContent", call.Inputs[0])
+	}
+	if data.MediaType != "text/x-python" {
+		t.Errorf("call input MediaType = %q, want %q", data.MediaType, "text/x-python")
+	}
+	decoded, err := base64.StdEncoding.DecodeString(data.Data)
+	if err != nil {
+		t.Fatalf("decode call input data: %v", err)
+	}
+	if string(decoded) != "print(sum(range(1, 6)))" {
+		t.Errorf("call input code = %q, want %q", string(decoded), "print(sum(range(1, 6)))")
+	}
+
+	if result == nil {
+		t.Fatal("expected a CodeInterpreterToolResultContent")
+	}
+	if result.CallID != "srvtoolu_1" {
+		t.Errorf("result CallID = %q, want %q", result.CallID, "srvtoolu_1")
+	}
+	var stdout *message.TextContent
+	var file *message.HostedFileContent
+	for _, out := range result.Outputs {
+		switch o := out.(type) {
+		case *message.TextContent:
+			stdout = o
+		case *message.HostedFileContent:
+			file = o
+		}
+	}
+	if stdout == nil || stdout.Text != "15\n" {
+		t.Errorf("result stdout = %#v, want text %q", stdout, "15\n")
+	}
+	if file == nil || file.FileID != "file_abc" {
+		t.Errorf("result file = %#v, want FileID %q", file, "file_abc")
 	}
 }
