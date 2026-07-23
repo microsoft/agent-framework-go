@@ -451,11 +451,15 @@ func requestDataContent(req *workflow.ExternalRequest) (message.Content, bool) {
 	if req == nil {
 		return nil, false
 	}
-	if data, ok := req.Data.As(reflect.TypeFor[*message.FunctionCallContent]()); ok {
-		return data.(*message.FunctionCallContent), true
+	if req.Data.TypeID.Match(reflect.TypeFor[*message.ToolApprovalRequestContent]()) {
+		if data, ok := req.Data.As(reflect.TypeFor[*message.ToolApprovalRequestContent]()); ok {
+			return data.(*message.ToolApprovalRequestContent), true
+		}
 	}
-	if data, ok := req.Data.As(reflect.TypeFor[*message.ToolApprovalRequestContent]()); ok {
-		return data.(*message.ToolApprovalRequestContent), true
+	if req.Data.TypeID.Match(reflect.TypeFor[*message.FunctionCallContent]()) {
+		if data, ok := req.Data.As(reflect.TypeFor[*message.FunctionCallContent]()); ok {
+			return data.(*message.FunctionCallContent), true
+		}
 	}
 	content, ok := req.Data.Any().(message.Content)
 	return content, ok
