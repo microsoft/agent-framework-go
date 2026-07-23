@@ -172,6 +172,90 @@ func collectStreamingToolCalls(t *testing.T, events string) []*message.FunctionC
 	return calls
 }
 
+// finishReasonCases enumerates every Anthropic stop_reason the provider maps to
+// a canonical FinishReason, exercising the unexported mapStopReason helper end
+// to end through the public API.
+var finishReasonCases = []struct {
+	stopReason string
+	want       string
+}{
+	{"end_turn", "stop"},
+	{"stop_sequence", "stop"},
+	{"pause_turn", "stop"},
+	{"max_tokens", "length"},
+	{"tool_use", "tool_calls"},
+	{"refusal", "content_filter"},
+}
+
+// TestNonStreamingFinishReason verifies the provider maps the Anthropic
+// stop_reason on a non-streaming response to the canonical FinishReason.
+func TestNonStreamingFinishReason(t *testing.T) {
+	for _, tc := range finishReasonCases {
+		t.Run(tc.stopReason, func(t *testing.T) {
+			body := fmt.Sprintf(`{
+				"id":"msg_finish",
+				"type":"message",
+				"role":"assistant",
+				"model":"claude-3-5-sonnet-20241022",
+				"stop_reason":%q,
+				"stop_sequence":null,
+				"content":[{"type":"text","text":"hello"}],
+				"usage":{"input_tokens":10,"output_tokens":5}
+			}`, tc.stopReason)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, body)
+			}))
+			defer server.Close()
+
+			resp, err := newTestClient(t, server).RunText(t.Context(), "hi").Collect()
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if resp.FinishReason != tc.want {
+				t.Errorf("FinishReason = %q, want %q", resp.FinishReason, tc.want)
+			}
+		})
+	}
+}
+
+// TestStreamingFinishReason verifies the provider captures the stop_reason from
+// the streaming message_delta event and reports it as the canonical
+// FinishReason on the collected response.
+func TestStreamingFinishReason(t *testing.T) {
+	for _, tc := range finishReasonCases {
+		t.Run(tc.stopReason, func(t *testing.T) {
+			stream := "" +
+				"event: message_start\n" +
+				`data: {"type":"message_start","message":{"id":"msg_stream_finish","type":"message","role":"assistant","content":[],"model":"claude-3-5-sonnet-20241022","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}` + "\n\n" +
+				"event: content_block_start\n" +
+				`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}` + "\n\n" +
+				"event: content_block_delta\n" +
+				`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}` + "\n\n" +
+				"event: content_block_stop\n" +
+				`data: {"type":"content_block_stop","index":0}` + "\n\n" +
+				"event: message_delta\n" +
+				fmt.Sprintf(`data: {"type":"message_delta","delta":{"stop_reason":%q,"stop_sequence":null},"usage":{"output_tokens":5}}`, tc.stopReason) + "\n\n" +
+				"event: message_stop\n" +
+				`data: {"type":"message_stop"}` + "\n\n"
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = io.WriteString(w, stream)
+			}))
+			defer server.Close()
+
+			resp, err := newTestClient(t, server).RunText(t.Context(), "hi", agent.Stream(true)).Collect()
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if resp.FinishReason != tc.want {
+				t.Errorf("FinishReason = %q, want %q", resp.FinishReason, tc.want)
+			}
+		})
+	}
+}
+
 func TestConfigInstructions(t *testing.T) {
 	bodyCh := make(chan []byte, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
