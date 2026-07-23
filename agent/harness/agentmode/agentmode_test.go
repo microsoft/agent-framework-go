@@ -577,10 +577,29 @@ func TestDefaultInstructions_ContainToolNamesAndModeCheckGuidance(t *testing.T) 
 	}
 
 	instructions := collectInstructions(outOpts)
-	for _, want := range []string{"mode_get", "mode_set", "check the current mode", "Mandatory Mode based Workflow"} {
+	for _, want := range []string{"mode_get", "mode_set", "check your current operating mode", "Mandatory Mode based Workflow"} {
 		if !strings.Contains(instructions, want) {
 			t.Errorf("expected instructions to contain %q", want)
 		}
+	}
+}
+
+// Verify the default instructions omit the extra hardcoded bullet that is not
+// present in the .NET AgentModeProvider default instructions. That bullet baked
+// the built-in 'plan'/'execute' names into the prose, which misleads when custom
+// modes are configured.
+func TestDefaultInstructions_OmitExtraHardcodedBullet(t *testing.T) {
+	p := agentmode.New(agentmode.Config{})
+	opts := sessionOpts()
+
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	instructions := collectInstructions(outOpts)
+	if strings.Contains(instructions, "You must check the current mode after any user input") {
+		t.Error("expected default instructions to omit the extra hardcoded bullet")
 	}
 }
 

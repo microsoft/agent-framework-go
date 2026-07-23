@@ -28,8 +28,6 @@ const stateKey = "agentModeState"
 const defaultInstructions = `## Agent Mode
 
 - You can operate in different modes. Depending on the mode you are in, you will be required to follow different processes.
-- You must check the current mode after any user input, since the user may have changed the mode themselves,
-  e.g. the user may have switched to 'plan' mode after a previous research task finished in 'execute' mode, meaning they want to review a plan first before execution.
 
 Use the mode_get tool to check your current operating mode.
 Use the mode_set tool to switch between modes as your work progresses. Only use mode_set if the user explicitly instructs/allows you to change modes.
