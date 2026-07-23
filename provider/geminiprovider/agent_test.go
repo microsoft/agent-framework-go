@@ -1669,3 +1669,98 @@ func TestUsageContent_Streaming_CumulativeUsageNotSummed(t *testing.T) {
 		t.Errorf("OutputTokenCount = %d, want 5", usage.OutputTokenCount)
 	}
 }
+
+// textResponseWithFinishReason returns a non-streaming Gemini generateContent
+// JSON response with a single text part and the given candidate finishReason.
+func textResponseWithFinishReason(text, finishReason string) string {
+	resp := map[string]any{
+		"candidates": []any{
+			map[string]any{
+				"content": map[string]any{
+					"role":  "model",
+					"parts": []any{map[string]any{"text": text}},
+				},
+				"finishReason": finishReason,
+			},
+		},
+		"usageMetadata": map[string]any{
+			"promptTokenCount":     10,
+			"candidatesTokenCount": 5,
+			"totalTokenCount":      15,
+		},
+	}
+	b, _ := json.Marshal(resp)
+	return string(b)
+}
+
+// TestFinishReason_NonStreaming verifies that the Gemini candidate finish
+// reason is mapped onto the framework's canonical Response.FinishReason,
+// matching the values produced by the OpenAI and Copilot providers.
+func TestFinishReason_NonStreaming(t *testing.T) {
+	tests := []struct {
+		name         string
+		geminiReason string
+		want         string
+	}{
+		{"stop", "STOP", "stop"},
+		{"max_tokens", "MAX_TOKENS", "length"},
+		{"safety", "SAFETY", "content_filter"},
+		{"malformed_function_call", "MALFORMED_FUNCTION_CALL", "tool_calls"},
+		{"unmapped", "OTHER", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "application/json", textResponseWithFinishReason("hi", tt.geminiReason)))
+			defer server.Close()
+
+			a := newTestClient(t, server)
+
+			resp, err := a.RunText(t.Context(), "hi").Collect()
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if resp.FinishReason != tt.want {
+				t.Errorf("FinishReason = %q, want %q", resp.FinishReason, tt.want)
+			}
+		})
+	}
+}
+
+// TestFinishReason_Streaming verifies that the mapped finish reason is carried
+// on the streaming terminal chunk (Gemini reports finishReason only on the last
+// candidate chunk) and aggregated onto the collected Response.
+func TestFinishReason_Streaming(t *testing.T) {
+	chunk := func(m map[string]any) string {
+		b, _ := json.Marshal(m)
+		return "data:" + string(b) + "\n\n"
+	}
+	stream := chunk(map[string]any{
+		"candidates": []any{map[string]any{
+			"content": map[string]any{"role": "model", "parts": []any{map[string]any{"text": "hi"}}},
+		}},
+	}) + chunk(map[string]any{
+		"candidates": []any{map[string]any{
+			"content":      map[string]any{"role": "model", "parts": []any{map[string]any{"text": " there"}}},
+			"finishReason": "MAX_TOKENS",
+		}},
+		"usageMetadata": map[string]any{"promptTokenCount": 10, "candidatesTokenCount": 5, "totalTokenCount": 15},
+	})
+
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "text/event-stream", stream))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	var reasons []string
+	for update, err := range a.RunText(t.Context(), "hi", agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if update.FinishReason != "" {
+			reasons = append(reasons, update.FinishReason)
+		}
+	}
+	if len(reasons) != 1 || reasons[0] != "length" {
+		t.Errorf("streaming per-chunk FinishReason = %v, want exactly [\"length\"] on the terminal chunk", reasons)
+	}
+}
