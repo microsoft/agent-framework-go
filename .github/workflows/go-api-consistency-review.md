@@ -47,12 +47,12 @@ safe-outputs:
       hide-older-comments: true
       allowed-reasons: [outdated]
    add-labels:
-      allowed: [parity-approved]
-      max: 1
+      allowed: [parity-approved, public-api-change]
+      max: 2
       target: "${{ github.event.pull_request.number || inputs.pr_number }}"
    remove-labels:
-      allowed: [parity-approved]
-      max: 1
+      allowed: [parity-approved, public-api-change]
+      max: 2
       target: "${{ github.event.pull_request.number || inputs.pr_number }}"
 timeout-minutes: 20
 ---
@@ -119,6 +119,7 @@ Use the upstream `microsoft/agent-framework` repository as the source of truth f
 2. **Identify the changed Go contract**:
    - List the new or changed exported functions, methods, types, fields, constants, options, events, or behaviors
    - Distinguish between pure implementation changes and user-visible behavior changes
+   - If the PR adds, removes, or changes any exported (public) Go API surface, add the `public-api-change` label so maintainers know the PR needs a public API review. If the PR only touches unexported helpers, `internal/` code, tests, docs, or comments with no exported API change, do not add this label and remove it if it is present from a stale run.
 
 3. **Find the upstream equivalents**:
    - Search the upstream Python and .NET codebases for analogous concepts, even if the file layout differs
@@ -173,5 +174,6 @@ If a PR improves Go performance, refactors unexported helpers, or changes intern
 ## Output Format
 
 - Target every comment, review comment, and label operation at PR `${{ github.event.pull_request.number || inputs.pr_number }}` explicitly. The input is used when a fork PR is routed through `workflow_dispatch`.
+- **If public Go APIs changed**: Add the `public-api-change` label to flag the PR for public API review, regardless of whether parity issues are found. If no exported API surface changed, ensure the label is not present (remove it if a stale run added it).
 - **If consistency issues are found**: Add specific inline review comments on the changed Go lines and one summary comment that names the upstream Python and/or .NET surfaces that appear out of sync. Remove the `parity-approved` label if it is present so a previous green review cannot remain stale.
 - **If no issues are found**: Add a brief summary comment confirming that the PR either preserves cross-repo parity or only changes Go-internal implementation details, then add the `parity-approved` label to mark the parity review green.
