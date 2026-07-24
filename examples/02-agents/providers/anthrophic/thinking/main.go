@@ -30,7 +30,7 @@ func main() {
 		anthropic.NewClient(),
 		anthropicprovider.AgentConfig{
 			Model:        "claude-sonnet-4-5",
-			Instructions: "You are a careful reasoner. Show your work.",
+			Instructions: "You are a careful reasoner. Think the problem through, then reply with only the final answer.",
 			Config: agent.Config{
 				Name:        "Thinker",
 				Middlewares: []agent.Middleware{logger}, // for logging agent interactions
@@ -56,10 +56,21 @@ func main() {
 
 	// Print the reasoning (TextReasoningContent) separately from the final
 	// answer (TextContent). Extended thinking is surfaced as reasoning content,
-	// distinct from the model's output text.
+	// distinct from the model's output text. The logger middleware already
+	// prints an "Assistant:" prefix for the run, so print the reasoning inline
+	// without adding another prefix. Redacted thinking arrives as
+	// TextReasoningContent with empty Text but non-empty ProtectedData; surface
+	// it so the reasoning is not silently dropped.
 	for c := range resp.Contents() {
-		if r, ok := c.(*message.TextReasoningContent); ok && r.Text != "" {
-			demo.Assistantf("Thinking: %s", r.Text)
+		r, ok := c.(*message.TextReasoningContent)
+		if !ok {
+			continue
+		}
+		switch {
+		case r.Text != "":
+			fmt.Printf("Thinking: %s\n\n", r.Text)
+		case r.ProtectedData != "":
+			fmt.Print("Thinking: [redacted]\n\n")
 		}
 	}
 	demo.Response(resp, nil)

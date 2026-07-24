@@ -496,7 +496,7 @@ var agentsExamples = []ExampleDefinition{
 		RequiredEnvironmentVariables: []string{"ANTHROPIC_API_KEY"},
 		ExpectedOutputDescription: []string{
 			"The output should contain the model's reasoning (thinking) about the bat-and-ball problem.",
-			"The output should conclude that the ball costs $0.05.",
+			"The output should conclude that the ball costs 5 cents (equivalently $0.05).",
 			"The output should not contain error messages or stack traces.",
 		},
 	},
