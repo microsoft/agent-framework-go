@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
@@ -368,10 +369,16 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 		if len(contents) == 0 {
 			return nil, nil
 		}
+		sys := openai.ChatCompletionSystemMessageParam{}
 		if len(contents) == 1 {
-			return []openai.ChatCompletionMessageParamUnion{openai.SystemMessage(contents[0].Text)}, nil
+			sys.Content.OfString = openai.String(contents[0].Text)
+		} else {
+			sys.Content.OfArrayOfContentParts = contents
 		}
-		return []openai.ChatCompletionMessageParamUnion{openai.SystemMessage(contents)}, nil
+		if name := sanitizeAuthorName(msg.AuthorName); name != "" {
+			sys.Name = openai.String(name)
+		}
+		return []openai.ChatCompletionMessageParamUnion{{OfSystem: &sys}}, nil
 
 	case message.RoleUser:
 		var contents []openai.ChatCompletionContentPartUnionParam
@@ -434,10 +441,16 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 		if len(contents) == 0 {
 			return nil, nil
 		}
+		usr := openai.ChatCompletionUserMessageParam{}
 		if len(contents) == 1 && contents[0].OfText != nil {
-			return []openai.ChatCompletionMessageParamUnion{openai.UserMessage(contents[0].OfText.Text)}, nil
+			usr.Content.OfString = openai.String(contents[0].OfText.Text)
+		} else {
+			usr.Content.OfArrayOfContentParts = contents
 		}
-		return []openai.ChatCompletionMessageParamUnion{openai.UserMessage(contents)}, nil
+		if name := sanitizeAuthorName(msg.AuthorName); name != "" {
+			usr.Name = openai.String(name)
+		}
+		return []openai.ChatCompletionMessageParamUnion{{OfUser: &usr}}, nil
 
 	case message.RoleAssistant:
 		var contents []openai.ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion
@@ -477,12 +490,14 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 		} else {
 			content = openai.ChatCompletionAssistantMessageParamContentUnion{OfArrayOfContentParts: contents}
 		}
-		return []openai.ChatCompletionMessageParamUnion{{
-			OfAssistant: &openai.ChatCompletionAssistantMessageParam{
-				Content:   content,
-				ToolCalls: toolCalls,
-			},
-		}}, nil
+		asst := openai.ChatCompletionAssistantMessageParam{
+			Content:   content,
+			ToolCalls: toolCalls,
+		}
+		if name := sanitizeAuthorName(msg.AuthorName); name != "" {
+			asst.Name = openai.String(name)
+		}
+		return []openai.ChatCompletionMessageParamUnion{{OfAssistant: &asst}}, nil
 
 	case message.RoleTool:
 		// Each tool result needs its own separate message for OpenAI API compliance
@@ -503,6 +518,31 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 	default:
 		panic("unknown message role: " + string(msg.Role))
 	}
+}
+
+// sanitizeAuthorName mirrors the .NET OpenAIChatClient.SanitizeAuthorName used
+// for ChatMessage.AuthorName. The Chat Completions API only accepts a limited
+// character set for the participant "name" field, so it keeps only alphanumeric
+// characters and caps the result at 64 characters. It returns an empty string
+// when the input is empty, whitespace-only, or entirely disallowed characters,
+// in which case the caller leaves the name field unset.
+func sanitizeAuthorName(name string) string {
+	if strings.TrimSpace(name) == "" {
+		return ""
+	}
+	const maxLen = 64
+	var b strings.Builder
+	n := 0
+	for _, r := range name {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+			n++
+			if n >= maxLen {
+				break
+			}
+		}
+	}
+	return b.String()
 }
 
 func addUsage(contents []message.Content, usage openai.CompletionUsage) []message.Content {

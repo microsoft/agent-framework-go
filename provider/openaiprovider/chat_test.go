@@ -1595,3 +1595,114 @@ func TestChatEmptyChoices_NonStreaming(t *testing.T) {
 		t.Errorf("expected usage input=12 total=12 to be surfaced, got %+v", usage)
 	}
 }
+
+func TestChatAuthorNamePropagation_NonStreaming(t *testing.T) {
+	const input = `
+            {
+                "messages": [
+                    {"role": "system", "content": "You are helpful.", "name": "AgentOne"},
+                    {"role": "user", "content": "hi", "name": "AgentOne"},
+                    {"role": "assistant", "content": "hello", "name": "AgentOne"}
+                ],
+                "model": "gpt-4o-mini"
+            }
+            `
+	const output = `
+            {
+              "id": "chatcmpl-author",
+              "object": "chat.completion",
+              "created": 1727894187,
+              "model": "gpt-4o-mini",
+              "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+              ]
+            }
+            `
+	server := newTestServer(t, input, output)
+	defer server.Close()
+
+	a := newTestClient(server)
+
+	messages := []*message.Message{
+		{Role: message.RoleSystem, AuthorName: "Agent One", Contents: []message.Content{&message.TextContent{Text: "You are helpful."}}},
+		{Role: message.RoleUser, AuthorName: "Agent One", Contents: []message.Content{&message.TextContent{Text: "hi"}}},
+		{Role: message.RoleAssistant, AuthorName: "Agent One", Contents: []message.Content{&message.TextContent{Text: "hello"}}},
+	}
+	if _, err := a.Run(t.Context(), messages).Collect(); err != nil {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestChatAuthorNameSanitizationAndTruncation_NonStreaming(t *testing.T) {
+	// Disallowed characters are stripped and the result is capped at 64 runes.
+	const input = `
+            {
+                "messages": [
+                    {"role": "user", "content": "hi", "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+                ],
+                "model": "gpt-4o-mini"
+            }
+            `
+	const output = `
+            {
+              "id": "chatcmpl-author",
+              "object": "chat.completion",
+              "created": 1727894187,
+              "model": "gpt-4o-mini",
+              "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+              ]
+            }
+            `
+	server := newTestServer(t, input, output)
+	defer server.Close()
+
+	a := newTestClient(server)
+
+	// "!" is stripped, then 70 alphanumerics are truncated to 64.
+	authorName := "!" + strings.Repeat("a", 70)
+	messages := []*message.Message{
+		{Role: message.RoleUser, AuthorName: authorName, Contents: []message.Content{&message.TextContent{Text: "hi"}}},
+	}
+	if _, err := a.Run(t.Context(), messages).Collect(); err != nil {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestChatAuthorNameEmpty_NonStreaming(t *testing.T) {
+	// Empty or whitespace-only author names leave the name field unset.
+	const input = `
+            {
+                "messages": [
+                    {"role": "system", "content": "You are helpful."},
+                    {"role": "user", "content": "hi"},
+                    {"role": "assistant", "content": "hello"}
+                ],
+                "model": "gpt-4o-mini"
+            }
+            `
+	const output = `
+            {
+              "id": "chatcmpl-author",
+              "object": "chat.completion",
+              "created": 1727894187,
+              "model": "gpt-4o-mini",
+              "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+              ]
+            }
+            `
+	server := newTestServer(t, input, output)
+	defer server.Close()
+
+	a := newTestClient(server)
+
+	messages := []*message.Message{
+		{Role: message.RoleSystem, AuthorName: "", Contents: []message.Content{&message.TextContent{Text: "You are helpful."}}},
+		{Role: message.RoleUser, AuthorName: "   ", Contents: []message.Content{&message.TextContent{Text: "hi"}}},
+		{Role: message.RoleAssistant, AuthorName: "  ", Contents: []message.Content{&message.TextContent{Text: "hello"}}},
+	}
+	if _, err := a.Run(t.Context(), messages).Collect(); err != nil {
+		t.Fatalf("error = %v", err)
+	}
+}
