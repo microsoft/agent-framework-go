@@ -292,7 +292,8 @@ func TestResponsesBasicRequestResponse_NonStreaming(t *testing.T) {
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	resp, err := a.RunText(t.Context(), "hello",
+	resp, err := a.RunText(
+		t.Context(), "hello",
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
@@ -384,7 +385,8 @@ data: {"type":"response.completed","response":{"id":"resp_67d329fbc87c81919f8952
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
 	var updates []*agent.ResponseUpdate
-	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
+	for update, err := range a.RunText(
+		t.Context(), "hello", agent.Stream(true),
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
@@ -676,7 +678,8 @@ func TestResponsesChatOptions_Model_OverridesClientModel_NonStreaming(t *testing
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
 	// Override with gpt-4o in options
-	resp, err := a.RunText(t.Context(), "hello",
+	resp, err := a.RunText(
+		t.Context(), "hello",
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			Model:           "gpt-4o",
 			MaxOutputTokens: openai.Int(10),
@@ -780,7 +783,8 @@ func TestResponsesMultipleMessages_NonStreaming(t *testing.T) {
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "i'm good. how are you?"}}},
 	}
 
-	resp, err := a.Run(t.Context(), messages,
+	resp, err := a.Run(
+		t.Context(), messages,
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			Temperature: openai.Float(0.25),
 		}),
@@ -1162,7 +1166,8 @@ data: {"type":"response.completed","response":{"id":"resp_streaming123","object"
 
 	var updates []*agent.ResponseUpdate
 	// Override with gpt-4o in options
-	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
+	for update, err := range a.RunText(
+		t.Context(), "hello", agent.Stream(true),
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			Model:           "gpt-4o",
 			MaxOutputTokens: openai.Int(20),
@@ -1290,7 +1295,8 @@ func TestResponsesMultipleOutputItems_NonStreaming(t *testing.T) {
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	resp, err := a.RunText(t.Context(), "hello",
+	resp, err := a.RunText(
+		t.Context(), "hello",
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
@@ -1491,7 +1497,8 @@ func TestResponsesFunctionCallWithResult_NonStreaming(t *testing.T) {
 		Description: "Get the current weather",
 	}, getWeather)
 
-	resp1, err := a1.RunText(t.Context(), "What's the weather in Seattle?",
+	resp1, err := a1.RunText(
+		t.Context(), "What's the weather in Seattle?",
 		agent.WithTool(tool),
 	).Collect()
 	if err != nil {
@@ -1542,7 +1549,8 @@ func TestResponsesFunctionCallWithResult_NonStreaming(t *testing.T) {
 		}},
 	}
 
-	resp2, err := a2.Run(t.Context(), messages,
+	resp2, err := a2.Run(
+		t.Context(), messages,
 		agent.WithTool(tool),
 	).Collect()
 	if err != nil {
@@ -1686,7 +1694,8 @@ func TestResponsesFunctionCall_UsesCallIDWhenDifferentFromID(t *testing.T) {
 		Description: "Get the current weather",
 	}, getWeather)
 
-	resp1, err := a1.RunText(t.Context(), "What's the weather in Amsterdam?",
+	resp1, err := a1.RunText(
+		t.Context(), "What's the weather in Amsterdam?",
 		agent.WithTool(weatherTool),
 	).Collect()
 	if err != nil {
@@ -1733,7 +1742,8 @@ func TestResponsesFunctionCall_UsesCallIDWhenDifferentFromID(t *testing.T) {
 		}},
 	}
 
-	resp2, err := a2.Run(t.Context(), messages,
+	resp2, err := a2.Run(
+		t.Context(), messages,
 		agent.WithTool(weatherTool),
 	).Collect()
 	if err != nil {
@@ -2345,7 +2355,8 @@ func TestResponsesCodeInterpreterTool_NonStreaming(t *testing.T) {
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	resp, err := a.RunText(t.Context(), "Calculate the sum of numbers from 1 to 5",
+	resp, err := a.RunText(
+		t.Context(), "Calculate the sum of numbers from 1 to 5",
 		agent.WithTool(&hostedtool.CodeInterpreter{}),
 	).Collect()
 	if err != nil {
@@ -2453,7 +2464,8 @@ data: {"type":"response.completed","response":{"id":"resp_002","object":"respons
 
 	var updates []*agent.ResponseUpdate
 	var allText strings.Builder
-	for update, err := range a.RunText(t.Context(), "Calculate 3+3", agent.Stream(true),
+	for update, err := range a.RunText(
+		t.Context(), "Calculate 3+3", agent.Stream(true),
 		agent.WithTool(&hostedtool.CodeInterpreter{}),
 	) {
 		if err != nil {
@@ -4411,7 +4423,8 @@ func TestResponsesConversationId_AsResponseId_NonStreaming(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.RunText(t.Context(), "hello",
+	_, err = a.RunText(
+		t.Context(), "hello",
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
@@ -4483,7 +4496,8 @@ func TestDisableStoreOutputDoesNotUseOrUpdateResponseID(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.RunText(t.Context(), "hello",
+	_, err = a.RunText(
+		t.Context(), "hello",
 		agent.WithSession(session),
 	).Collect()
 	if err != nil {
@@ -4549,7 +4563,8 @@ func TestResponsesNewParamsStoreOverridesDisableStoreOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.RunText(t.Context(), "hello",
+	_, err = a.RunText(
+		t.Context(), "hello",
 		agent.WithSession(session),
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{Store: openai.Bool(true)}),
 	).Collect()
@@ -4616,7 +4631,8 @@ func TestResponsesNewParamsStoreFalseDoesNotUpdateResponseID(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.RunText(t.Context(), "hello",
+	_, err = a.RunText(
+		t.Context(), "hello",
 		agent.WithSession(session),
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{Store: openai.Bool(false)}),
 	).Collect()
@@ -4671,7 +4687,8 @@ func TestResponsesNewParamsStoreFalseDoesNotDuplicateReasoningInclude(t *testing
 		},
 	)
 
-	_, err := a.RunText(t.Context(), "hello",
+	_, err := a.RunText(
+		t.Context(), "hello",
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			Store:   openai.Bool(false),
 			Include: []responses.ResponseIncludable{responses.ResponseIncludableReasoningEncryptedContent},
@@ -4731,7 +4748,8 @@ func TestResponsesConversationId_AsConversationId_NonStreaming(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.RunText(t.Context(), "hello",
+	_, err = a.RunText(
+		t.Context(), "hello",
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
@@ -4803,7 +4821,8 @@ data: {"type":"response.completed","response":{"id":"resp_67890","object":"respo
 	}
 
 	var updates []*agent.ResponseUpdate
-	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
+	for update, err := range a.RunText(
+		t.Context(), "hello", agent.Stream(true),
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
@@ -4882,7 +4901,8 @@ data: {"type":"response.completed","response":{"id":"resp_67890","object":"respo
 	}
 
 	var updates []*agent.ResponseUpdate
-	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
+	for update, err := range a.RunText(
+		t.Context(), "hello", agent.Stream(true),
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
@@ -4942,7 +4962,8 @@ func TestResponsesBackgroundResponses_FirstCall(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resp, err := a.RunText(t.Context(), "hello",
+	resp, err := a.RunText(
+		t.Context(), "hello",
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
@@ -5025,7 +5046,8 @@ func testResponsesBackgroundPolling(t *testing.T, status string) {
 	}
 	ctJSON, _ := json.Marshal(ct)
 
-	resp, err := a.Run(t.Context(), nil,
+	resp, err := a.Run(
+		t.Context(), nil,
 		agent.WithContinuationToken(agenttest.NewContinuationToken(t, string(ctJSON))),
 		agent.AllowBackgroundResponses(true),
 		agent.WithSession(session),
@@ -5146,7 +5168,8 @@ data: {"type":"response.completed","sequence_number":17,"response":{"id":"resp_6
 
 	var updates []*agent.ResponseUpdate
 	var allText strings.Builder
-	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
+	for update, err := range a.RunText(
+		t.Context(), "hello", agent.Stream(true),
 		agent.AllowBackgroundResponses(true),
 		agent.WithSession(session),
 	) {
@@ -5249,7 +5272,8 @@ data: {"type":"response.completed","sequence_number":17,"response":{"truncation"
 	}
 
 	var updates []*agent.ResponseUpdate
-	for update, err := range a.Run(t.Context(), []*message.Message{}, agent.Stream(true),
+	for update, err := range a.Run(
+		t.Context(), []*message.Message{}, agent.Stream(true),
 		agent.AllowBackgroundResponses(true),
 		agent.WithContinuationToken(token),
 		agent.WithSession(session),
@@ -5310,7 +5334,8 @@ func TestResponsesGetContinuationToken_WithMessages_ThrowsException(t *testing.T
 	token := agenttest.NewContinuationToken(t, `{"response_id":"resp_123","sequence_number":0}`)
 
 	// Attempt to use continuation token with messages should error
-	_, err := a.RunText(t.Context(), "test",
+	_, err := a.RunText(
+		t.Context(), "test",
 		agent.WithContinuationToken(token),
 	).Collect()
 
@@ -5335,7 +5360,8 @@ func TestResponsesBackgroundResponses_PollingCall_WithMessages(t *testing.T) {
 	token := agenttest.NewContinuationToken(t, `{"response_id":"resp_68d3d2c9ef7c8195863e4e2b2ec226a205007262ecbbfed8","sequence_number":0}`)
 
 	// A try to update a background response with new messages should fail
-	_, err = a.RunText(t.Context(), "Please book hotel as well",
+	_, err = a.RunText(
+		t.Context(), "Please book hotel as well",
 		agent.WithSession(session),
 		agent.WithContinuationToken(token),
 		agent.AllowBackgroundResponses(true),
@@ -5511,7 +5537,8 @@ func TestResponsesMultipleRequiredFunctions(t *testing.T) {
 		Description: "Get the current time for a location",
 	}, getTime)
 
-	resp, err := a.RunText(t.Context(), "What's the weather and time in Seattle?",
+	resp, err := a.RunText(
+		t.Context(), "What's the weather and time in Seattle?",
 		agent.WithTool(weatherTool),
 		agent.WithTool(timeTool),
 		agent.WithToolMode(tool.RequireTools("GetWeather", "GetTime")),
@@ -5544,5 +5571,44 @@ func responsesBodyEqual(t *testing.T, got string, want string) {
 			t.Fatalf("failed marshaling wantObj: %v", err)
 		}
 		t.Errorf("body\ngot %s\nwant %s", gotOut, wantOut)
+	}
+}
+
+// TestResponsesToolResult_StructSerializedAsJSON verifies that a structured
+// FunctionResultContent.Result is JSON-encoded in the Responses API request
+// rather than rendered with Go's %v (matching the chat path).
+func TestResponsesToolResult_StructSerializedAsJSON(t *testing.T) {
+	capturedCh := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		capturedCh <- string(b)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"resp_test","object":"response","created_at":1741891428,"status":"completed","error":null,"incomplete_details":null,"model":"gpt-4o-mini","output":[{"type":"message","id":"msg_test","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok","annotations":[]}]}]}`)
+	}))
+	defer server.Close()
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	type weather struct {
+		City  string `json:"city"`
+		TempC int    `json:"temp_c"`
+	}
+	messages := []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "weather?"}}},
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			&message.FunctionCallContent{CallID: "c1", Name: "GetWeather", Arguments: "{}"},
+		}},
+		{Role: message.RoleTool, Contents: []message.Content{
+			&message.FunctionResultContent{CallID: "c1", Result: weather{City: "Paris", TempC: 20}},
+		}},
+	}
+	if _, err := a.Run(t.Context(), messages).Collect(); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	captured := <-capturedCh
+	if strings.Contains(captured, "{Paris 20}") {
+		t.Errorf("tool result rendered with Go %%v instead of JSON:\n%s", captured)
+	}
+	if !strings.Contains(captured, "temp_c") {
+		t.Errorf("tool result was not JSON-encoded (missing field temp_c):\n%s", captured)
 	}
 }
