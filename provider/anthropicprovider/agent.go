@@ -310,22 +310,9 @@ func (a *client) buildMessageParams(messages []*message.Message, opts []agent.Op
 			var properties any
 			var required []string
 
-			// Extract schema details - first convert to map[string]any if needed
-			schema := ft.Schema()
-			var schemaMap map[string]any
-
-			switch s := schema.(type) {
-			case map[string]any:
-				schemaMap = s
-			default:
-				// For *jsonschema.Schema or other types, marshal to JSON then unmarshal to map
-				if schema != nil {
-					jsonBytes, err := json.Marshal(schema)
-					if err == nil {
-						_ = json.Unmarshal(jsonBytes, &schemaMap)
-					}
-				}
-			}
+			// Preserve existing lenient tool schema handling: unusable schemas
+			// simply leave properties and required empty.
+			schemaMap, _ := schemaMapFromAny(ft.Schema())
 
 			if schemaMap != nil {
 				if props, ok := schemaMap["properties"]; ok {
@@ -386,18 +373,9 @@ func (a *client) buildMessageParams(messages []*message.Message, opts []agent.Op
 	if frmt, ok := agent.GetOption(opts, agent.WithResponseFormat); ok {
 		if frmt.Kind == "json" {
 			if schema := frmt.Schema; schema != nil {
-				var schemaMap map[string]any
-				switch s := schema.(type) {
-				case map[string]any:
-					schemaMap = s
-				default:
-					jsonBytes, err := json.Marshal(s)
-					if err != nil {
-						return anthropic.MessageNewParams{}, fmt.Errorf("failed to marshal structured output schema: %w", err)
-					}
-					if err := json.Unmarshal(jsonBytes, &schemaMap); err != nil {
-						return anthropic.MessageNewParams{}, fmt.Errorf("failed to unmarshal structured output schema: %w", err)
-					}
+				schemaMap, err := schemaMapFromAny(schema)
+				if err != nil {
+					return anthropic.MessageNewParams{}, err
 				}
 				if schemaMap != nil {
 					params.OutputConfig.Format = anthropic.JSONOutputFormatParam{
@@ -438,6 +416,25 @@ func (a *client) buildMessageParams(messages []*message.Message, opts []agent.Op
 	}
 
 	return params, nil
+}
+
+func schemaMapFromAny(schema any) (map[string]any, error) {
+	switch s := schema.(type) {
+	case nil:
+		return nil, nil
+	case map[string]any:
+		return s, nil
+	default:
+		jsonBytes, err := json.Marshal(s)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal structured output schema: %w", err)
+		}
+		var schemaMap map[string]any
+		if err := json.Unmarshal(jsonBytes, &schemaMap); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal structured output schema: %w", err)
+		}
+		return schemaMap, nil
+	}
 }
 
 func buildMessageParam(msg *message.Message) (anthropic.MessageParam, error) {
