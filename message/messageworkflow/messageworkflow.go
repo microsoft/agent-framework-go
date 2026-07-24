@@ -14,8 +14,8 @@ import (
 )
 
 // Options configures the chat-message workflow behavior applied by Configure.
-// StateKey and TakeTurnHandler are required; Configure panics if either is
-// empty. The remaining fields are optional.
+// StateKey and TakeTurnHandler are required; Configure panics if StateKey is
+// empty or TakeTurnHandler is nil. The remaining fields are optional.
 type Options struct {
 	// StateKey identifies the accumulated turn state within the workflow.
 	StateKey string
@@ -50,8 +50,8 @@ func NewMessageState(stateKey string, scopeName string) *MessageState {
 }
 
 // ProcessTurnMessages transforms the accumulated turn messages by invoking fn
-// under the executor's state lock via InvokeWithState, storing the returned
-// slice as the new accumulated state.
+// via InvokeWithState, which reads the current state, calls fn, and queues the
+// returned slice as the new accumulated state.
 func (s *MessageState) ProcessTurnMessages(ctx *workflow.Context, fn func(ctx *workflow.Context, messages []*message.Message) ([]*message.Message, error)) error {
 	if fn == nil {
 		panic("messageworkflow: process function is required")
