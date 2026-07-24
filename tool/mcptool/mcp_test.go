@@ -7,6 +7,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -1024,5 +1026,29 @@ func TestAddToolTypedNilContentDoesNotPanic(t *testing.T) {
 	text, ok := contents[0].(*message.TextContent)
 	if !ok || !strings.Contains(text.Text, "null") {
 		t.Fatalf("content = %#v, want a TextContent containing \"null\"", contents[0])
+	}
+}
+
+// TestPackageDocNoWebSocket guards against re-introducing the inaccurate
+// claim that mcptool supports a WebSocket transport. Connect only wraps an
+// mcp.Transport supplied by the pinned go-sdk, which offers stdio and HTTP
+// (SSE / streamable HTTP) transports but no WebSocket transport.
+func TestPackageDocNoWebSocket(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("ReadDir(.) error = %v", err)
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(".", name))
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", name, err)
+		}
+		if strings.Contains(strings.ToLower(string(data)), "websocket") {
+			t.Errorf("%s mentions WebSocket, but the go-sdk provides no WebSocket transport", name)
+		}
 	}
 }

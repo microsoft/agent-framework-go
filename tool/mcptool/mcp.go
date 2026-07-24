@@ -1,8 +1,9 @@
 // Copyright (c) Microsoft. All rights reserved.
 
 // Package mcp provides integration with the Model Context Protocol (MCP).
-// It allows agents to connect to external MCP servers via stdio, HTTP, or WebSocket
-// and expose their tools and prompts as agent.Tool instances.
+// It allows agents to connect to external MCP servers via stdio (subprocess)
+// or HTTP (SSE / streamable HTTP) and expose their tools as
+// tool.Tool / tool.FuncTool instances.
 package mcptool
 
 import (
