@@ -37,15 +37,39 @@ type annotationKind string
 type Annotations []Annotation
 
 func (as *Annotations) UnmarshalJSON(data []byte) error {
-	var err error
-	*as, err = jsonx.UnmarshalDiscriminatedUnionSlice[Annotation](data, supportedAnnotations)
-	return err
+	out, err := jsonx.UnmarshalDiscriminatedUnionSliceWithFallback(data, supportedAnnotations, unmarshalRawAnnotation)
+	if err != nil {
+		return err
+	}
+	*as = out
+	return nil
+}
+
+func unmarshalRawAnnotation(data json.RawMessage) (Annotation, error) {
+	return &RawAnnotation{RawRepresentation: append(json.RawMessage(nil), data...)}, nil
 }
 
 // Annotation represents an annotation on content.
 type Annotation interface {
 	kind() annotationKind
 }
+
+// RawAnnotation represents a provider-specific annotation that does not fit one
+// of the structured annotation types. The original JSON is preserved in
+// RawRepresentation and round-tripped on marshal so that newer provider-emitted
+// annotation subtypes do not fail the enclosing deserialization.
+type RawAnnotation struct {
+	RawRepresentation json.RawMessage
+}
+
+func (t *RawAnnotation) MarshalJSON() ([]byte, error) {
+	if len(t.RawRepresentation) > 0 {
+		return t.RawRepresentation, nil
+	}
+	return []byte("{}"), nil
+}
+
+func (t *RawAnnotation) kind() annotationKind { return "" }
 
 // CitationAnnotation represents an annotation that links content to source references,
 // such as documents, URLs, files, or tool outputs.
@@ -80,9 +104,16 @@ type annotatedRegionKind string
 type AnnotatedRegions []AnnotatedRegion
 
 func (as *AnnotatedRegions) UnmarshalJSON(data []byte) error {
-	var err error
-	*as, err = jsonx.UnmarshalDiscriminatedUnionSlice[AnnotatedRegion](data, supportedAnnotatedRegions)
-	return err
+	out, err := jsonx.UnmarshalDiscriminatedUnionSliceWithFallback(data, supportedAnnotatedRegions, unmarshalRawAnnotatedRegion)
+	if err != nil {
+		return err
+	}
+	*as = out
+	return nil
+}
+
+func unmarshalRawAnnotatedRegion(data json.RawMessage) (AnnotatedRegion, error) {
+	return &RawAnnotatedRegion{RawRepresentation: append(json.RawMessage(nil), data...)}, nil
 }
 
 // AnnotatedRegion describes the portion of an associated [Content]
@@ -90,6 +121,23 @@ func (as *AnnotatedRegions) UnmarshalJSON(data []byte) error {
 type AnnotatedRegion interface {
 	kind() annotatedRegionKind
 }
+
+// RawAnnotatedRegion represents a provider-specific annotated region that does
+// not fit one of the structured region types. The original JSON is preserved in
+// RawRepresentation and round-tripped on marshal so that newer provider-emitted
+// region subtypes do not fail the enclosing deserialization.
+type RawAnnotatedRegion struct {
+	RawRepresentation json.RawMessage
+}
+
+func (t *RawAnnotatedRegion) MarshalJSON() ([]byte, error) {
+	if len(t.RawRepresentation) > 0 {
+		return t.RawRepresentation, nil
+	}
+	return []byte("{}"), nil
+}
+
+func (t *RawAnnotatedRegion) kind() annotatedRegionKind { return "" }
 
 // TextSpanAnnotatedRegion describes a location in the associated [Content]
 // based on starting and ending character indices.
