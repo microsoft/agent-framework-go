@@ -549,6 +549,20 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 					return
 				}
 				startRunActivity()
+				// Emit a StartedEvent for the continuation cycle, mirroring the
+				// streaming run loop which raises one per input → processing →
+				// halt cycle. Only when there is actual work to process, so
+				// no-work wakeups (e.g. spurious signals) stay event-free. The
+				// event is drained and yielded before the cycle's supersteps.
+				if l.stepRunner.HasUnprocessedMessages() {
+					l.eventQueue.Enqueue(workflow.StartedEvent{})
+					// Drain immediately so the StartedEvent is yielded before the
+					// cycle's supersteps run, rather than being held in the queue
+					// and drained alongside the first superstep's events.
+					if !l.drainAndFilterEvents(linkedCtx, yield) {
+						return
+					}
+				}
 			} else {
 				// No more work to do
 				return
