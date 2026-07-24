@@ -5,6 +5,7 @@ package anthropicprovider
 import (
 	"cmp"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"iter"
@@ -20,6 +21,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
+	"github.com/microsoft/agent-framework-go/tool/hostedtool"
 )
 
 type messageNewParamsOpt anthropic.MessageNewParams
@@ -254,8 +256,78 @@ func (a *client) buildBlock(index int, v any, contents []message.Content, functi
 			Name:      v.Name,
 			Arguments: string(v.Input),
 		}
+	case anthropic.ServerToolUseBlock:
+		if v.Name == anthropic.ServerToolUseBlockNameCodeExecution {
+			call := &message.CodeInterpreterToolCallContent{
+				CallID: v.ID,
+				ContentHeader: message.ContentHeader{
+					RawRepresentation: v,
+				},
+			}
+			if code := codeExecutionInput(v.Input); code != "" {
+				call.Inputs = message.Contents{
+					&message.DataContent{
+						Data:      base64.StdEncoding.EncodeToString([]byte(code)),
+						MediaType: "text/x-python",
+					},
+				}
+			}
+			contents = append(contents, call)
+		}
+	case anthropic.CodeExecutionToolResultBlock:
+		result := &message.CodeInterpreterToolResultContent{
+			CallID: v.ToolUseID,
+			ContentHeader: message.ContentHeader{
+				RawRepresentation: v,
+			},
+		}
+		res := v.Content
+		if res.Stdout != "" {
+			result.Outputs = append(result.Outputs, &message.TextContent{
+				Text:          res.Stdout,
+				ContentHeader: message.ContentHeader{RawRepresentation: res},
+			})
+		}
+		if res.Stderr != "" {
+			result.Outputs = append(result.Outputs, &message.TextContent{
+				Text:          res.Stderr,
+				ContentHeader: message.ContentHeader{RawRepresentation: res},
+			})
+		}
+		if res.ErrorCode != "" {
+			result.Outputs = append(result.Outputs, &message.TextContent{
+				Text:          string(res.ErrorCode),
+				ContentHeader: message.ContentHeader{RawRepresentation: res},
+			})
+		}
+		for _, out := range res.Content {
+			result.Outputs = append(result.Outputs, &message.HostedFileContent{
+				FileID:        out.FileID,
+				ContentHeader: message.ContentHeader{RawRepresentation: out},
+			})
+		}
+		contents = append(contents, result)
 	}
 	return contents
+}
+
+// codeExecutionInput extracts the source code from an Anthropic server_tool_use
+// code_execution input payload (shaped as {"code": "..."}).
+func codeExecutionInput(input any) string {
+	if input == nil {
+		return ""
+	}
+	raw, err := json.Marshal(input)
+	if err != nil {
+		return ""
+	}
+	var parsed struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return ""
+	}
+	return parsed.Code
 }
 
 func (a *client) buildDelta(v any, contents []message.Content) []message.Content {
@@ -353,6 +425,14 @@ func (a *client) buildMessageParams(messages []*message.Message, opts []agent.Op
 				toolParam.OfTool.Description = anthropic.String(description)
 			}
 			tools = append(tools, toolParam)
+			continue
+		}
+		if _, ok := tl.(*hostedtool.CodeInterpreter); ok {
+			// Map the hosted code-interpreter marker onto Anthropic's server-side
+			// code_execution tool, mirroring the OpenAI Responses provider.
+			tools = append(tools, anthropic.ToolUnionParam{
+				OfCodeExecutionTool20250825: &anthropic.CodeExecutionTool20250825Param{},
+			})
 		}
 	}
 	if len(tools) > 0 {
