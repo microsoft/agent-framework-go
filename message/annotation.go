@@ -34,6 +34,9 @@ func init() {
 // It is unexported to prevent external implementations of Annotation.
 type annotationKind string
 
+// Annotations is a slice of [Annotation] values; its UnmarshalJSON decodes each
+// element as a discriminated union based on its type discriminator (currently
+// [CitationAnnotation]).
 type Annotations []Annotation
 
 func (as *Annotations) UnmarshalJSON(data []byte) error {
@@ -77,6 +80,9 @@ func (t *CitationAnnotation) kind() annotationKind { return "citation" }
 
 type annotatedRegionKind string
 
+// AnnotatedRegions is a slice of [AnnotatedRegion] values; its UnmarshalJSON
+// decodes each element as a discriminated union based on its type discriminator
+// (currently [TextSpanAnnotatedRegion]).
 type AnnotatedRegions []AnnotatedRegion
 
 func (as *AnnotatedRegions) UnmarshalJSON(data []byte) error {
