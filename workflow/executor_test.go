@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/workflow"
+	"github.com/microsoft/agent-framework-go/workflow/checkpoint"
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
 )
 
@@ -796,6 +797,7 @@ func aggregatorBinding(id string, results *[]string) workflow.ExecutorBinding {
 
 			DisableAutoSendMessageHandlerResultObject: true,
 			DisableAutoYieldOutputHandlerResultObject: true,
+			OnCheckpointRestoredFunc:                  cache.OnCheckpointRestored,
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 					s := msg.(string)
@@ -880,6 +882,51 @@ func TestStatefulExecutorCache_ResetRestartsAggregate(t *testing.T) {
 	}
 
 	want := []string{"a", "a+b", "c"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("aggregation = %v, want %v", got, want)
+	}
+}
+
+func TestStatefulExecutorCache_CheckpointRestoreInvalidatesCache(t *testing.T) {
+	var got []string
+	binding := aggregatorBinding("agg", &got)
+	wf, err := workflow.NewBuilder(binding).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	ctx := context.Background()
+	manager := checkpoint.NewInMemoryManager()
+	run, err := inproc.Default.WithCheckpointing(manager).Run(ctx, wf, "a")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	defer func() { _ = run.Close(ctx) }()
+
+	// Capture the checkpoint taken after processing "a"; state is now "a".
+	postA, ok := run.LastCheckpoint()
+	if !ok {
+		t.Fatal("expected checkpoint after first superstep")
+	}
+
+	// Advance so the executor-local cache holds "a+b".
+	if _, err := run.Resume(ctx, "b"); err != nil {
+		t.Fatalf("Resume(b): %v", err)
+	}
+
+	// Restore in place to the post-"a" checkpoint. Without the cache
+	// participating in restore invalidation, the executor keeps observing the
+	// stale "a+b" value.
+	if err := run.RestoreCheckpoint(ctx, postA); err != nil {
+		t.Fatalf("RestoreCheckpoint: %v", err)
+	}
+
+	if _, err := run.Resume(ctx, "c"); err != nil {
+		t.Fatalf("Resume(c): %v", err)
+	}
+
+	// The final aggregate must build on the restored "a", not the stale "a+b".
+	want := []string{"a", "a+b", "a+c"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("aggregation = %v, want %v", got, want)
 	}
