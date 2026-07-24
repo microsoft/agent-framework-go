@@ -47,7 +47,7 @@ type contentKind string
 
 // ContentHeader contains common properties for all content types.
 type ContentHeader struct {
-	AdditionalProperties map[string]any `json:"-"`
+	AdditionalProperties map[string]any `json:",omitzero"`
 	Annotations          Annotations    `json:",omitempty"`
 	RawRepresentation    any            `json:"-"`
 }

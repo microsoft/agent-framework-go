@@ -3,6 +3,7 @@
 package message_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"reflect"
 	"testing"
@@ -35,6 +36,28 @@ func TestAnnotationEncoding_Roundtrip(t *testing.T) {
 		if !reflect.DeepEqual(v, decoded[i]) {
 			t.Errorf("[%d]: expected content %v, got %v", i, v, decoded[i])
 		}
+	}
+}
+
+func TestCitationAnnotationEncoding_PreservesAdditionalProperties(t *testing.T) {
+	original := &message.CitationAnnotation{
+		AdditionalProperties: map[string]any{"provider": "openai", "score": "0.9"},
+		Title:                "Example Title",
+		URL:                  "http://example.com",
+	}
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte("AdditionalProperties")) {
+		t.Fatalf("marshaled JSON does not contain AdditionalProperties: %s", data)
+	}
+	var decoded message.CitationAnnotation
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(original.AdditionalProperties, decoded.AdditionalProperties) {
+		t.Fatalf("AdditionalProperties = %v, want %v", decoded.AdditionalProperties, original.AdditionalProperties)
 	}
 }
 

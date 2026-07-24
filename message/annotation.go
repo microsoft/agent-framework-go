@@ -50,7 +50,7 @@ type Annotation interface {
 // CitationAnnotation represents an annotation that links content to source references,
 // such as documents, URLs, files, or tool outputs.
 type CitationAnnotation struct {
-	AdditionalProperties map[string]any   `json:"-"`
+	AdditionalProperties map[string]any   `json:",omitzero"`
 	AnnotatedRegions     AnnotatedRegions `json:",omitempty"`
 	RawRepresentation    any              `json:"-"`
 
