@@ -104,6 +104,107 @@ func minimalMessageResponse(payload string) string {
 	return string(b)
 }
 
+// TestUsageReasoningTokens verifies that Anthropic thinking tokens are surfaced
+// as ReasoningTokenCount, mirroring the OpenAI, Gemini, and Copilot providers,
+// instead of being dropped from usage accounting.
+func TestUsageReasoningTokens(t *testing.T) {
+	resp := map[string]any{
+		"id":            "msg_think01",
+		"type":          "message",
+		"role":          "assistant",
+		"model":         "claude-3-5-sonnet-20241022",
+		"stop_reason":   "end_turn",
+		"stop_sequence": nil,
+		"content": []any{
+			map[string]any{"type": "text", "text": "answer"},
+		},
+		"usage": map[string]any{
+			"input_tokens":  10,
+			"output_tokens": 50,
+			"output_tokens_details": map[string]any{
+				"thinking_tokens": 35,
+			},
+		},
+	}
+	body, _ := json.Marshal(resp)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, string(body))
+	}))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	out, err := a.RunText(t.Context(), "think about it").Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var usage *message.UsageContent
+	for _, msg := range out.Messages {
+		for _, c := range msg.Contents {
+			if uc, ok := c.(*message.UsageContent); ok {
+				usage = uc
+			}
+		}
+	}
+	if usage == nil {
+		t.Fatal("expected UsageContent, got none")
+	}
+	if usage.Details.ReasoningTokenCount != 35 {
+		t.Errorf("ReasoningTokenCount = %d, want 35", usage.Details.ReasoningTokenCount)
+	}
+	if usage.Details.OutputTokenCount != 50 {
+		t.Errorf("OutputTokenCount = %d, want 50", usage.Details.OutputTokenCount)
+	}
+}
+
+// TestUsageReasoningTokens_Streaming verifies that thinking tokens arriving on
+// the streamed message_delta usage are surfaced as ReasoningTokenCount, covering
+// the toUsageDetailsDelta path.
+func TestUsageReasoningTokens_Streaming(t *testing.T) {
+	output := "" +
+		"event: message_start\n" +
+		`data: {"type":"message_start","message":{"id":"m1","type":"message","role":"assistant","content":[],"model":"claude-3-5-sonnet-20241022","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}` + "\n\n" +
+		"event: content_block_start\n" +
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}` + "\n\n" +
+		"event: content_block_delta\n" +
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"answer"}}` + "\n\n" +
+		"event: content_block_stop\n" +
+		`data: {"type":"content_block_stop","index":0}` + "\n\n" +
+		"event: message_delta\n" +
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":50,"output_tokens_details":{"thinking_tokens":35}}}` + "\n\n" +
+		"event: message_stop\n" +
+		`data: {"type":"message_stop"}` + "\n\n"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, output)
+	}))
+	defer server.Close()
+
+	out, err := newTestClient(t, server).RunText(t.Context(), "think about it", agent.Stream(true)).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var usage *message.UsageContent
+	for _, msg := range out.Messages {
+		for _, c := range msg.Contents {
+			if uc, ok := c.(*message.UsageContent); ok {
+				usage = uc
+			}
+		}
+	}
+	if usage == nil {
+		t.Fatal("expected UsageContent, got none")
+	}
+	if usage.Details.ReasoningTokenCount != 35 {
+		t.Errorf("ReasoningTokenCount = %d, want 35 (from streamed message_delta thinking_tokens)", usage.Details.ReasoningTokenCount)
+	}
+}
+
 // minimalStreamingResponse returns an SSE stream that delivers payload as a
 // single text delta.
 func minimalStreamingResponse(payload string) string {
