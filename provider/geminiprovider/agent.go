@@ -372,12 +372,33 @@ func buildRequestParts(msg *message.Message, callIDToName map[string]string) ([]
 				},
 			})
 		case *message.URIContent:
-			parts = append(parts, &genai.Part{
-				FileData: &genai.FileData{
-					FileURI:  c.URI,
-					MIMEType: c.MediaType,
-				},
-			})
+			if len(c.URI) >= len("data:") && strings.EqualFold(c.URI[:len("data:")], "data:") {
+				// A data: URI carries the bytes inline. Gemini's FileData.FileURI
+				// requires an external reference (gs:// or https://), so a data: URI
+				// would be silently dropped. Decode it into InlineData instead,
+				// mirroring the DataContent handling above and the Python SDK
+				// (from_bytes for data: URIs, from_uri otherwise).
+				data, mt, err := message.DecodeDataURI(c.URI)
+				if err != nil {
+					return nil, fmt.Errorf("geminiprovider: failed to decode data URI content: %w", err)
+				}
+				if c.MediaType != "" {
+					mt = c.MediaType
+				}
+				parts = append(parts, &genai.Part{
+					InlineData: &genai.Blob{
+						Data:     data,
+						MIMEType: mt,
+					},
+				})
+			} else {
+				parts = append(parts, &genai.Part{
+					FileData: &genai.FileData{
+						FileURI:  c.URI,
+						MIMEType: c.MediaType,
+					},
+				})
+			}
 		case *message.HostedFileContent:
 			parts = append(parts, &genai.Part{
 				FileData: &genai.FileData{

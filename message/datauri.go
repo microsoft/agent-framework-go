@@ -68,6 +68,31 @@ func parseDataURI(uri string) (*dataURI, error) {
 	}, nil
 }
 
+// DecodeDataURI parses a data URI (RFC 2397) and returns the decoded bytes
+// together with its media type. It is intended for providers that must send
+// inline binary data (rather than a URI reference) when handling a URIContent
+// whose URI is a data: URI.
+func DecodeDataURI(uri string) (data []byte, mediaType string, err error) {
+	parsed, err := parseDataURI(uri)
+	if err != nil {
+		return nil, "", err
+	}
+	if !parsed.IsBase64 {
+		// Non-base64 data URIs carry percent-encoded payloads; return the
+		// unescaped bytes directly instead of round-tripping through base64.
+		unescaped, err := url.PathUnescape(parsed.Data)
+		if err != nil {
+			unescaped = parsed.Data
+		}
+		return []byte(unescaped), parsed.MediaType, nil
+	}
+	decoded, err := base64.StdEncoding.DecodeString(parsed.Data)
+	if err != nil {
+		return nil, "", fmt.Errorf("invalid data URI format: failed to decode data: %w", err)
+	}
+	return decoded, parsed.MediaType, nil
+}
+
 // data returns the raw data portion of the data URI as a base64-encoded string.
 func (d *dataURI) data() string {
 	if d.IsBase64 {

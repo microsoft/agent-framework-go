@@ -1002,6 +1002,97 @@ func TestURIAndHostedFileInRequest(t *testing.T) {
 	}
 }
 
+// TestDataURIContentInRequest verifies that a URIContent whose URI is a data:
+// URI is decoded into inlineData (Gemini's fileData.fileUri only accepts
+// external references), while a true external URI still maps to fileData.
+func TestDataURIContentInRequest(t *testing.T) {
+	const b64 = "iVBORw0KGgo="
+
+	t.Run("data uri decodes to inlineData", func(t *testing.T) {
+		bodyCh := make(chan []byte, 1)
+		server := httptest.NewServer(captureAndRespond(t, bodyCh, "application/json", minimalTextResponse("ok")))
+		defer server.Close()
+
+		a := newTestClient(t, server)
+		messages := []*message.Message{{
+			Role: message.RoleUser,
+			Contents: []message.Content{
+				&message.URIContent{URI: "data:image/png;base64," + b64, MediaType: "image/png"},
+			},
+		}}
+		if _, err := a.Run(t.Context(), messages).Collect(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		part := firstPart(t, <-bodyCh)
+		if _, ok := part["fileData"]; ok {
+			t.Errorf("expected no fileData for data URI, got %v", part["fileData"])
+		}
+		inlineData, _ := part["inlineData"].(map[string]any)
+		if inlineData == nil {
+			t.Fatal("expected inlineData for data URI")
+		}
+		if mime, _ := inlineData["mimeType"].(string); mime != "image/png" {
+			t.Errorf("inlineData.mimeType = %q, want %q", mime, "image/png")
+		}
+		// genai marshals the decoded bytes back to base64, so the payload
+		// round-trips to the original data URI base64.
+		if data, _ := inlineData["data"].(string); data != b64 {
+			t.Errorf("inlineData.data = %q, want %q", data, b64)
+		}
+	})
+
+	t.Run("external uri maps to fileData", func(t *testing.T) {
+		bodyCh := make(chan []byte, 1)
+		server := httptest.NewServer(captureAndRespond(t, bodyCh, "application/json", minimalTextResponse("ok")))
+		defer server.Close()
+
+		a := newTestClient(t, server)
+		messages := []*message.Message{{
+			Role: message.RoleUser,
+			Contents: []message.Content{
+				&message.URIContent{URI: "https://example.com/x.png", MediaType: "image/png"},
+			},
+		}}
+		if _, err := a.Run(t.Context(), messages).Collect(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		part := firstPart(t, <-bodyCh)
+		if _, ok := part["inlineData"]; ok {
+			t.Errorf("expected no inlineData for external URI, got %v", part["inlineData"])
+		}
+		fileData, _ := part["fileData"].(map[string]any)
+		if fileData == nil {
+			t.Fatal("expected fileData for external URI")
+		}
+		if fileURI, _ := fileData["fileUri"].(string); fileURI != "https://example.com/x.png" {
+			t.Errorf("fileData.fileUri = %q, want %q", fileURI, "https://example.com/x.png")
+		}
+	})
+}
+
+// firstPart unmarshals a captured Gemini request body and returns the first
+// part of its single content.
+func firstPart(t *testing.T, body []byte) map[string]any {
+	t.Helper()
+	var req map[string]any
+	if err := json.Unmarshal(body, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	contents, _ := req["contents"].([]any)
+	if len(contents) != 1 {
+		t.Fatalf("contents length = %d, want 1", len(contents))
+	}
+	content0, _ := contents[0].(map[string]any)
+	parts, _ := content0["parts"].([]any)
+	if len(parts) != 1 {
+		t.Fatalf("parts length = %d, want 1", len(parts))
+	}
+	part, _ := parts[0].(map[string]any)
+	return part
+}
+
 func TestResponseWithFileAndInlineData(t *testing.T) {
 	resp := map[string]any{
 		"candidates": []any{
