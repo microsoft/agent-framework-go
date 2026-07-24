@@ -111,6 +111,9 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				}
 			}
 		}
+		if blocked := promptBlockedContent(resp); blocked != nil {
+			responseContents = append(responseContents, blocked)
+		}
 		if resp.UsageMetadata != nil {
 			responseContents = append(responseContents, &message.UsageContent{
 				Details: toUsageDetails(resp.UsageMetadata),
@@ -147,6 +150,9 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 					}
 				}
 			}
+			if blocked := promptBlockedContent(resp); blocked != nil {
+				streamContents = append(streamContents, blocked)
+			}
 			// Gemini reports usageMetadata cumulatively across chunks, with the
 			// final chunk authoritative. Emitting a UsageContent per chunk would
 			// make the downstream Usage() aggregation sum the running totals, so
@@ -172,6 +178,27 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				RawRepresentation: latestUsageResp,
 			}, nil)
 		}
+	}
+}
+
+// promptBlockedContent returns an ErrorContent when Gemini blocked the prompt
+// for a content or safety policy violation. A blocked prompt yields zero
+// candidates and populates resp.PromptFeedback.BlockReason, so without this the
+// caller could not distinguish a policy block from a legitimately empty
+// completion. Mirrors the .NET/Python providers, which surface PromptFeedback
+// as an error rather than an empty success.
+func promptBlockedContent(resp *genai.GenerateContentResponse) *message.ErrorContent {
+	if resp == nil || resp.PromptFeedback == nil || resp.PromptFeedback.BlockReason == "" {
+		return nil
+	}
+	msg := resp.PromptFeedback.BlockReasonMessage
+	if msg == "" {
+		msg = "prompt blocked by Gemini content filter"
+	}
+	return &message.ErrorContent{
+		ContentHeader: message.ContentHeader{RawRepresentation: resp},
+		ErrorCode:     string(resp.PromptFeedback.BlockReason),
+		Message:       msg,
 	}
 }
 

@@ -1628,6 +1628,87 @@ func TestGenerateContentConfigOption(t *testing.T) {
 	}
 }
 
+// findErrorContent returns the first *message.ErrorContent across all messages
+// of a response, or nil if none is present.
+func findErrorContent(resp *agent.Response) *message.ErrorContent {
+	for _, msg := range resp.Messages {
+		for _, c := range msg.Contents {
+			if ec, ok := c.(*message.ErrorContent); ok {
+				return ec
+			}
+		}
+	}
+	return nil
+}
+
+// TestPromptBlocked_NonStreaming verifies that a prompt blocked by Gemini's
+// content filter (zero candidates + promptFeedback.blockReason) surfaces as an
+// ErrorContent rather than an empty successful response.
+func TestPromptBlocked_NonStreaming(t *testing.T) {
+	resp := map[string]any{
+		"promptFeedback": map[string]any{
+			"blockReason":        "SAFETY",
+			"blockReasonMessage": "blocked",
+		},
+	}
+	respBody, _ := json.Marshal(resp)
+
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "application/json", string(respBody)))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	result, err := a.RunText(t.Context(), "something disallowed").Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	ec := findErrorContent(result)
+	if ec == nil {
+		t.Fatal("expected ErrorContent for blocked prompt, got none")
+	}
+	if ec.ErrorCode != "SAFETY" {
+		t.Errorf("ErrorContent.ErrorCode = %q, want %q", ec.ErrorCode, "SAFETY")
+	}
+	if ec.Message != "blocked" {
+		t.Errorf("ErrorContent.Message = %q, want %q", ec.Message, "blocked")
+	}
+}
+
+// TestPromptBlocked_Streaming verifies that a streamed chunk carrying only
+// promptFeedback.blockReason (no candidates) surfaces an ErrorContent.
+func TestPromptBlocked_Streaming(t *testing.T) {
+	resp := map[string]any{
+		"promptFeedback": map[string]any{
+			"blockReason":        "SAFETY",
+			"blockReasonMessage": "blocked",
+		},
+	}
+	respBody, _ := json.Marshal(resp)
+	streamResp := "data:" + string(respBody) + "\n\n"
+
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "text/event-stream", streamResp))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	result, err := a.RunText(t.Context(), "something disallowed", agent.Stream(true)).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	ec := findErrorContent(result)
+	if ec == nil {
+		t.Fatal("expected ErrorContent for blocked prompt, got none")
+	}
+	if ec.ErrorCode != "SAFETY" {
+		t.Errorf("ErrorContent.ErrorCode = %q, want %q", ec.ErrorCode, "SAFETY")
+	}
+	if ec.Message != "blocked" {
+		t.Errorf("ErrorContent.Message = %q, want %q", ec.Message, "blocked")
+	}
+}
+
 // Gemini streams usageMetadata cumulatively across chunks, with the final
 // chunk's totals authoritative. The provider must report that final total once,
 // not sum the running totals from every chunk.
