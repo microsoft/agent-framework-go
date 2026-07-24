@@ -389,6 +389,11 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 			params.Tools = append(params.Tools, responses.ToolUnionParam{
 				OfFileSearch: &variant,
 			})
+			// Request the retrieved chunks so the file_search_call output item
+			// carries its results, mirroring the reasoning-encrypted-content path.
+			if !slices.Contains(params.Include, responses.ResponseIncludableFileSearchCallResults) {
+				params.Include = append(params.Include, responses.ResponseIncludableFileSearchCallResults)
+			}
 		case *hostedtool.CodeInterpreter:
 			var variant responses.ToolCodeInterpreterParam
 			hosted := make([]string, 0, len(tl.Inputs))
@@ -900,6 +905,9 @@ func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func
 			}
 			currentUpdate.Contents = append(currentUpdate.Contents, &output)
 
+		case responses.ResponseFileSearchToolCall:
+			currentUpdate.Contents = append(currentUpdate.Contents, fileSearchToolCallContents(out)...)
+
 		case responses.ResponseOutputItemMcpApprovalRequest:
 			currentUpdate.Contents = append(currentUpdate.Contents, mcpApprovalRequestContent(out))
 
@@ -1139,6 +1147,8 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 			content := &message.TextContent{Text: outputText.String()}
 			content.RawRepresentation = item
 			u.Contents = []message.Content{content}
+		case responses.ResponseFileSearchToolCall:
+			u.Contents = fileSearchToolCallContents(item)
 		case responses.ResponseOutputItemMcpApprovalRequest:
 			u.Contents = []message.Content{mcpApprovalRequestContent(item)}
 		case responses.ResponseOutputItemImageGenerationCall:
@@ -1167,6 +1177,43 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 	}
 
 	return u, nil
+}
+
+// fileSearchToolCallContents surfaces a file_search_call output item as message
+// content. Each retrieved chunk becomes a TextContent carrying a CitationAnnotation
+// (file ID, filename and snippet). Previously the queries and retrieved chunks were
+// dropped and only the file_citation annotations survived; surfacing them here keeps
+// the raw item (queries + status) on RawRepresentation, matching the .NET/Python
+// surfacing of FileSearch results. When the call returns no results, a single empty
+// annotated TextContent is emitted so the call is still surfaced and, being annotated,
+// is not coalesced away (which would strip its RawRepresentation).
+func fileSearchToolCallContents(item responses.ResponseFileSearchToolCall) []message.Content {
+	if len(item.Results) == 0 {
+		textContent := &message.TextContent{
+			ContentHeader: message.ContentHeader{RawRepresentation: item},
+		}
+		textContent.Annotations = append(textContent.Annotations, &message.CitationAnnotation{
+			ToolName:          "file_search",
+			RawRepresentation: item,
+		})
+		return []message.Content{textContent}
+	}
+	contents := make([]message.Content, 0, len(item.Results))
+	for _, res := range item.Results {
+		textContent := &message.TextContent{
+			ContentHeader: message.ContentHeader{RawRepresentation: item},
+			Text:          res.Text,
+		}
+		textContent.Annotations = append(textContent.Annotations, &message.CitationAnnotation{
+			FileID:            res.FileID,
+			Title:             res.Filename,
+			Snippet:           res.Text,
+			ToolName:          "file_search",
+			RawRepresentation: res,
+		})
+		contents = append(contents, textContent)
+	}
+	return contents
 }
 
 func mcpApprovalRequestContent(item responses.ResponseOutputItemMcpApprovalRequest) *message.ToolApprovalRequestContent {

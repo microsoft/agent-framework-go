@@ -2484,6 +2484,312 @@ data: {"type":"response.completed","response":{"id":"resp_002","object":"respons
 	}
 }
 
+func TestResponsesFileSearchTool_NonStreaming(t *testing.T) {
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{
+                    "type":"message",
+                    "role":"user",
+                    "content":[{"type":"input_text","text":"What does the doc say?"}]
+                }],
+                "include":["file_search_call.results"],
+                "tools":[{
+                    "type":"file_search",
+                    "vector_store_ids":["vs_abc"]
+                }]
+            }
+            `
+
+	const output = `
+            {
+              "id":"resp_fs_001",
+              "object":"response",
+              "created_at":1761309813,
+              "status":"completed",
+              "model":"gpt-4o-mini",
+              "output":[
+                {
+                  "id":"fs_001",
+                  "type":"file_search_call",
+                  "status":"completed",
+                  "queries":["what does the doc say"],
+                  "results":[
+                    {
+                      "file_id":"file_abc",
+                      "filename":"doc.txt",
+                      "score":0.87,
+                      "text":"The doc says hello."
+                    }
+                  ]
+                },
+                {
+                  "id":"msg_fs_001",
+                  "type":"message",
+                  "status":"completed",
+                  "content":[{"type":"output_text","annotations":[],"text":"It says hello."}],
+                  "role":"assistant"
+                }
+              ],
+              "usage":{"input_tokens":20,"output_tokens":5,"total_tokens":25}
+            }
+            `
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	resp, err := a.RunText(t.Context(), "What does the doc say?",
+		agent.WithTool(&hostedtool.FileSearch{
+			Inputs: []message.Content{&message.HostedVectorStoreContent{VectorStoreID: "vs_abc"}},
+		}),
+	).Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+
+	if len(resp.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(resp.Messages))
+	}
+
+	// Locate the TextContent surfaced from the file_search_call results.
+	var found *message.TextContent
+	for _, c := range resp.Messages[0].Contents {
+		tc, ok := c.(*message.TextContent)
+		if !ok {
+			continue
+		}
+		for _, ann := range tc.Annotations {
+			if ca, ok := ann.(*message.CitationAnnotation); ok && ca.FileID == "file_abc" {
+				found = tc
+				break
+			}
+		}
+		if found != nil {
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected a TextContent surfacing the file_search_call result, got contents %+v", resp.Messages[0].Contents)
+	}
+	if found.Text != "The doc says hello." {
+		t.Errorf("expected retrieved text to be surfaced, got %q", found.Text)
+	}
+
+	citation, ok := found.Annotations[0].(*message.CitationAnnotation)
+	if !ok {
+		t.Fatalf("expected CitationAnnotation, got %T", found.Annotations[0])
+	}
+	if citation.FileID != "file_abc" {
+		t.Errorf("expected FileID file_abc, got %q", citation.FileID)
+	}
+	if citation.Title != "doc.txt" {
+		t.Errorf("expected Title doc.txt, got %q", citation.Title)
+	}
+}
+
+func TestResponsesFileSearchTool_Streaming(t *testing.T) {
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"search"}]}],
+                "include":["file_search_call.results"],
+                "tools":[{"type":"file_search","vector_store_ids":["vs_abc"]}],
+                "stream":true
+            }
+            `
+
+	const output = `event: response.created
+data: {"type":"response.created","response":{"id":"resp_fs_str","object":"response","created_at":1741892091,"status":"in_progress","model":"gpt-4o-mini","output":[]}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","response_id":"resp_fs_str","output_index":0,"item":{"type":"file_search_call","id":"fs_str","status":"completed","queries":["search"],"results":[{"file_id":"file_str","filename":"notes.md","score":0.9,"text":"streamed chunk"}]}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_fs_str","object":"response","created_at":1741892091,"status":"completed","model":"gpt-4o-mini","output":[{"type":"file_search_call","id":"fs_str","status":"completed","queries":["search"],"results":[{"file_id":"file_str","filename":"notes.md","score":0.9,"text":"streamed chunk"}]}]}}
+
+`
+
+	server := newTestResponsesServerStreaming(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	var found *message.TextContent
+	for update, err := range a.RunText(t.Context(), "search",
+		agent.Stream(true),
+		agent.WithTool(&hostedtool.FileSearch{
+			Inputs: []message.Content{&message.HostedVectorStoreContent{VectorStoreID: "vs_abc"}},
+		}),
+	) {
+		if err != nil {
+			t.Fatalf("error = %v", err)
+		}
+		for _, c := range update.Contents {
+			tc, ok := c.(*message.TextContent)
+			if !ok {
+				continue
+			}
+			for _, ann := range tc.Annotations {
+				if ca, ok := ann.(*message.CitationAnnotation); ok && ca.FileID == "file_str" {
+					found = tc
+				}
+			}
+		}
+	}
+	if found == nil {
+		t.Fatal("expected the streamed file_search_call result to be surfaced")
+	}
+	if found.Text != "streamed chunk" {
+		t.Errorf("expected retrieved text 'streamed chunk', got %q", found.Text)
+	}
+}
+
+func TestResponsesFileSearchTool_DoesNotDuplicateInclude(t *testing.T) {
+	// The include is requested by the FileSearch tool; if the caller already set it
+	// via ResponsesNewParams, it must not be appended twice.
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{
+                    "type":"message",
+                    "role":"user",
+                    "content":[{"type":"input_text","text":"hi"}]
+                }],
+                "include":["file_search_call.results"],
+                "tools":[{
+                    "type":"file_search",
+                    "vector_store_ids":["vs_abc"]
+                }]
+            }
+            `
+
+	const output = `
+            {
+              "id":"resp_fs_002",
+              "object":"response",
+              "created_at":1761309813,
+              "status":"completed",
+              "model":"gpt-4o-mini",
+              "output":[{
+                "type":"message",
+                "id":"msg_fs_002",
+                "status":"completed",
+                "role":"assistant",
+                "content":[{"type":"output_text","annotations":[],"text":"hi"}]
+              }]
+            }
+            `
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	_, err := a.RunText(t.Context(), "hi",
+		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
+			Include: []responses.ResponseIncludable{responses.ResponseIncludableFileSearchCallResults},
+		}),
+		agent.WithTool(&hostedtool.FileSearch{
+			Inputs: []message.Content{&message.HostedVectorStoreContent{VectorStoreID: "vs_abc"}},
+		}),
+	).Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestResponsesFileSearchTool_NoResultsStillSurfaced(t *testing.T) {
+	// A file_search_call with zero results must still be surfaced as an annotated
+	// TextContent so the call (queries + status on RawRepresentation) is not dropped
+	// and, being annotated, is not coalesced away.
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{
+                    "type":"message",
+                    "role":"user",
+                    "content":[{"type":"input_text","text":"anything?"}]
+                }],
+                "include":["file_search_call.results"],
+                "tools":[{
+                    "type":"file_search",
+                    "vector_store_ids":["vs_abc"]
+                }]
+            }
+            `
+
+	const output = `
+            {
+              "id":"resp_fs_003",
+              "object":"response",
+              "created_at":1761309813,
+              "status":"completed",
+              "model":"gpt-4o-mini",
+              "output":[
+                {
+                  "id":"fs_003",
+                  "type":"file_search_call",
+                  "status":"completed",
+                  "queries":["anything"],
+                  "results":[]
+                },
+                {
+                  "id":"msg_fs_003",
+                  "type":"message",
+                  "status":"completed",
+                  "content":[{"type":"output_text","annotations":[],"text":"Nothing found."}],
+                  "role":"assistant"
+                }
+              ],
+              "usage":{"input_tokens":20,"output_tokens":5,"total_tokens":25}
+            }
+            `
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	resp, err := a.RunText(t.Context(), "anything?",
+		agent.WithTool(&hostedtool.FileSearch{
+			Inputs: []message.Content{&message.HostedVectorStoreContent{VectorStoreID: "vs_abc"}},
+		}),
+	).Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+
+	if len(resp.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(resp.Messages))
+	}
+
+	// Find the annotated TextContent surfacing the (empty) file_search_call.
+	var found *message.TextContent
+	for _, c := range resp.Messages[0].Contents {
+		tc, ok := c.(*message.TextContent)
+		if !ok {
+			continue
+		}
+		for _, ann := range tc.Annotations {
+			if ca, ok := ann.(*message.CitationAnnotation); ok && ca.ToolName == "file_search" {
+				found = tc
+				break
+			}
+		}
+		if found != nil {
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected an annotated TextContent surfacing the empty file_search_call, got contents %+v", resp.Messages[0].Contents)
+	}
+	if found.RawRepresentation == nil {
+		t.Error("expected the empty file_search_call to retain its RawRepresentation")
+	}
+}
+
 func TestResponsesStreamingResponseWithIncompleteUpdate_HandlesCorrectly(t *testing.T) {
 	const input = `
             {
