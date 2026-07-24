@@ -132,9 +132,11 @@ func DefaultToolCallFormatter(group *MessageGroup) string {
 
 	plainTextIndex := 0
 	var orderedNames []string
+	seenNames := make(map[string]bool)
 	groupedResults := make(map[string][]string)
 	for _, functionCall := range functionCalls {
-		if _, ok := groupedResults[functionCall.name]; !ok {
+		if !seenNames[functionCall.name] {
+			seenNames[functionCall.name] = true
 			orderedNames = append(orderedNames, functionCall.name)
 		}
 		result, ok := resultsByCallID[functionCall.id]
