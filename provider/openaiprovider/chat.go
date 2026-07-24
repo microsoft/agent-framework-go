@@ -133,7 +133,9 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 				})
 			}
 			if choice.Message.Content != "" {
-				contents = append(contents, &message.TextContent{Text: choice.Message.Content})
+				textContent := &message.TextContent{Text: choice.Message.Content}
+				populateChatAnnotations(choice.Message.Annotations, textContent)
+				contents = append(contents, textContent)
 			}
 			if choice.Message.Refusal != "" {
 				contents = append(contents, &message.ErrorContent{Message: choice.Message.Refusal})
@@ -502,6 +504,24 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 
 	default:
 		panic("unknown message role: " + string(msg.Role))
+	}
+}
+
+// populateChatAnnotations maps Chat Completions message annotations (e.g. the
+// url_citation entries produced by the web-search tool) onto the text content's
+// annotations, mirroring populateAnnotations on the Responses path.
+func populateChatAnnotations(anns []openai.ChatCompletionMessageAnnotation, content *message.TextContent) {
+	for _, ann := range anns {
+		// Only url_citation annotations carry a populated URLCitation payload;
+		// skip other variants (and empty URLs) to avoid emitting bogus citations.
+		if ann.Type != "url_citation" || ann.URLCitation.URL == "" {
+			continue
+		}
+		content.Annotations = append(content.Annotations, &message.CitationAnnotation{
+			URL:               ann.URLCitation.URL,
+			Title:             ann.URLCitation.Title,
+			RawRepresentation: ann,
+		})
 	}
 }
 
