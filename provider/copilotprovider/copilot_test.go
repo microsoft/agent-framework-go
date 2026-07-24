@@ -215,6 +215,61 @@ func TestCopyResumeSessionConfig_WithStreamingNull_DefaultsToTrue(t *testing.T) 
 	assertEqual(t, runtime.lastResumeRequest(t)["streaming"], true, "streaming")
 }
 
+func TestRun_SurfacesLifecycleEventEmittedDuringSessionResume(t *testing.T) {
+	runtime := newFakeRuntime(t, idleEvent())
+	runtime.resumeEvents = []map[string]any{sessionEvent("session.start", map[string]any{})}
+	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
+	session, err := agent.CreateSession(context.Background(), agentpkg.WithServiceID("existing-session"))
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	response, err := runText(t, agent, "hello", agentpkg.WithSession(session))
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if !hasRawEventOfType(response, "session.start") {
+		t.Fatal("lifecycle event emitted before the session.resume response was dropped; OnEvent must be registered before the RPC")
+	}
+}
+
+func TestRun_PreservesUserSuppliedOnEventHandler(t *testing.T) {
+	runtime := newFakeRuntime(t, idleEvent())
+	var mu sync.Mutex
+	invocations := 0
+	userHandler := func(event copilot.SessionEvent) {
+		mu.Lock()
+		invocations++
+		mu.Unlock()
+	}
+	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{
+		SessionConfig: &copilot.SessionConfig{OnEvent: userHandler},
+	})
+
+	if _, err := runText(t, agent, "hello"); err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if invocations == 0 {
+		t.Fatal("user-supplied SessionConfig.OnEvent was overwritten by the per-run handler and never invoked")
+	}
+}
+
+func hasRawEventOfType(response *agentpkg.Response, eventType string) bool {
+	for content := range response.Contents() {
+		raw, ok := content.(*message.RawContent)
+		if !ok {
+			continue
+		}
+		if event, ok := raw.RawRepresentation.(copilot.SessionEvent); ok && string(event.Type()) == eventType {
+			return true
+		}
+	}
+	return false
+}
+
 func TestConvertToAgentResponseUpdate_AssistantMessageEventWhenStreaming_DoesNotEmitTextContent(t *testing.T) {
 	runtime := newFakeRuntime(t,
 		sessionEvent("assistant.message", map[string]any{"messageId": "msg-456", "content": "Some streamed content that was already delivered via delta events"}),
@@ -675,6 +730,7 @@ type fakeRuntime struct {
 	mu             sync.Mutex
 	sessionID      string
 	events         []map[string]any
+	resumeEvents   []map[string]any
 	createRequests []map[string]any
 	resumeRequests []map[string]any
 	sendRequests   []map[string]any
@@ -791,7 +847,14 @@ func (r *fakeRuntime) handle(conn net.Conn, req jsonRPCRequest) {
 		r.mu.Lock()
 		r.sessionID = sessionID
 		r.resumeRequests = append(r.resumeRequests, params)
+		resumeEvents := append([]map[string]any(nil), r.resumeEvents...)
 		r.mu.Unlock()
+		// Emit any lifecycle events the CLI produces during session.resume
+		// before the RPC response, so they land in the window before a
+		// post-return session.On call would have registered a handler.
+		for _, event := range resumeEvents {
+			writeNotification(r.t, conn, "session.event", map[string]any{"sessionId": sessionID, "event": event})
+		}
 		writeResponse(r.t, conn, req.ID, map[string]any{"sessionId": sessionID, "workspacePath": ""})
 	case "session.send":
 		params := decodeParams(r.t, req.Params)
