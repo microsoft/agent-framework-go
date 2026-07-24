@@ -63,16 +63,18 @@ func main() {
 		"A farmer has 17 sheep. All but 9 run away. How many are left? Think it through.",
 		thinking,
 	).Collect()
+
+	// Print the final answer first, immediately after the logger middleware's
+	// "Assistant:" prefix, then surface the reasoning summary (thought parts)
+	// as a separate section below it.
+	demo.Response(resp, err)
 	if err != nil {
-		demo.Response(resp, err)
 		return
 	}
 
-	// Print the reasoning summary (thought parts) separately from the answer.
 	for c := range resp.Contents() {
 		if reasoning, ok := c.(*message.TextReasoningContent); ok && reasoning.Text != "" {
 			fmt.Printf("[reasoning] %s\n\n", reasoning.Text)
 		}
 	}
-	demo.Assistantf("%s", resp)
 }
