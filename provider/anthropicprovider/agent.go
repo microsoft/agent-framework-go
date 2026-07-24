@@ -463,20 +463,29 @@ func buildMessageParam(msg *message.Message) (anthropic.MessageParam, error) {
 			content = append(content, anthropic.NewToolUseBlock(c.CallID, args, c.Name))
 		case *message.FunctionResultContent:
 			resStr := ""
-			switch r := c.Result.(type) {
-			case json.RawMessage:
-				resStr = string(r)
-			case string:
-				resStr = r
-			case []byte:
-				resStr = string(r)
+			switch {
+			case c.Error != nil:
+				// Surface the diagnostic text so the model sees why the tool
+				// failed, mirroring the other providers (OpenAI Responses sends
+				// "Error: %v", Gemini sends {"error": ...}). Otherwise a failed
+				// result with a nil Result would serialize to the literal "null".
+				resStr = "Error: " + c.Error.Error()
 			default:
-				// Marshal any other type to JSON for proper formatting
-				jsonBytes, err := json.Marshal(c.Result)
-				if err != nil {
-					resStr = fmt.Sprintf("%v", c.Result)
-				} else {
-					resStr = string(jsonBytes)
+				switch r := c.Result.(type) {
+				case json.RawMessage:
+					resStr = string(r)
+				case string:
+					resStr = r
+				case []byte:
+					resStr = string(r)
+				default:
+					// Marshal any other type to JSON for proper formatting
+					jsonBytes, err := json.Marshal(c.Result)
+					if err != nil {
+						resStr = fmt.Sprintf("%v", c.Result)
+					} else {
+						resStr = string(jsonBytes)
+					}
 				}
 			}
 			content = append(content, anthropic.NewToolResultBlock(c.CallID, resStr, c.Error != nil))
