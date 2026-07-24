@@ -2056,6 +2056,150 @@ func firstToolApprovalRequest(t *testing.T, resp *agent.Response) *message.ToolA
 	return nil
 }
 
+func TestResponsesNonStreamingMCPCall_MapsResultContent(t *testing.T) {
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"test"}]}]
+            }
+            `
+
+	const output = `
+            {
+              "id":"resp_001",
+              "object":"response",
+              "created_at":1741892091,
+              "status":"completed",
+              "model":"gpt-4o-mini",
+              "output":[{
+                "type":"mcp_call",
+                "id":"mcp_123",
+                "server_label":"github",
+                "name":"create_issue",
+                "arguments":"{\"title\":\"Bug\"}",
+                "output":"issue #7 created",
+                "error":"rate limited"
+              }]
+            }
+            `
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+	resp, err := a.RunText(t.Context(), "test").Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+
+	var call *message.MCPServerToolCallContent
+	var result *message.MCPServerToolResultContent
+	var errContent *message.ErrorContent
+	for content := range resp.Contents() {
+		switch c := content.(type) {
+		case *message.MCPServerToolCallContent:
+			call = c
+		case *message.MCPServerToolResultContent:
+			result = c
+		case *message.ErrorContent:
+			errContent = c
+		}
+	}
+
+	if call == nil {
+		t.Fatal("expected MCPServerToolCallContent")
+	}
+	if call.CallID != "mcp_123" || call.Name != "create_issue" || call.ServerName != "github" || call.Arguments != `{"title":"Bug"}` {
+		t.Fatalf("call = %#v", call)
+	}
+	if result == nil {
+		t.Fatal("expected MCPServerToolResultContent")
+	}
+	if result.CallID != "mcp_123" || result.Name != "create_issue" || result.ServerName != "github" {
+		t.Fatalf("result = %#v", result)
+	}
+	if result.Error != "rate limited" {
+		t.Errorf("result.Error = %q, want %q", result.Error, "rate limited")
+	}
+	if len(result.Outputs) != 1 {
+		t.Fatalf("Outputs len = %d, want 1", len(result.Outputs))
+	}
+	text, ok := result.Outputs[0].(*message.TextContent)
+	if !ok || text.Text != "issue #7 created" {
+		t.Fatalf("Outputs[0] = %#v", result.Outputs[0])
+	}
+	if errContent == nil || errContent.Message != "rate limited" {
+		t.Fatalf("expected ErrorContent with tool error, got %#v", errContent)
+	}
+}
+
+func TestResponsesStreamingMCPCall_MapsResultContent(t *testing.T) {
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"test"}]}],
+                "stream":true
+            }
+            `
+
+	const output = `event: response.created
+data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_001","object":"response","created_at":1741892091,"status":"in_progress","model":"gpt-4o-mini","output":[]}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":1,"output_index":0,"item":{"type":"mcp_call","id":"mcp_123","server_label":"github","name":"create_issue","arguments":"{\"title\":\"Bug\"}","output":"issue #7 created","error":"rate limited"}}
+
+event: response.completed
+data: {"type":"response.completed","sequence_number":2,"response":{"id":"resp_001","object":"response","created_at":1741892091,"status":"completed","model":"gpt-4o-mini","output":[]}}
+
+`
+
+	server := newTestResponsesServerStreaming(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+	var call *message.MCPServerToolCallContent
+	var result *message.MCPServerToolResultContent
+	var errContent *message.ErrorContent
+	for update, err := range a.RunText(t.Context(), "test", agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("error = %v", err)
+		}
+		for _, content := range update.Contents {
+			switch c := content.(type) {
+			case *message.MCPServerToolCallContent:
+				call = c
+			case *message.MCPServerToolResultContent:
+				result = c
+			case *message.ErrorContent:
+				errContent = c
+			}
+		}
+	}
+
+	if call == nil {
+		t.Fatal("expected MCPServerToolCallContent")
+	}
+	if call.CallID != "mcp_123" || call.ServerName != "github" || call.Name != "create_issue" || call.Arguments != `{"title":"Bug"}` {
+		t.Fatalf("call = %#v", call)
+	}
+	if result == nil {
+		t.Fatal("expected MCPServerToolResultContent")
+	}
+	if result.CallID != "mcp_123" || result.ServerName != "github" || result.Name != "create_issue" {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(result.Outputs) != 1 {
+		t.Fatalf("Outputs len = %d, want 1", len(result.Outputs))
+	}
+	text, ok := result.Outputs[0].(*message.TextContent)
+	if !ok || text.Text != "issue #7 created" {
+		t.Fatalf("Outputs[0] = %#v", result.Outputs[0])
+	}
+	if errContent == nil || errContent.Message != "rate limited" {
+		t.Fatalf("expected ErrorContent with tool error, got %#v", errContent)
+	}
+}
+
 func TestResponsesResponseFormatSchemaConvertsJSONSchema(t *testing.T) {
 	type payload struct {
 		Name string `json:"name"`

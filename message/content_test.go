@@ -164,6 +164,15 @@ func TestContentEncoding_Roundtrip(t *testing.T) {
 			Name:       "mcpName",
 			ServerName: "mcpServer",
 		},
+		&message.MCPServerToolResultContent{
+			CallID:     "mcp-call-123",
+			Name:       "mcpName",
+			ServerName: "mcpServer",
+			Outputs: message.Contents{
+				&message.TextContent{Text: "mcp tool output"},
+			},
+			Error: "mcp tool error",
+		},
 	}
 	data, err := json.Marshal(contents)
 	if err != nil {

@@ -903,6 +903,9 @@ func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func
 		case responses.ResponseOutputItemMcpApprovalRequest:
 			currentUpdate.Contents = append(currentUpdate.Contents, mcpApprovalRequestContent(out))
 
+		case responses.ResponseOutputItemMcpCall:
+			currentUpdate.Contents = append(currentUpdate.Contents, mcpCallContents(out)...)
+
 		case responses.ResponseOutputItemImageGenerationCall:
 			if content := imageGenerationContent(out); content != nil {
 				currentUpdate.Contents = append(currentUpdate.Contents, content)
@@ -1141,6 +1144,8 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 			u.Contents = []message.Content{content}
 		case responses.ResponseOutputItemMcpApprovalRequest:
 			u.Contents = []message.Content{mcpApprovalRequestContent(item)}
+		case responses.ResponseOutputItemMcpCall:
+			u.Contents = mcpCallContents(item)
 		case responses.ResponseOutputItemImageGenerationCall:
 			if content := imageGenerationContent(item); content != nil {
 				u.Contents = []message.Content{content}
@@ -1181,6 +1186,42 @@ func mcpApprovalRequestContent(item responses.ResponseOutputItemMcpApprovalReque
 			ServerName:    item.ServerLabel,
 		},
 	}
+}
+
+// mcpCallContents surfaces a completed hosted MCP tool call, emitting both the
+// call (from its arguments) and its result so the output is not silently
+// dropped. Any tool-call error is surfaced as an ErrorContent.
+func mcpCallContents(item responses.ResponseOutputItemMcpCall) []message.Content {
+	contents := []message.Content{
+		&message.MCPServerToolCallContent{
+			ContentHeader: message.ContentHeader{RawRepresentation: item},
+			Arguments:     item.Arguments,
+			CallID:        item.ID,
+			Name:          item.Name,
+			ServerName:    item.ServerLabel,
+		},
+	}
+
+	result := &message.MCPServerToolResultContent{
+		ContentHeader: message.ContentHeader{RawRepresentation: item},
+		CallID:        item.ID,
+		Name:          item.Name,
+		ServerName:    item.ServerLabel,
+		Error:         item.Error,
+	}
+	if item.Output != "" {
+		result.Outputs = message.Contents{
+			&message.TextContent{Text: item.Output},
+		}
+	}
+	contents = append(contents, result)
+
+	if item.Error != "" {
+		contents = append(contents, &message.ErrorContent{
+			Message: item.Error,
+		})
+	}
+	return contents
 }
 
 func imageGenerationContent(item responses.ResponseOutputItemImageGenerationCall) *message.DataContent {
