@@ -164,6 +164,11 @@ func (v *PortableValue) Is(typ reflect.Type) bool {
 	return true
 }
 
+// As returns the contained value and true when it is assignable to typ (or can
+// be delayed-deserialized to a value assignable to typ); otherwise it returns
+// nil and false. No conversion is performed: when typ is an interface, the
+// returned value is the concrete value assignable to that interface. It is the
+// comma-ok extraction counterpart to [PortableValue.Is].
 func (v *PortableValue) As(typ reflect.Type) (any, bool) {
 	if v.Is(typ) {
 		return v.Any(), true
