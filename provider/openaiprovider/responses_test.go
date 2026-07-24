@@ -1114,6 +1114,122 @@ data: {"type":"response.completed","sequence_number":14,"response":{"id":"resp_r
 	}
 }
 
+// TestResponsesReasoningEncryptedContent_Streaming verifies that a completed
+// reasoning item's encrypted content is carried through the streaming path so it
+// can be replayed on the next turn when store=false (Include always adds reasoning
+// encrypted content in that mode). Before the fix the reasoning
+// response.output_item.done event fell through to the default case and its
+// EncryptedContent was discarded.
+func TestResponsesReasoningEncryptedContent_Streaming(t *testing.T) {
+	const encrypted = "gAAAAABencrypted_reasoning_blob"
+
+	const input = `
+            {
+              "input":[{
+                "type":"message",
+                "role":"user",
+                "content":[{
+                  "type":"input_text",
+                  "text":"Solve this problem step by step."
+                }]
+              }],
+              "model": "o4-mini",
+              "stream": true
+            }
+            `
+
+	const output = `event: response.created
+data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_enc123","object":"response","created_at":1756752900,"status":"in_progress","model":"o4-mini-2025-04-16","output":[],"reasoning":{"effort":"medium"}}}
+
+event: response.in_progress
+data: {"type":"response.in_progress","sequence_number":1,"response":{"id":"resp_enc123","object":"response","created_at":1756752900,"status":"in_progress","model":"o4-mini-2025-04-16","output":[]}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":2,"output_index":0,"item":{"id":"rs_enc123","type":"reasoning","text":""}}
+
+event: response.reasoning_text.delta
+data: {"type":"response.reasoning_text.delta","sequence_number":3,"item_id":"rs_enc123","output_index":0,"delta":"Analyzing."}
+
+event: response.reasoning_text.done
+data: {"type":"response.reasoning_text.done","sequence_number":4,"item_id":"rs_enc123","output_index":0,"text":"Analyzing."}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":5,"output_index":0,"item":{"id":"rs_enc123","type":"reasoning","content":[{"type":"reasoning_text","text":"Analyzing."}],"encrypted_content":"gAAAAABencrypted_reasoning_blob"}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":6,"output_index":1,"item":{"id":"msg_enc123","type":"message","status":"in_progress","content":[],"role":"assistant"}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":7,"item_id":"msg_enc123","output_index":1,"content_index":0,"delta":"The solution is 42."}
+
+event: response.output_text.done
+data: {"type":"response.output_text.done","sequence_number":8,"item_id":"msg_enc123","output_index":1,"content_index":0,"text":"The solution is 42."}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":9,"output_index":1,"item":{"id":"msg_enc123","type":"message","status":"completed","content":[{"type":"output_text","annotations":[],"text":"The solution is 42."}],"role":"assistant"}}
+
+event: response.completed
+data: {"type":"response.completed","sequence_number":10,"response":{"id":"resp_enc123","object":"response","created_at":1756752900,"status":"completed","model":"o4-mini-2025-04-16","output":[{"id":"rs_enc123","type":"reasoning","content":[{"type":"reasoning_text","text":"Analyzing."}],"encrypted_content":"gAAAAABencrypted_reasoning_blob"},{"id":"msg_enc123","type":"message","status":"completed","content":[{"type":"output_text","annotations":[],"text":"The solution is 42."}],"role":"assistant"}],"usage":{"input_tokens":10,"output_tokens":25,"total_tokens":35}}}
+
+`
+
+	server := newTestResponsesServerStreaming(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "o4-mini")
+
+	var updates []*agent.ResponseUpdate
+	for update, err := range a.RunText(t.Context(), "Solve this problem step by step.", agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("error = %v", err)
+		}
+		updates = append(updates, update)
+	}
+
+	// The completed reasoning item must surface as a TextReasoningContent that
+	// carries the encrypted content forward.
+	var protectedData string
+	for _, update := range updates {
+		for _, content := range update.Contents {
+			if rc, ok := content.(*message.TextReasoningContent); ok && rc.ProtectedData != "" {
+				protectedData = rc.ProtectedData
+			}
+		}
+	}
+	if protectedData != encrypted {
+		t.Fatalf("expected reasoning ProtectedData %q, got %q", encrypted, protectedData)
+	}
+
+	// Round-trip: replaying the collected reasoning content on the next turn must
+	// echo the encrypted content back as reasoning encrypted_content in the request.
+	var capturedBody string
+	replayServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("failed reading request body: %v", err)
+		}
+		capturedBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"resp_enc456","object":"response","created_at":1756752901,"status":"completed","model":"o4-mini-2025-04-16","output":[{"type":"message","id":"msg_enc456","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok","annotations":[]}]}]}`)
+	}))
+	defer replayServer.Close()
+
+	a2 := newTestResponsesClient(replayServer, "o4-mini")
+	messages := []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Solve this problem step by step."}}},
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			&message.TextReasoningContent{Text: "Analyzing.", ProtectedData: protectedData},
+			&message.TextContent{Text: "The solution is 42."},
+		}},
+	}
+	if _, err := a2.Run(t.Context(), messages).Collect(); err != nil {
+		t.Fatalf("replay error = %v", err)
+	}
+	if !strings.Contains(capturedBody, `"encrypted_content":"`+encrypted+`"`) {
+		t.Fatalf("expected replay request to carry encrypted_content %q, body = %s", encrypted, capturedBody)
+	}
+}
+
 func TestResponsesChatOptions_Model_OverridesClientModel_Streaming(t *testing.T) {
 	const input = `
             {

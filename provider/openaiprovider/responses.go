@@ -1145,6 +1145,23 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 			if content := imageGenerationContent(item); content != nil {
 				u.Contents = []message.Content{content}
 			}
+		case responses.ResponseReasoningItem:
+			// Carry the completed reasoning item's encrypted content so it can be
+			// replayed on the next turn when store=false (reasoning delta events only
+			// carry text and drop EncryptedContent). Mirrors the non-streaming handler.
+			var sb strings.Builder
+			for _, c := range item.Content {
+				sb.WriteString(c.Text)
+			}
+			u.Contents = []message.Content{
+				&message.TextReasoningContent{
+					Text:          sb.String(),
+					ProtectedData: item.EncryptedContent,
+					ContentHeader: message.ContentHeader{
+						RawRepresentation: item,
+					},
+				},
+			}
 		default:
 			u = createUpdate(message.RoleAssistant, nil)
 		}
