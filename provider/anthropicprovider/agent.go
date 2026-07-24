@@ -117,6 +117,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				MessageID:         resp.ID,
 				ResponseID:        resp.ID,
 				CreatedAt:         time.Now(),
+				FinishReason:      mapStopReason(resp.StopReason),
 				RawRepresentation: resp,
 			}, nil)
 		}
@@ -125,6 +126,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 		stream := a.client.Messages.NewStreaming(ctx, params)
 
 		var messageID string
+		var finishReason string
 		var usage message.UsageDetails
 		var accumulated anthropic.Message
 
@@ -142,6 +144,11 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				usage.Add(toUsageDetails(event.Message.Usage))
 			case anthropic.MessageDeltaEvent:
 				usage.Add(toUsageDetailsDelta(event.Usage))
+				// Later chunks may carry an empty stop_reason; don't clobber a
+				// value we already captured.
+				if fr := mapStopReason(event.Delta.StopReason); fr != "" {
+					finishReason = fr
+				}
 			case anthropic.ContentBlockStartEvent:
 				block := event.ContentBlock.AsAny()
 				if _, isToolUse := block.(anthropic.ToolUseBlock); !isToolUse {
@@ -171,9 +178,10 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 			}
 		}
 		if !yield(&agent.ResponseUpdate{
-			CreatedAt: time.Now(),
-			Role:      message.RoleAssistant,
-			MessageID: messageID,
+			CreatedAt:    time.Now(),
+			Role:         message.RoleAssistant,
+			MessageID:    messageID,
+			FinishReason: finishReason,
 			Contents: []message.Content{
 				&message.UsageContent{
 					Details: usage,
@@ -185,6 +193,24 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 		if err := stream.Err(); err != nil {
 			yield(nil, err)
 		}
+	}
+}
+
+// mapStopReason maps an Anthropic stop_reason to the canonical FinishReason
+// values shared across providers (mirroring the OpenAI/Copilot providers). It
+// returns "" for empty or unrecognized reasons so callers can fall through.
+func mapStopReason(reason anthropic.StopReason) string {
+	switch reason {
+	case anthropic.StopReasonEndTurn, anthropic.StopReasonStopSequence, anthropic.StopReasonPauseTurn:
+		return "stop"
+	case anthropic.StopReasonMaxTokens:
+		return "length"
+	case anthropic.StopReasonToolUse:
+		return "tool_calls"
+	case anthropic.StopReasonRefusal:
+		return "content_filter"
+	default:
+		return ""
 	}
 }
 
