@@ -372,7 +372,7 @@ func buildRequestParts(msg *message.Message, callIDToName map[string]string) ([]
 				},
 			})
 		case *message.URIContent:
-			if strings.HasPrefix(strings.ToLower(c.URI), "data:") {
+			if len(c.URI) >= len("data:") && strings.EqualFold(c.URI[:len("data:")], "data:") {
 				// A data: URI carries the bytes inline. Gemini's FileData.FileURI
 				// requires an external reference (gs:// or https://), so a data: URI
 				// would be silently dropped. Decode it into InlineData instead,
