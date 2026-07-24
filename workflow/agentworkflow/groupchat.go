@@ -367,7 +367,7 @@ func (host *groupChatHostExecutor) handleTurn(ctx *workflow.Context, token workf
 	// TurnToken without any fresh input. This mirrors .NET GroupChatHost's
 	// TakeTurnAsync guard (string.Equals(executor.Id, _currentSpeakerExecutorId)
 	// -> CompleteAsync). The empty-string initial value never fires on turn one.
-	if nextBinding.ID == host.currentSpeakerExecutorID {
+	if host.currentSpeakerExecutorID != "" && nextBinding.ID == host.currentSpeakerExecutorID {
 		return host.complete(ctx)
 	}
 
