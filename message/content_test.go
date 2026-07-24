@@ -738,6 +738,32 @@ func TestCoalesceContents(t *testing.T) {
 			},
 		},
 		{
+			name: "single code interpreter tool call preserves raw representation",
+			input: []message.Content{
+				&message.CodeInterpreterToolCallContent{
+					ContentHeader: message.ContentHeader{
+						RawRepresentation: "raw-call",
+					},
+					CallID: "call-1",
+					Inputs: message.Contents{
+						&message.TextContent{Text: "foo"},
+						&message.TextContent{Text: "bar"},
+					},
+				},
+			},
+			expected: []message.Content{
+				&message.CodeInterpreterToolCallContent{
+					ContentHeader: message.ContentHeader{
+						RawRepresentation: "raw-call",
+					},
+					CallID: "call-1",
+					Inputs: message.Contents{
+						&message.TextContent{Text: "foobar"},
+					},
+				},
+			},
+		},
+		{
 			name: "code interpreter tool result with same call id coalesced and outputs merged",
 			input: []message.Content{
 				&message.CodeInterpreterToolResultContent{
@@ -809,6 +835,32 @@ func TestCoalesceContents(t *testing.T) {
 			},
 			expected: []message.Content{
 				&message.CodeInterpreterToolResultContent{
+					CallID: "call-1",
+					Outputs: message.Contents{
+						&message.TextContent{Text: "foobar"},
+					},
+				},
+			},
+		},
+		{
+			name: "single code interpreter tool result preserves raw representation",
+			input: []message.Content{
+				&message.CodeInterpreterToolResultContent{
+					ContentHeader: message.ContentHeader{
+						RawRepresentation: "raw-result",
+					},
+					CallID: "call-1",
+					Outputs: message.Contents{
+						&message.TextContent{Text: "foo"},
+						&message.TextContent{Text: "bar"},
+					},
+				},
+			},
+			expected: []message.Content{
+				&message.CodeInterpreterToolResultContent{
+					ContentHeader: message.ContentHeader{
+						RawRepresentation: "raw-result",
+					},
 					CallID: "call-1",
 					Outputs: message.Contents{
 						&message.TextContent{Text: "foobar"},

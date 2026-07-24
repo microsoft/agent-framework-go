@@ -979,12 +979,12 @@ func CoalesceContents(contents []Content) []Content {
 			for _, c := range contents[start:end] {
 				inputs = append(inputs, c.(*CodeInterpreterToolCallContent).Inputs...)
 			}
+			header := first.ContentHeader
+			header.AdditionalProperties = maps.Clone(first.AdditionalProperties)
 			return &CodeInterpreterToolCallContent{
-				ContentHeader: ContentHeader{
-					AdditionalProperties: maps.Clone(first.AdditionalProperties),
-				},
-				CallID: first.CallID,
-				Inputs: CoalesceContents(inputs),
+				ContentHeader: header,
+				CallID:        first.CallID,
+				Inputs:        CoalesceContents(inputs),
 			}
 		})
 
@@ -996,12 +996,12 @@ func CoalesceContents(contents []Content) []Content {
 			for _, c := range contents[start:end] {
 				outputs = append(outputs, c.(*CodeInterpreterToolResultContent).Outputs...)
 			}
+			header := first.ContentHeader
+			header.AdditionalProperties = maps.Clone(first.AdditionalProperties)
 			return &CodeInterpreterToolResultContent{
-				ContentHeader: ContentHeader{
-					AdditionalProperties: maps.Clone(first.AdditionalProperties),
-				},
-				CallID:  first.CallID,
-				Outputs: CoalesceContents(outputs),
+				ContentHeader: header,
+				CallID:        first.CallID,
+				Outputs:       CoalesceContents(outputs),
 			}
 		})
 
