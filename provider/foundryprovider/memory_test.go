@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
@@ -274,6 +275,101 @@ func TestMemoryProviderInvokedLogsUpdateFailureAndDoesNotReturnError(t *testing.
 	}
 	if strings.Contains(logText, "user-456") {
 		t.Fatalf("logs should not include scope: %q", logText)
+	}
+}
+
+func TestMemoryProviderEnsureMemoryStoreCreated(t *testing.T) {
+	description := "team memory"
+	tests := []struct {
+		name        string
+		description *string
+		handle      func(req *http.Request, body string) (*http.Response, error)
+		wantErr     bool
+		wantPaths   []string
+	}{
+		{
+			name: "store exists returns nil without create",
+			handle: func(req *http.Request, _ string) (*http.Response, error) {
+				return jsonResponse(req, http.StatusOK, `{"name":"memory"}`), nil
+			},
+			wantPaths: []string{"/memory_stores/memory"},
+		},
+		{
+			name:        "store missing creates default store",
+			description: &description,
+			handle: func(req *http.Request, _ string) (*http.Response, error) {
+				if req.Method == http.MethodGet {
+					return jsonResponse(req, http.StatusNotFound, `{"error":{"code":"NotFound"}}`), nil
+				}
+				return jsonResponse(req, http.StatusOK, `{"name":"memory"}`), nil
+			},
+			wantPaths: []string{"/memory_stores/memory", "/memory_stores"},
+		},
+		{
+			name:        "concurrent create conflict is treated as no-op",
+			description: &description,
+			handle: func(req *http.Request, _ string) (*http.Response, error) {
+				if req.Method == http.MethodGet {
+					return jsonResponse(req, http.StatusNotFound, `{"error":{"code":"NotFound"}}`), nil
+				}
+				return jsonResponse(req, http.StatusConflict, `{"error":{"code":"Conflict"}}`), nil
+			},
+			wantPaths: []string{"/memory_stores/memory", "/memory_stores"},
+		},
+		{
+			name: "non-404 error is propagated",
+			handle: func(req *http.Request, _ string) (*http.Response, error) {
+				return jsonResponse(req, http.StatusInternalServerError, `{"error":{"code":"Boom"}}`), nil
+			},
+			wantErr:   true,
+			wantPaths: []string{"/memory_stores/memory"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			transport := &recordingTransport{handle: tt.handle}
+			provider := foundryprovider.NewMemoryProvider(validEndpoint, validCredential, "memory", validScope, foundryprovider.MemoryProviderConfig{
+				ClientOptions: azcore.ClientOptions{Transport: transport, Retry: policy.RetryOptions{MaxRetries: -1}},
+			})
+
+			err := provider.EnsureMemoryStoreCreated(t.Context(), "gpt-4o-mini", "text-embedding-3-small", tt.description)
+			if tt.wantErr != (err != nil) {
+				t.Fatalf("EnsureMemoryStoreCreated error = %v, wantErr = %v", err, tt.wantErr)
+			}
+
+			requests := transport.Requests()
+			if len(requests) != len(tt.wantPaths) {
+				t.Fatalf("request count = %d, want %d", len(requests), len(tt.wantPaths))
+			}
+			for i, want := range tt.wantPaths {
+				if requests[i].Path != want {
+					t.Fatalf("request[%d] path = %q, want %q", i, requests[i].Path, want)
+				}
+			}
+			if requests[0].Method != http.MethodGet {
+				t.Fatalf("first request method = %q, want GET", requests[0].Method)
+			}
+
+			if len(tt.wantPaths) != 2 {
+				return
+			}
+			post := requests[1]
+			if post.Method != http.MethodPost {
+				t.Fatalf("second request method = %q, want POST", post.Method)
+			}
+			body := jsonMap(t, post.Body)
+			if body["name"] != "memory" || body["description"] != "team memory" {
+				t.Fatalf("create body = %#v", body)
+			}
+			definition, ok := body["definition"].(map[string]any)
+			if !ok {
+				t.Fatalf("definition = %#v", body["definition"])
+			}
+			if definition["chat_model"] != "gpt-4o-mini" || definition["embedding_model"] != "text-embedding-3-small" {
+				t.Fatalf("definition = %#v", definition)
+			}
+		})
 	}
 }
 
