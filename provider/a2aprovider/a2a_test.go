@@ -1513,6 +1513,132 @@ func TestRunStreamingWithTaskStatusUpdateEvent_WithMessage(t *testing.T) {
 	})
 }
 
+// TestRunWithAgentTaskResponse_SurfacesArtifactMetadata asserts that an
+// artifact's own Metadata is surfaced in the response update's
+// AdditionalProperties, matching .NET's A2A conversion which preserves
+// artifact-level metadata rather than dropping it.
+func TestRunWithAgentTaskResponse_SurfacesArtifactMetadata(t *testing.T) {
+	transport := &mockA2ATransport{
+		responseToReturn: &a2a.Task{
+			ID:        a2a.TaskID("task-meta"),
+			ContextID: "context-meta",
+			Status: a2a.TaskStatus{
+				State: a2a.TaskStateCompleted,
+			},
+			Metadata: map[string]any{"task-key": "task-value"},
+			Artifacts: []*a2a.Artifact{
+				{
+					ID:       a2a.ArtifactID("art-1"),
+					Metadata: map[string]any{"ext": "v"},
+					Parts:    a2a.ContentParts{a2a.NewTextPart("Artifact content")},
+				},
+			},
+		},
+	}
+	a := newTestAgent(transport, agent.Config{})
+
+	var updates []*agent.ResponseUpdate
+	for update, err := range a.RunText(t.Context(), "Start a task") {
+		if err != nil {
+			t.Fatalf("error = %v, want nil", err)
+		}
+		updates = append(updates, update)
+	}
+
+	if len(updates) != 1 {
+		t.Fatalf("len(updates) = %d, want 1", len(updates))
+	}
+	props := updates[0].AdditionalProperties
+	if got, ok := props["ext"]; !ok || got != "v" {
+		t.Errorf("AdditionalProperties[ext] = %v (ok=%v), want %q", got, ok, "v")
+	}
+	if got, ok := props["task-key"]; !ok || got != "task-value" {
+		t.Errorf("AdditionalProperties[task-key] = %v (ok=%v), want %q", got, ok, "task-value")
+	}
+}
+
+// TestRunWithAgentTaskResponse_NoMetadataYieldsNilProperties asserts that a task
+// with no task-level or artifact-level metadata produces an update with nil
+// AdditionalProperties rather than a non-nil empty map.
+func TestRunWithAgentTaskResponse_NoMetadataYieldsNilProperties(t *testing.T) {
+	transport := &mockA2ATransport{
+		responseToReturn: &a2a.Task{
+			ID:        a2a.TaskID("task-nometa"),
+			ContextID: "context-nometa",
+			Status: a2a.TaskStatus{
+				State: a2a.TaskStateCompleted,
+			},
+			Metadata: map[string]any{},
+			Artifacts: []*a2a.Artifact{
+				{
+					ID:       a2a.ArtifactID("art-1"),
+					Metadata: map[string]any{},
+					Parts:    a2a.ContentParts{a2a.NewTextPart("Artifact content")},
+				},
+			},
+		},
+	}
+	a := newTestAgent(transport, agent.Config{})
+
+	var updates []*agent.ResponseUpdate
+	for update, err := range a.RunText(t.Context(), "Start a task") {
+		if err != nil {
+			t.Fatalf("error = %v, want nil", err)
+		}
+		updates = append(updates, update)
+	}
+
+	if len(updates) != 1 {
+		t.Fatalf("len(updates) = %d, want 1", len(updates))
+	}
+	if props := updates[0].AdditionalProperties; props != nil {
+		t.Errorf("AdditionalProperties = %v, want nil", props)
+	}
+}
+
+// TestRunStreamingWithTaskArtifactUpdateEvent_SurfacesArtifactMetadata asserts
+// that the artifact's Metadata carried by a TaskArtifactUpdateEvent is folded
+// into the update's AdditionalProperties alongside the event-level metadata.
+func TestRunStreamingWithTaskArtifactUpdateEvent_SurfacesArtifactMetadata(t *testing.T) {
+	transport := &mockA2ATransport{
+		streamingResponseToReturn: &a2a.TaskArtifactUpdateEvent{
+			TaskID:    a2a.TaskID("task-artifact-meta"),
+			ContextID: "ctx-artifact-meta",
+			Metadata:  map[string]any{"event-key": "event-value"},
+			Artifact: &a2a.Artifact{
+				ID:       a2a.ArtifactID("artifact-meta"),
+				Metadata: map[string]any{"ext": "v"},
+				Parts:    a2a.ContentParts{a2a.NewTextPart("Artifact data")},
+			},
+		},
+	}
+	a := newTestAgent(transport, agent.Config{})
+
+	session, err := a.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var updates []*agent.ResponseUpdate
+	for update, err := range a.RunText(t.Context(), "Process artifact", agent.WithSession(session), agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("error = %v, want nil", err)
+		}
+		updates = append(updates, update)
+	}
+
+	if len(updates) != 1 {
+		t.Fatalf("len(updates) = %d, want 1", len(updates))
+	}
+	props := updates[0].AdditionalProperties
+	if got, ok := props["ext"]; !ok || got != "v" {
+		t.Errorf("AdditionalProperties[ext] = %v (ok=%v), want %q", got, ok, "v")
+	}
+	if got, ok := props["event-key"]; !ok || got != "event-value" {
+		t.Errorf("AdditionalProperties[event-key] = %v (ok=%v), want %q", got, ok, "event-value")
+	}
+}
+
 // TestRunStreamingWithTaskArtifactUpdateEvent tests handling of TaskArtifactUpdateEvent
 func TestRunStreamingWithTaskArtifactUpdateEvent(t *testing.T) {
 	const taskID = "task-artifact-123"
