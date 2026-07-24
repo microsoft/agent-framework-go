@@ -10,10 +10,12 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/internal/messagetest"
 	"github.com/microsoft/agent-framework-go/message"
@@ -1593,5 +1595,168 @@ func TestChatEmptyChoices_NonStreaming(t *testing.T) {
 	}
 	if usage := resp.Usage(); usage.InputTokenCount != 12 || usage.TotalTokenCount != 12 {
 		t.Errorf("expected usage input=12 total=12 to be surfaced, got %+v", usage)
+	}
+}
+
+// newInjectionTestServer returns a server that answers the first request with a call to the
+// "Injecting" tool and every subsequent request with a final text answer, recording each
+// received request body so tests can assert what was forwarded to the provider.
+func newInjectionTestServer(t *testing.T) (server *httptest.Server, bodies *[]string, mu *sync.Mutex) {
+	t.Helper()
+	const toolCallOutput = `
+        {
+          "id": "chatcmpl-inject-1",
+          "object": "chat.completion",
+          "created": 1727894702,
+          "model": "gpt-4o-mini-2024-07-18",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [
+                  {"id": "call_1", "type": "function", "function": {"name": "Injecting", "arguments": "{}"}}
+                ],
+                "refusal": null
+              },
+              "logprobs": null,
+              "finish_reason": "tool_calls"
+            }
+          ]
+        }
+        `
+	const finalOutput = `
+        {
+          "id": "chatcmpl-inject-2",
+          "object": "chat.completion",
+          "created": 1727894703,
+          "model": "gpt-4o-mini-2024-07-18",
+          "choices": [
+            {
+              "index": 0,
+              "message": {"role": "assistant", "content": "Final answer after injection", "refusal": null},
+              "logprobs": null,
+              "finish_reason": "stop"
+            }
+          ]
+        }
+        `
+	var (
+		m    sync.Mutex
+		bods []string
+	)
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("failed reading request body: %v", err)
+			return
+		}
+		m.Lock()
+		bods = append(bods, string(body))
+		n := len(bods)
+		m.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		out := finalOutput
+		if n == 1 {
+			out = toolCallOutput
+		}
+		if _, err := io.WriteString(w, out); err != nil {
+			t.Errorf("failed writing response: %v", err)
+		}
+	}))
+	return server, &bods, &m
+}
+
+// TestChatMessageInjection_ToolInjectsMessage verifies that AgentConfig.EnableMessageInjection
+// is threaded into the provider-installed toolautocall middleware: a tool that enqueues a
+// message via MessageInjectorFromContext has that message forwarded to the provider on the
+// following service call. This mirrors the .NET MessageInjectingChatClient behavior.
+func TestChatMessageInjection_ToolInjectsMessage(t *testing.T) {
+	const injectedText = "injected follow-up from tool"
+
+	server, bodies, mu := newInjectionTestServer(t)
+	defer server.Close()
+
+	a := openaiprovider.NewChatCompletionsAgent(
+		openai.NewClient(option.WithBaseURL(server.URL)),
+		openaiprovider.AgentConfig{
+			Model:  "gpt-4o-mini",
+			Config: agent.Config{EnableMessageInjection: true},
+		},
+	)
+
+	type EmptyArgs struct{}
+	injecting := functool.MustNew(functool.Config{
+		Name:        "Injecting",
+		Description: "Injects a message",
+	}, func(ctx context.Context, _ EmptyArgs) (string, error) {
+		if mi := toolautocall.MessageInjectorFromContext(ctx); mi != nil {
+			mi.EnqueueMessages(message.New(&message.TextContent{Text: injectedText}))
+		}
+		return "tool done", nil
+	})
+
+	resp, err := a.RunText(t.Context(), "How old is Alice?", agent.WithTool(injecting)).Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if got := resp.String(); !strings.Contains(got, "Final answer after injection") {
+		t.Errorf("expected final answer in response, got %q", got)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(*bodies) < 2 {
+		t.Fatalf("expected an extra provider round after injection, got %d calls", len(*bodies))
+	}
+	if !strings.Contains((*bodies)[1], injectedText) {
+		t.Errorf("expected injected message %q to appear in second provider request, got %s", injectedText, (*bodies)[1])
+	}
+}
+
+// TestChatMessageInjection_DisabledReturnsNilInjector verifies the default behavior: when
+// AgentConfig.EnableMessageInjection is false, tools observe a nil MessageInjector and no
+// message is injected.
+func TestChatMessageInjection_DisabledReturnsNilInjector(t *testing.T) {
+	server, bodies, mu := newInjectionTestServer(t)
+	defer server.Close()
+
+	a := openaiprovider.NewChatCompletionsAgent(
+		openai.NewClient(option.WithBaseURL(server.URL)),
+		openaiprovider.AgentConfig{
+			Model:  "gpt-4o-mini",
+			Config: agent.Config{},
+		},
+	)
+
+	const injectedText = "should not be injected"
+	var gotInjector *toolautocall.MessageInjector
+
+	type EmptyArgs struct{}
+	injecting := functool.MustNew(functool.Config{
+		Name:        "Injecting",
+		Description: "Injects a message",
+	}, func(ctx context.Context, _ EmptyArgs) (string, error) {
+		gotInjector = toolautocall.MessageInjectorFromContext(ctx)
+		if gotInjector != nil {
+			gotInjector.EnqueueMessages(message.New(&message.TextContent{Text: injectedText}))
+		}
+		return "tool done", nil
+	})
+
+	if _, err := a.RunText(t.Context(), "How old is Alice?", agent.WithTool(injecting)).Collect(); err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if gotInjector != nil {
+		t.Fatal("expected nil MessageInjector when EnableMessageInjection is false")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	for i, b := range *bodies {
+		if strings.Contains(b, injectedText) {
+			t.Errorf("did not expect injected text in provider request %d, got %s", i, b)
+		}
 	}
 }

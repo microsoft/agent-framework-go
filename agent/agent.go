@@ -77,6 +77,13 @@ type Config struct {
 	// DisableFuncAutoCall tells provider constructors not to add automatic function-tool calling middleware.
 	DisableFuncAutoCall bool
 
+	// EnableMessageInjection lets tool implementations enqueue additional messages into the
+	// automatic function-call loop via the injector returned by
+	// [github.com/microsoft/agent-framework-go/agent/harness/toolautocall.MessageInjectorFromContext].
+	// It is threaded into the provider-installed toolautocall middleware and has no effect when
+	// DisableFuncAutoCall is true.
+	EnableMessageInjection bool
+
 	// Logger receives run, middleware, and provider diagnostics.
 	Logger *slog.Logger
 

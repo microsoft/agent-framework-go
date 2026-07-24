@@ -75,8 +75,9 @@ func NewChatCompletionsAgent(oclient openai.Client, config AgentConfig) *agent.A
 	var providerMiddlewares []agent.Middleware
 	if !config.DisableFuncAutoCall {
 		providerMiddlewares = append(providerMiddlewares, toolautocall.New(toolautocall.Config{
-			Logger:           config.Logger,
-			LogSensitiveData: config.LogSensitiveData,
+			Logger:                 config.Logger,
+			LogSensitiveData:       config.LogSensitiveData,
+			EnableMessageInjection: config.EnableMessageInjection,
 		}))
 	}
 	return agent.New(agent.ProviderConfig{
