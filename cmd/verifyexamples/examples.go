@@ -583,6 +583,13 @@ var agentsExamples = []ExampleDefinition{
 		SkipReason:                   "Starts an MCP server that does not exit.",
 	},
 	{
+		Name:                         "02_agents_mcp_local_stdio_mcp",
+		ProjectPath:                  "examples/02-agents/mcp/local_stdio_mcp",
+		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
+		OptionalEnvironmentVariables: []string{"FOUNDRY_MODEL"},
+		SkipReason:                   "Spawns a local stdio MCP server subprocess (go run) that requires live Foundry credentials.",
+	},
+	{
 		Name:        "02_agents_providers_github_copilot",
 		ProjectPath: "examples/02-agents/providers/github-copilot",
 		Inputs:      inputLines("Y", "Y", "Y"),
