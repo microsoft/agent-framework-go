@@ -35,12 +35,163 @@ func AddTool(src *mcp.Server, tl tool.FuncTool) {
 	})
 }
 
-func Connect(ctx context.Context, transport mcp.Transport) (*mcp.ClientSession, error) {
+// ConnectOption configures the MCP client that Connect constructs. Options are
+// additive: with no options Connect behaves exactly as before, advertising no
+// sampling capability and ignoring server list-changed notifications.
+type ConnectOption func(*mcp.ClientOptions)
+
+// SamplingChatClient produces the host model's reply to a server-initiated
+// sampling/createMessage request. It mirrors the Python client's
+// sampling_callback and the .NET sampling IChatClient: an MCP server may
+// delegate sub-reasoning to the host, which answers with the caller's model.
+type SamplingChatClient interface {
+	// GetResponse returns the assistant reply for the translated conversation.
+	// maxTokens is the clamped token budget for the reply (0 when unbounded).
+	GetResponse(ctx context.Context, messages []*message.Message, maxTokens int64) (*message.Message, error)
+}
+
+// SamplingApprover decides whether a server-initiated sampling request may run
+// against the host model. Returning false, an error, or supplying a nil
+// approver denies the request, mirroring the Python client's deny-by-default
+// policy for host-in-the-loop sampling.
+type SamplingApprover func(ctx context.Context, params *mcp.CreateMessageParams) (bool, error)
+
+// WithSampling advertises the sampling capability and services incoming
+// sampling/createMessage requests using client. Requests are denied unless
+// approve is non-nil and returns true. maxTokens, when positive, clamps the
+// server-requested token budget passed to the client.
+func WithSampling(client SamplingChatClient, approve SamplingApprover, maxTokens int64) ConnectOption {
+	return func(opts *mcp.ClientOptions) {
+		opts.CreateMessageHandler = func(ctx context.Context, req *mcp.CreateMessageRequest) (*mcp.CreateMessageResult, error) {
+			return handleSampling(ctx, client, approve, maxTokens, req.Params)
+		}
+	}
+}
+
+// WithToolListChanged invokes cb when the server sends
+// notifications/tools/list_changed, letting the caller re-run ListTools to
+// refresh a static tool set mid-session.
+func WithToolListChanged(cb func()) ConnectOption {
+	return func(opts *mcp.ClientOptions) {
+		opts.ToolListChangedHandler = func(context.Context, *mcp.ToolListChangedRequest) {
+			if cb != nil {
+				cb()
+			}
+		}
+	}
+}
+
+// WithPromptListChanged invokes cb when the server sends
+// notifications/prompts/list_changed.
+func WithPromptListChanged(cb func()) ConnectOption {
+	return func(opts *mcp.ClientOptions) {
+		opts.PromptListChangedHandler = func(context.Context, *mcp.PromptListChangedRequest) {
+			if cb != nil {
+				cb()
+			}
+		}
+	}
+}
+
+func Connect(ctx context.Context, transport mcp.Transport, opts ...ConnectOption) (*mcp.ClientSession, error) {
+	clientOptions := &mcp.ClientOptions{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(clientOptions)
+		}
+	}
 	client := mcp.NewClient(&mcp.Implementation{
 		Name:    "agent-framework-go-mcp-client",
 		Version: "1.0.0",
-	}, nil)
+	}, clientOptions)
 	return client.Connect(ctx, transport, nil)
+}
+
+func handleSampling(ctx context.Context, client SamplingChatClient, approve SamplingApprover, maxTokens int64, params *mcp.CreateMessageParams) (*mcp.CreateMessageResult, error) {
+	if client == nil {
+		return nil, fmt.Errorf("mcp sampling: no chat client configured")
+	}
+	// Deny by default: a server may only borrow the host model when the caller
+	// has explicitly opted in via an approval callback (matches Python).
+	if approve == nil {
+		return nil, fmt.Errorf("mcp sampling: request denied (no approval callback configured)")
+	}
+	approved, err := approve(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("mcp sampling: approval failed: %w", err)
+	}
+	if !approved {
+		return nil, fmt.Errorf("mcp sampling: request denied by approval callback")
+	}
+
+	requested := int64(0)
+	if params != nil {
+		requested = params.MaxTokens
+	}
+	reply, err := client.GetResponse(ctx, samplingMessagesToAgent(params), clampMaxTokens(requested, maxTokens))
+	if err != nil {
+		return nil, fmt.Errorf("mcp sampling: chat client failed: %w", err)
+	}
+
+	return &mcp.CreateMessageResult{
+		Role:       mcp.Role(message.RoleAssistant),
+		Content:    samplingReplyContent(reply),
+		StopReason: "endTurn",
+	}, nil
+}
+
+// clampMaxTokens limits the server-requested token budget to limit. A
+// non-positive limit leaves the request unbounded; a non-positive request
+// adopts the limit.
+func clampMaxTokens(requested, limit int64) int64 {
+	if limit <= 0 {
+		return requested
+	}
+	if requested <= 0 || requested > limit {
+		return limit
+	}
+	return requested
+}
+
+func samplingMessagesToAgent(params *mcp.CreateMessageParams) []*message.Message {
+	if params == nil {
+		return nil
+	}
+	messages := make([]*message.Message, 0, len(params.Messages)+1)
+	if params.SystemPrompt != "" {
+		messages = append(messages, &message.Message{
+			Role:     message.RoleSystem,
+			Contents: message.Contents{&message.TextContent{Text: params.SystemPrompt}},
+		})
+	}
+	for _, samplingMessage := range params.Messages {
+		if samplingMessage == nil {
+			continue
+		}
+		messages = append(messages, &message.Message{
+			Role:     samplingRoleToAgent(samplingMessage.Role),
+			Contents: mcpContentToAgentContent([]mcp.Content{samplingMessage.Content}),
+		})
+	}
+	return messages
+}
+
+func samplingRoleToAgent(role mcp.Role) message.Role {
+	if role == mcp.Role(message.RoleAssistant) {
+		return message.RoleAssistant
+	}
+	return message.RoleUser
+}
+
+func samplingReplyContent(reply *message.Message) mcp.Content {
+	if reply != nil {
+		for _, content := range reply.Contents {
+			if content != nil {
+				return agentContentToMCPContent(content)
+			}
+		}
+	}
+	return &mcp.TextContent{}
 }
 
 func ListTools(ctx context.Context, session *mcp.ClientSession) ([]tool.Tool, error) {

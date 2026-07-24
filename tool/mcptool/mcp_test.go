@@ -9,6 +9,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
@@ -972,6 +973,12 @@ func sameNumber(value any, want float64) bool {
 
 func connectInMemory(t *testing.T, ctx context.Context, server *mcp.Server) *mcp.ClientSession {
 	t.Helper()
+	clientSession, _ := connectInMemoryWithOptions(t, ctx, server)
+	return clientSession
+}
+
+func connectInMemoryWithOptions(t *testing.T, ctx context.Context, server *mcp.Server, opts ...mcptool.ConnectOption) (*mcp.ClientSession, *mcp.ServerSession) {
+	t.Helper()
 	clientTransport, serverTransport := mcp.NewInMemoryTransports()
 	serverSession, err := server.Connect(ctx, serverTransport, nil)
 	if err != nil {
@@ -979,12 +986,150 @@ func connectInMemory(t *testing.T, ctx context.Context, server *mcp.Server) *mcp
 	}
 	t.Cleanup(func() { _ = serverSession.Close() })
 
-	clientSession, err := mcptool.Connect(ctx, clientTransport)
+	clientSession, err := mcptool.Connect(ctx, clientTransport, opts...)
 	if err != nil {
 		t.Fatalf("client Connect() error = %v", err)
 	}
 	t.Cleanup(func() { _ = clientSession.Close() })
-	return clientSession
+	return clientSession, serverSession
+}
+
+type stubSamplingChatClient struct {
+	called   bool
+	reply    message.Content
+	gotMax   int64
+	gotRoles []message.Role
+	gotTexts []string
+}
+
+func (s *stubSamplingChatClient) GetResponse(_ context.Context, messages []*message.Message, maxTokens int64) (*message.Message, error) {
+	s.called = true
+	s.gotMax = maxTokens
+	for _, m := range messages {
+		s.gotRoles = append(s.gotRoles, m.Role)
+		s.gotTexts = append(s.gotTexts, m.Contents.Text())
+	}
+	return &message.Message{Role: message.RoleAssistant, Contents: message.Contents{s.reply}}, nil
+}
+
+// A server-initiated sampling request must be denied when the caller wired no
+// approval callback, mirroring the Python client's deny-by-default policy: the
+// host model is never borrowed silently.
+func TestConnectSamplingDeniesByDefault(t *testing.T) {
+	ctx := context.Background()
+	server := mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "1.0.0"}, nil)
+	stub := &stubSamplingChatClient{reply: &message.TextContent{Text: "should not be used"}}
+	_, serverSession := connectInMemoryWithOptions(t, ctx, server, mcptool.WithSampling(stub, nil, 0))
+
+	_, err := serverSession.CreateMessage(ctx, &mcp.CreateMessageParams{
+		MaxTokens: 100,
+		Messages: []*mcp.SamplingMessage{
+			{Role: "user", Content: &mcp.TextContent{Text: "hi"}},
+		},
+	})
+	if err == nil {
+		t.Fatal("CreateMessage() error = nil, want deny error")
+	}
+	if stub.called {
+		t.Fatal("chat client was invoked despite deny-by-default")
+	}
+}
+
+// With an approving callback the request is serviced by the host chat client:
+// the server-requested budget is clamped, the conversation (including the
+// system prompt) is translated, and the reply is returned as an assistant
+// message with an endTurn stop reason.
+func TestConnectSamplingApproveInvokesChatClient(t *testing.T) {
+	ctx := context.Background()
+	server := mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "1.0.0"}, nil)
+	stub := &stubSamplingChatClient{reply: &message.TextContent{Text: "host reply"}}
+	approve := func(context.Context, *mcp.CreateMessageParams) (bool, error) { return true, nil }
+	_, serverSession := connectInMemoryWithOptions(t, ctx, server, mcptool.WithSampling(stub, approve, 64))
+
+	result, err := serverSession.CreateMessage(ctx, &mcp.CreateMessageParams{
+		MaxTokens:    1000,
+		SystemPrompt: "be terse",
+		Messages: []*mcp.SamplingMessage{
+			{Role: "user", Content: &mcp.TextContent{Text: "hi"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateMessage() error = %v", err)
+	}
+	if !stub.called {
+		t.Fatal("chat client was not invoked")
+	}
+	if stub.gotMax != 64 {
+		t.Fatalf("clamped maxTokens = %d, want 64", stub.gotMax)
+	}
+	wantRoles := []message.Role{message.RoleSystem, message.RoleUser}
+	if len(stub.gotRoles) != len(wantRoles) {
+		t.Fatalf("translated roles = %v, want %v", stub.gotRoles, wantRoles)
+	}
+	for i, want := range wantRoles {
+		if stub.gotRoles[i] != want {
+			t.Fatalf("translated role[%d] = %q, want %q", i, stub.gotRoles[i], want)
+		}
+	}
+	if stub.gotTexts[0] != "be terse" || stub.gotTexts[1] != "hi" {
+		t.Fatalf("translated texts = %v, want system prompt then user message", stub.gotTexts)
+	}
+	text, ok := result.Content.(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("result content is %T, want *mcp.TextContent", result.Content)
+	}
+	if text.Text != "host reply" {
+		t.Fatalf("result text = %q, want host reply", text.Text)
+	}
+	if result.Role != mcp.Role(message.RoleAssistant) {
+		t.Fatalf("result role = %q, want assistant", result.Role)
+	}
+	if result.StopReason != "endTurn" {
+		t.Fatalf("result stopReason = %q, want endTurn", result.StopReason)
+	}
+}
+
+// A server that adds a tool mid-session sends notifications/tools/list_changed;
+// with WithToolListChanged wired, the caller's callback fires so it can re-run
+// ListTools and pick up the new tool.
+func TestConnectToolListChangedFiresCallback(t *testing.T) {
+	ctx := context.Background()
+	server := mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "1.0.0"}, nil)
+	server.AddTool(&mcp.Tool{Name: "first", Description: "first tool", InputSchema: map[string]any{"type": "object"}},
+		func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "ok"}}}, nil
+		})
+
+	changed := make(chan struct{}, 1)
+	clientSession, _ := connectInMemoryWithOptions(t, ctx, server, mcptool.WithToolListChanged(func() {
+		select {
+		case changed <- struct{}{}:
+		default:
+		}
+	}))
+
+	server.AddTool(&mcp.Tool{Name: "second", Description: "second tool", InputSchema: map[string]any{"type": "object"}},
+		func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "ok"}}}, nil
+		})
+
+	select {
+	case <-changed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("tool list changed callback did not fire")
+	}
+
+	tools, err := mcptool.ListTools(ctx, clientSession)
+	if err != nil {
+		t.Fatalf("ListTools() error = %v", err)
+	}
+	names := make(map[string]bool, len(tools))
+	for _, tl := range tools {
+		names[tl.Name()] = true
+	}
+	if !names["second"] {
+		t.Fatalf("tools = %v, want the newly added second tool", names)
+	}
 }
 
 // A tool exposed via AddTool may return a typed-nil message.Content (e.g. a
