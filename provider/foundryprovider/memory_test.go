@@ -277,4 +277,85 @@ func TestMemoryProviderInvokedLogsUpdateFailureAndDoesNotReturnError(t *testing.
 	}
 }
 
+func TestMemoryProviderEnsureStoredMemoriesDeletedDeletesScope(t *testing.T) {
+	transport := &recordingTransport{handle: func(req *http.Request, _ string) (*http.Response, error) {
+		return jsonResponse(req, http.StatusOK, `{"deleted_count":3}`), nil
+	}}
+	provider := foundryprovider.NewMemoryProvider(validEndpoint, validCredential, "memory", validScope, foundryprovider.MemoryProviderConfig{
+		ClientOptions: azcore.ClientOptions{Transport: transport},
+	})
+
+	if err := provider.EnsureStoredMemoriesDeleted(t.Context(), nil); err != nil {
+		t.Fatalf("EnsureStoredMemoriesDeleted error = %v", err)
+	}
+
+	requests := transport.Requests()
+	if len(requests) != 1 {
+		t.Fatalf("request count = %d, want 1", len(requests))
+	}
+	req := requests[0]
+	if req.Method != http.MethodPost || req.Path != "/memory_stores/memory:delete_scope" {
+		t.Fatalf("request = %s %s", req.Method, req.Path)
+	}
+	if got := req.Header.Get("Foundry-Features"); got != "MemoryStores=V1Preview" {
+		t.Fatalf("Foundry-Features = %q", got)
+	}
+	if body := jsonMap(t, req.Body); body["scope"] != "user-456" {
+		t.Fatalf("scope = %#v", body["scope"])
+	}
+}
+
+func TestMemoryProviderEnsureStoredMemoriesDeletedTreatsNotFoundAsSuccess(t *testing.T) {
+	transport := &recordingTransport{handle: func(req *http.Request, _ string) (*http.Response, error) {
+		return jsonResponse(req, http.StatusNotFound, `{"error":{"code":"NotFound","message":"scope not found"}}`), nil
+	}}
+	provider := foundryprovider.NewMemoryProvider(validEndpoint, validCredential, "memory", validScope, foundryprovider.MemoryProviderConfig{
+		ClientOptions: azcore.ClientOptions{Transport: transport},
+	})
+
+	if err := provider.EnsureStoredMemoriesDeleted(t.Context(), nil); err != nil {
+		t.Fatalf("EnsureStoredMemoriesDeleted error = %v", err)
+	}
+
+	requests := transport.Requests()
+	if len(requests) != 1 {
+		t.Fatalf("request count = %d, want 1", len(requests))
+	}
+	req := requests[0]
+	if req.Method != http.MethodPost || req.Path != "/memory_stores/memory:delete_scope" {
+		t.Fatalf("request = %s %s", req.Method, req.Path)
+	}
+	if got := req.Header.Get("Foundry-Features"); got != "MemoryStores=V1Preview" {
+		t.Fatalf("Foundry-Features = %q", got)
+	}
+	if body := jsonMap(t, req.Body); body["scope"] != "user-456" {
+		t.Fatalf("scope = %#v", body["scope"])
+	}
+}
+
+func TestMemoryProviderEnsureStoredMemoriesDeletedSurfacesOtherErrors(t *testing.T) {
+	transport := &recordingTransport{handle: func(req *http.Request, _ string) (*http.Response, error) {
+		return jsonResponse(req, http.StatusInternalServerError, `{"error":{"code":"InternalError","message":"boom"}}`), nil
+	}}
+	provider := foundryprovider.NewMemoryProvider(validEndpoint, validCredential, "memory", validScope, foundryprovider.MemoryProviderConfig{
+		ClientOptions: azcore.ClientOptions{Transport: transport},
+	})
+
+	err := provider.EnsureStoredMemoriesDeleted(t.Context(), nil)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var respErr *azcore.ResponseError
+	if !errors.As(err, &respErr) || respErr.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestMemoryProviderEnsureStoredMemoriesDeletedPanicsWhenScopeIsEmpty(t *testing.T) {
+	provider := foundryprovider.NewMemoryProvider(validEndpoint, validCredential, "memory", func(*agent.Session) string { return " " }, foundryprovider.MemoryProviderConfig{})
+	assertPanics(t, func() {
+		_ = provider.EnsureStoredMemoriesDeleted(t.Context(), nil)
+	})
+}
+
 func validScope(*agent.Session) string { return "user-456" }
