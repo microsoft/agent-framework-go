@@ -413,7 +413,14 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 		case *hostedtool.MCPServer:
 			var variant responses.ToolMcpParam
 			variant.ServerLabel = tl.ServerName
-			if _, err := url.Parse(tl.ServerAddress); err == nil {
+			// The Responses API accepts either a server_url (a full HTTP(S)
+			// endpoint) or a connector_id (a bare service-connector identifier
+			// such as "connector_googledrive"); the two are mutually exclusive.
+			// url.Parse only errors on control-char/malformed input, so it
+			// cannot distinguish the two. Discriminate on an actual URL scheme
+			// instead, routing scheme-bearing addresses to server_url and bare
+			// connector IDs to connector_id.
+			if u, err := url.Parse(tl.ServerAddress); err == nil && (u.Scheme == "http" || u.Scheme == "https") {
 				variant.ServerURL = openai.String(tl.ServerAddress)
 			} else {
 				variant.ConnectorID = tl.ServerAddress
