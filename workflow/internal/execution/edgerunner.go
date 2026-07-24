@@ -198,12 +198,21 @@ func (em *EdgeRunner) PrepareDeliveryForEdge(ctx context.Context, edge workflow.
 		span.End()
 	}()
 
-	if edge.Condition != nil && !edge.Condition(envelope.Message) {
+	// Unwrap a PortableValue to its declared runtime type before invoking the
+	// caller-supplied Condition and Assigner delegates, so a user predicate like
+	// m.(Order).Total > 100 sees the concrete type rather than the wrapper.
+	// Only unwrap when a delegate will actually consume the message; otherwise
+	// avoid the cost (and potential side-effects) of resolving the runtime type.
+	message := envelope.Message
+	if edge.Condition != nil || edge.Assigner != nil {
+		message = em.unwrapMessage(ctx, envelope)
+	}
+	if edge.Condition != nil && !edge.Condition(message) {
 		// Condition not met; do not route message.
 		span.SetDeliveryStatus(observability.DeliveryStatusDroppedConditionFalse)
 		return nil, nil
 	}
-	targetIDs := selectedTargetIDs(edge, envelope)
+	targetIDs := selectedTargetIDs(edge, envelope, message)
 	if len(targetIDs) == 0 {
 		span.SetDeliveryStatus(observability.DeliveryStatusDroppedTargetMismatch)
 		return nil, nil
@@ -279,14 +288,33 @@ func (em *EdgeRunner) filterEnvelopesForTarget(ctx context.Context, envelopes []
 	return filtered, nil
 }
 
-func selectedTargetIDs(edge workflow.Edge, envelope *MessageEnvelope) []string {
+// unwrapMessage resolves a workflow.PortableValue envelope to its declared
+// runtime type so the caller-supplied Condition and Assigner delegates receive
+// the concrete message value, mirroring messageRouter.routeMessage. It falls
+// back to the raw message whenever the runtime type cannot be resolved.
+func (em *EdgeRunner) unwrapMessage(ctx context.Context, envelope *MessageEnvelope) any {
+	portable, ok := envelope.Message.(workflow.PortableValue)
+	if !ok {
+		return envelope.Message
+	}
+	runtimeType, err := em.messageRuntimeType(ctx, envelope)
+	if err != nil || runtimeType == nil {
+		return envelope.Message
+	}
+	if value, ok := portable.As(runtimeType); ok {
+		return value
+	}
+	return envelope.Message
+}
+
+func selectedTargetIDs(edge workflow.Edge, envelope *MessageEnvelope, message any) []string {
 	targetIDs := edge.Connection.SinkIDs
 	if edge.Assigner != nil {
 		targetIDs = make([]string, 0, len(edge.Connection.SinkIDs))
 		// Assigner is caller-supplied (WithEdgeAssigner). Guard against both a
 		// nil sequence (ranging over a nil iter.Seq panics) and out-of-range
 		// indices, so a misbehaving assigner cannot crash the workflow runtime.
-		if seq := edge.Assigner(len(edge.Connection.SinkIDs), envelope.Message); seq != nil {
+		if seq := edge.Assigner(len(edge.Connection.SinkIDs), message); seq != nil {
 			for id := range seq {
 				if id >= 0 && id < len(edge.Connection.SinkIDs) {
 					targetIDs = append(targetIDs, edge.Connection.SinkIDs[id])
