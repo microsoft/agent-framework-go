@@ -144,6 +144,10 @@ func (p *provider) responseUpdateForSessionEvent(event copilot.SessionEvent, isS
 		return p.assistantMessageDeltaUpdate(event, data), false, nil
 	case *copilot.AssistantMessageData:
 		return p.assistantMessageUpdate(event, data, isStreaming), false, nil
+	case *copilot.AssistantReasoningData:
+		return p.assistantReasoningUpdate(event, data), false, nil
+	case *copilot.AssistantReasoningDeltaData:
+		return p.assistantReasoningDeltaUpdate(event, data), false, nil
 	case *copilot.ToolExecutionStartData:
 		return p.toolExecutionStartUpdate(event, data), false, nil
 	case *copilot.ToolExecutionCompleteData:
@@ -528,8 +532,43 @@ func (p *provider) assistantMessageUpdate(event copilot.SessionEvent, data *copi
 			ContentHeader: message.ContentHeader{RawRepresentation: event},
 			Text:          data.Content,
 		}}
+		if data.ReasoningText != nil {
+			update.Contents = append(update.Contents, &message.TextReasoningContent{
+				ContentHeader: message.ContentHeader{RawRepresentation: event},
+				Text:          *data.ReasoningText,
+				ProtectedData: firstNonNilString(data.ReasoningOpaque, data.EncryptedContent),
+			})
+		}
 	}
 	return update
+}
+
+func (p *provider) assistantReasoningUpdate(event copilot.SessionEvent, data *copilot.AssistantReasoningData) *agent.ResponseUpdate {
+	content := &message.TextReasoningContent{
+		ContentHeader: message.ContentHeader{RawRepresentation: event},
+		Text:          data.Content,
+	}
+	return &agent.ResponseUpdate{
+		RawRepresentation: event,
+		Role:              message.RoleAssistant,
+		MessageID:         data.ReasoningID,
+		CreatedAt:         event.Timestamp,
+		Contents:          []message.Content{content},
+	}
+}
+
+func (p *provider) assistantReasoningDeltaUpdate(event copilot.SessionEvent, data *copilot.AssistantReasoningDeltaData) *agent.ResponseUpdate {
+	content := &message.TextReasoningContent{
+		ContentHeader: message.ContentHeader{RawRepresentation: event},
+		Text:          data.DeltaContent,
+	}
+	return &agent.ResponseUpdate{
+		RawRepresentation: event,
+		Role:              message.RoleAssistant,
+		MessageID:         data.ReasoningID,
+		CreatedAt:         event.Timestamp,
+		Contents:          []message.Content{content},
+	}
 }
 
 func (p *provider) toolExecutionStartUpdate(event copilot.SessionEvent, data *copilot.ToolExecutionStartData) *agent.ResponseUpdate {
@@ -627,6 +666,15 @@ func int64Value(value *int64) int64 {
 		return 0
 	}
 	return *value
+}
+
+func firstNonNilString(values ...*string) string {
+	for _, value := range values {
+		if value != nil {
+			return *value
+		}
+	}
+	return ""
 }
 
 func rawEventUpdate(event copilot.SessionEvent) *agent.ResponseUpdate {

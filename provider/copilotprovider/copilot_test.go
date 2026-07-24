@@ -361,6 +361,72 @@ func TestConvertToAgentResponseUpdate_UsageEvent_SurfacesReasoningTokens(t *test
 	}
 }
 
+func TestConvertToAgentResponseUpdate_ReasoningEvent_SurfacesReasoningContent(t *testing.T) {
+	const thinking = "Let me work through this step by step."
+	runtime := newFakeRuntime(t,
+		sessionEvent("assistant.reasoning", map[string]any{"content": thinking, "reasoningId": "r1"}),
+		idleEvent(),
+	)
+	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
+
+	response, err := runText(t, agent, "hello")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	reasoning := firstContent[*message.TextReasoningContent](t, response)
+	if reasoning.Text != thinking {
+		t.Fatalf("reasoning text = %q, want %q", reasoning.Text, thinking)
+	}
+}
+
+func TestConvertToAgentResponseUpdate_ReasoningDeltaEvent_SurfacesReasoningContent(t *testing.T) {
+	const chunk = "partial thought"
+	runtime := newFakeRuntime(t,
+		sessionEvent("assistant.reasoning_delta", map[string]any{"deltaContent": chunk, "reasoningId": "r1"}),
+		idleEvent(),
+	)
+	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
+
+	response, err := runText(t, agent, "hello")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	reasoning := firstContent[*message.TextReasoningContent](t, response)
+	if reasoning.Text != chunk {
+		t.Fatalf("reasoning text = %q, want %q", reasoning.Text, chunk)
+	}
+}
+
+func TestConvertToAgentResponseUpdate_AssistantMessageEventWhenNotStreaming_SurfacesReasoningText(t *testing.T) {
+	const expected = "Full response text"
+	const thinking = "internal reasoning"
+	runtime := newFakeRuntime(t,
+		sessionEvent("assistant.message", map[string]any{
+			"messageId":       "msg-r1",
+			"content":         expected,
+			"reasoningText":   thinking,
+			"reasoningOpaque": "opaque-blob",
+		}),
+		idleEvent(),
+	)
+	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
+
+	response, err := runText(t, agent, "hello", agentpkg.Stream(false))
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if text := firstContent[*message.TextContent](t, response); text.Text != expected {
+		t.Fatalf("text content = %q, want %q", text.Text, expected)
+	}
+	reasoning := firstContent[*message.TextReasoningContent](t, response)
+	if reasoning.Text != thinking {
+		t.Fatalf("reasoning text = %q, want %q", reasoning.Text, thinking)
+	}
+	if reasoning.ProtectedData != "opaque-blob" {
+		t.Fatalf("reasoning protected data = %q, want %q", reasoning.ProtectedData, "opaque-blob")
+	}
+}
+
 func TestConvertToAgentResponseUpdate_ToolExecutionStartEvent_WithNullData_ProducesEmptyFunctionCall(t *testing.T) {
 	runtime := newFakeRuntime(t,
 		sessionEvent("tool.execution_start", nil),
