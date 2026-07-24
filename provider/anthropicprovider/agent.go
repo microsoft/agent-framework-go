@@ -150,12 +150,27 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 			case anthropic.ContentBlockDeltaEvent:
 				contents = a.buildDelta(event.Delta.AsAny(), contents)
 			case anthropic.ContentBlockStopEvent:
-				if block, ok := accumulated.Content[event.Index].AsAny().(anthropic.ToolUseBlock); ok {
+				switch block := accumulated.Content[event.Index].AsAny().(type) {
+				case anthropic.ToolUseBlock:
 					contents = append(contents, &message.FunctionCallContent{
 						CallID:    block.ID,
 						Name:      block.Name,
 						Arguments: string(block.Input),
 					})
+				case anthropic.TextBlock:
+					// The text itself is streamed incrementally via TextDelta, but
+					// citations are only available on the accumulated block. Emit an
+					// annotations-only TextContent (empty Text avoids duplicating the
+					// streamed text) so streamed responses carry the same citation
+					// annotations as the non-streaming path.
+					if annotations := citationAnnotations(block.Citations); annotations != nil {
+						contents = append(contents, &message.TextContent{
+							ContentHeader: message.ContentHeader{
+								Annotations:       annotations,
+								RawRepresentation: block,
+							},
+						})
+					}
 				}
 			}
 
@@ -216,20 +231,10 @@ func toUsageDetailsDelta(usage anthropic.MessageDeltaUsage) message.UsageDetails
 func (a *client) buildBlock(index int, v any, contents []message.Content, functions map[int]*message.FunctionCallContent) []message.Content {
 	switch v := v.(type) {
 	case anthropic.TextBlock:
-		var annotations []message.Annotation
-		for _, citation := range v.Citations {
-			annotations = append(annotations, &message.CitationAnnotation{
-				FileID:            citation.FileID,
-				Snippet:           citation.CitedText,
-				Title:             cmp.Or(citation.DocumentTitle, citation.Title),
-				URL:               citation.URL,
-				RawRepresentation: citation,
-			})
-		}
 		contents = append(contents, &message.TextContent{
 			Text: v.Text,
 			ContentHeader: message.ContentHeader{
-				Annotations:       annotations,
+				Annotations:       citationAnnotations(v.Citations),
 				RawRepresentation: v,
 			},
 		})
@@ -256,6 +261,23 @@ func (a *client) buildBlock(index int, v any, contents []message.Content, functi
 		}
 	}
 	return contents
+}
+
+// citationAnnotations converts Anthropic text-block citations into
+// [message.CitationAnnotation] values. It returns nil when there are no
+// citations so callers can leave the annotations slice unset.
+func citationAnnotations(citations []anthropic.TextCitationUnion) []message.Annotation {
+	var annotations []message.Annotation
+	for _, citation := range citations {
+		annotations = append(annotations, &message.CitationAnnotation{
+			FileID:            citation.FileID,
+			Snippet:           citation.CitedText,
+			Title:             cmp.Or(citation.DocumentTitle, citation.Title),
+			URL:               citation.URL,
+			RawRepresentation: citation,
+		})
+	}
+	return annotations
 }
 
 func (a *client) buildDelta(v any, contents []message.Content) []message.Content {

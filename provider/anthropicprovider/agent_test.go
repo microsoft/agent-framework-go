@@ -285,6 +285,70 @@ func TestTextCitationsBecomeAnnotations(t *testing.T) {
 	}
 }
 
+// TestStreamingTextCitationsBecomeAnnotations mirrors
+// TestTextCitationsBecomeAnnotations for the streaming path: citations are only
+// present on the accumulated text block, so the content_block_stop handler must
+// surface them as annotations. The streamed text arrives via text_delta and the
+// citation via a citations_delta.
+func TestStreamingTextCitationsBecomeAnnotations(t *testing.T) {
+	stream := "" +
+		"event: message_start\n" +
+		`data: {"type":"message_start","message":{"id":"msg_stream_cite","type":"message","role":"assistant","content":[],"model":"claude-3-5-sonnet-20241022","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}` + "\n\n" +
+		"event: content_block_start\n" +
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}` + "\n\n" +
+		"event: content_block_delta\n" +
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"The answer cites the docs."}}` + "\n\n" +
+		"event: content_block_delta\n" +
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"citations_delta","citation":{"type":"web_search_result_location","cited_text":"source excerpt","encrypted_index":"enc_123","title":"Example Source","url":"https://example.com/source"}}}` + "\n\n" +
+		"event: content_block_stop\n" +
+		`data: {"type":"content_block_stop","index":0}` + "\n\n" +
+		"event: message_delta\n" +
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}` + "\n\n" +
+		"event: message_stop\n" +
+		`data: {"type":"message_stop"}` + "\n\n"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, stream)
+	}))
+	defer server.Close()
+
+	resp, err := newTestClient(t, server).RunText(t.Context(), "cite something", agent.Stream(true)).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var citation *message.CitationAnnotation
+	var streamedText string
+	for content := range resp.Contents() {
+		tc, ok := content.(*message.TextContent)
+		if !ok {
+			continue
+		}
+		streamedText += tc.Text
+		for _, ann := range tc.Annotations {
+			if c, ok := ann.(*message.CitationAnnotation); ok {
+				citation = c
+			}
+		}
+	}
+	if streamedText != "The answer cites the docs." {
+		t.Errorf("streamed text = %q, want %q", streamedText, "The answer cites the docs.")
+	}
+	if citation == nil {
+		t.Fatal("expected a citation annotation on the streamed text")
+	}
+	if citation.URL != "https://example.com/source" {
+		t.Errorf("citation URL = %q, want %q", citation.URL, "https://example.com/source")
+	}
+	if citation.Title != "Example Source" {
+		t.Errorf("citation Title = %q, want %q", citation.Title, "Example Source")
+	}
+	if citation.Snippet != "source excerpt" {
+		t.Errorf("citation Snippet = %q, want %q", citation.Snippet, "source excerpt")
+	}
+}
+
 // TestStructuredOutput_NonStreaming verifies that passing agent.WithStructuredOutput
 // with a typed struct causes the provider to:
 //  1. Send output_config.format with type "json_schema" and a schema derived
