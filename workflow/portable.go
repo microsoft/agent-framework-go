@@ -184,6 +184,13 @@ func (v PortableValue) MarshalJSON() ([]byte, error) {
 	if v.any == nil {
 		return nil, errors.New("cannot marshal zero PortableValue")
 	}
+	// Preserve the original wire bytes for a delayed value that was never read.
+	// Any() would generically decode the raw JSON (e.g. into map[string]any /
+	// float64) and lose type/large-integer fidelity on re-marshal, so short-circuit
+	// here to re-emit the retained JSON verbatim, matching .NET's JsonElement.
+	if raw, ok := v.any.(json.RawMessage); ok && v.cache == nil {
+		return json.Marshal(portableValueJSON{TypeID: v.TypeID, Value: raw})
+	}
 	value := v.Any()
 	if raw, ok := value.(json.RawMessage); ok {
 		return json.Marshal(portableValueJSON{TypeID: v.TypeID, Value: raw})
