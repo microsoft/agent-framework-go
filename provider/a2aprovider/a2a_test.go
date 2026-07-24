@@ -365,6 +365,60 @@ func TestRunWithExistingSession(t *testing.T) {
 	}
 }
 
+// TestRunAllowBackgroundResponsesSetsReturnImmediately verifies that the
+// AllowBackgroundResponses option propagates to the non-streaming send config's
+// ReturnImmediately field, mirroring .NET A2AAgent.RunCoreAsync.
+func TestRunAllowBackgroundResponsesSetsReturnImmediately(t *testing.T) {
+	newSession := func(a *agent.Agent) *agent.Session {
+		t.Helper()
+		session, err := a.CreateSession(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return session
+	}
+
+	t.Run("enabled", func(t *testing.T) {
+		transport := &mockA2ATransport{}
+		a := newTestAgent(transport, agent.Config{})
+
+		_, err := a.RunText(t.Context(), "Test message",
+			agent.WithSession(newSession(a)),
+			agent.AllowBackgroundResponses(true),
+		).Collect()
+		if err != nil {
+			t.Fatalf("error = %v, want nil", err)
+		}
+		if transport.capturedMessageSendParams == nil {
+			t.Fatal("capturedMessageSendParams is nil")
+		}
+		if transport.capturedMessageSendParams.Config == nil {
+			t.Fatal("capturedMessageSendParams.Config is nil, want non-nil")
+		}
+		if !transport.capturedMessageSendParams.Config.ReturnImmediately {
+			t.Error("Config.ReturnImmediately = false, want true")
+		}
+	})
+
+	t.Run("disabled", func(t *testing.T) {
+		transport := &mockA2ATransport{}
+		a := newTestAgent(transport, agent.Config{})
+
+		_, err := a.RunText(t.Context(), "Test message",
+			agent.WithSession(newSession(a)),
+		).Collect()
+		if err != nil {
+			t.Fatalf("error = %v, want nil", err)
+		}
+		if transport.capturedMessageSendParams == nil {
+			t.Fatal("capturedMessageSendParams is nil")
+		}
+		if cfg := transport.capturedMessageSendParams.Config; cfg != nil {
+			t.Errorf("Config = %+v, want nil to preserve the default wire request", cfg)
+		}
+	})
+}
+
 // TestRunWithSessionHavingDifferentContextID tests error when context ID mismatch
 func TestRunWithSessionHavingDifferentContextID(t *testing.T) {
 	transport := &mockA2ATransport{
