@@ -512,12 +512,20 @@ func addUsage(contents []message.Content, usage openai.CompletionUsage) []messag
 		TotalTokenCount:       usage.TotalTokens,
 		CachedInputTokenCount: usage.PromptTokensDetails.CachedTokens,
 		ReasoningTokenCount:   usage.CompletionTokensDetails.ReasoningTokens,
-		AdditionalCounts:      make(map[string]int64),
 	}
-	details.AdditionalCounts["PromptTokensDetails.AudioTokens"] = usage.PromptTokensDetails.AudioTokens
-	details.AdditionalCounts["CompletionTokensDetails.AudioTokens"] = usage.CompletionTokensDetails.AudioTokens
-	details.AdditionalCounts["CompletionTokensDetails.AcceptedPredictionTokens"] = usage.CompletionTokensDetails.AcceptedPredictionTokens
-	details.AdditionalCounts["CompletionTokensDetails.RejectedPredictionTokens"] = usage.CompletionTokensDetails.RejectedPredictionTokens
+	add := func(k string, v int64) {
+		if v == 0 {
+			return
+		}
+		if details.AdditionalCounts == nil {
+			details.AdditionalCounts = make(map[string]int64)
+		}
+		details.AdditionalCounts[k] = v
+	}
+	add("PromptTokensDetails.AudioTokens", usage.PromptTokensDetails.AudioTokens)
+	add("CompletionTokensDetails.AudioTokens", usage.CompletionTokensDetails.AudioTokens)
+	add("CompletionTokensDetails.AcceptedPredictionTokens", usage.CompletionTokensDetails.AcceptedPredictionTokens)
+	add("CompletionTokensDetails.RejectedPredictionTokens", usage.CompletionTokensDetails.RejectedPredictionTokens)
 	return append(contents, &message.UsageContent{Details: details})
 }
 
