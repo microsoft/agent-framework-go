@@ -285,11 +285,12 @@ func (r *runner) RequestEndRun(ctx context.Context) error {
 	return r.runContext.endRun(ctx)
 }
 
-// Checkpoints returns the list of created checkpoints.
+// IsCheckpointingEnabled reports whether a checkpoint manager is configured for this run.
 func (r *runner) IsCheckpointingEnabled() bool {
 	return r.checkpointMgr != nil
 }
 
+// Checkpoints returns the list of created checkpoints.
 func (r *runner) Checkpoints() []workflow.CheckpointInfo {
 	r.checkpointMu.Lock()
 	defer r.checkpointMu.Unlock()
