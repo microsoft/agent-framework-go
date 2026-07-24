@@ -755,6 +755,18 @@ var workflowExamples = []ExampleDefinition{
 		},
 	},
 	{
+		Name:            "03_workflows_checkpoint_filesystem_checkpoint",
+		ProjectPath:     "examples/03-workflows/checkpoint/filesystem_checkpoint",
+		IsDeterministic: true,
+		MustContain: []string{
+			"Persisted",
+			"Closed the checkpoint store.",
+			"Reopened checkpoint store from disk.",
+			"Retrieved",
+			"Workflow completed with result:",
+		},
+	},
+	{
 		Name:        "03_workflows_checkpoint_checkpoint_with_human_in_the_loop",
 		ProjectPath: "examples/03-workflows/checkpoint/checkpoint_with_human_in_the_loop",
 		Inputs:      inputLines("50", "25", "40", "45", "42", "50", "25", "40", "45", "42"),
