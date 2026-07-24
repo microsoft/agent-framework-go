@@ -79,6 +79,7 @@ type EdgeConnection struct {
 	SinkIDs   []string
 }
 
+// Equal reports whether c and other connect the same ordered SourceIDs and SinkIDs.
 func (c EdgeConnection) Equal(other EdgeConnection) bool {
 	return slices.Equal(c.SourceIDs, other.SourceIDs) && slices.Equal(c.SinkIDs, other.SinkIDs)
 }
