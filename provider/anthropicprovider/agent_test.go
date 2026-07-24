@@ -256,6 +256,42 @@ func TestStreamingFinishReason(t *testing.T) {
 	}
 }
 
+// TestStreamingFinishReasonNotClobbered verifies that once a non-empty
+// stop_reason has been captured from a message_delta, a later message_delta
+// carrying an empty stop_reason does not overwrite it. This exercises the guard
+// in the streaming path that skips empty stop_reason chunks.
+func TestStreamingFinishReasonNotClobbered(t *testing.T) {
+	stream := "" +
+		"event: message_start\n" +
+		`data: {"type":"message_start","message":{"id":"msg_stream_finish","type":"message","role":"assistant","content":[],"model":"claude-3-5-sonnet-20241022","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}` + "\n\n" +
+		"event: content_block_start\n" +
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}` + "\n\n" +
+		"event: content_block_delta\n" +
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}` + "\n\n" +
+		"event: content_block_stop\n" +
+		`data: {"type":"content_block_stop","index":0}` + "\n\n" +
+		"event: message_delta\n" +
+		`data: {"type":"message_delta","delta":{"stop_reason":"max_tokens","stop_sequence":null},"usage":{"output_tokens":5}}` + "\n\n" +
+		"event: message_delta\n" +
+		`data: {"type":"message_delta","delta":{"stop_reason":null,"stop_sequence":null},"usage":{"output_tokens":1}}` + "\n\n" +
+		"event: message_stop\n" +
+		`data: {"type":"message_stop"}` + "\n\n"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, stream)
+	}))
+	defer server.Close()
+
+	resp, err := newTestClient(t, server).RunText(t.Context(), "hi", agent.Stream(true)).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.FinishReason != "length" {
+		t.Errorf("FinishReason = %q, want %q", resp.FinishReason, "length")
+	}
+}
+
 func TestConfigInstructions(t *testing.T) {
 	bodyCh := make(chan []byte, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
