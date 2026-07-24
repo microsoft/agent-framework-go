@@ -423,6 +423,20 @@ func buildResponsePart(part *genai.Part, contents []message.Content) ([]message.
 		if err != nil {
 			return nil, fmt.Errorf("geminiprovider: failed to marshal function call arguments: %w", err)
 		}
+		// Gemini 3 attaches the opaque thought_signature to the same part that
+		// carries the function call (Thought is false, Text is empty). Capture it
+		// as a preceding TextReasoningContent so buildRequestParts can replay it
+		// on the next turn, mirroring the Python reference which emits a
+		// text-reasoning content (protected_data=base64(thought_signature))
+		// immediately before the function call.
+		if len(part.ThoughtSignature) > 0 {
+			contents = append(contents, &message.TextReasoningContent{
+				ProtectedData: base64.StdEncoding.EncodeToString(part.ThoughtSignature),
+				ContentHeader: message.ContentHeader{
+					RawRepresentation: part,
+				},
+			})
+		}
 		contents = append(contents, &message.FunctionCallContent{
 			CallID:    part.FunctionCall.ID,
 			Name:      part.FunctionCall.Name,

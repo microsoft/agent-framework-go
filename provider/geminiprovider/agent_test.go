@@ -874,6 +874,77 @@ func TestResponseWithThoughtSignature(t *testing.T) {
 	}
 }
 
+// TestResponseWithFunctionCallThoughtSignature verifies that a thought signature
+// carried on the same part as a function call (Gemini 3 behavior) is captured as
+// a TextReasoningContent emitted immediately before the FunctionCallContent, so
+// it can be replayed on the next turn.
+func TestResponseWithFunctionCallThoughtSignature(t *testing.T) {
+	const wantProtectedData = "dGhpbmtpbmcgc2lnbmF0dXJlIGRhdGE="
+	resp := map[string]any{
+		"candidates": []any{
+			map[string]any{
+				"content": map[string]any{
+					"role": "model",
+					"parts": []any{
+						map[string]any{
+							"thoughtSignature": wantProtectedData,
+							"functionCall": map[string]any{
+								"id":   "call-1",
+								"name": "get_weather",
+								"args": map[string]any{"city": "Paris"},
+							},
+						},
+					},
+				},
+				"finishReason": "STOP",
+			},
+		},
+		"usageMetadata": map[string]any{
+			"promptTokenCount":     8,
+			"candidatesTokenCount": 15,
+			"totalTokenCount":      23,
+		},
+	}
+	respBody, _ := json.Marshal(resp)
+
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "application/json", string(respBody)))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	result, err := a.RunText(t.Context(), "What's the weather in Paris?").Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var contents []message.Content
+	for _, msg := range result.Messages {
+		contents = append(contents, msg.Contents...)
+	}
+
+	reasoningIdx, callIdx := -1, -1
+	for i, c := range contents {
+		switch cc := c.(type) {
+		case *message.TextReasoningContent:
+			reasoningIdx = i
+			if cc.ProtectedData != wantProtectedData {
+				t.Errorf("reasoning ProtectedData = %q, want %q", cc.ProtectedData, wantProtectedData)
+			}
+		case *message.FunctionCallContent:
+			callIdx = i
+		}
+	}
+	if reasoningIdx == -1 {
+		t.Fatal("expected TextReasoningContent capturing the function-call thought signature")
+	}
+	if callIdx == -1 {
+		t.Fatal("expected FunctionCallContent in response")
+	}
+	if reasoningIdx >= callIdx {
+		t.Errorf("TextReasoningContent (index %d) must precede FunctionCallContent (index %d)", reasoningIdx, callIdx)
+	}
+}
+
 // TestInvalidReasoningProtectedData verifies that invalid base64 in
 // TextReasoningContent.ProtectedData returns a clear error.
 func TestInvalidReasoningProtectedData(t *testing.T) {
