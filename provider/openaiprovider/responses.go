@@ -1181,10 +1181,23 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 
 // fileSearchToolCallContents surfaces a file_search_call output item as message
 // content. Each retrieved chunk becomes a TextContent carrying a CitationAnnotation
-// (file ID, filename and snippet), so the queries/results are no longer dropped and
-// only the file_citation annotations survive. The raw item (queries + status) is kept
-// on RawRepresentation, matching the .NET/Python surfacing of FileSearch results.
+// (file ID, filename and snippet). Previously the queries and retrieved chunks were
+// dropped and only the file_citation annotations survived; surfacing them here keeps
+// the raw item (queries + status) on RawRepresentation, matching the .NET/Python
+// surfacing of FileSearch results. When the call returns no results, a single empty
+// annotated TextContent is emitted so the call is still surfaced and, being annotated,
+// is not coalesced away (which would strip its RawRepresentation).
 func fileSearchToolCallContents(item responses.ResponseFileSearchToolCall) []message.Content {
+	if len(item.Results) == 0 {
+		textContent := &message.TextContent{
+			ContentHeader: message.ContentHeader{RawRepresentation: item},
+		}
+		textContent.Annotations = append(textContent.Annotations, &message.CitationAnnotation{
+			ToolName:          "file_search",
+			RawRepresentation: item,
+		})
+		return []message.Content{textContent}
+	}
 	contents := make([]message.Content, 0, len(item.Results))
 	for _, res := range item.Results {
 		textContent := &message.TextContent{
