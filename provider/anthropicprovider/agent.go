@@ -348,6 +348,24 @@ func (a *client) buildMessageParams(messages []*message.Message, opts []agent.Op
 				Required:   required,
 			}
 
+			// Carry the remaining JSON Schema keywords (e.g. additionalProperties:false
+			// emitted by functool's strict schema) through ExtraFields so the
+			// model-facing schema stays in sync with the Go-side resolved-schema
+			// validation funcTool.Call performs. Without this a hallucinated extra
+			// argument would pass the model but be rejected by functool. This mirrors
+			// the OpenAI and Gemini providers, which forward the full schema.
+			for k, v := range schemaMap {
+				switch k {
+				case "type", "properties", "required":
+					// Already represented on the typed fields above.
+				default:
+					if schemaParam.ExtraFields == nil {
+						schemaParam.ExtraFields = make(map[string]any)
+					}
+					schemaParam.ExtraFields[k] = v
+				}
+			}
+
 			toolParam := anthropic.ToolUnionParamOfTool(schemaParam, name)
 			if toolParam.OfTool != nil {
 				toolParam.OfTool.Description = anthropic.String(description)

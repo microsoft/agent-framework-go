@@ -3,6 +3,7 @@
 package anthropicprovider_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/provider/anthropicprovider"
+	"github.com/microsoft/agent-framework-go/tool/functool"
 )
 
 // testOutput is the structured type used across structured output tests.
@@ -573,5 +575,63 @@ func TestToolUseEmptyArgumentsSerializeAsObject(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("tool_use block for toolu_1 not found in request")
+	}
+}
+
+// The tool's input_schema sent to Anthropic must carry the additionalProperties
+// keyword emitted by functool's strict schema. functool.Call validates decoded
+// arguments against the resolved schema (additionalProperties:false), so if the
+// model-facing schema omits it the model can hallucinate an extra argument that
+// passes the model but is rejected Go-side. OpenAI and Gemini forward the full
+// schema; this keeps the Anthropic path in parity.
+func TestToolInputSchemaCarriesAdditionalProperties(t *testing.T) {
+	type getWeatherInput struct {
+		City string `json:"city"`
+	}
+	weatherTool := functool.MustNew(functool.Config{
+		Name:        "get_weather",
+		Description: "Gets the weather for a city.",
+	}, func(_ context.Context, in getWeatherInput) (string, error) {
+		return "sunny", nil
+	})
+
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		bodyCh <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, minimalMessageResponse("ok"))
+	}))
+	defer server.Close()
+
+	if _, err := newTestClient(t, server).RunText(
+		t.Context(), "what's the weather?", agent.WithTool(weatherTool),
+	).Collect(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	tools, ok := req["tools"].([]any)
+	if !ok || len(tools) == 0 {
+		t.Fatalf("request tools = %#v, want a non-empty JSON array", req["tools"])
+	}
+	toolObj, ok := tools[0].(map[string]any)
+	if !ok {
+		t.Fatalf("tools[0] = %#v, want a JSON object", tools[0])
+	}
+	addl, ok := nestedKey(toolObj, "input_schema", "additionalProperties")
+	if !ok {
+		t.Fatal("tool input_schema is missing additionalProperties")
+	}
+	if addl != false {
+		t.Errorf("input_schema.additionalProperties = %#v, want false", addl)
 	}
 }
