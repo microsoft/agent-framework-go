@@ -2860,6 +2860,104 @@ data: {"type":"response.completed","response":{"id":"resp_001","object":"respons
 	}
 }
 
+func TestResponsesAnnotations_NonStreaming_PreservesFidelity(t *testing.T) {
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]
+            }
+            `
+
+	const output = `
+            {
+                "id":"resp_001",
+                "object":"response",
+                "created_at":1741892091,
+                "status":"completed",
+                "error":null,
+                "incomplete_details":null,
+                "model":"gpt-4o-mini",
+                "output":[{
+                    "type":"message",
+                    "id":"msg_001",
+                    "status":"completed",
+                    "role":"assistant",
+                    "content":[{"type":"output_text","text":"Annotated text","annotations":[
+                        {"type":"url_citation","title":"Example","url":"https://example.com","start_index":0,"end_index":9},
+                        {"type":"file_citation","file_id":"file_123","filename":"doc.pdf","index":0},
+                        {"type":"container_file_citation","container_id":"cntr_1","file_id":"file_456","filename":"out.txt","start_index":2,"end_index":8}
+                    ]}]
+                }]
+            }
+            `
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	resp, err := a.RunText(t.Context(), "hello").Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if len(resp.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(resp.Messages))
+	}
+
+	var annotations []message.Annotation
+	for _, content := range resp.Messages[0].Contents {
+		if tc, ok := content.(*message.TextContent); ok {
+			annotations = tc.Annotations
+		}
+	}
+	if len(annotations) != 3 {
+		t.Fatalf("expected 3 annotations, got %d", len(annotations))
+	}
+
+	url, ok := annotations[0].(*message.CitationAnnotation)
+	if !ok {
+		t.Fatalf("annotation[0] type = %T, want *CitationAnnotation", annotations[0])
+	}
+	if url.Title != "Example" || url.URL != "https://example.com" {
+		t.Errorf("url citation = %+v, want Title=Example URL=https://example.com", url)
+	}
+	if len(url.AnnotatedRegions) != 1 {
+		t.Fatalf("url citation regions = %d, want 1", len(url.AnnotatedRegions))
+	}
+	if span, ok := url.AnnotatedRegions[0].(*message.TextSpanAnnotatedRegion); !ok {
+		t.Errorf("url region type = %T, want *TextSpanAnnotatedRegion", url.AnnotatedRegions[0])
+	} else if span.Start != 0 || span.End != 9 {
+		t.Errorf("url span = {%d,%d}, want {0,9}", span.Start, span.End)
+	}
+
+	file, ok := annotations[1].(*message.CitationAnnotation)
+	if !ok {
+		t.Fatalf("annotation[1] type = %T, want *CitationAnnotation", annotations[1])
+	}
+	if file.FileID != "file_123" || file.Title != "doc.pdf" {
+		t.Errorf("file citation = %+v, want FileID=file_123 Title=doc.pdf", file)
+	}
+
+	container, ok := annotations[2].(*message.CitationAnnotation)
+	if !ok {
+		t.Fatalf("annotation[2] type = %T, want *CitationAnnotation", annotations[2])
+	}
+	if container.FileID != "file_456" || container.Title != "out.txt" {
+		t.Errorf("container citation = %+v, want FileID=file_456 Title=out.txt", container)
+	}
+	if container.AdditionalProperties["ContainerId"] != "cntr_1" {
+		t.Errorf("container id = %v, want cntr_1", container.AdditionalProperties["ContainerId"])
+	}
+	if len(container.AnnotatedRegions) != 1 {
+		t.Fatalf("container regions = %d, want 1", len(container.AnnotatedRegions))
+	}
+	if span, ok := container.AnnotatedRegions[0].(*message.TextSpanAnnotatedRegion); !ok {
+		t.Errorf("container region type = %T, want *TextSpanAnnotatedRegion", container.AnnotatedRegions[0])
+	} else if span.Start != 2 || span.End != 8 {
+		t.Errorf("container span = {%d,%d}, want {2,8}", span.Start, span.End)
+	}
+}
+
 func TestResponsesResponseWithInputImageHttpUrl_ParsesAsUriContent(t *testing.T) {
 	t.Skip("Skipping: input_image in output messages not yet supported by SDK")
 	const input = `

@@ -1207,11 +1207,27 @@ func populateAnnotations(anns []responses.ResponseOutputTextAnnotationUnion, con
 		case responses.ResponseOutputTextAnnotationFileCitation:
 			content.Annotations = append(content.Annotations, &message.CitationAnnotation{
 				FileID:            a.FileID,
+				Title:             a.Filename,
 				RawRepresentation: a,
 			})
 		case responses.ResponseOutputTextAnnotationURLCitation:
 			content.Annotations = append(content.Annotations, &message.CitationAnnotation{
+				Title:             a.Title,
 				URL:               a.URL,
+				AnnotatedRegions:  message.AnnotatedRegions{&message.TextSpanAnnotatedRegion{Start: int(a.StartIndex), End: int(a.EndIndex)}},
+				RawRepresentation: a,
+			})
+		case responses.ResponseOutputTextAnnotationContainerFileCitation:
+			content.Annotations = append(content.Annotations, &message.CitationAnnotation{
+				FileID:               a.FileID,
+				Title:                a.Filename,
+				AnnotatedRegions:     message.AnnotatedRegions{&message.TextSpanAnnotatedRegion{Start: int(a.StartIndex), End: int(a.EndIndex)}},
+				AdditionalProperties: map[string]any{"ContainerId": a.ContainerID},
+				RawRepresentation:    a,
+			})
+		case responses.ResponseOutputTextAnnotationFilePath:
+			content.Annotations = append(content.Annotations, &message.CitationAnnotation{
+				FileID:            a.FileID,
 				RawRepresentation: a,
 			})
 		}
