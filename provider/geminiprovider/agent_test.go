@@ -14,7 +14,9 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/provider/geminiprovider"
+	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
+	"github.com/microsoft/agent-framework-go/tool/hostedtool"
 	"google.golang.org/genai"
 )
 
@@ -1667,5 +1669,145 @@ func TestUsageContent_Streaming_CumulativeUsageNotSummed(t *testing.T) {
 	}
 	if usage.OutputTokenCount != 5 {
 		t.Errorf("OutputTokenCount = %d, want 5", usage.OutputTokenCount)
+	}
+}
+
+// TestHostedTools_MappedToGenaiTools verifies that hosted tools attached via
+// agent.WithTool are mapped onto their native genai.Tool entries in the outgoing
+// request. Before this mapping, non-FuncTool options were silently dropped and
+// the request carried no tools at all.
+func TestHostedTools_MappedToGenaiTools(t *testing.T) {
+	tests := []struct {
+		name    string
+		tool    tool.Tool
+		toolKey string
+	}{
+		{"web_search", &hostedtool.WebSearch{}, "googleSearch"},
+		{"code_interpreter", &hostedtool.CodeInterpreter{}, "codeExecution"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			bodyCh := make(chan []byte, 1)
+			server := httptest.NewServer(captureAndRespond(t, bodyCh, "application/json", minimalTextResponse("ok")))
+			defer server.Close()
+
+			a := newTestClient(t, server)
+
+			if _, err := a.RunText(t.Context(), "hi", agent.WithTool(tc.tool)).Collect(); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			var req map[string]any
+			if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+				t.Fatalf("unmarshal request body: %v", err)
+			}
+			toolsAny, ok := req["tools"].([]any)
+			if !ok || len(toolsAny) == 0 {
+				t.Fatalf("request missing tools or tools is not an array: %v", req["tools"])
+			}
+			found := false
+			for _, tAny := range toolsAny {
+				tMap, ok := tAny.(map[string]any)
+				if !ok {
+					continue
+				}
+				if _, ok := tMap[tc.toolKey]; ok {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("request tools missing %q entry: %v", tc.toolKey, toolsAny)
+			}
+		})
+	}
+}
+
+// TestHostedTools_FileSearchMapping verifies that a FileSearch hosted tool is
+// mapped onto a native genai fileSearch tool with its vector store names and
+// (range-checked) TopK serialized. A missing case here previously allowed
+// FileSearch to be silently omitted or mis-serialized.
+func TestHostedTools_FileSearchMapping(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(captureAndRespond(t, bodyCh, "application/json", minimalTextResponse("ok")))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	fileSearch := &hostedtool.FileSearch{
+		Inputs: []message.Content{
+			&message.HostedVectorStoreContent{VectorStoreID: "store-a"},
+			&message.HostedVectorStoreContent{VectorStoreID: "store-b"},
+		},
+		MaximumResultCount: 7,
+	}
+	if _, err := a.RunText(t.Context(), "hi", agent.WithTool(fileSearch)).Collect(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	toolsAny, ok := req["tools"].([]any)
+	if !ok || len(toolsAny) == 0 {
+		t.Fatalf("request missing tools or tools is not an array: %v", req["tools"])
+	}
+	var fileSearchMap map[string]any
+	for _, tAny := range toolsAny {
+		tMap, ok := tAny.(map[string]any)
+		if !ok {
+			continue
+		}
+		if fsAny, ok := tMap["fileSearch"].(map[string]any); ok {
+			fileSearchMap = fsAny
+			break
+		}
+	}
+	if fileSearchMap == nil {
+		t.Fatalf("request tools missing fileSearch entry: %v", toolsAny)
+	}
+
+	names, _ := fileSearchMap["fileSearchStoreNames"].([]any)
+	if len(names) != 2 || names[0] != "store-a" || names[1] != "store-b" {
+		t.Errorf("fileSearchStoreNames = %v, want [store-a store-b]", fileSearchMap["fileSearchStoreNames"])
+	}
+	if topK, _ := fileSearchMap["topK"].(float64); topK != 7 {
+		t.Errorf("topK = %v, want 7", fileSearchMap["topK"])
+	}
+}
+
+// TestHostedTools_FileSearchInvalidTopK verifies that a negative
+// MaximumResultCount is not serialized as an invalid TopK.
+func TestHostedTools_FileSearchInvalidTopK(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(captureAndRespond(t, bodyCh, "application/json", minimalTextResponse("ok")))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	fileSearch := &hostedtool.FileSearch{
+		Inputs:             []message.Content{&message.HostedVectorStoreContent{VectorStoreID: "store-a"}},
+		MaximumResultCount: -1,
+	}
+	if _, err := a.RunText(t.Context(), "hi", agent.WithTool(fileSearch)).Collect(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	toolsAny, _ := req["tools"].([]any)
+	for _, tAny := range toolsAny {
+		tMap, ok := tAny.(map[string]any)
+		if !ok {
+			continue
+		}
+		if fsAny, ok := tMap["fileSearch"].(map[string]any); ok {
+			if _, present := fsAny["topK"]; present {
+				t.Errorf("negative MaximumResultCount should not serialize topK, got %v", fsAny["topK"])
+			}
+		}
 	}
 }
