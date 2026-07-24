@@ -479,6 +479,63 @@ func TestUsageContent(t *testing.T) {
 	}
 }
 
+// TestUsageContent_ReasoningTokens verifies that Gemini's thoughtsTokenCount is
+// surfaced as ReasoningTokenCount, mirroring the OpenAI providers, instead of
+// being dropped from usage accounting. thoughtsTokenCount is a separate bucket
+// from candidatesTokenCount within totalTokenCount, so omitting it leaves the
+// usage record internally inconsistent for thinking models.
+func TestUsageContent_ReasoningTokens(t *testing.T) {
+	resp := map[string]any{
+		"candidates": []any{
+			map[string]any{
+				"content": map[string]any{
+					"role":  "model",
+					"parts": []any{map[string]any{"text": "hi"}},
+				},
+				"finishReason": "STOP",
+			},
+		},
+		"usageMetadata": map[string]any{
+			"promptTokenCount":     10,
+			"candidatesTokenCount": 5,
+			"thoughtsTokenCount":   8,
+			"totalTokenCount":      23,
+		},
+	}
+	body, _ := json.Marshal(resp)
+
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "application/json", string(body)))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	out, err := a.RunText(t.Context(), "hello").Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var usage *message.UsageContent
+	for _, msg := range out.Messages {
+		for _, c := range msg.Contents {
+			if uc, ok := c.(*message.UsageContent); ok {
+				usage = uc
+			}
+		}
+	}
+	if usage == nil {
+		t.Fatal("expected UsageContent in response, got none")
+	}
+	if usage.Details.ReasoningTokenCount != 8 {
+		t.Errorf("ReasoningTokenCount = %d, want 8", usage.Details.ReasoningTokenCount)
+	}
+	if usage.Details.OutputTokenCount != 5 {
+		t.Errorf("OutputTokenCount = %d, want 5", usage.Details.OutputTokenCount)
+	}
+	if usage.Details.TotalTokenCount != 23 {
+		t.Errorf("TotalTokenCount = %d, want 23", usage.Details.TotalTokenCount)
+	}
+}
+
 // TestMultiTurnConversation verifies that multi-turn messages are sent to the
 // API in the correct order with the correct roles.
 func TestMultiTurnConversation(t *testing.T) {

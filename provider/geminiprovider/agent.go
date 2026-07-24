@@ -531,5 +531,6 @@ func toUsageDetails(u *genai.GenerateContentResponseUsageMetadata) message.Usage
 		OutputTokenCount:      int64(u.CandidatesTokenCount),
 		TotalTokenCount:       int64(u.TotalTokenCount),
 		CachedInputTokenCount: int64(u.CachedContentTokenCount),
+		ReasoningTokenCount:   int64(u.ThoughtsTokenCount),
 	}
 }
