@@ -306,6 +306,72 @@ func TestChatURLCitationAnnotations_NonStreaming(t *testing.T) {
 	}
 }
 
+func TestChatURLCitationAnnotations_SkipsEmptyURL(t *testing.T) {
+	const input = `
+            {
+                "messages":[{"role":"user","content":"hello"}],
+                "model":"gpt-4o-mini"
+            }
+            `
+	// An annotation whose url_citation payload has an empty URL must not
+	// produce a bogus CitationAnnotation.
+	const output = `
+            {
+              "id": "chatcmpl-URLCIT-EMPTY",
+              "object": "chat.completion",
+              "created": 1727888631,
+              "model": "gpt-4o-mini-2024-07-18",
+              "choices": [
+                {
+                  "index": 0,
+                  "message": {
+                    "role": "assistant",
+                    "content": "No citation.",
+                    "annotations": [
+                      {
+                        "type": "url_citation",
+                        "url_citation": {
+                          "url": "",
+                          "title": "",
+                          "start_index": 0,
+                          "end_index": 0
+                        }
+                      }
+                    ]
+                  },
+                  "logprobs": null,
+                  "finish_reason": "stop"
+                }
+              ]
+            }
+            `
+
+	server := newTestServer(t, input, output)
+	defer server.Close()
+
+	a := newTestClient(server)
+
+	resp, err := a.RunText(t.Context(), "hello").Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+
+	var text *message.TextContent
+	for _, msg := range resp.Messages {
+		for _, c := range msg.Contents {
+			if tc, ok := c.(*message.TextContent); ok {
+				text = tc
+			}
+		}
+	}
+	if text == nil {
+		t.Fatalf("no TextContent in response")
+	}
+	if len(text.Annotations) != 0 {
+		t.Fatalf("expected 0 annotations, got %d", len(text.Annotations))
+	}
+}
+
 func newTestServerStreaming(t *testing.T, input string, output string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -512,6 +512,11 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 // annotations, mirroring populateAnnotations on the Responses path.
 func populateChatAnnotations(anns []openai.ChatCompletionMessageAnnotation, content *message.TextContent) {
 	for _, ann := range anns {
+		// Only url_citation annotations carry a populated URLCitation payload;
+		// skip other variants (and empty URLs) to avoid emitting bogus citations.
+		if ann.Type != "url_citation" || ann.URLCitation.URL == "" {
+			continue
+		}
 		content.Annotations = append(content.Annotations, &message.CitationAnnotation{
 			URL:               ann.URLCitation.URL,
 			Title:             ann.URLCitation.Title,
