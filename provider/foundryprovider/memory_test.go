@@ -86,6 +86,79 @@ func TestNewMemoryProviderUsesCustomSearchInputFilter(t *testing.T) {
 	}
 }
 
+func TestNewMemoryProviderUsesCustomStoreFilters(t *testing.T) {
+	transport := &recordingTransport{}
+	transport.handle = func(req *http.Request, _ string) (*http.Response, error) {
+		resp := jsonResponse(req, http.StatusAccepted, `{"update_id":"update_1","status":"queued"}`)
+		resp.Header.Set("Operation-Location", validEndpoint+"/memory_stores/memory/updates/update_1?api-version=v1")
+		return resp, nil
+	}
+	requestCalled := false
+	responseCalled := false
+	requestFilter := func(_ context.Context, messages []*message.Message) ([]*message.Message, error) {
+		requestCalled = true
+		return messages, nil
+	}
+	responseFilter := func(_ context.Context, messages []*message.Message) ([]*message.Message, error) {
+		responseCalled = true
+		return messages, nil
+	}
+	provider := foundryprovider.NewMemoryProvider(validEndpoint, validCredential, "memory", validScope, foundryprovider.MemoryProviderConfig{
+		ClientOptions:            azcore.ClientOptions{Transport: transport},
+		StoreInputRequestFilter:  requestFilter,
+		StoreInputResponseFilter: responseFilter,
+	})
+
+	err := provider.Invoked(t.Context(), agent.InvokedContext{
+		RequestMessages:  []*message.Message{message.NewText("remember me")},
+		ResponseMessages: []*message.Message{{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: "assistant text"}}}},
+	})
+	if err != nil {
+		t.Fatalf("Invoked error = %v", err)
+	}
+	if !requestCalled {
+		t.Fatal("custom store request filter was not called")
+	}
+	if !responseCalled {
+		t.Fatal("custom store response filter was not called")
+	}
+}
+
+func TestNewMemoryProviderStoreFiltersDefaultToExternalOnlyRequestAndPassThroughResponse(t *testing.T) {
+	transport := &recordingTransport{}
+	transport.handle = func(req *http.Request, _ string) (*http.Response, error) {
+		resp := jsonResponse(req, http.StatusAccepted, `{"update_id":"update_1","status":"queued"}`)
+		resp.Header.Set("Operation-Location", validEndpoint+"/memory_stores/memory/updates/update_1?api-version=v1")
+		return resp, nil
+	}
+	provider := foundryprovider.NewMemoryProvider(validEndpoint, validCredential, "memory", validScope, foundryprovider.MemoryProviderConfig{
+		ClientOptions: azcore.ClientOptions{Transport: transport},
+	})
+
+	// Request message with a non-external source is dropped by the default
+	// ExternalOnly request filter; response message with a non-external source is
+	// kept by the default PassThrough response filter.
+	err := provider.Invoked(t.Context(), agent.InvokedContext{
+		RequestMessages:  []*message.Message{{Role: message.RoleUser, Source: message.Source{Type: agent.SourceTypeContextProvider}, Contents: message.Contents{&message.TextContent{Text: "internal request"}}}},
+		ResponseMessages: []*message.Message{{Role: message.RoleAssistant, Source: message.Source{Type: agent.SourceTypeContextProvider}, Contents: message.Contents{&message.TextContent{Text: "internal response"}}}},
+	})
+	if err != nil {
+		t.Fatalf("Invoked error = %v", err)
+	}
+
+	requests := transport.Requests()
+	if len(requests) != 1 {
+		t.Fatalf("request count = %d, want 1", len(requests))
+	}
+	items, ok := jsonMap(t, requests[0].Body)["items"].([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("items = %#v, want only the response message", items)
+	}
+	if items[0].(map[string]any)["role"] != "assistant" {
+		t.Fatalf("item role = %#v, want assistant", items[0])
+	}
+}
+
 func TestMemoryProviderPanicsWhenScopeIsEmptyOnUse(t *testing.T) {
 	provider := foundryprovider.NewMemoryProvider(validEndpoint, validCredential, "memory", func(*agent.Session) string { return " " }, foundryprovider.MemoryProviderConfig{})
 	assertPanics(t, func() {

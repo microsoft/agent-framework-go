@@ -40,6 +40,14 @@ type MemoryProviderConfig struct {
 	// default is [messagefilter.ExternalOnly].
 	SearchInputFilter messagefilter.Filter
 
+	// StoreInputRequestFilter filters request messages before they are stored as
+	// memories. The default is [messagefilter.ExternalOnly].
+	StoreInputRequestFilter messagefilter.Filter
+
+	// StoreInputResponseFilter filters response messages before they are stored as
+	// memories. The default is [messagefilter.PassThrough].
+	StoreInputResponseFilter messagefilter.Filter
+
 	// UpdateDelay controls Foundry memory extraction delay in seconds. The default is 0,
 	// which submits memory updates immediately.
 	UpdateDelay int32
@@ -98,10 +106,17 @@ func newMemoryProvider(client *azaiprojects.MemoryStoresClient, memoryStoreName 
 	if config.SearchInputFilter == nil {
 		config.SearchInputFilter = messagefilter.ExternalOnly
 	}
+	if config.StoreInputRequestFilter == nil {
+		config.StoreInputRequestFilter = messagefilter.ExternalOnly
+	}
+	if config.StoreInputResponseFilter == nil {
+		config.StoreInputResponseFilter = messagefilter.PassThrough
+	}
 	providerConfig := agent.ContextProviderConfig{
-		ProvideInputMessageFilter:      config.SearchInputFilter,
-		SourceID:                       defaultSourceID,
-		StoreInputRequestMessageFilter: messagefilter.ExternalOnly,
+		ProvideInputMessageFilter:       config.SearchInputFilter,
+		SourceID:                        defaultSourceID,
+		StoreInputRequestMessageFilter:  config.StoreInputRequestFilter,
+		StoreInputResponseMessageFilter: config.StoreInputResponseFilter,
 	}
 	p := &MemoryProvider{
 		client:          client,
