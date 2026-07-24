@@ -575,3 +575,128 @@ func TestToolUseEmptyArgumentsSerializeAsObject(t *testing.T) {
 		t.Fatal("tool_use block for toolu_1 not found in request")
 	}
 }
+
+// assistantBlocksFromRequest runs the agent against a server that records the
+// outbound request body, then returns the decoded content blocks of the first
+// assistant message so tests can assert on how prior contents were replayed.
+func assistantBlocksFromRequest(t *testing.T, msgs []*message.Message) []map[string]any {
+	t.Helper()
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		bodyCh <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, minimalMessageResponse("ok"))
+	}))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+	if _, err := a.Run(t.Context(), msgs).Collect(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	messages, ok := req["messages"].([]any)
+	if !ok {
+		t.Fatalf("request messages = %#v, want a JSON array", req["messages"])
+	}
+	for _, m := range messages {
+		msg, ok := m.(map[string]any)
+		if !ok || msg["role"] != "assistant" {
+			continue
+		}
+		rawBlocks, ok := msg["content"].([]any)
+		if !ok {
+			t.Fatalf("assistant content = %#v, want a JSON array", msg["content"])
+		}
+		blocks := make([]map[string]any, 0, len(rawBlocks))
+		for _, b := range rawBlocks {
+			block, ok := b.(map[string]any)
+			if !ok {
+				t.Fatalf("content block = %#v, want an object", b)
+			}
+			blocks = append(blocks, block)
+		}
+		return blocks
+	}
+	t.Fatal("no assistant message found in request")
+	return nil
+}
+
+func TestAssistantReasoningReplayedAsThinkingBlock(t *testing.T) {
+	msgs := []*message.Message{
+		{Role: message.RoleUser, Contents: message.Contents{&message.TextContent{Text: "what time is it?"}}},
+		{Role: message.RoleAssistant, Contents: message.Contents{
+			&message.TextReasoningContent{Text: "let me check the clock", ProtectedData: "sig123"},
+			&message.FunctionCallContent{CallID: "toolu_1", Name: "get_time", Arguments: "{}"},
+		}},
+		{Role: message.RoleTool, Contents: message.Contents{&message.FunctionResultContent{CallID: "toolu_1", Result: "12:00"}}},
+	}
+
+	blocks := assistantBlocksFromRequest(t, msgs)
+	if len(blocks) != 2 {
+		t.Fatalf("assistant content blocks = %d, want 2 (%#v)", len(blocks), blocks)
+	}
+
+	// Reasoning must come first, carrying its signature, so Anthropic accepts
+	// the replayed turn.
+	if blocks[0]["type"] != "thinking" {
+		t.Errorf("first block type = %v, want %q", blocks[0]["type"], "thinking")
+	}
+	if blocks[0]["thinking"] != "let me check the clock" {
+		t.Errorf("thinking = %v, want %q", blocks[0]["thinking"], "let me check the clock")
+	}
+	if blocks[0]["signature"] != "sig123" {
+		t.Errorf("signature = %v, want %q", blocks[0]["signature"], "sig123")
+	}
+	if blocks[1]["type"] != "tool_use" {
+		t.Errorf("second block type = %v, want %q", blocks[1]["type"], "tool_use")
+	}
+}
+
+func TestAssistantRedactedReasoningReplayedAsRedactedThinkingBlock(t *testing.T) {
+	msgs := []*message.Message{
+		{Role: message.RoleUser, Contents: message.Contents{&message.TextContent{Text: "hi"}}},
+		{Role: message.RoleAssistant, Contents: message.Contents{
+			&message.TextReasoningContent{ProtectedData: "redacted-data"},
+			&message.TextContent{Text: "hello"},
+		}},
+	}
+
+	blocks := assistantBlocksFromRequest(t, msgs)
+	if len(blocks) != 2 {
+		t.Fatalf("assistant content blocks = %d, want 2 (%#v)", len(blocks), blocks)
+	}
+	if blocks[0]["type"] != "redacted_thinking" {
+		t.Errorf("first block type = %v, want %q", blocks[0]["type"], "redacted_thinking")
+	}
+	if blocks[0]["data"] != "redacted-data" {
+		t.Errorf("data = %v, want %q", blocks[0]["data"], "redacted-data")
+	}
+}
+
+func TestAssistantUnsignedReasoningIsSkipped(t *testing.T) {
+	msgs := []*message.Message{
+		{Role: message.RoleUser, Contents: message.Contents{&message.TextContent{Text: "hi"}}},
+		{Role: message.RoleAssistant, Contents: message.Contents{
+			&message.TextReasoningContent{Text: "partial with no signature"},
+			&message.TextContent{Text: "hello"},
+		}},
+	}
+
+	blocks := assistantBlocksFromRequest(t, msgs)
+	if len(blocks) != 1 {
+		t.Fatalf("assistant content blocks = %d, want 1 (%#v)", len(blocks), blocks)
+	}
+	if blocks[0]["type"] != "text" {
+		t.Errorf("block type = %v, want %q", blocks[0]["type"], "text")
+	}
+}

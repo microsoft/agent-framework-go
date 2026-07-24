@@ -446,6 +446,18 @@ func buildMessageParam(msg *message.Message) (anthropic.MessageParam, error) {
 		switch c := c.(type) {
 		case *message.TextContent:
 			content = append(content, anthropic.NewTextBlock(c.Text))
+		case *message.TextReasoningContent:
+			// Replay a prior assistant thinking block so its signature travels
+			// back with the request (Anthropic emits reasoning before the rest of
+			// the turn, so it is appended in iteration order). A redacted block
+			// carries only ProtectedData; skip streamed partials that never
+			// received a signature to avoid sending an invalid unsigned block.
+			switch {
+			case c.Text != "" && c.ProtectedData != "":
+				content = append(content, anthropic.NewThinkingBlock(c.ProtectedData, c.Text))
+			case c.Text == "" && c.ProtectedData != "":
+				content = append(content, anthropic.NewRedactedThinkingBlock(c.ProtectedData))
+			}
 		case *message.FunctionCallContent:
 			// Parse the JSON string arguments into a map for Anthropic SDK
 			var args map[string]any
