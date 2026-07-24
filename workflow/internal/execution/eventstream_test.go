@@ -75,9 +75,9 @@ func TestStreamingRunEventStream_NoWorkWakeupDoesNotOpenWorkflowRunSpan(t *testi
 	waitForEventHandlerCount(t, runner.outgoingEvents, 1)
 
 	// Trigger a no-work wakeup: the run loop is signaled but
-	// HasUnprocessedMessages reports false, mirroring a checkpoint restore
-	// whose only state is an unserviced request. Such an iteration must not
-	// open a WorkflowRun span, matching the lockstep implementation.
+	// HasUnprocessedMessages reports false, so the iteration has nothing to
+	// process. Such an iteration must not open a WorkflowRun span, matching
+	// the lockstep implementation.
 	stream.SignalInput()
 
 	// The loop enqueues an internalHaltSignal once the (no-work) cycle
