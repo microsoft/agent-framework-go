@@ -590,11 +590,20 @@ func toolExecutionError(data *copilot.ToolExecutionCompleteData) error {
 	if data.Success {
 		return nil
 	}
-	if data.Error != nil && data.Error.Message != "" {
+	if data.Error != nil {
+		msg := data.Error.Message
+		code := ""
 		if data.Error.Code != nil {
-			return fmt.Errorf("%s (%s)", data.Error.Message, *data.Error.Code)
+			code = *data.Error.Code
 		}
-		return errors.New(data.Error.Message)
+		switch {
+		case msg != "" && code != "":
+			return fmt.Errorf("%s (%s)", msg, code)
+		case msg != "":
+			return errors.New(msg)
+		case code != "":
+			return fmt.Errorf("tool execution failed (%s)", code)
+		}
 	}
 	return errors.New("tool execution failed")
 }

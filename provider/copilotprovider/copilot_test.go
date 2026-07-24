@@ -440,6 +440,12 @@ func TestConvertToAgentResponseUpdate_ToolExecutionCompleteEvent_WithFailureNoEr
 	if result.CallID != "call-000" || result.Result != "Tool execution failed" {
 		t.Fatalf("result = (%q, %#v), want default failure", result.CallID, result.Result)
 	}
+	if result.Error == nil {
+		t.Fatalf("Error = nil, want non-nil failure error")
+	}
+	if msg := result.Error.Error(); !strings.Contains(msg, "tool execution failed") {
+		t.Fatalf("Error = %q, want default failure message", msg)
+	}
 }
 
 func TestConvertToAgentResponseUpdate_ToolExecutionCompleteEvent_WithNullData_ProducesEmptyResult(t *testing.T) {
