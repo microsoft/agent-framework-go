@@ -640,6 +640,17 @@ var workflowExamples = []ExampleDefinition{
 		},
 	},
 	{
+		Name:            "03_workflows_observability_executor_io",
+		ProjectPath:     "examples/03-workflows/observability/executor_io",
+		IsDeterministic: true,
+		MustContain: []string{
+			"invoked UppercaseExecutor: Hello, World!",
+			"completed UppercaseExecutor: HELLO, WORLD!",
+			"invoked ReverseTextExecutor: HELLO, WORLD!",
+			"completed ReverseTextExecutor: !DLROW ,OLLEH",
+		},
+	},
+	{
 		Name:                         "03_workflows_01_start_here_02_agents_in_workflows",
 		ProjectPath:                  "examples/03-workflows/01-start-here/02_agents_in_workflows",
 		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
