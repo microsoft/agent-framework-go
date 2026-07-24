@@ -161,6 +161,40 @@ func TestCopyResumeSessionConfig_CopiesAllProperties(t *testing.T) {
 	}
 	assertStringSlice(t, request["disabledSkills"], []string{"skill1"}, "disabledSkills")
 	assertEqual(t, request["streaming"], true, "streaming")
+
+	// Fields beyond the originally hand-copied set must also carry over so that
+	// multi-turn options keep taking effect after the first turn.
+	assertEqual(t, request["clientName"], "test-client", "clientName")
+	assertEqual(t, request["reasoningSummary"], "concise", "reasoningSummary")
+	assertEqual(t, request["contextTier"], "long_context", "contextTier")
+	assertEqual(t, request["mcpOAuthTokenStorage"], "in-memory", "mcpOAuthTokenStorage")
+	assertStringSlice(t, request["excludedBuiltinAgents"], []string{"builtin1"}, "excludedBuiltinAgents")
+	assertEqual(t, request["enableSessionTelemetry"], true, "enableSessionTelemetry")
+	assertEqual(t, request["enableCitations"], true, "enableCitations")
+	assertEqual(t, request["enableConfigDiscovery"], true, "enableConfigDiscovery")
+	assertEqual(t, request["skipEmbeddingRetrieval"], true, "skipEmbeddingRetrieval")
+	assertEqual(t, request["embeddingCacheStorage"], "in-memory", "embeddingCacheStorage")
+	assertEqual(t, request["organizationCustomInstructions"], "org instructions", "organizationCustomInstructions")
+	assertEqual(t, request["enableOnDemandInstructionDiscovery"], true, "enableOnDemandInstructionDiscovery")
+	assertEqual(t, request["enableFileHooks"], true, "enableFileHooks")
+	assertEqual(t, request["enableHostGitOperations"], true, "enableHostGitOperations")
+	assertEqual(t, request["enableSessionStore"], true, "enableSessionStore")
+	assertEqual(t, request["enableSkills"], true, "enableSkills")
+	assertEqual(t, request["skipCustomInstructions"], true, "skipCustomInstructions")
+	assertEqual(t, request["customAgentsLocalOnly"], true, "customAgentsLocalOnly")
+	assertEqual(t, request["coauthorEnabled"], true, "coauthorEnabled")
+	assertEqual(t, request["manageScheduleEnabled"], true, "manageScheduleEnabled")
+	assertEqual(t, request["includeSubAgentStreamingEvents"], false, "includeSubAgentStreamingEvents")
+	assertEqual(t, request["agent"], "custom-agent", "agent")
+	assertStringSlice(t, request["pluginDirectories"], []string{"/plugins"}, "pluginDirectories")
+	assertStringSlice(t, request["instructionDirectories"], []string{"/instructions"}, "instructionDirectories")
+	assertEqual(t, request["gitHubToken"], "gh-token-123", "gitHubToken")
+	assertEqual(t, request["remoteSession"], "on", "remoteSession")
+	for _, key := range []string{"providers", "models", "capi", "modelCapabilities", "sessionLimits", "defaultAgent", "largeOutput", "toolSearch", "memory"} {
+		if request[key] == nil {
+			t.Fatalf("%s was not sent on resume", key)
+		}
+	}
 }
 
 func TestCopySessionConfig_WithStreamingDisabled_PreservesStreamingValue(t *testing.T) {
@@ -609,8 +643,11 @@ func dataContent(t *testing.T, name, value string) *message.DataContent {
 
 func richSessionConfig() *copilot.SessionConfig {
 	return &copilot.SessionConfig{
+		ClientName:       "test-client",
 		Model:            "gpt-4o",
 		ReasoningEffort:  "high",
+		ReasoningSummary: copilot.ReasoningSummaryConcise,
+		ContextTier:      copilot.ContextTierLongContext,
 		SystemMessage:    &copilot.SystemMessageConfig{Mode: "append", Content: "Be helpful"},
 		AvailableTools:   []string{"tool1", "tool2"},
 		ExcludedTools:    []string{"tool3"},
@@ -631,7 +668,39 @@ func richSessionConfig() *copilot.SessionConfig {
 		MCPServers: map[string]copilot.MCPServerConfig{
 			"server1": copilot.MCPStdioServerConfig{Command: "npx"},
 		},
-		DisabledSkills: []string{"skill1"},
+		MCPOAuthTokenStorage:               "in-memory",
+		DisabledSkills:                     []string{"skill1"},
+		ExcludedBuiltInAgents:              []string{"builtin1"},
+		Providers:                          []copilot.NamedProviderConfig{{Name: "prov1", BaseURL: "https://example.com"}},
+		Models:                             []copilot.ProviderModelConfig{{ID: "m1", Provider: "prov1"}},
+		Capi:                               &copilot.CapiSessionOptions{EnableWebSocketResponses: copilot.Bool(true)},
+		ModelCapabilities:                  &rpc.ModelCapabilitiesOverride{},
+		SessionLimits:                      &rpc.SessionLimitsConfig{},
+		EnableSessionTelemetry:             copilot.Bool(true),
+		EnableCitations:                    copilot.Bool(true),
+		EnableConfigDiscovery:              copilot.Bool(true),
+		SkipEmbeddingRetrieval:             copilot.Bool(true),
+		EmbeddingCacheStorage:              copilot.String("in-memory"),
+		OrganizationCustomInstructions:     copilot.String("org instructions"),
+		EnableOnDemandInstructionDiscovery: copilot.Bool(true),
+		EnableFileHooks:                    copilot.Bool(true),
+		EnableHostGitOperations:            copilot.Bool(true),
+		EnableSessionStore:                 copilot.Bool(true),
+		EnableSkills:                       copilot.Bool(true),
+		SkipCustomInstructions:             copilot.Bool(true),
+		CustomAgentsLocalOnly:              copilot.Bool(true),
+		CoauthorEnabled:                    copilot.Bool(true),
+		ManageScheduleEnabled:              copilot.Bool(true),
+		IncludeSubAgentStreamingEvents:     copilot.Bool(false),
+		DefaultAgent:                       &copilot.DefaultAgentConfig{ExcludedTools: []string{"dtool"}},
+		Agent:                              "custom-agent",
+		PluginDirectories:                  []string{"/plugins"},
+		InstructionDirectories:             []string{"/instructions"},
+		LargeOutput:                        &copilot.LargeToolOutputConfig{Enabled: copilot.Bool(true)},
+		ToolSearch:                         &copilot.ToolSearchConfig{Enabled: copilot.Bool(true)},
+		Memory:                             &copilot.MemoryConfiguration{Enabled: true},
+		GitHubToken:                        "gh-token-123",
+		RemoteSession:                      rpc.RemoteSessionModeOn,
 	}
 }
 
