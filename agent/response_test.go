@@ -461,6 +461,35 @@ func TestResponse_Update_RawRepresentation(t *testing.T) {
 	}
 }
 
+func TestResponse_ToUpdates_RoundTripPreservesRawRepresentationWithContinuationToken(t *testing.T) {
+	// A response with a message raw representation and a continuation token emits
+	// a trailing metadata-only update (RawRepresentation nil). Collecting the
+	// updates back must not fold that nil into the message's raw data.
+	original := &agent.Response{
+		ContinuationToken: "token-123",
+		Messages: []*message.Message{
+			{
+				ID:                "msg1",
+				Role:              message.RoleAssistant,
+				RawRepresentation: "raw1",
+				Contents:          message.Contents{&message.TextContent{Text: "Hello"}},
+			},
+		},
+	}
+
+	var collected agent.Response
+	for _, update := range original.ToUpdates() {
+		collected.Update(update)
+	}
+
+	if got := collected.Messages[0].RawRepresentation; got != "raw1" {
+		t.Errorf("expected RawRepresentation to round-trip as 'raw1', got %v", got)
+	}
+	if collected.ContinuationToken != "token-123" {
+		t.Errorf("expected ContinuationToken 'token-123', got %q", collected.ContinuationToken)
+	}
+}
+
 func TestResponse_Coalesce_PreservesEmptyMessagesAndWhitespaceText(t *testing.T) {
 	resp := &agent.Response{}
 	resp.Update(&agent.ResponseUpdate{
@@ -786,5 +815,30 @@ func TestResponse_ToUpdates_WithAdditionalPropertiesOnlyProducesSingleUpdate(t *
 	}
 	if updates[0].AdditionalProperties["key"] != "value" {
 		t.Errorf("expected key value, got %v", updates[0].AdditionalProperties["key"])
+	}
+}
+
+func TestResponse_ToUpdates_PropagatesContinuationToken(t *testing.T) {
+	resp := &agent.Response{
+		ContinuationToken: "tok-123",
+		Messages: []*message.Message{
+			{
+				Role:     message.RoleAssistant,
+				Contents: message.Contents{&message.TextContent{Text: "Text"}},
+			},
+		},
+	}
+
+	updates := resp.ToUpdates()
+
+	// The token must survive a ToUpdates/Collect round-trip.
+	var roundTripped agent.Response
+	for _, update := range updates {
+		roundTripped.Update(update)
+	}
+	roundTripped.Coalesce()
+
+	if roundTripped.ContinuationToken != "tok-123" {
+		t.Errorf("expected ContinuationToken tok-123, got %q", roundTripped.ContinuationToken)
 	}
 }

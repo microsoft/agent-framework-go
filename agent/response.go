@@ -119,8 +119,9 @@ func (resp *Response) Coalesce() {
 // ToUpdates converts this response into response updates suitable for streaming
 // scenarios.
 //
-// Each message in the response becomes a separate update. Response-level usage
-// and additional properties are included as an additional update when present.
+// Each message in the response becomes a separate update. Response-level usage,
+// additional properties, and a non-empty continuation token are included as an
+// additional metadata-only update when present.
 func (resp *Response) ToUpdates() []*ResponseUpdate {
 	if resp == nil {
 		return nil
@@ -149,11 +150,12 @@ func (resp *Response) ToUpdates() []*ResponseUpdate {
 		})
 	}
 
-	if hasUsage || hasAdditionalProperties {
+	if hasUsage || hasAdditionalProperties || resp.ContinuationToken != "" {
 		extra := &ResponseUpdate{
 			AdditionalProperties: resp.AdditionalProperties,
 			AgentID:              resp.AgentID,
 			ResponseID:           resp.ID,
+			ContinuationToken:    resp.ContinuationToken,
 			CreatedAt:            resp.CreatedAt,
 		}
 		if hasUsage {
@@ -196,12 +198,18 @@ func (resp *Response) Update(update *ResponseUpdate) {
 		}
 		maps.Copy(msg.AdditionalProperties, update.AdditionalProperties)
 	}
-	if msg.RawRepresentation == nil {
-		msg.RawRepresentation = update.RawRepresentation
-	} else if s, ok := msg.RawRepresentation.([]any); ok {
-		msg.RawRepresentation = append(s, update.RawRepresentation)
-	} else {
-		msg.RawRepresentation = []any{msg.RawRepresentation, update.RawRepresentation}
+	// A nil RawRepresentation carries no provider data, so treat it as a no-op.
+	// This keeps metadata-only updates (e.g. response-level usage or a
+	// continuation token emitted by ToUpdates) from mutating the message's raw
+	// data during a ToUpdates/Collect round-trip.
+	if update.RawRepresentation != nil {
+		if msg.RawRepresentation == nil {
+			msg.RawRepresentation = update.RawRepresentation
+		} else if s, ok := msg.RawRepresentation.([]any); ok {
+			msg.RawRepresentation = append(s, update.RawRepresentation)
+		} else {
+			msg.RawRepresentation = []any{msg.RawRepresentation, update.RawRepresentation}
+		}
 	}
 
 	// Other members on a ResponseUpdate map to members of the response.
