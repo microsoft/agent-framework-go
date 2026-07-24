@@ -412,6 +412,29 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 			params.Tools = append(params.Tools, responses.ToolUnionParam{
 				OfCodeInterpreter: &variant,
 			})
+		case *hostedtool.ImageGeneration:
+			var variant responses.ToolImageGenerationParam
+			if size, ok := tl.AdditionalProperties["size"].(string); ok && size != "" {
+				variant.Size = size
+			}
+			if quality, ok := tl.AdditionalProperties["quality"].(string); ok && quality != "" {
+				variant.Quality = quality
+			}
+			if background, ok := tl.AdditionalProperties["background"].(string); ok && background != "" {
+				variant.Background = background
+			}
+			if outputFormat, ok := tl.AdditionalProperties["output_format"].(string); ok && outputFormat != "" {
+				variant.OutputFormat = outputFormat
+			}
+			switch partialImages := tl.AdditionalProperties["partial_images"].(type) {
+			case int:
+				variant.PartialImages = openai.Int(int64(partialImages))
+			case int64:
+				variant.PartialImages = openai.Int(partialImages)
+			}
+			params.Tools = append(params.Tools, responses.ToolUnionParam{
+				OfImageGeneration: &variant,
+			})
 		case *hostedtool.MCPServer:
 			var variant responses.ToolMcpParam
 			variant.ServerLabel = tl.ServerName

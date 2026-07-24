@@ -65,6 +65,25 @@ func (t *CodeInterpreter) Description() string {
 	return ""
 }
 
+var _ tool.Tool = (*ImageGeneration)(nil)
+
+// ImageGeneration represents a hosted tool that can be specified to an AI service
+// to enable it to generate images.
+//
+// AdditionalProperties carries the optional image generation settings, such as
+// "size", "quality", "background", "output_format" and "partial_images".
+type ImageGeneration struct {
+	AdditionalProperties map[string]any
+}
+
+func (t *ImageGeneration) Name() string {
+	return "image_generation"
+}
+
+func (t *ImageGeneration) Description() string {
+	return ""
+}
+
 type MCPServer struct {
 	AdditionalProperties map[string]any
 

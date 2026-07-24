@@ -3424,6 +3424,59 @@ func TestResponsesNonStreamingImageGenerationCall_MapsToDataContent(t *testing.T
 	}
 }
 
+func TestResponsesImageGenerationTool_MapsToRequestParams(t *testing.T) {
+	const imageBase64 = "iVBORw0KGgo="
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"draw"}]}],
+                "tools":[{"type":"image_generation","quality":"high","size":"1024x1024"}]
+            }
+            `
+
+	const output = `
+            {
+              "id":"resp_001",
+              "object":"response",
+              "created_at":1741892091,
+              "status":"completed",
+              "model":"gpt-4o-mini",
+              "output":[{
+                "type":"image_generation_call",
+                "id":"ig_123",
+                "status":"completed",
+                "result":"` + imageBase64 + `"
+              }]
+            }
+            `
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+	resp, err := a.RunText(t.Context(), "draw",
+		agent.WithTool(&hostedtool.ImageGeneration{
+			AdditionalProperties: map[string]any{
+				"size":    "1024x1024",
+				"quality": "high",
+			},
+		}),
+	).Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+
+	// The request-body assertion in newTestResponsesServer proves the tool was
+	// serialized into params.Tools; also confirm the output still maps back.
+	image := firstDataContent(t, resp)
+	if image.Data != imageBase64 {
+		t.Errorf("Data = %q, want %q", image.Data, imageBase64)
+	}
+	if image.MediaType != "image/png" {
+		t.Errorf("MediaType = %q, want %q", image.MediaType, "image/png")
+	}
+}
+
 func TestResponsesStreamingImageGenerationCall_MapsToDataContent(t *testing.T) {
 	const imageBase64 = "iVBORw0KGgo="
 	const input = `
