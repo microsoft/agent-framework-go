@@ -533,6 +533,9 @@ type URIContent struct {
 	URI       string
 }
 
+// NewURIContent creates a [URIContent] for the given URI. When mediaType is
+// empty it is inferred from the URI; a non-empty mediaType is validated. It
+// returns an error if the URI is invalid or the media type is malformed.
 func NewURIContent(uri string, mediaType string) (*URIContent, error) {
 	if err := validateURIContentURI(uri); err != nil {
 		return nil, err
