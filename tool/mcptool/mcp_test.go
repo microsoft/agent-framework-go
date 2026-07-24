@@ -888,6 +888,94 @@ func TestCallConvertsMCPToolUseAndToolResultContent(t *testing.T) {
 	}
 }
 
+func TestListPromptsReturnsServerPromptDescriptors(t *testing.T) {
+	ctx := context.Background()
+	server := mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "1.0.0"}, nil)
+	server.AddPrompt(&mcp.Prompt{
+		Name:        "greeting",
+		Description: "Greets a person by name.",
+		Arguments: []*mcp.PromptArgument{
+			{Name: "name", Description: "who to greet", Required: true},
+		},
+	}, func(_ context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+		return &mcp.GetPromptResult{
+			Messages: []*mcp.PromptMessage{
+				{Role: "user", Content: &mcp.TextContent{Text: "hi"}},
+			},
+		}, nil
+	})
+
+	session := connectInMemory(t, ctx, server)
+	prompts, err := mcptool.ListPrompts(ctx, session)
+	if err != nil {
+		t.Fatalf("ListPrompts() error = %v", err)
+	}
+	if len(prompts) != 1 {
+		t.Fatalf("expected one prompt, got %d", len(prompts))
+	}
+	if prompts[0].Name != "greeting" {
+		t.Fatalf("Name = %q, want greeting", prompts[0].Name)
+	}
+	if prompts[0].Description != "Greets a person by name." {
+		t.Fatalf("Description = %q, want Greets a person by name.", prompts[0].Description)
+	}
+	if len(prompts[0].Arguments) != 1 || prompts[0].Arguments[0].Name != "name" {
+		t.Fatalf("Arguments = %#v, want a single argument named name", prompts[0].Arguments)
+	}
+}
+
+func TestGetPromptMaterializesAgentMessages(t *testing.T) {
+	ctx := context.Background()
+	server := mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "1.0.0"}, nil)
+	var captured map[string]string
+	server.AddPrompt(&mcp.Prompt{
+		Name:        "greeting",
+		Description: "Greets a person by name.",
+	}, func(_ context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+		captured = req.Params.Arguments
+		return &mcp.GetPromptResult{
+			Messages: []*mcp.PromptMessage{
+				{Role: "user", Content: &mcp.TextContent{Text: "You are a helpful greeter."}},
+				{Role: "assistant", Content: &mcp.TextContent{Text: "Hello, Ada!"}},
+			},
+		}, nil
+	})
+
+	session := connectInMemory(t, ctx, server)
+	messages, err := mcptool.GetPrompt(ctx, session, "greeting", map[string]string{"name": "Ada"})
+	if err != nil {
+		t.Fatalf("GetPrompt() error = %v", err)
+	}
+	if captured["name"] != "Ada" {
+		t.Fatalf("captured args = %#v, want name Ada", captured)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("expected two messages, got %d", len(messages))
+	}
+
+	if messages[0].Role != message.RoleUser {
+		t.Fatalf("first message role = %q, want user", messages[0].Role)
+	}
+	firstText, ok := messages[0].Contents[0].(*message.TextContent)
+	if !ok {
+		t.Fatalf("first content is %T, want *message.TextContent", messages[0].Contents[0])
+	}
+	if firstText.Text != "You are a helpful greeter." {
+		t.Fatalf("first text = %q, want the greeter instruction", firstText.Text)
+	}
+
+	if messages[1].Role != message.RoleAssistant {
+		t.Fatalf("second message role = %q, want assistant", messages[1].Role)
+	}
+	secondText, ok := messages[1].Contents[0].(*message.TextContent)
+	if !ok {
+		t.Fatalf("second content is %T, want *message.TextContent", messages[1].Contents[0])
+	}
+	if secondText.Text != "Hello, Ada!" {
+		t.Fatalf("second text = %q, want Hello, Ada!", secondText.Text)
+	}
+}
+
 func callSingleMCPContent(t *testing.T, content mcp.Content) message.Content {
 	t.Helper()
 	result := callMCPResult(t, &mcp.CallToolResult{Content: []mcp.Content{content}})

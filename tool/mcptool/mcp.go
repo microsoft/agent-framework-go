@@ -59,6 +59,58 @@ func ListTools(ctx context.Context, session *mcp.ClientSession) ([]tool.Tool, er
 	return result, nil
 }
 
+// ListPrompts returns the prompt descriptors currently offered by the MCP
+// server. Unlike tools, MCP prompts are not exposed as agent.Tool instances:
+// they materialize into conversation messages (via GetPrompt) rather than being
+// invoked as tools, so callers receive the raw *mcp.Prompt descriptors.
+func ListPrompts(ctx context.Context, session *mcp.ClientSession) ([]*mcp.Prompt, error) {
+	promptsResult, err := session.ListPrompts(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list prompts: %w", err)
+	}
+	return promptsResult.Prompts, nil
+}
+
+// GetPrompt retrieves the named prompt from the MCP server, applying the given
+// template arguments, and converts the returned prompt messages into agent
+// messages. Each MCP PromptMessage.Content is mapped with the same
+// content-conversion used for tool results, so text, image, audio, and resource
+// contents are preserved.
+func GetPrompt(ctx context.Context, session *mcp.ClientSession, name string, args map[string]string) ([]*message.Message, error) {
+	promptResult, err := session.GetPrompt(ctx, &mcp.GetPromptParams{
+		Name:      name,
+		Arguments: args,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get prompt %q: %w", name, err)
+	}
+
+	messages := make([]*message.Message, 0, len(promptResult.Messages))
+	for _, promptMessage := range promptResult.Messages {
+		if promptMessage == nil {
+			continue
+		}
+		contents := mcpContentToAgentContent([]mcp.Content{promptMessage.Content})
+		msg := message.New(contents...)
+		msg.Role = mcpRoleToAgentRole(promptMessage.Role)
+		msg.RawRepresentation = promptMessage
+		messages = append(messages, msg)
+	}
+	return messages, nil
+}
+
+// mcpRoleToAgentRole maps an MCP conversation role onto the agent-framework
+// role. MCP only defines "user" and "assistant"; anything else defaults to the
+// user role, matching how a prompt materializes as user-provided context.
+func mcpRoleToAgentRole(role mcp.Role) message.Role {
+	switch role {
+	case "assistant":
+		return message.RoleAssistant
+	default:
+		return message.RoleUser
+	}
+}
+
 func mcpCallToolResultToAgentContent(result *mcp.CallToolResult) []message.Content {
 	if result == nil {
 		return nil
