@@ -397,6 +397,9 @@ func TestConvertToAgentResponseUpdate_ToolExecutionCompleteEvent_WithSuccess_Pro
 	if result.CallID != "call-123" || result.Result != resultJSON {
 		t.Fatalf("result = (%q, %#v), want (call-123, %q)", result.CallID, result.Result, resultJSON)
 	}
+	if result.Error != nil {
+		t.Fatalf("Error = %v, want nil on success", result.Error)
+	}
 }
 
 func TestConvertToAgentResponseUpdate_ToolExecutionCompleteEvent_WithError_ProducesErrorResult(t *testing.T) {
@@ -413,6 +416,12 @@ func TestConvertToAgentResponseUpdate_ToolExecutionCompleteEvent_WithError_Produ
 	result := firstContent[*message.FunctionResultContent](t, response)
 	if result.CallID != "call-789" || result.Result != "Access denied to resource" {
 		t.Fatalf("result = (%q, %#v), want access denied", result.CallID, result.Result)
+	}
+	if result.Error == nil {
+		t.Fatalf("Error = nil, want non-nil failure error")
+	}
+	if msg := result.Error.Error(); !strings.Contains(msg, "Access denied to resource") || !strings.Contains(msg, "PERMISSION_DENIED") {
+		t.Fatalf("Error = %q, want message and code", msg)
 	}
 }
 
