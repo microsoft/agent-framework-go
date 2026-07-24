@@ -220,6 +220,48 @@ func TestRun_ResumeAcceptsMessages(t *testing.T) {
 	}
 }
 
+// TestRun_NewEventsEarlyBreakPreservesUnreadEvents verifies that stopping the
+// NewEvents iterator early does not discard the events that were never yielded.
+// The read cursor must advance only past events actually delivered to the
+// consumer, so a subsequent NewEvents call still surfaces the rest of the batch.
+func TestRun_NewEventsEarlyBreakPreservesUnreadEvents(t *testing.T) {
+	ex := minimalEchoBinding("ex")
+	wf, err := workflow.NewBuilder(ex).WithOutputFrom(ex).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	ctx := context.Background()
+	run, err := inproc.Default.Run(ctx, wf, "hi")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	total := run.NewEventCount()
+	if total < 2 {
+		t.Fatalf("need at least 2 new events to exercise an early break, got %d", total)
+	}
+
+	// Consume exactly one event, then stop iterating.
+	consumed := 0
+	for range run.NewEvents() {
+		consumed++
+		break
+	}
+	if consumed != 1 {
+		t.Fatalf("consumed = %d, want 1", consumed)
+	}
+
+	// The events after the one consumed must still be reported as new and be
+	// re-iterable; they must not be silently dropped by the early break.
+	if got, want := run.NewEventCount(), total-1; got != want {
+		t.Errorf("NewEventCount after early break = %d, want %d", got, want)
+	}
+	if got, want := len(slices.Collect(run.NewEvents())), total-1; got != want {
+		t.Errorf("re-iterated new events after early break = %d, want %d", got, want)
+	}
+}
+
 func TestRunAndStreamingRun_ProduceEquivalentOutputs(t *testing.T) {
 	ex := minimalEchoBinding("ex")
 	wf, err := workflow.NewBuilder(ex).WithOutputFrom(ex).Build()

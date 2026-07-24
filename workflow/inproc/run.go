@@ -57,13 +57,13 @@ func (run *Run) NewEventCount() int {
 }
 
 func (run *Run) NewEvents() iter.Seq[workflow.Event] {
-	if run.lastBookmark >= len(run.eventSink) {
-		return func(yield func(workflow.Event) bool) {}
-	}
 	return func(yield func(workflow.Event) bool) {
-		current := run.lastBookmark
-		run.lastBookmark = len(run.eventSink)
-		for _, evt := range run.eventSink[current:] {
+		// Advance the read bookmark as each event is delivered so that stopping
+		// the iteration early leaves the un-yielded events available to a later
+		// NewEvents call instead of silently discarding them.
+		for run.lastBookmark < len(run.eventSink) {
+			evt := run.eventSink[run.lastBookmark]
+			run.lastBookmark++
 			if !yield(evt) {
 				return
 			}
