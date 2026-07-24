@@ -459,6 +459,39 @@ func TestStreamingToolCallsSupportInterleavedDeltas(t *testing.T) {
 	}
 }
 
+// When the streaming request faults (here, an immediate HTTP 500 before any
+// SSE event) the provider must surface only the error and emit no trailing
+// UsageContent update. This matches openaiprovider chat streaming, which yields
+// stream.Err() alone on failure; an aggregator/otel middleware counting
+// UsageContent would otherwise record phantom usage for a call that never ran.
+func TestStreamingFaultEmitsNoUsage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	var gotErr error
+	var updates int
+	for update, err := range newTestClient(t, server).RunText(t.Context(), "hi", agent.Stream(true)) {
+		if err != nil {
+			gotErr = err
+			continue
+		}
+		updates++
+		for _, c := range update.Contents {
+			if _, ok := c.(*message.UsageContent); ok {
+				t.Error("streaming fault emitted a UsageContent update; want none")
+			}
+		}
+	}
+	if gotErr == nil {
+		t.Fatal("expected a terminal error from the faulted stream, got nil")
+	}
+	if updates != 0 {
+		t.Errorf("got %d non-error updates, want 0 before the fault", updates)
+	}
+}
+
 // Building the request must not mutate the caller's MessageNewParams slices.
 // The provider appends system instructions to params.System; if it shares the
 // caller's backing array (spare capacity), the append corrupts the caller's data.

@@ -171,6 +171,10 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				return
 			}
 		}
+		if err := stream.Err(); err != nil {
+			yield(nil, err)
+			return
+		}
 		if !yield(&agent.ResponseUpdate{
 			CreatedAt: time.Now(),
 			Role:      message.RoleAssistant,
@@ -182,9 +186,6 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 			},
 		}, nil) {
 			return
-		}
-		if err := stream.Err(); err != nil {
-			yield(nil, err)
 		}
 	}
 }
