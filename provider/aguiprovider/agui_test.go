@@ -488,6 +488,47 @@ func TestAGUIAgentRun_ConvertsStateSnapshotEventToDataContent(t *testing.T) {
 	}
 }
 
+func TestAGUIAgentRun_SurfacesMessagesSnapshotEvent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeSSE(t, w, aguiEvents.NewRunStartedEvent("thread-1", "run-1"))
+		writeSSE(t, w, aguiEvents.NewMessagesSnapshotEvent([]aguiTypes.Message{{
+			ID:      "msg-1",
+			Role:    aguiTypes.RoleAssistant,
+			Content: "restored history",
+		}}))
+		writeSSE(t, w, aguiEvents.NewRunFinishedEvent("thread-1", "run-1"))
+	}))
+	defer server.Close()
+
+	a := aguiprovider.NewAgent(newTestClient(server.URL), aguiprovider.AgentConfig{})
+	resp, err := a.RunText(context.Background(), "hi").Collect()
+	if err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+
+	var snapshot any
+	for _, msg := range resp.Messages {
+		if v, ok := msg.AdditionalProperties["agui_messages_snapshot"]; ok {
+			snapshot = v
+			break
+		}
+	}
+	if snapshot == nil {
+		t.Fatal("expected agui_messages_snapshot in message metadata")
+	}
+	messages, ok := snapshot.([]aguiTypes.Message)
+	if !ok {
+		t.Fatalf("agui_messages_snapshot type = %T, want []aguiTypes.Message", snapshot)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("snapshot length = %d, want 1", len(messages))
+	}
+	if messages[0].ID != "msg-1" || messages[0].Content != "restored history" {
+		t.Fatalf("snapshot message = %#v, want id msg-1 content 'restored history'", messages[0])
+	}
+}
+
 func TestAGUIAgentRun_WithUnknownEventType_ReturnsError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
