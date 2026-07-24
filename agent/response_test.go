@@ -193,7 +193,8 @@ func TestResponse_Update_CreatedAt(t *testing.T) {
 		t.Errorf("expected CreatedAt %v, got %v", time1, resp.Messages[0].CreatedAt)
 	}
 
-	// Second update with later time - should update
+	// Second update with a later time - the first valid timestamp wins, so the
+	// message keeps time1 (matches .NET ProcessUpdate).
 	update2 := &agent.ResponseUpdate{
 		MessageID: "msg1",
 		CreatedAt: time2,
@@ -201,11 +202,11 @@ func TestResponse_Update_CreatedAt(t *testing.T) {
 	}
 	resp.Update(update2)
 
-	if !resp.Messages[0].CreatedAt.Equal(time2) {
-		t.Errorf("expected CreatedAt %v, got %v", time2, resp.Messages[0].CreatedAt)
+	if !resp.Messages[0].CreatedAt.Equal(time1) {
+		t.Errorf("expected CreatedAt to remain %v, got %v", time1, resp.Messages[0].CreatedAt)
 	}
 
-	// Third update with even later time - should update
+	// Third update with an even later time - still keeps time1.
 	update3 := &agent.ResponseUpdate{
 		MessageID: "msg1",
 		CreatedAt: time3,
@@ -213,8 +214,8 @@ func TestResponse_Update_CreatedAt(t *testing.T) {
 	}
 	resp.Update(update3)
 
-	if !resp.Messages[0].CreatedAt.Equal(time3) {
-		t.Errorf("expected CreatedAt %v, got %v", time3, resp.Messages[0].CreatedAt)
+	if !resp.Messages[0].CreatedAt.Equal(time1) {
+		t.Errorf("expected CreatedAt to remain %v, got %v", time1, resp.Messages[0].CreatedAt)
 	}
 }
 
@@ -241,6 +242,98 @@ func TestResponse_Update_CreatedAt_EarlierIgnored(t *testing.T) {
 
 	if !resp.Messages[0].CreatedAt.Equal(time1) {
 		t.Errorf("expected CreatedAt to remain %v, got %v", time1, resp.Messages[0].CreatedAt)
+	}
+}
+
+func TestResponse_Update_CreatedAt_FirstValidWins(t *testing.T) {
+	resp := &agent.Response{}
+
+	time1 := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	time2 := time1.Add(time.Second) // Later time
+
+	update1 := &agent.ResponseUpdate{
+		MessageID: "msg1",
+		CreatedAt: time1,
+		Contents:  message.Contents{&message.TextContent{Text: "First"}},
+	}
+	resp.Update(update1)
+
+	// Second update with a strictly later time - the first valid timestamp
+	// wins, so both the message and the response keep time1 (matches .NET
+	// ProcessUpdate, which never overwrites an already-set CreatedAt).
+	update2 := &agent.ResponseUpdate{
+		MessageID: "msg1",
+		CreatedAt: time2,
+		Contents:  message.Contents{&message.TextContent{Text: "Second"}},
+	}
+	resp.Update(update2)
+
+	if !resp.Messages[0].CreatedAt.Equal(time1) {
+		t.Errorf("expected message CreatedAt to remain %v, got %v", time1, resp.Messages[0].CreatedAt)
+	}
+	if !resp.CreatedAt.Equal(time1) {
+		t.Errorf("expected response CreatedAt to remain %v, got %v", time1, resp.CreatedAt)
+	}
+}
+
+func TestResponse_Update_CreatedAt_EpochZeroIgnored(t *testing.T) {
+	resp := &agent.Response{}
+
+	// An epoch-zero timestamp is treated as unset, so it does not populate
+	// CreatedAt and a later valid value can still take hold.
+	resp.Update(&agent.ResponseUpdate{
+		MessageID: "msg1",
+		CreatedAt: time.Unix(0, 0),
+		Contents:  message.Contents{&message.TextContent{Text: "First"}},
+	})
+
+	if !resp.Messages[0].CreatedAt.IsZero() {
+		t.Errorf("expected message CreatedAt to remain zero, got %v", resp.Messages[0].CreatedAt)
+	}
+	if !resp.CreatedAt.IsZero() {
+		t.Errorf("expected response CreatedAt to remain zero, got %v", resp.CreatedAt)
+	}
+
+	valid := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	resp.Update(&agent.ResponseUpdate{
+		MessageID: "msg1",
+		CreatedAt: valid,
+		Contents:  message.Contents{&message.TextContent{Text: "Second"}},
+	})
+
+	if !resp.Messages[0].CreatedAt.Equal(valid) {
+		t.Errorf("expected message CreatedAt %v, got %v", valid, resp.Messages[0].CreatedAt)
+	}
+	if !resp.CreatedAt.Equal(valid) {
+		t.Errorf("expected response CreatedAt %v, got %v", valid, resp.CreatedAt)
+	}
+}
+
+func TestResponse_Update_CreatedAt_PreexistingEpochZeroReplaced(t *testing.T) {
+	// A Response/Message may already carry an epoch-zero CreatedAt (e.g. loaded
+	// from older data or JSON). Because epoch-zero is treated as unset, a later
+	// valid timestamp must still be allowed to replace it.
+	resp := &agent.Response{
+		CreatedAt: time.Unix(0, 0),
+		Messages: []*message.Message{{
+			ID:        "msg1",
+			CreatedAt: time.Unix(0, 0),
+			Contents:  message.Contents{&message.TextContent{Text: "First"}},
+		}},
+	}
+
+	valid := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	resp.Update(&agent.ResponseUpdate{
+		MessageID: "msg1",
+		CreatedAt: valid,
+		Contents:  message.Contents{&message.TextContent{Text: "Second"}},
+	})
+
+	if !resp.Messages[0].CreatedAt.Equal(valid) {
+		t.Errorf("expected message CreatedAt %v, got %v", valid, resp.Messages[0].CreatedAt)
+	}
+	if !resp.CreatedAt.Equal(valid) {
+		t.Errorf("expected response CreatedAt %v, got %v", valid, resp.CreatedAt)
 	}
 }
 
@@ -336,7 +429,8 @@ func TestResponse_CreatedAt(t *testing.T) {
 		t.Errorf("expected resp.CreatedAt %v, got %v", time1, resp.CreatedAt)
 	}
 
-	// Second update with later time - should update
+	// Second update with a later time - the first valid timestamp wins, so the
+	// response keeps time1 (matches .NET ProcessUpdate).
 	update2 := &agent.ResponseUpdate{
 		MessageID: "msg2",
 		CreatedAt: time2,
@@ -344,11 +438,11 @@ func TestResponse_CreatedAt(t *testing.T) {
 	}
 	resp.Update(update2)
 
-	if !resp.CreatedAt.Equal(time2) {
-		t.Errorf("expected resp.CreatedAt %v, got %v", time2, resp.CreatedAt)
+	if !resp.CreatedAt.Equal(time1) {
+		t.Errorf("expected resp.CreatedAt to remain %v, got %v", time1, resp.CreatedAt)
 	}
 
-	// Third update with earlier time - should NOT update
+	// Third update with an earlier time - still keeps time1.
 	update3 := &agent.ResponseUpdate{
 		MessageID: "msg3",
 		CreatedAt: time3,
@@ -356,8 +450,8 @@ func TestResponse_CreatedAt(t *testing.T) {
 	}
 	resp.Update(update3)
 
-	if !resp.CreatedAt.Equal(time2) {
-		t.Errorf("expected resp.CreatedAt to remain %v, got %v", time2, resp.CreatedAt)
+	if !resp.CreatedAt.Equal(time1) {
+		t.Errorf("expected resp.CreatedAt to remain %v, got %v", time1, resp.CreatedAt)
 	}
 }
 

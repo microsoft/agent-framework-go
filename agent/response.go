@@ -186,7 +186,7 @@ func (resp *Response) Update(update *ResponseUpdate) {
 	msg.AuthorName = cmp.Or(update.AuthorName, msg.AuthorName)
 	msg.Role = cmp.Or(update.Role, msg.Role)
 	msg.ID = cmp.Or(update.MessageID, msg.ID)
-	if msg.CreatedAt.IsZero() || (!update.CreatedAt.IsZero() && update.CreatedAt.After(msg.CreatedAt)) {
+	if !isValidCreatedAt(msg.CreatedAt) && isValidCreatedAt(update.CreatedAt) {
 		msg.CreatedAt = update.CreatedAt
 	}
 	msg.Contents = append(msg.Contents, update.Contents...)
@@ -214,7 +214,7 @@ func (resp *Response) Update(update *ResponseUpdate) {
 	} else {
 		resp.ContinuationToken = update.ContinuationToken
 	}
-	if resp.CreatedAt.IsZero() || (!update.CreatedAt.IsZero() && update.CreatedAt.After(resp.CreatedAt)) {
+	if !isValidCreatedAt(resp.CreatedAt) && isValidCreatedAt(update.CreatedAt) {
 		resp.CreatedAt = update.CreatedAt
 	}
 	if update.AdditionalProperties != nil {
@@ -223,6 +223,14 @@ func (resp *Response) Update(update *ResponseUpdate) {
 		}
 		maps.Copy(resp.AdditionalProperties, update.AdditionalProperties)
 	}
+}
+
+// isValidCreatedAt reports whether t is a usable creation timestamp. A zero
+// time.Time or an epoch-zero value is treated as unset, mirroring the .NET
+// ProcessUpdate check that keeps the first valid timestamp and ignores
+// default/uninitialized values.
+func isValidCreatedAt(t time.Time) bool {
+	return t.After(time.Unix(0, 0))
 }
 
 func (resp *Response) targetMessage(update *ResponseUpdate) *message.Message {
