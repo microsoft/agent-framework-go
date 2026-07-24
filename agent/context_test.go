@@ -229,6 +229,45 @@ func TestContextProviderMiddleware_Run_PassesRunErrorToCustomProvider(t *testing
 	}
 }
 
+func TestContextProviderMiddleware_Run_SuppressesInvokedErrorAfterConsumerStop(t *testing.T) {
+	provider := contextProviderFunc{
+		invoking: func(_ context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+			return invoking.Messages, invoking.Options, nil
+		},
+		invoked: func(context.Context, agent.InvokedContext) error {
+			return errors.New("store failed")
+		},
+	}
+
+	seq := agent.ContextProviderMiddleware(provider).Run(
+		func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			return func(yield func(*agent.ResponseUpdate, error) bool) {
+				if !yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "one"}}}, nil) {
+					return
+				}
+				yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "two"}}}, nil)
+			}
+		},
+		context.Background(),
+		[]*message.Message{message.NewText("hello")},
+		agent.WithSession(agenttest.CreateSession()),
+	)
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("middleware yielded after consumer stop: %v", r)
+		}
+	}()
+
+	// Abandon the range after the first update. The provider's Invoked hook then
+	// returns an error; the middleware must not yield it because the consumer
+	// already stopped, otherwise Go panics with
+	// "range function continued iteration after loop body returned false".
+	for range seq {
+		break
+	}
+}
+
 func contextProviderMiddlewareSingleUpdate(text string) iter.Seq2[*agent.ResponseUpdate, error] {
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: text}}}, nil)
