@@ -491,6 +491,16 @@ var agentsExamples = []ExampleDefinition{
 		},
 	},
 	{
+		Name:                         "02_agents_providers_anthropic_thinking",
+		ProjectPath:                  "examples/02-agents/providers/anthrophic/thinking",
+		RequiredEnvironmentVariables: []string{"ANTHROPIC_API_KEY"},
+		ExpectedOutputDescription: []string{
+			"The output should contain the model's reasoning (thinking) about the bat-and-ball problem.",
+			"The output should conclude that the ball costs 5 cents (equivalently $0.05).",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
 		Name:        "02_agents_a2a_as_function_tools",
 		ProjectPath: "examples/02-agents/a2a/as_function_tools",
 		SkipReason:  "Requires a running A2A example server.",
