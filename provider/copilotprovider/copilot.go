@@ -90,14 +90,17 @@ func (p *provider) run(ctx context.Context, messages []*message.Message, options
 
 		frameworkSession, _ := agent.GetOption(options, agent.WithSession)
 		isStreaming := p.streaming(options)
-		copilotSession, err := p.openSession(ctx, frameworkSession, isStreaming, options)
+		// Register eventHandler through SessionConfig.OnEvent so it is attached
+		// before the session.create/resume RPC. This matches the SDK's
+		// no-missed-events guarantee: lifecycle events the CLI emits during
+		// session creation (e.g. session.start) would otherwise be delivered to
+		// zero handlers in the window before a post-return session.On call.
+		copilotSession, err := p.openSession(ctx, frameworkSession, isStreaming, eventHandler, options)
 		if err != nil {
 			yield(nil, err)
 			return
 		}
 		defer func() { _ = copilotSession.Disconnect() }()
-		unsubscribe := copilotSession.On(eventHandler)
-		defer unsubscribe()
 
 		if frameworkSession != nil && frameworkSession.ServiceID() == "" {
 			frameworkSession.SetServiceID(copilotSession.SessionID)
@@ -221,27 +224,30 @@ func (p *provider) openSession(
 	ctx context.Context,
 	frameworkSession *agent.Session,
 	streaming bool,
+	eventHandler copilot.SessionEventHandler,
 	options []agent.Option,
 ) (*copilot.Session, error) {
 	if frameworkSession != nil && frameworkSession.ServiceID() != "" {
-		cfg := p.resumeSessionConfig(streaming, options)
+		cfg := p.resumeSessionConfig(streaming, eventHandler, options)
 		return p.client.ResumeSession(ctx, frameworkSession.ServiceID(), &cfg)
 	}
-	cfg := p.sessionConfig(streaming, options)
+	cfg := p.sessionConfig(streaming, eventHandler, options)
 	return p.client.CreateSession(ctx, &cfg)
 }
 
-func (p *provider) sessionConfig(streaming bool, options []agent.Option) copilot.SessionConfig {
+func (p *provider) sessionConfig(streaming bool, eventHandler copilot.SessionEventHandler, options []agent.Option) copilot.SessionConfig {
 	cfg := copySessionConfig(p.cfg.SessionConfig)
 	cfg.Streaming = copilot.Bool(streaming)
+	cfg.OnEvent = eventHandler
 	cfg.SystemMessage = systemMessageWithInstructions(cfg.SystemMessage, slices.Collect(agent.AllOptions(options, agent.WithInstructions)))
 	cfg.Tools = append(cfg.Tools, copilotTools(options)...)
 	return cfg
 }
 
-func (p *provider) resumeSessionConfig(streaming bool, options []agent.Option) copilot.ResumeSessionConfig {
+func (p *provider) resumeSessionConfig(streaming bool, eventHandler copilot.SessionEventHandler, options []agent.Option) copilot.ResumeSessionConfig {
 	cfg := copyResumeSessionConfig(p.cfg.SessionConfig)
 	cfg.Streaming = copilot.Bool(streaming)
+	cfg.OnEvent = eventHandler
 	cfg.SystemMessage = systemMessageWithInstructions(cfg.SystemMessage, slices.Collect(agent.AllOptions(options, agent.WithInstructions)))
 	cfg.Tools = append(cfg.Tools, copilotTools(options)...)
 	return cfg
