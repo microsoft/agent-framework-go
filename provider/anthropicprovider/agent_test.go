@@ -4,6 +4,7 @@ package anthropicprovider_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -573,5 +574,115 @@ func TestToolUseEmptyArgumentsSerializeAsObject(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("tool_use block for toolu_1 not found in request")
+	}
+}
+
+// findToolResultBlock returns the tool_result block for the given call ID from
+// an Anthropic messages request body, or nil if not present.
+func findToolResultBlock(t *testing.T, body []byte, callID string) map[string]any {
+	t.Helper()
+	var req map[string]any
+	if err := json.Unmarshal(body, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	messages, ok := req["messages"].([]any)
+	if !ok {
+		t.Fatalf("request messages = %#v, want a JSON array", req["messages"])
+	}
+	for _, m := range messages {
+		msg, ok := m.(map[string]any)
+		if !ok {
+			continue
+		}
+		blocks, ok := msg["content"].([]any)
+		if !ok {
+			continue
+		}
+		for _, b := range blocks {
+			block, ok := b.(map[string]any)
+			if !ok {
+				continue
+			}
+			if block["type"] == "tool_result" && block["tool_use_id"] == callID {
+				return block
+			}
+		}
+	}
+	return nil
+}
+
+func runWithToolResult(t *testing.T, result *message.FunctionResultContent) []byte {
+	t.Helper()
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		bodyCh <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, minimalMessageResponse("ok"))
+	}))
+	defer server.Close()
+
+	a := anthropicprovider.NewAgent(
+		anthropic.NewClient(option.WithBaseURL(server.URL), option.WithAPIKey("test")),
+		anthropicprovider.AgentConfig{
+			Model:  "claude-3-5-sonnet-20241022",
+			Config: agent.Config{DisableFuncAutoCall: true},
+		},
+	)
+
+	msgs := []*message.Message{
+		{Role: message.RoleUser, Contents: message.Contents{&message.TextContent{Text: "what time is it?"}}},
+		{Role: message.RoleAssistant, Contents: message.Contents{&message.FunctionCallContent{CallID: result.CallID, Name: "get_time", Arguments: ""}}},
+		{Role: message.RoleTool, Contents: message.Contents{result}},
+	}
+	if _, err := a.Run(t.Context(), msgs).Collect(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	return <-bodyCh
+}
+
+func TestToolResultErrorSendsErrorText(t *testing.T) {
+	body := runWithToolResult(t, &message.FunctionResultContent{
+		CallID: "toolu_err",
+		Error:  errors.New("boom"),
+	})
+
+	block := findToolResultBlock(t, body, "toolu_err")
+	if block == nil {
+		t.Fatal("tool_result block for toolu_err not found in request")
+	}
+	if isErr, _ := block["is_error"].(bool); !isErr {
+		t.Errorf("tool_result is_error = %#v, want true", block["is_error"])
+	}
+	content, _ := json.Marshal(block["content"])
+	if !strings.Contains(string(content), "boom") {
+		t.Errorf("tool_result content = %s, want it to contain the error text %q", content, "boom")
+	}
+	if string(content) == "null" {
+		t.Errorf("tool_result content = %s, want the error text and not the literal null", content)
+	}
+}
+
+func TestToolResultSuccessSendsResult(t *testing.T) {
+	body := runWithToolResult(t, &message.FunctionResultContent{
+		CallID: "toolu_ok",
+		Result: "12:00",
+	})
+
+	block := findToolResultBlock(t, body, "toolu_ok")
+	if block == nil {
+		t.Fatal("tool_result block for toolu_ok not found in request")
+	}
+	if isErr, _ := block["is_error"].(bool); isErr {
+		t.Errorf("tool_result is_error = %#v, want false", block["is_error"])
+	}
+	content, _ := json.Marshal(block["content"])
+	if !strings.Contains(string(content), "12:00") {
+		t.Errorf("tool_result content = %s, want it to contain the result %q", content, "12:00")
 	}
 }
