@@ -415,6 +415,17 @@ func (a *toolCallAccumulator) onEvent(evt aguiEvents.Event) ([]*agent.ResponseUp
 			CreatedAt: eventTime(evt),
 			Contents:  message.Contents{&message.TextContent{Text: e.Delta}},
 		}}, nil
+	case *aguiEvents.TextMessageChunkEvent:
+		delta := deref(e.Delta)
+		if delta == "" {
+			return nil, nil
+		}
+		return []*agent.ResponseUpdate{{
+			Role:      message.RoleAssistant,
+			MessageID: deref(e.MessageID),
+			CreatedAt: eventTime(evt),
+			Contents:  message.Contents{&message.TextContent{Text: delta}},
+		}}, nil
 	case *aguiEvents.ReasoningMessageContentEvent:
 		return []*agent.ResponseUpdate{{
 			Role:      message.RoleAssistant,

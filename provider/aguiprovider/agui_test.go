@@ -43,6 +43,50 @@ func TestAGUIAgentRun_AggregatesStreamingText(t *testing.T) {
 	}
 }
 
+func TestAGUIAgentRun_SurfacesTextMessageChunkEvents(t *testing.T) {
+	strPtr := func(s string) *string { return &s }
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeSSE(t, w, aguiEvents.NewRunStartedEvent("thread-1", "run-1"))
+		writeSSE(t, w, aguiEvents.NewTextMessageChunkEvent(strPtr("msg-1"), strPtr("assistant"), strPtr("Hello")))
+		writeSSE(t, w, aguiEvents.NewTextMessageChunkEvent(strPtr("msg-1"), strPtr("assistant"), strPtr(" World")))
+		writeSSE(t, w, aguiEvents.NewRunFinishedEvent("thread-1", "run-1"))
+	}))
+	defer server.Close()
+
+	a := aguiprovider.NewAgent(newTestClient(server.URL), aguiprovider.AgentConfig{})
+	resp, err := a.RunText(context.Background(), "hi").Collect()
+	if err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	if got := resp.String(); got != "Hello World" {
+		t.Fatalf("response text = %q, want %q", got, "Hello World")
+	}
+}
+
+func TestAGUIAgentRun_SkipsEmptyTextMessageChunkEvents(t *testing.T) {
+	strPtr := func(s string) *string { return &s }
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeSSE(t, w, aguiEvents.NewRunStartedEvent("thread-1", "run-1"))
+		writeSSE(t, w, aguiEvents.NewTextMessageChunkEvent(strPtr("msg-1"), strPtr("assistant"), nil))
+		writeSSE(t, w, aguiEvents.NewTextMessageChunkEvent(strPtr("msg-1"), strPtr("assistant"), strPtr("")))
+		writeSSE(t, w, aguiEvents.NewRunFinishedEvent("thread-1", "run-1"))
+	}))
+	defer server.Close()
+
+	a := aguiprovider.NewAgent(newTestClient(server.URL), aguiprovider.AgentConfig{})
+	resp, err := a.RunText(context.Background(), "hi").Collect()
+	if err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	for content := range resp.Contents() {
+		if _, ok := content.(*message.TextContent); ok {
+			t.Fatalf("expected no text content for empty chunk deltas, got %#v", content)
+		}
+	}
+}
+
 func TestAGUIAgentRun_ConfigInstructionsBecomeSystemMessage(t *testing.T) {
 	var captured aguiTypes.RunAgentInput
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
