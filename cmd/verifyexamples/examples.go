@@ -254,6 +254,21 @@ var agentsExamples = []ExampleDefinition{
 		},
 	},
 	{
+		Name:                         "02_agents_agents_step23_planning_with_todos",
+		ProjectPath:                  "examples/02-agents/agents/step23_planning_with_todos",
+		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
+		OptionalEnvironmentVariables: []string{"FOUNDRY_MODEL"},
+		MustContain: []string{
+			"Planning With Todos",
+		},
+		ExpectedOutputDescription: []string{
+			"The output should show the agent planning a task by recording todo items, then switching to execute mode and completing them.",
+			"The assistant should reference adding a health-check endpoint and break the work into trackable todo items.",
+			"The final response should report which todo items remain, if any.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
 		Name:                         "02_agents_providers_azure_openai_chat_completion",
 		ProjectPath:                  "examples/02-agents/providers/azure/openai_chat_completion",
 		RequiredEnvironmentVariables: []string{"AZURE_OPENAI_ENDPOINT"},
