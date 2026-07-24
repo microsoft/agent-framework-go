@@ -785,6 +785,17 @@ var workflowExamples = []ExampleDefinition{
 		},
 	},
 	{
+		Name:                         "03_workflows_concurrent_concurrent_custom_aggregator",
+		ProjectPath:                  "examples/03-workflows/concurrent/concurrent_custom_aggregator",
+		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
+		OptionalEnvironmentVariables: []string{"FOUNDRY_MODEL"},
+		MustContain:                  []string{"Combined expert summary:"},
+		ExpectedOutputDescription: []string{
+			"The output should show several domain experts' answers folded into a single combined summary message.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
 		Name:            "03_workflows_conditional_edges_01_edge_condition",
 		ProjectPath:     "examples/03-workflows/conditional-edges/01_edge_condition",
 		IsDeterministic: true,
