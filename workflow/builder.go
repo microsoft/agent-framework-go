@@ -48,6 +48,8 @@ func NewBuilder(start ExecutorBinding) *Builder {
 	return bld
 }
 
+// WithName sets the workflow's human-readable name. It is a no-op if the
+// builder already holds an error.
 func (wb *Builder) WithName(name string) *Builder {
 	if wb.err != nil {
 		return wb
@@ -56,6 +58,8 @@ func (wb *Builder) WithName(name string) *Builder {
 	return wb
 }
 
+// WithDescription sets the workflow's human-readable description. It is a
+// no-op if the builder already holds an error.
 func (wb *Builder) WithDescription(description string) *Builder {
 	if wb.err != nil {
 		return wb
@@ -73,6 +77,9 @@ func (wb *Builder) WithTelemetry(tracer workflowobservability.Tracer, options Te
 	return wb
 }
 
+// WithOutputFrom registers the given bindings as terminal (untagged) workflow
+// output sources. It mirrors [Builder.WithIntermediateOutputFrom] but without
+// the [OutputTagIntermediate] tag.
 func (wb *Builder) WithOutputFrom(bindings ...ExecutorBinding) *Builder {
 	return wb.withOutputFrom(nil, bindings...)
 }
