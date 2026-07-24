@@ -1363,6 +1363,68 @@ func TestChatDataContentMessage_Image_NonStreaming(t *testing.T) {
 	}
 }
 
+// TestChatDataContentMessage_File_NonStreaming verifies that a non-image file
+// DataContent (e.g. a PDF) is sent as a data URI in file_data, matching the
+// image branch and the Responses provider, not as raw base64.
+func TestChatDataContentMessage_File_NonStreaming(t *testing.T) {
+	input := `
+            {
+              "messages": [
+                {
+                  "role": "user",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "Summarize this document"
+                    },
+                    {
+                      "type": "file",
+                      "file": {
+                        "file_data": "data:application/pdf;base64,cGRmZGF0YQ==",
+                        "filename": "report.pdf"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "model": "gpt-4o-mini"
+            }
+            `
+	const output = `
+            {
+              "choices": [
+                {
+                  "finish_reason": "stop",
+                  "index": 0,
+                  "message": {"content": "ok", "refusal": null, "role": "assistant"}
+                }
+              ],
+              "created": 1743531271,
+              "id": "chatcmpl-file01",
+              "model": "gpt-4o-mini-2024-07-18",
+              "object": "chat.completion"
+            }
+            `
+	server := newTestServer(t, input, output)
+	defer server.Close()
+
+	a := newTestClient(server)
+
+	messages := []*message.Message{
+		{
+			Role: message.RoleUser,
+			Contents: []message.Content{
+				&message.TextContent{Text: "Summarize this document"},
+				&message.DataContent{Data: "cGRmZGF0YQ==", MediaType: "application/pdf", Name: "report.pdf"},
+			},
+		},
+	}
+
+	if _, err := a.Run(t.Context(), messages).Collect(); err != nil {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestChatMultipleRequiredFunctions(t *testing.T) {
 	const input = `
             {

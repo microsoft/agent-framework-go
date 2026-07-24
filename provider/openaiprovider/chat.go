@@ -421,7 +421,7 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 					}))
 				default:
 					contents = append(contents, openai.FileContentPart(openai.ChatCompletionContentPartFileFileParam{
-						FileData: openai.String(c.Data),
+						FileData: openai.String(c.URI()),
 						Filename: openai.String(c.Name),
 					}))
 				}
