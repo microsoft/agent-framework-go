@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/microsoft/agent-framework-go/agent"
@@ -274,6 +275,86 @@ func TestMemoryProviderInvokedLogsUpdateFailureAndDoesNotReturnError(t *testing.
 	}
 	if strings.Contains(logText, "user-456") {
 		t.Fatalf("logs should not include scope: %q", logText)
+	}
+}
+
+func TestMemoryProviderWhenUpdatesCompletedAwaitsPendingUpdate(t *testing.T) {
+	pollResponses := []string{
+		`{"update_id":"update_1","status":"queued"}`,
+		`{"update_id":"update_1","status":"completed"}`,
+	}
+	polls := 0
+	transport := &recordingTransport{handle: func(req *http.Request, _ string) (*http.Response, error) {
+		if req.Method == http.MethodPost && strings.HasSuffix(req.URL.Path, ":update_memories") {
+			resp := jsonResponse(req, http.StatusAccepted, `{"update_id":"update_1","status":"queued"}`)
+			resp.Header.Set("Operation-Location", validEndpoint+"/memory_stores/memory/updates/update_1?api-version=v1")
+			return resp, nil
+		}
+		body := pollResponses[len(pollResponses)-1]
+		if polls < len(pollResponses) {
+			body = pollResponses[polls]
+		}
+		polls++
+		return jsonResponse(req, http.StatusOK, body), nil
+	}}
+	provider := foundryprovider.NewMemoryProvider(validEndpoint, validCredential, "memory", validScope, foundryprovider.MemoryProviderConfig{
+		ClientOptions: azcore.ClientOptions{Transport: transport},
+	})
+
+	if err := provider.Invoked(t.Context(), agent.InvokedContext{RequestMessages: []*message.Message{message.NewText("remember me")}}); err != nil {
+		t.Fatalf("Invoked error = %v", err)
+	}
+
+	if err := provider.WhenUpdatesCompleted(t.Context(), time.Millisecond); err != nil {
+		t.Fatalf("WhenUpdatesCompleted error = %v", err)
+	}
+	if polls < 2 {
+		t.Fatalf("poll count = %d, want at least 2", polls)
+	}
+
+	// The pending update is cleared, so a second call is a no-op and issues no further requests.
+	before := len(transport.Requests())
+	if err := provider.WhenUpdatesCompleted(t.Context(), time.Millisecond); err != nil {
+		t.Fatalf("second WhenUpdatesCompleted error = %v", err)
+	}
+	if after := len(transport.Requests()); after != before {
+		t.Fatalf("request count after second call = %d, want %d", after, before)
+	}
+}
+
+func TestMemoryProviderWhenUpdatesCompletedReturnsErrorOnFailedUpdate(t *testing.T) {
+	transport := &recordingTransport{handle: func(req *http.Request, _ string) (*http.Response, error) {
+		if req.Method == http.MethodPost && strings.HasSuffix(req.URL.Path, ":update_memories") {
+			resp := jsonResponse(req, http.StatusAccepted, `{"update_id":"update_1","status":"queued"}`)
+			resp.Header.Set("Operation-Location", validEndpoint+"/memory_stores/memory/updates/update_1?api-version=v1")
+			return resp, nil
+		}
+		return jsonResponse(req, http.StatusOK, `{"update_id":"update_1","status":"failed","error":{"code":"extraction_failed","message":"boom"}}`), nil
+	}}
+	provider := foundryprovider.NewMemoryProvider(validEndpoint, validCredential, "memory", validScope, foundryprovider.MemoryProviderConfig{
+		ClientOptions: azcore.ClientOptions{Transport: transport},
+	})
+
+	if err := provider.Invoked(t.Context(), agent.InvokedContext{RequestMessages: []*message.Message{message.NewText("remember me")}}); err != nil {
+		t.Fatalf("Invoked error = %v", err)
+	}
+
+	if err := provider.WhenUpdatesCompleted(t.Context(), time.Millisecond); err == nil {
+		t.Fatal("WhenUpdatesCompleted error = nil, want non-nil for failed update")
+	}
+}
+
+func TestMemoryProviderWhenUpdatesCompletedReturnsNilWhenNoPendingUpdate(t *testing.T) {
+	transport := &recordingTransport{}
+	provider := foundryprovider.NewMemoryProvider(validEndpoint, validCredential, "memory", validScope, foundryprovider.MemoryProviderConfig{
+		ClientOptions: azcore.ClientOptions{Transport: transport},
+	})
+
+	if err := provider.WhenUpdatesCompleted(t.Context(), time.Millisecond); err != nil {
+		t.Fatalf("WhenUpdatesCompleted error = %v", err)
+	}
+	if got := len(transport.Requests()); got != 0 {
+		t.Fatalf("request count = %d, want 0", got)
 	}
 }
 

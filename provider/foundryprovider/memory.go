@@ -7,8 +7,11 @@ import (
 	"context"
 	"log/slog"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/runtime"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/internal/azaiprojects"
 	"github.com/microsoft/agent-framework-go/message"
@@ -53,6 +56,9 @@ type MemoryProvider struct {
 	config          MemoryProviderConfig
 	providerConfig  agent.ContextProviderConfig
 	provider        agent.ContextProvider
+
+	mu            sync.Mutex
+	pendingUpdate *runtime.Poller[azaiprojects.MemoryStoresClientUpdateMemoriesResponse]
 }
 
 // NewMemoryProvider creates a Foundry memory provider backed by a Microsoft Foundry Projects memory store.
@@ -163,11 +169,43 @@ func (p *MemoryProvider) store(ctx context.Context, invoked agent.InvokedContext
 		Items:       items,
 		UpdateDelay: &p.config.UpdateDelay,
 	}
-	if _, err := p.client.BeginUpdateMemories(ctx, p.memoryStoreName, scope, updateOptions); err != nil {
+	poller, err := p.client.BeginUpdateMemories(ctx, p.memoryStoreName, scope, updateOptions)
+	if err != nil {
 		p.log(ctx, slog.LevelError, "foundrymemory: failed to update memories", "memory_store", p.memoryStoreName, "count", len(items), "error", err)
 		return nil
 	}
+	p.mu.Lock()
+	p.pendingUpdate = poller
+	p.mu.Unlock()
 	p.log(ctx, slog.LevelInfo, "foundrymemory: submitted memory update", "memory_store", p.memoryStoreName, "count", len(items))
+	return nil
+}
+
+// WhenUpdatesCompleted blocks until the memory update most recently submitted by
+// the provider reaches a terminal state, polling the update status at
+// pollingInterval. It returns nil when no update is pending or when the update
+// completed successfully, and a non-nil error when the update failed.
+//
+// Foundry extracts memories asynchronously after a run, so [MemoryProvider.store]
+// is fire-and-forget and returns before memories are persisted. Callers that must
+// observe stored memories before the next search—typically tests—can await
+// completion with this method. Normal runs need not call it and do not pay the
+// polling cost.
+func (p *MemoryProvider) WhenUpdatesCompleted(ctx context.Context, pollingInterval time.Duration) error {
+	p.mu.Lock()
+	poller := p.pendingUpdate
+	p.mu.Unlock()
+	if poller == nil {
+		return nil
+	}
+	if _, err := poller.PollUntilDone(ctx, &runtime.PollUntilDoneOptions{Frequency: pollingInterval}); err != nil {
+		return err
+	}
+	p.mu.Lock()
+	if p.pendingUpdate == poller {
+		p.pendingUpdate = nil
+	}
+	p.mu.Unlock()
 	return nil
 }
 
