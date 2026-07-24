@@ -136,7 +136,8 @@ func (p *EnvironmentProvider) Invoking(ctx context.Context, invoking agent.Invok
 	return p.provider.Invoking(ctx, invoking)
 }
 
-// Invoked implements agent.ContextProvider by delegating to the wrapped provider, persisting post-invocation state.
+// Invoked implements agent.ContextProvider by delegating to the wrapped provider.
+// The wrapped provider is configured without a Store, so this is a no-op on success.
 func (p *EnvironmentProvider) Invoked(ctx context.Context, invoked agent.InvokedContext) error {
 	return p.provider.Invoked(ctx, invoked)
 }
