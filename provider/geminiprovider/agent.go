@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
@@ -423,8 +424,16 @@ func buildResponsePart(part *genai.Part, contents []message.Content) ([]message.
 		if err != nil {
 			return nil, fmt.Errorf("geminiprovider: failed to marshal function call arguments: %w", err)
 		}
+		// Standard Gemini generateContent responses leave the function call ID empty
+		// (genai marks it omitempty). Synthesize a stable ID so the framework tool loop
+		// can correlate the call with its result on subsequent turns, mirroring Python's
+		// _generate_tool_call_id.
+		callID := part.FunctionCall.ID
+		if callID == "" {
+			callID = "tool-call-" + strings.ReplaceAll(uuid.NewString(), "-", "")
+		}
 		contents = append(contents, &message.FunctionCallContent{
-			CallID:    part.FunctionCall.ID,
+			CallID:    callID,
 			Name:      part.FunctionCall.Name,
 			Arguments: string(argsJSON),
 			ContentHeader: message.ContentHeader{
