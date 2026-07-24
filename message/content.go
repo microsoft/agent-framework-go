@@ -36,6 +36,8 @@ func init() {
 		&ToolApprovalResponseContent{},
 		&AlwaysApproveToolApprovalResponseContent{},
 		&MCPServerToolCallContent{},
+		&CodeInterpreterToolCallContent{},
+		&CodeInterpreterToolResultContent{},
 	} {
 		supportedContents[c.kind()] = reflect.TypeOf(c).Elem()
 	}

@@ -183,6 +183,53 @@ func TestContentEncoding_Roundtrip(t *testing.T) {
 	}
 }
 
+func TestCodeInterpreterContentEncoding_Roundtrip(t *testing.T) {
+	tests := []struct {
+		name    string
+		content message.Content
+	}{
+		{
+			name: "toolCall",
+			content: &message.CodeInterpreterToolCallContent{
+				CallID: "code-call-123",
+				Inputs: message.Contents{
+					&message.TextContent{Text: "print('hello')"},
+				},
+			},
+		},
+		{
+			name: "toolResult",
+			content: &message.CodeInterpreterToolResultContent{
+				CallID: "code-call-123",
+				Outputs: message.Contents{
+					&message.TextContent{Text: "hello"},
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := json.Marshal(message.Contents{tt.content})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded message.Contents
+			if err = json.Unmarshal(data, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if len(decoded) != 1 {
+				t.Fatalf("expected 1 content, got %d", len(decoded))
+			}
+			if _, ok := decoded[0].(*message.RawContent); ok {
+				t.Fatalf("content decoded to *message.RawContent, want %T", tt.content)
+			}
+			if !reflect.DeepEqual(tt.content, decoded[0]) {
+				t.Errorf("expected content %v, got %v", tt.content, decoded[0])
+			}
+		})
+	}
+}
+
 func TestDataContentUnmarshalDefaultsMissingMediaType(t *testing.T) {
 	var content message.DataContent
 	if err := json.Unmarshal([]byte(`{"Type":"data","URI":"data:,hello%20world+literal"}`), &content); err != nil {
