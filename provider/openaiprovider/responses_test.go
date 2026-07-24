@@ -965,6 +965,206 @@ func TestResponsesDataContentMessage_Image_NonStreaming(t *testing.T) {
 	}
 }
 
+func TestResponsesUriContentMessage_Image_ForwardsFileID(t *testing.T) {
+	// An image referenced by an already-uploaded file_id must be forwarded
+	// alongside image_url and detail, matching the Python reference.
+	const input = `
+            {
+              "input": [
+                {
+                  "type": "message",
+                  "role": "user",
+                  "content": [
+                    {
+                      "type": "input_image",
+                      "image_url": "https://x/img.png",
+                      "detail": "high",
+                      "file_id": "file-abc"
+                    }
+                  ]
+                }
+              ],
+              "model": "gpt-4o-mini"
+            }
+            `
+	const output = `
+            {
+              "id": "resp_img_fileid",
+              "object": "response",
+              "created_at": 1743531271,
+              "status": "completed",
+              "model": "gpt-4o-mini-2024-07-18",
+              "output": [
+                {
+                  "type": "message",
+                  "id": "msg_img_fileid",
+                  "status": "completed",
+                  "role": "assistant",
+                  "content": [
+                    {"type": "output_text", "text": "ok", "annotations": []}
+                  ]
+                }
+              ]
+            }
+            `
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	uriContent := &message.URIContent{
+		URI:       "https://x/img.png",
+		MediaType: "image/png",
+	}
+	uriContent.AdditionalProperties = map[string]any{
+		"detail":  "high",
+		"file_id": "file-abc",
+	}
+
+	messages := []*message.Message{
+		{
+			Role:     message.RoleUser,
+			Contents: []message.Content{uriContent},
+		},
+	}
+
+	if _, err := a.Run(t.Context(), messages).Collect(); err != nil {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestResponsesDataContentMessage_Image_ForwardsFileID(t *testing.T) {
+	const input = `
+            {
+              "input": [
+                {
+                  "type": "message",
+                  "role": "user",
+                  "content": [
+                    {
+                      "type": "input_image",
+                      "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==",
+                      "detail": "high",
+                      "file_id": "file-abc"
+                    }
+                  ]
+                }
+              ],
+              "model": "gpt-4o-mini"
+            }
+            `
+	const output = `
+            {
+              "id": "resp_img_fileid",
+              "object": "response",
+              "created_at": 1743531271,
+              "status": "completed",
+              "model": "gpt-4o-mini-2024-07-18",
+              "output": [
+                {
+                  "type": "message",
+                  "id": "msg_img_fileid",
+                  "status": "completed",
+                  "role": "assistant",
+                  "content": [
+                    {"type": "output_text", "text": "ok", "annotations": []}
+                  ]
+                }
+              ]
+            }
+            `
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	dataContent := &message.DataContent{
+		Data:      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==",
+		MediaType: "image/png",
+	}
+	dataContent.AdditionalProperties = map[string]any{
+		"detail":  "high",
+		"file_id": "file-abc",
+	}
+
+	messages := []*message.Message{
+		{
+			Role:     message.RoleUser,
+			Contents: []message.Content{dataContent},
+		},
+	}
+
+	if _, err := a.Run(t.Context(), messages).Collect(); err != nil {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestResponsesUriContentMessage_Image_NoFileID_OmitsField(t *testing.T) {
+	// Without a file_id in AdditionalProperties, no file_id field is emitted.
+	const input = `
+            {
+              "input": [
+                {
+                  "type": "message",
+                  "role": "user",
+                  "content": [
+                    {
+                      "type": "input_image",
+                      "image_url": "https://x/img.png",
+                      "detail": "high"
+                    }
+                  ]
+                }
+              ],
+              "model": "gpt-4o-mini"
+            }
+            `
+	const output = `
+            {
+              "id": "resp_img_nofileid",
+              "object": "response",
+              "created_at": 1743531271,
+              "status": "completed",
+              "model": "gpt-4o-mini-2024-07-18",
+              "output": [
+                {
+                  "type": "message",
+                  "id": "msg_img_nofileid",
+                  "status": "completed",
+                  "role": "assistant",
+                  "content": [
+                    {"type": "output_text", "text": "ok", "annotations": []}
+                  ]
+                }
+              ]
+            }
+            `
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	uriContent := &message.URIContent{
+		URI:       "https://x/img.png",
+		MediaType: "image/png",
+	}
+	uriContent.AdditionalProperties = map[string]any{"detail": "high"}
+
+	messages := []*message.Message{
+		{
+			Role:     message.RoleUser,
+			Contents: []message.Content{uriContent},
+		},
+	}
+
+	if _, err := a.Run(t.Context(), messages).Collect(); err != nil {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestResponsesReasoningTextDelta_Streaming(t *testing.T) {
 	const input = `
             {

@@ -471,11 +471,15 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 			case *message.URIContent:
 				switch c.TopLevelMediaType() {
 				case "image":
+					img := responses.ResponseInputImageParam{
+						ImageURL: openai.String(c.URI),
+						Detail:   responses.ResponseInputImageDetail(imageDetail(c.AdditionalProperties)),
+					}
+					if id := imageFileID(c.AdditionalProperties); id != "" {
+						img.FileID = openai.String(id)
+					}
 					contents = append(contents, responses.ResponseInputContentUnionParam{
-						OfInputImage: &responses.ResponseInputImageParam{
-							ImageURL: openai.String(c.URI),
-							Detail:   responses.ResponseInputImageDetail(imageDetail(c.AdditionalProperties)),
-						},
+						OfInputImage: &img,
 					})
 				default:
 					contents = append(contents, responses.ResponseInputContentUnionParam{
@@ -487,11 +491,15 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 			case *message.DataContent:
 				switch c.TopLevelMediaType() {
 				case "image":
+					img := responses.ResponseInputImageParam{
+						ImageURL: openai.String(c.URI()),
+						Detail:   responses.ResponseInputImageDetail(imageDetail(c.AdditionalProperties)),
+					}
+					if id := imageFileID(c.AdditionalProperties); id != "" {
+						img.FileID = openai.String(id)
+					}
 					contents = append(contents, responses.ResponseInputContentUnionParam{
-						OfInputImage: &responses.ResponseInputImageParam{
-							ImageURL: openai.String(c.URI()),
-							Detail:   responses.ResponseInputImageDetail(imageDetail(c.AdditionalProperties)),
-						},
+						OfInputImage: &img,
 					})
 				default:
 					file := responses.ResponseInputFileParam{

@@ -529,3 +529,15 @@ func imageDetail(props map[string]any) string {
 	}
 	return ""
 }
+
+// imageFileID returns the string value of props["file_id"] or empty. This
+// allows an image referenced by an already-uploaded file to be forwarded to
+// the Responses API, mirroring the Python reference.
+func imageFileID(props map[string]any) string {
+	if id, ok := props["file_id"]; ok {
+		if v, ok := id.(string); ok {
+			return v
+		}
+	}
+	return ""
+}
