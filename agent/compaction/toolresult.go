@@ -3,7 +3,6 @@
 package compaction
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 	"slices"
@@ -29,7 +28,10 @@ type ToolResultStrategy struct {
 
 	// MinimumPreservedGroups is the minimum number of most-recent non-system groups to preserve.
 	// This is a hard floor; tool-call groups within this protected window are not collapsed.
-	MinimumPreservedGroups int
+	//
+	// When nil, a default floor is used. An explicit value is honored as-is, so a pointer to 0
+	// disables the floor entirely; a negative value is clamped to 0.
+	MinimumPreservedGroups *int
 
 	// ToolCallFormatter formats a tool-call group as a compact summary string.
 	// When nil, DefaultToolCallFormatter is used, which produces a YAML-like block listing
@@ -44,7 +46,10 @@ func (strategy *ToolResultStrategy) Compact(_ context.Context, index *MessageInd
 		return false, nil
 	}
 
-	minimumPreservedGroups := cmp.Or(max(strategy.MinimumPreservedGroups, 0), defaultMinimumPreservedToolResultGroups)
+	minimumPreservedGroups := defaultMinimumPreservedToolResultGroups
+	if strategy.MinimumPreservedGroups != nil {
+		minimumPreservedGroups = max(*strategy.MinimumPreservedGroups, 0)
+	}
 	var nonSystemIncludedIndices []int
 	for i, group := range index.Groups {
 		if !group.IsExcluded && group.Kind != GroupKindSystem {

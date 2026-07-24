@@ -3,7 +3,6 @@
 package compaction
 
 import (
-	"cmp"
 	"context"
 )
 
@@ -24,7 +23,10 @@ type TruncationStrategy struct {
 
 	// MinimumPreservedGroups is the minimum number of most-recent non-system groups to preserve.
 	// This is a hard floor; truncation will not remove groups beyond this limit.
-	MinimumPreservedGroups int
+	//
+	// When nil, a default floor is used. An explicit value is honored as-is, so a pointer to 0
+	// disables the floor entirely; a negative value is clamped to 0.
+	MinimumPreservedGroups *int
 }
 
 // Compact compacts index in place.
@@ -34,7 +36,10 @@ func (strategy *TruncationStrategy) Compact(_ context.Context, index *MessageInd
 		return false, nil
 	}
 
-	minimumPreservedGroups := cmp.Or(max(strategy.MinimumPreservedGroups, 0), defaultMinimumPreservedTruncationGroups)
+	minimumPreservedGroups := defaultMinimumPreservedTruncationGroups
+	if strategy.MinimumPreservedGroups != nil {
+		minimumPreservedGroups = max(*strategy.MinimumPreservedGroups, 0)
+	}
 	removableCount := index.IncludedNonSystemGroupCount()
 	maxRemovable := removableCount - minimumPreservedGroups
 	if maxRemovable <= 0 {

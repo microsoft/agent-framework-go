@@ -54,7 +54,10 @@ type SummarizationStrategy struct {
 
 	// MinimumPreservedGroups is the minimum number of most-recent non-system groups to preserve.
 	// This is a hard floor; summarization will not summarize groups within this protected window.
-	MinimumPreservedGroups int
+	//
+	// When nil, a default floor is used. An explicit value is honored as-is, so a pointer to 0
+	// disables the floor entirely; a negative value is clamped to 0.
+	MinimumPreservedGroups *int
 
 	// SummarizationPrompt is the system prompt prepended to messages sent to Summarizer.
 	// When empty, a default prompt is used.
@@ -75,7 +78,10 @@ func (strategy *SummarizationStrategy) Compact(ctx context.Context, index *Messa
 	if strategy.Summarizer == nil {
 		return false, nil
 	}
-	minimumPreservedGroups := cmp.Or(max(strategy.MinimumPreservedGroups, 0), defaultMinimumPreservedSummarizationGroups)
+	minimumPreservedGroups := defaultMinimumPreservedSummarizationGroups
+	if strategy.MinimumPreservedGroups != nil {
+		minimumPreservedGroups = max(*strategy.MinimumPreservedGroups, 0)
+	}
 	summarizationPrompt := cmp.Or(strategy.SummarizationPrompt, defaultSummarizationPrompt)
 	summaryUnavailableMessage := cmp.Or(strategy.SummaryUnavailableMessage, "[Summary unavailable]")
 

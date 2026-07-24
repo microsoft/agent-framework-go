@@ -115,7 +115,7 @@ func TestTruncationStrategy_ExcludesOldestGroups(t *testing.T) {
 	index := compaction.CreateMessageIndex(turnMessages(3), nil)
 	strategy := &compaction.TruncationStrategy{
 		Trigger:                compaction.GroupsExceed(2),
-		MinimumPreservedGroups: 2,
+		MinimumPreservedGroups: ptr(2),
 	}
 
 	compacted, err := strategy.Compact(t.Context(), index)
@@ -142,7 +142,7 @@ func TestTruncationStrategy_SkipsPreExcludedAndSystemGroups(t *testing.T) {
 	}, nil)
 	index.Groups[1].IsExcluded = true
 	strategy := &compaction.TruncationStrategy{
-		MinimumPreservedGroups: 1,
+		MinimumPreservedGroups: ptr(1),
 	}
 
 	compacted, err := strategy.Compact(t.Context(), index)
@@ -187,7 +187,7 @@ func TestSlidingWindowStrategy_ExcludesOldestTurns(t *testing.T) {
 	index := compaction.CreateMessageIndex(turnMessages(3), nil)
 	strategy := &compaction.SlidingWindowStrategy{
 		Trigger:               compaction.TurnsExceed(1),
-		MinimumPreservedTurns: 1,
+		MinimumPreservedTurns: ptr(1),
 	}
 
 	compacted, err := strategy.Compact(t.Context(), index)
@@ -215,7 +215,7 @@ func TestSlidingWindowStrategy_PreservesTurnZeroGroups(t *testing.T) {
 	}, nil)
 	strategy := &compaction.SlidingWindowStrategy{
 		Trigger:               compaction.TurnsExceed(1),
-		MinimumPreservedTurns: 1,
+		MinimumPreservedTurns: ptr(1),
 	}
 
 	compacted, err := strategy.Compact(t.Context(), index)
@@ -230,6 +230,48 @@ func TestSlidingWindowStrategy_PreservesTurnZeroGroups(t *testing.T) {
 	want := []string{"preface", "u2", "a2"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("unexpected included messages: got %v want %v", got, want)
+	}
+}
+
+func TestTruncationStrategy_ExplicitZeroPreservesNone(t *testing.T) {
+	index := compaction.CreateMessageIndex([]*message.Message{
+		textMessage(message.RoleSystem, "system"),
+		textMessage(message.RoleAssistant, "g1"),
+		textMessage(message.RoleAssistant, "g2"),
+		textMessage(message.RoleAssistant, "g3"),
+		textMessage(message.RoleAssistant, "g4"),
+		textMessage(message.RoleAssistant, "g5"),
+	}, nil)
+	strategy := &compaction.TruncationStrategy{MinimumPreservedGroups: ptr(0)}
+
+	compacted, err := strategy.Compact(t.Context(), index)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !compacted {
+		t.Fatal("expected compaction with an explicit zero floor")
+	}
+	if got := index.IncludedNonSystemGroupCount(); got != 0 {
+		t.Fatalf("expected all removable non-system groups excluded, got %d preserved", got)
+	}
+	if index.Groups[0].IsExcluded {
+		t.Fatal("expected system group to be preserved")
+	}
+}
+
+func TestSlidingWindowStrategy_NegativeMinimumClampsToZero(t *testing.T) {
+	index := compaction.CreateMessageIndex(turnMessages(3), nil)
+	strategy := &compaction.SlidingWindowStrategy{MinimumPreservedTurns: ptr(-5)}
+
+	compacted, err := strategy.Compact(t.Context(), index)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !compacted {
+		t.Fatal("expected compaction when the floor clamps to zero")
+	}
+	if got := index.IncludedTurnCount(); got != 0 {
+		t.Fatalf("expected a negative floor to clamp to zero and exclude all turns, got %d turns preserved", got)
 	}
 }
 
@@ -273,7 +315,7 @@ func TestToolResultStrategy_CollapsesOldToolGroups(t *testing.T) {
 	index := compaction.CreateMessageIndex(messages, nil)
 	strategy := &compaction.ToolResultStrategy{
 		Trigger:                compaction.HasToolCalls(),
-		MinimumPreservedGroups: 2,
+		MinimumPreservedGroups: ptr(2),
 	}
 
 	compacted, err := strategy.Compact(t.Context(), index)
@@ -345,7 +387,7 @@ func TestSummarizationStrategy_InsertsSummaryAndPreservesRecentGroups(t *testing
 	strategy := &compaction.SummarizationStrategy{
 		Trigger:                compaction.GroupsExceed(2),
 		Summarizer:             summarizer,
-		MinimumPreservedGroups: 2,
+		MinimumPreservedGroups: ptr(2),
 		SummarizationPrompt:    "summarize",
 	}
 
@@ -417,7 +459,7 @@ func TestSummarizationStrategy_RestoresGroupsWhenSummarizerFails(t *testing.T) {
 	strategy := &compaction.SummarizationStrategy{
 		Trigger:                compaction.GroupsExceed(2),
 		Summarizer:             compaction.SummarizerFunc(func(context.Context, []*message.Message) (string, error) { return "", expected }),
-		MinimumPreservedGroups: 1,
+		MinimumPreservedGroups: ptr(1),
 	}
 
 	compacted, err := strategy.Compact(t.Context(), index)
@@ -437,7 +479,7 @@ func TestSummarizationStrategy_PropagatesCancellation(t *testing.T) {
 	strategy := &compaction.SummarizationStrategy{
 		Trigger:                compaction.GroupsExceed(2),
 		Summarizer:             compaction.SummarizerFunc(func(context.Context, []*message.Message) (string, error) { return "", context.Canceled }),
-		MinimumPreservedGroups: 1,
+		MinimumPreservedGroups: ptr(1),
 	}
 
 	compacted, err := strategy.Compact(t.Context(), index)
@@ -457,7 +499,7 @@ func TestNewProvider_CompactsAndPersistsIndex(t *testing.T) {
 	provider := compaction.NewContextProvider(compaction.ContextProviderConfig{
 		Strategy: &compaction.TruncationStrategy{
 			Trigger:                compaction.GroupsExceed(2),
-			MinimumPreservedGroups: 2,
+			MinimumPreservedGroups: ptr(2),
 		},
 		SourceID: "compaction-test",
 	})
@@ -494,7 +536,7 @@ func TestNewProvider_SourceStampsGeneratedMessages(t *testing.T) {
 		Strategy: &compaction.SummarizationStrategy{
 			Trigger:                compaction.GroupsExceed(2),
 			Summarizer:             compaction.SummarizerFunc(func(context.Context, []*message.Message) (string, error) { return "older context", nil }),
-			MinimumPreservedGroups: 2,
+			MinimumPreservedGroups: ptr(2),
 		},
 		SourceID: "compaction-test",
 	})
@@ -518,7 +560,7 @@ func TestNewProvider_CompactsWithoutSession(t *testing.T) {
 	provider := compaction.NewContextProvider(compaction.ContextProviderConfig{
 		Strategy: &compaction.TruncationStrategy{
 			Trigger:                compaction.GroupsExceed(2),
-			MinimumPreservedGroups: 2,
+			MinimumPreservedGroups: ptr(2),
 		},
 	})
 
@@ -583,3 +625,5 @@ func messageTexts(messages []*message.Message) []string {
 	}
 	return texts
 }
+
+func ptr[T any](value T) *T { return &value }

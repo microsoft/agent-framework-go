@@ -58,23 +58,23 @@ func main() {
 			// 1. Gentle: collapse old tool-call groups into short summaries.
 			&compaction.ToolResultStrategy{
 				Trigger:                compaction.MessagesExceed(7),
-				MinimumPreservedGroups: 4,
+				MinimumPreservedGroups: ptr(4),
 			},
 			// 2. Moderate: use an LLM to summarize older conversation spans into a concise message.
 			&compaction.SummarizationStrategy{
 				Trigger:                compaction.TokensExceed(0x500),
 				Summarizer:             summarizer,
-				MinimumPreservedGroups: 4,
+				MinimumPreservedGroups: ptr(4),
 			},
 			// 3. Aggressive: keep only the last N user turns and their responses.
 			&compaction.SlidingWindowStrategy{
 				Trigger:               compaction.TurnsExceed(4),
-				MinimumPreservedTurns: 4,
+				MinimumPreservedTurns: ptr(4),
 			},
 			// 4. Emergency: drop oldest groups until under the token budget.
 			&compaction.TruncationStrategy{
 				Trigger:                compaction.TokensExceed(0x8000),
-				MinimumPreservedGroups: 8,
+				MinimumPreservedGroups: ptr(8),
 			},
 		},
 	}
@@ -125,6 +125,8 @@ When responding, be extra descriptive and use as many words as possible without 
 		demo.Response(resp, err)
 	}
 }
+
+func ptr[T any](value T) *T { return &value }
 
 func lookupPrice(_ context.Context, productName string) (string, error) {
 	switch strings.ToUpper(productName) {

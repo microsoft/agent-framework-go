@@ -3,7 +3,6 @@
 package compaction
 
 import (
-	"cmp"
 	"context"
 	"slices"
 )
@@ -25,7 +24,10 @@ type SlidingWindowStrategy struct {
 
 	// MinimumPreservedTurns is the minimum number of most-recent user turns to preserve.
 	// Groups with nil or non-positive turn indexes are preserved independently of this value.
-	MinimumPreservedTurns int
+	//
+	// When nil, a default floor is used. An explicit value is honored as-is, so a pointer to 0
+	// disables the floor entirely; a negative value is clamped to 0.
+	MinimumPreservedTurns *int
 }
 
 // Compact compacts index in place.
@@ -35,7 +37,10 @@ func (strategy *SlidingWindowStrategy) Compact(_ context.Context, index *Message
 		return false, nil
 	}
 
-	minimumPreservedTurns := cmp.Or(max(strategy.MinimumPreservedTurns, 0), defaultMinimumPreservedSlidingWindowTurns)
+	minimumPreservedTurns := defaultMinimumPreservedSlidingWindowTurns
+	if strategy.MinimumPreservedTurns != nil {
+		minimumPreservedTurns = max(*strategy.MinimumPreservedTurns, 0)
+	}
 	turnGroups := make(map[int][]int)
 	var turnOrder []int
 	for i, group := range index.Groups {
