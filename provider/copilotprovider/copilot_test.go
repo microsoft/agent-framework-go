@@ -553,6 +553,44 @@ func TestRun_WithSessionErrorMissingMessage_ReturnsUnknownError(t *testing.T) {
 	}
 }
 
+func TestRun_WithRateLimitEligibleForAutoSwitch_KeepsSessionAlive(t *testing.T) {
+	const expected = "Recovered after auto mode switch"
+	runtime := newFakeRuntime(t,
+		sessionEvent("session.error", map[string]any{
+			"errorType":             "rate_limit",
+			"message":               "Rate limit reached",
+			"eligibleForAutoSwitch": true,
+		}),
+		sessionEvent("auto_mode_switch.requested", map[string]any{"requestId": "req-1"}),
+		sessionEvent("assistant.message", map[string]any{"messageId": "msg-1", "content": expected}),
+		idleEvent(),
+	)
+	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
+
+	response, err := runText(t, agent, "hello", agentpkg.Stream(false))
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if got := response.String(); got != expected {
+		t.Fatalf("response text = %q, want %q", got, expected)
+	}
+}
+
+func TestRun_WithRateLimitNotEligibleForAutoSwitch_ReturnsError(t *testing.T) {
+	runtime := newFakeRuntime(t,
+		sessionEvent("session.error", map[string]any{
+			"errorType": "rate_limit",
+			"message":   "Rate limit reached",
+		}),
+	)
+	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
+
+	_, err := runText(t, agent, "hello")
+	if err == nil || err.Error() != "session error: Rate limit reached" {
+		t.Fatalf("err = %v, want session error: Rate limit reached", err)
+	}
+}
+
 func TestRun_WithBurstOfStreamingEvents_Completes(t *testing.T) {
 	const eventCount = 200
 	events := make([]map[string]any, 0, eventCount+1)

@@ -153,6 +153,14 @@ func (p *provider) responseUpdateForSessionEvent(event copilot.SessionEvent, isS
 	case *copilot.SessionIdleData:
 		return rawEventUpdate(event), true, nil
 	case *copilot.SessionErrorData:
+		// A rate_limit error flagged EligibleForAutoSwitch means the runtime will
+		// follow it with an auto_mode_switch.requested event and keep the session
+		// alive. Surface the error as a non-terminal notification so the run loop
+		// keeps pumping the subsequent auto-switch events and the eventual idle
+		// completion instead of aborting the run.
+		if data.EligibleForAutoSwitch != nil && *data.EligibleForAutoSwitch {
+			return rawEventUpdate(event), false, nil
+		}
 		return rawEventUpdate(event), true, fmt.Errorf("session error: %s", sessionErrorMessage(data))
 	default:
 		return rawEventUpdate(event), false, nil
