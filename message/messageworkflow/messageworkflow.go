@@ -1,5 +1,8 @@
 // Copyright (c) Microsoft. All rights reserved.
 
+// Package messageworkflow extends a workflow executor with chat-message
+// handling behavior, accumulating the messages received during a turn and
+// invoking a caller-supplied handler when a turn token arrives.
 package messageworkflow
 
 import (
@@ -10,22 +13,33 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow"
 )
 
+// Options configures the chat-message workflow behavior applied by Configure.
+// StateKey and TakeTurnHandler are required; Configure panics if either is
+// empty. The remaining fields are optional.
 type Options struct {
-	// Required fields
-	StateKey        string
+	// StateKey identifies the accumulated turn state within the workflow.
+	StateKey string
+	// TakeTurnHandler is invoked with the accumulated messages when a turn token arrives.
 	TakeTurnHandler func(ctx *workflow.Context, token workflow.TurnToken, messages []*message.Message) error
 
-	// Optional fields
-	StringMessageRole        string
-	ScopeName                string
+	// StringMessageRole, when set, registers a handler that wraps incoming string messages with this role.
+	StringMessageRole string
+	// ScopeName scopes the accumulated turn state; used when constructing a default MessageState.
+	ScopeName string
+	// DisableAutoSendTurnToken suppresses automatically declaring and forwarding the turn token.
 	DisableAutoSendTurnToken bool
-	MessageState             *MessageState
+	// MessageState supplies an existing accumulator; when nil a new one is created from StateKey and ScopeName.
+	MessageState *MessageState
 }
 
+// MessageState is the checkpoint-restorable accumulator for a turn's messages.
+// It wraps a StatefulExecutorCache holding the slice of messages received so far.
 type MessageState struct {
 	cache workflow.StatefulExecutorCache[[]*message.Message]
 }
 
+// NewMessageState returns a MessageState whose accumulated messages are keyed
+// by stateKey within the given scopeName.
 func NewMessageState(stateKey string, scopeName string) *MessageState {
 	return &MessageState{
 		cache: workflow.StatefulExecutorCache[[]*message.Message]{
@@ -35,6 +49,9 @@ func NewMessageState(stateKey string, scopeName string) *MessageState {
 	}
 }
 
+// ProcessTurnMessages transforms the accumulated turn messages by invoking fn
+// under the executor's state lock via InvokeWithState, storing the returned
+// slice as the new accumulated state.
 func (s *MessageState) ProcessTurnMessages(ctx *workflow.Context, fn func(ctx *workflow.Context, messages []*message.Message) ([]*message.Message, error)) error {
 	if fn == nil {
 		panic("messageworkflow: process function is required")
@@ -42,6 +59,8 @@ func (s *MessageState) ProcessTurnMessages(ctx *workflow.Context, fn func(ctx *w
 	return s.cache.InvokeWithState(ctx, false, fn)
 }
 
+// Reset clears the accumulated turn state. It is registered both as the
+// executor's reset function and as its checkpoint-restored callback.
 func (s *MessageState) Reset() error {
 	return s.cache.Reset()
 }
