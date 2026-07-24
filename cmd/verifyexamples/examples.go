@@ -472,6 +472,16 @@ var agentsExamples = []ExampleDefinition{
 		},
 	},
 	{
+		Name:                         "02_agents_providers_openai_hosted_mcp",
+		ProjectPath:                  "examples/02-agents/providers/openai/hosted_mcp",
+		RequiredEnvironmentVariables: []string{"OPENAI_API_KEY"},
+		ExpectedOutputDescription: []string{
+			"The output should show an OpenAI Responses agent using the hosted Microsoft Learn MCP server to answer a documentation question.",
+			"It may show records of MCP tool calls or approval requests.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
 		Name:                         "02_agents_providers_gemini",
 		ProjectPath:                  "examples/02-agents/providers/gemini",
 		RequiredEnvironmentVariables: []string{"GEMINI_API_KEY"},
