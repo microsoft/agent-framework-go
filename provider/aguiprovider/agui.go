@@ -373,6 +373,10 @@ type pendingToolCall struct {
 
 type toolCallAccumulator struct {
 	pending map[string]*pendingToolCall
+	// customSeq counts emitted custom events so each one is assigned a unique
+	// synthetic MessageID, keeping it in its own message rather than being merged
+	// into (and overwriting) an unrelated assistant message when collected.
+	customSeq int
 }
 
 func (a *toolCallAccumulator) onEvent(evt aguiEvents.Event) ([]*agent.ResponseUpdate, error) {
@@ -478,6 +482,19 @@ func (a *toolCallAccumulator) onEvent(evt aguiEvents.Event) ([]*agent.ResponseUp
 			Role:      message.RoleAssistant,
 			CreatedAt: eventTime(evt),
 			Contents:  message.Contents{newJSONDataContent(e.Delta, "application/json-patch+json")},
+		}}, nil
+	case *aguiEvents.CustomEvent:
+		a.customSeq++
+		return []*agent.ResponseUpdate{{
+			Role:      message.RoleAssistant,
+			MessageID: fmt.Sprintf("agui-custom-%d", a.customSeq),
+			CreatedAt: eventTime(evt),
+			AdditionalProperties: map[string]any{
+				"agui_custom_event": map[string]any{
+					"name":  e.Name,
+					"value": e.Value,
+				},
+			},
 		}}, nil
 	default:
 		return nil, nil

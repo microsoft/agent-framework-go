@@ -281,6 +281,52 @@ func TestAGUIAgentRun_MapsReasoningEvents(t *testing.T) {
 	}
 }
 
+func TestAGUIAgentRun_SurfacesCustomEventAsMetadata(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var input aguiTypes.RunAgentInput
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeSSE(t, w, aguiEvents.NewRunStartedEvent(input.ThreadID, input.RunID))
+		writeSSE(t, w, aguiEvents.NewCustomEvent("predictive_state", aguiEvents.WithValue(map[string]any{"foo": "bar"})))
+		writeSSE(t, w, aguiEvents.NewRunFinishedEvent(input.ThreadID, input.RunID))
+	}))
+	defer server.Close()
+
+	a := aguiprovider.NewAgent(newTestClient(server.URL), aguiprovider.AgentConfig{})
+	resp, err := a.Run(context.Background(), []*message.Message{message.NewText("hi")}).Collect()
+	if err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+
+	var custom map[string]any
+	for _, msg := range resp.Messages {
+		if v, ok := msg.AdditionalProperties["agui_custom_event"]; ok {
+			m, ok := v.(map[string]any)
+			if !ok {
+				t.Fatalf("agui_custom_event = %T, want map[string]any", v)
+			}
+			custom = m
+			break
+		}
+	}
+	if custom == nil {
+		t.Fatal("expected an update carrying agui_custom_event metadata")
+	}
+	if custom["name"] != "predictive_state" {
+		t.Errorf("custom event name = %v, want %q", custom["name"], "predictive_state")
+	}
+	value, ok := custom["value"].(map[string]any)
+	if !ok {
+		t.Fatalf("custom event value = %T, want map[string]any", custom["value"])
+	}
+	if value["foo"] != "bar" {
+		t.Errorf("custom event value[foo] = %v, want %q", value["foo"], "bar")
+	}
+}
+
 func TestAGUIAgentRun_InvokesTools_WhenFunctionCallsReturned(t *testing.T) {
 	var mu sync.Mutex
 	requestCount := 0
@@ -485,6 +531,53 @@ func TestAGUIAgentRun_ConvertsStateSnapshotEventToDataContent(t *testing.T) {
 	}
 	if snapshot["status"] != "active" {
 		t.Fatalf("snapshot status = %v, want active", snapshot["status"])
+	}
+}
+
+func TestAGUIAgentRun_PreservesMultipleCustomEvents(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeSSE(t, w, aguiEvents.NewRunStartedEvent("thread-1", "run-1"))
+		// An assistant text message precedes the custom events; the custom
+		// events must not be merged into (and thus mutate) it.
+		writeSSE(t, w, aguiEvents.NewTextMessageStartEvent("msg-1", aguiEvents.WithRole("assistant")))
+		writeSSE(t, w, aguiEvents.NewTextMessageContentEvent("msg-1", "Hello"))
+		writeSSE(t, w, aguiEvents.NewTextMessageEndEvent("msg-1"))
+		writeSSE(t, w, aguiEvents.NewCustomEvent("progress", aguiEvents.WithValue("first")))
+		writeSSE(t, w, aguiEvents.NewCustomEvent("progress", aguiEvents.WithValue("second")))
+		writeSSE(t, w, aguiEvents.NewRunFinishedEvent("thread-1", "run-1"))
+	}))
+	defer server.Close()
+
+	a := aguiprovider.NewAgent(newTestClient(server.URL), aguiprovider.AgentConfig{})
+	resp, err := a.RunText(context.Background(), "hi").Collect()
+	if err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+
+	var values []any
+	for _, m := range resp.Messages {
+		raw, ok := m.AdditionalProperties["agui_custom_event"]
+		if !ok {
+			continue
+		}
+		ce, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("agui_custom_event = %T, want map[string]any", raw)
+		}
+		values = append(values, ce["value"])
+		// A custom event must live in its own message, not be attached to the
+		// assistant text message.
+		if got := m.String(); got != "" {
+			t.Fatalf("custom event message has unexpected text content %q", got)
+		}
+	}
+
+	if len(values) != 2 {
+		t.Fatalf("preserved custom events = %d (%v), want 2", len(values), values)
+	}
+	if values[0] != "first" || values[1] != "second" {
+		t.Fatalf("custom event values = %v, want [first second]", values)
 	}
 }
 
