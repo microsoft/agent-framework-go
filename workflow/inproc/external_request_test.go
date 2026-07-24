@@ -6,9 +6,11 @@ import (
 	"context"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/workflow"
+	"github.com/microsoft/agent-framework-go/workflow/checkpoint"
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
 )
 
@@ -400,6 +402,149 @@ func TestExternalResponse_RejectsForgedPortIDWithoutConsumingRequest(t *testing.
 	}
 	if gotOutput != 42 {
 		t.Fatalf("output = %v, want 42", gotOutput)
+	}
+}
+
+// TestCheckpoint_RequestPortRestoresWrappedRequests verifies that a request-port
+// executor which re-wraps an inbound *ExternalRequest (the subworkflow-style
+// forwarding path) persists its wrapped-request map across checkpoint/restore.
+// After resuming in a fresh runner, the matching response must be re-wrapped
+// with the ORIGINAL request PortInfo and forwarded as a single *ExternalResponse
+// — not forwarded raw as the port response plus the decoded payload.
+func TestCheckpoint_RequestPortRestoresWrappedRequests(t *testing.T) {
+	ctx := context.Background()
+
+	outerPort := workflow.RequestPort{
+		ID:       "OuterPort",
+		Request:  reflect.TypeFor[string](),
+		Response: reflect.TypeFor[string](),
+	}
+	innerPort := workflow.RequestPort{
+		ID:       "InnerPort",
+		Request:  reflect.TypeFor[string](),
+		Response: reflect.TypeFor[string](),
+	}
+	portBinding := outerPort.Bind()
+
+	// Source executor forwards an *ExternalRequest (carrying the inner port's
+	// PortInfo) into the request-port executor, exercising the re-wrapping path.
+	sourceID := "Source"
+	sourceBinding := workflow.ExecutorBinding{
+		ID:               sourceID,
+		ImplementationID: "*workflow.Executor",
+		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
+			return &workflow.Executor{
+				ID: sourceID,
+				DisableAutoSendMessageHandlerResultObject: true,
+				DisableAutoYieldOutputHandlerResultObject: true,
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.SendsMessageType(reflect.TypeFor[*workflow.ExternalRequest]())
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(wctx *workflow.Context, _ any) (any, error) {
+						req, err := workflow.NewExternalRequest("wrapped-req", innerPort, "question")
+						if err != nil {
+							return nil, err
+						}
+						return nil, wctx.SendMessage("", req)
+					})
+					return rb, nil
+				},
+			}, nil
+		},
+	}
+
+	// Sink records every message the request-port executor forwards to it.
+	var mu sync.Mutex
+	var received []any
+	sinkID := "Sink"
+	sinkBinding := workflow.ExecutorBinding{
+		ID:               sinkID,
+		ImplementationID: "*workflow.Executor",
+		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
+			record := func(msg any) (any, error) {
+				mu.Lock()
+				received = append(received, msg)
+				mu.Unlock()
+				return nil, nil
+			}
+			return &workflow.Executor{
+				ID: sinkID,
+				DisableAutoSendMessageHandlerResultObject: true,
+				DisableAutoYieldOutputHandlerResultObject: true,
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.RouteBuilder.
+						AddHandlerRaw(reflect.TypeFor[*workflow.ExternalResponse](), nil, func(_ *workflow.Context, msg any) (any, error) {
+							return record(msg)
+						}).
+						AddHandlerRaw(reflect.TypeFor[string](), nil, func(_ *workflow.Context, msg any) (any, error) {
+							return record(msg)
+						})
+					return rb, nil
+				},
+			}, nil
+		},
+	}
+
+	wf, err := workflow.NewBuilder(sourceBinding).
+		AddEdge(sourceBinding, portBinding).
+		AddEdge(portBinding, sinkBinding).
+		Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	manager := checkpoint.NewInMemoryManager()
+	first, err := inproc.Default.WithCheckpointing(manager).Run(ctx, wf, "kick")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	pendingRequest := firstRequest(t, first.OutgoingEvents())
+	if pendingRequest.PortInfo.PortID != outerPort.ID {
+		t.Fatalf("pending request port = %q, want %q", pendingRequest.PortInfo.PortID, outerPort.ID)
+	}
+	checkpointInfo, ok := first.LastCheckpoint()
+	if !ok {
+		t.Fatal("expected checkpoint")
+	}
+	if err := first.Close(ctx); err != nil {
+		t.Fatalf("Close first run: %v", err)
+	}
+
+	// Resume in a fresh runner: the request-port executor's in-memory wrapped
+	// map starts empty and must be repopulated from the restored state.
+	resumed, err := inproc.Default.WithCheckpointing(manager).Resume(ctx, wf, checkpointInfo)
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	replayed := firstRequest(t, resumed.NewEvents())
+	if replayed.RequestID != pendingRequest.RequestID {
+		t.Fatalf("replayed request ID = %q, want %q", replayed.RequestID, pendingRequest.RequestID)
+	}
+
+	response, err := replayed.CreateResponse("answer")
+	if err != nil {
+		t.Fatalf("CreateResponse: %v", err)
+	}
+	if _, err := resumed.Resume(ctx, response); err != nil {
+		t.Fatalf("Resume with response: %v", err)
+	}
+	for range resumed.NewEvents() {
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(received) != 1 {
+		t.Fatalf("sink received %d messages %#v, want 1 re-wrapped *ExternalResponse", len(received), received)
+	}
+	resp, ok := received[0].(*workflow.ExternalResponse)
+	if !ok {
+		t.Fatalf("sink message type = %T, want *workflow.ExternalResponse", received[0])
+	}
+	if resp.PortInfo.PortID != innerPort.ID {
+		t.Fatalf("re-wrapped response port = %q, want original %q", resp.PortInfo.PortID, innerPort.ID)
+	}
+	data, dataOK := resp.Data.As(innerPort.Response)
+	if !dataOK || data != "answer" {
+		t.Fatalf("re-wrapped response data = %v (ok=%v), want %q", data, dataOK, "answer")
 	}
 }
 

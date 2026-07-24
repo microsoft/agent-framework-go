@@ -590,6 +590,12 @@ func (s *StatefulExecutorCache[T]) Reset() error {
 	return nil
 }
 
+// wrappedRequestsStateKey is the workflow state key under which a request-port
+// executor persists its in-flight wrapped requests so they survive
+// checkpoint/restore. Mirrors the .NET RequestInfoExecutor
+// WrappedRequestsStateKey.
+const wrappedRequestsStateKey = "workflow.RequestPort.WrappedRequests"
+
 // newRequestPortExecutor creates the executor that turns request-port messages
 // into [ExternalRequest]s and routes matching [ExternalResponse]s back into the
 // workflow.
@@ -601,6 +607,42 @@ func newRequestPortExecutor(port RequestPort) *Executor {
 
 	return &Executor{
 		ID: port.ID,
+		OnCheckpointFunc: func(ctx *Context) error {
+			if ctx.QueueStateUpdate == nil {
+				return nil
+			}
+			wrappedMu.Lock()
+			snapshot := make(map[string]*ExternalRequest, len(wrappedRequests))
+			for id, req := range wrappedRequests {
+				snapshot[id] = req
+			}
+			wrappedMu.Unlock()
+			return ctx.QueueStateUpdate(wrappedRequestsStateKey, "", snapshot)
+		},
+		OnCheckpointRestoredFunc: func(ctx *Context) error {
+			if ctx.ReadState == nil {
+				return nil
+			}
+			value, err := ctx.ReadState(wrappedRequestsStateKey, "")
+			if err != nil {
+				return err
+			}
+			var restored map[string]*ExternalRequest
+			if value != nil {
+				typed, ok := value.(map[string]*ExternalRequest)
+				if !ok {
+					return fmt.Errorf("workflow: state %q has type %T, want map[string]*ExternalRequest", wrappedRequestsStateKey, value)
+				}
+				restored = typed
+			}
+			wrappedMu.Lock()
+			clear(wrappedRequests)
+			for id, req := range restored {
+				wrappedRequests[id] = req
+			}
+			wrappedMu.Unlock()
+			return nil
+		},
 		ConfigureProtocol: func(rb *ProtocolBuilder) (*ProtocolBuilder, error) {
 			rb.SendsMessageType(port.Response, reflect.TypeFor[*ExternalResponse]())
 			rb.RouteBuilder.
