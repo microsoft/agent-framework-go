@@ -395,17 +395,22 @@ func buildResponsePart(part *genai.Part, contents []message.Content) ([]message.
 	if part.Thought {
 		// Thinking model: emit TextReasoningContent. Encode ThoughtSignature as
 		// base64 in ProtectedData so it can be passed back in multi-turn requests.
-		protectedData := ""
-		if len(part.ThoughtSignature) > 0 {
-			protectedData = base64.StdEncoding.EncodeToString(part.ThoughtSignature)
+		// Skip a thought part that carries neither thinking text nor a signature,
+		// consistent with how empty text parts are skipped below; such a part
+		// would otherwise add an empty, information-free reasoning content.
+		if part.Text != "" || len(part.ThoughtSignature) > 0 {
+			protectedData := ""
+			if len(part.ThoughtSignature) > 0 {
+				protectedData = base64.StdEncoding.EncodeToString(part.ThoughtSignature)
+			}
+			contents = append(contents, &message.TextReasoningContent{
+				Text:          part.Text,
+				ProtectedData: protectedData,
+				ContentHeader: message.ContentHeader{
+					RawRepresentation: part,
+				},
+			})
 		}
-		contents = append(contents, &message.TextReasoningContent{
-			Text:          part.Text,
-			ProtectedData: protectedData,
-			ContentHeader: message.ContentHeader{
-				RawRepresentation: part,
-			},
-		})
 	} else if part.Text != "" {
 		contents = append(contents, &message.TextContent{
 			Text: part.Text,
