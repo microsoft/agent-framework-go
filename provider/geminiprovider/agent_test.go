@@ -1752,6 +1752,7 @@ func TestFinishReason_Streaming(t *testing.T) {
 	a := newTestClient(t, server)
 
 	var reasons []string
+	var resp agent.Response
 	for update, err := range a.RunText(t.Context(), "hi", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -1759,8 +1760,12 @@ func TestFinishReason_Streaming(t *testing.T) {
 		if update.FinishReason != "" {
 			reasons = append(reasons, update.FinishReason)
 		}
+		resp.Update(update)
 	}
 	if len(reasons) != 1 || reasons[0] != "length" {
 		t.Errorf("streaming per-chunk FinishReason = %v, want exactly [\"length\"] on the terminal chunk", reasons)
+	}
+	if resp.FinishReason != "length" {
+		t.Errorf("aggregated Response.FinishReason = %q, want %q", resp.FinishReason, "length")
 	}
 }
