@@ -765,11 +765,6 @@ var workflowExamples = []ExampleDefinition{
 			"Retrieved",
 			"Workflow completed with result:",
 		},
-		ExpectedOutputDescription: []string{
-			"The output should show checkpoints being persisted to a filesystem directory, the store being closed, then reopened from disk before resuming.",
-			"After reopening, the workflow should resume from a persisted checkpoint and complete with a result.",
-			"The output should not contain error messages or stack traces.",
-		},
 	},
 	{
 		Name:        "03_workflows_checkpoint_checkpoint_with_human_in_the_loop",

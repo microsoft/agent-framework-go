@@ -39,8 +39,8 @@ func main() {
 	defer func() { _ = os.RemoveAll(dir) }()
 	demo.Assistantf("Using checkpoint directory: %s", dir)
 
-	// Phase one: run the workflow partway, persisting checkpoints to disk, then
-	// close the store to release its file handles and process lock.
+	// Phase one: run the workflow to completion, persisting checkpoints to disk,
+	// then close the store to release its file handles and process lock.
 	checkpoints := runPhaseOne(ctx, dir)
 	if len(checkpoints) == 0 {
 		demo.Panic("no checkpoints were persisted during phase one")
@@ -48,15 +48,18 @@ func main() {
 	demo.Assistantf("Persisted %d checkpoint(s) to disk before closing the store.", len(checkpoints))
 	listCheckpointFiles(dir)
 
-	// Phase two: reopen the store from disk in a fresh manager and resume the
-	// latest persisted checkpoint to completion, proving the durability of the
+	// Phase two: reopen the store from disk in a fresh manager and resume from a
+	// persisted checkpoint to completion, proving the durability of the
 	// filesystem-backed backend across a close/reopen.
 	runPhaseTwo(ctx, dir, checkpoints)
 }
 
-// runPhaseOne starts the workflow with a filesystem-backed checkpoint manager,
-// collecting checkpoints until a few super-steps have completed, then closes the
-// store so nothing is left in memory.
+// runPhaseOne runs the workflow to completion with a filesystem-backed
+// checkpoint manager, collecting every checkpoint persisted along the way, then
+// closes the store so nothing is left in memory. Consuming the whole stream
+// guarantees the run loop has finished and every checkpoint is durably on disk
+// before the store closes, so the on-disk state matches what we report and what
+// phase two later resumes from.
 func runPhaseOne(ctx context.Context, dir string) []workflow.CheckpointInfo {
 	store, err := checkpoint.NewFileSystemJSONStore(dir)
 	if err != nil {
@@ -76,9 +79,6 @@ func runPhaseOne(ctx context.Context, dir string) []workflow.CheckpointInfo {
 	}
 	defer func() { _ = run.Close(ctx) }()
 
-	// Stop after a handful of checkpoints to simulate an interrupted run that
-	// must later resume from what was durably persisted.
-	const stopAfter = 3
 	var checkpoints []workflow.CheckpointInfo
 	for evt, err := range run.WatchStream(ctx) {
 		if err != nil {
@@ -97,9 +97,6 @@ func runPhaseOne(ctx context.Context, dir string) []workflow.CheckpointInfo {
 		case workflow.ExecutorFailedEvent:
 			demo.Panicf("executor %q failed: %v", e.ExecutorID, e.Error)
 		}
-		if len(checkpoints) >= stopAfter {
-			break
-		}
 	}
 	return checkpoints
 }
@@ -111,7 +108,11 @@ func runPhaseTwo(ctx context.Context, dir string, phaseOne []workflow.Checkpoint
 	if err != nil {
 		demo.Panic(err)
 	}
-	defer func() { _ = store.Close() }()
+	defer func() {
+		if err := store.Close(); err != nil {
+			demo.Panic(err)
+		}
+	}()
 	demo.Assistantf("Reopened checkpoint store from disk.")
 
 	sessionID := phaseOne[0].SessionID
@@ -124,12 +125,17 @@ func runPhaseTwo(ctx context.Context, dir string, phaseOne []workflow.Checkpoint
 		demo.Panic("expected persisted checkpoints after reopening the store")
 	}
 
-	// Resume from the latest checkpoint recorded during phase one.
-	latest := phaseOne[len(phaseOne)-1]
-	demo.Assistantf("Resuming from checkpoint %s.", latest.CheckpointID)
+	// Resume from an intermediate checkpoint recorded during phase one, picking
+	// up a partially completed run from durable storage and driving it to the end.
+	const resumeFromStep = 3
+	if len(phaseOne) < resumeFromStep {
+		demo.Panicf("expected at least %d checkpoints from phase one", resumeFromStep)
+	}
+	resumeFrom := phaseOne[resumeFromStep-1]
+	demo.Assistantf("Resuming from checkpoint %s.", resumeFrom.CheckpointID)
 
 	mgr := checkpoint.NewJSONManager(store)
-	run, err := inproc.Default.WithCheckpointing(mgr).ResumeStreaming(ctx, buildWorkflow(), latest)
+	run, err := inproc.Default.WithCheckpointing(mgr).ResumeStreaming(ctx, buildWorkflow(), resumeFrom)
 	if err != nil {
 		demo.Panic(err)
 	}
