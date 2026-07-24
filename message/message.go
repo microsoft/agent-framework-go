@@ -61,10 +61,14 @@ func NewText(text string) *Message {
 	return New(&TextContent{Text: text})
 }
 
+// String implements fmt.Stringer, returning the concatenated text of all
+// TextContent in the message (delegating to Contents.Text).
 func (m *Message) String() string {
 	return m.Contents.Text()
 }
 
+// Usage returns the aggregated UsageDetails carried by the message's
+// UsageContent (delegating to Contents.Usage).
 func (m *Message) Usage() UsageDetails {
 	return m.Contents.Usage()
 }
