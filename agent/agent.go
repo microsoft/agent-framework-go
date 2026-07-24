@@ -8,6 +8,7 @@ import (
 	"iter"
 	"log/slog"
 	"slices"
+	"sync/atomic"
 
 	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework-go/message"
@@ -166,7 +167,12 @@ type Agent struct {
 	runOptions  []Option
 	logger      *slog.Logger
 
-	historyProvider      HistoryProvider
+	historyProvider HistoryProvider
+	// historyCleared records that a run promoted its session to service-managed
+	// history and cleared the configured provider globally (matching the .NET
+	// clear-on-conflict semantics). It is set instead of mutating historyProvider
+	// so a shared *Agent can be run concurrently without a data race.
+	historyCleared       atomic.Bool
 	hasConfiguredHistory bool
 	// hasDefaultHistoryProvider is true when New synthesized the in-memory
 	// history provider because Config.HistoryProvider was nil. The synthesized
@@ -416,7 +422,7 @@ func (a *Agent) historyProviderForContinuationStore(session *Session, noSession 
 }
 
 func (a *Agent) historyProviderForSession(session *Session, noSession bool) HistoryProvider {
-	if a.historyProvider == nil || session == nil {
+	if a.historyProvider == nil || session == nil || a.historyCleared.Load() {
 		return nil
 	}
 	if !a.hasDefaultHistoryProvider {
@@ -466,7 +472,7 @@ func (a *Agent) handleHistoryProviderConflict(ctx context.Context, provider Hist
 		return false, errors.New("only Session.ServiceID or HistoryProvider may be used, but not both; the service returned an ID indicating service-managed history while the agent has a HistoryProvider configured")
 	}
 	if !a.keepHistoryOnConflict {
-		a.historyProvider = nil
+		a.historyCleared.Store(true)
 		return false, nil
 	}
 	return true, nil
