@@ -49,10 +49,22 @@ func ListTools(ctx context.Context, session *mcp.ClientSession) ([]tool.Tool, er
 		return nil, fmt.Errorf("failed to list tools: %w", err)
 	}
 
-	// Create agent.Tool instances for each MCP tool
+	// Create agent.Tool instances for each MCP tool.
+	//
+	// Normalization (normalizeMCPName) can map distinct remote names onto the
+	// same provider-safe name (e.g. "a b" and "a/b" both become "a-b"). Such a
+	// collision would break provider tool registration (duplicate function
+	// names) and cause the autocall tools map to silently drop all but the
+	// first tool. Detect it here and fail loudly so the caller gets a clear
+	// signal instead of missing/unreachable tools.
 	result := make([]tool.Tool, 0, len(toolsResult.Tools))
+	seen := make(map[string]string, len(toolsResult.Tools))
 	for _, mcpTool := range toolsResult.Tools {
 		agentTool := newMCPToolWrapper(session, mcpTool)
+		if existing, ok := seen[agentTool.name]; ok {
+			return nil, fmt.Errorf("normalized MCP tool name collision: remote tools %q and %q both normalize to %q", existing, mcpTool.Name, agentTool.name)
+		}
+		seen[agentTool.name] = mcpTool.Name
 		result = append(result, agentTool)
 	}
 

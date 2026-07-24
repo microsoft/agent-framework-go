@@ -388,6 +388,30 @@ func TestListToolsNormalizesInvalidToolName(t *testing.T) {
 	}
 }
 
+func TestListToolsRejectsNormalizedNameCollision(t *testing.T) {
+	ctx := context.Background()
+	server := mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "1.0.0"}, nil)
+	// "search a" and "search/a" both normalize to "search-a".
+	for _, remoteName := range []string{"search a", "search/a"} {
+		server.AddTool(&mcp.Tool{
+			Name:        remoteName,
+			Description: "collision tool",
+			InputSchema: map[string]any{"type": "object"},
+		}, func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return &mcp.CallToolResult{}, nil
+		})
+	}
+
+	session := connectInMemory(t, ctx, server)
+	tools, err := mcptool.ListTools(ctx, session)
+	if err == nil {
+		t.Fatalf("ListTools() error = nil, want collision error; got %d tools", len(tools))
+	}
+	if !strings.Contains(err.Error(), "search-a") {
+		t.Fatalf("ListTools() error = %v, want it to mention the colliding normalized name", err)
+	}
+}
+
 func TestCallForwardsArgumentsToMCPTool(t *testing.T) {
 	ctx := context.Background()
 	server := mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "1.0.0"}, nil)
