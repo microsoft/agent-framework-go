@@ -803,6 +803,12 @@ var workflowExamples = []ExampleDefinition{
 		MustContain:     []string{"Email sent:", "Logged: Summary:"},
 	},
 	{
+		Name:            "03_workflows_conditional_edges_04_intermediate_outputs",
+		ProjectPath:     "examples/03-workflows/conditional-edges/04_intermediate_outputs",
+		IsDeterministic: true,
+		MustContain:     []string{"[intermediate] normalized hello workflow", "[final] Summary of"},
+	},
+	{
 		Name:        "03_workflows_human_in_the_loop_human_in_the_loop_basic",
 		ProjectPath: "examples/03-workflows/human-in-the-loop/human_in_the_loop_basic",
 		Inputs:      inputLines("50", "25", "40", "45", "42"),
