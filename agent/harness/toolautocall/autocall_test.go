@@ -1549,3 +1549,108 @@ func TestFunctionInvoking_NextIterationIncludesAssistantFunctionCallMessage(t *t
 		t.Errorf("expected final text 'done', got %q", lastMsg.String())
 	}
 }
+
+func TestFunctionInvoking_FunctionMiddleware(t *testing.T) {
+	type mwArgs struct {
+		X int `json:"x"`
+	}
+
+	var toolSawX []int
+	tools := []tool.Tool{
+		functool.MustNew(functool.Config{Name: "Func1"},
+			func(ctx context.Context, args mwArgs) (string, error) {
+				toolSawX = append(toolSawX, args.X)
+				return "original", nil
+			}),
+	}
+
+	var order []string
+	var iterations []int
+
+	// outer mutates arguments (round 0), records the iteration, and requests
+	// termination on the second round.
+	outer := func(ctx context.Context, fic *agent.FunctionInvocationContext, next func(context.Context) (any, error)) (any, error) {
+		order = append(order, "outer")
+		iterations = append(iterations, fic.Iteration)
+		if fic.Iteration == 0 {
+			fic.Arguments = `{"x":7}`
+		}
+		if fic.Iteration == 1 {
+			fic.Terminate = true
+		}
+		return next(ctx)
+	}
+	// inner runs after outer (outermost-first) and replaces the tool result.
+	inner := func(ctx context.Context, fic *agent.FunctionInvocationContext, next func(context.Context) (any, error)) (any, error) {
+		order = append(order, "inner")
+		if _, err := next(ctx); err != nil {
+			return nil, err
+		}
+		return fmt.Sprintf("replaced-%d", fic.Iteration), nil
+	}
+
+	var providerCalls int
+	count := func(ctx context.Context, messages []*message.Message, opts ...agent.Option) { providerCalls++ }
+
+	rb := agenttest.NewResponseBuilder(count).
+		AddFunctionCall("callId1", "Func1", `{"x":1}`).
+		NewTurn(count).
+		AddFunctionCall("callId2", "Func1", `{"x":3}`).
+		NewTurn(count). // reached only if termination fails
+		AddText("should-not-reach")
+	runner := &agenttest.Runner{Responses: rb.Build()}
+
+	var opts []agent.Option
+	for _, tl := range tools {
+		opts = append(opts, agent.WithTool(tl))
+	}
+
+	cfg := toolautocall.Config{
+		FunctionMiddleware: []agent.FunctionInvocationMiddleware{outer, inner},
+	}
+
+	var resp agent.Response
+	for update, err := range toolautocall.New(cfg).Run(runner.Run, t.Context(), []*message.Message{message.NewText("hello")}, opts...) {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		resp.Update(update)
+	}
+
+	// (a) arguments mutated before next: the tool saw the mutated value (7) in
+	// round 0 and the unchanged provider value (3) in round 1.
+	if !slices.Equal(toolSawX, []int{7, 3}) {
+		t.Errorf("expected tool to observe args [7 3], got %v", toolSawX)
+	}
+
+	// (b) result replaced after next: the FunctionResultContent carries the values
+	// returned by the inner middleware, not the tool's own "original".
+	results := map[string]any{}
+	for _, msg := range resp.Messages {
+		for _, c := range msg.Contents {
+			if frc, ok := c.(*message.FunctionResultContent); ok {
+				results[frc.CallID] = frc.Result
+			}
+		}
+	}
+	if got := fmt.Sprint(results["callId1"]); got != "replaced-0" {
+		t.Errorf("expected callId1 result 'replaced-0', got %q", got)
+	}
+	if got := fmt.Sprint(results["callId2"]); got != "replaced-1" {
+		t.Errorf("expected callId2 result 'replaced-1', got %q", got)
+	}
+
+	// (c) Terminate stops the loop: the provider is called exactly twice, and the
+	// third "should-not-reach" turn is never consumed.
+	if providerCalls != 2 {
+		t.Errorf("expected provider to be called twice before termination, got %d", providerCalls)
+	}
+
+	// Iteration increments across rounds and the chain composes outermost-first.
+	if !slices.Equal(iterations, []int{0, 1}) {
+		t.Errorf("expected iterations [0 1], got %v", iterations)
+	}
+	if !slices.Equal(order, []string{"outer", "inner", "outer", "inner"}) {
+		t.Errorf("expected outermost-first order, got %v", order)
+	}
+}

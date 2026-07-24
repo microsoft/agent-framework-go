@@ -7,6 +7,7 @@ import (
 	"iter"
 
 	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/tool"
 )
 
 // SourceTypeMiddleware represents a message that originated from a middleware component.
@@ -30,6 +31,47 @@ type MiddlewareFunc func(next RunFunc, ctx context.Context, messages []*message.
 func (mf MiddlewareFunc) Run(next RunFunc, ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error] {
 	return mf(next, ctx, messages, options...)
 }
+
+// FunctionInvocationContext carries the state of a single tool (function)
+// invocation as it flows through a chain of [FunctionInvocationMiddleware]
+// executed by the automatic tool-calling loop (see the toolautocall harness).
+//
+// Unlike the run-level [Middleware], which only wraps a whole run, this hook
+// intercepts each individual tool call. It mirrors the per-call interception
+// offered by .NET's FunctionInvocationDelegatingAgent and Python's
+// FunctionMiddleware.
+type FunctionInvocationContext struct {
+	// Function is the tool that will be invoked for this call.
+	Function tool.Tool
+
+	// Arguments holds the JSON-encoded arguments passed to the tool. A middleware
+	// may replace this before calling next to change what the tool receives.
+	Arguments string
+
+	// CallContent is the originating function call content from the provider.
+	CallContent *message.FunctionCallContent
+
+	// Result holds the value returned by next (the inner middleware, or the tool
+	// itself). It is populated before next returns so an outer middleware can
+	// inspect the produced result.
+	Result any
+
+	// Terminate, when set to true by any middleware, stops the tool-calling loop
+	// after the current round of function results has been returned to the caller.
+	Terminate bool
+
+	// Iteration is the zero-based tool-calling round in which this invocation runs.
+	Iteration int
+}
+
+// FunctionInvocationMiddleware intercepts a single tool invocation performed by
+// the automatic tool-calling loop. Implementations call next to proceed to the
+// next middleware and ultimately the tool, or skip it to short-circuit the call.
+// The value returned becomes the function result recorded for the provider.
+//
+// Middleware compose outermost-first: the first element of the configured slice
+// runs first and wraps the rest, matching [runChain].
+type FunctionInvocationMiddleware func(ctx context.Context, fic *FunctionInvocationContext, next func(context.Context) (any, error)) (any, error)
 
 // runChain applies the given middlewares around the given RunFunc.
 func runChain(ctx context.Context, fn RunFunc, middlewares []Middleware, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error] {

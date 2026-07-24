@@ -103,6 +103,14 @@ type Config struct {
 	// appended to the conversation and trigger another provider call, even when
 	// the provider returned no further function calls in the current round.
 	EnableMessageInjection bool
+
+	// FunctionMiddleware is an ordered chain of per-call hooks composed around each
+	// tool invocation. Middleware may mutate the arguments before the tool runs,
+	// replace the result afterward, and set
+	// [agent.FunctionInvocationContext.Terminate] to stop the tool-calling loop.
+	// The chain composes outermost-first: the first element runs first and wraps
+	// the rest, mirroring the run-level middleware composition.
+	FunctionMiddleware []agent.FunctionInvocationMiddleware
 }
 
 type autocall struct {
@@ -115,6 +123,7 @@ type autocall struct {
 	maximumIterationsPerRequest        int
 	newID                              func() string
 	enableMessageInjection             bool
+	functionMiddleware                 []agent.FunctionInvocationMiddleware
 }
 
 // New creates a new function-invoking chat client that wraps the provided client.
@@ -137,6 +146,7 @@ func New(cfg Config) agent.Middleware {
 		maximumIterationsPerRequest:        cmp.Or(cfg.MaximumIterationsPerRequest, defaultMaximumIterationsPerRequest),
 		newID:                              cfg.NewID,
 		enableMessageInjection:             cfg.EnableMessageInjection,
+		functionMiddleware:                 cfg.FunctionMiddleware,
 	}
 	return ac
 }
@@ -314,7 +324,8 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 			// Process all of the functions, adding their results into the history.
 			var newMsg *message.Message
 			var err error
-			newMsg, errCount, err = f.processFunctionCalls(ctx, tools, functionCallContents, errCount)
+			var terminate bool
+			newMsg, errCount, terminate, err = f.processFunctionCalls(ctx, tools, functionCallContents, errCount, i)
 			if err != nil {
 				yield(nil, err)
 				return
@@ -351,6 +362,13 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 				if injected := injector.drain(); len(injected) > 0 {
 					messages = append(messages, injected...)
 				}
+			}
+
+			// A FunctionInvocationMiddleware may request that the loop stop after the
+			// current round of results has been streamed back to the caller.
+			if terminate {
+				f.logger.Debug(ctx, "function middleware requested termination; stopping function invocation loop")
+				break
 			}
 		}
 	}
@@ -612,7 +630,7 @@ func (f *autocall) invokeApprovedToolApprovalResponses(ctx context.Context, appr
 	if len(funcCalls) == 0 {
 		return nil, errCount, nil
 	}
-	newMsg, errCount, err := f.processFunctionCalls(ctx, tools, funcCalls, errCount)
+	newMsg, errCount, _, err := f.processFunctionCalls(ctx, tools, funcCalls, errCount, 0)
 	if err != nil {
 		return nil, errCount, err
 	}
@@ -639,13 +657,14 @@ const (
 )
 
 type functionInvocationResult struct {
-	status functionInvocationStatus
-	call   *message.FunctionCallContent
-	result any
-	err    error
+	status    functionInvocationStatus
+	call      *message.FunctionCallContent
+	result    any
+	err       error
+	terminate bool
 }
 
-func (f *autocall) processFunctionCalls(ctx context.Context, tools map[string]tool.SchemaTool, funcCalls []*message.FunctionCallContent, errCount int) (*message.Message, int, error) {
+func (f *autocall) processFunctionCalls(ctx context.Context, tools map[string]tool.SchemaTool, funcCalls []*message.FunctionCallContent, errCount, iteration int) (*message.Message, int, bool, error) {
 	// We must add a response for every tool call, regardless of whether we successfully executed it or not.
 	// If we successfully execute it, we'll add the result. If we don't, we'll add an error.
 	if len(funcCalls) == 0 { // invariant
@@ -665,7 +684,7 @@ func (f *autocall) processFunctionCalls(ctx context.Context, tools map[string]to
 		for i, fc := range funcCalls {
 			go func() {
 				defer wg.Done()
-				parallelResults[i] = f.processFunctionCall(ctx, tools, fc)
+				parallelResults[i] = f.processFunctionCall(ctx, tools, fc, iteration)
 			}()
 		}
 		wg.Wait()
@@ -673,25 +692,29 @@ func (f *autocall) processFunctionCalls(ctx context.Context, tools map[string]to
 	} else {
 		// Invoke each function serially.
 		for _, fc := range funcCalls {
-			result := f.processFunctionCall(ctx, tools, fc)
+			result := f.processFunctionCall(ctx, tools, fc, iteration)
 			if !captureCurrentIterationErrors && result.status == functionInvocationStatusException {
-				return nil, errCount, result.err
+				return nil, errCount, false, result.err
 			}
 			results = append(results, result)
 		}
 	}
+	var terminate bool
 	for _, result := range results {
 		result.call.InformationalOnly = true
+		if result.terminate {
+			terminate = true
+		}
 	}
 
 	newMsg := f.createResponseMessage(results)
 	var err error
 	errCount, err = f.updateConsecutiveErrorCountOrThrow(ctx, newMsg, errCount)
 	if err != nil {
-		return nil, errCount, err
+		return nil, errCount, false, err
 	}
 
-	return newMsg, errCount, nil
+	return newMsg, errCount, terminate, nil
 }
 
 func (f *autocall) updateConsecutiveErrorCountOrThrow(ctx context.Context, added *message.Message, errCount int) (int, error) {
@@ -721,7 +744,7 @@ func (f *autocall) updateConsecutiveErrorCountOrThrow(ctx context.Context, added
 	return errCount, nil
 }
 
-func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]tool.SchemaTool, funcCall *message.FunctionCallContent) functionInvocationResult {
+func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]tool.SchemaTool, funcCall *message.FunctionCallContent, iteration int) functionInvocationResult {
 	declaration, ok := tools[funcCall.Name]
 	if !ok {
 		f.logger.Warn(ctx, "function not found", "funcName", funcCall.Name)
@@ -738,6 +761,12 @@ func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]too
 	if span != nil {
 		defer span.End()
 	}
+	fic := &agent.FunctionInvocationContext{
+		Function:    tl,
+		Arguments:   funcCall.Arguments,
+		CallContent: funcCall,
+		Iteration:   iteration,
+	}
 	var result any
 	var err error
 	func() {
@@ -750,7 +779,7 @@ func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]too
 				}
 			}
 		}()
-		result, err = tl.Call(ctx, funcCall.Arguments)
+		result, err = f.invokeFunction(ctx, tl, fic)
 	}()
 	if err != nil {
 		if span != nil {
@@ -767,10 +796,33 @@ func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]too
 	f.logger.Debug(ctx, "function call completed", "funcName", funcCall.Name, "duration", time.Since(start), slogx.SensitiveData("result", result))
 
 	if err != nil {
-		return functionInvocationResult{status: functionInvocationStatusException, call: funcCall, err: err}
+		return functionInvocationResult{status: functionInvocationStatusException, call: funcCall, err: err, terminate: fic.Terminate}
 	}
 
-	return functionInvocationResult{status: functionInvocationStatusRanToCompletion, call: funcCall, result: result}
+	return functionInvocationResult{status: functionInvocationStatusRanToCompletion, call: funcCall, result: result, terminate: fic.Terminate}
+}
+
+// invokeFunction runs the tool through the configured [Config.FunctionMiddleware]
+// chain. The innermost call invokes the tool with the (possibly middleware-mutated)
+// arguments carried on fic; each middleware may replace the result by returning a
+// different value. Middleware compose outermost-first, mirroring the run-level
+// middleware composition, so the first configured middleware wraps the rest.
+func (f *autocall) invokeFunction(ctx context.Context, tl tool.FuncTool, fic *agent.FunctionInvocationContext) (any, error) {
+	next := func(ctx context.Context) (any, error) {
+		res, err := tl.Call(ctx, fic.Arguments)
+		fic.Result = res
+		return res, err
+	}
+	for i := len(f.functionMiddleware) - 1; i >= 0; i-- {
+		mw := f.functionMiddleware[i]
+		inner := next
+		next = func(ctx context.Context) (any, error) {
+			res, err := mw(ctx, fic, inner)
+			fic.Result = res
+			return res, err
+		}
+	}
+	return next(ctx)
 }
 
 func startToolSpan(ctx context.Context, funcCall *message.FunctionCallContent, tl tool.Tool) (context.Context, trace.Span) {
