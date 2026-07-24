@@ -105,6 +105,26 @@ func fixedTextAgent(id, name, text string) *agent.Agent {
 	)
 }
 
+func fixedUpdatesAgent(id, name string, updates ...*agent.ResponseUpdate) *agent.Agent {
+	run := func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			for _, update := range updates {
+				if !yield(update, nil) {
+					return
+				}
+			}
+		}
+	}
+	return agent.New(
+		agent.ProviderConfig{ProviderName: "fixed-updates", Run: run},
+		agent.Config{
+			ID:                  id,
+			Name:                name,
+			DisableFuncAutoCall: true,
+		},
+	)
+}
+
 func uppercaseLatestTextBinding(id string) workflow.ExecutorBinding {
 	binding := workflow.ExecutorBinding{
 		ID:               id,
@@ -445,7 +465,7 @@ func TestNew_GatesHostedAgentResponseOutputsByDefault(t *testing.T) {
 		t.Fatalf("New included: %v", err)
 	}
 	var sawResponseOutput bool
-	for update, err := range included.RunText(t.Context(), "ping") {
+	for update, err := range included.RunText(t.Context(), "ping", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("RunText included: %v", err)
 		}
@@ -457,6 +477,87 @@ func TestNew_GatesHostedAgentResponseOutputsByDefault(t *testing.T) {
 	}
 	if !sawResponseOutput {
 		t.Fatalf("aggregated hosted agent response output was not forwarded when included")
+	}
+}
+
+func TestNew_SuppressesDuplicateHostedAgentResponseMessages(t *testing.T) {
+	host := agentworkflow.New(
+		fixedUpdatesAgent("hosted-id", "hosted-name", &agent.ResponseUpdate{
+			Role:      message.RoleAssistant,
+			MessageID: "streamed-message",
+			Contents: message.Contents{
+				&message.TextContent{Text: "hosted-response"},
+			},
+		}),
+		agentworkflow.Config{
+			EmitUpdateEvents:   true,
+			EmitResponseEvents: true,
+		},
+	)
+	wf, err := workflow.NewBuilder(host).
+		WithOutputFrom(host).
+		Build()
+	if err != nil {
+		t.Fatalf("build workflow: %v", err)
+	}
+	ag, err := agentworkflow.NewAgent(wf, agentworkflow.AgentConfig{IncludeOutputsInResponse: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	var textUpdates int
+	var sawCompletionOutput bool
+	for update, err := range ag.RunText(t.Context(), "ping", agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("RunText: %v", err)
+		}
+		if update.Contents.Text() == "hosted-response" {
+			textUpdates++
+		}
+		if raw, ok := update.RawRepresentation.(workflow.OutputEvent); ok && len(update.Contents) == 0 {
+			if _, isResponse := raw.Output.(*agent.Response); isResponse {
+				sawCompletionOutput = true
+			}
+		}
+	}
+	if textUpdates != 1 {
+		t.Fatalf("hosted response text updates = %d, want 1", textUpdates)
+	}
+	if !sawCompletionOutput {
+		t.Fatalf("expected raw-only completion update for suppressed hosted response output")
+	}
+}
+
+func TestNew_SuppressesDuplicateHostedAgentResponseMessagesWithoutProviderMessageIDs(t *testing.T) {
+	host := agentworkflow.New(
+		fixedUpdatesAgent("hosted-id", "hosted-name", &agent.ResponseUpdate{
+			Role: message.RoleAssistant,
+			Contents: message.Contents{
+				&message.TextContent{Text: "hosted-response"},
+			},
+		}),
+		agentworkflow.Config{
+			EmitUpdateEvents:   true,
+			EmitResponseEvents: true,
+		},
+	)
+	wf, err := workflow.NewBuilder(host).
+		WithOutputFrom(host).
+		Build()
+	if err != nil {
+		t.Fatalf("build workflow: %v", err)
+	}
+	ag, err := agentworkflow.NewAgent(wf, agentworkflow.AgentConfig{IncludeOutputsInResponse: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	resp, err := ag.RunText(t.Context(), "ping").Collect()
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if got, want := responseTexts(resp), []string{"hosted-response"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("response texts = %v, want %v; response = %+v", got, want, resp)
 	}
 }
 
