@@ -403,6 +403,7 @@ func (a *toolCallAccumulator) onEvent(evt aguiEvents.Event) ([]*agent.ResponseUp
 			Role:                 message.RoleAssistant,
 			ResponseID:           e.RunID(),
 			CreatedAt:            eventTime(evt),
+			FinishReason:         "stop",
 			AdditionalProperties: props,
 		}}, nil
 	case *aguiEvents.RunErrorEvent:

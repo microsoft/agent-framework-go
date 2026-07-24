@@ -76,6 +76,12 @@ func TestAGUIAgentRun_RunFinishedResultBecomesMetadataNotText(t *testing.T) {
 		}
 	}
 
+	// A completed run reports a "stop" finish reason so consumers can
+	// distinguish successful completion from other end states.
+	if resp.FinishReason != "stop" {
+		t.Fatalf("finish reason = %q, want %q", resp.FinishReason, "stop")
+	}
+
 	// The result is surfaced only as metadata under the "result" key.
 	raw, ok := resp.AdditionalProperties["result"]
 	if !ok {
