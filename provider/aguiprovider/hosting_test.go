@@ -3,11 +3,13 @@
 package aguiprovider_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"iter"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -524,6 +526,60 @@ func TestHandler_MidStreamError_EmitsRunErrorEvent(t *testing.T) {
 	}
 	if strings.Contains(content, "CUSTOM") {
 		t.Fatalf("did not expect a non-standard CUSTOM error event, got %q", content)
+	}
+}
+
+// failOnMatchResponseWriter fails Write calls whose payload contains a sentinel,
+// simulating a client disconnect/broken pipe partway through the SSE stream.
+type failOnMatchResponseWriter struct {
+	*httptest.ResponseRecorder
+	sentinel string
+	writeErr error
+}
+
+func (w *failOnMatchResponseWriter) Write(b []byte) (int, error) {
+	if strings.Contains(string(b), w.sentinel) {
+		return 0, w.writeErr
+	}
+	return w.ResponseRecorder.Write(b)
+}
+
+func (w *failOnMatchResponseWriter) Flush() { w.ResponseRecorder.Flush() }
+
+// TestHandler_MidStreamError_TerminalWriteFailureSurfaced verifies that when the hosted
+// agent fails mid-stream AND writing the terminal RUN_ERROR frame also fails (e.g. client
+// disconnect/broken pipe), the delivery failure is surfaced to the handler alongside the
+// original agent error rather than silently dropped. The handler logs the returned error,
+// so the captured log must reference both the agent error and the write failure.
+func TestHandler_MidStreamError_TerminalWriteFailureSurfaced(t *testing.T) {
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(nil, errors.New("boom"))
+		}
+	})
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+	h := aguiprovider.NewJSONHTTPHandler(a, aguiprovider.HandlerConfig{Logger: logger})
+
+	body := `{"threadId":"thread-1","runId":"run-err-1","messages":[{"id":"u1","role":"user","content":"ping"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	rr := &failOnMatchResponseWriter{
+		ResponseRecorder: httptest.NewRecorder(),
+		sentinel:         "RUN_ERROR",
+		writeErr:         errors.New("broken pipe"),
+	}
+	h.ServeHTTP(rr, req)
+
+	logged := logBuf.String()
+	if !strings.Contains(logged, "agui stream failed") {
+		t.Fatalf("expected stream failure to be logged, got %q", logged)
+	}
+	if !strings.Contains(logged, "broken pipe") {
+		t.Fatalf("expected terminal-write failure to be surfaced, got %q", logged)
+	}
+	if !strings.Contains(logged, "boom") {
+		t.Fatalf("expected original agent error to be preserved, got %q", logged)
 	}
 }
 
