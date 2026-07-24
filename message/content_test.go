@@ -354,6 +354,39 @@ func TestToolApprovalRequestContent_CreateResponseSnapshotsFunctionCall(t *testi
 	}
 }
 
+func TestToolApprovalRequestContent_AlwaysApproveSnapshotsAdditionalProperties(t *testing.T) {
+	newRequest := func() *message.ToolApprovalRequestContent {
+		return &message.ToolApprovalRequestContent{
+			ContentHeader: message.ContentHeader{
+				AdditionalProperties: map[string]any{"request": "value"},
+			},
+			RequestID: "approval-1",
+			ToolCall: &message.FunctionCallContent{
+				CallID: "call-1",
+				Name:   "deploy",
+			},
+		}
+	}
+
+	t.Run("AlwaysApproveToolResponse", func(t *testing.T) {
+		request := newRequest()
+		response := request.AlwaysApproveToolResponse()
+		request.AdditionalProperties["request"] = "changed"
+		if response.AdditionalProperties["request"] != "value" {
+			t.Fatalf("expected response additional properties to be snapshotted, got %v", response.AdditionalProperties["request"])
+		}
+	})
+
+	t.Run("AlwaysApproveToolWithArgumentsResponse", func(t *testing.T) {
+		request := newRequest()
+		response := request.AlwaysApproveToolWithArgumentsResponse()
+		request.AdditionalProperties["request"] = "changed"
+		if response.AdditionalProperties["request"] != "value" {
+			t.Fatalf("expected response additional properties to be snapshotted, got %v", response.AdditionalProperties["request"])
+		}
+	})
+}
+
 func TestToolApprovalRequestContent_CreateResponseSnapshotsMCPServerToolCall(t *testing.T) {
 	toolCall := &message.MCPServerToolCallContent{
 		ContentHeader: message.ContentHeader{
