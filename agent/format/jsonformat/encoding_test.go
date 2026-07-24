@@ -133,3 +133,30 @@ func TestNormalizeEmptyStruct(t *testing.T) {
 		t.Fatalf("Normalize: %v", err)
 	}
 }
+
+// Integer arguments beyond 2^53 must survive Unmarshal: decoding through an
+// interface{} as float64 would silently truncate them.
+func TestFormat_Unmarshal_PreservesLargeIntegerPrecision(t *testing.T) {
+	type output struct {
+		N int64 `json:"n"`
+	}
+	format := requireFormat(t, jsonformat.MustFor[output]())
+	var out output
+	if err := format.Unmarshal([]byte(`{"n":9007199254740993}`), &out); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if out.N != 9007199254740993 {
+		t.Errorf("N = %d, want 9007199254740993 (large-integer precision lost)", out.N)
+	}
+}
+
+func TestFormat_Unmarshal_RejectsTrailingData(t *testing.T) {
+	type output struct {
+		N int `json:"n"`
+	}
+	format := requireFormat(t, jsonformat.MustFor[output]())
+	var out output
+	if err := format.Unmarshal([]byte(`{"n":1} {"n":2}`), &out); err == nil {
+		t.Fatal("expected an error for trailing data after the JSON value, got nil")
+	}
+}

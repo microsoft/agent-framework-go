@@ -3,8 +3,10 @@
 package jsonformat
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 
 	"github.com/google/jsonschema-go/jsonschema"
 )
@@ -69,8 +71,17 @@ func (f *Format) Normalize(v any) error {
 func applySchema(data json.RawMessage, resolved *jsonschema.Resolved) (json.RawMessage, error) {
 	var v any
 	if len(data) > 0 {
-		if err := json.Unmarshal(data, &v); err != nil {
+		// Decode with UseNumber so integers beyond 2^53 are not silently
+		// truncated by being decoded into float64 and re-marshalled.
+		dec := json.NewDecoder(bytes.NewReader(data))
+		dec.UseNumber()
+		if err := dec.Decode(&v); err != nil {
 			return nil, fmt.Errorf("unmarshaling arguments: %w", err)
+		}
+		// Unlike json.Unmarshal, json.Decoder tolerates trailing data after the
+		// first value; reject it so validation is not looser than before.
+		if _, err := dec.Token(); err != io.EOF {
+			return nil, fmt.Errorf("unmarshaling arguments: unexpected trailing data after JSON value")
 		}
 	}
 	if err := resolved.ApplyDefaults(&v); err != nil {
