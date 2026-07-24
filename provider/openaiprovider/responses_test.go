@@ -2057,6 +2057,114 @@ func firstToolApprovalRequest(t *testing.T, resp *agent.Response) *message.ToolA
 	return nil
 }
 
+func TestResponsesMCPServerRequireApproval(t *testing.T) {
+	const output = `
+            {
+              "id":"resp_001",
+              "object":"response",
+              "created_at":1741892091,
+              "status":"completed",
+              "model":"gpt-4o-mini",
+              "output":[{"type":"message","id":"msg_001","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok","annotations":[]}]}]
+            }
+            `
+
+	tests := []struct {
+		name  string
+		tool  *hostedtool.MCPServer
+		input string
+	}{
+		{
+			name: "approval mode never",
+			tool: &hostedtool.MCPServer{
+				ServerName:    "github",
+				ServerAddress: "https://example.com/mcp",
+				ApprovalMode:  "never",
+			},
+			input: `
+                {
+                    "model":"gpt-4o-mini",
+                    "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"test"}]}],
+                    "tools":[{"type":"mcp","server_label":"github","server_url":"https://example.com/mcp","require_approval":"never"}]
+                }
+                `,
+		},
+		{
+			name: "approval filter lists",
+			tool: &hostedtool.MCPServer{
+				ServerName:            "github",
+				ServerAddress:         "https://example.com/mcp",
+				ApprovalMode:          "never",
+				AlwaysRequireApproval: []string{"create_issue"},
+				NeverRequireApproval:  []string{"list_issues"},
+			},
+			input: `
+                {
+                    "model":"gpt-4o-mini",
+                    "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"test"}]}],
+                    "tools":[{"type":"mcp","server_label":"github","server_url":"https://example.com/mcp","require_approval":{"always":{"tool_names":["create_issue"]},"never":{"tool_names":["list_issues"]}}}]
+                }
+                `,
+		},
+		{
+			name: "only always list",
+			tool: &hostedtool.MCPServer{
+				ServerName:            "github",
+				ServerAddress:         "https://example.com/mcp",
+				AlwaysRequireApproval: []string{"create_issue"},
+			},
+			input: `
+                {
+                    "model":"gpt-4o-mini",
+                    "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"test"}]}],
+                    "tools":[{"type":"mcp","server_label":"github","server_url":"https://example.com/mcp","require_approval":{"always":{"tool_names":["create_issue"]}}}]
+                }
+                `,
+		},
+		{
+			name: "only never list",
+			tool: &hostedtool.MCPServer{
+				ServerName:           "github",
+				ServerAddress:        "https://example.com/mcp",
+				NeverRequireApproval: []string{"list_issues"},
+			},
+			input: `
+                {
+                    "model":"gpt-4o-mini",
+                    "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"test"}]}],
+                    "tools":[{"type":"mcp","server_label":"github","server_url":"https://example.com/mcp","require_approval":{"never":{"tool_names":["list_issues"]}}}]
+                }
+                `,
+		},
+		{
+			name: "zero value omits require_approval",
+			tool: &hostedtool.MCPServer{
+				ServerName:    "github",
+				ServerAddress: "https://example.com/mcp",
+			},
+			input: `
+                {
+                    "model":"gpt-4o-mini",
+                    "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"test"}]}],
+                    "tools":[{"type":"mcp","server_label":"github","server_url":"https://example.com/mcp"}]
+                }
+                `,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := newTestResponsesServer(t, tt.input, output)
+			defer server.Close()
+
+			a := newTestResponsesClient(server, "gpt-4o-mini")
+			if _, err := a.RunText(t.Context(), "test", agent.WithTool(tt.tool)).Collect(); err != nil {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
 func TestResponsesResponseFormatSchemaConvertsJSONSchema(t *testing.T) {
 	type payload struct {
 		Name string `json:"name"`

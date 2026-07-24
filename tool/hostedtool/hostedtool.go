@@ -74,6 +74,18 @@ type MCPServer struct {
 	Authorization     string
 	AllowedTools      []string
 	Headers           map[string]string
+
+	// ApprovalMode controls whether the service requires approval before
+	// invoking the server's tools. Valid values are "always" and "never".
+	// An empty value leaves the service default in effect.
+	//
+	// ApprovalMode is ignored when AlwaysRequireApproval or NeverRequireApproval
+	// is non-empty, which express per-tool approval requirements instead.
+	ApprovalMode string
+	// AlwaysRequireApproval lists tool names that always require approval.
+	AlwaysRequireApproval []string
+	// NeverRequireApproval lists tool names that never require approval.
+	NeverRequireApproval []string
 }
 
 func (t *MCPServer) Name() string {
