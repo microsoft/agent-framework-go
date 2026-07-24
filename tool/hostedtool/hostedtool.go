@@ -65,15 +65,23 @@ func (t *CodeInterpreter) Description() string {
 	return ""
 }
 
+// MCPServer represents a hosted tool that can be specified to an AI service
+// to enable it to invoke tools exposed by a remote MCP server.
 type MCPServer struct {
 	AdditionalProperties map[string]any
 
-	ServerName        string
+	// ServerName is the name used to identify the MCP server.
+	ServerName string
+	// ServerDescription is an optional human-readable description of the MCP server.
 	ServerDescription string
-	ServerAddress     string
-	Authorization     string
-	AllowedTools      []string
-	Headers           map[string]string
+	// ServerAddress is the URL of the remote MCP server.
+	ServerAddress string
+	// Authorization is an optional authorization token used when connecting to the MCP server.
+	Authorization string
+	// AllowedTools optionally restricts the set of tools that may be invoked on the MCP server.
+	AllowedTools []string
+	// Headers contains optional HTTP headers to send when connecting to the MCP server.
+	Headers map[string]string
 }
 
 func (t *MCPServer) Name() string {
