@@ -316,6 +316,21 @@ func TestMemoryProviderEnsureStoredMemoriesDeletedTreatsNotFoundAsSuccess(t *tes
 	if err := provider.EnsureStoredMemoriesDeleted(t.Context(), nil); err != nil {
 		t.Fatalf("EnsureStoredMemoriesDeleted error = %v", err)
 	}
+
+	requests := transport.Requests()
+	if len(requests) != 1 {
+		t.Fatalf("request count = %d, want 1", len(requests))
+	}
+	req := requests[0]
+	if req.Method != http.MethodPost || req.Path != "/memory_stores/memory:delete_scope" {
+		t.Fatalf("request = %s %s", req.Method, req.Path)
+	}
+	if got := req.Header.Get("Foundry-Features"); got != "MemoryStores=V1Preview" {
+		t.Fatalf("Foundry-Features = %q", got)
+	}
+	if body := jsonMap(t, req.Body); body["scope"] != "user-456" {
+		t.Fatalf("scope = %#v", body["scope"])
+	}
 }
 
 func TestMemoryProviderEnsureStoredMemoriesDeletedSurfacesOtherErrors(t *testing.T) {
