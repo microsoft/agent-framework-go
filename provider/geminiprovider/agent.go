@@ -241,9 +241,13 @@ func (a *client) buildParams(messages []*message.Message, opts []agent.Option) (
 			fc.Mode = genai.FunctionCallingConfigModeAny
 			fc.AllowedFunctionNames = mode.Required()
 		}
-		cfg.ToolConfig = &genai.ToolConfig{
-			FunctionCallingConfig: fc,
+		// Merge into any caller-supplied ToolConfig (e.g. a RetrievalConfig for
+		// Vertex grounding passed through GenerateContentConfig) rather than
+		// replacing it, so only the function-calling mode is overridden.
+		if cfg.ToolConfig == nil {
+			cfg.ToolConfig = &genai.ToolConfig{}
 		}
+		cfg.ToolConfig.FunctionCallingConfig = fc
 	}
 
 	// Build a map of CallID → function name by scanning all messages first.
