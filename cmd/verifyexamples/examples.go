@@ -240,6 +240,23 @@ var agentsExamples = []ExampleDefinition{
 		},
 	},
 	{
+		Name:            "02_agents_agents_step19_loop_reinvocation",
+		ProjectPath:     "examples/02-agents/agents/step19_loop_reinvocation",
+		IsDeterministic: true,
+		MustContain: []string{
+			"Completion-marker loop finished after 3 agent iteration(s) (cap 5).",
+			"Custom-evaluator loop stopped on approval after 2 iteration(s) (cap 4).",
+			"Custom-evaluator loop stopped at the safety cap after 3 iteration(s) (cap 3).",
+		},
+		MustNotContain: []string{"Error:", "panic:"},
+		ExpectedOutputDescription: []string{
+			"The output should show the loop harness re-invoking an agent until an evaluator stops it.",
+			"A completion-marker loop should finish once the response contains the marker, before the MaxIterations cap.",
+			"A custom evaluator loop should stop on approval, and a separate run should stop at the MaxIterations safety cap.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
 		Name:                         "02_agents_agents_step22_foundry_memory",
 		ProjectPath:                  "examples/02-agents/agents/step22_foundry_memory",
 		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
