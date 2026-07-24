@@ -813,6 +813,15 @@ var workflowExamples = []ExampleDefinition{
 		},
 	},
 	{
+		Name:            "03_workflows_human_in_the_loop_imperative_request",
+		ProjectPath:     "examples/03-workflows/human-in-the-loop/imperative_request",
+		IsDeterministic: true,
+		MustContain:     []string{"Executor asked: What is your name?", "Workflow completed with result: Hello, Ada!"},
+		ExpectedOutputDescription: []string{
+			"The output should show an executor raising a human-in-the-loop request imperatively and completing with the greeting \"Hello, Ada!\".",
+		},
+	},
+	{
 		Name:        "03_workflows_loop",
 		ProjectPath: "examples/03-workflows/loop",
 		MustContain: []string{"found in"},
