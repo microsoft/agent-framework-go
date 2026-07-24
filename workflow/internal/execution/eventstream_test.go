@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/microsoft/agent-framework-go/workflow"
+	"github.com/microsoft/agent-framework-go/workflow/internal/observability"
+	"github.com/microsoft/agent-framework-go/workflow/internal/workflowtest"
 )
 
 func TestStreamingRunEventStream_RemovesEventHandlerOnStop(t *testing.T) {
@@ -55,6 +57,46 @@ func TestStreamingRunEventStream_ErrorEventCancelsRunLoop(t *testing.T) {
 	waitForEventHandlerCount(t, runner.outgoingEvents, 0)
 }
 
+func TestStreamingRunEventStream_NoWorkWakeupDoesNotOpenWorkflowRunSpan(t *testing.T) {
+	tracer := workflowtest.NewRecordingTracer()
+	wf, err := workflow.NewBuilder((&workflow.Executor{ID: "start", ImplementationID: "workflow_test.start"}).Bind()).
+		WithTelemetry(tracer, workflow.TelemetryOptions{}).
+		Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	runner := newTestSuperStepRunner()
+	runner.wf = wf
+	stream := newStreamingRunEventStream(runner, false)
+
+	stream.Start()
+	defer stream.Stop()
+	waitForEventHandlerCount(t, runner.outgoingEvents, 1)
+
+	// Trigger a no-work wakeup: the run loop is signaled but
+	// HasUnprocessedMessages reports false, so the iteration has nothing to
+	// process. Such an iteration must not open a WorkflowRun span, matching
+	// the lockstep implementation.
+	stream.SignalInput()
+
+	// The loop enqueues an internalHaltSignal once the (no-work) cycle
+	// completes; use it to synchronize before asserting on spans.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	evt, ok := stream.nextEvent(ctx)
+	if !ok {
+		t.Fatal("run loop did not complete the no-work iteration")
+	}
+	if _, ok := evt.(*internalHaltSignal); !ok {
+		t.Fatalf("unexpected event on no-work wakeup: %#v", evt)
+	}
+
+	if count := workflowtest.CountSpansWithPrefix(tracer.Spans(), observability.ActivityWorkflowInvoke); count != 0 {
+		t.Fatalf("workflow_invoke span count = %d, want 0 on no-work wakeup", count)
+	}
+}
+
 func waitForEventHandlerCount(t *testing.T, sink *ConcurrentEventSink, want int) {
 	t.Helper()
 	deadline := time.After(time.Second)
@@ -75,6 +117,7 @@ func waitForEventHandlerCount(t *testing.T, sink *ConcurrentEventSink, want int)
 
 type testSuperStepRunner struct {
 	outgoingEvents *ConcurrentEventSink
+	wf             *workflow.Workflow
 }
 
 func newTestSuperStepRunner() *testSuperStepRunner {
@@ -84,6 +127,9 @@ func newTestSuperStepRunner() *testSuperStepRunner {
 func (r *testSuperStepRunner) SessionID() string { return "session" }
 
 func (r *testSuperStepRunner) Workflow() *workflow.Workflow {
+	if r.wf != nil {
+		return r.wf
+	}
 	wf, err := workflow.NewBuilder((&workflow.Executor{ID: "start", ImplementationID: "workflow_test.start"}).Bind()).Build()
 	if err != nil {
 		panic(err)
