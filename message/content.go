@@ -663,6 +663,10 @@ func (t *ToolApprovalRequestContent) UnmarshalJSON(data []byte) error {
 
 func (t ToolApprovalRequestContent) kind() contentKind { return "toolApprovalRequest" }
 
+// CreateResponse builds a [ToolApprovalResponseContent] that approves or rejects this
+// request. It carries over the RequestID, records the decision and reason, and clones the
+// pending tool call along with the AdditionalProperties and Annotations of the content
+// header. Note that RawRepresentation is copied by reference.
 func (t *ToolApprovalRequestContent) CreateResponse(approved bool, reason string) *ToolApprovalResponseContent {
 	return &ToolApprovalResponseContent{
 		RequestID: t.RequestID,
