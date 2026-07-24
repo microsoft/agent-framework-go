@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -23,12 +24,35 @@ type MiddlewareConfig struct {
 	SourceName string
 }
 
-// NewMiddleware creates a new middleware that adds OpenTelemetry tracing to agent runs.
+// NewMiddleware creates a new middleware that adds OpenTelemetry tracing and metrics to
+// agent runs.
 func NewMiddleware(cfg MiddlewareConfig) agent.Middleware {
-	tracer := otel.Tracer(cmp.Or(cfg.SourceName, "github.com/microsoft/agent-framework-go"))
-	return &mw{
-		tracer: tracer,
+	name := cmp.Or(cfg.SourceName, "github.com/microsoft/agent-framework-go")
+	m := &mw{
+		tracer: otel.Tracer(name),
 	}
+
+	// Metrics complement the span: span attributes describe a single run, whereas these
+	// histograms aggregate token spend and latency across runs -- the shape a spend or
+	// latency dashboard needs, and what the Python/.NET references emit. A failure to
+	// build a histogram must not disable tracing, so we drop only the failed instrument
+	// and record() tolerates a nil histogram.
+	meter := otel.Meter(name)
+	if h, err := meter.Float64Histogram(
+		metricTokenUsage,
+		metric.WithUnit("{token}"),
+		metric.WithDescription("Measures number of input and output tokens used."),
+	); err == nil {
+		m.tokenUsage = h
+	}
+	if h, err := meter.Float64Histogram(
+		metricOperationDuration,
+		metric.WithUnit("s"),
+		metric.WithDescription("Duration of GenAI client operations."),
+	); err == nil {
+		m.operationDuration = h
+	}
+	return m
 }
 
 const (
@@ -40,6 +64,13 @@ const (
 	attrKeyAgentDesc     = "gen_ai.agent.description"
 	attrKeyOperationName = "gen_ai.operation.name"
 	attrKeyErrorType     = "error.type"
+	attrKeyTokenType     = "gen_ai.token.type"
+
+	// Metric instrument names from the OpenTelemetry GenAI semantic conventions, matching
+	// the histograms emitted by the Python and .NET SDKs so cross-language dashboards
+	// aggregate Go runs alongside the rest.
+	metricTokenUsage        = "gen_ai.client.token.usage"
+	metricOperationDuration = "gen_ai.client.operation.duration"
 
 	// Token usage, per the OpenTelemetry GenAI semantic conventions.
 	//
@@ -59,12 +90,15 @@ const (
 )
 
 type mw struct {
-	tracer trace.Tracer
+	tracer            trace.Tracer
+	tokenUsage        metric.Float64Histogram
+	operationDuration metric.Float64Histogram
 }
 
 func (m *mw) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		a, _ := agent.AgentFromContext(ctx)
+		start := time.Now()
 		ctx, span := m.tracer.Start(ctx, a.Name(), trace.WithAttributes(
 			attribute.String(attrKeyOperationName, opInvoke),
 			attribute.String(attrKeyProviderName, cmp.Or(a.ProviderName(), "unknown")),
@@ -79,10 +113,12 @@ func (m *mw) Run(next agent.RunFunc, ctx context.Context, messages []*message.Me
 		// emits one UsageContent per round-trip, so summing them gives the true cost of
 		// the agent rather than the cost of its final call.
 		var usage message.UsageDetails
+		var errorType string
 
 		for update, err := range next(ctx, messages, options...) {
 			if err != nil {
-				span.SetAttributes(attribute.String(attrKeyErrorType, otelx.ErrorTypeName(err)))
+				errorType = otelx.ErrorTypeName(err)
+				span.SetAttributes(attribute.String(attrKeyErrorType, errorType))
 				span.RecordError(err, trace.WithTimestamp(time.Now()))
 				span.SetStatus(codes.Error, err.Error())
 			}
@@ -94,11 +130,46 @@ func (m *mw) Run(next agent.RunFunc, ctx context.Context, messages []*message.Me
 				// still ran (and paid for) the tokens counted so far, and a span that
 				// silently reports none of them understates real spend.
 				setUsage(span, usage)
+				m.recordMetrics(ctx, a, usage, start, errorType)
 				return
 			}
 		}
 
 		setUsage(span, usage)
+		m.recordMetrics(ctx, a, usage, start, errorType)
+	}
+}
+
+// recordMetrics emits the operation-duration and token-usage histograms for a completed
+// run. Both span and metric are recorded from the same accumulated totals so a dashboard
+// aggregating across runs sees the same numbers the span carries for a single run. It is a
+// no-op when the histograms failed to build (see NewMiddleware), keeping the middleware
+// usable for tracing alone.
+func (m *mw) recordMetrics(ctx context.Context, a *agent.Agent, usage message.UsageDetails, start time.Time, errorType string) {
+	// Attributes shared by every data point, mirroring the span's identifying attributes
+	// plus error.type when the run faulted.
+	attrs := []attribute.KeyValue{
+		attribute.String(attrKeyOperationName, opInvoke),
+		attribute.String(attrKeyProviderName, cmp.Or(a.ProviderName(), "unknown")),
+		attribute.String(attrKeyAgentName, a.Name()),
+	}
+	if errorType != "" {
+		attrs = append(attrs, attribute.String(attrKeyErrorType, errorType))
+	}
+
+	if m.operationDuration != nil {
+		m.operationDuration.Record(ctx, time.Since(start).Seconds(), metric.WithAttributes(attrs...))
+	}
+
+	if m.tokenUsage != nil {
+		// One data point per token direction, each tagged gen_ai.token.type, so the same
+		// histogram splits input from output spend the way the GenAI conventions define.
+		// tokenAttrs builds a fresh slice per call so the two records never alias.
+		tokenAttrs := func(tokenType string) []attribute.KeyValue {
+			return append(attrs[:len(attrs):len(attrs)], attribute.String(attrKeyTokenType, tokenType))
+		}
+		m.tokenUsage.Record(ctx, float64(usage.InputTokenCount), metric.WithAttributes(tokenAttrs("input")...))
+		m.tokenUsage.Record(ctx, float64(usage.OutputTokenCount), metric.WithAttributes(tokenAttrs("output")...))
 	}
 }
 

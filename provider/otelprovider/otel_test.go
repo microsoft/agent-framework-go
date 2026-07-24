@@ -17,6 +17,9 @@ import (
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 
+	"go.opentelemetry.io/otel/attribute"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
@@ -38,6 +41,137 @@ func setupTracer(t *testing.T) *tracetest.InMemoryExporter {
 		otellib.SetTracerProvider(originalProvider)
 	})
 	return exporter
+}
+
+func setupMeter(t *testing.T) *sdkmetric.ManualReader {
+	t.Helper()
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	original := otellib.GetMeterProvider()
+	otellib.SetMeterProvider(mp)
+	t.Cleanup(func() {
+		_ = mp.Shutdown(t.Context())
+		otellib.SetMeterProvider(original)
+	})
+	return reader
+}
+
+// findMetric returns the aggregation for the named instrument, failing the test if absent.
+func findMetric(t *testing.T, rm metricdata.ResourceMetrics, name string) metricdata.Aggregation {
+	t.Helper()
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name == name {
+				return m.Data
+			}
+		}
+	}
+	t.Fatalf("expected metric %q to be recorded", name)
+	return nil
+}
+
+func attrOf(set attribute.Set, key string) string {
+	v, _ := set.Value(attribute.Key(key))
+	return v.AsString()
+}
+
+func TestOtel_Run_RecordsUsageAndDurationMetrics(t *testing.T) {
+	reader := setupMeter(t)
+
+	mw := otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{})
+	a := agent.New(agent.ProviderConfig{
+		ProviderName: "test-provider",
+		Run: func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			return func(yield func(*agent.ResponseUpdate, error) bool) {
+				yield(&agent.ResponseUpdate{
+					MessageID: "turn-1",
+					Contents: []message.Content{&message.UsageContent{
+						Details: message.UsageDetails{InputTokenCount: 100, OutputTokenCount: 50, TotalTokenCount: 150},
+					}},
+				}, nil)
+			}
+		},
+	}, agent.Config{ID: "id", Name: "test-agent", Middlewares: []agent.Middleware{mw}})
+
+	_, _ = a.RunMessage(t.Context(), message.NewText("test")).Collect()
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(t.Context(), &rm); err != nil {
+		t.Fatalf("collect metrics: %v", err)
+	}
+
+	usage, ok := findMetric(t, rm, "gen_ai.client.token.usage").(metricdata.Histogram[float64])
+	if !ok {
+		t.Fatal("expected gen_ai.client.token.usage to be a float64 histogram")
+	}
+	if len(usage.DataPoints) != 2 {
+		t.Fatalf("expected 2 token-usage data points, got %d", len(usage.DataPoints))
+	}
+	byType := map[string]metricdata.HistogramDataPoint[float64]{}
+	for _, dp := range usage.DataPoints {
+		byType[attrOf(dp.Attributes, "gen_ai.token.type")] = dp
+	}
+	if got := byType["input"].Sum; got != 100 {
+		t.Errorf("input token usage sum = %v, want 100", got)
+	}
+	if got := byType["output"].Sum; got != 50 {
+		t.Errorf("output token usage sum = %v, want 50", got)
+	}
+	// Shared GenAI attributes must ride along on every data point.
+	if got := attrOf(byType["input"].Attributes, "gen_ai.operation.name"); got != "invoke_agent" {
+		t.Errorf("gen_ai.operation.name = %q, want %q", got, "invoke_agent")
+	}
+	if got := attrOf(byType["input"].Attributes, "gen_ai.provider.name"); got != "test-provider" {
+		t.Errorf("gen_ai.provider.name = %q, want %q", got, "test-provider")
+	}
+	if got := attrOf(byType["input"].Attributes, "gen_ai.agent.name"); got != "test-agent" {
+		t.Errorf("gen_ai.agent.name = %q, want %q", got, "test-agent")
+	}
+
+	duration, ok := findMetric(t, rm, "gen_ai.client.operation.duration").(metricdata.Histogram[float64])
+	if !ok {
+		t.Fatal("expected gen_ai.client.operation.duration to be a float64 histogram")
+	}
+	if len(duration.DataPoints) != 1 {
+		t.Fatalf("expected 1 duration data point, got %d", len(duration.DataPoints))
+	}
+	if duration.DataPoints[0].Count != 1 {
+		t.Errorf("expected duration count 1, got %d", duration.DataPoints[0].Count)
+	}
+	if got := attrOf(duration.DataPoints[0].Attributes, "gen_ai.operation.name"); got != "invoke_agent" {
+		t.Errorf("duration gen_ai.operation.name = %q, want %q", got, "invoke_agent")
+	}
+}
+
+func TestOtel_Run_MetricsIncludeErrorType(t *testing.T) {
+	reader := setupMeter(t)
+
+	mw := otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{})
+	next := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{}, errors.New("boom"))
+		}
+	}
+
+	seq := mw.Run(next, t.Context(), []*message.Message{})
+	for range seq {
+	}
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(t.Context(), &rm); err != nil {
+		t.Fatalf("collect metrics: %v", err)
+	}
+
+	duration, ok := findMetric(t, rm, "gen_ai.client.operation.duration").(metricdata.Histogram[float64])
+	if !ok {
+		t.Fatal("expected gen_ai.client.operation.duration to be a float64 histogram")
+	}
+	if len(duration.DataPoints) != 1 {
+		t.Fatalf("expected 1 duration data point, got %d", len(duration.DataPoints))
+	}
+	if got := attrOf(duration.DataPoints[0].Attributes, "error.type"); got != "errorString" {
+		t.Errorf("expected error.type %q on faulted-run metric, got %q", "errorString", got)
+	}
 }
 
 func TestOtel_Run_CreatesSpan(t *testing.T) {
