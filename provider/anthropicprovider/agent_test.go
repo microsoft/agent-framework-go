@@ -286,6 +286,91 @@ func TestTextCitationsBecomeAnnotations(t *testing.T) {
 	}
 }
 
+func TestServerToolUseAndWebSearchResultBlocks(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"id":"msg_server_tool",
+			"type":"message",
+			"role":"assistant",
+			"model":"claude-3-5-sonnet-20241022",
+			"stop_reason":"end_turn",
+			"stop_sequence":null,
+			"content":[
+				{
+					"type":"server_tool_use",
+					"id":"srvtoolu_01",
+					"name":"web_search",
+					"input":{"query":"agent framework"}
+				},
+				{
+					"type":"web_search_tool_result",
+					"tool_use_id":"srvtoolu_01",
+					"content":[{
+						"type":"web_search_result",
+						"title":"Example Result",
+						"url":"https://example.com/result",
+						"encrypted_content":"enc",
+						"page_age":"1 day"
+					}]
+				}
+			],
+			"usage":{"input_tokens":10,"output_tokens":5}
+		}`)
+	}))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+	resp, err := a.RunText(t.Context(), "search the web").Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var call *message.FunctionCallContent
+	var result *message.FunctionResultContent
+	for content := range resp.Contents() {
+		switch c := content.(type) {
+		case *message.FunctionCallContent:
+			call = c
+		case *message.FunctionResultContent:
+			result = c
+		}
+	}
+
+	if call == nil {
+		t.Fatal("expected a FunctionCallContent for the server_tool_use block")
+	}
+	if call.CallID != "srvtoolu_01" {
+		t.Errorf("call CallID = %q, want %q", call.CallID, "srvtoolu_01")
+	}
+	if call.Name != "web_search" {
+		t.Errorf("call Name = %q, want %q", call.Name, "web_search")
+	}
+	if !strings.Contains(call.Arguments, "agent framework") {
+		t.Errorf("call Arguments = %q, want it to contain the query", call.Arguments)
+	}
+
+	if result == nil {
+		t.Fatal("expected a FunctionResultContent for the web_search_tool_result block")
+	}
+	if result.CallID != "srvtoolu_01" {
+		t.Errorf("result CallID = %q, want %q", result.CallID, "srvtoolu_01")
+	}
+	if len(result.Annotations) != 1 {
+		t.Fatalf("result annotations length = %d, want 1", len(result.Annotations))
+	}
+	citation, ok := result.Annotations[0].(*message.CitationAnnotation)
+	if !ok {
+		t.Fatalf("annotation type = %T, want *message.CitationAnnotation", result.Annotations[0])
+	}
+	if citation.URL != "https://example.com/result" {
+		t.Errorf("citation URL = %q, want %q", citation.URL, "https://example.com/result")
+	}
+	if citation.Title != "Example Result" {
+		t.Errorf("citation Title = %q, want %q", citation.Title, "Example Result")
+	}
+}
+
 // TestStructuredOutput_NonStreaming verifies that passing agent.WithStructuredOutput
 // with a typed struct causes the provider to:
 //  1. Send output_config.format with type "json_schema" and a schema derived

@@ -255,6 +255,55 @@ func (a *client) buildBlock(index int, v any, contents []message.Content, functi
 			Name:      v.Name,
 			Arguments: string(v.Input),
 		}
+	case anthropic.ServerToolUseBlock:
+		// Server-side tool invocations (e.g. web_search) are executed by
+		// Anthropic itself. Surface them as function calls so callers can
+		// observe the request, mirroring the client-side ToolUseBlock handling
+		// and the Python SDK's server_tool_use parsing. Unlike client tool
+		// calls these are appended in place (not via the functions map, which
+		// is nil on the streaming path) since Anthropic already ran them.
+		var args string
+		if v.Input != nil {
+			if b, err := json.Marshal(v.Input); err == nil {
+				args = string(b)
+			}
+		}
+		contents = append(contents, &message.FunctionCallContent{
+			CallID:    v.ID,
+			Name:      string(v.Name),
+			Arguments: args,
+			ContentHeader: message.ContentHeader{
+				RawRepresentation: v,
+			},
+		})
+	case anthropic.WebSearchToolResultBlock:
+		// The paired result for a server-side web search. Surface it as a
+		// function result whose citations point at each source, matching the
+		// Python SDK's web_search_tool_result handling.
+		result := &message.FunctionResultContent{
+			CallID: v.ToolUseID,
+			ContentHeader: message.ContentHeader{
+				RawRepresentation: v,
+			},
+		}
+		if v.Content.Type == "web_search_tool_result_error" {
+			searchErr := v.Content.AsResponseWebSearchToolResultError()
+			result.Error = fmt.Errorf("web search failed: %s", searchErr.ErrorCode)
+			result.Result = string(searchErr.ErrorCode)
+		} else {
+			results := v.Content.AsWebSearchResultBlockArray()
+			var annotations []message.Annotation
+			for _, r := range results {
+				annotations = append(annotations, &message.CitationAnnotation{
+					Title:             r.Title,
+					URL:               r.URL,
+					RawRepresentation: r,
+				})
+			}
+			result.Annotations = annotations
+			result.Result = results
+		}
+		contents = append(contents, result)
 	}
 	return contents
 }
