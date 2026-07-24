@@ -651,3 +651,93 @@ func TestBuildMessageParam_ImageURLAndPDFAreForwarded(t *testing.T) {
 		t.Error("document block with a base64 application/pdf source not found in request")
 	}
 }
+
+// A PDF media type that carries parameters or non-canonical casing (e.g.
+// "application/PDF; charset=binary") must still be recognized and forwarded as a
+// document block, not dropped.
+func TestBuildMessageParam_PDFMediaTypeWithParametersIsForwarded(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		bodyCh <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, minimalMessageResponse("ok"))
+	}))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	msgs := []*message.Message{
+		{Role: message.RoleUser, Contents: message.Contents{
+			&message.DataContent{Data: "JVBERi0xLjQK", MediaType: "application/PDF; charset=binary"},
+		}},
+	}
+	if _, err := a.Run(t.Context(), msgs).Collect(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	messages, ok := req["messages"].([]any)
+	if !ok {
+		t.Fatalf("request messages = %#v, want a JSON array", req["messages"])
+	}
+
+	var documentBase64 bool
+	for _, m := range messages {
+		msg, ok := m.(map[string]any)
+		if !ok {
+			continue
+		}
+		blocks, ok := msg["content"].([]any)
+		if !ok {
+			continue
+		}
+		for _, b := range blocks {
+			block, ok := b.(map[string]any)
+			if !ok {
+				continue
+			}
+			source, _ := block["source"].(map[string]any)
+			if block["type"] == "document" && source["type"] == "base64" && source["data"] == "JVBERi0xLjQK" {
+				documentBase64 = true
+			}
+		}
+	}
+	if !documentBase64 {
+		t.Error("document block for a PDF media type with parameters not found in request")
+	}
+}
+
+// A HostedFileContent cannot be represented by the stable Messages API, so the
+// request must fail with an explicit error rather than silently dropping it.
+func TestBuildMessageParam_HostedFileContentReturnsError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("request should not be sent when a hosted file reference is present")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, minimalMessageResponse("ok"))
+	}))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	msgs := []*message.Message{
+		{Role: message.RoleUser, Contents: message.Contents{
+			&message.HostedFileContent{FileID: "file_123"},
+		}},
+	}
+	_, err := a.Run(t.Context(), msgs).Collect()
+	if err == nil {
+		t.Fatal("expected an error for a hosted file reference, got nil")
+	}
+	if !strings.Contains(err.Error(), "file_123") {
+		t.Errorf("error = %v, want it to mention the offending file id", err)
+	}
+}

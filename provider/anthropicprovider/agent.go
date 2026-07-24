@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"iter"
 	"maps"
+	"mime"
 	"reflect"
 	"slices"
 	"strings"
@@ -439,6 +440,17 @@ func (a *client) buildMessageParams(messages []*message.Message, opts []agent.Op
 	return params, nil
 }
 
+// isPDFMediaType reports whether mediaType denotes a PDF document. Media types
+// may carry parameters (e.g. "application/pdf; charset=binary") and arbitrary
+// casing, so the base type is parsed and compared case-insensitively.
+func isPDFMediaType(mediaType string) bool {
+	base, _, err := mime.ParseMediaType(mediaType)
+	if err != nil {
+		base = strings.ToLower(strings.TrimSpace(mediaType))
+	}
+	return base == "application/pdf"
+}
+
 func buildMessageParam(msg *message.Message) (anthropic.MessageParam, error) {
 	var content []anthropic.ContentBlockParamUnion
 
@@ -488,7 +500,7 @@ func buildMessageParam(msg *message.Message) (anthropic.MessageParam, error) {
 					mediaType = "image/jpeg"
 				}
 				content = append(content, anthropic.NewImageBlockBase64(mediaType, c.Data))
-			case c.MediaType == "application/pdf":
+			case isPDFMediaType(c.MediaType):
 				content = append(content, anthropic.NewDocumentBlock(anthropic.Base64PDFSourceParam{
 					Data: c.Data,
 				}))
@@ -497,14 +509,16 @@ func buildMessageParam(msg *message.Message) (anthropic.MessageParam, error) {
 			switch {
 			case c.TopLevelMediaType() == "image":
 				content = append(content, anthropic.NewImageBlock(anthropic.URLImageSourceParam{URL: c.URI}))
-			case c.MediaType == "application/pdf":
+			case isPDFMediaType(c.MediaType):
 				content = append(content, anthropic.NewDocumentBlock(anthropic.URLPDFSourceParam{URL: c.URI}))
 			}
 		case *message.HostedFileContent:
 			// The stable Anthropic Messages API used here (anthropic.MessageNewParams)
 			// has no file-id image/document source in anthropic-sdk-go v1.58.1; only
 			// the Beta API exposes BetaFileImageSourceParam/BetaFileDocumentSourceParam.
-			// A hosted file reference therefore cannot be forwarded yet.
+			// A hosted file reference therefore cannot be forwarded yet, so surface an
+			// explicit error rather than silently dropping it.
+			return anthropic.MessageParam{}, fmt.Errorf("anthropic: hosted file references (file id %q) are not supported by the Messages API; use DataContent or URIContent instead", c.FileID)
 		}
 	}
 
