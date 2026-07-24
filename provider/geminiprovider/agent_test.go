@@ -14,6 +14,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/provider/geminiprovider"
+	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 	"google.golang.org/genai"
 )
@@ -1625,6 +1626,63 @@ func TestGenerateContentConfigOption(t *testing.T) {
 	stops, _ := gc["stopSequences"].([]any)
 	if len(stops) != 1 || stops[0] != "END" {
 		t.Errorf("stopSequences = %v, want [END]", stops)
+	}
+}
+
+// TestToolModeMergesCallerToolConfig verifies that applying a tool mode only
+// overrides the FunctionCallingConfig and preserves other fields a caller set on
+// ToolConfig via the GenerateContentConfig escape hatch (e.g. a RetrievalConfig
+// used for Vertex grounding).
+func TestToolModeMergesCallerToolConfig(t *testing.T) {
+	weatherTool := functool.MustNew(functool.Config{
+		Name:        "get_weather",
+		Description: "Get the weather for a city.",
+	}, func(_ context.Context, args struct{ City string }) (string, error) {
+		return "sunny", nil
+	})
+
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(captureAndRespond(t, bodyCh, "application/json", minimalTextResponse("ok")))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	_, err := a.RunText(t.Context(), "what's the weather?",
+		geminiprovider.GenerateContentConfig(genai.GenerateContentConfig{
+			ToolConfig: &genai.ToolConfig{
+				RetrievalConfig: &genai.RetrievalConfig{LanguageCode: "en-US"},
+			},
+		}),
+		agent.WithTool(weatherTool),
+		agent.WithToolMode(tool.ToolModeRequired),
+	).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	toolConfig, ok := req["toolConfig"].(map[string]any)
+	if !ok {
+		t.Fatalf("request missing toolConfig, got %T", req["toolConfig"])
+	}
+	// The requested tool mode must be applied.
+	fcc, ok := toolConfig["functionCallingConfig"].(map[string]any)
+	if !ok {
+		t.Fatalf("toolConfig missing functionCallingConfig, got %T", toolConfig["functionCallingConfig"])
+	}
+	if mode, _ := fcc["mode"].(string); mode != string(genai.FunctionCallingConfigModeAny) {
+		t.Errorf("functionCallingConfig.mode = %q, want %q", mode, genai.FunctionCallingConfigModeAny)
+	}
+	// The caller-supplied RetrievalConfig must be preserved, not dropped.
+	retrieval, ok := toolConfig["retrievalConfig"].(map[string]any)
+	if !ok {
+		t.Fatalf("toolConfig dropped caller retrievalConfig, got %T", toolConfig["retrievalConfig"])
+	}
+	if lang, _ := retrieval["languageCode"].(string); lang != "en-US" {
+		t.Errorf("retrievalConfig.languageCode = %q, want %q", lang, "en-US")
 	}
 }
 
