@@ -2300,7 +2300,8 @@ func TestResponsesCodeInterpreterTool_NonStreaming(t *testing.T) {
                 "tools":[{
                     "type":"code_interpreter",
                     "container":{"type":"auto"}
-                }]
+                }],
+                "include":["code_interpreter_call.outputs"]
             }
             `
 
@@ -2318,7 +2319,10 @@ func TestResponsesCodeInterpreterTool_NonStreaming(t *testing.T) {
                   "status":"completed",
                   "code":"# Calculating the sum of numbers from 1 to 5\nresult = sum(range(1, 6))\nresult",
                   "container_id":"cntr_68fb7476c384819186524b78cdc3180000a9a0fdd06b3cd4",
-                  "outputs":null
+                  "outputs":[
+                    {"type":"logs","logs":"15\n"},
+                    {"type":"image","url":"https://example.com/plot.png"}
+                  ]
                 },
                 {
                   "id":"msg_0e599e83cc6642210068fb747e118081a08c3ed46daa9d9dcb",
@@ -2390,6 +2394,28 @@ func TestResponsesCodeInterpreterTool_NonStreaming(t *testing.T) {
 	if codeResult.CallID != codeCall.CallID {
 		t.Errorf("expected result CallID to match call CallID, got %s vs %s", codeResult.CallID, codeCall.CallID)
 	}
+	// The include=code_interpreter_call.outputs must surface the tool outputs
+	// (logs + image) into CodeInterpreterToolResultContent.Outputs.
+	if len(codeResult.Outputs) != 2 {
+		t.Fatalf("expected 2 code interpreter outputs (logs, image), got %d", len(codeResult.Outputs))
+	}
+	logsOutput, ok := codeResult.Outputs[0].(*message.TextContent)
+	if !ok {
+		t.Fatalf("expected first output to be TextContent (logs), got %T", codeResult.Outputs[0])
+	}
+	if logsOutput.Text != "15\n" {
+		t.Errorf("expected logs output '15\\n', got %q", logsOutput.Text)
+	}
+	imageOutput, ok := codeResult.Outputs[1].(*message.URIContent)
+	if !ok {
+		t.Fatalf("expected second output to be URIContent (image), got %T", codeResult.Outputs[1])
+	}
+	if imageOutput.URI != "https://example.com/plot.png" {
+		t.Errorf("expected image URI 'https://example.com/plot.png', got %q", imageOutput.URI)
+	}
+	if imageOutput.MediaType != "image/png" {
+		t.Errorf("expected image media type 'image/png', got %q", imageOutput.MediaType)
+	}
 
 	// Check for TextContent
 	textContent, ok := msg.Contents[2].(*message.TextContent)
@@ -2419,6 +2445,7 @@ func TestResponsesCodeInterpreterTool_Streaming(t *testing.T) {
                 "model":"gpt-4o-mini",
                 "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Calculate 3+3"}]}],
                 "tools":[{"type":"code_interpreter","container":{"type":"auto"}}],
+                "include":["code_interpreter_call.outputs"],
                 "stream":true
             }
             `
@@ -2430,7 +2457,7 @@ event: response.output_item.added
 data: {"type":"response.output_item.added","item":{"type":"code_interpreter_call","id":"call_code_002","code":"","container_id":"container_002","status":"in_progress","outputs":[]}}
 
 event: response.output_item.done
-data: {"type":"response.output_item.done","item":{"type":"code_interpreter_call","id":"call_code_002","code":"print(3+3)","container_id":"container_002","status":"completed","outputs":[{"type":"logs","logs":"6\n"}]}}
+data: {"type":"response.output_item.done","item":{"type":"code_interpreter_call","id":"call_code_002","code":"print(3+3)","container_id":"container_002","status":"completed","outputs":[{"type":"logs","logs":"6\n"},{"type":"image","url":"https://example.com/plot.png"}]}}
 
 event: response.output_item.added
 data: {"type":"response.output_item.added","item":{"type":"message","id":"msg_002","role":"assistant","status":"in_progress","content":[]}}
@@ -2442,7 +2469,7 @@ event: response.output_item.done
 data: {"type":"response.output_item.done","item":{"type":"message","id":"msg_002","status":"completed","role":"assistant","content":[{"type":"output_text","text":"6","annotations":[]}]}}
 
 event: response.completed
-data: {"type":"response.completed","response":{"id":"resp_002","object":"response","created_at":1741892091,"status":"completed","model":"gpt-4o-mini","output":[{"type":"code_interpreter_call","id":"call_code_002","code":"print(3+3)","container_id":"container_002","status":"completed","outputs":[{"type":"logs","logs":"6\n"}]},{"type":"message","id":"msg_002","status":"completed","role":"assistant","content":[{"type":"output_text","text":"6","annotations":[]}]}]}}
+data: {"type":"response.completed","response":{"id":"resp_002","object":"response","created_at":1741892091,"status":"completed","model":"gpt-4o-mini","output":[{"type":"code_interpreter_call","id":"call_code_002","code":"print(3+3)","container_id":"container_002","status":"completed","outputs":[{"type":"logs","logs":"6\n"},{"type":"image","url":"https://example.com/plot.png"}]},{"type":"message","id":"msg_002","status":"completed","role":"assistant","content":[{"type":"output_text","text":"6","annotations":[]}]}]}}
 
 `
 
@@ -2479,8 +2506,67 @@ data: {"type":"response.completed","response":{"id":"resp_002","object":"respons
 	if !strings.Contains(responseText, "print(3+3)") {
 		t.Errorf("expected response to contain code 'print(3+3)', got %q", responseText)
 	}
-	if !strings.Contains(responseText, "6") {
-		t.Errorf("expected response to contain output '6', got %q", responseText)
+	// Assert on the Code Interpreter output section specifically so this test verifies
+	// that streamed code_interpreter_call.outputs (enabled by the include) are surfaced,
+	// rather than being satisfied by the assistant message's output_text "6".
+	if !strings.Contains(responseText, "[Output]") {
+		t.Errorf("expected response to contain '[Output]' section from code interpreter outputs, got %q", responseText)
+	}
+	if !strings.Contains(responseText, "Image: https://example.com/plot.png") {
+		t.Errorf("expected response to contain the code interpreter image URL, got %q", responseText)
+	}
+}
+
+func TestResponsesCodeInterpreterTool_IncludeNotDuplicatedWhenCallerSupplied(t *testing.T) {
+	// The caller already requested code_interpreter_call.outputs; the builder must not
+	// append a second copy of the same include value.
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{
+                    "type":"message",
+                    "role":"user",
+                    "content":[{"type":"input_text","text":"Calculate the sum of numbers from 1 to 5"}]
+                }],
+                "tools":[{
+                    "type":"code_interpreter",
+                    "container":{"type":"auto"}
+                }],
+                "include":["code_interpreter_call.outputs"]
+            }
+            `
+
+	const output = `
+            {
+              "id":"resp_dedup",
+              "object":"response",
+              "created_at":1761309813,
+              "status":"completed",
+              "model":"gpt-4o-mini",
+              "output":[{
+                "id":"msg_dedup",
+                "type":"message",
+                "status":"completed",
+                "content":[{"type":"output_text","annotations":[],"text":"15"}],
+                "role":"assistant"
+              }],
+              "usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}
+            }
+            `
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	_, err := a.RunText(t.Context(), "Calculate the sum of numbers from 1 to 5",
+		agent.WithTool(&hostedtool.CodeInterpreter{}),
+		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
+			Include: []responses.ResponseIncludable{responses.ResponseIncludableCodeInterpreterCallOutputs},
+		}),
+	).Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
 	}
 }
 

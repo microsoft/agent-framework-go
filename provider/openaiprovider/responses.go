@@ -410,6 +410,11 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 			params.Tools = append(params.Tools, responses.ToolUnionParam{
 				OfCodeInterpreter: &variant,
 			})
+			// The Responses API only populates the outputs field of a code_interpreter_call
+			// item (execution logs and generated images) when this include is requested.
+			if !slices.Contains(params.Include, responses.ResponseIncludableCodeInterpreterCallOutputs) {
+				params.Include = append(params.Include, responses.ResponseIncludableCodeInterpreterCallOutputs)
+			}
 		case *hostedtool.MCPServer:
 			var variant responses.ToolMcpParam
 			variant.ServerLabel = tl.ServerName
