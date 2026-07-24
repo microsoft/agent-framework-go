@@ -55,6 +55,17 @@ func (m *mockA2ATransport) SendStreamingMessage(ctx context.Context, _ a2aclient
 	m.capturedMessageSendParams = params
 	responseToYield := m.streamingResponseToReturn
 	if m.rawStreamingResponse {
+		if responseToYield == nil {
+			// Default to a non-nil event so a raw test that forgets to set
+			// streamingResponseToReturn doesn't yield a nil event (which would
+			// panic when production code calls TaskInfo()). Deliberately leave
+			// ContextID empty — the "raw" mode exists to exercise bare messages
+			// that carry no context ID.
+			responseToYield = &a2a.Message{
+				ID:   "default-stream-id",
+				Role: a2a.MessageRoleAgent,
+			}
+		}
 		return func(yield func(a2a.Event, error) bool) {
 			yield(responseToYield, nil)
 		}
