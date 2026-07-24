@@ -554,6 +554,7 @@ func (p *provider) toolExecutionCompleteUpdate(event copilot.SessionEvent, data 
 		ContentHeader: message.ContentHeader{RawRepresentation: event},
 		CallID:        data.ToolCallID,
 		Result:        toolExecutionResult(data),
+		Error:         toolExecutionError(data),
 	}
 	return &agent.ResponseUpdate{
 		RawRepresentation: event,
@@ -577,6 +578,34 @@ func toolExecutionResult(data *copilot.ToolExecutionCompleteData) any {
 		return data.Error.Message
 	}
 	return "Tool execution failed"
+}
+
+// toolExecutionError maps a failed tool execution to the FunctionResultContent
+// failure channel, mirroring how the framework surfaces tool errors (frc.Error)
+// across providers. It returns nil for successful executions.
+func toolExecutionError(data *copilot.ToolExecutionCompleteData) error {
+	if data == nil {
+		return errors.New("tool execution failed")
+	}
+	if data.Success {
+		return nil
+	}
+	if data.Error != nil {
+		msg := data.Error.Message
+		code := ""
+		if data.Error.Code != nil {
+			code = *data.Error.Code
+		}
+		switch {
+		case msg != "" && code != "":
+			return fmt.Errorf("%s (%s)", msg, code)
+		case msg != "":
+			return errors.New(msg)
+		case code != "":
+			return fmt.Errorf("tool execution failed (%s)", code)
+		}
+	}
+	return errors.New("tool execution failed")
 }
 
 func (p *provider) assistantUsageUpdate(event copilot.SessionEvent, data *copilot.AssistantUsageData) *agent.ResponseUpdate {
