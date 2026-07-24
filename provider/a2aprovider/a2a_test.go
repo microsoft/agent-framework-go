@@ -30,10 +30,13 @@ type mockA2ATransport struct {
 	sendStreamingMessageCalled bool
 	subscribeToTaskCalled      bool
 	getTaskCalled              bool
+	sendMessageCallCount       int
+	sendStreamingCallCount     int
 }
 
 func (m *mockA2ATransport) SendMessage(ctx context.Context, _ a2aclient.ServiceParams, params *a2a.SendMessageRequest) (a2a.SendMessageResult, error) {
 	m.sendMessageCalled = true
+	m.sendMessageCallCount++
 	m.capturedMessageSendParams = params
 	if m.responseToReturn != nil {
 		return m.responseToReturn, nil
@@ -48,6 +51,7 @@ func (m *mockA2ATransport) SendMessage(ctx context.Context, _ a2aclient.ServiceP
 
 func (m *mockA2ATransport) SendStreamingMessage(ctx context.Context, _ a2aclient.ServiceParams, params *a2a.SendMessageRequest) iter.Seq2[a2a.Event, error] {
 	m.sendStreamingMessageCalled = true
+	m.sendStreamingCallCount++
 	m.capturedMessageSendParams = params
 	responseToYield := m.streamingResponseToReturn
 	if responseToYield == nil {
@@ -610,6 +614,161 @@ func TestRunWithHostedFileContent(t *testing.T) {
 	expectedURI := "https://example.com/file.pdf"
 	if got := string(capturedMsg.Parts[1].URL()); got != expectedURI {
 		t.Errorf("Parts[1].URL() = %q, want %q", got, expectedURI)
+	}
+}
+
+// TestRunCombinesMultipleMessagesIntoSingleRequest verifies that a run with several
+// input messages issues exactly one A2A request whose message carries the parts of
+// every input message. This matches the framework's one-run/one-request contract and
+// the .NET/Python A2A providers, which map a run's messages to a single A2A Message.
+func TestRunCombinesMultipleMessagesIntoSingleRequest(t *testing.T) {
+	transport := &mockA2ATransport{
+		responseToReturn: &a2a.Task{
+			ID:        a2a.TaskID("task-abc"),
+			ContextID: "ctx-abc",
+			Status: a2a.TaskStatus{
+				State: a2a.TaskStateSubmitted,
+			},
+		},
+	}
+	a := newTestAgent(transport, agent.Config{})
+
+	session, err := a.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	inputMessages := []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "A"}}},
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "B"}}},
+	}
+
+	_, err = a.Run(t.Context(), inputMessages, agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("error = %v, want nil", err)
+	}
+
+	if transport.sendMessageCallCount != 1 {
+		t.Fatalf("SendMessage call count = %d, want 1", transport.sendMessageCallCount)
+	}
+
+	capturedMsg := transport.capturedMessageSendParams.Message
+	if capturedMsg == nil {
+		t.Fatal("capturedMessageSendParams.Message is nil")
+	}
+	if len(capturedMsg.Parts) != 2 {
+		t.Fatalf("len(message.Parts) = %d, want 2", len(capturedMsg.Parts))
+	}
+	if got := capturedMsg.Parts[0].Text(); got != "A" {
+		t.Errorf("Parts[0].Text() = %q, want %q", got, "A")
+	}
+	if got := capturedMsg.Parts[1].Text(); got != "B" {
+		t.Errorf("Parts[1].Text() = %q, want %q", got, "B")
+	}
+
+	// The combined message must not be cross-linked to a task created earlier in the
+	// same run: there is no prior task, so it references and targets none.
+	if len(capturedMsg.ReferenceTasks) != 0 {
+		t.Errorf("message.ReferenceTasks = %v, want empty", capturedMsg.ReferenceTasks)
+	}
+	if capturedMsg.TaskID != "" {
+		t.Errorf("message.TaskID = %q, want empty", capturedMsg.TaskID)
+	}
+}
+
+// TestRunPreservesEmptyNonNilMetadata verifies that an input message carrying an
+// empty-but-non-nil AdditionalProperties map results in an empty-but-non-nil
+// Metadata map on the combined A2A message (nil vs empty map are distinct in JSON).
+func TestRunPreservesEmptyNonNilMetadata(t *testing.T) {
+	transport := &mockA2ATransport{
+		responseToReturn: &a2a.Task{
+			ID:        a2a.TaskID("task-abc"),
+			ContextID: "ctx-abc",
+			Status: a2a.TaskStatus{
+				State: a2a.TaskStateSubmitted,
+			},
+		},
+	}
+	a := newTestAgent(transport, agent.Config{})
+
+	session, err := a.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	inputMessages := []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "A"}}, AdditionalProperties: map[string]any{}},
+	}
+
+	_, err = a.Run(t.Context(), inputMessages, agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("error = %v, want nil", err)
+	}
+
+	capturedMsg := transport.capturedMessageSendParams.Message
+	if capturedMsg == nil {
+		t.Fatal("capturedMessageSendParams.Message is nil")
+	}
+	if capturedMsg.Metadata == nil {
+		t.Fatal("message.Metadata = nil, want empty non-nil map")
+	}
+	if len(capturedMsg.Metadata) != 0 {
+		t.Fatalf("message.Metadata = %#v, want empty map", capturedMsg.Metadata)
+	}
+}
+
+// TestRunStreamingCombinesMultipleMessagesIntoSingleRequest is the streaming variant of
+// TestRunCombinesMultipleMessagesIntoSingleRequest.
+func TestRunStreamingCombinesMultipleMessagesIntoSingleRequest(t *testing.T) {
+	transport := &mockA2ATransport{
+		streamingResponseToReturn: &a2a.Task{
+			ID:        a2a.TaskID("task-abc"),
+			ContextID: "ctx-abc",
+			Status: a2a.TaskStatus{
+				State: a2a.TaskStateSubmitted,
+			},
+		},
+	}
+	a := newTestAgent(transport, agent.Config{})
+
+	session, err := a.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	inputMessages := []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "A"}}},
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "B"}}},
+	}
+
+	for _, err := range a.Run(t.Context(), inputMessages, agent.WithSession(session), agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("error = %v, want nil", err)
+		}
+	}
+
+	if transport.sendStreamingCallCount != 1 {
+		t.Fatalf("SendStreamingMessage call count = %d, want 1", transport.sendStreamingCallCount)
+	}
+
+	capturedMsg := transport.capturedMessageSendParams.Message
+	if capturedMsg == nil {
+		t.Fatal("capturedMessageSendParams.Message is nil")
+	}
+	if len(capturedMsg.Parts) != 2 {
+		t.Fatalf("len(message.Parts) = %d, want 2", len(capturedMsg.Parts))
+	}
+	if got := capturedMsg.Parts[0].Text(); got != "A" {
+		t.Errorf("Parts[0].Text() = %q, want %q", got, "A")
+	}
+	if got := capturedMsg.Parts[1].Text(); got != "B" {
+		t.Errorf("Parts[1].Text() = %q, want %q", got, "B")
+	}
+	if len(capturedMsg.ReferenceTasks) != 0 {
+		t.Errorf("message.ReferenceTasks = %v, want empty", capturedMsg.ReferenceTasks)
+	}
+	if capturedMsg.TaskID != "" {
+		t.Errorf("message.TaskID = %q, want empty", capturedMsg.TaskID)
 	}
 }
 
