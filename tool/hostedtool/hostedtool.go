@@ -65,6 +65,29 @@ func (t *CodeInterpreter) Description() string {
 	return ""
 }
 
+var _ tool.Tool = (*ToolSearch)(nil)
+
+// ToolSearch represents a hosted tool that can be specified to an AI service
+// to enable it to search over a set of deferred tools, mirroring the .NET
+// Microsoft.Extensions.AI.HostedToolSearchTool. The service searches the
+// deferred tools on the model's behalf so that large tool sets do not all
+// need to be sent to the model up front.
+type ToolSearch struct {
+	AdditionalProperties map[string]any
+
+	DeferredTools        []string
+	Namespace            string
+	NamespaceDescription string
+}
+
+func (t *ToolSearch) Name() string {
+	return "tool_search"
+}
+
+func (t *ToolSearch) Description() string {
+	return ""
+}
+
 type MCPServer struct {
 	AdditionalProperties map[string]any
 

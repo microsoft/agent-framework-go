@@ -431,6 +431,20 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 			params.Tools = append(params.Tools, responses.ToolUnionParam{
 				OfMcp: &variant,
 			})
+		case *hostedtool.ToolSearch:
+			var variant responses.ToolSearchToolParam
+			if tl.NamespaceDescription != "" {
+				variant.Description = openai.String(tl.NamespaceDescription)
+			}
+			if execution, ok := tl.AdditionalProperties["execution"].(string); ok && execution != "" {
+				variant.Execution = responses.ToolSearchToolExecution(execution)
+			}
+			if parameters, ok := tl.AdditionalProperties["parameters"]; ok {
+				variant.Parameters = parameters
+			}
+			params.Tools = append(params.Tools, responses.ToolUnionParam{
+				OfToolSearch: &variant,
+			})
 		}
 	}
 	for _, msg := range messages {

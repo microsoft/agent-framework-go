@@ -2485,6 +2485,63 @@ data: {"type":"response.completed","response":{"id":"resp_002","object":"respons
 	}
 }
 
+func TestResponsesToolSearchTool_SerializesCorrectly(t *testing.T) {
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{
+                    "type":"message",
+                    "role":"user",
+                    "content":[{"type":"input_text","text":"find a tool"}]
+                }],
+                "tools":[{
+                    "type":"tool_search",
+                    "description":"File operations",
+                    "execution":"client",
+                    "parameters":{"type":"object"}
+                }]
+            }
+            `
+
+	const output = `
+            {
+              "id":"resp_toolsearch",
+              "object":"response",
+              "created_at":1761309813,
+              "status":"completed",
+              "model":"gpt-4o-mini",
+              "output":[{
+                "id":"msg_toolsearch",
+                "type":"message",
+                "status":"completed",
+                "content":[{"type":"output_text","annotations":[],"text":"ok"}],
+                "role":"assistant"
+              }],
+              "usage":{"input_tokens":5,"output_tokens":1,"total_tokens":6}
+            }
+            `
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	_, err := a.RunText(t.Context(), "find a tool",
+		agent.WithTool(&hostedtool.ToolSearch{
+			Namespace:            "files",
+			NamespaceDescription: "File operations",
+			DeferredTools:        []string{"read_file", "write_file"},
+			AdditionalProperties: map[string]any{
+				"execution":  "client",
+				"parameters": map[string]any{"type": "object"},
+			},
+		}),
+	).Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestResponsesStreamingResponseWithIncompleteUpdate_HandlesCorrectly(t *testing.T) {
 	const input = `
             {
