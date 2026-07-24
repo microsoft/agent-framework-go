@@ -57,9 +57,11 @@ func (q *Queue[T]) Len() int {
 func (q *Queue[T]) All() iter.Seq[T] {
 	return func(yield func(T) bool) {
 		q.mu.RLock()
-		defer q.mu.RUnlock()
+		items := make([]T, len(q.items))
+		copy(items, q.items)
+		q.mu.RUnlock()
 
-		for _, item := range q.items {
+		for _, item := range items {
 			if !yield(item) {
 				return
 			}
