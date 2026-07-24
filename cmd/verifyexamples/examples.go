@@ -702,6 +702,17 @@ var workflowExamples = []ExampleDefinition{
 		},
 	},
 	{
+		Name:            "03_workflows_01_start_here_08_sequential_chain_only_responses",
+		ProjectPath:     "examples/03-workflows/01-start-here/08_sequential_chain_only_responses",
+		IsDeterministic: true,
+		MustContain: []string{
+			"Seed prompt: Write a one-line greeting.",
+			"Translator received 1 message(s):",
+			"Translator responds: Bonjour, le monde!",
+			"Approved: Bonjour, le monde!",
+		},
+	},
+	{
 		Name:                         "03_workflows_agents_custom_agent_executors",
 		ProjectPath:                  "examples/03-workflows/agents/custom_agent_executors",
 		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
