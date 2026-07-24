@@ -818,6 +818,17 @@ var workflowExamples = []ExampleDefinition{
 		MustContain: []string{"found in"},
 	},
 	{
+		Name:            "03_workflows_message_workflow",
+		ProjectPath:     "examples/03-workflows/message-workflow",
+		IsDeterministic: true,
+		MustContain: []string{
+			"You said: hello | how are you?",
+			"forwarded turn tokens: 1",
+			"forwarded turn tokens: 0",
+			"TakeTurnHandler invocations: 1",
+		},
+	},
+	{
 		Name:            "03_workflows_shared_states",
 		ProjectPath:     "examples/03-workflows/shared-states",
 		IsDeterministic: true,
