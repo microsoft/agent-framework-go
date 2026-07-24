@@ -285,7 +285,7 @@ func updateSessionContextID(session *agent.Session, contextID, taskID string, ta
 	// Surface cases where the A2A agent responds with a response that
 	// has a different context ID than the session's context ID.
 	currentContextID := getContextID(session)
-	if currentContextID != "" && currentContextID != contextID {
+	if currentContextID != "" && contextID != "" && currentContextID != contextID {
 		return fmt.Errorf("mismatched context ID: session has %q but A2A response has %q", currentContextID, contextID)
 	}
 	setContextID(session, contextID)
