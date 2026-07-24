@@ -145,12 +145,15 @@ type Local struct {
 	exec *localShellExecutor
 }
 
+// Name returns the tool identifier (run_shell).
 func (t *Local) Name() string { return "run_shell" }
 
+// Description returns the model-facing description of the shell tool.
 func (t *Local) Description() string {
 	return t.exec.opts.defaultDescription()
 }
 
+// Schema returns the JSON schema for the tool's command argument.
 func (t *Local) Schema() any {
 	return map[string]any{
 		"type": "object",
@@ -164,8 +167,10 @@ func (t *Local) Schema() any {
 	}
 }
 
+// ReturnSchema returns nil because the tool yields free-form model-formatted output.
 func (t *Local) ReturnSchema() any { return nil }
 
+// Call unmarshals the command argument, executes it via Run, and returns model-formatted output.
 func (t *Local) Call(ctx context.Context, args string) (any, error) {
 	var in shellInput
 	if err := json.Unmarshal([]byte(args), &in); err != nil {
