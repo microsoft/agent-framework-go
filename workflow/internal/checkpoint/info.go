@@ -77,8 +77,22 @@ func (w *WorkflowInfo) Match(wf *workflow.Workflow) bool {
 		if !ok || len(other) != len(edges) {
 			return false
 		}
-		for i, edge := range edges {
-			if !edge.Match(other[i]) {
+		// Edges from a single source are order-independent: they are appended in
+		// AddEdge registration order, so two semantically identical graphs may list
+		// them differently. Match each checkpoint edge to a distinct, as-yet-unconsumed
+		// workflow edge so duplicate edges are not double-counted.
+		consumed := make([]bool, len(other))
+		for _, edge := range edges {
+			matched := false
+			for i := range other {
+				if consumed[i] || !edge.Match(other[i]) {
+					continue
+				}
+				consumed[i] = true
+				matched = true
+				break
+			}
+			if !matched {
 				return false
 			}
 		}
