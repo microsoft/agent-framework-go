@@ -164,6 +164,9 @@ func (v *PortableValue) Is(typ reflect.Type) bool {
 	return true
 }
 
+// As returns the contained value coerced to typ and true when the value is
+// (or can be delayed-deserialized to) typ; otherwise it returns nil and false.
+// It is the comma-ok extraction counterpart to [PortableValue.Is].
 func (v *PortableValue) As(typ reflect.Type) (any, bool) {
 	if v.Is(typ) {
 		return v.Any(), true
