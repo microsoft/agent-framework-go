@@ -165,10 +165,12 @@ func (resp *Response) ToUpdates() []*ResponseUpdate {
 	return updates
 }
 
-// contentsWithoutUsage returns a copy of contents with any *message.UsageContent
-// removed. Per-message usage is re-emitted once as a trailing aggregate update in
-// ToUpdates, so retaining it here would cause Collect to double-count usage. The
-// input slice is not mutated, as the owning Response is caller-owned.
+// contentsWithoutUsage returns contents with any *message.UsageContent removed.
+// Per-message usage is re-emitted once as a trailing aggregate update in
+// ToUpdates, so retaining it here would cause Collect to double-count usage.
+// When no *message.UsageContent is present the input slice is returned as-is;
+// otherwise a filtered copy is returned. The input slice is never mutated, as
+// the owning Response is caller-owned.
 func contentsWithoutUsage(contents message.Contents) message.Contents {
 	hasUsage := false
 	for _, c := range contents {
