@@ -1557,6 +1557,45 @@ func TestRunWithAgentTaskResponse_SurfacesArtifactMetadata(t *testing.T) {
 	}
 }
 
+// TestRunWithAgentTaskResponse_NoMetadataYieldsNilProperties asserts that a task
+// with no task-level or artifact-level metadata produces an update with nil
+// AdditionalProperties rather than a non-nil empty map.
+func TestRunWithAgentTaskResponse_NoMetadataYieldsNilProperties(t *testing.T) {
+	transport := &mockA2ATransport{
+		responseToReturn: &a2a.Task{
+			ID:        a2a.TaskID("task-nometa"),
+			ContextID: "context-nometa",
+			Status: a2a.TaskStatus{
+				State: a2a.TaskStateCompleted,
+			},
+			Metadata: map[string]any{},
+			Artifacts: []*a2a.Artifact{
+				{
+					ID:       a2a.ArtifactID("art-1"),
+					Metadata: map[string]any{},
+					Parts:    a2a.ContentParts{a2a.NewTextPart("Artifact content")},
+				},
+			},
+		},
+	}
+	a := newTestAgent(transport, agent.Config{})
+
+	var updates []*agent.ResponseUpdate
+	for update, err := range a.RunText(t.Context(), "Start a task") {
+		if err != nil {
+			t.Fatalf("error = %v, want nil", err)
+		}
+		updates = append(updates, update)
+	}
+
+	if len(updates) != 1 {
+		t.Fatalf("len(updates) = %d, want 1", len(updates))
+	}
+	if props := updates[0].AdditionalProperties; props != nil {
+		t.Errorf("AdditionalProperties = %v, want nil", props)
+	}
+}
+
 // TestRunStreamingWithTaskArtifactUpdateEvent_SurfacesArtifactMetadata asserts
 // that the artifact's Metadata carried by a TaskArtifactUpdateEvent is folded
 // into the update's AdditionalProperties alongside the event-level metadata.

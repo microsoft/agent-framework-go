@@ -258,10 +258,13 @@ func newResponseUpdate(raw any, additionalProperties map[string]any, responseID,
 
 // mergeMetadata combines a base metadata map with additional maps into a new
 // map, cloning so the inputs are never mutated. Keys from later maps take
-// precedence over earlier ones. It returns nil when every source is empty,
-// preserving the previous behavior of forwarding the base map unchanged.
+// precedence over earlier ones. It returns nil when every source is empty, so a
+// task with no metadata yields no metadata map rather than an empty one.
 func mergeMetadata(base map[string]any, extra ...map[string]any) map[string]any {
-	merged := maps.Clone(base)
+	var merged map[string]any
+	if len(base) > 0 {
+		merged = maps.Clone(base)
+	}
 	for _, m := range extra {
 		if len(m) == 0 {
 			continue
