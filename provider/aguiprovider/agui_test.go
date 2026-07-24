@@ -534,6 +534,53 @@ func TestAGUIAgentRun_ConvertsStateSnapshotEventToDataContent(t *testing.T) {
 	}
 }
 
+func TestAGUIAgentRun_PreservesMultipleCustomEvents(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeSSE(t, w, aguiEvents.NewRunStartedEvent("thread-1", "run-1"))
+		// An assistant text message precedes the custom events; the custom
+		// events must not be merged into (and thus mutate) it.
+		writeSSE(t, w, aguiEvents.NewTextMessageStartEvent("msg-1", aguiEvents.WithRole("assistant")))
+		writeSSE(t, w, aguiEvents.NewTextMessageContentEvent("msg-1", "Hello"))
+		writeSSE(t, w, aguiEvents.NewTextMessageEndEvent("msg-1"))
+		writeSSE(t, w, aguiEvents.NewCustomEvent("progress", aguiEvents.WithValue("first")))
+		writeSSE(t, w, aguiEvents.NewCustomEvent("progress", aguiEvents.WithValue("second")))
+		writeSSE(t, w, aguiEvents.NewRunFinishedEvent("thread-1", "run-1"))
+	}))
+	defer server.Close()
+
+	a := aguiprovider.NewAgent(newTestClient(server.URL), aguiprovider.AgentConfig{})
+	resp, err := a.RunText(context.Background(), "hi").Collect()
+	if err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+
+	var values []any
+	for _, m := range resp.Messages {
+		raw, ok := m.AdditionalProperties["agui_custom_event"]
+		if !ok {
+			continue
+		}
+		ce, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("agui_custom_event = %T, want map[string]any", raw)
+		}
+		values = append(values, ce["value"])
+		// A custom event must live in its own message, not be attached to the
+		// assistant text message.
+		if got := m.String(); got != "" {
+			t.Fatalf("custom event message has unexpected text content %q", got)
+		}
+	}
+
+	if len(values) != 2 {
+		t.Fatalf("preserved custom events = %d (%v), want 2", len(values), values)
+	}
+	if values[0] != "first" || values[1] != "second" {
+		t.Fatalf("custom event values = %v, want [first second]", values)
+	}
+}
+
 func TestAGUIAgentRun_WithUnknownEventType_ReturnsError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
