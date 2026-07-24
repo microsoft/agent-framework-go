@@ -102,6 +102,16 @@ func TestProvide_ReturnsToolsAndInstructions(t *testing.T) {
 	if instructions == "" {
 		t.Fatal("expected non-empty instructions")
 	}
+	// Default instructions mirror the current .NET TodoProvider text: a
+	// numbered simple-vs-complex decision and a General TODO Guidelines heading.
+	for _, want := range []string{
+		"### General TODO Guidelines",
+		"just complete the task directly",
+	} {
+		if !strings.Contains(instructions, want) {
+			t.Errorf("expected default instructions to contain %q", want)
+		}
+	}
 }
 
 // 2. AddTodos_CreatesSingleItem

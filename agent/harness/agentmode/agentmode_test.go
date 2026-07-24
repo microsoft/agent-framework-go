@@ -621,3 +621,24 @@ func TestDefaultInstructions_ModesSectionHeaderFormat(t *testing.T) {
 		t.Error("expected '#### execute' section header in instructions")
 	}
 }
+
+// Verify the execute-mode description matches the current .NET AgentModeProvider
+// text: it opens with the simple-vs-complex "Determine the type of ask" decision
+// and no longer uses the old "carrying out approved plans" phrasing.
+func TestDefaultInstructions_ExecuteModeDescription(t *testing.T) {
+	p := agentmode.New(agentmode.Config{})
+	opts := sessionOpts()
+
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	instructions := collectInstructions(outOpts)
+	if !strings.Contains(instructions, "Determine the type of ask:") {
+		t.Error("expected execute-mode instructions to contain 'Determine the type of ask:'")
+	}
+	if strings.Contains(instructions, "carrying out approved plans") {
+		t.Error("expected execute-mode instructions to no longer contain 'carrying out approved plans'")
+	}
+}
