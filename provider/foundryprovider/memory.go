@@ -116,10 +116,14 @@ func newMemoryProvider(client *azaiprojects.MemoryStoresClient, memoryStoreName 
 	return p
 }
 
+// Invoking is called before an agent run. It searches the Foundry memory store for memories
+// relevant to the incoming messages and returns them as additional context to inject into the run.
 func (p *MemoryProvider) Invoking(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
 	return p.provider.Invoking(ctx, invoking)
 }
 
+// Invoked is called after an agent run to persist the request and response messages as memory
+// updates in the Foundry memory store.
 func (p *MemoryProvider) Invoked(ctx context.Context, invoked agent.InvokedContext) error {
 	return p.provider.Invoked(ctx, invoked)
 }
