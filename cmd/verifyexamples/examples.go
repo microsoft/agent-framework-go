@@ -818,6 +818,14 @@ var workflowExamples = []ExampleDefinition{
 		MustContain: []string{"found in"},
 	},
 	{
+		Name:        "03_workflows_cancellation",
+		ProjectPath: "examples/03-workflows/cancellation",
+		MustContain: []string{
+			"Cancelling run after",
+			"final run status:",
+		},
+	},
+	{
 		Name:            "03_workflows_shared_states",
 		ProjectPath:     "examples/03-workflows/shared-states",
 		IsDeterministic: true,
