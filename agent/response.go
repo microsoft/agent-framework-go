@@ -145,7 +145,7 @@ func (resp *Response) ToUpdates() []*ResponseUpdate {
 			AuthorName:           msg.AuthorName,
 			Role:                 msg.Role,
 			CreatedAt:            createdAt,
-			Contents:             msg.Contents,
+			Contents:             contentsWithoutUsage(msg.Contents),
 		})
 	}
 
@@ -163,6 +163,33 @@ func (resp *Response) ToUpdates() []*ResponseUpdate {
 	}
 
 	return updates
+}
+
+// contentsWithoutUsage returns contents with any *message.UsageContent removed.
+// Per-message usage is re-emitted once as a trailing aggregate update in
+// ToUpdates, so retaining it here would cause Collect to double-count usage.
+// When no *message.UsageContent is present the input slice is returned as-is;
+// otherwise a filtered copy is returned. The input slice is never mutated, as
+// the owning Response is caller-owned.
+func contentsWithoutUsage(contents message.Contents) message.Contents {
+	hasUsage := false
+	for _, c := range contents {
+		if _, ok := c.(*message.UsageContent); ok {
+			hasUsage = true
+			break
+		}
+	}
+	if !hasUsage {
+		return contents
+	}
+	filtered := make(message.Contents, 0, len(contents))
+	for _, c := range contents {
+		if _, ok := c.(*message.UsageContent); ok {
+			continue
+		}
+		filtered = append(filtered, c)
+	}
+	return filtered
 }
 
 func isZeroUsage(usage message.UsageDetails) bool {
