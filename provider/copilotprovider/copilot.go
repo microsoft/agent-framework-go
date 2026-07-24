@@ -266,7 +266,7 @@ func copyResumeSessionConfig(source *copilot.SessionConfig) copilot.ResumeSessio
 		ReasoningEffort:                    source.ReasoningEffort,
 		ReasoningSummary:                   source.ReasoningSummary,
 		ContextTier:                        source.ContextTier,
-		Tools:                              source.Tools,
+		Tools:                              slices.Clone(source.Tools),
 		SystemMessage:                      source.SystemMessage,
 		AvailableTools:                     source.AvailableTools,
 		ExcludedTools:                      source.ExcludedTools,
