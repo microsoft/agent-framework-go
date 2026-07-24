@@ -63,6 +63,7 @@ type Response struct {
 	Messages []*message.Message
 }
 
+// String returns the concatenated text of all TextContent items across the response messages.
 func (resp *Response) String() string {
 	if resp == nil {
 		return ""
@@ -95,6 +96,7 @@ func (resp *Response) Contents() iter.Seq[message.Content] {
 	}
 }
 
+// Usage returns the token usage aggregated (summed) across all of the response's messages.
 func (resp *Response) Usage() message.UsageDetails {
 	var usage message.UsageDetails
 	if resp == nil {
@@ -174,6 +176,7 @@ func isZeroUsage(usage message.UsageDetails) bool {
 		len(usage.AdditionalCounts) == 0
 }
 
+// Update folds a streaming [ResponseUpdate] into resp, appending its contents to the matching message and updating response-level fields from later updates.
 func (resp *Response) Update(update *ResponseUpdate) {
 	if update == nil {
 		return
@@ -316,6 +319,7 @@ func (r *ResponseUpdate) String() string {
 	return sb.String()
 }
 
+// Usage returns the token usage carried by this update's UsageContent items.
 func (m *ResponseUpdate) Usage() message.UsageDetails {
 	if m == nil || m.Contents == nil {
 		return message.UsageDetails{}
