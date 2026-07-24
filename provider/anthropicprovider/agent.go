@@ -166,7 +166,8 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 					if annotations := citationAnnotations(block.Citations); annotations != nil {
 						contents = append(contents, &message.TextContent{
 							ContentHeader: message.ContentHeader{
-								Annotations: annotations,
+								Annotations:       annotations,
+								RawRepresentation: block,
 							},
 						})
 					}
