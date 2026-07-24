@@ -343,3 +343,30 @@ func splitWords(text string) func(func(string) bool) {
 		}
 	}
 }
+
+// A user re-sending an identical short message (or any repeated content) must
+// not cause Update to drop the turns appended since the previous update. The
+// processed-prefix boundary must be located positionally, not by matching the
+// last occurrence of the previous message's content.
+func TestMessageIndex_Update_RepeatedContentDoesNotDropMessages(t *testing.T) {
+	turn1 := []*message.Message{
+		textMessage(message.RoleUser, "hi"),
+		textMessage(message.RoleAssistant, "hello"),
+		textMessage(message.RoleUser, "continue"),
+	}
+	index := &compaction.MessageIndex{}
+	index.Update(turn1)
+	if got, want := messageTexts(index.AllMessages()), []string{"hi", "hello", "continue"}; !slices.Equal(got, want) {
+		t.Fatalf("after turn 1: got %v, want %v", got, want)
+	}
+
+	// Turn 2: the assistant replies, then the user repeats "continue" verbatim.
+	turn2 := append(slices.Clone(turn1),
+		textMessage(message.RoleAssistant, "sure"),
+		textMessage(message.RoleUser, "continue"),
+	)
+	index.Update(turn2)
+	if got, want := messageTexts(index.AllMessages()), []string{"hi", "hello", "continue", "sure", "continue"}; !slices.Equal(got, want) {
+		t.Fatalf("after turn 2 (repeated \"continue\"): got %v, want %v — appended turns were dropped", got, want)
+	}
+}
