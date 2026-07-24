@@ -555,17 +555,18 @@ func validateExtensions(extensions []string) {
 }
 
 func newScript(name string, fsys fs.FS, runner skills.ScriptRunner) skills.Script {
+	additionalProperties := map[string]any{
+		"fsskills.scriptFS": fsys,
+	}
 	return skills.Script{
-		Name:             name,
-		ParametersSchema: defaultFileScriptSchema,
-		Run:              newFileScriptRunFunc(name, runner),
-		AdditionalProperties: map[string]any{
-			"fsskills.scriptFS": fsys,
-		},
+		Name:                 name,
+		ParametersSchema:     defaultFileScriptSchema,
+		Run:                  newFileScriptRunFunc(name, runner, additionalProperties),
+		AdditionalProperties: additionalProperties,
 	}
 }
 
-func newFileScriptRunFunc(name string, runner skills.ScriptRunner) func(context.Context, *skills.Skill, []string) (any, error) {
+func newFileScriptRunFunc(name string, runner skills.ScriptRunner, additionalProperties map[string]any) func(context.Context, *skills.Skill, []string) (any, error) {
 	return func(ctx context.Context, owner *skills.Skill, arguments []string) (any, error) {
 		if err := requireFileSkill(name, owner); err != nil {
 			return nil, err
@@ -573,7 +574,15 @@ func newFileScriptRunFunc(name string, runner skills.ScriptRunner) func(context.
 		if runner == nil {
 			return nil, fmt.Errorf("script %q cannot be executed because no file script runner was provided", name)
 		}
-		script := &skills.Script{Name: name}
+		// Hand the runner a script carrying the same metadata the discovered
+		// Script exposes (parameters schema and the backing fs.FS), so runners
+		// that inspect them to locate/execute the file see the real values
+		// instead of empty ones.
+		script := &skills.Script{
+			Name:                 name,
+			ParametersSchema:     defaultFileScriptSchema,
+			AdditionalProperties: additionalProperties,
+		}
 		return runner(ctx, owner, script, arguments)
 	}
 }
