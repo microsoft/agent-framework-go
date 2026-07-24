@@ -250,6 +250,95 @@ func TestNew_SerializedSessionResumesFromCheckpoint(t *testing.T) {
 	}
 }
 
+func newApprovalRequestWorkflow(t *testing.T, id string) *workflow.Workflow {
+	t.Helper()
+	binding := approvalRequestExecutorBinding(t, id)
+	wf, err := workflow.NewBuilder(binding).
+		WithOutputFrom(binding).
+		Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	return wf
+}
+
+// TestNew_SerializedSessionResumesApprovalRequest verifies that a pending
+// ToolApprovalRequestContent that survives a session JSON round-trip resolves
+// to the same concrete type as a live request. After the round-trip the
+// pending request's Data is a delayed-deserialized PortableValue, whose JSON
+// form also unmarshals cleanly into an empty FunctionCallContent. Before the
+// TypeID disambiguation in requestDataContent, the restored request resolved to
+// that empty FunctionCallContent, so the matching ToolApprovalResponseContent
+// was not re-keyed to the original request ID ("req-1") and the workflow
+// observed the external request ID instead. The executor asserts the delivered
+// ID equals "req-1", so this fails before the fix and passes after.
+func TestNew_SerializedSessionResumesApprovalRequest(t *testing.T) {
+	wf1 := newApprovalRequestWorkflow(t, "approval-persisted")
+	ag1, err := agentworkflow.NewAgent(wf1, agentworkflow.AgentConfig{
+		IncludeOutputsInResponse: true,
+	})
+	if err != nil {
+		t.Fatalf("New first agent: %v", err)
+	}
+	session, err := ag1.CreateSession(t.Context())
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	first, err := ag1.RunText(t.Context(), "hi", agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	var req *message.ToolApprovalRequestContent
+	for _, m := range first.Messages {
+		for _, c := range m.Contents {
+			if r, ok := c.(*message.ToolApprovalRequestContent); ok {
+				req = r
+			}
+		}
+	}
+	if req == nil {
+		t.Fatalf("expected an approval request, got %+v", first)
+	}
+	if req.RequestID != "approval-persisted_UserInput:req-1" {
+		t.Fatalf("first run request ID = %q, want %q", req.RequestID, "approval-persisted_UserInput:req-1")
+	}
+
+	data, err := json.Marshal(session)
+	if err != nil {
+		t.Fatalf("Marshal session: %v", err)
+	}
+	var restored agent.Session
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("Unmarshal session: %v", err)
+	}
+
+	wf2 := newApprovalRequestWorkflow(t, "approval-persisted")
+	ag2, err := agentworkflow.NewAgent(wf2, agentworkflow.AgentConfig{
+		IncludeOutputsInResponse: true,
+	})
+	if err != nil {
+		t.Fatalf("New restored agent: %v", err)
+	}
+	resumeMsg := []*message.Message{{
+		Role:     message.RoleUser,
+		Contents: []message.Content{req.CreateResponse(true, "")},
+	}}
+	second, err := ag2.Run(t.Context(), resumeMsg, agent.WithSession(&restored)).Collect()
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	var finalText string
+	for _, m := range second.Messages {
+		if txt := m.Contents.Text(); txt == "approved" || txt == "denied" {
+			finalText = txt
+		}
+	}
+	if finalText != "approved" {
+		t.Fatalf("final response text = %q, want %q", finalText, "approved")
+	}
+}
+
 func TestNew_StreamsUpdatesForUnhandledWorkflowEvents(t *testing.T) {
 	binding := echoExecutorBinding("echo")
 	wf, err := workflow.NewBuilder(binding).Build()
