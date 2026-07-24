@@ -35,6 +35,9 @@ type Handler func(ctx context.Context, args string) (any, error)
 //     Invalid input is rejected before getting to the handler.
 type HandlerFor[In, Out any] func(context.Context, In) (Out, error)
 
+// MustNew is like [New] but panics if schema construction fails. It is intended
+// for package-level initialization where a construction failure is a programming
+// error that should surface immediately.
 func MustNew[In, Out any](cfg Config, h HandlerFor[In, Out]) tool.FuncTool {
 	t, err := New(cfg, h)
 	if err != nil {
@@ -43,6 +46,10 @@ func MustNew[In, Out any](cfg Config, h HandlerFor[In, Out]) tool.FuncTool {
 	return t
 }
 
+// New builds a [tool.FuncTool] from cfg and the typed handler h. It derives the
+// JSON input schema from In and the output schema from Out, wrapping non-struct
+// inputs and validating arguments before invoking h. It returns an error if
+// either schema cannot be constructed.
 func New[In, Out any](cfg Config, h HandlerFor[In, Out]) (tool.FuncTool, error) {
 	t := funcTool{
 		cfg: cfg,
