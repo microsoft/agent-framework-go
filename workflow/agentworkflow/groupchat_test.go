@@ -48,6 +48,40 @@ func TestGroupChatWorkflowBuilder_RoundRobinManagerProducesTranscript(t *testing
 	}
 }
 
+func TestGroupChatWorkflowBuilder_ManagerReselectingJustSpokeSpeakerCompletes(t *testing.T) {
+	agentA := newGroupChatLabelAgent("a", "A", "from-a")
+
+	// A manager that always reselects the agent that just spoke. Round-robin
+	// never does this, so only a custom manager can exercise the guard.
+	wf, err := newGroupChatWorkflow("", func(agents []*agent.Agent) *GroupChatManager {
+		return &GroupChatManager{
+			SelectNextAgent: func(context.Context, []*message.Message) (*agent.Agent, error) {
+				return agents[0], nil
+			},
+			ShouldTerminate: func(_ context.Context, _ []*message.Message, iterationCount int) (bool, error) {
+				return iterationCount >= 5, nil
+			},
+		}
+	}, agentA)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	events := runGroupChatWorkflowTurn(t, wf, "hello")
+	assertNoGroupChatErrors(t, events)
+	// The agent speaks once, then the manager reselects it: the host must
+	// complete by yielding output rather than re-invoking it on stale input
+	// (broadcast() skips the current speaker), mirroring .NET GroupChatHost's
+	// TakeTurnAsync guard. Without the guard the same speaker would be driven
+	// repeatedly until the iteration limit, yielding "from-a" five times.
+	if got := collectGroupChatUpdateTexts(events); !slices.Equal(got, []string{"from-a"}) {
+		t.Fatalf("update texts = %v, want [from-a]", got)
+	}
+	if got := collectGroupChatOutputTexts(events); !slices.Equal(got, []string{"hello", "from-a"}) {
+		t.Fatalf("output transcript = %v, want [hello from-a]", got)
+	}
+}
+
 func TestGroupChatWorkflowBuilder_WithNameOnlySetsWorkflowName(t *testing.T) {
 	const workflowName = "named group chat"
 	wf, err := newGroupChatWorkflow(workflowName, func(agents []*agent.Agent) *GroupChatManager {
