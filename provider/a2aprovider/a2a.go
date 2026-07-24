@@ -109,7 +109,11 @@ func (a *a2aProvider) run(ctx context.Context, messages []*message.Message, opti
 			if msg.ID != "" {
 				msgID = msg.ID
 			}
-			if len(msg.AdditionalProperties) > 0 {
+			// Treat a non-nil map as "present" even when empty so that an
+			// empty-but-non-nil AdditionalProperties is preserved as an empty
+			// metadata map (nil vs empty map are distinct in JSON output),
+			// matching the per-message maps.Clone behavior in createA2AMessage.
+			if msg.AdditionalProperties != nil {
 				if metadata == nil {
 					metadata = make(map[string]any, len(msg.AdditionalProperties))
 				}

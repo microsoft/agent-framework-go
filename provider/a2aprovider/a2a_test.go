@@ -676,6 +676,47 @@ func TestRunCombinesMultipleMessagesIntoSingleRequest(t *testing.T) {
 	}
 }
 
+// TestRunPreservesEmptyNonNilMetadata verifies that an input message carrying an
+// empty-but-non-nil AdditionalProperties map results in an empty-but-non-nil
+// Metadata map on the combined A2A message (nil vs empty map are distinct in JSON).
+func TestRunPreservesEmptyNonNilMetadata(t *testing.T) {
+	transport := &mockA2ATransport{
+		responseToReturn: &a2a.Task{
+			ID:        a2a.TaskID("task-abc"),
+			ContextID: "ctx-abc",
+			Status: a2a.TaskStatus{
+				State: a2a.TaskStateSubmitted,
+			},
+		},
+	}
+	a := newTestAgent(transport, agent.Config{})
+
+	session, err := a.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	inputMessages := []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "A"}}, AdditionalProperties: map[string]any{}},
+	}
+
+	_, err = a.Run(t.Context(), inputMessages, agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("error = %v, want nil", err)
+	}
+
+	capturedMsg := transport.capturedMessageSendParams.Message
+	if capturedMsg == nil {
+		t.Fatal("capturedMessageSendParams.Message is nil")
+	}
+	if capturedMsg.Metadata == nil {
+		t.Fatal("message.Metadata = nil, want empty non-nil map")
+	}
+	if len(capturedMsg.Metadata) != 0 {
+		t.Fatalf("message.Metadata = %#v, want empty map", capturedMsg.Metadata)
+	}
+}
+
 // TestRunStreamingCombinesMultipleMessagesIntoSingleRequest is the streaming variant of
 // TestRunCombinesMultipleMessagesIntoSingleRequest.
 func TestRunStreamingCombinesMultipleMessagesIntoSingleRequest(t *testing.T) {
