@@ -27,7 +27,8 @@ type Middleware interface {
 // MiddlewareFunc adapts a function to the [Middleware] interface.
 type MiddlewareFunc func(next RunFunc, ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error]
 
-// Run calls the underlying function, letting a plain func be used wherever a [Middleware] is required.
+// Run calls the underlying function, letting a plain func be used wherever a
+// [Middleware] is required.
 func (mf MiddlewareFunc) Run(next RunFunc, ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error] {
 	return mf(next, ctx, messages, options...)
 }
