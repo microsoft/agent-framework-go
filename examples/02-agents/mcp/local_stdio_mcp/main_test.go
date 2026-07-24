@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"testing"
@@ -33,7 +34,10 @@ func runStubMCPServer() {
 	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "pong"}}}, nil
 	})
-	_ = srv.Run(context.Background(), &mcp.StdioTransport{})
+	if err := srv.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
+		fmt.Fprintf(os.Stderr, "stub stdio MCP server failed: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 // TestLocalStdioMCPClient exercises the transport wiring used by this sample:
@@ -50,6 +54,14 @@ func TestLocalStdioMCPClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Connect() error = %v", err)
 	}
+	// Ensure the spawned helper process is torn down even if a later assertion
+	// fails before the explicit Close() below runs.
+	closed := false
+	t.Cleanup(func() {
+		if !closed {
+			_ = session.Close()
+		}
+	})
 
 	tools, err := mcptool.ListTools(ctx, session)
 	if err != nil {
@@ -65,6 +77,7 @@ func TestLocalStdioMCPClient(t *testing.T) {
 	if err := session.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
+	closed = true
 	if cmd.ProcessState == nil || !cmd.ProcessState.Exited() {
 		t.Fatalf("child process did not terminate after Close(); ProcessState = %v", cmd.ProcessState)
 	}
