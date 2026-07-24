@@ -69,11 +69,17 @@ func (resp *Response) String() string {
 	}
 	var sb strings.Builder
 	for _, msg := range resp.Messages {
-		for _, c := range msg.Contents {
-			if textContent, ok := c.(*message.TextContent); ok {
-				sb.WriteString(textContent.Text)
-			}
+		// msg.String() equals message.Contents.Text(), the per-message join.
+		// Add a newline separator between each non-empty message, matching
+		// .NET's ChatMessage list ConcatText / AgentResponse.Text.
+		t := msg.String()
+		if t == "" {
+			continue
 		}
+		if sb.Len() > 0 {
+			sb.WriteByte('\n')
+		}
+		sb.WriteString(t)
 	}
 	return sb.String()
 }

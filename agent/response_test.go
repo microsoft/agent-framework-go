@@ -788,3 +788,44 @@ func TestResponse_ToUpdates_WithAdditionalPropertiesOnlyProducesSingleUpdate(t *
 		t.Errorf("expected key value, got %v", updates[0].AdditionalProperties["key"])
 	}
 }
+
+func TestResponse_String(t *testing.T) {
+	msg := func(texts ...string) *message.Message {
+		var contents message.Contents
+		for _, text := range texts {
+			contents = append(contents, &message.TextContent{Text: text})
+		}
+		return &message.Message{Role: message.RoleAssistant, Contents: contents}
+	}
+
+	tests := []struct {
+		name     string
+		messages []*message.Message
+		want     string
+	}{
+		{
+			name:     "two messages joined with newline",
+			messages: []*message.Message{msg("foo"), msg("Bar")},
+			want:     "foo\nBar",
+		},
+		{
+			name:     "empty middle message skipped without double newline",
+			messages: []*message.Message{msg("foo"), msg(""), msg("Bar")},
+			want:     "foo\nBar",
+		},
+		{
+			name:     "multiple text contents stay glued within a message",
+			messages: []*message.Message{msg("a", "b")},
+			want:     "ab",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := &agent.Response{Messages: tt.messages}
+			if got := resp.String(); got != tt.want {
+				t.Errorf("String() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
