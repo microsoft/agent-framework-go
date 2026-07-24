@@ -272,6 +272,8 @@ func agentResultToMCPCallToolResult(result any) *mcp.CallToolResult {
 		}
 		callResult.Content = []mcp.Content{agentContentToMCPContent(resultValue)}
 		return callResult
+	case message.Contents:
+		return agentResultToMCPCallToolResult([]message.Content(resultValue))
 	case []message.Content:
 		callResult := &mcp.CallToolResult{Content: make([]mcp.Content, 0, len(resultValue))}
 		for _, contentValue := range resultValue {

@@ -706,6 +706,53 @@ func TestAddToolReturnsDataAndMultipleContentResults(t *testing.T) {
 	})
 }
 
+// message.Contents is the named slice type (type Contents []Content) that
+// Message.Contents is declared as. A Go type switch matches on dynamic type
+// identity, so a message.Contents value must be handled explicitly; otherwise
+// it misses the []message.Content branch, falls through to the JSON fallback,
+// and collapses every block into a single TextContent (losing image/audio
+// blocks and never setting IsError). This mirrors the .NET/Python behavior of
+// iterating each content block individually.
+func TestAddToolReturnsNamedContentsSlice(t *testing.T) {
+	result := callAddedTool(t, stubFuncTool{
+		name:         "named-contents-result",
+		description:  "returns a message.Contents named slice",
+		schema:       map[string]any{"type": "object"},
+		returnSchema: map[string]any{"type": "object"},
+		call: func(context.Context, string) (any, error) {
+			return message.Contents{
+				&message.TextContent{Text: "hi"},
+				&message.DataContent{Data: "iVBORw0KGgo=", MediaType: "image/png"},
+				&message.ErrorContent{Message: "boom"},
+			}, nil
+		},
+	})
+
+	if len(result.Content) != 3 {
+		t.Fatalf("expected three content items, got %d", len(result.Content))
+	}
+	text, ok := result.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("first content is %T, want *mcp.TextContent", result.Content[0])
+	}
+	if text.Text != "hi" {
+		t.Fatalf("first text = %q, want hi", text.Text)
+	}
+	image, ok := result.Content[1].(*mcp.ImageContent)
+	if !ok {
+		t.Fatalf("second content is %T, want *mcp.ImageContent", result.Content[1])
+	}
+	if image.MIMEType != "image/png" {
+		t.Fatalf("image MIMEType = %q, want image/png", image.MIMEType)
+	}
+	if _, ok := result.Content[2].(*mcp.TextContent); !ok {
+		t.Fatalf("third content is %T, want *mcp.TextContent", result.Content[2])
+	}
+	if !result.IsError {
+		t.Fatal("IsError = false, want true (error content block present)")
+	}
+}
+
 // A text-typed DataContent whose bytes are not valid UTF-8 must fall back to a
 // binary Blob resource; putting invalid UTF-8 in Text corrupts it on transport.
 func TestAddToolReturnsInvalidUTF8TextAsBlob(t *testing.T) {
