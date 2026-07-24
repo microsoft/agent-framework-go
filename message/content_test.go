@@ -3,9 +3,11 @@
 package message_test
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -180,6 +182,43 @@ func TestContentEncoding_Roundtrip(t *testing.T) {
 		if !reflect.DeepEqual(v, decoded[i]) {
 			t.Errorf("[%d]: expected content %v, got %v", i, v, decoded[i])
 		}
+	}
+}
+
+func TestFunctionResultContentRoundtripPreservesResult(t *testing.T) {
+	cases := []struct {
+		name   string
+		result any
+		want   string // fmt.Sprint of the round-tripped result
+	}{
+		{"large-int", int64(9007199254740993), "9007199254740993"},
+		{"small-int", int64(42), "42"},
+		{"string", "hello", "hello"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			original := &message.FunctionResultContent{CallID: "call-1", Result: tc.result}
+			first, err := json.Marshal(original)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded message.FunctionResultContent
+			if err := json.Unmarshal(first, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if got := fmt.Sprint(decoded.Result); got != tc.want {
+				t.Fatalf("round-tripped result = %q, want %q", got, tc.want)
+			}
+			// Re-marshaling the decoded value must produce identical bytes,
+			// i.e. Marshal/Unmarshal is idempotent for the result payload.
+			second, err := json.Marshal(&decoded)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(first, second) {
+				t.Fatalf("re-marshaled JSON differs:\n first = %s\nsecond = %s", first, second)
+			}
+		})
 	}
 }
 

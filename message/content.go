@@ -374,6 +374,14 @@ type serializedFunctionResultContent struct {
 	Type contentKind
 }
 
+type serializedFunctionResultContentForUnmarshal struct {
+	ContentHeader
+
+	CallID string
+	Error  string          `json:",omitempty"`
+	Result json.RawMessage `json:",omitempty"`
+}
+
 // FunctionResultContent represents the result of a function call.
 type FunctionResultContent struct {
 	ContentHeader
@@ -397,13 +405,25 @@ func (t *FunctionResultContent) MarshalJSON() ([]byte, error) {
 }
 
 func (t *FunctionResultContent) UnmarshalJSON(data []byte) error {
-	var tmp serializedFunctionResultContent
+	var tmp serializedFunctionResultContentForUnmarshal
 	if err := json.Unmarshal(data, &tmp); err != nil {
 		return err
 	}
 	t.ContentHeader = tmp.ContentHeader
 	t.CallID = tmp.CallID
-	t.Result = tmp.Result
+	// Decode the result with a number-preserving decoder so numeric leaves become
+	// json.Number rather than float64. This keeps large integers exact (values
+	// above 2^53 would otherwise be corrupted) and makes Marshal/Unmarshal
+	// idempotent, matching .NET's JsonElement preservation.
+	if len(tmp.Result) > 0 {
+		dec := json.NewDecoder(bytes.NewReader(tmp.Result))
+		dec.UseNumber()
+		var r any
+		if err := dec.Decode(&r); err != nil {
+			return err
+		}
+		t.Result = r
+	}
 	if tmp.Error != "" {
 		t.Error = errors.New(tmp.Error)
 	}
