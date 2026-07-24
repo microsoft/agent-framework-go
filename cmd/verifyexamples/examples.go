@@ -755,6 +755,23 @@ var workflowExamples = []ExampleDefinition{
 		},
 	},
 	{
+		Name:            "03_workflows_checkpoint_filesystem_checkpoint",
+		ProjectPath:     "examples/03-workflows/checkpoint/filesystem_checkpoint",
+		IsDeterministic: true,
+		MustContain: []string{
+			"Persisted",
+			"Closed the checkpoint store.",
+			"Reopened checkpoint store from disk.",
+			"Retrieved",
+			"Workflow completed with result:",
+		},
+		ExpectedOutputDescription: []string{
+			"The output should show checkpoints being persisted to a filesystem directory, the store being closed, then reopened from disk before resuming.",
+			"After reopening, the workflow should resume from a persisted checkpoint and complete with a result.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
 		Name:        "03_workflows_checkpoint_checkpoint_with_human_in_the_loop",
 		ProjectPath: "examples/03-workflows/checkpoint/checkpoint_with_human_in_the_loop",
 		Inputs:      inputLines("50", "25", "40", "45", "42", "50", "25", "40", "45", "42"),
