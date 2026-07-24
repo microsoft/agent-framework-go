@@ -223,11 +223,15 @@ func toResponseItem(role message.Role, text string) map[string]any {
 	default:
 		role = message.RoleUser
 	}
+	contentType := "input_text"
+	if role == message.RoleAssistant {
+		contentType = "output_text"
+	}
 	return map[string]any{
 		"type": "message",
 		"role": string(role),
 		"content": []map[string]any{{
-			"type": "input_text",
+			"type": contentType,
 			"text": text,
 		}},
 	}

@@ -235,6 +235,22 @@ func TestMemoryProviderInvokedUpdatesMemories(t *testing.T) {
 	if items[0].(map[string]any)["role"] != "user" || items[1].(map[string]any)["role"] != "assistant" {
 		t.Fatalf("items = %#v", items)
 	}
+	if got := contentPartType(t, items[0]); got != "input_text" {
+		t.Fatalf("user content type = %q, want input_text", got)
+	}
+	if got := contentPartType(t, items[1]); got != "output_text" {
+		t.Fatalf("assistant content type = %q, want output_text", got)
+	}
+}
+
+func contentPartType(t *testing.T, item any) string {
+	t.Helper()
+	content, ok := item.(map[string]any)["content"].([]any)
+	if !ok || len(content) == 0 {
+		t.Fatalf("item content = %#v", item)
+	}
+	partType, _ := content[0].(map[string]any)["type"].(string)
+	return partType
 }
 
 func TestMemoryProviderInvokedSkipsStoreWhenInvocationFailed(t *testing.T) {
