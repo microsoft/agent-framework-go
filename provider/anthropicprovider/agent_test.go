@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -573,5 +574,73 @@ func TestToolUseEmptyArgumentsSerializeAsObject(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("tool_use block for toolu_1 not found in request")
+	}
+}
+
+// countingReadCloser counts Close calls on an HTTP response body.
+type countingReadCloser struct {
+	io.ReadCloser
+	closes *atomic.Int64
+}
+
+func (c *countingReadCloser) Close() error {
+	c.closes.Add(1)
+	return c.ReadCloser.Close()
+}
+
+// closeCountingTransport wraps each response body so tests can assert the
+// streaming HTTP body is released once the run completes.
+type closeCountingTransport struct {
+	base   http.RoundTripper
+	closes *atomic.Int64
+}
+
+func (t *closeCountingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err != nil || resp == nil {
+		return resp, err
+	}
+	resp.Body = &countingReadCloser{ReadCloser: resp.Body, closes: t.closes}
+	return resp, nil
+}
+
+// TestStreamingClosesResponseBody verifies the streaming path releases the HTTP
+// response body when the consumer stops iterating early. Without an explicit
+// stream.Close(), the body is never returned to the pool, leaking the
+// underlying connection. This mirrors the defer-close already present on the
+// Chat Completions streaming path and matches the .NET/Python SDKs, which
+// dispose the streaming response on early enumeration.
+func TestStreamingClosesResponseBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, minimalStreamingResponse("hello world"))
+	}))
+	defer server.Close()
+
+	var closes atomic.Int64
+	httpClient := &http.Client{Transport: &closeCountingTransport{base: http.DefaultTransport, closes: &closes}}
+	a := anthropicprovider.NewAgent(
+		anthropic.NewClient(
+			option.WithBaseURL(server.URL),
+			option.WithAPIKey("test"),
+			option.WithHTTPClient(httpClient),
+		),
+		anthropicprovider.AgentConfig{
+			Model:  "claude-3-5-sonnet-20241022",
+			Config: agent.Config{DisableFuncAutoCall: true},
+		},
+	)
+
+	// Stop iterating after the first streamed update. The provider's run
+	// closure then returns via yield=false, which must close the body.
+	for _, err := range a.RunText(t.Context(), "hi", agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		break
+	}
+
+	if got := closes.Load(); got == 0 {
+		t.Fatal("streaming response body was not closed after early consumer exit")
 	}
 }

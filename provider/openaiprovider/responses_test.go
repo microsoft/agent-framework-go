@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -5521,6 +5522,81 @@ func TestResponsesMultipleRequiredFunctions(t *testing.T) {
 	}
 	if err := messagetest.MessagesEqual(resp.Messages, want); err != nil {
 		t.Error(err)
+	}
+}
+
+// countingReadCloser counts Close calls on an HTTP response body.
+type countingReadCloser struct {
+	io.ReadCloser
+	closes *atomic.Int64
+}
+
+func (c *countingReadCloser) Close() error {
+	c.closes.Add(1)
+	return c.ReadCloser.Close()
+}
+
+// closeCountingTransport wraps each response body so tests can assert the
+// streaming HTTP body is released once the run completes.
+type closeCountingTransport struct {
+	base   http.RoundTripper
+	closes *atomic.Int64
+}
+
+func (t *closeCountingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err != nil || resp == nil {
+		return resp, err
+	}
+	resp.Body = &countingReadCloser{ReadCloser: resp.Body, closes: t.closes}
+	return resp, nil
+}
+
+// TestResponsesStreamingClosesResponseBody verifies the Responses streaming path
+// releases the HTTP response body when the consumer stops iterating early.
+// Without an explicit streamResp.Close(), the body is never returned to the
+// pool, leaking the underlying connection. This mirrors the defer-close already
+// present on the Chat Completions streaming path and matches the .NET/Python
+// SDKs, which dispose the streaming response on early enumeration.
+func TestResponsesStreamingClosesResponseBody(t *testing.T) {
+	const output = `event: response.created
+data: {"type":"response.created","response":{"id":"resp_close_test","object":"response","created_at":1741892091,"status":"in_progress","error":null,"incomplete_details":null,"instructions":null,"max_output_tokens":null,"model":"gpt-4o-mini-2024-07-18","output":[],"parallel_tool_calls":true,"previous_response_id":null,"reasoning":{"effort":null,"generate_summary":null},"store":true,"temperature":1.0,"text":{"format":{"type":"text"}},"tool_choice":"auto","tools":[],"top_p":1.0,"usage":null,"user":null,"metadata":{}}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":"Hello"}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":" world"}
+
+`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, output)
+	}))
+	defer server.Close()
+
+	var closes atomic.Int64
+	httpClient := &http.Client{Transport: &closeCountingTransport{base: http.DefaultTransport, closes: &closes}}
+	a := openaiprovider.NewResponsesAgent(
+		openai.NewClient(option.WithBaseURL(server.URL), option.WithHTTPClient(httpClient)),
+		openaiprovider.AgentConfig{
+			Model:  "gpt-4o-mini",
+			Config: agent.Config{DisableFuncAutoCall: true},
+		},
+	)
+
+	// Stop iterating after the first streamed update. The provider's run
+	// closure then returns via yield=false, which must close the body.
+	for _, err := range a.RunText(t.Context(), "hi", agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		break
+	}
+
+	if got := closes.Load(); got == 0 {
+		t.Fatal("streaming response body was not closed after early consumer exit")
 	}
 }
 

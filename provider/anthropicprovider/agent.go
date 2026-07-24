@@ -123,6 +123,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 	}
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		stream := a.client.Messages.NewStreaming(ctx, params)
+		defer func() { _ = stream.Close() }()
 
 		var messageID string
 		var usage message.UsageDetails

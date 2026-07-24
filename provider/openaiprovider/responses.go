@@ -130,6 +130,7 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 				streamResp := a.client.Responses.GetStreaming(ctx, ct.ResponseID, responses.ResponseGetParams{
 					StartingAfter: openai.Int(ct.SequenceNumber),
 				}, telemetryRequestOption)
+				defer func() { _ = streamResp.Close() }()
 				// Update conversation ID when resuming
 				updateConversationID(ct.ResponseID)
 				for streamResp.Next() {
@@ -171,6 +172,7 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 		if stream {
 			// Create streaming response
 			streamResp := a.client.Responses.NewStreaming(ctx, body, telemetryRequestOption)
+			defer func() { _ = streamResp.Close() }()
 			responseID := ""
 			createdAt := time.Time{}
 			isBackground, _ := agent.GetOption(options, agent.AllowBackgroundResponses)
