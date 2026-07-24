@@ -843,4 +843,14 @@ var workflowExamples = []ExampleDefinition{
 			"Order completed:",
 		},
 	},
+	{
+		Name:            "03_workflows_subworkflows_request_interception",
+		ProjectPath:     "examples/03-workflows/subworkflows/request_interception",
+		IsDeterministic: true,
+		MustContain: []string{
+			"Sub-Workflow Request Interception",
+			"Path: AUTO-APPROVED",
+			"Path: ESCALATED",
+		},
+	},
 }
