@@ -104,6 +104,57 @@ func minimalMessageResponse(payload string) string {
 	return string(b)
 }
 
+// TestStreamingUsage_DoesNotDoubleCountOutputTokens verifies that streaming
+// usage reports the final cumulative output token count from message_delta,
+// rather than summing it with the placeholder output count from message_start.
+func TestStreamingUsage_DoesNotDoubleCountOutputTokens(t *testing.T) {
+	output := "" +
+		"event: message_start\n" +
+		`data: {"type":"message_start","message":{"id":"m1","type":"message","role":"assistant","content":[],"model":"claude-3-5-sonnet-20241022","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}` + "\n\n" +
+		"event: content_block_start\n" +
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}` + "\n\n" +
+		"event: content_block_delta\n" +
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}` + "\n\n" +
+		"event: content_block_stop\n" +
+		`data: {"type":"content_block_stop","index":0}` + "\n\n" +
+		"event: message_delta\n" +
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}` + "\n\n" +
+		"event: message_stop\n" +
+		`data: {"type":"message_stop"}` + "\n\n"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, output)
+	}))
+	defer server.Close()
+
+	resp, err := newTestClient(t, server).RunText(t.Context(), "hi", agent.Stream(true)).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var usage *message.UsageContent
+	for _, msg := range resp.Messages {
+		for _, c := range msg.Contents {
+			if uc, ok := c.(*message.UsageContent); ok {
+				usage = uc
+			}
+		}
+	}
+	if usage == nil {
+		t.Fatal("expected UsageContent, got none")
+	}
+	if usage.Details.OutputTokenCount != 5 {
+		t.Errorf("OutputTokenCount = %d, want 5 (message_delta final count, not 1+5)", usage.Details.OutputTokenCount)
+	}
+	if usage.Details.InputTokenCount != 10 {
+		t.Errorf("InputTokenCount = %d, want 10", usage.Details.InputTokenCount)
+	}
+	if usage.Details.TotalTokenCount != 15 {
+		t.Errorf("TotalTokenCount = %d, want 15", usage.Details.TotalTokenCount)
+	}
+}
+
 // minimalStreamingResponse returns an SSE stream that delivers payload as a
 // single text delta.
 func minimalStreamingResponse(payload string) string {

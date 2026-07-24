@@ -141,7 +141,15 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				messageID = cmp.Or(messageID, event.Message.ID)
 				usage.Add(toUsageDetails(event.Message.Usage))
 			case anthropic.MessageDeltaEvent:
-				usage.Add(toUsageDetailsDelta(event.Usage))
+				// Anthropic reports the final cumulative output token count on
+				// message_delta, superseding the placeholder output count from
+				// message_start. Overwrite the output-derived counts from the
+				// delta instead of summing them; adding would double-count the
+				// message_start placeholder (and any earlier delta).
+				delta := toUsageDetailsDelta(event.Usage)
+				usage.OutputTokenCount = delta.OutputTokenCount
+				usage.ReasoningTokenCount = delta.ReasoningTokenCount
+				usage.TotalTokenCount = usage.InputTokenCount + usage.OutputTokenCount
 			case anthropic.ContentBlockStartEvent:
 				block := event.ContentBlock.AsAny()
 				if _, isToolUse := block.(anthropic.ToolUseBlock); !isToolUse {
