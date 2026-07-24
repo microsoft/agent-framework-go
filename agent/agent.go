@@ -473,9 +473,13 @@ func (a *Agent) handleHistoryProviderConflict(ctx context.Context, provider Hist
 }
 
 func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, options []Option) (context.Context, []*message.Message, []Option, error) {
-	// Prepend options from agent configuration.
+	// Prepend options from agent configuration. Clone runOptions first: it is
+	// shared across every run of this Agent and, because New builds it with a
+	// per-tool append, it can carry spare capacity. Appending onto it directly
+	// would write this run's options into the shared backing array, racing with
+	// (and corrupting) concurrent runs.
 	if len(a.runOptions) != 0 {
-		options = append(a.runOptions, options...)
+		options = append(slices.Clone(a.runOptions), options...)
 	}
 
 	if _, ok := GetOption(options, WithSession); !ok {
