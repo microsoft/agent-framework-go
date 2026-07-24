@@ -262,3 +262,24 @@ func TestFuncTool_NewRejectsAnyInput(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+// A *Struct input must produce the same flat schema as a Struct input and accept
+// flat arguments, not be wrapped in an inputWrapper (which would require {"Arg0":{...}}).
+func TestFuncTool_PointerStructInput_UsesFlatSchema(t *testing.T) {
+	type In struct {
+		V string `json:"v"`
+	}
+	tl := functool.MustNew(functool.Config{Name: "t", Description: "d"}, func(_ context.Context, in *In) (string, error) {
+		if in == nil {
+			return "", nil
+		}
+		return in.V, nil
+	})
+	ret, err := tl.Call(t.Context(), `{"v":"hi"}`)
+	if err != nil {
+		t.Fatalf("Call with flat args failed for *struct input: %v", err)
+	}
+	if ret != "hi" {
+		t.Errorf("ret = %v, want hi", ret)
+	}
+}

@@ -128,7 +128,14 @@ func inputFormatFor[T any]() (format *jsonformat.Format, wrapped bool, err error
 	if typ == reflect.TypeFor[any]() {
 		return nil, false, fmt.Errorf("input type any is not supported by HandlerFor; use Handler for dynamic inputs")
 	}
-	if typ.Kind() != reflect.Struct {
+	// Dereference pointers so a *Struct input produces the same flat schema as
+	// a Struct input (jsonformat.ForType treats pointers equivalently); only
+	// genuinely non-struct inputs are wrapped in inputWrapper.
+	elem := typ
+	for elem.Kind() == reflect.Pointer {
+		elem = elem.Elem()
+	}
+	if elem.Kind() != reflect.Struct {
 		typ = reflect.TypeFor[inputWrapper[T]]()
 		wrapped = true
 	}
