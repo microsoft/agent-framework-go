@@ -1117,30 +1117,41 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 			}
 
 		case responses.ResponseCodeInterpreterToolCall:
-			// For code interpreter, create a text representation
-			var outputText strings.Builder
-			fmt.Fprintf(&outputText, "[Code Interpreter: %s]\n", item.ID)
+			// Emit structured content matching the non-streaming path so
+			// streaming consumers receive the same code-interpreter call and
+			// result contents rather than a free-form text blob.
+			var input message.CodeInterpreterToolCallContent
+			input.CallID = item.ID
 			if item.Code != "" {
-				outputText.WriteString(item.Code)
-				outputText.WriteString("\n")
-			}
-			if len(item.Outputs) > 0 {
-				outputText.WriteString("[Output]\n")
-				for _, output := range item.Outputs {
-					switch output := output.AsAny().(type) {
-					case responses.ResponseCodeInterpreterToolCallOutputLogs:
-						outputText.WriteString(output.Logs)
-						outputText.WriteString("\n")
-					case responses.ResponseCodeInterpreterToolCallOutputImage:
-						if output.URL != "" {
-							fmt.Fprintf(&outputText, "Image: %s\n", output.URL)
-						}
-					}
+				input.Inputs = []message.Content{
+					&message.DataContent{
+						Data:      base64.StdEncoding.EncodeToString([]byte(item.Code)),
+						MediaType: "text/x-python",
+					},
 				}
 			}
-			content := &message.TextContent{Text: outputText.String()}
-			content.RawRepresentation = item
-			u.Contents = []message.Content{content}
+
+			var output message.CodeInterpreterToolResultContent
+			output.CallID = item.ID
+			output.RawRepresentation = item
+			for _, res := range item.Outputs {
+				switch res := res.AsAny().(type) {
+				case responses.ResponseCodeInterpreterToolCallOutputLogs:
+					output.Outputs = append(output.Outputs, &message.TextContent{
+						Text:          res.Logs,
+						ContentHeader: message.ContentHeader{RawRepresentation: res},
+					})
+				case responses.ResponseCodeInterpreterToolCallOutputImage:
+					output.Outputs = append(output.Outputs, &message.URIContent{
+						URI:       res.URL,
+						MediaType: imageURIToMediaType(res.URL),
+						ContentHeader: message.ContentHeader{
+							RawRepresentation: res,
+						},
+					})
+				}
+			}
+			u.Contents = []message.Content{&input, &output}
 		case responses.ResponseOutputItemMcpApprovalRequest:
 			u.Contents = []message.Content{mcpApprovalRequestContent(item)}
 		case responses.ResponseOutputItemImageGenerationCall:

@@ -4,6 +4,7 @@ package openaiprovider_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -2431,7 +2432,7 @@ event: response.output_item.added
 data: {"type":"response.output_item.added","item":{"type":"code_interpreter_call","id":"call_code_002","code":"","container_id":"container_002","status":"in_progress","outputs":[]}}
 
 event: response.output_item.done
-data: {"type":"response.output_item.done","item":{"type":"code_interpreter_call","id":"call_code_002","code":"print(3+3)","container_id":"container_002","status":"completed","outputs":[{"type":"logs","logs":"6\n"}]}}
+data: {"type":"response.output_item.done","item":{"type":"code_interpreter_call","id":"call_code_002","code":"print(3+3)","container_id":"container_002","status":"completed","outputs":[{"type":"logs","logs":"6\n"},{"type":"image","url":"https://example.com/plot.png"}]}}
 
 event: response.output_item.added
 data: {"type":"response.output_item.added","item":{"type":"message","id":"msg_002","role":"assistant","status":"in_progress","content":[]}}
@@ -2443,7 +2444,7 @@ event: response.output_item.done
 data: {"type":"response.output_item.done","item":{"type":"message","id":"msg_002","status":"completed","role":"assistant","content":[{"type":"output_text","text":"6","annotations":[]}]}}
 
 event: response.completed
-data: {"type":"response.completed","response":{"id":"resp_002","object":"response","created_at":1741892091,"status":"completed","model":"gpt-4o-mini","output":[{"type":"code_interpreter_call","id":"call_code_002","code":"print(3+3)","container_id":"container_002","status":"completed","outputs":[{"type":"logs","logs":"6\n"}]},{"type":"message","id":"msg_002","status":"completed","role":"assistant","content":[{"type":"output_text","text":"6","annotations":[]}]}]}}
+data: {"type":"response.completed","response":{"id":"resp_002","object":"response","created_at":1741892091,"status":"completed","model":"gpt-4o-mini","output":[{"type":"code_interpreter_call","id":"call_code_002","code":"print(3+3)","container_id":"container_002","status":"completed","outputs":[{"type":"logs","logs":"6\n"},{"type":"image","url":"https://example.com/plot.png"}]},{"type":"message","id":"msg_002","status":"completed","role":"assistant","content":[{"type":"output_text","text":"6","annotations":[]}]}]}}
 
 `
 
@@ -2453,7 +2454,8 @@ data: {"type":"response.completed","response":{"id":"resp_002","object":"respons
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
 	var updates []*agent.ResponseUpdate
-	var allText strings.Builder
+	var codeCall *message.CodeInterpreterToolCallContent
+	var codeResult *message.CodeInterpreterToolResultContent
 	for update, err := range a.RunText(t.Context(), "Calculate 3+3", agent.Stream(true),
 		agent.WithTool(&hostedtool.CodeInterpreter{}),
 	) {
@@ -2462,8 +2464,11 @@ data: {"type":"response.completed","response":{"id":"resp_002","object":"respons
 		}
 		updates = append(updates, update)
 		for _, content := range update.Contents {
-			if tc, ok := content.(*message.TextContent); ok {
-				allText.WriteString(tc.Text)
+			switch c := content.(type) {
+			case *message.CodeInterpreterToolCallContent:
+				codeCall = c
+			case *message.CodeInterpreterToolResultContent:
+				codeResult = c
 			}
 		}
 	}
@@ -2472,16 +2477,52 @@ data: {"type":"response.completed","response":{"id":"resp_002","object":"respons
 		t.Errorf("expected at least 3 updates, got %d", len(updates))
 	}
 
-	// Verify we got both code interpreter content and text result
-	responseText := allText.String()
-	if !strings.Contains(responseText, "Code Interpreter") {
-		t.Errorf("expected response to contain 'Code Interpreter', got %q", responseText)
+	// Streaming must emit structured code-interpreter content, matching the
+	// non-streaming path and the .NET/Python SDKs, rather than a text blob.
+	if codeCall == nil {
+		t.Fatalf("expected a CodeInterpreterToolCallContent in the streamed updates")
 	}
-	if !strings.Contains(responseText, "print(3+3)") {
-		t.Errorf("expected response to contain code 'print(3+3)', got %q", responseText)
+	if codeCall.CallID != "call_code_002" {
+		t.Errorf("expected call CallID 'call_code_002', got %q", codeCall.CallID)
 	}
-	if !strings.Contains(responseText, "6") {
-		t.Errorf("expected response to contain output '6', got %q", responseText)
+	if len(codeCall.Inputs) != 1 {
+		t.Fatalf("expected 1 input in code call, got %d", len(codeCall.Inputs))
+	}
+	dataContent, ok := codeCall.Inputs[0].(*message.DataContent)
+	if !ok {
+		t.Fatalf("expected input to be DataContent, got %T", codeCall.Inputs[0])
+	}
+	if dataContent.MediaType != "text/x-python" {
+		t.Errorf("expected MediaType text/x-python, got %s", dataContent.MediaType)
+	}
+	if decoded, err := base64.StdEncoding.DecodeString(dataContent.Data); err != nil {
+		t.Errorf("expected base64-encoded code, decode error: %v", err)
+	} else if string(decoded) != "print(3+3)" {
+		t.Errorf("expected decoded code 'print(3+3)', got %q", string(decoded))
+	}
+
+	if codeResult == nil {
+		t.Fatalf("expected a CodeInterpreterToolResultContent in the streamed updates")
+	}
+	if codeResult.CallID != codeCall.CallID {
+		t.Errorf("expected result CallID to match call CallID, got %s vs %s", codeResult.CallID, codeCall.CallID)
+	}
+	if len(codeResult.Outputs) != 2 {
+		t.Fatalf("expected 2 outputs (logs + image), got %d", len(codeResult.Outputs))
+	}
+	logs, ok := codeResult.Outputs[0].(*message.TextContent)
+	if !ok {
+		t.Fatalf("expected first output to be TextContent, got %T", codeResult.Outputs[0])
+	}
+	if logs.Text != "6\n" {
+		t.Errorf("expected logs '6\\n', got %q", logs.Text)
+	}
+	img, ok := codeResult.Outputs[1].(*message.URIContent)
+	if !ok {
+		t.Fatalf("expected second output to be URIContent, got %T", codeResult.Outputs[1])
+	}
+	if img.URI != "https://example.com/plot.png" {
+		t.Errorf("expected image URI 'https://example.com/plot.png', got %q", img.URI)
 	}
 }
 
