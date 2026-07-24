@@ -447,6 +447,68 @@ func TestAddSwitch_FallsBackToDefault(t *testing.T) {
 	}
 }
 
+func TestAddSwitch_DeduplicatesRepeatedTargetsWithinCase(t *testing.T) {
+	var trace []string
+	src := recordingBinding("src", &trace)
+	target := recordingBinding("target", &trace)
+
+	bld := workflow.NewBuilder(src)
+	// The same binding is listed twice within a single case. It must still
+	// receive the matched message exactly once, mirroring .NET's HashSet<int>
+	// target semantics.
+	bld.AddSwitch(src).
+		AddCase(func(msg any) bool { return msg == "hit" }, target, target).
+		AddToBuilder(bld)
+	wf, err := bld.Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	if _, err := inproc.Default.Run(context.Background(), wf, "hit"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var deliveries int
+	for _, ent := range trace {
+		if ent == "target:hit" {
+			deliveries++
+		}
+	}
+	if deliveries != 1 {
+		t.Errorf("expected duplicated target to be delivered exactly once, got %d; trace=%v", deliveries, trace)
+	}
+}
+
+func TestAddSwitch_DeduplicatesRepeatedDefaultTargets(t *testing.T) {
+	var trace []string
+	src := recordingBinding("src", &trace)
+	def := recordingBinding("def", &trace)
+
+	bld := workflow.NewBuilder(src)
+	bld.AddSwitch(src).
+		AddCase(func(msg any) bool { return msg == "match" }, recordingBinding("branch", &trace)).
+		WithDefault(def, def).
+		AddToBuilder(bld)
+	wf, err := bld.Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	if _, err := inproc.Default.Run(context.Background(), wf, "no-match"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var deliveries int
+	for _, ent := range trace {
+		if ent == "def:no-match" {
+			deliveries++
+		}
+	}
+	if deliveries != 1 {
+		t.Errorf("expected duplicated default target to be delivered exactly once, got %d; trace=%v", deliveries, trace)
+	}
+}
+
 func TestBuilder_Validation_FailsWhenOutputExecutorNotInGraph(t *testing.T) {
 	start := newNoOpExecutor("start")
 
