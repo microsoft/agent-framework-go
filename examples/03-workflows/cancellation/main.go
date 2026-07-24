@@ -114,7 +114,13 @@ func newCounterExecutor(id string, bound int) workflow.ExecutorBinding {
 		if int(n) > bound {
 			return nil
 		}
-		time.Sleep(workDelay) // simulate a slow, long-running step
+		// Simulate a slow, long-running step, but honor the executor context so a
+		// cancellation lands immediately instead of after the delay elapses.
+		select {
+		case <-time.After(workDelay):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 		return ctx.SendMessage("", n)
 	}).Extend(&workflow.Executor{
 		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
