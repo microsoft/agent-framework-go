@@ -2288,6 +2288,75 @@ data: {"type":"response.completed","response":{"id":"resp_001","object":"respons
 	}
 }
 
+func TestResponsesMCPServerToolAddressRouting(t *testing.T) {
+	const output = `
+            {
+                "id": "resp_test",
+                "object": "response",
+                "created_at": 1741891428,
+                "status": "completed",
+                "error": null,
+                "incomplete_details": null,
+                "model": "gpt-4o-mini",
+                "output": [{
+                    "type": "message",
+                    "id": "msg_test",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Hello", "annotations": []}]
+                }]
+            }
+            `
+
+	tests := []struct {
+		name          string
+		serverAddress string
+		wantTool      string
+	}{
+		{
+			name:          "bare connector id routes to connector_id",
+			serverAddress: "connector_googledrive",
+			wantTool:      `{"type":"mcp","server_label":"drive","connector_id":"connector_googledrive"}`,
+		},
+		{
+			name:          "https url routes to server_url",
+			serverAddress: "https://example.com/mcp",
+			wantTool:      `{"type":"mcp","server_label":"drive","server_url":"https://example.com/mcp"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := `
+                {
+                    "model":"gpt-4o-mini",
+                    "input":[{
+                        "type":"message",
+                        "role":"user",
+                        "content":[{"type":"input_text","text":"hello"}]
+                    }],
+                    "tools":[` + tt.wantTool + `]
+                }
+                `
+
+			server := newTestResponsesServer(t, input, output)
+			defer server.Close()
+
+			a := newTestResponsesClient(server, "gpt-4o-mini")
+
+			_, err := a.RunText(t.Context(), "hello",
+				agent.WithTool(&hostedtool.MCPServer{
+					ServerName:    "drive",
+					ServerAddress: tt.serverAddress,
+				}),
+			).Collect()
+			if err != nil {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
 func TestResponsesCodeInterpreterTool_NonStreaming(t *testing.T) {
 	const input = `
             {
