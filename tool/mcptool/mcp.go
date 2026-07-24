@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-// Package mcp provides integration with the Model Context Protocol (MCP).
+// Package mcptool provides integration with the Model Context Protocol (MCP).
 // It allows agents to connect to external MCP servers via stdio, HTTP, or WebSocket
-// and expose their tools and prompts as agent.Tool instances.
+// and expose their tools as tool.Tool instances.
 package mcptool
 
 import (
@@ -18,6 +18,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// AddTool registers a tool.FuncTool on the given mcp.Server so it is exposed to MCP clients.
 func AddTool(src *mcp.Server, tl tool.FuncTool) {
 	src.AddTool(&mcp.Tool{
 		Name:         tl.Name(),
@@ -35,6 +36,7 @@ func AddTool(src *mcp.Server, tl tool.FuncTool) {
 	})
 }
 
+// Connect dials an MCP server over the given transport and returns a client session.
 func Connect(ctx context.Context, transport mcp.Transport) (*mcp.ClientSession, error) {
 	client := mcp.NewClient(&mcp.Implementation{
 		Name:    "agent-framework-go-mcp-client",
@@ -43,13 +45,14 @@ func Connect(ctx context.Context, transport mcp.Transport) (*mcp.ClientSession, 
 	return client.Connect(ctx, transport, nil)
 }
 
+// ListTools enumerates the remote server's tools and wraps each as a tool.Tool.
 func ListTools(ctx context.Context, session *mcp.ClientSession) ([]tool.Tool, error) {
 	toolsResult, err := session.ListTools(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list tools: %w", err)
 	}
 
-	// Create agent.Tool instances for each MCP tool
+	// Create tool.Tool instances for each MCP tool
 	result := make([]tool.Tool, 0, len(toolsResult.Tools))
 	for _, mcpTool := range toolsResult.Tools {
 		agentTool := newMCPToolWrapper(session, mcpTool)
@@ -389,7 +392,7 @@ var (
 	_ tool.FuncTool = (*mcpWrapper)(nil)
 )
 
-// mcpWrapper wraps an MCP tool as an agent.Tool.
+// mcpWrapper wraps an MCP tool as a tool.Tool.
 type mcpWrapper struct {
 	session *mcp.ClientSession
 	tool    *mcp.Tool
