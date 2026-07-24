@@ -104,9 +104,9 @@ func TestOtel_Run_SpanHasCorrectAttributes(t *testing.T) {
 
 	span := spans[len(spans)-1]
 
-	// Check span name matches agent name
-	if span.Name != "test-agent" {
-		t.Errorf("expected span name 'test-agent', got %s", span.Name)
+	// Check span name is "<operation> <target>" per GenAI conventions
+	if span.Name != "invoke_agent test-agent" {
+		t.Errorf("expected span name 'invoke_agent test-agent', got %s", span.Name)
 	}
 
 	// Check attributes
@@ -128,6 +128,97 @@ func TestOtel_Run_SpanHasCorrectAttributes(t *testing.T) {
 			t.Errorf("expected attribute %q to be present", key)
 		} else if got != expected {
 			t.Errorf("expected attribute %q to be %q, got %q", key, expected, got)
+		}
+	}
+}
+
+func TestOtel_Run_SpanNamePrefixedWithOperation(t *testing.T) {
+	exporter := setupTracer(t)
+
+	mw := otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{})
+	a := agent.New(agent.ProviderConfig{
+		Run: func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			return func(yield func(*agent.ResponseUpdate, error) bool) {
+				yield(&agent.ResponseUpdate{MessageID: "test-1"}, nil)
+			}
+		},
+	}, agent.Config{
+		Name:        "helper",
+		Middlewares: []agent.Middleware{mw},
+	})
+
+	_, _ = a.RunMessage(t.Context(), message.NewText("test")).Collect()
+
+	spans := exporter.GetSpans()
+	if len(spans) != 1 {
+		t.Fatalf("expected 1 span, got %d", len(spans))
+	}
+	// GenAI conventions require the span be named "<operation> <target>", matching the
+	// sibling execute_tool span and the .NET/Python SDKs.
+	if spans[0].Name != "invoke_agent helper" {
+		t.Errorf("expected span name %q, got %q", "invoke_agent helper", spans[0].Name)
+	}
+}
+
+func TestOtel_Run_SpanNameFallsBackToAgentID(t *testing.T) {
+	exporter := setupTracer(t)
+
+	mw := otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{})
+	// Agent with an id but no name: the span target falls back to the agent id,
+	// matching .NET/Python.
+	a := agent.New(agent.ProviderConfig{
+		Run: func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			return func(yield func(*agent.ResponseUpdate, error) bool) {
+				yield(&agent.ResponseUpdate{MessageID: "test-1"}, nil)
+			}
+		},
+	}, agent.Config{
+		ID:          "agent-123",
+		Middlewares: []agent.Middleware{mw},
+	})
+
+	_, _ = a.RunMessage(t.Context(), message.NewText("test")).Collect()
+
+	spans := exporter.GetSpans()
+	if len(spans) != 1 {
+		t.Fatalf("expected 1 span, got %d", len(spans))
+	}
+	// With no name, the target is the agent id.
+	if spans[0].Name != "invoke_agent agent-123" {
+		t.Errorf("expected span name %q, got %q", "invoke_agent agent-123", spans[0].Name)
+	}
+	for _, attr := range spans[0].Attributes {
+		if string(attr.Key) == "gen_ai.agent.id" && attr.Value.AsString() != "agent-123" {
+			t.Errorf("expected gen_ai.agent.id %q, got %q", "agent-123", attr.Value.AsString())
+		}
+	}
+}
+
+func TestOtel_Run_OmitsEmptyAgentNameAndDescription(t *testing.T) {
+	exporter := setupTracer(t)
+
+	mw := otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{})
+	// Agent with no name and no description: .NET and Python omit these attributes
+	// rather than emitting empty strings.
+	a := agent.New(agent.ProviderConfig{
+		Run: func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			return func(yield func(*agent.ResponseUpdate, error) bool) {
+				yield(&agent.ResponseUpdate{MessageID: "test-1"}, nil)
+			}
+		},
+	}, agent.Config{
+		Middlewares: []agent.Middleware{mw},
+	})
+
+	_, _ = a.RunMessage(t.Context(), message.NewText("test")).Collect()
+
+	spans := exporter.GetSpans()
+	if len(spans) != 1 {
+		t.Fatalf("expected 1 span, got %d", len(spans))
+	}
+	for _, attr := range spans[0].Attributes {
+		if key := string(attr.Key); key == "gen_ai.agent.name" || key == "gen_ai.agent.description" {
+			t.Errorf("expected %q to be omitted for an unnamed/undescribed agent", key)
 		}
 	}
 }

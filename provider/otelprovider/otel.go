@@ -65,13 +65,28 @@ type mw struct {
 func (m *mw) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		a, _ := agent.AgentFromContext(ctx)
-		ctx, span := m.tracer.Start(ctx, a.Name(), trace.WithAttributes(
+		// GenAI conventions name the span "<operation> <target>", mirroring the sibling
+		// execute_tool span (see startToolSpan). Fall back to the agent id when it has no
+		// name so the span still carries a target, matching .NET/Python. Default the id to
+		// "unknown" (as with the provider name below) so the span always carries a target
+		// and gen_ai.agent.id is never an empty string, even when the middleware runs
+		// without an agent in context.
+		id := cmp.Or(a.ID(), "unknown")
+		name := opInvoke + " " + cmp.Or(a.Name(), id)
+		// Only include name/description when present: .NET and Python omit these attributes
+		// for an unnamed/undescribed agent rather than emitting empty strings.
+		attrs := []attribute.KeyValue{
 			attribute.String(attrKeyOperationName, opInvoke),
 			attribute.String(attrKeyProviderName, cmp.Or(a.ProviderName(), "unknown")),
-			attribute.String(attrKeyAgentID, a.ID()),
-			attribute.String(attrKeyAgentName, a.Name()),
-			attribute.String(attrKeyAgentDesc, a.Description()),
-		))
+			attribute.String(attrKeyAgentID, id),
+		}
+		if a.Name() != "" {
+			attrs = append(attrs, attribute.String(attrKeyAgentName, a.Name()))
+		}
+		if a.Description() != "" {
+			attrs = append(attrs, attribute.String(attrKeyAgentDesc, a.Description()))
+		}
+		ctx, span := m.tracer.Start(ctx, name, trace.WithAttributes(attrs...))
 		ctx = otelx.WithTracer(ctx, m.tracer)
 		defer span.End()
 
