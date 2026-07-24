@@ -1595,3 +1595,58 @@ func TestChatEmptyChoices_NonStreaming(t *testing.T) {
 		t.Errorf("expected usage input=12 total=12 to be surfaced, got %+v", usage)
 	}
 }
+
+func TestChatResponseWithRefusalContent_ParsesCorrectly(t *testing.T) {
+	const input = `
+		{
+			"messages":[{"role":"user","content":"harmful request"}],
+			"model":"gpt-4o-mini"
+		}
+		`
+	const output = `
+		{
+			"id":"chatcmpl-refusal",
+			"object":"chat.completion",
+			"created":1727888631,
+			"model":"gpt-4o-mini",
+			"choices":[{
+				"index":0,
+				"message":{"role":"assistant","content":null,"refusal":"I cannot provide that information"},
+				"finish_reason":"stop"
+			}]
+		}
+		`
+	server := newTestServer(t, input, output)
+	defer server.Close()
+
+	a := newTestClient(server)
+
+	resp, err := a.RunText(t.Context(), "harmful request").Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+
+	if len(resp.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(resp.Messages))
+	}
+
+	// Refusal is mapped to ErrorContent.
+	var errorContent *message.ErrorContent
+	for _, content := range resp.Messages[0].Contents {
+		if ec, ok := content.(*message.ErrorContent); ok {
+			errorContent = ec
+			break
+		}
+	}
+
+	if errorContent == nil {
+		t.Fatal("expected ErrorContent in message")
+	}
+
+	if errorContent.Message != "I cannot provide that information" {
+		t.Errorf("expected error message 'I cannot provide that information', got %q", errorContent.Message)
+	}
+	if errorContent.ErrorCode != "Refusal" {
+		t.Errorf("expected error code 'Refusal', got %q", errorContent.ErrorCode)
+	}
+}
