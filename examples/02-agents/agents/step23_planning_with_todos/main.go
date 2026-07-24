@@ -8,6 +8,7 @@
 // together they let an agent enter plan mode, break a request into trackable todo items, switch to
 // execute mode, and complete those items while checking what remains. Both providers persist their
 // state in the agent session, so the plan and progress survive across turns.
+
 package main
 
 import (
@@ -47,8 +48,8 @@ func main() {
 		foundryprovider.AgentConfig{
 			Instructions: `You are a diligent engineering assistant that plans before acting.
 Start every substantive request in plan mode: analyze the work, then record concrete todo items with todos_add.
-Once the plan is recorded, switch to execute mode with mode_set and carry out the work.
-As you finish each item, mark it done with todos_complete, and use todos_get_remaining to see what is left.`,
+Only switch to execute mode with mode_set when the user explicitly asks you to.
+As you finish each item, mark it done with todos_complete (include a reason describing how it was completed), and use todos_get_remaining to see what is left.`,
 			DisableStoreOutput: true,
 			Config: agent.Config{
 				Name: "PlanningAssistant",
