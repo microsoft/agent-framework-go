@@ -101,6 +101,10 @@ func (a *a2aProvider) run(ctx context.Context, messages []*message.Message, opti
 			if stream {
 				seq = a.client.SendStreamingMessage(ctx, params)
 			} else {
+				// Mirror .NET A2AAgent.RunCoreAsync, which sets the send
+				// configuration only on the non-streaming send.
+				allowBackground, _ := agent.GetOption(options, agent.AllowBackgroundResponses)
+				params.Config = &a2a.SendMessageConfig{ReturnImmediately: allowBackground}
 				resp, err := a.client.SendMessage(ctx, params)
 				seq = func(yield func(a2a.Event, error) bool) {
 					yield(resp, err)
