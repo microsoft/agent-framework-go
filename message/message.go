@@ -48,7 +48,8 @@ type Message struct {
 	RawRepresentation    any       `json:"-"`
 }
 
-// New creates a new [Message] with the given role and contents.
+// New creates a new [Message] with the given contents and [RoleUser].
+// To use a different role, set [Message.Role] on the returned Message.
 func New(contents ...Content) *Message {
 	return &Message{
 		Role:     RoleUser,
