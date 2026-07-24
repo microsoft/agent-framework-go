@@ -1363,6 +1363,94 @@ func TestChatDataContentMessage_Image_NonStreaming(t *testing.T) {
 	}
 }
 
+func TestChatDataContentMessage_AudioAndFile_NonStreaming(t *testing.T) {
+	// Minimal base64-encoded payloads standing in for a WAV clip and a PDF file.
+	const audioData = "UklGRiQAAABXQVZFZm10IBAAAAABAAEAAAA="
+	const pdfData = "JVBERi0xLjQKJcTl8uXrp/Og0MTGCg=="
+
+	const input = `
+            {
+              "messages": [
+                {
+                  "role": "user",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "Transcribe the audio and summarize the document."
+                    },
+                    {
+                      "type": "input_audio",
+                      "input_audio": {
+                        "data": "` + audioData + `",
+                        "format": "wav"
+                      }
+                    },
+                    {
+                      "type": "file",
+                      "file": {
+                        "file_data": "` + pdfData + `",
+                        "filename": "report.pdf"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "model": "gpt-4o-mini"
+            }
+            `
+	const output = `
+            {
+              "id": "chatcmpl-audiofile",
+              "object": "chat.completion",
+              "created": 1727888631,
+              "model": "gpt-4o-mini-2024-07-18",
+              "choices": [
+                {
+                  "index": 0,
+                  "message": {
+                    "role": "assistant",
+                    "content": "Done.",
+                    "refusal": null
+                  },
+                  "logprobs": null,
+                  "finish_reason": "stop"
+                }
+              ]
+            }
+            `
+
+	server := newTestServer(t, input, output)
+	defer server.Close()
+
+	a := newTestClient(server)
+
+	messages := []*message.Message{
+		{
+			Role: message.RoleUser,
+			Contents: []message.Content{
+				&message.TextContent{Text: "Transcribe the audio and summarize the document."},
+				&message.DataContent{
+					Data:      audioData,
+					MediaType: "audio/wav",
+				},
+				&message.DataContent{
+					Name:      "report.pdf",
+					Data:      pdfData,
+					MediaType: "application/pdf",
+				},
+			},
+		},
+	}
+
+	resp, err := a.Run(t.Context(), messages).Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if got := resp.String(); got != "Done." {
+		t.Errorf("expected text %q, got %q", "Done.", got)
+	}
+}
+
 func TestChatMultipleRequiredFunctions(t *testing.T) {
 	const input = `
             {
