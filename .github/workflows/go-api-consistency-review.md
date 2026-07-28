@@ -27,8 +27,16 @@ permissions:
    pull-requests: read
    issues: read
    copilot-requests: write
+network: defaults
 tools:
+   # Route GitHub tools and Safe Outputs through the CLI proxy instead of the
+   # native HTTP MCP endpoints on the internal awmg-mcpg gateway. The firewall's
+   # Squid proxy denies that internal single-label host (TCP_DENIED/403) and then
+   # surfaces a non-compilable "awmgmcpg" network.allowed recommendation.
+   # Workaround for https://github.com/github/gh-aw/issues/45915.
+   cli-proxy: true
    github:
+      mode: gh-proxy
       toolsets: [default]
       # Lower the automatic "approved" lockdown so fork-PR content is readable
       # for parity review. unapproved covers CONTRIBUTOR / FIRST_TIME_CONTRIBUTOR
