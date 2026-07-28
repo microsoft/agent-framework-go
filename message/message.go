@@ -69,6 +69,37 @@ func (m *Message) Usage() UsageDetails {
 	return m.Contents.Usage()
 }
 
+// SourceType returns the message source type.
+//
+// When no explicit source type is set, [SourceTypeExternal] is returned.
+func (m *Message) SourceType() SourceType {
+	if m == nil {
+		return SourceTypeExternal
+	}
+	return m.Source.Type
+}
+
+// SourceID returns the message source identifier.
+func (m *Message) SourceID() string {
+	if m == nil {
+		return ""
+	}
+	return m.Source.ID
+}
+
+// WithSource returns the message tagged with the provided source.
+//
+// If the message already has the requested source, the original message is
+// returned. Otherwise, a cloned message is returned with the updated source.
+func (m *Message) WithSource(source Source) *Message {
+	if m == nil || m.Source == source {
+		return m
+	}
+	v := m.Clone()
+	v.Source = source
+	return v
+}
+
 // Clone creates a shallow copy of the message.
 func (m *Message) Clone() *Message {
 	if m == nil {

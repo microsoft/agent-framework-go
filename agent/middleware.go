@@ -62,9 +62,7 @@ func (mr middlewareRunner) Run(ctx context.Context, messages []*message.Message,
 			if msg == nil || msg.Source != (message.Source{}) {
 				continue
 			}
-			marked := msg.Clone()
-			marked.Source = message.Source{Type: SourceTypeMiddleware}
-			outMessages[i] = marked
+			outMessages[i] = msg.WithSource(message.Source{Type: SourceTypeMiddleware})
 		}
 		return mr.next(ctx, outMessages, opts...)
 	}

@@ -135,12 +135,7 @@ func (p *defaultContextProvider) Invoking(ctx context.Context, invoking Invoking
 	if len(providedMessages) > 0 {
 		source := message.Source{Type: SourceTypeContextProvider, ID: p.config.SourceID}
 		for i, msg := range providedMessages {
-			if msg == nil || msg.Source == source {
-				continue
-			}
-			marked := msg.Clone()
-			marked.Source = source
-			providedMessages[i] = marked
+			providedMessages[i] = msg.WithSource(source)
 		}
 		outMessages = append(outMessages, providedMessages...)
 	}
