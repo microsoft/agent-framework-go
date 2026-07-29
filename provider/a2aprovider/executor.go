@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"iter"
+	"maps"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
@@ -286,6 +287,9 @@ func (e *executor) newRunOptions(ctx context.Context, execCtx *a2asrv.ExecutorCo
 	runOptions := []agent.Option{
 		agent.WithSession(session),
 		agent.AllowBackgroundResponses(allowBackground),
+	}
+	if len(execCtx.Metadata) > 0 {
+		runOptions = append(runOptions, agent.WithAdditionalProperties(maps.Clone(execCtx.Metadata)))
 	}
 	if stream {
 		runOptions = append(runOptions, agent.Stream(true))

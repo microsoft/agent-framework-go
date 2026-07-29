@@ -4,6 +4,7 @@ package agent
 
 import (
 	"iter"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -31,6 +32,7 @@ type (
 	toolModeOpt                 tool.ToolMode
 	streamOpt                   bool
 	allowBackgroundResponsesOpt bool
+	additionalPropertiesOpt     struct{ props map[string]any }
 
 	structuredOutputOpt struct{ any }
 )
@@ -40,6 +42,7 @@ func (o streamOpt) Value() any                   { return bool(o) }
 func (o continuationTokenOpt) Value() any        { return string(o) }
 func (o instructionsOpt) Value() any             { return string(o) }
 func (o allowBackgroundResponsesOpt) Value() any { return bool(o) }
+func (o additionalPropertiesOpt) Value() any     { return o.props }
 func (o toolModeOpt) Value() any                 { return tool.ToolMode(o) }
 func (o toolOpt) Value() any                     { return o.Tool }
 func (o structuredOutputOpt) Value() any         { return o.any }
@@ -168,4 +171,10 @@ func WithInstructions(instructions string) Option {
 // If the implementation does not support background responses, this property will be ignored.
 func AllowBackgroundResponses(allow bool) Option {
 	return allowBackgroundResponsesOpt(allow)
+}
+
+// WithAdditionalProperties sets provider-specific or protocol-specific request
+// metadata for an agent run.
+func WithAdditionalProperties(props map[string]any) Option {
+	return additionalPropertiesOpt{props: maps.Clone(props)}
 }
