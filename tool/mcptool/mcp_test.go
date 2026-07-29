@@ -829,13 +829,13 @@ func TestCallReturnsEmptyAndStructuredOnlyMCPResults(t *testing.T) {
 
 func TestCallConvertsMCPToolUseAndToolResultContent(t *testing.T) {
 	result := callMCPResult(t, &mcp.CallToolResult{Content: []mcp.Content{
-		&mcp.ToolUseContent{
+		&mcp.ToolUseContent{ //nolint:staticcheck // ToolUseContent is deprecated per SEP-2577 but remains functional during the deprecation window.
 			ID:    "call-1",
 			Name:  "calculator",
 			Input: map[string]any{"x": 1},
 			Meta:  mcp.Meta{"source": "assistant"},
 		},
-		&mcp.ToolResultContent{
+		&mcp.ToolResultContent{ //nolint:staticcheck // ToolResultContent is deprecated per SEP-2577 but remains functional during the deprecation window.
 			ToolUseID:         "call-1",
 			Content:           []mcp.Content{&mcp.TextContent{Text: "done"}},
 			StructuredContent: map[string]any{"ok": true},
@@ -855,7 +855,7 @@ func TestCallConvertsMCPToolUseAndToolResultContent(t *testing.T) {
 	if !strings.Contains(toolUse.Text, `"name":"calculator"`) || !strings.Contains(toolUse.Text, `"id":"call-1"`) {
 		t.Fatalf("tool use text = %q, want calculator call JSON", toolUse.Text)
 	}
-	rawToolUse, ok := toolUse.Header().RawRepresentation.(*mcp.ToolUseContent)
+	rawToolUse, ok := toolUse.Header().RawRepresentation.(*mcp.ToolUseContent) //nolint:staticcheck // ToolUseContent is deprecated per SEP-2577 but remains functional during the deprecation window.
 	if !ok {
 		t.Fatalf("tool use RawRepresentation is %T, want *mcp.ToolUseContent", toolUse.Header().RawRepresentation)
 	}
@@ -874,7 +874,7 @@ func TestCallConvertsMCPToolUseAndToolResultContent(t *testing.T) {
 	if toolResult.Text != "done" {
 		t.Fatalf("tool result text = %q, want done", toolResult.Text)
 	}
-	rawToolResult, ok := toolResult.Header().RawRepresentation.(*mcp.ToolResultContent)
+	rawToolResult, ok := toolResult.Header().RawRepresentation.(*mcp.ToolResultContent) //nolint:staticcheck // ToolResultContent is deprecated per SEP-2577 but remains functional during the deprecation window.
 	if !ok {
 		t.Fatalf("tool result RawRepresentation is %T, want *mcp.ToolResultContent", toolResult.Header().RawRepresentation)
 	}

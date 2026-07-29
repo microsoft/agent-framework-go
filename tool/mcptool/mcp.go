@@ -83,7 +83,21 @@ func mcpCallToolResultToAgentContent(result *mcp.CallToolResult) []message.Conte
 }
 
 func mcpCallToolResultNeedsEnvelope(result *mcp.CallToolResult) bool {
-	return result.IsError || result.StructuredContent != nil || len(result.Meta) > 0
+	return result.IsError || result.StructuredContent != nil || hasUserDefinedMeta(result.Meta)
+}
+
+// hasUserDefinedMeta reports whether the meta map contains any keys that are
+// not automatically injected by the MCP SDK (which prefixes its own keys with
+// "io.modelcontextprotocol/"). SDK-injected keys such as
+// MetaKeyServerInfo (added per SEP-2575 in v1.7.0) are not considered
+// user-defined and do not warrant wrapping the result in an envelope.
+func hasUserDefinedMeta(meta mcp.Meta) bool {
+	for k := range meta {
+		if !strings.HasPrefix(k, "io.modelcontextprotocol/") {
+			return true
+		}
+	}
+	return false
 }
 
 func mcpContentToAgentContent(mcpContents []mcp.Content) []message.Content {
@@ -157,13 +171,13 @@ func mcpContentToAgentContentWithRaw(mcpContents []mcp.Content, rawOverride any)
 				})
 			}
 
-		case *mcp.ToolUseContent:
+		case *mcp.ToolUseContent: //nolint:staticcheck // ToolUseContent is deprecated per SEP-2577 but remains functional during the deprecation window.
 			result = append(result, &message.TextContent{
 				ContentHeader: mcpContentHeader(raw),
 				Text:          jsonText(contentValue),
 			})
 
-		case *mcp.ToolResultContent:
+		case *mcp.ToolResultContent: //nolint:staticcheck // ToolResultContent is deprecated per SEP-2577 but remains functional during the deprecation window.
 			nestedContents := mcpContentToAgentContentWithRaw(contentValue.Content, contentValue)
 			if len(nestedContents) > 0 {
 				result = append(result, nestedContents...)
