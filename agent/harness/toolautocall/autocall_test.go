@@ -485,7 +485,6 @@ func TestFunctionInvoking_FunctionReturningFunctionResultContentWithMatchingCall
 	}
 	if toolMessage == nil {
 		t.Fatal("expected a tool message in response")
-		return
 	}
 
 	var frcs []*message.FunctionResultContent
@@ -562,7 +561,6 @@ func TestFunctionInvoking_FunctionReturningFunctionResultContentWithMismatchedCa
 	}
 	if toolMessage == nil {
 		t.Fatal("expected a tool message in response")
-		return
 	}
 
 	var frcs []*message.FunctionResultContent

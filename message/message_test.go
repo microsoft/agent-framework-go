@@ -16,7 +16,6 @@ func TestMessage_Clone_ClonesAdditionalProperties(t *testing.T) {
 	cloned := original.Clone()
 	if cloned == nil {
 		t.Fatal("expected cloned message")
-		return
 	}
 	if cloned.AdditionalProperties["k"] != "v" {
 		t.Fatalf("expected cloned additional property value 'v', got %v", cloned.AdditionalProperties["k"])

@@ -5,6 +5,12 @@ linters:
     - nakedret
     - predeclared
     - unconvert
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - staticcheck
+        text: "SA5011"
 formatters:
   enable:
     - gofumpt
