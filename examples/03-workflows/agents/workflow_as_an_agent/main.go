@@ -19,6 +19,9 @@ var logger = demo.NewLogger(
 
 func main() {
 	token := demo.FoundryTokenCredential()
+	// Keep hosted-agent IDs and names stable if this workflow is ever rebuilt and
+	// resumed from a checkpointed session; hosted executor identities derive from
+	// both values.
 	french := foundryprovider.NewAgent(
 		demo.FoundryProjectEndpoint,
 		token,
@@ -26,6 +29,7 @@ func main() {
 		foundryprovider.AgentConfig{
 			Instructions: "Respond in French. Keep the answer concise.",
 			Config: agent.Config{
+				ID:          "french-agent",
 				Name:        "French",
 				Middlewares: []agent.Middleware{logger},
 			},
@@ -38,6 +42,7 @@ func main() {
 		foundryprovider.AgentConfig{
 			Instructions: "Respond in English. Keep the answer concise.",
 			Config: agent.Config{
+				ID:          "english-agent",
 				Name:        "English",
 				Middlewares: []agent.Middleware{logger},
 			},
@@ -51,6 +56,7 @@ func main() {
 	wfAgent, err := agentworkflow.NewAgent(wf, agentworkflow.AgentConfig{
 		IncludeOutputsInResponse: true,
 		Config: agent.Config{
+			ID:   "bilingual-workflow-agent",
 			Name: "BilingualWorkflowAgent",
 		},
 	})

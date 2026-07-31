@@ -35,6 +35,9 @@ func main() {
 	otel.SetTracerProvider(provider)
 
 	token := demo.FoundryTokenCredential()
+	// Keep hosted-agent IDs and names stable if this workflow is rebuilt and a
+	// checkpointed session is resumed later; hosted executor identities derive
+	// from both values.
 	french := foundryprovider.NewAgent(
 		demo.FoundryProjectEndpoint,
 		token,
@@ -42,6 +45,7 @@ func main() {
 		foundryprovider.AgentConfig{
 			Instructions: "Answer in French, concisely.",
 			Config: agent.Config{
+				ID:          "french-agent",
 				Name:        "French",
 				Middlewares: []agent.Middleware{logger},
 			},
@@ -54,6 +58,7 @@ func main() {
 		foundryprovider.AgentConfig{
 			Instructions: "Answer in English, concisely.",
 			Config: agent.Config{
+				ID:          "english-agent",
 				Name:        "English",
 				Middlewares: []agent.Middleware{logger},
 			},
@@ -70,7 +75,13 @@ func main() {
 		demo.Panic(err)
 	}
 
-	wfAgent, err := agentworkflow.NewAgent(wf, agentworkflow.AgentConfig{IncludeOutputsInResponse: true})
+	wfAgent, err := agentworkflow.NewAgent(wf, agentworkflow.AgentConfig{
+		IncludeOutputsInResponse: true,
+		Config: agent.Config{
+			ID:   "observable-workflow-agent",
+			Name: "ObservableWorkflowAgent",
+		},
+	})
 	if err != nil {
 		demo.Panic(err)
 	}

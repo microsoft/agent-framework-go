@@ -105,6 +105,36 @@ func fixedTextAgent(id, name, text string) *agent.Agent {
 	)
 }
 
+func userTurnCountingAgent(id, name, prefix string) *agent.Agent {
+	run := func(_ context.Context, messages []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			userTurns := 0
+			for _, current := range messages {
+				if current != nil && current.Role == message.RoleUser {
+					userTurns++
+				}
+			}
+			yield(&agent.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					&message.TextContent{Text: fmt.Sprintf("%s:turn:%d", prefix, userTurns)},
+				},
+			}, nil)
+		}
+	}
+	cfg := agent.Config{
+		Name:                name,
+		DisableFuncAutoCall: true,
+	}
+	if id != "" {
+		cfg.ID = id
+	}
+	return agent.New(
+		agent.ProviderConfig{ProviderName: "user-turn-counter", Run: run},
+		cfg,
+	)
+}
+
 func uppercaseLatestTextBinding(id string) workflow.ExecutorBinding {
 	binding := workflow.ExecutorBinding{
 		ID:               id,
@@ -328,6 +358,108 @@ func TestNew_SerializedSessionResumesApprovalRequestFromCheckpoint(t *testing.T)
 	}
 	if finalText != "approved" {
 		t.Fatalf("final text = %q, want %q", finalText, "approved")
+	}
+}
+
+func TestNew_WorkflowAgentSessionWithStableInnerAgentIdentityResumesAcrossReconstruction(t *testing.T) {
+	firstGeneration := newCheckpointIdentityWorkflowAgent(t, userTurnCountingAgent("specialist-agent", "specialist_agent", "SPECIALIST_REPLY"))
+	session, err := firstGeneration.CreateSession(t.Context())
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	first, err := firstGeneration.RunText(t.Context(), "Please help me.", agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if got, want := responseTexts(first), []string{"SPECIALIST_REPLY:turn:1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("first response texts = %v, want %v", got, want)
+	}
+
+	data, err := json.Marshal(session)
+	if err != nil {
+		t.Fatalf("Marshal session: %v", err)
+	}
+	var restored agent.Session
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("Unmarshal session: %v", err)
+	}
+
+	secondGeneration := newCheckpointIdentityWorkflowAgent(t, userTurnCountingAgent("specialist-agent", "specialist_agent", "SPECIALIST_REPLY"))
+	second, err := secondGeneration.RunText(t.Context(), "Anything else?", agent.WithSession(&restored)).Collect()
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if got, want := responseTexts(second), []string{"SPECIALIST_REPLY:turn:2"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("second response texts = %v, want %v", got, want)
+	}
+}
+
+func TestNew_WorkflowAgentSessionWithoutStableInnerAgentIdentityFailsAcrossReconstruction(t *testing.T) {
+	firstGeneration := newCheckpointIdentityWorkflowAgent(t, userTurnCountingAgent("", "specialist_agent", "SPECIALIST_REPLY"))
+	session, err := firstGeneration.CreateSession(t.Context())
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	first, err := firstGeneration.RunText(t.Context(), "Please help me.", agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if got := responseTexts(first); len(got) == 0 || got[0] != "SPECIALIST_REPLY:turn:1" {
+		t.Fatalf("first response texts = %v, want first turn reply", got)
+	}
+
+	data, err := json.Marshal(session)
+	if err != nil {
+		t.Fatalf("Marshal session: %v", err)
+	}
+	var restored agent.Session
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("Unmarshal session: %v", err)
+	}
+
+	secondGeneration := newCheckpointIdentityWorkflowAgent(t, userTurnCountingAgent("", "specialist_agent", "SPECIALIST_REPLY"))
+	_, err = secondGeneration.RunText(t.Context(), "Anything else?", agent.WithSession(&restored)).Collect()
+	if err == nil {
+		t.Fatal("second run succeeded; want checkpoint compatibility error")
+	}
+	if !strings.Contains(err.Error(), "checkpoint is not compatible with the workflow associated with this runner") {
+		t.Fatalf("second run error = %v, want checkpoint compatibility error", err)
+	}
+}
+
+func TestNew_WorkflowAgentSessionWithStableInnerIDButChangedNameFailsAcrossReconstruction(t *testing.T) {
+	firstGeneration := newCheckpointIdentityWorkflowAgent(t, userTurnCountingAgent("specialist-agent", "specialist_agent", "SPECIALIST_REPLY"))
+	session, err := firstGeneration.CreateSession(t.Context())
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	first, err := firstGeneration.RunText(t.Context(), "Please help me.", agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if got := responseTexts(first); len(got) == 0 || got[0] != "SPECIALIST_REPLY:turn:1" {
+		t.Fatalf("first response texts = %v, want first turn reply", got)
+	}
+
+	data, err := json.Marshal(session)
+	if err != nil {
+		t.Fatalf("Marshal session: %v", err)
+	}
+	var restored agent.Session
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("Unmarshal session: %v", err)
+	}
+
+	secondGeneration := newCheckpointIdentityWorkflowAgent(t, userTurnCountingAgent("specialist-agent", "specialist_agent_renamed", "SPECIALIST_REPLY"))
+	_, err = secondGeneration.RunText(t.Context(), "Anything else?", agent.WithSession(&restored)).Collect()
+	if err == nil {
+		t.Fatal("second run succeeded; want checkpoint compatibility error")
+	}
+	if !strings.Contains(err.Error(), "checkpoint is not compatible with the workflow associated with this runner") {
+		t.Fatalf("second run error = %v, want checkpoint compatibility error", err)
 	}
 }
 
@@ -1941,6 +2073,27 @@ func responseErrorMessages(response *agent.Response) []string {
 		}
 	}
 	return messages
+}
+
+func newCheckpointIdentityWorkflowAgent(t *testing.T, inner *agent.Agent) *agent.Agent {
+	t.Helper()
+	host := agentworkflow.New(inner, agentworkflow.Config{})
+	wf, err := workflow.NewBuilder(host).
+		WithOutputFrom(host).
+		Build()
+	if err != nil {
+		t.Fatalf("Build workflow: %v", err)
+	}
+	outer, err := agentworkflow.NewAgent(wf, agentworkflow.AgentConfig{
+		Config: agent.Config{
+			ID:   "workflow-agent",
+			Name: "workflow-agent",
+		},
+	})
+	if err != nil {
+		t.Fatalf("New outer workflow agent: %v", err)
+	}
+	return outer
 }
 
 // TestNew_MatchingResponse_DoesNotCauseExtraTurn mirrors .NET's
