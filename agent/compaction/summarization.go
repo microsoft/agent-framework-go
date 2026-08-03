@@ -75,7 +75,7 @@ func (strategy *SummarizationStrategy) Compact(ctx context.Context, index *Messa
 	if strategy.Summarizer == nil {
 		return false, nil
 	}
-	minimumPreservedGroups := cmp.Or(max(strategy.MinimumPreservedGroups, 0), defaultMinimumPreservedSummarizationGroups)
+	minimumPreservedGroups := cmp.Or(ensureNonNegative(strategy.MinimumPreservedGroups), defaultMinimumPreservedSummarizationGroups)
 	summarizationPrompt := cmp.Or(strategy.SummarizationPrompt, defaultSummarizationPrompt)
 	summaryUnavailableMessage := cmp.Or(strategy.SummaryUnavailableMessage, "[Summary unavailable]")
 

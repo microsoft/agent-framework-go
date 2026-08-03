@@ -44,7 +44,7 @@ func (strategy *ToolResultStrategy) Compact(_ context.Context, index *MessageInd
 		return false, nil
 	}
 
-	minimumPreservedGroups := cmp.Or(max(strategy.MinimumPreservedGroups, 0), defaultMinimumPreservedToolResultGroups)
+	minimumPreservedGroups := cmp.Or(ensureNonNegative(strategy.MinimumPreservedGroups), defaultMinimumPreservedToolResultGroups)
 	var nonSystemIncludedIndices []int
 	for i, group := range index.Groups {
 		if !group.IsExcluded && group.Kind != GroupKindSystem {
