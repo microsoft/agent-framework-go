@@ -84,28 +84,57 @@ func New(cfg Config) agent.Middleware {
 	})
 }
 
+// AutoApprovalRuleFunc decides whether a tool approval request should be
+// approved without prompting the caller.
+type AutoApprovalRuleFunc func(context.Context, *ToolAutoApprovalRuleContext) (bool, error)
+
+// ToolAutoApprovalRuleContext describes a tool call being evaluated by an
+// auto-approval rule.
+type ToolAutoApprovalRuleContext struct {
+	// FunctionCallContent is the tool call that requires approval.
+	FunctionCallContent *message.FunctionCallContent
+	// Agent is the agent evaluating the tool call when available. It is nil when
+	// the middleware is invoked outside an [agent.Agent] run.
+	Agent *agent.Agent
+	// Session is the session associated with the current run, if any.
+	Session *agent.Session
+	// RequestMessages are the messages passed into the current run before this
+	// middleware injects approval responses for replay.
+	RequestMessages []*message.Message
+	// RunOptions are the options associated with the current run.
+	RunOptions []agent.Option
+}
+
+// AllToolsAutoApprovalRule approves every tool call. Use it only in trusted
+// contexts because it bypasses the approval boundary for all registered tools.
+var AllToolsAutoApprovalRule AutoApprovalRuleFunc = func(context.Context, *ToolAutoApprovalRuleContext) (bool, error) {
+	return true, nil
+}
+
 // Config configures tool-approval middleware behavior.
 type Config struct {
 	// AutoApprovalRules is an optional list of heuristic functions evaluated after
 	// standing rules (derived from prior user approvals) but before surfacing the
-	// approval request to the caller. Each rule receives the tool call and returns
-	// (approved, error). Returning approved=true auto-approves the request. Rules
-	// are evaluated in order; the first returning approved=true causes the request
-	// to be auto-approved without prompting the caller. Returning an error fails
-	// the current run.
-	AutoApprovalRules []func(context.Context, *message.FunctionCallContent) (bool, error)
+	// approval request to the caller. Each rule receives a
+	// [ToolAutoApprovalRuleContext] describing the tool call and current run, and
+	// returns (approved, error). Returning approved=true auto-approves the
+	// request. Rules are evaluated in order; the first returning approved=true
+	// causes the request to be auto-approved without prompting the caller.
+	// Returning an error fails the current run.
+	AutoApprovalRules []AutoApprovalRuleFunc
 }
 
 func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		st := loadState(opts)
+		requestMessages := slices.Clone(messages)
 
 		// Step 1: Process inbound approval responses from the caller.
 		messages, st = prepareInbound(messages, st)
 
 		// Step 2: If we have queued requests from a previous turn, drain any
 		// that are now auto-approvable and surface the next one.
-		if err := drainAutoApprovable(ctx, cfg, &st, opts); err != nil {
+		if err := drainAutoApprovable(ctx, cfg, &st, requestMessages, opts); err != nil {
 			yield(nil, err)
 			return
 		}
@@ -163,7 +192,7 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 			var autoApproved []*message.ToolApprovalResponseContent
 			var needsApproval []*message.ToolApprovalRequestContent
 			for _, req := range approvalRequests {
-				approved, err := isAutoApprovable(ctx, cfg, st.Rules, opts, req)
+				approved, err := isAutoApprovable(ctx, cfg, st.Rules, requestMessages, opts, req)
 				if err != nil {
 					yield(nil, err)
 					return
@@ -288,13 +317,13 @@ func isInboundApprovalContent(c message.Content) bool {
 // drainAutoApprovable removes queued requests that now match a standing rule,
 // are for tools that do not require approval, or match an auto-approval rule,
 // adding auto-approve responses to collected.
-func drainAutoApprovable(ctx context.Context, cfg Config, st *state, opts []agent.Option) error {
+func drainAutoApprovable(ctx context.Context, cfg Config, st *state, requestMessages []*message.Message, opts []agent.Option) error {
 	if len(st.QueuedApprovalRequests) == 0 {
 		return nil
 	}
 	var remaining []*message.ToolApprovalRequestContent
 	for _, req := range st.QueuedApprovalRequests {
-		approved, err := isAutoApprovable(ctx, cfg, st.Rules, opts, req)
+		approved, err := isAutoApprovable(ctx, cfg, st.Rules, requestMessages, opts, req)
 		if err != nil {
 			return err
 		}
@@ -353,17 +382,17 @@ func isNotApprovalRequired(req *message.ToolApprovalRequestContent, opts []agent
 // Standing rules and tools not requiring approval are checked first (cheaply), before evaluating
 // configured auto-approval rules. This matches the .NET MatchesRule || MatchesAutoApprovalRule
 // evaluation pattern used in ToolApprovalAgent.
-func isAutoApprovable(ctx context.Context, cfg Config, rules []Rule, opts []agent.Option, req *message.ToolApprovalRequestContent) (bool, error) {
+func isAutoApprovable(ctx context.Context, cfg Config, rules []Rule, requestMessages []*message.Message, opts []agent.Option, req *message.ToolApprovalRequestContent) (bool, error) {
 	if matchesRule(rules, req) || isNotApprovalRequired(req, opts) {
 		return true, nil
 	}
-	return matchesAutoApprovalRules(ctx, cfg.AutoApprovalRules, req)
+	return matchesAutoApprovalRules(ctx, cfg.AutoApprovalRules, requestMessages, opts, req)
 }
 
 // matchesAutoApprovalRules returns true if any configured auto-approval rule
 // approves the request. Rules are evaluated in order; the first returning true
 // wins. Returns false when rules is empty or the request is not a function call.
-func matchesAutoApprovalRules(ctx context.Context, rules []func(context.Context, *message.FunctionCallContent) (bool, error), req *message.ToolApprovalRequestContent) (bool, error) {
+func matchesAutoApprovalRules(ctx context.Context, rules []AutoApprovalRuleFunc, requestMessages []*message.Message, opts []agent.Option, req *message.ToolApprovalRequestContent) (bool, error) {
 	if len(rules) == 0 {
 		return false, nil
 	}
@@ -371,11 +400,12 @@ func matchesAutoApprovalRules(ctx context.Context, rules []func(context.Context,
 	if !ok || fc == nil {
 		return false, nil
 	}
+	ruleCtx := newAutoApprovalRuleContext(ctx, fc, requestMessages, opts)
 	for _, rule := range rules {
 		if rule == nil {
 			continue
 		}
-		matches, err := rule(ctx, fc)
+		matches, err := rule(ctx, ruleCtx)
 		if err != nil {
 			return false, err
 		}
@@ -384,6 +414,18 @@ func matchesAutoApprovalRules(ctx context.Context, rules []func(context.Context,
 		}
 	}
 	return false, nil
+}
+
+func newAutoApprovalRuleContext(ctx context.Context, fc *message.FunctionCallContent, requestMessages []*message.Message, opts []agent.Option) *ToolAutoApprovalRuleContext {
+	ag, _ := agent.AgentFromContext(ctx)
+	session, _ := agent.GetOption(opts, agent.WithSession)
+	return &ToolAutoApprovalRuleContext{
+		FunctionCallContent: fc,
+		Agent:               ag,
+		Session:             session,
+		RequestMessages:     slices.Clone(requestMessages),
+		RunOptions:          slices.Clone(opts),
+	}
 }
 
 func serializeArguments(arguments string) (map[string]string, error) {
