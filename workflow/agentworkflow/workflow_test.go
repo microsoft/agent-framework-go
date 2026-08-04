@@ -331,6 +331,83 @@ func TestNew_SerializedSessionResumesApprovalRequestFromCheckpoint(t *testing.T)
 	}
 }
 
+func TestNew_SerializedSessionWithStableInnerAgentIDsResumesAcrossReconstruction(t *testing.T) {
+	ag1 := newCheckpointIdentityWorkflowAgent(t, true, "")
+	session, err := ag1.CreateSession(t.Context())
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	first, err := ag1.RunText(t.Context(), "Please help me.", agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if got := responseTextWithPrefix(first, checkpointIdentityReplyPrefix); got != checkpointIdentityReplyPrefix+":turn:1" {
+		t.Fatalf("first response = %q, want %q", got, checkpointIdentityReplyPrefix+":turn:1")
+	}
+
+	restored := marshalAndRestoreSession(t, session)
+	ag2 := newCheckpointIdentityWorkflowAgent(t, true, "")
+
+	second, err := ag2.RunText(t.Context(), "Anything else?", agent.WithSession(restored)).Collect()
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if got := responseTextWithPrefix(second, checkpointIdentityReplyPrefix); got != checkpointIdentityReplyPrefix+":turn:2" {
+		t.Fatalf("second response = %q, want %q", got, checkpointIdentityReplyPrefix+":turn:2")
+	}
+}
+
+func TestNew_SerializedSessionWithoutStableInnerAgentIDsFailsAcrossReconstruction(t *testing.T) {
+	ag1 := newCheckpointIdentityWorkflowAgent(t, false, "")
+	session, err := ag1.CreateSession(t.Context())
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	first, err := ag1.RunText(t.Context(), "Please help me.", agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if got := responseTextWithPrefix(first, checkpointIdentityReplyPrefix); got != checkpointIdentityReplyPrefix+":turn:1" {
+		t.Fatalf("first response = %q, want %q", got, checkpointIdentityReplyPrefix+":turn:1")
+	}
+
+	restored := marshalAndRestoreSession(t, session)
+	ag2 := newCheckpointIdentityWorkflowAgent(t, false, "")
+
+	if _, err := ag2.RunText(t.Context(), "Anything else?", agent.WithSession(restored)).Collect(); err == nil {
+		t.Fatal("second run error = nil, want checkpoint compatibility error")
+	} else if !strings.Contains(err.Error(), "the specified checkpoint is not compatible with the workflow associated with this runner") {
+		t.Fatalf("second run error = %q, want checkpoint compatibility error", err.Error())
+	}
+}
+
+func TestNew_SerializedSessionWithRenamedInnerAgentsFailsAcrossReconstruction(t *testing.T) {
+	ag1 := newCheckpointIdentityWorkflowAgent(t, true, "")
+	session, err := ag1.CreateSession(t.Context())
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	first, err := ag1.RunText(t.Context(), "Please help me.", agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if got := responseTextWithPrefix(first, checkpointIdentityReplyPrefix); got != checkpointIdentityReplyPrefix+":turn:1" {
+		t.Fatalf("first response = %q, want %q", got, checkpointIdentityReplyPrefix+":turn:1")
+	}
+
+	restored := marshalAndRestoreSession(t, session)
+	ag2 := newCheckpointIdentityWorkflowAgent(t, true, "-renamed")
+
+	if _, err := ag2.RunText(t.Context(), "Anything else?", agent.WithSession(restored)).Collect(); err == nil {
+		t.Fatal("second run error = nil, want checkpoint compatibility error")
+	} else if !strings.Contains(err.Error(), "the specified checkpoint is not compatible with the workflow associated with this runner") {
+		t.Fatalf("second run error = %q, want checkpoint compatibility error", err.Error())
+	}
+}
+
 func TestNew_StreamsUpdatesForUnhandledWorkflowEvents(t *testing.T) {
 	binding := echoExecutorBinding("echo")
 	wf, err := workflow.NewBuilder(binding).Build()
@@ -931,6 +1008,111 @@ func newCallRequestWorkflow(t *testing.T, id string) *workflow.Workflow {
 		t.Fatalf("Build: %v", err)
 	}
 	return wf
+}
+
+const checkpointIdentityReplyPrefix = "SPECIALIST_REPLY"
+
+func newCheckpointIdentityWorkflowAgent(t *testing.T, useStableInnerIDs bool, nameSuffix string) *agent.Agent {
+	t.Helper()
+
+	triageID := ""
+	specialistID := ""
+	if useStableInnerIDs {
+		triageID = "triage-agent"
+		specialistID = "specialist-agent"
+	}
+
+	triage := newCheckpointIdentityRelayAgent(triageID, "triage_agent"+nameSuffix)
+	specialist := newCheckpointIdentityTurnCounterAgent(specialistID, "specialist_agent"+nameSuffix)
+
+	wf, err := agentworkflow.NewSequentialWorkflowBuilder(triage, specialist).
+		WithOutputFrom(specialist).
+		Build()
+	if err != nil {
+		t.Fatalf("Build checkpoint identity workflow: %v", err)
+	}
+
+	ag, err := agentworkflow.NewAgent(wf, agentworkflow.AgentConfig{
+		Config: agent.Config{
+			ID:   "workflow-agent",
+			Name: "workflow-agent",
+		},
+		IncludeOutputsInResponse: true,
+	})
+	if err != nil {
+		t.Fatalf("New workflow agent: %v", err)
+	}
+	return ag
+}
+
+func newCheckpointIdentityRelayAgent(id string, name string) *agent.Agent {
+	run := func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
+				Role:       message.RoleAssistant,
+				AuthorName: name,
+				Contents:   []message.Content{&message.TextContent{Text: "handoff"}},
+			}, nil)
+		}
+	}
+	return agent.New(
+		agent.ProviderConfig{ProviderName: "checkpoint-relay", Run: run},
+		agent.Config{ID: id, Name: name, DisableFuncAutoCall: true},
+	)
+}
+
+func newCheckpointIdentityTurnCounterAgent(id string, name string) *agent.Agent {
+	run := func(_ context.Context, messages []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			userTurns := 0
+			for _, msg := range messages {
+				if msg == nil || msg.Role != message.RoleUser || msg.AuthorName != "" {
+					continue
+				}
+				if msg.Contents.Text() == "" {
+					continue
+				}
+				userTurns++
+			}
+			yield(&agent.ResponseUpdate{
+				Role:       message.RoleAssistant,
+				AuthorName: name,
+				Contents: []message.Content{
+					&message.TextContent{Text: fmt.Sprintf("%s:turn:%d", checkpointIdentityReplyPrefix, userTurns)},
+				},
+			}, nil)
+		}
+	}
+	return agent.New(
+		agent.ProviderConfig{ProviderName: "checkpoint-counter", Run: run},
+		agent.Config{ID: id, Name: name, DisableFuncAutoCall: true},
+	)
+}
+
+func marshalAndRestoreSession(t *testing.T, session *agent.Session) *agent.Session {
+	t.Helper()
+
+	data, err := json.Marshal(session)
+	if err != nil {
+		t.Fatalf("Marshal session: %v", err)
+	}
+	var restored agent.Session
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("Unmarshal session: %v", err)
+	}
+	return &restored
+}
+
+func responseTextWithPrefix(resp *agent.Response, prefix string) string {
+	if resp == nil {
+		return ""
+	}
+	for _, msg := range resp.Messages {
+		if text := msg.Contents.Text(); strings.HasPrefix(text, prefix) {
+			return text
+		}
+	}
+	return ""
 }
 
 // TestNew_SurfacesRequestInfoAndAcceptsResponse verifies the multi-turn
