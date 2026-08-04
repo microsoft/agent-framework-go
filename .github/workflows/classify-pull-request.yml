@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   classify:
-    uses: microsoft/go-infra/.github/workflows/classify-pull-request.yml@7b0f0f11af86d8ca880b567622154eb865e2bf6a
+    uses: microsoft/go-infra/.github/workflows/classify-pull-request.yml@f3a954dcc66106930dffaf9dbae84b8ba428d094
     permissions:
       contents: read
       issues: write
