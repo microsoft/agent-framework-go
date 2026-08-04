@@ -47,7 +47,7 @@ func (strategy *TruncationStrategy) Compact(_ context.Context, index *MessageInd
 		if removed >= maxRemovable {
 			break
 		}
-		if group.IsExcluded || group.Kind == GroupKindSystem {
+		if !group.isIncludedNonSystem() {
 			continue
 		}
 		group.IsExcluded = true
