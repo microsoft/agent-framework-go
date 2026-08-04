@@ -30,6 +30,10 @@ type mockA2ATransport struct {
 	sendStreamingMessageCalled bool
 	subscribeToTaskCalled      bool
 	getTaskCalled              bool
+	// rawStreamingResponse yields streamingResponseToReturn verbatim, without
+	// backfilling an empty ContextID from the request. It lets tests exercise
+	// bare streamed messages that carry no context ID.
+	rawStreamingResponse bool
 }
 
 func (m *mockA2ATransport) SendMessage(ctx context.Context, _ a2aclient.ServiceParams, params *a2a.SendMessageRequest) (a2a.SendMessageResult, error) {
@@ -50,6 +54,22 @@ func (m *mockA2ATransport) SendStreamingMessage(ctx context.Context, _ a2aclient
 	m.sendStreamingMessageCalled = true
 	m.capturedMessageSendParams = params
 	responseToYield := m.streamingResponseToReturn
+	if m.rawStreamingResponse {
+		if responseToYield == nil {
+			// Default to a non-nil event so a raw test that forgets to set
+			// streamingResponseToReturn doesn't yield a nil event (which would
+			// panic when production code calls TaskInfo()). Deliberately leave
+			// ContextID empty — the "raw" mode exists to exercise bare messages
+			// that carry no context ID.
+			responseToYield = &a2a.Message{
+				ID:   "default-stream-id",
+				Role: a2a.MessageRoleAgent,
+			}
+		}
+		return func(yield func(a2a.Event, error) bool) {
+			yield(responseToYield, nil)
+		}
+	}
 	if responseToYield == nil {
 		// Return default empty message with context ID from request
 		responseToYield = &a2a.Message{
@@ -365,6 +385,60 @@ func TestRunWithExistingSession(t *testing.T) {
 	}
 }
 
+// TestRunAllowBackgroundResponsesSetsReturnImmediately verifies that the
+// AllowBackgroundResponses option propagates to the non-streaming send config's
+// ReturnImmediately field, mirroring .NET A2AAgent.RunCoreAsync.
+func TestRunAllowBackgroundResponsesSetsReturnImmediately(t *testing.T) {
+	newSession := func(a *agent.Agent) *agent.Session {
+		t.Helper()
+		session, err := a.CreateSession(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return session
+	}
+
+	t.Run("enabled", func(t *testing.T) {
+		transport := &mockA2ATransport{}
+		a := newTestAgent(transport, agent.Config{})
+
+		_, err := a.RunText(t.Context(), "Test message",
+			agent.WithSession(newSession(a)),
+			agent.AllowBackgroundResponses(true),
+		).Collect()
+		if err != nil {
+			t.Fatalf("error = %v, want nil", err)
+		}
+		if transport.capturedMessageSendParams == nil {
+			t.Fatal("capturedMessageSendParams is nil")
+		}
+		if transport.capturedMessageSendParams.Config == nil {
+			t.Fatal("capturedMessageSendParams.Config is nil, want non-nil")
+		}
+		if !transport.capturedMessageSendParams.Config.ReturnImmediately {
+			t.Error("Config.ReturnImmediately = false, want true")
+		}
+	})
+
+	t.Run("disabled", func(t *testing.T) {
+		transport := &mockA2ATransport{}
+		a := newTestAgent(transport, agent.Config{})
+
+		_, err := a.RunText(t.Context(), "Test message",
+			agent.WithSession(newSession(a)),
+		).Collect()
+		if err != nil {
+			t.Fatalf("error = %v, want nil", err)
+		}
+		if transport.capturedMessageSendParams == nil {
+			t.Fatal("capturedMessageSendParams is nil")
+		}
+		if cfg := transport.capturedMessageSendParams.Config; cfg != nil {
+			t.Errorf("Config = %+v, want nil to preserve the default wire request", cfg)
+		}
+	})
+}
+
 // TestRunWithSessionHavingDifferentContextID tests error when context ID mismatch
 func TestRunWithSessionHavingDifferentContextID(t *testing.T) {
 	transport := &mockA2ATransport{
@@ -547,6 +621,69 @@ func TestRunStreamingWithSessionHavingDifferentContextID(t *testing.T) {
 	}
 }
 
+// TestRunStreamingWithEmptyContextIDKeepsSessionContext verifies that a bare
+// streamed message carrying an empty context ID neither errors the run nor
+// clobbers the context ID already stored in the session. This mirrors the .NET
+// behavior where ContextId is only assigned when currently unset
+// (ContextId ??= contextId).
+func TestRunStreamingWithEmptyContextIDKeepsSessionContext(t *testing.T) {
+	transport := &mockA2ATransport{
+		rawStreamingResponse: true,
+		streamingResponseToReturn: &a2a.Message{
+			ID:    "stream-1",
+			Role:  a2a.MessageRoleAgent,
+			Parts: a2a.ContentParts{a2a.NewTextPart("Response")},
+			// No ContextID: a bare streamed message chunk.
+		},
+	}
+	a := newTestAgent(transport, agent.Config{})
+
+	session, err := a.CreateSession(t.Context(), agent.WithServiceID("ctx-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, err := range a.RunText(t.Context(), "Test streaming", agent.WithSession(session), agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("error = %v, want nil", err)
+		}
+	}
+
+	if got := session.ServiceID(); got != "ctx-1" {
+		t.Errorf("session.ServiceID = %q, want %q", got, "ctx-1")
+	}
+}
+
+// TestRunStreamingWithEmptyInitialContextStoresResponseContext verifies that when
+// the session has no context ID yet, the first streamed event's context ID is stored.
+func TestRunStreamingWithEmptyInitialContextStoresResponseContext(t *testing.T) {
+	transport := &mockA2ATransport{
+		rawStreamingResponse: true,
+		streamingResponseToReturn: &a2a.Message{
+			ID:        "stream-1",
+			Role:      a2a.MessageRoleAgent,
+			Parts:     a2a.ContentParts{a2a.NewTextPart("Response")},
+			ContextID: "ctx-1",
+		},
+	}
+	a := newTestAgent(transport, agent.Config{})
+
+	session, err := a.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, err := range a.RunText(t.Context(), "Test streaming", agent.WithSession(session), agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("error = %v, want nil", err)
+		}
+	}
+
+	if got := session.ServiceID(); got != "ctx-1" {
+		t.Errorf("session.ServiceID = %q, want %q", got, "ctx-1")
+	}
+}
+
 // TestRunStreamingAllowsNonUserRoleMessages tests that streaming allows non-user messages
 func TestRunStreamingAllowsNonUserRoleMessages(t *testing.T) {
 	transport := &mockA2ATransport{
@@ -704,6 +841,72 @@ func TestRunWithMultipleTaskIDsInSessionAndMessage(t *testing.T) {
 	}
 	if string(capturedMsg.ReferenceTasks[1]) != "task-456" {
 		t.Errorf("message.ReferenceTasks[1] = %q, want %q", capturedMsg.ReferenceTasks[1], "task-456")
+	}
+}
+
+// TestRunDeduplicatesTaskIDsAcrossTurns tests that repeating the same task ID
+// across turns (as happens when every streamed event carries the same task ID)
+// stores it only once, so follow-up requests do not accumulate duplicates.
+func TestRunDeduplicatesTaskIDsAcrossTurns(t *testing.T) {
+	transport := &mockA2ATransport{
+		responseToReturn: &a2a.Task{
+			ID:        a2a.TaskID("task-123"),
+			ContextID: "ctx-123",
+			Status:    a2a.TaskStatus{State: a2a.TaskStateCompleted},
+		},
+	}
+	a := newTestAgent(transport, agent.Config{})
+
+	session, err := a.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 3; i++ {
+		if _, err := a.RunText(t.Context(), "Do something", agent.WithSession(session)).Collect(); err != nil {
+			t.Fatalf("run %d error = %v, want nil", i, err)
+		}
+	}
+
+	taskIDs := a2a1.TaskIDsFromSession(session)
+	if len(taskIDs) != 1 || taskIDs[0] != "task-123" {
+		t.Fatalf("TaskIDsFromSession = %v, want [task-123]", taskIDs)
+	}
+}
+
+// TestRunKeepsDistinctTaskIDs tests that dedup does not collapse distinct task IDs.
+func TestRunKeepsDistinctTaskIDs(t *testing.T) {
+	transport := &mockA2ATransport{
+		responseToReturn: &a2a.Task{
+			ID:        a2a.TaskID("task-123"),
+			ContextID: "ctx-123",
+			Status:    a2a.TaskStatus{State: a2a.TaskStateCompleted},
+		},
+	}
+	a := newTestAgent(transport, agent.Config{})
+
+	session, err := a.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := a.RunText(t.Context(), "Do something", agent.WithSession(session)).Collect(); err != nil {
+		t.Fatalf("first run error = %v, want nil", err)
+	}
+
+	transport.responseToReturn = &a2a.Task{
+		ID:        a2a.TaskID("task-456"),
+		ContextID: "ctx-123",
+		Status:    a2a.TaskStatus{State: a2a.TaskStateCompleted},
+	}
+	if _, err := a.RunText(t.Context(), "Do something else", agent.WithSession(session)).Collect(); err != nil {
+		t.Fatalf("second run error = %v, want nil", err)
+	}
+
+	taskIDs := a2a1.TaskIDsFromSession(session)
+	want := []string{"task-123", "task-456"}
+	if len(taskIDs) != len(want) || taskIDs[0] != want[0] || taskIDs[1] != want[1] {
+		t.Fatalf("TaskIDsFromSession = %v, want %v", taskIDs, want)
 	}
 }
 
@@ -1445,6 +1648,132 @@ func TestRunStreamingWithTaskStatusUpdateEvent_WithMessage(t *testing.T) {
 			t.Errorf("update.String() = %q, want empty (Working state should not populate contents)", got)
 		}
 	})
+}
+
+// TestRunWithAgentTaskResponse_SurfacesArtifactMetadata asserts that an
+// artifact's own Metadata is surfaced in the response update's
+// AdditionalProperties, matching .NET's A2A conversion which preserves
+// artifact-level metadata rather than dropping it.
+func TestRunWithAgentTaskResponse_SurfacesArtifactMetadata(t *testing.T) {
+	transport := &mockA2ATransport{
+		responseToReturn: &a2a.Task{
+			ID:        a2a.TaskID("task-meta"),
+			ContextID: "context-meta",
+			Status: a2a.TaskStatus{
+				State: a2a.TaskStateCompleted,
+			},
+			Metadata: map[string]any{"task-key": "task-value"},
+			Artifacts: []*a2a.Artifact{
+				{
+					ID:       a2a.ArtifactID("art-1"),
+					Metadata: map[string]any{"ext": "v"},
+					Parts:    a2a.ContentParts{a2a.NewTextPart("Artifact content")},
+				},
+			},
+		},
+	}
+	a := newTestAgent(transport, agent.Config{})
+
+	var updates []*agent.ResponseUpdate
+	for update, err := range a.RunText(t.Context(), "Start a task") {
+		if err != nil {
+			t.Fatalf("error = %v, want nil", err)
+		}
+		updates = append(updates, update)
+	}
+
+	if len(updates) != 1 {
+		t.Fatalf("len(updates) = %d, want 1", len(updates))
+	}
+	props := updates[0].AdditionalProperties
+	if got, ok := props["ext"]; !ok || got != "v" {
+		t.Errorf("AdditionalProperties[ext] = %v (ok=%v), want %q", got, ok, "v")
+	}
+	if got, ok := props["task-key"]; !ok || got != "task-value" {
+		t.Errorf("AdditionalProperties[task-key] = %v (ok=%v), want %q", got, ok, "task-value")
+	}
+}
+
+// TestRunWithAgentTaskResponse_NoMetadataYieldsNilProperties asserts that a task
+// with no task-level or artifact-level metadata produces an update with nil
+// AdditionalProperties rather than a non-nil empty map.
+func TestRunWithAgentTaskResponse_NoMetadataYieldsNilProperties(t *testing.T) {
+	transport := &mockA2ATransport{
+		responseToReturn: &a2a.Task{
+			ID:        a2a.TaskID("task-nometa"),
+			ContextID: "context-nometa",
+			Status: a2a.TaskStatus{
+				State: a2a.TaskStateCompleted,
+			},
+			Metadata: map[string]any{},
+			Artifacts: []*a2a.Artifact{
+				{
+					ID:       a2a.ArtifactID("art-1"),
+					Metadata: map[string]any{},
+					Parts:    a2a.ContentParts{a2a.NewTextPart("Artifact content")},
+				},
+			},
+		},
+	}
+	a := newTestAgent(transport, agent.Config{})
+
+	var updates []*agent.ResponseUpdate
+	for update, err := range a.RunText(t.Context(), "Start a task") {
+		if err != nil {
+			t.Fatalf("error = %v, want nil", err)
+		}
+		updates = append(updates, update)
+	}
+
+	if len(updates) != 1 {
+		t.Fatalf("len(updates) = %d, want 1", len(updates))
+	}
+	if props := updates[0].AdditionalProperties; props != nil {
+		t.Errorf("AdditionalProperties = %v, want nil", props)
+	}
+}
+
+// TestRunStreamingWithTaskArtifactUpdateEvent_SurfacesArtifactMetadata asserts
+// that the artifact's Metadata carried by a TaskArtifactUpdateEvent is folded
+// into the update's AdditionalProperties alongside the event-level metadata.
+func TestRunStreamingWithTaskArtifactUpdateEvent_SurfacesArtifactMetadata(t *testing.T) {
+	transport := &mockA2ATransport{
+		streamingResponseToReturn: &a2a.TaskArtifactUpdateEvent{
+			TaskID:    a2a.TaskID("task-artifact-meta"),
+			ContextID: "ctx-artifact-meta",
+			Metadata:  map[string]any{"event-key": "event-value"},
+			Artifact: &a2a.Artifact{
+				ID:       a2a.ArtifactID("artifact-meta"),
+				Metadata: map[string]any{"ext": "v"},
+				Parts:    a2a.ContentParts{a2a.NewTextPart("Artifact data")},
+			},
+		},
+	}
+	a := newTestAgent(transport, agent.Config{})
+
+	session, err := a.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var updates []*agent.ResponseUpdate
+	for update, err := range a.RunText(t.Context(), "Process artifact", agent.WithSession(session), agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("error = %v, want nil", err)
+		}
+		updates = append(updates, update)
+	}
+
+	if len(updates) != 1 {
+		t.Fatalf("len(updates) = %d, want 1", len(updates))
+	}
+	props := updates[0].AdditionalProperties
+	if got, ok := props["ext"]; !ok || got != "v" {
+		t.Errorf("AdditionalProperties[ext] = %v (ok=%v), want %q", got, ok, "v")
+	}
+	if got, ok := props["event-key"]; !ok || got != "event-value" {
+		t.Errorf("AdditionalProperties[event-key] = %v (ok=%v), want %q", got, ok, "event-value")
+	}
 }
 
 // TestRunStreamingWithTaskArtifactUpdateEvent tests handling of TaskArtifactUpdateEvent

@@ -95,13 +95,7 @@ func (b *ConcurrentWorkflowBuilder) Build() (*workflow.Workflow, error) {
 	}
 
 	cfg := Config{}
-	bindings := make([]workflow.ExecutorBinding, len(b.agents))
-	bindingsByAgent := make(map[*agent.Agent]workflow.ExecutorBinding, len(b.agents))
-	for index, currentAgent := range b.agents {
-		binding := New(currentAgent, cfg)
-		bindings[index] = binding
-		bindingsByAgent[currentAgent] = binding
-	}
+	bindings, bindingsByAgent := newAgentBindings(b.agents, cfg)
 
 	start := newMessageForwardingBinding("Start")
 	accumulators := make([]workflow.ExecutorBinding, len(bindings))
@@ -156,12 +150,16 @@ func newAggregateTurnMessagesBinding(id string) workflow.ExecutorBinding {
 				StateKey:                 aggregateTurnMessagesStateKey,
 				DisableAutoSendTurnToken: true,
 				TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, messages []*message.Message) error {
-					return ctx.SendMessage("", messages)
+					return sendAggregateTurnMessages(ctx, messages)
 				},
 			})
 			return &executor, nil
 		},
 	}
+}
+
+func sendAggregateTurnMessages(ctx *workflow.Context, messages []*message.Message) error {
+	return ctx.SendMessage("", messages)
 }
 
 func newConcurrentEndBinding(expectedInputs int, aggregator MessageAggregator) workflow.ExecutorBinding {

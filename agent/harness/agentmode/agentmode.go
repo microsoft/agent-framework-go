@@ -12,7 +12,10 @@ package agentmode
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"strings"
+	"sync"
+	"weak"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/message"
@@ -25,8 +28,6 @@ const stateKey = "agentModeState"
 const defaultInstructions = `## Agent Mode
 
 - You can operate in different modes. Depending on the mode you are in, you will be required to follow different processes.
-- You must check the current mode after any user input, since the user may have changed the mode themselves,
-  e.g. the user may have switched to 'plan' mode after a previous research task finished in 'execute' mode, meaning they want to review a plan first before execution.
 
 Use the mode_get tool to check your current operating mode.
 Use the mode_set tool to switch between modes as your work progresses. Only use mode_set if the user explicitly instructs/allows you to change modes.
@@ -85,9 +86,12 @@ Process to follow when in plan mode:
 	},
 	{
 		Name: "execute",
-		Description: `Use this mode when carrying out approved plans. Work autonomously using your best judgment — do not ask the user questions or wait for feedback.
+		Description: `Determine the type of ask:
+1. Simple question that doesn't require any further work to answer.
+2. Any other work, including complex user request that requires a multi-step process to satisfy.
 
-Process to follow when in execute mode:
+If 1. just answer the question directly.
+If 2. Work autonomously using your best judgment — do not ask the user questions or wait for feedback and follow the following process:
 1. If you don't have a plan or tasks yet, analyze the user request and create tasks and a plan. (**Skip this step if you came from plan mode**)
 2. Work autonomously — use your best judgment to make decisions and keep progressing without asking the user questions. The goal is to have a complete, useful result ready when the user returns.
 3. If you encounter ambiguity or an unexpected situation during execution, choose the most reasonable option, note your choice, and keep going.
@@ -161,12 +165,53 @@ type Provider struct {
 	defaultMode  string
 	instructions string
 	validModes   map[string]struct{}
+
+	sessionLocks    sync.Map // map[weak.Pointer[agent.Session]]*sync.Mutex
+	nullSessionLock sync.Mutex
 }
 
+// getSessionLock returns a per-session mutex that guards the session state
+// against concurrent tool invocations, which toolautocall runs on separate
+// goroutines when AllowConcurrentInvocations is enabled.
+//
+// The registry is keyed by session object identity via a weak pointer, not by
+// Session.ServiceID(): a service ID may be empty (causing unrelated sessions to
+// collide), shared across distinct sessions, or mutated during a session's
+// lifetime — any of which would break the guarantee that a given session always
+// maps to the same lock. When no session is available, a shared fallback lock is
+// returned so state access is still serialized.
+//
+// Weak keys do not keep sessions alive and do not remove map entries on their
+// own, so a runtime cleanup deletes the entry once the session is collected,
+// keeping the registry from growing unbounded.
+func (p *Provider) getSessionLock(opts []agent.Option) *sync.Mutex {
+	session, ok := agent.GetOption(opts, agent.WithSession)
+	if !ok || session == nil {
+		return &p.nullSessionLock
+	}
+	key := weak.Make(session)
+	if existing, ok := p.sessionLocks.Load(key); ok {
+		return existing.(*sync.Mutex)
+	}
+	actual, loaded := p.sessionLocks.LoadOrStore(key, &sync.Mutex{})
+	if !loaded {
+		// First registration for this session: arrange to drop the entry when
+		// the session is garbage collected. The cleanup must not capture the
+		// session itself (only the weak key), or it would keep it alive.
+		runtime.AddCleanup(session, func(k weak.Pointer[agent.Session]) {
+			p.sessionLocks.Delete(k)
+		}, key)
+	}
+	return actual.(*sync.Mutex)
+}
+
+// Invoking implements agent.ContextProvider by delegating to the wrapped provider, applying this provider's context/instructions to the invocation.
 func (p *Provider) Invoking(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
 	return p.provider.Invoking(ctx, invoking)
 }
 
+// Invoked implements agent.ContextProvider by delegating to the wrapped provider.
+// The wrapped provider is configured without a Store, so this is a no-op on success.
 func (p *Provider) Invoked(ctx context.Context, invoked agent.InvokedContext) error {
 	return p.provider.Invoked(ctx, invoked)
 }
@@ -193,21 +238,14 @@ func (p *Provider) saveState(opts []agent.Option, s *state) {
 
 func (p *Provider) provide(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
 	opts := invoking.Options
+
+	var outMessages []*message.Message
+
+	mu := p.getSessionLock(opts)
+	mu.Lock()
 	st := p.loadState(opts)
 	// Persist the initial state so SetMode can read it.
 	p.saveState(opts, st)
-
-	tools := p.createTools(opts, st)
-	var outOpts []agent.Option
-	for _, t := range tools {
-		outOpts = append(outOpts, agent.WithTool(t))
-	}
-
-	// Add instructions with mode info.
-	instructionText := p.buildInstructions(st.CurrentMode)
-	outOpts = append(outOpts, agent.WithInstructions(instructionText))
-
-	var outMessages []*message.Message
 
 	// If the mode was changed externally (e.g. via SetMode), inject a notification
 	// so the agent clearly sees the change in conversation context.
@@ -219,6 +257,18 @@ func (p *Provider) provide(ctx context.Context, invoking agent.InvokingContext) 
 		st.PreviousMode = ""
 		p.saveState(opts, st)
 	}
+	currentMode := st.CurrentMode
+	mu.Unlock()
+
+	tools := p.createTools(opts)
+	var outOpts []agent.Option
+	for _, t := range tools {
+		outOpts = append(outOpts, agent.WithTool(t))
+	}
+
+	// Add instructions with mode info.
+	instructionText := p.buildInstructions(currentMode)
+	outOpts = append(outOpts, agent.WithInstructions(instructionText))
 
 	return outMessages, outOpts, nil
 }
@@ -235,7 +285,7 @@ func (p *Provider) buildInstructions(currentMode string) string {
 	return result
 }
 
-func (p *Provider) createTools(opts []agent.Option, st *state) []tool.FuncTool {
+func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
 	modeNames := make([]string, len(p.modes))
 	for i, m := range p.modes {
 		modeNames[i] = m.Name
@@ -251,6 +301,10 @@ func (p *Provider) createTools(opts []agent.Option, st *state) []tool.FuncTool {
 			if _, ok := p.validModes[mode]; !ok {
 				return "", fmt.Errorf("invalid mode: %q. Supported modes: \"%s\"", mode, modeNamesDisplay)
 			}
+			mu := p.getSessionLock(opts)
+			mu.Lock()
+			defer mu.Unlock()
+			st := p.loadState(opts)
 			st.CurrentMode = mode
 			p.saveState(opts, st)
 			return fmt.Sprintf("Mode changed to %q.", mode), nil
@@ -263,6 +317,10 @@ func (p *Provider) createTools(opts []agent.Option, st *state) []tool.FuncTool {
 			Description: "Get the agent's current operating mode.",
 		},
 		func(ctx context.Context, _ struct{}) (string, error) {
+			mu := p.getSessionLock(opts)
+			mu.Lock()
+			defer mu.Unlock()
+			st := p.loadState(opts)
 			return st.CurrentMode, nil
 		},
 	)
@@ -273,6 +331,9 @@ func (p *Provider) createTools(opts []agent.Option, st *state) []tool.FuncTool {
 // GetMode returns the current operating mode from the session.
 // If no state has been persisted yet, it returns the configured default mode.
 func (p *Provider) GetMode(opts ...agent.Option) string {
+	mu := p.getSessionLock(opts)
+	mu.Lock()
+	defer mu.Unlock()
 	session, ok := agent.GetOption(opts, agent.WithSession)
 	if !ok {
 		return p.defaultMode
@@ -291,6 +352,9 @@ func (p *Provider) SetMode(mode string, opts ...agent.Option) error {
 	if _, ok := p.validModes[mode]; !ok {
 		return fmt.Errorf("agentmode: invalid mode %q", mode)
 	}
+	mu := p.getSessionLock(opts)
+	mu.Lock()
+	defer mu.Unlock()
 	session, ok := agent.GetOption(opts, agent.WithSession)
 	if !ok {
 		return fmt.Errorf("agentmode: no session available")

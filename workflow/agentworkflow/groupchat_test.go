@@ -302,6 +302,28 @@ func TestGroupChatWorkflowBuilder_UpdateHistoryFiltersBroadcastPayload(t *testin
 	}
 }
 
+func TestGroupChatWorkflowBuilder_NonParticipantSelectionCompletesChat(t *testing.T) {
+	agentA := newGroupChatLabelAgent("a", "A", "from-a")
+	outsider := newGroupChatLabelAgent("outsider", "Outsider", "from-outsider")
+
+	wf, err := newGroupChatWorkflow("", func([]*agent.Agent) *GroupChatManager {
+		return &GroupChatManager{
+			SelectNextAgent: func(context.Context, []*message.Message) (*agent.Agent, error) {
+				return outsider, nil
+			},
+		}
+	}, agentA)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	events := runGroupChatWorkflowTurn(t, wf, "hello")
+	assertNoGroupChatErrors(t, events)
+	if got := collectGroupChatOutputTexts(events); !slices.Equal(got, []string{"hello"}) {
+		t.Fatalf("output transcript = %v, want [hello]", got)
+	}
+}
+
 func TestGroupChatWorkflowBuilder_ToolApprovalCheckpointResumePreservesFunctionCallContent(t *testing.T) {
 	approvalAgent := newGroupChatApprovalAgent("approval-agent")
 	wf, err := newGroupChatWorkflow("", func(agents []*agent.Agent) *GroupChatManager {

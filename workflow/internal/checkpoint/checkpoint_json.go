@@ -16,8 +16,16 @@ type scopeKeyHasherImpl struct{}
 
 var scopeKeyHasherInstance hashmap.Hasher[workflow.ScopeKey] = scopeKeyHasherImpl{}
 
+// scopeKeyHashSeed is a fixed process-wide seed. maphash.Hash's zero value
+// picks a new random seed on first use, so without SetSeed the same key would
+// hash differently on every call — breaking Load/Delete and shared-scope key
+// collapse on a map restored from JSON. state.go seeds its ScopeKey hasher the
+// same way.
+var scopeKeyHashSeed = maphash.MakeSeed()
+
 func (scopeKeyHasherImpl) Hash(s workflow.ScopeKey) uint64 {
 	var h maphash.Hash
+	h.SetSeed(scopeKeyHashSeed)
 	s.Hash(&h)
 	return h.Sum64()
 }

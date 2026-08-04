@@ -483,28 +483,6 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 			}
 		}()
 
-		drainEvents := func() bool {
-			var hadRequestHaltEvent bool
-			for {
-				evt, ok := l.eventQueue.Dequeue()
-				if !ok {
-					break
-				}
-				if errors.Is(linkedCtx.Err(), context.Canceled) {
-					return false
-				}
-				if _, ok := evt.(workflow.RequestHaltEvent); ok {
-					hadRequestHaltEvent = true
-					continue
-				}
-				if !yield(evt, nil) {
-					return false
-				}
-			}
-
-			return !hadRequestHaltEvent && linkedCtx.Err() == nil
-		}
-
 		l.setStatus(RunStatusRunning)
 
 		var runActivity *observability.Activity
@@ -522,7 +500,7 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 			yield(nil, err)
 			return
 		}
-		if !drainEvents() {
+		if !l.drainAndFilterEvents(linkedCtx, yield) {
 			return
 		}
 
@@ -542,7 +520,7 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 					return
 				}
 
-				if !drainEvents() {
+				if !l.drainAndFilterEvents(linkedCtx, yield) {
 					return
 				}
 			}
@@ -577,6 +555,28 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 			}
 		}
 	}
+}
+
+func (l *lockstepRunEventStream) drainAndFilterEvents(ctx context.Context, yield func(workflow.Event, error) bool) bool {
+	var hadRequestHaltEvent bool
+	for {
+		evt, ok := l.eventQueue.Dequeue()
+		if !ok {
+			break
+		}
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return false
+		}
+		if _, ok := evt.(workflow.RequestHaltEvent); ok {
+			hadRequestHaltEvent = true
+			continue
+		}
+		if !yield(evt, nil) {
+			return false
+		}
+	}
+
+	return !hadRequestHaltEvent && ctx.Err() == nil
 }
 
 func (l *lockstepRunEventStream) shouldBreak(status RunStatus, blockOnPendingRequest bool, ctx context.Context) bool {

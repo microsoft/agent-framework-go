@@ -16,14 +16,27 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/internal/otelx"
 	"github.com/microsoft/agent-framework-go/internal/slogx"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
 	defaultMaximumConsecutiveErrorsPerRequest = 3
 	defaultMaximumIterationsPerRequest        = 40
+	opExecuteTool                             = "execute_tool"
+
+	attrKeyOperationName = "gen_ai.operation.name"
+	attrKeyToolName      = "gen_ai.tool.name"
+	attrKeyToolCallID    = "gen_ai.tool.call.id"
+	attrKeyToolType      = "gen_ai.tool.type"
+	attrKeyToolDesc      = "gen_ai.tool.description"
+	attrKeyErrorType     = "error.type"
 )
 
 // Config configures the automatic tool invocation middleware.
@@ -313,13 +326,43 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 				return
 			}
 
-			// Build an assistant message containing the function calls that were processed.
-			// This is needed because chat APIs (e.g. OpenAI) require tool result messages
-			// to be preceded by an assistant message containing the corresponding tool_calls.
+			// Build an assistant message containing the text, reasoning, and function
+			// calls that were produced this iteration. This is needed because chat APIs
+			// (e.g. OpenAI) require tool result messages to be preceded by an assistant
+			// message containing the corresponding tool_calls. Preserving the assistant's
+			// text and reasoning content keeps the turn intact for the next provider call,
+			// matching .NET's FunctionInvokingChatClient, which does
+			// augmentedHistory.AddMessages(response) rather than reconstructing from the
+			// function calls alone.
 			processedFunctionCalls := functionCallContents[:len(newMsg.Contents)]
-			assistantContents := make([]message.Content, len(processedFunctionCalls))
-			for i, fcc := range processedFunctionCalls {
-				assistantContents[i] = fcc
+
+			// Coalesce the buffered updates for this iteration so streamed text/reasoning
+			// fragments merge, then carry the text and reasoning over alongside the
+			// processed (non-informational) function calls, preserving the exact
+			// assistant content order the model emitted (e.g. reasoning → text →
+			// tool_calls, or text following a tool_call).
+			processedFCCSet := make(map[*message.FunctionCallContent]struct{}, len(processedFunctionCalls))
+			for _, fcc := range processedFunctionCalls {
+				processedFCCSet[fcc] = struct{}{}
+			}
+			var iterationContents []message.Content
+			for _, u := range updates {
+				iterationContents = append(iterationContents, u.Contents...)
+			}
+			iterationContents = message.CoalesceContents(iterationContents)
+			assistantContents := make([]message.Content, 0, len(iterationContents))
+			for _, c := range iterationContents {
+				switch v := c.(type) {
+				case *message.TextContent, *message.TextReasoningContent:
+					assistantContents = append(assistantContents, c)
+				case *message.FunctionCallContent:
+					// Only carry over the non-informational function calls that were
+					// actually processed this iteration, keeping them in their original
+					// position relative to the surrounding text/reasoning.
+					if _, ok := processedFCCSet[v]; ok {
+						assistantContents = append(assistantContents, c)
+					}
+				}
 			}
 
 			// Use the augmented history as the new set of messages to send.
@@ -721,6 +764,10 @@ func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]too
 	}
 	f.logger.Debug(ctx, "calling function", "funcName", funcCall.Name, slogx.SensitiveData("arguments", funcCall.Arguments))
 	start := time.Now()
+	ctx, span := startToolSpan(ctx, funcCall, declaration)
+	if span != nil {
+		defer span.End()
+	}
 	var result any
 	var err error
 	func() {
@@ -736,6 +783,11 @@ func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]too
 		result, err = tl.Call(ctx, funcCall.Arguments)
 	}()
 	if err != nil {
+		if span != nil {
+			span.SetAttributes(attribute.String(attrKeyErrorType, otelx.ErrorTypeName(err)))
+			span.RecordError(err, trace.WithTimestamp(time.Now()))
+			span.SetStatus(codes.Error, err.Error())
+		}
 		if errors.Is(err, context.Canceled) {
 			f.logger.Debug(ctx, "call canceled", "funcName", funcCall.Name)
 		} else {
@@ -749,6 +801,32 @@ func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]too
 	}
 
 	return functionInvocationResult{status: functionInvocationStatusRanToCompletion, call: funcCall, result: result}
+}
+
+func startToolSpan(ctx context.Context, funcCall *message.FunctionCallContent, tl tool.Tool) (context.Context, trace.Span) {
+	tracer, ok := otelx.TracerFromContext(ctx)
+	if !ok || funcCall == nil {
+		return ctx, nil
+	}
+	name := opExecuteTool
+	if funcCall.Name != "" {
+		name += " " + funcCall.Name
+	}
+	attrs := []attribute.KeyValue{
+		attribute.String(attrKeyOperationName, opExecuteTool),
+		attribute.String(attrKeyToolName, funcCall.Name),
+		attribute.String(attrKeyToolCallID, cmp.Or(funcCall.CallID, "unknown")),
+		attribute.String(attrKeyToolType, "function"),
+	}
+	if tl != nil {
+		if desc := tl.Description(); desc != "" {
+			attrs = append(attrs, attribute.String(attrKeyToolDesc, desc))
+		}
+	}
+	// TODO: add gen_ai.tool.call.arguments and gen_ai.tool.call.result when an
+	// opt-in EnableSensitiveData flag is available on Config (parity with Python's
+	// get_function_span_attributes and .NET's OpenTelemetryAgent.EnableSensitiveData).
+	return tracer.Start(ctx, name, trace.WithAttributes(attrs...))
 }
 
 func (f *autocall) createResponseMessage(results []functionInvocationResult) *message.Message {

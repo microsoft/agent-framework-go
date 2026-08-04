@@ -1,9 +1,9 @@
 ---
 description: Nightly agent that ports new or changed .NET Agent Framework public API and feature parity into the Go SDK and opens a PR
 tracker-id: dotnet-port-api-nightly
+model: "gpt-5.4"
 engine:
    id: copilot
-   model: "gpt-5.4"
 max-ai-credits: 2000
 network:
    allowed:

@@ -211,6 +211,7 @@ func (r *contextProviderMiddleware) Run(next RunFunc, ctx context.Context, messa
 		requestMessages := slices.Clone(messages)
 		var resp Response
 		var invokeErr error
+		var stopped bool
 		for update, err := range next(ctx, messages, options...) {
 			if update != nil {
 				resp.Update(update)
@@ -219,13 +220,16 @@ func (r *contextProviderMiddleware) Run(next RunFunc, ctx context.Context, messa
 				invokeErr = err
 			}
 			if !yield(update, err) {
+				stopped = true
 				break
 			}
 		}
 		resp.Coalesce()
 
 		if err := r.provider.Invoked(ctx, InvokedContext{RequestMessages: requestMessages, ResponseMessages: resp.Messages, Options: options, Err: invokeErr}); err != nil {
-			yield(nil, err)
+			if !stopped {
+				yield(nil, err)
+			}
 			return
 		}
 	}

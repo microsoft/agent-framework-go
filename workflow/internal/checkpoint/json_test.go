@@ -4,6 +4,7 @@ package checkpoint_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -113,5 +114,30 @@ func TestRunnerStateData_JsonRoundtrip(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.ResponsePortOwners, state.ResponsePortOwners) {
 		t.Fatalf("ResponsePortOwners = %+v, want %+v", got.ResponsePortOwners, state.ResponsePortOwners)
+	}
+}
+
+// A Checkpoint's StateData map is rebuilt from JSON on Unmarshal. Its scope-key
+// hasher must use a fixed seed: a zero-value maphash.Hash picks a new random
+// seed on every call, so Load on a restored map would miss the key it just
+// stored (and shared-scope keys would not collapse).
+func TestCheckpoint_JsonRoundtrip_StateDataRemainsLoadable(t *testing.T) {
+	key := workflow.ScopeKey{ID: workflow.ScopeID{ExecutorID: "exec1"}, Key: "k"}
+	keyJSON, err := json.Marshal(key)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+	valJSON, err := json.Marshal(workflow.AnyPortableValue("v"))
+	if err != nil {
+		t.Fatalf("marshal value: %v", err)
+	}
+	data := []byte(fmt.Sprintf(`{"StateData":[{"Key":%s,"Value":%s}]}`, keyJSON, valJSON))
+
+	var cp checkpoint.Checkpoint
+	if err := json.Unmarshal(data, &cp); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if _, ok := cp.StateData.Load(key); !ok {
+		t.Fatal("restored StateData.Load(key) = false: the scope-key hasher is not deterministic across calls")
 	}
 }

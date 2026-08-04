@@ -30,7 +30,7 @@ func (m *messageMerger) AddUpdate(update *agent.ResponseUpdate) {
 		return
 	}
 	if update.ResponseID == "" {
-		m.danglingState.addDangling(update)
+		m.danglingState.addUpdate(update)
 		return
 	}
 	state, ok := m.states[update.ResponseID]
@@ -51,7 +51,6 @@ func (m *messageMerger) ComputeMerged(primaryResponseID string, primaryAgentID s
 	for _, responseID := range m.stateOrder {
 		state := m.states[responseID]
 		responses := state.computeResponses()
-		slices.SortFunc(responses, compareResponsesByCreatedAt)
 		merged := mergeResponseList(responses)
 		if merged == nil {
 			continue
@@ -67,6 +66,7 @@ func (m *messageMerger) ComputeMerged(primaryResponseID string, primaryAgentID s
 	}
 
 	messages = append(messages, m.danglingState.computeFlattened()...)
+	messages = foldIdentifierlessMessages(messages)
 	messages = cleanupMergedMessages(messages)
 
 	response := &agent.Response{
@@ -88,38 +88,81 @@ func (m *messageMerger) ComputeMerged(primaryResponseID string, primaryAgentID s
 	return response
 }
 
+type collectedResponseMergeState struct {
+	allUpdates             *messageMerger
+	terminalWorkflowOutput *messageMerger
+	hasTerminalOutput      bool
+}
+
+func newCollectedResponseMergeState() *collectedResponseMergeState {
+	return &collectedResponseMergeState{
+		allUpdates:             newMessageMerger(),
+		terminalWorkflowOutput: newMessageMerger(),
+	}
+}
+
+func (s *collectedResponseMergeState) AddUpdate(update *agent.ResponseUpdate, terminalWorkflowOutput bool) {
+	if s == nil {
+		return
+	}
+	s.allUpdates.AddUpdate(update)
+	if terminalWorkflowOutput {
+		s.terminalWorkflowOutput.AddUpdate(update)
+		s.hasTerminalOutput = true
+	}
+}
+
+func (s *collectedResponseMergeState) ComputeMerged(primaryResponseID string, primaryAgentID string, primaryAgentName string) *agent.Response {
+	if s != nil && s.hasTerminalOutput {
+		return s.terminalWorkflowOutput.ComputeMerged(primaryResponseID, primaryAgentID, primaryAgentName)
+	}
+	return s.allUpdates.ComputeMerged(primaryResponseID, primaryAgentID, primaryAgentName)
+}
+
 type responseMergeState struct {
-	responseID         string
-	updatesByMessageID map[string][]*agent.ResponseUpdate
-	messageOrder       []string
-	danglingUpdates    []*agent.ResponseUpdate
+	responseID        string
+	messageStatesByID map[string]*messageMergeState
+	messageStateOrder []*messageMergeState
+	lastObservedState *messageMergeState
+}
+
+type messageMergeState struct {
+	messageID      string
+	identifierless bool
+	updates        []*agent.ResponseUpdate
 }
 
 func (s *responseMergeState) addUpdate(update *agent.ResponseUpdate) {
-	if update.MessageID == "" {
-		s.addDangling(update)
-		return
-	}
-	if s.updatesByMessageID == nil {
-		s.updatesByMessageID = make(map[string][]*agent.ResponseUpdate)
-	}
-	if _, ok := s.updatesByMessageID[update.MessageID]; !ok {
-		s.messageOrder = append(s.messageOrder, update.MessageID)
-	}
-	s.updatesByMessageID[update.MessageID] = append(s.updatesByMessageID[update.MessageID], update)
+	state := s.getOrCreateMessageState(update.MessageID)
+	state.updates = append(state.updates, update)
+	s.lastObservedState = state
 }
 
-func (s *responseMergeState) addDangling(update *agent.ResponseUpdate) {
-	s.danglingUpdates = append(s.danglingUpdates, update)
+func (s *responseMergeState) getOrCreateMessageState(messageID string) *messageMergeState {
+	if messageID == "" {
+		if s.lastObservedState != nil && s.lastObservedState.identifierless {
+			return s.lastObservedState
+		}
+		state := &messageMergeState{identifierless: true}
+		s.messageStateOrder = append(s.messageStateOrder, state)
+		return state
+	}
+	if s.messageStatesByID == nil {
+		s.messageStatesByID = make(map[string]*messageMergeState)
+	}
+	if existing, ok := s.messageStatesByID[messageID]; ok {
+		return existing
+	}
+	state := &messageMergeState{messageID: messageID}
+	s.messageStatesByID[messageID] = state
+	s.messageStateOrder = append(s.messageStateOrder, state)
+	return state
 }
 
 func (s *responseMergeState) computeResponses() []*agent.Response {
-	responses := make([]*agent.Response, 0, len(s.messageOrder)+1)
-	for _, messageID := range s.messageOrder {
-		responses = append(responses, responseFromUpdates(s.updatesByMessageID[messageID]))
-	}
-	if len(s.danglingUpdates) > 0 {
-		responses = append(responses, responseFromUpdates(s.danglingUpdates))
+	responses := make([]*agent.Response, 0, len(s.messageStateOrder))
+	for _, state := range s.messageStateOrder {
+		responses = append(responses, responseFromUpdates(state.updates))
 	}
 	return responses
 }
@@ -141,21 +184,6 @@ func responseFromUpdates(updates []*agent.ResponseUpdate) *agent.Response {
 	return response
 }
 
-func compareResponsesByCreatedAt(left, right *agent.Response) int {
-	leftZero := left == nil || left.CreatedAt.IsZero()
-	rightZero := right == nil || right.CreatedAt.IsZero()
-	switch {
-	case leftZero && rightZero:
-		return 0
-	case leftZero:
-		return 1
-	case rightZero:
-		return -1
-	default:
-		return left.CreatedAt.Compare(right.CreatedAt)
-	}
-}
-
 func mergeResponseList(responses []*agent.Response) *agent.Response {
 	var current *agent.Response
 	for _, incoming := range responses {
@@ -171,7 +199,7 @@ func mergeResponseList(responses []*agent.Response) *agent.Response {
 		}
 		current.AgentID = cmp.Or(incoming.AgentID, current.AgentID)
 		current.AdditionalProperties = mergeProperties(current.AdditionalProperties, incoming.AdditionalProperties)
-		if !incoming.CreatedAt.IsZero() {
+		if !incoming.CreatedAt.IsZero() && (current.CreatedAt.IsZero() || incoming.CreatedAt.After(current.CreatedAt)) {
 			current.CreatedAt = incoming.CreatedAt
 		}
 		current.FinishReason = cmp.Or(incoming.FinishReason, current.FinishReason)
@@ -188,12 +216,55 @@ func messagesWithCreatedAt(response *agent.Response) []*message.Message {
 	messages := make([]*message.Message, 0, len(response.Messages))
 	for _, msg := range response.Messages {
 		clone := msg.Clone()
-		if clone != nil && !response.CreatedAt.IsZero() {
+		if clone != nil && clone.CreatedAt.IsZero() && !response.CreatedAt.IsZero() {
 			clone.CreatedAt = response.CreatedAt
 		}
 		messages = append(messages, clone)
 	}
 	return messages
+}
+
+func foldIdentifierlessMessages(messages []*message.Message) []*message.Message {
+	for i := len(messages) - 1; i > 0; i-- {
+		current := messages[i-1]
+		next := messages[i]
+		if current == nil || next == nil {
+			continue
+		}
+		if !isIdentifierlessAssistantReasoningMessage(current) || next.ID == "" || current.Role != next.Role {
+			continue
+		}
+
+		messages[i] = mergeIdentifierlessMessageIntoNext(current, next)
+		messages = append(messages[:i-1], messages[i:]...)
+	}
+	return messages
+}
+
+func mergeIdentifierlessMessageIntoNext(current, next *message.Message) *message.Message {
+	merged := next.Clone()
+	merged.AuthorName = cmp.Or(next.AuthorName, current.AuthorName)
+	merged.AdditionalProperties = mergeProperties(current.AdditionalProperties, merged.AdditionalProperties)
+	if merged.CreatedAt.IsZero() {
+		merged.CreatedAt = current.CreatedAt
+	}
+	merged.Contents = append(slices.Clone(current.Contents), next.Contents...)
+	if merged.Source == (message.Source{}) {
+		merged.Source = current.Source
+	}
+	return merged
+}
+
+func isIdentifierlessAssistantReasoningMessage(msg *message.Message) bool {
+	if msg == nil || msg.ID != "" || msg.Role != message.RoleAssistant || len(msg.Contents) == 0 {
+		return false
+	}
+	for _, content := range msg.Contents {
+		if _, ok := content.(*message.TextReasoningContent); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func mergeProperties(current, incoming map[string]any) map[string]any {

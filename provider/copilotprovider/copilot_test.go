@@ -161,6 +161,40 @@ func TestCopyResumeSessionConfig_CopiesAllProperties(t *testing.T) {
 	}
 	assertStringSlice(t, request["disabledSkills"], []string{"skill1"}, "disabledSkills")
 	assertEqual(t, request["streaming"], true, "streaming")
+
+	// Fields beyond the originally hand-copied set must also carry over so that
+	// multi-turn options keep taking effect after the first turn.
+	assertEqual(t, request["clientName"], "test-client", "clientName")
+	assertEqual(t, request["reasoningSummary"], "concise", "reasoningSummary")
+	assertEqual(t, request["contextTier"], "long_context", "contextTier")
+	assertEqual(t, request["mcpOAuthTokenStorage"], "in-memory", "mcpOAuthTokenStorage")
+	assertStringSlice(t, request["excludedBuiltinAgents"], []string{"builtin1"}, "excludedBuiltinAgents")
+	assertEqual(t, request["enableSessionTelemetry"], true, "enableSessionTelemetry")
+	assertEqual(t, request["enableCitations"], true, "enableCitations")
+	assertEqual(t, request["enableConfigDiscovery"], true, "enableConfigDiscovery")
+	assertEqual(t, request["skipEmbeddingRetrieval"], true, "skipEmbeddingRetrieval")
+	assertEqual(t, request["embeddingCacheStorage"], "in-memory", "embeddingCacheStorage")
+	assertEqual(t, request["organizationCustomInstructions"], "org instructions", "organizationCustomInstructions")
+	assertEqual(t, request["enableOnDemandInstructionDiscovery"], true, "enableOnDemandInstructionDiscovery")
+	assertEqual(t, request["enableFileHooks"], true, "enableFileHooks")
+	assertEqual(t, request["enableHostGitOperations"], true, "enableHostGitOperations")
+	assertEqual(t, request["enableSessionStore"], true, "enableSessionStore")
+	assertEqual(t, request["enableSkills"], true, "enableSkills")
+	assertEqual(t, request["skipCustomInstructions"], true, "skipCustomInstructions")
+	assertEqual(t, request["customAgentsLocalOnly"], true, "customAgentsLocalOnly")
+	assertEqual(t, request["coauthorEnabled"], true, "coauthorEnabled")
+	assertEqual(t, request["manageScheduleEnabled"], true, "manageScheduleEnabled")
+	assertEqual(t, request["includeSubAgentStreamingEvents"], false, "includeSubAgentStreamingEvents")
+	assertEqual(t, request["agent"], "custom-agent", "agent")
+	assertStringSlice(t, request["pluginDirectories"], []string{"/plugins"}, "pluginDirectories")
+	assertStringSlice(t, request["instructionDirectories"], []string{"/instructions"}, "instructionDirectories")
+	assertEqual(t, request["gitHubToken"], "gh-token-123", "gitHubToken")
+	assertEqual(t, request["remoteSession"], "on", "remoteSession")
+	for _, key := range []string{"providers", "models", "capi", "modelCapabilities", "sessionLimits", "defaultAgent", "largeOutput", "toolSearch", "memory"} {
+		if request[key] == nil {
+			t.Fatalf("%s was not sent on resume", key)
+		}
+	}
 }
 
 func TestCopySessionConfig_WithStreamingDisabled_PreservesStreamingValue(t *testing.T) {
@@ -336,6 +370,97 @@ func TestConvertToAgentResponseUpdate_ToolExecutionStartEvent_WithNullArguments_
 	}
 }
 
+func TestConvertToAgentResponseUpdate_UsageEvent_SurfacesReasoningTokens(t *testing.T) {
+	runtime := newFakeRuntime(t,
+		sessionEvent("assistant.usage", map[string]any{
+			"model":           "gpt-5",
+			"inputTokens":     10,
+			"outputTokens":    20,
+			"reasoningTokens": 8,
+		}),
+		idleEvent(),
+	)
+	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
+
+	response, err := runText(t, agent, "hello")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	usage := firstContent[*message.UsageContent](t, response)
+	if usage.Details.ReasoningTokenCount != 8 {
+		t.Fatalf("ReasoningTokenCount = %d, want 8", usage.Details.ReasoningTokenCount)
+	}
+	if usage.Details.OutputTokenCount != 20 {
+		t.Fatalf("OutputTokenCount = %d, want 20", usage.Details.OutputTokenCount)
+	}
+}
+
+func TestConvertToAgentResponseUpdate_ReasoningEvent_SurfacesReasoningContent(t *testing.T) {
+	const thinking = "Let me work through this step by step."
+	runtime := newFakeRuntime(t,
+		sessionEvent("assistant.reasoning", map[string]any{"content": thinking, "reasoningId": "r1"}),
+		idleEvent(),
+	)
+	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
+
+	response, err := runText(t, agent, "hello")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	reasoning := firstContent[*message.TextReasoningContent](t, response)
+	if reasoning.Text != thinking {
+		t.Fatalf("reasoning text = %q, want %q", reasoning.Text, thinking)
+	}
+}
+
+func TestConvertToAgentResponseUpdate_ReasoningDeltaEvent_SurfacesReasoningContent(t *testing.T) {
+	const chunk = "partial thought"
+	runtime := newFakeRuntime(t,
+		sessionEvent("assistant.reasoning_delta", map[string]any{"deltaContent": chunk, "reasoningId": "r1"}),
+		idleEvent(),
+	)
+	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
+
+	response, err := runText(t, agent, "hello")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	reasoning := firstContent[*message.TextReasoningContent](t, response)
+	if reasoning.Text != chunk {
+		t.Fatalf("reasoning text = %q, want %q", reasoning.Text, chunk)
+	}
+}
+
+func TestConvertToAgentResponseUpdate_AssistantMessageEventWhenNotStreaming_SurfacesReasoningText(t *testing.T) {
+	const expected = "Full response text"
+	const thinking = "internal reasoning"
+	runtime := newFakeRuntime(t,
+		sessionEvent("assistant.message", map[string]any{
+			"messageId":       "msg-r1",
+			"content":         expected,
+			"reasoningText":   thinking,
+			"reasoningOpaque": "opaque-blob",
+		}),
+		idleEvent(),
+	)
+	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
+
+	response, err := runText(t, agent, "hello", agentpkg.Stream(false))
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if text := firstContent[*message.TextContent](t, response); text.Text != expected {
+		t.Fatalf("text content = %q, want %q", text.Text, expected)
+	}
+	reasoning := firstContent[*message.TextReasoningContent](t, response)
+	if reasoning.Text != thinking {
+		t.Fatalf("reasoning text = %q, want %q", reasoning.Text, thinking)
+	}
+	if reasoning.ProtectedData != "opaque-blob" {
+		t.Fatalf("reasoning protected data = %q, want %q", reasoning.ProtectedData, "opaque-blob")
+	}
+}
+
 func TestConvertToAgentResponseUpdate_ToolExecutionStartEvent_WithNullData_ProducesEmptyFunctionCall(t *testing.T) {
 	runtime := newFakeRuntime(t,
 		sessionEvent("tool.execution_start", nil),
@@ -372,6 +497,9 @@ func TestConvertToAgentResponseUpdate_ToolExecutionCompleteEvent_WithSuccess_Pro
 	if result.CallID != "call-123" || result.Result != resultJSON {
 		t.Fatalf("result = (%q, %#v), want (call-123, %q)", result.CallID, result.Result, resultJSON)
 	}
+	if result.Error != nil {
+		t.Fatalf("Error = %v, want nil on success", result.Error)
+	}
 }
 
 func TestConvertToAgentResponseUpdate_ToolExecutionCompleteEvent_WithError_ProducesErrorResult(t *testing.T) {
@@ -389,6 +517,12 @@ func TestConvertToAgentResponseUpdate_ToolExecutionCompleteEvent_WithError_Produ
 	if result.CallID != "call-789" || result.Result != "Access denied to resource" {
 		t.Fatalf("result = (%q, %#v), want access denied", result.CallID, result.Result)
 	}
+	if result.Error == nil {
+		t.Fatalf("Error = nil, want non-nil failure error")
+	}
+	if msg := result.Error.Error(); !strings.Contains(msg, "Access denied to resource") || !strings.Contains(msg, "PERMISSION_DENIED") {
+		t.Fatalf("Error = %q, want message and code", msg)
+	}
 }
 
 func TestConvertToAgentResponseUpdate_ToolExecutionCompleteEvent_WithFailureNoError_ProducesDefaultErrorMessage(t *testing.T) {
@@ -405,6 +539,12 @@ func TestConvertToAgentResponseUpdate_ToolExecutionCompleteEvent_WithFailureNoEr
 	result := firstContent[*message.FunctionResultContent](t, response)
 	if result.CallID != "call-000" || result.Result != "Tool execution failed" {
 		t.Fatalf("result = (%q, %#v), want default failure", result.CallID, result.Result)
+	}
+	if result.Error == nil {
+		t.Fatalf("Error = nil, want non-nil failure error")
+	}
+	if msg := result.Error.Error(); !strings.Contains(msg, "tool execution failed") {
+		t.Fatalf("Error = %q, want default failure message", msg)
 	}
 }
 
@@ -528,6 +668,44 @@ func TestRun_WithSessionErrorMissingMessage_ReturnsUnknownError(t *testing.T) {
 	}
 }
 
+func TestRun_WithRateLimitEligibleForAutoSwitch_KeepsSessionAlive(t *testing.T) {
+	const expected = "Recovered after auto mode switch"
+	runtime := newFakeRuntime(t,
+		sessionEvent("session.error", map[string]any{
+			"errorType":             "rate_limit",
+			"message":               "Rate limit reached",
+			"eligibleForAutoSwitch": true,
+		}),
+		sessionEvent("auto_mode_switch.requested", map[string]any{"requestId": "req-1"}),
+		sessionEvent("assistant.message", map[string]any{"messageId": "msg-1", "content": expected}),
+		idleEvent(),
+	)
+	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
+
+	response, err := runText(t, agent, "hello", agentpkg.Stream(false))
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if got := response.String(); got != expected {
+		t.Fatalf("response text = %q, want %q", got, expected)
+	}
+}
+
+func TestRun_WithRateLimitNotEligibleForAutoSwitch_ReturnsError(t *testing.T) {
+	runtime := newFakeRuntime(t,
+		sessionEvent("session.error", map[string]any{
+			"errorType": "rate_limit",
+			"message":   "Rate limit reached",
+		}),
+	)
+	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
+
+	_, err := runText(t, agent, "hello")
+	if err == nil || err.Error() != "session error: Rate limit reached" {
+		t.Fatalf("err = %v, want session error: Rate limit reached", err)
+	}
+}
+
 func TestRun_WithBurstOfStreamingEvents_Completes(t *testing.T) {
 	const eventCount = 200
 	events := make([]map[string]any, 0, eventCount+1)
@@ -584,8 +762,11 @@ func dataContent(t *testing.T, name, value string) *message.DataContent {
 
 func richSessionConfig() *copilot.SessionConfig {
 	return &copilot.SessionConfig{
+		ClientName:       "test-client",
 		Model:            "gpt-4o",
 		ReasoningEffort:  "high",
+		ReasoningSummary: copilot.ReasoningSummaryConcise,
+		ContextTier:      copilot.ContextTierLongContext,
 		SystemMessage:    &copilot.SystemMessageConfig{Mode: "append", Content: "Be helpful"},
 		AvailableTools:   []string{"tool1", "tool2"},
 		ExcludedTools:    []string{"tool3"},
@@ -606,7 +787,39 @@ func richSessionConfig() *copilot.SessionConfig {
 		MCPServers: map[string]copilot.MCPServerConfig{
 			"server1": copilot.MCPStdioServerConfig{Command: "npx"},
 		},
-		DisabledSkills: []string{"skill1"},
+		MCPOAuthTokenStorage:               "in-memory",
+		DisabledSkills:                     []string{"skill1"},
+		ExcludedBuiltInAgents:              []string{"builtin1"},
+		Providers:                          []copilot.NamedProviderConfig{{Name: "prov1", BaseURL: "https://example.com"}},
+		Models:                             []copilot.ProviderModelConfig{{ID: "m1", Provider: "prov1"}},
+		Capi:                               &copilot.CapiSessionOptions{EnableWebSocketResponses: copilot.Bool(true)},
+		ModelCapabilities:                  &rpc.ModelCapabilitiesOverride{},
+		SessionLimits:                      &rpc.SessionLimitsConfig{},
+		EnableSessionTelemetry:             copilot.Bool(true),
+		EnableCitations:                    copilot.Bool(true),
+		EnableConfigDiscovery:              copilot.Bool(true),
+		SkipEmbeddingRetrieval:             copilot.Bool(true),
+		EmbeddingCacheStorage:              copilot.String("in-memory"),
+		OrganizationCustomInstructions:     copilot.String("org instructions"),
+		EnableOnDemandInstructionDiscovery: copilot.Bool(true),
+		EnableFileHooks:                    copilot.Bool(true),
+		EnableHostGitOperations:            copilot.Bool(true),
+		EnableSessionStore:                 copilot.Bool(true),
+		EnableSkills:                       copilot.Bool(true),
+		SkipCustomInstructions:             copilot.Bool(true),
+		CustomAgentsLocalOnly:              copilot.Bool(true),
+		CoauthorEnabled:                    copilot.Bool(true),
+		ManageScheduleEnabled:              copilot.Bool(true),
+		IncludeSubAgentStreamingEvents:     copilot.Bool(false),
+		DefaultAgent:                       &copilot.DefaultAgentConfig{ExcludedTools: []string{"dtool"}},
+		Agent:                              "custom-agent",
+		PluginDirectories:                  []string{"/plugins"},
+		InstructionDirectories:             []string{"/instructions"},
+		LargeOutput:                        &copilot.LargeToolOutputConfig{Enabled: copilot.Bool(true)},
+		ToolSearch:                         &copilot.ToolSearchConfig{Enabled: copilot.Bool(true)},
+		Memory:                             &copilot.MemoryConfiguration{Enabled: true},
+		GitHubToken:                        "gh-token-123",
+		RemoteSession:                      rpc.RemoteSessionModeOn,
 	}
 }
 

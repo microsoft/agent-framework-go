@@ -7,6 +7,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -706,6 +708,82 @@ func TestAddToolReturnsDataAndMultipleContentResults(t *testing.T) {
 	})
 }
 
+// message.Contents is the named slice type (type Contents []Content) that
+// Message.Contents is declared as. A Go type switch matches on dynamic type
+// identity, so a message.Contents value must be handled explicitly; otherwise
+// it misses the []message.Content branch, falls through to the JSON fallback,
+// and collapses every block into a single TextContent (losing image/audio
+// blocks and never setting IsError). This mirrors the .NET/Python behavior of
+// iterating each content block individually.
+func TestAddToolReturnsNamedContentsSlice(t *testing.T) {
+	result := callAddedTool(t, stubFuncTool{
+		name:         "named-contents-result",
+		description:  "returns a message.Contents named slice",
+		schema:       map[string]any{"type": "object"},
+		returnSchema: map[string]any{"type": "object"},
+		call: func(context.Context, string) (any, error) {
+			return message.Contents{
+				&message.TextContent{Text: "hi"},
+				&message.DataContent{Data: "iVBORw0KGgo=", MediaType: "image/png"},
+				&message.ErrorContent{Message: "boom"},
+			}, nil
+		},
+	})
+
+	if len(result.Content) != 3 {
+		t.Fatalf("expected three content items, got %d", len(result.Content))
+	}
+	text, ok := result.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("first content is %T, want *mcp.TextContent", result.Content[0])
+	}
+	if text.Text != "hi" {
+		t.Fatalf("first text = %q, want hi", text.Text)
+	}
+	image, ok := result.Content[1].(*mcp.ImageContent)
+	if !ok {
+		t.Fatalf("second content is %T, want *mcp.ImageContent", result.Content[1])
+	}
+	if image.MIMEType != "image/png" {
+		t.Fatalf("image MIMEType = %q, want image/png", image.MIMEType)
+	}
+	if _, ok := result.Content[2].(*mcp.TextContent); !ok {
+		t.Fatalf("third content is %T, want *mcp.TextContent", result.Content[2])
+	}
+	if !result.IsError {
+		t.Fatal("IsError = false, want true (error content block present)")
+	}
+}
+
+// A text-typed DataContent whose bytes are not valid UTF-8 must fall back to a
+// binary Blob resource; putting invalid UTF-8 in Text corrupts it on transport.
+func TestAddToolReturnsInvalidUTF8TextAsBlob(t *testing.T) {
+	result := callAddedTool(t, stubFuncTool{
+		name:         "bad-utf8-result",
+		description:  "returns text media type with non-UTF-8 bytes",
+		schema:       map[string]any{"type": "object"},
+		returnSchema: map[string]any{"type": "object"},
+		call: func(context.Context, string) (any, error) {
+			// "//4=" is base64 for {0xff, 0xfe}, which is not valid UTF-8.
+			return &message.DataContent{Name: "note.txt", Data: "//4=", MediaType: "text/plain"}, nil
+		},
+	})
+
+	if len(result.Content) != 1 {
+		t.Fatalf("expected one content item, got %d", len(result.Content))
+	}
+	embedded, ok := result.Content[0].(*mcp.EmbeddedResource)
+	if !ok {
+		t.Fatalf("content is %T, want *mcp.EmbeddedResource", result.Content[0])
+	}
+	if embedded.Resource.Text != "" {
+		t.Errorf("Resource.Text = %q, want empty (non-UTF-8 must not be placed in Text)", embedded.Resource.Text)
+	}
+	if len(embedded.Resource.Blob) == 0 {
+		t.Error("Resource.Blob is empty, want the raw non-UTF-8 bytes")
+	}
+}
+
 func TestAddToolReturnsBinaryDataAsEmbeddedResource(t *testing.T) {
 	result := callAddedTool(t, stubFuncTool{
 		name:         "binary-result",
@@ -729,6 +807,35 @@ func TestAddToolReturnsBinaryDataAsEmbeddedResource(t *testing.T) {
 	}
 	if string(embedded.Resource.Blob) != string([]byte{1, 2, 3, 4}) {
 		t.Fatalf("blob = %#v, want [1 2 3 4]", embedded.Resource.Blob)
+	}
+}
+
+// A text DataContent must be surfaced as an MCP text resource (Resource.Text),
+// not a binary Blob; the reverse mapping reads Resource.Text for text resources.
+func TestAddToolReturnsTextDataAsTextResource(t *testing.T) {
+	result := callAddedTool(t, stubFuncTool{
+		name:         "text-result",
+		description:  "returns text content",
+		schema:       map[string]any{"type": "object"},
+		returnSchema: map[string]any{"type": "object"},
+		call: func(context.Context, string) (any, error) {
+			// "hello" base64-encoded, with a text media type.
+			return &message.DataContent{Name: "note.txt", Data: "aGVsbG8=", MediaType: "text/plain"}, nil
+		},
+	})
+
+	if len(result.Content) != 1 {
+		t.Fatalf("expected one content item, got %d", len(result.Content))
+	}
+	embedded, ok := result.Content[0].(*mcp.EmbeddedResource)
+	if !ok {
+		t.Fatalf("content is %T, want *mcp.EmbeddedResource", result.Content[0])
+	}
+	if embedded.Resource.Text != "hello" {
+		t.Errorf("resource Text = %q, want %q", embedded.Resource.Text, "hello")
+	}
+	if len(embedded.Resource.Blob) != 0 {
+		t.Errorf("text resource must not use Blob, got %#v", embedded.Resource.Blob)
 	}
 }
 
@@ -769,13 +876,13 @@ func TestCallReturnsEmptyAndStructuredOnlyMCPResults(t *testing.T) {
 
 func TestCallConvertsMCPToolUseAndToolResultContent(t *testing.T) {
 	result := callMCPResult(t, &mcp.CallToolResult{Content: []mcp.Content{
-		&mcp.ToolUseContent{
+		&mcp.ToolUseContent{ //nolint:staticcheck // ToolUseContent is deprecated per SEP-2577 but remains functional during the deprecation window.
 			ID:    "call-1",
 			Name:  "calculator",
 			Input: map[string]any{"x": 1},
 			Meta:  mcp.Meta{"source": "assistant"},
 		},
-		&mcp.ToolResultContent{
+		&mcp.ToolResultContent{ //nolint:staticcheck // ToolResultContent is deprecated per SEP-2577 but remains functional during the deprecation window.
 			ToolUseID:         "call-1",
 			Content:           []mcp.Content{&mcp.TextContent{Text: "done"}},
 			StructuredContent: map[string]any{"ok": true},
@@ -795,7 +902,7 @@ func TestCallConvertsMCPToolUseAndToolResultContent(t *testing.T) {
 	if !strings.Contains(toolUse.Text, `"name":"calculator"`) || !strings.Contains(toolUse.Text, `"id":"call-1"`) {
 		t.Fatalf("tool use text = %q, want calculator call JSON", toolUse.Text)
 	}
-	rawToolUse, ok := toolUse.Header().RawRepresentation.(*mcp.ToolUseContent)
+	rawToolUse, ok := toolUse.Header().RawRepresentation.(*mcp.ToolUseContent) //nolint:staticcheck // ToolUseContent is deprecated per SEP-2577 but remains functional during the deprecation window.
 	if !ok {
 		t.Fatalf("tool use RawRepresentation is %T, want *mcp.ToolUseContent", toolUse.Header().RawRepresentation)
 	}
@@ -814,7 +921,7 @@ func TestCallConvertsMCPToolUseAndToolResultContent(t *testing.T) {
 	if toolResult.Text != "done" {
 		t.Fatalf("tool result text = %q, want done", toolResult.Text)
 	}
-	rawToolResult, ok := toolResult.Header().RawRepresentation.(*mcp.ToolResultContent)
+	rawToolResult, ok := toolResult.Header().RawRepresentation.(*mcp.ToolResultContent) //nolint:staticcheck // ToolResultContent is deprecated per SEP-2577 but remains functional during the deprecation window.
 	if !ok {
 		t.Fatalf("tool result RawRepresentation is %T, want *mcp.ToolResultContent", toolResult.Header().RawRepresentation)
 	}
@@ -927,4 +1034,68 @@ func connectInMemory(t *testing.T, ctx context.Context, server *mcp.Server) *mcp
 	}
 	t.Cleanup(func() { _ = clientSession.Close() })
 	return clientSession
+}
+
+// A tool exposed via AddTool may return a typed-nil message.Content (e.g. a
+// (*message.ErrorContent)(nil)). Converting that to an MCP result must not
+// panic the server handler; it degrades to a "null" text result.
+func TestAddToolTypedNilContentDoesNotPanic(t *testing.T) {
+	ctx := context.Background()
+	server := mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "1.0.0"}, nil)
+	mcptool.AddTool(server, stubFuncTool{
+		name:        "typednil",
+		description: "returns a typed-nil content",
+		schema:      map[string]any{"type": "object"},
+		call: func(context.Context, string) (any, error) {
+			var ec *message.ErrorContent
+			return ec, nil // typed-nil message.Content
+		},
+	})
+
+	session := connectInMemory(t, ctx, server)
+	tools, err := mcptool.ListTools(ctx, session)
+	if err != nil {
+		t.Fatalf("ListTools() error = %v", err)
+	}
+	funcTool, ok := tools[0].(tool.FuncTool)
+	if !ok {
+		t.Fatalf("listed tool is %T, want tool.FuncTool", tools[0])
+	}
+
+	result, err := funcTool.Call(ctx, `{}`) // must not panic or error
+	if err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+	contents, ok := result.([]message.Content)
+	if !ok || len(contents) != 1 {
+		t.Fatalf("Call() result = %#v, want one content item", result)
+	}
+	text, ok := contents[0].(*message.TextContent)
+	if !ok || !strings.Contains(text.Text, "null") {
+		t.Fatalf("content = %#v, want a TextContent containing \"null\"", contents[0])
+	}
+}
+
+// TestPackageDocNoWebSocket guards against re-introducing the inaccurate
+// claim that mcptool supports a WebSocket transport. Connect only wraps an
+// mcp.Transport supplied by the pinned go-sdk, which offers stdio and HTTP
+// (SSE / streamable HTTP) transports but no WebSocket transport.
+func TestPackageDocNoWebSocket(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("ReadDir(.) error = %v", err)
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(".", name))
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", name, err)
+		}
+		if strings.Contains(strings.ToLower(string(data)), "websocket") {
+			t.Errorf("%s mentions WebSocket, but the go-sdk provides no WebSocket transport", name)
+		}
+	}
 }

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -965,6 +966,206 @@ func TestResponsesDataContentMessage_Image_NonStreaming(t *testing.T) {
 	}
 }
 
+func TestResponsesUriContentMessage_Image_ForwardsFileID(t *testing.T) {
+	// An image referenced by an already-uploaded file_id must be forwarded
+	// alongside image_url and detail, matching the Python reference.
+	const input = `
+            {
+              "input": [
+                {
+                  "type": "message",
+                  "role": "user",
+                  "content": [
+                    {
+                      "type": "input_image",
+                      "image_url": "https://x/img.png",
+                      "detail": "high",
+                      "file_id": "file-abc"
+                    }
+                  ]
+                }
+              ],
+              "model": "gpt-4o-mini"
+            }
+            `
+	const output = `
+            {
+              "id": "resp_img_fileid",
+              "object": "response",
+              "created_at": 1743531271,
+              "status": "completed",
+              "model": "gpt-4o-mini-2024-07-18",
+              "output": [
+                {
+                  "type": "message",
+                  "id": "msg_img_fileid",
+                  "status": "completed",
+                  "role": "assistant",
+                  "content": [
+                    {"type": "output_text", "text": "ok", "annotations": []}
+                  ]
+                }
+              ]
+            }
+            `
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	uriContent := &message.URIContent{
+		URI:       "https://x/img.png",
+		MediaType: "image/png",
+	}
+	uriContent.AdditionalProperties = map[string]any{
+		"detail":  "high",
+		"file_id": "file-abc",
+	}
+
+	messages := []*message.Message{
+		{
+			Role:     message.RoleUser,
+			Contents: []message.Content{uriContent},
+		},
+	}
+
+	if _, err := a.Run(t.Context(), messages).Collect(); err != nil {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestResponsesDataContentMessage_Image_ForwardsFileID(t *testing.T) {
+	const input = `
+            {
+              "input": [
+                {
+                  "type": "message",
+                  "role": "user",
+                  "content": [
+                    {
+                      "type": "input_image",
+                      "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==",
+                      "detail": "high",
+                      "file_id": "file-abc"
+                    }
+                  ]
+                }
+              ],
+              "model": "gpt-4o-mini"
+            }
+            `
+	const output = `
+            {
+              "id": "resp_img_fileid",
+              "object": "response",
+              "created_at": 1743531271,
+              "status": "completed",
+              "model": "gpt-4o-mini-2024-07-18",
+              "output": [
+                {
+                  "type": "message",
+                  "id": "msg_img_fileid",
+                  "status": "completed",
+                  "role": "assistant",
+                  "content": [
+                    {"type": "output_text", "text": "ok", "annotations": []}
+                  ]
+                }
+              ]
+            }
+            `
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	dataContent := &message.DataContent{
+		Data:      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==",
+		MediaType: "image/png",
+	}
+	dataContent.AdditionalProperties = map[string]any{
+		"detail":  "high",
+		"file_id": "file-abc",
+	}
+
+	messages := []*message.Message{
+		{
+			Role:     message.RoleUser,
+			Contents: []message.Content{dataContent},
+		},
+	}
+
+	if _, err := a.Run(t.Context(), messages).Collect(); err != nil {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestResponsesUriContentMessage_Image_NoFileID_OmitsField(t *testing.T) {
+	// Without a file_id in AdditionalProperties, no file_id field is emitted.
+	const input = `
+            {
+              "input": [
+                {
+                  "type": "message",
+                  "role": "user",
+                  "content": [
+                    {
+                      "type": "input_image",
+                      "image_url": "https://x/img.png",
+                      "detail": "high"
+                    }
+                  ]
+                }
+              ],
+              "model": "gpt-4o-mini"
+            }
+            `
+	const output = `
+            {
+              "id": "resp_img_nofileid",
+              "object": "response",
+              "created_at": 1743531271,
+              "status": "completed",
+              "model": "gpt-4o-mini-2024-07-18",
+              "output": [
+                {
+                  "type": "message",
+                  "id": "msg_img_nofileid",
+                  "status": "completed",
+                  "role": "assistant",
+                  "content": [
+                    {"type": "output_text", "text": "ok", "annotations": []}
+                  ]
+                }
+              ]
+            }
+            `
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	uriContent := &message.URIContent{
+		URI:       "https://x/img.png",
+		MediaType: "image/png",
+	}
+	uriContent.AdditionalProperties = map[string]any{"detail": "high"}
+
+	messages := []*message.Message{
+		{
+			Role:     message.RoleUser,
+			Contents: []message.Content{uriContent},
+		},
+	}
+
+	if _, err := a.Run(t.Context(), messages).Collect(); err != nil {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestResponsesReasoningTextDelta_Streaming(t *testing.T) {
 	const input = `
             {
@@ -1111,6 +1312,167 @@ data: {"type":"response.completed","sequence_number":14,"response":{"id":"resp_r
 	}
 	if !usageFound {
 		t.Error("expected usage content in last update")
+	}
+}
+
+// TestResponsesReasoningEncryptedContent_Streaming verifies that a completed
+// reasoning item's encrypted content is carried through the streaming path so it
+// can be replayed on the next turn when store=false (Include always adds reasoning
+// encrypted content in that mode). Before the fix the reasoning
+// response.output_item.done event fell through to the default case and its
+// EncryptedContent was discarded.
+func TestResponsesReasoningEncryptedContent_Streaming(t *testing.T) {
+	const encrypted = "gAAAAABencrypted_reasoning_blob"
+
+	const input = `
+            {
+              "store":false,
+              "include":["reasoning.encrypted_content"],
+              "input":[{
+                "type":"message",
+                "role":"user",
+                "content":[{
+                  "type":"input_text",
+                  "text":"Solve this problem step by step."
+                }]
+              }],
+              "model": "o4-mini",
+              "stream": true
+            }
+            `
+
+	const output = `event: response.created
+data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_enc123","object":"response","created_at":1756752900,"status":"in_progress","model":"o4-mini-2025-04-16","output":[],"reasoning":{"effort":"medium"}}}
+
+event: response.in_progress
+data: {"type":"response.in_progress","sequence_number":1,"response":{"id":"resp_enc123","object":"response","created_at":1756752900,"status":"in_progress","model":"o4-mini-2025-04-16","output":[]}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":2,"output_index":0,"item":{"id":"rs_enc123","type":"reasoning","text":""}}
+
+event: response.reasoning_text.delta
+data: {"type":"response.reasoning_text.delta","sequence_number":3,"item_id":"rs_enc123","output_index":0,"delta":"Analyzing."}
+
+event: response.reasoning_text.done
+data: {"type":"response.reasoning_text.done","sequence_number":4,"item_id":"rs_enc123","output_index":0,"text":"Analyzing."}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":5,"output_index":0,"item":{"id":"rs_enc123","type":"reasoning","content":[{"type":"reasoning_text","text":"Analyzing."}],"encrypted_content":"gAAAAABencrypted_reasoning_blob"}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":6,"output_index":1,"item":{"id":"msg_enc123","type":"message","status":"in_progress","content":[],"role":"assistant"}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":7,"item_id":"msg_enc123","output_index":1,"content_index":0,"delta":"The solution is 42."}
+
+event: response.output_text.done
+data: {"type":"response.output_text.done","sequence_number":8,"item_id":"msg_enc123","output_index":1,"content_index":0,"text":"The solution is 42."}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":9,"output_index":1,"item":{"id":"msg_enc123","type":"message","status":"completed","content":[{"type":"output_text","annotations":[],"text":"The solution is 42."}],"role":"assistant"}}
+
+event: response.completed
+data: {"type":"response.completed","sequence_number":10,"response":{"id":"resp_enc123","object":"response","created_at":1756752900,"status":"completed","model":"o4-mini-2025-04-16","output":[{"id":"rs_enc123","type":"reasoning","content":[{"type":"reasoning_text","text":"Analyzing."}],"encrypted_content":"gAAAAABencrypted_reasoning_blob"},{"id":"msg_enc123","type":"message","status":"completed","content":[{"type":"output_text","annotations":[],"text":"The solution is 42."}],"role":"assistant"}],"usage":{"input_tokens":10,"output_tokens":25,"total_tokens":35}}}
+
+`
+
+	server := newTestResponsesServerStreaming(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "o4-mini")
+
+	var updates []*agent.ResponseUpdate
+	for update, err := range a.RunText(t.Context(), "Solve this problem step by step.", agent.Stream(true),
+		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{Store: openai.Bool(false)})) {
+		if err != nil {
+			t.Fatalf("error = %v", err)
+		}
+		updates = append(updates, update)
+	}
+
+	// The completed reasoning item must surface as a TextReasoningContent that
+	// carries the encrypted content forward.
+	var protectedData string
+	for _, update := range updates {
+		for _, content := range update.Contents {
+			if rc, ok := content.(*message.TextReasoningContent); ok && rc.ProtectedData != "" {
+				protectedData = rc.ProtectedData
+			}
+		}
+	}
+	if protectedData != encrypted {
+		t.Fatalf("expected reasoning ProtectedData %q, got %q", encrypted, protectedData)
+	}
+
+	// Round-trip: replaying the collected reasoning content on the next turn must
+	// echo the encrypted content back as reasoning encrypted_content in the request.
+	var capturedBody string
+	replayServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("failed reading request body: %v", err)
+		}
+		capturedBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"resp_enc456","object":"response","created_at":1756752901,"status":"completed","model":"o4-mini-2025-04-16","output":[{"type":"message","id":"msg_enc456","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok","annotations":[]}]}]}`)
+	}))
+	defer replayServer.Close()
+
+	a2 := newTestResponsesClient(replayServer, "o4-mini")
+	messages := []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Solve this problem step by step."}}},
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			&message.TextReasoningContent{Text: "Analyzing.", ProtectedData: protectedData},
+			&message.TextContent{Text: "The solution is 42."},
+		}},
+	}
+	if _, err := a2.Run(t.Context(), messages).Collect(); err != nil {
+		t.Fatalf("replay error = %v", err)
+	}
+	if !strings.Contains(capturedBody, `"encrypted_content":"`+encrypted+`"`) {
+		t.Fatalf("expected replay request to carry encrypted_content %q, body = %s", encrypted, capturedBody)
+	}
+	// summary is required by the Responses API even when empty.
+	if !strings.Contains(capturedBody, `"summary":[]`) {
+		t.Fatalf("expected replay request to include an (empty) reasoning summary, body = %s", capturedBody)
+	}
+	// Plaintext reasoning content must not be replayed on input.
+	if strings.Contains(capturedBody, `"reasoning_text"`) {
+		t.Fatalf("expected replay request to omit plaintext reasoning content, body = %s", capturedBody)
+	}
+}
+
+// TestResponsesReasoningReplay_StoreTrue_SkipsReasoningItem verifies that when a
+// reasoning item has no encrypted content (store=true), it is not replayed in the
+// request. Under store=true the server retains the reasoning item by id, so
+// re-sending it would fail with a duplicate-item error.
+func TestResponsesReasoningReplay_StoreTrue_SkipsReasoningItem(t *testing.T) {
+	var capturedBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("failed reading request body: %v", err)
+		}
+		capturedBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"resp_store1","object":"response","created_at":1756752901,"status":"completed","model":"o4-mini-2025-04-16","output":[{"type":"message","id":"msg_store1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok","annotations":[]}]}]}`)
+	}))
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "o4-mini")
+	messages := []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Solve this problem step by step."}}},
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			// No ProtectedData: reasoning was stored server-side (store=true).
+			&message.TextReasoningContent{Text: "Analyzing."},
+			&message.TextContent{Text: "The solution is 42."},
+		}},
+	}
+	if _, err := a.Run(t.Context(), messages).Collect(); err != nil {
+		t.Fatalf("replay error = %v", err)
+	}
+	if strings.Contains(capturedBody, `"type":"reasoning"`) {
+		t.Fatalf("expected reasoning item to be skipped under store=true, body = %s", capturedBody)
 	}
 }
 
@@ -2056,6 +2418,150 @@ func firstToolApprovalRequest(t *testing.T, resp *agent.Response) *message.ToolA
 	return nil
 }
 
+func TestResponsesNonStreamingMCPCall_MapsResultContent(t *testing.T) {
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"test"}]}]
+            }
+            `
+
+	const output = `
+            {
+              "id":"resp_001",
+              "object":"response",
+              "created_at":1741892091,
+              "status":"completed",
+              "model":"gpt-4o-mini",
+              "output":[{
+                "type":"mcp_call",
+                "id":"mcp_123",
+                "server_label":"github",
+                "name":"create_issue",
+                "arguments":"{\"title\":\"Bug\"}",
+                "output":"issue #7 created",
+                "error":"rate limited"
+              }]
+            }
+            `
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+	resp, err := a.RunText(t.Context(), "test").Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+
+	var call *message.MCPServerToolCallContent
+	var result *message.MCPServerToolResultContent
+	var errContent *message.ErrorContent
+	for content := range resp.Contents() {
+		switch c := content.(type) {
+		case *message.MCPServerToolCallContent:
+			call = c
+		case *message.MCPServerToolResultContent:
+			result = c
+		case *message.ErrorContent:
+			errContent = c
+		}
+	}
+
+	if call == nil {
+		t.Fatal("expected MCPServerToolCallContent")
+	}
+	if call.CallID != "mcp_123" || call.Name != "create_issue" || call.ServerName != "github" || call.Arguments != `{"title":"Bug"}` {
+		t.Fatalf("call = %#v", call)
+	}
+	if result == nil {
+		t.Fatal("expected MCPServerToolResultContent")
+	}
+	if result.CallID != "mcp_123" || result.Name != "create_issue" || result.ServerName != "github" {
+		t.Fatalf("result = %#v", result)
+	}
+	if result.Error != "rate limited" {
+		t.Errorf("result.Error = %q, want %q", result.Error, "rate limited")
+	}
+	if len(result.Outputs) != 1 {
+		t.Fatalf("Outputs len = %d, want 1", len(result.Outputs))
+	}
+	text, ok := result.Outputs[0].(*message.TextContent)
+	if !ok || text.Text != "issue #7 created" {
+		t.Fatalf("Outputs[0] = %#v", result.Outputs[0])
+	}
+	if errContent == nil || errContent.Message != "rate limited" {
+		t.Fatalf("expected ErrorContent with tool error, got %#v", errContent)
+	}
+}
+
+func TestResponsesStreamingMCPCall_MapsResultContent(t *testing.T) {
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"test"}]}],
+                "stream":true
+            }
+            `
+
+	const output = `event: response.created
+data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_001","object":"response","created_at":1741892091,"status":"in_progress","model":"gpt-4o-mini","output":[]}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":1,"output_index":0,"item":{"type":"mcp_call","id":"mcp_123","server_label":"github","name":"create_issue","arguments":"{\"title\":\"Bug\"}","output":"issue #7 created","error":"rate limited"}}
+
+event: response.completed
+data: {"type":"response.completed","sequence_number":2,"response":{"id":"resp_001","object":"response","created_at":1741892091,"status":"completed","model":"gpt-4o-mini","output":[]}}
+
+`
+
+	server := newTestResponsesServerStreaming(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+	var call *message.MCPServerToolCallContent
+	var result *message.MCPServerToolResultContent
+	var errContent *message.ErrorContent
+	for update, err := range a.RunText(t.Context(), "test", agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("error = %v", err)
+		}
+		for _, content := range update.Contents {
+			switch c := content.(type) {
+			case *message.MCPServerToolCallContent:
+				call = c
+			case *message.MCPServerToolResultContent:
+				result = c
+			case *message.ErrorContent:
+				errContent = c
+			}
+		}
+	}
+
+	if call == nil {
+		t.Fatal("expected MCPServerToolCallContent")
+	}
+	if call.CallID != "mcp_123" || call.ServerName != "github" || call.Name != "create_issue" || call.Arguments != `{"title":"Bug"}` {
+		t.Fatalf("call = %#v", call)
+	}
+	if result == nil {
+		t.Fatal("expected MCPServerToolResultContent")
+	}
+	if result.CallID != "mcp_123" || result.ServerName != "github" || result.Name != "create_issue" {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(result.Outputs) != 1 {
+		t.Fatalf("Outputs len = %d, want 1", len(result.Outputs))
+	}
+	text, ok := result.Outputs[0].(*message.TextContent)
+	if !ok || text.Text != "issue #7 created" {
+		t.Fatalf("Outputs[0] = %#v", result.Outputs[0])
+	}
+	if errContent == nil || errContent.Message != "rate limited" {
+		t.Fatalf("expected ErrorContent with tool error, got %#v", errContent)
+	}
+}
+
 func TestResponsesResponseFormatSchemaConvertsJSONSchema(t *testing.T) {
 	type payload struct {
 		Name string `json:"name"`
@@ -2288,6 +2794,75 @@ data: {"type":"response.completed","response":{"id":"resp_001","object":"respons
 	}
 }
 
+func TestResponsesMCPServerToolAddressRouting(t *testing.T) {
+	const output = `
+            {
+                "id": "resp_test",
+                "object": "response",
+                "created_at": 1741891428,
+                "status": "completed",
+                "error": null,
+                "incomplete_details": null,
+                "model": "gpt-4o-mini",
+                "output": [{
+                    "type": "message",
+                    "id": "msg_test",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Hello", "annotations": []}]
+                }]
+            }
+            `
+
+	tests := []struct {
+		name          string
+		serverAddress string
+		wantTool      string
+	}{
+		{
+			name:          "bare connector id routes to connector_id",
+			serverAddress: "connector_googledrive",
+			wantTool:      `{"type":"mcp","server_label":"drive","connector_id":"connector_googledrive"}`,
+		},
+		{
+			name:          "https url routes to server_url",
+			serverAddress: "https://example.com/mcp",
+			wantTool:      `{"type":"mcp","server_label":"drive","server_url":"https://example.com/mcp"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := `
+                {
+                    "model":"gpt-4o-mini",
+                    "input":[{
+                        "type":"message",
+                        "role":"user",
+                        "content":[{"type":"input_text","text":"hello"}]
+                    }],
+                    "tools":[` + tt.wantTool + `]
+                }
+                `
+
+			server := newTestResponsesServer(t, input, output)
+			defer server.Close()
+
+			a := newTestResponsesClient(server, "gpt-4o-mini")
+
+			_, err := a.RunText(t.Context(), "hello",
+				agent.WithTool(&hostedtool.MCPServer{
+					ServerName:    "drive",
+					ServerAddress: tt.serverAddress,
+				}),
+			).Collect()
+			if err != nil {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
 func TestResponsesCodeInterpreterTool_NonStreaming(t *testing.T) {
 	const input = `
             {
@@ -2300,7 +2875,8 @@ func TestResponsesCodeInterpreterTool_NonStreaming(t *testing.T) {
                 "tools":[{
                     "type":"code_interpreter",
                     "container":{"type":"auto"}
-                }]
+                }],
+                "include":["code_interpreter_call.outputs"]
             }
             `
 
@@ -2318,7 +2894,10 @@ func TestResponsesCodeInterpreterTool_NonStreaming(t *testing.T) {
                   "status":"completed",
                   "code":"# Calculating the sum of numbers from 1 to 5\nresult = sum(range(1, 6))\nresult",
                   "container_id":"cntr_68fb7476c384819186524b78cdc3180000a9a0fdd06b3cd4",
-                  "outputs":null
+                  "outputs":[
+                    {"type":"logs","logs":"15\n"},
+                    {"type":"image","url":"https://example.com/plot.png"}
+                  ]
                 },
                 {
                   "id":"msg_0e599e83cc6642210068fb747e118081a08c3ed46daa9d9dcb",
@@ -2390,6 +2969,28 @@ func TestResponsesCodeInterpreterTool_NonStreaming(t *testing.T) {
 	if codeResult.CallID != codeCall.CallID {
 		t.Errorf("expected result CallID to match call CallID, got %s vs %s", codeResult.CallID, codeCall.CallID)
 	}
+	// The include=code_interpreter_call.outputs must surface the tool outputs
+	// (logs + image) into CodeInterpreterToolResultContent.Outputs.
+	if len(codeResult.Outputs) != 2 {
+		t.Fatalf("expected 2 code interpreter outputs (logs, image), got %d", len(codeResult.Outputs))
+	}
+	logsOutput, ok := codeResult.Outputs[0].(*message.TextContent)
+	if !ok {
+		t.Fatalf("expected first output to be TextContent (logs), got %T", codeResult.Outputs[0])
+	}
+	if logsOutput.Text != "15\n" {
+		t.Errorf("expected logs output '15\\n', got %q", logsOutput.Text)
+	}
+	imageOutput, ok := codeResult.Outputs[1].(*message.URIContent)
+	if !ok {
+		t.Fatalf("expected second output to be URIContent (image), got %T", codeResult.Outputs[1])
+	}
+	if imageOutput.URI != "https://example.com/plot.png" {
+		t.Errorf("expected image URI 'https://example.com/plot.png', got %q", imageOutput.URI)
+	}
+	if imageOutput.MediaType != "image/png" {
+		t.Errorf("expected image media type 'image/png', got %q", imageOutput.MediaType)
+	}
 
 	// Check for TextContent
 	textContent, ok := msg.Contents[2].(*message.TextContent)
@@ -2419,6 +3020,7 @@ func TestResponsesCodeInterpreterTool_Streaming(t *testing.T) {
                 "model":"gpt-4o-mini",
                 "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Calculate 3+3"}]}],
                 "tools":[{"type":"code_interpreter","container":{"type":"auto"}}],
+                "include":["code_interpreter_call.outputs"],
                 "stream":true
             }
             `
@@ -2430,7 +3032,7 @@ event: response.output_item.added
 data: {"type":"response.output_item.added","item":{"type":"code_interpreter_call","id":"call_code_002","code":"","container_id":"container_002","status":"in_progress","outputs":[]}}
 
 event: response.output_item.done
-data: {"type":"response.output_item.done","item":{"type":"code_interpreter_call","id":"call_code_002","code":"print(3+3)","container_id":"container_002","status":"completed","outputs":[{"type":"logs","logs":"6\n"}]}}
+data: {"type":"response.output_item.done","item":{"type":"code_interpreter_call","id":"call_code_002","code":"print(3+3)","container_id":"container_002","status":"completed","outputs":[{"type":"logs","logs":"6\n"},{"type":"image","url":"https://example.com/plot.png"}]}}
 
 event: response.output_item.added
 data: {"type":"response.output_item.added","item":{"type":"message","id":"msg_002","role":"assistant","status":"in_progress","content":[]}}
@@ -2442,7 +3044,7 @@ event: response.output_item.done
 data: {"type":"response.output_item.done","item":{"type":"message","id":"msg_002","status":"completed","role":"assistant","content":[{"type":"output_text","text":"6","annotations":[]}]}}
 
 event: response.completed
-data: {"type":"response.completed","response":{"id":"resp_002","object":"response","created_at":1741892091,"status":"completed","model":"gpt-4o-mini","output":[{"type":"code_interpreter_call","id":"call_code_002","code":"print(3+3)","container_id":"container_002","status":"completed","outputs":[{"type":"logs","logs":"6\n"}]},{"type":"message","id":"msg_002","status":"completed","role":"assistant","content":[{"type":"output_text","text":"6","annotations":[]}]}]}}
+data: {"type":"response.completed","response":{"id":"resp_002","object":"response","created_at":1741892091,"status":"completed","model":"gpt-4o-mini","output":[{"type":"code_interpreter_call","id":"call_code_002","code":"print(3+3)","container_id":"container_002","status":"completed","outputs":[{"type":"logs","logs":"6\n"},{"type":"image","url":"https://example.com/plot.png"}]},{"type":"message","id":"msg_002","status":"completed","role":"assistant","content":[{"type":"output_text","text":"6","annotations":[]}]}]}}
 
 `
 
@@ -2479,8 +3081,67 @@ data: {"type":"response.completed","response":{"id":"resp_002","object":"respons
 	if !strings.Contains(responseText, "print(3+3)") {
 		t.Errorf("expected response to contain code 'print(3+3)', got %q", responseText)
 	}
-	if !strings.Contains(responseText, "6") {
-		t.Errorf("expected response to contain output '6', got %q", responseText)
+	// Assert on the Code Interpreter output section specifically so this test verifies
+	// that streamed code_interpreter_call.outputs (enabled by the include) are surfaced,
+	// rather than being satisfied by the assistant message's output_text "6".
+	if !strings.Contains(responseText, "[Output]") {
+		t.Errorf("expected response to contain '[Output]' section from code interpreter outputs, got %q", responseText)
+	}
+	if !strings.Contains(responseText, "Image: https://example.com/plot.png") {
+		t.Errorf("expected response to contain the code interpreter image URL, got %q", responseText)
+	}
+}
+
+func TestResponsesCodeInterpreterTool_IncludeNotDuplicatedWhenCallerSupplied(t *testing.T) {
+	// The caller already requested code_interpreter_call.outputs; the builder must not
+	// append a second copy of the same include value.
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{
+                    "type":"message",
+                    "role":"user",
+                    "content":[{"type":"input_text","text":"Calculate the sum of numbers from 1 to 5"}]
+                }],
+                "tools":[{
+                    "type":"code_interpreter",
+                    "container":{"type":"auto"}
+                }],
+                "include":["code_interpreter_call.outputs"]
+            }
+            `
+
+	const output = `
+            {
+              "id":"resp_dedup",
+              "object":"response",
+              "created_at":1761309813,
+              "status":"completed",
+              "model":"gpt-4o-mini",
+              "output":[{
+                "id":"msg_dedup",
+                "type":"message",
+                "status":"completed",
+                "content":[{"type":"output_text","annotations":[],"text":"15"}],
+                "role":"assistant"
+              }],
+              "usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}
+            }
+            `
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	_, err := a.RunText(t.Context(), "Calculate the sum of numbers from 1 to 5",
+		agent.WithTool(&hostedtool.CodeInterpreter{}),
+		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
+			Include: []responses.ResponseIncludable{responses.ResponseIncludableCodeInterpreterCallOutputs},
+		}),
+	).Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
 	}
 }
 
@@ -2856,6 +3517,104 @@ data: {"type":"response.completed","response":{"id":"resp_001","object":"respons
 
 	if len(firstAnnotations) == 0 {
 		t.Error("expected first content to have annotations")
+	}
+}
+
+func TestResponsesAnnotations_NonStreaming_PreservesFidelity(t *testing.T) {
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]
+            }
+            `
+
+	const output = `
+            {
+                "id":"resp_001",
+                "object":"response",
+                "created_at":1741892091,
+                "status":"completed",
+                "error":null,
+                "incomplete_details":null,
+                "model":"gpt-4o-mini",
+                "output":[{
+                    "type":"message",
+                    "id":"msg_001",
+                    "status":"completed",
+                    "role":"assistant",
+                    "content":[{"type":"output_text","text":"Annotated text","annotations":[
+                        {"type":"url_citation","title":"Example","url":"https://example.com","start_index":0,"end_index":9},
+                        {"type":"file_citation","file_id":"file_123","filename":"doc.pdf","index":0},
+                        {"type":"container_file_citation","container_id":"cntr_1","file_id":"file_456","filename":"out.txt","start_index":2,"end_index":8}
+                    ]}]
+                }]
+            }
+            `
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	resp, err := a.RunText(t.Context(), "hello").Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if len(resp.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(resp.Messages))
+	}
+
+	var annotations []message.Annotation
+	for _, content := range resp.Messages[0].Contents {
+		if tc, ok := content.(*message.TextContent); ok {
+			annotations = tc.Annotations
+		}
+	}
+	if len(annotations) != 3 {
+		t.Fatalf("expected 3 annotations, got %d", len(annotations))
+	}
+
+	url, ok := annotations[0].(*message.CitationAnnotation)
+	if !ok {
+		t.Fatalf("annotation[0] type = %T, want *CitationAnnotation", annotations[0])
+	}
+	if url.Title != "Example" || url.URL != "https://example.com" {
+		t.Errorf("url citation = %+v, want Title=Example URL=https://example.com", url)
+	}
+	if len(url.AnnotatedRegions) != 1 {
+		t.Fatalf("url citation regions = %d, want 1", len(url.AnnotatedRegions))
+	}
+	if span, ok := url.AnnotatedRegions[0].(*message.TextSpanAnnotatedRegion); !ok {
+		t.Errorf("url region type = %T, want *TextSpanAnnotatedRegion", url.AnnotatedRegions[0])
+	} else if span.Start != 0 || span.End != 9 {
+		t.Errorf("url span = {%d,%d}, want {0,9}", span.Start, span.End)
+	}
+
+	file, ok := annotations[1].(*message.CitationAnnotation)
+	if !ok {
+		t.Fatalf("annotation[1] type = %T, want *CitationAnnotation", annotations[1])
+	}
+	if file.FileID != "file_123" || file.Title != "doc.pdf" {
+		t.Errorf("file citation = %+v, want FileID=file_123 Title=doc.pdf", file)
+	}
+
+	container, ok := annotations[2].(*message.CitationAnnotation)
+	if !ok {
+		t.Fatalf("annotation[2] type = %T, want *CitationAnnotation", annotations[2])
+	}
+	if container.FileID != "file_456" || container.Title != "out.txt" {
+		t.Errorf("container citation = %+v, want FileID=file_456 Title=out.txt", container)
+	}
+	if container.AdditionalProperties["ContainerId"] != "cntr_1" {
+		t.Errorf("container id = %v, want cntr_1", container.AdditionalProperties["ContainerId"])
+	}
+	if len(container.AnnotatedRegions) != 1 {
+		t.Fatalf("container regions = %d, want 1", len(container.AnnotatedRegions))
+	}
+	if span, ok := container.AnnotatedRegions[0].(*message.TextSpanAnnotatedRegion); !ok {
+		t.Errorf("container region type = %T, want *TextSpanAnnotatedRegion", container.AnnotatedRegions[0])
+	} else if span.Start != 2 || span.End != 8 {
+		t.Errorf("container span = {%d,%d}, want {2,8}", span.Start, span.End)
 	}
 }
 
@@ -5521,6 +6280,81 @@ func TestResponsesMultipleRequiredFunctions(t *testing.T) {
 	}
 	if err := messagetest.MessagesEqual(resp.Messages, want); err != nil {
 		t.Error(err)
+	}
+}
+
+// countingReadCloser counts Close calls on an HTTP response body.
+type countingReadCloser struct {
+	io.ReadCloser
+	closes *atomic.Int64
+}
+
+func (c *countingReadCloser) Close() error {
+	c.closes.Add(1)
+	return c.ReadCloser.Close()
+}
+
+// closeCountingTransport wraps each response body so tests can assert the
+// streaming HTTP body is released once the run completes.
+type closeCountingTransport struct {
+	base   http.RoundTripper
+	closes *atomic.Int64
+}
+
+func (t *closeCountingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err != nil || resp == nil {
+		return resp, err
+	}
+	resp.Body = &countingReadCloser{ReadCloser: resp.Body, closes: t.closes}
+	return resp, nil
+}
+
+// TestResponsesStreamingClosesResponseBody verifies the Responses streaming path
+// releases the HTTP response body when the consumer stops iterating early.
+// Without an explicit streamResp.Close(), the body is never returned to the
+// pool, leaking the underlying connection. This mirrors the defer-close already
+// present on the Chat Completions streaming path and matches the .NET/Python
+// SDKs, which dispose the streaming response on early enumeration.
+func TestResponsesStreamingClosesResponseBody(t *testing.T) {
+	const output = `event: response.created
+data: {"type":"response.created","response":{"id":"resp_close_test","object":"response","created_at":1741892091,"status":"in_progress","error":null,"incomplete_details":null,"instructions":null,"max_output_tokens":null,"model":"gpt-4o-mini-2024-07-18","output":[],"parallel_tool_calls":true,"previous_response_id":null,"reasoning":{"effort":null,"generate_summary":null},"store":true,"temperature":1.0,"text":{"format":{"type":"text"}},"tool_choice":"auto","tools":[],"top_p":1.0,"usage":null,"user":null,"metadata":{}}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":"Hello"}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":" world"}
+
+`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, output)
+	}))
+	defer server.Close()
+
+	var closes atomic.Int64
+	httpClient := &http.Client{Transport: &closeCountingTransport{base: http.DefaultTransport, closes: &closes}}
+	a := openaiprovider.NewResponsesAgent(
+		openai.NewClient(option.WithBaseURL(server.URL), option.WithHTTPClient(httpClient)),
+		openaiprovider.AgentConfig{
+			Model:  "gpt-4o-mini",
+			Config: agent.Config{DisableFuncAutoCall: true},
+		},
+	)
+
+	// Stop iterating after the first streamed update. The provider's run
+	// closure then returns via yield=false, which must close the body.
+	for _, err := range a.RunText(t.Context(), "hi", agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		break
+	}
+
+	if got := closes.Load(); got == 0 {
+		t.Fatal("streaming response body was not closed after early consumer exit")
 	}
 }
 

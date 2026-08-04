@@ -14,7 +14,9 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/provider/geminiprovider"
+	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
+	"github.com/microsoft/agent-framework-go/tool/hostedtool"
 	"google.golang.org/genai"
 )
 
@@ -874,6 +876,77 @@ func TestResponseWithThoughtSignature(t *testing.T) {
 	}
 }
 
+// TestResponseWithFunctionCallThoughtSignature verifies that a thought signature
+// carried on the same part as a function call (Gemini 3 behavior) is captured as
+// a TextReasoningContent emitted immediately before the FunctionCallContent, so
+// it can be replayed on the next turn.
+func TestResponseWithFunctionCallThoughtSignature(t *testing.T) {
+	const wantProtectedData = "dGhpbmtpbmcgc2lnbmF0dXJlIGRhdGE="
+	resp := map[string]any{
+		"candidates": []any{
+			map[string]any{
+				"content": map[string]any{
+					"role": "model",
+					"parts": []any{
+						map[string]any{
+							"thoughtSignature": wantProtectedData,
+							"functionCall": map[string]any{
+								"id":   "call-1",
+								"name": "get_weather",
+								"args": map[string]any{"city": "Paris"},
+							},
+						},
+					},
+				},
+				"finishReason": "STOP",
+			},
+		},
+		"usageMetadata": map[string]any{
+			"promptTokenCount":     8,
+			"candidatesTokenCount": 15,
+			"totalTokenCount":      23,
+		},
+	}
+	respBody, _ := json.Marshal(resp)
+
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "application/json", string(respBody)))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	result, err := a.RunText(t.Context(), "What's the weather in Paris?").Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var contents []message.Content
+	for _, msg := range result.Messages {
+		contents = append(contents, msg.Contents...)
+	}
+
+	reasoningIdx, callIdx := -1, -1
+	for i, c := range contents {
+		switch cc := c.(type) {
+		case *message.TextReasoningContent:
+			reasoningIdx = i
+			if cc.ProtectedData != wantProtectedData {
+				t.Errorf("reasoning ProtectedData = %q, want %q", cc.ProtectedData, wantProtectedData)
+			}
+		case *message.FunctionCallContent:
+			callIdx = i
+		}
+	}
+	if reasoningIdx == -1 {
+		t.Fatal("expected TextReasoningContent capturing the function-call thought signature")
+	}
+	if callIdx == -1 {
+		t.Fatal("expected FunctionCallContent in response")
+	}
+	if reasoningIdx >= callIdx {
+		t.Errorf("TextReasoningContent (index %d) must precede FunctionCallContent (index %d)", reasoningIdx, callIdx)
+	}
+}
+
 // TestInvalidReasoningProtectedData verifies that invalid base64 in
 // TextReasoningContent.ProtectedData returns a clear error.
 func TestInvalidReasoningProtectedData(t *testing.T) {
@@ -1000,6 +1073,97 @@ func TestURIAndHostedFileInRequest(t *testing.T) {
 			t.Errorf("parts[%d].fileData.fileUri = %q, want %q", i, fileURI, wantURI)
 		}
 	}
+}
+
+// TestDataURIContentInRequest verifies that a URIContent whose URI is a data:
+// URI is decoded into inlineData (Gemini's fileData.fileUri only accepts
+// external references), while a true external URI still maps to fileData.
+func TestDataURIContentInRequest(t *testing.T) {
+	const b64 = "iVBORw0KGgo="
+
+	t.Run("data uri decodes to inlineData", func(t *testing.T) {
+		bodyCh := make(chan []byte, 1)
+		server := httptest.NewServer(captureAndRespond(t, bodyCh, "application/json", minimalTextResponse("ok")))
+		defer server.Close()
+
+		a := newTestClient(t, server)
+		messages := []*message.Message{{
+			Role: message.RoleUser,
+			Contents: []message.Content{
+				&message.URIContent{URI: "data:image/png;base64," + b64, MediaType: "image/png"},
+			},
+		}}
+		if _, err := a.Run(t.Context(), messages).Collect(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		part := firstPart(t, <-bodyCh)
+		if _, ok := part["fileData"]; ok {
+			t.Errorf("expected no fileData for data URI, got %v", part["fileData"])
+		}
+		inlineData, _ := part["inlineData"].(map[string]any)
+		if inlineData == nil {
+			t.Fatal("expected inlineData for data URI")
+		}
+		if mime, _ := inlineData["mimeType"].(string); mime != "image/png" {
+			t.Errorf("inlineData.mimeType = %q, want %q", mime, "image/png")
+		}
+		// genai marshals the decoded bytes back to base64, so the payload
+		// round-trips to the original data URI base64.
+		if data, _ := inlineData["data"].(string); data != b64 {
+			t.Errorf("inlineData.data = %q, want %q", data, b64)
+		}
+	})
+
+	t.Run("external uri maps to fileData", func(t *testing.T) {
+		bodyCh := make(chan []byte, 1)
+		server := httptest.NewServer(captureAndRespond(t, bodyCh, "application/json", minimalTextResponse("ok")))
+		defer server.Close()
+
+		a := newTestClient(t, server)
+		messages := []*message.Message{{
+			Role: message.RoleUser,
+			Contents: []message.Content{
+				&message.URIContent{URI: "https://example.com/x.png", MediaType: "image/png"},
+			},
+		}}
+		if _, err := a.Run(t.Context(), messages).Collect(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		part := firstPart(t, <-bodyCh)
+		if _, ok := part["inlineData"]; ok {
+			t.Errorf("expected no inlineData for external URI, got %v", part["inlineData"])
+		}
+		fileData, _ := part["fileData"].(map[string]any)
+		if fileData == nil {
+			t.Fatal("expected fileData for external URI")
+		}
+		if fileURI, _ := fileData["fileUri"].(string); fileURI != "https://example.com/x.png" {
+			t.Errorf("fileData.fileUri = %q, want %q", fileURI, "https://example.com/x.png")
+		}
+	})
+}
+
+// firstPart unmarshals a captured Gemini request body and returns the first
+// part of its single content.
+func firstPart(t *testing.T, body []byte) map[string]any {
+	t.Helper()
+	var req map[string]any
+	if err := json.Unmarshal(body, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	contents, _ := req["contents"].([]any)
+	if len(contents) != 1 {
+		t.Fatalf("contents length = %d, want 1", len(contents))
+	}
+	content0, _ := contents[0].(map[string]any)
+	parts, _ := content0["parts"].([]any)
+	if len(parts) != 1 {
+		t.Fatalf("parts length = %d, want 1", len(parts))
+	}
+	part, _ := parts[0].(map[string]any)
+	return part
 }
 
 func TestResponseWithFileAndInlineData(t *testing.T) {
@@ -1625,5 +1789,268 @@ func TestGenerateContentConfigOption(t *testing.T) {
 	stops, _ := gc["stopSequences"].([]any)
 	if len(stops) != 1 || stops[0] != "END" {
 		t.Errorf("stopSequences = %v, want [END]", stops)
+	}
+}
+
+// findErrorContent returns the first *message.ErrorContent across all messages
+// of a response, or nil if none is present.
+func findErrorContent(resp *agent.Response) *message.ErrorContent {
+	for _, msg := range resp.Messages {
+		for _, c := range msg.Contents {
+			if ec, ok := c.(*message.ErrorContent); ok {
+				return ec
+			}
+		}
+	}
+	return nil
+}
+
+// TestPromptBlocked_NonStreaming verifies that a prompt blocked by Gemini's
+// content filter (zero candidates + promptFeedback.blockReason) surfaces as an
+// ErrorContent rather than an empty successful response.
+func TestPromptBlocked_NonStreaming(t *testing.T) {
+	resp := map[string]any{
+		"promptFeedback": map[string]any{
+			"blockReason":        "SAFETY",
+			"blockReasonMessage": "blocked",
+		},
+	}
+	respBody, _ := json.Marshal(resp)
+
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "application/json", string(respBody)))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	result, err := a.RunText(t.Context(), "something disallowed").Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	ec := findErrorContent(result)
+	if ec == nil {
+		t.Fatal("expected ErrorContent for blocked prompt, got none")
+	}
+	if ec.ErrorCode != "SAFETY" {
+		t.Errorf("ErrorContent.ErrorCode = %q, want %q", ec.ErrorCode, "SAFETY")
+	}
+	if ec.Message != "blocked" {
+		t.Errorf("ErrorContent.Message = %q, want %q", ec.Message, "blocked")
+	}
+}
+
+// TestPromptBlocked_Streaming verifies that a streamed chunk carrying only
+// promptFeedback.blockReason (no candidates) surfaces an ErrorContent.
+func TestPromptBlocked_Streaming(t *testing.T) {
+	resp := map[string]any{
+		"promptFeedback": map[string]any{
+			"blockReason":        "SAFETY",
+			"blockReasonMessage": "blocked",
+		},
+	}
+	respBody, _ := json.Marshal(resp)
+	streamResp := "data:" + string(respBody) + "\n\n"
+
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "text/event-stream", streamResp))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	result, err := a.RunText(t.Context(), "something disallowed", agent.Stream(true)).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	ec := findErrorContent(result)
+	if ec == nil {
+		t.Fatal("expected ErrorContent for blocked prompt, got none")
+	}
+	if ec.ErrorCode != "SAFETY" {
+		t.Errorf("ErrorContent.ErrorCode = %q, want %q", ec.ErrorCode, "SAFETY")
+	}
+	if ec.Message != "blocked" {
+		t.Errorf("ErrorContent.Message = %q, want %q", ec.Message, "blocked")
+	}
+}
+
+// Gemini streams usageMetadata cumulatively across chunks, with the final
+// chunk's totals authoritative. The provider must report that final total once,
+// not sum the running totals from every chunk.
+func TestUsageContent_Streaming_CumulativeUsageNotSummed(t *testing.T) {
+	chunk := func(m map[string]any) string {
+		b, _ := json.Marshal(m)
+		return "data:" + string(b) + "\n\n"
+	}
+	stream := chunk(map[string]any{
+		"candidates": []any{map[string]any{
+			"content": map[string]any{"role": "model", "parts": []any{map[string]any{"text": "Hi"}}},
+		}},
+		"usageMetadata": map[string]any{"promptTokenCount": 10, "candidatesTokenCount": 2, "totalTokenCount": 12},
+	}) + chunk(map[string]any{
+		"candidates": []any{map[string]any{
+			"content": map[string]any{"role": "model", "parts": []any{map[string]any{"text": " there"}}},
+		}},
+		"usageMetadata": map[string]any{"promptTokenCount": 10, "candidatesTokenCount": 5, "totalTokenCount": 15},
+	})
+
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "text/event-stream", stream))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	resp, err := a.RunText(t.Context(), "hello", agent.Stream(true)).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	usage := resp.Usage()
+	if usage.TotalTokenCount != 15 {
+		t.Errorf("TotalTokenCount = %d, want 15 (final cumulative total, not the sum of per-chunk usage)", usage.TotalTokenCount)
+	}
+	if usage.InputTokenCount != 10 {
+		t.Errorf("InputTokenCount = %d, want 10", usage.InputTokenCount)
+	}
+	if usage.OutputTokenCount != 5 {
+		t.Errorf("OutputTokenCount = %d, want 5", usage.OutputTokenCount)
+	}
+}
+
+// TestHostedTools_MappedToGenaiTools verifies that hosted tools attached via
+// agent.WithTool are mapped onto their native genai.Tool entries in the outgoing
+// request. Before this mapping, non-FuncTool options were silently dropped and
+// the request carried no tools at all.
+func TestHostedTools_MappedToGenaiTools(t *testing.T) {
+	tests := []struct {
+		name    string
+		tool    tool.Tool
+		toolKey string
+	}{
+		{"web_search", &hostedtool.WebSearch{}, "googleSearch"},
+		{"code_interpreter", &hostedtool.CodeInterpreter{}, "codeExecution"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			bodyCh := make(chan []byte, 1)
+			server := httptest.NewServer(captureAndRespond(t, bodyCh, "application/json", minimalTextResponse("ok")))
+			defer server.Close()
+
+			a := newTestClient(t, server)
+
+			if _, err := a.RunText(t.Context(), "hi", agent.WithTool(tc.tool)).Collect(); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			var req map[string]any
+			if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+				t.Fatalf("unmarshal request body: %v", err)
+			}
+			toolsAny, ok := req["tools"].([]any)
+			if !ok || len(toolsAny) == 0 {
+				t.Fatalf("request missing tools or tools is not an array: %v", req["tools"])
+			}
+			found := false
+			for _, tAny := range toolsAny {
+				tMap, ok := tAny.(map[string]any)
+				if !ok {
+					continue
+				}
+				if _, ok := tMap[tc.toolKey]; ok {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("request tools missing %q entry: %v", tc.toolKey, toolsAny)
+			}
+		})
+	}
+}
+
+// TestHostedTools_FileSearchMapping verifies that a FileSearch hosted tool is
+// mapped onto a native genai fileSearch tool with its vector store names and
+// (range-checked) TopK serialized. A missing case here previously allowed
+// FileSearch to be silently omitted or mis-serialized.
+func TestHostedTools_FileSearchMapping(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(captureAndRespond(t, bodyCh, "application/json", minimalTextResponse("ok")))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	fileSearch := &hostedtool.FileSearch{
+		Inputs: []message.Content{
+			&message.HostedVectorStoreContent{VectorStoreID: "store-a"},
+			&message.HostedVectorStoreContent{VectorStoreID: "store-b"},
+		},
+		MaximumResultCount: 7,
+	}
+	if _, err := a.RunText(t.Context(), "hi", agent.WithTool(fileSearch)).Collect(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	toolsAny, ok := req["tools"].([]any)
+	if !ok || len(toolsAny) == 0 {
+		t.Fatalf("request missing tools or tools is not an array: %v", req["tools"])
+	}
+	var fileSearchMap map[string]any
+	for _, tAny := range toolsAny {
+		tMap, ok := tAny.(map[string]any)
+		if !ok {
+			continue
+		}
+		if fsAny, ok := tMap["fileSearch"].(map[string]any); ok {
+			fileSearchMap = fsAny
+			break
+		}
+	}
+	if fileSearchMap == nil {
+		t.Fatalf("request tools missing fileSearch entry: %v", toolsAny)
+	}
+
+	names, _ := fileSearchMap["fileSearchStoreNames"].([]any)
+	if len(names) != 2 || names[0] != "store-a" || names[1] != "store-b" {
+		t.Errorf("fileSearchStoreNames = %v, want [store-a store-b]", fileSearchMap["fileSearchStoreNames"])
+	}
+	if topK, _ := fileSearchMap["topK"].(float64); topK != 7 {
+		t.Errorf("topK = %v, want 7", fileSearchMap["topK"])
+	}
+}
+
+// TestHostedTools_FileSearchInvalidTopK verifies that a negative
+// MaximumResultCount is not serialized as an invalid TopK.
+func TestHostedTools_FileSearchInvalidTopK(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(captureAndRespond(t, bodyCh, "application/json", minimalTextResponse("ok")))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	fileSearch := &hostedtool.FileSearch{
+		Inputs:             []message.Content{&message.HostedVectorStoreContent{VectorStoreID: "store-a"}},
+		MaximumResultCount: -1,
+	}
+	if _, err := a.RunText(t.Context(), "hi", agent.WithTool(fileSearch)).Collect(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	toolsAny, _ := req["tools"].([]any)
+	for _, tAny := range toolsAny {
+		tMap, ok := tAny.(map[string]any)
+		if !ok {
+			continue
+		}
+		if fsAny, ok := tMap["fileSearch"].(map[string]any); ok {
+			if _, present := fsAny["topK"]; present {
+				t.Errorf("negative MaximumResultCount should not serialize topK, got %v", fsAny["topK"])
+			}
+		}
 	}
 }

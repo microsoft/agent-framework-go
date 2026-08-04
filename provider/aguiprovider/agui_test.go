@@ -43,6 +43,86 @@ func TestAGUIAgentRun_AggregatesStreamingText(t *testing.T) {
 	}
 }
 
+func TestAGUIAgentRun_SurfacesTextMessageChunkEvents(t *testing.T) {
+	strPtr := func(s string) *string { return &s }
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeSSE(t, w, aguiEvents.NewRunStartedEvent("thread-1", "run-1"))
+		writeSSE(t, w, aguiEvents.NewTextMessageChunkEvent(strPtr("msg-1"), strPtr("assistant"), strPtr("Hello")))
+		writeSSE(t, w, aguiEvents.NewTextMessageChunkEvent(strPtr("msg-1"), strPtr("assistant"), strPtr(" World")))
+		writeSSE(t, w, aguiEvents.NewRunFinishedEvent("thread-1", "run-1"))
+	}))
+	defer server.Close()
+
+	a := aguiprovider.NewAgent(newTestClient(server.URL), aguiprovider.AgentConfig{})
+	resp, err := a.RunText(context.Background(), "hi").Collect()
+	if err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	if got := resp.String(); got != "Hello World" {
+		t.Fatalf("response text = %q, want %q", got, "Hello World")
+	}
+}
+
+func TestAGUIAgentRun_SkipsEmptyTextMessageChunkEvents(t *testing.T) {
+	strPtr := func(s string) *string { return &s }
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeSSE(t, w, aguiEvents.NewRunStartedEvent("thread-1", "run-1"))
+		writeSSE(t, w, aguiEvents.NewTextMessageChunkEvent(strPtr("msg-1"), strPtr("assistant"), nil))
+		writeSSE(t, w, aguiEvents.NewTextMessageChunkEvent(strPtr("msg-1"), strPtr("assistant"), strPtr("")))
+		writeSSE(t, w, aguiEvents.NewRunFinishedEvent("thread-1", "run-1"))
+	}))
+	defer server.Close()
+
+	a := aguiprovider.NewAgent(newTestClient(server.URL), aguiprovider.AgentConfig{})
+	resp, err := a.RunText(context.Background(), "hi").Collect()
+	if err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	for content := range resp.Contents() {
+		if _, ok := content.(*message.TextContent); ok {
+			t.Fatalf("expected no text content for empty chunk deltas, got %#v", content)
+		}
+	}
+}
+
+func TestAGUIAgentRun_ChunkWithoutMessageIDContinuesItsOwnMessage(t *testing.T) {
+	strPtr := func(s string) *string { return &s }
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeSSE(t, w, aguiEvents.NewRunStartedEvent("thread-1", "run-1"))
+		// A text chunk establishes message "msg-1".
+		writeSSE(t, w, aguiEvents.NewTextMessageChunkEvent(strPtr("msg-1"), strPtr("assistant"), strPtr("Hello")))
+		// A different message (reasoning) becomes the last collected message.
+		writeSSE(t, w, aguiEvents.NewReasoningMessageContentEvent("msg-r", "thinking"))
+		// A chunk omitting MessageID must continue "msg-1", not merge into "msg-r".
+		writeSSE(t, w, aguiEvents.NewTextMessageChunkEvent(nil, nil, strPtr(" World")))
+		writeSSE(t, w, aguiEvents.NewRunFinishedEvent("thread-1", "run-1"))
+	}))
+	defer server.Close()
+
+	a := aguiprovider.NewAgent(newTestClient(server.URL), aguiprovider.AgentConfig{})
+	resp, err := a.RunText(context.Background(), "hi").Collect()
+	if err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+
+	for _, msg := range resp.Messages {
+		if msg.ID != "msg-r" {
+			continue
+		}
+		for _, c := range msg.Contents {
+			if tc, ok := c.(*message.TextContent); ok && strings.Contains(tc.Text, "World") {
+				t.Fatalf("chunk without MessageID was mis-grouped into reasoning message %q", msg.ID)
+			}
+		}
+	}
+	if got := resp.String(); !strings.Contains(got, "Hello") || !strings.Contains(got, "World") {
+		t.Fatalf("response text = %q, want it to contain both chunk deltas", got)
+	}
+}
+
 func TestAGUIAgentRun_ConfigInstructionsBecomeSystemMessage(t *testing.T) {
 	var captured aguiTypes.RunAgentInput
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -485,6 +565,47 @@ func TestAGUIAgentRun_ConvertsStateSnapshotEventToDataContent(t *testing.T) {
 	}
 	if snapshot["status"] != "active" {
 		t.Fatalf("snapshot status = %v, want active", snapshot["status"])
+	}
+}
+
+func TestAGUIAgentRun_SurfacesMessagesSnapshotEvent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeSSE(t, w, aguiEvents.NewRunStartedEvent("thread-1", "run-1"))
+		writeSSE(t, w, aguiEvents.NewMessagesSnapshotEvent([]aguiTypes.Message{{
+			ID:      "msg-1",
+			Role:    aguiTypes.RoleAssistant,
+			Content: "restored history",
+		}}))
+		writeSSE(t, w, aguiEvents.NewRunFinishedEvent("thread-1", "run-1"))
+	}))
+	defer server.Close()
+
+	a := aguiprovider.NewAgent(newTestClient(server.URL), aguiprovider.AgentConfig{})
+	resp, err := a.RunText(context.Background(), "hi").Collect()
+	if err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+
+	var snapshot any
+	for _, msg := range resp.Messages {
+		if v, ok := msg.AdditionalProperties["agui_messages_snapshot"]; ok {
+			snapshot = v
+			break
+		}
+	}
+	if snapshot == nil {
+		t.Fatal("expected agui_messages_snapshot in message metadata")
+	}
+	messages, ok := snapshot.([]aguiTypes.Message)
+	if !ok {
+		t.Fatalf("agui_messages_snapshot type = %T, want []aguiTypes.Message", snapshot)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("snapshot length = %d, want 1", len(messages))
+	}
+	if messages[0].ID != "msg-1" || messages[0].Content != "restored history" {
+		t.Fatalf("snapshot message = %#v, want id msg-1 content 'restored history'", messages[0])
 	}
 }
 

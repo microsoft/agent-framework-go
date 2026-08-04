@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"sync"
 
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/internal/checkpoint"
@@ -33,6 +34,10 @@ func NewJSONManager(store Store[json.RawMessage]) Manager {
 }
 
 type inMemoryManager struct {
+	// mu guards Store (and the per-session caches within it) so a single
+	// manager can be shared across concurrent workflow runs — which its
+	// session-keyed design implies — without racing on the map or the caches.
+	mu    sync.Mutex
 	Store map[string]*checkpoint.SessionCache[*checkpoint.Checkpoint]
 }
 
@@ -61,6 +66,8 @@ func (s *inMemoryManager) Commit(_ context.Context, sessionID string, checkpoint
 		return workflow.CheckpointInfo{}, fmt.Errorf("checkpoint: parent sessionID %q does not match sessionID %q", checkpoint.Parent.SessionID, sessionID)
 	}
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	store := s.sessionStore(sessionID)
 	return store.Add(sessionID, checkpoint), nil
 }
@@ -73,6 +80,8 @@ func (s *inMemoryManager) Lookup(_ context.Context, sessionID string, checkpoint
 		return nil, fmt.Errorf("checkpoint: checkpoint sessionID %q does not match sessionID %q", checkpointInfo.SessionID, sessionID)
 	}
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	store := s.sessionStore(sessionID)
 	v, ok := store.Get(checkpointInfo)
 	if !ok {
@@ -89,6 +98,8 @@ func (s *inMemoryManager) RetrieveIndex(_ context.Context, sessionID string, wit
 		return nil, fmt.Errorf("checkpoint: parent sessionID %q does not match sessionID %q", withParent.SessionID, sessionID)
 	}
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	store := s.sessionStore(sessionID)
 	if withParent == nil {
 		return slices.Clone(store.CheckpointIndex), nil

@@ -27,7 +27,15 @@ func (q *Queue[T]) Dequeue() (T, bool) {
 	}
 
 	item := q.items[0]
+	// Zero the vacated head slot so the backing array no longer pins the
+	// dequeued value; drop the array entirely once the queue empties. This
+	// matches slices.Delete semantics and lets dead references be collected.
+	var zero T
+	q.items[0] = zero
 	q.items = q.items[1:]
+	if len(q.items) == 0 {
+		q.items = nil
+	}
 	return item, true
 }
 

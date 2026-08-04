@@ -46,6 +46,7 @@ type AgentConfig struct {
 	Model string
 }
 
+// NewAgent creates a new [agent.Agent] backed by the Anthropic Messages API via the anthropic client.
 func NewAgent(aclient anthropic.Client, config AgentConfig) *agent.Agent {
 	c := &client{
 		client: aclient,
@@ -116,38 +117,68 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				MessageID:         resp.ID,
 				ResponseID:        resp.ID,
 				CreatedAt:         time.Now(),
+				FinishReason:      mapStopReason(resp.StopReason),
 				RawRepresentation: resp,
 			}, nil)
 		}
 	}
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		stream := a.client.Messages.NewStreaming(ctx, params)
+		defer func() { _ = stream.Close() }()
 
 		var messageID string
-		var modelID string
+		var finishReason string
 		var usage message.UsageDetails
-		functions := make(map[int]*message.FunctionCallContent)
+		var accumulated anthropic.Message
 
 		for stream.Next() {
 			event := stream.Current()
+			if err := accumulated.Accumulate(event); err != nil {
+				yield(nil, err)
+				return
+			}
 
 			var contents []message.Content
 			switch event := event.AsAny().(type) {
 			case anthropic.MessageStartEvent:
 				messageID = cmp.Or(messageID, event.Message.ID)
-				modelID = cmp.Or(modelID, event.Message.Model)
 				usage.Add(toUsageDetails(event.Message.Usage))
 			case anthropic.MessageDeltaEvent:
 				usage.Add(toUsageDetailsDelta(event.Usage))
+				// Later chunks may carry an empty stop_reason; don't clobber a
+				// value we already captured.
+				if fr := mapStopReason(event.Delta.StopReason); fr != "" {
+					finishReason = fr
+				}
 			case anthropic.ContentBlockStartEvent:
-				contents = a.buildBlock(int(event.Index), event.ContentBlock.AsAny(), contents, functions)
+				block := event.ContentBlock.AsAny()
+				if _, isToolUse := block.(anthropic.ToolUseBlock); !isToolUse {
+					contents = a.buildBlock(int(event.Index), block, contents, nil)
+				}
 			case anthropic.ContentBlockDeltaEvent:
-				contents = a.buildDelta(int(event.Index), event.Delta.AsAny(), contents, functions)
+				contents = a.buildDelta(event.Delta.AsAny(), contents)
 			case anthropic.ContentBlockStopEvent:
-				indices := slices.Collect(maps.Keys(functions))
-				slices.Sort(indices)
-				for _, id := range indices {
-					contents = append(contents, functions[id])
+				switch block := accumulated.Content[event.Index].AsAny().(type) {
+				case anthropic.ToolUseBlock:
+					contents = append(contents, &message.FunctionCallContent{
+						CallID:    block.ID,
+						Name:      block.Name,
+						Arguments: string(block.Input),
+					})
+				case anthropic.TextBlock:
+					// The text itself is streamed incrementally via TextDelta, but
+					// citations are only available on the accumulated block. Emit an
+					// annotations-only TextContent (empty Text avoids duplicating the
+					// streamed text) so streamed responses carry the same citation
+					// annotations as the non-streaming path.
+					if annotations := citationAnnotations(block.Citations); annotations != nil {
+						contents = append(contents, &message.TextContent{
+							ContentHeader: message.ContentHeader{
+								Annotations:       annotations,
+								RawRepresentation: block,
+							},
+						})
+					}
 				}
 			}
 
@@ -162,10 +193,15 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				return
 			}
 		}
+		if err := stream.Err(); err != nil {
+			yield(nil, err)
+			return
+		}
 		if !yield(&agent.ResponseUpdate{
-			CreatedAt: time.Now(),
-			Role:      message.RoleAssistant,
-			MessageID: messageID,
+			CreatedAt:    time.Now(),
+			Role:         message.RoleAssistant,
+			MessageID:    messageID,
+			FinishReason: finishReason,
 			Contents: []message.Content{
 				&message.UsageContent{
 					Details: usage,
@@ -174,9 +210,24 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 		}, nil) {
 			return
 		}
-		if err := stream.Err(); err != nil {
-			yield(nil, err)
-		}
+	}
+}
+
+// mapStopReason maps an Anthropic stop_reason to the canonical FinishReason
+// values shared across providers (mirroring the OpenAI/Copilot providers). It
+// returns "" for empty or unrecognized reasons so callers can fall through.
+func mapStopReason(reason anthropic.StopReason) string {
+	switch reason {
+	case anthropic.StopReasonEndTurn, anthropic.StopReasonStopSequence, anthropic.StopReasonPauseTurn:
+		return "stop"
+	case anthropic.StopReasonMaxTokens:
+		return "length"
+	case anthropic.StopReasonToolUse:
+		return "tool_calls"
+	case anthropic.StopReasonRefusal:
+		return "content_filter"
+	default:
+		return ""
 	}
 }
 
@@ -208,20 +259,10 @@ func toUsageDetailsDelta(usage anthropic.MessageDeltaUsage) message.UsageDetails
 func (a *client) buildBlock(index int, v any, contents []message.Content, functions map[int]*message.FunctionCallContent) []message.Content {
 	switch v := v.(type) {
 	case anthropic.TextBlock:
-		var annotations []message.Annotation
-		for _, citation := range v.Citations {
-			annotations = append(annotations, &message.CitationAnnotation{
-				FileID:            citation.FileID,
-				Snippet:           citation.CitedText,
-				Title:             cmp.Or(citation.DocumentTitle, citation.Title),
-				URL:               citation.URL,
-				RawRepresentation: citation,
-			})
-		}
 		contents = append(contents, &message.TextContent{
 			Text: v.Text,
 			ContentHeader: message.ContentHeader{
-				Annotations:       annotations,
+				Annotations:       citationAnnotations(v.Citations),
 				RawRepresentation: v,
 			},
 		})
@@ -250,7 +291,24 @@ func (a *client) buildBlock(index int, v any, contents []message.Content, functi
 	return contents
 }
 
-func (a *client) buildDelta(index int, v any, contents []message.Content, functions map[int]*message.FunctionCallContent) []message.Content {
+// citationAnnotations converts Anthropic text-block citations into
+// [message.CitationAnnotation] values. It returns nil when there are no
+// citations so callers can leave the annotations slice unset.
+func citationAnnotations(citations []anthropic.TextCitationUnion) []message.Annotation {
+	var annotations []message.Annotation
+	for _, citation := range citations {
+		annotations = append(annotations, &message.CitationAnnotation{
+			FileID:            citation.FileID,
+			Snippet:           citation.CitedText,
+			Title:             cmp.Or(citation.DocumentTitle, citation.Title),
+			URL:               citation.URL,
+			RawRepresentation: citation,
+		})
+	}
+	return annotations
+}
+
+func (a *client) buildDelta(v any, contents []message.Content) []message.Content {
 	switch d := v.(type) {
 	case anthropic.TextDelta:
 		contents = append(contents, &message.TextContent{
@@ -259,10 +317,6 @@ func (a *client) buildDelta(index int, v any, contents []message.Content, functi
 				RawRepresentation: d,
 			},
 		})
-	case anthropic.InputJSONDelta:
-		if fnContent, ok := functions[index]; ok {
-			fnContent.Arguments += d.PartialJSON
-		}
 	case anthropic.ThinkingDelta:
 		contents = append(contents, &message.TextReasoningContent{
 			Text: d.Thinking,
@@ -285,6 +339,11 @@ func (a *client) buildMessageParams(messages []*message.Message, opts []agent.Op
 	var params anthropic.MessageNewParams
 	if p, ok := agent.GetOption(opts, MessageNewParams); ok {
 		params = p
+		// Clone the mutable slice fields appended to below so we never mutate
+		// the caller's backing arrays (the option stores a shallow copy of the
+		// struct); the gemini provider clones for the same reason.
+		params.System = slices.Clone(params.System)
+		params.Messages = slices.Clone(params.Messages)
 	}
 	params.Model = cmp.Or(params.Model, a.config.Model)
 	params.MaxTokens = cmp.Or(params.MaxTokens, 4096)
@@ -444,6 +503,12 @@ func buildMessageParam(msg *message.Message) (anthropic.MessageParam, error) {
 				if err := json.Unmarshal([]byte(c.Arguments), &args); err != nil {
 					return anthropic.MessageParam{}, fmt.Errorf("failed to unmarshal tool arguments: %w", err)
 				}
+			}
+			if args == nil {
+				// Anthropic requires a tool_use block's input to be an object; a
+				// nil map serializes to null (rejected by the API), so send {}
+				// for a tool call with empty or absent arguments.
+				args = map[string]any{}
 			}
 			content = append(content, anthropic.NewToolUseBlock(c.CallID, args, c.Name))
 		case *message.FunctionResultContent:

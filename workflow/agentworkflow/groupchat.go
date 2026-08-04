@@ -355,7 +355,10 @@ func (host *groupChatHostExecutor) handleTurn(ctx *workflow.Context, token workf
 	}
 	nextBinding, ok := host.bindingForAgent(nextAgent)
 	if !ok {
-		return fmt.Errorf("agentworkflow: group chat manager selected non-participant agent %q", agentNameForError(nextAgent))
+		// Selecting an agent that is not a participant ends the chat and
+		// yields the accumulated conversation, matching .NET GroupChatHost
+		// falling through to CompleteAsync on a lookup miss.
+		return host.complete(ctx)
 	}
 
 	host.iterationCount++

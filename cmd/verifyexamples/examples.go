@@ -216,6 +216,16 @@ var agentsExamples = []ExampleDefinition{
 		},
 	},
 	{
+		Name:                         "02_agents_agents_step13_using_audio_and_files",
+		ProjectPath:                  "examples/02-agents/agents/step13_using_audio_and_files",
+		RequiredEnvironmentVariables: []string{"OPENAI_API_KEY", "FOUNDRY_PROJECT_ENDPOINT"},
+		ExpectedOutputDescription: []string{
+			"The output should include a transcription (or acknowledgement) of the attached audio clip and a summary of the attached PDF document.",
+			"The summary should reference the document content about an Agent Framework quarterly report.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
 		Name:                         "02_agents_agents_step17_additional_ai_context",
 		ProjectPath:                  "examples/02-agents/agents/step17_additional_ai_context",
 		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
@@ -236,6 +246,23 @@ var agentsExamples = []ExampleDefinition{
 		ExpectedOutputDescription: []string{
 			"The output should show a turn-by-turn shopping conversation with user prompts and assistant replies.",
 			"The output may include message-count lines showing chat history compaction.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
+		Name:            "02_agents_agents_step19_loop_reinvocation",
+		ProjectPath:     "examples/02-agents/agents/step19_loop_reinvocation",
+		IsDeterministic: true,
+		MustContain: []string{
+			"Completion-marker loop finished after 3 agent iteration(s) (cap 5).",
+			"Custom-evaluator loop stopped on approval after 2 iteration(s) (cap 4).",
+			"Custom-evaluator loop stopped at the safety cap after 3 iteration(s) (cap 3).",
+		},
+		MustNotContain: []string{"Error:", "panic:"},
+		ExpectedOutputDescription: []string{
+			"The output should show the loop harness re-invoking an agent until an evaluator stops it.",
+			"A completion-marker loop should finish once the response contains the marker, before the MaxIterations cap.",
+			"A custom evaluator loop should stop on approval, and a separate run should stop at the MaxIterations safety cap.",
 			"The output should not contain error messages or stack traces.",
 		},
 	},
@@ -583,6 +610,13 @@ var agentsExamples = []ExampleDefinition{
 		SkipReason:                   "Starts an MCP server that does not exit.",
 	},
 	{
+		Name:                         "02_agents_mcp_local_stdio_mcp",
+		ProjectPath:                  "examples/02-agents/mcp/local_stdio_mcp",
+		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
+		OptionalEnvironmentVariables: []string{"FOUNDRY_MODEL"},
+		SkipReason:                   "Spawns a local stdio MCP server subprocess (go run) that requires live Foundry credentials.",
+	},
+	{
 		Name:        "02_agents_providers_github_copilot",
 		ProjectPath: "examples/02-agents/providers/github-copilot",
 		Inputs:      inputLines("Y", "Y", "Y"),
@@ -702,6 +736,17 @@ var workflowExamples = []ExampleDefinition{
 		},
 	},
 	{
+		Name:            "03_workflows_01_start_here_08_sequential_chain_only_responses",
+		ProjectPath:     "examples/03-workflows/01-start-here/08_sequential_chain_only_responses",
+		IsDeterministic: true,
+		MustContain: []string{
+			"Seed prompt: Write a one-line greeting.",
+			"Translator received 1 message(s):",
+			"Translator responds: Bonjour, le monde!",
+			"Approved: Bonjour, le monde!",
+		},
+	},
+	{
 		Name:                         "03_workflows_agents_custom_agent_executors",
 		ProjectPath:                  "examples/03-workflows/agents/custom_agent_executors",
 		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
@@ -755,6 +800,18 @@ var workflowExamples = []ExampleDefinition{
 		},
 	},
 	{
+		Name:            "03_workflows_checkpoint_filesystem_checkpoint",
+		ProjectPath:     "examples/03-workflows/checkpoint/filesystem_checkpoint",
+		IsDeterministic: true,
+		MustContain: []string{
+			"Persisted",
+			"Closed the checkpoint store.",
+			"Reopened checkpoint store from disk.",
+			"Retrieved",
+			"Workflow completed with result:",
+		},
+	},
+	{
 		Name:        "03_workflows_checkpoint_checkpoint_with_human_in_the_loop",
 		ProjectPath: "examples/03-workflows/checkpoint/checkpoint_with_human_in_the_loop",
 		Inputs:      inputLines("50", "25", "40", "45", "42", "50", "25", "40", "45", "42"),
@@ -781,6 +838,17 @@ var workflowExamples = []ExampleDefinition{
 		OptionalEnvironmentVariables: []string{"FOUNDRY_MODEL"},
 		ExpectedOutputDescription: []string{
 			"The output should show results from concurrent agent processing.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
+		Name:                         "03_workflows_concurrent_concurrent_custom_aggregator",
+		ProjectPath:                  "examples/03-workflows/concurrent/concurrent_custom_aggregator",
+		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
+		OptionalEnvironmentVariables: []string{"FOUNDRY_MODEL"},
+		MustContain:                  []string{"Combined expert summary:"},
+		ExpectedOutputDescription: []string{
+			"The output should show several domain experts' answers folded into a single combined summary message.",
 			"The output should not contain error messages or stack traces.",
 		},
 	},
@@ -818,6 +886,17 @@ var workflowExamples = []ExampleDefinition{
 		MustContain: []string{"found in"},
 	},
 	{
+		Name:            "03_workflows_message_workflow",
+		ProjectPath:     "examples/03-workflows/message-workflow",
+		IsDeterministic: true,
+		MustContain: []string{
+			"You said: hello | how are you?",
+			"forwarded turn tokens: 1",
+			"forwarded turn tokens: 0",
+			"TakeTurnHandler invocations: 1",
+		},
+	},
+	{
 		Name:            "03_workflows_shared_states",
 		ProjectPath:     "examples/03-workflows/shared-states",
 		IsDeterministic: true,
@@ -841,6 +920,16 @@ var workflowExamples = []ExampleDefinition{
 			"Nested Sub-Workflows",
 			"Starting order processing",
 			"Order completed:",
+		},
+	},
+	{
+		Name:            "03_workflows_subworkflows_request_interception",
+		ProjectPath:     "examples/03-workflows/subworkflows/request_interception",
+		IsDeterministic: true,
+		MustContain: []string{
+			"Sub-Workflow Request Interception",
+			"Path: AUTO-APPROVED",
+			"Path: ESCALATED",
 		},
 	},
 }

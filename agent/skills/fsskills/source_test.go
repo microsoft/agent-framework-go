@@ -182,6 +182,26 @@ func TestFileSource_SkillBeyondMaxDepth_NotDiscovered(t *testing.T) {
 	}
 }
 
+func TestFileSource_SearchDepth_DoesNotAffectSkillDirectoryDiscovery(t *testing.T) {
+	root := t.TempDir()
+	// A skill directory nested four levels below the filesystem root.
+	createSkillDir(t, filepath.Join(root, "l1", "l2", "l3"), "deep-skill", "Deep", "Body.")
+
+	// SearchDepth governs only within-skill resource/script discovery; it must
+	// not widen skill-directory discovery, which is bounded independently. Even
+	// a large SearchDepth leaves the deeply-nested skill directory undiscovered.
+	deep := fsskills.NewSourceOptions(fsskills.SourceOptions{SearchDepth: 4}, os.DirFS(root))
+	loaded, err := deep.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, skill := range loaded {
+		if skill.Frontmatter.Name == "deep-skill" {
+			t.Fatal("SearchDepth must not cause skill-directory discovery beyond the fixed bound")
+		}
+	}
+}
+
 func TestFileSource_ReadResource_ValidResource_ReturnsContent(t *testing.T) {
 	root := t.TempDir()
 	createSkillDirWithResource(t, root, "read-skill", "A skill", "See docs.", "references/doc.md", "Document content here.")

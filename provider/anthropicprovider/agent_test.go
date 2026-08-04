@@ -4,9 +4,12 @@ package anthropicprovider_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -32,7 +35,8 @@ func newTestClient(t *testing.T, server *httptest.Server) *agent.Agent {
 		anthropicprovider.AgentConfig{
 			Model:  "claude-3-5-sonnet-20241022",
 			Config: agent.Config{DisableFuncAutoCall: true},
-		})
+		},
+	)
 }
 
 // nestedKey traverses a decoded JSON map following the given path of keys and
@@ -120,6 +124,175 @@ func minimalStreamingResponse(payload string) string {
 		`data: {"type":"message_stop"}` + "\n\n"
 }
 
+func streamingToolCallResponse(events string) string {
+	return "" +
+		"event: message_start\n" +
+		`data: {"type":"message_start","message":{"id":"msg_tool01","type":"message","role":"assistant","content":[],"model":"claude-3-5-sonnet-20241022","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}` + "\n\n" +
+		events +
+		"event: message_delta\n" +
+		`data: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":5}}` + "\n\n" +
+		"event: message_stop\n" +
+		`data: {"type":"message_stop"}` + "\n\n"
+}
+
+func streamingToolStart(index int, callID, name string) string {
+	return "event: content_block_start\n" +
+		fmt.Sprintf(`data: {"type":"content_block_start","index":%d,"content_block":{"type":"tool_use","id":%q,"name":%q,"input":{}}}`, index, callID, name) + "\n\n"
+}
+
+func streamingToolDelta(index int, partialJSON string) string {
+	partial, _ := json.Marshal(partialJSON)
+	return "event: content_block_delta\n" +
+		fmt.Sprintf(`data: {"type":"content_block_delta","index":%d,"delta":{"type":"input_json_delta","partial_json":%s}}`, index, partial) + "\n\n"
+}
+
+func streamingToolStop(index int) string {
+	return "event: content_block_stop\n" +
+		fmt.Sprintf(`data: {"type":"content_block_stop","index":%d}`, index) + "\n\n"
+}
+
+func collectStreamingToolCalls(t *testing.T, events string) []*message.FunctionCallContent {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, streamingToolCallResponse(events))
+	}))
+	defer server.Close()
+
+	resp, err := newTestClient(t, server).RunText(t.Context(), "call tools", agent.Stream(true)).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var calls []*message.FunctionCallContent
+	for content := range resp.Contents() {
+		if call, ok := content.(*message.FunctionCallContent); ok {
+			calls = append(calls, call)
+		}
+	}
+	return calls
+}
+
+// finishReasonCases enumerates every Anthropic stop_reason the provider maps to
+// a canonical FinishReason, exercising the unexported mapStopReason helper end
+// to end through the public API.
+var finishReasonCases = []struct {
+	stopReason string
+	want       string
+}{
+	{"end_turn", "stop"},
+	{"stop_sequence", "stop"},
+	{"pause_turn", "stop"},
+	{"max_tokens", "length"},
+	{"tool_use", "tool_calls"},
+	{"refusal", "content_filter"},
+}
+
+// TestNonStreamingFinishReason verifies the provider maps the Anthropic
+// stop_reason on a non-streaming response to the canonical FinishReason.
+func TestNonStreamingFinishReason(t *testing.T) {
+	for _, tc := range finishReasonCases {
+		t.Run(tc.stopReason, func(t *testing.T) {
+			body := fmt.Sprintf(`{
+				"id":"msg_finish",
+				"type":"message",
+				"role":"assistant",
+				"model":"claude-3-5-sonnet-20241022",
+				"stop_reason":%q,
+				"stop_sequence":null,
+				"content":[{"type":"text","text":"hello"}],
+				"usage":{"input_tokens":10,"output_tokens":5}
+			}`, tc.stopReason)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, body)
+			}))
+			defer server.Close()
+
+			resp, err := newTestClient(t, server).RunText(t.Context(), "hi").Collect()
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if resp.FinishReason != tc.want {
+				t.Errorf("FinishReason = %q, want %q", resp.FinishReason, tc.want)
+			}
+		})
+	}
+}
+
+// TestStreamingFinishReason verifies the provider captures the stop_reason from
+// the streaming message_delta event and reports it as the canonical
+// FinishReason on the collected response.
+func TestStreamingFinishReason(t *testing.T) {
+	for _, tc := range finishReasonCases {
+		t.Run(tc.stopReason, func(t *testing.T) {
+			stream := "" +
+				"event: message_start\n" +
+				`data: {"type":"message_start","message":{"id":"msg_stream_finish","type":"message","role":"assistant","content":[],"model":"claude-3-5-sonnet-20241022","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}` + "\n\n" +
+				"event: content_block_start\n" +
+				`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}` + "\n\n" +
+				"event: content_block_delta\n" +
+				`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}` + "\n\n" +
+				"event: content_block_stop\n" +
+				`data: {"type":"content_block_stop","index":0}` + "\n\n" +
+				"event: message_delta\n" +
+				fmt.Sprintf(`data: {"type":"message_delta","delta":{"stop_reason":%q,"stop_sequence":null},"usage":{"output_tokens":5}}`, tc.stopReason) + "\n\n" +
+				"event: message_stop\n" +
+				`data: {"type":"message_stop"}` + "\n\n"
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = io.WriteString(w, stream)
+			}))
+			defer server.Close()
+
+			resp, err := newTestClient(t, server).RunText(t.Context(), "hi", agent.Stream(true)).Collect()
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if resp.FinishReason != tc.want {
+				t.Errorf("FinishReason = %q, want %q", resp.FinishReason, tc.want)
+			}
+		})
+	}
+}
+
+// TestStreamingFinishReasonNotClobbered verifies that once a non-empty
+// stop_reason has been captured from a message_delta, a later message_delta
+// carrying an empty stop_reason does not overwrite it. This exercises the guard
+// in the streaming path that skips empty stop_reason chunks.
+func TestStreamingFinishReasonNotClobbered(t *testing.T) {
+	stream := "" +
+		"event: message_start\n" +
+		`data: {"type":"message_start","message":{"id":"msg_stream_finish","type":"message","role":"assistant","content":[],"model":"claude-3-5-sonnet-20241022","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}` + "\n\n" +
+		"event: content_block_start\n" +
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}` + "\n\n" +
+		"event: content_block_delta\n" +
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}` + "\n\n" +
+		"event: content_block_stop\n" +
+		`data: {"type":"content_block_stop","index":0}` + "\n\n" +
+		"event: message_delta\n" +
+		`data: {"type":"message_delta","delta":{"stop_reason":"max_tokens","stop_sequence":null},"usage":{"output_tokens":5}}` + "\n\n" +
+		"event: message_delta\n" +
+		`data: {"type":"message_delta","delta":{"stop_reason":null,"stop_sequence":null},"usage":{"output_tokens":1}}` + "\n\n" +
+		"event: message_stop\n" +
+		`data: {"type":"message_stop"}` + "\n\n"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, stream)
+	}))
+	defer server.Close()
+
+	resp, err := newTestClient(t, server).RunText(t.Context(), "hi", agent.Stream(true)).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.FinishReason != "length" {
+		t.Errorf("FinishReason = %q, want %q", resp.FinishReason, "length")
+	}
+}
+
 func TestConfigInstructions(t *testing.T) {
 	bodyCh := make(chan []byte, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -146,7 +319,8 @@ func TestConfigInstructions(t *testing.T) {
 			Config: agent.Config{
 				DisableFuncAutoCall: true,
 			},
-		})
+		},
+	)
 
 	if _, err := a.RunText(t.Context(), "hi").Collect(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -229,6 +403,70 @@ func TestTextCitationsBecomeAnnotations(t *testing.T) {
 	}
 	if citation.RawRepresentation == nil {
 		t.Error("citation RawRepresentation is nil")
+	}
+}
+
+// TestStreamingTextCitationsBecomeAnnotations mirrors
+// TestTextCitationsBecomeAnnotations for the streaming path: citations are only
+// present on the accumulated text block, so the content_block_stop handler must
+// surface them as annotations. The streamed text arrives via text_delta and the
+// citation via a citations_delta.
+func TestStreamingTextCitationsBecomeAnnotations(t *testing.T) {
+	stream := "" +
+		"event: message_start\n" +
+		`data: {"type":"message_start","message":{"id":"msg_stream_cite","type":"message","role":"assistant","content":[],"model":"claude-3-5-sonnet-20241022","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}` + "\n\n" +
+		"event: content_block_start\n" +
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}` + "\n\n" +
+		"event: content_block_delta\n" +
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"The answer cites the docs."}}` + "\n\n" +
+		"event: content_block_delta\n" +
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"citations_delta","citation":{"type":"web_search_result_location","cited_text":"source excerpt","encrypted_index":"enc_123","title":"Example Source","url":"https://example.com/source"}}}` + "\n\n" +
+		"event: content_block_stop\n" +
+		`data: {"type":"content_block_stop","index":0}` + "\n\n" +
+		"event: message_delta\n" +
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}` + "\n\n" +
+		"event: message_stop\n" +
+		`data: {"type":"message_stop"}` + "\n\n"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, stream)
+	}))
+	defer server.Close()
+
+	resp, err := newTestClient(t, server).RunText(t.Context(), "cite something", agent.Stream(true)).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var citation *message.CitationAnnotation
+	var streamedText string
+	for content := range resp.Contents() {
+		tc, ok := content.(*message.TextContent)
+		if !ok {
+			continue
+		}
+		streamedText += tc.Text
+		for _, ann := range tc.Annotations {
+			if c, ok := ann.(*message.CitationAnnotation); ok {
+				citation = c
+			}
+		}
+	}
+	if streamedText != "The answer cites the docs." {
+		t.Errorf("streamed text = %q, want %q", streamedText, "The answer cites the docs.")
+	}
+	if citation == nil {
+		t.Fatal("expected a citation annotation on the streamed text")
+	}
+	if citation.URL != "https://example.com/source" {
+		t.Errorf("citation URL = %q, want %q", citation.URL, "https://example.com/source")
+	}
+	if citation.Title != "Example Source" {
+		t.Errorf("citation Title = %q, want %q", citation.Title, "Example Source")
+	}
+	if citation.Snippet != "source excerpt" {
+		t.Errorf("citation Snippet = %q, want %q", citation.Snippet, "source excerpt")
 	}
 }
 
@@ -319,5 +557,307 @@ func TestStructuredOutput_Streaming(t *testing.T) {
 	}
 	if out.Age != 25 {
 		t.Errorf("out.Age = %d, want %d", out.Age, 25)
+	}
+}
+
+func TestStreamingToolCallArgumentsExcludeStartPlaceholder(t *testing.T) {
+	events := streamingToolStart(0, "toolu_01", "get_weather") +
+		streamingToolDelta(0, `{"city":`) +
+		streamingToolDelta(0, `"Seattle"}`) +
+		streamingToolStop(0)
+	calls := collectStreamingToolCalls(t, events)
+	if len(calls) != 1 {
+		t.Fatalf("function call count = %d, want 1", len(calls))
+	}
+	if calls[0].Arguments != `{"city":"Seattle"}` {
+		t.Errorf("arguments = %q, want %q", calls[0].Arguments, `{"city":"Seattle"}`)
+	}
+}
+
+func TestStreamingToolCallAccumulatesFragmentedArguments(t *testing.T) {
+	want := `{"name":"tool_value","count":1,"description":"fragmented arguments"}`
+	var events strings.Builder
+	events.WriteString(streamingToolStart(0, "toolu_fragmented", "fragmented_tool"))
+	for i := 0; i < len(want); i += 3 {
+		end := min(i+3, len(want))
+		events.WriteString(streamingToolDelta(0, want[i:end]))
+	}
+	events.WriteString(streamingToolStop(0))
+
+	calls := collectStreamingToolCalls(t, events.String())
+	if len(calls) != 1 {
+		t.Fatalf("function call count = %d, want 1", len(calls))
+	}
+	if calls[0].Arguments != want {
+		t.Errorf("arguments = %q, want %q", calls[0].Arguments, want)
+	}
+}
+
+func TestStreamingMultipleToolCallsAreNotDuplicated(t *testing.T) {
+	var events strings.Builder
+	for i, arg := range []string{"a", "b", "c"} {
+		events.WriteString(streamingToolStart(i, fmt.Sprintf("toolu_%d", i), fmt.Sprintf("tool_%s", arg)))
+		events.WriteString(streamingToolDelta(i, fmt.Sprintf(`{"arg":%q}`, arg)))
+		events.WriteString(streamingToolStop(i))
+	}
+
+	calls := collectStreamingToolCalls(t, events.String())
+	if len(calls) != 3 {
+		t.Fatalf("function call count = %d, want 3", len(calls))
+	}
+	for i, call := range calls {
+		want := fmt.Sprintf(`{"arg":%q}`, string(rune('a'+i)))
+		if call.Arguments != want {
+			t.Errorf("call %d arguments = %q, want %q", i, call.Arguments, want)
+		}
+	}
+}
+
+func TestStreamingToolCallsSupportInterleavedDeltas(t *testing.T) {
+	events := streamingToolStart(0, "toolu_alpha", "tool_alpha") +
+		streamingToolStart(1, "toolu_beta", "tool_beta") +
+		streamingToolStart(2, "toolu_gamma", "tool_gamma") +
+		streamingToolDelta(0, `{"city":`) +
+		streamingToolDelta(1, `{"query":`) +
+		streamingToolDelta(2, `{"id":`) +
+		streamingToolDelta(0, `"San Francisco"}`) +
+		streamingToolDelta(1, `"weather forecast"}`) +
+		streamingToolDelta(2, `123,"active":true}`) +
+		streamingToolStop(0) +
+		streamingToolStop(1) +
+		streamingToolStop(2)
+
+	calls := collectStreamingToolCalls(t, events)
+	if len(calls) != 3 {
+		t.Fatalf("function call count = %d, want 3", len(calls))
+	}
+	want := map[string]string{
+		"toolu_alpha": `{"city":"San Francisco"}`,
+		"toolu_beta":  `{"query":"weather forecast"}`,
+		"toolu_gamma": `{"id":123,"active":true}`,
+	}
+	for _, call := range calls {
+		if call.Arguments != want[call.CallID] {
+			t.Errorf("call %q arguments = %q, want %q", call.CallID, call.Arguments, want[call.CallID])
+		}
+	}
+}
+
+// When the streaming request faults (here, an immediate HTTP 500 before any
+// SSE event) the provider must surface only the error and emit no trailing
+// UsageContent update. This matches openaiprovider chat streaming, which yields
+// stream.Err() alone on failure; an aggregator/otel middleware counting
+// UsageContent would otherwise record phantom usage for a call that never ran.
+func TestStreamingFaultEmitsNoUsage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	var gotErr error
+	var updates int
+	for update, err := range newTestClient(t, server).RunText(t.Context(), "hi", agent.Stream(true)) {
+		if err != nil {
+			gotErr = err
+			continue
+		}
+		updates++
+		for _, c := range update.Contents {
+			if _, ok := c.(*message.UsageContent); ok {
+				t.Error("streaming fault emitted a UsageContent update; want none")
+			}
+		}
+	}
+	if gotErr == nil {
+		t.Fatal("expected a terminal error from the faulted stream, got nil")
+	}
+	if updates != 0 {
+		t.Errorf("got %d non-error updates, want 0 before the fault", updates)
+	}
+}
+
+// Building the request must not mutate the caller's MessageNewParams slices.
+// The provider appends system instructions to params.System; if it shares the
+// caller's backing array (spare capacity), the append corrupts the caller's data.
+func TestBuildMessageParams_DoesNotMutateCallerSystemSlice(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"m","type":"message","role":"assistant","model":"claude","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	defer server.Close()
+	a := newTestClient(t, server)
+
+	// Caller-supplied System slice with spare capacity.
+	system := make([]anthropic.TextBlockParam, 1, 4)
+	system[0] = anthropic.TextBlockParam{Text: "s0"}
+	opt := anthropicprovider.MessageNewParams(anthropic.MessageNewParams{System: system})
+
+	if _, err := a.RunText(t.Context(), "hi", agent.WithInstructions("added"), opt).Collect(); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if full := system[:cap(system)]; full[1].Text != "" {
+		t.Errorf("provider mutated the caller's System backing array: spare slot = %q", full[1].Text)
+	}
+}
+
+func TestBuildMessageParams_DoesNotMutateCallerMessagesSlice(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"m","type":"message","role":"assistant","model":"claude","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	defer server.Close()
+	a := newTestClient(t, server)
+
+	// Caller-supplied Messages slice with spare capacity. The provider appends
+	// the run's messages to params.Messages; with aliasing that append lands in
+	// the caller's spare slot instead of a cloned slice.
+	messages := make([]anthropic.MessageParam, 1, 4)
+	messages[0] = anthropic.NewUserMessage(anthropic.NewTextBlock("seeded"))
+	opt := anthropicprovider.MessageNewParams(anthropic.MessageNewParams{Messages: messages})
+
+	if _, err := a.RunText(t.Context(), "hi", opt).Collect(); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if full := messages[:cap(messages)]; len(full[1].Content) != 0 {
+		t.Errorf("provider mutated the caller's Messages backing array: spare slot has %d content block(s)", len(full[1].Content))
+	}
+}
+
+// A tool call with empty Arguments must serialize to an object input ({}), not
+// null: Anthropic rejects a tool_use block whose input is null.
+func TestToolUseEmptyArgumentsSerializeAsObject(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		bodyCh <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, minimalMessageResponse("ok"))
+	}))
+	defer server.Close()
+
+	a := anthropicprovider.NewAgent(
+		anthropic.NewClient(option.WithBaseURL(server.URL), option.WithAPIKey("test")),
+		anthropicprovider.AgentConfig{
+			Model:  "claude-3-5-sonnet-20241022",
+			Config: agent.Config{DisableFuncAutoCall: true},
+		},
+	)
+
+	msgs := []*message.Message{
+		{Role: message.RoleUser, Contents: message.Contents{&message.TextContent{Text: "what time is it?"}}},
+		{Role: message.RoleAssistant, Contents: message.Contents{&message.FunctionCallContent{CallID: "toolu_1", Name: "get_time", Arguments: ""}}},
+		{Role: message.RoleTool, Contents: message.Contents{&message.FunctionResultContent{CallID: "toolu_1", Result: "12:00"}}},
+	}
+	if _, err := a.Run(t.Context(), msgs).Collect(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	messages, ok := req["messages"].([]any)
+	if !ok {
+		t.Fatalf("request messages = %#v, want a JSON array", req["messages"])
+	}
+	found := false
+	for _, m := range messages {
+		msg, ok := m.(map[string]any)
+		if !ok {
+			continue
+		}
+		blocks, ok := msg["content"].([]any)
+		if !ok {
+			continue
+		}
+		for _, b := range blocks {
+			block, ok := b.(map[string]any)
+			if !ok {
+				continue
+			}
+			if block["type"] != "tool_use" || block["id"] != "toolu_1" {
+				continue
+			}
+			found = true
+			if _, isObject := block["input"].(map[string]any); !isObject {
+				t.Errorf("tool_use input = %#v (%T), want an object", block["input"], block["input"])
+			}
+		}
+	}
+	if !found {
+		t.Fatal("tool_use block for toolu_1 not found in request")
+	}
+}
+
+// countingReadCloser counts Close calls on an HTTP response body.
+type countingReadCloser struct {
+	io.ReadCloser
+	closes *atomic.Int64
+}
+
+func (c *countingReadCloser) Close() error {
+	c.closes.Add(1)
+	return c.ReadCloser.Close()
+}
+
+// closeCountingTransport wraps each response body so tests can assert the
+// streaming HTTP body is released once the run completes.
+type closeCountingTransport struct {
+	base   http.RoundTripper
+	closes *atomic.Int64
+}
+
+func (t *closeCountingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err != nil || resp == nil {
+		return resp, err
+	}
+	resp.Body = &countingReadCloser{ReadCloser: resp.Body, closes: t.closes}
+	return resp, nil
+}
+
+// TestStreamingClosesResponseBody verifies the streaming path releases the HTTP
+// response body when the consumer stops iterating early. Without an explicit
+// stream.Close(), the body is never returned to the pool, leaking the
+// underlying connection. This mirrors the defer-close already present on the
+// Chat Completions streaming path and matches the .NET/Python SDKs, which
+// dispose the streaming response on early enumeration.
+func TestStreamingClosesResponseBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, minimalStreamingResponse("hello world"))
+	}))
+	defer server.Close()
+
+	var closes atomic.Int64
+	httpClient := &http.Client{Transport: &closeCountingTransport{base: http.DefaultTransport, closes: &closes}}
+	a := anthropicprovider.NewAgent(
+		anthropic.NewClient(
+			option.WithBaseURL(server.URL),
+			option.WithAPIKey("test"),
+			option.WithHTTPClient(httpClient),
+		),
+		anthropicprovider.AgentConfig{
+			Model:  "claude-3-5-sonnet-20241022",
+			Config: agent.Config{DisableFuncAutoCall: true},
+		},
+	)
+
+	// Stop iterating after the first streamed update. The provider's run
+	// closure then returns via yield=false, which must close the body.
+	for _, err := range a.RunText(t.Context(), "hi", agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		break
+	}
+
+	if got := closes.Load(); got == 0 {
+		t.Fatal("streaming response body was not closed after early consumer exit")
 	}
 }

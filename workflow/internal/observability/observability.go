@@ -6,8 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"reflect"
 
+	"github.com/microsoft/agent-framework-go/internal/otelx"
 	workflowobservability "github.com/microsoft/agent-framework-go/workflow/observability"
 )
 
@@ -153,7 +153,7 @@ func (s *Activity) CaptureError(err error) {
 	}
 	s.span.RecordError(err)
 	s.span.SetAttributes(
-		workflowobservability.StringAttribute(TagErrorType, reflect.TypeOf(err).String()),
+		workflowobservability.StringAttribute(TagErrorType, otelx.ErrorTypeName(err)),
 		workflowobservability.StringAttribute(TagErrorMessage, err.Error()),
 	)
 	s.span.SetError(err.Error())
@@ -285,7 +285,7 @@ func BuildErrorAttributes(err error) []workflowobservability.Attribute {
 	}
 	return []workflowobservability.Attribute{
 		workflowobservability.StringAttribute(TagBuildErrorMessage, err.Error()),
-		workflowobservability.StringAttribute(TagBuildErrorType, reflect.TypeOf(err).String()),
+		workflowobservability.StringAttribute(TagBuildErrorType, otelx.ErrorTypeName(err)),
 	}
 }
 
@@ -294,7 +294,7 @@ func ErrorAttributes(err error) []workflowobservability.Attribute {
 		return nil
 	}
 	return []workflowobservability.Attribute{
-		workflowobservability.StringAttribute(TagErrorType, reflect.TypeOf(err).String()),
+		workflowobservability.StringAttribute(TagErrorType, otelx.ErrorTypeName(err)),
 		workflowobservability.StringAttribute(TagErrorMessage, err.Error()),
 	}
 }

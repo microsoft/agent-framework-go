@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
+	"math"
 	"reflect"
 	"slices"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
+	"github.com/microsoft/agent-framework-go/tool/hostedtool"
 	"google.golang.org/genai"
 )
 
@@ -111,6 +113,9 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				}
 			}
 		}
+		if blocked := promptBlockedContent(resp); blocked != nil {
+			responseContents = append(responseContents, blocked)
+		}
 		if resp.UsageMetadata != nil {
 			responseContents = append(responseContents, &message.UsageContent{
 				Details: toUsageDetails(resp.UsageMetadata),
@@ -127,6 +132,8 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 	}
 
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
+		var latestUsage *genai.GenerateContentResponseUsageMetadata
+		var latestUsageResp *genai.GenerateContentResponse
 		for resp, err := range a.client.Models.GenerateContentStream(ctx, a.config.Model, contents, cfg) {
 			if err != nil {
 				yield(nil, err)
@@ -145,10 +152,16 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 					}
 				}
 			}
+			if blocked := promptBlockedContent(resp); blocked != nil {
+				streamContents = append(streamContents, blocked)
+			}
+			// Gemini reports usageMetadata cumulatively across chunks, with the
+			// final chunk authoritative. Emitting a UsageContent per chunk would
+			// make the downstream Usage() aggregation sum the running totals, so
+			// remember the latest and emit it once after the stream ends.
 			if resp.UsageMetadata != nil {
-				streamContents = append(streamContents, &message.UsageContent{
-					Details: toUsageDetails(resp.UsageMetadata),
-				})
+				latestUsage = resp.UsageMetadata
+				latestUsageResp = resp
 			}
 			if !yield(&agent.ResponseUpdate{
 				Contents:          streamContents,
@@ -159,6 +172,35 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				return
 			}
 		}
+		if latestUsage != nil {
+			yield(&agent.ResponseUpdate{
+				Contents:          []message.Content{&message.UsageContent{Details: toUsageDetails(latestUsage)}},
+				Role:              message.RoleAssistant,
+				CreatedAt:         time.Now(),
+				RawRepresentation: latestUsageResp,
+			}, nil)
+		}
+	}
+}
+
+// promptBlockedContent returns an ErrorContent when Gemini blocked the prompt
+// for a content or safety policy violation. A blocked prompt yields zero
+// candidates and populates resp.PromptFeedback.BlockReason, so without this the
+// caller could not distinguish a policy block from a legitimately empty
+// completion. Mirrors the .NET/Python providers, which surface PromptFeedback
+// as an error rather than an empty success.
+func promptBlockedContent(resp *genai.GenerateContentResponse) *message.ErrorContent {
+	if resp == nil || resp.PromptFeedback == nil || resp.PromptFeedback.BlockReason == "" {
+		return nil
+	}
+	msg := resp.PromptFeedback.BlockReasonMessage
+	if msg == "" {
+		msg = "prompt blocked by Gemini content filter"
+	}
+	return &message.ErrorContent{
+		ContentHeader: message.ContentHeader{RawRepresentation: resp},
+		ErrorCode:     string(resp.PromptFeedback.BlockReason),
+		Message:       msg,
 	}
 }
 
@@ -182,19 +224,43 @@ func (a *client) buildParams(messages []*message.Message, opts []agent.Option) (
 		appendSystemInstruction(cfg, strings.Join(instructions, "\n"))
 	}
 
-	// Collect tools from options.
+	// Collect tools from options. Function tools are aggregated into a single
+	// genai.Tool holding all FunctionDeclarations, while each hosted tool maps
+	// onto its own genai.Tool entry (Gemini does not allow combining native
+	// tools with function declarations in a single Tool). This mirrors the
+	// hosted-tool mapping already performed by the openaiprovider.
 	var funcDecls []*genai.FunctionDeclaration
 	for tl := range agent.AllOptions(opts, agent.WithTool) {
-		if ft, ok := tl.(tool.FuncTool); ok {
-			decl := &genai.FunctionDeclaration{
-				Name:        ft.Name(),
-				Description: ft.Description(),
+		switch tl := tl.(type) {
+		case *hostedtool.WebSearch:
+			cfg.Tools = append(cfg.Tools, &genai.Tool{GoogleSearch: &genai.GoogleSearch{}})
+		case *hostedtool.CodeInterpreter:
+			cfg.Tools = append(cfg.Tools, &genai.Tool{CodeExecution: &genai.ToolCodeExecution{}})
+		case *hostedtool.FileSearch:
+			fs := &genai.FileSearch{}
+			for _, input := range tl.Inputs {
+				if hosted, ok := input.(*message.HostedVectorStoreContent); ok {
+					fs.FileSearchStoreNames = append(fs.FileSearchStoreNames, hosted.VectorStoreID)
+				}
 			}
-			if schema := ft.Schema(); schema != nil {
+			// Guard against negative or out-of-range values before the
+			// int32 conversion: negatives would produce an invalid TopK and
+			// large values would overflow on 64-bit platforms.
+			if tl.MaximumResultCount > 0 && tl.MaximumResultCount <= math.MaxInt32 {
+				topK := int32(tl.MaximumResultCount)
+				fs.TopK = &topK
+			}
+			cfg.Tools = append(cfg.Tools, &genai.Tool{FileSearch: fs})
+		case tool.FuncTool:
+			decl := &genai.FunctionDeclaration{
+				Name:        tl.Name(),
+				Description: tl.Description(),
+			}
+			if schema := tl.Schema(); schema != nil {
 				// Use ParametersJsonSchema to pass through the JSON schema directly.
 				decl.ParametersJsonSchema = schema
 			}
-			if schema := ft.ReturnSchema(); schema != nil {
+			if schema := tl.ReturnSchema(); schema != nil {
 				decl.ResponseJsonSchema = schema
 			}
 			funcDecls = append(funcDecls, decl)
@@ -359,12 +425,33 @@ func buildRequestParts(msg *message.Message, callIDToName map[string]string) ([]
 				},
 			})
 		case *message.URIContent:
-			parts = append(parts, &genai.Part{
-				FileData: &genai.FileData{
-					FileURI:  c.URI,
-					MIMEType: c.MediaType,
-				},
-			})
+			if len(c.URI) >= len("data:") && strings.EqualFold(c.URI[:len("data:")], "data:") {
+				// A data: URI carries the bytes inline. Gemini's FileData.FileURI
+				// requires an external reference (gs:// or https://), so a data: URI
+				// would be silently dropped. Decode it into InlineData instead,
+				// mirroring the DataContent handling above and the Python SDK
+				// (from_bytes for data: URIs, from_uri otherwise).
+				data, mt, err := message.DecodeDataURI(c.URI)
+				if err != nil {
+					return nil, fmt.Errorf("geminiprovider: failed to decode data URI content: %w", err)
+				}
+				if c.MediaType != "" {
+					mt = c.MediaType
+				}
+				parts = append(parts, &genai.Part{
+					InlineData: &genai.Blob{
+						Data:     data,
+						MIMEType: mt,
+					},
+				})
+			} else {
+				parts = append(parts, &genai.Part{
+					FileData: &genai.FileData{
+						FileURI:  c.URI,
+						MIMEType: c.MediaType,
+					},
+				})
+			}
 		case *message.HostedFileContent:
 			parts = append(parts, &genai.Part{
 				FileData: &genai.FileData{
@@ -409,6 +496,20 @@ func buildResponsePart(part *genai.Part, contents []message.Content) ([]message.
 		argsJSON, err := json.Marshal(args)
 		if err != nil {
 			return nil, fmt.Errorf("geminiprovider: failed to marshal function call arguments: %w", err)
+		}
+		// Gemini 3 attaches the opaque thought_signature to the same part that
+		// carries the function call (Thought is false, Text is empty). Capture it
+		// as a preceding TextReasoningContent so buildRequestParts can replay it
+		// on the next turn, mirroring the Python reference which emits a
+		// text-reasoning content (protected_data=base64(thought_signature))
+		// immediately before the function call.
+		if len(part.ThoughtSignature) > 0 {
+			contents = append(contents, &message.TextReasoningContent{
+				ProtectedData: base64.StdEncoding.EncodeToString(part.ThoughtSignature),
+				ContentHeader: message.ContentHeader{
+					RawRepresentation: part,
+				},
+			})
 		}
 		contents = append(contents, &message.FunctionCallContent{
 			CallID:    part.FunctionCall.ID,

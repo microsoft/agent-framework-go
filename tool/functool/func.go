@@ -35,6 +35,9 @@ type Handler func(ctx context.Context, args string) (any, error)
 //     Invalid input is rejected before getting to the handler.
 type HandlerFor[In, Out any] func(context.Context, In) (Out, error)
 
+// MustNew is like [New] but panics if schema construction fails. It is intended
+// for package-level initialization where a construction failure is a programming
+// error that should surface immediately.
 func MustNew[In, Out any](cfg Config, h HandlerFor[In, Out]) tool.FuncTool {
 	t, err := New(cfg, h)
 	if err != nil {
@@ -43,6 +46,10 @@ func MustNew[In, Out any](cfg Config, h HandlerFor[In, Out]) tool.FuncTool {
 	return t
 }
 
+// New builds a [tool.FuncTool] from cfg and the typed handler h. It derives the
+// JSON input schema from In and the output schema from Out, wrapping non-struct
+// inputs and validating arguments before invoking h. It returns an error if
+// either schema cannot be constructed.
 func New[In, Out any](cfg Config, h HandlerFor[In, Out]) (tool.FuncTool, error) {
 	t := funcTool{
 		cfg: cfg,
@@ -128,7 +135,14 @@ func inputFormatFor[T any]() (format *jsonformat.Format, wrapped bool, err error
 	if typ == reflect.TypeFor[any]() {
 		return nil, false, fmt.Errorf("input type any is not supported by HandlerFor; use Handler for dynamic inputs")
 	}
-	if typ.Kind() != reflect.Struct {
+	// Dereference pointers so a *Struct input produces the same flat schema as
+	// a Struct input (jsonformat.ForType treats pointers equivalently); only
+	// genuinely non-struct inputs are wrapped in inputWrapper.
+	elem := typ
+	for elem.Kind() == reflect.Pointer {
+		elem = elem.Elem()
+	}
+	if elem.Kind() != reflect.Struct {
 		typ = reflect.TypeFor[inputWrapper[T]]()
 		wrapped = true
 	}

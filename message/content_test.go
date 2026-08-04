@@ -20,6 +20,36 @@ func TestTextContent_String(t *testing.T) {
 	}
 }
 
+func TestContentsText(t *testing.T) {
+	tests := []struct {
+		name     string
+		contents message.Contents
+		want     string
+	}{
+		{
+			name:     "empty",
+			contents: message.Contents{},
+			want:     "",
+		},
+		{
+			name: "concatenates all text contents in order",
+			contents: message.Contents{
+				&message.TextContent{Text: "foo"},
+				&message.TextReasoningContent{Text: "ignored"},
+				&message.TextContent{Text: "bar"},
+			},
+			want: "foobar",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.contents.Text(); got != tt.want {
+				t.Errorf("Text() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // Test TextReasoningContent
 func TestTextReasoningContent_String(t *testing.T) {
 	trc := &message.TextReasoningContent{Text: "reasoning text"}
@@ -163,6 +193,15 @@ func TestContentEncoding_Roundtrip(t *testing.T) {
 			Arguments:  "{\"arg1\":\"value1\"}",
 			Name:       "mcpName",
 			ServerName: "mcpServer",
+		},
+		&message.MCPServerToolResultContent{
+			CallID:     "mcp-call-123",
+			Name:       "mcpName",
+			ServerName: "mcpServer",
+			Outputs: message.Contents{
+				&message.TextContent{Text: "mcp tool output"},
+			},
+			Error: "mcp tool error",
 		},
 	}
 	data, err := json.Marshal(contents)
@@ -352,6 +391,39 @@ func TestToolApprovalRequestContent_CreateResponseSnapshotsFunctionCall(t *testi
 	if response.AdditionalProperties["request"] != "value" {
 		t.Fatalf("expected response additional properties to be snapshotted, got %v", response.AdditionalProperties["request"])
 	}
+}
+
+func TestToolApprovalRequestContent_AlwaysApproveSnapshotsAdditionalProperties(t *testing.T) {
+	newRequest := func() *message.ToolApprovalRequestContent {
+		return &message.ToolApprovalRequestContent{
+			ContentHeader: message.ContentHeader{
+				AdditionalProperties: map[string]any{"request": "value"},
+			},
+			RequestID: "approval-1",
+			ToolCall: &message.FunctionCallContent{
+				CallID: "call-1",
+				Name:   "deploy",
+			},
+		}
+	}
+
+	t.Run("AlwaysApproveToolResponse", func(t *testing.T) {
+		request := newRequest()
+		response := request.AlwaysApproveToolResponse()
+		request.AdditionalProperties["request"] = "changed"
+		if response.AdditionalProperties["request"] != "value" {
+			t.Fatalf("expected response additional properties to be snapshotted, got %v", response.AdditionalProperties["request"])
+		}
+	})
+
+	t.Run("AlwaysApproveToolWithArgumentsResponse", func(t *testing.T) {
+		request := newRequest()
+		response := request.AlwaysApproveToolWithArgumentsResponse()
+		request.AdditionalProperties["request"] = "changed"
+		if response.AdditionalProperties["request"] != "value" {
+			t.Fatalf("expected response additional properties to be snapshotted, got %v", response.AdditionalProperties["request"])
+		}
+	})
 }
 
 func TestToolApprovalRequestContent_CreateResponseSnapshotsMCPServerToolCall(t *testing.T) {

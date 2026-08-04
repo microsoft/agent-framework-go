@@ -114,20 +114,33 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 				yield(nil, err)
 			}
 		}
-		choice := resp.Choices[0]
-		contents := make([]message.Content, 0, 1+len(choice.Message.ToolCalls))
-		for _, tc := range choice.Message.ToolCalls {
-			contents = append(contents, &message.FunctionCallContent{
-				CallID:    tc.ID,
-				Name:      tc.Function.Name,
-				Arguments: tc.Function.Arguments,
-			})
-		}
-		if choice.Message.Content != "" {
-			contents = append(contents, &message.TextContent{Text: choice.Message.Content})
-		}
-		if choice.Message.Refusal != "" {
-			contents = append(contents, &message.ErrorContent{Message: choice.Message.Refusal})
+		// Some services return a successful response with no choices, e.g.
+		// Azure OpenAI when the prompt is blocked by a content filter (the
+		// response carries prompt_filter_results and usage instead). Tolerate
+		// this by emitting an update with whatever metadata and usage are
+		// present rather than indexing into an empty Choices slice, mirroring
+		// the streaming path below.
+		var contents []message.Content
+		var finishReason string
+		if len(resp.Choices) > 0 {
+			choice := resp.Choices[0]
+			contents = make([]message.Content, 0, 1+len(choice.Message.ToolCalls))
+			for _, tc := range choice.Message.ToolCalls {
+				contents = append(contents, &message.FunctionCallContent{
+					CallID:    tc.ID,
+					Name:      tc.Function.Name,
+					Arguments: tc.Function.Arguments,
+				})
+			}
+			if choice.Message.Content != "" {
+				textContent := &message.TextContent{Text: choice.Message.Content}
+				populateChatAnnotations(choice.Message.Annotations, textContent)
+				contents = append(contents, textContent)
+			}
+			if choice.Message.Refusal != "" {
+				contents = append(contents, &message.ErrorContent{Message: choice.Message.Refusal, ErrorCode: "Refusal"})
+			}
+			finishReason = choice.FinishReason
 		}
 		if resp.JSON.Usage.Valid() {
 			contents = addUsage(contents, resp.Usage)
@@ -138,7 +151,7 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 				Role:         message.RoleAssistant,
 				ResponseID:   resp.ID,
 				MessageID:    resp.ID,
-				FinishReason: choice.FinishReason,
+				FinishReason: finishReason,
 				CreatedAt:    time.Unix(resp.Created, 0),
 			}
 			if !yield(update, nil) {
@@ -162,6 +175,9 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 					Name:      tc.Name,
 					Arguments: tc.Arguments,
 				})
+			}
+			if refusal, ok := acc.JustFinishedRefusal(); ok {
+				contents = append(contents, &message.ErrorContent{Message: refusal})
 			}
 			role := message.RoleAssistant
 			if len(chunk.Choices) > 0 {
@@ -308,21 +324,10 @@ func buildCompletionParams(model string, messages []*message.Message, opts []age
 			}
 		case tool.FuncTool:
 			name, description := tl.Name(), tl.Description()
-			var funcParams map[string]any
-			switch schema := tl.Schema().(type) {
-			case map[string]any:
-				funcParams = schema
-			default:
-				if schema == nil {
-					break
-				}
-				data, err := json.Marshal(schema)
-				if err == nil {
-					err = json.Unmarshal(data, &funcParams)
-				}
-				if err != nil {
-					return openai.ChatCompletionNewParams{}, fmt.Errorf("failed to convert function tool schema to JSON format: %w", err)
-				}
+			schema := tl.Schema()
+			funcParams, err := schemaToMap(schema)
+			if err != nil {
+				return openai.ChatCompletionNewParams{}, fmt.Errorf("failed to convert function tool schema to JSON format: %w", err)
 			}
 			params.Tools = append(params.Tools, openai.ChatCompletionToolUnionParam{
 				OfFunction: &openai.ChatCompletionFunctionToolParam{
@@ -502,6 +507,24 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 	}
 }
 
+// populateChatAnnotations maps Chat Completions message annotations (e.g. the
+// url_citation entries produced by the web-search tool) onto the text content's
+// annotations, mirroring populateAnnotations on the Responses path.
+func populateChatAnnotations(anns []openai.ChatCompletionMessageAnnotation, content *message.TextContent) {
+	for _, ann := range anns {
+		// Only url_citation annotations carry a populated URLCitation payload;
+		// skip other variants (and empty URLs) to avoid emitting bogus citations.
+		if ann.Type != "url_citation" || ann.URLCitation.URL == "" {
+			continue
+		}
+		content.Annotations = append(content.Annotations, &message.CitationAnnotation{
+			URL:               ann.URLCitation.URL,
+			Title:             ann.URLCitation.Title,
+			RawRepresentation: ann,
+		})
+	}
+}
+
 func addUsage(contents []message.Content, usage openai.CompletionUsage) []message.Content {
 	details := message.UsageDetails{
 		InputTokenCount:       usage.PromptTokens,
@@ -509,18 +532,38 @@ func addUsage(contents []message.Content, usage openai.CompletionUsage) []messag
 		TotalTokenCount:       usage.TotalTokens,
 		CachedInputTokenCount: usage.PromptTokensDetails.CachedTokens,
 		ReasoningTokenCount:   usage.CompletionTokensDetails.ReasoningTokens,
-		AdditionalCounts:      make(map[string]int64),
 	}
-	details.AdditionalCounts["PromptTokensDetails.AudioTokens"] = usage.PromptTokensDetails.AudioTokens
-	details.AdditionalCounts["CompletionTokensDetails.AudioTokens"] = usage.CompletionTokensDetails.AudioTokens
-	details.AdditionalCounts["CompletionTokensDetails.AcceptedPredictionTokens"] = usage.CompletionTokensDetails.AcceptedPredictionTokens
-	details.AdditionalCounts["CompletionTokensDetails.RejectedPredictionTokens"] = usage.CompletionTokensDetails.RejectedPredictionTokens
+	add := func(k string, v int64) {
+		if v == 0 {
+			return
+		}
+		if details.AdditionalCounts == nil {
+			details.AdditionalCounts = make(map[string]int64)
+		}
+		details.AdditionalCounts[k] = v
+	}
+	add("PromptTokensDetails.AudioTokens", usage.PromptTokensDetails.AudioTokens)
+	add("CompletionTokensDetails.AudioTokens", usage.CompletionTokensDetails.AudioTokens)
+	add("CompletionTokensDetails.AcceptedPredictionTokens", usage.CompletionTokensDetails.AcceptedPredictionTokens)
+	add("CompletionTokensDetails.RejectedPredictionTokens", usage.CompletionTokensDetails.RejectedPredictionTokens)
 	return append(contents, &message.UsageContent{Details: details})
 }
 
 func imageDetail(props map[string]any) string {
 	if detail, ok := props["detail"]; ok {
 		if v, ok := detail.(string); ok {
+			return v
+		}
+	}
+	return ""
+}
+
+// imageFileID returns the string value of props["file_id"] or empty. This
+// allows an image referenced by an already-uploaded file to be forwarded to
+// the Responses API, mirroring the Python reference.
+func imageFileID(props map[string]any) string {
+	if id, ok := props["file_id"]; ok {
+		if v, ok := id.(string); ok {
 			return v
 		}
 	}

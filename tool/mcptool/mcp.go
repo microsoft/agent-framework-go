@@ -1,8 +1,9 @@
 // Copyright (c) Microsoft. All rights reserved.
 
 // Package mcp provides integration with the Model Context Protocol (MCP).
-// It allows agents to connect to external MCP servers via stdio, HTTP, or WebSocket
-// and expose their tools and prompts as agent.Tool instances.
+// It allows agents to connect to external MCP servers via stdio (subprocess)
+// or HTTP (SSE / streamable HTTP) and expose their tools as
+// tool.Tool / tool.FuncTool instances.
 package mcptool
 
 import (
@@ -11,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
@@ -81,7 +83,21 @@ func mcpCallToolResultToAgentContent(result *mcp.CallToolResult) []message.Conte
 }
 
 func mcpCallToolResultNeedsEnvelope(result *mcp.CallToolResult) bool {
-	return result.IsError || result.StructuredContent != nil || len(result.Meta) > 0
+	return result.IsError || result.StructuredContent != nil || hasUserDefinedMeta(result.Meta)
+}
+
+// hasUserDefinedMeta reports whether the meta map contains any keys that are
+// not automatically injected by the MCP SDK (which prefixes its own keys with
+// "io.modelcontextprotocol/"). SDK-injected keys such as
+// MetaKeyServerInfo (added per SEP-2575 in v1.7.0) are not considered
+// user-defined and do not warrant wrapping the result in an envelope.
+func hasUserDefinedMeta(meta mcp.Meta) bool {
+	for k := range meta {
+		if !strings.HasPrefix(k, "io.modelcontextprotocol/") {
+			return true
+		}
+	}
+	return false
 }
 
 func mcpContentToAgentContent(mcpContents []mcp.Content) []message.Content {
@@ -155,13 +171,13 @@ func mcpContentToAgentContentWithRaw(mcpContents []mcp.Content, rawOverride any)
 				})
 			}
 
-		case *mcp.ToolUseContent:
+		case *mcp.ToolUseContent: //nolint:staticcheck // ToolUseContent is deprecated per SEP-2577 but remains functional during the deprecation window.
 			result = append(result, &message.TextContent{
 				ContentHeader: mcpContentHeader(raw),
 				Text:          jsonText(contentValue),
 			})
 
-		case *mcp.ToolResultContent:
+		case *mcp.ToolResultContent: //nolint:staticcheck // ToolResultContent is deprecated per SEP-2577 but remains functional during the deprecation window.
 			nestedContents := mcpContentToAgentContentWithRaw(contentValue.Content, contentValue)
 			if len(nestedContents) > 0 {
 				result = append(result, nestedContents...)
@@ -271,6 +287,8 @@ func agentResultToMCPCallToolResult(result any) *mcp.CallToolResult {
 		}
 		callResult.Content = []mcp.Content{agentContentToMCPContent(resultValue)}
 		return callResult
+	case message.Contents:
+		return agentResultToMCPCallToolResult([]message.Content(resultValue))
 	case []message.Content:
 		callResult := &mcp.CallToolResult{Content: make([]mcp.Content, 0, len(resultValue))}
 		for _, contentValue := range resultValue {
@@ -324,33 +342,63 @@ func isJSONObject(data []byte) bool {
 }
 
 func agentContentToMCPContent(contentValue message.Content) mcp.Content {
-	switch contentValue := contentValue.(type) {
+	// Each case returns only for a non-nil concrete value. A typed-nil pointer
+	// (e.g. a tool returning (*message.ErrorContent)(nil)) still satisfies the
+	// message.Content interface, so it would otherwise reach a field
+	// dereference below and panic; instead it falls through to the JSON
+	// fallback, where a typed-nil pointer marshals to "null".
+	switch c := contentValue.(type) {
 	case *message.TextContent:
-		return &mcp.TextContent{Text: contentValue.Text}
-	case *message.ErrorContent:
-		return &mcp.TextContent{Text: contentValue.Message}
-	case *message.DataContent:
-		data, err := base64.StdEncoding.DecodeString(contentValue.Data)
-		if err != nil {
-			return &mcp.TextContent{Text: fmt.Sprintf("[Invalid data content: %v]", err)}
+		if c != nil {
+			return &mcp.TextContent{Text: c.Text}
 		}
-		switch contentValue.TopLevelMediaType() {
-		case "image":
-			return &mcp.ImageContent{Data: data, MIMEType: contentValue.MediaType}
-		case "audio":
-			return &mcp.AudioContent{Data: data, MIMEType: contentValue.MediaType}
-		default:
-			return &mcp.EmbeddedResource{Resource: &mcp.ResourceContents{
-				URI:      contentValue.Name,
-				MIMEType: contentValue.MediaType,
-				Blob:     data,
-			}}
+	case *message.ErrorContent:
+		if c != nil {
+			return &mcp.TextContent{Text: c.Message}
+		}
+	case *message.DataContent:
+		if c != nil {
+			data, err := base64.StdEncoding.DecodeString(c.Data)
+			if err != nil {
+				return &mcp.TextContent{Text: fmt.Sprintf("[Invalid data content: %v]", err)}
+			}
+			switch c.TopLevelMediaType() {
+			case "image":
+				return &mcp.ImageContent{Data: data, MIMEType: c.MediaType}
+			case "audio":
+				return &mcp.AudioContent{Data: data, MIMEType: c.MediaType}
+			case "text":
+				// Text resources carry their payload in Text, not Blob. The reverse
+				// mapping (mcpContentToAgentContent) already reads Resource.Text for
+				// text; emitting Blob here would make text unreadable to MCP clients.
+				// Non-UTF-8 payloads cannot survive JSON transport as Text (invalid
+				// sequences are replaced), so fall back to Blob for those.
+				if utf8.Valid(data) {
+					return &mcp.EmbeddedResource{Resource: &mcp.ResourceContents{
+						URI:      c.Name,
+						MIMEType: c.MediaType,
+						Text:     string(data),
+					}}
+				}
+				return &mcp.EmbeddedResource{Resource: &mcp.ResourceContents{
+					URI:      c.Name,
+					MIMEType: c.MediaType,
+					Blob:     data,
+				}}
+			default:
+				return &mcp.EmbeddedResource{Resource: &mcp.ResourceContents{
+					URI:      c.Name,
+					MIMEType: c.MediaType,
+					Blob:     data,
+				}}
+			}
 		}
 	case *message.URIContent:
-		return &mcp.ResourceLink{URI: contentValue.URI, MIMEType: contentValue.MediaType}
-	default:
-		return &mcp.TextContent{Text: jsonText(contentValue)}
+		if c != nil {
+			return &mcp.ResourceLink{URI: c.URI, MIMEType: c.MediaType}
+		}
 	}
+	return &mcp.TextContent{Text: jsonText(contentValue)}
 }
 
 var (

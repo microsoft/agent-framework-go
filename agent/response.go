@@ -63,6 +63,7 @@ type Response struct {
 	Messages []*message.Message
 }
 
+// String returns the concatenated text of all TextContent items across the response messages.
 func (resp *Response) String() string {
 	if resp == nil {
 		return ""
@@ -95,6 +96,7 @@ func (resp *Response) Contents() iter.Seq[message.Content] {
 	}
 }
 
+// Usage returns the token usage aggregated (summed) across all of the response's messages.
 func (resp *Response) Usage() message.UsageDetails {
 	var usage message.UsageDetails
 	if resp == nil {
@@ -119,8 +121,9 @@ func (resp *Response) Coalesce() {
 // ToUpdates converts this response into response updates suitable for streaming
 // scenarios.
 //
-// Each message in the response becomes a separate update. Response-level usage
-// and additional properties are included as an additional update when present.
+// Each message in the response becomes a separate update. Response-level usage,
+// additional properties, and a non-empty continuation token are included as an
+// additional metadata-only update when present.
 func (resp *Response) ToUpdates() []*ResponseUpdate {
 	if resp == nil {
 		return nil
@@ -149,11 +152,12 @@ func (resp *Response) ToUpdates() []*ResponseUpdate {
 		})
 	}
 
-	if hasUsage || hasAdditionalProperties {
+	if hasUsage || hasAdditionalProperties || resp.ContinuationToken != "" {
 		extra := &ResponseUpdate{
 			AdditionalProperties: resp.AdditionalProperties,
 			AgentID:              resp.AgentID,
 			ResponseID:           resp.ID,
+			ContinuationToken:    resp.ContinuationToken,
 			CreatedAt:            resp.CreatedAt,
 		}
 		if hasUsage {
@@ -174,6 +178,7 @@ func isZeroUsage(usage message.UsageDetails) bool {
 		len(usage.AdditionalCounts) == 0
 }
 
+// Update folds a streaming [ResponseUpdate] into resp, appending its contents to the matching message and updating response-level fields from later updates.
 func (resp *Response) Update(update *ResponseUpdate) {
 	if update == nil {
 		return
@@ -186,7 +191,7 @@ func (resp *Response) Update(update *ResponseUpdate) {
 	msg.AuthorName = cmp.Or(update.AuthorName, msg.AuthorName)
 	msg.Role = cmp.Or(update.Role, msg.Role)
 	msg.ID = cmp.Or(update.MessageID, msg.ID)
-	if msg.CreatedAt.IsZero() || (!update.CreatedAt.IsZero() && update.CreatedAt.After(msg.CreatedAt)) {
+	if !isValidCreatedAt(msg.CreatedAt) && isValidCreatedAt(update.CreatedAt) {
 		msg.CreatedAt = update.CreatedAt
 	}
 	msg.Contents = append(msg.Contents, update.Contents...)
@@ -196,12 +201,18 @@ func (resp *Response) Update(update *ResponseUpdate) {
 		}
 		maps.Copy(msg.AdditionalProperties, update.AdditionalProperties)
 	}
-	if msg.RawRepresentation == nil {
-		msg.RawRepresentation = update.RawRepresentation
-	} else if s, ok := msg.RawRepresentation.([]any); ok {
-		msg.RawRepresentation = append(s, update.RawRepresentation)
-	} else {
-		msg.RawRepresentation = []any{msg.RawRepresentation, update.RawRepresentation}
+	// A nil RawRepresentation carries no provider data, so treat it as a no-op.
+	// This keeps metadata-only updates (e.g. response-level usage or a
+	// continuation token emitted by ToUpdates) from mutating the message's raw
+	// data during a ToUpdates/Collect round-trip.
+	if update.RawRepresentation != nil {
+		if msg.RawRepresentation == nil {
+			msg.RawRepresentation = update.RawRepresentation
+		} else if s, ok := msg.RawRepresentation.([]any); ok {
+			msg.RawRepresentation = append(s, update.RawRepresentation)
+		} else {
+			msg.RawRepresentation = []any{msg.RawRepresentation, update.RawRepresentation}
+		}
 	}
 
 	// Other members on a ResponseUpdate map to members of the response.
@@ -214,7 +225,7 @@ func (resp *Response) Update(update *ResponseUpdate) {
 	} else {
 		resp.ContinuationToken = update.ContinuationToken
 	}
-	if resp.CreatedAt.IsZero() || (!update.CreatedAt.IsZero() && update.CreatedAt.After(resp.CreatedAt)) {
+	if !isValidCreatedAt(resp.CreatedAt) && isValidCreatedAt(update.CreatedAt) {
 		resp.CreatedAt = update.CreatedAt
 	}
 	if update.AdditionalProperties != nil {
@@ -223,6 +234,14 @@ func (resp *Response) Update(update *ResponseUpdate) {
 		}
 		maps.Copy(resp.AdditionalProperties, update.AdditionalProperties)
 	}
+}
+
+// isValidCreatedAt reports whether t is a usable creation timestamp. A zero
+// time.Time or an epoch-zero value is treated as unset, mirroring the .NET
+// ProcessUpdate check that keeps the first valid timestamp and ignores
+// default/uninitialized values.
+func isValidCreatedAt(t time.Time) bool {
+	return t.After(time.Unix(0, 0))
 }
 
 func (resp *Response) targetMessage(update *ResponseUpdate) *message.Message {
@@ -316,6 +335,7 @@ func (r *ResponseUpdate) String() string {
 	return sb.String()
 }
 
+// Usage returns the token usage carried by this update's UsageContent items.
 func (m *ResponseUpdate) Usage() message.UsageDetails {
 	if m == nil || m.Contents == nil {
 		return message.UsageDetails{}

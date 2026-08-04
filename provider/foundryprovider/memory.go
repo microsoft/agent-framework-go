@@ -5,7 +5,9 @@ package foundryprovider
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"net/http"
 	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
@@ -116,12 +118,36 @@ func newMemoryProvider(client *azaiprojects.MemoryStoresClient, memoryStoreName 
 	return p
 }
 
+// Invoking is called before an agent run. It searches the Foundry memory store for memories
+// relevant to the incoming messages and returns them as additional context to inject into the run.
 func (p *MemoryProvider) Invoking(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
 	return p.provider.Invoking(ctx, invoking)
 }
 
+// Invoked is called after an agent run to persist the request and response messages as memory
+// updates in the Foundry memory store.
 func (p *MemoryProvider) Invoked(ctx context.Context, invoked agent.InvokedContext) error {
 	return p.provider.Invoked(ctx, invoked)
+}
+
+// EnsureStoredMemoriesDeleted deletes every memory stored for the session's scope in the
+// backing Foundry memory store. The scope is resolved with the provider's scope callback,
+// so a blank scope is treated as a configuration error and panics, matching the contract
+// documented on [NewMemoryProvider]. A store that holds no memories for the scope responds
+// with HTTP 404, which is treated as success. Any other error is returned to the caller.
+func (p *MemoryProvider) EnsureStoredMemoriesDeleted(ctx context.Context, session *agent.Session) error {
+	scope := p.scope(session)
+	if _, err := p.client.DeleteScope(ctx, p.memoryStoreName, scope, nil); err != nil {
+		var respErr *azcore.ResponseError
+		if errors.As(err, &respErr) && respErr.StatusCode == http.StatusNotFound {
+			p.log(ctx, slog.LevelInfo, "foundrymemory: no stored memories to delete", "memory_store", p.memoryStoreName)
+			return nil
+		}
+		p.log(ctx, slog.LevelError, "foundrymemory: failed to delete stored memories", "memory_store", p.memoryStoreName, "error", err)
+		return err
+	}
+	p.log(ctx, slog.LevelInfo, "foundrymemory: deleted stored memories", "memory_store", p.memoryStoreName)
+	return nil
 }
 
 func (p *MemoryProvider) provide(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
@@ -223,11 +249,15 @@ func toResponseItem(role message.Role, text string) map[string]any {
 	default:
 		role = message.RoleUser
 	}
+	contentType := "input_text"
+	if role == message.RoleAssistant {
+		contentType = "output_text"
+	}
 	return map[string]any{
 		"type": "message",
 		"role": string(role),
 		"content": []map[string]any{{
-			"type": "input_text",
+			"type": contentType,
 			"text": text,
 		}},
 	}

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"sync"
 	"sync/atomic"
 
 	"github.com/google/uuid"
@@ -41,6 +42,10 @@ type runner struct {
 	knownValidInputTypes map[reflect.Type]struct{}
 	needsRepublish       atomic.Bool
 
+	// checkpointMu guards checkpoints and lastCheckpointInfo. The background
+	// run loop writes them during supersteps (and on restore) while consumers
+	// read them concurrently via the public Checkpoints/LastCheckpoint handles.
+	checkpointMu       sync.Mutex
 	checkpoints        []workflow.CheckpointInfo
 	lastCheckpointInfo *workflow.CheckpointInfo
 }
@@ -280,12 +285,15 @@ func (r *runner) RequestEndRun(ctx context.Context) error {
 	return r.runContext.endRun(ctx)
 }
 
-// Checkpoints returns the list of created checkpoints.
+// IsCheckpointingEnabled reports whether a checkpoint manager is configured for this run.
 func (r *runner) IsCheckpointingEnabled() bool {
 	return r.checkpointMgr != nil
 }
 
+// Checkpoints returns the list of created checkpoints.
 func (r *runner) Checkpoints() []workflow.CheckpointInfo {
+	r.checkpointMu.Lock()
+	defer r.checkpointMu.Unlock()
 	return slices.Clone(r.checkpoints)
 }
 
@@ -343,8 +351,10 @@ func (r *runner) restoreCheckpointCore(ctx context.Context, checkpointInfo workf
 	if err != nil {
 		return fmt.Errorf("failed to retrieve checkpoint index: %w", err)
 	}
+	r.checkpointMu.Lock()
 	r.checkpoints = index
 	r.lastCheckpointInfo = checkpointInfoPtr(checkpointInfo)
+	r.checkpointMu.Unlock()
 	r.stepTracer.Reload(cp.StepNumber)
 	return nil
 }
@@ -456,20 +466,26 @@ func (r *runner) checkpoint(ctx context.Context) error {
 		stateData.Set(key, value)
 	}
 
+	r.checkpointMu.Lock()
+	parent := cloneCheckpointInfoPtr(r.lastCheckpointInfo)
+	r.checkpointMu.Unlock()
+
 	cp := &checkpoint.Checkpoint{
 		StepNumber:    r.stepTracer.StepNumber(),
 		WorkflowInfo:  workflowInfo,
 		RunnerData:    r.runContext.exportState(),
 		StateData:     *stateData,
 		EdgeStateData: edgeData,
-		Parent:        cloneCheckpointInfoPtr(r.lastCheckpointInfo),
+		Parent:        parent,
 	}
 	info, err := r.checkpointMgr.Commit(ctx, r.sessionID, cp)
 	if err != nil {
 		return err
 	}
 	r.stepTracer.TraceCheckpointCreated(info)
+	r.checkpointMu.Lock()
 	r.checkpoints = append(r.checkpoints, info)
 	r.lastCheckpointInfo = checkpointInfoPtr(info)
+	r.checkpointMu.Unlock()
 	return nil
 }
