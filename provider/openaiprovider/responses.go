@@ -947,12 +947,8 @@ func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func
 	if usage := responsesUsageToContent(resp.Usage); usage != nil {
 		currentUpdate.Contents = append(currentUpdate.Contents, usage)
 	}
-	// If there's an error in the response, add an ErrorContent
-	if resp.Error.Message != "" {
-		currentUpdate.Contents = append(currentUpdate.Contents, &message.ErrorContent{
-			Message:   resp.Error.Message,
-			ErrorCode: string(resp.Error.Code),
-		})
+	if failure := responsesFailureContent(resp); failure != nil {
+		currentUpdate.Contents = append(currentUpdate.Contents, failure)
 	}
 	yield(currentUpdate, nil)
 }
@@ -998,6 +994,35 @@ func responsesUsageToContent(usage responses.ResponseUsage) *message.UsageConten
 			CachedInputTokenCount: usage.InputTokensDetails.CachedTokens,
 			ReasoningTokenCount:   usage.OutputTokensDetails.ReasoningTokens,
 		},
+	}
+}
+
+const (
+	responsesDefaultFailureMessage = "The agent run failed."
+	responsesDefaultFailureCode    = "failed"
+)
+
+func responsesFailureContent(resp *responses.Response) *message.ErrorContent {
+	if resp == nil {
+		return nil
+	}
+	if resp.Status != responses.ResponseStatusFailed && resp.Error.Message == "" && resp.Error.Code == "" {
+		return nil
+	}
+	return responsesErrorContent(resp.Error.Message, string(resp.Error.Code), "")
+}
+
+func responsesErrorContent(msg string, code string, details string) *message.ErrorContent {
+	if strings.TrimSpace(msg) == "" {
+		msg = responsesDefaultFailureMessage
+	}
+	if code == "" {
+		code = responsesDefaultFailureCode
+	}
+	return &message.ErrorContent{
+		Message:   msg,
+		Details:   details,
+		ErrorCode: code,
 	}
 }
 
@@ -1062,6 +1087,15 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 		u.AdditionalProperties = responsesPopulateAdditionalProperties(&event.Response)
 		if contToken := createContinuationToken(event.Response.ID, event.SequenceNumber, event.Response.Status, isBackground); contToken != "" {
 			u.ContinuationToken = contToken
+		}
+
+	case responses.ResponseFailedEvent:
+		u = createUpdate(message.RoleAssistant, nil)
+		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
+		u.ResponseID = event.Response.ID
+		u.AdditionalProperties = responsesPopulateAdditionalProperties(&event.Response)
+		if failure := responsesFailureContent(&event.Response); failure != nil {
+			u.Contents = []message.Content{failure}
 		}
 
 	case responses.ResponseTextDeltaEvent:
@@ -1201,11 +1235,7 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 		}
 	case responses.ResponseErrorEvent:
 		u = createUpdate(message.RoleAssistant, []message.Content{
-			&message.ErrorContent{
-				Message:   event.Message,
-				ErrorCode: event.Code,
-				Details:   event.Param,
-			},
+			responsesErrorContent(event.Message, event.Code, event.Param),
 		})
 		if contToken := createContinuationToken(responseID, event.SequenceNumber, responses.ResponseStatusFailed, isBackground); contToken != "" {
 			u.ContinuationToken = contToken
