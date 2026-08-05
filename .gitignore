@@ -38,6 +38,8 @@ Thumbs.db
 /dist/
 samples/getting_started/openai/chat_cli/chat_cli
 samples/getting_started/openai/chat_cli_enhanced/chat_cli_enhanced
+examples/02-agents/agents/message-injection/message-injection
+/message-injection
 
 # Temporary files
 tmp/
