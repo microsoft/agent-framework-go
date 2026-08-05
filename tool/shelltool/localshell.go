@@ -34,6 +34,14 @@ const defaultMaxOutputBytes = 64 * 1024
 
 // LocalConfig configures the shell tool returned by [NewLocal].
 type LocalConfig struct {
+	// Name overrides the tool identifier exposed to the model. When empty,
+	// [NewLocal] uses the default name "run_shell".
+	Name string
+
+	// Description overrides the model-facing tool description. When empty,
+	// [NewLocal] derives a default description from the local shell settings.
+	Description string
+
 	// Shell is an optional override for the shell binary path.  When empty,
 	// the AGENT_FRAMEWORK_SHELL environment variable is consulted; if that is
 	// also unset, the OS default is used (/bin/bash on POSIX, pwsh/cmd on
@@ -145,12 +153,12 @@ type Local struct {
 	exec *localShellExecutor
 }
 
-// Name returns the tool identifier (run_shell).
-func (t *Local) Name() string { return "run_shell" }
+// Name returns the tool identifier.
+func (t *Local) Name() string { return t.exec.opts.toolName() }
 
 // Description returns the model-facing description of the shell tool.
 func (t *Local) Description() string {
-	return t.exec.opts.defaultDescription()
+	return t.exec.opts.toolDescription()
 }
 
 // Schema returns the JSON schema for the tool's command argument.
@@ -533,6 +541,20 @@ func (o LocalConfig) resolvedShell() (resolvedShell, error) {
 	}
 	binary := resolveShell(o.Shell)
 	return resolvedShell{binary: binary, kind: classifyShellKind(binary)}, nil
+}
+
+func (o LocalConfig) toolName() string {
+	if strings.TrimSpace(o.Name) != "" {
+		return o.Name
+	}
+	return "run_shell"
+}
+
+func (o LocalConfig) toolDescription() string {
+	if strings.TrimSpace(o.Description) != "" {
+		return o.Description
+	}
+	return o.defaultDescription()
 }
 
 func (o LocalConfig) defaultDescription() string {
