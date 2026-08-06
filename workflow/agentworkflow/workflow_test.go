@@ -105,6 +105,66 @@ func fixedTextAgent(id, name, text string) *agent.Agent {
 	)
 }
 
+func countingAgent(id, name string) *agent.Agent {
+	run := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			userTurns := 0
+			for _, msg := range msgs {
+				if msg != nil && msg.Role == message.RoleUser {
+					userTurns++
+				}
+			}
+			yield(&agent.ResponseUpdate{
+				Role:       message.RoleAssistant,
+				AgentID:    id,
+				AuthorName: name,
+				Contents: []message.Content{
+					&message.TextContent{Text: fmt.Sprintf("turn:%d", userTurns)},
+				},
+			}, nil)
+		}
+	}
+	return agent.New(
+		agent.ProviderConfig{ProviderName: "counting", Run: run},
+		agent.Config{
+			ID:                  id,
+			Name:                name,
+			DisableFuncAutoCall: true,
+		},
+	)
+}
+
+func newCheckpointIdentityWorkflowAgent(t *testing.T, innerID, innerName string) *agent.Agent {
+	t.Helper()
+	hosted := agentworkflow.New(countingAgent(innerID, innerName), agentworkflow.Config{})
+	wf, err := workflow.NewBuilder(hosted).WithOutputFrom(hosted).Build()
+	if err != nil {
+		t.Fatalf("build workflow: %v", err)
+	}
+	ag, err := agentworkflow.NewAgent(wf, agentworkflow.AgentConfig{
+		Config: agent.Config{
+			ID:   "workflow-agent",
+			Name: "workflow-agent",
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewAgent: %v", err)
+	}
+	return ag
+}
+
+func responseText(resp *agent.Response) string {
+	if resp == nil {
+		return ""
+	}
+	for _, msg := range resp.Messages {
+		if text := msg.Contents.Text(); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
 func uppercaseLatestTextBinding(id string) workflow.ExecutorBinding {
 	binding := workflow.ExecutorBinding{
 		ID:               id,
@@ -247,6 +307,105 @@ func TestNew_SerializedSessionResumesFromCheckpoint(t *testing.T) {
 	}
 	if finalText != "got:42" {
 		t.Fatalf("final response text = %q, want %q", finalText, "got:42")
+	}
+}
+
+func TestNew_SerializedSessionWithStableHostedAgentIdentity_ResumesAcrossReconstruction(t *testing.T) {
+	ag1 := newCheckpointIdentityWorkflowAgent(t, "inner-agent", "inner_agent")
+	session, err := ag1.CreateSession(t.Context())
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	first, err := ag1.RunText(t.Context(), "Please help me.", agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if got := responseText(first); got != "turn:1" {
+		t.Fatalf("first response = %q, want %q", got, "turn:1")
+	}
+
+	data, err := json.Marshal(session)
+	if err != nil {
+		t.Fatalf("Marshal session: %v", err)
+	}
+
+	var restored agent.Session
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("Unmarshal session: %v", err)
+	}
+
+	ag2 := newCheckpointIdentityWorkflowAgent(t, "inner-agent", "inner_agent")
+	second, err := ag2.RunText(t.Context(), "Anything else?", agent.WithSession(&restored)).Collect()
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if got := responseText(second); got != "turn:2" {
+		t.Fatalf("second response = %q, want %q", got, "turn:2")
+	}
+}
+
+func TestNew_SerializedSessionWithUnstableHostedAgentIdentity_FailsAcrossReconstruction(t *testing.T) {
+	ag1 := newCheckpointIdentityWorkflowAgent(t, "", "inner_agent")
+	session, err := ag1.CreateSession(t.Context())
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	first, err := ag1.RunText(t.Context(), "Please help me.", agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if got := responseText(first); got != "turn:1" {
+		t.Fatalf("first response = %q, want %q", got, "turn:1")
+	}
+
+	data, err := json.Marshal(session)
+	if err != nil {
+		t.Fatalf("Marshal session: %v", err)
+	}
+
+	var restored agent.Session
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("Unmarshal session: %v", err)
+	}
+
+	ag2 := newCheckpointIdentityWorkflowAgent(t, "", "inner_agent")
+	_, err = ag2.RunText(t.Context(), "Anything else?", agent.WithSession(&restored)).Collect()
+	if err == nil || !strings.Contains(err.Error(), "not compatible with the workflow associated with this runner") {
+		t.Fatalf("second run error = %v, want checkpoint compatibility failure", err)
+	}
+}
+
+func TestNew_SerializedSessionWithRenamedHostedAgent_FailsAcrossReconstruction(t *testing.T) {
+	ag1 := newCheckpointIdentityWorkflowAgent(t, "inner-agent", "inner_agent")
+	session, err := ag1.CreateSession(t.Context())
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	first, err := ag1.RunText(t.Context(), "Please help me.", agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if got := responseText(first); got != "turn:1" {
+		t.Fatalf("first response = %q, want %q", got, "turn:1")
+	}
+
+	data, err := json.Marshal(session)
+	if err != nil {
+		t.Fatalf("Marshal session: %v", err)
+	}
+
+	var restored agent.Session
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("Unmarshal session: %v", err)
+	}
+
+	ag2 := newCheckpointIdentityWorkflowAgent(t, "inner-agent", "inner_agent_renamed")
+	_, err = ag2.RunText(t.Context(), "Anything else?", agent.WithSession(&restored)).Collect()
+	if err == nil || !strings.Contains(err.Error(), "not compatible with the workflow associated with this runner") {
+		t.Fatalf("second run error = %v, want checkpoint compatibility failure", err)
 	}
 }
 
