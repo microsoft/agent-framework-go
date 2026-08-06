@@ -118,6 +118,40 @@ func newMemoryProvider(client *azaiprojects.MemoryStoresClient, memoryStoreName 
 	return p
 }
 
+// EnsureMemoryStoreCreated provisions the configured Foundry memory store when it does not
+// already exist. It first retrieves the store; if the store is present the call is a no-op.
+// When the store is missing (HTTP 404) it creates a default memory store backed by the given
+// chat and embedding model deployments, applying description when non-nil. The helper is
+// idempotent: if another process creates the store between the retrieval and the create, the
+// resulting HTTP 409 conflict is treated as success. Any other retrieval or create error is
+// returned unchanged.
+func (p *MemoryProvider) EnsureMemoryStoreCreated(ctx context.Context, chatModel, embeddingModel string, description *string) error {
+	if _, err := p.client.GetMemoryStore(ctx, p.memoryStoreName, nil); err != nil {
+		var respErr *azcore.ResponseError
+		if !errors.As(err, &respErr) || respErr.StatusCode != http.StatusNotFound {
+			return err
+		}
+		def := &azaiprojects.MemoryStoreDefaultDefinition{
+			ChatModel:      &chatModel,
+			EmbeddingModel: &embeddingModel,
+		}
+		var options *azaiprojects.MemoryStoresClientCreateMemoryStoreOptions
+		if description != nil {
+			options = &azaiprojects.MemoryStoresClientCreateMemoryStoreOptions{Description: description}
+		}
+		if _, err = p.client.CreateMemoryStore(ctx, p.memoryStoreName, def, options); err != nil {
+			// Tolerate a concurrent create: if another process created the store after the
+			// GET returned 404, CreateMemoryStore reports a conflict. Treat it as a no-op.
+			if errors.As(err, &respErr) && respErr.StatusCode == http.StatusConflict {
+				return nil
+			}
+			return err
+		}
+		return nil
+	}
+	return nil
+}
+
 // Invoking is called before an agent run. It searches the Foundry memory store for memories
 // relevant to the incoming messages and returns them as additional context to inject into the run.
 func (p *MemoryProvider) Invoking(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
