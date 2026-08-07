@@ -35,7 +35,7 @@ func (strategy *SlidingWindowStrategy) Compact(_ context.Context, index *Message
 		return false, nil
 	}
 
-	minimumPreservedTurns := cmp.Or(max(strategy.MinimumPreservedTurns, 0), defaultMinimumPreservedSlidingWindowTurns)
+	minimumPreservedTurns := cmp.Or(ensureNonNegative(strategy.MinimumPreservedTurns), defaultMinimumPreservedSlidingWindowTurns)
 	turnGroups := make(map[int][]int)
 	var turnOrder []int
 	for i, group := range index.Groups {

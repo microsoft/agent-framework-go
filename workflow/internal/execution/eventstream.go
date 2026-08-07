@@ -176,8 +176,7 @@ func (s *streamingRunEventStream) runLoop() {
 		default:
 		}
 
-		cycleCtx, runActivity := telemetry.StartWorkflowRun(ctx, workflowMetadata(wf, s.stepRunner.SessionID()))
-		runActivity.AddEvent(observability.EventWorkflowStarted)
+		cycleCtx := ctx
 
 		// Run all available supersteps continuously
 		// Events are streamed out in real-time as they happen via the event handler
@@ -188,6 +187,13 @@ func (s *streamingRunEventStream) runLoop() {
 			// Running after a prior halt has already been observed by callers
 			// (e.g. Run.RunToNextHalt returning after reading an Idle halt signal).
 			s.setStatus(RunStatusRunning)
+
+			// Open the WorkflowRun span only when there's actual work to
+			// process, to avoid spurious zero-superstep spans on no-work loop
+			// iterations. This mirrors the lockstep implementation.
+			var runActivity *observability.Activity
+			cycleCtx, runActivity = telemetry.StartWorkflowRun(ctx, workflowMetadata(wf, s.stepRunner.SessionID()))
+			runActivity.AddEvent(observability.EventWorkflowStarted)
 
 			// Emit StartedEvent only when there's actual work to process,
 			// to avoid spurious events on no-work loop iterations.
@@ -212,9 +218,10 @@ func (s *streamingRunEventStream) runLoop() {
 					return
 				}
 			}
+
+			runActivity.AddEvent(observability.EventWorkflowCompleted)
+			runActivity.End()
 		}
-		runActivity.AddEvent(observability.EventWorkflowCompleted)
-		runActivity.End()
 
 		// Update status based on what's waiting
 		if s.stepRunner.HasUnservicedRequests() {

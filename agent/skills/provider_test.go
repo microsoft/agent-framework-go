@@ -453,6 +453,65 @@ func TestProvider_RunSkillScript_RequiresExactName(t *testing.T) {
 	}
 }
 
+func TestProvider_SkillMemberLookupErrors(t *testing.T) {
+	skill := mustInlineSkill(
+		skills.Frontmatter{Name: "lookup-skill", Description: "Lookup skill"},
+		"Body.",
+		[]skills.Resource{{Name: "docs/readme.md", Read: func(context.Context) (any, error) {
+			return "docs", nil
+		}}},
+		[]skills.Script{{Name: "scripts/run", Run: func(context.Context, *skills.Skill, []string) (any, error) {
+			return "ok", nil
+		}}},
+	)
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}})
+	_, tools := captureProviderContext(t, provider)
+
+	tests := []struct {
+		name    string
+		tool    string
+		payload string
+		want    string
+	}{
+		{
+			name:    "empty resource name",
+			tool:    "read_skill_resource",
+			payload: `{"skillName":"lookup-skill","resourceName":" "}`,
+			want:    "Error: Resource name cannot be empty.",
+		},
+		{
+			name:    "missing resource",
+			tool:    "read_skill_resource",
+			payload: `{"skillName":"lookup-skill","resourceName":"missing.md"}`,
+			want:    "Error: Resource 'missing.md' not found in skill 'lookup-skill'.",
+		},
+		{
+			name:    "empty script name",
+			tool:    "run_skill_script",
+			payload: `{"skillName":"lookup-skill","scriptName":" "}`,
+			want:    "Error: Script name cannot be empty.",
+		},
+		{
+			name:    "missing script",
+			tool:    "run_skill_script",
+			payload: `{"skillName":"lookup-skill","scriptName":"missing"}`,
+			want:    "Error: Script 'missing' not found in skill 'lookup-skill'.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := findTool(t, tools, tt.tool).Call(t.Context(), tt.payload)
+			if err != nil {
+				t.Fatalf("expected no tool error, got %v", err)
+			}
+			if result != tt.want {
+				t.Fatalf("expected %q, got %#v", tt.want, result)
+			}
+		})
+	}
+}
+
 func TestProvider_RunSkillScript_PropagatesErrorByDefault(t *testing.T) {
 	skill := mustInlineSkill(
 		skills.Frontmatter{Name: "script-skill", Description: "Script skill"},

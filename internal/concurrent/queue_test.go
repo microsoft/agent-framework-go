@@ -5,6 +5,7 @@ package concurrent
 import (
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestQueue_EnqueueDequeue(t *testing.T) {
@@ -165,6 +166,44 @@ func TestQueue_DequeueDropsEmptyBackingArray(t *testing.T) {
 
 	if q.items != nil {
 		t.Errorf("expected backing array to be released on empty, got %v", q.items)
+	}
+}
+
+func TestQueue_AllSnapshotAllowsMutationInLoop(t *testing.T) {
+	// All must iterate over a snapshot taken at the start, releasing the lock
+	// before yielding. Mutating the same queue from the loop body must not
+	// deadlock and must not affect the values already being iterated.
+	q := &Queue[int]{}
+	original := []int{1, 2, 3, 4, 5}
+	for _, item := range original {
+		q.Enqueue(item)
+	}
+
+	done := make(chan []int, 1)
+	go func() {
+		var got []int
+		for v := range q.All() {
+			got = append(got, v)
+			// Reentrant mutation on the same queue: would deadlock if All
+			// held the read lock across the yield callback.
+			q.Enqueue(v * 10)
+			q.Dequeue()
+		}
+		done <- got
+	}()
+
+	select {
+	case got := <-done:
+		if len(got) != len(original) {
+			t.Fatalf("expected %d snapshot items, got %d (%v)", len(original), len(got), got)
+		}
+		for i, v := range got {
+			if v != original[i] {
+				t.Errorf("expected snapshot value %d at index %d, got %d", original[i], i, v)
+			}
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Queue.All deadlocked when mutating the queue inside the iteration")
 	}
 }
 
