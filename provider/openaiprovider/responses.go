@@ -562,14 +562,21 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 				})
 			case *message.TextReasoningContent:
 				flushOutputContents()
-				// Reasoning content is added as a separate input item
-				var reasoning responses.ResponseReasoningItemParam
-				if c.ProtectedData != "" {
-					reasoning.EncryptedContent = openai.String(c.ProtectedData)
+				// Only replay reasoning when we hold its encrypted content (store=false).
+				// With store=true the server retains the reasoning item by id, so
+				// re-sending it would duplicate a server-side item.
+				if c.ProtectedData == "" {
+					continue
 				}
-				reasoning.Content = append(reasoning.Content, responses.ResponseReasoningItemContentParam{
-					Text: c.Text,
-				})
+				var reasoning responses.ResponseReasoningItemParam
+				// summary is required by the Responses API; send an empty array when absent.
+				reasoning.Summary = []responses.ResponseReasoningItemSummaryParam{}
+				// id is required and must match the original reasoning item; recover it.
+				if item, ok := c.RawRepresentation.(responses.ResponseReasoningItem); ok {
+					reasoning.ID = item.ID
+				}
+				// content must stay empty on input; reasoning is replayed via encrypted_content.
+				reasoning.EncryptedContent = openai.String(c.ProtectedData)
 				resp = append(resp, responses.ResponseInputItemUnionParam{
 					OfReasoning: &reasoning,
 				})
