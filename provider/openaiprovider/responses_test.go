@@ -1432,6 +1432,48 @@ data: {"type":"response.completed","sequence_number":10,"response":{"id":"resp_e
 	if !strings.Contains(capturedBody, `"encrypted_content":"`+encrypted+`"`) {
 		t.Fatalf("expected replay request to carry encrypted_content %q, body = %s", encrypted, capturedBody)
 	}
+	// summary is required by the Responses API even when empty.
+	if !strings.Contains(capturedBody, `"summary":[]`) {
+		t.Fatalf("expected replay request to include an (empty) reasoning summary, body = %s", capturedBody)
+	}
+	// Plaintext reasoning content must not be replayed on input.
+	if strings.Contains(capturedBody, `"reasoning_text"`) {
+		t.Fatalf("expected replay request to omit plaintext reasoning content, body = %s", capturedBody)
+	}
+}
+
+// TestResponsesReasoningReplay_StoreTrue_SkipsReasoningItem verifies that when a
+// reasoning item has no encrypted content (store=true), it is not replayed in the
+// request. Under store=true the server retains the reasoning item by id, so
+// re-sending it would fail with a duplicate-item error.
+func TestResponsesReasoningReplay_StoreTrue_SkipsReasoningItem(t *testing.T) {
+	var capturedBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("failed reading request body: %v", err)
+		}
+		capturedBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"resp_store1","object":"response","created_at":1756752901,"status":"completed","model":"o4-mini-2025-04-16","output":[{"type":"message","id":"msg_store1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok","annotations":[]}]}]}`)
+	}))
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "o4-mini")
+	messages := []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Solve this problem step by step."}}},
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			// No ProtectedData: reasoning was stored server-side (store=true).
+			&message.TextReasoningContent{Text: "Analyzing."},
+			&message.TextContent{Text: "The solution is 42."},
+		}},
+	}
+	if _, err := a.Run(t.Context(), messages).Collect(); err != nil {
+		t.Fatalf("replay error = %v", err)
+	}
+	if strings.Contains(capturedBody, `"type":"reasoning"`) {
+		t.Fatalf("expected reasoning item to be skipped under store=true, body = %s", capturedBody)
+	}
 }
 
 func TestResponsesChatOptions_Model_OverridesClientModel_Streaming(t *testing.T) {
