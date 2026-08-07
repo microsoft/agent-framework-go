@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       pr-number:
-        description: "PR number to classify, or 0 to classify every open PR"
+        description: "PR number to classify, or 0 to backfill size and area labels only"
         required: false
         default: 0
         type: number
@@ -23,19 +23,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  classify:
-    uses: microsoft/go-infra/.github/workflows/classify-pull-request.yml@f3a954dcc66106930dffaf9dbae84b8ba428d094
+  classify-size-area:
+    uses: microsoft/go-infra/.github/workflows/classify-pull-request.yml@ca41d8dbe89649f963250fa6be95ce17fc8debf2
     permissions:
       contents: read
       issues: write
       pull-requests: read
     with:
       pr-number: ${{ github.event.pull_request.number || inputs.pr-number || 0 }}
-      example-paths: |
-        [
-          "examples/",
-          "cmd/verifyexamples/examples.go"
-        ]
       area-prefixes: |
         {
           "area:agent": ["agent/"],
@@ -56,3 +51,17 @@ jobs:
           "area:examples": ["examples/", "cmd/verifyexamples/examples.go"],
           "area:github": [".github/"]
         }
+
+  classify-kind:
+    if: github.event_name != 'workflow_dispatch' || inputs.pr-number != 0
+    needs: classify-size-area
+    uses: microsoft/go-infra/.github/workflows/classify-pull-request-kind.lock.yml@ca41d8dbe89649f963250fa6be95ce17fc8debf2
+    secrets: inherit
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: write
+      copilot-requests: write
+    with:
+      pr_number: ${{ github.event.pull_request.number || inputs.pr-number }}
