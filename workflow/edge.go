@@ -79,6 +79,7 @@ type EdgeConnection struct {
 	SinkIDs   []string
 }
 
+// newEdgeConnection returns an EdgeConnection that aliases sourceIDs and sinkIDs.
 func newEdgeConnection(sourceIDs, sinkIDs []string) EdgeConnection {
 	return EdgeConnection{
 		SourceIDs: sourceIDs,
