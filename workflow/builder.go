@@ -143,10 +143,7 @@ func (wb *Builder) AddDirectEdge(source ExecutorBinding, target ExecutorBinding,
 	if wb.err != nil {
 		return wb
 	}
-	conn := EdgeConnection{
-		SourceIDs: []string{source.ID},
-		SinkIDs:   []string{target.ID},
-	}
+	conn := newDirectEdgeConnection(source.ID, target.ID)
 	if condition == nil && slices.ContainsFunc(wb.conditionlessConnections, func(c EdgeConnection) bool {
 		return conn.Equal(c)
 	}) {
@@ -193,10 +190,7 @@ func (wb *Builder) AddFanOutEdge(source ExecutorBinding, targets []ExecutorBindi
 		}
 		sinkIDs = append(sinkIDs, target.ID)
 	}
-	conn := EdgeConnection{
-		SourceIDs: []string{source.ID},
-		SinkIDs:   sinkIDs,
-	}
+	conn := newEdgeConnection([]string{source.ID}, sinkIDs)
 	edge := Edge{
 		Connection: conn,
 		Index:      wb.edgeIdx(),
@@ -223,11 +217,8 @@ func (wb *Builder) AddFanInBarrierEdge(sources []ExecutorBinding, target Executo
 		sourceIDs = append(sourceIDs, source.ID)
 	}
 	edge := Edge{
-		Connection: EdgeConnection{
-			SourceIDs: sourceIDs,
-			SinkIDs:   []string{target.ID},
-		},
-		Index: wb.edgeIdx(),
+		Connection: newEdgeConnection(sourceIDs, []string{target.ID}),
+		Index:      wb.edgeIdx(),
 	}
 	applyEdgeOptions(&edge, opts)
 	for _, id := range sourceIDs {
