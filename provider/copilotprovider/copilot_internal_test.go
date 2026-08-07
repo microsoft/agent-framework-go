@@ -20,7 +20,7 @@ func TestSessionConfig_WithApprovalRequiredTool_InstallsAskPreToolUseHook(t *tes
 	plainTool := testFuncTool(t, "plain")
 	p := &provider{}
 
-	cfg := p.sessionConfig(true, []agent.Option{
+	cfg := p.sessionConfig(true, nil, []agent.Option{
 		agent.WithTool(dangerousTool),
 		agent.WithTool(plainTool),
 	})
@@ -57,7 +57,7 @@ func TestSessionConfig_RawSessionConfigToolNotGatedButFrameworkApprovalToolIs(t 
 	}
 	p := &provider{cfg: AgentConfig{SessionConfig: source}}
 
-	cfg := p.sessionConfig(true, []agent.Option{
+	cfg := p.sessionConfig(true, nil, []agent.Option{
 		agent.WithTool(tool.ApprovalRequiredFunc(testFuncTool(t, "fw-dangerous"))),
 	})
 
@@ -104,7 +104,7 @@ func TestSessionConfig_WithExistingPreToolUseHook_PreservesCallerHook(t *testing
 	}
 	p := &provider{cfg: AgentConfig{SessionConfig: source}}
 
-	cfg := p.sessionConfig(true, []agent.Option{agent.WithTool(tool.ApprovalRequiredFunc(testFuncTool(t, "dangerous")))})
+	cfg := p.sessionConfig(true, nil, []agent.Option{agent.WithTool(tool.ApprovalRequiredFunc(testFuncTool(t, "dangerous")))})
 
 	if cfg.Hooks == nil || cfg.Hooks.OnPreToolUse == nil {
 		t.Fatal("OnPreToolUse hook is nil")
@@ -135,7 +135,7 @@ func TestSessionConfig_WithExistingPreToolUseHookAndApprovalTools_LogsWarning(t 
 	}
 	p := &provider{cfg: AgentConfig{SessionConfig: source}}
 
-	_ = p.sessionConfig(true, []agent.Option{
+	_ = p.sessionConfig(true, nil, []agent.Option{
 		agent.WithTool(tool.ApprovalRequiredFunc(testFuncTool(t, "dangerous-a"))),
 		agent.WithTool(tool.ApprovalRequiredFunc(testFuncTool(t, "dangerous-b"))),
 	})
@@ -155,7 +155,7 @@ func TestSessionConfig_WithExistingPreToolUseHookAndApprovalTools_LogsWarning(t 
 func TestResumeSessionConfig_WithApprovalRequiredTool_InstallsAskPreToolUseHook(t *testing.T) {
 	p := &provider{}
 
-	cfg := p.resumeSessionConfig(true, []agent.Option{
+	cfg := p.resumeSessionConfig(true, nil, []agent.Option{
 		agent.WithTool(tool.ApprovalRequiredFunc(testFuncTool(t, "dangerous"))),
 	})
 
