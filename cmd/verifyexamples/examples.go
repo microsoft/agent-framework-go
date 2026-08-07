@@ -216,6 +216,17 @@ var agentsExamples = []ExampleDefinition{
 		},
 	},
 	{
+		Name:                         "02_agents_agents_message_injection",
+		ProjectPath:                  "examples/02-agents/agents/message-injection",
+		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
+		OptionalEnvironmentVariables: []string{"FOUNDRY_MODEL"},
+		ExpectedOutputDescription: []string{
+			"The output should report the status of order A-1234.",
+			"The final answer should incorporate the injected shipping update (out for delivery, expected today by 6pm), showing that the tool folded late context into the same run.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
 		Name:                         "02_agents_agents_step13_using_audio_and_files",
 		ProjectPath:                  "examples/02-agents/agents/step13_using_audio_and_files",
 		RequiredEnvironmentVariables: []string{"OPENAI_API_KEY", "FOUNDRY_PROJECT_ENDPOINT"},
@@ -884,6 +895,14 @@ var workflowExamples = []ExampleDefinition{
 		Name:        "03_workflows_loop",
 		ProjectPath: "examples/03-workflows/loop",
 		MustContain: []string{"found in"},
+	},
+	{
+		Name:        "03_workflows_cancellation",
+		ProjectPath: "examples/03-workflows/cancellation",
+		MustContain: []string{
+			"Cancelling run after",
+			"final run status:",
+		},
 	},
 	{
 		Name:            "03_workflows_message_workflow",

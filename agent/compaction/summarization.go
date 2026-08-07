@@ -79,12 +79,7 @@ func (strategy *SummarizationStrategy) Compact(ctx context.Context, index *Messa
 	summarizationPrompt := cmp.Or(strategy.SummarizationPrompt, defaultSummarizationPrompt)
 	summaryUnavailableMessage := cmp.Or(strategy.SummaryUnavailableMessage, "[Summary unavailable]")
 
-	nonSystemIncludedCount := 0
-	for _, group := range index.Groups {
-		if !group.IsExcluded && group.Kind != GroupKindSystem {
-			nonSystemIncludedCount++
-		}
-	}
+	nonSystemIncludedCount := index.IncludedNonSystemGroupCount()
 	protectedFromEnd := min(minimumPreservedGroups, nonSystemIncludedCount)
 	maxSummarizable := nonSystemIncludedCount - protectedFromEnd
 	if maxSummarizable <= 0 {
