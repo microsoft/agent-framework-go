@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"iter"
 	"strings"
 	"testing"
@@ -881,6 +882,108 @@ func TestToolApproval_AutoApprovalRule_ApprovesMatchingTool(t *testing.T) {
 	}
 }
 
+func TestToolApproval_MaxAutoApprovalIterationsSurfacesFinalRequest(t *testing.T) {
+	fcc := &message.FunctionCallContent{CallID: "c1", Name: "ReadTool", Arguments: `{}`}
+	calls := 0
+
+	next := func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			calls++
+			yield(&agent.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					&message.ToolApprovalRequestContent{
+						RequestID: fmt.Sprintf("r%d", calls),
+						ToolCall:  fcc,
+					},
+				},
+			}, nil)
+		}
+	}
+
+	mw := toolapproval.New(toolapproval.Config{
+		AutoApprovalRules: []func(context.Context, *message.FunctionCallContent) (bool, error){
+			func(_ context.Context, fc *message.FunctionCallContent) (bool, error) {
+				return fc.Name == "ReadTool", nil
+			},
+		},
+		MaxAutoApprovalIterations: 2,
+	})
+
+	updates := collectUpdates(t, mw, next, []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "go"}}},
+	})
+
+	if calls != 3 {
+		t.Fatalf("expected 3 inner invocations (2 auto-approved + final surfaced turn), got %d", calls)
+	}
+
+	var approvalReqs []*message.ToolApprovalRequestContent
+	for _, u := range updates {
+		for _, c := range u.Contents {
+			if req, ok := c.(*message.ToolApprovalRequestContent); ok {
+				approvalReqs = append(approvalReqs, req)
+			}
+		}
+	}
+	if len(approvalReqs) != 1 {
+		t.Fatalf("expected 1 surfaced approval request after hitting cap, got %d", len(approvalReqs))
+	}
+	if approvalReqs[0].RequestID != "r3" {
+		t.Fatalf("expected final surfaced request r3, got %q", approvalReqs[0].RequestID)
+	}
+}
+
+func TestToolApproval_MaxAutoApprovalIterationsFinalTurnYieldsRequestsAsIs(t *testing.T) {
+	fcc1 := &message.FunctionCallContent{CallID: "c1", Name: "ReadTool", Arguments: `{}`}
+	fcc2 := &message.FunctionCallContent{CallID: "c2", Name: "WriteTool", Arguments: `{}`}
+	calls := 0
+
+	next := func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			calls++
+			yield(&agent.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					&message.TextContent{Text: fmt.Sprintf("turn-%d", calls)},
+					&message.ToolApprovalRequestContent{RequestID: fmt.Sprintf("r%da", calls), ToolCall: fcc1},
+					&message.ToolApprovalRequestContent{RequestID: fmt.Sprintf("r%db", calls), ToolCall: fcc2},
+				},
+			}, nil)
+		}
+	}
+
+	mw := toolapproval.New(toolapproval.Config{
+		AutoApprovalRules: []func(context.Context, *message.FunctionCallContent) (bool, error){
+			func(_ context.Context, _ *message.FunctionCallContent) (bool, error) { return true, nil },
+		},
+		MaxAutoApprovalIterations: 1,
+	})
+
+	updates := collectUpdates(t, mw, next, []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "go"}}},
+	})
+
+	if calls != 2 {
+		t.Fatalf("expected 2 inner invocations (1 auto-approved + final surfaced turn), got %d", calls)
+	}
+	if len(updates) != 2 {
+		t.Fatalf("expected stripped first-turn text plus 1 final raw update, got %d updates", len(updates))
+	}
+	if len(updates[1].Contents) != 3 {
+		t.Fatalf("expected final update to keep text and both approval requests, got %d contents", len(updates[1].Contents))
+	}
+	if text, ok := updates[1].Contents[0].(*message.TextContent); !ok || text.Text != "turn-2" {
+		t.Fatalf("expected raw text content from final turn, got %#v", updates[1].Contents[0])
+	}
+	if req, ok := updates[1].Contents[1].(*message.ToolApprovalRequestContent); !ok || req.RequestID != "r2a" {
+		t.Fatalf("expected first raw approval request from final turn, got %#v", updates[1].Contents[1])
+	}
+	if req, ok := updates[1].Contents[2].(*message.ToolApprovalRequestContent); !ok || req.RequestID != "r2b" {
+		t.Fatalf("expected second raw approval request from final turn, got %#v", updates[1].Contents[2])
+	}
+}
+
 func TestToolApproval_AutoApprovalRule_DoesNotMatchSurfacesToCaller(t *testing.T) {
 	fcc := &message.FunctionCallContent{CallID: "c1", Name: "DangerousTool", Arguments: `{}`}
 
@@ -1231,4 +1334,14 @@ func TestToolApproval_NilUpdatePassthrough(t *testing.T) {
 	if textUpdates != 1 {
 		t.Errorf("expected 1 text update, got %d", textUpdates)
 	}
+}
+
+func TestToolApproval_NewPanicsOnNegativeMaxAutoApprovalIterations(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic for negative MaxAutoApprovalIterations")
+		}
+	}()
+
+	_ = toolapproval.New(toolapproval.Config{MaxAutoApprovalIterations: -1})
 }
