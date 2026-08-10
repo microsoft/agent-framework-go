@@ -36,6 +36,29 @@ func TestFileSource_NonExistentPath_ReturnsEmptyList(t *testing.T) {
 	}
 }
 
+func TestFileSource_SymlinkedSkillFile_IsNotDiscovered(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	linkedSkillDir := filepath.Join(root, "linked-skill")
+	if err := os.MkdirAll(linkedSkillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outsideSkillFile := filepath.Join(outside, "SKILL.md")
+	if err := os.WriteFile(outsideSkillFile, []byte("---\nname: linked-skill\ndescription: Linked\n---\nBody."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustCreateSymlink(t, outsideSkillFile, filepath.Join(linkedSkillDir, "SKILL.md"))
+
+	source := fsskills.NewSource(os.DirFS(root))
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 0 {
+		t.Fatalf("expected symlinked SKILL.md to be ignored, got %d skills", len(loaded))
+	}
+}
+
 func TestFileSource_NoResourceFiles_ReturnsEmptyResources(t *testing.T) {
 	root := t.TempDir()
 	createSkillDir(t, root, "no-resources", "A skill", "No resources here.")
@@ -548,6 +571,26 @@ func TestFileSource_NoDuplicateResourcesFromSamePath(t *testing.T) {
 	}
 }
 
+func TestFileSource_SymlinkedResource_IsNotDiscovered(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	createSkillDir(t, root, "symlink-resource-skill", "Symlink resource test", "Body.")
+	outsideResource := filepath.Join(outside, "secret.md")
+	if err := os.WriteFile(outsideResource, []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustCreateSymlink(t, outsideResource, filepath.Join(root, "symlink-resource-skill", "references", "secret.md"))
+
+	source := fsskills.NewSource(os.DirFS(root))
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded[0].Resources) != 0 {
+		t.Fatalf("expected symlinked resource to be ignored, got %d resources", len(loaded[0].Resources))
+	}
+}
+
 func createSkillDir(t *testing.T, root, name, description, body string) {
 	t.Helper()
 	skillDir := filepath.Join(root, name)
@@ -592,5 +635,15 @@ func createRelativeFile(t *testing.T, root, relativePath, content string) {
 	}
 	if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func mustCreateSymlink(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks not supported: %v", err)
 	}
 }

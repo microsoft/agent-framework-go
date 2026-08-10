@@ -342,6 +342,30 @@ func TestFileSource_ScriptFilter_IncludesOnlyMatchingScripts(t *testing.T) {
 	}
 }
 
+func TestFileSource_SymlinkedScript_IsNotDiscovered(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	createSkillDir(t, root, "symlink-script-skill", "Symlink script test", "Body.")
+	outsideScript := filepath.Join(outside, "run.py")
+	if err := os.WriteFile(outsideScript, []byte("print('secret')"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustCreateSymlink(t, outsideScript, filepath.Join(root, "symlink-script-skill", "scripts", "run.py"))
+
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
+		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+			return nil, nil
+		},
+	}, os.DirFS(root))
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded[0].Scripts) != 0 {
+		t.Fatalf("expected symlinked script to be ignored, got %d scripts", len(loaded[0].Scripts))
+	}
+}
+
 func TestFileScript_RunWithNonFileSkill_ReturnsError(t *testing.T) {
 	root := t.TempDir()
 	createSkillDir(t, root, "script-owner", "Script owner", "Body.")

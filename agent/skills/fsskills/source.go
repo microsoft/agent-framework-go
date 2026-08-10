@@ -204,8 +204,11 @@ func discoverSkillDirectories(filesystems []fs.FS) []discoveredSkillDir {
 // script discovery within an already-discovered skill directory. This matches
 // the .NET SDK, which bounds the two concerns separately.
 func searchForSkills(filesystem fs.FS, dir string, results *[]discoveredSkillDir, currentDepth int) {
-	skillPath := path.Join(dir, skillFileName)
-	if _, err := fs.Stat(filesystem, skillPath); err == nil {
+	entries, err := fs.ReadDir(filesystem, dir)
+	if err != nil {
+		return
+	}
+	if hasNonSymlinkSkillFile(entries) {
 		sub := filesystem
 		var subErr error
 		if dir != "." {
@@ -217,10 +220,6 @@ func searchForSkills(filesystem fs.FS, dir string, results *[]discoveredSkillDir
 		}
 	}
 	if currentDepth >= defaultSearchDepth {
-		return
-	}
-	entries, err := fs.ReadDir(filesystem, dir)
-	if err != nil {
 		return
 	}
 	for _, entry := range entries {
@@ -501,6 +500,10 @@ func (s *Source) scanForFiles(
 	}
 
 	for _, entry := range entries {
+		if isSymlinkEntry(entry) {
+			continue
+		}
+
 		entryPath := path.Join(dir, entry.Name())
 		if entry.IsDir() {
 			if currentDepth < s.searchDepth {
@@ -532,6 +535,26 @@ func (s *Source) scanForFiles(
 
 		collect(relativePath)
 	}
+}
+
+func hasNonSymlinkSkillFile(entries []fs.DirEntry) bool {
+	for _, entry := range entries {
+		if entry.Name() == skillFileName && !isSymlinkEntry(entry) {
+			return true
+		}
+	}
+	return false
+}
+
+func isSymlinkEntry(entry fs.DirEntry) bool {
+	if entry.Type()&fs.ModeSymlink != 0 {
+		return true
+	}
+	info, err := entry.Info()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&fs.ModeSymlink != 0
 }
 
 func buildExtensionSet(extensions []string, defaults []string) map[string]bool {
