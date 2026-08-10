@@ -127,6 +127,7 @@ Use the upstream `microsoft/agent-framework` repository as the source of truth f
    - Do not use the absence of exported-symbol changes as evidence that runtime behavior is not user-visible
    - If exported Go APIs or observable Go runtime behavior change, continue
    - Classify the review scope as one or more of: public API, user-visible behavior, examples, or internal-only. Include this classification in the summary comment so maintainers can prioritize their manual review.
+   - For every out-of-scope PR, use `add-comment` to post exactly one concise summary using the review record below. Do not emit `noop`, inline comments, or labels.
 
 2. **Identify the changed Go contract**:
    - List the new or changed exported functions, methods, types, fields, constants, options, events, or behaviors
