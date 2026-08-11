@@ -90,3 +90,25 @@ func TestCaptureErrorShortTypeName(t *testing.T) {
 		t.Errorf("captured error.type = %q, want %q", got, "errorString")
 	}
 }
+
+func TestStartExecutorProcessEmitsExecutorType(t *testing.T) {
+	span := &fakeSpan{}
+	telemetry := observability.New(observability.Options{Tracer: &fakeTracer{span: span}})
+
+	_, activity := telemetry.StartExecutorProcess(context.Background(), "exec1", "pkg.Type", "standard", nil, nil)
+	if activity == nil {
+		t.Fatal("expected an activity span")
+	}
+
+	// The executor type is emitted under the canonical OTel attribute
+	// executor.type, matching the .NET (Tags.ExecutorType) and Python
+	// (EXECUTOR_TYPE) implementations for cross-SDK dashboard alignment.
+	if got := attributeValue(t, span.attrs, "executor.type"); got != "pkg.Type" {
+		t.Errorf("executor.type = %v, want %q", got, "pkg.Type")
+	}
+	for _, attr := range span.attrs {
+		if attr.Key == "executor.implementation.id" {
+			t.Error("span must not carry the non-canonical executor.implementation.id attribute")
+		}
+	}
+}

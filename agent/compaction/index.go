@@ -79,16 +79,23 @@ func (index *MessageIndex) Update(messages []*message.Message) {
 		return
 	}
 	processedMessageCount := index.includedRawMessageCount()
-	if index.lastProcessedMessage != nil && len(messages) >= processedMessageCount && messageContentEqual(messages[len(messages)-1], index.lastProcessedMessage) {
-		return
-	}
-
+	// Locate where the already-processed prefix ends. lastProcessedMessage sits
+	// at index processedMessageCount-1 when nothing earlier was trimmed, so check
+	// that expected position first. Matching only the last occurrence of its
+	// content would latch the boundary onto a later duplicate when a message is
+	// repeated (e.g. a user re-sending "continue"), silently dropping the turns
+	// appended since. Fall back to a search only when the prefix was trimmed.
 	foundIndex := -1
 	if index.lastProcessedMessage != nil {
-		for i := len(messages) - 1; i >= 0; i-- {
-			if messageContentEqual(messages[i], index.lastProcessedMessage) {
-				foundIndex = i
-				break
+		if expected := processedMessageCount - 1; expected >= 0 && expected < len(messages) &&
+			messageContentEqual(messages[expected], index.lastProcessedMessage) {
+			foundIndex = expected
+		} else {
+			for i := len(messages) - 1; i >= 0; i-- {
+				if messageContentEqual(messages[i], index.lastProcessedMessage) {
+					foundIndex = i
+					break
+				}
 			}
 		}
 	}
@@ -291,11 +298,21 @@ func (index *MessageIndex) IncludedTurnCount() int {
 func (index *MessageIndex) IncludedNonSystemGroupCount() int {
 	var total int
 	for _, group := range index.Groups {
-		if !group.IsExcluded && group.Kind != GroupKindSystem {
+		if group.isIncludedNonSystem() {
 			total++
 		}
 	}
 	return total
+}
+
+func (index *MessageIndex) includedNonSystemGroupIndices() []int {
+	var indices []int
+	for i, group := range index.Groups {
+		if group.isIncludedNonSystem() {
+			indices = append(indices, i)
+		}
+	}
+	return indices
 }
 
 // RawMessageCount returns the number of original messages represented by the index.

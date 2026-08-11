@@ -5,10 +5,20 @@ package agenttool
 import (
 	"context"
 	"encoding/json"
+	"regexp"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/tool"
 )
+
+// defaultDescription mirrors the .NET AIAgent function-tool default description
+// used when an agent exposes no description of its own.
+const defaultDescription = "Invoke an agent to retrieve some information."
+
+// invalidNameChars matches every run of characters that are not valid in a
+// function name, matching the .NET SanitizeAgentName regex so agent display
+// names such as "Weather Agent" become valid provider function names.
+var invalidNameChars = regexp.MustCompile(`[^0-9A-Za-z]+`)
 
 // Config represents the configuration for [New].
 type Config struct {
@@ -29,11 +39,14 @@ type functool struct {
 }
 
 func (t functool) Name() string {
-	return t.agent.Name()
+	return invalidNameChars.ReplaceAllString(t.agent.Name(), "_")
 }
 
 func (t functool) Description() string {
-	return t.agent.Description()
+	if d := t.agent.Description(); d != "" {
+		return d
+	}
+	return defaultDescription
 }
 
 func (t functool) Schema() any {

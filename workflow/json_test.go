@@ -272,6 +272,31 @@ func TestScopeID_JsonRoundtrip(t *testing.T) {
 	}
 }
 
+func TestScopeID_Equal(t *testing.T) {
+	privateScope1 := workflow.ScopeID{ExecutorID: "executor1"}
+	privateScope2 := workflow.ScopeID{ExecutorID: "executor2"}
+
+	if privateScope1.Equal(privateScope2) {
+		t.Fatal("private scopes from different executors should not be equal")
+	}
+	if !privateScope1.Equal(workflow.ScopeID{ExecutorID: "executor1"}) {
+		t.Fatal("private scopes from the same executor should be equal")
+	}
+
+	sharedScope1 := workflow.ScopeID{ExecutorID: "executor1", ScopeName: "sharedScope"}
+	sharedScope2 := workflow.ScopeID{ExecutorID: "executor2", ScopeName: "sharedScope"}
+
+	if !sharedScope1.Equal(sharedScope2) {
+		t.Fatal("shared scopes with the same scope name should be equal")
+	}
+	if sharedScope1.Equal(workflow.ScopeID{ExecutorID: "executor1", ScopeName: "differentScope"}) {
+		t.Fatal("shared scopes with different scope names should not be equal")
+	}
+	if sharedScope1.Equal(privateScope1) {
+		t.Fatal("shared and private scopes should not be equal")
+	}
+}
+
 func TestScopeKey_JsonRoundtrip(t *testing.T) {
 	cases := []struct {
 		name string

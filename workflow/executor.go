@@ -590,6 +590,15 @@ func (s *StatefulExecutorCache[T]) Reset() error {
 	return nil
 }
 
+// OnCheckpointRestored invalidates the executor-local cache so the next read
+// observes the state imported from the checkpoint rather than a stale cached
+// value. Its signature matches [Executor.OnCheckpointRestoredFunc], so a shared
+// stateful executor should wire it there to stay consistent after an in-place
+// checkpoint restore.
+func (s *StatefulExecutorCache[T]) OnCheckpointRestored(*Context) error {
+	return s.Reset()
+}
+
 // newRequestPortExecutor creates the executor that turns request-port messages
 // into [ExternalRequest]s and routes matching [ExternalResponse]s back into the
 // workflow.

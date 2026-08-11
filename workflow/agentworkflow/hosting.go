@@ -167,6 +167,12 @@ type hostExecutor struct {
 	turnEmitEvents  *bool
 }
 
+type generatedHostedMessageState struct {
+	messageID  string
+	responseID string
+	role       message.Role
+}
+
 func newHostExecutor(a *agent.Agent, cfg Config) *hostExecutor {
 	id := descriptiveID(a)
 	ports := hostPorts(id)
@@ -406,10 +412,12 @@ func (h *hostExecutor) runAgentAndDispatch(wctx *workflow.Context, messages []*m
 	}
 
 	var resp agent.Response
+	var generatedMessageState generatedHostedMessageState
 	for update, err := range h.agent.Run(wctx, agentInput, runOpts...) {
 		if err != nil {
 			return err
 		}
+		update = stampHostedUpdateMessageID(update, &generatedMessageState)
 		if emitUpdates {
 			if err := wctx.YieldOutput(update); err != nil {
 				return err
@@ -452,6 +460,48 @@ func (h *hostExecutor) runAgentAndDispatch(wctx *workflow.Context, messages []*m
 		return err
 	}
 	return nil
+}
+
+func stampHostedUpdateMessageID(update *agent.ResponseUpdate, state *generatedHostedMessageState) *agent.ResponseUpdate {
+	if update == nil {
+		return nil
+	}
+	if update.MessageID != "" {
+		if state != nil {
+			*state = generatedHostedMessageState{}
+		}
+		return update
+	}
+	if !responseUpdateHasContent(update) || state == nil {
+		return update
+	}
+	if state.messageID == "" ||
+		(state.responseID != "" && update.ResponseID != "" && state.responseID != update.ResponseID) ||
+		(state.role != "" && update.Role != "" && state.role != update.Role) {
+		state.messageID = newMessageID()
+	}
+	if update.ResponseID != "" {
+		state.responseID = update.ResponseID
+	}
+	if update.Role != "" {
+		state.role = update.Role
+	}
+	clone := *update
+	clone.MessageID = state.messageID
+	return &clone
+}
+
+func responseUpdateHasContent(update *agent.ResponseUpdate) bool {
+	if update == nil {
+		return false
+	}
+	for _, content := range update.Contents {
+		if text, ok := content.(*message.TextContent); ok && text.Text == "" {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // releasePendingTurnIfReady propagates the held TurnToken downstream once all
