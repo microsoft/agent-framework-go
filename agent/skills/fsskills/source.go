@@ -170,7 +170,7 @@ func NewSourceOptions(opts SourceOptions, filesystems ...fs.FS) *Source {
 
 // Skills discovers and loads valid skills from the configured filesystems.
 func (s *Source) Skills(ctx context.Context) ([]*skills.Skill, error) {
-	directories := discoverSkillDirectories(s.filesystems)
+	directories := discoverSkillDirectories(s.filesystems, s.logger)
 	s.logger.Info("Discovered potential skills", "count", len(directories))
 
 	skills := make([]*skills.Skill, 0, len(directories))
@@ -190,10 +190,10 @@ func (s *Source) Skills(ctx context.Context) ([]*skills.Skill, error) {
 	return skills, nil
 }
 
-func discoverSkillDirectories(filesystems []fs.FS) []discoveredSkillDir {
+func discoverSkillDirectories(filesystems []fs.FS, logger *slog.Logger) []discoveredSkillDir {
 	var results []discoveredSkillDir
 	for _, filesystem := range filesystems {
-		searchForSkills(filesystem, ".", &results, 0)
+		searchForSkills(filesystem, ".", logger, &results, 0)
 	}
 	return results
 }
@@ -203,9 +203,23 @@ func discoverSkillDirectories(filesystems []fs.FS) []discoveredSkillDir {
 // independent of SourceOptions.SearchDepth, which governs only resource and
 // script discovery within an already-discovered skill directory. This matches
 // the .NET SDK, which bounds the two concerns separately.
-func searchForSkills(filesystem fs.FS, dir string, results *[]discoveredSkillDir, currentDepth int) {
-	skillPath := path.Join(dir, skillFileName)
-	if _, err := fs.Stat(filesystem, skillPath); err == nil {
+func searchForSkills(filesystem fs.FS, dir string, logger *slog.Logger, results *[]discoveredSkillDir, currentDepth int) {
+	entries, err := fs.ReadDir(filesystem, dir)
+	if err != nil {
+		return
+	}
+
+	for _, entry := range entries {
+		if entry.Name() != skillFileName {
+			continue
+		}
+
+		skillPath := path.Join(dir, entry.Name())
+		if isUnsafeDirEntry(filesystem, skillPath, entry) {
+			logger.Warn("Skipping skill discovery path: symbolic link or inspection failure", "path", skillPath)
+			return
+		}
+
 		sub := filesystem
 		var subErr error
 		if dir != "." {
@@ -213,19 +227,22 @@ func searchForSkills(filesystem fs.FS, dir string, results *[]discoveredSkillDir
 		}
 		if subErr == nil {
 			*results = append(*results, discoveredSkillDir{fsys: sub, path: dir})
-			return
 		}
+		return
 	}
+
 	if currentDepth >= defaultSearchDepth {
 		return
 	}
-	entries, err := fs.ReadDir(filesystem, dir)
-	if err != nil {
-		return
-	}
+
 	for _, entry := range entries {
+		entryPath := path.Join(dir, entry.Name())
+		if isUnsafeDirEntry(filesystem, entryPath, entry) {
+			logger.Warn("Skipping skill discovery path: symbolic link or inspection failure", "path", entryPath)
+			continue
+		}
 		if entry.IsDir() {
-			searchForSkills(filesystem, path.Join(dir, entry.Name()), results, currentDepth+1)
+			searchForSkills(filesystem, entryPath, logger, results, currentDepth+1)
 		}
 	}
 }
@@ -502,6 +519,10 @@ func (s *Source) scanForFiles(
 
 	for _, entry := range entries {
 		entryPath := path.Join(dir, entry.Name())
+		if isUnsafeDirEntry(skillFS, entryPath, entry) {
+			s.logger.Warn("Skipping file skill path: symbolic link or inspection failure", "skillName", skillName, "filePath", entryPath, "kind", kind)
+			continue
+		}
 		if entry.IsDir() {
 			if currentDepth < s.searchDepth {
 				s.scanForFiles(skillFS, entryPath, skillName, currentDepth+1, allowedExtensions, filter, kind, collect)
@@ -532,6 +553,24 @@ func (s *Source) scanForFiles(
 
 		collect(relativePath)
 	}
+}
+
+func isUnsafeDirEntry(filesystem fs.FS, filePath string, entry fs.DirEntry) bool {
+	if entry.Type()&fs.ModeSymlink != 0 {
+		return true
+	}
+
+	readLinkFS, ok := filesystem.(fs.ReadLinkFS)
+	if !ok {
+		return false
+	}
+
+	info, err := readLinkFS.Lstat(filePath)
+	if err == nil {
+		return info.Mode()&fs.ModeSymlink != 0
+	}
+
+	return !errors.Is(err, fs.ErrNotExist)
 }
 
 func buildExtensionSet(extensions []string, defaults []string) map[string]bool {
