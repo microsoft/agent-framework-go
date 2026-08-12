@@ -74,37 +74,8 @@ func (v *PortableValue) Any() any {
 }
 
 func decodeKnownPortableType(typeID TypeID, raw json.RawMessage) (any, bool) {
-	if typeID.PackageName == "" {
-		switch typeID.TypeName {
-		case "string":
-			return decodePortableJSON[string](raw)
-		case "bool":
-			return decodePortableJSON[bool](raw)
-		case "int":
-			return decodePortableJSON[int](raw)
-		case "int8":
-			return decodePortableJSON[int8](raw)
-		case "int16":
-			return decodePortableJSON[int16](raw)
-		case "int32":
-			return decodePortableJSON[int32](raw)
-		case "int64":
-			return decodePortableJSON[int64](raw)
-		case "uint":
-			return decodePortableJSON[uint](raw)
-		case "uint8":
-			return decodePortableJSON[uint8](raw)
-		case "uint16":
-			return decodePortableJSON[uint16](raw)
-		case "uint32":
-			return decodePortableJSON[uint32](raw)
-		case "uint64":
-			return decodePortableJSON[uint64](raw)
-		case "float32":
-			return decodePortableJSON[float32](raw)
-		case "float64":
-			return decodePortableJSON[float64](raw)
-		}
+	if decoded, ok := decodeBuiltinPortableType(typeID, raw); ok {
+		return decoded, true
 	}
 	if typ, ok := runtimeTypeForTypeID(typeID); ok {
 		if decoded, ok := decodePortableJSONType(typ, raw); ok {
@@ -112,6 +83,44 @@ func decodeKnownPortableType(typeID TypeID, raw json.RawMessage) (any, bool) {
 		}
 	}
 	return nil, false
+}
+
+func decodeBuiltinPortableType(typeID TypeID, raw json.RawMessage) (any, bool) {
+	if typeID.PackageName != "" {
+		return nil, false
+	}
+	switch typeID.TypeName {
+	case "string":
+		return decodePortableJSON[string](raw)
+	case "bool":
+		return decodePortableJSON[bool](raw)
+	case "int":
+		return decodePortableJSON[int](raw)
+	case "int8":
+		return decodePortableJSON[int8](raw)
+	case "int16":
+		return decodePortableJSON[int16](raw)
+	case "int32":
+		return decodePortableJSON[int32](raw)
+	case "int64":
+		return decodePortableJSON[int64](raw)
+	case "uint":
+		return decodePortableJSON[uint](raw)
+	case "uint8":
+		return decodePortableJSON[uint8](raw)
+	case "uint16":
+		return decodePortableJSON[uint16](raw)
+	case "uint32":
+		return decodePortableJSON[uint32](raw)
+	case "uint64":
+		return decodePortableJSON[uint64](raw)
+	case "float32":
+		return decodePortableJSON[float32](raw)
+	case "float64":
+		return decodePortableJSON[float64](raw)
+	default:
+		return nil, false
+	}
 }
 
 func decodePortableJSONType(typ reflect.Type, raw json.RawMessage) (any, bool) {
