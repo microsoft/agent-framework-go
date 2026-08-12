@@ -3,6 +3,8 @@ name: Classify pull requests
 # Run the trusted, API-only reusable workflow for fork PRs without checking out
 # or executing contributor code.
 on:
+  pull_request:
+    types: [synchronize]
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
@@ -24,7 +26,7 @@ concurrency:
 
 jobs:
   classify-size-area:
-    uses: microsoft/go-infra/.github/workflows/classify-pull-request.yml@911b9e494ac064956d332f815f1d54d002c3cbcd
+    uses: microsoft/go-infra/.github/workflows/classify-pull-request.yml@e80f3ff2876b578ea0b97cc7e08131c9af368afc
     permissions:
       contents: read
       issues: write
@@ -55,7 +57,7 @@ jobs:
   classify-kind:
     if: github.event_name != 'workflow_dispatch' || inputs.pr-number != 0
     needs: classify-size-area
-    uses: microsoft/go-infra/.github/workflows/classify-pull-request-kind.lock.yml@911b9e494ac064956d332f815f1d54d002c3cbcd
+    uses: microsoft/go-infra/.github/workflows/classify-pull-request-kind.lock.yml@e80f3ff2876b578ea0b97cc7e08131c9af368afc
     secrets: inherit
     permissions:
       actions: read
