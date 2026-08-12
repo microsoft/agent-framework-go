@@ -4,14 +4,25 @@ package inproc_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
+	internalobservability "github.com/microsoft/agent-framework-go/workflow/internal/observability"
 	"github.com/microsoft/agent-framework-go/workflow/internal/workflowtest"
 	"github.com/microsoft/agent-framework-go/workflow/observability"
 )
+
+type unserializablePayload struct {
+	Value string
+}
+
+func (unserializablePayload) MarshalJSON() ([]byte, error) {
+	return nil, errors.New("marshal failed")
+}
 
 func TestObservability_CreatesWorkflowEndToEndSpans(t *testing.T) {
 	tracer := workflowtest.NewRecordingTracer()
@@ -192,6 +203,49 @@ func TestObservability_SensitiveDataControlsMessageContent(t *testing.T) {
 			messageSpan.RequireOptionalStringAttribute(t, "message.content", testCase.wantContent, "HELLO")
 		})
 	}
+}
+
+func TestObservability_UnserializableSensitiveDataDoesNotFailWorkflow(t *testing.T) {
+	tracer := workflowtest.NewRecordingTracer()
+	var received []unserializablePayload
+	start := workflow.NewExecutor("start", func(input string) unserializablePayload {
+		return unserializablePayload{Value: strings.ToUpper(input)}
+	}).Bind()
+	sink := workflow.NewExecutor("sink", func(msg unserializablePayload) string {
+		received = append(received, msg)
+		return "done"
+	}).Bind()
+
+	wf, err := workflow.NewBuilder(start).
+		AddEdge(start, sink).
+		WithOutputFrom(sink).
+		WithTelemetry(tracer, workflow.TelemetryOptions{EnableSensitiveData: true}).
+		Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	run, err := inproc.Default.Run(context.Background(), wf, "hello")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	outputs := collectOutputValues(run.OutgoingEvents())
+	if err := run.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if len(outputs) != 1 || outputs[0] != "done" {
+		t.Fatalf("outputs = %#v, want []string{\"done\"}", outputs)
+	}
+	if len(received) != 1 || received[0].Value != "HELLO" {
+		t.Fatalf("received = %#v, want one delivered payload with value HELLO", received)
+	}
+
+	wantFallback := fmt.Sprintf("[Unserializable: %T]", unserializablePayload{})
+	messageSpan := workflowtest.FindSpanWithPrefix(t, tracer.Spans(), "message.send")
+	messageSpan.RequireAttributeValue(t, internalobservability.TagMessageContent, wantFallback)
+	sinkSpan := workflowtest.FindSpanWithPrefix(t, tracer.Spans(), "executor.process sink")
+	sinkSpan.RequireAttributeValue(t, internalobservability.TagExecutorInput, wantFallback)
 }
 
 func TestObservability_RunSpansAreEnded(t *testing.T) {
