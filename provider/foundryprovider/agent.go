@@ -30,6 +30,10 @@ type AgentConfig struct {
 
 	// DisableStoreOutput disables service-side Responses output storage.
 	// Use this when local session history providers own conversation state.
+	// By default, store-disabled runs also request `reasoning.encrypted_content`
+	// so reasoning items can be replayed statelessly; use
+	// [openaiprovider.ResponsesIncludeReasoningEncryptedContent] in RunOptions to
+	// opt out.
 	DisableStoreOutput bool
 
 	// OpenAIOptions are appended to the OpenAI-compatible per-agent client options.
