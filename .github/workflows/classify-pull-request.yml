@@ -3,8 +3,6 @@ name: Classify pull requests
 # Run the trusted, API-only reusable workflow for fork PRs without checking out
 # or executing contributor code.
 on:
-  pull_request:
-    types: [synchronize]
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
