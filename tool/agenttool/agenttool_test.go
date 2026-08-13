@@ -5,6 +5,7 @@ package agenttool_test
 import (
 	"context"
 	"errors"
+	"iter"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -12,6 +13,16 @@ import (
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool/agenttool"
 )
+
+// newNamedAgent builds an agent with the given display name and description.
+// The provider Run function is never invoked by the metadata tests.
+func newNamedAgent(name, description string) *agent.Agent {
+	return agent.New(agent.ProviderConfig{
+		Run: func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			return func(func(*agent.ResponseUpdate, error) bool) {}
+		},
+	}, agent.Config{Name: name, Description: description})
+}
 
 func TestNew_ExposesAgentMetadataAndSchemas(t *testing.T) {
 	a := agenttest.New(agenttest.NewResponseBuilder().AddText("ok").Build())
@@ -59,6 +70,22 @@ func TestNew_ExposesAgentMetadataAndSchemas(t *testing.T) {
 	}
 	if got := returnSchema["type"]; got != "string" {
 		t.Fatalf("ReturnSchema()[\"type\"] = %#v, want %q", got, "string")
+	}
+}
+
+func TestName_SanitizesInvalidCharacters(t *testing.T) {
+	tl := agenttool.New(newNamedAgent("Weather Agent!", "forecasts"), agenttool.Config{})
+
+	if got, want := tl.Name(), "Weather_Agent_"; got != want {
+		t.Fatalf("Name() = %q, want %q", got, want)
+	}
+}
+
+func TestDescription_DefaultsWhenEmpty(t *testing.T) {
+	tl := agenttool.New(newNamedAgent("Agent", ""), agenttool.Config{})
+
+	if got, want := tl.Description(), "Invoke an agent to retrieve some information."; got != want {
+		t.Fatalf("Description() = %q, want %q", got, want)
 	}
 }
 

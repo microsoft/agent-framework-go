@@ -180,7 +180,6 @@ var agentsExamples = []ExampleDefinition{
 		ProjectPath:                  "examples/02-agents/agents/step09_dependency_injection",
 		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
 		OptionalEnvironmentVariables: []string{"FOUNDRY_MODEL"},
-		SkipReason:                   "Example is currently a TODO placeholder and produces no output.",
 		ExpectedOutputDescription: []string{
 			"The output should contain a joke about a pirate.",
 			"The output should not contain error messages or stack traces.",
@@ -212,6 +211,21 @@ var agentsExamples = []ExampleDefinition{
 		ExpectedOutputDescription: []string{
 			"The output should be a response about the weather in Amsterdam, written in French.",
 			"The response should reference the tool result: cloudy weather with a high of 15°C.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
+		Name:                         "02_agents_agents_step13_middleware",
+		ProjectPath:                  "examples/02-agents/agents/step13_middleware",
+		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
+		OptionalEnvironmentVariables: []string{"FOUNDRY_MODEL"},
+		MustContain: []string{
+			">> Guardrail middleware: filtered input messages",
+			">> PII middleware: filtered input messages",
+		},
+		ExpectedOutputDescription: []string{
+			"The output should show the Guardrail and PII middleware filtering messages before and after each run.",
+			"The responses should not contain the blocked keyword 'harmful', nor the raw email or phone number, since the middleware redacts them.",
 			"The output should not contain error messages or stack traces.",
 		},
 	},
@@ -288,6 +302,21 @@ var agentsExamples = []ExampleDefinition{
 		ExpectedOutputDescription: []string{
 			"The output should show Foundry memory being used across multiple agent sessions.",
 			"The later response should recall facts from the earlier conversation using shared Foundry memory.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
+		Name:                         "02_agents_agents_step23_planning_with_todos",
+		ProjectPath:                  "examples/02-agents/agents/step23_planning_with_todos",
+		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
+		OptionalEnvironmentVariables: []string{"FOUNDRY_MODEL"},
+		MustContain: []string{
+			"Planning With Todos",
+		},
+		ExpectedOutputDescription: []string{
+			"The output should show the agent planning a task by recording todo items, then switching to execute mode and completing them.",
+			"The assistant should reference adding a health-check endpoint and break the work into trackable todo items.",
+			"The final response should report which todo items remain, if any.",
 			"The output should not contain error messages or stack traces.",
 		},
 	},
@@ -510,6 +539,16 @@ var agentsExamples = []ExampleDefinition{
 		},
 	},
 	{
+		Name:                         "02_agents_providers_openai_reasoning",
+		ProjectPath:                  "examples/02-agents/providers/openai/reasoning",
+		RequiredEnvironmentVariables: []string{"OPENAI_API_KEY"},
+		ExpectedOutputDescription: []string{
+			"The output should solve the chickens-and-rabbits puzzle, concluding there are 23 chickens and 12 rabbits.",
+			"The output should include a reasoning summary section separate from the final answer.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
 		Name:                         "02_agents_providers_gemini",
 		ProjectPath:                  "examples/02-agents/providers/gemini",
 		RequiredEnvironmentVariables: []string{"GEMINI_API_KEY"},
@@ -520,11 +559,32 @@ var agentsExamples = []ExampleDefinition{
 		},
 	},
 	{
+		Name:                         "02_agents_providers_gemini_thinking",
+		ProjectPath:                  "examples/02-agents/providers/gemini/thinking",
+		RequiredEnvironmentVariables: []string{"GEMINI_API_KEY"},
+		OptionalEnvironmentVariables: []string{"GEMINI_MODEL"},
+		ExpectedOutputDescription: []string{
+			"The output should contain a reasoning summary labeled with [reasoning] followed by the final answer.",
+			"The final answer should indicate that 9 sheep are left.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
 		Name:                         "02_agents_providers_anthropic",
 		ProjectPath:                  "examples/02-agents/providers/anthrophic",
 		RequiredEnvironmentVariables: []string{"ANTHROPIC_API_KEY"},
 		ExpectedOutputDescription: []string{
 			"The output should contain a joke about a pirate.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
+		Name:                         "02_agents_providers_anthropic_thinking",
+		ProjectPath:                  "examples/02-agents/providers/anthrophic/thinking",
+		RequiredEnvironmentVariables: []string{"ANTHROPIC_API_KEY"},
+		ExpectedOutputDescription: []string{
+			"The output should contain the model's reasoning (thinking) about the bat-and-ball problem.",
+			"The output should conclude that the ball costs 5 cents (equivalently $0.05).",
 			"The output should not contain error messages or stack traces.",
 		},
 	},
@@ -685,6 +745,17 @@ var workflowExamples = []ExampleDefinition{
 		},
 	},
 	{
+		Name:            "03_workflows_observability_executor_io",
+		ProjectPath:     "examples/03-workflows/observability/executor_io",
+		IsDeterministic: true,
+		MustContain: []string{
+			"invoked UppercaseExecutor: Hello, World!",
+			"completed UppercaseExecutor: HELLO, WORLD!",
+			"invoked ReverseTextExecutor: HELLO, WORLD!",
+			"completed ReverseTextExecutor: !DLROW ,OLLEH",
+		},
+	},
+	{
 		Name:                         "03_workflows_01_start_here_02_agents_in_workflows",
 		ProjectPath:                  "examples/03-workflows/01-start-here/02_agents_in_workflows",
 		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
@@ -791,6 +862,19 @@ var workflowExamples = []ExampleDefinition{
 		},
 	},
 	{
+		Name:                         "03_workflows_agents_workflow_as_an_agent_human_in_the_loop",
+		ProjectPath:                  "examples/03-workflows/agents/workflow_as_an_agent_human_in_the_loop",
+		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
+		OptionalEnvironmentVariables: []string{"FOUNDRY_MODEL"},
+		Inputs:                       inputLines("Y"),
+		InputDelay:                   5 * time.Second,
+		ExpectedOutputDescription: []string{
+			"The output should wrap a workflow as an agent that asks for approval before calling the weather tool.",
+			"After approval, the workflow should resume and report the weather in Amsterdam (cloudy with a high of 15°C).",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
 		Name:            "03_workflows_checkpoint_checkpoint_and_rehydrate",
 		ProjectPath:     "examples/03-workflows/checkpoint/checkpoint_and_rehydrate",
 		IsDeterministic: true,
@@ -882,6 +966,12 @@ var workflowExamples = []ExampleDefinition{
 		MustContain:     []string{"Email sent:", "Logged: Summary:"},
 	},
 	{
+		Name:            "03_workflows_conditional_edges_04_intermediate_outputs",
+		ProjectPath:     "examples/03-workflows/conditional-edges/04_intermediate_outputs",
+		IsDeterministic: true,
+		MustContain:     []string{"[intermediate] normalized hello workflow", "[final] Summary of"},
+	},
+	{
 		Name:        "03_workflows_human_in_the_loop_human_in_the_loop_basic",
 		ProjectPath: "examples/03-workflows/human-in-the-loop/human_in_the_loop_basic",
 		Inputs:      inputLines("50", "25", "40", "45", "42"),
@@ -889,6 +979,15 @@ var workflowExamples = []ExampleDefinition{
 		MustContain: []string{"found in"},
 		ExpectedOutputDescription: []string{
 			"The output should show a number guessing game with higher/lower hints that eventually reaches the correct number 42.",
+		},
+	},
+	{
+		Name:            "03_workflows_human_in_the_loop_imperative_request",
+		ProjectPath:     "examples/03-workflows/human-in-the-loop/imperative_request",
+		IsDeterministic: true,
+		MustContain:     []string{"Executor asked: What is your name?", "Workflow completed with result: Hello, Ada!"},
+		ExpectedOutputDescription: []string{
+			"The output should show an executor raising a human-in-the-loop request imperatively and completing with the greeting \"Hello, Ada!\".",
 		},
 	},
 	{

@@ -1,0 +1,67 @@
+name: Classify pull requests
+
+# Run the trusted, API-only reusable workflow for fork PRs without checking out
+# or executing contributor code.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr-number:
+        description: "PR number to classify, or 0 to backfill size and area labels only"
+        required: false
+        default: 0
+        type: number
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: classify-pull-request-${{ github.event.pull_request.number || inputs.pr-number || 'all' }}
+  cancel-in-progress: true
+
+jobs:
+  classify-size-area:
+    uses: microsoft/go-infra/.github/workflows/classify-pull-request.yml@33bdb51f63044f5caa3df215d983d226ebdfef6c
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+    with:
+      pr-number: ${{ github.event.pull_request.number || inputs.pr-number || 0 }}
+      area-prefixes: |
+        {
+          "area:agent": ["agent/"],
+          "area:workflow": ["workflow/"],
+          "area:message": ["message/"],
+          "area:tool": ["tool/"],
+          "area:provider": ["provider/"],
+          "area:provider/a2a": ["provider/a2aprovider/"],
+          "area:provider/agui": ["provider/aguiprovider/"],
+          "area:provider/anthropic": ["provider/anthropicprovider/"],
+          "area:provider/copilot": ["provider/copilotprovider/"],
+          "area:provider/foundry": ["provider/foundryprovider/"],
+          "area:provider/gemini": ["provider/geminiprovider/"],
+          "area:provider/openai": ["provider/openaiprovider/"],
+          "area:provider/otel": ["provider/otelprovider/"],
+          "area:internal": ["internal/"],
+          "area:tooling": ["cmd/"],
+          "area:examples": ["examples/", "cmd/verifyexamples/examples.go"],
+          "area:github": [".github/"]
+        }
+
+  classify-kind:
+    if: github.event_name != 'workflow_dispatch' || inputs.pr-number != 0
+    needs: classify-size-area
+    uses: microsoft/go-infra/.github/workflows/classify-pull-request-kind.lock.yml@33bdb51f63044f5caa3df215d983d226ebdfef6c
+    secrets: inherit
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: write
+      copilot-requests: write
+    with:
+      pr_number: ${{ github.event.pull_request.number || inputs.pr-number }}

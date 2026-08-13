@@ -67,6 +67,10 @@ func newMessageGroup(kind GroupKind, messages []*message.Message, byteCount, tok
 	}
 }
 
+func (group *MessageGroup) isIncludedNonSystem() bool {
+	return !group.IsExcluded && group.Kind != GroupKindSystem
+}
+
 func cloneTurnIndex(turnIndex *int) *int {
 	if turnIndex == nil {
 		return nil
