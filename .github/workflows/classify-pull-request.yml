@@ -16,7 +16,7 @@ on:
 permissions:
   contents: read
   issues: write
-  pull-requests: read
+  pull-requests: write
 
 concurrency:
   group: classify-pull-request-${{ github.event.pull_request.number || inputs.pr-number || 'all' }}
@@ -24,11 +24,11 @@ concurrency:
 
 jobs:
   classify-size-area:
-    uses: microsoft/go-infra/.github/workflows/classify-pull-request.yml@33bdb51f63044f5caa3df215d983d226ebdfef6c
+    uses: microsoft/go-infra/.github/workflows/classify-pull-request.yml@35d34d21089773bebd2dd5efc6197a38f16490bf
     permissions:
       contents: read
       issues: write
-      pull-requests: read
+      pull-requests: write
     with:
       pr-number: ${{ github.event.pull_request.number || inputs.pr-number || 0 }}
       area-prefixes: |
@@ -55,7 +55,7 @@ jobs:
   classify-kind:
     if: github.event_name != 'workflow_dispatch' || inputs.pr-number != 0
     needs: classify-size-area
-    uses: microsoft/go-infra/.github/workflows/classify-pull-request-kind.lock.yml@33bdb51f63044f5caa3df215d983d226ebdfef6c
+    uses: microsoft/go-infra/.github/workflows/classify-pull-request-kind.lock.yml@35d34d21089773bebd2dd5efc6197a38f16490bf
     secrets: inherit
     permissions:
       actions: read
