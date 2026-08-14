@@ -221,8 +221,7 @@ func (p *providerState) provide(ctx context.Context, invoking agent.InvokingCont
 	}
 
 	p.mu.Lock()
-	if p.cached != nil {
-		cached := *p.cached
+	if cached, ok := p.cachedContextLocked(); ok {
 		p.mu.Unlock()
 		outMessages, outOptions = providedContext(cached)
 		return outMessages, outOptions, nil
@@ -234,16 +233,14 @@ func (p *providerState) provide(ctx context.Context, invoking agent.InvokingCont
 
 		p.mu.Lock()
 		defer p.mu.Unlock()
-		if p.cached == nil {
-			result, err := p.buildContext(ctx)
+		result, ok := p.cachedContextLocked()
+		if !ok {
+			result, err = p.buildContext(ctx)
 			if err != nil {
 				return nil, nil, err
 			}
-			outMessages, outOptions = providedContext(result)
-			return outMessages, outOptions, nil
 		}
-		cached := *p.cached
-		outMessages, outOptions = providedContext(cached)
+		outMessages, outOptions = providedContext(result)
 		return outMessages, outOptions, nil
 	}
 	p.loading = make(chan struct{})
@@ -272,6 +269,13 @@ func (p *providerState) provide(ctx context.Context, invoking agent.InvokingCont
 	}
 	outMessages, outOptions = providedContext(result)
 	return outMessages, outOptions, nil
+}
+
+func (p *providerState) cachedContextLocked() (providerContext, bool) {
+	if p.cached == nil {
+		return providerContext{}, false
+	}
+	return *p.cached, true
 }
 
 func providedContext(result providerContext) ([]*message.Message, []agent.Option) {
