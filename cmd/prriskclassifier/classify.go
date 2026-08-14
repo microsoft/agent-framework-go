@@ -61,11 +61,26 @@ func isCriticalProductionPath(path string) bool {
 	if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") || strings.Contains(path, "/testdata/") {
 		return false
 	}
-	return strings.HasPrefix(path, "workflow/") ||
+	return isCriticalWorkflowPath(path) ||
 		strings.HasPrefix(path, "agent/harness/toolapproval/") ||
 		strings.HasPrefix(path, "agent/harness/toolautocall/") ||
 		strings.HasPrefix(path, "tool/shelltool/") ||
 		strings.HasPrefix(path, "internal/concurrent/")
+}
+
+func isCriticalWorkflowPath(path string) bool {
+	if !strings.HasPrefix(path, "workflow/") {
+		return false
+	}
+	relative := strings.TrimPrefix(path, "workflow/")
+	if !strings.Contains(relative, "/") {
+		return true
+	}
+	return strings.HasPrefix(relative, "agentworkflow/") ||
+		strings.HasPrefix(relative, "checkpoint/") ||
+		strings.HasPrefix(relative, "inproc/") ||
+		strings.HasPrefix(relative, "internal/checkpoint/") ||
+		strings.HasPrefix(relative, "internal/execution/")
 }
 
 func labelsWithPrefix(labels []string, prefix string) []string {

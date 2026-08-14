@@ -31,6 +31,17 @@ func TestClassifyDeterministically(t *testing.T) {
 			want:   riskHigh,
 		},
 		{
+			name:   "top-level workflow contract",
+			files:  []string{"workflow/executor.go"},
+			labels: []string{"size:small", "kind:code", "area:workflow"},
+			want:   riskHigh,
+		},
+		{
+			name:   "workflow observability needs semantic review",
+			files:  []string{"workflow/observability/handler.go"},
+			labels: []string{"size:small", "kind:code", "area:workflow"},
+		},
+		{
 			name:   "shell tool production code",
 			files:  []string{"tool/shelltool/localshell.go"},
 			labels: []string{"size:small", "kind:code", "area:tool"},
