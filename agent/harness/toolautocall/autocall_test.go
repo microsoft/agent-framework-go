@@ -1321,6 +1321,45 @@ func TestFunctionInvoking_NonInvocableSchemaToolTerminates(t *testing.T) {
 	invokeAndAssert(t, tools, plan, nil, toolautocall.Config{})
 }
 
+func TestFunctionInvoking_MixedInvocableAndNonInvocableSchemaToolExecutesInvocableSibling(t *testing.T) {
+	var toolInvoked atomic.Int32
+
+	localCall := &message.FunctionCallContent{CallID: "callId2", Name: "LocalFunc", Arguments: `{}`}
+	declaredCall := &message.FunctionCallContent{CallID: "callId1", Name: "DeclaredFunc", Arguments: `{}`}
+
+	tools := []tool.Tool{
+		schemaOnlyTool{Tool: agenttest.NewTool("DeclaredFunc", "declared function")},
+		functool.MustNew(functool.Config{Name: "LocalFunc"},
+			func(ctx context.Context, args struct{}) (string, error) {
+				toolInvoked.Add(1)
+				return "local result", nil
+			}),
+	}
+
+	plan := []*message.Message{
+		message.NewText("hello"),
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			declaredCall,
+			localCall,
+		}},
+		{Role: message.RoleTool, Contents: []message.Content{
+			&message.FunctionResultContent{CallID: "callId2", Result: "local result"},
+		}},
+	}
+
+	invokeAndAssert(t, tools, plan, nil, toolautocall.Config{})
+
+	if got := toolInvoked.Load(); got != 1 {
+		t.Fatalf("expected one local tool invocation, got %d", got)
+	}
+	if !localCall.InformationalOnly {
+		t.Fatal("expected processed invocable FunctionCallContent to be informational-only")
+	}
+	if declaredCall.InformationalOnly {
+		t.Fatal("expected declaration-only FunctionCallContent to remain actionable")
+	}
+}
+
 func TestFunctionInvoking_NonSchemaToolWithMatchingNameIsUnknown(t *testing.T) {
 	tools := []tool.Tool{
 		agenttest.NewTool("PlainTool", "plain tool"),

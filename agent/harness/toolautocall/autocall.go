@@ -117,6 +117,11 @@ type autocall struct {
 	enableMessageInjection             bool
 }
 
+type functionCallExecutionPlan struct {
+	process   []*message.FunctionCallContent
+	terminate bool
+}
+
 // New creates a new function-invoking chat client that wraps the provided client.
 func New(cfg Config) agent.Middleware {
 	if cfg.NewID == nil {
@@ -292,9 +297,11 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 					return
 				}
 			}
+			executionPlan := f.buildFunctionCallExecutionPlan(ctx, functionCallContents, tools)
+
 			// If there's nothing more to do, break out of the loop and allow the handling at the
 			// end to configure the response with aggregated data from previous requests.
-			if i >= f.maximumIterationsPerRequest || hasApprovalRequiringFcc || f.shouldTerminateLoopBasedOnHandleableFunctions(ctx, functionCallContents, tools) {
+			if i >= f.maximumIterationsPerRequest || hasApprovalRequiringFcc || (executionPlan.terminate && len(executionPlan.process) == 0) {
 				// When message injection is enabled, check if any tools enqueued messages
 				// during this iteration.  If so, add them to the conversation and continue
 				// the loop so the provider sees the new user messages — even though no
@@ -314,7 +321,7 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 			// Process all of the functions, adding their results into the history.
 			var newMsg *message.Message
 			var err error
-			newMsg, errCount, err = f.processFunctionCalls(ctx, tools, functionCallContents, errCount)
+			newMsg, errCount, err = f.processFunctionCalls(ctx, tools, executionPlan.process, errCount)
 			if err != nil {
 				yield(nil, err)
 				return
@@ -334,7 +341,7 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 			// matching .NET's FunctionInvokingChatClient, which does
 			// augmentedHistory.AddMessages(response) rather than reconstructing from the
 			// function calls alone.
-			processedFunctionCalls := functionCallContents[:len(newMsg.Contents)]
+			processedFunctionCalls := executionPlan.process
 
 			// Coalesce the buffered updates for this iteration so streamed text/reasoning
 			// fragments merge, then carry the text and reasoning over alongside the
@@ -363,6 +370,10 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 						assistantContents = append(assistantContents, c)
 					}
 				}
+			}
+
+			if executionPlan.terminate {
+				break
 			}
 
 			// Use the augmented history as the new set of messages to send.
@@ -497,10 +508,10 @@ func prepareOptionsForLastIteration(opts []agent.Option) []agent.Option {
 	return updated
 }
 
-func (f *autocall) shouldTerminateLoopBasedOnHandleableFunctions(ctx context.Context, funcCalls []*message.FunctionCallContent, tools map[string]tool.SchemaTool) bool {
+func (f *autocall) buildFunctionCallExecutionPlan(ctx context.Context, funcCalls []*message.FunctionCallContent, tools map[string]tool.SchemaTool) functionCallExecutionPlan {
 	if len(funcCalls) == 0 {
 		// There are no functions to call, so there's no reason to keep going.
-		return true
+		return functionCallExecutionPlan{terminate: true}
 	}
 	if len(tools) == 0 {
 		// There are functions to call but we have no tools, so we can't handle them.
@@ -511,10 +522,15 @@ func (f *autocall) shouldTerminateLoopBasedOnHandleableFunctions(ctx context.Con
 				f.logger.Warn(ctx, "function not found", "funcName", fc.Name)
 			}
 		}
-		return f.terminateOnUnknownCalls
+		if f.terminateOnUnknownCalls {
+			return functionCallExecutionPlan{terminate: true}
+		}
+		return functionCallExecutionPlan{process: funcCalls}
 	}
 	// At this point, we have both function call requests and some tools.
 	// Look up each function.
+	processable := make([]*message.FunctionCallContent, 0, len(funcCalls))
+	terminate := false
 	for _, fc := range funcCalls {
 		declaration, ok := tools[fc.Name]
 		if !ok {
@@ -523,18 +539,24 @@ func (f *autocall) shouldTerminateLoopBasedOnHandleableFunctions(ctx context.Con
 			// creating a NotFound response message.
 			if f.terminateOnUnknownCalls {
 				f.logger.Warn(ctx, "function not found", "funcName", fc.Name)
-				return true
+				return functionCallExecutionPlan{terminate: true}
 			}
+			processable = append(processable, fc)
 			continue
 		}
 		if _, ok := declaration.(tool.FuncTool); !ok {
 			// The schema tool was found but it's not invocable. Regardless of TerminateOnUnknownCallRequests,
-			// we need to break out of the loop so that callers can handle all the call requests.
+			// callers need to receive the call request, but we can still execute any invocable siblings first.
 			f.logger.Debug(ctx, "function is not invocable; terminating loop", "funcName", fc.Name)
-			return true
+			terminate = true
+			continue
 		}
+		processable = append(processable, fc)
 	}
-	return false
+	if len(processable) == 0 {
+		return functionCallExecutionPlan{terminate: true}
+	}
+	return functionCallExecutionPlan{process: processable, terminate: terminate}
 }
 
 func (f *autocall) createToolsMap(tools iter.Seq[tool.Tool]) (mtools map[string]tool.SchemaTool, anyRequiredApproval bool) {
