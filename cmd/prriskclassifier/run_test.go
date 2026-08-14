@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"testing"
 )
@@ -14,6 +15,7 @@ type fakeRiskClient struct {
 	ensured bool
 	added   []string
 	removed []string
+	addErr  map[string]error
 }
 
 func (f *fakeRiskClient) ensureLabels(context.Context) error {
@@ -27,7 +29,7 @@ func (f *fakeRiskClient) pullRequestSignals(context.Context, int) ([]string, []s
 
 func (f *fakeRiskClient) addLabel(_ context.Context, _ int, label string) error {
 	f.added = append(f.added, label)
-	return nil
+	return f.addErr[label]
 }
 
 func (f *fakeRiskClient) removeLabel(_ context.Context, _ int, label string) error {
@@ -86,5 +88,21 @@ func TestClassifyPullRequestInconclusivePreservesRiskLabels(t *testing.T) {
 	}
 	if len(client.added) != 0 || len(client.removed) != 0 {
 		t.Fatalf("added = %v, removed = %v", client.added, client.removed)
+	}
+}
+
+func TestClassifyPullRequestLabelFailureAddsMarker(t *testing.T) {
+	writeErr := errors.New("write denied")
+	client := &fakeRiskClient{
+		files:  []string{"agent/harness/toolapproval/toolapproval.go"},
+		labels: []string{"size:small", "kind:code"},
+		addErr: map[string]error{riskHigh: writeErr},
+	}
+	_, err := classifyPullRequest(context.Background(), client, 42)
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("error = %v, want write failure", err)
+	}
+	if !slices.Equal(client.added, []string{riskHigh, failedAutoRisk}) {
+		t.Fatalf("added = %v", client.added)
 	}
 }
