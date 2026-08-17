@@ -25,6 +25,20 @@ func TestClassifyDeterministically(t *testing.T) {
 			want:   riskLow,
 		},
 		{
+			name:   "docs label on production file needs semantic review",
+			files:  []string{"agent/agent.go"},
+			labels: []string{"size:small", "kind:docs"},
+		},
+		{
+			name:   "tests label on production file needs semantic review",
+			files:  []string{"workflow/inproc/state.go"},
+			labels: []string{"size:small", "kind:tests"},
+		},
+		{
+			name:   "missing files need semantic review",
+			labels: []string{"size:small", "kind:docs"},
+		},
+		{
 			name:   "large workflow production change needs semantic review",
 			files:  []string{"workflow/inproc/state.go", "workflow/inproc/state_test.go"},
 			labels: []string{"size:large", "kind:code", "kind:tests", "area:workflow"},

@@ -4,6 +4,7 @@
 package main
 
 import (
+	"path/filepath"
 	"slices"
 	"strings"
 )
@@ -19,10 +20,10 @@ type deterministicDecision struct {
 	Reason string
 }
 
-func classifyDeterministically(_ []string, labels []string) deterministicDecision {
+func classifyDeterministically(files, labels []string) deterministicDecision {
 	kinds := labelsWithPrefix(labels, "kind:")
 
-	if isClearlyLowRisk(kinds, labels) {
+	if isClearlyLowRisk(kinds, labels) && len(files) > 0 && !slices.ContainsFunc(files, isPotentialProductionFile) {
 		return deterministicDecision{
 			Label:  riskLow,
 			Reason: "changes are limited to documentation, tests, or examples",
@@ -46,6 +47,17 @@ func isClearlyLowRisk(kinds, labels []string) bool {
 		}
 	}
 	return true
+}
+
+func isPotentialProductionFile(path string) bool {
+	path = filepath.ToSlash(path)
+	base := filepath.Base(path)
+	return !strings.HasPrefix(path, "docs/") &&
+		!strings.HasPrefix(path, "examples/") &&
+		!strings.Contains(path, "/testdata/") &&
+		!strings.HasSuffix(path, "_test.go") &&
+		!strings.HasSuffix(path, ".md") &&
+		base != "LICENSE"
 }
 
 func labelsWithPrefix(labels []string, prefix string) []string {
