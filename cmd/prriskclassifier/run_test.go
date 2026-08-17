@@ -78,7 +78,7 @@ func TestClassifyPullRequestDeterministicNoop(t *testing.T) {
 	}
 }
 
-func TestClassifyPullRequestInconclusivePreservesRiskLabels(t *testing.T) {
+func TestClassifyPullRequestInconclusiveMarksPendingAndPreservesRisk(t *testing.T) {
 	client := &fakeRiskClient{
 		files:  []string{"provider/openaiprovider/openai.go"},
 		labels: []string{"kind:code", riskMedium},
@@ -90,8 +90,22 @@ func TestClassifyPullRequestInconclusivePreservesRiskLabels(t *testing.T) {
 	if result.Decision.Label != "" || !result.NeedsAgent {
 		t.Fatalf("result = %+v", result)
 	}
-	if len(client.added) != 0 || len(client.removed) != 0 {
+	if !slices.Equal(client.added, []string{failedAutoRisk}) || len(client.removed) != 0 {
 		t.Fatalf("added = %v, removed = %v", client.added, client.removed)
+	}
+}
+
+func TestClassifyPullRequestInconclusiveDoesNotDuplicateMarker(t *testing.T) {
+	client := &fakeRiskClient{
+		files:  []string{"provider/openaiprovider/openai.go"},
+		labels: []string{"kind:code", failedAutoRisk},
+	}
+	result, err := classifyPullRequest(context.Background(), client, 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.NeedsAgent || len(client.added) != 0 || len(client.removed) != 0 {
+		t.Fatalf("result=%+v added=%v removed=%v", result, client.added, client.removed)
 	}
 }
 

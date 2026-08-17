@@ -57,7 +57,7 @@ timeout-minutes: 10
 
 Classify pull request `${{ inputs.pr_number }}` in `${{ github.repository }}` only when the evidence supports one risk level with high confidence.
 
-The deterministic classifier already handled unambiguous low-risk changes. This agent reviews every production or otherwise ambiguous change. A wrong risk label is worse than abstaining.
+The deterministic classifier already handled unambiguous low-risk changes. This agent reviews every production or otherwise ambiguous change. A wrong risk label is worse than abstaining. The deterministic stage adds `failed-auto-risk` before this agent starts; treat it as a pending marker that must be removed only after a confident classification.
 
 ## Risk Levels
 

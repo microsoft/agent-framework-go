@@ -21,6 +21,11 @@ func classifyPullRequest(ctx context.Context, client riskClient, number int) (cl
 	decision := classifyDeterministically(files, labels)
 	result := classificationResult{Decision: decision, NeedsAgent: decision.Label == ""}
 	if result.NeedsAgent {
+		if !slices.Contains(labels, failedAutoRisk) {
+			if err := client.addLabel(ctx, number, failedAutoRisk); err != nil {
+				return classificationResult{}, fmt.Errorf("mark semantic risk classification pending: %w", err)
+			}
+		}
 		return result, nil
 	}
 
