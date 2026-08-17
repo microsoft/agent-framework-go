@@ -23,10 +23,12 @@ type deterministicDecision struct {
 func classifyDeterministically(files, labels []string) deterministicDecision {
 	kinds := labelsWithPrefix(labels, "kind:")
 
-	if slices.Contains(kinds, "kind:code") && slices.ContainsFunc(files, isCriticalProductionPath) {
+	if slices.Contains(kinds, "kind:code") &&
+		(slices.Contains(labels, "size:large") || slices.Contains(labels, "size:xlarge")) &&
+		slices.ContainsFunc(files, isCriticalProductionPath) {
 		return deterministicDecision{
 			Label:  riskHigh,
-			Reason: "production code changes a workflow, tool-execution, or concurrency boundary",
+			Reason: "a large production change affects a workflow, tool-execution, or concurrency boundary",
 		}
 	}
 

@@ -69,6 +69,7 @@ The deterministic classifier already handled unambiguous low- and high-risk chan
 
 Use all available evidence rather than treating any single label as decisive:
 
+- Assess the regression risk introduced by this proposed change, not merely how sensitive the touched component is. A small, well-tested safeguard or bounded bug fix in a sensitive area is usually `risk:medium`, not automatically `risk:high`.
 - `size:*` indicates review surface, not semantic risk by itself.
 - `kind:*` distinguishes code, tests, documentation, examples, dependencies, and CI.
 - `area:*` identifies affected Agent Framework subsystems and providers.

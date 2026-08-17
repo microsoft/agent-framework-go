@@ -25,16 +25,15 @@ func TestClassifyDeterministically(t *testing.T) {
 			want:   riskLow,
 		},
 		{
-			name:   "workflow production code",
+			name:   "large workflow production change",
 			files:  []string{"workflow/inproc/state.go", "workflow/inproc/state_test.go"},
-			labels: []string{"size:medium", "kind:code", "kind:tests", "area:workflow"},
+			labels: []string{"size:large", "kind:code", "kind:tests", "area:workflow"},
 			want:   riskHigh,
 		},
 		{
-			name:   "top-level workflow contract",
+			name:   "small top-level workflow contract needs semantic review",
 			files:  []string{"workflow/executor.go"},
 			labels: []string{"size:small", "kind:code", "area:workflow"},
-			want:   riskHigh,
 		},
 		{
 			name:   "workflow observability needs semantic review",
@@ -42,22 +41,19 @@ func TestClassifyDeterministically(t *testing.T) {
 			labels: []string{"size:small", "kind:code", "area:workflow"},
 		},
 		{
-			name:   "shell tool production code",
+			name:   "small shell tool fix needs semantic review",
 			files:  []string{"tool/shelltool/localshell.go"},
 			labels: []string{"size:small", "kind:code", "area:tool"},
-			want:   riskHigh,
 		},
 		{
-			name:   "tool approval production code",
+			name:   "bounded tool approval fix needs semantic review",
 			files:  []string{"agent/harness/toolapproval/toolapproval.go", "agent/harness/toolapproval/toolapproval_test.go"},
 			labels: []string{"size:medium", "kind:code", "kind:tests", "area:agent"},
-			want:   riskHigh,
 		},
 		{
-			name:   "concurrency implementation",
+			name:   "small concurrency fix needs semantic review",
 			files:  []string{"internal/concurrent/map.go"},
 			labels: []string{"size:small", "kind:code", "area:internal"},
-			want:   riskHigh,
 		},
 		{
 			name:   "public API needs semantic review",

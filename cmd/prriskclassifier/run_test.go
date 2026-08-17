@@ -40,7 +40,7 @@ func (f *fakeRiskClient) removeLabel(_ context.Context, _ int, label string) err
 func TestClassifyPullRequestDeterministicHighReconcilesLabels(t *testing.T) {
 	client := &fakeRiskClient{
 		files:  []string{"workflow/inproc/state.go"},
-		labels: []string{"kind:code", riskLow, failedAutoRisk},
+		labels: []string{"size:large", "kind:code", riskLow, failedAutoRisk},
 	}
 	result, err := classifyPullRequest(context.Background(), client, 42)
 	if err != nil {
@@ -95,7 +95,7 @@ func TestClassifyPullRequestLabelFailureAddsMarker(t *testing.T) {
 	writeErr := errors.New("write denied")
 	client := &fakeRiskClient{
 		files:  []string{"agent/harness/toolapproval/toolapproval.go"},
-		labels: []string{"size:small", "kind:code"},
+		labels: []string{"size:large", "kind:code"},
 		addErr: map[string]error{riskHigh: writeErr},
 	}
 	_, err := classifyPullRequest(context.Background(), client, 42)
