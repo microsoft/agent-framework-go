@@ -4,6 +4,8 @@ package agent_test
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -61,6 +63,48 @@ func TestNewInMemoryHistoryProvider_DefaultConfig_RoundTripsHistory(t *testing.T
 	}
 	if messages[0].String() != "request" || messages[1].String() != "response" || messages[2].String() != "new request" || messages[3].String() != "new response" {
 		t.Fatalf("unexpected updated history order/content")
+	}
+}
+
+// Agent runs may share a conversation session; concurrent stores must preserve
+// every turn without racing on session state. Run with -race.
+func TestNewInMemoryHistoryProvider_ConcurrentStoresOnSameSession_NoDataRace(t *testing.T) {
+	provider := agent.NewInMemoryHistoryProvider(agent.InMemoryHistoryProviderConfig{})
+	session := agenttest.CreateSession()
+
+	const stores = 64
+	start := make(chan struct{})
+	errs := make(chan error, stores)
+	var wg sync.WaitGroup
+	wg.Add(stores)
+	for i := range stores {
+		go func() {
+			defer wg.Done()
+			<-start
+			errs <- invokeHistoryProviderInvoked(
+				provider,
+				context.Background(),
+				[]*message.Message{message.NewText(fmt.Sprintf("request-%d", i))},
+				nil,
+				agent.WithSession(session),
+			)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Errorf("store history: %v", err)
+		}
+	}
+	messages, err := invokeHistoryProvider(provider, context.Background(), nil, agent.WithSession(session))
+	if err != nil {
+		t.Fatalf("load history: %v", err)
+	}
+	if len(messages) != stores {
+		t.Fatalf("stored history message count = %d, want %d", len(messages), stores)
 	}
 }
 
