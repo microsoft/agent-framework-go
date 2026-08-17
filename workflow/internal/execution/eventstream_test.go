@@ -128,8 +128,13 @@ func TestLockstepRunEventStream_StaleWakeupBeforeWorkStillEmitsStartedEvent(t *t
 	runner.hasUnprocessedFn = func() bool {
 		if inBlock && pending && !workReady {
 			// Simulate the response landing in the gap: this decision read sees
-			// no work, but work becomes available immediately afterwards.
+			// no work, but work becomes available immediately afterwards. The
+			// response also services the pending request, so from now on
+			// HasUnservicedRequests reports false — exercising the requirement
+			// that the loop break to process the work rather than recomputing
+			// status (which would otherwise flip to Idle and drop the cycle).
 			workReady = true
+			pending = false
 			return false
 		}
 		return workReady
