@@ -36,6 +36,16 @@ type addHandlerOptions struct {
 	overwrite bool
 }
 
+func normalizeAddHandlerOptions(options []AddHandlerOption) addHandlerOptions {
+	addHandlerOptions := addHandlerOptions{}
+	for _, option := range options {
+		if option != nil {
+			option(&addHandlerOptions)
+		}
+	}
+	return addHandlerOptions
+}
+
 // WithHandlerOverwrite controls whether handler registration replaces an
 // existing handler.
 //
@@ -82,12 +92,7 @@ func (rb *RouteBuilder) AddHandlerRaw(messageType reflect.Type, outputType refle
 	if handler == nil {
 		panic("handler cannot be nil")
 	}
-	addHandlerOptions := addHandlerOptions{}
-	for _, option := range options {
-		if option != nil {
-			option(&addHandlerOptions)
-		}
-	}
+	addHandlerOptions := normalizeAddHandlerOptions(options)
 	if rb.err != nil {
 		return rb
 	}
@@ -133,12 +138,7 @@ func (rb *RouteBuilder) AddCatchAll(handler func(*Context, PortableValue) (any, 
 	if handler == nil {
 		panic("handler cannot be nil")
 	}
-	addHandlerOptions := addHandlerOptions{}
-	for _, option := range options {
-		if option != nil {
-			option(&addHandlerOptions)
-		}
-	}
+	addHandlerOptions := normalizeAddHandlerOptions(options)
 	if rb.err != nil {
 		return rb
 	}
