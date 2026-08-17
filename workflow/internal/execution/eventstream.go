@@ -561,23 +561,46 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 
 			// If blocking on pending requests and we have pending requests, wait for input
 			if blockOnPendingRequest && status == RunStatusPendingRequests {
-				if err := l.inputWaiter.waitForInput(linkedCtx); err != nil {
-					return
+				// Wait for the continuation signal. A wakeup does not guarantee
+				// that work is actually available: the input signal is a binary
+				// semaphore, so a stale signal (e.g. left over from the initial
+				// input) or a spurious wakeup can return here with nothing to
+				// process. Keep waiting until there is genuine work, re-checking
+				// for terminal state each time, so that the StartedEvent below is
+				// emitted for — and stays paired with — the cycle that actually
+				// runs the continuation supersteps.
+				for !l.stepRunner.HasUnprocessedMessages() {
+					if err := l.inputWaiter.waitForInput(linkedCtx); err != nil {
+						return
+					}
+					if l.stepRunner.HasUnprocessedMessages() {
+						break
+					}
+					// No work yet: the run may have progressed to a terminal
+					// state (e.g. requests serviced elsewhere). Re-evaluate and
+					// stop if there is nothing left to wait for.
+					if l.stepRunner.HasUnservicedRequests() {
+						l.setStatus(RunStatusPendingRequests)
+					} else {
+						l.setStatus(RunStatusIdle)
+					}
+					status = l.getStatus()
+					if l.shouldBreak(status, blockOnPendingRequest, linkedCtx) {
+						return
+					}
 				}
 				startRunActivity()
 				// Emit a StartedEvent for the continuation cycle, mirroring the
 				// streaming run loop which raises one per input → processing →
-				// halt cycle. Only when there is actual work to process, so
-				// no-work wakeups (e.g. spurious signals) stay event-free. The
-				// event is drained and yielded before the cycle's supersteps.
-				if l.stepRunner.HasUnprocessedMessages() {
-					l.eventQueue.Enqueue(workflow.StartedEvent{})
-					// Drain immediately so the StartedEvent is yielded before the
-					// cycle's supersteps run, rather than being held in the queue
-					// and drained alongside the first superstep's events.
-					if !l.drainAndFilterEvents(linkedCtx, yield) {
-						return
-					}
+				// halt cycle. There is confirmed work to process, so the event
+				// stays paired with the cycle that runs it. The event is drained
+				// and yielded before the cycle's supersteps.
+				l.eventQueue.Enqueue(workflow.StartedEvent{})
+				// Drain immediately so the StartedEvent is yielded before the
+				// cycle's supersteps run, rather than being held in the queue
+				// and drained alongside the first superstep's events.
+				if !l.drainAndFilterEvents(linkedCtx, yield) {
+					return
 				}
 			} else {
 				// No more work to do
