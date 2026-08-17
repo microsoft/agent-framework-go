@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"iter"
+	"sync"
 	"sync/atomic"
 
 	"github.com/microsoft/agent-framework-go/internal/concurrent"
@@ -43,8 +44,9 @@ func contextWithWorkflowTelemetry(ctx context.Context, wf *workflow.Workflow) co
 }
 
 type inputWaiter struct {
+	mu     sync.Mutex
 	signal chan struct{}
-	closed atomic.Bool
+	closed bool
 }
 
 func newInputWaiter() inputWaiter {
@@ -56,7 +58,11 @@ func newInputWaiter() inputWaiter {
 
 // signalInput: non-blocking signal (swallow if already signaled)
 func (iw *inputWaiter) signalInput() {
-	if iw.closed.Load() {
+	// Hold the lock while sending so it cannot race with close closing the
+	// channel, which would otherwise panic with "send on closed channel".
+	iw.mu.Lock()
+	defer iw.mu.Unlock()
+	if iw.closed {
 		return
 	}
 	select {
@@ -79,7 +85,10 @@ func (iw *inputWaiter) waitForInput(ctx context.Context) error {
 
 // close closes the inputWaiter and releases any waiting goroutines
 func (iw *inputWaiter) close() {
-	if iw.closed.CompareAndSwap(false, true) {
+	iw.mu.Lock()
+	defer iw.mu.Unlock()
+	if !iw.closed {
+		iw.closed = true
 		close(iw.signal)
 	}
 }
