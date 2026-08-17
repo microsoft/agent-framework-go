@@ -25,10 +25,9 @@ func TestClassifyDeterministically(t *testing.T) {
 			want:   riskLow,
 		},
 		{
-			name:   "large workflow production change",
+			name:   "large workflow production change needs semantic review",
 			files:  []string{"workflow/inproc/state.go", "workflow/inproc/state_test.go"},
 			labels: []string{"size:large", "kind:code", "kind:tests", "area:workflow"},
-			want:   riskHigh,
 		},
 		{
 			name:   "small top-level workflow contract needs semantic review",

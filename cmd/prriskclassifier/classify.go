@@ -4,7 +4,6 @@
 package main
 
 import (
-	"path/filepath"
 	"slices"
 	"strings"
 )
@@ -20,17 +19,8 @@ type deterministicDecision struct {
 	Reason string
 }
 
-func classifyDeterministically(files, labels []string) deterministicDecision {
+func classifyDeterministically(_ []string, labels []string) deterministicDecision {
 	kinds := labelsWithPrefix(labels, "kind:")
-
-	if slices.Contains(kinds, "kind:code") &&
-		(slices.Contains(labels, "size:large") || slices.Contains(labels, "size:xlarge")) &&
-		slices.ContainsFunc(files, isCriticalProductionPath) {
-		return deterministicDecision{
-			Label:  riskHigh,
-			Reason: "a large production change affects a workflow, tool-execution, or concurrency boundary",
-		}
-	}
 
 	if isClearlyLowRisk(kinds, labels) {
 		return deterministicDecision{
@@ -39,7 +29,7 @@ func classifyDeterministically(files, labels []string) deterministicDecision {
 		}
 	}
 
-	return deterministicDecision{}
+	return deterministicDecision{Reason: "production or ambiguous changes require confidence-gated semantic review"}
 }
 
 func isClearlyLowRisk(kinds, labels []string) bool {
@@ -56,33 +46,6 @@ func isClearlyLowRisk(kinds, labels []string) bool {
 		}
 	}
 	return true
-}
-
-func isCriticalProductionPath(path string) bool {
-	path = filepath.ToSlash(path)
-	if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") || strings.Contains(path, "/testdata/") {
-		return false
-	}
-	return isCriticalWorkflowPath(path) ||
-		strings.HasPrefix(path, "agent/harness/toolapproval/") ||
-		strings.HasPrefix(path, "agent/harness/toolautocall/") ||
-		strings.HasPrefix(path, "tool/shelltool/") ||
-		strings.HasPrefix(path, "internal/concurrent/")
-}
-
-func isCriticalWorkflowPath(path string) bool {
-	if !strings.HasPrefix(path, "workflow/") {
-		return false
-	}
-	relative := strings.TrimPrefix(path, "workflow/")
-	if !strings.Contains(relative, "/") {
-		return true
-	}
-	return strings.HasPrefix(relative, "agentworkflow/") ||
-		strings.HasPrefix(relative, "checkpoint/") ||
-		strings.HasPrefix(relative, "inproc/") ||
-		strings.HasPrefix(relative, "internal/checkpoint/") ||
-		strings.HasPrefix(relative, "internal/execution/")
 }
 
 func labelsWithPrefix(labels []string, prefix string) []string {

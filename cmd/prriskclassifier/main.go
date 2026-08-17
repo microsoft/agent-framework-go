@@ -17,10 +17,11 @@ import (
 const failedAutoRisk = "failed-auto-risk"
 
 type options struct {
-	repo     string
-	prNumber int
-	output   string
-	summary  string
+	repo           string
+	prNumber       int
+	output         string
+	summary        string
+	validateResult bool
 }
 
 func main() {
@@ -35,6 +36,15 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 	}
 
 	client := &ghClient{repo: opts.repo, run: execGH}
+	if opts.validateResult {
+		if err := validatePullRequestRisk(context.Background(), client, opts.prNumber); err != nil {
+			_, _ = fmt.Fprintf(stderr, "error: validate PR #%d risk result: %v\n", opts.prNumber, err)
+			return 1
+		}
+		_, _ = fmt.Fprintf(stdout, "PR #%d: automatic risk result is valid\n", opts.prNumber)
+		return 0
+	}
+
 	result, err := classifyPullRequest(context.Background(), client, opts.prNumber)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "error: classify PR #%d: %v\n", opts.prNumber, err)
@@ -60,6 +70,7 @@ func parseOptions(args []string, getenv func(string) string, output io.Writer) (
 	prNumber := fs.Int("pr-number", envInt(getenv("PR_NUMBER")), "pull request number")
 	resultPath := fs.String("output", getenv("GITHUB_OUTPUT"), "GitHub Actions output file (optional)")
 	summaryPath := fs.String("summary", getenv("GITHUB_STEP_SUMMARY"), "GitHub Actions summary file (optional)")
+	validateResult := fs.Bool("validate-result", false, "validate and enforce the final automatic risk label state")
 	if err := fs.Parse(args); err != nil {
 		return options{}, err
 	}
@@ -73,7 +84,13 @@ func parseOptions(args []string, getenv func(string) string, output io.Writer) (
 	if *prNumber <= 0 {
 		return options{}, fmt.Errorf("pr-number must be positive")
 	}
-	return options{repo: *repo, prNumber: *prNumber, output: *resultPath, summary: *summaryPath}, nil
+	return options{
+		repo:           *repo,
+		prNumber:       *prNumber,
+		output:         *resultPath,
+		summary:        *summaryPath,
+		validateResult: *validateResult,
+	}, nil
 }
 
 func envInt(value string) int {

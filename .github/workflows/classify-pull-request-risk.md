@@ -55,9 +55,9 @@ timeout-minutes: 10
 
 # Agent Framework Pull Request Risk Classifier
 
-Classify pull request `${{ inputs.pr_number }}` in `${{ github.repository }}` with exactly one `risk:*` label.
+Classify pull request `${{ inputs.pr_number }}` in `${{ github.repository }}` only when the evidence supports one risk level with high confidence.
 
-The deterministic classifier already handled unambiguous low- and high-risk changes. This agent runs only when repository-specific rules were inconclusive.
+The deterministic classifier already handled unambiguous low-risk changes. This agent reviews every production or otherwise ambiguous change. A wrong risk label is worse than abstaining.
 
 ## Risk Levels
 
@@ -78,11 +78,31 @@ Use all available evidence rather than treating any single label as decisive:
 - `public-api-change` is positive evidence that exported API changed, but it does not prove the change is breaking. Its absence is not proof that no API changed because the parity workflow may still be running.
 - Review the actual diff and test changes to distinguish an isolated fix from a broad behavioral change.
 
+## Confidence Gates
+
+Apply a risk label only when the actual diff provides concrete evidence for that level:
+
+- Use `risk:low` only when there is no meaningful production behavior change, or the change is obviously isolated, directly tested, and straightforward to roll back.
+- Use `risk:medium` only when production impact is clearly bounded, compatibility is preserved, tests cover the changed behavior, and no high-risk criterion is present.
+- Use `risk:high` only when the diff itself shows a concrete high-risk property such as a breaking API, weakened trust boundary, persistence or serialization incompatibility, broad orchestration or concurrency impact, major dependency upgrade, difficult rollback, or inadequate tests for the potential impact. A sensitive path alone is not sufficient.
+
+Abstain by adding `failed-auto-risk` when any of these are true:
+
+- Required files, patches, labels, or dependency-version details cannot be read.
+- Classification depends on assumptions not established by the diff.
+- More than one risk level remains reasonably plausible.
+- The test evidence or rollback scope is unclear.
+- You cannot cite concrete evidence for the selected level.
+
+Do not guess, choose a default, or round uncertainty up to a higher risk level.
+
 ## Process
 
 1. Use GitHub tools to read the PR title, body, existing labels, changed files, and relevant diff patches. Do not execute pull request code.
-2. Select exactly one risk level using the definitions and signals above. When evidence falls between levels, choose the higher level needed for safe review depth.
+2. Apply the confidence gates above. Select exactly one risk level only when one level is clearly supported; otherwise abstain.
 3. On success, add the selected risk label if missing, remove the other two risk labels, and remove `failed-auto-risk` if present. Do not remove labels outside this allowlist.
 4. If the selected risk label is already the only risk label and no failure marker is present, use `noop`.
 5. Do not add comments or reviews.
-6. If the PR cannot be read or classified confidently, preserve existing risk labels and add `failed-auto-risk`.
+6. If the PR cannot be read or classified confidently, add `failed-auto-risk` first and then remove all existing `risk:low`, `risk:medium`, and `risk:high` labels. Do not use `noop` when abstaining.
+
+The workflow validates the final state after this agent finishes. A valid automatic result is either exactly one risk label with no failure marker, or `failed-auto-risk` with no risk labels. Missing, conflicting, or mixed states are converted to the unable marker and fail the workflow check.

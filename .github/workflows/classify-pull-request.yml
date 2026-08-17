@@ -118,11 +118,50 @@ jobs:
     with:
       pr_number: ${{ github.event.pull_request.number || fromJSON(github.event.inputs.pr-number || '0') }}
 
+  validate-risk-result:
+    if: >-
+      always() &&
+      needs.classify-risk-rules.result == 'success' &&
+      (needs.classify-risk-agent.result == 'success' || needs.classify-risk-agent.result == 'skipped')
+    needs: [classify-risk-rules, classify-risk-agent]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout classifier
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Build risk classifier
+        run: go build -o "$RUNNER_TEMP/prriskclassifier" ./cmd/prriskclassifier
+
+      - name: Enforce automatic risk result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr-number }}
+        run: |
+          "$RUNNER_TEMP/prriskclassifier" \
+            -repo "${{ github.repository }}" \
+            -pr-number "$PR_NUMBER" \
+            -validate-result
+
   mark-risk-failure:
     if: >-
       always() &&
-      (needs.classify-risk-rules.result == 'failure' || needs.classify-risk-agent.result == 'failure')
-    needs: [classify-risk-rules, classify-risk-agent]
+      (needs.classify-risk-rules.result == 'failure' ||
+       needs.classify-risk-agent.result == 'failure' ||
+       needs.validate-risk-result.result == 'failure')
+    needs: [classify-risk-rules, classify-risk-agent, validate-risk-result]
     runs-on: ubuntu-latest
     permissions:
       issues: write
@@ -136,8 +175,17 @@ jobs:
           gh label create failed-auto-risk \
             --repo "${{ github.repository }}" \
             --color 6E7781 \
-            --description "Automatic risk classification needs maintainer attention" \
+            --description "Automatic risk classification was inconclusive or failed" \
             --force
           gh api --method POST \
             "repos/${{ github.repository }}/issues/$PR_NUMBER/labels" \
             -f 'labels[]=failed-auto-risk'
+          risk_labels="$(gh api \
+            "repos/${{ github.repository }}/issues/$PR_NUMBER" \
+            --jq '.labels[].name | select(. == "risk:low" or . == "risk:medium" or . == "risk:high")')"
+          while IFS= read -r label; do
+            if [[ -n "$label" ]]; then
+              gh api --method DELETE \
+                "repos/${{ github.repository }}/issues/$PR_NUMBER/labels/${label/:/%3A}"
+            fi
+          done <<< "$risk_labels"

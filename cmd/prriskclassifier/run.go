@@ -46,3 +46,38 @@ func markFailure(ctx context.Context, client riskClient, number int, cause error
 	}
 	return cause
 }
+
+func validatePullRequestRisk(ctx context.Context, client riskClient, number int) error {
+	if err := client.ensureLabels(ctx); err != nil {
+		return markFailure(ctx, client, number, fmt.Errorf("ensure risk labels: %w", err))
+	}
+	labels, err := client.pullRequestLabels(ctx, number)
+	if err != nil {
+		return markFailure(ctx, client, number, fmt.Errorf("read pull request labels: %w", err))
+	}
+
+	riskLabels := currentRiskLabels(labels)
+	hasFailureMarker := slices.Contains(labels, failedAutoRisk)
+	if (len(riskLabels) == 1 && !hasFailureMarker) || (len(riskLabels) == 0 && hasFailureMarker) {
+		return nil
+	}
+
+	cause := fmt.Errorf("invalid automatic risk state: risk labels=%v, %s=%t", riskLabels, failedAutoRisk, hasFailureMarker)
+	if !hasFailureMarker {
+		if err := client.addLabel(ctx, number, failedAutoRisk); err != nil {
+			return errors.Join(cause, fmt.Errorf("add %s: %w", failedAutoRisk, err))
+		}
+	}
+	for _, label := range riskLabels {
+		if err := client.removeLabel(ctx, number, label); err != nil {
+			return errors.Join(cause, fmt.Errorf("remove invalid %s: %w", label, err))
+		}
+	}
+	return cause
+}
+
+func currentRiskLabels(labels []string) []string {
+	return slices.DeleteFunc(slices.Clone(labels), func(label string) bool {
+		return label != riskLow && label != riskMedium && label != riskHigh
+	})
+}

@@ -37,6 +37,20 @@ func TestParseOptionsRejectsInvalidInput(t *testing.T) {
 	}
 }
 
+func TestParseOptionsValidateResult(t *testing.T) {
+	opts, err := parseOptions(
+		[]string{"-repo", "microsoft/agent-framework-go", "-pr-number", "824", "-validate-result"},
+		func(string) string { return "" },
+		&strings.Builder{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opts.validateResult {
+		t.Fatal("validate-result was not enabled")
+	}
+}
+
 func TestWriteResult(t *testing.T) {
 	dir := t.TempDir()
 	opts := options{
