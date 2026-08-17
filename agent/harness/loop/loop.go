@@ -176,6 +176,7 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 		returnLastResponseOnly := cfg.NonStreamingReturnsLastResponseOnly && !stream
 		initialSession, hasSession := agent.GetOption(opts, agent.WithSession)
 		var initialSessionSnapshot []byte
+		var aggregatedUsage message.UsageDetails
 		loopCtx := &Context{
 			InitialMessages:      initialMessages,
 			Options:              slices.Clone(opts),
@@ -197,6 +198,7 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 				if update != nil {
 					resp.Update(update)
 					if returnLastResponseOnly {
+						aggregatedUsage.Add(update.Usage())
 						iterationUpdates = append(iterationUpdates, cloneResponseUpdate(update))
 					}
 				}
@@ -217,7 +219,7 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 
 			if hasPendingApprovalRequests(&resp) || loopCtx.Iteration >= maxIterations {
 				if returnLastResponseOnly {
-					if !yieldResponseUpdates(yield, iterationUpdates) {
+					if !yieldResponseUpdates(yield, responseUpdatesWithAggregatedUsage(iterationUpdates, aggregatedUsage)) {
 						return
 					}
 				}
@@ -231,7 +233,7 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 			}
 			if !ok {
 				if returnLastResponseOnly {
-					if !yieldResponseUpdates(yield, iterationUpdates) {
+					if !yieldResponseUpdates(yield, responseUpdatesWithAggregatedUsage(iterationUpdates, aggregatedUsage)) {
 						return
 					}
 				}
@@ -351,6 +353,76 @@ func yieldResponseUpdates(yield func(*agent.ResponseUpdate, error) bool, updates
 		}
 	}
 	return true
+}
+
+func responseUpdatesWithAggregatedUsage(updates []*agent.ResponseUpdate, usage message.UsageDetails) []*agent.ResponseUpdate {
+	if len(updates) == 0 {
+		return nil
+	}
+
+	out := make([]*agent.ResponseUpdate, 0, len(updates))
+	for _, update := range updates {
+		if stripped := stripUsageFromResponseUpdate(update); stripped != nil {
+			out = append(out, stripped)
+		}
+	}
+	if isZeroUsageDetails(usage) {
+		return out
+	}
+
+	for i := len(out) - 1; i >= 0; i-- {
+		if len(out[i].Contents) == 0 {
+			continue
+		}
+		out[i].Contents = append(out[i].Contents, &message.UsageContent{Details: usage})
+		return out
+	}
+
+	return append(out, &agent.ResponseUpdate{
+		Contents: message.Contents{&message.UsageContent{Details: usage}},
+	})
+}
+
+func stripUsageFromResponseUpdate(update *agent.ResponseUpdate) *agent.ResponseUpdate {
+	if update == nil {
+		return nil
+	}
+
+	out := cloneResponseUpdate(update)
+	contents := out.Contents[:0]
+	for _, content := range out.Contents {
+		if _, ok := content.(*message.UsageContent); ok {
+			continue
+		}
+		contents = append(contents, content)
+	}
+	out.Contents = contents
+	if len(out.Contents) == 0 && !hasResponseUpdateMetadata(out) {
+		return nil
+	}
+	return out
+}
+
+func hasResponseUpdateMetadata(update *agent.ResponseUpdate) bool {
+	return update.RawRepresentation != nil ||
+		update.AdditionalProperties != nil ||
+		update.AgentID != "" ||
+		update.MessageID != "" ||
+		update.ResponseID != "" ||
+		update.FinishReason != "" ||
+		update.AuthorName != "" ||
+		update.Role != "" ||
+		update.ContinuationToken != "" ||
+		!update.CreatedAt.IsZero()
+}
+
+func isZeroUsageDetails(usage message.UsageDetails) bool {
+	return usage.InputTokenCount == 0 &&
+		usage.OutputTokenCount == 0 &&
+		usage.TotalTokenCount == 0 &&
+		usage.CachedInputTokenCount == 0 &&
+		usage.ReasoningTokenCount == 0 &&
+		len(usage.AdditionalCounts) == 0
 }
 
 func snapshotSession(session *agent.Session) ([]byte, error) {

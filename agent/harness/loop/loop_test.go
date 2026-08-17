@@ -359,6 +359,46 @@ func TestLoop_NonStreamingReturnsLastResponseOnly(t *testing.T) {
 	}
 }
 
+func TestLoop_NonStreamingReturnsLastResponseOnly_AggregatesUsage(t *testing.T) {
+	capture := newCaptureAgent(func(call int, _ []*message.Message) []*agent.ResponseUpdate {
+		return textAndUsageUpdates("iteration "+strconv.Itoa(call), message.UsageDetails{
+			InputTokenCount:  int64(call),
+			OutputTokenCount: int64(call * 2),
+			TotalTokenCount:  int64(call * 3),
+			AdditionalCounts: map[string]int64{"cache_read": int64(call)},
+		})
+	})
+	a := agent.New(capture.provider(), agent.Config{
+		Middlewares: []agent.Middleware{loop.New(loop.Config{
+			NonStreamingReturnsLastResponseOnly: true,
+			Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(_ context.Context, ctx *loop.Context) (loop.Evaluation, error) {
+				if ctx.LastResponse.String() == "iteration 3" {
+					return loop.Stop(), nil
+				}
+				return loop.Continue("follow-up"), nil
+			})},
+		})},
+	})
+
+	resp, err := a.RunText(context.Background(), "go").Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	usage := resp.Usage()
+	if usage.InputTokenCount != 6 {
+		t.Fatalf("input tokens = %d, want 6", usage.InputTokenCount)
+	}
+	if usage.OutputTokenCount != 12 {
+		t.Fatalf("output tokens = %d, want 12", usage.OutputTokenCount)
+	}
+	if usage.TotalTokenCount != 18 {
+		t.Fatalf("total tokens = %d, want 18", usage.TotalTokenCount)
+	}
+	if usage.AdditionalCounts["cache_read"] != 6 {
+		t.Fatalf("cache_read = %d, want 6", usage.AdditionalCounts["cache_read"])
+	}
+}
+
 func TestLoop_NonStreamingReturnsLastResponseOnly_IgnoredForStreaming(t *testing.T) {
 	capture := newCaptureAgent(func(call int, _ []*message.Message) []*agent.ResponseUpdate {
 		return textUpdates("iteration " + strconv.Itoa(call))
@@ -505,6 +545,18 @@ func textUpdates(text string) []*agent.ResponseUpdate {
 		Role:     message.RoleAssistant,
 		Contents: []message.Content{&message.TextContent{Text: text}},
 	}}
+}
+
+func textAndUsageUpdates(text string, usage message.UsageDetails) []*agent.ResponseUpdate {
+	return []*agent.ResponseUpdate{
+		{
+			Role:     message.RoleAssistant,
+			Contents: []message.Content{&message.TextContent{Text: text}},
+		},
+		{
+			Contents: []message.Content{&message.UsageContent{Details: usage}},
+		},
+	}
 }
 
 func messageTexts(messages []*message.Message) []string {
