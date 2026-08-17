@@ -78,7 +78,7 @@ func TestClassifyPullRequestDeterministicNoop(t *testing.T) {
 	}
 }
 
-func TestClassifyPullRequestInconclusiveMarksPendingAndPreservesRisk(t *testing.T) {
+func TestClassifyPullRequestInconclusiveMarksUnableAndClearsStaleRisk(t *testing.T) {
 	client := &fakeRiskClient{
 		files:  []string{"provider/openaiprovider/openai.go"},
 		labels: []string{"kind:code", riskMedium},
@@ -90,7 +90,7 @@ func TestClassifyPullRequestInconclusiveMarksPendingAndPreservesRisk(t *testing.
 	if result.Decision.Label != "" || !result.NeedsAgent {
 		t.Fatalf("result = %+v", result)
 	}
-	if !slices.Equal(client.added, []string{failedAutoRisk}) || len(client.removed) != 0 {
+	if !slices.Equal(client.added, []string{failedAutoRisk}) || !slices.Equal(client.removed, []string{riskMedium}) {
 		t.Fatalf("added = %v, removed = %v", client.added, client.removed)
 	}
 }

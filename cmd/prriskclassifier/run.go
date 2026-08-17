@@ -26,6 +26,11 @@ func classifyPullRequest(ctx context.Context, client riskClient, number int) (cl
 				return classificationResult{}, fmt.Errorf("mark semantic risk classification pending: %w", err)
 			}
 		}
+		for _, label := range currentRiskLabels(labels) {
+			if err := client.removeLabel(ctx, number, label); err != nil {
+				return classificationResult{}, fmt.Errorf("clear stale %s before semantic review: %w", label, err)
+			}
+		}
 		return result, nil
 	}
 

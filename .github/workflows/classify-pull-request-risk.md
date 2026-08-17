@@ -57,7 +57,7 @@ timeout-minutes: 10
 
 Classify pull request `${{ inputs.pr_number }}` in `${{ github.repository }}` only when the evidence supports one risk level with high confidence.
 
-The deterministic classifier already handled unambiguous low-risk changes. This agent reviews every production or otherwise ambiguous change. A wrong risk label is worse than abstaining. The deterministic stage adds `failed-auto-risk` before this agent starts; treat it as a pending marker that must be removed only after a confident classification.
+The deterministic classifier already handled unambiguous low-risk changes. This agent reviews every production or otherwise ambiguous change. A wrong risk label is worse than abstaining. Before this agent starts, the deterministic stage adds `failed-auto-risk` and clears every existing risk label. A confident classification must therefore actively add one risk label and remove the marker.
 
 ## Risk Levels
 
@@ -103,6 +103,6 @@ Do not guess, choose a default, or round uncertainty up to a higher risk level.
 3. On success, add the selected risk label if missing, remove the other two risk labels, and remove `failed-auto-risk` if present. Do not remove labels outside this allowlist.
 4. If the selected risk label is already the only risk label and no failure marker is present, use `noop`.
 5. Do not add comments or reviews.
-6. If the PR cannot be read or classified confidently, add `failed-auto-risk` first and then remove all existing `risk:low`, `risk:medium`, and `risk:high` labels. Do not use `noop` when abstaining.
+6. If the PR cannot be read or classified confidently, leave `failed-auto-risk` in place and do not add a risk label. Use `noop` if no label changes are needed.
 
 The workflow validates the final state after this agent finishes. A valid automatic result is either exactly one risk label with no failure marker, or `failed-auto-risk` with no risk labels. Missing, conflicting, or mixed states are converted to the unable marker and fail the workflow check.
