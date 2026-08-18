@@ -15,13 +15,20 @@ import (
 	"github.com/openai/openai-go/v3/option"
 )
 
-const clientHeaderPrefix = "x-client-"
+const (
+	clientHeaderPrefix            = "x-client-"
+	HostedAgentUserIdentityHeader = "x-ms-user-identity"
+)
 
-type clientHeadersContextKey struct{}
+type requestHeadersContextKey struct{}
 
 type clientHeadersOpt map[string]string
 
 func (o clientHeadersOpt) Value() any { return map[string]string(o) }
+
+type hostedAgentUserIdentityOpt string
+
+func (o hostedAgentUserIdentityOpt) Value() any { return string(o) }
 
 // WithClientHeader adds a single x-client-* header to a Foundry agent run.
 func WithClientHeader(name string, value string) agent.Option {
@@ -39,19 +46,25 @@ func WithClientHeaders(headers map[string]string) agent.Option {
 	return clientHeadersOpt(cloned)
 }
 
-type clientHeadersMiddleware struct{}
+// WithHostedAgentUserIdentity adds a per-call hosted-agent user identity header to a Foundry agent run.
+func WithHostedAgentUserIdentity(userIdentity string) agent.Option {
+	validateHostedAgentUserIdentity(userIdentity)
+	return hostedAgentUserIdentityOpt(userIdentity)
+}
 
-func (clientHeadersMiddleware) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
-	headers := collectClientHeaders(options)
+type requestHeadersMiddleware struct{}
+
+func (requestHeadersMiddleware) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+	headers := collectRequestHeaders(options)
 	if len(headers) != 0 {
-		ctx = context.WithValue(ctx, clientHeadersContextKey{}, headers)
+		ctx = context.WithValue(ctx, requestHeadersContextKey{}, headers)
 	}
 	return next(ctx, messages, options...)
 }
 
-func clientHeadersRequestOption() option.RequestOption {
+func requestHeadersRequestOption() option.RequestOption {
 	return option.WithMiddleware(func(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
-		if headers, ok := req.Context().Value(clientHeadersContextKey{}).(map[string]string); ok {
+		if headers, ok := req.Context().Value(requestHeadersContextKey{}).(map[string]string); ok {
 			for name, value := range headers {
 				req.Header.Set(name, value)
 			}
@@ -60,17 +73,21 @@ func clientHeadersRequestOption() option.RequestOption {
 	})
 }
 
-func collectClientHeaders(options []agent.Option) map[string]string {
+func collectRequestHeaders(options []agent.Option) map[string]string {
 	var headers map[string]string
 	for _, opt := range options {
-		clientHeaders, ok := opt.(clientHeadersOpt)
-		if !ok {
-			continue
+		switch opt := opt.(type) {
+		case clientHeadersOpt:
+			if headers == nil {
+				headers = make(map[string]string, len(opt)+1)
+			}
+			maps.Copy(headers, opt)
+		case hostedAgentUserIdentityOpt:
+			if headers == nil {
+				headers = make(map[string]string, 1)
+			}
+			headers[HostedAgentUserIdentityHeader] = string(opt)
 		}
-		if headers == nil {
-			headers = make(map[string]string, len(clientHeaders))
-		}
-		maps.Copy(headers, clientHeaders)
 	}
 	return headers
 }
@@ -84,5 +101,11 @@ func validateClientHeader(name string, value string) {
 	}
 	if !strings.HasPrefix(strings.ToLower(name), clientHeaderPrefix) {
 		panic(fmt.Sprintf("client header %q must start with %q", name, clientHeaderPrefix))
+	}
+}
+
+func validateHostedAgentUserIdentity(userIdentity string) {
+	if strings.TrimSpace(userIdentity) == "" {
+		panic("hosted agent user identity is required")
 	}
 }

@@ -127,9 +127,9 @@ func newFoundryAgent(credential azcore.TokenCredential, config AgentConfig, mode
 	}
 	openAIOptions = append(openAIOptions, mode.requestOptions...)
 	openAIOptions = append(openAIOptions, config.OpenAIOptions...)
-	openAIOptions = append(openAIOptions, clientHeadersRequestOption())
+	openAIOptions = append(openAIOptions, requestHeadersRequestOption())
 	openAIOptions = append(openAIOptions, servedModelRequestOption())
-	config.Middlewares = append([]agent.Middleware{clientHeadersMiddleware{}, servedModelMiddleware{}}, config.Middlewares...)
+	config.Middlewares = append([]agent.Middleware{requestHeadersMiddleware{}, servedModelMiddleware{}}, config.Middlewares...)
 
 	return openaiprovider.NewResponsesAgent(openai.NewClient(openAIOptions...), openaiprovider.AgentConfig{
 		Config:             config.Config,
