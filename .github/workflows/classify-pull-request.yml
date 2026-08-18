@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   classify-size-area:
-    uses: microsoft/go-infra/.github/workflows/classify-pull-request.yml@35d34d21089773bebd2dd5efc6197a38f16490bf
+    uses: microsoft/go-infra/.github/workflows/classify-pull-request.yml@cf095ee7dc1ed628f4b3d7c225011e858ad7733e
     permissions:
       contents: read
       issues: write
@@ -55,7 +55,7 @@ jobs:
   classify-kind:
     if: github.event_name != 'workflow_dispatch' || github.event.inputs.pr-number != '0'
     needs: classify-size-area
-    uses: microsoft/go-infra/.github/workflows/classify-pull-request-kind.lock.yml@35d34d21089773bebd2dd5efc6197a38f16490bf
+    uses: microsoft/go-infra/.github/workflows/classify-pull-request-kind.lock.yml@cf095ee7dc1ed628f4b3d7c225011e858ad7733e
     secrets: inherit
     permissions:
       actions: read
@@ -65,3 +65,127 @@ jobs:
       copilot-requests: write
     with:
       pr_number: ${{ github.event.pull_request.number || fromJSON(github.event.inputs.pr-number || '0') }}
+
+  classify-risk-rules:
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.pr-number != '0'
+    needs: classify-kind
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    outputs:
+      needs-agent: ${{ steps.classify.outputs.needs-agent }}
+    steps:
+      # pull_request_target resolves github.workflow_sha from the trusted base
+      # branch, so this never builds or executes pull request code.
+      - name: Checkout classifier
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Build risk classifier
+        run: go build -o "$RUNNER_TEMP/prriskclassifier" ./cmd/prriskclassifier
+
+      - name: Apply deterministic risk rules
+        id: classify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr-number }}
+        run: |
+          "$RUNNER_TEMP/prriskclassifier" \
+            -repo "${{ github.repository }}" \
+            -pr-number "$PR_NUMBER"
+
+  classify-risk-agent:
+    if: needs.classify-risk-rules.outputs.needs-agent == 'true'
+    needs: classify-risk-rules
+    uses: ./.github/workflows/classify-pull-request-risk.lock.yml
+    secrets: inherit
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: write
+      copilot-requests: write
+    with:
+      pr_number: ${{ github.event.pull_request.number || fromJSON(github.event.inputs.pr-number || '0') }}
+
+  validate-risk-result:
+    if: >-
+      always() &&
+      needs.classify-risk-rules.result == 'success' &&
+      (needs.classify-risk-agent.result == 'success' || needs.classify-risk-agent.result == 'skipped')
+    needs: [classify-risk-rules, classify-risk-agent]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout classifier
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Build risk classifier
+        run: go build -o "$RUNNER_TEMP/prriskclassifier" ./cmd/prriskclassifier
+
+      - name: Enforce automatic risk result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr-number }}
+        run: |
+          "$RUNNER_TEMP/prriskclassifier" \
+            -repo "${{ github.repository }}" \
+            -pr-number "$PR_NUMBER" \
+            -validate-result
+
+  mark-risk-failure:
+    if: >-
+      always() &&
+      (needs.classify-risk-rules.result == 'failure' ||
+       needs.classify-risk-agent.result == 'failure' ||
+       needs.validate-risk-result.result == 'failure')
+    needs: [classify-risk-rules, classify-risk-agent, validate-risk-result]
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Mark automatic risk classification failure
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr-number }}
+        run: |
+          gh label create failed-auto-risk \
+            --repo "${{ github.repository }}" \
+            --color 6E7781 \
+            --description "Automatic risk classification was inconclusive or failed" \
+            --force
+          gh api --method POST \
+            "repos/${{ github.repository }}/issues/$PR_NUMBER/labels" \
+            -f 'labels[]=failed-auto-risk'
+          risk_labels="$(gh api \
+            "repos/${{ github.repository }}/issues/$PR_NUMBER" \
+            --jq '.labels[].name | select(. == "risk:low" or . == "risk:medium" or . == "risk:high")')"
+          while IFS= read -r label; do
+            if [[ -n "$label" ]]; then
+              gh api --method DELETE \
+                "repos/${{ github.repository }}/issues/$PR_NUMBER/labels/${label/:/%3A}"
+            fi
+          done <<< "$risk_labels"
