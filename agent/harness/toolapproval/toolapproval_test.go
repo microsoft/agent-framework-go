@@ -1232,3 +1232,118 @@ func TestToolApproval_NilUpdatePassthrough(t *testing.T) {
 		t.Errorf("expected 1 text update, got %d", textUpdates)
 	}
 }
+
+func TestToolApproval_AutoApprovedRequestsStopAtDefaultIterationCap(t *testing.T) {
+	var callCount int
+	next := func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			callCount++
+			yield(&agent.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					&message.ToolApprovalRequestContent{
+						RequestID: "r1",
+						ToolCall: &message.FunctionCallContent{
+							CallID: "c1",
+							Name:   "load_skill",
+						},
+					},
+				},
+			}, nil)
+		}
+	}
+
+	mw := toolapproval.New(toolapproval.Config{
+		AutoApprovalRules: []func(context.Context, *message.FunctionCallContent) (bool, error){
+			func(context.Context, *message.FunctionCallContent) (bool, error) { return true, nil },
+		},
+	})
+
+	updates := collectUpdates(t, mw, next, []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "hi"}}},
+	})
+
+	if callCount != 41 {
+		t.Fatalf("expected 41 inner invocations (40 auto-approved turns plus one final surfaced turn), got %d", callCount)
+	}
+	if len(updates) != 1 {
+		t.Fatalf("expected 1 surfaced update after hitting the cap, got %d", len(updates))
+	}
+	if len(updates[0].Contents) != 1 {
+		t.Fatalf("expected final update to contain the unsplit approval request, got %#v", updates[0].Contents)
+	}
+	if _, ok := updates[0].Contents[0].(*message.ToolApprovalRequestContent); !ok {
+		t.Fatalf("expected final update to surface the approval request, got %#v", updates[0].Contents[0])
+	}
+}
+
+func TestToolApproval_AutoApprovedRequestsStopAtConfiguredIterationCap(t *testing.T) {
+	var callCount int
+	next := func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			callCount++
+			yield(&agent.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					&message.ToolApprovalRequestContent{
+						RequestID: "r1",
+						ToolCall: &message.FunctionCallContent{
+							CallID: "c1",
+							Name:   "load_skill",
+						},
+					},
+				},
+			}, nil)
+		}
+	}
+
+	mw := toolapproval.New(toolapproval.Config{
+		AutoApprovalRules: []func(context.Context, *message.FunctionCallContent) (bool, error){
+			func(context.Context, *message.FunctionCallContent) (bool, error) { return true, nil },
+		},
+		MaxAutoApprovalIterations: 3,
+	})
+
+	updates := collectUpdates(t, mw, next, []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "hi"}}},
+	})
+
+	if callCount != 4 {
+		t.Fatalf("expected 4 inner invocations (3 auto-approved turns plus one final surfaced turn), got %d", callCount)
+	}
+	if len(updates) != 1 {
+		t.Fatalf("expected 1 surfaced update after hitting the cap, got %d", len(updates))
+	}
+	if len(updates[0].Contents) != 1 {
+		t.Fatalf("expected final update to contain the unsplit approval request, got %#v", updates[0].Contents)
+	}
+	if _, ok := updates[0].Contents[0].(*message.ToolApprovalRequestContent); !ok {
+		t.Fatalf("expected final update to surface the approval request, got %#v", updates[0].Contents[0])
+	}
+}
+
+func TestToolApproval_MaxAutoApprovalIterationsBelowOneReturnsError(t *testing.T) {
+	mw := toolapproval.New(toolapproval.Config{
+		MaxAutoApprovalIterations: -1,
+	})
+	next := func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(func(*agent.ResponseUpdate, error) bool) {}
+	}
+
+	var got error
+	for _, err := range mw.Run(next, context.Background(), []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "hi"}}},
+	}) {
+		if err != nil {
+			got = err
+			break
+		}
+	}
+
+	if got == nil {
+		t.Fatal("expected error for MaxAutoApprovalIterations < 1")
+	}
+	if !strings.Contains(got.Error(), "MaxAutoApprovalIterations must be 0 or greater") {
+		t.Fatalf("expected MaxAutoApprovalIterations validation error, got %v", got)
+	}
+}

@@ -26,7 +26,14 @@ import (
 	"github.com/microsoft/agent-framework-go/tool"
 )
 
-const stateKey = "toolApprovalState"
+const (
+	stateKey = "toolApprovalState"
+
+	// DefaultMaxAutoApprovalIterations is the default safety cap for how many
+	// times the inner agent is re-invoked in a single run when every surfaced
+	// approval request is auto-approved.
+	DefaultMaxAutoApprovalIterations = 40
+)
 
 // Rule is a standing approval rule. If Arguments is nil, all invocations of
 // the named tool are auto-approved. Otherwise only invocations with an exact
@@ -94,10 +101,25 @@ type Config struct {
 	// to be auto-approved without prompting the caller. Returning an error fails
 	// the current run.
 	AutoApprovalRules []func(context.Context, *message.FunctionCallContent) (bool, error)
+
+	// MaxAutoApprovalIterations is the safety cap for how many times the inner
+	// agent is re-invoked in a single run when every surfaced approval request
+	// is auto-approved. When zero, DefaultMaxAutoApprovalIterations is used.
+	MaxAutoApprovalIterations int
 }
 
 func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
+		if cfg.MaxAutoApprovalIterations < 0 {
+			yield(nil, fmt.Errorf("toolapproval: MaxAutoApprovalIterations must be 0 or greater, got %d", cfg.MaxAutoApprovalIterations))
+			return
+		}
+
+		maxAutoApprovalIterations := cfg.MaxAutoApprovalIterations
+		if maxAutoApprovalIterations == 0 {
+			maxAutoApprovalIterations = DefaultMaxAutoApprovalIterations
+		}
+
 		st := loadState(opts)
 
 		// Step 1: Process inbound approval responses from the caller.
@@ -121,13 +143,30 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 		}
 
 		// Step 3: Main loop — call inner agent, classify approval requests.
-		for {
+		for iteration := 0; ; iteration++ {
 			// Inject collected approval responses as user messages.
 			callMessages := messages
 			if len(st.CollectedApprovalResponses) > 0 {
 				injected := responseMessage(st.CollectedApprovalResponses)
 				callMessages = append(slices.Clone(messages), injected)
 				st.CollectedApprovalResponses = nil
+			}
+
+			if iteration >= maxAutoApprovalIterations {
+				// Cap reached: forward one final inner turn as-is so any approval request
+				// is surfaced to the caller instead of continuing the auto-approval chain.
+				for update, err := range next(ctx, callMessages, opts...) {
+					if err != nil {
+						yield(nil, err)
+						return
+					}
+					if !yield(update, nil) {
+						saveState(opts, st)
+						return
+					}
+				}
+				saveState(opts, st)
+				return
 			}
 
 			var approvalRequests []*message.ToolApprovalRequestContent

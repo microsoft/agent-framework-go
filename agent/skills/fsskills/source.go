@@ -217,7 +217,7 @@ func searchForSkills(filesystem fs.FS, dir string, logger *slog.Logger, results 
 		skillPath := path.Join(dir, entry.Name())
 		if isUnsafeDirEntry(filesystem, skillPath, entry) {
 			logger.Warn("Skipping skill discovery path: symbolic link or inspection failure", "path", skillPath)
-			return
+			break
 		}
 
 		sub := filesystem
