@@ -425,7 +425,7 @@ func TestStreamingRun_ConcurrentSendMessage_NoDataRace(t *testing.T) {
 	errs := make(chan error, senders)
 	var wg sync.WaitGroup
 	wg.Add(senders)
-	for range senders {
+	for i := 0; i < senders; i++ {
 		go func() {
 			defer wg.Done()
 			<-start
@@ -464,6 +464,8 @@ func TestStreamingRun_SendMessageReturnsErrInvalidInputType(t *testing.T) {
 }
 
 // Cancellation must not acknowledge work after the event loop has stopped.
+// This test intentionally documents the current gap and remains red until
+// canceled runs reject new work.
 func TestStreamingRun_SendMessageAfterCancelReturnsError(t *testing.T) {
 	ex := minimalEchoBinding("ex")
 	wf, err := workflow.NewBuilder(ex).WithOutputFrom(ex).Build()
@@ -480,6 +482,13 @@ func TestStreamingRun_SendMessageAfterCancelReturnsError(t *testing.T) {
 
 	if err := stream.CancelRun(); err != nil {
 		t.Fatalf("CancelRun: %v", err)
+	}
+	status, err := stream.GetStatus(ctx)
+	if err != nil {
+		t.Fatalf("GetStatus: %v", err)
+	}
+	if status != inproc.RunStatusEnded {
+		t.Fatalf("status after CancelRun = %v, want Ended", status)
 	}
 	if err := stream.SendMessage(ctx, "message"); err == nil {
 		t.Fatal("SendMessage after CancelRun succeeded even though the run can no longer execute it")

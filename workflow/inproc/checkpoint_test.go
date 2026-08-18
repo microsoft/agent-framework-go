@@ -1311,6 +1311,7 @@ func TestStreamingRun_RestoreCheckpointWhileReadingState_NoDataRace(t *testing.T
 		keys[i] = fmt.Sprintf("key-%d", i)
 	}
 	started := make(chan struct{})
+	var startedOnce sync.Once
 	stop := make(chan struct{})
 	binding := workflow.ExecutorBinding{
 		ID:               "state-reader",
@@ -1328,7 +1329,7 @@ func TestStreamingRun_RestoreCheckpointWhileReadingState_NoDataRace(t *testing.T
 								}
 							}
 						case "read":
-							close(started)
+							startedOnce.Do(func() { close(started) })
 							for {
 								select {
 								case <-stop:

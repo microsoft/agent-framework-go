@@ -77,18 +77,18 @@ func TestNewInMemoryHistoryProvider_ConcurrentStoresOnSameSession_NoDataRace(t *
 	errs := make(chan error, stores)
 	var wg sync.WaitGroup
 	wg.Add(stores)
-	for i := range stores {
-		go func() {
+	for i := 0; i < stores; i++ {
+		go func(index int) {
 			defer wg.Done()
 			<-start
 			errs <- invokeHistoryProviderInvoked(
 				provider,
 				context.Background(),
-				[]*message.Message{message.NewText(fmt.Sprintf("request-%d", i))},
+				[]*message.Message{message.NewText(fmt.Sprintf("request-%d", index))},
 				nil,
 				agent.WithSession(session),
 			)
-		}()
+		}(i)
 	}
 	close(start)
 	wg.Wait()

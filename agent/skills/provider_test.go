@@ -86,19 +86,25 @@ func (s *panicOnceSource) Skills(context.Context) ([]*skills.Skill, error) {
 }
 
 type blockingSource struct {
-	started chan struct{}
-	release chan struct{}
-	skill   *skills.Skill
+	started     chan struct{}
+	startedOnce sync.Once
+	release     chan struct{}
+	releaseOnce sync.Once
+	skill       *skills.Skill
 }
 
 func (s *blockingSource) Skills(ctx context.Context) ([]*skills.Skill, error) {
-	close(s.started)
+	s.startedOnce.Do(func() { close(s.started) })
 	select {
 	case <-s.release:
 		return []*skills.Skill{s.skill}, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+func (s *blockingSource) unblock() {
+	s.releaseOnce.Do(func() { close(s.release) })
 }
 
 func TestProvider_CustomPromptTemplate_MissingSkillsPlaceholderPanics(t *testing.T) {
@@ -316,14 +322,14 @@ func TestProvider_CanceledWaiterDoesNotBlockOnSharedLoad(t *testing.T) {
 	select {
 	case waiterErr = <-waiterDone:
 	case <-time.After(250 * time.Millisecond):
-		close(source.release)
+		source.unblock()
 		if err := <-ownerDone; err != nil {
 			t.Fatalf("cache owner: %v", err)
 		}
 		waiterErr = <-waiterDone
 		t.Fatalf("canceled provider invocation remained blocked until the shared load completed; final error: %v", waiterErr)
 	}
-	close(source.release)
+	source.unblock()
 	if err := <-ownerDone; err != nil {
 		t.Fatalf("cache owner: %v", err)
 	}
