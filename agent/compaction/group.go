@@ -75,6 +75,11 @@ func (group *MessageGroup) isIncludedNonSystem() bool {
 	return group.isIncluded() && group.Kind != GroupKindSystem
 }
 
+func (group *MessageGroup) exclude(reason string) {
+	group.IsExcluded = true
+	group.ExcludeReason = reason
+}
+
 func (group *MessageGroup) isRaw() bool {
 	return group.Kind != GroupKindSummary
 }

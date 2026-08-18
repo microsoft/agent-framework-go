@@ -73,8 +73,7 @@ func (strategy *ToolResultStrategy) Compact(_ context.Context, index *MessageInd
 		group := index.Groups[idx]
 		summary := formatter(group)
 
-		group.IsExcluded = true
-		group.ExcludeReason = "collapsed by ToolResultStrategy"
+		group.exclude("collapsed by ToolResultStrategy")
 
 		summaryMessage := &message.Message{
 			Role: message.RoleAssistant,
