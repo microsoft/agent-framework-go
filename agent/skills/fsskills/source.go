@@ -547,14 +547,7 @@ func hasNonSymlinkSkillFile(entries []fs.DirEntry) bool {
 }
 
 func isSymlinkEntry(entry fs.DirEntry) bool {
-	if entry.Type()&fs.ModeSymlink != 0 {
-		return true
-	}
-	info, err := entry.Info()
-	if err != nil {
-		return false
-	}
-	return info.Mode()&fs.ModeSymlink != 0
+	return entry.Type()&fs.ModeSymlink != 0
 }
 
 func buildExtensionSet(extensions []string, defaults []string) map[string]bool {
