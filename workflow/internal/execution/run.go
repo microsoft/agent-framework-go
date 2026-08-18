@@ -155,6 +155,9 @@ func (h *RunHandle) IsValidInputType(ctx context.Context, typ reflect.Type) bool
 }
 
 func (h *RunHandle) EnqueueMessage(ctx context.Context, message any) error {
+	if err := h.cancellationError(); err != nil {
+		return err
+	}
 	if response, ok := message.(*workflow.ExternalResponse); ok {
 		return h.EnqueueResponse(ctx, response)
 	}
@@ -175,6 +178,9 @@ func (h *RunHandle) EnqueueMessage(ctx context.Context, message any) error {
 }
 
 func (h *RunHandle) EnqueueResponse(ctx context.Context, response *workflow.ExternalResponse) error {
+	if err := h.cancellationError(); err != nil {
+		return err
+	}
 	if err := h.stepRunner.EnqueueResponse(ctx, response); err != nil {
 		return err
 	}
@@ -182,6 +188,13 @@ func (h *RunHandle) EnqueueResponse(ctx context.Context, response *workflow.Exte
 	// Signal the run loop that new input is available
 	h.signalInputToRunLoop()
 
+	return nil
+}
+
+func (h *RunHandle) cancellationError() error {
+	if err := h.endRunCtx.Err(); err != nil {
+		return fmt.Errorf("workflow run has been canceled: %w", err)
+	}
 	return nil
 }
 

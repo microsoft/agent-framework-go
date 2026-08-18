@@ -39,8 +39,11 @@ type runner struct {
 	stepTracer      *stepTracer
 	outgoingEvents  *execution.ConcurrentEventSink
 
-	knownValidInputTypes map[reflect.Type]struct{}
+	knownValidInputTypes concurrent.Map[reflect.Type, struct{}]
 	needsRepublish       atomic.Bool
+	// executionMu prevents checkpoint restore from replacing runner state while
+	// an executor is reading or mutating that state in an active superstep.
+	executionMu sync.Mutex
 
 	// checkpointMu guards checkpoints and lastCheckpointInfo. The background
 	// run loop writes them during supersteps (and on restore) while consumers
@@ -120,20 +123,19 @@ func newInProcessRunner(
 	}
 
 	runner := &runner{
-		sessionID:            sessionID,
-		startExecutorID:      wf.StartExecutorID(),
-		wf:                   wf,
-		runContext:           runContext,
-		checkpointMgr:        checkpointMgr,
-		edgeMap:              runContext.edgeMap,
-		stepTracer:           stepTracer,
-		outgoingEvents:       outgoingEvents,
-		knownValidInputTypes: make(map[reflect.Type]struct{}),
+		sessionID:       sessionID,
+		startExecutorID: wf.StartExecutorID(),
+		wf:              wf,
+		runContext:      runContext,
+		checkpointMgr:   checkpointMgr,
+		edgeMap:         runContext.edgeMap,
+		stepTracer:      stepTracer,
+		outgoingEvents:  outgoingEvents,
 	}
 
 	// Initialize known valid input types
 	for _, typ := range knownValidInputTypes {
-		runner.knownValidInputTypes[typ] = struct{}{}
+		runner.knownValidInputTypes.Store(typ, struct{}{})
 	}
 
 	return runner, nil
@@ -183,7 +185,7 @@ func (r *runner) RepublishPendingEvents(ctx context.Context) error {
 
 // IsValidInputType checks if the given type is a valid input type for this workflow.
 func (r *runner) IsValidInputType(ctx context.Context, messageType reflect.Type) bool {
-	if _, known := r.knownValidInputTypes[messageType]; known {
+	if _, known := r.knownValidInputTypes.Load(messageType); known {
 		return true
 	}
 
@@ -193,7 +195,7 @@ func (r *runner) IsValidInputType(ctx context.Context, messageType reflect.Type)
 	}
 
 	if execution.CanHandleType(startingExecutor, messageType) {
-		r.knownValidInputTypes[messageType] = struct{}{}
+		r.knownValidInputTypes.Store(messageType, struct{}{})
 		return true
 	}
 
@@ -251,6 +253,9 @@ func (r *runner) EnqueueResponse(ctx context.Context, response *workflow.Externa
 
 // RunSuperStep executes a single super step of the workflow.
 func (r *runner) RunSuperStep(ctx context.Context) (bool, error) {
+	r.executionMu.Lock()
+	defer r.executionMu.Unlock()
+
 	if err := r.runContext.checkEnded(); err != nil {
 		return false, err
 	}
@@ -317,6 +322,11 @@ func (r *runner) RestoreCheckpoint(ctx context.Context, checkpointInfo workflow.
 }
 
 func (r *runner) restoreCheckpointCore(ctx context.Context, checkpointInfo workflow.CheckpointInfo) error {
+	if !r.executionMu.TryLock() {
+		return fmt.Errorf("cannot restore a checkpoint while a workflow superstep is running")
+	}
+	defer r.executionMu.Unlock()
+
 	if err := r.runContext.checkEnded(); err != nil {
 		return err
 	}

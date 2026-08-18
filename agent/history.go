@@ -4,7 +4,10 @@ package agent
 
 import (
 	"context"
+	"runtime"
 	"slices"
+	"sync"
+	"weak"
 
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/message/messagefilter"
@@ -193,8 +196,32 @@ type inMemoryHistoryProviderState struct {
 	Messages []*message.Message `json:"messages,omitempty"`
 }
 
+type historySessionLocks struct {
+	locks           sync.Map // map[weak.Pointer[Session]]*sync.Mutex
+	nullSessionLock sync.Mutex
+}
+
+func (l *historySessionLocks) forOptions(options []Option) *sync.Mutex {
+	session, ok := GetOption(options, WithSession)
+	if !ok || session == nil {
+		return &l.nullSessionLock
+	}
+	key := weak.Make(session)
+	if existing, ok := l.locks.Load(key); ok {
+		return existing.(*sync.Mutex)
+	}
+	actual, loaded := l.locks.LoadOrStore(key, &sync.Mutex{})
+	if !loaded {
+		runtime.AddCleanup(session, func(k weak.Pointer[Session]) {
+			l.locks.Delete(k)
+		}, key)
+	}
+	return actual.(*sync.Mutex)
+}
+
 // NewInMemoryHistoryProvider creates a history provider that stores conversation history in the session.
 func NewInMemoryHistoryProvider(config InMemoryHistoryProviderConfig) HistoryProvider {
+	locks := new(historySessionLocks)
 	sourceID := config.SourceID
 	if sourceID == "" {
 		sourceID = defaultInMemoryHistorySourceID
@@ -209,6 +236,9 @@ func NewInMemoryHistoryProvider(config InMemoryHistoryProviderConfig) HistoryPro
 		StoreInputRequestMessageFilter:  config.StoreInputRequestMessageFilter,
 		StoreInputResponseMessageFilter: config.StoreInputResponseMessageFilter,
 		Provide: func(_ context.Context, invoking InvokingContext) ([]*message.Message, error) {
+			mu := locks.forOptions(invoking.Options)
+			mu.Lock()
+			defer mu.Unlock()
 			session, _ := GetOption(invoking.Options, WithSession)
 			if session == nil {
 				return nil, nil
@@ -223,6 +253,9 @@ func NewInMemoryHistoryProvider(config InMemoryHistoryProviderConfig) HistoryPro
 			return slices.Clone(state.Messages), nil
 		},
 		Store: func(_ context.Context, invoked InvokedContext) error {
+			mu := locks.forOptions(invoked.Options)
+			mu.Lock()
+			defer mu.Unlock()
 			session, _ := GetOption(invoked.Options, WithSession)
 			if session == nil {
 				return nil
