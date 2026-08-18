@@ -1325,12 +1325,13 @@ func mcpCallContents(item responses.ResponseOutputItemMcpCall) []message.Content
 		},
 	}
 
+	errorMessage := mcpToolCallErrorMessage(item.Error)
 	result := &message.MCPServerToolResultContent{
 		ContentHeader: message.ContentHeader{RawRepresentation: item},
 		CallID:        item.ID,
 		Name:          item.Name,
 		ServerName:    item.ServerLabel,
-		Error:         item.Error,
+		Error:         errorMessage,
 	}
 	if item.Output != "" {
 		result.Outputs = message.Contents{
@@ -1339,12 +1340,37 @@ func mcpCallContents(item responses.ResponseOutputItemMcpCall) []message.Content
 	}
 	contents = append(contents, result)
 
-	if item.Error != "" {
+	if errorMessage != "" {
 		contents = append(contents, &message.ErrorContent{
-			Message: item.Error,
+			Message: errorMessage,
 		})
 	}
 	return contents
+}
+
+func mcpToolCallErrorMessage(err responses.McpToolCallErrorUnion) string {
+	if err.Message != "" {
+		return err.Message
+	}
+	if err.Content != nil {
+		if content, ok := err.Content.(string); ok {
+			return content
+		}
+		if content, marshalErr := json.Marshal(err.Content); marshalErr == nil {
+			return string(content)
+		}
+		return fmt.Sprint(err.Content)
+	}
+
+	raw := err.RawJSON()
+	if raw == "" || raw == "null" || raw == "{}" {
+		return ""
+	}
+	var msg string
+	if json.Unmarshal([]byte(raw), &msg) == nil {
+		return msg
+	}
+	return raw
 }
 
 func imageGenerationContent(item responses.ResponseOutputItemImageGenerationCall) *message.DataContent {
