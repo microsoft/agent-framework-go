@@ -182,7 +182,7 @@ jobs:
             -f 'labels[]=failed-auto-risk'
           risk_labels="$(gh api \
             "repos/${{ github.repository }}/issues/$PR_NUMBER" \
-            --jq '.labels[].name | select(. == "risk:low" or . == "risk:medium" or . == "risk:high")')"
+            --jq '.labels[].name | select(. == "risk:low" or . == "risk:medium" or . == "risk:high" or . == "pending-auto-risk")')"
           while IFS= read -r label; do
             if [[ -n "$label" ]]; then
               gh api --method DELETE \

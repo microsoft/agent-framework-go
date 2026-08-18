@@ -17,7 +17,7 @@ func TestEnsureLabelsUsesPaginatedREST(t *testing.T) {
 			if !slices.Equal(args, wantArgs) {
 				return "", fmt.Errorf("args = %v, want %v", args, wantArgs)
 			}
-			return `[[{"name":"risk:low"},{"name":"risk:medium"},{"name":"risk:high"},{"name":"failed-auto-risk"}]]`, nil
+			return `[[{"name":"risk:low"},{"name":"risk:medium"},{"name":"risk:high"},{"name":"pending-auto-risk"},{"name":"failed-auto-risk"}]]`, nil
 		},
 	}
 	if err := client.ensureLabels(context.Background()); err != nil {
