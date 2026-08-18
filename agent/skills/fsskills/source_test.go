@@ -164,6 +164,34 @@ func TestFileSource_SymlinkedSkillFile_IsSkipped(t *testing.T) {
 	}
 }
 
+func TestFileSource_SymlinkedSkillFile_DoesNotAbortNestedDiscovery(t *testing.T) {
+	root := t.TempDir()
+	linkedSkillDir := filepath.Join(root, "linked-skill")
+	if err := os.MkdirAll(linkedSkillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outsideSkillFile := filepath.Join(root, "outside-SKILL.md")
+	if err := os.WriteFile(outsideSkillFile, []byte("---\nname: linked-skill\ndescription: Linked skill file\n---\nBody."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	createSymlink(t, filepath.Join(linkedSkillDir, "SKILL.md"), outsideSkillFile)
+
+	nestedSkillDir := filepath.Join(linkedSkillDir, "nested-skill")
+	createSkillDir(t, filepath.Dir(nestedSkillDir), "nested-skill", "Nested", "Nested body.")
+
+	source := fsskills.NewSource(os.DirFS(root))
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
+	}
+	if loaded[0].Frontmatter.Name != "nested-skill" {
+		t.Fatalf("expected nested-skill, got %q", loaded[0].Frontmatter.Name)
+	}
+}
+
 func TestFileSource_ConfiguredRootSymlink_StillDiscoversSkills(t *testing.T) {
 	root := t.TempDir()
 	realRoot := filepath.Join(root, "real-root")
