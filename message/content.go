@@ -55,7 +55,7 @@ type ContentHeader struct {
 	RawRepresentation    any            `json:"-"`
 }
 
-func (ch ContentHeader) Header() ContentHeader {
+func (ch *ContentHeader) Header() *ContentHeader {
 	return ch
 }
 
@@ -63,7 +63,7 @@ func (ch ContentHeader) Header() ContentHeader {
 type Content interface {
 	json.Marshaler
 	kind() contentKind
-	Header() ContentHeader
+	Header() *ContentHeader
 }
 
 // ToolCallContent represents content that requests a tool call.
