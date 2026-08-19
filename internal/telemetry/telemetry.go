@@ -3,6 +3,7 @@
 package telemetry
 
 import (
+	"maps"
 	"net/http"
 	"os"
 	"runtime/debug"
@@ -83,10 +84,7 @@ func PrependAgentFrameworkToHTTPHeader(headers http.Header) http.Header {
 }
 
 func userAgentPrefixList() []string {
-	prefixes := make([]string, 0, len(userAgentPrefixes))
-	for prefix := range userAgentPrefixes {
-		prefixes = append(prefixes, prefix)
-	}
+	prefixes := slices.Collect(maps.Keys(userAgentPrefixes))
 	slices.Sort(prefixes)
 	return prefixes
 }

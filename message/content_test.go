@@ -222,6 +222,53 @@ func TestContentEncoding_Roundtrip(t *testing.T) {
 	}
 }
 
+func TestCodeInterpreterContentEncoding_Roundtrip(t *testing.T) {
+	tests := []struct {
+		name    string
+		content message.Content
+	}{
+		{
+			name: "toolCall",
+			content: &message.CodeInterpreterToolCallContent{
+				CallID: "code-call-123",
+				Inputs: message.Contents{
+					&message.TextContent{Text: "print('hello')"},
+				},
+			},
+		},
+		{
+			name: "toolResult",
+			content: &message.CodeInterpreterToolResultContent{
+				CallID: "code-call-123",
+				Outputs: message.Contents{
+					&message.TextContent{Text: "hello"},
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := json.Marshal(message.Contents{tt.content})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded message.Contents
+			if err = json.Unmarshal(data, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if len(decoded) != 1 {
+				t.Fatalf("expected 1 content, got %d", len(decoded))
+			}
+			if _, ok := decoded[0].(*message.RawContent); ok {
+				t.Fatalf("content decoded to *message.RawContent, want %T", tt.content)
+			}
+			if !reflect.DeepEqual(tt.content, decoded[0]) {
+				t.Errorf("expected content %v, got %v", tt.content, decoded[0])
+			}
+		})
+	}
+}
+
 func TestDataContentUnmarshalDefaultsMissingMediaType(t *testing.T) {
 	var content message.DataContent
 	if err := json.Unmarshal([]byte(`{"Type":"data","URI":"data:,hello%20world+literal"}`), &content); err != nil {
@@ -727,6 +774,216 @@ func TestCoalesceContents(t *testing.T) {
 					Data:      base64.StdEncoding.EncodeToString([]byte("hello world")),
 					MediaType: "text/plain",
 					Name:      "file.txt",
+				},
+			},
+		},
+		{
+			name: "code interpreter tool call with same call id coalesced and inputs merged",
+			input: []message.Content{
+				&message.CodeInterpreterToolCallContent{
+					CallID: "call-1",
+					Inputs: message.Contents{
+						&message.TextContent{Text: "hello"},
+						&message.TextContent{Text: " world"},
+					},
+				},
+				&message.CodeInterpreterToolCallContent{
+					CallID: "call-1",
+					Inputs: message.Contents{
+						&message.TextContent{Text: "!"},
+					},
+				},
+			},
+			expected: []message.Content{
+				&message.CodeInterpreterToolCallContent{
+					CallID: "call-1",
+					Inputs: message.Contents{
+						&message.TextContent{Text: "hello world!"},
+					},
+				},
+			},
+		},
+		{
+			name: "code interpreter tool call with different call ids not coalesced but inputs still merged",
+			input: []message.Content{
+				&message.CodeInterpreterToolCallContent{
+					CallID: "call-1",
+					Inputs: message.Contents{
+						&message.TextContent{Text: "a"},
+						&message.TextContent{Text: "b"},
+					},
+				},
+				&message.CodeInterpreterToolCallContent{
+					CallID: "call-2",
+					Inputs: message.Contents{
+						&message.TextContent{Text: "c"},
+						&message.TextContent{Text: "d"},
+					},
+				},
+			},
+			expected: []message.Content{
+				&message.CodeInterpreterToolCallContent{
+					CallID: "call-1",
+					Inputs: message.Contents{
+						&message.TextContent{Text: "ab"},
+					},
+				},
+				&message.CodeInterpreterToolCallContent{
+					CallID: "call-2",
+					Inputs: message.Contents{
+						&message.TextContent{Text: "cd"},
+					},
+				},
+			},
+		},
+		{
+			name: "single code interpreter tool call still coalesces nested inputs",
+			input: []message.Content{
+				&message.CodeInterpreterToolCallContent{
+					CallID: "call-1",
+					Inputs: message.Contents{
+						&message.TextContent{Text: "foo"},
+						&message.TextContent{Text: "bar"},
+					},
+				},
+			},
+			expected: []message.Content{
+				&message.CodeInterpreterToolCallContent{
+					CallID: "call-1",
+					Inputs: message.Contents{
+						&message.TextContent{Text: "foobar"},
+					},
+				},
+			},
+		},
+		{
+			name: "single code interpreter tool call preserves raw representation",
+			input: []message.Content{
+				&message.CodeInterpreterToolCallContent{
+					ContentHeader: message.ContentHeader{
+						RawRepresentation: "raw-call",
+					},
+					CallID: "call-1",
+					Inputs: message.Contents{
+						&message.TextContent{Text: "foo"},
+						&message.TextContent{Text: "bar"},
+					},
+				},
+			},
+			expected: []message.Content{
+				&message.CodeInterpreterToolCallContent{
+					ContentHeader: message.ContentHeader{
+						RawRepresentation: "raw-call",
+					},
+					CallID: "call-1",
+					Inputs: message.Contents{
+						&message.TextContent{Text: "foobar"},
+					},
+				},
+			},
+		},
+		{
+			name: "code interpreter tool result with same call id coalesced and outputs merged",
+			input: []message.Content{
+				&message.CodeInterpreterToolResultContent{
+					CallID: "call-1",
+					Outputs: message.Contents{
+						&message.TextContent{Text: "res"},
+						&message.TextContent{Text: "ult"},
+					},
+				},
+				&message.CodeInterpreterToolResultContent{
+					CallID: "call-1",
+					Outputs: message.Contents{
+						&message.TextContent{Text: "!"},
+					},
+				},
+			},
+			expected: []message.Content{
+				&message.CodeInterpreterToolResultContent{
+					CallID: "call-1",
+					Outputs: message.Contents{
+						&message.TextContent{Text: "result!"},
+					},
+				},
+			},
+		},
+		{
+			name: "code interpreter tool result with different call ids not coalesced but outputs still merged",
+			input: []message.Content{
+				&message.CodeInterpreterToolResultContent{
+					CallID: "call-1",
+					Outputs: message.Contents{
+						&message.TextContent{Text: "a"},
+						&message.TextContent{Text: "b"},
+					},
+				},
+				&message.CodeInterpreterToolResultContent{
+					CallID: "call-2",
+					Outputs: message.Contents{
+						&message.TextContent{Text: "c"},
+						&message.TextContent{Text: "d"},
+					},
+				},
+			},
+			expected: []message.Content{
+				&message.CodeInterpreterToolResultContent{
+					CallID: "call-1",
+					Outputs: message.Contents{
+						&message.TextContent{Text: "ab"},
+					},
+				},
+				&message.CodeInterpreterToolResultContent{
+					CallID: "call-2",
+					Outputs: message.Contents{
+						&message.TextContent{Text: "cd"},
+					},
+				},
+			},
+		},
+		{
+			name: "single code interpreter tool result still coalesces nested outputs",
+			input: []message.Content{
+				&message.CodeInterpreterToolResultContent{
+					CallID: "call-1",
+					Outputs: message.Contents{
+						&message.TextContent{Text: "foo"},
+						&message.TextContent{Text: "bar"},
+					},
+				},
+			},
+			expected: []message.Content{
+				&message.CodeInterpreterToolResultContent{
+					CallID: "call-1",
+					Outputs: message.Contents{
+						&message.TextContent{Text: "foobar"},
+					},
+				},
+			},
+		},
+		{
+			name: "single code interpreter tool result preserves raw representation",
+			input: []message.Content{
+				&message.CodeInterpreterToolResultContent{
+					ContentHeader: message.ContentHeader{
+						RawRepresentation: "raw-result",
+					},
+					CallID: "call-1",
+					Outputs: message.Contents{
+						&message.TextContent{Text: "foo"},
+						&message.TextContent{Text: "bar"},
+					},
+				},
+			},
+			expected: []message.Content{
+				&message.CodeInterpreterToolResultContent{
+					ContentHeader: message.ContentHeader{
+						RawRepresentation: "raw-result",
+					},
+					CallID: "call-1",
+					Outputs: message.Contents{
+						&message.TextContent{Text: "foobar"},
+					},
 				},
 			},
 		},

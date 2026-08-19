@@ -24,7 +24,7 @@ import (
 
 type messageNewParamsOpt anthropic.MessageNewParams
 
-func (o messageNewParamsOpt) Value() any { return anthropic.MessageNewParams(o) }
+func (o messageNewParamsOpt) MAFValue() any { return anthropic.MessageNewParams(o) }
 
 // MessageNewParams allows passing custom parameters to the underlying anthropic API calls.
 func MessageNewParams(params anthropic.MessageNewParams) agent.Option {
@@ -144,7 +144,15 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				messageID = cmp.Or(messageID, event.Message.ID)
 				usage.Add(toUsageDetails(event.Message.Usage))
 			case anthropic.MessageDeltaEvent:
-				usage.Add(toUsageDetailsDelta(event.Usage))
+				// Anthropic reports the final cumulative output token count on
+				// message_delta, superseding the placeholder output count from
+				// message_start. Overwrite the output-derived counts from the
+				// delta instead of summing them; adding would double-count the
+				// message_start placeholder (and any earlier delta).
+				delta := toUsageDetailsDelta(event.Usage)
+				usage.OutputTokenCount = delta.OutputTokenCount
+				usage.ReasoningTokenCount = delta.ReasoningTokenCount
+				usage.TotalTokenCount = usage.InputTokenCount + usage.OutputTokenCount
 				// Later chunks may carry an empty stop_reason; don't clobber a
 				// value we already captured.
 				if fr := mapStopReason(event.Delta.StopReason); fr != "" {

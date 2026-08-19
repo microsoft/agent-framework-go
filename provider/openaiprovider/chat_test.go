@@ -1457,6 +1457,68 @@ func TestChatDataContentMessage_Image_NonStreaming(t *testing.T) {
 	}
 }
 
+// TestChatDataContentMessage_File_NonStreaming verifies that a non-image file
+// DataContent (e.g. a PDF) is sent as a data URI in file_data, matching the
+// image branch and the Responses provider, not as raw base64.
+func TestChatDataContentMessage_File_NonStreaming(t *testing.T) {
+	input := `
+            {
+              "messages": [
+                {
+                  "role": "user",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "Summarize this document"
+                    },
+                    {
+                      "type": "file",
+                      "file": {
+                        "file_data": "data:application/pdf;base64,cGRmZGF0YQ==",
+                        "filename": "report.pdf"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "model": "gpt-4o-mini"
+            }
+            `
+	const output = `
+            {
+              "choices": [
+                {
+                  "finish_reason": "stop",
+                  "index": 0,
+                  "message": {"content": "ok", "refusal": null, "role": "assistant"}
+                }
+              ],
+              "created": 1743531271,
+              "id": "chatcmpl-file01",
+              "model": "gpt-4o-mini-2024-07-18",
+              "object": "chat.completion"
+            }
+            `
+	server := newTestServer(t, input, output)
+	defer server.Close()
+
+	a := newTestClient(server)
+
+	messages := []*message.Message{
+		{
+			Role: message.RoleUser,
+			Contents: []message.Content{
+				&message.TextContent{Text: "Summarize this document"},
+				&message.DataContent{Data: "cGRmZGF0YQ==", MediaType: "application/pdf", Name: "report.pdf"},
+			},
+		},
+	}
+
+	if _, err := a.Run(t.Context(), messages).Collect(); err != nil {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestChatURIContentMessage_DataURI_NonStreaming(t *testing.T) {
 	// A data: URIContent carries the bytes inline, so audio/PDF content must map
 	// to input_audio/file exactly like the equivalent DataContent (Python keys
@@ -1578,7 +1640,7 @@ func TestChatDataContentMessage_AudioAndFile_NonStreaming(t *testing.T) {
                     {
                       "type": "file",
                       "file": {
-                        "file_data": "` + pdfData + `",
+                        "file_data": "data:application/pdf;base64,` + pdfData + `",
                         "filename": "report.pdf"
                       }
                     }
@@ -1871,6 +1933,45 @@ func TestChatEmptyChoices_NonStreaming(t *testing.T) {
 	}
 	if usage := resp.Usage(); usage.InputTokenCount != 12 || usage.TotalTokenCount != 12 {
 		t.Errorf("expected usage input=12 total=12 to be surfaced, got %+v", usage)
+	}
+}
+
+// A structured (non-string) function-tool result — e.g. a struct returned by a
+// typed functool — must be JSON-encoded in the request, not rendered with Go's
+// %v, which would send an unparseable representation like "{Paris 20}" to the model.
+func TestChatToolResult_StructSerializedAsJSON_NonStreaming(t *testing.T) {
+	capturedCh := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		capturedCh <- string(b)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"x","object":"chat.completion","created":1,"model":"gpt-4o-mini","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
+	}))
+	defer server.Close()
+	a := newTestClient(server)
+
+	type weather struct {
+		City  string `json:"city"`
+		TempC int    `json:"temp_c"`
+	}
+	messages := []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "weather?"}}},
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			&message.FunctionCallContent{CallID: "c1", Name: "GetWeather", Arguments: "{}"},
+		}},
+		{Role: message.RoleTool, Contents: []message.Content{
+			&message.FunctionResultContent{CallID: "c1", Result: weather{City: "Paris", TempC: 20}},
+		}},
+	}
+	if _, err := a.Run(t.Context(), messages).Collect(); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	captured := <-capturedCh
+	if strings.Contains(captured, "{Paris 20}") {
+		t.Errorf("tool result rendered with Go %%v instead of JSON:\n%s", captured)
+	}
+	if !strings.Contains(captured, "temp_c") {
+		t.Errorf("tool result was not JSON-encoded (missing field temp_c):\n%s", captured)
 	}
 }
 

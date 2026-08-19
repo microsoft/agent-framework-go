@@ -6,10 +6,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -272,7 +273,7 @@ func newCompletion(id string, expected int) workflow.ExecutorBinding {
 			if len(paths) < expected {
 				return nil
 			}
-			out := append([]string(nil), paths...)
+			out := slices.Clone(paths)
 			paths = nil
 			return ctx.YieldOutput(out)
 		}).Extend(&workflow.Executor{
@@ -307,11 +308,8 @@ type wordGroup struct {
 }
 
 func partitionGroups(groups map[string][]int, count int) [][]wordGroup {
-	keys := make([]string, 0, len(groups))
-	for key := range groups {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
+	keys := slices.Collect(maps.Keys(groups))
+	slices.Sort(keys)
 
 	partitions := make([][]wordGroup, count)
 	if count == 0 {

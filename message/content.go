@@ -36,6 +36,8 @@ func init() {
 		&ToolApprovalResponseContent{},
 		&AlwaysApproveToolApprovalResponseContent{},
 		&MCPServerToolCallContent{},
+		&CodeInterpreterToolCallContent{},
+		&CodeInterpreterToolResultContent{},
 		&MCPServerToolResultContent{},
 	} {
 		supportedContents[c.kind()] = reflect.TypeOf(c).Elem()
@@ -53,7 +55,7 @@ type ContentHeader struct {
 	RawRepresentation    any            `json:"-"`
 }
 
-func (ch ContentHeader) Header() ContentHeader {
+func (ch *ContentHeader) Header() *ContentHeader {
 	return ch
 }
 
@@ -61,7 +63,7 @@ func (ch ContentHeader) Header() ContentHeader {
 type Content interface {
 	json.Marshaler
 	kind() contentKind
-	Header() ContentHeader
+	Header() *ContentHeader
 }
 
 // ToolCallContent represents content that requests a tool call.
@@ -524,7 +526,7 @@ func (t *RawContent) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &header); err == nil {
 		t.ContentHeader = header
 	}
-	t.RawRepresentation = append(json.RawMessage(nil), data...)
+	t.RawRepresentation = slices.Clone(json.RawMessage(data))
 	return nil
 }
 
@@ -1013,6 +1015,40 @@ func CoalesceContents(contents []Content) []Content {
 				Name:      first.Name,
 				MediaType: first.MediaType,
 				Data:      mergeBase64(contents, start, end),
+			}
+		})
+
+	contents = coalesce(contents, true,
+		func(a, b *CodeInterpreterToolCallContent) bool { return a.CallID == b.CallID },
+		func(contents []Content, start, end int) *CodeInterpreterToolCallContent {
+			first := contents[start].(*CodeInterpreterToolCallContent)
+			var inputs Contents
+			for _, c := range contents[start:end] {
+				inputs = append(inputs, c.(*CodeInterpreterToolCallContent).Inputs...)
+			}
+			header := first.ContentHeader
+			header.AdditionalProperties = maps.Clone(first.AdditionalProperties)
+			return &CodeInterpreterToolCallContent{
+				ContentHeader: header,
+				CallID:        first.CallID,
+				Inputs:        CoalesceContents(inputs),
+			}
+		})
+
+	contents = coalesce(contents, true,
+		func(a, b *CodeInterpreterToolResultContent) bool { return a.CallID == b.CallID },
+		func(contents []Content, start, end int) *CodeInterpreterToolResultContent {
+			first := contents[start].(*CodeInterpreterToolResultContent)
+			var outputs Contents
+			for _, c := range contents[start:end] {
+				outputs = append(outputs, c.(*CodeInterpreterToolResultContent).Outputs...)
+			}
+			header := first.ContentHeader
+			header.AdditionalProperties = maps.Clone(first.AdditionalProperties)
+			return &CodeInterpreterToolResultContent{
+				ContentHeader: header,
+				CallID:        first.CallID,
+				Outputs:       CoalesceContents(outputs),
 			}
 		})
 

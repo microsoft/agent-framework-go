@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 
@@ -157,7 +158,7 @@ func NewSourceOptions(opts SourceOptions, filesystems ...fs.FS) *Source {
 		searchDepth = defaultSearchDepth
 	}
 	return &Source{
-		filesystems:               append([]fs.FS(nil), filesystems...),
+		filesystems:               slices.Clone(filesystems),
 		logger:                    logger,
 		searchDepth:               searchDepth,
 		resourceFilter:            opts.ResourceFilter,
@@ -204,8 +205,11 @@ func discoverSkillDirectories(filesystems []fs.FS) []discoveredSkillDir {
 // script discovery within an already-discovered skill directory. This matches
 // the .NET SDK, which bounds the two concerns separately.
 func searchForSkills(filesystem fs.FS, dir string, results *[]discoveredSkillDir, currentDepth int) {
-	skillPath := path.Join(dir, skillFileName)
-	if _, err := fs.Stat(filesystem, skillPath); err == nil {
+	entries, err := fs.ReadDir(filesystem, dir)
+	if err != nil {
+		return
+	}
+	if hasNonSymlinkSkillFile(entries) {
 		sub := filesystem
 		var subErr error
 		if dir != "." {
@@ -217,10 +221,6 @@ func searchForSkills(filesystem fs.FS, dir string, results *[]discoveredSkillDir
 		}
 	}
 	if currentDepth >= defaultSearchDepth {
-		return
-	}
-	entries, err := fs.ReadDir(filesystem, dir)
-	if err != nil {
 		return
 	}
 	for _, entry := range entries {
@@ -501,6 +501,10 @@ func (s *Source) scanForFiles(
 	}
 
 	for _, entry := range entries {
+		if isSymlinkEntry(entry) {
+			continue
+		}
+
 		entryPath := path.Join(dir, entry.Name())
 		if entry.IsDir() {
 			if currentDepth < s.searchDepth {
@@ -534,6 +538,19 @@ func (s *Source) scanForFiles(
 	}
 }
 
+func hasNonSymlinkSkillFile(entries []fs.DirEntry) bool {
+	for _, entry := range entries {
+		if entry.Name() == skillFileName && !isSymlinkEntry(entry) {
+			return true
+		}
+	}
+	return false
+}
+
+func isSymlinkEntry(entry fs.DirEntry) bool {
+	return entry.Type()&fs.ModeSymlink != 0
+}
+
 func buildExtensionSet(extensions []string, defaults []string) map[string]bool {
 	if extensions == nil {
 		extensions = defaults
@@ -555,17 +572,18 @@ func validateExtensions(extensions []string) {
 }
 
 func newScript(name string, fsys fs.FS, runner skills.ScriptRunner) skills.Script {
+	additionalProperties := map[string]any{
+		"fsskills.scriptFS": fsys,
+	}
 	return skills.Script{
-		Name:             name,
-		ParametersSchema: defaultFileScriptSchema,
-		Run:              newFileScriptRunFunc(name, runner),
-		AdditionalProperties: map[string]any{
-			"fsskills.scriptFS": fsys,
-		},
+		Name:                 name,
+		ParametersSchema:     defaultFileScriptSchema,
+		Run:                  newFileScriptRunFunc(name, runner, additionalProperties),
+		AdditionalProperties: additionalProperties,
 	}
 }
 
-func newFileScriptRunFunc(name string, runner skills.ScriptRunner) func(context.Context, *skills.Skill, []string) (any, error) {
+func newFileScriptRunFunc(name string, runner skills.ScriptRunner, additionalProperties map[string]any) func(context.Context, *skills.Skill, []string) (any, error) {
 	return func(ctx context.Context, owner *skills.Skill, arguments []string) (any, error) {
 		if err := requireFileSkill(name, owner); err != nil {
 			return nil, err
@@ -573,7 +591,15 @@ func newFileScriptRunFunc(name string, runner skills.ScriptRunner) func(context.
 		if runner == nil {
 			return nil, fmt.Errorf("script %q cannot be executed because no file script runner was provided", name)
 		}
-		script := &skills.Script{Name: name}
+		// Hand the runner a script carrying the same metadata the discovered
+		// Script exposes (parameters schema and the backing fs.FS), so runners
+		// that inspect them to locate/execute the file see the real values
+		// instead of empty ones.
+		script := &skills.Script{
+			Name:                 name,
+			ParametersSchema:     defaultFileScriptSchema,
+			AdditionalProperties: additionalProperties,
+		}
 		return runner(ctx, owner, script, arguments)
 	}
 }

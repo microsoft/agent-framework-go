@@ -6,7 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"testing"
 
@@ -54,7 +54,7 @@ func TestFileSource_WithMultipleScriptExtensions_DiscoversAll(t *testing.T) {
 	for _, script := range loaded[0].Scripts {
 		scriptNames = append(scriptNames, script.Name)
 	}
-	sort.Strings(scriptNames)
+	slices.Sort(scriptNames)
 	if len(scriptNames) != 6 {
 		t.Fatalf("expected 6 scripts, got %d", len(scriptNames))
 	}
@@ -342,6 +342,30 @@ func TestFileSource_ScriptFilter_IncludesOnlyMatchingScripts(t *testing.T) {
 	}
 }
 
+func TestFileSource_SymlinkedScript_IsNotDiscovered(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	createSkillDir(t, root, "symlink-script-skill", "Symlink script test", "Body.")
+	outsideScript := filepath.Join(outside, "run.py")
+	if err := os.WriteFile(outsideScript, []byte("print('secret')"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustCreateSymlink(t, outsideScript, filepath.Join(root, "symlink-script-skill", "scripts", "run.py"))
+
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
+		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+			return nil, nil
+		},
+	}, os.DirFS(root))
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded[0].Scripts) != 0 {
+		t.Fatalf("expected symlinked script to be ignored, got %d scripts", len(loaded[0].Scripts))
+	}
+}
+
 func TestFileScript_RunWithNonFileSkill_ReturnsError(t *testing.T) {
 	root := t.TempDir()
 	createSkillDir(t, root, "script-owner", "Script owner", "Body.")
@@ -491,5 +515,37 @@ func TestFileSkill_ScriptContent_IncludesDefaultArraySchema(t *testing.T) {
 	// Quotes in JSON schema should be preserved (not escaped as &quot;).
 	if strings.Contains(content, "&quot;") {
 		t.Fatalf("expected JSON quotes to be preserved in schema content, got: %s", content)
+	}
+}
+
+// The runner-facing *Script must carry the same metadata as the discovered
+// Script (parameters schema and the fsskills.scriptFS backing FS), otherwise a
+// runner that inspects those fields to locate/execute the file sees empty values.
+func TestFileSource_Runner_ReceivesScriptMetadata(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "meta-skill", "Metadata test", "Body.")
+	createRelativeFile(t, filepath.Join(root, "meta-skill"), "scripts/test.py", "print('ok')")
+
+	var gotSchema string
+	var gotFS any
+	var hasFSKey bool
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: func(_ context.Context, _ *skills.Skill, script *skills.Script, _ []string) (any, error) {
+		gotSchema = script.ParametersSchema
+		gotFS, hasFSKey = script.AdditionalProperties["fsskills.scriptFS"]
+		return "ok", nil
+	}}, os.DirFS(root))
+
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loaded[0].Scripts[0].Run(t.Context(), loaded[0], nil); err != nil {
+		t.Fatal(err)
+	}
+	if gotSchema == "" {
+		t.Errorf("runner received empty ParametersSchema; want the discovered script's schema")
+	}
+	if !hasFSKey || gotFS == nil {
+		t.Errorf("runner received no fsskills.scriptFS in AdditionalProperties (hasKey=%v value=%v)", hasFSKey, gotFS)
 	}
 }

@@ -4,6 +4,7 @@ package execution
 
 import (
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/workflow"
@@ -207,10 +208,5 @@ func executorWithYieldTypes(yieldTypes ...reflect.Type) *workflow.Executor {
 }
 
 func slicesContains(types []reflect.Type, typ reflect.Type) bool {
-	for _, candidate := range types {
-		if candidate == typ {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(types, typ)
 }

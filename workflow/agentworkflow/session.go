@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework-go/agent"
@@ -55,7 +56,7 @@ func (s *sessionCheckpointStore) CreateCheckpoint(_ context.Context, sessionID s
 	}
 	s.Entries = append(s.Entries, sessionCheckpointEntry{
 		CheckpointInfo: info,
-		Data:           append(json.RawMessage(nil), data...),
+		Data:           slices.Clone(data),
 		Parent:         parentCopy,
 	})
 	return info, nil
@@ -67,7 +68,7 @@ func (s *sessionCheckpointStore) RetrieveCheckpoint(_ context.Context, sessionID
 	}
 	for _, entry := range s.Entries {
 		if entry.CheckpointInfo == info {
-			return append(json.RawMessage(nil), entry.Data...), nil
+			return slices.Clone(entry.Data), nil
 		}
 	}
 	return nil, fmt.Errorf("agentworkflow: checkpoint %s not found for session %s", info.CheckpointID, sessionID)

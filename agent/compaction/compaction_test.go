@@ -294,6 +294,37 @@ func TestToolResultStrategy_CollapsesOldToolGroups(t *testing.T) {
 	}
 }
 
+// TestDefaultToolCallFormatter_DedupsRepeatedNamesWithEmptyResults guards the
+// tool-name deduplication when repeated calls to the same tool produce empty
+// results. The name must still be listed exactly once, matching the behavior
+// for non-empty results.
+func TestDefaultToolCallFormatter_DedupsRepeatedNamesWithEmptyResults(t *testing.T) {
+	group := &compaction.MessageGroup{
+		Messages: []*message.Message{
+			{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					&message.FunctionCallContent{CallID: "c1", Name: "notify"},
+					&message.FunctionCallContent{CallID: "c2", Name: "notify"},
+				},
+			},
+			{
+				Role: message.RoleTool,
+				Contents: []message.Content{
+					&message.FunctionResultContent{CallID: "c1", Result: ""},
+					&message.FunctionResultContent{CallID: "c2", Result: ""},
+				},
+			},
+		},
+	}
+
+	got := compaction.DefaultToolCallFormatter(group)
+	want := "[Tool Calls]\nnotify:"
+	if got != want {
+		t.Fatalf("formatter output = %q, want %q", got, want)
+	}
+}
+
 func TestToolResultStrategy_ZeroValueUsesDefaults(t *testing.T) {
 	messages := make([]*message.Message, 0, 20)
 	for i := 0; i < 9; i++ {

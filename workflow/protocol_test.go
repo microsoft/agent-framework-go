@@ -5,6 +5,7 @@ package workflow
 import (
 	"errors"
 	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -98,10 +99,5 @@ func newProtocolBuilderWithHandler(inputType, outputType reflect.Type) *Protocol
 }
 
 func containsReflectType(types []reflect.Type, want reflect.Type) bool {
-	for _, typ := range types {
-		if typ == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(types, want)
 }

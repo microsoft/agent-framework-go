@@ -4,6 +4,7 @@ package concurrent
 
 import (
 	"iter"
+	"slices"
 	"sync"
 )
 
@@ -57,8 +58,7 @@ func (q *Queue[T]) Len() int {
 func (q *Queue[T]) All() iter.Seq[T] {
 	return func(yield func(T) bool) {
 		q.mu.RLock()
-		items := make([]T, len(q.items))
-		copy(items, q.items)
+		items := slices.Clone(q.items)
 		q.mu.RUnlock()
 
 		for _, item := range items {

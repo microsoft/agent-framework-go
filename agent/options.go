@@ -17,7 +17,7 @@ import (
 // [GetOption] and [AllOptions] use the option's type
 // to uniquely identify each option.
 type Option interface {
-	Value() any
+	MAFValue() any
 }
 
 type (
@@ -35,19 +35,19 @@ type (
 	structuredOutputOpt struct{ any }
 )
 
-func (o responseFormatOpt) Value() any           { return o.ResponseFormat }
-func (o streamOpt) Value() any                   { return bool(o) }
-func (o continuationTokenOpt) Value() any        { return string(o) }
-func (o instructionsOpt) Value() any             { return string(o) }
-func (o allowBackgroundResponsesOpt) Value() any { return bool(o) }
-func (o toolModeOpt) Value() any                 { return tool.ToolMode(o) }
-func (o toolOpt) Value() any                     { return o.Tool }
-func (o structuredOutputOpt) Value() any         { return o.any }
-func (o serviceIDOpt) Value() any                { return string(o) }
+func (o responseFormatOpt) MAFValue() any           { return o.ResponseFormat }
+func (o streamOpt) MAFValue() any                   { return bool(o) }
+func (o continuationTokenOpt) MAFValue() any        { return string(o) }
+func (o instructionsOpt) MAFValue() any             { return string(o) }
+func (o allowBackgroundResponsesOpt) MAFValue() any { return bool(o) }
+func (o toolModeOpt) MAFValue() any                 { return tool.ToolMode(o) }
+func (o toolOpt) MAFValue() any                     { return o.Tool }
+func (o structuredOutputOpt) MAFValue() any         { return o.any }
+func (o serviceIDOpt) MAFValue() any                { return string(o) }
 
 type sessionOpt struct{ *Session }
 
-func (o sessionOpt) Value() any { return o.Session }
+func (o sessionOpt) MAFValue() any { return o.Session }
 
 // GetOption returns the value stored in opts with the provided setter,
 // reporting whether the value is present.
@@ -60,7 +60,7 @@ func GetOption[T any](opts []Option, setter func(T) Option) (T, bool) {
 	setterType := reflect.TypeOf(setter(zero))
 	for _, opt := range slices.Backward(opts) {
 		if reflect.TypeOf(opt) == setterType {
-			v, ok := opt.Value().(T)
+			v, ok := opt.MAFValue().(T)
 			return v, ok
 		}
 	}
@@ -80,10 +80,10 @@ func AllOptions[T any](opts []Option, setter func(T) Option) iter.Seq[T] {
 		setterType := reflect.TypeOf(setter(zero))
 		for _, opt := range opts {
 			if reflect.TypeOf(opt) == setterType {
-				v, ok := opt.Value().(T)
+				v, ok := opt.MAFValue().(T)
 				if !ok {
 					// Skip an option whose value is absent for T (e.g. a
-					// WithTool(nil) whose Value() is a nil tool.Tool), mirroring
+					// WithTool(nil) whose MAFValue() is a nil tool.Tool), mirroring
 					// GetOption's graceful (zero, false) handling rather than
 					// panicking and aborting the entire collection.
 					continue

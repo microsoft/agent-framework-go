@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"iter"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -480,7 +481,7 @@ func prepareOptionsForLastIteration(opts []agent.Option) []agent.Option {
 
 	updated := make([]agent.Option, 0, len(opts)+len(nonSchemaTools)+1)
 	for _, opt := range opts {
-		if _, ok := opt.Value().(tool.Tool); ok {
+		if _, ok := opt.MAFValue().(tool.Tool); ok {
 			continue
 		}
 		updated = append(updated, opt)
@@ -998,10 +999,7 @@ func (f *autocall) extractAndRemoveToolApprovalRequestsAndResponses(ctx context.
 	if len(approvalRequestCallIDs) > 0 {
 		// Validation: If we got an approval for each request, we should have no call ids left.
 		// Collect call IDs for error message
-		callIDs := make([]string, 0, len(approvalRequestCallIDs))
-		for callID := range approvalRequestCallIDs {
-			callIDs = append(callIDs, callID)
-		}
+		callIDs := slices.Collect(maps.Keys(approvalRequestCallIDs))
 		slices.Sort(callIDs) // Sort for consistent error messages
 		return nil, nil, nil, fmt.Errorf("ToolApprovalRequestContent found with ToolCall.CallID(s) '%s' that have no matching ToolApprovalResponseContent", strings.Join(callIDs, "', '"))
 	}
