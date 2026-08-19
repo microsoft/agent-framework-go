@@ -280,13 +280,6 @@ func (p *providerState) buildContextSafely(ctx context.Context) (result provider
 	return p.buildContext(ctx)
 }
 
-func (p *providerState) cachedContextLocked() (providerContext, bool) {
-	if p.cached == nil {
-		return providerContext{}, false
-	}
-	return *p.cached, true
-}
-
 func providedContext(result providerContext) ([]*message.Message, []agent.Option) {
 	outMessages := result.Messages
 	var outOptions []agent.Option
