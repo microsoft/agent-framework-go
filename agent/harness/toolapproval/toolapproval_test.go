@@ -30,6 +30,15 @@ func collectUpdates(t *testing.T, mw agent.Middleware, next agent.RunFunc, messa
 	return updates
 }
 
+func sessionFromOptions(t *testing.T, opts ...agent.Option) *agent.Session {
+	t.Helper()
+	session, ok := agent.GetOption(opts, agent.WithSession)
+	if !ok || session == nil {
+		t.Fatal("expected run options to include a non-nil session")
+	}
+	return session
+}
+
 func TestToolApproval_PassthroughWithoutApprovalRequests(t *testing.T) {
 	runner := &agenttest.Runner{
 		Responses: agenttest.NewResponseBuilder().AddText("hello").Build(),
@@ -144,6 +153,134 @@ func TestToolApproval_SurfacesFirstApprovalRequest(t *testing.T) {
 	}
 	if approvalReqs[0].RequestID != "r1" {
 		t.Errorf("expected request ID 'r1', got %q", approvalReqs[0].RequestID)
+	}
+}
+
+func TestToolApproval_AutoApprovalRuleWithoutExplicitSessionThreadsImplicitSession(t *testing.T) {
+	fcc := &message.FunctionCallContent{CallID: "c1", Name: "deploy", Arguments: `{"env":"prod"}`}
+
+	var createdSession *agent.Session
+	createSessionCalls := 0
+	capturedSessions := []*agent.Session{}
+
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder(
+			func(_ context.Context, _ []*message.Message, opts ...agent.Option) {
+				capturedSessions = append(capturedSessions, sessionFromOptions(t, opts...))
+			},
+		).
+			Add(&agent.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					&message.ToolApprovalRequestContent{RequestID: "r1", ToolCall: fcc},
+				},
+			}).
+			NewTurn(func(_ context.Context, messages []*message.Message, opts ...agent.Option) {
+				capturedSessions = append(capturedSessions, sessionFromOptions(t, opts...))
+
+				var sawApprovalResponse bool
+				for _, msg := range messages {
+					for _, c := range msg.Contents {
+						resp, ok := c.(*message.ToolApprovalResponseContent)
+						if !ok {
+							continue
+						}
+						sawApprovalResponse = true
+						if !resp.Approved {
+							t.Fatal("expected auto-approved tool response on re-entry")
+						}
+					}
+				}
+				if !sawApprovalResponse {
+					t.Fatal("expected auto-approval response to be forwarded on re-entry")
+				}
+			}).
+			AddText("done").
+			Build(),
+	}
+
+	a := agent.New(agent.ProviderConfig{
+		Run: runner.Run,
+		CreateSession: func(_ context.Context, session *agent.Session, _ ...agent.Option) error {
+			createSessionCalls++
+			createdSession = session
+			return nil
+		},
+		Middlewares: []agent.Middleware{toolapproval.New(toolapproval.Config{
+			AutoApprovalRules: []func(context.Context, *message.FunctionCallContent) (bool, error){
+				func(_ context.Context, call *message.FunctionCallContent) (bool, error) {
+					if call.Name != "deploy" {
+						t.Fatalf("auto-approval rule saw tool %q, want deploy", call.Name)
+					}
+					return true, nil
+				},
+			},
+		})},
+	}, agent.Config{ID: "test-agent", Name: "test-agent"})
+
+	resp, err := a.RunText(t.Context(), "go").Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := resp.String(); got != "done" {
+		t.Fatalf("response text = %q, want done", got)
+	}
+	if createSessionCalls != 1 {
+		t.Fatalf("CreateSession called %d times, want 1", createSessionCalls)
+	}
+	if createdSession == nil {
+		t.Fatal("expected CreateSession to receive a session")
+	}
+	if len(capturedSessions) != 2 {
+		t.Fatalf("captured %d provider sessions, want 2", len(capturedSessions))
+	}
+	for i, session := range capturedSessions {
+		if session != createdSession {
+			t.Fatalf("provider call %d received session %p, want %p", i+1, session, createdSession)
+		}
+	}
+}
+
+func TestToolApproval_NoApprovalRequestWithoutExplicitSessionCreatesSingleImplicitSession(t *testing.T) {
+	var createdSession *agent.Session
+	createSessionCalls := 0
+	var capturedSession *agent.Session
+
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder(
+			func(_ context.Context, _ []*message.Message, opts ...agent.Option) {
+				capturedSession = sessionFromOptions(t, opts...)
+			},
+		).
+			AddText("done").
+			Build(),
+	}
+
+	a := agent.New(agent.ProviderConfig{
+		Run: runner.Run,
+		CreateSession: func(_ context.Context, session *agent.Session, _ ...agent.Option) error {
+			createSessionCalls++
+			createdSession = session
+			return nil
+		},
+		Middlewares: []agent.Middleware{toolapproval.New(toolapproval.Config{})},
+	}, agent.Config{ID: "test-agent", Name: "test-agent"})
+
+	resp, err := a.RunText(t.Context(), "go").Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := resp.String(); got != "done" {
+		t.Fatalf("response text = %q, want done", got)
+	}
+	if createSessionCalls != 1 {
+		t.Fatalf("CreateSession called %d times, want 1", createSessionCalls)
+	}
+	if createdSession == nil {
+		t.Fatal("expected CreateSession to receive a session")
+	}
+	if capturedSession != createdSession {
+		t.Fatalf("provider run received session %p, want %p", capturedSession, createdSession)
 	}
 }
 
