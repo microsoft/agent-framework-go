@@ -24,7 +24,7 @@ import (
 
 type messageNewParamsOpt anthropic.MessageNewParams
 
-func (o messageNewParamsOpt) Value() any { return anthropic.MessageNewParams(o) }
+func (o messageNewParamsOpt) MAFValue() any { return anthropic.MessageNewParams(o) }
 
 // MessageNewParams allows passing custom parameters to the underlying anthropic API calls.
 func MessageNewParams(params anthropic.MessageNewParams) agent.Option {

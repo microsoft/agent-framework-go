@@ -31,7 +31,7 @@ func invokeProvider(provider *agentmode.Provider, ctx context.Context, messages 
 func collectTools(opts []agent.Option) []tool.Tool {
 	var tools []tool.Tool
 	for _, opt := range opts {
-		if tt, ok := opt.Value().(tool.Tool); ok {
+		if tt, ok := opt.MAFValue().(tool.Tool); ok {
 			tools = append(tools, tt)
 		}
 	}

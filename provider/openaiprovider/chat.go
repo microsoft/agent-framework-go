@@ -38,7 +38,7 @@ type chatClient struct {
 
 type chatCompletionNewParamsOpt openai.ChatCompletionNewParams
 
-func (o chatCompletionNewParamsOpt) Value() any {
+func (o chatCompletionNewParamsOpt) MAFValue() any {
 	return openai.ChatCompletionNewParams(o)
 }
 

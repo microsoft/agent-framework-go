@@ -25,7 +25,7 @@ import (
 
 type generateContentConfigOpt genai.GenerateContentConfig
 
-func (o generateContentConfigOpt) Value() any { return genai.GenerateContentConfig(o) }
+func (o generateContentConfigOpt) MAFValue() any { return genai.GenerateContentConfig(o) }
 
 // GenerateContentConfig allows passing custom parameters to the underlying genai API calls.
 func GenerateContentConfig(config genai.GenerateContentConfig) agent.Option {

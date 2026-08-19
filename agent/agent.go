@@ -537,7 +537,7 @@ type agentKey struct{}
 
 type noSessionOpt bool
 
-func (o noSessionOpt) Value() any { return bool(o) }
+func (o noSessionOpt) MAFValue() any { return bool(o) }
 
 func noSessionProvided(v bool) Option {
 	return noSessionOpt(v)

@@ -69,7 +69,7 @@ type responsesClient struct {
 
 type responsesNewParamsOpt responses.ResponseNewParams
 
-func (o responsesNewParamsOpt) Value() any {
+func (o responsesNewParamsOpt) MAFValue() any {
 	return responses.ResponseNewParams(o)
 }
 

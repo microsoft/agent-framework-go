@@ -27,7 +27,7 @@ type AgentConfig struct {
 
 type taskIDOpt struct{ string }
 
-func (o taskIDOpt) Value() any { return o.string }
+func (o taskIDOpt) MAFValue() any { return o.string }
 
 // TaskID returns an [agent.Option] that associates the run with an existing A2A
 // task, so the request continues that task rather than starting a new one.

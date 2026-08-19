@@ -480,7 +480,7 @@ func prepareOptionsForLastIteration(opts []agent.Option) []agent.Option {
 
 	updated := make([]agent.Option, 0, len(opts)+len(nonSchemaTools)+1)
 	for _, opt := range opts {
-		if _, ok := opt.Value().(tool.Tool); ok {
+		if _, ok := opt.MAFValue().(tool.Tool); ok {
 			continue
 		}
 		updated = append(updated, opt)
