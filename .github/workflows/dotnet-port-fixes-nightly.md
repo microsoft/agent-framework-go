@@ -206,7 +206,7 @@ Return a compact selection report only. Include:
 
 - Upstream head and recent commit range inspected
 - Selected upstream behavior to port, or no-change recommendation, with commit SHA and PR number when available
-- Selected classification (`fix` or `test-only`) and a one-sentence rationale based on the upstream contract
+- Selected classification (`fix/test`) and a one-sentence rationale based on the upstream contract
 - Complete upstream commit and PR diff inspected, including every changed public API, option, builder, and implementation file relevant to classification
 - Upstream public API delta, option defaults, opt-in or experimental gating, and user-visible capability delta; write `none` for each category with no change
 - Relevant upstream .NET files and nearby Go files used as evidence
