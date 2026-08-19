@@ -134,6 +134,17 @@ func decodePortableJSONType(typ reflect.Type, raw json.RawMessage) (any, bool) {
 	return target.Elem().Interface(), true
 }
 
+func decodePortableJSONAs(typ reflect.Type, raw json.RawMessage) (any, bool) {
+	decoded, ok := decodePortableJSONType(typ, raw)
+	if !ok {
+		return nil, false
+	}
+	if decoded == nil || !reflect.TypeOf(decoded).AssignableTo(typ) {
+		return nil, false
+	}
+	return decoded, true
+}
+
 func decodePortableJSON[T any](raw json.RawMessage) (any, bool) {
 	var decoded T
 	if err := json.Unmarshal(raw, &decoded); err != nil {
@@ -160,13 +171,9 @@ func (v *PortableValue) Is(typ reflect.Type) bool {
 		// not a delayed deserialization
 		return v.any != nil && reflect.TypeOf(v.any).AssignableTo(typ)
 	}
-	target := reflect.New(typ)
 	// Either we have no cache, or the types are incompatible; see if we can deserialize to the requested type
-	if err := json.Unmarshal(raw, target.Interface()); err != nil {
-		return false
-	}
-	deserialized := target.Elem().Interface()
-	if deserialized == nil || !reflect.TypeOf(deserialized).AssignableTo(typ) {
+	deserialized, ok := decodePortableJSONAs(typ, raw)
+	if !ok {
 		return false
 	}
 	v.cache = deserialized
