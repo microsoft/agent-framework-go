@@ -10,7 +10,6 @@ import (
 	"regexp"
 	"runtime"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -423,11 +422,8 @@ func DefaultShellEnvironmentInstructions(snapshot ShellEnvironmentSnapshot) stri
 }
 
 func formatToolVersions(versions map[string]ToolVersion) (installed, missing []string) {
-	keys := make([]string, 0, len(versions))
-	for name := range versions {
-		keys = append(keys, name)
-	}
-	sort.Strings(keys)
+	keys := slices.Collect(maps.Keys(versions))
+	slices.Sort(keys)
 	for _, name := range keys {
 		version := versions[name]
 		if version.Found {

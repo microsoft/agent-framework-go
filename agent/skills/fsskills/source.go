@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 
@@ -157,7 +158,7 @@ func NewSourceOptions(opts SourceOptions, filesystems ...fs.FS) *Source {
 		searchDepth = defaultSearchDepth
 	}
 	return &Source{
-		filesystems:               append([]fs.FS(nil), filesystems...),
+		filesystems:               slices.Clone(filesystems),
 		logger:                    logger,
 		searchDepth:               searchDepth,
 		resourceFilter:            opts.ResourceFilter,

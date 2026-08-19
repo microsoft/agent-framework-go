@@ -6,6 +6,7 @@ import (
 	"cmp"
 	"context"
 	"log/slog"
+	"slices"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/message"
@@ -76,7 +77,7 @@ func (p *contextProvider) Invoking(ctx context.Context, invoking agent.InvokingC
 		}
 		return messages, options, nil
 	}
-	inputMessages := append([]*message.Message(nil), messages...)
+	inputMessages := slices.Clone(messages)
 	if session == nil {
 		compactedMessages, err := Compact(ctx, p.strategy, messages, p.tokenCounter)
 		if err != nil {

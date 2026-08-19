@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
+	"maps"
 	"slices"
 	"strings"
 
@@ -356,8 +357,8 @@ func matchesRule(rules []Rule, req *message.ToolApprovalRequestContent) bool {
 	if err != nil {
 		return false
 	}
-	for _, r := range rules {
-		if r.matches(fc.Name, args) {
+	for _, rule := range rules {
+		if rule.matches(fc.Name, args) {
 			return true
 		}
 	}
@@ -447,15 +448,7 @@ func argumentMapsEqual(a, b map[string]string) bool {
 	if (a == nil) != (b == nil) {
 		return false
 	}
-	if len(a) != len(b) {
-		return false
-	}
-	for k, av := range a {
-		if bv, ok := b[k]; !ok || av != bv {
-			return false
-		}
-	}
-	return true
+	return maps.Equal(a, b)
 }
 
 func addRuleIfNotExists(st *state, rule Rule) {

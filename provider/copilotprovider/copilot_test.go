@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1131,7 +1132,7 @@ func (r *fakeRuntime) handle(conn net.Conn, req jsonRPCRequest) {
 		r.mu.Lock()
 		r.sessionID = sessionID
 		r.resumeRequests = append(r.resumeRequests, params)
-		resumeEvents := append([]map[string]any(nil), r.resumeEvents...)
+		resumeEvents := slices.Clone(r.resumeEvents)
 		r.mu.Unlock()
 		// Emit any lifecycle events the CLI produces during session.resume
 		// before the RPC response, so they land in the window before a
@@ -1145,7 +1146,7 @@ func (r *fakeRuntime) handle(conn net.Conn, req jsonRPCRequest) {
 		r.mu.Lock()
 		r.sendRequests = append(r.sendRequests, params)
 		sessionID := r.sessionID
-		events := append([]map[string]any(nil), r.events...)
+		events := slices.Clone(r.events)
 		r.mu.Unlock()
 		writeResponse(r.t, conn, req.ID, map[string]any{"messageId": "sent-message"})
 		for _, event := range events {

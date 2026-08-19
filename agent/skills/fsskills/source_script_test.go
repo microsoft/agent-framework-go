@@ -6,7 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"testing"
 
@@ -54,7 +54,7 @@ func TestFileSource_WithMultipleScriptExtensions_DiscoversAll(t *testing.T) {
 	for _, script := range loaded[0].Scripts {
 		scriptNames = append(scriptNames, script.Name)
 	}
-	sort.Strings(scriptNames)
+	slices.Sort(scriptNames)
 	if len(scriptNames) != 6 {
 		t.Fatalf("expected 6 scripts, got %d", len(scriptNames))
 	}

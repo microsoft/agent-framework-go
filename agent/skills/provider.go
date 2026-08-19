@@ -194,7 +194,7 @@ type skillSliceSource struct {
 }
 
 func newSkillSliceSource(skills ...*Skill) *skillSliceSource {
-	cloned := append([]*Skill(nil), skills...)
+	cloned := slices.Clone(skills)
 	for i, skill := range cloned {
 		if skill == nil {
 			panic(fmt.Sprintf("skill %d is nil", i))
@@ -546,7 +546,7 @@ func buildProviderSkillsInstructionPrompt(template string, skills []*Skill) stri
 		template = defaultSkillsInstructionPrompt
 	}
 
-	sortedSkills := append([]*Skill(nil), skills...)
+	sortedSkills := slices.Clone(skills)
 	slices.SortFunc(sortedSkills, func(left, right *Skill) int {
 		return strings.Compare(left.Frontmatter.Name, right.Frontmatter.Name)
 	})

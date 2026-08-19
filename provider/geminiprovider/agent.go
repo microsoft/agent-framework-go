@@ -218,10 +218,10 @@ func (a *client) buildParams(messages []*message.Message, opts []agent.Option) (
 		// Clone mutable slice fields so that appending to cfg.Tools or
 		// cfg.SystemInstruction.Parts below never aliases the caller's
 		// backing arrays (the option stores a shallow copy of the struct).
-		cfg.Tools = append([]*genai.Tool(nil), cfg.Tools...)
+		cfg.Tools = slices.Clone(cfg.Tools)
 		if cfg.SystemInstruction != nil {
 			si := *cfg.SystemInstruction
-			si.Parts = append([]*genai.Part(nil), si.Parts...)
+			si.Parts = slices.Clone(si.Parts)
 			cfg.SystemInstruction = &si
 		}
 	}

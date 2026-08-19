@@ -526,7 +526,7 @@ func (t *RawContent) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &header); err == nil {
 		t.ContentHeader = header
 	}
-	t.RawRepresentation = append(json.RawMessage(nil), data...)
+	t.RawRepresentation = slices.Clone(json.RawMessage(data))
 	return nil
 }
 
