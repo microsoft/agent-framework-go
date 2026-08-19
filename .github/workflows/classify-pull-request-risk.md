@@ -2,6 +2,7 @@
 description: Classifies Agent Framework pull request risk when deterministic rules are inconclusive
 tracker-id: classify-pull-request-risk
 on:
+   roles: all
    workflow_call:
       inputs:
          pr_number:
@@ -101,7 +102,7 @@ Do not guess, choose a default, or round uncertainty up to a higher risk level.
 
 1. Use GitHub tools to read the PR title, body, existing labels, changed files, and relevant diff patches. Do not execute pull request code.
 2. Apply the confidence gates above. Select exactly one risk level only when one level is clearly supported; otherwise abstain.
-3. On success, add the selected risk label, remove the other two risk labels, and remove `pending-auto-risk` and `failed-auto-risk` if present. Do not remove labels outside this allowlist.
+3. On success, add the selected risk label, remove the other two risk labels, and remove `pending-auto-risk` and `failed-auto-risk` if present. Do not remove labels outside this allowlist. The safe-output target is already fixed to this PR, so omit `item_number` from label calls. If the tool requires it, pass the bare integer `${{ inputs.pr_number }}`; never pass a string or prefix it with `#`.
 4. If the selected risk label is already the only risk label and neither marker is present, use `noop`.
 5. Do not add comments or reviews.
 6. If the PR cannot be read or classified confidently, add `failed-auto-risk`, remove `pending-auto-risk`, and do not add a risk label.
