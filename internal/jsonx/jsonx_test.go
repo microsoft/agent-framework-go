@@ -40,7 +40,7 @@ func TestUnmarshalDiscriminatedUnionSliceWithFallback_UsesFallbackForMissingAndU
 		"known": reflect.TypeOf(knownUnion{}),
 	}
 	fallback := func(raw json.RawMessage) (testUnion, error) {
-		return &rawUnion{Raw: slices.Clone(json.RawMessage(raw))}, nil
+		return &rawUnion{Raw: slices.Clone(raw)}, nil
 	}
 
 	values, err := UnmarshalDiscriminatedUnionSliceWithFallback(data, types, fallback)

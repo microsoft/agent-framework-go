@@ -50,7 +50,7 @@ func (as *Annotations) UnmarshalJSON(data []byte) error {
 }
 
 func unmarshalRawAnnotation(data json.RawMessage) (Annotation, error) {
-	return &RawAnnotation{RawRepresentation: slices.Clone(json.RawMessage(data))}, nil
+	return &RawAnnotation{RawRepresentation: slices.Clone(data)}, nil
 }
 
 // Annotation represents an annotation on content.
@@ -120,7 +120,7 @@ func (as *AnnotatedRegions) UnmarshalJSON(data []byte) error {
 }
 
 func unmarshalRawAnnotatedRegion(data json.RawMessage) (AnnotatedRegion, error) {
-	return &RawAnnotatedRegion{RawRepresentation: slices.Clone(json.RawMessage(data))}, nil
+	return &RawAnnotatedRegion{RawRepresentation: slices.Clone(data)}, nil
 }
 
 // AnnotatedRegion describes the portion of an associated [Content]
