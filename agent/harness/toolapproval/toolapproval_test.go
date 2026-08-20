@@ -227,6 +227,85 @@ func TestToolApproval_AlwaysApproveToolCreatesRule(t *testing.T) {
 	}
 }
 
+func TestToolApproval_AutoApprovalWithoutSessionPreservesOriginalMessages(t *testing.T) {
+	fcc := &message.FunctionCallContent{CallID: "c1", Name: "deploy", Arguments: `{"env":"prod"}`}
+
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder().
+			Add(&agent.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					&message.ToolApprovalRequestContent{RequestID: "r1", ToolCall: fcc},
+				},
+			}).
+			NewTurn(func(_ context.Context, messages []*message.Message, _ ...agent.Option) {
+				if len(messages) != 2 {
+					t.Fatalf("expected original user message plus injected approval response, got %d messages", len(messages))
+				}
+
+				if messages[0].Role != message.RoleUser {
+					t.Fatalf("first message role = %q, want %q", messages[0].Role, message.RoleUser)
+				}
+				text, ok := messages[0].Contents[0].(*message.TextContent)
+				if !ok || text.Text != "go" {
+					t.Fatalf("first message contents = %#v, want original user text", messages[0].Contents)
+				}
+
+				if messages[1].Role != message.RoleUser {
+					t.Fatalf("second message role = %q, want %q", messages[1].Role, message.RoleUser)
+				}
+				if len(messages[1].Contents) != 1 {
+					t.Fatalf("second message contents count = %d, want 1", len(messages[1].Contents))
+				}
+				resp, ok := messages[1].Contents[0].(*message.ToolApprovalResponseContent)
+				if !ok {
+					t.Fatalf("second message contents = %#v, want approval response", messages[1].Contents)
+				}
+				if !resp.Approved {
+					t.Fatal("expected injected approval response to approve the tool call")
+				}
+				if resp.RequestID != "r1" {
+					t.Fatalf("approval response request ID = %q, want %q", resp.RequestID, "r1")
+				}
+			}).
+			AddText("done").
+			Build(),
+	}
+
+	ruleCalls := 0
+	mw := toolapproval.New(toolapproval.Config{
+		AutoApprovalRules: []func(context.Context, *message.FunctionCallContent) (bool, error){
+			func(_ context.Context, call *message.FunctionCallContent) (bool, error) {
+				ruleCalls++
+				if call != fcc {
+					t.Fatalf("auto-approval rule received tool call %#v, want %#v", call, fcc)
+				}
+				return true, nil
+			},
+		},
+	})
+
+	updates := collectUpdates(t, mw, runner.Run, []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "go"}}},
+	})
+
+	if ruleCalls != 1 {
+		t.Fatalf("auto-approval rule called %d times, want 1", ruleCalls)
+	}
+
+	var gotDone bool
+	for _, u := range updates {
+		for _, c := range u.Contents {
+			if tc, ok := c.(*message.TextContent); ok && tc.Text == "done" {
+				gotDone = true
+			}
+		}
+	}
+	if !gotDone {
+		t.Fatal("expected done text after auto-approved re-invocation without a session")
+	}
+}
+
 func TestToolApproval_QueuedRequestsSurfacedOneAtATime(t *testing.T) {
 	fcc1 := &message.FunctionCallContent{CallID: "c1", Name: "deploy", Arguments: `{"env":"prod"}`}
 	fcc2 := &message.FunctionCallContent{CallID: "c2", Name: "restart", Arguments: `{}`}
