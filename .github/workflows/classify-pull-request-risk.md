@@ -18,6 +18,7 @@ on:
 concurrency:
    group: "gh-aw-${{ github.workflow }}-${{ github.repository }}-${{ inputs.pr_number }}"
    cancel-in-progress: true
+checkout: false
 permissions:
    contents: read
    issues: read
