@@ -144,6 +144,7 @@ func New(cfg Config) agent.Middleware {
 
 func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
+		var messagesCloned bool
 		tools, _ := f.createToolsMap(agent.AllOptions(opts, agent.WithTool))
 
 		// When message injection is enabled, create a MessageInjector and place it on the
@@ -164,6 +165,7 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 		var errCount int
 		if hasAnyApprovalContent(messages) {
 			messages = slices.Clone(messages)
+			messagesCloned = true
 			// We also need a synthetic ID for the function call content for approved function calls
 			// where we don't know what the original message id of the function call was.
 			funcCallFallbackMsgID := f.newID()
@@ -303,6 +305,10 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 				if i < f.maximumIterationsPerRequest && injector != nil && len(functionCallContents) == 0 {
 					if injected := injector.drain(); len(injected) > 0 {
 						opts = updateOptionsForNextIteration(opts)
+						if !messagesCloned {
+							messages = slices.Clone(messages)
+							messagesCloned = true
+						}
 						messages = append(messages, injected...)
 						continue
 					}
@@ -342,10 +348,6 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 			// processed (non-informational) function calls, preserving the exact
 			// assistant content order the model emitted (e.g. reasoning → text →
 			// tool_calls, or text following a tool_call).
-			processedFCCSet := make(map[*message.FunctionCallContent]struct{}, len(processedFunctionCalls))
-			for _, fcc := range processedFunctionCalls {
-				processedFCCSet[fcc] = struct{}{}
-			}
 			var iterationContents []message.Content
 			for _, u := range updates {
 				iterationContents = append(iterationContents, u.Contents...)
@@ -360,7 +362,7 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 					// Only carry over the non-informational function calls that were
 					// actually processed this iteration, keeping them in their original
 					// position relative to the surrounding text/reasoning.
-					if _, ok := processedFCCSet[v]; ok {
+					if slices.Contains(processedFunctionCalls, v) {
 						assistantContents = append(assistantContents, c)
 					}
 				}
@@ -371,6 +373,10 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 			// and the tool results so that the downstream provider receives a well-formed
 			// conversation (user message → assistant tool_calls → tool results).
 			opts = updateOptionsForNextIteration(opts)
+			if !messagesCloned {
+				messages = slices.Clone(messages)
+				messagesCloned = true
+			}
 			messages = append(messages, &message.Message{
 				Role:     message.RoleAssistant,
 				Contents: assistantContents,
@@ -441,18 +447,25 @@ func convertToolResultMsgToUpdate(msg *message.Message, msgID string) *agent.Res
 }
 
 func updateOptionsForNextIteration(opts []agent.Option) []agent.Option {
+	updated := opts
+	var cloned bool
 	if v, ok := agent.GetOption(opts, agent.WithToolMode); ok && v == tool.ToolModeRequired {
 		// We have to reset the tool mode to be non-required after the first iteration,
 		// as otherwise we'll be in an infinite loop.
-		opts = append(opts, agent.WithToolMode(tool.ToolModeAuto))
+		updated = slices.Clone(opts)
+		cloned = true
+		updated = append(updated, agent.WithToolMode(tool.ToolModeAuto))
 	}
 	// Reset the continuation token of a background response operation
 	// to signal the inner client to handle function call result rather
 	// than getting the result of the operation.
 	if _, ok := agent.GetOption(opts, agent.WithContinuationToken); ok {
-		opts = append(opts, agent.WithContinuationToken(""))
+		if !cloned {
+			updated = slices.Clone(opts)
+		}
+		updated = append(updated, agent.WithContinuationToken(""))
 	}
-	return opts
+	return updated
 }
 
 // prepareOptionsForLastIteration prepares options for the last iteration by removing schema tools.
@@ -605,6 +618,7 @@ func markServerHandledFunctionCalls(updates []*agent.ResponseUpdate, functionCal
 }
 
 func hasAnyApprovalContent(msgs []*message.Message) bool {
+	approvalResponseNeedsProcessing := approvalResponseNeedsProcessingByRequestID(msgs)
 	return slices.ContainsFunc(msgs, func(m *message.Message) bool {
 		if m == nil || m.Contents == nil {
 			return false
@@ -612,8 +626,17 @@ func hasAnyApprovalContent(msgs []*message.Message) bool {
 		return slices.ContainsFunc(m.Contents, func(c message.Content) bool {
 			switch c := c.(type) {
 			case *message.ToolApprovalRequestContent:
+				if c == nil {
+					return false
+				}
+				if responseNeedsProcessing, hasResponse := approvalResponseNeedsProcessing[c.RequestID]; hasResponse {
+					return responseNeedsProcessing
+				}
 				return approvalToolCallNeedsProcessing(c.ToolCall)
 			case *message.ToolApprovalResponseContent:
+				if c == nil {
+					return false
+				}
 				return approvalToolCallNeedsProcessing(c.ToolCall)
 			default:
 				return false
@@ -625,6 +648,32 @@ func hasAnyApprovalContent(msgs []*message.Message) bool {
 func approvalToolCallNeedsProcessing(toolCall message.ToolCallContent) bool {
 	fcc, ok := approvalToolCallAsFunctionCall(toolCall)
 	return ok && !fcc.InformationalOnly
+}
+
+// approvalResponseNeedsProcessingByRequestID records whether paired approval
+// responses are actionable. Any actionable duplicate keeps the pair actionable.
+func approvalResponseNeedsProcessingByRequestID(msgs []*message.Message) map[string]bool {
+	var result map[string]bool
+	for _, msg := range msgs {
+		if msg == nil {
+			continue
+		}
+		for _, content := range msg.Contents {
+			response, ok := content.(*message.ToolApprovalResponseContent)
+			if !ok || response == nil {
+				continue
+			}
+			fcc, ok := approvalToolCallAsFunctionCall(response.ToolCall)
+			if !ok {
+				continue
+			}
+			if result == nil {
+				result = make(map[string]bool)
+			}
+			result[response.RequestID] = result[response.RequestID] || !fcc.InformationalOnly
+		}
+	}
+	return result
 }
 
 func (f *autocall) invokeApprovedToolApprovalResponses(ctx context.Context, approvals []toolApprovalResultWithRequestMessage, tools map[string]tool.SchemaTool, errCount int) (*message.Message, int, error) {
@@ -646,16 +695,6 @@ func (f *autocall) invokeApprovedToolApprovalResponses(ctx context.Context, appr
 	newMsg, errCount, err := f.processFunctionCalls(ctx, tools, funcCalls, errCount)
 	if err != nil {
 		return nil, errCount, err
-	}
-
-	// Also mark the request's function call as informational-only to keep serialized
-	// approval request/response pairs consistent when they are separate instances.
-	for _, approval := range approvals {
-		if approval.Request != nil {
-			if fcc, ok := approvalToolCallAsFunctionCall(approval.Request.ToolCall); ok {
-				fcc.InformationalOnly = true
-			}
-		}
 	}
 
 	return newMsg, errCount, nil
@@ -908,13 +947,24 @@ func (f *autocall) processToolApprovalResponses(ctx context.Context, msgs []*mes
 
 type toolApprovalResultWithRequestMessage struct {
 	Response       *message.ToolApprovalResponseContent
-	Request        *message.ToolApprovalRequestContent
 	RequestMessage *message.Message
 }
 
 func approvalToolCallAsFunctionCall(toolCall message.ToolCallContent) (*message.FunctionCallContent, bool) {
 	fcc, ok := toolCall.(*message.FunctionCallContent)
 	return fcc, ok && fcc != nil
+}
+
+func cloneToolApprovalResponseContent(content *message.ToolApprovalResponseContent) *message.ToolApprovalResponseContent {
+	if content == nil {
+		return nil
+	}
+	cloned := *content
+	if functionCall, ok := approvalToolCallAsFunctionCall(content.ToolCall); ok {
+		clonedFunctionCall := *functionCall
+		cloned.ToolCall = &clonedFunctionCall
+	}
+	return &cloned
 }
 
 func (f *autocall) extractAndRemoveToolApprovalRequestsAndResponses(ctx context.Context, msgs []*message.Message) (out []*message.Message, approvals, rejections []toolApprovalResultWithRequestMessage, err error) {
@@ -924,6 +974,9 @@ func (f *autocall) extractAndRemoveToolApprovalRequestsAndResponses(ctx context.
 		functionResultCallIds       map[string]struct{}
 		allApprovalResponses        []*message.ToolApprovalResponseContent
 	)
+	// A paired response is authoritative because request and response tool calls may
+	// be separate instances after serialization.
+	approvalResponseNeedsProcessing := approvalResponseNeedsProcessingByRequestID(msgs)
 	// 1st iteration, over all messages and content:
 	// - Build a list of all function call ids that are already executed.
 	// - Build a list of all function approval requests and responses.
@@ -936,7 +989,9 @@ func (f *autocall) extractAndRemoveToolApprovalRequestsAndResponses(ctx context.
 			switch c := c.(type) {
 			case *message.ToolApprovalRequestContent:
 				fcc, ok := approvalToolCallAsFunctionCall(c.ToolCall)
-				if !ok || fcc.InformationalOnly {
+				responseNeedsProcessing, hasResponse := approvalResponseNeedsProcessing[c.RequestID]
+				requestNeedsProcessing := ok && ((hasResponse && responseNeedsProcessing) || (!hasResponse && !fcc.InformationalOnly))
+				if !requestNeedsProcessing {
 					keptContents = append(keptContents, c)
 					continue
 				}
@@ -948,7 +1003,7 @@ func (f *autocall) extractAndRemoveToolApprovalRequestsAndResponses(ctx context.
 				if allApprovalRequestsMessages == nil {
 					allApprovalRequestsMessages = make(map[string]toolApprovalResultWithRequestMessage)
 				}
-				allApprovalRequestsMessages[c.RequestID] = toolApprovalResultWithRequestMessage{Request: c, RequestMessage: msg}
+				allApprovalRequestsMessages[c.RequestID] = toolApprovalResultWithRequestMessage{RequestMessage: msg}
 			case *message.ToolApprovalResponseContent:
 				fcc, ok := approvalToolCallAsFunctionCall(c.ToolCall)
 				if !ok {
@@ -956,7 +1011,6 @@ func (f *autocall) extractAndRemoveToolApprovalRequestsAndResponses(ctx context.
 					continue
 				}
 				if fcc.InformationalOnly {
-					delete(approvalRequestCallIDs, fcc.CallID)
 					keptContents = append(keptContents, c)
 					continue
 				}
@@ -1021,8 +1075,7 @@ func (f *autocall) extractAndRemoveToolApprovalRequestsAndResponses(ctx context.
 		request := allApprovalRequestsMessages[approvalResponse.RequestID]
 		// Split the responses into approved and rejected.
 		newMsg := toolApprovalResultWithRequestMessage{
-			Response:       approvalResponse,
-			Request:        request.Request,
+			Response:       cloneToolApprovalResponseContent(approvalResponse),
 			RequestMessage: request.RequestMessage,
 		}
 		if approvalResponse.Approved {
@@ -1133,11 +1186,6 @@ func (f *autocall) generateRejectedFunctionResults(ctx context.Context, rejectio
 		}
 		f.logger.Debug(ctx, "function was rejected", "funcName", fcc.Name, "reason", rej.Response.Reason)
 		fcc.InformationalOnly = true
-		if rej.Request != nil {
-			if requestFCC, ok := approvalToolCallAsFunctionCall(rej.Request.ToolCall); ok {
-				requestFCC.InformationalOnly = true
-			}
-		}
 		result := "Tool call invocation rejected."
 		if strings.TrimSpace(rej.Response.Reason) != "" {
 			result += " " + rej.Response.Reason

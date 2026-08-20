@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 	"iter"
+	"slices"
 
 	"github.com/microsoft/agent-framework-go/message"
 )
@@ -20,6 +21,10 @@ const SourceTypeMiddleware message.SourceType = "middleware"
 // request/response message hooks exposed by [ContextProvider].
 // Messages passed to next that were not present in the middleware input are
 // marked with [SourceTypeMiddleware] when they do not already carry a source.
+//
+// Middleware implementations must treat input message and option slices, and
+// existing messages, as read-only. To modify the downstream invocation, clone
+// the slices and any message being changed, then pass the derived values to next.
 type Middleware interface {
 	Run(next RunFunc, ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error]
 }
@@ -52,12 +57,9 @@ type middlewareRunner struct {
 
 func (mr middlewareRunner) Run(ctx context.Context, messages []*message.Message, opts ...Option) iter.Seq2[*ResponseUpdate, error] {
 	next := func(ctx context.Context, outMessages []*message.Message, opts ...Option) iter.Seq2[*ResponseUpdate, error] {
-		originals := make(map[*message.Message]struct{}, len(messages))
-		for _, msg := range messages {
-			originals[msg] = struct{}{}
-		}
+		var outMessagesCloned bool
 		for i, msg := range outMessages {
-			if _, ok := originals[msg]; ok {
+			if slices.Contains(messages, msg) {
 				continue
 			}
 			if msg == nil || msg.Source != (message.Source{}) {
@@ -65,6 +67,10 @@ func (mr middlewareRunner) Run(ctx context.Context, messages []*message.Message,
 			}
 			marked := msg.Clone()
 			marked.Source = message.Source{Type: SourceTypeMiddleware}
+			if !outMessagesCloned {
+				outMessages = slices.Clone(outMessages)
+				outMessagesCloned = true
+			}
 			outMessages[i] = marked
 		}
 		return mr.next(ctx, outMessages, opts...)

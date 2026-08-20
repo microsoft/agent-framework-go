@@ -16,6 +16,8 @@ import (
 )
 
 // RunFunc is the provider function that executes an agent invocation.
+// Implementations must treat the message and option slices, and existing
+// messages, as read-only. Clone them before making changes.
 type RunFunc = func(ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error]
 
 // ProviderConfig configures the provider-specific implementation behind an Agent.
@@ -35,7 +37,8 @@ type ProviderConfig struct {
 	// Unmarshal decodes provider structured output into v using format.
 	Unmarshal func(format ResponseFormat, data []byte, v any) error
 
-	// CreateSession configures a provider-specific session.
+	// CreateSession configures a provider-specific session. Implementations must
+	// treat options as read-only and clone the slice before making changes.
 	CreateSession func(ctx context.Context, session *Session, options ...Option) error
 
 	// ServiceDoesNotManageHistory indicates that this provider never manages
@@ -113,13 +116,13 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 			cfg.RunOptions = append(cfg.RunOptions, WithTool(tool))
 		}
 	}
-	agentMiddlewares := slices.Clone(cfg.Middlewares)
+	agentMiddlewares := cfg.Middlewares
 	if cfg.Logger != nil && !cfg.DisableRunLogs {
 		agentMiddlewares = append([]Middleware{newRunLoggerMiddleware(cfg.Logger, cfg.LogSensitiveData)}, agentMiddlewares...)
 	}
-	providerMiddlewares := slices.Clone(prov.Middlewares)
+	providerMiddlewares := prov.Middlewares
 	if prov.Format != nil || prov.Unmarshal != nil {
-		providerMiddlewares = append(providerMiddlewares, &structuredOutputMiddleware{
+		providerMiddlewares = append(slices.Clone(providerMiddlewares), &structuredOutputMiddleware{
 			format:    prov.Format,
 			unmarshal: prov.Unmarshal,
 		})
@@ -273,10 +276,7 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 		}
 		noSession, _ := GetOption(options, noSessionProvided)
 		stream, _ := GetOption(options, Stream)
-		var inputMessages []*message.Message
-		if stream {
-			inputMessages = slices.Clone(messages)
-		}
+		inputMessages := messages
 		lifecycleOptions := withoutContinuationToken(options)
 
 		historyProvider := a.historyProviderForRun(session, continuationToken, noSession)
@@ -291,7 +291,7 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 		}
 
 		if runContextProviders {
-			options = slices.Clone(lifecycleOptions)
+			options = lifecycleOptions
 			for _, provider := range a.contextProviders {
 				var err error
 				messages, options, err = provider.Invoking(ctx, InvokingContext{Messages: messages, Options: options})
@@ -304,7 +304,7 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 
 		var requestMessages []*message.Message
 		if historyProvider != nil || runContextProviders {
-			requestMessages = slices.Clone(messages)
+			requestMessages = messages
 		}
 		trackContinuationUpdates := stream || continuationToken != ""
 
@@ -394,7 +394,7 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 					state.historyResponse.Coalesce()
 					storeResponseMessages = state.historyResponse.Messages
 				}
-				if err := historyStoreProvider.Invoked(ctx, InvokedContext{RequestMessages: slices.Clone(requestMessages), ResponseMessages: slices.Clone(storeResponseMessages), Options: withoutContinuationToken(options), Err: state.runErr}); err != nil {
+				if err := historyStoreProvider.Invoked(ctx, InvokedContext{RequestMessages: requestMessages, ResponseMessages: storeResponseMessages, Options: withoutContinuationToken(options), Err: state.runErr}); err != nil {
 					if !state.stopped {
 						yield(nil, err)
 					}
@@ -413,7 +413,7 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 				contextStoreResponseMessages = state.contextResponse.Messages
 			}
 			for _, provider := range a.contextProviders {
-				if err := provider.Invoked(ctx, InvokedContext{RequestMessages: slices.Clone(requestMessages), ResponseMessages: slices.Clone(contextStoreResponseMessages), Options: withoutContinuationToken(options), Err: state.runErr}); err != nil {
+				if err := provider.Invoked(ctx, InvokedContext{RequestMessages: requestMessages, ResponseMessages: contextStoreResponseMessages, Options: withoutContinuationToken(options), Err: state.runErr}); err != nil {
 					if !state.stopped {
 						yield(nil, err)
 					}
@@ -519,8 +519,12 @@ func (a *Agent) handleHistoryProviderConflict(ctx context.Context, provider Hist
 
 func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, options []Option) (context.Context, []*message.Message, []Option, error) {
 	// Prepend options from agent configuration.
+	var optionsOwned bool
 	if len(a.runOptions) != 0 {
-		options = append(a.runOptions, options...)
+		combined := make([]Option, 0, len(a.runOptions)+len(options)+2)
+		combined = append(combined, a.runOptions...)
+		options = append(combined, options...)
+		optionsOwned = true
 	}
 
 	if _, ok := GetOption(options, WithSession); !ok {
@@ -533,6 +537,11 @@ func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, opt
 		session, err := a.CreateSession(ctx, options...)
 		if err != nil {
 			return nil, nil, nil, err
+		}
+		if !optionsOwned {
+			cloned := make([]Option, len(options), len(options)+2)
+			copy(cloned, options)
+			options = cloned
 		}
 		options = append(options, WithSession(session), noSessionProvided(true))
 	}

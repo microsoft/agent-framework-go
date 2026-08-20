@@ -245,6 +245,74 @@ func TestNewInMemoryHistoryProvider_DefaultStoreInputRequestMessageFilter_Exclud
 	}
 }
 
+func TestHistoryProvider_Invoking_DoesNotMutateProvidedMessageSlice(t *testing.T) {
+	provided := message.NewText("provided")
+	filtered := message.NewText("filtered")
+	providedMessages := make([]*message.Message, 1, 2)
+	providedMessages[0] = provided
+	sentinel := message.NewText("sentinel")
+	backing := providedMessages[:cap(providedMessages)]
+	backing[1] = sentinel
+	provider := agent.NewHistoryProvider(agent.HistoryProviderConfig{
+		SourceID: "history",
+		Provide: func(context.Context, agent.InvokingContext) ([]*message.Message, error) {
+			return providedMessages, nil
+		},
+		ProvideOutputMessageFilter: func(_ context.Context, messages []*message.Message) ([]*message.Message, error) {
+			messages[0] = filtered
+			return messages, nil
+		},
+	})
+
+	request := message.NewText("request")
+	messages, err := invokeHistoryProvider(provider, t.Context(), []*message.Message{request})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(messages) != 2 || messages[1] != request {
+		t.Fatalf("unexpected history output: %#v", messages)
+	}
+	if messages[0] == provided || messages[0].Source != (message.Source{Type: agent.SourceTypeHistoryProvider, ID: "history"}) {
+		t.Fatal("expected provided message to be cloned and source-stamped")
+	}
+	if providedMessages[0] != provided || backing[1] != sentinel {
+		t.Fatal("expected history provider not to modify the provided message backing array")
+	}
+}
+
+func TestHistoryProvider_Invoked_FiltersDoNotMutateInputSlices(t *testing.T) {
+	historyMessage := message.NewText("history")
+	historyMessage.Source = message.Source{Type: agent.SourceTypeHistoryProvider, ID: "history"}
+	externalMessage := message.NewText("external")
+	requestMessages := []*message.Message{historyMessage, externalMessage}
+	responseMessage := message.NewText("response")
+	replacementResponse := message.NewText("replacement")
+	responseMessages := []*message.Message{responseMessage, replacementResponse}
+	provider := agent.NewHistoryProvider(agent.HistoryProviderConfig{
+		SourceID: "history",
+		StoreInputResponseMessageFilter: func(_ context.Context, messages []*message.Message) ([]*message.Message, error) {
+			messages[0] = replacementResponse
+			return messages[:1], nil
+		},
+		Store: func(_ context.Context, invoked agent.InvokedContext) error {
+			if len(invoked.ResponseMessages) != 1 || invoked.ResponseMessages[0] != replacementResponse {
+				return fmt.Errorf("unexpected filtered response messages")
+			}
+			return nil
+		},
+	})
+
+	if err := invokeHistoryProviderInvoked(provider, t.Context(), requestMessages, responseMessages); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if requestMessages[0] != historyMessage || requestMessages[1] != externalMessage {
+		t.Fatal("expected request filtering not to mutate InvokedContext input")
+	}
+	if responseMessages[0] != responseMessage || responseMessages[1] != replacementResponse {
+		t.Fatal("expected response filtering not to mutate InvokedContext input")
+	}
+}
+
 func TestNewInMemoryHistoryProvider_SkipStoreRequestMessages(t *testing.T) {
 	provider := agent.NewInMemoryHistoryProvider(agent.InMemoryHistoryProviderConfig{
 		SourceID: "k",

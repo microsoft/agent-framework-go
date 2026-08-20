@@ -100,7 +100,7 @@ func (p *defaultHistoryProvider) Invoking(ctx context.Context, invoking Invoking
 	}
 
 	if p.config.ProvideOutputMessageFilter != nil {
-		providedMessages, err = p.config.ProvideOutputMessageFilter(ctx, providedMessages)
+		providedMessages, err = p.config.ProvideOutputMessageFilter(ctx, slices.Clone(providedMessages))
 		if err != nil {
 			return nil, err
 		}
@@ -110,16 +110,18 @@ func (p *defaultHistoryProvider) Invoking(ctx context.Context, invoking Invoking
 		return invoking.Messages, nil
 	}
 
+	outMessages := make([]*message.Message, 0, len(providedMessages)+len(invoking.Messages))
 	source := message.Source{Type: SourceTypeHistoryProvider, ID: p.config.SourceID}
-	for i, msg := range providedMessages {
+	for _, msg := range providedMessages {
 		if msg == nil || msg.Source == source {
+			outMessages = append(outMessages, msg)
 			continue
 		}
 		marked := msg.Clone()
 		marked.Source = source
-		providedMessages[i] = marked
+		outMessages = append(outMessages, marked)
 	}
-	outMessages := append(providedMessages, invoking.Messages...)
+	outMessages = append(outMessages, invoking.Messages...)
 
 	return outMessages, nil
 }
@@ -139,17 +141,16 @@ func (p *defaultHistoryProvider) Invoked(ctx context.Context, invoked InvokedCon
 	if requestFilter == nil {
 		requestFilter = notSourceTypes(SourceTypeHistoryProvider)
 	}
-	responseFilter := p.config.StoreInputResponseMessageFilter
-	if responseFilter == nil {
-		responseFilter = messagefilter.PassThrough
-	}
-	filteredReq, err := requestFilter(ctx, invoked.RequestMessages)
+	filteredReq, err := requestFilter(ctx, slices.Clone(invoked.RequestMessages))
 	if err != nil {
 		return err
 	}
-	filteredResp, err := responseFilter(ctx, invoked.ResponseMessages)
-	if err != nil {
-		return err
+	filteredResp := invoked.ResponseMessages
+	if responseFilter := p.config.StoreInputResponseMessageFilter; responseFilter != nil {
+		filteredResp, err = responseFilter(ctx, slices.Clone(invoked.ResponseMessages))
+		if err != nil {
+			return err
+		}
 	}
 	return p.config.Store(ctx, InvokedContext{RequestMessages: filteredReq, ResponseMessages: filteredResp, Options: invoked.Options, Err: invoked.Err})
 }

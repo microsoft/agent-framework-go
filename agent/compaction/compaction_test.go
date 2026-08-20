@@ -19,6 +19,12 @@ func invokeProvider(provider agent.ContextProvider, ctx context.Context, message
 	return provider.Invoking(ctx, agent.InvokingContext{Messages: messages, Options: options})
 }
 
+type strategyFunc func(context.Context, *compaction.MessageIndex) (bool, error)
+
+func (f strategyFunc) Compact(ctx context.Context, index *compaction.MessageIndex) (bool, error) {
+	return f(ctx, index)
+}
+
 func TestMessageIndex_GroupsToolCallsAtomically(t *testing.T) {
 	messages := []*message.Message{
 		textMessage(message.RoleSystem, "system"),
@@ -542,6 +548,32 @@ func TestNewProvider_SourceStampsGeneratedMessages(t *testing.T) {
 	}
 	if compactedMessages[1].Source != (message.Source{}) || compactedMessages[2].Source != (message.Source{}) {
 		t.Fatalf("expected preserved messages to keep original sources, got %#v and %#v", compactedMessages[1].Source, compactedMessages[2].Source)
+	}
+}
+
+func TestNewProvider_SourceStampingDoesNotMutateGeneratedMessage(t *testing.T) {
+	generated := textMessage(message.RoleAssistant, "generated")
+	provider := compaction.NewContextProvider(compaction.ContextProviderConfig{
+		Strategy: strategyFunc(func(_ context.Context, index *compaction.MessageIndex) (bool, error) {
+			index.AddGroup(compaction.GroupKindSummary, []*message.Message{generated}, nil)
+			return true, nil
+		}),
+		SourceID: "compaction-test",
+	})
+
+	input := textMessage(message.RoleUser, "input")
+	compactedMessages, _, err := invokeProvider(provider, t.Context(), []*message.Message{input})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(compactedMessages) != 2 || compactedMessages[0] != input {
+		t.Fatalf("unexpected compacted messages: %#v", compactedMessages)
+	}
+	if compactedMessages[1] == generated {
+		t.Fatal("expected generated message to be cloned before source attribution")
+	}
+	if generated.Source != (message.Source{}) {
+		t.Fatalf("expected generated message source to remain unchanged, got %#v", generated.Source)
 	}
 }
 
