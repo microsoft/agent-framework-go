@@ -127,15 +127,13 @@ func (resp *Response) Coalesce() {
 // ToUpdates converts this response into response updates suitable for streaming
 // scenarios.
 //
-// Each message in the response becomes a separate update. Response-level usage,
-// additional properties, and a non-empty continuation token are included as an
-// additional metadata-only update when present.
+// Each message in the response becomes a separate update. Response-level
+// additional properties and a non-empty continuation token are included as
+// an additional metadata-only update when present.
 func (resp *Response) ToUpdates() []*ResponseUpdate {
 	if resp == nil {
 		return nil
 	}
-	usage := resp.Usage()
-	hasUsage := !isZeroUsage(usage)
 	hasAdditionalProperties := resp.AdditionalProperties != nil
 
 	updates := make([]*ResponseUpdate, 0, len(resp.Messages)+1)
@@ -154,11 +152,11 @@ func (resp *Response) ToUpdates() []*ResponseUpdate {
 			AuthorName:           msg.AuthorName,
 			Role:                 msg.Role,
 			CreatedAt:            createdAt,
-			Contents:             contentsWithoutUsage(msg.Contents),
+			Contents:             msg.Contents,
 		})
 	}
 
-	if hasUsage || hasAdditionalProperties || resp.ContinuationToken != "" {
+	if hasAdditionalProperties || resp.ContinuationToken != "" {
 		extra := &ResponseUpdate{
 			AdditionalProperties: resp.AdditionalProperties,
 			AgentID:              resp.AgentID,
@@ -166,49 +164,10 @@ func (resp *Response) ToUpdates() []*ResponseUpdate {
 			ContinuationToken:    resp.ContinuationToken,
 			CreatedAt:            resp.CreatedAt,
 		}
-		if hasUsage {
-			extra.Contents = message.Contents{&message.UsageContent{Details: usage}}
-		}
 		updates = append(updates, extra)
 	}
 
 	return updates
-}
-
-// contentsWithoutUsage returns contents with any *message.UsageContent removed.
-// Per-message usage is re-emitted once as a trailing aggregate update in
-// ToUpdates, so retaining it here would cause Collect to double-count usage.
-// When no *message.UsageContent is present the input slice is returned as-is;
-// otherwise a filtered copy is returned. The input slice is never mutated, as
-// the owning Response is caller-owned.
-func contentsWithoutUsage(contents message.Contents) message.Contents {
-	hasUsage := false
-	for _, c := range contents {
-		if _, ok := c.(*message.UsageContent); ok {
-			hasUsage = true
-			break
-		}
-	}
-	if !hasUsage {
-		return contents
-	}
-	filtered := make(message.Contents, 0, len(contents))
-	for _, c := range contents {
-		if _, ok := c.(*message.UsageContent); ok {
-			continue
-		}
-		filtered = append(filtered, c)
-	}
-	return filtered
-}
-
-func isZeroUsage(usage message.UsageDetails) bool {
-	return usage.InputTokenCount == 0 &&
-		usage.OutputTokenCount == 0 &&
-		usage.TotalTokenCount == 0 &&
-		usage.CachedInputTokenCount == 0 &&
-		usage.ReasoningTokenCount == 0 &&
-		len(usage.AdditionalCounts) == 0
 }
 
 // Update folds a streaming [ResponseUpdate] into resp, appending its contents to the matching message and updating response-level fields from later updates.
