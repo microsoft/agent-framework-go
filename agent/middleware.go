@@ -57,9 +57,13 @@ type middlewareRunner struct {
 
 func (mr middlewareRunner) Run(ctx context.Context, messages []*message.Message, opts ...Option) iter.Seq2[*ResponseUpdate, error] {
 	next := func(ctx context.Context, outMessages []*message.Message, opts ...Option) iter.Seq2[*ResponseUpdate, error] {
+		inputMessages := make(map[*message.Message]struct{}, len(messages))
+		for _, msg := range messages {
+			inputMessages[msg] = struct{}{}
+		}
 		var outMessagesCloned bool
 		for i, msg := range outMessages {
-			if slices.Contains(messages, msg) {
+			if _, ok := inputMessages[msg]; ok {
 				continue
 			}
 			if msg == nil || msg.Source != (message.Source{}) {

@@ -348,6 +348,10 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 			// processed (non-informational) function calls, preserving the exact
 			// assistant content order the model emitted (e.g. reasoning → text →
 			// tool_calls, or text following a tool_call).
+			processedFCCSet := make(map[*message.FunctionCallContent]struct{}, len(processedFunctionCalls))
+			for _, fcc := range processedFunctionCalls {
+				processedFCCSet[fcc] = struct{}{}
+			}
 			var iterationContents []message.Content
 			for _, u := range updates {
 				iterationContents = append(iterationContents, u.Contents...)
@@ -362,7 +366,7 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 					// Only carry over the non-informational function calls that were
 					// actually processed this iteration, keeping them in their original
 					// position relative to the surrounding text/reasoning.
-					if slices.Contains(processedFunctionCalls, v) {
+					if _, ok := processedFCCSet[v]; ok {
 						assistantContents = append(assistantContents, c)
 					}
 				}
@@ -984,6 +988,9 @@ func (f *autocall) extractAndRemoveToolApprovalRequestsAndResponses(ctx context.
 	// - Validate that we have an approval response for each approval request.
 	var anyRemoved bool
 	for i, msg := range msgs {
+		if msg == nil {
+			continue
+		}
 		var keptContents []message.Content
 		for _, c := range msg.Contents {
 			switch c := c.(type) {
