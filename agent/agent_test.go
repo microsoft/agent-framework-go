@@ -170,6 +170,46 @@ func TestAgent_RunText(t *testing.T) {
 	}
 }
 
+func TestAgent_Run_AppliesAuthorAttributionAfterProviderMiddleware(t *testing.T) {
+	var observed bool
+	middleware := agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			for update, err := range next(ctx, messages, options...) {
+				if update != nil {
+					observed = true
+					if update.AgentID != "" || update.AuthorName != "" {
+						t.Errorf("expected attribution after provider middleware, got agent ID %q and author name %q", update.AgentID, update.AuthorName)
+					}
+				}
+				if !yield(update, err) {
+					return
+				}
+			}
+		}
+	})
+	run := func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{Role: message.RoleAssistant}, nil)
+		}
+	}
+	a := agent.New(agent.ProviderConfig{Run: run, Middlewares: []agent.Middleware{middleware}}, agent.Config{
+		ID:   "test-agent",
+		Name: "Test Agent",
+	})
+
+	for update, err := range a.RunText(t.Context(), "hello") {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if update.AgentID != a.ID() || update.AuthorName != a.Name() {
+			t.Fatalf("expected agent attribution, got agent ID %q and author name %q", update.AgentID, update.AuthorName)
+		}
+	}
+	if !observed {
+		t.Fatal("expected provider middleware to observe a response update")
+	}
+}
+
 func TestAgent_RunMessage(t *testing.T) {
 	var capturedMessages []*message.Message
 	var capturedOptions []agent.Option

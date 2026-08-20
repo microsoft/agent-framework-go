@@ -113,13 +113,13 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 			cfg.RunOptions = append(cfg.RunOptions, WithTool(tool))
 		}
 	}
-	cfg.Middlewares = slices.Clone(cfg.Middlewares)
+	agentMiddlewares := slices.Clone(cfg.Middlewares)
 	if cfg.Logger != nil && !cfg.DisableRunLogs {
-		cfg.Middlewares = append([]Middleware{newRunLoggerMiddleware(cfg.Logger, cfg.LogSensitiveData)}, cfg.Middlewares...)
+		agentMiddlewares = append([]Middleware{newRunLoggerMiddleware(cfg.Logger, cfg.LogSensitiveData)}, agentMiddlewares...)
 	}
-	prov.Middlewares = slices.Clone(prov.Middlewares)
+	providerMiddlewares := slices.Clone(prov.Middlewares)
 	if prov.Format != nil || prov.Unmarshal != nil {
-		prov.Middlewares = append(prov.Middlewares, &structuredOutputMiddleware{
+		providerMiddlewares = append(providerMiddlewares, &structuredOutputMiddleware{
 			format:    prov.Format,
 			unmarshal: prov.Unmarshal,
 		})
@@ -136,14 +136,12 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 		historyProvider = NewInMemoryHistoryProvider(InMemoryHistoryProviderConfig{})
 		hasDefaultHistoryProvider = true
 	}
-	prov.Middlewares = append(prov.Middlewares, authorMiddleware(cfg.ID, cfg.Name))
-	return &Agent{
+	a := &Agent{
 		id:                           cfg.ID,
 		name:                         cfg.Name,
 		description:                  cfg.Description,
 		provider:                     prov,
 		runOptions:                   cfg.RunOptions,
-		middlewares:                  cfg.Middlewares,
 		logger:                       cfg.Logger,
 		historyProvider:              historyProvider,
 		hasConfiguredHistory:         cfg.HistoryProvider != nil,
@@ -154,18 +152,26 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 		providerDoesNotManageHistory: prov.ServiceDoesNotManageHistory,
 		contextProviders:             contextProviders,
 	}
+	if len(providerMiddlewares) == 0 {
+		a.providerPipeline = prov.Run
+	} else {
+		a.providerPipeline = compileRunChain(prov.Run, providerMiddlewares)
+	}
+	a.runPipeline = compileRunChain(a.invoke, agentMiddlewares)
+	return a
 }
 
 // Agent coordinates message preparation, middleware, sessions, and provider execution.
 type Agent struct {
-	id          string
-	name        string
-	description string
-	provider    ProviderConfig
+	id               string
+	name             string
+	description      string
+	provider         ProviderConfig
+	providerPipeline RunFunc
+	runPipeline      RunFunc
 
-	middlewares []Middleware
-	runOptions  []Option
-	logger      *slog.Logger
+	runOptions []Option
+	logger     *slog.Logger
 
 	historyProvider HistoryProvider
 	// historyCleared records that a run promoted its session to service-managed
@@ -249,11 +255,7 @@ func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ..
 			yield(nil, err)
 		}
 	}
-	return ResponseStream(a.run(ctx, preparedMessages, options...))
-}
-
-func (a *Agent) run(ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error] {
-	return runChain(ctx, a.invoke, a.middlewares, messages, options...)
+	return ResponseStream(a.runPipeline(ctx, preparedMessages, options...))
 }
 
 func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error] {
@@ -271,7 +273,10 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 		}
 		noSession, _ := GetOption(options, noSessionProvided)
 		stream, _ := GetOption(options, Stream)
-		inputMessages := slices.Clone(messages)
+		var inputMessages []*message.Message
+		if stream {
+			inputMessages = slices.Clone(messages)
+		}
 		lifecycleOptions := withoutContinuationToken(options)
 
 		historyProvider := a.historyProviderForRun(session, continuationToken, noSession)
@@ -297,65 +302,87 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 			}
 		}
 
-		requestMessages := slices.Clone(messages)
-		var contextResponse Response
-		var historyResponse Response
-		continuationUpdates := cloneResponseUpdates(continuationState.ResponseUpdates)
-		var runErr error
-		var stopped bool
+		var requestMessages []*message.Message
+		if historyProvider != nil || runContextProviders {
+			requestMessages = slices.Clone(messages)
+		}
+		trackContinuationUpdates := stream || continuationToken != ""
 
-		for update, err := range runChain(ctx, a.provider.Run, a.provider.Middlewares, messages, options...) {
+		// invocationState groups values captured by the provider sequence's yield
+		// callback so range-over-function lowering heap-boxes one object instead of
+		// allocating each captured local separately.
+		var state struct {
+			contextResponse     *Response
+			historyResponse     *Response
+			continuationUpdates []*ResponseUpdate
+			runErr              error
+			stopped             bool
+		}
+		if historyProvider != nil {
+			state.historyResponse = new(Response)
+		}
+		if runContextProviders {
+			state.contextResponse = new(Response)
+		}
+		if trackContinuationUpdates {
+			state.continuationUpdates = cloneResponseUpdates(continuationState.ResponseUpdates)
+		}
+
+		for update, err := range a.providerPipeline(ctx, messages, options...) {
 			if update != nil {
-				continuationUpdates = append(continuationUpdates, cloneResponseUpdate(update))
-				historyResponse.Update(update)
+				a.setAuthor(update)
+				if trackContinuationUpdates {
+					state.continuationUpdates = append(state.continuationUpdates, cloneResponseUpdate(update))
+				}
+				if historyProvider != nil {
+					state.historyResponse.Update(update)
+				}
 				if runContextProviders {
-					contextResponse.Update(update)
+					state.contextResponse.Update(update)
 				}
 				if update.ContinuationToken != "" {
 					var tokenInputMessages []*message.Message
 					var tokenResponseUpdates []*ResponseUpdate
 					if stream {
 						tokenInputMessages = inputMessagesForContinuation(inputMessages, continuationState)
-						tokenResponseUpdates = continuationUpdates
+						tokenResponseUpdates = state.continuationUpdates
 					}
 					wrappedToken, err := wrapContinuationToken(update.ContinuationToken, tokenInputMessages, tokenResponseUpdates)
 					if err != nil {
-						if !stopped {
-							yield(nil, err)
-						}
+						yield(nil, err)
 						return
 					}
 					update.ContinuationToken = wrappedToken
 				}
 			}
 			if err != nil {
-				runErr = err
-				stopped = !yield(update, err)
-				break
+				state.runErr = err
 			}
-			if !yield(update, nil) {
-				stopped = true
+			state.stopped = !yield(update, err)
+			if state.stopped || err != nil {
 				break
 			}
 		}
 
 		historyStoreProvider := historyProvider
-		storeRequestMessages := requestMessages
-		storeResponseMessages := historyResponse.Messages
+		var storeResponseMessages []*message.Message
+		if state.historyResponse != nil {
+			storeResponseMessages = state.historyResponse.Messages
+		}
 		if continuationToken != "" {
 			historyStoreProvider = a.historyProviderForContinuationStore(session, noSession)
-			storeRequestMessages = inputMessagesForContinuation(nil, continuationState)
-			continuationResponse := responseFromUpdates(continuationUpdates)
+			requestMessages = inputMessagesForContinuation(nil, continuationState)
+			continuationResponse := responseFromUpdates(state.continuationUpdates)
 			storeResponseMessages = continuationResponse.Messages
 		}
 
 		if historyStoreProvider != nil {
 			storeHistory := a.shouldStoreHistoryProvider(historyStoreProvider, session)
-			if runErr == nil {
+			if state.runErr == nil {
 				var err error
 				storeHistory, err = a.handleHistoryProviderConflict(ctx, historyStoreProvider, session)
 				if err != nil {
-					if !stopped {
+					if !state.stopped {
 						yield(nil, err)
 					}
 					return
@@ -364,11 +391,11 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 			}
 			if storeHistory {
 				if continuationToken == "" {
-					historyResponse.Coalesce()
-					storeResponseMessages = historyResponse.Messages
+					state.historyResponse.Coalesce()
+					storeResponseMessages = state.historyResponse.Messages
 				}
-				if err := historyStoreProvider.Invoked(ctx, InvokedContext{RequestMessages: slices.Clone(storeRequestMessages), ResponseMessages: slices.Clone(storeResponseMessages), Options: withoutContinuationToken(options), Err: runErr}); err != nil {
-					if !stopped {
+				if err := historyStoreProvider.Invoked(ctx, InvokedContext{RequestMessages: slices.Clone(requestMessages), ResponseMessages: slices.Clone(storeResponseMessages), Options: withoutContinuationToken(options), Err: state.runErr}); err != nil {
+					if !state.stopped {
 						yield(nil, err)
 					}
 					return
@@ -379,21 +406,33 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 		if runContextProviders || continuationToken != "" && len(a.contextProviders) > 0 {
 			var contextStoreResponseMessages []*message.Message
 			if continuationToken != "" {
-				continuationResponse := responseFromUpdates(continuationUpdates)
+				continuationResponse := responseFromUpdates(state.continuationUpdates)
 				contextStoreResponseMessages = continuationResponse.Messages
 			} else {
-				contextResponse.Coalesce()
-				contextStoreResponseMessages = contextResponse.Messages
+				state.contextResponse.Coalesce()
+				contextStoreResponseMessages = state.contextResponse.Messages
 			}
 			for _, provider := range a.contextProviders {
-				if err := provider.Invoked(ctx, InvokedContext{RequestMessages: slices.Clone(storeRequestMessages), ResponseMessages: slices.Clone(contextStoreResponseMessages), Options: withoutContinuationToken(options), Err: runErr}); err != nil {
-					if !stopped {
+				if err := provider.Invoked(ctx, InvokedContext{RequestMessages: slices.Clone(requestMessages), ResponseMessages: slices.Clone(contextStoreResponseMessages), Options: withoutContinuationToken(options), Err: state.runErr}); err != nil {
+					if !state.stopped {
 						yield(nil, err)
 					}
 					return
 				}
 			}
 		}
+	}
+}
+
+func (a *Agent) setAuthor(update *ResponseUpdate) {
+	if update == nil {
+		return
+	}
+	if update.AgentID == "" {
+		update.AgentID = a.id
+	}
+	if update.AuthorName == "" {
+		update.AuthorName = a.name
 	}
 }
 
@@ -511,26 +550,6 @@ func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, opt
 	ctx = context.WithValue(ctx, agentKey{}, a)
 
 	return ctx, messages, options, nil
-}
-
-func authorMiddleware(id, name string) Middleware {
-	return MiddlewareFunc(func(next RunFunc, ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error] {
-		return func(yield func(*ResponseUpdate, error) bool) {
-			for update, err := range next(ctx, messages, options...) {
-				if update != nil {
-					if update.AgentID == "" {
-						update.AgentID = id
-					}
-					if update.AuthorName == "" {
-						update.AuthorName = name
-					}
-				}
-				if !yield(update, err) {
-					return
-				}
-			}
-		}
-	})
 }
 
 type agentKey struct{}
