@@ -38,10 +38,9 @@ func NewCompletionMarkerEvaluator(config CompletionMarkerConfig) *CompletionMark
 	if config.FeedbackMessageTemplate != "" {
 		template = config.FeedbackMessageTemplate
 	}
-	template = strings.ReplaceAll(template, completionMarkerPlaceholder, marker)
 	return &CompletionMarkerEvaluator{
 		completionMarker:        marker,
-		feedbackMessageTemplate: template,
+		feedbackMessageTemplate: prepareCompletionMarkerFeedbackTemplate(template, marker),
 	}
 }
 
@@ -57,6 +56,13 @@ func (e *CompletionMarkerEvaluator) Evaluate(_ context.Context, loop *Context) (
 	if strings.Contains(responseText, e.completionMarker) {
 		return Stop(), nil
 	}
-	feedback := strings.ReplaceAll(e.feedbackMessageTemplate, lastResponsePlaceholder, responseText)
-	return Continue(feedback), nil
+	return Continue(formatCompletionMarkerFeedback(e.feedbackMessageTemplate, responseText)), nil
+}
+
+func prepareCompletionMarkerFeedbackTemplate(template, marker string) string {
+	return strings.ReplaceAll(template, completionMarkerPlaceholder, marker)
+}
+
+func formatCompletionMarkerFeedback(template, responseText string) string {
+	return strings.ReplaceAll(template, lastResponsePlaceholder, responseText)
 }

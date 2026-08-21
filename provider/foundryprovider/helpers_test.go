@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -115,7 +116,7 @@ func (transport *recordingTransport) Do(req *http.Request) (*http.Response, erro
 func (transport *recordingTransport) Requests() []recordedRequest {
 	transport.mu.Lock()
 	defer transport.mu.Unlock()
-	return append([]recordedRequest(nil), transport.requests...)
+	return slices.Clone(transport.requests)
 }
 
 func jsonResponse(req *http.Request, status int, body string) *http.Response {

@@ -59,7 +59,8 @@ func NewResponsesAgent(oclient openai.Client, config AgentConfig) *agent.Agent {
 			Middlewares:  providerMiddlewares,
 			Format:       c.formatOf,
 			Unmarshal:    c.unmarshal,
-		}, config.Config)
+		}, config.Config,
+	)
 }
 
 type responsesClient struct {
@@ -69,7 +70,7 @@ type responsesClient struct {
 
 type responsesNewParamsOpt responses.ResponseNewParams
 
-func (o responsesNewParamsOpt) Value() any {
+func (o responsesNewParamsOpt) MAFValue() any {
 	return responses.ResponseNewParams(o)
 }
 
@@ -769,10 +770,11 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 						outputContent,
 					))
 				} else {
-					// Default case - convert to string
+					// Default case - convert to string (JSON-encode structured
+					// results rather than rendering them with Go's %v).
 					resp = append(resp, responses.ResponseInputItemParamOfFunctionCallOutput(
 						funcResult.CallID,
-						fmt.Sprintf("%v", ret),
+						toolResultText(ret),
 					))
 				}
 
@@ -1189,30 +1191,41 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 			}
 
 		case responses.ResponseCodeInterpreterToolCall:
-			// For code interpreter, create a text representation
-			var outputText strings.Builder
-			fmt.Fprintf(&outputText, "[Code Interpreter: %s]\n", item.ID)
+			// Emit structured content matching the non-streaming path so
+			// streaming consumers receive the same code-interpreter call and
+			// result contents rather than a free-form text blob.
+			var input message.CodeInterpreterToolCallContent
+			input.CallID = item.ID
 			if item.Code != "" {
-				outputText.WriteString(item.Code)
-				outputText.WriteString("\n")
-			}
-			if len(item.Outputs) > 0 {
-				outputText.WriteString("[Output]\n")
-				for _, output := range item.Outputs {
-					switch output := output.AsAny().(type) {
-					case responses.ResponseCodeInterpreterToolCallOutputLogs:
-						outputText.WriteString(output.Logs)
-						outputText.WriteString("\n")
-					case responses.ResponseCodeInterpreterToolCallOutputImage:
-						if output.URL != "" {
-							fmt.Fprintf(&outputText, "Image: %s\n", output.URL)
-						}
-					}
+				input.Inputs = []message.Content{
+					&message.DataContent{
+						Data:      base64.StdEncoding.EncodeToString([]byte(item.Code)),
+						MediaType: "text/x-python",
+					},
 				}
 			}
-			content := &message.TextContent{Text: outputText.String()}
-			content.RawRepresentation = item
-			u.Contents = []message.Content{content}
+
+			var output message.CodeInterpreterToolResultContent
+			output.CallID = item.ID
+			output.RawRepresentation = item
+			for _, res := range item.Outputs {
+				switch res := res.AsAny().(type) {
+				case responses.ResponseCodeInterpreterToolCallOutputLogs:
+					output.Outputs = append(output.Outputs, &message.TextContent{
+						Text:          res.Logs,
+						ContentHeader: message.ContentHeader{RawRepresentation: res},
+					})
+				case responses.ResponseCodeInterpreterToolCallOutputImage:
+					output.Outputs = append(output.Outputs, &message.URIContent{
+						URI:       res.URL,
+						MediaType: imageURIToMediaType(res.URL),
+						ContentHeader: message.ContentHeader{
+							RawRepresentation: res,
+						},
+					})
+				}
+			}
+			u.Contents = []message.Content{&input, &output}
 		case responses.ResponseFileSearchToolCall:
 			u.Contents = fileSearchToolCallContents(item)
 		case responses.ResponseOutputItemMcpApprovalRequest:
@@ -1325,12 +1338,13 @@ func mcpCallContents(item responses.ResponseOutputItemMcpCall) []message.Content
 		},
 	}
 
+	errorMessage := mcpToolCallErrorMessage(item.Error)
 	result := &message.MCPServerToolResultContent{
 		ContentHeader: message.ContentHeader{RawRepresentation: item},
 		CallID:        item.ID,
 		Name:          item.Name,
 		ServerName:    item.ServerLabel,
-		Error:         item.Error,
+		Error:         errorMessage,
 	}
 	if item.Output != "" {
 		result.Outputs = message.Contents{
@@ -1339,12 +1353,37 @@ func mcpCallContents(item responses.ResponseOutputItemMcpCall) []message.Content
 	}
 	contents = append(contents, result)
 
-	if item.Error != "" {
+	if errorMessage != "" {
 		contents = append(contents, &message.ErrorContent{
-			Message: item.Error,
+			Message: errorMessage,
 		})
 	}
 	return contents
+}
+
+func mcpToolCallErrorMessage(err responses.McpToolCallErrorUnion) string {
+	if err.Message != "" {
+		return err.Message
+	}
+	if err.Content != nil {
+		if content, ok := err.Content.(string); ok {
+			return content
+		}
+		if content, marshalErr := json.Marshal(err.Content); marshalErr == nil {
+			return string(content)
+		}
+		return fmt.Sprint(err.Content)
+	}
+
+	raw := err.RawJSON()
+	if raw == "" || raw == "null" || raw == "{}" {
+		return ""
+	}
+	var msg string
+	if json.Unmarshal([]byte(raw), &msg) == nil {
+		return msg
+	}
+	return raw
 }
 
 func imageGenerationContent(item responses.ResponseOutputItemImageGenerationCall) *message.DataContent {

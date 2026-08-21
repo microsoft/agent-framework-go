@@ -4,6 +4,7 @@ package inproc_test
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"slices"
 	"sync"
@@ -1298,4 +1299,82 @@ func TestStreamingRun_ConcurrentCheckpointAccess_NoDataRace(t *testing.T) {
 
 	close(stop)
 	pollWG.Wait()
+}
+
+// A restore may reject an active run, but accepting it must not race with the
+// executor that is currently reading workflow state. Run with -race.
+func TestStreamingRun_RestoreCheckpointWhileReadingState_NoDataRace(t *testing.T) {
+	ctx := context.Background()
+	const stateKeyCount = 2048
+	keys := make([]string, stateKeyCount)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("key-%d", i)
+	}
+	started := make(chan struct{})
+	var startedOnce sync.Once
+	stop := make(chan struct{})
+	binding := workflow.ExecutorBinding{
+		ID:               "state-reader",
+		ImplementationID: "state-reader",
+		NewExecutorFunc: func(string) (*workflow.Executor, error) {
+			return &workflow.Executor{
+				ID: "state-reader",
+				ConfigureProtocol: func(builder *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					builder.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(wctx *workflow.Context, value any) (any, error) {
+						switch value.(string) {
+						case "seed":
+							for _, key := range keys {
+								if err := wctx.QueueStateUpdate(key, "", key); err != nil {
+									return nil, err
+								}
+							}
+						case "read":
+							startedOnce.Do(func() { close(started) })
+							for {
+								select {
+								case <-stop:
+									return nil, nil
+								default:
+								}
+								for _, key := range keys {
+									if _, err := wctx.ReadState(key, ""); err != nil {
+										return nil, err
+									}
+								}
+							}
+						}
+						return nil, nil
+					})
+					return builder, nil
+				},
+			}, nil
+		},
+	}
+	wf, err := workflow.NewBuilder(binding).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	run, err := inproc.Default.WithCheckpointing(checkpoint.NewInMemoryManager()).RunStreaming(ctx, wf, "seed")
+	if err != nil {
+		t.Fatalf("RunStreaming: %v", err)
+	}
+	defer func() {
+		close(stop)
+		if err := run.Close(ctx); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	}()
+	readStreamToHalt(t, ctx, run)
+	checkpointInfo, ok := run.LastCheckpoint()
+	if !ok {
+		t.Fatal("expected checkpoint")
+	}
+
+	if err := run.SendMessage(ctx, "read"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	<-started
+	if err := run.RestoreCheckpoint(ctx, checkpointInfo); err != nil {
+		return
+	}
 }

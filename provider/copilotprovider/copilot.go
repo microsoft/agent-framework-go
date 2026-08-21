@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"iter"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -411,10 +412,7 @@ func logApprovalGatingSkipped(names map[string]struct{}) {
 	if len(names) == 0 {
 		return
 	}
-	toolNames := make([]string, 0, len(names))
-	for name := range names {
-		toolNames = append(toolNames, name)
-	}
+	toolNames := slices.Collect(maps.Keys(names))
 	slices.Sort(toolNames)
 	slog.Warn(
 		"A custom OnPreToolUse hook is configured, so approval-required tools will not be automatically gated.",

@@ -32,7 +32,7 @@ func invokeProvider(provider *todo.Provider, ctx context.Context, messages []*me
 func collectTools(opts []agent.Option) []tool.Tool {
 	var tools []tool.Tool
 	for _, opt := range opts {
-		if tt, ok := opt.Value().(tool.Tool); ok {
+		if tt, ok := opt.MAFValue().(tool.Tool); ok {
 			tools = append(tools, tt)
 		}
 	}
@@ -62,7 +62,7 @@ func callTool(t *testing.T, opts []agent.Option, name string, argsJSON string) s
 	t.Helper()
 	var tools []tool.Tool
 	for _, opt := range opts {
-		if tt, ok := opt.Value().(tool.Tool); ok {
+		if tt, ok := opt.MAFValue().(tool.Tool); ok {
 			tools = append(tools, tt)
 		}
 	}

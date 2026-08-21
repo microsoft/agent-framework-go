@@ -372,6 +372,16 @@ func (host *groupChatHostExecutor) dispatchNextAgent(ctx *workflow.Context, toke
 		return false, nil
 	}
 
+	// When the manager reselects the agent that just spoke, terminate by
+	// yielding output rather than re-invoking it on stale input: broadcast
+	// skips the current speaker, so a reselected same speaker would receive a
+	// TurnToken without any fresh input. This mirrors .NET GroupChatHost's
+	// TakeTurnAsync guard (string.Equals(executor.Id, _currentSpeakerExecutorId)
+	// -> CompleteAsync). The empty-string initial value never fires on turn one.
+	if host.currentSpeakerExecutorID != "" && nextBinding.ID == host.currentSpeakerExecutorID {
+		return host.complete(ctx)
+	}
+
 	host.iterationCount++
 	host.currentSpeakerExecutorID = nextBinding.ID
 	return true, ctx.SendMessage(nextBinding.ID, token)

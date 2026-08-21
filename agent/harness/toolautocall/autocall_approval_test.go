@@ -198,6 +198,127 @@ func TestFunctionInvoking_IgnoresInformationalOnlyApprovalContent(t *testing.T) 
 	invokeAndAssertApproval(t, nil, input, downstreamAgentOutput, expectedOutput, expectedDownstreamAgentInput, nil)
 }
 
+func TestFunctionInvoking_PreservesUnpairedInformationalApprovalRequest(t *testing.T) {
+	input := []*message.Message{
+		message.New(&message.TextContent{Text: "hello"}),
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			&message.ToolApprovalRequestContent{RequestID: "ficc_callId1", ToolCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1", InformationalOnly: true}},
+		}},
+	}
+	downstreamAgentOutput := []*agent.ResponseUpdate{
+		{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "world"}}},
+	}
+	expectedOutput := []*agent.ResponseUpdate{
+		{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "world"}}},
+	}
+
+	invokeAndAssertApproval(t, nil, input, downstreamAgentOutput, expectedOutput, input, nil)
+}
+
+func TestFunctionInvoking_UsesResponseInformationalOnlyForApprovalPairs(t *testing.T) {
+	tests := []struct {
+		name                  string
+		requestInformational  bool
+		responseInformational bool
+	}{
+		{name: "informational_response", responseInformational: true},
+		{name: "informational_request", requestInformational: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			requestCall := &message.FunctionCallContent{CallID: "callId1", Name: "Func1", InformationalOnly: tt.requestInformational}
+			responseCall := &message.FunctionCallContent{CallID: "callId1", Name: "Func1", InformationalOnly: tt.responseInformational}
+			input := []*message.Message{
+				message.New(&message.TextContent{Text: "hello"}),
+				{Role: message.RoleAssistant, ID: "resp1", Contents: []message.Content{
+					&message.ToolApprovalRequestContent{RequestID: "ficc_callId1", ToolCall: requestCall},
+				}},
+				message.New(&message.ToolApprovalResponseContent{RequestID: "ficc_callId1", Approved: true, ToolCall: responseCall}),
+			}
+			if tt.responseInformational {
+				input = append(input,
+					&message.Message{Role: message.RoleAssistant, Contents: []message.Content{
+						&message.FunctionCallContent{CallID: "callId1", Name: "Func1", InformationalOnly: true},
+					}},
+					&message.Message{Role: message.RoleTool, Contents: []message.Content{
+						&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
+					}},
+				)
+			}
+			input = append(input,
+				&message.Message{Role: message.RoleAssistant, ID: "resp2", Contents: []message.Content{
+					&message.ToolApprovalRequestContent{RequestID: "ficc_callId2", ToolCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func1"}},
+				}},
+				message.New(&message.ToolApprovalResponseContent{RequestID: "ficc_callId2", Approved: true, ToolCall: &message.FunctionCallContent{CallID: "callId2", Name: "Func1"}}),
+			)
+
+			var expectedDownstreamAgentInput []*message.Message
+			var expectedOutput []*agent.ResponseUpdate
+			if tt.responseInformational {
+				expectedDownstreamAgentInput = []*message.Message{
+					message.New(&message.TextContent{Text: "hello"}),
+					{Role: message.RoleAssistant, ID: "resp1", Contents: []message.Content{
+						&message.ToolApprovalRequestContent{RequestID: "ficc_callId1", ToolCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}},
+					}},
+					message.New(&message.ToolApprovalResponseContent{RequestID: "ficc_callId1", Approved: true, ToolCall: &message.FunctionCallContent{CallID: "callId1", Name: "Func1", InformationalOnly: true}}),
+					{Role: message.RoleAssistant, Contents: []message.Content{
+						&message.FunctionCallContent{CallID: "callId1", Name: "Func1", InformationalOnly: true},
+					}},
+					{Role: message.RoleTool, Contents: []message.Content{
+						&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
+					}},
+					{Role: message.RoleTool, Contents: []message.Content{
+						&message.FunctionResultContent{CallID: "callId2", Result: "Result 1"},
+					}},
+				}
+				expectedOutput = []*agent.ResponseUpdate{
+					{MessageID: "resp2", ResponseID: "resp2", Role: message.RoleAssistant, Contents: []message.Content{
+						&message.FunctionCallContent{CallID: "callId2", Name: "Func1"},
+					}},
+					{Role: message.RoleTool, Contents: []message.Content{
+						&message.FunctionResultContent{CallID: "callId2", Result: "Result 1"},
+					}},
+					{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "world"}}},
+				}
+			} else {
+				expectedDownstreamAgentInput = []*message.Message{
+					message.New(&message.TextContent{Text: "hello"}),
+					{Role: message.RoleTool, Contents: []message.Content{
+						&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
+						&message.FunctionResultContent{CallID: "callId2", Result: "Result 1"},
+					}},
+				}
+				expectedOutput = []*agent.ResponseUpdate{
+					{MessageID: "resp1", ResponseID: "resp1", Role: message.RoleAssistant, Contents: []message.Content{
+						&message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
+					}},
+					{MessageID: "resp2", ResponseID: "resp2", Role: message.RoleAssistant, Contents: []message.Content{
+						&message.FunctionCallContent{CallID: "callId2", Name: "Func1"},
+					}},
+					{Role: message.RoleTool, Contents: []message.Content{
+						&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
+						&message.FunctionResultContent{CallID: "callId2", Result: "Result 1"},
+					}},
+					{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "world"}}},
+				}
+			}
+			downstreamAgentOutput := []*agent.ResponseUpdate{
+				{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "world"}}},
+			}
+
+			invokeAndAssertApproval(t, []tool.Tool{tool.ApprovalRequiredFunc(createFunc1())}, input, downstreamAgentOutput, expectedOutput, expectedDownstreamAgentInput, nil)
+
+			if requestCall.InformationalOnly != tt.requestInformational {
+				t.Fatal("expected approval request FunctionCallContent to remain unchanged")
+			}
+			if responseCall.InformationalOnly != tt.responseInformational {
+				t.Fatal("expected approval response FunctionCallContent to remain unchanged")
+			}
+		})
+	}
+}
+
 func TestFunctionInvoking_PreservesNilToolCallApprovalContentWhenProcessingOtherApproval(t *testing.T) {
 	tools := []tool.Tool{createFunc1()}
 
@@ -377,7 +498,7 @@ func TestFunctionInvoking_ApprovedApprovalResponsesAreExecuted(t *testing.T) {
 	invokeAndAssertApproval(t, tools, input, downstreamAgentOutput, expectedOutput, expectedDownstreamAgentInput, nil)
 }
 
-func TestFunctionInvoking_ApprovedApprovalResponsesMarkRequestInformationalOnly(t *testing.T) {
+func TestFunctionInvoking_ApprovedApprovalResponsesDoNotMutateInput(t *testing.T) {
 	tools := []tool.Tool{tool.ApprovalRequiredFunc(createFunc1())}
 	requestCall := &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}
 	responseCall := &message.FunctionCallContent{CallID: "callId1", Name: "Func1"}
@@ -401,11 +522,11 @@ func TestFunctionInvoking_ApprovedApprovalResponsesMarkRequestInformationalOnly(
 
 	invokeAndAssertApproval(t, tools, input, downstreamAgentOutput, expectedOutput, nil, nil)
 
-	if !requestCall.InformationalOnly {
-		t.Fatal("expected approval request FunctionCallContent to be informational-only")
+	if requestCall.InformationalOnly {
+		t.Fatal("expected approval request FunctionCallContent to remain unchanged")
 	}
-	if !responseCall.InformationalOnly {
-		t.Fatal("expected approval response FunctionCallContent to be informational-only")
+	if responseCall.InformationalOnly {
+		t.Fatal("expected approval response FunctionCallContent to remain unchanged")
 	}
 }
 

@@ -101,6 +101,8 @@ Review public, user-facing Go APIs and behaviors across the repository, while ig
 
 Treat exported identifiers, option structs, builder patterns, observable runtime behavior, and documented sample-facing behavior as in scope. Treat unexported helpers and `internal/` implementation details as out of scope unless they clearly change user-visible semantics.
 
+Do not infer that a change has no user-visible effect merely because it changes only unexported Go symbols. A default, side effect, execution path, or enablement change implemented in private code remains in scope when callers can observe it.
+
 The `examples/` directory is also in scope for parity review. Go examples should stay aligned in concept, coverage, and sample organization with the upstream `.NET` and Python `samples/` trees where equivalent scenarios exist.
 
 ## Upstream Reference Locations
@@ -122,6 +124,7 @@ Use the upstream `microsoft/agent-framework` repository as the source of truth f
 1. **Determine whether the PR is in scope**:
    - Ignore changes limited to `.github/` or root-level files
    - If the change is limited to tests, docs, comments, refactors, or private/internal code with no user-visible effect, do not raise parity issues
+   - Do not use the absence of exported-symbol changes as evidence that runtime behavior is not user-visible
    - If exported Go APIs or observable Go runtime behavior change, continue
 
 2. **Identify the changed Go contract**:
@@ -132,16 +135,21 @@ Use the upstream `microsoft/agent-framework` repository as the source of truth f
 3. **Find the upstream equivalents**:
    - Search the upstream Python and .NET codebases for analogous concepts, even if the file layout differs
    - Prefer public export files, builders, facades, and primary types over incidental internal implementations
+   - When the Go PR links an upstream PR or commit, inspect that complete upstream change, including public options, builders, defaults, and tests; do not limit review to the implementation files cited in the Go PR description
    - Use samples and tests as secondary evidence when behavior is not obvious from signatures alone
 
 4. **Compare for parity**:
    - Naming and intent
    - Required and optional inputs
    - Default values and opt-in flags
+   - Experimental or feature gating and the behavior when the gate is disabled
    - Return shapes and streaming behavior
+   - Execution timing, session or request state, and side effects
    - Error and validation behavior
    - Workflow graph, routing, checkpointing, or hosting semantics when relevant
    - Example and sample coverage when the PR changes `examples/` or changes public APIs that should be demonstrated consistently across SDKs
+
+   For a linked upstream port, explicitly map the upstream contract to the Go contract for public API, enablement, defaults, and observable behavior. If upstream adds a default-disabled or opt-in feature while Go enables the behavior unconditionally, report a parity issue. In that case, the absence of a new exported Go option may be the defect rather than evidence that the change is internal-only.
 
 5. **Report only actionable consistency issues**:
    - If Go appears ahead of or divergent from .NET/Python in a meaningful way, explain the gap and suggest which upstream surfaces should be reviewed
@@ -175,6 +183,10 @@ If a PR adds a new Go workflow builder option and the same concept already exist
 
 If a PR changes a Go workflow or agent default in a way that makes message routing, session state, tool execution, or output shaping behave differently from the upstream .NET and Python implementations, raise a parity concern.
 
+### Bad: Missing upstream feature gate
+
+For a port of `microsoft/agent-framework#7388`, approving unconditional Go tool-execution behavior because the diff changes only unexported helpers is incorrect. The upstream feature has a default-disabled option, so review must require equivalent Go enablement and default behavior or an explicit, justified divergence.
+
 ### Good: Internal Go-only change
 
 If a PR improves Go performance, refactors unexported helpers, or changes internal storage without affecting exported APIs or observable behavior, do not raise a cross-repo consistency issue.
@@ -184,4 +196,4 @@ If a PR improves Go performance, refactors unexported helpers, or changes intern
 - Target every comment, review comment, and label operation at PR `${{ github.event.pull_request.number || inputs.pr_number }}` explicitly. The input is used when a fork PR is routed through `workflow_dispatch`.
 - **If public Go APIs changed**: Add the `public-api-change` label to flag the PR for public API review, regardless of whether parity issues are found. If no exported API surface changed, ensure the label is not present (remove it if a stale run added it).
 - **If consistency issues are found**: Add specific inline review comments on the changed Go lines and one summary comment that names the upstream Python and/or .NET surfaces that appear out of sync. Remove the `parity-approved` label if it is present so a previous green review cannot remain stale.
-- **If no issues are found**: Add a brief summary comment confirming that the PR either preserves cross-repo parity or only changes Go-internal implementation details, then add the `parity-approved` label to mark the parity review green.
+- **If no issues are found**: Add a brief summary comment confirming that the PR either preserves cross-repo parity or only changes Go-internal implementation details. For a linked upstream port, state the upstream and Go enablement/default mapping used to reach that conclusion. Add the `parity-approved` label only after this comparison is complete.

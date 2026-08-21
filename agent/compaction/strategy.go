@@ -36,10 +36,6 @@ func prepareCompaction(index *MessageIndex, trigger, target Trigger) (Trigger, b
 	return target, true
 }
 
-func ensureNonNegative(value int) int {
-	return max(value, 0)
-}
-
 // Compact applies a strategy to messages and returns the included compacted messages.
 //
 // It is useful for ad-hoc compaction outside of a context provider. The input messages are first

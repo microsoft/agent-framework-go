@@ -344,6 +344,48 @@ func TestRun_ResumeAcceptsMessages(t *testing.T) {
 	}
 }
 
+// TestRun_NewEventsEarlyBreakPreservesUnreadEvents verifies that stopping the
+// NewEvents iterator early does not discard the events that were never yielded.
+// The read cursor must advance only past events actually delivered to the
+// consumer, so a subsequent NewEvents call still surfaces the rest of the batch.
+func TestRun_NewEventsEarlyBreakPreservesUnreadEvents(t *testing.T) {
+	ex := minimalEchoBinding("ex")
+	wf, err := workflow.NewBuilder(ex).WithOutputFrom(ex).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	ctx := context.Background()
+	run, err := inproc.Default.Run(ctx, wf, "hi")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	total := run.NewEventCount()
+	if total < 2 {
+		t.Fatalf("need at least 2 new events to exercise an early break, got %d", total)
+	}
+
+	// Consume exactly one event, then stop iterating.
+	consumed := 0
+	for range run.NewEvents() {
+		consumed++
+		break
+	}
+	if consumed != 1 {
+		t.Fatalf("consumed = %d, want 1", consumed)
+	}
+
+	// The events after the one consumed must still be reported as new and be
+	// re-iterable; they must not be silently dropped by the early break.
+	if got, want := run.NewEventCount(), total-1; got != want {
+		t.Errorf("NewEventCount after early break = %d, want %d", got, want)
+	}
+	if got, want := len(slices.Collect(run.NewEvents())), total-1; got != want {
+		t.Errorf("re-iterated new events after early break = %d, want %d", got, want)
+	}
+}
+
 func TestRunAndStreamingRun_ProduceEquivalentOutputs(t *testing.T) {
 	ex := minimalEchoBinding("ex")
 	wf, err := workflow.NewBuilder(ex).WithOutputFrom(ex).Build()
@@ -405,6 +447,44 @@ func TestStreamingRun_AcceptsSequentialMessages(t *testing.T) {
 	}
 }
 
+// Concurrent callers may enqueue input on the same StreamingRun. Run with -race.
+func TestStreamingRun_ConcurrentSendMessage_NoDataRace(t *testing.T) {
+	ex := minimalEchoBinding("ex")
+	wf, err := workflow.NewBuilder(ex).WithOutputFrom(ex).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	ctx := context.Background()
+	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
+	if err != nil {
+		t.Fatalf("RunStreaming: %v", err)
+	}
+	defer func() { _ = stream.Close(ctx) }()
+
+	const senders = 64
+	start := make(chan struct{})
+	errs := make(chan error, senders)
+	var wg sync.WaitGroup
+	wg.Add(senders)
+	for i := 0; i < senders; i++ {
+		go func() {
+			defer wg.Done()
+			<-start
+			errs <- stream.SendMessage(ctx, "message")
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Errorf("SendMessage: %v", err)
+		}
+	}
+}
+
 func TestStreamingRun_SendMessageReturnsErrInvalidInputType(t *testing.T) {
 	ex := minimalEchoBinding("ex")
 	wf, err := workflow.NewBuilder(ex).WithOutputFrom(ex).Build()
@@ -422,6 +502,38 @@ func TestStreamingRun_SendMessageReturnsErrInvalidInputType(t *testing.T) {
 	err = stream.SendMessage(ctx, 42)
 	if !errors.Is(err, workflow.ErrInvalidInputType) {
 		t.Fatalf("SendMessage error = %v, want ErrInvalidInputType", err)
+	}
+}
+
+// Cancellation must not acknowledge work after the event loop has stopped.
+// This test intentionally documents the current gap and remains red until
+// canceled runs reject new work.
+func TestStreamingRun_SendMessageAfterCancelReturnsError(t *testing.T) {
+	ex := minimalEchoBinding("ex")
+	wf, err := workflow.NewBuilder(ex).WithOutputFrom(ex).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	ctx := context.Background()
+	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
+	if err != nil {
+		t.Fatalf("RunStreaming: %v", err)
+	}
+	defer func() { _ = stream.Close(ctx) }()
+
+	if err := stream.CancelRun(); err != nil {
+		t.Fatalf("CancelRun: %v", err)
+	}
+	status, err := stream.GetStatus(ctx)
+	if err != nil {
+		t.Fatalf("GetStatus: %v", err)
+	}
+	if status != inproc.RunStatusEnded {
+		t.Fatalf("status after CancelRun = %v, want Ended", status)
+	}
+	if err := stream.SendMessage(ctx, "message"); err == nil {
+		t.Fatal("SendMessage after CancelRun succeeded even though the run can no longer execute it")
 	}
 }
 

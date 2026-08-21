@@ -313,7 +313,6 @@ func (s *persistentSession) readExitCode(ctx context.Context, afterIdx int) (int
 			tail = snapshotRange(s.stdoutBuf, afterIdx, lenTail)
 		}
 		signal := s.stdoutSignal
-		s.stdoutSignal = newSignal()
 		s.bufferGate.Unlock()
 
 		if nl := bytes.IndexByte(tail, '\n'); nl >= 0 {

@@ -779,6 +779,9 @@ func TestResponse_ToUpdates_ProducesUpdates(t *testing.T) {
 	if update0.String() != "Text" {
 		t.Errorf("expected Text, got %q", update0.String())
 	}
+	if got := update0.Usage().TotalTokenCount; got != 100 {
+		t.Errorf("expected message update usage 100, got %d", got)
+	}
 
 	update1 := updates[1]
 	if update1.AdditionalProperties["key1"] != "value1" {
@@ -790,15 +793,56 @@ func TestResponse_ToUpdates_ProducesUpdates(t *testing.T) {
 	if update1.AdditionalProperties["key2"] != 42 {
 		t.Errorf("expected key2 42, got %v", update1.AdditionalProperties["key2"])
 	}
-	if len(update1.Contents) != 1 {
-		t.Fatalf("expected 1 extra content, got %d", len(update1.Contents))
+	if len(update1.Contents) != 0 {
+		t.Fatalf("expected metadata-only update, got %d contents", len(update1.Contents))
 	}
-	usageContent, ok := update1.Contents[0].(*message.UsageContent)
-	if !ok {
-		t.Fatalf("expected UsageContent, got %T", update1.Contents[0])
+}
+
+func TestResponse_ToUpdates_PreservesPerMessageUsage(t *testing.T) {
+	resp := &agent.Response{
+		Messages: []*message.Message{
+			{
+				ID:   "message-1",
+				Role: message.RoleAssistant,
+				Contents: message.Contents{
+					&message.TextContent{Text: "First"},
+					&message.UsageContent{Details: message.UsageDetails{TotalTokenCount: 100}},
+				},
+			},
+			{
+				ID:   "message-2",
+				Role: message.RoleAssistant,
+				Contents: message.Contents{
+					&message.TextContent{Text: "Second"},
+					&message.UsageContent{Details: message.UsageDetails{TotalTokenCount: 200}},
+				},
+			},
+		},
 	}
-	if usageContent.Details.TotalTokenCount != 100 {
-		t.Errorf("expected total token count 100, got %d", usageContent.Details.TotalTokenCount)
+
+	updates := resp.ToUpdates()
+	if len(updates) != 2 {
+		t.Fatalf("expected 2 updates, got %d", len(updates))
+	}
+	if got := updates[0].Usage().TotalTokenCount; got != 100 {
+		t.Errorf("expected first update usage 100, got %d", got)
+	}
+	if got := updates[1].Usage().TotalTokenCount; got != 200 {
+		t.Errorf("expected second update usage 200, got %d", got)
+	}
+
+	collected, err := agent.ResponseStream(func(yield func(*agent.ResponseUpdate, error) bool) {
+		for _, u := range updates {
+			if !yield(u, nil) {
+				return
+			}
+		}
+	}).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error collecting updates: %v", err)
+	}
+	if got := collected.Usage().TotalTokenCount; got != 300 {
+		t.Errorf("expected collected usage 300, got %d", got)
 	}
 }
 
@@ -835,12 +879,12 @@ func TestResponse_ToUpdates_WithUsageOnlyProducesSingleUpdate(t *testing.T) {
 
 	updates := resp.ToUpdates()
 
-	if len(updates) != 2 {
-		t.Fatalf("expected message update and usage update, got %d", len(updates))
+	if len(updates) != 1 {
+		t.Fatalf("expected one message update, got %d", len(updates))
 	}
-	usageContent, ok := updates[1].Contents[0].(*message.UsageContent)
+	usageContent, ok := updates[0].Contents[0].(*message.UsageContent)
 	if !ok {
-		t.Fatalf("expected UsageContent, got %T", updates[1].Contents[0])
+		t.Fatalf("expected UsageContent, got %T", updates[0].Contents[0])
 	}
 	if usageContent.Details.TotalTokenCount != 100 {
 		t.Errorf("expected total token count 100, got %d", usageContent.Details.TotalTokenCount)

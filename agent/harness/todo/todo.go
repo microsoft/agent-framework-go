@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"weak"
@@ -136,9 +137,7 @@ func (p *Provider) GetAllItems(opts ...agent.Option) []Item {
 	mu.Lock()
 	defer mu.Unlock()
 	st := p.loadState(opts)
-	result := make([]Item, len(st.Items))
-	copy(result, st.Items)
-	return result
+	return slices.Clone(st.Items)
 }
 
 // GetRemainingItems returns only the incomplete todo items from the session state.

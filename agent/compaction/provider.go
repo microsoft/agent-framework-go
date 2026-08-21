@@ -76,13 +76,12 @@ func (p *contextProvider) Invoking(ctx context.Context, invoking agent.InvokingC
 		}
 		return messages, options, nil
 	}
-	inputMessages := append([]*message.Message(nil), messages...)
 	if session == nil {
 		compactedMessages, err := Compact(ctx, p.strategy, messages, p.tokenCounter)
 		if err != nil {
 			return nil, nil, err
 		}
-		return p.markGeneratedMessages(compactedMessages, inputMessages), options, nil
+		return p.markGeneratedMessages(compactedMessages, messages), options, nil
 	}
 	if session.ServiceID() != "" {
 		if p.logger != nil {
@@ -118,7 +117,7 @@ func (p *contextProvider) Invoking(ctx context.Context, invoking agent.InvokingC
 
 	state.MessageGroups = index.Groups
 	session.Set(p.stateKey, state)
-	return p.markGeneratedMessages(index.IncludedMessages(), inputMessages), options, nil
+	return p.markGeneratedMessages(index.IncludedMessages(), messages), options, nil
 }
 
 func (p *contextProvider) Invoked(context.Context, agent.InvokedContext) error {

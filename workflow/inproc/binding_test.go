@@ -859,12 +859,7 @@ func TestNewExecutor_DescribesProtocol(t *testing.T) {
 }
 
 func containsType(types []reflect.Type, want reflect.Type) bool {
-	for _, typ := range types {
-		if typ == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(types, want)
 }
 
 func TestFunctionExecutor_ReturnValueAutoSendAndYieldOptions(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -481,6 +482,63 @@ func TestUsageContent(t *testing.T) {
 	}
 }
 
+// TestUsageContent_ReasoningTokens verifies that Gemini's thoughtsTokenCount is
+// surfaced as ReasoningTokenCount, mirroring the OpenAI providers, instead of
+// being dropped from usage accounting. thoughtsTokenCount is a separate bucket
+// from candidatesTokenCount within totalTokenCount, so omitting it leaves the
+// usage record internally inconsistent for thinking models.
+func TestUsageContent_ReasoningTokens(t *testing.T) {
+	resp := map[string]any{
+		"candidates": []any{
+			map[string]any{
+				"content": map[string]any{
+					"role":  "model",
+					"parts": []any{map[string]any{"text": "hi"}},
+				},
+				"finishReason": "STOP",
+			},
+		},
+		"usageMetadata": map[string]any{
+			"promptTokenCount":     10,
+			"candidatesTokenCount": 5,
+			"thoughtsTokenCount":   8,
+			"totalTokenCount":      23,
+		},
+	}
+	body, _ := json.Marshal(resp)
+
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "application/json", string(body)))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	out, err := a.RunText(t.Context(), "hello").Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var usage *message.UsageContent
+	for _, msg := range out.Messages {
+		for _, c := range msg.Contents {
+			if uc, ok := c.(*message.UsageContent); ok {
+				usage = uc
+			}
+		}
+	}
+	if usage == nil {
+		t.Fatal("expected UsageContent in response, got none")
+	}
+	if usage.Details.ReasoningTokenCount != 8 {
+		t.Errorf("ReasoningTokenCount = %d, want 8", usage.Details.ReasoningTokenCount)
+	}
+	if usage.Details.OutputTokenCount != 5 {
+		t.Errorf("OutputTokenCount = %d, want 5", usage.Details.OutputTokenCount)
+	}
+	if usage.Details.TotalTokenCount != 23 {
+		t.Errorf("TotalTokenCount = %d, want 23", usage.Details.TotalTokenCount)
+	}
+}
+
 // TestMultiTurnConversation verifies that multi-turn messages are sent to the
 // API in the correct order with the correct roles.
 func TestMultiTurnConversation(t *testing.T) {
@@ -762,6 +820,55 @@ func TestFunctionResultMissingCallID(t *testing.T) {
 	_, err := a.Run(t.Context(), messages).Collect()
 	if err == nil {
 		t.Fatal("expected error for missing function name, got nil")
+	}
+}
+
+// TestResponseWithEmptyThoughtPartOmitted verifies that a thought part carrying
+// neither text nor a signature does not produce an empty TextReasoningContent.
+func TestResponseWithEmptyThoughtPartOmitted(t *testing.T) {
+	resp := map[string]any{
+		"candidates": []any{
+			map[string]any{
+				"content": map[string]any{
+					"role": "model",
+					"parts": []any{
+						map[string]any{"thought": true}, // empty thought: no text, no signature
+						map[string]any{"text": "The answer is 42."},
+					},
+				},
+				"finishReason": "STOP",
+			},
+		},
+		"usageMetadata": map[string]any{"promptTokenCount": 10, "candidatesTokenCount": 15, "totalTokenCount": 25},
+	}
+	respBody, _ := json.Marshal(resp)
+
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "application/json", string(respBody)))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	result, err := a.RunText(t.Context(), "hi").Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var foundText string
+	for _, msg := range result.Messages {
+		for _, c := range msg.Contents {
+			switch content := c.(type) {
+			case *message.TextReasoningContent:
+				t.Errorf("expected no reasoning content for an empty thought part, got Text=%q ProtectedData=%q", content.Text, content.ProtectedData)
+			case *message.TextContent:
+				foundText += content.Text
+			}
+		}
+	}
+	// The normal (non-thought) text part must still be emitted; asserting it
+	// guards against a regression that drops all parts rather than just the
+	// empty thought.
+	if foundText != "The answer is 42." {
+		t.Errorf("text content = %q, want %q", foundText, "The answer is 42.")
 	}
 }
 
@@ -1756,7 +1863,8 @@ func TestGenerateContentConfigOption(t *testing.T) {
 	temp := float32(0.5)
 	topP := float32(0.9)
 	topK := float32(20)
-	_, err := a.RunText(t.Context(), "Test",
+	_, err := a.RunText(
+		t.Context(), "Test",
 		geminiprovider.GenerateContentConfig(genai.GenerateContentConfig{
 			Temperature:     &temp,
 			TopP:            &topP,
@@ -1969,6 +2077,234 @@ func TestUsageContent_Streaming_CumulativeUsageNotSummed(t *testing.T) {
 	}
 	if usage.OutputTokenCount != 5 {
 		t.Errorf("OutputTokenCount = %d, want 5", usage.OutputTokenCount)
+	}
+}
+
+// TestFunctionCallWithoutID verifies that when Gemini returns a functionCall part
+// without an ID (the standard generateContent behavior, since genai marks the ID
+// omitempty), the provider synthesizes a fallback CallID. Without an ID the
+// framework tool loop cannot correlate the call with its result, and the follow-up
+// turn errors on the empty-CallID function response. This test auto-invokes a tool
+// and continues to a second turn to prove the round-trip succeeds.
+func TestFunctionCallWithoutID(t *testing.T) {
+	funcCallResp := map[string]any{
+		"candidates": []any{
+			map[string]any{
+				"content": map[string]any{
+					"role": "model",
+					"parts": []any{
+						map[string]any{
+							// Note: no "id" field, mirroring real Gemini responses.
+							"functionCall": map[string]any{
+								"name": "get_weather",
+								"args": map[string]any{"City": "Seattle"},
+							},
+						},
+					},
+				},
+				"finishReason": "STOP",
+			},
+		},
+	}
+	funcCallBody, _ := json.Marshal(funcCallResp)
+
+	var calls atomic.Int32
+	bodyCh := make(chan []byte, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		bodyCh <- body
+		w.Header().Set("Content-Type", "application/json")
+		if calls.Add(1) == 1 {
+			// First turn: the model requests a tool call with no ID.
+			_, _ = w.Write(funcCallBody)
+			return
+		}
+		// Second turn: the model produces the final answer.
+		_, _ = io.WriteString(w, minimalTextResponse("It's sunny in Seattle."))
+	}))
+	defer server.Close()
+
+	client, err := genai.NewClient(t.Context(), &genai.ClientConfig{
+		Backend: genai.BackendGeminiAPI,
+		APIKey:  "test",
+		HTTPOptions: genai.HTTPOptions{
+			BaseURL: server.URL,
+		},
+	})
+	if err != nil {
+		t.Fatalf("genai.NewClient: %v", err)
+	}
+	// Auto function calling enabled (the default) so the tool loop runs a second turn.
+	a := geminiprovider.NewAgent(client, geminiprovider.AgentConfig{Model: testModel})
+
+	weatherTool := functool.MustNew(functool.Config{
+		Name:        "get_weather",
+		Description: "Get the weather for a city.",
+	}, func(_ context.Context, args struct{ City string }) (string, error) {
+		return "sunny", nil
+	})
+
+	resp, err := a.RunText(t.Context(), "what's the weather in Seattle?", agent.WithTool(weatherTool)).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("expected 2 model calls (tool round-trip), got %d", calls.Load())
+	}
+	if got := resp.String(); got != "It's sunny in Seattle." {
+		t.Errorf("response text = %q, want %q", got, "It's sunny in Seattle.")
+	}
+
+	// The synthesized FunctionCallContent must carry a non-empty CallID.
+	var gotFuncCall *message.FunctionCallContent
+	for _, msg := range resp.Messages {
+		for _, c := range msg.Contents {
+			if fc, ok := c.(*message.FunctionCallContent); ok {
+				gotFuncCall = fc
+			}
+		}
+	}
+	if gotFuncCall == nil {
+		t.Fatal("expected FunctionCallContent in response, got none")
+	}
+	if gotFuncCall.CallID == "" {
+		t.Fatal("expected synthesized non-empty CallID for function call without an ID")
+	}
+
+	// Drain the captured request bodies; the second turn must include a
+	// functionResponse whose id matches the synthesized call id.
+	<-bodyCh
+	var secondReq map[string]any
+	if err := json.Unmarshal(<-bodyCh, &secondReq); err != nil {
+		t.Fatalf("unmarshal second request body: %v", err)
+	}
+	contents, _ := secondReq["contents"].([]any)
+	var foundResult bool
+	for _, c := range contents {
+		cm, _ := c.(map[string]any)
+		parts, _ := cm["parts"].([]any)
+		for _, p := range parts {
+			pm, _ := p.(map[string]any)
+			fr, _ := pm["functionResponse"].(map[string]any)
+			if fr == nil {
+				continue
+			}
+			foundResult = true
+			if id, _ := fr["id"].(string); id != gotFuncCall.CallID {
+				t.Errorf("functionResponse.id = %q, want %q", id, gotFuncCall.CallID)
+			}
+			if name, _ := fr["name"].(string); name != "get_weather" {
+				t.Errorf("functionResponse.name = %q, want %q", name, "get_weather")
+			}
+		}
+	}
+	if !foundResult {
+		t.Error("expected a functionResponse part in the second-turn request")
+	}
+}
+
+// textResponseWithFinishReason returns a non-streaming Gemini generateContent
+// JSON response with a single text part and the given candidate finishReason.
+func textResponseWithFinishReason(text, finishReason string) string {
+	resp := map[string]any{
+		"candidates": []any{
+			map[string]any{
+				"content": map[string]any{
+					"role":  "model",
+					"parts": []any{map[string]any{"text": text}},
+				},
+				"finishReason": finishReason,
+			},
+		},
+		"usageMetadata": map[string]any{
+			"promptTokenCount":     10,
+			"candidatesTokenCount": 5,
+			"totalTokenCount":      15,
+		},
+	}
+	b, _ := json.Marshal(resp)
+	return string(b)
+}
+
+// TestFinishReason_NonStreaming verifies that the Gemini candidate finish
+// reason is mapped onto the framework's canonical Response.FinishReason,
+// matching the values produced by the OpenAI and Copilot providers.
+func TestFinishReason_NonStreaming(t *testing.T) {
+	tests := []struct {
+		name         string
+		geminiReason string
+		want         string
+	}{
+		{"stop", "STOP", "stop"},
+		{"max_tokens", "MAX_TOKENS", "length"},
+		{"safety", "SAFETY", "content_filter"},
+		{"malformed_function_call", "MALFORMED_FUNCTION_CALL", "tool_calls"},
+		{"unmapped", "OTHER", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "application/json", textResponseWithFinishReason("hi", tt.geminiReason)))
+			defer server.Close()
+
+			a := newTestClient(t, server)
+
+			resp, err := a.RunText(t.Context(), "hi").Collect()
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if resp.FinishReason != tt.want {
+				t.Errorf("FinishReason = %q, want %q", resp.FinishReason, tt.want)
+			}
+		})
+	}
+}
+
+// TestFinishReason_Streaming verifies that the mapped finish reason is carried
+// on the streaming terminal chunk (Gemini reports finishReason only on the last
+// candidate chunk) and aggregated onto the collected Response.
+func TestFinishReason_Streaming(t *testing.T) {
+	chunk := func(m map[string]any) string {
+		b, _ := json.Marshal(m)
+		return "data:" + string(b) + "\n\n"
+	}
+	stream := chunk(map[string]any{
+		"candidates": []any{map[string]any{
+			"content": map[string]any{"role": "model", "parts": []any{map[string]any{"text": "hi"}}},
+		}},
+	}) + chunk(map[string]any{
+		"candidates": []any{map[string]any{
+			"content":      map[string]any{"role": "model", "parts": []any{map[string]any{"text": " there"}}},
+			"finishReason": "MAX_TOKENS",
+		}},
+		"usageMetadata": map[string]any{"promptTokenCount": 10, "candidatesTokenCount": 5, "totalTokenCount": 15},
+	})
+
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "text/event-stream", stream))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	var reasons []string
+	var resp agent.Response
+	for update, err := range a.RunText(t.Context(), "hi", agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if update.FinishReason != "" {
+			reasons = append(reasons, update.FinishReason)
+		}
+		resp.Update(update)
+	}
+	if len(reasons) != 1 || reasons[0] != "length" {
+		t.Errorf("streaming per-chunk FinishReason = %v, want exactly [\"length\"] on the terminal chunk", reasons)
+	}
+	if resp.FinishReason != "length" {
+		t.Errorf("aggregated Response.FinishReason = %q, want %q", resp.FinishReason, "length")
 	}
 }
 

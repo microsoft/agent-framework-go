@@ -142,6 +142,76 @@ func TestFileSource_RootSkillFileWithNestedSkillFile_DoesNotAbortDiscovery(t *te
 	}
 }
 
+func TestFileSource_SymlinkedSkillFile_IsSkipped(t *testing.T) {
+	root := t.TempDir()
+	skillDir := filepath.Join(root, "linked-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outsideSkillFile := filepath.Join(root, "outside-SKILL.md")
+	if err := os.WriteFile(outsideSkillFile, []byte("---\nname: linked-skill\ndescription: Linked skill file\n---\nBody."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	createSymlink(t, filepath.Join(skillDir, "SKILL.md"), outsideSkillFile)
+
+	source := fsskills.NewSource(os.DirFS(root))
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 0 {
+		t.Fatalf("expected symlinked SKILL.md to be skipped, got %d skills", len(loaded))
+	}
+}
+
+func TestFileSource_SymlinkedSkillFile_DoesNotAbortNestedDiscovery(t *testing.T) {
+	root := t.TempDir()
+	linkedSkillDir := filepath.Join(root, "linked-skill")
+	if err := os.MkdirAll(linkedSkillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outsideSkillFile := filepath.Join(root, "outside-SKILL.md")
+	if err := os.WriteFile(outsideSkillFile, []byte("---\nname: linked-skill\ndescription: Linked skill file\n---\nBody."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	createSymlink(t, filepath.Join(linkedSkillDir, "SKILL.md"), outsideSkillFile)
+
+	nestedSkillDir := filepath.Join(linkedSkillDir, "nested-skill")
+	createSkillDir(t, filepath.Dir(nestedSkillDir), "nested-skill", "Nested", "Nested body.")
+
+	source := fsskills.NewSource(os.DirFS(root))
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
+	}
+	if loaded[0].Frontmatter.Name != "nested-skill" {
+		t.Fatalf("expected nested-skill, got %q", loaded[0].Frontmatter.Name)
+	}
+}
+
+func TestFileSource_ConfiguredRootSymlink_StillDiscoversSkills(t *testing.T) {
+	root := t.TempDir()
+	realRoot := filepath.Join(root, "real-root")
+	linkedRoot := filepath.Join(root, "linked-root")
+	createSkillDir(t, realRoot, "my-skill", "A skill", "Body.")
+	createSymlink(t, linkedRoot, realRoot)
+
+	source := fsskills.NewSource(os.DirFS(linkedRoot))
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
+	}
+	if loaded[0].Frontmatter.Name != "my-skill" {
+		t.Fatalf("expected my-skill, got %q", loaded[0].Frontmatter.Name)
+	}
+}
+
 func TestFileSource_NestedSkillFileUnderSkillRoot_NotDiscoveredAsIndependentSkill(t *testing.T) {
 	root := t.TempDir()
 	createSkillDir(t, root, "parent-skill", "Parent", "Parent body.")
@@ -548,6 +618,28 @@ func TestFileSource_NoDuplicateResourcesFromSamePath(t *testing.T) {
 	}
 }
 
+func TestFileSource_SymlinkedResource_IsSkipped(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "resource-link-skill", "Symlinked resource", "Body.")
+	outsideResource := filepath.Join(root, "outside.md")
+	if err := os.WriteFile(outsideResource, []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	createSymlink(t, filepath.Join(root, "resource-link-skill", "references", "secret.md"), outsideResource)
+
+	source := fsskills.NewSource(os.DirFS(root))
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
+	}
+	if len(loaded[0].Resources) != 0 {
+		t.Fatalf("expected symlinked resource to be skipped, got %d resources", len(loaded[0].Resources))
+	}
+}
+
 func createSkillDir(t *testing.T, root, name, description, body string) {
 	t.Helper()
 	skillDir := filepath.Join(root, name)
@@ -592,5 +684,15 @@ func createRelativeFile(t *testing.T, root, relativePath, content string) {
 	}
 	if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func createSymlink(t *testing.T, linkPath, targetPath string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(linkPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(targetPath, linkPath); err != nil {
+		t.Skipf("symlink creation unavailable: %v", err)
 	}
 }
