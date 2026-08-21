@@ -79,6 +79,7 @@ func (m *HashMap[K, V]) Delete(key K) (V, bool) {
 
 // Keys returns an iterator over the map keys in unspecified order.
 func (m *HashMap[K, V]) Keys() iter.Seq[K] {
+	_ = m.state
 	return func(yield func(K) bool) {
 		for key := range m.All() {
 			if !yield(key) {
@@ -90,6 +91,7 @@ func (m *HashMap[K, V]) Keys() iter.Seq[K] {
 
 // Values returns an iterator over the map values in unspecified order.
 func (m *HashMap[K, V]) Values() iter.Seq[V] {
+	_ = m.state
 	return func(yield func(V) bool) {
 		for _, value := range m.All() {
 			if !yield(value) {

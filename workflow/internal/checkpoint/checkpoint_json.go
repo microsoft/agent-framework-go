@@ -11,7 +11,7 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow"
 )
 
-// scopeKeyHasherImpl implements maphash.Hasher for workflow.ScopeKey.
+// scopeKeyHasherImpl implements internalmaphash.Hasher for workflow.ScopeKey.
 // This is duplicated here to avoid an import cycle with execution.
 type scopeKeyHasherImpl struct{}
 

@@ -66,6 +66,27 @@ func TestHashMapCollisions(t *testing.T) {
 	}
 }
 
+func TestNilHashMapIteratorsPanicImmediately(t *testing.T) {
+	var m *HashMap[string, int]
+	for _, test := range []struct {
+		name string
+		call func()
+	}{
+		{name: "All", call: func() { m.All() }},
+		{name: "Keys", call: func() { m.Keys() }},
+		{name: "Values", call: func() { m.Values() }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("call did not panic")
+				}
+			}()
+			test.call()
+		})
+	}
+}
+
 func TestHashMapConcurrentCollisions(t *testing.T) {
 	m := NewHashMap[string, int](collisionHasher{})
 	keys := []string{"zero", "one", "two", "three", "four", "five", "six", "seven"}
