@@ -379,7 +379,7 @@ func (host *groupChatHostExecutor) dispatchNextAgent(ctx *workflow.Context, toke
 	// TakeTurnAsync guard (string.Equals(executor.Id, _currentSpeakerExecutorId)
 	// -> CompleteAsync). The empty-string initial value never fires on turn one.
 	if host.currentSpeakerExecutorID != "" && nextBinding.ID == host.currentSpeakerExecutorID {
-		return host.complete(ctx)
+		return false, host.complete(ctx)
 	}
 
 	host.iterationCount++
