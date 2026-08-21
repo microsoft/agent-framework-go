@@ -74,6 +74,13 @@ type Config struct {
 	// schema tool that is not invocable always stops the loop. The default is false.
 	TerminateOnUnknownCalls bool
 
+	// EnableExecutableFunctionBypassing enables experimental handling of invocable
+	// function calls that share a provider response with declaration-only calls.
+	// Invocable calls are executed before the function-calling loop stops. When false,
+	// the complete mixed response is returned so the caller can handle it. The default
+	// is false.
+	EnableExecutableFunctionBypassing bool
+
 	// AllowConcurrentInvocations controls whether multiple function calls from the
 	// same provider response may execute in parallel. When false, function calls are
 	// processed serially. The default is false.
@@ -110,6 +117,7 @@ type autocall struct {
 	additionalTools                    []tool.Tool
 	includeDetailedErrors              bool
 	terminateOnUnknownCalls            bool
+	enableExecutableFunctionBypassing  bool
 	allowConcurrentInvocations         bool
 	maximumConsecutiveErrorsPerRequest int
 	maximumIterationsPerRequest        int
@@ -137,6 +145,7 @@ func New(cfg Config) agent.Middleware {
 		additionalTools:                    cfg.AdditionalTools,
 		includeDetailedErrors:              cfg.IncludeDetailedErrors,
 		terminateOnUnknownCalls:            cfg.TerminateOnUnknownCalls,
+		enableExecutableFunctionBypassing:  cfg.EnableExecutableFunctionBypassing,
 		allowConcurrentInvocations:         cfg.AllowConcurrentInvocations,
 		maximumConsecutiveErrorsPerRequest: cmp.Or(cfg.MaximumConsecutiveErrorsPerRequest, defaultMaximumConsecutiveErrorsPerRequest),
 		maximumIterationsPerRequest:        cmp.Or(cfg.MaximumIterationsPerRequest, defaultMaximumIterationsPerRequest),
@@ -546,8 +555,12 @@ func (f *autocall) buildFunctionCallExecutionPlan(ctx context.Context, funcCalls
 		}
 		if _, ok := declaration.(tool.FuncTool); !ok {
 			// The schema tool was found but it's not invocable. Regardless of TerminateOnUnknownCallRequests,
-			// callers need to receive the call request, but we can still execute any invocable siblings first.
+			// callers need to receive the call request. Unless executable function bypassing is enabled,
+			// return the complete batch without executing any invocable siblings.
 			f.logger.Debug(ctx, "function is not invocable; terminating loop", "funcName", fc.Name)
+			if !f.enableExecutableFunctionBypassing {
+				return functionCallExecutionPlan{terminate: true}
+			}
 			terminate = true
 			continue
 		}

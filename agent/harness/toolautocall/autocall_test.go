@@ -1321,7 +1321,43 @@ func TestFunctionInvoking_NonInvocableSchemaToolTerminates(t *testing.T) {
 	invokeAndAssert(t, tools, plan, nil, toolautocall.Config{})
 }
 
-func TestFunctionInvoking_MixedInvocableAndNonInvocableSchemaToolExecutesInvocableSibling(t *testing.T) {
+func TestFunctionInvoking_MixedInvocableAndNonInvocableSchemaToolsTerminateByDefault(t *testing.T) {
+	var toolInvoked atomic.Int32
+
+	localCall := &message.FunctionCallContent{CallID: "callId2", Name: "LocalFunc", Arguments: `{}`}
+	declaredCall := &message.FunctionCallContent{CallID: "callId1", Name: "DeclaredFunc", Arguments: `{}`}
+
+	tools := []tool.Tool{
+		schemaOnlyTool{Tool: agenttest.NewTool("DeclaredFunc", "declared function")},
+		functool.MustNew(functool.Config{Name: "LocalFunc"},
+			func(ctx context.Context, args struct{}) (string, error) {
+				toolInvoked.Add(1)
+				return "local result", nil
+			}),
+	}
+
+	plan := []*message.Message{
+		message.NewText("hello"),
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			declaredCall,
+			localCall,
+		}},
+	}
+
+	invokeAndAssert(t, tools, plan, nil, toolautocall.Config{})
+
+	if got := toolInvoked.Load(); got != 0 {
+		t.Fatalf("expected no local tool invocation, got %d", got)
+	}
+	if localCall.InformationalOnly {
+		t.Fatal("expected unprocessed invocable FunctionCallContent to remain actionable")
+	}
+	if declaredCall.InformationalOnly {
+		t.Fatal("expected declaration-only FunctionCallContent to remain actionable")
+	}
+}
+
+func TestFunctionInvoking_MixedInvocableAndNonInvocableSchemaToolExecutesInvocableSiblingWhenEnabled(t *testing.T) {
 	var toolInvoked atomic.Int32
 
 	localCall := &message.FunctionCallContent{CallID: "callId2", Name: "LocalFunc", Arguments: `{}`}
@@ -1347,7 +1383,7 @@ func TestFunctionInvoking_MixedInvocableAndNonInvocableSchemaToolExecutesInvocab
 		}},
 	}
 
-	invokeAndAssert(t, tools, plan, nil, toolautocall.Config{})
+	invokeAndAssert(t, tools, plan, nil, toolautocall.Config{EnableExecutableFunctionBypassing: true})
 
 	if got := toolInvoked.Load(); got != 1 {
 		t.Fatalf("expected one local tool invocation, got %d", got)
