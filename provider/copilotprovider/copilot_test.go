@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -247,6 +248,40 @@ func TestCopyResumeSessionConfig_WithStreamingNull_DefaultsToTrue(t *testing.T) 
 		t.Fatalf("RunText: %v", err)
 	}
 	assertEqual(t, runtime.lastResumeRequest(t)["streaming"], true, "streaming")
+}
+
+func TestCreateSession_WithPerRunTools_DoesNotMutateSharedSessionConfigTools(t *testing.T) {
+	runtime := newFakeRuntime(t, idleEvent())
+	shared := sharedToolsSessionConfig()
+	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{SessionConfig: shared})
+
+	for range 2 {
+		if _, err := runText(t, agent, "hello", agentpkg.WithTool(perRunTool(t))); err != nil {
+			t.Fatalf("RunText: %v", err)
+		}
+	}
+
+	assertSharedToolsUnchanged(t, shared)
+	assertRequestToolNames(t, runtime.lastCreateRequest(t), []string{"preconfigured", "PerRun"})
+}
+
+func TestResumeSession_WithPerRunTools_DoesNotMutateSharedSessionConfigTools(t *testing.T) {
+	runtime := newFakeRuntime(t, idleEvent())
+	shared := sharedToolsSessionConfig()
+	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{SessionConfig: shared})
+	session, err := agent.CreateSession(context.Background(), agentpkg.WithServiceID("existing-session"))
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	for range 2 {
+		if _, err := runText(t, agent, "hello", agentpkg.WithSession(session), agentpkg.WithTool(perRunTool(t))); err != nil {
+			t.Fatalf("RunText: %v", err)
+		}
+	}
+
+	assertSharedToolsUnchanged(t, shared)
+	assertRequestToolNames(t, runtime.lastResumeRequest(t), []string{"preconfigured", "PerRun"})
 }
 
 func TestRun_SurfacesLifecycleEventEmittedDuringSessionResume(t *testing.T) {
@@ -815,6 +850,68 @@ func dataContent(t *testing.T, name, value string) *message.DataContent {
 	}
 }
 
+// sharedToolsSessionConfig returns a config whose Tools slice has spare capacity,
+// mirroring a caller that preconfigured tools ahead of time. The spare capacity is
+// what let the old shallow copy alias the shared backing array when a per-run tool
+// was appended.
+func sharedToolsSessionConfig() *copilot.SessionConfig {
+	tools := make([]copilot.Tool, 1, 4)
+	tools[0] = copilot.Tool{Name: "preconfigured"}
+	return &copilot.SessionConfig{Model: "gpt-4o", Tools: tools}
+}
+
+func perRunTool(t *testing.T) tool.Tool {
+	t.Helper()
+	return functool.MustNew(functool.Config{Name: "PerRun", Description: "per-run tool"}, func(context.Context, struct{}) (string, error) {
+		return "ok", nil
+	})
+}
+
+// assertSharedToolsUnchanged verifies the provider never wrote a per-run tool
+// through the caller's shared Tools slice, including its spare capacity beyond len.
+func assertSharedToolsUnchanged(t *testing.T, config *copilot.SessionConfig) {
+	t.Helper()
+	if len(config.Tools) != 1 {
+		t.Fatalf("shared Tools mutated: len = %d, want 1", len(config.Tools))
+	}
+	if got := config.Tools[0].Name; got != "preconfigured" {
+		t.Fatalf("shared Tools[0] corrupted: %q", got)
+	}
+	for i, tl := range config.Tools[:cap(config.Tools)] {
+		if i == 0 {
+			continue
+		}
+		if tl.Name != "" {
+			t.Fatalf("shared Tools backing array mutated at index %d: %q", i, tl.Name)
+		}
+	}
+}
+
+func assertRequestToolNames(t *testing.T, request map[string]any, want []string) {
+	t.Helper()
+	raw, ok := request["tools"].([]any)
+	if !ok {
+		t.Fatalf("tools = %#v, want slice", request["tools"])
+	}
+	got := make([]string, 0, len(raw))
+	for _, item := range raw {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			t.Fatalf("tool entry = %#v, want object", item)
+		}
+		name, _ := entry["name"].(string)
+		got = append(got, name)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("tool names = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("tool names = %#v, want %#v", got, want)
+		}
+	}
+}
+
 func richSessionConfig() *copilot.SessionConfig {
 	return &copilot.SessionConfig{
 		ClientName:       "test-client",
@@ -1035,7 +1132,7 @@ func (r *fakeRuntime) handle(conn net.Conn, req jsonRPCRequest) {
 		r.mu.Lock()
 		r.sessionID = sessionID
 		r.resumeRequests = append(r.resumeRequests, params)
-		resumeEvents := append([]map[string]any(nil), r.resumeEvents...)
+		resumeEvents := slices.Clone(r.resumeEvents)
 		r.mu.Unlock()
 		// Emit any lifecycle events the CLI produces during session.resume
 		// before the RPC response, so they land in the window before a
@@ -1049,7 +1146,7 @@ func (r *fakeRuntime) handle(conn net.Conn, req jsonRPCRequest) {
 		r.mu.Lock()
 		r.sendRequests = append(r.sendRequests, params)
 		sessionID := r.sessionID
-		events := append([]map[string]any(nil), r.events...)
+		events := slices.Clone(r.events)
 		r.mu.Unlock()
 		writeResponse(r.t, conn, req.ID, map[string]any{"messageId": "sent-message"})
 		for _, event := range events {

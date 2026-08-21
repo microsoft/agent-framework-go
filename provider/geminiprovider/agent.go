@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
@@ -25,7 +26,7 @@ import (
 
 type generateContentConfigOpt genai.GenerateContentConfig
 
-func (o generateContentConfigOpt) Value() any { return genai.GenerateContentConfig(o) }
+func (o generateContentConfigOpt) MAFValue() any { return genai.GenerateContentConfig(o) }
 
 // GenerateContentConfig allows passing custom parameters to the underlying genai API calls.
 func GenerateContentConfig(config genai.GenerateContentConfig) agent.Option {
@@ -100,8 +101,10 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 			}
 		}
 		var responseContents []message.Content
+		var finishReason string
 		if len(resp.Candidates) > 0 {
 			cand := resp.Candidates[0]
+			finishReason = toFinishReason(cand.FinishReason)
 			if cand.Content != nil {
 				for _, part := range cand.Content.Parts {
 					responseContents, err = buildResponsePart(part, responseContents)
@@ -125,6 +128,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 			yield(&agent.ResponseUpdate{
 				Contents:          responseContents,
 				Role:              message.RoleAssistant,
+				FinishReason:      finishReason,
 				CreatedAt:         time.Now(),
 				RawRepresentation: resp,
 			}, nil)
@@ -140,8 +144,10 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				return
 			}
 			var streamContents []message.Content
+			var finishReason string
 			if len(resp.Candidates) > 0 {
 				cand := resp.Candidates[0]
+				finishReason = toFinishReason(cand.FinishReason)
 				if cand.Content != nil {
 					for _, part := range cand.Content.Parts {
 						streamContents, err = buildResponsePart(part, streamContents)
@@ -166,6 +172,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 			if !yield(&agent.ResponseUpdate{
 				Contents:          streamContents,
 				Role:              message.RoleAssistant,
+				FinishReason:      finishReason,
 				CreatedAt:         time.Now(),
 				RawRepresentation: resp,
 			}, nil) {
@@ -212,10 +219,10 @@ func (a *client) buildParams(messages []*message.Message, opts []agent.Option) (
 		// Clone mutable slice fields so that appending to cfg.Tools or
 		// cfg.SystemInstruction.Parts below never aliases the caller's
 		// backing arrays (the option stores a shallow copy of the struct).
-		cfg.Tools = append([]*genai.Tool(nil), cfg.Tools...)
+		cfg.Tools = slices.Clone(cfg.Tools)
 		if cfg.SystemInstruction != nil {
 			si := *cfg.SystemInstruction
-			si.Parts = append([]*genai.Part(nil), si.Parts...)
+			si.Parts = slices.Clone(si.Parts)
 			cfg.SystemInstruction = &si
 		}
 	}
@@ -479,17 +486,22 @@ func buildResponsePart(part *genai.Part, contents []message.Content) ([]message.
 	if part.Thought {
 		// Thinking model: emit TextReasoningContent. Encode ThoughtSignature as
 		// base64 in ProtectedData so it can be passed back in multi-turn requests.
-		protectedData := ""
-		if len(part.ThoughtSignature) > 0 {
-			protectedData = base64.StdEncoding.EncodeToString(part.ThoughtSignature)
+		// Skip a thought part that carries neither thinking text nor a signature,
+		// consistent with how empty text parts are skipped below; such a part
+		// would otherwise add an empty, information-free reasoning content.
+		if part.Text != "" || len(part.ThoughtSignature) > 0 {
+			protectedData := ""
+			if len(part.ThoughtSignature) > 0 {
+				protectedData = base64.StdEncoding.EncodeToString(part.ThoughtSignature)
+			}
+			contents = append(contents, &message.TextReasoningContent{
+				Text:          part.Text,
+				ProtectedData: protectedData,
+				ContentHeader: message.ContentHeader{
+					RawRepresentation: part,
+				},
+			})
 		}
-		contents = append(contents, &message.TextReasoningContent{
-			Text:          part.Text,
-			ProtectedData: protectedData,
-			ContentHeader: message.ContentHeader{
-				RawRepresentation: part,
-			},
-		})
 	} else if part.Text != "" {
 		contents = append(contents, &message.TextContent{
 			Text: part.Text,
@@ -507,6 +519,14 @@ func buildResponsePart(part *genai.Part, contents []message.Content) ([]message.
 		if err != nil {
 			return nil, fmt.Errorf("geminiprovider: failed to marshal function call arguments: %w", err)
 		}
+		// Standard Gemini generateContent responses leave the function call ID empty
+		// (genai marks it omitempty). Synthesize a stable ID so the framework tool loop
+		// can correlate the call with its result on subsequent turns, mirroring Python's
+		// _generate_tool_call_id.
+		callID := part.FunctionCall.ID
+		if callID == "" {
+			callID = "tool-call-" + strings.ReplaceAll(uuid.NewString(), "-", "")
+		}
 		// Gemini 3 attaches the opaque thought_signature to the same part that
 		// carries the function call (Thought is false, Text is empty). Capture it
 		// as a preceding TextReasoningContent so buildRequestParts can replay it
@@ -522,7 +542,7 @@ func buildResponsePart(part *genai.Part, contents []message.Content) ([]message.
 			})
 		}
 		contents = append(contents, &message.FunctionCallContent{
-			CallID:    part.FunctionCall.ID,
+			CallID:    callID,
 			Name:      part.FunctionCall.Name,
 			Arguments: string(argsJSON),
 			ContentHeader: message.ContentHeader{
@@ -623,11 +643,35 @@ func toFunctionResponseMap(c *message.FunctionResultContent) (map[string]any, er
 	}
 }
 
+// toFinishReason maps a genai finish reason to the framework's canonical
+// finish reason strings, mirroring the values produced by the OpenAI and
+// Copilot providers ("stop", "length", "tool_calls", "content_filter") so that
+// aggregation over ResponseUpdate.FinishReason stays consistent across
+// providers and with the .NET/Python SDKs. It returns "" for reasons that have
+// no framework equivalent.
+func toFinishReason(reason genai.FinishReason) string {
+	switch reason {
+	case genai.FinishReasonStop:
+		return "stop"
+	case genai.FinishReasonMaxTokens:
+		return "length"
+	case genai.FinishReasonSafety, genai.FinishReasonRecitation,
+		genai.FinishReasonBlocklist, genai.FinishReasonProhibitedContent,
+		genai.FinishReasonSPII:
+		return "content_filter"
+	case genai.FinishReasonMalformedFunctionCall:
+		return "tool_calls"
+	default:
+		return ""
+	}
+}
+
 func toUsageDetails(u *genai.GenerateContentResponseUsageMetadata) message.UsageDetails {
 	return message.UsageDetails{
 		InputTokenCount:       int64(u.PromptTokenCount),
 		OutputTokenCount:      int64(u.CandidatesTokenCount),
 		TotalTokenCount:       int64(u.TotalTokenCount),
 		CachedInputTokenCount: int64(u.CachedContentTokenCount),
+		ReasoningTokenCount:   int64(u.ThoughtsTokenCount),
 	}
 }

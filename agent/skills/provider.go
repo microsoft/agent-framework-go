@@ -194,7 +194,7 @@ type skillSliceSource struct {
 }
 
 func newSkillSliceSource(skills ...*Skill) *skillSliceSource {
-	cloned := append([]*Skill(nil), skills...)
+	cloned := slices.Clone(skills)
 	for i, skill := range cloned {
 		if skill == nil {
 			panic(fmt.Sprintf("skill %d is nil", i))
@@ -212,7 +212,7 @@ func (s *skillSliceSource) Skills(context.Context) ([]*Skill, error) {
 
 func (p *providerState) provide(ctx context.Context, invoking agent.InvokingContext) (outMessages []*message.Message, outOptions []agent.Option, err error) {
 	if p.options.DisableCaching {
-		result, err := p.buildContext(ctx)
+		result, err := p.buildContextSafely(ctx)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -220,58 +220,64 @@ func (p *providerState) provide(ctx context.Context, invoking agent.InvokingCont
 		return outMessages, outOptions, nil
 	}
 
-	p.mu.Lock()
-	if p.cached != nil {
-		cached := *p.cached
-		p.mu.Unlock()
-		outMessages, outOptions = providedContext(cached)
-		return outMessages, outOptions, nil
-	}
-	if p.loading != nil {
-		loading := p.loading
-		p.mu.Unlock()
-		<-loading
-
+	for {
 		p.mu.Lock()
-		defer p.mu.Unlock()
-		if p.cached == nil {
-			result, err := p.buildContext(ctx)
-			if err != nil {
-				return nil, nil, err
-			}
-			outMessages, outOptions = providedContext(result)
+		if p.cached != nil {
+			cached := *p.cached
+			p.mu.Unlock()
+			outMessages, outOptions = providedContext(cached)
 			return outMessages, outOptions, nil
 		}
-		cached := *p.cached
-		outMessages, outOptions = providedContext(cached)
-		return outMessages, outOptions, nil
-	}
-	p.loading = make(chan struct{})
-	loading := p.loading
-	p.mu.Unlock()
+		if p.loading != nil {
+			loading := p.loading
+			p.mu.Unlock()
+			if err := ctx.Err(); err != nil {
+				return nil, nil, err
+			}
+			select {
+			case <-loading:
+			case <-ctx.Done():
+				return nil, nil, ctx.Err()
+			}
 
-	var result providerContext
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("building skills context panicked: %v", recovered)
+			// The cache owner normally clears loading before waking waiters.
+			// Clear a matching completed load defensively so every retry goes
+			// through the same owner path and panic recovery below.
+			p.mu.Lock()
+			if p.loading == loading {
+				p.loading = nil
+			}
+			p.mu.Unlock()
+			continue
 		}
+		loading := make(chan struct{})
+		p.loading = loading
+		p.mu.Unlock()
 
+		result, err := p.buildContextSafely(ctx)
 		p.mu.Lock()
 		if err == nil {
 			cached := result
 			p.cached = &cached
 		}
-		close(loading)
 		p.loading = nil
+		close(loading)
 		p.mu.Unlock()
-	}()
-
-	result, err = p.buildContext(ctx)
-	if err != nil {
-		return nil, nil, err
+		if err != nil {
+			return nil, nil, err
+		}
+		outMessages, outOptions = providedContext(result)
+		return outMessages, outOptions, nil
 	}
-	outMessages, outOptions = providedContext(result)
-	return outMessages, outOptions, nil
+}
+
+func (p *providerState) buildContextSafely(ctx context.Context) (result providerContext, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("building skills context panicked: %v", recovered)
+		}
+	}()
+	return p.buildContext(ctx)
 }
 
 func providedContext(result providerContext) ([]*message.Message, []agent.Option) {
@@ -542,7 +548,7 @@ func buildProviderSkillsInstructionPrompt(template string, skills []*Skill) stri
 		template = defaultSkillsInstructionPrompt
 	}
 
-	sortedSkills := append([]*Skill(nil), skills...)
+	sortedSkills := slices.Clone(skills)
 	slices.SortFunc(sortedSkills, func(left, right *Skill) int {
 		return strings.Compare(left.Frontmatter.Name, right.Frontmatter.Name)
 	})

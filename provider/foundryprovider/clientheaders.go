@@ -21,7 +21,7 @@ type clientHeadersContextKey struct{}
 
 type clientHeadersOpt map[string]string
 
-func (o clientHeadersOpt) Value() any { return map[string]string(o) }
+func (o clientHeadersOpt) MAFValue() any { return map[string]string(o) }
 
 // WithClientHeader adds a single x-client-* header to a Foundry agent run.
 func WithClientHeader(name string, value string) agent.Option {

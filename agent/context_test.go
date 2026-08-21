@@ -74,6 +74,42 @@ func TestContextProviderMiddleware_Run_ProviderOptionsEnrichTools(t *testing.T) 
 	}
 }
 
+func TestContextProviderMiddleware_Run_PassesReadOnlySlicesWithoutCloning(t *testing.T) {
+	messages := []*message.Message{message.NewText("request")}
+	options := []agent.Option{agent.WithSession(agenttest.CreateSession())}
+	provider := contextProviderFunc{
+		invoking: func(_ context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+			if &invoking.Messages[0] != &messages[0] {
+				t.Error("expected InvokingContext to share the input message slice")
+			}
+			if &invoking.Options[0] != &options[0] {
+				t.Error("expected InvokingContext to share the input option slice")
+			}
+			return invoking.Messages, invoking.Options, nil
+		},
+		invoked: func(_ context.Context, invoked agent.InvokedContext) error {
+			if &invoked.RequestMessages[0] != &messages[0] {
+				t.Error("expected InvokedContext to share the request message slice")
+			}
+			if &invoked.Options[0] != &options[0] {
+				t.Error("expected InvokedContext to share the input option slice")
+			}
+			return nil
+		},
+	}
+
+	if _, err := collectContextProviderMiddlewareResponse(agent.ContextProviderMiddleware(provider).Run(
+		func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			return contextProviderMiddlewareSingleUpdate("ok")
+		},
+		context.Background(),
+		messages,
+		options...,
+	)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestContextProviderMiddleware_Run_SharedOptions_ProviderToolsDoNotAccumulateAcrossCalls(t *testing.T) {
 	toolCounts := make([]int, 0, 3)
 	provider := agent.NewContextProvider(agent.ContextProviderConfig{
@@ -351,6 +387,53 @@ func TestContextProvider_Invoking_SourceStampsProvidedMessages(t *testing.T) {
 	}
 }
 
+func TestContextProvider_Invoking_DoesNotMutateProvidedMessageSlice(t *testing.T) {
+	provided := message.NewText("provided")
+	providedMessages := []*message.Message{provided}
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{
+		SourceID: "ctx",
+		Provide: func(context.Context, agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+			return providedMessages, nil, nil
+		},
+	})
+
+	if _, _, err := invokeContextProvider(provider, t.Context(), []*message.Message{message.NewText("request")}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if providedMessages[0] != provided {
+		t.Fatal("expected context provider not to modify the provided message slice")
+	}
+}
+
+func TestContextProvider_Invoking_DoesNotMutateInputBackingArrays(t *testing.T) {
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{
+		SourceID: "ctx",
+		Provide: func(_ context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+			return []*message.Message{message.NewText("provided")}, []agent.Option{agent.WithInstructions("provided")}, nil
+		},
+	})
+	messages := make([]*message.Message, 1, 2)
+	messages[0] = message.NewText("request")
+	messageSentinel := message.NewText("sentinel")
+	messageBacking := messages[:cap(messages)]
+	messageBacking[1] = messageSentinel
+	options := make([]agent.Option, 1, 2)
+	options[0] = agent.WithSession(agenttest.CreateSession())
+	optionSentinel := agent.WithInstructions("sentinel")
+	optionBacking := options[:cap(options)]
+	optionBacking[1] = optionSentinel
+
+	if _, _, err := invokeContextProvider(provider, t.Context(), messages, options...); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if messageBacking[1] != messageSentinel {
+		t.Fatal("expected context provider not to modify the input message backing array")
+	}
+	if optionBacking[1] != optionSentinel {
+		t.Fatal("expected context provider not to modify the input option backing array")
+	}
+}
+
 func TestContextProvider_Invoking_HonorsNilProvideOutputs(t *testing.T) {
 	provider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "ctx",
@@ -413,24 +496,32 @@ func TestContextProvider_Invoking_FiltersInputMessagesBeforeProvide(t *testing.T
 
 func TestContextProvider_Invoking_UsesCustomProvideInputMessageFilter(t *testing.T) {
 	request := message.NewText("request")
+	replacement := message.NewText("replacement")
 	ctxMessage := message.NewText("ctx")
 	ctxMessage.Source = message.Source{Type: agent.SourceTypeContextProvider, ID: "other"}
 	var providedInput []*message.Message
 	provider := agent.NewContextProvider(agent.ContextProviderConfig{
-		SourceID:                  "ctx",
-		ProvideInputMessageFilter: messagefilter.PassThrough,
+		SourceID: "ctx",
+		ProvideInputMessageFilter: func(_ context.Context, messages []*message.Message) ([]*message.Message, error) {
+			messages[0] = replacement
+			return messages, nil
+		},
 		Provide: func(_ context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
 			providedInput = invoking.Messages
 			return nil, nil, nil
 		},
 	})
 
-	_, _, err := invokeContextProvider(provider, t.Context(), []*message.Message{request, ctxMessage}, agent.WithSession(agenttest.CreateSession()))
+	inputMessages := []*message.Message{request, ctxMessage}
+	_, _, err := invokeContextProvider(provider, t.Context(), inputMessages, agent.WithSession(agenttest.CreateSession()))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got := messageStrings(providedInput); !slices.Equal(got, []string{"request", "ctx"}) {
-		t.Fatalf("provided input messages = %v, want unfiltered input", got)
+	if got := messageStrings(providedInput); !slices.Equal(got, []string{"replacement", "ctx"}) {
+		t.Fatalf("provided input messages = %v, want custom-filtered input", got)
+	}
+	if inputMessages[0] != request {
+		t.Fatal("expected custom filter not to mutate the original input slice")
 	}
 }
 
@@ -557,6 +648,31 @@ func TestContextProvider_Invoked_CallsStoreAndIncludesExternalRequestMessagesByD
 	}
 	if len(storedResponse) != 1 || storedResponse[0] != resp {
 		t.Fatal("expected response messages to pass through unchanged")
+	}
+}
+
+func TestContextProvider_Invoked_FiltersDoNotMutateInputSlices(t *testing.T) {
+	contextMessage := message.NewText("context")
+	contextMessage.Source = message.Source{Type: agent.SourceTypeContextProvider, ID: "ctx"}
+	externalMessage := message.NewText("external")
+	requestMessages := []*message.Message{contextMessage, externalMessage}
+	responseMessages := []*message.Message{contextMessage, externalMessage}
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{
+		SourceID:                        "ctx",
+		StoreInputResponseMessageFilter: messagefilter.ExternalOnly,
+		Store: func(context.Context, agent.InvokedContext) error {
+			return nil
+		},
+	})
+
+	if err := invokeContextProviderInvoked(provider, t.Context(), requestMessages, responseMessages); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if requestMessages[0] != contextMessage || requestMessages[1] != externalMessage {
+		t.Fatal("expected request filtering not to mutate InvokedContext input")
+	}
+	if responseMessages[0] != contextMessage || responseMessages[1] != externalMessage {
+		t.Fatal("expected response filtering not to mutate InvokedContext input")
 	}
 }
 

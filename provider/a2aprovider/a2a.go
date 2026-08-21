@@ -27,7 +27,7 @@ type AgentConfig struct {
 
 type taskIDOpt struct{ string }
 
-func (o taskIDOpt) Value() any { return o.string }
+func (o taskIDOpt) MAFValue() any { return o.string }
 
 // TaskID returns an [agent.Option] that associates the run with an existing A2A
 // task, so the request continues that task rather than starting a new one.
@@ -321,6 +321,22 @@ func yieldTask(yield func(*agent.ResponseUpdate, error) bool, task *a2a.Task) bo
 		timestamp = *task.Status.Timestamp
 	}
 	var contents []message.Content
+	messageID := ""
+	if task.Status.Message != nil {
+		messageID = task.Status.Message.ID
+		// Mirror the streaming TaskStatusUpdateEvent path: surface the status
+		// message text for states where it carries the agent's response (an
+		// input-required follow-up question or a terminal summary), rather than
+		// dropping it when the task has no artifacts.
+		if task.Status.State == a2a.TaskStateInputRequired || task.Status.State.Terminal() {
+			var err error
+			contents, err = partsToContents(task.Status.Message.Parts, contents)
+			if err != nil {
+				yield(nil, err)
+				return false
+			}
+		}
+	}
 	artifactMetadata := make([]map[string]any, 0, len(task.Artifacts))
 	for _, artifact := range task.Artifacts {
 		var err error
@@ -336,7 +352,7 @@ func yieldTask(yield func(*agent.ResponseUpdate, error) bool, task *a2a.Task) bo
 	// task-level metadata, matching .NET's A2A conversion which preserves
 	// artifact metadata rather than dropping it.
 	metadata := mergeMetadata(task.Metadata, artifactMetadata...)
-	update := newResponseUpdate(task, metadata, string(task.ID), "", message.RoleAssistant, contents, timestamp)
+	update := newResponseUpdate(task, metadata, string(task.ID), messageID, message.RoleAssistant, contents, timestamp)
 	update.ContinuationToken = continuationToken
 	return yield(update, nil)
 }

@@ -4,6 +4,7 @@ package openaiprovider_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -293,7 +294,8 @@ func TestResponsesBasicRequestResponse_NonStreaming(t *testing.T) {
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	resp, err := a.RunText(t.Context(), "hello",
+	resp, err := a.RunText(
+		t.Context(), "hello",
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
@@ -385,7 +387,8 @@ data: {"type":"response.completed","response":{"id":"resp_67d329fbc87c81919f8952
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
 	var updates []*agent.ResponseUpdate
-	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
+	for update, err := range a.RunText(
+		t.Context(), "hello", agent.Stream(true),
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
@@ -677,7 +680,8 @@ func TestResponsesChatOptions_Model_OverridesClientModel_NonStreaming(t *testing
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
 	// Override with gpt-4o in options
-	resp, err := a.RunText(t.Context(), "hello",
+	resp, err := a.RunText(
+		t.Context(), "hello",
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			Model:           "gpt-4o",
 			MaxOutputTokens: openai.Int(10),
@@ -781,7 +785,8 @@ func TestResponsesMultipleMessages_NonStreaming(t *testing.T) {
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "i'm good. how are you?"}}},
 	}
 
-	resp, err := a.Run(t.Context(), messages,
+	resp, err := a.Run(
+		t.Context(), messages,
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			Temperature: openai.Float(0.25),
 		}),
@@ -1524,7 +1529,8 @@ data: {"type":"response.completed","response":{"id":"resp_streaming123","object"
 
 	var updates []*agent.ResponseUpdate
 	// Override with gpt-4o in options
-	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
+	for update, err := range a.RunText(
+		t.Context(), "hello", agent.Stream(true),
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			Model:           "gpt-4o",
 			MaxOutputTokens: openai.Int(20),
@@ -1652,7 +1658,8 @@ func TestResponsesMultipleOutputItems_NonStreaming(t *testing.T) {
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	resp, err := a.RunText(t.Context(), "hello",
+	resp, err := a.RunText(
+		t.Context(), "hello",
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
@@ -1853,7 +1860,8 @@ func TestResponsesFunctionCallWithResult_NonStreaming(t *testing.T) {
 		Description: "Get the current weather",
 	}, getWeather)
 
-	resp1, err := a1.RunText(t.Context(), "What's the weather in Seattle?",
+	resp1, err := a1.RunText(
+		t.Context(), "What's the weather in Seattle?",
 		agent.WithTool(tool),
 	).Collect()
 	if err != nil {
@@ -1904,7 +1912,8 @@ func TestResponsesFunctionCallWithResult_NonStreaming(t *testing.T) {
 		}},
 	}
 
-	resp2, err := a2.Run(t.Context(), messages,
+	resp2, err := a2.Run(
+		t.Context(), messages,
 		agent.WithTool(tool),
 	).Collect()
 	if err != nil {
@@ -2048,7 +2057,8 @@ func TestResponsesFunctionCall_UsesCallIDWhenDifferentFromID(t *testing.T) {
 		Description: "Get the current weather",
 	}, getWeather)
 
-	resp1, err := a1.RunText(t.Context(), "What's the weather in Amsterdam?",
+	resp1, err := a1.RunText(
+		t.Context(), "What's the weather in Amsterdam?",
 		agent.WithTool(weatherTool),
 	).Collect()
 	if err != nil {
@@ -2095,7 +2105,8 @@ func TestResponsesFunctionCall_UsesCallIDWhenDifferentFromID(t *testing.T) {
 		}},
 	}
 
-	resp2, err := a2.Run(t.Context(), messages,
+	resp2, err := a2.Run(
+		t.Context(), messages,
 		agent.WithTool(weatherTool),
 	).Collect()
 	if err != nil {
@@ -2946,7 +2957,8 @@ func TestResponsesCodeInterpreterTool_NonStreaming(t *testing.T) {
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	resp, err := a.RunText(t.Context(), "Calculate the sum of numbers from 1 to 5",
+	resp, err := a.RunText(
+		t.Context(), "Calculate the sum of numbers from 1 to 5",
 		agent.WithTool(&hostedtool.CodeInterpreter{}),
 	).Collect()
 	if err != nil {
@@ -3076,7 +3088,8 @@ data: {"type":"response.completed","response":{"id":"resp_002","object":"respons
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
 	var updates []*agent.ResponseUpdate
-	var allText strings.Builder
+	var codeCall *message.CodeInterpreterToolCallContent
+	var codeResult *message.CodeInterpreterToolResultContent
 	for update, err := range a.RunText(t.Context(), "Calculate 3+3", agent.Stream(true),
 		agent.WithTool(&hostedtool.CodeInterpreter{}),
 	) {
@@ -3085,8 +3098,11 @@ data: {"type":"response.completed","response":{"id":"resp_002","object":"respons
 		}
 		updates = append(updates, update)
 		for _, content := range update.Contents {
-			if tc, ok := content.(*message.TextContent); ok {
-				allText.WriteString(tc.Text)
+			switch c := content.(type) {
+			case *message.CodeInterpreterToolCallContent:
+				codeCall = c
+			case *message.CodeInterpreterToolResultContent:
+				codeResult = c
 			}
 		}
 	}
@@ -3095,22 +3111,52 @@ data: {"type":"response.completed","response":{"id":"resp_002","object":"respons
 		t.Errorf("expected at least 3 updates, got %d", len(updates))
 	}
 
-	// Verify we got both code interpreter content and text result
-	responseText := allText.String()
-	if !strings.Contains(responseText, "Code Interpreter") {
-		t.Errorf("expected response to contain 'Code Interpreter', got %q", responseText)
+	// Streaming must emit structured code-interpreter content, matching the
+	// non-streaming path and the .NET/Python SDKs, rather than a text blob.
+	if codeCall == nil {
+		t.Fatalf("expected a CodeInterpreterToolCallContent in the streamed updates")
 	}
-	if !strings.Contains(responseText, "print(3+3)") {
-		t.Errorf("expected response to contain code 'print(3+3)', got %q", responseText)
+	if codeCall.CallID != "call_code_002" {
+		t.Errorf("expected call CallID 'call_code_002', got %q", codeCall.CallID)
 	}
-	// Assert on the Code Interpreter output section specifically so this test verifies
-	// that streamed code_interpreter_call.outputs (enabled by the include) are surfaced,
-	// rather than being satisfied by the assistant message's output_text "6".
-	if !strings.Contains(responseText, "[Output]") {
-		t.Errorf("expected response to contain '[Output]' section from code interpreter outputs, got %q", responseText)
+	if len(codeCall.Inputs) != 1 {
+		t.Fatalf("expected 1 input in code call, got %d", len(codeCall.Inputs))
 	}
-	if !strings.Contains(responseText, "Image: https://example.com/plot.png") {
-		t.Errorf("expected response to contain the code interpreter image URL, got %q", responseText)
+	dataContent, ok := codeCall.Inputs[0].(*message.DataContent)
+	if !ok {
+		t.Fatalf("expected input to be DataContent, got %T", codeCall.Inputs[0])
+	}
+	if dataContent.MediaType != "text/x-python" {
+		t.Errorf("expected MediaType text/x-python, got %s", dataContent.MediaType)
+	}
+	if decoded, err := base64.StdEncoding.DecodeString(dataContent.Data); err != nil {
+		t.Errorf("expected base64-encoded code, decode error: %v", err)
+	} else if string(decoded) != "print(3+3)" {
+		t.Errorf("expected decoded code 'print(3+3)', got %q", string(decoded))
+	}
+
+	if codeResult == nil {
+		t.Fatalf("expected a CodeInterpreterToolResultContent in the streamed updates")
+	}
+	if codeResult.CallID != codeCall.CallID {
+		t.Errorf("expected result CallID to match call CallID, got %s vs %s", codeResult.CallID, codeCall.CallID)
+	}
+	if len(codeResult.Outputs) != 2 {
+		t.Fatalf("expected 2 outputs (logs + image), got %d", len(codeResult.Outputs))
+	}
+	logs, ok := codeResult.Outputs[0].(*message.TextContent)
+	if !ok {
+		t.Fatalf("expected first output to be TextContent, got %T", codeResult.Outputs[0])
+	}
+	if logs.Text != "6\n" {
+		t.Errorf("expected logs '6\\n', got %q", logs.Text)
+	}
+	img, ok := codeResult.Outputs[1].(*message.URIContent)
+	if !ok {
+		t.Fatalf("expected second output to be URIContent, got %T", codeResult.Outputs[1])
+	}
+	if img.URI != "https://example.com/plot.png" {
+		t.Errorf("expected image URI 'https://example.com/plot.png', got %q", img.URI)
 	}
 }
 
@@ -5546,7 +5592,8 @@ func TestResponsesConversationId_AsResponseId_NonStreaming(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.RunText(t.Context(), "hello",
+	_, err = a.RunText(
+		t.Context(), "hello",
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
@@ -5618,7 +5665,8 @@ func TestDisableStoreOutputDoesNotUseOrUpdateResponseID(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.RunText(t.Context(), "hello",
+	_, err = a.RunText(
+		t.Context(), "hello",
 		agent.WithSession(session),
 	).Collect()
 	if err != nil {
@@ -5684,7 +5732,8 @@ func TestResponsesNewParamsStoreOverridesDisableStoreOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.RunText(t.Context(), "hello",
+	_, err = a.RunText(
+		t.Context(), "hello",
 		agent.WithSession(session),
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{Store: openai.Bool(true)}),
 	).Collect()
@@ -5751,7 +5800,8 @@ func TestResponsesNewParamsStoreFalseDoesNotUpdateResponseID(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.RunText(t.Context(), "hello",
+	_, err = a.RunText(
+		t.Context(), "hello",
 		agent.WithSession(session),
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{Store: openai.Bool(false)}),
 	).Collect()
@@ -5806,7 +5856,8 @@ func TestResponsesNewParamsStoreFalseDoesNotDuplicateReasoningInclude(t *testing
 		},
 	)
 
-	_, err := a.RunText(t.Context(), "hello",
+	_, err := a.RunText(
+		t.Context(), "hello",
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			Store:   openai.Bool(false),
 			Include: []responses.ResponseIncludable{responses.ResponseIncludableReasoningEncryptedContent},
@@ -5866,7 +5917,8 @@ func TestResponsesConversationId_AsConversationId_NonStreaming(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.RunText(t.Context(), "hello",
+	_, err = a.RunText(
+		t.Context(), "hello",
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
@@ -5938,7 +5990,8 @@ data: {"type":"response.completed","response":{"id":"resp_67890","object":"respo
 	}
 
 	var updates []*agent.ResponseUpdate
-	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
+	for update, err := range a.RunText(
+		t.Context(), "hello", agent.Stream(true),
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
@@ -6017,7 +6070,8 @@ data: {"type":"response.completed","response":{"id":"resp_67890","object":"respo
 	}
 
 	var updates []*agent.ResponseUpdate
-	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
+	for update, err := range a.RunText(
+		t.Context(), "hello", agent.Stream(true),
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
@@ -6077,7 +6131,8 @@ func TestResponsesBackgroundResponses_FirstCall(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resp, err := a.RunText(t.Context(), "hello",
+	resp, err := a.RunText(
+		t.Context(), "hello",
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
@@ -6160,7 +6215,8 @@ func testResponsesBackgroundPolling(t *testing.T, status string) {
 	}
 	ctJSON, _ := json.Marshal(ct)
 
-	resp, err := a.Run(t.Context(), nil,
+	resp, err := a.Run(
+		t.Context(), nil,
 		agent.WithContinuationToken(agenttest.NewContinuationToken(t, string(ctJSON))),
 		agent.AllowBackgroundResponses(true),
 		agent.WithSession(session),
@@ -6281,7 +6337,8 @@ data: {"type":"response.completed","sequence_number":17,"response":{"id":"resp_6
 
 	var updates []*agent.ResponseUpdate
 	var allText strings.Builder
-	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
+	for update, err := range a.RunText(
+		t.Context(), "hello", agent.Stream(true),
 		agent.AllowBackgroundResponses(true),
 		agent.WithSession(session),
 	) {
@@ -6384,7 +6441,8 @@ data: {"type":"response.completed","sequence_number":17,"response":{"truncation"
 	}
 
 	var updates []*agent.ResponseUpdate
-	for update, err := range a.Run(t.Context(), []*message.Message{}, agent.Stream(true),
+	for update, err := range a.Run(
+		t.Context(), []*message.Message{}, agent.Stream(true),
 		agent.AllowBackgroundResponses(true),
 		agent.WithContinuationToken(token),
 		agent.WithSession(session),
@@ -6445,7 +6503,8 @@ func TestResponsesGetContinuationToken_WithMessages_ThrowsException(t *testing.T
 	token := agenttest.NewContinuationToken(t, `{"response_id":"resp_123","sequence_number":0}`)
 
 	// Attempt to use continuation token with messages should error
-	_, err := a.RunText(t.Context(), "test",
+	_, err := a.RunText(
+		t.Context(), "test",
 		agent.WithContinuationToken(token),
 	).Collect()
 
@@ -6470,7 +6529,8 @@ func TestResponsesBackgroundResponses_PollingCall_WithMessages(t *testing.T) {
 	token := agenttest.NewContinuationToken(t, `{"response_id":"resp_68d3d2c9ef7c8195863e4e2b2ec226a205007262ecbbfed8","sequence_number":0}`)
 
 	// A try to update a background response with new messages should fail
-	_, err = a.RunText(t.Context(), "Please book hotel as well",
+	_, err = a.RunText(
+		t.Context(), "Please book hotel as well",
 		agent.WithSession(session),
 		agent.WithContinuationToken(token),
 		agent.AllowBackgroundResponses(true),
@@ -6646,7 +6706,8 @@ func TestResponsesMultipleRequiredFunctions(t *testing.T) {
 		Description: "Get the current time for a location",
 	}, getTime)
 
-	resp, err := a.RunText(t.Context(), "What's the weather and time in Seattle?",
+	resp, err := a.RunText(
+		t.Context(), "What's the weather and time in Seattle?",
 		agent.WithTool(weatherTool),
 		agent.WithTool(timeTool),
 		agent.WithToolMode(tool.RequireTools("GetWeather", "GetTime")),
@@ -6754,5 +6815,129 @@ func responsesBodyEqual(t *testing.T, got string, want string) {
 			t.Fatalf("failed marshaling wantObj: %v", err)
 		}
 		t.Errorf("body\ngot %s\nwant %s", gotOut, wantOut)
+	}
+}
+
+// TestResponsesStreamingFailedResponseSurfacesError verifies that a streamed
+// response.failed event surfaces its error as ErrorContent rather than an
+// empty update.
+func TestResponsesStreamingFailedResponseSurfacesError(t *testing.T) {
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"test"}]}],
+                "stream":true
+            }
+            `
+	const output = `event: response.created
+data: {"type":"response.created","response":{"id":"resp_001","object":"response","created_at":1741892091,"status":"in_progress","model":"gpt-4o-mini","output":[]}}
+
+event: response.failed
+data: {"type":"response.failed","response":{"id":"resp_001","object":"response","created_at":1741892091,"status":"failed","model":"gpt-4o-mini","output":[],"error":{"code":"server_error","message":"Internal error"}}}
+
+`
+	server := newTestResponsesServerStreaming(t, input, output)
+	defer server.Close()
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	var errContent *message.ErrorContent
+	for update, err := range a.RunText(t.Context(), "test", agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("error = %v", err)
+		}
+		for _, c := range update.Contents {
+			if ec, ok := c.(*message.ErrorContent); ok {
+				errContent = ec
+			}
+		}
+	}
+	if errContent == nil {
+		t.Fatal("expected an ErrorContent for the failed response, got none")
+	}
+	if errContent.Message != "Internal error" {
+		t.Errorf("error message = %q, want %q", errContent.Message, "Internal error")
+	}
+	if errContent.ErrorCode != "server_error" {
+		t.Errorf("error code = %q, want %q", errContent.ErrorCode, "server_error")
+	}
+}
+
+// TestResponsesStreamingFailedResponseSurfacesCodeOnlyError guards the case where a
+// failed response carries an error code but no message. The failure must still be
+// surfaced as ErrorContent rather than collapsing into an empty update.
+func TestResponsesStreamingFailedResponseSurfacesCodeOnlyError(t *testing.T) {
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"test"}]}],
+                "stream":true
+            }
+            `
+	const output = `event: response.created
+data: {"type":"response.created","response":{"id":"resp_001","object":"response","created_at":1741892091,"status":"in_progress","model":"gpt-4o-mini","output":[]}}
+
+event: response.failed
+data: {"type":"response.failed","response":{"id":"resp_001","object":"response","created_at":1741892091,"status":"failed","model":"gpt-4o-mini","output":[],"error":{"code":"server_error"}}}
+
+`
+	server := newTestResponsesServerStreaming(t, input, output)
+	defer server.Close()
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	var errContent *message.ErrorContent
+	for update, err := range a.RunText(t.Context(), "test", agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("error = %v", err)
+		}
+		for _, c := range update.Contents {
+			if ec, ok := c.(*message.ErrorContent); ok {
+				errContent = ec
+			}
+		}
+	}
+	if errContent == nil {
+		t.Fatal("expected an ErrorContent for the code-only failed response, got none")
+	}
+	if errContent.ErrorCode != "server_error" {
+		t.Errorf("error code = %q, want %q", errContent.ErrorCode, "server_error")
+	}
+}
+
+// TestResponsesToolResult_StructSerializedAsJSON verifies that a structured
+// FunctionResultContent.Result is JSON-encoded in the Responses API request
+// rather than rendered with Go's %v (matching the chat path).
+func TestResponsesToolResult_StructSerializedAsJSON(t *testing.T) {
+	capturedCh := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		capturedCh <- string(b)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"resp_test","object":"response","created_at":1741891428,"status":"completed","error":null,"incomplete_details":null,"model":"gpt-4o-mini","output":[{"type":"message","id":"msg_test","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok","annotations":[]}]}]}`)
+	}))
+	defer server.Close()
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	type weather struct {
+		City  string `json:"city"`
+		TempC int    `json:"temp_c"`
+	}
+	messages := []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "weather?"}}},
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			&message.FunctionCallContent{CallID: "c1", Name: "GetWeather", Arguments: "{}"},
+		}},
+		{Role: message.RoleTool, Contents: []message.Content{
+			&message.FunctionResultContent{CallID: "c1", Result: weather{City: "Paris", TempC: 20}},
+		}},
+	}
+	if _, err := a.Run(t.Context(), messages).Collect(); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	captured := <-capturedCh
+	if strings.Contains(captured, "{Paris 20}") {
+		t.Errorf("tool result rendered with Go %%v instead of JSON:\n%s", captured)
+	}
+	if !strings.Contains(captured, "temp_c") {
+		t.Errorf("tool result was not JSON-encoded (missing field temp_c):\n%s", captured)
 	}
 }

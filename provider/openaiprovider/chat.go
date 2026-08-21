@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
@@ -38,7 +39,7 @@ type chatClient struct {
 
 type chatCompletionNewParamsOpt openai.ChatCompletionNewParams
 
-func (o chatCompletionNewParamsOpt) Value() any {
+func (o chatCompletionNewParamsOpt) MAFValue() any {
 	return openai.ChatCompletionNewParams(o)
 }
 
@@ -158,6 +159,13 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 				return
 			}
 		}
+	}
+	// Request usage in the final stream chunk. OpenAI omits the usage chunk for
+	// streamed completions unless stream_options.include_usage is set, so without
+	// this a streamed run reports zero token usage, unlike the non-streaming path.
+	// Respect an explicit caller value if one was already supplied.
+	if !body.StreamOptions.IncludeUsage.Valid() {
+		body.StreamOptions.IncludeUsage = openai.Bool(true)
 	}
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		stream := a.client.Chat.Completions.NewStreaming(ctx, body, telemetryRequestOption)
@@ -370,10 +378,16 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 		if len(contents) == 0 {
 			return nil, nil
 		}
+		sys := openai.ChatCompletionSystemMessageParam{}
 		if len(contents) == 1 {
-			return []openai.ChatCompletionMessageParamUnion{openai.SystemMessage(contents[0].Text)}, nil
+			sys.Content.OfString = openai.String(contents[0].Text)
+		} else {
+			sys.Content.OfArrayOfContentParts = contents
 		}
-		return []openai.ChatCompletionMessageParamUnion{openai.SystemMessage(contents)}, nil
+		if name := sanitizeAuthorName(msg.AuthorName); name != "" {
+			sys.Name = openai.String(name)
+		}
+		return []openai.ChatCompletionMessageParamUnion{{OfSystem: &sys}}, nil
 
 	case message.RoleUser:
 		var contents []openai.ChatCompletionContentPartUnionParam
@@ -433,7 +447,7 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 					}))
 				default:
 					contents = append(contents, openai.FileContentPart(openai.ChatCompletionContentPartFileFileParam{
-						FileData: openai.String(c.Data),
+						FileData: openai.String(c.URI()),
 						Filename: openai.String(c.Name),
 					}))
 				}
@@ -446,10 +460,16 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 		if len(contents) == 0 {
 			return nil, nil
 		}
+		usr := openai.ChatCompletionUserMessageParam{}
 		if len(contents) == 1 && contents[0].OfText != nil {
-			return []openai.ChatCompletionMessageParamUnion{openai.UserMessage(contents[0].OfText.Text)}, nil
+			usr.Content.OfString = openai.String(contents[0].OfText.Text)
+		} else {
+			usr.Content.OfArrayOfContentParts = contents
 		}
-		return []openai.ChatCompletionMessageParamUnion{openai.UserMessage(contents)}, nil
+		if name := sanitizeAuthorName(msg.AuthorName); name != "" {
+			usr.Name = openai.String(name)
+		}
+		return []openai.ChatCompletionMessageParamUnion{{OfUser: &usr}}, nil
 
 	case message.RoleAssistant:
 		var contents []openai.ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion
@@ -489,12 +509,14 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 		} else {
 			content = openai.ChatCompletionAssistantMessageParamContentUnion{OfArrayOfContentParts: contents}
 		}
-		return []openai.ChatCompletionMessageParamUnion{{
-			OfAssistant: &openai.ChatCompletionAssistantMessageParam{
-				Content:   content,
-				ToolCalls: toolCalls,
-			},
-		}}, nil
+		asst := openai.ChatCompletionAssistantMessageParam{
+			Content:   content,
+			ToolCalls: toolCalls,
+		}
+		if name := sanitizeAuthorName(msg.AuthorName); name != "" {
+			asst.Name = openai.String(name)
+		}
+		return []openai.ChatCompletionMessageParamUnion{{OfAssistant: &asst}}, nil
 
 	case message.RoleTool:
 		// Each tool result needs its own separate message for OpenAI API compliance
@@ -504,10 +526,8 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 				ret := funcResult.Result
 				if funcResult.Error != nil {
 					ret = funcResult.Error
-				} else if b, ok := ret.(json.RawMessage); ok {
-					ret = string(b)
 				}
-				messages = append(messages, openai.ToolMessage(fmt.Sprintf("%v", ret), funcResult.CallID))
+				messages = append(messages, openai.ToolMessage(toolResultText(ret), funcResult.CallID))
 			}
 		}
 		return messages, nil
@@ -515,6 +535,54 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 	default:
 		panic("unknown message role: " + string(msg.Role))
 	}
+}
+
+// sanitizeAuthorName mirrors the .NET OpenAIChatClient.SanitizeAuthorName used
+// for ChatMessage.AuthorName. The Chat Completions API only accepts a limited
+// character set for the participant "name" field, so it keeps only alphanumeric
+// characters and caps the result at 64 characters. It returns an empty string
+// when the input is empty, whitespace-only, or entirely disallowed characters,
+// in which case the caller leaves the name field unset.
+func sanitizeAuthorName(name string) string {
+	if strings.TrimSpace(name) == "" {
+		return ""
+	}
+	const maxLen = 64
+	var b strings.Builder
+	n := 0
+	for _, r := range name {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+			n++
+			if n >= maxLen {
+				break
+			}
+		}
+	}
+	return b.String()
+}
+
+// toolResultText renders a function-tool result for the OpenAI wire format. A
+// non-string, non-raw result (e.g. a struct or map returned by a typed
+// functool) is JSON-encoded rather than rendered with Go's %v, which would send
+// an unparseable Go representation like "{Paris 20}" to the model.
+func toolResultText(ret any) string {
+	switch v := ret.(type) {
+	case nil:
+		return ""
+	case string:
+		return v
+	case json.RawMessage:
+		return string(v)
+	case []byte:
+		return string(v)
+	case error:
+		return v.Error()
+	}
+	if b, err := json.Marshal(ret); err == nil {
+		return string(b)
+	}
+	return fmt.Sprintf("%v", ret)
 }
 
 // populateChatAnnotations maps Chat Completions message annotations (e.g. the

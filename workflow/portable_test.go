@@ -166,6 +166,38 @@ func delayedPortableValue(t *testing.T, pv workflow.PortableValue) workflow.Port
 	return delayed
 }
 
+func TestPortableValueMarshal_PreservesUntouchedDelayedRawJSON(t *testing.T) {
+	// A delayed value with an unregistered TypeID and a large integer that
+	// cannot be represented exactly by float64. Re-marshaling without any typed
+	// access must re-emit the original bytes verbatim, so a durable-JSON
+	// restore -> re-checkpoint cycle stays idempotent and loses no fidelity.
+	const bigInt = "9007219254740993" // > 2^53
+	wire := []byte(`{"TypeID":{"PackageName":"example.invalid/missing","TypeName":"Missing"},"Value":` + bigInt + `}`)
+
+	var delayed workflow.PortableValue
+	if err := json.Unmarshal(wire, &delayed); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if !delayed.Delayed() {
+		t.Fatalf("expected delayed value after unmarshal")
+	}
+
+	// Re-marshal WITHOUT any typed access.
+	data, err := json.Marshal(delayed)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var wrapper struct {
+		Value json.RawMessage
+	}
+	if err := json.Unmarshal(data, &wrapper); err != nil {
+		t.Fatalf("Unmarshal wrapper: %v", err)
+	}
+	if got := string(wrapper.Value); got != bigInt {
+		t.Fatalf("re-emitted Value = %s, want %s (large-integer fidelity lost)", got, bigInt)
+	}
+}
+
 func TestPortableValue_RejectsNil(t *testing.T) {
 	defer func() {
 		if recover() == nil {

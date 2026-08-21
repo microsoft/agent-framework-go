@@ -4,6 +4,7 @@ package skills_test
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -19,8 +20,8 @@ func mustInlineSkill(frontmatter skills.Frontmatter, content string, resources [
 		GetContent: func(context.Context) (string, error) {
 			return content, nil
 		},
-		Resources: append([]skills.Resource(nil), resources...),
-		Scripts:   append([]skills.Script(nil), scripts...),
+		Resources: slices.Clone(resources),
+		Scripts:   slices.Clone(scripts),
 	}
 }
 

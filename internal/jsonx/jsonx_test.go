@@ -5,6 +5,7 @@ package jsonx
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -39,7 +40,7 @@ func TestUnmarshalDiscriminatedUnionSliceWithFallback_UsesFallbackForMissingAndU
 		"known": reflect.TypeOf(knownUnion{}),
 	}
 	fallback := func(raw json.RawMessage) (testUnion, error) {
-		return &rawUnion{Raw: append(json.RawMessage(nil), raw...)}, nil
+		return &rawUnion{Raw: slices.Clone(raw)}, nil
 	}
 
 	values, err := UnmarshalDiscriminatedUnionSliceWithFallback(data, types, fallback)

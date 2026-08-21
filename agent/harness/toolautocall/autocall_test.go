@@ -127,6 +127,48 @@ func TestFunctionInvoking_MarksProcessedFunctionCallsInformationalOnly(t *testin
 	}
 }
 
+func TestFunctionInvoking_DoesNotMutateInputSliceBackingArrays(t *testing.T) {
+	testTool := functool.MustNew(functool.Config{Name: "Func1"},
+		func(ctx context.Context, args struct{}) (string, error) {
+			return "ok", nil
+		})
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder().
+			Add(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{
+				&message.FunctionCallContent{CallID: "callId1", Name: "Func1", Arguments: `{}`},
+			}}).
+			NewTurn().
+			AddText("done").
+			Build(),
+	}
+
+	messages := make([]*message.Message, 1, 3)
+	messages[0] = message.NewText("hello")
+	messageSentinel1 := message.NewText("sentinel-1")
+	messageSentinel2 := message.NewText("sentinel-2")
+	messageBacking := messages[:cap(messages)]
+	messageBacking[1] = messageSentinel1
+	messageBacking[2] = messageSentinel2
+	options := make([]agent.Option, 2, 3)
+	options[0] = agent.WithTool(testTool)
+	options[1] = agent.WithToolMode(tool.ToolModeRequired)
+	optionSentinel := agent.WithInstructions("sentinel")
+	optionBacking := options[:cap(options)]
+	optionBacking[2] = optionSentinel
+
+	for _, err := range toolautocall.New(toolautocall.Config{}).Run(runner.Run, t.Context(), messages, options...) {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	if messageBacking[1] != messageSentinel1 || messageBacking[2] != messageSentinel2 {
+		t.Fatal("expected autocall not to modify the input message backing array")
+	}
+	if optionBacking[2] != optionSentinel {
+		t.Fatal("expected autocall not to modify the input option backing array")
+	}
+}
+
 func TestFunctionInvoking_PreparesOptionsForLastIteration(t *testing.T) {
 	var capturedTools []tool.Tool
 	var capturedToolMode tool.ToolMode

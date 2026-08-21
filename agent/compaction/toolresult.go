@@ -3,7 +3,6 @@
 package compaction
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 	"slices"
@@ -29,7 +28,10 @@ type ToolResultStrategy struct {
 
 	// MinimumPreservedGroups is the minimum number of most-recent non-system groups to preserve.
 	// This is a hard floor; tool-call groups within this protected window are not collapsed.
-	MinimumPreservedGroups int
+	//
+	// When nil, a default floor is used. An explicit value is honored as-is, so a pointer to 0
+	// disables the floor entirely; a negative value is clamped to 0.
+	MinimumPreservedGroups *int
 
 	// ToolCallFormatter formats a tool-call group as a compact summary string.
 	// When nil, DefaultToolCallFormatter is used, which produces a YAML-like block listing
@@ -44,8 +46,16 @@ func (strategy *ToolResultStrategy) Compact(_ context.Context, index *MessageInd
 		return false, nil
 	}
 
-	minimumPreservedGroups := cmp.Or(ensureNonNegative(strategy.MinimumPreservedGroups), defaultMinimumPreservedToolResultGroups)
-	nonSystemIncludedIndices := index.includedNonSystemGroupIndices()
+	minimumPreservedGroups := defaultMinimumPreservedToolResultGroups
+	if strategy.MinimumPreservedGroups != nil {
+		minimumPreservedGroups = max(*strategy.MinimumPreservedGroups, 0)
+	}
+	var nonSystemIncludedIndices []int
+	for i, group := range index.Groups {
+		if !group.IsExcluded && group.Kind != GroupKindSystem {
+			nonSystemIncludedIndices = append(nonSystemIncludedIndices, i)
+		}
+	}
 	protectedStart := len(nonSystemIncludedIndices) - minimumPreservedGroups
 	if protectedStart < 0 {
 		protectedStart = 0
@@ -127,9 +137,11 @@ func DefaultToolCallFormatter(group *MessageGroup) string {
 
 	plainTextIndex := 0
 	var orderedNames []string
+	seenNames := make(map[string]bool)
 	groupedResults := make(map[string][]string)
 	for _, functionCall := range functionCalls {
-		if _, ok := groupedResults[functionCall.name]; !ok {
+		if !seenNames[functionCall.name] {
+			seenNames[functionCall.name] = true
 			orderedNames = append(orderedNames, functionCall.name)
 		}
 		result, ok := resultsByCallID[functionCall.id]

@@ -51,6 +51,53 @@ func TestWorkflowInfoMatch_PreservesEdgeMultiplicity(t *testing.T) {
 	}
 }
 
+func TestWorkflowInfoMatch_IgnoresPerSourceEdgeOrder(t *testing.T) {
+	a := testBinding("a", "test")
+	b := testBinding("b", "test")
+	c := testBinding("c", "test")
+	recorded, err := workflow.NewBuilder(a).
+		AddEdge(a, b).
+		AddEdge(a, c).
+		Build()
+	if err != nil {
+		t.Fatalf("Build recorded: %v", err)
+	}
+	// Same topology, but the edges from a are registered in the opposite order.
+	reordered, err := workflow.NewBuilder(a).
+		AddEdge(a, c).
+		AddEdge(a, b).
+		Build()
+	if err != nil {
+		t.Fatalf("Build reordered: %v", err)
+	}
+
+	info := NewWorkflowInfo(recorded)
+	if !info.Match(reordered) {
+		t.Fatal("expected reordered per-source edges to match order-independently")
+	}
+
+	// A genuinely different edge set must still fail to match.
+	different, err := workflow.NewBuilder(a).
+		AddEdge(a, b).
+		AddEdge(b, c).
+		Build()
+	if err != nil {
+		t.Fatalf("Build different: %v", err)
+	}
+	if info.Match(different) {
+		t.Fatal("expected a different edge set not to match")
+	}
+
+	// Duplicating a single checkpoint edge must not let both copies consume the
+	// same workflow edge: with the consumed guard the second copy has no distinct
+	// workflow edge to match, so the overall match fails.
+	dupInfo := NewWorkflowInfo(recorded)
+	dupInfo.Edges["a"] = []workflow.EdgeInfo{dupInfo.Edges["a"][0], dupInfo.Edges["a"][0]}
+	if dupInfo.Match(recorded) {
+		t.Fatal("expected duplicated checkpoint edge not to double-count a single workflow edge")
+	}
+}
+
 func TestWorkflowInfoMatch_UsesInferredImplementationID(t *testing.T) {
 	wf, err := workflow.NewBuilder(testBinding("a", "")).Build()
 	if err != nil {

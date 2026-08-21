@@ -631,12 +631,7 @@ func executorWithSendTypes(sendTypes ...reflect.Type) *workflow.Executor {
 }
 
 func hasReflectType(types []reflect.Type, typ reflect.Type) bool {
-	for _, candidate := range types {
-		if candidate == typ {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(types, typ)
 }
 
 func TestBindExecutor_RecordsImplementationID(t *testing.T) {

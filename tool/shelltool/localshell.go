@@ -7,11 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"runtime"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -528,7 +528,7 @@ func (o LocalConfig) resolvedShell() (resolvedShell, error) {
 		return resolvedShell{
 			binary:    o.ShellArgv[0],
 			kind:      classifyShellKind(o.ShellArgv[0]),
-			extraArgv: append([]string(nil), o.ShellArgv[1:]...),
+			extraArgv: slices.Clone(o.ShellArgv[1:]),
 		}, nil
 	}
 	binary := resolveShell(o.Shell)
@@ -686,11 +686,8 @@ func commandEnvironment(clean bool, overrides map[string]string, removals []stri
 		setEnvironmentValue(env, name, value)
 	}
 
-	keys := make([]string, 0, len(env))
-	for name := range env {
-		keys = append(keys, name)
-	}
-	sort.Strings(keys)
+	keys := slices.Collect(maps.Keys(env))
+	slices.Sort(keys)
 	result := make([]string, 0, len(keys))
 	for _, name := range keys {
 		result = append(result, name+"="+env[name])

@@ -631,44 +631,36 @@ func (h *hostExecutor) dispatchRequests(wctx *workflow.Context, msgs []*message.
 		}
 	}
 
-	var approvalDispatches []*message.ToolApprovalRequestContent
-	var callDispatches []*message.FunctionCallContent
-	for _, id := range approvalOrder {
-		approval, ok := approvalRequests[id]
-		if !ok {
-			continue
-		}
-		delete(approvalRequests, id)
-		added, err := h.approvalHandler.TrackRequest(wctx, approval)
-		if err != nil {
-			return err
-		}
-		if added {
-			approvalDispatches = append(approvalDispatches, approval)
-		}
+	if err := dispatchTrackedRequests(wctx, approvalOrder, approvalRequests, h.approvalHandler); err != nil {
+		return err
 	}
-	for _, id := range callOrder {
-		call, ok := functionCalls[id]
+	return dispatchTrackedRequests(wctx, callOrder, functionCalls, h.callHandler)
+}
+
+type requestDispatcher[T any] interface {
+	TrackRequest(*workflow.Context, T) (bool, error)
+	DispatchRequest(*workflow.Context, T) error
+}
+
+func dispatchTrackedRequests[T any](wctx *workflow.Context, order []string, requests map[string]T, dispatcher requestDispatcher[T]) error {
+	dispatches := make([]T, 0, len(order))
+	for _, id := range order {
+		request, ok := requests[id]
 		if !ok {
 			continue
 		}
-		delete(functionCalls, id)
-		added, err := h.callHandler.TrackRequest(wctx, call)
+		delete(requests, id)
+		added, err := dispatcher.TrackRequest(wctx, request)
 		if err != nil {
 			return err
 		}
 		if added {
-			callDispatches = append(callDispatches, call)
+			dispatches = append(dispatches, request)
 		}
 	}
 
-	for _, approval := range approvalDispatches {
-		if err := h.approvalHandler.DispatchRequest(wctx, approval); err != nil {
-			return err
-		}
-	}
-	for _, call := range callDispatches {
-		if err := h.callHandler.DispatchRequest(wctx, call); err != nil {
+	for _, request := range dispatches {
+		if err := dispatcher.DispatchRequest(wctx, request); err != nil {
 			return err
 		}
 	}

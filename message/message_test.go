@@ -26,3 +26,18 @@ func TestMessage_Clone_ClonesAdditionalProperties(t *testing.T) {
 		t.Fatalf("expected original additional properties to remain unchanged, got %v", original.AdditionalProperties["k"])
 	}
 }
+
+func TestMessage_Clone_ClonesContentsSlice(t *testing.T) {
+	content := &message.TextContent{Text: "original"}
+	original := message.New(content)
+
+	cloned := original.Clone()
+	if cloned.Contents[0] != content {
+		t.Fatal("expected content values to remain shallow-copied")
+	}
+
+	cloned.Contents[0] = &message.TextContent{Text: "replacement"}
+	if original.Contents[0] != content {
+		t.Fatal("expected replacing cloned contents not to modify the original message")
+	}
+}

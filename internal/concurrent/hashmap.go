@@ -5,36 +5,55 @@ package concurrent
 import (
 	"fmt"
 	"iter"
-)
+	"slices"
+	"strings"
+	"sync"
 
-type Hasher[T any] interface {
-	Hash(T) uint64
-	Equal(T, T) bool
-}
+	"github.com/microsoft/agent-framework-go/internal/hashmap"
+	internalmaphash "github.com/microsoft/agent-framework-go/internal/maphash"
+)
 
 type entry[K, V any] struct {
 	key   K
 	value V
 }
 
-// Map is a mapping from keys of type K to values of type V,
-// using key-equivalence relation H.
-type HashMap[K, V any] struct {
-	entries Map[uint64, entry[K, V]]
-	h       Hasher[K]
+type hashMapState[K, V any] struct {
+	mu    sync.RWMutex
+	inner *hashmap.Map[K, V]
 }
 
-// NewMap returns a new mapping.
-func NewHashMap[K, V any](h Hasher[K]) *HashMap[K, V] {
+// HashMap is a synchronized wrapper around [hashmap.Map].
+type HashMap[K, V any] struct {
+	state *hashMapState[K, V]
+}
+
+// NewHashMap returns a new map that uses the specified hash function and
+// key-equivalence relation.
+func NewHashMap[K, V any](hasher internalmaphash.Hasher[K]) *HashMap[K, V] {
 	return &HashMap[K, V]{
-		h: h,
+		state: &hashMapState[K, V]{
+			inner: hashmap.NewMap[K, V](hasher),
+		},
 	}
+}
+
+func (m *HashMap[K, V]) snapshot() []entry[K, V] {
+	m.state.mu.RLock()
+	defer m.state.mu.RUnlock()
+
+	entries := make([]entry[K, V], 0, m.state.inner.Len())
+	for key, value := range m.state.inner.All() {
+		entries = append(entries, entry[K, V]{key: key, value: value})
+	}
+	return entries
 }
 
 // All returns an iterator over the key/value entries of the map in undefined order.
 func (m *HashMap[K, V]) All() iter.Seq2[K, V] {
+	_ = m.state
 	return func(yield func(K, V) bool) {
-		for entry := range m.entries.Values() {
+		for _, entry := range m.snapshot() {
 			if !yield(entry.key, entry.value) {
 				return
 			}
@@ -42,26 +61,28 @@ func (m *HashMap[K, V]) All() iter.Seq2[K, V] {
 	}
 }
 
-// Load returns the map entry for the given key.
-func (m *HashMap[K, V]) Load(key K) (V, bool) {
-	entry, ok := m.entries.Load(m.h.Hash(key))
-	if !ok {
-		var zero V
-		return zero, false
-	}
-	return entry.value, ok
+// Get reports whether the map contains the specified key, and returns the
+// corresponding value if found, or the zero value if not.
+func (m *HashMap[K, V]) Get(key K) (V, bool) {
+	m.state.mu.RLock()
+	defer m.state.mu.RUnlock()
+	return m.state.inner.Get(key)
 }
 
-// Delete removes th//e entry with the given key, if any.
-func (m *HashMap[K, V]) Delete(key K) {
-	m.entries.Delete(m.h.Hash(key))
+// Delete removes the entry with the given key, if present. It reports whether
+// the map changed, and returns the previous value, if any.
+func (m *HashMap[K, V]) Delete(key K) (V, bool) {
+	m.state.mu.Lock()
+	defer m.state.mu.Unlock()
+	return m.state.inner.Delete(key)
 }
 
 // Keys returns an iterator over the map keys in unspecified order.
 func (m *HashMap[K, V]) Keys() iter.Seq[K] {
+	_ = m.state
 	return func(yield func(K) bool) {
-		for entry := range m.entries.Values() {
-			if !yield(entry.key) {
+		for key := range m.All() {
+			if !yield(key) {
 				return
 			}
 		}
@@ -70,42 +91,64 @@ func (m *HashMap[K, V]) Keys() iter.Seq[K] {
 
 // Values returns an iterator over the map values in unspecified order.
 func (m *HashMap[K, V]) Values() iter.Seq[V] {
+	_ = m.state
 	return func(yield func(V) bool) {
-		for entry := range m.entries.Values() {
-			if !yield(entry.value) {
+		for _, value := range m.All() {
+			if !yield(value) {
 				return
 			}
 		}
 	}
 }
 
-// Swap updates the map entry for key to value, and returns the previous entry, if any.
-func (m *HashMap[K, V]) Swap(key K, value V) (V, bool) {
-	hash := m.h.Hash(key)
-	entry, ok := m.entries.Swap(hash, entry[K, V]{key: key, value: value})
-	if !ok {
-		var zero V
-		return zero, false
-	}
-	return entry.value, ok
+// Set updates the map entry for key to value and returns the previous entry,
+// if any. It reports whether the map size increased.
+func (m *HashMap[K, V]) Set(key K, value V) (prev V, changed bool) {
+	m.state.mu.Lock()
+	defer m.state.mu.Unlock()
+	return m.state.inner.Set(key, value)
 }
 
 func (m *HashMap[K, V]) Clear() {
-	m.entries.Clear()
+	m.state.mu.Lock()
+	defer m.state.mu.Unlock()
+	m.state.inner.Clear()
 }
 
-// String returns a string representation of the map's entries in unspecified order.
-// Values are printed as if by fmt.Sprint.
+// String returns a string representation of the map's entries in an
+// unspecified but deterministic order. Keys and values are printed as if by
+// fmt.Sprint.
 func (m *HashMap[K, V]) String() string {
-	s := "{"
-	first := true
-	for entry := range m.entries.Values() {
-		if !first {
-			s += " "
-		}
-		s += fmt.Sprintf("%v: %v", entry.key, entry.value)
-		first = false
+	type formattedEntry struct {
+		key   string
+		value string
 	}
-	s += "}"
-	return s
+
+	entries := m.snapshot()
+	formatted := make([]formattedEntry, 0, len(entries))
+	for _, entry := range entries {
+		formatted = append(formatted, formattedEntry{
+			key:   fmt.Sprint(entry.key),
+			value: fmt.Sprint(entry.value),
+		})
+	}
+	slices.SortStableFunc(formatted, func(a, b formattedEntry) int {
+		if result := strings.Compare(a.key, b.key); result != 0 {
+			return result
+		}
+		return strings.Compare(a.value, b.value)
+	})
+
+	var buf strings.Builder
+	buf.WriteByte('{')
+	for i, entry := range formatted {
+		if i > 0 {
+			buf.WriteString(", ")
+		}
+		buf.WriteString(entry.key)
+		buf.WriteString(": ")
+		buf.WriteString(entry.value)
+	}
+	buf.WriteByte('}')
+	return buf.String()
 }
