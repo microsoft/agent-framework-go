@@ -5,7 +5,6 @@ package hashmap
 import (
 	"hash/maphash"
 	"slices"
-	"strings"
 	"testing"
 	"unicode"
 	"unicode/utf8"
@@ -27,7 +26,16 @@ func (caseInsensitive) Hash(h *maphash.Hash, s string) {
 }
 
 func (caseInsensitive) Equal(x, y string) bool {
-	return strings.ToLower(x) == strings.ToLower(y)
+	for len(x) > 0 && len(y) > 0 {
+		xr, xSize := utf8.DecodeRuneInString(x)
+		yr, ySize := utf8.DecodeRuneInString(y)
+		if unicode.ToLower(xr) != unicode.ToLower(yr) {
+			return false
+		}
+		x = x[xSize:]
+		y = y[ySize:]
+	}
+	return len(x) == len(y)
 }
 
 func TestMap(t *testing.T) {
