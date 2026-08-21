@@ -1538,7 +1538,7 @@ func TestAgent_Run_HistoryProvider_ClearsWhenThrowDisabledAndClearEnabled(t *tes
 	}
 }
 
-func TestAgent_Run_HistoryProvider_KeepsWhenThrowAndClearDisabled(t *testing.T) {
+func TestAgent_Run_HistoryProvider_KeepsReferenceButSkipsStoreWhenThrowAndClearDisabled(t *testing.T) {
 	provideCalls := 0
 	storeCalls := 0
 	historyProvider := agent.NewHistoryProvider(agent.HistoryProviderConfig{
@@ -1575,14 +1575,14 @@ func TestAgent_Run_HistoryProvider_KeepsWhenThrowAndClearDisabled(t *testing.T) 
 	if _, err := a.RunText(t.Context(), "input", agent.WithSession(agenttest.CreateSession())).Collect(); err != nil {
 		t.Fatalf("unexpected first run error: %v", err)
 	}
-	if provideCalls != 1 || storeCalls != 1 {
-		t.Fatalf("after first run provide/store = %d/%d, want 1/1", provideCalls, storeCalls)
+	if provideCalls != 1 || storeCalls != 0 {
+		t.Fatalf("after first run provide/store = %d/%d, want 1/0", provideCalls, storeCalls)
 	}
 	if _, err := a.RunText(t.Context(), "next", agent.WithSession(agenttest.CreateSession())).Collect(); err != nil {
 		t.Fatalf("unexpected second run error: %v", err)
 	}
-	if provideCalls != 2 || storeCalls != 2 {
-		t.Fatalf("after second run provide/store = %d/%d, want 2/2", provideCalls, storeCalls)
+	if provideCalls != 2 || storeCalls != 1 {
+		t.Fatalf("after second run provide/store = %d/%d, want 2/1", provideCalls, storeCalls)
 	}
 }
 
