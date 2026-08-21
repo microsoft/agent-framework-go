@@ -484,7 +484,7 @@ func (r *runner) checkpoint(ctx context.Context) error {
 		StepNumber:    r.stepTracer.StepNumber(),
 		WorkflowInfo:  workflowInfo,
 		RunnerData:    r.runContext.exportState(),
-		StateData:     *stateData,
+		StateData:     stateData,
 		EdgeStateData: edgeData,
 		Parent:        parent,
 	}

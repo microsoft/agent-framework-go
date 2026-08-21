@@ -527,7 +527,7 @@ func TestScopeLoadPortableValueState_AfterSerialization(t *testing.T) {
 	}
 
 	testCheckpoint := &checkpoint.Checkpoint{
-		StateData: *stateData,
+		StateData: stateData,
 	}
 
 	manager = NewStateManager()

@@ -10,6 +10,7 @@ import (
 
 	"github.com/microsoft/agent-framework-go/internal/concurrent"
 	"github.com/microsoft/agent-framework-go/internal/hashmap"
+	internalmaphash "github.com/microsoft/agent-framework-go/internal/maphash"
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/internal/checkpoint"
 )
@@ -126,17 +127,12 @@ func (s UpdateKey) Hash(h *maphash.Hash) {
 	h.WriteString(s.Key)
 }
 
-var theSeed = maphash.MakeSeed()
-
 type updateKeyHasher struct{}
 
-var UpdateKeyHasher hashmap.Hasher[UpdateKey] = updateKeyHasher{}
+var UpdateKeyHasher internalmaphash.Hasher[UpdateKey] = updateKeyHasher{}
 
-func (updateKeyHasher) Hash(s UpdateKey) uint64 {
-	var mh maphash.Hash
-	mh.SetSeed(theSeed)
-	s.Hash(&mh)
-	return mh.Sum64()
+func (updateKeyHasher) Hash(h *maphash.Hash, s UpdateKey) {
+	s.Hash(h)
 }
 
 func (h updateKeyHasher) Equal(a, b UpdateKey) bool {
@@ -145,13 +141,10 @@ func (h updateKeyHasher) Equal(a, b UpdateKey) bool {
 
 type scopeIDHasher struct{}
 
-var ScopeIDHasher hashmap.Hasher[workflow.ScopeID] = scopeIDHasher{}
+var ScopeIDHasher internalmaphash.Hasher[workflow.ScopeID] = scopeIDHasher{}
 
-func (scopeIDHasher) Hash(s workflow.ScopeID) uint64 {
-	var mh maphash.Hash
-	mh.SetSeed(theSeed)
-	s.Hash(&mh)
-	return mh.Sum64()
+func (scopeIDHasher) Hash(h *maphash.Hash, s workflow.ScopeID) {
+	s.Hash(h)
 }
 
 func (scopeIDHasher) Equal(a, b workflow.ScopeID) bool {
@@ -160,13 +153,10 @@ func (scopeIDHasher) Equal(a, b workflow.ScopeID) bool {
 
 type scopeKeyHasher struct{}
 
-var ScopeKeyHasher hashmap.Hasher[workflow.ScopeKey] = scopeKeyHasher{}
+var ScopeKeyHasher internalmaphash.Hasher[workflow.ScopeKey] = scopeKeyHasher{}
 
-func (scopeKeyHasher) Hash(s workflow.ScopeKey) uint64 {
-	var mh maphash.Hash
-	mh.SetSeed(theSeed)
-	s.Hash(&mh)
-	return mh.Sum64()
+func (scopeKeyHasher) Hash(h *maphash.Hash, s workflow.ScopeKey) {
+	s.Hash(h)
 }
 
 func (scopeKeyHasher) Equal(a, b workflow.ScopeKey) bool {
@@ -189,11 +179,11 @@ func NewStateManager() StateManager {
 
 // getOrCreateScope gets or creates a state scope.
 func (sm *StateManager) getOrCreateScope(scopeID workflow.ScopeID) *StateScope {
-	if scope, ok := sm.scopes.Load(scopeID); ok {
+	if scope, ok := sm.scopes.Get(scopeID); ok {
 		return scope
 	}
 	scope := NewStateScope(scopeID)
-	sm.scopes.Swap(scopeID, scope)
+	sm.scopes.Set(scopeID, scope)
 	return scope
 }
 
@@ -224,22 +214,22 @@ func (sm *StateManager) ClearStateByID(scopeID workflow.ScopeID) error {
 	// into deletes, otherwise a write-then-clear on a fresh scope silently keeps
 	// (and later commits) the write.
 	keysToDelete := map[string]struct{}{}
-	if scope, exists := sm.scopes.Load(scopeID); exists {
+	if scope, exists := sm.scopes.Get(scopeID); exists {
 		keysToDelete = scope.ReadKeys()
 	}
 
 	// Mark existing updates as deletes
 	for updateKey := range sm.getUpdatesForScopeStrict(scopeID) {
-		update, _ := sm.queuedUpdates.Load(updateKey)
+		update, _ := sm.queuedUpdates.Get(updateKey)
 		if !update.IsDelete {
-			sm.queuedUpdates.Swap(updateKey, DeleteStateUpdate(update.Key))
+			sm.queuedUpdates.Set(updateKey, DeleteStateUpdate(update.Key))
 		}
 		delete(keysToDelete, update.Key)
 	}
 
 	// Queue deletes for remaining keys
 	for key := range keysToDelete {
-		sm.queuedUpdates.Swap(UpdateKey{ScopeID: scopeID, Key: key}, DeleteStateUpdate(key))
+		sm.queuedUpdates.Set(UpdateKey{ScopeID: scopeID, Key: key}, DeleteStateUpdate(key))
 	}
 
 	return nil
@@ -248,7 +238,7 @@ func (sm *StateManager) ClearStateByID(scopeID workflow.ScopeID) error {
 // applyUnpublishedUpdates applies queued updates to a set of keys.
 func (sm *StateManager) applyUnpublishedUpdates(scopeID workflow.ScopeID, keys map[string]struct{}) map[string]struct{} {
 	for key := range sm.getUpdatesForScopeStrict(scopeID) {
-		update, _ := sm.queuedUpdates.Load(key)
+		update, _ := sm.queuedUpdates.Get(key)
 		if update.IsDelete || update.Value == nil {
 			delete(keys, update.Key)
 		} else {
@@ -287,7 +277,7 @@ func (sm *StateManager) ReadStateByID(scopeID workflow.ScopeID, key string) (wor
 	stateKey := UpdateKey{ScopeID: scopeID, Key: key}
 
 	// Check queued updates first
-	if update, hasUpdate := sm.queuedUpdates.Load(stateKey); hasUpdate {
+	if update, hasUpdate := sm.queuedUpdates.Get(stateKey); hasUpdate {
 		if update.IsDelete || update.Value == nil {
 			return workflow.PortableValue{}, false, nil
 		}
@@ -343,7 +333,7 @@ func (sm *StateManager) WriteStateByID(scopeID workflow.ScopeID, key string, val
 	}
 
 	stateKey := UpdateKey{ScopeID: scopeID, Key: key}
-	sm.queuedUpdates.Swap(stateKey, UpdateStateUpdate(key, value))
+	sm.queuedUpdates.Set(stateKey, UpdateStateUpdate(key, value))
 
 	return nil
 }
@@ -361,7 +351,7 @@ func (sm *StateManager) ClearStateKeyByID(scopeID workflow.ScopeID, key string) 
 	}
 
 	stateKey := UpdateKey{ScopeID: scopeID, Key: key}
-	sm.queuedUpdates.Swap(stateKey, DeleteStateUpdate(key))
+	sm.queuedUpdates.Set(stateKey, DeleteStateUpdate(key))
 
 	return nil
 }
@@ -372,11 +362,11 @@ func (sm *StateManager) PublishUpdates(tracer StepTracer) error {
 	updatesByScope := hashmap.NewMap[workflow.ScopeID, map[string][]StateUpdate](ScopeIDHasher)
 
 	for key, update := range sm.queuedUpdates.All() {
-		if _, ok := updatesByScope.Load(key.ScopeID); !ok {
+		if _, ok := updatesByScope.Get(key.ScopeID); !ok {
 			updatesByScope.Set(key.ScopeID, make(map[string][]StateUpdate))
 		}
 
-		scopeUpdates, _ := updatesByScope.Load(key.ScopeID)
+		scopeUpdates, _ := updatesByScope.Get(key.ScopeID)
 		scopeUpdates[key.Key] = append(scopeUpdates[key.Key], update)
 	}
 
@@ -428,13 +418,15 @@ func (sm *StateManager) ImportState(cp *checkpoint.Checkpoint) error {
 	sm.queuedUpdates.Clear()
 	sm.scopes.Clear()
 
-	for scopeKey, value := range cp.StateData.All() {
-		scope, ok := sm.scopes.Load(scopeKey.ID)
-		if !ok {
-			scope = NewStateScope(scopeKey.ID)
-			sm.scopes.Swap(scopeKey.ID, scope)
+	if cp.StateData != nil {
+		for scopeKey, value := range cp.StateData.All() {
+			scope, ok := sm.scopes.Get(scopeKey.ID)
+			if !ok {
+				scope = NewStateScope(scopeKey.ID)
+				sm.scopes.Set(scopeKey.ID, scope)
+			}
+			scope.ImportState(scopeKey.Key, value)
 		}
-		scope.ImportState(scopeKey.Key, value)
 	}
 
 	return nil

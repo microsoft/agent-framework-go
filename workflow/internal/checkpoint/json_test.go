@@ -117,10 +117,9 @@ func TestRunnerStateData_JsonRoundtrip(t *testing.T) {
 	}
 }
 
-// A Checkpoint's StateData map is rebuilt from JSON on Unmarshal. Its scope-key
-// hasher must use a fixed seed: a zero-value maphash.Hash picks a new random
-// seed on every call, so Load on a restored map would miss the key it just
-// stored (and shared-scope keys would not collapse).
+// A Checkpoint's StateData map is rebuilt from JSON on Unmarshal. The map must
+// consistently apply its per-instance seed so Get can find keys inserted while
+// restoring the checkpoint.
 func TestCheckpoint_JsonRoundtrip_StateDataRemainsLoadable(t *testing.T) {
 	key := workflow.ScopeKey{ID: workflow.ScopeID{ExecutorID: "exec1"}, Key: "k"}
 	keyJSON, err := json.Marshal(key)
@@ -137,7 +136,7 @@ func TestCheckpoint_JsonRoundtrip_StateDataRemainsLoadable(t *testing.T) {
 	if err := json.Unmarshal(data, &cp); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if _, ok := cp.StateData.Load(key); !ok {
-		t.Fatal("restored StateData.Load(key) = false: the scope-key hasher is not deterministic across calls")
+	if _, ok := cp.StateData.Get(key); !ok {
+		t.Fatal("restored StateData.Get(key) = false: the scope-key hasher is not deterministic across calls")
 	}
 }
