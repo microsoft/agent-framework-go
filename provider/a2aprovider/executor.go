@@ -153,10 +153,26 @@ func (e *executor) executeNewMessageStreaming(ctx context.Context, execCtx *a2as
 		return nil
 	}
 
-	var artifactID a2a.ArtifactID
+	artifactWriter := newArtifactStreamWriter(execCtx)
 	var yieldedWorking bool
 	for update, runErr := range e.agent.Run(ctx, messagesIn, runOptions...) {
 		if runErr != nil {
+			artifact, err := artifactWriter.Complete()
+			if err != nil {
+				return err
+			}
+			if artifact != nil {
+				if !yieldedWorking {
+					if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateWorking, nil), nil) {
+						return nil
+					}
+					yieldedWorking = true
+				}
+				if !yield(artifact, nil) {
+					return nil
+				}
+			}
+
 			statusMsg := a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart(runErr.Error()))
 			if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateFailed, statusMsg), nil) {
 				return nil
@@ -167,6 +183,22 @@ func (e *executor) executeNewMessageStreaming(ctx context.Context, execCtx *a2as
 			continue
 		}
 		if update.ContinuationToken != "" {
+			artifact, err := artifactWriter.Complete()
+			if err != nil {
+				return err
+			}
+			if artifact != nil {
+				if !yieldedWorking {
+					if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateWorking, nil), nil) {
+						return nil
+					}
+					yieldedWorking = true
+				}
+				if !yield(artifact, nil) {
+					return nil
+				}
+			}
+
 			working, err := responseUpdateToWorkingStatusEvent(execCtx, update)
 			if err != nil {
 				return err
@@ -177,20 +209,38 @@ func (e *executor) executeNewMessageStreaming(ctx context.Context, execCtx *a2as
 			return nil
 		}
 
-		artifact, nextArtifactID, err := responseUpdateToArtifactEvent(execCtx, artifactID, update)
+		artifacts, err := artifactWriter.Write(update)
 		if err != nil {
 			return err
 		}
-		if artifact == nil {
-			continue
+
+		for _, artifact := range artifacts {
+			if artifact == nil {
+				continue
+			}
+			if !yieldedWorking {
+				if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateWorking, nil), nil) {
+					return nil
+				}
+				yieldedWorking = true
+			}
+			if !yield(artifact, nil) {
+				return nil
+			}
 		}
+	}
+
+	artifact, err := artifactWriter.Complete()
+	if err != nil {
+		return err
+	}
+	if artifact != nil {
 		if !yieldedWorking {
 			if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateWorking, nil), nil) {
 				return nil
 			}
 			yieldedWorking = true
 		}
-		artifactID = nextArtifactID
 		if !yield(artifact, nil) {
 			return nil
 		}
