@@ -36,6 +36,14 @@ func TestPrependAgentFrameworkToUserAgent(t *testing.T) {
 	}
 }
 
+func TestPrependAgentFrameworkToUserAgentIsIdempotent(t *testing.T) {
+	got := runHelper(t, "prepend-map-twice", userAgentTelemetryDisabledEnvVar+"=")
+	want := runHelper(t, "user-agent", foundryHostingEnvVar+"=", userAgentTelemetryDisabledEnvVar+"=") + " my-app/1.0"
+	if got != want {
+		t.Fatalf("User-Agent = %q, want %q", got, want)
+	}
+}
+
 func TestPrependAgentFrameworkToUserAgentWithNilHeaders(t *testing.T) {
 	want := runHelper(t, "user-agent", foundryHostingEnvVar+"=", userAgentTelemetryDisabledEnvVar+"=")
 	if got := runHelper(t, "prepend-nil", userAgentTelemetryDisabledEnvVar+"="); got != want {
@@ -54,6 +62,22 @@ func TestPrependAgentFrameworkToUserAgentDisabled(t *testing.T) {
 func TestPrependAgentFrameworkToHTTPHeader(t *testing.T) {
 	got := runHelper(t, "prepend-http", userAgentTelemetryDisabledEnvVar+"=")
 	want := runHelper(t, "user-agent", foundryHostingEnvVar+"=", userAgentTelemetryDisabledEnvVar+"=") + " my-app/1.0"
+	if got != want {
+		t.Fatalf("User-Agent = %q, want %q", got, want)
+	}
+}
+
+func TestPrependAgentFrameworkToHTTPHeaderIsIdempotent(t *testing.T) {
+	got := runHelper(t, "prepend-http-twice", userAgentTelemetryDisabledEnvVar+"=")
+	want := runHelper(t, "user-agent", foundryHostingEnvVar+"=", userAgentTelemetryDisabledEnvVar+"=") + " my-app/1.0"
+	if got != want {
+		t.Fatalf("User-Agent = %q, want %q", got, want)
+	}
+}
+
+func TestPrependAgentFrameworkToHTTPHeaderHostedReplacesBareProduct(t *testing.T) {
+	got := runHelper(t, "prepend-http-hosted-over-bare", foundryHostingEnvVar+"=1", userAgentTelemetryDisabledEnvVar+"=")
+	want := runHelper(t, "user-agent", foundryHostingEnvVar+"=1", userAgentTelemetryDisabledEnvVar+"=") + " my-app/1.0"
 	if got != want {
 		t.Fatalf("User-Agent = %q, want %q", got, want)
 	}
@@ -99,6 +123,10 @@ func TestHelperProcess(t *testing.T) {
 	case "prepend-map":
 		headers := telemetry.PrependAgentFrameworkToUserAgent(map[string]string{"User-Agent": "my-app/1.0"})
 		fmt.Print(headers[userAgentKey])
+	case "prepend-map-twice":
+		headers := telemetry.PrependAgentFrameworkToUserAgent(map[string]string{"User-Agent": "my-app/1.0"})
+		headers = telemetry.PrependAgentFrameworkToUserAgent(headers)
+		fmt.Print(headers[userAgentKey])
 	case "prepend-nil":
 		headers := telemetry.PrependAgentFrameworkToUserAgent(nil)
 		fmt.Print(headers[userAgentKey])
@@ -109,6 +137,15 @@ func TestHelperProcess(t *testing.T) {
 		fmt.Print(telemetry.PrependAgentFrameworkToHTTPHeader(nil) == nil)
 	case "prepend-http":
 		headers := telemetry.PrependAgentFrameworkToHTTPHeader(http.Header{"User-Agent": []string{"my-app/1.0"}})
+		fmt.Print(headers.Get(userAgentKey))
+	case "prepend-http-twice":
+		headers := telemetry.PrependAgentFrameworkToHTTPHeader(http.Header{"User-Agent": []string{"my-app/1.0"}})
+		headers = telemetry.PrependAgentFrameworkToHTTPHeader(headers)
+		fmt.Print(headers.Get(userAgentKey))
+	case "prepend-http-hosted-over-bare":
+		headers := telemetry.PrependAgentFrameworkToHTTPHeader(nil)
+		bareUserAgent := strings.TrimPrefix(headers.Get(userAgentKey), "foundry-hosting/")
+		headers = telemetry.PrependAgentFrameworkToHTTPHeader(http.Header{"User-Agent": []string{bareUserAgent + " my-app/1.0"}})
 		fmt.Print(headers.Get(userAgentKey))
 	case "telemetry-enabled-cached":
 		fmt.Println(telemetry.PrependAgentFrameworkToUserAgent(nil) != nil)
