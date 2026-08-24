@@ -118,6 +118,35 @@ func newGenericTestAgent(runFn func(context.Context, []*message.Message, ...agen
 	})
 }
 
+func TestNew_IgnoresNilMiddleware(t *testing.T) {
+	var providerCalls, agentMiddlewareCalls, providerMiddlewareCalls int
+	run := func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		providerCalls++
+		return func(func(*agent.ResponseUpdate, error) bool) {}
+	}
+	agentMiddleware := agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		agentMiddlewareCalls++
+		return next(ctx, messages, options...)
+	})
+	providerMiddleware := agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		providerMiddlewareCalls++
+		return next(ctx, messages, options...)
+	})
+
+	a := agent.New(agent.ProviderConfig{
+		Run:         run,
+		Middlewares: []agent.Middleware{nil, providerMiddleware, nil},
+	}, agent.Config{
+		Middlewares: []agent.Middleware{nil, agentMiddleware, nil},
+	})
+	if _, err := a.RunText(t.Context(), "hello").Collect(); err != nil {
+		t.Fatalf("RunText() error = %v", err)
+	}
+	if providerCalls != 1 || agentMiddlewareCalls != 1 || providerMiddlewareCalls != 1 {
+		t.Fatalf("calls = provider:%d agent middleware:%d provider middleware:%d, want all 1", providerCalls, agentMiddlewareCalls, providerMiddlewareCalls)
+	}
+}
+
 func TestAgent_RunText(t *testing.T) {
 	var capturedMessages []*message.Message
 	responseBuilder := agenttest.NewResponseBuilder(
@@ -389,6 +418,23 @@ func TestAgent_Run_RequiresSessionWhenAllowBackgroundResponsesEnabled(t *testing
 	}
 	if runCalled {
 		t.Fatal("expected run function not to be called when validation fails")
+	}
+}
+
+func TestAgent_Run_RejectsNilSessionWhenAllowBackgroundResponsesEnabled(t *testing.T) {
+	runCalled := false
+	a := agenttest.New(agenttest.NewResponseBuilder(
+		func(context.Context, []*message.Message, ...agent.Option) {
+			runCalled = true
+		},
+	).AddText("response").Build())
+
+	_, err := a.RunText(t.Context(), "test", agent.WithSession(nil), agent.AllowBackgroundResponses(true)).Collect()
+	if err == nil || err.Error() != "a session must be provided when AllowBackgroundResponses is enabled" {
+		t.Fatalf("RunText() error = %v, want session-required error", err)
+	}
+	if runCalled {
+		t.Fatal("run function called with a nil background-response session")
 	}
 }
 

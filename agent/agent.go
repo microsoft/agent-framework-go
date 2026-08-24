@@ -527,7 +527,7 @@ func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, opt
 		optionsOwned = true
 	}
 
-	if _, ok := GetOption(options, WithSession); !ok {
+	if session, ok := GetOption(options, WithSession); !ok || session == nil {
 		if allowBackgroundResponses, ok := GetOption(options, AllowBackgroundResponses); ok && allowBackgroundResponses {
 			// Background responses require an explicit session to avoid inconsistent
 			// caller experience between initial and follow-up runs.

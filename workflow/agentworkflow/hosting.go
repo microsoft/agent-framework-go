@@ -111,8 +111,11 @@ type Config struct {
 
 // New creates a workflow [workflow.ExecutorBinding] that hosts the given
 // [agent.Agent] using the supplied [Config]. The zero value of [Config] is a
-// sensible default.
+// sensible default. New panics if a is nil.
 func New(a *agent.Agent, cfg Config) workflow.ExecutorBinding {
+	if a == nil {
+		panic("agentworkflow: agent is required")
+	}
 	id := descriptiveID(a)
 	ports := hostPorts(id)
 	return workflow.ExecutorBinding{
@@ -206,7 +209,7 @@ func (h *hostExecutor) executor() *workflow.Executor {
 	messageworkflow.Configure(&executor, &messageworkflow.Options{
 		StateKey:                 agentBufferedStateKey,
 		TakeTurnHandler:          h.handleTurnToken,
-		StringMessageRole:        string(message.RoleUser),
+		StringMessageRole:        message.RoleUser,
 		DisableAutoSendTurnToken: true,
 		MessageState:             h.messageState,
 	})

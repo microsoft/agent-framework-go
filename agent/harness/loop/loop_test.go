@@ -4,6 +4,7 @@ package loop_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"iter"
 	"slices"
@@ -264,6 +265,34 @@ func TestLoop_FreshContextPerIteration_RecreatesSession(t *testing.T) {
 	}
 	if capture.sessionsPerCall[1] == capture.sessionsPerCall[2] {
 		t.Fatal("second and third call should use different sessions")
+	}
+}
+
+func TestLoop_FreshContextPerIteration_SnapshotErrorPreservesCause(t *testing.T) {
+	capture := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate {
+		return textUpdates("unused")
+	})
+	a := agent.New(capture.provider(), agent.Config{
+		Middlewares: []agent.Middleware{loop.New(loop.Config{
+			FreshContextPerIteration: true,
+			Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(context.Context, *loop.Context) (loop.Evaluation, error) {
+				return loop.Stop(), nil
+			})},
+		})},
+	})
+	session := &agent.Session{}
+	session.Set("unsupported", func() {})
+
+	_, err := a.RunText(t.Context(), "go", agent.WithSession(session)).Collect()
+	var unsupported *json.UnsupportedTypeError
+	if !errors.As(err, &unsupported) {
+		t.Fatalf("RunText() error = %v, want wrapped json.UnsupportedTypeError", err)
+	}
+	if !strings.Contains(err.Error(), "loop: snapshot session") {
+		t.Fatalf("RunText() error = %v, want snapshot context", err)
+	}
+	if capture.callCount != 0 {
+		t.Fatalf("provider call count = %d, want 0", capture.callCount)
 	}
 }
 

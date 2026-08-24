@@ -90,7 +90,8 @@ type Config struct {
 	// MaximumIterationsPerRequest is the maximum number of tool-invocation rounds
 	// performed for a single run. When the limit is reached, the middleware makes a
 	// final provider request without schema tools so no more local function calls
-	// are requested. The zero value uses the default of 40.
+	// are requested. The zero value uses the default of 40. Negative values are
+	// invalid.
 	MaximumIterationsPerRequest int
 
 	// NewID generates synthetic IDs for generated tool-result messages and
@@ -144,6 +145,10 @@ func New(cfg Config) agent.Middleware {
 
 func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
+		if f.maximumIterationsPerRequest < 0 {
+			yield(nil, fmt.Errorf("toolautocall: MaximumIterationsPerRequest must be 0 or greater, got %d", f.maximumIterationsPerRequest))
+			return
+		}
 		var messagesCloned bool
 		tools, _ := f.createToolsMap(agent.AllOptions(opts, agent.WithTool))
 

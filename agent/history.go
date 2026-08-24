@@ -81,7 +81,12 @@ type defaultHistoryProvider struct {
 // those messages when ProvideOutputMessageFilter is set, source-stamps them,
 // prepends them to caller-provided request messages, filters stored request and
 // response messages, and skips Store when the run fails.
+//
+// It panics if SourceID is empty.
 func NewHistoryProvider(config HistoryProviderConfig) HistoryProvider {
+	if config.SourceID == "" {
+		panic("SourceID is required")
+	}
 	return &defaultHistoryProvider{config: config}
 }
 

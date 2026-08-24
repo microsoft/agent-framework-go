@@ -180,6 +180,10 @@ func (wb *Builder) AddFanOutEdge(source ExecutorBinding, targets []ExecutorBindi
 	if wb.err != nil {
 		return wb
 	}
+	if len(targets) == 0 {
+		wb.err = fmt.Errorf("fan-out edge requires at least one target")
+		return wb
+	}
 	if !wb.track(source) {
 		return wb
 	}
@@ -204,6 +208,10 @@ func (wb *Builder) AddFanOutEdge(source ExecutorBinding, targets []ExecutorBindi
 // all sources before dispatching to the target.
 func (wb *Builder) AddFanInBarrierEdge(sources []ExecutorBinding, target ExecutorBinding, opts ...EdgeOption) *Builder {
 	if wb.err != nil {
+		return wb
+	}
+	if len(sources) == 0 {
+		wb.err = fmt.Errorf("fan-in barrier edge requires at least one source")
 		return wb
 	}
 	if !wb.track(target) {
@@ -471,11 +479,20 @@ func sendTypeCompatibleWithInput(outType, inType reflect.Type) bool {
 	return outType == inType || outType.AssignableTo(inType) || (inType.Kind() == reflect.Interface && outType.Implements(inType))
 }
 
-func (wb *Builder) trackInputPort(port RequestPort) {
+func (wb *Builder) trackInputPort(port RequestPort) bool {
+	if err := validateRequestPort(port); err != nil {
+		wb.err = err
+		return false
+	}
 	if wb.inputPorts == nil {
 		wb.inputPorts = make(map[string]RequestPort)
 	}
+	if existing, ok := wb.inputPorts[port.ID]; ok && existing != port {
+		wb.err = fmt.Errorf("workflow: request port %q conflicts with an existing definition", port.ID)
+		return false
+	}
 	wb.inputPorts[port.ID] = port
+	return true
 }
 
 func (wb *Builder) track(binding ExecutorBinding) bool {
@@ -523,12 +540,17 @@ func (wb *Builder) track(binding ExecutorBinding) bool {
 		}
 	}
 	for _, port := range binding.Ports {
-		wb.trackInputPort(port)
+		if !wb.trackInputPort(port) {
+			return false
+		}
 	}
 	return true
 }
 
 func validateBinding(binding ExecutorBinding) error {
+	if binding.ID == "" {
+		return fmt.Errorf("cannot bind executor with empty ID")
+	}
 	if binding.RawValue == nil {
 		return nil
 	}
@@ -605,6 +627,9 @@ func (wb *Builder) AddSwitch(source ExecutorBinding) *SwitchBuilder {
 // AddCase adds a case branch matching messages of type T satisfying the
 // predicate. The matched message is routed to all bindings in targets.
 func (s *SwitchBuilder) AddCase(predicate func(msg any) bool, targets ...ExecutorBinding) *SwitchBuilder {
+	if predicate == nil {
+		panic("workflow: switch case predicate cannot be nil")
+	}
 	indices := s.collectTargets(targets)
 	s.cases = append(s.cases, switchCase{predicate: predicate, indices: indices})
 	return s

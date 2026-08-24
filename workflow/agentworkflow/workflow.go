@@ -42,7 +42,9 @@ type AgentConfig struct {
 	agent.Config
 
 	// Environment is the execution environment used to run the workflow on
-	// each agent turn. Defaults to [inproc.Default] when nil.
+	// each agent turn. When nil, [inproc.Concurrent] is used if every workflow
+	// executor supports concurrent shared execution; otherwise [inproc.OffThread]
+	// is used.
 	Environment *inproc.ExecutionEnvironment
 
 	// IncludeOutputsInResponse, if true, surfaces [workflow.OutputEvent]

@@ -223,6 +223,43 @@ func TestContentEncoding_Roundtrip(t *testing.T) {
 	}
 }
 
+func TestFunctionContentUnmarshal_ClearsStaleError(t *testing.T) {
+	tests := []struct {
+		name   string
+		data   string
+		target any
+	}{
+		{
+			name:   "function call omitted error",
+			data:   `{"Arguments":"{}","CallID":"call","Name":"tool","InformationalOnly":false,"Type":"functionCall"}`,
+			target: &message.FunctionCallContent{Error: errors.New("stale")},
+		},
+		{
+			name:   "function result empty error",
+			data:   `{"CallID":"call","Error":"","Result":"ok","Type":"functionResult"}`,
+			target: &message.FunctionResultContent{Error: errors.New("stale")},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := json.Unmarshal([]byte(test.data), test.target); err != nil {
+				t.Fatalf("Unmarshal() error = %v", err)
+			}
+			switch target := test.target.(type) {
+			case *message.FunctionCallContent:
+				if target.Error != nil {
+					t.Fatalf("Error = %v, want nil", target.Error)
+				}
+			case *message.FunctionResultContent:
+				if target.Error != nil {
+					t.Fatalf("Error = %v, want nil", target.Error)
+				}
+			}
+		})
+	}
+}
+
 func TestContentEncoding_PreservesAdditionalProperties(t *testing.T) {
 	original := &message.TextContent{
 		ContentHeader: message.ContentHeader{
@@ -310,6 +347,24 @@ func TestDataContentUnmarshalDefaultsMissingMediaType(t *testing.T) {
 	}
 }
 
+func TestDataContentMarshalRejectsInvalidValue(t *testing.T) {
+	tests := []struct {
+		name    string
+		content *message.DataContent
+	}{
+		{name: "invalid base64", content: &message.DataContent{MediaType: "text/plain", Data: "%%%"}},
+		{name: "invalid media type", content: &message.DataContent{MediaType: "not a media type", Data: "aGVsbG8="}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := json.Marshal(test.content); err == nil {
+				t.Fatal("Marshal() error = nil, want validation error")
+			}
+		})
+	}
+}
+
 func TestDataContentUnmarshalPreservesInvalidPercentEscapes(t *testing.T) {
 	var content message.DataContent
 	if err := json.Unmarshal([]byte(`{"Type":"data","URI":"data:,hello%20%ZZ+there"}`), &content); err != nil {
@@ -339,6 +394,14 @@ func TestNewURIContentInfersMediaType(t *testing.T) {
 	}
 	if content.MediaType != "application/octet-stream" {
 		t.Fatalf("MediaType = %q, want application/octet-stream", content.MediaType)
+	}
+
+	content, err = message.NewURIContent("data:image/png;base64,iVBORw0KGgo=", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if content.MediaType != "image/png" {
+		t.Fatalf("MediaType = %q, want image/png", content.MediaType)
 	}
 }
 
@@ -1025,5 +1088,15 @@ func TestCoalesceContents(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCoalesceContents_PreservesInvalidDataContent(t *testing.T) {
+	invalid := &message.DataContent{Data: "%%%", MediaType: "text/plain"}
+	valid := &message.DataContent{Data: base64.StdEncoding.EncodeToString([]byte("valid")), MediaType: "text/plain"}
+
+	got := message.CoalesceContents([]message.Content{invalid, valid})
+	if len(got) != 2 || got[0] != invalid || got[1] != valid {
+		t.Fatalf("CoalesceContents() = %#v, want original contents", got)
 	}
 }

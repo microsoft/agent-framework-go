@@ -435,10 +435,12 @@ func (e *Executor) describeProtocol() (ProtocolDescriptor, error) {
 	return protocol.describe(), nil
 }
 
+// DescribeProtocol returns the executor's accepted, sent, and yielded message
+// types. It panics if the executor's protocol configuration is invalid.
 func (e *Executor) DescribeProtocol() ProtocolDescriptor {
 	protocol, err := e.describeProtocol()
 	if err != nil {
-		return ProtocolDescriptor{}
+		panic(err)
 	}
 	return protocol
 }
@@ -794,7 +796,7 @@ func hasAnonymousFuncOrdinal(s string) bool {
 //     significant; _ is recommended for marker-only fields.
 //
 // NewExecutor panics for nil values, nil functions, unsupported function
-// signatures, or mismatched IDs.
+// signatures, factory failures, or mismatched IDs.
 func NewExecutor(id string, v any) *Executor {
 	if v == nil {
 		panic("workflow: cannot create Executor from nil value")
@@ -805,7 +807,7 @@ func NewExecutor(id string, v any) *Executor {
 			panic("workflow: cannot create Executor from nil *Executor")
 		}
 		if id != "" && v.ID != id {
-			panic(fmt.Sprintf("workflow: executor ID %q does not match provided ID %q", v.ID, id))
+			panic(fmt.Errorf("workflow: executor ID %q does not match provided ID %q", v.ID, id))
 		}
 		return v
 	case RequestPort:
@@ -817,11 +819,11 @@ func NewExecutor(id string, v any) *Executor {
 		return newRequestPortExecutor(*v)
 	case ExecutorBinding:
 		if id != "" && v.ID != id {
-			panic(fmt.Sprintf("workflow: binding ID %q does not match provided ID %q", v.ID, id))
+			panic(fmt.Errorf("workflow: binding ID %q does not match provided ID %q", v.ID, id))
 		}
 		executor, err := v.CreateInstance(v.ID)
 		if err != nil {
-			panic(fmt.Sprintf("workflow: error creating Executor from binding for ID %q: %v", v.ID, err))
+			panic(fmt.Errorf("workflow: error creating Executor from binding for ID %q: %w", v.ID, err))
 		}
 		return executor
 	default:
@@ -844,9 +846,9 @@ func NewExecutor(id string, v any) *Executor {
 			if ok {
 				return executor
 			}
-			panic(fmt.Sprintf("workflow: cannot create Executor from value of type %T", v))
+			panic(fmt.Errorf("workflow: cannot create Executor from value of type %T", v))
 		default:
-			panic(fmt.Sprintf("workflow: cannot create Executor from value of type %T", v))
+			panic(fmt.Errorf("workflow: cannot create Executor from value of type %T", v))
 		}
 	}
 }

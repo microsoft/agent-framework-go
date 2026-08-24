@@ -533,7 +533,7 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 		return messages, nil
 
 	default:
-		panic("unknown message role: " + string(msg.Role))
+		return nil, fmt.Errorf("openaiprovider: unsupported message role %q", msg.Role)
 	}
 }
 

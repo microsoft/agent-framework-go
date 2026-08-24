@@ -47,6 +47,17 @@ func bodyEqual(t *testing.T, got string, want string) {
 	}
 }
 
+func TestChatCompletionsAgent_UnsupportedMessageRoleReturnsError(t *testing.T) {
+	a := openaiprovider.NewChatCompletionsAgent(openai.NewClient(option.WithAPIKey("test")), openaiprovider.AgentConfig{
+		Model:  "test-model",
+		Config: agent.Config{DisableFuncAutoCall: true},
+	})
+	_, err := a.Run(t.Context(), []*message.Message{{Role: message.Role("custom")}}).Collect()
+	if err == nil || !strings.Contains(err.Error(), "unsupported message role") {
+		t.Fatalf("Run() error = %v, want unsupported message role", err)
+	}
+}
+
 func newTestServer(t *testing.T, input string, output string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

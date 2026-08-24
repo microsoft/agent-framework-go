@@ -598,6 +598,23 @@ func TestExecutorDescribeProtocol_IncludesExplicitSendAndYieldTypes(t *testing.T
 	}
 }
 
+func TestExecutorDescribeProtocol_PanicsOnConfigurationError(t *testing.T) {
+	want := errors.New("invalid protocol")
+	executor := &workflow.Executor{
+		ConfigureProtocol: func(*workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+			return nil, want
+		},
+	}
+	defer func() {
+		got, ok := recover().(error)
+		if !ok || !errors.Is(got, want) {
+			t.Fatalf("panic = %v, want %v", got, want)
+		}
+	}()
+
+	executor.DescribeProtocol()
+}
+
 func TestExecutorDescribeProtocol_ValueReturnIsAllocFreeAfterBuild(t *testing.T) {
 	executor := executorWithSendTypes(reflect.TypeFor[protocolSent]())
 	_ = executor.DescribeProtocol()

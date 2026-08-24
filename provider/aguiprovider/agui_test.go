@@ -21,6 +21,23 @@ import (
 	"github.com/microsoft/agent-framework-go/tool/functool"
 )
 
+func TestNewAgent_PanicsWithNilClient(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic")
+		}
+	}()
+	aguiprovider.NewAgent(nil, aguiprovider.AgentConfig{})
+}
+
+func TestAgent_UnsupportedMessageRoleReturnsError(t *testing.T) {
+	a := aguiprovider.NewAgent(newTestClient("http://127.0.0.1"), aguiprovider.AgentConfig{})
+	_, err := a.Run(t.Context(), []*message.Message{{Role: message.Role("custom")}}).Collect()
+	if err == nil || !strings.Contains(err.Error(), "unsupported message role") {
+		t.Fatalf("Run() error = %v, want unsupported message role", err)
+	}
+}
+
 func TestAGUIAgentRun_AggregatesStreamingText(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
