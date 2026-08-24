@@ -69,10 +69,9 @@ func (run *Run) NewEventCount() int {
 }
 
 // NewEvents returns an iterator over the events accumulated since the previous
-// call to NewEvents. The internal bookmark is advanced to the current end of the
-// event sink as soon as iteration begins, so every event returned here is
-// consumed even if the caller stops iterating early; a subsequent call will only
-// yield events accumulated after this call.
+// call to NewEvents. The internal bookmark advances as each event is yielded,
+// so stopping iteration early leaves unread events available to a subsequent
+// call.
 func (run *Run) NewEvents() iter.Seq[workflow.Event] {
 	return func(yield func(workflow.Event) bool) {
 		// Advance the read bookmark as each event is delivered so that stopping

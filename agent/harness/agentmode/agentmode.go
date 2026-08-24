@@ -356,7 +356,7 @@ func (p *Provider) SetMode(mode string, opts ...agent.Option) error {
 	mu.Lock()
 	defer mu.Unlock()
 	session, ok := agent.GetOption(opts, agent.WithSession)
-	if !ok {
+	if !ok || session == nil {
 		return fmt.Errorf("agentmode: no session available")
 	}
 	var s state

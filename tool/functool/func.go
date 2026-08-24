@@ -4,6 +4,7 @@ package functool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 
@@ -51,6 +52,9 @@ func MustNew[In, Out any](cfg Config, h HandlerFor[In, Out]) tool.FuncTool {
 // inputs and validating arguments before invoking h. It returns an error if
 // either schema cannot be constructed.
 func New[In, Out any](cfg Config, h HandlerFor[In, Out]) (tool.FuncTool, error) {
+	if h == nil {
+		return nil, errors.New("functool: handler is required")
+	}
 	t := funcTool{
 		cfg: cfg,
 	}

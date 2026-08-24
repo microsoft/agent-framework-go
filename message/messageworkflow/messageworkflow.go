@@ -14,8 +14,8 @@ import (
 )
 
 // Options configures the chat-message workflow behavior applied by Configure.
-// StateKey and TakeTurnHandler are required; Configure panics if StateKey is
-// empty or TakeTurnHandler is nil. The remaining fields are optional.
+// StateKey and TakeTurnHandler are required; Configure panics if options is nil,
+// StateKey is empty, or TakeTurnHandler is nil. The remaining fields are optional.
 type Options struct {
 	// StateKey identifies the accumulated turn state within the workflow.
 	StateKey string
@@ -23,7 +23,7 @@ type Options struct {
 	TakeTurnHandler func(ctx *workflow.Context, token workflow.TurnToken, messages []*message.Message) error
 
 	// StringMessageRole, when set, registers a handler that wraps incoming string messages with this role.
-	StringMessageRole string
+	StringMessageRole message.Role
 	// ScopeName scopes the accumulated turn state; used when constructing a default MessageState.
 	ScopeName string
 	// DisableAutoSendTurnToken suppresses automatically declaring and forwarding the turn token.
@@ -70,12 +70,17 @@ func Configure(executor *workflow.Executor, options *Options) {
 	if executor == nil {
 		panic("messageworkflow: executor is required")
 	}
+	if options == nil {
+		panic("messageworkflow: options are required")
+	}
 	if options.StateKey == "" {
 		panic("stateKey is required")
 	}
 	if options.TakeTurnHandler == nil {
 		panic("TakeTurnHandler is required")
 	}
+	configured := *options
+	options = &configured
 	state := options.MessageState
 	if state == nil {
 		state = NewMessageState(options.StateKey, options.ScopeName)
@@ -90,7 +95,7 @@ func Configure(executor *workflow.Executor, options *Options) {
 				rb.SendsMessageType(reflect.TypeFor[workflow.TurnToken]())
 			}
 			if options.StringMessageRole != "" {
-				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, accumulateStringMessage(state, message.Role(options.StringMessageRole)))
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, accumulateStringMessage(state, options.StringMessageRole))
 			}
 			rb.RouteBuilder.
 				AddHandlerRaw(reflect.TypeFor[*message.Message](), nil, accumulateMessage(state)).

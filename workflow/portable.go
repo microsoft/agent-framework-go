@@ -3,6 +3,7 @@
 package workflow
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -26,10 +27,16 @@ type PortableValue struct {
 func AnyPortableValue(v any) PortableValue {
 	switch val := v.(type) {
 	case PortableValue:
+		if !val.valid() {
+			panic("workflow: PortableValue cannot wrap zero value")
+		}
 		return val
 	case *PortableValue:
 		if val == nil {
 			panic("workflow: PortableValue cannot wrap nil")
+		}
+		if !val.valid() {
+			panic("workflow: PortableValue cannot wrap zero value")
 		}
 		return *val
 	default:
@@ -38,6 +45,10 @@ func AnyPortableValue(v any) PortableValue {
 		}
 		return PortableValue{any: v, TypeID: NewTypeID(reflect.TypeOf(v))}
 	}
+}
+
+func (v PortableValue) valid() bool {
+	return v.any != nil
 }
 
 // PortableValueAs attempts to convert the supplied [PortableValue] to the requested type T.
@@ -146,7 +157,7 @@ func decodePortableJSON[T any](raw json.RawMessage) (any, bool) {
 // If the value is stored in a delayed deserialized form, it will attempt to
 // deserialize it to the requested type.
 func (v *PortableValue) Is(typ reflect.Type) bool {
-	if v == nil {
+	if v == nil || typ == nil {
 		return false
 	}
 	if typ == reflect.TypeFor[PortableValue]() {
@@ -195,7 +206,7 @@ func (v *PortableValue) Delayed() bool {
 }
 
 func (v PortableValue) MarshalJSON() ([]byte, error) {
-	if v.any == nil {
+	if !v.valid() {
 		return nil, errors.New("cannot marshal zero PortableValue")
 	}
 	// Preserve the original wire bytes for a delayed value that was never read.
@@ -221,12 +232,19 @@ func (v PortableValue) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PortableValue) UnmarshalJSON(data []byte) error {
-	if string(data) == "null" {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
 		return errors.New("cannot unmarshal null PortableValue")
 	}
 	var wire portableValueJSON
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return err
+	}
+	raw := bytes.TrimSpace(wire.Value)
+	if len(raw) == 0 {
+		return errors.New("cannot unmarshal PortableValue without a non-null value")
+	}
+	if bytes.Equal(raw, []byte("null")) && wire.TypeID == (TypeID{}) {
+		return errors.New("cannot unmarshal untyped null PortableValue")
 	}
 	*v = PortableValue{any: wire.Value, TypeID: wire.TypeID}
 	return nil

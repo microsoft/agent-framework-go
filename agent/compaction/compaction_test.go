@@ -25,6 +25,14 @@ func (f strategyFunc) Compact(ctx context.Context, index *compaction.MessageInde
 	return f(ctx, index)
 }
 
+func TestSummarizerFunc_NilReturnsError(t *testing.T) {
+	var summarizer compaction.SummarizerFunc
+	_, err := summarizer.Summarize(t.Context(), nil)
+	if err == nil || err.Error() != "compaction: summarizer function is nil" {
+		t.Fatalf("Summarize() error = %v, want nil-function error", err)
+	}
+}
+
 func TestMessageIndex_GroupsToolCallsAtomically(t *testing.T) {
 	messages := []*message.Message{
 		textMessage(message.RoleSystem, "system"),

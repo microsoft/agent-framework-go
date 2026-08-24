@@ -304,7 +304,7 @@ func (host *groupChatHostExecutor) executor() *workflow.Executor {
 	messageworkflow.Configure(&executor, &messageworkflow.Options{
 		StateKey:                 groupChatHostBufferedStateKey,
 		TakeTurnHandler:          host.handleTurn,
-		StringMessageRole:        string(message.RoleUser),
+		StringMessageRole:        message.RoleUser,
 		DisableAutoSendTurnToken: true,
 		MessageState:             host.messageState,
 	})

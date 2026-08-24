@@ -143,12 +143,19 @@ func FSFromSkill(skill *skills.Skill) (fs.FS, error) {
 }
 
 // NewSource creates a file-based skill source with default options.
+// It panics if any filesystem is nil.
 func NewSource(filesystems ...fs.FS) *Source {
 	return NewSourceOptions(SourceOptions{}, filesystems...)
 }
 
 // NewSourceOptions creates a file-based skill source using the provided options.
+// It panics if any filesystem is nil.
 func NewSourceOptions(opts SourceOptions, filesystems ...fs.FS) *Source {
+	for index, filesystem := range filesystems {
+		if filesystem == nil {
+			panic(fmt.Sprintf("fsskills: filesystem at index %d is nil", index))
+		}
+	}
 	logger := opts.Logger
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)

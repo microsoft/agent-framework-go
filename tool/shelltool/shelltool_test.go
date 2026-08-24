@@ -796,6 +796,39 @@ func TestNewLocal_negativeMaxOutputErrors(t *testing.T) {
 	}
 }
 
+func TestNewLocal_invalidModeErrors(t *testing.T) {
+	_, err := shelltool.NewLocal(shelltool.LocalConfig{
+		AcknowledgeUnsafe: true,
+		Mode:              shelltool.Mode(99),
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid Mode 99") {
+		t.Fatalf("NewLocal() error = %v, want invalid mode error", err)
+	}
+}
+
+func TestNewLocal_negativeTimeoutErrors(t *testing.T) {
+	_, err := shelltool.NewLocal(shelltool.LocalConfig{
+		AcknowledgeUnsafe: true,
+		Timeout:           -time.Second,
+	})
+	if err == nil || !strings.Contains(err.Error(), "Timeout must be non-negative") {
+		t.Fatalf("NewLocal() error = %v, want negative timeout error", err)
+	}
+}
+
+func TestNewEnvironmentProvider_invalidFamilyPanics(t *testing.T) {
+	fake := &environmentTestExecutor{}
+	defer func() {
+		if got := recover(); got != "shelltool: invalid shell family 99" {
+			t.Fatalf("panic = %v, want invalid shell family message", got)
+		}
+	}()
+
+	shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
+		OverrideFamily: shelltool.ShellFamily(99),
+	})
+}
+
 func TestNewLocal_descriptionContainsShellGuidance(t *testing.T) {
 	ft := newLocal(t, shelltool.LocalConfig{AcknowledgeUnsafe: true})
 	desc := ft.Description()

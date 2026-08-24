@@ -73,10 +73,52 @@ func TestNew_ExposesAgentMetadataAndSchemas(t *testing.T) {
 	}
 }
 
+func TestNew_PanicsWithNilAgent(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic")
+		}
+	}()
+	agenttool.New(nil, agenttool.Config{})
+}
+
+func TestNew_ClonesRunOptions(t *testing.T) {
+	var capturedOptions []agent.Option
+	a := agenttest.New(agenttest.NewResponseBuilder(
+		func(_ context.Context, _ []*message.Message, opts ...agent.Option) {
+			capturedOptions = opts
+		},
+	).AddText("ok").Build())
+	runOptions := []agent.Option{agent.Stream(false)}
+	tl := agenttool.New(a, agenttool.Config{RunOptions: runOptions})
+	runOptions[0] = agent.Stream(true)
+
+	if _, err := tl.Call(t.Context(), `{"query":"hello"}`); err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+	stream, ok := agent.GetOption(capturedOptions, agent.Stream)
+	if !ok || stream {
+		t.Fatalf("stream option = %v, %v; want false, true", stream, ok)
+	}
+}
+
 func TestName_SanitizesInvalidCharacters(t *testing.T) {
 	tl := agenttool.New(newNamedAgent("Weather Agent!", "forecasts"), agenttool.Config{})
 
 	if got, want := tl.Name(), "Weather_Agent_"; got != want {
+		t.Fatalf("Name() = %q, want %q", got, want)
+	}
+}
+
+func TestName_FallsBackToAgentID(t *testing.T) {
+	a := agent.New(agent.ProviderConfig{
+		Run: func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			return func(func(*agent.ResponseUpdate, error) bool) {}
+		},
+	}, agent.Config{ID: "unnamed-agent"})
+	tl := agenttool.New(a, agenttool.Config{})
+
+	if got, want := tl.Name(), "unnamed_agent"; got != want {
 		t.Fatalf("Name() = %q, want %q", got, want)
 	}
 }

@@ -41,13 +41,20 @@ func (m ToolMode) Mode() ToolMode {
 // It returns nil unless m was created by RequireTools.
 func (m ToolMode) Required() []string {
 	if strings.HasPrefix(string(m), requiredPrefix) && m != ToolModeRequired {
-		return strings.Split(strings.TrimPrefix(string(m), requiredPrefix), ",")
+		names := strings.TrimPrefix(string(m), requiredPrefix)
+		if names == "" {
+			return nil
+		}
+		return strings.Split(names, ",")
 	}
 	return nil
 }
 
 // RequireTools returns a ToolMode that requires the named tools to be used.
 func RequireTools(name ...string) ToolMode {
+	if len(name) == 0 {
+		return ToolModeRequired
+	}
 	return ToolMode(requiredPrefix + strings.Join(name, ","))
 }
 
@@ -99,6 +106,9 @@ func (approvalRequiredFunc) ApprovalRequired() bool { return true }
 // If the tool already requires approval, it is returned as-is.
 // Not all tools support approval, in which case the original tool is returned.
 func ApprovalRequiredFunc(t FuncTool) FuncTool {
+	if t == nil {
+		return nil
+	}
 	if approval, ok := t.(ApprovalRequiredTool); ok && approval.ApprovalRequired() {
 		return t
 	}

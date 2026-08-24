@@ -349,14 +349,13 @@ func (p contextProviderFunc) Invoked(ctx context.Context, invoked agent.InvokedC
 	return p.invoked(ctx, invoked)
 }
 
-func TestContextProvider_Invoking_PanicsWithoutSourceID(t *testing.T) {
-	provider := agent.NewContextProvider(agent.ContextProviderConfig{})
+func TestNewContextProvider_PanicsWithoutSourceID(t *testing.T) {
 	defer func() {
 		if recover() == nil {
 			t.Fatal("expected panic")
 		}
 	}()
-	_, _, _ = invokeContextProvider(provider, t.Context(), nil, agent.WithSession(agenttest.CreateSession()))
+	agent.NewContextProvider(agent.ContextProviderConfig{})
 }
 
 func TestContextProvider_Invoking_SourceStampsProvidedMessages(t *testing.T) {
@@ -601,16 +600,6 @@ func TestContextProvider_Invoking_UsesCustomSourceID(t *testing.T) {
 	if messages[0].Source.ID != "CustomContextSource" {
 		t.Fatalf("expected custom source ID, got %q", messages[0].Source.ID)
 	}
-}
-
-func TestContextProvider_Invoked_PanicsWithoutSourceID(t *testing.T) {
-	provider := agent.NewContextProvider(agent.ContextProviderConfig{})
-	defer func() {
-		if recover() == nil {
-			t.Fatal("expected panic")
-		}
-	}()
-	_ = invokeContextProviderInvoked(provider, t.Context(), nil, nil, agent.WithSession(agenttest.CreateSession()))
 }
 
 func TestContextProvider_Invoked_CallsStoreAndIncludesExternalRequestMessagesByDefault(t *testing.T) {

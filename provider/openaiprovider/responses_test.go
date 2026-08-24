@@ -35,6 +35,17 @@ type continuationToken struct {
 	SequenceNumber int64  `json:"sequence_number"`
 }
 
+func TestResponsesAgent_UnsupportedMessageRoleReturnsError(t *testing.T) {
+	a := openaiprovider.NewResponsesAgent(openai.NewClient(option.WithAPIKey("test")), openaiprovider.AgentConfig{
+		Model:  "test-model",
+		Config: agent.Config{DisableFuncAutoCall: true},
+	})
+	_, err := a.Run(t.Context(), []*message.Message{{Role: message.Role("custom")}}).Collect()
+	if err == nil || !strings.Contains(err.Error(), "unsupported message role") {
+		t.Fatalf("Run() error = %v, want unsupported message role", err)
+	}
+}
+
 // Helper functions for responses tests
 func newTestResponsesServer(t *testing.T, input string, output string) *httptest.Server {
 	t.Helper()

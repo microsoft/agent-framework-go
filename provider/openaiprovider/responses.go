@@ -782,7 +782,7 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 		}
 
 	default:
-		panic("unknown message role: " + string(msg.Role))
+		return nil, fmt.Errorf("openaiprovider: unsupported message role %q", msg.Role)
 	}
 
 	if len(contents) > 0 {

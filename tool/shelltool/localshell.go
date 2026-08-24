@@ -103,6 +103,12 @@ func (o LocalConfig) maxOutputBytes() int {
 }
 
 func (o LocalConfig) validate() error {
+	if o.Mode != ModePersistent && o.Mode != ModeStateless {
+		return fmt.Errorf("shelltool: invalid Mode %d", o.Mode)
+	}
+	if o.Timeout < 0 {
+		return fmt.Errorf("shelltool: Timeout must be non-negative")
+	}
 	if o.MaxOutputBytes < 0 {
 		return fmt.Errorf("shelltool: MaxOutputBytes must be non-negative")
 	}

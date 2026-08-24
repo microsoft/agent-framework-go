@@ -29,6 +29,33 @@ type testOutput struct {
 	Age  int    `json:"age"`
 }
 
+func TestNewAgent_PanicsWithNilClient(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic")
+		}
+	}()
+	geminiprovider.NewAgent(nil, geminiprovider.AgentConfig{})
+}
+
+func TestAgent_UnsupportedMessageRoleReturnsError(t *testing.T) {
+	client, err := genai.NewClient(t.Context(), &genai.ClientConfig{
+		Backend: genai.BackendGeminiAPI,
+		APIKey:  "test",
+	})
+	if err != nil {
+		t.Fatalf("genai.NewClient: %v", err)
+	}
+	a := geminiprovider.NewAgent(client, geminiprovider.AgentConfig{
+		Model:  testModel,
+		Config: agent.Config{DisableFuncAutoCall: true},
+	})
+	_, err = a.Run(t.Context(), []*message.Message{{Role: message.Role("custom")}}).Collect()
+	if err == nil || !strings.Contains(err.Error(), "unsupported message role") {
+		t.Fatalf("Run() error = %v, want unsupported message role", err)
+	}
+}
+
 func newTestClient(t *testing.T, server *httptest.Server) *agent.Agent {
 	t.Helper()
 	client, err := genai.NewClient(t.Context(), &genai.ClientConfig{

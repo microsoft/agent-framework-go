@@ -42,6 +42,9 @@ func (mf MiddlewareFunc) Run(next RunFunc, ctx context.Context, messages []*mess
 func compileRunChain(fn RunFunc, middlewares []Middleware) RunFunc {
 	for i := len(middlewares) - 1; i >= 0; i-- {
 		mw := middlewares[i]
+		if mw == nil {
+			continue
+		}
 		fn = middlewareRunner{
 			Middleware: mw,
 			next:       fn,

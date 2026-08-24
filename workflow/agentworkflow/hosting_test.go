@@ -71,6 +71,16 @@ func splitWordsKeepSpaces(s string) []string {
 	return words
 }
 
+func TestNewPanicsForNilAgent(t *testing.T) {
+	defer func() {
+		if got := recover(); got != "agentworkflow: agent is required" {
+			t.Fatalf("panic = %v, want agent required message", got)
+		}
+	}()
+
+	agentworkflow.New(nil, agentworkflow.Config{})
+}
+
 // newReplayAgent emits one *ResponseUpdate per word of each non-empty source
 // message, sharing a stable MessageID across all updates from the same source
 // message.

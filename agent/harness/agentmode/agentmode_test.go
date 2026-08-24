@@ -479,6 +479,15 @@ func TestPublicSetMode_InvalidMode_ReturnsError(t *testing.T) {
 	}
 }
 
+func TestPublicSetMode_NilSession_ReturnsError(t *testing.T) {
+	p := agentmode.New(agentmode.Config{})
+
+	err := p.SetMode("execute", agent.WithSession(nil))
+	if err == nil || err.Error() != "agentmode: no session available" {
+		t.Fatalf("SetMode() error = %v, want no-session error", err)
+	}
+}
+
 // 22. PublicSetMode_ReflectedInToolResults
 func TestPublicSetMode_ReflectedInInstructions(t *testing.T) {
 	p := agentmode.New(agentmode.Config{})

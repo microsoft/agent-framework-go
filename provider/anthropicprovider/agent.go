@@ -476,7 +476,7 @@ func (a *client) buildMessageParams(messages []*message.Message, opts []agent.Op
 				}
 			}
 		default:
-			// Ignore
+			return anthropic.MessageNewParams{}, fmt.Errorf("anthropicprovider: unsupported message role %q", msg.Role)
 		}
 	}
 

@@ -27,6 +27,20 @@ type testOutput struct {
 	Age  int    `json:"age"`
 }
 
+func TestAgent_UnsupportedMessageRoleReturnsError(t *testing.T) {
+	a := anthropicprovider.NewAgent(
+		anthropic.NewClient(option.WithAPIKey("test")),
+		anthropicprovider.AgentConfig{
+			Model:  "test-model",
+			Config: agent.Config{DisableFuncAutoCall: true},
+		},
+	)
+	_, err := a.Run(t.Context(), []*message.Message{{Role: message.Role("custom")}}).Collect()
+	if err == nil || !strings.Contains(err.Error(), "unsupported message role") {
+		t.Fatalf("Run() error = %v, want unsupported message role", err)
+	}
+}
+
 func newTestClient(t *testing.T, server *httptest.Server) *agent.Agent {
 	t.Helper()
 	return anthropicprovider.NewAgent(
