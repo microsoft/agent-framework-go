@@ -233,11 +233,7 @@ func (s *streamingRunEventStream) runLoop() {
 		}
 
 		// Update status based on what's waiting
-		if s.stepRunner.HasUnservicedRequests() {
-			s.setStatus(RunStatusPendingRequests)
-		} else {
-			s.setStatus(RunStatusIdle)
-		}
+		s.setStatus(idleOrPendingRequestsStatus(s.stepRunner))
 
 		// Signal completion to consumer so they can check status and decide whether to continue
 		// Increment epoch so next consumer iteration gets a new completion signal
@@ -492,11 +488,7 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 
 		defer func() {
 			// Update status
-			if l.stepRunner.HasUnservicedRequests() {
-				l.setStatus(RunStatusPendingRequests)
-			} else {
-				l.setStatus(RunStatusIdle)
-			}
+			l.setStatus(idleOrPendingRequestsStatus(l.stepRunner))
 		}()
 
 		l.setStatus(RunStatusRunning)
@@ -547,11 +539,7 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 			}
 
 			// Update status
-			if l.stepRunner.HasUnservicedRequests() {
-				l.setStatus(RunStatusPendingRequests)
-			} else {
-				l.setStatus(RunStatusIdle)
-			}
+			l.setStatus(idleOrPendingRequestsStatus(l.stepRunner))
 
 			// Check if we should break
 			status := l.getStatus()
@@ -579,11 +567,7 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 					// No work yet: the run may have progressed to a terminal
 					// state (e.g. requests serviced elsewhere). Re-evaluate and
 					// stop if there is nothing left to wait for.
-					if l.stepRunner.HasUnservicedRequests() {
-						l.setStatus(RunStatusPendingRequests)
-					} else {
-						l.setStatus(RunStatusIdle)
-					}
+					l.setStatus(idleOrPendingRequestsStatus(l.stepRunner))
 					status = l.getStatus()
 					if l.shouldBreak(status, blockOnPendingRequest, linkedCtx) {
 						return
@@ -643,6 +627,13 @@ func (l *lockstepRunEventStream) shouldBreak(status RunStatus, blockOnPendingReq
 		return true
 	}
 	return false
+}
+
+func idleOrPendingRequestsStatus(stepRunner SuperStepRunner) RunStatus {
+	if stepRunner.HasUnservicedRequests() {
+		return RunStatusPendingRequests
+	}
+	return RunStatusIdle
 }
 
 // SignalInput signals that new input has been provided and the run loop should continue processing.
