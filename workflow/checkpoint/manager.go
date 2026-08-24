@@ -152,7 +152,7 @@ func (s *jsonManager) Lookup(ctx context.Context, sessionID string, checkpointIn
 		return nil, fmt.Errorf("checkpoint: sessionID cannot be empty")
 	}
 	if err := validateManagerCheckpointInfo(sessionID, checkpointInfo); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("checkpoint: invalid checkpoint info: %w", err)
 	}
 	v, err := s.store.RetrieveCheckpoint(ctx, sessionID, checkpointInfo)
 	if err != nil {

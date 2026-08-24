@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -53,6 +54,8 @@ func TestJSONManager_ValidatesInputs(t *testing.T) {
 	}
 	if _, err := manager.Lookup(t.Context(), "session", workflow.CheckpointInfo{SessionID: "session"}); err == nil {
 		t.Fatal("Lookup() error = nil for empty checkpoint ID")
+	} else if !strings.Contains(err.Error(), "checkpoint: invalid checkpoint info: checkpointID cannot be empty") {
+		t.Fatalf("Lookup() error = %v, want scoped checkpoint info error", err)
 	}
 	if _, err := manager.RetrieveIndex(t.Context(), "", nil); err == nil {
 		t.Fatal("RetrieveIndex() error = nil for empty session ID")
