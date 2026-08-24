@@ -166,7 +166,6 @@ func (e *executor) executeNewMessageStreaming(ctx context.Context, execCtx *a2as
 					if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateWorking, nil), nil) {
 						return nil
 					}
-					yieldedWorking = true
 				}
 				if !yield(artifact, nil) {
 					return nil
@@ -187,17 +186,6 @@ func (e *executor) executeNewMessageStreaming(ctx context.Context, execCtx *a2as
 			if err != nil {
 				return err
 			}
-			if artifact != nil {
-				if !yieldedWorking {
-					if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateWorking, nil), nil) {
-						return nil
-					}
-					yieldedWorking = true
-				}
-				if !yield(artifact, nil) {
-					return nil
-				}
-			}
 
 			working, err := responseUpdateToWorkingStatusEvent(execCtx, update)
 			if err != nil {
@@ -206,13 +194,16 @@ func (e *executor) executeNewMessageStreaming(ctx context.Context, execCtx *a2as
 			if !yield(working, nil) {
 				return nil
 			}
+
+			if artifact != nil {
+				if !yield(artifact, nil) {
+					return nil
+				}
+			}
 			return nil
 		}
 
-		artifacts, err := artifactWriter.Write(update)
-		if err != nil {
-			return err
-		}
+		artifacts, writeErr := artifactWriter.Write(update)
 
 		for _, artifact := range artifacts {
 			if artifact == nil {
@@ -228,6 +219,10 @@ func (e *executor) executeNewMessageStreaming(ctx context.Context, execCtx *a2as
 				return nil
 			}
 		}
+
+		if writeErr != nil {
+			return writeErr
+		}
 	}
 
 	artifact, err := artifactWriter.Complete()
@@ -239,7 +234,6 @@ func (e *executor) executeNewMessageStreaming(ctx context.Context, execCtx *a2as
 			if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateWorking, nil), nil) {
 				return nil
 			}
-			yieldedWorking = true
 		}
 		if !yield(artifact, nil) {
 			return nil

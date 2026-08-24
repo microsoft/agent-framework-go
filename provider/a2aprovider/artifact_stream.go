@@ -3,6 +3,8 @@
 package a2aprovider
 
 import (
+	"cmp"
+
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/microsoft/agent-framework-go/agent"
 )
@@ -30,21 +32,24 @@ func (w *artifactStreamWriter) Write(update *agent.ResponseUpdate) ([]*a2a.TaskA
 
 	events := make([]*a2a.TaskArtifactUpdateEvent, 0, 2)
 	if w.currentArtifactID == "" {
-		w.startArtifact(update.MessageID)
+		w.startArtifact(update.MessageID, update.ResponseID)
 	} else if w.isNewMessage(update.MessageID) {
 		evt, err := w.flushBuffered(true)
 		if err != nil {
-			return nil, err
+			return events, err
 		}
 		if evt != nil {
 			events = append(events, evt)
 		}
-		w.startArtifact(update.MessageID)
+		w.startArtifact(update.MessageID, update.ResponseID)
 	}
 
 	parts, err := contentsToParts(update.Contents, nil)
 	if err != nil {
-		return nil, err
+		if flushEvt, flushErr := w.flushBuffered(true); flushErr == nil && flushEvt != nil {
+			events = append(events, flushEvt)
+		}
+		return events, err
 	}
 	if len(parts) == 0 {
 		return events, nil
@@ -52,7 +57,7 @@ func (w *artifactStreamWriter) Write(update *agent.ResponseUpdate) ([]*a2a.TaskA
 
 	evt, err := w.flushBuffered(false)
 	if err != nil {
-		return nil, err
+		return events, err
 	}
 	if evt != nil {
 		events = append(events, evt)
@@ -90,14 +95,15 @@ func (w *artifactStreamWriter) isNewMessage(messageID string) bool {
 	return messageID != "" && messageID != w.currentMessageID
 }
 
-func (w *artifactStreamWriter) startArtifact(messageID string) {
-	groupKey := messageID
-	if groupKey == "" {
-		groupKey = string(a2a.NewArtifactID())
+func (w *artifactStreamWriter) startArtifact(messageID, responseID string) {
+	w.currentMessageID = messageID
+
+	idSource := cmp.Or(messageID, responseID)
+	if idSource == "" {
+		idSource = string(a2a.NewArtifactID())
 	}
 
-	w.currentMessageID = groupKey
-	artifactID := a2a.ArtifactID(groupKey)
+	artifactID := a2a.ArtifactID(idSource)
 	if _, used := w.usedArtifactIDs[artifactID]; !used {
 		w.currentArtifactID = artifactID
 		w.usedArtifactIDs[artifactID] = struct{}{}

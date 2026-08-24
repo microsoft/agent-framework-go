@@ -153,7 +153,7 @@ func responseToArtifactEvent(infoProvider a2a.TaskInfoProvider, resp *agent.Resp
 func responseUpdateToArtifactEventWithOptions(
 	infoProvider a2a.TaskInfoProvider,
 	artifactID a2a.ArtifactID,
-	append bool,
+	appendChunk bool,
 	lastChunk bool,
 	update *agent.ResponseUpdate,
 ) (*a2a.TaskArtifactUpdateEvent, error) {
@@ -174,7 +174,7 @@ func responseUpdateToArtifactEventWithOptions(
 	if evt.Artifact.ID == "" {
 		evt.Artifact.ID = a2a.NewArtifactID()
 	}
-	evt.Append = append
+	evt.Append = appendChunk
 	evt.LastChunk = lastChunk
 	evt.Metadata = maps.Clone(update.AdditionalProperties)
 	return evt, nil

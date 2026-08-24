@@ -389,6 +389,30 @@ func TestRequestHandler_OnSendMessageStream_ReusedMessageIDGetsNewArtifactID(t *
 	}
 }
 
+func TestRequestHandler_OnSendMessageStream_MissingMessageIDFallsBackToResponseIDForArtifactID(t *testing.T) {
+	a := newHostedTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
+				ResponseID: "resp-1",
+				Role:       message.RoleAssistant,
+				Contents:   message.Contents{&message.TextContent{Text: "reply"}},
+			}, nil)
+		}
+	})
+
+	h := newRequestHandler(a, a2aprovider.ExecutorConfig{})
+	artifacts := collectStreamingArtifacts(collectStreamingEvents(t, h.SendStreamingMessage(context.Background(), &a2a.SendMessageRequest{
+		Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("ping")),
+	})))
+
+	if len(artifacts) != 1 {
+		t.Fatalf("artifact event count = %d, want 1", len(artifacts))
+	}
+	if artifacts[0].Artifact.ID != "resp-1" {
+		t.Fatalf("artifact id = %q, want %q", artifacts[0].Artifact.ID, "resp-1")
+	}
+}
+
 func TestRequestHandler_OnSendMessageStream_FlushesBufferedArtifactBeforeFailure(t *testing.T) {
 	a := newHostedTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
