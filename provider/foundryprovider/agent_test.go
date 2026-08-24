@@ -129,6 +129,30 @@ func TestNewAgentRunsAgainstFoundryAgentEndpoint(t *testing.T) {
 	}
 }
 
+func TestNewAgentIncludesFeatureUsageForApprovedFoundryOrigin(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("User-Agent"); !strings.HasPrefix(got, "agent-framework-go/") {
+			t.Fatalf("User-Agent = %q", got)
+		} else if !strings.Contains(got, "(feat=v1.") {
+			t.Fatalf("User-Agent = %q, want feature token", got)
+		}
+		writeResponsesOK(w)
+	}))
+	defer server.Close()
+
+	foundryAgent := newFoundryAgentAtEndpoint(
+		t,
+		"https://project.services.ai.azure.com/projects/proj",
+		server,
+		foundryprovider.ModelDeployment("gpt-4o-mini"),
+		foundryprovider.AgentConfig{Config: agent.Config{DisableFuncAutoCall: true}},
+	)
+
+	if _, err := foundryAgent.RunText(t.Context(), "hello").Collect(); err != nil {
+		t.Fatalf("RunText error = %v", err)
+	}
+}
+
 func TestNewAgentEscapesServerAgentNameInEndpoint(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.URL.EscapedPath(); got != "/projects/proj/agents/my%2Fagent/endpoint/protocols/openai/responses" {

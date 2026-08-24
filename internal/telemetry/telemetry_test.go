@@ -3,13 +3,16 @@
 package telemetry_test
 
 import (
+	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
 
+	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/internal/telemetry"
 )
 
@@ -83,6 +86,39 @@ func TestUserAgentHostedEnvironmentDetectionCached(t *testing.T) {
 	}
 }
 
+func TestApplyToRequestApprovedOpenAIOriginIncludesFeatureToken(t *testing.T) {
+	got := runHelper(t, "request-approved", userAgentTelemetryDisabledEnvVar+"=")
+	if !strings.HasPrefix(got, "agent-framework-go/") {
+		t.Fatalf("User-Agent = %q, want agent-framework-go prefix", got)
+	}
+	if !strings.Contains(got, "OpenAI/Go") {
+		t.Fatalf("User-Agent = %q, want OpenAI/Go token", got)
+	}
+	if !strings.Contains(got, "(feat=v1.") {
+		t.Fatalf("User-Agent = %q, want feature token", got)
+	}
+}
+
+func TestApplyToRequestUnapprovedOpenAIOriginOmitsAgentFrameworkUserAgent(t *testing.T) {
+	got := runHelper(t, "request-unapproved", userAgentTelemetryDisabledEnvVar+"=")
+	if got != "OpenAI/Go" {
+		t.Fatalf("User-Agent = %q, want OpenAI/Go", got)
+	}
+}
+
+func TestApplyToRequestAllRequestsRetainsBaseUserAgentAndStripsStaleFeatureToken(t *testing.T) {
+	got := runHelper(t, "request-all-requests", userAgentTelemetryDisabledEnvVar+"=")
+	if !strings.HasPrefix(got, "agent-framework-go/") {
+		t.Fatalf("User-Agent = %q, want agent-framework-go prefix", got)
+	}
+	if strings.Contains(got, "(feat=") {
+		t.Fatalf("User-Agent = %q, want stale feature token removed", got)
+	}
+	if !strings.Contains(got, "OpenAI/Go") {
+		t.Fatalf("User-Agent = %q, want OpenAI/Go token", got)
+	}
+}
+
 func TestHelperProcess(t *testing.T) {
 	if os.Getenv(helperProcessEnv) != "1" {
 		return
@@ -123,6 +159,71 @@ func TestHelperProcess(t *testing.T) {
 		_ = os.Setenv(foundryHostingEnvVar, "1")
 		headers = telemetry.PrependAgentFrameworkToUserAgent(nil)
 		fmt.Print(headers[userAgentKey])
+	case "request-approved":
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://resource.openai.azure.com/v1/chat/completions", nil)
+		if err != nil {
+			fmt.Fprint(os.Stderr, err)
+			os.Exit(2)
+		}
+		req.Header.Set(userAgentKey, "OpenAI/Go")
+		ctx := telemetry.ConfigureRequestContext(req.Context(), []agent.Option{
+			telemetry.WithFeatureUsage(telemetry.FeatureUsageConfig{
+				Index:              54,
+				BaseUserAgentScope: telemetry.BaseUserAgentScopeApprovedOrigins,
+				ApprovedHostSuffixes: []string{
+					"cognitiveservices.azure.com",
+					"openai.azure.com",
+					"services.ai.azure.com",
+				},
+			}),
+		})
+		req = req.WithContext(ctx)
+		telemetry.ApplyToRequest(req)
+		fmt.Print(req.Header.Get(userAgentKey))
+	case "request-unapproved":
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://api.openai.com/v1/chat/completions", nil)
+		if err != nil {
+			fmt.Fprint(os.Stderr, err)
+			os.Exit(2)
+		}
+		req.Header.Set(userAgentKey, "OpenAI/Go (feat=v1.ff)")
+		ctx := telemetry.ConfigureRequestContext(req.Context(), []agent.Option{
+			telemetry.WithFeatureUsage(telemetry.FeatureUsageConfig{
+				Index:              54,
+				BaseUserAgentScope: telemetry.BaseUserAgentScopeApprovedOrigins,
+				ApprovedHostSuffixes: []string{
+					"cognitiveservices.azure.com",
+					"openai.azure.com",
+					"services.ai.azure.com",
+				},
+			}),
+		})
+		req = req.WithContext(ctx)
+		telemetry.ApplyToRequest(req)
+		fmt.Print(req.Header.Get(userAgentKey))
+	case "request-all-requests":
+		requestURL, err := url.Parse("https://example.test/v1/responses")
+		if err != nil {
+			fmt.Fprint(os.Stderr, err)
+			os.Exit(2)
+		}
+		req := (&http.Request{
+			Method: http.MethodGet,
+			URL:    requestURL,
+			Header: http.Header{},
+		}).WithContext(telemetry.ConfigureRequestContext(context.Background(), []agent.Option{
+			telemetry.WithFeatureUsage(telemetry.FeatureUsageConfig{
+				Index:              49,
+				BaseUserAgentScope: telemetry.BaseUserAgentScopeAllRequests,
+				ApprovedHostSuffixes: []string{
+					"services.ai.azure.com",
+					"inference.ai.azure.com",
+				},
+			}),
+		}))
+		req.Header.Set(userAgentKey, "OpenAI/Go (feat=v1.ff)")
+		telemetry.ApplyToRequest(req)
+		fmt.Print(req.Header.Get(userAgentKey))
 	default:
 		fmt.Fprintf(os.Stderr, "unknown helper %q", helperName)
 		os.Exit(2)

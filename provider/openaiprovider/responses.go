@@ -20,6 +20,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/hostedtool"
@@ -38,6 +39,7 @@ func NewAgent(oclient openai.Client, config AgentConfig) *agent.Agent {
 
 // NewResponsesAgent creates an agent backed by the OpenAI Responses API.
 func NewResponsesAgent(oclient openai.Client, config AgentConfig) *agent.Agent {
+	ensureFeatureUsageRunOption(&config)
 	c := &responsesClient{
 		client: oclient,
 		config: config,
@@ -92,6 +94,7 @@ func (a *responsesClient) unmarshal(format agent.ResponseFormat, data []byte, v 
 }
 
 func (a *responsesClient) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+	ctx = telemetry.ConfigureRequestContext(ctx, options)
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		stream, _ := agent.GetOption(options, agent.Stream)
 

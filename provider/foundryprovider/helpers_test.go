@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -53,6 +54,47 @@ func newFoundryAgent(t *testing.T, server *httptest.Server, target foundryprovid
 	t.Helper()
 	config.OpenAIOptions = append(config.OpenAIOptions, option.WithHTTPClient(server.Client()))
 	return foundryprovider.NewAgent(server.URL+"/projects/proj", validCredential, target, config)
+}
+
+func newFoundryAgentAtEndpoint(t *testing.T, endpoint string, server *httptest.Server, target foundryprovider.AgentTarget, config foundryprovider.AgentConfig) *agent.Agent {
+	t.Helper()
+	config.OpenAIOptions = append(config.OpenAIOptions, option.WithHTTPClient(newRewrittenHTTPClient(t, server)))
+	return foundryprovider.NewAgent(endpoint, validCredential, target, config)
+}
+
+type rewriteFoundryBaseURLTransport struct {
+	targetBaseURL *url.URL
+	inner         http.RoundTripper
+}
+
+func (transport rewriteFoundryBaseURLTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	cloneURL := *clone.URL
+	clone.URL = &cloneURL
+	clone.URL.Scheme = transport.targetBaseURL.Scheme
+	clone.URL.Host = transport.targetBaseURL.Host
+	clone.Host = transport.targetBaseURL.Host
+	return transport.inner.RoundTrip(clone)
+}
+
+func newRewrittenHTTPClient(t *testing.T, server *httptest.Server) *http.Client {
+	t.Helper()
+
+	targetBaseURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("url.Parse(server.URL) failed: %v", err)
+	}
+
+	client := *server.Client()
+	inner := client.Transport
+	if inner == nil {
+		inner = http.DefaultTransport
+	}
+	client.Transport = rewriteFoundryBaseURLTransport{
+		targetBaseURL: targetBaseURL,
+		inner:         inner,
+	}
+	return &client
 }
 
 func mustReadBody(t *testing.T, r *http.Request) string {

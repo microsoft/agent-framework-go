@@ -27,8 +27,18 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 )
 
+var openAIFeatureUsageConfig = telemetry.FeatureUsageConfig{
+	Index:              54,
+	BaseUserAgentScope: telemetry.BaseUserAgentScopeApprovedOrigins,
+	ApprovedHostSuffixes: []string{
+		"cognitiveservices.azure.com",
+		"openai.azure.com",
+		"services.ai.azure.com",
+	},
+}
+
 var telemetryRequestOption = option.WithMiddleware(func(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
-	req.Header = telemetry.PrependAgentFrameworkToHTTPHeader(req.Header)
+	telemetry.ApplyToRequest(req)
 	return next(req)
 })
 
@@ -66,6 +76,7 @@ type AgentConfig struct {
 
 // NewChatCompletionsAgent creates an agent backed by the OpenAI Chat Completions API.
 func NewChatCompletionsAgent(oclient openai.Client, config AgentConfig) *agent.Agent {
+	ensureFeatureUsageRunOption(&config)
 	c := &chatClient{
 		client: oclient,
 		config: config,
@@ -102,6 +113,7 @@ func (a *chatClient) unmarshal(format agent.ResponseFormat, data []byte, v any) 
 }
 
 func (a *chatClient) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+	ctx = telemetry.ConfigureRequestContext(ctx, options)
 	body, err := buildCompletionParams(a.config.Model, messages, options)
 	if err != nil {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
@@ -218,6 +230,13 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 			yield(nil, stream.Err())
 		}
 	}
+}
+
+func ensureFeatureUsageRunOption(config *AgentConfig) {
+	if _, ok := agent.GetOption(config.RunOptions, telemetry.WithFeatureUsage); ok {
+		return
+	}
+	config.RunOptions = append(config.RunOptions, telemetry.WithFeatureUsage(openAIFeatureUsageConfig))
 }
 
 func mapRole(r string) message.Role {

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -72,11 +73,87 @@ func newTestClient(server *httptest.Server) *agent.Agent {
 	)
 }
 
-func TestChatRequestIncludesAgentFrameworkUserAgent(t *testing.T) {
+type rewriteBaseURLTransport struct {
+	targetBaseURL *url.URL
+	inner         http.RoundTripper
+}
+
+func (transport rewriteBaseURLTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	cloneURL := *clone.URL
+	clone.URL = &cloneURL
+	clone.URL.Scheme = transport.targetBaseURL.Scheme
+	clone.URL.Host = transport.targetBaseURL.Host
+	clone.Host = transport.targetBaseURL.Host
+	return transport.inner.RoundTrip(clone)
+}
+
+func newApprovedOriginHTTPClient(t *testing.T, server *httptest.Server) *http.Client {
+	t.Helper()
+
+	targetBaseURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("url.Parse(server.URL) failed: %v", err)
+	}
+
+	client := *server.Client()
+	inner := client.Transport
+	if inner == nil {
+		inner = http.DefaultTransport
+	}
+	client.Transport = rewriteBaseURLTransport{
+		targetBaseURL: targetBaseURL,
+		inner:         inner,
+	}
+	return &client
+}
+
+func TestChatRequestIncludesAgentFrameworkUserAgentForApprovedAzureOrigin(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		userAgent := r.Header.Get("User-Agent")
 		if !strings.HasPrefix(userAgent, "agent-framework-go/") {
 			t.Fatalf("User-Agent = %q, want agent-framework-go prefix", userAgent)
+		}
+		if !strings.Contains(userAgent, "(feat=v1.") {
+			t.Fatalf("User-Agent = %q, want feature token", userAgent)
+		}
+		if !strings.Contains(userAgent, "OpenAI/Go") {
+			t.Fatalf("User-Agent = %q, want OpenAI SDK token", userAgent)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"id":"chatcmpl-test",
+			"object":"chat.completion",
+			"created":1727888631,
+			"model":"gpt-4o-mini",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}]
+		}`)
+	}))
+	defer server.Close()
+
+	a := openaiprovider.NewChatCompletionsAgent(
+		openai.NewClient(
+			option.WithBaseURL("https://resource.openai.azure.com"),
+			option.WithHTTPClient(newApprovedOriginHTTPClient(t, server)),
+		),
+		openaiprovider.AgentConfig{
+			Model:  "gpt-4o-mini",
+			Config: agent.Config{DisableFuncAutoCall: true},
+		},
+	)
+	if _, err := a.RunText(t.Context(), "hello").Collect(); err != nil {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestChatRequestOmitsAgentFrameworkUserAgentForUnapprovedOrigin(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		userAgent := r.Header.Get("User-Agent")
+		if strings.Contains(userAgent, "agent-framework-go/") {
+			t.Fatalf("User-Agent = %q, want no agent-framework-go prefix", userAgent)
+		}
+		if strings.Contains(userAgent, "(feat=") {
+			t.Fatalf("User-Agent = %q, want no feature token", userAgent)
 		}
 		if !strings.Contains(userAgent, "OpenAI/Go") {
 			t.Fatalf("User-Agent = %q, want OpenAI SDK token", userAgent)

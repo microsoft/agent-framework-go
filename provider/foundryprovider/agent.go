@@ -9,6 +9,7 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
@@ -19,6 +20,15 @@ const (
 	azureAIResourceScope       = "https://ai.azure.com/.default"
 	foundryDataPlaneAPIVersion = "v1"
 )
+
+var foundryFeatureUsageConfig = telemetry.FeatureUsageConfig{
+	Index:              49,
+	BaseUserAgentScope: telemetry.BaseUserAgentScopeAllRequests,
+	ApprovedHostSuffixes: []string{
+		"services.ai.azure.com",
+		"inference.ai.azure.com",
+	},
+}
 
 // AgentConfig contains configuration for Foundry-backed agents.
 type AgentConfig struct {
@@ -130,6 +140,7 @@ func newFoundryAgent(credential azcore.TokenCredential, config AgentConfig, mode
 	openAIOptions = append(openAIOptions, clientHeadersRequestOption())
 	openAIOptions = append(openAIOptions, servedModelRequestOption())
 	config.Middlewares = append([]agent.Middleware{clientHeadersMiddleware{}, servedModelMiddleware{}}, config.Middlewares...)
+	config.RunOptions = append(config.RunOptions, telemetry.WithFeatureUsage(foundryFeatureUsageConfig))
 
 	return openaiprovider.NewResponsesAgent(openai.NewClient(openAIOptions...), openaiprovider.AgentConfig{
 		Config:             config.Config,
