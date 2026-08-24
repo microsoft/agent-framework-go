@@ -185,6 +185,13 @@ func TestPortableValue_RejectsZeroJSON(t *testing.T) {
 	}
 }
 
+func TestPortableValueIs_NilType(t *testing.T) {
+	value := workflow.AnyPortableValue("value")
+	if value.Is(nil) {
+		t.Fatal("Is(nil) = true, want false")
+	}
+}
+
 func portableValueTypeID(v any) workflow.TypeID {
 	if pv, ok := v.(workflow.PortableValue); ok {
 		return pv.TypeID

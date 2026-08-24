@@ -157,7 +157,7 @@ func decodePortableJSON[T any](raw json.RawMessage) (any, bool) {
 // If the value is stored in a delayed deserialized form, it will attempt to
 // deserialize it to the requested type.
 func (v *PortableValue) Is(typ reflect.Type) bool {
-	if v == nil {
+	if v == nil || typ == nil {
 		return false
 	}
 	if typ == reflect.TypeFor[PortableValue]() {
