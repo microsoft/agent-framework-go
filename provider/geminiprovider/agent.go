@@ -665,7 +665,7 @@ func toFinishReason(reason genai.FinishReason) string {
 		genai.FinishReasonBlocklist, genai.FinishReasonProhibitedContent,
 		genai.FinishReasonSPII:
 		return "content_filter"
-	case genai.FinishReasonMalformedFunctionCall:
+	case genai.FinishReasonMalformedFunctionCall, genai.FinishReasonTooManyToolCalls:
 		return "tool_calls"
 	default:
 		return ""

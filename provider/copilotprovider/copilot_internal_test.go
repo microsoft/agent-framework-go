@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 
@@ -168,6 +169,40 @@ func TestResumeSessionConfig_WithApprovalRequiredTool_InstallsAskPreToolUseHook(
 	}
 	if decision == nil || decision.PermissionDecision != "ask" {
 		t.Fatalf("dangerous permission decision = %#v, want ask", decision)
+	}
+}
+
+func TestCopyResumeSessionConfig_CopiesRecentSDKFields(t *testing.T) {
+	githubMCPToolConfig := &copilot.GitHubMCPToolConfig{}
+	managedSettings := &copilot.ManagedSettings{}
+	source := &copilot.SessionConfig{
+		AdditionalDirectories:    []string{"/shared"},
+		EnableFileChangeTracking: copilot.Bool(true),
+		EnableExperimentalMode:   copilot.Bool(true),
+		DisabledMCPServers:       []string{"legacy"},
+		GitHubMCPToolConfig:      githubMCPToolConfig,
+		ManagedSettings:          managedSettings,
+	}
+
+	got := copyResumeSessionConfig(source)
+
+	if !slices.Equal(got.AdditionalDirectories, source.AdditionalDirectories) {
+		t.Errorf("AdditionalDirectories = %v, want %v", got.AdditionalDirectories, source.AdditionalDirectories)
+	}
+	if got.EnableFileChangeTracking != source.EnableFileChangeTracking {
+		t.Error("EnableFileChangeTracking was not preserved")
+	}
+	if got.EnableExperimentalMode != source.EnableExperimentalMode {
+		t.Error("EnableExperimentalMode was not preserved")
+	}
+	if !slices.Equal(got.DisabledMCPServers, source.DisabledMCPServers) {
+		t.Errorf("DisabledMCPServers = %v, want %v", got.DisabledMCPServers, source.DisabledMCPServers)
+	}
+	if got.GitHubMCPToolConfig != githubMCPToolConfig {
+		t.Error("GitHubMCPToolConfig was not preserved")
+	}
+	if got.ManagedSettings != managedSettings {
+		t.Error("ManagedSettings was not preserved")
 	}
 }
 
