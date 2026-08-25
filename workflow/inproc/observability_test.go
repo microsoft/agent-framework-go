@@ -24,6 +24,14 @@ func (unserializablePayload) MarshalJSON() ([]byte, error) {
 	return nil, errors.New("marshal failed")
 }
 
+type panicPayload struct {
+	Value string
+}
+
+func (panicPayload) MarshalJSON() ([]byte, error) {
+	panic("marshal panic")
+}
+
 func TestObservability_CreatesWorkflowEndToEndSpans(t *testing.T) {
 	tracer := workflowtest.NewRecordingTracer()
 	wf := newTelemetryWorkflow(t, tracer, workflow.TelemetryOptions{})
@@ -242,6 +250,49 @@ func TestObservability_UnserializableSensitiveDataDoesNotFailWorkflow(t *testing
 	}
 
 	wantFallback := fmt.Sprintf("[Unserializable: %T]", unserializablePayload{})
+	messageSpan := workflowtest.FindSpanWithPrefix(t, tracer.Spans(), "message.send")
+	messageSpan.RequireAttributeValue(t, internalobservability.TagMessageContent, wantFallback)
+	sinkSpan := workflowtest.FindSpanWithPrefix(t, tracer.Spans(), "executor.process sink")
+	sinkSpan.RequireAttributeValue(t, internalobservability.TagExecutorInput, wantFallback)
+}
+
+func TestObservability_PanickingSensitiveDataDoesNotFailWorkflow(t *testing.T) {
+	tracer := workflowtest.NewRecordingTracer()
+	var received []panicPayload
+	start := workflow.NewExecutor("start", func(input string) panicPayload {
+		return panicPayload{Value: strings.ToUpper(input)}
+	}).Bind()
+	sink := workflow.NewExecutor("sink", func(msg panicPayload) string {
+		received = append(received, msg)
+		return "done"
+	}).Bind()
+
+	wf, err := workflow.NewBuilder(start).
+		AddEdge(start, sink).
+		WithOutputFrom(sink).
+		WithTelemetry(tracer, workflow.TelemetryOptions{EnableSensitiveData: true}).
+		Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	run, err := inproc.Default.Run(context.Background(), wf, "hello")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	outputs := collectOutputValues(run.OutgoingEvents())
+	if err := run.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if len(outputs) != 1 || outputs[0] != "done" {
+		t.Fatalf("outputs = %#v, want []string{\"done\"}", outputs)
+	}
+	if len(received) != 1 || received[0].Value != "HELLO" {
+		t.Fatalf("received = %#v, want one delivered payload with value HELLO", received)
+	}
+
+	wantFallback := fmt.Sprintf("[Unserializable: %T]", panicPayload{})
 	messageSpan := workflowtest.FindSpanWithPrefix(t, tracer.Spans(), "message.send")
 	messageSpan.RequireAttributeValue(t, internalobservability.TagMessageContent, wantFallback)
 	sinkSpan := workflowtest.FindSpanWithPrefix(t, tracer.Spans(), "executor.process sink")
