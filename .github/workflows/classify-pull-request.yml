@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   classify-size-area:
-    uses: microsoft/go-infra/.github/workflows/classify-pull-request.yml@15a51b9aebe9faced4b14ebf267608793f93baf7
+    uses: microsoft/go-infra/.github/workflows/classify-pull-request.yml@02330400c68c422ca601bc372704c97d67bbe4da
     permissions:
       contents: read
       issues: write
