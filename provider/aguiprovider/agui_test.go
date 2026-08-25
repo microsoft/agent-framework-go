@@ -10,7 +10,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	aguiSSEClient "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/client/sse"
 	aguiEvents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
@@ -594,6 +596,92 @@ func TestAGUIAgentRun_ForwardsAllToolResults_WhenMultipleToolCallsReturned(t *te
 	}
 	if !toolCalls["call-1"] || !toolCalls["call-2"] {
 		t.Fatalf("expected second payload to include tool results for call-1 and call-2, got %+v", toolCalls)
+	}
+}
+
+func TestAGUIAgentRun_DefaultAutoCallInvokesToolsSerially(t *testing.T) {
+	testAGUIAgentRunConcurrentToolInvocations(t, false, 1)
+}
+
+func TestAGUIAgentRun_ConfigAllowsConcurrentToolInvocations(t *testing.T) {
+	testAGUIAgentRunConcurrentToolInvocations(t, true, 2)
+}
+
+func testAGUIAgentRunConcurrentToolInvocations(t *testing.T, allowConcurrent bool, wantMaxActive int32) {
+	t.Helper()
+
+	var requestCount atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		current := requestCount.Add(1)
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		switch current {
+		case 1:
+			writeSSE(t, w, aguiEvents.NewRunStartedEvent("thread-1", "run-1"))
+			writeSSE(t, w, aguiEvents.NewToolCallStartEvent("call-1", "GetWeather"))
+			writeSSE(t, w, aguiEvents.NewToolCallArgsEvent("call-1", `{"location":"Seattle"}`))
+			writeSSE(t, w, aguiEvents.NewToolCallEndEvent("call-1"))
+			writeSSE(t, w, aguiEvents.NewToolCallStartEvent("call-2", "GetTime"))
+			writeSSE(t, w, aguiEvents.NewToolCallArgsEvent("call-2", `{"timezone":"UTC"}`))
+			writeSSE(t, w, aguiEvents.NewToolCallEndEvent("call-2"))
+			writeSSE(t, w, aguiEvents.NewRunFinishedEvent("thread-1", "run-1"))
+		default:
+			writeSSE(t, w, aguiEvents.NewRunStartedEvent("thread-1", "run-2"))
+			writeSSE(t, w, aguiEvents.NewTextMessageStartEvent("msg-2", aguiEvents.WithRole("assistant")))
+			writeSSE(t, w, aguiEvents.NewTextMessageContentEvent("msg-2", "done"))
+			writeSSE(t, w, aguiEvents.NewTextMessageEndEvent("msg-2"))
+			writeSSE(t, w, aguiEvents.NewRunFinishedEvent("thread-1", "run-2"))
+		}
+	}))
+	defer server.Close()
+
+	a := aguiprovider.NewAgent(newTestClient(server.URL), aguiprovider.AgentConfig{
+		Config: agent.Config{
+			AllowConcurrentToolInvocations: allowConcurrent,
+		},
+	})
+
+	var activeCount atomic.Int32
+	var maxActive atomic.Int32
+	updateMax := func(v int32) {
+		for {
+			current := maxActive.Load()
+			if v <= current || maxActive.CompareAndSwap(current, v) {
+				return
+			}
+		}
+	}
+
+	type weatherInput struct {
+		Location string `json:"location"`
+	}
+	type timeInput struct {
+		Timezone string `json:"timezone"`
+	}
+	weatherTool := functool.MustNew(functool.Config{Name: "GetWeather", Description: "Get weather"}, func(ctx context.Context, in weatherInput) (string, error) {
+		active := activeCount.Add(1)
+		updateMax(active)
+		time.Sleep(100 * time.Millisecond)
+		activeCount.Add(-1)
+		return "Sunny", nil
+	})
+	timeTool := functool.MustNew(functool.Config{Name: "GetTime", Description: "Get time"}, func(ctx context.Context, in timeInput) (string, error) {
+		active := activeCount.Add(1)
+		updateMax(active)
+		time.Sleep(100 * time.Millisecond)
+		activeCount.Add(-1)
+		return "12:00", nil
+	})
+
+	resp, err := a.RunText(context.Background(), "Do both", agent.Stream(true), agent.WithTool(weatherTool), agent.WithTool(timeTool)).Collect()
+	if err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	if resp.String() != "done" {
+		t.Fatalf("response text = %q, want %q", resp.String(), "done")
+	}
+	if got := maxActive.Load(); got != wantMaxActive {
+		t.Fatalf("max concurrent tool calls = %d, want %d", got, wantMaxActive)
 	}
 }
 
