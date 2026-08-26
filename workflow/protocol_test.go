@@ -65,8 +65,8 @@ func TestProtocolBuilderBuildRespectsAutoReturnOptions(t *testing.T) {
 	outputType := reflect.TypeFor[protocolBuilderOutput]()
 
 	protocol, err := newProtocolBuilderWithHandler(inputType, outputType).build(&Executor{
-		DisableAutoSendMessageHandlerResultObject: true,
-		DisableAutoYieldOutputHandlerResultObject: true,
+		AutoSendMessageHandlerResultObject: new(false),
+		AutoYieldOutputHandlerResultObject: new(false),
 	})
 	if err != nil {
 		t.Fatalf("build error = %v", err)

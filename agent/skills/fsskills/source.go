@@ -68,15 +68,15 @@ func newFilterContext(skillName, relativeFilePath string) FilterContext {
 type SourceOptions struct {
 	// SearchDepth controls the maximum depth to search for resource and script
 	// files within each skill directory. A value of 1 searches only the skill
-	// root; a value of 2 (the default) also searches one level of subdirectories.
-	// Values less than 1 are treated as the default.
+	// root; a value of 2 also searches one level of subdirectories. When nil,
+	// the default depth of 2 is used. Explicit values must be at least 1.
 	//
 	// SearchDepth applies only to resource and script discovery within a skill
 	// directory. It does not affect the discovery of skill directories
 	// themselves (those containing a SKILL.md), which is bounded independently.
 	// This mirrors the .NET SDK, where the two concerns are configured
 	// separately.
-	SearchDepth int
+	SearchDepth *int
 
 	// ResourceFilter is an optional predicate applied to each candidate resource
 	// file after extension filtering. Return true to include the file or false to
@@ -160,9 +160,12 @@ func NewSourceOptions(opts SourceOptions, filesystems ...fs.FS) *Source {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	searchDepth := opts.SearchDepth
-	if searchDepth < 1 {
-		searchDepth = defaultSearchDepth
+	searchDepth := defaultSearchDepth
+	if opts.SearchDepth != nil {
+		if *opts.SearchDepth < 1 {
+			panic(fmt.Sprintf("fsskills: SearchDepth must be at least 1, got %d", *opts.SearchDepth))
+		}
+		searchDepth = *opts.SearchDepth
 	}
 	return &Source{
 		filesystems:               slices.Clone(filesystems),

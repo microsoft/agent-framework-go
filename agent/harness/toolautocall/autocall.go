@@ -83,9 +83,9 @@ type Config struct {
 	// MaximumConsecutiveErrorsPerRequest is the number of consecutive failing
 	// function-invocation iterations allowed before the middleware returns the
 	// aggregated invocation errors to the caller. A successful iteration resets the
-	// count. The zero value uses the default of 3; set to -1 to allow 0 consecutive
-	// errors and fail on the first tool error.
-	MaximumConsecutiveErrorsPerRequest int
+	// count. When nil, the default of 3 is used. Set to new(0) to fail on the
+	// first tool error.
+	MaximumConsecutiveErrorsPerRequest *int
 
 	// MaximumIterationsPerRequest is the maximum number of tool-invocation rounds
 	// performed for a single run. When the limit is reached, the middleware makes a
@@ -124,6 +124,10 @@ func New(cfg Config) agent.Middleware {
 	if cfg.NewID == nil {
 		cfg.NewID = uuid.NewString
 	}
+	maximumConsecutiveErrorsPerRequest := defaultMaximumConsecutiveErrorsPerRequest
+	if cfg.MaximumConsecutiveErrorsPerRequest != nil {
+		maximumConsecutiveErrorsPerRequest = *cfg.MaximumConsecutiveErrorsPerRequest
+	}
 	ac := &autocall{
 		logger: slogx.Logger{
 			Logger:        cfg.Logger,
@@ -135,7 +139,7 @@ func New(cfg Config) agent.Middleware {
 		includeDetailedErrors:              cfg.IncludeDetailedErrors,
 		terminateOnUnknownCalls:            cfg.TerminateOnUnknownCalls,
 		allowConcurrentInvocations:         cfg.AllowConcurrentInvocations,
-		maximumConsecutiveErrorsPerRequest: cmp.Or(cfg.MaximumConsecutiveErrorsPerRequest, defaultMaximumConsecutiveErrorsPerRequest),
+		maximumConsecutiveErrorsPerRequest: maximumConsecutiveErrorsPerRequest,
 		maximumIterationsPerRequest:        cmp.Or(cfg.MaximumIterationsPerRequest, defaultMaximumIterationsPerRequest),
 		newID:                              cfg.NewID,
 		enableMessageInjection:             cfg.EnableMessageInjection,
@@ -145,6 +149,10 @@ func New(cfg Config) agent.Middleware {
 
 func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
+		if f.maximumConsecutiveErrorsPerRequest < 0 {
+			yield(nil, fmt.Errorf("toolautocall: MaximumConsecutiveErrorsPerRequest must be 0 or greater, got %d", f.maximumConsecutiveErrorsPerRequest))
+			return
+		}
 		if f.maximumIterationsPerRequest < 0 {
 			yield(nil, fmt.Errorf("toolautocall: MaximumIterationsPerRequest must be 0 or greater, got %d", f.maximumIterationsPerRequest))
 			return

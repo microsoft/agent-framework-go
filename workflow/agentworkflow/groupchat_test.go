@@ -128,7 +128,7 @@ func TestGroupChatWorkflowBuilder_DefaultOutputMetadataDesignatesHostAndIntermed
 	slices.Sort(outputIDs)
 	wantIDs := []string{groupChatHostExecutorID}
 	for _, currentAgent := range []*agent.Agent{agentA, agentB, agentC} {
-		wantIDs = append(wantIDs, New(currentAgent, Config{DisableForwardIncomingMessages: true}).ID)
+		wantIDs = append(wantIDs, New(currentAgent, Config{ForwardIncomingMessages: new(false)}).ID)
 	}
 	slices.Sort(wantIDs)
 	if !slices.Equal(outputIDs, wantIDs) {
@@ -141,7 +141,7 @@ func TestGroupChatWorkflowBuilder_DefaultOutputMetadataDesignatesHostAndIntermed
 		t.Fatalf("host tags = %v, want terminal output with no tags", tags)
 	}
 	for _, currentAgent := range []*agent.Agent{agentA, agentB, agentC} {
-		participantID := New(currentAgent, Config{DisableForwardIncomingMessages: true}).ID
+		participantID := New(currentAgent, Config{ForwardIncomingMessages: new(false)}).ID
 		if !wf.HasOutputExecutor(participantID) {
 			t.Fatalf("participant %q was not designated as an output executor", participantID)
 		}
@@ -163,7 +163,7 @@ func TestGroupChatWorkflowBuilder_ExplicitOutputDesignationSuppressesDefaults(t 
 		t.Fatalf("Build: %v", err)
 	}
 
-	wantOutputID := New(agentA, Config{DisableForwardIncomingMessages: true}).ID
+	wantOutputID := New(agentA, Config{ForwardIncomingMessages: new(false)}).ID
 	outputIDs := wf.OutputExecutorIDs()
 	slices.Sort(outputIDs)
 	if !slices.Equal(outputIDs, []string{wantOutputID}) {
@@ -232,7 +232,7 @@ func TestGroupChatWorkflowBuilder_RegistersParticipantRequestPorts(t *testing.T)
 	}
 
 	for _, currentAgent := range []*agent.Agent{agentA, agentB} {
-		participantID := New(currentAgent, Config{DisableForwardIncomingMessages: true}).ID
+		participantID := New(currentAgent, Config{ForwardIncomingMessages: new(false)}).ID
 		approvalPort, ok := wf.RequestPort(participantID + "_UserInput")
 		if !ok {
 			t.Fatalf("missing user-input request port for participant %q", participantID)

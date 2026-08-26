@@ -69,9 +69,9 @@ func TestSubworkflowBinding_QualifiedRequestPortRoundTrip(t *testing.T) {
 
 	childStart := workflow.BindNewExecutorFunc("child-start", func(_ string, executorID string) (*workflow.Executor, error) {
 		return &workflow.Executor{
-			ID: executorID,
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			ID:                                 executorID,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(pb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				pb.YieldsOutputType(reflect.TypeFor[string]())
 				pb.RouteBuilder.
@@ -155,9 +155,9 @@ func TestSubworkflowBinding_ParentInterceptsChildRequestLocally(t *testing.T) {
 		}
 		childStart := workflow.BindNewExecutorFunc("submit", func(_ string, executorID string) (*workflow.Executor, error) {
 			return &workflow.Executor{
-				ID: executorID,
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
+				ID:                                 executorID,
+				AutoSendMessageHandlerResultObject: new(false),
+				AutoYieldOutputHandlerResultObject: new(false),
 				ConfigureProtocol: func(pb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 					pb.YieldsOutputType(reflect.TypeFor[bool]())
 					pb.RouteBuilder.
@@ -197,8 +197,8 @@ func TestSubworkflowBinding_ParentInterceptsChildRequestLocally(t *testing.T) {
 		escalation := escalationPort.Bind()
 		interceptor := workflow.BindNewExecutorFunc("gate", func(_ string, executorID string) (*workflow.Executor, error) {
 			return &workflow.Executor{
-				ID: executorID,
-				DisableAutoSendMessageHandlerResultObject: true,
+				ID:                                 executorID,
+				AutoSendMessageHandlerResultObject: new(false),
 				ConfigureProtocol: func(pb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 					pb.SendsMessageType(reflect.TypeFor[*workflow.ExternalResponse](), reflect.TypeFor[*workflow.ExternalRequest]())
 					pb.RouteBuilder.AddCatchAll(func(ctx *workflow.Context, msg workflow.PortableValue) (any, error) {

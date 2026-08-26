@@ -433,7 +433,7 @@ func TestSummarizationStrategy_InsertsSummaryAndPreservesRecentGroups(t *testing
 		Trigger:                compaction.GroupsExceed(2),
 		Summarizer:             summarizer,
 		MinimumPreservedGroups: new(2),
-		SummarizationPrompt:    "summarize",
+		SummarizationPrompt:    new("summarize"),
 	}
 
 	compacted, err := strategy.Compact(t.Context(), index)

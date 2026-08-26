@@ -1517,7 +1517,7 @@ func TestToolApproval_AutoApprovedRequestsStopAtConfiguredIterationCap(t *testin
 		AutoApprovalRules: []func(context.Context, *message.FunctionCallContent) (bool, error){
 			func(context.Context, *message.FunctionCallContent) (bool, error) { return true, nil },
 		},
-		MaxAutoApprovalIterations: 3,
+		MaxAutoApprovalIterations: new(3),
 	})
 
 	updates := collectUpdates(t, mw, next, []*message.Message{
@@ -1540,7 +1540,7 @@ func TestToolApproval_AutoApprovedRequestsStopAtConfiguredIterationCap(t *testin
 
 func TestToolApproval_MaxAutoApprovalIterationsBelowOneReturnsError(t *testing.T) {
 	mw := toolapproval.New(toolapproval.Config{
-		MaxAutoApprovalIterations: -1,
+		MaxAutoApprovalIterations: new(0),
 	})
 	next := func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		return func(func(*agent.ResponseUpdate, error) bool) {}
@@ -1559,7 +1559,7 @@ func TestToolApproval_MaxAutoApprovalIterationsBelowOneReturnsError(t *testing.T
 	if got == nil {
 		t.Fatal("expected error for MaxAutoApprovalIterations < 1")
 	}
-	if !strings.Contains(got.Error(), "MaxAutoApprovalIterations must be 0 or greater") {
+	if !strings.Contains(got.Error(), "MaxAutoApprovalIterations must be at least 1") {
 		t.Fatalf("expected MaxAutoApprovalIterations validation error, got %v", got)
 	}
 }

@@ -184,7 +184,7 @@ func TestMessageIndex_UpdatePreservesStateFromCompactedProjection(t *testing.T) 
 		Trigger:                compaction.GroupsExceed(2),
 		Summarizer:             compaction.SummarizerFunc(func(context.Context, []*message.Message) (string, error) { return "older context", nil }),
 		MinimumPreservedGroups: new(2),
-		SummarizationPrompt:    "summarize",
+		SummarizationPrompt:    new("summarize"),
 	}
 
 	compacted, err := strategy.Compact(t.Context(), index)

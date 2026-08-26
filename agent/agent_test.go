@@ -1617,10 +1617,10 @@ func TestAgent_Run_HistoryProvider_ClearsWhenThrowDisabledAndClearEnabled(t *tes
 		}
 	}
 	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
-		ID:                           "test-agent",
-		Name:                         "test-agent",
-		HistoryProvider:              historyProvider,
-		AllowHistoryProviderConflict: true,
+		ID:                             "test-agent",
+		Name:                           "test-agent",
+		HistoryProvider:                historyProvider,
+		ThrowOnHistoryProviderConflict: new(false),
 	})
 
 	if _, err := a.RunText(t.Context(), "input", agent.WithSession(agenttest.CreateSession())).Collect(); err != nil {
@@ -1666,12 +1666,12 @@ func TestAgent_Run_HistoryProvider_KeepsReferenceButSkipsStoreWhenThrowAndClearD
 		}
 	}
 	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
-		ID:                                     "test-agent",
-		Name:                                   "test-agent",
-		HistoryProvider:                        historyProvider,
-		AllowHistoryProviderConflict:           true,
-		SuppressHistoryProviderConflictWarning: true,
-		KeepHistoryProviderOnConflict:          true,
+		ID:                             "test-agent",
+		Name:                           "test-agent",
+		HistoryProvider:                historyProvider,
+		ThrowOnHistoryProviderConflict: new(false),
+		WarnOnHistoryProviderConflict:  new(false),
+		ClearOnHistoryProviderConflict: new(false),
 	})
 
 	if _, err := a.RunText(t.Context(), "input", agent.WithSession(agenttest.CreateSession())).Collect(); err != nil {
@@ -2298,11 +2298,11 @@ func TestAgent_Run_HistoryProvider_ConcurrentConflictClearIsRaceFree(t *testing.
 		}
 	}
 	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
-		ID:                                     "test-agent",
-		Name:                                   "test-agent",
-		HistoryProvider:                        historyProvider,
-		AllowHistoryProviderConflict:           true,
-		SuppressHistoryProviderConflictWarning: true,
+		ID:                             "test-agent",
+		Name:                           "test-agent",
+		HistoryProvider:                historyProvider,
+		ThrowOnHistoryProviderConflict: new(false),
+		WarnOnHistoryProviderConflict:  new(false),
 	})
 
 	const goroutines = 64

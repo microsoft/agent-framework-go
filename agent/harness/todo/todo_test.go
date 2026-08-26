@@ -409,7 +409,7 @@ func TestPublicGetAllTodos_ReturnsEmptyForNewSession(t *testing.T) {
 // 16. Options_CustomInstructions_OverridesDefault
 func TestCustomInstructions_OverridesDefault(t *testing.T) {
 	p := todo.New(&todo.Options{
-		Instructions: "Custom todo instructions here",
+		Instructions: new("Custom todo instructions here"),
 	})
 	opts := sessionOpts()
 

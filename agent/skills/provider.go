@@ -55,10 +55,10 @@ type ContextProviderOptions struct {
 	Sources []Source
 
 	// SkillsInstructionPrompt is a custom system prompt template.
-	// When empty, a default template is used.
+	// When nil, a default template is used.
 	//
 	// The template must contain {skills}.
-	SkillsInstructionPrompt string
+	SkillsInstructionPrompt *string
 
 	// DisableLoadSkillApproval disables approval for the load_skill tool.
 	// When false (the default), invoking load_skill requires approval.
@@ -152,8 +152,8 @@ func NewContextProvider(opts ContextProviderOptions) agent.ContextProvider {
 	if opts.Logger == nil {
 		opts.Logger = slog.New(slog.DiscardHandler)
 	}
-	if opts.SkillsInstructionPrompt != "" {
-		if err := validatePromptTemplate(opts.SkillsInstructionPrompt); err != nil {
+	if opts.SkillsInstructionPrompt != nil {
+		if err := validatePromptTemplate(*opts.SkillsInstructionPrompt); err != nil {
 			panic(err)
 		}
 	}
@@ -540,12 +540,13 @@ func validateSkillName(skillName string) string {
 	return ""
 }
 
-func buildProviderSkillsInstructionPrompt(template string, skills []*Skill) string {
+func buildProviderSkillsInstructionPrompt(template *string, skills []*Skill) string {
 	if len(skills) == 0 {
 		return ""
 	}
-	if template == "" {
-		template = defaultSkillsInstructionPrompt
+	promptTemplate := defaultSkillsInstructionPrompt
+	if template != nil {
+		promptTemplate = *template
 	}
 
 	sortedSkills := slices.Clone(skills)
@@ -565,7 +566,7 @@ func buildProviderSkillsInstructionPrompt(template string, skills []*Skill) stri
 	replacer := strings.NewReplacer(
 		skillsPlaceholder, skillList,
 	)
-	return replacer.Replace(template)
+	return replacer.Replace(promptTemplate)
 }
 
 func validatePromptTemplate(template string) error {

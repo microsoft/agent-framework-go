@@ -205,7 +205,7 @@ func TestAutocall_LogsFailedFunctionCall(t *testing.T) {
 
 	invokeAndAssert(t, tools, plan, nil, toolautocall.Config{
 		Logger:                             log,
-		MaximumConsecutiveErrorsPerRequest: 3,
+		MaximumConsecutiveErrorsPerRequest: new(3),
 	})
 
 	// Assert logs contain error information
@@ -254,7 +254,7 @@ func TestAutocall_LogsCanceledFunctionCall(t *testing.T) {
 
 	invokeAndAssert(t, tools, plan, nil, toolautocall.Config{
 		Logger:                             log,
-		MaximumConsecutiveErrorsPerRequest: 3,
+		MaximumConsecutiveErrorsPerRequest: new(3),
 	})
 
 	// Assert logs contain cancellation information

@@ -33,7 +33,7 @@ func main() {
 	// The agent mode provider tracks whether the agent is planning or executing.
 	// It defaults to "plan" and "execute" modes and injects mode-specific instructions.
 	modeProvider := agentmode.New(agentmode.Config{
-		DefaultMode: "plan",
+		DefaultMode: new("plan"),
 	})
 
 	// The todo provider gives the agent a persistent todo list it can add to, query, and complete.

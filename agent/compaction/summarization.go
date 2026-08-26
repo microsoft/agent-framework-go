@@ -65,8 +65,8 @@ type SummarizationStrategy struct {
 	MinimumPreservedGroups *int
 
 	// SummarizationPrompt is the system prompt prepended to messages sent to Summarizer.
-	// When empty, a default prompt is used.
-	SummarizationPrompt string
+	// When nil, a default prompt is used.
+	SummarizationPrompt *string
 
 	// SummaryUnavailableMessage is used when Summarizer returns only whitespace.
 	// When empty, a default unavailable message is used.
@@ -87,7 +87,10 @@ func (strategy *SummarizationStrategy) Compact(ctx context.Context, index *Messa
 	if strategy.MinimumPreservedGroups != nil {
 		minimumPreservedGroups = max(*strategy.MinimumPreservedGroups, 0)
 	}
-	summarizationPrompt := cmp.Or(strategy.SummarizationPrompt, defaultSummarizationPrompt)
+	summarizationPrompt := defaultSummarizationPrompt
+	if strategy.SummarizationPrompt != nil {
+		summarizationPrompt = *strategy.SummarizationPrompt
+	}
 	summaryUnavailableMessage := cmp.Or(strategy.SummaryUnavailableMessage, "[Summary unavailable]")
 
 	nonSystemIncludedCount := index.IncludedNonSystemGroupCount()

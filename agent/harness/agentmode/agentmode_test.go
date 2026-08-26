@@ -151,8 +151,8 @@ func TestProvide_InstructionsIncludeCurrentMode(t *testing.T) {
 func TestCustomModes_AreUsed(t *testing.T) {
 	p := agentmode.New(agentmode.Config{
 		Modes: []agentmode.Mode{
-			{Name: "draft", Description: "Draft mode"},
-			{Name: "review", Description: "Review mode"},
+			{Name: "draft", Instructions: "Draft mode"},
+			{Name: "review", Instructions: "Review mode"},
 		},
 	})
 	opts := sessionOpts()
@@ -167,8 +167,8 @@ func TestCustomModes_AreUsed(t *testing.T) {
 func TestCustomModes_SetModeValidatesAgainstList(t *testing.T) {
 	p := agentmode.New(agentmode.Config{
 		Modes: []agentmode.Mode{
-			{Name: "draft", Description: "Draft mode"},
-			{Name: "review", Description: "Review mode"},
+			{Name: "draft", Instructions: "Draft mode"},
+			{Name: "review", Instructions: "Review mode"},
 		},
 	})
 	opts := sessionOpts()
@@ -189,10 +189,10 @@ func TestCustomModes_SetModeValidatesAgainstList(t *testing.T) {
 func TestCustomDefaultMode_IsUsed(t *testing.T) {
 	p := agentmode.New(agentmode.Config{
 		Modes: []agentmode.Mode{
-			{Name: "draft", Description: "Draft mode"},
-			{Name: "review", Description: "Review mode"},
+			{Name: "draft", Instructions: "Draft mode"},
+			{Name: "review", Instructions: "Review mode"},
 		},
-		DefaultMode: "review",
+		DefaultMode: new("review"),
 	})
 	opts := sessionOpts()
 
@@ -211,9 +211,9 @@ func TestInvalidDefaultMode_Panics(t *testing.T) {
 	}()
 	agentmode.New(agentmode.Config{
 		Modes: []agentmode.Mode{
-			{Name: "plan", Description: "Plan mode"},
+			{Name: "plan", Instructions: "Plan mode"},
 		},
-		DefaultMode: "nonexistent",
+		DefaultMode: new("nonexistent"),
 	})
 }
 
@@ -234,8 +234,8 @@ func TestEmptyModes_UsesDefaults(t *testing.T) {
 func TestCustomModes_AppearInInstructions(t *testing.T) {
 	p := agentmode.New(agentmode.Config{
 		Modes: []agentmode.Mode{
-			{Name: "alpha", Description: "Alpha mode description"},
-			{Name: "beta", Description: "Beta mode description"},
+			{Name: "alpha", Instructions: "Alpha mode description"},
+			{Name: "beta", Instructions: "Beta mode description"},
 		},
 	})
 	opts := sessionOpts()
@@ -260,7 +260,7 @@ func TestCustomModes_AppearInInstructions(t *testing.T) {
 	}
 }
 
-// 9. AgentMode_RequiresNameAndDescription
+// 9. AgentMode_RequiresNameAndInstructions
 func TestEmptyModeName_Panics(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
@@ -269,8 +269,19 @@ func TestEmptyModeName_Panics(t *testing.T) {
 	}()
 	agentmode.New(agentmode.Config{
 		Modes: []agentmode.Mode{
-			{Name: "", Description: "No name"},
+			{Name: "", Instructions: "No name"},
 		},
+	})
+}
+
+func TestEmptyModeInstructions_Panics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic for empty mode instructions")
+		}
+	}()
+	agentmode.New(agentmode.Config{
+		Modes: []agentmode.Mode{{Name: "plan"}},
 	})
 }
 
@@ -283,8 +294,8 @@ func TestDuplicateModeNames_Panics(t *testing.T) {
 	}()
 	agentmode.New(agentmode.Config{
 		Modes: []agentmode.Mode{
-			{Name: "plan", Description: "Plan mode"},
-			{Name: "plan", Description: "Duplicate"},
+			{Name: "plan", Instructions: "Plan mode"},
+			{Name: "plan", Instructions: "Duplicate"},
 		},
 	})
 }
@@ -533,7 +544,7 @@ func TestState_PersistsAcrossInvocations(t *testing.T) {
 // 24. Options_CustomInstructions_OverridesDefault
 func TestCustomInstructions_OverridesDefault(t *testing.T) {
 	p := agentmode.New(agentmode.Config{
-		Instructions: "Custom instructions for mode {current_mode}",
+		Instructions: new("Custom instructions for mode {current_mode}"),
 	})
 	opts := sessionOpts()
 

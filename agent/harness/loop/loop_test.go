@@ -97,7 +97,7 @@ func TestLoop_MultipleEvaluators_FirstContinueWins(t *testing.T) {
 					return loop.Continue("from second"), nil
 				}),
 			},
-			MaxIterations: 3,
+			MaxIterations: new(3),
 		})},
 	})
 
@@ -128,7 +128,7 @@ func TestLoop_MaxIterationsCapsContinuation(t *testing.T) {
 			Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(context.Context, *loop.Context) (loop.Evaluation, error) {
 				return loop.Continue("again"), nil
 			})},
-			MaxIterations: 2,
+			MaxIterations: new(2),
 		})},
 	})
 
@@ -243,7 +243,7 @@ func TestLoop_FreshContextPerIteration_RecreatesSession(t *testing.T) {
 	a := agent.New(capture.provider(), agent.Config{
 		Middlewares: []agent.Middleware{loop.New(loop.Config{
 			FreshContextPerIteration: true,
-			MaxIterations:            3,
+			MaxIterations:            new(3),
 			Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(context.Context, *loop.Context) (loop.Evaluation, error) {
 				return loop.Continue("again"), nil
 			})},
@@ -304,7 +304,7 @@ func TestLoop_FreshContextPerIteration_SessionCreatedCallback(t *testing.T) {
 	a := agent.New(capture.provider(), agent.Config{
 		Middlewares: []agent.Middleware{loop.New(loop.Config{
 			FreshContextPerIteration: true,
-			MaxIterations:            3,
+			MaxIterations:            new(3),
 			SessionCreatedCallback: func(_ context.Context, s *agent.Session) error {
 				createdSessions = append(createdSessions, s)
 				return nil
@@ -338,7 +338,7 @@ func TestLoop_FreshContextPerIteration_SessionCreatedCallbackErrorStopsRun(t *te
 	a := agent.New(capture.provider(), agent.Config{
 		Middlewares: []agent.Middleware{loop.New(loop.Config{
 			FreshContextPerIteration: true,
-			MaxIterations:            3,
+			MaxIterations:            new(3),
 			SessionCreatedCallback: func(context.Context, *agent.Session) error {
 				return wantErr
 			},
@@ -394,7 +394,7 @@ func TestLoop_NonStreamingReturnsLastResponseOnly_IgnoredForStreaming(t *testing
 	a := agent.New(capture.provider(), agent.Config{
 		Middlewares: []agent.Middleware{loop.New(loop.Config{
 			NonStreamingReturnsLastResponseOnly: true,
-			MaxIterations:                       2,
+			MaxIterations:                       new(2),
 			Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(context.Context, *loop.Context) (loop.Evaluation, error) {
 				return loop.Continue("follow-up"), nil
 			})},
@@ -468,7 +468,7 @@ func TestCompletionMarkerEvaluator(t *testing.T) {
 func TestCompletionMarkerEvaluator_CustomTemplateSubstitutesLastResponse(t *testing.T) {
 	evaluator := loop.NewCompletionMarkerEvaluator(loop.CompletionMarkerConfig{
 		Marker:                  "FINISHED",
-		FeedbackMessageTemplate: "Previous: {last_response}. Finish with {completion_marker}.",
+		FeedbackMessageTemplate: new("Previous: {last_response}. Finish with {completion_marker}."),
 	})
 
 	evaluation, err := evaluator.Evaluate(context.Background(), contextWithResponse("candidate name: NoteNest"))

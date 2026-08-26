@@ -141,9 +141,9 @@ func buildChild(port workflow.RequestPort) *workflow.Workflow {
 func expenseSubmitter(id string, port workflow.RequestPort) workflow.ExecutorBinding {
 	return workflow.BindNewExecutorFunc(id, func(_ string, executorID string) (*workflow.Executor, error) {
 		return &workflow.Executor{
-			ID: executorID,
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			ID:                                 executorID,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(pb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				pb.YieldsOutputType(reflect.TypeFor[bool]())
 				pb.RouteBuilder.
@@ -174,8 +174,8 @@ func expenseSubmitter(id string, port workflow.RequestPort) workflow.ExecutorBin
 func approvalInterceptor(id, hostID, escalationPortID string) workflow.ExecutorBinding {
 	return workflow.BindNewExecutorFunc(id, func(_ string, executorID string) (*workflow.Executor, error) {
 		return &workflow.Executor{
-			ID: executorID,
-			DisableAutoSendMessageHandlerResultObject: true,
+			ID:                                 executorID,
+			AutoSendMessageHandlerResultObject: new(false),
 			ConfigureProtocol: func(pb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				pb.SendsMessageType(
 					reflect.TypeFor[*workflow.ExternalResponse](),

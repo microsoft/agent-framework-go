@@ -1033,7 +1033,7 @@ func TestFunctionInvoking_ContinuesWithFailingCallsUntilMaximumConsecutiveErrors
 			plan = append(plan, createFunctionCallIterationPlan(&callIndex, true, true)...)
 
 			autocallOptions := toolautocall.Config{
-				MaximumConsecutiveErrorsPerRequest: 2,
+				MaximumConsecutiveErrorsPerRequest: new(2),
 				MaximumIterationsPerRequest:        10,
 				AllowConcurrentInvocations:         tt.allowConcurrentInvocations,
 			}
@@ -1124,7 +1124,7 @@ func createFunctionCallIterationPlan(callIndex *int, shouldThrow ...bool) []*mes
 	}
 }
 
-// TestFunctionInvoking_CanFailOnFirstException tests MaximumConsecutiveErrors=-1, which allows 0 errors.
+// TestFunctionInvoking_CanFailOnFirstException tests MaximumConsecutiveErrors=0.
 func TestFunctionInvoking_CanFailOnFirstException(t *testing.T) {
 	tests := []struct {
 		name                       string
@@ -1151,7 +1151,7 @@ func TestFunctionInvoking_CanFailOnFirstException(t *testing.T) {
 			plan = append(plan, createFunctionCallIterationPlan(&callIndex, true)...)
 
 			autocallOptions := toolautocall.Config{
-				MaximumConsecutiveErrorsPerRequest: -1,
+				MaximumConsecutiveErrorsPerRequest: new(0),
 				AllowConcurrentInvocations:         tt.allowConcurrentInvocations,
 			}
 
@@ -1231,7 +1231,7 @@ func TestFunctionInvoking_SerialDoesNotCaptureErrorsAfterMaximumConsecutiveError
 	}
 
 	var streamErr error
-	for _, err := range toolautocall.New(toolautocall.Config{MaximumConsecutiveErrorsPerRequest: -1}).Run(
+	for _, err := range toolautocall.New(toolautocall.Config{MaximumConsecutiveErrorsPerRequest: new(0)}).Run(
 		runner.Run,
 		t.Context(),
 		[]*message.Message{message.NewText("hello")},
@@ -1447,7 +1447,7 @@ func TestFunctionInvoking_ExceptionDetailsOnlyReportedWhenRequested(t *testing.T
 			}
 
 			autocallOptions := toolautocall.Config{
-				MaximumConsecutiveErrorsPerRequest: 3,
+				MaximumConsecutiveErrorsPerRequest: new(3),
 				IncludeDetailedErrors:              tt.detailedErrors,
 			}
 

@@ -903,7 +903,7 @@ func TestBuilder_Validation_TypeCompatibility_RespectsAutoSendDisabled(t *testin
 		return &workflow.Executor{
 			ID: source.ID,
 
-			DisableAutoSendMessageHandlerResultObject: true,
+			AutoSendMessageHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[int](), func(ctx *workflow.Context, msg any) (any, error) {
 					return 1, nil

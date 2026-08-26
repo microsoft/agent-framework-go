@@ -40,10 +40,10 @@ For every new substantive user request, including short factual questions, your 
 
 {available_modes}`
 
-// Mode describes a named operating mode with a description of its behavior.
+// Mode describes a named operating mode and its behavioral instructions.
 type Mode struct {
-	Name        string
-	Description string
+	Name         string
+	Instructions string
 }
 
 // state is persisted in the session across turns.
@@ -58,18 +58,18 @@ type Config struct {
 	Modes []Mode
 
 	// DefaultMode is the initial mode. Must be one of the configured Modes.
-	// If empty, the first mode is used.
-	DefaultMode string
+	// If nil, the first mode is used.
+	DefaultMode *string
 
 	// Instructions overrides the default instruction template.
 	// Use {available_modes} and {current_mode} as placeholders.
-	Instructions string
+	Instructions *string
 }
 
 var defaultModes = []Mode{
 	{
 		Name: "plan",
-		Description: `Use this mode when analyzing requirements, breaking down tasks, and creating plans. This is the interactive mode — ask clarifying questions, discuss options, and get user approval before proceeding.
+		Instructions: `Use this mode when analyzing requirements, breaking down tasks, and creating plans. This is the interactive mode — ask clarifying questions, discuss options, and get user approval before proceeding.
 
 Process to follow when in plan mode:
 1. Analyze the request with the purpose of building a research plan.
@@ -86,7 +86,7 @@ Process to follow when in plan mode:
 	},
 	{
 		Name: "execute",
-		Description: `Determine the type of ask:
+		Instructions: `Determine the type of ask:
 1. Simple question that doesn't require any further work to answer.
 2. Any other work, including complex user request that requires a multi-step process to satisfy.
 
@@ -103,29 +103,24 @@ If 2. Work autonomously using your best judgment — do not ask the user questio
 // New creates a new agent mode context provider.
 // A zero-value Config uses defaults (plan/execute modes).
 //
-// Panics if the configuration is invalid (empty modes, duplicate names,
-// empty mode name, or default mode not in the configured set).
+// Panics if the configuration contains duplicate names, an empty mode name or
+// instructions, or a default mode that is not in the configured set.
 func New(cfg Config) *Provider {
 	modes := defaultModes
-	defaultMode := ""
-	instructions := defaultInstructions
-
 	if len(cfg.Modes) > 0 {
 		modes = cfg.Modes
 	}
-	if cfg.DefaultMode != "" {
-		defaultMode = cfg.DefaultMode
-	}
-	if cfg.Instructions != "" {
-		instructions = cfg.Instructions
-	}
-
 	if len(modes) == 0 {
 		panic("agentmode: at least one mode must be configured")
 	}
 
-	if defaultMode == "" {
-		defaultMode = modes[0].Name
+	defaultMode := modes[0].Name
+	if cfg.DefaultMode != nil {
+		defaultMode = *cfg.DefaultMode
+	}
+	instructions := defaultInstructions
+	if cfg.Instructions != nil {
+		instructions = *cfg.Instructions
 	}
 
 	// Validate modes: no empty names, no duplicates.
@@ -133,6 +128,9 @@ func New(cfg Config) *Provider {
 	for i, m := range modes {
 		if strings.TrimSpace(m.Name) == "" {
 			panic(fmt.Sprintf("agentmode: mode at index %d has an empty name", i))
+		}
+		if strings.TrimSpace(m.Instructions) == "" {
+			panic(fmt.Sprintf("agentmode: mode at index %d has empty instructions", i))
 		}
 		if _, exists := validModes[m.Name]; exists {
 			panic(fmt.Sprintf("agentmode: duplicate mode name %q", m.Name))
@@ -276,7 +274,7 @@ func (p *Provider) provide(ctx context.Context, invoking agent.InvokingContext) 
 func (p *Provider) buildInstructions(currentMode string) string {
 	var sb strings.Builder
 	for _, m := range p.modes {
-		fmt.Fprintf(&sb, "#### %s\n\n%s\n\n", m.Name, strings.TrimRight(m.Description, "\n"))
+		fmt.Fprintf(&sb, "#### %s\n\n%s\n\n", m.Name, strings.TrimRight(m.Instructions, "\n"))
 	}
 	modesText := strings.TrimRight(sb.String(), "\n")
 

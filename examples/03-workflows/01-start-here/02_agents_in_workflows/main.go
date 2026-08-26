@@ -23,7 +23,7 @@ var logger = demo.NewLogger(
 
 func main() {
 	cfg := agentworkflow.Config{
-		DisableForwardIncomingMessages: true,
+		ForwardIncomingMessages: new(false),
 	}
 	french := agentworkflow.New(newTranslationAgent("French"), cfg)
 	spanish := agentworkflow.New(newTranslationAgent("Spanish"), cfg)

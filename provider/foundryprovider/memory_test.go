@@ -107,8 +107,8 @@ func TestMemoryProviderInvokingSearchesAndInjectsRetrievedMemories(t *testing.T)
 	}
 	provider := foundryprovider.NewMemoryProvider(validEndpoint, validCredential, "memory", validScope, foundryprovider.MemoryProviderConfig{
 		ClientOptions: azcore.ClientOptions{Transport: transport},
-		ContextPrompt: "Memories:",
-		MaxMemories:   2,
+		ContextPrompt: new("Memories:"),
+		MaxMemories:   new(int32(2)),
 	})
 
 	messages, options, err := provider.Invoking(t.Context(), agent.InvokingContext{Messages: []*message.Message{message.NewText("what do you remember?")}})

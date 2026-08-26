@@ -910,7 +910,7 @@ func TestNew_SuppressesDuplicateHostedAgentResponseMessages(t *testing.T) {
 			},
 		}),
 		agentworkflow.Config{
-			EmitUpdateEvents:   true,
+			EmitUpdateEvents:   new(true),
 			EmitResponseEvents: true,
 		},
 	)
@@ -957,7 +957,7 @@ func TestNew_SuppressesDuplicateHostedAgentResponseMessagesWithoutProviderMessag
 			},
 		}),
 		agentworkflow.Config{
-			EmitUpdateEvents:   true,
+			EmitUpdateEvents:   new(true),
 			EmitResponseEvents: true,
 		},
 	)
@@ -985,15 +985,15 @@ func TestNew_CollectPrefersTerminalWorkflowOutputOverIntermediateHostedAgentUpda
 	first := agentworkflow.New(
 		fixedTextAgent("first-agent", "First Agent", "first answer"),
 		agentworkflow.Config{
-			DisableForwardIncomingMessages: true,
-			EmitUpdateEvents:               true,
+			ForwardIncomingMessages: new(false),
+			EmitUpdateEvents:        new(true),
 		},
 	)
 	second := agentworkflow.New(
 		fixedTextAgent("second-agent", "Second Agent", "second answer"),
 		agentworkflow.Config{
-			DisableForwardIncomingMessages: true,
-			EmitUpdateEvents:               true,
+			ForwardIncomingMessages: new(false),
+			EmitUpdateEvents:        new(true),
 		},
 	)
 	uppercase := uppercaseLatestTextBinding("uppercase")
@@ -2338,8 +2338,8 @@ func kickoffOnStartExecutorBinding(id, downstreamExecutorID, kickoffInputText, k
 	}
 	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		executor := newMessageExecutor(id, &messageworkflow.Options{
-			StateKey:                 id + "_msgs",
-			DisableAutoSendTurnToken: true,
+			StateKey:          id + "_msgs",
+			AutoSendTurnToken: new(false),
 			TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, messages []*message.Message) error {
 				if containsTextContent(messages, kickoffInputText) {
 					kickoff := []*message.Message{{
@@ -2373,8 +2373,8 @@ func turnTrackingStartExecutorBinding(id, downstreamExecutorID, activatedMarker 
 	}
 	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		executor := newMessageExecutor(id, &messageworkflow.Options{
-			StateKey:                 id + "_msgs",
-			DisableAutoSendTurnToken: true,
+			StateKey:          id + "_msgs",
+			AutoSendTurnToken: new(false),
 			TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, messages []*message.Message) error {
 				if hasUserMessage(messages) {
 					if err := ctx.SendMessage(downstreamExecutorID, messages); err != nil {
@@ -2499,7 +2499,7 @@ func responseErrorMessages(response *agent.Response) []string {
 func TestNew_MatchingResponse_DoesNotCauseExtraTurn(t *testing.T) {
 	host := agentworkflow.New(
 		requestEmittingAgent("matching-response-call-id", "matchingResponseFunction"),
-		agentworkflow.Config{EmitUpdateEvents: true},
+		agentworkflow.Config{EmitUpdateEvents: new(true)},
 	)
 	wf, err := workflow.NewBuilder(host).WithOutputFrom(host).Build()
 	if err != nil {
@@ -2567,7 +2567,7 @@ func TestNew_MatchingResponse_DoesNotCauseExtraTurn(t *testing.T) {
 func TestNew_UnmatchedResponse_TriggersTurnAndKeepsProgressing(t *testing.T) {
 	host := agentworkflow.New(
 		requestEmittingAgent("unmatched-response-call-id", "unmatchedResponseFunction"),
-		agentworkflow.Config{EmitUpdateEvents: true},
+		agentworkflow.Config{EmitUpdateEvents: new(true)},
 	)
 	wf, err := workflow.NewBuilder(host).WithOutputFrom(host).Build()
 	if err != nil {
@@ -2623,7 +2623,7 @@ func TestNew_MixedResponseAndRegularMessage_CrossExecutorStartExecutorIsReawaken
 	)
 	downstream := agentworkflow.New(
 		requestCompletingAgent("cross-executor-call-id", "crossExecutorFunction"),
-		agentworkflow.Config{EmitUpdateEvents: true},
+		agentworkflow.Config{EmitUpdateEvents: new(true)},
 	)
 	start := kickoffOnStartExecutorBinding(
 		startExecutorID,
@@ -2688,7 +2688,7 @@ func TestNew_ResponseOnlyToNonStartExecutor_StartExecutorIsStillActivated(t *tes
 	)
 	downstream := agentworkflow.New(
 		requestCompletingAgent("response-only-call-id", "responseOnlyFunction"),
-		agentworkflow.Config{EmitUpdateEvents: true},
+		agentworkflow.Config{EmitUpdateEvents: new(true)},
 	)
 	start := turnTrackingStartExecutorBinding(startExecutorID, downstream.ID, activatedMarker)
 	wf, err := addCrossExecutorEdges(workflow.NewBuilder(start), start, downstream).

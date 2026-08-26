@@ -42,11 +42,12 @@ type Config struct {
 	// asks to continue wins, and the loop stops only when all evaluators stop.
 	Evaluators []Evaluator
 
-	// MaxIterations is the absolute safety cap for a single run. When zero,
+	// MaxIterations is the absolute safety cap for a single run. When nil,
 	// DefaultMaxIterations is used.
-	MaxIterations int
+	MaxIterations *int
 
-	// OnBehalfOfAuthorName stamps loop-synthesized feedback messages.
+	// OnBehalfOfAuthorName stamps loop-synthesized feedback messages. When empty,
+	// feedback messages are unattributed.
 	OnBehalfOfAuthorName string
 
 	// ExcludeOnBehalfOfMessages prevents loop-synthesized feedback messages
@@ -160,12 +161,12 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 				return
 			}
 		}
-		maxIterations := cfg.MaxIterations
-		if maxIterations == 0 {
-			maxIterations = defaultMaxIterations
+		maxIterations := defaultMaxIterations
+		if cfg.MaxIterations != nil {
+			maxIterations = *cfg.MaxIterations
 		}
 		if maxIterations < 1 {
-			yield(nil, fmt.Errorf("loop: MaxIterations must be at least 1, got %d", cfg.MaxIterations))
+			yield(nil, fmt.Errorf("loop: MaxIterations must be at least 1, got %d", maxIterations))
 			return
 		}
 

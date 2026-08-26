@@ -602,8 +602,8 @@ func TestWorkflowOutput_AgentResponseUsesOutputFilter(t *testing.T) {
 		return &workflow.Executor{
 			ID: binding.ID,
 
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(wctx *workflow.Context, _ any) (any, error) {
 					return nil, wctx.YieldOutput(&agent.Response{
@@ -736,8 +736,8 @@ type unrelatedOutput struct{}
 func polymorphicOutputBinding(id string, output polymorphicOutput) workflow.ExecutorBinding {
 	return workflow.BindNewExecutorFunc(id, func(_ string, executorID string) (*workflow.Executor, error) {
 		return &workflow.Executor{
-			ID: executorID,
-			DisableAutoSendMessageHandlerResultObject: true,
+			ID:                                 executorID,
+			AutoSendMessageHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[polymorphicOutput](), func(_ *workflow.Context, _ any) (any, error) {
 					return output, nil
@@ -870,8 +870,8 @@ func TestFunctionExecutor_ReturnValueAutoSendAndYieldOptions(t *testing.T) {
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
 			source := returnedDataBinding("source", &workflow.Executor{
-				DisableAutoSendMessageHandlerResultObject: !testCase.autoSend,
-				DisableAutoYieldOutputHandlerResultObject: !testCase.autoYield,
+				AutoSendMessageHandlerResultObject: new(testCase.autoSend),
+				AutoYieldOutputHandlerResultObject: new(testCase.autoYield),
 			})
 			var gotAtSink []dataMessage
 			sink := workflow.NewExecutor("sink", func(msg dataMessage) {
