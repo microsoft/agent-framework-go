@@ -80,6 +80,10 @@ type Config struct {
 	// Invocable calls are executed before the function-calling loop stops. When false,
 	// the complete mixed response is returned so the caller can handle it. The default
 	// is false.
+	//
+	// The invocable calls are executed within the current run rather than being stored
+	// and replayed on the next request as the .NET SDK does, so the middleware stays
+	// stateless and does not depend on session state.
 	EnableExecutableFunctionBypassing bool
 
 	// AllowConcurrentInvocations controls whether multiple function calls from the
