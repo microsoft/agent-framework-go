@@ -207,7 +207,7 @@ func TestExecutor_WithStringRole_ConvertsStringToMessage(t *testing.T) {
 	executor, ctx := createExecutor(&messageworkflow.Options{
 		StateKey:          "test-state",
 		TakeTurnHandler:   te.takeTurn,
-		StringMessageRole: string(message.RoleUser),
+		StringMessageRole: message.RoleUser,
 	})
 
 	if _, err := executor.Execute(ctx, "String message"); err != nil {
@@ -225,6 +225,43 @@ func TestExecutor_WithStringRole_ConvertsStringToMessage(t *testing.T) {
 	}
 	if te.receivedMessages[0].Contents[0].(*message.TextContent).Text != "String message" {
 		t.Errorf("Expected message 'String message'")
+	}
+}
+
+func TestConfigure_RejectsNilOptions(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected Configure to panic for nil options")
+		}
+	}()
+	messageworkflow.Configure(&workflow.Executor{ID: "test-executor"}, nil)
+}
+
+func TestConfigure_SnapshotsOptions(t *testing.T) {
+	var configuredCalls int
+	options := &messageworkflow.Options{
+		StateKey:          "test-state",
+		StringMessageRole: message.RoleUser,
+		TakeTurnHandler: func(_ *workflow.Context, _ workflow.TurnToken, _ []*message.Message) error {
+			configuredCalls++
+			return nil
+		},
+	}
+	executor, ctx := createExecutor(options)
+	options.StringMessageRole = ""
+	options.TakeTurnHandler = func(_ *workflow.Context, _ workflow.TurnToken, _ []*message.Message) error {
+		t.Fatal("Configure retained caller-owned options")
+		return nil
+	}
+
+	if _, err := executor.Execute(ctx, "String message"); err != nil {
+		t.Fatalf("Execute string: %v", err)
+	}
+	if _, err := executor.Execute(ctx, workflow.TurnToken{}); err != nil {
+		t.Fatalf("Execute turn token: %v", err)
+	}
+	if configuredCalls != 1 {
+		t.Fatalf("configured handler calls = %d, want 1", configuredCalls)
 	}
 }
 

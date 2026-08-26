@@ -486,17 +486,23 @@ func (a *Agent) shouldStoreHistoryProvider(provider HistoryProvider, session *Se
 	if provider == nil {
 		return false
 	}
-	if !a.hasDefaultHistoryProvider {
-		return true
-	}
 	if a.providerDoesNotManageHistory {
 		// Provider never uses server-side history; always persist locally.
+		return true
+	}
+	if session != nil && session.ServiceID() != "" {
+		// Once the provider service owns the conversation history, no history
+		// provider should persist the run locally, even if a configured provider
+		// remains attached for future local sessions.
+		return false
+	}
+	if !a.hasDefaultHistoryProvider {
 		return true
 	}
 
 	// A provider can promote a local session to a service-managed one during the
 	// run. Once that happens, the default in-memory provider should stop storing.
-	return session != nil && session.ServiceID() == ""
+	return session != nil
 }
 
 func (a *Agent) handleHistoryProviderConflict(ctx context.Context, provider HistoryProvider, session *Session) (bool, error) {
@@ -527,7 +533,7 @@ func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, opt
 		optionsOwned = true
 	}
 
-	if _, ok := GetOption(options, WithSession); !ok {
+	if session, ok := GetOption(options, WithSession); !ok || session == nil {
 		if allowBackgroundResponses, ok := GetOption(options, AllowBackgroundResponses); ok && allowBackgroundResponses {
 			// Background responses require an explicit session to avoid inconsistent
 			// caller experience between initial and follow-up runs.

@@ -118,6 +118,35 @@ func newGenericTestAgent(runFn func(context.Context, []*message.Message, ...agen
 	})
 }
 
+func TestNew_IgnoresNilMiddleware(t *testing.T) {
+	var providerCalls, agentMiddlewareCalls, providerMiddlewareCalls int
+	run := func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		providerCalls++
+		return func(func(*agent.ResponseUpdate, error) bool) {}
+	}
+	agentMiddleware := agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		agentMiddlewareCalls++
+		return next(ctx, messages, options...)
+	})
+	providerMiddleware := agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		providerMiddlewareCalls++
+		return next(ctx, messages, options...)
+	})
+
+	a := agent.New(agent.ProviderConfig{
+		Run:         run,
+		Middlewares: []agent.Middleware{nil, providerMiddleware, nil},
+	}, agent.Config{
+		Middlewares: []agent.Middleware{nil, agentMiddleware, nil},
+	})
+	if _, err := a.RunText(t.Context(), "hello").Collect(); err != nil {
+		t.Fatalf("RunText() error = %v", err)
+	}
+	if providerCalls != 1 || agentMiddlewareCalls != 1 || providerMiddlewareCalls != 1 {
+		t.Fatalf("calls = provider:%d agent middleware:%d provider middleware:%d, want all 1", providerCalls, agentMiddlewareCalls, providerMiddlewareCalls)
+	}
+}
+
 func TestAgent_RunText(t *testing.T) {
 	var capturedMessages []*message.Message
 	responseBuilder := agenttest.NewResponseBuilder(
@@ -389,6 +418,23 @@ func TestAgent_Run_RequiresSessionWhenAllowBackgroundResponsesEnabled(t *testing
 	}
 	if runCalled {
 		t.Fatal("expected run function not to be called when validation fails")
+	}
+}
+
+func TestAgent_Run_RejectsNilSessionWhenAllowBackgroundResponsesEnabled(t *testing.T) {
+	runCalled := false
+	a := agenttest.New(agenttest.NewResponseBuilder(
+		func(context.Context, []*message.Message, ...agent.Option) {
+			runCalled = true
+		},
+	).AddText("response").Build())
+
+	_, err := a.RunText(t.Context(), "test", agent.WithSession(nil), agent.AllowBackgroundResponses(true)).Collect()
+	if err == nil || err.Error() != "a session must be provided when AllowBackgroundResponses is enabled" {
+		t.Fatalf("RunText() error = %v, want session-required error", err)
+	}
+	if runCalled {
+		t.Fatal("run function called with a nil background-response session")
 	}
 }
 
@@ -1594,7 +1640,7 @@ func TestAgent_Run_HistoryProvider_ClearsWhenThrowDisabledAndClearEnabled(t *tes
 	}
 }
 
-func TestAgent_Run_HistoryProvider_KeepsWhenThrowAndClearDisabled(t *testing.T) {
+func TestAgent_Run_HistoryProvider_KeepsReferenceButSkipsStoreWhenThrowAndClearDisabled(t *testing.T) {
 	provideCalls := 0
 	storeCalls := 0
 	historyProvider := agent.NewHistoryProvider(agent.HistoryProviderConfig{
@@ -1631,14 +1677,14 @@ func TestAgent_Run_HistoryProvider_KeepsWhenThrowAndClearDisabled(t *testing.T) 
 	if _, err := a.RunText(t.Context(), "input", agent.WithSession(agenttest.CreateSession())).Collect(); err != nil {
 		t.Fatalf("unexpected first run error: %v", err)
 	}
-	if provideCalls != 1 || storeCalls != 1 {
-		t.Fatalf("after first run provide/store = %d/%d, want 1/1", provideCalls, storeCalls)
+	if provideCalls != 1 || storeCalls != 0 {
+		t.Fatalf("after first run provide/store = %d/%d, want 1/0", provideCalls, storeCalls)
 	}
 	if _, err := a.RunText(t.Context(), "next", agent.WithSession(agenttest.CreateSession())).Collect(); err != nil {
 		t.Fatalf("unexpected second run error: %v", err)
 	}
-	if provideCalls != 2 || storeCalls != 2 {
-		t.Fatalf("after second run provide/store = %d/%d, want 2/2", provideCalls, storeCalls)
+	if provideCalls != 2 || storeCalls != 1 {
+		t.Fatalf("after second run provide/store = %d/%d, want 2/1", provideCalls, storeCalls)
 	}
 }
 
@@ -2262,7 +2308,7 @@ func TestAgent_Run_HistoryProvider_ConcurrentConflictClearIsRaceFree(t *testing.
 	const goroutines = 64
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		go func() {
 			defer wg.Done()
 			// Each goroutine drives a shared *Agent with its own session, so the

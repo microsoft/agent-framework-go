@@ -118,6 +118,11 @@ func NewEnvironmentProvider(executor Executor, config EnvironmentProviderConfig)
 	if executor == nil {
 		panic("shelltool: executor is required")
 	}
+	switch config.OverrideFamily {
+	case ShellFamilyUnknown, ShellFamilyPOSIX, ShellFamilyPowerShell:
+	default:
+		panic(fmt.Sprintf("shelltool: invalid shell family %d", config.OverrideFamily))
+	}
 	p := &EnvironmentProvider{executor: executor, config: config}
 	sourceID := strings.TrimSpace(config.SourceID)
 	if sourceID == "" {

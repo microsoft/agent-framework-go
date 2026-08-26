@@ -142,6 +142,10 @@ func (rb *RouteBuilder) AddCatchAll(handler func(*Context, PortableValue) (any, 
 	if rb.err != nil {
 		return rb
 	}
+	if rb.catchAll == nil && addHandlerOptions.overwrite {
+		rb.err = errors.New("cannot overwrite unregistered catch-all handler")
+		return rb
+	}
 	if rb.catchAll != nil && !addHandlerOptions.overwrite {
 		rb.err = errors.New("catch-all handler is already registered")
 		return rb

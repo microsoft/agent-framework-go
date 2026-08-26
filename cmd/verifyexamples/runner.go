@@ -60,8 +60,7 @@ func runExample(ctx context.Context, projectPath string, timeout time.Duration, 
 
 	exitCode := 0
 	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
+		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 			exitCode = exitErr.ExitCode()
 		} else {
 			exitCode = -1

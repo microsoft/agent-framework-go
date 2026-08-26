@@ -782,7 +782,7 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 		}
 
 	default:
-		panic("unknown message role: " + string(msg.Role))
+		return nil, fmt.Errorf("openaiprovider: unsupported message role %q", msg.Role)
 	}
 
 	if len(contents) > 0 {
@@ -851,7 +851,12 @@ func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func
 				if !yield(currentUpdate, nil) {
 					return
 				}
-				currentUpdate = &agent.ResponseUpdate{}
+				// Reset for the next message, carrying the response-level
+				// properties forward so the second and later messages keep
+				// AdditionalProperties (e.g. EndUserId).
+				currentUpdate = &agent.ResponseUpdate{
+					AdditionalProperties: responsesPopulateAdditionalProperties(resp),
+				}
 			}
 			currentUpdate.MessageID = out.ID
 			currentUpdate.ResponseID = resp.ID

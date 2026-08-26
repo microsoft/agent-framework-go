@@ -127,8 +127,8 @@ func newMemoryProvider(client *azaiprojects.MemoryStoresClient, memoryStoreName 
 // returned unchanged.
 func (p *MemoryProvider) EnsureMemoryStoreCreated(ctx context.Context, chatModel, embeddingModel string, description *string) error {
 	if _, err := p.client.GetMemoryStore(ctx, p.memoryStoreName, nil); err != nil {
-		var respErr *azcore.ResponseError
-		if !errors.As(err, &respErr) || respErr.StatusCode != http.StatusNotFound {
+		respErr, ok := errors.AsType[*azcore.ResponseError](err)
+		if !ok || respErr.StatusCode != http.StatusNotFound {
 			return err
 		}
 		def := &azaiprojects.MemoryStoreDefaultDefinition{
@@ -142,7 +142,7 @@ func (p *MemoryProvider) EnsureMemoryStoreCreated(ctx context.Context, chatModel
 		if _, err = p.client.CreateMemoryStore(ctx, p.memoryStoreName, def, options); err != nil {
 			// Tolerate a concurrent create: if another process created the store after the
 			// GET returned 404, CreateMemoryStore reports a conflict. Treat it as a no-op.
-			if errors.As(err, &respErr) && respErr.StatusCode == http.StatusConflict {
+			if respErr, ok := errors.AsType[*azcore.ResponseError](err); ok && respErr.StatusCode == http.StatusConflict {
 				return nil
 			}
 			return err
@@ -172,8 +172,7 @@ func (p *MemoryProvider) Invoked(ctx context.Context, invoked agent.InvokedConte
 func (p *MemoryProvider) EnsureStoredMemoriesDeleted(ctx context.Context, session *agent.Session) error {
 	scope := p.scope(session)
 	if _, err := p.client.DeleteScope(ctx, p.memoryStoreName, scope, nil); err != nil {
-		var respErr *azcore.ResponseError
-		if errors.As(err, &respErr) && respErr.StatusCode == http.StatusNotFound {
+		if respErr, ok := errors.AsType[*azcore.ResponseError](err); ok && respErr.StatusCode == http.StatusNotFound {
 			p.log(ctx, slog.LevelInfo, "foundrymemory: no stored memories to delete", "memory_store", p.memoryStoreName)
 			return nil
 		}

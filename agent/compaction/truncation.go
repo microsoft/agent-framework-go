@@ -55,8 +55,7 @@ func (strategy *TruncationStrategy) Compact(_ context.Context, index *MessageInd
 		if !group.isIncludedNonSystem() {
 			continue
 		}
-		group.IsExcluded = true
-		group.ExcludeReason = "truncated by TruncationStrategy"
+		group.exclude("truncated by TruncationStrategy")
 		removed++
 		compacted = true
 		if target(index) {

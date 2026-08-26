@@ -57,12 +57,7 @@ func PrependAgentFrameworkToUserAgent(headers map[string]string) map[string]stri
 	if headers == nil {
 		headers = map[string]string{}
 	}
-	userAgent := userAgent()
-	if existing := headers[userAgentKey]; existing != "" {
-		headers[userAgentKey] = userAgent + " " + existing
-	} else {
-		headers[userAgentKey] = userAgent
-	}
+	headers[userAgentKey] = prependUserAgent(headers[userAgentKey])
 	return headers
 }
 
@@ -74,13 +69,48 @@ func PrependAgentFrameworkToHTTPHeader(headers http.Header) http.Header {
 	if headers == nil {
 		headers = http.Header{}
 	}
-	userAgent := userAgent()
-	if existing := headers.Get(userAgentKey); existing != "" {
-		headers.Set(userAgentKey, userAgent+" "+existing)
-	} else {
-		headers.Set(userAgentKey, userAgent)
-	}
+	headers.Set(userAgentKey, prependUserAgent(headers.Get(userAgentKey)))
 	return headers
+}
+
+func prependUserAgent(existing string) string {
+	frameworkUserAgent := userAgent()
+	products := strings.Fields(existing)
+	frameworkProductCount := 0
+	hasCurrentFrameworkProduct := false
+	for _, product := range products {
+		if isAgentFrameworkUserAgent(product) {
+			frameworkProductCount++
+			hasCurrentFrameworkProduct = hasCurrentFrameworkProduct || product == frameworkUserAgent
+		}
+	}
+	if frameworkProductCount == 1 && hasCurrentFrameworkProduct {
+		return existing
+	}
+	if frameworkProductCount > 0 {
+		normalized := make([]string, 0, len(products)-frameworkProductCount+1)
+		frameworkProductAdded := false
+		for _, product := range products {
+			if isAgentFrameworkUserAgent(product) {
+				if !frameworkProductAdded {
+					normalized = append(normalized, frameworkUserAgent)
+					frameworkProductAdded = true
+				}
+				continue
+			}
+			normalized = append(normalized, product)
+		}
+		return strings.Join(normalized, " ")
+	}
+	if existing == "" {
+		return frameworkUserAgent
+	}
+	return frameworkUserAgent + " " + existing
+}
+
+func isAgentFrameworkUserAgent(product string) bool {
+	return strings.HasPrefix(product, httpUserAgent+"/") ||
+		strings.Contains(product, "/"+httpUserAgent+"/")
 }
 
 func userAgentPrefixList() []string {

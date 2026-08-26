@@ -3,6 +3,7 @@
 package anthropicprovider_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/provider/anthropicprovider"
+	"github.com/microsoft/agent-framework-go/tool/functool"
 	"github.com/microsoft/agent-framework-go/tool/hostedtool"
 )
 
@@ -25,6 +27,20 @@ import (
 type testOutput struct {
 	Name string `json:"name"`
 	Age  int    `json:"age"`
+}
+
+func TestAgent_UnsupportedMessageRoleReturnsError(t *testing.T) {
+	a := anthropicprovider.NewAgent(
+		anthropic.NewClient(option.WithAPIKey("test")),
+		anthropicprovider.AgentConfig{
+			Model:  "test-model",
+			Config: agent.Config{DisableFuncAutoCall: true},
+		},
+	)
+	_, err := a.Run(t.Context(), []*message.Message{{Role: message.Role("custom")}}).Collect()
+	if err == nil || !strings.Contains(err.Error(), "unsupported message role") {
+		t.Fatalf("Run() error = %v, want unsupported message role", err)
+	}
 }
 
 func newTestClient(t *testing.T, server *httptest.Server) *agent.Agent {
@@ -844,6 +860,230 @@ func TestToolUseEmptyArgumentsSerializeAsObject(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("tool_use block for toolu_1 not found in request")
+	}
+}
+
+// The tool's input_schema sent to Anthropic must carry the additionalProperties
+// keyword emitted by functool's strict schema. functool.Call validates decoded
+// arguments against the resolved schema (additionalProperties:false), so if the
+// model-facing schema omits it the model can hallucinate an extra argument that
+// passes the model but is rejected Go-side. OpenAI and Gemini forward the full
+// schema; this keeps the Anthropic path in parity.
+func TestToolInputSchemaCarriesAdditionalProperties(t *testing.T) {
+	type getWeatherInput struct {
+		City string `json:"city"`
+	}
+	weatherTool := functool.MustNew(functool.Config{
+		Name:        "get_weather",
+		Description: "Gets the weather for a city.",
+	}, func(_ context.Context, in getWeatherInput) (string, error) {
+		return "sunny", nil
+	})
+
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		bodyCh <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, minimalMessageResponse("ok"))
+	}))
+	defer server.Close()
+
+	if _, err := newTestClient(t, server).RunText(
+		t.Context(), "what's the weather?", agent.WithTool(weatherTool),
+	).Collect(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	tools, ok := req["tools"].([]any)
+	if !ok || len(tools) == 0 {
+		t.Fatalf("request tools = %#v, want a non-empty JSON array", req["tools"])
+	}
+	toolObj, ok := tools[0].(map[string]any)
+	if !ok {
+		t.Fatalf("tools[0] = %#v, want a JSON object", tools[0])
+	}
+	addl, ok := nestedKey(toolObj, "input_schema", "additionalProperties")
+	if !ok {
+		t.Fatal("tool input_schema is missing additionalProperties")
+	}
+	if addl != false {
+		t.Errorf("input_schema.additionalProperties = %#v, want false", addl)
+	}
+}
+
+// A URIContent image URL and a DataContent application/pdf must be forwarded to
+// Anthropic as an image block with a URL source and a document block. Before the
+// fix these inputs fell through the content switch and were silently dropped,
+// diverging from the OpenAI chat provider which maps all three multimodal inputs.
+func TestBuildMessageParam_ImageURLAndPDFAreForwarded(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		bodyCh <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, minimalMessageResponse("ok"))
+	}))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	msgs := []*message.Message{
+		{Role: message.RoleUser, Contents: message.Contents{
+			&message.URIContent{URI: "https://example.com/cat.png", MediaType: "image/png"},
+			&message.DataContent{Data: "JVBERi0xLjQK", MediaType: "application/pdf"},
+		}},
+	}
+	if _, err := a.Run(t.Context(), msgs).Collect(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	messages, ok := req["messages"].([]any)
+	if !ok {
+		t.Fatalf("request messages = %#v, want a JSON array", req["messages"])
+	}
+
+	var imageURL, documentBase64 bool
+	for _, m := range messages {
+		msg, ok := m.(map[string]any)
+		if !ok {
+			continue
+		}
+		blocks, ok := msg["content"].([]any)
+		if !ok {
+			continue
+		}
+		for _, b := range blocks {
+			block, ok := b.(map[string]any)
+			if !ok {
+				continue
+			}
+			source, _ := block["source"].(map[string]any)
+			switch block["type"] {
+			case "image":
+				if source["type"] == "url" && source["url"] == "https://example.com/cat.png" {
+					imageURL = true
+				}
+			case "document":
+				if source["type"] == "base64" && source["media_type"] == "application/pdf" && source["data"] == "JVBERi0xLjQK" {
+					documentBase64 = true
+				}
+			}
+		}
+	}
+	if !imageURL {
+		t.Error("image block with a URL source not found in request")
+	}
+	if !documentBase64 {
+		t.Error("document block with a base64 application/pdf source not found in request")
+	}
+}
+
+// A PDF media type that carries parameters or non-canonical casing (e.g.
+// "application/PDF; charset=binary") must still be recognized and forwarded as a
+// document block, not dropped.
+func TestBuildMessageParam_PDFMediaTypeWithParametersIsForwarded(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		bodyCh <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, minimalMessageResponse("ok"))
+	}))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	msgs := []*message.Message{
+		{Role: message.RoleUser, Contents: message.Contents{
+			&message.DataContent{Data: "JVBERi0xLjQK", MediaType: "application/PDF; charset=binary"},
+		}},
+	}
+	if _, err := a.Run(t.Context(), msgs).Collect(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	messages, ok := req["messages"].([]any)
+	if !ok {
+		t.Fatalf("request messages = %#v, want a JSON array", req["messages"])
+	}
+
+	var documentBase64 bool
+	for _, m := range messages {
+		msg, ok := m.(map[string]any)
+		if !ok {
+			continue
+		}
+		blocks, ok := msg["content"].([]any)
+		if !ok {
+			continue
+		}
+		for _, b := range blocks {
+			block, ok := b.(map[string]any)
+			if !ok {
+				continue
+			}
+			source, _ := block["source"].(map[string]any)
+			if block["type"] == "document" && source["type"] == "base64" && source["data"] == "JVBERi0xLjQK" {
+				documentBase64 = true
+			}
+		}
+	}
+	if !documentBase64 {
+		t.Error("document block for a PDF media type with parameters not found in request")
+	}
+}
+
+// A HostedFileContent cannot be represented by the stable Messages API, so the
+// request must fail with an explicit error rather than silently dropping it.
+func TestBuildMessageParam_HostedFileContentReturnsError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("request should not be sent when a hosted file reference is present")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, minimalMessageResponse("ok"))
+	}))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	msgs := []*message.Message{
+		{Role: message.RoleUser, Contents: message.Contents{
+			&message.HostedFileContent{FileID: "file_123"},
+		}},
+	}
+	_, err := a.Run(t.Context(), msgs).Collect()
+	if err == nil {
+		t.Fatal("expected an error for a hosted file reference, got nil")
+	}
+	if !strings.Contains(err.Error(), "file_123") {
+		t.Errorf("error = %v, want it to mention the offending file id", err)
 	}
 }
 

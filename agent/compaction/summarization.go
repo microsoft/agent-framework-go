@@ -32,13 +32,18 @@ type SummarizerFunc func(context.Context, []*message.Message) (string, error)
 
 // Summarize calls f(ctx, messages).
 func (f SummarizerFunc) Summarize(ctx context.Context, messages []*message.Message) (string, error) {
+	if f == nil {
+		return "", errors.New("compaction: summarizer function is nil")
+	}
 	return f(ctx, messages)
 }
 
 // SummarizationStrategy summarizes older groups into a single assistant summary message.
 //
 // The strategy protects system messages and the most recent non-system groups. Older groups are sent
-// to Summarizer, and the resulting summary is inserted as a GroupKindSummary message.
+// to Summarizer, and the resulting summary is inserted as a GroupKindSummary message. Summarizer
+// failures are best effort: excluded groups are restored and Compact reports no change. Context
+// cancellation and deadline errors are restored and returned to the caller.
 type SummarizationStrategy struct {
 	// Trigger controls whether summarization should run.
 	// When nil, summarization always runs.

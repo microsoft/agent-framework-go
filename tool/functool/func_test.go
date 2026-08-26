@@ -68,6 +68,17 @@ func TestFuncTool_MustNew(t *testing.T) {
 	}
 }
 
+func TestFuncTool_NewRejectsNilHandler(t *testing.T) {
+	var handler functool.HandlerFor[struct{}, string]
+	tool, err := functool.New(functool.Config{Name: "nil-handler"}, handler)
+	if err == nil || err.Error() != "functool: handler is required" {
+		t.Fatalf("New() error = %v, want handler required error", err)
+	}
+	if tool != nil {
+		t.Fatalf("New() tool = %T, want nil", tool)
+	}
+}
+
 func TestFuncTool_CallMissingArg0(t *testing.T) {
 	cfg := functool.Config{
 		Name: "test",

@@ -457,8 +457,8 @@ func TestMemoryProviderEnsureStoredMemoriesDeletedSurfacesOtherErrors(t *testing
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	var respErr *azcore.ResponseError
-	if !errors.As(err, &respErr) || respErr.StatusCode != http.StatusInternalServerError {
+	respErr, ok := errors.AsType[*azcore.ResponseError](err)
+	if !ok || respErr.StatusCode != http.StatusInternalServerError {
 		t.Fatalf("error = %v", err)
 	}
 }

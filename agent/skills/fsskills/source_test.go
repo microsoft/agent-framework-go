@@ -23,6 +23,16 @@ func TestFileSource_EmptyPaths_ReturnsEmptyList(t *testing.T) {
 	}
 }
 
+func TestFileSource_NilFilesystemPanics(t *testing.T) {
+	defer func() {
+		if got := recover(); got != "fsskills: filesystem at index 1 is nil" {
+			t.Fatalf("panic = %v, want indexed nil filesystem message", got)
+		}
+	}()
+
+	fsskills.NewSource(os.DirFS(t.TempDir()), nil)
+}
+
 func TestFileSource_NonExistentPath_ReturnsEmptyList(t *testing.T) {
 	root := t.TempDir()
 	source := fsskills.NewSource(os.DirFS(filepath.Join(root, "does-not-exist")))

@@ -42,8 +42,7 @@ func NewMessageIndex(groups []*MessageGroup, tokenCounter TokenCounter) *Message
 		Groups:       groups,
 		TokenCounter: tokenCounter,
 	}
-	for i := len(groups) - 1; i >= 0; i-- {
-		group := groups[i]
+	for _, group := range slices.Backward(groups) {
 		if index.lastProcessedMessage == nil && group.Kind != GroupKindSummary && len(group.Messages) > 0 {
 			index.lastProcessedMessage = group.Messages[len(group.Messages)-1]
 		}
@@ -91,8 +90,8 @@ func (index *MessageIndex) Update(messages []*message.Message) {
 			messageContentEqual(messages[expected], index.lastProcessedMessage) {
 			foundIndex = expected
 		} else {
-			for i := len(messages) - 1; i >= 0; i-- {
-				if messageContentEqual(messages[i], index.lastProcessedMessage) {
+			for i, message := range slices.Backward(messages) {
+				if messageContentEqual(message, index.lastProcessedMessage) {
 					foundIndex = i
 					break
 				}

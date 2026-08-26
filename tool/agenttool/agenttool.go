@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"regexp"
+	"slices"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/tool"
@@ -25,10 +26,14 @@ type Config struct {
 	RunOptions []agent.Option
 }
 
-// New creates a new FuncTool that invokes the given agent with the provided configuration.
+// New creates a new FuncTool that invokes the given agent with the provided
+// configuration. It panics if a is nil.
 func New(a *agent.Agent, config Config) tool.FuncTool {
+	if a == nil {
+		panic("agenttool: agent is required")
+	}
 	return functool{
-		opts:  config.RunOptions,
+		opts:  slices.Clone(config.RunOptions),
 		agent: a,
 	}
 }
@@ -39,7 +44,11 @@ type functool struct {
 }
 
 func (t functool) Name() string {
-	return invalidNameChars.ReplaceAllString(t.agent.Name(), "_")
+	name := t.agent.Name()
+	if name == "" {
+		name = t.agent.ID()
+	}
+	return invalidNameChars.ReplaceAllString(name, "_")
 }
 
 func (t functool) Description() string {

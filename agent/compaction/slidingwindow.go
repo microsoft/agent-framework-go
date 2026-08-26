@@ -66,9 +66,7 @@ func (strategy *SlidingWindowStrategy) Compact(_ context.Context, index *Message
 			continue
 		}
 		for _, groupIndex := range turnGroups[turnIndex] {
-			group := index.Groups[groupIndex]
-			group.IsExcluded = true
-			group.ExcludeReason = "excluded by SlidingWindowStrategy"
+			index.Groups[groupIndex].exclude("excluded by SlidingWindowStrategy")
 		}
 		compacted = true
 		if target(index) {

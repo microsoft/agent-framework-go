@@ -103,6 +103,12 @@ func (o LocalConfig) maxOutputBytes() int {
 }
 
 func (o LocalConfig) validate() error {
+	if o.Mode != ModePersistent && o.Mode != ModeStateless {
+		return fmt.Errorf("shelltool: invalid Mode %d", o.Mode)
+	}
+	if o.Timeout < 0 {
+		return fmt.Errorf("shelltool: Timeout must be non-negative")
+	}
 	if o.MaxOutputBytes < 0 {
 		return fmt.Errorf("shelltool: MaxOutputBytes must be non-negative")
 	}
@@ -380,8 +386,7 @@ func runStateless(ctx context.Context, opts LocalConfig, command string) (Result
 	if timedOut {
 		exitCode = exitCodeTimedOut
 	} else if runErr != nil {
-		var exitErr *exec.ExitError
-		if errors.As(runErr, &exitErr) {
+		if exitErr, ok := errors.AsType[*exec.ExitError](runErr); ok {
 			exitCode = exitErr.ExitCode()
 		} else {
 			return Result{}, fmt.Errorf("%w: shelltool: run: %w", errCommandIO, runErr)

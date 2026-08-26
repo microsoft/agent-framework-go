@@ -302,15 +302,11 @@ func (r *runner) Checkpoints() []workflow.CheckpointInfo {
 	return slices.Clone(r.checkpoints)
 }
 
-func checkpointInfoPtr(info workflow.CheckpointInfo) *workflow.CheckpointInfo {
-	return &info
-}
-
 func cloneCheckpointInfoPtr(info *workflow.CheckpointInfo) *workflow.CheckpointInfo {
 	if info == nil {
 		return nil
 	}
-	return checkpointInfoPtr(*info)
+	return new(*info)
 }
 
 // RestoreCheckpoint restores the workflow state from a checkpoint.
@@ -363,7 +359,7 @@ func (r *runner) restoreCheckpointCore(ctx context.Context, checkpointInfo workf
 	}
 	r.checkpointMu.Lock()
 	r.checkpoints = index
-	r.lastCheckpointInfo = checkpointInfoPtr(checkpointInfo)
+	r.lastCheckpointInfo = new(checkpointInfo)
 	r.checkpointMu.Unlock()
 	r.stepTracer.Reload(cp.StepNumber)
 	return nil
@@ -495,7 +491,7 @@ func (r *runner) checkpoint(ctx context.Context) error {
 	r.stepTracer.TraceCheckpointCreated(info)
 	r.checkpointMu.Lock()
 	r.checkpoints = append(r.checkpoints, info)
-	r.lastCheckpointInfo = checkpointInfoPtr(info)
+	r.lastCheckpointInfo = new(info)
 	r.checkpointMu.Unlock()
 	return nil
 }

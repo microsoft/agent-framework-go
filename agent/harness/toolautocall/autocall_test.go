@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"iter"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -631,6 +633,33 @@ func TestFunctionInvoking_FunctionReturningFunctionResultContentWithMismatchedCa
 	}
 	if inner.Result != "Result from function" {
 		t.Fatalf("expected inner result %q, got %v", "Result from function", inner.Result)
+	}
+}
+
+func TestFunctionInvoking_NegativeMaximumIterationsReturnsError(t *testing.T) {
+	invoked := false
+	next := func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		invoked = true
+		return func(func(*agent.ResponseUpdate, error) bool) {}
+	}
+
+	var got error
+	for _, err := range toolautocall.New(toolautocall.Config{MaximumIterationsPerRequest: -1}).Run(
+		next,
+		t.Context(),
+		[]*message.Message{message.NewText("hello")},
+	) {
+		if err != nil {
+			got = err
+			break
+		}
+	}
+
+	if got == nil || !strings.Contains(got.Error(), "MaximumIterationsPerRequest must be 0 or greater") {
+		t.Fatalf("Run() error = %v, want iteration-limit validation error", got)
+	}
+	if invoked {
+		t.Fatal("provider was invoked for invalid configuration")
 	}
 }
 

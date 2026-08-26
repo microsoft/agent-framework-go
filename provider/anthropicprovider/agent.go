@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"iter"
 	"maps"
+	"mime"
 	"reflect"
 	"slices"
 	"strings"
@@ -400,6 +401,24 @@ func (a *client) buildMessageParams(messages []*message.Message, opts []agent.Op
 				Required:   required,
 			}
 
+			// Carry the remaining JSON Schema keywords (e.g. additionalProperties:false
+			// emitted by functool's strict schema) through ExtraFields so the
+			// model-facing schema stays in sync with the Go-side resolved-schema
+			// validation funcTool.Call performs. Without this a hallucinated extra
+			// argument would pass the model but be rejected by functool. This mirrors
+			// the OpenAI and Gemini providers, which forward the full schema.
+			for k, v := range schemaMap {
+				switch k {
+				case "type", "properties", "required":
+					// Already represented on the typed fields above.
+				default:
+					if schemaParam.ExtraFields == nil {
+						schemaParam.ExtraFields = make(map[string]any)
+					}
+					schemaParam.ExtraFields[k] = v
+				}
+			}
+
 			toolParam := anthropic.ToolUnionParamOfTool(schemaParam, name)
 			if toolParam.OfTool != nil {
 				toolParam.OfTool.Description = anthropic.String(description)
@@ -475,11 +494,22 @@ func (a *client) buildMessageParams(messages []*message.Message, opts []agent.Op
 				}
 			}
 		default:
-			// Ignore
+			return anthropic.MessageNewParams{}, fmt.Errorf("anthropicprovider: unsupported message role %q", msg.Role)
 		}
 	}
 
 	return params, nil
+}
+
+// isPDFMediaType reports whether mediaType denotes a PDF document. Media types
+// may carry parameters (e.g. "application/pdf; charset=binary") and arbitrary
+// casing, so the base type is parsed and compared case-insensitively.
+func isPDFMediaType(mediaType string) bool {
+	base, _, err := mime.ParseMediaType(mediaType)
+	if err != nil {
+		base = strings.ToLower(strings.TrimSpace(mediaType))
+	}
+	return base == "application/pdf"
 }
 
 // buildWebSearchTool maps a hosted WebSearch tool to the Anthropic
@@ -632,13 +662,32 @@ func buildMessageParam(msg *message.Message) (anthropic.MessageParam, error) {
 			}
 			content = append(content, anthropic.NewToolResultBlock(c.CallID, resStr, c.Error != nil))
 		case *message.DataContent:
-			if c.TopLevelMediaType() == "image" {
+			switch {
+			case c.TopLevelMediaType() == "image":
 				mediaType := c.MediaType
 				if mediaType == "" {
 					mediaType = "image/jpeg"
 				}
 				content = append(content, anthropic.NewImageBlockBase64(mediaType, c.Data))
+			case isPDFMediaType(c.MediaType):
+				content = append(content, anthropic.NewDocumentBlock(anthropic.Base64PDFSourceParam{
+					Data: c.Data,
+				}))
 			}
+		case *message.URIContent:
+			switch {
+			case c.TopLevelMediaType() == "image":
+				content = append(content, anthropic.NewImageBlock(anthropic.URLImageSourceParam{URL: c.URI}))
+			case isPDFMediaType(c.MediaType):
+				content = append(content, anthropic.NewDocumentBlock(anthropic.URLPDFSourceParam{URL: c.URI}))
+			}
+		case *message.HostedFileContent:
+			// The stable Anthropic Messages API used here (anthropic.MessageNewParams)
+			// has no file-id image/document source in anthropic-sdk-go v1.58.1; only
+			// the Beta API exposes BetaFileImageSourceParam/BetaFileDocumentSourceParam.
+			// A hosted file reference therefore cannot be forwarded yet, so surface an
+			// explicit error rather than silently dropping it.
+			return anthropic.MessageParam{}, fmt.Errorf("anthropic: hosted file references (file id %q) are not supported by the Messages API; use DataContent or URIContent instead", c.FileID)
 		}
 	}
 

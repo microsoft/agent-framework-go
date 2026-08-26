@@ -106,14 +106,6 @@ func responseUpdateToArtifactEvent(infoProvider a2a.TaskInfoProvider, artifactID
 		return nil, artifactID, nil
 	}
 
-	parts, err := contentsToParts(update.Contents, nil)
-	if err != nil {
-		return nil, artifactID, err
-	}
-	if len(parts) == 0 {
-		return nil, artifactID, nil
-	}
-
 	nextArtifactID := artifactID
 	stableID := cmp.Or(update.ResponseID, update.MessageID)
 	if stableID != "" {
@@ -123,11 +115,19 @@ func responseUpdateToArtifactEvent(infoProvider a2a.TaskInfoProvider, artifactID
 		nextArtifactID = a2a.NewArtifactID()
 	}
 
-	evt := a2a.NewArtifactEvent(infoProvider, parts...)
-	evt.Artifact.ID = nextArtifactID
-	evt.Append = artifactID != "" && artifactID == nextArtifactID
-	evt.LastChunk = false
-	evt.Metadata = maps.Clone(update.AdditionalProperties)
+	evt, err := responseUpdateToArtifactEventWithOptions(
+		infoProvider,
+		nextArtifactID,
+		artifactID != "" && artifactID == nextArtifactID,
+		false,
+		update,
+	)
+	if err != nil {
+		return nil, artifactID, err
+	}
+	if evt == nil {
+		return nil, artifactID, nil
+	}
 	return evt, nextArtifactID, nil
 }
 
@@ -147,5 +147,35 @@ func responseToArtifactEvent(infoProvider a2a.TaskInfoProvider, resp *agent.Resp
 	if resp != nil {
 		evt.Metadata = maps.Clone(resp.AdditionalProperties)
 	}
+	return evt, nil
+}
+
+func responseUpdateToArtifactEventWithOptions(
+	infoProvider a2a.TaskInfoProvider,
+	artifactID a2a.ArtifactID,
+	appendChunk bool,
+	lastChunk bool,
+	update *agent.ResponseUpdate,
+) (*a2a.TaskArtifactUpdateEvent, error) {
+	if update == nil {
+		return nil, nil
+	}
+
+	parts, err := contentsToParts(update.Contents, nil)
+	if err != nil {
+		return nil, err
+	}
+	if len(parts) == 0 {
+		return nil, nil
+	}
+
+	evt := a2a.NewArtifactEvent(infoProvider, parts...)
+	evt.Artifact.ID = artifactID
+	if evt.Artifact.ID == "" {
+		evt.Artifact.ID = a2a.NewArtifactID()
+	}
+	evt.Append = appendChunk
+	evt.LastChunk = lastChunk
+	evt.Metadata = maps.Clone(update.AdditionalProperties)
 	return evt, nil
 }

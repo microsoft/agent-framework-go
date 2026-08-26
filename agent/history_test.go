@@ -66,6 +66,15 @@ func TestNewInMemoryHistoryProvider_DefaultConfig_RoundTripsHistory(t *testing.T
 	}
 }
 
+func TestNewHistoryProvider_PanicsWithoutSourceID(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic")
+		}
+	}()
+	agent.NewHistoryProvider(agent.HistoryProviderConfig{})
+}
+
 // Agent runs may share a conversation session; concurrent stores must preserve
 // every turn without racing on session state. Run with -race.
 func TestNewInMemoryHistoryProvider_ConcurrentStoresOnSameSession_NoDataRace(t *testing.T) {
@@ -77,7 +86,7 @@ func TestNewInMemoryHistoryProvider_ConcurrentStoresOnSameSession_NoDataRace(t *
 	errs := make(chan error, stores)
 	var wg sync.WaitGroup
 	wg.Add(stores)
-	for i := 0; i < stores; i++ {
+	for i := range stores {
 		go func(index int) {
 			defer wg.Done()
 			<-start

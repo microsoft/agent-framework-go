@@ -562,6 +562,43 @@ func TestExternalRequest_NewRequest_TypeValidation(t *testing.T) {
 	}
 }
 
+func TestExternalRequest_NewRequest_RejectsInvalidPort(t *testing.T) {
+	stringType := reflect.TypeFor[string]()
+	tests := []struct {
+		name string
+		port workflow.RequestPort
+		want string
+	}{
+		{
+			name: "empty ID",
+			port: workflow.RequestPort{Request: stringType, Response: stringType},
+			want: "workflow: request port ID is required",
+		},
+		{
+			name: "nil request type",
+			port: workflow.RequestPort{ID: "port", Response: stringType},
+			want: `workflow: request port "port" request type is required`,
+		},
+		{
+			name: "nil response type",
+			port: workflow.RequestPort{ID: "port", Request: stringType},
+			want: `workflow: request port "port" response type is required`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request, err := workflow.NewExternalRequest("request", test.port, "payload")
+			if err == nil || err.Error() != test.want {
+				t.Fatalf("NewExternalRequest() error = %v, want %q", err, test.want)
+			}
+			if request != nil {
+				t.Fatalf("NewExternalRequest() = %#v, want nil", request)
+			}
+		})
+	}
+}
+
 func TestExternalRequest_NewRequest_RejectsNil(t *testing.T) {
 	port := workflow.RequestPort{
 		ID:       "p",

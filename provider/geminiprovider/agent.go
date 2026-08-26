@@ -48,8 +48,12 @@ type AgentConfig struct {
 	Model string
 }
 
-// NewAgent creates a new [agent.Agent] backed by the Google Gemini API via the genai client.
+// NewAgent creates a new [agent.Agent] backed by the Google Gemini API via the
+// genai client. It panics if gclient is nil.
 func NewAgent(gclient *genai.Client, config AgentConfig) *agent.Agent {
+	if gclient == nil {
+		panic("geminiprovider: client cannot be nil")
+	}
 	c := &client{
 		client: gclient,
 		config: config,
@@ -362,6 +366,8 @@ func (a *client) buildParams(messages []*message.Message, opts []agent.Option) (
 					Parts: parts,
 				})
 			}
+		default:
+			return nil, nil, fmt.Errorf("geminiprovider: unsupported message role %q", msg.Role)
 		}
 	}
 
@@ -659,7 +665,7 @@ func toFinishReason(reason genai.FinishReason) string {
 		genai.FinishReasonBlocklist, genai.FinishReasonProhibitedContent,
 		genai.FinishReasonSPII:
 		return "content_filter"
-	case genai.FinishReasonMalformedFunctionCall:
+	case genai.FinishReasonMalformedFunctionCall, genai.FinishReasonTooManyToolCalls:
 		return "tool_calls"
 	default:
 		return ""

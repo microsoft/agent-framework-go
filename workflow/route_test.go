@@ -19,6 +19,44 @@ type routeTestConcrete struct {
 
 func (m routeTestConcrete) routeMarker() string { return m.value }
 
+func TestRouteBuilder_OverwriteRequiresRegisteredHandler(t *testing.T) {
+	tests := []struct {
+		name string
+		add  func(*RouteBuilder)
+		want string
+	}{
+		{
+			name: "typed handler",
+			add: func(rb *RouteBuilder) {
+				rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(*Context, any) (any, error) {
+					return nil, nil
+				}, WithHandlerOverwrite(true))
+			},
+			want: "cannot overwrite handler for unregistered type string",
+		},
+		{
+			name: "catch-all handler",
+			add: func(rb *RouteBuilder) {
+				rb.AddCatchAll(func(*Context, PortableValue) (any, error) {
+					return nil, nil
+				}, WithHandlerOverwrite(true))
+			},
+			want: "cannot overwrite unregistered catch-all handler",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var rb RouteBuilder
+			test.add(&rb)
+			_, err := rb.build()
+			if err == nil || err.Error() != test.want {
+				t.Fatalf("build() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestMessageRouterRoutesAssignableInterfaceHandler(t *testing.T) {
 	var rb RouteBuilder
 	rb.AddHandlerRaw(reflect.TypeFor[routeTestMessage](), nil, func(_ *Context, msg any) (any, error) {

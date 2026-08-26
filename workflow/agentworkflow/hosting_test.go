@@ -71,6 +71,16 @@ func splitWordsKeepSpaces(s string) []string {
 	return words
 }
 
+func TestNewPanicsForNilAgent(t *testing.T) {
+	defer func() {
+		if got := recover(); got != "agentworkflow: agent is required" {
+			t.Fatalf("panic = %v, want agent required message", got)
+		}
+	}()
+
+	agentworkflow.New(nil, agentworkflow.Config{})
+}
+
 // newReplayAgent emits one *ResponseUpdate per word of each non-empty source
 // message, sharing a stable MessageID across all updates from the same source
 // message.
@@ -339,9 +349,6 @@ func runHostedAgent(t *testing.T, a *agent.Agent, cfg agentworkflow.Config, toke
 	return events
 }
 
-// boolPtr is a tiny helper for *bool literals.
-func boolPtr(b bool) *bool { return &b }
-
 // TestHostedAgent_EmitsStreamingUpdatesIfConfigured exercises the matrix
 // (executorSetting × turnSetting) for streaming response update output emission. The rule:
 // the TurnToken's EmitEvents flag overrides the executor's EmitUpdateEvents
@@ -352,14 +359,14 @@ func TestHostedAgent_EmitsStreamingUpdatesIfConfigured(t *testing.T) {
 		turnSetting     *bool
 	}{
 		{nil, nil},
-		{nil, boolPtr(true)},
-		{nil, boolPtr(false)},
-		{boolPtr(true), nil},
-		{boolPtr(true), boolPtr(true)},
-		{boolPtr(true), boolPtr(false)},
-		{boolPtr(false), nil},
-		{boolPtr(false), boolPtr(true)},
-		{boolPtr(false), boolPtr(false)},
+		{nil, new(true)},
+		{nil, new(false)},
+		{new(true), nil},
+		{new(true), new(true)},
+		{new(true), new(false)},
+		{new(false), nil},
+		{new(false), new(true)},
+		{new(false), new(false)},
 	}
 
 	expectedContents := expectedReplayUpdateContents()
@@ -1577,7 +1584,7 @@ func newRequestAgent(unpaired, paired int) *agent.Agent {
 				// Build interleaved requests: first `unpaired` are unpaired, last
 				// `paired` are immediately resolved by appending matching results.
 				var pairedResults []message.Content
-				for i := 0; i < total; i++ {
+				for i := range total {
 					id := fmt.Sprintf("call-%d", i)
 					call := &message.FunctionCallContent{CallID: id, Name: "TestFunction"}
 					if i < unpaired {

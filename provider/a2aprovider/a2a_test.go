@@ -1021,7 +1021,7 @@ func TestRunDeduplicatesTaskIDsAcrossTurns(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if _, err := a.RunText(t.Context(), "Do something", agent.WithSession(session)).Collect(); err != nil {
 			t.Fatalf("run %d error = %v, want nil", i, err)
 		}

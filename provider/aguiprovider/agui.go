@@ -40,8 +40,12 @@ type provider struct {
 }
 
 // NewAgent creates a new [agent.Agent] backed by a remote agent that speaks the
-// AG-UI protocol over Server-Sent Events via the AG-UI client.
+// AG-UI protocol over Server-Sent Events via the AG-UI client. It panics if
+// aclient is nil.
 func NewAgent(aclient *aguiSSEClient.Client, config AgentConfig) *agent.Agent {
+	if aclient == nil {
+		panic("aguiprovider: client cannot be nil")
+	}
 	p := &provider{
 		cfg:    config,
 		client: aclient,
@@ -347,7 +351,7 @@ func toAGUIMessage(msg *message.Message) (aguiTypes.Message, bool, error) {
 		out.Content = msg.String()
 		return out, true, nil
 	default:
-		return aguiTypes.Message{}, false, nil
+		return aguiTypes.Message{}, false, fmt.Errorf("aguiprovider: unsupported message role %q", msg.Role)
 	}
 }
 

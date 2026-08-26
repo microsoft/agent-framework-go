@@ -111,7 +111,12 @@ type defaultContextProvider struct {
 // results as additive, source-stamps provided messages, appends provided
 // messages and options to the original invocation context, filters stored
 // request and response messages, and skips Store when the run fails.
+//
+// It panics if SourceID is empty.
 func NewContextProvider(config ContextProviderConfig) ContextProvider {
+	if config.SourceID == "" {
+		panic("SourceID is required")
+	}
 	return &defaultContextProvider{config: config}
 }
 

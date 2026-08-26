@@ -56,10 +56,7 @@ func (strategy *ToolResultStrategy) Compact(_ context.Context, index *MessageInd
 			nonSystemIncludedIndices = append(nonSystemIncludedIndices, i)
 		}
 	}
-	protectedStart := len(nonSystemIncludedIndices) - minimumPreservedGroups
-	if protectedStart < 0 {
-		protectedStart = 0
-	}
+	protectedStart := max(len(nonSystemIncludedIndices)-minimumPreservedGroups, 0)
 	protectedGroupIndices := nonSystemIncludedIndices[protectedStart:]
 
 	var eligibleIndices []int
@@ -83,8 +80,7 @@ func (strategy *ToolResultStrategy) Compact(_ context.Context, index *MessageInd
 		group := index.Groups[idx]
 		summary := formatter(group)
 
-		group.IsExcluded = true
-		group.ExcludeReason = "collapsed by ToolResultStrategy"
+		group.exclude("collapsed by ToolResultStrategy")
 
 		summaryMessage := &message.Message{
 			Role: message.RoleAssistant,

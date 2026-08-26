@@ -359,7 +359,7 @@ func snapshotSession(session *agent.Session) ([]byte, error) {
 	}
 	data, err := json.Marshal(session)
 	if err != nil {
-		return nil, errors.New("loop: snapshot session")
+		return nil, fmt.Errorf("loop: snapshot session: %w", err)
 	}
 	return data, nil
 }
@@ -370,7 +370,7 @@ func sessionFromSnapshot(data []byte) (*agent.Session, error) {
 	}
 	var cloned agent.Session
 	if err := json.Unmarshal(data, &cloned); err != nil {
-		return nil, errors.New("loop: restore session snapshot")
+		return nil, fmt.Errorf("loop: restore session snapshot: %w", err)
 	}
 	return &cloned, nil
 }

@@ -4,6 +4,7 @@ package hashmap
 
 import (
 	"hash/maphash"
+	"maps"
 	"slices"
 	"testing"
 	"unicode"
@@ -95,10 +96,7 @@ func TestMap(t *testing.T) {
 		t.Errorf("Values(): got %v", values)
 	}
 
-	entries := make(map[string]int)
-	for key, value := range m.All() {
-		entries[key] = value
-	}
+	entries := maps.Collect(m.All())
 	if len(entries) != 2 || entries["Hello"] != 2 || entries["World"] != 3 {
 		t.Errorf("All(): got %v", entries)
 	}

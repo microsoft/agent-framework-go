@@ -30,6 +30,15 @@ func collectUpdates(t *testing.T, mw agent.Middleware, next agent.RunFunc, messa
 	return updates
 }
 
+func sessionFromOptions(t *testing.T, opts ...agent.Option) *agent.Session {
+	t.Helper()
+	session, ok := agent.GetOption(opts, agent.WithSession)
+	if !ok || session == nil {
+		t.Fatal("expected run options to include a non-nil session")
+	}
+	return session
+}
+
 func TestToolApproval_PassthroughWithoutApprovalRequests(t *testing.T) {
 	runner := &agenttest.Runner{
 		Responses: agenttest.NewResponseBuilder().AddText("hello").Build(),
@@ -147,6 +156,134 @@ func TestToolApproval_SurfacesFirstApprovalRequest(t *testing.T) {
 	}
 }
 
+func TestToolApproval_AutoApprovalRuleWithoutExplicitSessionThreadsImplicitSession(t *testing.T) {
+	fcc := &message.FunctionCallContent{CallID: "c1", Name: "deploy", Arguments: `{"env":"prod"}`}
+
+	var createdSession *agent.Session
+	createSessionCalls := 0
+	capturedSessions := []*agent.Session{}
+
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder(
+			func(_ context.Context, _ []*message.Message, opts ...agent.Option) {
+				capturedSessions = append(capturedSessions, sessionFromOptions(t, opts...))
+			},
+		).
+			Add(&agent.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					&message.ToolApprovalRequestContent{RequestID: "r1", ToolCall: fcc},
+				},
+			}).
+			NewTurn(func(_ context.Context, messages []*message.Message, opts ...agent.Option) {
+				capturedSessions = append(capturedSessions, sessionFromOptions(t, opts...))
+
+				var sawApprovalResponse bool
+				for _, msg := range messages {
+					for _, c := range msg.Contents {
+						resp, ok := c.(*message.ToolApprovalResponseContent)
+						if !ok {
+							continue
+						}
+						sawApprovalResponse = true
+						if !resp.Approved {
+							t.Fatal("expected auto-approved tool response on re-entry")
+						}
+					}
+				}
+				if !sawApprovalResponse {
+					t.Fatal("expected auto-approval response to be forwarded on re-entry")
+				}
+			}).
+			AddText("done").
+			Build(),
+	}
+
+	a := agent.New(agent.ProviderConfig{
+		Run: runner.Run,
+		CreateSession: func(_ context.Context, session *agent.Session, _ ...agent.Option) error {
+			createSessionCalls++
+			createdSession = session
+			return nil
+		},
+		Middlewares: []agent.Middleware{toolapproval.New(toolapproval.Config{
+			AutoApprovalRules: []func(context.Context, *message.FunctionCallContent) (bool, error){
+				func(_ context.Context, call *message.FunctionCallContent) (bool, error) {
+					if call.Name != "deploy" {
+						t.Fatalf("auto-approval rule saw tool %q, want deploy", call.Name)
+					}
+					return true, nil
+				},
+			},
+		})},
+	}, agent.Config{ID: "test-agent", Name: "test-agent"})
+
+	resp, err := a.RunText(t.Context(), "go").Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := resp.String(); got != "done" {
+		t.Fatalf("response text = %q, want done", got)
+	}
+	if createSessionCalls != 1 {
+		t.Fatalf("CreateSession called %d times, want 1", createSessionCalls)
+	}
+	if createdSession == nil {
+		t.Fatal("expected CreateSession to receive a session")
+	}
+	if len(capturedSessions) != 2 {
+		t.Fatalf("captured %d provider sessions, want 2", len(capturedSessions))
+	}
+	for i, session := range capturedSessions {
+		if session != createdSession {
+			t.Fatalf("provider call %d received session %p, want %p", i+1, session, createdSession)
+		}
+	}
+}
+
+func TestToolApproval_NoApprovalRequestWithoutExplicitSessionCreatesSingleImplicitSession(t *testing.T) {
+	var createdSession *agent.Session
+	createSessionCalls := 0
+	var capturedSession *agent.Session
+
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder(
+			func(_ context.Context, _ []*message.Message, opts ...agent.Option) {
+				capturedSession = sessionFromOptions(t, opts...)
+			},
+		).
+			AddText("done").
+			Build(),
+	}
+
+	a := agent.New(agent.ProviderConfig{
+		Run: runner.Run,
+		CreateSession: func(_ context.Context, session *agent.Session, _ ...agent.Option) error {
+			createSessionCalls++
+			createdSession = session
+			return nil
+		},
+		Middlewares: []agent.Middleware{toolapproval.New(toolapproval.Config{})},
+	}, agent.Config{ID: "test-agent", Name: "test-agent"})
+
+	resp, err := a.RunText(t.Context(), "go").Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := resp.String(); got != "done" {
+		t.Fatalf("response text = %q, want done", got)
+	}
+	if createSessionCalls != 1 {
+		t.Fatalf("CreateSession called %d times, want 1", createSessionCalls)
+	}
+	if createdSession == nil {
+		t.Fatal("expected CreateSession to receive a session")
+	}
+	if capturedSession != createdSession {
+		t.Fatalf("provider run received session %p, want %p", capturedSession, createdSession)
+	}
+}
+
 func TestToolApproval_AlwaysApproveToolCreatesRule(t *testing.T) {
 	fcc := &message.FunctionCallContent{CallID: "c1", Name: "deploy", Arguments: `{"env":"prod"}`}
 
@@ -224,6 +361,85 @@ func TestToolApproval_AlwaysApproveToolCreatesRule(t *testing.T) {
 	}
 	if !gotDone {
 		t.Error("expected 'done' text after auto-approval, but did not get it")
+	}
+}
+
+func TestToolApproval_AutoApprovalWithoutSessionPreservesOriginalMessages(t *testing.T) {
+	fcc := &message.FunctionCallContent{CallID: "c1", Name: "deploy", Arguments: `{"env":"prod"}`}
+
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder().
+			Add(&agent.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					&message.ToolApprovalRequestContent{RequestID: "r1", ToolCall: fcc},
+				},
+			}).
+			NewTurn(func(_ context.Context, messages []*message.Message, _ ...agent.Option) {
+				if len(messages) != 2 {
+					t.Fatalf("expected original user message plus injected approval response, got %d messages", len(messages))
+				}
+
+				if messages[0].Role != message.RoleUser {
+					t.Fatalf("first message role = %q, want %q", messages[0].Role, message.RoleUser)
+				}
+				text, ok := messages[0].Contents[0].(*message.TextContent)
+				if !ok || text.Text != "go" {
+					t.Fatalf("first message contents = %#v, want original user text", messages[0].Contents)
+				}
+
+				if messages[1].Role != message.RoleUser {
+					t.Fatalf("second message role = %q, want %q", messages[1].Role, message.RoleUser)
+				}
+				if len(messages[1].Contents) != 1 {
+					t.Fatalf("second message contents count = %d, want 1", len(messages[1].Contents))
+				}
+				resp, ok := messages[1].Contents[0].(*message.ToolApprovalResponseContent)
+				if !ok {
+					t.Fatalf("second message contents = %#v, want approval response", messages[1].Contents)
+				}
+				if !resp.Approved {
+					t.Fatal("expected injected approval response to approve the tool call")
+				}
+				if resp.RequestID != "r1" {
+					t.Fatalf("approval response request ID = %q, want %q", resp.RequestID, "r1")
+				}
+			}).
+			AddText("done").
+			Build(),
+	}
+
+	ruleCalls := 0
+	mw := toolapproval.New(toolapproval.Config{
+		AutoApprovalRules: []func(context.Context, *message.FunctionCallContent) (bool, error){
+			func(_ context.Context, call *message.FunctionCallContent) (bool, error) {
+				ruleCalls++
+				if call != fcc {
+					t.Fatalf("auto-approval rule received tool call %#v, want %#v", call, fcc)
+				}
+				return true, nil
+			},
+		},
+	})
+
+	updates := collectUpdates(t, mw, runner.Run, []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "go"}}},
+	})
+
+	if ruleCalls != 1 {
+		t.Fatalf("auto-approval rule called %d times, want 1", ruleCalls)
+	}
+
+	var gotDone bool
+	for _, u := range updates {
+		for _, c := range u.Contents {
+			if tc, ok := c.(*message.TextContent); ok && tc.Text == "done" {
+				gotDone = true
+			}
+		}
+	}
+	if !gotDone {
+		t.Fatal("expected done text after auto-approved re-invocation without a session")
 	}
 }
 

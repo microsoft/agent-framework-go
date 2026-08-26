@@ -11,6 +11,30 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow"
 )
 
+func TestOutputTag_JSONRoundtrip(t *testing.T) {
+	data, err := json.Marshal(workflow.OutputTagIntermediate)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	var got workflow.OutputTag
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if got != workflow.OutputTagIntermediate {
+		t.Fatalf("roundtrip = %q, want %q", got, workflow.OutputTagIntermediate)
+	}
+}
+
+func TestOutputTag_RejectsEmptyJSON(t *testing.T) {
+	if _, err := json.Marshal(workflow.OutputTag("")); err == nil {
+		t.Fatal("Marshal() error = nil, want empty-tag error")
+	}
+	var tag workflow.OutputTag
+	if err := json.Unmarshal([]byte(`""`), &tag); err == nil {
+		t.Fatal("Unmarshal() error = nil, want empty-tag error")
+	}
+}
+
 func TestEdgeConnection_JsonRoundtrip(t *testing.T) {
 	cases := []workflow.EdgeConnection{
 		{SourceIDs: []string{"a"}, SinkIDs: []string{"b"}},
