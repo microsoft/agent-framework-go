@@ -75,7 +75,7 @@ func New[In, Out any](cfg Config, h HandlerFor[In, Out]) (tool.FuncTool, error) 
 	// that case, mirroring the MCP go-sdk's HandlerFor behavior.
 	var elemZero Out
 	outType := reflect.TypeFor[Out]()
-	hasPointerOut := outType != nil && outType.Kind() == reflect.Pointer
+	hasPointerOut := outType.Kind() == reflect.Pointer
 	if hasPointerOut {
 		// Convert to outType before asserting: for a named pointer type
 		// (e.g. type P *T), reflect.New yields an unnamed *T that is not

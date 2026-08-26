@@ -125,6 +125,7 @@ When responding, be extra descriptive and use as many words as possible without 
 		demo.Response(resp, err)
 	}
 }
+
 func lookupPrice(_ context.Context, productName string) (string, error) {
 	switch strings.ToUpper(productName) {
 	case "LAPTOP":
