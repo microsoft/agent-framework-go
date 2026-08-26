@@ -251,7 +251,7 @@ func (p *provider) openSession(
 
 func (p *provider) sessionConfig(streaming bool, eventHandler copilot.SessionEventHandler, options []agent.Option) copilot.SessionConfig {
 	cfg := copySessionConfig(p.cfg.SessionConfig)
-	cfg.Streaming = copilot.Bool(streaming)
+	cfg.Streaming = new(streaming)
 	cfg.OnEvent = chainSessionEventHandlers(cfg.OnEvent, eventHandler)
 	cfg.SystemMessage = systemMessageWithInstructions(cfg.SystemMessage, slices.Collect(agent.AllOptions(options, agent.WithInstructions)))
 	cfg.Tools = append(cfg.Tools, copilotTools(options)...)
@@ -261,7 +261,7 @@ func (p *provider) sessionConfig(streaming bool, eventHandler copilot.SessionEve
 
 func (p *provider) resumeSessionConfig(streaming bool, eventHandler copilot.SessionEventHandler, options []agent.Option) copilot.ResumeSessionConfig {
 	cfg := copyResumeSessionConfig(p.cfg.SessionConfig)
-	cfg.Streaming = copilot.Bool(streaming)
+	cfg.Streaming = new(streaming)
 	cfg.OnEvent = chainSessionEventHandlers(cfg.OnEvent, eventHandler)
 	cfg.SystemMessage = systemMessageWithInstructions(cfg.SystemMessage, slices.Collect(agent.AllOptions(options, agent.WithInstructions)))
 	cfg.Tools = append(cfg.Tools, copilotTools(options)...)
@@ -271,7 +271,7 @@ func (p *provider) resumeSessionConfig(streaming bool, eventHandler copilot.Sess
 
 func copySessionConfig(source *copilot.SessionConfig) copilot.SessionConfig {
 	if source == nil {
-		return copilot.SessionConfig{Streaming: copilot.Bool(true)}
+		return copilot.SessionConfig{Streaming: new(true)}
 	}
 	clone := *source
 	clone.Tools = slices.Clone(source.Tools)
@@ -281,7 +281,7 @@ func copySessionConfig(source *copilot.SessionConfig) copilot.SessionConfig {
 
 func copyResumeSessionConfig(source *copilot.SessionConfig) copilot.ResumeSessionConfig {
 	if source == nil {
-		return copilot.ResumeSessionConfig{Streaming: copilot.Bool(true)}
+		return copilot.ResumeSessionConfig{Streaming: new(true)}
 	}
 	return copilot.ResumeSessionConfig{
 		ClientName:                         source.ClientName,
@@ -367,7 +367,7 @@ func chainSessionEventHandlers(existing, added copilot.SessionEventHandler) copi
 
 func copyBoolDefaultTrue(source *bool) *bool {
 	if source == nil {
-		return copilot.Bool(true)
+		return new(true)
 	}
 	value := *source
 	return &value

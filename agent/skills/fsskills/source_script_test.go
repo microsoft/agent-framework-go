@@ -63,13 +63,7 @@ func TestFileSource_WithMultipleScriptExtensions_DiscoversAll(t *testing.T) {
 		if scriptNames[0] == "" {
 			break
 		}
-		found := false
-		for _, actual := range scriptNames {
-			if actual == expected {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(scriptNames, expected)
 		if !found {
 			t.Fatalf("expected script %q to be discovered, got %#v", expected, scriptNames)
 		}

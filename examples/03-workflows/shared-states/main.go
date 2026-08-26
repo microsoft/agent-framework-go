@@ -57,7 +57,7 @@ func main() {
 			return FileStats{}, err
 		}
 		paragraphs := 0
-		for _, block := range strings.Split(content, "\n\n") {
+		for block := range strings.SplitSeq(content, "\n\n") {
 			if strings.TrimSpace(block) != "" {
 				paragraphs++
 			}

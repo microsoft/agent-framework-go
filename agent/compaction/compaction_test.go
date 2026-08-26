@@ -383,7 +383,7 @@ func TestDefaultToolCallFormatter_DedupsRepeatedNamesWithEmptyResults(t *testing
 
 func TestToolResultStrategy_ZeroValueUsesDefaults(t *testing.T) {
 	messages := make([]*message.Message, 0, 20)
-	for i := 0; i < 9; i++ {
+	for i := range 9 {
 		callID := "call-" + string(rune('0'+i))
 		messages = append(messages,
 			textMessage(message.RoleUser, "u"+string(rune('0'+i))),

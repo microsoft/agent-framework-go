@@ -834,14 +834,7 @@ func TestNewExecutor_DescribesProtocol(t *testing.T) {
 		t.Fatalf("DescribeProtocol: %v", err)
 	}
 	wantIn := reflect.TypeFor[textMessage]()
-	var foundIn bool
-	for _, t := range descriptor.Accepts {
-		if t == wantIn {
-			foundIn = true
-			break
-		}
-	}
-	if !foundIn {
+	if !slices.Contains(descriptor.Accepts, wantIn) {
 		t.Errorf("descriptor.Accepts = %v, want to contain %v", descriptor.Accepts, wantIn)
 	}
 	executor, err := binding.CreateInstance("")

@@ -56,10 +56,7 @@ func (strategy *ToolResultStrategy) Compact(_ context.Context, index *MessageInd
 			nonSystemIncludedIndices = append(nonSystemIncludedIndices, i)
 		}
 	}
-	protectedStart := len(nonSystemIncludedIndices) - minimumPreservedGroups
-	if protectedStart < 0 {
-		protectedStart = 0
-	}
+	protectedStart := max(len(nonSystemIncludedIndices)-minimumPreservedGroups, 0)
 	protectedGroupIndices := nonSystemIncludedIndices[protectedStart:]
 
 	var eligibleIndices []int

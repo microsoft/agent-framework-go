@@ -86,7 +86,7 @@ func TestNewInMemoryHistoryProvider_ConcurrentStoresOnSameSession_NoDataRace(t *
 	errs := make(chan error, stores)
 	var wg sync.WaitGroup
 	wg.Add(stores)
-	for i := 0; i < stores; i++ {
+	for i := range stores {
 		go func(index int) {
 			defer wg.Done()
 			<-start

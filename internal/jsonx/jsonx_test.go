@@ -37,7 +37,7 @@ func TestUnmarshalDiscriminatedUnionSliceWithFallback_UsesFallbackForMissingAndU
 		"Value":"missing"
 	}]`)
 	types := map[string]reflect.Type{
-		"known": reflect.TypeOf(knownUnion{}),
+		"known": reflect.TypeFor[knownUnion](),
 	}
 	fallback := func(raw json.RawMessage) (testUnion, error) {
 		return &rawUnion{Raw: slices.Clone(raw)}, nil
@@ -73,7 +73,7 @@ func TestUnmarshalDiscriminatedUnionSliceWithFallback_MissingTypeDoesNotMatchZer
 		"Value":"missing"
 	}]`)
 	types := map[string]reflect.Type{
-		"": reflect.TypeOf(knownUnion{}),
+		"": reflect.TypeFor[knownUnion](),
 	}
 	fallback := func(raw json.RawMessage) (testUnion, error) {
 		return &rawUnion{Raw: raw}, nil

@@ -1584,7 +1584,7 @@ func newRequestAgent(unpaired, paired int) *agent.Agent {
 				// Build interleaved requests: first `unpaired` are unpaired, last
 				// `paired` are immediately resolved by appending matching results.
 				var pairedResults []message.Content
-				for i := 0; i < total; i++ {
+				for i := range total {
 					id := fmt.Sprintf("call-%d", i)
 					call := &message.FunctionCallContent{CallID: id, Name: "TestFunction"}
 					if i < unpaired {

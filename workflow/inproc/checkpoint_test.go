@@ -456,7 +456,7 @@ func TestCheckpoint_ResumeFanInBarrierCheckpointCanBeResumedTwice(t *testing.T) 
 				wf,
 			)
 
-			for attempt := 0; attempt < 2; attempt++ {
+			for attempt := range 2 {
 				replayedRequest := resumeAndAssertFanInBarrierRelease(
 					t,
 					ctx,
@@ -477,7 +477,7 @@ func TestCheckpoint_ResumeFanInBarrierCheckpointCanBeResumedTwice(t *testing.T) 
 func TestCheckpoint_RestorePreservesExecutorInstancesDuringImport(t *testing.T) {
 	ctx := context.Background()
 	manager := checkpoint.NewInMemoryManager()
-	var nextInstanceID int64
+	var nextInstanceID atomic.Int64
 	type counterOutput struct {
 		InstanceID int64
 		Count      int
@@ -496,7 +496,7 @@ func TestCheckpoint_RestorePreservesExecutorInstancesDuringImport(t *testing.T) 
 		ID:               "counter",
 		ImplementationID: "*workflow.Executor",
 		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
-			instanceID := atomic.AddInt64(&nextInstanceID, 1)
+			instanceID := nextInstanceID.Add(1)
 			count := 0
 			return &workflow.Executor{
 				ID: "counter",
@@ -818,7 +818,6 @@ func createCheckpointChainWorkflow(t *testing.T, ids ...string) *workflow.Workfl
 
 	bindings := make([]workflow.ExecutorBinding, 0, len(ids))
 	for _, id := range ids {
-		id := id
 		bindings = append(bindings, workflow.ExecutorBinding{
 			ID:               id,
 			ImplementationID: "*workflow.Executor",
@@ -1266,9 +1265,7 @@ func TestStreamingRun_ConcurrentCheckpointAccess_NoDataRace(t *testing.T) {
 	// Poll the checkpoint accessors from another goroutine for the whole run.
 	stop := make(chan struct{})
 	var pollWG sync.WaitGroup
-	pollWG.Add(1)
-	go func() {
-		defer pollWG.Done()
+	pollWG.Go(func() {
 		for {
 			select {
 			case <-stop:
@@ -1278,7 +1275,7 @@ func TestStreamingRun_ConcurrentCheckpointAccess_NoDataRace(t *testing.T) {
 				_, _ = run.LastCheckpoint()
 			}
 		}
-	}()
+	})
 
 	// Drive the run through several checkpoint-producing supersteps.
 	pendingRequest, checkpointInfo := capturePendingRequestAndCheckpointFromStream(t, ctx, run)

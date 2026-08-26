@@ -152,13 +152,11 @@ func TestPrepareDeliveryForFanInEdgeConcurrentProcessing(t *testing.T) {
 		var wg sync.WaitGroup
 		for _, sourceID := range sourceIDs {
 			envelope := mustEnvelopeTarget(t, "msg-from-"+sourceID, sourceID, "")
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				<-start
 				mapping, err := runner.PrepareDeliveryForEdge(context.Background(), edge, envelope)
 				results <- deliveryResult{mapping: mapping, err: err}
-			}()
+			})
 		}
 		close(start)
 		wg.Wait()

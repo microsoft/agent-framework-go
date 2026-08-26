@@ -7,6 +7,7 @@ import (
 	"context"
 	"log/slog"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -511,11 +512,8 @@ func TestAddSwitch_RoutesToMatchingCase(t *testing.T) {
 	}
 	wantContains := "even:abcd"
 	var found bool
-	for _, t := range trace {
-		if t == wantContains {
-			found = true
-			break
-		}
+	if slices.Contains(trace, wantContains) {
+		found = true
 	}
 	if !found {
 		t.Errorf("expected trace to include %q, got %v", wantContains, trace)

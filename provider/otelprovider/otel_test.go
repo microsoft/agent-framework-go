@@ -374,7 +374,7 @@ func TestOtel_Run_HandlesMultipleUpdates(t *testing.T) {
 	updateCount := 0
 	next := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
-			for i := 0; i < 5; i++ {
+			for range 5 {
 				if !yield(&agent.ResponseUpdate{MessageID: "test"}, nil) {
 					return
 				}
@@ -615,7 +615,7 @@ func TestOtel_Run_HandlesEarlyBreak(t *testing.T) {
 
 	next := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
-			for i := 0; i < 10; i++ {
+			for range 10 {
 				if !yield(&agent.ResponseUpdate{MessageID: "test"}, nil) {
 					return
 				}

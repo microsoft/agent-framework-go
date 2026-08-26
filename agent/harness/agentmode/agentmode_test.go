@@ -88,7 +88,7 @@ func TestConcurrentToolInvocations_NoDataRace(t *testing.T) {
 	// a functional regression (e.g. argument-decode failure) fails the test
 	// deterministically, independent of the race detector.
 	errs := make([]error, n*2)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		mode := "plan"
 		if i%2 == 0 {
 			mode = "execute"

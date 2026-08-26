@@ -467,7 +467,7 @@ func TestStreamingRun_ConcurrentSendMessage_NoDataRace(t *testing.T) {
 	errs := make(chan error, senders)
 	var wg sync.WaitGroup
 	wg.Add(senders)
-	for i := 0; i < senders; i++ {
+	for range senders {
 		go func() {
 			defer wg.Done()
 			<-start

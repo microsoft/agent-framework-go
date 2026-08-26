@@ -177,8 +177,8 @@ func TestCopyResumeSessionConfig_CopiesRecentSDKFields(t *testing.T) {
 	managedSettings := &copilot.ManagedSettings{}
 	source := &copilot.SessionConfig{
 		AdditionalDirectories:    []string{"/shared"},
-		EnableFileChangeTracking: copilot.Bool(true),
-		EnableExperimentalMode:   copilot.Bool(true),
+		EnableFileChangeTracking: new(true),
+		EnableExperimentalMode:   new(true),
 		DisabledMCPServers:       []string{"legacy"},
 		GitHubMCPToolConfig:      githubMCPToolConfig,
 		ManagedSettings:          managedSettings,

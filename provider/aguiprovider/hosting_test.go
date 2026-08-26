@@ -331,7 +331,7 @@ func TestHandler_ToolResult_HasDistinctMessageID(t *testing.T) {
 
 	// Extract the tool result messageId and the text message start messageId.
 	var toolResultMsgID, textStartMsgID string
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
@@ -388,7 +388,7 @@ func TestHandler_ParallelToolResults_HaveUniqueMessageIDs(t *testing.T) {
 	content := rr.Body.String()
 
 	var resultMsgIDs []string
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
@@ -503,7 +503,7 @@ func TestHandler_MidStreamError_EmitsRunErrorEvent(t *testing.T) {
 
 	var sawRunError bool
 	var runErrorRunID string
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		if !strings.HasPrefix(line, "data:") {
 			continue
 		}

@@ -565,8 +565,8 @@ func prefixingWorkflowContext(inner *workflow.Context, prefix string) *workflow.
 						}
 						continue
 					}
-					if strings.HasPrefix(key, prefix) {
-						if !yield(strings.TrimPrefix(key, prefix), nil) {
+					if after, ok := strings.CutPrefix(key, prefix); ok {
+						if !yield(after, nil) {
 							return
 						}
 					}

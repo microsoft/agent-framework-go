@@ -40,8 +40,8 @@ func (mf MiddlewareFunc) Run(next RunFunc, ctx context.Context, messages []*mess
 
 // compileRunChain applies the given middlewares around fn.
 func compileRunChain(fn RunFunc, middlewares []Middleware) RunFunc {
-	for i := len(middlewares) - 1; i >= 0; i-- {
-		mw := middlewares[i]
+	for _, mw := range slices.Backward(middlewares) {
+
 		if mw == nil {
 			continue
 		}

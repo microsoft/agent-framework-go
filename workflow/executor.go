@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"runtime"
 	"slices"
@@ -624,9 +625,7 @@ func newRequestPortExecutor(port RequestPort) *Executor {
 			}
 			wrappedMu.Lock()
 			snapshot := make(map[string]*ExternalRequest, len(wrappedRequests))
-			for id, req := range wrappedRequests {
-				snapshot[id] = req
-			}
+			maps.Copy(snapshot, wrappedRequests)
 			wrappedMu.Unlock()
 			return ctx.QueueStateUpdate(wrappedRequestsStateKey, "", snapshot)
 		},
@@ -648,9 +647,7 @@ func newRequestPortExecutor(port RequestPort) *Executor {
 			}
 			wrappedMu.Lock()
 			clear(wrappedRequests)
-			for id, req := range restored {
-				wrappedRequests[id] = req
-			}
+			maps.Copy(wrappedRequests, restored)
 			wrappedMu.Unlock()
 			return nil
 		},
