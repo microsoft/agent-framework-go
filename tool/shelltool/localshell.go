@@ -386,8 +386,7 @@ func runStateless(ctx context.Context, opts LocalConfig, command string) (Result
 	if timedOut {
 		exitCode = exitCodeTimedOut
 	} else if runErr != nil {
-		var exitErr *exec.ExitError
-		if errors.As(runErr, &exitErr) {
+		if exitErr, ok := errors.AsType[*exec.ExitError](runErr); ok {
 			exitCode = exitErr.ExitCode()
 		} else {
 			return Result{}, fmt.Errorf("%w: shelltool: run: %w", errCommandIO, runErr)

@@ -946,8 +946,8 @@ func handleMethodValue(value reflect.Value) reflect.Value {
 }
 
 func executorAttrTypes(structType reflect.Type) (sendTypes []reflect.Type, yieldTypes []reflect.Type) {
-	for i := 0; i < structType.NumField(); i++ {
-		fieldType := structType.Field(i).Type
+	for field := range structType.Fields() {
+		fieldType := field.Type
 		if typ, ok := executorAttrType(fieldType, "AttrSendsMessage"); ok {
 			sendTypes = appendUniqueTypes(sendTypes, typ)
 		}

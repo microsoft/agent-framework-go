@@ -17,7 +17,7 @@ import (
 )
 
 func TestPrepareDeliveryForDirectEdge(t *testing.T) {
-	bools := []*bool{nil, ptr(true), ptr(false)}
+	bools := []*bool{nil, new(true), new(false)}
 	for _, conditionMatch := range bools {
 		for _, targetMatch := range bools {
 			name := fmt.Sprintf("condition=%v/target=%v", boolName(conditionMatch), boolName(targetMatch))
@@ -68,7 +68,7 @@ func TestPrepareDeliveryForDirectEdge(t *testing.T) {
 }
 
 func TestPrepareDeliveryForFanOutEdge(t *testing.T) {
-	bools := []*bool{nil, ptr(true), ptr(false)}
+	bools := []*bool{nil, new(true), new(false)}
 	for _, assignerSelectsEmpty := range bools {
 		for _, targetMatch := range bools {
 			name := fmt.Sprintf("assignerEmpty=%v/target=%v", boolName(assignerSelectsEmpty), boolName(targetMatch))
@@ -417,10 +417,6 @@ func sameStringSet(left []string, right []string) bool {
 		}
 	}
 	return true
-}
-
-func ptr(value bool) *bool {
-	return &value
 }
 
 func boolName(value *bool) string {

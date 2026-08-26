@@ -349,9 +349,6 @@ func runHostedAgent(t *testing.T, a *agent.Agent, cfg agentworkflow.Config, toke
 	return events
 }
 
-// boolPtr is a tiny helper for *bool literals.
-func boolPtr(b bool) *bool { return &b }
-
 // TestHostedAgent_EmitsStreamingUpdatesIfConfigured exercises the matrix
 // (executorSetting × turnSetting) for streaming response update output emission. The rule:
 // the TurnToken's EmitEvents flag overrides the executor's EmitUpdateEvents
@@ -362,14 +359,14 @@ func TestHostedAgent_EmitsStreamingUpdatesIfConfigured(t *testing.T) {
 		turnSetting     *bool
 	}{
 		{nil, nil},
-		{nil, boolPtr(true)},
-		{nil, boolPtr(false)},
-		{boolPtr(true), nil},
-		{boolPtr(true), boolPtr(true)},
-		{boolPtr(true), boolPtr(false)},
-		{boolPtr(false), nil},
-		{boolPtr(false), boolPtr(true)},
-		{boolPtr(false), boolPtr(false)},
+		{nil, new(true)},
+		{nil, new(false)},
+		{new(true), nil},
+		{new(true), new(true)},
+		{new(true), new(false)},
+		{new(false), nil},
+		{new(false), new(true)},
+		{new(false), new(false)},
 	}
 
 	expectedContents := expectedReplayUpdateContents()

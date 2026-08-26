@@ -129,7 +129,7 @@ func TestTruncationStrategy_ExcludesOldestGroups(t *testing.T) {
 	index := compaction.CreateMessageIndex(turnMessages(3), nil)
 	strategy := &compaction.TruncationStrategy{
 		Trigger:                compaction.GroupsExceed(2),
-		MinimumPreservedGroups: ptr(2),
+		MinimumPreservedGroups: new(2),
 	}
 
 	compacted, err := strategy.Compact(t.Context(), index)
@@ -156,7 +156,7 @@ func TestTruncationStrategy_SkipsPreExcludedAndSystemGroups(t *testing.T) {
 	}, nil)
 	index.Groups[1].IsExcluded = true
 	strategy := &compaction.TruncationStrategy{
-		MinimumPreservedGroups: ptr(1),
+		MinimumPreservedGroups: new(1),
 	}
 
 	compacted, err := strategy.Compact(t.Context(), index)
@@ -201,7 +201,7 @@ func TestSlidingWindowStrategy_ExcludesOldestTurns(t *testing.T) {
 	index := compaction.CreateMessageIndex(turnMessages(3), nil)
 	strategy := &compaction.SlidingWindowStrategy{
 		Trigger:               compaction.TurnsExceed(1),
-		MinimumPreservedTurns: ptr(1),
+		MinimumPreservedTurns: new(1),
 	}
 
 	compacted, err := strategy.Compact(t.Context(), index)
@@ -229,7 +229,7 @@ func TestSlidingWindowStrategy_PreservesTurnZeroGroups(t *testing.T) {
 	}, nil)
 	strategy := &compaction.SlidingWindowStrategy{
 		Trigger:               compaction.TurnsExceed(1),
-		MinimumPreservedTurns: ptr(1),
+		MinimumPreservedTurns: new(1),
 	}
 
 	compacted, err := strategy.Compact(t.Context(), index)
@@ -256,7 +256,7 @@ func TestTruncationStrategy_ExplicitZeroPreservesNone(t *testing.T) {
 		textMessage(message.RoleAssistant, "g4"),
 		textMessage(message.RoleAssistant, "g5"),
 	}, nil)
-	strategy := &compaction.TruncationStrategy{MinimumPreservedGroups: ptr(0)}
+	strategy := &compaction.TruncationStrategy{MinimumPreservedGroups: new(0)}
 
 	compacted, err := strategy.Compact(t.Context(), index)
 	if err != nil {
@@ -275,7 +275,7 @@ func TestTruncationStrategy_ExplicitZeroPreservesNone(t *testing.T) {
 
 func TestSlidingWindowStrategy_NegativeMinimumClampsToZero(t *testing.T) {
 	index := compaction.CreateMessageIndex(turnMessages(3), nil)
-	strategy := &compaction.SlidingWindowStrategy{MinimumPreservedTurns: ptr(-5)}
+	strategy := &compaction.SlidingWindowStrategy{MinimumPreservedTurns: new(-5)}
 
 	compacted, err := strategy.Compact(t.Context(), index)
 	if err != nil {
@@ -329,7 +329,7 @@ func TestToolResultStrategy_CollapsesOldToolGroups(t *testing.T) {
 	index := compaction.CreateMessageIndex(messages, nil)
 	strategy := &compaction.ToolResultStrategy{
 		Trigger:                compaction.HasToolCalls(),
-		MinimumPreservedGroups: ptr(2),
+		MinimumPreservedGroups: new(2),
 	}
 
 	compacted, err := strategy.Compact(t.Context(), index)
@@ -432,7 +432,7 @@ func TestSummarizationStrategy_InsertsSummaryAndPreservesRecentGroups(t *testing
 	strategy := &compaction.SummarizationStrategy{
 		Trigger:                compaction.GroupsExceed(2),
 		Summarizer:             summarizer,
-		MinimumPreservedGroups: ptr(2),
+		MinimumPreservedGroups: new(2),
 		SummarizationPrompt:    "summarize",
 	}
 
@@ -504,7 +504,7 @@ func TestSummarizationStrategy_RestoresGroupsWhenSummarizerFails(t *testing.T) {
 	strategy := &compaction.SummarizationStrategy{
 		Trigger:                compaction.GroupsExceed(2),
 		Summarizer:             compaction.SummarizerFunc(func(context.Context, []*message.Message) (string, error) { return "", expected }),
-		MinimumPreservedGroups: ptr(1),
+		MinimumPreservedGroups: new(1),
 	}
 
 	compacted, err := strategy.Compact(t.Context(), index)
@@ -524,7 +524,7 @@ func TestSummarizationStrategy_PropagatesCancellation(t *testing.T) {
 	strategy := &compaction.SummarizationStrategy{
 		Trigger:                compaction.GroupsExceed(2),
 		Summarizer:             compaction.SummarizerFunc(func(context.Context, []*message.Message) (string, error) { return "", context.Canceled }),
-		MinimumPreservedGroups: ptr(1),
+		MinimumPreservedGroups: new(1),
 	}
 
 	compacted, err := strategy.Compact(t.Context(), index)
@@ -544,7 +544,7 @@ func TestNewProvider_CompactsAndPersistsIndex(t *testing.T) {
 	provider := compaction.NewContextProvider(compaction.ContextProviderConfig{
 		Strategy: &compaction.TruncationStrategy{
 			Trigger:                compaction.GroupsExceed(2),
-			MinimumPreservedGroups: ptr(2),
+			MinimumPreservedGroups: new(2),
 		},
 		SourceID: "compaction-test",
 	})
@@ -581,7 +581,7 @@ func TestNewProvider_SourceStampsGeneratedMessages(t *testing.T) {
 		Strategy: &compaction.SummarizationStrategy{
 			Trigger:                compaction.GroupsExceed(2),
 			Summarizer:             compaction.SummarizerFunc(func(context.Context, []*message.Message) (string, error) { return "older context", nil }),
-			MinimumPreservedGroups: ptr(2),
+			MinimumPreservedGroups: new(2),
 		},
 		SourceID: "compaction-test",
 	})
@@ -631,7 +631,7 @@ func TestNewProvider_CompactsWithoutSession(t *testing.T) {
 	provider := compaction.NewContextProvider(compaction.ContextProviderConfig{
 		Strategy: &compaction.TruncationStrategy{
 			Trigger:                compaction.GroupsExceed(2),
-			MinimumPreservedGroups: ptr(2),
+			MinimumPreservedGroups: new(2),
 		},
 	})
 
@@ -696,5 +696,3 @@ func messageTexts(messages []*message.Message) []string {
 	}
 	return texts
 }
-
-func ptr[T any](value T) *T { return &value }

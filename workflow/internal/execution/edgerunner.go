@@ -216,7 +216,7 @@ func (em *EdgeRunner) PrepareDeliveryForEdge(ctx context.Context, edge workflow.
 		// Stateful edge - track source messages.
 		state, ok := em.statefulEdges[edge.Index]
 		if !ok {
-			return nil, fmt.Errorf("edge state for %q not found", edge.Index)
+			return nil, fmt.Errorf("edge state for %d not found", edge.Index)
 		}
 		envelopes = state.processMessage(envelope.SourceID, envelope)
 		if len(envelopes) == 0 {

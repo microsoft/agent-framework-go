@@ -284,8 +284,7 @@ func TestLoop_FreshContextPerIteration_SnapshotErrorPreservesCause(t *testing.T)
 	session.Set("unsupported", func() {})
 
 	_, err := a.RunText(t.Context(), "go", agent.WithSession(session)).Collect()
-	var unsupported *json.UnsupportedTypeError
-	if !errors.As(err, &unsupported) {
+	if _, ok := errors.AsType[*json.UnsupportedTypeError](err); !ok {
 		t.Fatalf("RunText() error = %v, want wrapped json.UnsupportedTypeError", err)
 	}
 	if !strings.Contains(err.Error(), "loop: snapshot session") {
