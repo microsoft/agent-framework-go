@@ -43,7 +43,6 @@ func NewMessageIndex(groups []*MessageGroup, tokenCounter TokenCounter) *Message
 		TokenCounter: tokenCounter,
 	}
 	for _, group := range slices.Backward(groups) {
-
 		if index.lastProcessedMessage == nil && group.Kind != GroupKindSummary && len(group.Messages) > 0 {
 			index.lastProcessedMessage = group.Messages[len(group.Messages)-1]
 		}
