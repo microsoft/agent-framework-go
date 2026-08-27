@@ -52,7 +52,6 @@ jobs:
           set +e
           go run ./cmd/verifyexamples \
             02_agents_providers_github_copilot_function_tool \
-            --verifier copilot \
             --parallel 1 \
             --log live-copilot-example.log \
             --md live-copilot-example.md

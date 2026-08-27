@@ -2,7 +2,7 @@
 
 // This tool runs the examples under examples/ and verifies their output.
 // Deterministic examples are verified with exact string matching.
-// Non-deterministic LLM examples are verified using a Foundry or GitHub Copilot agent.
+// Non-deterministic LLM examples are verified using an agent-framework agent when FOUNDRY_PROJECT_ENDPOINT is set.
 //
 // Usage:
 //   go run ./cmd/verifyexamples                                      # Run all examples
@@ -12,7 +12,6 @@
 //   go run ./cmd/verifyexamples --log results.log                    # Write sequential log to file
 //   go run ./cmd/verifyexamples --csv results.csv                    # Write CSV summary to file
 //   go run ./cmd/verifyexamples --md results.md                      # Write Markdown summary to file
-//   go run ./cmd/verifyexamples --verifier copilot                   # Verify semantic output with GitHub Copilot
 //   go run ./cmd/verifyexamples --build                              # Allow normal module writes during go run
 
 package main
@@ -25,9 +24,7 @@ import (
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
-	copilot "github.com/github/copilot-sdk/go"
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/provider/copilotprovider"
 	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
 )
 
@@ -46,7 +43,6 @@ func run(args []string) int {
 	if !ok {
 		return 1
 	}
-	ctx := context.Background()
 
 	foundryEndpoint := os.Getenv("FOUNDRY_PROJECT_ENDPOINT")
 	foundryModel := os.Getenv("FOUNDRY_MODEL")
@@ -55,21 +51,7 @@ func run(args []string) int {
 	}
 
 	var verifierAgent semanticVerifier
-	supportsStructuredOutput := false
-	verifierName := options.Verifier
-	if verifierName == "auto" {
-		if foundryEndpoint == "" {
-			verifierName = "disabled"
-		} else {
-			verifierName = "foundry"
-		}
-	}
-	switch verifierName {
-	case "foundry":
-		if foundryEndpoint == "" {
-			fmt.Fprintln(os.Stderr, "--verifier foundry requires FOUNDRY_PROJECT_ENDPOINT.")
-			return 1
-		}
+	if foundryEndpoint != "" {
 		credential, err := azidentity.NewDefaultAzureCredential(nil)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to create verifier credential: %v\n", err)
@@ -80,41 +62,6 @@ func run(args []string) int {
 			credential,
 			foundryprovider.ModelDeployment(foundryModel),
 			foundryprovider.AgentConfig{
-				Instructions: verifierInstructions,
-				Config: agent.Config{
-					Name: "OutputVerifier",
-				},
-			},
-		)
-		supportsStructuredOutput = true
-	case "copilot":
-		copilotClient := copilot.NewClient(&copilot.ClientOptions{
-			GitHubToken: os.Getenv("COPILOT_GITHUB_TOKEN"),
-		})
-		if err := copilotClient.Start(ctx); err != nil {
-			fmt.Fprintf(os.Stderr, "failed to start Copilot verifier client: %v\n", err)
-			return 1
-		}
-		defer func() {
-			if err := copilotClient.Stop(); err != nil {
-				fmt.Fprintf(os.Stderr, "failed to stop Copilot verifier client: %v\n", err)
-			}
-		}()
-		verifierAgent = copilotprovider.NewAgent(
-			copilotClient,
-			copilotprovider.AgentConfig{
-				SessionConfig: &copilot.SessionConfig{
-					AvailableTools:                     []string{},
-					EnableConfigDiscovery:              copilot.Bool(false),
-					EnableOnDemandInstructionDiscovery: copilot.Bool(false),
-					EnableFileHooks:                    copilot.Bool(false),
-					EnableHostGitOperations:            copilot.Bool(false),
-					EnableSessionStore:                 copilot.Bool(false),
-					EnableSkills:                       copilot.Bool(false),
-					InfiniteSessions: &copilot.InfiniteSessionConfig{
-						Enabled: copilot.Bool(false),
-					},
-				},
 				Instructions: verifierInstructions,
 				Config: agent.Config{
 					Name: "OutputVerifier",
@@ -133,22 +80,16 @@ func run(args []string) int {
 	}
 
 	reporter := NewConsoleReporter(os.Stdout)
-	fmt.Printf("Semantic verifier: %s\n", verifierName)
-	if verifierName == "foundry" {
-		fmt.Printf("Foundry endpoint: %s, Model: %s\n", foundryEndpoint, foundryModel)
-	}
+	fmt.Printf("Foundry endpoint: %s, Model: %s\n", displayEnv(foundryEndpoint), foundryModel)
 	orchestrator := VerificationOrchestrator{
-		verifier: ExampleVerifier{
-			verifierAgent:            verifierAgent,
-			supportsStructuredOutput: supportsStructuredOutput,
-		},
+		verifier:      ExampleVerifier{verifierAgent: verifierAgent},
 		reporter:      reporter,
 		logWriter:     logWriter,
 		repoRoot:      repoRoot,
 		timeout:       3 * time.Minute,
 		buildExamples: options.BuildExamples,
 	}
-	run := orchestrator.RunAll(ctx, options.Examples, options.MaxParallelism)
+	run := orchestrator.RunAll(context.Background(), options.Examples, options.MaxParallelism)
 	elapsed := time.Since(start)
 	ordered := orderedResults(run)
 	reporter.PrintSummary(ordered, run.Skipped, elapsed)
@@ -197,6 +138,13 @@ func resolveRepoRoot() (string, error) {
 			return "", fmt.Errorf("could not find repository root from %s", wd)
 		}
 	}
+}
+
+func displayEnv(value string) string {
+	if value == "" {
+		return "(not set - AI verification disabled)"
+	}
+	return value
 }
 
 const verifierInstructions = `You are a test output verifier. You will be given:

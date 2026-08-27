@@ -720,13 +720,11 @@ var agentsExamples = []ExampleDefinition{
 		},
 	},
 	{
-		Name:        "02_agents_providers_github_copilot_function_tool",
-		ProjectPath: "examples/02-agents/providers/github-copilot/function_tool",
-		MustContain: []string{canaryResult},
-		ExpectedOutputDescription: []string{
-			"The agent should call the canary_status function tool and include its exact result in the response.",
-			"The output should not contain error messages or stack traces.",
-		},
+		Name:            "02_agents_providers_github_copilot_function_tool",
+		ProjectPath:     "examples/02-agents/providers/github-copilot/function_tool",
+		IsDeterministic: true,
+		MustContain:     []string{canaryResult},
+		MustNotContain:  []string{"panic:", "Permission denied"},
 	},
 	{
 		Name:                         "02_agents_skills_step01_file_based_skills",

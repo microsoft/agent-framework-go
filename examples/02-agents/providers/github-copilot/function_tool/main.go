@@ -40,6 +40,7 @@ func main() {
 		copilotprovider.AgentConfig{
 			SessionConfig: &copilot.SessionConfig{
 				AvailableTools:                     []string{"canary_status"},
+				OnPermissionRequest:                copilot.PermissionHandler.ApproveAll,
 				EnableConfigDiscovery:              copilot.Bool(false),
 				EnableOnDemandInstructionDiscovery: copilot.Bool(false),
 				EnableFileHooks:                    copilot.Bool(false),

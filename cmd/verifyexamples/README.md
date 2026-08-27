@@ -33,7 +33,6 @@ go run ./cmd/verifyexamples --parallel 16
 go run ./cmd/verifyexamples --log results.log
 go run ./cmd/verifyexamples --csv results.csv
 go run ./cmd/verifyexamples --md results.md
-go run ./cmd/verifyexamples --verifier copilot
 go run ./cmd/verifyexamples --build
 ```
 
@@ -43,7 +42,7 @@ By default, example processes run with `go run -mod=readonly .`. Passing `--buil
 
 `verifyexamples` executes example programs from this repository. Review any example before adding it to the registry, especially if it starts servers, opens files, uses shell commands, or calls external services.
 
-Some examples and AI verification use credentials from environment variables. Do not put secrets in example inputs, expected output, logs, CSV/Markdown reports, or committed files. AI verification sends captured stdout/stderr to the configured model, so examples that print sensitive values should be skipped or rewritten before being registered.
+Some examples and AI verification use credentials from environment variables. Do not put secrets in example inputs, expected output, logs, CSV/Markdown reports, or committed files. AI verification may send captured stdout/stderr to the configured Foundry model, so examples that print sensitive values should be skipped or rewritten before being registered.
 
 ## Verification
 
@@ -58,9 +57,7 @@ Each example definition can include:
 - `OptionalEnvironmentVariables`: missing values also skip when they would cause prompts or nondeterministic hangs.
 - `SkipReason`: structural skip reason for servers, multi-process examples, or external service requirements.
 
-AI verification uses Foundry when `FOUNDRY_PROJECT_ENDPOINT` is set. `FOUNDRY_MODEL` is optional and defaults to `gpt-4o-mini`. Use `--verifier foundry` to require Foundry configuration.
-
-Use `--verifier copilot` to verify output with the GitHub Copilot provider. The Copilot CLI must be available. Local runs can use an existing Copilot CLI login. In GitHub Actions, grant `copilot-requests: write` and set `COPILOT_GITHUB_TOKEN` to `${{ github.token }}`. GitHub creates that token for the run, so no repository secret is needed.
+AI verification is enabled when `FOUNDRY_PROJECT_ENDPOINT` is set. `FOUNDRY_MODEL` is optional and defaults to `gpt-4o-mini`.
 
 ## Example Registry
 
