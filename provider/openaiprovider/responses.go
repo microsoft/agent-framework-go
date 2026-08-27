@@ -262,7 +262,13 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 		switch frmt.Kind {
 		case "json":
 			if schema := frmt.Schema; schema != nil {
-				schemaMap, err := schemaToMap(schema)
+				var schemaMap map[string]any
+				var err error
+				if frmt.Strict {
+					schemaMap, err = strictSchemaToMap(schema)
+				} else {
+					schemaMap, err = schemaToMap(schema)
+				}
 				if err != nil {
 					return responses.ResponseNewParams{}, fmt.Errorf("failed to convert response format schema (type %T) to JSON format: %w", schema, err)
 				}

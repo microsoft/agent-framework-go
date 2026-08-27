@@ -2643,7 +2643,8 @@ data: {"type":"response.completed","sequence_number":2,"response":{"id":"resp_00
 
 func TestResponsesResponseFormatSchemaConvertsJSONSchema(t *testing.T) {
 	type payload struct {
-		Name string `json:"name"`
+		Name     string `json:"name"`
+		Nickname string `json:"nickname,omitempty"`
 	}
 	format, err := jsonformat.For[payload]()
 	if err != nil {
@@ -2654,7 +2655,7 @@ func TestResponsesResponseFormatSchemaConvertsJSONSchema(t *testing.T) {
             {
                 "model":"gpt-4o-mini",
                 "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}],
-                "text":{"format":{"type":"json_schema","name":"payload","schema":{"properties":{"name":{"type":"string"}},"type":"object","required":["name"],"additionalProperties":false},"strict":true}}
+				"text":{"format":{"type":"json_schema","name":"payload","schema":{"properties":{"name":{"type":"string"},"nickname":{"type":"string"}},"type":"object","required":["name","nickname"],"additionalProperties":false},"strict":true}}
             }
             `
 
@@ -2675,6 +2676,18 @@ func TestResponsesResponseFormatSchemaConvertsJSONSchema(t *testing.T) {
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 	if _, err := a.RunText(t.Context(), "hello", agent.WithResponseFormat(format)).Collect(); err != nil {
 		t.Fatalf("error = %v", err)
+	}
+
+	localFormat, err := jsonformat.FromResponseFormat(format)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := localFormat.Marshal(payload{Name: "Ada"})
+	if err != nil {
+		t.Fatalf("local Marshal() rejected omitted optional property: %v", err)
+	}
+	if got, want := string(data), `{"name":"Ada"}`; got != want {
+		t.Fatalf("local Marshal() = %s, want %s", got, want)
 	}
 }
 

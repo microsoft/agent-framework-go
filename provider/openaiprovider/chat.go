@@ -246,10 +246,18 @@ func buildCompletionParams(model string, messages []*message.Message, opts []age
 		switch frmt.Kind {
 		case "json":
 			if schema := frmt.Schema; schema != nil {
+				wireSchema := schema
+				if frmt.Strict {
+					var err error
+					wireSchema, err = strictSchemaToMap(schema)
+					if err != nil {
+						return openai.ChatCompletionNewParams{}, fmt.Errorf("failed to convert response format schema (type %T) to JSON format: %w", schema, err)
+					}
+				}
 				params.ResponseFormat.OfJSONSchema = &shared.ResponseFormatJSONSchemaParam{
 					JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
 						Name:   frmt.Name,
-						Schema: schema,
+						Schema: wireSchema,
 					},
 				}
 				if desc := frmt.Description; desc != "" {
