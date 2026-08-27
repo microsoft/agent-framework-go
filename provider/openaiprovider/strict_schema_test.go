@@ -4,6 +4,7 @@ package openaiprovider
 
 import (
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -90,71 +91,29 @@ func TestStrictSchemaToMapTransformsCloneRecursively(t *testing.T) {
 	}
 }
 
-func TestStrictSchemaToMapCleansUnsupportedOpenAIKeywords(t *testing.T) {
-	unsupported := map[string]any{
-		"contentEncoding":       "base64",
-		"contentMediaType":      "text/plain",
-		"not":                   true,
-		"minLength":             1,
-		"maxLength":             10,
-		"pattern":               "^[a-z]+$",
-		"format":                "email",
-		"minimum":               1,
-		"maximum":               10,
-		"multipleOf":            2,
-		"patternProperties":     map[string]any{"^x-": map[string]any{"type": "string"}},
-		"minItems":              1,
-		"maxItems":              10,
-		"unevaluatedProperties": false,
-		"propertyNames":         map[string]any{"type": "string"},
-		"minProperties":         1,
-		"maxProperties":         10,
-		"unevaluatedItems":      false,
-		"contains":              map[string]any{"type": "string"},
-		"minContains":           1,
-		"maxContains":           2,
-		"uniqueItems":           true,
-	}
-	schema := map[string]any{
-		"type":        "string",
-		"description": "A value",
-		"default":     "fallback",
-	}
-	for name, value := range unsupported {
-		schema[name] = value
-	}
-
-	strict, err := strictSchemaToMap(schema)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	description, ok := strict["description"].(string)
-	if !ok {
-		t.Fatalf("description = %#v, want string", strict["description"])
-	}
-	if !strings.HasPrefix(description, `A value (Default value: "fallback")`) {
-		t.Errorf("description = %q, want original description with default", description)
-	}
-	if _, ok := strict["default"]; ok {
-		t.Error("strict schema retained default")
-	}
-	for name := range unsupported {
-		if _, ok := strict[name]; ok {
-			t.Errorf("strict schema retained unsupported keyword %q", name)
-		}
-		if !strings.Contains(description, name+": ") {
-			t.Errorf("description does not preserve %q constraint: %q", name, description)
-		}
-	}
-}
-
-func TestStrictSchemaToMapConvertsBooleanSchemas(t *testing.T) {
+func TestStrictSchemaToMapPreservesSupportedOpenAIKeywords(t *testing.T) {
 	schema := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"anything": true,
-			"nothing":  false,
+			"text": map[string]any{
+				"type":      "string",
+				"minLength": float64(1),
+				"maxLength": float64(10),
+				"pattern":   "^[a-z]+$",
+				"format":    "email",
+			},
+			"number": map[string]any{
+				"type":       "number",
+				"minimum":    float64(1),
+				"maximum":    float64(10),
+				"multipleOf": float64(2),
+			},
+			"items": map[string]any{
+				"type":     "array",
+				"items":    map[string]any{"type": "string"},
+				"minItems": float64(1),
+				"maxItems": float64(10),
+			},
 		},
 	}
 
@@ -164,11 +123,111 @@ func TestStrictSchemaToMapConvertsBooleanSchemas(t *testing.T) {
 	}
 
 	properties := strict["properties"].(map[string]any)
-	if got, want := properties["anything"], map[string]any{}; !reflect.DeepEqual(got, want) {
-		t.Errorf("anything schema = %#v, want %#v", got, want)
+	for name, want := range schema["properties"].(map[string]any) {
+		got := properties[name].(map[string]any)
+		for keyword, wantValue := range want.(map[string]any) {
+			if gotValue := got[keyword]; !reflect.DeepEqual(gotValue, wantValue) {
+				t.Errorf("properties/%s/%s = %#v, want %#v", name, keyword, gotValue, wantValue)
+			}
+		}
 	}
-	if got, want := properties["nothing"], map[string]any{"description": "not: true"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("nothing schema = %#v, want %#v", got, want)
+}
+
+func TestStrictSchemaToMapMovesDefaultToDescription(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"value": map[string]any{
+				"type":        "string",
+				"description": "A value",
+				"default":     "fallback",
+			},
+		},
+	}
+
+	strict, err := strictSchemaToMap(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	value := strict["properties"].(map[string]any)["value"].(map[string]any)
+	if got, want := value["description"], `A value (Default value: "fallback")`; got != want {
+		t.Errorf("description = %#v, want %#v", got, want)
+	}
+	if _, ok := value["default"]; ok {
+		t.Error("strict schema retained default")
+	}
+}
+
+func TestStrictSchemaToMapRejectsUnsupportedOpenAIKeywords(t *testing.T) {
+	tests := map[string]any{
+		"allOf":                 []any{map[string]any{"type": "string"}},
+		"contains":              map[string]any{"type": "string"},
+		"contentEncoding":       "base64",
+		"contentMediaType":      "text/plain",
+		"dependentRequired":     map[string]any{"value": []any{"other"}},
+		"dependentSchemas":      map[string]any{"value": map[string]any{"type": "string"}},
+		"else":                  map[string]any{"type": "string"},
+		"if":                    map[string]any{"type": "string"},
+		"maxContains":           float64(2),
+		"maxProperties":         float64(2),
+		"minContains":           float64(1),
+		"minProperties":         float64(1),
+		"not":                   map[string]any{"type": "string"},
+		"patternProperties":     map[string]any{"^x-": map[string]any{"type": "string"}},
+		"prefixItems":           []any{map[string]any{"type": "string"}},
+		"propertyNames":         map[string]any{"type": "string"},
+		"then":                  map[string]any{"type": "string"},
+		"unevaluatedItems":      false,
+		"unevaluatedProperties": false,
+		"uniqueItems":           true,
+	}
+	for keyword, value := range tests {
+		t.Run(keyword, func(t *testing.T) {
+			schema := map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"value": map[string]any{
+						"type":  keywordType(keyword),
+						keyword: value,
+					},
+				},
+			}
+
+			_, err := strictSchemaToMap(schema)
+			if err == nil || !strings.Contains(err.Error(), `properties/value: unsupported keyword "`+keyword+`"`) {
+				t.Fatalf("strictSchemaToMap() error = %v, want unsupported-keyword error", err)
+			}
+		})
+	}
+}
+
+func keywordType(keyword string) string {
+	switch keyword {
+	case "contains", "maxContains", "minContains", "prefixItems", "unevaluatedItems", "uniqueItems":
+		return "array"
+	case "dependentRequired", "dependentSchemas", "maxProperties", "minProperties", "patternProperties", "propertyNames", "unevaluatedProperties":
+		return "object"
+	default:
+		return "string"
+	}
+}
+
+func TestStrictSchemaToMapRejectsBooleanSchemas(t *testing.T) {
+	for _, value := range []bool{true, false} {
+		t.Run(strconv.FormatBool(value), func(t *testing.T) {
+			schema := map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"value": value,
+				},
+			}
+
+			_, err := strictSchemaToMap(schema)
+			if err == nil || !strings.Contains(err.Error(), "properties/value: boolean schemas are not supported") {
+				t.Fatalf("strictSchemaToMap() error = %v, want boolean-schema error", err)
+			}
+		})
 	}
 }
 
@@ -214,7 +273,11 @@ func TestStrictSchemaTransformCacheReturnsIndependentMaps(t *testing.T) {
 func TestStrictSchemaTransformCacheIsBounded(t *testing.T) {
 	cache := strictSchemaTransformCache{}
 	for index := 0; index < strictSchemaTransformCacheLimit+1; index++ {
-		schema := map[string]any{"type": "string", "cacheKey": index}
+		schema := map[string]any{
+			"type":        "object",
+			"properties":  map[string]any{"value": map[string]any{"type": "string"}},
+			"description": strconv.Itoa(index),
+		}
 		if _, err := cache.transform(schema); err != nil {
 			t.Fatal(err)
 		}
@@ -302,6 +365,57 @@ func TestStrictSchemaToMapRejectsImplicitlyOpenObject(t *testing.T) {
 	_, err := strictSchemaToMap(map[string]any{"type": "object"})
 	if err == nil || !strings.Contains(err.Error(), "<root>: object schema must declare properties or set additionalProperties to false") {
 		t.Fatalf("strictSchemaToMap() error = %v, want implicitly-open-object error", err)
+	}
+}
+
+func TestStrictSchemaToMapRejectsEmptyPropertiesOpenObject(t *testing.T) {
+	_, err := strictSchemaToMap(map[string]any{
+		"type":       "object",
+		"properties": map[string]any{},
+	})
+	if err == nil || !strings.Contains(err.Error(), "<root>: object schema must declare properties or set additionalProperties to false") {
+		t.Fatalf("strictSchemaToMap() error = %v, want empty open-object error", err)
+	}
+}
+
+func TestStrictSchemaToMapRejectsNonObjectRoot(t *testing.T) {
+	stringFormat, err := jsonformat.For[string]()
+	if err != nil {
+		t.Fatal(err)
+	}
+	arrayFormat, err := jsonformat.For[[]string]()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := map[string]any{
+		"string":        stringFormat.Schema,
+		"array":         arrayFormat.Schema,
+		"unconstrained": jsonformat.Any().Schema,
+		"nothing":       jsonformat.Nothing().Schema,
+		"boolean":       true,
+	}
+	for name, schema := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := strictSchemaToMap(schema)
+			if err == nil || !strings.Contains(err.Error(), "<root>: root schema must have type object") {
+				t.Fatalf("strictSchemaToMap() error = %v, want root-object error", err)
+			}
+		})
+	}
+}
+
+func TestStrictSchemaToMapRejectsRootAnyOf(t *testing.T) {
+	_, err := strictSchemaToMap(map[string]any{
+		"type":                 "object",
+		"properties":           map[string]any{},
+		"additionalProperties": false,
+		"anyOf": []any{
+			map[string]any{"type": "object", "additionalProperties": false},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "<root>: root schema must not use anyOf") {
+		t.Fatalf("strictSchemaToMap() error = %v, want root-anyOf error", err)
 	}
 }
 

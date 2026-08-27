@@ -16,27 +16,32 @@ const strictSchemaTransformCacheLimit = 256
 var strictSchemaCache strictSchemaTransformCache
 
 var unsupportedStrictSchemaKeywords = [...]string{
+	"$anchor",
+	"$dynamicAnchor",
+	"$dynamicRef",
+	"$recursiveAnchor",
+	"$recursiveRef",
+	"allOf",
+	"contains",
 	"contentEncoding",
 	"contentMediaType",
-	"not",
-	"minLength",
-	"maxLength",
-	"pattern",
-	"format",
-	"minimum",
-	"maximum",
-	"multipleOf",
-	"patternProperties",
-	"minItems",
-	"maxItems",
-	"unevaluatedProperties",
-	"propertyNames",
-	"minProperties",
-	"maxProperties",
-	"unevaluatedItems",
-	"contains",
-	"minContains",
+	"contentSchema",
+	"dependentRequired",
+	"dependentSchemas",
+	"dependencies",
+	"else",
+	"if",
 	"maxContains",
+	"maxProperties",
+	"minContains",
+	"minProperties",
+	"not",
+	"patternProperties",
+	"prefixItems",
+	"propertyNames",
+	"then",
+	"unevaluatedItems",
+	"unevaluatedProperties",
 	"uniqueItems",
 }
 
@@ -63,13 +68,15 @@ func (c *strictSchemaTransformCache) transform(schema any) (map[string]any, erro
 	if err := json.Unmarshal(source, &schemaValue); err != nil {
 		return nil, err
 	}
-	schemaValue, err = transformStrictSchema(schemaValue, nil)
-	if err != nil {
-		return nil, err
-	}
 	schemaMap, ok := schemaValue.(map[string]any)
 	if !ok {
-		return nil, strictSchemaError(nil, "schema must be an object or boolean")
+		return nil, strictSchemaError(nil, "root schema must have type object")
+	}
+	if err := validateStrictSchemaRoot(schemaMap); err != nil {
+		return nil, err
+	}
+	if err := transformStrictSchemaObject(schemaMap, nil); err != nil {
+		return nil, err
 	}
 	transformed, err := json.Marshal(schemaMap)
 	if err != nil {
@@ -115,15 +122,7 @@ func decodeStrictSchemaMap(data []byte) (map[string]any, error) {
 func transformStrictSchema(value any, path []string) (any, error) {
 	switch schema := value.(type) {
 	case bool:
-		if schema {
-			return map[string]any{}, nil
-		}
-		// Match .NET's boolean conversion before its unsupported-keyword cleanup.
-		converted := map[string]any{"not": true}
-		if err := cleanStrictSchemaNode(converted, path); err != nil {
-			return nil, err
-		}
-		return converted, nil
+		return nil, strictSchemaError(path, "boolean schemas are not supported")
 	case map[string]any:
 		if err := transformStrictSchemaObject(schema, path); err != nil {
 			return nil, err
@@ -135,6 +134,9 @@ func transformStrictSchema(value any, path []string) (any, error) {
 }
 
 func transformStrictSchemaObject(schema map[string]any, path []string) error {
+	if err := validateStrictSchemaNode(schema, path); err != nil {
+		return err
+	}
 	properties, hasProperties, err := strictSchemaProperties(schema, path)
 	if err != nil {
 		return err
@@ -162,7 +164,7 @@ func transformStrictSchemaObject(schema map[string]any, path []string) error {
 			return strictSchemaError(path, "additionalProperties must be false")
 		}
 	}
-	if strictSchemaHasType(schema, "object") && !hasProperties {
+	if strictSchemaHasType(schema, "object") && (!hasProperties || len(properties) == 0) {
 		if _, ok := schema["additionalProperties"]; !ok {
 			return strictSchemaError(path, "object schema must declare properties or set additionalProperties to false")
 		}
@@ -182,14 +184,7 @@ func transformStrictSchemaObject(schema map[string]any, path []string) error {
 		}
 		schema["items"] = transformed
 	}
-	if not, ok := schema["not"]; ok {
-		transformed, err := transformStrictSchema(not, strictSchemaPath(path, "not"))
-		if err != nil {
-			return err
-		}
-		schema["not"] = transformed
-	}
-	for _, keyword := range []string{"prefixItems", "anyOf", "allOf", "oneOf"} {
+	for _, keyword := range []string{"anyOf", "oneOf"} {
 		value, ok := schema[keyword]
 		if !ok {
 			continue
@@ -274,26 +269,33 @@ func cleanStrictSchemaNode(schema map[string]any, path []string) error {
 		}
 		delete(schema, "default")
 	}
+	return nil
+}
 
-	constraints := make([]string, 0)
-	for _, keyword := range unsupportedStrictSchemaKeywords {
-		value, ok := schema[keyword]
-		if !ok {
-			continue
+func validateStrictSchemaRoot(schema map[string]any) error {
+	switch schemaType := schema["type"].(type) {
+	case string:
+		if schemaType != "object" {
+			return strictSchemaError(nil, "root schema must have type object")
 		}
-		encoded, err := json.Marshal(value)
-		if err != nil {
-			return strictSchemaError(path, "encoding %s: %v", keyword, err)
+	case []any:
+		if len(schemaType) != 1 || schemaType[0] != "object" {
+			return strictSchemaError(nil, "root schema must have type object")
 		}
-		constraints = append(constraints, keyword+": "+string(encoded))
-		delete(schema, keyword)
+		schema["type"] = "object"
+	default:
+		return strictSchemaError(nil, "root schema must have type object")
 	}
-	if len(constraints) > 0 {
-		constraintDescription := strings.Join(constraints, "\n")
-		if description, ok := schema["description"].(string); ok {
-			schema["description"] = description + "\n" + constraintDescription
-		} else {
-			schema["description"] = constraintDescription
+	if _, ok := schema["anyOf"]; ok {
+		return strictSchemaError(nil, "root schema must not use anyOf")
+	}
+	return nil
+}
+
+func validateStrictSchemaNode(schema map[string]any, path []string) error {
+	for _, keyword := range unsupportedStrictSchemaKeywords {
+		if _, ok := schema[keyword]; ok {
+			return strictSchemaError(path, "unsupported keyword %q", keyword)
 		}
 	}
 	return nil
