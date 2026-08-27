@@ -4,6 +4,8 @@ package main
 
 import "time"
 
+const canaryResult = "agent-framework-go-copilot-tool-ok"
+
 var exampleSets = map[string][]ExampleDefinition{
 	"01-get-started": getStartedExamples,
 	"02-agents":      agentsExamples,
@@ -714,6 +716,15 @@ var agentsExamples = []ExampleDefinition{
 		InputDelay:  3 * time.Second,
 		ExpectedOutputDescription: []string{
 			"The output should contain a response listing files in the current directory.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
+		Name:        "02_agents_providers_github_copilot_function_tool",
+		ProjectPath: "examples/02-agents/providers/github-copilot/function_tool",
+		MustContain: []string{canaryResult},
+		ExpectedOutputDescription: []string{
+			"The agent should call the canary_status function tool and include its exact result in the response.",
 			"The output should not contain error messages or stack traces.",
 		},
 	},

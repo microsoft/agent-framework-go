@@ -15,6 +15,7 @@ type VerifyOptions struct {
 	CsvFilePath      string
 	MarkdownFilePath string
 	LogFilePath      string
+	Verifier         string
 	BuildExamples    bool
 	Examples         []ExampleDefinition
 }
@@ -35,6 +36,17 @@ func parseOptions(args []string, stderr io.Writer) (VerifyOptions, bool) {
 	}
 	markdownFilePath, ok := extractArg(&argList, "--md", stderr)
 	if !ok {
+		return VerifyOptions{}, false
+	}
+	verifier, ok := extractArg(&argList, "--verifier", stderr)
+	if !ok {
+		return VerifyOptions{}, false
+	}
+	if verifier == "" {
+		verifier = "auto"
+	}
+	if verifier != "auto" && verifier != "foundry" && verifier != "copilot" {
+		_, _ = fmt.Fprintf(stderr, "Invalid value for --verifier: %s. Available: auto, foundry, copilot.\n", verifier)
 		return VerifyOptions{}, false
 	}
 	buildExamples := extractFlag(&argList, "--build")
@@ -94,6 +106,7 @@ func parseOptions(args []string, stderr io.Writer) (VerifyOptions, bool) {
 		CsvFilePath:      csvFilePath,
 		MarkdownFilePath: markdownFilePath,
 		LogFilePath:      logFilePath,
+		Verifier:         verifier,
 		BuildExamples:    buildExamples,
 		Examples:         examples,
 	}, true

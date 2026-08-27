@@ -9,7 +9,7 @@ import (
 
 func TestParseOptionsFiltersCategoryAndNames(t *testing.T) {
 	var stderr bytes.Buffer
-	options, ok := parseOptions([]string{"--category", "01-get-started", "01_get_started_05_first_workflow", "--parallel", "2", "--build"}, &stderr)
+	options, ok := parseOptions([]string{"--category", "01-get-started", "01_get_started_05_first_workflow", "--parallel", "2", "--verifier", "copilot", "--build"}, &stderr)
 	if !ok {
 		t.Fatalf("parseOptions failed: %s", stderr.String())
 	}
@@ -19,8 +19,33 @@ func TestParseOptionsFiltersCategoryAndNames(t *testing.T) {
 	if !options.BuildExamples {
 		t.Fatal("BuildExamples = false, want true")
 	}
+	if options.Verifier != "copilot" {
+		t.Fatalf("Verifier = %q, want copilot", options.Verifier)
+	}
 	if len(options.Examples) != 1 || options.Examples[0].Name != "01_get_started_05_first_workflow" {
 		t.Fatalf("Examples = %#v, want only first workflow", options.Examples)
+	}
+}
+
+func TestParseOptionsDefaultsVerifierToAuto(t *testing.T) {
+	var stderr bytes.Buffer
+	options, ok := parseOptions([]string{"01_get_started_05_first_workflow"}, &stderr)
+	if !ok {
+		t.Fatalf("parseOptions failed: %s", stderr.String())
+	}
+	if options.Verifier != "auto" {
+		t.Fatalf("Verifier = %q, want auto", options.Verifier)
+	}
+}
+
+func TestParseOptionsRejectsUnknownVerifier(t *testing.T) {
+	var stderr bytes.Buffer
+	_, ok := parseOptions([]string{"--verifier", "unknown"}, &stderr)
+	if ok {
+		t.Fatal("parseOptions succeeded, want failure")
+	}
+	if stderr.String() == "" {
+		t.Fatal("stderr is empty")
 	}
 }
 

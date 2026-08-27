@@ -16,7 +16,8 @@ type semanticVerifier interface {
 }
 
 type ExampleVerifier struct {
-	verifierAgent semanticVerifier
+	verifierAgent            semanticVerifier
+	supportsStructuredOutput bool
 }
 
 func (v ExampleVerifier) Verify(ctx context.Context, example ExampleDefinition, run ExampleRunResult) VerificationResult {
@@ -86,20 +87,32 @@ Respond with only JSON matching this shape:
 `, truncate(stdout, 4000), stderrSection, expectationList.String())
 
 	var result aiVerificationResponse
-	response, err := v.verifierAgent.RunText(ctx, prompt, agent.WithStructuredOutput(&result)).Collect()
+	var options []agent.Option
+	if v.supportsStructuredOutput {
+		options = append(options, agent.WithStructuredOutput(&result))
+	} else {
+		options = append(options, agent.Stream(false))
+	}
+	response, err := v.verifierAgent.RunText(ctx, prompt, options...).Collect()
 	if err != nil {
 		return "AI verification error: " + err.Error(), []string{"AI verification error: " + err.Error()}
 	}
 
 	if len(result.ExpectationResults) == 0 && response != nil && response.String() != "" {
-		_ = json.Unmarshal([]byte(response.String()), &result)
-	}
-	if !result.Pass && len(result.ExpectationResults) == 0 {
-		text := "AI verification returned no structured expectation results."
-		if response != nil && strings.TrimSpace(response.String()) != "" {
-			text += " Raw: " + truncate(response.String(), 500)
+		if err := json.Unmarshal([]byte(response.String()), &result); err != nil {
+			text := "AI verification returned invalid JSON: " + err.Error() + ". Raw: " + truncate(response.String(), 500)
+			return text, []string{text}
 		}
+	}
+	if len(result.ExpectationResults) != len(expectations) {
+		text := fmt.Sprintf("AI verification returned %d expectation results, want %d.", len(result.ExpectationResults), len(expectations))
 		return text, []string{text}
+	}
+	for i, expectation := range expectations {
+		if result.ExpectationResults[i].Expectation != expectation {
+			text := fmt.Sprintf("AI verification result %d echoed expectation %q, want %q.", i+1, result.ExpectationResults[i].Expectation, expectation)
+			return text, []string{text}
+		}
 	}
 
 	reasoning := result.AIReasoning
