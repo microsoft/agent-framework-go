@@ -129,7 +129,7 @@ func minimalMessageResponse(payload string) string {
 func TestStreamingUsage_DoesNotDoubleCountOutputTokens(t *testing.T) {
 	output := "" +
 		"event: message_start\n" +
-		`data: {"type":"message_start","message":{"id":"m1","type":"message","role":"assistant","content":[],"model":"claude-3-5-sonnet-20241022","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}` + "\n\n" +
+		`data: {"type":"message_start","message":{"id":"m1","type":"message","role":"assistant","content":[],"model":"claude-3-5-sonnet-20241022","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1,"cache_creation_input_tokens":3,"cache_read_input_tokens":7}}}` + "\n\n" +
 		"event: content_block_start\n" +
 		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}` + "\n\n" +
 		"event: content_block_delta\n" +
@@ -166,11 +166,17 @@ func TestStreamingUsage_DoesNotDoubleCountOutputTokens(t *testing.T) {
 	if usage.Details.OutputTokenCount != 5 {
 		t.Errorf("OutputTokenCount = %d, want 5 (message_delta final count, not 1+5)", usage.Details.OutputTokenCount)
 	}
-	if usage.Details.InputTokenCount != 10 {
-		t.Errorf("InputTokenCount = %d, want 10", usage.Details.InputTokenCount)
+	if usage.Details.InputTokenCount != 20 {
+		t.Errorf("InputTokenCount = %d, want 20 (uncached + cache creation + cache read)", usage.Details.InputTokenCount)
 	}
-	if usage.Details.TotalTokenCount != 15 {
-		t.Errorf("TotalTokenCount = %d, want 15", usage.Details.TotalTokenCount)
+	if usage.Details.TotalTokenCount != 25 {
+		t.Errorf("TotalTokenCount = %d, want 25", usage.Details.TotalTokenCount)
+	}
+	if usage.Details.CachedInputTokenCount != 7 {
+		t.Errorf("CachedInputTokenCount = %d, want 7", usage.Details.CachedInputTokenCount)
+	}
+	if got := usage.Details.AdditionalCounts["cache_creation_input_tokens"]; got != 3 {
+		t.Errorf("cache_creation_input_tokens = %d, want 3", got)
 	}
 }
 

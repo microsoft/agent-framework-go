@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"iter"
+	"slices"
 	"strings"
 	"testing"
 
@@ -17,6 +18,9 @@ import (
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 
+	"go.opentelemetry.io/otel/attribute"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
@@ -38,6 +42,312 @@ func setupTracer(t *testing.T) *tracetest.InMemoryExporter {
 		otellib.SetTracerProvider(originalProvider)
 	})
 	return exporter
+}
+
+func setupMeter(t *testing.T) *sdkmetric.ManualReader {
+	t.Helper()
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	originalProvider := otellib.GetMeterProvider()
+	otellib.SetMeterProvider(provider)
+
+	t.Cleanup(func() {
+		_ = provider.Shutdown(t.Context())
+		otellib.SetMeterProvider(originalProvider)
+	})
+	return reader
+}
+
+func collectMetric(t *testing.T, reader *sdkmetric.ManualReader, name string) metricdata.Aggregation {
+	t.Helper()
+	resourceMetrics := collectMetrics(t, reader)
+	for _, scopeMetrics := range resourceMetrics.ScopeMetrics {
+		for _, m := range scopeMetrics.Metrics {
+			if m.Name == name {
+				return m.Data
+			}
+		}
+	}
+	t.Fatalf("metric %q was not recorded", name)
+	return nil
+}
+
+func collectMetrics(t *testing.T, reader *sdkmetric.ManualReader) metricdata.ResourceMetrics {
+	t.Helper()
+	var resourceMetrics metricdata.ResourceMetrics
+	if err := reader.Collect(t.Context(), &resourceMetrics); err != nil {
+		t.Fatalf("collect metrics: %v", err)
+	}
+	return resourceMetrics
+}
+
+func hasMetric(resourceMetrics metricdata.ResourceMetrics, name string) bool {
+	for _, scopeMetrics := range resourceMetrics.ScopeMetrics {
+		for _, m := range scopeMetrics.Metrics {
+			if m.Name == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func metricAttribute(set attribute.Set, key string) (string, bool) {
+	value, ok := set.Value(attribute.Key(key))
+	return value.AsString(), ok
+}
+
+func TestOtel_Run_RecordsOperationDurationMetric(t *testing.T) {
+	exporter := setupTracer(t)
+	reader := setupMeter(t)
+	mw := otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{})
+	a := agent.New(agent.ProviderConfig{
+		ProviderName: "test-provider",
+		Run: func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			return func(yield func(*agent.ResponseUpdate, error) bool) {
+				yield(&agent.ResponseUpdate{MessageID: "test-1"}, nil)
+			}
+		},
+	}, agent.Config{Name: "test-agent", Middlewares: []agent.Middleware{mw}})
+
+	_, _ = a.RunMessage(t.Context(), message.NewText("test")).Collect()
+
+	var resourceMetrics metricdata.ResourceMetrics
+	if err := reader.Collect(t.Context(), &resourceMetrics); err != nil {
+		t.Fatalf("collect metrics: %v", err)
+	}
+	for _, scopeMetrics := range resourceMetrics.ScopeMetrics {
+		for _, m := range scopeMetrics.Metrics {
+			if m.Name == "gen_ai.client.operation.duration" {
+				histogram, ok := m.Data.(metricdata.Histogram[float64])
+				if !ok {
+					t.Fatalf("operation duration metric has type %T, want float64 histogram", m.Data)
+				}
+				if len(histogram.DataPoints) != 1 {
+					t.Fatalf("operation duration data points = %d, want 1", len(histogram.DataPoints))
+				}
+				dataPoint := histogram.DataPoints[0]
+				wantBounds := []float64{0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24, 20.48, 40.96, 81.92}
+				if !slices.Equal(dataPoint.Bounds, wantBounds) {
+					t.Errorf("operation duration bounds = %v, want %v", dataPoint.Bounds, wantBounds)
+				}
+				if operation, _ := metricAttribute(dataPoint.Attributes, "gen_ai.operation.name"); operation != "invoke_agent" {
+					t.Errorf("gen_ai.operation.name = %q, want invoke_agent", operation)
+				}
+				if provider, _ := metricAttribute(dataPoint.Attributes, "gen_ai.provider.name"); provider != "test-provider" {
+					t.Errorf("gen_ai.provider.name = %q, want test-provider", provider)
+				}
+				for _, key := range []string{"gen_ai.agent.name", "gen_ai.agent.id"} {
+					if _, ok := metricAttribute(dataPoint.Attributes, key); ok {
+						t.Errorf("operation duration data point unexpectedly contains %s", key)
+					}
+				}
+				spans := exporter.GetSpans()
+				if len(spans) != 1 {
+					t.Fatalf("spans = %d, want 1", len(spans))
+				}
+				if want := spans[0].EndTime.Sub(spans[0].StartTime).Seconds(); dataPoint.Sum != want {
+					t.Errorf("operation duration metric = %v, span duration = %v", dataPoint.Sum, want)
+				}
+				return
+			}
+		}
+	}
+	t.Fatal("gen_ai.client.operation.duration metric was not recorded")
+}
+
+func TestOtel_Run_RecordsTokenUsageMetric(t *testing.T) {
+	reader := setupMeter(t)
+	mw := otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{})
+	a := agent.New(agent.ProviderConfig{
+		ProviderName: "test-provider",
+		Run: func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			return func(yield func(*agent.ResponseUpdate, error) bool) {
+				yield(&agent.ResponseUpdate{Contents: []message.Content{&message.UsageContent{
+					Details: message.UsageDetails{InputTokenCount: 100, OutputTokenCount: 10},
+				}}}, nil)
+				yield(&agent.ResponseUpdate{Contents: []message.Content{&message.UsageContent{
+					Details: message.UsageDetails{InputTokenCount: 200, OutputTokenCount: 20},
+				}}}, nil)
+			}
+		},
+	}, agent.Config{Name: "test-agent", Middlewares: []agent.Middleware{mw}})
+
+	_, _ = a.RunMessage(t.Context(), message.NewText("test")).Collect()
+
+	data := collectMetric(t, reader, "gen_ai.client.token.usage")
+	histogram, ok := data.(metricdata.Histogram[int64])
+	if !ok {
+		t.Fatalf("token usage metric has type %T, want int64 histogram", data)
+	}
+	if len(histogram.DataPoints) != 2 {
+		t.Fatalf("token usage data points = %d, want 2", len(histogram.DataPoints))
+	}
+	counts := make(map[string]int64, 2)
+	for _, dataPoint := range histogram.DataPoints {
+		wantBounds := []float64{1, 4, 16, 64, 256, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216, 67108864}
+		if !slices.Equal(dataPoint.Bounds, wantBounds) {
+			t.Errorf("token usage bounds = %v, want %v", dataPoint.Bounds, wantBounds)
+		}
+		tokenType, ok := metricAttribute(dataPoint.Attributes, "gen_ai.token.type")
+		if !ok {
+			t.Fatal("token usage data point is missing gen_ai.token.type")
+		}
+		counts[tokenType] = dataPoint.Sum
+		if operation, _ := metricAttribute(dataPoint.Attributes, "gen_ai.operation.name"); operation != "invoke_agent" {
+			t.Errorf("gen_ai.operation.name = %q, want invoke_agent", operation)
+		}
+		if provider, _ := metricAttribute(dataPoint.Attributes, "gen_ai.provider.name"); provider != "test-provider" {
+			t.Errorf("gen_ai.provider.name = %q, want test-provider", provider)
+		}
+		if _, ok := metricAttribute(dataPoint.Attributes, "gen_ai.agent.name"); ok {
+			t.Error("token usage data point unexpectedly contains gen_ai.agent.name")
+		}
+	}
+	if counts["input"] != 300 {
+		t.Errorf("input token usage = %d, want 300", counts["input"])
+	}
+	if counts["output"] != 30 {
+		t.Errorf("output token usage = %d, want 30", counts["output"])
+	}
+}
+
+func TestOtel_Run_DoesNotRecordUnreportedTokenUsage(t *testing.T) {
+	reader := setupMeter(t)
+	mw := otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{})
+	next := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{MessageID: "no-usage"}, nil)
+		}
+	}
+
+	for range mw.Run(next, t.Context(), nil) {
+	}
+
+	resourceMetrics := collectMetrics(t, reader)
+	if hasMetric(resourceMetrics, "gen_ai.client.token.usage") {
+		t.Error("token usage metric was recorded when the provider reported no usage")
+	}
+	if !hasMetric(resourceMetrics, "gen_ai.client.operation.duration") {
+		t.Error("operation duration metric was not recorded")
+	}
+}
+
+func TestOtel_Run_DoesNotRecordEmptyUsageContent(t *testing.T) {
+	reader := setupMeter(t)
+	mw := otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{})
+	next := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{Contents: []message.Content{&message.UsageContent{}}}, nil)
+		}
+	}
+
+	for range mw.Run(next, t.Context(), nil) {
+	}
+
+	resourceMetrics := collectMetrics(t, reader)
+	if hasMetric(resourceMetrics, "gen_ai.client.token.usage") {
+		t.Error("token usage metric was recorded for an empty usage payload")
+	}
+	if !hasMetric(resourceMetrics, "gen_ai.client.operation.duration") {
+		t.Error("operation duration metric was not recorded")
+	}
+}
+
+func TestOtel_Run_DoesNotRecordTokenMetricForOptionalCountersOnly(t *testing.T) {
+	reader := setupMeter(t)
+	mw := otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{})
+	next := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{Contents: []message.Content{&message.UsageContent{
+				Details: message.UsageDetails{CachedInputTokenCount: 42},
+			}}}, nil)
+		}
+	}
+
+	for range mw.Run(next, t.Context(), nil) {
+	}
+
+	resourceMetrics := collectMetrics(t, reader)
+	if hasMetric(resourceMetrics, "gen_ai.client.token.usage") {
+		t.Error("token usage metric was recorded without input or output counts")
+	}
+}
+
+func TestOtel_Run_MetricErrorAttributes(t *testing.T) {
+	reader := setupMeter(t)
+	mw := otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{})
+	testErr := errors.New("boom")
+	next := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{Contents: []message.Content{&message.UsageContent{
+				Details: message.UsageDetails{InputTokenCount: 10, OutputTokenCount: 5},
+			}}}, testErr)
+		}
+	}
+
+	for range mw.Run(next, t.Context(), nil) {
+	}
+
+	resourceMetrics := collectMetrics(t, reader)
+	var duration, usage metricdata.Aggregation
+	for _, scopeMetrics := range resourceMetrics.ScopeMetrics {
+		for _, m := range scopeMetrics.Metrics {
+			switch m.Name {
+			case "gen_ai.client.operation.duration":
+				duration = m.Data
+			case "gen_ai.client.token.usage":
+				usage = m.Data
+			}
+		}
+	}
+	durationHistogram, ok := duration.(metricdata.Histogram[float64])
+	if !ok || len(durationHistogram.DataPoints) != 1 {
+		t.Fatalf("operation duration metric = %T with %d data points, want one float64 histogram data point", duration, len(durationHistogram.DataPoints))
+	}
+	if errorType, ok := metricAttribute(durationHistogram.DataPoints[0].Attributes, "error.type"); !ok || errorType != "errorString" {
+		t.Errorf("duration error.type = %q, %v; want errorString, true", errorType, ok)
+	}
+	if operation, _ := metricAttribute(durationHistogram.DataPoints[0].Attributes, "gen_ai.operation.name"); operation != "invoke_agent" {
+		t.Errorf("duration gen_ai.operation.name = %q, want invoke_agent", operation)
+	}
+	usageHistogram, ok := usage.(metricdata.Histogram[int64])
+	if !ok {
+		t.Fatalf("token usage metric has type %T, want int64 histogram", usage)
+	}
+	for _, dataPoint := range usageHistogram.DataPoints {
+		if _, ok := metricAttribute(dataPoint.Attributes, "error.type"); ok {
+			t.Error("token usage data point unexpectedly contains error.type")
+		}
+	}
+}
+
+func TestOtel_Run_RecordsMetricsOnEarlyBreak(t *testing.T) {
+	reader := setupMeter(t)
+	mw := otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{})
+	next := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			for range 3 {
+				if !yield(&agent.ResponseUpdate{Contents: []message.Content{&message.UsageContent{
+					Details: message.UsageDetails{InputTokenCount: 10, OutputTokenCount: 5},
+				}}}, nil) {
+					return
+				}
+			}
+		}
+	}
+
+	for range mw.Run(next, t.Context(), nil) {
+		break
+	}
+
+	resourceMetrics := collectMetrics(t, reader)
+	if !hasMetric(resourceMetrics, "gen_ai.client.operation.duration") {
+		t.Error("operation duration metric was not recorded after an early break")
+	}
+	if !hasMetric(resourceMetrics, "gen_ai.client.token.usage") {
+		t.Error("token usage metric was not recorded after an early break")
+	}
 }
 
 func TestOtel_Run_CreatesSpan(t *testing.T) {
