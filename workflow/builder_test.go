@@ -734,7 +734,7 @@ func TestBuilder_Validation_SelfLoopWarning(t *testing.T) {
 	start := newNoOpExecutor("start")
 
 	wf, err := workflow.NewBuilder(start).
-		AddDirectEdge(start, start, true, func(any) bool { return false }).
+		AddEdge(start, start, workflow.WithEdgeCondition(func(any) bool { return false }), workflow.IdempotentEdge()).
 		Build()
 	if err != nil {
 		t.Fatalf("expected no error for self-loop, got %v", err)
@@ -948,6 +948,40 @@ func TestBuilder_Validation_TypeCompatibility_CatchAllSourceSkipped(t *testing.T
 	}
 }
 
+func TestBuilder_DuplicateConditionlessEdgeRejected(t *testing.T) {
+	start := newNoOpExecutor("start")
+	target := newNoOpExecutor("target")
+
+	_, err := workflow.NewBuilder(start).
+		AddEdge(start, target).
+		AddEdge(start, target).
+		Build()
+	if err == nil || !strings.Contains(err.Error(), "already exists without a condition") {
+		t.Fatalf("Build error = %v, want duplicate conditionless edge error", err)
+	}
+}
+
+func TestBuilder_EdgeIdempotencySkipsDuplicateConditionlessEdge(t *testing.T) {
+	start := newNoOpExecutor("start")
+	middle := newNoOpExecutor("middle")
+	target := newNoOpExecutor("target")
+
+	wf, err := workflow.NewBuilder(start).
+		AddEdge(start, middle).
+		AddEdge(start, middle, workflow.IdempotentEdge()).
+		AddEdge(middle, target).
+		Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if got := len(wf.Edges()[start.ID]); got != 1 {
+		t.Fatalf("start edge count = %d, want 1", got)
+	}
+	if got := wf.Edges()[middle.ID][0].Index; got != 2 {
+		t.Fatalf("edge index after skipped duplicate = %d, want 2", got)
+	}
+}
+
 // A conditional edge on a source→target pair must not populate the
 // conditionless-edge dedup set: adding a legitimate conditionless edge on the
 // same pair afterwards should succeed, not be rejected as a duplicate.
@@ -956,7 +990,7 @@ func TestBuilder_ConditionalEdgeDoesNotBlockConditionlessEdge(t *testing.T) {
 	target := newNoOpExecutor("target")
 
 	_, err := workflow.NewBuilder(start).
-		AddDirectEdge(start, target, false, func(any) bool { return true }).
+		AddEdge(start, target, workflow.WithEdgeCondition(func(any) bool { return true })).
 		AddEdge(start, target).
 		Build()
 	if err != nil {
@@ -964,15 +998,15 @@ func TestBuilder_ConditionalEdgeDoesNotBlockConditionlessEdge(t *testing.T) {
 	}
 }
 
-// The idempotent path (AddChain / idempotent=true) must likewise not silently
+// The idempotent path (AddChain / IdempotentEdge) must likewise not silently
 // drop a conditionless edge just because a conditional edge preceded it.
 func TestBuilder_ConditionalEdgeDoesNotDropIdempotentConditionlessEdge(t *testing.T) {
 	start := newNoOpExecutor("start")
 	target := newNoOpExecutor("target")
 
 	wf, err := workflow.NewBuilder(start).
-		AddDirectEdge(start, target, false, func(any) bool { return true }).
-		AddDirectEdge(start, target, true, nil). // idempotent conditionless edge
+		AddEdge(start, target, workflow.WithEdgeCondition(func(any) bool { return true })).
+		AddEdge(start, target, workflow.IdempotentEdge()).
 		Build()
 	if err != nil {
 		t.Fatalf("unexpected build error: %v", err)

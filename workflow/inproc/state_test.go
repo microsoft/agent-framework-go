@@ -127,13 +127,8 @@ func validateState(t *testing.T, expectedValue int) func(*int) *int {
 	}
 }
 
-func maxTurns(limit int) func(any) bool {
-	return func(maybeTurn any) bool {
-		if turn, ok := maybeTurn.(TestTurnToken); ok {
-			return turn.Count < limit
-		}
-		return false
-	}
+func maxTurns(limit int) func(TestTurnToken) bool {
+	return func(turn TestTurnToken) bool { return turn.Count < limit }
 }
 
 func TestInProcessRun_StateShouldPersist_NotCheckpointed(t *testing.T) {
@@ -154,8 +149,8 @@ func TestInProcessRun_StateShouldPersist_NotCheckpointed(t *testing.T) {
 	)
 
 	wf, err := workflow.NewBuilder(writer.Bind()).
-		AddDirectEdge(writer.Bind(), validator.Bind(), false, maxTurns(4)).
-		AddDirectEdge(validator.Bind(), writer.Bind(), false, maxTurns(4)).
+		AddEdge(writer.Bind(), validator.Bind(), workflow.WithEdgeCondition(maxTurns(4))).
+		AddEdge(validator.Bind(), writer.Bind(), workflow.WithEdgeCondition(maxTurns(4))).
 		Build()
 	if err != nil {
 		t.Fatalf("Failed to build workflow: %v", err)
@@ -198,8 +193,8 @@ func TestInProcessRun_StateShouldPersist_Checkpointed(t *testing.T) {
 	)
 
 	wf, err := workflow.NewBuilder(writer.Bind()).
-		AddDirectEdge(writer.Bind(), validator.Bind(), false, maxTurns(4)).
-		AddDirectEdge(validator.Bind(), writer.Bind(), false, maxTurns(4)).
+		AddEdge(writer.Bind(), validator.Bind(), workflow.WithEdgeCondition(maxTurns(4))).
+		AddEdge(validator.Bind(), writer.Bind(), workflow.WithEdgeCondition(maxTurns(4))).
 		Build()
 	if err != nil {
 		t.Fatalf("Failed to build workflow: %v", err)

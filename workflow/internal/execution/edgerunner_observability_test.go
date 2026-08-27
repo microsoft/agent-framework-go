@@ -317,12 +317,15 @@ func newTestWorkflow(t *testing.T, edges ...workflow.Edge) (*workflow.Workflow, 
 		opts := edgeOptions(edge)
 		switch {
 		case len(sources) == 1 && len(sinks) == 1:
-			builder.AddDirectEdge(sources[0], sinks[0], false, edge.Condition, opts...)
+			if edge.Condition != nil {
+				opts = append(opts, workflow.WithEdgeCondition(edge.Condition))
+			}
+			builder.AddEdge(sources[0], sinks[0], opts...)
 		case len(sources) == 1:
 			builder.AddFanOutEdge(sources[0], sinks, opts...)
 		default:
 			for _, source := range sources[1:] {
-				builder.AddDirectEdge(sources[0], source, true, nil)
+				builder.AddEdge(sources[0], source, workflow.IdempotentEdge())
 			}
 			builder.AddFanInBarrierEdge(sources, sinks[0], opts...)
 		}

@@ -2441,14 +2441,14 @@ func emitTextUpdate(ctx *workflow.Context, executorID, text string) error {
 
 func addCrossExecutorEdges(builder *workflow.Builder, startBinding, downstreamBinding workflow.ExecutorBinding) *workflow.Builder {
 	return builder.
-		AddDirectEdge(startBinding, downstreamBinding, false, func(value any) bool {
+		AddEdge(startBinding, downstreamBinding, workflow.WithEdgeCondition(func(value any) bool {
 			_, ok := value.([]*message.Message)
 			return ok
-		}).
-		AddDirectEdge(startBinding, downstreamBinding, false, func(value any) bool {
+		})).
+		AddEdge(startBinding, downstreamBinding, workflow.WithEdgeCondition(func(value any) bool {
 			_, ok := value.(workflow.TurnToken)
 			return ok
-		})
+		}))
 }
 
 func requireWorkflowFunctionCallID(t *testing.T, response *agent.Response) string {

@@ -39,7 +39,7 @@ func TestWorkflowInfoMatch_PreservesEdgeMultiplicity(t *testing.T) {
 	}
 	incompatible, err := workflow.NewBuilder(a).
 		AddEdge(a, b).
-		AddDirectEdge(a, b, false, func(any) bool { return true }).
+		AddEdge(a, b, workflow.WithEdgeCondition(func(any) bool { return true })).
 		Build()
 	if err != nil {
 		t.Fatalf("Build incompatible: %v", err)
