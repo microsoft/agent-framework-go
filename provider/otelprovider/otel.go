@@ -136,9 +136,12 @@ func (m *mw) recordTokenUsage(ctx context.Context, a *agent.Agent, usage message
 	}
 
 	providerName := genaiconv.ProviderNameAttr(cmp.Or(a.ProviderName(), "unknown"))
-	m.tokenUsage.Record(ctx, usage.InputTokenCount, genaiconv.OperationNameInvokeAgent, providerName, genaiconv.TokenTypeInput)
-	m.tokenUsage.Record(ctx, usage.OutputTokenCount, genaiconv.OperationNameInvokeAgent, providerName, genaiconv.TokenTypeOutput)
-}
+	if usage.InputTokenCount != 0 {
+		m.tokenUsage.Record(ctx, usage.InputTokenCount, genaiconv.OperationNameInvokeAgent, providerName, genaiconv.TokenTypeInput)
+	}
+	if usage.OutputTokenCount != 0 {
+		m.tokenUsage.Record(ctx, usage.OutputTokenCount, genaiconv.OperationNameInvokeAgent, providerName, genaiconv.TokenTypeOutput)
+	}
 
 // setUsage records token counts on the span. Zero-valued optional counters are left
 // off rather than written as 0: a provider that does not report cached or reasoning
