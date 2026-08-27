@@ -248,6 +248,7 @@ func toUsageDetails(usage anthropic.Usage) message.UsageDetails {
 		OutputTokenCount:      usage.OutputTokens,
 		TotalTokenCount:       inputTokens + usage.OutputTokens,
 		CachedInputTokenCount: usage.CacheReadInputTokens,
+		ReasoningTokenCount:   usage.OutputTokensDetails.ThinkingTokens,
 	}
 	if usage.CacheCreationInputTokens != 0 {
 		if details.AdditionalCounts == nil {
@@ -264,6 +265,7 @@ func toUsageDetailsDelta(usage anthropic.MessageDeltaUsage) message.UsageDetails
 		OutputTokens:             usage.OutputTokens,
 		CacheCreationInputTokens: usage.CacheCreationInputTokens,
 		CacheReadInputTokens:     usage.CacheReadInputTokens,
+		OutputTokensDetails:      usage.OutputTokensDetails,
 	})
 }
 

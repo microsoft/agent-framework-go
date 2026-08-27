@@ -129,7 +129,7 @@ func minimalMessageResponse(payload string) string {
 func TestStreamingUsage_DoesNotDoubleCountOutputTokens(t *testing.T) {
 	output := "" +
 		"event: message_start\n" +
-		`data: {"type":"message_start","message":{"id":"m1","type":"message","role":"assistant","content":[],"model":"claude-3-5-sonnet-20241022","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1,"cache_creation_input_tokens":3,"cache_read_input_tokens":7}}}` + "\n\n" +
+		`data: {"type":"message_start","message":{"id":"m1","type":"message","role":"assistant","content":[],"model":"claude-3-5-sonnet-20241022","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1,"cache_creation_input_tokens":3,"cache_read_input_tokens":7,"output_tokens_details":{"thinking_tokens":1}}}}` + "\n\n" +
 		"event: content_block_start\n" +
 		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}` + "\n\n" +
 		"event: content_block_delta\n" +
@@ -137,7 +137,7 @@ func TestStreamingUsage_DoesNotDoubleCountOutputTokens(t *testing.T) {
 		"event: content_block_stop\n" +
 		`data: {"type":"content_block_stop","index":0}` + "\n\n" +
 		"event: message_delta\n" +
-		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}` + "\n\n" +
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5,"output_tokens_details":{"thinking_tokens":3}}}` + "\n\n" +
 		"event: message_stop\n" +
 		`data: {"type":"message_stop"}` + "\n\n"
 
@@ -165,6 +165,9 @@ func TestStreamingUsage_DoesNotDoubleCountOutputTokens(t *testing.T) {
 	}
 	if usage.Details.OutputTokenCount != 5 {
 		t.Errorf("OutputTokenCount = %d, want 5 (message_delta final count, not 1+5)", usage.Details.OutputTokenCount)
+	}
+	if usage.Details.ReasoningTokenCount != 3 {
+		t.Errorf("ReasoningTokenCount = %d, want 3", usage.Details.ReasoningTokenCount)
 	}
 	if usage.Details.InputTokenCount != 20 {
 		t.Errorf("InputTokenCount = %d, want 20 (uncached + cache creation + cache read)", usage.Details.InputTokenCount)
