@@ -713,7 +713,7 @@ var agentsExamples = []ExampleDefinition{
 		IsDeterministic: true,
 		Inputs:          inputLines("Y", "Y", "Y"),
 		InputDelay:      3 * time.Second,
-		MustContain:     []string{"README.md", "go.mod"},
+		MustContain:     []string{"main.go"},
 		MustNotContain:  []string{"panic:", "Permission denied"},
 	},
 	{

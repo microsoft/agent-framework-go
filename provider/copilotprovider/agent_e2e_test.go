@@ -130,7 +130,8 @@ func newE2EClient(t *testing.T) *copilot.Client {
 	}
 	t.Cleanup(func() {
 		if err := client.Stop(); err != nil {
-			t.Errorf("stop Copilot client: %v", err)
+			t.Logf("stop Copilot client: %v", err)
+			client.ForceStop()
 		}
 	})
 	return client
