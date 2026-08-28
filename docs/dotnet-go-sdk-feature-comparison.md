@@ -1,6 +1,6 @@
 # .NET and Go SDK Feature Comparison
 
-Date: July 2, 2026
+Date: August 28, 2026
 
 This document compares the .NET SDK at `microsoft/agent-framework/dotnet` with the Go SDK in this repository. It is based on the package, sample, and public API inventory present on this date.
 
@@ -43,7 +43,7 @@ Within overlapping features, the main misalignments are API shape and ecosystem 
 | Hosted/server-side tools | Foundry/OpenAI samples for code interpreter, file search, web search, OpenAPI, Bing custom search, SharePoint, Microsoft Fabric, memory search, Toolbox, hosted MCP. | `tool/hostedtool` declarations for web search, file search, code interpreter, MCP server; Foundry-first samples cover code interpreter, web search, MCP client tools, and local MCP tools; OpenAI Responses hosted-tool coverage remains provider-specific. | Partial | Go has declaration types and initial Foundry/OpenAI Responses hosted-tool coverage, but fewer service-specific Foundry hosted tool integrations and no Foundry toolbox lifecycle sample. |
 | Agent as function tool | Agents can be converted/bound as tools in samples and workflow builders. | `tool/agenttool.New` wraps an agent as a `FuncTool`. | Aligned | API shape differs; Go exposes a direct package. |
 | Agent as MCP tool/server | .NET sample `Agent_Step07_AsMcpTool` and durable sample for agent as MCP tool. | `tool/mcptool.AddTool`, `examples/02-agents/mcp/agent_mcp_server`, `step10_as_mcp_tool`. | Aligned | Durable MCP hosting is .NET only. |
-| MCP client tools | .NET hosted MCP and MCP declarative workflow packages/samples. | `mcptool.Connect`, `ListTools`, wrappers over MCP client sessions. | Partial | Go has the basic MCP client/tool bridge; .NET has more hosting/declarative samples. |
+| MCP client tools | .NET hosted MCP and MCP declarative workflow packages/samples, including task-aware tool wrappers for the 2026-07-28 MCP Tasks extension with polling, input requests, and best-effort remote cancellation. | `mcptool.Connect`, `ListTools`, wrappers over MCP client sessions. | Partial | Go has the basic MCP client/tool bridge, but it does not yet expose task-aware MCP tool wrappers or configurable Tasks-extension polling/cancellation/input-request limits, and .NET also has more hosting/declarative samples. |
 | Skills | File-based, inline/code-defined, class-based skills, resources, scripts, DI-backed skills. | `agent/skills`, `fsskills`, file-based, in-memory/code-defined, mixed skills, resources, scripts with script runners. | Partial | Go lacks class-based skill reflection and DI skill support. |
 | OpenAI provider | OpenAI Chat Completions, Responses, Azure OpenAI, background responses, code interpreter file download samples. | `openaiprovider.NewAgent`, `NewChatCompletionsAgent`, `NewResponsesAgent`, Azure OpenAI through the OpenAI Go Azure client, continuation/background response support, and explicit OpenAI/Azure provider samples. | Partial | General Go samples prefer Foundry agents; OpenAI coverage remains provider-specific and has fewer samples for background responses and hosted tools. |
 | Anthropic provider | Anthropic packages and reasoning/skills/function-tool samples. | `anthropicprovider.NewAgent`, message params option. | Partial | Go has provider support, but sample coverage is smaller. |
@@ -126,6 +126,7 @@ Within overlapping features, the main misalignments are API shape and ecosystem 
 ### Hosting and Developer Experience
 
 - Go has useful protocol handlers for A2A and AGUI, but .NET goes further with ASP.NET Core endpoint extensions, Azure Functions hosting, OpenAI-compatible hosting, Foundry hosting, DevUI, and Aspire integration. The .NET `samples/04-hosting/FoundryHostedAgents` family remains unported in Go.
+- Go's MCP client bridge covers basic tool discovery and invocation, but it does not yet expose task-aware wrappers for the 2026-07-28 MCP Tasks extension (server-directed polling, input-required loops, or best-effort remote cancellation).
 - Go has agent OpenTelemetry middleware and workflow trace context plumbing. .NET has richer observability samples and workflow builder instrumentation.
 - .NET includes evaluation and a broader harness package set. Go now includes initial harness packages for agent mode, todo tracking, tool approval, tool auto-call, and loop reinvocation; other harness capabilities still require custom tools, context providers, or test helpers.
 
