@@ -175,6 +175,24 @@ func newContentAgent(updates ...*agent.ResponseUpdate) *agent.Agent {
 	)
 }
 
+func newCancelOnCompletionAgent(cancel context.CancelFunc) *agent.Agent {
+	run := func(ctx context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			if !yield(&agent.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: []message.Content{&message.TextContent{Text: "done"}},
+			}, nil) {
+				return
+			}
+			cancel()
+		}
+	}
+	return agent.New(
+		agent.ProviderConfig{ProviderName: "cancel-on-completion", Run: run},
+		agent.Config{ID: testAgentID, Name: testAgentName, DisableFuncAutoCall: true},
+	)
+}
+
 func newNamedNoopAgent(id string, name string) *agent.Agent {
 	run := func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
@@ -470,6 +488,77 @@ func TestHostedAgent_EmitsResponseIfConfigured(t *testing.T) {
 				t.Errorf("expected no response outputs, got %d", len(responses))
 			}
 		})
+	}
+}
+
+func TestHostedAgent_CancellationSuppressesFinalResponseEmission(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	binding := agentworkflow.New(newCancelOnCompletionAgent(cancel), agentworkflow.Config{
+		EmitResponseEvents:      true,
+		ForwardIncomingMessages: new(false),
+	})
+	executor, err := binding.CreateInstance("")
+	if err != nil {
+		t.Fatalf("CreateInstance: %v", err)
+	}
+
+	state := map[string]any{}
+	var yielded []any
+	var sent []any
+	wctx := &workflow.Context{
+		Context: ctx,
+		AddEvent: func(workflow.Event) error {
+			return nil
+		},
+		SendMessage: func(_ string, msg any) error {
+			sent = append(sent, msg)
+			return nil
+		},
+		YieldOutput: func(output any) error {
+			yielded = append(yielded, output)
+			return nil
+		},
+		ReadState: func(key string, _ string) (any, error) {
+			return state[key], nil
+		},
+		ReadOrInitState: func(key string, _ string, init func(context.Context, string, string) (any, error)) (any, error) {
+			if value, ok := state[key]; ok {
+				return value, nil
+			}
+			value, err := init(ctx, key, "")
+			if err != nil {
+				return nil, err
+			}
+			state[key] = value
+			return value, nil
+		},
+		QueueStateUpdate: func(key string, _ string, value any) error {
+			if value == nil {
+				delete(state, key)
+				return nil
+			}
+			state[key] = value
+			return nil
+		},
+	}
+
+	if _, err := executor.Execute(wctx, &message.Message{
+		Role:     message.RoleUser,
+		Contents: []message.Content{&message.TextContent{Text: "go"}},
+	}); err != nil {
+		t.Fatalf("buffer message: %v", err)
+	}
+
+	if _, err := executor.Execute(wctx, workflow.TurnToken{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("turn error = %v, want context canceled", err)
+	}
+	if len(yielded) != 0 {
+		t.Fatalf("yielded outputs = %d, want 0 after cancellation", len(yielded))
+	}
+	if len(sent) != 0 {
+		t.Fatalf("sent messages = %d, want 0 after cancellation", len(sent))
 	}
 }
 

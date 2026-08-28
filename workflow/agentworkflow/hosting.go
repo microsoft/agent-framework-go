@@ -430,6 +430,11 @@ func (h *hostExecutor) runAgentAndDispatch(wctx *workflow.Context, messages []*m
 		}
 		resp.Update(update)
 	}
+	// Match .NET hosting: if cancellation arrives after the last streamed update
+	// but before the turn is finalized, do not emit the aggregated completion.
+	if err := wctx.Err(); err != nil {
+		return err
+	}
 	resp.Coalesce()
 
 	// Stamp this hosting executor's name on every aggregated message,
