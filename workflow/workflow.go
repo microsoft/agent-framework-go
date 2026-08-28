@@ -182,6 +182,30 @@ func sameOwnershipToken(left any, right any) bool {
 	return leftOK && rightOK && leftType == rightType && leftPtr == rightPtr
 }
 
+func (w *Workflow) hasResettableExecutors() bool {
+	for _, binding := range w.executorBindings {
+		if binding.ResetFunc != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func ownershipConflictError(subworkflow bool, owner *workflowOwner) error {
+	switch {
+	case subworkflow && owner.subworkflow:
+		return errors.New("cannot use a Workflow as a subworkflow of multiple parent workflows")
+	case subworkflow && !owner.subworkflow:
+		return errors.New("cannot use a running Workflow as a subworkflow")
+	case !subworkflow && owner.subworkflow:
+		return errors.New("cannot directly run a Workflow that is a subworkflow of another workflow")
+	case !subworkflow && !owner.subworkflow:
+		return errors.New("cannot use a Workflow that is already owned by another runner or parent workflow")
+	default:
+		panic("unreachable")
+	}
+}
+
 // Name returns the optional human-readable workflow name.
 func (w *Workflow) Name() string {
 	if w == nil {
@@ -337,12 +361,7 @@ func (w *Workflow) describeOutputYields() ([]reflect.Type, error) {
 // HasResettableExecutors reports whether any executor binding can reset shared
 // resources between workflow runs.
 func (w *Workflow) HasResettableExecutors() bool {
-	for _, binding := range w.executorBindings {
-		if binding.ResetFunc != nil {
-			return true
-		}
-	}
-	return false
+	return w.hasResettableExecutors()
 }
 
 // ContextWithTelemetry returns ctx annotated with the workflow's telemetry
@@ -368,7 +387,7 @@ func (w *Workflow) AllowConcurrent() bool {
 // TryReset attempts to reset all shared executor bindings that require reset
 // support before workflow reuse.
 func (w *Workflow) TryReset() bool {
-	if !w.HasResettableExecutors() {
+	if !w.hasResettableExecutors() {
 		return false
 	}
 	for _, er := range w.executorBindings {
@@ -429,22 +448,11 @@ func (w *Workflow) TakeOwnership(token any, newToken any, subworkflow bool) erro
 		}
 
 		// Someone else owns the workflow
-		switch {
-		case subworkflow && owner.subworkflow:
-			return errors.New("cannot use a Workflow as a subworkflow of multiple parent workflows")
-		case subworkflow && !owner.subworkflow:
-			return errors.New("cannot use a running Workflow as a subworkflow")
-		case !subworkflow && owner.subworkflow:
-			return errors.New("cannot directly run a Workflow that is a subworkflow of another workflow")
-		case !subworkflow && !owner.subworkflow:
-			return errors.New("cannot use a Workflow that is already owned by another runner or parent workflow")
-		default:
-			panic("unreachable")
-		}
+		return ownershipConflictError(subworkflow, owner)
 	}
 
 	// Successfully took ownership (or was already owned by us)
-	w.needsReset.Store(w.HasResettableExecutors())
+	w.needsReset.Store(w.hasResettableExecutors())
 	return nil
 }
 
