@@ -1,10 +1,6 @@
 name: Live examples
 
 on:
-  # Remove this branch trigger after the revised workflow passes once.
-  push:
-    branches:
-      - dev/mclayton/live-examples-poc
   schedule:
     - cron: "17 9 * * 1-5"
   workflow_dispatch:
@@ -20,7 +16,7 @@ concurrency:
 jobs:
   verify:
     name: Verify examples and Copilot provider
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev/mclayton/live-examples-poc'
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
