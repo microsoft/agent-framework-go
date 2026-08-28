@@ -1,6 +1,10 @@
-name: Live Copilot example
+name: Live examples
 
 on:
+  # Remove this branch trigger after the revised workflow passes once.
+  push:
+    branches:
+      - dev/mclayton/live-examples-poc
   schedule:
     - cron: "17 9 * * 1-5"
   workflow_dispatch:
@@ -10,15 +14,15 @@ permissions:
   copilot-requests: write
 
 concurrency:
-  group: live-copilot-example
+  group: live-examples
   cancel-in-progress: false
 
 jobs:
   verify:
-    name: Verify Copilot example
-    if: github.ref == 'refs/heads/main'
+    name: Verify examples and Copilot provider
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev/mclayton/live-examples-poc'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -40,34 +44,60 @@ jobs:
         shell: bash
         run: npm install --global @github/copilot@1.0.75
 
-      - name: Run live example
+      - name: Verify examples
+        id: examples
+        continue-on-error: true
         shell: bash
         env:
-          COPILOT_GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set +e
           go run ./cmd/verifyexamples \
-            02_agents_providers_github_copilot_function_tool \
-            --parallel 1 \
-            --log live-copilot-example.log \
-            --md live-copilot-example.md
+            --parallel 4 \
+            --log live-examples.log \
+            --md live-examples.md
           status=$?
           set -e
 
-          if [[ -f live-copilot-example.md ]]; then
-            cat live-copilot-example.md >> "$GITHUB_STEP_SUMMARY"
+          if [[ -f live-examples.md ]]; then
+            cat live-examples.md >> "$GITHUB_STEP_SUMMARY"
           else
             echo "The example verifier exited before it could write a report." >> "$GITHUB_STEP_SUMMARY"
           fi
           exit "$status"
 
+      - name: Run Copilot integration tests
+        id: copilot_integration
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -o pipefail
+          go test -count=1 -v ./provider/copilotprovider -run '^TestE2E_' \
+            2>&1 | tee copilot-integration-tests.log
+
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: live-copilot-example-results
+          name: live-example-results
           path: |
-            live-copilot-example.log
-            live-copilot-example.md
+            live-examples.log
+            live-examples.md
+            copilot-integration-tests.log
           if-no-files-found: warn
           retention-days: 14
+
+      - name: Check results
+        if: always()
+        shell: bash
+        env:
+          EXAMPLES_OUTCOME: ${{ steps.examples.outcome }}
+          COPILOT_INTEGRATION_OUTCOME: ${{ steps.copilot_integration.outcome }}
+        run: |
+          if [[ "$EXAMPLES_OUTCOME" != "success" || "$COPILOT_INTEGRATION_OUTCOME" != "success" ]]; then
+            echo "Example verification or Copilot integration tests failed."
+            exit 1
+          fi

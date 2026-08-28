@@ -4,8 +4,6 @@ package main
 
 import "time"
 
-const canaryResult = "agent-framework-go-copilot-tool-ok"
-
 var exampleSets = map[string][]ExampleDefinition{
 	"01-get-started": getStartedExamples,
 	"02-agents":      agentsExamples,
@@ -710,20 +708,12 @@ var agentsExamples = []ExampleDefinition{
 		SkipReason:                   "Spawns a local stdio MCP server subprocess (go run) that requires live Foundry credentials.",
 	},
 	{
-		Name:        "02_agents_providers_github_copilot",
-		ProjectPath: "examples/02-agents/providers/github-copilot",
-		Inputs:      inputLines("Y", "Y", "Y"),
-		InputDelay:  3 * time.Second,
-		ExpectedOutputDescription: []string{
-			"The output should contain a response listing files in the current directory.",
-			"The output should not contain error messages or stack traces.",
-		},
-	},
-	{
-		Name:            "02_agents_providers_github_copilot_function_tool",
-		ProjectPath:     "examples/02-agents/providers/github-copilot/function_tool",
+		Name:            "02_agents_providers_github_copilot",
+		ProjectPath:     "examples/02-agents/providers/github-copilot",
 		IsDeterministic: true,
-		MustContain:     []string{canaryResult},
+		Inputs:          inputLines("Y", "Y", "Y"),
+		InputDelay:      3 * time.Second,
+		MustContain:     []string{"README.md", "go.mod"},
 		MustNotContain:  []string{"panic:", "Permission denied"},
 	},
 	{
@@ -936,18 +926,15 @@ var workflowExamples = []ExampleDefinition{
 		},
 	},
 	{
-		Name:        "03_workflows_checkpoint_checkpoint_with_human_in_the_loop",
-		ProjectPath: "examples/03-workflows/checkpoint/checkpoint_with_human_in_the_loop",
-		Inputs:      inputLines("50", "25", "40", "45", "42", "50", "25", "40", "45", "42"),
-		InputDelay:  time.Second,
+		Name:            "03_workflows_checkpoint_checkpoint_with_human_in_the_loop",
+		ProjectPath:     "examples/03-workflows/checkpoint/checkpoint_with_human_in_the_loop",
+		IsDeterministic: true,
+		Inputs:          inputLines("50", "25", "40", "45", "42", "50", "25", "40", "45", "42"),
+		InputDelay:      time.Second,
 		MustContain: []string{
 			"Workflow completed with result:",
 			"Number of checkpoints created:",
 			"Restored run completed with result:",
-		},
-		ExpectedOutputDescription: []string{
-			"The output should show a number guessing workflow with higher/lower hints that eventually reaches the correct number.",
-			"The output should demonstrate checkpoint save and restore behavior.",
 		},
 	},
 	{
@@ -1001,14 +988,12 @@ var workflowExamples = []ExampleDefinition{
 		MustContain:     []string{"[intermediate] normalized hello workflow", "[final] Summary of"},
 	},
 	{
-		Name:        "03_workflows_human_in_the_loop_human_in_the_loop_basic",
-		ProjectPath: "examples/03-workflows/human-in-the-loop/human_in_the_loop_basic",
-		Inputs:      inputLines("50", "25", "40", "45", "42"),
-		InputDelay:  time.Second,
-		MustContain: []string{"found in"},
-		ExpectedOutputDescription: []string{
-			"The output should show a number guessing game with higher/lower hints that eventually reaches the correct number 42.",
-		},
+		Name:            "03_workflows_human_in_the_loop_human_in_the_loop_basic",
+		ProjectPath:     "examples/03-workflows/human-in-the-loop/human_in_the_loop_basic",
+		IsDeterministic: true,
+		Inputs:          inputLines("50", "25", "40", "45", "42"),
+		InputDelay:      time.Second,
+		MustContain:     []string{"42 found in 5 tries!"},
 	},
 	{
 		Name:            "03_workflows_human_in_the_loop_imperative_request",
