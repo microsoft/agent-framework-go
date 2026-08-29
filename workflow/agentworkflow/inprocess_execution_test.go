@@ -63,7 +63,7 @@ func newEchoAgent(name string) *agent.Agent {
 func buildSequentialWorkflow(t *testing.T, a *agent.Agent) *workflow.Workflow {
 	t.Helper()
 	binding := agentworkflow.New(a, agentworkflow.Config{
-		EmitUpdateEvents:   true,
+		EmitUpdateEvents:   new(true),
 		EmitResponseEvents: true,
 	})
 	wf, err := workflow.NewBuilder(binding).WithOutputFrom(binding).Build()

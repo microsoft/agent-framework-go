@@ -127,27 +127,20 @@ func (wb *Builder) BindExecutor(binding ExecutorBinding) *Builder {
 	return wb
 }
 
-// AddEdge adds a single unconditional edge from source to target. It is a
-// convenience wrapper over [Builder.AddDirectEdge] with idempotent=false and a
-// nil condition.
+// AddEdge adds a direct edge from source to target. Pass [WithEdgeCondition] to
+// make the edge conditional. Adding a duplicate conditionless edge records an
+// error unless [IdempotentEdge] is supplied. Only conditionless edges
+// participate in the duplicate-edge check.
 func (wb *Builder) AddEdge(source ExecutorBinding, target ExecutorBinding, opts ...EdgeOption) *Builder {
-	return wb.AddDirectEdge(source, target, false, nil, opts...)
-}
-
-// AddDirectEdge adds an edge from source to target. A non-nil condition makes
-// the edge fire only when condition returns true; a nil condition makes it
-// unconditional. When a matching conditionless edge already exists, idempotent=true
-// silently skips the duplicate while idempotent=false records an error. Only
-// conditionless edges participate in the duplicate-edge check.
-func (wb *Builder) AddDirectEdge(source ExecutorBinding, target ExecutorBinding, idempotent bool, condition func(any) bool, opts ...EdgeOption) *Builder {
 	if wb.err != nil {
 		return wb
 	}
 	conn := newDirectEdgeConnection(source.ID, target.ID)
-	if condition == nil && slices.ContainsFunc(wb.conditionlessConnections, func(c EdgeConnection) bool {
+	config := normalizeEdgeOptions(opts)
+	if config.condition == nil && slices.ContainsFunc(wb.conditionlessConnections, func(c EdgeConnection) bool {
 		return conn.Equal(c)
 	}) {
-		if idempotent {
+		if config.idempotent {
 			return wb
 		}
 		wb.err = fmt.Errorf("an edge from '%s' to '%s' already exists without a condition", source.ID, target.ID)
@@ -158,15 +151,14 @@ func (wb *Builder) AddDirectEdge(source ExecutorBinding, target ExecutorBinding,
 	}
 	edge := Edge{
 		Connection: conn,
-		Condition:  condition,
 		Index:      wb.edgeIdx(),
 	}
-	applyEdgeOptions(&edge, opts)
+	config.apply(&edge)
 	wb.addEdgeForSource(source.ID, edge)
 	// Only conditionless edges participate in the conditionless-edge dedup set;
 	// appending conditional edges here would wrongly make a later conditionless
 	// edge on the same source→target pair look like a duplicate.
-	if condition == nil {
+	if edge.Condition == nil {
 		wb.conditionlessConnections = append(wb.conditionlessConnections, conn)
 	}
 	return wb
@@ -199,7 +191,7 @@ func (wb *Builder) AddFanOutEdge(source ExecutorBinding, targets []ExecutorBindi
 		Connection: conn,
 		Index:      wb.edgeIdx(),
 	}
-	applyEdgeOptions(&edge, opts)
+	normalizeEdgeOptions(opts).apply(&edge)
 	wb.addEdgeForSource(source.ID, edge)
 	return wb
 }
@@ -228,7 +220,7 @@ func (wb *Builder) AddFanInBarrierEdge(sources []ExecutorBinding, target Executo
 		Connection: newEdgeConnection(sourceIDs, []string{target.ID}),
 		Index:      wb.edgeIdx(),
 	}
-	applyEdgeOptions(&edge, opts)
+	normalizeEdgeOptions(opts).apply(&edge)
 	for _, id := range sourceIDs {
 		wb.addEdgeForSource(id, edge)
 	}
@@ -579,7 +571,7 @@ func (wb *Builder) AddChain(source ExecutorBinding, executors []ExecutorBinding,
 			}
 			seen[exec.ID] = struct{}{}
 		}
-		wb.AddDirectEdge(current, exec, true /*idempotent*/, nil)
+		wb.AddEdge(current, exec, IdempotentEdge())
 		if wb.err != nil {
 			return wb
 		}

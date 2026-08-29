@@ -19,6 +19,12 @@ func (unserializableValue) MarshalJSON() ([]byte, error) {
 	return nil, errors.New("marshal failed")
 }
 
+type panicSerializableValue struct{}
+
+func (panicSerializableValue) MarshalJSON() ([]byte, error) {
+	panic("marshal panic")
+}
+
 func attributeValue(t *testing.T, attrs []workflowobservability.Attribute, key string) string {
 	t.Helper()
 	for _, attr := range attrs {
@@ -131,6 +137,18 @@ func TestSerializedAttributeUsesFallbackForMarshalErrors(t *testing.T) {
 	}
 }
 
+func TestSerializedAttributeUsesFallbackForMarshalPanics(t *testing.T) {
+	attr := observability.SerializedAttribute("message.content", panicSerializableValue{})
+	value, ok := attr.Value.(string)
+	if !ok {
+		t.Fatalf("attribute value type = %T, want string", attr.Value)
+	}
+	want := "[Unserializable: observability_test.panicSerializableValue]"
+	if value != want {
+		t.Fatalf("attribute value = %q, want %q", value, want)
+	}
+}
+
 func TestSensitiveDataUsesFallbackForExecutorInputAndOutput(t *testing.T) {
 	span := &fakeSpan{}
 	telemetry := observability.New(observability.Options{
@@ -146,6 +164,29 @@ func TestSensitiveDataUsesFallbackForExecutorInputAndOutput(t *testing.T) {
 	telemetry.SetExecutorOutput(activity, message)
 
 	want := "[Unserializable: observability_test.unserializableValue]"
+	if got := attributeValue(t, span.attrs, observability.TagExecutorInput); got != want {
+		t.Fatalf("executor.input = %q, want %q", got, want)
+	}
+	if got := attributeValue(t, span.attrs, observability.TagExecutorOutput); got != want {
+		t.Fatalf("executor.output = %q, want %q", got, want)
+	}
+}
+
+func TestSensitiveDataUsesFallbackForExecutorInputAndOutputPanics(t *testing.T) {
+	span := &fakeSpan{}
+	telemetry := observability.New(observability.Options{
+		Tracer:              &fakeTracer{span: span},
+		EnableSensitiveData: true,
+	})
+
+	message := panicSerializableValue{}
+	_, activity := telemetry.StartExecutorProcess(context.Background(), "exec1", "pkg.Type", "message", message, nil)
+	if activity == nil {
+		t.Fatal("expected an activity span")
+	}
+	telemetry.SetExecutorOutput(activity, message)
+
+	want := "[Unserializable: observability_test.panicSerializableValue]"
 	if got := attributeValue(t, span.attrs, observability.TagExecutorInput); got != want {
 		t.Fatalf("executor.input = %q, want %q", got, want)
 	}

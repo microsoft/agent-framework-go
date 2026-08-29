@@ -99,8 +99,8 @@ func TestPostRequestFromExecutor(t *testing.T) {
 		return &workflow.Executor{
 			ID: id,
 
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.YieldsOutputType(reflect.TypeFor[string]())
 				rb.RouteBuilder.
@@ -182,8 +182,8 @@ func TestPostRequestRoutingToOwner(t *testing.T) {
 		return &workflow.Executor{
 			ID: startID,
 
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.SendsMessageType(reflect.TypeFor[string]())
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(wctx *workflow.Context, msg any) (any, error) {
@@ -205,8 +205,8 @@ func TestPostRequestRoutingToOwner(t *testing.T) {
 		return &workflow.Executor{
 			ID: askerID,
 
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.YieldsOutputType(reflect.TypeFor[string]())
 				rb.RouteBuilder.
@@ -271,8 +271,8 @@ func TestExternalResponse_UnsolicitedResponseErrors(t *testing.T) {
 		return &workflow.Executor{
 			ID: id,
 
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(_ *workflow.Context, _ any) (any, error) {
 					return nil, nil
@@ -333,8 +333,8 @@ func TestExternalResponse_RejectsForgedPortIDWithoutConsumingRequest(t *testing.
 		return &workflow.Executor{
 			ID: id,
 
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.YieldsOutputType(reflect.TypeFor[int]())
 				rb.RouteBuilder.
@@ -434,9 +434,9 @@ func TestCheckpoint_RequestPortRestoresWrappedRequests(t *testing.T) {
 		ImplementationID: "*workflow.Executor",
 		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
 			return &workflow.Executor{
-				ID: sourceID,
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
+				ID:                                 sourceID,
+				AutoSendMessageHandlerResultObject: new(false),
+				AutoYieldOutputHandlerResultObject: new(false),
 				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 					rb.SendsMessageType(reflect.TypeFor[*workflow.ExternalRequest]())
 					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(wctx *workflow.Context, _ any) (any, error) {
@@ -467,9 +467,9 @@ func TestCheckpoint_RequestPortRestoresWrappedRequests(t *testing.T) {
 				return nil, nil
 			}
 			return &workflow.Executor{
-				ID: sinkID,
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
+				ID:                                 sinkID,
+				AutoSendMessageHandlerResultObject: new(false),
+				AutoYieldOutputHandlerResultObject: new(false),
 				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 					rb.RouteBuilder.
 						AddHandlerRaw(reflect.TypeFor[*workflow.ExternalResponse](), nil, func(_ *workflow.Context, msg any) (any, error) {

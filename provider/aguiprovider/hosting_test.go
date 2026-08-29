@@ -639,3 +639,28 @@ func TestHandler_MidStreamError_ClientObservesErrorContent(t *testing.T) {
 		t.Fatalf("expected client to observe an *message.ErrorContent from RUN_ERROR, got messages %#v", resp.Messages)
 	}
 }
+
+func TestHandler_URIContentEmittedAsText(t *testing.T) {
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
+				MessageID: "msg-1",
+				Role:      message.RoleAssistant,
+				Contents:  message.Contents{&message.URIContent{URI: "https://example.com/generated.png", MediaType: "image/png"}},
+			}, nil)
+		}
+	})
+	h := aguiprovider.NewJSONHTTPHandler(a, aguiprovider.HandlerConfig{})
+
+	body := `{"threadId":"thread-1","runId":"run-1","messages":[{"id":"u1","role":"user","content":"ping"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if content := rr.Body.String(); !strings.Contains(content, "https://example.com/generated.png") {
+		t.Fatalf("expected URIContent URI surfaced in SSE payload, got %q", content)
+	}
+}

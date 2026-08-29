@@ -347,9 +347,9 @@ func TestExecutor_ExtendProtocolAndLifecycleInOrder(t *testing.T) {
 		AddEvent: func(workflow.Event) error { return nil },
 	}
 	executor := workflow.Executor{
-		ID: "composed",
-		DisableAutoSendMessageHandlerResultObject: true,
-		DisableAutoYieldOutputHandlerResultObject: true,
+		ID:                                 "composed",
+		AutoSendMessageHandlerResultObject: new(false),
+		AutoYieldOutputHandlerResultObject: new(false),
 	}
 	executor.Extend(&workflow.Executor{
 		InitializeFunc: func(*workflow.Context) error {
@@ -546,8 +546,8 @@ func TestExecutorDescribeProtocol_RespectsAutoReturnOptions(t *testing.T) {
 			executor := &workflow.Executor{
 				ID: "protocol",
 
-				DisableAutoSendMessageHandlerResultObject: !testCase.autoSend,
-				DisableAutoYieldOutputHandlerResultObject: !testCase.autoYield,
+				AutoSendMessageHandlerResultObject: new(testCase.autoSend),
+				AutoYieldOutputHandlerResultObject: new(testCase.autoYield),
 				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 					rb.RouteBuilder.AddHandlerRaw(inputType, outputType, func(*workflow.Context, any) (any, error) {
 						return executorProtocolOutput{}, nil
@@ -576,8 +576,8 @@ func TestExecutorDescribeProtocol_IncludesExplicitSendAndYieldTypes(t *testing.T
 	executor := &workflow.Executor{
 		ID: "protocol",
 
-		DisableAutoSendMessageHandlerResultObject: true,
-		DisableAutoYieldOutputHandlerResultObject: true,
+		AutoSendMessageHandlerResultObject: new(false),
+		AutoYieldOutputHandlerResultObject: new(false),
 		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 			rb.
 				SendsMessageType(explicitSend, nil, explicitSend).
@@ -635,8 +635,8 @@ func executorWithSendTypes(sendTypes ...reflect.Type) *workflow.Executor {
 	return &workflow.Executor{
 		ID: "send-protocol",
 
-		DisableAutoSendMessageHandlerResultObject: true,
-		DisableAutoYieldOutputHandlerResultObject: true,
+		AutoSendMessageHandlerResultObject: new(false),
+		AutoYieldOutputHandlerResultObject: new(false),
 		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 			rb.SendsMessageType(sendTypes...)
 			rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(*workflow.Context, any) (any, error) {
@@ -697,8 +697,8 @@ func TestAddHandlerRaw_WithHandlerOverwrite(t *testing.T) {
 	executor := &workflow.Executor{
 		ID: "overwrite-handler",
 
-		DisableAutoSendMessageHandlerResultObject: true,
-		DisableAutoYieldOutputHandlerResultObject: true,
+		AutoSendMessageHandlerResultObject: new(false),
+		AutoYieldOutputHandlerResultObject: new(false),
 		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 			rb.RouteBuilder.
 				AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[string](), func(*workflow.Context, any) (any, error) {
@@ -728,8 +728,8 @@ func TestAddCatchAll_WithHandlerOverwrite(t *testing.T) {
 	executor := &workflow.Executor{
 		ID: "overwrite-catch-all",
 
-		DisableAutoSendMessageHandlerResultObject: true,
-		DisableAutoYieldOutputHandlerResultObject: true,
+		AutoSendMessageHandlerResultObject: new(false),
+		AutoYieldOutputHandlerResultObject: new(false),
 		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 			rb.RouteBuilder.
 				AddCatchAll(func(*workflow.Context, workflow.PortableValue) (any, error) {
@@ -759,8 +759,8 @@ func TestExecutorExecute_HandlerPanicReportsFailure(t *testing.T) {
 	executor := &workflow.Executor{
 		ID: "panic-handler",
 
-		DisableAutoSendMessageHandlerResultObject: true,
-		DisableAutoYieldOutputHandlerResultObject: true,
+		AutoSendMessageHandlerResultObject: new(false),
+		AutoYieldOutputHandlerResultObject: new(false),
 		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 			rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(*workflow.Context, any) (any, error) {
 				panic("boom")
@@ -807,9 +807,9 @@ func aggregatorBinding(id string, results *[]string) workflow.ExecutorBinding {
 		return &workflow.Executor{
 			ID: id,
 
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
-			OnCheckpointRestoredFunc:                  cache.OnCheckpointRestored,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
+			OnCheckpointRestoredFunc:           cache.OnCheckpointRestored,
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 					s := msg.(string)
@@ -991,8 +991,8 @@ func nullableAggregatorBinding(id string, results *[]string) workflow.ExecutorBi
 		return &workflow.Executor{
 			ID: id,
 
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 					input := msg.(string)

@@ -38,6 +38,21 @@ func TestNewAgent_PanicsWithNilClient(t *testing.T) {
 	geminiprovider.NewAgent(nil, geminiprovider.AgentConfig{})
 }
 
+func TestNewAgent_UsesCanonicalProviderName(t *testing.T) {
+	client, err := genai.NewClient(t.Context(), &genai.ClientConfig{
+		Backend: genai.BackendGeminiAPI,
+		APIKey:  "test",
+	})
+	if err != nil {
+		t.Fatalf("genai.NewClient: %v", err)
+	}
+	a := geminiprovider.NewAgent(client, geminiprovider.AgentConfig{})
+
+	if got := a.ProviderName(); got != "gcp.gemini" {
+		t.Errorf("ProviderName() = %q, want %q", got, "gcp.gemini")
+	}
+}
+
 func TestAgent_UnsupportedMessageRoleReturnsError(t *testing.T) {
 	client, err := genai.NewClient(t.Context(), &genai.ClientConfig{
 		Backend: genai.BackendGeminiAPI,

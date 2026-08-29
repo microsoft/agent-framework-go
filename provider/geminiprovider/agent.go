@@ -70,7 +70,7 @@ func NewAgent(gclient *genai.Client, config AgentConfig) *agent.Agent {
 	}
 	return agent.New(agent.ProviderConfig{
 		Run:          c.run,
-		ProviderName: "gemini",
+		ProviderName: "gcp.gemini",
 		Middlewares:  providerMiddlewares,
 		Format:       c.formatOf,
 		Unmarshal:    c.unmarshal,

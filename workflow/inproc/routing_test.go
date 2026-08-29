@@ -67,12 +67,9 @@ func TestDirectEdgeRouting_ConditionTrue_Delivers(t *testing.T) {
 	)
 	a := captureExecutor("a", &trace, &mu)
 	b := captureExecutor("b", &trace, &mu)
-	cond := func(msg any) bool {
-		s, ok := msg.(string)
-		return ok && s == "match"
-	}
+	cond := func(msg string) bool { return msg == "match" }
 	wf, err := workflow.NewBuilder(a).
-		AddDirectEdge(a, b, false, cond).
+		AddEdge(a, b, workflow.WithEdgeCondition(cond)).
 		Build()
 	if err != nil {
 		t.Fatalf("Build: %v", err)
@@ -96,9 +93,9 @@ func TestDirectEdgeRouting_ConditionFalse_DoesNotDeliver(t *testing.T) {
 	)
 	a := captureExecutor("a", &trace, &mu)
 	b := captureExecutor("b", &trace, &mu)
-	cond := func(msg any) bool { return false }
+	cond := func(string) bool { return false }
 	wf, err := workflow.NewBuilder(a).
-		AddDirectEdge(a, b, false, cond).
+		AddEdge(a, b, workflow.WithEdgeCondition(cond)).
 		Build()
 	if err != nil {
 		t.Fatalf("Build: %v", err)

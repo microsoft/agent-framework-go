@@ -198,6 +198,10 @@ func hasTextLikeContent(contents message.Contents) bool {
 		if ok && shouldEmitDataContentAsText(dc) {
 			return true
 		}
+		uc, ok := c.(*message.URIContent)
+		if ok && uc.URI != "" {
+			return true
+		}
 	}
 	return false
 }
@@ -246,6 +250,15 @@ func contentToEvents(content message.Content, messageID string) ([]aguiEvents.Ev
 		// message ID. MEAI batches all results under a shared MessageId, which
 		// collapses them in FE reconciliation when the same id is reused.
 		return []aguiEvents.Event{aguiEvents.NewToolCallResultEvent("result-"+callID, callID, contentStr)}, nil
+	case *message.URIContent:
+		// AG-UI has no native reference/attachment event; surface the URI as
+		// text so it is not silently dropped (mirrors the DataContent fallback
+		// and the A2A hosting path, which never drop unknown content). Gemini,
+		// for example, emits URIContent for generated files.
+		if c.URI == "" {
+			return nil, nil
+		}
+		return []aguiEvents.Event{aguiEvents.NewTextMessageContentEvent(messageID, c.URI)}, nil
 	case *message.DataContent:
 		return dataContentToEvents(c, messageID)
 	default:

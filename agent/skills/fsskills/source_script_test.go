@@ -230,7 +230,7 @@ func TestFileSource_ScriptAtConfigurableDepth_DiscoversWithSearchDepth(t *testin
 	createSkillDir(t, root, "nested-script-skill", "Nested script directory", "Body.")
 	createRelativeFile(t, filepath.Join(root, "nested-script-skill"), "f1/f2/f3/run.py", "print('nested')")
 	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
-		SearchDepth: 4,
+		SearchDepth: new(4),
 		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
 			return nil, nil
 		},

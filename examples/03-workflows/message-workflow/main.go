@@ -32,12 +32,12 @@ func main() {
 	// Auto-send is the default: after the chat executor takes its turn it
 	// forwards the TurnToken downstream, so the collector observes it.
 	demo.Assistantf("Scenario 1: TurnToken forwarded downstream (auto-send, the default)")
-	runTurn(false)
-
-	// DisableAutoSendTurnToken keeps the token from being forwarded, which is
-	// how terminal executors (for example an output collector) end a turn.
-	demo.Assistantf("Scenario 2: DisableAutoSendTurnToken keeps the token from being forwarded")
 	runTurn(true)
+
+	// AutoSendTurnToken=false keeps the token from being forwarded, which is
+	// how terminal executors (for example an output collector) end a turn.
+	demo.Assistantf("Scenario 2: AutoSendTurnToken=false keeps the token from being forwarded")
+	runTurn(false)
 }
 
 // runTurn builds and runs driver -> relay -> chat -> collector once.
@@ -47,7 +47,7 @@ func main() {
 //   - chat (messageworkflow.Configure) accumulates the messages and, on the
 //     TurnToken, invokes its TakeTurnHandler exactly once to build a reply.
 //   - collector records the reply and any forwarded TurnToken.
-func runTurn(disableAutoSendTurnToken bool) {
+func runTurn(autoSendTurnToken bool) {
 	// State observed after the run. Each call rebuilds fresh executors, so the
 	// closures below capture per-run counters.
 	turnHandlerCalls := 0
@@ -76,8 +76,8 @@ func runTurn(disableAutoSendTurnToken bool) {
 	chat := workflow.BindNewExecutorFunc(chatID, func(_ string, executorID string) (*workflow.Executor, error) {
 		executor := workflow.Executor{ID: executorID}
 		messageworkflow.Configure(&executor, &messageworkflow.Options{
-			StateKey:                 "chat",
-			DisableAutoSendTurnToken: disableAutoSendTurnToken,
+			StateKey:          "chat",
+			AutoSendTurnToken: new(autoSendTurnToken),
 			TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, messages []*message.Message) error {
 				turnHandlerCalls++
 				parts := make([]string, 0, len(messages))

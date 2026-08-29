@@ -645,6 +645,63 @@ data: {"type":"response.completed","sequence_number":29,"response":{"id":"resp_6
 	}
 }
 
+func TestResponsesReasoningSummary_NonStreaming(t *testing.T) {
+	const input = `
+            {
+                "model":"o4-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]
+            }
+            `
+	const output = `
+            {
+                "id":"resp_reasoningsummary",
+                "object":"response",
+                "created_at":1741891428,
+                "status":"completed",
+                "error":null,
+                "incomplete_details":null,
+                "model":"o4-mini-2025-04-16",
+                "output":[
+                    {
+                        "id":"rs_reasoningsummary",
+                        "type":"reasoning",
+                        "summary":[{"type":"summary_text","text":"**Calculating a simple sum**"}],
+                        "content":[]
+                    },
+                    {
+                        "type":"message",
+                        "id":"msg_reasoningsummary",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[{"type":"output_text","text":"The sum is 15.","annotations":[]}]
+                    }
+                ]
+            }
+            `
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "o4-mini")
+
+	resp, err := a.RunText(t.Context(), "hello").Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+
+	var summaryText string
+	for _, msg := range resp.Messages {
+		for _, content := range msg.Contents {
+			if rc, ok := content.(*message.TextReasoningContent); ok && rc.Text != "" {
+				summaryText = rc.Text
+			}
+		}
+	}
+	if summaryText != "**Calculating a simple sum**" {
+		t.Errorf("expected reasoning summary text %q, got %q", "**Calculating a simple sum**", summaryText)
+	}
+}
+
 func TestResponsesChatOptions_Model_OverridesClientModel_NonStreaming(t *testing.T) {
 	const input = `
             {
@@ -2586,7 +2643,8 @@ data: {"type":"response.completed","sequence_number":2,"response":{"id":"resp_00
 
 func TestResponsesResponseFormatSchemaConvertsJSONSchema(t *testing.T) {
 	type payload struct {
-		Name string `json:"name"`
+		Name     string `json:"name"`
+		Nickname string `json:"nickname,omitempty"`
 	}
 	format, err := jsonformat.For[payload]()
 	if err != nil {
@@ -2597,7 +2655,7 @@ func TestResponsesResponseFormatSchemaConvertsJSONSchema(t *testing.T) {
             {
                 "model":"gpt-4o-mini",
                 "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}],
-                "text":{"format":{"type":"json_schema","name":"payload","schema":{"properties":{"name":{"type":"string"}},"type":"object","required":["name"],"additionalProperties":false},"strict":true}}
+				"text":{"format":{"type":"json_schema","name":"payload","schema":{"properties":{"name":{"type":"string"},"nickname":{"type":"string"}},"type":"object","required":["name","nickname"],"additionalProperties":false},"strict":true}}
             }
             `
 
@@ -2618,6 +2676,18 @@ func TestResponsesResponseFormatSchemaConvertsJSONSchema(t *testing.T) {
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 	if _, err := a.RunText(t.Context(), "hello", agent.WithResponseFormat(format)).Collect(); err != nil {
 		t.Fatalf("error = %v", err)
+	}
+
+	localFormat, err := jsonformat.FromResponseFormat(format)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := localFormat.Marshal(payload{Name: "Ada"})
+	if err != nil {
+		t.Fatalf("local Marshal() rejected omitted optional property: %v", err)
+	}
+	if got, want := string(data), `{"name":"Ada"}`; got != want {
+		t.Fatalf("local Marshal() = %s, want %s", got, want)
 	}
 }
 

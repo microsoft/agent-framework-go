@@ -35,13 +35,13 @@ type Executor struct {
 	// ImplementationID identifies the implementation or semantic source for this executor.
 	ImplementationID string
 
-	// If true, the result of a message handler that returns a value will not be
-	// sent as a message from the executor.
-	DisableAutoSendMessageHandlerResultObject bool
+	// If true, the result of a message handler that returns a value will be sent
+	// as a message from the executor. The default is true.
+	AutoSendMessageHandlerResultObject *bool
 
-	// If true, the result of a message handler that returns a value will not be
-	// yielded as workflow output from the executor.
-	DisableAutoYieldOutputHandlerResultObject bool
+	// If true, the result of a message handler that returns a value will be
+	// yielded as workflow output from the executor. The default is true.
+	AutoYieldOutputHandlerResultObject *bool
 
 	// CrossRunShareable reports whether this executor instance can be shared
 	// safely by concurrent workflow runs. [Executor.Bind] copies this value to
@@ -118,8 +118,8 @@ func (e *Executor) SetCrossRunShareable(v bool) *Executor {
 // Most hooks stop on the first error. OnMessageDeliveryFinished runs every hook
 // and returns the first error encountered.
 //
-// Runtime policy fields are combined conservatively: disabling automatic send
-// or yield in either executor disables it in the receiver.
+// Runtime policy fields are combined conservatively: automatic send or yield
+// remains enabled only when both executors enable it.
 func (e *Executor) Extend(executor *Executor) *Executor {
 	if e == nil {
 		panic("workflow: cannot extend nil Executor")
@@ -128,8 +128,8 @@ func (e *Executor) Extend(executor *Executor) *Executor {
 		panic("workflow: cannot extend with nil Executor")
 	}
 
-	e.DisableAutoSendMessageHandlerResultObject = e.DisableAutoSendMessageHandlerResultObject || executor.DisableAutoSendMessageHandlerResultObject
-	e.DisableAutoYieldOutputHandlerResultObject = e.DisableAutoYieldOutputHandlerResultObject || executor.DisableAutoYieldOutputHandlerResultObject
+	e.AutoSendMessageHandlerResultObject = new(e.autoSendMessageHandlerResultObject() && executor.autoSendMessageHandlerResultObject())
+	e.AutoYieldOutputHandlerResultObject = new(e.autoYieldOutputHandlerResultObject() && executor.autoYieldOutputHandlerResultObject())
 	e.ConfigureProtocol = extendProtocol(e.ConfigureProtocol, executor.ConfigureProtocol)
 	e.InitializeFunc = extendContextHook(e.InitializeFunc, executor.InitializeFunc)
 	e.AttachRuntimeFunc = extendRuntimeHook(e.AttachRuntimeFunc, executor.AttachRuntimeFunc)
@@ -141,6 +141,14 @@ func (e *Executor) Extend(executor *Executor) *Executor {
 	e.OnMessageDeliveryFinishedFunc = extendFinishedHook(e.OnMessageDeliveryFinishedFunc, executor.OnMessageDeliveryFinishedFunc)
 	e.state = executorState{}
 	return e
+}
+
+func (e *Executor) autoSendMessageHandlerResultObject() bool {
+	return e.AutoSendMessageHandlerResultObject == nil || *e.AutoSendMessageHandlerResultObject
+}
+
+func (e *Executor) autoYieldOutputHandlerResultObject() bool {
+	return e.AutoYieldOutputHandlerResultObject == nil || *e.AutoYieldOutputHandlerResultObject
 }
 
 func appendUniqueTypes(dst []reflect.Type, src ...reflect.Type) []reflect.Type {
@@ -414,12 +422,12 @@ func (e *Executor) Execute(ctx *Context, message any) (result any, err error) {
 	// If we had a real return type, raise it as a SendMessage
 	if ret.result != nil && ret.autoOutput {
 		telemetry.SetExecutorOutput(span, ret.result)
-		if !e.DisableAutoSendMessageHandlerResultObject {
+		if e.autoSendMessageHandlerResultObject() {
 			if err := ctx.SendMessage("", ret.result); err != nil {
 				return nil, err
 			}
 		}
-		if !e.DisableAutoYieldOutputHandlerResultObject {
+		if e.autoYieldOutputHandlerResultObject() {
 			if err := ctx.YieldOutput(ret.result); err != nil {
 				return nil, err
 			}

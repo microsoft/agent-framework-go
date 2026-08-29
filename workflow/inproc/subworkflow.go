@@ -80,15 +80,15 @@ type subworkflowHostExecutor struct {
 
 func (h *subworkflowHostExecutor) executor() *workflow.Executor {
 	return &workflow.Executor{
-		ID:               h.id,
-		ImplementationID: subworkflowImplementationID,
-		DisableAutoSendMessageHandlerResultObject: true,
-		DisableAutoYieldOutputHandlerResultObject: true,
-		ConfigureProtocol:                         h.configureProtocol,
-		AttachRuntimeFunc:                         h.attachRuntime,
-		CloseFunc:                                 h.reset,
-		OnCheckpointFunc:                          h.onCheckpoint,
-		OnCheckpointRestoredFunc:                  h.onCheckpointRestored,
+		ID:                                 h.id,
+		ImplementationID:                   subworkflowImplementationID,
+		AutoSendMessageHandlerResultObject: new(false),
+		AutoYieldOutputHandlerResultObject: new(false),
+		ConfigureProtocol:                  h.configureProtocol,
+		AttachRuntimeFunc:                  h.attachRuntime,
+		CloseFunc:                          h.reset,
+		OnCheckpointFunc:                   h.onCheckpoint,
+		OnCheckpointRestoredFunc:           h.onCheckpointRestored,
 	}
 }
 

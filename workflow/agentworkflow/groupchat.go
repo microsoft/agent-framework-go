@@ -228,7 +228,7 @@ func (b *GroupChatWorkflowBuilder) Build() (*workflow.Workflow, error) {
 	participantBindings := make([]workflow.ExecutorBinding, len(participants))
 	bindingsByAgent := make(map[*agent.Agent]workflow.ExecutorBinding, len(participants))
 	bindingsByAgentID := make(map[string]workflow.ExecutorBinding, len(participants))
-	participantConfig := Config{DisableForwardIncomingMessages: true}
+	participantConfig := Config{ForwardIncomingMessages: new(false)}
 	for index, currentAgent := range participants {
 		binding := New(currentAgent, participantConfig)
 		participantBindings[index] = binding
@@ -302,11 +302,11 @@ func (host *groupChatHostExecutor) executor() *workflow.Executor {
 		},
 	}
 	messageworkflow.Configure(&executor, &messageworkflow.Options{
-		StateKey:                 groupChatHostBufferedStateKey,
-		TakeTurnHandler:          host.handleTurn,
-		StringMessageRole:        message.RoleUser,
-		DisableAutoSendTurnToken: true,
-		MessageState:             host.messageState,
+		StateKey:          groupChatHostBufferedStateKey,
+		TakeTurnHandler:   host.handleTurn,
+		StringMessageRole: message.RoleUser,
+		AutoSendTurnToken: new(false),
+		MessageState:      host.messageState,
 	})
 	executor.Extend(&workflow.Executor{
 		ResetFunc:                host.reset,

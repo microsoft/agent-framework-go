@@ -239,16 +239,19 @@ func TestConfigure_RejectsNilOptions(t *testing.T) {
 
 func TestConfigure_SnapshotsOptions(t *testing.T) {
 	var configuredCalls int
+	autoSendTurnToken := true
 	options := &messageworkflow.Options{
 		StateKey:          "test-state",
 		StringMessageRole: message.RoleUser,
+		AutoSendTurnToken: &autoSendTurnToken,
 		TakeTurnHandler: func(_ *workflow.Context, _ workflow.TurnToken, _ []*message.Message) error {
 			configuredCalls++
 			return nil
 		},
 	}
-	executor, ctx := createExecutor(options)
+	executor, ctx, sent := createExecutorWithSent(options)
 	options.StringMessageRole = ""
+	*options.AutoSendTurnToken = false
 	options.TakeTurnHandler = func(_ *workflow.Context, _ workflow.TurnToken, _ []*message.Message) error {
 		t.Fatal("Configure retained caller-owned options")
 		return nil
@@ -262,6 +265,9 @@ func TestConfigure_SnapshotsOptions(t *testing.T) {
 	}
 	if configuredCalls != 1 {
 		t.Fatalf("configured handler calls = %d, want 1", configuredCalls)
+	}
+	if len(*sent) != 1 {
+		t.Fatalf("sent messages = %v, want auto-sent turn token", *sent)
 	}
 }
 
@@ -455,12 +461,12 @@ func TestExecutor_DefaultAutoSendsTurnToken(t *testing.T) {
 	}
 }
 
-func TestExecutor_DisableAutoSendTurnToken(t *testing.T) {
+func TestExecutor_AutoSendTurnTokenFalse(t *testing.T) {
 	te := &TestExecutor{}
 	executor, ctx, sent := createExecutorWithSent(&messageworkflow.Options{
-		StateKey:                 "test-state",
-		TakeTurnHandler:          te.takeTurn,
-		DisableAutoSendTurnToken: true,
+		StateKey:          "test-state",
+		TakeTurnHandler:   te.takeTurn,
+		AutoSendTurnToken: new(false),
 	})
 
 	if _, err := executor.Execute(ctx, workflow.TurnToken{}); err != nil {

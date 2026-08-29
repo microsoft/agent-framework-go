@@ -115,13 +115,13 @@ func TestProvider_CustomPromptTemplate_MissingSkillsPlaceholderPanics(t *testing
 	}()
 
 	skill := mustInlineSkill(skills.Frontmatter{Name: "inline-skill", Description: "Inline skill"}, "Instructions.", nil, nil)
-	_ = skills.NewContextProvider(skills.ContextProviderOptions{SkillsInstructionPrompt: "No skills placeholder here {resource_instructions} {script_instructions}", Skills: []*skills.Skill{skill}})
+	_ = skills.NewContextProvider(skills.ContextProviderOptions{SkillsInstructionPrompt: new("No skills placeholder here {resource_instructions} {script_instructions}"), Skills: []*skills.Skill{skill}})
 }
 
 func TestProvider_CustomPromptTemplate_MissingLegacyInstructionPlaceholdersAccepted(t *testing.T) {
 	skill := mustInlineSkill(skills.Frontmatter{Name: "inline-skill", Description: "Inline skill"}, "Instructions.", nil, nil)
 	provider := skills.NewContextProvider(skills.ContextProviderOptions{
-		SkillsInstructionPrompt: "Custom skills:\n{skills}",
+		SkillsInstructionPrompt: new("Custom skills:\n{skills}"),
 		Skills:                  []*skills.Skill{skill},
 	})
 
@@ -137,7 +137,7 @@ func TestProvider_CustomPromptTemplate_MissingLegacyInstructionPlaceholdersAccep
 func TestProvider_CustomPromptTemplate_LegacyInstructionPlaceholdersRemainLiteral(t *testing.T) {
 	skill := mustInlineSkill(skills.Frontmatter{Name: "inline-skill", Description: "Inline skill"}, "Instructions.", nil, nil)
 	provider := skills.NewContextProvider(skills.ContextProviderOptions{
-		SkillsInstructionPrompt: "Custom skills:\n{skills}\n{resource_instructions}\n{script_instructions}",
+		SkillsInstructionPrompt: new("Custom skills:\n{skills}\n{resource_instructions}\n{script_instructions}"),
 		Skills:                  []*skills.Skill{skill},
 	})
 

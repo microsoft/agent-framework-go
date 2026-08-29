@@ -79,8 +79,7 @@ type persistentSessionConfig struct {
 	shell                   resolvedShell
 	workingDirectory        string
 	confineWorkingDirectory bool
-	environment             map[string]string
-	removeEnvironment       []string
+	environment             map[string]*string
 	cleanEnvironment        bool
 }
 
@@ -95,7 +94,7 @@ func newPersistentSession(cfg persistentSessionConfig) (*persistentSession, erro
 	if cfg.workingDirectory != "" {
 		cmd.Dir = cfg.workingDirectory
 	}
-	cmd.Env = commandEnvironment(cfg.cleanEnvironment, cfg.environment, cfg.removeEnvironment)
+	cmd.Env = commandEnvironment(cfg.cleanEnvironment, cfg.environment)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -184,7 +183,7 @@ func (s *persistentSession) Close() {
 // appears. On timeout the session first tries to interrupt the in-flight
 // command so the shell can survive; if the sentinel still does not arrive, the
 // session is closed and the executor will create a fresh one for the next call.
-func (s *persistentSession) run(ctx context.Context, command string, timeout time.Duration, maxBytes int) (Result, error) {
+func (s *persistentSession) run(ctx context.Context, command string, timeout *time.Duration, maxBytes int) (Result, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -211,8 +210,8 @@ func (s *persistentSession) run(ctx context.Context, command string, timeout tim
 	}
 	runCtx := ctx
 	var cancel context.CancelFunc
-	if timeout > 0 {
-		runCtx, cancel = context.WithTimeout(ctx, timeout)
+	if timeout != nil {
+		runCtx, cancel = context.WithTimeout(ctx, *timeout)
 		defer cancel()
 	}
 

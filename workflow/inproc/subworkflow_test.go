@@ -69,9 +69,9 @@ func TestSubworkflowBinding_QualifiedRequestPortRoundTrip(t *testing.T) {
 
 	childStart := workflow.BindNewExecutorFunc("child-start", func(_ string, executorID string) (*workflow.Executor, error) {
 		return &workflow.Executor{
-			ID: executorID,
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			ID:                                 executorID,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(pb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				pb.YieldsOutputType(reflect.TypeFor[string]())
 				pb.RouteBuilder.
@@ -106,8 +106,8 @@ func TestSubworkflowBinding_QualifiedRequestPortRoundTrip(t *testing.T) {
 	}
 	qualifiedPortBinding := qualifiedPort.Bind()
 	parent, err := workflow.NewBuilder(host).
-		AddDirectEdge(host, qualifiedPortBinding, false, externalRequestOnly).
-		AddDirectEdge(qualifiedPortBinding, host, false, externalResponseOnly).
+		AddEdge(host, qualifiedPortBinding, workflow.WithEdgeCondition(externalRequestOnly)).
+		AddEdge(qualifiedPortBinding, host, workflow.WithEdgeCondition(externalResponseOnly)).
 		WithOutputFrom(host).
 		Build()
 	if err != nil {
@@ -155,9 +155,9 @@ func TestSubworkflowBinding_ParentInterceptsChildRequestLocally(t *testing.T) {
 		}
 		childStart := workflow.BindNewExecutorFunc("submit", func(_ string, executorID string) (*workflow.Executor, error) {
 			return &workflow.Executor{
-				ID: executorID,
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
+				ID:                                 executorID,
+				AutoSendMessageHandlerResultObject: new(false),
+				AutoYieldOutputHandlerResultObject: new(false),
 				ConfigureProtocol: func(pb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 					pb.YieldsOutputType(reflect.TypeFor[bool]())
 					pb.RouteBuilder.
@@ -197,8 +197,8 @@ func TestSubworkflowBinding_ParentInterceptsChildRequestLocally(t *testing.T) {
 		escalation := escalationPort.Bind()
 		interceptor := workflow.BindNewExecutorFunc("gate", func(_ string, executorID string) (*workflow.Executor, error) {
 			return &workflow.Executor{
-				ID: executorID,
-				DisableAutoSendMessageHandlerResultObject: true,
+				ID:                                 executorID,
+				AutoSendMessageHandlerResultObject: new(false),
 				ConfigureProtocol: func(pb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 					pb.SendsMessageType(reflect.TypeFor[*workflow.ExternalResponse](), reflect.TypeFor[*workflow.ExternalRequest]())
 					pb.RouteBuilder.AddCatchAll(func(ctx *workflow.Context, msg workflow.PortableValue) (any, error) {
@@ -224,10 +224,10 @@ func TestSubworkflowBinding_ParentInterceptsChildRequestLocally(t *testing.T) {
 			}, nil
 		})
 		parent, err := workflow.NewBuilder(host).
-			AddDirectEdge(host, interceptor, false, externalRequestOnly).
-			AddDirectEdge(interceptor, host, false, externalResponseOnly).
-			AddDirectEdge(interceptor, escalation, false, externalRequestOnly).
-			AddDirectEdge(escalation, host, false, externalResponseOnly).
+			AddEdge(host, interceptor, workflow.WithEdgeCondition(externalRequestOnly)).
+			AddEdge(interceptor, host, workflow.WithEdgeCondition(externalResponseOnly)).
+			AddEdge(interceptor, escalation, workflow.WithEdgeCondition(externalRequestOnly)).
+			AddEdge(escalation, host, workflow.WithEdgeCondition(externalResponseOnly)).
 			WithOutputFrom(host).
 			Build()
 		if err != nil {
@@ -640,8 +640,8 @@ func createCheckpointedSubworkflowRequestWorkflow(t *testing.T) *workflow.Workfl
 		Response: innerPort.Response,
 	}
 	parent, err := workflow.NewBuilder(host).
-		AddDirectEdge(host, qualifiedPort.Bind(), false, externalRequestOnly).
-		AddDirectEdge(qualifiedPort.Bind(), host, false, externalResponseOnly).
+		AddEdge(host, qualifiedPort.Bind(), workflow.WithEdgeCondition(externalRequestOnly)).
+		AddEdge(qualifiedPort.Bind(), host, workflow.WithEdgeCondition(externalResponseOnly)).
 		Build()
 	if err != nil {
 		t.Fatalf("Build parent request workflow: %v", err)
@@ -693,14 +693,12 @@ func reverseString(s string) string {
 	return string(runes)
 }
 
-func externalRequestOnly(msg any) bool {
-	_, ok := msg.(*workflow.ExternalRequest)
-	return ok
+func externalRequestOnly(request *workflow.ExternalRequest) bool {
+	return request != nil
 }
 
-func externalResponseOnly(msg any) bool {
-	_, ok := msg.(*workflow.ExternalResponse)
-	return ok
+func externalResponseOnly(response *workflow.ExternalResponse) bool {
+	return response != nil
 }
 
 const wordStateScope = "WordStateScope"

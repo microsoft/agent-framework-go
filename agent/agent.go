@@ -63,22 +63,26 @@ type Config struct {
 	// When nil, New uses a default in-memory history provider for local sessions.
 	HistoryProvider HistoryProvider
 
-	// AllowHistoryProviderConflict prevents returning an error when a configured
-	// HistoryProvider conflicts with service-managed history.
-	AllowHistoryProviderConflict bool
+	// ThrowOnHistoryProviderConflict controls whether a configured
+	// HistoryProvider conflicting with service-managed history returns an error.
+	// The default is true.
+	ThrowOnHistoryProviderConflict *bool
 
-	// SuppressHistoryProviderConflictWarning prevents logging a warning when a
-	// configured HistoryProvider conflicts with service-managed history.
-	SuppressHistoryProviderConflictWarning bool
+	// WarnOnHistoryProviderConflict controls whether a warning is logged when a
+	// configured HistoryProvider conflicts with service-managed history. The
+	// default is true.
+	WarnOnHistoryProviderConflict *bool
 
-	// KeepHistoryProviderOnConflict prevents clearing the configured HistoryProvider
-	// when it conflicts with service-managed history. Returning an error takes precedence.
-	KeepHistoryProviderOnConflict bool
+	// ClearOnHistoryProviderConflict controls whether the configured
+	// HistoryProvider is cleared when it conflicts with service-managed history.
+	// Returning an error takes precedence. The default is true.
+	ClearOnHistoryProviderConflict *bool
 
 	// ContextProviders inject and persist context around each agent run.
 	ContextProviders []ContextProvider
 
-	// DisableFuncAutoCall tells provider constructors not to add automatic function-tool calling middleware.
+	// DisableFuncAutoCall tells provider constructors not to add automatic
+	// function-tool calling middleware.
 	DisableFuncAutoCall bool
 
 	// Logger receives run, middleware, and provider diagnostics.
@@ -149,9 +153,9 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 		historyProvider:              historyProvider,
 		hasConfiguredHistory:         cfg.HistoryProvider != nil,
 		hasDefaultHistoryProvider:    hasDefaultHistoryProvider,
-		allowHistoryConflict:         cfg.AllowHistoryProviderConflict,
-		suppressHistoryWarning:       cfg.SuppressHistoryProviderConflictWarning,
-		keepHistoryOnConflict:        cfg.KeepHistoryProviderOnConflict,
+		throwOnHistoryConflict:       cfg.ThrowOnHistoryProviderConflict == nil || *cfg.ThrowOnHistoryProviderConflict,
+		warnOnHistoryConflict:        cfg.WarnOnHistoryProviderConflict == nil || *cfg.WarnOnHistoryProviderConflict,
+		clearOnHistoryConflict:       cfg.ClearOnHistoryProviderConflict == nil || *cfg.ClearOnHistoryProviderConflict,
 		providerDoesNotManageHistory: prov.ServiceDoesNotManageHistory,
 		contextProviders:             contextProviders,
 	}
@@ -188,9 +192,9 @@ type Agent struct {
 	// provider is a local-session convenience and backs off for implicit per-run
 	// sessions and service-managed sessions.
 	hasDefaultHistoryProvider    bool
-	allowHistoryConflict         bool
-	suppressHistoryWarning       bool
-	keepHistoryOnConflict        bool
+	throwOnHistoryConflict       bool
+	warnOnHistoryConflict        bool
+	clearOnHistoryConflict       bool
 	providerDoesNotManageHistory bool
 	contextProviders             []ContextProvider
 }
@@ -510,13 +514,13 @@ func (a *Agent) handleHistoryProviderConflict(ctx context.Context, provider Hist
 		return true, nil
 	}
 
-	if !a.suppressHistoryWarning && a.logger != nil {
+	if a.warnOnHistoryConflict && a.logger != nil {
 		a.logger.WarnContext(ctx, "history provider conflicts with service-managed history", slog.String("service_id", session.ServiceID()))
 	}
-	if !a.allowHistoryConflict {
+	if a.throwOnHistoryConflict {
 		return false, errors.New("only Session.ServiceID or HistoryProvider may be used, but not both; the service returned an ID indicating service-managed history while the agent has a HistoryProvider configured")
 	}
-	if !a.keepHistoryOnConflict {
+	if a.clearOnHistoryConflict {
 		a.historyCleared.Store(true)
 		return false, nil
 	}

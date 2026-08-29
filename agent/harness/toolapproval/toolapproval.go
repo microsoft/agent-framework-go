@@ -105,20 +105,19 @@ type Config struct {
 
 	// MaxAutoApprovalIterations is the safety cap for how many times the inner
 	// agent is re-invoked in a single run when every surfaced approval request
-	// is auto-approved. When zero, DefaultMaxAutoApprovalIterations is used.
-	MaxAutoApprovalIterations int
+	// is auto-approved. When nil, DefaultMaxAutoApprovalIterations is used.
+	MaxAutoApprovalIterations *int
 }
 
 func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
-		if cfg.MaxAutoApprovalIterations < 0 {
-			yield(nil, fmt.Errorf("toolapproval: MaxAutoApprovalIterations must be 0 or greater, got %d", cfg.MaxAutoApprovalIterations))
-			return
-		}
-
-		maxAutoApprovalIterations := cfg.MaxAutoApprovalIterations
-		if maxAutoApprovalIterations == 0 {
-			maxAutoApprovalIterations = DefaultMaxAutoApprovalIterations
+		maxAutoApprovalIterations := DefaultMaxAutoApprovalIterations
+		if cfg.MaxAutoApprovalIterations != nil {
+			maxAutoApprovalIterations = *cfg.MaxAutoApprovalIterations
+			if maxAutoApprovalIterations < 1 {
+				yield(nil, fmt.Errorf("toolapproval: MaxAutoApprovalIterations must be at least 1, got %d", maxAutoApprovalIterations))
+				return
+			}
 		}
 
 		st := loadState(opts)

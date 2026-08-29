@@ -273,8 +273,8 @@ func collectForwardedResponseMessages(t *testing.T, a *agent.Agent, cfg agentwor
 		return &workflow.Executor{
 			ID: sinkID,
 
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[[]*message.Message](), nil, func(_ *workflow.Context, msg any) (any, error) {
 					observed = append(observed, msg.([]*message.Message)...)
@@ -286,7 +286,7 @@ func collectForwardedResponseMessages(t *testing.T, a *agent.Agent, cfg agentwor
 	}
 
 	hostCfg := cfg
-	hostCfg.DisableForwardIncomingMessages = true
+	hostCfg.ForwardIncomingMessages = new(false)
 	binding := agentworkflow.New(a, hostCfg)
 	wf, err := workflow.NewBuilder(binding).
 		AddEdge(binding, sink).
@@ -376,7 +376,7 @@ func TestHostedAgent_EmitsStreamingUpdatesIfConfigured(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			cfg := agentworkflow.Config{}
 			if tc.executorSetting != nil {
-				cfg.EmitUpdateEvents = *tc.executorSetting
+				cfg.EmitUpdateEvents = tc.executorSetting
 			}
 			token := workflow.TurnToken{EmitEvents: tc.turnSetting}
 
@@ -521,7 +521,7 @@ func TestHostedAgent_ReassignsRolesIfConfigured(t *testing.T) {
 		name := fmt.Sprintf("reassign=%v/u=%v/s=%v/o=%v", tc.reassign, tc.includeUser, tc.includeSelf, tc.includeOther)
 		t.Run(name, func(t *testing.T) {
 			cfg := agentworkflow.Config{
-				DisableReassignOtherAgentsAsUsers: !tc.reassign,
+				ReassignOtherAgentsAsUsers: new(tc.reassign),
 			}
 			var msgs []*message.Message
 			if tc.includeUser {
@@ -603,8 +603,8 @@ func TestHostedAgent_ForwardsIncomingMessages(t *testing.T) {
 				return &workflow.Executor{
 					ID: sinkID,
 
-					DisableAutoSendMessageHandlerResultObject: true,
-					DisableAutoYieldOutputHandlerResultObject: true,
+					AutoSendMessageHandlerResultObject: new(false),
+					AutoYieldOutputHandlerResultObject: new(false),
 					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 						rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[[]*message.Message](), nil, func(_ *workflow.Context, msg any) (any, error) {
 							observed = append(observed, msg)
@@ -615,7 +615,7 @@ func TestHostedAgent_ForwardsIncomingMessages(t *testing.T) {
 				}, nil
 			}
 
-			binding := agentworkflow.New(newReplayAgent(), agentworkflow.Config{DisableForwardIncomingMessages: disable})
+			binding := agentworkflow.New(newReplayAgent(), agentworkflow.Config{ForwardIncomingMessages: new(!disable)})
 			wf, err := workflow.NewBuilder(binding).
 				AddEdge(binding, sink).
 				Build()
@@ -1092,8 +1092,8 @@ func approverExecutor(target workflow.ExecutorBinding, approve bool) workflow.Ex
 		return &workflow.Executor{
 			ID: id,
 
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.SendsMessageType(reflect.TypeFor[*message.ToolApprovalResponseContent]())
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[*message.ToolApprovalRequestContent](), nil, func(ctx *workflow.Context, msg any) (any, error) {
@@ -1118,8 +1118,8 @@ func resultExecutor(target workflow.ExecutorBinding, result any) workflow.Execut
 		return &workflow.Executor{
 			ID: id,
 
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.SendsMessageType(reflect.TypeFor[*message.FunctionResultContent]())
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[*message.FunctionCallContent](), nil, func(ctx *workflow.Context, msg any) (any, error) {
@@ -1360,8 +1360,8 @@ func TestHostedAgent_InterceptDisabled_PostsExternalRequest(t *testing.T) {
 		return &workflow.Executor{
 			ID: probeID,
 
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[*message.ToolApprovalRequestContent](), nil, func(_ *workflow.Context, _ any) (any, error) {
 					sawApprovalRequestMessage = true
@@ -1837,8 +1837,8 @@ func TestHostedAgent_UnknownResponseID_RaisesError(t *testing.T) {
 		return &workflow.Executor{
 			ID: senderID,
 
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.SendsMessageType(reflect.TypeFor[*message.FunctionResultContent]())
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
@@ -1884,7 +1884,7 @@ func TestHostedAgent_UnknownResponseID_RaisesError(t *testing.T) {
 // input EmitEvents.
 func TestHostedAgent_HeldTurnToken_StampsResolvedEmitEvents(t *testing.T) {
 	host := agentworkflow.New(newApprovalAgent(), agentworkflow.Config{
-		EmitUpdateEvents:           true,
+		EmitUpdateEvents:           new(true),
 		InterceptUserInputRequests: true,
 	})
 	app := approverExecutor(host, true)
@@ -1900,8 +1900,8 @@ func TestHostedAgent_HeldTurnToken_StampsResolvedEmitEvents(t *testing.T) {
 		return &workflow.Executor{
 			ID: sinkID,
 
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[workflow.TurnToken](), nil, func(_ *workflow.Context, msg any) (any, error) {
 					observed = append(observed, msg.(workflow.TurnToken))
@@ -2069,8 +2069,8 @@ func TestHostedAgent_AlreadyPendingRequest_IsIdempotent_InterceptMode(t *testing
 		return &workflow.Executor{
 			ID: probeID,
 
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[*message.ToolApprovalRequestContent](), nil, func(_ *workflow.Context, msg any) (any, error) {
 					seen = append(seen, msg.(*message.ToolApprovalRequestContent))

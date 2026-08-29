@@ -33,14 +33,23 @@ type MemoryProviderConfig struct {
 
 	// ContextPrompt prefixes retrieved memories injected into the run. The default
 	// prompt is "## Memories\nConsider the following memories when answering user questions:".
-	ContextPrompt string
+	ContextPrompt *string
 
-	// MaxMemories limits the number of memories returned by search. The default is 5.
-	MaxMemories int32
+	// MaxMemories limits the number of memories returned by search. Nil uses the
+	// default of 5.
+	MaxMemories *int32
 
 	// SearchInputFilter filters messages used to search for relevant memories. The
 	// default is [messagefilter.ExternalOnly].
 	SearchInputFilter messagefilter.Filter
+
+	// StorageInputRequestMessageFilter filters request messages before they are stored as
+	// memories. The default is [messagefilter.ExternalOnly].
+	StorageInputRequestMessageFilter messagefilter.Filter
+
+	// StorageInputResponseMessageFilter filters response messages before they are stored as
+	// memories. The default is [messagefilter.PassThrough].
+	StorageInputResponseMessageFilter messagefilter.Filter
 
 	// UpdateDelay controls Foundry memory extraction delay in seconds. The default is 0,
 	// which submits memory updates immediately.
@@ -91,19 +100,21 @@ func newMemoryProvider(client *azaiprojects.MemoryStoresClient, memoryStoreName 
 	if scope == nil {
 		panic("memory scope is required")
 	}
-	if config.ContextPrompt == "" {
-		config.ContextPrompt = defaultMemoryContextPrompt
+	if config.ContextPrompt == nil {
+		config.ContextPrompt = new(defaultMemoryContextPrompt)
 	}
-	if config.MaxMemories == 0 {
-		config.MaxMemories = defaultMaxMemories
+	if config.MaxMemories == nil {
+		config.MaxMemories = new(int32(defaultMaxMemories))
 	}
-	if config.SearchInputFilter == nil {
-		config.SearchInputFilter = messagefilter.ExternalOnly
-	}
+	// All three filters are intentionally left nil when unset: ContextProviderConfig
+	// already defaults a nil provide/store-request filter to messagefilter.ExternalOnly
+	// and a nil store-response filter to messagefilter.PassThrough, so re-setting them
+	// here would be redundant.
 	providerConfig := agent.ContextProviderConfig{
-		ProvideInputMessageFilter:      config.SearchInputFilter,
-		SourceID:                       defaultSourceID,
-		StoreInputRequestMessageFilter: messagefilter.ExternalOnly,
+		ProvideInputMessageFilter:       config.SearchInputFilter,
+		SourceID:                        defaultSourceID,
+		StoreInputRequestMessageFilter:  config.StorageInputRequestMessageFilter,
+		StoreInputResponseMessageFilter: config.StorageInputResponseMessageFilter,
 	}
 	p := &MemoryProvider{
 		client:          client,
@@ -191,10 +202,8 @@ func (p *MemoryProvider) provide(ctx context.Context, invoking agent.InvokingCon
 	session, _ := agent.GetOption(invoking.Options, agent.WithSession)
 	scope := p.scope(session)
 	searchOptions := &azaiprojects.MemoryStoresClientSearchMemoriesOptions{
-		Items: items,
-	}
-	if p.config.MaxMemories > 0 {
-		searchOptions.Options = &azaiprojects.MemorySearchResultOptions{MaxMemories: &p.config.MaxMemories}
+		Items:   items,
+		Options: &azaiprojects.MemorySearchResultOptions{MaxMemories: p.config.MaxMemories},
 	}
 	result, err := p.client.SearchMemories(ctx, p.memoryStoreName, scope, searchOptions)
 	if err != nil {
@@ -206,7 +215,7 @@ func (p *MemoryProvider) provide(ctx context.Context, invoking agent.InvokingCon
 	if len(memories) == 0 {
 		return nil, nil, nil
 	}
-	contextMessage := message.NewText(p.config.ContextPrompt + "\n" + strings.Join(memories, "\n"))
+	contextMessage := message.NewText(*p.config.ContextPrompt + "\n" + strings.Join(memories, "\n"))
 	return []*message.Message{contextMessage}, nil, nil
 }
 

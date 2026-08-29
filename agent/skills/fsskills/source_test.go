@@ -270,7 +270,7 @@ func TestFileSource_SearchDepth_DoesNotAffectSkillDirectoryDiscovery(t *testing.
 	// SearchDepth governs only within-skill resource/script discovery; it must
 	// not widen skill-directory discovery, which is bounded independently. Even
 	// a large SearchDepth leaves the deeply-nested skill directory undiscovered.
-	deep := fsskills.NewSourceOptions(fsskills.SourceOptions{SearchDepth: 4}, os.DirFS(root))
+	deep := fsskills.NewSourceOptions(fsskills.SourceOptions{SearchDepth: new(4)}, os.DirFS(root))
 	loaded, err := deep.Skills(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -589,7 +589,7 @@ func TestFileSource_SearchDepth1_DoesNotDiscoverSubdirectoryResources(t *testing
 		t.Fatal(err)
 	}
 
-	source := fsskills.NewSourceOptions(fsskills.SourceOptions{SearchDepth: 1}, os.DirFS(root))
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{SearchDepth: new(1)}, os.DirFS(root))
 	loaded, err := source.Skills(t.Context())
 	if err != nil {
 		t.Fatal(err)

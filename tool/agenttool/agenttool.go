@@ -48,7 +48,7 @@ func (t functool) Name() string {
 	if name == "" {
 		name = t.agent.ID()
 	}
-	return invalidNameChars.ReplaceAllString(name, "_")
+	return sanitizeAgentName(name)
 }
 
 func (t functool) Description() string {
@@ -56,6 +56,10 @@ func (t functool) Description() string {
 		return d
 	}
 	return defaultDescription
+}
+
+func sanitizeAgentName(name string) string {
+	return invalidNameChars.ReplaceAllString(name, "_")
 }
 
 func (t functool) Schema() any {

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/message"
@@ -602,8 +603,8 @@ func TestWorkflowOutput_AgentResponseUsesOutputFilter(t *testing.T) {
 		return &workflow.Executor{
 			ID: binding.ID,
 
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(wctx *workflow.Context, _ any) (any, error) {
 					return nil, wctx.YieldOutput(&agent.Response{
@@ -736,8 +737,8 @@ type unrelatedOutput struct{}
 func polymorphicOutputBinding(id string, output polymorphicOutput) workflow.ExecutorBinding {
 	return workflow.BindNewExecutorFunc(id, func(_ string, executorID string) (*workflow.Executor, error) {
 		return &workflow.Executor{
-			ID: executorID,
-			DisableAutoSendMessageHandlerResultObject: true,
+			ID:                                 executorID,
+			AutoSendMessageHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[polymorphicOutput](), func(_ *workflow.Context, _ any) (any, error) {
 					return output, nil
@@ -870,8 +871,8 @@ func TestFunctionExecutor_ReturnValueAutoSendAndYieldOptions(t *testing.T) {
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
 			source := returnedDataBinding("source", &workflow.Executor{
-				DisableAutoSendMessageHandlerResultObject: !testCase.autoSend,
-				DisableAutoYieldOutputHandlerResultObject: !testCase.autoYield,
+				AutoSendMessageHandlerResultObject: new(testCase.autoSend),
+				AutoYieldOutputHandlerResultObject: new(testCase.autoYield),
 			})
 			var gotAtSink []dataMessage
 			sink := workflow.NewExecutor("sink", func(msg dataMessage) {
@@ -1150,5 +1151,33 @@ func TestRequestPortBind_ForwardsExternalRequestAndRestoresOriginalResponse(t *t
 	value, ok := workflow.PortableValueAs[int](gotResponse.Data)
 	if !ok || value != 42 {
 		t.Fatalf("restored response data = %d, %v; want 42, true", value, ok)
+	}
+}
+
+func TestRun_SecondRunToNextHaltOnHaltedRunReturns(t *testing.T) {
+	// Environment.Run already drives one RunToNextHalt internally. A caller that
+	// polls RunToNextHalt again on an already-Idle run must return promptly
+	// rather than block forever on a halt signal that was already consumed.
+	binding := workflow.NewExecutor("fn", func(in textMessage) dataMessage {
+		return dataMessage{Bytes: []byte(in.Text)}
+	}).Bind()
+	wf, err := workflow.NewBuilder(binding).WithOutputFrom(binding).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	run, err := inproc.OffThread.Run(context.Background(), wf, textMessage{Text: "abc"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		_, _ = run.RunToNextHalt(context.Background())
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("second RunToNextHalt on an already-halted run blocked")
 	}
 }

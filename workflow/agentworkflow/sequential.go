@@ -92,7 +92,7 @@ func (b *SequentialWorkflowBuilder) Build() (*workflow.Workflow, error) {
 		return nil, err
 	}
 
-	cfg := Config{DisableForwardIncomingMessages: b.chainOnlyAgentResponses}
+	cfg := Config{ForwardIncomingMessages: new(!b.chainOnlyAgentResponses)}
 	bindings, bindingsByAgent := newAgentBindings(b.agents, cfg)
 
 	bld := applyBuilderMetadata(workflow.NewBuilder(bindings[0]), b.name, b.description)
@@ -125,8 +125,8 @@ func newOutputMessagesBinding() workflow.ExecutorBinding {
 				},
 			}
 			messageworkflow.Configure(&executor, &messageworkflow.Options{
-				StateKey:                 outputMessagesStateKey,
-				DisableAutoSendTurnToken: true,
+				StateKey:          outputMessagesStateKey,
+				AutoSendTurnToken: new(false),
 				TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, messages []*message.Message) error {
 					return ctx.YieldOutput(messages)
 				},

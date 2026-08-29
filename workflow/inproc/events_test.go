@@ -172,8 +172,8 @@ func askOnceBinding(id string) workflow.ExecutorBinding {
 		return &workflow.Executor{
 			ID: id,
 
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.YieldsOutputType(reflect.TypeFor[string]())
 				rb.RouteBuilder.

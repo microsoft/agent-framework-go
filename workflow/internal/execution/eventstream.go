@@ -233,11 +233,7 @@ func (s *streamingRunEventStream) runLoop() {
 		}
 
 		// Update status based on what's waiting
-		if s.stepRunner.HasUnservicedRequests() {
-			s.setStatus(RunStatusPendingRequests)
-		} else {
-			s.setStatus(RunStatusIdle)
-		}
+		s.setStatus(idleOrPendingRequestsStatus(s.stepRunner))
 
 		// Signal completion to consumer so they can check status and decide whether to continue
 		// Increment epoch so next consumer iteration gets a new completion signal
@@ -332,6 +328,45 @@ func (s *streamingRunEventStream) TakeEventStream(ctx context.Context, blockOnPe
 	}
 
 	return func(yield func(workflow.Event, error) bool) {
+		// Fast path: the run has already halted and there is no fresh work. The
+		// halt signal is a one-shot queue item, so a prior consumer may have
+		// already drained it for this epoch; blocking in nextEvent would then wait
+		// forever for a signal that is never re-emitted (the run loop is parked
+		// awaiting input). Drain whatever is still queued and stop at the
+		// terminal/pending halt instead, mirroring the lockstep stream. The
+		// blockOnPendingRequest path still falls through to block for serviced input.
+		if !expectingFreshWork {
+			for {
+				evt, ok := s.eventQueue.Dequeue()
+				if !ok {
+					break
+				}
+				if signal, ok := evt.(*internalHaltSignal); ok {
+					if signal.epoch < myEpoch {
+						continue
+					}
+					if signal.status == RunStatusIdle || signal.status == RunStatusEnded {
+						return
+					}
+					if !blockOnPendingRequest && signal.status == RunStatusPendingRequests {
+						return
+					}
+					continue
+				}
+				if !yield(evt, nil) {
+					return
+				}
+			}
+			switch s.getStatus() {
+			case RunStatusIdle, RunStatusEnded:
+				return
+			case RunStatusPendingRequests:
+				if !blockOnPendingRequest {
+					return
+				}
+			}
+		}
+
 		for {
 			evt, ok := s.nextEvent(ctx)
 			if !ok {
@@ -492,11 +527,7 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 
 		defer func() {
 			// Update status
-			if l.stepRunner.HasUnservicedRequests() {
-				l.setStatus(RunStatusPendingRequests)
-			} else {
-				l.setStatus(RunStatusIdle)
-			}
+			l.setStatus(idleOrPendingRequestsStatus(l.stepRunner))
 		}()
 
 		l.setStatus(RunStatusRunning)
@@ -547,11 +578,7 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 			}
 
 			// Update status
-			if l.stepRunner.HasUnservicedRequests() {
-				l.setStatus(RunStatusPendingRequests)
-			} else {
-				l.setStatus(RunStatusIdle)
-			}
+			l.setStatus(idleOrPendingRequestsStatus(l.stepRunner))
 
 			// Check if we should break
 			status := l.getStatus()
@@ -579,11 +606,7 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 					// No work yet: the run may have progressed to a terminal
 					// state (e.g. requests serviced elsewhere). Re-evaluate and
 					// stop if there is nothing left to wait for.
-					if l.stepRunner.HasUnservicedRequests() {
-						l.setStatus(RunStatusPendingRequests)
-					} else {
-						l.setStatus(RunStatusIdle)
-					}
+					l.setStatus(idleOrPendingRequestsStatus(l.stepRunner))
 					status = l.getStatus()
 					if l.shouldBreak(status, blockOnPendingRequest, linkedCtx) {
 						return
@@ -643,6 +666,13 @@ func (l *lockstepRunEventStream) shouldBreak(status RunStatus, blockOnPendingReq
 		return true
 	}
 	return false
+}
+
+func idleOrPendingRequestsStatus(stepRunner SuperStepRunner) RunStatus {
+	if stepRunner.HasUnservicedRequests() {
+		return RunStatusPendingRequests
+	}
+	return RunStatusIdle
 }
 
 // SignalInput signals that new input has been provided and the run loop should continue processing.

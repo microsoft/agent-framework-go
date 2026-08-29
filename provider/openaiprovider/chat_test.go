@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/internal/messagetest"
 	"github.com/microsoft/agent-framework-go/message"
@@ -105,6 +106,42 @@ func TestChatRequestIncludesAgentFrameworkUserAgent(t *testing.T) {
 
 	a := newTestClient(server)
 	if _, err := a.RunText(t.Context(), "hello").Collect(); err != nil {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestChatResponseFormatSchemaConvertsJSONSchema(t *testing.T) {
+	type payload struct {
+		Name     string `json:"name"`
+		Nickname string `json:"nickname,omitempty"`
+	}
+	format, err := jsonformat.For[payload]()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const input = `
+            {
+                "messages":[{"role":"user","content":"hello"}],
+                "model":"gpt-4o-mini",
+                "response_format":{"type":"json_schema","json_schema":{"name":"payload","schema":{"properties":{"name":{"type":"string"},"nickname":{"type":"string"}},"type":"object","required":["name","nickname"],"additionalProperties":false},"strict":true}}
+            }
+            `
+	const output = `
+            {
+                "id":"chatcmpl-test",
+                "object":"chat.completion",
+                "created":1727888631,
+                "model":"gpt-4o-mini",
+                "choices":[{"index":0,"message":{"role":"assistant","content":"{\"name\":\"Ada\",\"nickname\":\"A\"}"},"finish_reason":"stop"}]
+            }
+            `
+
+	server := newTestServer(t, input, output)
+	defer server.Close()
+
+	a := newTestClient(server)
+	if _, err := a.RunText(t.Context(), "hello", agent.WithResponseFormat(format)).Collect(); err != nil {
 		t.Fatalf("error = %v", err)
 	}
 }

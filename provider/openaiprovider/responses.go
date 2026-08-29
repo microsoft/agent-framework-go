@@ -262,7 +262,13 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 		switch frmt.Kind {
 		case "json":
 			if schema := frmt.Schema; schema != nil {
-				schemaMap, err := schemaToMap(schema)
+				var schemaMap map[string]any
+				var err error
+				if frmt.Strict {
+					schemaMap, err = strictSchemaToMap(schema)
+				} else {
+					schemaMap, err = schemaToMap(schema)
+				}
 				if err != nil {
 					return responses.ResponseNewParams{}, fmt.Errorf("failed to convert response format schema (type %T) to JSON format: %w", schema, err)
 				}
@@ -887,13 +893,28 @@ func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func
 			for _, c := range out.Content {
 				sb.WriteString(c.Text)
 			}
-			currentUpdate.Contents = append(currentUpdate.Contents, &message.TextReasoningContent{
-				Text:          sb.String(),
-				ProtectedData: out.EncryptedContent,
-				ContentHeader: message.ContentHeader{
-					RawRepresentation: out,
-				},
-			})
+			// Attach the encrypted content and raw representation to only the
+			// first reasoning content emitted for this item, mirroring the
+			// Python SDK's content-then-summary loop.
+			firstReasoning := true
+			appendReasoning := func(text string) {
+				rc := &message.TextReasoningContent{Text: text}
+				if firstReasoning {
+					rc.ProtectedData = out.EncryptedContent
+					rc.RawRepresentation = out
+					firstReasoning = false
+				}
+				currentUpdate.Contents = append(currentUpdate.Contents, rc)
+			}
+			// Skip the content-derived entry only when it is empty but summary
+			// text is available, so o-series models that return a reasoning
+			// summary (and no content) still surface the summary text.
+			if sb.Len() > 0 || len(out.Summary) == 0 {
+				appendReasoning(sb.String())
+			}
+			for _, s := range out.Summary {
+				appendReasoning(s.Text)
+			}
 
 		case responses.ResponseFunctionToolCall:
 			callID := cmp.Or(out.CallID, out.ID)

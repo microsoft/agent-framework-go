@@ -147,8 +147,8 @@ func newAggregateTurnMessagesBinding(id string) workflow.ExecutorBinding {
 				},
 			}
 			messageworkflow.Configure(&executor, &messageworkflow.Options{
-				StateKey:                 aggregateTurnMessagesStateKey,
-				DisableAutoSendTurnToken: true,
+				StateKey:          aggregateTurnMessagesStateKey,
+				AutoSendTurnToken: new(false),
 				TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, messages []*message.Message) error {
 					return sendAggregateTurnMessages(ctx, messages)
 				},

@@ -772,8 +772,8 @@ func createCheckpointRequestWorkflow(t *testing.T) (*workflow.Workflow, *atomic.
 			return &workflow.Executor{
 				ID: "Processor",
 
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
+				AutoSendMessageHandlerResultObject: new(false),
+				AutoYieldOutputHandlerResultObject: new(false),
 				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 					rb.YieldsOutputType(reflect.TypeFor[string]())
 					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
@@ -825,8 +825,8 @@ func createCheckpointChainWorkflow(t *testing.T, ids ...string) *workflow.Workfl
 				return &workflow.Executor{
 					ID: id,
 
-					DisableAutoSendMessageHandlerResultObject: true,
-					DisableAutoYieldOutputHandlerResultObject: true,
+					AutoSendMessageHandlerResultObject: new(false),
+					AutoYieldOutputHandlerResultObject: new(false),
 					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 						rb.SendsMessageType(reflect.TypeFor[string]())
 						rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
@@ -862,9 +862,9 @@ func createCheckpointFanInBarrierWorkflow(t *testing.T, beforeValues ...string) 
 			ImplementationID: "*workflow.Executor",
 			NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
 				return &workflow.Executor{
-					ID: id,
-					DisableAutoSendMessageHandlerResultObject: true,
-					DisableAutoYieldOutputHandlerResultObject: true,
+					ID:                                 id,
+					AutoSendMessageHandlerResultObject: new(false),
+					AutoYieldOutputHandlerResultObject: new(false),
 					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 						rb.SendsMessageType(reflect.TypeFor[string]())
 						rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
@@ -883,9 +883,9 @@ func createCheckpointFanInBarrierWorkflow(t *testing.T, beforeValues ...string) 
 			ImplementationID: "*workflow.Executor",
 			NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
 				return &workflow.Executor{
-					ID: id,
-					DisableAutoSendMessageHandlerResultObject: true,
-					DisableAutoYieldOutputHandlerResultObject: true,
+					ID:                                 id,
+					AutoSendMessageHandlerResultObject: new(false),
+					AutoYieldOutputHandlerResultObject: new(false),
 					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 						rb.SendsMessageType(reflect.TypeFor[string]())
 						rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
@@ -904,9 +904,9 @@ func createCheckpointFanInBarrierWorkflow(t *testing.T, beforeValues ...string) 
 			ImplementationID: "*workflow.Executor",
 			NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
 				return &workflow.Executor{
-					ID: id,
-					DisableAutoSendMessageHandlerResultObject: true,
-					DisableAutoYieldOutputHandlerResultObject: true,
+					ID:                                 id,
+					AutoSendMessageHandlerResultObject: new(false),
+					AutoYieldOutputHandlerResultObject: new(false),
 					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 						rb.YieldsOutputType(reflect.TypeFor[string]())
 						rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
@@ -1176,8 +1176,8 @@ func (e *checkpointHookExecutor) Bind() workflow.ExecutorBinding {
 			return &workflow.Executor{
 				ID: e.id,
 
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
+				AutoSendMessageHandlerResultObject: new(false),
+				AutoYieldOutputHandlerResultObject: new(false),
 				OnCheckpointFunc: func(_ *workflow.Context) error {
 					e.checkpointingCalls.Add(1)
 					return nil
