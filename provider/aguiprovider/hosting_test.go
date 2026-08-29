@@ -210,7 +210,29 @@ func TestHandler_ReasoningContent_EmitsReasoningEvents(t *testing.T) {
 	h.ServeHTTP(rr, req)
 
 	content := rr.Body.String()
-	if !strings.Contains(content, "REASONING_MESSAGE_START") {
+	foundReasoningStart := false
+	for _, line := range strings.Split(content, "\n") {
+		payload, ok := strings.CutPrefix(line, "data: ")
+		if !ok {
+			continue
+		}
+		var event struct {
+			Type string `json:"type"`
+			Role string `json:"role"`
+		}
+		if err := json.Unmarshal([]byte(payload), &event); err != nil {
+			t.Fatalf("decode SSE event: %v", err)
+		}
+		if event.Type != "REASONING_MESSAGE_START" {
+			continue
+		}
+		foundReasoningStart = true
+		if event.Role != "reasoning" {
+			t.Errorf("reasoning message role = %q, want %q", event.Role, "reasoning")
+		}
+		break
+	}
+	if !foundReasoningStart {
 		t.Fatalf("expected REASONING_MESSAGE_START, got %q", content)
 	}
 	if !strings.Contains(content, "REASONING_MESSAGE_CONTENT") {

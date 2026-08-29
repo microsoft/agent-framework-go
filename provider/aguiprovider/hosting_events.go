@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	aguiEvents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	aguiTypes "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/message"
 )
@@ -133,11 +134,7 @@ func updatesToAGUIEvents(
 						return
 					}
 				}
-				role := string(update.Role)
-				if role == "" {
-					role = string(message.RoleAssistant)
-				}
-				if !yield(aguiEvents.NewReasoningMessageStartEvent(msgID, role), nil) {
+				if !yield(aguiEvents.NewReasoningMessageStartEvent(msgID, string(aguiTypes.RoleReasoning)), nil) {
 					return
 				}
 				currentReasoningMsgID = msgID
