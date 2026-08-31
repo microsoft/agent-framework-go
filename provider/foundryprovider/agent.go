@@ -109,8 +109,8 @@ func NewAgent(endpoint string, credential azcore.TokenCredential, target AgentTa
 		// authenticated-transport protections.
 		azure.WithTokenCredential(credential, azure.WithTokenCredentialScopes([]string{azureAIResourceScope})),
 	}
-	openAIOptions = append(openAIOptions, targetOptions...)
 	openAIOptions = append(openAIOptions, config.OpenAIOptions...)
+	openAIOptions = append(openAIOptions, targetOptions...)
 	openAIOptions = append(openAIOptions, clientHeadersRequestOption())
 	openAIOptions = append(openAIOptions, servedModelRequestOption())
 	config.Middlewares = append([]agent.Middleware{clientHeadersMiddleware{}, servedModelMiddleware{}}, config.Middlewares...)

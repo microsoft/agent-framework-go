@@ -476,7 +476,9 @@ func responsesDisableStoreOutput(config AgentConfig, opts []agent.Option) bool {
 
 func responseInputItemParamOfFunctionCallOutput[T string | responses.ResponseFunctionCallOutputItemListParam](callID string, output T) responses.ResponseInputItemUnionParam {
 	item := responses.ResponseInputItemParamOfFunctionCallOutput(output)
-	item.OfFunctionCallOutput.CallID = param.NewOpt(callID)
+	if callID != "" {
+		item.OfFunctionCallOutput.CallID = param.NewOpt(callID)
+	}
 	return item
 }
 
