@@ -16,6 +16,9 @@ func TestToolModeRequiredHasNoSpecificTool(t *testing.T) {
 
 func TestRequireTool(t *testing.T) {
 	mode := tool.RequireTool(" get_weather ")
+	if string(mode) != "required:get_weather" {
+		t.Fatalf("RequireTool() = %q, want %q", mode, "required:get_weather")
+	}
 	if mode.Mode() != tool.ToolModeRequired {
 		t.Fatalf("Mode() = %q, want %q", mode.Mode(), tool.ToolModeRequired)
 	}
