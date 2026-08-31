@@ -75,16 +75,8 @@ func (m *messageMerger) ComputeMerged(primaryResponseID string, primaryAgentID s
 		Messages:             messages,
 		AdditionalProperties: additionalProperties,
 	}
-	if primaryAgentID != "" {
-		response.AgentID = primaryAgentID
-	} else if primaryAgentName != "" {
-		response.AgentID = primaryAgentName
-	} else if len(agentIDs) == 1 {
-		response.AgentID = slices.Collect(maps.Keys(agentIDs))[0]
-	}
-	if len(finishReasons) == 1 {
-		response.FinishReason = slices.Collect(maps.Keys(finishReasons))[0]
-	}
+	response.AgentID = cmp.Or(primaryAgentID, primaryAgentName, singleString(agentIDs))
+	response.FinishReason = singleString(finishReasons)
 	return response
 }
 
@@ -277,6 +269,16 @@ func mergeProperties(current, incoming map[string]any) map[string]any {
 	merged := maps.Clone(current)
 	maps.Copy(merged, incoming)
 	return merged
+}
+
+func singleString(values map[string]struct{}) string {
+	if len(values) != 1 {
+		return ""
+	}
+	for value := range values {
+		return value
+	}
+	return ""
 }
 
 func cleanupMergedMessages(messages []*message.Message) []*message.Message {
