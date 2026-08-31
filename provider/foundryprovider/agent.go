@@ -123,8 +123,8 @@ func newFoundryAgent(credential azcore.TokenCredential, config AgentConfig, mode
 		instructions = ""
 	}
 	openAIOptions := []option.RequestOption{
-		azure.WithEndpoint(mode.baseURL, foundryDataPlaneAPIVersion),
 		// WithEndpoint registers Azure authentication; Foundry uses custom routes.
+		azure.WithEndpoint(mode.baseURL, foundryDataPlaneAPIVersion),
 		option.WithBaseURL(mode.baseURL),
 		option.WithQueryDel("api-version"),
 		option.WithMiddleware(func(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
