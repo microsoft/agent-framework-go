@@ -92,7 +92,7 @@ func TestNewAgentRunsAgainstFoundryAgentEndpoint(t *testing.T) {
 		if got := r.Header.Get("Authorization"); got == "" {
 			t.Fatal("missing Authorization header")
 		}
-		if got := r.Header.Get("User-Agent"); !strings.HasPrefix(got, "agent-framework-go/") {
+		if got := r.Header.Get("User-Agent"); !strings.Contains(got, "agent-framework-go/") {
 			t.Fatalf("User-Agent = %q", got)
 		}
 		body := jsonMap(t, mustReadBody(t, r))

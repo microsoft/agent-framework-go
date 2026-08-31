@@ -474,6 +474,12 @@ func responsesDisableStoreOutput(config AgentConfig, opts []agent.Option) bool {
 	return config.DisableStoreOutput
 }
 
+func responseInputItemParamOfFunctionCallOutput[T string | responses.ResponseFunctionCallOutputItemListParam](callID string, output T) responses.ResponseInputItemUnionParam {
+	item := responses.ResponseInputItemParamOfFunctionCallOutput(output)
+	item.OfFunctionCallOutput.CallID = param.NewOpt(callID)
+	return item
+}
+
 // responsesBuildMessageParam converts an agent.Message to one or more OpenAI message parameters.
 // Returns a slice because some agent messages (like RoleTool) need to be split into multiple OpenAI messages.
 func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInputParam) (responses.ResponseInputParam, error) {
@@ -607,19 +613,19 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 
 				if funcResult.Error != nil {
 					// Error case - serialize as text with "Error: " prefix
-					resp = append(resp, responses.ResponseInputItemParamOfFunctionCallOutput(
+					resp = append(resp, responseInputItemParamOfFunctionCallOutput(
 						funcResult.CallID,
 						fmt.Sprintf("Error: %v", funcResult.Error),
 					))
 				} else if b, ok := ret.(json.RawMessage); ok {
 					// json.RawMessage - pass as string directly
-					resp = append(resp, responses.ResponseInputItemParamOfFunctionCallOutput(
+					resp = append(resp, responseInputItemParamOfFunctionCallOutput(
 						funcResult.CallID,
 						string(b),
 					))
 				} else if str, ok := ret.(string); ok {
 					// Plain string - pass directly
-					resp = append(resp, responses.ResponseInputItemParamOfFunctionCallOutput(
+					resp = append(resp, responseInputItemParamOfFunctionCallOutput(
 						funcResult.CallID,
 						str,
 					))
@@ -700,7 +706,7 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 							},
 						}
 					}
-					resp = append(resp, responses.ResponseInputItemParamOfFunctionCallOutput(
+					resp = append(resp, responseInputItemParamOfFunctionCallOutput(
 						funcResult.CallID,
 						outputContent,
 					))
@@ -771,14 +777,14 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 							})
 						}
 					}
-					resp = append(resp, responses.ResponseInputItemParamOfFunctionCallOutput(
+					resp = append(resp, responseInputItemParamOfFunctionCallOutput(
 						funcResult.CallID,
 						outputContent,
 					))
 				} else {
 					// Default case - convert to string (JSON-encode structured
 					// results rather than rendering them with Go's %v).
-					resp = append(resp, responses.ResponseInputItemParamOfFunctionCallOutput(
+					resp = append(resp, responseInputItemParamOfFunctionCallOutput(
 						funcResult.CallID,
 						toolResultText(ret),
 					))

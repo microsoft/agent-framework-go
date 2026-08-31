@@ -4,6 +4,7 @@ package foundryprovider
 
 import (
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 
@@ -122,7 +123,14 @@ func newFoundryAgent(credential azcore.TokenCredential, config AgentConfig, mode
 		instructions = ""
 	}
 	openAIOptions := []option.RequestOption{
+		azure.WithEndpoint(mode.baseURL, foundryDataPlaneAPIVersion),
 		option.WithBaseURL(mode.baseURL),
+		option.WithQueryDel("api-version"),
+		option.WithMiddleware(func(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+			req.URL.Path = strings.TrimPrefix(req.URL.Path, "/openai")
+			req.URL.RawPath = strings.TrimPrefix(req.URL.RawPath, "/openai")
+			return next(req)
+		}),
 		azure.WithTokenCredential(credential, azure.WithTokenCredentialScopes([]string{azureAIResourceScope})),
 	}
 	openAIOptions = append(openAIOptions, mode.requestOptions...)
