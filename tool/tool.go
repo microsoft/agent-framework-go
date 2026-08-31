@@ -51,7 +51,8 @@ func (m ToolMode) RequiredTool() (string, bool) {
 
 // RequireTool returns a ToolMode that requires the named tool to be used.
 func RequireTool(name string) ToolMode {
-	if strings.TrimSpace(name) == "" {
+	name = strings.TrimSpace(name)
+	if name == "" {
 		panic("tool: required tool name cannot be blank")
 	}
 	return ToolMode(requiredPrefix + name)

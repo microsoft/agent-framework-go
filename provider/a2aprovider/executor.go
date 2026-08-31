@@ -383,7 +383,9 @@ func yieldCompletedResponse(execCtx *a2asrv.ExecutorContext, resp *agent.Respons
 	if !yield(artifact, nil) {
 		return nil
 	}
-	yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateCompleted, nil), nil)
+	if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateCompleted, nil), nil) {
+		return nil
+	}
 	return nil
 }
 
