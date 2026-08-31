@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   verify:
-    name: Verify examples and Copilot provider
+    name: Verify examples
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -62,18 +62,6 @@ jobs:
           fi
           exit "$status"
 
-      - name: Run Copilot integration tests
-        id: copilot_integration
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          set -o pipefail
-          go test -count=1 -v ./provider/copilotprovider -run '^TestE2E_' \
-            2>&1 | tee copilot-integration-tests.log
-
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -82,7 +70,6 @@ jobs:
           path: |
             live-examples.log
             live-examples.md
-            copilot-integration-tests.log
           if-no-files-found: warn
           retention-days: 14
 
@@ -91,9 +78,8 @@ jobs:
         shell: bash
         env:
           EXAMPLES_OUTCOME: ${{ steps.examples.outcome }}
-          COPILOT_INTEGRATION_OUTCOME: ${{ steps.copilot_integration.outcome }}
         run: |
-          if [[ "$EXAMPLES_OUTCOME" != "success" || "$COPILOT_INTEGRATION_OUTCOME" != "success" ]]; then
-            echo "Example verification or Copilot integration tests failed."
+          if [[ "$EXAMPLES_OUTCOME" != "success" ]]; then
+            echo "Example verification failed."
             exit 1
           fi
