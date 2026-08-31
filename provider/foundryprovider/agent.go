@@ -3,7 +3,9 @@
 package foundryprovider
 
 import (
+	"cmp"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 
@@ -59,17 +61,20 @@ func NewAgent(endpoint string, credential azcore.TokenCredential, target AgentTa
 	if credential == nil {
 		panic("credential is required")
 	}
+	var baseURL, model string
+	var targetOptions []option.RequestOption
+	instructions := config.Instructions
 	switch target := target.(type) {
 	case ModelDeployment:
 		projectEndpoint := normalizeAbsoluteEndpoint(endpoint)
-		model := strings.TrimSpace(string(target))
+		model = strings.TrimSpace(string(target))
 		if model == "" {
 			panic("model is required")
 		}
-		return newFoundryAgent(credential, config, foundryAgentMode{
-			baseURL: projectOpenAIBaseURL(projectEndpoint),
-			model:   model,
-		})
+		baseURL = projectOpenAIBaseURL(projectEndpoint)
+		// Foundry project endpoints encode the API version in /openai/v1 and
+		// reject the api-version query added by azure.WithEndpoint.
+		targetOptions = append(targetOptions, option.WithQueryDel("api-version"))
 	case ServerAgent:
 		projectEndpoint := normalizeAbsoluteEndpoint(endpoint)
 		agentName := strings.TrimSpace(string(target))
@@ -77,14 +82,45 @@ func NewAgent(endpoint string, credential azcore.TokenCredential, target AgentTa
 			panic("agent name is required")
 		}
 		agentEndpoint := serverAgentEndpoint(projectEndpoint, agentName)
-		return newFoundryAgent(credential, config, foundryAgentMode{
-			baseURL:        serverAgentOpenAIBaseURL(agentEndpoint),
-			agentName:      agentName,
-			requestOptions: []option.RequestOption{option.WithQuery("api-version", foundryDataPlaneAPIVersion)},
-		})
+		baseURL = serverAgentOpenAIBaseURL(agentEndpoint)
+		config.ID = cmp.Or(config.ID, agentName)
+		config.Name = cmp.Or(config.Name, agentName)
+		instructions = ""
 	default:
 		panic(fmt.Sprintf("unsupported Foundry agent target %T", target))
 	}
+
+	openAIOptions := []option.RequestOption{
+		// WithTokenCredential requires the Azure endpoint marker registered by
+		// WithEndpoint. WithEndpoint also adds ?api-version=v1 and rewrites a
+		// Responses path from /responses to /openai/responses.
+		azure.WithEndpoint(baseURL, foundryDataPlaneAPIVersion),
+		// Keep the complete Foundry OpenAI-compatible route as the request root.
+		option.WithBaseURL(baseURL),
+		option.WithMiddleware(func(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+			// Undo WithEndpoint's Azure OpenAI path prefix because baseURL already
+			// contains the complete Foundry route. Update RawPath as well so escaped
+			// server agent names remain encoded.
+			req.URL.Path = strings.TrimPrefix(req.URL.Path, "/openai")
+			req.URL.RawPath = strings.TrimPrefix(req.URL.RawPath, "/openai")
+			return next(req)
+		}),
+		// Use the Foundry audience while retaining the SDK's token refresh and
+		// authenticated-transport protections.
+		azure.WithTokenCredential(credential, azure.WithTokenCredentialScopes([]string{azureAIResourceScope})),
+	}
+	openAIOptions = append(openAIOptions, targetOptions...)
+	openAIOptions = append(openAIOptions, config.OpenAIOptions...)
+	openAIOptions = append(openAIOptions, clientHeadersRequestOption())
+	openAIOptions = append(openAIOptions, servedModelRequestOption())
+	config.Middlewares = append([]agent.Middleware{clientHeadersMiddleware{}, servedModelMiddleware{}}, config.Middlewares...)
+
+	return openaiprovider.NewResponsesAgent(openai.NewClient(openAIOptions...), openaiprovider.AgentConfig{
+		Config:             config.Config,
+		Instructions:       instructions,
+		Model:              model,
+		DisableStoreOutput: config.DisableStoreOutput,
+	})
 }
 
 func serverAgentOpenAIBaseURL(agentEndpoint string) string {
@@ -101,42 +137,6 @@ func serverAgentEndpoint(projectEndpoint string, agentName string) string {
 		panic(fmt.Sprintf("invalid project endpoint %q: %v", projectEndpoint, err))
 	}
 	return endpoint
-}
-
-type foundryAgentMode struct {
-	baseURL        string
-	agentName      string
-	model          string
-	requestOptions []option.RequestOption
-}
-
-func newFoundryAgent(credential azcore.TokenCredential, config AgentConfig, mode foundryAgentMode) *agent.Agent {
-	if config.ID == "" {
-		config.ID = mode.agentName
-	}
-	if config.Name == "" {
-		config.Name = mode.agentName
-	}
-	instructions := config.Instructions
-	if mode.agentName != "" {
-		instructions = ""
-	}
-	openAIOptions := []option.RequestOption{
-		option.WithBaseURL(mode.baseURL),
-		azure.WithTokenCredential(credential, azure.WithTokenCredentialScopes([]string{azureAIResourceScope})),
-	}
-	openAIOptions = append(openAIOptions, mode.requestOptions...)
-	openAIOptions = append(openAIOptions, config.OpenAIOptions...)
-	openAIOptions = append(openAIOptions, clientHeadersRequestOption())
-	openAIOptions = append(openAIOptions, servedModelRequestOption())
-	config.Middlewares = append([]agent.Middleware{clientHeadersMiddleware{}, servedModelMiddleware{}}, config.Middlewares...)
-
-	return openaiprovider.NewResponsesAgent(openai.NewClient(openAIOptions...), openaiprovider.AgentConfig{
-		Config:             config.Config,
-		Instructions:       instructions,
-		Model:              mode.model,
-		DisableStoreOutput: config.DisableStoreOutput,
-	})
 }
 
 func normalizeAbsoluteEndpoint(rawEndpoint string) string {

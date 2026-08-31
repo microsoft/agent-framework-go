@@ -2519,7 +2519,7 @@ func TestResponsesNonStreamingMCPCall_MapsResultContent(t *testing.T) {
                 "name":"create_issue",
                 "arguments":"{\"title\":\"Bug\"}",
                 "output":"issue #7 created",
-                "error":"rate limited"
+				"error":{"type":"mcp_tool_execution_error","message":"rate limited"}
               }]
             }
             `
@@ -2587,7 +2587,7 @@ func TestResponsesStreamingMCPCall_MapsResultContent(t *testing.T) {
 data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_001","object":"response","created_at":1741892091,"status":"in_progress","model":"gpt-4o-mini","output":[]}}
 
 event: response.output_item.done
-data: {"type":"response.output_item.done","sequence_number":1,"output_index":0,"item":{"type":"mcp_call","id":"mcp_123","server_label":"github","name":"create_issue","arguments":"{\"title\":\"Bug\"}","output":"issue #7 created","error":"rate limited"}}
+data: {"type":"response.output_item.done","sequence_number":1,"output_index":0,"item":{"type":"mcp_call","id":"mcp_123","server_label":"github","name":"create_issue","arguments":"{\"title\":\"Bug\"}","output":"issue #7 created","error":{"type":"mcp_tool_execution_error","message":"rate limited"}}}
 
 event: response.completed
 data: {"type":"response.completed","sequence_number":2,"response":{"id":"resp_001","object":"response","created_at":1741892091,"status":"completed","model":"gpt-4o-mini","output":[]}}

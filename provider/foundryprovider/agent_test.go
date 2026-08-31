@@ -17,6 +17,9 @@ func TestNewAgentUsesProjectResponsesEndpointAndConfig(t *testing.T) {
 		if r.URL.Path != "/projects/proj/openai/v1/responses" {
 			t.Fatalf("path = %q", r.URL.Path)
 		}
+		if got := r.URL.Query().Get("api-version"); got != "" {
+			t.Fatalf("api-version = %q, want omitted", got)
+		}
 		body := jsonMap(t, mustReadBody(t, r))
 		if body["model"] != "gpt-4o-mini" {
 			t.Fatalf("model = %#v", body["model"])
@@ -92,7 +95,7 @@ func TestNewAgentRunsAgainstFoundryAgentEndpoint(t *testing.T) {
 		if got := r.Header.Get("Authorization"); got == "" {
 			t.Fatal("missing Authorization header")
 		}
-		if got := r.Header.Get("User-Agent"); !strings.HasPrefix(got, "agent-framework-go/") {
+		if got := r.Header.Get("User-Agent"); !strings.Contains(got, "agent-framework-go/") {
 			t.Fatalf("User-Agent = %q", got)
 		}
 		body := jsonMap(t, mustReadBody(t, r))
