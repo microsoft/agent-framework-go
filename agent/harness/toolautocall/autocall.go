@@ -925,15 +925,15 @@ func snapshotApprovalRequest(request *message.ToolApprovalRequestContent) *messa
 	case *message.FunctionCallContent:
 		if call != nil {
 			callClone := *call
-			callClone.ContentHeader.AdditionalProperties = maps.Clone(call.AdditionalProperties)
-			callClone.ContentHeader.Annotations = slices.Clone(call.Annotations)
+			callClone.AdditionalProperties = maps.Clone(call.AdditionalProperties)
+			callClone.Annotations = slices.Clone(call.Annotations)
 			clone.ToolCall = &callClone
 		}
 	case *message.MCPServerToolCallContent:
 		if call != nil {
 			callClone := *call
-			callClone.ContentHeader.AdditionalProperties = maps.Clone(call.AdditionalProperties)
-			callClone.ContentHeader.Annotations = slices.Clone(call.Annotations)
+			callClone.AdditionalProperties = maps.Clone(call.AdditionalProperties)
+			callClone.Annotations = slices.Clone(call.Annotations)
 			clone.ToolCall = &callClone
 		}
 	default:
@@ -947,8 +947,8 @@ func snapshotFunctionCall(call *message.FunctionCallContent) *message.FunctionCa
 		return nil
 	}
 	clone := *call
-	clone.ContentHeader.AdditionalProperties = maps.Clone(call.AdditionalProperties)
-	clone.ContentHeader.Annotations = slices.Clone(call.Annotations)
+	clone.AdditionalProperties = maps.Clone(call.AdditionalProperties)
+	clone.Annotations = slices.Clone(call.Annotations)
 	return &clone
 }
 

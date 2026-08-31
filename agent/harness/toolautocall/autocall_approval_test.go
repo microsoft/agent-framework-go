@@ -117,7 +117,8 @@ func TestFunctionInvoking_BindsApprovalResponseToRecordedRequest(t *testing.T) {
 	}))
 	substituted := functool.MustNew(functool.Config{Name: "Substituted"}, func(context.Context, struct {
 		Value string `json:"value"`
-	}) (string, error) {
+	},
+	) (string, error) {
 		substitutedCalls++
 		return "substituted result", nil
 	})
