@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/checkpoint"
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
@@ -199,14 +199,15 @@ func loadOrInitState(
 	sess *agent.Session,
 	env *inproc.ExecutionEnvironment,
 	wf *workflow.Workflow,
-) (*providerState, error) {
+	initialMessages []*message.Message,
+) (*providerState, bool, error) {
 	var state *providerState
 	if sess != nil {
 		if ok, _ := sess.Get(sessionStateKey, &state); ok && state != nil {
 			state.ensurePending()
 			state.ensureWorkflowSessionID()
 			if state.stream != nil {
-				return state, nil
+				return state, false, nil
 			}
 		} else {
 			state = nil
@@ -219,25 +220,25 @@ func loadOrInitState(
 
 	effectiveEnv, err := state.executionEnvironment(env)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	if state.lastCheckpoint != nil {
 		stream, err := effectiveEnv.ResumeStreaming(ctx, wf, *state.lastCheckpoint, inproc.WithPendingRequestRepublish(false))
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		state.stream = stream
-		return state, nil
+		return state, false, nil
 	}
 
-	stream, err := effectiveEnv.RunStreaming(ctx, wf, nil, inproc.WithSessionID(state.workflowSessionID))
+	stream, err := effectiveEnv.RunStreaming(ctx, wf, initialMessages, inproc.WithSessionID(state.workflowSessionID))
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	state.stream = stream
 	state.ensurePending()
-	return state, nil
+	return state, true, nil
 }
 
 func (s *providerState) ensurePending() {
@@ -254,7 +255,7 @@ func (s *providerState) ensureWorkflowSessionID() {
 		s.workflowSessionID = s.lastCheckpoint.SessionID
 		return
 	}
-	s.workflowSessionID = uuid.NewString()
+	s.workflowSessionID = newMessageID()
 }
 
 func (s *providerState) closeStream(ctx context.Context) error {

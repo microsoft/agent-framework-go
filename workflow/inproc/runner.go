@@ -184,22 +184,30 @@ func (r *runner) RepublishPendingEvents(ctx context.Context) error {
 }
 
 // IsValidInputType checks if the given type is a valid input type for this workflow.
-func (r *runner) IsValidInputType(ctx context.Context, messageType reflect.Type) bool {
+func (r *runner) IsValidInputType(ctx context.Context, messageType reflect.Type) (bool, error) {
 	if _, known := r.knownValidInputTypes.Load(messageType); known {
-		return true
+		return true, nil
 	}
 
 	startingExecutor, err := r.runContext.ensureExecutor(ctx, r.startExecutorID, nil)
 	if err != nil {
-		return false
+		return false, err
 	}
 
 	if execution.CanHandleType(startingExecutor, messageType) {
 		r.knownValidInputTypes.Store(messageType, struct{}{})
-		return true
+		return true, nil
 	}
 
-	return false
+	return false, nil
+}
+
+func (r *runner) startingExecutorInputTypes(ctx context.Context) ([]reflect.Type, error) {
+	startingExecutor, err := r.runContext.ensureExecutor(ctx, r.startExecutorID, nil)
+	if err != nil {
+		return nil, err
+	}
+	return startingExecutor.DescribeProtocol().Accepts, nil
 }
 
 func (r *runner) beginStream(_ context.Context, mode execution.Mode) (*execution.RunHandle, error) {
@@ -225,25 +233,28 @@ func (r *runner) resumeStreamWithRepublish(ctx context.Context, mode execution.M
 	return execution.NewRunHandle(r, r, mode), nil
 }
 
-// EnqueueMessage enqueues a typed message to the workflow.
-func (r *runner) EnqueueMessage(ctx context.Context, message any) error {
+// EnqueueMessageUntyped enqueues a message using declaredType for validation
+// and routing.
+func (r *runner) EnqueueMessageUntyped(ctx context.Context, message any, declaredType reflect.Type) (bool, error) {
 	if err := r.runContext.checkEnded(); err != nil {
-		return err
+		return false, err
 	}
 	if message == nil {
-		return fmt.Errorf("message cannot be nil")
+		return false, fmt.Errorf("message cannot be nil")
 	}
 
-	if response, ok := message.(*workflow.ExternalResponse); ok {
-		return r.runContext.addExternalResponse(response)
+	valid, err := r.IsValidInputType(ctx, declaredType)
+	if err != nil {
+		return false, err
+	}
+	if !valid {
+		return false, nil
 	}
 
-	messageType := reflect.TypeOf(message)
-	if !r.IsValidInputType(ctx, messageType) {
-		return fmt.Errorf("message type %v is not a valid input type for this workflow: %w", messageType, workflow.ErrInvalidInputType)
+	if err := r.runContext.addExternalMessage(message, declaredType); err != nil {
+		return false, err
 	}
-
-	return r.runContext.addExternalMessage(message, messageType)
+	return true, nil
 }
 
 // EnqueueResponse enqueues an external response to the workflow.
@@ -387,11 +398,16 @@ func (r *runner) runSuperstep(ctx context.Context, currentStep *execution.StepCo
 		return err
 	}
 
-	// Process subworkflows
+	// Process joined subworkflows concurrently within the parent superstep.
+	var subworkflows errgroup.Group
 	for _, subRunner := range r.runContext.joinedSubworkflowRunnerSnapshot() {
-		if _, err := subRunner.RunSuperStep(ctx); err != nil {
+		subworkflows.Go(func() error {
+			_, err := subRunner.RunSuperStep(ctx)
 			return err
-		}
+		})
+	}
+	if err := subworkflows.Wait(); err != nil {
+		return err
 	}
 
 	// Create checkpoint
@@ -414,9 +430,6 @@ func (r *runner) deliverMessages(ctx context.Context, receiverID string, envelop
 
 	// Bind a context with no per-message trace context for delivery-level callbacks.
 	tracelessCtx := r.runContext.bind(ctx, receiverID, nil)
-	if err := executor.OnMessageDeliveryStarting(tracelessCtx); err != nil {
-		return err
-	}
 	defer func() {
 		// Always run the finished hook even on error / panic, but don't override
 		// any earlier error.
@@ -424,6 +437,9 @@ func (r *runner) deliverMessages(ctx context.Context, receiverID string, envelop
 			err = finishErr
 		}
 	}()
+	if err := executor.OnMessageDeliveryStarting(tracelessCtx); err != nil {
+		return err
+	}
 
 	for {
 		envelope, ok := envelopes.Dequeue()

@@ -5,6 +5,7 @@ package agentworkflow_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"iter"
 	"reflect"
@@ -99,9 +100,8 @@ func fixedTextAgent(id, name, text string) *agent.Agent {
 	return agent.New(
 		agent.ProviderConfig{ProviderName: "fixed-text", Run: run},
 		agent.Config{
-			ID:                  id,
-			Name:                name,
-			DisableFuncAutoCall: true,
+			ID:   id,
+			Name: name,
 		},
 	)
 }
@@ -133,9 +133,8 @@ func turnCountingAgent(id, name string) *agent.Agent {
 			},
 		},
 		agent.Config{
-			ID:                  id,
-			Name:                name,
-			DisableFuncAutoCall: true,
+			ID:   id,
+			Name: name,
 		},
 	)
 }
@@ -153,9 +152,8 @@ func fixedUpdatesAgent(id, name string, updates ...*agent.ResponseUpdate) *agent
 	return agent.New(
 		agent.ProviderConfig{ProviderName: "fixed-updates", Run: run},
 		agent.Config{
-			ID:                  id,
-			Name:                name,
-			DisableFuncAutoCall: true,
+			ID:   id,
+			Name: name,
 		},
 	)
 }
@@ -176,9 +174,8 @@ func buildCheckpointIdentityWorkflowAgent(t *testing.T, useStableInnerID bool, i
 	}
 	ag, err := agentworkflow.NewAgent(wf, agentworkflow.AgentConfig{
 		Config: agent.Config{
-			ID:                  checkpointIdentityWorkflowAgentID,
-			Name:                checkpointIdentityWorkflowAgentID,
-			DisableFuncAutoCall: true,
+			ID:   checkpointIdentityWorkflowAgentID,
+			Name: checkpointIdentityWorkflowAgentID,
 		},
 	})
 	if err != nil {
@@ -854,7 +851,7 @@ func TestNew_GatesHostedAgentResponseOutputsByDefault(t *testing.T) {
 	host := agentworkflow.New(
 		agent.New(
 			agent.ProviderConfig{ProviderName: "hosted-response", Run: run},
-			agent.Config{ID: "hosted-id", Name: "hosted-name", DisableFuncAutoCall: true},
+			agent.Config{ID: "hosted-id", Name: "hosted-name"},
 		),
 		agentworkflow.Config{EmitResponseEvents: true},
 	)
@@ -1135,6 +1132,103 @@ func TestNew_NilWorkflow(t *testing.T) {
 	if _, err := agentworkflow.NewAgent(nil, agentworkflow.AgentConfig{}); err == nil {
 		t.Fatalf("NewAgent(nil) should return an error")
 	}
+}
+
+func TestNew_EmptyFirstTurnEnqueuesMessageBatch(t *testing.T) {
+	var batchHandled bool
+	binding := workflow.ExecutorBinding{ID: "start", ImplementationID: "start"}
+	binding.NewExecutorFunc = func(string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: binding.ID,
+			ConfigureProtocol: func(builder *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				builder.RouteBuilder.
+					AddHandlerRaw(reflect.TypeFor[[]*message.Message](), nil, func(*workflow.Context, any) (any, error) {
+						batchHandled = true
+						return nil, nil
+					}).
+					AddHandlerRaw(reflect.TypeFor[workflow.TurnToken](), nil, func(*workflow.Context, any) (any, error) {
+						if !batchHandled {
+							return nil, errors.New("turn token arrived before message batch")
+						}
+						return nil, nil
+					})
+				return builder, nil
+			},
+		}, nil
+	}
+	wf, err := workflow.NewBuilder(binding).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ag, err := agentworkflow.NewAgent(wf, agentworkflow.AgentConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := ag.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ag.Run(t.Context(), nil, agent.WithSession(session)).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	if !batchHandled {
+		t.Fatal("empty initial message batch was not handled")
+	}
+}
+
+func TestRun_CloseError(t *testing.T) {
+	closeErr := errors.New("close failed")
+	newAgent := func(t *testing.T, closeCalls *int) *agent.Agent {
+		t.Helper()
+		binding := echoExecutorBinding("echo")
+		newExecutor := binding.NewExecutorFunc
+		binding.NewExecutorFunc = func(sessionID string) (*workflow.Executor, error) {
+			executor, err := newExecutor(sessionID)
+			if err != nil {
+				return nil, err
+			}
+			executor.CloseFunc = func(context.Context) error {
+				*closeCalls++
+				return closeErr
+			}
+			return executor, nil
+		}
+		wf, err := workflow.NewBuilder(binding).Build()
+		if err != nil {
+			t.Fatal(err)
+		}
+		ag, err := agentworkflow.NewAgent(wf, agentworkflow.AgentConfig{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ag
+	}
+
+	t.Run("natural completion", func(t *testing.T) {
+		closeCalls := 0
+		ag := newAgent(t, &closeCalls)
+		if _, err := ag.RunText(t.Context(), "hello").Collect(); !errors.Is(err, closeErr) {
+			t.Fatalf("RunText error = %v, want %v", err, closeErr)
+		}
+		if closeCalls != 1 {
+			t.Fatalf("close calls = %d, want 1", closeCalls)
+		}
+	})
+
+	t.Run("early stop", func(t *testing.T) {
+		closeCalls := 0
+		ag := newAgent(t, &closeCalls)
+		for _, err := range ag.RunText(t.Context(), "hello", agent.Stream(true)) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			break
+		}
+		if closeCalls != 1 {
+			t.Fatalf("close calls = %d, want 1", closeCalls)
+		}
+	})
 }
 
 func errorContentExecutorBinding(id string, messageText string) workflow.ExecutorBinding {
@@ -1420,7 +1514,7 @@ func newCheckpointIdentityRelayAgent(id string, name string) *agent.Agent {
 	}
 	return agent.New(
 		agent.ProviderConfig{ProviderName: "checkpoint-relay", Run: run},
-		agent.Config{ID: id, Name: name, DisableFuncAutoCall: true},
+		agent.Config{ID: id, Name: name},
 	)
 }
 
@@ -1448,7 +1542,7 @@ func newCheckpointIdentityTurnCounterAgent(id string, name string) *agent.Agent 
 	}
 	return agent.New(
 		agent.ProviderConfig{ProviderName: "checkpoint-counter", Run: run},
-		agent.Config{ID: id, Name: name, DisableFuncAutoCall: true},
+		agent.Config{ID: id, Name: name},
 	)
 }
 
@@ -2291,7 +2385,7 @@ func requestEmittingAgent(callID, name string) *agent.Agent {
 	}
 	return agent.New(
 		agent.ProviderConfig{ProviderName: "request-emitting", Run: run},
-		agent.Config{ID: "rep-id", Name: "rep-name", DisableFuncAutoCall: true},
+		agent.Config{ID: "rep-id", Name: "rep-name"},
 	)
 }
 
@@ -2315,7 +2409,7 @@ func requestCompletingAgent(callID, name string) *agent.Agent {
 	}
 	return agent.New(
 		agent.ProviderConfig{ProviderName: "request-completing", Run: run},
-		agent.Config{ID: "complete-id", Name: "complete-name", DisableFuncAutoCall: true},
+		agent.Config{ID: "complete-id", Name: "complete-name"},
 	)
 }
 

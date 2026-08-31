@@ -122,6 +122,7 @@ func TestConcurrentWorkflowBuilder_ExplicitOutputDesignationSuppressesDefaults(t
 	}
 	events := runBuiltWorkflow(t, wf)
 	texts := collectOutputTexts(events)
+	slices.Sort(texts)
 	if !slices.Equal(texts, []string{"from-a"}) {
 		t.Fatalf("output texts = %v, want [from-a]", texts)
 	}
@@ -208,7 +209,7 @@ func TestConcurrentWorkflowBuilder_ResetsEndExecutorBetweenTurns(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
+	stream, err := inproc.Lockstep.OpenStreaming(ctx, wf)
 	if err != nil {
 		t.Fatalf("RunStreaming: %v", err)
 	}

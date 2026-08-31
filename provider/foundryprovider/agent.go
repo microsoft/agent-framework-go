@@ -9,6 +9,7 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/azure"
@@ -24,6 +25,10 @@ const (
 type AgentConfig struct {
 	agent.Config
 
+	// ToolAutoCall configures automatic function-tool invocation. When nil, defaults
+	// are used.
+	ToolAutoCall *toolautocall.Config
+
 	// Instructions are provided to Foundry as system instructions for project Responses API agents.
 	// They are ignored for server-side Foundry prompt agents, whose instructions are owned by the service.
 	Instructions string
@@ -32,7 +37,8 @@ type AgentConfig struct {
 	// Use this when local session history providers own conversation state.
 	DisableStoreOutput bool
 
-	// OpenAIOptions are appended to the OpenAI-compatible per-agent client options.
+	// OpenAIOptions configure the OpenAI-compatible per-agent client. Foundry-owned
+	// endpoint, authentication, and protocol options take precedence.
 	OpenAIOptions []option.RequestOption
 }
 
@@ -121,21 +127,24 @@ func newFoundryAgent(credential azcore.TokenCredential, config AgentConfig, mode
 	if mode.agentName != "" {
 		instructions = ""
 	}
-	openAIOptions := []option.RequestOption{
+	openAIOptions := make([]option.RequestOption, 0, len(config.OpenAIOptions)+len(mode.requestOptions)+4)
+	openAIOptions = append(openAIOptions, config.OpenAIOptions...)
+	openAIOptions = append(openAIOptions,
 		option.WithBaseURL(mode.baseURL),
 		azure.WithTokenCredential(credential, azure.WithTokenCredentialScopes([]string{azureAIResourceScope})),
-	}
+	)
 	openAIOptions = append(openAIOptions, mode.requestOptions...)
-	openAIOptions = append(openAIOptions, config.OpenAIOptions...)
 	openAIOptions = append(openAIOptions, clientHeadersRequestOption())
 	openAIOptions = append(openAIOptions, servedModelRequestOption())
 	config.Middlewares = append([]agent.Middleware{clientHeadersMiddleware{}, servedModelMiddleware{}}, config.Middlewares...)
 
 	return openaiprovider.NewResponsesAgent(openai.NewClient(openAIOptions...), openaiprovider.AgentConfig{
 		Config:             config.Config,
+		ProviderName:       "microsoft.foundry",
 		Instructions:       instructions,
 		Model:              mode.model,
 		DisableStoreOutput: config.DisableStoreOutput,
+		ToolAutoCall:       config.ToolAutoCall,
 	})
 }
 

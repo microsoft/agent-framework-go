@@ -53,9 +53,8 @@ func newEchoAgent(name string) *agent.Agent {
 	return agent.New(
 		agent.ProviderConfig{ProviderName: "echo", Run: run},
 		agent.Config{
-			ID:                  id,
-			Name:                name,
-			DisableFuncAutoCall: true,
+			ID:   id,
+			Name: name,
 		},
 	)
 }
@@ -143,7 +142,7 @@ func TestWorkflowBuilderWithHostedAgentsTagsIntermediateOutputs(t *testing.T) {
 		t.Fatal("expected at least one OutputEvent carrying *agent.Response")
 	}
 	for _, output := range append(updates, responses...) {
-		if !output.IsIntermediate() {
+		if len(output.Tags) != 1 || output.Tags[0] != workflow.OutputTagIntermediate {
 			t.Fatalf("OutputEvent tags = %v, want intermediate", output.Tags)
 		}
 	}
@@ -154,7 +153,7 @@ func TestStreamAsync_ExecutesWorkflowWithTurnToken(t *testing.T) {
 	wf := buildSequentialWorkflow(t, a)
 
 	ctx := context.Background()
-	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
+	stream, err := inproc.Default.OpenStreaming(ctx, wf)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -193,7 +192,7 @@ func TestStreamAsync_ExecutesWorkflowWithTurnToken(t *testing.T) {
 func runHostedAgentWorkflow(t *testing.T, wf *workflow.Workflow) []workflow.Event {
 	t.Helper()
 	ctx := context.Background()
-	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
+	stream, err := inproc.Default.OpenStreaming(ctx, wf)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -234,7 +233,7 @@ func TestRunAsyncAndStreamAsync_ProduceSimilarResults(t *testing.T) {
 	}
 	nonStreamingEvents := slices.Collect(run.OutgoingEvents())
 
-	stream, err := inproc.Default.RunStreaming(ctx, wf2, nil)
+	stream, err := inproc.Default.OpenStreaming(ctx, wf2)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -266,7 +265,7 @@ func TestRunStreamingAsync_StatusReachesIdleBeforeWatch(t *testing.T) {
 	wf := buildSequentialWorkflow(t, a)
 
 	ctx := context.Background()
-	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
+	stream, err := inproc.Default.OpenStreaming(ctx, wf)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}

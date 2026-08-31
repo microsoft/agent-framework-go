@@ -68,19 +68,17 @@ func (run *Run) NewEventCount() int {
 	return len(run.eventSink) - run.lastBookmark
 }
 
-// NewEvents returns an iterator over the events accumulated since the previous
-// call to NewEvents. The internal bookmark advances as each event is yielded,
-// so stopping iteration early leaves unread events available to a subsequent
-// call.
+// NewEvents returns a snapshot iterator over the events accumulated since the
+// previous call to NewEvents. The internal bookmark advances when NewEvents is
+// called, so stopping iteration early does not leave unread events available to
+// a subsequent call.
 func (run *Run) NewEvents() iter.Seq[workflow.Event] {
+	start := run.lastBookmark
+	end := len(run.eventSink)
+	run.lastBookmark = end
 	return func(yield func(workflow.Event) bool) {
-		// Advance the read bookmark as each event is delivered so that stopping
-		// the iteration early leaves the un-yielded events available to a later
-		// NewEvents call instead of silently discarding them.
-		for run.lastBookmark < len(run.eventSink) {
-			evt := run.eventSink[run.lastBookmark]
-			run.lastBookmark++
-			if !yield(evt) {
+		for i := start; i < end; i++ {
+			if !yield(run.eventSink[i]) {
 				return
 			}
 		}
@@ -91,7 +89,7 @@ func (run *Run) NewEvents() iter.Seq[workflow.Event] {
 // halt, returning whether any events were raised.
 func (run *Run) Resume(ctx context.Context, messages ...any) (bool, error) {
 	for _, msg := range messages {
-		if err := run.runHandle.EnqueueMessage(ctx, msg); err != nil {
+		if _, err := run.runHandle.EnqueueMessageUntyped(ctx, msg, nil); err != nil {
 			return false, err
 		}
 	}
@@ -166,9 +164,12 @@ func (stream *StreamingRun) SendResponse(ctx context.Context, response *workflow
 	return stream.runHandle.EnqueueResponse(ctx, response)
 }
 
-// SendMessage enqueues a message as input to the workflow.
-func (stream *StreamingRun) SendMessage(ctx context.Context, message any) error {
-	return stream.runHandle.EnqueueMessage(ctx, message)
+// TrySendMessage attempts to enqueue a message as input to the workflow. It
+// returns false without an error when the workflow does not accept its type.
+// TODO: Once Go 1.27 is the minimum supported version, add generic message
+// entry points that preserve caller-declared types during validation and routing.
+func (stream *StreamingRun) TrySendMessage(ctx context.Context, message any) (bool, error) {
+	return stream.runHandle.EnqueueMessageUntyped(ctx, message, nil)
 }
 
 // ResponsePortExecutorID returns the executor that handles responses on the

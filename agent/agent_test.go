@@ -147,6 +147,59 @@ func TestNew_IgnoresNilMiddleware(t *testing.T) {
 	}
 }
 
+func TestAgent_MessageInjectionRunsInsideProviderMiddleware(t *testing.T) {
+	injection := &agent.MessageInjector{}
+	session := &agent.Session{}
+	var providerMiddlewareCalls int
+	var calls [][]string
+	run := func(_ context.Context, messages []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		texts := make([]string, 0, len(messages))
+		for _, msg := range messages {
+			texts = append(texts, msg.String())
+		}
+		calls = append(calls, texts)
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			if len(calls) == 1 {
+				if err := injection.EnqueueMessages(session, message.NewText("during run")); err != nil {
+					yield(nil, err)
+					return
+				}
+				yield(&agent.ResponseUpdate{Contents: message.Contents{&message.TextContent{Text: "working"}}}, nil)
+				return
+			}
+			yield(&agent.ResponseUpdate{Contents: message.Contents{
+				&message.FunctionCallContent{CallID: "call-1", Name: "tool"},
+			}}, nil)
+		}
+	}
+	providerMiddleware := agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		providerMiddlewareCalls++
+		return next(ctx, messages, options...)
+	})
+	a := agent.New(agent.ProviderConfig{Run: run, Middlewares: []agent.Middleware{providerMiddleware}}, agent.Config{
+		MessageInjector: injection,
+	})
+	if err := injection.EnqueueMessages(session, message.NewText("before run")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.RunText(t.Context(), "original", agent.WithSession(session)).Collect(); err != nil {
+		t.Fatal(err)
+	}
+
+	if providerMiddlewareCalls != 1 {
+		t.Fatalf("provider middleware calls = %d, want 1", providerMiddlewareCalls)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("provider calls = %d, want 2", len(calls))
+	}
+	if want := []string{"original", "before run"}; !slices.Equal(calls[0], want) {
+		t.Fatalf("first provider messages = %v, want %v", calls[0], want)
+	}
+	if want := []string{"original", "before run", "during run"}; !slices.Equal(calls[1], want) {
+		t.Fatalf("second provider messages = %v, want %v", calls[1], want)
+	}
+}
+
 func TestAgent_RunText(t *testing.T) {
 	var capturedMessages []*message.Message
 	responseBuilder := agenttest.NewResponseBuilder(
@@ -196,6 +249,25 @@ func TestAgent_RunText(t *testing.T) {
 
 	if resp.Messages[0].AuthorName != a.Name() {
 		t.Errorf("expected author name %q, got %q", a.Name(), resp.Messages[0].AuthorName)
+	}
+}
+
+func TestAgent_RunTextRejectsBlankMessage(t *testing.T) {
+	providerCalled := false
+	a := agent.New(agent.ProviderConfig{
+		Run: func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			providerCalled = true
+			return func(func(*agent.ResponseUpdate, error) bool) {}
+		},
+	}, agent.Config{ID: "test-agent"})
+
+	for _, input := range []string{"", " ", "\t"} {
+		if _, err := a.RunText(t.Context(), input).Collect(); err == nil {
+			t.Errorf("RunText(%q) error = nil, want blank-message error", input)
+		}
+	}
+	if providerCalled {
+		t.Fatal("provider was called for blank input")
 	}
 }
 
@@ -279,6 +351,13 @@ func TestAgent_RunMessage(t *testing.T) {
 
 	if len(resp.Messages) != 1 {
 		t.Fatalf("expected 1 response message, got %d", len(resp.Messages))
+	}
+}
+
+func TestAgent_RunMessageRejectsNil(t *testing.T) {
+	a := agenttest.New(agenttest.NewResponseBuilder().Build())
+	if _, err := a.RunMessage(t.Context(), nil).Collect(); err == nil {
+		t.Fatal("RunMessage(nil) error = nil, want error")
 	}
 }
 
@@ -2102,7 +2181,7 @@ func TestAgent_Run_ContextProvider_InvokedReceivesRunError(t *testing.T) {
 	}
 }
 
-func TestAgent_Run_ContextProvider_EarlyStopWithoutErrorStillStores(t *testing.T) {
+func TestAgent_Run_ContextProvider_EarlyStopWithoutErrorDoesNotStore(t *testing.T) {
 	storeCalled := false
 
 	historyProvider := agent.NewContextProvider(agent.ContextProviderConfig{
@@ -2134,8 +2213,8 @@ func TestAgent_Run_ContextProvider_EarlyStopWithoutErrorStillStores(t *testing.T
 		break
 	}
 
-	if !storeCalled {
-		t.Fatal("expected store to still be called when iteration stops without an error")
+	if storeCalled {
+		t.Fatal("store called after response stream was abandoned")
 	}
 }
 

@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
 )
 
@@ -20,9 +19,7 @@ func TestWithClientHeaderStampsRequest(t *testing.T) {
 	}))
 	defer server.Close()
 
-	foundryAgent := newFoundryAgent(t, server, foundryprovider.ModelDeployment("gpt-4o-mini"), foundryprovider.AgentConfig{
-		Config: agent.Config{DisableFuncAutoCall: true},
-	})
+	foundryAgent := newFoundryAgent(t, server, foundryprovider.ModelDeployment("gpt-4o-mini"), foundryprovider.AgentConfig{})
 
 	if _, err := foundryAgent.RunText(t.Context(), "hello", foundryprovider.WithClientHeader("x-client-end-user-id", "user-123")).Collect(); err != nil {
 		t.Fatalf("RunText error = %v", err)
@@ -73,9 +70,7 @@ func TestWithClientHeadersClonesInputMap(t *testing.T) {
 	option := foundryprovider.WithClientHeaders(headers)
 	headers["x-client-end-user-id"] = "bob"
 
-	foundryAgent := newFoundryAgent(t, server, foundryprovider.ModelDeployment("gpt-4o-mini"), foundryprovider.AgentConfig{
-		Config: agent.Config{DisableFuncAutoCall: true},
-	})
+	foundryAgent := newFoundryAgent(t, server, foundryprovider.ModelDeployment("gpt-4o-mini"), foundryprovider.AgentConfig{})
 	if _, err := foundryAgent.RunText(t.Context(), "hello", option).Collect(); err != nil {
 		t.Fatalf("RunText error = %v", err)
 	}
@@ -93,13 +88,30 @@ func TestWithClientHeaderAccumulatesAndUpserts(t *testing.T) {
 	}))
 	defer server.Close()
 
-	foundryAgent := newFoundryAgent(t, server, foundryprovider.ModelDeployment("gpt-4o-mini"), foundryprovider.AgentConfig{
-		Config: agent.Config{DisableFuncAutoCall: true},
-	})
+	foundryAgent := newFoundryAgent(t, server, foundryprovider.ModelDeployment("gpt-4o-mini"), foundryprovider.AgentConfig{})
 	_, err := foundryAgent.RunText(t.Context(), "hello",
 		foundryprovider.WithClientHeader("x-client-a", "1"),
 		foundryprovider.WithClientHeader("x-client-b", "2"),
 		foundryprovider.WithClientHeader("x-client-a", "1-updated"),
+	).Collect()
+	if err != nil {
+		t.Fatalf("RunText error = %v", err)
+	}
+}
+
+func TestWithClientHeaderUpsertsCaseInsensitively(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Values("x-client-a"); len(got) != 1 || got[0] != "updated" {
+			t.Fatalf("x-client-a = %#v, want [updated]", got)
+		}
+		writeResponsesOK(w)
+	}))
+	defer server.Close()
+
+	foundryAgent := newFoundryAgent(t, server, foundryprovider.ModelDeployment("gpt-4o-mini"), foundryprovider.AgentConfig{})
+	_, err := foundryAgent.RunText(t.Context(), "hello",
+		foundryprovider.WithClientHeader("x-client-a", "first"),
+		foundryprovider.WithClientHeader("X-CLIENT-A", "updated"),
 	).Collect()
 	if err != nil {
 		t.Fatalf("RunText error = %v", err)
@@ -114,9 +126,7 @@ func TestWithClientHeaderDoesNotLeakToSubsequentRun(t *testing.T) {
 	}))
 	defer server.Close()
 
-	foundryAgent := newFoundryAgent(t, server, foundryprovider.ModelDeployment("gpt-4o-mini"), foundryprovider.AgentConfig{
-		Config: agent.Config{DisableFuncAutoCall: true},
-	})
+	foundryAgent := newFoundryAgent(t, server, foundryprovider.ModelDeployment("gpt-4o-mini"), foundryprovider.AgentConfig{})
 	if _, err := foundryAgent.RunText(t.Context(), "hello", foundryprovider.WithClientHeader("x-client-end-user-id", "alice")).Collect(); err != nil {
 		t.Fatalf("first RunText error = %v", err)
 	}

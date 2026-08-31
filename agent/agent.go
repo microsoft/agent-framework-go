@@ -8,6 +8,7 @@ import (
 	"iter"
 	"log/slog"
 	"slices"
+	"strings"
 	"sync/atomic"
 
 	"github.com/google/uuid"
@@ -81,10 +82,6 @@ type Config struct {
 	// ContextProviders inject and persist context around each agent run.
 	ContextProviders []ContextProvider
 
-	// DisableFuncAutoCall tells provider constructors not to add automatic
-	// function-tool calling middleware.
-	DisableFuncAutoCall bool
-
 	// Logger receives run, middleware, and provider diagnostics.
 	Logger *slog.Logger
 
@@ -96,6 +93,10 @@ type Config struct {
 
 	// Middlewares wrap the agent lifecycle before history and context providers.
 	Middlewares []Middleware
+
+	// MessageInjector configures mid-run message injection. Call its
+	// EnqueueMessages method to queue messages. Nil disables message injection.
+	MessageInjector *MessageInjector
 
 	// Tools are added to every run.
 	Tools []tool.Tool
@@ -124,9 +125,13 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 	if cfg.Logger != nil && !cfg.DisableRunLogs {
 		agentMiddlewares = append([]Middleware{newRunLoggerMiddleware(cfg.Logger, cfg.LogSensitiveData)}, agentMiddlewares...)
 	}
-	providerMiddlewares := prov.Middlewares
+	providerMiddlewares := make([]Middleware, 0, len(prov.Middlewares)+2)
+	providerMiddlewares = append(providerMiddlewares, prov.Middlewares...)
+	if cfg.MessageInjector != nil {
+		providerMiddlewares = append(providerMiddlewares, MiddlewareFunc(cfg.MessageInjector.run))
+	}
 	if prov.Format != nil || prov.Unmarshal != nil {
-		providerMiddlewares = append(slices.Clone(providerMiddlewares), &structuredOutputMiddleware{
+		providerMiddlewares = append(providerMiddlewares, &structuredOutputMiddleware{
 			format:    prov.Format,
 			unmarshal: prov.Unmarshal,
 		})
@@ -246,11 +251,17 @@ func (a *Agent) CreateSession(ctx context.Context, options ...Option) (*Session,
 
 // RunText runs the agent with a single user text message.
 func (a *Agent) RunText(ctx context.Context, msg string, options ...Option) ResponseStream {
+	if strings.TrimSpace(msg) == "" {
+		return errorResponseStream(errors.New("message cannot be blank"))
+	}
 	return a.Run(ctx, []*message.Message{message.NewText(msg)}, options...)
 }
 
 // RunMessage runs the agent with a single message.
 func (a *Agent) RunMessage(ctx context.Context, msg *message.Message, options ...Option) ResponseStream {
+	if msg == nil {
+		return errorResponseStream(errors.New("message cannot be nil"))
+	}
 	return a.Run(ctx, []*message.Message{msg}, options...)
 }
 
@@ -258,11 +269,15 @@ func (a *Agent) RunMessage(ctx context.Context, msg *message.Message, options ..
 func (a *Agent) Run(ctx context.Context, messages []*message.Message, options ...Option) ResponseStream {
 	ctx, preparedMessages, options, err := a.prepareRun(ctx, messages, options)
 	if err != nil {
-		return func(yield func(*ResponseUpdate, error) bool) {
-			yield(nil, err)
-		}
+		return errorResponseStream(err)
 	}
 	return ResponseStream(a.runPipeline(ctx, preparedMessages, options...))
+}
+
+func errorResponseStream(err error) ResponseStream {
+	return func(yield func(*ResponseUpdate, error) bool) {
+		yield(nil, err)
+	}
 }
 
 func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error] {
@@ -366,6 +381,9 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 			if state.stopped || err != nil {
 				break
 			}
+		}
+		if state.stopped && state.runErr == nil {
+			return
 		}
 
 		historyStoreProvider := historyProvider

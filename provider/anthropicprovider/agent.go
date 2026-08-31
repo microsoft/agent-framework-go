@@ -42,6 +42,10 @@ type client struct {
 type AgentConfig struct {
 	agent.Config
 
+	// ToolAutoCall configures automatic function-tool invocation. When nil, defaults
+	// are used.
+	ToolAutoCall *toolautocall.Config
+
 	// Instructions are provided to Anthropic as system instructions for each run.
 	Instructions string
 
@@ -55,15 +59,13 @@ func NewAgent(aclient anthropic.Client, config AgentConfig) *agent.Agent {
 		config: config,
 	}
 	if config.Instructions != "" {
-		config.RunOptions = append(config.RunOptions, agent.WithInstructions(config.Instructions))
+		config.RunOptions = append(slices.Clone(config.RunOptions), agent.WithInstructions(config.Instructions))
 	}
-	var providerMiddlewares []agent.Middleware
-	if !config.DisableFuncAutoCall {
-		providerMiddlewares = append(providerMiddlewares, toolautocall.New(toolautocall.Config{
-			Logger:           config.Logger,
-			LogSensitiveData: config.LogSensitiveData,
-		}))
+	autoCall := toolautocall.Config{Logger: config.Logger, LogSensitiveData: config.LogSensitiveData}
+	if config.ToolAutoCall != nil {
+		autoCall = *config.ToolAutoCall
 	}
+	providerMiddlewares := []agent.Middleware{toolautocall.New(autoCall)}
 	return agent.New(agent.ProviderConfig{
 		Run:          c.run,
 		ProviderName: "anthropic",
@@ -444,14 +446,12 @@ func (a *client) buildMessageParams(messages []*message.Message, opts []agent.Op
 				OfNone: &anthropic.ToolChoiceNoneParam{},
 			}
 		case tool.ToolModeRequired:
-			names := mode.Required()
-			if len(names) != 1 {
-				// Anthropic requires either a single tool name or "any" for multiple tools
+			if name, ok := mode.RequiredTool(); !ok {
 				params.ToolChoice = anthropic.ToolChoiceUnionParam{
 					OfAny: &anthropic.ToolChoiceAnyParam{},
 				}
 			} else {
-				params.ToolChoice = anthropic.ToolChoiceParamOfTool(names[0])
+				params.ToolChoice = anthropic.ToolChoiceParamOfTool(name)
 			}
 		}
 	}

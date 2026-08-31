@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"iter"
-	"maps"
 	"net/http"
 	"strings"
 
@@ -26,7 +25,7 @@ func (o clientHeadersOpt) MAFValue() any { return map[string]string(o) }
 // WithClientHeader adds a single x-client-* header to a Foundry agent run.
 func WithClientHeader(name string, value string) agent.Option {
 	validateClientHeader(name, value)
-	return clientHeadersOpt{name: value}
+	return clientHeadersOpt{strings.ToLower(name): value}
 }
 
 // WithClientHeaders adds multiple x-client-* headers to a Foundry agent run.
@@ -34,7 +33,11 @@ func WithClientHeaders(headers map[string]string) agent.Option {
 	cloned := make(map[string]string, len(headers))
 	for name, value := range headers {
 		validateClientHeader(name, value)
-		cloned[name] = value
+		normalizedName := strings.ToLower(name)
+		if _, exists := cloned[normalizedName]; exists {
+			panic(fmt.Sprintf("duplicate client header %q", name))
+		}
+		cloned[normalizedName] = value
 	}
 	return clientHeadersOpt(cloned)
 }
@@ -70,7 +73,9 @@ func collectClientHeaders(options []agent.Option) map[string]string {
 		if headers == nil {
 			headers = make(map[string]string, len(clientHeaders))
 		}
-		maps.Copy(headers, clientHeaders)
+		for name, value := range clientHeaders {
+			headers[strings.ToLower(name)] = value
+		}
 	}
 	return headers
 }

@@ -281,7 +281,7 @@ func TestInProcessRun_StateShouldPersist_JSONCheckpointed(t *testing.T) {
 			t.Errorf("Close read run: %v", err)
 		}
 	}()
-	if err := readRun.SendMessage(ctx, "read"); err != nil {
+	if _, err := readRun.TrySendMessage(ctx, "read"); err != nil {
 		t.Fatalf("SendMessage read: %v", err)
 	}
 	var got any
@@ -320,13 +320,13 @@ func TestInProcessRun_ReadStateKeysLifecycle(t *testing.T) {
 			}
 
 			ctx := context.Background()
-			stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
+			stream, err := inproc.Lockstep.OpenStreaming(ctx, wf)
 			if err != nil {
 				t.Fatalf("RunStreaming: %v", err)
 			}
 			defer func() { _ = stream.CancelRun() }()
 
-			if err := stream.SendMessage(ctx, "write"); err != nil {
+			if _, err := stream.TrySendMessage(ctx, "write"); err != nil {
 				t.Fatalf("SendMessage write: %v", err)
 			}
 			for _, err := range stream.WatchUntilHalt(ctx) {
@@ -342,7 +342,7 @@ func TestInProcessRun_ReadStateKeysLifecycle(t *testing.T) {
 				t.Fatalf("reader keys after write = %v, want %v", got, testCase.wantAfterWrite)
 			}
 
-			if err := stream.SendMessage(ctx, "delete"); err != nil {
+			if _, err := stream.TrySendMessage(ctx, "delete"); err != nil {
 				t.Fatalf("SendMessage delete: %v", err)
 			}
 			for _, err := range stream.WatchUntilHalt(ctx) {
