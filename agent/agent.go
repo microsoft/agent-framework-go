@@ -85,6 +85,12 @@ type Config struct {
 	// function-tool calling middleware.
 	DisableFuncAutoCall bool
 
+	// AllowConcurrentInvocations tells provider constructors to let the default
+	// automatic function-tool calling middleware invoke multiple tool calls from
+	// the same provider response in parallel. The default is false.
+	// It has no effect when DisableFuncAutoCall is true.
+	AllowConcurrentInvocations bool
+
 	// Logger receives run, middleware, and provider diagnostics.
 	Logger *slog.Logger
 

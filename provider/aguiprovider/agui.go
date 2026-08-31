@@ -17,7 +17,7 @@ import (
 	aguiEvents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	aguiTypes "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
+	"github.com/microsoft/agent-framework-go/internal/providerdefaults"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 )
@@ -59,11 +59,8 @@ func NewAgent(aclient *aguiSSEClient.Client, config AgentConfig) *agent.Agent {
 		p.decoder = aguiEvents.NewEventDecoder(nil)
 	}
 	var providerMiddlewares []agent.Middleware
-	if !config.DisableFuncAutoCall {
-		providerMiddlewares = append(providerMiddlewares, toolautocall.New(toolautocall.Config{
-			Logger:           config.Logger,
-			LogSensitiveData: config.LogSensitiveData,
-		}))
+	if middleware := providerdefaults.ToolAutoCallMiddleware(config.Config); middleware != nil {
+		providerMiddlewares = append(providerMiddlewares, middleware)
 	}
 	return agent.New(agent.ProviderConfig{
 		ProviderName:                "agui",

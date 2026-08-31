@@ -17,7 +17,7 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
-	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
+	"github.com/microsoft/agent-framework-go/internal/providerdefaults"
 	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
@@ -74,11 +74,8 @@ func NewChatCompletionsAgent(oclient openai.Client, config AgentConfig) *agent.A
 		config.RunOptions = append(config.RunOptions, agent.WithInstructions(config.Instructions))
 	}
 	var providerMiddlewares []agent.Middleware
-	if !config.DisableFuncAutoCall {
-		providerMiddlewares = append(providerMiddlewares, toolautocall.New(toolautocall.Config{
-			Logger:           config.Logger,
-			LogSensitiveData: config.LogSensitiveData,
-		}))
+	if middleware := providerdefaults.ToolAutoCallMiddleware(config.Config); middleware != nil {
+		providerMiddlewares = append(providerMiddlewares, middleware)
 	}
 	return agent.New(agent.ProviderConfig{
 		ProviderName: "openai",

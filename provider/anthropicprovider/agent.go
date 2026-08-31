@@ -18,7 +18,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
-	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
+	"github.com/microsoft/agent-framework-go/internal/providerdefaults"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/hostedtool"
@@ -58,11 +58,8 @@ func NewAgent(aclient anthropic.Client, config AgentConfig) *agent.Agent {
 		config.RunOptions = append(config.RunOptions, agent.WithInstructions(config.Instructions))
 	}
 	var providerMiddlewares []agent.Middleware
-	if !config.DisableFuncAutoCall {
-		providerMiddlewares = append(providerMiddlewares, toolautocall.New(toolautocall.Config{
-			Logger:           config.Logger,
-			LogSensitiveData: config.LogSensitiveData,
-		}))
+	if middleware := providerdefaults.ToolAutoCallMiddleware(config.Config); middleware != nil {
+		providerMiddlewares = append(providerMiddlewares, middleware)
 	}
 	return agent.New(agent.ProviderConfig{
 		Run:          c.run,
