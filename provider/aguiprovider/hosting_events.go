@@ -185,12 +185,12 @@ func updatesToAGUIEvents(
 					continue
 				}
 
-				if !closeReasoning() {
-					return
-				}
-
 				eventMessageID := update.MessageID
-				if isTextLikeContent(c) {
+				textLike := isTextLikeContent(c)
+				if textLike {
+					if !closeReasoning() {
+						return
+					}
 					sourceIDChanged := update.MessageID != "" && currentMessageSourceID != update.MessageID
 					if currentMessageID == "" || sourceIDChanged {
 						if !closeText() {
@@ -215,6 +215,14 @@ func updatesToAGUIEvents(
 						return
 					}
 					return
+				}
+				if len(events) == 0 {
+					continue
+				}
+				if !textLike {
+					if !closeReasoning() {
+						return
+					}
 				}
 				for _, e := range events {
 					if !yield(e, nil) {

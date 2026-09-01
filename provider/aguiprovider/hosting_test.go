@@ -403,6 +403,39 @@ func TestHandler_ReasoningDeltasWithoutMessageID_ShareLifecycle(t *testing.T) {
 	}
 }
 
+func TestHandler_ReasoningIgnoresNonEmittingContent(t *testing.T) {
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: message.Contents{
+					&message.TextReasoningContent{Text: "Think "},
+					&message.URIContent{},
+					&message.TextReasoningContent{Text: "carefully."},
+				},
+			}, nil)
+		}
+	})
+	h := aguiprovider.NewJSONHTTPHandler(a, aguiprovider.HandlerConfig{})
+
+	body := `{"threadId":"thread-1","runId":"run-1","messages":[{"id":"u1","role":"user","content":"ping"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	reasoning := eventsWithPrefixes(decodeSSEEvents(t, rr.Body.String()), "REASONING_")
+	wantTypes := []string{
+		"REASONING_START",
+		"REASONING_MESSAGE_START",
+		"REASONING_MESSAGE_CONTENT",
+		"REASONING_MESSAGE_CONTENT",
+		"REASONING_MESSAGE_END",
+		"REASONING_END",
+	}
+	assertEventTypes(t, reasoning, wantTypes)
+	assertSharedMessageID(t, reasoning)
+}
+
 func TestHandler_TextDeltasWithoutMessageID_ShareLifecycle(t *testing.T) {
 	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
