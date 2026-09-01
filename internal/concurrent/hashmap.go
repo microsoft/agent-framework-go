@@ -110,16 +110,19 @@ func (m *HashMap[K, V]) Set(key K, value V) (prev V, changed bool) {
 }
 
 // LoadOrStore returns the existing value for key if present. Otherwise, it
-// stores and returns the given value. The loaded result is true if the value
-// was loaded, false if stored. Unlike a separate Get followed by Set, this
-// check-and-set is performed atomically under a single lock, so concurrent
-// callers racing to initialize the same key never lose an update.
-func (m *HashMap[K, V]) LoadOrStore(key K, value V) (actual V, loaded bool) {
+// calls newValue to construct a value, stores it, and returns it. newValue is
+// only called on a miss, so callers don't pay the cost of constructing a
+// value when the key is already present. The loaded result is true if the
+// value was loaded, false if stored. Unlike a separate Get followed by Set,
+// this check-and-set is performed atomically under a single lock, so
+// concurrent callers racing to initialize the same key never lose an update.
+func (m *HashMap[K, V]) LoadOrStore(key K, newValue func() V) (actual V, loaded bool) {
 	m.state.mu.Lock()
 	defer m.state.mu.Unlock()
 	if existing, ok := m.state.inner.Get(key); ok {
 		return existing, true
 	}
+	value := newValue()
 	m.state.inner.Set(key, value)
 	return value, false
 }

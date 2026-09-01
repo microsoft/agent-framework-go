@@ -182,14 +182,11 @@ func NewStateManager() StateManager {
 // multiple executors within the same superstep, so the check-and-create must
 // be atomic: a plain Get followed by Set can race and silently discard one
 // of two concurrently created scopes, losing any state written through it.
-// The common case (the scope already exists) is served by a lock-free Get,
-// so LoadOrStore's atomic check-and-create is only reached, and a new
-// StateScope only allocated, on the first access to a given scope.
+// LoadOrStore only constructs a new StateScope when the scope doesn't
+// already exist, so the common case (the scope already exists) doesn't pay
+// for an unnecessary allocation.
 func (sm *StateManager) getOrCreateScope(scopeID workflow.ScopeID) *StateScope {
-	if scope, ok := sm.scopes.Get(scopeID); ok {
-		return scope
-	}
-	scope, _ := sm.scopes.LoadOrStore(scopeID, NewStateScope(scopeID))
+	scope, _ := sm.scopes.LoadOrStore(scopeID, func() *StateScope { return NewStateScope(scopeID) })
 	return scope
 }
 
