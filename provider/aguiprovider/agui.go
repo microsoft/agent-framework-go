@@ -383,6 +383,10 @@ type toolCallAccumulator struct {
 	// TextMessageChunkEvent that carried one. Chunks that omit MessageID
 	// continue that message.
 	lastChunkMessageID string
+	// lastReasoningChunkMessageID is the same for ReasoningMessageChunkEvent,
+	// kept separate from lastChunkMessageID so interleaved text and reasoning
+	// chunks that omit MessageID do not inherit each other's message.
+	lastReasoningChunkMessageID string
 }
 
 func (a *toolCallAccumulator) onEvent(evt aguiEvents.Event) ([]*agent.ResponseUpdate, error) {
@@ -447,6 +451,23 @@ func (a *toolCallAccumulator) onEvent(evt aguiEvents.Event) ([]*agent.ResponseUp
 			MessageID: a.lastChunkMessageID,
 			CreatedAt: eventTime(evt),
 			Contents:  message.Contents{&message.TextContent{Text: delta}},
+		}}, nil
+	case *aguiEvents.ReasoningMessageChunkEvent:
+		delta := deref(e.Delta)
+		if delta == "" {
+			return nil, nil
+		}
+		// A chunk may omit MessageID to continue the current reasoning message;
+		// reuse the last reasoning chunk MessageID (kept separate from the text
+		// chunk MessageID so interleaved text/reasoning chunks do not cross).
+		if id := deref(e.MessageID); id != "" {
+			a.lastReasoningChunkMessageID = id
+		}
+		return []*agent.ResponseUpdate{{
+			Role:      message.RoleAssistant,
+			MessageID: a.lastReasoningChunkMessageID,
+			CreatedAt: eventTime(evt),
+			Contents:  message.Contents{&message.TextReasoningContent{Text: delta}},
 		}}, nil
 	case *aguiEvents.ReasoningMessageContentEvent:
 		return []*agent.ResponseUpdate{{
