@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	copilot "github.com/github/copilot-sdk/go"
 	"github.com/github/copilot-sdk/go/rpc"
@@ -25,10 +24,8 @@ func TestE2E_RunTextReturnsResponse(t *testing.T) {
 	})
 	session := newE2ESession(t, canaryAgent, client)
 
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
-	defer cancel()
 	response, err := canaryAgent.RunText(
-		ctx,
+		t.Context(),
 		"What is 2 + 2? Answer with just the number.",
 		agent.WithSession(session),
 		agent.Stream(false),
@@ -51,12 +48,10 @@ func TestE2E_RunTextStreamingReturnsUpdates(t *testing.T) {
 	})
 	session := newE2ESession(t, canaryAgent, client)
 
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
-	defer cancel()
 	var responseText strings.Builder
 	var updates int
 	for update, err := range canaryAgent.RunText(
-		ctx,
+		t.Context(),
 		"What is 2 + 2? Answer with just the number.",
 		agent.WithSession(session),
 		agent.Stream(true),
@@ -90,10 +85,8 @@ func TestE2E_RunTextInvokesFunctionTool(t *testing.T) {
 	})
 	session := newE2ESession(t, canaryAgent, client)
 
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
-	defer cancel()
 	response, err := canaryAgent.RunText(
-		ctx,
+		t.Context(),
 		"What is the weather like in Seattle?",
 		agent.WithSession(session),
 		agent.Stream(false),
@@ -128,10 +121,8 @@ func TestE2E_RunTextWithApprovalRequiredTool(t *testing.T) {
 	})
 	session := newE2ESession(t, canaryAgent, client)
 
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
-	defer cancel()
 	response, err := canaryAgent.RunText(
-		ctx,
+		t.Context(),
 		"What is the weather like in Seattle?",
 		agent.WithSession(session),
 		agent.Stream(false),
@@ -158,8 +149,7 @@ func TestE2E_RunTextMaintainsSessionContext(t *testing.T) {
 	})
 	session := newE2ESession(t, canaryAgent, client)
 
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
-	defer cancel()
+	ctx := t.Context()
 	if _, err := canaryAgent.RunText(ctx, "My name is Alice.", agent.WithSession(session), agent.Stream(false)).Collect(); err != nil {
 		t.Fatal(err)
 	}
@@ -180,8 +170,7 @@ func TestE2E_RunTextResumesSession(t *testing.T) {
 	})
 	session1 := newE2ESession(t, agent1, client1)
 
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
-	defer cancel()
+	ctx := t.Context()
 	if _, err := agent1.RunText(ctx, "Remember this number: 42.", agent.WithSession(session1), agent.Stream(false)).Collect(); err != nil {
 		t.Fatal(err)
 	}
@@ -215,10 +204,8 @@ func TestE2E_RunTextExecutesShellCommand(t *testing.T) {
 	canaryAgent := copilotprovider.NewAgent(client, copilotprovider.AgentConfig{SessionConfig: config})
 	session := newE2ESession(t, canaryAgent, client)
 
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
-	defer cancel()
 	response, err := canaryAgent.RunText(
-		ctx,
+		t.Context(),
 		"Run a shell command to print 'hello world'.",
 		agent.WithSession(session),
 		agent.Stream(false),
@@ -238,10 +225,8 @@ func TestE2E_RunTextFetchesURL(t *testing.T) {
 	canaryAgent := copilotprovider.NewAgent(client, copilotprovider.AgentConfig{SessionConfig: config})
 	session := newE2ESession(t, canaryAgent, client)
 
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
-	defer cancel()
 	response, err := canaryAgent.RunText(
-		ctx,
+		t.Context(),
 		"Fetch https://learn.microsoft.com/agent-framework/tutorials/quick-start and summarize its contents in one sentence.",
 		agent.WithSession(session),
 		agent.Stream(false),
@@ -268,10 +253,8 @@ func TestE2E_RunTextUsesLocalMCPServer(t *testing.T) {
 	canaryAgent := copilotprovider.NewAgent(client, copilotprovider.AgentConfig{SessionConfig: config})
 	session := newE2ESession(t, canaryAgent, client)
 
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
-	defer cancel()
 	response, err := canaryAgent.RunText(
-		ctx,
+		t.Context(),
 		"List the files in the current directory.",
 		agent.WithSession(session),
 		agent.Stream(false),
@@ -299,10 +282,8 @@ func TestE2E_RunTextUsesRemoteMCPServer(t *testing.T) {
 	canaryAgent := copilotprovider.NewAgent(client, copilotprovider.AgentConfig{SessionConfig: config})
 	session := newE2ESession(t, canaryAgent, client)
 
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
-	defer cancel()
 	response, err := canaryAgent.RunText(
-		ctx,
+		t.Context(),
 		"Search Microsoft Learn for 'Azure Functions' and summarize the top result.",
 		agent.WithSession(session),
 		agent.Stream(false),
@@ -334,9 +315,7 @@ func newE2EClient(t *testing.T) *copilot.Client {
 		options.GitHubToken = token
 	}
 	client := copilot.NewClient(options)
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-	defer cancel()
-	if err := client.Start(ctx); err != nil {
+	if err := client.Start(t.Context()); err != nil {
 		t.Fatalf("start Copilot client: %v", err)
 	}
 	t.Cleanup(client.ForceStop)
@@ -375,9 +354,7 @@ func newE2ESession(t *testing.T, canaryAgent *agent.Agent, client *copilot.Clien
 	}
 	t.Cleanup(func() {
 		if sessionID := session.ServiceID(); sessionID != "" {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			if err := client.DeleteSession(ctx, sessionID); err != nil {
+			if err := client.DeleteSession(context.Background(), sessionID); err != nil {
 				t.Errorf("delete session: %v", err)
 			}
 		}
