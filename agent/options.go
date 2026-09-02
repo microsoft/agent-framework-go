@@ -134,12 +134,12 @@ func WithSession(session *Session) Option {
 // WithContinuationToken sets the continuation token for resuming and getting the result
 // of the agent response identified by this token.
 //
-// This token is used for background responses that can be activated via [AllowBackgroundResponses]
-// if the agent supports them. Streamed background responses, such as those returned by default by [RunStream],
-// can be resumed if interrupted. This means that a continuation token obtained from the [RunResponseUpdate] continuation token
-// of an update just before the interruption occurred can be passed to this function to resume the stream from
-// the point of interruption. Non-streamed background responses, such as those returned by [Run], can be polled for
-// completion by obtaining the token from the [RunResponse] continuation token.
+// This token is used for background responses that can be activated via
+// [AllowBackgroundResponses] if the agent supports them. A streamed background
+// response started with [Stream] can be resumed by passing a token from
+// [ResponseUpdate.ContinuationToken] to a later [Agent.Run]. A non-streamed
+// background response can be polled by passing [Response.ContinuationToken] to
+// a later Agent.Run with no input messages.
 func WithContinuationToken(token string) Option {
 	return continuationTokenOpt(token)
 }

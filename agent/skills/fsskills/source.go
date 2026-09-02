@@ -68,15 +68,15 @@ func newFilterContext(skillName, relativeFilePath string) FilterContext {
 type SourceOptions struct {
 	// SearchDepth controls the maximum depth to search for resource and script
 	// files within each skill directory. A value of 1 searches only the skill
-	// root; a value of 2 (the default) also searches one level of subdirectories.
-	// Values less than 1 are treated as the default.
+	// root; a value of 2 also searches one level of subdirectories. When nil,
+	// the default depth of 2 is used. Explicit values must be at least 1.
 	//
 	// SearchDepth applies only to resource and script discovery within a skill
 	// directory. It does not affect the discovery of skill directories
 	// themselves (those containing a SKILL.md), which is bounded independently.
 	// This mirrors the .NET SDK, where the two concerns are configured
 	// separately.
-	SearchDepth int
+	SearchDepth *int
 
 	// ResourceFilter is an optional predicate applied to each candidate resource
 	// file after extension filtering. Return true to include the file or false to
@@ -143,19 +143,29 @@ func FSFromSkill(skill *skills.Skill) (fs.FS, error) {
 }
 
 // NewSource creates a file-based skill source with default options.
+// It panics if any filesystem is nil.
 func NewSource(filesystems ...fs.FS) *Source {
 	return NewSourceOptions(SourceOptions{}, filesystems...)
 }
 
 // NewSourceOptions creates a file-based skill source using the provided options.
+// It panics if any filesystem is nil.
 func NewSourceOptions(opts SourceOptions, filesystems ...fs.FS) *Source {
+	for index, filesystem := range filesystems {
+		if filesystem == nil {
+			panic(fmt.Sprintf("fsskills: filesystem at index %d is nil", index))
+		}
+	}
 	logger := opts.Logger
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	searchDepth := opts.SearchDepth
-	if searchDepth < 1 {
-		searchDepth = defaultSearchDepth
+	searchDepth := defaultSearchDepth
+	if opts.SearchDepth != nil {
+		if *opts.SearchDepth < 1 {
+			panic(fmt.Sprintf("fsskills: SearchDepth must be at least 1, got %d", *opts.SearchDepth))
+		}
+		searchDepth = *opts.SearchDepth
 	}
 	return &Source{
 		filesystems:               slices.Clone(filesystems),
@@ -171,7 +181,7 @@ func NewSourceOptions(opts SourceOptions, filesystems ...fs.FS) *Source {
 
 // Skills discovers and loads valid skills from the configured filesystems.
 func (s *Source) Skills(ctx context.Context) ([]*skills.Skill, error) {
-	directories := discoverSkillDirectories(s.filesystems)
+	directories := discoverSkillDirectories(s.filesystems, s.logger)
 	s.logger.Info("Discovered potential skills", "count", len(directories))
 
 	skills := make([]*skills.Skill, 0, len(directories))
@@ -191,10 +201,10 @@ func (s *Source) Skills(ctx context.Context) ([]*skills.Skill, error) {
 	return skills, nil
 }
 
-func discoverSkillDirectories(filesystems []fs.FS) []discoveredSkillDir {
+func discoverSkillDirectories(filesystems []fs.FS, logger *slog.Logger) []discoveredSkillDir {
 	var results []discoveredSkillDir
 	for _, filesystem := range filesystems {
-		searchForSkills(filesystem, ".", &results, 0)
+		searchForSkills(filesystem, ".", logger, &results, 0)
 	}
 	return results
 }
@@ -204,12 +214,23 @@ func discoverSkillDirectories(filesystems []fs.FS) []discoveredSkillDir {
 // independent of SourceOptions.SearchDepth, which governs only resource and
 // script discovery within an already-discovered skill directory. This matches
 // the .NET SDK, which bounds the two concerns separately.
-func searchForSkills(filesystem fs.FS, dir string, results *[]discoveredSkillDir, currentDepth int) {
+func searchForSkills(filesystem fs.FS, dir string, logger *slog.Logger, results *[]discoveredSkillDir, currentDepth int) {
 	entries, err := fs.ReadDir(filesystem, dir)
 	if err != nil {
 		return
 	}
-	if hasNonSymlinkSkillFile(entries) {
+
+	for _, entry := range entries {
+		if entry.Name() != skillFileName {
+			continue
+		}
+
+		skillPath := path.Join(dir, entry.Name())
+		if isUnsafeDirEntry(filesystem, skillPath, entry) {
+			logger.Warn("Skipping skill discovery path: symbolic link or inspection failure", "path", skillPath)
+			break
+		}
+
 		sub := filesystem
 		var subErr error
 		if dir != "." {
@@ -217,15 +238,22 @@ func searchForSkills(filesystem fs.FS, dir string, results *[]discoveredSkillDir
 		}
 		if subErr == nil {
 			*results = append(*results, discoveredSkillDir{fsys: sub, path: dir})
-			return
 		}
+		return
 	}
+
 	if currentDepth >= defaultSearchDepth {
 		return
 	}
+
 	for _, entry := range entries {
+		entryPath := path.Join(dir, entry.Name())
+		if isUnsafeDirEntry(filesystem, entryPath, entry) {
+			logger.Warn("Skipping skill discovery path: symbolic link or inspection failure", "path", entryPath)
+			continue
+		}
 		if entry.IsDir() {
-			searchForSkills(filesystem, path.Join(dir, entry.Name()), results, currentDepth+1)
+			searchForSkills(filesystem, entryPath, logger, results, currentDepth+1)
 		}
 	}
 }
@@ -443,11 +471,14 @@ func (s *Source) discoverResourceFiles(skillFS fs.FS, skillName string) []skills
 	seen := make(map[string]bool)
 	var resources []skills.Resource
 	s.scanForFiles(skillFS, ".", skillName, 1, s.allowedResourceExtensions, s.resourceFilter, "resource", func(filePath string) {
-		key := strings.ToLower(filePath)
-		if seen[key] {
+		// Dedup by the exact path (guards against the same file being visited
+		// twice), not a case-folded key, which would wrongly collapse two
+		// distinct files (e.g. Data.json and data.json) on a case-sensitive
+		// filesystem and silently drop one.
+		if seen[filePath] {
 			return
 		}
-		seen[key] = true
+		seen[filePath] = true
 		resources = append(resources, skills.Resource{
 			Name: filePath,
 			Read: func(context.Context) (any, error) {
@@ -466,11 +497,13 @@ func (s *Source) discoverScriptFiles(skillFS fs.FS, skillName string) []skills.S
 	seen := make(map[string]bool)
 	var scripts []skills.Script
 	s.scanForFiles(skillFS, ".", skillName, 1, s.allowedScriptExtensions, s.scriptFilter, "script", func(filePath string) {
-		key := strings.ToLower(filePath)
-		if seen[key] {
+		// Dedup by the exact path (not a case-folded key) so two distinct
+		// files differing only in case are both kept on a case-sensitive
+		// filesystem. See discoverResourceFiles for details.
+		if seen[filePath] {
 			return
 		}
-		seen[key] = true
+		seen[filePath] = true
 		scripts = append(scripts, newScript(filePath, skillFS, s.scriptRunner))
 	})
 	return scripts
@@ -501,11 +534,11 @@ func (s *Source) scanForFiles(
 	}
 
 	for _, entry := range entries {
-		if isSymlinkEntry(entry) {
+		entryPath := path.Join(dir, entry.Name())
+		if isUnsafeDirEntry(skillFS, entryPath, entry) {
+			s.logger.Warn("Skipping file skill path: symbolic link or inspection failure", "skillName", skillName, "filePath", entryPath, "kind", kind)
 			continue
 		}
-
-		entryPath := path.Join(dir, entry.Name())
 		if entry.IsDir() {
 			if currentDepth < s.searchDepth {
 				s.scanForFiles(skillFS, entryPath, skillName, currentDepth+1, allowedExtensions, filter, kind, collect)
@@ -538,17 +571,22 @@ func (s *Source) scanForFiles(
 	}
 }
 
-func hasNonSymlinkSkillFile(entries []fs.DirEntry) bool {
-	for _, entry := range entries {
-		if entry.Name() == skillFileName && !isSymlinkEntry(entry) {
-			return true
-		}
+func isUnsafeDirEntry(filesystem fs.FS, filePath string, entry fs.DirEntry) bool {
+	if entry.Type()&fs.ModeSymlink != 0 {
+		return true
 	}
-	return false
-}
 
-func isSymlinkEntry(entry fs.DirEntry) bool {
-	return entry.Type()&fs.ModeSymlink != 0
+	readLinkFS, ok := filesystem.(fs.ReadLinkFS)
+	if !ok {
+		return false
+	}
+
+	info, err := readLinkFS.Lstat(filePath)
+	if err == nil {
+		return info.Mode()&fs.ModeSymlink != 0
+	}
+
+	return !errors.Is(err, fs.ErrNotExist)
 }
 
 func buildExtensionSet(extensions []string, defaults []string) map[string]bool {

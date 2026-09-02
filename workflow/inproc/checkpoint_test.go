@@ -456,7 +456,7 @@ func TestCheckpoint_ResumeFanInBarrierCheckpointCanBeResumedTwice(t *testing.T) 
 				wf,
 			)
 
-			for attempt := 0; attempt < 2; attempt++ {
+			for attempt := range 2 {
 				replayedRequest := resumeAndAssertFanInBarrierRelease(
 					t,
 					ctx,
@@ -477,7 +477,7 @@ func TestCheckpoint_ResumeFanInBarrierCheckpointCanBeResumedTwice(t *testing.T) 
 func TestCheckpoint_RestorePreservesExecutorInstancesDuringImport(t *testing.T) {
 	ctx := context.Background()
 	manager := checkpoint.NewInMemoryManager()
-	var nextInstanceID int64
+	var nextInstanceID atomic.Int64
 	type counterOutput struct {
 		InstanceID int64
 		Count      int
@@ -496,7 +496,7 @@ func TestCheckpoint_RestorePreservesExecutorInstancesDuringImport(t *testing.T) 
 		ID:               "counter",
 		ImplementationID: "*workflow.Executor",
 		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
-			instanceID := atomic.AddInt64(&nextInstanceID, 1)
+			instanceID := nextInstanceID.Add(1)
 			count := 0
 			return &workflow.Executor{
 				ID: "counter",
@@ -772,8 +772,8 @@ func createCheckpointRequestWorkflow(t *testing.T) (*workflow.Workflow, *atomic.
 			return &workflow.Executor{
 				ID: "Processor",
 
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
+				AutoSendMessageHandlerResultObject: new(false),
+				AutoYieldOutputHandlerResultObject: new(false),
 				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 					rb.YieldsOutputType(reflect.TypeFor[string]())
 					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
@@ -818,7 +818,6 @@ func createCheckpointChainWorkflow(t *testing.T, ids ...string) *workflow.Workfl
 
 	bindings := make([]workflow.ExecutorBinding, 0, len(ids))
 	for _, id := range ids {
-		id := id
 		bindings = append(bindings, workflow.ExecutorBinding{
 			ID:               id,
 			ImplementationID: "*workflow.Executor",
@@ -826,8 +825,8 @@ func createCheckpointChainWorkflow(t *testing.T, ids ...string) *workflow.Workfl
 				return &workflow.Executor{
 					ID: id,
 
-					DisableAutoSendMessageHandlerResultObject: true,
-					DisableAutoYieldOutputHandlerResultObject: true,
+					AutoSendMessageHandlerResultObject: new(false),
+					AutoYieldOutputHandlerResultObject: new(false),
 					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 						rb.SendsMessageType(reflect.TypeFor[string]())
 						rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
@@ -863,9 +862,9 @@ func createCheckpointFanInBarrierWorkflow(t *testing.T, beforeValues ...string) 
 			ImplementationID: "*workflow.Executor",
 			NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
 				return &workflow.Executor{
-					ID: id,
-					DisableAutoSendMessageHandlerResultObject: true,
-					DisableAutoYieldOutputHandlerResultObject: true,
+					ID:                                 id,
+					AutoSendMessageHandlerResultObject: new(false),
+					AutoYieldOutputHandlerResultObject: new(false),
 					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 						rb.SendsMessageType(reflect.TypeFor[string]())
 						rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
@@ -884,9 +883,9 @@ func createCheckpointFanInBarrierWorkflow(t *testing.T, beforeValues ...string) 
 			ImplementationID: "*workflow.Executor",
 			NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
 				return &workflow.Executor{
-					ID: id,
-					DisableAutoSendMessageHandlerResultObject: true,
-					DisableAutoYieldOutputHandlerResultObject: true,
+					ID:                                 id,
+					AutoSendMessageHandlerResultObject: new(false),
+					AutoYieldOutputHandlerResultObject: new(false),
 					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 						rb.SendsMessageType(reflect.TypeFor[string]())
 						rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
@@ -905,9 +904,9 @@ func createCheckpointFanInBarrierWorkflow(t *testing.T, beforeValues ...string) 
 			ImplementationID: "*workflow.Executor",
 			NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
 				return &workflow.Executor{
-					ID: id,
-					DisableAutoSendMessageHandlerResultObject: true,
-					DisableAutoYieldOutputHandlerResultObject: true,
+					ID:                                 id,
+					AutoSendMessageHandlerResultObject: new(false),
+					AutoYieldOutputHandlerResultObject: new(false),
 					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 						rb.YieldsOutputType(reflect.TypeFor[string]())
 						rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
@@ -1177,8 +1176,8 @@ func (e *checkpointHookExecutor) Bind() workflow.ExecutorBinding {
 			return &workflow.Executor{
 				ID: e.id,
 
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
+				AutoSendMessageHandlerResultObject: new(false),
+				AutoYieldOutputHandlerResultObject: new(false),
 				OnCheckpointFunc: func(_ *workflow.Context) error {
 					e.checkpointingCalls.Add(1)
 					return nil
@@ -1266,9 +1265,7 @@ func TestStreamingRun_ConcurrentCheckpointAccess_NoDataRace(t *testing.T) {
 	// Poll the checkpoint accessors from another goroutine for the whole run.
 	stop := make(chan struct{})
 	var pollWG sync.WaitGroup
-	pollWG.Add(1)
-	go func() {
-		defer pollWG.Done()
+	pollWG.Go(func() {
 		for {
 			select {
 			case <-stop:
@@ -1278,7 +1275,7 @@ func TestStreamingRun_ConcurrentCheckpointAccess_NoDataRace(t *testing.T) {
 				_, _ = run.LastCheckpoint()
 			}
 		}
-	}()
+	})
 
 	// Drive the run through several checkpoint-producing supersteps.
 	pendingRequest, checkpointInfo := capturePendingRequestAndCheckpointFromStream(t, ctx, run)
@@ -1370,7 +1367,7 @@ func TestStreamingRun_RestoreCheckpointWhileReadingState_NoDataRace(t *testing.T
 		t.Fatal("expected checkpoint")
 	}
 
-	if err := run.SendMessage(ctx, "read"); err != nil {
+	if _, err := run.TrySendMessage(ctx, "read"); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
 	<-started

@@ -3,6 +3,7 @@
 package message_test
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -117,7 +118,6 @@ func TestContentEncoding_Roundtrip(t *testing.T) {
 		&message.FunctionResultContent{
 			CallID: "call-123",
 			Result: map[string]any{"key": "value"},
-			Error:  errors.New("sample error"),
 		},
 		&message.URIContent{
 			URI: "https://example.com/resource",
@@ -222,6 +222,121 @@ func TestContentEncoding_Roundtrip(t *testing.T) {
 	}
 }
 
+func TestFunctionCallContent_ErrorNotSerialized(t *testing.T) {
+	content := &message.FunctionCallContent{
+		CallID:    "call-1",
+		Name:      "doThing",
+		Arguments: `{"a":1}`,
+		Error:     errors.New("mapping failed"),
+	}
+	data, err := json.Marshal(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := raw["Error"]; ok {
+		t.Fatalf("Error must not be serialized, got %s", data)
+	}
+
+	var decoded message.FunctionCallContent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Error != nil {
+		t.Fatalf("Error must be nil after unmarshal, got %v", decoded.Error)
+	}
+}
+
+func TestFunctionResultContent_ErrorNotSerialized(t *testing.T) {
+	content := &message.FunctionResultContent{
+		CallID: "call-1",
+		Result: "ok",
+		Error:  errors.New("function failed"),
+	}
+	data, err := json.Marshal(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := raw["Error"]; ok {
+		t.Fatalf("Error must not be serialized, got %s", data)
+	}
+
+	var decoded message.FunctionResultContent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Error != nil {
+		t.Fatalf("Error must be nil after unmarshal, got %v", decoded.Error)
+	}
+}
+
+func TestFunctionContentUnmarshal_ClearsStaleError(t *testing.T) {
+	tests := []struct {
+		name   string
+		data   string
+		target any
+	}{
+		{
+			name:   "function call omitted error",
+			data:   `{"Arguments":"{}","CallID":"call","Name":"tool","InformationalOnly":false,"Type":"functionCall"}`,
+			target: &message.FunctionCallContent{Error: errors.New("stale")},
+		},
+		{
+			name:   "function result empty error",
+			data:   `{"CallID":"call","Error":"","Result":"ok","Type":"functionResult"}`,
+			target: &message.FunctionResultContent{Error: errors.New("stale")},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := json.Unmarshal([]byte(test.data), test.target); err != nil {
+				t.Fatalf("Unmarshal() error = %v", err)
+			}
+			switch target := test.target.(type) {
+			case *message.FunctionCallContent:
+				if target.Error != nil {
+					t.Fatalf("Error = %v, want nil", target.Error)
+				}
+			case *message.FunctionResultContent:
+				if target.Error != nil {
+					t.Fatalf("Error = %v, want nil", target.Error)
+				}
+			}
+		})
+	}
+}
+
+func TestContentEncoding_PreservesAdditionalProperties(t *testing.T) {
+	original := &message.TextContent{
+		ContentHeader: message.ContentHeader{
+			AdditionalProperties: map[string]any{"provider": "openai", "region": "eastus"},
+		},
+		Text: "sample text",
+	}
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte("AdditionalProperties")) {
+		t.Fatalf("marshaled JSON does not contain AdditionalProperties: %s", data)
+	}
+	var decoded message.TextContent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(original.AdditionalProperties, decoded.AdditionalProperties) {
+		t.Fatalf("AdditionalProperties = %v, want %v", decoded.AdditionalProperties, original.AdditionalProperties)
+	}
+}
+
 func TestCodeInterpreterContentEncoding_Roundtrip(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -286,6 +401,24 @@ func TestDataContentUnmarshalDefaultsMissingMediaType(t *testing.T) {
 	}
 }
 
+func TestDataContentMarshalRejectsInvalidValue(t *testing.T) {
+	tests := []struct {
+		name    string
+		content *message.DataContent
+	}{
+		{name: "invalid base64", content: &message.DataContent{MediaType: "text/plain", Data: "%%%"}},
+		{name: "invalid media type", content: &message.DataContent{MediaType: "not a media type", Data: "aGVsbG8="}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := json.Marshal(test.content); err == nil {
+				t.Fatal("Marshal() error = nil, want validation error")
+			}
+		})
+	}
+}
+
 func TestDataContentUnmarshalPreservesInvalidPercentEscapes(t *testing.T) {
 	var content message.DataContent
 	if err := json.Unmarshal([]byte(`{"Type":"data","URI":"data:,hello%20%ZZ+there"}`), &content); err != nil {
@@ -315,6 +448,14 @@ func TestNewURIContentInfersMediaType(t *testing.T) {
 	}
 	if content.MediaType != "application/octet-stream" {
 		t.Fatalf("MediaType = %q, want application/octet-stream", content.MediaType)
+	}
+
+	content, err = message.NewURIContent("data:image/png;base64,iVBORw0KGgo=", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if content.MediaType != "image/png" {
+		t.Fatalf("MediaType = %q, want image/png", content.MediaType)
 	}
 }
 
@@ -1001,5 +1142,15 @@ func TestCoalesceContents(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCoalesceContents_PreservesInvalidDataContent(t *testing.T) {
+	invalid := &message.DataContent{Data: "%%%", MediaType: "text/plain"}
+	valid := &message.DataContent{Data: base64.StdEncoding.EncodeToString([]byte("valid")), MediaType: "text/plain"}
+
+	got := message.CoalesceContents([]message.Content{invalid, valid})
+	if len(got) != 2 || got[0] != invalid || got[1] != valid {
+		t.Fatalf("CoalesceContents() = %#v, want original contents", got)
 	}
 }

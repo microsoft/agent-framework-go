@@ -234,7 +234,7 @@ func newReducer(id string) workflow.ExecutorBinding {
 			return err
 		}
 		var lines []string
-		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		for line := range strings.SplitSeq(strings.TrimSpace(string(data)), "\n") {
 			if strings.TrimSpace(line) == "" {
 				continue
 			}
@@ -293,7 +293,7 @@ func preprocess(text string) []string {
 		if line == "" {
 			continue
 		}
-		for _, word := range strings.Split(line, " ") {
+		for word := range strings.SplitSeq(line, " ") {
 			if strings.TrimSpace(word) != "" {
 				words = append(words, word)
 			}
@@ -339,7 +339,7 @@ func loadMapGroups(results []MapComplete) (map[string][]int, error) {
 		if err != nil {
 			return nil, err
 		}
-		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		for line := range strings.SplitSeq(strings.TrimSpace(string(data)), "\n") {
 			key, value, ok := strings.Cut(line, ": ")
 			if !ok {
 				continue

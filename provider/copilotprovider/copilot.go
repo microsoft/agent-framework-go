@@ -56,7 +56,7 @@ func NewAgent(cclient *copilot.Client, config AgentConfig) *agent.Agent {
 		config.Description = defaultDescription
 	}
 	if config.Instructions != "" {
-		config.RunOptions = append(config.RunOptions, agent.WithInstructions(config.Instructions))
+		config.RunOptions = append(slices.Clone(config.RunOptions), agent.WithInstructions(config.Instructions))
 	}
 	p := &provider{
 		client: cclient,
@@ -251,7 +251,7 @@ func (p *provider) openSession(
 
 func (p *provider) sessionConfig(streaming bool, eventHandler copilot.SessionEventHandler, options []agent.Option) copilot.SessionConfig {
 	cfg := copySessionConfig(p.cfg.SessionConfig)
-	cfg.Streaming = copilot.Bool(streaming)
+	cfg.Streaming = new(streaming)
 	cfg.OnEvent = chainSessionEventHandlers(cfg.OnEvent, eventHandler)
 	cfg.SystemMessage = systemMessageWithInstructions(cfg.SystemMessage, slices.Collect(agent.AllOptions(options, agent.WithInstructions)))
 	cfg.Tools = append(cfg.Tools, copilotTools(options)...)
@@ -261,7 +261,7 @@ func (p *provider) sessionConfig(streaming bool, eventHandler copilot.SessionEve
 
 func (p *provider) resumeSessionConfig(streaming bool, eventHandler copilot.SessionEventHandler, options []agent.Option) copilot.ResumeSessionConfig {
 	cfg := copyResumeSessionConfig(p.cfg.SessionConfig)
-	cfg.Streaming = copilot.Bool(streaming)
+	cfg.Streaming = new(streaming)
 	cfg.OnEvent = chainSessionEventHandlers(cfg.OnEvent, eventHandler)
 	cfg.SystemMessage = systemMessageWithInstructions(cfg.SystemMessage, slices.Collect(agent.AllOptions(options, agent.WithInstructions)))
 	cfg.Tools = append(cfg.Tools, copilotTools(options)...)
@@ -271,7 +271,7 @@ func (p *provider) resumeSessionConfig(streaming bool, eventHandler copilot.Sess
 
 func copySessionConfig(source *copilot.SessionConfig) copilot.SessionConfig {
 	if source == nil {
-		return copilot.SessionConfig{Streaming: copilot.Bool(true)}
+		return copilot.SessionConfig{Streaming: new(true)}
 	}
 	clone := *source
 	clone.Tools = slices.Clone(source.Tools)
@@ -281,7 +281,7 @@ func copySessionConfig(source *copilot.SessionConfig) copilot.SessionConfig {
 
 func copyResumeSessionConfig(source *copilot.SessionConfig) copilot.ResumeSessionConfig {
 	if source == nil {
-		return copilot.ResumeSessionConfig{Streaming: copilot.Bool(true)}
+		return copilot.ResumeSessionConfig{Streaming: new(true)}
 	}
 	return copilot.ResumeSessionConfig{
 		ClientName:                         source.ClientName,
@@ -301,7 +301,9 @@ func copyResumeSessionConfig(source *copilot.SessionConfig) copilot.ResumeSessio
 		ModelCapabilities:                  source.ModelCapabilities,
 		EnableSessionTelemetry:             source.EnableSessionTelemetry,
 		EnableCitations:                    source.EnableCitations,
+		EnableFileChangeTracking:           source.EnableFileChangeTracking,
 		SessionLimits:                      source.SessionLimits,
+		EnableExperimentalMode:             source.EnableExperimentalMode,
 		SkipCustomInstructions:             source.SkipCustomInstructions,
 		CustomAgentsLocalOnly:              source.CustomAgentsLocalOnly,
 		CoauthorEnabled:                    source.CoauthorEnabled,
@@ -312,6 +314,7 @@ func copyResumeSessionConfig(source *copilot.SessionConfig) copilot.ResumeSessio
 		OnUserInputRequest:                 source.OnUserInputRequest,
 		Hooks:                              source.Hooks,
 		WorkingDirectory:                   source.WorkingDirectory,
+		AdditionalDirectories:              source.AdditionalDirectories,
 		ConfigDirectory:                    source.ConfigDirectory,
 		EnableConfigDiscovery:              source.EnableConfigDiscovery,
 		SkipEmbeddingRetrieval:             source.SkipEmbeddingRetrieval,
@@ -332,12 +335,15 @@ func copyResumeSessionConfig(source *copilot.SessionConfig) copilot.ResumeSessio
 		PluginDirectories:                  source.PluginDirectories,
 		InstructionDirectories:             source.InstructionDirectories,
 		DisabledSkills:                     source.DisabledSkills,
+		DisabledMCPServers:                 source.DisabledMCPServers,
 		InfiniteSessions:                   source.InfiniteSessions,
 		LargeOutput:                        source.LargeOutput,
 		ToolSearch:                         source.ToolSearch,
 		Memory:                             source.Memory,
+		GitHubMCPToolConfig:                source.GitHubMCPToolConfig,
 		GitHubToken:                        source.GitHubToken,
 		RemoteSession:                      source.RemoteSession,
+		ManagedSettings:                    source.ManagedSettings,
 		Streaming:                          copyBoolDefaultTrue(source.Streaming),
 	}
 }
@@ -361,7 +367,7 @@ func chainSessionEventHandlers(existing, added copilot.SessionEventHandler) copi
 
 func copyBoolDefaultTrue(source *bool) *bool {
 	if source == nil {
-		return copilot.Bool(true)
+		return new(true)
 	}
 	value := *source
 	return &value

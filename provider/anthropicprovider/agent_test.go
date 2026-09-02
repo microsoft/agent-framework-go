@@ -3,6 +3,7 @@
 package anthropicprovider_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,14 +17,31 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/provider/anthropicprovider"
+	"github.com/microsoft/agent-framework-go/tool"
+	"github.com/microsoft/agent-framework-go/tool/functool"
+	"github.com/microsoft/agent-framework-go/tool/hostedtool"
 )
 
 // testOutput is the structured type used across structured output tests.
 type testOutput struct {
 	Name string `json:"name"`
 	Age  int    `json:"age"`
+}
+
+func TestAgent_UnsupportedMessageRoleReturnsError(t *testing.T) {
+	a := anthropicprovider.NewAgent(
+		anthropic.NewClient(option.WithAPIKey("test")),
+		anthropicprovider.AgentConfig{
+			Model: "test-model",
+		},
+	)
+	_, err := a.Run(t.Context(), []*message.Message{{Role: message.Role("custom")}}).Collect()
+	if err == nil || !strings.Contains(err.Error(), "unsupported message role") {
+		t.Fatalf("Run() error = %v, want unsupported message role", err)
+	}
 }
 
 func newTestClient(t *testing.T, server *httptest.Server) *agent.Agent {
@@ -34,8 +52,10 @@ func newTestClient(t *testing.T, server *httptest.Server) *agent.Agent {
 			option.WithAPIKey("test"),
 		),
 		anthropicprovider.AgentConfig{
-			Model:  "claude-3-5-sonnet-20241022",
-			Config: agent.Config{DisableFuncAutoCall: true},
+			Model: "claude-3-5-sonnet-20241022",
+			ToolAutoCall: &toolautocall.Config{
+				MaximumIterationsPerRequest: new(0),
+			},
 		},
 	)
 }
@@ -112,7 +132,7 @@ func minimalMessageResponse(payload string) string {
 func TestStreamingUsage_DoesNotDoubleCountOutputTokens(t *testing.T) {
 	output := "" +
 		"event: message_start\n" +
-		`data: {"type":"message_start","message":{"id":"m1","type":"message","role":"assistant","content":[],"model":"claude-3-5-sonnet-20241022","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}` + "\n\n" +
+		`data: {"type":"message_start","message":{"id":"m1","type":"message","role":"assistant","content":[],"model":"claude-3-5-sonnet-20241022","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1,"cache_creation_input_tokens":3,"cache_read_input_tokens":7,"output_tokens_details":{"thinking_tokens":1}}}}` + "\n\n" +
 		"event: content_block_start\n" +
 		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}` + "\n\n" +
 		"event: content_block_delta\n" +
@@ -120,7 +140,7 @@ func TestStreamingUsage_DoesNotDoubleCountOutputTokens(t *testing.T) {
 		"event: content_block_stop\n" +
 		`data: {"type":"content_block_stop","index":0}` + "\n\n" +
 		"event: message_delta\n" +
-		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}` + "\n\n" +
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5,"output_tokens_details":{"thinking_tokens":3}}}` + "\n\n" +
 		"event: message_stop\n" +
 		`data: {"type":"message_stop"}` + "\n\n"
 
@@ -149,11 +169,20 @@ func TestStreamingUsage_DoesNotDoubleCountOutputTokens(t *testing.T) {
 	if usage.Details.OutputTokenCount != 5 {
 		t.Errorf("OutputTokenCount = %d, want 5 (message_delta final count, not 1+5)", usage.Details.OutputTokenCount)
 	}
-	if usage.Details.InputTokenCount != 10 {
-		t.Errorf("InputTokenCount = %d, want 10", usage.Details.InputTokenCount)
+	if usage.Details.ReasoningTokenCount != 3 {
+		t.Errorf("ReasoningTokenCount = %d, want 3", usage.Details.ReasoningTokenCount)
 	}
-	if usage.Details.TotalTokenCount != 15 {
-		t.Errorf("TotalTokenCount = %d, want 15", usage.Details.TotalTokenCount)
+	if usage.Details.InputTokenCount != 20 {
+		t.Errorf("InputTokenCount = %d, want 20 (uncached + cache creation + cache read)", usage.Details.InputTokenCount)
+	}
+	if usage.Details.TotalTokenCount != 25 {
+		t.Errorf("TotalTokenCount = %d, want 25", usage.Details.TotalTokenCount)
+	}
+	if usage.Details.CachedInputTokenCount != 7 {
+		t.Errorf("CachedInputTokenCount = %d, want 7", usage.Details.CachedInputTokenCount)
+	}
+	if got := usage.Details.AdditionalCounts["cache_creation_input_tokens"]; got != 3 {
+		t.Errorf("cache_creation_input_tokens = %d, want 3", got)
 	}
 }
 
@@ -368,9 +397,6 @@ func TestConfigInstructions(t *testing.T) {
 		anthropicprovider.AgentConfig{
 			Model:        "claude-3-5-sonnet-20241022",
 			Instructions: "You are helpful.",
-			Config: agent.Config{
-				DisableFuncAutoCall: true,
-			},
 		},
 	)
 
@@ -795,8 +821,7 @@ func TestToolUseEmptyArgumentsSerializeAsObject(t *testing.T) {
 	a := anthropicprovider.NewAgent(
 		anthropic.NewClient(option.WithBaseURL(server.URL), option.WithAPIKey("test")),
 		anthropicprovider.AgentConfig{
-			Model:  "claude-3-5-sonnet-20241022",
-			Config: agent.Config{DisableFuncAutoCall: true},
+			Model: "claude-3-5-sonnet-20241022",
 		},
 	)
 
@@ -843,6 +868,475 @@ func TestToolUseEmptyArgumentsSerializeAsObject(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("tool_use block for toolu_1 not found in request")
+	}
+}
+
+// assistantBlocksFromRequest runs the agent against a server that records the
+// outbound request body, then returns the decoded content blocks of the first
+// assistant message so tests can assert on how prior contents were replayed.
+func assistantBlocksFromRequest(t *testing.T, msgs []*message.Message) []map[string]any {
+	t.Helper()
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		bodyCh <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, minimalMessageResponse("ok"))
+	}))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+	if _, err := a.Run(t.Context(), msgs).Collect(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	messages, ok := req["messages"].([]any)
+	if !ok {
+		t.Fatalf("request messages = %#v, want a JSON array", req["messages"])
+	}
+	for _, m := range messages {
+		msg, ok := m.(map[string]any)
+		if !ok || msg["role"] != "assistant" {
+			continue
+		}
+		rawBlocks, ok := msg["content"].([]any)
+		if !ok {
+			t.Fatalf("assistant content = %#v, want a JSON array", msg["content"])
+		}
+		blocks := make([]map[string]any, 0, len(rawBlocks))
+		for _, b := range rawBlocks {
+			block, ok := b.(map[string]any)
+			if !ok {
+				t.Fatalf("content block = %#v, want an object", b)
+			}
+			blocks = append(blocks, block)
+		}
+		return blocks
+	}
+	t.Fatal("no assistant message found in request")
+	return nil
+}
+
+func TestAssistantReasoningReplayedAsThinkingBlock(t *testing.T) {
+	msgs := []*message.Message{
+		{Role: message.RoleUser, Contents: message.Contents{&message.TextContent{Text: "what time is it?"}}},
+		{Role: message.RoleAssistant, Contents: message.Contents{
+			&message.TextReasoningContent{Text: "let me check the clock", ProtectedData: "sig123"},
+			&message.FunctionCallContent{CallID: "toolu_1", Name: "get_time", Arguments: "{}"},
+		}},
+		{Role: message.RoleTool, Contents: message.Contents{&message.FunctionResultContent{CallID: "toolu_1", Result: "12:00"}}},
+	}
+
+	blocks := assistantBlocksFromRequest(t, msgs)
+	if len(blocks) != 2 {
+		t.Fatalf("assistant content blocks = %d, want 2 (%#v)", len(blocks), blocks)
+	}
+
+	// Reasoning must come first, carrying its signature, so Anthropic accepts
+	// the replayed turn.
+	if blocks[0]["type"] != "thinking" {
+		t.Errorf("first block type = %v, want %q", blocks[0]["type"], "thinking")
+	}
+	if blocks[0]["thinking"] != "let me check the clock" {
+		t.Errorf("thinking = %v, want %q", blocks[0]["thinking"], "let me check the clock")
+	}
+	if blocks[0]["signature"] != "sig123" {
+		t.Errorf("signature = %v, want %q", blocks[0]["signature"], "sig123")
+	}
+	if blocks[1]["type"] != "tool_use" {
+		t.Errorf("second block type = %v, want %q", blocks[1]["type"], "tool_use")
+	}
+}
+
+func TestAssistantRedactedReasoningReplayedAsRedactedThinkingBlock(t *testing.T) {
+	msgs := []*message.Message{
+		{Role: message.RoleUser, Contents: message.Contents{&message.TextContent{Text: "hi"}}},
+		{Role: message.RoleAssistant, Contents: message.Contents{
+			&message.TextReasoningContent{ProtectedData: "redacted-data"},
+			&message.TextContent{Text: "hello"},
+		}},
+	}
+
+	blocks := assistantBlocksFromRequest(t, msgs)
+	if len(blocks) != 2 {
+		t.Fatalf("assistant content blocks = %d, want 2 (%#v)", len(blocks), blocks)
+	}
+	if blocks[0]["type"] != "redacted_thinking" {
+		t.Errorf("first block type = %v, want %q", blocks[0]["type"], "redacted_thinking")
+	}
+	if blocks[0]["data"] != "redacted-data" {
+		t.Errorf("data = %v, want %q", blocks[0]["data"], "redacted-data")
+	}
+}
+
+func TestAssistantUnsignedReasoningIsSkipped(t *testing.T) {
+	msgs := []*message.Message{
+		{Role: message.RoleUser, Contents: message.Contents{&message.TextContent{Text: "hi"}}},
+		{Role: message.RoleAssistant, Contents: message.Contents{
+			&message.TextReasoningContent{Text: "partial with no signature"},
+			&message.TextContent{Text: "hello"},
+		}},
+	}
+
+	blocks := assistantBlocksFromRequest(t, msgs)
+	if len(blocks) != 1 {
+		t.Fatalf("assistant content blocks = %d, want 1 (%#v)", len(blocks), blocks)
+	}
+	if blocks[0]["type"] != "text" {
+		t.Errorf("block type = %v, want %q", blocks[0]["type"], "text")
+	}
+}
+
+// The tool's input_schema sent to Anthropic must carry the additionalProperties
+// keyword emitted by functool's strict schema. functool.Call validates decoded
+// arguments against the resolved schema (additionalProperties:false), so if the
+// model-facing schema omits it the model can hallucinate an extra argument that
+// passes the model but is rejected Go-side. OpenAI and Gemini forward the full
+// schema; this keeps the Anthropic path in parity.
+func TestToolInputSchemaCarriesAdditionalProperties(t *testing.T) {
+	type getWeatherInput struct {
+		City string `json:"city"`
+	}
+	weatherTool := functool.MustNew(functool.Config{
+		Name:        "get_weather",
+		Description: "Gets the weather for a city.",
+	}, func(_ context.Context, in getWeatherInput) (string, error) {
+		return "sunny", nil
+	})
+
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		bodyCh <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, minimalMessageResponse("ok"))
+	}))
+	defer server.Close()
+
+	if _, err := newTestClient(t, server).RunText(
+		t.Context(), "what's the weather?",
+		agent.WithTool(weatherTool),
+		agent.WithToolMode(tool.RequireTool("get_weather")),
+	).Collect(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	tools, ok := req["tools"].([]any)
+	if !ok || len(tools) == 0 {
+		t.Fatalf("request tools = %#v, want a non-empty JSON array", req["tools"])
+	}
+	toolObj, ok := tools[0].(map[string]any)
+	if !ok {
+		t.Fatalf("tools[0] = %#v, want a JSON object", tools[0])
+	}
+	addl, ok := nestedKey(toolObj, "input_schema", "additionalProperties")
+	if !ok {
+		t.Fatal("tool input_schema is missing additionalProperties")
+	}
+	if addl != false {
+		t.Errorf("input_schema.additionalProperties = %#v, want false", addl)
+	}
+	toolChoice, ok := req["tool_choice"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool_choice = %#v, want a JSON object", req["tool_choice"])
+	}
+	if toolChoice["type"] != "tool" || toolChoice["name"] != "get_weather" {
+		t.Errorf("tool_choice = %#v, want specific get_weather tool", toolChoice)
+	}
+}
+
+// A URIContent image URL and a DataContent application/pdf must be forwarded to
+// Anthropic as an image block with a URL source and a document block. Before the
+// fix these inputs fell through the content switch and were silently dropped,
+// diverging from the OpenAI chat provider which maps all three multimodal inputs.
+func TestBuildMessageParam_ImageURLAndPDFAreForwarded(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		bodyCh <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, minimalMessageResponse("ok"))
+	}))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	msgs := []*message.Message{
+		{Role: message.RoleUser, Contents: message.Contents{
+			&message.URIContent{URI: "https://example.com/cat.png", MediaType: "image/png"},
+			&message.DataContent{Data: "JVBERi0xLjQK", MediaType: "application/pdf"},
+		}},
+	}
+	if _, err := a.Run(t.Context(), msgs).Collect(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	messages, ok := req["messages"].([]any)
+	if !ok {
+		t.Fatalf("request messages = %#v, want a JSON array", req["messages"])
+	}
+
+	var imageURL, documentBase64 bool
+	for _, m := range messages {
+		msg, ok := m.(map[string]any)
+		if !ok {
+			continue
+		}
+		blocks, ok := msg["content"].([]any)
+		if !ok {
+			continue
+		}
+		for _, b := range blocks {
+			block, ok := b.(map[string]any)
+			if !ok {
+				continue
+			}
+			source, _ := block["source"].(map[string]any)
+			switch block["type"] {
+			case "image":
+				if source["type"] == "url" && source["url"] == "https://example.com/cat.png" {
+					imageURL = true
+				}
+			case "document":
+				if source["type"] == "base64" && source["media_type"] == "application/pdf" && source["data"] == "JVBERi0xLjQK" {
+					documentBase64 = true
+				}
+			}
+		}
+	}
+	if !imageURL {
+		t.Error("image block with a URL source not found in request")
+	}
+	if !documentBase64 {
+		t.Error("document block with a base64 application/pdf source not found in request")
+	}
+}
+
+// A PDF media type that carries parameters or non-canonical casing (e.g.
+// "application/PDF; charset=binary") must still be recognized and forwarded as a
+// document block, not dropped.
+func TestBuildMessageParam_PDFMediaTypeWithParametersIsForwarded(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		bodyCh <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, minimalMessageResponse("ok"))
+	}))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	msgs := []*message.Message{
+		{Role: message.RoleUser, Contents: message.Contents{
+			&message.DataContent{Data: "JVBERi0xLjQK", MediaType: "application/PDF; charset=binary"},
+		}},
+	}
+	if _, err := a.Run(t.Context(), msgs).Collect(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	messages, ok := req["messages"].([]any)
+	if !ok {
+		t.Fatalf("request messages = %#v, want a JSON array", req["messages"])
+	}
+
+	var documentBase64 bool
+	for _, m := range messages {
+		msg, ok := m.(map[string]any)
+		if !ok {
+			continue
+		}
+		blocks, ok := msg["content"].([]any)
+		if !ok {
+			continue
+		}
+		for _, b := range blocks {
+			block, ok := b.(map[string]any)
+			if !ok {
+				continue
+			}
+			source, _ := block["source"].(map[string]any)
+			if block["type"] == "document" && source["type"] == "base64" && source["data"] == "JVBERi0xLjQK" {
+				documentBase64 = true
+			}
+		}
+	}
+	if !documentBase64 {
+		t.Error("document block for a PDF media type with parameters not found in request")
+	}
+}
+
+// A HostedFileContent cannot be represented by the stable Messages API, so the
+// request must fail with an explicit error rather than silently dropping it.
+func TestBuildMessageParam_HostedFileContentReturnsError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("request should not be sent when a hosted file reference is present")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, minimalMessageResponse("ok"))
+	}))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+
+	msgs := []*message.Message{
+		{Role: message.RoleUser, Contents: message.Contents{
+			&message.HostedFileContent{FileID: "file_123"},
+		}},
+	}
+	_, err := a.Run(t.Context(), msgs).Collect()
+	if err == nil {
+		t.Fatal("expected an error for a hosted file reference, got nil")
+	}
+	if !strings.Contains(err.Error(), "file_123") {
+		t.Errorf("error = %v, want it to mention the offending file id", err)
+	}
+}
+
+// A hosted WebSearch tool must be mapped to the Anthropic web_search_20250305
+// tool request, with MaxUses/AllowedDomains/UserLocation carried across from
+// AdditionalProperties. This mirrors the OpenAI providers and the Python
+// agent_framework_anthropic client (get_web_search_tool -> web_search_20250305).
+func TestWebSearchHostedToolMapping(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		bodyCh <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, minimalMessageResponse("ok"))
+	}))
+	defer server.Close()
+
+	ws := &hostedtool.WebSearch{
+		AdditionalProperties: map[string]any{
+			"max_uses":        5,
+			"allowed_domains": []string{"example.com", "docs.example.com"},
+			"user_location": map[string]string{
+				"city":    "Seattle",
+				"country": "US",
+			},
+		},
+	}
+
+	if _, err := newTestClient(t, server).RunText(t.Context(), "search the web", agent.WithTool(ws)).Collect(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	tools, ok := req["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("tools = %#v, want one tool", req["tools"])
+	}
+	tl, _ := tools[0].(map[string]any)
+	if tl["type"] != "web_search_20250305" {
+		t.Fatalf("tool type = %v, want web_search_20250305", tl["type"])
+	}
+	if got := tl["max_uses"]; got != float64(5) {
+		t.Errorf("max_uses = %#v, want 5", got)
+	}
+	domains, _ := tl["allowed_domains"].([]any)
+	if len(domains) != 2 || domains[0] != "example.com" || domains[1] != "docs.example.com" {
+		t.Errorf("allowed_domains = %#v, want [example.com docs.example.com]", tl["allowed_domains"])
+	}
+	if _, present := tl["blocked_domains"]; present {
+		t.Errorf("blocked_domains should be omitted, got %#v", tl["blocked_domains"])
+	}
+	loc, ok := tl["user_location"].(map[string]any)
+	if !ok {
+		t.Fatalf("user_location = %#v, want an object", tl["user_location"])
+	}
+	if loc["city"] != "Seattle" {
+		t.Errorf("user_location.city = %v, want Seattle", loc["city"])
+	}
+	if loc["country"] != "US" {
+		t.Errorf("user_location.country = %v, want US", loc["country"])
+	}
+	if _, present := loc["region"]; present {
+		t.Errorf("user_location.region should be omitted, got %#v", loc["region"])
+	}
+}
+
+// A hosted WebSearch tool with no AdditionalProperties must still map to the
+// web_search_20250305 request, with all optional fields omitted.
+func TestWebSearchHostedToolMappingWithoutProperties(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		bodyCh <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, minimalMessageResponse("ok"))
+	}))
+	defer server.Close()
+
+	if _, err := newTestClient(t, server).RunText(t.Context(), "search the web", agent.WithTool(&hostedtool.WebSearch{})).Collect(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	tools, ok := req["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("tools = %#v, want one tool", req["tools"])
+	}
+	tl, _ := tools[0].(map[string]any)
+	if tl["type"] != "web_search_20250305" {
+		t.Fatalf("tool type = %v, want web_search_20250305", tl["type"])
+	}
+	for _, k := range []string{"max_uses", "allowed_domains", "blocked_domains", "user_location"} {
+		if _, present := tl[k]; present {
+			t.Errorf("%s should be omitted, got %#v", k, tl[k])
+		}
 	}
 }
 
@@ -899,8 +1393,7 @@ func runWithToolResult(t *testing.T, result *message.FunctionResultContent) []by
 	a := anthropicprovider.NewAgent(
 		anthropic.NewClient(option.WithBaseURL(server.URL), option.WithAPIKey("test")),
 		anthropicprovider.AgentConfig{
-			Model:  "claude-3-5-sonnet-20241022",
-			Config: agent.Config{DisableFuncAutoCall: true},
+			Model: "claude-3-5-sonnet-20241022",
 		},
 	)
 
@@ -1005,8 +1498,7 @@ func TestStreamingClosesResponseBody(t *testing.T) {
 			option.WithHTTPClient(httpClient),
 		),
 		anthropicprovider.AgentConfig{
-			Model:  "claude-3-5-sonnet-20241022",
-			Config: agent.Config{DisableFuncAutoCall: true},
+			Model: "claude-3-5-sonnet-20241022",
 		},
 	)
 

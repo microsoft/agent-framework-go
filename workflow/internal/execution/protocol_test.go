@@ -165,8 +165,8 @@ func executorWithSendTypes(sendTypes ...reflect.Type) *workflow.Executor {
 	return &workflow.Executor{
 		ID: "send-protocol",
 
-		DisableAutoSendMessageHandlerResultObject: true,
-		DisableAutoYieldOutputHandlerResultObject: true,
+		AutoSendMessageHandlerResultObject: new(false),
+		AutoYieldOutputHandlerResultObject: new(false),
 		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 			rb.SendsMessageType(sendTypes...)
 			rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(*workflow.Context, any) (any, error) {
@@ -181,8 +181,8 @@ func executorWithInputTypes(inputTypes ...reflect.Type) *workflow.Executor {
 	return &workflow.Executor{
 		ID: "input-protocol",
 
-		DisableAutoSendMessageHandlerResultObject: true,
-		DisableAutoYieldOutputHandlerResultObject: true,
+		AutoSendMessageHandlerResultObject: new(false),
+		AutoYieldOutputHandlerResultObject: new(false),
 		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 			for _, inputType := range inputTypes {
 				rb.RouteBuilder.AddHandlerRaw(inputType, nil, func(*workflow.Context, any) (any, error) {
@@ -198,8 +198,8 @@ func executorWithYieldTypes(yieldTypes ...reflect.Type) *workflow.Executor {
 	return &workflow.Executor{
 		ID: "yield-protocol",
 
-		DisableAutoSendMessageHandlerResultObject: true,
-		DisableAutoYieldOutputHandlerResultObject: true,
+		AutoSendMessageHandlerResultObject: new(false),
+		AutoYieldOutputHandlerResultObject: new(false),
 		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 			rb.YieldsOutputType(yieldTypes...)
 			return rb, nil

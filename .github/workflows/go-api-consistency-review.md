@@ -126,6 +126,8 @@ Use the upstream `microsoft/agent-framework` repository as the source of truth f
    - If the change is limited to tests, docs, comments, refactors, or private/internal code with no user-visible effect, do not raise parity issues
    - Do not use the absence of exported-symbol changes as evidence that runtime behavior is not user-visible
    - If exported Go APIs or observable Go runtime behavior change, continue
+   - Classify the review scope as one or more of: public API, user-visible behavior, examples, or internal-only. Include this classification in the summary comment so maintainers can prioritize their manual review.
+   - For every out-of-scope PR, use `add-comment` to post exactly one concise summary using the review record below. Do not emit `noop`, inline comments, or labels.
 
 2. **Identify the changed Go contract**:
    - List the new or changed exported functions, methods, types, fields, constants, options, events, or behaviors
@@ -137,6 +139,7 @@ Use the upstream `microsoft/agent-framework` repository as the source of truth f
    - Prefer public export files, builders, facades, and primary types over incidental internal implementations
    - When the Go PR links an upstream PR or commit, inspect that complete upstream change, including public options, builders, defaults, and tests; do not limit review to the implementation files cited in the Go PR description
    - Use samples and tests as secondary evidence when behavior is not obvious from signatures alone
+   - Record the exact upstream file paths and symbols or tests reviewed. For every parity finding, cite the specific .NET or Python source that supports it.
 
 4. **Compare for parity**:
    - Naming and intent
@@ -154,6 +157,8 @@ Use the upstream `microsoft/agent-framework` repository as the source of truth f
 5. **Report only actionable consistency issues**:
    - If Go appears ahead of or divergent from .NET/Python in a meaningful way, explain the gap and suggest which upstream surfaces should be reviewed
    - If the change matches upstream semantics, or the divergence is clearly intentional and language-specific, say so briefly in the summary comment
+   - Comment only on high-confidence findings supported by the changed Go code and an upstream reference. Do not turn uncertainty into an inline finding.
+   - Consolidate repeated instances of the same root cause into one representative inline comment and describe the complete affected scope there.
 
 ## Guidelines
 
@@ -172,6 +177,7 @@ Use the upstream `microsoft/agent-framework` repository as the source of truth f
 7. **Allow intentional platform-specific differences**: Performance optimizations, integration plumbing, or ecosystem-specific packaging do not need exact parity unless they change the public contract
 8. **Prefer evidence over speculation**: If you cannot find a clear upstream equivalent, say that explicitly and explain the uncertainty instead of over-claiming a mismatch
 9. **Only comment when there is a real parity issue**: If the PR stays aligned or is out of scope, leave a short summary comment and no inline findings
+10. **Keep findings reviewable**: Each inline finding must identify the changed Go contract, cite the exact upstream evidence, explain the material semantic difference, and suggest a concrete resolution.
 
 ## Example Scenarios
 
@@ -194,6 +200,11 @@ If a PR improves Go performance, refactors unexported helpers, or changes intern
 ## Output Format
 
 - Target every comment, review comment, and label operation at PR `${{ github.event.pull_request.number || inputs.pr_number }}` explicitly. The input is used when a fork PR is routed through `workflow_dispatch`.
+- Begin every summary comment with the following concise review record:
+  - **Scope**: public API, user-visible behavior, examples, and/or internal-only
+  - **Changed Go contract**: the exported API or observable behavior reviewed, or `None`
+  - **Upstream evidence reviewed**: exact .NET/Python file paths and relevant symbols, tests, or samples; state `No equivalent found` when applicable
+  - **Result**: aligned, findings reported, out of scope, or unable to determine
 - **If public Go APIs changed**: Add the `public-api-change` label to flag the PR for public API review, regardless of whether parity issues are found. If no exported API surface changed, ensure the label is not present (remove it if a stale run added it).
-- **If consistency issues are found**: Add specific inline review comments on the changed Go lines and one summary comment that names the upstream Python and/or .NET surfaces that appear out of sync. Remove the `parity-approved` label if it is present so a previous green review cannot remain stale.
+- **If consistency issues are found**: Add specific inline review comments on the changed Go lines. Each must cite the exact upstream .NET or Python file path and symbol, test, or sample that demonstrates the mismatch. Add one summary comment using the review record above, and remove the `parity-approved` label if it is present so a previous green review cannot remain stale.
 - **If no issues are found**: Add a brief summary comment confirming that the PR either preserves cross-repo parity or only changes Go-internal implementation details. For a linked upstream port, state the upstream and Go enablement/default mapping used to reach that conclusion. Add the `parity-approved` label only after this comparison is complete.

@@ -3,15 +3,13 @@
 package a2aprovider
 
 import (
-	"slices"
-
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/microsoft/agent-framework-go/agent"
 )
 
 const (
-	taskIDsStateKey = "a2aprovider.taskIDs"
-	taskStateKey    = "a2aprovider.taskState"
+	taskIDStateKey = "a2aprovider.taskID"
+	taskStateKey   = "a2aprovider.taskState"
 )
 
 func setContextID(session *agent.Session, contextID string) {
@@ -26,37 +24,27 @@ func getContextID(session *agent.Session) string {
 }
 
 func setTaskID(session *agent.Session, taskID string) {
+	if session == nil {
+		return
+	}
 	if taskID == "" {
+		session.Delete(taskIDStateKey)
 		return
 	}
-	existing := getTaskIDs(session)
-	// The same task ID is reported on every streamed event for a task, so guard
-	// against re-adding an ID that is already stored. slices.Contains keeps
-	// interleaved distinct task IDs working.
-	if slices.Contains(existing, taskID) {
-		return
-	}
-	setTaskIDs(session, append(existing, taskID))
+	session.Set(taskIDStateKey, taskID)
 }
 
-func setTaskIDs(session *agent.Session, taskIDs []string) {
-	if len(taskIDs) == 0 {
-		return
+func getTaskID(session *agent.Session) string {
+	var taskID string
+	if ok, err := session.Get(taskIDStateKey, &taskID); err != nil || !ok {
+		return ""
 	}
-	session.Set(taskIDsStateKey, taskIDs)
+	return taskID
 }
 
-func getTaskIDs(session *agent.Session) []string {
-	var taskIDs []string
-	if ok, err := session.Get(taskIDsStateKey, &taskIDs); err != nil || !ok {
-		return nil
-	}
-	return taskIDs
-}
-
-// TaskIDsFromSession returns all known A2A task IDs stored in session state.
-func TaskIDsFromSession(session *agent.Session) []string {
-	return getTaskIDs(session)
+// TaskIDFromSession returns the current A2A task ID stored in session state.
+func TaskIDFromSession(session *agent.Session) string {
+	return getTaskID(session)
 }
 
 func setLastTaskState(session *agent.Session, state a2a.TaskState) {

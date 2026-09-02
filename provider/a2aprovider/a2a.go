@@ -12,7 +12,7 @@ import (
 	"iter"
 	"maps"
 	"slices"
-	"time"
+	"strings"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
@@ -29,10 +29,21 @@ type taskIDOpt struct{ string }
 
 func (o taskIDOpt) MAFValue() any { return o.string }
 
-// TaskID returns an [agent.Option] that associates the run with an existing A2A
-// task, so the request continues that task rather than starting a new one.
-func TaskID(taskID string) agent.Option {
+type metadataOpt struct{ value map[string]any }
+
+func (o metadataOpt) MAFValue() any { return o.value }
+
+// WithTaskID sets the existing A2A task to resume when creating a session.
+// Supply it to [agent.Agent.CreateSession] together with a nonblank
+// [agent.WithServiceID] context ID.
+func WithTaskID(taskID string) agent.Option {
 	return taskIDOpt{taskID}
+}
+
+// WithMetadata sets A2A request-level metadata for a run. When hosting an
+// agent, the executor supplies incoming request metadata through this option.
+func WithMetadata(metadata map[string]any) agent.Option {
+	return metadataOpt{value: cloneMetadata(metadata)}
 }
 
 type a2aProvider struct {
@@ -59,7 +70,21 @@ func NewAgent(aclient *a2aclient.Client, config AgentConfig) *agent.Agent {
 }
 
 func (a *a2aProvider) createSession(ctx context.Context, session *agent.Session, options ...agent.Option) error {
-	setTaskIDs(session, slices.Collect(agent.AllOptions(options, TaskID)))
+	contextID := session.ServiceID()
+	if contextID != "" && strings.TrimSpace(contextID) == "" {
+		return errors.New("a2aprovider: context ID cannot be blank")
+	}
+	taskID, hasTaskID := agent.GetOption(options, WithTaskID)
+	if !hasTaskID {
+		return nil
+	}
+	if strings.TrimSpace(contextID) == "" {
+		return errors.New("a2aprovider: context ID is required with a task ID")
+	}
+	if strings.TrimSpace(taskID) == "" {
+		return errors.New("a2aprovider: task ID cannot be blank")
+	}
+	setTaskID(session, taskID)
 	return nil
 }
 
@@ -73,7 +98,7 @@ func (a *a2aProvider) run(ctx context.Context, messages []*message.Message, opti
 				return
 			}
 			if stream {
-				sendMsg(session, a.subscribeToTaskWithFallback(ctx, a2a.TaskID(token)), yield)
+				sendMsg(session, a.subscribeToTaskWithFallback(ctx, a2a.TaskID(token)), true, yield)
 				return
 			}
 			task, err := a.client.GetTask(ctx, &a2a.GetTaskRequest{ID: a2a.TaskID(token)})
@@ -85,7 +110,7 @@ func (a *a2aProvider) run(ctx context.Context, messages []*message.Message, opti
 				yield(nil, err)
 				return
 			}
-			yieldTask(yield, task)
+			yieldTask(yield, task, true)
 			return
 		}
 		if len(messages) == 0 {
@@ -109,11 +134,7 @@ func (a *a2aProvider) run(ctx context.Context, messages []*message.Message, opti
 			if msg.ID != "" {
 				msgID = msg.ID
 			}
-			// Treat a non-nil map as "present" even when empty so that an
-			// empty-but-non-nil AdditionalProperties is preserved as an empty
-			// metadata map (nil vs empty map are distinct in JSON output),
-			// matching the per-message maps.Clone behavior in createA2AMessage.
-			if msg.AdditionalProperties != nil {
+			if len(msg.AdditionalProperties) > 0 {
 				if metadata == nil {
 					metadata = make(map[string]any, len(msg.AdditionalProperties))
 				}
@@ -127,6 +148,9 @@ func (a *a2aProvider) run(ctx context.Context, messages []*message.Message, opti
 		userMsg := createA2AMessage(session, combined, parts)
 
 		params := &a2a.SendMessageRequest{Message: userMsg}
+		if metadata, ok := agent.GetOption(options, WithMetadata); ok {
+			params.Metadata = cloneMetadata(metadata)
+		}
 		var seq iter.Seq2[a2a.Event, error]
 		if stream {
 			seq = a.client.SendStreamingMessage(ctx, params)
@@ -139,32 +163,30 @@ func (a *a2aProvider) run(ctx context.Context, messages []*message.Message, opti
 				yield(resp, err)
 			}
 		}
-		sendMsg(session, seq, yield)
+		sendMsg(session, seq, stream, yield)
 	}
 }
 
 func createA2AMessage(session *agent.Session, msg *message.Message, parts a2a.ContentParts) *a2a.Message {
-	taskIDs := make([]a2a.TaskID, 0, 1)
-	for _, taskID := range getTaskIDs(session) {
-		taskIDs = append(taskIDs, a2a.TaskID(taskID))
-	}
-
 	a2aMessage := a2a.NewMessage(a2a.MessageRoleUser, parts...)
 	if msg.ID != "" {
 		a2aMessage.ID = msg.ID
 	}
 	a2aMessage.ContextID = getContextID(session)
+	taskID := getTaskID(session)
 
 	// When the task is waiting for user input (InputRequired), link the message
 	// directly to the task via TaskID so it is treated as input for that task.
 	// Otherwise, use ReferenceTasks to link as a follow-up.
 	// See: https://github.com/a2aproject/A2A/blob/main/docs/topics/life-of-a-task.md#task-refinements
-	if getLastTaskState(session) == a2a.TaskStateInputRequired && len(taskIDs) > 0 {
-		a2aMessage.TaskID = taskIDs[len(taskIDs)-1]
-	} else {
-		a2aMessage.ReferenceTasks = taskIDs
+	if taskID != "" {
+		if getLastTaskState(session) == a2a.TaskStateInputRequired {
+			a2aMessage.TaskID = a2a.TaskID(taskID)
+		} else {
+			a2aMessage.ReferenceTasks = []a2a.TaskID{a2a.TaskID(taskID)}
+		}
 	}
-	a2aMessage.Metadata = maps.Clone(msg.AdditionalProperties)
+	a2aMessage.Metadata = cloneMetadata(msg.AdditionalProperties)
 	return a2aMessage
 }
 
@@ -198,27 +220,38 @@ func (a *a2aProvider) subscribeToTaskWithFallback(ctx context.Context, taskID a2
 	}
 }
 
-func sendMsg(session *agent.Session, seq iter.Seq2[a2a.Event, error], yield func(*agent.ResponseUpdate, error) bool) {
+func sendMsg(session *agent.Session, seq iter.Seq2[a2a.Event, error], stream bool, yield func(*agent.ResponseUpdate, error) bool) {
+	var contextID, taskID string
+	var taskState a2a.TaskState
 	for e, err := range seq {
 		if err != nil {
 			yield(nil, err)
 			return
 		}
 		taskInfo := e.TaskInfo()
-		var taskState a2a.TaskState
-		switch evt := e.(type) {
-		case *a2a.Task:
-			taskState = evt.Status.State
-		case *a2a.TaskStatusUpdateEvent:
-			taskState = evt.Status.State
-		}
-		if err := updateSessionContextID(session, taskInfo.ContextID, string(taskInfo.TaskID), taskState); err != nil {
+		if err := validateSessionContextID(session, taskInfo.ContextID); err != nil {
 			yield(nil, err)
 			return
 		}
+		if taskInfo.ContextID != "" {
+			contextID = taskInfo.ContextID
+		}
+		switch evt := e.(type) {
+		case *a2a.Task:
+			taskID = string(evt.ID)
+			taskState = evt.Status.State
+		case *a2a.TaskStatusUpdateEvent:
+			taskID = string(evt.TaskID)
+			taskState = evt.Status.State
+		case *a2a.TaskArtifactUpdateEvent:
+			taskID = string(evt.TaskID)
+		case *a2a.Message:
+			taskID = ""
+			taskState = a2a.TaskStateUnspecified
+		}
 		switch e := e.(type) {
 		case *a2a.Task:
-			if ok := yieldTask(yield, e); !ok {
+			if ok := yieldTask(yield, e, !stream); !ok {
 				return
 			}
 		case *a2a.TaskStatusUpdateEvent:
@@ -228,7 +261,7 @@ func sendMsg(session *agent.Session, seq iter.Seq2[a2a.Event, error], yield func
 			)
 			if e.Status.Message != nil {
 				messageID = e.Status.Message.ID
-				if e.Status.State == a2a.TaskStateInputRequired || e.Status.State.Terminal() {
+				if e.Status.State == a2a.TaskStateInputRequired {
 					var err error
 					contents, err = partsToContents(e.Status.Message.Parts, nil)
 					if err != nil {
@@ -237,7 +270,8 @@ func sendMsg(session *agent.Session, seq iter.Seq2[a2a.Event, error], yield func
 					}
 				}
 			}
-			update := newResponseUpdate(e, e.Metadata, string(e.TaskID), messageID, message.RoleAssistant, contents, time.Now())
+			update := newResponseUpdate(e, e.Metadata, string(e.TaskID), messageID, message.RoleAssistant, contents)
+			update.FinishReason = finishReasonForTaskState(e.Status.State)
 			if !yield(update, nil) {
 				return
 			}
@@ -247,11 +281,7 @@ func sendMsg(session *agent.Session, seq iter.Seq2[a2a.Event, error], yield func
 				yield(nil, err)
 				return
 			}
-			// Surface the artifact's own metadata alongside the event-level
-			// metadata, matching .NET's A2A conversion which folds artifact
-			// metadata into the resulting message.
-			metadata := mergeMetadata(e.Metadata, e.Artifact.Metadata)
-			update := newResponseUpdate(e, metadata, string(e.TaskID), string(e.Artifact.ID), message.RoleAssistant, contents, time.Now())
+			update := newResponseUpdate(e, cloneMetadata(e.Metadata), string(e.TaskID), string(e.Artifact.ID), message.RoleAssistant, contents)
 			if !yield(update, nil) {
 				return
 			}
@@ -261,11 +291,8 @@ func sendMsg(session *agent.Session, seq iter.Seq2[a2a.Event, error], yield func
 				yield(nil, err)
 				return
 			}
-			role := message.RoleUser
-			if e.Role == a2a.MessageRoleAgent {
-				role = message.RoleAssistant
-			}
-			update := newResponseUpdate(e, e.Metadata, e.ID, e.ID, role, contents, time.Now())
+			update := newResponseUpdate(e, e.Metadata, e.ID, e.ID, message.RoleAssistant, contents)
+			update.FinishReason = "stop"
 			if !yield(update, nil) {
 				return
 			}
@@ -274,9 +301,12 @@ func sendMsg(session *agent.Session, seq iter.Seq2[a2a.Event, error], yield func
 			return
 		}
 	}
+	if err := updateSessionContextID(session, contextID, taskID, taskState); err != nil {
+		yield(nil, err)
+	}
 }
 
-func newResponseUpdate(raw any, additionalProperties map[string]any, responseID, messageID string, role message.Role, contents message.Contents, createdAt time.Time) *agent.ResponseUpdate {
+func newResponseUpdate(raw any, additionalProperties map[string]any, responseID, messageID string, role message.Role, contents message.Contents) *agent.ResponseUpdate {
 	return &agent.ResponseUpdate{
 		RawRepresentation:    raw,
 		AdditionalProperties: additionalProperties,
@@ -284,7 +314,6 @@ func newResponseUpdate(raw any, additionalProperties map[string]any, responseID,
 		MessageID:            messageID,
 		Role:                 role,
 		Contents:             contents,
-		CreatedAt:            createdAt,
 	}
 }
 
@@ -309,26 +338,59 @@ func mergeMetadata(base map[string]any, extra ...map[string]any) map[string]any 
 	return merged
 }
 
-func yieldTask(yield func(*agent.ResponseUpdate, error) bool, task *a2a.Task) bool {
-	now := time.Now()
+func yieldTask(yield func(*agent.ResponseUpdate, error) bool, task *a2a.Task, splitArtifacts bool) bool {
 	var continuationToken string
 	switch task.Status.State {
 	case a2a.TaskStateSubmitted, a2a.TaskStateWorking:
 		continuationToken = string(task.ID)
 	}
-	timestamp := now
-	if task.Status.Timestamp != nil {
-		timestamp = *task.Status.Timestamp
+	finishReason := finishReasonForTaskState(task.Status.State)
+	if splitArtifacts {
+		var yielded bool
+		for _, artifact := range task.Artifacts {
+			contents, err := partsToContents(artifact.Parts, nil)
+			if err != nil {
+				yield(nil, err)
+				return false
+			}
+			update := newResponseUpdate(artifact, mergeMetadata(task.Metadata, artifact.Metadata), string(task.ID), string(artifact.ID), message.RoleAssistant, contents)
+			update.ContinuationToken = continuationToken
+			update.FinishReason = finishReason
+			yielded = true
+			if !yield(update, nil) {
+				return false
+			}
+		}
+		if task.Status.Message != nil && task.Status.State == a2a.TaskStateInputRequired {
+			contents, err := partsToContents(task.Status.Message.Parts, nil)
+			if err != nil {
+				yield(nil, err)
+				return false
+			}
+			update := newResponseUpdate(task.Status, nil, string(task.ID), task.Status.Message.ID, message.RoleAssistant, contents)
+			update.ContinuationToken = continuationToken
+			update.FinishReason = finishReason
+			yielded = true
+			if !yield(update, nil) {
+				return false
+			}
+		}
+		if yielded {
+			return true
+		}
+		update := newResponseUpdate(task, cloneMetadata(task.Metadata), string(task.ID), "", "", nil)
+		update.ContinuationToken = continuationToken
+		update.FinishReason = finishReason
+		return yield(update, nil)
 	}
+
 	var contents []message.Content
 	messageID := ""
 	if task.Status.Message != nil {
 		messageID = task.Status.Message.ID
 		// Mirror the streaming TaskStatusUpdateEvent path: surface the status
-		// message text for states where it carries the agent's response (an
-		// input-required follow-up question or a terminal summary), rather than
-		// dropping it when the task has no artifacts.
-		if task.Status.State == a2a.TaskStateInputRequired || task.Status.State.Terminal() {
+		// message when it carries an input-required follow-up question.
+		if task.Status.State == a2a.TaskStateInputRequired {
 			var err error
 			contents, err = partsToContents(task.Status.Message.Parts, contents)
 			if err != nil {
@@ -337,7 +399,6 @@ func yieldTask(yield func(*agent.ResponseUpdate, error) bool, task *a2a.Task) bo
 			}
 		}
 	}
-	artifactMetadata := make([]map[string]any, 0, len(task.Artifacts))
 	for _, artifact := range task.Artifacts {
 		var err error
 		contents, err = partsToContents(artifact.Parts, contents)
@@ -345,16 +406,29 @@ func yieldTask(yield func(*agent.ResponseUpdate, error) bool, task *a2a.Task) bo
 			yield(nil, err)
 			return false
 		}
-		artifactMetadata = append(artifactMetadata, artifact.Metadata)
 	}
-
-	// Fold each artifact's own metadata into the update alongside the
-	// task-level metadata, matching .NET's A2A conversion which preserves
-	// artifact metadata rather than dropping it.
-	metadata := mergeMetadata(task.Metadata, artifactMetadata...)
-	update := newResponseUpdate(task, metadata, string(task.ID), messageID, message.RoleAssistant, contents, timestamp)
+	update := newResponseUpdate(task, cloneMetadata(task.Metadata), string(task.ID), messageID, message.RoleAssistant, contents)
 	update.ContinuationToken = continuationToken
+	update.FinishReason = finishReason
 	return yield(update, nil)
+}
+
+func finishReasonForTaskState(state a2a.TaskState) string {
+	if state == a2a.TaskStateCompleted {
+		return "stop"
+	}
+	return ""
+}
+
+func validateSessionContextID(session *agent.Session, contextID string) error {
+	if session == nil {
+		return nil
+	}
+	currentContextID := getContextID(session)
+	if currentContextID != "" && contextID != "" && currentContextID != contextID {
+		return fmt.Errorf("mismatched context ID: session has %q but A2A response has %q", currentContextID, contextID)
+	}
+	return nil
 }
 
 func updateSessionContextID(session *agent.Session, contextID, taskID string, taskState a2a.TaskState) error {
@@ -363,9 +437,8 @@ func updateSessionContextID(session *agent.Session, contextID, taskID string, ta
 	}
 	// Surface cases where the A2A agent responds with a response that
 	// has a different context ID than the session's context ID.
-	currentContextID := getContextID(session)
-	if currentContextID != "" && contextID != "" && currentContextID != contextID {
-		return fmt.Errorf("mismatched context ID: session has %q but A2A response has %q", currentContextID, contextID)
+	if err := validateSessionContextID(session, contextID); err != nil {
+		return err
 	}
 	setContextID(session, contextID)
 	setTaskID(session, taskID)
@@ -385,7 +458,7 @@ func partsToContents(parts a2a.ContentParts, contents []message.Content) ([]mess
 		case a2a.Text:
 			content = &message.TextContent{
 				ContentHeader: message.ContentHeader{
-					AdditionalProperties: maps.Clone(part.Metadata),
+					AdditionalProperties: cloneMetadata(part.Metadata),
 					RawRepresentation:    part,
 				},
 				Text: string(c),
@@ -393,7 +466,7 @@ func partsToContents(parts a2a.ContentParts, contents []message.Content) ([]mess
 		case a2a.URL:
 			content = &message.URIContent{
 				ContentHeader: message.ContentHeader{
-					AdditionalProperties: maps.Clone(part.Metadata),
+					AdditionalProperties: cloneMetadata(part.Metadata),
 					RawRepresentation:    part,
 				},
 				MediaType: cmp.Or(part.MediaType, "application/octet-stream"),
@@ -402,7 +475,7 @@ func partsToContents(parts a2a.ContentParts, contents []message.Content) ([]mess
 		case a2a.Raw:
 			content = &message.DataContent{
 				ContentHeader: message.ContentHeader{
-					AdditionalProperties: maps.Clone(part.Metadata),
+					AdditionalProperties: cloneMetadata(part.Metadata),
 					RawRepresentation:    part,
 				},
 				Name:      part.Filename,
@@ -416,7 +489,7 @@ func partsToContents(parts a2a.ContentParts, contents []message.Content) ([]mess
 			}
 			content = &message.DataContent{
 				ContentHeader: message.ContentHeader{
-					AdditionalProperties: maps.Clone(part.Metadata),
+					AdditionalProperties: cloneMetadata(part.Metadata),
 					RawRepresentation:    part,
 				},
 				Name:      part.Filename,
@@ -480,7 +553,7 @@ func contentsToParts(contents []message.Content, parts a2a.ContentParts) (a2a.Co
 			part = a2a.NewTextPart(string(data))
 		}
 		if part != nil {
-			part.Metadata = maps.Clone(content.Header().AdditionalProperties)
+			part.Metadata = cloneMetadata(content.Header().AdditionalProperties)
 			parts = append(parts, part)
 		}
 	}

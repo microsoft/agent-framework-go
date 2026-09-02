@@ -142,6 +142,10 @@ func (rb *RouteBuilder) AddCatchAll(handler func(*Context, PortableValue) (any, 
 	if rb.err != nil {
 		return rb
 	}
+	if rb.catchAll == nil && addHandlerOptions.overwrite {
+		rb.err = errors.New("cannot overwrite unregistered catch-all handler")
+		return rb
+	}
 	if rb.catchAll != nil && !addHandlerOptions.overwrite {
 		rb.err = errors.New("catch-all handler is already registered")
 		return rb
@@ -264,6 +268,8 @@ func (mr *messageRouter) routeMessage(ctx *Context, msg any) (result callResult,
 				// If we found a runtime type, we can use it
 				msg = v
 			}
+		} else if value := pvalue.Any(); value != nil && pvalue.TypeID.MatchPolymorphic(reflect.TypeOf(value)) {
+			msg = value
 		}
 	}
 	defer func() {

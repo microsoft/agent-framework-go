@@ -200,7 +200,7 @@ func TestCopyResumeSessionConfig_CopiesAllProperties(t *testing.T) {
 
 func TestCopySessionConfig_WithStreamingDisabled_PreservesStreamingValue(t *testing.T) {
 	runtime := newFakeRuntime(t, idleEvent())
-	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{SessionConfig: &copilot.SessionConfig{Streaming: copilot.Bool(false), Model: "gpt-4o"}})
+	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{SessionConfig: &copilot.SessionConfig{Streaming: new(false), Model: "gpt-4o"}})
 
 	_, err := runText(t, agent, "hello")
 	if err != nil {
@@ -222,7 +222,7 @@ func TestCopySessionConfig_WithStreamingNull_DefaultsToTrue(t *testing.T) {
 
 func TestCopyResumeSessionConfig_WithStreamingDisabled_PreservesStreamingValue(t *testing.T) {
 	runtime := newFakeRuntime(t, idleEvent())
-	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{SessionConfig: &copilot.SessionConfig{Streaming: copilot.Bool(false), Model: "gpt-4o"}})
+	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{SessionConfig: &copilot.SessionConfig{Streaming: new(false), Model: "gpt-4o"}})
 	session, err := agent.CreateSession(context.Background(), agentpkg.WithServiceID("existing-session"))
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
@@ -944,31 +944,31 @@ func richSessionConfig() *copilot.SessionConfig {
 		ExcludedBuiltInAgents:              []string{"builtin1"},
 		Providers:                          []copilot.NamedProviderConfig{{Name: "prov1", BaseURL: "https://example.com"}},
 		Models:                             []copilot.ProviderModelConfig{{ID: "m1", Provider: "prov1"}},
-		Capi:                               &copilot.CapiSessionOptions{EnableWebSocketResponses: copilot.Bool(true)},
+		Capi:                               &copilot.CapiSessionOptions{EnableWebSocketResponses: new(true)},
 		ModelCapabilities:                  &rpc.ModelCapabilitiesOverride{},
 		SessionLimits:                      &rpc.SessionLimitsConfig{},
-		EnableSessionTelemetry:             copilot.Bool(true),
-		EnableCitations:                    copilot.Bool(true),
-		EnableConfigDiscovery:              copilot.Bool(true),
-		SkipEmbeddingRetrieval:             copilot.Bool(true),
-		EmbeddingCacheStorage:              copilot.String("in-memory"),
-		OrganizationCustomInstructions:     copilot.String("org instructions"),
-		EnableOnDemandInstructionDiscovery: copilot.Bool(true),
-		EnableFileHooks:                    copilot.Bool(true),
-		EnableHostGitOperations:            copilot.Bool(true),
-		EnableSessionStore:                 copilot.Bool(true),
-		EnableSkills:                       copilot.Bool(true),
-		SkipCustomInstructions:             copilot.Bool(true),
-		CustomAgentsLocalOnly:              copilot.Bool(true),
-		CoauthorEnabled:                    copilot.Bool(true),
-		ManageScheduleEnabled:              copilot.Bool(true),
-		IncludeSubAgentStreamingEvents:     copilot.Bool(false),
+		EnableSessionTelemetry:             new(true),
+		EnableCitations:                    new(true),
+		EnableConfigDiscovery:              new(true),
+		SkipEmbeddingRetrieval:             new(true),
+		EmbeddingCacheStorage:              new("in-memory"),
+		OrganizationCustomInstructions:     new("org instructions"),
+		EnableOnDemandInstructionDiscovery: new(true),
+		EnableFileHooks:                    new(true),
+		EnableHostGitOperations:            new(true),
+		EnableSessionStore:                 new(true),
+		EnableSkills:                       new(true),
+		SkipCustomInstructions:             new(true),
+		CustomAgentsLocalOnly:              new(true),
+		CoauthorEnabled:                    new(true),
+		ManageScheduleEnabled:              new(true),
+		IncludeSubAgentStreamingEvents:     new(false),
 		DefaultAgent:                       &copilot.DefaultAgentConfig{ExcludedTools: []string{"dtool"}},
 		Agent:                              "custom-agent",
 		PluginDirectories:                  []string{"/plugins"},
 		InstructionDirectories:             []string{"/instructions"},
-		LargeOutput:                        &copilot.LargeToolOutputConfig{Enabled: copilot.Bool(true)},
-		ToolSearch:                         &copilot.ToolSearchConfig{Enabled: copilot.Bool(true)},
+		LargeOutput:                        &copilot.LargeToolOutputConfig{Enabled: new(true)},
+		ToolSearch:                         &copilot.ToolSearchConfig{Enabled: new(true)},
 		Memory:                             &copilot.MemoryConfiguration{Enabled: true},
 		GitHubToken:                        "gh-token-123",
 		RemoteSession:                      rpc.RemoteSessionModeOn,

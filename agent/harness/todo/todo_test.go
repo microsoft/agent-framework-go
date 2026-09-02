@@ -409,7 +409,7 @@ func TestPublicGetAllTodos_ReturnsEmptyForNewSession(t *testing.T) {
 // 16. Options_CustomInstructions_OverridesDefault
 func TestCustomInstructions_OverridesDefault(t *testing.T) {
 	p := todo.New(&todo.Options{
-		Instructions: "Custom todo instructions here",
+		Instructions: new("Custom todo instructions here"),
 	})
 	opts := sessionOpts()
 
@@ -712,7 +712,7 @@ func TestTodo_ConcurrentSessionAccess_NoDataRace(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(n * 2)
 	errs := make([]error, n*2)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		go func(idx int) {
 			defer wg.Done()
 			_, errs[idx] = addTool.Call(context.Background(), fmt.Sprintf(`{"Arg0":[{"title":"item-%d"}]}`, idx))

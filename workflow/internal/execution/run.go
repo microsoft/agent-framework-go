@@ -150,31 +150,43 @@ func (h *RunHandle) TakeEventStream(ctx context.Context, blockOnPendingRequest b
 	}
 }
 
-func (h *RunHandle) IsValidInputType(ctx context.Context, typ reflect.Type) bool {
+func (h *RunHandle) IsValidInputType(ctx context.Context, typ reflect.Type) (bool, error) {
 	return h.stepRunner.IsValidInputType(ctx, typ)
 }
 
-func (h *RunHandle) EnqueueMessage(ctx context.Context, message any) error {
+// EnqueueMessageUntyped attempts to enqueue message using declaredType for
+// validation and routing. A nil declaredType uses the message's runtime type.
+func (h *RunHandle) EnqueueMessageUntyped(ctx context.Context, message any, declaredType reflect.Type) (bool, error) {
 	if err := h.cancellationError(); err != nil {
-		return err
-	}
-	if response, ok := message.(*workflow.ExternalResponse); ok {
-		return h.EnqueueResponse(ctx, response)
+		return false, err
 	}
 	if message == nil {
-		return fmt.Errorf("message cannot be nil")
+		return false, fmt.Errorf("message cannot be nil")
 	}
-	if !h.IsValidInputType(ctx, reflect.TypeOf(message)) {
-		return fmt.Errorf("message type %v is not a valid input type for this workflow: %w", reflect.TypeOf(message), workflow.ErrInvalidInputType)
+	messageType := reflect.TypeOf(message)
+	if declaredType != nil {
+		if !messageType.AssignableTo(declaredType) {
+			return false, fmt.Errorf("message type %v is not assignable to declared type %v", messageType, declaredType)
+		}
+		if declaredType.AssignableTo(reflect.TypeFor[*workflow.ExternalResponse]()) {
+			return true, h.EnqueueResponse(ctx, message.(*workflow.ExternalResponse))
+		}
+	} else {
+		if response, ok := message.(*workflow.ExternalResponse); ok {
+			return true, h.EnqueueResponse(ctx, response)
+		}
+		declaredType = messageType
 	}
-	if err := h.stepRunner.EnqueueMessage(ctx, message); err != nil {
-		return err
+	accepted, err := h.stepRunner.EnqueueMessageUntyped(ctx, message, declaredType)
+	if err != nil {
+		return false, err
 	}
 
-	// Signal the run loop that new input is available
+	// Wake the run loop even when the message was rejected so an initial run can
+	// reach its idle halt and return a disposable handle.
 	h.signalInputToRunLoop()
 
-	return nil
+	return accepted, nil
 }
 
 func (h *RunHandle) EnqueueResponse(ctx context.Context, response *workflow.ExternalResponse) error {
@@ -217,7 +229,7 @@ func (h *RunHandle) Close(ctx context.Context) error {
 		h.Cancel()
 
 		// Request end of run
-		if err := h.stepRunner.RequestEndRun(ctx); err != nil {
+		if err := h.stepRunner.RequestEndRun(context.WithoutCancel(ctx)); err != nil {
 			return err
 		}
 	}

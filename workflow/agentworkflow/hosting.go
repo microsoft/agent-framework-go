@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -32,6 +31,13 @@ const (
 
 var invalidDescriptiveIDChars = regexp.MustCompile(`[^0-9A-Za-z]+`)
 
+func valueOrDefault(value *bool, defaultValue bool) bool {
+	if value == nil {
+		return defaultValue
+	}
+	return *value
+}
+
 type agentHostState struct {
 	ThreadState           []byte
 	CurrentTurnEmitEvents *bool
@@ -44,29 +50,24 @@ type ResetSignal struct{}
 // Config configures how an [agent.Agent] is hosted as a workflow
 // [workflow.Executor].
 type Config struct {
-	// EmitUpdateEvents controls whether streaming [agent.ResponseUpdate] outputs
-	// are emitted as the agent runs. A [workflow.TurnToken] with
-	// [workflow.TurnToken.EmitEvents] set overrides this default for that turn.
-	EmitUpdateEvents bool
+	// EmitUpdateEvents controls whether streaming [agent.ResponseUpdate]
+	// outputs are emitted as the agent runs. When nil, a [workflow.TurnToken]
+	// controls update emission for that turn.
+	EmitUpdateEvents *bool
 
-	// EmitResponseEvents controls whether an aggregated [agent.Response] output is
-	// emitted at the end of each turn.
+	// EmitResponseEvents controls whether an aggregated [agent.Response]
+	// output is emitted at the end of each turn.
 	EmitResponseEvents bool
 
-	// DisableForwardIncomingMessages disables forwarding of incoming messages
-	// downstream before the agent runs. By default (zero value), incoming
-	// messages are forwarded so downstream nodes observe the full
-	// conversation. Set to true for strict pipelines where each node should
-	// only forward its own output.
-	DisableForwardIncomingMessages bool
+	// ForwardIncomingMessages controls whether incoming messages are forwarded
+	// downstream before the agent runs. The default is true.
+	ForwardIncomingMessages *bool
 
-	// DisableReassignOtherAgentsAsUsers disables rewriting incoming
+	// ReassignOtherAgentsAsUsers controls whether incoming
 	// [message.RoleAssistant] messages whose [message.Message.AuthorName]
-	// does not match this agent to [message.RoleUser]. By default (zero
-	// value), such messages are reassigned so the conversation between
-	// agents appears, to each agent, as messages from "the user". Set to
-	// true to preserve original roles.
-	DisableReassignOtherAgentsAsUsers bool
+	// does not match this agent are rewritten to [message.RoleUser]. The default
+	// is true.
+	ReassignOtherAgentsAsUsers *bool
 
 	// InterceptUserInputRequests controls how [message.ToolApprovalRequestContent]
 	// produced by the agent is dispatched.
@@ -111,8 +112,11 @@ type Config struct {
 
 // New creates a workflow [workflow.ExecutorBinding] that hosts the given
 // [agent.Agent] using the supplied [Config]. The zero value of [Config] is a
-// sensible default.
+// sensible default. New panics if a is nil.
 func New(a *agent.Agent, cfg Config) workflow.ExecutorBinding {
+	if a == nil {
+		panic("agentworkflow: agent is required")
+	}
 	id := descriptiveID(a)
 	ports := hostPorts(id)
 	return workflow.ExecutorBinding{
@@ -204,11 +208,11 @@ func newHostExecutor(a *agent.Agent, cfg Config) *hostExecutor {
 func (h *hostExecutor) executor() *workflow.Executor {
 	executor := workflow.Executor{ID: h.id}
 	messageworkflow.Configure(&executor, &messageworkflow.Options{
-		StateKey:                 agentBufferedStateKey,
-		TakeTurnHandler:          h.handleTurnToken,
-		StringMessageRole:        string(message.RoleUser),
-		DisableAutoSendTurnToken: true,
-		MessageState:             h.messageState,
+		StateKey:          agentBufferedStateKey,
+		TakeTurnHandler:   h.handleTurnToken,
+		StringMessageRole: message.RoleUser,
+		AutoSendTurnToken: new(false),
+		MessageState:      h.messageState,
 	})
 	executor.Extend(&workflow.Executor{
 		OnCheckpointFunc:         h.onCheckpoint,
@@ -309,7 +313,7 @@ func (h *hostExecutor) drainBuffered(wctx *workflow.Context) ([]*message.Message
 }
 
 func (h *hostExecutor) handleTurnToken(wctx *workflow.Context, token workflow.TurnToken, messages []*message.Message) error {
-	emitUpdates := token.EmitEventsOr(h.cfg.EmitUpdateEvents)
+	emitUpdates := token.EmitEventsOr(valueOrDefault(h.cfg.EmitUpdateEvents, false))
 	h.turnEmitEvents = &emitUpdates
 	return h.runAgentAndDispatch(wctx, messages)
 }
@@ -383,14 +387,14 @@ func (h *hostExecutor) handleExternalResponse(wctx *workflow.Context, resp *work
 // messages, dispatches outputs and any requests, and propagates the held
 // TurnToken downstream when no outstanding requests remain.
 func (h *hostExecutor) runAgentAndDispatch(wctx *workflow.Context, messages []*message.Message) error {
-	if !h.cfg.DisableForwardIncomingMessages && len(messages) > 0 {
+	if valueOrDefault(h.cfg.ForwardIncomingMessages, true) && len(messages) > 0 {
 		if err := wctx.SendMessage("", messages); err != nil {
 			return err
 		}
 	}
 
 	agentInput := messages
-	if !h.cfg.DisableReassignOtherAgentsAsUsers {
+	if valueOrDefault(h.cfg.ReassignOtherAgentsAsUsers, true) {
 		agentInput = reassignOtherAgentsAsUsers(messages, agentNameOrID(h.agent))
 	}
 
@@ -727,7 +731,7 @@ func agentNameOrID(a *agent.Agent) string {
 }
 
 func newMessageID() string {
-	return strings.ReplaceAll(uuid.NewString(), "-", "")
+	return uuid.NewString()
 }
 
 func descriptiveID(a *agent.Agent) string {

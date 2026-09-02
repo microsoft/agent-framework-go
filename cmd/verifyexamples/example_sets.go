@@ -34,7 +34,6 @@ func availableCategories() []string {
 func inputLines(values ...string) []*string {
 	inputs := make([]*string, 0, len(values))
 	for _, value := range values {
-		value := value
 		inputs = append(inputs, &value)
 	}
 	return inputs

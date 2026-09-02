@@ -118,6 +118,88 @@ func newGenericTestAgent(runFn func(context.Context, []*message.Message, ...agen
 	})
 }
 
+func TestNew_IgnoresNilMiddleware(t *testing.T) {
+	var providerCalls, agentMiddlewareCalls, providerMiddlewareCalls int
+	run := func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		providerCalls++
+		return func(func(*agent.ResponseUpdate, error) bool) {}
+	}
+	agentMiddleware := agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		agentMiddlewareCalls++
+		return next(ctx, messages, options...)
+	})
+	providerMiddleware := agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		providerMiddlewareCalls++
+		return next(ctx, messages, options...)
+	})
+
+	a := agent.New(agent.ProviderConfig{
+		Run:         run,
+		Middlewares: []agent.Middleware{nil, providerMiddleware, nil},
+	}, agent.Config{
+		Middlewares: []agent.Middleware{nil, agentMiddleware, nil},
+	})
+	if _, err := a.RunText(t.Context(), "hello").Collect(); err != nil {
+		t.Fatalf("RunText() error = %v", err)
+	}
+	if providerCalls != 1 || agentMiddlewareCalls != 1 || providerMiddlewareCalls != 1 {
+		t.Fatalf("calls = provider:%d agent middleware:%d provider middleware:%d, want all 1", providerCalls, agentMiddlewareCalls, providerMiddlewareCalls)
+	}
+}
+
+func TestAgent_MessageInjectionRunsInsideProviderMiddleware(t *testing.T) {
+	injection := &agent.MessageInjector{}
+	session := &agent.Session{}
+	var providerMiddlewareCalls int
+	var calls [][]string
+	run := func(_ context.Context, messages []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		texts := make([]string, 0, len(messages))
+		for _, msg := range messages {
+			texts = append(texts, msg.String())
+		}
+		calls = append(calls, texts)
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			if len(calls) == 1 {
+				if err := injection.EnqueueMessages(session, message.NewText("during run")); err != nil {
+					yield(nil, err)
+					return
+				}
+				yield(&agent.ResponseUpdate{Contents: message.Contents{&message.TextContent{Text: "working"}}}, nil)
+				return
+			}
+			yield(&agent.ResponseUpdate{Contents: message.Contents{
+				&message.FunctionCallContent{CallID: "call-1", Name: "tool"},
+			}}, nil)
+		}
+	}
+	providerMiddleware := agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		providerMiddlewareCalls++
+		return next(ctx, messages, options...)
+	})
+	a := agent.New(agent.ProviderConfig{Run: run, Middlewares: []agent.Middleware{providerMiddleware}}, agent.Config{
+		MessageInjector: injection,
+	})
+	if err := injection.EnqueueMessages(session, message.NewText("before run")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.RunText(t.Context(), "original", agent.WithSession(session)).Collect(); err != nil {
+		t.Fatal(err)
+	}
+
+	if providerMiddlewareCalls != 1 {
+		t.Fatalf("provider middleware calls = %d, want 1", providerMiddlewareCalls)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("provider calls = %d, want 2", len(calls))
+	}
+	if want := []string{"original", "before run"}; !slices.Equal(calls[0], want) {
+		t.Fatalf("first provider messages = %v, want %v", calls[0], want)
+	}
+	if want := []string{"original", "before run", "during run"}; !slices.Equal(calls[1], want) {
+		t.Fatalf("second provider messages = %v, want %v", calls[1], want)
+	}
+}
+
 func TestAgent_RunText(t *testing.T) {
 	var capturedMessages []*message.Message
 	responseBuilder := agenttest.NewResponseBuilder(
@@ -170,6 +252,65 @@ func TestAgent_RunText(t *testing.T) {
 	}
 }
 
+func TestAgent_RunTextRejectsBlankMessage(t *testing.T) {
+	providerCalled := false
+	a := agent.New(agent.ProviderConfig{
+		Run: func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			providerCalled = true
+			return func(func(*agent.ResponseUpdate, error) bool) {}
+		},
+	}, agent.Config{ID: "test-agent"})
+
+	for _, input := range []string{"", " ", "\t"} {
+		if _, err := a.RunText(t.Context(), input).Collect(); err == nil {
+			t.Errorf("RunText(%q) error = nil, want blank-message error", input)
+		}
+	}
+	if providerCalled {
+		t.Fatal("provider was called for blank input")
+	}
+}
+
+func TestAgent_Run_AppliesAuthorAttributionAfterProviderMiddleware(t *testing.T) {
+	var observed bool
+	middleware := agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			for update, err := range next(ctx, messages, options...) {
+				if update != nil {
+					observed = true
+					if update.AgentID != "" || update.AuthorName != "" {
+						t.Errorf("expected attribution after provider middleware, got agent ID %q and author name %q", update.AgentID, update.AuthorName)
+					}
+				}
+				if !yield(update, err) {
+					return
+				}
+			}
+		}
+	})
+	run := func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{Role: message.RoleAssistant}, nil)
+		}
+	}
+	a := agent.New(agent.ProviderConfig{Run: run, Middlewares: []agent.Middleware{middleware}}, agent.Config{
+		ID:   "test-agent",
+		Name: "Test Agent",
+	})
+
+	for update, err := range a.RunText(t.Context(), "hello") {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if update.AgentID != a.ID() || update.AuthorName != a.Name() {
+			t.Fatalf("expected agent attribution, got agent ID %q and author name %q", update.AgentID, update.AuthorName)
+		}
+	}
+	if !observed {
+		t.Fatal("expected provider middleware to observe a response update")
+	}
+}
+
 func TestAgent_RunMessage(t *testing.T) {
 	var capturedMessages []*message.Message
 	var capturedOptions []agent.Option
@@ -213,6 +354,13 @@ func TestAgent_RunMessage(t *testing.T) {
 	}
 }
 
+func TestAgent_RunMessageRejectsNil(t *testing.T) {
+	a := agenttest.New(agenttest.NewResponseBuilder().Build())
+	if _, err := a.RunMessage(t.Context(), nil).Collect(); err == nil {
+		t.Fatal("RunMessage(nil) error = nil, want error")
+	}
+}
+
 func TestAgent_Run(t *testing.T) {
 	var capturedMessages []*message.Message
 	responseBuilder := agenttest.NewResponseBuilder(
@@ -240,6 +388,24 @@ func TestAgent_Run(t *testing.T) {
 
 	if len(resp.Messages) != 1 {
 		t.Fatalf("expected 1 response message, got %d", len(resp.Messages))
+	}
+}
+
+func TestAgent_Run_DoesNotMutateInputOptionBackingArray(t *testing.T) {
+	a := agenttest.New(agenttest.NewResponseBuilder().AddText("response").Build())
+	options := make([]agent.Option, 1, 3)
+	options[0] = agent.Stream(false)
+	firstSentinel := agent.WithInstructions("first sentinel")
+	secondSentinel := agent.WithInstructions("second sentinel")
+	backing := options[:cap(options)]
+	backing[1] = firstSentinel
+	backing[2] = secondSentinel
+
+	if _, err := a.RunText(t.Context(), "input", options...).Collect(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if backing[1] != firstSentinel || backing[2] != secondSentinel {
+		t.Fatal("expected Agent.Run not to modify the input option backing array")
 	}
 }
 
@@ -331,6 +497,23 @@ func TestAgent_Run_RequiresSessionWhenAllowBackgroundResponsesEnabled(t *testing
 	}
 	if runCalled {
 		t.Fatal("expected run function not to be called when validation fails")
+	}
+}
+
+func TestAgent_Run_RejectsNilSessionWhenAllowBackgroundResponsesEnabled(t *testing.T) {
+	runCalled := false
+	a := agenttest.New(agenttest.NewResponseBuilder(
+		func(context.Context, []*message.Message, ...agent.Option) {
+			runCalled = true
+		},
+	).AddText("response").Build())
+
+	_, err := a.RunText(t.Context(), "test", agent.WithSession(nil), agent.AllowBackgroundResponses(true)).Collect()
+	if err == nil || err.Error() != "a session must be provided when AllowBackgroundResponses is enabled" {
+		t.Fatalf("RunText() error = %v, want session-required error", err)
+	}
+	if runCalled {
+		t.Fatal("run function called with a nil background-response session")
 	}
 }
 
@@ -567,8 +750,10 @@ func TestAgent_Run_InvokesSingleContextMiddleware(t *testing.T) {
 
 func TestAgent_Run_MarksMiddlewareAddedMessagesWithSource(t *testing.T) {
 	added := message.NewText("middleware")
+	var middlewareMessages []*message.Message
 	mw := agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		messages = append(slices.Clone(messages), added)
+		middlewareMessages = messages
 		return next(ctx, messages, opts...)
 	})
 
@@ -594,6 +779,9 @@ func TestAgent_Run_MarksMiddlewareAddedMessagesWithSource(t *testing.T) {
 	}
 	if capturedMessages[1].Source != (message.Source{Type: agent.SourceTypeMiddleware}) {
 		t.Fatalf("middleware message source = %#v, want middleware source", capturedMessages[1].Source)
+	}
+	if middlewareMessages[1] != added || middlewareMessages[1].Source != (message.Source{}) {
+		t.Fatal("expected source stamping not to mutate messages passed by middleware")
 	}
 }
 
@@ -1116,7 +1304,6 @@ func TestAgent_Run_ContinuationToken_PersistsSavedInputMessages(t *testing.T) {
 func TestAgent_Run_UsesConfigContextProvider(t *testing.T) {
 	provideCalled := false
 	runCalled := false
-
 	contextProvider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "ctx-provider",
 		Provide: func(_ context.Context, _ agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
@@ -1146,6 +1333,40 @@ func TestAgent_Run_UsesConfigContextProvider(t *testing.T) {
 	}
 	if !provideCalled {
 		t.Fatal("expected context provider to be used")
+	}
+}
+
+func TestAgent_Run_PassesReadOnlyContextSlicesWithoutCloning(t *testing.T) {
+	messages := []*message.Message{message.NewText("request")}
+	options := []agent.Option{agent.WithSession(agenttest.CreateSession())}
+	var invokingMessages []*message.Message
+	contextProvider := contextProviderFunc{
+		invoking: func(_ context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+			invokingMessages = invoking.Messages
+			if &invoking.Options[0] != &options[0] {
+				t.Error("expected InvokingContext to share the run option slice")
+			}
+			return invoking.Messages, invoking.Options, nil
+		},
+		invoked: func(_ context.Context, invoked agent.InvokedContext) error {
+			if &invoked.RequestMessages[0] != &invokingMessages[0] {
+				t.Error("expected InvokedContext to share the invocation message slice")
+			}
+			return nil
+		},
+	}
+	runFn := func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "ok"}}}, nil)
+		}
+	}
+	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
+		ID:               "test-agent",
+		ContextProviders: []agent.ContextProvider{contextProvider},
+	})
+
+	if _, err := a.Run(t.Context(), messages, options...).Collect(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -1475,10 +1696,10 @@ func TestAgent_Run_HistoryProvider_ClearsWhenThrowDisabledAndClearEnabled(t *tes
 		}
 	}
 	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
-		ID:                           "test-agent",
-		Name:                         "test-agent",
-		HistoryProvider:              historyProvider,
-		AllowHistoryProviderConflict: true,
+		ID:                             "test-agent",
+		Name:                           "test-agent",
+		HistoryProvider:                historyProvider,
+		ThrowOnHistoryProviderConflict: new(false),
 	})
 
 	if _, err := a.RunText(t.Context(), "input", agent.WithSession(agenttest.CreateSession())).Collect(); err != nil {
@@ -1498,7 +1719,7 @@ func TestAgent_Run_HistoryProvider_ClearsWhenThrowDisabledAndClearEnabled(t *tes
 	}
 }
 
-func TestAgent_Run_HistoryProvider_KeepsWhenThrowAndClearDisabled(t *testing.T) {
+func TestAgent_Run_HistoryProvider_KeepsReferenceButSkipsStoreWhenThrowAndClearDisabled(t *testing.T) {
 	provideCalls := 0
 	storeCalls := 0
 	historyProvider := agent.NewHistoryProvider(agent.HistoryProviderConfig{
@@ -1524,25 +1745,25 @@ func TestAgent_Run_HistoryProvider_KeepsWhenThrowAndClearDisabled(t *testing.T) 
 		}
 	}
 	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
-		ID:                                     "test-agent",
-		Name:                                   "test-agent",
-		HistoryProvider:                        historyProvider,
-		AllowHistoryProviderConflict:           true,
-		SuppressHistoryProviderConflictWarning: true,
-		KeepHistoryProviderOnConflict:          true,
+		ID:                             "test-agent",
+		Name:                           "test-agent",
+		HistoryProvider:                historyProvider,
+		ThrowOnHistoryProviderConflict: new(false),
+		WarnOnHistoryProviderConflict:  new(false),
+		ClearOnHistoryProviderConflict: new(false),
 	})
 
 	if _, err := a.RunText(t.Context(), "input", agent.WithSession(agenttest.CreateSession())).Collect(); err != nil {
 		t.Fatalf("unexpected first run error: %v", err)
 	}
-	if provideCalls != 1 || storeCalls != 1 {
-		t.Fatalf("after first run provide/store = %d/%d, want 1/1", provideCalls, storeCalls)
+	if provideCalls != 1 || storeCalls != 0 {
+		t.Fatalf("after first run provide/store = %d/%d, want 1/0", provideCalls, storeCalls)
 	}
 	if _, err := a.RunText(t.Context(), "next", agent.WithSession(agenttest.CreateSession())).Collect(); err != nil {
 		t.Fatalf("unexpected second run error: %v", err)
 	}
-	if provideCalls != 2 || storeCalls != 2 {
-		t.Fatalf("after second run provide/store = %d/%d, want 2/2", provideCalls, storeCalls)
+	if provideCalls != 2 || storeCalls != 1 {
+		t.Fatalf("after second run provide/store = %d/%d, want 2/1", provideCalls, storeCalls)
 	}
 }
 
@@ -1960,7 +2181,7 @@ func TestAgent_Run_ContextProvider_InvokedReceivesRunError(t *testing.T) {
 	}
 }
 
-func TestAgent_Run_ContextProvider_EarlyStopWithoutErrorStillStores(t *testing.T) {
+func TestAgent_Run_ContextProvider_EarlyStopWithoutErrorDoesNotStore(t *testing.T) {
 	storeCalled := false
 
 	historyProvider := agent.NewContextProvider(agent.ContextProviderConfig{
@@ -1992,8 +2213,8 @@ func TestAgent_Run_ContextProvider_EarlyStopWithoutErrorStillStores(t *testing.T
 		break
 	}
 
-	if !storeCalled {
-		t.Fatal("expected store to still be called when iteration stops without an error")
+	if storeCalled {
+		t.Fatal("store called after response stream was abandoned")
 	}
 }
 
@@ -2156,17 +2377,17 @@ func TestAgent_Run_HistoryProvider_ConcurrentConflictClearIsRaceFree(t *testing.
 		}
 	}
 	a := agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{
-		ID:                                     "test-agent",
-		Name:                                   "test-agent",
-		HistoryProvider:                        historyProvider,
-		AllowHistoryProviderConflict:           true,
-		SuppressHistoryProviderConflictWarning: true,
+		ID:                             "test-agent",
+		Name:                           "test-agent",
+		HistoryProvider:                historyProvider,
+		ThrowOnHistoryProviderConflict: new(false),
+		WarnOnHistoryProviderConflict:  new(false),
 	})
 
 	const goroutines = 64
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		go func() {
 			defer wg.Done()
 			// Each goroutine drives a shared *Agent with its own session, so the

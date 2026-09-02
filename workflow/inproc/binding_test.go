@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/message"
@@ -602,8 +603,8 @@ func TestWorkflowOutput_AgentResponseUsesOutputFilter(t *testing.T) {
 		return &workflow.Executor{
 			ID: binding.ID,
 
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(wctx *workflow.Context, _ any) (any, error) {
 					return nil, wctx.YieldOutput(&agent.Response{
@@ -627,7 +628,8 @@ func TestWorkflowOutput_AgentResponseUsesOutputFilter(t *testing.T) {
 	if errors := errorEvents(events); len(errors) != 0 {
 		t.Fatalf("unexpected error events: %#v", errors)
 	}
-	if outputs := outputEvents(events); len(outputs) != 0 {
+	outputs := outputEvents(events)
+	if len(outputs) != 0 {
 		t.Fatalf("output count = %d, want 0 without output designation; outputs: %#v", len(outputs), outputs)
 	}
 
@@ -639,14 +641,14 @@ func TestWorkflowOutput_AgentResponseUsesOutputFilter(t *testing.T) {
 	if errors := errorEvents(events); len(errors) != 0 {
 		t.Fatalf("unexpected error events with output: %#v", errors)
 	}
-	outputs := outputEvents(events)
+	outputs = outputEvents(events)
 	if len(outputs) != 1 {
 		t.Fatalf("output count = %d, want 1 with output designation; outputs: %#v", len(outputs), outputs)
 	}
 	if _, ok := outputs[0].Output.(*agent.Response); !ok {
 		t.Fatalf("OutputEvent.Output = %T, want *agent.Response", outputs[0].Output)
 	}
-	if !outputs[0].IsIntermediate() {
+	if len(outputs[0].Tags) != 1 || outputs[0].Tags[0] != workflow.OutputTagIntermediate {
 		t.Fatalf("OutputEvent tags = %v, want intermediate", outputs[0].Tags)
 	}
 }
@@ -736,8 +738,8 @@ type unrelatedOutput struct{}
 func polymorphicOutputBinding(id string, output polymorphicOutput) workflow.ExecutorBinding {
 	return workflow.BindNewExecutorFunc(id, func(_ string, executorID string) (*workflow.Executor, error) {
 		return &workflow.Executor{
-			ID: executorID,
-			DisableAutoSendMessageHandlerResultObject: true,
+			ID:                                 executorID,
+			AutoSendMessageHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[polymorphicOutput](), func(_ *workflow.Context, _ any) (any, error) {
 					return output, nil
@@ -834,14 +836,7 @@ func TestNewExecutor_DescribesProtocol(t *testing.T) {
 		t.Fatalf("DescribeProtocol: %v", err)
 	}
 	wantIn := reflect.TypeFor[textMessage]()
-	var foundIn bool
-	for _, t := range descriptor.Accepts {
-		if t == wantIn {
-			foundIn = true
-			break
-		}
-	}
-	if !foundIn {
+	if !slices.Contains(descriptor.Accepts, wantIn) {
 		t.Errorf("descriptor.Accepts = %v, want to contain %v", descriptor.Accepts, wantIn)
 	}
 	executor, err := binding.CreateInstance("")
@@ -877,8 +872,8 @@ func TestFunctionExecutor_ReturnValueAutoSendAndYieldOptions(t *testing.T) {
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
 			source := returnedDataBinding("source", &workflow.Executor{
-				DisableAutoSendMessageHandlerResultObject: !testCase.autoSend,
-				DisableAutoYieldOutputHandlerResultObject: !testCase.autoYield,
+				AutoSendMessageHandlerResultObject: new(testCase.autoSend),
+				AutoYieldOutputHandlerResultObject: new(testCase.autoYield),
 			})
 			var gotAtSink []dataMessage
 			sink := workflow.NewExecutor("sink", func(msg dataMessage) {
@@ -1157,5 +1152,33 @@ func TestRequestPortBind_ForwardsExternalRequestAndRestoresOriginalResponse(t *t
 	value, ok := workflow.PortableValueAs[int](gotResponse.Data)
 	if !ok || value != 42 {
 		t.Fatalf("restored response data = %d, %v; want 42, true", value, ok)
+	}
+}
+
+func TestRun_SecondRunToNextHaltOnHaltedRunReturns(t *testing.T) {
+	// Environment.Run already consumes the initial halt. A subsequent event read
+	// must still return even though the previous halt signal was already consumed.
+	binding := workflow.NewExecutor("fn", func(in textMessage) dataMessage {
+		return dataMessage{Bytes: []byte(in.Text)}
+	}).Bind()
+	wf, err := workflow.NewBuilder(binding).WithOutputFrom(binding).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	run, err := inproc.OffThread.Run(context.Background(), wf, textMessage{Text: "abc"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	defer func() { _ = run.Close(t.Context()) }()
+
+	done := make(chan struct{})
+	go func() {
+		_, _ = run.RunToNextHalt(t.Context())
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("second RunToNextHalt blocked on an already halted run")
 	}
 }

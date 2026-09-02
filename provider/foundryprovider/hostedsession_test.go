@@ -43,7 +43,7 @@ func TestWithHostedAgentSessionIDStampsRequestAndPersistsOnSession(t *testing.T)
 	defer server.Close()
 
 	foundryAgent := newFoundryAgent(t, server, foundryprovider.ModelDeployment("gpt-4o-mini"), foundryprovider.AgentConfig{
-		Config: agent.Config{DisableFuncAutoCall: true},
+		Config: agent.Config{},
 	})
 	session, err := foundryAgent.CreateSession(t.Context())
 	if err != nil {
@@ -81,7 +81,7 @@ func TestHostedAgentSessionIDCapturedFromResponseAndReused(t *testing.T) {
 	defer server.Close()
 
 	foundryAgent := newFoundryAgent(t, server, foundryprovider.ModelDeployment("gpt-4o-mini"), foundryprovider.AgentConfig{
-		Config: agent.Config{DisableFuncAutoCall: true},
+		Config: agent.Config{},
 	})
 	session, err := foundryAgent.CreateSession(t.Context())
 	if err != nil {
@@ -107,7 +107,7 @@ func TestWithHostedAgentSessionIDRejectsSessionConflict(t *testing.T) {
 	defer server.Close()
 
 	foundryAgent := newFoundryAgent(t, server, foundryprovider.ModelDeployment("gpt-4o-mini"), foundryprovider.AgentConfig{
-		Config: agent.Config{DisableFuncAutoCall: true},
+		Config: agent.Config{},
 	})
 	session, err := foundryAgent.CreateSession(t.Context())
 	if err != nil {
@@ -136,7 +136,7 @@ func TestHostedAgentSessionIDRejectsUnexpectedHeaderSwitch(t *testing.T) {
 	defer server.Close()
 
 	foundryAgent := newFoundryAgent(t, server, foundryprovider.ModelDeployment("gpt-4o-mini"), foundryprovider.AgentConfig{
-		Config: agent.Config{DisableFuncAutoCall: true},
+		Config: agent.Config{},
 	})
 	session, err := foundryAgent.CreateSession(t.Context())
 	if err != nil {
@@ -157,6 +157,5 @@ func TestHostedAgentSessionIDRejectsUnexpectedHeaderSwitch(t *testing.T) {
 }
 
 func TestHostedAgentSessionIDHelpersRejectInvalidArguments(t *testing.T) {
-	assertPanics(t, func() { _ = foundryprovider.WithHostedAgentSessionID(" ") })
 	assertPanics(t, func() { foundryprovider.SetHostedAgentSessionID(&agent.Session{}, " ") })
 }

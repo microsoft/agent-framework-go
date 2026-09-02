@@ -5,6 +5,7 @@ package foundryprovider
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"iter"
@@ -14,7 +15,6 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/openai/openai-go/v3/option"
-	"github.com/tidwall/sjson"
 )
 
 const (
@@ -37,7 +37,7 @@ func (o hostedAgentSessionIDOpt) MAFValue() any { return string(o) }
 // When the supplied [agent.Session] already stores a different hosted-agent session
 // ID, the run fails rather than silently switching sandboxes.
 func WithHostedAgentSessionID(hostedSessionID string) agent.Option {
-	return hostedAgentSessionIDOpt(validateHostedAgentSessionID(hostedSessionID))
+	return hostedAgentSessionIDOpt(strings.TrimSpace(hostedSessionID))
 }
 
 // HostedAgentSessionID returns the sticky Foundry hosted-agent session ID stored in session.
@@ -119,12 +119,8 @@ func resolveHostedAgentSessionID(session *agent.Session, options []agent.Option)
 }
 
 func runHostedAgentSessionID(options []agent.Option) string {
-	for i := len(options) - 1; i >= 0; i-- {
-		if hostedSessionID, ok := options[i].(hostedAgentSessionIDOpt); ok {
-			return string(hostedSessionID)
-		}
-	}
-	return ""
+	hostedSessionID, _ := agent.GetOption(options, WithHostedAgentSessionID)
+	return hostedSessionID
 }
 
 func applyHostedAgentSessionID(session *agent.Session, box *hostedAgentSessionIDBox) {
@@ -146,7 +142,15 @@ func setHostedAgentSessionIDRequestBody(req *http.Request, hostedSessionID strin
 	if len(body) == 0 {
 		body = []byte("{}")
 	}
-	body, err = sjson.SetBytes(body, "agent_session_id", hostedSessionID)
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return fmt.Errorf("foundryprovider: parse request body: %w", err)
+	}
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	payload["agent_session_id"] = hostedSessionID
+	body, err = json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("foundryprovider: set agent_session_id request field: %w", err)
 	}

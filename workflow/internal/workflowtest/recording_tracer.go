@@ -4,6 +4,7 @@ package workflowtest
 
 import (
 	"context"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -39,9 +40,7 @@ func (*RecordingTracer) ExtractTraceContext(ctx context.Context) map[string]stri
 		return nil
 	}
 	traceContextCopy := make(map[string]string, len(traceContext))
-	for key, value := range traceContext {
-		traceContextCopy[key] = value
-	}
+	maps.Copy(traceContextCopy, traceContext)
 	return traceContextCopy
 }
 

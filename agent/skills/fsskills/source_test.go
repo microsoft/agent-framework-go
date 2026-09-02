@@ -23,6 +23,16 @@ func TestFileSource_EmptyPaths_ReturnsEmptyList(t *testing.T) {
 	}
 }
 
+func TestFileSource_NilFilesystemPanics(t *testing.T) {
+	defer func() {
+		if got := recover(); got != "fsskills: filesystem at index 1 is nil" {
+			t.Fatalf("panic = %v, want indexed nil filesystem message", got)
+		}
+	}()
+
+	fsskills.NewSource(os.DirFS(t.TempDir()), nil)
+}
+
 func TestFileSource_NonExistentPath_ReturnsEmptyList(t *testing.T) {
 	root := t.TempDir()
 	source := fsskills.NewSource(os.DirFS(filepath.Join(root, "does-not-exist")))
@@ -33,29 +43,6 @@ func TestFileSource_NonExistentPath_ReturnsEmptyList(t *testing.T) {
 	}
 	if len(loaded) != 0 {
 		t.Fatalf("expected no skills, got %d", len(loaded))
-	}
-}
-
-func TestFileSource_SymlinkedSkillFile_IsNotDiscovered(t *testing.T) {
-	root := t.TempDir()
-	outside := t.TempDir()
-	linkedSkillDir := filepath.Join(root, "linked-skill")
-	if err := os.MkdirAll(linkedSkillDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	outsideSkillFile := filepath.Join(outside, "SKILL.md")
-	if err := os.WriteFile(outsideSkillFile, []byte("---\nname: linked-skill\ndescription: Linked\n---\nBody."), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	mustCreateSymlink(t, outsideSkillFile, filepath.Join(linkedSkillDir, "SKILL.md"))
-
-	source := fsskills.NewSource(os.DirFS(root))
-	loaded, err := source.Skills(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(loaded) != 0 {
-		t.Fatalf("expected symlinked SKILL.md to be ignored, got %d skills", len(loaded))
 	}
 }
 
@@ -165,6 +152,76 @@ func TestFileSource_RootSkillFileWithNestedSkillFile_DoesNotAbortDiscovery(t *te
 	}
 }
 
+func TestFileSource_SymlinkedSkillFile_IsSkipped(t *testing.T) {
+	root := t.TempDir()
+	skillDir := filepath.Join(root, "linked-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outsideSkillFile := filepath.Join(root, "outside-SKILL.md")
+	if err := os.WriteFile(outsideSkillFile, []byte("---\nname: linked-skill\ndescription: Linked skill file\n---\nBody."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	createSymlink(t, filepath.Join(skillDir, "SKILL.md"), outsideSkillFile)
+
+	source := fsskills.NewSource(os.DirFS(root))
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 0 {
+		t.Fatalf("expected symlinked SKILL.md to be skipped, got %d skills", len(loaded))
+	}
+}
+
+func TestFileSource_SymlinkedSkillFile_DoesNotAbortNestedDiscovery(t *testing.T) {
+	root := t.TempDir()
+	linkedSkillDir := filepath.Join(root, "linked-skill")
+	if err := os.MkdirAll(linkedSkillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outsideSkillFile := filepath.Join(root, "outside-SKILL.md")
+	if err := os.WriteFile(outsideSkillFile, []byte("---\nname: linked-skill\ndescription: Linked skill file\n---\nBody."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	createSymlink(t, filepath.Join(linkedSkillDir, "SKILL.md"), outsideSkillFile)
+
+	nestedSkillDir := filepath.Join(linkedSkillDir, "nested-skill")
+	createSkillDir(t, filepath.Dir(nestedSkillDir), "nested-skill", "Nested", "Nested body.")
+
+	source := fsskills.NewSource(os.DirFS(root))
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
+	}
+	if loaded[0].Frontmatter.Name != "nested-skill" {
+		t.Fatalf("expected nested-skill, got %q", loaded[0].Frontmatter.Name)
+	}
+}
+
+func TestFileSource_ConfiguredRootSymlink_StillDiscoversSkills(t *testing.T) {
+	root := t.TempDir()
+	realRoot := filepath.Join(root, "real-root")
+	linkedRoot := filepath.Join(root, "linked-root")
+	createSkillDir(t, realRoot, "my-skill", "A skill", "Body.")
+	createSymlink(t, linkedRoot, realRoot)
+
+	source := fsskills.NewSource(os.DirFS(linkedRoot))
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
+	}
+	if loaded[0].Frontmatter.Name != "my-skill" {
+		t.Fatalf("expected my-skill, got %q", loaded[0].Frontmatter.Name)
+	}
+}
+
 func TestFileSource_NestedSkillFileUnderSkillRoot_NotDiscoveredAsIndependentSkill(t *testing.T) {
 	root := t.TempDir()
 	createSkillDir(t, root, "parent-skill", "Parent", "Parent body.")
@@ -213,7 +270,7 @@ func TestFileSource_SearchDepth_DoesNotAffectSkillDirectoryDiscovery(t *testing.
 	// SearchDepth governs only within-skill resource/script discovery; it must
 	// not widen skill-directory discovery, which is bounded independently. Even
 	// a large SearchDepth leaves the deeply-nested skill directory undiscovered.
-	deep := fsskills.NewSourceOptions(fsskills.SourceOptions{SearchDepth: 4}, os.DirFS(root))
+	deep := fsskills.NewSourceOptions(fsskills.SourceOptions{SearchDepth: new(4)}, os.DirFS(root))
 	loaded, err := deep.Skills(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -532,7 +589,7 @@ func TestFileSource_SearchDepth1_DoesNotDiscoverSubdirectoryResources(t *testing
 		t.Fatal(err)
 	}
 
-	source := fsskills.NewSourceOptions(fsskills.SourceOptions{SearchDepth: 1}, os.DirFS(root))
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{SearchDepth: new(1)}, os.DirFS(root))
 	loaded, err := source.Skills(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -571,23 +628,25 @@ func TestFileSource_NoDuplicateResourcesFromSamePath(t *testing.T) {
 	}
 }
 
-func TestFileSource_SymlinkedResource_IsNotDiscovered(t *testing.T) {
+func TestFileSource_SymlinkedResource_IsSkipped(t *testing.T) {
 	root := t.TempDir()
-	outside := t.TempDir()
-	createSkillDir(t, root, "symlink-resource-skill", "Symlink resource test", "Body.")
-	outsideResource := filepath.Join(outside, "secret.md")
+	createSkillDir(t, root, "resource-link-skill", "Symlinked resource", "Body.")
+	outsideResource := filepath.Join(root, "outside.md")
 	if err := os.WriteFile(outsideResource, []byte("secret"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	mustCreateSymlink(t, outsideResource, filepath.Join(root, "symlink-resource-skill", "references", "secret.md"))
+	createSymlink(t, filepath.Join(root, "resource-link-skill", "references", "secret.md"), outsideResource)
 
 	source := fsskills.NewSource(os.DirFS(root))
 	loaded, err := source.Skills(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
+	}
 	if len(loaded[0].Resources) != 0 {
-		t.Fatalf("expected symlinked resource to be ignored, got %d resources", len(loaded[0].Resources))
+		t.Fatalf("expected symlinked resource to be skipped, got %d resources", len(loaded[0].Resources))
 	}
 }
 
@@ -638,12 +697,12 @@ func createRelativeFile(t *testing.T, root, relativePath, content string) {
 	}
 }
 
-func mustCreateSymlink(t *testing.T, target, link string) {
+func createSymlink(t *testing.T, linkPath, targetPath string) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(linkPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(target, link); err != nil {
-		t.Skipf("symlinks not supported: %v", err)
+	if err := os.Symlink(targetPath, linkPath); err != nil {
+		t.Skipf("symlink creation unavailable: %v", err)
 	}
 }

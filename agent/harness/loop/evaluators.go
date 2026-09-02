@@ -14,10 +14,11 @@ type CompletionMarkerConfig struct {
 	// latest response text.
 	Marker string
 
-	// FeedbackMessageTemplate is used when the marker is absent. The
+	// FeedbackMessageTemplate is used when the marker is absent. When nil, the
+	// default template is used. The
 	// completionMarkerPlaceholder token is replaced when the evaluator is
 	// created, and lastResponsePlaceholder is replaced on each evaluation.
-	FeedbackMessageTemplate string
+	FeedbackMessageTemplate *string
 }
 
 // CompletionMarkerEvaluator stops the loop once a marker appears in the latest
@@ -35,8 +36,8 @@ func NewCompletionMarkerEvaluator(config CompletionMarkerConfig) *CompletionMark
 		panic("loop: completion marker cannot be empty")
 	}
 	template := defaultCompletionMarkerFeedbackTemplate
-	if config.FeedbackMessageTemplate != "" {
-		template = config.FeedbackMessageTemplate
+	if config.FeedbackMessageTemplate != nil {
+		template = *config.FeedbackMessageTemplate
 	}
 	return &CompletionMarkerEvaluator{
 		completionMarker:        marker,

@@ -10,10 +10,13 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
+	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/internal/messagetest"
 	"github.com/microsoft/agent-framework-go/message"
@@ -47,6 +50,33 @@ func bodyEqual(t *testing.T, got string, want string) {
 	}
 }
 
+func TestChatCompletionsAgent_UnsupportedMessageRoleReturnsError(t *testing.T) {
+	a := openaiprovider.NewChatCompletionsAgent(openai.NewClient(option.WithAPIKey("test")), openaiprovider.AgentConfig{
+		Model: "test-model",
+	})
+	_, err := a.Run(t.Context(), []*message.Message{{Role: message.Role("custom")}}).Collect()
+	if err == nil || !strings.Contains(err.Error(), "unsupported message role") {
+		t.Fatalf("Run() error = %v, want unsupported message role", err)
+	}
+}
+
+func TestChatCompletionsAgent_InstructionsDoNotMutateRunOptionsBackingArray(t *testing.T) {
+	runOptions := make([]agent.Option, 1, 2)
+	runOptions[0] = agent.WithInstructions("caller")
+	sentinel := agent.WithToolMode(tool.ToolModeNone)
+	runOptions[:cap(runOptions)][1] = sentinel
+
+	_ = openaiprovider.NewChatCompletionsAgent(openai.NewClient(option.WithAPIKey("test")), openaiprovider.AgentConfig{
+		Config:       agent.Config{RunOptions: runOptions},
+		Instructions: "provider",
+		Model:        "test-model",
+	})
+
+	if got := runOptions[:cap(runOptions)][1]; got != sentinel {
+		t.Fatalf("RunOptions spare slot = %#v, want caller sentinel %#v", got, sentinel)
+	}
+}
+
 func newTestServer(t *testing.T, input string, output string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -66,10 +96,45 @@ func newTestClient(server *httptest.Server) *agent.Agent {
 	return openaiprovider.NewChatCompletionsAgent(
 		openai.NewClient(option.WithBaseURL(server.URL)),
 		openaiprovider.AgentConfig{
-			Model:  "gpt-4o-mini",
-			Config: agent.Config{DisableFuncAutoCall: true},
+			Model: "gpt-4o-mini",
+			ToolAutoCall: &toolautocall.Config{
+				MaximumIterationsPerRequest: new(0),
+			},
 		},
 	)
+}
+
+func TestChatToolModeNoneWithoutFrameworkToolsAndRawMessagesRemainUnchanged(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		bodyCh <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"chatcmpl-test","object":"chat.completion","created":1727888631,"model":"gpt-4o-mini","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
+	}))
+	defer server.Close()
+
+	backing := make([]openai.ChatCompletionMessageParamUnion, 0, 2)
+	_, err := newTestClient(server).RunText(
+		t.Context(),
+		"hello",
+		openaiprovider.ChatCompletionNewParams(openai.ChatCompletionNewParams{Messages: backing}),
+		agent.WithToolMode(tool.ToolModeNone),
+	).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request map[string]any
+	if err := json.Unmarshal(<-bodyCh, &request); err != nil {
+		t.Fatal(err)
+	}
+	if request["tool_choice"] != "none" {
+		t.Fatalf("tool_choice = %#v, want none", request["tool_choice"])
+	}
+	var zero openai.ChatCompletionMessageParamUnion
+	if !reflect.DeepEqual(backing[:cap(backing)][0], zero) {
+		t.Fatal("request construction mutated caller's Messages backing array")
+	}
 }
 
 func TestChatRequestIncludesAgentFrameworkUserAgent(t *testing.T) {
@@ -94,6 +159,42 @@ func TestChatRequestIncludesAgentFrameworkUserAgent(t *testing.T) {
 
 	a := newTestClient(server)
 	if _, err := a.RunText(t.Context(), "hello").Collect(); err != nil {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestChatResponseFormatSchemaConvertsJSONSchema(t *testing.T) {
+	type payload struct {
+		Name     string `json:"name"`
+		Nickname string `json:"nickname,omitempty"`
+	}
+	format, err := jsonformat.For[payload]()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const input = `
+            {
+                "messages":[{"role":"user","content":"hello"}],
+                "model":"gpt-4o-mini",
+                "response_format":{"type":"json_schema","json_schema":{"name":"payload","schema":{"properties":{"name":{"type":"string"},"nickname":{"type":"string"}},"type":"object","required":["name","nickname"],"additionalProperties":false},"strict":true}}
+            }
+            `
+	const output = `
+            {
+                "id":"chatcmpl-test",
+                "object":"chat.completion",
+                "created":1727888631,
+                "model":"gpt-4o-mini",
+                "choices":[{"index":0,"message":{"role":"assistant","content":"{\"name\":\"Ada\",\"nickname\":\"A\"}"},"finish_reason":"stop"}]
+            }
+            `
+
+	server := newTestServer(t, input, output)
+	defer server.Close()
+
+	a := newTestClient(server)
+	if _, err := a.RunText(t.Context(), "hello", agent.WithResponseFormat(format)).Collect(); err != nil {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -129,14 +230,111 @@ func TestChatConfigInstructions_NonStreaming(t *testing.T) {
 		openaiprovider.AgentConfig{
 			Model:        "gpt-4o-mini",
 			Instructions: "Be concise.",
-			Config: agent.Config{
-				DisableFuncAutoCall: true,
-			},
 		},
 	)
 
 	if _, err := a.RunText(t.Context(), "hello", agent.WithInstructions("Answer warmly.")).Collect(); err != nil {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestChatAgentConfigAllowsConcurrentToolInvocation(t *testing.T) {
+	var requests atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if requests.Add(1) == 1 {
+			_, _ = io.WriteString(w, `{
+				"id":"chatcmpl-tools","object":"chat.completion","created":1727888631,"model":"gpt-4o-mini",
+				"choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[
+					{"id":"call-1","type":"function","function":{"name":"First","arguments":"{}"}},
+					{"id":"call-2","type":"function","function":{"name":"Second","arguments":"{}"}}
+				]},"finish_reason":"tool_calls"}]}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"id":"chatcmpl-done","object":"chat.completion","created":1727888632,"model":"gpt-4o-mini","choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}]}`)
+	}))
+	defer server.Close()
+
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	newTool := func(name string) tool.FuncTool {
+		return functool.MustNew(functool.Config{Name: name}, func(context.Context, struct{}) (string, error) {
+			started <- struct{}{}
+			<-release
+			return name, nil
+		})
+	}
+	a := openaiprovider.NewChatCompletionsAgent(
+		openai.NewClient(option.WithBaseURL(server.URL), option.WithAPIKey("test")),
+		openaiprovider.AgentConfig{
+			Model: "gpt-4o-mini",
+			ToolAutoCall: &toolautocall.Config{
+				AllowConcurrentInvocations: true,
+			},
+			Config: agent.Config{
+				Tools: []tool.Tool{newTool("First"), newTool("Second")},
+			},
+		},
+	)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := a.RunText(t.Context(), "run tools").Collect()
+		done <- err
+	}()
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			close(release)
+			<-done
+			t.Fatal("tool calls did not start concurrently")
+		}
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestChatAgentConfigEnablesMessageInjectionInsideToolAutoCall(t *testing.T) {
+	var requests atomic.Int64
+	var injectedMessageSeen atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		if requests.Add(1) == 1 {
+			_, _ = io.WriteString(w, `{"id":"chatcmpl-tools","object":"chat.completion","created":1727888631,"model":"gpt-4o-mini","choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call-1","type":"function","function":{"name":"Inject","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`)
+			return
+		}
+		injectedMessageSeen.Store(strings.Contains(string(body), "injected follow-up"))
+		_, _ = io.WriteString(w, `{"id":"chatcmpl-done","object":"chat.completion","created":1727888632,"model":"gpt-4o-mini","choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}]}`)
+	}))
+	defer server.Close()
+
+	session := &agent.Session{}
+	injection := &agent.MessageInjector{}
+	inject := functool.MustNew(functool.Config{Name: "Inject"}, func(context.Context, struct{}) (string, error) {
+		if err := injection.EnqueueMessages(session, message.NewText("injected follow-up")); err != nil {
+			return "", err
+		}
+		return "ok", nil
+	})
+	a := openaiprovider.NewChatCompletionsAgent(
+		openai.NewClient(option.WithBaseURL(server.URL), option.WithAPIKey("test")),
+		openaiprovider.AgentConfig{
+			Model: "gpt-4o-mini",
+			Config: agent.Config{
+				MessageInjector: injection,
+				Tools:           []tool.Tool{inject},
+			},
+		},
+	)
+	if _, err := a.RunText(t.Context(), "run tool", agent.WithSession(session)).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	if !injectedMessageSeen.Load() {
+		t.Fatal("second provider call did not receive the injected message")
 	}
 }
 
@@ -223,6 +421,10 @@ func TestChatBasicRequestResponse_NonStreaming(t *testing.T) {
 	}
 	if resp.FinishReason != "stop" {
 		t.Errorf("expected FinishReason stop, got %q", resp.FinishReason)
+	}
+	raw, ok := resp.RawRepresentation.(*openai.ChatCompletion)
+	if !ok || raw.ID != resp.ID {
+		t.Fatalf("RawRepresentation = %#v, want native ChatCompletion for %q", resp.RawRepresentation, resp.ID)
 	}
 }
 
@@ -388,6 +590,7 @@ func TestChatBasicRequestResponse_Streaming(t *testing.T) {
                 "messages":[{"role":"user","content":"hello"}],
                 "model":"gpt-4o-mini",
                 "stream":true,
+                "stream_options":{"include_usage":true},
                 "max_completion_tokens":20
             }
             `
@@ -459,6 +662,9 @@ data: [DONE]
 		if err != nil {
 			t.Fatalf("error = %v", err)
 		}
+		if raw, ok := update.RawRepresentation.(openai.ChatCompletionChunk); !ok || raw.ID != msgID {
+			t.Fatalf("RawRepresentation = %#v, want native ChatCompletionChunk for %q", update.RawRepresentation, msgID)
+		}
 		updates = append(updates, update)
 	}
 	if err := agenttest.ResponseUpdatesEqual(updates, want); err != nil {
@@ -474,7 +680,8 @@ func TestChatStreamingRefusal_SurfacesErrorContent(t *testing.T) {
             {
                 "messages":[{"role":"user","content":"do something disallowed"}],
                 "model":"gpt-4o-mini",
-                "stream":true
+                "stream":true,
+                "stream_options":{"include_usage":true}
             }
             `
 	const output = `data: {"id":"chatcmpl-refusal01","object":"chat.completion.chunk","created":1727889370,"model":"gpt-4o-mini-2024-07-18","choices":[{"index":0,"delta":{"role":"assistant","refusal":"I'm sorry, I can't "},"finish_reason":null}],"usage":null}
@@ -507,6 +714,41 @@ data: [DONE]
 	}
 	if refusal.Message != "I'm sorry, I can't help with that." {
 		t.Errorf("refusal message = %q, want full accumulated refusal", refusal.Message)
+	}
+}
+
+// TestChatStreamingIncludeUsage_RespectsCallerOverride verifies that when the
+// caller explicitly sets stream_options.include_usage the provider does not
+// override it with the default true value.
+func TestChatStreamingIncludeUsage_RespectsCallerOverride(t *testing.T) {
+	const input = `
+            {
+                "messages":[{"role":"user","content":"hello"}],
+                "model":"gpt-4o-mini",
+                "stream":true,
+                "stream_options":{"include_usage":false}
+            }
+            `
+	const output = `data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1727889370,"model":"gpt-4o-mini-2024-07-18","choices":[{"index":0,"delta":{"role":"assistant","content":"Hi"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1727889370,"model":"gpt-4o-mini-2024-07-18","choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"stop"}]}
+
+data: [DONE]
+
+`
+	server := newTestServerStreaming(t, input, output)
+	defer server.Close()
+
+	a := newTestClient(server)
+
+	for _, err := range a.RunText(t.Context(), "hello", openaiprovider.ChatCompletionNewParams(openai.ChatCompletionNewParams{
+		StreamOptions: openai.ChatCompletionStreamOptionsParam{
+			IncludeUsage: openai.Bool(false),
+		},
+	}), agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("error = %v", err)
+		}
 	}
 }
 
@@ -990,7 +1232,8 @@ func TestChatFunctionCallContent_Streaming(t *testing.T) {
                     }
                 ],
                 "model": "gpt-4o-mini",
-                "stream": true
+                "stream": true,
+                "stream_options": {"include_usage": true}
             }
             `
 	const output = `data: {"id":"chatcmpl-ADymNiWWeqCJqHNFXiI1QtRcLuXcl","object":"chat.completion.chunk","created":1727895263,"model":"gpt-4o-mini-2024-07-18","system_fingerprint":"fp_f85bea6784","choices":[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_F9ZaqPWo69u0urxAhVt8meDW","type":"function","function":{"name":"GetPersonAge","arguments":""}}],"refusal":null},"logprobs":null,"finish_reason":null}],"usage":null}
@@ -1278,6 +1521,7 @@ func TestChatOptions_Model_OverridesClientModel_Streaming(t *testing.T) {
                 "messages":[{"role":"user","content":"hello"}],
                 "model":"gpt-4o",
                 "stream":true,
+                "stream_options":{"include_usage":true},
                 "max_completion_tokens":20
             }
             `
@@ -1703,7 +1947,7 @@ func TestChatDataContentMessage_AudioAndFile_NonStreaming(t *testing.T) {
 	}
 }
 
-func TestChatMultipleRequiredFunctions(t *testing.T) {
+func TestChatRequiredSpecificFunction(t *testing.T) {
 	const input = `
             {
                 "tools": [
@@ -1749,23 +1993,9 @@ func TestChatMultipleRequiredFunctions(t *testing.T) {
                     }
                 ],
                 "tool_choice": {
-                    "type": "allowed_tools",
-                    "allowed_tools": {
-                        "mode": "required",
-                        "tools": [
-                            {
-                                "type": "function",
-                                "function": {
-                                    "name": "GetWeather"
-                                }
-                            },
-                            {
-                                "type": "function",
-                                "function": {
-                                    "name": "GetTime"
-                                }
-                            }
-                        ]
+					"type": "function",
+					"function": {
+						"name": "GetWeather"
                     }
                 },
                 "messages": [
@@ -1868,7 +2098,7 @@ func TestChatMultipleRequiredFunctions(t *testing.T) {
 		t.Context(), "What's the weather and time in Seattle?",
 		agent.WithTool(weatherTool),
 		agent.WithTool(timeTool),
-		agent.WithToolMode(tool.RequireTools("GetWeather", "GetTime")),
+		agent.WithToolMode(tool.RequireTool("GetWeather")),
 	).Collect()
 	if err != nil {
 		t.Fatalf("error = %v", err)
@@ -1933,6 +2163,117 @@ func TestChatEmptyChoices_NonStreaming(t *testing.T) {
 	}
 	if usage := resp.Usage(); usage.InputTokenCount != 12 || usage.TotalTokenCount != 12 {
 		t.Errorf("expected usage input=12 total=12 to be surfaced, got %+v", usage)
+	}
+}
+
+func TestChatAuthorNamePropagation_NonStreaming(t *testing.T) {
+	const input = `
+            {
+                "messages": [
+                    {"role": "system", "content": "You are helpful.", "name": "AgentOne"},
+                    {"role": "user", "content": "hi", "name": "AgentOne"},
+                    {"role": "assistant", "content": "hello", "name": "AgentOne"}
+                ],
+                "model": "gpt-4o-mini"
+            }
+            `
+	const output = `
+            {
+              "id": "chatcmpl-author",
+              "object": "chat.completion",
+              "created": 1727894187,
+              "model": "gpt-4o-mini",
+              "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+              ]
+            }
+            `
+	server := newTestServer(t, input, output)
+	defer server.Close()
+
+	a := newTestClient(server)
+
+	messages := []*message.Message{
+		{Role: message.RoleSystem, AuthorName: "Agent One", Contents: []message.Content{&message.TextContent{Text: "You are helpful."}}},
+		{Role: message.RoleUser, AuthorName: "Agent One", Contents: []message.Content{&message.TextContent{Text: "hi"}}},
+		{Role: message.RoleAssistant, AuthorName: "Agent One", Contents: []message.Content{&message.TextContent{Text: "hello"}}},
+	}
+	if _, err := a.Run(t.Context(), messages).Collect(); err != nil {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestChatAuthorNameSanitizationAndTruncation_NonStreaming(t *testing.T) {
+	// Disallowed characters are stripped and the result is capped at 64 runes.
+	const input = `
+            {
+                "messages": [
+                    {"role": "user", "content": "hi", "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+                ],
+                "model": "gpt-4o-mini"
+            }
+            `
+	const output = `
+            {
+              "id": "chatcmpl-author",
+              "object": "chat.completion",
+              "created": 1727894187,
+              "model": "gpt-4o-mini",
+              "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+              ]
+            }
+            `
+	server := newTestServer(t, input, output)
+	defer server.Close()
+
+	a := newTestClient(server)
+
+	// "!" is stripped, then 70 alphanumerics are truncated to 64.
+	authorName := "!" + strings.Repeat("a", 70)
+	messages := []*message.Message{
+		{Role: message.RoleUser, AuthorName: authorName, Contents: []message.Content{&message.TextContent{Text: "hi"}}},
+	}
+	if _, err := a.Run(t.Context(), messages).Collect(); err != nil {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestChatAuthorNameEmpty_NonStreaming(t *testing.T) {
+	// Empty or whitespace-only author names leave the name field unset.
+	const input = `
+            {
+                "messages": [
+                    {"role": "system", "content": "You are helpful."},
+                    {"role": "user", "content": "hi"},
+                    {"role": "assistant", "content": "hello"}
+                ],
+                "model": "gpt-4o-mini"
+            }
+            `
+	const output = `
+            {
+              "id": "chatcmpl-author",
+              "object": "chat.completion",
+              "created": 1727894187,
+              "model": "gpt-4o-mini",
+              "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+              ]
+            }
+            `
+	server := newTestServer(t, input, output)
+	defer server.Close()
+
+	a := newTestClient(server)
+
+	messages := []*message.Message{
+		{Role: message.RoleSystem, AuthorName: "", Contents: []message.Content{&message.TextContent{Text: "You are helpful."}}},
+		{Role: message.RoleUser, AuthorName: "   ", Contents: []message.Content{&message.TextContent{Text: "hi"}}},
+		{Role: message.RoleAssistant, AuthorName: "  ", Contents: []message.Content{&message.TextContent{Text: "hello"}}},
+	}
+	if _, err := a.Run(t.Context(), messages).Collect(); err != nil {
+		t.Fatalf("error = %v", err)
 	}
 }
 

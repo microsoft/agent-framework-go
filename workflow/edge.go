@@ -4,32 +4,109 @@ package workflow
 
 import (
 	"iter"
+	"reflect"
 	"slices"
 )
 
+type edgeOptions struct {
+	label      string
+	condition  func(any) bool
+	assigner   func(int, any) iter.Seq[int]
+	idempotent bool
+}
+
 // EdgeOption configures an [Edge] when it is added to a workflow via [Builder].
-type EdgeOption func(*Edge)
+type EdgeOption func(*edgeOptions)
 
 // WithEdgeLabel sets an optional label on the edge. Labels can be used by
 // visualizers to annotate edges.
 func WithEdgeLabel(label string) EdgeOption {
-	return func(e *Edge) { e.Label = label }
+	return func(options *edgeOptions) { options.label = label }
+}
+
+// IdempotentEdge makes adding a duplicate conditionless direct edge a
+// no-op instead of a build error. It has no effect on conditional, fan-out, or
+// fan-in edges.
+func IdempotentEdge() EdgeOption {
+	return func(options *edgeOptions) { options.idempotent = true }
+}
+
+// WithEdgeCondition attaches a condition that receives messages as T to a
+// direct edge. PortableValue messages are decoded as T before the condition is
+// invoked. Messages that cannot be assigned to T are passed as the zero value
+// of T. When T is any, the original message is passed unchanged.
+func WithEdgeCondition[T any](condition func(T) bool) EdgeOption {
+	return func(options *edgeOptions) {
+		if condition == nil {
+			options.condition = nil
+			return
+		}
+		options.condition = func(message any) bool {
+			return condition(edgeMessageFor[T](message))
+		}
+	}
+}
+
+// WithEdgeCondition0 attaches a message-independent condition to a direct
+// edge. The condition is invoked once for each incoming message.
+func WithEdgeCondition0(condition func() bool) EdgeOption {
+	return func(options *edgeOptions) {
+		if condition == nil {
+			options.condition = nil
+			return
+		}
+		options.condition = func(any) bool { return condition() }
+	}
 }
 
 // WithEdgeAssigner attaches an [Edge.Assigner] callback to a fan-out edge.
 // The assigner is invoked for each message and must return the indexes of
-// the targets that should receive it. Has no effect on direct or fan-in
-// edges.
-func WithEdgeAssigner(assigner func(targetCount int, message any) iter.Seq[int]) EdgeOption {
-	return func(e *Edge) { e.Assigner = assigner }
-}
-
-func applyEdgeOptions(e *Edge, opts []EdgeOption) {
-	for _, opt := range opts {
-		if opt != nil {
-			opt(e)
+// the targets that should receive it. PortableValue messages are decoded as T
+// before the assigner is invoked. Messages that cannot be assigned to T are
+// passed as the zero value of T. When T is any, the original message is passed
+// unchanged. Has no effect on direct or fan-in edges.
+func WithEdgeAssigner[T any](assigner func(targetCount int, message T) iter.Seq[int]) EdgeOption {
+	return func(options *edgeOptions) {
+		if assigner == nil {
+			options.assigner = nil
+			return
+		}
+		options.assigner = func(targetCount int, message any) iter.Seq[int] {
+			return assigner(targetCount, edgeMessageFor[T](message))
 		}
 	}
+}
+
+func edgeMessageFor[T any](message any) T {
+	var zero T
+	if message == nil {
+		return zero
+	}
+	if reflect.TypeFor[T]() == reflect.TypeFor[any]() {
+		return message.(T)
+	}
+	if portable, ok := message.(PortableValue); ok {
+		value, _ := PortableValueAs[T](portable)
+		return value
+	}
+	value, _ := message.(T)
+	return value
+}
+
+func normalizeEdgeOptions(opts []EdgeOption) edgeOptions {
+	var config edgeOptions
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&config)
+		}
+	}
+	return config
+}
+
+func (config edgeOptions) apply(edge *Edge) {
+	edge.Label = config.label
+	edge.Condition = config.condition
+	edge.Assigner = config.assigner
 }
 
 // Edge represents a connection or relationship between nodes.
