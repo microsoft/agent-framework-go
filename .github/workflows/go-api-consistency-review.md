@@ -1,7 +1,6 @@
 ---
 description: Reviews PRs to ensure new Go APIs and behaviors stay aligned with the .NET and Python Agent Framework implementations
 tracker-id: go-api-consistency-review
-model: "gpt-5.4"
 on:
    roles: all
    pull_request:
