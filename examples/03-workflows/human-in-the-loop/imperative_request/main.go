@@ -38,8 +38,8 @@ func main() {
 				// The handlers drive the request/response protocol directly, so
 				// disable the automatic message/output plumbing that the
 				// convenience executors rely on.
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
+				AutoSendMessageHandlerResultObject: new(false),
+				AutoYieldOutputHandlerResultObject: new(false),
 				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 					rb.YieldsOutputType(reflect.TypeFor[string]())
 					rb.RouteBuilder.

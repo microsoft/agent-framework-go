@@ -25,7 +25,7 @@ type Checkpoint struct {
 	StepNumber    int
 	WorkflowInfo  WorkflowInfo
 	RunnerData    RunnerStateData
-	StateData     hashmap.Map[workflow.ScopeKey, workflow.PortableValue]
+	StateData     *hashmap.Map[workflow.ScopeKey, workflow.PortableValue]
 	EdgeStateData map[string]workflow.PortableValue
 	Parent        *workflow.CheckpointInfo
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	aguiEvents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	aguiTypes "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/message"
 )
@@ -72,7 +73,51 @@ func updatesToAGUIEvents(
 		}
 
 		var currentMessageID string
+		var currentMessageSourceID string
 		var currentReasoningMsgID string
+		var currentReasoningSourceID string
+		usedMessageIDs := map[string]struct{}{}
+		allocateMessageID := func(preferred string) string {
+			if preferred != "" {
+				if _, used := usedMessageIDs[preferred]; !used {
+					usedMessageIDs[preferred] = struct{}{}
+					return preferred
+				}
+			}
+			for {
+				generated := aguiEvents.GenerateMessageID()
+				if _, used := usedMessageIDs[generated]; used {
+					continue
+				}
+				usedMessageIDs[generated] = struct{}{}
+				return generated
+			}
+		}
+		closeReasoning := func() bool {
+			if currentReasoningMsgID == "" {
+				return true
+			}
+			if !yield(aguiEvents.NewReasoningMessageEndEvent(currentReasoningMsgID), nil) {
+				return false
+			}
+			if !yield(aguiEvents.NewReasoningEndEvent(currentReasoningMsgID), nil) {
+				return false
+			}
+			currentReasoningMsgID = ""
+			currentReasoningSourceID = ""
+			return true
+		}
+		closeText := func() bool {
+			if currentMessageID == "" {
+				return true
+			}
+			if !yield(aguiEvents.NewTextMessageEndEvent(currentMessageID), nil) {
+				return false
+			}
+			currentMessageID = ""
+			currentMessageSourceID = ""
+			return true
+		}
 		suppressedCallIDs := map[string]struct{}{}
 		for update, err := range updates {
 			if err != nil {
@@ -97,51 +142,7 @@ func updatesToAGUIEvents(
 				continue
 			}
 
-			msgID := update.MessageID
-			if msgID == "" {
-				msgID = aguiEvents.GenerateMessageID()
-			}
-
-			if currentReasoningMsgID != "" && currentReasoningMsgID != msgID {
-				if !yield(aguiEvents.NewReasoningMessageEndEvent(currentReasoningMsgID), nil) {
-					return
-				}
-				currentReasoningMsgID = ""
-			}
-
-			hasText := hasTextLikeContent(update.Contents)
-			if hasText && currentMessageID != msgID {
-				if currentMessageID != "" {
-					if !yield(aguiEvents.NewTextMessageEndEvent(currentMessageID), nil) {
-						return
-					}
-				}
-				role := string(update.Role)
-				if role == "" {
-					role = string(message.RoleAssistant)
-				}
-				if !yield(aguiEvents.NewTextMessageStartEvent(msgID, aguiEvents.WithRole(role)), nil) {
-					return
-				}
-				currentMessageID = msgID
-			}
-
-			hasReasoning := hasReasoningContent(update.Contents)
-			if hasReasoning && currentReasoningMsgID != msgID {
-				if currentReasoningMsgID != "" {
-					if !yield(aguiEvents.NewReasoningMessageEndEvent(currentReasoningMsgID), nil) {
-						return
-					}
-				}
-				role := string(update.Role)
-				if role == "" {
-					role = string(message.RoleAssistant)
-				}
-				if !yield(aguiEvents.NewReasoningMessageStartEvent(msgID, role), nil) {
-					return
-				}
-				currentReasoningMsgID = msgID
-			}
+			mixedReasoningAndText := hasReasoningContent(update.Contents) && hasTextLikeContent(update.Contents)
 
 			for _, c := range update.Contents {
 				if frc, ok := c.(*message.FunctionResultContent); ok {
@@ -150,6 +151,27 @@ func updatesToAGUIEvents(
 					}
 				}
 				if rc, ok := c.(*message.TextReasoningContent); ok {
+					if rc.Text == "" && rc.ProtectedData == "" {
+						continue
+					}
+					sourceIDChanged := update.MessageID != "" && currentReasoningSourceID != update.MessageID
+					if currentReasoningMsgID == "" || sourceIDChanged {
+						if !closeReasoning() {
+							return
+						}
+						preferredID := update.MessageID
+						if mixedReasoningAndText {
+							preferredID = ""
+						}
+						currentReasoningMsgID = allocateMessageID(preferredID)
+						currentReasoningSourceID = update.MessageID
+						if !yield(aguiEvents.NewReasoningStartEvent(currentReasoningMsgID), nil) {
+							return
+						}
+						if !yield(aguiEvents.NewReasoningMessageStartEvent(currentReasoningMsgID, string(aguiTypes.RoleReasoning)), nil) {
+							return
+						}
+					}
 					if rc.Text != "" {
 						if !yield(aguiEvents.NewReasoningMessageContentEvent(currentReasoningMsgID, rc.Text), nil) {
 							return
@@ -162,12 +184,45 @@ func updatesToAGUIEvents(
 					}
 					continue
 				}
-				events, convErr := contentToEvents(c, msgID)
+
+				eventMessageID := update.MessageID
+				textLike := isTextLikeContent(c)
+				if textLike {
+					if !closeReasoning() {
+						return
+					}
+					sourceIDChanged := update.MessageID != "" && currentMessageSourceID != update.MessageID
+					if currentMessageID == "" || sourceIDChanged {
+						if !closeText() {
+							return
+						}
+						currentMessageID = allocateMessageID(update.MessageID)
+						currentMessageSourceID = update.MessageID
+						role := string(update.Role)
+						if role == "" {
+							role = string(message.RoleAssistant)
+						}
+						if !yield(aguiEvents.NewTextMessageStartEvent(currentMessageID, aguiEvents.WithRole(role)), nil) {
+							return
+						}
+					}
+					eventMessageID = currentMessageID
+				}
+
+				events, convErr := contentToEvents(c, eventMessageID)
 				if convErr != nil {
 					if !yield(aguiEvents.NewRunErrorEvent(convErr.Error(), aguiEvents.WithRunID(runID)), convErr) {
 						return
 					}
 					return
+				}
+				if len(events) == 0 {
+					continue
+				}
+				if !textLike {
+					if !closeReasoning() {
+						return
+					}
 				}
 				for _, e := range events {
 					if !yield(e, nil) {
@@ -177,28 +232,32 @@ func updatesToAGUIEvents(
 			}
 		}
 
-		if currentReasoningMsgID != "" {
-			if !yield(aguiEvents.NewReasoningMessageEndEvent(currentReasoningMsgID), nil) {
-				return
-			}
+		if !closeReasoning() {
+			return
 		}
-		if currentMessageID != "" {
-			if !yield(aguiEvents.NewTextMessageEndEvent(currentMessageID), nil) {
-				return
-			}
+		if !closeText() {
+			return
 		}
 		yield(aguiEvents.NewRunFinishedEvent(threadID, runID), nil)
 	}
 }
 
+func isTextLikeContent(content message.Content) bool {
+	switch c := content.(type) {
+	case *message.TextContent:
+		return c.Text != ""
+	case *message.DataContent:
+		return shouldEmitDataContentAsText(c)
+	case *message.URIContent:
+		return c.URI != ""
+	default:
+		return false
+	}
+}
+
 func hasTextLikeContent(contents message.Contents) bool {
 	for _, c := range contents {
-		text, ok := c.(*message.TextContent)
-		if ok && text.Text != "" {
-			return true
-		}
-		dc, ok := c.(*message.DataContent)
-		if ok && shouldEmitDataContentAsText(dc) {
+		if isTextLikeContent(c) {
 			return true
 		}
 	}
@@ -249,6 +308,15 @@ func contentToEvents(content message.Content, messageID string) ([]aguiEvents.Ev
 		// message ID. MEAI batches all results under a shared MessageId, which
 		// collapses them in FE reconciliation when the same id is reused.
 		return []aguiEvents.Event{aguiEvents.NewToolCallResultEvent("result-"+callID, callID, contentStr)}, nil
+	case *message.URIContent:
+		// AG-UI has no native reference/attachment event; surface the URI as
+		// text so it is not silently dropped (mirrors the DataContent fallback
+		// and the A2A hosting path, which never drop unknown content). Gemini,
+		// for example, emits URIContent for generated files.
+		if c.URI == "" {
+			return nil, nil
+		}
+		return []aguiEvents.Event{aguiEvents.NewTextMessageContentEvent(messageID, c.URI)}, nil
 	case *message.DataContent:
 		return dataContentToEvents(c, messageID)
 	default:

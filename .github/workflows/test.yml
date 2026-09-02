@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        go-version: ['1.25', '1.26']
+        go-version: ['1.26', '1.27']
         target:
         - name: linux
           runner: ubuntu-latest

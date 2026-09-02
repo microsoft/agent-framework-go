@@ -43,23 +43,22 @@ func NewResponsesAgent(oclient openai.Client, config AgentConfig) *agent.Agent {
 		config: config,
 	}
 	if config.Instructions != "" {
-		config.RunOptions = append(config.RunOptions, agent.WithInstructions(config.Instructions))
+		config.RunOptions = append(slices.Clone(config.RunOptions), agent.WithInstructions(config.Instructions))
 	}
-	var providerMiddlewares []agent.Middleware
-	if !config.DisableFuncAutoCall {
-		providerMiddlewares = append(providerMiddlewares, toolautocall.New(toolautocall.Config{
-			Logger:           config.Logger,
-			LogSensitiveData: config.LogSensitiveData,
-		}))
+	autoCall := toolautocall.Config{Logger: config.Logger, LogSensitiveData: config.LogSensitiveData}
+	if config.ToolAutoCall != nil {
+		autoCall = *config.ToolAutoCall
 	}
+	providerMiddlewares := []agent.Middleware{toolautocall.New(autoCall)}
 	return agent.New(
 		agent.ProviderConfig{
-			ProviderName: "openai",
+			ProviderName: cmp.Or(config.ProviderName, "openai"),
 			Run:          c.run,
 			Middlewares:  providerMiddlewares,
 			Format:       c.formatOf,
 			Unmarshal:    c.unmarshal,
-		}, config.Config)
+		}, config.Config,
+	)
 }
 
 type responsesClient struct {
@@ -69,7 +68,7 @@ type responsesClient struct {
 
 type responsesNewParamsOpt responses.ResponseNewParams
 
-func (o responsesNewParamsOpt) Value() any {
+func (o responsesNewParamsOpt) MAFValue() any {
 	return responses.ResponseNewParams(o)
 }
 
@@ -226,6 +225,9 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 	var params responses.ResponseNewParams
 	if p, ok := agent.GetOption(opts, ResponsesNewParams); ok {
 		params = p
+		params.Include = slices.Clone(params.Include)
+		params.Tools = slices.Clone(params.Tools)
+		params.Input.OfInputItemList = slices.Clone(params.Input.OfInputItemList)
 	}
 	if responsesDisableStoreOutput(config, opts) {
 		if param.IsOmitted(params.Store) {
@@ -261,7 +263,13 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 		switch frmt.Kind {
 		case "json":
 			if schema := frmt.Schema; schema != nil {
-				schemaMap, err := schemaToMap(schema)
+				var schemaMap map[string]any
+				var err error
+				if frmt.Strict {
+					schemaMap, err = strictSchemaToMap(schema)
+				} else {
+					schemaMap, err = schemaToMap(schema)
+				}
 				if err != nil {
 					return responses.ResponseNewParams{}, fmt.Errorf("failed to convert response format schema (type %T) to JSON format: %w", schema, err)
 				}
@@ -282,50 +290,29 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 			}
 		}
 	}
-	first := true
-	for tl := range agent.AllOptions(opts, agent.WithTool) {
-		if first {
-			first = false
-			if mode, ok := agent.GetOption(opts, agent.WithToolMode); ok {
-				switch mode.Mode() {
-				case tool.ToolModeAuto, "":
-					params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
-						OfToolChoiceMode: param.NewOpt(responses.ToolChoiceOptionsAuto),
-					}
-				case tool.ToolModeNone:
-					params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
-						OfToolChoiceMode: param.NewOpt(responses.ToolChoiceOptionsNone),
-					}
-				case tool.ToolModeRequired:
-					names := mode.Required()
-					if len(names) == 0 {
-						params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
-							OfToolChoiceMode: param.NewOpt(responses.ToolChoiceOptionsRequired),
-						}
-					} else if len(names) == 1 {
-						params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
-							OfFunctionTool: &responses.ToolChoiceFunctionParam{
-								Name: names[0],
-							},
-						}
-					} else {
-						toolsMap := make([]map[string]any, 0, len(names))
-						for _, name := range names {
-							toolsMap = append(toolsMap, map[string]any{
-								"type": "function",
-								"name": name,
-							})
-						}
-						params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
-							OfAllowedTools: &responses.ToolChoiceAllowedParam{
-								Mode:  responses.ToolChoiceAllowedModeRequired,
-								Tools: toolsMap,
-							},
-						}
-					}
+	if mode, ok := agent.GetOption(opts, agent.WithToolMode); ok {
+		switch mode.Mode() {
+		case tool.ToolModeAuto, "":
+			params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
+				OfToolChoiceMode: param.NewOpt(responses.ToolChoiceOptionsAuto),
+			}
+		case tool.ToolModeNone:
+			params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
+				OfToolChoiceMode: param.NewOpt(responses.ToolChoiceOptionsNone),
+			}
+		case tool.ToolModeRequired:
+			if name, ok := mode.RequiredTool(); !ok {
+				params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
+					OfToolChoiceMode: param.NewOpt(responses.ToolChoiceOptionsRequired),
+				}
+			} else {
+				params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
+					OfFunctionTool: &responses.ToolChoiceFunctionParam{Name: name},
 				}
 			}
 		}
+	}
+	for tl := range agent.AllOptions(opts, agent.WithTool) {
 		switch tl := tl.(type) {
 		case tool.FuncTool:
 			name, description := tl.Name(), tl.Description()
@@ -467,6 +454,14 @@ func responsesDisableStoreOutput(config AgentConfig, opts []agent.Option) bool {
 	return config.DisableStoreOutput
 }
 
+func responseInputItemParamOfFunctionCallOutput[T string | responses.ResponseFunctionCallOutputItemListParam](callID string, output T) responses.ResponseInputItemUnionParam {
+	item := responses.ResponseInputItemParamOfFunctionCallOutput(output)
+	if callID != "" {
+		item.OfFunctionCallOutput.CallID = param.NewOpt(callID)
+	}
+	return item
+}
+
 // responsesBuildMessageParam converts an agent.Message to one or more OpenAI message parameters.
 // Returns a slice because some agent messages (like RoleTool) need to be split into multiple OpenAI messages.
 func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInputParam) (responses.ResponseInputParam, error) {
@@ -600,19 +595,19 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 
 				if funcResult.Error != nil {
 					// Error case - serialize as text with "Error: " prefix
-					resp = append(resp, responses.ResponseInputItemParamOfFunctionCallOutput(
+					resp = append(resp, responseInputItemParamOfFunctionCallOutput(
 						funcResult.CallID,
 						fmt.Sprintf("Error: %v", funcResult.Error),
 					))
 				} else if b, ok := ret.(json.RawMessage); ok {
 					// json.RawMessage - pass as string directly
-					resp = append(resp, responses.ResponseInputItemParamOfFunctionCallOutput(
+					resp = append(resp, responseInputItemParamOfFunctionCallOutput(
 						funcResult.CallID,
 						string(b),
 					))
 				} else if str, ok := ret.(string); ok {
 					// Plain string - pass directly
-					resp = append(resp, responses.ResponseInputItemParamOfFunctionCallOutput(
+					resp = append(resp, responseInputItemParamOfFunctionCallOutput(
 						funcResult.CallID,
 						str,
 					))
@@ -693,7 +688,7 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 							},
 						}
 					}
-					resp = append(resp, responses.ResponseInputItemParamOfFunctionCallOutput(
+					resp = append(resp, responseInputItemParamOfFunctionCallOutput(
 						funcResult.CallID,
 						outputContent,
 					))
@@ -764,15 +759,16 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 							})
 						}
 					}
-					resp = append(resp, responses.ResponseInputItemParamOfFunctionCallOutput(
+					resp = append(resp, responseInputItemParamOfFunctionCallOutput(
 						funcResult.CallID,
 						outputContent,
 					))
 				} else {
-					// Default case - convert to string
-					resp = append(resp, responses.ResponseInputItemParamOfFunctionCallOutput(
+					// Default case - convert to string (JSON-encode structured
+					// results rather than rendering them with Go's %v).
+					resp = append(resp, responseInputItemParamOfFunctionCallOutput(
 						funcResult.CallID,
-						fmt.Sprintf("%v", ret),
+						toolResultText(ret),
 					))
 				}
 
@@ -780,7 +776,7 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 		}
 
 	default:
-		panic("unknown message role: " + string(msg.Role))
+		return nil, fmt.Errorf("openaiprovider: unsupported message role %q", msg.Role)
 	}
 
 	if len(contents) > 0 {
@@ -849,7 +845,12 @@ func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func
 				if !yield(currentUpdate, nil) {
 					return
 				}
-				currentUpdate = &agent.ResponseUpdate{}
+				// Reset for the next message, carrying the response-level
+				// properties forward so the second and later messages keep
+				// AdditionalProperties (e.g. EndUserId).
+				currentUpdate = &agent.ResponseUpdate{
+					AdditionalProperties: responsesPopulateAdditionalProperties(resp),
+				}
 			}
 			currentUpdate.MessageID = out.ID
 			currentUpdate.ResponseID = resp.ID
@@ -880,13 +881,28 @@ func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func
 			for _, c := range out.Content {
 				sb.WriteString(c.Text)
 			}
-			currentUpdate.Contents = append(currentUpdate.Contents, &message.TextReasoningContent{
-				Text:          sb.String(),
-				ProtectedData: out.EncryptedContent,
-				ContentHeader: message.ContentHeader{
-					RawRepresentation: out,
-				},
-			})
+			// Attach the encrypted content and raw representation to only the
+			// first reasoning content emitted for this item, mirroring the
+			// Python SDK's content-then-summary loop.
+			firstReasoning := true
+			appendReasoning := func(text string) {
+				rc := &message.TextReasoningContent{Text: text}
+				if firstReasoning {
+					rc.ProtectedData = out.EncryptedContent
+					rc.RawRepresentation = out
+					firstReasoning = false
+				}
+				currentUpdate.Contents = append(currentUpdate.Contents, rc)
+			}
+			// Skip the content-derived entry only when it is empty but summary
+			// text is available, so o-series models that return a reasoning
+			// summary (and no content) still surface the summary text.
+			if sb.Len() > 0 || len(out.Summary) == 0 {
+				appendReasoning(sb.String())
+			}
+			for _, s := range out.Summary {
+				appendReasoning(s.Text)
+			}
 
 		case responses.ResponseFunctionToolCall:
 			callID := cmp.Or(out.CallID, out.ID)
@@ -1189,30 +1205,41 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 			}
 
 		case responses.ResponseCodeInterpreterToolCall:
-			// For code interpreter, create a text representation
-			var outputText strings.Builder
-			fmt.Fprintf(&outputText, "[Code Interpreter: %s]\n", item.ID)
+			// Emit structured content matching the non-streaming path so
+			// streaming consumers receive the same code-interpreter call and
+			// result contents rather than a free-form text blob.
+			var input message.CodeInterpreterToolCallContent
+			input.CallID = item.ID
 			if item.Code != "" {
-				outputText.WriteString(item.Code)
-				outputText.WriteString("\n")
-			}
-			if len(item.Outputs) > 0 {
-				outputText.WriteString("[Output]\n")
-				for _, output := range item.Outputs {
-					switch output := output.AsAny().(type) {
-					case responses.ResponseCodeInterpreterToolCallOutputLogs:
-						outputText.WriteString(output.Logs)
-						outputText.WriteString("\n")
-					case responses.ResponseCodeInterpreterToolCallOutputImage:
-						if output.URL != "" {
-							fmt.Fprintf(&outputText, "Image: %s\n", output.URL)
-						}
-					}
+				input.Inputs = []message.Content{
+					&message.DataContent{
+						Data:      base64.StdEncoding.EncodeToString([]byte(item.Code)),
+						MediaType: "text/x-python",
+					},
 				}
 			}
-			content := &message.TextContent{Text: outputText.String()}
-			content.RawRepresentation = item
-			u.Contents = []message.Content{content}
+
+			var output message.CodeInterpreterToolResultContent
+			output.CallID = item.ID
+			output.RawRepresentation = item
+			for _, res := range item.Outputs {
+				switch res := res.AsAny().(type) {
+				case responses.ResponseCodeInterpreterToolCallOutputLogs:
+					output.Outputs = append(output.Outputs, &message.TextContent{
+						Text:          res.Logs,
+						ContentHeader: message.ContentHeader{RawRepresentation: res},
+					})
+				case responses.ResponseCodeInterpreterToolCallOutputImage:
+					output.Outputs = append(output.Outputs, &message.URIContent{
+						URI:       res.URL,
+						MediaType: imageURIToMediaType(res.URL),
+						ContentHeader: message.ContentHeader{
+							RawRepresentation: res,
+						},
+					})
+				}
+			}
+			u.Contents = []message.Content{&input, &output}
 		case responses.ResponseFileSearchToolCall:
 			u.Contents = fileSearchToolCallContents(item)
 		case responses.ResponseOutputItemMcpApprovalRequest:
@@ -1325,12 +1352,13 @@ func mcpCallContents(item responses.ResponseOutputItemMcpCall) []message.Content
 		},
 	}
 
+	errorMessage := mcpToolCallErrorMessage(item.Error)
 	result := &message.MCPServerToolResultContent{
 		ContentHeader: message.ContentHeader{RawRepresentation: item},
 		CallID:        item.ID,
 		Name:          item.Name,
 		ServerName:    item.ServerLabel,
-		Error:         item.Error,
+		Error:         errorMessage,
 	}
 	if item.Output != "" {
 		result.Outputs = message.Contents{
@@ -1339,12 +1367,37 @@ func mcpCallContents(item responses.ResponseOutputItemMcpCall) []message.Content
 	}
 	contents = append(contents, result)
 
-	if item.Error != "" {
+	if errorMessage != "" {
 		contents = append(contents, &message.ErrorContent{
-			Message: item.Error,
+			Message: errorMessage,
 		})
 	}
 	return contents
+}
+
+func mcpToolCallErrorMessage(err responses.McpToolCallErrorUnion) string {
+	if err.Message != "" {
+		return err.Message
+	}
+	if err.Content != nil {
+		if content, ok := err.Content.(string); ok {
+			return content
+		}
+		if content, marshalErr := json.Marshal(err.Content); marshalErr == nil {
+			return string(content)
+		}
+		return fmt.Sprint(err.Content)
+	}
+
+	raw := err.RawJSON()
+	if raw == "" || raw == "null" || raw == "{}" {
+		return ""
+	}
+	var msg string
+	if json.Unmarshal([]byte(raw), &msg) == nil {
+		return msg
+	}
+	return raw
 }
 
 func imageGenerationContent(item responses.ResponseOutputItemImageGenerationCall) *message.DataContent {
