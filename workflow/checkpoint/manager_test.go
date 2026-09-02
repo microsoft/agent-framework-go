@@ -86,6 +86,30 @@ func TestJSONManager_RejectsInvalidStoreMetadata(t *testing.T) {
 	}
 }
 
+func TestManager_LatestCheckpoint(t *testing.T) {
+	want := workflow.CheckpointInfo{SessionID: "session", CheckpointID: "latest"}
+	manager := NewJSONManager(&managerTestStore{index: []workflow.CheckpointInfo{
+		{SessionID: "session", CheckpointID: "first"},
+		want,
+	}})
+
+	got, err := manager.LatestCheckpoint(t.Context(), "session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || *got != want {
+		t.Fatalf("LatestCheckpoint() = %v, want %v", got, want)
+	}
+
+	got, err = NewJSONManager(&managerTestStore{}).LatestCheckpoint(t.Context(), "session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Fatalf("LatestCheckpoint() = %v, want nil", got)
+	}
+}
+
 // The in-memory manager is keyed by session ID, so a single manager can be
 // shared across concurrent workflow runs (distinct sessions). Its Store map and
 // per-session caches must be synchronized: without a lock, concurrent Commit

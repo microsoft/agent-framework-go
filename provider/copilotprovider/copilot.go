@@ -56,7 +56,7 @@ func NewAgent(cclient *copilot.Client, config AgentConfig) *agent.Agent {
 		config.Description = defaultDescription
 	}
 	if config.Instructions != "" {
-		config.RunOptions = append(config.RunOptions, agent.WithInstructions(config.Instructions))
+		config.RunOptions = append(slices.Clone(config.RunOptions), agent.WithInstructions(config.Instructions))
 	}
 	p := &provider{
 		client: cclient,

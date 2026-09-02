@@ -83,6 +83,18 @@ func TestPrependAgentFrameworkToHTTPHeaderHostedReplacesBareProduct(t *testing.T
 	}
 }
 
+func TestPrependAgentFrameworkToUserAgentRecognizesMixedCaseProduct(t *testing.T) {
+	for _, hosted := range []string{"", "1"} {
+		t.Run(map[string]string{"": "bare", "1": "hosted"}[hosted], func(t *testing.T) {
+			got := runHelper(t, "prepend-map-mixed-case", foundryHostingEnvVar+"="+hosted, userAgentTelemetryDisabledEnvVar+"=")
+			want := strings.ToUpper(runHelper(t, "user-agent", foundryHostingEnvVar+"="+hosted, userAgentTelemetryDisabledEnvVar+"=")) + " my-app/1.0"
+			if got != want {
+				t.Fatalf("User-Agent = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestIsUserAgentTelemetryEnabledCached(t *testing.T) {
 	got := runHelper(t, "telemetry-enabled-cached", userAgentTelemetryDisabledEnvVar+"=")
 	if got != "true\ntrue" {
@@ -147,6 +159,11 @@ func TestHelperProcess(t *testing.T) {
 		bareUserAgent := strings.TrimPrefix(headers.Get(userAgentKey), "foundry-hosting/")
 		headers = telemetry.PrependAgentFrameworkToHTTPHeader(http.Header{"User-Agent": []string{bareUserAgent + " my-app/1.0"}})
 		fmt.Print(headers.Get(userAgentKey))
+	case "prepend-map-mixed-case":
+		headers := telemetry.PrependAgentFrameworkToUserAgent(nil)
+		mixedCase := strings.ToUpper(headers[userAgentKey])
+		headers = telemetry.PrependAgentFrameworkToUserAgent(map[string]string{"User-Agent": mixedCase + " my-app/1.0"})
+		fmt.Print(headers[userAgentKey])
 	case "telemetry-enabled-cached":
 		fmt.Println(telemetry.PrependAgentFrameworkToUserAgent(nil) != nil)
 		_ = os.Setenv(userAgentTelemetryDisabledEnvVar, "true")

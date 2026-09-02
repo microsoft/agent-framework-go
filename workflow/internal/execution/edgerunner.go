@@ -345,15 +345,18 @@ func (em *EdgeRunner) resolveTargets(ctx context.Context, targetIDs []string) ([
 
 func (em *EdgeRunner) messageRuntimeType(ctx context.Context, envelope *MessageEnvelope) (reflect.Type, error) {
 	if portable, ok := envelope.Message.(workflow.PortableValue); ok {
-		if envelope.SourceID == "" {
-			return nil, nil
+		if envelope.SourceID != "" {
+			source, err := em.ensureExecutor(ctx, envelope.SourceID, em.tracer)
+			if err != nil {
+				return nil, err
+			}
+			if typ, ok := SentRuntimeType(source, portable.TypeID); ok {
+				return typ, nil
+			}
 		}
-		source, err := em.ensureExecutor(ctx, envelope.SourceID, em.tracer)
-		if err != nil {
-			return nil, err
-		}
-		if typ, ok := SentRuntimeType(source, portable.TypeID); ok {
-			return typ, nil
+		valueType := reflect.TypeOf(portable.Any())
+		if portable.TypeID.MatchPolymorphic(valueType) {
+			return valueType, nil
 		}
 		return nil, nil
 	}
@@ -386,7 +389,11 @@ func (em *EdgeRunner) PrepareDeliveryForInput(ctx context.Context, envelope *Mes
 	if err != nil {
 		return nil, err
 	}
-	if !CanHandleTypeID(target, envelope.MessageType()) {
+	runtimeType, err := em.messageRuntimeType(ctx, envelope)
+	if err != nil {
+		return nil, err
+	}
+	if !canHandleRuntimeType(target, runtimeType) {
 		// Type mismatch.
 		span.SetDeliveryStatus(observability.DeliveryStatusDroppedTypeMismatch)
 		return nil, nil
@@ -421,7 +428,11 @@ func (em *EdgeRunner) PrepareDeliveryForResponse(ctx context.Context, response *
 	if err != nil {
 		return nil, err
 	}
-	if !CanHandleTypeID(target, envelope.MessageType()) {
+	runtimeType, err := em.messageRuntimeType(ctx, envelope)
+	if err != nil {
+		return nil, err
+	}
+	if !canHandleRuntimeType(target, runtimeType) {
 		// Type mismatch.
 		span.SetDeliveryStatus(observability.DeliveryStatusDroppedTypeMismatch)
 		return nil, nil

@@ -177,13 +177,16 @@ func NewStateManager() StateManager {
 	}
 }
 
-// getOrCreateScope gets or creates a state scope.
+// getOrCreateScope gets or creates a state scope. Shared scopes (identified
+// by ScopeName rather than ExecutorID) can be reached concurrently by
+// multiple executors within the same superstep, so the check-and-create must
+// be atomic: a plain Get followed by Set can race and silently discard one
+// of two concurrently created scopes, losing any state written through it.
+// LoadOrStore only constructs a new StateScope when the scope doesn't
+// already exist, so the common case (the scope already exists) doesn't pay
+// for an unnecessary allocation.
 func (sm *StateManager) getOrCreateScope(scopeID workflow.ScopeID) *StateScope {
-	if scope, ok := sm.scopes.Get(scopeID); ok {
-		return scope
-	}
-	scope := NewStateScope(scopeID)
-	sm.scopes.Set(scopeID, scope)
+	scope, _ := sm.scopes.LoadOrStore(scopeID, func() *StateScope { return NewStateScope(scopeID) })
 	return scope
 }
 

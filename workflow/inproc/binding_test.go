@@ -628,7 +628,8 @@ func TestWorkflowOutput_AgentResponseUsesOutputFilter(t *testing.T) {
 	if errors := errorEvents(events); len(errors) != 0 {
 		t.Fatalf("unexpected error events: %#v", errors)
 	}
-	if outputs := outputEvents(events); len(outputs) != 0 {
+	outputs := outputEvents(events)
+	if len(outputs) != 0 {
 		t.Fatalf("output count = %d, want 0 without output designation; outputs: %#v", len(outputs), outputs)
 	}
 
@@ -640,14 +641,14 @@ func TestWorkflowOutput_AgentResponseUsesOutputFilter(t *testing.T) {
 	if errors := errorEvents(events); len(errors) != 0 {
 		t.Fatalf("unexpected error events with output: %#v", errors)
 	}
-	outputs := outputEvents(events)
+	outputs = outputEvents(events)
 	if len(outputs) != 1 {
 		t.Fatalf("output count = %d, want 1 with output designation; outputs: %#v", len(outputs), outputs)
 	}
 	if _, ok := outputs[0].Output.(*agent.Response); !ok {
 		t.Fatalf("OutputEvent.Output = %T, want *agent.Response", outputs[0].Output)
 	}
-	if !outputs[0].IsIntermediate() {
+	if len(outputs[0].Tags) != 1 || outputs[0].Tags[0] != workflow.OutputTagIntermediate {
 		t.Fatalf("OutputEvent tags = %v, want intermediate", outputs[0].Tags)
 	}
 }
@@ -1155,9 +1156,8 @@ func TestRequestPortBind_ForwardsExternalRequestAndRestoresOriginalResponse(t *t
 }
 
 func TestRun_SecondRunToNextHaltOnHaltedRunReturns(t *testing.T) {
-	// Environment.Run already drives one RunToNextHalt internally. A caller that
-	// polls RunToNextHalt again on an already-Idle run must return promptly
-	// rather than block forever on a halt signal that was already consumed.
+	// Environment.Run already consumes the initial halt. A subsequent event read
+	// must still return even though the previous halt signal was already consumed.
 	binding := workflow.NewExecutor("fn", func(in textMessage) dataMessage {
 		return dataMessage{Bytes: []byte(in.Text)}
 	}).Bind()
@@ -1169,15 +1169,16 @@ func TestRun_SecondRunToNextHaltOnHaltedRunReturns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+	defer func() { _ = run.Close(t.Context()) }()
 
 	done := make(chan struct{})
 	go func() {
-		_, _ = run.RunToNextHalt(context.Background())
+		_, _ = run.RunToNextHalt(t.Context())
 		close(done)
 	}()
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("second RunToNextHalt on an already-halted run blocked")
+	case <-time.After(time.Second):
+		t.Fatal("second RunToNextHalt blocked on an already halted run")
 	}
 }

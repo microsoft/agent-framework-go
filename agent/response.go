@@ -59,6 +59,10 @@ type Response struct {
 	// supply a finish reason.
 	FinishReason string `json:",omitzero"`
 
+	// RawRepresentation stores the provider-specific object or objects that
+	// produced this response.
+	RawRepresentation any `json:"-"`
+
 	// Messages contains the messages produced by the agent run.
 	Messages []*message.Message
 }
@@ -193,25 +197,14 @@ func (resp *Response) Update(update *ResponseUpdate) {
 		}
 		maps.Copy(msg.AdditionalProperties, update.AdditionalProperties)
 	}
-	// A nil RawRepresentation carries no provider data, so treat it as a no-op.
-	// This keeps metadata-only updates (e.g. response-level usage or a
-	// continuation token emitted by ToUpdates) from mutating the message's raw
-	// data during a ToUpdates/Collect round-trip.
-	if update.RawRepresentation != nil {
-		if msg.RawRepresentation == nil {
-			msg.RawRepresentation = update.RawRepresentation
-		} else if s, ok := msg.RawRepresentation.([]any); ok {
-			msg.RawRepresentation = append(s, update.RawRepresentation)
-		} else {
-			msg.RawRepresentation = []any{msg.RawRepresentation, update.RawRepresentation}
-		}
-	}
+	msg.RawRepresentation = appendRawRepresentation(msg.RawRepresentation, update.RawRepresentation)
 
 	// Other members on a ResponseUpdate map to members of the response.
 	// Update the response object with those, preferring the values from later updates.
 	resp.AgentID = cmp.Or(update.AgentID, resp.AgentID)
 	resp.ID = cmp.Or(update.ResponseID, resp.ID)
 	resp.FinishReason = cmp.Or(update.FinishReason, resp.FinishReason)
+	resp.RawRepresentation = appendRawRepresentation(resp.RawRepresentation, update.RawRepresentation)
 	if update.ContinuationToken == "" {
 		resp.ContinuationToken = ""
 	} else {
@@ -226,6 +219,19 @@ func (resp *Response) Update(update *ResponseUpdate) {
 		}
 		maps.Copy(resp.AdditionalProperties, update.AdditionalProperties)
 	}
+}
+
+func appendRawRepresentation(current, incoming any) any {
+	if incoming == nil {
+		return current
+	}
+	if current == nil {
+		return incoming
+	}
+	if values, ok := current.([]any); ok {
+		return append(values, incoming)
+	}
+	return []any{current, incoming}
 }
 
 // isValidCreatedAt reports whether t is a usable creation timestamp. A zero

@@ -31,7 +31,7 @@ func toAgentMessage(in *a2a.Message) (*message.Message, error) {
 		ID:                   in.ID,
 		Role:                 role,
 		Contents:             contents,
-		AdditionalProperties: maps.Clone(in.Metadata),
+		AdditionalProperties: cloneMetadata(in.Metadata),
 		RawRepresentation:    in,
 	}
 	return out, nil
@@ -52,7 +52,7 @@ func responseToMessage(infoProvider a2a.TaskInfoProvider, resp *agent.Response) 
 	}
 
 	out := a2a.NewMessageForTask(a2a.MessageRoleAgent, infoProvider, parts...)
-	out.Metadata = maps.Clone(resp.AdditionalProperties)
+	out.Metadata = cloneMetadata(resp.AdditionalProperties)
 	for _, msg := range slices.Backward(resp.Messages) {
 		if msg != nil && msg.ID != "" {
 			out.ID = msg.ID
@@ -73,7 +73,7 @@ func responseUpdateToMessage(infoProvider a2a.TaskInfoProvider, update *agent.Re
 		return nil, err
 	}
 	out.Parts = parts
-	out.Metadata = maps.Clone(update.AdditionalProperties)
+	out.Metadata = cloneMetadata(update.AdditionalProperties)
 	out.ID = cmp.Or(update.MessageID, update.ResponseID, out.ID)
 	return out, nil
 }
@@ -90,7 +90,7 @@ func responseUpdateToWorkingStatusEvent(infoProvider a2a.TaskInfoProvider, updat
 
 	working := a2a.NewStatusUpdateEvent(infoProvider, a2a.TaskStateWorking, progressMessage)
 	if update != nil {
-		working.Metadata = maps.Clone(update.AdditionalProperties)
+		working.Metadata = cloneMetadata(update.AdditionalProperties)
 		if update.ContinuationToken != "" {
 			if working.Metadata == nil {
 				working.Metadata = map[string]any{}
@@ -145,7 +145,7 @@ func responseToArtifactEvent(infoProvider a2a.TaskInfoProvider, resp *agent.Resp
 	evt := a2a.NewArtifactEvent(infoProvider, parts...)
 	evt.LastChunk = true
 	if resp != nil {
-		evt.Metadata = maps.Clone(resp.AdditionalProperties)
+		evt.Metadata = cloneMetadata(resp.AdditionalProperties)
 	}
 	return evt, nil
 }
@@ -176,6 +176,13 @@ func responseUpdateToArtifactEventWithOptions(
 	}
 	evt.Append = appendChunk
 	evt.LastChunk = lastChunk
-	evt.Metadata = maps.Clone(update.AdditionalProperties)
+	evt.Metadata = cloneMetadata(update.AdditionalProperties)
 	return evt, nil
+}
+
+func cloneMetadata(metadata map[string]any) map[string]any {
+	if len(metadata) == 0 {
+		return nil
+	}
+	return maps.Clone(metadata)
 }

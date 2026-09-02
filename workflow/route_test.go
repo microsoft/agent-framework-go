@@ -4,6 +4,7 @@ package workflow
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -97,6 +98,33 @@ func TestAddHandlerRawRejectsPortableValue(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "PortableValue") {
 		t.Fatalf("build() error = %q, want mention of PortableValue", err)
+	}
+}
+
+func TestMessageRouterKeepsUnknownPortableTypeOnCatchAllPath(t *testing.T) {
+	var portable PortableValue
+	if err := json.Unmarshal([]byte(`{"TypeID":{"PackageName":"example.invalid/missing","TypeName":"Payload"},"Value":{"value":"test"}}`), &portable); err != nil {
+		t.Fatal(err)
+	}
+
+	var rb RouteBuilder
+	rb.AddHandlerRaw(reflect.TypeFor[map[string]any](), nil, func(*Context, any) (any, error) {
+		return "map", nil
+	})
+	rb.AddCatchAll(func(*Context, PortableValue) (any, error) {
+		return "catch-all", nil
+	})
+	router, err := rb.build()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, handled := router.routeMessage(&Context{Context: context.Background()}, portable)
+	if !handled || result.err != nil {
+		t.Fatalf("RouteMessage() = (%v, %v), want handled without error", handled, result.err)
+	}
+	if result.result != "catch-all" {
+		t.Fatalf("RouteMessage() result = %v, want catch-all", result.result)
 	}
 }
 

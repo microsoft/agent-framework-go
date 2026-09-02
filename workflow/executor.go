@@ -276,6 +276,9 @@ func (e *Executor) implementationID() string {
 }
 
 func (e *Executor) Initialize(ctx *Context) error {
+	if _, err := e.protocol(); err != nil {
+		return err
+	}
 	if e.InitializeFunc != nil {
 		return e.InitializeFunc(ctx)
 	}
@@ -452,6 +455,54 @@ func (e *Executor) DescribeProtocol() ProtocolDescriptor {
 		panic(err)
 	}
 	return protocol
+}
+
+// NewAggregatingExecutor creates an executor that incrementally aggregates
+// input messages. Aggregate state is persisted in workflow checkpoints.
+// The aggregator receives nil when no state is present; returning nil clears
+// the state. Non-nil aggregates are sent and yielded normally.
+func NewAggregatingExecutor[TInput, TAggregate any](id string, aggregator func(*TAggregate, TInput) *TAggregate) *Executor {
+	if aggregator == nil {
+		panic("workflow: aggregator cannot be nil")
+	}
+
+	cache := &StatefulExecutorCache[aggregatingExecutorState[TAggregate]]{StateKey: "Aggregate"}
+	return &Executor{
+		ID:                       id,
+		ImplementationID:         fmt.Sprintf("workflow.AggregatingExecutor[%v,%v]", reflect.TypeFor[TInput](), reflect.TypeFor[TAggregate]()),
+		ResetFunc:                cache.Reset,
+		OnCheckpointRestoredFunc: cache.OnCheckpointRestored,
+		ConfigureProtocol: func(builder *ProtocolBuilder) (*ProtocolBuilder, error) {
+			builder.RouteBuilder.AddHandlerRaw(
+				reflect.TypeFor[TInput](),
+				reflect.TypeFor[TAggregate](),
+				func(ctx *Context, message any) (any, error) {
+					var aggregate *TAggregate
+					err := cache.InvokeWithState(ctx, false, func(_ *Context, state aggregatingExecutorState[TAggregate]) (aggregatingExecutorState[TAggregate], error) {
+						var current *TAggregate
+						if state.Present {
+							current = &state.Value
+						}
+						aggregate = aggregator(current, message.(TInput))
+						if aggregate == nil {
+							return aggregatingExecutorState[TAggregate]{}, nil
+						}
+						return aggregatingExecutorState[TAggregate]{Value: *aggregate, Present: true}, nil
+					})
+					if err != nil || aggregate == nil {
+						return nil, err
+					}
+					return *aggregate, nil
+				},
+			)
+			return builder, nil
+		},
+	}
+}
+
+type aggregatingExecutorState[T any] struct {
+	Value   T
+	Present bool
 }
 
 // StatefulExecutorCache helps an executor read, update, and cache typed state.

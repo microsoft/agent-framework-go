@@ -10,7 +10,6 @@ import (
 	"maps"
 	"reflect"
 	"slices"
-	"strings"
 	"sync/atomic"
 
 	"github.com/google/uuid"
@@ -690,7 +689,7 @@ func (proc *runnerContext) joinedSubworkflowRunnerSnapshot() []execution.SuperSt
 // attachSuperstep attaches a subworkflow runner.
 func (proc *runnerContext) attachSuperstep(runner execution.SuperStepRunner) (string, error) {
 	for {
-		joinID := strings.ReplaceAll(uuid.NewString(), "-", "")
+		joinID := uuid.NewString()
 		if _, exists := proc.joinedSubworkflowRunners.LoadOrStore(joinID, runner); !exists {
 			return joinID, nil
 		}

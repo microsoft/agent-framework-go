@@ -170,7 +170,7 @@ func (s *streamingRunEventStream) runLoop() {
 	}
 
 	// Wait for the first input before starting.
-	// The consumer will call EnqueueMessage which signals the run loop.
+	// The consumer will call EnqueueMessageUntyped, which signals the run loop.
 	// Note: RunHandle also signals here on checkpoint resume when there are
 	// already pending requests, so the first iteration can emit a
 	// PendingRequests halt signal even without unprocessed messages.
@@ -538,6 +538,11 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 			cycleCtx, runActivity = telemetry.StartWorkflowRun(linkedCtx, workflowMetadata(wf, l.stepRunner.SessionID()))
 			runActivity.AddEvent(observability.EventWorkflowStarted)
 		}
+		defer func() {
+			if runActivity != nil {
+				runActivity.End()
+			}
+		}()
 
 		startRunActivity()
 		l.eventQueue.Enqueue(workflow.StartedEvent{})
@@ -559,6 +564,7 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 						runActivity.AddErrorEvent(observability.EventWorkflowError, err)
 						runActivity.CaptureError(err)
 						runActivity.End()
+						runActivity = nil
 					}
 					sessionErr = err
 					if !errors.Is(err, context.Canceled) {
@@ -576,7 +582,6 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 				runActivity.End()
 				runActivity = nil
 			}
-
 			// Update status
 			l.setStatus(idleOrPendingRequestsStatus(l.stepRunner))
 
@@ -614,14 +619,12 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 				}
 				startRunActivity()
 				// Emit a StartedEvent for the continuation cycle, mirroring the
-				// streaming run loop which raises one per input → processing →
-				// halt cycle. There is confirmed work to process, so the event
-				// stays paired with the cycle that runs it. The event is drained
-				// and yielded before the cycle's supersteps.
+				// streaming run loop which raises one per input-to-processing-to-halt
+				// cycle. There is confirmed work to process, so the event stays paired
+				// with the cycle that runs it.
 				l.eventQueue.Enqueue(workflow.StartedEvent{})
-				// Drain immediately so the StartedEvent is yielded before the
-				// cycle's supersteps run, rather than being held in the queue
-				// and drained alongside the first superstep's events.
+				// Drain immediately so the StartedEvent precedes the cycle's
+				// supersteps instead of being delivered with the first step's events.
 				if !l.drainAndFilterEvents(linkedCtx, yield) {
 					return
 				}

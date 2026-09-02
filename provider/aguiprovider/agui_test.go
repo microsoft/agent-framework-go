@@ -713,3 +713,79 @@ func writeSSE(t *testing.T, w http.ResponseWriter, evt aguiEvents.Event) {
 func newTestClient(endpoint string) *aguiSSEClient.Client {
 	return aguiSSEClient.NewClient(aguiSSEClient.Config{Endpoint: endpoint})
 }
+
+func TestAGUIAgentRun_SurfacesReasoningMessageChunkEvents(t *testing.T) {
+	strPtr := func(s string) *string { return &s }
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeSSE(t, w, aguiEvents.NewRunStartedEvent("thread-1", "run-1"))
+		writeSSE(t, w, aguiEvents.NewReasoningMessageChunkEvent(strPtr("r1"), strPtr("think")))
+		writeSSE(t, w, aguiEvents.NewReasoningMessageChunkEvent(strPtr("r1"), strPtr("ing")))
+		writeSSE(t, w, aguiEvents.NewRunFinishedEvent("thread-1", "run-1"))
+	}))
+	defer server.Close()
+
+	a := aguiprovider.NewAgent(newTestClient(server.URL), aguiprovider.AgentConfig{})
+	resp, err := a.RunText(context.Background(), "hi").Collect()
+	if err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	var reasoning string
+	for content := range resp.Contents() {
+		if rc, ok := content.(*message.TextReasoningContent); ok {
+			reasoning += rc.Text
+		}
+	}
+	if reasoning != "thinking" {
+		t.Fatalf("reasoning text = %q, want %q", reasoning, "thinking")
+	}
+}
+
+func TestAGUIAgentRun_ReasoningChunkContinuationIsSeparateFromTextChunk(t *testing.T) {
+	strPtr := func(s string) *string { return &s }
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeSSE(t, w, aguiEvents.NewRunStartedEvent("thread-1", "run-1"))
+		writeSSE(t, w, aguiEvents.NewReasoningMessageChunkEvent(strPtr("r1"), strPtr("think")))
+		writeSSE(t, w, aguiEvents.NewTextMessageChunkEvent(strPtr("t1"), strPtr("assistant"), strPtr("hello")))
+		// A reasoning chunk that omits MessageID must continue the reasoning
+		// message (r1), not inherit the last text chunk's MessageID (t1).
+		writeSSE(t, w, aguiEvents.NewReasoningMessageChunkEvent(nil, strPtr("ing")))
+		writeSSE(t, w, aguiEvents.NewRunFinishedEvent("thread-1", "run-1"))
+	}))
+	defer server.Close()
+
+	a := aguiprovider.NewAgent(newTestClient(server.URL), aguiprovider.AgentConfig{})
+	resp, err := a.RunText(context.Background(), "hi").Collect()
+	if err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+
+	var r1Reasoning, t1Text, t1Reasoning string
+	for _, m := range resp.Messages {
+		for _, c := range m.Contents {
+			switch cc := c.(type) {
+			case *message.TextReasoningContent:
+				switch m.ID {
+				case "r1":
+					r1Reasoning += cc.Text
+				case "t1":
+					t1Reasoning += cc.Text
+				}
+			case *message.TextContent:
+				if m.ID == "t1" {
+					t1Text += cc.Text
+				}
+			}
+		}
+	}
+	if r1Reasoning != "thinking" {
+		t.Errorf("reasoning message r1 = %q, want %q", r1Reasoning, "thinking")
+	}
+	if t1Text != "hello" {
+		t.Errorf("text message t1 = %q, want %q", t1Text, "hello")
+	}
+	if t1Reasoning != "" {
+		t.Errorf("reasoning leaked into text message t1: %q", t1Reasoning)
+	}
+}
