@@ -99,6 +99,7 @@ func hostedAgentSessionRequestOption() option.RequestOption {
 		}
 		if box, ok := req.Context().Value(hostedAgentSessionIDContextKey{}).(*hostedAgentSessionIDBox); ok {
 			if err := captureHostedAgentSessionID(resp, box); err != nil {
+				_ = resp.Body.Close()
 				return nil, err
 			}
 		}
