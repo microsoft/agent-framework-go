@@ -1,6 +1,7 @@
 ---
 description: Classifies Agent Framework pull request risk when deterministic rules are inconclusive
 tracker-id: classify-pull-request-risk
+model: "gpt-5.4"
 on:
    roles: all
    workflow_call:
