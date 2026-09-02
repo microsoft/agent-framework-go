@@ -181,6 +181,37 @@ func TestAgent_StructuredOutput_SuccessfulUnmarshal(t *testing.T) {
 	}
 }
 
+func TestAgent_StructuredOutput_DoesNotMutateInputOptions(t *testing.T) {
+	a := newStructuredOutputTestAgent(
+		func(v any) (agent.ResponseFormat, error) {
+			return agent.ResponseFormat{Kind: "json"}, nil
+		},
+		func(format agent.ResponseFormat, data []byte, v any) error {
+			return json.Unmarshal(data, v)
+		},
+		func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			return singleStructuredOutputTestUpdate(`{"name":"Alice"}`)
+		},
+	)
+
+	output := &struct {
+		Name string `json:"name"`
+	}{}
+	options := make([]agent.Option, 2, 3)
+	options[0] = agent.WithStructuredOutput(output)
+	options[1] = agent.WithSession(agenttest.CreateSession())
+	sentinel := agent.WithInstructions("sentinel")
+	backing := options[:cap(options)]
+	backing[2] = sentinel
+
+	if _, err := a.Run(context.Background(), nil, options...).Collect(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if backing[2] != sentinel {
+		t.Fatal("expected structured output not to modify the input options backing array")
+	}
+}
+
 func TestAgent_StructuredOutput_UsesLastMessageOnly(t *testing.T) {
 	a := newStructuredOutputTestAgent(
 		func(v any) (agent.ResponseFormat, error) {

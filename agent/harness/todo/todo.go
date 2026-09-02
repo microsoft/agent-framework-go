@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"weak"
@@ -76,7 +77,7 @@ type state struct {
 // Options configures the todo provider.
 type Options struct {
 	// Instructions overrides the default instructions provided to the agent.
-	Instructions string
+	Instructions *string
 
 	// SuppressTodoListMessage, when true, prevents injecting the current todo
 	// list summary message on each invocation.
@@ -105,8 +106,8 @@ func New(opts *Options) *Provider {
 		instructions: defaultInstructions,
 	}
 	if opts != nil {
-		if opts.Instructions != "" {
-			p.instructions = opts.Instructions
+		if opts.Instructions != nil {
+			p.instructions = *opts.Instructions
 		}
 		p.suppressTodoMessage = opts.SuppressTodoListMessage
 		p.todoListMessageBuilder = opts.TodoListMessageBuilder
@@ -136,9 +137,7 @@ func (p *Provider) GetAllItems(opts ...agent.Option) []Item {
 	mu.Lock()
 	defer mu.Unlock()
 	st := p.loadState(opts)
-	result := make([]Item, len(st.Items))
-	copy(result, st.Items)
-	return result
+	return slices.Clone(st.Items)
 }
 
 // GetRemainingItems returns only the incomplete todo items from the session state.

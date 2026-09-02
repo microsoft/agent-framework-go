@@ -7,6 +7,7 @@ import (
 	"context"
 	"log/slog"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -95,6 +96,84 @@ func TestBuilder_InfersEmptyImplementationID(t *testing.T) {
 	got := bindings["start"].ImplementationID
 	if got != "start" {
 		t.Fatalf("ImplementationID = %q, want start", got)
+	}
+}
+
+func TestBuilder_RejectsEmptyExecutorID(t *testing.T) {
+	binding := (&workflow.Executor{ImplementationID: "empty-id"}).Bind()
+
+	_, err := workflow.NewBuilder(binding).Build()
+	if err == nil || !strings.Contains(err.Error(), "cannot bind executor with empty ID") {
+		t.Fatalf("Build() error = %v, want empty executor ID error", err)
+	}
+}
+
+func TestBuilder_ValidatesBindingPorts(t *testing.T) {
+	stringType := reflect.TypeFor[string]()
+	intType := reflect.TypeFor[int]()
+	tests := []struct {
+		name string
+		port workflow.RequestPort
+		want string
+	}{
+		{
+			name: "empty ID",
+			port: workflow.RequestPort{Request: stringType, Response: intType},
+			want: "workflow: request port ID is required",
+		},
+		{
+			name: "nil request type",
+			port: workflow.RequestPort{ID: "port", Response: intType},
+			want: `workflow: request port "port" request type is required`,
+		},
+		{
+			name: "nil response type",
+			port: workflow.RequestPort{ID: "port", Request: stringType},
+			want: `workflow: request port "port" response type is required`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			binding := newNoOpExecutor("start")
+			binding.Ports = []workflow.RequestPort{test.port}
+			wf, err := workflow.NewBuilder(binding).Build()
+			if err == nil || err.Error() != test.want {
+				t.Fatalf("Build() error = %v, want %q", err, test.want)
+			}
+			if wf != nil {
+				t.Fatalf("Build() workflow = %#v, want nil", wf)
+			}
+		})
+	}
+}
+
+func TestBuilder_RejectsConflictingBindingPorts(t *testing.T) {
+	stringType := reflect.TypeFor[string]()
+	port := workflow.RequestPort{ID: "shared-port", Request: stringType, Response: reflect.TypeFor[int]()}
+	source := newNoOpExecutor("source")
+	source.Ports = []workflow.RequestPort{port}
+	target := newNoOpExecutor("target")
+	target.Ports = []workflow.RequestPort{{ID: port.ID, Request: stringType, Response: reflect.TypeFor[bool]()}}
+
+	wf, err := workflow.NewBuilder(source).AddEdge(source, target).Build()
+	if err == nil || err.Error() != `workflow: request port "shared-port" conflicts with an existing definition` {
+		t.Fatalf("Build() error = %v, want conflicting port error", err)
+	}
+	if wf != nil {
+		t.Fatalf("Build() workflow = %#v, want nil", wf)
+	}
+}
+
+func TestBuilder_AllowsIdenticalBindingPorts(t *testing.T) {
+	port := workflow.RequestPort{ID: "shared-port", Request: reflect.TypeFor[string](), Response: reflect.TypeFor[int]()}
+	source := newNoOpExecutor("source")
+	source.Ports = []workflow.RequestPort{port}
+	target := newNoOpExecutor("target")
+	target.Ports = []workflow.RequestPort{port}
+
+	if _, err := workflow.NewBuilder(source).AddEdge(source, target).Build(); err != nil {
+		t.Fatalf("Build() error = %v, want nil", err)
 	}
 }
 
@@ -368,6 +447,43 @@ func TestAddChain_RejectsRepetitionByDefault(t *testing.T) {
 	}
 }
 
+func TestBuilder_RejectsEmptyFanEdgeEndpoints(t *testing.T) {
+	source := newNoOpExecutor("source")
+	target := newNoOpExecutor("target")
+	tests := []struct {
+		name  string
+		build func() (*workflow.Workflow, error)
+		want  string
+	}{
+		{
+			name: "fan out without targets",
+			build: func() (*workflow.Workflow, error) {
+				return workflow.NewBuilder(source).AddFanOutEdge(source, nil).Build()
+			},
+			want: "fan-out edge requires at least one target",
+		},
+		{
+			name: "fan in without sources",
+			build: func() (*workflow.Workflow, error) {
+				return workflow.NewBuilder(target).AddFanInBarrierEdge(nil, target).Build()
+			},
+			want: "fan-in barrier edge requires at least one source",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			wf, err := test.build()
+			if err == nil || err.Error() != test.want {
+				t.Fatalf("Build() error = %v, want %q", err, test.want)
+			}
+			if wf != nil {
+				t.Fatalf("Build() workflow = %#v, want nil", wf)
+			}
+		})
+	}
+}
+
 func TestAddSwitch_RoutesToMatchingCase(t *testing.T) {
 	var trace []string
 	src := recordingBinding("src", &trace)
@@ -396,11 +512,8 @@ func TestAddSwitch_RoutesToMatchingCase(t *testing.T) {
 	}
 	wantContains := "even:abcd"
 	var found bool
-	for _, t := range trace {
-		if t == wantContains {
-			found = true
-			break
-		}
+	if slices.Contains(trace, wantContains) {
+		found = true
 	}
 	if !found {
 		t.Errorf("expected trace to include %q, got %v", wantContains, trace)
@@ -410,6 +523,18 @@ func TestAddSwitch_RoutesToMatchingCase(t *testing.T) {
 			t.Errorf("expected odd branch not to receive even-length string; trace=%v", trace)
 		}
 	}
+}
+
+func TestAddSwitch_RejectsNilPredicate(t *testing.T) {
+	src := recordingBinding("src", new([]string))
+	target := recordingBinding("target", new([]string))
+	defer func() {
+		if got := recover(); got != "workflow: switch case predicate cannot be nil" {
+			t.Fatalf("panic = %v, want nil-predicate message", got)
+		}
+	}()
+
+	workflow.NewBuilder(src).AddSwitch(src).AddCase(nil, target)
 }
 
 func TestAddSwitch_FallsBackToDefault(t *testing.T) {
@@ -609,7 +734,7 @@ func TestBuilder_Validation_SelfLoopWarning(t *testing.T) {
 	start := newNoOpExecutor("start")
 
 	wf, err := workflow.NewBuilder(start).
-		AddDirectEdge(start, start, true, func(any) bool { return false }).
+		AddEdge(start, start, workflow.WithEdgeCondition(func(any) bool { return false }), workflow.IdempotentEdge()).
 		Build()
 	if err != nil {
 		t.Fatalf("expected no error for self-loop, got %v", err)
@@ -778,7 +903,7 @@ func TestBuilder_Validation_TypeCompatibility_RespectsAutoSendDisabled(t *testin
 		return &workflow.Executor{
 			ID: source.ID,
 
-			DisableAutoSendMessageHandlerResultObject: true,
+			AutoSendMessageHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[int](), func(ctx *workflow.Context, msg any) (any, error) {
 					return 1, nil
@@ -823,6 +948,40 @@ func TestBuilder_Validation_TypeCompatibility_CatchAllSourceSkipped(t *testing.T
 	}
 }
 
+func TestBuilder_DuplicateConditionlessEdgeRejected(t *testing.T) {
+	start := newNoOpExecutor("start")
+	target := newNoOpExecutor("target")
+
+	_, err := workflow.NewBuilder(start).
+		AddEdge(start, target).
+		AddEdge(start, target).
+		Build()
+	if err == nil || !strings.Contains(err.Error(), "already exists without a condition") {
+		t.Fatalf("Build error = %v, want duplicate conditionless edge error", err)
+	}
+}
+
+func TestBuilder_EdgeIdempotencySkipsDuplicateConditionlessEdge(t *testing.T) {
+	start := newNoOpExecutor("start")
+	middle := newNoOpExecutor("middle")
+	target := newNoOpExecutor("target")
+
+	wf, err := workflow.NewBuilder(start).
+		AddEdge(start, middle).
+		AddEdge(start, middle, workflow.IdempotentEdge()).
+		AddEdge(middle, target).
+		Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if got := len(wf.Edges()[start.ID]); got != 1 {
+		t.Fatalf("start edge count = %d, want 1", got)
+	}
+	if got := wf.Edges()[middle.ID][0].Index; got != 2 {
+		t.Fatalf("edge index after skipped duplicate = %d, want 2", got)
+	}
+}
+
 // A conditional edge on a source→target pair must not populate the
 // conditionless-edge dedup set: adding a legitimate conditionless edge on the
 // same pair afterwards should succeed, not be rejected as a duplicate.
@@ -831,7 +990,7 @@ func TestBuilder_ConditionalEdgeDoesNotBlockConditionlessEdge(t *testing.T) {
 	target := newNoOpExecutor("target")
 
 	_, err := workflow.NewBuilder(start).
-		AddDirectEdge(start, target, false, func(any) bool { return true }).
+		AddEdge(start, target, workflow.WithEdgeCondition(func(any) bool { return true })).
 		AddEdge(start, target).
 		Build()
 	if err != nil {
@@ -839,15 +998,15 @@ func TestBuilder_ConditionalEdgeDoesNotBlockConditionlessEdge(t *testing.T) {
 	}
 }
 
-// The idempotent path (AddChain / idempotent=true) must likewise not silently
+// The idempotent path (AddChain / IdempotentEdge) must likewise not silently
 // drop a conditionless edge just because a conditional edge preceded it.
 func TestBuilder_ConditionalEdgeDoesNotDropIdempotentConditionlessEdge(t *testing.T) {
 	start := newNoOpExecutor("start")
 	target := newNoOpExecutor("target")
 
 	wf, err := workflow.NewBuilder(start).
-		AddDirectEdge(start, target, false, func(any) bool { return true }).
-		AddDirectEdge(start, target, true, nil). // idempotent conditionless edge
+		AddEdge(start, target, workflow.WithEdgeCondition(func(any) bool { return true })).
+		AddEdge(start, target, workflow.IdempotentEdge()).
 		Build()
 	if err != nil {
 		t.Fatalf("unexpected build error: %v", err)

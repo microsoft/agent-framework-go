@@ -84,7 +84,7 @@ func TestMessageIndex_ClassifiesStrategySummaryMessages(t *testing.T) {
 	strategy := &compaction.SummarizationStrategy{
 		Trigger:                compaction.GroupsExceed(2),
 		Summarizer:             compaction.SummarizerFunc(func(context.Context, []*message.Message) (string, error) { return "older context", nil }),
-		MinimumPreservedGroups: 1,
+		MinimumPreservedGroups: new(1),
 	}
 
 	compacted, err := strategy.Compact(t.Context(), index)
@@ -183,8 +183,8 @@ func TestMessageIndex_UpdatePreservesStateFromCompactedProjection(t *testing.T) 
 	strategy := &compaction.SummarizationStrategy{
 		Trigger:                compaction.GroupsExceed(2),
 		Summarizer:             compaction.SummarizerFunc(func(context.Context, []*message.Message) (string, error) { return "older context", nil }),
-		MinimumPreservedGroups: 2,
-		SummarizationPrompt:    "summarize",
+		MinimumPreservedGroups: new(2),
+		SummarizationPrompt:    new("summarize"),
 	}
 
 	compacted, err := strategy.Compact(t.Context(), index)

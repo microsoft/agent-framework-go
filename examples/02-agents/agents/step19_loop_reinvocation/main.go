@@ -67,7 +67,7 @@ func completionMarkerRefinement() {
 		Name: "SloganWriter",
 		Middlewares: []agent.Middleware{
 			loop.New(loop.Config{
-				MaxIterations:            5,
+				MaxIterations:            new(5),
 				FreshContextPerIteration: true,
 				Evaluators: []loop.Evaluator{
 					loop.NewCompletionMarkerEvaluator(loop.CompletionMarkerConfig{Marker: marker}),
@@ -97,7 +97,7 @@ func customEvaluatorStops() {
 		Name: "ReportSummarizer",
 		Middlewares: []agent.Middleware{
 			loop.New(loop.Config{
-				MaxIterations: 4,
+				MaxIterations: new(4),
 				Evaluators:    []loop.Evaluator{approvalEvaluator()},
 			}),
 			logger,
@@ -121,7 +121,7 @@ func customEvaluatorHitsSafetyCap() {
 		Name: "StubbornSummarizer",
 		Middlewares: []agent.Middleware{
 			loop.New(loop.Config{
-				MaxIterations: maxIterations,
+				MaxIterations: new(maxIterations),
 				Evaluators:    []loop.Evaluator{approvalEvaluator()},
 			}),
 			logger,

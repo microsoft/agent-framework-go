@@ -18,6 +18,10 @@ type attrInput struct{ Text string }
 
 type attrOutput struct{ Text string }
 
+type aggregateRecord struct {
+	Values []string
+}
+
 type attrExecutor struct {
 	_          workflow.AttrYieldsOutput[string]
 	NamedYield workflow.AttrYieldsOutput[int]
@@ -347,9 +351,9 @@ func TestExecutor_ExtendProtocolAndLifecycleInOrder(t *testing.T) {
 		AddEvent: func(workflow.Event) error { return nil },
 	}
 	executor := workflow.Executor{
-		ID: "composed",
-		DisableAutoSendMessageHandlerResultObject: true,
-		DisableAutoYieldOutputHandlerResultObject: true,
+		ID:                                 "composed",
+		AutoSendMessageHandlerResultObject: new(false),
+		AutoYieldOutputHandlerResultObject: new(false),
 	}
 	executor.Extend(&workflow.Executor{
 		InitializeFunc: func(*workflow.Context) error {
@@ -447,11 +451,11 @@ func TestExecutor_ExtendProtocolAndLifecycleInOrder(t *testing.T) {
 	}
 
 	want := []string{
+		"routes-1", "routes-2",
 		"initialize-1", "initialize-2",
 		"checkpoint-1", "checkpoint-2",
 		"restored-1", "restored-2",
 		"starting-1", "starting-2",
-		"routes-1", "routes-2",
 		"handler-string", "handler-int",
 		"finished-1", "finished-2",
 		"reset-1", "reset-2",
@@ -546,8 +550,8 @@ func TestExecutorDescribeProtocol_RespectsAutoReturnOptions(t *testing.T) {
 			executor := &workflow.Executor{
 				ID: "protocol",
 
-				DisableAutoSendMessageHandlerResultObject: !testCase.autoSend,
-				DisableAutoYieldOutputHandlerResultObject: !testCase.autoYield,
+				AutoSendMessageHandlerResultObject: new(testCase.autoSend),
+				AutoYieldOutputHandlerResultObject: new(testCase.autoYield),
 				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 					rb.RouteBuilder.AddHandlerRaw(inputType, outputType, func(*workflow.Context, any) (any, error) {
 						return executorProtocolOutput{}, nil
@@ -576,8 +580,8 @@ func TestExecutorDescribeProtocol_IncludesExplicitSendAndYieldTypes(t *testing.T
 	executor := &workflow.Executor{
 		ID: "protocol",
 
-		DisableAutoSendMessageHandlerResultObject: true,
-		DisableAutoYieldOutputHandlerResultObject: true,
+		AutoSendMessageHandlerResultObject: new(false),
+		AutoYieldOutputHandlerResultObject: new(false),
 		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 			rb.
 				SendsMessageType(explicitSend, nil, explicitSend).
@@ -596,6 +600,23 @@ func TestExecutorDescribeProtocol_IncludesExplicitSendAndYieldTypes(t *testing.T
 	if !reflect.DeepEqual(protocol.Yields, []reflect.Type{explicitYield}) {
 		t.Fatalf("Yields = %v, want [%v]", protocol.Yields, explicitYield)
 	}
+}
+
+func TestExecutorDescribeProtocol_PanicsOnConfigurationError(t *testing.T) {
+	want := errors.New("invalid protocol")
+	executor := &workflow.Executor{
+		ConfigureProtocol: func(*workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+			return nil, want
+		},
+	}
+	defer func() {
+		got, ok := recover().(error)
+		if !ok || !errors.Is(got, want) {
+			t.Fatalf("panic = %v, want %v", got, want)
+		}
+	}()
+
+	executor.DescribeProtocol()
 }
 
 func TestExecutorDescribeProtocol_ValueReturnIsAllocFreeAfterBuild(t *testing.T) {
@@ -618,8 +639,8 @@ func executorWithSendTypes(sendTypes ...reflect.Type) *workflow.Executor {
 	return &workflow.Executor{
 		ID: "send-protocol",
 
-		DisableAutoSendMessageHandlerResultObject: true,
-		DisableAutoYieldOutputHandlerResultObject: true,
+		AutoSendMessageHandlerResultObject: new(false),
+		AutoYieldOutputHandlerResultObject: new(false),
 		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 			rb.SendsMessageType(sendTypes...)
 			rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(*workflow.Context, any) (any, error) {
@@ -631,12 +652,7 @@ func executorWithSendTypes(sendTypes ...reflect.Type) *workflow.Executor {
 }
 
 func hasReflectType(types []reflect.Type, typ reflect.Type) bool {
-	for _, candidate := range types {
-		if candidate == typ {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(types, typ)
 }
 
 func TestBindExecutor_RecordsImplementationID(t *testing.T) {
@@ -685,8 +701,8 @@ func TestAddHandlerRaw_WithHandlerOverwrite(t *testing.T) {
 	executor := &workflow.Executor{
 		ID: "overwrite-handler",
 
-		DisableAutoSendMessageHandlerResultObject: true,
-		DisableAutoYieldOutputHandlerResultObject: true,
+		AutoSendMessageHandlerResultObject: new(false),
+		AutoYieldOutputHandlerResultObject: new(false),
 		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 			rb.RouteBuilder.
 				AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[string](), func(*workflow.Context, any) (any, error) {
@@ -716,8 +732,8 @@ func TestAddCatchAll_WithHandlerOverwrite(t *testing.T) {
 	executor := &workflow.Executor{
 		ID: "overwrite-catch-all",
 
-		DisableAutoSendMessageHandlerResultObject: true,
-		DisableAutoYieldOutputHandlerResultObject: true,
+		AutoSendMessageHandlerResultObject: new(false),
+		AutoYieldOutputHandlerResultObject: new(false),
 		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 			rb.RouteBuilder.
 				AddCatchAll(func(*workflow.Context, workflow.PortableValue) (any, error) {
@@ -747,8 +763,8 @@ func TestExecutorExecute_HandlerPanicReportsFailure(t *testing.T) {
 	executor := &workflow.Executor{
 		ID: "panic-handler",
 
-		DisableAutoSendMessageHandlerResultObject: true,
-		DisableAutoYieldOutputHandlerResultObject: true,
+		AutoSendMessageHandlerResultObject: new(false),
+		AutoYieldOutputHandlerResultObject: new(false),
 		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 			rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(*workflow.Context, any) (any, error) {
 				panic("boom")
@@ -795,9 +811,9 @@ func aggregatorBinding(id string, results *[]string) workflow.ExecutorBinding {
 		return &workflow.Executor{
 			ID: id,
 
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
-			OnCheckpointRestoredFunc:                  cache.OnCheckpointRestored,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
+			OnCheckpointRestoredFunc:           cache.OnCheckpointRestored,
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 					s := msg.(string)
@@ -828,14 +844,14 @@ func TestStatefulExecutorCache_AggregatesIncrementally(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
+	stream, err := inproc.Default.OpenStreaming(ctx, wf)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	defer func() { _ = stream.CancelRun() }()
 
 	for _, in := range []string{"a", "b", "c"} {
-		if err := stream.SendMessage(ctx, in); err != nil {
+		if _, err := stream.TrySendMessage(ctx, in); err != nil {
 			t.Fatalf("SendMessage(%q): %v", in, err)
 		}
 	}
@@ -941,14 +957,14 @@ func TestStatefulExecutorCache_NilStateRestartsAggregate(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
+	stream, err := inproc.Default.OpenStreaming(ctx, wf)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	defer func() { _ = stream.CancelRun() }()
 
 	for _, input := range []string{"a", "clear", "b"} {
-		if err := stream.SendMessage(ctx, input); err != nil {
+		if _, err := stream.TrySendMessage(ctx, input); err != nil {
 			t.Fatalf("SendMessage(%q): %v", input, err)
 		}
 	}
@@ -979,8 +995,8 @@ func nullableAggregatorBinding(id string, results *[]string) workflow.ExecutorBi
 		return &workflow.Executor{
 			ID: id,
 
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
 					input := msg.(string)
@@ -1002,6 +1018,115 @@ func nullableAggregatorBinding(id string, results *[]string) workflow.ExecutorBi
 		}, nil
 	}
 	return binding
+}
+
+func TestNewAggregatingExecutor_AggregatesIncrementallyAndNilClearsState(t *testing.T) {
+	var received []string
+	executor := workflow.NewAggregatingExecutor("aggregate", func(aggregate *string, input string) *string {
+		if aggregate == nil {
+			received = append(received, "<nil>")
+		} else {
+			received = append(received, *aggregate)
+		}
+		if input == "clear" {
+			return nil
+		}
+		if aggregate == nil {
+			return new(input)
+		}
+		return new(*aggregate + "+" + input)
+	})
+	binding := executor.Bind()
+	wf, err := workflow.NewBuilder(binding).WithOutputFrom(binding).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	run, err := inproc.Lockstep.Run(t.Context(), wf, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = run.Close(t.Context()) }()
+	if _, err := run.Resume(t.Context(), "b", "clear", "c"); err != nil {
+		t.Fatal(err)
+	}
+
+	var outputs []string
+	for event := range run.OutgoingEvents() {
+		if output, ok := event.(workflow.OutputEvent); ok {
+			outputs = append(outputs, output.Output.(string))
+		}
+	}
+	if want := []string{"a", "a+b", "c"}; !slices.Equal(outputs, want) {
+		t.Fatalf("outputs = %v, want %v", outputs, want)
+	}
+	if want := []string{"<nil>", "a", "a+b", "<nil>"}; !slices.Equal(received, want) {
+		t.Fatalf("aggregates = %v, want %v", received, want)
+	}
+}
+
+func TestNewAggregatingExecutor_JSONCheckpointRestoresPointerAggregate(t *testing.T) {
+	build := func() *workflow.Workflow {
+		executor := workflow.NewAggregatingExecutor("aggregate", func(aggregate **aggregateRecord, input string) **aggregateRecord {
+			next := &aggregateRecord{}
+			if aggregate != nil {
+				next.Values = slices.Clone((*aggregate).Values)
+			}
+			next.Values = append(next.Values, input)
+			return &next
+		})
+		binding := executor.Bind()
+		wf, err := workflow.NewBuilder(binding).WithOutputFrom(binding).Build()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return wf
+	}
+	store, err := checkpoint.NewFileSystemJSONStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	environment := inproc.Lockstep.WithCheckpointing(checkpoint.NewJSONManager(store))
+
+	first, err := environment.Run(t.Context(), build(), "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpointInfo, ok := first.LastCheckpoint()
+	if !ok {
+		t.Fatal("expected checkpoint")
+	}
+	if err := first.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	resumed, err := environment.Resume(t.Context(), build(), checkpointInfo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resumed.Close(t.Context()) }()
+	if _, err := resumed.Resume(t.Context(), "b"); err != nil {
+		t.Fatal(err)
+	}
+
+	var got *aggregateRecord
+	for event := range resumed.NewEvents() {
+		if output, ok := event.(workflow.OutputEvent); ok {
+			got = output.Output.(*aggregateRecord)
+		}
+	}
+	if got == nil || !slices.Equal(got.Values, []string{"a", "b"}) {
+		t.Fatalf("aggregate = %#v, want [a b]", got)
+	}
+}
+
+func TestNewAggregatingExecutor_ImplementationIdentityIncludesTypes(t *testing.T) {
+	strings := workflow.NewAggregatingExecutor("aggregate", func(*string, string) *string { return nil })
+	integers := workflow.NewAggregatingExecutor("aggregate", func(*int, string) *int { return nil })
+	if strings.ImplementationID == integers.ImplementationID {
+		t.Fatalf("ImplementationID = %q for different aggregate types", strings.ImplementationID)
+	}
 }
 
 func TestWorkflow_AllowsReuseSharedExecutorWithoutResetWhenNoResettableExecutors(t *testing.T) {

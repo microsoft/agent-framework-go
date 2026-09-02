@@ -39,6 +39,11 @@ func TestDecodeDataURI(t *testing.T) {
 			uri:     "text/plain,hello",
 			wantErr: true,
 		},
+		{
+			name:    "malformed percent escape",
+			uri:     "data:text/plain,%ZZ",
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

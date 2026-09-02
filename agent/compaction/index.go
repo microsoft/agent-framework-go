@@ -42,8 +42,7 @@ func NewMessageIndex(groups []*MessageGroup, tokenCounter TokenCounter) *Message
 		Groups:       groups,
 		TokenCounter: tokenCounter,
 	}
-	for i := len(groups) - 1; i >= 0; i-- {
-		group := groups[i]
+	for _, group := range slices.Backward(groups) {
 		if index.lastProcessedMessage == nil && group.Kind != GroupKindSummary && len(group.Messages) > 0 {
 			index.lastProcessedMessage = group.Messages[len(group.Messages)-1]
 		}
@@ -91,8 +90,8 @@ func (index *MessageIndex) Update(messages []*message.Message) {
 			messageContentEqual(messages[expected], index.lastProcessedMessage) {
 			foundIndex = expected
 		} else {
-			for i := len(messages) - 1; i >= 0; i-- {
-				if messageContentEqual(messages[i], index.lastProcessedMessage) {
+			for i, message := range slices.Backward(messages) {
+				if messageContentEqual(message, index.lastProcessedMessage) {
 					foundIndex = i
 					break
 				}
@@ -182,7 +181,7 @@ func (index *MessageIndex) AddGroup(kind GroupKind, messages []*message.Message,
 func (index *MessageIndex) IncludedMessages() []*message.Message {
 	var messages []*message.Message
 	for _, group := range index.Groups {
-		if !group.IsExcluded {
+		if group.isIncluded() {
 			messages = append(messages, group.Messages...)
 		}
 	}
@@ -232,7 +231,7 @@ func (index *MessageIndex) TotalTokenCount() int {
 func (index *MessageIndex) IncludedGroupCount() int {
 	var total int
 	for _, group := range index.Groups {
-		if !group.IsExcluded {
+		if group.isIncluded() {
 			total++
 		}
 	}
@@ -243,7 +242,7 @@ func (index *MessageIndex) IncludedGroupCount() int {
 func (index *MessageIndex) IncludedMessageCount() int {
 	var total int
 	for _, group := range index.Groups {
-		if !group.IsExcluded {
+		if group.isIncluded() {
 			total += group.MessageCount
 		}
 	}
@@ -254,7 +253,7 @@ func (index *MessageIndex) IncludedMessageCount() int {
 func (index *MessageIndex) IncludedByteCount() int {
 	var total int
 	for _, group := range index.Groups {
-		if !group.IsExcluded {
+		if group.isIncluded() {
 			total += group.ByteCount
 		}
 	}
@@ -265,7 +264,7 @@ func (index *MessageIndex) IncludedByteCount() int {
 func (index *MessageIndex) IncludedTokenCount() int {
 	var total int
 	for _, group := range index.Groups {
-		if !group.IsExcluded {
+		if group.isIncluded() {
 			total += group.TokenCount
 		}
 	}
@@ -287,7 +286,7 @@ func (index *MessageIndex) TotalTurnCount() int {
 func (index *MessageIndex) IncludedTurnCount() int {
 	seen := make(map[int]bool)
 	for _, group := range index.Groups {
-		if !group.IsExcluded && group.TurnIndex != nil && *group.TurnIndex > 0 {
+		if group.isIncluded() && group.TurnIndex != nil && *group.TurnIndex > 0 {
 			seen[*group.TurnIndex] = true
 		}
 	}
@@ -305,23 +304,13 @@ func (index *MessageIndex) IncludedNonSystemGroupCount() int {
 	return total
 }
 
-func (index *MessageIndex) includedNonSystemGroupIndices() []int {
-	var indices []int
-	for i, group := range index.Groups {
-		if group.isIncludedNonSystem() {
-			indices = append(indices, i)
-		}
-	}
-	return indices
-}
-
 // RawMessageCount returns the number of original messages represented by the index.
 //
 // Summary groups are excluded from this count because they are generated during compaction.
 func (index *MessageIndex) RawMessageCount() int {
 	var total int
 	for _, group := range index.Groups {
-		if group.Kind != GroupKindSummary {
+		if group.isRaw() {
 			total += group.MessageCount
 		}
 	}
@@ -331,7 +320,7 @@ func (index *MessageIndex) RawMessageCount() int {
 func (index *MessageIndex) includedRawMessageCount() int {
 	var total int
 	for _, group := range index.Groups {
-		if !group.IsExcluded && group.Kind != GroupKindSummary {
+		if group.isIncluded() && group.isRaw() {
 			total += group.MessageCount
 		}
 	}

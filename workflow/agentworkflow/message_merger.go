@@ -236,7 +236,7 @@ func foldIdentifierlessMessages(messages []*message.Message) []*message.Message 
 		}
 
 		messages[i] = mergeIdentifierlessMessageIntoNext(current, next)
-		messages = append(messages[:i-1], messages[i:]...)
+		messages = slices.Delete(messages, i-1, i)
 	}
 	return messages
 }

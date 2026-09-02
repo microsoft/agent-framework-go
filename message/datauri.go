@@ -82,7 +82,7 @@ func DecodeDataURI(uri string) (data []byte, mediaType string, err error) {
 		// unescaped bytes directly instead of round-tripping through base64.
 		unescaped, err := url.PathUnescape(parsed.Data)
 		if err != nil {
-			unescaped = parsed.Data
+			return nil, "", fmt.Errorf("invalid data URI format: failed to decode percent-encoded data: %w", err)
 		}
 		return []byte(unescaped), parsed.MediaType, nil
 	}
