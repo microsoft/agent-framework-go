@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"slices"
 	"strings"
 )
 
@@ -33,7 +34,7 @@ func execGH(ctx context.Context, args ...string) (string, error) {
 }
 
 func redactGHArgs(args []string) []string {
-	redacted := append([]string(nil), args...)
+	redacted := slices.Clone(args)
 	for i, arg := range redacted {
 		switch {
 		case arg == "--body" && i+1 < len(redacted):

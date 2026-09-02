@@ -38,8 +38,8 @@ func nonConcurrentBinding(id string) workflow.ExecutorBinding {
 		ID:               id,
 		ImplementationID: "workflow_test.nonConcurrent",
 
-		DisableAutoSendMessageHandlerResultObject: true,
-		DisableAutoYieldOutputHandlerResultObject: true,
+		AutoSendMessageHandlerResultObject: new(false),
+		AutoYieldOutputHandlerResultObject: new(false),
 		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 			rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[string](), func(_ *workflow.Context, msg any) (any, error) {
 				return msg, nil
@@ -126,13 +126,13 @@ func TestInprocConcurrent_RejectsWorkflowOwnedByAnotherRunner(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	stream, err := inproc.OffThread.RunStreaming(ctx, wf, nil)
+	stream, err := inproc.OffThread.OpenStreaming(ctx, wf)
 	if err != nil {
 		t.Fatalf("OffThread.RunStreaming: %v", err)
 	}
 	defer func() { _ = stream.CancelRun() }()
 
-	_, err = inproc.Concurrent.RunStreaming(ctx, wf, nil)
+	_, err = inproc.Concurrent.OpenStreaming(ctx, wf)
 	if err == nil {
 		t.Fatal("Concurrent.RunStreaming should reject a workflow owned by another runner")
 	}
@@ -147,7 +147,7 @@ func TestInprocConcurrent_AcceptsAllConcurrentInStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	stream, err := inproc.Concurrent.RunStreaming(context.Background(), wf, nil)
+	stream, err := inproc.Concurrent.OpenStreaming(context.Background(), wf)
 	if err != nil {
 		t.Fatalf("Concurrent.RunStreaming: %v", err)
 	}

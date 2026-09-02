@@ -14,7 +14,10 @@ import (
 	"strings"
 )
 
-const failedAutoRisk = "failed-auto-risk"
+const (
+	pendingAutoRisk = "pending-auto-risk"
+	failedAutoRisk  = "failed-auto-risk"
+)
 
 type options struct {
 	repo           string

@@ -40,6 +40,7 @@ var managedLabels = []riskLabel{
 	{Name: riskLow, Color: "0E8A16", Description: "Limited blast radius and straightforward rollback"},
 	{Name: riskMedium, Color: "FBCA04", Description: "Contained production impact requiring normal review depth"},
 	{Name: riskHigh, Color: "B60205", Description: "Large blast radius, difficult rollback, or sensitive behavior"},
+	{Name: pendingAutoRisk, Color: "BFDADC", Description: "Automatic risk classification is in progress"},
 	{Name: failedAutoRisk, Color: "6E7781", Description: "Automatic risk classification was inconclusive or failed"},
 }
 

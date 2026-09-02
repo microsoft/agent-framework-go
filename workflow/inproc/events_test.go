@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/microsoft/agent-framework-go/workflow"
+	"github.com/microsoft/agent-framework-go/workflow/checkpoint"
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
 )
 
@@ -107,7 +108,7 @@ func TestStartedEvent_NotEmittedWhenNoWork(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
+	stream, err := inproc.Default.OpenStreaming(ctx, wf)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -137,7 +138,7 @@ func TestStartedEvent_EmittedInLockstepWithoutWork(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
+	stream, err := inproc.Lockstep.OpenStreaming(ctx, wf)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -172,8 +173,8 @@ func askOnceBinding(id string) workflow.ExecutorBinding {
 		return &workflow.Executor{
 			ID: id,
 
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.YieldsOutputType(reflect.TypeFor[string]())
 				rb.RouteBuilder.
@@ -217,12 +218,8 @@ func respondWhenPending(ctx context.Context, stream *inproc.StreamingRun, resp *
 	}
 }
 
-// TestStartedEvent_EmittedPerContinuationCycle verifies that a StartedEvent is
-// raised for every input → processing → halt cycle, including the continuation
-// cycle that runs after an external response is supplied. The streaming
-// (OffThread) run loop already emits one StartedEvent per cycle; Lockstep's
-// blocking WatchStream drives multiple cycles from a single TakeEventStream
-// call and must match that per-cycle semantics.
+// TestStartedEvent_EmittedPerContinuationCycle verifies that each execution
+// mode emits one start event for every input-to-halt cycle that processes work.
 func TestStartedEvent_EmittedPerContinuationCycle(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -273,8 +270,9 @@ func TestStartedEvent_EmittedPerContinuationCycle(t *testing.T) {
 			if got, want := gotOutput, any("Alice"); got != want {
 				t.Errorf("output = %v, want %v", got, want)
 			}
-			if startedCount != 2 {
-				t.Errorf("StartedEvent count = %d, want 2 (one per continuation cycle)", startedCount)
+			wantStarted := 2
+			if startedCount != wantStarted {
+				t.Errorf("StartedEvent count = %d, want %d", startedCount, wantStarted)
 			}
 		})
 	}
@@ -344,6 +342,42 @@ func TestRun_ResumeAcceptsMessages(t *testing.T) {
 	}
 }
 
+func TestRun_NewEventsAdvancesBookmarkBeforeIteration(t *testing.T) {
+	ex := minimalEchoBinding("ex")
+	wf, err := workflow.NewBuilder(ex).WithOutputFrom(ex).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	ctx := context.Background()
+	run, err := inproc.Default.Run(ctx, wf, "hi")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	total := run.NewEventCount()
+	if total < 2 {
+		t.Fatalf("need at least 2 new events to exercise an early break, got %d", total)
+	}
+
+	// Consume exactly one event, then stop iterating.
+	consumed := 0
+	for range run.NewEvents() {
+		consumed++
+		break
+	}
+	if consumed != 1 {
+		t.Fatalf("consumed = %d, want 1", consumed)
+	}
+
+	if got, want := run.NewEventCount(), 0; got != want {
+		t.Errorf("NewEventCount after early break = %d, want %d", got, want)
+	}
+	if got, want := len(slices.Collect(run.NewEvents())), 0; got != want {
+		t.Errorf("re-iterated new events after early break = %d, want %d", got, want)
+	}
+}
+
 func TestRunAndStreamingRun_ProduceEquivalentOutputs(t *testing.T) {
 	ex := minimalEchoBinding("ex")
 	wf, err := workflow.NewBuilder(ex).WithOutputFrom(ex).Build()
@@ -381,14 +415,14 @@ func TestStreamingRun_AcceptsSequentialMessages(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
+	stream, err := inproc.Default.OpenStreaming(ctx, wf)
 	if err != nil {
 		t.Fatalf("RunStreaming: %v", err)
 	}
 	defer func() { _ = stream.CancelRun() }()
 
 	for _, message := range []string{"first", "second"} {
-		if err := stream.SendMessage(ctx, message); err != nil {
+		if _, err := stream.TrySendMessage(ctx, message); err != nil {
 			t.Fatalf("SendMessage(%q): %v", message, err)
 		}
 		outputs := collectStreamingOutputValues(t, ctx, stream)
@@ -405,7 +439,8 @@ func TestStreamingRun_AcceptsSequentialMessages(t *testing.T) {
 	}
 }
 
-func TestStreamingRun_SendMessageReturnsErrInvalidInputType(t *testing.T) {
+// Concurrent callers may enqueue input on the same StreamingRun. Run with -race.
+func TestStreamingRun_ConcurrentSendMessage_NoDataRace(t *testing.T) {
 	ex := minimalEchoBinding("ex")
 	wf, err := workflow.NewBuilder(ex).WithOutputFrom(ex).Build()
 	if err != nil {
@@ -413,15 +448,235 @@ func TestStreamingRun_SendMessageReturnsErrInvalidInputType(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
+	stream, err := inproc.Default.OpenStreaming(ctx, wf)
+	if err != nil {
+		t.Fatalf("RunStreaming: %v", err)
+	}
+	defer func() { _ = stream.Close(ctx) }()
+
+	const senders = 64
+	start := make(chan struct{})
+	errs := make(chan error, senders)
+	var wg sync.WaitGroup
+	wg.Add(senders)
+	for range senders {
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := stream.TrySendMessage(ctx, "message")
+			errs <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Errorf("SendMessage: %v", err)
+		}
+	}
+}
+
+func TestStreamingRun_TrySendMessageReturnsFalseForInvalidInput(t *testing.T) {
+	ex := minimalEchoBinding("ex")
+	wf, err := workflow.NewBuilder(ex).WithOutputFrom(ex).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	ctx := context.Background()
+	stream, err := inproc.Default.OpenStreaming(ctx, wf)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
-	defer func() { _ = stream.CancelRun() }()
+	defer func() { _ = stream.Close(ctx) }()
 
-	err = stream.SendMessage(ctx, 42)
-	if !errors.Is(err, workflow.ErrInvalidInputType) {
-		t.Fatalf("SendMessage error = %v, want ErrInvalidInputType", err)
+	accepted, err := stream.TrySendMessage(ctx, 42)
+	if err != nil {
+		t.Fatalf("TrySendMessage error = %v", err)
+	}
+	if accepted {
+		t.Fatal("TrySendMessage accepted invalid input")
+	}
+}
+
+func TestExecutionEnvironment_RunStreamingInvalidInputReturnsClosableRun(t *testing.T) {
+	ex := minimalEchoBinding("ex")
+	wf, err := workflow.NewBuilder(ex).WithOutputFrom(ex).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	ctx := context.Background()
+	stream, err := inproc.Default.RunStreaming(ctx, wf, 42)
+	if err != nil {
+		t.Fatalf("RunStreaming invalid input: %v", err)
+	}
+	if err := stream.Close(ctx); err != nil {
+		t.Fatalf("Close invalid run: %v", err)
+	}
+
+	stream, err = inproc.Default.RunStreaming(ctx, wf, "valid")
+	if err != nil {
+		t.Fatalf("RunStreaming after close: %v", err)
+	}
+	if err := stream.Close(ctx); err != nil {
+		t.Fatalf("Close valid run: %v", err)
+	}
+}
+
+func TestExecutionEnvironment_RunMethodsRejectNilInput(t *testing.T) {
+	ex := minimalEchoBinding("ex")
+	wf, err := workflow.NewBuilder(ex).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := inproc.Default.RunStreaming(t.Context(), wf, nil); err == nil {
+		t.Fatal("RunStreaming(nil) error = nil, want error")
+	}
+	if _, err := inproc.Default.Run(t.Context(), wf, nil); err == nil {
+		t.Fatal("Run(nil) error = nil, want error")
+	}
+	stream, err := inproc.Default.OpenStreaming(t.Context(), wf)
+	if err != nil {
+		t.Fatalf("OpenStreaming() error = %v", err)
+	}
+	if err := stream.Close(t.Context()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestExecutionEnvironment_RunStreamingPropagatesStartExecutorInitializationError(t *testing.T) {
+	expected := errors.New("initialize start executor")
+	binding := workflow.ExecutorBinding{ID: "start", ImplementationID: "start"}
+	binding.NewExecutorFunc = func(string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: binding.ID,
+			InitializeFunc: func(*workflow.Context) error {
+				return expected
+			},
+			ConfigureProtocol: func(builder *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				builder.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(*workflow.Context, any) (any, error) {
+					return nil, nil
+				})
+				return builder, nil
+			},
+		}, nil
+	}
+	wf, err := workflow.NewBuilder(binding).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := inproc.Default.RunStreaming(t.Context(), wf, "message"); !errors.Is(err, expected) {
+		t.Fatalf("RunStreaming() error = %v, want %v", err, expected)
+	}
+}
+
+func TestExecutionEnvironment_RunStreamingPropagatesRuntimeProtocolError(t *testing.T) {
+	expected := errors.New("configure runtime protocol")
+	binding := workflow.ExecutorBinding{ID: "start", ImplementationID: "start"}
+	binding.NewExecutorFunc = func(sessionID string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: binding.ID,
+			ConfigureProtocol: func(builder *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				if sessionID != "" {
+					return nil, expected
+				}
+				builder.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(*workflow.Context, any) (any, error) {
+					return nil, nil
+				})
+				return builder, nil
+			},
+		}, nil
+	}
+	wf, err := workflow.NewBuilder(binding).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := inproc.Default.RunStreaming(t.Context(), wf, "message"); !errors.Is(err, expected) {
+		t.Fatalf("RunStreaming() error = %v, want %v", err, expected)
+	}
+}
+
+func TestExecutionEnvironment_RunInvalidInputReturnsClosableRun(t *testing.T) {
+	ex := minimalEchoBinding("ex")
+	wf, err := workflow.NewBuilder(ex).WithOutputFrom(ex).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	ctx := context.Background()
+	run, err := inproc.Default.Run(ctx, wf, 42)
+	if err != nil {
+		t.Fatalf("Run invalid input: %v", err)
+	}
+	if err := run.Close(ctx); err != nil {
+		t.Fatalf("Close invalid run: %v", err)
+	}
+
+	run, err = inproc.Default.Run(ctx, wf, "valid")
+	if err != nil {
+		t.Fatalf("Run after close: %v", err)
+	}
+	if err := run.Close(ctx); err != nil {
+		t.Fatalf("Close valid run: %v", err)
+	}
+}
+
+func TestExecutionEnvironment_FailedResumeReleasesOwnership(t *testing.T) {
+	ex := minimalEchoBinding("ex")
+	wf, err := workflow.NewBuilder(ex).WithOutputFrom(ex).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	ctx := context.Background()
+	env := inproc.Default.WithCheckpointing(checkpoint.NewInMemoryManager())
+	_, err = env.ResumeStreaming(ctx, wf, workflow.CheckpointInfo{SessionID: "session", CheckpointID: "missing"})
+	if err == nil {
+		t.Fatal("ResumeStreaming error = nil")
+	}
+
+	stream, err := env.RunStreaming(ctx, wf, "valid")
+	if err != nil {
+		t.Fatalf("RunStreaming after failed resume: %v", err)
+	}
+	if err := stream.Close(ctx); err != nil {
+		t.Fatalf("Close valid run: %v", err)
+	}
+}
+
+func TestStreamingRun_SendMessageAfterCancelReturnsError(t *testing.T) {
+	ex := minimalEchoBinding("ex")
+	wf, err := workflow.NewBuilder(ex).WithOutputFrom(ex).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	ctx := context.Background()
+	stream, err := inproc.Default.OpenStreaming(ctx, wf)
+	if err != nil {
+		t.Fatalf("RunStreaming: %v", err)
+	}
+	defer func() { _ = stream.Close(ctx) }()
+
+	if err := stream.CancelRun(); err != nil {
+		t.Fatalf("CancelRun: %v", err)
+	}
+	status, err := stream.GetStatus(ctx)
+	if err != nil {
+		t.Fatalf("GetStatus: %v", err)
+	}
+	if status != inproc.RunStatusEnded {
+		t.Fatalf("status after CancelRun = %v, want Ended", status)
+	}
+	accepted, err := stream.TrySendMessage(ctx, "message")
+	if err == nil || accepted {
+		t.Fatalf("TrySendMessage after CancelRun = (%v, %v), want (false, error)", accepted, err)
 	}
 }
 
@@ -442,7 +697,7 @@ func TestRunAndStreamingRun_CheckpointableDefaults(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
+	stream, err := inproc.Default.OpenStreaming(ctx, wf)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -493,7 +748,7 @@ func collectStreamingOutputValues(t *testing.T, ctx context.Context, stream *inp
 
 func sendStreamingMessage(t *testing.T, stream *inproc.StreamingRun, ctx context.Context, message any) {
 	t.Helper()
-	if err := stream.SendMessage(ctx, message); err != nil {
+	if _, err := stream.TrySendMessage(ctx, message); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
 }
@@ -776,6 +1031,40 @@ func TestDeliveryEvents_FinishedRunsEvenWhenHandlerErrors(t *testing.T) {
 	}
 	if got := finishedCalls.Load(); got != 1 {
 		t.Errorf("OnMessageDeliveryFinished called %d times, want 1", got)
+	}
+}
+
+func TestDeliveryEvents_FinishedRunsEvenWhenStartingErrors(t *testing.T) {
+	finishedCalls := atomic.Int64{}
+	id := "start-boom"
+	binding := workflow.ExecutorBinding{ID: id, ImplementationID: "*workflow.Executor"}
+	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: id,
+			OnMessageDeliveryStartingFunc: func(_ *workflow.Context) error {
+				return errBoom
+			},
+			OnMessageDeliveryFinishedFunc: func(_ *workflow.Context) error {
+				finishedCalls.Add(1)
+				return nil
+			},
+			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(_ *workflow.Context, _ any) (any, error) {
+					return nil, nil
+				})
+				return rb, nil
+			},
+		}, nil
+	}
+	wf, err := workflow.NewBuilder(binding).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inproc.Default.Run(t.Context(), wf, "x"); err != nil {
+		t.Fatal(err)
+	}
+	if got := finishedCalls.Load(); got != 1 {
+		t.Fatalf("OnMessageDeliveryFinished called %d times, want 1", got)
 	}
 }
 

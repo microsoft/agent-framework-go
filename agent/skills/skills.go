@@ -50,6 +50,9 @@ type Source interface {
 type SourceFunc func(context.Context) ([]*Skill, error)
 
 func (f SourceFunc) Skills(ctx context.Context) ([]*Skill, error) {
+	if f == nil {
+		return nil, fmt.Errorf("skills: source function is nil")
+	}
 	return f(ctx)
 }
 

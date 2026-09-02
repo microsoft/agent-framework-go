@@ -97,6 +97,28 @@ func TestStreamingRunEventStream_NoWorkWakeupDoesNotOpenWorkflowRunSpan(t *testi
 	}
 }
 
+func TestLockstepRunEventStream_EarlyStopEndsWorkflowRunSpan(t *testing.T) {
+	tracer := workflowtest.NewRecordingTracer()
+	wf, err := workflow.NewBuilder((&workflow.Executor{ID: "start", ImplementationID: "workflow_test.start"}).Bind()).
+		WithTelemetry(tracer, workflow.TelemetryOptions{}).
+		Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runner := newTestSuperStepRunner()
+	runner.wf = wf
+	stream := newLockstepRunEventStream(runner)
+	defer stream.Stop()
+
+	for range stream.TakeEventStream(t.Context(), false) {
+		break
+	}
+
+	span := workflowtest.FindSpanWithPrefix(t, tracer.Spans(), observability.ActivityWorkflowInvoke)
+	span.RequireEnded(t)
+}
+
 // TestLockstepRunEventStream_StaleWakeupBeforeWorkStillEmitsStartedEvent is a
 // regression test for a race in the lockstep continuation cycle. The input
 // signal is a binary semaphore, so a stale/leftover signal can wake the run
@@ -196,6 +218,90 @@ func TestLockstepRunEventStream_StaleWakeupBeforeWorkStillEmitsStartedEvent(t *t
 	}
 }
 
+type declaredEnqueueMessage interface {
+	declaredEnqueueMessage()
+}
+
+type concreteEnqueueMessage struct{}
+
+func (concreteEnqueueMessage) declaredEnqueueMessage() {}
+
+func TestRunHandle_EnqueueMessageUntyped_DefaultsToRuntimeType(t *testing.T) {
+	runner := newTestSuperStepRunner()
+	handle := newTestRunHandle(t, runner)
+	message := concreteEnqueueMessage{}
+
+	accepted, err := handle.EnqueueMessageUntyped(t.Context(), message, nil)
+	if err != nil || !accepted {
+		t.Fatalf("EnqueueMessageUntyped() = (%v, %v), want (true, nil)", accepted, err)
+	}
+	if runner.enqueuedMessage != message || runner.enqueuedType != reflect.TypeFor[concreteEnqueueMessage]() {
+		t.Fatalf("enqueued message/type = (%#v, %v), want runtime concrete type", runner.enqueuedMessage, runner.enqueuedType)
+	}
+}
+
+func TestRunHandle_EnqueueMessageUntyped_ForwardsDeclaredType(t *testing.T) {
+	runner := newTestSuperStepRunner()
+	handle := newTestRunHandle(t, runner)
+	message := concreteEnqueueMessage{}
+	declaredType := reflect.TypeFor[declaredEnqueueMessage]()
+
+	accepted, err := handle.EnqueueMessageUntyped(t.Context(), message, declaredType)
+	if err != nil || !accepted {
+		t.Fatalf("EnqueueMessageUntyped() = (%v, %v), want (true, nil)", accepted, err)
+	}
+	if runner.enqueuedType != declaredType {
+		t.Fatalf("enqueued type = %v, want %v", runner.enqueuedType, declaredType)
+	}
+}
+
+func TestRunHandle_EnqueueMessageUntyped_RejectsIncompatibleDeclaredType(t *testing.T) {
+	runner := newTestSuperStepRunner()
+	handle := newTestRunHandle(t, runner)
+
+	if _, err := handle.EnqueueMessageUntyped(t.Context(), "message", reflect.TypeFor[int]()); err == nil {
+		t.Fatal("EnqueueMessageUntyped() error = nil, want incompatible declared type error")
+	}
+	if runner.enqueuedMessage != nil {
+		t.Fatal("step runner received an incompatible message")
+	}
+}
+
+func TestRunHandle_EnqueueMessageUntyped_UsesDeclaredTypeForExternalResponse(t *testing.T) {
+	response := &workflow.ExternalResponse{}
+
+	externalRunner := newTestSuperStepRunner()
+	externalHandle := newTestRunHandle(t, externalRunner)
+	accepted, err := externalHandle.EnqueueMessageUntyped(t.Context(), response, reflect.TypeFor[*workflow.ExternalResponse]())
+	if err != nil || !accepted {
+		t.Fatalf("external response enqueue = (%v, %v), want (true, nil)", accepted, err)
+	}
+	if externalRunner.enqueuedResponse != response || externalRunner.enqueuedMessage != nil {
+		t.Fatal("ExternalResponse declared type did not use the response path")
+	}
+
+	objectRunner := newTestSuperStepRunner()
+	objectHandle := newTestRunHandle(t, objectRunner)
+	accepted, err = objectHandle.EnqueueMessageUntyped(t.Context(), response, reflect.TypeFor[any]())
+	if err != nil || !accepted {
+		t.Fatalf("object-declared response enqueue = (%v, %v), want (true, nil)", accepted, err)
+	}
+	if objectRunner.enqueuedResponse != nil || objectRunner.enqueuedMessage != response || objectRunner.enqueuedType != reflect.TypeFor[any]() {
+		t.Fatal("ExternalResponse declared as any did not use the ordinary message path")
+	}
+}
+
+func newTestRunHandle(t *testing.T, runner *testSuperStepRunner) *RunHandle {
+	t.Helper()
+	stream := newLockstepRunEventStream(runner)
+	t.Cleanup(stream.Stop)
+	return &RunHandle{
+		stepRunner:  runner,
+		eventStream: stream,
+		endRunCtx:   context.Background(),
+	}
+}
+
 func waitForEventHandlerCount(t *testing.T, sink *ConcurrentEventSink, want int) {
 	t.Helper()
 	deadline := time.After(time.Second)
@@ -215,8 +321,11 @@ func waitForEventHandlerCount(t *testing.T, sink *ConcurrentEventSink, want int)
 }
 
 type testSuperStepRunner struct {
-	outgoingEvents *ConcurrentEventSink
-	wf             *workflow.Workflow
+	outgoingEvents   *ConcurrentEventSink
+	wf               *workflow.Workflow
+	enqueuedMessage  any
+	enqueuedType     reflect.Type
+	enqueuedResponse *workflow.ExternalResponse
 
 	// Optional hooks. When set, they override the default behavior. They let
 	// tests script a run (e.g. an input → request → response → output cycle)
@@ -261,13 +370,20 @@ func (r *testSuperStepRunner) HasUnprocessedMessages() bool {
 
 func (r *testSuperStepRunner) RepublishPendingEvents(context.Context) error { return nil }
 
-func (r *testSuperStepRunner) EnqueueResponse(context.Context, *workflow.ExternalResponse) error {
+func (r *testSuperStepRunner) EnqueueResponse(_ context.Context, response *workflow.ExternalResponse) error {
+	r.enqueuedResponse = response
 	return nil
 }
 
-func (r *testSuperStepRunner) IsValidInputType(context.Context, reflect.Type) bool { return true }
+func (r *testSuperStepRunner) IsValidInputType(context.Context, reflect.Type) (bool, error) {
+	return true, nil
+}
 
-func (r *testSuperStepRunner) EnqueueMessage(context.Context, any) error { return nil }
+func (r *testSuperStepRunner) EnqueueMessageUntyped(_ context.Context, message any, declaredType reflect.Type) (bool, error) {
+	r.enqueuedMessage = message
+	r.enqueuedType = declaredType
+	return true, nil
+}
 
 func (r *testSuperStepRunner) OutgoingEvents() *ConcurrentEventSink { return r.outgoingEvents }
 

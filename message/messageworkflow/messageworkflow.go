@@ -14,20 +14,22 @@ import (
 )
 
 // Options configures the chat-message workflow behavior applied by Configure.
-// StateKey and TakeTurnHandler are required; Configure panics if StateKey is
-// empty or TakeTurnHandler is nil. The remaining fields are optional.
+// StateKey and TakeTurnHandler are required; Configure panics if options is nil,
+// StateKey is empty, or TakeTurnHandler is nil. The remaining fields are optional.
 type Options struct {
 	// StateKey identifies the accumulated turn state within the workflow.
 	StateKey string
 	// TakeTurnHandler is invoked with the accumulated messages when a turn token arrives.
 	TakeTurnHandler func(ctx *workflow.Context, token workflow.TurnToken, messages []*message.Message) error
 
-	// StringMessageRole, when set, registers a handler that wraps incoming string messages with this role.
-	StringMessageRole string
+	// StringMessageRole, when set, registers a handler that wraps incoming
+	// string messages with this role.
+	StringMessageRole message.Role
 	// ScopeName scopes the accumulated turn state; used when constructing a default MessageState.
 	ScopeName string
-	// DisableAutoSendTurnToken suppresses automatically declaring and forwarding the turn token.
-	DisableAutoSendTurnToken bool
+	// AutoSendTurnToken controls whether the turn token is automatically declared
+	// and forwarded. The default is true.
+	AutoSendTurnToken *bool
 	// MessageState supplies an existing accumulator; when nil a new one is created from StateKey and ScopeName.
 	MessageState *MessageState
 }
@@ -36,6 +38,10 @@ type Options struct {
 // It wraps a StatefulExecutorCache holding the slice of messages received so far.
 type MessageState struct {
 	cache workflow.StatefulExecutorCache[[]*message.Message]
+}
+
+func (o *Options) autoSendTurnToken() bool {
+	return o.AutoSendTurnToken == nil || *o.AutoSendTurnToken
 }
 
 // NewMessageState returns a MessageState whose accumulated messages are keyed
@@ -70,12 +76,20 @@ func Configure(executor *workflow.Executor, options *Options) {
 	if executor == nil {
 		panic("messageworkflow: executor is required")
 	}
+	if options == nil {
+		panic("messageworkflow: options are required")
+	}
 	if options.StateKey == "" {
 		panic("stateKey is required")
 	}
 	if options.TakeTurnHandler == nil {
 		panic("TakeTurnHandler is required")
 	}
+	configured := *options
+	if configured.AutoSendTurnToken != nil {
+		configured.AutoSendTurnToken = new(*configured.AutoSendTurnToken)
+	}
+	options = &configured
 	state := options.MessageState
 	if state == nil {
 		state = NewMessageState(options.StateKey, options.ScopeName)
@@ -86,11 +100,11 @@ func Configure(executor *workflow.Executor, options *Options) {
 			return state.Reset()
 		},
 		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-			if !options.DisableAutoSendTurnToken {
+			if options.autoSendTurnToken() {
 				rb.SendsMessageType(reflect.TypeFor[workflow.TurnToken]())
 			}
 			if options.StringMessageRole != "" {
-				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, accumulateStringMessage(state, message.Role(options.StringMessageRole)))
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, accumulateStringMessage(state, options.StringMessageRole))
 			}
 			rb.RouteBuilder.
 				AddHandlerRaw(reflect.TypeFor[*message.Message](), nil, accumulateMessage(state)).
@@ -143,7 +157,7 @@ func takeAccumulatedTurn(state *MessageState, options *Options) func(*workflow.C
 			if err := options.TakeTurnHandler(ctx, token, messages); err != nil {
 				return nil, err
 			}
-			if !options.DisableAutoSendTurnToken {
+			if options.autoSendTurnToken() {
 				if err := ctx.SendMessage("", token); err != nil {
 					return nil, err
 				}

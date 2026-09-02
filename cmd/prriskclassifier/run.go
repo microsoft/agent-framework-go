@@ -21,14 +21,19 @@ func classifyPullRequest(ctx context.Context, client riskClient, number int) (cl
 	decision := classifyDeterministically(files, labels)
 	result := classificationResult{Decision: decision, NeedsAgent: decision.Label == ""}
 	if result.NeedsAgent {
-		if !slices.Contains(labels, failedAutoRisk) {
-			if err := client.addLabel(ctx, number, failedAutoRisk); err != nil {
+		if !slices.Contains(labels, pendingAutoRisk) {
+			if err := client.addLabel(ctx, number, pendingAutoRisk); err != nil {
 				return classificationResult{}, fmt.Errorf("mark semantic risk classification pending: %w", err)
 			}
 		}
 		for _, label := range currentRiskLabels(labels) {
 			if err := client.removeLabel(ctx, number, label); err != nil {
 				return classificationResult{}, fmt.Errorf("clear stale %s before semantic review: %w", label, err)
+			}
+		}
+		if slices.Contains(labels, failedAutoRisk) {
+			if err := client.removeLabel(ctx, number, failedAutoRisk); err != nil {
+				return classificationResult{}, fmt.Errorf("clear stale %s before semantic review: %w", failedAutoRisk, err)
 			}
 		}
 		return result, nil
@@ -67,12 +72,20 @@ func validatePullRequestRisk(ctx context.Context, client riskClient, number int)
 	}
 
 	riskLabels := currentRiskLabels(labels)
+	hasPendingMarker := slices.Contains(labels, pendingAutoRisk)
 	hasFailureMarker := slices.Contains(labels, failedAutoRisk)
-	if (len(riskLabels) == 1 && !hasFailureMarker) || (len(riskLabels) == 0 && hasFailureMarker) {
+	if !hasPendingMarker && ((len(riskLabels) == 1 && !hasFailureMarker) || (len(riskLabels) == 0 && hasFailureMarker)) {
 		return nil
 	}
 
-	cause := fmt.Errorf("invalid automatic risk state: risk labels=%v, %s=%t", riskLabels, failedAutoRisk, hasFailureMarker)
+	cause := fmt.Errorf(
+		"invalid automatic risk state: risk labels=%v, %s=%t, %s=%t",
+		riskLabels,
+		pendingAutoRisk,
+		hasPendingMarker,
+		failedAutoRisk,
+		hasFailureMarker,
+	)
 	if !hasFailureMarker {
 		if err := client.addLabel(ctx, number, failedAutoRisk); err != nil {
 			return errors.Join(cause, fmt.Errorf("add %s: %w", failedAutoRisk, err))
@@ -81,6 +94,11 @@ func validatePullRequestRisk(ctx context.Context, client riskClient, number int)
 	for _, label := range riskLabels {
 		if err := client.removeLabel(ctx, number, label); err != nil {
 			return errors.Join(cause, fmt.Errorf("remove invalid %s: %w", label, err))
+		}
+	}
+	if hasPendingMarker {
+		if err := client.removeLabel(ctx, number, pendingAutoRisk); err != nil {
+			return errors.Join(cause, fmt.Errorf("remove invalid %s: %w", pendingAutoRisk, err))
 		}
 	}
 	return cause

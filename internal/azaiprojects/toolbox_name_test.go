@@ -39,12 +39,10 @@ func TestValidateToolboxNamePathSegment(t *testing.T) {
 	}
 
 	for _, endpoint := range endpoints {
-		endpoint := endpoint
 		t.Run("endpoint="+endpoint, func(t *testing.T) {
 			t.Parallel()
 
 			for _, name := range validNames {
-				name := name
 				t.Run("valid/"+name, func(t *testing.T) {
 					t.Parallel()
 
@@ -55,7 +53,6 @@ func TestValidateToolboxNamePathSegment(t *testing.T) {
 			}
 
 			for _, name := range invalidNames {
-				name := name
 				t.Run("invalid/"+name, func(t *testing.T) {
 					t.Parallel()
 

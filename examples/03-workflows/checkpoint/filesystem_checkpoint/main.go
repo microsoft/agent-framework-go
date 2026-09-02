@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/workflow"
@@ -169,7 +169,7 @@ func listCheckpointFiles(dir string) {
 	for _, entry := range entries {
 		names = append(names, entry.Name())
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	demo.Assistantf("Files written under %s:", dir)
 	for _, name := range names {
 		demo.Assistantf("  - %s", filepath.Join(dir, name))

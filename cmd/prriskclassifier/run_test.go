@@ -44,7 +44,7 @@ func (f *fakeRiskClient) removeLabel(_ context.Context, _ int, label string) err
 func TestClassifyPullRequestDeterministicLowReconcilesLabels(t *testing.T) {
 	client := &fakeRiskClient{
 		files:  []string{"docs/guide.md"},
-		labels: []string{"size:small", "kind:docs", riskHigh, failedAutoRisk},
+		labels: []string{"size:small", "kind:docs", riskHigh, pendingAutoRisk, failedAutoRisk},
 	}
 	result, err := classifyPullRequest(context.Background(), client, 42)
 	if err != nil {
@@ -56,7 +56,7 @@ func TestClassifyPullRequestDeterministicLowReconcilesLabels(t *testing.T) {
 	if !client.ensured || !slices.Equal(client.added, []string{riskLow}) {
 		t.Fatalf("ensured = %t, added = %v", client.ensured, client.added)
 	}
-	if !slices.Equal(client.removed, []string{riskHigh, failedAutoRisk}) {
+	if !slices.Equal(client.removed, []string{riskHigh, pendingAutoRisk, failedAutoRisk}) {
 		t.Fatalf("removed = %v", client.removed)
 	}
 }
@@ -78,10 +78,10 @@ func TestClassifyPullRequestDeterministicNoop(t *testing.T) {
 	}
 }
 
-func TestClassifyPullRequestInconclusiveMarksUnableAndClearsStaleRisk(t *testing.T) {
+func TestClassifyPullRequestInconclusiveMarksPendingAndClearsStaleResult(t *testing.T) {
 	client := &fakeRiskClient{
 		files:  []string{"provider/openaiprovider/openai.go"},
-		labels: []string{"kind:code", riskMedium},
+		labels: []string{"kind:code", riskMedium, failedAutoRisk},
 	}
 	result, err := classifyPullRequest(context.Background(), client, 42)
 	if err != nil {
@@ -90,7 +90,7 @@ func TestClassifyPullRequestInconclusiveMarksUnableAndClearsStaleRisk(t *testing
 	if result.Decision.Label != "" || !result.NeedsAgent {
 		t.Fatalf("result = %+v", result)
 	}
-	if !slices.Equal(client.added, []string{failedAutoRisk}) || !slices.Equal(client.removed, []string{riskMedium}) {
+	if !slices.Equal(client.added, []string{pendingAutoRisk}) || !slices.Equal(client.removed, []string{riskMedium, failedAutoRisk}) {
 		t.Fatalf("added = %v, removed = %v", client.added, client.removed)
 	}
 }
@@ -98,7 +98,7 @@ func TestClassifyPullRequestInconclusiveMarksUnableAndClearsStaleRisk(t *testing
 func TestClassifyPullRequestInconclusiveDoesNotDuplicateMarker(t *testing.T) {
 	client := &fakeRiskClient{
 		files:  []string{"provider/openaiprovider/openai.go"},
-		labels: []string{"kind:code", failedAutoRisk},
+		labels: []string{"kind:code", pendingAutoRisk},
 	}
 	result, err := classifyPullRequest(context.Background(), client, 42)
 	if err != nil {
@@ -170,5 +170,31 @@ func TestValidatePullRequestRiskClearsStaleRiskOnAbstention(t *testing.T) {
 	}
 	if len(client.added) != 0 || !slices.Equal(client.removed, []string{riskHigh}) {
 		t.Fatalf("added=%v removed=%v", client.added, client.removed)
+	}
+}
+
+func TestValidatePullRequestRiskConvertsPendingResultToUnable(t *testing.T) {
+	client := &fakeRiskClient{labels: []string{pendingAutoRisk}}
+	if err := validatePullRequestRisk(context.Background(), client, 42); err == nil {
+		t.Fatal("validation unexpectedly succeeded")
+	}
+	if !slices.Equal(client.added, []string{failedAutoRisk}) {
+		t.Fatalf("added=%v", client.added)
+	}
+	if !slices.Equal(client.removed, []string{pendingAutoRisk}) {
+		t.Fatalf("removed=%v", client.removed)
+	}
+}
+
+func TestValidatePullRequestRiskRejectsConfidentResultWithPendingMarker(t *testing.T) {
+	client := &fakeRiskClient{labels: []string{riskMedium, pendingAutoRisk}}
+	if err := validatePullRequestRisk(context.Background(), client, 42); err == nil {
+		t.Fatal("validation unexpectedly succeeded")
+	}
+	if !slices.Equal(client.added, []string{failedAutoRisk}) {
+		t.Fatalf("added=%v", client.added)
+	}
+	if !slices.Equal(client.removed, []string{riskMedium, pendingAutoRisk}) {
+		t.Fatalf("removed=%v", client.removed)
 	}
 }

@@ -2,6 +2,7 @@
 description: Classifies Agent Framework pull request risk when deterministic rules are inconclusive
 tracker-id: classify-pull-request-risk
 on:
+   roles: all
    workflow_call:
       inputs:
          pr_number:
@@ -17,6 +18,7 @@ on:
 concurrency:
    group: "gh-aw-${{ github.workflow }}-${{ github.repository }}-${{ inputs.pr_number }}"
    cancel-in-progress: true
+checkout: false
 permissions:
    contents: read
    issues: read
@@ -47,8 +49,9 @@ safe-outputs:
          - risk:low
          - risk:medium
          - risk:high
+         - pending-auto-risk
          - failed-auto-risk
-      max: 4
+      max: 5
       target: "${{ inputs.pr_number }}"
 timeout-minutes: 10
 ---
@@ -57,7 +60,7 @@ timeout-minutes: 10
 
 Classify pull request `${{ inputs.pr_number }}` in `${{ github.repository }}` only when the evidence supports one risk level with high confidence.
 
-The deterministic classifier already handled unambiguous low-risk changes. This agent reviews every production or otherwise ambiguous change. A wrong risk label is worse than abstaining. Before this agent starts, the deterministic stage adds `failed-auto-risk` and clears every existing risk label. A confident classification must therefore actively add one risk label and remove the marker.
+The deterministic classifier already handled unambiguous low-risk changes. This agent reviews every production or otherwise ambiguous change. A wrong risk label is worse than abstaining. Before this agent starts, the deterministic stage adds `pending-auto-risk` and clears every existing risk label. A confident classification must therefore actively add one risk label and remove the pending marker.
 
 ## Risk Levels
 
@@ -100,9 +103,9 @@ Do not guess, choose a default, or round uncertainty up to a higher risk level.
 
 1. Use GitHub tools to read the PR title, body, existing labels, changed files, and relevant diff patches. Do not execute pull request code.
 2. Apply the confidence gates above. Select exactly one risk level only when one level is clearly supported; otherwise abstain.
-3. On success, add the selected risk label if missing, remove the other two risk labels, and remove `failed-auto-risk` if present. Do not remove labels outside this allowlist.
-4. If the selected risk label is already the only risk label and no failure marker is present, use `noop`.
+3. On success, add the selected risk label, remove the other two risk labels, and remove `pending-auto-risk` and `failed-auto-risk` if present. Do not remove labels outside this allowlist. The safe-output target is already fixed to this PR, so omit `item_number` from label calls. If the tool requires it, pass the bare integer `${{ inputs.pr_number }}`; never pass a string or prefix it with `#`.
+4. If the selected risk label is already the only risk label and neither marker is present, use `noop`.
 5. Do not add comments or reviews.
-6. If the PR cannot be read or classified confidently, leave `failed-auto-risk` in place and do not add a risk label. Use `noop` if no label changes are needed.
+6. If the PR cannot be read or classified confidently, add `failed-auto-risk`, remove `pending-auto-risk`, and do not add a risk label.
 
-The workflow validates the final state after this agent finishes. A valid automatic result is either exactly one risk label with no failure marker, or `failed-auto-risk` with no risk labels. Missing, conflicting, or mixed states are converted to the unable marker and fail the workflow check.
+The workflow validates the final state after this agent finishes. A valid automatic result is either exactly one risk label with no marker, or `failed-auto-risk` with no risk or pending label. Missing, pending, conflicting, or mixed states are converted to the unable marker and fail the workflow check.
