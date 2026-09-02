@@ -247,7 +247,7 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 		if param.IsOmitted(params.Store) {
 			params.Store = openai.Bool(false)
 		}
-		if responsesIncludeReasoningEncryptedContent(opts) &&
+		if include, ok := agent.GetOption(opts, ResponsesIncludeReasoningEncryptedContent); (!ok || include) &&
 			!slices.Contains(params.Include, responses.ResponseIncludableReasoningEncryptedContent) {
 			params.Include = append(params.Include, responses.ResponseIncludableReasoningEncryptedContent)
 		}
@@ -467,13 +467,6 @@ func responsesDisableStoreOutput(config AgentConfig, opts []agent.Option) bool {
 		return !p.Store.Or(true)
 	}
 	return config.DisableStoreOutput
-}
-
-func responsesIncludeReasoningEncryptedContent(opts []agent.Option) bool {
-	if enabled, ok := agent.GetOption(opts, ResponsesIncludeReasoningEncryptedContent); ok {
-		return enabled
-	}
-	return true
 }
 
 func responseInputItemParamOfFunctionCallOutput[T string | responses.ResponseFunctionCallOutputItemListParam](callID string, output T) responses.ResponseInputItemUnionParam {
