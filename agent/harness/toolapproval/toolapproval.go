@@ -438,16 +438,16 @@ func matchesAutoApprovalRules(ctx context.Context, rules []AutoApprovalRule, req
 	}
 	session, _ := agent.GetOption(opts, agent.WithSession)
 	runAgent, _ := agent.AgentFromContext(ctx)
-	ruleCtx := &ToolAutoApprovalRuleContext{
-		FunctionCall:    fc,
-		Agent:           runAgent,
-		Session:         session,
-		RequestMessages: slices.Clone(requestMessages),
-		Options:         slices.Clone(opts),
-	}
 	for _, rule := range rules {
 		if rule == nil {
 			continue
+		}
+		ruleCtx := &ToolAutoApprovalRuleContext{
+			FunctionCall:    fc,
+			Agent:           runAgent,
+			Session:         session,
+			RequestMessages: slices.Clone(requestMessages),
+			Options:         slices.Clone(opts),
 		}
 		matches, err := rule(ctx, ruleCtx)
 		if err != nil {
