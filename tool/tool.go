@@ -21,11 +21,11 @@ const (
 	ToolModeNone ToolMode = "none"
 )
 
-// requiredPrefix marks a ToolMode created by RequireTools with specific tool names.
+// requiredPrefix marks a ToolMode created by RequireTool with a specific tool name.
 const requiredPrefix = "required:"
 
 // Mode returns the base tool mode represented by m.
-// Modes created by RequireTools return ToolModeRequired.
+// Modes created by RequireTool return ToolModeRequired.
 func (m ToolMode) Mode() ToolMode {
 	switch m {
 	case ToolModeAuto, ToolModeNone, ToolModeRequired:
@@ -37,25 +37,25 @@ func (m ToolMode) Mode() ToolMode {
 	return m
 }
 
-// Required returns the specific tool names required by m.
-// It returns nil unless m was created by RequireTools.
-func (m ToolMode) Required() []string {
+// RequiredTool returns the specific tool name required by m.
+// It returns false unless m was created by [RequireTool].
+func (m ToolMode) RequiredTool() (string, bool) {
 	if strings.HasPrefix(string(m), requiredPrefix) && m != ToolModeRequired {
-		names := strings.TrimPrefix(string(m), requiredPrefix)
-		if names == "" {
-			return nil
+		name := strings.TrimPrefix(string(m), requiredPrefix)
+		if name != "" {
+			return name, true
 		}
-		return strings.Split(names, ",")
 	}
-	return nil
+	return "", false
 }
 
-// RequireTools returns a ToolMode that requires the named tools to be used.
-func RequireTools(name ...string) ToolMode {
-	if len(name) == 0 {
-		return ToolModeRequired
+// RequireTool returns a ToolMode that requires the named tool to be used.
+func RequireTool(name string) ToolMode {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		panic("tool: required tool name cannot be blank")
 	}
-	return ToolMode(requiredPrefix + strings.Join(name, ","))
+	return ToolMode(requiredPrefix + name)
 }
 
 // Tool describes a tool that can be made available to an agent.

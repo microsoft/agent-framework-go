@@ -512,6 +512,9 @@ func TestResponse_Update_RawRepresentation(t *testing.T) {
 	if resp.Messages[0].RawRepresentation != "raw1" {
 		t.Errorf("expected RawRepresentation 'raw1', got %v", resp.Messages[0].RawRepresentation)
 	}
+	if resp.RawRepresentation != "raw1" {
+		t.Errorf("expected response RawRepresentation 'raw1', got %v", resp.RawRepresentation)
+	}
 
 	// Second update - should create slice
 	update2 := &agent.ResponseUpdate{
@@ -533,6 +536,10 @@ func TestResponse_Update_RawRepresentation(t *testing.T) {
 	}
 	if rawSlice[1] != "raw2" {
 		t.Errorf("expected second raw 'raw2', got %v", rawSlice[1])
+	}
+	responseRaw, ok := resp.RawRepresentation.([]any)
+	if !ok || len(responseRaw) != 2 {
+		t.Fatalf("response RawRepresentation = %#v, want two values", resp.RawRepresentation)
 	}
 
 	// Third update - should append to slice

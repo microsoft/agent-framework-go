@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -732,7 +731,7 @@ func agentNameOrID(a *agent.Agent) string {
 }
 
 func newMessageID() string {
-	return strings.ReplaceAll(uuid.NewString(), "-", "")
+	return uuid.NewString()
 }
 
 func descriptiveID(a *agent.Agent) string {

@@ -26,6 +26,10 @@ import (
 type AgentConfig struct {
 	agent.Config
 
+	// ToolAutoCall configures automatic function-tool invocation. When nil, defaults
+	// are used.
+	ToolAutoCall *toolautocall.Config
+
 	// Instructions are sent to AG-UI as a leading system message for each run.
 	Instructions string
 
@@ -51,20 +55,18 @@ func NewAgent(aclient *aguiSSEClient.Client, config AgentConfig) *agent.Agent {
 		client: aclient,
 	}
 	if config.Instructions != "" {
-		config.RunOptions = append(config.RunOptions, agent.WithInstructions(config.Instructions))
+		config.RunOptions = append(slices.Clone(config.RunOptions), agent.WithInstructions(config.Instructions))
 	}
 	if config.Decoder != nil {
 		p.decoder = config.Decoder
 	} else {
 		p.decoder = aguiEvents.NewEventDecoder(nil)
 	}
-	var providerMiddlewares []agent.Middleware
-	if !config.DisableFuncAutoCall {
-		providerMiddlewares = append(providerMiddlewares, toolautocall.New(toolautocall.Config{
-			Logger:           config.Logger,
-			LogSensitiveData: config.LogSensitiveData,
-		}))
+	autoCall := toolautocall.Config{Logger: config.Logger, LogSensitiveData: config.LogSensitiveData}
+	if config.ToolAutoCall != nil {
+		autoCall = *config.ToolAutoCall
 	}
+	providerMiddlewares := []agent.Middleware{toolautocall.New(autoCall)}
 	return agent.New(agent.ProviderConfig{
 		ProviderName:                "agui",
 		Run:                         p.run,

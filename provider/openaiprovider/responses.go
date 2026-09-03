@@ -43,18 +43,16 @@ func NewResponsesAgent(oclient openai.Client, config AgentConfig) *agent.Agent {
 		config: config,
 	}
 	if config.Instructions != "" {
-		config.RunOptions = append(config.RunOptions, agent.WithInstructions(config.Instructions))
+		config.RunOptions = append(slices.Clone(config.RunOptions), agent.WithInstructions(config.Instructions))
 	}
-	var providerMiddlewares []agent.Middleware
-	if !config.DisableFuncAutoCall {
-		providerMiddlewares = append(providerMiddlewares, toolautocall.New(toolautocall.Config{
-			Logger:           config.Logger,
-			LogSensitiveData: config.LogSensitiveData,
-		}))
+	autoCall := toolautocall.Config{Logger: config.Logger, LogSensitiveData: config.LogSensitiveData}
+	if config.ToolAutoCall != nil {
+		autoCall = *config.ToolAutoCall
 	}
+	providerMiddlewares := []agent.Middleware{toolautocall.New(autoCall)}
 	return agent.New(
 		agent.ProviderConfig{
-			ProviderName: "openai",
+			ProviderName: cmp.Or(config.ProviderName, "openai"),
 			Run:          c.run,
 			Middlewares:  providerMiddlewares,
 			Format:       c.formatOf,
@@ -227,6 +225,9 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 	var params responses.ResponseNewParams
 	if p, ok := agent.GetOption(opts, ResponsesNewParams); ok {
 		params = p
+		params.Include = slices.Clone(params.Include)
+		params.Tools = slices.Clone(params.Tools)
+		params.Input.OfInputItemList = slices.Clone(params.Input.OfInputItemList)
 	}
 	if responsesDisableStoreOutput(config, opts) {
 		if param.IsOmitted(params.Store) {
@@ -289,50 +290,29 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 			}
 		}
 	}
-	first := true
-	for tl := range agent.AllOptions(opts, agent.WithTool) {
-		if first {
-			first = false
-			if mode, ok := agent.GetOption(opts, agent.WithToolMode); ok {
-				switch mode.Mode() {
-				case tool.ToolModeAuto, "":
-					params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
-						OfToolChoiceMode: param.NewOpt(responses.ToolChoiceOptionsAuto),
-					}
-				case tool.ToolModeNone:
-					params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
-						OfToolChoiceMode: param.NewOpt(responses.ToolChoiceOptionsNone),
-					}
-				case tool.ToolModeRequired:
-					names := mode.Required()
-					if len(names) == 0 {
-						params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
-							OfToolChoiceMode: param.NewOpt(responses.ToolChoiceOptionsRequired),
-						}
-					} else if len(names) == 1 {
-						params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
-							OfFunctionTool: &responses.ToolChoiceFunctionParam{
-								Name: names[0],
-							},
-						}
-					} else {
-						toolsMap := make([]map[string]any, 0, len(names))
-						for _, name := range names {
-							toolsMap = append(toolsMap, map[string]any{
-								"type": "function",
-								"name": name,
-							})
-						}
-						params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
-							OfAllowedTools: &responses.ToolChoiceAllowedParam{
-								Mode:  responses.ToolChoiceAllowedModeRequired,
-								Tools: toolsMap,
-							},
-						}
-					}
+	if mode, ok := agent.GetOption(opts, agent.WithToolMode); ok {
+		switch mode.Mode() {
+		case tool.ToolModeAuto, "":
+			params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
+				OfToolChoiceMode: param.NewOpt(responses.ToolChoiceOptionsAuto),
+			}
+		case tool.ToolModeNone:
+			params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
+				OfToolChoiceMode: param.NewOpt(responses.ToolChoiceOptionsNone),
+			}
+		case tool.ToolModeRequired:
+			if name, ok := mode.RequiredTool(); !ok {
+				params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
+					OfToolChoiceMode: param.NewOpt(responses.ToolChoiceOptionsRequired),
+				}
+			} else {
+				params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
+					OfFunctionTool: &responses.ToolChoiceFunctionParam{Name: name},
 				}
 			}
 		}
+	}
+	for tl := range agent.AllOptions(opts, agent.WithTool) {
 		switch tl := tl.(type) {
 		case tool.FuncTool:
 			name, description := tl.Name(), tl.Description()
@@ -474,6 +454,14 @@ func responsesDisableStoreOutput(config AgentConfig, opts []agent.Option) bool {
 	return config.DisableStoreOutput
 }
 
+func responseInputItemParamOfFunctionCallOutput[T string | responses.ResponseFunctionCallOutputItemListParam](callID string, output T) responses.ResponseInputItemUnionParam {
+	item := responses.ResponseInputItemParamOfFunctionCallOutput(output)
+	if callID != "" {
+		item.OfFunctionCallOutput.CallID = param.NewOpt(callID)
+	}
+	return item
+}
+
 // responsesBuildMessageParam converts an agent.Message to one or more OpenAI message parameters.
 // Returns a slice because some agent messages (like RoleTool) need to be split into multiple OpenAI messages.
 func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInputParam) (responses.ResponseInputParam, error) {
@@ -607,19 +595,19 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 
 				if funcResult.Error != nil {
 					// Error case - serialize as text with "Error: " prefix
-					resp = append(resp, responses.ResponseInputItemParamOfFunctionCallOutput(
+					resp = append(resp, responseInputItemParamOfFunctionCallOutput(
 						funcResult.CallID,
 						fmt.Sprintf("Error: %v", funcResult.Error),
 					))
 				} else if b, ok := ret.(json.RawMessage); ok {
 					// json.RawMessage - pass as string directly
-					resp = append(resp, responses.ResponseInputItemParamOfFunctionCallOutput(
+					resp = append(resp, responseInputItemParamOfFunctionCallOutput(
 						funcResult.CallID,
 						string(b),
 					))
 				} else if str, ok := ret.(string); ok {
 					// Plain string - pass directly
-					resp = append(resp, responses.ResponseInputItemParamOfFunctionCallOutput(
+					resp = append(resp, responseInputItemParamOfFunctionCallOutput(
 						funcResult.CallID,
 						str,
 					))
@@ -700,7 +688,7 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 							},
 						}
 					}
-					resp = append(resp, responses.ResponseInputItemParamOfFunctionCallOutput(
+					resp = append(resp, responseInputItemParamOfFunctionCallOutput(
 						funcResult.CallID,
 						outputContent,
 					))
@@ -771,14 +759,14 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 							})
 						}
 					}
-					resp = append(resp, responses.ResponseInputItemParamOfFunctionCallOutput(
+					resp = append(resp, responseInputItemParamOfFunctionCallOutput(
 						funcResult.CallID,
 						outputContent,
 					))
 				} else {
 					// Default case - convert to string (JSON-encode structured
 					// results rather than rendering them with Go's %v).
-					resp = append(resp, responses.ResponseInputItemParamOfFunctionCallOutput(
+					resp = append(resp, responseInputItemParamOfFunctionCallOutput(
 						funcResult.CallID,
 						toolResultText(ret),
 					))

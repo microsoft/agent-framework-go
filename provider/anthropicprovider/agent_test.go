@@ -17,8 +17,10 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/provider/anthropicprovider"
+	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 	"github.com/microsoft/agent-framework-go/tool/hostedtool"
 )
@@ -33,8 +35,7 @@ func TestAgent_UnsupportedMessageRoleReturnsError(t *testing.T) {
 	a := anthropicprovider.NewAgent(
 		anthropic.NewClient(option.WithAPIKey("test")),
 		anthropicprovider.AgentConfig{
-			Model:  "test-model",
-			Config: agent.Config{DisableFuncAutoCall: true},
+			Model: "test-model",
 		},
 	)
 	_, err := a.Run(t.Context(), []*message.Message{{Role: message.Role("custom")}}).Collect()
@@ -51,8 +52,10 @@ func newTestClient(t *testing.T, server *httptest.Server) *agent.Agent {
 			option.WithAPIKey("test"),
 		),
 		anthropicprovider.AgentConfig{
-			Model:  "claude-3-5-sonnet-20241022",
-			Config: agent.Config{DisableFuncAutoCall: true},
+			Model: "claude-3-5-sonnet-20241022",
+			ToolAutoCall: &toolautocall.Config{
+				MaximumIterationsPerRequest: new(0),
+			},
 		},
 	)
 }
@@ -394,9 +397,6 @@ func TestConfigInstructions(t *testing.T) {
 		anthropicprovider.AgentConfig{
 			Model:        "claude-3-5-sonnet-20241022",
 			Instructions: "You are helpful.",
-			Config: agent.Config{
-				DisableFuncAutoCall: true,
-			},
 		},
 	)
 
@@ -821,8 +821,7 @@ func TestToolUseEmptyArgumentsSerializeAsObject(t *testing.T) {
 	a := anthropicprovider.NewAgent(
 		anthropic.NewClient(option.WithBaseURL(server.URL), option.WithAPIKey("test")),
 		anthropicprovider.AgentConfig{
-			Model:  "claude-3-5-sonnet-20241022",
-			Config: agent.Config{DisableFuncAutoCall: true},
+			Model: "claude-3-5-sonnet-20241022",
 		},
 	)
 
@@ -1029,7 +1028,9 @@ func TestToolInputSchemaCarriesAdditionalProperties(t *testing.T) {
 	defer server.Close()
 
 	if _, err := newTestClient(t, server).RunText(
-		t.Context(), "what's the weather?", agent.WithTool(weatherTool),
+		t.Context(), "what's the weather?",
+		agent.WithTool(weatherTool),
+		agent.WithToolMode(tool.RequireTool("get_weather")),
 	).Collect(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1052,6 +1053,13 @@ func TestToolInputSchemaCarriesAdditionalProperties(t *testing.T) {
 	}
 	if addl != false {
 		t.Errorf("input_schema.additionalProperties = %#v, want false", addl)
+	}
+	toolChoice, ok := req["tool_choice"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool_choice = %#v, want a JSON object", req["tool_choice"])
+	}
+	if toolChoice["type"] != "tool" || toolChoice["name"] != "get_weather" {
+		t.Errorf("tool_choice = %#v, want specific get_weather tool", toolChoice)
 	}
 }
 
@@ -1385,8 +1393,7 @@ func runWithToolResult(t *testing.T, result *message.FunctionResultContent) []by
 	a := anthropicprovider.NewAgent(
 		anthropic.NewClient(option.WithBaseURL(server.URL), option.WithAPIKey("test")),
 		anthropicprovider.AgentConfig{
-			Model:  "claude-3-5-sonnet-20241022",
-			Config: agent.Config{DisableFuncAutoCall: true},
+			Model: "claude-3-5-sonnet-20241022",
 		},
 	)
 
@@ -1491,8 +1498,7 @@ func TestStreamingClosesResponseBody(t *testing.T) {
 			option.WithHTTPClient(httpClient),
 		),
 		anthropicprovider.AgentConfig{
-			Model:  "claude-3-5-sonnet-20241022",
-			Config: agent.Config{DisableFuncAutoCall: true},
+			Model: "claude-3-5-sonnet-20241022",
 		},
 	)
 

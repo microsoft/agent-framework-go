@@ -15,6 +15,10 @@ import (
 
 // A Manager for storing and retrieving workflow execution checkpoints.
 type Manager interface {
+	// LatestCheckpoint returns the most recently committed checkpoint for
+	// sessionID, or nil when the session has no checkpoints.
+	LatestCheckpoint(ctx context.Context, sessionID string) (*workflow.CheckpointInfo, error)
+
 	internal()
 }
 
@@ -116,6 +120,14 @@ func (s *inMemoryManager) RetrieveIndex(_ context.Context, sessionID string, wit
 	return result, nil
 }
 
+func (s *inMemoryManager) LatestCheckpoint(ctx context.Context, sessionID string) (*workflow.CheckpointInfo, error) {
+	index, err := s.RetrieveIndex(ctx, sessionID, nil)
+	if err != nil || len(index) == 0 {
+		return nil, err
+	}
+	return &index[len(index)-1], nil
+}
+
 type jsonManager struct {
 	store Store[json.RawMessage]
 }
@@ -180,6 +192,14 @@ func (s *jsonManager) RetrieveIndex(ctx context.Context, sessionID string, withP
 		}
 	}
 	return index, nil
+}
+
+func (s *jsonManager) LatestCheckpoint(ctx context.Context, sessionID string) (*workflow.CheckpointInfo, error) {
+	index, err := s.RetrieveIndex(ctx, sessionID, nil)
+	if err != nil || len(index) == 0 {
+		return nil, err
+	}
+	return &index[len(index)-1], nil
 }
 
 func validateManagerCheckpointInfo(sessionID string, info workflow.CheckpointInfo) error {

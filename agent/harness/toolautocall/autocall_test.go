@@ -10,6 +10,7 @@ import (
 	"iter"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -173,7 +174,7 @@ func TestFunctionInvoking_DoesNotMutateInputSliceBackingArrays(t *testing.T) {
 
 func TestFunctionInvoking_PreparesOptionsForLastIteration(t *testing.T) {
 	var capturedTools []tool.Tool
-	var capturedToolMode tool.ToolMode
+	var capturedToolModePresent bool
 
 	testTool := functool.MustNew(functool.Config{Name: "Func1"},
 		func(ctx context.Context, args struct{}) (string, error) {
@@ -191,13 +192,13 @@ func TestFunctionInvoking_PreparesOptionsForLastIteration(t *testing.T) {
 			}).
 			NewTurn(func(_ context.Context, _ []*message.Message, opts ...agent.Option) {
 				capturedTools = slices.Collect(agent.AllOptions(opts, agent.WithTool))
-				capturedToolMode, _ = agent.GetOption(opts, agent.WithToolMode)
+				_, capturedToolModePresent = agent.GetOption(opts, agent.WithToolMode)
 			}).
 			AddText("done").
 			Build(),
 	}
 
-	for _, err := range toolautocall.New(toolautocall.Config{MaximumIterationsPerRequest: 1}).Run(
+	for _, err := range toolautocall.New(toolautocall.Config{MaximumIterationsPerRequest: new(1)}).Run(
 		runner.Run,
 		t.Context(),
 		[]*message.Message{message.NewText("hello")},
@@ -213,8 +214,77 @@ func TestFunctionInvoking_PreparesOptionsForLastIteration(t *testing.T) {
 	if len(capturedTools) != 0 {
 		t.Fatalf("expected no function declarations on last iteration request, got %d", len(capturedTools))
 	}
-	if capturedToolMode != tool.ToolModeAuto {
-		t.Fatalf("expected tool mode to be %q when function declarations are removed, got %q", tool.ToolModeAuto, capturedToolMode)
+	if capturedToolModePresent {
+		t.Fatal("expected tool mode to be cleared when function declarations are removed")
+	}
+}
+
+func TestFunctionInvoking_ResetsSpecificRequiredToolModeAfterFirstIteration(t *testing.T) {
+	var capturedToolModePresent bool
+	testTool := functool.MustNew(functool.Config{Name: "Func1"},
+		func(context.Context, struct{}) (string, error) { return "ok", nil })
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder().
+			Add(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: []message.Content{
+				&message.FunctionCallContent{CallID: "call1", Name: "Func1", Arguments: `{}`},
+			}}).
+			NewTurn(func(_ context.Context, _ []*message.Message, opts ...agent.Option) {
+				_, capturedToolModePresent = agent.GetOption(opts, agent.WithToolMode)
+			}).
+			AddText("done").
+			Build(),
+	}
+
+	for _, err := range toolautocall.New(toolautocall.Config{}).Run(
+		runner.Run,
+		t.Context(),
+		[]*message.Message{message.NewText("hello")},
+		agent.WithTool(testTool),
+		agent.WithToolMode(tool.RequireTool("Func1")),
+	) {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	if capturedToolModePresent {
+		t.Fatal("expected specific required tool mode to be cleared after the first iteration")
+	}
+}
+
+func TestFunctionInvoking_ZeroMaximumIterationsDisablesAutocall(t *testing.T) {
+	providerCalls := 0
+	toolCalls := 0
+	next := func(_ context.Context, _ []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		providerCalls++
+		if tools := slices.Collect(agent.AllOptions(opts, agent.WithTool)); len(tools) != 1 {
+			t.Fatalf("provider tools = %d, want 1", len(tools))
+		}
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{Contents: []message.Content{
+				&message.FunctionCallContent{CallID: "call1", Name: "Func1", Arguments: `{}`},
+			}}, nil)
+		}
+	}
+	testTool := functool.MustNew(functool.Config{Name: "Func1"}, func(context.Context, struct{}) (string, error) {
+		toolCalls++
+		return "ok", nil
+	})
+
+	for _, err := range toolautocall.New(toolautocall.Config{MaximumIterationsPerRequest: new(0)}).Run(
+		next,
+		t.Context(),
+		[]*message.Message{message.NewText("hello")},
+		agent.WithTool(testTool),
+	) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if providerCalls != 1 {
+		t.Fatalf("provider calls = %d, want 1", providerCalls)
+	}
+	if toolCalls != 0 {
+		t.Fatalf("tool calls = %d, want 0", toolCalls)
 	}
 }
 
@@ -644,7 +714,7 @@ func TestFunctionInvoking_NegativeMaximumIterationsReturnsError(t *testing.T) {
 	}
 
 	var got error
-	for _, err := range toolautocall.New(toolautocall.Config{MaximumIterationsPerRequest: -1}).Run(
+	for _, err := range toolautocall.New(toolautocall.Config{MaximumIterationsPerRequest: new(-1)}).Run(
 		next,
 		t.Context(),
 		[]*message.Message{message.NewText("hello")},
@@ -973,7 +1043,7 @@ func TestFunctionInvoking_ContinuesWithSuccessfulCallsUntilMaximumIterations(t *
 	expectedPlan := plan[:maxIterations*2+2]
 
 	autocallOptions := toolautocall.Config{
-		MaximumIterationsPerRequest: maxIterations,
+		MaximumIterationsPerRequest: new(maxIterations),
 	}
 
 	invokeAndAssert(t, tools, plan, expectedPlan, autocallOptions)
@@ -1034,7 +1104,7 @@ func TestFunctionInvoking_ContinuesWithFailingCallsUntilMaximumConsecutiveErrors
 
 			autocallOptions := toolautocall.Config{
 				MaximumConsecutiveErrorsPerRequest: new(2),
-				MaximumIterationsPerRequest:        10,
+				MaximumIterationsPerRequest:        new(10),
 				AllowConcurrentInvocations:         tt.allowConcurrentInvocations,
 			}
 
@@ -1645,4 +1715,219 @@ func TestFunctionInvoking_NextIterationIncludesAssistantFunctionCallMessage(t *t
 	if lastMsg.String() != "done" {
 		t.Errorf("expected final text 'done', got %q", lastMsg.String())
 	}
+}
+
+func TestMessageInjection_ToolInjectsMessageDuringFunctionLoop(t *testing.T) {
+	const injectedText = "injected follow-up from tool"
+	var secondTurnMessages []*message.Message
+	injection := &agent.MessageInjector{}
+	session := &agent.Session{}
+
+	runner := &agenttest.Runner{Responses: agenttest.NewResponseBuilder().
+		AddFunctionCall("call1", "Injecting", `{}`).
+		NewTurn(func(_ context.Context, messages []*message.Message, _ ...agent.Option) {
+			secondTurnMessages = slices.Clone(messages)
+		}).
+		AddText("Final answer after injection").
+		Build()}
+	injectingTool := functool.MustNew(
+		functool.Config{Name: "Injecting", Description: "Injects a message"},
+		func(context.Context, struct{}) (string, error) {
+			if err := injection.EnqueueMessages(session, nil, message.NewText(injectedText)); err != nil {
+				return "", err
+			}
+			return "tool done", nil
+		},
+	)
+	injectingAgent := newMessageInjectingAgent(runner.Run, toolautocall.Config{NewID: func() string { return "" }}, []tool.Tool{injectingTool}, injection)
+
+	response, err := injectingAgent.RunText(t.Context(), "start", agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.String() != "Final answer after injection" {
+		t.Fatalf("response = %q", response.String())
+	}
+	if !slices.Contains(messageTexts(secondTurnMessages), injectedText) {
+		t.Fatalf("injected message %q not found in %v", injectedText, messageTexts(secondTurnMessages))
+	}
+	if slices.Contains(secondTurnMessages, nil) {
+		t.Fatal("nil injected message was not ignored")
+	}
+}
+
+func TestMessageInjection_ApprovedApprovalResponseInjectionIsForwarded(t *testing.T) {
+	const injectedText = "injected after approved tool"
+	var downstreamMessages []*message.Message
+	injection := &agent.MessageInjector{}
+	session := &agent.Session{}
+
+	injectingTool := tool.ApprovalRequiredFunc(functool.MustNew(
+		functool.Config{Name: "Injecting", Description: "Injects a message"},
+		func(context.Context, struct{}) (string, error) {
+			if err := injection.EnqueueMessages(session, message.NewText(injectedText)); err != nil {
+				return "", err
+			}
+			return "approved tool done", nil
+		},
+	))
+	runner := &agenttest.Runner{Responses: agenttest.NewResponseBuilder(func(_ context.Context, messages []*message.Message, _ ...agent.Option) {
+		downstreamMessages = slices.Clone(messages)
+	}).AddText("done").Build()}
+	injectingAgent := newMessageInjectingAgent(runner.Run, toolautocall.Config{
+		DisableApprovalResponseBinding: true,
+		NewID:                          func() string { return "" },
+	}, []tool.Tool{injectingTool}, injection)
+
+	input := []*message.Message{
+		message.NewText("start"),
+		{Role: message.RoleAssistant, Contents: message.Contents{
+			&message.ToolApprovalRequestContent{RequestID: "call1", ToolCall: &message.FunctionCallContent{CallID: "call1", Name: "Injecting", Arguments: `{}`}},
+		}},
+		message.New(&message.ToolApprovalResponseContent{RequestID: "call1", Approved: true, ToolCall: &message.FunctionCallContent{CallID: "call1", Name: "Injecting", Arguments: `{}`}}),
+	}
+	if _, err := injectingAgent.Run(t.Context(), input, agent.WithSession(session)).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(messageTexts(downstreamMessages), injectedText) {
+		t.Fatalf("injected message %q not found in %v", injectedText, messageTexts(downstreamMessages))
+	}
+}
+
+func TestMessageInjection_IsIndependentFromToolAutoCallIterationLimit(t *testing.T) {
+	var calls int
+	injection := &agent.MessageInjector{}
+	session := &agent.Session{}
+	runner := &agenttest.Runner{Responses: agenttest.NewResponseBuilder(func(context.Context, []*message.Message, ...agent.Option) {
+		calls++
+		if err := injection.EnqueueMessages(session, message.NewText("first injected turn")); err != nil {
+			t.Error(err)
+		}
+	}).AddText("first response").
+		NewTurn(func(context.Context, []*message.Message, ...agent.Option) {
+			calls++
+			if err := injection.EnqueueMessages(session, message.NewText("second injected turn")); err != nil {
+				t.Error(err)
+			}
+		}).AddText("second response").
+		NewTurn(func(context.Context, []*message.Message, ...agent.Option) {
+			calls++
+		}).AddText("third response").
+		Build()}
+	injectingAgent := newMessageInjectingAgent(runner.Run, toolautocall.Config{
+		MaximumIterationsPerRequest: new(1),
+		NewID:                       func() string { return "" },
+	}, nil, injection)
+
+	if _, err := injectingAgent.RunText(t.Context(), "start", agent.WithSession(session)).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 3 {
+		t.Fatalf("provider calls = %d, want 3", calls)
+	}
+}
+
+func TestMessageInjection_DeliversMessageQueuedBeforeRunOnce(t *testing.T) {
+	var captured []*message.Message
+	runner := &agenttest.Runner{Responses: agenttest.NewResponseBuilder(func(_ context.Context, messages []*message.Message, _ ...agent.Option) {
+		captured = slices.Clone(messages)
+	}).AddText("done").Build()}
+	injection := &agent.MessageInjector{}
+	injectingAgent := newMessageInjectingAgent(runner.Run, toolautocall.Config{}, nil, injection)
+	session := &agent.Session{}
+	if err := injection.EnqueueMessages(session, message.NewText("queued before run")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := injectingAgent.RunText(t.Context(), "original", agent.WithSession(session)).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	if got := messageTexts(captured); !slices.Equal(got, []string{"original", "queued before run"}) {
+		t.Fatalf("provider messages = %v", got)
+	}
+	pending, err := injection.PendingMessages(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending messages = %d, want 0", len(pending))
+	}
+}
+
+func TestMessageInjection_DeliversQueuedMessageAfterSessionRoundTrip(t *testing.T) {
+	var captured []*message.Message
+	runner := &agenttest.Runner{Responses: agenttest.NewResponseBuilder(func(_ context.Context, messages []*message.Message, _ ...agent.Option) {
+		captured = slices.Clone(messages)
+	}).AddText("done").Build()}
+	injection := &agent.MessageInjector{}
+	injectingAgent := newMessageInjectingAgent(runner.Run, toolautocall.Config{}, nil, injection)
+	session := &agent.Session{}
+	if err := injection.EnqueueMessages(session, message.NewText("queued before serialization")); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored agent.Session
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := injectingAgent.RunText(t.Context(), "original", agent.WithSession(&restored)).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	if got := messageTexts(captured); !slices.Equal(got, []string{"original", "queued before serialization"}) {
+		t.Fatalf("provider messages = %v", got)
+	}
+}
+
+func TestMessageInjection_ConcurrentEnqueuesDoNotLoseMessages(t *testing.T) {
+	injection := &agent.MessageInjector{}
+	session := &agent.Session{}
+	const goroutineCount = 16
+	const messagesPerGoroutine = 100
+
+	var waitGroup sync.WaitGroup
+	for goroutineIndex := range goroutineCount {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			for messageIndex := range messagesPerGoroutine {
+				if err := injection.EnqueueMessages(session, message.NewText(fmt.Sprintf("%d-%d", goroutineIndex, messageIndex))); err != nil {
+					t.Errorf("EnqueueMessages error: %v", err)
+					return
+				}
+			}
+		}()
+	}
+	waitGroup.Wait()
+
+	pending, err := injection.PendingMessages(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(pending), goroutineCount*messagesPerGoroutine; got != want {
+		t.Fatalf("pending messages = %d, want %d", got, want)
+	}
+}
+
+func newMessageInjectingAgent(run agent.RunFunc, config toolautocall.Config, tools []tool.Tool, injection *agent.MessageInjector) *agent.Agent {
+	return agent.New(agent.ProviderConfig{
+		Run:         run,
+		Middlewares: []agent.Middleware{toolautocall.New(config)},
+	}, agent.Config{
+		MessageInjector: injection,
+		Tools:           tools,
+	})
+}
+
+func messageTexts(messages []*message.Message) []string {
+	texts := make([]string, 0, len(messages))
+	for _, msg := range messages {
+		if msg != nil {
+			texts = append(texts, msg.String())
+		}
+	}
+	return texts
 }
