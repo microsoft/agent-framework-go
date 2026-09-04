@@ -187,7 +187,7 @@ func newCancelOnCompletionAgent(cancel context.CancelFunc) *agent.Agent {
 	}
 	return agent.New(
 		agent.ProviderConfig{ProviderName: "cancel-on-completion", Run: run},
-		agent.Config{ID: testAgentID, Name: testAgentName, DisableFuncAutoCall: true},
+		agent.Config{ID: testAgentID, Name: testAgentName},
 	)
 }
 
