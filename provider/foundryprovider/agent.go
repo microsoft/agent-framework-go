@@ -37,6 +37,10 @@ type AgentConfig struct {
 
 	// DisableStoreOutput disables service-side Responses output storage.
 	// Use this when local session history providers own conversation state.
+	// By default, store-disabled runs also request `reasoning.encrypted_content`
+	// so reasoning items can be replayed statelessly; use
+	// [openaiprovider.ResponsesIncludeReasoningEncryptedContent] in RunOptions to
+	// opt out.
 	DisableStoreOutput bool
 
 	// OpenAIOptions configure the OpenAI-compatible per-agent client. Foundry-owned
@@ -122,8 +126,14 @@ func NewAgent(endpoint string, credential azcore.TokenCredential, target AgentTa
 	openAIOptions = append(openAIOptions, targetOptions...)
 	openAIOptions = append(openAIOptions, clientHeadersRequestOption())
 	openAIOptions = append(openAIOptions, hostedAgentUserIdentityRequestOption())
+	openAIOptions = append(openAIOptions, hostedAgentSessionRequestOption())
 	openAIOptions = append(openAIOptions, servedModelRequestOption())
-	config.Middlewares = append([]agent.Middleware{clientHeadersMiddleware{}, hostedAgentUserIdentityMiddleware{}, servedModelMiddleware{}}, config.Middlewares...)
+	config.Middlewares = append([]agent.Middleware{
+		clientHeadersMiddleware{},
+		hostedAgentUserIdentityMiddleware{},
+		hostedAgentSessionMiddleware{},
+		servedModelMiddleware{},
+	}, config.Middlewares...)
 
 	return openaiprovider.NewResponsesAgent(openai.NewClient(openAIOptions...), openaiprovider.AgentConfig{
 		Config:             config.Config,

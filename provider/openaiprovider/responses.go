@@ -72,9 +72,23 @@ func (o responsesNewParamsOpt) MAFValue() any {
 	return responses.ResponseNewParams(o)
 }
 
+type responsesIncludeReasoningEncryptedContentOpt bool
+
+func (o responsesIncludeReasoningEncryptedContentOpt) MAFValue() any {
+	return bool(o)
+}
+
 // ResponsesNewParams allows passing custom parameters to the underlying OpenAI Responses API calls.
 func ResponsesNewParams(params responses.ResponseNewParams) agent.Option {
 	return responsesNewParamsOpt(params)
+}
+
+// ResponsesIncludeReasoningEncryptedContent controls whether [NewResponsesAgent]
+// automatically requests `reasoning.encrypted_content` while Responses output
+// storage is disabled. The default is true so reasoning items can be replayed
+// across stateless turns.
+func ResponsesIncludeReasoningEncryptedContent(enabled bool) agent.Option {
+	return responsesIncludeReasoningEncryptedContentOpt(enabled)
 }
 
 func (a *responsesClient) formatOf(v any) (agent.ResponseFormat, error) {
@@ -233,7 +247,8 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 		if param.IsOmitted(params.Store) {
 			params.Store = openai.Bool(false)
 		}
-		if !slices.Contains(params.Include, responses.ResponseIncludableReasoningEncryptedContent) {
+		if include, ok := agent.GetOption(opts, ResponsesIncludeReasoningEncryptedContent); (!ok || include) &&
+			!slices.Contains(params.Include, responses.ResponseIncludableReasoningEncryptedContent) {
 			params.Include = append(params.Include, responses.ResponseIncludableReasoningEncryptedContent)
 		}
 	}
