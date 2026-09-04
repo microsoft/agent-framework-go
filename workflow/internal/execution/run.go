@@ -18,6 +18,17 @@ type DeliveryMapping struct {
 	Targets   []*workflow.Executor
 }
 
+func newDeliveryMapping(envelopes []*MessageEnvelope, targets []*workflow.Executor) *DeliveryMapping {
+	return &DeliveryMapping{
+		Envelopes: envelopes,
+		Targets:   targets,
+	}
+}
+
+func newSingleDeliveryMapping(envelope *MessageEnvelope, target *workflow.Executor) *DeliveryMapping {
+	return newDeliveryMapping([]*MessageEnvelope{envelope}, []*workflow.Executor{target})
+}
+
 func (d DeliveryMapping) MapInto(nextStep *StepContext) {
 	for _, target := range d.Targets {
 		messageQueue := nextStep.MessagesFor(target.ID)
