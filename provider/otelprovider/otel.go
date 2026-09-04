@@ -91,8 +91,12 @@ func (m *mw) Run(next agent.RunFunc, ctx context.Context, messages []*message.Me
 		// the agent rather than the cost of its final call.
 		var usage message.UsageDetails
 		var errorType string
+		var responseID string
 		defer func() {
 			end := time.Now()
+			if responseID != "" {
+				span.SetAttributes(semconv.GenAIResponseID(responseID))
+			}
 			setUsage(span, usage)
 			m.recordOperationDuration(ctx, a, end.Sub(start), errorType)
 			m.recordTokenUsage(ctx, a, usage)
@@ -105,6 +109,9 @@ func (m *mw) Run(next agent.RunFunc, ctx context.Context, messages []*message.Me
 				span.SetAttributes(semconv.ErrorTypeKey.String(errorType))
 				span.RecordError(err, trace.WithTimestamp(time.Now()))
 				span.SetStatus(codes.Error, err.Error())
+			}
+			if update != nil && update.ResponseID != "" {
+				responseID = update.ResponseID
 			}
 			// update.Usage() sums this update's UsageContent (nil-safe), so accumulate
 			// its total into the run rather than iterating Contents by hand.

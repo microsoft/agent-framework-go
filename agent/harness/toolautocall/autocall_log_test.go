@@ -357,7 +357,7 @@ func TestAutocall_LogsMaximumIterationReached(t *testing.T) {
 
 	invokeAndAssert(t, tools, plan, nil, toolautocall.Config{
 		Logger:                      log,
-		MaximumIterationsPerRequest: 1,
+		MaximumIterationsPerRequest: new(1),
 	})
 
 	output := buf.String()

@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/provider/geminiprovider"
 	"github.com/microsoft/agent-framework-go/tool"
@@ -62,8 +63,7 @@ func TestAgent_UnsupportedMessageRoleReturnsError(t *testing.T) {
 		t.Fatalf("genai.NewClient: %v", err)
 	}
 	a := geminiprovider.NewAgent(client, geminiprovider.AgentConfig{
-		Model:  testModel,
-		Config: agent.Config{DisableFuncAutoCall: true},
+		Model: testModel,
 	})
 	_, err = a.Run(t.Context(), []*message.Message{{Role: message.Role("custom")}}).Collect()
 	if err == nil || !strings.Contains(err.Error(), "unsupported message role") {
@@ -84,8 +84,10 @@ func newTestClient(t *testing.T, server *httptest.Server) *agent.Agent {
 		t.Fatalf("genai.NewClient: %v", err)
 	}
 	return geminiprovider.NewAgent(client, geminiprovider.AgentConfig{
-		Model:  testModel,
-		Config: agent.Config{DisableFuncAutoCall: true},
+		Model: testModel,
+		ToolAutoCall: &toolautocall.Config{
+			MaximumIterationsPerRequest: new(0),
+		},
 	})
 }
 
@@ -354,9 +356,6 @@ func TestConfigInstructions(t *testing.T) {
 	a := geminiprovider.NewAgent(client, geminiprovider.AgentConfig{
 		Model:        testModel,
 		Instructions: "You are helpful.",
-		Config: agent.Config{
-			DisableFuncAutoCall: true,
-		},
 	})
 
 	_, err = a.RunText(t.Context(), "hi").Collect()
@@ -1877,19 +1876,14 @@ func TestLongConversationHistory(t *testing.T) {
 	}
 }
 
-// TestEmptyMessage verifies that an empty text message is handled.
-func TestEmptyMessage(t *testing.T) {
+func TestEmptyMessageRejected(t *testing.T) {
 	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "application/json", minimalTextResponse("Hello!")))
 	defer server.Close()
 
 	a := newTestClient(t, server)
 
-	resp, err := a.RunText(t.Context(), "").Collect()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got := resp.String(); got != "Hello!" {
-		t.Errorf("response text = %q, want %q", got, "Hello!")
+	if _, err := a.RunText(t.Context(), "").Collect(); err == nil {
+		t.Fatal("RunText(\"\") error = nil, want error")
 	}
 }
 
@@ -1967,7 +1961,7 @@ func TestToolModeMergesCallerToolConfig(t *testing.T) {
 			},
 		}),
 		agent.WithTool(weatherTool),
-		agent.WithToolMode(tool.ToolModeRequired),
+		agent.WithToolMode(tool.RequireTool("get_weather")),
 	).Collect()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1989,6 +1983,10 @@ func TestToolModeMergesCallerToolConfig(t *testing.T) {
 	if mode, _ := fcc["mode"].(string); mode != string(genai.FunctionCallingConfigModeAny) {
 		t.Errorf("functionCallingConfig.mode = %q, want %q", mode, genai.FunctionCallingConfigModeAny)
 	}
+	allowedNames, ok := fcc["allowedFunctionNames"].([]any)
+	if !ok || len(allowedNames) != 1 || allowedNames[0] != "get_weather" {
+		t.Errorf("functionCallingConfig.allowedFunctionNames = %#v, want [get_weather]", fcc["allowedFunctionNames"])
+	}
 	// The caller-supplied RetrievalConfig must be preserved, not dropped.
 	retrieval, ok := toolConfig["retrievalConfig"].(map[string]any)
 	if !ok {
@@ -1996,6 +1994,36 @@ func TestToolModeMergesCallerToolConfig(t *testing.T) {
 	}
 	if lang, _ := retrieval["languageCode"].(string); lang != "en-US" {
 		t.Errorf("retrievalConfig.languageCode = %q, want %q", lang, "en-US")
+	}
+}
+
+func TestToolModeNoneAppliesToProviderNativeFunctions(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(captureAndRespond(t, bodyCh, "application/json", minimalTextResponse("ok")))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+	_, err := a.RunText(t.Context(), "hello",
+		geminiprovider.GenerateContentConfig(genai.GenerateContentConfig{
+			Tools: []*genai.Tool{{FunctionDeclarations: []*genai.FunctionDeclaration{{Name: "native_tool"}}}},
+		}),
+		agent.WithToolMode(tool.ToolModeNone),
+	).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var request map[string]any
+	if err := json.Unmarshal(<-bodyCh, &request); err != nil {
+		t.Fatal(err)
+	}
+	toolConfig, ok := request["toolConfig"].(map[string]any)
+	if !ok {
+		t.Fatalf("toolConfig = %T, want object", request["toolConfig"])
+	}
+	functionConfig, ok := toolConfig["functionCallingConfig"].(map[string]any)
+	if !ok || functionConfig["mode"] != string(genai.FunctionCallingConfigModeNone) {
+		t.Fatalf("functionCallingConfig = %#v, want mode NONE", functionConfig)
 	}
 }
 

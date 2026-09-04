@@ -14,6 +14,16 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
 )
 
+type polymorphicInput interface {
+	value() string
+}
+
+type concretePolymorphicInput struct {
+	text string
+}
+
+func (m concretePolymorphicInput) value() string { return m.text }
+
 func captureExecutor(id string, sink *[]string, mu *sync.Mutex) workflow.ExecutorBinding {
 	binding := workflow.ExecutorBinding{
 		ID:               id,
@@ -57,6 +67,34 @@ func TestDirectEdgeRouting_NoCondition_DeliversAlways(t *testing.T) {
 	want := []string{"a:test", "b:test"}
 	if !slices.Equal(trace, want) {
 		t.Errorf("trace = %v, want %v", trace, want)
+	}
+}
+
+func TestExternalInputRoutesPolymorphically(t *testing.T) {
+	var got string
+	binding := workflow.ExecutorBinding{ID: "interface-input", ImplementationID: "interface-input"}
+	binding.NewExecutorFunc = func(string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: binding.ID,
+			ConfigureProtocol: func(builder *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				builder.RouteBuilder.AddHandlerRaw(reflect.TypeFor[polymorphicInput](), nil, func(_ *workflow.Context, message any) (any, error) {
+					got = message.(polymorphicInput).value()
+					return nil, nil
+				})
+				return builder, nil
+			},
+		}, nil
+	}
+	wf, err := workflow.NewBuilder(binding).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := inproc.Lockstep.Run(t.Context(), wf, concretePolymorphicInput{text: "routed"}); err != nil {
+		t.Fatal(err)
+	}
+	if got != "routed" {
+		t.Fatalf("handler input = %q, want routed", got)
 	}
 }
 
@@ -184,6 +222,51 @@ func TestDirectEdgeRouting_BroadDeclaredSendTypeRoutesByRuntimeType(t *testing.T
 	defer mu.Unlock()
 	want := []string{"target:hello"}
 	if !slices.Equal(trace, want) {
+		t.Fatalf("trace = %v, want %v", trace, want)
+	}
+}
+
+func TestFanInEdgeRouting_BroadDeclaredSendTypeRoutesByRuntimeType(t *testing.T) {
+	broadSource := func(id, output string) workflow.ExecutorBinding {
+		binding := workflow.ExecutorBinding{ID: id, ImplementationID: "*workflow.Executor"}
+		binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
+			return &workflow.Executor{
+				ID: id,
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.SendsMessageType(reflect.TypeFor[any]())
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
+						return nil, ctx.SendMessage("", output)
+					})
+					return rb, nil
+				},
+			}, nil
+		}
+		return binding
+	}
+
+	var (
+		mu    sync.Mutex
+		trace []string
+	)
+	starter := emitsExecutor("starter", "kick")
+	first := broadSource("first", "one")
+	second := broadSource("second", "two")
+	target := captureExecutor("target", &trace, &mu)
+	wf, err := workflow.NewBuilder(starter).
+		AddFanOutEdge(starter, []workflow.ExecutorBinding{first, second}).
+		AddFanInBarrierEdge([]workflow.ExecutorBinding{first, second}, target).
+		Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := inproc.Default.Run(t.Context(), wf, "start"); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	slices.Sort(trace)
+	if want := []string{"target:one", "target:two"}; !slices.Equal(trace, want) {
 		t.Fatalf("trace = %v, want %v", trace, want)
 	}
 }

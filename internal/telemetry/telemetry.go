@@ -81,7 +81,7 @@ func prependUserAgent(existing string) string {
 	for _, product := range products {
 		if isAgentFrameworkUserAgent(product) {
 			frameworkProductCount++
-			hasCurrentFrameworkProduct = hasCurrentFrameworkProduct || product == frameworkUserAgent
+			hasCurrentFrameworkProduct = hasCurrentFrameworkProduct || strings.EqualFold(product, frameworkUserAgent)
 		}
 	}
 	if frameworkProductCount == 1 && hasCurrentFrameworkProduct {
@@ -109,8 +109,13 @@ func prependUserAgent(existing string) string {
 }
 
 func isAgentFrameworkUserAgent(product string) bool {
-	return strings.HasPrefix(product, httpUserAgent+"/") ||
-		strings.Contains(product, "/"+httpUserAgent+"/")
+	segments := strings.Split(product, "/")
+	for i := 0; i+1 < len(segments); i++ {
+		if strings.EqualFold(segments[i], httpUserAgent) {
+			return true
+		}
+	}
+	return false
 }
 
 func userAgentPrefixList() []string {

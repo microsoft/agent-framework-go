@@ -163,9 +163,11 @@ func TestOtel_Run_RecordsTokenUsageMetric(t *testing.T) {
 		ProviderName: "test-provider",
 		Run: func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 			return func(yield func(*agent.ResponseUpdate, error) bool) {
-				yield(&agent.ResponseUpdate{Contents: []message.Content{&message.UsageContent{
+				if !yield(&agent.ResponseUpdate{Contents: []message.Content{&message.UsageContent{
 					Details: message.UsageDetails{InputTokenCount: 100, OutputTokenCount: 10},
-				}}}, nil)
+				}}}, nil) {
+					return
+				}
 				yield(&agent.ResponseUpdate{Contents: []message.Content{&message.UsageContent{
 					Details: message.UsageDetails{InputTokenCount: 200, OutputTokenCount: 20},
 				}}}, nil)
@@ -392,7 +394,7 @@ func TestOtel_Run_SpanHasCorrectAttributes(t *testing.T) {
 		Run: func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 			return func(yield func(*agent.ResponseUpdate, error) bool) {
 				capturedCtx = ctx
-				yield(&agent.ResponseUpdate{MessageID: "test-1"}, nil)
+				yield(&agent.ResponseUpdate{MessageID: "test-1", ResponseID: "response-1"}, nil)
 			}
 		},
 	}, agent.Config{
@@ -431,6 +433,7 @@ func TestOtel_Run_SpanHasCorrectAttributes(t *testing.T) {
 		"gen_ai.agent.id":          "test-agent-id",
 		"gen_ai.agent.name":        "test-agent",
 		"gen_ai.agent.description": "A test agent",
+		"gen_ai.response.id":       "response-1",
 	}
 
 	for key, expected := range expectedAttrs {
@@ -1043,7 +1046,7 @@ func TestOtel_Run_RecordsTokenUsage(t *testing.T) {
 		ProviderName: "test-provider",
 		Run: func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 			return func(yield func(*agent.ResponseUpdate, error) bool) {
-				yield(&agent.ResponseUpdate{
+				if !yield(&agent.ResponseUpdate{
 					MessageID: "turn-1",
 					Contents: []message.Content{&message.UsageContent{
 						Details: message.UsageDetails{
@@ -1053,7 +1056,9 @@ func TestOtel_Run_RecordsTokenUsage(t *testing.T) {
 							CachedInputTokenCount: 5,
 						},
 					}},
-				}, nil)
+				}, nil) {
+					return
+				}
 				yield(&agent.ResponseUpdate{
 					MessageID: "turn-2",
 					Contents: []message.Content{&message.UsageContent{

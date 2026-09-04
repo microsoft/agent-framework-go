@@ -17,6 +17,7 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
+	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/internal/messagetest"
 	"github.com/microsoft/agent-framework-go/message"
@@ -35,10 +36,44 @@ type continuationToken struct {
 	SequenceNumber int64  `json:"sequence_number"`
 }
 
+func TestResponsesToolModeNoneWithoutFrameworkToolsAndRawInputRemainsUnchanged(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		bodyCh <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"resp-test","object":"response","created_at":1727888631,"status":"completed","model":"gpt-4o-mini","output":[]}`)
+	}))
+	defer server.Close()
+
+	backing := make([]responses.ResponseInputItemUnionParam, 0, 2)
+	var raw responses.ResponseNewParams
+	raw.Input.OfInputItemList = backing
+	_, err := newTestResponsesClient(server, "gpt-4o-mini").RunText(
+		t.Context(),
+		"hello",
+		openaiprovider.ResponsesNewParams(raw),
+		agent.WithToolMode(tool.ToolModeNone),
+	).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request map[string]any
+	if err := json.Unmarshal(<-bodyCh, &request); err != nil {
+		t.Fatal(err)
+	}
+	if request["tool_choice"] != "none" {
+		t.Fatalf("tool_choice = %#v, want none", request["tool_choice"])
+	}
+	var zero responses.ResponseInputItemUnionParam
+	if !reflect.DeepEqual(backing[:cap(backing)][0], zero) {
+		t.Fatal("request construction mutated caller's Input backing array")
+	}
+}
+
 func TestResponsesAgent_UnsupportedMessageRoleReturnsError(t *testing.T) {
 	a := openaiprovider.NewResponsesAgent(openai.NewClient(option.WithAPIKey("test")), openaiprovider.AgentConfig{
-		Model:  "test-model",
-		Config: agent.Config{DisableFuncAutoCall: true},
+		Model: "test-model",
 	})
 	_, err := a.Run(t.Context(), []*message.Message{{Role: message.Role("custom")}}).Collect()
 	if err == nil || !strings.Contains(err.Error(), "unsupported message role") {
@@ -81,8 +116,10 @@ func newTestResponsesClient(server *httptest.Server, model string) *agent.Agent 
 	return openaiprovider.NewResponsesAgent(
 		openai.NewClient(option.WithBaseURL(server.URL)),
 		openaiprovider.AgentConfig{
-			Model:  model,
-			Config: agent.Config{DisableFuncAutoCall: true},
+			Model: model,
+			ToolAutoCall: &toolautocall.Config{
+				MaximumIterationsPerRequest: new(0),
+			},
 		},
 	)
 }
@@ -150,7 +187,7 @@ func TestNewAgentCurrentlyUsesResponsesAPI(t *testing.T) {
 
 	a := openaiprovider.NewAgent(
 		openai.NewClient(option.WithBaseURL(server.URL)),
-		openaiprovider.AgentConfig{Model: "gpt-4o-mini", Config: agent.Config{DisableFuncAutoCall: true}},
+		openaiprovider.AgentConfig{Model: "gpt-4o-mini"},
 	)
 
 	if _, err := a.RunText(t.Context(), "hello").Collect(); err != nil {
@@ -197,9 +234,6 @@ func TestResponsesConfigInstructions_NonStreaming(t *testing.T) {
 		openaiprovider.AgentConfig{
 			Model:        "gpt-4o-mini",
 			Instructions: "Be concise.",
-			Config: agent.Config{
-				DisableFuncAutoCall: true,
-			},
 		},
 	)
 
@@ -2519,7 +2553,7 @@ func TestResponsesNonStreamingMCPCall_MapsResultContent(t *testing.T) {
                 "name":"create_issue",
                 "arguments":"{\"title\":\"Bug\"}",
                 "output":"issue #7 created",
-                "error":"rate limited"
+				"error":{"type":"mcp_tool_execution_error","message":"rate limited"}
               }]
             }
             `
@@ -2587,7 +2621,7 @@ func TestResponsesStreamingMCPCall_MapsResultContent(t *testing.T) {
 data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_001","object":"response","created_at":1741892091,"status":"in_progress","model":"gpt-4o-mini","output":[]}}
 
 event: response.output_item.done
-data: {"type":"response.output_item.done","sequence_number":1,"output_index":0,"item":{"type":"mcp_call","id":"mcp_123","server_label":"github","name":"create_issue","arguments":"{\"title\":\"Bug\"}","output":"issue #7 created","error":"rate limited"}}
+data: {"type":"response.output_item.done","sequence_number":1,"output_index":0,"item":{"type":"mcp_call","id":"mcp_123","server_label":"github","name":"create_issue","arguments":"{\"title\":\"Bug\"}","output":"issue #7 created","error":{"type":"mcp_tool_execution_error","message":"rate limited"}}}
 
 event: response.completed
 data: {"type":"response.completed","sequence_number":2,"response":{"id":"resp_001","object":"response","created_at":1741892091,"status":"completed","model":"gpt-4o-mini","output":[]}}
@@ -5738,7 +5772,6 @@ func TestDisableStoreOutputDoesNotUseOrUpdateResponseID(t *testing.T) {
 		openaiprovider.AgentConfig{
 			Model:              "gpt-4o-mini",
 			DisableStoreOutput: true,
-			Config:             agent.Config{DisableFuncAutoCall: true},
 		},
 	)
 	session, err := a.CreateSession(t.Context())
@@ -5805,7 +5838,6 @@ func TestResponsesNewParamsStoreOverridesDisableStoreOutput(t *testing.T) {
 		openaiprovider.AgentConfig{
 			Model:              "gpt-4o-mini",
 			DisableStoreOutput: true,
-			Config:             agent.Config{DisableFuncAutoCall: true},
 		},
 	)
 	session, err := a.CreateSession(t.Context())
@@ -5872,8 +5904,7 @@ func TestResponsesNewParamsStoreFalseDoesNotUpdateResponseID(t *testing.T) {
 	a := openaiprovider.NewResponsesAgent(
 		openai.NewClient(option.WithBaseURL(server.URL)),
 		openaiprovider.AgentConfig{
-			Model:  "gpt-4o-mini",
-			Config: agent.Config{DisableFuncAutoCall: true},
+			Model: "gpt-4o-mini",
 		},
 	)
 	session, err := a.CreateSession(t.Context())
@@ -5932,8 +5963,7 @@ func TestResponsesNewParamsStoreFalseDoesNotDuplicateReasoningInclude(t *testing
 	a := openaiprovider.NewResponsesAgent(
 		openai.NewClient(option.WithBaseURL(server.URL)),
 		openaiprovider.AgentConfig{
-			Model:  "gpt-4o-mini",
-			Config: agent.Config{DisableFuncAutoCall: true},
+			Model: "gpt-4o-mini",
 		},
 	)
 
@@ -5943,6 +5973,55 @@ func TestResponsesNewParamsStoreFalseDoesNotDuplicateReasoningInclude(t *testing
 			Store:   openai.Bool(false),
 			Include: []responses.ResponseIncludable{responses.ResponseIncludableReasoningEncryptedContent},
 		}),
+	).Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestResponsesIncludeReasoningEncryptedContentFalseSkipsAutomaticInclude(t *testing.T) {
+	const input = `
+		{
+			"store":false,
+			"model":"gpt-4o-mini",
+			"input":[{
+				"type":"message",
+				"role":"user",
+				"content":[{"type":"input_text","text":"hello"}]
+			}]
+		}
+		`
+
+	const output = `
+		{
+			"id": "resp_67890",
+			"object": "response",
+			"created_at": 1741891428,
+			"status": "completed",
+			"model": "gpt-4o-mini-2024-07-18",
+			"output": [{
+				"type": "message",
+				"id": "msg_67d32764fcdc8191bcf2e444d4088804058a5e08c46a181d",
+				"status": "completed",
+				"role": "assistant",
+				"content": [{"type": "output_text", "text": "Hello!", "annotations": []}]
+			}]
+		}
+		`
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := openaiprovider.NewResponsesAgent(
+		openai.NewClient(option.WithBaseURL(server.URL)),
+		openaiprovider.AgentConfig{
+			Model: "gpt-4o-mini",
+		},
+	)
+
+	_, err := a.RunText(t.Context(), "hello",
+		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{Store: openai.Bool(false)}),
+		openaiprovider.ResponsesIncludeReasoningEncryptedContent(false),
 	).Collect()
 	if err != nil {
 		t.Fatalf("error = %v", err)
@@ -6695,19 +6774,9 @@ func TestResponsesMultipleRequiredFunctions(t *testing.T) {
                         }
                     }
                 ],
-                "tool_choice": {
-                    "type": "allowed_tools",
-                    "mode": "required",
-                    "tools": [
-                        {
-                            "type": "function",
-                            "name": "GetWeather"
-                        },
-                        {
-                            "type": "function",
-                            "name": "GetTime"
-                        }
-                    ]
+				"tool_choice": {
+					"type": "function",
+					"name": "GetWeather"
                 },
                 "model": "gpt-4o-mini",
                 "input": [{
@@ -6791,7 +6860,7 @@ func TestResponsesMultipleRequiredFunctions(t *testing.T) {
 		t.Context(), "What's the weather and time in Seattle?",
 		agent.WithTool(weatherTool),
 		agent.WithTool(timeTool),
-		agent.WithToolMode(tool.RequireTools("GetWeather", "GetTime")),
+		agent.WithToolMode(tool.RequireTool("GetWeather")),
 	).Collect()
 	if err != nil {
 		t.Fatalf("error = %v", err)
@@ -6857,8 +6926,7 @@ data: {"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"c
 	a := openaiprovider.NewResponsesAgent(
 		openai.NewClient(option.WithBaseURL(server.URL), option.WithHTTPClient(httpClient)),
 		openaiprovider.AgentConfig{
-			Model:  "gpt-4o-mini",
-			Config: agent.Config{DisableFuncAutoCall: true},
+			Model: "gpt-4o-mini",
 		},
 	)
 

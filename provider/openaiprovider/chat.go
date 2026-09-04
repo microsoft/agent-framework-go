@@ -52,12 +52,23 @@ func ChatCompletionNewParams(params openai.ChatCompletionNewParams) agent.Option
 type AgentConfig struct {
 	agent.Config
 
+	// ToolAutoCall configures automatic function-tool invocation. When nil, defaults
+	// are used.
+	ToolAutoCall *toolautocall.Config
+
+	// ProviderName identifies the service powering the agent. It defaults to
+	// "openai". Adapters over the OpenAI protocol can set their own identity.
+	ProviderName string
+
 	// Instructions are provided to OpenAI as system instructions for each run.
 	Instructions string
 
 	// DisableStoreOutput is used only by [NewResponsesAgent]. It disables
 	// service-side output storage and prevents response IDs from being saved into
-	// agent sessions for later continuation.
+	// agent sessions for later continuation. While enabled, Responses requests
+	// also include `reasoning.encrypted_content` by default so reasoning items
+	// can be replayed statelessly; use [ResponsesIncludeReasoningEncryptedContent]
+	// to opt out per run.
 	// It is ignored by [NewChatCompletionsAgent].
 	DisableStoreOutput bool
 
@@ -71,17 +82,15 @@ func NewChatCompletionsAgent(oclient openai.Client, config AgentConfig) *agent.A
 		config: config,
 	}
 	if config.Instructions != "" {
-		config.RunOptions = append(config.RunOptions, agent.WithInstructions(config.Instructions))
+		config.RunOptions = append(slices.Clone(config.RunOptions), agent.WithInstructions(config.Instructions))
 	}
-	var providerMiddlewares []agent.Middleware
-	if !config.DisableFuncAutoCall {
-		providerMiddlewares = append(providerMiddlewares, toolautocall.New(toolautocall.Config{
-			Logger:           config.Logger,
-			LogSensitiveData: config.LogSensitiveData,
-		}))
+	autoCall := toolautocall.Config{Logger: config.Logger, LogSensitiveData: config.LogSensitiveData}
+	if config.ToolAutoCall != nil {
+		autoCall = *config.ToolAutoCall
 	}
+	providerMiddlewares := []agent.Middleware{toolautocall.New(autoCall)}
 	return agent.New(agent.ProviderConfig{
-		ProviderName: "openai",
+		ProviderName: cmp.Or(config.ProviderName, "openai"),
 		Run:          c.run,
 		Middlewares:  providerMiddlewares,
 		Format:       c.formatOf,
@@ -148,12 +157,13 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 		}
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			update := &agent.ResponseUpdate{
-				Contents:     contents,
-				Role:         message.RoleAssistant,
-				ResponseID:   resp.ID,
-				MessageID:    resp.ID,
-				FinishReason: finishReason,
-				CreatedAt:    time.Unix(resp.Created, 0),
+				Contents:          contents,
+				Role:              message.RoleAssistant,
+				ResponseID:        resp.ID,
+				MessageID:         resp.ID,
+				FinishReason:      finishReason,
+				CreatedAt:         time.Unix(resp.Created, 0),
+				RawRepresentation: resp,
 			}
 			if !yield(update, nil) {
 				return
@@ -203,12 +213,13 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 				finishReason = chunk.Choices[0].FinishReason
 			}
 			resp := &agent.ResponseUpdate{
-				Contents:     contents,
-				Role:         role,
-				ResponseID:   chunk.ID,
-				MessageID:    chunk.ID,
-				FinishReason: finishReason,
-				CreatedAt:    time.Unix(chunk.Created, 0),
+				Contents:          contents,
+				Role:              role,
+				ResponseID:        chunk.ID,
+				MessageID:         chunk.ID,
+				FinishReason:      finishReason,
+				CreatedAt:         time.Unix(chunk.Created, 0),
+				RawRepresentation: chunk,
 			}
 			if !yield(resp, nil) {
 				return
@@ -240,6 +251,8 @@ func buildCompletionParams(model string, messages []*message.Message, opts []age
 	var params openai.ChatCompletionNewParams
 	if p, ok := agent.GetOption(opts, ChatCompletionNewParams); ok {
 		params = p
+		params.Messages = slices.Clone(params.Messages)
+		params.Tools = slices.Clone(params.Tools)
 	}
 	params.Model = cmp.Or(params.Model, model)
 	if frmt, ok := agent.GetOption(opts, agent.WithResponseFormat); ok {
@@ -273,48 +286,29 @@ func buildCompletionParams(model string, messages []*message.Message, opts []age
 			}
 		}
 	}
-	first := true
-	for tl := range agent.AllOptions(opts, agent.WithTool) {
-		if first {
-			first = false
-			if mode, ok := agent.GetOption(opts, agent.WithToolMode); ok {
-				switch mode.Mode() {
-				case tool.ToolModeAuto, "":
-					params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
-						OfAuto: openai.String(string(openai.ChatCompletionToolChoiceOptionAutoAuto)),
-					}
-				case tool.ToolModeNone:
-					params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
-						OfAuto: openai.String(string(openai.ChatCompletionToolChoiceOptionAutoNone)),
-					}
-				case tool.ToolModeRequired:
-					names := mode.Required()
-					if len(names) == 0 {
-						params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
-							OfAuto: openai.String(string(openai.ChatCompletionToolChoiceOptionAutoRequired)),
-						}
-					} else if len(names) == 1 {
-						params.ToolChoice = openai.ToolChoiceOptionFunctionToolChoice(openai.ChatCompletionNamedToolChoiceFunctionParam{
-							Name: names[0],
-						})
-					} else {
-						toolsMap := make([]map[string]any, 0, len(names))
-						for _, name := range names {
-							toolsMap = append(toolsMap, map[string]any{
-								"type": "function",
-								"function": map[string]any{
-									"name": name,
-								},
-							})
-						}
-						params.ToolChoice = openai.ToolChoiceOptionAllowedTools(openai.ChatCompletionAllowedToolsParam{
-							Mode:  openai.ChatCompletionAllowedToolsModeRequired,
-							Tools: toolsMap,
-						})
-					}
+	if mode, ok := agent.GetOption(opts, agent.WithToolMode); ok {
+		switch mode.Mode() {
+		case tool.ToolModeAuto, "":
+			params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
+				OfAuto: openai.String(string(openai.ChatCompletionToolChoiceOptionAutoAuto)),
+			}
+		case tool.ToolModeNone:
+			params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
+				OfAuto: openai.String(string(openai.ChatCompletionToolChoiceOptionAutoNone)),
+			}
+		case tool.ToolModeRequired:
+			if name, ok := mode.RequiredTool(); !ok {
+				params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
+					OfAuto: openai.String(string(openai.ChatCompletionToolChoiceOptionAutoRequired)),
 				}
+			} else {
+				params.ToolChoice = openai.ToolChoiceOptionFunctionToolChoice(openai.ChatCompletionNamedToolChoiceFunctionParam{
+					Name: name,
+				})
 			}
 		}
+	}
+	for tl := range agent.AllOptions(opts, agent.WithTool) {
 		switch tl := tl.(type) {
 		case *hostedtool.WebSearch:
 			if location, ok := tl.AdditionalProperties["user_location"]; ok {

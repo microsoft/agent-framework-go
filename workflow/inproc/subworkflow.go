@@ -150,10 +150,10 @@ func (h *subworkflowHostExecutor) beginRun(ctx *workflow.Context, runner *runner
 	return runner.beginStream(ctx, execution.ModeSubworkflow)
 }
 
-func (h *subworkflowHostExecutor) ensureRunSendMessage(ctx *workflow.Context, incomingMessage any, resume bool) (*execution.RunHandle, error) {
+func (h *subworkflowHostExecutor) ensureRunSendMessage(ctx *workflow.Context, incomingMessage any, incomingMessageType reflect.Type, resume bool) (*execution.RunHandle, error) {
 	if h.run != nil {
 		if incomingMessage != nil {
-			if err := h.run.EnqueueMessage(ctx, incomingMessage); err != nil {
+			if _, err := h.run.EnqueueMessageUntyped(ctx, incomingMessage, incomingMessageType); err != nil {
 				return nil, err
 			}
 		}
@@ -171,7 +171,7 @@ func (h *subworkflowHostExecutor) ensureRunSendMessage(ctx *workflow.Context, in
 		return nil, err
 	}
 	if incomingMessage != nil {
-		if err := run.EnqueueMessage(ctx, incomingMessage); err != nil {
+		if _, err := run.EnqueueMessageUntyped(ctx, incomingMessage, incomingMessageType); err != nil {
 			_ = run.Close(ctx)
 			_ = runner.RequestEndRun(ctx)
 			return nil, err
@@ -207,15 +207,23 @@ func (h *subworkflowHostExecutor) queueExternalMessage(ctx *workflow.Context, ms
 	if response, ok := workflow.PortableValueAs[*workflow.ExternalResponse](msg); ok {
 		unqualified, ok := h.checkAndUnqualifyResponse(response)
 		if !ok {
-			return nil, nil
+			return nil, errors.New("subworkflow: external response is not associated with this subworkflow")
 		}
-		_, err := h.ensureRunSendMessage(ctx, unqualified, false)
+		_, err := h.ensureRunSendMessage(ctx, unqualified, nil, false)
 		return nil, err
 	}
 
-	for _, typ := range h.protocol.Accepts {
+	runner, err := h.ensureRunner()
+	if err != nil {
+		return nil, err
+	}
+	inputTypes, err := runner.startingExecutorInputTypes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, typ := range inputTypes {
 		if value, ok := msg.As(typ); ok {
-			_, err := h.ensureRunSendMessage(ctx, value, false)
+			_, err := h.ensureRunSendMessage(ctx, value, typ, false)
 			return nil, err
 		}
 	}
@@ -351,7 +359,7 @@ func (h *subworkflowHostExecutor) onCheckpointRestored(ctx *workflow.Context) er
 		h.pendingResponsePorts.Store(requestID, portInfo)
 	}
 
-	_, err = h.ensureRunSendMessage(ctx, nil, true)
+	_, err = h.ensureRunSendMessage(ctx, nil, nil, true)
 	return err
 }
 

@@ -26,6 +26,10 @@ import (
 type AgentConfig struct {
 	agent.Config
 
+	// ToolAutoCall configures automatic function-tool invocation. When nil, defaults
+	// are used.
+	ToolAutoCall *toolautocall.Config
+
 	// Instructions are sent to AG-UI as a leading system message for each run.
 	Instructions string
 
@@ -51,20 +55,18 @@ func NewAgent(aclient *aguiSSEClient.Client, config AgentConfig) *agent.Agent {
 		client: aclient,
 	}
 	if config.Instructions != "" {
-		config.RunOptions = append(config.RunOptions, agent.WithInstructions(config.Instructions))
+		config.RunOptions = append(slices.Clone(config.RunOptions), agent.WithInstructions(config.Instructions))
 	}
 	if config.Decoder != nil {
 		p.decoder = config.Decoder
 	} else {
 		p.decoder = aguiEvents.NewEventDecoder(nil)
 	}
-	var providerMiddlewares []agent.Middleware
-	if !config.DisableFuncAutoCall {
-		providerMiddlewares = append(providerMiddlewares, toolautocall.New(toolautocall.Config{
-			Logger:           config.Logger,
-			LogSensitiveData: config.LogSensitiveData,
-		}))
+	autoCall := toolautocall.Config{Logger: config.Logger, LogSensitiveData: config.LogSensitiveData}
+	if config.ToolAutoCall != nil {
+		autoCall = *config.ToolAutoCall
 	}
+	providerMiddlewares := []agent.Middleware{toolautocall.New(autoCall)}
 	return agent.New(agent.ProviderConfig{
 		ProviderName:                "agui",
 		Run:                         p.run,
@@ -381,6 +383,10 @@ type toolCallAccumulator struct {
 	// TextMessageChunkEvent that carried one. Chunks that omit MessageID
 	// continue that message.
 	lastChunkMessageID string
+	// lastReasoningChunkMessageID is the same for ReasoningMessageChunkEvent,
+	// kept separate from lastChunkMessageID so interleaved text and reasoning
+	// chunks that omit MessageID do not inherit each other's message.
+	lastReasoningChunkMessageID string
 }
 
 func (a *toolCallAccumulator) onEvent(evt aguiEvents.Event) ([]*agent.ResponseUpdate, error) {
@@ -445,6 +451,23 @@ func (a *toolCallAccumulator) onEvent(evt aguiEvents.Event) ([]*agent.ResponseUp
 			MessageID: a.lastChunkMessageID,
 			CreatedAt: eventTime(evt),
 			Contents:  message.Contents{&message.TextContent{Text: delta}},
+		}}, nil
+	case *aguiEvents.ReasoningMessageChunkEvent:
+		delta := deref(e.Delta)
+		if delta == "" {
+			return nil, nil
+		}
+		// A chunk may omit MessageID to continue the current reasoning message;
+		// reuse the last reasoning chunk MessageID (kept separate from the text
+		// chunk MessageID so interleaved text/reasoning chunks do not cross).
+		if id := deref(e.MessageID); id != "" {
+			a.lastReasoningChunkMessageID = id
+		}
+		return []*agent.ResponseUpdate{{
+			Role:      message.RoleAssistant,
+			MessageID: a.lastReasoningChunkMessageID,
+			CreatedAt: eventTime(evt),
+			Contents:  message.Contents{&message.TextReasoningContent{Text: delta}},
 		}}, nil
 	case *aguiEvents.ReasoningMessageContentEvent:
 		return []*agent.ResponseUpdate{{

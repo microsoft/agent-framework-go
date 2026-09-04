@@ -42,6 +42,10 @@ type client struct {
 type AgentConfig struct {
 	agent.Config
 
+	// ToolAutoCall configures automatic function-tool invocation. When nil, defaults
+	// are used.
+	ToolAutoCall *toolautocall.Config
+
 	// Instructions are provided to Gemini as system instructions for each run.
 	Instructions string
 
@@ -59,15 +63,13 @@ func NewAgent(gclient *genai.Client, config AgentConfig) *agent.Agent {
 		config: config,
 	}
 	if config.Instructions != "" {
-		config.RunOptions = append(config.RunOptions, agent.WithInstructions(config.Instructions))
+		config.RunOptions = append(slices.Clone(config.RunOptions), agent.WithInstructions(config.Instructions))
 	}
-	var providerMiddlewares []agent.Middleware
-	if !config.DisableFuncAutoCall {
-		providerMiddlewares = append(providerMiddlewares, toolautocall.New(toolautocall.Config{
-			Logger:           config.Logger,
-			LogSensitiveData: config.LogSensitiveData,
-		}))
+	autoCall := toolautocall.Config{Logger: config.Logger, LogSensitiveData: config.LogSensitiveData}
+	if config.ToolAutoCall != nil {
+		autoCall = *config.ToolAutoCall
 	}
+	providerMiddlewares := []agent.Middleware{toolautocall.New(autoCall)}
 	return agent.New(agent.ProviderConfig{
 		Run:          c.run,
 		ProviderName: "gcp.gemini",
@@ -294,7 +296,7 @@ func (a *client) buildParams(messages []*message.Message, opts []agent.Option) (
 	}
 
 	// Apply tool mode.
-	if mode, ok := agent.GetOption(opts, agent.WithToolMode); ok && len(funcDecls) > 0 {
+	if mode, ok := agent.GetOption(opts, agent.WithToolMode); ok {
 		fc := &genai.FunctionCallingConfig{}
 		switch mode.Mode() {
 		case tool.ToolModeAuto, "":
@@ -303,7 +305,9 @@ func (a *client) buildParams(messages []*message.Message, opts []agent.Option) (
 			fc.Mode = genai.FunctionCallingConfigModeNone
 		case tool.ToolModeRequired:
 			fc.Mode = genai.FunctionCallingConfigModeAny
-			fc.AllowedFunctionNames = mode.Required()
+			if name, ok := mode.RequiredTool(); ok {
+				fc.AllowedFunctionNames = []string{name}
+			}
 		}
 		// Merge into any caller-supplied ToolConfig (e.g. a RetrievalConfig for
 		// Vertex grounding passed through GenerateContentConfig) rather than
@@ -531,7 +535,7 @@ func buildResponsePart(part *genai.Part, contents []message.Content) ([]message.
 		// _generate_tool_call_id.
 		callID := part.FunctionCall.ID
 		if callID == "" {
-			callID = "tool-call-" + strings.ReplaceAll(uuid.NewString(), "-", "")
+			callID = "tool-call-" + uuid.NewString()
 		}
 		// Gemini 3 attaches the opaque thought_signature to the same part that
 		// carries the function call (Thought is false, Text is empty). Capture it

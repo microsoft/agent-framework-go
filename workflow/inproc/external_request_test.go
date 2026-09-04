@@ -89,7 +89,8 @@ func TestPostRequestFromExecutor(t *testing.T) {
 
 	// An executor that:
 	//   * on string input: posts an ExternalRequest, then halts.
-	//   * on *ExternalResponse: yields the response data as workflow output.
+	//   * on any other input: handles the concrete *ExternalResponse through an
+	//     interface route and yields its data as workflow output.
 	id := "asker"
 	binding := workflow.ExecutorBinding{
 		ID:               id,
@@ -111,7 +112,7 @@ func TestPostRequestFromExecutor(t *testing.T) {
 						}
 						return nil, wctx.PostRequest(req)
 					}).
-					AddHandlerRaw(reflect.TypeFor[*workflow.ExternalResponse](), nil, func(wctx *workflow.Context, msg any) (any, error) {
+					AddHandlerRaw(reflect.TypeFor[any](), nil, func(wctx *workflow.Context, msg any) (any, error) {
 						resp := msg.(*workflow.ExternalResponse)
 						data, _ := resp.Data.As(port.Response)
 						return nil, wctx.YieldOutput(data)
@@ -287,7 +288,7 @@ func TestExternalResponse_UnsolicitedResponseErrors(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
+	stream, err := inproc.Default.OpenStreaming(ctx, wf)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}

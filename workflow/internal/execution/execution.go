@@ -83,8 +83,8 @@ type SuperStepRunner interface {
 	RepublishPendingEvents(context.Context) error
 
 	EnqueueResponse(context.Context, *workflow.ExternalResponse) error
-	IsValidInputType(context.Context, reflect.Type) bool
-	EnqueueMessage(context.Context, any) error
+	IsValidInputType(context.Context, reflect.Type) (bool, error)
+	EnqueueMessageUntyped(context.Context, any, reflect.Type) (bool, error)
 
 	OutgoingEvents() *ConcurrentEventSink
 

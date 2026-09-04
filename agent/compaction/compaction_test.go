@@ -696,3 +696,45 @@ func messageTexts(messages []*message.Message) []string {
 	}
 	return texts
 }
+
+func TestNewProvider_KeepsRetainedHistorySourceAcrossTurns(t *testing.T) {
+	// A compaction provider generates only summary messages; genuine prior-turn
+	// history returned from the persisted index must keep its original Source.
+	// Across turns the index is rebuilt from persisted groups whose message
+	// pointers differ from this turn's input, so identity-based attribution
+	// wrongly stamps real history as context-provider generated.
+	provider := compaction.NewContextProvider(compaction.ContextProviderConfig{
+		Strategy: &compaction.TruncationStrategy{Trigger: compaction.Never()},
+		SourceID: "compaction-test",
+	})
+	session := agenttest.CreateSession()
+
+	if _, _, err := invokeProvider(provider, t.Context(), []*message.Message{
+		textMessage(message.RoleUser, "u1"),
+		textMessage(message.RoleAssistant, "a1"),
+	}, agent.WithSession(session)); err != nil {
+		t.Fatalf("turn 1: %v", err)
+	}
+
+	out, _, err := invokeProvider(provider, t.Context(), []*message.Message{
+		textMessage(message.RoleUser, "u1"),
+		textMessage(message.RoleAssistant, "a1"),
+		textMessage(message.RoleUser, "u2"),
+		textMessage(message.RoleAssistant, "a2"),
+	}, agent.WithSession(session))
+	if err != nil {
+		t.Fatalf("turn 2: %v", err)
+	}
+
+	cp := message.Source{Type: agent.SourceTypeContextProvider, ID: "compaction-test"}
+	for i, msg := range out {
+		if msg.Source == cp {
+			t.Errorf("message %d (%q) mislabeled as context-provider generated; genuine history must not be attributed to the provider", i, msg.String())
+		}
+	}
+	// Retained prior-turn history restored from compaction state is attributed as
+	// chat history (matching .NET), not context-provider generated.
+	if len(out) < 2 || out[0].Source.Type != agent.SourceTypeHistoryProvider || out[1].Source.Type != agent.SourceTypeHistoryProvider {
+		t.Errorf("retained history should be marked as chat history, got %#v and %#v", out[0].Source, out[1].Source)
+	}
+}

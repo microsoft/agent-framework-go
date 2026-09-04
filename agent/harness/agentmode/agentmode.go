@@ -125,6 +125,7 @@ func New(cfg Config) *Provider {
 
 	// Validate modes: no empty names, no duplicates.
 	validModes := make(map[string]struct{}, len(modes))
+	modeNames := make([]string, 0, len(modes))
 	for i, m := range modes {
 		if strings.TrimSpace(m.Name) == "" {
 			panic(fmt.Sprintf("agentmode: mode at index %d has an empty name", i))
@@ -136,16 +137,18 @@ func New(cfg Config) *Provider {
 			panic(fmt.Sprintf("agentmode: duplicate mode name %q", m.Name))
 		}
 		validModes[m.Name] = struct{}{}
+		modeNames = append(modeNames, m.Name)
 	}
 	if _, ok := validModes[defaultMode]; !ok {
 		panic(fmt.Sprintf("agentmode: default mode %q is not in the configured modes list", defaultMode))
 	}
 
 	p := &Provider{
-		modes:        modes,
-		defaultMode:  defaultMode,
-		instructions: instructions,
-		validModes:   validModes,
+		modes:            modes,
+		defaultMode:      defaultMode,
+		instructions:     instructions,
+		validModes:       validModes,
+		modeNamesDisplay: strings.Join(modeNames, "\", \""),
 	}
 
 	p.provider = agent.NewContextProvider(agent.ContextProviderConfig{
@@ -158,11 +161,12 @@ func New(cfg Config) *Provider {
 // Provider is an agent mode context provider.
 // Use [New] to create. Provider can be used directly in agent configuration.
 type Provider struct {
-	provider     agent.ContextProvider
-	modes        []Mode
-	defaultMode  string
-	instructions string
-	validModes   map[string]struct{}
+	provider         agent.ContextProvider
+	modes            []Mode
+	defaultMode      string
+	instructions     string
+	validModes       map[string]struct{}
+	modeNamesDisplay string
 
 	sessionLocks    sync.Map // map[weak.Pointer[agent.Session]]*sync.Mutex
 	nullSessionLock sync.Mutex
@@ -284,20 +288,14 @@ func (p *Provider) buildInstructions(currentMode string) string {
 }
 
 func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
-	modeNames := make([]string, len(p.modes))
-	for i, m := range p.modes {
-		modeNames[i] = m.Name
-	}
-	modeNamesDisplay := strings.Join(modeNames, "\", \"")
-
 	setTool := functool.MustNew(
 		functool.Config{
 			Name:        "mode_set",
-			Description: fmt.Sprintf("Switch the agent's operating mode. Supported modes: \"%s\".", modeNamesDisplay),
+			Description: fmt.Sprintf("Switch the agent's operating mode. Supported modes: \"%s\".", p.modeNamesDisplay),
 		},
 		func(ctx context.Context, mode string) (string, error) {
 			if _, ok := p.validModes[mode]; !ok {
-				return "", fmt.Errorf("invalid mode: %q. Supported modes: \"%s\"", mode, modeNamesDisplay)
+				return "", fmt.Errorf("invalid mode: %q. Supported modes: \"%s\"", mode, p.modeNamesDisplay)
 			}
 			mu := p.getSessionLock(opts)
 			mu.Lock()

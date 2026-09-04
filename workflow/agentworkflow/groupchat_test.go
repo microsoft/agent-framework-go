@@ -714,7 +714,7 @@ func newGroupChatLabelAgent(id string, name string, label string) *agent.Agent {
 	}
 	return agent.New(
 		agent.ProviderConfig{ProviderName: "group-chat-label", Run: run},
-		agent.Config{ID: id, Name: name, DisableFuncAutoCall: true},
+		agent.Config{ID: id, Name: name},
 	)
 }
 
@@ -737,7 +737,7 @@ func newGroupChatDoubleEchoAgent(id string) *agent.Agent {
 	}
 	return agent.New(
 		agent.ProviderConfig{ProviderName: "group-chat-double-echo", Run: run},
-		agent.Config{ID: id, Name: id, DisableFuncAutoCall: true, HistoryProvider: agent.NewHistoryProvider(agent.HistoryProviderConfig{SourceID: "noop-history"})},
+		agent.Config{ID: id, Name: id, HistoryProvider: agent.NewHistoryProvider(agent.HistoryProviderConfig{SourceID: "noop-history"})},
 	)
 }
 
@@ -828,7 +828,7 @@ func newGroupChatApprovalAgent(id string) *groupChatApprovalAgent {
 	}
 	agentState.Agent = agent.New(
 		agent.ProviderConfig{ProviderName: "group-chat-approval", Run: run},
-		agent.Config{ID: id, Name: id, DisableFuncAutoCall: true, HistoryProvider: agent.NewHistoryProvider(agent.HistoryProviderConfig{SourceID: "noop-history"})},
+		agent.Config{ID: id, Name: id, HistoryProvider: agent.NewHistoryProvider(agent.HistoryProviderConfig{SourceID: "noop-history"})},
 	)
 	return agentState
 }
@@ -882,7 +882,7 @@ func newGroupChatFunctionCallAgent(id string) *groupChatFunctionCallAgent {
 	}
 	agentState.Agent = agent.New(
 		agent.ProviderConfig{ProviderName: "group-chat-function-call", Run: run},
-		agent.Config{ID: id, Name: id, DisableFuncAutoCall: true, HistoryProvider: agent.NewHistoryProvider(agent.HistoryProviderConfig{SourceID: "noop-history"})},
+		agent.Config{ID: id, Name: id, HistoryProvider: agent.NewHistoryProvider(agent.HistoryProviderConfig{SourceID: "noop-history"})},
 	)
 	return agentState
 }
@@ -1031,7 +1031,7 @@ func runGroupChatWorkflowTurn(t *testing.T, wf *workflow.Workflow, inputText str
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
+	stream, err := inproc.Lockstep.OpenStreaming(ctx, wf)
 	if err != nil {
 		t.Fatalf("RunStreaming: %v", err)
 	}
@@ -1041,14 +1041,14 @@ func runGroupChatWorkflowTurn(t *testing.T, wf *workflow.Workflow, inputText str
 		}
 	}()
 
-	if err := stream.SendMessage(ctx, []*message.Message{{
+	if _, err := stream.TrySendMessage(ctx, []*message.Message{{
 		Role:     message.RoleUser,
 		Contents: []message.Content{&message.TextContent{Text: inputText}},
 	}}); err != nil {
 		t.Fatalf("SendMessage input: %v", err)
 	}
 	emitEvents := true
-	if err := stream.SendMessage(ctx, workflow.TurnToken{EmitEvents: &emitEvents}); err != nil {
+	if _, err := stream.TrySendMessage(ctx, workflow.TurnToken{EmitEvents: &emitEvents}); err != nil {
 		t.Fatalf("SendMessage turn token: %v", err)
 	}
 

@@ -1367,7 +1367,7 @@ func TestStreamingRun_RestoreCheckpointWhileReadingState_NoDataRace(t *testing.T
 		t.Fatal("expected checkpoint")
 	}
 
-	if err := run.SendMessage(ctx, "read"); err != nil {
+	if _, err := run.TrySendMessage(ctx, "read"); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
 	<-started

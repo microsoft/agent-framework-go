@@ -3,8 +3,6 @@
 package workflow
 
 import (
-	"strings"
-
 	"github.com/google/uuid"
 )
 
@@ -23,16 +21,15 @@ type CheckpointInfo struct {
 
 // NewCheckpointInfo creates checkpoint metadata for sessionID.
 //
-// The generated checkpoint ID is a UUID string without hyphen separators so it
-// can be used safely in checkpoint indexes and file names. NewCheckpointInfo
-// panics if sessionID is empty.
+// The generated checkpoint ID is a UUID string. NewCheckpointInfo panics if
+// sessionID is empty.
 func NewCheckpointInfo(sessionID string) CheckpointInfo {
 	if sessionID == "" {
 		panic("workflow: checkpoint session ID is required")
 	}
 	return CheckpointInfo{
 		SessionID:    sessionID,
-		CheckpointID: strings.ReplaceAll(uuid.NewString(), "-", ""),
+		CheckpointID: uuid.NewString(),
 	}
 }
 

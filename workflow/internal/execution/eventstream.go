@@ -170,7 +170,7 @@ func (s *streamingRunEventStream) runLoop() {
 	}
 
 	// Wait for the first input before starting.
-	// The consumer will call EnqueueMessage which signals the run loop.
+	// The consumer will call EnqueueMessageUntyped, which signals the run loop.
 	// Note: RunHandle also signals here on checkpoint resume when there are
 	// already pending requests, so the first iteration can emit a
 	// PendingRequests halt signal even without unprocessed messages.
@@ -233,11 +233,7 @@ func (s *streamingRunEventStream) runLoop() {
 		}
 
 		// Update status based on what's waiting
-		if s.stepRunner.HasUnservicedRequests() {
-			s.setStatus(RunStatusPendingRequests)
-		} else {
-			s.setStatus(RunStatusIdle)
-		}
+		s.setStatus(idleOrPendingRequestsStatus(s.stepRunner))
 
 		// Signal completion to consumer so they can check status and decide whether to continue
 		// Increment epoch so next consumer iteration gets a new completion signal
@@ -332,6 +328,45 @@ func (s *streamingRunEventStream) TakeEventStream(ctx context.Context, blockOnPe
 	}
 
 	return func(yield func(workflow.Event, error) bool) {
+		// Fast path: the run has already halted and there is no fresh work. The
+		// halt signal is a one-shot queue item, so a prior consumer may have
+		// already drained it for this epoch; blocking in nextEvent would then wait
+		// forever for a signal that is never re-emitted (the run loop is parked
+		// awaiting input). Drain whatever is still queued and stop at the
+		// terminal/pending halt instead, mirroring the lockstep stream. The
+		// blockOnPendingRequest path still falls through to block for serviced input.
+		if !expectingFreshWork {
+			for {
+				evt, ok := s.eventQueue.Dequeue()
+				if !ok {
+					break
+				}
+				if signal, ok := evt.(*internalHaltSignal); ok {
+					if signal.epoch < myEpoch {
+						continue
+					}
+					if signal.status == RunStatusIdle || signal.status == RunStatusEnded {
+						return
+					}
+					if !blockOnPendingRequest && signal.status == RunStatusPendingRequests {
+						return
+					}
+					continue
+				}
+				if !yield(evt, nil) {
+					return
+				}
+			}
+			switch s.getStatus() {
+			case RunStatusIdle, RunStatusEnded:
+				return
+			case RunStatusPendingRequests:
+				if !blockOnPendingRequest {
+					return
+				}
+			}
+		}
+
 		for {
 			evt, ok := s.nextEvent(ctx)
 			if !ok {
@@ -492,11 +527,7 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 
 		defer func() {
 			// Update status
-			if l.stepRunner.HasUnservicedRequests() {
-				l.setStatus(RunStatusPendingRequests)
-			} else {
-				l.setStatus(RunStatusIdle)
-			}
+			l.setStatus(idleOrPendingRequestsStatus(l.stepRunner))
 		}()
 
 		l.setStatus(RunStatusRunning)
@@ -507,6 +538,11 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 			cycleCtx, runActivity = telemetry.StartWorkflowRun(linkedCtx, workflowMetadata(wf, l.stepRunner.SessionID()))
 			runActivity.AddEvent(observability.EventWorkflowStarted)
 		}
+		defer func() {
+			if runActivity != nil {
+				runActivity.End()
+			}
+		}()
 
 		startRunActivity()
 		l.eventQueue.Enqueue(workflow.StartedEvent{})
@@ -528,6 +564,7 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 						runActivity.AddErrorEvent(observability.EventWorkflowError, err)
 						runActivity.CaptureError(err)
 						runActivity.End()
+						runActivity = nil
 					}
 					sessionErr = err
 					if !errors.Is(err, context.Canceled) {
@@ -545,13 +582,8 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 				runActivity.End()
 				runActivity = nil
 			}
-
 			// Update status
-			if l.stepRunner.HasUnservicedRequests() {
-				l.setStatus(RunStatusPendingRequests)
-			} else {
-				l.setStatus(RunStatusIdle)
-			}
+			l.setStatus(idleOrPendingRequestsStatus(l.stepRunner))
 
 			// Check if we should break
 			status := l.getStatus()
@@ -579,11 +611,7 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 					// No work yet: the run may have progressed to a terminal
 					// state (e.g. requests serviced elsewhere). Re-evaluate and
 					// stop if there is nothing left to wait for.
-					if l.stepRunner.HasUnservicedRequests() {
-						l.setStatus(RunStatusPendingRequests)
-					} else {
-						l.setStatus(RunStatusIdle)
-					}
+					l.setStatus(idleOrPendingRequestsStatus(l.stepRunner))
 					status = l.getStatus()
 					if l.shouldBreak(status, blockOnPendingRequest, linkedCtx) {
 						return
@@ -591,14 +619,12 @@ func (l *lockstepRunEventStream) TakeEventStream(ctx context.Context, blockOnPen
 				}
 				startRunActivity()
 				// Emit a StartedEvent for the continuation cycle, mirroring the
-				// streaming run loop which raises one per input → processing →
-				// halt cycle. There is confirmed work to process, so the event
-				// stays paired with the cycle that runs it. The event is drained
-				// and yielded before the cycle's supersteps.
+				// streaming run loop which raises one per input-to-processing-to-halt
+				// cycle. There is confirmed work to process, so the event stays paired
+				// with the cycle that runs it.
 				l.eventQueue.Enqueue(workflow.StartedEvent{})
-				// Drain immediately so the StartedEvent is yielded before the
-				// cycle's supersteps run, rather than being held in the queue
-				// and drained alongside the first superstep's events.
+				// Drain immediately so the StartedEvent precedes the cycle's
+				// supersteps instead of being delivered with the first step's events.
 				if !l.drainAndFilterEvents(linkedCtx, yield) {
 					return
 				}
@@ -643,6 +669,13 @@ func (l *lockstepRunEventStream) shouldBreak(status RunStatus, blockOnPendingReq
 		return true
 	}
 	return false
+}
+
+func idleOrPendingRequestsStatus(stepRunner SuperStepRunner) RunStatus {
+	if stepRunner.HasUnservicedRequests() {
+		return RunStatusPendingRequests
+	}
+	return RunStatusIdle
 }
 
 // SignalInput signals that new input has been provided and the run loop should continue processing.

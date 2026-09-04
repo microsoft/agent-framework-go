@@ -23,6 +23,7 @@ type mockA2ATransport struct {
 	capturedGetTaskReq         *a2a.GetTaskRequest
 	responseToReturn           a2a.SendMessageResult
 	streamingResponseToReturn  a2a.Event
+	streamingResponsesToReturn []a2a.Event
 	subscribeResponseToReturn  a2a.Event
 	subscribeErrToReturn       error
 	getTaskErrToReturn         error
@@ -57,6 +58,35 @@ func (m *mockA2ATransport) SendStreamingMessage(ctx context.Context, _ a2aclient
 	m.sendStreamingMessageCalled = true
 	m.sendStreamingCallCount++
 	m.capturedMessageSendParams = params
+	if len(m.streamingResponsesToReturn) > 0 {
+		for _, response := range m.streamingResponsesToReturn {
+			switch response := response.(type) {
+			case *a2a.Message:
+				if response.ContextID == "" {
+					response.ContextID = params.Message.ContextID
+				}
+			case *a2a.Task:
+				if response.ContextID == "" {
+					response.ContextID = params.Message.ContextID
+				}
+			case *a2a.TaskStatusUpdateEvent:
+				if response.ContextID == "" {
+					response.ContextID = params.Message.ContextID
+				}
+			case *a2a.TaskArtifactUpdateEvent:
+				if response.ContextID == "" {
+					response.ContextID = params.Message.ContextID
+				}
+			}
+		}
+		return func(yield func(a2a.Event, error) bool) {
+			for _, response := range m.streamingResponsesToReturn {
+				if !yield(response, nil) {
+					return
+				}
+			}
+		}
+	}
 	responseToYield := m.streamingResponseToReturn
 	if m.rawStreamingResponse {
 		if responseToYield == nil {
@@ -220,11 +250,7 @@ func newTestAgent(transport a2aclient.Transport, config agent.Config) *agent.Age
 }
 
 func latestTaskID(session *agent.Session) string {
-	taskIDs := a2a1.TaskIDsFromSession(session)
-	if len(taskIDs) == 0 {
-		return ""
-	}
-	return taskIDs[len(taskIDs)-1]
+	return a2a1.TaskIDFromSession(session)
 }
 
 // TestConstructorWithNilClient tests that nil client is handled
@@ -235,6 +261,25 @@ func TestConstructorWithNilClient(t *testing.T) {
 		}
 	}()
 	a2a1.NewAgent(nil, a2a1.AgentConfig{})
+}
+
+func TestCreateSessionValidatesExistingA2AIDs(t *testing.T) {
+	a := newTestAgent(&mockA2ATransport{}, agent.Config{})
+	tests := []struct {
+		name    string
+		options []agent.Option
+	}{
+		{name: "blank context ID", options: []agent.Option{agent.WithServiceID(" ")}},
+		{name: "task ID without context ID", options: []agent.Option{a2a1.WithTaskID("task-123")}},
+		{name: "blank task ID", options: []agent.Option{agent.WithServiceID("context-123"), a2a1.WithTaskID(" ")}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := a.CreateSession(t.Context(), test.options...); err == nil {
+				t.Fatal("CreateSession error = nil")
+			}
+		})
+	}
 }
 
 // TestRunAllowsNonUserRoleMessages tests that non-user role messages are accepted
@@ -313,6 +358,27 @@ func TestRunWithValidUserMessage(t *testing.T) {
 	}
 	if msg.String() != "Hello! How can I help you today?" {
 		t.Errorf("String() = %q, want %q", msg.String(), "Hello! How can I help you today?")
+	}
+	if result.FinishReason != "stop" {
+		t.Errorf("FinishReason = %q, want stop", result.FinishReason)
+	}
+	if !result.CreatedAt.IsZero() || !msg.CreatedAt.IsZero() {
+		t.Fatalf("A2A response synthesized a creation timestamp: response=%v message=%v", result.CreatedAt, msg.CreatedAt)
+	}
+}
+
+func TestRunForwardsRequestMetadata(t *testing.T) {
+	transport := &mockA2ATransport{}
+	a := newTestAgent(transport, agent.Config{})
+	metadata := map[string]any{"tenant": "contoso"}
+	option := a2a1.WithMetadata(metadata)
+	metadata["tenant"] = "mutated"
+
+	if _, err := a.RunText(t.Context(), "hello", option).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	if got := transport.capturedMessageSendParams.Metadata["tenant"]; got != "contoso" {
+		t.Fatalf("request metadata tenant = %#v, want contoso", got)
 	}
 }
 
@@ -813,10 +879,7 @@ func TestRunCombinesMultipleMessagesIntoSingleRequest(t *testing.T) {
 	}
 }
 
-// TestRunPreservesEmptyNonNilMetadata verifies that an input message carrying an
-// empty-but-non-nil AdditionalProperties map results in an empty-but-non-nil
-// Metadata map on the combined A2A message (nil vs empty map are distinct in JSON).
-func TestRunPreservesEmptyNonNilMetadata(t *testing.T) {
+func TestRunOmitsEmptyMetadata(t *testing.T) {
 	transport := &mockA2ATransport{
 		responseToReturn: &a2a.Task{
 			ID:        a2a.TaskID("task-abc"),
@@ -846,11 +909,8 @@ func TestRunPreservesEmptyNonNilMetadata(t *testing.T) {
 	if capturedMsg == nil {
 		t.Fatal("capturedMessageSendParams.Message is nil")
 	}
-	if capturedMsg.Metadata == nil {
-		t.Fatal("message.Metadata = nil, want empty non-nil map")
-	}
-	if len(capturedMsg.Metadata) != 0 {
-		t.Fatalf("message.Metadata = %#v, want empty map", capturedMsg.Metadata)
+	if capturedMsg.Metadata != nil {
+		t.Fatalf("message.Metadata = %#v, want nil", capturedMsg.Metadata)
 	}
 }
 
@@ -947,7 +1007,7 @@ func TestRunWithTaskInSessionAndMessage(t *testing.T) {
 	}
 	a := newTestAgent(transport, agent.Config{})
 
-	session, err := a.CreateSession(t.Context(), a2a1.TaskID("task-123"))
+	session, err := a.CreateSession(t.Context(), agent.WithServiceID("context-123"), a2a1.WithTaskID("task-123"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -968,7 +1028,7 @@ func TestRunWithTaskInSessionAndMessage(t *testing.T) {
 	}
 }
 
-func TestRunWithMultipleTaskIDsInSessionAndMessage(t *testing.T) {
+func TestCreateSessionWithRepeatedTaskIDUsesLastValue(t *testing.T) {
 	transport := &mockA2ATransport{
 		responseToReturn: &a2a.Message{
 			ID:    "response-123",
@@ -978,7 +1038,12 @@ func TestRunWithMultipleTaskIDsInSessionAndMessage(t *testing.T) {
 	}
 	a := newTestAgent(transport, agent.Config{})
 
-	session, err := a.CreateSession(t.Context(), a2a1.TaskID("task-123"), a2a1.TaskID("task-456"))
+	session, err := a.CreateSession(
+		t.Context(),
+		agent.WithServiceID("context-123"),
+		a2a1.WithTaskID("task-123"),
+		a2a1.WithTaskID("task-456"),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -992,21 +1057,15 @@ func TestRunWithMultipleTaskIDsInSessionAndMessage(t *testing.T) {
 	if capturedMsg == nil {
 		t.Fatal("capturedMessageSendParams.Message is nil")
 	}
-	if len(capturedMsg.ReferenceTasks) != 2 {
-		t.Fatalf("len(message.ReferenceTasks) = %d, want 2", len(capturedMsg.ReferenceTasks))
+	if len(capturedMsg.ReferenceTasks) != 1 {
+		t.Fatalf("len(message.ReferenceTasks) = %d, want 1", len(capturedMsg.ReferenceTasks))
 	}
-	if string(capturedMsg.ReferenceTasks[0]) != "task-123" {
-		t.Errorf("message.ReferenceTasks[0] = %q, want %q", capturedMsg.ReferenceTasks[0], "task-123")
-	}
-	if string(capturedMsg.ReferenceTasks[1]) != "task-456" {
-		t.Errorf("message.ReferenceTasks[1] = %q, want %q", capturedMsg.ReferenceTasks[1], "task-456")
+	if string(capturedMsg.ReferenceTasks[0]) != "task-456" {
+		t.Errorf("message.ReferenceTasks[0] = %q, want %q", capturedMsg.ReferenceTasks[0], "task-456")
 	}
 }
 
-// TestRunDeduplicatesTaskIDsAcrossTurns tests that repeating the same task ID
-// across turns (as happens when every streamed event carries the same task ID)
-// stores it only once, so follow-up requests do not accumulate duplicates.
-func TestRunDeduplicatesTaskIDsAcrossTurns(t *testing.T) {
+func TestRunKeepsCurrentTaskIDAcrossTurns(t *testing.T) {
 	transport := &mockA2ATransport{
 		responseToReturn: &a2a.Task{
 			ID:        a2a.TaskID("task-123"),
@@ -1027,14 +1086,12 @@ func TestRunDeduplicatesTaskIDsAcrossTurns(t *testing.T) {
 		}
 	}
 
-	taskIDs := a2a1.TaskIDsFromSession(session)
-	if len(taskIDs) != 1 || taskIDs[0] != "task-123" {
-		t.Fatalf("TaskIDsFromSession = %v, want [task-123]", taskIDs)
+	if taskID := a2a1.TaskIDFromSession(session); taskID != "task-123" {
+		t.Fatalf("TaskIDFromSession = %q, want %q", taskID, "task-123")
 	}
 }
 
-// TestRunKeepsDistinctTaskIDs tests that dedup does not collapse distinct task IDs.
-func TestRunKeepsDistinctTaskIDs(t *testing.T) {
+func TestRunReplacesCurrentTaskID(t *testing.T) {
 	transport := &mockA2ATransport{
 		responseToReturn: &a2a.Task{
 			ID:        a2a.TaskID("task-123"),
@@ -1062,10 +1119,8 @@ func TestRunKeepsDistinctTaskIDs(t *testing.T) {
 		t.Fatalf("second run error = %v, want nil", err)
 	}
 
-	taskIDs := a2a1.TaskIDsFromSession(session)
-	want := []string{"task-123", "task-456"}
-	if len(taskIDs) != len(want) || taskIDs[0] != want[0] || taskIDs[1] != want[1] {
-		t.Fatalf("TaskIDsFromSession = %v, want %v", taskIDs, want)
+	if taskID := a2a1.TaskIDFromSession(session); taskID != "task-456" {
+		t.Fatalf("TaskIDFromSession = %q, want %q", taskID, "task-456")
 	}
 }
 
@@ -1201,8 +1256,8 @@ func TestRunWithAgentTaskResponse(t *testing.T) {
 		t.Fatalf("len(result.Messages) = %d, want 1", len(result.Messages))
 	}
 	msg := result.Messages[0]
-	if msg.ID != "" {
-		t.Errorf("ID = %q, want empty", msg.ID)
+	if msg.ID != "art-1" {
+		t.Errorf("ID = %q, want art-1", msg.ID)
 	}
 
 	if result.ContinuationToken == "" {
@@ -1295,7 +1350,78 @@ func TestRunWithVariousTaskStates(t *testing.T) {
 			} else if !tt.expectContinuationToken && result.ContinuationToken != "" {
 				t.Errorf("ContinuationToken = %v, want empty", result.ContinuationToken)
 			}
+			wantFinishReason := ""
+			if tt.state == a2a.TaskStateCompleted {
+				wantFinishReason = "stop"
+			}
+			if result.FinishReason != wantFinishReason {
+				t.Errorf("FinishReason = %q, want %q", result.FinishReason, wantFinishReason)
+			}
 		})
+	}
+}
+
+func TestRunWithTaskPreservesArtifactMessageBoundaries(t *testing.T) {
+	transport := &mockA2ATransport{responseToReturn: &a2a.Task{
+		ID:        "task-1",
+		ContextID: "context-1",
+		Status:    a2a.TaskStatus{State: a2a.TaskStateCompleted},
+		Metadata:  map[string]any{"task": "metadata"},
+		Artifacts: []*a2a.Artifact{
+			{ID: "artifact-1", Metadata: map[string]any{"kind": "first"}, Parts: a2a.ContentParts{a2a.NewTextPart("one")}},
+			{ID: "artifact-2", Metadata: map[string]any{"kind": "second"}, Parts: a2a.ContentParts{a2a.NewTextPart("two")}},
+		},
+	}}
+	a := newTestAgent(transport, agent.Config{})
+
+	response, err := a.RunText(t.Context(), "start").Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Messages) != 2 {
+		t.Fatalf("message count = %d, want 2", len(response.Messages))
+	}
+	for i, want := range []struct {
+		id, text, kind string
+	}{{"artifact-1", "one", "first"}, {"artifact-2", "two", "second"}} {
+		msg := response.Messages[i]
+		if msg.ID != want.id || msg.String() != want.text || msg.AdditionalProperties["kind"] != want.kind {
+			t.Errorf("message %d = id:%q text:%q metadata:%v", i, msg.ID, msg.String(), msg.AdditionalProperties)
+		}
+		if msg.AdditionalProperties["task"] != "metadata" {
+			t.Errorf("message %d lost task metadata", i)
+		}
+	}
+}
+
+func TestStreamingArtifactPreservesTaskStateAndDirectMessageClearsTask(t *testing.T) {
+	transport := &mockA2ATransport{
+		streamingResponsesToReturn: []a2a.Event{
+			&a2a.TaskStatusUpdateEvent{TaskID: "task-1", ContextID: "context-1", Status: a2a.TaskStatus{State: a2a.TaskStateWorking}},
+			&a2a.TaskArtifactUpdateEvent{TaskID: "task-1", ContextID: "context-1", Artifact: &a2a.Artifact{ID: "artifact-1", Parts: a2a.ContentParts{a2a.NewTextPart("progress")}}},
+		},
+		responseToReturn: &a2a.Message{ID: "message-2", ContextID: "context-1", Role: a2a.MessageRoleAgent},
+	}
+	a := newTestAgent(transport, agent.Config{})
+	session, err := a.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := a.RunText(t.Context(), "start", agent.WithSession(session), agent.Stream(true)).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	if got := a2a1.TaskIDFromSession(session); got != "task-1" {
+		t.Fatalf("task ID after artifact = %q, want task-1", got)
+	}
+	if _, err := a.RunText(t.Context(), "follow up", agent.WithSession(session)).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	if refs := transport.capturedMessageSendParams.Message.ReferenceTasks; len(refs) != 1 || refs[0] != "task-1" {
+		t.Fatalf("follow-up references = %v, want [task-1]", refs)
+	}
+	if got := a2a1.TaskIDFromSession(session); got != "" {
+		t.Fatalf("task ID after direct message = %q, want empty", got)
 	}
 }
 
@@ -1522,7 +1648,7 @@ func TestRunStreamingWithTaskInSessionAndMessage(t *testing.T) {
 	}
 	a := newTestAgent(transport, agent.Config{})
 
-	session, err := a.CreateSession(t.Context(), a2a1.TaskID("task-123"))
+	session, err := a.CreateSession(t.Context(), agent.WithServiceID("context-123"), a2a1.WithTaskID("task-123"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1927,10 +2053,7 @@ func TestRunWithAgentTaskResponse_NoMetadataYieldsNilProperties(t *testing.T) {
 	}
 }
 
-// TestRunStreamingWithTaskArtifactUpdateEvent_SurfacesArtifactMetadata asserts
-// that the artifact's Metadata carried by a TaskArtifactUpdateEvent is folded
-// into the update's AdditionalProperties alongside the event-level metadata.
-func TestRunStreamingWithTaskArtifactUpdateEvent_SurfacesArtifactMetadata(t *testing.T) {
+func TestRunStreamingWithTaskArtifactUpdateEvent_UsesEventMetadata(t *testing.T) {
 	transport := &mockA2ATransport{
 		streamingResponseToReturn: &a2a.TaskArtifactUpdateEvent{
 			TaskID:    a2a.TaskID("task-artifact-meta"),
@@ -1962,8 +2085,8 @@ func TestRunStreamingWithTaskArtifactUpdateEvent_SurfacesArtifactMetadata(t *tes
 		t.Fatalf("len(updates) = %d, want 1", len(updates))
 	}
 	props := updates[0].AdditionalProperties
-	if got, ok := props["ext"]; !ok || got != "v" {
-		t.Errorf("AdditionalProperties[ext] = %v (ok=%v), want %q", got, ok, "v")
+	if _, ok := props["ext"]; ok {
+		t.Errorf("AdditionalProperties unexpectedly contains artifact metadata: %v", props)
 	}
 	if got, ok := props["event-key"]; !ok || got != "event-value" {
 		t.Errorf("AdditionalProperties[event-key] = %v (ok=%v), want %q", got, ok, "event-value")

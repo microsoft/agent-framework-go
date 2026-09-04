@@ -317,15 +317,24 @@ func setWorkflowAttributes(span *Activity, metadata WorkflowMetadata) {
 	span.SetAttributes(attrs...)
 }
 
-func serialize(value any) string {
+func serialize(value any) (serialized string) {
 	if value == nil {
 		return ""
 	}
+	defer func() {
+		if recover() != nil {
+			serialized = fallbackSerializedValue(value)
+		}
+	}()
 	data, err := json.Marshal(value)
 	if err != nil {
-		return fmt.Sprintf("[Unserializable: %T]", value)
+		return fallbackSerializedValue(value)
 	}
 	return string(data)
+}
+
+func fallbackSerializedValue(value any) string {
+	return fmt.Sprintf("[Unserializable: %T]", value)
 }
 
 type contextKey struct{}

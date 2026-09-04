@@ -268,6 +268,8 @@ func (mr *messageRouter) routeMessage(ctx *Context, msg any) (result callResult,
 				// If we found a runtime type, we can use it
 				msg = v
 			}
+		} else if value := pvalue.Any(); value != nil && pvalue.TypeID.MatchPolymorphic(reflect.TypeOf(value)) {
+			msg = value
 		}
 	}
 	defer func() {

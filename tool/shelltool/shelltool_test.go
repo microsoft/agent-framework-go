@@ -152,8 +152,6 @@ func TestDefaultShellEnvironmentInstructions_posix(t *testing.T) {
 }
 
 func TestEnvironmentProvider_refreshOnHostReportsDefaultFamily(t *testing.T) {
-	t.Parallel()
-
 	cfg, _ := statelessPlatformConfig(t)
 	ft := newLocal(t, cfg)
 	env := shelltool.NewEnvironmentProvider(ft, shelltool.EnvironmentProviderConfig{
