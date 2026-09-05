@@ -106,11 +106,11 @@ func extractArg(args *[]string, flag string, stderr io.Writer) (string, bool) {
 		}
 		if i+1 >= len(*args) {
 			_, _ = fmt.Fprintf(stderr, "Missing value for %s.\n", flag)
-			*args = append((*args)[:i], (*args)[i+1:]...)
+			*args = slices.Delete(*args, i, i+1)
 			return "", false
 		}
 		value := (*args)[i+1]
-		*args = append((*args)[:i], (*args)[i+2:]...)
+		*args = slices.Delete(*args, i, i+2)
 		return value, true
 	}
 	return "", true
@@ -119,7 +119,7 @@ func extractArg(args *[]string, flag string, stderr io.Writer) (string, bool) {
 func extractFlag(args *[]string, flag string) bool {
 	for i, arg := range *args {
 		if arg == flag {
-			*args = append((*args)[:i], (*args)[i+1:]...)
+			*args = slices.Delete(*args, i, i+1)
 			return true
 		}
 	}

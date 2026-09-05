@@ -127,13 +127,8 @@ func validateState(t *testing.T, expectedValue int) func(*int) *int {
 	}
 }
 
-func maxTurns(limit int) func(any) bool {
-	return func(maybeTurn any) bool {
-		if turn, ok := maybeTurn.(TestTurnToken); ok {
-			return turn.Count < limit
-		}
-		return false
-	}
+func maxTurns(limit int) func(TestTurnToken) bool {
+	return func(turn TestTurnToken) bool { return turn.Count < limit }
 }
 
 func TestInProcessRun_StateShouldPersist_NotCheckpointed(t *testing.T) {
@@ -154,8 +149,8 @@ func TestInProcessRun_StateShouldPersist_NotCheckpointed(t *testing.T) {
 	)
 
 	wf, err := workflow.NewBuilder(writer.Bind()).
-		AddDirectEdge(writer.Bind(), validator.Bind(), false, maxTurns(4)).
-		AddDirectEdge(validator.Bind(), writer.Bind(), false, maxTurns(4)).
+		AddEdge(writer.Bind(), validator.Bind(), workflow.WithEdgeCondition(maxTurns(4))).
+		AddEdge(validator.Bind(), writer.Bind(), workflow.WithEdgeCondition(maxTurns(4))).
 		Build()
 	if err != nil {
 		t.Fatalf("Failed to build workflow: %v", err)
@@ -198,8 +193,8 @@ func TestInProcessRun_StateShouldPersist_Checkpointed(t *testing.T) {
 	)
 
 	wf, err := workflow.NewBuilder(writer.Bind()).
-		AddDirectEdge(writer.Bind(), validator.Bind(), false, maxTurns(4)).
-		AddDirectEdge(validator.Bind(), writer.Bind(), false, maxTurns(4)).
+		AddEdge(writer.Bind(), validator.Bind(), workflow.WithEdgeCondition(maxTurns(4))).
+		AddEdge(validator.Bind(), writer.Bind(), workflow.WithEdgeCondition(maxTurns(4))).
 		Build()
 	if err != nil {
 		t.Fatalf("Failed to build workflow: %v", err)
@@ -286,7 +281,7 @@ func TestInProcessRun_StateShouldPersist_JSONCheckpointed(t *testing.T) {
 			t.Errorf("Close read run: %v", err)
 		}
 	}()
-	if err := readRun.SendMessage(ctx, "read"); err != nil {
+	if _, err := readRun.TrySendMessage(ctx, "read"); err != nil {
 		t.Fatalf("SendMessage read: %v", err)
 	}
 	var got any
@@ -325,13 +320,13 @@ func TestInProcessRun_ReadStateKeysLifecycle(t *testing.T) {
 			}
 
 			ctx := context.Background()
-			stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
+			stream, err := inproc.Lockstep.OpenStreaming(ctx, wf)
 			if err != nil {
 				t.Fatalf("RunStreaming: %v", err)
 			}
 			defer func() { _ = stream.CancelRun() }()
 
-			if err := stream.SendMessage(ctx, "write"); err != nil {
+			if _, err := stream.TrySendMessage(ctx, "write"); err != nil {
 				t.Fatalf("SendMessage write: %v", err)
 			}
 			for _, err := range stream.WatchUntilHalt(ctx) {
@@ -347,7 +342,7 @@ func TestInProcessRun_ReadStateKeysLifecycle(t *testing.T) {
 				t.Fatalf("reader keys after write = %v, want %v", got, testCase.wantAfterWrite)
 			}
 
-			if err := stream.SendMessage(ctx, "delete"); err != nil {
+			if _, err := stream.TrySendMessage(ctx, "delete"); err != nil {
 				t.Fatalf("SendMessage delete: %v", err)
 			}
 			for _, err := range stream.WatchUntilHalt(ctx) {

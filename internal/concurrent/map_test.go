@@ -3,6 +3,7 @@
 package concurrent
 
 import (
+	"maps"
 	"testing"
 )
 
@@ -28,10 +29,7 @@ func TestMap_All(t *testing.T) {
 		m.Store(k, v)
 	}
 
-	got := make(map[string]int)
-	for k, v := range m.All() {
-		got[k] = v
-	}
+	got := maps.Collect(m.All())
 
 	if len(got) != len(items) {
 		t.Errorf("expected %d items, got %d", len(items), len(got))

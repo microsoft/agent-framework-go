@@ -78,3 +78,18 @@ func TestMessage_WithSource_ReturnsOriginalWhenUnchanged(t *testing.T) {
 		t.Fatal("expected WithSource to return original message when source is unchanged")
 	}
 }
+
+func TestMessage_Clone_ClonesContentsSlice(t *testing.T) {
+	content := &message.TextContent{Text: "original"}
+	original := message.New(content)
+
+	cloned := original.Clone()
+	if cloned.Contents[0] != content {
+		t.Fatal("expected content values to remain shallow-copied")
+	}
+
+	cloned.Contents[0] = &message.TextContent{Text: "replacement"}
+	if original.Contents[0] != content {
+		t.Fatal("expected replacing cloned contents not to modify the original message")
+	}
+}

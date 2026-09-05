@@ -68,6 +68,17 @@ func TestFuncTool_MustNew(t *testing.T) {
 	}
 }
 
+func TestFuncTool_NewRejectsNilHandler(t *testing.T) {
+	var handler functool.HandlerFor[struct{}, string]
+	tool, err := functool.New(functool.Config{Name: "nil-handler"}, handler)
+	if err == nil || err.Error() != "functool: handler is required" {
+		t.Fatalf("New() error = %v, want handler required error", err)
+	}
+	if tool != nil {
+		t.Fatalf("New() tool = %T, want nil", tool)
+	}
+}
+
 func TestFuncTool_CallMissingArg0(t *testing.T) {
 	cfg := functool.Config{
 		Name: "test",
@@ -101,6 +112,67 @@ func TestFuncTool_CallStruct(t *testing.T) {
 	}
 	if ret.(string) != "hello" {
 		t.Errorf("expected 'hello', got %q", ret.(string))
+	}
+}
+
+func TestFuncTool_PointerOutputNilReturnsZeroValue(t *testing.T) {
+	type Out struct {
+		Msg string `json:"msg"`
+	}
+	type In struct {
+		A int `json:"a"`
+	}
+	tl := functool.MustNew(functool.Config{Name: "test"},
+		func(ctx context.Context, in In) (*Out, error) {
+			return nil, nil // legitimate "no result"
+		})
+
+	ret, err := tl.Call(t.Context(), `{"a":1}`)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	got, ok := ret.(*Out)
+	if !ok {
+		t.Fatalf("result type = %T, want *Out", ret)
+	}
+	if got == nil {
+		t.Fatal("result is nil, want zero-value *Out")
+	}
+	if got.Msg != "" {
+		t.Errorf("Msg = %q, want empty", got.Msg)
+	}
+}
+
+// namedPtr is a named pointer type; reflect.New produces an unnamed *outStruct
+// that is not directly assertable to it.
+type outStruct struct {
+	Msg string `json:"msg"`
+}
+
+type namedPtr *outStruct
+
+func TestFuncTool_NamedPointerOutputNilReturnsZeroValue(t *testing.T) {
+	type In struct {
+		A int `json:"a"`
+	}
+	tl := functool.MustNew(functool.Config{Name: "test"},
+		func(ctx context.Context, in In) (namedPtr, error) {
+			return nil, nil
+		})
+
+	ret, err := tl.Call(t.Context(), `{"a":1}`)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	got, ok := ret.(namedPtr)
+	if !ok {
+		t.Fatalf("result type = %T, want namedPtr", ret)
+	}
+	if got == nil {
+		t.Fatal("result is nil, want zero-value namedPtr")
+	}
+	if got.Msg != "" {
+		t.Errorf("Msg = %q, want empty", got.Msg)
 	}
 }
 
