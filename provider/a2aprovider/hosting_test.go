@@ -22,7 +22,7 @@ func newHostedTestAgent(runFn func(context.Context, []*message.Message, ...agent
 }
 
 func newRequestHandler(hostedAgent *agent.Agent, cfg a2aprovider.ExecutorConfig, options ...a2asrv.RequestHandlerOption) a2asrv.RequestHandler {
-	return a2asrv.NewHandler(a2aprovider.NewExecutor(hostedAgent, cfg), options...)
+	return a2aprovider.NewHandler(hostedAgent, cfg, options...)
 }
 
 func TestNewExecutor_PanicsWithoutAgent(t *testing.T) {
@@ -114,6 +114,53 @@ func TestRequestHandler_OnSendMessage_PreservesContextID(t *testing.T) {
 	}
 }
 
+func TestRequestHandler_OnSendMessage_ForwardsMetadataAndConfigurationToHostedAgent(t *testing.T) {
+	historyLength := 10
+	config := &a2a.SendMessageConfig{
+		AcceptedOutputModes: []string{"text/plain", "image/png"},
+		HistoryLength:       &historyLength,
+	}
+
+	var additionalProperties map[string]any
+	var runMetadata map[string]any
+	a := newHostedTestAgent(func(_ context.Context, _ []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		additionalProperties, _ = agent.GetOption(options, agent.WithAdditionalProperties)
+		runMetadata, _ = agent.GetOption(options, a2aprovider.WithMetadata)
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
+				MessageID: "m-config",
+				Role:      message.RoleAssistant,
+				Contents:  message.Contents{&message.TextContent{Text: "done"}},
+			}, nil)
+		}
+	})
+
+	h := newRequestHandler(a, a2aprovider.ExecutorConfig{})
+	_, err := h.SendMessage(context.Background(), &a2a.SendMessageRequest{
+		Config: config,
+		Message: a2a.NewMessage(
+			a2a.MessageRoleUser,
+			a2a.NewTextPart("ping"),
+		),
+		Metadata: map[string]any{
+			"key1": "value1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("OnSendMessage returned error: %v", err)
+	}
+
+	if len(additionalProperties) != 1 {
+		t.Fatalf("additional property count = %d, want %d", len(additionalProperties), 1)
+	}
+	if got := runMetadata["key1"]; got != "value1" {
+		t.Fatalf("metadata key1 = %v, want %q", got, "value1")
+	}
+	if got := additionalProperties[a2aprovider.RequestConfigurationPropertyKey]; got != config {
+		t.Fatalf("forwarded config = %#v, want %#v", got, config)
+	}
+}
+
 func TestRequestHandler_ContextIDIsNotProviderSessionID(t *testing.T) {
 	var serviceID string
 	a := newHostedTestAgent(func(_ context.Context, _ []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
@@ -162,6 +209,41 @@ func TestRequestHandler_ContextIDIsNotProviderSessionIDAndMetadataIsForwarded(t 
 	}
 	if runMetadata["tenant"] != "contoso" {
 		t.Fatalf("run metadata = %#v, want tenant=contoso", runMetadata)
+	}
+}
+
+func TestRequestHandler_OnSendMessage_WhenConfigurationRequestsImmediateReturn_DoesNotOverrideRunMode(t *testing.T) {
+	var (
+		allowBackground      bool
+		additionalProperties map[string]any
+	)
+	config := &a2a.SendMessageConfig{ReturnImmediately: true}
+	a := newHostedTestAgent(func(_ context.Context, _ []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		allowBackground, _ = agent.GetOption(options, agent.AllowBackgroundResponses)
+		additionalProperties, _ = agent.GetOption(options, agent.WithAdditionalProperties)
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
+				MessageID: "m-run-mode",
+				Role:      message.RoleAssistant,
+				Contents:  message.Contents{&message.TextContent{Text: "done"}},
+			}, nil)
+		}
+	})
+
+	h := newRequestHandler(a, a2aprovider.ExecutorConfig{})
+	_, err := h.SendMessage(context.Background(), &a2a.SendMessageRequest{
+		Config:  config,
+		Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("ping")),
+	})
+	if err != nil {
+		t.Fatalf("OnSendMessage returned error: %v", err)
+	}
+
+	if allowBackground {
+		t.Fatal("expected AllowBackgroundResponses=false")
+	}
+	if got := additionalProperties[a2aprovider.RequestConfigurationPropertyKey]; got != config {
+		t.Fatalf("forwarded config = %#v, want %#v", got, config)
 	}
 }
 

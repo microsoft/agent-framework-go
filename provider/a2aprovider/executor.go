@@ -417,6 +417,11 @@ func (e *executor) newRunOptions(ctx context.Context, execCtx *a2asrv.ExecutorCo
 	}
 	if execCtx.Metadata != nil {
 		runOptions = append(runOptions, WithMetadata(execCtx.Metadata))
+		if config, ok := execCtx.Metadata[RequestConfigurationPropertyKey]; ok {
+			runOptions = append(runOptions, agent.WithAdditionalProperties(map[string]any{
+				RequestConfigurationPropertyKey: config,
+			}))
+		}
 	}
 	if stream {
 		runOptions = append(runOptions, agent.Stream(true))
