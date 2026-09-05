@@ -125,9 +125,15 @@ func NewAgent(endpoint string, credential azcore.TokenCredential, target AgentTa
 	)
 	openAIOptions = append(openAIOptions, targetOptions...)
 	openAIOptions = append(openAIOptions, clientHeadersRequestOption())
+	openAIOptions = append(openAIOptions, hostedAgentUserIdentityRequestOption())
 	openAIOptions = append(openAIOptions, hostedAgentSessionRequestOption())
 	openAIOptions = append(openAIOptions, servedModelRequestOption())
-	config.Middlewares = append([]agent.Middleware{clientHeadersMiddleware{}, hostedAgentSessionMiddleware{}, servedModelMiddleware{}}, config.Middlewares...)
+	config.Middlewares = append([]agent.Middleware{
+		clientHeadersMiddleware{},
+		hostedAgentUserIdentityMiddleware{},
+		hostedAgentSessionMiddleware{},
+		servedModelMiddleware{},
+	}, config.Middlewares...)
 
 	return openaiprovider.NewResponsesAgent(openai.NewClient(openAIOptions...), openaiprovider.AgentConfig{
 		Config:             config.Config,

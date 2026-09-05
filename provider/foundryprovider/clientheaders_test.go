@@ -140,3 +140,80 @@ func TestWithClientHeaderDoesNotLeakToSubsequentRun(t *testing.T) {
 		t.Fatalf("x-client-end-user-id values = %#v", values)
 	}
 }
+
+func TestWithHostedAgentUserIdentityStampsRequest(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get(foundryprovider.HostedAgentUserIdentityHeader); got != "user-123" {
+			t.Fatalf("%s = %q", foundryprovider.HostedAgentUserIdentityHeader, got)
+		}
+		writeResponsesOK(w)
+	}))
+	defer server.Close()
+
+	foundryAgent := newFoundryAgent(t, server, foundryprovider.ServerAgent("my-agent"), foundryprovider.AgentConfig{})
+
+	if _, err := foundryAgent.RunText(t.Context(), "hello", foundryprovider.WithHostedAgentUserIdentity("user-123")).Collect(); err != nil {
+		t.Fatalf("RunText error = %v", err)
+	}
+}
+
+func TestWithHostedAgentUserIdentityRejectsInvalidArguments(t *testing.T) {
+	tests := []struct {
+		name         string
+		userIdentity string
+	}{
+		{name: "empty", userIdentity: ""},
+		{name: "whitespace", userIdentity: "   "},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertPanics(t, func() { _ = foundryprovider.WithHostedAgentUserIdentity(tt.userIdentity) })
+		})
+	}
+}
+
+func TestWithHostedAgentUserIdentityDoesNotLeakToSubsequentRun(t *testing.T) {
+	var values []string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		values = append(values, r.Header.Get(foundryprovider.HostedAgentUserIdentityHeader))
+		writeResponsesOK(w)
+	}))
+	defer server.Close()
+
+	foundryAgent := newFoundryAgent(t, server, foundryprovider.ServerAgent("my-agent"), foundryprovider.AgentConfig{})
+	if _, err := foundryAgent.RunText(t.Context(), "hello", foundryprovider.WithHostedAgentUserIdentity("alice")).Collect(); err != nil {
+		t.Fatalf("first RunText error = %v", err)
+	}
+	if _, err := foundryAgent.RunText(t.Context(), "hello").Collect(); err != nil {
+		t.Fatalf("second RunText error = %v", err)
+	}
+	if len(values) != 2 {
+		t.Fatalf("request count = %d", len(values))
+	}
+	if values[0] != "alice" || values[1] != "" {
+		t.Fatalf("%s values = %#v", foundryprovider.HostedAgentUserIdentityHeader, values)
+	}
+}
+
+func TestWithHostedAgentUserIdentityCoexistsWithClientHeaders(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get(foundryprovider.HostedAgentUserIdentityHeader); got != "user-123" {
+			t.Fatalf("%s = %q", foundryprovider.HostedAgentUserIdentityHeader, got)
+		}
+		if got := r.Header.Get("x-client-chat-id"); got != "chat-42" {
+			t.Fatalf("x-client-chat-id = %q", got)
+		}
+		writeResponsesOK(w)
+	}))
+	defer server.Close()
+
+	foundryAgent := newFoundryAgent(t, server, foundryprovider.ServerAgent("my-agent"), foundryprovider.AgentConfig{})
+
+	if _, err := foundryAgent.RunText(t.Context(), "hello",
+		foundryprovider.WithHostedAgentUserIdentity("user-123"),
+		foundryprovider.WithClientHeader("x-client-chat-id", "chat-42"),
+	).Collect(); err != nil {
+		t.Fatalf("RunText error = %v", err)
+	}
+}
