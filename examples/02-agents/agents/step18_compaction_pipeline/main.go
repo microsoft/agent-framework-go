@@ -58,23 +58,23 @@ func main() {
 			// 1. Gentle: collapse old tool-call groups into short summaries.
 			&compaction.ToolResultStrategy{
 				Trigger:                compaction.MessagesExceed(7),
-				MinimumPreservedGroups: 4,
+				MinimumPreservedGroups: new(4),
 			},
 			// 2. Moderate: use an LLM to summarize older conversation spans into a concise message.
 			&compaction.SummarizationStrategy{
 				Trigger:                compaction.TokensExceed(0x500),
 				Summarizer:             summarizer,
-				MinimumPreservedGroups: 4,
+				MinimumPreservedGroups: new(4),
 			},
 			// 3. Aggressive: keep only the last N user turns and their responses.
 			&compaction.SlidingWindowStrategy{
 				Trigger:               compaction.TurnsExceed(4),
-				MinimumPreservedTurns: 4,
+				MinimumPreservedTurns: new(4),
 			},
 			// 4. Emergency: drop oldest groups until under the token budget.
 			&compaction.TruncationStrategy{
 				Trigger:                compaction.TokensExceed(0x8000),
-				MinimumPreservedGroups: 8,
+				MinimumPreservedGroups: new(8),
 			},
 		},
 	}

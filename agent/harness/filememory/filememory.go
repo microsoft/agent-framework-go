@@ -159,7 +159,8 @@ func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
 		FileName    string `json:"file_name" jsonschema:"The name of the file to write."`
 		Content     string `json:"content" jsonschema:"The content to write to the file."`
 		Description string `json:"description,omitempty" jsonschema:"An optional description of the file contents for discovery."`
-	}) (string, error) {
+	},
+	) (string, error) {
 		normalized, err := validateMemoryFileName(input.FileName)
 		if err != nil {
 			return "", err
@@ -194,7 +195,8 @@ func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
 		Description: "Read the content of a memory file by file_name. Returns the file content or a message indicating the file was not found.",
 	}, func(ctx context.Context, input struct {
 		FileName string `json:"file_name" jsonschema:"The name of the file to read."`
-	}) (string, error) {
+	},
+	) (string, error) {
 		normalized, err := validateMemoryFileName(input.FileName)
 		if err != nil {
 			return "", err
@@ -215,7 +217,8 @@ func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
 		Description: "Delete a memory file by file_name. Also removes its companion description file if one exists.",
 	}, func(ctx context.Context, input struct {
 		FileName string `json:"file_name" jsonschema:"The name of the file to delete."`
-	}) (string, error) {
+	},
+	) (string, error) {
 		normalized, err := validateMemoryFileName(input.FileName)
 		if err != nil {
 			return "", err
@@ -246,7 +249,8 @@ func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
 		Description: "List all memory files with their descriptions, if available. Optionally filter file names with glob_pattern. Internal files are not shown.",
 	}, func(ctx context.Context, input struct {
 		GlobPattern string `json:"glob_pattern,omitempty" jsonschema:"Optional glob pattern such as '*.md' matched against file names."`
-	}) ([]ListEntry, error) {
+	},
+	) ([]ListEntry, error) {
 		state := p.loadState(opts)
 		children, err := p.store.ListChildren(ctx, state.WorkingFolder)
 		if err != nil {
@@ -255,7 +259,14 @@ func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
 		pattern := strings.TrimSpace(input.GlobPattern)
 		results := make([]ListEntry, 0)
 		for _, entry := range children {
-			if entry.Type != filestore.EntryTypeFile || isInternalFile(entry.Name) || !matchPattern(entry.Name, pattern) {
+			if entry.Type != filestore.EntryTypeFile || isInternalFile(entry.Name) {
+				continue
+			}
+			matched, err := matchPattern(entry.Name, pattern)
+			if err != nil {
+				return nil, fmt.Errorf("invalid glob_pattern %q: %w", pattern, err)
+			}
+			if !matched {
 				continue
 			}
 			description, found, err := p.store.Read(ctx, resolvePath(state.WorkingFolder, descriptionFileName(entry.Name)))
@@ -280,7 +291,8 @@ func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
 	}, func(ctx context.Context, input struct {
 		RegexPattern string `json:"regex_pattern" jsonschema:"A regular expression pattern to match against file contents (case-insensitive)."`
 		GlobPattern  string `json:"glob_pattern,omitempty" jsonschema:"Optional glob pattern to filter which files are searched."`
-	}) ([]filestore.SearchResult, error) {
+	},
+	) ([]filestore.SearchResult, error) {
 		state := p.loadState(opts)
 		results, err := p.store.Search(ctx, state.WorkingFolder, input.RegexPattern, input.GlobPattern, false)
 		if err != nil {
@@ -304,7 +316,8 @@ func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
 		OldString  string `json:"old_string" jsonschema:"The substring to find and replace."`
 		NewString  string `json:"new_string" jsonschema:"The replacement text."`
 		ReplaceAll bool   `json:"replace_all,omitempty" jsonschema:"When true, replace every occurrence instead of requiring exactly one match."`
-	}) (string, error) {
+	},
+	) (string, error) {
 		normalized, err := validateMemoryFileName(input.FileName)
 		if err != nil {
 			return "", err
@@ -337,7 +350,8 @@ func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
 	}, func(ctx context.Context, input struct {
 		FileName string               `json:"file_name" jsonschema:"The name of the file to modify."`
 		Edits    []filestore.LineEdit `json:"edits" jsonschema:"The list of line edits to apply."`
-	}) (string, error) {
+	},
+	) (string, error) {
 		normalized, err := validateMemoryFileName(input.FileName)
 		if err != nil {
 			return "", err
@@ -420,6 +434,11 @@ func (p *Provider) loadState(opts []agent.Option) State {
 	return state
 }
 
+// getSessionLock returns a per-session mutex guarding file-memory state against
+// concurrent tool invocations. The registry is keyed by session object identity
+// via a weak pointer so a session always maps to the same lock, and a runtime
+// cleanup drops the entry once the session is garbage collected to keep the
+// registry bounded. A shared fallback lock is used when no session is available.
 func (p *Provider) getSessionLock(opts []agent.Option) *sync.Mutex {
 	session, ok := agent.GetOption(opts, agent.WithSession)
 	if !ok || session == nil {
@@ -482,10 +501,9 @@ func resolvePath(workingFolder, fileName string) string {
 	return base + "/" + name
 }
 
-func matchPattern(name, pattern string) bool {
+func matchPattern(name, pattern string) (bool, error) {
 	if pattern == "" {
-		return true
+		return true, nil
 	}
-	matched, err := path.Match(strings.ToLower(pattern), strings.ToLower(name))
-	return err == nil && matched
+	return path.Match(strings.ToLower(pattern), strings.ToLower(name))
 }

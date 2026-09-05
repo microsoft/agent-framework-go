@@ -163,7 +163,7 @@ func TestProviderUsesWorkingFolderStateInitializer(t *testing.T) {
 func toolNames(opts []agent.Option) []string {
 	var names []string
 	for _, opt := range opts {
-		if tl, ok := opt.Value().(tool.Tool); ok {
+		if tl, ok := opt.MAFValue().(tool.Tool); ok {
 			names = append(names, tl.Name())
 		}
 	}
@@ -184,7 +184,7 @@ func collectInstructions(opts []agent.Option) string {
 func findTool(t *testing.T, opts []agent.Option, name string) tool.FuncTool {
 	t.Helper()
 	for _, opt := range opts {
-		tl, ok := opt.Value().(tool.FuncTool)
+		tl, ok := opt.MAFValue().(tool.FuncTool)
 		if ok && tl.Name() == name {
 			return tl
 		}

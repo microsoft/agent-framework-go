@@ -23,25 +23,27 @@ import (
 	"iter"
 	"reflect"
 	"slices"
+	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
 )
 
-var messagesSliceType = reflect.TypeFor[[]*message.Message]()
-
 const workflowErrorMessage = "An error occurred while executing the workflow."
+
+var messagesSliceType = reflect.TypeFor[[]*message.Message]()
 
 // AgentConfig configures a [workflow.Workflow] hosted as an [agent.Agent] via [NewAgent].
 type AgentConfig struct {
 	agent.Config
 
 	// Environment is the execution environment used to run the workflow on
-	// each agent turn. Defaults to [inproc.Default] when nil.
+	// each agent turn. When nil, [inproc.Concurrent] is used if every workflow
+	// executor supports concurrent shared execution; otherwise [inproc.OffThread]
+	// is used.
 	Environment *inproc.ExecutionEnvironment
 
 	// IncludeOutputsInResponse, if true, surfaces [workflow.OutputEvent]
@@ -57,10 +59,25 @@ type AgentConfig struct {
 	IncludeErrorDetails bool
 }
 
+func recordStreamedMessageID(streamed map[streamedMessageKey]struct{}, executorID string, messageID string) {
+	if strings.TrimSpace(messageID) == "" {
+		return
+	}
+	streamed[streamedMessageKey{executorID: executorID, messageID: messageID}] = struct{}{}
+}
+
+func messageWasStreamed(streamed map[streamedMessageKey]struct{}, executorID string, messageID string) bool {
+	if strings.TrimSpace(messageID) == "" {
+		return false
+	}
+	_, ok := streamed[streamedMessageKey{executorID: executorID, messageID: messageID}]
+	return ok
+}
+
 // NewAgent wraps a [*workflow.Workflow] as an [*agent.Agent].
 //
 // The workflow's start executor must accept [[]*message.Message] (typically
-// configured via [messageworkflow.Configure]). On the first call to
+// configured via messageworkflow.Configure). On the first call to
 // the agent's Run for a given session, a fresh streaming run is started.
 // Subsequent calls reuse that run, sending follow-up messages and
 // [workflow.ExternalResponse]s.
@@ -69,7 +86,7 @@ func NewAgent(wf *workflow.Workflow, cfg AgentConfig) (*agent.Agent, error) {
 		return nil, errors.New("workflow cannot be nil")
 	}
 	if cfg.ID == "" {
-		cfg.ID = uuid.NewString()
+		cfg.ID = newMessageID()
 	}
 	agentID := cfg.ID
 	agentName := cfg.Name
@@ -114,9 +131,18 @@ func NewAgent(wf *workflow.Workflow, cfg AgentConfig) (*agent.Agent, error) {
 
 	runFn := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
-			responseID := uuid.NewString()
+			responseID := newMessageID()
 			stream, _ := agent.GetOption(options, agent.Stream)
 			mergeState := newCollectedResponseMergeState()
+			streamedMessageIDs := make(map[streamedMessageKey]struct{})
+			consumerActive := true
+			emitResult := func(update *agent.ResponseUpdate, err error) bool {
+				if !consumerActive {
+					return false
+				}
+				consumerActive = yield(update, err)
+				return consumerActive
+			}
 			emitUpdate := func(update *agent.ResponseUpdate, terminalWorkflowOutput bool) bool {
 				if update == nil {
 					return true
@@ -125,7 +151,7 @@ func NewAgent(wf *workflow.Workflow, cfg AgentConfig) (*agent.Agent, error) {
 				if !stream {
 					return true
 				}
-				return yield(update, nil)
+				return emitResult(update, nil)
 			}
 
 			sess, _ := agent.GetOption(options, agent.WithSession)
@@ -133,33 +159,41 @@ func NewAgent(wf *workflow.Workflow, cfg AgentConfig) (*agent.Agent, error) {
 				sess.SetServiceID(providerServiceID)
 			}
 
-			state, err := loadOrInitState(ctx, sess, env, wf)
+			state, initialMessagesSent, err := loadOrInitState(ctx, sess, env, wf, messages)
 			if err != nil {
-				yield(nil, err)
+				emitResult(nil, err)
 				return
 			}
 			defer func() {
-				_ = state.closeStream(ctx)
+				closeErr := state.closeStream(ctx)
 				saveState(sess, state)
+				if closeErr != nil {
+					emitResult(nil, closeErr)
+				}
 			}()
 
 			// Split incoming messages into ExternalResponses for pending
 			// requests and the remaining workflow messages.
-			remaining, responses, hasMatchedStartResponse, err := splitResponses(messages, state.pending, wf.StartExecutorID(), state.stream.ResponsePortExecutorID)
-			if err != nil {
-				yield(nil, err)
-				return
+			var remaining []*message.Message
+			var responses []matchedExternalResponse
+			var hasMatchedStartResponse bool
+			if !initialMessagesSent {
+				remaining, responses, hasMatchedStartResponse, err = splitResponses(messages, state.pending, wf.StartExecutorID(), state.stream.ResponsePortExecutorID)
+				if err != nil {
+					emitResult(nil, err)
+					return
+				}
 			}
 
 			if len(remaining) > 0 {
-				if err := state.stream.SendMessage(ctx, remaining); err != nil {
-					yield(nil, err)
+				if _, err := state.stream.TrySendMessage(ctx, remaining); err != nil {
+					emitResult(nil, err)
 					return
 				}
 			}
 			for _, matched := range responses {
 				if err := state.stream.SendResponse(ctx, matched.response); err != nil {
-					yield(nil, err)
+					emitResult(nil, err)
 					return
 				}
 				delete(state.pending, matched.contentID)
@@ -175,15 +209,15 @@ func NewAgent(wf *workflow.Workflow, cfg AgentConfig) (*agent.Agent, error) {
 			shouldSendTurnToken := len(responses) == 0 || !hasMatchedStartResponse
 			if shouldSendTurnToken {
 				emit := true
-				if err := state.stream.SendMessage(ctx, workflow.TurnToken{EmitEvents: &emit}); err != nil {
-					yield(nil, err)
+				if _, err := state.stream.TrySendMessage(ctx, workflow.TurnToken{EmitEvents: &emit}); err != nil {
+					emitResult(nil, err)
 					return
 				}
 			}
 
 			for evt, err := range state.stream.WatchUntilHalt(ctx) {
 				if err != nil {
-					yield(nil, err)
+					emitResult(nil, err)
 					return
 				}
 				switch e := evt.(type) {
@@ -197,7 +231,9 @@ func NewAgent(wf *workflow.Workflow, cfg AgentConfig) (*agent.Agent, error) {
 				case workflow.OutputEvent:
 					switch out := e.Output.(type) {
 					case *agent.ResponseUpdate:
-						if !emitUpdate(stampUpdate(out, responseID, e), false) {
+						stamped := stampUpdate(out, responseID, e)
+						recordStreamedMessageID(streamedMessageIDs, e.ExecutorID, stamped.MessageID)
+						if !emitUpdate(stamped, false) {
 							return
 						}
 					case *agent.Response:
@@ -207,8 +243,20 @@ func NewAgent(wf *workflow.Workflow, cfg AgentConfig) (*agent.Agent, error) {
 						if out == nil {
 							continue
 						}
+						emittedMessage := false
+						suppressedStreamedMessage := false
 						for _, msg := range out.Messages {
+							if msg != nil && messageWasStreamed(streamedMessageIDs, e.ExecutorID, msg.ID) {
+								suppressedStreamedMessage = true
+								continue
+							}
+							emittedMessage = true
 							if !emitUpdate(messageToUpdate(msg, responseID, e), false) {
+								return
+							}
+						}
+						if !emittedMessage && suppressedStreamedMessage {
+							if !emitUpdate(newUpdate(responseID, e), false) {
 								return
 							}
 						}
@@ -267,7 +315,7 @@ func NewAgent(wf *workflow.Workflow, cfg AgentConfig) (*agent.Agent, error) {
 			}
 			if !stream {
 				for _, update := range mergeState.ComputeMerged(responseID, agentID, agentName).ToUpdates() {
-					if !yield(update, nil) {
+					if !emitResult(update, nil) {
 						return
 					}
 				}
@@ -296,6 +344,11 @@ func createSession(_ context.Context, sess *agent.Session, _ ...agent.Option) er
 type matchedExternalResponse struct {
 	contentID string
 	response  *workflow.ExternalResponse
+}
+
+type streamedMessageKey struct {
+	executorID string
+	messageID  string
 }
 
 // splitResponses scans messages for response content matching pending
@@ -451,11 +504,15 @@ func requestDataContent(req *workflow.ExternalRequest) (message.Content, bool) {
 	if req == nil {
 		return nil, false
 	}
-	if data, ok := req.Data.As(reflect.TypeFor[*message.FunctionCallContent]()); ok {
-		return data.(*message.FunctionCallContent), true
+	if req.Data.TypeID.Match(reflect.TypeFor[*message.ToolApprovalRequestContent]()) {
+		if data, ok := req.Data.As(reflect.TypeFor[*message.ToolApprovalRequestContent]()); ok {
+			return data.(*message.ToolApprovalRequestContent), true
+		}
 	}
-	if data, ok := req.Data.As(reflect.TypeFor[*message.ToolApprovalRequestContent]()); ok {
-		return data.(*message.ToolApprovalRequestContent), true
+	if req.Data.TypeID.Match(reflect.TypeFor[*message.FunctionCallContent]()) {
+		if data, ok := req.Data.As(reflect.TypeFor[*message.FunctionCallContent]()); ok {
+			return data.(*message.FunctionCallContent), true
+		}
 	}
 	content, ok := req.Data.Any().(message.Content)
 	return content, ok
@@ -540,7 +597,7 @@ func stampUpdate(update *agent.ResponseUpdate, responseID string, raw any) *agen
 		update.Role = message.RoleAssistant
 	}
 	if update.MessageID == "" {
-		update.MessageID = uuid.NewString()
+		update.MessageID = newMessageID()
 	}
 	if update.ResponseID == "" {
 		update.ResponseID = responseID

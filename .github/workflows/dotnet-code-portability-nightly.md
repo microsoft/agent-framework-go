@@ -1,9 +1,9 @@
 ---
 description: Nightly agent that randomly inspects the .NET codebase for small Go portability improvements without public API or behavior changes
 tracker-id: dotnet-code-portability-nightly
+model: "gpt-5.5"
 engine:
    id: copilot
-   model: "gpt-5.5"
 network:
    allowed:
       - defaults

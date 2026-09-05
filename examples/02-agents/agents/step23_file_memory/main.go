@@ -48,7 +48,7 @@ func main() {
 
 func requireTool(opts []agent.Option, name string) tool.FuncTool {
 	for _, opt := range opts {
-		if tl, ok := opt.Value().(tool.FuncTool); ok && tl.Name() == name {
+		if tl, ok := opt.MAFValue().(tool.FuncTool); ok && tl.Name() == name {
 			return tl
 		}
 	}

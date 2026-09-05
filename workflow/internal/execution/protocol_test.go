@@ -4,6 +4,7 @@ package execution
 
 import (
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/workflow"
@@ -164,8 +165,8 @@ func executorWithSendTypes(sendTypes ...reflect.Type) *workflow.Executor {
 	return &workflow.Executor{
 		ID: "send-protocol",
 
-		DisableAutoSendMessageHandlerResultObject: true,
-		DisableAutoYieldOutputHandlerResultObject: true,
+		AutoSendMessageHandlerResultObject: new(false),
+		AutoYieldOutputHandlerResultObject: new(false),
 		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 			rb.SendsMessageType(sendTypes...)
 			rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(*workflow.Context, any) (any, error) {
@@ -180,8 +181,8 @@ func executorWithInputTypes(inputTypes ...reflect.Type) *workflow.Executor {
 	return &workflow.Executor{
 		ID: "input-protocol",
 
-		DisableAutoSendMessageHandlerResultObject: true,
-		DisableAutoYieldOutputHandlerResultObject: true,
+		AutoSendMessageHandlerResultObject: new(false),
+		AutoYieldOutputHandlerResultObject: new(false),
 		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 			for _, inputType := range inputTypes {
 				rb.RouteBuilder.AddHandlerRaw(inputType, nil, func(*workflow.Context, any) (any, error) {
@@ -197,8 +198,8 @@ func executorWithYieldTypes(yieldTypes ...reflect.Type) *workflow.Executor {
 	return &workflow.Executor{
 		ID: "yield-protocol",
 
-		DisableAutoSendMessageHandlerResultObject: true,
-		DisableAutoYieldOutputHandlerResultObject: true,
+		AutoSendMessageHandlerResultObject: new(false),
+		AutoYieldOutputHandlerResultObject: new(false),
 		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 			rb.YieldsOutputType(yieldTypes...)
 			return rb, nil
@@ -207,10 +208,5 @@ func executorWithYieldTypes(yieldTypes ...reflect.Type) *workflow.Executor {
 }
 
 func slicesContains(types []reflect.Type, typ reflect.Type) bool {
-	for _, candidate := range types {
-		if candidate == typ {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(types, typ)
 }

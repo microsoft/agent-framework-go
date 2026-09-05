@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -161,11 +162,45 @@ func TestCopyResumeSessionConfig_CopiesAllProperties(t *testing.T) {
 	}
 	assertStringSlice(t, request["disabledSkills"], []string{"skill1"}, "disabledSkills")
 	assertEqual(t, request["streaming"], true, "streaming")
+
+	// Fields beyond the originally hand-copied set must also carry over so that
+	// multi-turn options keep taking effect after the first turn.
+	assertEqual(t, request["clientName"], "test-client", "clientName")
+	assertEqual(t, request["reasoningSummary"], "concise", "reasoningSummary")
+	assertEqual(t, request["contextTier"], "long_context", "contextTier")
+	assertEqual(t, request["mcpOAuthTokenStorage"], "in-memory", "mcpOAuthTokenStorage")
+	assertStringSlice(t, request["excludedBuiltinAgents"], []string{"builtin1"}, "excludedBuiltinAgents")
+	assertEqual(t, request["enableSessionTelemetry"], true, "enableSessionTelemetry")
+	assertEqual(t, request["enableCitations"], true, "enableCitations")
+	assertEqual(t, request["enableConfigDiscovery"], true, "enableConfigDiscovery")
+	assertEqual(t, request["skipEmbeddingRetrieval"], true, "skipEmbeddingRetrieval")
+	assertEqual(t, request["embeddingCacheStorage"], "in-memory", "embeddingCacheStorage")
+	assertEqual(t, request["organizationCustomInstructions"], "org instructions", "organizationCustomInstructions")
+	assertEqual(t, request["enableOnDemandInstructionDiscovery"], true, "enableOnDemandInstructionDiscovery")
+	assertEqual(t, request["enableFileHooks"], true, "enableFileHooks")
+	assertEqual(t, request["enableHostGitOperations"], true, "enableHostGitOperations")
+	assertEqual(t, request["enableSessionStore"], true, "enableSessionStore")
+	assertEqual(t, request["enableSkills"], true, "enableSkills")
+	assertEqual(t, request["skipCustomInstructions"], true, "skipCustomInstructions")
+	assertEqual(t, request["customAgentsLocalOnly"], true, "customAgentsLocalOnly")
+	assertEqual(t, request["coauthorEnabled"], true, "coauthorEnabled")
+	assertEqual(t, request["manageScheduleEnabled"], true, "manageScheduleEnabled")
+	assertEqual(t, request["includeSubAgentStreamingEvents"], false, "includeSubAgentStreamingEvents")
+	assertEqual(t, request["agent"], "custom-agent", "agent")
+	assertStringSlice(t, request["pluginDirectories"], []string{"/plugins"}, "pluginDirectories")
+	assertStringSlice(t, request["instructionDirectories"], []string{"/instructions"}, "instructionDirectories")
+	assertEqual(t, request["gitHubToken"], "gh-token-123", "gitHubToken")
+	assertEqual(t, request["remoteSession"], "on", "remoteSession")
+	for _, key := range []string{"providers", "models", "capi", "modelCapabilities", "sessionLimits", "defaultAgent", "largeOutput", "toolSearch", "memory"} {
+		if request[key] == nil {
+			t.Fatalf("%s was not sent on resume", key)
+		}
+	}
 }
 
 func TestCopySessionConfig_WithStreamingDisabled_PreservesStreamingValue(t *testing.T) {
 	runtime := newFakeRuntime(t, idleEvent())
-	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{SessionConfig: &copilot.SessionConfig{Streaming: copilot.Bool(false), Model: "gpt-4o"}})
+	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{SessionConfig: &copilot.SessionConfig{Streaming: new(false), Model: "gpt-4o"}})
 
 	_, err := runText(t, agent, "hello")
 	if err != nil {
@@ -187,7 +222,7 @@ func TestCopySessionConfig_WithStreamingNull_DefaultsToTrue(t *testing.T) {
 
 func TestCopyResumeSessionConfig_WithStreamingDisabled_PreservesStreamingValue(t *testing.T) {
 	runtime := newFakeRuntime(t, idleEvent())
-	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{SessionConfig: &copilot.SessionConfig{Streaming: copilot.Bool(false), Model: "gpt-4o"}})
+	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{SessionConfig: &copilot.SessionConfig{Streaming: new(false), Model: "gpt-4o"}})
 	session, err := agent.CreateSession(context.Background(), agentpkg.WithServiceID("existing-session"))
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
@@ -213,6 +248,95 @@ func TestCopyResumeSessionConfig_WithStreamingNull_DefaultsToTrue(t *testing.T) 
 		t.Fatalf("RunText: %v", err)
 	}
 	assertEqual(t, runtime.lastResumeRequest(t)["streaming"], true, "streaming")
+}
+
+func TestCreateSession_WithPerRunTools_DoesNotMutateSharedSessionConfigTools(t *testing.T) {
+	runtime := newFakeRuntime(t, idleEvent())
+	shared := sharedToolsSessionConfig()
+	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{SessionConfig: shared})
+
+	for range 2 {
+		if _, err := runText(t, agent, "hello", agentpkg.WithTool(perRunTool(t))); err != nil {
+			t.Fatalf("RunText: %v", err)
+		}
+	}
+
+	assertSharedToolsUnchanged(t, shared)
+	assertRequestToolNames(t, runtime.lastCreateRequest(t), []string{"preconfigured", "PerRun"})
+}
+
+func TestResumeSession_WithPerRunTools_DoesNotMutateSharedSessionConfigTools(t *testing.T) {
+	runtime := newFakeRuntime(t, idleEvent())
+	shared := sharedToolsSessionConfig()
+	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{SessionConfig: shared})
+	session, err := agent.CreateSession(context.Background(), agentpkg.WithServiceID("existing-session"))
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	for range 2 {
+		if _, err := runText(t, agent, "hello", agentpkg.WithSession(session), agentpkg.WithTool(perRunTool(t))); err != nil {
+			t.Fatalf("RunText: %v", err)
+		}
+	}
+
+	assertSharedToolsUnchanged(t, shared)
+	assertRequestToolNames(t, runtime.lastResumeRequest(t), []string{"preconfigured", "PerRun"})
+}
+
+func TestRun_SurfacesLifecycleEventEmittedDuringSessionResume(t *testing.T) {
+	runtime := newFakeRuntime(t, idleEvent())
+	runtime.resumeEvents = []map[string]any{sessionEvent("session.start", map[string]any{})}
+	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
+	session, err := agent.CreateSession(context.Background(), agentpkg.WithServiceID("existing-session"))
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	response, err := runText(t, agent, "hello", agentpkg.WithSession(session))
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if !hasRawEventOfType(response, "session.start") {
+		t.Fatal("lifecycle event emitted before the session.resume response was dropped; OnEvent must be registered before the RPC")
+	}
+}
+
+func TestRun_PreservesUserSuppliedOnEventHandler(t *testing.T) {
+	runtime := newFakeRuntime(t, idleEvent())
+	var mu sync.Mutex
+	invocations := 0
+	userHandler := func(event copilot.SessionEvent) {
+		mu.Lock()
+		invocations++
+		mu.Unlock()
+	}
+	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{
+		SessionConfig: &copilot.SessionConfig{OnEvent: userHandler},
+	})
+
+	if _, err := runText(t, agent, "hello"); err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if invocations == 0 {
+		t.Fatal("user-supplied SessionConfig.OnEvent was overwritten by the per-run handler and never invoked")
+	}
+}
+
+func hasRawEventOfType(response *agentpkg.Response, eventType string) bool {
+	for content := range response.Contents() {
+		raw, ok := content.(*message.RawContent)
+		if !ok {
+			continue
+		}
+		if event, ok := raw.RawRepresentation.(copilot.SessionEvent); ok && string(event.Type()) == eventType {
+			return true
+		}
+	}
+	return false
 }
 
 func TestConvertToAgentResponseUpdate_AssistantMessageEventWhenStreaming_DoesNotEmitTextContent(t *testing.T) {
@@ -361,6 +485,72 @@ func TestConvertToAgentResponseUpdate_UsageEvent_SurfacesReasoningTokens(t *test
 	}
 }
 
+func TestConvertToAgentResponseUpdate_ReasoningEvent_SurfacesReasoningContent(t *testing.T) {
+	const thinking = "Let me work through this step by step."
+	runtime := newFakeRuntime(t,
+		sessionEvent("assistant.reasoning", map[string]any{"content": thinking, "reasoningId": "r1"}),
+		idleEvent(),
+	)
+	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
+
+	response, err := runText(t, agent, "hello")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	reasoning := firstContent[*message.TextReasoningContent](t, response)
+	if reasoning.Text != thinking {
+		t.Fatalf("reasoning text = %q, want %q", reasoning.Text, thinking)
+	}
+}
+
+func TestConvertToAgentResponseUpdate_ReasoningDeltaEvent_SurfacesReasoningContent(t *testing.T) {
+	const chunk = "partial thought"
+	runtime := newFakeRuntime(t,
+		sessionEvent("assistant.reasoning_delta", map[string]any{"deltaContent": chunk, "reasoningId": "r1"}),
+		idleEvent(),
+	)
+	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
+
+	response, err := runText(t, agent, "hello")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	reasoning := firstContent[*message.TextReasoningContent](t, response)
+	if reasoning.Text != chunk {
+		t.Fatalf("reasoning text = %q, want %q", reasoning.Text, chunk)
+	}
+}
+
+func TestConvertToAgentResponseUpdate_AssistantMessageEventWhenNotStreaming_SurfacesReasoningText(t *testing.T) {
+	const expected = "Full response text"
+	const thinking = "internal reasoning"
+	runtime := newFakeRuntime(t,
+		sessionEvent("assistant.message", map[string]any{
+			"messageId":       "msg-r1",
+			"content":         expected,
+			"reasoningText":   thinking,
+			"reasoningOpaque": "opaque-blob",
+		}),
+		idleEvent(),
+	)
+	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
+
+	response, err := runText(t, agent, "hello", agentpkg.Stream(false))
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if text := firstContent[*message.TextContent](t, response); text.Text != expected {
+		t.Fatalf("text content = %q, want %q", text.Text, expected)
+	}
+	reasoning := firstContent[*message.TextReasoningContent](t, response)
+	if reasoning.Text != thinking {
+		t.Fatalf("reasoning text = %q, want %q", reasoning.Text, thinking)
+	}
+	if reasoning.ProtectedData != "opaque-blob" {
+		t.Fatalf("reasoning protected data = %q, want %q", reasoning.ProtectedData, "opaque-blob")
+	}
+}
+
 func TestConvertToAgentResponseUpdate_ToolExecutionStartEvent_WithNullData_ProducesEmptyFunctionCall(t *testing.T) {
 	runtime := newFakeRuntime(t,
 		sessionEvent("tool.execution_start", nil),
@@ -397,6 +587,9 @@ func TestConvertToAgentResponseUpdate_ToolExecutionCompleteEvent_WithSuccess_Pro
 	if result.CallID != "call-123" || result.Result != resultJSON {
 		t.Fatalf("result = (%q, %#v), want (call-123, %q)", result.CallID, result.Result, resultJSON)
 	}
+	if result.Error != nil {
+		t.Fatalf("Error = %v, want nil on success", result.Error)
+	}
 }
 
 func TestConvertToAgentResponseUpdate_ToolExecutionCompleteEvent_WithError_ProducesErrorResult(t *testing.T) {
@@ -414,6 +607,12 @@ func TestConvertToAgentResponseUpdate_ToolExecutionCompleteEvent_WithError_Produ
 	if result.CallID != "call-789" || result.Result != "Access denied to resource" {
 		t.Fatalf("result = (%q, %#v), want access denied", result.CallID, result.Result)
 	}
+	if result.Error == nil {
+		t.Fatalf("Error = nil, want non-nil failure error")
+	}
+	if msg := result.Error.Error(); !strings.Contains(msg, "Access denied to resource") || !strings.Contains(msg, "PERMISSION_DENIED") {
+		t.Fatalf("Error = %q, want message and code", msg)
+	}
 }
 
 func TestConvertToAgentResponseUpdate_ToolExecutionCompleteEvent_WithFailureNoError_ProducesDefaultErrorMessage(t *testing.T) {
@@ -430,6 +629,12 @@ func TestConvertToAgentResponseUpdate_ToolExecutionCompleteEvent_WithFailureNoEr
 	result := firstContent[*message.FunctionResultContent](t, response)
 	if result.CallID != "call-000" || result.Result != "Tool execution failed" {
 		t.Fatalf("result = (%q, %#v), want default failure", result.CallID, result.Result)
+	}
+	if result.Error == nil {
+		t.Fatalf("Error = nil, want non-nil failure error")
+	}
+	if msg := result.Error.Error(); !strings.Contains(msg, "tool execution failed") {
+		t.Fatalf("Error = %q, want default failure message", msg)
 	}
 }
 
@@ -553,6 +758,44 @@ func TestRun_WithSessionErrorMissingMessage_ReturnsUnknownError(t *testing.T) {
 	}
 }
 
+func TestRun_WithRateLimitEligibleForAutoSwitch_KeepsSessionAlive(t *testing.T) {
+	const expected = "Recovered after auto mode switch"
+	runtime := newFakeRuntime(t,
+		sessionEvent("session.error", map[string]any{
+			"errorType":             "rate_limit",
+			"message":               "Rate limit reached",
+			"eligibleForAutoSwitch": true,
+		}),
+		sessionEvent("auto_mode_switch.requested", map[string]any{"requestId": "req-1"}),
+		sessionEvent("assistant.message", map[string]any{"messageId": "msg-1", "content": expected}),
+		idleEvent(),
+	)
+	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
+
+	response, err := runText(t, agent, "hello", agentpkg.Stream(false))
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if got := response.String(); got != expected {
+		t.Fatalf("response text = %q, want %q", got, expected)
+	}
+}
+
+func TestRun_WithRateLimitNotEligibleForAutoSwitch_ReturnsError(t *testing.T) {
+	runtime := newFakeRuntime(t,
+		sessionEvent("session.error", map[string]any{
+			"errorType": "rate_limit",
+			"message":   "Rate limit reached",
+		}),
+	)
+	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
+
+	_, err := runText(t, agent, "hello")
+	if err == nil || err.Error() != "session error: Rate limit reached" {
+		t.Fatalf("err = %v, want session error: Rate limit reached", err)
+	}
+}
+
 func TestRun_WithBurstOfStreamingEvents_Completes(t *testing.T) {
 	const eventCount = 200
 	events := make([]map[string]any, 0, eventCount+1)
@@ -607,10 +850,75 @@ func dataContent(t *testing.T, name, value string) *message.DataContent {
 	}
 }
 
+// sharedToolsSessionConfig returns a config whose Tools slice has spare capacity,
+// mirroring a caller that preconfigured tools ahead of time. The spare capacity is
+// what let the old shallow copy alias the shared backing array when a per-run tool
+// was appended.
+func sharedToolsSessionConfig() *copilot.SessionConfig {
+	tools := make([]copilot.Tool, 1, 4)
+	tools[0] = copilot.Tool{Name: "preconfigured"}
+	return &copilot.SessionConfig{Model: "gpt-4o", Tools: tools}
+}
+
+func perRunTool(t *testing.T) tool.Tool {
+	t.Helper()
+	return functool.MustNew(functool.Config{Name: "PerRun", Description: "per-run tool"}, func(context.Context, struct{}) (string, error) {
+		return "ok", nil
+	})
+}
+
+// assertSharedToolsUnchanged verifies the provider never wrote a per-run tool
+// through the caller's shared Tools slice, including its spare capacity beyond len.
+func assertSharedToolsUnchanged(t *testing.T, config *copilot.SessionConfig) {
+	t.Helper()
+	if len(config.Tools) != 1 {
+		t.Fatalf("shared Tools mutated: len = %d, want 1", len(config.Tools))
+	}
+	if got := config.Tools[0].Name; got != "preconfigured" {
+		t.Fatalf("shared Tools[0] corrupted: %q", got)
+	}
+	for i, tl := range config.Tools[:cap(config.Tools)] {
+		if i == 0 {
+			continue
+		}
+		if tl.Name != "" {
+			t.Fatalf("shared Tools backing array mutated at index %d: %q", i, tl.Name)
+		}
+	}
+}
+
+func assertRequestToolNames(t *testing.T, request map[string]any, want []string) {
+	t.Helper()
+	raw, ok := request["tools"].([]any)
+	if !ok {
+		t.Fatalf("tools = %#v, want slice", request["tools"])
+	}
+	got := make([]string, 0, len(raw))
+	for _, item := range raw {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			t.Fatalf("tool entry = %#v, want object", item)
+		}
+		name, _ := entry["name"].(string)
+		got = append(got, name)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("tool names = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("tool names = %#v, want %#v", got, want)
+		}
+	}
+}
+
 func richSessionConfig() *copilot.SessionConfig {
 	return &copilot.SessionConfig{
+		ClientName:       "test-client",
 		Model:            "gpt-4o",
 		ReasoningEffort:  "high",
+		ReasoningSummary: copilot.ReasoningSummaryConcise,
+		ContextTier:      copilot.ContextTierLongContext,
 		SystemMessage:    &copilot.SystemMessageConfig{Mode: "append", Content: "Be helpful"},
 		AvailableTools:   []string{"tool1", "tool2"},
 		ExcludedTools:    []string{"tool3"},
@@ -631,7 +939,39 @@ func richSessionConfig() *copilot.SessionConfig {
 		MCPServers: map[string]copilot.MCPServerConfig{
 			"server1": copilot.MCPStdioServerConfig{Command: "npx"},
 		},
-		DisabledSkills: []string{"skill1"},
+		MCPOAuthTokenStorage:               "in-memory",
+		DisabledSkills:                     []string{"skill1"},
+		ExcludedBuiltInAgents:              []string{"builtin1"},
+		Providers:                          []copilot.NamedProviderConfig{{Name: "prov1", BaseURL: "https://example.com"}},
+		Models:                             []copilot.ProviderModelConfig{{ID: "m1", Provider: "prov1"}},
+		Capi:                               &copilot.CapiSessionOptions{EnableWebSocketResponses: new(true)},
+		ModelCapabilities:                  &rpc.ModelCapabilitiesOverride{},
+		SessionLimits:                      &rpc.SessionLimitsConfig{},
+		EnableSessionTelemetry:             new(true),
+		EnableCitations:                    new(true),
+		EnableConfigDiscovery:              new(true),
+		SkipEmbeddingRetrieval:             new(true),
+		EmbeddingCacheStorage:              new("in-memory"),
+		OrganizationCustomInstructions:     new("org instructions"),
+		EnableOnDemandInstructionDiscovery: new(true),
+		EnableFileHooks:                    new(true),
+		EnableHostGitOperations:            new(true),
+		EnableSessionStore:                 new(true),
+		EnableSkills:                       new(true),
+		SkipCustomInstructions:             new(true),
+		CustomAgentsLocalOnly:              new(true),
+		CoauthorEnabled:                    new(true),
+		ManageScheduleEnabled:              new(true),
+		IncludeSubAgentStreamingEvents:     new(false),
+		DefaultAgent:                       &copilot.DefaultAgentConfig{ExcludedTools: []string{"dtool"}},
+		Agent:                              "custom-agent",
+		PluginDirectories:                  []string{"/plugins"},
+		InstructionDirectories:             []string{"/instructions"},
+		LargeOutput:                        &copilot.LargeToolOutputConfig{Enabled: new(true)},
+		ToolSearch:                         &copilot.ToolSearchConfig{Enabled: new(true)},
+		Memory:                             &copilot.MemoryConfiguration{Enabled: true},
+		GitHubToken:                        "gh-token-123",
+		RemoteSession:                      rpc.RemoteSessionModeOn,
 	}
 }
 
@@ -675,6 +1015,7 @@ type fakeRuntime struct {
 	mu             sync.Mutex
 	sessionID      string
 	events         []map[string]any
+	resumeEvents   []map[string]any
 	createRequests []map[string]any
 	resumeRequests []map[string]any
 	sendRequests   []map[string]any
@@ -791,14 +1132,21 @@ func (r *fakeRuntime) handle(conn net.Conn, req jsonRPCRequest) {
 		r.mu.Lock()
 		r.sessionID = sessionID
 		r.resumeRequests = append(r.resumeRequests, params)
+		resumeEvents := slices.Clone(r.resumeEvents)
 		r.mu.Unlock()
+		// Emit any lifecycle events the CLI produces during session.resume
+		// before the RPC response, so they land in the window before a
+		// post-return session.On call would have registered a handler.
+		for _, event := range resumeEvents {
+			writeNotification(r.t, conn, "session.event", map[string]any{"sessionId": sessionID, "event": event})
+		}
 		writeResponse(r.t, conn, req.ID, map[string]any{"sessionId": sessionID, "workspacePath": ""})
 	case "session.send":
 		params := decodeParams(r.t, req.Params)
 		r.mu.Lock()
 		r.sendRequests = append(r.sendRequests, params)
 		sessionID := r.sessionID
-		events := append([]map[string]any(nil), r.events...)
+		events := slices.Clone(r.events)
 		r.mu.Unlock()
 		writeResponse(r.t, conn, req.ID, map[string]any{"messageId": "sent-message"})
 		for _, event := range events {

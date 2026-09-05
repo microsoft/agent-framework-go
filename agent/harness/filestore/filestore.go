@@ -38,15 +38,15 @@ type Entry struct {
 
 // SearchMatch represents a single regex match line in a file.
 type SearchMatch struct {
-	LineNumber int    `json:"lineNumber"`
+	LineNumber int    `json:"line_number"`
 	Line       string `json:"line"`
 }
 
 // SearchResult represents a file matched by [FileStore.Search].
 type SearchResult struct {
-	FileName      string        `json:"fileName"`
+	FileName      string        `json:"file_name"`
 	Snippet       string        `json:"snippet"`
-	MatchingLines []SearchMatch `json:"matchingLines"`
+	MatchingLines []SearchMatch `json:"matching_lines"`
 }
 
 // LineEdit represents a whole-line replacement operation.
@@ -126,8 +126,7 @@ func (s *InMemoryStore) ListChildren(ctx context.Context, directory string) ([]E
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	directories := make([]string, 0)
-	seenDirectories := map[string]struct{}{}
+	directoryNames := map[string]string{}
 	files := make([]string, 0)
 
 	for _, entry := range s.files {
@@ -144,16 +143,20 @@ func (s *InMemoryStore) ListChildren(ctx context.Context, directory string) ([]E
 		if idx := strings.IndexByte(remainder, '/'); idx >= 0 {
 			segment := remainder[:idx]
 			key := foldPath(segment)
-			if _, ok := seenDirectories[key]; ok {
-				continue
+			// Keep a deterministic (lexicographically smallest) casing per
+			// case-insensitive directory key, since map iteration order is random.
+			if existing, ok := directoryNames[key]; !ok || segment < existing {
+				directoryNames[key] = segment
 			}
-			seenDirectories[key] = struct{}{}
-			directories = append(directories, segment)
 			continue
 		}
 		files = append(files, remainder)
 	}
 
+	directories := make([]string, 0, len(directoryNames))
+	for _, name := range directoryNames {
+		directories = append(directories, name)
+	}
 	sortFolded(directories)
 	sortFolded(files)
 

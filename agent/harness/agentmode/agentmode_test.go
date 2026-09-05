@@ -31,7 +31,7 @@ func invokeProvider(provider *agentmode.Provider, ctx context.Context, messages 
 func collectTools(opts []agent.Option) []tool.Tool {
 	var tools []tool.Tool
 	for _, opt := range opts {
-		if tt, ok := opt.Value().(tool.Tool); ok {
+		if tt, ok := opt.MAFValue().(tool.Tool); ok {
 			tools = append(tools, tt)
 		}
 	}
@@ -88,7 +88,7 @@ func TestConcurrentToolInvocations_NoDataRace(t *testing.T) {
 	// a functional regression (e.g. argument-decode failure) fails the test
 	// deterministically, independent of the race detector.
 	errs := make([]error, n*2)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		mode := "plan"
 		if i%2 == 0 {
 			mode = "execute"
@@ -151,8 +151,8 @@ func TestProvide_InstructionsIncludeCurrentMode(t *testing.T) {
 func TestCustomModes_AreUsed(t *testing.T) {
 	p := agentmode.New(agentmode.Config{
 		Modes: []agentmode.Mode{
-			{Name: "draft", Description: "Draft mode"},
-			{Name: "review", Description: "Review mode"},
+			{Name: "draft", Instructions: "Draft mode"},
+			{Name: "review", Instructions: "Review mode"},
 		},
 	})
 	opts := sessionOpts()
@@ -167,8 +167,8 @@ func TestCustomModes_AreUsed(t *testing.T) {
 func TestCustomModes_SetModeValidatesAgainstList(t *testing.T) {
 	p := agentmode.New(agentmode.Config{
 		Modes: []agentmode.Mode{
-			{Name: "draft", Description: "Draft mode"},
-			{Name: "review", Description: "Review mode"},
+			{Name: "draft", Instructions: "Draft mode"},
+			{Name: "review", Instructions: "Review mode"},
 		},
 	})
 	opts := sessionOpts()
@@ -189,10 +189,10 @@ func TestCustomModes_SetModeValidatesAgainstList(t *testing.T) {
 func TestCustomDefaultMode_IsUsed(t *testing.T) {
 	p := agentmode.New(agentmode.Config{
 		Modes: []agentmode.Mode{
-			{Name: "draft", Description: "Draft mode"},
-			{Name: "review", Description: "Review mode"},
+			{Name: "draft", Instructions: "Draft mode"},
+			{Name: "review", Instructions: "Review mode"},
 		},
-		DefaultMode: "review",
+		DefaultMode: new("review"),
 	})
 	opts := sessionOpts()
 
@@ -211,9 +211,9 @@ func TestInvalidDefaultMode_Panics(t *testing.T) {
 	}()
 	agentmode.New(agentmode.Config{
 		Modes: []agentmode.Mode{
-			{Name: "plan", Description: "Plan mode"},
+			{Name: "plan", Instructions: "Plan mode"},
 		},
-		DefaultMode: "nonexistent",
+		DefaultMode: new("nonexistent"),
 	})
 }
 
@@ -234,8 +234,8 @@ func TestEmptyModes_UsesDefaults(t *testing.T) {
 func TestCustomModes_AppearInInstructions(t *testing.T) {
 	p := agentmode.New(agentmode.Config{
 		Modes: []agentmode.Mode{
-			{Name: "alpha", Description: "Alpha mode description"},
-			{Name: "beta", Description: "Beta mode description"},
+			{Name: "alpha", Instructions: "Alpha mode description"},
+			{Name: "beta", Instructions: "Beta mode description"},
 		},
 	})
 	opts := sessionOpts()
@@ -260,7 +260,7 @@ func TestCustomModes_AppearInInstructions(t *testing.T) {
 	}
 }
 
-// 9. AgentMode_RequiresNameAndDescription
+// 9. AgentMode_RequiresNameAndInstructions
 func TestEmptyModeName_Panics(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
@@ -269,8 +269,19 @@ func TestEmptyModeName_Panics(t *testing.T) {
 	}()
 	agentmode.New(agentmode.Config{
 		Modes: []agentmode.Mode{
-			{Name: "", Description: "No name"},
+			{Name: "", Instructions: "No name"},
 		},
+	})
+}
+
+func TestEmptyModeInstructions_Panics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic for empty mode instructions")
+		}
+	}()
+	agentmode.New(agentmode.Config{
+		Modes: []agentmode.Mode{{Name: "plan"}},
 	})
 }
 
@@ -283,8 +294,8 @@ func TestDuplicateModeNames_Panics(t *testing.T) {
 	}()
 	agentmode.New(agentmode.Config{
 		Modes: []agentmode.Mode{
-			{Name: "plan", Description: "Plan mode"},
-			{Name: "plan", Description: "Duplicate"},
+			{Name: "plan", Instructions: "Plan mode"},
+			{Name: "plan", Instructions: "Duplicate"},
 		},
 	})
 }
@@ -479,6 +490,15 @@ func TestPublicSetMode_InvalidMode_ReturnsError(t *testing.T) {
 	}
 }
 
+func TestPublicSetMode_NilSession_ReturnsError(t *testing.T) {
+	p := agentmode.New(agentmode.Config{})
+
+	err := p.SetMode("execute", agent.WithSession(nil))
+	if err == nil || err.Error() != "agentmode: no session available" {
+		t.Fatalf("SetMode() error = %v, want no-session error", err)
+	}
+}
+
 // 22. PublicSetMode_ReflectedInToolResults
 func TestPublicSetMode_ReflectedInInstructions(t *testing.T) {
 	p := agentmode.New(agentmode.Config{})
@@ -524,7 +544,7 @@ func TestState_PersistsAcrossInvocations(t *testing.T) {
 // 24. Options_CustomInstructions_OverridesDefault
 func TestCustomInstructions_OverridesDefault(t *testing.T) {
 	p := agentmode.New(agentmode.Config{
-		Instructions: "Custom instructions for mode {current_mode}",
+		Instructions: new("Custom instructions for mode {current_mode}"),
 	})
 	opts := sessionOpts()
 
@@ -619,5 +639,26 @@ func TestDefaultInstructions_ModesSectionHeaderFormat(t *testing.T) {
 	}
 	if !strings.Contains(instructions, "#### execute") {
 		t.Error("expected '#### execute' section header in instructions")
+	}
+}
+
+// Verify the execute-mode description matches the current .NET AgentModeProvider
+// text: it opens with the simple-vs-complex "Determine the type of ask" decision
+// and no longer uses the old "carrying out approved plans" phrasing.
+func TestDefaultInstructions_ExecuteModeDescription(t *testing.T) {
+	p := agentmode.New(agentmode.Config{})
+	opts := sessionOpts()
+
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	instructions := collectInstructions(outOpts)
+	if !strings.Contains(instructions, "Determine the type of ask:") {
+		t.Error("expected execute-mode instructions to contain 'Determine the type of ask:'")
+	}
+	if strings.Contains(instructions, "carrying out approved plans") {
+		t.Error("expected execute-mode instructions to no longer contain 'carrying out approved plans'")
 	}
 }

@@ -235,20 +235,24 @@ func foldIdentifierlessMessages(messages []*message.Message) []*message.Message 
 			continue
 		}
 
-		merged := next.Clone()
-		merged.AuthorName = cmp.Or(next.AuthorName, current.AuthorName)
-		merged.AdditionalProperties = mergeProperties(current.AdditionalProperties, merged.AdditionalProperties)
-		if merged.CreatedAt.IsZero() {
-			merged.CreatedAt = current.CreatedAt
-		}
-		merged.Contents = append(slices.Clone(current.Contents), next.Contents...)
-		if merged.Source == (message.Source{}) {
-			merged.Source = current.Source
-		}
-		messages[i] = merged
-		messages = append(messages[:i-1], messages[i:]...)
+		messages[i] = mergeIdentifierlessMessageIntoNext(current, next)
+		messages = slices.Delete(messages, i-1, i)
 	}
 	return messages
+}
+
+func mergeIdentifierlessMessageIntoNext(current, next *message.Message) *message.Message {
+	merged := next.Clone()
+	merged.AuthorName = cmp.Or(next.AuthorName, current.AuthorName)
+	merged.AdditionalProperties = mergeProperties(current.AdditionalProperties, merged.AdditionalProperties)
+	if merged.CreatedAt.IsZero() {
+		merged.CreatedAt = current.CreatedAt
+	}
+	merged.Contents = append(slices.Clone(current.Contents), next.Contents...)
+	if merged.Source == (message.Source{}) {
+		merged.Source = current.Source
+	}
+	return merged
 }
 
 func isIdentifierlessAssistantReasoningMessage(msg *message.Message) bool {

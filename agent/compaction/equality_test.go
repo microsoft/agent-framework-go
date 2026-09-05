@@ -3,6 +3,7 @@
 package compaction_test
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent/compaction"
@@ -62,7 +63,10 @@ func TestMessageIndexUpdate_MatchesKnownContentTypes(t *testing.T) {
 		{name: "uri", original: &message.URIContent{URI: "https://example.com/a", MediaType: "image/png"}, replacement: &message.URIContent{URI: "https://example.com/b", MediaType: "image/png"}, matches: false},
 		{name: "error", original: &message.ErrorContent{Message: "fail", ErrorCode: "E1"}, replacement: &message.ErrorContent{Message: "fail", ErrorCode: "E2"}, matches: false},
 		{name: "function call", original: &message.FunctionCallContent{CallID: "c1", Name: "fn", Arguments: `{"x":1}`}, replacement: &message.FunctionCallContent{CallID: "c1", Name: "fn", Arguments: `{"x":1}`}, matches: true},
+		{name: "function call informational", original: &message.FunctionCallContent{CallID: "c1", Name: "fn", Arguments: `{"x":1}`}, replacement: &message.FunctionCallContent{CallID: "c1", Name: "fn", Arguments: `{"x":1}`, InformationalOnly: true}, matches: false},
+		{name: "function call error", original: &message.FunctionCallContent{CallID: "c1", Name: "fn", Arguments: `{"x":1}`}, replacement: &message.FunctionCallContent{CallID: "c1", Name: "fn", Arguments: `{"x":1}`, Error: errors.New("bad call")}, matches: false},
 		{name: "function result", original: &message.FunctionResultContent{CallID: "c1", Result: "sunny"}, replacement: &message.FunctionResultContent{CallID: "c1", Result: "rainy"}, matches: false},
+		{name: "function result error", original: &message.FunctionResultContent{CallID: "c1", Result: "sunny"}, replacement: &message.FunctionResultContent{CallID: "c1", Result: "sunny", Error: errors.New("boom")}, matches: false},
 		{name: "hosted file", original: &message.HostedFileContent{FileID: "file-1", MediaType: "text/csv", Name: "a.csv"}, replacement: &message.HostedFileContent{FileID: "file-1", MediaType: "text/csv", Name: "a.csv"}, matches: true},
 	}
 
