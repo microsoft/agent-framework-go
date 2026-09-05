@@ -4,6 +4,7 @@ package workflow
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -18,6 +19,44 @@ type routeTestConcrete struct {
 }
 
 func (m routeTestConcrete) routeMarker() string { return m.value }
+
+func TestRouteBuilder_OverwriteRequiresRegisteredHandler(t *testing.T) {
+	tests := []struct {
+		name string
+		add  func(*RouteBuilder)
+		want string
+	}{
+		{
+			name: "typed handler",
+			add: func(rb *RouteBuilder) {
+				rb.AddHandlerRaw(reflect.TypeFor[string](), nil, func(*Context, any) (any, error) {
+					return nil, nil
+				}, WithHandlerOverwrite(true))
+			},
+			want: "cannot overwrite handler for unregistered type string",
+		},
+		{
+			name: "catch-all handler",
+			add: func(rb *RouteBuilder) {
+				rb.AddCatchAll(func(*Context, PortableValue) (any, error) {
+					return nil, nil
+				}, WithHandlerOverwrite(true))
+			},
+			want: "cannot overwrite unregistered catch-all handler",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var rb RouteBuilder
+			test.add(&rb)
+			_, err := rb.build()
+			if err == nil || err.Error() != test.want {
+				t.Fatalf("build() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
 
 func TestMessageRouterRoutesAssignableInterfaceHandler(t *testing.T) {
 	var rb RouteBuilder
@@ -59,6 +98,33 @@ func TestAddHandlerRawRejectsPortableValue(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "PortableValue") {
 		t.Fatalf("build() error = %q, want mention of PortableValue", err)
+	}
+}
+
+func TestMessageRouterKeepsUnknownPortableTypeOnCatchAllPath(t *testing.T) {
+	var portable PortableValue
+	if err := json.Unmarshal([]byte(`{"TypeID":{"PackageName":"example.invalid/missing","TypeName":"Payload"},"Value":{"value":"test"}}`), &portable); err != nil {
+		t.Fatal(err)
+	}
+
+	var rb RouteBuilder
+	rb.AddHandlerRaw(reflect.TypeFor[map[string]any](), nil, func(*Context, any) (any, error) {
+		return "map", nil
+	})
+	rb.AddCatchAll(func(*Context, PortableValue) (any, error) {
+		return "catch-all", nil
+	})
+	router, err := rb.build()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, handled := router.routeMessage(&Context{Context: context.Background()}, portable)
+	if !handled || result.err != nil {
+		t.Fatalf("RouteMessage() = (%v, %v), want handled without error", handled, result.err)
+	}
+	if result.result != "catch-all" {
+		t.Fatalf("RouteMessage() result = %v, want catch-all", result.result)
 	}
 }
 

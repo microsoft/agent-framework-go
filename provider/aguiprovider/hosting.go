@@ -102,8 +102,22 @@ func streamEvents(
 ) error {
 	for evt, err := range events {
 		if err != nil {
-			_ = writer.WriteErrorEvent(ctx, w, err, "")
-			return err
+			// updatesToAGUIEvents yields a proper RUN_ERROR terminal event
+			// (carrying the runID) alongside the error on every failure path.
+			// Prefer emitting that so consumers see a standard RUN_ERROR frame;
+			// WriteErrorEvent would instead write a non-standard CUSTOM event
+			// with no runID that the AG-UI client accumulator silently drops.
+			var writeErr error
+			if evt != nil {
+				writeErr = writer.WriteEvent(ctx, w, evt)
+			} else {
+				writeErr = writer.WriteErrorEvent(ctx, w, err, "")
+			}
+			// Return the original agent error, but also surface any failure to
+			// deliver the terminal frame (e.g. client disconnect/broken pipe)
+			// so stream delivery failures are not silently dropped. This mirrors
+			// the non-error path below, which returns WriteEvent errors.
+			return errors.Join(err, writeErr)
 		}
 		if evt == nil {
 			continue

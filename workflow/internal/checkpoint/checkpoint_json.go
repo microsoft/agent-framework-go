@@ -7,19 +7,18 @@ import (
 	"hash/maphash"
 
 	"github.com/microsoft/agent-framework-go/internal/hashmap"
+	internalmaphash "github.com/microsoft/agent-framework-go/internal/maphash"
 	"github.com/microsoft/agent-framework-go/workflow"
 )
 
-// scopeKeyHasherImpl implements hashmap.Hasher for workflow.ScopeKey.
+// scopeKeyHasherImpl implements internalmaphash.Hasher for workflow.ScopeKey.
 // This is duplicated here to avoid an import cycle with execution.
 type scopeKeyHasherImpl struct{}
 
-var scopeKeyHasherInstance hashmap.Hasher[workflow.ScopeKey] = scopeKeyHasherImpl{}
+var scopeKeyHasherInstance internalmaphash.Hasher[workflow.ScopeKey] = scopeKeyHasherImpl{}
 
-func (scopeKeyHasherImpl) Hash(s workflow.ScopeKey) uint64 {
-	var h maphash.Hash
-	s.Hash(&h)
-	return h.Sum64()
+func (scopeKeyHasherImpl) Hash(h *maphash.Hash, s workflow.ScopeKey) {
+	s.Hash(h)
 }
 
 func (scopeKeyHasherImpl) Equal(a, b workflow.ScopeKey) bool {
@@ -45,8 +44,10 @@ type checkpointJSON struct {
 // MarshalJSON implements [json.Marshaler] for Checkpoint.
 func (c *Checkpoint) MarshalJSON() ([]byte, error) {
 	var entries []scopeKeyEntry
-	for key, value := range c.StateData.All() {
-		entries = append(entries, scopeKeyEntry{Key: key, Value: value})
+	if c.StateData != nil {
+		for key, value := range c.StateData.All() {
+			entries = append(entries, scopeKeyEntry{Key: key, Value: value})
+		}
 	}
 
 	return json.Marshal(checkpointJSON{
@@ -74,7 +75,7 @@ func (c *Checkpoint) UnmarshalJSON(data []byte) error {
 	c.StepNumber = v.StepNumber
 	c.WorkflowInfo = v.WorkflowInfo
 	c.RunnerData = v.RunnerData
-	c.StateData = *stateData
+	c.StateData = stateData
 	c.EdgeStateData = v.EdgeStateData
 	c.Parent = v.Parent
 	return nil

@@ -95,13 +95,7 @@ func (b *ConcurrentWorkflowBuilder) Build() (*workflow.Workflow, error) {
 	}
 
 	cfg := Config{}
-	bindings := make([]workflow.ExecutorBinding, len(b.agents))
-	bindingsByAgent := make(map[*agent.Agent]workflow.ExecutorBinding, len(b.agents))
-	for index, currentAgent := range b.agents {
-		binding := New(currentAgent, cfg)
-		bindings[index] = binding
-		bindingsByAgent[currentAgent] = binding
-	}
+	bindings, bindingsByAgent := newAgentBindings(b.agents, cfg)
 
 	start := newMessageForwardingBinding("Start")
 	accumulators := make([]workflow.ExecutorBinding, len(bindings))
@@ -153,8 +147,8 @@ func newAggregateTurnMessagesBinding(id string) workflow.ExecutorBinding {
 				},
 			}
 			messageworkflow.Configure(&executor, &messageworkflow.Options{
-				StateKey:                 aggregateTurnMessagesStateKey,
-				DisableAutoSendTurnToken: true,
+				StateKey:          aggregateTurnMessagesStateKey,
+				AutoSendTurnToken: new(false),
 				TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, messages []*message.Message) error {
 					return sendAggregateTurnMessages(ctx, messages)
 				},
@@ -176,26 +170,17 @@ func newConcurrentEndBinding(expectedInputs int, aggregator MessageAggregator) w
 		ID:                                concurrentEndExecutorID,
 		SupportsConcurrentSharedExecution: true,
 		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
-			allResults := make([][]*message.Message, 0, expectedInputs)
-			remaining := expectedInputs
-			reset := func() {
-				allResults = make([][]*message.Message, 0, expectedInputs)
-				remaining = expectedInputs
-			}
+			state := newConcurrentEndState(expectedInputs)
 			return &workflow.Executor{
 				ID: concurrentEndExecutorID,
 				ResetFunc: func() error {
-					reset()
+					state.reset()
 					return nil
 				},
 				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 					rb.YieldsOutputType(reflect.TypeFor[[]*message.Message]())
 					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[[]*message.Message](), nil, func(ctx *workflow.Context, msg any) (any, error) {
-						allResults = append(allResults, msg.([]*message.Message))
-						remaining--
-						if remaining == 0 {
-							results := allResults
-							reset()
+						if results, done := state.add(msg.([]*message.Message)); done {
 							if err := ctx.YieldOutput(aggregator(ctx, results)); err != nil {
 								return nil, err
 							}
@@ -207,6 +192,34 @@ func newConcurrentEndBinding(expectedInputs int, aggregator MessageAggregator) w
 			}, nil
 		},
 	}
+}
+
+type concurrentEndState struct {
+	expectedInputs int
+	allResults     [][]*message.Message
+	remaining      int
+}
+
+func newConcurrentEndState(expectedInputs int) *concurrentEndState {
+	state := &concurrentEndState{expectedInputs: expectedInputs}
+	state.reset()
+	return state
+}
+
+func (state *concurrentEndState) reset() {
+	state.allResults = make([][]*message.Message, 0, state.expectedInputs)
+	state.remaining = state.expectedInputs
+}
+
+func (state *concurrentEndState) add(messages []*message.Message) ([][]*message.Message, bool) {
+	state.allResults = append(state.allResults, messages)
+	state.remaining--
+	if state.remaining != 0 {
+		return nil, false
+	}
+	results := state.allResults
+	state.reset()
+	return results, true
 }
 
 func defaultConcurrentMessageAggregator(_ context.Context, lists [][]*message.Message) []*message.Message {

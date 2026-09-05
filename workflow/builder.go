@@ -15,6 +15,8 @@ import (
 	workflowobservability "github.com/microsoft/agent-framework-go/workflow/observability"
 )
 
+// Builder assembles a Workflow graph from executors, edges, and
+// request/response ports, then produces an immutable Workflow via Build.
 type Builder struct {
 	startExecutorId string
 	name            string
@@ -32,6 +34,8 @@ type Builder struct {
 	telemetry                *internalobservability.Context
 }
 
+// NewBuilder returns a Builder rooted at the given start executor binding,
+// which becomes the workflow entry point.
 func NewBuilder(start ExecutorBinding) *Builder {
 	bld := &Builder{
 		startExecutorId: start.ID,
@@ -44,6 +48,8 @@ func NewBuilder(start ExecutorBinding) *Builder {
 	return bld
 }
 
+// WithName sets the workflow's human-readable name. It is a no-op if the
+// builder already holds an error.
 func (wb *Builder) WithName(name string) *Builder {
 	if wb.err != nil {
 		return wb
@@ -52,6 +58,8 @@ func (wb *Builder) WithName(name string) *Builder {
 	return wb
 }
 
+// WithDescription sets the workflow's human-readable description. It is a
+// no-op if the builder already holds an error.
 func (wb *Builder) WithDescription(description string) *Builder {
 	if wb.err != nil {
 		return wb
@@ -69,6 +77,9 @@ func (wb *Builder) WithTelemetry(tracer workflowobservability.Tracer, options Te
 	return wb
 }
 
+// WithOutputFrom registers the given bindings as terminal (untagged) workflow
+// output sources. It mirrors [Builder.WithIntermediateOutputFrom] but without
+// the [OutputTagIntermediate] tag.
 func (wb *Builder) WithOutputFrom(bindings ...ExecutorBinding) *Builder {
 	return wb.withOutputFrom(nil, bindings...)
 }
@@ -102,6 +113,8 @@ func (wb *Builder) withOutputFrom(tags []OutputTag, bindings ...ExecutorBinding)
 	return wb
 }
 
+// BindExecutor registers an executor binding without adding any edge. It
+// records an error if binding is a placeholder registration.
 func (wb *Builder) BindExecutor(binding ExecutorBinding) *Builder {
 	if wb.err != nil {
 		return wb
@@ -114,22 +127,20 @@ func (wb *Builder) BindExecutor(binding ExecutorBinding) *Builder {
 	return wb
 }
 
+// AddEdge adds a direct edge from source to target. Pass [WithEdgeCondition] to
+// make the edge conditional. Adding a duplicate conditionless edge records an
+// error unless [IdempotentEdge] is supplied. Only conditionless edges
+// participate in the duplicate-edge check.
 func (wb *Builder) AddEdge(source ExecutorBinding, target ExecutorBinding, opts ...EdgeOption) *Builder {
-	return wb.AddDirectEdge(source, target, false, nil, opts...)
-}
-
-func (wb *Builder) AddDirectEdge(source ExecutorBinding, target ExecutorBinding, idempotent bool, condition func(any) bool, opts ...EdgeOption) *Builder {
 	if wb.err != nil {
 		return wb
 	}
-	conn := EdgeConnection{
-		SourceIDs: []string{source.ID},
-		SinkIDs:   []string{target.ID},
-	}
-	if condition == nil && slices.ContainsFunc(wb.conditionlessConnections, func(c EdgeConnection) bool {
+	conn := newDirectEdgeConnection(source.ID, target.ID)
+	config := normalizeEdgeOptions(opts)
+	if config.condition == nil && slices.ContainsFunc(wb.conditionlessConnections, func(c EdgeConnection) bool {
 		return conn.Equal(c)
 	}) {
-		if idempotent {
+		if config.idempotent {
 			return wb
 		}
 		wb.err = fmt.Errorf("an edge from '%s' to '%s' already exists without a condition", source.ID, target.ID)
@@ -140,15 +151,14 @@ func (wb *Builder) AddDirectEdge(source ExecutorBinding, target ExecutorBinding,
 	}
 	edge := Edge{
 		Connection: conn,
-		Condition:  condition,
 		Index:      wb.edgeIdx(),
 	}
-	applyEdgeOptions(&edge, opts)
+	config.apply(&edge)
 	wb.addEdgeForSource(source.ID, edge)
 	// Only conditionless edges participate in the conditionless-edge dedup set;
 	// appending conditional edges here would wrongly make a later conditionless
 	// edge on the same source→target pair look like a duplicate.
-	if condition == nil {
+	if edge.Condition == nil {
 		wb.conditionlessConnections = append(wb.conditionlessConnections, conn)
 	}
 	return wb
@@ -162,6 +172,10 @@ func (wb *Builder) AddFanOutEdge(source ExecutorBinding, targets []ExecutorBindi
 	if wb.err != nil {
 		return wb
 	}
+	if len(targets) == 0 {
+		wb.err = fmt.Errorf("fan-out edge requires at least one target")
+		return wb
+	}
 	if !wb.track(source) {
 		return wb
 	}
@@ -172,15 +186,12 @@ func (wb *Builder) AddFanOutEdge(source ExecutorBinding, targets []ExecutorBindi
 		}
 		sinkIDs = append(sinkIDs, target.ID)
 	}
-	conn := EdgeConnection{
-		SourceIDs: []string{source.ID},
-		SinkIDs:   sinkIDs,
-	}
+	conn := newEdgeConnection([]string{source.ID}, sinkIDs)
 	edge := Edge{
 		Connection: conn,
 		Index:      wb.edgeIdx(),
 	}
-	applyEdgeOptions(&edge, opts)
+	normalizeEdgeOptions(opts).apply(&edge)
 	wb.addEdgeForSource(source.ID, edge)
 	return wb
 }
@@ -189,6 +200,10 @@ func (wb *Builder) AddFanOutEdge(source ExecutorBinding, targets []ExecutorBindi
 // all sources before dispatching to the target.
 func (wb *Builder) AddFanInBarrierEdge(sources []ExecutorBinding, target ExecutorBinding, opts ...EdgeOption) *Builder {
 	if wb.err != nil {
+		return wb
+	}
+	if len(sources) == 0 {
+		wb.err = fmt.Errorf("fan-in barrier edge requires at least one source")
 		return wb
 	}
 	if !wb.track(target) {
@@ -202,19 +217,19 @@ func (wb *Builder) AddFanInBarrierEdge(sources []ExecutorBinding, target Executo
 		sourceIDs = append(sourceIDs, source.ID)
 	}
 	edge := Edge{
-		Connection: EdgeConnection{
-			SourceIDs: sourceIDs,
-			SinkIDs:   []string{target.ID},
-		},
-		Index: wb.edgeIdx(),
+		Connection: newEdgeConnection(sourceIDs, []string{target.ID}),
+		Index:      wb.edgeIdx(),
 	}
-	applyEdgeOptions(&edge, opts)
+	normalizeEdgeOptions(opts).apply(&edge)
 	for _, id := range sourceIDs {
 		wb.addEdgeForSource(id, edge)
 	}
 	return wb
 }
 
+// Build validates the assembled graph, including orphan-executor checks, and
+// returns the immutable *Workflow. It returns the first accumulated error if
+// any builder step failed or validation did not pass.
 func (wb *Builder) Build() (*Workflow, error) {
 	return wb.build(true)
 }
@@ -456,11 +471,20 @@ func sendTypeCompatibleWithInput(outType, inType reflect.Type) bool {
 	return outType == inType || outType.AssignableTo(inType) || (inType.Kind() == reflect.Interface && outType.Implements(inType))
 }
 
-func (wb *Builder) trackInputPort(port RequestPort) {
+func (wb *Builder) trackInputPort(port RequestPort) bool {
+	if err := validateRequestPort(port); err != nil {
+		wb.err = err
+		return false
+	}
 	if wb.inputPorts == nil {
 		wb.inputPorts = make(map[string]RequestPort)
 	}
+	if existing, ok := wb.inputPorts[port.ID]; ok && existing != port {
+		wb.err = fmt.Errorf("workflow: request port %q conflicts with an existing definition", port.ID)
+		return false
+	}
 	wb.inputPorts[port.ID] = port
+	return true
 }
 
 func (wb *Builder) track(binding ExecutorBinding) bool {
@@ -508,12 +532,17 @@ func (wb *Builder) track(binding ExecutorBinding) bool {
 		}
 	}
 	for _, port := range binding.Ports {
-		wb.trackInputPort(port)
+		if !wb.trackInputPort(port) {
+			return false
+		}
 	}
 	return true
 }
 
 func validateBinding(binding ExecutorBinding) error {
+	if binding.ID == "" {
+		return fmt.Errorf("cannot bind executor with empty ID")
+	}
 	if binding.RawValue == nil {
 		return nil
 	}
@@ -542,7 +571,7 @@ func (wb *Builder) AddChain(source ExecutorBinding, executors []ExecutorBinding,
 			}
 			seen[exec.ID] = struct{}{}
 		}
-		wb.AddDirectEdge(current, exec, true /*idempotent*/, nil)
+		wb.AddEdge(current, exec, IdempotentEdge())
 		if wb.err != nil {
 			return wb
 		}
@@ -590,6 +619,9 @@ func (wb *Builder) AddSwitch(source ExecutorBinding) *SwitchBuilder {
 // AddCase adds a case branch matching messages of type T satisfying the
 // predicate. The matched message is routed to all bindings in targets.
 func (s *SwitchBuilder) AddCase(predicate func(msg any) bool, targets ...ExecutorBinding) *SwitchBuilder {
+	if predicate == nil {
+		panic("workflow: switch case predicate cannot be nil")
+	}
 	indices := s.collectTargets(targets)
 	s.cases = append(s.cases, switchCase{predicate: predicate, indices: indices})
 	return s
@@ -603,6 +635,7 @@ func (s *SwitchBuilder) WithDefault(targets ...ExecutorBinding) *SwitchBuilder {
 
 func (s *SwitchBuilder) collectTargets(targets []ExecutorBinding) []int {
 	out := make([]int, 0, len(targets))
+	seen := make(map[int]struct{}, len(targets))
 	for _, t := range targets {
 		idx, ok := s.targetIndexByID[t.ID]
 		if !ok {
@@ -610,6 +643,13 @@ func (s *SwitchBuilder) collectTargets(targets []ExecutorBinding) []int {
 			s.targets = append(s.targets, t)
 			s.targetIndexByID[t.ID] = idx
 		}
+		if _, dup := seen[idx]; dup {
+			// Skip repeated targets within a single case/default so a message
+			// is delivered at most once per target, matching .NET's
+			// HashSet<int> semantics.
+			continue
+		}
+		seen[idx] = struct{}{}
 		out = append(out, idx)
 	}
 	return out

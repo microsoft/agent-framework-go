@@ -43,23 +43,22 @@ func NewResponsesAgent(oclient openai.Client, config AgentConfig) *agent.Agent {
 		config: config,
 	}
 	if config.Instructions != "" {
-		config.RunOptions = append(config.RunOptions, agent.WithInstructions(config.Instructions))
+		config.RunOptions = append(slices.Clone(config.RunOptions), agent.WithInstructions(config.Instructions))
 	}
-	var providerMiddlewares []agent.Middleware
-	if !config.DisableFuncAutoCall {
-		providerMiddlewares = append(providerMiddlewares, toolautocall.New(toolautocall.Config{
-			Logger:           config.Logger,
-			LogSensitiveData: config.LogSensitiveData,
-		}))
+	autoCall := toolautocall.Config{Logger: config.Logger, LogSensitiveData: config.LogSensitiveData}
+	if config.ToolAutoCall != nil {
+		autoCall = *config.ToolAutoCall
 	}
+	providerMiddlewares := []agent.Middleware{toolautocall.New(autoCall)}
 	return agent.New(
 		agent.ProviderConfig{
-			ProviderName: "openai",
+			ProviderName: cmp.Or(config.ProviderName, "openai"),
 			Run:          c.run,
 			Middlewares:  providerMiddlewares,
 			Format:       c.formatOf,
 			Unmarshal:    c.unmarshal,
-		}, config.Config)
+		}, config.Config,
+	)
 }
 
 type responsesClient struct {
@@ -69,13 +68,27 @@ type responsesClient struct {
 
 type responsesNewParamsOpt responses.ResponseNewParams
 
-func (o responsesNewParamsOpt) Value() any {
+func (o responsesNewParamsOpt) MAFValue() any {
 	return responses.ResponseNewParams(o)
+}
+
+type responsesIncludeReasoningEncryptedContentOpt bool
+
+func (o responsesIncludeReasoningEncryptedContentOpt) MAFValue() any {
+	return bool(o)
 }
 
 // ResponsesNewParams allows passing custom parameters to the underlying OpenAI Responses API calls.
 func ResponsesNewParams(params responses.ResponseNewParams) agent.Option {
 	return responsesNewParamsOpt(params)
+}
+
+// ResponsesIncludeReasoningEncryptedContent controls whether [NewResponsesAgent]
+// automatically requests `reasoning.encrypted_content` while Responses output
+// storage is disabled. The default is true so reasoning items can be replayed
+// across stateless turns.
+func ResponsesIncludeReasoningEncryptedContent(enabled bool) agent.Option {
+	return responsesIncludeReasoningEncryptedContentOpt(enabled)
 }
 
 func (a *responsesClient) formatOf(v any) (agent.ResponseFormat, error) {
@@ -130,6 +143,7 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 				streamResp := a.client.Responses.GetStreaming(ctx, ct.ResponseID, responses.ResponseGetParams{
 					StartingAfter: openai.Int(ct.SequenceNumber),
 				}, telemetryRequestOption)
+				defer func() { _ = streamResp.Close() }()
 				// Update conversation ID when resuming
 				updateConversationID(ct.ResponseID)
 				for streamResp.Next() {
@@ -171,6 +185,7 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 		if stream {
 			// Create streaming response
 			streamResp := a.client.Responses.NewStreaming(ctx, body, telemetryRequestOption)
+			defer func() { _ = streamResp.Close() }()
 			responseID := ""
 			createdAt := time.Time{}
 			isBackground, _ := agent.GetOption(options, agent.AllowBackgroundResponses)
@@ -224,12 +239,16 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 	var params responses.ResponseNewParams
 	if p, ok := agent.GetOption(opts, ResponsesNewParams); ok {
 		params = p
+		params.Include = slices.Clone(params.Include)
+		params.Tools = slices.Clone(params.Tools)
+		params.Input.OfInputItemList = slices.Clone(params.Input.OfInputItemList)
 	}
 	if responsesDisableStoreOutput(config, opts) {
 		if param.IsOmitted(params.Store) {
 			params.Store = openai.Bool(false)
 		}
-		if !slices.Contains(params.Include, responses.ResponseIncludableReasoningEncryptedContent) {
+		if include, ok := agent.GetOption(opts, ResponsesIncludeReasoningEncryptedContent); (!ok || include) &&
+			!slices.Contains(params.Include, responses.ResponseIncludableReasoningEncryptedContent) {
 			params.Include = append(params.Include, responses.ResponseIncludableReasoningEncryptedContent)
 		}
 	}
@@ -259,7 +278,13 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 		switch frmt.Kind {
 		case "json":
 			if schema := frmt.Schema; schema != nil {
-				schemaMap, err := schemaToMap(schema)
+				var schemaMap map[string]any
+				var err error
+				if frmt.Strict {
+					schemaMap, err = strictSchemaToMap(schema)
+				} else {
+					schemaMap, err = schemaToMap(schema)
+				}
 				if err != nil {
 					return responses.ResponseNewParams{}, fmt.Errorf("failed to convert response format schema (type %T) to JSON format: %w", schema, err)
 				}
@@ -280,68 +305,36 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 			}
 		}
 	}
-	first := true
-	for tl := range agent.AllOptions(opts, agent.WithTool) {
-		if first {
-			first = false
-			if mode, ok := agent.GetOption(opts, agent.WithToolMode); ok {
-				switch mode.Mode() {
-				case tool.ToolModeAuto, "":
-					params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
-						OfToolChoiceMode: param.NewOpt(responses.ToolChoiceOptionsAuto),
-					}
-				case tool.ToolModeNone:
-					params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
-						OfToolChoiceMode: param.NewOpt(responses.ToolChoiceOptionsNone),
-					}
-				case tool.ToolModeRequired:
-					names := mode.Required()
-					if len(names) == 0 {
-						params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
-							OfToolChoiceMode: param.NewOpt(responses.ToolChoiceOptionsRequired),
-						}
-					} else if len(names) == 1 {
-						params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
-							OfFunctionTool: &responses.ToolChoiceFunctionParam{
-								Name: names[0],
-							},
-						}
-					} else {
-						toolsMap := make([]map[string]any, 0, len(names))
-						for _, name := range names {
-							toolsMap = append(toolsMap, map[string]any{
-								"type": "function",
-								"name": name,
-							})
-						}
-						params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
-							OfAllowedTools: &responses.ToolChoiceAllowedParam{
-								Mode:  responses.ToolChoiceAllowedModeRequired,
-								Tools: toolsMap,
-							},
-						}
-					}
+	if mode, ok := agent.GetOption(opts, agent.WithToolMode); ok {
+		switch mode.Mode() {
+		case tool.ToolModeAuto, "":
+			params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
+				OfToolChoiceMode: param.NewOpt(responses.ToolChoiceOptionsAuto),
+			}
+		case tool.ToolModeNone:
+			params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
+				OfToolChoiceMode: param.NewOpt(responses.ToolChoiceOptionsNone),
+			}
+		case tool.ToolModeRequired:
+			if name, ok := mode.RequiredTool(); !ok {
+				params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
+					OfToolChoiceMode: param.NewOpt(responses.ToolChoiceOptionsRequired),
+				}
+			} else {
+				params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
+					OfFunctionTool: &responses.ToolChoiceFunctionParam{Name: name},
 				}
 			}
 		}
+	}
+	for tl := range agent.AllOptions(opts, agent.WithTool) {
 		switch tl := tl.(type) {
 		case tool.FuncTool:
 			name, description := tl.Name(), tl.Description()
-			var funcParams map[string]any
-			switch schema := tl.Schema().(type) {
-			case map[string]any:
-				funcParams = schema
-			default:
-				if schema == nil {
-					break
-				}
-				data, err := json.Marshal(schema)
-				if err == nil {
-					err = json.Unmarshal(data, &funcParams)
-				}
-				if err != nil {
-					return responses.ResponseNewParams{}, fmt.Errorf("failed to convert schema for function tool %q (type %T) to JSON format: %w", name, schema, err)
-				}
+			schema := tl.Schema()
+			funcParams, err := schemaToMap(schema)
+			if err != nil {
+				return responses.ResponseNewParams{}, fmt.Errorf("failed to convert schema for function tool %q (type %T) to JSON format: %w", name, schema, err)
 			}
 			params.Tools = append(params.Tools, responses.ToolUnionParam{
 				OfFunction: &responses.FunctionToolParam{
@@ -400,6 +393,11 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 			params.Tools = append(params.Tools, responses.ToolUnionParam{
 				OfFileSearch: &variant,
 			})
+			// Request the retrieved chunks so the file_search_call output item
+			// carries its results, mirroring the reasoning-encrypted-content path.
+			if !slices.Contains(params.Include, responses.ResponseIncludableFileSearchCallResults) {
+				params.Include = append(params.Include, responses.ResponseIncludableFileSearchCallResults)
+			}
 		case *hostedtool.CodeInterpreter:
 			var variant responses.ToolCodeInterpreterParam
 			hosted := make([]string, 0, len(tl.Inputs))
@@ -421,10 +419,22 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 			params.Tools = append(params.Tools, responses.ToolUnionParam{
 				OfCodeInterpreter: &variant,
 			})
+			// The Responses API only populates the outputs field of a code_interpreter_call
+			// item (execution logs and generated images) when this include is requested.
+			if !slices.Contains(params.Include, responses.ResponseIncludableCodeInterpreterCallOutputs) {
+				params.Include = append(params.Include, responses.ResponseIncludableCodeInterpreterCallOutputs)
+			}
 		case *hostedtool.MCPServer:
 			var variant responses.ToolMcpParam
 			variant.ServerLabel = tl.ServerName
-			if _, err := url.Parse(tl.ServerAddress); err == nil {
+			// The Responses API accepts either a server_url (a full HTTP(S)
+			// endpoint) or a connector_id (a bare service-connector identifier
+			// such as "connector_googledrive"); the two are mutually exclusive.
+			// url.Parse only errors on control-char/malformed input, so it
+			// cannot distinguish the two. Discriminate on an actual URL scheme
+			// instead, routing scheme-bearing addresses to server_url and bare
+			// connector IDs to connector_id.
+			if u, err := url.Parse(tl.ServerAddress); err == nil && (u.Scheme == "http" || u.Scheme == "https") {
 				variant.ServerURL = openai.String(tl.ServerAddress)
 			} else {
 				variant.ConnectorID = tl.ServerAddress
@@ -459,6 +469,14 @@ func responsesDisableStoreOutput(config AgentConfig, opts []agent.Option) bool {
 	return config.DisableStoreOutput
 }
 
+func responseInputItemParamOfFunctionCallOutput[T string | responses.ResponseFunctionCallOutputItemListParam](callID string, output T) responses.ResponseInputItemUnionParam {
+	item := responses.ResponseInputItemParamOfFunctionCallOutput(output)
+	if callID != "" {
+		item.OfFunctionCallOutput.CallID = param.NewOpt(callID)
+	}
+	return item
+}
+
 // responsesBuildMessageParam converts an agent.Message to one or more OpenAI message parameters.
 // Returns a slice because some agent messages (like RoleTool) need to be split into multiple OpenAI messages.
 func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInputParam) (responses.ResponseInputParam, error) {
@@ -482,11 +500,15 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 			case *message.URIContent:
 				switch c.TopLevelMediaType() {
 				case "image":
+					img := responses.ResponseInputImageParam{
+						ImageURL: openai.String(c.URI),
+						Detail:   responses.ResponseInputImageDetail(imageDetail(c.AdditionalProperties)),
+					}
+					if id := imageFileID(c.AdditionalProperties); id != "" {
+						img.FileID = openai.String(id)
+					}
 					contents = append(contents, responses.ResponseInputContentUnionParam{
-						OfInputImage: &responses.ResponseInputImageParam{
-							ImageURL: openai.String(c.URI),
-							Detail:   responses.ResponseInputImageDetail(imageDetail(c.AdditionalProperties)),
-						},
+						OfInputImage: &img,
 					})
 				default:
 					contents = append(contents, responses.ResponseInputContentUnionParam{
@@ -498,11 +520,15 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 			case *message.DataContent:
 				switch c.TopLevelMediaType() {
 				case "image":
+					img := responses.ResponseInputImageParam{
+						ImageURL: openai.String(c.URI()),
+						Detail:   responses.ResponseInputImageDetail(imageDetail(c.AdditionalProperties)),
+					}
+					if id := imageFileID(c.AdditionalProperties); id != "" {
+						img.FileID = openai.String(id)
+					}
 					contents = append(contents, responses.ResponseInputContentUnionParam{
-						OfInputImage: &responses.ResponseInputImageParam{
-							ImageURL: openai.String(c.URI()),
-							Detail:   responses.ResponseInputImageDetail(imageDetail(c.AdditionalProperties)),
-						},
+						OfInputImage: &img,
 					})
 				default:
 					file := responses.ResponseInputFileParam{
@@ -551,14 +577,21 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 				})
 			case *message.TextReasoningContent:
 				flushOutputContents()
-				// Reasoning content is added as a separate input item
-				var reasoning responses.ResponseReasoningItemParam
-				if c.ProtectedData != "" {
-					reasoning.EncryptedContent = openai.String(c.ProtectedData)
+				// Only replay reasoning when we hold its encrypted content (store=false).
+				// With store=true the server retains the reasoning item by id, so
+				// re-sending it would duplicate a server-side item.
+				if c.ProtectedData == "" {
+					continue
 				}
-				reasoning.Content = append(reasoning.Content, responses.ResponseReasoningItemContentParam{
-					Text: c.Text,
-				})
+				var reasoning responses.ResponseReasoningItemParam
+				// summary is required by the Responses API; send an empty array when absent.
+				reasoning.Summary = []responses.ResponseReasoningItemSummaryParam{}
+				// id is required and must match the original reasoning item; recover it.
+				if item, ok := c.RawRepresentation.(responses.ResponseReasoningItem); ok {
+					reasoning.ID = item.ID
+				}
+				// content must stay empty on input; reasoning is replayed via encrypted_content.
+				reasoning.EncryptedContent = openai.String(c.ProtectedData)
 				resp = append(resp, responses.ResponseInputItemUnionParam{
 					OfReasoning: &reasoning,
 				})
@@ -577,19 +610,19 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 
 				if funcResult.Error != nil {
 					// Error case - serialize as text with "Error: " prefix
-					resp = append(resp, responses.ResponseInputItemParamOfFunctionCallOutput(
+					resp = append(resp, responseInputItemParamOfFunctionCallOutput(
 						funcResult.CallID,
 						fmt.Sprintf("Error: %v", funcResult.Error),
 					))
 				} else if b, ok := ret.(json.RawMessage); ok {
 					// json.RawMessage - pass as string directly
-					resp = append(resp, responses.ResponseInputItemParamOfFunctionCallOutput(
+					resp = append(resp, responseInputItemParamOfFunctionCallOutput(
 						funcResult.CallID,
 						string(b),
 					))
 				} else if str, ok := ret.(string); ok {
 					// Plain string - pass directly
-					resp = append(resp, responses.ResponseInputItemParamOfFunctionCallOutput(
+					resp = append(resp, responseInputItemParamOfFunctionCallOutput(
 						funcResult.CallID,
 						str,
 					))
@@ -670,7 +703,7 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 							},
 						}
 					}
-					resp = append(resp, responses.ResponseInputItemParamOfFunctionCallOutput(
+					resp = append(resp, responseInputItemParamOfFunctionCallOutput(
 						funcResult.CallID,
 						outputContent,
 					))
@@ -741,15 +774,16 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 							})
 						}
 					}
-					resp = append(resp, responses.ResponseInputItemParamOfFunctionCallOutput(
+					resp = append(resp, responseInputItemParamOfFunctionCallOutput(
 						funcResult.CallID,
 						outputContent,
 					))
 				} else {
-					// Default case - convert to string
-					resp = append(resp, responses.ResponseInputItemParamOfFunctionCallOutput(
+					// Default case - convert to string (JSON-encode structured
+					// results rather than rendering them with Go's %v).
+					resp = append(resp, responseInputItemParamOfFunctionCallOutput(
 						funcResult.CallID,
-						fmt.Sprintf("%v", ret),
+						toolResultText(ret),
 					))
 				}
 
@@ -757,7 +791,7 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 		}
 
 	default:
-		panic("unknown message role: " + string(msg.Role))
+		return nil, fmt.Errorf("openaiprovider: unsupported message role %q", msg.Role)
 	}
 
 	if len(contents) > 0 {
@@ -771,6 +805,9 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 }
 
 func schemaToMap(schema any) (map[string]any, error) {
+	if schema == nil {
+		return nil, nil
+	}
 	if schemaMap, ok := schema.(map[string]any); ok {
 		return schemaMap, nil
 	}
@@ -823,7 +860,12 @@ func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func
 				if !yield(currentUpdate, nil) {
 					return
 				}
-				currentUpdate = &agent.ResponseUpdate{}
+				// Reset for the next message, carrying the response-level
+				// properties forward so the second and later messages keep
+				// AdditionalProperties (e.g. EndUserId).
+				currentUpdate = &agent.ResponseUpdate{
+					AdditionalProperties: responsesPopulateAdditionalProperties(resp),
+				}
 			}
 			currentUpdate.MessageID = out.ID
 			currentUpdate.ResponseID = resp.ID
@@ -854,13 +896,28 @@ func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func
 			for _, c := range out.Content {
 				sb.WriteString(c.Text)
 			}
-			currentUpdate.Contents = append(currentUpdate.Contents, &message.TextReasoningContent{
-				Text:          sb.String(),
-				ProtectedData: out.EncryptedContent,
-				ContentHeader: message.ContentHeader{
-					RawRepresentation: out,
-				},
-			})
+			// Attach the encrypted content and raw representation to only the
+			// first reasoning content emitted for this item, mirroring the
+			// Python SDK's content-then-summary loop.
+			firstReasoning := true
+			appendReasoning := func(text string) {
+				rc := &message.TextReasoningContent{Text: text}
+				if firstReasoning {
+					rc.ProtectedData = out.EncryptedContent
+					rc.RawRepresentation = out
+					firstReasoning = false
+				}
+				currentUpdate.Contents = append(currentUpdate.Contents, rc)
+			}
+			// Skip the content-derived entry only when it is empty but summary
+			// text is available, so o-series models that return a reasoning
+			// summary (and no content) still surface the summary text.
+			if sb.Len() > 0 || len(out.Summary) == 0 {
+				appendReasoning(sb.String())
+			}
+			for _, s := range out.Summary {
+				appendReasoning(s.Text)
+			}
 
 		case responses.ResponseFunctionToolCall:
 			callID := cmp.Or(out.CallID, out.ID)
@@ -908,8 +965,14 @@ func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func
 			}
 			currentUpdate.Contents = append(currentUpdate.Contents, &output)
 
+		case responses.ResponseFileSearchToolCall:
+			currentUpdate.Contents = append(currentUpdate.Contents, fileSearchToolCallContents(out)...)
+
 		case responses.ResponseOutputItemMcpApprovalRequest:
 			currentUpdate.Contents = append(currentUpdate.Contents, mcpApprovalRequestContent(out))
+
+		case responses.ResponseOutputItemMcpCall:
+			currentUpdate.Contents = append(currentUpdate.Contents, mcpCallContents(out)...)
 
 		case responses.ResponseOutputItemImageGenerationCall:
 			if content := imageGenerationContent(out); content != nil {
@@ -923,12 +986,8 @@ func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func
 	if usage := responsesUsageToContent(resp.Usage); usage != nil {
 		currentUpdate.Contents = append(currentUpdate.Contents, usage)
 	}
-	// If there's an error in the response, add an ErrorContent
-	if resp.Error.Message != "" {
-		currentUpdate.Contents = append(currentUpdate.Contents, &message.ErrorContent{
-			Message:   resp.Error.Message,
-			ErrorCode: string(resp.Error.Code),
-		})
+	if failure := responsesFailureContent(resp); failure != nil {
+		currentUpdate.Contents = append(currentUpdate.Contents, failure)
 	}
 	yield(currentUpdate, nil)
 }
@@ -974,6 +1033,35 @@ func responsesUsageToContent(usage responses.ResponseUsage) *message.UsageConten
 			CachedInputTokenCount: usage.InputTokensDetails.CachedTokens,
 			ReasoningTokenCount:   usage.OutputTokensDetails.ReasoningTokens,
 		},
+	}
+}
+
+const (
+	responsesDefaultFailureMessage = "The agent run failed."
+	responsesDefaultFailureCode    = "failed"
+)
+
+func responsesFailureContent(resp *responses.Response) *message.ErrorContent {
+	if resp == nil {
+		return nil
+	}
+	if resp.Status != responses.ResponseStatusFailed && resp.Error.Message == "" && resp.Error.Code == "" {
+		return nil
+	}
+	return responsesErrorContent(resp.Error.Message, string(resp.Error.Code), "")
+}
+
+func responsesErrorContent(msg string, code string, details string) *message.ErrorContent {
+	if strings.TrimSpace(msg) == "" {
+		msg = responsesDefaultFailureMessage
+	}
+	if code == "" {
+		code = responsesDefaultFailureCode
+	}
+	return &message.ErrorContent{
+		Message:   msg,
+		Details:   details,
+		ErrorCode: code,
 	}
 }
 
@@ -1038,6 +1126,15 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 		u.AdditionalProperties = responsesPopulateAdditionalProperties(&event.Response)
 		if contToken := createContinuationToken(event.Response.ID, event.SequenceNumber, event.Response.Status, isBackground); contToken != "" {
 			u.ContinuationToken = contToken
+		}
+
+	case responses.ResponseFailedEvent:
+		u = createUpdate(message.RoleAssistant, nil)
+		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
+		u.ResponseID = event.Response.ID
+		u.AdditionalProperties = responsesPopulateAdditionalProperties(&event.Response)
+		if failure := responsesFailureContent(&event.Response); failure != nil {
+			u.Contents = []message.Content{failure}
 		}
 
 	case responses.ResponseTextDeltaEvent:
@@ -1123,46 +1220,74 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 			}
 
 		case responses.ResponseCodeInterpreterToolCall:
-			// For code interpreter, create a text representation
-			var outputText strings.Builder
-			fmt.Fprintf(&outputText, "[Code Interpreter: %s]\n", item.ID)
+			// Emit structured content matching the non-streaming path so
+			// streaming consumers receive the same code-interpreter call and
+			// result contents rather than a free-form text blob.
+			var input message.CodeInterpreterToolCallContent
+			input.CallID = item.ID
 			if item.Code != "" {
-				outputText.WriteString(item.Code)
-				outputText.WriteString("\n")
-			}
-			if len(item.Outputs) > 0 {
-				outputText.WriteString("[Output]\n")
-				for _, output := range item.Outputs {
-					switch output := output.AsAny().(type) {
-					case responses.ResponseCodeInterpreterToolCallOutputLogs:
-						outputText.WriteString(output.Logs)
-						outputText.WriteString("\n")
-					case responses.ResponseCodeInterpreterToolCallOutputImage:
-						if output.URL != "" {
-							fmt.Fprintf(&outputText, "Image: %s\n", output.URL)
-						}
-					}
+				input.Inputs = []message.Content{
+					&message.DataContent{
+						Data:      base64.StdEncoding.EncodeToString([]byte(item.Code)),
+						MediaType: "text/x-python",
+					},
 				}
 			}
-			content := &message.TextContent{Text: outputText.String()}
-			content.RawRepresentation = item
-			u.Contents = []message.Content{content}
+
+			var output message.CodeInterpreterToolResultContent
+			output.CallID = item.ID
+			output.RawRepresentation = item
+			for _, res := range item.Outputs {
+				switch res := res.AsAny().(type) {
+				case responses.ResponseCodeInterpreterToolCallOutputLogs:
+					output.Outputs = append(output.Outputs, &message.TextContent{
+						Text:          res.Logs,
+						ContentHeader: message.ContentHeader{RawRepresentation: res},
+					})
+				case responses.ResponseCodeInterpreterToolCallOutputImage:
+					output.Outputs = append(output.Outputs, &message.URIContent{
+						URI:       res.URL,
+						MediaType: imageURIToMediaType(res.URL),
+						ContentHeader: message.ContentHeader{
+							RawRepresentation: res,
+						},
+					})
+				}
+			}
+			u.Contents = []message.Content{&input, &output}
+		case responses.ResponseFileSearchToolCall:
+			u.Contents = fileSearchToolCallContents(item)
 		case responses.ResponseOutputItemMcpApprovalRequest:
 			u.Contents = []message.Content{mcpApprovalRequestContent(item)}
+		case responses.ResponseOutputItemMcpCall:
+			u.Contents = mcpCallContents(item)
 		case responses.ResponseOutputItemImageGenerationCall:
 			if content := imageGenerationContent(item); content != nil {
 				u.Contents = []message.Content{content}
+			}
+		case responses.ResponseReasoningItem:
+			// Carry the completed reasoning item's encrypted content so it can be
+			// replayed on the next turn when store=false (reasoning delta events only
+			// carry text and drop EncryptedContent). Mirrors the non-streaming handler.
+			var sb strings.Builder
+			for _, c := range item.Content {
+				sb.WriteString(c.Text)
+			}
+			u.Contents = []message.Content{
+				&message.TextReasoningContent{
+					Text:          sb.String(),
+					ProtectedData: item.EncryptedContent,
+					ContentHeader: message.ContentHeader{
+						RawRepresentation: item,
+					},
+				},
 			}
 		default:
 			u = createUpdate(message.RoleAssistant, nil)
 		}
 	case responses.ResponseErrorEvent:
 		u = createUpdate(message.RoleAssistant, []message.Content{
-			&message.ErrorContent{
-				Message:   event.Message,
-				ErrorCode: event.Code,
-				Details:   event.Param,
-			},
+			responsesErrorContent(event.Message, event.Code, event.Param),
 		})
 		if contToken := createContinuationToken(responseID, event.SequenceNumber, responses.ResponseStatusFailed, isBackground); contToken != "" {
 			u.ContinuationToken = contToken
@@ -1177,6 +1302,43 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 	return u, nil
 }
 
+// fileSearchToolCallContents surfaces a file_search_call output item as message
+// content. Each retrieved chunk becomes a TextContent carrying a CitationAnnotation
+// (file ID, filename and snippet). Previously the queries and retrieved chunks were
+// dropped and only the file_citation annotations survived; surfacing them here keeps
+// the raw item (queries + status) on RawRepresentation, matching the .NET/Python
+// surfacing of FileSearch results. When the call returns no results, a single empty
+// annotated TextContent is emitted so the call is still surfaced and, being annotated,
+// is not coalesced away (which would strip its RawRepresentation).
+func fileSearchToolCallContents(item responses.ResponseFileSearchToolCall) []message.Content {
+	if len(item.Results) == 0 {
+		textContent := &message.TextContent{
+			ContentHeader: message.ContentHeader{RawRepresentation: item},
+		}
+		textContent.Annotations = append(textContent.Annotations, &message.CitationAnnotation{
+			ToolName:          "file_search",
+			RawRepresentation: item,
+		})
+		return []message.Content{textContent}
+	}
+	contents := make([]message.Content, 0, len(item.Results))
+	for _, res := range item.Results {
+		textContent := &message.TextContent{
+			ContentHeader: message.ContentHeader{RawRepresentation: item},
+			Text:          res.Text,
+		}
+		textContent.Annotations = append(textContent.Annotations, &message.CitationAnnotation{
+			FileID:            res.FileID,
+			Title:             res.Filename,
+			Snippet:           res.Text,
+			ToolName:          "file_search",
+			RawRepresentation: res,
+		})
+		contents = append(contents, textContent)
+	}
+	return contents
+}
+
 func mcpApprovalRequestContent(item responses.ResponseOutputItemMcpApprovalRequest) *message.ToolApprovalRequestContent {
 	return &message.ToolApprovalRequestContent{
 		ContentHeader: message.ContentHeader{RawRepresentation: item},
@@ -1189,6 +1351,68 @@ func mcpApprovalRequestContent(item responses.ResponseOutputItemMcpApprovalReque
 			ServerName:    item.ServerLabel,
 		},
 	}
+}
+
+// mcpCallContents surfaces a completed hosted MCP tool call, emitting both the
+// call (from its arguments) and its result so the output is not silently
+// dropped. Any tool-call error is surfaced as an ErrorContent.
+func mcpCallContents(item responses.ResponseOutputItemMcpCall) []message.Content {
+	contents := []message.Content{
+		&message.MCPServerToolCallContent{
+			ContentHeader: message.ContentHeader{RawRepresentation: item},
+			Arguments:     item.Arguments,
+			CallID:        item.ID,
+			Name:          item.Name,
+			ServerName:    item.ServerLabel,
+		},
+	}
+
+	errorMessage := mcpToolCallErrorMessage(item.Error)
+	result := &message.MCPServerToolResultContent{
+		ContentHeader: message.ContentHeader{RawRepresentation: item},
+		CallID:        item.ID,
+		Name:          item.Name,
+		ServerName:    item.ServerLabel,
+		Error:         errorMessage,
+	}
+	if item.Output != "" {
+		result.Outputs = message.Contents{
+			&message.TextContent{Text: item.Output},
+		}
+	}
+	contents = append(contents, result)
+
+	if errorMessage != "" {
+		contents = append(contents, &message.ErrorContent{
+			Message: errorMessage,
+		})
+	}
+	return contents
+}
+
+func mcpToolCallErrorMessage(err responses.McpToolCallErrorUnion) string {
+	if err.Message != "" {
+		return err.Message
+	}
+	if err.Content != nil {
+		if content, ok := err.Content.(string); ok {
+			return content
+		}
+		if content, marshalErr := json.Marshal(err.Content); marshalErr == nil {
+			return string(content)
+		}
+		return fmt.Sprint(err.Content)
+	}
+
+	raw := err.RawJSON()
+	if raw == "" || raw == "null" || raw == "{}" {
+		return ""
+	}
+	var msg string
+	if json.Unmarshal([]byte(raw), &msg) == nil {
+		return msg
+	}
+	return raw
 }
 
 func imageGenerationContent(item responses.ResponseOutputItemImageGenerationCall) *message.DataContent {
@@ -1213,11 +1437,27 @@ func populateAnnotations(anns []responses.ResponseOutputTextAnnotationUnion, con
 		case responses.ResponseOutputTextAnnotationFileCitation:
 			content.Annotations = append(content.Annotations, &message.CitationAnnotation{
 				FileID:            a.FileID,
+				Title:             a.Filename,
 				RawRepresentation: a,
 			})
 		case responses.ResponseOutputTextAnnotationURLCitation:
 			content.Annotations = append(content.Annotations, &message.CitationAnnotation{
+				Title:             a.Title,
 				URL:               a.URL,
+				AnnotatedRegions:  message.AnnotatedRegions{&message.TextSpanAnnotatedRegion{Start: int(a.StartIndex), End: int(a.EndIndex)}},
+				RawRepresentation: a,
+			})
+		case responses.ResponseOutputTextAnnotationContainerFileCitation:
+			content.Annotations = append(content.Annotations, &message.CitationAnnotation{
+				FileID:               a.FileID,
+				Title:                a.Filename,
+				AnnotatedRegions:     message.AnnotatedRegions{&message.TextSpanAnnotatedRegion{Start: int(a.StartIndex), End: int(a.EndIndex)}},
+				AdditionalProperties: map[string]any{"ContainerId": a.ContainerID},
+				RawRepresentation:    a,
+			})
+		case responses.ResponseOutputTextAnnotationFilePath:
+			content.Annotations = append(content.Annotations, &message.CitationAnnotation{
+				FileID:            a.FileID,
 				RawRepresentation: a,
 			})
 		}

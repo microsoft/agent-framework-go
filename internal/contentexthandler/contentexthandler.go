@@ -109,15 +109,15 @@ func (h *Handler[TRequest, TResponse]) DispatchRequest(ctx *workflow.Context, re
 		return ctx.SendMessage("", request)
 	}
 	id := h.requestID(request)
-	req, err := workflow.NewExternalRequest(h.createExternalRequestID(id), h.port, request)
+	req, err := workflow.NewExternalRequest(createExternalRequestID(h.port.ID, id), h.port, request)
 	if err != nil {
 		return err
 	}
 	return ctx.PostRequest(req)
 }
 
-func (h *Handler[TRequest, TResponse]) createExternalRequestID(requestID string) string {
-	return fmt.Sprintf("%d:%s:%s", len(h.port.ID), h.port.ID, requestID)
+func createExternalRequestID(portID, requestID string) string {
+	return fmt.Sprintf("%d:%s:%s", len(portID), portID, requestID)
 }
 
 func (h *Handler[TRequest, TResponse]) Reset() error {

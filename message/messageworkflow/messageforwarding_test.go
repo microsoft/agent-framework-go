@@ -196,7 +196,7 @@ func TestConfigureForwarding_ForwardsMessageSequenceAsSlice(t *testing.T) {
 }
 
 func TestConfigureForwarding_ForwardsTurnTokenUnmodified(t *testing.T) {
-	for _, emitEvents := range []*bool{nil, boolPtr(false), boolPtr(true)} {
+	for _, emitEvents := range []*bool{nil, new(false), new(true)} {
 		executor := newForwardingExecutorForTest(nil)
 		token := workflow.TurnToken{EmitEvents: emitEvents}
 
@@ -209,5 +209,3 @@ func TestConfigureForwarding_ForwardsTurnTokenUnmodified(t *testing.T) {
 		}
 	}
 }
-
-func boolPtr(value bool) *bool { return &value }
