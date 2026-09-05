@@ -118,13 +118,7 @@ func (p *defaultHistoryProvider) Invoking(ctx context.Context, invoking Invoking
 	outMessages := make([]*message.Message, 0, len(providedMessages)+len(invoking.Messages))
 	source := message.Source{Type: SourceTypeHistoryProvider, ID: p.config.SourceID}
 	for _, msg := range providedMessages {
-		if msg == nil || msg.Source == source {
-			outMessages = append(outMessages, msg)
-			continue
-		}
-		marked := msg.Clone()
-		marked.Source = source
-		outMessages = append(outMessages, marked)
+		outMessages = append(outMessages, msg.WithSource(source))
 	}
 	outMessages = append(outMessages, invoking.Messages...)
 
