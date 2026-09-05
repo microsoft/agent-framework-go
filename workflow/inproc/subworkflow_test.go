@@ -60,6 +60,49 @@ func TestSubworkflowBinding_ForwardsOutputsAsParentOutputsAndMessages(t *testing
 	}
 }
 
+func TestSubworkflowBinding_UsesActiveRunnerInputTypes(t *testing.T) {
+	childStart := workflow.BindNewExecutorFunc("child-start", func(sessionID string, executorID string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: executorID,
+			ConfigureProtocol: func(builder *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				if sessionID == "" {
+					builder.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[string](), func(*workflow.Context, any) (any, error) {
+						return "descriptor", nil
+					})
+				} else {
+					builder.RouteBuilder.AddHandlerRaw(reflect.TypeFor[int](), reflect.TypeFor[string](), func(_ *workflow.Context, message any) (any, error) {
+						return strconv.Itoa(message.(int)), nil
+					})
+				}
+				return builder, nil
+			},
+		}, nil
+	})
+	child, err := workflow.NewBuilder(childStart).
+		WithOutputFrom(childStart).
+		Build()
+	if err != nil {
+		t.Fatalf("Build child: %v", err)
+	}
+
+	host := inproc.BindSubworkflowAsExecutor(child, "child")
+	parent, err := workflow.NewBuilder(host).
+		WithOutputFrom(host).
+		Build()
+	if err != nil {
+		t.Fatalf("Build parent: %v", err)
+	}
+
+	run, err := inproc.Lockstep.Run(t.Context(), parent, 42)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	outputs := outputEvents(slicesCollect(run.OutgoingEvents()))
+	if len(outputs) != 1 || outputs[0].Output != "42" {
+		t.Fatalf("outputs = %#v, want active-runner output 42", outputs)
+	}
+}
+
 func TestSubworkflowBinding_QualifiedRequestPortRoundTrip(t *testing.T) {
 	port := workflow.RequestPort{
 		ID:       "ask",
@@ -69,9 +112,9 @@ func TestSubworkflowBinding_QualifiedRequestPortRoundTrip(t *testing.T) {
 
 	childStart := workflow.BindNewExecutorFunc("child-start", func(_ string, executorID string) (*workflow.Executor, error) {
 		return &workflow.Executor{
-			ID: executorID,
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			ID:                                 executorID,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(pb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				pb.YieldsOutputType(reflect.TypeFor[string]())
 				pb.RouteBuilder.
@@ -106,8 +149,8 @@ func TestSubworkflowBinding_QualifiedRequestPortRoundTrip(t *testing.T) {
 	}
 	qualifiedPortBinding := qualifiedPort.Bind()
 	parent, err := workflow.NewBuilder(host).
-		AddDirectEdge(host, qualifiedPortBinding, false, externalRequestOnly).
-		AddDirectEdge(qualifiedPortBinding, host, false, externalResponseOnly).
+		AddEdge(host, qualifiedPortBinding, workflow.WithEdgeCondition(externalRequestOnly)).
+		AddEdge(qualifiedPortBinding, host, workflow.WithEdgeCondition(externalResponseOnly)).
 		WithOutputFrom(host).
 		Build()
 	if err != nil {
@@ -140,6 +183,50 @@ func TestSubworkflowBinding_QualifiedRequestPortRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSubworkflowBinding_RejectsUnqualifiedResponseBeforeChildRun(t *testing.T) {
+	childStart := workflow.NewExecutor("child-start", func(string) {}).Bind()
+	child, err := workflow.NewBuilder(childStart).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := inproc.BindSubworkflowAsExecutor(child, "child")
+	response := &workflow.ExternalResponse{
+		PortInfo:  workflow.RequestPortInfo{PortID: "other.port"},
+		RequestID: "request",
+	}
+	source := workflow.ExecutorBinding{ID: "source", ImplementationID: "source"}
+	source.NewExecutorFunc = func(string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: source.ID,
+			ConfigureProtocol: func(builder *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				builder.SendsMessageType(reflect.TypeFor[*workflow.ExternalResponse]())
+				builder.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
+					return nil, ctx.SendMessage("", response)
+				})
+				return builder, nil
+			},
+		}, nil
+	}
+	parent, err := workflow.NewBuilder(source).AddEdge(source, host).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	run, err := inproc.Lockstep.Run(t.Context(), parent, "send")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for event := range run.OutgoingEvents() {
+		if failure, ok := event.(workflow.ExecutorFailedEvent); ok && failure.Error != nil {
+			if !strings.Contains(failure.Error.Error(), "not associated with this subworkflow") {
+				t.Fatalf("failure = %v", failure.Error)
+			}
+			return
+		}
+	}
+	t.Fatal("unqualified response did not fail")
+}
+
 // TestSubworkflowBinding_ParentInterceptsChildRequestLocally exercises a parent
 // executor answering a nested subworkflow's request in-process. Small requests
 // are answered locally and never surface as a top-level RequestInfoEvent, while
@@ -155,9 +242,9 @@ func TestSubworkflowBinding_ParentInterceptsChildRequestLocally(t *testing.T) {
 		}
 		childStart := workflow.BindNewExecutorFunc("submit", func(_ string, executorID string) (*workflow.Executor, error) {
 			return &workflow.Executor{
-				ID: executorID,
-				DisableAutoSendMessageHandlerResultObject: true,
-				DisableAutoYieldOutputHandlerResultObject: true,
+				ID:                                 executorID,
+				AutoSendMessageHandlerResultObject: new(false),
+				AutoYieldOutputHandlerResultObject: new(false),
 				ConfigureProtocol: func(pb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 					pb.YieldsOutputType(reflect.TypeFor[bool]())
 					pb.RouteBuilder.
@@ -197,8 +284,8 @@ func TestSubworkflowBinding_ParentInterceptsChildRequestLocally(t *testing.T) {
 		escalation := escalationPort.Bind()
 		interceptor := workflow.BindNewExecutorFunc("gate", func(_ string, executorID string) (*workflow.Executor, error) {
 			return &workflow.Executor{
-				ID: executorID,
-				DisableAutoSendMessageHandlerResultObject: true,
+				ID:                                 executorID,
+				AutoSendMessageHandlerResultObject: new(false),
 				ConfigureProtocol: func(pb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 					pb.SendsMessageType(reflect.TypeFor[*workflow.ExternalResponse](), reflect.TypeFor[*workflow.ExternalRequest]())
 					pb.RouteBuilder.AddCatchAll(func(ctx *workflow.Context, msg workflow.PortableValue) (any, error) {
@@ -224,10 +311,10 @@ func TestSubworkflowBinding_ParentInterceptsChildRequestLocally(t *testing.T) {
 			}, nil
 		})
 		parent, err := workflow.NewBuilder(host).
-			AddDirectEdge(host, interceptor, false, externalRequestOnly).
-			AddDirectEdge(interceptor, host, false, externalResponseOnly).
-			AddDirectEdge(interceptor, escalation, false, externalRequestOnly).
-			AddDirectEdge(escalation, host, false, externalResponseOnly).
+			AddEdge(host, interceptor, workflow.WithEdgeCondition(externalRequestOnly)).
+			AddEdge(interceptor, host, workflow.WithEdgeCondition(externalResponseOnly)).
+			AddEdge(interceptor, escalation, workflow.WithEdgeCondition(externalRequestOnly)).
+			AddEdge(escalation, host, workflow.WithEdgeCondition(externalResponseOnly)).
 			WithOutputFrom(host).
 			Build()
 		if err != nil {
@@ -602,7 +689,7 @@ func runCheckpointedEchoSubworkflow(t *testing.T, env *inproc.ExecutionEnvironme
 	} else {
 		run, err = env.ResumeStreaming(ctx, wf, resumeFrom)
 		if err == nil {
-			err = run.SendMessage(ctx, input)
+			_, err = run.TrySendMessage(ctx, input)
 		}
 	}
 	if err != nil {
@@ -640,8 +727,8 @@ func createCheckpointedSubworkflowRequestWorkflow(t *testing.T) *workflow.Workfl
 		Response: innerPort.Response,
 	}
 	parent, err := workflow.NewBuilder(host).
-		AddDirectEdge(host, qualifiedPort.Bind(), false, externalRequestOnly).
-		AddDirectEdge(qualifiedPort.Bind(), host, false, externalResponseOnly).
+		AddEdge(host, qualifiedPort.Bind(), workflow.WithEdgeCondition(externalRequestOnly)).
+		AddEdge(qualifiedPort.Bind(), host, workflow.WithEdgeCondition(externalResponseOnly)).
 		Build()
 	if err != nil {
 		t.Fatalf("Build parent request workflow: %v", err)
@@ -693,14 +780,12 @@ func reverseString(s string) string {
 	return string(runes)
 }
 
-func externalRequestOnly(msg any) bool {
-	_, ok := msg.(*workflow.ExternalRequest)
-	return ok
+func externalRequestOnly(request *workflow.ExternalRequest) bool {
+	return request != nil
 }
 
-func externalResponseOnly(msg any) bool {
-	_, ok := msg.(*workflow.ExternalResponse)
-	return ok
+func externalResponseOnly(response *workflow.ExternalResponse) bool {
+	return response != nil
 }
 
 const wordStateScope = "WordStateScope"

@@ -5,6 +5,7 @@ package message
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 
 	"github.com/microsoft/agent-framework-go/internal/jsonx"
 )
@@ -49,7 +50,7 @@ func (as *Annotations) UnmarshalJSON(data []byte) error {
 }
 
 func unmarshalRawAnnotation(data json.RawMessage) (Annotation, error) {
-	return &RawAnnotation{RawRepresentation: append(json.RawMessage(nil), data...)}, nil
+	return &RawAnnotation{RawRepresentation: slices.Clone(data)}, nil
 }
 
 // Annotation represents an annotation on content.
@@ -77,7 +78,7 @@ func (t *RawAnnotation) kind() annotationKind { return "" }
 // CitationAnnotation represents an annotation that links content to source references,
 // such as documents, URLs, files, or tool outputs.
 type CitationAnnotation struct {
-	AdditionalProperties map[string]any   `json:"-"`
+	AdditionalProperties map[string]any   `json:",omitzero"`
 	AnnotatedRegions     AnnotatedRegions `json:",omitempty"`
 	RawRepresentation    any              `json:"-"`
 
@@ -119,7 +120,7 @@ func (as *AnnotatedRegions) UnmarshalJSON(data []byte) error {
 }
 
 func unmarshalRawAnnotatedRegion(data json.RawMessage) (AnnotatedRegion, error) {
-	return &RawAnnotatedRegion{RawRepresentation: append(json.RawMessage(nil), data...)}, nil
+	return &RawAnnotatedRegion{RawRepresentation: slices.Clone(data)}, nil
 }
 
 // AnnotatedRegion describes the portion of an associated [Content]

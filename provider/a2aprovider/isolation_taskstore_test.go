@@ -150,8 +150,8 @@ func TestIsolationKeyScopedTaskStore_StrictModeRequiresKey(t *testing.T) {
 	if err == nil {
 		t.Fatal("Create() error = nil, want non-nil")
 	}
-	if err.Error() != "task store isolation key is required but was not provided" {
-		t.Fatalf("Create() error = %q, want %q", err, "task store isolation key is required but was not provided")
+	if !errors.Is(err, a2aprovider.ErrTaskStoreIsolationKeyRequired) {
+		t.Fatalf("Create() error = %v, want ErrTaskStoreIsolationKeyRequired", err)
 	}
 }
 

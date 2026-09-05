@@ -205,7 +205,7 @@ func TestAutocall_LogsFailedFunctionCall(t *testing.T) {
 
 	invokeAndAssert(t, tools, plan, nil, toolautocall.Config{
 		Logger:                             log,
-		MaximumConsecutiveErrorsPerRequest: 3,
+		MaximumConsecutiveErrorsPerRequest: new(3),
 	})
 
 	// Assert logs contain error information
@@ -254,7 +254,7 @@ func TestAutocall_LogsCanceledFunctionCall(t *testing.T) {
 
 	invokeAndAssert(t, tools, plan, nil, toolautocall.Config{
 		Logger:                             log,
-		MaximumConsecutiveErrorsPerRequest: 3,
+		MaximumConsecutiveErrorsPerRequest: new(3),
 	})
 
 	// Assert logs contain cancellation information
@@ -357,7 +357,7 @@ func TestAutocall_LogsMaximumIterationReached(t *testing.T) {
 
 	invokeAndAssert(t, tools, plan, nil, toolautocall.Config{
 		Logger:                      log,
-		MaximumIterationsPerRequest: 1,
+		MaximumIterationsPerRequest: new(1),
 	})
 
 	output := buf.String()
@@ -448,11 +448,11 @@ func TestAutocall_LogsApprovalResponseAndRejection(t *testing.T) {
 	if !strings.Contains(output, "not now") {
 		t.Errorf("expected log to contain rejection reason, got: %s", output)
 	}
-	if !requestCall.InformationalOnly {
-		t.Fatal("expected rejected request FunctionCallContent to be informational-only")
+	if requestCall.InformationalOnly {
+		t.Fatal("expected rejected request FunctionCallContent to remain unchanged")
 	}
-	if !responseCall.InformationalOnly {
-		t.Fatal("expected rejected response FunctionCallContent to be informational-only")
+	if responseCall.InformationalOnly {
+		t.Fatal("expected rejected response FunctionCallContent to remain unchanged")
 	}
 }
 

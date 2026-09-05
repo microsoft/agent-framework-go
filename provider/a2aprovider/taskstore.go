@@ -12,7 +12,10 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2asrv/taskstore"
 )
 
-var errTaskStoreIsolationKeyRequired = errors.New("task store isolation key is required but was not provided")
+// ErrTaskStoreIsolationKeyRequired is returned by a strict
+// [IsolationKeyScopedTaskStore] when no isolation key is available for an
+// operation. Callers can match it with [errors.Is].
+var ErrTaskStoreIsolationKeyRequired = errors.New("task store isolation key is required but was not provided")
 
 // TaskStoreIsolationKeyProvider returns the current logical isolation key used
 // to scope task-store operations. Returning an empty string disables scoping for
@@ -134,7 +137,7 @@ func (s *IsolationKeyScopedTaskStore) List(ctx context.Context, req *a2a.ListTas
 func (s *IsolationKeyScopedTaskStore) isolationKey(ctx context.Context) (string, error) {
 	if s.keyProvider == nil {
 		if s.strict {
-			return "", errTaskStoreIsolationKeyRequired
+			return "", ErrTaskStoreIsolationKeyRequired
 		}
 		return "", nil
 	}
@@ -144,7 +147,7 @@ func (s *IsolationKeyScopedTaskStore) isolationKey(ctx context.Context) (string,
 		return "", err
 	}
 	if key == "" && s.strict {
-		return "", errTaskStoreIsolationKeyRequired
+		return "", ErrTaskStoreIsolationKeyRequired
 	}
 	return key, nil
 }

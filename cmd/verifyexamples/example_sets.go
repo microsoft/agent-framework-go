@@ -3,6 +3,7 @@
 package main
 
 import (
+	"maps"
 	"slices"
 	"strings"
 )
@@ -25,10 +26,7 @@ func lookupExampleSet(category string) ([]ExampleDefinition, bool) {
 }
 
 func availableCategories() []string {
-	categories := make([]string, 0, len(exampleSets))
-	for category := range exampleSets {
-		categories = append(categories, category)
-	}
+	categories := slices.Collect(maps.Keys(exampleSets))
 	slices.Sort(categories)
 	return categories
 }
@@ -36,7 +34,6 @@ func availableCategories() []string {
 func inputLines(values ...string) []*string {
 	inputs := make([]*string, 0, len(values))
 	for _, value := range values {
-		value := value
 		inputs = append(inputs, &value)
 	}
 	return inputs

@@ -53,10 +53,23 @@ func ListTools(ctx context.Context, session *mcp.ClientSession) ([]tool.Tool, er
 		return nil, fmt.Errorf("failed to list tools: %w", err)
 	}
 
+	// Create agent.Tool instances for each MCP tool.
+	//
+	// Normalization (normalizeMCPName) can map distinct remote names onto the
+	// same provider-safe name (e.g. "a b" and "a/b" both become "a-b"). Such a
+	// collision would break provider tool registration (duplicate function
+	// names) and cause the autocall tools map to silently drop all but the
+	// first tool. Detect it here and fail loudly so the caller gets a clear
+	// signal instead of missing/unreachable tools.
 	// Create tool.Tool instances for each MCP tool
 	result := make([]tool.Tool, 0, len(toolsResult.Tools))
+	seen := make(map[string]string, len(toolsResult.Tools))
 	for _, mcpTool := range toolsResult.Tools {
 		agentTool := newMCPToolWrapper(session, mcpTool)
+		if existing, ok := seen[agentTool.name]; ok {
+			return nil, fmt.Errorf("normalized MCP tool name collision: remote tools %q and %q both normalize to %q", existing, mcpTool.Name, agentTool.name)
+		}
+		seen[agentTool.name] = mcpTool.Name
 		result = append(result, agentTool)
 	}
 
@@ -151,28 +164,7 @@ func mcpContentToAgentContentWithRaw(mcpContents []mcp.Content, rawOverride any)
 			})
 
 		case *mcp.EmbeddedResource:
-			if contentValue.Resource == nil {
-				result = append(result, &message.TextContent{
-					ContentHeader: mcpContentHeader(raw),
-					Text:          "[MCP embedded resource missing resource data]",
-				})
-				continue
-			}
-			header := mcpContentHeader(raw)
-			if contentValue.Resource.Text != "" {
-				result = append(result, &message.TextContent{
-					ContentHeader: header,
-					Text:          contentValue.Resource.Text,
-				})
-			} else {
-				data, mediaType := mcpDataContent(contentValue.Resource.Blob, contentValue.Resource.MIMEType, "application/octet-stream")
-				result = append(result, &message.DataContent{
-					ContentHeader: header,
-					Data:          data,
-					MediaType:     mediaType,
-					Name:          contentValue.Resource.URI,
-				})
-			}
+			result = append(result, mcpEmbeddedResourceToAgentContent(contentValue, raw))
 
 		case *mcp.ToolUseContent: //nolint:staticcheck // ToolUseContent is deprecated per SEP-2577 but remains functional during the deprecation window.
 			result = append(result, &message.TextContent{
@@ -200,6 +192,31 @@ func mcpContentToAgentContentWithRaw(mcpContents []mcp.Content, rawOverride any)
 	}
 
 	return result
+}
+
+func mcpEmbeddedResourceToAgentContent(contentValue *mcp.EmbeddedResource, raw any) message.Content {
+	if contentValue.Resource == nil {
+		return &message.TextContent{
+			ContentHeader: mcpContentHeader(raw),
+			Text:          "[MCP embedded resource missing resource data]",
+		}
+	}
+
+	header := mcpContentHeader(raw)
+	if contentValue.Resource.Text != "" {
+		return &message.TextContent{
+			ContentHeader: header,
+			Text:          contentValue.Resource.Text,
+		}
+	}
+
+	data, mediaType := mcpDataContent(contentValue.Resource.Blob, contentValue.Resource.MIMEType, "application/octet-stream")
+	return &message.DataContent{
+		ContentHeader: header,
+		Data:          data,
+		MediaType:     mediaType,
+		Name:          contentValue.Resource.URI,
+	}
 }
 
 func mcpContentHeader(raw any) message.ContentHeader {
@@ -413,17 +430,42 @@ var (
 type mcpWrapper struct {
 	session *mcp.ClientSession
 	tool    *mcp.Tool
+	// name is the normalized tool name surfaced to providers and used as the
+	// autocall map key. tool.Name retains the original remote name used when
+	// invoking the MCP server.
+	name string
 }
 
 func newMCPToolWrapper(session *mcp.ClientSession, tool *mcp.Tool) *mcpWrapper {
 	return &mcpWrapper{
 		session: session,
 		tool:    tool,
+		name:    normalizeMCPName(tool.Name),
 	}
 }
 
+// normalizeMCPName replaces every rune that is not a valid function-name
+// character with a dash. Providers such as OpenAI reject tool names that do not
+// match the [A-Za-z0-9_.-] identifier pattern, but MCP server tool names may
+// contain arbitrary characters (spaces, slashes, colons). This mirrors the
+// Python SDK's _normalize_mcp_name so the same remote tool surfaces under the
+// same name across SDKs.
+func normalizeMCPName(name string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'A' && r <= 'Z',
+			r >= 'a' && r <= 'z',
+			r >= '0' && r <= '9',
+			r == '_', r == '.', r == '-':
+			return r
+		default:
+			return '-'
+		}
+	}, name)
+}
+
 func (w *mcpWrapper) Name() string {
-	return w.tool.Name
+	return w.name
 }
 
 func (w *mcpWrapper) Description() string {

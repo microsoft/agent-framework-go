@@ -113,10 +113,10 @@ func buildWorkflow() *workflow.Workflow {
 	//   interceptor -> escalation  (large requests are forwarded to a top-level port)
 	//   escalation -> host         (the user's answer flows back to the child)
 	parent, err := workflow.NewBuilder(host).
-		AddDirectEdge(host, interceptor, false, externalRequestOnly).
-		AddDirectEdge(interceptor, host, false, externalResponseOnly).
-		AddDirectEdge(interceptor, escalation, false, externalRequestOnly).
-		AddDirectEdge(escalation, host, false, externalResponseOnly).
+		AddEdge(host, interceptor, workflow.WithEdgeCondition(externalRequestOnly)).
+		AddEdge(interceptor, host, workflow.WithEdgeCondition(externalResponseOnly)).
+		AddEdge(interceptor, escalation, workflow.WithEdgeCondition(externalRequestOnly)).
+		AddEdge(escalation, host, workflow.WithEdgeCondition(externalResponseOnly)).
 		WithOutputFrom(host).
 		Build()
 	if err != nil {
@@ -141,9 +141,9 @@ func buildChild(port workflow.RequestPort) *workflow.Workflow {
 func expenseSubmitter(id string, port workflow.RequestPort) workflow.ExecutorBinding {
 	return workflow.BindNewExecutorFunc(id, func(_ string, executorID string) (*workflow.Executor, error) {
 		return &workflow.Executor{
-			ID: executorID,
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			ID:                                 executorID,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(pb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				pb.YieldsOutputType(reflect.TypeFor[bool]())
 				pb.RouteBuilder.
@@ -174,8 +174,8 @@ func expenseSubmitter(id string, port workflow.RequestPort) workflow.ExecutorBin
 func approvalInterceptor(id, hostID, escalationPortID string) workflow.ExecutorBinding {
 	return workflow.BindNewExecutorFunc(id, func(_ string, executorID string) (*workflow.Executor, error) {
 		return &workflow.Executor{
-			ID: executorID,
-			DisableAutoSendMessageHandlerResultObject: true,
+			ID:                                 executorID,
+			AutoSendMessageHandlerResultObject: new(false),
 			ConfigureProtocol: func(pb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				pb.SendsMessageType(
 					reflect.TypeFor[*workflow.ExternalResponse](),
@@ -211,12 +211,10 @@ func approvalInterceptor(id, hostID, escalationPortID string) workflow.ExecutorB
 	})
 }
 
-func externalRequestOnly(msg any) bool {
-	_, ok := msg.(*workflow.ExternalRequest)
-	return ok
+func externalRequestOnly(request *workflow.ExternalRequest) bool {
+	return request != nil
 }
 
-func externalResponseOnly(msg any) bool {
-	_, ok := msg.(*workflow.ExternalResponse)
-	return ok
+func externalResponseOnly(response *workflow.ExternalResponse) bool {
+	return response != nil
 }
