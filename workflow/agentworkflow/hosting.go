@@ -429,6 +429,11 @@ func (h *hostExecutor) runAgentAndDispatch(wctx *workflow.Context, messages []*m
 		}
 		resp.Update(update)
 	}
+	// Match .NET hosting: if cancellation arrives after the last streamed update
+	// but before the turn is finalized, do not emit the aggregated completion.
+	if err := wctx.Err(); err != nil {
+		return err
+	}
 	resp.Coalesce()
 
 	// Stamp this hosting executor's name on every aggregated message,
@@ -441,11 +446,17 @@ func (h *hostExecutor) runAgentAndDispatch(wctx *workflow.Context, messages []*m
 	}
 
 	if h.cfg.EmitResponseEvents {
+		if err := wctx.Err(); err != nil {
+			return err
+		}
 		if err := wctx.YieldOutput(&resp); err != nil {
 			return err
 		}
 	}
 
+	if err := wctx.Err(); err != nil {
+		return err
+	}
 	if err := h.dispatchRequests(wctx, resp.Messages); err != nil {
 		return err
 	}
@@ -455,11 +466,17 @@ func (h *hostExecutor) runAgentAndDispatch(wctx *workflow.Context, messages []*m
 	// workflow can cause invalid request errors when the receiving agent uses an
 	// API that does not accept those output-only item types as input.
 	if forwardableMessages := filterForwardableMessages(resp.Messages); len(forwardableMessages) > 0 {
+		if err := wctx.Err(); err != nil {
+			return err
+		}
 		if err := wctx.SendMessage("", forwardableMessages); err != nil {
 			return err
 		}
 	}
 
+	if err := wctx.Err(); err != nil {
+		return err
+	}
 	if err := h.releasePendingTurnIfReady(wctx); err != nil {
 		return err
 	}
@@ -529,6 +546,9 @@ func (h *hostExecutor) releasePendingTurnIfReady(wctx *workflow.Context) error {
 	}
 	// Forward a fresh TurnToken stamped with the resolved EmitEvents value so
 	// downstream executors observe the effective per-turn setting.
+	if err := wctx.Err(); err != nil {
+		return err
+	}
 	return wctx.SendMessage("", workflow.TurnToken{EmitEvents: emit})
 }
 
@@ -653,6 +673,9 @@ func dispatchTrackedRequests[T any](wctx *workflow.Context, order []string, requ
 		if !ok {
 			continue
 		}
+		if err := wctx.Err(); err != nil {
+			return err
+		}
 		delete(requests, id)
 		added, err := dispatcher.TrackRequest(wctx, request)
 		if err != nil {
@@ -664,6 +687,9 @@ func dispatchTrackedRequests[T any](wctx *workflow.Context, order []string, requ
 	}
 
 	for _, request := range dispatches {
+		if err := wctx.Err(); err != nil {
+			return err
+		}
 		if err := dispatcher.DispatchRequest(wctx, request); err != nil {
 			return err
 		}
