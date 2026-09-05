@@ -6,6 +6,8 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/microsoft/agent-framework-go/workflow/observability"
@@ -123,9 +125,5 @@ type mapCarrier map[string]string
 func (c mapCarrier) Get(key string) string { return c[key] }
 func (c mapCarrier) Set(key, value string) { c[key] = value }
 func (c mapCarrier) Keys() []string {
-	keys := make([]string, 0, len(c))
-	for k := range c {
-		keys = append(keys, k)
-	}
-	return keys
+	return slices.Collect(maps.Keys(c))
 }

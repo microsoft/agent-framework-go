@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 	"iter"
+	"slices"
 
 	"github.com/microsoft/agent-framework-go/message"
 )
@@ -20,6 +21,10 @@ const SourceTypeMiddleware message.SourceType = "middleware"
 // request/response message hooks exposed by [ContextProvider].
 // Messages passed to next that were not present in the middleware input are
 // marked with [SourceTypeMiddleware] when they do not already carry a source.
+//
+// Middleware implementations must treat input message and option slices, and
+// existing messages, as read-only. To modify the downstream invocation, clone
+// the slices and any message being changed, then pass the derived values to next.
 type Middleware interface {
 	Run(next RunFunc, ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error]
 }
@@ -33,17 +38,18 @@ func (mf MiddlewareFunc) Run(next RunFunc, ctx context.Context, messages []*mess
 	return mf(next, ctx, messages, options...)
 }
 
-// runChain applies the given middlewares around the given RunFunc.
-func runChain(ctx context.Context, fn RunFunc, middlewares []Middleware, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error] {
-	// Chain the middlewares together.
-	for i := len(middlewares) - 1; i >= 0; i-- {
-		mw := middlewares[i]
+// compileRunChain applies the given middlewares around fn.
+func compileRunChain(fn RunFunc, middlewares []Middleware) RunFunc {
+	for _, mw := range slices.Backward(middlewares) {
+		if mw == nil {
+			continue
+		}
 		fn = middlewareRunner{
 			Middleware: mw,
 			next:       fn,
 		}.Run
 	}
-	return fn(ctx, messages, options...)
+	return fn
 }
 
 type middlewareRunner struct {
@@ -53,12 +59,13 @@ type middlewareRunner struct {
 
 func (mr middlewareRunner) Run(ctx context.Context, messages []*message.Message, opts ...Option) iter.Seq2[*ResponseUpdate, error] {
 	next := func(ctx context.Context, outMessages []*message.Message, opts ...Option) iter.Seq2[*ResponseUpdate, error] {
-		originals := make(map[*message.Message]struct{}, len(messages))
+		inputMessages := make(map[*message.Message]struct{}, len(messages))
 		for _, msg := range messages {
-			originals[msg] = struct{}{}
+			inputMessages[msg] = struct{}{}
 		}
+		var outMessagesCloned bool
 		for i, msg := range outMessages {
-			if _, ok := originals[msg]; ok {
+			if _, ok := inputMessages[msg]; ok {
 				continue
 			}
 			if msg == nil || msg.Source != (message.Source{}) {
@@ -66,6 +73,10 @@ func (mr middlewareRunner) Run(ctx context.Context, messages []*message.Message,
 			}
 			marked := msg.Clone()
 			marked.Source = message.Source{Type: SourceTypeMiddleware}
+			if !outMessagesCloned {
+				outMessages = slices.Clone(outMessages)
+				outMessagesCloned = true
+			}
 			outMessages[i] = marked
 		}
 		return mr.next(ctx, outMessages, opts...)

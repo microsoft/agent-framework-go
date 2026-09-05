@@ -5,6 +5,7 @@ package agentworkflow_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"iter"
 	"reflect"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/message/messageworkflow"
@@ -98,11 +100,97 @@ func fixedTextAgent(id, name, text string) *agent.Agent {
 	return agent.New(
 		agent.ProviderConfig{ProviderName: "fixed-text", Run: run},
 		agent.Config{
-			ID:                  id,
-			Name:                name,
-			DisableFuncAutoCall: true,
+			ID:   id,
+			Name: name,
 		},
 	)
+}
+
+const checkpointIdentityWorkflowAgentID = "workflow-agent"
+
+func turnCountingAgent(id, name string) *agent.Agent {
+	return agent.New(
+		agent.ProviderConfig{
+			ProviderName: "turn-counter",
+			Run: func(_ context.Context, messages []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+				turns := 0
+				for _, msg := range messages {
+					if msg != nil && msg.Role == message.RoleUser {
+						turns++
+					}
+				}
+				return func(yield func(*agent.ResponseUpdate, error) bool) {
+					yield(&agent.ResponseUpdate{
+						Role:       message.RoleAssistant,
+						AgentID:    id,
+						AuthorName: name,
+						MessageID:  id + "-message",
+						Contents: []message.Content{
+							&message.TextContent{Text: fmt.Sprintf("turn:%d", turns)},
+						},
+					}, nil)
+				}
+			},
+		},
+		agent.Config{
+			ID:   id,
+			Name: name,
+		},
+	)
+}
+
+func fixedUpdatesAgent(id, name string, updates ...*agent.ResponseUpdate) *agent.Agent {
+	run := func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			for _, update := range updates {
+				if !yield(update, nil) {
+					return
+				}
+			}
+		}
+	}
+	return agent.New(
+		agent.ProviderConfig{ProviderName: "fixed-updates", Run: run},
+		agent.Config{
+			ID:   id,
+			Name: name,
+		},
+	)
+}
+
+func buildCheckpointIdentityWorkflowAgent(t *testing.T, useStableInnerID bool, innerNameSuffix string) *agent.Agent {
+	t.Helper()
+
+	innerID := uuid.NewString()
+	if useStableInnerID {
+		innerID = "turn-counter-agent"
+	}
+	innerName := "turn_counter_agent" + innerNameSuffix
+
+	hosted := agentworkflow.New(turnCountingAgent(innerID, innerName), agentworkflow.Config{})
+	wf, err := workflow.NewBuilder(hosted).WithOutputFrom(hosted).Build()
+	if err != nil {
+		t.Fatalf("Build workflow: %v", err)
+	}
+	ag, err := agentworkflow.NewAgent(wf, agentworkflow.AgentConfig{
+		Config: agent.Config{
+			ID:   checkpointIdentityWorkflowAgentID,
+			Name: checkpointIdentityWorkflowAgentID,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewAgent: %v", err)
+	}
+	return ag
+}
+
+func responseTextByPrefix(resp *agent.Response, prefix string) string {
+	for _, msg := range resp.Messages {
+		if text := msg.Contents.Text(); strings.HasPrefix(text, prefix) {
+			return text
+		}
+	}
+	return ""
 }
 
 func uppercaseLatestTextBinding(id string) workflow.ExecutorBinding {
@@ -250,6 +338,197 @@ func TestNew_SerializedSessionResumesFromCheckpoint(t *testing.T) {
 	}
 }
 
+func newApprovalRequestWorkflow(t *testing.T, id string) *workflow.Workflow {
+	t.Helper()
+	binding := approvalRequestExecutorBinding(t, id)
+	wf, err := workflow.NewBuilder(binding).
+		WithOutputFrom(binding).
+		Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	return wf
+}
+
+// TestNew_SerializedSessionResumesApprovalRequest verifies that a pending
+// ToolApprovalRequestContent that survives a session JSON round-trip resolves
+// to the same concrete type as a live request. After the round-trip the
+// pending request's Data is a delayed-deserialized PortableValue, whose JSON
+// form also unmarshals cleanly into an empty FunctionCallContent. Before the
+// TypeID disambiguation in requestDataContent, the restored request resolved to
+// that empty FunctionCallContent, so the matching ToolApprovalResponseContent
+// was not re-keyed to the original request ID ("req-1") and the workflow
+// observed the external request ID instead. The executor asserts the delivered
+// ID equals "req-1", so this fails before the fix and passes after.
+func TestNew_SerializedSessionResumesApprovalRequest(t *testing.T) {
+	wf1 := newApprovalRequestWorkflow(t, "approval-persisted")
+	ag1, err := agentworkflow.NewAgent(wf1, agentworkflow.AgentConfig{
+		IncludeOutputsInResponse: true,
+	})
+	if err != nil {
+		t.Fatalf("New first agent: %v", err)
+	}
+	session, err := ag1.CreateSession(t.Context())
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	first, err := ag1.RunText(t.Context(), "hi", agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	var req *message.ToolApprovalRequestContent
+	for _, m := range first.Messages {
+		for _, c := range m.Contents {
+			if r, ok := c.(*message.ToolApprovalRequestContent); ok {
+				req = r
+			}
+		}
+	}
+	if req == nil {
+		t.Fatalf("expected an approval request, got %+v", first)
+	}
+	if req.RequestID != "approval-persisted_UserInput:req-1" {
+		t.Fatalf("first run request ID = %q, want %q", req.RequestID, "approval-persisted_UserInput:req-1")
+	}
+
+	data, err := json.Marshal(session)
+	if err != nil {
+		t.Fatalf("Marshal session: %v", err)
+	}
+	var restored agent.Session
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("Unmarshal session: %v", err)
+	}
+
+	wf2 := newApprovalRequestWorkflow(t, "approval-persisted")
+	ag2, err := agentworkflow.NewAgent(wf2, agentworkflow.AgentConfig{
+		IncludeOutputsInResponse: true,
+	})
+	if err != nil {
+		t.Fatalf("New restored agent: %v", err)
+	}
+	resumeMsg := []*message.Message{{
+		Role:     message.RoleUser,
+		Contents: []message.Content{req.CreateResponse(true, "")},
+	}}
+	second, err := ag2.Run(t.Context(), resumeMsg, agent.WithSession(&restored)).Collect()
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	var finalText string
+	for _, m := range second.Messages {
+		if txt := m.Contents.Text(); txt == "approved" || txt == "denied" {
+			finalText = txt
+		}
+	}
+	if finalText != "approved" {
+		t.Fatalf("final response text = %q, want %q", finalText, "approved")
+	}
+}
+
+func TestNew_SerializedSessionResumesHostedAgentCheckpointAcrossReconstruction(t *testing.T) {
+	ag1 := buildCheckpointIdentityWorkflowAgent(t, true, "")
+	session, err := ag1.CreateSession(t.Context())
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	first, err := ag1.RunText(t.Context(), "Please help me.", agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if got := responseTextByPrefix(first, "turn:"); got != "turn:1" {
+		t.Fatalf("first response text = %q, want %q", got, "turn:1")
+	}
+
+	data, err := json.Marshal(session)
+	if err != nil {
+		t.Fatalf("Marshal session: %v", err)
+	}
+	var restored agent.Session
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("Unmarshal session: %v", err)
+	}
+
+	ag2 := buildCheckpointIdentityWorkflowAgent(t, true, "")
+	second, err := ag2.RunText(t.Context(), "Anything else?", agent.WithSession(&restored)).Collect()
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if got := responseTextByPrefix(second, "turn:"); got != "turn:2" {
+		t.Fatalf("second response text = %q, want %q", got, "turn:2")
+	}
+}
+
+func TestNew_SerializedSessionFailsAcrossReconstructionWithoutStableHostedAgentID(t *testing.T) {
+	ag1 := buildCheckpointIdentityWorkflowAgent(t, false, "")
+	session, err := ag1.CreateSession(t.Context())
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	first, err := ag1.RunText(t.Context(), "Please help me.", agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if got := responseTextByPrefix(first, "turn:"); got != "turn:1" {
+		t.Fatalf("first response text = %q, want %q", got, "turn:1")
+	}
+
+	data, err := json.Marshal(session)
+	if err != nil {
+		t.Fatalf("Marshal session: %v", err)
+	}
+	var restored agent.Session
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("Unmarshal session: %v", err)
+	}
+
+	ag2 := buildCheckpointIdentityWorkflowAgent(t, false, "")
+	_, err = ag2.RunText(t.Context(), "Anything else?", agent.WithSession(&restored)).Collect()
+	if err == nil {
+		t.Fatal("second run error = nil, want checkpoint compatibility error")
+	}
+	if !strings.Contains(err.Error(), "the specified checkpoint is not compatible with the workflow associated with this runner") {
+		t.Fatalf("second run error = %q, want checkpoint compatibility error", err)
+	}
+}
+
+func TestNew_SerializedSessionFailsAcrossReconstructionWhenHostedAgentNameChanges(t *testing.T) {
+	ag1 := buildCheckpointIdentityWorkflowAgent(t, true, "")
+	session, err := ag1.CreateSession(t.Context())
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	first, err := ag1.RunText(t.Context(), "Please help me.", agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if got := responseTextByPrefix(first, "turn:"); got != "turn:1" {
+		t.Fatalf("first response text = %q, want %q", got, "turn:1")
+	}
+
+	data, err := json.Marshal(session)
+	if err != nil {
+		t.Fatalf("Marshal session: %v", err)
+	}
+	var restored agent.Session
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("Unmarshal session: %v", err)
+	}
+
+	ag2 := buildCheckpointIdentityWorkflowAgent(t, true, "-renamed")
+	_, err = ag2.RunText(t.Context(), "Anything else?", agent.WithSession(&restored)).Collect()
+	if err == nil {
+		t.Fatal("second run error = nil, want checkpoint compatibility error")
+	}
+	if !strings.Contains(err.Error(), "the specified checkpoint is not compatible with the workflow associated with this runner") {
+		t.Fatalf("second run error = %q, want checkpoint compatibility error", err)
+	}
+}
+
 func TestNew_SerializedSessionResumesApprovalRequestFromCheckpoint(t *testing.T) {
 	binding1 := approvalRequestExecutorBinding(t, "approval-persisted")
 	wf1, err := workflow.NewBuilder(binding1).WithOutputFrom(binding1).Build()
@@ -328,6 +607,83 @@ func TestNew_SerializedSessionResumesApprovalRequestFromCheckpoint(t *testing.T)
 	}
 	if finalText != "approved" {
 		t.Fatalf("final text = %q, want %q", finalText, "approved")
+	}
+}
+
+func TestNew_SerializedSessionWithStableInnerAgentIDsResumesAcrossReconstruction(t *testing.T) {
+	ag1 := newCheckpointIdentityWorkflowAgent(t, true, "")
+	session, err := ag1.CreateSession(t.Context())
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	first, err := ag1.RunText(t.Context(), "Please help me.", agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if got := responseTextWithPrefix(first, checkpointIdentityReplyPrefix); got != checkpointIdentityReplyPrefix+":turn:1" {
+		t.Fatalf("first response = %q, want %q", got, checkpointIdentityReplyPrefix+":turn:1")
+	}
+
+	restored := marshalAndRestoreSession(t, session)
+	ag2 := newCheckpointIdentityWorkflowAgent(t, true, "")
+
+	second, err := ag2.RunText(t.Context(), "Anything else?", agent.WithSession(restored)).Collect()
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if got := responseTextWithPrefix(second, checkpointIdentityReplyPrefix); got != checkpointIdentityReplyPrefix+":turn:2" {
+		t.Fatalf("second response = %q, want %q", got, checkpointIdentityReplyPrefix+":turn:2")
+	}
+}
+
+func TestNew_SerializedSessionWithoutStableInnerAgentIDsFailsAcrossReconstruction(t *testing.T) {
+	ag1 := newCheckpointIdentityWorkflowAgent(t, false, "")
+	session, err := ag1.CreateSession(t.Context())
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	first, err := ag1.RunText(t.Context(), "Please help me.", agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if got := responseTextWithPrefix(first, checkpointIdentityReplyPrefix); got != checkpointIdentityReplyPrefix+":turn:1" {
+		t.Fatalf("first response = %q, want %q", got, checkpointIdentityReplyPrefix+":turn:1")
+	}
+
+	restored := marshalAndRestoreSession(t, session)
+	ag2 := newCheckpointIdentityWorkflowAgent(t, false, "")
+
+	if _, err := ag2.RunText(t.Context(), "Anything else?", agent.WithSession(restored)).Collect(); err == nil {
+		t.Fatal("second run error = nil, want checkpoint compatibility error")
+	} else if !strings.Contains(err.Error(), "the specified checkpoint is not compatible with the workflow associated with this runner") {
+		t.Fatalf("second run error = %q, want checkpoint compatibility error", err.Error())
+	}
+}
+
+func TestNew_SerializedSessionWithRenamedInnerAgentsFailsAcrossReconstruction(t *testing.T) {
+	ag1 := newCheckpointIdentityWorkflowAgent(t, true, "")
+	session, err := ag1.CreateSession(t.Context())
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	first, err := ag1.RunText(t.Context(), "Please help me.", agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if got := responseTextWithPrefix(first, checkpointIdentityReplyPrefix); got != checkpointIdentityReplyPrefix+":turn:1" {
+		t.Fatalf("first response = %q, want %q", got, checkpointIdentityReplyPrefix+":turn:1")
+	}
+
+	restored := marshalAndRestoreSession(t, session)
+	ag2 := newCheckpointIdentityWorkflowAgent(t, true, "-renamed")
+
+	if _, err := ag2.RunText(t.Context(), "Anything else?", agent.WithSession(restored)).Collect(); err == nil {
+		t.Fatal("second run error = nil, want checkpoint compatibility error")
+	} else if !strings.Contains(err.Error(), "the specified checkpoint is not compatible with the workflow associated with this runner") {
+		t.Fatalf("second run error = %q, want checkpoint compatibility error", err.Error())
 	}
 }
 
@@ -495,7 +851,7 @@ func TestNew_GatesHostedAgentResponseOutputsByDefault(t *testing.T) {
 	host := agentworkflow.New(
 		agent.New(
 			agent.ProviderConfig{ProviderName: "hosted-response", Run: run},
-			agent.Config{ID: "hosted-id", Name: "hosted-name", DisableFuncAutoCall: true},
+			agent.Config{ID: "hosted-id", Name: "hosted-name"},
 		),
 		agentworkflow.Config{EmitResponseEvents: true},
 	)
@@ -526,7 +882,7 @@ func TestNew_GatesHostedAgentResponseOutputsByDefault(t *testing.T) {
 		t.Fatalf("New included: %v", err)
 	}
 	var sawResponseOutput bool
-	for update, err := range included.RunText(t.Context(), "ping") {
+	for update, err := range included.RunText(t.Context(), "ping", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("RunText included: %v", err)
 		}
@@ -541,19 +897,100 @@ func TestNew_GatesHostedAgentResponseOutputsByDefault(t *testing.T) {
 	}
 }
 
+func TestNew_SuppressesDuplicateHostedAgentResponseMessages(t *testing.T) {
+	host := agentworkflow.New(
+		fixedUpdatesAgent("hosted-id", "hosted-name", &agent.ResponseUpdate{
+			Role:      message.RoleAssistant,
+			MessageID: "streamed-message",
+			Contents: message.Contents{
+				&message.TextContent{Text: "hosted-response"},
+			},
+		}),
+		agentworkflow.Config{
+			EmitUpdateEvents:   new(true),
+			EmitResponseEvents: true,
+		},
+	)
+	wf, err := workflow.NewBuilder(host).
+		WithOutputFrom(host).
+		Build()
+	if err != nil {
+		t.Fatalf("build workflow: %v", err)
+	}
+	ag, err := agentworkflow.NewAgent(wf, agentworkflow.AgentConfig{IncludeOutputsInResponse: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	var textUpdates int
+	var sawCompletionOutput bool
+	for update, err := range ag.RunText(t.Context(), "ping", agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("RunText: %v", err)
+		}
+		if update.Contents.Text() == "hosted-response" {
+			textUpdates++
+		}
+		if raw, ok := update.RawRepresentation.(workflow.OutputEvent); ok && len(update.Contents) == 0 {
+			if _, isResponse := raw.Output.(*agent.Response); isResponse {
+				sawCompletionOutput = true
+			}
+		}
+	}
+	if textUpdates != 1 {
+		t.Fatalf("hosted response text updates = %d, want 1", textUpdates)
+	}
+	if !sawCompletionOutput {
+		t.Fatalf("expected raw-only completion update for suppressed hosted response output")
+	}
+}
+
+func TestNew_SuppressesDuplicateHostedAgentResponseMessagesWithoutProviderMessageIDs(t *testing.T) {
+	host := agentworkflow.New(
+		fixedUpdatesAgent("hosted-id", "hosted-name", &agent.ResponseUpdate{
+			Role: message.RoleAssistant,
+			Contents: message.Contents{
+				&message.TextContent{Text: "hosted-response"},
+			},
+		}),
+		agentworkflow.Config{
+			EmitUpdateEvents:   new(true),
+			EmitResponseEvents: true,
+		},
+	)
+	wf, err := workflow.NewBuilder(host).
+		WithOutputFrom(host).
+		Build()
+	if err != nil {
+		t.Fatalf("build workflow: %v", err)
+	}
+	ag, err := agentworkflow.NewAgent(wf, agentworkflow.AgentConfig{IncludeOutputsInResponse: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	resp, err := ag.RunText(t.Context(), "ping").Collect()
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if got, want := responseTexts(resp), []string{"hosted-response"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("response texts = %v, want %v; response = %+v", got, want, resp)
+	}
+}
+
 func TestNew_CollectPrefersTerminalWorkflowOutputOverIntermediateHostedAgentUpdates(t *testing.T) {
 	first := agentworkflow.New(
 		fixedTextAgent("first-agent", "First Agent", "first answer"),
 		agentworkflow.Config{
-			DisableForwardIncomingMessages: true,
-			EmitUpdateEvents:               true,
+			ForwardIncomingMessages: new(false),
+			EmitUpdateEvents:        new(true),
 		},
 	)
 	second := agentworkflow.New(
 		fixedTextAgent("second-agent", "Second Agent", "second answer"),
 		agentworkflow.Config{
-			DisableForwardIncomingMessages: true,
-			EmitUpdateEvents:               true,
+			ForwardIncomingMessages: new(false),
+			EmitUpdateEvents:        new(true),
 		},
 	)
 	uppercase := uppercaseLatestTextBinding("uppercase")
@@ -695,6 +1132,103 @@ func TestNew_NilWorkflow(t *testing.T) {
 	if _, err := agentworkflow.NewAgent(nil, agentworkflow.AgentConfig{}); err == nil {
 		t.Fatalf("NewAgent(nil) should return an error")
 	}
+}
+
+func TestNew_EmptyFirstTurnEnqueuesMessageBatch(t *testing.T) {
+	var batchHandled bool
+	binding := workflow.ExecutorBinding{ID: "start", ImplementationID: "start"}
+	binding.NewExecutorFunc = func(string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: binding.ID,
+			ConfigureProtocol: func(builder *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				builder.RouteBuilder.
+					AddHandlerRaw(reflect.TypeFor[[]*message.Message](), nil, func(*workflow.Context, any) (any, error) {
+						batchHandled = true
+						return nil, nil
+					}).
+					AddHandlerRaw(reflect.TypeFor[workflow.TurnToken](), nil, func(*workflow.Context, any) (any, error) {
+						if !batchHandled {
+							return nil, errors.New("turn token arrived before message batch")
+						}
+						return nil, nil
+					})
+				return builder, nil
+			},
+		}, nil
+	}
+	wf, err := workflow.NewBuilder(binding).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ag, err := agentworkflow.NewAgent(wf, agentworkflow.AgentConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := ag.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ag.Run(t.Context(), nil, agent.WithSession(session)).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	if !batchHandled {
+		t.Fatal("empty initial message batch was not handled")
+	}
+}
+
+func TestRun_CloseError(t *testing.T) {
+	closeErr := errors.New("close failed")
+	newAgent := func(t *testing.T, closeCalls *int) *agent.Agent {
+		t.Helper()
+		binding := echoExecutorBinding("echo")
+		newExecutor := binding.NewExecutorFunc
+		binding.NewExecutorFunc = func(sessionID string) (*workflow.Executor, error) {
+			executor, err := newExecutor(sessionID)
+			if err != nil {
+				return nil, err
+			}
+			executor.CloseFunc = func(context.Context) error {
+				*closeCalls++
+				return closeErr
+			}
+			return executor, nil
+		}
+		wf, err := workflow.NewBuilder(binding).Build()
+		if err != nil {
+			t.Fatal(err)
+		}
+		ag, err := agentworkflow.NewAgent(wf, agentworkflow.AgentConfig{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ag
+	}
+
+	t.Run("natural completion", func(t *testing.T) {
+		closeCalls := 0
+		ag := newAgent(t, &closeCalls)
+		if _, err := ag.RunText(t.Context(), "hello").Collect(); !errors.Is(err, closeErr) {
+			t.Fatalf("RunText error = %v, want %v", err, closeErr)
+		}
+		if closeCalls != 1 {
+			t.Fatalf("close calls = %d, want 1", closeCalls)
+		}
+	})
+
+	t.Run("early stop", func(t *testing.T) {
+		closeCalls := 0
+		ag := newAgent(t, &closeCalls)
+		for _, err := range ag.RunText(t.Context(), "hello", agent.Stream(true)) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			break
+		}
+		if closeCalls != 1 {
+			t.Fatalf("close calls = %d, want 1", closeCalls)
+		}
+	})
 }
 
 func errorContentExecutorBinding(id string, messageText string) workflow.ExecutorBinding {
@@ -931,6 +1465,111 @@ func newCallRequestWorkflow(t *testing.T, id string) *workflow.Workflow {
 		t.Fatalf("Build: %v", err)
 	}
 	return wf
+}
+
+const checkpointIdentityReplyPrefix = "SPECIALIST_REPLY"
+
+func newCheckpointIdentityWorkflowAgent(t *testing.T, useStableInnerIDs bool, nameSuffix string) *agent.Agent {
+	t.Helper()
+
+	triageID := ""
+	specialistID := ""
+	if useStableInnerIDs {
+		triageID = "triage-agent"
+		specialistID = "specialist-agent"
+	}
+
+	triage := newCheckpointIdentityRelayAgent(triageID, "triage_agent"+nameSuffix)
+	specialist := newCheckpointIdentityTurnCounterAgent(specialistID, "specialist_agent"+nameSuffix)
+
+	wf, err := agentworkflow.NewSequentialWorkflowBuilder(triage, specialist).
+		WithOutputFrom(specialist).
+		Build()
+	if err != nil {
+		t.Fatalf("Build checkpoint identity workflow: %v", err)
+	}
+
+	ag, err := agentworkflow.NewAgent(wf, agentworkflow.AgentConfig{
+		Config: agent.Config{
+			ID:   "workflow-agent",
+			Name: "workflow-agent",
+		},
+		IncludeOutputsInResponse: true,
+	})
+	if err != nil {
+		t.Fatalf("New workflow agent: %v", err)
+	}
+	return ag
+}
+
+func newCheckpointIdentityRelayAgent(id string, name string) *agent.Agent {
+	run := func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
+				Role:       message.RoleAssistant,
+				AuthorName: name,
+				Contents:   []message.Content{&message.TextContent{Text: "handoff"}},
+			}, nil)
+		}
+	}
+	return agent.New(
+		agent.ProviderConfig{ProviderName: "checkpoint-relay", Run: run},
+		agent.Config{ID: id, Name: name},
+	)
+}
+
+func newCheckpointIdentityTurnCounterAgent(id string, name string) *agent.Agent {
+	run := func(_ context.Context, messages []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			userTurns := 0
+			for _, msg := range messages {
+				if msg == nil || msg.Role != message.RoleUser || msg.AuthorName != "" {
+					continue
+				}
+				if msg.Contents.Text() == "" {
+					continue
+				}
+				userTurns++
+			}
+			yield(&agent.ResponseUpdate{
+				Role:       message.RoleAssistant,
+				AuthorName: name,
+				Contents: []message.Content{
+					&message.TextContent{Text: fmt.Sprintf("%s:turn:%d", checkpointIdentityReplyPrefix, userTurns)},
+				},
+			}, nil)
+		}
+	}
+	return agent.New(
+		agent.ProviderConfig{ProviderName: "checkpoint-counter", Run: run},
+		agent.Config{ID: id, Name: name},
+	)
+}
+
+func marshalAndRestoreSession(t *testing.T, session *agent.Session) *agent.Session {
+	t.Helper()
+
+	data, err := json.Marshal(session)
+	if err != nil {
+		t.Fatalf("Marshal session: %v", err)
+	}
+	var restored agent.Session
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("Unmarshal session: %v", err)
+	}
+	return &restored
+}
+
+func responseTextWithPrefix(resp *agent.Response, prefix string) string {
+	if resp == nil {
+		return ""
+	}
+	for _, msg := range resp.Messages {
+		if text := msg.Contents.Text(); strings.HasPrefix(text, prefix) {
+			return text
+		}
+	}
+	return ""
 }
 
 // TestNew_SurfacesRequestInfoAndAcceptsResponse verifies the multi-turn
@@ -1746,7 +2385,7 @@ func requestEmittingAgent(callID, name string) *agent.Agent {
 	}
 	return agent.New(
 		agent.ProviderConfig{ProviderName: "request-emitting", Run: run},
-		agent.Config{ID: "rep-id", Name: "rep-name", DisableFuncAutoCall: true},
+		agent.Config{ID: "rep-id", Name: "rep-name"},
 	)
 }
 
@@ -1770,7 +2409,7 @@ func requestCompletingAgent(callID, name string) *agent.Agent {
 	}
 	return agent.New(
 		agent.ProviderConfig{ProviderName: "request-completing", Run: run},
-		agent.Config{ID: "complete-id", Name: "complete-name", DisableFuncAutoCall: true},
+		agent.Config{ID: "complete-id", Name: "complete-name"},
 	)
 }
 
@@ -1793,8 +2432,8 @@ func kickoffOnStartExecutorBinding(id, downstreamExecutorID, kickoffInputText, k
 	}
 	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		executor := newMessageExecutor(id, &messageworkflow.Options{
-			StateKey:                 id + "_msgs",
-			DisableAutoSendTurnToken: true,
+			StateKey:          id + "_msgs",
+			AutoSendTurnToken: new(false),
 			TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, messages []*message.Message) error {
 				if containsTextContent(messages, kickoffInputText) {
 					kickoff := []*message.Message{{
@@ -1828,8 +2467,8 @@ func turnTrackingStartExecutorBinding(id, downstreamExecutorID, activatedMarker 
 	}
 	binding.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
 		executor := newMessageExecutor(id, &messageworkflow.Options{
-			StateKey:                 id + "_msgs",
-			DisableAutoSendTurnToken: true,
+			StateKey:          id + "_msgs",
+			AutoSendTurnToken: new(false),
 			TakeTurnHandler: func(ctx *workflow.Context, _ workflow.TurnToken, messages []*message.Message) error {
 				if hasUserMessage(messages) {
 					if err := ctx.SendMessage(downstreamExecutorID, messages); err != nil {
@@ -1896,14 +2535,14 @@ func emitTextUpdate(ctx *workflow.Context, executorID, text string) error {
 
 func addCrossExecutorEdges(builder *workflow.Builder, startBinding, downstreamBinding workflow.ExecutorBinding) *workflow.Builder {
 	return builder.
-		AddDirectEdge(startBinding, downstreamBinding, false, func(value any) bool {
+		AddEdge(startBinding, downstreamBinding, workflow.WithEdgeCondition(func(value any) bool {
 			_, ok := value.([]*message.Message)
 			return ok
-		}).
-		AddDirectEdge(startBinding, downstreamBinding, false, func(value any) bool {
+		})).
+		AddEdge(startBinding, downstreamBinding, workflow.WithEdgeCondition(func(value any) bool {
 			_, ok := value.(workflow.TurnToken)
 			return ok
-		})
+		}))
 }
 
 func requireWorkflowFunctionCallID(t *testing.T, response *agent.Response) string {
@@ -1954,7 +2593,7 @@ func responseErrorMessages(response *agent.Response) []string {
 func TestNew_MatchingResponse_DoesNotCauseExtraTurn(t *testing.T) {
 	host := agentworkflow.New(
 		requestEmittingAgent("matching-response-call-id", "matchingResponseFunction"),
-		agentworkflow.Config{EmitUpdateEvents: true},
+		agentworkflow.Config{EmitUpdateEvents: new(true)},
 	)
 	wf, err := workflow.NewBuilder(host).WithOutputFrom(host).Build()
 	if err != nil {
@@ -2022,7 +2661,7 @@ func TestNew_MatchingResponse_DoesNotCauseExtraTurn(t *testing.T) {
 func TestNew_UnmatchedResponse_TriggersTurnAndKeepsProgressing(t *testing.T) {
 	host := agentworkflow.New(
 		requestEmittingAgent("unmatched-response-call-id", "unmatchedResponseFunction"),
-		agentworkflow.Config{EmitUpdateEvents: true},
+		agentworkflow.Config{EmitUpdateEvents: new(true)},
 	)
 	wf, err := workflow.NewBuilder(host).WithOutputFrom(host).Build()
 	if err != nil {
@@ -2078,7 +2717,7 @@ func TestNew_MixedResponseAndRegularMessage_CrossExecutorStartExecutorIsReawaken
 	)
 	downstream := agentworkflow.New(
 		requestCompletingAgent("cross-executor-call-id", "crossExecutorFunction"),
-		agentworkflow.Config{EmitUpdateEvents: true},
+		agentworkflow.Config{EmitUpdateEvents: new(true)},
 	)
 	start := kickoffOnStartExecutorBinding(
 		startExecutorID,
@@ -2143,7 +2782,7 @@ func TestNew_ResponseOnlyToNonStartExecutor_StartExecutorIsStillActivated(t *tes
 	)
 	downstream := agentworkflow.New(
 		requestCompletingAgent("response-only-call-id", "responseOnlyFunction"),
-		agentworkflow.Config{EmitUpdateEvents: true},
+		agentworkflow.Config{EmitUpdateEvents: new(true)},
 	)
 	start := turnTrackingStartExecutorBinding(startExecutorID, downstream.ID, activatedMarker)
 	wf, err := addCrossExecutorEdges(workflow.NewBuilder(start), start, downstream).

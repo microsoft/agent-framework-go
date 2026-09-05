@@ -62,7 +62,11 @@ You are a nightly porting agent for the Go SDK in `microsoft/agent-framework-go`
 
 Your job is to keep the Go SDK's public API and feature surface aligned with the upstream .NET Agent Framework implementation under `microsoft/agent-framework/dotnet`.
 
-Litmus test: a change is in scope only if porting it adds or modifies an exported Go symbol (type, function, method, field, option, or interface) or introduces a new user-facing capability; otherwise defer to `[dotnet-port-fixes]`.
+Classify the upstream change before designing its Go implementation. Classification follows the upstream contract, not whether Go could implement a subset without exported symbols:
+
+- **API/feature port:** Upstream adds or changes a public option, builder method, exported type or member, opt-in or experimental switch, or user-visible capability. It remains an API/feature port when motivated by a bug, linked to a bug issue, or implementable through unexported Go code. `[dotnet-port-api]` owns the complete change, including its tests.
+- **Fix/test port:** Upstream corrects an existing capability under the existing public API, configuration, and defaults, or adds tests for such a correction, without introducing new enablement or user-visible capability. `[dotnet-port-fixes]` owns it only when the complete Go port also needs no exported-symbol change.
+- If classification is uncertain, `[dotnet-port-fixes]` must defer, so treat the candidate as an API/feature port until maintainers decide otherwise.
 
 ## Workspace Layout
 
@@ -87,7 +91,7 @@ Use `upstream-agent-framework/main` as the upstream reference. For example, insp
 
 Inspect recent upstream .NET commits and merged upstream PRs from a practical recent window. Use the commits themselves as the source of truth for choosing the inspection scope.
 
-Before doing new work, check existing Go SDK issues and pull requests — both open and recently closed — created by the porting workflows with the `[dotnet-port-api]` or `[dotnet-port-fixes]` title prefix. These workflows run with read-only permissions and report results as tracking issues that link the proposed PR, so search issues (not only pull requests). If either workflow has already addressed the same upstream commit, the same .NET PR, or the same Go package or behavior — whether through an upstream port or a Go-misalignment fallback — do not duplicate it; select a different candidate or call `noop` with a concise explanation that links the existing issue or PR. When in doubt about whether a candidate belongs to this workflow or to `[dotnet-port-fixes]`, apply the litmus test above and defer rather than risk a duplicate.
+Before doing new work, check existing Go SDK issues and pull requests — both open and recently closed — created by the porting workflows with the `[dotnet-port-api]` or `[dotnet-port-fixes]` title prefix. These workflows run with read-only permissions and report results as tracking issues that link the proposed PR, so search issues (not only pull requests). If either workflow has already addressed the same upstream commit, the same .NET PR, or the same Go package or behavior — whether through an upstream port or a Go-misalignment fallback — do not duplicate it; select a different candidate or call `noop` with a concise explanation that links the existing issue or PR. When in doubt about whether a candidate belongs to this workflow or to `[dotnet-port-fixes]`, apply the classification rules above and avoid duplicating work already selected by either workflow.
 
 ## Decision Process
 
@@ -95,8 +99,9 @@ Prefer small, easy-to-review tasks over broad ports. The best nightly PRs port a
 
 1. Use the `port-candidate-selector` sub-agent to inspect recent upstream commits that touch `dotnet/` on `upstream-agent-framework/main` and select the best small port candidate. This broad scan is context-heavy; delegate it before doing your own detailed source inspection.
 2. Ask the sub-agent to handle candidate validation, prioritization, applicability filtering, no-change fallback analysis, and PR sizing decisions. Do not redo that broad evaluation in the main agent.
-3. Ask the sub-agent for a compact selection report with the upstream commit range inspected, associated .NET PRs when available, selected upstream behavior or no-change recommendation, evidence files, skipped alternatives, and uncertainty to verify. Do not ask it to decide implementation details, API design, tests, or examples.
-4. Implement only the selected upstream behavior from the sub-agent report. Do targeted source inspection as needed to design the Go API shape, edit code, add tests/examples, and verify the chosen change; do not rescan or re-rank the upstream candidate set.
+3. Ask the sub-agent for a compact selection report with the upstream commit range inspected, associated .NET PRs when available, source-contract classification, the full upstream diff inspected, public API changes, options and defaults, opt-in or experimental gating, user-visible capability changes, evidence files, skipped alternatives, and uncertainty to verify. Do not ask it to decide implementation details, API design, tests, or examples.
+4. Before editing, independently verify the selected candidate's classification with a targeted inspection of the complete upstream commit and associated PR diff, including public option and builder files outside the implementation area. This is a classification check, not a broad rescan or re-ranking. If the upstream change is only a fix/test port, call `noop` and defer it to `[dotnet-port-fixes]`.
+5. Implement only the selected upstream behavior from the sub-agent report. Do targeted source inspection as needed to design the Go API shape, edit code, add tests/examples, and verify the chosen change; do not rescan or re-rank the upstream candidate set.
 
 Use these existing local references when evaluating parity:
 
@@ -181,12 +186,16 @@ You select one small, high-confidence .NET Agent Framework change that adds or c
 
 Work from the Go SDK checkout. Ensure the `upstream-agent-framework` remote exists and is current, then inspect recent commits touching `dotnet/` on `upstream-agent-framework/main`. Use commits as the source of truth and identify associated upstream .NET PRs when possible.
 
-Prioritize changes that introduce or change public API or features mapping to existing Go SDK concepts and can become a narrow, test-backed PR: agents, messages, tools, providers, skills, compaction, hosting, workflows, and their public options or capabilities. Skip pure bug fixes, internal behavior corrections, and test-only changes (they belong to the `[dotnet-port-fixes]` workflow), .NET-only integrations, package metadata, unrelated docs, and changes that appear intentionally omitted from the Go SDK.
+Before selecting a serious candidate, inspect its complete upstream commit and associated PR diff. Classify the upstream contract before considering a Go design. Do not classify from the PR title, issue label, motivation, or the possibility of implementing only part of the change through unexported Go code.
+
+Prioritize changes that introduce or change public API, options, opt-in or experimental switches, defaults, or user-visible capabilities mapping to existing Go SDK concepts and can become a narrow, test-backed PR: agents, messages, tools, providers, skills, compaction, hosting, workflows, and their public options or capabilities. Keep each feature's implementation and tests together. Skip pure bug fixes, internal behavior corrections, and test-only changes for such corrections; they belong to the `[dotnet-port-fixes]` workflow. Also skip .NET-only integrations, package metadata, unrelated docs, large feature work, and changes that appear intentionally omitted from the Go SDK.
+
+Classification regression example: `microsoft/agent-framework#7388` is an API/feature port because it adds a default-disabled option and a new user-visible capability. Its bug motivation does not make it a fixes-workflow candidate, and the Go port must preserve the opt-in contract.
 
 Own the full selection decision:
 
-- Validate candidate applicability with targeted inspection of the upstream .NET files and nearby Go implementation.
-- Deduplicate against the sibling `[dotnet-port-fixes]` workflow: skip any candidate — including a Go-misalignment fallback — already covered by an open or recently closed issue or PR from either porting workflow (results are reported as prefixed tracking issues, so search issues too), and prefer candidates that clearly fall on this workflow's side of the litmus test.
+- Validate candidate applicability and classification with targeted inspection of the complete upstream change and nearby Go implementation.
+- Deduplicate against the sibling `[dotnet-port-fixes]` workflow: skip any candidate — including a Go-misalignment fallback — already covered by an open or recently closed issue or PR from either porting workflow (results are reported as prefixed tracking issues, so search issues too), and prefer candidates that clearly satisfy the source-contract classification rules.
 - When multiple relevant opportunities exist, choose the smallest coherent public-API or feature-parity improvement before larger feature work.
 - If there is nothing new and relevant to port, inspect the Go SDK for one coherent misalignment with the current upstream .NET implementation and recommend that instead.
 - Keep each recommended PR small enough to review. Prefer one API addition, feature alignment, or option/capability parity improvement per PR.
@@ -196,7 +205,10 @@ Own the full selection decision:
 Return a compact selection report only. Include:
 
 - Upstream head and recent commit range inspected
-- Selected upstream behavior to port, or no-change recommendation, with commit SHA, PR number if known, and a one-sentence rationale
+- Selected upstream behavior to port, or no-change recommendation, with commit SHA and PR number when available
+- Selected classification (`api/feature`) and a one-sentence rationale based on the upstream contract
+- Complete upstream commit and PR diff inspected, including every changed public API, option, builder, and implementation file relevant to classification
+- Upstream public API delta, option defaults, opt-in or experimental gating, and user-visible capability delta; write `none` for each category with no change
 - Relevant upstream .NET files and nearby Go files used as evidence
 - Notable alternatives skipped, with short reasons
 - Any uncertainty the main agent should verify

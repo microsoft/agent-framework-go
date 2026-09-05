@@ -152,8 +152,6 @@ func TestDefaultShellEnvironmentInstructions_posix(t *testing.T) {
 }
 
 func TestEnvironmentProvider_refreshOnHostReportsDefaultFamily(t *testing.T) {
-	t.Parallel()
-
 	cfg, _ := statelessPlatformConfig(t)
 	ft := newLocal(t, cfg)
 	env := shelltool.NewEnvironmentProvider(ft, shelltool.EnvironmentProviderConfig{
@@ -179,6 +177,26 @@ func TestEnvironmentProvider_refreshOnHostReportsDefaultFamily(t *testing.T) {
 	}
 }
 
+func TestEnvironmentProvider_snapshotsOverrideFamily(t *testing.T) {
+	family := shelltool.ShellFamilyPOSIX
+	fake := &environmentTestExecutor{
+		results: []shelltool.Result{{Stdout: "VERSION=1.0\nCWD=/tmp\n", ExitCode: 0}},
+	}
+	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
+		OverrideFamily: &family,
+		ProbeTools:     []string{},
+	})
+	family = shelltool.ShellFamily(99)
+
+	snapshot, err := env.Refresh(t.Context())
+	if err != nil {
+		t.Fatalf("refresh shell environment: %v", err)
+	}
+	if snapshot.Family != shelltool.ShellFamilyPOSIX {
+		t.Fatalf("family = %v, want %v", snapshot.Family, shelltool.ShellFamilyPOSIX)
+	}
+}
+
 func TestEnvironmentProvider_missingToolRecordedAsMissing(t *testing.T) {
 	fake := &environmentTestExecutor{
 		results: []shelltool.Result{
@@ -187,7 +205,7 @@ func TestEnvironmentProvider_missingToolRecordedAsMissing(t *testing.T) {
 		},
 	}
 	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
-		OverrideFamily: shelltool.ShellFamilyPOSIX,
+		OverrideFamily: new(shelltool.ShellFamilyPOSIX),
 		ProbeTools:     []string{"definitely-not-a-real-binary-xyz123"},
 	})
 
@@ -209,7 +227,7 @@ func TestEnvironmentProvider_customFormatterOverridesDefault(t *testing.T) {
 		results: []shelltool.Result{{Stdout: "VERSION=1.0\nCWD=/tmp\n", ExitCode: 0}},
 	}
 	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
-		OverrideFamily: shelltool.ShellFamilyPOSIX,
+		OverrideFamily: new(shelltool.ShellFamilyPOSIX),
 		ProbeTools:     []string{},
 		InstructionsFormatter: func(snapshot shelltool.ShellEnvironmentSnapshot) string {
 			if snapshot.WorkingDirectory != "/tmp" {
@@ -237,7 +255,7 @@ func TestEnvironmentProvider_refreshRecomputesSnapshot(t *testing.T) {
 		},
 	}
 	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
-		OverrideFamily: shelltool.ShellFamilyPOSIX,
+		OverrideFamily: new(shelltool.ShellFamilyPOSIX),
 		ProbeTools:     []string{},
 	})
 
@@ -267,7 +285,7 @@ func TestEnvironmentProvider_providesInstructionsAndSnapshot(t *testing.T) {
 		results: []shelltool.Result{{Stdout: "VERSION=1.0\nCWD=/tmp\n", ExitCode: 0}},
 	}
 	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
-		OverrideFamily: shelltool.ShellFamilyPOSIX,
+		OverrideFamily: new(shelltool.ShellFamilyPOSIX),
 		ProbeTools:     []string{},
 	})
 
@@ -302,7 +320,7 @@ func TestEnvironmentProvider_currentSnapshotReturnsCopy(t *testing.T) {
 		results: []shelltool.Result{{Stdout: "VERSION=1.0\nCWD=/tmp\n", ExitCode: 0}},
 	}
 	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
-		OverrideFamily: shelltool.ShellFamilyPOSIX,
+		OverrideFamily: new(shelltool.ShellFamilyPOSIX),
 		ProbeTools:     []string{"bad;name"},
 	})
 	if _, err := env.Refresh(t.Context()); err != nil {
@@ -334,7 +352,7 @@ func TestEnvironmentProvider_failedProvideAllowsRetry(t *testing.T) {
 		},
 	}
 	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
-		OverrideFamily: shelltool.ShellFamilyPOSIX,
+		OverrideFamily: new(shelltool.ShellFamilyPOSIX),
 		ProbeTools:     []string{},
 	})
 
@@ -368,7 +386,7 @@ func TestEnvironmentProvider_firstCallFailsNextCallRetriesAndSucceeds(t *testing
 		},
 	}
 	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
-		OverrideFamily: shelltool.ShellFamilyPOSIX,
+		OverrideFamily: new(shelltool.ShellFamilyPOSIX),
 		ProbeTools:     []string{},
 	})
 
@@ -403,7 +421,7 @@ func TestEnvironmentProvider_firstCallCanceledNextCallSucceeds(t *testing.T) {
 		},
 	}
 	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
-		OverrideFamily: shelltool.ShellFamilyPOSIX,
+		OverrideFamily: new(shelltool.ShellFamilyPOSIX),
 		ProbeTools:     []string{},
 	})
 	canceled, cancel := context.WithCancel(t.Context())
@@ -433,7 +451,7 @@ func TestEnvironmentProvider_invalidToolNameRecordedMissingWithoutInvokingExecut
 		results: []shelltool.Result{{Stdout: "VERSION=1.0\nCWD=/\n", ExitCode: 0}},
 	}
 	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
-		OverrideFamily: shelltool.ShellFamilyPOSIX,
+		OverrideFamily: new(shelltool.ShellFamilyPOSIX),
 		ProbeTools:     []string{"git; rm -rf /", "echo $PATH", "good-tool && bad"},
 	})
 
@@ -457,7 +475,7 @@ func TestEnvironmentProvider_probeToolsDeduplicateCaseInsensitive(t *testing.T) 
 		results: []shelltool.Result{{Stdout: "VERSION=1.0\nCWD=/tmp\n", ExitCode: 0}},
 	}
 	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
-		OverrideFamily: shelltool.ShellFamilyPOSIX,
+		OverrideFamily: new(shelltool.ShellFamilyPOSIX),
 		ProbeTools:     []string{"bad;name", "BAD;NAME"},
 	})
 
@@ -481,7 +499,7 @@ func TestEnvironmentProvider_duplicateProbeToolsCaseInsensitiveProbesOnce(t *tes
 		},
 	}
 	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
-		OverrideFamily: shelltool.ShellFamilyPOSIX,
+		OverrideFamily: new(shelltool.ShellFamilyPOSIX),
 		ProbeTools:     []string{"git", "GIT", "Git"},
 	})
 
@@ -508,7 +526,7 @@ func TestEnvironmentProvider_toolEmitsVersionToStderrFallsBackToStderr(t *testin
 		},
 	}
 	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
-		OverrideFamily: shelltool.ShellFamilyPOSIX,
+		OverrideFamily: new(shelltool.ShellFamilyPOSIX),
 		ProbeTools:     []string{"java"},
 	})
 
@@ -528,7 +546,7 @@ func TestEnvironmentProvider_callerCancellationPropagates(t *testing.T) {
 		},
 	}
 	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
-		OverrideFamily: shelltool.ShellFamilyPOSIX,
+		OverrideFamily: new(shelltool.ShellFamilyPOSIX),
 		ProbeTools:     []string{},
 	})
 	canceled, cancel := context.WithCancel(t.Context())
@@ -547,8 +565,8 @@ func TestEnvironmentProvider_probeTimeoutRecordedAsMissingFields(t *testing.T) {
 		},
 	}
 	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
-		OverrideFamily: shelltool.ShellFamilyPOSIX,
-		ProbeTimeout:   time.Millisecond,
+		OverrideFamily: new(shelltool.ShellFamilyPOSIX),
+		ProbeTimeout:   new(time.Millisecond),
 		ProbeTools:     []string{"git"},
 	})
 
@@ -564,6 +582,24 @@ func TestEnvironmentProvider_probeTimeoutRecordedAsMissingFields(t *testing.T) {
 	}
 }
 
+func TestEnvironmentProvider_zeroProbeTimeoutIsImmediate(t *testing.T) {
+	fake := &environmentTestExecutor{
+		run: func(ctx context.Context, command string) (shelltool.Result, error) {
+			<-ctx.Done()
+			return shelltool.Result{}, ctx.Err()
+		},
+	}
+	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
+		OverrideFamily: new(shelltool.ShellFamilyPOSIX),
+		ProbeTimeout:   new(time.Duration(0)),
+		ProbeTools:     []string{},
+	})
+
+	if _, err := env.Refresh(t.Context()); err != nil {
+		t.Fatalf("refresh shell environment: %v", err)
+	}
+}
+
 func TestEnvironmentProvider_policyRejectedToolProbeIsMissing(t *testing.T) {
 	fake := &environmentTestExecutor{
 		run: func(ctx context.Context, command string) (shelltool.Result, error) {
@@ -574,7 +610,7 @@ func TestEnvironmentProvider_policyRejectedToolProbeIsMissing(t *testing.T) {
 		},
 	}
 	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
-		OverrideFamily: shelltool.ShellFamilyPOSIX,
+		OverrideFamily: new(shelltool.ShellFamilyPOSIX),
 		ProbeTools:     []string{"git"},
 	})
 
@@ -796,6 +832,52 @@ func TestNewLocal_negativeMaxOutputErrors(t *testing.T) {
 	}
 }
 
+func TestNewLocal_invalidModeErrors(t *testing.T) {
+	_, err := shelltool.NewLocal(shelltool.LocalConfig{
+		AcknowledgeUnsafe: true,
+		Mode:              shelltool.Mode(99),
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid Mode 99") {
+		t.Fatalf("NewLocal() error = %v, want invalid mode error", err)
+	}
+}
+
+func TestNewLocal_negativeTimeoutErrors(t *testing.T) {
+	_, err := shelltool.NewLocal(shelltool.LocalConfig{
+		AcknowledgeUnsafe: true,
+		Timeout:           new(-time.Millisecond),
+	})
+	if err == nil || !strings.Contains(err.Error(), "Timeout must be non-negative") {
+		t.Fatalf("NewLocal() error = %v, want negative timeout error", err)
+	}
+}
+
+func TestNewEnvironmentProvider_invalidFamilyPanics(t *testing.T) {
+	for _, family := range []shelltool.ShellFamily{shelltool.ShellFamilyUnknown, 99} {
+		t.Run(family.String(), func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("expected panic for invalid shell family")
+				}
+			}()
+			shelltool.NewEnvironmentProvider(&environmentTestExecutor{}, shelltool.EnvironmentProviderConfig{
+				OverrideFamily: new(family),
+			})
+		})
+	}
+}
+
+func TestNewEnvironmentProvider_invalidProbeTimeoutPanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic for invalid probe timeout")
+		}
+	}()
+	shelltool.NewEnvironmentProvider(&environmentTestExecutor{}, shelltool.EnvironmentProviderConfig{
+		ProbeTimeout: new(-time.Millisecond),
+	})
+}
+
 func TestNewLocal_descriptionContainsShellGuidance(t *testing.T) {
 	ft := newLocal(t, shelltool.LocalConfig{AcknowledgeUnsafe: true})
 	desc := ft.Description()
@@ -982,8 +1064,8 @@ func TestCall_environmentPowerShellOnWindows(t *testing.T) {
 		AcknowledgeUnsafe: true,
 		Mode:              shelltool.ModeStateless,
 		Shell:             powershellPathForTest(t),
-		Environment: map[string]string{
-			"AGFW_TEST_ENV": "hello_env",
+		Environment: map[string]*string{
+			"AGFW_TEST_ENV": new("hello_env"),
 		},
 	})
 	out, err := ft.Call(t.Context(), `{"command":"Write-Output $env:AGFW_TEST_ENV"}`)
@@ -1004,8 +1086,8 @@ func TestCall_environmentRemovalPowerShellOnWindows(t *testing.T) {
 		AcknowledgeUnsafe: true,
 		Mode:              shelltool.ModeStateless,
 		Shell:             powershellPathForTest(t),
-		RemoveEnvironment: []string{
-			"AGFW_REMOVE_ME",
+		Environment: map[string]*string{
+			"AGFW_REMOVE_ME": nil,
 		},
 	})
 	out, err := ft.Call(t.Context(), `{"command":"if ($env:AGFW_REMOVE_ME) { Write-Output $env:AGFW_REMOVE_ME } else { Write-Output absent }"}`)
@@ -1057,7 +1139,7 @@ func TestCall_timeout(t *testing.T) {
 
 	ft := newLocal(t, shelltool.LocalConfig{
 		AcknowledgeUnsafe: true,
-		Timeout:           50 * time.Millisecond,
+		Timeout:           new(50 * time.Millisecond),
 	})
 	out, err := ft.Call(t.Context(), `{"command":"sleep 10"}`)
 	if err != nil {
@@ -1069,12 +1151,28 @@ func TestCall_timeout(t *testing.T) {
 	}
 }
 
+func TestCall_zeroTimeoutReturnsTimedOutResult(t *testing.T) {
+	t.Parallel()
+
+	cfg, _ := statelessPlatformConfig(t)
+	cfg.Timeout = new(time.Duration(0))
+	command := "sleep 10"
+	if runtime.GOOS == "windows" {
+		command = "Start-Sleep -Seconds 10"
+	}
+
+	out := callTool(t, newLocal(t, cfg), command)
+	if !strings.Contains(out, "[command timed out]") {
+		t.Fatalf("expected timed-out marker, got %q", out)
+	}
+}
+
 func TestCall_statelessOutputTruncationUsesHeadTailFormat(t *testing.T) {
 	t.Parallel()
 
 	cfg, _ := statelessPlatformConfig(t)
 	cfg.MaxOutputBytes = 2048
-	cfg.Timeout = 20 * time.Second
+	cfg.Timeout = new(20 * time.Second)
 	command := "i=1; while [ $i -le 400 ]; do printf 'line-%s-padding-padding-padding\\n' \"$i\"; i=$((i+1)); done"
 	if runtime.GOOS == "windows" {
 		command = "1..400 | ForEach-Object { 'line-' + $_ + '-padding-padding-padding' }"
@@ -1130,7 +1228,7 @@ func TestCall_statelessTimeoutKillsProcessTree(t *testing.T) {
 	ft := newLocal(t, shelltool.LocalConfig{
 		AcknowledgeUnsafe: true,
 		Mode:              shelltool.ModeStateless,
-		Timeout:           50 * time.Millisecond,
+		Timeout:           new(50 * time.Millisecond),
 	})
 	out, err := ft.Call(t.Context(), fmt.Sprintf(`{"command":%q}`, command))
 	if err != nil {
@@ -1156,7 +1254,7 @@ func TestCall_timeout_preservesPersistentSession(t *testing.T) {
 
 	ft := newLocal(t, shelltool.LocalConfig{
 		AcknowledgeUnsafe: true,
-		Timeout:           50 * time.Millisecond,
+		Timeout:           new(50 * time.Millisecond),
 	})
 	ctx := t.Context()
 
@@ -1209,9 +1307,9 @@ func TestCall_workingDirectory_canDisableReanchor(t *testing.T) {
 
 	dir := t.TempDir()
 	ft := newLocal(t, shelltool.LocalConfig{
-		AcknowledgeUnsafe:                  true,
-		WorkingDirectory:                   dir,
-		DisableWorkingDirectoryConfinement: true,
+		AcknowledgeUnsafe:       true,
+		WorkingDirectory:        dir,
+		ConfineWorkingDirectory: new(false),
 	})
 	ctx := t.Context()
 

@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -32,6 +31,13 @@ const (
 
 var invalidDescriptiveIDChars = regexp.MustCompile(`[^0-9A-Za-z]+`)
 
+func valueOrDefault(value *bool, defaultValue bool) bool {
+	if value == nil {
+		return defaultValue
+	}
+	return *value
+}
+
 type agentHostState struct {
 	ThreadState           []byte
 	CurrentTurnEmitEvents *bool
@@ -44,29 +50,24 @@ type ResetSignal struct{}
 // Config configures how an [agent.Agent] is hosted as a workflow
 // [workflow.Executor].
 type Config struct {
-	// EmitUpdateEvents controls whether streaming [agent.ResponseUpdate] outputs
-	// are emitted as the agent runs. A [workflow.TurnToken] with
-	// [workflow.TurnToken.EmitEvents] set overrides this default for that turn.
-	EmitUpdateEvents bool
+	// EmitUpdateEvents controls whether streaming [agent.ResponseUpdate]
+	// outputs are emitted as the agent runs. When nil, a [workflow.TurnToken]
+	// controls update emission for that turn.
+	EmitUpdateEvents *bool
 
-	// EmitResponseEvents controls whether an aggregated [agent.Response] output is
-	// emitted at the end of each turn.
+	// EmitResponseEvents controls whether an aggregated [agent.Response]
+	// output is emitted at the end of each turn.
 	EmitResponseEvents bool
 
-	// DisableForwardIncomingMessages disables forwarding of incoming messages
-	// downstream before the agent runs. By default (zero value), incoming
-	// messages are forwarded so downstream nodes observe the full
-	// conversation. Set to true for strict pipelines where each node should
-	// only forward its own output.
-	DisableForwardIncomingMessages bool
+	// ForwardIncomingMessages controls whether incoming messages are forwarded
+	// downstream before the agent runs. The default is true.
+	ForwardIncomingMessages *bool
 
-	// DisableReassignOtherAgentsAsUsers disables rewriting incoming
+	// ReassignOtherAgentsAsUsers controls whether incoming
 	// [message.RoleAssistant] messages whose [message.Message.AuthorName]
-	// does not match this agent to [message.RoleUser]. By default (zero
-	// value), such messages are reassigned so the conversation between
-	// agents appears, to each agent, as messages from "the user". Set to
-	// true to preserve original roles.
-	DisableReassignOtherAgentsAsUsers bool
+	// does not match this agent are rewritten to [message.RoleUser]. The default
+	// is true.
+	ReassignOtherAgentsAsUsers *bool
 
 	// InterceptUserInputRequests controls how [message.ToolApprovalRequestContent]
 	// produced by the agent is dispatched.
@@ -111,8 +112,11 @@ type Config struct {
 
 // New creates a workflow [workflow.ExecutorBinding] that hosts the given
 // [agent.Agent] using the supplied [Config]. The zero value of [Config] is a
-// sensible default.
+// sensible default. New panics if a is nil.
 func New(a *agent.Agent, cfg Config) workflow.ExecutorBinding {
+	if a == nil {
+		panic("agentworkflow: agent is required")
+	}
 	id := descriptiveID(a)
 	ports := hostPorts(id)
 	return workflow.ExecutorBinding{
@@ -167,6 +171,12 @@ type hostExecutor struct {
 	turnEmitEvents  *bool
 }
 
+type generatedHostedMessageState struct {
+	messageID  string
+	responseID string
+	role       message.Role
+}
+
 func newHostExecutor(a *agent.Agent, cfg Config) *hostExecutor {
 	id := descriptiveID(a)
 	ports := hostPorts(id)
@@ -198,11 +208,11 @@ func newHostExecutor(a *agent.Agent, cfg Config) *hostExecutor {
 func (h *hostExecutor) executor() *workflow.Executor {
 	executor := workflow.Executor{ID: h.id}
 	messageworkflow.Configure(&executor, &messageworkflow.Options{
-		StateKey:                 agentBufferedStateKey,
-		TakeTurnHandler:          h.handleTurnToken,
-		StringMessageRole:        string(message.RoleUser),
-		DisableAutoSendTurnToken: true,
-		MessageState:             h.messageState,
+		StateKey:          agentBufferedStateKey,
+		TakeTurnHandler:   h.handleTurnToken,
+		StringMessageRole: message.RoleUser,
+		AutoSendTurnToken: new(false),
+		MessageState:      h.messageState,
 	})
 	executor.Extend(&workflow.Executor{
 		OnCheckpointFunc:         h.onCheckpoint,
@@ -303,7 +313,7 @@ func (h *hostExecutor) drainBuffered(wctx *workflow.Context) ([]*message.Message
 }
 
 func (h *hostExecutor) handleTurnToken(wctx *workflow.Context, token workflow.TurnToken, messages []*message.Message) error {
-	emitUpdates := token.EmitEventsOr(h.cfg.EmitUpdateEvents)
+	emitUpdates := token.EmitEventsOr(valueOrDefault(h.cfg.EmitUpdateEvents, false))
 	h.turnEmitEvents = &emitUpdates
 	return h.runAgentAndDispatch(wctx, messages)
 }
@@ -377,14 +387,14 @@ func (h *hostExecutor) handleExternalResponse(wctx *workflow.Context, resp *work
 // messages, dispatches outputs and any requests, and propagates the held
 // TurnToken downstream when no outstanding requests remain.
 func (h *hostExecutor) runAgentAndDispatch(wctx *workflow.Context, messages []*message.Message) error {
-	if !h.cfg.DisableForwardIncomingMessages && len(messages) > 0 {
+	if valueOrDefault(h.cfg.ForwardIncomingMessages, true) && len(messages) > 0 {
 		if err := wctx.SendMessage("", messages); err != nil {
 			return err
 		}
 	}
 
 	agentInput := messages
-	if !h.cfg.DisableReassignOtherAgentsAsUsers {
+	if valueOrDefault(h.cfg.ReassignOtherAgentsAsUsers, true) {
 		agentInput = reassignOtherAgentsAsUsers(messages, agentNameOrID(h.agent))
 	}
 
@@ -406,10 +416,12 @@ func (h *hostExecutor) runAgentAndDispatch(wctx *workflow.Context, messages []*m
 	}
 
 	var resp agent.Response
+	var generatedMessageState generatedHostedMessageState
 	for update, err := range h.agent.Run(wctx, agentInput, runOpts...) {
 		if err != nil {
 			return err
 		}
+		update = stampHostedUpdateMessageID(update, &generatedMessageState)
 		if emitUpdates {
 			if err := wctx.YieldOutput(update); err != nil {
 				return err
@@ -452,6 +464,48 @@ func (h *hostExecutor) runAgentAndDispatch(wctx *workflow.Context, messages []*m
 		return err
 	}
 	return nil
+}
+
+func stampHostedUpdateMessageID(update *agent.ResponseUpdate, state *generatedHostedMessageState) *agent.ResponseUpdate {
+	if update == nil {
+		return nil
+	}
+	if update.MessageID != "" {
+		if state != nil {
+			*state = generatedHostedMessageState{}
+		}
+		return update
+	}
+	if !responseUpdateHasContent(update) || state == nil {
+		return update
+	}
+	if state.messageID == "" ||
+		(state.responseID != "" && update.ResponseID != "" && state.responseID != update.ResponseID) ||
+		(state.role != "" && update.Role != "" && state.role != update.Role) {
+		state.messageID = newMessageID()
+	}
+	if update.ResponseID != "" {
+		state.responseID = update.ResponseID
+	}
+	if update.Role != "" {
+		state.role = update.Role
+	}
+	clone := *update
+	clone.MessageID = state.messageID
+	return &clone
+}
+
+func responseUpdateHasContent(update *agent.ResponseUpdate) bool {
+	if update == nil {
+		return false
+	}
+	for _, content := range update.Contents {
+		if text, ok := content.(*message.TextContent); ok && text.Text == "" {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // releasePendingTurnIfReady propagates the held TurnToken downstream once all
@@ -581,44 +635,36 @@ func (h *hostExecutor) dispatchRequests(wctx *workflow.Context, msgs []*message.
 		}
 	}
 
-	var approvalDispatches []*message.ToolApprovalRequestContent
-	var callDispatches []*message.FunctionCallContent
-	for _, id := range approvalOrder {
-		approval, ok := approvalRequests[id]
-		if !ok {
-			continue
-		}
-		delete(approvalRequests, id)
-		added, err := h.approvalHandler.TrackRequest(wctx, approval)
-		if err != nil {
-			return err
-		}
-		if added {
-			approvalDispatches = append(approvalDispatches, approval)
-		}
+	if err := dispatchTrackedRequests(wctx, approvalOrder, approvalRequests, h.approvalHandler); err != nil {
+		return err
 	}
-	for _, id := range callOrder {
-		call, ok := functionCalls[id]
+	return dispatchTrackedRequests(wctx, callOrder, functionCalls, h.callHandler)
+}
+
+type requestDispatcher[T any] interface {
+	TrackRequest(*workflow.Context, T) (bool, error)
+	DispatchRequest(*workflow.Context, T) error
+}
+
+func dispatchTrackedRequests[T any](wctx *workflow.Context, order []string, requests map[string]T, dispatcher requestDispatcher[T]) error {
+	dispatches := make([]T, 0, len(order))
+	for _, id := range order {
+		request, ok := requests[id]
 		if !ok {
 			continue
 		}
-		delete(functionCalls, id)
-		added, err := h.callHandler.TrackRequest(wctx, call)
+		delete(requests, id)
+		added, err := dispatcher.TrackRequest(wctx, request)
 		if err != nil {
 			return err
 		}
 		if added {
-			callDispatches = append(callDispatches, call)
+			dispatches = append(dispatches, request)
 		}
 	}
 
-	for _, approval := range approvalDispatches {
-		if err := h.approvalHandler.DispatchRequest(wctx, approval); err != nil {
-			return err
-		}
-	}
-	for _, call := range callDispatches {
-		if err := h.callHandler.DispatchRequest(wctx, call); err != nil {
+	for _, request := range dispatches {
+		if err := dispatcher.DispatchRequest(wctx, request); err != nil {
 			return err
 		}
 	}
@@ -685,7 +731,7 @@ func agentNameOrID(a *agent.Agent) string {
 }
 
 func newMessageID() string {
-	return strings.ReplaceAll(uuid.NewString(), "-", "")
+	return uuid.NewString()
 }
 
 func descriptiveID(a *agent.Agent) string {
