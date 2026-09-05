@@ -81,8 +81,8 @@ func matchesAnyPrefix(title string, prefixes []string) bool {
 	if len(prefixes) == 0 {
 		return true
 	}
-	for _, p := range prefixes {
-		if strings.HasPrefix(title, p) {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(title, prefix) {
 			return true
 		}
 	}

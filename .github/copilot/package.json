@@ -1,0 +1,7 @@
+{
+  "name": "agent-framework-go-copilot-ci",
+  "private": true,
+  "dependencies": {
+    "@github/copilot": "1.0.75"
+  }
+}

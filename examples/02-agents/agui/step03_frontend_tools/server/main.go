@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/provider/aguiprovider"
 	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
@@ -32,9 +33,11 @@ func main() {
 		foundryprovider.ModelDeployment(demo.FoundryModel),
 		foundryprovider.AgentConfig{
 			Instructions: "You are a helpful assistant.",
+			ToolAutoCall: &toolautocall.Config{
+				MaximumIterationsPerRequest: new(0),
+			},
 			Config: agent.Config{
-				Name:                "AGUIAssistant",
-				DisableFuncAutoCall: true,
+				Name: "AGUIAssistant",
 			},
 		},
 	)

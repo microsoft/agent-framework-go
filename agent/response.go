@@ -59,6 +59,10 @@ type Response struct {
 	// supply a finish reason.
 	FinishReason string `json:",omitzero"`
 
+	// RawRepresentation stores the provider-specific object or objects that
+	// produced this response.
+	RawRepresentation any `json:"-"`
+
 	// Messages contains the messages produced by the agent run.
 	Messages []*message.Message
 }
@@ -70,11 +74,17 @@ func (resp *Response) String() string {
 	}
 	var sb strings.Builder
 	for _, msg := range resp.Messages {
-		for _, c := range msg.Contents {
-			if textContent, ok := c.(*message.TextContent); ok {
-				sb.WriteString(textContent.Text)
-			}
+		// msg.String() equals message.Contents.Text(), the per-message join.
+		// Add a newline separator between each non-empty message, matching
+		// .NET's ChatMessage list ConcatText / AgentResponse.Text.
+		t := msg.String()
+		if t == "" {
+			continue
 		}
+		if sb.Len() > 0 {
+			sb.WriteByte('\n')
+		}
+		sb.WriteString(t)
 	}
 	return sb.String()
 }
@@ -121,15 +131,13 @@ func (resp *Response) Coalesce() {
 // ToUpdates converts this response into response updates suitable for streaming
 // scenarios.
 //
-// Each message in the response becomes a separate update. Response-level usage,
-// additional properties, and a non-empty continuation token are included as an
-// additional metadata-only update when present.
+// Each message in the response becomes a separate update. Response-level
+// additional properties and a non-empty continuation token are included as
+// an additional metadata-only update when present.
 func (resp *Response) ToUpdates() []*ResponseUpdate {
 	if resp == nil {
 		return nil
 	}
-	usage := resp.Usage()
-	hasUsage := !isZeroUsage(usage)
 	hasAdditionalProperties := resp.AdditionalProperties != nil
 
 	updates := make([]*ResponseUpdate, 0, len(resp.Messages)+1)
@@ -152,7 +160,7 @@ func (resp *Response) ToUpdates() []*ResponseUpdate {
 		})
 	}
 
-	if hasUsage || hasAdditionalProperties || resp.ContinuationToken != "" {
+	if hasAdditionalProperties || resp.ContinuationToken != "" {
 		extra := &ResponseUpdate{
 			AdditionalProperties: resp.AdditionalProperties,
 			AgentID:              resp.AgentID,
@@ -160,22 +168,10 @@ func (resp *Response) ToUpdates() []*ResponseUpdate {
 			ContinuationToken:    resp.ContinuationToken,
 			CreatedAt:            resp.CreatedAt,
 		}
-		if hasUsage {
-			extra.Contents = message.Contents{&message.UsageContent{Details: usage}}
-		}
 		updates = append(updates, extra)
 	}
 
 	return updates
-}
-
-func isZeroUsage(usage message.UsageDetails) bool {
-	return usage.InputTokenCount == 0 &&
-		usage.OutputTokenCount == 0 &&
-		usage.TotalTokenCount == 0 &&
-		usage.CachedInputTokenCount == 0 &&
-		usage.ReasoningTokenCount == 0 &&
-		len(usage.AdditionalCounts) == 0
 }
 
 // Update folds a streaming [ResponseUpdate] into resp, appending its contents to the matching message and updating response-level fields from later updates.
@@ -201,25 +197,14 @@ func (resp *Response) Update(update *ResponseUpdate) {
 		}
 		maps.Copy(msg.AdditionalProperties, update.AdditionalProperties)
 	}
-	// A nil RawRepresentation carries no provider data, so treat it as a no-op.
-	// This keeps metadata-only updates (e.g. response-level usage or a
-	// continuation token emitted by ToUpdates) from mutating the message's raw
-	// data during a ToUpdates/Collect round-trip.
-	if update.RawRepresentation != nil {
-		if msg.RawRepresentation == nil {
-			msg.RawRepresentation = update.RawRepresentation
-		} else if s, ok := msg.RawRepresentation.([]any); ok {
-			msg.RawRepresentation = append(s, update.RawRepresentation)
-		} else {
-			msg.RawRepresentation = []any{msg.RawRepresentation, update.RawRepresentation}
-		}
-	}
+	msg.RawRepresentation = appendRawRepresentation(msg.RawRepresentation, update.RawRepresentation)
 
 	// Other members on a ResponseUpdate map to members of the response.
 	// Update the response object with those, preferring the values from later updates.
 	resp.AgentID = cmp.Or(update.AgentID, resp.AgentID)
 	resp.ID = cmp.Or(update.ResponseID, resp.ID)
 	resp.FinishReason = cmp.Or(update.FinishReason, resp.FinishReason)
+	resp.RawRepresentation = appendRawRepresentation(resp.RawRepresentation, update.RawRepresentation)
 	if update.ContinuationToken == "" {
 		resp.ContinuationToken = ""
 	} else {
@@ -234,6 +219,19 @@ func (resp *Response) Update(update *ResponseUpdate) {
 		}
 		maps.Copy(resp.AdditionalProperties, update.AdditionalProperties)
 	}
+}
+
+func appendRawRepresentation(current, incoming any) any {
+	if incoming == nil {
+		return current
+	}
+	if current == nil {
+		return incoming
+	}
+	if values, ok := current.([]any); ok {
+		return append(values, incoming)
+	}
+	return []any{current, incoming}
 }
 
 // isValidCreatedAt reports whether t is a usable creation timestamp. A zero

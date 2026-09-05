@@ -32,7 +32,7 @@ var testReplayMessages = []string{
 
 func sendStreamMessage(t *testing.T, stream *inproc.StreamingRun, ctx context.Context, message any) {
 	t.Helper()
-	if err := stream.SendMessage(ctx, message); err != nil {
+	if _, err := stream.TrySendMessage(ctx, message); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
 }
@@ -69,6 +69,16 @@ func splitWordsKeepSpaces(s string) []string {
 		words = append(words, s[start:])
 	}
 	return words
+}
+
+func TestNewPanicsForNilAgent(t *testing.T) {
+	defer func() {
+		if got := recover(); got != "agentworkflow: agent is required" {
+			t.Fatalf("panic = %v, want agent required message", got)
+		}
+	}()
+
+	agentworkflow.New(nil, agentworkflow.Config{})
 }
 
 // newReplayAgent emits one *ResponseUpdate per word of each non-empty source
@@ -108,9 +118,8 @@ func newReplayAgent() *agent.Agent {
 	return agent.New(
 		agent.ProviderConfig{ProviderName: "replay", Run: run},
 		agent.Config{
-			ID:                  testAgentID,
-			Name:                testAgentName,
-			DisableFuncAutoCall: true,
+			ID:   testAgentID,
+			Name: testAgentName,
 		},
 	)
 }
@@ -142,9 +151,8 @@ func newRoleCheckAgent() *agent.Agent {
 	return agent.New(
 		agent.ProviderConfig{ProviderName: "rolecheck", Run: run},
 		agent.Config{
-			ID:                  testAgentID,
-			Name:                testAgentName,
-			DisableFuncAutoCall: true,
+			ID:   testAgentID,
+			Name: testAgentName,
 		},
 	)
 }
@@ -161,7 +169,7 @@ func newContentAgent(updates ...*agent.ResponseUpdate) *agent.Agent {
 	}
 	return agent.New(
 		agent.ProviderConfig{ProviderName: "content", Run: run},
-		agent.Config{ID: testAgentID, Name: testAgentName, DisableFuncAutoCall: true},
+		agent.Config{ID: testAgentID, Name: testAgentName},
 	)
 }
 
@@ -173,7 +181,7 @@ func newNamedNoopAgent(id string, name string) *agent.Agent {
 	}
 	return agent.New(
 		agent.ProviderConfig{ProviderName: "noop", Run: run},
-		agent.Config{ID: id, Name: name, DisableFuncAutoCall: true},
+		agent.Config{ID: id, Name: name},
 	)
 }
 
@@ -192,10 +200,9 @@ func newRecordingAgent(calls *[][]*message.Message) *agent.Agent {
 	return agent.New(
 		agent.ProviderConfig{ProviderName: "recording", Run: run},
 		agent.Config{
-			ID:                  testAgentID,
-			Name:                testAgentName,
-			DisableFuncAutoCall: true,
-			HistoryProvider:     agent.NewHistoryProvider(agent.HistoryProviderConfig{SourceID: "noop"}),
+			ID:              testAgentID,
+			Name:            testAgentName,
+			HistoryProvider: agent.NewHistoryProvider(agent.HistoryProviderConfig{SourceID: "noop"}),
 		},
 	)
 }
@@ -263,8 +270,8 @@ func collectForwardedResponseMessages(t *testing.T, a *agent.Agent, cfg agentwor
 		return &workflow.Executor{
 			ID: sinkID,
 
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[[]*message.Message](), nil, func(_ *workflow.Context, msg any) (any, error) {
 					observed = append(observed, msg.([]*message.Message)...)
@@ -276,7 +283,7 @@ func collectForwardedResponseMessages(t *testing.T, a *agent.Agent, cfg agentwor
 	}
 
 	hostCfg := cfg
-	hostCfg.DisableForwardIncomingMessages = true
+	hostCfg.ForwardIncomingMessages = new(false)
 	binding := agentworkflow.New(a, hostCfg)
 	wf, err := workflow.NewBuilder(binding).
 		AddEdge(binding, sink).
@@ -286,7 +293,7 @@ func collectForwardedResponseMessages(t *testing.T, a *agent.Agent, cfg agentwor
 	}
 
 	ctx := t.Context()
-	stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
+	stream, err := inproc.Lockstep.OpenStreaming(ctx, wf)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -318,7 +325,7 @@ func runHostedAgent(t *testing.T, a *agent.Agent, cfg agentworkflow.Config, toke
 	}
 
 	ctx := t.Context()
-	stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
+	stream, err := inproc.Lockstep.OpenStreaming(ctx, wf)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -339,9 +346,6 @@ func runHostedAgent(t *testing.T, a *agent.Agent, cfg agentworkflow.Config, toke
 	return events
 }
 
-// boolPtr is a tiny helper for *bool literals.
-func boolPtr(b bool) *bool { return &b }
-
 // TestHostedAgent_EmitsStreamingUpdatesIfConfigured exercises the matrix
 // (executorSetting × turnSetting) for streaming response update output emission. The rule:
 // the TurnToken's EmitEvents flag overrides the executor's EmitUpdateEvents
@@ -352,14 +356,14 @@ func TestHostedAgent_EmitsStreamingUpdatesIfConfigured(t *testing.T) {
 		turnSetting     *bool
 	}{
 		{nil, nil},
-		{nil, boolPtr(true)},
-		{nil, boolPtr(false)},
-		{boolPtr(true), nil},
-		{boolPtr(true), boolPtr(true)},
-		{boolPtr(true), boolPtr(false)},
-		{boolPtr(false), nil},
-		{boolPtr(false), boolPtr(true)},
-		{boolPtr(false), boolPtr(false)},
+		{nil, new(true)},
+		{nil, new(false)},
+		{new(true), nil},
+		{new(true), new(true)},
+		{new(true), new(false)},
+		{new(false), nil},
+		{new(false), new(true)},
+		{new(false), new(false)},
 	}
 
 	expectedContents := expectedReplayUpdateContents()
@@ -369,7 +373,7 @@ func TestHostedAgent_EmitsStreamingUpdatesIfConfigured(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			cfg := agentworkflow.Config{}
 			if tc.executorSetting != nil {
-				cfg.EmitUpdateEvents = *tc.executorSetting
+				cfg.EmitUpdateEvents = tc.executorSetting
 			}
 			token := workflow.TurnToken{EmitEvents: tc.turnSetting}
 
@@ -514,7 +518,7 @@ func TestHostedAgent_ReassignsRolesIfConfigured(t *testing.T) {
 		name := fmt.Sprintf("reassign=%v/u=%v/s=%v/o=%v", tc.reassign, tc.includeUser, tc.includeSelf, tc.includeOther)
 		t.Run(name, func(t *testing.T) {
 			cfg := agentworkflow.Config{
-				DisableReassignOtherAgentsAsUsers: !tc.reassign,
+				ReassignOtherAgentsAsUsers: new(tc.reassign),
 			}
 			var msgs []*message.Message
 			if tc.includeUser {
@@ -596,8 +600,8 @@ func TestHostedAgent_ForwardsIncomingMessages(t *testing.T) {
 				return &workflow.Executor{
 					ID: sinkID,
 
-					DisableAutoSendMessageHandlerResultObject: true,
-					DisableAutoYieldOutputHandlerResultObject: true,
+					AutoSendMessageHandlerResultObject: new(false),
+					AutoYieldOutputHandlerResultObject: new(false),
 					ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 						rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[[]*message.Message](), nil, func(_ *workflow.Context, msg any) (any, error) {
 							observed = append(observed, msg)
@@ -608,7 +612,7 @@ func TestHostedAgent_ForwardsIncomingMessages(t *testing.T) {
 				}, nil
 			}
 
-			binding := agentworkflow.New(newReplayAgent(), agentworkflow.Config{DisableForwardIncomingMessages: disable})
+			binding := agentworkflow.New(newReplayAgent(), agentworkflow.Config{ForwardIncomingMessages: new(!disable)})
 			wf, err := workflow.NewBuilder(binding).
 				AddEdge(binding, sink).
 				Build()
@@ -617,7 +621,7 @@ func TestHostedAgent_ForwardsIncomingMessages(t *testing.T) {
 			}
 
 			ctx := t.Context()
-			stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
+			stream, err := inproc.Lockstep.OpenStreaming(ctx, wf)
 			if err != nil {
 				t.Fatalf("Stream: %v", err)
 			}
@@ -671,7 +675,7 @@ func TestHostedAgent_HandlesSingleMessage(t *testing.T) {
 	}
 
 	ctx := t.Context()
-	stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
+	stream, err := inproc.Lockstep.OpenStreaming(ctx, wf)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -754,7 +758,7 @@ func TestHostedAgent_HandlesStringMessageAsUser(t *testing.T) {
 	}
 
 	ctx := t.Context()
-	stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
+	stream, err := inproc.Lockstep.OpenStreaming(ctx, wf)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -792,7 +796,7 @@ func TestHostedAgent_AccumulatesAndClearsMessagesPerTurn(t *testing.T) {
 	}
 
 	ctx := t.Context()
-	stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
+	stream, err := inproc.Lockstep.OpenStreaming(ctx, wf)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -1026,7 +1030,7 @@ func newApprovalAgent() *agent.Agent {
 	}
 	return agent.New(
 		agent.ProviderConfig{ProviderName: "approval", Run: run},
-		agent.Config{ID: testAgentID, Name: testAgentName, DisableFuncAutoCall: true},
+		agent.Config{ID: testAgentID, Name: testAgentName},
 	)
 }
 
@@ -1068,7 +1072,7 @@ func newFunctionCallAgent() *agent.Agent {
 	}
 	return agent.New(
 		agent.ProviderConfig{ProviderName: "fcall", Run: run},
-		agent.Config{ID: testAgentID, Name: testAgentName, DisableFuncAutoCall: true},
+		agent.Config{ID: testAgentID, Name: testAgentName},
 	)
 }
 
@@ -1085,8 +1089,8 @@ func approverExecutor(target workflow.ExecutorBinding, approve bool) workflow.Ex
 		return &workflow.Executor{
 			ID: id,
 
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.SendsMessageType(reflect.TypeFor[*message.ToolApprovalResponseContent]())
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[*message.ToolApprovalRequestContent](), nil, func(ctx *workflow.Context, msg any) (any, error) {
@@ -1111,8 +1115,8 @@ func resultExecutor(target workflow.ExecutorBinding, result any) workflow.Execut
 		return &workflow.Executor{
 			ID: id,
 
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.SendsMessageType(reflect.TypeFor[*message.FunctionResultContent]())
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[*message.FunctionCallContent](), nil, func(ctx *workflow.Context, msg any) (any, error) {
@@ -1179,7 +1183,7 @@ func TestHostedAgent_InterceptUserInputRequests(t *testing.T) {
 	}
 
 	ctx := t.Context()
-	stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
+	stream, err := inproc.Lockstep.OpenStreaming(ctx, wf)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -1229,7 +1233,7 @@ func TestHostedAgent_InterceptUnterminatedFunctionCalls(t *testing.T) {
 	}
 
 	ctx := t.Context()
-	stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
+	stream, err := inproc.Lockstep.OpenStreaming(ctx, wf)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -1283,7 +1287,7 @@ func TestHostedAgent_FunctionResultMessageMetadataMatchesHostedAgent(t *testing.
 	}
 	a := agent.New(
 		agent.ProviderConfig{ProviderName: "metadata", Run: run},
-		agent.Config{ID: agentID, DisableFuncAutoCall: true, HistoryProvider: agent.NewHistoryProvider(agent.HistoryProviderConfig{SourceID: "noop"})},
+		agent.Config{ID: agentID, HistoryProvider: agent.NewHistoryProvider(agent.HistoryProviderConfig{SourceID: "noop"})},
 	)
 	host := agentworkflow.New(a, agentworkflow.Config{InterceptUnterminatedFunctionCalls: true})
 	exec := resultExecutor(host, "42")
@@ -1296,7 +1300,7 @@ func TestHostedAgent_FunctionResultMessageMetadataMatchesHostedAgent(t *testing.
 	}
 
 	ctx := t.Context()
-	stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
+	stream, err := inproc.Lockstep.OpenStreaming(ctx, wf)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -1353,8 +1357,8 @@ func TestHostedAgent_InterceptDisabled_PostsExternalRequest(t *testing.T) {
 		return &workflow.Executor{
 			ID: probeID,
 
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[*message.ToolApprovalRequestContent](), nil, func(_ *workflow.Context, _ any) (any, error) {
 					sawApprovalRequestMessage = true
@@ -1441,7 +1445,7 @@ func TestHostedAgent_ResetSignal_StartsNewSession(t *testing.T) {
 				return nil
 			},
 		},
-		agent.Config{ID: testAgentID, Name: testAgentName, DisableFuncAutoCall: true},
+		agent.Config{ID: testAgentID, Name: testAgentName},
 	)
 	host := agentworkflow.New(a, agentworkflow.Config{})
 	wf, err := workflow.NewBuilder(host).WithOutputFrom(host).Build()
@@ -1450,7 +1454,7 @@ func TestHostedAgent_ResetSignal_StartsNewSession(t *testing.T) {
 	}
 
 	ctx := t.Context()
-	stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
+	stream, err := inproc.Lockstep.OpenStreaming(ctx, wf)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -1577,7 +1581,7 @@ func newRequestAgent(unpaired, paired int) *agent.Agent {
 				// Build interleaved requests: first `unpaired` are unpaired, last
 				// `paired` are immediately resolved by appending matching results.
 				var pairedResults []message.Content
-				for i := 0; i < total; i++ {
+				for i := range total {
 					id := fmt.Sprintf("call-%d", i)
 					call := &message.FunctionCallContent{CallID: id, Name: "TestFunction"}
 					if i < unpaired {
@@ -1623,7 +1627,7 @@ func newRequestAgent(unpaired, paired int) *agent.Agent {
 	}
 	return agent.New(
 		agent.ProviderConfig{ProviderName: "request", Run: run},
-		agent.Config{ID: testAgentID, Name: testAgentName, DisableFuncAutoCall: true},
+		agent.Config{ID: testAgentID, Name: testAgentName},
 	)
 }
 
@@ -1708,7 +1712,7 @@ func TestHostedAgent_ResultBeforeFunctionCall_StillInterceptsCall(t *testing.T) 
 	}
 	a := agent.New(
 		agent.ProviderConfig{ProviderName: "ordered", Run: run},
-		agent.Config{ID: testAgentID, Name: testAgentName, DisableFuncAutoCall: true},
+		agent.Config{ID: testAgentID, Name: testAgentName},
 	)
 	host := agentworkflow.New(a, agentworkflow.Config{})
 	wf, err := workflow.NewBuilder(host).Build()
@@ -1770,7 +1774,7 @@ func TestHostedAgent_DuplicateRequestID_RaisesError(t *testing.T) {
 	}
 	a := agent.New(
 		agent.ProviderConfig{ProviderName: "dup", Run: dup},
-		agent.Config{ID: testAgentID, Name: testAgentName, DisableFuncAutoCall: true},
+		agent.Config{ID: testAgentID, Name: testAgentName},
 	)
 	host := agentworkflow.New(a, agentworkflow.Config{
 		InterceptUnterminatedFunctionCalls: true,
@@ -1814,7 +1818,7 @@ func TestHostedAgent_UnknownResponseID_RaisesError(t *testing.T) {
 	}
 	a := agent.New(
 		agent.ProviderConfig{ProviderName: "stub", Run: stub},
-		agent.Config{ID: testAgentID, Name: testAgentName, DisableFuncAutoCall: true},
+		agent.Config{ID: testAgentID, Name: testAgentName},
 	)
 	host := agentworkflow.New(a, agentworkflow.Config{
 		InterceptUnterminatedFunctionCalls: true,
@@ -1830,8 +1834,8 @@ func TestHostedAgent_UnknownResponseID_RaisesError(t *testing.T) {
 		return &workflow.Executor{
 			ID: senderID,
 
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.SendsMessageType(reflect.TypeFor[*message.FunctionResultContent]())
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
@@ -1877,7 +1881,7 @@ func TestHostedAgent_UnknownResponseID_RaisesError(t *testing.T) {
 // input EmitEvents.
 func TestHostedAgent_HeldTurnToken_StampsResolvedEmitEvents(t *testing.T) {
 	host := agentworkflow.New(newApprovalAgent(), agentworkflow.Config{
-		EmitUpdateEvents:           true,
+		EmitUpdateEvents:           new(true),
 		InterceptUserInputRequests: true,
 	})
 	app := approverExecutor(host, true)
@@ -1893,8 +1897,8 @@ func TestHostedAgent_HeldTurnToken_StampsResolvedEmitEvents(t *testing.T) {
 		return &workflow.Executor{
 			ID: sinkID,
 
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[workflow.TurnToken](), nil, func(_ *workflow.Context, msg any) (any, error) {
 					observed = append(observed, msg.(workflow.TurnToken))
@@ -1915,7 +1919,7 @@ func TestHostedAgent_HeldTurnToken_StampsResolvedEmitEvents(t *testing.T) {
 	}
 
 	ctx := t.Context()
-	stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
+	stream, err := inproc.Lockstep.OpenStreaming(ctx, wf)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -2048,7 +2052,7 @@ func TestHostedAgent_AlreadyPendingRequest_IsIdempotent_InterceptMode(t *testing
 	}
 	a := agent.New(
 		agent.ProviderConfig{ProviderName: "rep", Run: run},
-		agent.Config{ID: testAgentID, Name: testAgentName, DisableFuncAutoCall: true},
+		agent.Config{ID: testAgentID, Name: testAgentName},
 	)
 
 	// Probe records every approval-request workflow message it sees.
@@ -2062,8 +2066,8 @@ func TestHostedAgent_AlreadyPendingRequest_IsIdempotent_InterceptMode(t *testing
 		return &workflow.Executor{
 			ID: probeID,
 
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[*message.ToolApprovalRequestContent](), nil, func(_ *workflow.Context, msg any) (any, error) {
 					seen = append(seen, msg.(*message.ToolApprovalRequestContent))
@@ -2085,7 +2089,7 @@ func TestHostedAgent_AlreadyPendingRequest_IsIdempotent_InterceptMode(t *testing
 	}
 
 	ctx := t.Context()
-	stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
+	stream, err := inproc.Lockstep.OpenStreaming(ctx, wf)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}

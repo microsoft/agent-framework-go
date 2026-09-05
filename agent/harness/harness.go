@@ -48,16 +48,17 @@ type Config struct {
 	// AgentModeConfig customizes the default agent-mode provider when it is enabled.
 	AgentModeConfig agentmode.Config
 
-	// DisableToolAutoApproval omits the default tool-approval middleware.
-	DisableToolAutoApproval bool
+	// DisableToolApproval omits the default tool-approval middleware.
+	DisableToolApproval bool
 
 	// ToolApprovalConfig customizes the default tool-approval middleware when it is enabled.
 	ToolApprovalConfig toolapproval.Config
 
-	// LoopConfig enables loop middleware when non-nil and it contains at least
-	// one evaluator. The loop middleware is appended before tool-approval
-	// middleware so loop reinvocation remains outside approval handling, mirroring
-	// the upstream .NET HarnessAgent ordering.
+	// LoopConfig enables loop middleware when non-nil and its Evaluators slice is
+	// non-empty. Evaluators must be non-nil; loop.New rejects nil evaluators at
+	// runtime. The loop middleware is appended before tool-approval middleware so
+	// loop reinvocation remains outside approval handling, mirroring the upstream
+	// .NET HarnessAgent ordering.
 	LoopConfig *loop.Config
 }
 
@@ -91,9 +92,11 @@ func Configure(cfg agent.Config, harnessCfg Config) agent.Config {
 		out.ContextProviders = append(out.ContextProviders, agentmode.New(harnessCfg.AgentModeConfig))
 	}
 	if harnessCfg.LoopConfig != nil && len(harnessCfg.LoopConfig.Evaluators) > 0 {
-		out.Middlewares = append(out.Middlewares, loop.New(*harnessCfg.LoopConfig))
+		loopCfg := *harnessCfg.LoopConfig
+		loopCfg.Evaluators = slices.Clone(loopCfg.Evaluators)
+		out.Middlewares = append(out.Middlewares, loop.New(loopCfg))
 	}
-	if !harnessCfg.DisableToolAutoApproval {
+	if !harnessCfg.DisableToolApproval {
 		out.Middlewares = append(out.Middlewares, toolapproval.New(harnessCfg.ToolApprovalConfig))
 	}
 

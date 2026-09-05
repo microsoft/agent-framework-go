@@ -75,7 +75,7 @@ func TestConfigure_DisableFlagsOmitHarnessDefaults(t *testing.T) {
 		DisableInstructions:      true,
 		DisableTodoProvider:      true,
 		DisableAgentModeProvider: true,
-		DisableToolAutoApproval:  true,
+		DisableToolApproval:      true,
 		LoopConfig:               &loop.Config{},
 	})
 
@@ -144,7 +144,7 @@ func TestConfigure_LoopConfigReinvokesAgent(t *testing.T) {
 		DisableInstructions:      true,
 		DisableTodoProvider:      true,
 		DisableAgentModeProvider: true,
-		DisableToolAutoApproval:  true,
+		DisableToolApproval:      true,
 		LoopConfig: &loop.Config{
 			Evaluators: []loop.Evaluator{
 				loop.EvaluatorFunc(func(_ context.Context, lc *loop.Context) (loop.Evaluation, error) {

@@ -13,6 +13,18 @@ import (
 	workflowobservability "github.com/microsoft/agent-framework-go/workflow/observability"
 )
 
+type unserializableValue struct{}
+
+func (unserializableValue) MarshalJSON() ([]byte, error) {
+	return nil, errors.New("marshal failed")
+}
+
+type panicSerializableValue struct{}
+
+func (panicSerializableValue) MarshalJSON() ([]byte, error) {
+	panic("marshal panic")
+}
+
 func attributeValue(t *testing.T, attrs []workflowobservability.Attribute, key string) string {
 	t.Helper()
 	for _, attr := range attrs {
@@ -88,5 +100,97 @@ func TestCaptureErrorShortTypeName(t *testing.T) {
 
 	if got := attributeValue(t, span.attrs, observability.TagErrorType); got != "errorString" {
 		t.Errorf("captured error.type = %q, want %q", got, "errorString")
+	}
+}
+
+func TestStartExecutorProcessEmitsExecutorType(t *testing.T) {
+	span := &fakeSpan{}
+	telemetry := observability.New(observability.Options{Tracer: &fakeTracer{span: span}})
+
+	_, activity := telemetry.StartExecutorProcess(context.Background(), "exec1", "pkg.Type", "standard", nil, nil)
+	if activity == nil {
+		t.Fatal("expected an activity span")
+	}
+
+	// The executor type is emitted under the canonical OTel attribute
+	// executor.type, matching the .NET (Tags.ExecutorType) and Python
+	// (EXECUTOR_TYPE) implementations for cross-SDK dashboard alignment.
+	if got := attributeValue(t, span.attrs, "executor.type"); got != "pkg.Type" {
+		t.Errorf("executor.type = %v, want %q", got, "pkg.Type")
+	}
+	for _, attr := range span.attrs {
+		if attr.Key == "executor.implementation.id" {
+			t.Error("span must not carry the non-canonical executor.implementation.id attribute")
+		}
+	}
+}
+
+func TestSerializedAttributeUsesFallbackForMarshalErrors(t *testing.T) {
+	attr := observability.SerializedAttribute("message.content", unserializableValue{})
+	value, ok := attr.Value.(string)
+	if !ok {
+		t.Fatalf("attribute value type = %T, want string", attr.Value)
+	}
+	want := "[Unserializable: observability_test.unserializableValue]"
+	if value != want {
+		t.Fatalf("attribute value = %q, want %q", value, want)
+	}
+}
+
+func TestSerializedAttributeUsesFallbackForMarshalPanics(t *testing.T) {
+	attr := observability.SerializedAttribute("message.content", panicSerializableValue{})
+	value, ok := attr.Value.(string)
+	if !ok {
+		t.Fatalf("attribute value type = %T, want string", attr.Value)
+	}
+	want := "[Unserializable: observability_test.panicSerializableValue]"
+	if value != want {
+		t.Fatalf("attribute value = %q, want %q", value, want)
+	}
+}
+
+func TestSensitiveDataUsesFallbackForExecutorInputAndOutput(t *testing.T) {
+	span := &fakeSpan{}
+	telemetry := observability.New(observability.Options{
+		Tracer:              &fakeTracer{span: span},
+		EnableSensitiveData: true,
+	})
+
+	message := unserializableValue{}
+	_, activity := telemetry.StartExecutorProcess(context.Background(), "exec1", "pkg.Type", "message", message, nil)
+	if activity == nil {
+		t.Fatal("expected an activity span")
+	}
+	telemetry.SetExecutorOutput(activity, message)
+
+	want := "[Unserializable: observability_test.unserializableValue]"
+	if got := attributeValue(t, span.attrs, observability.TagExecutorInput); got != want {
+		t.Fatalf("executor.input = %q, want %q", got, want)
+	}
+	if got := attributeValue(t, span.attrs, observability.TagExecutorOutput); got != want {
+		t.Fatalf("executor.output = %q, want %q", got, want)
+	}
+}
+
+func TestSensitiveDataUsesFallbackForExecutorInputAndOutputPanics(t *testing.T) {
+	span := &fakeSpan{}
+	telemetry := observability.New(observability.Options{
+		Tracer:              &fakeTracer{span: span},
+		EnableSensitiveData: true,
+	})
+
+	message := panicSerializableValue{}
+	_, activity := telemetry.StartExecutorProcess(context.Background(), "exec1", "pkg.Type", "message", message, nil)
+	if activity == nil {
+		t.Fatal("expected an activity span")
+	}
+	telemetry.SetExecutorOutput(activity, message)
+
+	want := "[Unserializable: observability_test.panicSerializableValue]"
+	if got := attributeValue(t, span.attrs, observability.TagExecutorInput); got != want {
+		t.Fatalf("executor.input = %q, want %q", got, want)
+	}
+	if got := attributeValue(t, span.attrs, observability.TagExecutorOutput); got != want {
+		t.Fatalf("executor.output = %q, want %q", got, want)
 	}
 }

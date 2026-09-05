@@ -101,8 +101,8 @@ func parseCompareURL(raw string) (base, head, title string, ok bool) {
 // originalPRBody returns the portion of the issue body that precedes the gh-aw
 // fallback note, i.e. the PR description the workflow originally authored.
 func originalPRBody(issueBody string) string {
-	if idx := strings.Index(issueBody, fallbackNoteMarker); idx >= 0 {
-		return strings.TrimSpace(issueBody[:idx])
+	if before, _, ok := strings.Cut(issueBody, fallbackNoteMarker); ok {
+		return strings.TrimSpace(before)
 	}
 	return strings.TrimSpace(issueBody)
 }

@@ -14,20 +14,22 @@ import (
 )
 
 // Options configures the chat-message workflow behavior applied by Configure.
-// StateKey and TakeTurnHandler are required; Configure panics if StateKey is
-// empty or TakeTurnHandler is nil. The remaining fields are optional.
+// StateKey and TakeTurnHandler are required; Configure panics if options is nil,
+// StateKey is empty, or TakeTurnHandler is nil. The remaining fields are optional.
 type Options struct {
 	// StateKey identifies the accumulated turn state within the workflow.
 	StateKey string
 	// TakeTurnHandler is invoked with the accumulated messages when a turn token arrives.
 	TakeTurnHandler func(ctx *workflow.Context, token workflow.TurnToken, messages []*message.Message) error
 
-	// StringMessageRole, when set, registers a handler that wraps incoming string messages with this role.
-	StringMessageRole string
+	// StringMessageRole, when set, registers a handler that wraps incoming
+	// string messages with this role.
+	StringMessageRole message.Role
 	// ScopeName scopes the accumulated turn state; used when constructing a default MessageState.
 	ScopeName string
-	// DisableAutoSendTurnToken suppresses automatically declaring and forwarding the turn token.
-	DisableAutoSendTurnToken bool
+	// AutoSendTurnToken controls whether the turn token is automatically declared
+	// and forwarded. The default is true.
+	AutoSendTurnToken *bool
 	// MessageState supplies an existing accumulator; when nil a new one is created from StateKey and ScopeName.
 	MessageState *MessageState
 }
@@ -36,6 +38,10 @@ type Options struct {
 // It wraps a StatefulExecutorCache holding the slice of messages received so far.
 type MessageState struct {
 	cache workflow.StatefulExecutorCache[[]*message.Message]
+}
+
+func (o *Options) autoSendTurnToken() bool {
+	return o.AutoSendTurnToken == nil || *o.AutoSendTurnToken
 }
 
 // NewMessageState returns a MessageState whose accumulated messages are keyed
@@ -70,12 +76,20 @@ func Configure(executor *workflow.Executor, options *Options) {
 	if executor == nil {
 		panic("messageworkflow: executor is required")
 	}
+	if options == nil {
+		panic("messageworkflow: options are required")
+	}
 	if options.StateKey == "" {
 		panic("stateKey is required")
 	}
 	if options.TakeTurnHandler == nil {
 		panic("TakeTurnHandler is required")
 	}
+	configured := *options
+	if configured.AutoSendTurnToken != nil {
+		configured.AutoSendTurnToken = new(*configured.AutoSendTurnToken)
+	}
+	options = &configured
 	state := options.MessageState
 	if state == nil {
 		state = NewMessageState(options.StateKey, options.ScopeName)
@@ -86,54 +100,69 @@ func Configure(executor *workflow.Executor, options *Options) {
 			return state.Reset()
 		},
 		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-			if !options.DisableAutoSendTurnToken {
+			if options.autoSendTurnToken() {
 				rb.SendsMessageType(reflect.TypeFor[workflow.TurnToken]())
 			}
 			if options.StringMessageRole != "" {
-				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
-					return struct{}{}, state.ProcessTurnMessages(ctx, func(ctx *workflow.Context, messages []*message.Message) ([]*message.Message, error) {
-						return append(messages, &message.Message{
-							Role:     message.Role(options.StringMessageRole),
-							Contents: []message.Content{&message.TextContent{Text: msg.(string)}},
-						}), nil
-					})
-				})
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, accumulateStringMessage(state, options.StringMessageRole))
 			}
 			rb.RouteBuilder.
-				AddHandlerRaw(reflect.TypeFor[*message.Message](), nil, func(ctx *workflow.Context, msg any) (any, error) {
-					return struct{}{}, state.ProcessTurnMessages(ctx, func(ctx *workflow.Context, messages []*message.Message) ([]*message.Message, error) {
-						return append(messages, msg.(*message.Message)), nil
-					})
-				}).
-				AddHandlerRaw(reflect.TypeFor[[]*message.Message](), nil, func(ctx *workflow.Context, msgs any) (any, error) {
-					return struct{}{}, state.ProcessTurnMessages(ctx, func(ctx *workflow.Context, messages []*message.Message) ([]*message.Message, error) {
-						return append(messages, msgs.([]*message.Message)...), nil
-					})
-				}).
-				AddHandlerRaw(reflect.TypeFor[iter.Seq[*message.Message]](), nil, func(ctx *workflow.Context, msgs any) (any, error) {
-					return struct{}{}, state.ProcessTurnMessages(ctx, func(ctx *workflow.Context, messages []*message.Message) ([]*message.Message, error) {
-						for msg := range msgs.(iter.Seq[*message.Message]) {
-							messages = append(messages, msg)
-						}
-						return messages, nil
-					})
-				}).
-				AddHandlerRaw(reflect.TypeFor[workflow.TurnToken](), nil, func(ctx *workflow.Context, msg any) (any, error) {
-					return struct{}{}, state.ProcessTurnMessages(ctx, func(ctx *workflow.Context, messages []*message.Message) ([]*message.Message, error) {
-						token := msg.(workflow.TurnToken)
-						if err := options.TakeTurnHandler(ctx, token, messages); err != nil {
-							return nil, err
-						}
-						if !options.DisableAutoSendTurnToken {
-							if err := ctx.SendMessage("", token); err != nil {
-								return nil, err
-							}
-						}
-						return nil, nil
-					})
-				})
+				AddHandlerRaw(reflect.TypeFor[*message.Message](), nil, accumulateMessage(state)).
+				AddHandlerRaw(reflect.TypeFor[[]*message.Message](), nil, accumulateMessages(state)).
+				AddHandlerRaw(reflect.TypeFor[iter.Seq[*message.Message]](), nil, accumulateMessageSeq(state)).
+				AddHandlerRaw(reflect.TypeFor[workflow.TurnToken](), nil, takeAccumulatedTurn(state, options))
 			return rb, nil
 		},
 	}
 	executor.Extend(&messageExecutor)
+}
+
+func accumulateStringMessage(state *MessageState, role message.Role) func(*workflow.Context, any) (any, error) {
+	return func(ctx *workflow.Context, msg any) (any, error) {
+		return appendTurnMessages(ctx, state, &message.Message{
+			Role:     role,
+			Contents: []message.Content{&message.TextContent{Text: msg.(string)}},
+		})
+	}
+}
+
+func accumulateMessage(state *MessageState) func(*workflow.Context, any) (any, error) {
+	return func(ctx *workflow.Context, msg any) (any, error) {
+		return appendTurnMessages(ctx, state, msg.(*message.Message))
+	}
+}
+
+func accumulateMessages(state *MessageState) func(*workflow.Context, any) (any, error) {
+	return func(ctx *workflow.Context, msg any) (any, error) {
+		return appendTurnMessages(ctx, state, msg.([]*message.Message)...)
+	}
+}
+
+func accumulateMessageSeq(state *MessageState) func(*workflow.Context, any) (any, error) {
+	return func(ctx *workflow.Context, msg any) (any, error) {
+		return appendTurnMessages(ctx, state, messageSeqToSlice(msg.(iter.Seq[*message.Message]))...)
+	}
+}
+
+func appendTurnMessages(ctx *workflow.Context, state *MessageState, incoming ...*message.Message) (any, error) {
+	return struct{}{}, state.ProcessTurnMessages(ctx, func(ctx *workflow.Context, messages []*message.Message) ([]*message.Message, error) {
+		return append(messages, incoming...), nil
+	})
+}
+
+func takeAccumulatedTurn(state *MessageState, options *Options) func(*workflow.Context, any) (any, error) {
+	return func(ctx *workflow.Context, msg any) (any, error) {
+		return struct{}{}, state.ProcessTurnMessages(ctx, func(ctx *workflow.Context, messages []*message.Message) ([]*message.Message, error) {
+			token := msg.(workflow.TurnToken)
+			if err := options.TakeTurnHandler(ctx, token, messages); err != nil {
+				return nil, err
+			}
+			if options.autoSendTurnToken() {
+				if err := ctx.SendMessage("", token); err != nil {
+					return nil, err
+				}
+			}
+			return nil, nil
+		})
+	}
 }

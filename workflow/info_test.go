@@ -5,10 +5,21 @@ package workflow_test
 import (
 	"iter"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/workflow"
 )
+
+func TestNewCheckpointInfo_PanicsWithEmptySessionID(t *testing.T) {
+	defer func() {
+		if got := recover(); got != "workflow: checkpoint session ID is required" {
+			t.Fatalf("panic = %v, want checkpoint session ID message", got)
+		}
+	}()
+
+	workflow.NewCheckpointInfo("")
+}
 
 func source(i int) string { return "Source/" + itoa(i) }
 func sink(i int) string   { return "Sink/" + itoa(i) }
@@ -244,12 +255,7 @@ type (
 )
 
 func hasType(types []reflect.Type, typ reflect.Type) bool {
-	for _, candidate := range types {
-		if candidate == typ {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(types, typ)
 }
 
 func TestWorkflowDescribeProtocol_NilWorkflowReturnsError(t *testing.T) {

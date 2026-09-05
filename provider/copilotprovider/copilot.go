@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -54,7 +56,7 @@ func NewAgent(cclient *copilot.Client, config AgentConfig) *agent.Agent {
 		config.Description = defaultDescription
 	}
 	if config.Instructions != "" {
-		config.RunOptions = append(config.RunOptions, agent.WithInstructions(config.Instructions))
+		config.RunOptions = append(slices.Clone(config.RunOptions), agent.WithInstructions(config.Instructions))
 	}
 	p := &provider{
 		client: cclient,
@@ -90,14 +92,17 @@ func (p *provider) run(ctx context.Context, messages []*message.Message, options
 
 		frameworkSession, _ := agent.GetOption(options, agent.WithSession)
 		isStreaming := p.streaming(options)
-		copilotSession, err := p.openSession(ctx, frameworkSession, isStreaming, options)
+		// Register eventHandler through SessionConfig.OnEvent so it is attached
+		// before the session.create/resume RPC. This matches the SDK's
+		// no-missed-events guarantee: lifecycle events the CLI emits during
+		// session creation (e.g. session.start) would otherwise be delivered to
+		// zero handlers in the window before a post-return session.On call.
+		copilotSession, err := p.openSession(ctx, frameworkSession, isStreaming, eventHandler, options)
 		if err != nil {
 			yield(nil, err)
 			return
 		}
 		defer func() { _ = copilotSession.Disconnect() }()
-		unsubscribe := copilotSession.On(eventHandler)
-		defer unsubscribe()
 
 		if frameworkSession != nil && frameworkSession.ServiceID() == "" {
 			frameworkSession.SetServiceID(copilotSession.SessionID)
@@ -233,44 +238,50 @@ func (p *provider) openSession(
 	ctx context.Context,
 	frameworkSession *agent.Session,
 	streaming bool,
+	eventHandler copilot.SessionEventHandler,
 	options []agent.Option,
 ) (*copilot.Session, error) {
 	if frameworkSession != nil && frameworkSession.ServiceID() != "" {
-		cfg := p.resumeSessionConfig(streaming, options)
+		cfg := p.resumeSessionConfig(streaming, eventHandler, options)
 		return p.client.ResumeSession(ctx, frameworkSession.ServiceID(), &cfg)
 	}
-	cfg := p.sessionConfig(streaming, options)
+	cfg := p.sessionConfig(streaming, eventHandler, options)
 	return p.client.CreateSession(ctx, &cfg)
 }
 
-func (p *provider) sessionConfig(streaming bool, options []agent.Option) copilot.SessionConfig {
+func (p *provider) sessionConfig(streaming bool, eventHandler copilot.SessionEventHandler, options []agent.Option) copilot.SessionConfig {
 	cfg := copySessionConfig(p.cfg.SessionConfig)
-	cfg.Streaming = copilot.Bool(streaming)
+	cfg.Streaming = new(streaming)
+	cfg.OnEvent = chainSessionEventHandlers(cfg.OnEvent, eventHandler)
 	cfg.SystemMessage = systemMessageWithInstructions(cfg.SystemMessage, slices.Collect(agent.AllOptions(options, agent.WithInstructions)))
 	cfg.Tools = append(cfg.Tools, copilotTools(options)...)
+	cfg.Hooks = sessionHooksWithApprovalRequests(approvalRequiredToolNames(options), cfg.Hooks)
 	return cfg
 }
 
-func (p *provider) resumeSessionConfig(streaming bool, options []agent.Option) copilot.ResumeSessionConfig {
+func (p *provider) resumeSessionConfig(streaming bool, eventHandler copilot.SessionEventHandler, options []agent.Option) copilot.ResumeSessionConfig {
 	cfg := copyResumeSessionConfig(p.cfg.SessionConfig)
-	cfg.Streaming = copilot.Bool(streaming)
+	cfg.Streaming = new(streaming)
+	cfg.OnEvent = chainSessionEventHandlers(cfg.OnEvent, eventHandler)
 	cfg.SystemMessage = systemMessageWithInstructions(cfg.SystemMessage, slices.Collect(agent.AllOptions(options, agent.WithInstructions)))
 	cfg.Tools = append(cfg.Tools, copilotTools(options)...)
+	cfg.Hooks = sessionHooksWithApprovalRequests(approvalRequiredToolNames(options), cfg.Hooks)
 	return cfg
 }
 
 func copySessionConfig(source *copilot.SessionConfig) copilot.SessionConfig {
 	if source == nil {
-		return copilot.SessionConfig{Streaming: copilot.Bool(true)}
+		return copilot.SessionConfig{Streaming: new(true)}
 	}
 	clone := *source
+	clone.Tools = slices.Clone(source.Tools)
 	clone.Streaming = copyBoolDefaultTrue(source.Streaming)
 	return clone
 }
 
 func copyResumeSessionConfig(source *copilot.SessionConfig) copilot.ResumeSessionConfig {
 	if source == nil {
-		return copilot.ResumeSessionConfig{Streaming: copilot.Bool(true)}
+		return copilot.ResumeSessionConfig{Streaming: new(true)}
 	}
 	return copilot.ResumeSessionConfig{
 		ClientName:                         source.ClientName,
@@ -290,16 +301,20 @@ func copyResumeSessionConfig(source *copilot.SessionConfig) copilot.ResumeSessio
 		ModelCapabilities:                  source.ModelCapabilities,
 		EnableSessionTelemetry:             source.EnableSessionTelemetry,
 		EnableCitations:                    source.EnableCitations,
+		EnableFileChangeTracking:           source.EnableFileChangeTracking,
 		SessionLimits:                      source.SessionLimits,
+		EnableExperimentalMode:             source.EnableExperimentalMode,
 		SkipCustomInstructions:             source.SkipCustomInstructions,
 		CustomAgentsLocalOnly:              source.CustomAgentsLocalOnly,
 		CoauthorEnabled:                    source.CoauthorEnabled,
 		ManageScheduleEnabled:              source.ManageScheduleEnabled,
+		OnEvent:                            source.OnEvent,
 		OnPermissionRequest:                source.OnPermissionRequest,
 		OnMCPAuthRequest:                   source.OnMCPAuthRequest,
 		OnUserInputRequest:                 source.OnUserInputRequest,
 		Hooks:                              source.Hooks,
 		WorkingDirectory:                   source.WorkingDirectory,
+		AdditionalDirectories:              source.AdditionalDirectories,
 		ConfigDirectory:                    source.ConfigDirectory,
 		EnableConfigDiscovery:              source.EnableConfigDiscovery,
 		SkipEmbeddingRetrieval:             source.SkipEmbeddingRetrieval,
@@ -320,22 +335,104 @@ func copyResumeSessionConfig(source *copilot.SessionConfig) copilot.ResumeSessio
 		PluginDirectories:                  source.PluginDirectories,
 		InstructionDirectories:             source.InstructionDirectories,
 		DisabledSkills:                     source.DisabledSkills,
+		DisabledMCPServers:                 source.DisabledMCPServers,
 		InfiniteSessions:                   source.InfiniteSessions,
 		LargeOutput:                        source.LargeOutput,
 		ToolSearch:                         source.ToolSearch,
 		Memory:                             source.Memory,
+		GitHubMCPToolConfig:                source.GitHubMCPToolConfig,
 		GitHubToken:                        source.GitHubToken,
 		RemoteSession:                      source.RemoteSession,
+		ManagedSettings:                    source.ManagedSettings,
 		Streaming:                          copyBoolDefaultTrue(source.Streaming),
+	}
+}
+
+// chainSessionEventHandlers composes a caller-supplied handler with the
+// per-run handler so a user-configured SessionConfig.OnEvent is preserved
+// and runs alongside (before) the provider's per-run handler rather than
+// being overwritten.
+func chainSessionEventHandlers(existing, added copilot.SessionEventHandler) copilot.SessionEventHandler {
+	if existing == nil {
+		return added
+	}
+	if added == nil {
+		return existing
+	}
+	return func(event copilot.SessionEvent) {
+		existing(event)
+		added(event)
 	}
 }
 
 func copyBoolDefaultTrue(source *bool) *bool {
 	if source == nil {
-		return copilot.Bool(true)
+		return new(true)
 	}
 	value := *source
 	return &value
+}
+
+func sessionHooksWithApprovalRequests(names map[string]struct{}, hooks *copilot.SessionHooks) *copilot.SessionHooks {
+	if hooks != nil && hooks.OnPreToolUse != nil {
+		logApprovalGatingSkipped(names)
+		return hooks
+	}
+	if len(names) == 0 {
+		return hooks
+	}
+	clone := cloneSessionHooks(hooks)
+	clone.OnPreToolUse = func(input copilot.PreToolUseHookInput, _ copilot.HookInvocation) (*copilot.PreToolUseHookOutput, error) {
+		if _, ok := names[input.ToolName]; !ok {
+			return nil, nil
+		}
+		return &copilot.PreToolUseHookOutput{
+			PermissionDecision:       "ask",
+			PermissionDecisionReason: fmt.Sprintf("Tool %q requires approval before it can run.", input.ToolName),
+		}, nil
+	}
+	return clone
+}
+
+// approvalRequiredToolNames returns the names of the option-provided tools that
+// are explicitly marked approval-required via tool.ApprovalRequiredTool. This
+// mirrors .NET's ApprovalRequiredAIFunction detection and is intentionally
+// independent of copilot.Tool.SkipPermission: raw copilot.Tool values supplied
+// through SessionConfig.Tools carry no approval marker and are never auto-gated.
+func approvalRequiredToolNames(options []agent.Option) map[string]struct{} {
+	var names map[string]struct{}
+	for tl := range agent.AllOptions(options, agent.WithTool) {
+		funcTool, ok := tl.(tool.FuncTool)
+		if !ok || !approvalRequired(funcTool) {
+			continue
+		}
+		if names == nil {
+			names = make(map[string]struct{})
+		}
+		names[funcTool.Name()] = struct{}{}
+	}
+	return names
+}
+
+func logApprovalGatingSkipped(names map[string]struct{}) {
+	if len(names) == 0 {
+		return
+	}
+	toolNames := slices.Collect(maps.Keys(names))
+	slices.Sort(toolNames)
+	slog.Warn(
+		"A custom OnPreToolUse hook is configured, so approval-required tools will not be automatically gated.",
+		"approvalRequiredToolCount", len(toolNames),
+		"approvalRequiredTools", strings.Join(toolNames, ", "),
+	)
+}
+
+func cloneSessionHooks(source *copilot.SessionHooks) *copilot.SessionHooks {
+	if source == nil {
+		return &copilot.SessionHooks{}
+	}
+	clone := *source
+	return &clone
 }
 
 func systemMessageWithInstructions(base *copilot.SystemMessageConfig, instructions []string) *copilot.SystemMessageConfig {
@@ -390,10 +487,9 @@ func toCopilotTool(funcTool tool.FuncTool) (copilot.Tool, error) {
 		return copilot.Tool{}, err
 	}
 	converted := copilot.Tool{
-		Name:           funcTool.Name(),
-		Description:    funcTool.Description(),
-		Parameters:     parameters,
-		SkipPermission: !approvalRequired(funcTool),
+		Name:        funcTool.Name(),
+		Description: funcTool.Description(),
+		Parameters:  parameters,
 		Handler: func(invocation copilot.ToolInvocation) (copilot.ToolResult, error) {
 			arguments, err := toolArguments(invocation.Arguments)
 			if err != nil {

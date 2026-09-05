@@ -55,7 +55,7 @@ func main() {
 	defer func() { _ = run.Close(ctx) }()
 
 	emitEvents := true
-	if err := run.SendMessage(ctx, workflow.TurnToken{EmitEvents: &emitEvents}); err != nil {
+	if _, err := run.TrySendMessage(ctx, workflow.TurnToken{EmitEvents: &emitEvents}); err != nil {
 		demo.Panic(err)
 	}
 
@@ -103,7 +103,7 @@ func newStageAgent(id, name string, respond func(input string) string) *agent.Ag
 	}
 	return agent.New(
 		agent.ProviderConfig{ProviderName: "demo-stage", Run: run},
-		agent.Config{ID: id, Name: name, DisableFuncAutoCall: true},
+		agent.Config{ID: id, Name: name},
 	)
 }
 
