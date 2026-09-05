@@ -7,11 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"runtime"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -34,7 +34,7 @@ const defaultMaxOutputBytes = 64 * 1024
 
 // LocalConfig configures the shell tool returned by [NewLocal].
 type LocalConfig struct {
-	// Shell is an optional override for the shell binary path.  When empty,
+	// Shell is an optional override for the shell binary path. When empty,
 	// the AGENT_FRAMEWORK_SHELL environment variable is consulted; if that is
 	// also unset, the OS default is used (/bin/bash on POSIX, pwsh/cmd on
 	// Windows). Mutually exclusive with [LocalConfig.ShellArgv].
@@ -51,32 +51,26 @@ type LocalConfig struct {
 	Mode Mode
 
 	// WorkingDirectory is the initial working directory for the shell.
-	// Defaults to the current process working directory.
+	// When empty, defaults to the current process working directory.
 	WorkingDirectory string
 
-	// DisableWorkingDirectoryConfinement allows persistent shell working
-	// directory changes to carry across calls. By default, each persistent
-	// command is prefixed with a cd/Set-Location back to
-	// [LocalConfig.WorkingDirectory]. It has no effect when WorkingDirectory is
-	// empty.
-	DisableWorkingDirectoryConfinement bool
+	// ConfineWorkingDirectory controls whether each persistent command is
+	// prefixed with a cd/Set-Location back to [LocalConfig.WorkingDirectory].
+	// The default is true.
+	ConfineWorkingDirectory *bool
 
 	// Environment contains extra environment variables for the spawned shell.
-	// Nil means no overrides.
-	Environment map[string]string
-
-	// RemoveEnvironment contains inherited environment variable names to omit
-	// from the spawned shell before [LocalConfig.Environment] is applied.
-	RemoveEnvironment []string
+	// A nil value removes an inherited variable. A nil map means no overrides.
+	Environment map[string]*string
 
 	// CleanEnvironment starts the shell with only a small allowlist of
 	// inherited variables (PATH, HOME, USER, USERNAME, USERPROFILE,
 	// SystemRoot, TEMP, TMP) before applying [LocalConfig.Environment].
 	CleanEnvironment bool
 
-	// Timeout is the per-command deadline. Zero (the default) means no
-	// timeout. 30s is the recommended value.
-	Timeout time.Duration
+	// Timeout is the per-command deadline. Nil means no timeout. Negative values
+	// are invalid. 30s is the recommended value.
+	Timeout *time.Duration
 
 	// MaxOutputBytes caps each captured output stream per command.
 	// Defaults to 64 KiB. Output beyond this limit is
@@ -103,6 +97,12 @@ func (o LocalConfig) maxOutputBytes() int {
 }
 
 func (o LocalConfig) validate() error {
+	if o.Mode != ModePersistent && o.Mode != ModeStateless {
+		return fmt.Errorf("shelltool: invalid Mode %d", o.Mode)
+	}
+	if o.Timeout != nil && *o.Timeout < 0 {
+		return fmt.Errorf("shelltool: Timeout must be non-negative")
+	}
 	if o.MaxOutputBytes < 0 {
 		return fmt.Errorf("shelltool: MaxOutputBytes must be non-negative")
 	}
@@ -117,7 +117,7 @@ func (o LocalConfig) validate() error {
 }
 
 func (o LocalConfig) confineWorkingDirectory() bool {
-	return !o.DisableWorkingDirectoryConfinement
+	return o.ConfineWorkingDirectory == nil || *o.ConfineWorkingDirectory
 }
 
 // --------------------------------------------------------------------------
@@ -145,12 +145,15 @@ type Local struct {
 	exec *localShellExecutor
 }
 
+// Name returns the tool identifier (run_shell).
 func (t *Local) Name() string { return "run_shell" }
 
+// Description returns the model-facing description of the shell tool.
 func (t *Local) Description() string {
 	return t.exec.opts.defaultDescription()
 }
 
+// Schema returns the JSON schema for the tool's command argument.
 func (t *Local) Schema() any {
 	return map[string]any{
 		"type": "object",
@@ -164,8 +167,10 @@ func (t *Local) Schema() any {
 	}
 }
 
+// ReturnSchema returns nil because the tool yields free-form model-formatted output.
 func (t *Local) ReturnSchema() any { return nil }
 
+// Call unmarshals the command argument, executes it via Run, and returns model-formatted output.
 func (t *Local) Call(ctx context.Context, args string) (any, error) {
 	var in shellInput
 	if err := json.Unmarshal([]byte(args), &in); err != nil {
@@ -279,7 +284,6 @@ func (e *localShellExecutor) runPersistent(ctx context.Context, command string) 
 			workingDirectory:        e.opts.WorkingDirectory,
 			confineWorkingDirectory: e.opts.confineWorkingDirectory(),
 			environment:             e.opts.Environment,
-			removeEnvironment:       e.opts.RemoveEnvironment,
 			cleanEnvironment:        e.opts.CleanEnvironment,
 		})
 		if err != nil {
@@ -320,12 +324,12 @@ func runStateless(ctx context.Context, opts LocalConfig, command string) (Result
 
 	runCtx := ctx
 	var cancel context.CancelFunc
-	if opts.Timeout > 0 {
-		runCtx, cancel = context.WithTimeout(ctx, opts.Timeout)
+	if opts.Timeout != nil {
+		runCtx, cancel = context.WithTimeout(ctx, *opts.Timeout)
 		defer cancel()
 	}
 
-	if err := runCtx.Err(); err != nil {
+	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
 
@@ -334,7 +338,7 @@ func runStateless(ctx context.Context, opts LocalConfig, command string) (Result
 	if opts.WorkingDirectory != "" {
 		cmd.Dir = opts.WorkingDirectory
 	}
-	cmd.Env = commandEnvironment(opts.CleanEnvironment, opts.Environment, opts.RemoveEnvironment)
+	cmd.Env = commandEnvironment(opts.CleanEnvironment, opts.Environment)
 	if shell.kind == shellKindPowerShell {
 		cmd.Env = setEnvironmentListValue(cmd.Env, "PSDefaultParameterValues", "Out-File:Encoding=utf8")
 	}
@@ -375,8 +379,7 @@ func runStateless(ctx context.Context, opts LocalConfig, command string) (Result
 	if timedOut {
 		exitCode = exitCodeTimedOut
 	} else if runErr != nil {
-		var exitErr *exec.ExitError
-		if errors.As(runErr, &exitErr) {
+		if exitErr, ok := errors.AsType[*exec.ExitError](runErr); ok {
 			exitCode = exitErr.ExitCode()
 		} else {
 			return Result{}, fmt.Errorf("%w: shelltool: run: %w", errCommandIO, runErr)
@@ -398,14 +401,17 @@ func runStateless(ctx context.Context, opts LocalConfig, command string) (Result
 // --------------------------------------------------------------------------
 
 // headTailBuffer keeps up to cap bytes: the first half as head and the most
-// recent half as a rolling tail. When the total exceeds cap, the middle is
-// dropped and [Result.Truncated] is set. This mirrors the .NET HeadTailBuffer.
+// recent half as a rolling tail. Once a complete rune no longer fits in the
+// head, it and all later runes stay in the tail so the final output keeps the
+// original UTF-8 ordering. When the total exceeds cap, the middle is dropped
+// and [Result.Truncated] is set. This mirrors the .NET HeadTailBuffer.
 type headTailBuffer struct {
 	cap        int
 	head       []byte
 	tail       [][]byte // queue of complete rune-byte slices
 	tailBytes  int
 	totalBytes int
+	headSealed bool
 	truncated  bool
 }
 
@@ -430,15 +436,16 @@ func (b *headTailBuffer) Write(p []byte) (int, error) {
 
 		b.totalBytes += size
 
-		if len(b.head)+len(encoded) <= headCap {
+		if !b.headSealed && len(b.head)+len(encoded) <= headCap {
 			b.head = append(b.head, encoded...)
 			continue
 		}
-		// Head full — append to tail.
+		// Once a complete rune cannot fit in the head, all later runes stay in the tail.
+		b.headSealed = true
 		b.tail = append(b.tail, encoded)
 		b.tailBytes += len(encoded)
 		// Evict oldest rune-chunk from tail until within budget.
-		for b.tailBytes > tailCap && len(b.tail) > 0 {
+		for b.totalBytes > b.cap && b.tailBytes > tailCap && len(b.tail) > 0 {
 			b.tailBytes -= len(b.tail[0])
 			b.tail = b.tail[1:]
 			b.truncated = true
@@ -519,7 +526,7 @@ func (o LocalConfig) resolvedShell() (resolvedShell, error) {
 		return resolvedShell{
 			binary:    o.ShellArgv[0],
 			kind:      classifyShellKind(o.ShellArgv[0]),
-			extraArgv: append([]string(nil), o.ShellArgv[1:]...),
+			extraArgv: slices.Clone(o.ShellArgv[1:]),
 		}, nil
 	}
 	binary := resolveShell(o.Shell)
@@ -555,7 +562,7 @@ func (o LocalConfig) defaultDescription() string {
 	} else {
 		sb.WriteString("STATELESS MODE: each call runs in a fresh shell; working directory and environment changes do not carry across calls. Combine related steps into one command if state matters. ")
 	}
-	if o.Timeout > 0 {
+	if o.Timeout != nil {
 		fmt.Fprintf(&sb, "Per-call timeout: %ds. ", int(o.Timeout.Seconds()))
 	}
 	fmt.Fprintf(&sb, "Output is truncated to %d bytes per stream (head + tail). ", o.maxOutputBytes())
@@ -594,37 +601,40 @@ func shellKindDescription(shell resolvedShell) string {
 }
 
 func (s resolvedShell) statelessArgvForCommand(command string) []string {
-	var suffix []string
 	switch s.kind {
 	case shellKindPowerShell:
-		suffix = []string{"-NoProfile", "-NoLogo", "-NonInteractive", "-Command", command}
+		return s.argvWithExtra([]string{"-NoProfile", "-NoLogo", "-NonInteractive", "-Command", command})
 	case shellKindCmd:
-		suffix = []string{"/d", "/c", command}
+		return s.argvWithExtra([]string{"/d", "/c", command})
 	case shellKindBash:
-		suffix = []string{"--noprofile", "--norc", "-c", command}
+		return s.argvWithExtra([]string{"--noprofile", "--norc", "-c", command})
 	default:
-		suffix = []string{"-c", command}
+		return s.argvWithExtra([]string{"-c", command})
 	}
-	return combineArgv(s.extraArgv, suffix)
 }
 
 func (s resolvedShell) persistentArgv() ([]string, error) {
-	var suffix []string
 	switch s.kind {
 	case shellKindPowerShell:
-		suffix = []string{"-NoProfile", "-NoLogo", "-NonInteractive", "-Command", "-"}
+		return s.launchArgv([]string{"-NoProfile", "-NoLogo", "-NonInteractive", "-Command", "-"}), nil
 	case shellKindCmd:
 		return nil, fmt.Errorf("persistent mode is not supported for cmd.exe; use pwsh, powershell, or a POSIX shell")
 	case shellKindBash:
-		suffix = []string{"--noprofile", "--norc"}
+		return s.launchArgv([]string{"--noprofile", "--norc"}), nil
 	default:
-		suffix = nil
+		return s.launchArgv(nil), nil
 	}
-	return append([]string{s.binary}, combineArgv(s.extraArgv, suffix)...), nil
 }
 
-func combineArgv(extra, suffix []string) []string {
-	return slices.Concat(extra, suffix)
+func (s resolvedShell) launchArgv(suffix []string) []string {
+	return append([]string{s.binary}, s.argvWithExtra(suffix)...)
+}
+
+func (s resolvedShell) argvWithExtra(suffix []string) []string {
+	if len(s.extraArgv) == 0 {
+		return suffix
+	}
+	return append(slices.Clone(s.extraArgv), suffix...)
 }
 
 func classifyShellKind(shell string) shellKind {
@@ -661,24 +671,22 @@ var preservedEnvironmentVariables = []string{
 	"TMP",
 }
 
-func commandEnvironment(clean bool, overrides map[string]string, removals []string) []string {
-	if !clean && len(overrides) == 0 && len(removals) == 0 {
+func commandEnvironment(clean bool, overrides map[string]*string) []string {
+	if !clean && len(overrides) == 0 {
 		return nil
 	}
 	env := inheritedCommandEnvironment(clean)
 
-	for _, name := range removals {
-		deleteEnvironmentValue(env, name)
-	}
 	for name, value := range overrides {
-		setEnvironmentValue(env, name, value)
+		if value == nil {
+			deleteEnvironmentValue(env, name)
+		} else {
+			setEnvironmentValue(env, name, *value)
+		}
 	}
 
-	keys := make([]string, 0, len(env))
-	for name := range env {
-		keys = append(keys, name)
-	}
-	sort.Strings(keys)
+	keys := slices.Collect(maps.Keys(env))
+	slices.Sort(keys)
 	result := make([]string, 0, len(keys))
 	for _, name := range keys {
 		result = append(result, name+"="+env[name])

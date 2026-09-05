@@ -10,7 +10,6 @@ import (
 	"regexp"
 	"runtime"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -84,12 +83,12 @@ type EnvironmentProviderConfig struct {
 	// Nil uses a small default list; an empty non-nil slice disables tool probes.
 	ProbeTools []string
 
-	// OverrideFamily forces the reported shell family when non-zero.
-	// The zero value, [ShellFamilyUnknown], auto-detects the shell family.
-	OverrideFamily ShellFamily
+	// OverrideFamily forces the reported shell family when non-nil.
+	OverrideFamily *ShellFamily
 
-	// ProbeTimeout bounds each individual probe. Zero uses a 5 second default.
-	ProbeTimeout time.Duration
+	// ProbeTimeout bounds each individual probe. Nil uses a 5 second default.
+	// Negative values are invalid.
+	ProbeTimeout *time.Duration
 
 	// InstructionsFormatter renders a snapshot into agent instructions.
 	// Defaults to [DefaultShellEnvironmentInstructions].
@@ -99,9 +98,11 @@ type EnvironmentProviderConfig struct {
 // EnvironmentProvider probes a local shell and injects shell-specific
 // instructions through an [agent.ContextProvider].
 type EnvironmentProvider struct {
-	executor Executor
-	config   EnvironmentProviderConfig
-	provider agent.ContextProvider
+	executor             Executor
+	config               EnvironmentProviderConfig
+	provider             agent.ContextProvider
+	overrideFamily       ShellFamily
+	probeTimeoutDuration time.Duration
 
 	mu           sync.Mutex
 	current      *ShellEnvironmentSnapshot
@@ -119,7 +120,30 @@ func NewEnvironmentProvider(executor Executor, config EnvironmentProviderConfig)
 	if executor == nil {
 		panic("shelltool: executor is required")
 	}
-	p := &EnvironmentProvider{executor: executor, config: config}
+	overrideFamily := ShellFamilyUnknown
+	if config.OverrideFamily != nil {
+		overrideFamily = *config.OverrideFamily
+		switch overrideFamily {
+		case ShellFamilyPOSIX, ShellFamilyPowerShell:
+		default:
+			panic(fmt.Sprintf("shelltool: invalid shell family %d", overrideFamily))
+		}
+	}
+	probeTimeout := defaultProbeTimeout
+	if config.ProbeTimeout != nil {
+		probeTimeout = *config.ProbeTimeout
+		if probeTimeout < 0 {
+			panic(fmt.Sprintf("shelltool: ProbeTimeout must be non-negative, got %s", probeTimeout))
+		}
+	}
+	config.OverrideFamily = nil
+	config.ProbeTimeout = nil
+	p := &EnvironmentProvider{
+		executor:             executor,
+		config:               config,
+		overrideFamily:       overrideFamily,
+		probeTimeoutDuration: probeTimeout,
+	}
 	sourceID := strings.TrimSpace(config.SourceID)
 	if sourceID == "" {
 		sourceID = defaultShellEnvironmentSourceID
@@ -131,10 +155,13 @@ func NewEnvironmentProvider(executor Executor, config EnvironmentProviderConfig)
 	return p
 }
 
+// Invoking implements agent.ContextProvider by delegating to the wrapped provider, applying this provider's context/instructions to the invocation.
 func (p *EnvironmentProvider) Invoking(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
 	return p.provider.Invoking(ctx, invoking)
 }
 
+// Invoked implements agent.ContextProvider by delegating to the wrapped provider.
+// The wrapped provider is configured without a Store, so this is a no-op on success.
 func (p *EnvironmentProvider) Invoked(ctx context.Context, invoked agent.InvokedContext) error {
 	return p.provider.Invoked(ctx, invoked)
 }
@@ -261,8 +288,8 @@ func (p *EnvironmentProvider) probe(ctx context.Context) (ShellEnvironmentSnapsh
 }
 
 func (p *EnvironmentProvider) detectFamily() ShellFamily {
-	if p.config.OverrideFamily != ShellFamilyUnknown {
-		return p.config.OverrideFamily
+	if p.overrideFamily != ShellFamilyUnknown {
+		return p.overrideFamily
 	}
 	if runtime.GOOS == "windows" {
 		return ShellFamilyPowerShell
@@ -275,13 +302,6 @@ func (p *EnvironmentProvider) probeTools() []string {
 		return slices.Clone(defaultProbeTools)
 	}
 	return slices.Clone(p.config.ProbeTools)
-}
-
-func (p *EnvironmentProvider) probeTimeout() time.Duration {
-	if p.config.ProbeTimeout > 0 {
-		return p.config.ProbeTimeout
-	}
-	return defaultProbeTimeout
 }
 
 func (p *EnvironmentProvider) probeShellAndCWD(ctx context.Context, family ShellFamily) (string, string, error) {
@@ -329,7 +349,7 @@ func (p *EnvironmentProvider) probeToolVersion(ctx context.Context, name string)
 }
 
 func (p *EnvironmentProvider) runProbe(ctx context.Context, command string) (Result, bool, error) {
-	probeCtx, cancel := context.WithTimeout(ctx, p.probeTimeout())
+	probeCtx, cancel := context.WithTimeout(ctx, p.probeTimeoutDuration)
 	defer cancel()
 
 	result, err := p.executor.Run(probeCtx, command)
@@ -420,11 +440,8 @@ func DefaultShellEnvironmentInstructions(snapshot ShellEnvironmentSnapshot) stri
 }
 
 func formatToolVersions(versions map[string]ToolVersion) (installed, missing []string) {
-	keys := make([]string, 0, len(versions))
-	for name := range versions {
-		keys = append(keys, name)
-	}
-	sort.Strings(keys)
+	keys := slices.Collect(maps.Keys(versions))
+	slices.Sort(keys)
 	for _, name := range keys {
 		version := versions[name]
 		if version.Found {

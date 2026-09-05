@@ -31,3 +31,44 @@ jobs:
         with:
           version: latest
           args: --verbose
+
+  no-binaries:
+    name: no committed binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Check for committed binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Compiled binaries and build artifacts are reproducible from source
+          # and must never be checked in (see .github/copilot-instructions.md).
+          # Fail if any tracked file is a compiled executable, shared object,
+          # object/archive, or a well-known build-artifact extension.
+          violations=""
+          while IFS= read -r f; do
+            [ -f "$f" ] || continue
+            case "$f" in
+              *.exe|*.dll|*.so|*.dylib|*.test|*.a|*.o|*.out|coverage.html)
+                violations="${violations}${f}"$'\n'; continue;;
+            esac
+            # Only inspect binary-content files; text (e.g. scripts) is skipped.
+            mime=$(file --mime -b -- "$f" 2>/dev/null || echo "")
+            case "$mime" in
+              *charset=binary*) ;;
+              *) continue;;
+            esac
+            desc=$(file -b -- "$f" 2>/dev/null || echo "")
+            case "$desc" in
+              *executable*|*Mach-O*|*ELF*|*PE32*|*"ar archive"*|*"shared object"*|*"relocatable"*)
+                violations="${violations}${f}"$'\n';;
+            esac
+          done < <(git ls-files)
+          if [ -n "$violations" ]; then
+            echo "::error::Committed compiled binaries/build artifacts detected. Remove them; binaries are reproducible from source and must not be checked in."
+            printf '%s' "$violations"
+            exit 1
+          fi
+          echo "No committed binaries found."
+

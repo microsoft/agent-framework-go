@@ -180,7 +180,6 @@ var agentsExamples = []ExampleDefinition{
 		ProjectPath:                  "examples/02-agents/agents/step09_dependency_injection",
 		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
 		OptionalEnvironmentVariables: []string{"FOUNDRY_MODEL"},
-		SkipReason:                   "Example is currently a TODO placeholder and produces no output.",
 		ExpectedOutputDescription: []string{
 			"The output should contain a joke about a pirate.",
 			"The output should not contain error messages or stack traces.",
@@ -216,6 +215,42 @@ var agentsExamples = []ExampleDefinition{
 		},
 	},
 	{
+		Name:                         "02_agents_agents_step13_middleware",
+		ProjectPath:                  "examples/02-agents/agents/step13_middleware",
+		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
+		OptionalEnvironmentVariables: []string{"FOUNDRY_MODEL"},
+		MustContain: []string{
+			">> Guardrail middleware: filtered input messages",
+			">> PII middleware: filtered input messages",
+		},
+		ExpectedOutputDescription: []string{
+			"The output should show the Guardrail and PII middleware filtering messages before and after each run.",
+			"The responses should not contain the blocked keyword 'harmful', nor the raw email or phone number, since the middleware redacts them.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
+		Name:                         "02_agents_agents_message_injection",
+		ProjectPath:                  "examples/02-agents/agents/message-injection",
+		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
+		OptionalEnvironmentVariables: []string{"FOUNDRY_MODEL"},
+		ExpectedOutputDescription: []string{
+			"The output should report the status of order A-1234.",
+			"The final answer should incorporate the injected shipping update (out for delivery, expected today by 6pm), showing that the tool folded late context into the same run.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
+		Name:                         "02_agents_agents_step13_using_audio_and_files",
+		ProjectPath:                  "examples/02-agents/agents/step13_using_audio_and_files",
+		RequiredEnvironmentVariables: []string{"OPENAI_API_KEY", "FOUNDRY_PROJECT_ENDPOINT"},
+		ExpectedOutputDescription: []string{
+			"The output should include a transcription (or acknowledgement) of the attached audio clip and a summary of the attached PDF document.",
+			"The summary should reference the document content about an Agent Framework quarterly report.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
 		Name:                         "02_agents_agents_step17_additional_ai_context",
 		ProjectPath:                  "examples/02-agents/agents/step17_additional_ai_context",
 		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
@@ -240,6 +275,23 @@ var agentsExamples = []ExampleDefinition{
 		},
 	},
 	{
+		Name:            "02_agents_agents_step19_loop_reinvocation",
+		ProjectPath:     "examples/02-agents/agents/step19_loop_reinvocation",
+		IsDeterministic: true,
+		MustContain: []string{
+			"Completion-marker loop finished after 3 agent iteration(s) (cap 5).",
+			"Custom-evaluator loop stopped on approval after 2 iteration(s) (cap 4).",
+			"Custom-evaluator loop stopped at the safety cap after 3 iteration(s) (cap 3).",
+		},
+		MustNotContain: []string{"Error:", "panic:"},
+		ExpectedOutputDescription: []string{
+			"The output should show the loop harness re-invoking an agent until an evaluator stops it.",
+			"A completion-marker loop should finish once the response contains the marker, before the MaxIterations cap.",
+			"A custom evaluator loop should stop on approval, and a separate run should stop at the MaxIterations safety cap.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
 		Name:                         "02_agents_agents_step22_foundry_memory",
 		ProjectPath:                  "examples/02-agents/agents/step22_foundry_memory",
 		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
@@ -250,6 +302,21 @@ var agentsExamples = []ExampleDefinition{
 		ExpectedOutputDescription: []string{
 			"The output should show Foundry memory being used across multiple agent sessions.",
 			"The later response should recall facts from the earlier conversation using shared Foundry memory.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
+		Name:                         "02_agents_agents_step23_planning_with_todos",
+		ProjectPath:                  "examples/02-agents/agents/step23_planning_with_todos",
+		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
+		OptionalEnvironmentVariables: []string{"FOUNDRY_MODEL"},
+		MustContain: []string{
+			"Planning With Todos",
+		},
+		ExpectedOutputDescription: []string{
+			"The output should show the agent planning a task by recording todo items, then switching to execute mode and completing them.",
+			"The assistant should reference adding a health-check endpoint and break the work into trackable todo items.",
+			"The final response should report which todo items remain, if any.",
 			"The output should not contain error messages or stack traces.",
 		},
 	},
@@ -270,6 +337,16 @@ var agentsExamples = []ExampleDefinition{
 		OptionalEnvironmentVariables: []string{"AZURE_OPENAI_DEPLOYMENT_NAME"},
 		ExpectedOutputDescription: []string{
 			"The output should contain two separate joke responses about a pirate.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
+		Name:                         "02_agents_providers_azure_openai_responses_background",
+		ProjectPath:                  "examples/02-agents/providers/azure/openai_responses_background",
+		RequiredEnvironmentVariables: []string{"AZURE_OPENAI_ENDPOINT"},
+		OptionalEnvironmentVariables: []string{"AZURE_OPENAI_DEPLOYMENT_NAME"},
+		ExpectedOutputDescription: []string{
+			"The output should contain a concise explanation of the theory of relativity.",
 			"The output should not contain error messages or stack traces.",
 		},
 	},
@@ -472,6 +549,26 @@ var agentsExamples = []ExampleDefinition{
 		},
 	},
 	{
+		Name:                         "02_agents_providers_openai_hosted_mcp",
+		ProjectPath:                  "examples/02-agents/providers/openai/hosted_mcp",
+		RequiredEnvironmentVariables: []string{"OPENAI_API_KEY"},
+		ExpectedOutputDescription: []string{
+			"The output should show an OpenAI Responses agent using the hosted Microsoft Learn MCP server to answer a documentation question.",
+			"It may show records of MCP tool calls or approval requests.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
+		Name:                         "02_agents_providers_openai_reasoning",
+		ProjectPath:                  "examples/02-agents/providers/openai/reasoning",
+		RequiredEnvironmentVariables: []string{"OPENAI_API_KEY"},
+		ExpectedOutputDescription: []string{
+			"The output should solve the chickens-and-rabbits puzzle, concluding there are 23 chickens and 12 rabbits.",
+			"The output should include a reasoning summary section separate from the final answer.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
 		Name:                         "02_agents_providers_gemini",
 		ProjectPath:                  "examples/02-agents/providers/gemini",
 		RequiredEnvironmentVariables: []string{"GEMINI_API_KEY"},
@@ -482,11 +579,32 @@ var agentsExamples = []ExampleDefinition{
 		},
 	},
 	{
+		Name:                         "02_agents_providers_gemini_thinking",
+		ProjectPath:                  "examples/02-agents/providers/gemini/thinking",
+		RequiredEnvironmentVariables: []string{"GEMINI_API_KEY"},
+		OptionalEnvironmentVariables: []string{"GEMINI_MODEL"},
+		ExpectedOutputDescription: []string{
+			"The output should contain a reasoning summary labeled with [reasoning] followed by the final answer.",
+			"The final answer should indicate that 9 sheep are left.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
 		Name:                         "02_agents_providers_anthropic",
 		ProjectPath:                  "examples/02-agents/providers/anthrophic",
 		RequiredEnvironmentVariables: []string{"ANTHROPIC_API_KEY"},
 		ExpectedOutputDescription: []string{
 			"The output should contain a joke about a pirate.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
+		Name:                         "02_agents_providers_anthropic_thinking",
+		ProjectPath:                  "examples/02-agents/providers/anthrophic/thinking",
+		RequiredEnvironmentVariables: []string{"ANTHROPIC_API_KEY"},
+		ExpectedOutputDescription: []string{
+			"The output should contain the model's reasoning (thinking) about the bat-and-ball problem.",
+			"The output should conclude that the ball costs 5 cents (equivalently $0.05).",
 			"The output should not contain error messages or stack traces.",
 		},
 	},
@@ -583,14 +701,20 @@ var agentsExamples = []ExampleDefinition{
 		SkipReason:                   "Starts an MCP server that does not exit.",
 	},
 	{
-		Name:        "02_agents_providers_github_copilot",
-		ProjectPath: "examples/02-agents/providers/github-copilot",
-		Inputs:      inputLines("Y", "Y", "Y"),
-		InputDelay:  3 * time.Second,
-		ExpectedOutputDescription: []string{
-			"The output should contain a response listing files in the current directory.",
-			"The output should not contain error messages or stack traces.",
-		},
+		Name:                         "02_agents_mcp_local_stdio_mcp",
+		ProjectPath:                  "examples/02-agents/mcp/local_stdio_mcp",
+		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
+		OptionalEnvironmentVariables: []string{"FOUNDRY_MODEL"},
+		SkipReason:                   "Spawns a local stdio MCP server subprocess (go run) that requires live Foundry credentials.",
+	},
+	{
+		Name:            "02_agents_providers_github_copilot",
+		ProjectPath:     "examples/02-agents/providers/github-copilot",
+		IsDeterministic: true,
+		Inputs:          inputLines("Y", "Y", "Y"),
+		InputDelay:      3 * time.Second,
+		MustContain:     []string{"main.go"},
+		MustNotContain:  []string{"panic:", "Permission denied"},
 	},
 	{
 		Name:                         "02_agents_skills_step01_file_based_skills",
@@ -637,6 +761,17 @@ var workflowExamples = []ExampleDefinition{
 		MustContain: []string{
 			"UppercaseExecutor",
 			"ReverseTextExecutor: !DLROW ,OLLEH",
+		},
+	},
+	{
+		Name:            "03_workflows_observability_executor_io",
+		ProjectPath:     "examples/03-workflows/observability/executor_io",
+		IsDeterministic: true,
+		MustContain: []string{
+			"invoked UppercaseExecutor: Hello, World!",
+			"completed UppercaseExecutor: HELLO, WORLD!",
+			"invoked ReverseTextExecutor: HELLO, WORLD!",
+			"completed ReverseTextExecutor: !DLROW ,OLLEH",
 		},
 	},
 	{
@@ -702,6 +837,17 @@ var workflowExamples = []ExampleDefinition{
 		},
 	},
 	{
+		Name:            "03_workflows_01_start_here_08_sequential_chain_only_responses",
+		ProjectPath:     "examples/03-workflows/01-start-here/08_sequential_chain_only_responses",
+		IsDeterministic: true,
+		MustContain: []string{
+			"Seed prompt: Write a one-line greeting.",
+			"Translator received 1 message(s):",
+			"Translator responds: Bonjour, le monde!",
+			"Approved: Bonjour, le monde!",
+		},
+	},
+	{
 		Name:                         "03_workflows_agents_custom_agent_executors",
 		ProjectPath:                  "examples/03-workflows/agents/custom_agent_executors",
 		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
@@ -735,6 +881,19 @@ var workflowExamples = []ExampleDefinition{
 		},
 	},
 	{
+		Name:                         "03_workflows_agents_workflow_as_an_agent_human_in_the_loop",
+		ProjectPath:                  "examples/03-workflows/agents/workflow_as_an_agent_human_in_the_loop",
+		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
+		OptionalEnvironmentVariables: []string{"FOUNDRY_MODEL"},
+		Inputs:                       inputLines("Y"),
+		InputDelay:                   5 * time.Second,
+		ExpectedOutputDescription: []string{
+			"The output should wrap a workflow as an agent that asks for approval before calling the weather tool.",
+			"After approval, the workflow should resume and report the weather in Amsterdam (cloudy with a high of 15°C).",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
 		Name:            "03_workflows_checkpoint_checkpoint_and_rehydrate",
 		ProjectPath:     "examples/03-workflows/checkpoint/checkpoint_and_rehydrate",
 		IsDeterministic: true,
@@ -755,18 +914,27 @@ var workflowExamples = []ExampleDefinition{
 		},
 	},
 	{
-		Name:        "03_workflows_checkpoint_checkpoint_with_human_in_the_loop",
-		ProjectPath: "examples/03-workflows/checkpoint/checkpoint_with_human_in_the_loop",
-		Inputs:      inputLines("50", "25", "40", "45", "42", "50", "25", "40", "45", "42"),
-		InputDelay:  time.Second,
+		Name:            "03_workflows_checkpoint_filesystem_checkpoint",
+		ProjectPath:     "examples/03-workflows/checkpoint/filesystem_checkpoint",
+		IsDeterministic: true,
+		MustContain: []string{
+			"Persisted",
+			"Closed the checkpoint store.",
+			"Reopened checkpoint store from disk.",
+			"Retrieved",
+			"Workflow completed with result:",
+		},
+	},
+	{
+		Name:            "03_workflows_checkpoint_checkpoint_with_human_in_the_loop",
+		ProjectPath:     "examples/03-workflows/checkpoint/checkpoint_with_human_in_the_loop",
+		IsDeterministic: true,
+		Inputs:          inputLines("50", "25", "40", "45", "42", "50", "25", "40", "45", "42"),
+		InputDelay:      time.Second,
 		MustContain: []string{
 			"Workflow completed with result:",
 			"Number of checkpoints created:",
 			"Restored run completed with result:",
-		},
-		ExpectedOutputDescription: []string{
-			"The output should show a number guessing workflow with higher/lower hints that eventually reaches the correct number.",
-			"The output should demonstrate checkpoint save and restore behavior.",
 		},
 	},
 	{
@@ -781,6 +949,17 @@ var workflowExamples = []ExampleDefinition{
 		OptionalEnvironmentVariables: []string{"FOUNDRY_MODEL"},
 		ExpectedOutputDescription: []string{
 			"The output should show results from concurrent agent processing.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
+		Name:                         "03_workflows_concurrent_concurrent_custom_aggregator",
+		ProjectPath:                  "examples/03-workflows/concurrent/concurrent_custom_aggregator",
+		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
+		OptionalEnvironmentVariables: []string{"FOUNDRY_MODEL"},
+		MustContain:                  []string{"Combined expert summary:"},
+		ExpectedOutputDescription: []string{
+			"The output should show several domain experts' answers folded into a single combined summary message.",
 			"The output should not contain error messages or stack traces.",
 		},
 	},
@@ -803,19 +982,51 @@ var workflowExamples = []ExampleDefinition{
 		MustContain:     []string{"Email sent:", "Logged: Summary:"},
 	},
 	{
-		Name:        "03_workflows_human_in_the_loop_human_in_the_loop_basic",
-		ProjectPath: "examples/03-workflows/human-in-the-loop/human_in_the_loop_basic",
-		Inputs:      inputLines("50", "25", "40", "45", "42"),
-		InputDelay:  time.Second,
-		MustContain: []string{"found in"},
+		Name:            "03_workflows_conditional_edges_04_intermediate_outputs",
+		ProjectPath:     "examples/03-workflows/conditional-edges/04_intermediate_outputs",
+		IsDeterministic: true,
+		MustContain:     []string{"[intermediate] normalized hello workflow", "[final] Summary of"},
+	},
+	{
+		Name:            "03_workflows_human_in_the_loop_human_in_the_loop_basic",
+		ProjectPath:     "examples/03-workflows/human-in-the-loop/human_in_the_loop_basic",
+		IsDeterministic: true,
+		Inputs:          inputLines("50", "25", "40", "45", "42"),
+		InputDelay:      time.Second,
+		MustContain:     []string{"42 found in 5 tries!"},
+	},
+	{
+		Name:            "03_workflows_human_in_the_loop_imperative_request",
+		ProjectPath:     "examples/03-workflows/human-in-the-loop/imperative_request",
+		IsDeterministic: true,
+		MustContain:     []string{"Executor asked: What is your name?", "Workflow completed with result: Hello, Ada!"},
 		ExpectedOutputDescription: []string{
-			"The output should show a number guessing game with higher/lower hints that eventually reaches the correct number 42.",
+			"The output should show an executor raising a human-in-the-loop request imperatively and completing with the greeting \"Hello, Ada!\".",
 		},
 	},
 	{
 		Name:        "03_workflows_loop",
 		ProjectPath: "examples/03-workflows/loop",
 		MustContain: []string{"found in"},
+	},
+	{
+		Name:        "03_workflows_cancellation",
+		ProjectPath: "examples/03-workflows/cancellation",
+		MustContain: []string{
+			"Cancelling run after",
+			"final run status:",
+		},
+	},
+	{
+		Name:            "03_workflows_message_workflow",
+		ProjectPath:     "examples/03-workflows/message-workflow",
+		IsDeterministic: true,
+		MustContain: []string{
+			"You said: hello | how are you?",
+			"forwarded turn tokens: 1",
+			"forwarded turn tokens: 0",
+			"TakeTurnHandler invocations: 1",
+		},
 	},
 	{
 		Name:            "03_workflows_shared_states",
@@ -841,6 +1052,16 @@ var workflowExamples = []ExampleDefinition{
 			"Nested Sub-Workflows",
 			"Starting order processing",
 			"Order completed:",
+		},
+	},
+	{
+		Name:            "03_workflows_subworkflows_request_interception",
+		ProjectPath:     "examples/03-workflows/subworkflows/request_interception",
+		IsDeterministic: true,
+		MustContain: []string{
+			"Sub-Workflow Request Interception",
+			"Path: AUTO-APPROVED",
+			"Path: ESCALATED",
 		},
 	},
 }

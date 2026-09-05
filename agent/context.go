@@ -46,6 +46,10 @@ type ContextProvider interface {
 
 // InvokingContext contains the agent invocation context available to a
 // [ContextProvider] before the provider run starts.
+//
+// Providers must treat the message and option slices, and existing messages,
+// as read-only. To modify the invocation, clone the slices and any message
+// being changed, then return the derived values from Invoking.
 type InvokingContext struct {
 	// Messages are the request messages currently being prepared for the invocation.
 	Messages []*message.Message
@@ -56,6 +60,9 @@ type InvokingContext struct {
 
 // InvokedContext contains the agent invocation context available to a
 // [ContextProvider] after a provider run completes.
+//
+// Providers must treat the message and option slices, and existing messages,
+// as read-only. Clone them before retaining modified copies.
 type InvokedContext struct {
 	// RequestMessages are the messages used for the invocation.
 	RequestMessages []*message.Message
@@ -104,7 +111,12 @@ type defaultContextProvider struct {
 // results as additive, source-stamps provided messages, appends provided
 // messages and options to the original invocation context, filters stored
 // request and response messages, and skips Store when the run fails.
+//
+// It panics if SourceID is empty.
 func NewContextProvider(config ContextProviderConfig) ContextProvider {
+	if config.SourceID == "" {
+		panic("SourceID is required")
+	}
 	return &defaultContextProvider{config: config}
 }
 
@@ -133,21 +145,23 @@ func (p *defaultContextProvider) Invoking(ctx context.Context, invoking Invoking
 
 	outMessages := invoking.Messages
 	if len(providedMessages) > 0 {
+		outMessages = make([]*message.Message, len(invoking.Messages), len(invoking.Messages)+len(providedMessages))
+		copy(outMessages, invoking.Messages)
 		source := message.Source{Type: SourceTypeContextProvider, ID: p.config.SourceID}
-		for i, msg := range providedMessages {
+		for _, msg := range providedMessages {
 			if msg == nil || msg.Source == source {
+				outMessages = append(outMessages, msg)
 				continue
 			}
 			marked := msg.Clone()
 			marked.Source = source
-			providedMessages[i] = marked
+			outMessages = append(outMessages, marked)
 		}
-		outMessages = append(outMessages, providedMessages...)
 	}
 
 	outOptions := invoking.Options
 	if len(providedOptions) > 0 {
-		outOptions = append(outOptions, providedOptions...)
+		outOptions = append(slices.Clone(invoking.Options), providedOptions...)
 	}
 
 	return outMessages, outOptions, nil
@@ -168,17 +182,16 @@ func (p *defaultContextProvider) Invoked(ctx context.Context, invoked InvokedCon
 	if requestFilter == nil {
 		requestFilter = messagefilter.ExternalOnly
 	}
-	responseFilter := p.config.StoreInputResponseMessageFilter
-	if responseFilter == nil {
-		responseFilter = messagefilter.PassThrough
-	}
-	filteredReq, err := requestFilter(ctx, invoked.RequestMessages)
+	filteredReq, err := requestFilter(ctx, slices.Clone(invoked.RequestMessages))
 	if err != nil {
 		return err
 	}
-	filteredResp, err := responseFilter(ctx, invoked.ResponseMessages)
-	if err != nil {
-		return err
+	filteredResp := invoked.ResponseMessages
+	if responseFilter := p.config.StoreInputResponseMessageFilter; responseFilter != nil {
+		filteredResp, err = responseFilter(ctx, slices.Clone(invoked.ResponseMessages))
+		if err != nil {
+			return err
+		}
 	}
 	return p.config.Store(ctx, InvokedContext{RequestMessages: filteredReq, ResponseMessages: filteredResp, Options: invoked.Options, Err: invoked.Err})
 }
@@ -200,7 +213,6 @@ type contextProviderMiddleware struct {
 
 func (r *contextProviderMiddleware) Run(next RunFunc, ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error] {
 	return func(yield func(*ResponseUpdate, error) bool) {
-		options = slices.Clone(options)
 		var err error
 		messages, options, err = r.provider.Invoking(ctx, InvokingContext{Messages: messages, Options: options})
 		if err != nil {
@@ -208,9 +220,10 @@ func (r *contextProviderMiddleware) Run(next RunFunc, ctx context.Context, messa
 			return
 		}
 
-		requestMessages := slices.Clone(messages)
+		requestMessages := messages
 		var resp Response
 		var invokeErr error
+		var stopped bool
 		for update, err := range next(ctx, messages, options...) {
 			if update != nil {
 				resp.Update(update)
@@ -219,13 +232,16 @@ func (r *contextProviderMiddleware) Run(next RunFunc, ctx context.Context, messa
 				invokeErr = err
 			}
 			if !yield(update, err) {
+				stopped = true
 				break
 			}
 		}
 		resp.Coalesce()
 
 		if err := r.provider.Invoked(ctx, InvokedContext{RequestMessages: requestMessages, ResponseMessages: resp.Messages, Options: options, Err: invokeErr}); err != nil {
-			yield(nil, err)
+			if !stopped {
+				yield(nil, err)
+			}
 			return
 		}
 	}

@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"weak"
@@ -29,11 +30,16 @@ const stateKey = "todoProviderState"
 const defaultInstructions = `## Todo Items
 
 You have access to a todo list for tracking work items.
-While planning, make sure that you break down complex tasks into manageable todo items and add them to the list.
+When a user asks you to perform a task, follow these steps to manage your work:
+1. Determine whether the ask requires multiple steps to complete (complex) or can be completed using a single step (simple).
+2. If complex, turn the task into manageable todo items and add them to the list.
+3. If simple, don't add a todo item, but rather just complete the task directly.
+
+### General TODO Guidelines
 Ask questions from the user where clarification is needed to create effective todos.
-If the user provides feedback on your plan, adjust your todos accordingly by adding new items or removing irrelevant ones.
+If the user provides feedback on your plan, adjust your todos accordingly by adding new items or removing irrelevant/old ones.
 During execution, use the todo list to keep track of what needs to be done, mark items as complete when finished, and remove any items that are no longer needed.
-When a user changes the topic or changes their mind, ensure that you update the todo list accordingly by removing irrelevant items or adding new ones as needed.
+When a user changes the topic, changes their mind or switches to a new request, ensure that you update the todo list accordingly by removing irrelevant/old items, clearing the list, or adding new ones as needed.
 
 Use these tools to manage your tasks:
 - Use todos_add to break down complex work into trackable items (supports adding one or many at once).
@@ -71,7 +77,7 @@ type state struct {
 // Options configures the todo provider.
 type Options struct {
 	// Instructions overrides the default instructions provided to the agent.
-	Instructions string
+	Instructions *string
 
 	// SuppressTodoListMessage, when true, prevents injecting the current todo
 	// list summary message on each invocation.
@@ -100,8 +106,8 @@ func New(opts *Options) *Provider {
 		instructions: defaultInstructions,
 	}
 	if opts != nil {
-		if opts.Instructions != "" {
-			p.instructions = opts.Instructions
+		if opts.Instructions != nil {
+			p.instructions = *opts.Instructions
 		}
 		p.suppressTodoMessage = opts.SuppressTodoListMessage
 		p.todoListMessageBuilder = opts.TodoListMessageBuilder
@@ -114,10 +120,13 @@ func New(opts *Options) *Provider {
 	return p
 }
 
+// Invoking implements agent.ContextProvider by delegating to the wrapped provider, applying this provider's context/instructions to the invocation.
 func (p *Provider) Invoking(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
 	return p.provider.Invoking(ctx, invoking)
 }
 
+// Invoked implements agent.ContextProvider by delegating to the wrapped provider.
+// The wrapped provider is configured without a Store, so this is a no-op on success.
 func (p *Provider) Invoked(ctx context.Context, invoked agent.InvokedContext) error {
 	return p.provider.Invoked(ctx, invoked)
 }
@@ -128,9 +137,7 @@ func (p *Provider) GetAllItems(opts ...agent.Option) []Item {
 	mu.Lock()
 	defer mu.Unlock()
 	st := p.loadState(opts)
-	result := make([]Item, len(st.Items))
-	copy(result, st.Items)
-	return result
+	return slices.Clone(st.Items)
 }
 
 // GetRemainingItems returns only the incomplete todo items from the session state.
@@ -139,13 +146,7 @@ func (p *Provider) GetRemainingItems(opts ...agent.Option) []Item {
 	mu.Lock()
 	defer mu.Unlock()
 	st := p.loadState(opts)
-	var remaining []Item
-	for _, item := range st.Items {
-		if !item.IsComplete {
-			remaining = append(remaining, item)
-		}
-	}
-	return remaining
+	return remainingItems(st.Items)
 }
 
 func (p *Provider) loadState(opts []agent.Option) *state {
@@ -336,13 +337,7 @@ func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
 			mu.Lock()
 			defer mu.Unlock()
 			st := p.loadState(opts)
-			var remaining []Item
-			for _, item := range st.Items {
-				if !item.IsComplete {
-					remaining = append(remaining, item)
-				}
-			}
-			return remaining, nil
+			return remainingItems(st.Items), nil
 		},
 	)
 
@@ -361,6 +356,16 @@ func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
 	)
 
 	return []tool.FuncTool{addTool, completeTool, removeTool, getRemainingTool, getAllTool}
+}
+
+func remainingItems(items []Item) []Item {
+	var remaining []Item
+	for _, item := range items {
+		if !item.IsComplete {
+			remaining = append(remaining, item)
+		}
+	}
+	return remaining
 }
 
 func formatTodoListMessage(items []Item) string {

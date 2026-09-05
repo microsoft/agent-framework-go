@@ -5,6 +5,7 @@ package execution
 import (
 	"context"
 	"reflect"
+	"slices"
 	"sync"
 
 	"github.com/microsoft/agent-framework-go/workflow"
@@ -47,7 +48,7 @@ func (s *ConcurrentEventSink) RemoveHandler(handler func(context.Context, any, w
 	defer s.mu.Unlock()
 	for i, current := range s.EventRaised {
 		if reflect.ValueOf(current).Pointer() == target {
-			s.EventRaised = append(s.EventRaised[:i], s.EventRaised[i+1:]...)
+			s.EventRaised = slices.Delete(s.EventRaised, i, i+1)
 			return
 		}
 	}
@@ -61,7 +62,7 @@ func (s *ConcurrentEventSink) HandlerCount() int {
 
 func (s *ConcurrentEventSink) Enqueue(ctx context.Context, evt workflow.Event) error {
 	s.mu.RLock()
-	handlers := append([]func(context.Context, any, workflow.Event) error(nil), s.EventRaised...)
+	handlers := slices.Clone(s.EventRaised)
 	s.mu.RUnlock()
 
 	for _, handler := range handlers {
@@ -82,8 +83,8 @@ type SuperStepRunner interface {
 	RepublishPendingEvents(context.Context) error
 
 	EnqueueResponse(context.Context, *workflow.ExternalResponse) error
-	IsValidInputType(context.Context, reflect.Type) bool
-	EnqueueMessage(context.Context, any) error
+	IsValidInputType(context.Context, reflect.Type) (bool, error)
+	EnqueueMessageUntyped(context.Context, any, reflect.Type) (bool, error)
 
 	OutgoingEvents() *ConcurrentEventSink
 

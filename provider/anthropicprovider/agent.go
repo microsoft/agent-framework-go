@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"iter"
 	"maps"
+	"mime"
 	"reflect"
 	"slices"
 	"strings"
@@ -20,11 +21,12 @@ import (
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
+	"github.com/microsoft/agent-framework-go/tool/hostedtool"
 )
 
 type messageNewParamsOpt anthropic.MessageNewParams
 
-func (o messageNewParamsOpt) Value() any { return anthropic.MessageNewParams(o) }
+func (o messageNewParamsOpt) MAFValue() any { return anthropic.MessageNewParams(o) }
 
 // MessageNewParams allows passing custom parameters to the underlying anthropic API calls.
 func MessageNewParams(params anthropic.MessageNewParams) agent.Option {
@@ -40,27 +42,30 @@ type client struct {
 type AgentConfig struct {
 	agent.Config
 
+	// ToolAutoCall configures automatic function-tool invocation. When nil, defaults
+	// are used.
+	ToolAutoCall *toolautocall.Config
+
 	// Instructions are provided to Anthropic as system instructions for each run.
 	Instructions string
 
 	Model string
 }
 
+// NewAgent creates a new [agent.Agent] backed by the Anthropic Messages API via the anthropic client.
 func NewAgent(aclient anthropic.Client, config AgentConfig) *agent.Agent {
 	c := &client{
 		client: aclient,
 		config: config,
 	}
 	if config.Instructions != "" {
-		config.RunOptions = append(config.RunOptions, agent.WithInstructions(config.Instructions))
+		config.RunOptions = append(slices.Clone(config.RunOptions), agent.WithInstructions(config.Instructions))
 	}
-	var providerMiddlewares []agent.Middleware
-	if !config.DisableFuncAutoCall {
-		providerMiddlewares = append(providerMiddlewares, toolautocall.New(toolautocall.Config{
-			Logger:           config.Logger,
-			LogSensitiveData: config.LogSensitiveData,
-		}))
+	autoCall := toolautocall.Config{Logger: config.Logger, LogSensitiveData: config.LogSensitiveData}
+	if config.ToolAutoCall != nil {
+		autoCall = *config.ToolAutoCall
 	}
+	providerMiddlewares := []agent.Middleware{toolautocall.New(autoCall)}
 	return agent.New(agent.ProviderConfig{
 		Run:          c.run,
 		ProviderName: "anthropic",
@@ -116,14 +121,17 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				MessageID:         resp.ID,
 				ResponseID:        resp.ID,
 				CreatedAt:         time.Now(),
+				FinishReason:      mapStopReason(resp.StopReason),
 				RawRepresentation: resp,
 			}, nil)
 		}
 	}
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		stream := a.client.Messages.NewStreaming(ctx, params)
+		defer func() { _ = stream.Close() }()
 
 		var messageID string
+		var finishReason string
 		var usage message.UsageDetails
 		var accumulated anthropic.Message
 
@@ -140,7 +148,20 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				messageID = cmp.Or(messageID, event.Message.ID)
 				usage.Add(toUsageDetails(event.Message.Usage))
 			case anthropic.MessageDeltaEvent:
-				usage.Add(toUsageDetailsDelta(event.Usage))
+				// Anthropic reports the final cumulative output token count on
+				// message_delta, superseding the placeholder output count from
+				// message_start. Overwrite the output-derived counts from the
+				// delta instead of summing them; adding would double-count the
+				// message_start placeholder (and any earlier delta).
+				delta := toUsageDetailsDelta(event.Usage)
+				usage.OutputTokenCount = delta.OutputTokenCount
+				usage.ReasoningTokenCount = delta.ReasoningTokenCount
+				usage.TotalTokenCount = usage.InputTokenCount + usage.OutputTokenCount
+				// Later chunks may carry an empty stop_reason; don't clobber a
+				// value we already captured.
+				if fr := mapStopReason(event.Delta.StopReason); fr != "" {
+					finishReason = fr
+				}
 			case anthropic.ContentBlockStartEvent:
 				block := event.ContentBlock.AsAny()
 				if _, isToolUse := block.(anthropic.ToolUseBlock); !isToolUse {
@@ -149,12 +170,27 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 			case anthropic.ContentBlockDeltaEvent:
 				contents = a.buildDelta(event.Delta.AsAny(), contents)
 			case anthropic.ContentBlockStopEvent:
-				if block, ok := accumulated.Content[event.Index].AsAny().(anthropic.ToolUseBlock); ok {
+				switch block := accumulated.Content[event.Index].AsAny().(type) {
+				case anthropic.ToolUseBlock:
 					contents = append(contents, &message.FunctionCallContent{
 						CallID:    block.ID,
 						Name:      block.Name,
 						Arguments: string(block.Input),
 					})
+				case anthropic.TextBlock:
+					// The text itself is streamed incrementally via TextDelta, but
+					// citations are only available on the accumulated block. Emit an
+					// annotations-only TextContent (empty Text avoids duplicating the
+					// streamed text) so streamed responses carry the same citation
+					// annotations as the non-streaming path.
+					if annotations := citationAnnotations(block.Citations); annotations != nil {
+						contents = append(contents, &message.TextContent{
+							ContentHeader: message.ContentHeader{
+								Annotations:       annotations,
+								RawRepresentation: block,
+							},
+						})
+					}
 				}
 			}
 
@@ -169,10 +205,15 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				return
 			}
 		}
+		if err := stream.Err(); err != nil {
+			yield(nil, err)
+			return
+		}
 		if !yield(&agent.ResponseUpdate{
-			CreatedAt: time.Now(),
-			Role:      message.RoleAssistant,
-			MessageID: messageID,
+			CreatedAt:    time.Now(),
+			Role:         message.RoleAssistant,
+			MessageID:    messageID,
+			FinishReason: finishReason,
 			Contents: []message.Content{
 				&message.UsageContent{
 					Details: usage,
@@ -181,18 +222,35 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 		}, nil) {
 			return
 		}
-		if err := stream.Err(); err != nil {
-			yield(nil, err)
-		}
+	}
+}
+
+// mapStopReason maps an Anthropic stop_reason to the canonical FinishReason
+// values shared across providers (mirroring the OpenAI/Copilot providers). It
+// returns "" for empty or unrecognized reasons so callers can fall through.
+func mapStopReason(reason anthropic.StopReason) string {
+	switch reason {
+	case anthropic.StopReasonEndTurn, anthropic.StopReasonStopSequence, anthropic.StopReasonPauseTurn:
+		return "stop"
+	case anthropic.StopReasonMaxTokens:
+		return "length"
+	case anthropic.StopReasonToolUse:
+		return "tool_calls"
+	case anthropic.StopReasonRefusal:
+		return "content_filter"
+	default:
+		return ""
 	}
 }
 
 func toUsageDetails(usage anthropic.Usage) message.UsageDetails {
+	inputTokens := usage.InputTokens + usage.CacheCreationInputTokens + usage.CacheReadInputTokens
 	details := message.UsageDetails{
-		InputTokenCount:       usage.InputTokens,
+		InputTokenCount:       inputTokens,
 		OutputTokenCount:      usage.OutputTokens,
-		TotalTokenCount:       usage.InputTokens + usage.OutputTokens,
+		TotalTokenCount:       inputTokens + usage.OutputTokens,
 		CachedInputTokenCount: usage.CacheReadInputTokens,
+		ReasoningTokenCount:   usage.OutputTokensDetails.ThinkingTokens,
 	}
 	if usage.CacheCreationInputTokens != 0 {
 		if details.AdditionalCounts == nil {
@@ -209,26 +267,17 @@ func toUsageDetailsDelta(usage anthropic.MessageDeltaUsage) message.UsageDetails
 		OutputTokens:             usage.OutputTokens,
 		CacheCreationInputTokens: usage.CacheCreationInputTokens,
 		CacheReadInputTokens:     usage.CacheReadInputTokens,
+		OutputTokensDetails:      usage.OutputTokensDetails,
 	})
 }
 
 func (a *client) buildBlock(index int, v any, contents []message.Content, functions map[int]*message.FunctionCallContent) []message.Content {
 	switch v := v.(type) {
 	case anthropic.TextBlock:
-		var annotations []message.Annotation
-		for _, citation := range v.Citations {
-			annotations = append(annotations, &message.CitationAnnotation{
-				FileID:            citation.FileID,
-				Snippet:           citation.CitedText,
-				Title:             cmp.Or(citation.DocumentTitle, citation.Title),
-				URL:               citation.URL,
-				RawRepresentation: citation,
-			})
-		}
 		contents = append(contents, &message.TextContent{
 			Text: v.Text,
 			ContentHeader: message.ContentHeader{
-				Annotations:       annotations,
+				Annotations:       citationAnnotations(v.Citations),
 				RawRepresentation: v,
 			},
 		})
@@ -255,6 +304,23 @@ func (a *client) buildBlock(index int, v any, contents []message.Content, functi
 		}
 	}
 	return contents
+}
+
+// citationAnnotations converts Anthropic text-block citations into
+// [message.CitationAnnotation] values. It returns nil when there are no
+// citations so callers can leave the annotations slice unset.
+func citationAnnotations(citations []anthropic.TextCitationUnion) []message.Annotation {
+	var annotations []message.Annotation
+	for _, citation := range citations {
+		annotations = append(annotations, &message.CitationAnnotation{
+			FileID:            citation.FileID,
+			Snippet:           citation.CitedText,
+			Title:             cmp.Or(citation.DocumentTitle, citation.Title),
+			URL:               citation.URL,
+			RawRepresentation: citation,
+		})
+	}
+	return annotations
 }
 
 func (a *client) buildDelta(v any, contents []message.Content) []message.Content {
@@ -303,27 +369,20 @@ func (a *client) buildMessageParams(messages []*message.Message, opts []agent.Op
 
 	var tools []anthropic.ToolUnionParam
 	for tl := range agent.AllOptions(opts, agent.WithTool) {
+		if ws, ok := tl.(*hostedtool.WebSearch); ok {
+			tools = append(tools, anthropic.ToolUnionParam{
+				OfWebSearchTool20250305: buildWebSearchTool(ws),
+			})
+			continue
+		}
 		if ft, ok := tl.(tool.FuncTool); ok {
 			name, description := ft.Name(), ft.Description()
 			var properties any
 			var required []string
 
-			// Extract schema details - first convert to map[string]any if needed
-			schema := ft.Schema()
-			var schemaMap map[string]any
-
-			switch s := schema.(type) {
-			case map[string]any:
-				schemaMap = s
-			default:
-				// For *jsonschema.Schema or other types, marshal to JSON then unmarshal to map
-				if schema != nil {
-					jsonBytes, err := json.Marshal(schema)
-					if err == nil {
-						_ = json.Unmarshal(jsonBytes, &schemaMap)
-					}
-				}
-			}
+			// Preserve existing lenient tool schema handling: unusable schemas
+			// simply leave properties and required empty.
+			schemaMap, _ := schemaMapFromAny(ft.Schema())
 
 			if schemaMap != nil {
 				if props, ok := schemaMap["properties"]; ok {
@@ -345,6 +404,24 @@ func (a *client) buildMessageParams(messages []*message.Message, opts []agent.Op
 			schemaParam := anthropic.ToolInputSchemaParam{
 				Properties: properties,
 				Required:   required,
+			}
+
+			// Carry the remaining JSON Schema keywords (e.g. additionalProperties:false
+			// emitted by functool's strict schema) through ExtraFields so the
+			// model-facing schema stays in sync with the Go-side resolved-schema
+			// validation funcTool.Call performs. Without this a hallucinated extra
+			// argument would pass the model but be rejected by functool. This mirrors
+			// the OpenAI and Gemini providers, which forward the full schema.
+			for k, v := range schemaMap {
+				switch k {
+				case "type", "properties", "required":
+					// Already represented on the typed fields above.
+				default:
+					if schemaParam.ExtraFields == nil {
+						schemaParam.ExtraFields = make(map[string]any)
+					}
+					schemaParam.ExtraFields[k] = v
+				}
 			}
 
 			toolParam := anthropic.ToolUnionParamOfTool(schemaParam, name)
@@ -369,14 +446,12 @@ func (a *client) buildMessageParams(messages []*message.Message, opts []agent.Op
 				OfNone: &anthropic.ToolChoiceNoneParam{},
 			}
 		case tool.ToolModeRequired:
-			names := mode.Required()
-			if len(names) != 1 {
-				// Anthropic requires either a single tool name or "any" for multiple tools
+			if name, ok := mode.RequiredTool(); !ok {
 				params.ToolChoice = anthropic.ToolChoiceUnionParam{
 					OfAny: &anthropic.ToolChoiceAnyParam{},
 				}
 			} else {
-				params.ToolChoice = anthropic.ToolChoiceParamOfTool(names[0])
+				params.ToolChoice = anthropic.ToolChoiceParamOfTool(name)
 			}
 		}
 	}
@@ -384,18 +459,9 @@ func (a *client) buildMessageParams(messages []*message.Message, opts []agent.Op
 	if frmt, ok := agent.GetOption(opts, agent.WithResponseFormat); ok {
 		if frmt.Kind == "json" {
 			if schema := frmt.Schema; schema != nil {
-				var schemaMap map[string]any
-				switch s := schema.(type) {
-				case map[string]any:
-					schemaMap = s
-				default:
-					jsonBytes, err := json.Marshal(s)
-					if err != nil {
-						return anthropic.MessageNewParams{}, fmt.Errorf("failed to marshal structured output schema: %w", err)
-					}
-					if err := json.Unmarshal(jsonBytes, &schemaMap); err != nil {
-						return anthropic.MessageNewParams{}, fmt.Errorf("failed to unmarshal structured output schema: %w", err)
-					}
+				schemaMap, err := schemaMapFromAny(schema)
+				if err != nil {
+					return anthropic.MessageNewParams{}, err
 				}
 				if schemaMap != nil {
 					params.OutputConfig.Format = anthropic.JSONOutputFormatParam{
@@ -431,11 +497,121 @@ func (a *client) buildMessageParams(messages []*message.Message, opts []agent.Op
 				}
 			}
 		default:
-			// Ignore
+			return anthropic.MessageNewParams{}, fmt.Errorf("anthropicprovider: unsupported message role %q", msg.Role)
 		}
 	}
 
 	return params, nil
+}
+
+// isPDFMediaType reports whether mediaType denotes a PDF document. Media types
+// may carry parameters (e.g. "application/pdf; charset=binary") and arbitrary
+// casing, so the base type is parsed and compared case-insensitively.
+func isPDFMediaType(mediaType string) bool {
+	base, _, err := mime.ParseMediaType(mediaType)
+	if err != nil {
+		base = strings.ToLower(strings.TrimSpace(mediaType))
+	}
+	return base == "application/pdf"
+}
+
+// buildWebSearchTool maps a hosted WebSearch tool to the Anthropic
+// web_search_20250305 tool request, populating the optional MaxUses,
+// AllowedDomains, BlockedDomains and UserLocation fields from the tool's
+// AdditionalProperties when present. This mirrors the OpenAI providers, which
+// already surface *hostedtool.WebSearch, and the Python
+// agent_framework_anthropic client, whose get_web_search_tool emits
+// web_search_20250305.
+func buildWebSearchTool(ws *hostedtool.WebSearch) *anthropic.WebSearchTool20250305Param {
+	param := &anthropic.WebSearchTool20250305Param{}
+	props := ws.AdditionalProperties
+	if props == nil {
+		return param
+	}
+	if v, ok := props["max_uses"]; ok {
+		if n, ok := toInt64(v); ok {
+			param.MaxUses = anthropic.Int(n)
+		}
+	}
+	if v, ok := props["allowed_domains"]; ok {
+		if domains, ok := toStringSlice(v); ok {
+			param.AllowedDomains = domains
+		}
+	}
+	if v, ok := props["blocked_domains"]; ok {
+		if domains, ok := toStringSlice(v); ok {
+			param.BlockedDomains = domains
+		}
+	}
+	if v, ok := props["user_location"]; ok {
+		if loc, ok := v.(map[string]string); ok {
+			if city := loc["city"]; city != "" {
+				param.UserLocation.City = anthropic.String(city)
+			}
+			if region := loc["region"]; region != "" {
+				param.UserLocation.Region = anthropic.String(region)
+			}
+			if country := loc["country"]; country != "" {
+				param.UserLocation.Country = anthropic.String(country)
+			}
+			if timezone := loc["timezone"]; timezone != "" {
+				param.UserLocation.Timezone = anthropic.String(timezone)
+			}
+		}
+	}
+	return param
+}
+
+// toInt64 coerces the numeric types JSON decoding and callers commonly produce
+// into an int64.
+func toInt64(v any) (int64, bool) {
+	switch n := v.(type) {
+	case int:
+		return int64(n), true
+	case int64:
+		return n, true
+	case float64:
+		return int64(n), true
+	}
+	return 0, false
+}
+
+// toStringSlice coerces a []string or a []any of strings into a []string.
+func toStringSlice(v any) ([]string, bool) {
+	switch s := v.(type) {
+	case []string:
+		return s, true
+	case []any:
+		out := make([]string, 0, len(s))
+		for _, e := range s {
+			str, ok := e.(string)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, str)
+		}
+		return out, true
+	}
+	return nil, false
+}
+
+func schemaMapFromAny(schema any) (map[string]any, error) {
+	switch s := schema.(type) {
+	case nil:
+		return nil, nil
+	case map[string]any:
+		return s, nil
+	default:
+		jsonBytes, err := json.Marshal(s)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal structured output schema: %w", err)
+		}
+		var schemaMap map[string]any
+		if err := json.Unmarshal(jsonBytes, &schemaMap); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal structured output schema: %w", err)
+		}
+		return schemaMap, nil
+	}
 }
 
 func buildMessageParam(msg *message.Message) (anthropic.MessageParam, error) {
@@ -445,6 +621,18 @@ func buildMessageParam(msg *message.Message) (anthropic.MessageParam, error) {
 		switch c := c.(type) {
 		case *message.TextContent:
 			content = append(content, anthropic.NewTextBlock(c.Text))
+		case *message.TextReasoningContent:
+			// Replay a prior assistant thinking block so its signature travels
+			// back with the request (Anthropic emits reasoning before the rest of
+			// the turn, so it is appended in iteration order). A redacted block
+			// carries only ProtectedData; skip streamed partials that never
+			// received a signature to avoid sending an invalid unsigned block.
+			switch {
+			case c.Text != "" && c.ProtectedData != "":
+				content = append(content, anthropic.NewThinkingBlock(c.ProtectedData, c.Text))
+			case c.Text == "" && c.ProtectedData != "":
+				content = append(content, anthropic.NewRedactedThinkingBlock(c.ProtectedData))
+			}
 		case *message.FunctionCallContent:
 			// Parse the JSON string arguments into a map for Anthropic SDK
 			var args map[string]any
@@ -462,31 +650,59 @@ func buildMessageParam(msg *message.Message) (anthropic.MessageParam, error) {
 			content = append(content, anthropic.NewToolUseBlock(c.CallID, args, c.Name))
 		case *message.FunctionResultContent:
 			resStr := ""
-			switch r := c.Result.(type) {
-			case json.RawMessage:
-				resStr = string(r)
-			case string:
-				resStr = r
-			case []byte:
-				resStr = string(r)
+			switch {
+			case c.Error != nil:
+				// Surface the diagnostic text so the model sees why the tool
+				// failed, mirroring the other providers (OpenAI Responses sends
+				// "Error: %v", Gemini sends {"error": ...}). Otherwise a failed
+				// result with a nil Result would serialize to the literal "null".
+				resStr = "Error: " + c.Error.Error()
 			default:
-				// Marshal any other type to JSON for proper formatting
-				jsonBytes, err := json.Marshal(c.Result)
-				if err != nil {
-					resStr = fmt.Sprintf("%v", c.Result)
-				} else {
-					resStr = string(jsonBytes)
+				switch r := c.Result.(type) {
+				case json.RawMessage:
+					resStr = string(r)
+				case string:
+					resStr = r
+				case []byte:
+					resStr = string(r)
+				default:
+					// Marshal any other type to JSON for proper formatting
+					jsonBytes, err := json.Marshal(c.Result)
+					if err != nil {
+						resStr = fmt.Sprintf("%v", c.Result)
+					} else {
+						resStr = string(jsonBytes)
+					}
 				}
 			}
 			content = append(content, anthropic.NewToolResultBlock(c.CallID, resStr, c.Error != nil))
 		case *message.DataContent:
-			if c.TopLevelMediaType() == "image" {
+			switch {
+			case c.TopLevelMediaType() == "image":
 				mediaType := c.MediaType
 				if mediaType == "" {
 					mediaType = "image/jpeg"
 				}
 				content = append(content, anthropic.NewImageBlockBase64(mediaType, c.Data))
+			case isPDFMediaType(c.MediaType):
+				content = append(content, anthropic.NewDocumentBlock(anthropic.Base64PDFSourceParam{
+					Data: c.Data,
+				}))
 			}
+		case *message.URIContent:
+			switch {
+			case c.TopLevelMediaType() == "image":
+				content = append(content, anthropic.NewImageBlock(anthropic.URLImageSourceParam{URL: c.URI}))
+			case isPDFMediaType(c.MediaType):
+				content = append(content, anthropic.NewDocumentBlock(anthropic.URLPDFSourceParam{URL: c.URI}))
+			}
+		case *message.HostedFileContent:
+			// The stable Anthropic Messages API used here (anthropic.MessageNewParams)
+			// has no file-id image/document source in anthropic-sdk-go v1.58.1; only
+			// the Beta API exposes BetaFileImageSourceParam/BetaFileDocumentSourceParam.
+			// A hosted file reference therefore cannot be forwarded yet, so surface an
+			// explicit error rather than silently dropping it.
+			return anthropic.MessageParam{}, fmt.Errorf("anthropic: hosted file references (file id %q) are not supported by the Messages API; use DataContent or URIContent instead", c.FileID)
 		}
 	}
 

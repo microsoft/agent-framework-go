@@ -48,6 +48,40 @@ func TestGroupChatWorkflowBuilder_RoundRobinManagerProducesTranscript(t *testing
 	}
 }
 
+func TestGroupChatWorkflowBuilder_ManagerReselectingJustSpokeSpeakerCompletes(t *testing.T) {
+	agentA := newGroupChatLabelAgent("a", "A", "from-a")
+
+	// A manager that always reselects the agent that just spoke. Round-robin
+	// never does this, so only a custom manager can exercise the guard.
+	wf, err := newGroupChatWorkflow("", func(agents []*agent.Agent) *GroupChatManager {
+		return &GroupChatManager{
+			SelectNextAgent: func(context.Context, []*message.Message) (*agent.Agent, error) {
+				return agents[0], nil
+			},
+			ShouldTerminate: func(_ context.Context, _ []*message.Message, iterationCount int) (bool, error) {
+				return iterationCount >= 5, nil
+			},
+		}
+	}, agentA)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	events := runGroupChatWorkflowTurn(t, wf, "hello")
+	assertNoGroupChatErrors(t, events)
+	// The agent speaks once, then the manager reselects it: the host must
+	// complete by yielding output rather than re-invoking it on stale input
+	// (broadcast() skips the current speaker), mirroring .NET GroupChatHost's
+	// TakeTurnAsync guard. Without the guard the same speaker would be driven
+	// repeatedly until the iteration limit, yielding "from-a" five times.
+	if got := collectGroupChatUpdateTexts(events); !slices.Equal(got, []string{"from-a"}) {
+		t.Fatalf("update texts = %v, want [from-a]", got)
+	}
+	if got := collectGroupChatOutputTexts(events); !slices.Equal(got, []string{"hello", "from-a"}) {
+		t.Fatalf("output transcript = %v, want [hello from-a]", got)
+	}
+}
+
 func TestGroupChatWorkflowBuilder_WithNameOnlySetsWorkflowName(t *testing.T) {
 	const workflowName = "named group chat"
 	wf, err := newGroupChatWorkflow(workflowName, func(agents []*agent.Agent) *GroupChatManager {
@@ -94,7 +128,7 @@ func TestGroupChatWorkflowBuilder_DefaultOutputMetadataDesignatesHostAndIntermed
 	slices.Sort(outputIDs)
 	wantIDs := []string{groupChatHostExecutorID}
 	for _, currentAgent := range []*agent.Agent{agentA, agentB, agentC} {
-		wantIDs = append(wantIDs, New(currentAgent, Config{DisableForwardIncomingMessages: true}).ID)
+		wantIDs = append(wantIDs, New(currentAgent, Config{ForwardIncomingMessages: new(false)}).ID)
 	}
 	slices.Sort(wantIDs)
 	if !slices.Equal(outputIDs, wantIDs) {
@@ -107,7 +141,7 @@ func TestGroupChatWorkflowBuilder_DefaultOutputMetadataDesignatesHostAndIntermed
 		t.Fatalf("host tags = %v, want terminal output with no tags", tags)
 	}
 	for _, currentAgent := range []*agent.Agent{agentA, agentB, agentC} {
-		participantID := New(currentAgent, Config{DisableForwardIncomingMessages: true}).ID
+		participantID := New(currentAgent, Config{ForwardIncomingMessages: new(false)}).ID
 		if !wf.HasOutputExecutor(participantID) {
 			t.Fatalf("participant %q was not designated as an output executor", participantID)
 		}
@@ -129,7 +163,7 @@ func TestGroupChatWorkflowBuilder_ExplicitOutputDesignationSuppressesDefaults(t 
 		t.Fatalf("Build: %v", err)
 	}
 
-	wantOutputID := New(agentA, Config{DisableForwardIncomingMessages: true}).ID
+	wantOutputID := New(agentA, Config{ForwardIncomingMessages: new(false)}).ID
 	outputIDs := wf.OutputExecutorIDs()
 	slices.Sort(outputIDs)
 	if !slices.Equal(outputIDs, []string{wantOutputID}) {
@@ -198,7 +232,7 @@ func TestGroupChatWorkflowBuilder_RegistersParticipantRequestPorts(t *testing.T)
 	}
 
 	for _, currentAgent := range []*agent.Agent{agentA, agentB} {
-		participantID := New(currentAgent, Config{DisableForwardIncomingMessages: true}).ID
+		participantID := New(currentAgent, Config{ForwardIncomingMessages: new(false)}).ID
 		approvalPort, ok := wf.RequestPort(participantID + "_UserInput")
 		if !ok {
 			t.Fatalf("missing user-input request port for participant %q", participantID)
@@ -299,6 +333,28 @@ func TestGroupChatWorkflowBuilder_UpdateHistoryFiltersBroadcastPayload(t *testin
 	}
 	if got := agentB.Invocations(); !equalGroupChatInvocations(got, [][]string{{"[broadcast] hello", "[broadcast] agentA"}}) {
 		t.Fatalf("agentB invocations = %v, want [[broadcast hello] [broadcast agentA]]", got)
+	}
+}
+
+func TestGroupChatWorkflowBuilder_NonParticipantSelectionCompletesChat(t *testing.T) {
+	agentA := newGroupChatLabelAgent("a", "A", "from-a")
+	outsider := newGroupChatLabelAgent("outsider", "Outsider", "from-outsider")
+
+	wf, err := newGroupChatWorkflow("", func([]*agent.Agent) *GroupChatManager {
+		return &GroupChatManager{
+			SelectNextAgent: func(context.Context, []*message.Message) (*agent.Agent, error) {
+				return outsider, nil
+			},
+		}
+	}, agentA)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	events := runGroupChatWorkflowTurn(t, wf, "hello")
+	assertNoGroupChatErrors(t, events)
+	if got := collectGroupChatOutputTexts(events); !slices.Equal(got, []string{"hello"}) {
+		t.Fatalf("output transcript = %v, want [hello]", got)
 	}
 }
 
@@ -658,7 +714,7 @@ func newGroupChatLabelAgent(id string, name string, label string) *agent.Agent {
 	}
 	return agent.New(
 		agent.ProviderConfig{ProviderName: "group-chat-label", Run: run},
-		agent.Config{ID: id, Name: name, DisableFuncAutoCall: true},
+		agent.Config{ID: id, Name: name},
 	)
 }
 
@@ -681,7 +737,7 @@ func newGroupChatDoubleEchoAgent(id string) *agent.Agent {
 	}
 	return agent.New(
 		agent.ProviderConfig{ProviderName: "group-chat-double-echo", Run: run},
-		agent.Config{ID: id, Name: id, DisableFuncAutoCall: true, HistoryProvider: agent.NewHistoryProvider(agent.HistoryProviderConfig{SourceID: "noop-history"})},
+		agent.Config{ID: id, Name: id, HistoryProvider: agent.NewHistoryProvider(agent.HistoryProviderConfig{SourceID: "noop-history"})},
 	)
 }
 
@@ -772,7 +828,7 @@ func newGroupChatApprovalAgent(id string) *groupChatApprovalAgent {
 	}
 	agentState.Agent = agent.New(
 		agent.ProviderConfig{ProviderName: "group-chat-approval", Run: run},
-		agent.Config{ID: id, Name: id, DisableFuncAutoCall: true, HistoryProvider: agent.NewHistoryProvider(agent.HistoryProviderConfig{SourceID: "noop-history"})},
+		agent.Config{ID: id, Name: id, HistoryProvider: agent.NewHistoryProvider(agent.HistoryProviderConfig{SourceID: "noop-history"})},
 	)
 	return agentState
 }
@@ -826,7 +882,7 @@ func newGroupChatFunctionCallAgent(id string) *groupChatFunctionCallAgent {
 	}
 	agentState.Agent = agent.New(
 		agent.ProviderConfig{ProviderName: "group-chat-function-call", Run: run},
-		agent.Config{ID: id, Name: id, DisableFuncAutoCall: true, HistoryProvider: agent.NewHistoryProvider(agent.HistoryProviderConfig{SourceID: "noop-history"})},
+		agent.Config{ID: id, Name: id, HistoryProvider: agent.NewHistoryProvider(agent.HistoryProviderConfig{SourceID: "noop-history"})},
 	)
 	return agentState
 }
@@ -975,7 +1031,7 @@ func runGroupChatWorkflowTurn(t *testing.T, wf *workflow.Workflow, inputText str
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
+	stream, err := inproc.Lockstep.OpenStreaming(ctx, wf)
 	if err != nil {
 		t.Fatalf("RunStreaming: %v", err)
 	}
@@ -985,14 +1041,14 @@ func runGroupChatWorkflowTurn(t *testing.T, wf *workflow.Workflow, inputText str
 		}
 	}()
 
-	if err := stream.SendMessage(ctx, []*message.Message{{
+	if _, err := stream.TrySendMessage(ctx, []*message.Message{{
 		Role:     message.RoleUser,
 		Contents: []message.Content{&message.TextContent{Text: inputText}},
 	}}); err != nil {
 		t.Fatalf("SendMessage input: %v", err)
 	}
 	emitEvents := true
-	if err := stream.SendMessage(ctx, workflow.TurnToken{EmitEvents: &emitEvents}); err != nil {
+	if _, err := stream.TrySendMessage(ctx, workflow.TurnToken{EmitEvents: &emitEvents}); err != nil {
 		t.Fatalf("SendMessage turn token: %v", err)
 	}
 
