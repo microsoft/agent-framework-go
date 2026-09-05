@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -54,7 +56,7 @@ func NewAgent(cclient *copilot.Client, config AgentConfig) *agent.Agent {
 		config.Description = defaultDescription
 	}
 	if config.Instructions != "" {
-		config.RunOptions = append(config.RunOptions, agent.WithInstructions(config.Instructions))
+		config.RunOptions = append(slices.Clone(config.RunOptions), agent.WithInstructions(config.Instructions))
 	}
 	p := &provider{
 		client: cclient,
@@ -90,14 +92,17 @@ func (p *provider) run(ctx context.Context, messages []*message.Message, options
 
 		frameworkSession, _ := agent.GetOption(options, agent.WithSession)
 		isStreaming := p.streaming(options)
-		copilotSession, err := p.openSession(ctx, frameworkSession, isStreaming, options)
+		// Register eventHandler through SessionConfig.OnEvent so it is attached
+		// before the session.create/resume RPC. This matches the SDK's
+		// no-missed-events guarantee: lifecycle events the CLI emits during
+		// session creation (e.g. session.start) would otherwise be delivered to
+		// zero handlers in the window before a post-return session.On call.
+		copilotSession, err := p.openSession(ctx, frameworkSession, isStreaming, eventHandler, options)
 		if err != nil {
 			yield(nil, err)
 			return
 		}
 		defer func() { _ = copilotSession.Disconnect() }()
-		unsubscribe := copilotSession.On(eventHandler)
-		defer unsubscribe()
 
 		if frameworkSession != nil && frameworkSession.ServiceID() == "" {
 			frameworkSession.SetServiceID(copilotSession.SessionID)
@@ -144,6 +149,10 @@ func (p *provider) responseUpdateForSessionEvent(event copilot.SessionEvent, isS
 		return p.assistantMessageDeltaUpdate(event, data), false, nil
 	case *copilot.AssistantMessageData:
 		return p.assistantMessageUpdate(event, data, isStreaming), false, nil
+	case *copilot.AssistantReasoningData:
+		return p.assistantReasoningUpdate(event, data), false, nil
+	case *copilot.AssistantReasoningDeltaData:
+		return p.assistantReasoningDeltaUpdate(event, data), false, nil
 	case *copilot.ToolExecutionStartData:
 		return p.toolExecutionStartUpdate(event, data), false, nil
 	case *copilot.ToolExecutionCompleteData:
@@ -153,6 +162,14 @@ func (p *provider) responseUpdateForSessionEvent(event copilot.SessionEvent, isS
 	case *copilot.SessionIdleData:
 		return rawEventUpdate(event), true, nil
 	case *copilot.SessionErrorData:
+		// A rate_limit error flagged EligibleForAutoSwitch means the runtime will
+		// follow it with an auto_mode_switch.requested event and keep the session
+		// alive. Surface the error as a non-terminal notification so the run loop
+		// keeps pumping the subsequent auto-switch events and the eventual idle
+		// completion instead of aborting the run.
+		if data.EligibleForAutoSwitch != nil && *data.EligibleForAutoSwitch {
+			return rawEventUpdate(event), false, nil
+		}
 		return rawEventUpdate(event), true, fmt.Errorf("session error: %s", sessionErrorMessage(data))
 	default:
 		return rawEventUpdate(event), false, nil
@@ -221,73 +238,201 @@ func (p *provider) openSession(
 	ctx context.Context,
 	frameworkSession *agent.Session,
 	streaming bool,
+	eventHandler copilot.SessionEventHandler,
 	options []agent.Option,
 ) (*copilot.Session, error) {
 	if frameworkSession != nil && frameworkSession.ServiceID() != "" {
-		cfg := p.resumeSessionConfig(streaming, options)
+		cfg := p.resumeSessionConfig(streaming, eventHandler, options)
 		return p.client.ResumeSession(ctx, frameworkSession.ServiceID(), &cfg)
 	}
-	cfg := p.sessionConfig(streaming, options)
+	cfg := p.sessionConfig(streaming, eventHandler, options)
 	return p.client.CreateSession(ctx, &cfg)
 }
 
-func (p *provider) sessionConfig(streaming bool, options []agent.Option) copilot.SessionConfig {
+func (p *provider) sessionConfig(streaming bool, eventHandler copilot.SessionEventHandler, options []agent.Option) copilot.SessionConfig {
 	cfg := copySessionConfig(p.cfg.SessionConfig)
-	cfg.Streaming = copilot.Bool(streaming)
+	cfg.Streaming = new(streaming)
+	cfg.OnEvent = chainSessionEventHandlers(cfg.OnEvent, eventHandler)
 	cfg.SystemMessage = systemMessageWithInstructions(cfg.SystemMessage, slices.Collect(agent.AllOptions(options, agent.WithInstructions)))
 	cfg.Tools = append(cfg.Tools, copilotTools(options)...)
+	cfg.Hooks = sessionHooksWithApprovalRequests(approvalRequiredToolNames(options), cfg.Hooks)
 	return cfg
 }
 
-func (p *provider) resumeSessionConfig(streaming bool, options []agent.Option) copilot.ResumeSessionConfig {
+func (p *provider) resumeSessionConfig(streaming bool, eventHandler copilot.SessionEventHandler, options []agent.Option) copilot.ResumeSessionConfig {
 	cfg := copyResumeSessionConfig(p.cfg.SessionConfig)
-	cfg.Streaming = copilot.Bool(streaming)
+	cfg.Streaming = new(streaming)
+	cfg.OnEvent = chainSessionEventHandlers(cfg.OnEvent, eventHandler)
 	cfg.SystemMessage = systemMessageWithInstructions(cfg.SystemMessage, slices.Collect(agent.AllOptions(options, agent.WithInstructions)))
 	cfg.Tools = append(cfg.Tools, copilotTools(options)...)
+	cfg.Hooks = sessionHooksWithApprovalRequests(approvalRequiredToolNames(options), cfg.Hooks)
 	return cfg
 }
 
 func copySessionConfig(source *copilot.SessionConfig) copilot.SessionConfig {
 	if source == nil {
-		return copilot.SessionConfig{Streaming: copilot.Bool(true)}
+		return copilot.SessionConfig{Streaming: new(true)}
 	}
 	clone := *source
+	clone.Tools = slices.Clone(source.Tools)
 	clone.Streaming = copyBoolDefaultTrue(source.Streaming)
 	return clone
 }
 
 func copyResumeSessionConfig(source *copilot.SessionConfig) copilot.ResumeSessionConfig {
 	if source == nil {
-		return copilot.ResumeSessionConfig{Streaming: copilot.Bool(true)}
+		return copilot.ResumeSessionConfig{Streaming: new(true)}
 	}
 	return copilot.ResumeSessionConfig{
-		Model:               source.Model,
-		ReasoningEffort:     source.ReasoningEffort,
-		Tools:               source.Tools,
-		SystemMessage:       source.SystemMessage,
-		AvailableTools:      source.AvailableTools,
-		ExcludedTools:       source.ExcludedTools,
-		Provider:            source.Provider,
-		OnPermissionRequest: source.OnPermissionRequest,
-		OnUserInputRequest:  source.OnUserInputRequest,
-		Hooks:               source.Hooks,
-		WorkingDirectory:    source.WorkingDirectory,
-		ConfigDirectory:     source.ConfigDirectory,
-		MCPServers:          source.MCPServers,
-		CustomAgents:        source.CustomAgents,
-		SkillDirectories:    source.SkillDirectories,
-		DisabledSkills:      source.DisabledSkills,
-		InfiniteSessions:    source.InfiniteSessions,
-		Streaming:           copyBoolDefaultTrue(source.Streaming),
+		ClientName:                         source.ClientName,
+		Model:                              source.Model,
+		ReasoningEffort:                    source.ReasoningEffort,
+		ReasoningSummary:                   source.ReasoningSummary,
+		ContextTier:                        source.ContextTier,
+		Tools:                              slices.Clone(source.Tools),
+		SystemMessage:                      source.SystemMessage,
+		AvailableTools:                     source.AvailableTools,
+		ExcludedTools:                      source.ExcludedTools,
+		ExcludedBuiltInAgents:              source.ExcludedBuiltInAgents,
+		Provider:                           source.Provider,
+		Capi:                               source.Capi,
+		Providers:                          source.Providers,
+		Models:                             source.Models,
+		ModelCapabilities:                  source.ModelCapabilities,
+		EnableSessionTelemetry:             source.EnableSessionTelemetry,
+		EnableCitations:                    source.EnableCitations,
+		EnableFileChangeTracking:           source.EnableFileChangeTracking,
+		SessionLimits:                      source.SessionLimits,
+		EnableExperimentalMode:             source.EnableExperimentalMode,
+		SkipCustomInstructions:             source.SkipCustomInstructions,
+		CustomAgentsLocalOnly:              source.CustomAgentsLocalOnly,
+		CoauthorEnabled:                    source.CoauthorEnabled,
+		ManageScheduleEnabled:              source.ManageScheduleEnabled,
+		OnEvent:                            source.OnEvent,
+		OnPermissionRequest:                source.OnPermissionRequest,
+		OnMCPAuthRequest:                   source.OnMCPAuthRequest,
+		OnUserInputRequest:                 source.OnUserInputRequest,
+		Hooks:                              source.Hooks,
+		WorkingDirectory:                   source.WorkingDirectory,
+		AdditionalDirectories:              source.AdditionalDirectories,
+		ConfigDirectory:                    source.ConfigDirectory,
+		EnableConfigDiscovery:              source.EnableConfigDiscovery,
+		SkipEmbeddingRetrieval:             source.SkipEmbeddingRetrieval,
+		EmbeddingCacheStorage:              source.EmbeddingCacheStorage,
+		OrganizationCustomInstructions:     source.OrganizationCustomInstructions,
+		EnableOnDemandInstructionDiscovery: source.EnableOnDemandInstructionDiscovery,
+		EnableFileHooks:                    source.EnableFileHooks,
+		EnableHostGitOperations:            source.EnableHostGitOperations,
+		EnableSessionStore:                 source.EnableSessionStore,
+		EnableSkills:                       source.EnableSkills,
+		IncludeSubAgentStreamingEvents:     source.IncludeSubAgentStreamingEvents,
+		MCPServers:                         source.MCPServers,
+		MCPOAuthTokenStorage:               source.MCPOAuthTokenStorage,
+		CustomAgents:                       source.CustomAgents,
+		DefaultAgent:                       source.DefaultAgent,
+		Agent:                              source.Agent,
+		SkillDirectories:                   source.SkillDirectories,
+		PluginDirectories:                  source.PluginDirectories,
+		InstructionDirectories:             source.InstructionDirectories,
+		DisabledSkills:                     source.DisabledSkills,
+		DisabledMCPServers:                 source.DisabledMCPServers,
+		InfiniteSessions:                   source.InfiniteSessions,
+		LargeOutput:                        source.LargeOutput,
+		ToolSearch:                         source.ToolSearch,
+		Memory:                             source.Memory,
+		GitHubMCPToolConfig:                source.GitHubMCPToolConfig,
+		GitHubToken:                        source.GitHubToken,
+		RemoteSession:                      source.RemoteSession,
+		ManagedSettings:                    source.ManagedSettings,
+		Streaming:                          copyBoolDefaultTrue(source.Streaming),
+	}
+}
+
+// chainSessionEventHandlers composes a caller-supplied handler with the
+// per-run handler so a user-configured SessionConfig.OnEvent is preserved
+// and runs alongside (before) the provider's per-run handler rather than
+// being overwritten.
+func chainSessionEventHandlers(existing, added copilot.SessionEventHandler) copilot.SessionEventHandler {
+	if existing == nil {
+		return added
+	}
+	if added == nil {
+		return existing
+	}
+	return func(event copilot.SessionEvent) {
+		existing(event)
+		added(event)
 	}
 }
 
 func copyBoolDefaultTrue(source *bool) *bool {
 	if source == nil {
-		return copilot.Bool(true)
+		return new(true)
 	}
 	value := *source
 	return &value
+}
+
+func sessionHooksWithApprovalRequests(names map[string]struct{}, hooks *copilot.SessionHooks) *copilot.SessionHooks {
+	if hooks != nil && hooks.OnPreToolUse != nil {
+		logApprovalGatingSkipped(names)
+		return hooks
+	}
+	if len(names) == 0 {
+		return hooks
+	}
+	clone := cloneSessionHooks(hooks)
+	clone.OnPreToolUse = func(input copilot.PreToolUseHookInput, _ copilot.HookInvocation) (*copilot.PreToolUseHookOutput, error) {
+		if _, ok := names[input.ToolName]; !ok {
+			return nil, nil
+		}
+		return &copilot.PreToolUseHookOutput{
+			PermissionDecision:       "ask",
+			PermissionDecisionReason: fmt.Sprintf("Tool %q requires approval before it can run.", input.ToolName),
+		}, nil
+	}
+	return clone
+}
+
+// approvalRequiredToolNames returns the names of the option-provided tools that
+// are explicitly marked approval-required via tool.ApprovalRequiredTool. This
+// mirrors .NET's ApprovalRequiredAIFunction detection and is intentionally
+// independent of copilot.Tool.SkipPermission: raw copilot.Tool values supplied
+// through SessionConfig.Tools carry no approval marker and are never auto-gated.
+func approvalRequiredToolNames(options []agent.Option) map[string]struct{} {
+	var names map[string]struct{}
+	for tl := range agent.AllOptions(options, agent.WithTool) {
+		funcTool, ok := tl.(tool.FuncTool)
+		if !ok || !approvalRequired(funcTool) {
+			continue
+		}
+		if names == nil {
+			names = make(map[string]struct{})
+		}
+		names[funcTool.Name()] = struct{}{}
+	}
+	return names
+}
+
+func logApprovalGatingSkipped(names map[string]struct{}) {
+	if len(names) == 0 {
+		return
+	}
+	toolNames := slices.Collect(maps.Keys(names))
+	slices.Sort(toolNames)
+	slog.Warn(
+		"A custom OnPreToolUse hook is configured, so approval-required tools will not be automatically gated.",
+		"approvalRequiredToolCount", len(toolNames),
+		"approvalRequiredTools", strings.Join(toolNames, ", "),
+	)
+}
+
+func cloneSessionHooks(source *copilot.SessionHooks) *copilot.SessionHooks {
+	if source == nil {
+		return &copilot.SessionHooks{}
+	}
+	clone := *source
+	return &clone
 }
 
 func systemMessageWithInstructions(base *copilot.SystemMessageConfig, instructions []string) *copilot.SystemMessageConfig {
@@ -342,10 +487,9 @@ func toCopilotTool(funcTool tool.FuncTool) (copilot.Tool, error) {
 		return copilot.Tool{}, err
 	}
 	converted := copilot.Tool{
-		Name:           funcTool.Name(),
-		Description:    funcTool.Description(),
-		Parameters:     parameters,
-		SkipPermission: !approvalRequired(funcTool),
+		Name:        funcTool.Name(),
+		Description: funcTool.Description(),
+		Parameters:  parameters,
 		Handler: func(invocation copilot.ToolInvocation) (copilot.ToolResult, error) {
 			arguments, err := toolArguments(invocation.Arguments)
 			if err != nil {
@@ -528,8 +672,43 @@ func (p *provider) assistantMessageUpdate(event copilot.SessionEvent, data *copi
 			ContentHeader: message.ContentHeader{RawRepresentation: event},
 			Text:          data.Content,
 		}}
+		if data.ReasoningText != nil {
+			update.Contents = append(update.Contents, &message.TextReasoningContent{
+				ContentHeader: message.ContentHeader{RawRepresentation: event},
+				Text:          *data.ReasoningText,
+				ProtectedData: firstNonNilString(data.ReasoningOpaque, data.EncryptedContent),
+			})
+		}
 	}
 	return update
+}
+
+func (p *provider) assistantReasoningUpdate(event copilot.SessionEvent, data *copilot.AssistantReasoningData) *agent.ResponseUpdate {
+	content := &message.TextReasoningContent{
+		ContentHeader: message.ContentHeader{RawRepresentation: event},
+		Text:          data.Content,
+	}
+	return &agent.ResponseUpdate{
+		RawRepresentation: event,
+		Role:              message.RoleAssistant,
+		MessageID:         data.ReasoningID,
+		CreatedAt:         event.Timestamp,
+		Contents:          []message.Content{content},
+	}
+}
+
+func (p *provider) assistantReasoningDeltaUpdate(event copilot.SessionEvent, data *copilot.AssistantReasoningDeltaData) *agent.ResponseUpdate {
+	content := &message.TextReasoningContent{
+		ContentHeader: message.ContentHeader{RawRepresentation: event},
+		Text:          data.DeltaContent,
+	}
+	return &agent.ResponseUpdate{
+		RawRepresentation: event,
+		Role:              message.RoleAssistant,
+		MessageID:         data.ReasoningID,
+		CreatedAt:         event.Timestamp,
+		Contents:          []message.Content{content},
+	}
 }
 
 func (p *provider) toolExecutionStartUpdate(event copilot.SessionEvent, data *copilot.ToolExecutionStartData) *agent.ResponseUpdate {
@@ -554,6 +733,7 @@ func (p *provider) toolExecutionCompleteUpdate(event copilot.SessionEvent, data 
 		ContentHeader: message.ContentHeader{RawRepresentation: event},
 		CallID:        data.ToolCallID,
 		Result:        toolExecutionResult(data),
+		Error:         toolExecutionError(data),
 	}
 	return &agent.ResponseUpdate{
 		RawRepresentation: event,
@@ -577,6 +757,34 @@ func toolExecutionResult(data *copilot.ToolExecutionCompleteData) any {
 		return data.Error.Message
 	}
 	return "Tool execution failed"
+}
+
+// toolExecutionError maps a failed tool execution to the FunctionResultContent
+// failure channel, mirroring how the framework surfaces tool errors (frc.Error)
+// across providers. It returns nil for successful executions.
+func toolExecutionError(data *copilot.ToolExecutionCompleteData) error {
+	if data == nil {
+		return errors.New("tool execution failed")
+	}
+	if data.Success {
+		return nil
+	}
+	if data.Error != nil {
+		msg := data.Error.Message
+		code := ""
+		if data.Error.Code != nil {
+			code = *data.Error.Code
+		}
+		switch {
+		case msg != "" && code != "":
+			return fmt.Errorf("%s (%s)", msg, code)
+		case msg != "":
+			return errors.New(msg)
+		case code != "":
+			return fmt.Errorf("tool execution failed (%s)", code)
+		}
+	}
+	return errors.New("tool execution failed")
 }
 
 func (p *provider) assistantUsageUpdate(event copilot.SessionEvent, data *copilot.AssistantUsageData) *agent.ResponseUpdate {
@@ -627,6 +835,15 @@ func int64Value(value *int64) int64 {
 		return 0
 	}
 	return *value
+}
+
+func firstNonNilString(values ...*string) string {
+	for _, value := range values {
+		if value != nil {
+			return *value
+		}
+	}
+	return ""
 }
 
 func rawEventUpdate(event copilot.SessionEvent) *agent.ResponseUpdate {

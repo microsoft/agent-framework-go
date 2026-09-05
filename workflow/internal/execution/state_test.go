@@ -3,6 +3,7 @@
 package execution
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/internal/hashmap"
@@ -21,6 +22,64 @@ func TestUpdateStateUpdateNilValueIsDelete(t *testing.T) {
 	update := UpdateStateUpdate("key", nil)
 	if !update.IsDelete {
 		t.Fatal("nil state update should be marked as delete")
+	}
+}
+
+// TestStateManager_ClearByIDDropsUnpublishedWriteOnFreshScope verifies that
+// clearing a scope also removes writes still queued (unpublished) when the
+// scope has never been materialized in sm.scopes. Writing then clearing the
+// same scope within a superstep must not leave the write readable, nor commit
+// it on publish.
+func TestStateManager_ClearByIDDropsUnpublishedWriteOnFreshScope(t *testing.T) {
+	manager := NewStateManager()
+	scope := workflow.ScopeID{ExecutorID: "executor1", ScopeName: ""}
+
+	mustSucceed(t, manager.WriteStateByID(scope, "key1", "value1"))
+	mustSucceed(t, manager.ClearStateByID(scope))
+
+	if _, ok, err := manager.ReadStateByID(scope, "key1"); err != nil {
+		t.Fatalf("ReadStateByID: %v", err)
+	} else if ok {
+		t.Fatal("cleared key should be absent, but the queued write survived the clear")
+	}
+
+	mustSucceed(t, manager.PublishUpdates(nil))
+
+	if _, ok, err := manager.ReadStateByID(scope, "key1"); err != nil {
+		t.Fatalf("ReadStateByID after publish: %v", err)
+	} else if ok {
+		t.Fatal("cleared key must not be committed on publish")
+	}
+}
+
+// TestStateManager_ConcurrentGetOrCreateSharedScopeReturnsSameInstance
+// verifies that concurrent first-time access to a shared scope (identified
+// by ScopeName rather than ExecutorID, so it is reachable by multiple
+// executors within the same superstep, e.g. via concurrent ReadStateByID
+// calls) from many goroutines always resolves to the same [*StateScope]
+// instance. A racy check-then-create (Get followed by Set) can construct
+// distinct StateScope instances for the same key and let a later Set
+// silently discard an earlier one, losing any state already written through
+// the discarded instance.
+func TestStateManager_ConcurrentGetOrCreateSharedScopeReturnsSameInstance(t *testing.T) {
+	manager := NewStateManager()
+	scopeID := workflow.ScopeID{ScopeName: "sharedScope"}
+
+	const goroutines = 64
+	scopes := make([]*StateScope, goroutines)
+	var wg sync.WaitGroup
+	for i := range goroutines {
+		wg.Go(func() {
+			scopes[i] = manager.getOrCreateScope(scopeID)
+		})
+	}
+	wg.Wait()
+
+	first := scopes[0]
+	for i, scope := range scopes {
+		if scope != first {
+			t.Fatalf("getOrCreateScope() returned distinct instances for the same shared scope (index %d); a concurrent create-then-set race can discard state written through the other instance", i)
+		}
 	}
 }
 
@@ -500,7 +559,7 @@ func TestScopeLoadPortableValueState_AfterSerialization(t *testing.T) {
 	}
 
 	testCheckpoint := &checkpoint.Checkpoint{
-		StateData: *stateData,
+		StateData: stateData,
 	}
 
 	manager = NewStateManager()

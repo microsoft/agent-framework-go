@@ -97,20 +97,21 @@ func (t *stepTracer) Advance(step *execution.StepContext) workflow.SuperStepStar
 
 // Complete generates a SuperStepCompletedEvent for the current step.
 func (t *stepTracer) Complete(nextStepHasActions, hasPendingRequests bool) workflow.SuperStepCompletedEvent {
-	activated := slices.Collect(t.activated.Keys())
-	slices.Sort(activated)
-	instantiated := slices.Collect(t.instantiated.Keys())
-	slices.Sort(instantiated)
-
 	return workflow.SuperStepCompletedEvent{
 		StepNumber: t.StepNumber(),
 		CompletionInfo: &workflow.SuperStepCompletionInfo{
-			ActivatedExecutors:    activated,
-			InstantiatedExecutors: instantiated,
+			ActivatedExecutors:    sortedTrackedExecutorIDs(&t.activated),
+			InstantiatedExecutors: sortedTrackedExecutorIDs(&t.instantiated),
 			HasPendingMessages:    nextStepHasActions,
 			HasPendingRequests:    hasPendingRequests,
 			StateUpdated:          t.StateUpdated(),
 			CheckpointInfo:        t.checkpointInfo,
 		},
 	}
+}
+
+func sortedTrackedExecutorIDs(executors *concurrent.Map[string, string]) []string {
+	ids := slices.Collect(executors.Keys())
+	slices.Sort(ids)
+	return ids
 }

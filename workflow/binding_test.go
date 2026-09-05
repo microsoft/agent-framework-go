@@ -2,7 +2,46 @@
 
 package workflow
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
+
+func TestRequestPortBind_PanicsForInvalidPort(t *testing.T) {
+	stringType := reflect.TypeFor[string]()
+	tests := []struct {
+		name string
+		port RequestPort
+		want string
+	}{
+		{
+			name: "empty ID",
+			port: RequestPort{Request: stringType, Response: stringType},
+			want: "workflow: request port ID is required",
+		},
+		{
+			name: "nil request type",
+			port: RequestPort{ID: "port", Response: stringType},
+			want: `workflow: request port "port" request type is required`,
+		},
+		{
+			name: "nil response type",
+			port: RequestPort{ID: "port", Request: stringType},
+			want: `workflow: request port "port" response type is required`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			defer func() {
+				if got := recover(); got != test.want {
+					t.Fatalf("panic = %v, want %q", got, test.want)
+				}
+			}()
+			test.port.Bind()
+		})
+	}
+}
 
 func TestIsAnonymousFuncName(t *testing.T) {
 	tests := []struct {

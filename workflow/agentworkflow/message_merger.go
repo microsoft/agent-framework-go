@@ -66,6 +66,7 @@ func (m *messageMerger) ComputeMerged(primaryResponseID string, primaryAgentID s
 	}
 
 	messages = append(messages, m.danglingState.computeFlattened()...)
+	messages = foldIdentifierlessMessages(messages)
 	messages = cleanupMergedMessages(messages)
 
 	response := &agent.Response{
@@ -85,6 +86,37 @@ func (m *messageMerger) ComputeMerged(primaryResponseID string, primaryAgentID s
 		response.FinishReason = slices.Collect(maps.Keys(finishReasons))[0]
 	}
 	return response
+}
+
+type collectedResponseMergeState struct {
+	allUpdates             *messageMerger
+	terminalWorkflowOutput *messageMerger
+	hasTerminalOutput      bool
+}
+
+func newCollectedResponseMergeState() *collectedResponseMergeState {
+	return &collectedResponseMergeState{
+		allUpdates:             newMessageMerger(),
+		terminalWorkflowOutput: newMessageMerger(),
+	}
+}
+
+func (s *collectedResponseMergeState) AddUpdate(update *agent.ResponseUpdate, terminalWorkflowOutput bool) {
+	if s == nil {
+		return
+	}
+	s.allUpdates.AddUpdate(update)
+	if terminalWorkflowOutput {
+		s.terminalWorkflowOutput.AddUpdate(update)
+		s.hasTerminalOutput = true
+	}
+}
+
+func (s *collectedResponseMergeState) ComputeMerged(primaryResponseID string, primaryAgentID string, primaryAgentName string) *agent.Response {
+	if s != nil && s.hasTerminalOutput {
+		return s.terminalWorkflowOutput.ComputeMerged(primaryResponseID, primaryAgentID, primaryAgentName)
+	}
+	return s.allUpdates.ComputeMerged(primaryResponseID, primaryAgentID, primaryAgentName)
 }
 
 type responseMergeState struct {
@@ -190,6 +222,49 @@ func messagesWithCreatedAt(response *agent.Response) []*message.Message {
 		messages = append(messages, clone)
 	}
 	return messages
+}
+
+func foldIdentifierlessMessages(messages []*message.Message) []*message.Message {
+	for i := len(messages) - 1; i > 0; i-- {
+		current := messages[i-1]
+		next := messages[i]
+		if current == nil || next == nil {
+			continue
+		}
+		if !isIdentifierlessAssistantReasoningMessage(current) || next.ID == "" || current.Role != next.Role {
+			continue
+		}
+
+		messages[i] = mergeIdentifierlessMessageIntoNext(current, next)
+		messages = slices.Delete(messages, i-1, i)
+	}
+	return messages
+}
+
+func mergeIdentifierlessMessageIntoNext(current, next *message.Message) *message.Message {
+	merged := next.Clone()
+	merged.AuthorName = cmp.Or(next.AuthorName, current.AuthorName)
+	merged.AdditionalProperties = mergeProperties(current.AdditionalProperties, merged.AdditionalProperties)
+	if merged.CreatedAt.IsZero() {
+		merged.CreatedAt = current.CreatedAt
+	}
+	merged.Contents = append(slices.Clone(current.Contents), next.Contents...)
+	if merged.Source == (message.Source{}) {
+		merged.Source = current.Source
+	}
+	return merged
+}
+
+func isIdentifierlessAssistantReasoningMessage(msg *message.Message) bool {
+	if msg == nil || msg.ID != "" || msg.Role != message.RoleAssistant || len(msg.Contents) == 0 {
+		return false
+	}
+	for _, content := range msg.Contents {
+		if _, ok := content.(*message.TextReasoningContent); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func mergeProperties(current, incoming map[string]any) map[string]any {

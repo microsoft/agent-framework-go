@@ -26,6 +26,10 @@ import (
 type AgentConfig struct {
 	agent.Config
 
+	// ToolAutoCall configures automatic function-tool invocation. When nil, defaults
+	// are used.
+	ToolAutoCall *toolautocall.Config
+
 	// Instructions are sent to AG-UI as a leading system message for each run.
 	Instructions string
 
@@ -40,27 +44,29 @@ type provider struct {
 }
 
 // NewAgent creates a new [agent.Agent] backed by a remote agent that speaks the
-// AG-UI protocol over Server-Sent Events via the AG-UI client.
+// AG-UI protocol over Server-Sent Events via the AG-UI client. It panics if
+// aclient is nil.
 func NewAgent(aclient *aguiSSEClient.Client, config AgentConfig) *agent.Agent {
+	if aclient == nil {
+		panic("aguiprovider: client cannot be nil")
+	}
 	p := &provider{
 		cfg:    config,
 		client: aclient,
 	}
 	if config.Instructions != "" {
-		config.RunOptions = append(config.RunOptions, agent.WithInstructions(config.Instructions))
+		config.RunOptions = append(slices.Clone(config.RunOptions), agent.WithInstructions(config.Instructions))
 	}
 	if config.Decoder != nil {
 		p.decoder = config.Decoder
 	} else {
 		p.decoder = aguiEvents.NewEventDecoder(nil)
 	}
-	var providerMiddlewares []agent.Middleware
-	if !config.DisableFuncAutoCall {
-		providerMiddlewares = append(providerMiddlewares, toolautocall.New(toolautocall.Config{
-			Logger:           config.Logger,
-			LogSensitiveData: config.LogSensitiveData,
-		}))
+	autoCall := toolautocall.Config{Logger: config.Logger, LogSensitiveData: config.LogSensitiveData}
+	if config.ToolAutoCall != nil {
+		autoCall = *config.ToolAutoCall
 	}
+	providerMiddlewares := []agent.Middleware{toolautocall.New(autoCall)}
 	return agent.New(agent.ProviderConfig{
 		ProviderName:                "agui",
 		Run:                         p.run,
@@ -347,7 +353,7 @@ func toAGUIMessage(msg *message.Message) (aguiTypes.Message, bool, error) {
 		out.Content = msg.String()
 		return out, true, nil
 	default:
-		return aguiTypes.Message{}, false, nil
+		return aguiTypes.Message{}, false, fmt.Errorf("aguiprovider: unsupported message role %q", msg.Role)
 	}
 }
 
@@ -373,6 +379,14 @@ type pendingToolCall struct {
 
 type toolCallAccumulator struct {
 	pending map[string]*pendingToolCall
+	// lastChunkMessageID is the MessageID of the most recent
+	// TextMessageChunkEvent that carried one. Chunks that omit MessageID
+	// continue that message.
+	lastChunkMessageID string
+	// lastReasoningChunkMessageID is the same for ReasoningMessageChunkEvent,
+	// kept separate from lastChunkMessageID so interleaved text and reasoning
+	// chunks that omit MessageID do not inherit each other's message.
+	lastReasoningChunkMessageID string
 }
 
 func (a *toolCallAccumulator) onEvent(evt aguiEvents.Event) ([]*agent.ResponseUpdate, error) {
@@ -388,18 +402,23 @@ func (a *toolCallAccumulator) onEvent(evt aguiEvents.Event) ([]*agent.ResponseUp
 			},
 		}}, nil
 	case *aguiEvents.RunFinishedEvent:
-		if e.Result == nil {
-			return nil, nil
+		// Mirror the Python reference (_handle_run_finished): the structured run
+		// result is surfaced only as metadata, never as visible assistant text.
+		// The assistant text has already been streamed via TEXT_MESSAGE_CONTENT,
+		// so emitting the result as an extra TextContent would duplicate it.
+		props := map[string]any{
+			"agui_thread_id": e.ThreadID(),
+			"agui_run_id":    e.RunID(),
 		}
-		text, err := serializeToolResult(e.Result)
-		if err != nil {
-			return nil, err
+		if e.Result != nil {
+			props["result"] = e.Result
 		}
 		return []*agent.ResponseUpdate{{
-			Role:       message.RoleAssistant,
-			ResponseID: e.RunID(),
-			CreatedAt:  eventTime(evt),
-			Contents:   message.Contents{&message.TextContent{Text: text}},
+			Role:                 message.RoleAssistant,
+			ResponseID:           e.RunID(),
+			CreatedAt:            eventTime(evt),
+			FinishReason:         "stop",
+			AdditionalProperties: props,
 		}}, nil
 	case *aguiEvents.RunErrorEvent:
 		return []*agent.ResponseUpdate{{
@@ -414,6 +433,41 @@ func (a *toolCallAccumulator) onEvent(evt aguiEvents.Event) ([]*agent.ResponseUp
 			MessageID: e.MessageID,
 			CreatedAt: eventTime(evt),
 			Contents:  message.Contents{&message.TextContent{Text: e.Delta}},
+		}}, nil
+	case *aguiEvents.TextMessageChunkEvent:
+		delta := deref(e.Delta)
+		if delta == "" {
+			return nil, nil
+		}
+		// A chunk may omit MessageID to continue the current text message.
+		// Reuse the last seen chunk MessageID so the collector groups the
+		// delta with its message instead of merging it into an unrelated
+		// last message (see agent.Response.targetMessage).
+		if id := deref(e.MessageID); id != "" {
+			a.lastChunkMessageID = id
+		}
+		return []*agent.ResponseUpdate{{
+			Role:      message.RoleAssistant,
+			MessageID: a.lastChunkMessageID,
+			CreatedAt: eventTime(evt),
+			Contents:  message.Contents{&message.TextContent{Text: delta}},
+		}}, nil
+	case *aguiEvents.ReasoningMessageChunkEvent:
+		delta := deref(e.Delta)
+		if delta == "" {
+			return nil, nil
+		}
+		// A chunk may omit MessageID to continue the current reasoning message;
+		// reuse the last reasoning chunk MessageID (kept separate from the text
+		// chunk MessageID so interleaved text/reasoning chunks do not cross).
+		if id := deref(e.MessageID); id != "" {
+			a.lastReasoningChunkMessageID = id
+		}
+		return []*agent.ResponseUpdate{{
+			Role:      message.RoleAssistant,
+			MessageID: a.lastReasoningChunkMessageID,
+			CreatedAt: eventTime(evt),
+			Contents:  message.Contents{&message.TextReasoningContent{Text: delta}},
 		}}, nil
 	case *aguiEvents.ReasoningMessageContentEvent:
 		return []*agent.ResponseUpdate{{
@@ -478,6 +532,14 @@ func (a *toolCallAccumulator) onEvent(evt aguiEvents.Event) ([]*agent.ResponseUp
 			Role:      message.RoleAssistant,
 			CreatedAt: eventTime(evt),
 			Contents:  message.Contents{newJSONDataContent(e.Delta, "application/json-patch+json")},
+		}}, nil
+	case *aguiEvents.MessagesSnapshotEvent:
+		return []*agent.ResponseUpdate{{
+			Role:      message.RoleAssistant,
+			CreatedAt: eventTime(evt),
+			AdditionalProperties: map[string]any{
+				"agui_messages_snapshot": e.Messages,
+			},
 		}}, nil
 	default:
 		return nil, nil

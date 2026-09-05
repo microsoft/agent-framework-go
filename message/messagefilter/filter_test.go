@@ -5,6 +5,7 @@ package messagefilter
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/message"
@@ -133,7 +134,7 @@ func TestBuiltInFilters_DoNotAddMessages(t *testing.T) {
 	}
 
 	for _, filter := range filters {
-		out, err := filter(t.Context(), append([]*message.Message(nil), messages...))
+		out, err := filter(t.Context(), slices.Clone(messages))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

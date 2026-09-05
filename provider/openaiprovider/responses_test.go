@@ -4,17 +4,20 @@ package openaiprovider_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
+	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/internal/messagetest"
 	"github.com/microsoft/agent-framework-go/message"
@@ -31,6 +34,51 @@ import (
 type continuationToken struct {
 	ResponseID     string `json:"response_id"`
 	SequenceNumber int64  `json:"sequence_number"`
+}
+
+func TestResponsesToolModeNoneWithoutFrameworkToolsAndRawInputRemainsUnchanged(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		bodyCh <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"resp-test","object":"response","created_at":1727888631,"status":"completed","model":"gpt-4o-mini","output":[]}`)
+	}))
+	defer server.Close()
+
+	backing := make([]responses.ResponseInputItemUnionParam, 0, 2)
+	var raw responses.ResponseNewParams
+	raw.Input.OfInputItemList = backing
+	_, err := newTestResponsesClient(server, "gpt-4o-mini").RunText(
+		t.Context(),
+		"hello",
+		openaiprovider.ResponsesNewParams(raw),
+		agent.WithToolMode(tool.ToolModeNone),
+	).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request map[string]any
+	if err := json.Unmarshal(<-bodyCh, &request); err != nil {
+		t.Fatal(err)
+	}
+	if request["tool_choice"] != "none" {
+		t.Fatalf("tool_choice = %#v, want none", request["tool_choice"])
+	}
+	var zero responses.ResponseInputItemUnionParam
+	if !reflect.DeepEqual(backing[:cap(backing)][0], zero) {
+		t.Fatal("request construction mutated caller's Input backing array")
+	}
+}
+
+func TestResponsesAgent_UnsupportedMessageRoleReturnsError(t *testing.T) {
+	a := openaiprovider.NewResponsesAgent(openai.NewClient(option.WithAPIKey("test")), openaiprovider.AgentConfig{
+		Model: "test-model",
+	})
+	_, err := a.Run(t.Context(), []*message.Message{{Role: message.Role("custom")}}).Collect()
+	if err == nil || !strings.Contains(err.Error(), "unsupported message role") {
+		t.Fatalf("Run() error = %v, want unsupported message role", err)
+	}
 }
 
 // Helper functions for responses tests
@@ -68,8 +116,10 @@ func newTestResponsesClient(server *httptest.Server, model string) *agent.Agent 
 	return openaiprovider.NewResponsesAgent(
 		openai.NewClient(option.WithBaseURL(server.URL)),
 		openaiprovider.AgentConfig{
-			Model:  model,
-			Config: agent.Config{DisableFuncAutoCall: true},
+			Model: model,
+			ToolAutoCall: &toolautocall.Config{
+				MaximumIterationsPerRequest: new(0),
+			},
 		},
 	)
 }
@@ -137,7 +187,7 @@ func TestNewAgentCurrentlyUsesResponsesAPI(t *testing.T) {
 
 	a := openaiprovider.NewAgent(
 		openai.NewClient(option.WithBaseURL(server.URL)),
-		openaiprovider.AgentConfig{Model: "gpt-4o-mini", Config: agent.Config{DisableFuncAutoCall: true}},
+		openaiprovider.AgentConfig{Model: "gpt-4o-mini"},
 	)
 
 	if _, err := a.RunText(t.Context(), "hello").Collect(); err != nil {
@@ -184,9 +234,6 @@ func TestResponsesConfigInstructions_NonStreaming(t *testing.T) {
 		openaiprovider.AgentConfig{
 			Model:        "gpt-4o-mini",
 			Instructions: "Be concise.",
-			Config: agent.Config{
-				DisableFuncAutoCall: true,
-			},
 		},
 	)
 
@@ -292,7 +339,8 @@ func TestResponsesBasicRequestResponse_NonStreaming(t *testing.T) {
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	resp, err := a.RunText(t.Context(), "hello",
+	resp, err := a.RunText(
+		t.Context(), "hello",
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
@@ -384,7 +432,8 @@ data: {"type":"response.completed","response":{"id":"resp_67d329fbc87c81919f8952
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
 	var updates []*agent.ResponseUpdate
-	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
+	for update, err := range a.RunText(
+		t.Context(), "hello", agent.Stream(true),
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
@@ -630,6 +679,63 @@ data: {"type":"response.completed","sequence_number":29,"response":{"id":"resp_6
 	}
 }
 
+func TestResponsesReasoningSummary_NonStreaming(t *testing.T) {
+	const input = `
+            {
+                "model":"o4-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]
+            }
+            `
+	const output = `
+            {
+                "id":"resp_reasoningsummary",
+                "object":"response",
+                "created_at":1741891428,
+                "status":"completed",
+                "error":null,
+                "incomplete_details":null,
+                "model":"o4-mini-2025-04-16",
+                "output":[
+                    {
+                        "id":"rs_reasoningsummary",
+                        "type":"reasoning",
+                        "summary":[{"type":"summary_text","text":"**Calculating a simple sum**"}],
+                        "content":[]
+                    },
+                    {
+                        "type":"message",
+                        "id":"msg_reasoningsummary",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[{"type":"output_text","text":"The sum is 15.","annotations":[]}]
+                    }
+                ]
+            }
+            `
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "o4-mini")
+
+	resp, err := a.RunText(t.Context(), "hello").Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+
+	var summaryText string
+	for _, msg := range resp.Messages {
+		for _, content := range msg.Contents {
+			if rc, ok := content.(*message.TextReasoningContent); ok && rc.Text != "" {
+				summaryText = rc.Text
+			}
+		}
+	}
+	if summaryText != "**Calculating a simple sum**" {
+		t.Errorf("expected reasoning summary text %q, got %q", "**Calculating a simple sum**", summaryText)
+	}
+}
+
 func TestResponsesChatOptions_Model_OverridesClientModel_NonStreaming(t *testing.T) {
 	const input = `
             {
@@ -676,7 +782,8 @@ func TestResponsesChatOptions_Model_OverridesClientModel_NonStreaming(t *testing
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
 	// Override with gpt-4o in options
-	resp, err := a.RunText(t.Context(), "hello",
+	resp, err := a.RunText(
+		t.Context(), "hello",
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			Model:           "gpt-4o",
 			MaxOutputTokens: openai.Int(10),
@@ -780,7 +887,8 @@ func TestResponsesMultipleMessages_NonStreaming(t *testing.T) {
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "i'm good. how are you?"}}},
 	}
 
-	resp, err := a.Run(t.Context(), messages,
+	resp, err := a.Run(
+		t.Context(), messages,
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			Temperature: openai.Float(0.25),
 		}),
@@ -965,6 +1073,206 @@ func TestResponsesDataContentMessage_Image_NonStreaming(t *testing.T) {
 	}
 }
 
+func TestResponsesUriContentMessage_Image_ForwardsFileID(t *testing.T) {
+	// An image referenced by an already-uploaded file_id must be forwarded
+	// alongside image_url and detail, matching the Python reference.
+	const input = `
+            {
+              "input": [
+                {
+                  "type": "message",
+                  "role": "user",
+                  "content": [
+                    {
+                      "type": "input_image",
+                      "image_url": "https://x/img.png",
+                      "detail": "high",
+                      "file_id": "file-abc"
+                    }
+                  ]
+                }
+              ],
+              "model": "gpt-4o-mini"
+            }
+            `
+	const output = `
+            {
+              "id": "resp_img_fileid",
+              "object": "response",
+              "created_at": 1743531271,
+              "status": "completed",
+              "model": "gpt-4o-mini-2024-07-18",
+              "output": [
+                {
+                  "type": "message",
+                  "id": "msg_img_fileid",
+                  "status": "completed",
+                  "role": "assistant",
+                  "content": [
+                    {"type": "output_text", "text": "ok", "annotations": []}
+                  ]
+                }
+              ]
+            }
+            `
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	uriContent := &message.URIContent{
+		URI:       "https://x/img.png",
+		MediaType: "image/png",
+	}
+	uriContent.AdditionalProperties = map[string]any{
+		"detail":  "high",
+		"file_id": "file-abc",
+	}
+
+	messages := []*message.Message{
+		{
+			Role:     message.RoleUser,
+			Contents: []message.Content{uriContent},
+		},
+	}
+
+	if _, err := a.Run(t.Context(), messages).Collect(); err != nil {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestResponsesDataContentMessage_Image_ForwardsFileID(t *testing.T) {
+	const input = `
+            {
+              "input": [
+                {
+                  "type": "message",
+                  "role": "user",
+                  "content": [
+                    {
+                      "type": "input_image",
+                      "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==",
+                      "detail": "high",
+                      "file_id": "file-abc"
+                    }
+                  ]
+                }
+              ],
+              "model": "gpt-4o-mini"
+            }
+            `
+	const output = `
+            {
+              "id": "resp_img_fileid",
+              "object": "response",
+              "created_at": 1743531271,
+              "status": "completed",
+              "model": "gpt-4o-mini-2024-07-18",
+              "output": [
+                {
+                  "type": "message",
+                  "id": "msg_img_fileid",
+                  "status": "completed",
+                  "role": "assistant",
+                  "content": [
+                    {"type": "output_text", "text": "ok", "annotations": []}
+                  ]
+                }
+              ]
+            }
+            `
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	dataContent := &message.DataContent{
+		Data:      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==",
+		MediaType: "image/png",
+	}
+	dataContent.AdditionalProperties = map[string]any{
+		"detail":  "high",
+		"file_id": "file-abc",
+	}
+
+	messages := []*message.Message{
+		{
+			Role:     message.RoleUser,
+			Contents: []message.Content{dataContent},
+		},
+	}
+
+	if _, err := a.Run(t.Context(), messages).Collect(); err != nil {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestResponsesUriContentMessage_Image_NoFileID_OmitsField(t *testing.T) {
+	// Without a file_id in AdditionalProperties, no file_id field is emitted.
+	const input = `
+            {
+              "input": [
+                {
+                  "type": "message",
+                  "role": "user",
+                  "content": [
+                    {
+                      "type": "input_image",
+                      "image_url": "https://x/img.png",
+                      "detail": "high"
+                    }
+                  ]
+                }
+              ],
+              "model": "gpt-4o-mini"
+            }
+            `
+	const output = `
+            {
+              "id": "resp_img_nofileid",
+              "object": "response",
+              "created_at": 1743531271,
+              "status": "completed",
+              "model": "gpt-4o-mini-2024-07-18",
+              "output": [
+                {
+                  "type": "message",
+                  "id": "msg_img_nofileid",
+                  "status": "completed",
+                  "role": "assistant",
+                  "content": [
+                    {"type": "output_text", "text": "ok", "annotations": []}
+                  ]
+                }
+              ]
+            }
+            `
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	uriContent := &message.URIContent{
+		URI:       "https://x/img.png",
+		MediaType: "image/png",
+	}
+	uriContent.AdditionalProperties = map[string]any{"detail": "high"}
+
+	messages := []*message.Message{
+		{
+			Role:     message.RoleUser,
+			Contents: []message.Content{uriContent},
+		},
+	}
+
+	if _, err := a.Run(t.Context(), messages).Collect(); err != nil {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestResponsesReasoningTextDelta_Streaming(t *testing.T) {
 	const input = `
             {
@@ -1114,6 +1422,167 @@ data: {"type":"response.completed","sequence_number":14,"response":{"id":"resp_r
 	}
 }
 
+// TestResponsesReasoningEncryptedContent_Streaming verifies that a completed
+// reasoning item's encrypted content is carried through the streaming path so it
+// can be replayed on the next turn when store=false (Include always adds reasoning
+// encrypted content in that mode). Before the fix the reasoning
+// response.output_item.done event fell through to the default case and its
+// EncryptedContent was discarded.
+func TestResponsesReasoningEncryptedContent_Streaming(t *testing.T) {
+	const encrypted = "gAAAAABencrypted_reasoning_blob"
+
+	const input = `
+            {
+              "store":false,
+              "include":["reasoning.encrypted_content"],
+              "input":[{
+                "type":"message",
+                "role":"user",
+                "content":[{
+                  "type":"input_text",
+                  "text":"Solve this problem step by step."
+                }]
+              }],
+              "model": "o4-mini",
+              "stream": true
+            }
+            `
+
+	const output = `event: response.created
+data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_enc123","object":"response","created_at":1756752900,"status":"in_progress","model":"o4-mini-2025-04-16","output":[],"reasoning":{"effort":"medium"}}}
+
+event: response.in_progress
+data: {"type":"response.in_progress","sequence_number":1,"response":{"id":"resp_enc123","object":"response","created_at":1756752900,"status":"in_progress","model":"o4-mini-2025-04-16","output":[]}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":2,"output_index":0,"item":{"id":"rs_enc123","type":"reasoning","text":""}}
+
+event: response.reasoning_text.delta
+data: {"type":"response.reasoning_text.delta","sequence_number":3,"item_id":"rs_enc123","output_index":0,"delta":"Analyzing."}
+
+event: response.reasoning_text.done
+data: {"type":"response.reasoning_text.done","sequence_number":4,"item_id":"rs_enc123","output_index":0,"text":"Analyzing."}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":5,"output_index":0,"item":{"id":"rs_enc123","type":"reasoning","content":[{"type":"reasoning_text","text":"Analyzing."}],"encrypted_content":"gAAAAABencrypted_reasoning_blob"}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":6,"output_index":1,"item":{"id":"msg_enc123","type":"message","status":"in_progress","content":[],"role":"assistant"}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":7,"item_id":"msg_enc123","output_index":1,"content_index":0,"delta":"The solution is 42."}
+
+event: response.output_text.done
+data: {"type":"response.output_text.done","sequence_number":8,"item_id":"msg_enc123","output_index":1,"content_index":0,"text":"The solution is 42."}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":9,"output_index":1,"item":{"id":"msg_enc123","type":"message","status":"completed","content":[{"type":"output_text","annotations":[],"text":"The solution is 42."}],"role":"assistant"}}
+
+event: response.completed
+data: {"type":"response.completed","sequence_number":10,"response":{"id":"resp_enc123","object":"response","created_at":1756752900,"status":"completed","model":"o4-mini-2025-04-16","output":[{"id":"rs_enc123","type":"reasoning","content":[{"type":"reasoning_text","text":"Analyzing."}],"encrypted_content":"gAAAAABencrypted_reasoning_blob"},{"id":"msg_enc123","type":"message","status":"completed","content":[{"type":"output_text","annotations":[],"text":"The solution is 42."}],"role":"assistant"}],"usage":{"input_tokens":10,"output_tokens":25,"total_tokens":35}}}
+
+`
+
+	server := newTestResponsesServerStreaming(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "o4-mini")
+
+	var updates []*agent.ResponseUpdate
+	for update, err := range a.RunText(t.Context(), "Solve this problem step by step.", agent.Stream(true),
+		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{Store: openai.Bool(false)})) {
+		if err != nil {
+			t.Fatalf("error = %v", err)
+		}
+		updates = append(updates, update)
+	}
+
+	// The completed reasoning item must surface as a TextReasoningContent that
+	// carries the encrypted content forward.
+	var protectedData string
+	for _, update := range updates {
+		for _, content := range update.Contents {
+			if rc, ok := content.(*message.TextReasoningContent); ok && rc.ProtectedData != "" {
+				protectedData = rc.ProtectedData
+			}
+		}
+	}
+	if protectedData != encrypted {
+		t.Fatalf("expected reasoning ProtectedData %q, got %q", encrypted, protectedData)
+	}
+
+	// Round-trip: replaying the collected reasoning content on the next turn must
+	// echo the encrypted content back as reasoning encrypted_content in the request.
+	var capturedBody string
+	replayServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("failed reading request body: %v", err)
+		}
+		capturedBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"resp_enc456","object":"response","created_at":1756752901,"status":"completed","model":"o4-mini-2025-04-16","output":[{"type":"message","id":"msg_enc456","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok","annotations":[]}]}]}`)
+	}))
+	defer replayServer.Close()
+
+	a2 := newTestResponsesClient(replayServer, "o4-mini")
+	messages := []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Solve this problem step by step."}}},
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			&message.TextReasoningContent{Text: "Analyzing.", ProtectedData: protectedData},
+			&message.TextContent{Text: "The solution is 42."},
+		}},
+	}
+	if _, err := a2.Run(t.Context(), messages).Collect(); err != nil {
+		t.Fatalf("replay error = %v", err)
+	}
+	if !strings.Contains(capturedBody, `"encrypted_content":"`+encrypted+`"`) {
+		t.Fatalf("expected replay request to carry encrypted_content %q, body = %s", encrypted, capturedBody)
+	}
+	// summary is required by the Responses API even when empty.
+	if !strings.Contains(capturedBody, `"summary":[]`) {
+		t.Fatalf("expected replay request to include an (empty) reasoning summary, body = %s", capturedBody)
+	}
+	// Plaintext reasoning content must not be replayed on input.
+	if strings.Contains(capturedBody, `"reasoning_text"`) {
+		t.Fatalf("expected replay request to omit plaintext reasoning content, body = %s", capturedBody)
+	}
+}
+
+// TestResponsesReasoningReplay_StoreTrue_SkipsReasoningItem verifies that when a
+// reasoning item has no encrypted content (store=true), it is not replayed in the
+// request. Under store=true the server retains the reasoning item by id, so
+// re-sending it would fail with a duplicate-item error.
+func TestResponsesReasoningReplay_StoreTrue_SkipsReasoningItem(t *testing.T) {
+	var capturedBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("failed reading request body: %v", err)
+		}
+		capturedBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"resp_store1","object":"response","created_at":1756752901,"status":"completed","model":"o4-mini-2025-04-16","output":[{"type":"message","id":"msg_store1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok","annotations":[]}]}]}`)
+	}))
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "o4-mini")
+	messages := []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Solve this problem step by step."}}},
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			// No ProtectedData: reasoning was stored server-side (store=true).
+			&message.TextReasoningContent{Text: "Analyzing."},
+			&message.TextContent{Text: "The solution is 42."},
+		}},
+	}
+	if _, err := a.Run(t.Context(), messages).Collect(); err != nil {
+		t.Fatalf("replay error = %v", err)
+	}
+	if strings.Contains(capturedBody, `"type":"reasoning"`) {
+		t.Fatalf("expected reasoning item to be skipped under store=true, body = %s", capturedBody)
+	}
+}
+
 func TestResponsesChatOptions_Model_OverridesClientModel_Streaming(t *testing.T) {
 	const input = `
             {
@@ -1162,7 +1631,8 @@ data: {"type":"response.completed","response":{"id":"resp_streaming123","object"
 
 	var updates []*agent.ResponseUpdate
 	// Override with gpt-4o in options
-	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
+	for update, err := range a.RunText(
+		t.Context(), "hello", agent.Stream(true),
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			Model:           "gpt-4o",
 			MaxOutputTokens: openai.Int(20),
@@ -1290,7 +1760,8 @@ func TestResponsesMultipleOutputItems_NonStreaming(t *testing.T) {
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	resp, err := a.RunText(t.Context(), "hello",
+	resp, err := a.RunText(
+		t.Context(), "hello",
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
@@ -1491,7 +1962,8 @@ func TestResponsesFunctionCallWithResult_NonStreaming(t *testing.T) {
 		Description: "Get the current weather",
 	}, getWeather)
 
-	resp1, err := a1.RunText(t.Context(), "What's the weather in Seattle?",
+	resp1, err := a1.RunText(
+		t.Context(), "What's the weather in Seattle?",
 		agent.WithTool(tool),
 	).Collect()
 	if err != nil {
@@ -1542,7 +2014,8 @@ func TestResponsesFunctionCallWithResult_NonStreaming(t *testing.T) {
 		}},
 	}
 
-	resp2, err := a2.Run(t.Context(), messages,
+	resp2, err := a2.Run(
+		t.Context(), messages,
 		agent.WithTool(tool),
 	).Collect()
 	if err != nil {
@@ -1686,7 +2159,8 @@ func TestResponsesFunctionCall_UsesCallIDWhenDifferentFromID(t *testing.T) {
 		Description: "Get the current weather",
 	}, getWeather)
 
-	resp1, err := a1.RunText(t.Context(), "What's the weather in Amsterdam?",
+	resp1, err := a1.RunText(
+		t.Context(), "What's the weather in Amsterdam?",
 		agent.WithTool(weatherTool),
 	).Collect()
 	if err != nil {
@@ -1733,7 +2207,8 @@ func TestResponsesFunctionCall_UsesCallIDWhenDifferentFromID(t *testing.T) {
 		}},
 	}
 
-	resp2, err := a2.Run(t.Context(), messages,
+	resp2, err := a2.Run(
+		t.Context(), messages,
 		agent.WithTool(weatherTool),
 	).Collect()
 	if err != nil {
@@ -2056,9 +2531,154 @@ func firstToolApprovalRequest(t *testing.T, resp *agent.Response) *message.ToolA
 	return nil
 }
 
+func TestResponsesNonStreamingMCPCall_MapsResultContent(t *testing.T) {
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"test"}]}]
+            }
+            `
+
+	const output = `
+            {
+              "id":"resp_001",
+              "object":"response",
+              "created_at":1741892091,
+              "status":"completed",
+              "model":"gpt-4o-mini",
+              "output":[{
+                "type":"mcp_call",
+                "id":"mcp_123",
+                "server_label":"github",
+                "name":"create_issue",
+                "arguments":"{\"title\":\"Bug\"}",
+                "output":"issue #7 created",
+				"error":{"type":"mcp_tool_execution_error","message":"rate limited"}
+              }]
+            }
+            `
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+	resp, err := a.RunText(t.Context(), "test").Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+
+	var call *message.MCPServerToolCallContent
+	var result *message.MCPServerToolResultContent
+	var errContent *message.ErrorContent
+	for content := range resp.Contents() {
+		switch c := content.(type) {
+		case *message.MCPServerToolCallContent:
+			call = c
+		case *message.MCPServerToolResultContent:
+			result = c
+		case *message.ErrorContent:
+			errContent = c
+		}
+	}
+
+	if call == nil {
+		t.Fatal("expected MCPServerToolCallContent")
+	}
+	if call.CallID != "mcp_123" || call.Name != "create_issue" || call.ServerName != "github" || call.Arguments != `{"title":"Bug"}` {
+		t.Fatalf("call = %#v", call)
+	}
+	if result == nil {
+		t.Fatal("expected MCPServerToolResultContent")
+	}
+	if result.CallID != "mcp_123" || result.Name != "create_issue" || result.ServerName != "github" {
+		t.Fatalf("result = %#v", result)
+	}
+	if result.Error != "rate limited" {
+		t.Errorf("result.Error = %q, want %q", result.Error, "rate limited")
+	}
+	if len(result.Outputs) != 1 {
+		t.Fatalf("Outputs len = %d, want 1", len(result.Outputs))
+	}
+	text, ok := result.Outputs[0].(*message.TextContent)
+	if !ok || text.Text != "issue #7 created" {
+		t.Fatalf("Outputs[0] = %#v", result.Outputs[0])
+	}
+	if errContent == nil || errContent.Message != "rate limited" {
+		t.Fatalf("expected ErrorContent with tool error, got %#v", errContent)
+	}
+}
+
+func TestResponsesStreamingMCPCall_MapsResultContent(t *testing.T) {
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"test"}]}],
+                "stream":true
+            }
+            `
+
+	const output = `event: response.created
+data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_001","object":"response","created_at":1741892091,"status":"in_progress","model":"gpt-4o-mini","output":[]}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":1,"output_index":0,"item":{"type":"mcp_call","id":"mcp_123","server_label":"github","name":"create_issue","arguments":"{\"title\":\"Bug\"}","output":"issue #7 created","error":{"type":"mcp_tool_execution_error","message":"rate limited"}}}
+
+event: response.completed
+data: {"type":"response.completed","sequence_number":2,"response":{"id":"resp_001","object":"response","created_at":1741892091,"status":"completed","model":"gpt-4o-mini","output":[]}}
+
+`
+
+	server := newTestResponsesServerStreaming(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+	var call *message.MCPServerToolCallContent
+	var result *message.MCPServerToolResultContent
+	var errContent *message.ErrorContent
+	for update, err := range a.RunText(t.Context(), "test", agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("error = %v", err)
+		}
+		for _, content := range update.Contents {
+			switch c := content.(type) {
+			case *message.MCPServerToolCallContent:
+				call = c
+			case *message.MCPServerToolResultContent:
+				result = c
+			case *message.ErrorContent:
+				errContent = c
+			}
+		}
+	}
+
+	if call == nil {
+		t.Fatal("expected MCPServerToolCallContent")
+	}
+	if call.CallID != "mcp_123" || call.ServerName != "github" || call.Name != "create_issue" || call.Arguments != `{"title":"Bug"}` {
+		t.Fatalf("call = %#v", call)
+	}
+	if result == nil {
+		t.Fatal("expected MCPServerToolResultContent")
+	}
+	if result.CallID != "mcp_123" || result.ServerName != "github" || result.Name != "create_issue" {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(result.Outputs) != 1 {
+		t.Fatalf("Outputs len = %d, want 1", len(result.Outputs))
+	}
+	text, ok := result.Outputs[0].(*message.TextContent)
+	if !ok || text.Text != "issue #7 created" {
+		t.Fatalf("Outputs[0] = %#v", result.Outputs[0])
+	}
+	if errContent == nil || errContent.Message != "rate limited" {
+		t.Fatalf("expected ErrorContent with tool error, got %#v", errContent)
+	}
+}
+
 func TestResponsesResponseFormatSchemaConvertsJSONSchema(t *testing.T) {
 	type payload struct {
-		Name string `json:"name"`
+		Name     string `json:"name"`
+		Nickname string `json:"nickname,omitempty"`
 	}
 	format, err := jsonformat.For[payload]()
 	if err != nil {
@@ -2069,7 +2689,7 @@ func TestResponsesResponseFormatSchemaConvertsJSONSchema(t *testing.T) {
             {
                 "model":"gpt-4o-mini",
                 "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}],
-                "text":{"format":{"type":"json_schema","name":"payload","schema":{"properties":{"name":{"type":"string"}},"type":"object","required":["name"],"additionalProperties":false},"strict":true}}
+				"text":{"format":{"type":"json_schema","name":"payload","schema":{"properties":{"name":{"type":"string"},"nickname":{"type":"string"}},"type":"object","required":["name","nickname"],"additionalProperties":false},"strict":true}}
             }
             `
 
@@ -2090,6 +2710,18 @@ func TestResponsesResponseFormatSchemaConvertsJSONSchema(t *testing.T) {
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 	if _, err := a.RunText(t.Context(), "hello", agent.WithResponseFormat(format)).Collect(); err != nil {
 		t.Fatalf("error = %v", err)
+	}
+
+	localFormat, err := jsonformat.FromResponseFormat(format)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := localFormat.Marshal(payload{Name: "Ada"})
+	if err != nil {
+		t.Fatalf("local Marshal() rejected omitted optional property: %v", err)
+	}
+	if got, want := string(data), `{"name":"Ada"}`; got != want {
+		t.Fatalf("local Marshal() = %s, want %s", got, want)
 	}
 }
 
@@ -2170,6 +2802,28 @@ data: {"type":"response.failed","response":{"id":"resp_001","object":"response",
 
 	if len(updates) < 2 {
 		t.Errorf("expected at least 2 updates, got %d", len(updates))
+	}
+
+	var errorContent *message.ErrorContent
+	for _, update := range updates {
+		for _, content := range update.Contents {
+			if ec, ok := content.(*message.ErrorContent); ok {
+				errorContent = ec
+				break
+			}
+		}
+		if errorContent != nil {
+			break
+		}
+	}
+	if errorContent == nil {
+		t.Fatal("expected response.failed update to surface ErrorContent")
+	}
+	if errorContent.Message != "Internal error" {
+		t.Errorf("expected error message %q, got %q", "Internal error", errorContent.Message)
+	}
+	if errorContent.ErrorCode != "internal_error" {
+		t.Errorf("expected error code %q, got %q", "internal_error", errorContent.ErrorCode)
 	}
 
 	// Verify all updates have the same response ID
@@ -2288,6 +2942,75 @@ data: {"type":"response.completed","response":{"id":"resp_001","object":"respons
 	}
 }
 
+func TestResponsesMCPServerToolAddressRouting(t *testing.T) {
+	const output = `
+            {
+                "id": "resp_test",
+                "object": "response",
+                "created_at": 1741891428,
+                "status": "completed",
+                "error": null,
+                "incomplete_details": null,
+                "model": "gpt-4o-mini",
+                "output": [{
+                    "type": "message",
+                    "id": "msg_test",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Hello", "annotations": []}]
+                }]
+            }
+            `
+
+	tests := []struct {
+		name          string
+		serverAddress string
+		wantTool      string
+	}{
+		{
+			name:          "bare connector id routes to connector_id",
+			serverAddress: "connector_googledrive",
+			wantTool:      `{"type":"mcp","server_label":"drive","connector_id":"connector_googledrive"}`,
+		},
+		{
+			name:          "https url routes to server_url",
+			serverAddress: "https://example.com/mcp",
+			wantTool:      `{"type":"mcp","server_label":"drive","server_url":"https://example.com/mcp"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := `
+                {
+                    "model":"gpt-4o-mini",
+                    "input":[{
+                        "type":"message",
+                        "role":"user",
+                        "content":[{"type":"input_text","text":"hello"}]
+                    }],
+                    "tools":[` + tt.wantTool + `]
+                }
+                `
+
+			server := newTestResponsesServer(t, input, output)
+			defer server.Close()
+
+			a := newTestResponsesClient(server, "gpt-4o-mini")
+
+			_, err := a.RunText(t.Context(), "hello",
+				agent.WithTool(&hostedtool.MCPServer{
+					ServerName:    "drive",
+					ServerAddress: tt.serverAddress,
+				}),
+			).Collect()
+			if err != nil {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
 func TestResponsesCodeInterpreterTool_NonStreaming(t *testing.T) {
 	const input = `
             {
@@ -2300,7 +3023,8 @@ func TestResponsesCodeInterpreterTool_NonStreaming(t *testing.T) {
                 "tools":[{
                     "type":"code_interpreter",
                     "container":{"type":"auto"}
-                }]
+                }],
+                "include":["code_interpreter_call.outputs"]
             }
             `
 
@@ -2318,7 +3042,10 @@ func TestResponsesCodeInterpreterTool_NonStreaming(t *testing.T) {
                   "status":"completed",
                   "code":"# Calculating the sum of numbers from 1 to 5\nresult = sum(range(1, 6))\nresult",
                   "container_id":"cntr_68fb7476c384819186524b78cdc3180000a9a0fdd06b3cd4",
-                  "outputs":null
+                  "outputs":[
+                    {"type":"logs","logs":"15\n"},
+                    {"type":"image","url":"https://example.com/plot.png"}
+                  ]
                 },
                 {
                   "id":"msg_0e599e83cc6642210068fb747e118081a08c3ed46daa9d9dcb",
@@ -2345,7 +3072,8 @@ func TestResponsesCodeInterpreterTool_NonStreaming(t *testing.T) {
 
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	resp, err := a.RunText(t.Context(), "Calculate the sum of numbers from 1 to 5",
+	resp, err := a.RunText(
+		t.Context(), "Calculate the sum of numbers from 1 to 5",
 		agent.WithTool(&hostedtool.CodeInterpreter{}),
 	).Collect()
 	if err != nil {
@@ -2390,6 +3118,28 @@ func TestResponsesCodeInterpreterTool_NonStreaming(t *testing.T) {
 	if codeResult.CallID != codeCall.CallID {
 		t.Errorf("expected result CallID to match call CallID, got %s vs %s", codeResult.CallID, codeCall.CallID)
 	}
+	// The include=code_interpreter_call.outputs must surface the tool outputs
+	// (logs + image) into CodeInterpreterToolResultContent.Outputs.
+	if len(codeResult.Outputs) != 2 {
+		t.Fatalf("expected 2 code interpreter outputs (logs, image), got %d", len(codeResult.Outputs))
+	}
+	logsOutput, ok := codeResult.Outputs[0].(*message.TextContent)
+	if !ok {
+		t.Fatalf("expected first output to be TextContent (logs), got %T", codeResult.Outputs[0])
+	}
+	if logsOutput.Text != "15\n" {
+		t.Errorf("expected logs output '15\\n', got %q", logsOutput.Text)
+	}
+	imageOutput, ok := codeResult.Outputs[1].(*message.URIContent)
+	if !ok {
+		t.Fatalf("expected second output to be URIContent (image), got %T", codeResult.Outputs[1])
+	}
+	if imageOutput.URI != "https://example.com/plot.png" {
+		t.Errorf("expected image URI 'https://example.com/plot.png', got %q", imageOutput.URI)
+	}
+	if imageOutput.MediaType != "image/png" {
+		t.Errorf("expected image media type 'image/png', got %q", imageOutput.MediaType)
+	}
 
 	// Check for TextContent
 	textContent, ok := msg.Contents[2].(*message.TextContent)
@@ -2419,6 +3169,7 @@ func TestResponsesCodeInterpreterTool_Streaming(t *testing.T) {
                 "model":"gpt-4o-mini",
                 "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Calculate 3+3"}]}],
                 "tools":[{"type":"code_interpreter","container":{"type":"auto"}}],
+                "include":["code_interpreter_call.outputs"],
                 "stream":true
             }
             `
@@ -2430,7 +3181,7 @@ event: response.output_item.added
 data: {"type":"response.output_item.added","item":{"type":"code_interpreter_call","id":"call_code_002","code":"","container_id":"container_002","status":"in_progress","outputs":[]}}
 
 event: response.output_item.done
-data: {"type":"response.output_item.done","item":{"type":"code_interpreter_call","id":"call_code_002","code":"print(3+3)","container_id":"container_002","status":"completed","outputs":[{"type":"logs","logs":"6\n"}]}}
+data: {"type":"response.output_item.done","item":{"type":"code_interpreter_call","id":"call_code_002","code":"print(3+3)","container_id":"container_002","status":"completed","outputs":[{"type":"logs","logs":"6\n"},{"type":"image","url":"https://example.com/plot.png"}]}}
 
 event: response.output_item.added
 data: {"type":"response.output_item.added","item":{"type":"message","id":"msg_002","role":"assistant","status":"in_progress","content":[]}}
@@ -2442,7 +3193,7 @@ event: response.output_item.done
 data: {"type":"response.output_item.done","item":{"type":"message","id":"msg_002","status":"completed","role":"assistant","content":[{"type":"output_text","text":"6","annotations":[]}]}}
 
 event: response.completed
-data: {"type":"response.completed","response":{"id":"resp_002","object":"response","created_at":1741892091,"status":"completed","model":"gpt-4o-mini","output":[{"type":"code_interpreter_call","id":"call_code_002","code":"print(3+3)","container_id":"container_002","status":"completed","outputs":[{"type":"logs","logs":"6\n"}]},{"type":"message","id":"msg_002","status":"completed","role":"assistant","content":[{"type":"output_text","text":"6","annotations":[]}]}]}}
+data: {"type":"response.completed","response":{"id":"resp_002","object":"response","created_at":1741892091,"status":"completed","model":"gpt-4o-mini","output":[{"type":"code_interpreter_call","id":"call_code_002","code":"print(3+3)","container_id":"container_002","status":"completed","outputs":[{"type":"logs","logs":"6\n"},{"type":"image","url":"https://example.com/plot.png"}]},{"type":"message","id":"msg_002","status":"completed","role":"assistant","content":[{"type":"output_text","text":"6","annotations":[]}]}]}}
 
 `
 
@@ -2452,7 +3203,8 @@ data: {"type":"response.completed","response":{"id":"resp_002","object":"respons
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
 	var updates []*agent.ResponseUpdate
-	var allText strings.Builder
+	var codeCall *message.CodeInterpreterToolCallContent
+	var codeResult *message.CodeInterpreterToolResultContent
 	for update, err := range a.RunText(t.Context(), "Calculate 3+3", agent.Stream(true),
 		agent.WithTool(&hostedtool.CodeInterpreter{}),
 	) {
@@ -2461,8 +3213,11 @@ data: {"type":"response.completed","response":{"id":"resp_002","object":"respons
 		}
 		updates = append(updates, update)
 		for _, content := range update.Contents {
-			if tc, ok := content.(*message.TextContent); ok {
-				allText.WriteString(tc.Text)
+			switch c := content.(type) {
+			case *message.CodeInterpreterToolCallContent:
+				codeCall = c
+			case *message.CodeInterpreterToolResultContent:
+				codeResult = c
 			}
 		}
 	}
@@ -2471,16 +3226,411 @@ data: {"type":"response.completed","response":{"id":"resp_002","object":"respons
 		t.Errorf("expected at least 3 updates, got %d", len(updates))
 	}
 
-	// Verify we got both code interpreter content and text result
-	responseText := allText.String()
-	if !strings.Contains(responseText, "Code Interpreter") {
-		t.Errorf("expected response to contain 'Code Interpreter', got %q", responseText)
+	// Streaming must emit structured code-interpreter content, matching the
+	// non-streaming path and the .NET/Python SDKs, rather than a text blob.
+	if codeCall == nil {
+		t.Fatalf("expected a CodeInterpreterToolCallContent in the streamed updates")
 	}
-	if !strings.Contains(responseText, "print(3+3)") {
-		t.Errorf("expected response to contain code 'print(3+3)', got %q", responseText)
+	if codeCall.CallID != "call_code_002" {
+		t.Errorf("expected call CallID 'call_code_002', got %q", codeCall.CallID)
 	}
-	if !strings.Contains(responseText, "6") {
-		t.Errorf("expected response to contain output '6', got %q", responseText)
+	if len(codeCall.Inputs) != 1 {
+		t.Fatalf("expected 1 input in code call, got %d", len(codeCall.Inputs))
+	}
+	dataContent, ok := codeCall.Inputs[0].(*message.DataContent)
+	if !ok {
+		t.Fatalf("expected input to be DataContent, got %T", codeCall.Inputs[0])
+	}
+	if dataContent.MediaType != "text/x-python" {
+		t.Errorf("expected MediaType text/x-python, got %s", dataContent.MediaType)
+	}
+	if decoded, err := base64.StdEncoding.DecodeString(dataContent.Data); err != nil {
+		t.Errorf("expected base64-encoded code, decode error: %v", err)
+	} else if string(decoded) != "print(3+3)" {
+		t.Errorf("expected decoded code 'print(3+3)', got %q", string(decoded))
+	}
+
+	if codeResult == nil {
+		t.Fatalf("expected a CodeInterpreterToolResultContent in the streamed updates")
+	}
+	if codeResult.CallID != codeCall.CallID {
+		t.Errorf("expected result CallID to match call CallID, got %s vs %s", codeResult.CallID, codeCall.CallID)
+	}
+	if len(codeResult.Outputs) != 2 {
+		t.Fatalf("expected 2 outputs (logs + image), got %d", len(codeResult.Outputs))
+	}
+	logs, ok := codeResult.Outputs[0].(*message.TextContent)
+	if !ok {
+		t.Fatalf("expected first output to be TextContent, got %T", codeResult.Outputs[0])
+	}
+	if logs.Text != "6\n" {
+		t.Errorf("expected logs '6\\n', got %q", logs.Text)
+	}
+	img, ok := codeResult.Outputs[1].(*message.URIContent)
+	if !ok {
+		t.Fatalf("expected second output to be URIContent, got %T", codeResult.Outputs[1])
+	}
+	if img.URI != "https://example.com/plot.png" {
+		t.Errorf("expected image URI 'https://example.com/plot.png', got %q", img.URI)
+	}
+}
+
+func TestResponsesCodeInterpreterTool_IncludeNotDuplicatedWhenCallerSupplied(t *testing.T) {
+	// The caller already requested code_interpreter_call.outputs; the builder must not
+	// append a second copy of the same include value.
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{
+                    "type":"message",
+                    "role":"user",
+                    "content":[{"type":"input_text","text":"Calculate the sum of numbers from 1 to 5"}]
+                }],
+                "tools":[{
+                    "type":"code_interpreter",
+                    "container":{"type":"auto"}
+                }],
+                "include":["code_interpreter_call.outputs"]
+            }
+            `
+
+	const output = `
+            {
+              "id":"resp_dedup",
+              "object":"response",
+              "created_at":1761309813,
+              "status":"completed",
+              "model":"gpt-4o-mini",
+              "output":[{
+                "id":"msg_dedup",
+                "type":"message",
+                "status":"completed",
+                "content":[{"type":"output_text","annotations":[],"text":"15"}],
+                "role":"assistant"
+              }],
+              "usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}
+            }
+            `
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	_, err := a.RunText(t.Context(), "Calculate the sum of numbers from 1 to 5",
+		agent.WithTool(&hostedtool.CodeInterpreter{}),
+		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
+			Include: []responses.ResponseIncludable{responses.ResponseIncludableCodeInterpreterCallOutputs},
+		}),
+	).Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestResponsesFileSearchTool_NonStreaming(t *testing.T) {
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{
+                    "type":"message",
+                    "role":"user",
+                    "content":[{"type":"input_text","text":"What does the doc say?"}]
+                }],
+                "include":["file_search_call.results"],
+                "tools":[{
+                    "type":"file_search",
+                    "vector_store_ids":["vs_abc"]
+                }]
+            }
+            `
+
+	const output = `
+            {
+              "id":"resp_fs_001",
+              "object":"response",
+              "created_at":1761309813,
+              "status":"completed",
+              "model":"gpt-4o-mini",
+              "output":[
+                {
+                  "id":"fs_001",
+                  "type":"file_search_call",
+                  "status":"completed",
+                  "queries":["what does the doc say"],
+                  "results":[
+                    {
+                      "file_id":"file_abc",
+                      "filename":"doc.txt",
+                      "score":0.87,
+                      "text":"The doc says hello."
+                    }
+                  ]
+                },
+                {
+                  "id":"msg_fs_001",
+                  "type":"message",
+                  "status":"completed",
+                  "content":[{"type":"output_text","annotations":[],"text":"It says hello."}],
+                  "role":"assistant"
+                }
+              ],
+              "usage":{"input_tokens":20,"output_tokens":5,"total_tokens":25}
+            }
+            `
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	resp, err := a.RunText(t.Context(), "What does the doc say?",
+		agent.WithTool(&hostedtool.FileSearch{
+			Inputs: []message.Content{&message.HostedVectorStoreContent{VectorStoreID: "vs_abc"}},
+		}),
+	).Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+
+	if len(resp.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(resp.Messages))
+	}
+
+	// Locate the TextContent surfaced from the file_search_call results.
+	var found *message.TextContent
+	for _, c := range resp.Messages[0].Contents {
+		tc, ok := c.(*message.TextContent)
+		if !ok {
+			continue
+		}
+		for _, ann := range tc.Annotations {
+			if ca, ok := ann.(*message.CitationAnnotation); ok && ca.FileID == "file_abc" {
+				found = tc
+				break
+			}
+		}
+		if found != nil {
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected a TextContent surfacing the file_search_call result, got contents %+v", resp.Messages[0].Contents)
+	}
+	if found.Text != "The doc says hello." {
+		t.Errorf("expected retrieved text to be surfaced, got %q", found.Text)
+	}
+
+	citation, ok := found.Annotations[0].(*message.CitationAnnotation)
+	if !ok {
+		t.Fatalf("expected CitationAnnotation, got %T", found.Annotations[0])
+	}
+	if citation.FileID != "file_abc" {
+		t.Errorf("expected FileID file_abc, got %q", citation.FileID)
+	}
+	if citation.Title != "doc.txt" {
+		t.Errorf("expected Title doc.txt, got %q", citation.Title)
+	}
+}
+
+func TestResponsesFileSearchTool_Streaming(t *testing.T) {
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"search"}]}],
+                "include":["file_search_call.results"],
+                "tools":[{"type":"file_search","vector_store_ids":["vs_abc"]}],
+                "stream":true
+            }
+            `
+
+	const output = `event: response.created
+data: {"type":"response.created","response":{"id":"resp_fs_str","object":"response","created_at":1741892091,"status":"in_progress","model":"gpt-4o-mini","output":[]}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","response_id":"resp_fs_str","output_index":0,"item":{"type":"file_search_call","id":"fs_str","status":"completed","queries":["search"],"results":[{"file_id":"file_str","filename":"notes.md","score":0.9,"text":"streamed chunk"}]}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_fs_str","object":"response","created_at":1741892091,"status":"completed","model":"gpt-4o-mini","output":[{"type":"file_search_call","id":"fs_str","status":"completed","queries":["search"],"results":[{"file_id":"file_str","filename":"notes.md","score":0.9,"text":"streamed chunk"}]}]}}
+
+`
+
+	server := newTestResponsesServerStreaming(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	var found *message.TextContent
+	for update, err := range a.RunText(t.Context(), "search",
+		agent.Stream(true),
+		agent.WithTool(&hostedtool.FileSearch{
+			Inputs: []message.Content{&message.HostedVectorStoreContent{VectorStoreID: "vs_abc"}},
+		}),
+	) {
+		if err != nil {
+			t.Fatalf("error = %v", err)
+		}
+		for _, c := range update.Contents {
+			tc, ok := c.(*message.TextContent)
+			if !ok {
+				continue
+			}
+			for _, ann := range tc.Annotations {
+				if ca, ok := ann.(*message.CitationAnnotation); ok && ca.FileID == "file_str" {
+					found = tc
+				}
+			}
+		}
+	}
+	if found == nil {
+		t.Fatal("expected the streamed file_search_call result to be surfaced")
+	}
+	if found.Text != "streamed chunk" {
+		t.Errorf("expected retrieved text 'streamed chunk', got %q", found.Text)
+	}
+}
+
+func TestResponsesFileSearchTool_DoesNotDuplicateInclude(t *testing.T) {
+	// The include is requested by the FileSearch tool; if the caller already set it
+	// via ResponsesNewParams, it must not be appended twice.
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{
+                    "type":"message",
+                    "role":"user",
+                    "content":[{"type":"input_text","text":"hi"}]
+                }],
+                "include":["file_search_call.results"],
+                "tools":[{
+                    "type":"file_search",
+                    "vector_store_ids":["vs_abc"]
+                }]
+            }
+            `
+
+	const output = `
+            {
+              "id":"resp_fs_002",
+              "object":"response",
+              "created_at":1761309813,
+              "status":"completed",
+              "model":"gpt-4o-mini",
+              "output":[{
+                "type":"message",
+                "id":"msg_fs_002",
+                "status":"completed",
+                "role":"assistant",
+                "content":[{"type":"output_text","annotations":[],"text":"hi"}]
+              }]
+            }
+            `
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	_, err := a.RunText(t.Context(), "hi",
+		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
+			Include: []responses.ResponseIncludable{responses.ResponseIncludableFileSearchCallResults},
+		}),
+		agent.WithTool(&hostedtool.FileSearch{
+			Inputs: []message.Content{&message.HostedVectorStoreContent{VectorStoreID: "vs_abc"}},
+		}),
+	).Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestResponsesFileSearchTool_NoResultsStillSurfaced(t *testing.T) {
+	// A file_search_call with zero results must still be surfaced as an annotated
+	// TextContent so the call (queries + status on RawRepresentation) is not dropped
+	// and, being annotated, is not coalesced away.
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{
+                    "type":"message",
+                    "role":"user",
+                    "content":[{"type":"input_text","text":"anything?"}]
+                }],
+                "include":["file_search_call.results"],
+                "tools":[{
+                    "type":"file_search",
+                    "vector_store_ids":["vs_abc"]
+                }]
+            }
+            `
+
+	const output = `
+            {
+              "id":"resp_fs_003",
+              "object":"response",
+              "created_at":1761309813,
+              "status":"completed",
+              "model":"gpt-4o-mini",
+              "output":[
+                {
+                  "id":"fs_003",
+                  "type":"file_search_call",
+                  "status":"completed",
+                  "queries":["anything"],
+                  "results":[]
+                },
+                {
+                  "id":"msg_fs_003",
+                  "type":"message",
+                  "status":"completed",
+                  "content":[{"type":"output_text","annotations":[],"text":"Nothing found."}],
+                  "role":"assistant"
+                }
+              ],
+              "usage":{"input_tokens":20,"output_tokens":5,"total_tokens":25}
+            }
+            `
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	resp, err := a.RunText(t.Context(), "anything?",
+		agent.WithTool(&hostedtool.FileSearch{
+			Inputs: []message.Content{&message.HostedVectorStoreContent{VectorStoreID: "vs_abc"}},
+		}),
+	).Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+
+	if len(resp.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(resp.Messages))
+	}
+
+	// Find the annotated TextContent surfacing the (empty) file_search_call.
+	var found *message.TextContent
+	for _, c := range resp.Messages[0].Contents {
+		tc, ok := c.(*message.TextContent)
+		if !ok {
+			continue
+		}
+		for _, ann := range tc.Annotations {
+			if ca, ok := ann.(*message.CitationAnnotation); ok && ca.ToolName == "file_search" {
+				found = tc
+				break
+			}
+		}
+		if found != nil {
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected an annotated TextContent surfacing the empty file_search_call, got contents %+v", resp.Messages[0].Contents)
+	}
+	if found.RawRepresentation == nil {
+		t.Error("expected the empty file_search_call to retain its RawRepresentation")
 	}
 }
 
@@ -2859,6 +4009,104 @@ data: {"type":"response.completed","response":{"id":"resp_001","object":"respons
 	}
 }
 
+func TestResponsesAnnotations_NonStreaming_PreservesFidelity(t *testing.T) {
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]
+            }
+            `
+
+	const output = `
+            {
+                "id":"resp_001",
+                "object":"response",
+                "created_at":1741892091,
+                "status":"completed",
+                "error":null,
+                "incomplete_details":null,
+                "model":"gpt-4o-mini",
+                "output":[{
+                    "type":"message",
+                    "id":"msg_001",
+                    "status":"completed",
+                    "role":"assistant",
+                    "content":[{"type":"output_text","text":"Annotated text","annotations":[
+                        {"type":"url_citation","title":"Example","url":"https://example.com","start_index":0,"end_index":9},
+                        {"type":"file_citation","file_id":"file_123","filename":"doc.pdf","index":0},
+                        {"type":"container_file_citation","container_id":"cntr_1","file_id":"file_456","filename":"out.txt","start_index":2,"end_index":8}
+                    ]}]
+                }]
+            }
+            `
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	resp, err := a.RunText(t.Context(), "hello").Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if len(resp.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(resp.Messages))
+	}
+
+	var annotations []message.Annotation
+	for _, content := range resp.Messages[0].Contents {
+		if tc, ok := content.(*message.TextContent); ok {
+			annotations = tc.Annotations
+		}
+	}
+	if len(annotations) != 3 {
+		t.Fatalf("expected 3 annotations, got %d", len(annotations))
+	}
+
+	url, ok := annotations[0].(*message.CitationAnnotation)
+	if !ok {
+		t.Fatalf("annotation[0] type = %T, want *CitationAnnotation", annotations[0])
+	}
+	if url.Title != "Example" || url.URL != "https://example.com" {
+		t.Errorf("url citation = %+v, want Title=Example URL=https://example.com", url)
+	}
+	if len(url.AnnotatedRegions) != 1 {
+		t.Fatalf("url citation regions = %d, want 1", len(url.AnnotatedRegions))
+	}
+	if span, ok := url.AnnotatedRegions[0].(*message.TextSpanAnnotatedRegion); !ok {
+		t.Errorf("url region type = %T, want *TextSpanAnnotatedRegion", url.AnnotatedRegions[0])
+	} else if span.Start != 0 || span.End != 9 {
+		t.Errorf("url span = {%d,%d}, want {0,9}", span.Start, span.End)
+	}
+
+	file, ok := annotations[1].(*message.CitationAnnotation)
+	if !ok {
+		t.Fatalf("annotation[1] type = %T, want *CitationAnnotation", annotations[1])
+	}
+	if file.FileID != "file_123" || file.Title != "doc.pdf" {
+		t.Errorf("file citation = %+v, want FileID=file_123 Title=doc.pdf", file)
+	}
+
+	container, ok := annotations[2].(*message.CitationAnnotation)
+	if !ok {
+		t.Fatalf("annotation[2] type = %T, want *CitationAnnotation", annotations[2])
+	}
+	if container.FileID != "file_456" || container.Title != "out.txt" {
+		t.Errorf("container citation = %+v, want FileID=file_456 Title=out.txt", container)
+	}
+	if container.AdditionalProperties["ContainerId"] != "cntr_1" {
+		t.Errorf("container id = %v, want cntr_1", container.AdditionalProperties["ContainerId"])
+	}
+	if len(container.AnnotatedRegions) != 1 {
+		t.Fatalf("container regions = %d, want 1", len(container.AnnotatedRegions))
+	}
+	if span, ok := container.AnnotatedRegions[0].(*message.TextSpanAnnotatedRegion); !ok {
+		t.Errorf("container region type = %T, want *TextSpanAnnotatedRegion", container.AnnotatedRegions[0])
+	} else if span.Start != 2 || span.End != 8 {
+		t.Errorf("container span = {%d,%d}, want {2,8}", span.Start, span.End)
+	}
+}
+
 func TestResponsesResponseWithInputImageHttpUrl_ParsesAsUriContent(t *testing.T) {
 	t.Skip("Skipping: input_image in output messages not yet supported by SDK")
 	const input = `
@@ -3151,6 +4399,57 @@ func TestResponsesResponseWithError_IncludesInAdditionalPropertiesAndMessage(t *
 	}
 }
 
+func TestResponsesResponseWithFailedStatusWithoutErrorDetails_UsesDefaultErrorContent(t *testing.T) {
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"test"}]}]
+            }
+            `
+
+	const output = `
+            {
+              "id":"resp_004",
+              "object":"response",
+              "created_at":1741892091,
+              "status":"failed",
+              "model":"gpt-4o-mini",
+              "output":[]
+            }
+            `
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	resp, err := a.RunText(t.Context(), "test").Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if len(resp.Messages) == 0 {
+		t.Fatal("expected at least one message")
+	}
+
+	lastMessage := resp.Messages[len(resp.Messages)-1]
+	var errorContent *message.ErrorContent
+	for _, content := range lastMessage.Contents {
+		if ec, ok := content.(*message.ErrorContent); ok {
+			errorContent = ec
+			break
+		}
+	}
+	if errorContent == nil {
+		t.Fatal("expected ErrorContent in last message")
+	}
+	if errorContent.Message != "The agent run failed." {
+		t.Errorf("expected default error message, got %q", errorContent.Message)
+	}
+	if errorContent.ErrorCode != "failed" {
+		t.Errorf("expected default error code, got %q", errorContent.ErrorCode)
+	}
+}
+
 func TestResponsesStreamingErrorUpdate_ActualErroneousFormat_ParsesCorrectly(t *testing.T) {
 	const input = `
             {
@@ -3236,11 +4535,11 @@ data: {"type":"response.failed","sequence_number":2,"response":{"id":"resp_003",
 		updates = append(updates, update)
 	}
 
-	// Find error update with empty error information
+	// Find synthesized failure content from the response.failed event.
 	var errorUpdate *agent.ResponseUpdate
 	for _, update := range updates {
 		for _, content := range update.Contents {
-			if _, ok := content.(*message.ErrorContent); ok {
+			if ec, ok := content.(*message.ErrorContent); ok && ec.Message == "The agent run failed." {
 				errorUpdate = update
 				break
 			}
@@ -3254,7 +4553,6 @@ data: {"type":"response.failed","sequence_number":2,"response":{"id":"resp_003",
 		t.Fatal("expected to find an update with ErrorContent")
 	}
 
-	// Verify error content has empty fields
 	var errorContent *message.ErrorContent
 	for _, content := range errorUpdate.Contents {
 		if ec, ok := content.(*message.ErrorContent); ok {
@@ -3266,13 +4564,11 @@ data: {"type":"response.failed","sequence_number":2,"response":{"id":"resp_003",
 	if errorContent == nil {
 		t.Fatal("expected ErrorContent in error update")
 	}
-
-	// Verify all fields are empty (like C#)
-	if errorContent.Message != "" {
-		t.Errorf("expected empty Message, got %q", errorContent.Message)
+	if errorContent.Message != "The agent run failed." {
+		t.Errorf("expected default Message, got %q", errorContent.Message)
 	}
-	if errorContent.ErrorCode != "" {
-		t.Errorf("expected empty ErrorCode, got %q", errorContent.ErrorCode)
+	if errorContent.ErrorCode != "failed" {
+		t.Errorf("expected default ErrorCode, got %q", errorContent.ErrorCode)
 	}
 	if errorContent.Details != "" {
 		t.Errorf("expected empty Details, got %q", errorContent.Details)
@@ -4411,7 +5707,8 @@ func TestResponsesConversationId_AsResponseId_NonStreaming(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.RunText(t.Context(), "hello",
+	_, err = a.RunText(
+		t.Context(), "hello",
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
@@ -4475,7 +5772,6 @@ func TestDisableStoreOutputDoesNotUseOrUpdateResponseID(t *testing.T) {
 		openaiprovider.AgentConfig{
 			Model:              "gpt-4o-mini",
 			DisableStoreOutput: true,
-			Config:             agent.Config{DisableFuncAutoCall: true},
 		},
 	)
 	session, err := a.CreateSession(t.Context())
@@ -4483,7 +5779,8 @@ func TestDisableStoreOutputDoesNotUseOrUpdateResponseID(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.RunText(t.Context(), "hello",
+	_, err = a.RunText(
+		t.Context(), "hello",
 		agent.WithSession(session),
 	).Collect()
 	if err != nil {
@@ -4541,7 +5838,6 @@ func TestResponsesNewParamsStoreOverridesDisableStoreOutput(t *testing.T) {
 		openaiprovider.AgentConfig{
 			Model:              "gpt-4o-mini",
 			DisableStoreOutput: true,
-			Config:             agent.Config{DisableFuncAutoCall: true},
 		},
 	)
 	session, err := a.CreateSession(t.Context())
@@ -4549,7 +5845,8 @@ func TestResponsesNewParamsStoreOverridesDisableStoreOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.RunText(t.Context(), "hello",
+	_, err = a.RunText(
+		t.Context(), "hello",
 		agent.WithSession(session),
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{Store: openai.Bool(true)}),
 	).Collect()
@@ -4607,8 +5904,7 @@ func TestResponsesNewParamsStoreFalseDoesNotUpdateResponseID(t *testing.T) {
 	a := openaiprovider.NewResponsesAgent(
 		openai.NewClient(option.WithBaseURL(server.URL)),
 		openaiprovider.AgentConfig{
-			Model:  "gpt-4o-mini",
-			Config: agent.Config{DisableFuncAutoCall: true},
+			Model: "gpt-4o-mini",
 		},
 	)
 	session, err := a.CreateSession(t.Context())
@@ -4616,7 +5912,8 @@ func TestResponsesNewParamsStoreFalseDoesNotUpdateResponseID(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.RunText(t.Context(), "hello",
+	_, err = a.RunText(
+		t.Context(), "hello",
 		agent.WithSession(session),
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{Store: openai.Bool(false)}),
 	).Collect()
@@ -4666,16 +5963,65 @@ func TestResponsesNewParamsStoreFalseDoesNotDuplicateReasoningInclude(t *testing
 	a := openaiprovider.NewResponsesAgent(
 		openai.NewClient(option.WithBaseURL(server.URL)),
 		openaiprovider.AgentConfig{
-			Model:  "gpt-4o-mini",
-			Config: agent.Config{DisableFuncAutoCall: true},
+			Model: "gpt-4o-mini",
 		},
 	)
 
-	_, err := a.RunText(t.Context(), "hello",
+	_, err := a.RunText(
+		t.Context(), "hello",
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			Store:   openai.Bool(false),
 			Include: []responses.ResponseIncludable{responses.ResponseIncludableReasoningEncryptedContent},
 		}),
+	).Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestResponsesIncludeReasoningEncryptedContentFalseSkipsAutomaticInclude(t *testing.T) {
+	const input = `
+		{
+			"store":false,
+			"model":"gpt-4o-mini",
+			"input":[{
+				"type":"message",
+				"role":"user",
+				"content":[{"type":"input_text","text":"hello"}]
+			}]
+		}
+		`
+
+	const output = `
+		{
+			"id": "resp_67890",
+			"object": "response",
+			"created_at": 1741891428,
+			"status": "completed",
+			"model": "gpt-4o-mini-2024-07-18",
+			"output": [{
+				"type": "message",
+				"id": "msg_67d32764fcdc8191bcf2e444d4088804058a5e08c46a181d",
+				"status": "completed",
+				"role": "assistant",
+				"content": [{"type": "output_text", "text": "Hello!", "annotations": []}]
+			}]
+		}
+		`
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := openaiprovider.NewResponsesAgent(
+		openai.NewClient(option.WithBaseURL(server.URL)),
+		openaiprovider.AgentConfig{
+			Model: "gpt-4o-mini",
+		},
+	)
+
+	_, err := a.RunText(t.Context(), "hello",
+		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{Store: openai.Bool(false)}),
+		openaiprovider.ResponsesIncludeReasoningEncryptedContent(false),
 	).Collect()
 	if err != nil {
 		t.Fatalf("error = %v", err)
@@ -4731,7 +6077,8 @@ func TestResponsesConversationId_AsConversationId_NonStreaming(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.RunText(t.Context(), "hello",
+	_, err = a.RunText(
+		t.Context(), "hello",
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
@@ -4803,7 +6150,8 @@ data: {"type":"response.completed","response":{"id":"resp_67890","object":"respo
 	}
 
 	var updates []*agent.ResponseUpdate
-	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
+	for update, err := range a.RunText(
+		t.Context(), "hello", agent.Stream(true),
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
@@ -4882,7 +6230,8 @@ data: {"type":"response.completed","response":{"id":"resp_67890","object":"respo
 	}
 
 	var updates []*agent.ResponseUpdate
-	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
+	for update, err := range a.RunText(
+		t.Context(), "hello", agent.Stream(true),
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
@@ -4942,7 +6291,8 @@ func TestResponsesBackgroundResponses_FirstCall(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resp, err := a.RunText(t.Context(), "hello",
+	resp, err := a.RunText(
+		t.Context(), "hello",
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			MaxOutputTokens: openai.Int(20),
 			Temperature:     openai.Float(0.5),
@@ -5025,7 +6375,8 @@ func testResponsesBackgroundPolling(t *testing.T, status string) {
 	}
 	ctJSON, _ := json.Marshal(ct)
 
-	resp, err := a.Run(t.Context(), nil,
+	resp, err := a.Run(
+		t.Context(), nil,
 		agent.WithContinuationToken(agenttest.NewContinuationToken(t, string(ctJSON))),
 		agent.AllowBackgroundResponses(true),
 		agent.WithSession(session),
@@ -5146,7 +6497,8 @@ data: {"type":"response.completed","sequence_number":17,"response":{"id":"resp_6
 
 	var updates []*agent.ResponseUpdate
 	var allText strings.Builder
-	for update, err := range a.RunText(t.Context(), "hello", agent.Stream(true),
+	for update, err := range a.RunText(
+		t.Context(), "hello", agent.Stream(true),
 		agent.AllowBackgroundResponses(true),
 		agent.WithSession(session),
 	) {
@@ -5249,7 +6601,8 @@ data: {"type":"response.completed","sequence_number":17,"response":{"truncation"
 	}
 
 	var updates []*agent.ResponseUpdate
-	for update, err := range a.Run(t.Context(), []*message.Message{}, agent.Stream(true),
+	for update, err := range a.Run(
+		t.Context(), []*message.Message{}, agent.Stream(true),
 		agent.AllowBackgroundResponses(true),
 		agent.WithContinuationToken(token),
 		agent.WithSession(session),
@@ -5310,7 +6663,8 @@ func TestResponsesGetContinuationToken_WithMessages_ThrowsException(t *testing.T
 	token := agenttest.NewContinuationToken(t, `{"response_id":"resp_123","sequence_number":0}`)
 
 	// Attempt to use continuation token with messages should error
-	_, err := a.RunText(t.Context(), "test",
+	_, err := a.RunText(
+		t.Context(), "test",
 		agent.WithContinuationToken(token),
 	).Collect()
 
@@ -5335,7 +6689,8 @@ func TestResponsesBackgroundResponses_PollingCall_WithMessages(t *testing.T) {
 	token := agenttest.NewContinuationToken(t, `{"response_id":"resp_68d3d2c9ef7c8195863e4e2b2ec226a205007262ecbbfed8","sequence_number":0}`)
 
 	// A try to update a background response with new messages should fail
-	_, err = a.RunText(t.Context(), "Please book hotel as well",
+	_, err = a.RunText(
+		t.Context(), "Please book hotel as well",
 		agent.WithSession(session),
 		agent.WithContinuationToken(token),
 		agent.AllowBackgroundResponses(true),
@@ -5419,19 +6774,9 @@ func TestResponsesMultipleRequiredFunctions(t *testing.T) {
                         }
                     }
                 ],
-                "tool_choice": {
-                    "type": "allowed_tools",
-                    "mode": "required",
-                    "tools": [
-                        {
-                            "type": "function",
-                            "name": "GetWeather"
-                        },
-                        {
-                            "type": "function",
-                            "name": "GetTime"
-                        }
-                    ]
+				"tool_choice": {
+					"type": "function",
+					"name": "GetWeather"
                 },
                 "model": "gpt-4o-mini",
                 "input": [{
@@ -5511,16 +6856,91 @@ func TestResponsesMultipleRequiredFunctions(t *testing.T) {
 		Description: "Get the current time for a location",
 	}, getTime)
 
-	resp, err := a.RunText(t.Context(), "What's the weather and time in Seattle?",
+	resp, err := a.RunText(
+		t.Context(), "What's the weather and time in Seattle?",
 		agent.WithTool(weatherTool),
 		agent.WithTool(timeTool),
-		agent.WithToolMode(tool.RequireTools("GetWeather", "GetTime")),
+		agent.WithToolMode(tool.RequireTool("GetWeather")),
 	).Collect()
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
 	if err := messagetest.MessagesEqual(resp.Messages, want); err != nil {
 		t.Error(err)
+	}
+}
+
+// countingReadCloser counts Close calls on an HTTP response body.
+type countingReadCloser struct {
+	io.ReadCloser
+	closes *atomic.Int64
+}
+
+func (c *countingReadCloser) Close() error {
+	c.closes.Add(1)
+	return c.ReadCloser.Close()
+}
+
+// closeCountingTransport wraps each response body so tests can assert the
+// streaming HTTP body is released once the run completes.
+type closeCountingTransport struct {
+	base   http.RoundTripper
+	closes *atomic.Int64
+}
+
+func (t *closeCountingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err != nil || resp == nil {
+		return resp, err
+	}
+	resp.Body = &countingReadCloser{ReadCloser: resp.Body, closes: t.closes}
+	return resp, nil
+}
+
+// TestResponsesStreamingClosesResponseBody verifies the Responses streaming path
+// releases the HTTP response body when the consumer stops iterating early.
+// Without an explicit streamResp.Close(), the body is never returned to the
+// pool, leaking the underlying connection. This mirrors the defer-close already
+// present on the Chat Completions streaming path and matches the .NET/Python
+// SDKs, which dispose the streaming response on early enumeration.
+func TestResponsesStreamingClosesResponseBody(t *testing.T) {
+	const output = `event: response.created
+data: {"type":"response.created","response":{"id":"resp_close_test","object":"response","created_at":1741892091,"status":"in_progress","error":null,"incomplete_details":null,"instructions":null,"max_output_tokens":null,"model":"gpt-4o-mini-2024-07-18","output":[],"parallel_tool_calls":true,"previous_response_id":null,"reasoning":{"effort":null,"generate_summary":null},"store":true,"temperature":1.0,"text":{"format":{"type":"text"}},"tool_choice":"auto","tools":[],"top_p":1.0,"usage":null,"user":null,"metadata":{}}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":"Hello"}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":" world"}
+
+`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, output)
+	}))
+	defer server.Close()
+
+	var closes atomic.Int64
+	httpClient := &http.Client{Transport: &closeCountingTransport{base: http.DefaultTransport, closes: &closes}}
+	a := openaiprovider.NewResponsesAgent(
+		openai.NewClient(option.WithBaseURL(server.URL), option.WithHTTPClient(httpClient)),
+		openaiprovider.AgentConfig{
+			Model: "gpt-4o-mini",
+		},
+	)
+
+	// Stop iterating after the first streamed update. The provider's run
+	// closure then returns via yield=false, which must close the body.
+	for _, err := range a.RunText(t.Context(), "hi", agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		break
+	}
+
+	if got := closes.Load(); got == 0 {
+		t.Fatal("streaming response body was not closed after early consumer exit")
 	}
 }
 
@@ -5544,5 +6964,181 @@ func responsesBodyEqual(t *testing.T, got string, want string) {
 			t.Fatalf("failed marshaling wantObj: %v", err)
 		}
 		t.Errorf("body\ngot %s\nwant %s", gotOut, wantOut)
+	}
+}
+
+// A non-streaming Responses result with more than one output message must carry
+// response-level AdditionalProperties (e.g. EndUserId) on every message, not
+// only the first. currentUpdate is reset to a fresh value for each message
+// after the first, so the properties must be repopulated per message.
+func TestResponses_NonStreaming_AllMessagesKeepAdditionalProperties(t *testing.T) {
+	const input = `
+		{
+			"model":"gpt-4o-mini",
+			"input": [{
+				"type":"message",
+				"role":"user",
+				"content":[{"type":"input_text","text":"hello"}]
+			}]
+		}`
+	const output = `
+		{
+			"id":"resp_multi",
+			"object":"response",
+			"created_at":1741891428,
+			"status":"completed",
+			"error":null,
+			"incomplete_details":null,
+			"model":"gpt-4o-mini",
+			"user":"end-user-42",
+			"output":[
+				{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"first","annotations":[]}]},
+				{"type":"message","id":"msg_2","status":"completed","role":"assistant","content":[{"type":"output_text","text":"second","annotations":[]}]}
+			]
+		}`
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	var msgUpdates int
+	for u, err := range a.RunText(t.Context(), "hello") {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if u.MessageID == "" {
+			continue
+		}
+		msgUpdates++
+		if got, _ := u.AdditionalProperties["EndUserId"].(string); got != "end-user-42" {
+			t.Errorf("message %q: EndUserId = %q, want %q", u.MessageID, got, "end-user-42")
+		}
+	}
+	if msgUpdates != 2 {
+		t.Fatalf("expected 2 message-bearing updates, got %d", msgUpdates)
+	}
+}
+
+// TestResponsesStreamingFailedResponseSurfacesError verifies that a streamed
+// response.failed event surfaces its error as ErrorContent rather than an
+// empty update.
+func TestResponsesStreamingFailedResponseSurfacesError(t *testing.T) {
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"test"}]}],
+                "stream":true
+            }
+            `
+	const output = `event: response.created
+data: {"type":"response.created","response":{"id":"resp_001","object":"response","created_at":1741892091,"status":"in_progress","model":"gpt-4o-mini","output":[]}}
+
+event: response.failed
+data: {"type":"response.failed","response":{"id":"resp_001","object":"response","created_at":1741892091,"status":"failed","model":"gpt-4o-mini","output":[],"error":{"code":"server_error","message":"Internal error"}}}
+
+`
+	server := newTestResponsesServerStreaming(t, input, output)
+	defer server.Close()
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	var errContent *message.ErrorContent
+	for update, err := range a.RunText(t.Context(), "test", agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("error = %v", err)
+		}
+		for _, c := range update.Contents {
+			if ec, ok := c.(*message.ErrorContent); ok {
+				errContent = ec
+			}
+		}
+	}
+	if errContent == nil {
+		t.Fatal("expected an ErrorContent for the failed response, got none")
+	}
+	if errContent.Message != "Internal error" {
+		t.Errorf("error message = %q, want %q", errContent.Message, "Internal error")
+	}
+	if errContent.ErrorCode != "server_error" {
+		t.Errorf("error code = %q, want %q", errContent.ErrorCode, "server_error")
+	}
+}
+
+// TestResponsesStreamingFailedResponseSurfacesCodeOnlyError guards the case where a
+// failed response carries an error code but no message. The failure must still be
+// surfaced as ErrorContent rather than collapsing into an empty update.
+func TestResponsesStreamingFailedResponseSurfacesCodeOnlyError(t *testing.T) {
+	const input = `
+            {
+                "model":"gpt-4o-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"test"}]}],
+                "stream":true
+            }
+            `
+	const output = `event: response.created
+data: {"type":"response.created","response":{"id":"resp_001","object":"response","created_at":1741892091,"status":"in_progress","model":"gpt-4o-mini","output":[]}}
+
+event: response.failed
+data: {"type":"response.failed","response":{"id":"resp_001","object":"response","created_at":1741892091,"status":"failed","model":"gpt-4o-mini","output":[],"error":{"code":"server_error"}}}
+
+`
+	server := newTestResponsesServerStreaming(t, input, output)
+	defer server.Close()
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	var errContent *message.ErrorContent
+	for update, err := range a.RunText(t.Context(), "test", agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("error = %v", err)
+		}
+		for _, c := range update.Contents {
+			if ec, ok := c.(*message.ErrorContent); ok {
+				errContent = ec
+			}
+		}
+	}
+	if errContent == nil {
+		t.Fatal("expected an ErrorContent for the code-only failed response, got none")
+	}
+	if errContent.ErrorCode != "server_error" {
+		t.Errorf("error code = %q, want %q", errContent.ErrorCode, "server_error")
+	}
+}
+
+// TestResponsesToolResult_StructSerializedAsJSON verifies that a structured
+// FunctionResultContent.Result is JSON-encoded in the Responses API request
+// rather than rendered with Go's %v (matching the chat path).
+func TestResponsesToolResult_StructSerializedAsJSON(t *testing.T) {
+	capturedCh := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		capturedCh <- string(b)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"resp_test","object":"response","created_at":1741891428,"status":"completed","error":null,"incomplete_details":null,"model":"gpt-4o-mini","output":[{"type":"message","id":"msg_test","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok","annotations":[]}]}]}`)
+	}))
+	defer server.Close()
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+
+	type weather struct {
+		City  string `json:"city"`
+		TempC int    `json:"temp_c"`
+	}
+	messages := []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "weather?"}}},
+		{Role: message.RoleAssistant, Contents: []message.Content{
+			&message.FunctionCallContent{CallID: "c1", Name: "GetWeather", Arguments: "{}"},
+		}},
+		{Role: message.RoleTool, Contents: []message.Content{
+			&message.FunctionResultContent{CallID: "c1", Result: weather{City: "Paris", TempC: 20}},
+		}},
+	}
+	if _, err := a.Run(t.Context(), messages).Collect(); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	captured := <-capturedCh
+	if strings.Contains(captured, "{Paris 20}") {
+		t.Errorf("tool result rendered with Go %%v instead of JSON:\n%s", captured)
+	}
+	if !strings.Contains(captured, "temp_c") {
+		t.Errorf("tool result was not JSON-encoded (missing field temp_c):\n%s", captured)
 	}
 }

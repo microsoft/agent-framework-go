@@ -42,7 +42,7 @@ func main() {
 	stringToChat := workflow.NewExecutor("StringToChat", stringToChatMessageExecutor{}).Bind()
 
 	token := demo.FoundryTokenCredential()
-	hostCfg := agentworkflow.Config{DisableForwardIncomingMessages: true}
+	hostCfg := agentworkflow.Config{ForwardIncomingMessages: new(false)}
 	detector := agentworkflow.New(
 		foundryprovider.NewAgent(
 			demo.FoundryProjectEndpoint,

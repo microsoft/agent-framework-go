@@ -165,6 +165,262 @@ func TestMessageMerger_SeparatesIdentifierlessSegments(t *testing.T) {
 	assertMessageTexts(t, response.Messages, "AB", "X", "Y")
 }
 
+func TestMessageMerger_FoldsIdentifierlessReasoningIntoFollowingMessage(t *testing.T) {
+	const (
+		responseID = "response"
+		messageID  = "msg-answer"
+	)
+
+	merger := newMessageMerger()
+	merger.AddUpdate(&agent.ResponseUpdate{
+		ResponseID: responseID,
+		Role:       message.RoleAssistant,
+		Contents:   []message.Content{&message.TextReasoningContent{Text: "thinking about the question"}},
+	})
+	merger.AddUpdate(&agent.ResponseUpdate{
+		ResponseID: responseID,
+		MessageID:  messageID,
+		Role:       message.RoleAssistant,
+		Contents:   []message.Content{&message.TextContent{Text: "The reformulated question."}},
+	})
+
+	response := merger.ComputeMerged(responseID, "", "")
+
+	if len(response.Messages) != 1 {
+		t.Fatalf("message count = %d, want 1", len(response.Messages))
+	}
+	msg := response.Messages[0]
+	if msg.Role != message.RoleAssistant {
+		t.Fatalf("role = %q, want %q", msg.Role, message.RoleAssistant)
+	}
+	if msg.ID != messageID {
+		t.Fatalf("message ID = %q, want %q", msg.ID, messageID)
+	}
+	assertMessageContentTexts(t, msg, "thinking about the question", "The reformulated question.")
+	assertTextReasoningContent(t, msg.Contents[0], "thinking about the question")
+	assertTextContent(t, msg.Contents[1], "The reformulated question.")
+}
+
+func TestMessageMerger_DoesNotFoldIdentifierlessReasoningIntoDifferentRole(t *testing.T) {
+	const (
+		responseID = "response"
+		messageID  = "msg-tool"
+	)
+
+	merger := newMessageMerger()
+	merger.AddUpdate(&agent.ResponseUpdate{
+		ResponseID: responseID,
+		Role:       message.RoleAssistant,
+		Contents:   []message.Content{&message.TextReasoningContent{Text: "thinking"}},
+	})
+	merger.AddUpdate(&agent.ResponseUpdate{
+		ResponseID: responseID,
+		MessageID:  messageID,
+		Role:       message.RoleTool,
+		Contents:   []message.Content{&message.FunctionResultContent{CallID: "call", Result: "done"}},
+	})
+
+	response := merger.ComputeMerged(responseID, "", "")
+
+	if len(response.Messages) != 2 {
+		t.Fatalf("message count = %d, want 2", len(response.Messages))
+	}
+	if response.Messages[0].Role != message.RoleAssistant {
+		t.Fatalf("first role = %q, want %q", response.Messages[0].Role, message.RoleAssistant)
+	}
+	assertTextReasoningContent(t, response.Messages[0].Contents[0], "thinking")
+	if response.Messages[1].Role != message.RoleTool {
+		t.Fatalf("second role = %q, want %q", response.Messages[1].Role, message.RoleTool)
+	}
+	if _, ok := response.Messages[1].Contents[0].(*message.FunctionResultContent); !ok {
+		t.Fatalf("second content = %T, want *message.FunctionResultContent", response.Messages[1].Contents[0])
+	}
+}
+
+func TestMessageMerger_DoesNotFoldIdentifierlessAssistantFunctionCallIntoFollowingMessage(t *testing.T) {
+	const (
+		responseID = "response"
+		messageID  = "msg-answer"
+		callID     = "call-1"
+	)
+
+	merger := newMessageMerger()
+	merger.AddUpdate(&agent.ResponseUpdate{
+		ResponseID: responseID,
+		Role:       message.RoleAssistant,
+		Contents:   []message.Content{&message.FunctionCallContent{CallID: callID, Name: "handoff"}},
+	})
+	merger.AddUpdate(&agent.ResponseUpdate{
+		ResponseID: responseID,
+		MessageID:  messageID,
+		Role:       message.RoleAssistant,
+		Contents:   []message.Content{&message.TextContent{Text: "answer"}},
+	})
+
+	response := merger.ComputeMerged(responseID, "", "")
+
+	if len(response.Messages) != 2 {
+		t.Fatalf("message count = %d, want 2", len(response.Messages))
+	}
+	if _, ok := response.Messages[0].Contents[0].(*message.FunctionCallContent); !ok {
+		t.Fatalf("first content = %T, want *message.FunctionCallContent", response.Messages[0].Contents[0])
+	}
+	if response.Messages[1].ID != messageID {
+		t.Fatalf("second message ID = %q, want %q", response.Messages[1].ID, messageID)
+	}
+	assertTextContent(t, response.Messages[1].Contents[0], "answer")
+}
+
+func TestMessageMerger_PreservesMessageOrderWhenReasoningLacksCreatedAt(t *testing.T) {
+	responseID := "response"
+	answerTime := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+
+	merger := newMessageMerger()
+	merger.AddUpdate(&agent.ResponseUpdate{
+		ResponseID: responseID,
+		MessageID:  "reasoning-message",
+		Role:       message.RoleAssistant,
+		Contents:   []message.Content{&message.TextReasoningContent{Text: "Thinking about the question"}},
+	})
+	merger.AddUpdate(&agent.ResponseUpdate{
+		ResponseID: responseID,
+		MessageID:  "text-message",
+		Role:       message.RoleAssistant,
+		CreatedAt:  answerTime,
+		Contents:   []message.Content{&message.TextContent{Text: "Here is the answer."}},
+	})
+
+	response := merger.ComputeMerged(responseID, "", "")
+
+	if len(response.Messages) != 2 {
+		t.Fatalf("message count = %d, want 2", len(response.Messages))
+	}
+	assertTextReasoningContent(t, response.Messages[0].Contents[0], "Thinking about the question")
+	assertTextContent(t, response.Messages[1].Contents[0], "Here is the answer.")
+}
+
+func TestMessageMerger_MergesReasoningAndTextIntoSingleMessageWhenReasoningLacksMessageID(t *testing.T) {
+	const (
+		responseID = "response"
+		messageID  = "msg-answer"
+	)
+
+	merger := newMessageMerger()
+	merger.AddUpdate(&agent.ResponseUpdate{
+		ResponseID: responseID,
+		Role:       message.RoleAssistant,
+		Contents:   []message.Content{&message.TextReasoningContent{Text: "Thinking "}},
+	})
+	merger.AddUpdate(&agent.ResponseUpdate{
+		ResponseID: responseID,
+		Role:       message.RoleAssistant,
+		Contents:   []message.Content{&message.TextReasoningContent{Text: "about the question"}},
+	})
+	merger.AddUpdate(&agent.ResponseUpdate{
+		ResponseID: responseID,
+		MessageID:  messageID,
+		Role:       message.RoleAssistant,
+		CreatedAt:  time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC),
+		Contents:   []message.Content{&message.TextContent{Text: "Here is "}},
+	})
+	merger.AddUpdate(&agent.ResponseUpdate{
+		ResponseID: responseID,
+		MessageID:  messageID,
+		Role:       message.RoleAssistant,
+		CreatedAt:  time.Date(2026, 7, 15, 12, 0, 1, 0, time.UTC),
+		Contents:   []message.Content{&message.TextContent{Text: "the answer."}},
+	})
+
+	response := merger.ComputeMerged(responseID, "", "")
+
+	if len(response.Messages) != 1 {
+		t.Fatalf("message count = %d, want 1", len(response.Messages))
+	}
+	msg := response.Messages[0]
+	if msg.ID != messageID {
+		t.Fatalf("message ID = %q, want %q", msg.ID, messageID)
+	}
+	if len(msg.Contents) != 2 {
+		t.Fatalf("content count = %d, want 2", len(msg.Contents))
+	}
+	assertTextReasoningContent(t, msg.Contents[0], "Thinking about the question")
+	assertTextContent(t, msg.Contents[1], "Here is the answer.")
+}
+
+func TestMessageMerger_FoldsIdentifierlessReasoningMergesAdditionalProperties(t *testing.T) {
+	const (
+		responseID = "response"
+		messageID  = "msg-answer"
+	)
+
+	merger := newMessageMerger()
+	merger.AddUpdate(&agent.ResponseUpdate{
+		ResponseID:           responseID,
+		Role:                 message.RoleAssistant,
+		AdditionalProperties: map[string]any{"reasoning_key": "reasoning", "shared": "reasoning"},
+		Contents:             []message.Content{&message.TextReasoningContent{Text: "thinking"}},
+	})
+	merger.AddUpdate(&agent.ResponseUpdate{
+		ResponseID:           responseID,
+		MessageID:            messageID,
+		Role:                 message.RoleAssistant,
+		AdditionalProperties: map[string]any{"answer_key": "answer", "shared": "answer"},
+		Contents:             []message.Content{&message.TextContent{Text: "final"}},
+	})
+
+	response := merger.ComputeMerged(responseID, "", "")
+
+	if len(response.Messages) != 1 {
+		t.Fatalf("message count = %d, want 1", len(response.Messages))
+	}
+	msg := response.Messages[0]
+	if msg.AdditionalProperties["reasoning_key"] != "reasoning" {
+		t.Fatalf("reasoning additional property = %v, want reasoning", msg.AdditionalProperties["reasoning_key"])
+	}
+	if msg.AdditionalProperties["answer_key"] != "answer" {
+		t.Fatalf("answer additional property = %v, want answer", msg.AdditionalProperties["answer_key"])
+	}
+	if msg.AdditionalProperties["shared"] != "answer" {
+		t.Fatalf("shared additional property = %v, want answer", msg.AdditionalProperties["shared"])
+	}
+}
+
+func TestMessageMerger_FoldsIdentifierlessReasoningIntoFollowingMessageAcrossResponseBuckets(t *testing.T) {
+	const (
+		reasoningResponseID = "resp-reasoning"
+		textResponseID      = "resp-text"
+		messageID           = "msg-answer"
+	)
+
+	merger := newMessageMerger()
+	merger.AddUpdate(&agent.ResponseUpdate{
+		ResponseID: reasoningResponseID,
+		Role:       message.RoleAssistant,
+		Contents:   []message.Content{&message.TextReasoningContent{Text: "thinking about the question"}},
+	})
+	merger.AddUpdate(&agent.ResponseUpdate{
+		ResponseID: textResponseID,
+		MessageID:  messageID,
+		Role:       message.RoleAssistant,
+		Contents:   []message.Content{&message.TextContent{Text: "The reformulated question."}},
+	})
+
+	response := merger.ComputeMerged(textResponseID, "", "")
+
+	if len(response.Messages) != 1 {
+		t.Fatalf("message count = %d, want 1", len(response.Messages))
+	}
+	msg := response.Messages[0]
+	if msg.ID != messageID {
+		t.Fatalf("message ID = %q, want %q", msg.ID, messageID)
+	}
+	if msg.Role != message.RoleAssistant {
+		t.Fatalf("role = %q, want %q", msg.Role, message.RoleAssistant)
+	}
+	assertTextReasoningContent(t, msg.Contents[0], "thinking about the question")
+	assertTextContent(t, msg.Contents[1], "The reformulated question.")
+}
+
 func addTextUpdate(merger *messageMerger, responseID string, text string, messageID string, createdAt time.Time) {
 	merger.AddUpdate(&agent.ResponseUpdate{
 		ResponseID: responseID,
@@ -184,5 +440,48 @@ func assertMessageTexts(t *testing.T, messages []*message.Message, want ...strin
 		if got := msg.String(); got != want[i] {
 			t.Fatalf("message[%d] = %q, want %q", i, got, want[i])
 		}
+	}
+}
+
+func assertMessageContentTexts(t *testing.T, msg *message.Message, want ...string) {
+	t.Helper()
+	if len(msg.Contents) != len(want) {
+		t.Fatalf("content count = %d, want %d", len(msg.Contents), len(want))
+	}
+	for i, content := range msg.Contents {
+		var got string
+		switch v := content.(type) {
+		case *message.TextContent:
+			got = v.Text
+		case *message.TextReasoningContent:
+			got = v.Text
+		default:
+			t.Fatalf("content[%d] = %T, want text or reasoning content", i, content)
+		}
+		if got != want[i] {
+			t.Fatalf("content[%d] = %q, want %q", i, got, want[i])
+		}
+	}
+}
+
+func assertTextReasoningContent(t *testing.T, content message.Content, want string) {
+	t.Helper()
+	reasoning, ok := content.(*message.TextReasoningContent)
+	if !ok {
+		t.Fatalf("content = %T, want *message.TextReasoningContent", content)
+	}
+	if reasoning.Text != want {
+		t.Fatalf("reasoning text = %q, want %q", reasoning.Text, want)
+	}
+}
+
+func assertTextContent(t *testing.T, content message.Content, want string) {
+	t.Helper()
+	text, ok := content.(*message.TextContent)
+	if !ok {
+		t.Fatalf("content = %T, want *message.TextContent", content)
+	}
+	if text.Text != want {
+		t.Fatalf("text = %q, want %q", text.Text, want)
 	}
 }

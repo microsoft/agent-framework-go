@@ -193,7 +193,8 @@ func TestResponse_Update_CreatedAt(t *testing.T) {
 		t.Errorf("expected CreatedAt %v, got %v", time1, resp.Messages[0].CreatedAt)
 	}
 
-	// Second update with later time - should update
+	// Second update with a later time - the first valid timestamp wins, so the
+	// message keeps time1 (matches .NET ProcessUpdate).
 	update2 := &agent.ResponseUpdate{
 		MessageID: "msg1",
 		CreatedAt: time2,
@@ -201,11 +202,11 @@ func TestResponse_Update_CreatedAt(t *testing.T) {
 	}
 	resp.Update(update2)
 
-	if !resp.Messages[0].CreatedAt.Equal(time2) {
-		t.Errorf("expected CreatedAt %v, got %v", time2, resp.Messages[0].CreatedAt)
+	if !resp.Messages[0].CreatedAt.Equal(time1) {
+		t.Errorf("expected CreatedAt to remain %v, got %v", time1, resp.Messages[0].CreatedAt)
 	}
 
-	// Third update with even later time - should update
+	// Third update with an even later time - still keeps time1.
 	update3 := &agent.ResponseUpdate{
 		MessageID: "msg1",
 		CreatedAt: time3,
@@ -213,8 +214,8 @@ func TestResponse_Update_CreatedAt(t *testing.T) {
 	}
 	resp.Update(update3)
 
-	if !resp.Messages[0].CreatedAt.Equal(time3) {
-		t.Errorf("expected CreatedAt %v, got %v", time3, resp.Messages[0].CreatedAt)
+	if !resp.Messages[0].CreatedAt.Equal(time1) {
+		t.Errorf("expected CreatedAt to remain %v, got %v", time1, resp.Messages[0].CreatedAt)
 	}
 }
 
@@ -241,6 +242,98 @@ func TestResponse_Update_CreatedAt_EarlierIgnored(t *testing.T) {
 
 	if !resp.Messages[0].CreatedAt.Equal(time1) {
 		t.Errorf("expected CreatedAt to remain %v, got %v", time1, resp.Messages[0].CreatedAt)
+	}
+}
+
+func TestResponse_Update_CreatedAt_FirstValidWins(t *testing.T) {
+	resp := &agent.Response{}
+
+	time1 := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	time2 := time1.Add(time.Second) // Later time
+
+	update1 := &agent.ResponseUpdate{
+		MessageID: "msg1",
+		CreatedAt: time1,
+		Contents:  message.Contents{&message.TextContent{Text: "First"}},
+	}
+	resp.Update(update1)
+
+	// Second update with a strictly later time - the first valid timestamp
+	// wins, so both the message and the response keep time1 (matches .NET
+	// ProcessUpdate, which never overwrites an already-set CreatedAt).
+	update2 := &agent.ResponseUpdate{
+		MessageID: "msg1",
+		CreatedAt: time2,
+		Contents:  message.Contents{&message.TextContent{Text: "Second"}},
+	}
+	resp.Update(update2)
+
+	if !resp.Messages[0].CreatedAt.Equal(time1) {
+		t.Errorf("expected message CreatedAt to remain %v, got %v", time1, resp.Messages[0].CreatedAt)
+	}
+	if !resp.CreatedAt.Equal(time1) {
+		t.Errorf("expected response CreatedAt to remain %v, got %v", time1, resp.CreatedAt)
+	}
+}
+
+func TestResponse_Update_CreatedAt_EpochZeroIgnored(t *testing.T) {
+	resp := &agent.Response{}
+
+	// An epoch-zero timestamp is treated as unset, so it does not populate
+	// CreatedAt and a later valid value can still take hold.
+	resp.Update(&agent.ResponseUpdate{
+		MessageID: "msg1",
+		CreatedAt: time.Unix(0, 0),
+		Contents:  message.Contents{&message.TextContent{Text: "First"}},
+	})
+
+	if !resp.Messages[0].CreatedAt.IsZero() {
+		t.Errorf("expected message CreatedAt to remain zero, got %v", resp.Messages[0].CreatedAt)
+	}
+	if !resp.CreatedAt.IsZero() {
+		t.Errorf("expected response CreatedAt to remain zero, got %v", resp.CreatedAt)
+	}
+
+	valid := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	resp.Update(&agent.ResponseUpdate{
+		MessageID: "msg1",
+		CreatedAt: valid,
+		Contents:  message.Contents{&message.TextContent{Text: "Second"}},
+	})
+
+	if !resp.Messages[0].CreatedAt.Equal(valid) {
+		t.Errorf("expected message CreatedAt %v, got %v", valid, resp.Messages[0].CreatedAt)
+	}
+	if !resp.CreatedAt.Equal(valid) {
+		t.Errorf("expected response CreatedAt %v, got %v", valid, resp.CreatedAt)
+	}
+}
+
+func TestResponse_Update_CreatedAt_PreexistingEpochZeroReplaced(t *testing.T) {
+	// A Response/Message may already carry an epoch-zero CreatedAt (e.g. loaded
+	// from older data or JSON). Because epoch-zero is treated as unset, a later
+	// valid timestamp must still be allowed to replace it.
+	resp := &agent.Response{
+		CreatedAt: time.Unix(0, 0),
+		Messages: []*message.Message{{
+			ID:        "msg1",
+			CreatedAt: time.Unix(0, 0),
+			Contents:  message.Contents{&message.TextContent{Text: "First"}},
+		}},
+	}
+
+	valid := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	resp.Update(&agent.ResponseUpdate{
+		MessageID: "msg1",
+		CreatedAt: valid,
+		Contents:  message.Contents{&message.TextContent{Text: "Second"}},
+	})
+
+	if !resp.Messages[0].CreatedAt.Equal(valid) {
+		t.Errorf("expected message CreatedAt %v, got %v", valid, resp.Messages[0].CreatedAt)
+	}
+	if !resp.CreatedAt.Equal(valid) {
+		t.Errorf("expected response CreatedAt %v, got %v", valid, resp.CreatedAt)
 	}
 }
 
@@ -336,7 +429,8 @@ func TestResponse_CreatedAt(t *testing.T) {
 		t.Errorf("expected resp.CreatedAt %v, got %v", time1, resp.CreatedAt)
 	}
 
-	// Second update with later time - should update
+	// Second update with a later time - the first valid timestamp wins, so the
+	// response keeps time1 (matches .NET ProcessUpdate).
 	update2 := &agent.ResponseUpdate{
 		MessageID: "msg2",
 		CreatedAt: time2,
@@ -344,11 +438,11 @@ func TestResponse_CreatedAt(t *testing.T) {
 	}
 	resp.Update(update2)
 
-	if !resp.CreatedAt.Equal(time2) {
-		t.Errorf("expected resp.CreatedAt %v, got %v", time2, resp.CreatedAt)
+	if !resp.CreatedAt.Equal(time1) {
+		t.Errorf("expected resp.CreatedAt to remain %v, got %v", time1, resp.CreatedAt)
 	}
 
-	// Third update with earlier time - should NOT update
+	// Third update with an earlier time - still keeps time1.
 	update3 := &agent.ResponseUpdate{
 		MessageID: "msg3",
 		CreatedAt: time3,
@@ -356,8 +450,8 @@ func TestResponse_CreatedAt(t *testing.T) {
 	}
 	resp.Update(update3)
 
-	if !resp.CreatedAt.Equal(time2) {
-		t.Errorf("expected resp.CreatedAt to remain %v, got %v", time2, resp.CreatedAt)
+	if !resp.CreatedAt.Equal(time1) {
+		t.Errorf("expected resp.CreatedAt to remain %v, got %v", time1, resp.CreatedAt)
 	}
 }
 
@@ -418,6 +512,9 @@ func TestResponse_Update_RawRepresentation(t *testing.T) {
 	if resp.Messages[0].RawRepresentation != "raw1" {
 		t.Errorf("expected RawRepresentation 'raw1', got %v", resp.Messages[0].RawRepresentation)
 	}
+	if resp.RawRepresentation != "raw1" {
+		t.Errorf("expected response RawRepresentation 'raw1', got %v", resp.RawRepresentation)
+	}
 
 	// Second update - should create slice
 	update2 := &agent.ResponseUpdate{
@@ -440,6 +537,10 @@ func TestResponse_Update_RawRepresentation(t *testing.T) {
 	if rawSlice[1] != "raw2" {
 		t.Errorf("expected second raw 'raw2', got %v", rawSlice[1])
 	}
+	responseRaw, ok := resp.RawRepresentation.([]any)
+	if !ok || len(responseRaw) != 2 {
+		t.Fatalf("response RawRepresentation = %#v, want two values", resp.RawRepresentation)
+	}
 
 	// Third update - should append to slice
 	update3 := &agent.ResponseUpdate{
@@ -458,6 +559,35 @@ func TestResponse_Update_RawRepresentation(t *testing.T) {
 	}
 	if rawSlice[2] != "raw3" {
 		t.Errorf("expected third raw 'raw3', got %v", rawSlice[2])
+	}
+}
+
+func TestResponse_ToUpdates_RoundTripPreservesRawRepresentationWithContinuationToken(t *testing.T) {
+	// A response with a message raw representation and a continuation token emits
+	// a trailing metadata-only update (RawRepresentation nil). Collecting the
+	// updates back must not fold that nil into the message's raw data.
+	original := &agent.Response{
+		ContinuationToken: "token-123",
+		Messages: []*message.Message{
+			{
+				ID:                "msg1",
+				Role:              message.RoleAssistant,
+				RawRepresentation: "raw1",
+				Contents:          message.Contents{&message.TextContent{Text: "Hello"}},
+			},
+		},
+	}
+
+	var collected agent.Response
+	for _, update := range original.ToUpdates() {
+		collected.Update(update)
+	}
+
+	if got := collected.Messages[0].RawRepresentation; got != "raw1" {
+		t.Errorf("expected RawRepresentation to round-trip as 'raw1', got %v", got)
+	}
+	if collected.ContinuationToken != "token-123" {
+		t.Errorf("expected ContinuationToken 'token-123', got %q", collected.ContinuationToken)
 	}
 }
 
@@ -656,6 +786,9 @@ func TestResponse_ToUpdates_ProducesUpdates(t *testing.T) {
 	if update0.String() != "Text" {
 		t.Errorf("expected Text, got %q", update0.String())
 	}
+	if got := update0.Usage().TotalTokenCount; got != 100 {
+		t.Errorf("expected message update usage 100, got %d", got)
+	}
 
 	update1 := updates[1]
 	if update1.AdditionalProperties["key1"] != "value1" {
@@ -667,15 +800,56 @@ func TestResponse_ToUpdates_ProducesUpdates(t *testing.T) {
 	if update1.AdditionalProperties["key2"] != 42 {
 		t.Errorf("expected key2 42, got %v", update1.AdditionalProperties["key2"])
 	}
-	if len(update1.Contents) != 1 {
-		t.Fatalf("expected 1 extra content, got %d", len(update1.Contents))
+	if len(update1.Contents) != 0 {
+		t.Fatalf("expected metadata-only update, got %d contents", len(update1.Contents))
 	}
-	usageContent, ok := update1.Contents[0].(*message.UsageContent)
-	if !ok {
-		t.Fatalf("expected UsageContent, got %T", update1.Contents[0])
+}
+
+func TestResponse_ToUpdates_PreservesPerMessageUsage(t *testing.T) {
+	resp := &agent.Response{
+		Messages: []*message.Message{
+			{
+				ID:   "message-1",
+				Role: message.RoleAssistant,
+				Contents: message.Contents{
+					&message.TextContent{Text: "First"},
+					&message.UsageContent{Details: message.UsageDetails{TotalTokenCount: 100}},
+				},
+			},
+			{
+				ID:   "message-2",
+				Role: message.RoleAssistant,
+				Contents: message.Contents{
+					&message.TextContent{Text: "Second"},
+					&message.UsageContent{Details: message.UsageDetails{TotalTokenCount: 200}},
+				},
+			},
+		},
 	}
-	if usageContent.Details.TotalTokenCount != 100 {
-		t.Errorf("expected total token count 100, got %d", usageContent.Details.TotalTokenCount)
+
+	updates := resp.ToUpdates()
+	if len(updates) != 2 {
+		t.Fatalf("expected 2 updates, got %d", len(updates))
+	}
+	if got := updates[0].Usage().TotalTokenCount; got != 100 {
+		t.Errorf("expected first update usage 100, got %d", got)
+	}
+	if got := updates[1].Usage().TotalTokenCount; got != 200 {
+		t.Errorf("expected second update usage 200, got %d", got)
+	}
+
+	collected, err := agent.ResponseStream(func(yield func(*agent.ResponseUpdate, error) bool) {
+		for _, u := range updates {
+			if !yield(u, nil) {
+				return
+			}
+		}
+	}).Collect()
+	if err != nil {
+		t.Fatalf("unexpected error collecting updates: %v", err)
+	}
+	if got := collected.Usage().TotalTokenCount; got != 300 {
+		t.Errorf("expected collected usage 300, got %d", got)
 	}
 }
 
@@ -712,12 +886,12 @@ func TestResponse_ToUpdates_WithUsageOnlyProducesSingleUpdate(t *testing.T) {
 
 	updates := resp.ToUpdates()
 
-	if len(updates) != 2 {
-		t.Fatalf("expected message update and usage update, got %d", len(updates))
+	if len(updates) != 1 {
+		t.Fatalf("expected one message update, got %d", len(updates))
 	}
-	usageContent, ok := updates[1].Contents[0].(*message.UsageContent)
+	usageContent, ok := updates[0].Contents[0].(*message.UsageContent)
 	if !ok {
-		t.Fatalf("expected UsageContent, got %T", updates[1].Contents[0])
+		t.Fatalf("expected UsageContent, got %T", updates[0].Contents[0])
 	}
 	if usageContent.Details.TotalTokenCount != 100 {
 		t.Errorf("expected total token count 100, got %d", usageContent.Details.TotalTokenCount)
@@ -786,5 +960,71 @@ func TestResponse_ToUpdates_WithAdditionalPropertiesOnlyProducesSingleUpdate(t *
 	}
 	if updates[0].AdditionalProperties["key"] != "value" {
 		t.Errorf("expected key value, got %v", updates[0].AdditionalProperties["key"])
+	}
+}
+
+func TestResponse_String(t *testing.T) {
+	msg := func(texts ...string) *message.Message {
+		var contents message.Contents
+		for _, text := range texts {
+			contents = append(contents, &message.TextContent{Text: text})
+		}
+		return &message.Message{Role: message.RoleAssistant, Contents: contents}
+	}
+
+	tests := []struct {
+		name     string
+		messages []*message.Message
+		want     string
+	}{
+		{
+			name:     "two messages joined with newline",
+			messages: []*message.Message{msg("foo"), msg("Bar")},
+			want:     "foo\nBar",
+		},
+		{
+			name:     "empty middle message skipped without double newline",
+			messages: []*message.Message{msg("foo"), msg(""), msg("Bar")},
+			want:     "foo\nBar",
+		},
+		{
+			name:     "multiple text contents stay glued within a message",
+			messages: []*message.Message{msg("a", "b")},
+			want:     "ab",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := &agent.Response{Messages: tt.messages}
+			if got := resp.String(); got != tt.want {
+				t.Errorf("String() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResponse_ToUpdates_PropagatesContinuationToken(t *testing.T) {
+	resp := &agent.Response{
+		ContinuationToken: "tok-123",
+		Messages: []*message.Message{
+			{
+				Role:     message.RoleAssistant,
+				Contents: message.Contents{&message.TextContent{Text: "Text"}},
+			},
+		},
+	}
+
+	updates := resp.ToUpdates()
+
+	// The token must survive a ToUpdates/Collect round-trip.
+	var roundTripped agent.Response
+	for _, update := range updates {
+		roundTripped.Update(update)
+	}
+	roundTripped.Coalesce()
+
+	if roundTripped.ContinuationToken != "tok-123" {
+		t.Errorf("expected ContinuationToken tok-123, got %q", roundTripped.ContinuationToken)
 	}
 }
