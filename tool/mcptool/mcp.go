@@ -164,28 +164,7 @@ func mcpContentToAgentContentWithRaw(mcpContents []mcp.Content, rawOverride any)
 			})
 
 		case *mcp.EmbeddedResource:
-			if contentValue.Resource == nil {
-				result = append(result, &message.TextContent{
-					ContentHeader: mcpContentHeader(raw),
-					Text:          "[MCP embedded resource missing resource data]",
-				})
-				continue
-			}
-			header := mcpContentHeader(raw)
-			if contentValue.Resource.Text != "" {
-				result = append(result, &message.TextContent{
-					ContentHeader: header,
-					Text:          contentValue.Resource.Text,
-				})
-			} else {
-				data, mediaType := mcpDataContent(contentValue.Resource.Blob, contentValue.Resource.MIMEType, "application/octet-stream")
-				result = append(result, &message.DataContent{
-					ContentHeader: header,
-					Data:          data,
-					MediaType:     mediaType,
-					Name:          contentValue.Resource.URI,
-				})
-			}
+			result = append(result, mcpEmbeddedResourceToAgentContent(contentValue, raw))
 
 		case *mcp.ToolUseContent: //nolint:staticcheck // ToolUseContent is deprecated per SEP-2577 but remains functional during the deprecation window.
 			result = append(result, &message.TextContent{
@@ -213,6 +192,31 @@ func mcpContentToAgentContentWithRaw(mcpContents []mcp.Content, rawOverride any)
 	}
 
 	return result
+}
+
+func mcpEmbeddedResourceToAgentContent(contentValue *mcp.EmbeddedResource, raw any) message.Content {
+	if contentValue.Resource == nil {
+		return &message.TextContent{
+			ContentHeader: mcpContentHeader(raw),
+			Text:          "[MCP embedded resource missing resource data]",
+		}
+	}
+
+	header := mcpContentHeader(raw)
+	if contentValue.Resource.Text != "" {
+		return &message.TextContent{
+			ContentHeader: header,
+			Text:          contentValue.Resource.Text,
+		}
+	}
+
+	data, mediaType := mcpDataContent(contentValue.Resource.Blob, contentValue.Resource.MIMEType, "application/octet-stream")
+	return &message.DataContent{
+		ContentHeader: header,
+		Data:          data,
+		MediaType:     mediaType,
+		Name:          contentValue.Resource.URI,
+	}
 }
 
 func mcpContentHeader(raw any) message.ContentHeader {

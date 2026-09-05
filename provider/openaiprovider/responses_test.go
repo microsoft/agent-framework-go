@@ -5979,6 +5979,55 @@ func TestResponsesNewParamsStoreFalseDoesNotDuplicateReasoningInclude(t *testing
 	}
 }
 
+func TestResponsesIncludeReasoningEncryptedContentFalseSkipsAutomaticInclude(t *testing.T) {
+	const input = `
+		{
+			"store":false,
+			"model":"gpt-4o-mini",
+			"input":[{
+				"type":"message",
+				"role":"user",
+				"content":[{"type":"input_text","text":"hello"}]
+			}]
+		}
+		`
+
+	const output = `
+		{
+			"id": "resp_67890",
+			"object": "response",
+			"created_at": 1741891428,
+			"status": "completed",
+			"model": "gpt-4o-mini-2024-07-18",
+			"output": [{
+				"type": "message",
+				"id": "msg_67d32764fcdc8191bcf2e444d4088804058a5e08c46a181d",
+				"status": "completed",
+				"role": "assistant",
+				"content": [{"type": "output_text", "text": "Hello!", "annotations": []}]
+			}]
+		}
+		`
+
+	server := newTestResponsesServer(t, input, output)
+	defer server.Close()
+
+	a := openaiprovider.NewResponsesAgent(
+		openai.NewClient(option.WithBaseURL(server.URL)),
+		openaiprovider.AgentConfig{
+			Model: "gpt-4o-mini",
+		},
+	)
+
+	_, err := a.RunText(t.Context(), "hello",
+		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{Store: openai.Bool(false)}),
+		openaiprovider.ResponsesIncludeReasoningEncryptedContent(false),
+	).Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestResponsesConversationId_AsConversationId_NonStreaming(t *testing.T) {
 	const input = `
             {

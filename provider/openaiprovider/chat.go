@@ -65,7 +65,10 @@ type AgentConfig struct {
 
 	// DisableStoreOutput is used only by [NewResponsesAgent]. It disables
 	// service-side output storage and prevents response IDs from being saved into
-	// agent sessions for later continuation.
+	// agent sessions for later continuation. While enabled, Responses requests
+	// also include `reasoning.encrypted_content` by default so reasoning items
+	// can be replayed statelessly; use [ResponsesIncludeReasoningEncryptedContent]
+	// to opt out per run.
 	// It is ignored by [NewChatCompletionsAgent].
 	DisableStoreOutput bool
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
+	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
 	"github.com/openai/openai-go/v3/option"
 )
 
@@ -81,6 +82,33 @@ func TestNewAgentDisableStoreOutputSetsStoreFalse(t *testing.T) {
 	}
 	if got := session.ServiceID(); got != "" {
 		t.Fatalf("session ServiceID = %q, want empty", got)
+	}
+}
+
+func TestNewAgentRunOptionCanDisableReasoningEncryptedContentInclude(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := jsonMap(t, mustReadBody(t, r))
+		if body["store"] != false {
+			t.Fatalf("store = %#v, want false", body["store"])
+		}
+		if _, ok := body["include"]; ok {
+			t.Fatalf("include = %#v, want omitted", body["include"])
+		}
+		writeResponsesOK(w)
+	}))
+	defer server.Close()
+
+	foundryAgent := newFoundryAgent(t, server, foundryprovider.ModelDeployment("gpt-4o-mini"), foundryprovider.AgentConfig{
+		DisableStoreOutput: true,
+		Config: agent.Config{
+			RunOptions: []agent.Option{
+				openaiprovider.ResponsesIncludeReasoningEncryptedContent(false),
+			},
+		},
+	})
+
+	if _, err := foundryAgent.RunText(t.Context(), "hello").Collect(); err != nil {
+		t.Fatalf("RunText error = %v", err)
 	}
 }
 
