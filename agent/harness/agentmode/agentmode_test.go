@@ -304,6 +304,10 @@ func TestDuplicateModeNames_Panics(t *testing.T) {
 func TestExternalModeChange_InjectsNotification(t *testing.T) {
 	p := agentmode.New(agentmode.Config{})
 	opts := sessionOpts()
+	session, ok := agent.GetOption(opts, agent.WithSession)
+	if !ok || session == nil {
+		t.Fatal("expected session option from sessionOpts()")
+	}
 	msgs := newMessages("hi")
 
 	// Initialize state.
@@ -313,7 +317,7 @@ func TestExternalModeChange_InjectsNotification(t *testing.T) {
 	}
 
 	// Change mode externally.
-	if err := p.SetMode("execute", opts...); err != nil {
+	if err := p.SetModeForSession(session, "execute"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -339,10 +343,14 @@ func TestExternalModeChange_InjectsNotification(t *testing.T) {
 func TestExternalModeChange_NotificationClearedAfterFirstRead(t *testing.T) {
 	p := agentmode.New(agentmode.Config{})
 	opts := sessionOpts()
+	session, ok := agent.GetOption(opts, agent.WithSession)
+	if !ok || session == nil {
+		t.Fatal("expected session option from sessionOpts()")
+	}
 	msgs := newMessages("hi")
 
 	_, _, _ = invokeProvider(p, context.Background(), msgs, opts...)
-	_ = p.SetMode("execute", opts...)
+	_ = p.SetModeForSession(session, "execute")
 
 	// First read: should have notification.
 	outMessages, _, _ := invokeProvider(p, context.Background(), msgs, opts...)
@@ -370,12 +378,16 @@ func TestExternalModeChange_NotificationClearedAfterFirstRead(t *testing.T) {
 func TestExternalModeChange_SameMode_NoNotification(t *testing.T) {
 	p := agentmode.New(agentmode.Config{})
 	opts := sessionOpts()
+	session, ok := agent.GetOption(opts, agent.WithSession)
+	if !ok || session == nil {
+		t.Fatal("expected session option from sessionOpts()")
+	}
 	msgs := newMessages("hi")
 
 	_, _, _ = invokeProvider(p, context.Background(), msgs, opts...)
 
 	// Set to same mode.
-	_ = p.SetMode("plan", opts...)
+	_ = p.SetModeForSession(session, "plan")
 
 	outMessages, _, _ := invokeProvider(p, context.Background(), msgs, opts...)
 	for _, msg := range outMessages {
@@ -466,7 +478,43 @@ func TestPublicGetMode_ReturnsDefaultMode(t *testing.T) {
 	}
 }
 
-// 20. PublicSetMode_ChangesMode
+// 20. PublicGetModeForSession_ReturnsDefaultMode
+func TestPublicGetModeForSession_ReturnsDefaultMode(t *testing.T) {
+	p := agentmode.New(agentmode.Config{})
+	session := agenttest.CreateSession()
+
+	if mode := p.GetModeForSession(session); mode != "plan" {
+		t.Errorf("expected 'plan', got %q", mode)
+	}
+}
+
+// 21. PublicSetModeForSession_ChangesMode
+func TestPublicSetModeForSession_ChangesMode(t *testing.T) {
+	p := agentmode.New(agentmode.Config{})
+	session := agenttest.CreateSession()
+
+	if err := p.SetModeForSession(session, "execute"); err != nil {
+		t.Fatal(err)
+	}
+	if mode := p.GetModeForSession(session); mode != "execute" {
+		t.Errorf("expected 'execute', got %q", mode)
+	}
+}
+
+// 22. PublicSetModeForSession_NoSession_ReturnsError
+func TestPublicSetModeForSession_NoSession_ReturnsError(t *testing.T) {
+	p := agentmode.New(agentmode.Config{})
+
+	err := p.SetModeForSession(nil, "execute")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "no session available") {
+		t.Fatalf("expected no-session error, got %v", err)
+	}
+}
+
+// 23. PublicSetMode_ChangesMode
 func TestPublicSetMode_ChangesMode(t *testing.T) {
 	p := agentmode.New(agentmode.Config{})
 	opts := sessionOpts()
@@ -479,7 +527,7 @@ func TestPublicSetMode_ChangesMode(t *testing.T) {
 	}
 }
 
-// 21. PublicSetMode_InvalidMode_Throws
+// 24. PublicSetMode_InvalidMode_Throws
 func TestPublicSetMode_InvalidMode_ReturnsError(t *testing.T) {
 	p := agentmode.New(agentmode.Config{})
 	opts := sessionOpts()
@@ -499,7 +547,7 @@ func TestPublicSetMode_NilSession_ReturnsError(t *testing.T) {
 	}
 }
 
-// 22. PublicSetMode_ReflectedInToolResults
+// 25. PublicSetMode_ReflectedInToolResults
 func TestPublicSetMode_ReflectedInInstructions(t *testing.T) {
 	p := agentmode.New(agentmode.Config{})
 	opts := sessionOpts()
@@ -517,7 +565,7 @@ func TestPublicSetMode_ReflectedInInstructions(t *testing.T) {
 	}
 }
 
-// 23. State_PersistsAcrossInvocations
+// 26. State_PersistsAcrossInvocations
 func TestState_PersistsAcrossInvocations(t *testing.T) {
 	p := agentmode.New(agentmode.Config{})
 	opts := sessionOpts()
@@ -541,7 +589,7 @@ func TestState_PersistsAcrossInvocations(t *testing.T) {
 	}
 }
 
-// 24. Options_CustomInstructions_OverridesDefault
+// 27. Options_CustomInstructions_OverridesDefault
 func TestCustomInstructions_OverridesDefault(t *testing.T) {
 	p := agentmode.New(agentmode.Config{
 		Instructions: new("Custom instructions for mode {current_mode}"),
