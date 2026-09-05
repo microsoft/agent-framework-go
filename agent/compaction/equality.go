@@ -61,14 +61,26 @@ func contentEqual(left, right message.Content) bool {
 		return leftContent.Message == rightContent.Message && leftContent.ErrorCode == rightContent.ErrorCode && leftContent.Details == rightContent.Details
 	case *message.FunctionCallContent:
 		rightContent := right.(*message.FunctionCallContent)
-		return leftContent.CallID == rightContent.CallID && leftContent.Name == rightContent.Name && leftContent.Arguments == rightContent.Arguments
+		return leftContent.CallID == rightContent.CallID && leftContent.Name == rightContent.Name && leftContent.Arguments == rightContent.Arguments &&
+			errorsEqual(leftContent.Error, rightContent.Error) && leftContent.InformationalOnly == rightContent.InformationalOnly
 	case *message.FunctionResultContent:
 		rightContent := right.(*message.FunctionResultContent)
-		return leftContent.CallID == rightContent.CallID && reflect.DeepEqual(leftContent.Result, rightContent.Result)
+		return leftContent.CallID == rightContent.CallID && reflect.DeepEqual(leftContent.Result, rightContent.Result) &&
+			errorsEqual(leftContent.Error, rightContent.Error)
 	case *message.HostedFileContent:
 		rightContent := right.(*message.HostedFileContent)
 		return leftContent.FileID == rightContent.FileID && leftContent.MediaType == rightContent.MediaType && leftContent.Name == rightContent.Name
 	default:
 		return true
 	}
+}
+
+// errorsEqual reports whether two content error values are equal. Errors are
+// compared by their message string, matching how function content serializes
+// its Error field to and from JSON.
+func errorsEqual(left, right error) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Error() == right.Error()
 }

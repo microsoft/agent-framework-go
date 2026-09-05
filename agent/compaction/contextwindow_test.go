@@ -20,7 +20,7 @@ func (charCounter) CountTokens(text string) int { return len(text) }
 // preceded by a user message.
 func buildToolCallMessages(n int) []*message.Message {
 	msgs := make([]*message.Message, 0, n*4)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		callID := "call-" + string(rune('a'+i))
 		msgs = append(msgs,
 			textMessage(message.RoleUser, "u"),
@@ -174,7 +174,7 @@ func TestContextWindowStrategy_TruncatesWhenOverTruncationThreshold(t *testing.T
 	msgs := []*message.Message{
 		textMessage(message.RoleSystem, "system"),
 	}
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		msgs = append(msgs,
 			textMessage(message.RoleUser, "uuuu"),
 			textMessage(message.RoleAssistant, "aaaa"),

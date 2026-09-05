@@ -5,7 +5,9 @@ package foundryprovider
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"net/http"
 	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
@@ -31,14 +33,23 @@ type MemoryProviderConfig struct {
 
 	// ContextPrompt prefixes retrieved memories injected into the run. The default
 	// prompt is "## Memories\nConsider the following memories when answering user questions:".
-	ContextPrompt string
+	ContextPrompt *string
 
-	// MaxMemories limits the number of memories returned by search. The default is 5.
-	MaxMemories int32
+	// MaxMemories limits the number of memories returned by search. Nil uses the
+	// default of 5.
+	MaxMemories *int32
 
 	// SearchInputFilter filters messages used to search for relevant memories. The
 	// default is [messagefilter.ExternalOnly].
 	SearchInputFilter messagefilter.Filter
+
+	// StorageInputRequestMessageFilter filters request messages before they are stored as
+	// memories. The default is [messagefilter.ExternalOnly].
+	StorageInputRequestMessageFilter messagefilter.Filter
+
+	// StorageInputResponseMessageFilter filters response messages before they are stored as
+	// memories. The default is [messagefilter.PassThrough].
+	StorageInputResponseMessageFilter messagefilter.Filter
 
 	// UpdateDelay controls Foundry memory extraction delay in seconds. The default is 0,
 	// which submits memory updates immediately.
@@ -89,19 +100,21 @@ func newMemoryProvider(client *azaiprojects.MemoryStoresClient, memoryStoreName 
 	if scope == nil {
 		panic("memory scope is required")
 	}
-	if config.ContextPrompt == "" {
-		config.ContextPrompt = defaultMemoryContextPrompt
+	if config.ContextPrompt == nil {
+		config.ContextPrompt = new(defaultMemoryContextPrompt)
 	}
-	if config.MaxMemories == 0 {
-		config.MaxMemories = defaultMaxMemories
+	if config.MaxMemories == nil {
+		config.MaxMemories = new(int32(defaultMaxMemories))
 	}
-	if config.SearchInputFilter == nil {
-		config.SearchInputFilter = messagefilter.ExternalOnly
-	}
+	// All three filters are intentionally left nil when unset: ContextProviderConfig
+	// already defaults a nil provide/store-request filter to messagefilter.ExternalOnly
+	// and a nil store-response filter to messagefilter.PassThrough, so re-setting them
+	// here would be redundant.
 	providerConfig := agent.ContextProviderConfig{
-		ProvideInputMessageFilter:      config.SearchInputFilter,
-		SourceID:                       defaultSourceID,
-		StoreInputRequestMessageFilter: messagefilter.ExternalOnly,
+		ProvideInputMessageFilter:       config.SearchInputFilter,
+		SourceID:                        defaultSourceID,
+		StoreInputRequestMessageFilter:  config.StorageInputRequestMessageFilter,
+		StoreInputResponseMessageFilter: config.StorageInputResponseMessageFilter,
 	}
 	p := &MemoryProvider{
 		client:          client,
@@ -116,6 +129,40 @@ func newMemoryProvider(client *azaiprojects.MemoryStoresClient, memoryStoreName 
 	return p
 }
 
+// EnsureMemoryStoreCreated provisions the configured Foundry memory store when it does not
+// already exist. It first retrieves the store; if the store is present the call is a no-op.
+// When the store is missing (HTTP 404) it creates a default memory store backed by the given
+// chat and embedding model deployments, applying description when non-nil. The helper is
+// idempotent: if another process creates the store between the retrieval and the create, the
+// resulting HTTP 409 conflict is treated as success. Any other retrieval or create error is
+// returned unchanged.
+func (p *MemoryProvider) EnsureMemoryStoreCreated(ctx context.Context, chatModel, embeddingModel string, description *string) error {
+	if _, err := p.client.GetMemoryStore(ctx, p.memoryStoreName, nil); err != nil {
+		respErr, ok := errors.AsType[*azcore.ResponseError](err)
+		if !ok || respErr.StatusCode != http.StatusNotFound {
+			return err
+		}
+		def := &azaiprojects.MemoryStoreDefaultDefinition{
+			ChatModel:      &chatModel,
+			EmbeddingModel: &embeddingModel,
+		}
+		var options *azaiprojects.MemoryStoresClientCreateMemoryStoreOptions
+		if description != nil {
+			options = &azaiprojects.MemoryStoresClientCreateMemoryStoreOptions{Description: description}
+		}
+		if _, err = p.client.CreateMemoryStore(ctx, p.memoryStoreName, def, options); err != nil {
+			// Tolerate a concurrent create: if another process created the store after the
+			// GET returned 404, CreateMemoryStore reports a conflict. Treat it as a no-op.
+			if respErr, ok := errors.AsType[*azcore.ResponseError](err); ok && respErr.StatusCode == http.StatusConflict {
+				return nil
+			}
+			return err
+		}
+		return nil
+	}
+	return nil
+}
+
 // Invoking is called before an agent run. It searches the Foundry memory store for memories
 // relevant to the incoming messages and returns them as additional context to inject into the run.
 func (p *MemoryProvider) Invoking(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
@@ -128,6 +175,25 @@ func (p *MemoryProvider) Invoked(ctx context.Context, invoked agent.InvokedConte
 	return p.provider.Invoked(ctx, invoked)
 }
 
+// EnsureStoredMemoriesDeleted deletes every memory stored for the session's scope in the
+// backing Foundry memory store. The scope is resolved with the provider's scope callback,
+// so a blank scope is treated as a configuration error and panics, matching the contract
+// documented on [NewMemoryProvider]. A store that holds no memories for the scope responds
+// with HTTP 404, which is treated as success. Any other error is returned to the caller.
+func (p *MemoryProvider) EnsureStoredMemoriesDeleted(ctx context.Context, session *agent.Session) error {
+	scope := p.scope(session)
+	if _, err := p.client.DeleteScope(ctx, p.memoryStoreName, scope, nil); err != nil {
+		if respErr, ok := errors.AsType[*azcore.ResponseError](err); ok && respErr.StatusCode == http.StatusNotFound {
+			p.log(ctx, slog.LevelInfo, "foundrymemory: no stored memories to delete", "memory_store", p.memoryStoreName)
+			return nil
+		}
+		p.log(ctx, slog.LevelError, "foundrymemory: failed to delete stored memories", "memory_store", p.memoryStoreName, "error", err)
+		return err
+	}
+	p.log(ctx, slog.LevelInfo, "foundrymemory: deleted stored memories", "memory_store", p.memoryStoreName)
+	return nil
+}
+
 func (p *MemoryProvider) provide(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
 	items := searchMemoryItems(invoking.Messages)
 	if len(items) == 0 {
@@ -136,10 +202,8 @@ func (p *MemoryProvider) provide(ctx context.Context, invoking agent.InvokingCon
 	session, _ := agent.GetOption(invoking.Options, agent.WithSession)
 	scope := p.scope(session)
 	searchOptions := &azaiprojects.MemoryStoresClientSearchMemoriesOptions{
-		Items: items,
-	}
-	if p.config.MaxMemories > 0 {
-		searchOptions.Options = &azaiprojects.MemorySearchResultOptions{MaxMemories: &p.config.MaxMemories}
+		Items:   items,
+		Options: &azaiprojects.MemorySearchResultOptions{MaxMemories: p.config.MaxMemories},
 	}
 	result, err := p.client.SearchMemories(ctx, p.memoryStoreName, scope, searchOptions)
 	if err != nil {
@@ -151,7 +215,7 @@ func (p *MemoryProvider) provide(ctx context.Context, invoking agent.InvokingCon
 	if len(memories) == 0 {
 		return nil, nil, nil
 	}
-	contextMessage := message.NewText(p.config.ContextPrompt + "\n" + strings.Join(memories, "\n"))
+	contextMessage := message.NewText(*p.config.ContextPrompt + "\n" + strings.Join(memories, "\n"))
 	return []*message.Message{contextMessage}, nil, nil
 }
 
@@ -227,11 +291,15 @@ func toResponseItem(role message.Role, text string) map[string]any {
 	default:
 		role = message.RoleUser
 	}
+	contentType := "input_text"
+	if role == message.RoleAssistant {
+		contentType = "output_text"
+	}
 	return map[string]any{
 		"type": "message",
 		"role": string(role),
 		"content": []map[string]any{{
-			"type": "input_text",
+			"type": contentType,
 			"text": text,
 		}},
 	}

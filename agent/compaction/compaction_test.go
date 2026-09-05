@@ -19,6 +19,20 @@ func invokeProvider(provider agent.ContextProvider, ctx context.Context, message
 	return provider.Invoking(ctx, agent.InvokingContext{Messages: messages, Options: options})
 }
 
+type strategyFunc func(context.Context, *compaction.MessageIndex) (bool, error)
+
+func (f strategyFunc) Compact(ctx context.Context, index *compaction.MessageIndex) (bool, error) {
+	return f(ctx, index)
+}
+
+func TestSummarizerFunc_NilReturnsError(t *testing.T) {
+	var summarizer compaction.SummarizerFunc
+	_, err := summarizer.Summarize(t.Context(), nil)
+	if err == nil || err.Error() != "compaction: summarizer function is nil" {
+		t.Fatalf("Summarize() error = %v, want nil-function error", err)
+	}
+}
+
 func TestMessageIndex_GroupsToolCallsAtomically(t *testing.T) {
 	messages := []*message.Message{
 		textMessage(message.RoleSystem, "system"),
@@ -115,7 +129,7 @@ func TestTruncationStrategy_ExcludesOldestGroups(t *testing.T) {
 	index := compaction.CreateMessageIndex(turnMessages(3), nil)
 	strategy := &compaction.TruncationStrategy{
 		Trigger:                compaction.GroupsExceed(2),
-		MinimumPreservedGroups: 2,
+		MinimumPreservedGroups: new(2),
 	}
 
 	compacted, err := strategy.Compact(t.Context(), index)
@@ -142,7 +156,7 @@ func TestTruncationStrategy_SkipsPreExcludedAndSystemGroups(t *testing.T) {
 	}, nil)
 	index.Groups[1].IsExcluded = true
 	strategy := &compaction.TruncationStrategy{
-		MinimumPreservedGroups: 1,
+		MinimumPreservedGroups: new(1),
 	}
 
 	compacted, err := strategy.Compact(t.Context(), index)
@@ -187,7 +201,7 @@ func TestSlidingWindowStrategy_ExcludesOldestTurns(t *testing.T) {
 	index := compaction.CreateMessageIndex(turnMessages(3), nil)
 	strategy := &compaction.SlidingWindowStrategy{
 		Trigger:               compaction.TurnsExceed(1),
-		MinimumPreservedTurns: 1,
+		MinimumPreservedTurns: new(1),
 	}
 
 	compacted, err := strategy.Compact(t.Context(), index)
@@ -215,7 +229,7 @@ func TestSlidingWindowStrategy_PreservesTurnZeroGroups(t *testing.T) {
 	}, nil)
 	strategy := &compaction.SlidingWindowStrategy{
 		Trigger:               compaction.TurnsExceed(1),
-		MinimumPreservedTurns: 1,
+		MinimumPreservedTurns: new(1),
 	}
 
 	compacted, err := strategy.Compact(t.Context(), index)
@@ -230,6 +244,48 @@ func TestSlidingWindowStrategy_PreservesTurnZeroGroups(t *testing.T) {
 	want := []string{"preface", "u2", "a2"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("unexpected included messages: got %v want %v", got, want)
+	}
+}
+
+func TestTruncationStrategy_ExplicitZeroPreservesNone(t *testing.T) {
+	index := compaction.CreateMessageIndex([]*message.Message{
+		textMessage(message.RoleSystem, "system"),
+		textMessage(message.RoleAssistant, "g1"),
+		textMessage(message.RoleAssistant, "g2"),
+		textMessage(message.RoleAssistant, "g3"),
+		textMessage(message.RoleAssistant, "g4"),
+		textMessage(message.RoleAssistant, "g5"),
+	}, nil)
+	strategy := &compaction.TruncationStrategy{MinimumPreservedGroups: new(0)}
+
+	compacted, err := strategy.Compact(t.Context(), index)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !compacted {
+		t.Fatal("expected compaction with an explicit zero floor")
+	}
+	if got := index.IncludedNonSystemGroupCount(); got != 0 {
+		t.Fatalf("expected all removable non-system groups excluded, got %d preserved", got)
+	}
+	if index.Groups[0].IsExcluded {
+		t.Fatal("expected system group to be preserved")
+	}
+}
+
+func TestSlidingWindowStrategy_NegativeMinimumClampsToZero(t *testing.T) {
+	index := compaction.CreateMessageIndex(turnMessages(3), nil)
+	strategy := &compaction.SlidingWindowStrategy{MinimumPreservedTurns: new(-5)}
+
+	compacted, err := strategy.Compact(t.Context(), index)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !compacted {
+		t.Fatal("expected compaction when the floor clamps to zero")
+	}
+	if got := index.IncludedTurnCount(); got != 0 {
+		t.Fatalf("expected a negative floor to clamp to zero and exclude all turns, got %d turns preserved", got)
 	}
 }
 
@@ -273,7 +329,7 @@ func TestToolResultStrategy_CollapsesOldToolGroups(t *testing.T) {
 	index := compaction.CreateMessageIndex(messages, nil)
 	strategy := &compaction.ToolResultStrategy{
 		Trigger:                compaction.HasToolCalls(),
-		MinimumPreservedGroups: 2,
+		MinimumPreservedGroups: new(2),
 	}
 
 	compacted, err := strategy.Compact(t.Context(), index)
@@ -294,9 +350,40 @@ func TestToolResultStrategy_CollapsesOldToolGroups(t *testing.T) {
 	}
 }
 
+// TestDefaultToolCallFormatter_DedupsRepeatedNamesWithEmptyResults guards the
+// tool-name deduplication when repeated calls to the same tool produce empty
+// results. The name must still be listed exactly once, matching the behavior
+// for non-empty results.
+func TestDefaultToolCallFormatter_DedupsRepeatedNamesWithEmptyResults(t *testing.T) {
+	group := &compaction.MessageGroup{
+		Messages: []*message.Message{
+			{
+				Role: message.RoleAssistant,
+				Contents: []message.Content{
+					&message.FunctionCallContent{CallID: "c1", Name: "notify"},
+					&message.FunctionCallContent{CallID: "c2", Name: "notify"},
+				},
+			},
+			{
+				Role: message.RoleTool,
+				Contents: []message.Content{
+					&message.FunctionResultContent{CallID: "c1", Result: ""},
+					&message.FunctionResultContent{CallID: "c2", Result: ""},
+				},
+			},
+		},
+	}
+
+	got := compaction.DefaultToolCallFormatter(group)
+	want := "[Tool Calls]\nnotify:"
+	if got != want {
+		t.Fatalf("formatter output = %q, want %q", got, want)
+	}
+}
+
 func TestToolResultStrategy_ZeroValueUsesDefaults(t *testing.T) {
 	messages := make([]*message.Message, 0, 20)
-	for i := 0; i < 9; i++ {
+	for i := range 9 {
 		callID := "call-" + string(rune('0'+i))
 		messages = append(messages,
 			textMessage(message.RoleUser, "u"+string(rune('0'+i))),
@@ -345,8 +432,8 @@ func TestSummarizationStrategy_InsertsSummaryAndPreservesRecentGroups(t *testing
 	strategy := &compaction.SummarizationStrategy{
 		Trigger:                compaction.GroupsExceed(2),
 		Summarizer:             summarizer,
-		MinimumPreservedGroups: 2,
-		SummarizationPrompt:    "summarize",
+		MinimumPreservedGroups: new(2),
+		SummarizationPrompt:    new("summarize"),
 	}
 
 	compacted, err := strategy.Compact(t.Context(), index)
@@ -417,7 +504,7 @@ func TestSummarizationStrategy_RestoresGroupsWhenSummarizerFails(t *testing.T) {
 	strategy := &compaction.SummarizationStrategy{
 		Trigger:                compaction.GroupsExceed(2),
 		Summarizer:             compaction.SummarizerFunc(func(context.Context, []*message.Message) (string, error) { return "", expected }),
-		MinimumPreservedGroups: 1,
+		MinimumPreservedGroups: new(1),
 	}
 
 	compacted, err := strategy.Compact(t.Context(), index)
@@ -437,7 +524,7 @@ func TestSummarizationStrategy_PropagatesCancellation(t *testing.T) {
 	strategy := &compaction.SummarizationStrategy{
 		Trigger:                compaction.GroupsExceed(2),
 		Summarizer:             compaction.SummarizerFunc(func(context.Context, []*message.Message) (string, error) { return "", context.Canceled }),
-		MinimumPreservedGroups: 1,
+		MinimumPreservedGroups: new(1),
 	}
 
 	compacted, err := strategy.Compact(t.Context(), index)
@@ -457,7 +544,7 @@ func TestNewProvider_CompactsAndPersistsIndex(t *testing.T) {
 	provider := compaction.NewContextProvider(compaction.ContextProviderConfig{
 		Strategy: &compaction.TruncationStrategy{
 			Trigger:                compaction.GroupsExceed(2),
-			MinimumPreservedGroups: 2,
+			MinimumPreservedGroups: new(2),
 		},
 		SourceID: "compaction-test",
 	})
@@ -494,7 +581,7 @@ func TestNewProvider_SourceStampsGeneratedMessages(t *testing.T) {
 		Strategy: &compaction.SummarizationStrategy{
 			Trigger:                compaction.GroupsExceed(2),
 			Summarizer:             compaction.SummarizerFunc(func(context.Context, []*message.Message) (string, error) { return "older context", nil }),
-			MinimumPreservedGroups: 2,
+			MinimumPreservedGroups: new(2),
 		},
 		SourceID: "compaction-test",
 	})
@@ -514,11 +601,37 @@ func TestNewProvider_SourceStampsGeneratedMessages(t *testing.T) {
 	}
 }
 
+func TestNewProvider_SourceStampingDoesNotMutateGeneratedMessage(t *testing.T) {
+	generated := textMessage(message.RoleAssistant, "generated")
+	provider := compaction.NewContextProvider(compaction.ContextProviderConfig{
+		Strategy: strategyFunc(func(_ context.Context, index *compaction.MessageIndex) (bool, error) {
+			index.AddGroup(compaction.GroupKindSummary, []*message.Message{generated}, nil)
+			return true, nil
+		}),
+		SourceID: "compaction-test",
+	})
+
+	input := textMessage(message.RoleUser, "input")
+	compactedMessages, _, err := invokeProvider(provider, t.Context(), []*message.Message{input})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(compactedMessages) != 2 || compactedMessages[0] != input {
+		t.Fatalf("unexpected compacted messages: %#v", compactedMessages)
+	}
+	if compactedMessages[1] == generated {
+		t.Fatal("expected generated message to be cloned before source attribution")
+	}
+	if generated.Source != (message.Source{}) {
+		t.Fatalf("expected generated message source to remain unchanged, got %#v", generated.Source)
+	}
+}
+
 func TestNewProvider_CompactsWithoutSession(t *testing.T) {
 	provider := compaction.NewContextProvider(compaction.ContextProviderConfig{
 		Strategy: &compaction.TruncationStrategy{
 			Trigger:                compaction.GroupsExceed(2),
-			MinimumPreservedGroups: 2,
+			MinimumPreservedGroups: new(2),
 		},
 	})
 
@@ -582,4 +695,46 @@ func messageTexts(messages []*message.Message) []string {
 		texts[i] = msg.String()
 	}
 	return texts
+}
+
+func TestNewProvider_KeepsRetainedHistorySourceAcrossTurns(t *testing.T) {
+	// A compaction provider generates only summary messages; genuine prior-turn
+	// history returned from the persisted index must keep its original Source.
+	// Across turns the index is rebuilt from persisted groups whose message
+	// pointers differ from this turn's input, so identity-based attribution
+	// wrongly stamps real history as context-provider generated.
+	provider := compaction.NewContextProvider(compaction.ContextProviderConfig{
+		Strategy: &compaction.TruncationStrategy{Trigger: compaction.Never()},
+		SourceID: "compaction-test",
+	})
+	session := agenttest.CreateSession()
+
+	if _, _, err := invokeProvider(provider, t.Context(), []*message.Message{
+		textMessage(message.RoleUser, "u1"),
+		textMessage(message.RoleAssistant, "a1"),
+	}, agent.WithSession(session)); err != nil {
+		t.Fatalf("turn 1: %v", err)
+	}
+
+	out, _, err := invokeProvider(provider, t.Context(), []*message.Message{
+		textMessage(message.RoleUser, "u1"),
+		textMessage(message.RoleAssistant, "a1"),
+		textMessage(message.RoleUser, "u2"),
+		textMessage(message.RoleAssistant, "a2"),
+	}, agent.WithSession(session))
+	if err != nil {
+		t.Fatalf("turn 2: %v", err)
+	}
+
+	cp := message.Source{Type: agent.SourceTypeContextProvider, ID: "compaction-test"}
+	for i, msg := range out {
+		if msg.Source == cp {
+			t.Errorf("message %d (%q) mislabeled as context-provider generated; genuine history must not be attributed to the provider", i, msg.String())
+		}
+	}
+	// Retained prior-turn history restored from compaction state is attributed as
+	// chat history (matching .NET), not context-provider generated.
+	if len(out) < 2 || out[0].Source.Type != agent.SourceTypeHistoryProvider || out[1].Source.Type != agent.SourceTypeHistoryProvider {
+		t.Errorf("retained history should be marked as chat history, got %#v and %#v", out[0].Source, out[1].Source)
+	}
 }

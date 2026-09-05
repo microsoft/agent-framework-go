@@ -6,7 +6,7 @@ import (
 	"context"
 	"errors"
 	"iter"
-	"maps"
+	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
@@ -14,7 +14,11 @@ import (
 	"github.com/microsoft/agent-framework-go/message"
 )
 
-const continuationTokenMetadataKey = "__a2a__continuationToken"
+const (
+	continuationTokenMetadataKey   = "__a2a__continuationToken"
+	backgroundResponsePollInterval = time.Second
+	unexpectedFailureMessage       = "The agent encountered an unexpected error and could not complete the request."
+)
 
 // ExecutorConfig defines the configuration for [NewExecutor].
 type ExecutorConfig struct {
@@ -83,7 +87,7 @@ func (e *executor) executeNewMessage(ctx context.Context, execCtx *a2asrv.Execut
 		return err
 	}
 
-	resp, err := e.runResponse(ctx, execCtx, messagesIn)
+	resp, err := e.runResponse(ctx, execCtx, messagesIn, "")
 	if err != nil {
 		return err
 	}
@@ -100,40 +104,38 @@ func (e *executor) executeNewMessage(ctx context.Context, execCtx *a2asrv.Execut
 	if !yield(a2a.NewSubmittedTask(execCtx, execCtx.Message), nil) {
 		return nil
 	}
-	if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateSubmitted, nil), nil) {
-		return nil
-	}
 
-	return yieldWorkingStatusFromResponse(execCtx, resp, yield)
+	if ok, err := yieldWorkingStatusFromResponse(execCtx, resp, yield); err != nil || !ok {
+		return err
+	}
+	return e.pollBackgroundResponse(ctx, execCtx, resp.ContinuationToken, yield)
 }
 
 func (e *executor) executeTaskUpdate(ctx context.Context, execCtx *a2asrv.ExecutorContext, yield func(a2a.Event, error) bool) error {
-	messagesIn, err := buildTaskUpdateInputs(execCtx)
+	messagesIn, continuationToken, err := buildTaskUpdateInputs(execCtx)
 	if err != nil {
 		return err
 	}
 
-	resp, runErr := e.runResponse(ctx, execCtx, messagesIn)
+	resp, runErr := e.runResponse(ctx, execCtx, messagesIn, continuationToken)
 	if runErr != nil {
-		statusMsg := a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart(runErr.Error()))
-		yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateFailed, statusMsg), nil)
-		return nil
+		if isCancellationError(runErr) {
+			return runErr
+		}
+		if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateFailed, nil), nil) {
+			return nil
+		}
+		return runErr
 	}
 
 	if resp.ContinuationToken != "" {
-		return yieldWorkingStatusFromResponse(execCtx, resp, yield)
+		if ok, err := yieldWorkingStatusFromResponse(execCtx, resp, yield); err != nil || !ok {
+			return err
+		}
+		return e.pollBackgroundResponse(ctx, execCtx, resp.ContinuationToken, yield)
 	}
 
-	artifact, err := responseToArtifactEvent(execCtx, resp)
-	if err != nil {
-		return err
-	}
-	if !yield(artifact, nil) {
-		return nil
-	}
-
-	yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateCompleted, nil), nil)
-	return nil
+	return yieldCompletedResponse(execCtx, resp, yield)
 }
 
 func (e *executor) executeNewMessageStreaming(ctx context.Context, execCtx *a2asrv.ExecutorContext, yield func(a2a.Event, error) bool) error {
@@ -150,24 +152,52 @@ func (e *executor) executeNewMessageStreaming(ctx context.Context, execCtx *a2as
 	if !yield(a2a.NewSubmittedTask(execCtx, execCtx.Message), nil) {
 		return nil
 	}
-	if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateSubmitted, nil), nil) {
+	if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateWorking, nil), nil) {
 		return nil
 	}
 
-	var artifactID a2a.ArtifactID
-	var yieldedWorking bool
+	artifactWriter := newArtifactStreamWriter(execCtx)
+	yieldedWorking := true
 	for update, runErr := range e.agent.Run(ctx, messagesIn, runOptions...) {
 		if runErr != nil {
-			statusMsg := a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart(runErr.Error()))
-			if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateFailed, statusMsg), nil) {
+			artifact, err := artifactWriter.Complete()
+			if err != nil {
+				return err
+			}
+			if artifact != nil {
+				if !yieldedWorking {
+					if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateWorking, nil), nil) {
+						return nil
+					}
+				}
+				if !yield(artifact, nil) {
+					return nil
+				}
+			}
+
+			state := a2a.TaskStateFailed
+			var statusMessage *a2a.Message
+			if isCallerCancellation(ctx, runErr) {
+				state = a2a.TaskStateCanceled
+			} else {
+				statusMessage = unexpectedFailureStatusMessage()
+			}
+			if !yield(a2a.NewStatusUpdateEvent(execCtx, state, statusMessage), nil) {
 				return nil
 			}
+			// a2a-go cancels its event queue when an executor error follows a
+			// terminal update, dropping artifacts already queued above.
 			return nil
 		}
 		if update == nil {
 			continue
 		}
 		if update.ContinuationToken != "" {
+			artifact, err := artifactWriter.Complete()
+			if err != nil {
+				return err
+			}
+
 			working, err := responseUpdateToWorkingStatusEvent(execCtx, update)
 			if err != nil {
 				return err
@@ -175,23 +205,47 @@ func (e *executor) executeNewMessageStreaming(ctx context.Context, execCtx *a2as
 			if !yield(working, nil) {
 				return nil
 			}
-			return nil
+
+			if artifact != nil {
+				if !yield(artifact, nil) {
+					return nil
+				}
+			}
+			return e.pollBackgroundResponse(ctx, execCtx, update.ContinuationToken, yield)
 		}
 
-		artifact, nextArtifactID, err := responseUpdateToArtifactEvent(execCtx, artifactID, update)
-		if err != nil {
-			return err
+		artifacts, writeErr := artifactWriter.Write(update)
+
+		for _, artifact := range artifacts {
+			if artifact == nil {
+				continue
+			}
+			if !yieldedWorking {
+				if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateWorking, nil), nil) {
+					return nil
+				}
+				yieldedWorking = true
+			}
+			if !yield(artifact, nil) {
+				return nil
+			}
 		}
-		if artifact == nil {
-			continue
+
+		if writeErr != nil {
+			return writeErr
 		}
+	}
+
+	artifact, err := artifactWriter.Complete()
+	if err != nil {
+		return err
+	}
+	if artifact != nil {
 		if !yieldedWorking {
 			if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateWorking, nil), nil) {
 				return nil
 			}
-			yieldedWorking = true
 		}
-		artifactID = nextArtifactID
 		if !yield(artifact, nil) {
 			return nil
 		}
@@ -224,10 +278,17 @@ func buildNewMessageInputs(in *a2a.Message) ([]*message.Message, error) {
 	return []*message.Message{incoming}, nil
 }
 
-func buildTaskUpdateInputs(execCtx *a2asrv.ExecutorContext) ([]*message.Message, error) {
+func buildTaskUpdateInputs(execCtx *a2asrv.ExecutorContext) ([]*message.Message, string, error) {
+	if value, ok := execCtx.StoredTask.Metadata[continuationTokenMetadataKey]; ok {
+		token, ok := value.(string)
+		if !ok || token == "" {
+			return nil, "", errors.New("stored A2A continuation token is invalid")
+		}
+		return nil, token, nil
+	}
 	messages := make([]*message.Message, 0, 1)
 	if len(execCtx.StoredTask.History) == 0 {
-		return messages, nil
+		return messages, "", nil
 	}
 
 	for _, m := range execCtx.StoredTask.History {
@@ -236,23 +297,23 @@ func buildTaskUpdateInputs(execCtx *a2asrv.ExecutorContext) ([]*message.Message,
 		}
 		msg, err := toAgentMessage(m)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		if msg != nil {
 			messages = append(messages, msg)
 		}
 	}
 
-	return messages, nil
+	return messages, "", nil
 }
 
-func yieldWorkingStatusFromResponse(execCtx *a2asrv.ExecutorContext, resp *agent.Response, yield func(a2a.Event, error) bool) error {
+func yieldWorkingStatusFromResponse(execCtx *a2asrv.ExecutorContext, resp *agent.Response, yield func(a2a.Event, error) bool) (bool, error) {
 	var progressMessage *a2a.Message
 	var err error
 	if len(resp.Messages) > 0 {
 		progressMessage, err = responseToMessage(execCtx, resp)
 		if err != nil {
-			return err
+			return false, err
 		}
 	}
 
@@ -261,14 +322,80 @@ func yieldWorkingStatusFromResponse(execCtx *a2asrv.ExecutorContext, resp *agent
 		working.Metadata = map[string]any{}
 	}
 	working.Metadata[continuationTokenMetadataKey] = resp.ContinuationToken
-	yield(working, nil)
+	return yield(working, nil), nil
+}
+
+func (e *executor) pollBackgroundResponse(ctx context.Context, execCtx *a2asrv.ExecutorContext, continuationToken string, yield func(a2a.Event, error) bool) error {
+	for continuationToken != "" {
+		resp, runErr := e.runResponse(ctx, execCtx, nil, continuationToken)
+		if runErr != nil {
+			if isCancellationError(runErr) {
+				if isCallerCancellation(ctx, runErr) {
+					if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateCanceled, nil), nil) {
+						return nil
+					}
+					return nil
+				}
+				return runErr
+			}
+			if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateFailed, unexpectedFailureStatusMessage()), nil) {
+				return nil
+			}
+			return nil
+		}
+		if resp.ContinuationToken == "" {
+			return yieldCompletedResponse(execCtx, resp, yield)
+		}
+		if ok, err := yieldWorkingStatusFromResponse(execCtx, resp, yield); err != nil || !ok {
+			return err
+		}
+		continuationToken = resp.ContinuationToken
+
+		select {
+		case <-ctx.Done():
+			if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateCanceled, nil), nil) {
+				return nil
+			}
+			return nil
+		case <-time.After(backgroundResponsePollInterval):
+		}
+	}
 	return nil
 }
 
-func (e *executor) runResponse(ctx context.Context, execCtx *a2asrv.ExecutorContext, messagesIn []*message.Message) (*agent.Response, error) {
+func isCancellationError(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+func isCallerCancellation(ctx context.Context, err error) bool {
+	return ctx.Err() != nil && isCancellationError(err)
+}
+
+func unexpectedFailureStatusMessage() *a2a.Message {
+	return a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart(unexpectedFailureMessage))
+}
+
+func yieldCompletedResponse(execCtx *a2asrv.ExecutorContext, resp *agent.Response, yield func(a2a.Event, error) bool) error {
+	artifact, err := responseToArtifactEvent(execCtx, resp)
+	if err != nil {
+		return err
+	}
+	if !yield(artifact, nil) {
+		return nil
+	}
+	if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateCompleted, nil), nil) {
+		return nil
+	}
+	return nil
+}
+
+func (e *executor) runResponse(ctx context.Context, execCtx *a2asrv.ExecutorContext, messagesIn []*message.Message, continuationToken string) (*agent.Response, error) {
 	runOptions, err := e.newRunOptions(ctx, execCtx, false)
 	if err != nil {
 		return nil, err
+	}
+	if continuationToken != "" {
+		runOptions = append(runOptions, agent.WithContinuationToken(continuationToken))
 	}
 	return e.agent.Run(ctx, messagesIn, runOptions...).Collect()
 }
@@ -279,7 +406,7 @@ func (e *executor) newRunOptions(ctx context.Context, execCtx *a2asrv.ExecutorCo
 		return nil, err
 	}
 
-	session, err := e.agent.CreateSession(ctx, agent.WithServiceID(execCtx.ContextID))
+	session, err := e.agent.CreateSession(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -288,8 +415,13 @@ func (e *executor) newRunOptions(ctx context.Context, execCtx *a2asrv.ExecutorCo
 		agent.WithSession(session),
 		agent.AllowBackgroundResponses(allowBackground),
 	}
-	if len(execCtx.Metadata) > 0 {
-		runOptions = append(runOptions, agent.WithAdditionalProperties(maps.Clone(execCtx.Metadata)))
+	if execCtx.Metadata != nil {
+		runOptions = append(runOptions, WithMetadata(execCtx.Metadata))
+		if config, ok := execCtx.Metadata[RequestConfigurationPropertyKey]; ok {
+			runOptions = append(runOptions, agent.WithAdditionalProperties(map[string]any{
+				RequestConfigurationPropertyKey: config,
+			}))
+		}
 	}
 	if stream {
 		runOptions = append(runOptions, agent.Stream(true))

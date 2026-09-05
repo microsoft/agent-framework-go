@@ -116,7 +116,7 @@ func TestInputWaiter_WaitForInput_CanBeSignaledMultipleTimesSequentially(t *test
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		w.signalInput()
 		if err := w.waitForInput(ctx); err != nil {
 			t.Fatalf("cycle %d: %v", i, err)

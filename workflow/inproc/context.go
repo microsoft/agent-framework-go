@@ -10,7 +10,6 @@ import (
 	"maps"
 	"reflect"
 	"slices"
-	"strings"
 	"sync/atomic"
 
 	"github.com/google/uuid"
@@ -616,10 +615,10 @@ func (proc *runnerContext) yieldOutput(ctx context.Context, executorID string, o
 		return fmt.Errorf("executor %q cannot output object of type %s; expected one of %v", executorID, reflect.TypeOf(output), expectedTypes)
 	}
 
-	tags, ok := proc.outputFilter.tryGetTags(executorID)
-	if !ok {
+	if !proc.outputFilter.canOutput(executorID, output) {
 		return nil
 	}
+	tags, _ := proc.outputFilter.tryGetTags(executorID)
 	return proc.addEvent(ctx, workflow.OutputEvent{
 		ExecutorID: executorID,
 		Output:     output,
@@ -690,7 +689,7 @@ func (proc *runnerContext) joinedSubworkflowRunnerSnapshot() []execution.SuperSt
 // attachSuperstep attaches a subworkflow runner.
 func (proc *runnerContext) attachSuperstep(runner execution.SuperStepRunner) (string, error) {
 	for {
-		joinID := strings.ReplaceAll(uuid.NewString(), "-", "")
+		joinID := uuid.NewString()
 		if _, exists := proc.joinedSubworkflowRunners.LoadOrStore(joinID, runner); !exists {
 			return joinID, nil
 		}

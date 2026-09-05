@@ -12,8 +12,8 @@ import (
 
 // ForwardingOptions configures [ConfigureForwarding].
 type ForwardingOptions struct {
-	// StringMessageRole, when set, enables string input and forwards each string
-	// as a [message.Message] with this role.
+	// StringMessageRole, when set, enables string input and forwards each
+	// string as a [message.Message] with this role.
 	StringMessageRole message.Role
 }
 

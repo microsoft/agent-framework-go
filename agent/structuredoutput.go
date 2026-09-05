@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"iter"
+	"slices"
 
 	"github.com/microsoft/agent-framework-go/message"
 )
@@ -35,7 +36,7 @@ func (m *structuredOutputMiddleware) Run(next RunFunc, ctx context.Context, mess
 			yield(nil, err)
 			return
 		}
-		options = append(options, WithResponseFormat(format))
+		options = append(slices.Clone(options), WithResponseFormat(format))
 		var data []byte
 		var current structuredOutputMessageKey
 		var sawUpdate bool

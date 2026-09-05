@@ -7,7 +7,6 @@ import (
 	"cmp"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"maps"
 	"reflect"
@@ -36,6 +35,9 @@ func init() {
 		&ToolApprovalResponseContent{},
 		&AlwaysApproveToolApprovalResponseContent{},
 		&MCPServerToolCallContent{},
+		&CodeInterpreterToolCallContent{},
+		&CodeInterpreterToolResultContent{},
+		&MCPServerToolResultContent{},
 	} {
 		supportedContents[c.kind()] = reflect.TypeOf(c).Elem()
 	}
@@ -47,12 +49,12 @@ type contentKind string
 
 // ContentHeader contains common properties for all content types.
 type ContentHeader struct {
-	AdditionalProperties map[string]any `json:"-"`
+	AdditionalProperties map[string]any `json:",omitzero"`
 	Annotations          Annotations    `json:",omitempty"`
 	RawRepresentation    any            `json:"-"`
 }
 
-func (ch ContentHeader) Header() ContentHeader {
+func (ch *ContentHeader) Header() *ContentHeader {
 	return ch
 }
 
@@ -60,7 +62,7 @@ func (ch ContentHeader) Header() ContentHeader {
 type Content interface {
 	json.Marshaler
 	kind() contentKind
-	Header() ContentHeader
+	Header() *ContentHeader
 }
 
 // ToolCallContent represents content that requests a tool call.
@@ -90,7 +92,8 @@ func unmarshalRawContent(data json.RawMessage) (Content, error) {
 	return &raw, nil
 }
 
-// Text returns the first text content in the response, or empty string.
+// Text returns the concatenation of the Text of all [TextContent] items in the
+// Contents, or the empty string if there are none.
 func (cs Contents) Text() string {
 	var sb strings.Builder
 	for _, c := range cs {
@@ -101,6 +104,7 @@ func (cs Contents) Text() string {
 	return sb.String()
 }
 
+// Usage sums the UsageDetails of every UsageContent in the slice, returning the aggregate token usage (a zero UsageDetails if none is present).
 func (cs Contents) Usage() UsageDetails {
 	var usage UsageDetails
 	for _, c := range cs {
@@ -160,6 +164,12 @@ type serializedDataContent struct {
 }
 
 func (t *DataContent) MarshalJSON() ([]byte, error) {
+	if !isValidMediaType(t.MediaType) {
+		return nil, fmt.Errorf("invalid media type: %s", t.MediaType)
+	}
+	if !isValidBase64Data(t.Data) {
+		return nil, fmt.Errorf("invalid base64 data")
+	}
 	tmp := serializedDataContent{
 		ContentHeader: t.ContentHeader,
 		Name:          t.Name,
@@ -235,6 +245,7 @@ func (t *DataContent) Bytes() ([]byte, error) {
 	return base64.StdEncoding.DecodeString(t.Data)
 }
 
+// TopLevelMediaType returns the normalized (lowercased, whitespace-trimmed) top-level part of the content's MediaType - the portion before the / (for example image for image/png). If MediaType contains no /, the whole normalized value is returned; if MediaType is unset, it returns an empty string.
 func (t *DataContent) TopLevelMediaType() string {
 	return topLevelMediaType(t.MediaType)
 }
@@ -301,12 +312,40 @@ func (t *MCPServerToolCallContent) MarshalJSON() ([]byte, error) {
 	return json.Marshal(tmp)
 }
 
+// MCPServerToolResultContent represents the result of a tool call executed by
+// a hosted MCP server.
+//
+// It mirrors MCPServerToolCallContent and conveys the outputs (and any error)
+// produced when a hosted service runs an MCP server tool.
+type MCPServerToolResultContent struct {
+	ContentHeader
+
+	CallID     string
+	Name       string
+	ServerName string   `json:",omitempty"`
+	Outputs    Contents `json:",omitempty"`
+	Error      string   `json:",omitempty"`
+}
+
+func (t MCPServerToolResultContent) kind() contentKind { return "mcpServerToolResult" }
+
+func (t *MCPServerToolResultContent) MarshalJSON() ([]byte, error) {
+	type alias MCPServerToolResultContent
+	tmp := struct {
+		*alias
+		Type contentKind
+	}{
+		alias: (*alias)(t),
+		Type:  t.kind(),
+	}
+	return json.Marshal(tmp)
+}
+
 type serializedFunctionCallContent struct {
 	ContentHeader
 
 	Arguments         string
 	CallID            string
-	Error             string `json:",omitempty"`
 	Name              string
 	InformationalOnly bool
 
@@ -333,9 +372,6 @@ func (t *FunctionCallContent) MarshalJSON() ([]byte, error) {
 		InformationalOnly: t.InformationalOnly,
 		Type:              t.kind(),
 	}
-	if t.Error != nil {
-		tmp.Error = t.Error.Error()
-	}
 	return json.Marshal(tmp)
 }
 
@@ -349,9 +385,7 @@ func (t *FunctionCallContent) UnmarshalJSON(data []byte) error {
 	t.CallID = tmp.CallID
 	t.Name = tmp.Name
 	t.InformationalOnly = tmp.InformationalOnly
-	if tmp.Error != "" {
-		t.Error = errors.New(tmp.Error)
-	}
+	t.Error = nil
 	return nil
 }
 
@@ -368,8 +402,7 @@ type serializedFunctionResultContent struct {
 	ContentHeader
 
 	CallID string
-	Error  string `json:",omitempty"`
-	Result any    `json:",omitempty"`
+	Result any `json:",omitempty"`
 
 	Type contentKind
 }
@@ -390,9 +423,6 @@ func (t *FunctionResultContent) MarshalJSON() ([]byte, error) {
 		Result:        t.Result,
 		Type:          t.kind(),
 	}
-	if t.Error != nil {
-		tmp.Error = t.Error.Error()
-	}
 	return json.Marshal(tmp)
 }
 
@@ -404,9 +434,7 @@ func (t *FunctionResultContent) UnmarshalJSON(data []byte) error {
 	t.ContentHeader = tmp.ContentHeader
 	t.CallID = tmp.CallID
 	t.Result = tmp.Result
-	if tmp.Error != "" {
-		t.Error = errors.New(tmp.Error)
-	}
+	t.Error = nil
 	return nil
 }
 
@@ -425,6 +453,7 @@ type HostedFileContent struct {
 	MediaType string `json:",omitempty"`
 }
 
+// TopLevelMediaType returns the normalized (lowercased, whitespace-trimmed) top-level part of the content's MediaType - the portion before the / (for example image for image/png). If MediaType contains no /, the whole normalized value is returned; if MediaType is unset, it returns an empty string.
 func (t *HostedFileContent) TopLevelMediaType() string {
 	return topLevelMediaType(t.MediaType)
 }
@@ -490,7 +519,7 @@ func (t *RawContent) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &header); err == nil {
 		t.ContentHeader = header
 	}
-	t.RawRepresentation = append(json.RawMessage(nil), data...)
+	t.RawRepresentation = slices.Clone(json.RawMessage(data))
 	return nil
 }
 
@@ -533,18 +562,30 @@ type URIContent struct {
 	URI       string
 }
 
+// NewURIContent creates a [URIContent] for the given URI. When mediaType is
+// empty it is inferred from the URI; a non-empty mediaType is validated. It
+// returns an error if the URI is invalid or the media type is malformed.
 func NewURIContent(uri string, mediaType string) (*URIContent, error) {
 	if err := validateURIContentURI(uri); err != nil {
 		return nil, err
 	}
 	if mediaType == "" {
-		mediaType = inferMediaTypeFromURI(uri)
+		if strings.HasPrefix(strings.ToLower(uri), dataURIScheme) {
+			parsed, err := parseDataURI(uri)
+			if err != nil {
+				return nil, err
+			}
+			mediaType = parsed.MediaType
+		} else {
+			mediaType = inferMediaTypeFromURI(uri)
+		}
 	} else if !isValidMediaType(mediaType) {
 		return nil, fmt.Errorf("invalid media type: %s", mediaType)
 	}
 	return &URIContent{URI: uri, MediaType: mediaType}, nil
 }
 
+// TopLevelMediaType returns the normalized (lowercased, whitespace-trimmed) top-level part of the content's MediaType - the portion before the / (for example image for image/png). If MediaType contains no /, the whole normalized value is returned; if MediaType is unset, it returns an empty string.
 func (t *URIContent) TopLevelMediaType() string {
 	return topLevelMediaType(t.MediaType)
 }
@@ -573,6 +614,7 @@ type UsageDetails struct {
 	ReasoningTokenCount   int64
 }
 
+// Add accumulates other into u, summing each token count field and merging AdditionalCounts (allocating the map on first use).
 func (u *UsageDetails) Add(other UsageDetails) {
 	u.InputTokenCount += other.InputTokenCount
 	u.OutputTokenCount += other.OutputTokenCount
@@ -663,6 +705,10 @@ func (t *ToolApprovalRequestContent) UnmarshalJSON(data []byte) error {
 
 func (t ToolApprovalRequestContent) kind() contentKind { return "toolApprovalRequest" }
 
+// CreateResponse builds a [ToolApprovalResponseContent] that approves or rejects this
+// request. It carries over the RequestID, records the decision and reason, and clones the
+// pending tool call along with the AdditionalProperties and Annotations of the content
+// header. Note that RawRepresentation is copied by reference.
 func (t *ToolApprovalRequestContent) CreateResponse(approved bool, reason string) *ToolApprovalResponseContent {
 	return &ToolApprovalResponseContent{
 		RequestID: t.RequestID,
@@ -715,7 +761,7 @@ func (t *ToolApprovalRequestContent) AlwaysApproveToolResponse() *AlwaysApproveT
 	return &AlwaysApproveToolApprovalResponseContent{
 		InnerResponse:     t.CreateResponse(true, ""),
 		AlwaysApproveTool: true,
-		ContentHeader:     ContentHeader{AdditionalProperties: t.AdditionalProperties},
+		ContentHeader:     ContentHeader{AdditionalProperties: maps.Clone(t.AdditionalProperties)},
 	}
 }
 
@@ -726,7 +772,7 @@ func (t *ToolApprovalRequestContent) AlwaysApproveToolWithArgumentsResponse() *A
 	return &AlwaysApproveToolApprovalResponseContent{
 		InnerResponse:                  t.CreateResponse(true, ""),
 		AlwaysApproveToolWithArguments: true,
-		ContentHeader:                  ContentHeader{AdditionalProperties: t.AdditionalProperties},
+		ContentHeader:                  ContentHeader{AdditionalProperties: maps.Clone(t.AdditionalProperties)},
 	}
 }
 
@@ -858,6 +904,7 @@ func (t AlwaysApproveToolApprovalResponseContent) kind() contentKind {
 	return "alwaysApproveToolApprovalResponse"
 }
 
+// CodeInterpreterToolCallContent represents a call to a hosted code-interpreter tool, correlated by CallID, whose Inputs hold the submitted code or content.
 type CodeInterpreterToolCallContent struct {
 	ContentHeader
 
@@ -879,6 +926,7 @@ func (t *CodeInterpreterToolCallContent) MarshalJSON() ([]byte, error) {
 
 func (t CodeInterpreterToolCallContent) kind() contentKind { return "codeInterpreterToolCall" }
 
+// CodeInterpreterToolResultContent represents the result of a hosted code-interpreter tool call, correlated by CallID, whose Outputs hold the produced content.
 type CodeInterpreterToolResultContent struct {
 	ContentHeader
 
@@ -956,7 +1004,14 @@ func CoalesceContents(contents []Content) []Content {
 
 	contents = coalesce(contents, false,
 		func(a, b *DataContent) bool {
-			return strings.EqualFold(a.MediaType, b.MediaType) && a.TopLevelMediaType() == "text" && a.Name == b.Name
+			if !strings.EqualFold(a.MediaType, b.MediaType) || a.TopLevelMediaType() != "text" || a.Name != b.Name {
+				return false
+			}
+			if _, err := a.Bytes(); err != nil {
+				return false
+			}
+			_, err := b.Bytes()
+			return err == nil
 		},
 		func(contents []Content, start, end int) *DataContent {
 			first := contents[start].(*DataContent)
@@ -968,6 +1023,40 @@ func CoalesceContents(contents []Content) []Content {
 				Name:      first.Name,
 				MediaType: first.MediaType,
 				Data:      mergeBase64(contents, start, end),
+			}
+		})
+
+	contents = coalesce(contents, true,
+		func(a, b *CodeInterpreterToolCallContent) bool { return a.CallID == b.CallID },
+		func(contents []Content, start, end int) *CodeInterpreterToolCallContent {
+			first := contents[start].(*CodeInterpreterToolCallContent)
+			var inputs Contents
+			for _, c := range contents[start:end] {
+				inputs = append(inputs, c.(*CodeInterpreterToolCallContent).Inputs...)
+			}
+			header := first.ContentHeader
+			header.AdditionalProperties = maps.Clone(first.AdditionalProperties)
+			return &CodeInterpreterToolCallContent{
+				ContentHeader: header,
+				CallID:        first.CallID,
+				Inputs:        CoalesceContents(inputs),
+			}
+		})
+
+	contents = coalesce(contents, true,
+		func(a, b *CodeInterpreterToolResultContent) bool { return a.CallID == b.CallID },
+		func(contents []Content, start, end int) *CodeInterpreterToolResultContent {
+			first := contents[start].(*CodeInterpreterToolResultContent)
+			var outputs Contents
+			for _, c := range contents[start:end] {
+				outputs = append(outputs, c.(*CodeInterpreterToolResultContent).Outputs...)
+			}
+			header := first.ContentHeader
+			header.AdditionalProperties = maps.Clone(first.AdditionalProperties)
+			return &CodeInterpreterToolResultContent{
+				ContentHeader: header,
+				CallID:        first.CallID,
+				Outputs:       CoalesceContents(outputs),
 			}
 		})
 
