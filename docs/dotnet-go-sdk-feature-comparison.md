@@ -2,7 +2,7 @@
 
 Feature inventory date: July 2, 2026
 
-Contract parity update: August 31, 2026
+Contract parity update: September 2, 2026
 
 This document compares the .NET SDK at `microsoft/agent-framework/dotnet` with the Go SDK in this repository. The updated overlapping API contracts use .NET baseline `microsoft/agent-framework@5996105a1bf2726918101adc6e9c9857b7f68b98`; the broader package, sample, and feature inventory remains based on July 2, 2026. The workflow source and test delta was also checked through `microsoft/agent-framework@6a0773ba2180e8036d138dbb9794ae64ec2d978b`; no workflow code or test changes followed the baseline.
 
@@ -19,7 +19,7 @@ This document compares the .NET SDK at `microsoft/agent-framework/dotnet` with t
 
 The Go SDK covers the core agent and workflow model: agents, sessions, history, context providers, streaming response updates, structured output, function tools, shell execution with environment-aware context, tool auto-calling and approvals, initial harness utilities, A2A, AGUI, MCP, skills, compaction, in-process workflows, checkpoint/resume, human-in-the-loop request ports, state, and workflow-as-agent/agent-in-workflow adapters.
 
-The .NET SDK has a much wider integration and product layer. The largest gaps are DevUI/Aspire, evaluation, declarative agents/workflows, durable agents/workflows, Azure Functions and ASP.NET hosting integrations, OpenAI-compatible hosting, Foundry lifecycle/hosting administration, Azure AI Persistent agents, Copilot Studio, Mem0, Cosmos DB storage, Purview, RAG, remaining harness utilities such as file access/memory/store and subagents, richer sample coverage, and source-generator/declarative workflow tooling.
+The .NET SDK has a much wider integration and product layer. The largest gaps are Agent Hooks protocol support, DevUI/Aspire, evaluation, declarative agents/workflows, durable agents/workflows, Azure Functions and ASP.NET hosting integrations, OpenAI-compatible hosting, Foundry lifecycle/hosting administration, Azure AI Persistent agents, Copilot Studio, Mem0, Cosmos DB storage, Purview, RAG, remaining harness utilities such as file access/memory/store and subagents, richer sample coverage, and source-generator/declarative workflow tooling.
 
 Within overlapping features, the main misalignments are API shape and ecosystem integration. .NET is centered on `Microsoft.Extensions.AI` types (`AIAgent`, `AgentRunOptions`, `ChatMessage`, `AIContent`, `AIFunction`, `AITool`, dependency injection, ASP.NET, Durable Task). Go has idiomatic packages and interfaces (`agent.Agent`, `agent.Option`, `message.Message`, `message.Content`, `tool.Tool`, `workflow.Builder`) with less framework hosting and fewer service-specific adapters.
 
@@ -73,6 +73,7 @@ Intentional contract choices in this parity pass:
 | Aspire integration | `Aspire.Hosting.AgentFramework.DevUI`, Aspire dashboard samples. | No equivalent package. | .NET only | No Go Aspire integration. |
 | Dependency injection | Agent and skill samples using `Microsoft.Extensions.DependencyInjection`; service collection extensions in multiple packages. | Idiomatic construction/config examples, no DI framework package. | Partial | Go does not attempt to mirror .NET DI. |
 | Agent middleware/delegation | `DelegatingAIAgent`, builder extensions, tool approval agent, chat client pipeline integration. | `agent.Middleware`, `MiddlewareFunc`, automatic run logging, automatic provider-backed structured output, built-in message injection, `provider/otelprovider`, `(*agent.ContextProvider).Middleware`, and harness middleware. | Aligned | API shape differs: .NET exposes delegating agents and chat-client builders; Go exposes direct run middleware plus provider-owned internal middleware. |
+| Agent Hooks protocol support | `Microsoft.Agents.AI.AgentHooks`, `AgentHooksOptions`, `AsAIAgentWithAgentHooks`, AGENT-HOOKS-0.1 enforcement at the agent, model-call, and tool-call seams. | Generic `agent.Middleware`, `HistoryProvider`, `ContextProvider`, and provider hooks only. | .NET only | Go exposes low-level interception seams, but no first-class Agent Hooks protocol package, options surface, fail-closed enforcement layer, or interception-record contract. |
 | Logging | Microsoft.Extensions.Logging source-generated logs. | `slog` logger support through `agent.Config.Logger`, automatic agent run logs, and provider/middleware diagnostics. | Partial | Logging ecosystems differ. |
 | OpenTelemetry for agents | Agent/workflow observability samples and OpenTelemetry workflow builder extension. | `provider/otelprovider`, `workflow/observability/opentelemetry`, workflow builder instrumentation via `WithTelemetry`, trace context propagation in workflow context. | Aligned | API shape differs: Go passes a tracer from the OpenTelemetry adapter separately from `TelemetryOptions` and keeps workflow observability internals unexported. |
 | Evaluation | Agent evaluation extensions, eval checks, local/function evaluators, conversation splitters, workflow evaluation samples, Foundry quality samples. | No evaluation package. | .NET only | No Go equivalent found. |
@@ -108,6 +109,7 @@ Intentional contract choices in this parity pass:
 ### Agent Runtime
 
 - .NET can adapt any `IChatClient` into an `AIAgent`, so provider coverage includes direct packages plus any MEAI-compatible chat client. Go can define any provider through `agent.ProviderConfig`, but there is no common external chat-client adapter layer.
+- .NET now ships `Microsoft.Agents.AI.AgentHooks`, a first-class alpha package for fail-closed AGENT-HOOKS-0.1 interception across agent, model-call, and tool-call seams. Go exposes general middleware plus history/context hooks, but no packaged protocol-support layer or standard interception record contract.
 - .NET agent responses include typed `AgentResponse<T>`; Go keeps structured output as run options backed by provider-declared response formatting and unmarshaling hooks.
 - Go supports background/continuation tokens through agent options and OpenAI Responses handling, but .NET has more sample coverage around background responses and provider fallbacks.
 - Go rejects blank `RunText` input and nil `RunMessage` input, generates UUID default IDs, and does not persist history/context after a caller successfully abandons a response stream.
@@ -149,6 +151,7 @@ The following .NET source packages were present and accounted for in the matrix:
 | --- | --- |
 | `Microsoft.Agents.AI.Abstractions` | Core agent, sessions, responses, context providers, chat history, content conversions. |
 | `Microsoft.Agents.AI` | Chat client agent, compaction, evaluation, harness providers, memory, skills. |
+| `Microsoft.Agents.AI.AgentHooks` | AGENT-HOOKS-0.1 protocol support with enforced interception across agent, chat, and tool seams. |
 | `Microsoft.Agents.AI.OpenAI` | OpenAI and Azure OpenAI agent adapters. |
 | `Microsoft.Agents.AI.Anthropic` | Anthropic agent adapters. |
 | `Microsoft.Agents.AI.Tools.Shell` | Local shell execution, shell policies, shell results, shell environment provider/snapshots, environment-aware sample parity. |
@@ -226,10 +229,11 @@ The following Go packages and sample groups were present and accounted for in th
 
 ## Highest-Priority Go Parity Opportunities
 
-1. Add Cosmos-like checkpoint/chat history storage integrations and examples.
-2. Add DevUI or at least workflow visualization/export support that consumes existing reflection metadata.
-3. Add evaluation primitives and samples, starting with local function checks and expected-output/tool-call assertions.
-4. Add declarative agent/workflow support only if Go wants parity with .NET's YAML/PowerFx model; otherwise document the intentional code-first stance.
-5. Add first-class handoff builder support, or document recommended manual workflow patterns.
-6. Expand remaining provider integrations for Foundry lifecycle/admin and hosting, Azure AI Persistent Agents, Copilot Studio, Mem0, Cosmos DB, and Purview if Go intends to match .NET's product surface.
-7. Add OpenAI-compatible, Azure Functions, and richer web hosting adapters if Go should match .NET hosting scenarios.
+1. Add first-class Agent Hooks protocol support, or document an intentional choice to rely on raw middleware/provider hooks instead.
+2. Add Cosmos-like checkpoint/chat history storage integrations and examples.
+3. Add DevUI or at least workflow visualization/export support that consumes existing reflection metadata.
+4. Add evaluation primitives and samples, starting with local function checks and expected-output/tool-call assertions.
+5. Add declarative agent/workflow support only if Go wants parity with .NET's YAML/PowerFx model; otherwise document the intentional code-first stance.
+6. Add first-class handoff builder support, or document recommended manual workflow patterns.
+7. Expand remaining provider integrations for Foundry lifecycle/admin and hosting, Azure AI Persistent Agents, Copilot Studio, Mem0, Cosmos DB, and Purview if Go intends to match .NET's product surface.
+8. Add OpenAI-compatible, Azure Functions, and richer web hosting adapters if Go should match .NET hosting scenarios.
