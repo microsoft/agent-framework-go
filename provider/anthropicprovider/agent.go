@@ -5,6 +5,7 @@ package anthropicprovider
 import (
 	"cmp"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"iter"
@@ -691,6 +692,28 @@ func buildMessageParam(msg *message.Message) (anthropic.MessageParam, error) {
 			}
 		case *message.URIContent:
 			switch {
+			case strings.HasPrefix(strings.ToLower(c.URI), "data:"):
+				// A data: URI carries the bytes inline. Anthropic's URL image/PDF
+				// sources require an external http(s) reference, so a data: URI sent
+				// as a url source is rejected; decode it and send a base64 block
+				// instead, mirroring the DataContent branch and the Gemini/OpenAI
+				// data: handling.
+				data, mediaType, err := message.DecodeDataURI(c.URI)
+				if err != nil {
+					return anthropic.MessageParam{}, fmt.Errorf("anthropicprovider: failed to decode data URI content: %w", err)
+				}
+				// An explicit URIContent.MediaType overrides the one parsed from the
+				// data: URI, matching the gemini provider.
+				if c.MediaType != "" {
+					mediaType = c.MediaType
+				}
+				encoded := base64.StdEncoding.EncodeToString(data)
+				switch {
+				case strings.HasPrefix(strings.ToLower(mediaType), "image/"):
+					content = append(content, anthropic.NewImageBlockBase64(mediaType, encoded))
+				case isPDFMediaType(mediaType):
+					content = append(content, anthropic.NewDocumentBlock(anthropic.Base64PDFSourceParam{Data: encoded}))
+				}
 			case c.TopLevelMediaType() == "image":
 				content = append(content, anthropic.NewImageBlock(anthropic.URLImageSourceParam{URL: c.URI}))
 			case isPDFMediaType(c.MediaType):

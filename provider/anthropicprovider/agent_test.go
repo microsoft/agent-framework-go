@@ -1515,3 +1515,54 @@ func TestStreamingClosesResponseBody(t *testing.T) {
 		t.Fatal("streaming response body was not closed after early consumer exit")
 	}
 }
+
+// A URIContent carrying a data: URI must be decoded and forwarded to Anthropic
+// as an inline base64 block, not passed through as a URL source (which the API
+// rejects). Mirrors the DataContent branch and the Gemini/OpenAI data: handling.
+func TestBuildMessageParam_DataURIImageForwardedAsBase64(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		bodyCh <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, minimalMessageResponse("ok"))
+	}))
+	defer server.Close()
+
+	a := newTestClient(t, server)
+	msgs := []*message.Message{
+		{Role: message.RoleUser, Contents: message.Contents{
+			&message.URIContent{URI: "data:image/png;base64,aGVsbG8=", MediaType: "image/png"},
+		}},
+	}
+	if _, err := a.Run(t.Context(), msgs).Collect(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	body := <-bodyCh
+	var req map[string]any
+	if err := json.Unmarshal(body, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	messages, _ := req["messages"].([]any)
+	var base64Image bool
+	for _, m := range messages {
+		msg, _ := m.(map[string]any)
+		blocks, _ := msg["content"].([]any)
+		for _, b := range blocks {
+			block, _ := b.(map[string]any)
+			source, _ := block["source"].(map[string]any)
+			if block["type"] == "image" && source["type"] == "base64" && source["media_type"] == "image/png" && source["data"] == "aGVsbG8=" {
+				base64Image = true
+			}
+		}
+	}
+	if !base64Image {
+		t.Fatalf("expected data: URIContent image forwarded as a base64 image source, got: %s", body)
+	}
+}
