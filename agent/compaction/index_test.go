@@ -5,6 +5,7 @@ package compaction_test
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent/compaction"
@@ -368,5 +369,33 @@ func TestMessageIndex_Update_RepeatedContentDoesNotDropMessages(t *testing.T) {
 	index.Update(turn2)
 	if got, want := messageTexts(index.AllMessages()), []string{"hi", "hello", "continue", "sure", "continue"}; !slices.Equal(got, want) {
 		t.Fatalf("after turn 2 (repeated \"continue\"): got %v, want %v — appended turns were dropped", got, want)
+	}
+}
+
+func TestMessageIndex_CountsHostedToolResultBytes(t *testing.T) {
+	big := strings.Repeat("x", 10000)
+	// A hosted tool result carrying 10k bytes of Outputs must be byte-accounted
+	// like the equivalent FunctionResultContent, so token/byte-based compaction
+	// triggers see the payload that most needs compacting.
+	fnMsg := &message.Message{Role: message.RoleTool, Contents: message.Contents{
+		&message.FunctionResultContent{CallID: "c1", Result: big},
+	}}
+	mcpMsg := &message.Message{Role: message.RoleTool, Contents: message.Contents{
+		&message.MCPServerToolResultContent{CallID: "c1", Outputs: message.Contents{&message.TextContent{Text: big}}},
+	}}
+	ciMsg := &message.Message{Role: message.RoleTool, Contents: message.Contents{
+		&message.CodeInterpreterToolResultContent{CallID: "c1", Outputs: message.Contents{&message.TextContent{Text: big}}},
+	}}
+	prefix := textMessage(message.RoleUser, "hi")
+
+	fnBytes := compaction.CreateMessageIndex([]*message.Message{prefix, fnMsg}, nil).TotalByteCount()
+	mcpBytes := compaction.CreateMessageIndex([]*message.Message{prefix, mcpMsg}, nil).TotalByteCount()
+	ciBytes := compaction.CreateMessageIndex([]*message.Message{prefix, ciMsg}, nil).TotalByteCount()
+
+	if mcpBytes < fnBytes {
+		t.Errorf("MCP tool-result bytes = %d, want >= FunctionResult bytes %d (Outputs undercounted)", mcpBytes, fnBytes)
+	}
+	if ciBytes < fnBytes {
+		t.Errorf("code-interpreter result bytes = %d, want >= FunctionResult bytes %d (Outputs undercounted)", ciBytes, fnBytes)
 	}
 }

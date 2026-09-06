@@ -399,6 +399,26 @@ func computeContentByteCount(content message.Content) int {
 		return stringByteCount(typed.Message) + stringByteCount(typed.ErrorCode) + stringByteCount(typed.Details)
 	case *message.HostedFileContent:
 		return stringByteCount(typed.FileID) + stringByteCount(typed.MediaType) + stringByteCount(typed.Name)
+	case *message.MCPServerToolCallContent:
+		return stringByteCount(typed.CallID) + stringByteCount(typed.Name) + stringByteCount(typed.ServerName) + stringByteCount(typed.Arguments)
+	case *message.MCPServerToolResultContent:
+		total := stringByteCount(typed.CallID) + stringByteCount(typed.Name) + stringByteCount(typed.ServerName) + stringByteCount(typed.Error)
+		for _, output := range typed.Outputs {
+			total += computeContentByteCount(output)
+		}
+		return total
+	case *message.CodeInterpreterToolCallContent:
+		total := stringByteCount(typed.CallID)
+		for _, input := range typed.Inputs {
+			total += computeContentByteCount(input)
+		}
+		return total
+	case *message.CodeInterpreterToolResultContent:
+		total := stringByteCount(typed.CallID)
+		for _, output := range typed.Outputs {
+			total += computeContentByteCount(output)
+		}
+		return total
 	default:
 		return 0
 	}
