@@ -1073,3 +1073,61 @@ var errBoom = &boomError{}
 type boomError struct{}
 
 func (*boomError) Error() string { return "boom" }
+
+func TestSuperStepStartInfo_ReportsSendersAndExternalMessages(t *testing.T) {
+	// start (id "message-handler") receives an external textMessage and sends a
+	// dataMessage on to sink. SuperStepStartInfo.SendingExecutors must name the
+	// executors that SENT the step's messages (per its doc), and
+	// HasExternalMessages must be true for the initial external input.
+	start := (&workflow.Executor{
+		ID:               "message-handler",
+		ImplementationID: "test.message-handler",
+		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+			rb.SendsMessageType(reflect.TypeFor[dataMessage]())
+			rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[textMessage](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+				return nil, ctx.SendMessage("", dataMessage{Bytes: []byte(msg.(textMessage).Text)})
+			})
+			return rb, nil
+		},
+	}).Bind()
+	sink := workflow.NewExecutor("sink", func(in dataMessage) textMessage {
+		return textMessage{Text: string(in.Bytes)}
+	}).Bind()
+
+	wf, err := workflow.NewBuilder(start).AddEdge(start, sink).WithOutputFrom(sink).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	run, err := inproc.Default.Run(context.Background(), wf, textMessage{Text: "abc"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var infos []*workflow.SuperStepStartInfo
+	for evt := range run.OutgoingEvents() {
+		if e, ok := evt.(workflow.SuperStepStartedEvent); ok && e.StartInfo != nil {
+			infos = append(infos, e.StartInfo)
+		}
+	}
+	if len(infos) < 2 {
+		t.Fatalf("expected at least 2 SuperStepStartInfos, got %d", len(infos))
+	}
+	// The first superstep carries the external input.
+	if !infos[0].HasExternalMessages {
+		t.Errorf("first superstep HasExternalMessages = false, want true (external input)")
+	}
+	// "sink" only ever receives; it must never be reported as a sender.
+	// "message-handler" sends to sink and must be reported as a sender.
+	var sawSender bool
+	for _, info := range infos {
+		if slices.Contains(info.SendingExecutors, "sink") {
+			t.Errorf("SendingExecutors reported the receiver %q as a sender: %v", "sink", info.SendingExecutors)
+		}
+		if slices.Contains(info.SendingExecutors, "message-handler") {
+			sawSender = true
+		}
+	}
+	if !sawSender {
+		t.Errorf("expected the sending executor %q to appear in SendingExecutors across steps", "message-handler")
+	}
+}

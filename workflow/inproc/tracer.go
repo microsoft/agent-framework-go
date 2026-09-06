@@ -72,15 +72,20 @@ func (t *stepTracer) Advance(step *execution.StepContext) workflow.SuperStepStar
 	t.stateUpdated = false
 	t.checkpointInfo = nil
 
-	// Collect sending executors
+	// Collect the executors that sent this step's messages, and whether any
+	// message came from an external source. StepContext is keyed by the message
+	// TARGET, so the sender/external signal lives on each envelope's SourceID
+	// (empty SourceID == external), not on the map key.
 	sendingExecutors := make([]string, 0)
 	hasExternalMessages := false
 
-	for _, identity := range step.Keys() {
-		if identity == "" {
-			hasExternalMessages = true
-		} else {
-			sendingExecutors = append(sendingExecutors, identity)
+	for _, target := range step.Keys() {
+		for envelope := range step.MessagesFor(target).All() {
+			if envelope.IsExternal() {
+				hasExternalMessages = true
+			} else {
+				sendingExecutors = append(sendingExecutors, envelope.SourceID)
+			}
 		}
 	}
 	slices.Sort(sendingExecutors)
