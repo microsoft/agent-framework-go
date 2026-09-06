@@ -667,7 +667,9 @@ func toFinishReason(reason genai.FinishReason) string {
 		return "length"
 	case genai.FinishReasonSafety, genai.FinishReasonRecitation,
 		genai.FinishReasonBlocklist, genai.FinishReasonProhibitedContent,
-		genai.FinishReasonSPII:
+		genai.FinishReasonSPII,
+		genai.FinishReasonImageSafety, genai.FinishReasonImageProhibitedContent,
+		genai.FinishReasonImageRecitation:
 		return "content_filter"
 	case genai.FinishReasonMalformedFunctionCall, genai.FinishReasonTooManyToolCalls:
 		return "tool_calls"
