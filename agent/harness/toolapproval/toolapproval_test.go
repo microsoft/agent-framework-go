@@ -1654,6 +1654,7 @@ func TestToolApproval_MaxAutoApprovalIterationsBelowOneReturnsError(t *testing.T
 		t.Fatalf("expected MaxAutoApprovalIterations validation error, got %v", got)
 	}
 }
+
 func firstApprovalRequest(t *testing.T, updates []*agent.ResponseUpdate) *message.ToolApprovalRequestContent {
 	t.Helper()
 	for _, u := range updates {
