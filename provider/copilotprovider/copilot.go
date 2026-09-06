@@ -668,10 +668,23 @@ func (p *provider) assistantMessageUpdate(event copilot.SessionEvent, data *copi
 			ContentHeader: message.ContentHeader{RawRepresentation: event},
 		}}
 	} else {
-		update.Contents = []message.Content{&message.TextContent{
+		textContent := &message.TextContent{
 			ContentHeader: message.ContentHeader{RawRepresentation: event},
 			Text:          data.Content,
-		}}
+		}
+		// Surface native model citations (enabled via AgentConfig.EnableCitations)
+		// as CitationAnnotations, mirroring the OpenAI chat/Responses providers.
+		if data.Citations != nil {
+			for _, source := range data.Citations.Sources {
+				textContent.Annotations = append(textContent.Annotations, &message.CitationAnnotation{
+					FileID:            derefString(source.Path),
+					Title:             derefString(source.Title),
+					URL:               derefString(source.URL),
+					RawRepresentation: source,
+				})
+			}
+		}
+		update.Contents = []message.Content{textContent}
 		if data.ReasoningText != nil {
 			update.Contents = append(update.Contents, &message.TextReasoningContent{
 				ContentHeader: message.ContentHeader{RawRepresentation: event},
@@ -833,6 +846,13 @@ func additionalUsageCounts(data *copilot.AssistantUsageData) map[string]int64 {
 func int64Value(value *int64) int64 {
 	if value == nil {
 		return 0
+	}
+	return *value
+}
+
+func derefString(value *string) string {
+	if value == nil {
+		return ""
 	}
 	return *value
 }
