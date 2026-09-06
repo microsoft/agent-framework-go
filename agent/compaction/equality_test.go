@@ -68,6 +68,12 @@ func TestMessageIndexUpdate_MatchesKnownContentTypes(t *testing.T) {
 		{name: "function result", original: &message.FunctionResultContent{CallID: "c1", Result: "sunny"}, replacement: &message.FunctionResultContent{CallID: "c1", Result: "rainy"}, matches: false},
 		{name: "function result error", original: &message.FunctionResultContent{CallID: "c1", Result: "sunny"}, replacement: &message.FunctionResultContent{CallID: "c1", Result: "sunny", Error: errors.New("boom")}, matches: false},
 		{name: "hosted file", original: &message.HostedFileContent{FileID: "file-1", MediaType: "text/csv", Name: "a.csv"}, replacement: &message.HostedFileContent{FileID: "file-1", MediaType: "text/csv", Name: "a.csv"}, matches: true},
+		{name: "mcp call same", original: &message.MCPServerToolCallContent{CallID: "c1", Name: "fn", Arguments: `{"x":1}`}, replacement: &message.MCPServerToolCallContent{CallID: "c1", Name: "fn", Arguments: `{"x":1}`}, matches: true},
+		{name: "mcp call args differ", original: &message.MCPServerToolCallContent{CallID: "c1", Name: "fn", Arguments: `{"x":1}`}, replacement: &message.MCPServerToolCallContent{CallID: "c1", Name: "fn", Arguments: `{"x":2}`}, matches: false},
+		{name: "mcp result outputs differ", original: &message.MCPServerToolResultContent{CallID: "c1", Outputs: message.Contents{&message.TextContent{Text: "a"}}}, replacement: &message.MCPServerToolResultContent{CallID: "c1", Outputs: message.Contents{&message.TextContent{Text: "b"}}}, matches: false},
+		{name: "code interpreter call inputs differ", original: &message.CodeInterpreterToolCallContent{CallID: "c1", Inputs: message.Contents{&message.TextContent{Text: "x=1"}}}, replacement: &message.CodeInterpreterToolCallContent{CallID: "c1", Inputs: message.Contents{&message.TextContent{Text: "x=2"}}}, matches: false},
+		{name: "code interpreter result outputs differ", original: &message.CodeInterpreterToolResultContent{CallID: "c1", Outputs: message.Contents{&message.TextContent{Text: "1"}}}, replacement: &message.CodeInterpreterToolResultContent{CallID: "c1", Outputs: message.Contents{&message.TextContent{Text: "2"}}}, matches: false},
+		{name: "usage differs", original: &message.UsageContent{Details: message.UsageDetails{InputTokenCount: 10}}, replacement: &message.UsageContent{Details: message.UsageDetails{InputTokenCount: 20}}, matches: false},
 	}
 
 	for _, tt := range tests {

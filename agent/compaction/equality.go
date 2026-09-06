@@ -70,7 +70,29 @@ func contentEqual(left, right message.Content) bool {
 	case *message.HostedFileContent:
 		rightContent := right.(*message.HostedFileContent)
 		return leftContent.FileID == rightContent.FileID && leftContent.MediaType == rightContent.MediaType && leftContent.Name == rightContent.Name
+	case *message.MCPServerToolCallContent:
+		rightContent := right.(*message.MCPServerToolCallContent)
+		return leftContent.CallID == rightContent.CallID && leftContent.Name == rightContent.Name &&
+			leftContent.ServerName == rightContent.ServerName && leftContent.Arguments == rightContent.Arguments
+	case *message.MCPServerToolResultContent:
+		rightContent := right.(*message.MCPServerToolResultContent)
+		return leftContent.CallID == rightContent.CallID && leftContent.Name == rightContent.Name &&
+			leftContent.ServerName == rightContent.ServerName && leftContent.Error == rightContent.Error &&
+			contentsEqual(leftContent.Outputs, rightContent.Outputs)
+	case *message.CodeInterpreterToolCallContent:
+		rightContent := right.(*message.CodeInterpreterToolCallContent)
+		return leftContent.CallID == rightContent.CallID && contentsEqual(leftContent.Inputs, rightContent.Inputs)
+	case *message.CodeInterpreterToolResultContent:
+		rightContent := right.(*message.CodeInterpreterToolResultContent)
+		return leftContent.CallID == rightContent.CallID && contentsEqual(leftContent.Outputs, rightContent.Outputs)
+	case *message.UsageContent:
+		rightContent := right.(*message.UsageContent)
+		return reflect.DeepEqual(leftContent.Details, rightContent.Details)
 	default:
+		// An unhandled content type is treated as equal so a genuinely new,
+		// forward-compatible content type does not force an index rebuild. The
+		// hosted content types the framework produces are handled explicitly
+		// above so real changes in them are detected.
 		return true
 	}
 }
