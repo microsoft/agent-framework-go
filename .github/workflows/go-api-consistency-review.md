@@ -21,6 +21,7 @@ on:
             type: string
 concurrency:
    group: "gh-aw-${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number || github.ref || github.run_id }}"
+   job-discriminator: ${{ github.run_id }}
    cancel-in-progress: true
 permissions:
    contents: read
