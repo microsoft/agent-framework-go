@@ -75,6 +75,19 @@ func (m *Message) Usage() UsageDetails {
 	return m.Contents.Usage()
 }
 
+// WithSource returns the message tagged with the provided source.
+//
+// If the message already has the requested source, the original message is
+// returned. Otherwise, a cloned message is returned with the updated source.
+func (m *Message) WithSource(source Source) *Message {
+	if m == nil || m.Source == source {
+		return m
+	}
+	v := m.Clone()
+	v.Source = source
+	return v
+}
+
 // Clone creates a shallow copy of the message, cloning its top-level map and
 // slice containers while sharing their values and content objects.
 func (m *Message) Clone() *Message {
