@@ -75,24 +75,6 @@ func (m *Message) Usage() UsageDetails {
 	return m.Contents.Usage()
 }
 
-// SourceType returns the message source type.
-//
-// When no explicit source type is set, [SourceTypeExternal] is returned.
-func (m *Message) SourceType() SourceType {
-	if m == nil {
-		return SourceTypeExternal
-	}
-	return m.Source.Type
-}
-
-// SourceID returns the message source identifier.
-func (m *Message) SourceID() string {
-	if m == nil {
-		return ""
-	}
-	return m.Source.ID
-}
-
 // WithSource returns the message tagged with the provided source.
 //
 // If the message already has the requested source, the original message is

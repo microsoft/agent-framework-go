@@ -27,26 +27,6 @@ func TestMessage_Clone_ClonesAdditionalProperties(t *testing.T) {
 	}
 }
 
-func TestMessage_SourceType_DefaultsToExternal(t *testing.T) {
-	msg := message.NewText("hello")
-
-	if got := msg.SourceType(); got != message.SourceTypeExternal {
-		t.Fatalf("SourceType() = %q, want %q", got, message.SourceTypeExternal)
-	}
-}
-
-func TestMessage_SourceTypeAndSourceID_ReturnExplicitSource(t *testing.T) {
-	msg := message.NewText("hello")
-	msg.Source = message.Source{Type: message.SourceType("context-provider"), ID: "ctx"}
-
-	if got := msg.SourceType(); got != message.SourceType("context-provider") {
-		t.Fatalf("SourceType() = %q, want %q", got, message.SourceType("context-provider"))
-	}
-	if got := msg.SourceID(); got != "ctx" {
-		t.Fatalf("SourceID() = %q, want %q", got, "ctx")
-	}
-}
-
 func TestMessage_WithSource_ClonesWhenSourceChanges(t *testing.T) {
 	original := message.NewText("hello")
 	original.AdditionalProperties = map[string]any{"k": "v"}
