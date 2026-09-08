@@ -259,10 +259,7 @@ func (em *EdgeRunner) PrepareDeliveryForEdge(ctx context.Context, edge workflow.
 		return nil, nil
 	}
 	span.SetDeliveryStatus(observability.DeliveryStatusDelivered)
-	return &DeliveryMapping{
-		Targets:   targets,
-		Envelopes: envelopes,
-	}, nil
+	return newDeliveryMapping(envelopes, targets), nil
 }
 
 func (em *EdgeRunner) filterEnvelopesForTarget(ctx context.Context, envelopes []*MessageEnvelope, target *workflow.Executor) ([]*MessageEnvelope, error) {
@@ -399,10 +396,7 @@ func (em *EdgeRunner) PrepareDeliveryForInput(ctx context.Context, envelope *Mes
 		return nil, nil
 	}
 	span.SetDeliveryStatus(observability.DeliveryStatusDelivered)
-	return &DeliveryMapping{
-		Targets:   []*workflow.Executor{target},
-		Envelopes: []*MessageEnvelope{envelope},
-	}, nil
+	return newSingleDeliveryMapping(envelope, target), nil
 }
 
 // PrepareDeliveryForResponse prepares delivery of an external response to
@@ -438,10 +432,7 @@ func (em *EdgeRunner) PrepareDeliveryForResponse(ctx context.Context, response *
 		return nil, nil
 	}
 	span.SetDeliveryStatus(observability.DeliveryStatusDelivered)
-	return &DeliveryMapping{
-		Targets:   []*workflow.Executor{target},
-		Envelopes: []*MessageEnvelope{envelope},
-	}, nil
+	return newSingleDeliveryMapping(envelope, target), nil
 }
 
 func edgeGroupMetadata(edge workflow.Edge) observability.EdgeGroupMetadata {

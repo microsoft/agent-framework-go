@@ -180,6 +180,8 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 		}
 		var messagesCloned bool
 		session, _ := agent.GetOption(opts, agent.WithSession)
+		serviceID, _ := agent.GetOption(opts, agent.WithServiceID)
+		serviceManagedHistory := serviceID != "" || session.ServiceID() != ""
 		yieldUpdate := func(update *agent.ResponseUpdate) bool {
 			if !f.disableApprovalResponseBinding && update != nil {
 				if err := recordPendingApprovalRequests(session, update.Contents); err != nil {
@@ -232,8 +234,9 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 			// the inner client had returned them directly.
 			var notInvokedMsgs []toolApprovalResultWithRequestMessage
 			var preDownstreamCallHistory []*message.Message
+			var approvedResultInsertIdx int
 			var err error
-			messages, preDownstreamCallHistory, notInvokedMsgs, err = f.processToolApprovalResponses(ctx, messages, toolMsgID, funcCallFallbackMsgID)
+			messages, preDownstreamCallHistory, notInvokedMsgs, approvedResultInsertIdx, err = f.processToolApprovalResponses(ctx, messages, toolMsgID, funcCallFallbackMsgID, serviceManagedHistory)
 			if err != nil {
 				yield(nil, err)
 				return
@@ -252,7 +255,7 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 			}
 			if newMsg != nil {
 				opts = updateOptionsForNextIteration(opts)
-				messages = append(messages, newMsg)
+				messages = slices.Insert(messages, approvedResultInsertIdx, newMsg)
 				newMsg.ID = toolMsgID
 				if !yield(convertToolResultMsgToUpdate(newMsg, toolMsgID), nil) {
 					return
@@ -677,29 +680,37 @@ func markServerHandledFunctionCalls(updates []*agent.ResponseUpdate, functionCal
 func hasAnyApprovalContent(msgs []*message.Message) bool {
 	approvalResponseNeedsProcessing := approvalResponseNeedsProcessingByRequestID(msgs)
 	return slices.ContainsFunc(msgs, func(m *message.Message) bool {
-		if m == nil || m.Contents == nil {
+		return messageHasFunctionApproval(m, approvalResponseNeedsProcessing)
+	})
+}
+
+func messageHasFunctionApproval(msg *message.Message, approvalResponseNeedsProcessing map[string]bool) bool {
+	return msg != nil && slices.ContainsFunc(msg.Contents, func(content message.Content) bool {
+		return functionApprovalNeedsProcessing(content, approvalResponseNeedsProcessing)
+	})
+}
+
+func messageContainsOnlyFunctionApprovals(msg *message.Message, approvalResponseNeedsProcessing map[string]bool) bool {
+	return msg != nil && len(msg.Contents) > 0 && !slices.ContainsFunc(msg.Contents, func(content message.Content) bool {
+		return !functionApprovalNeedsProcessing(content, approvalResponseNeedsProcessing)
+	})
+}
+
+func functionApprovalNeedsProcessing(content message.Content, approvalResponseNeedsProcessing map[string]bool) bool {
+	switch content := content.(type) {
+	case *message.ToolApprovalRequestContent:
+		if content == nil {
 			return false
 		}
-		return slices.ContainsFunc(m.Contents, func(c message.Content) bool {
-			switch c := c.(type) {
-			case *message.ToolApprovalRequestContent:
-				if c == nil {
-					return false
-				}
-				if responseNeedsProcessing, hasResponse := approvalResponseNeedsProcessing[c.RequestID]; hasResponse {
-					return responseNeedsProcessing
-				}
-				return approvalToolCallNeedsProcessing(c.ToolCall)
-			case *message.ToolApprovalResponseContent:
-				if c == nil {
-					return false
-				}
-				return approvalToolCallNeedsProcessing(c.ToolCall)
-			default:
-				return false
-			}
-		})
-	})
+		if responseNeedsProcessing, hasResponse := approvalResponseNeedsProcessing[content.RequestID]; hasResponse {
+			return responseNeedsProcessing
+		}
+		return approvalToolCallNeedsProcessing(content.ToolCall)
+	case *message.ToolApprovalResponseContent:
+		return content != nil && approvalToolCallNeedsProcessing(content.ToolCall)
+	default:
+		return false
+	}
 }
 
 func approvalToolCallNeedsProcessing(toolCall message.ToolCallContent) bool {
@@ -1193,15 +1204,36 @@ func (f *autocall) createFunctionResultContent(result functionInvocationResult) 
 //   - Recreates tool call content for any ToolApprovalResponseContent that hasn't been handled yet.
 //   - Generates failed FunctionResultContent for any rejected function tool call.
 //   - Adds all the new content items to originalMessages and returns them as the pre-invocation history.
-func (f *autocall) processToolApprovalResponses(ctx context.Context, msgs []*message.Message, toolMsgID, fallbackMsgID string) ([]*message.Message, []*message.Message, []toolApprovalResultWithRequestMessage, error) {
+func (f *autocall) processToolApprovalResponses(ctx context.Context, msgs []*message.Message, toolMsgID, fallbackMsgID string, serviceManagedHistory bool) ([]*message.Message, []*message.Message, []toolApprovalResultWithRequestMessage, int, error) {
+	approvalResponseNeedsProcessing := approvalResponseNeedsProcessingByRequestID(msgs)
+	lastApprovalIdx := -1
+	for i, msg := range slices.Backward(msgs) {
+		if messageHasFunctionApproval(msg, approvalResponseNeedsProcessing) {
+			lastApprovalIdx = i
+			break
+		}
+	}
+	trailingMessageCount := 0
+	if lastApprovalIdx >= 0 {
+		trailingMessageCount = len(msgs) - (lastApprovalIdx + 1)
+		if !messageContainsOnlyFunctionApprovals(msgs[lastApprovalIdx], approvalResponseNeedsProcessing) {
+			trailingMessageCount++
+		}
+	}
+
 	// Extract any approval responses where we need to execute or reject the function calls.
 	// The original messages are also modified to remove all approval requests and responses.
 	msgs, approvals, rejections, err := f.extractAndRemoveToolApprovalRequestsAndResponses(ctx, msgs)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, 0, err
 	}
+	insertIdx := len(msgs) - trailingMessageCount
 	// Wrap the tool call content in message(s).
 	preDownstreamCallHistory := convertToToolCallContentMessages(append(rejections, approvals...), fallbackMsgID)
+	if !serviceManagedHistory && len(preDownstreamCallHistory) > 0 {
+		msgs = slices.Insert(msgs, insertIdx, preDownstreamCallHistory...)
+		insertIdx += len(preDownstreamCallHistory)
+	}
 	// Generate failed function result contents for any rejected requests and wrap it in a message.
 	rejectedFunctionContent := f.generateRejectedFunctionResults(ctx, rejections)
 	var rejectedPreDownstreamCallResultsMsgs *message.Message
@@ -1212,13 +1244,14 @@ func (f *autocall) processToolApprovalResponses(ctx context.Context, msgs []*mes
 			Contents: rejectedFunctionContent,
 		}
 	}
-	// Add generated tool call and function result content to the pre-downstream-call history so they can be returned to the caller as part of the next response.
-	// Also, add them into the original messages list so that they are passed to the inner client and can be used to generate a result.
+	// Add generated function result content to the pre-downstream-call history so it can be returned to the caller as part of the next response.
+	// Also, insert it at the approval anchor so it stays ahead of trailing caller messages.
 	if rejectedPreDownstreamCallResultsMsgs != nil {
 		preDownstreamCallHistory = append(preDownstreamCallHistory, rejectedPreDownstreamCallResultsMsgs)
-		msgs = append(msgs, rejectedPreDownstreamCallResultsMsgs)
+		msgs = slices.Insert(msgs, insertIdx, rejectedPreDownstreamCallResultsMsgs)
+		insertIdx++
 	}
-	return msgs, preDownstreamCallHistory, approvals, nil
+	return msgs, preDownstreamCallHistory, approvals, insertIdx, nil
 }
 
 type toolApprovalResultWithRequestMessage struct {
