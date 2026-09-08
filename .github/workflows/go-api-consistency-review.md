@@ -28,7 +28,11 @@ permissions:
    pull-requests: read
    issues: read
    copilot-requests: write
-network: defaults
+network:
+  allowed:
+    - defaults
+    - "github"
+    - "go"
 tools:
    # Route GitHub tools and Safe Outputs through the CLI proxy instead of the
    # native HTTP MCP endpoints on the internal awmg-mcpg gateway. The firewall's
