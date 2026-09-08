@@ -22,6 +22,8 @@ updates:
       - .github/workflows/*.lock.yml # Managed by gh aw compile. Version-locked to the gh-aw compiler; do not bump.
       - .github/workflows/copilot-setup-steps.yml
     open-pull-requests-limit: 10
+    cooldown:
+      default-days: 7
   - package-ecosystem: gomod
     directory: /
     schedule:
