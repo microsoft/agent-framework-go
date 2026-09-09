@@ -255,10 +255,10 @@ func (p *Provider) provide(ctx context.Context, invoking agent.InvokingContext) 
 	mu := p.getSessionLock(opts)
 	mu.Lock()
 	st := p.loadState(opts)
-	// Persist the initial state so SetMode can read it.
+	// Persist the initial state so SetModeForSession can read it.
 	p.saveState(opts, st)
 
-	// If the mode was changed externally (e.g. via SetMode), inject a notification
+	// If the mode was changed externally (e.g. via SetModeForSession), inject a notification
 	// so the agent clearly sees the change in conversation context.
 	if st.PreviousMode != "" {
 		outMessages = append(outMessages, message.NewText(fmt.Sprintf(
@@ -333,20 +333,13 @@ func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
 	return []tool.FuncTool{setTool, getTool}
 }
 
-// GetModeForSession returns the current operating mode from session state.
+// ModeForSession returns the current operating mode from session state.
 // If no state has been persisted yet, it returns the configured default mode.
-func (p *Provider) GetModeForSession(session *agent.Session) string {
+func (p *Provider) ModeForSession(session *agent.Session) string {
 	mu := p.getSessionLockForSession(session)
 	mu.Lock()
 	defer mu.Unlock()
 	return p.loadStateForSession(session).CurrentMode
-}
-
-// GetMode returns the current operating mode from the session option.
-// If no state has been persisted yet, it returns the configured default mode.
-func (p *Provider) GetMode(opts ...agent.Option) string {
-	session, _ := agent.GetOption(opts, agent.WithSession)
-	return p.GetModeForSession(session)
 }
 
 // SetModeForSession sets the operating mode in session state, validating it
@@ -369,12 +362,4 @@ func (p *Provider) SetModeForSession(session *agent.Session, mode string) error 
 	}
 	p.saveStateForSession(session, s)
 	return nil
-}
-
-// SetMode sets the operating mode in the session option, validating it against
-// the provider's configured modes. Returns an error if the mode is invalid or
-// no session is available.
-func (p *Provider) SetMode(mode string, opts ...agent.Option) error {
-	session, _ := agent.GetOption(opts, agent.WithSession)
-	return p.SetModeForSession(session, mode)
 }
