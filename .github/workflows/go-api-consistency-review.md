@@ -21,13 +21,18 @@ on:
             type: string
 concurrency:
    group: "gh-aw-${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number || github.ref || github.run_id }}"
+   job-discriminator: ${{ github.run_id }}
    cancel-in-progress: true
 permissions:
    contents: read
    pull-requests: read
    issues: read
    copilot-requests: write
-network: defaults
+network:
+  allowed:
+    - defaults
+    - "github"
+    - "go"
 tools:
    # Route GitHub tools and Safe Outputs through the CLI proxy instead of the
    # native HTTP MCP endpoints on the internal awmg-mcpg gateway. The firewall's

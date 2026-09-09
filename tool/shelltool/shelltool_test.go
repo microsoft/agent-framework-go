@@ -888,6 +888,20 @@ func TestNewLocal_descriptionContainsShellGuidance(t *testing.T) {
 	}
 }
 
+func TestNewLocal_customNameAndDescription(t *testing.T) {
+	ft := newLocal(t, shelltool.LocalConfig{
+		AcknowledgeUnsafe: true,
+		Name:              "custom_shell",
+		Description:       "Run a custom command.",
+	})
+	if ft.Name() != "custom_shell" {
+		t.Errorf("expected custom name, got %q", ft.Name())
+	}
+	if ft.Description() != "Run a custom command." {
+		t.Errorf("expected custom description, got %q", ft.Description())
+	}
+}
+
 func TestNewLocal_persistentCmdErrors(t *testing.T) {
 	_, err := shelltool.NewLocal(shelltool.LocalConfig{
 		AcknowledgeUnsafe: true,

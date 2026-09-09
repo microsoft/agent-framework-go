@@ -446,7 +446,7 @@ func TestChatURLCitationAnnotations_NonStreaming(t *testing.T) {
                   "index": 0,
                   "message": {
                     "role": "assistant",
-                    "content": "See Example.",
+										"content": "",
                     "annotations": [
                       {
                         "type": "url_citation",
@@ -499,6 +499,13 @@ func TestChatURLCitationAnnotations_NonStreaming(t *testing.T) {
 	}
 	if citation.Title != "Example" {
 		t.Errorf("expected Title Example, got %q", citation.Title)
+	}
+	if len(citation.AnnotatedRegions) != 1 {
+		t.Fatalf("expected 1 annotated region, got %d", len(citation.AnnotatedRegions))
+	}
+	span, ok := citation.AnnotatedRegions[0].(*message.TextSpanAnnotatedRegion)
+	if !ok || span.StartIndex == nil || *span.StartIndex != 4 || span.EndIndex == nil || *span.EndIndex != 11 {
+		t.Fatalf("annotated region = %#v, want [4, 11)", citation.AnnotatedRegions[0])
 	}
 }
 
@@ -714,6 +721,9 @@ data: [DONE]
 	}
 	if refusal.Message != "I'm sorry, I can't help with that." {
 		t.Errorf("refusal message = %q, want full accumulated refusal", refusal.Message)
+	}
+	if refusal.ErrorCode != "Refusal" {
+		t.Errorf("refusal error code = %q, want Refusal", refusal.ErrorCode)
 	}
 }
 
@@ -1768,36 +1778,7 @@ func TestChatURIContentMessage_DataURI_NonStreaming(t *testing.T) {
 	// to input_audio/file exactly like the equivalent DataContent (Python keys
 	// audio/application on both data and uri). Plain http(s) audio/file URLs have
 	// no chat-completions mapping and are still dropped.
-	const input = `
-            {
-              "messages": [
-                {
-                  "role": "user",
-                  "content": [
-                    {
-                      "type": "text",
-                      "text": "Transcribe and summarize the attachments."
-                    },
-                    {
-                      "type": "input_audio",
-                      "input_audio": {
-                        "data": "QUJDRA==",
-                        "format": "wav"
-                      }
-                    },
-                    {
-                      "type": "file",
-                      "file": {
-                        "file_data": "data:application/pdf;base64,JVBERg==",
-                        "filename": ""
-                      }
-                    }
-                  ]
-                }
-              ],
-              "model": "gpt-4o-mini"
-            }
-            `
+	bodyCh := make(chan []byte, 1)
 	const output = `
             {
               "choices": [
@@ -1830,7 +1811,15 @@ func TestChatURIContentMessage_DataURI_NonStreaming(t *testing.T) {
 		},
 	}
 
-	server := newTestServer(t, input, output)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bodyCh <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, output)
+	}))
 	defer server.Close()
 
 	a := newTestClient(server)
@@ -1856,6 +1845,27 @@ func TestChatURIContentMessage_DataURI_NonStreaming(t *testing.T) {
 	}
 	if err := messagetest.MessagesEqual(resp.Messages, want); err != nil {
 		t.Error(err)
+	}
+
+	var request map[string]any
+	if err := json.Unmarshal(<-bodyCh, &request); err != nil {
+		t.Fatal(err)
+	}
+	wireMessages, _ := request["messages"].([]any)
+	wireMessage, _ := wireMessages[0].(map[string]any)
+	parts, _ := wireMessage["content"].([]any)
+	if len(parts) != 3 {
+		t.Fatalf("content parts = %#v", wireMessage["content"])
+	}
+	audioPart, _ := parts[1].(map[string]any)
+	if audioPart["type"] != "input_audio" {
+		t.Fatalf("audio part = %#v", audioPart)
+	}
+	filePart, _ := parts[2].(map[string]any)
+	file, _ := filePart["file"].(map[string]any)
+	filename, _ := file["filename"].(string)
+	if !strings.HasPrefix(filename, "file_") || !strings.HasSuffix(filename, ".pdf") {
+		t.Fatalf("generated filename = %q", filename)
 	}
 }
 
@@ -2170,9 +2180,9 @@ func TestChatAuthorNamePropagation_NonStreaming(t *testing.T) {
 	const input = `
             {
                 "messages": [
-                    {"role": "system", "content": "You are helpful.", "name": "AgentOne"},
-                    {"role": "user", "content": "hi", "name": "AgentOne"},
-                    {"role": "assistant", "content": "hello", "name": "AgentOne"}
+					{"role": "system", "content": "You are helpful.", "name": "Agent_One"},
+					{"role": "user", "content": "hi", "name": "Agent_One"},
+					{"role": "assistant", "content": "hello", "name": "Agent_One"}
                 ],
                 "model": "gpt-4o-mini"
             }
@@ -2194,9 +2204,9 @@ func TestChatAuthorNamePropagation_NonStreaming(t *testing.T) {
 	a := newTestClient(server)
 
 	messages := []*message.Message{
-		{Role: message.RoleSystem, AuthorName: "Agent One", Contents: []message.Content{&message.TextContent{Text: "You are helpful."}}},
-		{Role: message.RoleUser, AuthorName: "Agent One", Contents: []message.Content{&message.TextContent{Text: "hi"}}},
-		{Role: message.RoleAssistant, AuthorName: "Agent One", Contents: []message.Content{&message.TextContent{Text: "hello"}}},
+		{Role: message.RoleSystem, AuthorName: "Agent_ Oneé", Contents: []message.Content{&message.TextContent{Text: "You are helpful."}}},
+		{Role: message.RoleUser, AuthorName: "Agent_ Oneé", Contents: []message.Content{&message.TextContent{Text: "hi"}}},
+		{Role: message.RoleAssistant, AuthorName: "Agent_ Oneé", Contents: []message.Content{&message.TextContent{Text: "hello"}}},
 	}
 	if _, err := a.Run(t.Context(), messages).Collect(); err != nil {
 		t.Fatalf("error = %v", err)
@@ -2368,5 +2378,40 @@ func TestChatResponseWithRefusalContent_ParsesCorrectly(t *testing.T) {
 	}
 	if errorContent.ErrorCode != "Refusal" {
 		t.Errorf("expected error code 'Refusal', got %q", errorContent.ErrorCode)
+	}
+}
+
+func TestChatAssistantRefusal_ReplaysAsRefusal(t *testing.T) {
+	var captured map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"chatcmpl-refusal-replay","object":"chat.completion","created":1,"model":"gpt-4o-mini","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
+	}))
+	defer server.Close()
+
+	messages := []*message.Message{{
+		Role: message.RoleAssistant,
+		Contents: message.Contents{&message.ErrorContent{
+			Message:   "I cannot help with that",
+			ErrorCode: "Refusal",
+		}},
+	}}
+	if _, err := newTestClient(server).Run(t.Context(), messages).Collect(); err != nil {
+		t.Fatal(err)
+	}
+
+	wireMessages, ok := captured["messages"].([]any)
+	if !ok || len(wireMessages) != 1 {
+		t.Fatalf("messages = %#v", captured["messages"])
+	}
+	assistant, _ := wireMessages[0].(map[string]any)
+	if assistant["refusal"] != "I cannot help with that" {
+		t.Fatalf("assistant message = %#v", assistant)
+	}
+	if assistant["content"] == "I cannot help with that" {
+		t.Fatal("refusal was replayed as ordinary assistant text")
 	}
 }

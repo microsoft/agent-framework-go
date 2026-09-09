@@ -9,6 +9,9 @@ import (
 	"fmt"
 	"iter"
 	"math"
+	"mime"
+	"net/url"
+	"path"
 	"reflect"
 	"slices"
 	"strings"
@@ -112,8 +115,9 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 			cand := resp.Candidates[0]
 			finishReason = toFinishReason(cand.FinishReason)
 			if cand.Content != nil {
+				partState := responsePartState{}
 				for _, part := range cand.Content.Parts {
-					responseContents, err = buildResponsePart(part, responseContents)
+					responseContents, err = buildResponsePart(part, responseContents, &partState)
 					if err != nil {
 						return func(yield func(*agent.ResponseUpdate, error) bool) {
 							yield(nil, err)
@@ -121,6 +125,8 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 					}
 				}
 			}
+			addCitationAnnotations(responseContents, cand.CitationMetadata)
+			responseContents = append(responseContents, groundingContents(cand.GroundingMetadata, "web-search-"+uuid.NewString())...)
 		}
 		if blocked := promptBlockedContent(resp); blocked != nil {
 			responseContents = append(responseContents, blocked)
@@ -143,7 +149,8 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		var latestUsage *genai.GenerateContentResponseUsageMetadata
-		var latestUsageResp *genai.GenerateContentResponse
+		var latestMetadataResp *genai.GenerateContentResponse
+		partState := responsePartState{}
 		for resp, err := range a.client.Models.GenerateContentStream(ctx, a.config.Model, contents, cfg) {
 			if err != nil {
 				yield(nil, err)
@@ -156,13 +163,15 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				finishReason = toFinishReason(cand.FinishReason)
 				if cand.Content != nil {
 					for _, part := range cand.Content.Parts {
-						streamContents, err = buildResponsePart(part, streamContents)
+						streamContents, err = buildResponsePart(part, streamContents, &partState)
 						if err != nil {
 							yield(nil, err)
 							return
 						}
 					}
 				}
+				addCitationAnnotations(streamContents, cand.CitationMetadata)
+				streamContents = append(streamContents, groundingContents(cand.GroundingMetadata, "web-search-"+uuid.NewString())...)
 			}
 			if blocked := promptBlockedContent(resp); blocked != nil {
 				streamContents = append(streamContents, blocked)
@@ -173,7 +182,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 			// remember the latest and emit it once after the stream ends.
 			if resp.UsageMetadata != nil {
 				latestUsage = resp.UsageMetadata
-				latestUsageResp = resp
+				latestMetadataResp = resp
 			}
 			if !yield(&agent.ResponseUpdate{
 				Contents:          streamContents,
@@ -185,12 +194,16 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				return
 			}
 		}
+		var finalContents []message.Content
 		if latestUsage != nil {
+			finalContents = append(finalContents, &message.UsageContent{Details: toUsageDetails(latestUsage)})
+		}
+		if len(finalContents) > 0 {
 			yield(&agent.ResponseUpdate{
-				Contents:          []message.Content{&message.UsageContent{Details: toUsageDetails(latestUsage)}},
+				Contents:          finalContents,
 				Role:              message.RoleAssistant,
 				CreatedAt:         time.Now(),
-				RawRepresentation: latestUsageResp,
+				RawRepresentation: latestMetadataResp,
 			}, nil)
 		}
 	}
@@ -491,8 +504,12 @@ func buildRequestParts(msg *message.Message, callIDToName map[string]string) ([]
 	return parts, nil
 }
 
+type responsePartState struct {
+	pendingCodeCallID string
+}
+
 // buildResponsePart converts a genai Part from a response into framework message content.
-func buildResponsePart(part *genai.Part, contents []message.Content) ([]message.Content, error) {
+func buildResponsePart(part *genai.Part, contents message.Contents, state *responsePartState) (message.Contents, error) {
 	if part.Thought {
 		// Thinking model: emit TextReasoningContent. Encode ThoughtSignature as
 		// base64 in ProtectedData so it can be passed back in multi-turn requests.
@@ -579,9 +596,14 @@ func buildResponsePart(part *genai.Part, contents []message.Content) ([]message.
 		})
 	}
 	if part.ExecutableCode != nil {
+		callID := part.ExecutableCode.ID
+		if callID == "" {
+			callID = "code-call-" + uuid.NewString()
+		}
+		state.pendingCodeCallID = callID
 		contents = append(contents, &message.CodeInterpreterToolCallContent{
 			ContentHeader: message.ContentHeader{RawRepresentation: part},
-			CallID:        part.ExecutableCode.ID,
+			CallID:        callID,
 			Inputs: message.Contents{&message.DataContent{
 				Data:      base64.StdEncoding.EncodeToString([]byte(part.ExecutableCode.Code)),
 				MediaType: geminiCodeMediaType(part.ExecutableCode.Language),
@@ -589,7 +611,15 @@ func buildResponsePart(part *genai.Part, contents []message.Content) ([]message.
 		})
 	}
 	if part.CodeExecutionResult != nil {
-		contents = append(contents, codeExecutionResultContent(part))
+		callID := part.CodeExecutionResult.ID
+		if callID == "" {
+			callID = state.pendingCodeCallID
+			if callID == "" {
+				callID = "code-call-" + uuid.NewString()
+			}
+		}
+		state.pendingCodeCallID = ""
+		contents = append(contents, codeExecutionResultContent(part, callID))
 	}
 	return contents, nil
 }
@@ -598,10 +628,10 @@ func geminiCodeMediaType(language genai.Language) string {
 	if language == genai.LanguagePython {
 		return "text/x-python"
 	}
-	return "text/plain"
+	return "text/x-source-code"
 }
 
-func codeExecutionResultContent(part *genai.Part) *message.CodeInterpreterToolResultContent {
+func codeExecutionResultContent(part *genai.Part, callID string) *message.CodeInterpreterToolResultContent {
 	result := part.CodeExecutionResult
 	output := message.Content(&message.TextContent{
 		Text:          result.Output,
@@ -616,9 +646,86 @@ func codeExecutionResultContent(part *genai.Part) *message.CodeInterpreterToolRe
 	}
 	return &message.CodeInterpreterToolResultContent{
 		ContentHeader: message.ContentHeader{RawRepresentation: part},
-		CallID:        result.ID,
+		CallID:        callID,
 		Outputs:       message.Contents{output},
 	}
+}
+
+func groundingContents(metadata *genai.GroundingMetadata, callID string) message.Contents {
+	if metadata == nil || (len(metadata.WebSearchQueries) == 0 && len(metadata.GroundingChunks) == 0) {
+		return nil
+	}
+
+	var outputs message.Contents
+	for _, chunk := range metadata.GroundingChunks {
+		if chunk == nil || chunk.Web == nil || chunk.Web.URI == "" {
+			continue
+		}
+		header := message.ContentHeader{RawRepresentation: chunk.Web}
+		if chunk.Web.Title != "" {
+			header.AdditionalProperties = map[string]any{"title": chunk.Web.Title}
+		}
+		outputs = append(outputs, &message.URIContent{
+			ContentHeader: header,
+			URI:           chunk.Web.URI,
+			MediaType:     inferMediaTypeFromURI(chunk.Web.URI),
+		})
+	}
+
+	return message.Contents{
+		&message.WebSearchToolCallContent{
+			ContentHeader: message.ContentHeader{RawRepresentation: metadata},
+			CallID:        callID,
+			Queries:       slices.Clone(metadata.WebSearchQueries),
+		},
+		&message.WebSearchToolResultContent{
+			CallID:  callID,
+			Outputs: outputs,
+		},
+	}
+}
+
+func addCitationAnnotations(contents message.Contents, metadata *genai.CitationMetadata) {
+	if metadata == nil || len(metadata.Citations) == 0 {
+		return
+	}
+	var textContent *message.TextContent
+	for _, content := range contents {
+		if text, ok := content.(*message.TextContent); ok {
+			textContent = text
+			break
+		}
+	}
+	if textContent == nil {
+		return
+	}
+	for _, citation := range metadata.Citations {
+		if citation == nil {
+			continue
+		}
+		startIndex, endIndex := int(citation.StartIndex), int(citation.EndIndex)
+		textContent.Annotations = append(textContent.Annotations, &message.CitationAnnotation{
+			Title: citation.Title,
+			URL:   citation.URI,
+			AnnotatedRegions: message.AnnotatedRegions{
+				&message.TextSpanAnnotatedRegion{StartIndex: &startIndex, EndIndex: &endIndex},
+			},
+		})
+	}
+}
+
+func inferMediaTypeFromURI(rawURI string) string {
+	uriPath := rawURI
+	if parsed, err := url.Parse(rawURI); err == nil {
+		uriPath = parsed.Path
+	}
+	if mediaType := mime.TypeByExtension(path.Ext(uriPath)); mediaType != "" {
+		if baseType, _, err := mime.ParseMediaType(mediaType); err == nil {
+			return baseType
+		}
+		return mediaType
+	}
+	return "application/octet-stream"
 }
 
 // toFunctionResponseMap converts a FunctionResultContent's result to the map[string]any
@@ -667,7 +774,9 @@ func toFinishReason(reason genai.FinishReason) string {
 		return "length"
 	case genai.FinishReasonSafety, genai.FinishReasonRecitation,
 		genai.FinishReasonBlocklist, genai.FinishReasonProhibitedContent,
-		genai.FinishReasonSPII:
+		genai.FinishReasonSPII,
+		genai.FinishReasonImageSafety, genai.FinishReasonImageProhibitedContent,
+		genai.FinishReasonImageRecitation:
 		return "content_filter"
 	case genai.FinishReasonMalformedFunctionCall, genai.FinishReasonTooManyToolCalls:
 		return "tool_calls"
@@ -677,11 +786,17 @@ func toFinishReason(reason genai.FinishReason) string {
 }
 
 func toUsageDetails(u *genai.GenerateContentResponseUsageMetadata) message.UsageDetails {
-	return message.UsageDetails{
+	details := message.UsageDetails{
 		InputTokenCount:       int64(u.PromptTokenCount),
 		OutputTokenCount:      int64(u.CandidatesTokenCount),
 		TotalTokenCount:       int64(u.TotalTokenCount),
 		CachedInputTokenCount: int64(u.CachedContentTokenCount),
 		ReasoningTokenCount:   int64(u.ThoughtsTokenCount),
 	}
+	if u.ToolUsePromptTokenCount != 0 {
+		details.AdditionalCounts = map[string]int64{
+			"ToolUsePromptTokenCount": int64(u.ToolUsePromptTokenCount),
+		}
+	}
+	return details
 }

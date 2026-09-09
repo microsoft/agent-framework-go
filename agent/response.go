@@ -124,7 +124,7 @@ func (resp *Response) Coalesce() {
 		return
 	}
 	for _, msg := range resp.Messages {
-		msg.Contents = message.CoalesceContents(msg.Contents)
+		msg.Contents = msg.Contents.Coalesce()
 	}
 }
 

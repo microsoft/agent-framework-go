@@ -13,7 +13,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
@@ -142,7 +141,7 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 					Arguments: tc.Function.Arguments,
 				})
 			}
-			if choice.Message.Content != "" {
+			if choice.Message.Content != "" || len(choice.Message.Annotations) > 0 {
 				textContent := &message.TextContent{Text: choice.Message.Content}
 				populateChatAnnotations(choice.Message.Annotations, textContent)
 				contents = append(contents, textContent)
@@ -195,7 +194,7 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 				})
 			}
 			if refusal, ok := acc.JustFinishedRefusal(); ok {
-				contents = append(contents, &message.ErrorContent{Message: refusal})
+				contents = append(contents, &message.ErrorContent{Message: refusal, ErrorCode: "Refusal"})
 			}
 			role := message.RoleAssistant
 			if len(chunk.Choices) > 0 {
@@ -450,7 +449,7 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 				default:
 					contents = append(contents, openai.FileContentPart(openai.ChatCompletionContentPartFileFileParam{
 						FileData: openai.String(c.URI()),
-						Filename: openai.String(c.Name),
+						Filename: openai.String(requiredOpenAIFileName(c.Name, c.MediaType)),
 					}))
 				}
 			case *message.HostedFileContent:
@@ -476,6 +475,7 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 	case message.RoleAssistant:
 		var contents []openai.ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion
 		var toolCalls []openai.ChatCompletionMessageToolCallUnionParam
+		var refusal string
 		for _, c := range msg.Contents {
 			switch c := c.(type) {
 			case *message.TextContent:
@@ -495,14 +495,18 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 					},
 				})
 			case *message.ErrorContent:
-				contents = append(contents, openai.ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion{
-					OfText: &openai.ChatCompletionContentPartTextParam{
-						Text: c.Message,
-					},
-				})
+				if c.ErrorCode == "Refusal" {
+					refusal = c.Message
+				} else {
+					contents = append(contents, openai.ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion{
+						OfText: &openai.ChatCompletionContentPartTextParam{
+							Text: c.Message,
+						},
+					})
+				}
 			}
 		}
-		if len(contents) == 0 && len(toolCalls) == 0 {
+		if len(contents) == 0 && len(toolCalls) == 0 && refusal == "" {
 			return nil, nil
 		}
 		var content openai.ChatCompletionAssistantMessageParamContentUnion
@@ -514,6 +518,9 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 		asst := openai.ChatCompletionAssistantMessageParam{
 			Content:   content,
 			ToolCalls: toolCalls,
+		}
+		if refusal != "" {
+			asst.Refusal = openai.String(refusal)
 		}
 		if name := sanitizeAuthorName(msg.AuthorName); name != "" {
 			asst.Name = openai.String(name)
@@ -553,7 +560,7 @@ func sanitizeAuthorName(name string) string {
 	var b strings.Builder
 	n := 0
 	for _, r := range name {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+		if r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
 			b.WriteRune(r)
 			n++
 			if n >= maxLen {
@@ -600,12 +607,13 @@ func populateChatAnnotations(anns []openai.ChatCompletionMessageAnnotation, cont
 		content.Annotations = append(content.Annotations, &message.CitationAnnotation{
 			URL:               ann.URLCitation.URL,
 			Title:             ann.URLCitation.Title,
+			AnnotatedRegions:  message.AnnotatedRegions{textSpanAnnotatedRegion(ann.URLCitation.StartIndex, ann.URLCitation.EndIndex)},
 			RawRepresentation: ann,
 		})
 	}
 }
 
-func addUsage(contents []message.Content, usage openai.CompletionUsage) []message.Content {
+func addUsage(contents message.Contents, usage openai.CompletionUsage) message.Contents {
 	details := message.UsageDetails{
 		InputTokenCount:       usage.PromptTokens,
 		OutputTokenCount:      usage.CompletionTokens,
@@ -683,7 +691,7 @@ func dataContentPart(c *message.DataContent) openai.ChatCompletionContentPartUni
 	default:
 		return openai.FileContentPart(openai.ChatCompletionContentPartFileFileParam{
 			FileData: openai.String(c.URI()),
-			Filename: openai.String(c.Name),
+			Filename: openai.String(requiredOpenAIFileName(c.Name, c.MediaType)),
 		})
 	}
 }

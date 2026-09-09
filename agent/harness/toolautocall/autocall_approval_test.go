@@ -47,7 +47,8 @@ func invokeAndAssertApproval(t *testing.T, tools []tool.Tool, input []*message.M
 	invokeAndAssertApprovalWithAgent(t, runner.Run, tools, input, expectedOutput, additionalTools)
 }
 
-// invokeAndAssertApprovalWithAgent performs streaming test execution
+// invokeAndAssertApprovalWithAgent performs streaming test execution against a
+// provider-managed conversation. Client-managed history is covered separately.
 func invokeAndAssertApprovalWithAgent(t *testing.T, next agent.RunFunc,
 	tools []tool.Tool, input []*message.Message,
 	expectedOutput []*agent.ResponseUpdate, additionalTools []tool.Tool,
@@ -62,7 +63,7 @@ func invokeAndAssertApprovalWithAgent(t *testing.T, next agent.RunFunc,
 	ctx := t.Context()
 
 	// Build options
-	var opts []agent.Option
+	opts := []agent.Option{agent.WithServiceID("test-conversation")}
 	for _, tool := range tools {
 		opts = append(opts, agent.WithTool(tool))
 	}
@@ -473,6 +474,124 @@ func TestFunctionInvoking_CanDisableApprovalNotRequiredBypassing(t *testing.T) {
 	}
 }
 
+func TestFunctionInvoking_ApprovedResultPrecedesTrailingMessageWithServiceManagedHistory(t *testing.T) {
+	request := &message.ToolApprovalRequestContent{
+		RequestID: "ficc_callId1",
+		ToolCall:  &message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
+	}
+	input := []*message.Message{
+		{Role: message.RoleAssistant, Contents: message.Contents{request}},
+		message.New(request.CreateResponse(true, "")),
+		message.NewText("keep the answer concise"),
+	}
+	expected := []*message.Message{
+		{Role: message.RoleTool, Contents: message.Contents{
+			&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
+		}},
+		message.NewText("keep the answer concise"),
+	}
+
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder(expectedMessages(t, expected...)).
+			Add(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{
+				&message.TextContent{Text: "done"},
+			}}).
+			Build(),
+	}
+	for _, err := range toolautocall.New(toolautocall.Config{NewID: func() string { return "" }}).Run(
+		runner.Run,
+		t.Context(),
+		input,
+		agent.WithServiceID("conversation-1"),
+		agent.WithTool(tool.ApprovalRequiredFunc(createFunc1())),
+	) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestFunctionInvoking_ApprovedCallAndResultPrecedeTrailingMessageWithClientManagedHistory(t *testing.T) {
+	request := &message.ToolApprovalRequestContent{
+		RequestID: "ficc_callId1",
+		ToolCall:  &message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
+	}
+	input := []*message.Message{
+		message.NewText("hello"),
+		{Role: message.RoleAssistant, ID: "response-1", Contents: message.Contents{request}},
+		message.New(request.CreateResponse(true, "")),
+		message.NewText("keep the answer concise"),
+	}
+	expected := []*message.Message{
+		message.NewText("hello"),
+		{Role: message.RoleAssistant, ID: "response-1", Contents: message.Contents{
+			&message.FunctionCallContent{CallID: "callId1", Name: "Func1", InformationalOnly: true},
+		}},
+		{Role: message.RoleTool, Contents: message.Contents{
+			&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
+		}},
+		message.NewText("keep the answer concise"),
+	}
+
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder(expectedMessages(t, expected...)).
+			Add(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{
+				&message.TextContent{Text: "done"},
+			}}).
+			Build(),
+	}
+	for _, err := range toolautocall.New(toolautocall.Config{NewID: func() string { return "" }}).Run(
+		runner.Run,
+		t.Context(),
+		input,
+		agent.WithTool(tool.ApprovalRequiredFunc(createFunc1())),
+	) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestFunctionInvoking_ApprovedCallAndResultPrecedeResidualContentWithClientManagedHistory(t *testing.T) {
+	request := &message.ToolApprovalRequestContent{
+		RequestID: "ficc_callId1",
+		ToolCall:  &message.FunctionCallContent{CallID: "callId1", Name: "Func1"},
+	}
+	input := []*message.Message{
+		message.NewText("hello"),
+		{Role: message.RoleAssistant, ID: "response-1", Contents: message.Contents{request}},
+		message.New(request.CreateResponse(true, ""), &message.TextContent{Text: "please proceed"}),
+	}
+	expected := []*message.Message{
+		message.NewText("hello"),
+		{Role: message.RoleAssistant, ID: "response-1", Contents: message.Contents{
+			&message.FunctionCallContent{CallID: "callId1", Name: "Func1", InformationalOnly: true},
+		}},
+		{Role: message.RoleTool, Contents: message.Contents{
+			&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
+		}},
+		message.NewText("please proceed"),
+	}
+
+	runner := &agenttest.Runner{
+		Responses: agenttest.NewResponseBuilder(expectedMessages(t, expected...)).
+			Add(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{
+				&message.TextContent{Text: "done"},
+			}}).
+			Build(),
+	}
+	for _, err := range toolautocall.New(toolautocall.Config{NewID: func() string { return "" }}).Run(
+		runner.Run,
+		t.Context(),
+		input,
+		agent.WithTool(tool.ApprovalRequiredFunc(createFunc1())),
+	) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // TestFunctionInvoking_AllFunctionCallsReplacedWithApprovalsWhenAllRequireApproval tests that
 // all function calls are replaced with approval requests when all functions require approval
 func TestFunctionInvoking_AllFunctionCallsReplacedWithApprovalsWhenAllRequireApproval(t *testing.T) {
@@ -717,13 +836,13 @@ func TestFunctionInvoking_PreservesNilToolCallApprovalContentWhenProcessingOther
 
 	expectedDownstreamAgentInput := []*message.Message{
 		message.New(&message.TextContent{Text: "hello"}),
+		{Role: message.RoleTool, Contents: []message.Content{
+			&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
+		}},
 		message.New(
 			&message.ToolApprovalRequestContent{RequestID: "missing-request-tool-call"},
 			&message.ToolApprovalResponseContent{RequestID: "missing-response-tool-call", Approved: true},
 		),
-		{Role: message.RoleTool, Contents: []message.Content{
-			&message.FunctionResultContent{CallID: "callId1", Result: "Result 1"},
-		}},
 	}
 
 	invokeAndAssertApproval(t, tools, input, downstreamAgentOutput, expectedOutput, expectedDownstreamAgentInput, nil)

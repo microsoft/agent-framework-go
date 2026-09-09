@@ -149,13 +149,7 @@ func (p *defaultContextProvider) Invoking(ctx context.Context, invoking Invoking
 		copy(outMessages, invoking.Messages)
 		source := message.Source{Type: SourceTypeContextProvider, ID: p.config.SourceID}
 		for _, msg := range providedMessages {
-			if msg == nil || msg.Source == source {
-				outMessages = append(outMessages, msg)
-				continue
-			}
-			marked := msg.Clone()
-			marked.Source = source
-			outMessages = append(outMessages, marked)
+			outMessages = append(outMessages, msg.WithSource(source))
 		}
 	}
 

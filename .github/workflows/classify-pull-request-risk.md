@@ -17,6 +17,7 @@ on:
             type: number
 concurrency:
    group: "gh-aw-${{ github.workflow }}-${{ github.repository }}-${{ inputs.pr_number }}"
+   job-discriminator: ${{ github.run_id }}
    cancel-in-progress: true
 checkout: false
 permissions:

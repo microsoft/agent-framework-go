@@ -117,17 +117,18 @@ func TestAnnotationEncoding_KnownTypeInvalidPayloadReturnsError(t *testing.T) {
 		t.Fatal("expected error decoding known annotation with invalid payload, got nil")
 	}
 
-	// Likewise for a known annotated region type ("text_span").
-	if err := json.Unmarshal([]byte(`[{"Type":"text_span","Start":"nope"}]`), new(message.AnnotatedRegions)); err == nil {
+	// Likewise for a known annotated region type ("textSpan").
+	if err := json.Unmarshal([]byte(`[{"Type":"textSpan","StartIndex":"nope"}]`), new(message.AnnotatedRegions)); err == nil {
 		t.Fatal("expected error decoding known region with invalid payload, got nil")
 	}
 }
 
 func TestAnnotatedRegionEncoding_Roundtrip(t *testing.T) {
+	start, end := 10, 50
 	regions := message.AnnotatedRegions{
 		&message.TextSpanAnnotatedRegion{
-			Start: 10,
-			End:   50,
+			StartIndex: &start,
+			EndIndex:   &end,
 		},
 	}
 	data, err := json.Marshal(regions)
@@ -145,5 +146,34 @@ func TestAnnotatedRegionEncoding_Roundtrip(t *testing.T) {
 		if !reflect.DeepEqual(v, decoded[i]) {
 			t.Errorf("[%d]: expected region %v, got %v", i, v, decoded[i])
 		}
+	}
+}
+
+func TestTextSpanAnnotatedRegionEncoding_NullableEndpoints(t *testing.T) {
+	zero := 0
+	regions := message.AnnotatedRegions{
+		&message.TextSpanAnnotatedRegion{},
+		&message.TextSpanAnnotatedRegion{StartIndex: &zero},
+	}
+
+	data, err := json.Marshal(regions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(data), `[{"Type":"textSpan"},{"StartIndex":0,"Type":"textSpan"}]`; got != want {
+		t.Fatalf("JSON = %s, want %s", got, want)
+	}
+
+	var decoded message.AnnotatedRegions
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	first := decoded[0].(*message.TextSpanAnnotatedRegion)
+	second := decoded[1].(*message.TextSpanAnnotatedRegion)
+	if first.StartIndex != nil || first.EndIndex != nil {
+		t.Fatalf("first region = %#v, want nil endpoints", first)
+	}
+	if second.StartIndex == nil || *second.StartIndex != 0 || second.EndIndex != nil {
+		t.Fatalf("second region = %#v, want start 0 and nil end", second)
 	}
 }
