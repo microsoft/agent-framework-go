@@ -149,8 +149,8 @@ func (t *RawAnnotatedRegion) kind() annotatedRegionKind { return "" }
 // TextSpanAnnotatedRegion describes a location in the associated [Content]
 // based on starting and ending character indices.
 type TextSpanAnnotatedRegion struct {
-	Start int // Start character index (inclusive) of the annotated span.
-	End   int // End character index (exclusive) of the annotated span.
+	StartIndex *int `json:",omitempty"` // Start character index (inclusive) of the annotated span.
+	EndIndex   *int `json:",omitempty"` // End character index (exclusive) of the annotated span.
 }
 
 func (t *TextSpanAnnotatedRegion) MarshalJSON() ([]byte, error) {
@@ -165,4 +165,4 @@ func (t *TextSpanAnnotatedRegion) MarshalJSON() ([]byte, error) {
 	return json.Marshal(tmp)
 }
 
-func (t *TextSpanAnnotatedRegion) kind() annotatedRegionKind { return "text_span" }
+func (t *TextSpanAnnotatedRegion) kind() annotatedRegionKind { return "textSpan" }

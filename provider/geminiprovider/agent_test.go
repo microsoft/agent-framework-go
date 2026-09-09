@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -207,6 +208,146 @@ func TestBasicText_Streaming(t *testing.T) {
 	if got := resp.String(); got != wantText {
 		t.Errorf("response text = %q, want %q", got, wantText)
 	}
+}
+
+func TestGoogleSearchGrounding_NonStreaming(t *testing.T) {
+	response := map[string]any{
+		"candidates": []any{map[string]any{
+			"content":      map[string]any{"role": "model", "parts": []any{map[string]any{"text": "grounded"}}},
+			"finishReason": "STOP",
+			"groundingMetadata": map[string]any{
+				"webSearchQueries": []string{"first query", "second query"},
+				"groundingChunks": []any{
+					map[string]any{"web": map[string]any{"uri": "https://example.com/source", "title": "Example"}},
+				},
+			},
+		}},
+	}
+	body, _ := json.Marshal(response)
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "application/json", string(body)))
+	defer server.Close()
+
+	resp, err := newTestClient(t, server).RunText(t.Context(), "search", agent.WithTool(&hostedtool.WebSearch{})).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	call, result := webSearchContents(resp)
+	if call == nil || call.CallID == "" || !slices.Equal(call.Queries, []string{"first query", "second query"}) || call.RawRepresentation == nil {
+		t.Fatalf("call = %#v", call)
+	}
+	if result == nil || result.CallID != call.CallID || len(result.Outputs) != 1 || result.RawRepresentation != nil {
+		t.Fatalf("result = %#v", result)
+	}
+	source, ok := result.Outputs[0].(*message.URIContent)
+	if !ok || source.URI != "https://example.com/source" || source.MediaType != "application/octet-stream" || source.AdditionalProperties["title"] != "Example" {
+		t.Fatalf("source = %#v", result.Outputs[0])
+	}
+}
+
+func TestCitationMetadataAnnotatesFirstTextContent(t *testing.T) {
+	response := map[string]any{
+		"candidates": []any{map[string]any{
+			"content": map[string]any{"role": "model", "parts": []any{map[string]any{"text": "A cited response"}}},
+			"citationMetadata": map[string]any{
+				"citationSources": []any{map[string]any{
+					"startIndex": 2,
+					"endIndex":   7,
+					"title":      "Example",
+					"uri":        "https://example.com/article",
+				}},
+			},
+		}},
+	}
+	body, _ := json.Marshal(response)
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "application/json", string(body)))
+	defer server.Close()
+
+	resp, err := newTestClient(t, server).RunText(t.Context(), "cite").Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var text *message.TextContent
+	for content := range resp.Contents() {
+		if candidate, ok := content.(*message.TextContent); ok {
+			text = candidate
+			break
+		}
+	}
+	if text == nil || len(text.Annotations) != 1 {
+		t.Fatalf("text content = %#v", text)
+	}
+	citation, ok := text.Annotations[0].(*message.CitationAnnotation)
+	if !ok || citation.Title != "Example" || citation.URL != "https://example.com/article" || len(citation.AnnotatedRegions) != 1 {
+		t.Fatalf("citation = %#v", text.Annotations[0])
+	}
+	span, ok := citation.AnnotatedRegions[0].(*message.TextSpanAnnotatedRegion)
+	if !ok || span.StartIndex == nil || *span.StartIndex != 2 || span.EndIndex == nil || *span.EndIndex != 7 {
+		t.Fatalf("annotated region = %#v", citation.AnnotatedRegions[0])
+	}
+}
+
+func TestGoogleSearchGrounding_StreamingProcessesEachMetadataChunk(t *testing.T) {
+	chunk := func(queries []string, sources ...string) string {
+		chunks := make([]any, len(sources))
+		for i, source := range sources {
+			chunks[i] = map[string]any{"web": map[string]any{"uri": source}}
+		}
+		body, _ := json.Marshal(map[string]any{
+			"candidates": []any{map[string]any{
+				"content": map[string]any{"role": "model", "parts": []any{map[string]any{"text": "grounded"}}},
+				"groundingMetadata": map[string]any{
+					"webSearchQueries": queries,
+					"groundingChunks":  chunks,
+				},
+			}},
+		})
+		return "data:" + string(body) + "\n\n"
+	}
+	stream := chunk([]string{"first"}, "https://example.com/first") +
+		chunk([]string{"first", "second"}, "https://example.com/first", "https://example.com/second")
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "text/event-stream", stream))
+	defer server.Close()
+
+	resp, err := newTestClient(t, server).RunText(t.Context(), "search", agent.Stream(true), agent.WithTool(&hostedtool.WebSearch{})).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	call, result := webSearchContents(resp)
+	if call == nil || !slices.Equal(call.Queries, []string{"first", "second"}) {
+		t.Fatalf("call = %#v", call)
+	}
+	if result == nil || result.CallID != call.CallID || len(result.Outputs) != 2 {
+		t.Fatalf("result = %#v", result)
+	}
+	var callCount, resultCount int
+	for content := range resp.Contents() {
+		switch content.(type) {
+		case *message.WebSearchToolCallContent:
+			callCount++
+		case *message.WebSearchToolResultContent:
+			resultCount++
+		}
+	}
+	if callCount != 2 || resultCount != 2 {
+		t.Fatalf("web search content counts = call:%d result:%d", callCount, resultCount)
+	}
+}
+
+func webSearchContents(resp *agent.Response) (*message.WebSearchToolCallContent, *message.WebSearchToolResultContent) {
+	var call *message.WebSearchToolCallContent
+	var result *message.WebSearchToolResultContent
+	for content := range resp.Contents() {
+		switch content := content.(type) {
+		case *message.WebSearchToolCallContent:
+			call = content
+		case *message.WebSearchToolResultContent:
+			result = content
+		}
+	}
+	return call, result
 }
 
 // TestStructuredOutput_NonStreaming verifies that passing agent.WithStructuredOutput
@@ -540,10 +681,11 @@ func TestUsageContent_ReasoningTokens(t *testing.T) {
 			},
 		},
 		"usageMetadata": map[string]any{
-			"promptTokenCount":     10,
-			"candidatesTokenCount": 5,
-			"thoughtsTokenCount":   8,
-			"totalTokenCount":      23,
+			"promptTokenCount":        10,
+			"candidatesTokenCount":    5,
+			"thoughtsTokenCount":      8,
+			"toolUsePromptTokenCount": 3,
+			"totalTokenCount":         26,
 		},
 	}
 	body, _ := json.Marshal(resp)
@@ -575,8 +717,11 @@ func TestUsageContent_ReasoningTokens(t *testing.T) {
 	if usage.Details.OutputTokenCount != 5 {
 		t.Errorf("OutputTokenCount = %d, want 5", usage.Details.OutputTokenCount)
 	}
-	if usage.Details.TotalTokenCount != 23 {
-		t.Errorf("TotalTokenCount = %d, want 23", usage.Details.TotalTokenCount)
+	if usage.Details.TotalTokenCount != 26 {
+		t.Errorf("TotalTokenCount = %d, want 26", usage.Details.TotalTokenCount)
+	}
+	if got := usage.Details.AdditionalCounts["ToolUsePromptTokenCount"]; got != 3 {
+		t.Errorf("ToolUsePromptTokenCount = %d, want 3", got)
 	}
 }
 
@@ -1410,6 +1555,45 @@ func TestResponseWithCodeExecutionParts(t *testing.T) {
 	output, ok := codeResult.Outputs[0].(*message.TextContent)
 	if !ok || output.Text != "1\n" {
 		t.Fatalf("code output = %#v", codeResult.Outputs[0])
+	}
+}
+
+func TestResponseWithCodeExecutionPartsWithoutIDs(t *testing.T) {
+	resp := map[string]any{
+		"candidates": []any{map[string]any{
+			"content": map[string]any{
+				"role": "model",
+				"parts": []any{
+					map[string]any{"executableCode": map[string]any{"language": "PYTHON", "code": "print(1)"}},
+					map[string]any{"codeExecutionResult": map[string]any{"outcome": "OUTCOME_OK", "output": "1\n"}},
+				},
+			},
+		}},
+	}
+	body, _ := json.Marshal(resp)
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "application/json", string(body)))
+	defer server.Close()
+
+	result, err := newTestClient(t, server).RunText(t.Context(), "run code").Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var call *message.CodeInterpreterToolCallContent
+	var codeResult *message.CodeInterpreterToolResultContent
+	for content := range result.Contents() {
+		switch content := content.(type) {
+		case *message.CodeInterpreterToolCallContent:
+			call = content
+		case *message.CodeInterpreterToolResultContent:
+			codeResult = content
+		}
+	}
+	if call == nil || call.CallID == "" {
+		t.Fatalf("code call = %#v", call)
+	}
+	if codeResult == nil || codeResult.CallID != call.CallID {
+		t.Fatalf("code result = %#v, want CallID %q", codeResult, call.CallID)
 	}
 }
 

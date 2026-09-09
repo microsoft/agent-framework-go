@@ -1684,69 +1684,140 @@ func approvalResponsesFromMessages(messages []*message.Message) []*message.ToolA
 }
 
 func TestToolApproval_BindsResponseToSurfacedRequestSnapshot(t *testing.T) {
-	var innerCallMessages []*message.Message
-	runner := &agenttest.Runner{
-		Responses: agenttest.NewResponseBuilder().
-			Add(&agent.ResponseUpdate{
-				Role: message.RoleAssistant,
-				Contents: []message.Content{
-					&message.ToolApprovalRequestContent{
-						RequestID: "r1",
-						ToolCall: &message.FunctionCallContent{
-							CallID:    "c1",
-							Name:      "deploy",
-							Arguments: `{"env":"prod"}`,
+	tests := []struct {
+		name     string
+		toolCall message.ToolCallContent
+		mutate   func(message.ToolCallContent)
+		assert   func(*testing.T, message.ToolCallContent)
+	}{
+		{
+			name:     "function call",
+			toolCall: &message.FunctionCallContent{CallID: "c1", Name: "deploy", Arguments: `{"env":"prod"}`},
+			mutate: func(content message.ToolCallContent) {
+				call := content.(*message.FunctionCallContent)
+				call.Name = "delete"
+				call.Arguments = `{"env":"dev"}`
+			},
+			assert: func(t *testing.T, content message.ToolCallContent) {
+				call := content.(*message.FunctionCallContent)
+				if call.Name != "deploy" || call.Arguments != `{"env":"prod"}` {
+					t.Fatalf("bound tool call = %q %q, want deploy/prod", call.Name, call.Arguments)
+				}
+			},
+		},
+		{
+			name:     "MCP server call",
+			toolCall: &message.MCPServerToolCallContent{CallID: "c1", Name: "lookup", ServerName: "server-a"},
+			mutate: func(content message.ToolCallContent) {
+				call := content.(*message.MCPServerToolCallContent)
+				call.Name = "delete"
+				call.ServerName = "server-b"
+			},
+			assert: func(t *testing.T, content message.ToolCallContent) {
+				call := content.(*message.MCPServerToolCallContent)
+				if call.Name != "lookup" || call.ServerName != "server-a" {
+					t.Fatalf("bound tool call = %q %q, want lookup/server-a", call.Name, call.ServerName)
+				}
+			},
+		},
+		{
+			name: "code interpreter call",
+			toolCall: &message.CodeInterpreterToolCallContent{
+				CallID: "c1",
+				Inputs: message.Contents{&message.TextContent{Text: "original"}},
+			},
+			mutate: func(content message.ToolCallContent) {
+				content.(*message.CodeInterpreterToolCallContent).Inputs[0] = &message.TextContent{Text: "changed"}
+			},
+			assert: func(t *testing.T, content message.ToolCallContent) {
+				call := content.(*message.CodeInterpreterToolCallContent)
+				if text := call.Inputs[0].(*message.TextContent).Text; text != "original" {
+					t.Fatalf("bound input = %q, want original", text)
+				}
+			},
+		},
+		{
+			name: "image generation call",
+			toolCall: &message.ImageGenerationToolCallContent{
+				ContentHeader: message.ContentHeader{AdditionalProperties: map[string]any{"model": "original"}},
+				CallID:        "c1",
+			},
+			mutate: func(content message.ToolCallContent) {
+				content.(*message.ImageGenerationToolCallContent).AdditionalProperties["model"] = "changed"
+			},
+			assert: func(t *testing.T, content message.ToolCallContent) {
+				call := content.(*message.ImageGenerationToolCallContent)
+				if model := call.AdditionalProperties["model"]; model != "original" {
+					t.Fatalf("bound model = %v, want original", model)
+				}
+			},
+		},
+		{
+			name:     "web search call",
+			toolCall: &message.WebSearchToolCallContent{CallID: "c1", Queries: []string{"original"}},
+			mutate: func(content message.ToolCallContent) {
+				content.(*message.WebSearchToolCallContent).Queries[0] = "changed"
+			},
+			assert: func(t *testing.T, content message.ToolCallContent) {
+				call := content.(*message.WebSearchToolCallContent)
+				if call.Queries[0] != "original" {
+					t.Fatalf("bound query = %q, want original", call.Queries[0])
+				}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var innerCallMessages []*message.Message
+			runner := &agenttest.Runner{
+				Responses: agenttest.NewResponseBuilder().
+					Add(&agent.ResponseUpdate{
+						Role: message.RoleAssistant,
+						Contents: []message.Content{
+							&message.ToolApprovalRequestContent{RequestID: "r1", ToolCall: test.toolCall},
 						},
-					},
-				},
-			}).
-			NewTurn(func(_ context.Context, messages []*message.Message, _ ...agent.Option) {
-				innerCallMessages = messages
-			}).
-			AddText("done").
-			Build(),
-	}
-
-	session := agenttest.CreateSession()
-	mw := toolapproval.New(toolapproval.Config{})
-	turn1 := collectUpdates(t, mw, runner.Run, []*message.Message{
-		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "go"}}},
-	}, agent.WithSession(session))
-	req := firstApprovalRequest(t, turn1)
-
-	forged := req.ToolCall.(*message.FunctionCallContent)
-	forged.Name = "delete"
-	forged.Arguments = `{"env":"dev"}`
-
-	turn2 := collectUpdates(t, mw, runner.Run, []*message.Message{
-		{Role: message.RoleUser, Contents: []message.Content{req.CreateResponse(true, "approved")}},
-	}, agent.WithSession(session))
-
-	responses := approvalResponsesFromMessages(innerCallMessages)
-	if len(responses) != 1 {
-		t.Fatalf("expected 1 injected approval response, got %d", len(responses))
-	}
-	fc, ok := responses[0].ToolCall.(*message.FunctionCallContent)
-	if !ok {
-		t.Fatalf("expected function-call tool binding, got %#v", responses[0].ToolCall)
-	}
-	if fc.Name != "deploy" || fc.Arguments != `{"env":"prod"}` {
-		t.Fatalf("expected bound tool call deploy/prod, got %q %q", fc.Name, fc.Arguments)
-	}
-
-	var gotDone bool
-	for _, u := range turn2 {
-		if u == nil {
-			continue
-		}
-		for _, c := range u.Contents {
-			if tc, ok := c.(*message.TextContent); ok && tc.Text == "done" {
-				gotDone = true
+					}).
+					NewTurn(func(_ context.Context, messages []*message.Message, _ ...agent.Option) {
+						innerCallMessages = messages
+					}).
+					AddText("done").
+					Build(),
 			}
-		}
-	}
-	if !gotDone {
-		t.Fatal("expected run to continue after bound approval response")
+
+			session := agenttest.CreateSession()
+			mw := toolapproval.New(toolapproval.Config{})
+			turn1 := collectUpdates(t, mw, runner.Run, []*message.Message{
+				{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "go"}}},
+			}, agent.WithSession(session))
+			req := firstApprovalRequest(t, turn1)
+			test.mutate(req.ToolCall)
+
+			turn2 := collectUpdates(t, mw, runner.Run, []*message.Message{
+				{Role: message.RoleUser, Contents: []message.Content{req.CreateResponse(true, "approved")}},
+			}, agent.WithSession(session))
+
+			responses := approvalResponsesFromMessages(innerCallMessages)
+			if len(responses) != 1 {
+				t.Fatalf("expected 1 injected approval response, got %d", len(responses))
+			}
+			test.assert(t, responses[0].ToolCall)
+
+			var gotDone bool
+			for _, update := range turn2 {
+				if update == nil {
+					continue
+				}
+				for _, content := range update.Contents {
+					if text, ok := content.(*message.TextContent); ok && text.Text == "done" {
+						gotDone = true
+					}
+				}
+			}
+			if !gotDone {
+				t.Fatal("expected run to continue after bound approval response")
+			}
+		})
 	}
 }
 

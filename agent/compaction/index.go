@@ -399,9 +399,45 @@ func computeContentByteCount(content message.Content) int {
 		return stringByteCount(typed.Message) + stringByteCount(typed.ErrorCode) + stringByteCount(typed.Details)
 	case *message.HostedFileContent:
 		return stringByteCount(typed.FileID) + stringByteCount(typed.MediaType) + stringByteCount(typed.Name)
+	case *message.HostedVectorStoreContent:
+		return stringByteCount(typed.VectorStoreID)
+	case *message.MCPServerToolCallContent:
+		return stringByteCount(typed.CallID) + stringByteCount(typed.Name) + stringByteCount(typed.ServerName) + stringByteCount(typed.Arguments)
+	case *message.MCPServerToolResultContent:
+		return stringByteCount(typed.CallID) + contentsByteCount(typed.Outputs)
+	case *message.CodeInterpreterToolCallContent:
+		return stringByteCount(typed.CallID) + contentsByteCount(typed.Inputs)
+	case *message.CodeInterpreterToolResultContent:
+		return stringByteCount(typed.CallID) + contentsByteCount(typed.Outputs)
+	case *message.ImageGenerationToolCallContent:
+		return stringByteCount(typed.CallID)
+	case *message.ImageGenerationToolResultContent:
+		return stringByteCount(typed.CallID) + contentsByteCount(typed.Outputs)
+	case *message.WebSearchToolCallContent:
+		total := stringByteCount(typed.CallID)
+		for _, query := range typed.Queries {
+			total += stringByteCount(query)
+		}
+		return total
+	case *message.WebSearchToolResultContent:
+		return stringByteCount(typed.CallID) + contentsByteCount(typed.Outputs)
+	case *message.ToolApprovalRequestContent:
+		return stringByteCount(typed.RequestID) + computeContentByteCount(typed.ToolCall)
+	case *message.ToolApprovalResponseContent:
+		return stringByteCount(typed.RequestID) + stringByteCount(typed.Reason) + computeContentByteCount(typed.ToolCall)
+	case *message.AlwaysApproveToolApprovalResponseContent:
+		return computeContentByteCount(typed.InnerResponse)
 	default:
 		return 0
 	}
+}
+
+func contentsByteCount(contents message.Contents) int {
+	var total int
+	for _, content := range contents {
+		total += computeContentByteCount(content)
+	}
+	return total
 }
 
 func stringByteCount(value string) int { return len(value) }

@@ -484,6 +484,142 @@ func TestTextCitationsBecomeAnnotations(t *testing.T) {
 	}
 }
 
+func TestCharacterLocationCitationsBecomeAnnotatedRegions(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"id":"msg_char_citation",
+			"type":"message",
+			"role":"assistant",
+			"model":"claude-3-5-sonnet-20241022",
+			"stop_reason":"end_turn",
+			"content":[{
+				"type":"text",
+				"text":"The answer cites a document.",
+				"citations":[{
+					"type":"char_location",
+					"cited_text":"document excerpt",
+					"document_index":0,
+					"document_title":"Document",
+					"start_char_index":4,
+					"end_char_index":12
+				}]
+			}],
+			"usage":{"input_tokens":10,"output_tokens":5}
+		}`)
+	}))
+	defer server.Close()
+
+	resp, err := newTestClient(t, server).RunText(t.Context(), "cite something").Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var citation *message.CitationAnnotation
+	for content := range resp.Contents() {
+		if text, ok := content.(*message.TextContent); ok && len(text.Annotations) > 0 {
+			citation, _ = text.Annotations[0].(*message.CitationAnnotation)
+		}
+	}
+	if citation == nil || len(citation.AnnotatedRegions) != 1 {
+		t.Fatalf("citation = %#v", citation)
+	}
+	span, ok := citation.AnnotatedRegions[0].(*message.TextSpanAnnotatedRegion)
+	if !ok || span.StartIndex == nil || *span.StartIndex != 4 || span.EndIndex == nil || *span.EndIndex != 12 {
+		t.Fatalf("annotated region = %#v, want [4, 12)", citation.AnnotatedRegions[0])
+	}
+}
+
+func TestHostedServerToolContents(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"id":"msg_server_tools",
+			"type":"message",
+			"role":"assistant",
+			"model":"claude-sonnet-4-5",
+			"stop_reason":"end_turn",
+			"content":[
+				{"type":"server_tool_use","id":"srv_web","name":"web_search","input":{"query":"go sdk"}},
+				{"type":"web_search_tool_result","tool_use_id":"srv_web","content":[{"type":"web_search_result","url":"https://example.com/doc.pdf","title":"Docs","encrypted_content":"encrypted","page_age":"today"}]},
+				{"type":"server_tool_use","id":"srv_code","name":"code_execution","input":{"code":"print(1)"}},
+				{"type":"code_execution_tool_result","tool_use_id":"srv_code","content":{"type":"code_execution_result","stdout":"1\n","stderr":"warning\n","return_code":0,"content":[{"type":"code_execution_output","file_id":"file_1"}]}},
+				{"type":"container_upload","file_id":"file_2"}
+			],
+			"usage":{"input_tokens":10,"output_tokens":5,"server_tool_use":{"web_search_requests":1,"web_fetch_requests":2}}
+		}`)
+	}))
+	defer server.Close()
+
+	resp, err := newTestClient(t, server).RunText(t.Context(), "use hosted tools").Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var webCall *message.WebSearchToolCallContent
+	var webResult *message.WebSearchToolResultContent
+	var codeCall *message.CodeInterpreterToolCallContent
+	var codeResult *message.CodeInterpreterToolResultContent
+	var uploadedFile *message.HostedFileContent
+	var usage *message.UsageContent
+	for content := range resp.Contents() {
+		switch content := content.(type) {
+		case *message.WebSearchToolCallContent:
+			webCall = content
+		case *message.WebSearchToolResultContent:
+			webResult = content
+		case *message.CodeInterpreterToolCallContent:
+			codeCall = content
+		case *message.CodeInterpreterToolResultContent:
+			codeResult = content
+		case *message.HostedFileContent:
+			uploadedFile = content
+		case *message.UsageContent:
+			usage = content
+		}
+	}
+
+	if webCall == nil || webCall.CallID != "srv_web" || len(webCall.Queries) != 1 || webCall.Queries[0] != "go sdk" {
+		t.Fatalf("web call = %#v", webCall)
+	}
+	if webResult == nil || webResult.CallID != webCall.CallID || len(webResult.Outputs) != 1 {
+		t.Fatalf("web result = %#v", webResult)
+	}
+	webURI, ok := webResult.Outputs[0].(*message.URIContent)
+	if !ok || webURI.URI != "https://example.com/doc.pdf" || webURI.MediaType != "application/pdf" {
+		t.Fatalf("web output = %#v", webResult.Outputs[0])
+	}
+	if codeCall == nil || codeCall.CallID != "srv_code" || len(codeCall.Inputs) != 1 {
+		t.Fatalf("code call = %#v", codeCall)
+	}
+	codeInput, ok := codeCall.Inputs[0].(*message.DataContent)
+	if !ok || codeInput.MediaType != "text/x-python" {
+		t.Fatalf("code input = %#v", codeCall.Inputs[0])
+	}
+	code, err := codeInput.Bytes()
+	if err != nil || string(code) != "print(1)" {
+		t.Fatalf("decoded code = %q, error = %v", code, err)
+	}
+	if codeResult == nil || codeResult.CallID != codeCall.CallID || len(codeResult.Outputs) != 3 {
+		t.Fatalf("code result = %#v", codeResult)
+	}
+	if text, ok := codeResult.Outputs[0].(*message.TextContent); !ok || text.Text != "1\n" {
+		t.Fatalf("stdout = %#v", codeResult.Outputs[0])
+	}
+	if codeError, ok := codeResult.Outputs[1].(*message.ErrorContent); !ok || codeError.Message != "warning\n" || codeError.ErrorCode != "0" {
+		t.Fatalf("stderr = %#v", codeResult.Outputs[1])
+	}
+	if file, ok := codeResult.Outputs[2].(*message.HostedFileContent); !ok || file.FileID != "file_1" {
+		t.Fatalf("code file = %#v", codeResult.Outputs[2])
+	}
+	if uploadedFile == nil || uploadedFile.FileID != "file_2" {
+		t.Fatalf("uploaded file = %#v", uploadedFile)
+	}
+	if usage == nil || usage.Details.AdditionalCounts["web_search_requests"] != 1 || usage.Details.AdditionalCounts["web_fetch_requests"] != 2 {
+		t.Fatalf("usage = %#v", usage)
+	}
+}
+
 // TestStreamingTextCitationsBecomeAnnotations mirrors
 // TestTextCitationsBecomeAnnotations for the streaming path: citations are only
 // present on the accumulated text block, so the content_block_stop handler must
@@ -718,6 +854,42 @@ func TestStreamingToolCallsSupportInterleavedDeltas(t *testing.T) {
 		if call.Arguments != want[call.CallID] {
 			t.Errorf("call %q arguments = %q, want %q", call.CallID, call.Arguments, want[call.CallID])
 		}
+	}
+}
+
+func TestStreamingServerToolCallAccumulatesInput(t *testing.T) {
+	events := "event: content_block_start\n" +
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"srvtoolu_code","name":"code_execution","input":{}}}` + "\n\n" +
+		streamingToolDelta(0, `{"code":`) +
+		streamingToolDelta(0, `"print(2)"}`) +
+		streamingToolStop(0)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, streamingToolCallResponse(events))
+	}))
+	defer server.Close()
+
+	resp, err := newTestClient(t, server).RunText(t.Context(), "run code", agent.Stream(true)).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var calls []*message.CodeInterpreterToolCallContent
+	for content := range resp.Contents() {
+		if call, ok := content.(*message.CodeInterpreterToolCallContent); ok {
+			calls = append(calls, call)
+		}
+	}
+	if len(calls) != 1 || calls[0].CallID != "srvtoolu_code" || len(calls[0].Inputs) != 1 {
+		t.Fatalf("code calls = %#v", calls)
+	}
+	input, ok := calls[0].Inputs[0].(*message.DataContent)
+	if !ok || input.MediaType != "text/x-python" {
+		t.Fatalf("code input = %#v", calls[0].Inputs[0])
+	}
+	code, err := input.Bytes()
+	if err != nil || string(code) != "print(2)" {
+		t.Fatalf("decoded code = %q, error = %v", code, err)
 	}
 }
 
@@ -1337,6 +1509,39 @@ func TestWebSearchHostedToolMappingWithoutProperties(t *testing.T) {
 		if _, present := tl[k]; present {
 			t.Errorf("%s should be omitted, got %#v", k, tl[k])
 		}
+	}
+}
+
+func TestCodeInterpreterHostedToolMapping(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		bodyCh <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, minimalMessageResponse("ok"))
+	}))
+	defer server.Close()
+
+	if _, err := newTestClient(t, server).RunText(t.Context(), "run code", agent.WithTool(&hostedtool.CodeInterpreter{})).Collect(); err != nil {
+		t.Fatal(err)
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	tools, ok := req["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("tools = %#v, want one tool", req["tools"])
+	}
+	codeTool, _ := tools[0].(map[string]any)
+	if codeTool["type"] != "code_execution_20250825" || codeTool["name"] != "code_execution" {
+		t.Fatalf("code tool = %#v", codeTool)
 	}
 }
 

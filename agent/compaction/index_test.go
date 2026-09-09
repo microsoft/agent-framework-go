@@ -35,6 +35,34 @@ func TestMessageIndex_CreateBasicGroups(t *testing.T) {
 	}
 }
 
+func TestMessageIndex_CountsStableToolContent(t *testing.T) {
+	msg := &message.Message{
+		Role: message.RoleUser,
+		Contents: message.Contents{
+			&message.HostedVectorStoreContent{VectorStoreID: "store"},
+			&message.ImageGenerationToolResultContent{
+				CallID:  "img",
+				Outputs: message.Contents{&message.TextContent{Text: "pixels"}},
+			},
+			&message.WebSearchToolCallContent{CallID: "web", Queries: []string{"one", "two"}},
+			&message.MCPServerToolResultContent{
+				CallID:  "mcp",
+				Outputs: message.Contents{&message.ErrorContent{Message: "bad"}},
+			},
+			&message.CodeInterpreterToolCallContent{
+				CallID: "code",
+				Inputs: message.Contents{&message.TextContent{Text: "x"}},
+			},
+			&message.RawContent{ContentHeader: message.ContentHeader{RawRepresentation: map[string]any{"opaque": "ignored"}}},
+		},
+	}
+
+	index := compaction.CreateMessageIndex([]*message.Message{msg}, nil)
+	if got, want := index.Groups[0].ByteCount, 34; got != want {
+		t.Fatalf("ByteCount = %d, want %d", got, want)
+	}
+}
+
 func TestMessageIndex_CreateMixedConversationGroupsCorrectly(t *testing.T) {
 	index := compaction.CreateMessageIndex([]*message.Message{
 		textMessage(message.RoleSystem, "system"),

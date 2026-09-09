@@ -931,7 +931,14 @@ func snapshotApprovalRequest(request *message.ToolApprovalRequestContent) *messa
 	if request == nil {
 		return nil
 	}
-	clone := &message.ToolApprovalRequestContent{RequestID: request.RequestID}
+	clone := &message.ToolApprovalRequestContent{
+		ContentHeader: message.ContentHeader{
+			AdditionalProperties: maps.Clone(request.AdditionalProperties),
+			Annotations:          slices.Clone(request.Annotations),
+			RawRepresentation:    request.RawRepresentation,
+		},
+		RequestID: request.RequestID,
+	}
 	switch call := request.ToolCall.(type) {
 	case *message.FunctionCallContent:
 		if call != nil {
@@ -945,6 +952,29 @@ func snapshotApprovalRequest(request *message.ToolApprovalRequestContent) *messa
 			callClone := *call
 			callClone.AdditionalProperties = maps.Clone(call.AdditionalProperties)
 			callClone.Annotations = slices.Clone(call.Annotations)
+			clone.ToolCall = &callClone
+		}
+	case *message.CodeInterpreterToolCallContent:
+		if call != nil {
+			callClone := *call
+			callClone.AdditionalProperties = maps.Clone(call.AdditionalProperties)
+			callClone.Annotations = slices.Clone(call.Annotations)
+			callClone.Inputs = slices.Clone(call.Inputs)
+			clone.ToolCall = &callClone
+		}
+	case *message.ImageGenerationToolCallContent:
+		if call != nil {
+			callClone := *call
+			callClone.AdditionalProperties = maps.Clone(call.AdditionalProperties)
+			callClone.Annotations = slices.Clone(call.Annotations)
+			clone.ToolCall = &callClone
+		}
+	case *message.WebSearchToolCallContent:
+		if call != nil {
+			callClone := *call
+			callClone.AdditionalProperties = maps.Clone(call.AdditionalProperties)
+			callClone.Annotations = slices.Clone(call.Annotations)
+			callClone.Queries = slices.Clone(call.Queries)
 			clone.ToolCall = &callClone
 		}
 	default:

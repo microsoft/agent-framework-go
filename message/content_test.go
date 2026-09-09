@@ -9,8 +9,26 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/microsoft/agent-framework-go/message"
+)
+
+var (
+	_ message.ToolCallContent = (*message.FunctionCallContent)(nil)
+	_ message.ToolCallContent = (*message.MCPServerToolCallContent)(nil)
+	_ message.ToolCallContent = (*message.ImageGenerationToolCallContent)(nil)
+	_ message.ToolCallContent = (*message.CodeInterpreterToolCallContent)(nil)
+	_ message.ToolCallContent = (*message.WebSearchToolCallContent)(nil)
+
+	_ message.ToolResultContent = (*message.FunctionResultContent)(nil)
+	_ message.ToolResultContent = (*message.MCPServerToolResultContent)(nil)
+	_ message.ToolResultContent = (*message.ImageGenerationToolResultContent)(nil)
+	_ message.ToolResultContent = (*message.CodeInterpreterToolResultContent)(nil)
+	_ message.ToolResultContent = (*message.WebSearchToolResultContent)(nil)
+
+	_ message.InputRequestContent  = (*message.ToolApprovalRequestContent)(nil)
+	_ message.InputResponseContent = (*message.ToolApprovalResponseContent)(nil)
 )
 
 // Test TextContent
@@ -109,6 +127,8 @@ func TestUsageDetails_AddWithAdditionalCounts(t *testing.T) {
 }
 
 func TestContentEncoding_Roundtrip(t *testing.T) {
+	createdAt := time.Date(2026, time.September, 9, 12, 30, 0, 0, time.UTC)
+	sizeInBytes := int64(1024)
 	contents := message.Contents{
 		&message.TextContent{Text: "sample text"},
 		&message.TextReasoningContent{Text: "sample reasoning"},
@@ -140,7 +160,11 @@ func TestContentEncoding_Roundtrip(t *testing.T) {
 			MediaType: "text/plain",
 		},
 		&message.HostedFileContent{
-			FileID: "file-123",
+			FileID:      "file-123",
+			Name:        "document.txt",
+			MediaType:   "text/plain",
+			SizeInBytes: &sizeInBytes,
+			CreatedAt:   &createdAt,
 		},
 		&message.HostedVectorStoreContent{
 			VectorStoreID: "store-123",
@@ -195,13 +219,35 @@ func TestContentEncoding_Roundtrip(t *testing.T) {
 			ServerName: "mcpServer",
 		},
 		&message.MCPServerToolResultContent{
-			CallID:     "mcp-call-123",
-			Name:       "mcpName",
-			ServerName: "mcpServer",
+			CallID: "mcp-call-123",
 			Outputs: message.Contents{
 				&message.TextContent{Text: "mcp tool output"},
 			},
-			Error: "mcp tool error",
+		},
+		&message.ImageGenerationToolCallContent{
+			CallID: "image-call-123",
+		},
+		&message.ImageGenerationToolResultContent{
+			CallID: "image-call-123",
+			Outputs: message.Contents{
+				&message.DataContent{
+					Data:      base64.StdEncoding.EncodeToString([]byte("image")),
+					MediaType: "image/png",
+				},
+			},
+		},
+		&message.WebSearchToolCallContent{
+			CallID:  "web-call-123",
+			Queries: []string{"first query", "second query"},
+		},
+		&message.WebSearchToolResultContent{
+			CallID: "web-call-123",
+			Outputs: message.Contents{
+				&message.URIContent{
+					URI:       "https://example.com/result",
+					MediaType: "text/html",
+				},
+			},
 		},
 	}
 	data, err := json.Marshal(contents)
@@ -384,6 +430,47 @@ func TestCodeInterpreterContentEncoding_Roundtrip(t *testing.T) {
 	}
 }
 
+func TestCodeInterpreterToolCallContentImplementsToolCallContent(t *testing.T) {
+	var content message.ToolCallContent = &message.CodeInterpreterToolCallContent{CallID: "call-123"}
+	if content.GetCallID() != "call-123" {
+		t.Fatalf("GetCallID() = %q, want call-123", content.GetCallID())
+	}
+}
+
+func TestToolApprovalContentEncoding_RoundtripsStableToolCalls(t *testing.T) {
+	toolCalls := []message.ToolCallContent{
+		&message.FunctionCallContent{CallID: "function-call", Name: "lookup"},
+		&message.MCPServerToolCallContent{CallID: "mcp-call", Name: "lookup"},
+		&message.ImageGenerationToolCallContent{CallID: "image-call"},
+		&message.CodeInterpreterToolCallContent{
+			CallID: "code-call",
+			Inputs: message.Contents{&message.TextContent{Text: "print('hello')"}},
+		},
+		&message.WebSearchToolCallContent{CallID: "web-call", Queries: []string{"query"}},
+	}
+
+	for _, toolCall := range toolCalls {
+		t.Run(toolCall.GetCallID(), func(t *testing.T) {
+			request := &message.ToolApprovalRequestContent{
+				RequestID: "request-" + toolCall.GetCallID(),
+				ToolCall:  toolCall,
+			}
+			contents := message.Contents{request, request.CreateResponse(true, "approved")}
+			data, err := json.Marshal(contents)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded message.Contents
+			if err := json.Unmarshal(data, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(contents, decoded) {
+				t.Fatalf("decoded = %#v, want %#v", decoded, contents)
+			}
+		})
+	}
+}
+
 func TestDataContentUnmarshalDefaultsMissingMediaType(t *testing.T) {
 	var content message.DataContent
 	if err := json.Unmarshal([]byte(`{"Type":"data","URI":"data:,hello%20world+literal"}`), &content); err != nil {
@@ -398,6 +485,43 @@ func TestDataContentUnmarshalDefaultsMissingMediaType(t *testing.T) {
 	}
 	if string(data) != "hello world+literal" {
 		t.Fatalf("data = %q, want hello world+literal", string(data))
+	}
+}
+
+func TestNewDataContent(t *testing.T) {
+	content, err := message.NewDataContent([]byte("hello"), "text/plain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if content.Data != "aGVsbG8=" || content.MediaType != "text/plain" {
+		t.Fatalf("content = %#v", content)
+	}
+	data, err := content.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "hello" {
+		t.Fatalf("Bytes() = %q, want hello", data)
+	}
+	if _, err := message.NewDataContent(nil, "invalid media type"); err == nil {
+		t.Fatal("NewDataContent() error = nil, want invalid media type error")
+	}
+}
+
+func TestNewDataContentFromURI(t *testing.T) {
+	content, err := message.NewDataContentFromURI("data:,hello%20world", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if content.MediaType != "text/plain;charset=US-ASCII" {
+		t.Fatalf("MediaType = %q", content.MediaType)
+	}
+	data, err := content.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "hello world" {
+		t.Fatalf("Bytes() = %q, want hello world", data)
 	}
 }
 
@@ -484,6 +608,31 @@ func TestNewURIContentUsesExplicitMediaType(t *testing.T) {
 	}
 }
 
+func TestContentHasTopLevelMediaType(t *testing.T) {
+	tests := []struct {
+		name    string
+		content interface{ HasTopLevelMediaType(string) bool }
+		want    string
+		missing string
+	}{
+		{name: "data", content: &message.DataContent{MediaType: " Image/PNG "}, want: "image", missing: "text"},
+		{name: "hosted file", content: &message.HostedFileContent{MediaType: "TEXT/PLAIN"}, want: "text", missing: "image"},
+		{name: "URI", content: &message.URIContent{MediaType: "application/json"}, want: "APPLICATION", missing: "text"},
+		{name: "unset", content: &message.DataContent{}, want: "image", missing: ""},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.content.HasTopLevelMediaType(test.want); got != (test.name != "unset") {
+				t.Fatalf("HasTopLevelMediaType(%q) = %v", test.want, got)
+			}
+			if test.content.HasTopLevelMediaType(test.missing) {
+				t.Fatalf("HasTopLevelMediaType(%q) = true, want false", test.missing)
+			}
+		})
+	}
+}
+
 func TestContentEncoding_UnmarshalMissingTypeUsesRawContent(t *testing.T) {
 	const rawContent = `{"Provider":"github","Payload":{"value":42}}`
 	data := []byte(`[` + rawContent + `]`)
@@ -539,45 +688,39 @@ func TestContentEncoding_RawContentMarshalHasNoType(t *testing.T) {
 	}
 }
 
-func TestToolApprovalRequestContent_CreateResponseSnapshotsFunctionCall(t *testing.T) {
-	toolCall := &message.FunctionCallContent{
-		ContentHeader: message.ContentHeader{
-			AdditionalProperties: map[string]any{"key": "value"},
-		},
-		CallID:    "call-1",
-		Name:      "deploy",
-		Arguments: `{"environment":"prod"}`,
-	}
-	request := &message.ToolApprovalRequestContent{
-		ContentHeader: message.ContentHeader{
-			AdditionalProperties: map[string]any{"request": "value"},
-		},
-		RequestID: "approval-1",
-		ToolCall:  toolCall,
+func TestToolApprovalRequestContent_CreateResponseUsesToolCallReference(t *testing.T) {
+	toolCalls := []message.ToolCallContent{
+		&message.FunctionCallContent{CallID: "function-call", Name: "lookup"},
+		&message.MCPServerToolCallContent{CallID: "mcp-call", Name: "lookup"},
+		&message.ImageGenerationToolCallContent{CallID: "image-call"},
+		&message.CodeInterpreterToolCallContent{CallID: "code-call"},
+		&message.WebSearchToolCallContent{CallID: "web-call"},
 	}
 
-	response := request.CreateResponse(true, "approved")
+	for _, toolCall := range toolCalls {
+		t.Run(toolCall.GetCallID(), func(t *testing.T) {
+			request := &message.ToolApprovalRequestContent{
+				ContentHeader: message.ContentHeader{
+					AdditionalProperties: map[string]any{"request": "value"},
+					Annotations:          message.Annotations{&message.CitationAnnotation{Title: "source"}},
+					RawRepresentation:    "raw-request",
+				},
+				RequestID: "approval-1",
+				ToolCall:  toolCall,
+			}
 
-	toolCall.Name = "destroy"
-	toolCall.Arguments = `{"environment":"dev"}`
-	toolCall.AdditionalProperties["key"] = "changed"
-	request.AdditionalProperties["request"] = "changed"
+			response := request.CreateResponse(true, "approved")
 
-	responseToolCall, ok := response.ToolCall.(*message.FunctionCallContent)
-	if !ok {
-		t.Fatalf("expected FunctionCallContent, got %T", response.ToolCall)
-	}
-	if responseToolCall.Name != "deploy" {
-		t.Fatalf("expected response tool name to be snapshotted, got %q", responseToolCall.Name)
-	}
-	if responseToolCall.Arguments != `{"environment":"prod"}` {
-		t.Fatalf("expected response tool arguments to be snapshotted, got %q", responseToolCall.Arguments)
-	}
-	if responseToolCall.AdditionalProperties["key"] != "value" {
-		t.Fatalf("expected response tool additional properties to be snapshotted, got %v", responseToolCall.AdditionalProperties["key"])
-	}
-	if response.AdditionalProperties["request"] != "value" {
-		t.Fatalf("expected response additional properties to be snapshotted, got %v", response.AdditionalProperties["request"])
+			if response.RequestID != request.RequestID || !response.Approved || response.Reason != "approved" {
+				t.Fatalf("response = %#v", response)
+			}
+			if response.ToolCall != toolCall {
+				t.Fatalf("ToolCall = %p, want original %p", response.ToolCall, toolCall)
+			}
+			if response.AdditionalProperties != nil || response.Annotations != nil || response.RawRepresentation != nil {
+				t.Fatalf("ContentHeader = %#v, want zero value", response.ContentHeader)
+			}
+		})
 	}
 }
 
@@ -612,46 +755,6 @@ func TestToolApprovalRequestContent_AlwaysApproveSnapshotsAdditionalProperties(t
 			t.Fatalf("expected response additional properties to be snapshotted, got %v", response.AdditionalProperties["request"])
 		}
 	})
-}
-
-func TestToolApprovalRequestContent_CreateResponseSnapshotsMCPServerToolCall(t *testing.T) {
-	toolCall := &message.MCPServerToolCallContent{
-		ContentHeader: message.ContentHeader{
-			AdditionalProperties: map[string]any{"key": "value"},
-		},
-		CallID:     "call-1",
-		Name:       "lookup",
-		ServerName: "server-a",
-		Arguments:  `{"query":"alpha"}`,
-	}
-	request := &message.ToolApprovalRequestContent{
-		RequestID: "approval-1",
-		ToolCall:  toolCall,
-	}
-
-	response := request.CreateResponse(true, "approved")
-
-	toolCall.Name = "delete"
-	toolCall.ServerName = "server-b"
-	toolCall.Arguments = `{"query":"beta"}`
-	toolCall.AdditionalProperties["key"] = "changed"
-
-	responseToolCall, ok := response.ToolCall.(*message.MCPServerToolCallContent)
-	if !ok {
-		t.Fatalf("expected MCPServerToolCallContent, got %T", response.ToolCall)
-	}
-	if responseToolCall.Name != "lookup" {
-		t.Fatalf("expected response tool name to be snapshotted, got %q", responseToolCall.Name)
-	}
-	if responseToolCall.ServerName != "server-a" {
-		t.Fatalf("expected response server name to be snapshotted, got %q", responseToolCall.ServerName)
-	}
-	if responseToolCall.Arguments != `{"query":"alpha"}` {
-		t.Fatalf("expected response tool arguments to be snapshotted, got %q", responseToolCall.Arguments)
-	}
-	if responseToolCall.AdditionalProperties["key"] != "value" {
-		t.Fatalf("expected response tool additional properties to be snapshotted, got %v", responseToolCall.AdditionalProperties["key"])
-	}
 }
 
 func TestCoalesceContents(t *testing.T) {
@@ -813,6 +916,17 @@ func TestCoalesceContents(t *testing.T) {
 					Data:      base64.StdEncoding.EncodeToString([]byte("world")),
 					MediaType: "text/html",
 				},
+			},
+		},
+		{
+			name: "data contents with differently cased media types not coalesced",
+			input: []message.Content{
+				&message.DataContent{Data: base64.StdEncoding.EncodeToString([]byte("hello")), MediaType: "text/plain"},
+				&message.DataContent{Data: base64.StdEncoding.EncodeToString([]byte(" world")), MediaType: "TEXT/PLAIN"},
+			},
+			expected: []message.Content{
+				&message.DataContent{Data: base64.StdEncoding.EncodeToString([]byte("hello")), MediaType: "text/plain"},
+				&message.DataContent{Data: base64.StdEncoding.EncodeToString([]byte(" world")), MediaType: "TEXT/PLAIN"},
 			},
 		},
 		{
@@ -1128,6 +1242,65 @@ func TestCoalesceContents(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "image generation results with the same call id keep the latest result",
+			input: []message.Content{
+				&message.ImageGenerationToolResultContent{
+					CallID:  "image-1",
+					Outputs: message.Contents{&message.TextContent{Text: "partial"}},
+				},
+				&message.TextContent{Text: "between"},
+				&message.ImageGenerationToolResultContent{
+					CallID:  "image-2",
+					Outputs: message.Contents{&message.TextContent{Text: "other"}},
+				},
+				&message.ImageGenerationToolResultContent{
+					ContentHeader: message.ContentHeader{AdditionalProperties: map[string]any{"final": true}},
+					CallID:        "image-1",
+					Outputs:       message.Contents{&message.TextContent{Text: "complete"}},
+				},
+			},
+			expected: []message.Content{
+				&message.ImageGenerationToolResultContent{
+					ContentHeader: message.ContentHeader{AdditionalProperties: map[string]any{"final": true}},
+					CallID:        "image-1",
+					Outputs:       message.Contents{&message.TextContent{Text: "complete"}},
+				},
+				&message.TextContent{Text: "between"},
+				&message.ImageGenerationToolResultContent{
+					CallID:  "image-2",
+					Outputs: message.Contents{&message.TextContent{Text: "other"}},
+				},
+			},
+		},
+		{
+			name: "web search calls with the same call id merge queries and metadata",
+			input: []message.Content{
+				&message.WebSearchToolCallContent{CallID: "web-1", Queries: []string{"first query"}},
+				&message.TextContent{Text: "between"},
+				&message.WebSearchToolCallContent{CallID: "web-2", Queries: []string{"other query"}},
+				&message.WebSearchToolCallContent{
+					ContentHeader: message.ContentHeader{
+						AdditionalProperties: map[string]any{"provider": "search"},
+						RawRepresentation:    "raw-search-call",
+					},
+					CallID:  "web-1",
+					Queries: []string{"second query"},
+				},
+			},
+			expected: []message.Content{
+				&message.WebSearchToolCallContent{
+					ContentHeader: message.ContentHeader{
+						AdditionalProperties: map[string]any{"provider": "search"},
+						RawRepresentation:    "raw-search-call",
+					},
+					CallID:  "web-1",
+					Queries: []string{"first query", "second query"},
+				},
+				&message.TextContent{Text: "between"},
+				&message.WebSearchToolCallContent{CallID: "web-2", Queries: []string{"other query"}},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1152,5 +1325,30 @@ func TestCoalesceContents_PreservesInvalidDataContent(t *testing.T) {
 	got := message.CoalesceContents([]message.Content{invalid, valid})
 	if len(got) != 2 || got[0] != invalid || got[1] != valid {
 		t.Fatalf("CoalesceContents() = %#v, want original contents", got)
+	}
+}
+
+func TestCoalesceContents_PreservesSingleCodeInterpreterContentIdentity(t *testing.T) {
+	call := &message.CodeInterpreterToolCallContent{
+		CallID: "call-1",
+		Inputs: message.Contents{
+			&message.TextContent{Text: "a"},
+			&message.TextContent{Text: "b"},
+		},
+	}
+	result := &message.CodeInterpreterToolResultContent{
+		CallID: "call-1",
+		Outputs: message.Contents{
+			&message.TextContent{Text: "c"},
+			&message.TextContent{Text: "d"},
+		},
+	}
+
+	got := message.CoalesceContents([]message.Content{call, result})
+	if got[0] != call || got[1] != result {
+		t.Fatalf("CoalesceContents() replaced single code-interpreter content")
+	}
+	if call.Inputs.Text() != "ab" || result.Outputs.Text() != "cd" {
+		t.Fatalf("nested contents = %q, %q", call.Inputs.Text(), result.Outputs.Text())
 	}
 }
