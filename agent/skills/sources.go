@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -17,7 +18,7 @@ type InMemorySource struct {
 }
 
 func newSkillSliceSource(skills ...*Skill) *InMemorySource {
-	cloned := append([]*Skill(nil), skills...)
+	cloned := slices.Clone(skills)
 	for i, skill := range cloned {
 		if skill == nil {
 			panic(fmt.Sprintf("skill %d is nil", i))
@@ -31,7 +32,7 @@ func newSkillSliceSource(skills ...*Skill) *InMemorySource {
 
 // Skills returns the in-memory skills in registration order.
 func (s *InMemorySource) Skills(context.Context) ([]*Skill, error) {
-	return s.skills, nil
+	return slices.Clone(s.skills), nil
 }
 
 // AggregatingSource is a skills source that returns the concatenated skills from
@@ -42,7 +43,7 @@ type AggregatingSource struct {
 
 // NewAggregatingSource creates a source that aggregates child sources in order.
 func NewAggregatingSource(sources ...Source) *AggregatingSource {
-	cloned := append([]Source(nil), sources...)
+	cloned := slices.Clone(sources)
 	for i, source := range cloned {
 		if source == nil {
 			panic(fmt.Sprintf("source %d is nil", i))
@@ -116,6 +117,9 @@ func (s *FilteringSource) Skills(ctx context.Context) ([]*Skill, error) {
 
 	filtered := make([]*Skill, 0, len(allSkills))
 	for _, skill := range allSkills {
+		if skill == nil {
+			continue
+		}
 		if s.predicate(skill) {
 			filtered = append(filtered, skill)
 			continue
@@ -202,7 +206,7 @@ func (s *CachingSource) Skills(ctx context.Context) ([]*Skill, error) {
 
 	s.mu.Lock()
 	if err == nil {
-		s.cached = loaded
+		s.cached = slices.Clone(loaded)
 		s.lastLoaded = time.Now().UTC()
 	}
 	close(loading)
@@ -219,13 +223,16 @@ func (s *CachingSource) cachedSkillsLocked() ([]*Skill, bool) {
 	if s.refreshAfter > 0 && time.Since(s.lastLoaded) >= s.refreshAfter {
 		return nil, false
 	}
-	return s.cached, true
+	return slices.Clone(s.cached), true
 }
 
 func deduplicateSkillsByName(skills []*Skill, logger *slog.Logger) []*Skill {
 	seen := make(map[string]struct{}, len(skills))
-	deduplicated := skills[:0]
+	deduplicated := make([]*Skill, 0, len(skills))
 	for _, skill := range skills {
+		if skill == nil {
+			continue
+		}
 		resolvedKey := strings.ToLower(skill.Frontmatter.Name)
 		if _, ok := seen[resolvedKey]; ok {
 			logger.Warn("Duplicate skill name: subsequent skill skipped in favor of first occurrence", "skillName", skill.Frontmatter.Name)

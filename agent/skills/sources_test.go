@@ -167,3 +167,73 @@ func TestCachingSource_SharesInFlightLoadAcrossConcurrentCallers(t *testing.T) {
 		t.Fatalf("expected one shared load, got %d", inner.count)
 	}
 }
+
+func TestInMemorySource_ReturnedSliceIsNotShared(t *testing.T) {
+	first := mustInlineSkill(skills.Frontmatter{Name: "first", Description: "First skill."}, "First.", nil, nil)
+	second := mustInlineSkill(skills.Frontmatter{Name: "second", Description: "Second skill."}, "Second.", nil, nil)
+	source := skills.NewInMemorySource(first, second)
+
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded[0] = second
+
+	reloaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded[0].Frontmatter.Name != "first" {
+		t.Fatalf("expected source state to be unchanged, got %q", reloaded[0].Frontmatter.Name)
+	}
+}
+
+func TestCachingSource_ReturnedSliceIsNotShared(t *testing.T) {
+	first := mustInlineSkill(skills.Frontmatter{Name: "first", Description: "First skill."}, "First.", nil, nil)
+	second := mustInlineSkill(skills.Frontmatter{Name: "second", Description: "Second skill."}, "Second.", nil, nil)
+	source := skills.NewCachingSource(skills.NewInMemorySource(first, second))
+
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded[0] = second
+
+	cached, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cached[0].Frontmatter.Name != "first" {
+		t.Fatalf("expected cached state to be unchanged, got %q", cached[0].Frontmatter.Name)
+	}
+}
+
+func TestFilteringSource_SkipsNilSkills(t *testing.T) {
+	skill := mustInlineSkill(skills.Frontmatter{Name: "keep", Description: "Keep skill."}, "Keep.", nil, nil)
+	inner := &countingSource{skills: []*skills.Skill{nil, skill}}
+
+	source := skills.NewFilteringSource(inner, func(*skills.Skill) bool { return false }, nil)
+
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 0 {
+		t.Fatalf("expected no skills, got %#v", loaded)
+	}
+}
+
+func TestDeduplicatingSource_SkipsNilSkills(t *testing.T) {
+	skill := mustInlineSkill(skills.Frontmatter{Name: "keep", Description: "Keep skill."}, "Keep.", nil, nil)
+	inner := &countingSource{skills: []*skills.Skill{nil, skill}}
+
+	source := skills.NewDeduplicatingSource(inner, nil)
+
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 || loaded[0].Frontmatter.Name != "keep" {
+		t.Fatalf("expected only the non-nil skill, got %#v", loaded)
+	}
+}
