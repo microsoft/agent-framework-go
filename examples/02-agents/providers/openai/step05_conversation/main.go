@@ -19,13 +19,24 @@ import (
 var model = cmp.Or(strings.TrimSpace(os.Getenv("OPENAI_CHAT_MODEL_NAME")), "gpt-5.4-mini")
 
 func main() {
-	ctx := context.Background()
+	if err := run(context.Background()); err != nil {
+		demo.Panic(err)
+	}
+}
+
+func run(ctx context.Context) error {
 	client := openai.NewClient()
 
 	conversation, err := client.Conversations.New(ctx, conversations.ConversationNewParams{})
 	if err != nil {
-		demo.Panic(err)
+		return fmt.Errorf("create conversation: %w", err)
 	}
+	cleanupConversation := true
+	defer func() {
+		if cleanupConversation {
+			_, _ = client.Conversations.Delete(ctx, conversation.ID)
+		}
+	}()
 
 	a := openaiprovider.NewResponsesAgent(
 		client,
@@ -39,18 +50,24 @@ func main() {
 	)
 	session, err := a.CreateSession(ctx, agent.WithServiceID(conversation.ID))
 	if err != nil {
-		demo.Panic(err)
+		return fmt.Errorf("create agent session: %w", err)
 	}
 
 	fmt.Println("=== Multi-turn Conversation Demo ===")
-	runTurn(ctx, a, session, "What is the capital of France?")
-	runTurn(ctx, a, session, "What famous landmarks are located there?")
-	runTurn(ctx, a, session, "How tall is the most famous one?")
+	for _, prompt := range []string{
+		"What is the capital of France?",
+		"What famous landmarks are located there?",
+		"How tall is the most famous one?",
+	} {
+		if err := runTurn(ctx, a, session, prompt); err != nil {
+			return err
+		}
+	}
 	fmt.Println("=== End of Conversation ===")
 
 	storedConversation, err := client.Conversations.Get(ctx, conversation.ID)
 	if err != nil {
-		demo.Panic(err)
+		return fmt.Errorf("get conversation: %w", err)
 	}
 	fmt.Printf("Conversation created.\n    Conversation ID: %s\n\n", storedConversation.ID)
 
@@ -74,21 +91,24 @@ func main() {
 		fmt.Println()
 	}
 	if err := pager.Err(); err != nil {
-		demo.Panic(err)
+		return fmt.Errorf("list conversation items: %w", err)
 	}
 
 	deleted, err := client.Conversations.Delete(ctx, conversation.ID)
 	if err != nil {
-		demo.Panic(err)
+		return fmt.Errorf("delete conversation: %w", err)
 	}
+	cleanupConversation = false
 	fmt.Printf("Conversation deleted.\n    Deleted: %t\n", deleted.Deleted)
+	return nil
 }
 
-func runTurn(ctx context.Context, a *agent.Agent, session *agent.Session, prompt string) {
+func runTurn(ctx context.Context, a *agent.Agent, session *agent.Session, prompt string) error {
 	fmt.Printf("User: %s\n", prompt)
 	resp, err := a.RunText(ctx, prompt, agent.WithSession(session)).Collect()
 	if err != nil {
-		demo.Panic(err)
+		return fmt.Errorf("run turn %q: %w", prompt, err)
 	}
 	fmt.Printf("Assistant: %s\n\n", resp)
+	return nil
 }
