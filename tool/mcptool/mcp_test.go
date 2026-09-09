@@ -76,9 +76,9 @@ func TestCallPreservesMCPErrorResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Call() error = %v", err)
 	}
-	contents, ok := result.([]message.Content)
+	contents, ok := result.(message.Contents)
 	if !ok {
-		t.Fatalf("Call() result is %T, want []message.Content", result)
+		t.Fatalf("Call() result is %T, want message.Contents", result)
 	}
 	if len(contents) != 1 {
 		t.Fatalf("expected one content item, got %d", len(contents))
@@ -141,7 +141,7 @@ func TestCallConvertsMCPContentTypes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Call() error = %v", err)
 	}
-	contents := result.([]message.Content)
+	contents := result.(message.Contents)
 	if len(contents) != 6 {
 		t.Fatalf("expected six content items, got %d", len(contents))
 	}
@@ -912,9 +912,9 @@ func TestCallReturnsEmptyAndStructuredOnlyMCPResults(t *testing.T) {
 
 	t.Run("structured only", func(t *testing.T) {
 		result := callMCPResult(t, &mcp.CallToolResult{StructuredContent: map[string]any{"key": "value", "number": 42}})
-		contents, ok := result.([]message.Content)
+		contents, ok := result.(message.Contents)
 		if !ok {
-			t.Fatalf("result is %T, want []message.Content", result)
+			t.Fatalf("result is %T, want message.Contents", result)
 		}
 		if len(contents) != 1 {
 			t.Fatalf("expected one content item, got %d", len(contents))
@@ -954,9 +954,9 @@ func TestCallConvertsMCPToolUseAndToolResultContent(t *testing.T) {
 		},
 	}})
 
-	contents, ok := result.([]message.Content)
+	contents, ok := result.(message.Contents)
 	if !ok {
-		t.Fatalf("result is %T, want []message.Content", result)
+		t.Fatalf("result is %T, want message.Contents", result)
 	}
 	if len(contents) != 2 {
 		t.Fatalf("expected two content items, got %d", len(contents))
@@ -1003,9 +1003,9 @@ func TestCallConvertsMCPToolUseAndToolResultContent(t *testing.T) {
 func callSingleMCPContent(t *testing.T, content mcp.Content) message.Content {
 	t.Helper()
 	result := callMCPResult(t, &mcp.CallToolResult{Content: []mcp.Content{content}})
-	contents, ok := result.([]message.Content)
+	contents, ok := result.(message.Contents)
 	if !ok {
-		t.Fatalf("Call() result is %T, want []message.Content", result)
+		t.Fatalf("Call() result is %T, want message.Contents", result)
 	}
 	if len(contents) != 1 {
 		t.Fatalf("expected one content item, got %d", len(contents))
@@ -1129,7 +1129,7 @@ func TestAddToolTypedNilContentDoesNotPanic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Call() error = %v", err)
 	}
-	contents, ok := result.([]message.Content)
+	contents, ok := result.(message.Contents)
 	if !ok || len(contents) != 1 {
 		t.Fatalf("Call() result = %#v, want one content item", result)
 	}

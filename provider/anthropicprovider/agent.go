@@ -298,7 +298,7 @@ func toUsageDetailsDelta(usage anthropic.MessageDeltaUsage) message.UsageDetails
 	})
 }
 
-func (a *client) buildBlock(index int, v any, contents []message.Content, functions map[int]*message.FunctionCallContent) []message.Content {
+func (a *client) buildBlock(index int, v any, contents message.Contents, functions map[int]*message.FunctionCallContent) message.Contents {
 	switch v := v.(type) {
 	case anthropic.TextBlock:
 		contents = append(contents, &message.TextContent{
@@ -573,7 +573,7 @@ func citationAnnotations(citations []anthropic.TextCitationUnion) []message.Anno
 	return annotations
 }
 
-func (a *client) buildDelta(v any, contents []message.Content) []message.Content {
+func (a *client) buildDelta(v any, contents message.Contents) message.Contents {
 	switch d := v.(type) {
 	case anthropic.TextDelta:
 		contents = append(contents, &message.TextContent{

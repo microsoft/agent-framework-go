@@ -613,7 +613,7 @@ func populateChatAnnotations(anns []openai.ChatCompletionMessageAnnotation, cont
 	}
 }
 
-func addUsage(contents []message.Content, usage openai.CompletionUsage) []message.Content {
+func addUsage(contents message.Contents, usage openai.CompletionUsage) message.Contents {
 	details := message.UsageDetails{
 		InputTokenCount:       usage.PromptTokens,
 		OutputTokenCount:      usage.CompletionTokens,

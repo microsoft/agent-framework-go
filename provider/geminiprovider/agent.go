@@ -509,7 +509,7 @@ type responsePartState struct {
 }
 
 // buildResponsePart converts a genai Part from a response into framework message content.
-func buildResponsePart(part *genai.Part, contents []message.Content, state *responsePartState) ([]message.Content, error) {
+func buildResponsePart(part *genai.Part, contents message.Contents, state *responsePartState) (message.Contents, error) {
 	if part.Thought {
 		// Thinking model: emit TextReasoningContent. Encode ThoughtSignature as
 		// base64 in ProtectedData so it can be passed back in multi-turn requests.

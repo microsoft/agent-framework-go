@@ -394,11 +394,11 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 			for _, fcc := range processedFunctionCalls {
 				processedFCCSet[fcc] = struct{}{}
 			}
-			var iterationContents []message.Content
+			var iterationContents message.Contents
 			for _, u := range updates {
 				iterationContents = append(iterationContents, u.Contents...)
 			}
-			iterationContents = message.CoalesceContents(iterationContents)
+			iterationContents = iterationContents.Coalesce()
 			assistantContents := make([]message.Content, 0, len(iterationContents))
 			for _, c := range iterationContents {
 				switch v := c.(type) {
@@ -431,8 +431,8 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 	}
 }
 
-func (f *autocall) prepareApprovalContents(ctx context.Context, contents []message.Content, tools map[string]tool.SchemaTool, session *agent.Session) ([]message.Content, error) {
-	var updated []message.Content
+func (f *autocall) prepareApprovalContents(ctx context.Context, contents message.Contents, tools map[string]tool.SchemaTool, session *agent.Session) (message.Contents, error) {
+	var updated message.Contents
 	var autoApproved []*message.FunctionCallContent
 	for i, c := range contents {
 		if fcc, ok := c.(*message.FunctionCallContent); ok && !fcc.InformationalOnly {
@@ -1516,11 +1516,11 @@ func convertToToolCallContentMessage(msg toolApprovalResultWithRequestMessage, f
 	return newMsg
 }
 
-func (f *autocall) generateRejectedFunctionResults(ctx context.Context, rejections []toolApprovalResultWithRequestMessage) []message.Content {
+func (f *autocall) generateRejectedFunctionResults(ctx context.Context, rejections []toolApprovalResultWithRequestMessage) message.Contents {
 	if len(rejections) == 0 {
 		return nil
 	}
-	contents := make([]message.Content, 0, len(rejections))
+	contents := make(message.Contents, 0, len(rejections))
 	for _, rej := range rejections {
 		fcc, ok := approvalToolCallAsFunctionCall(rej.Response.ToolCall)
 		if !ok {

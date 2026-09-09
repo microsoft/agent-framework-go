@@ -76,13 +76,13 @@ func ListTools(ctx context.Context, session *mcp.ClientSession) ([]tool.Tool, er
 	return result, nil
 }
 
-func mcpCallToolResultToAgentContent(result *mcp.CallToolResult) []message.Content {
+func mcpCallToolResultToAgentContent(result *mcp.CallToolResult) message.Contents {
 	if result == nil {
 		return nil
 	}
 
 	if mcpCallToolResultNeedsEnvelope(result) {
-		return []message.Content{
+		return message.Contents{
 			&message.TextContent{
 				ContentHeader: mcpContentHeader(result),
 				Text:          jsonText(result),
@@ -116,16 +116,16 @@ func hasUserDefinedMeta(meta mcp.Meta) bool {
 	return false
 }
 
-func mcpContentToAgentContent(mcpContents []mcp.Content) []message.Content {
+func mcpContentToAgentContent(mcpContents []mcp.Content) message.Contents {
 	return mcpContentToAgentContentWithRaw(mcpContents, nil)
 }
 
-func mcpContentToAgentContentWithRaw(mcpContents []mcp.Content, rawOverride any) []message.Content {
+func mcpContentToAgentContentWithRaw(mcpContents []mcp.Content, rawOverride any) message.Contents {
 	if len(mcpContents) == 0 {
 		return nil
 	}
 
-	result := make([]message.Content, 0, len(mcpContents))
+	result := make(message.Contents, 0, len(mcpContents))
 
 	for _, contentValue := range mcpContents {
 		var raw any = contentValue

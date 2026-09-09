@@ -446,7 +446,7 @@ func updateSessionContextID(session *agent.Session, contextID, taskID string, ta
 	return nil
 }
 
-func partsToContents(parts a2a.ContentParts, contents []message.Content) ([]message.Content, error) {
+func partsToContents(parts a2a.ContentParts, contents message.Contents) (message.Contents, error) {
 	contents = slices.Grow(contents, len(parts))
 	for _, part := range parts {
 		if part == nil {

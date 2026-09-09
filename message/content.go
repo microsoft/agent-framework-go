@@ -1142,8 +1142,9 @@ func (t *WebSearchToolResultContent) MarshalJSON() ([]byte, error) {
 
 func (t WebSearchToolResultContent) kind() contentKind { return "webSearchToolResult" }
 
-// CoalesceContents combines sequential contents elements.
-func CoalesceContents(contents []Content) []Content {
+// Coalesce combines adjacent compatible content elements and returns the
+// resulting slice. It may reuse and modify the receiver's backing array.
+func (contents Contents) Coalesce() Contents {
 	var sb strings.Builder
 	mergeText := func(contents []Content, start, end int) string {
 		sb.Reset()
@@ -1225,7 +1226,7 @@ func CoalesceContents(contents []Content) []Content {
 		func(contents []Content, start, end int) *CodeInterpreterToolCallContent {
 			first := contents[start].(*CodeInterpreterToolCallContent)
 			if end-start == 1 {
-				first.Inputs = CoalesceContents(first.Inputs)
+				first.Inputs = first.Inputs.Coalesce()
 				return first
 			}
 			var inputs Contents
@@ -1235,7 +1236,7 @@ func CoalesceContents(contents []Content) []Content {
 			return &CodeInterpreterToolCallContent{
 				ContentHeader: ContentHeader{AdditionalProperties: maps.Clone(first.AdditionalProperties)},
 				CallID:        first.CallID,
-				Inputs:        CoalesceContents(inputs),
+				Inputs:        inputs.Coalesce(),
 			}
 		})
 
@@ -1244,7 +1245,7 @@ func CoalesceContents(contents []Content) []Content {
 		func(contents []Content, start, end int) *CodeInterpreterToolResultContent {
 			first := contents[start].(*CodeInterpreterToolResultContent)
 			if end-start == 1 {
-				first.Outputs = CoalesceContents(first.Outputs)
+				first.Outputs = first.Outputs.Coalesce()
 				return first
 			}
 			var outputs Contents
@@ -1254,14 +1255,14 @@ func CoalesceContents(contents []Content) []Content {
 			return &CodeInterpreterToolResultContent{
 				ContentHeader: ContentHeader{AdditionalProperties: maps.Clone(first.AdditionalProperties)},
 				CallID:        first.CallID,
-				Outputs:       CoalesceContents(outputs),
+				Outputs:       outputs.Coalesce(),
 			}
 		})
 
 	return contents
 }
 
-func coalesceImageGenerationToolResults(contents []Content) []Content {
+func coalesceImageGenerationToolResults(contents Contents) Contents {
 	indexByCallID := make(map[string]int)
 	for i, content := range contents {
 		result, ok := content.(*ImageGenerationToolResultContent)
@@ -1278,7 +1279,7 @@ func coalesceImageGenerationToolResults(contents []Content) []Content {
 	return slices.DeleteFunc(contents, func(c Content) bool { return c == nil })
 }
 
-func coalesceWebSearchToolCalls(contents []Content) []Content {
+func coalesceWebSearchToolCalls(contents Contents) Contents {
 	indexByCallID := make(map[string]int)
 	for i, content := range contents {
 		toolCall, ok := content.(*WebSearchToolCallContent)
@@ -1325,7 +1326,7 @@ func coalesceWebSearchToolCalls(contents []Content) []Content {
 	return slices.DeleteFunc(contents, func(c Content) bool { return c == nil })
 }
 
-func coalesce[T Content](contents []Content, mergeSingle bool, canMerge func(a, b T) bool, merge func([]Content, int, int) T) []Content {
+func coalesce[T Content](contents Contents, mergeSingle bool, canMerge func(a, b T) bool, merge func([]Content, int, int) T) Contents {
 	// Iterate through all of the items in the list looking for contiguous items that can be coalesced.
 	start := 0
 	tryAsCoalescable := func(c Content) (T, bool) {
