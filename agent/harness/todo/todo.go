@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"weak"
@@ -130,26 +131,16 @@ func (p *Provider) Invoked(ctx context.Context, invoked agent.InvokedContext) er
 	return p.provider.Invoked(ctx, invoked)
 }
 
-// GetAllItems returns all todo items from the session state.
-func (p *Provider) GetAllItems(opts ...agent.Option) []Item {
-	return p.GetAllTodos(sessionFromOptions(opts))
-}
-
-// GetRemainingItems returns only the incomplete todo items from the session state.
-func (p *Provider) GetRemainingItems(opts ...agent.Option) []Item {
-	return p.GetRemainingTodos(sessionFromOptions(opts))
-}
-
-// GetAllTodos returns all todo items stored in session.
-func (p *Provider) GetAllTodos(session *agent.Session) []Item {
+// AllTodos returns all todo items stored in session.
+func (p *Provider) AllTodos(session *agent.Session) []Item {
 	mu := p.getSessionLock(session)
 	mu.Lock()
 	defer mu.Unlock()
-	return copyItems(p.loadState(session).Items)
+	return slices.Clone(p.loadState(session).Items)
 }
 
-// GetRemainingTodos returns only the incomplete todo items stored in session.
-func (p *Provider) GetRemainingTodos(session *agent.Session) []Item {
+// RemainingTodos returns only the incomplete todo items stored in session.
+func (p *Provider) RemainingTodos(session *agent.Session) []Item {
 	mu := p.getSessionLock(session)
 	mu.Lock()
 	defer mu.Unlock()
@@ -157,6 +148,9 @@ func (p *Provider) GetRemainingTodos(session *agent.Session) []Item {
 }
 
 func (p *Provider) loadState(session *agent.Session) *state {
+	if session == nil {
+		return &state{}
+	}
 	var s state
 	if found, _ := session.Get(stateKey, &s); found {
 		return &s
@@ -209,8 +203,8 @@ func (p *Provider) getSessionLock(session *agent.Session) *sync.Mutex {
 
 func (p *Provider) provide(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
 	opts := invoking.Options
-	session := sessionFromOptions(opts)
-	tools := p.createTools(opts)
+	session, _ := agent.GetOption(opts, agent.WithSession)
+	tools := p.createTools(session)
 
 	var outOpts []agent.Option
 	for _, t := range tools {
@@ -241,8 +235,7 @@ func (p *Provider) provide(ctx context.Context, invoking agent.InvokingContext) 
 	return outMessages, outOpts, nil
 }
 
-func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
-	session := sessionFromOptions(opts)
+func (p *Provider) createTools(session *agent.Session) []tool.FuncTool {
 	addTool := functool.MustNew(
 		functool.Config{
 			Name:        "todos_add",
@@ -336,7 +329,7 @@ func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
 			Description: "Retrieve the list of incomplete todo items.",
 		},
 		func(ctx context.Context, _ struct{}) ([]Item, error) {
-			return p.GetRemainingTodos(session), nil
+			return p.RemainingTodos(session), nil
 		},
 	)
 
@@ -346,7 +339,7 @@ func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
 			Description: "Retrieve the full list of todo items, both complete and incomplete.",
 		},
 		func(ctx context.Context, _ struct{}) ([]Item, error) {
-			return p.GetAllTodos(session), nil
+			return p.AllTodos(session), nil
 		},
 	)
 
@@ -361,17 +354,6 @@ func remainingItems(items []Item) []Item {
 		}
 	}
 	return remaining
-}
-
-func copyItems(items []Item) []Item {
-	result := make([]Item, len(items))
-	copy(result, items)
-	return result
-}
-
-func sessionFromOptions(opts []agent.Option) *agent.Session {
-	session, _ := agent.GetOption(opts, agent.WithSession)
-	return session
 }
 
 func formatTodoListMessage(items []Item) string {
