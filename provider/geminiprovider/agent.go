@@ -8,22 +8,28 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
+	"math"
+	"mime"
+	"net/url"
+	"path"
 	"reflect"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
+	"github.com/microsoft/agent-framework-go/tool/hostedtool"
 	"google.golang.org/genai"
 )
 
 type generateContentConfigOpt genai.GenerateContentConfig
 
-func (o generateContentConfigOpt) Value() any { return genai.GenerateContentConfig(o) }
+func (o generateContentConfigOpt) MAFValue() any { return genai.GenerateContentConfig(o) }
 
 // GenerateContentConfig allows passing custom parameters to the underlying genai API calls.
 func GenerateContentConfig(config genai.GenerateContentConfig) agent.Option {
@@ -39,31 +45,37 @@ type client struct {
 type AgentConfig struct {
 	agent.Config
 
+	// ToolAutoCall configures automatic function-tool invocation. When nil, defaults
+	// are used.
+	ToolAutoCall *toolautocall.Config
+
 	// Instructions are provided to Gemini as system instructions for each run.
 	Instructions string
 
 	Model string
 }
 
-// NewAgent creates a new [agent.Agent] backed by the Google Gemini API via the genai client.
+// NewAgent creates a new [agent.Agent] backed by the Google Gemini API via the
+// genai client. It panics if gclient is nil.
 func NewAgent(gclient *genai.Client, config AgentConfig) *agent.Agent {
+	if gclient == nil {
+		panic("geminiprovider: client cannot be nil")
+	}
 	c := &client{
 		client: gclient,
 		config: config,
 	}
 	if config.Instructions != "" {
-		config.RunOptions = append(config.RunOptions, agent.WithInstructions(config.Instructions))
+		config.RunOptions = append(slices.Clone(config.RunOptions), agent.WithInstructions(config.Instructions))
 	}
-	var providerMiddlewares []agent.Middleware
-	if !config.DisableFuncAutoCall {
-		providerMiddlewares = append(providerMiddlewares, toolautocall.New(toolautocall.Config{
-			Logger:           config.Logger,
-			LogSensitiveData: config.LogSensitiveData,
-		}))
+	autoCall := toolautocall.Config{Logger: config.Logger, LogSensitiveData: config.LogSensitiveData}
+	if config.ToolAutoCall != nil {
+		autoCall = *config.ToolAutoCall
 	}
+	providerMiddlewares := []agent.Middleware{toolautocall.New(autoCall)}
 	return agent.New(agent.ProviderConfig{
 		Run:          c.run,
-		ProviderName: "gemini",
+		ProviderName: "gcp.gemini",
 		Middlewares:  providerMiddlewares,
 		Format:       c.formatOf,
 		Unmarshal:    c.unmarshal,
@@ -98,11 +110,14 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 			}
 		}
 		var responseContents []message.Content
+		var finishReason string
 		if len(resp.Candidates) > 0 {
 			cand := resp.Candidates[0]
+			finishReason = toFinishReason(cand.FinishReason)
 			if cand.Content != nil {
+				partState := responsePartState{}
 				for _, part := range cand.Content.Parts {
-					responseContents, err = buildResponsePart(part, responseContents)
+					responseContents, err = buildResponsePart(part, responseContents, &partState)
 					if err != nil {
 						return func(yield func(*agent.ResponseUpdate, error) bool) {
 							yield(nil, err)
@@ -110,6 +125,11 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 					}
 				}
 			}
+			addCitationAnnotations(responseContents, cand.CitationMetadata)
+			responseContents = append(responseContents, groundingContents(cand.GroundingMetadata, "web-search-"+uuid.NewString())...)
+		}
+		if blocked := promptBlockedContent(resp); blocked != nil {
+			responseContents = append(responseContents, blocked)
 		}
 		if resp.UsageMetadata != nil {
 			responseContents = append(responseContents, &message.UsageContent{
@@ -120,6 +140,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 			yield(&agent.ResponseUpdate{
 				Contents:          responseContents,
 				Role:              message.RoleAssistant,
+				FinishReason:      finishReason,
 				CreatedAt:         time.Now(),
 				RawRepresentation: resp,
 			}, nil)
@@ -127,38 +148,85 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 	}
 
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
+		var latestUsage *genai.GenerateContentResponseUsageMetadata
+		var latestMetadataResp *genai.GenerateContentResponse
+		partState := responsePartState{}
 		for resp, err := range a.client.Models.GenerateContentStream(ctx, a.config.Model, contents, cfg) {
 			if err != nil {
 				yield(nil, err)
 				return
 			}
 			var streamContents []message.Content
+			var finishReason string
 			if len(resp.Candidates) > 0 {
 				cand := resp.Candidates[0]
+				finishReason = toFinishReason(cand.FinishReason)
 				if cand.Content != nil {
 					for _, part := range cand.Content.Parts {
-						streamContents, err = buildResponsePart(part, streamContents)
+						streamContents, err = buildResponsePart(part, streamContents, &partState)
 						if err != nil {
 							yield(nil, err)
 							return
 						}
 					}
 				}
+				addCitationAnnotations(streamContents, cand.CitationMetadata)
+				streamContents = append(streamContents, groundingContents(cand.GroundingMetadata, "web-search-"+uuid.NewString())...)
 			}
+			if blocked := promptBlockedContent(resp); blocked != nil {
+				streamContents = append(streamContents, blocked)
+			}
+			// Gemini reports usageMetadata cumulatively across chunks, with the
+			// final chunk authoritative. Emitting a UsageContent per chunk would
+			// make the downstream Usage() aggregation sum the running totals, so
+			// remember the latest and emit it once after the stream ends.
 			if resp.UsageMetadata != nil {
-				streamContents = append(streamContents, &message.UsageContent{
-					Details: toUsageDetails(resp.UsageMetadata),
-				})
+				latestUsage = resp.UsageMetadata
+				latestMetadataResp = resp
 			}
 			if !yield(&agent.ResponseUpdate{
 				Contents:          streamContents,
 				Role:              message.RoleAssistant,
+				FinishReason:      finishReason,
 				CreatedAt:         time.Now(),
 				RawRepresentation: resp,
 			}, nil) {
 				return
 			}
 		}
+		var finalContents []message.Content
+		if latestUsage != nil {
+			finalContents = append(finalContents, &message.UsageContent{Details: toUsageDetails(latestUsage)})
+		}
+		if len(finalContents) > 0 {
+			yield(&agent.ResponseUpdate{
+				Contents:          finalContents,
+				Role:              message.RoleAssistant,
+				CreatedAt:         time.Now(),
+				RawRepresentation: latestMetadataResp,
+			}, nil)
+		}
+	}
+}
+
+// promptBlockedContent returns an ErrorContent when Gemini blocked the prompt
+// for a content or safety policy violation. A blocked prompt yields zero
+// candidates and populates resp.PromptFeedback.BlockReason, so without this the
+// caller could not distinguish a policy block from a legitimately empty
+// completion. Mirrors the .NET/Python providers, which surface PromptFeedback
+// as an error rather than an empty success.
+func promptBlockedContent(resp *genai.GenerateContentResponse) *message.ErrorContent {
+	if resp == nil || resp.PromptFeedback == nil || resp.PromptFeedback.BlockReason == "" {
+		return nil
+	}
+	msg := resp.PromptFeedback.BlockReasonMessage
+	if msg == "" {
+		msg = "prompt blocked by Gemini content filter"
+	}
+	return &message.ErrorContent{
+		ContentHeader: message.ContentHeader{RawRepresentation: resp},
+		ErrorCode:     string(resp.PromptFeedback.BlockReason),
+		Message:       msg,
 	}
 }
 
@@ -170,10 +238,10 @@ func (a *client) buildParams(messages []*message.Message, opts []agent.Option) (
 		// Clone mutable slice fields so that appending to cfg.Tools or
 		// cfg.SystemInstruction.Parts below never aliases the caller's
 		// backing arrays (the option stores a shallow copy of the struct).
-		cfg.Tools = append([]*genai.Tool(nil), cfg.Tools...)
+		cfg.Tools = slices.Clone(cfg.Tools)
 		if cfg.SystemInstruction != nil {
 			si := *cfg.SystemInstruction
-			si.Parts = append([]*genai.Part(nil), si.Parts...)
+			si.Parts = slices.Clone(si.Parts)
 			cfg.SystemInstruction = &si
 		}
 	}
@@ -182,19 +250,43 @@ func (a *client) buildParams(messages []*message.Message, opts []agent.Option) (
 		appendSystemInstruction(cfg, strings.Join(instructions, "\n"))
 	}
 
-	// Collect tools from options.
+	// Collect tools from options. Function tools are aggregated into a single
+	// genai.Tool holding all FunctionDeclarations, while each hosted tool maps
+	// onto its own genai.Tool entry (Gemini does not allow combining native
+	// tools with function declarations in a single Tool). This mirrors the
+	// hosted-tool mapping already performed by the openaiprovider.
 	var funcDecls []*genai.FunctionDeclaration
 	for tl := range agent.AllOptions(opts, agent.WithTool) {
-		if ft, ok := tl.(tool.FuncTool); ok {
-			decl := &genai.FunctionDeclaration{
-				Name:        ft.Name(),
-				Description: ft.Description(),
+		switch tl := tl.(type) {
+		case *hostedtool.WebSearch:
+			cfg.Tools = append(cfg.Tools, &genai.Tool{GoogleSearch: &genai.GoogleSearch{}})
+		case *hostedtool.CodeInterpreter:
+			cfg.Tools = append(cfg.Tools, &genai.Tool{CodeExecution: &genai.ToolCodeExecution{}})
+		case *hostedtool.FileSearch:
+			fs := &genai.FileSearch{}
+			for _, input := range tl.Inputs {
+				if hosted, ok := input.(*message.HostedVectorStoreContent); ok {
+					fs.FileSearchStoreNames = append(fs.FileSearchStoreNames, hosted.VectorStoreID)
+				}
 			}
-			if schema := ft.Schema(); schema != nil {
+			// Guard against negative or out-of-range values before the
+			// int32 conversion: negatives would produce an invalid TopK and
+			// large values would overflow on 64-bit platforms.
+			if tl.MaximumResultCount > 0 && tl.MaximumResultCount <= math.MaxInt32 {
+				topK := int32(tl.MaximumResultCount)
+				fs.TopK = &topK
+			}
+			cfg.Tools = append(cfg.Tools, &genai.Tool{FileSearch: fs})
+		case tool.FuncTool:
+			decl := &genai.FunctionDeclaration{
+				Name:        tl.Name(),
+				Description: tl.Description(),
+			}
+			if schema := tl.Schema(); schema != nil {
 				// Use ParametersJsonSchema to pass through the JSON schema directly.
 				decl.ParametersJsonSchema = schema
 			}
-			if schema := ft.ReturnSchema(); schema != nil {
+			if schema := tl.ReturnSchema(); schema != nil {
 				decl.ResponseJsonSchema = schema
 			}
 			funcDecls = append(funcDecls, decl)
@@ -217,7 +309,7 @@ func (a *client) buildParams(messages []*message.Message, opts []agent.Option) (
 	}
 
 	// Apply tool mode.
-	if mode, ok := agent.GetOption(opts, agent.WithToolMode); ok && len(funcDecls) > 0 {
+	if mode, ok := agent.GetOption(opts, agent.WithToolMode); ok {
 		fc := &genai.FunctionCallingConfig{}
 		switch mode.Mode() {
 		case tool.ToolModeAuto, "":
@@ -226,11 +318,23 @@ func (a *client) buildParams(messages []*message.Message, opts []agent.Option) (
 			fc.Mode = genai.FunctionCallingConfigModeNone
 		case tool.ToolModeRequired:
 			fc.Mode = genai.FunctionCallingConfigModeAny
-			fc.AllowedFunctionNames = mode.Required()
+			if name, ok := mode.RequiredTool(); ok {
+				fc.AllowedFunctionNames = []string{name}
+			}
 		}
-		cfg.ToolConfig = &genai.ToolConfig{
-			FunctionCallingConfig: fc,
+		// Merge into any caller-supplied ToolConfig (e.g. a RetrievalConfig for
+		// Vertex grounding passed through GenerateContentConfig) rather than
+		// replacing it, so only the function-calling mode is overridden. Shallow-
+		// clone the struct first so overriding FunctionCallingConfig preserves the
+		// caller's other fields without mutating their ToolConfig pointer (which is
+		// aliased via the shallow *cfg = p copy above).
+		if cfg.ToolConfig == nil {
+			cfg.ToolConfig = &genai.ToolConfig{}
+		} else {
+			tc := *cfg.ToolConfig
+			cfg.ToolConfig = &tc
 		}
+		cfg.ToolConfig.FunctionCallingConfig = fc
 	}
 
 	// Build a map of CallID → function name by scanning all messages first.
@@ -279,6 +383,8 @@ func (a *client) buildParams(messages []*message.Message, opts []agent.Option) (
 					Parts: parts,
 				})
 			}
+		default:
+			return nil, nil, fmt.Errorf("geminiprovider: unsupported message role %q", msg.Role)
 		}
 	}
 
@@ -359,12 +465,33 @@ func buildRequestParts(msg *message.Message, callIDToName map[string]string) ([]
 				},
 			})
 		case *message.URIContent:
-			parts = append(parts, &genai.Part{
-				FileData: &genai.FileData{
-					FileURI:  c.URI,
-					MIMEType: c.MediaType,
-				},
-			})
+			if len(c.URI) >= len("data:") && strings.EqualFold(c.URI[:len("data:")], "data:") {
+				// A data: URI carries the bytes inline. Gemini's FileData.FileURI
+				// requires an external reference (gs:// or https://), so a data: URI
+				// would be silently dropped. Decode it into InlineData instead,
+				// mirroring the DataContent handling above and the Python SDK
+				// (from_bytes for data: URIs, from_uri otherwise).
+				data, mt, err := message.DecodeDataURI(c.URI)
+				if err != nil {
+					return nil, fmt.Errorf("geminiprovider: failed to decode data URI content: %w", err)
+				}
+				if c.MediaType != "" {
+					mt = c.MediaType
+				}
+				parts = append(parts, &genai.Part{
+					InlineData: &genai.Blob{
+						Data:     data,
+						MIMEType: mt,
+					},
+				})
+			} else {
+				parts = append(parts, &genai.Part{
+					FileData: &genai.FileData{
+						FileURI:  c.URI,
+						MIMEType: c.MediaType,
+					},
+				})
+			}
 		case *message.HostedFileContent:
 			parts = append(parts, &genai.Part{
 				FileData: &genai.FileData{
@@ -377,22 +504,31 @@ func buildRequestParts(msg *message.Message, callIDToName map[string]string) ([]
 	return parts, nil
 }
 
+type responsePartState struct {
+	pendingCodeCallID string
+}
+
 // buildResponsePart converts a genai Part from a response into framework message content.
-func buildResponsePart(part *genai.Part, contents []message.Content) ([]message.Content, error) {
+func buildResponsePart(part *genai.Part, contents message.Contents, state *responsePartState) (message.Contents, error) {
 	if part.Thought {
 		// Thinking model: emit TextReasoningContent. Encode ThoughtSignature as
 		// base64 in ProtectedData so it can be passed back in multi-turn requests.
-		protectedData := ""
-		if len(part.ThoughtSignature) > 0 {
-			protectedData = base64.StdEncoding.EncodeToString(part.ThoughtSignature)
+		// Skip a thought part that carries neither thinking text nor a signature,
+		// consistent with how empty text parts are skipped below; such a part
+		// would otherwise add an empty, information-free reasoning content.
+		if part.Text != "" || len(part.ThoughtSignature) > 0 {
+			protectedData := ""
+			if len(part.ThoughtSignature) > 0 {
+				protectedData = base64.StdEncoding.EncodeToString(part.ThoughtSignature)
+			}
+			contents = append(contents, &message.TextReasoningContent{
+				Text:          part.Text,
+				ProtectedData: protectedData,
+				ContentHeader: message.ContentHeader{
+					RawRepresentation: part,
+				},
+			})
 		}
-		contents = append(contents, &message.TextReasoningContent{
-			Text:          part.Text,
-			ProtectedData: protectedData,
-			ContentHeader: message.ContentHeader{
-				RawRepresentation: part,
-			},
-		})
 	} else if part.Text != "" {
 		contents = append(contents, &message.TextContent{
 			Text: part.Text,
@@ -410,8 +546,30 @@ func buildResponsePart(part *genai.Part, contents []message.Content) ([]message.
 		if err != nil {
 			return nil, fmt.Errorf("geminiprovider: failed to marshal function call arguments: %w", err)
 		}
+		// Standard Gemini generateContent responses leave the function call ID empty
+		// (genai marks it omitempty). Synthesize a stable ID so the framework tool loop
+		// can correlate the call with its result on subsequent turns, mirroring Python's
+		// _generate_tool_call_id.
+		callID := part.FunctionCall.ID
+		if callID == "" {
+			callID = "tool-call-" + uuid.NewString()
+		}
+		// Gemini 3 attaches the opaque thought_signature to the same part that
+		// carries the function call (Thought is false, Text is empty). Capture it
+		// as a preceding TextReasoningContent so buildRequestParts can replay it
+		// on the next turn, mirroring the Python reference which emits a
+		// text-reasoning content (protected_data=base64(thought_signature))
+		// immediately before the function call.
+		if len(part.ThoughtSignature) > 0 {
+			contents = append(contents, &message.TextReasoningContent{
+				ProtectedData: base64.StdEncoding.EncodeToString(part.ThoughtSignature),
+				ContentHeader: message.ContentHeader{
+					RawRepresentation: part,
+				},
+			})
+		}
 		contents = append(contents, &message.FunctionCallContent{
-			CallID:    part.FunctionCall.ID,
+			CallID:    callID,
 			Name:      part.FunctionCall.Name,
 			Arguments: string(argsJSON),
 			ContentHeader: message.ContentHeader{
@@ -438,9 +596,14 @@ func buildResponsePart(part *genai.Part, contents []message.Content) ([]message.
 		})
 	}
 	if part.ExecutableCode != nil {
+		callID := part.ExecutableCode.ID
+		if callID == "" {
+			callID = "code-call-" + uuid.NewString()
+		}
+		state.pendingCodeCallID = callID
 		contents = append(contents, &message.CodeInterpreterToolCallContent{
 			ContentHeader: message.ContentHeader{RawRepresentation: part},
-			CallID:        part.ExecutableCode.ID,
+			CallID:        callID,
 			Inputs: message.Contents{&message.DataContent{
 				Data:      base64.StdEncoding.EncodeToString([]byte(part.ExecutableCode.Code)),
 				MediaType: geminiCodeMediaType(part.ExecutableCode.Language),
@@ -448,7 +611,15 @@ func buildResponsePart(part *genai.Part, contents []message.Content) ([]message.
 		})
 	}
 	if part.CodeExecutionResult != nil {
-		contents = append(contents, codeExecutionResultContent(part))
+		callID := part.CodeExecutionResult.ID
+		if callID == "" {
+			callID = state.pendingCodeCallID
+			if callID == "" {
+				callID = "code-call-" + uuid.NewString()
+			}
+		}
+		state.pendingCodeCallID = ""
+		contents = append(contents, codeExecutionResultContent(part, callID))
 	}
 	return contents, nil
 }
@@ -457,10 +628,10 @@ func geminiCodeMediaType(language genai.Language) string {
 	if language == genai.LanguagePython {
 		return "text/x-python"
 	}
-	return "text/plain"
+	return "text/x-source-code"
 }
 
-func codeExecutionResultContent(part *genai.Part) *message.CodeInterpreterToolResultContent {
+func codeExecutionResultContent(part *genai.Part, callID string) *message.CodeInterpreterToolResultContent {
 	result := part.CodeExecutionResult
 	output := message.Content(&message.TextContent{
 		Text:          result.Output,
@@ -475,9 +646,86 @@ func codeExecutionResultContent(part *genai.Part) *message.CodeInterpreterToolRe
 	}
 	return &message.CodeInterpreterToolResultContent{
 		ContentHeader: message.ContentHeader{RawRepresentation: part},
-		CallID:        result.ID,
+		CallID:        callID,
 		Outputs:       message.Contents{output},
 	}
+}
+
+func groundingContents(metadata *genai.GroundingMetadata, callID string) message.Contents {
+	if metadata == nil || (len(metadata.WebSearchQueries) == 0 && len(metadata.GroundingChunks) == 0) {
+		return nil
+	}
+
+	var outputs message.Contents
+	for _, chunk := range metadata.GroundingChunks {
+		if chunk == nil || chunk.Web == nil || chunk.Web.URI == "" {
+			continue
+		}
+		header := message.ContentHeader{RawRepresentation: chunk.Web}
+		if chunk.Web.Title != "" {
+			header.AdditionalProperties = map[string]any{"title": chunk.Web.Title}
+		}
+		outputs = append(outputs, &message.URIContent{
+			ContentHeader: header,
+			URI:           chunk.Web.URI,
+			MediaType:     inferMediaTypeFromURI(chunk.Web.URI),
+		})
+	}
+
+	return message.Contents{
+		&message.WebSearchToolCallContent{
+			ContentHeader: message.ContentHeader{RawRepresentation: metadata},
+			CallID:        callID,
+			Queries:       slices.Clone(metadata.WebSearchQueries),
+		},
+		&message.WebSearchToolResultContent{
+			CallID:  callID,
+			Outputs: outputs,
+		},
+	}
+}
+
+func addCitationAnnotations(contents message.Contents, metadata *genai.CitationMetadata) {
+	if metadata == nil || len(metadata.Citations) == 0 {
+		return
+	}
+	var textContent *message.TextContent
+	for _, content := range contents {
+		if text, ok := content.(*message.TextContent); ok {
+			textContent = text
+			break
+		}
+	}
+	if textContent == nil {
+		return
+	}
+	for _, citation := range metadata.Citations {
+		if citation == nil {
+			continue
+		}
+		startIndex, endIndex := int(citation.StartIndex), int(citation.EndIndex)
+		textContent.Annotations = append(textContent.Annotations, &message.CitationAnnotation{
+			Title: citation.Title,
+			URL:   citation.URI,
+			AnnotatedRegions: message.AnnotatedRegions{
+				&message.TextSpanAnnotatedRegion{StartIndex: &startIndex, EndIndex: &endIndex},
+			},
+		})
+	}
+}
+
+func inferMediaTypeFromURI(rawURI string) string {
+	uriPath := rawURI
+	if parsed, err := url.Parse(rawURI); err == nil {
+		uriPath = parsed.Path
+	}
+	if mediaType := mime.TypeByExtension(path.Ext(uriPath)); mediaType != "" {
+		if baseType, _, err := mime.ParseMediaType(mediaType); err == nil {
+			return baseType
+		}
+		return mediaType
+	}
+	return "application/octet-stream"
 }
 
 // toFunctionResponseMap converts a FunctionResultContent's result to the map[string]any
@@ -512,11 +760,43 @@ func toFunctionResponseMap(c *message.FunctionResultContent) (map[string]any, er
 	}
 }
 
+// toFinishReason maps a genai finish reason to the framework's canonical
+// finish reason strings, mirroring the values produced by the OpenAI and
+// Copilot providers ("stop", "length", "tool_calls", "content_filter") so that
+// aggregation over ResponseUpdate.FinishReason stays consistent across
+// providers and with the .NET/Python SDKs. It returns "" for reasons that have
+// no framework equivalent.
+func toFinishReason(reason genai.FinishReason) string {
+	switch reason {
+	case genai.FinishReasonStop:
+		return "stop"
+	case genai.FinishReasonMaxTokens:
+		return "length"
+	case genai.FinishReasonSafety, genai.FinishReasonRecitation,
+		genai.FinishReasonBlocklist, genai.FinishReasonProhibitedContent,
+		genai.FinishReasonSPII,
+		genai.FinishReasonImageSafety, genai.FinishReasonImageProhibitedContent,
+		genai.FinishReasonImageRecitation:
+		return "content_filter"
+	case genai.FinishReasonMalformedFunctionCall, genai.FinishReasonTooManyToolCalls:
+		return "tool_calls"
+	default:
+		return ""
+	}
+}
+
 func toUsageDetails(u *genai.GenerateContentResponseUsageMetadata) message.UsageDetails {
-	return message.UsageDetails{
+	details := message.UsageDetails{
 		InputTokenCount:       int64(u.PromptTokenCount),
 		OutputTokenCount:      int64(u.CandidatesTokenCount),
 		TotalTokenCount:       int64(u.TotalTokenCount),
 		CachedInputTokenCount: int64(u.CachedContentTokenCount),
+		ReasoningTokenCount:   int64(u.ThoughtsTokenCount),
 	}
+	if u.ToolUsePromptTokenCount != 0 {
+		details.AdditionalCounts = map[string]int64{
+			"ToolUsePromptTokenCount": int64(u.ToolUsePromptTokenCount),
+		}
+	}
+	return details
 }

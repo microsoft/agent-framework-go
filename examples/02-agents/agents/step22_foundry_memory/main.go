@@ -91,10 +91,6 @@ func main() {
 	demo.Response(resp, err)
 }
 
-func stringPtr(value string) *string {
-	return &value
-}
-
 // setupFoundryMemoryStore prepares a sample memory store so the demo can run
 // repeatedly. Regular apps should provision Foundry resources outside the app;
 // this helper uses Agent Framework's temporary internal Foundry SDK for setup.
@@ -108,8 +104,8 @@ func setupFoundryMemoryStore(ctx context.Context, foundryEndpoint string, token 
 	// Ensure the memory store exists (creates it with the specified models if needed).
 	if _, err := client.GetMemoryStore(ctx, memoryStoreName, nil); err != nil {
 		demo.Assistant("Setting up Foundry memory store")
-		var responseErr *azcore.ResponseError
-		if !errors.As(err, &responseErr) || responseErr.StatusCode != 404 {
+		responseErr, ok := errors.AsType[*azcore.ResponseError](err)
+		if !ok || responseErr.StatusCode != 404 {
 			demo.Panicf("failed to get memory store: %v", err)
 		}
 
@@ -117,7 +113,7 @@ func setupFoundryMemoryStore(ctx context.Context, foundryEndpoint string, token 
 			ChatModel:      &chatDeployment,
 			EmbeddingModel: &embeddingDeployment,
 		}, &azaiprojects.MemoryStoresClientCreateMemoryStoreOptions{
-			Description: stringPtr("Sample memory store for travel assistant"),
+			Description: new("Sample memory store for travel assistant"),
 		})
 		if err != nil {
 			demo.Panicf("failed to create memory store with chat deployment %q and embedding deployment %q: %v", chatDeployment, embeddingDeployment, err)
@@ -126,8 +122,8 @@ func setupFoundryMemoryStore(ctx context.Context, foundryEndpoint string, token 
 
 	// Clear any existing memories for this scope to demonstrate fresh behavior.
 	if _, err := client.DeleteScope(ctx, memoryStoreName, memoryScope, nil); err != nil {
-		var responseErr *azcore.ResponseError
-		if !errors.As(err, &responseErr) || responseErr.StatusCode != 404 {
+		responseErr, ok := errors.AsType[*azcore.ResponseError](err)
+		if !ok || responseErr.StatusCode != 404 {
 			demo.Panicf("failed to clear stored memories: %v", err)
 		}
 	}

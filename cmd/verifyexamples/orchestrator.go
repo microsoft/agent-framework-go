@@ -53,17 +53,14 @@ func (o VerificationOrchestrator) RunAll(ctx context.Context, examples []Example
 	semaphore := make(chan struct{}, maxParallelism)
 	var wg sync.WaitGroup
 	for _, example := range runnable {
-		example := example
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			semaphore <- struct{}{}
 			defer func() { <-semaphore }()
 			result := o.runSingle(ctx, example)
 			resultsLock.Lock()
 			results[example.Name] = result
 			resultsLock.Unlock()
-		}()
+		})
 	}
 	wg.Wait()
 	return RunAllResult{Results: results, Skipped: skipped, ExampleOrder: exampleOrder}

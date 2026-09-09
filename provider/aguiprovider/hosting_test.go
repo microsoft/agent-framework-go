@@ -3,10 +3,13 @@
 package aguiprovider_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"iter"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,6 +22,68 @@ import (
 
 func newTestAgent(runFn func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error]) *agent.Agent {
 	return agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{Name: "test-agent", ID: "test-agent-id"})
+}
+
+type sseEvent struct {
+	Type      string `json:"type"`
+	MessageID string `json:"messageId"`
+	Role      string `json:"role"`
+}
+
+func decodeSSEEvents(t *testing.T, body string) []sseEvent {
+	t.Helper()
+	var events []sseEvent
+	for _, line := range strings.Split(body, "\n") {
+		payload, ok := strings.CutPrefix(line, "data: ")
+		if !ok {
+			continue
+		}
+		var event sseEvent
+		if err := json.Unmarshal([]byte(payload), &event); err != nil {
+			t.Fatalf("decode SSE event: %v", err)
+		}
+		events = append(events, event)
+	}
+	return events
+}
+
+func eventsWithPrefixes(events []sseEvent, prefixes ...string) []sseEvent {
+	var filtered []sseEvent
+	for _, event := range events {
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(event.Type, prefix) {
+				filtered = append(filtered, event)
+				break
+			}
+		}
+	}
+	return filtered
+}
+
+func assertEventTypes(t *testing.T, events []sseEvent, want []string) {
+	t.Helper()
+	if len(events) != len(want) {
+		t.Fatalf("event count = %d, want %d; events=%+v", len(events), len(want), events)
+	}
+	for i, wantType := range want {
+		if events[i].Type != wantType {
+			t.Fatalf("events[%d].type = %q, want %q; events=%+v", i, events[i].Type, wantType, events)
+		}
+	}
+}
+
+func assertSharedMessageID(t *testing.T, events []sseEvent) string {
+	t.Helper()
+	if len(events) == 0 || events[0].MessageID == "" {
+		t.Fatalf("events must have a non-empty message ID: %+v", events)
+	}
+	messageID := events[0].MessageID
+	for _, event := range events[1:] {
+		if event.MessageID != messageID {
+			t.Fatalf("event %q messageId = %q, want %q", event.Type, event.MessageID, messageID)
+		}
+	}
+	return messageID
 }
 
 func TestHandler_MethodNotAllowed(t *testing.T) {
@@ -207,7 +272,29 @@ func TestHandler_ReasoningContent_EmitsReasoningEvents(t *testing.T) {
 	h.ServeHTTP(rr, req)
 
 	content := rr.Body.String()
-	if !strings.Contains(content, "REASONING_MESSAGE_START") {
+	foundReasoningStart := false
+	for _, line := range strings.Split(content, "\n") {
+		payload, ok := strings.CutPrefix(line, "data: ")
+		if !ok {
+			continue
+		}
+		var event struct {
+			Type string `json:"type"`
+			Role string `json:"role"`
+		}
+		if err := json.Unmarshal([]byte(payload), &event); err != nil {
+			t.Fatalf("decode SSE event: %v", err)
+		}
+		if event.Type != "REASONING_MESSAGE_START" {
+			continue
+		}
+		foundReasoningStart = true
+		if event.Role != "reasoning" {
+			t.Errorf("reasoning message role = %q, want %q", event.Role, "reasoning")
+		}
+		break
+	}
+	if !foundReasoningStart {
 		t.Fatalf("expected REASONING_MESSAGE_START, got %q", content)
 	}
 	if !strings.Contains(content, "REASONING_MESSAGE_CONTENT") {
@@ -227,6 +314,157 @@ func TestHandler_ReasoningContent_EmitsReasoningEvents(t *testing.T) {
 	if !strings.Contains(content, "TEXT_MESSAGE_START") || !strings.Contains(content, "final answer") {
 		t.Fatalf("expected text message events after reasoning, got %q", content)
 	}
+}
+
+func TestHandler_MixedReasoningAndText_UsesDistinctOrderedLifecycles(t *testing.T) {
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
+				MessageID: "msg-shared",
+				Role:      message.RoleAssistant,
+				Contents: message.Contents{
+					&message.TextReasoningContent{Text: "thinking"},
+					&message.TextContent{Text: "final answer"},
+				},
+			}, nil)
+		}
+	})
+	h := aguiprovider.NewJSONHTTPHandler(a, aguiprovider.HandlerConfig{})
+
+	body := `{"threadId":"thread-1","runId":"run-1","messages":[{"id":"u1","role":"user","content":"ping"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	lifecycle := eventsWithPrefixes(decodeSSEEvents(t, rr.Body.String()), "REASONING_", "TEXT_MESSAGE_")
+	wantTypes := []string{
+		"REASONING_START",
+		"REASONING_MESSAGE_START",
+		"REASONING_MESSAGE_CONTENT",
+		"REASONING_MESSAGE_END",
+		"REASONING_END",
+		"TEXT_MESSAGE_START",
+		"TEXT_MESSAGE_CONTENT",
+		"TEXT_MESSAGE_END",
+	}
+	assertEventTypes(t, lifecycle, wantTypes)
+	reasoningID := assertSharedMessageID(t, lifecycle[:5])
+	textID := assertSharedMessageID(t, lifecycle[5:])
+	if reasoningID == textID {
+		t.Fatalf("reasoning and text IDs must differ, both were %q", reasoningID)
+	}
+	if lifecycle[1].Role != "reasoning" {
+		t.Fatalf("reasoning role = %q, want %q", lifecycle[1].Role, "reasoning")
+	}
+}
+
+func TestHandler_ReasoningDeltasWithoutMessageID_ShareLifecycle(t *testing.T) {
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: message.Contents{&message.TextReasoningContent{Text: "Think "}},
+			}, nil)
+			yield(&agent.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: message.Contents{&message.TextReasoningContent{Text: "carefully."}},
+			}, nil)
+			yield(&agent.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: message.Contents{&message.TextContent{Text: "Answer."}},
+			}, nil)
+		}
+	})
+	h := aguiprovider.NewJSONHTTPHandler(a, aguiprovider.HandlerConfig{})
+
+	body := `{"threadId":"thread-1","runId":"run-1","messages":[{"id":"u1","role":"user","content":"ping"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	events := decodeSSEEvents(t, rr.Body.String())
+	reasoning := eventsWithPrefixes(events, "REASONING_")
+	textEvents := eventsWithPrefixes(events, "TEXT_MESSAGE_")
+	wantReasoningTypes := []string{
+		"REASONING_START",
+		"REASONING_MESSAGE_START",
+		"REASONING_MESSAGE_CONTENT",
+		"REASONING_MESSAGE_CONTENT",
+		"REASONING_MESSAGE_END",
+		"REASONING_END",
+	}
+	assertEventTypes(t, reasoning, wantReasoningTypes)
+	reasoningID := assertSharedMessageID(t, reasoning)
+	wantTextTypes := []string{"TEXT_MESSAGE_START", "TEXT_MESSAGE_CONTENT", "TEXT_MESSAGE_END"}
+	assertEventTypes(t, textEvents, wantTextTypes)
+	textID := assertSharedMessageID(t, textEvents)
+	if reasoningID == textID {
+		t.Fatalf("reasoning and text IDs must differ, both were %q", reasoningID)
+	}
+}
+
+func TestHandler_ReasoningIgnoresNonEmittingContent(t *testing.T) {
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: message.Contents{
+					&message.TextReasoningContent{Text: "Think "},
+					&message.URIContent{},
+					&message.TextReasoningContent{Text: "carefully."},
+				},
+			}, nil)
+		}
+	})
+	h := aguiprovider.NewJSONHTTPHandler(a, aguiprovider.HandlerConfig{})
+
+	body := `{"threadId":"thread-1","runId":"run-1","messages":[{"id":"u1","role":"user","content":"ping"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	reasoning := eventsWithPrefixes(decodeSSEEvents(t, rr.Body.String()), "REASONING_")
+	wantTypes := []string{
+		"REASONING_START",
+		"REASONING_MESSAGE_START",
+		"REASONING_MESSAGE_CONTENT",
+		"REASONING_MESSAGE_CONTENT",
+		"REASONING_MESSAGE_END",
+		"REASONING_END",
+	}
+	assertEventTypes(t, reasoning, wantTypes)
+	assertSharedMessageID(t, reasoning)
+}
+
+func TestHandler_TextDeltasWithoutMessageID_ShareLifecycle(t *testing.T) {
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: message.Contents{&message.TextContent{Text: "Hello "}},
+			}, nil)
+			yield(&agent.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: message.Contents{&message.TextContent{Text: "world."}},
+			}, nil)
+		}
+	})
+	h := aguiprovider.NewJSONHTTPHandler(a, aguiprovider.HandlerConfig{})
+
+	body := `{"threadId":"thread-1","runId":"run-1","messages":[{"id":"u1","role":"user","content":"ping"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	textEvents := eventsWithPrefixes(decodeSSEEvents(t, rr.Body.String()), "TEXT_MESSAGE_")
+	wantTypes := []string{
+		"TEXT_MESSAGE_START",
+		"TEXT_MESSAGE_CONTENT",
+		"TEXT_MESSAGE_CONTENT",
+		"TEXT_MESSAGE_END",
+	}
+	assertEventTypes(t, textEvents, wantTypes)
+	assertSharedMessageID(t, textEvents)
 }
 
 func TestHandler_ReasoningContent_WithEncryptedValue(t *testing.T) {
@@ -328,7 +566,7 @@ func TestHandler_ToolResult_HasDistinctMessageID(t *testing.T) {
 
 	// Extract the tool result messageId and the text message start messageId.
 	var toolResultMsgID, textStartMsgID string
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
@@ -385,7 +623,7 @@ func TestHandler_ParallelToolResults_HaveUniqueMessageIDs(t *testing.T) {
 	content := rr.Body.String()
 
 	var resultMsgIDs []string
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
@@ -468,5 +706,174 @@ func TestHandler_ConsecutiveAssistantToolCallMessages_Coalesced(t *testing.T) {
 	}
 	if callIDs[0] != "c1" || callIDs[1] != "c2" {
 		t.Errorf("coalesced tool call IDs = %v, want [c1 c2]", callIDs)
+	}
+}
+
+// TestHandler_MidStreamError_EmitsRunErrorEvent verifies that when the hosted agent
+// fails mid-stream, the handler emits the standard RUN_ERROR terminal event (carrying
+// the runID) that updatesToAGUIEvents already built, rather than a non-standard CUSTOM
+// error event. The AG-UI client accumulator has no CUSTOM-event case, so a CUSTOM error
+// frame would be silently dropped and the consumer would see no error. This mirrors the
+// AG-UI protocol semantics used by the .NET/Python SDKs, where run failures terminate
+// the stream with RUN_ERROR.
+func TestHandler_MidStreamError_EmitsRunErrorEvent(t *testing.T) {
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
+				MessageID: "msg-1",
+				Role:      message.RoleAssistant,
+				Contents:  message.Contents{&message.TextContent{Text: "partial"}},
+			}, nil)
+			yield(nil, errors.New("boom"))
+		}
+	})
+	h := aguiprovider.NewJSONHTTPHandler(a, aguiprovider.HandlerConfig{})
+
+	body := `{"threadId":"thread-1","runId":"run-err-1","messages":[{"id":"u1","role":"user","content":"ping"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	content := rr.Body.String()
+
+	var sawRunError bool
+	var runErrorRunID string
+	for line := range strings.SplitSeq(content, "\n") {
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		var evt map[string]any
+		if err := json.Unmarshal([]byte(data), &evt); err != nil {
+			continue
+		}
+		if evt["type"] == "RUN_ERROR" {
+			sawRunError = true
+			runErrorRunID, _ = evt["runId"].(string)
+		}
+	}
+
+	if !sawRunError {
+		t.Fatalf("expected a RUN_ERROR frame on mid-stream failure, got %q", content)
+	}
+	if runErrorRunID != "run-err-1" {
+		t.Fatalf("RUN_ERROR runId = %q, want %q", runErrorRunID, "run-err-1")
+	}
+	if strings.Contains(content, "CUSTOM") {
+		t.Fatalf("did not expect a non-standard CUSTOM error event, got %q", content)
+	}
+}
+
+// failOnMatchResponseWriter fails Write calls whose payload contains a sentinel,
+// simulating a client disconnect/broken pipe partway through the SSE stream.
+type failOnMatchResponseWriter struct {
+	*httptest.ResponseRecorder
+	sentinel string
+	writeErr error
+}
+
+func (w *failOnMatchResponseWriter) Write(b []byte) (int, error) {
+	if strings.Contains(string(b), w.sentinel) {
+		return 0, w.writeErr
+	}
+	return w.ResponseRecorder.Write(b)
+}
+
+func (w *failOnMatchResponseWriter) Flush() { w.ResponseRecorder.Flush() }
+
+// TestHandler_MidStreamError_TerminalWriteFailureSurfaced verifies that when the hosted
+// agent fails mid-stream AND writing the terminal RUN_ERROR frame also fails (e.g. client
+// disconnect/broken pipe), the delivery failure is surfaced to the handler alongside the
+// original agent error rather than silently dropped. The handler logs the returned error,
+// so the captured log must reference both the agent error and the write failure.
+func TestHandler_MidStreamError_TerminalWriteFailureSurfaced(t *testing.T) {
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(nil, errors.New("boom"))
+		}
+	})
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+	h := aguiprovider.NewJSONHTTPHandler(a, aguiprovider.HandlerConfig{Logger: logger})
+
+	body := `{"threadId":"thread-1","runId":"run-err-1","messages":[{"id":"u1","role":"user","content":"ping"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	rr := &failOnMatchResponseWriter{
+		ResponseRecorder: httptest.NewRecorder(),
+		sentinel:         "RUN_ERROR",
+		writeErr:         errors.New("broken pipe"),
+	}
+	h.ServeHTTP(rr, req)
+
+	logged := logBuf.String()
+	if !strings.Contains(logged, "agui stream failed") {
+		t.Fatalf("expected stream failure to be logged, got %q", logged)
+	}
+	if !strings.Contains(logged, "broken pipe") {
+		t.Fatalf("expected terminal-write failure to be surfaced, got %q", logged)
+	}
+	if !strings.Contains(logged, "boom") {
+		t.Fatalf("expected original agent error to be preserved, got %q", logged)
+	}
+}
+
+// TestHandler_MidStreamError_ClientObservesErrorContent verifies the end-to-end contract:
+// a RUN_ERROR frame emitted by the host is decoded by the AG-UI client accumulator into a
+// message.ErrorContent. A CUSTOM error frame (the pre-fix behavior) would be swallowed and
+// the client would observe a clean stream end with no error surfaced.
+func TestHandler_MidStreamError_ClientObservesErrorContent(t *testing.T) {
+	hosted := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(nil, errors.New("boom"))
+		}
+	})
+	server := httptest.NewServer(aguiprovider.NewJSONHTTPHandler(hosted, aguiprovider.HandlerConfig{}))
+	defer server.Close()
+
+	client := aguiprovider.NewAgent(newTestClient(server.URL), aguiprovider.AgentConfig{})
+	resp, err := client.RunText(context.Background(), "hi").Collect()
+	if err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+
+	var sawErrorContent bool
+	for _, msg := range resp.Messages {
+		for _, c := range msg.Contents {
+			if ec, ok := c.(*message.ErrorContent); ok {
+				sawErrorContent = true
+				if ec.Message != "boom" {
+					t.Fatalf("error content message = %q, want %q", ec.Message, "boom")
+				}
+			}
+		}
+	}
+	if !sawErrorContent {
+		t.Fatalf("expected client to observe an *message.ErrorContent from RUN_ERROR, got messages %#v", resp.Messages)
+	}
+}
+
+func TestHandler_URIContentEmittedAsText(t *testing.T) {
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
+				MessageID: "msg-1",
+				Role:      message.RoleAssistant,
+				Contents:  message.Contents{&message.URIContent{URI: "https://example.com/generated.png", MediaType: "image/png"}},
+			}, nil)
+		}
+	})
+	h := aguiprovider.NewJSONHTTPHandler(a, aguiprovider.HandlerConfig{})
+
+	body := `{"threadId":"thread-1","runId":"run-1","messages":[{"id":"u1","role":"user","content":"ping"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if content := rr.Body.String(); !strings.Contains(content, "https://example.com/generated.png") {
+		t.Fatalf("expected URIContent URI surfaced in SSE payload, got %q", content)
 	}
 }

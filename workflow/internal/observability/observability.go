@@ -6,8 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"reflect"
 
+	"github.com/microsoft/agent-framework-go/internal/otelx"
 	workflowobservability "github.com/microsoft/agent-framework-go/workflow/observability"
 )
 
@@ -40,7 +40,7 @@ const (
 	TagErrorMessage            = "error.message"
 	TagSessionID               = "session.id"
 	TagExecutorID              = "executor.id"
-	TagImplementationID        = "executor.implementation.id"
+	TagExecutorType            = "executor.type"
 	TagExecutorInput           = "executor.input"
 	TagExecutorOutput          = "executor.output"
 	TagMessageType             = "message.type"
@@ -153,7 +153,7 @@ func (s *Activity) CaptureError(err error) {
 	}
 	s.span.RecordError(err)
 	s.span.SetAttributes(
-		workflowobservability.StringAttribute(TagErrorType, reflect.TypeOf(err).String()),
+		workflowobservability.StringAttribute(TagErrorType, otelx.ErrorTypeName(err)),
 		workflowobservability.StringAttribute(TagErrorMessage, err.Error()),
 	)
 	s.span.SetError(err.Error())
@@ -211,14 +211,14 @@ func (c *Context) StartWorkflowRun(ctx context.Context, metadata WorkflowMetadat
 	return ctx, span
 }
 
-func (c *Context) StartExecutorProcess(ctx context.Context, executorID, implementationID, messageType string, message any, traceContext map[string]string) (context.Context, *Activity) {
+func (c *Context) StartExecutorProcess(ctx context.Context, executorID, executorType, messageType string, message any, traceContext map[string]string) (context.Context, *Activity) {
 	if !c.activityEnabled(c.optionsOrZero().DisableExecutorProcess) {
 		return ctx, nil
 	}
 	ctx, span := c.start(ctx, ActivityExecutorProcess+" "+executorID, workflowobservability.SpanOptions{SourceTraceContext: traceContext})
 	span.SetAttributes(
 		workflowobservability.StringAttribute(TagExecutorID, executorID),
-		workflowobservability.StringAttribute(TagImplementationID, implementationID),
+		workflowobservability.StringAttribute(TagExecutorType, executorType),
 		workflowobservability.StringAttribute(TagMessageType, messageType),
 	)
 	if c.optionsOrZero().EnableSensitiveData {
@@ -285,7 +285,7 @@ func BuildErrorAttributes(err error) []workflowobservability.Attribute {
 	}
 	return []workflowobservability.Attribute{
 		workflowobservability.StringAttribute(TagBuildErrorMessage, err.Error()),
-		workflowobservability.StringAttribute(TagBuildErrorType, reflect.TypeOf(err).String()),
+		workflowobservability.StringAttribute(TagBuildErrorType, otelx.ErrorTypeName(err)),
 	}
 }
 
@@ -294,7 +294,7 @@ func ErrorAttributes(err error) []workflowobservability.Attribute {
 		return nil
 	}
 	return []workflowobservability.Attribute{
-		workflowobservability.StringAttribute(TagErrorType, reflect.TypeOf(err).String()),
+		workflowobservability.StringAttribute(TagErrorType, otelx.ErrorTypeName(err)),
 		workflowobservability.StringAttribute(TagErrorMessage, err.Error()),
 	}
 }
@@ -317,15 +317,24 @@ func setWorkflowAttributes(span *Activity, metadata WorkflowMetadata) {
 	span.SetAttributes(attrs...)
 }
 
-func serialize(value any) string {
+func serialize(value any) (serialized string) {
 	if value == nil {
 		return ""
 	}
+	defer func() {
+		if recover() != nil {
+			serialized = fallbackSerializedValue(value)
+		}
+	}()
 	data, err := json.Marshal(value)
 	if err != nil {
-		return fmt.Sprintf("[Unserializable: %T]", value)
+		return fallbackSerializedValue(value)
 	}
 	return string(data)
+}
+
+func fallbackSerializedValue(value any) string {
+	return fmt.Sprintf("[Unserializable: %T]", value)
 }
 
 type contextKey struct{}

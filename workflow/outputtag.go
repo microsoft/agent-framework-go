@@ -27,6 +27,9 @@ func (t OutputTag) String() string {
 
 // MarshalJSON implements [json.Marshaler].
 func (t OutputTag) MarshalJSON() ([]byte, error) {
+	if t == "" {
+		return nil, fmt.Errorf("workflow: output tag value cannot be empty")
+	}
 	return json.Marshal(string(t))
 }
 

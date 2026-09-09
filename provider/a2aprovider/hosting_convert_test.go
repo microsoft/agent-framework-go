@@ -3,11 +3,15 @@
 package a2aprovider
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"iter"
 	"testing"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/message"
 )
@@ -16,6 +20,151 @@ type testTaskInfoProvider struct{}
 
 func (testTaskInfoProvider) TaskInfo() a2a.TaskInfo {
 	return a2a.TaskInfo{TaskID: "task-1", ContextID: "ctx-1"}
+}
+
+func TestBuildTaskUpdateInputs_RejectsInvalidStoredContinuationToken(t *testing.T) {
+	_, _, err := buildTaskUpdateInputs(&a2asrv.ExecutorContext{
+		StoredTask: &a2a.Task{Metadata: map[string]any{continuationTokenMetadataKey: 42}},
+	})
+	if err == nil || err.Error() != "stored A2A continuation token is invalid" {
+		t.Fatalf("error = %v, want invalid stored continuation token error", err)
+	}
+}
+
+func TestExecuteNewMessageStreaming_CallerCancellationCancelsTask(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	hostedAgent := agent.New(agent.ProviderConfig{Run: func(runCtx context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			if !yield(&agent.ResponseUpdate{MessageID: "msg-1", Contents: message.Contents{&message.TextContent{Text: "partial"}}}, nil) {
+				return
+			}
+			cancel()
+			yield(nil, runCtx.Err())
+		}
+	}}, agent.Config{})
+	exec := &executor{agent: hostedAgent}
+	execCtx := testExecutorContext()
+
+	events, err := collectExecutorEvents(func(yield func(a2a.Event, error) bool) error {
+		return exec.executeNewMessageStreaming(ctx, execCtx, yield)
+	})
+	if err != nil {
+		t.Fatalf("error = %v, want terminal status without executor error", err)
+	}
+	assertTaskStates(t, events, a2a.TaskStateWorking, a2a.TaskStateCanceled)
+	artifacts := executorArtifactEvents(events)
+	if len(artifacts) != 1 || !artifacts[0].LastChunk || artifacts[0].Artifact.Parts[0].Text() != "partial" {
+		t.Fatalf("artifacts = %#v, want one completed partial artifact", artifacts)
+	}
+}
+
+func TestExecuteNewMessageStreaming_AgentCancellationFailsTask(t *testing.T) {
+	hostedAgent := agent.New(agent.ProviderConfig{Run: func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(nil, context.Canceled)
+		}
+	}}, agent.Config{})
+	exec := &executor{agent: hostedAgent}
+
+	events, err := collectExecutorEvents(func(yield func(a2a.Event, error) bool) error {
+		return exec.executeNewMessageStreaming(context.Background(), testExecutorContext(), yield)
+	})
+	if err != nil {
+		t.Fatalf("error = %v, want terminal status without executor error", err)
+	}
+	assertTaskStates(t, events, a2a.TaskStateWorking, a2a.TaskStateFailed)
+}
+
+func TestExecuteTaskUpdate_FailureEmitsFailedAndReturnsError(t *testing.T) {
+	wantErr := errors.New("agent failed")
+	hostedAgent := agent.New(agent.ProviderConfig{Run: func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(nil, wantErr)
+		}
+	}}, agent.Config{})
+	exec := &executor{agent: hostedAgent}
+	execCtx := testExecutorContext()
+	execCtx.StoredTask = &a2a.Task{ID: execCtx.TaskID, ContextID: execCtx.ContextID, Status: a2a.TaskStatus{State: a2a.TaskStateWorking}}
+
+	events, err := collectExecutorEvents(func(yield func(a2a.Event, error) bool) error {
+		return exec.executeTaskUpdate(context.Background(), execCtx, yield)
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want %v", err, wantErr)
+	}
+	assertTaskStates(t, events, a2a.TaskStateFailed)
+	status := events[0].(*a2a.TaskStatusUpdateEvent)
+	if status.Status.Message != nil {
+		t.Fatalf("failure status message = %#v, want nil", status.Status.Message)
+	}
+}
+
+func TestExecuteTaskUpdate_CancellationReturnsWithoutFailureStatus(t *testing.T) {
+	hostedAgent := agent.New(agent.ProviderConfig{Run: func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(nil, context.Canceled)
+		}
+	}}, agent.Config{})
+	exec := &executor{agent: hostedAgent}
+	execCtx := testExecutorContext()
+	execCtx.StoredTask = &a2a.Task{ID: execCtx.TaskID, ContextID: execCtx.ContextID, Status: a2a.TaskStatus{State: a2a.TaskStateWorking}}
+
+	events, err := collectExecutorEvents(func(yield func(a2a.Event, error) bool) error {
+		return exec.executeTaskUpdate(context.Background(), execCtx, yield)
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context canceled", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("events = %#v, want none", events)
+	}
+}
+
+func testExecutorContext() *a2asrv.ExecutorContext {
+	msg := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("ping"))
+	msg.TaskID = "task-1"
+	msg.ContextID = "ctx-1"
+	return &a2asrv.ExecutorContext{Message: msg, TaskID: "task-1", ContextID: "ctx-1"}
+}
+
+func collectExecutorEvents(run func(func(a2a.Event, error) bool) error) ([]a2a.Event, error) {
+	var events []a2a.Event
+	err := run(func(event a2a.Event, err error) bool {
+		if err != nil {
+			return false
+		}
+		events = append(events, event)
+		return true
+	})
+	return events, err
+}
+
+func assertTaskStates(t *testing.T, events []a2a.Event, want ...a2a.TaskState) {
+	t.Helper()
+	var got []a2a.TaskState
+	for _, event := range events {
+		if status, ok := event.(*a2a.TaskStatusUpdateEvent); ok {
+			got = append(got, status.Status.State)
+		}
+	}
+	if len(got) != len(want) {
+		t.Fatalf("task states = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("task states = %v, want %v", got, want)
+		}
+	}
+}
+
+func executorArtifactEvents(events []a2a.Event) []*a2a.TaskArtifactUpdateEvent {
+	var artifacts []*a2a.TaskArtifactUpdateEvent
+	for _, event := range events {
+		if artifact, ok := event.(*a2a.TaskArtifactUpdateEvent); ok {
+			artifacts = append(artifacts, artifact)
+		}
+	}
+	return artifacts
 }
 
 func TestToAgentMessage_Nil_ReturnsNil(t *testing.T) {
@@ -62,7 +211,7 @@ func TestResponseToMessage_NilResponse_ReturnsAgentMessage(t *testing.T) {
 	}
 }
 
-func TestResponseToMessage_WithEmptyAdditionalProperties_PreservesEmptyMetadataMap(t *testing.T) {
+func TestResponseToMessage_WithEmptyAdditionalProperties_OmitsMetadata(t *testing.T) {
 	got, err := responseToMessage(testTaskInfoProvider{}, &agent.Response{
 		AdditionalProperties: map[string]any{},
 		Messages:             []*message.Message{{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: "chunk"}}}},
@@ -70,11 +219,8 @@ func TestResponseToMessage_WithEmptyAdditionalProperties_PreservesEmptyMetadataM
 	if err != nil {
 		t.Fatalf("responseToMessage returned error: %v", err)
 	}
-	if got.Metadata == nil {
-		t.Fatal("expected non-nil metadata map")
-	}
-	if len(got.Metadata) != 0 {
-		t.Fatalf("expected empty metadata map, got %#v", got.Metadata)
+	if got.Metadata != nil {
+		t.Fatalf("Metadata = %#v, want nil", got.Metadata)
 	}
 }
 

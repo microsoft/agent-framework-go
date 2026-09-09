@@ -3,7 +3,9 @@
 package compaction_test
 
 import (
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/microsoft/agent-framework-go/agent/compaction"
 	"github.com/microsoft/agent-framework-go/message"
@@ -62,8 +64,25 @@ func TestMessageIndexUpdate_MatchesKnownContentTypes(t *testing.T) {
 		{name: "uri", original: &message.URIContent{URI: "https://example.com/a", MediaType: "image/png"}, replacement: &message.URIContent{URI: "https://example.com/b", MediaType: "image/png"}, matches: false},
 		{name: "error", original: &message.ErrorContent{Message: "fail", ErrorCode: "E1"}, replacement: &message.ErrorContent{Message: "fail", ErrorCode: "E2"}, matches: false},
 		{name: "function call", original: &message.FunctionCallContent{CallID: "c1", Name: "fn", Arguments: `{"x":1}`}, replacement: &message.FunctionCallContent{CallID: "c1", Name: "fn", Arguments: `{"x":1}`}, matches: true},
+		{name: "function call informational", original: &message.FunctionCallContent{CallID: "c1", Name: "fn", Arguments: `{"x":1}`}, replacement: &message.FunctionCallContent{CallID: "c1", Name: "fn", Arguments: `{"x":1}`, InformationalOnly: true}, matches: false},
+		{name: "function call error", original: &message.FunctionCallContent{CallID: "c1", Name: "fn", Arguments: `{"x":1}`}, replacement: &message.FunctionCallContent{CallID: "c1", Name: "fn", Arguments: `{"x":1}`, Error: errors.New("bad call")}, matches: false},
 		{name: "function result", original: &message.FunctionResultContent{CallID: "c1", Result: "sunny"}, replacement: &message.FunctionResultContent{CallID: "c1", Result: "rainy"}, matches: false},
+		{name: "function result error", original: &message.FunctionResultContent{CallID: "c1", Result: "sunny"}, replacement: &message.FunctionResultContent{CallID: "c1", Result: "sunny", Error: errors.New("boom")}, matches: false},
 		{name: "hosted file", original: &message.HostedFileContent{FileID: "file-1", MediaType: "text/csv", Name: "a.csv"}, replacement: &message.HostedFileContent{FileID: "file-1", MediaType: "text/csv", Name: "a.csv"}, matches: true},
+		{name: "hosted file size", original: &message.HostedFileContent{FileID: "file-1", SizeInBytes: ptr(int64(1))}, replacement: &message.HostedFileContent{FileID: "file-1", SizeInBytes: ptr(int64(2))}, matches: false},
+		{name: "hosted file creation", original: &message.HostedFileContent{FileID: "file-1", CreatedAt: ptr(time.Unix(1, 0))}, replacement: &message.HostedFileContent{FileID: "file-1", CreatedAt: ptr(time.Unix(2, 0))}, matches: false},
+		{name: "vector store", original: &message.HostedVectorStoreContent{VectorStoreID: "store-1"}, replacement: &message.HostedVectorStoreContent{VectorStoreID: "store-2"}, matches: false},
+		{name: "MCP call", original: &message.MCPServerToolCallContent{CallID: "c1", Name: "search", Arguments: `{}`}, replacement: &message.MCPServerToolCallContent{CallID: "c1", Name: "delete", Arguments: `{}`}, matches: false},
+		{name: "MCP result", original: &message.MCPServerToolResultContent{CallID: "c1", Outputs: message.Contents{&message.TextContent{Text: "a"}}}, replacement: &message.MCPServerToolResultContent{CallID: "c1", Outputs: message.Contents{&message.TextContent{Text: "b"}}}, matches: false},
+		{name: "code interpreter call", original: &message.CodeInterpreterToolCallContent{CallID: "c1", Inputs: message.Contents{&message.TextContent{Text: "a"}}}, replacement: &message.CodeInterpreterToolCallContent{CallID: "c1", Inputs: message.Contents{&message.TextContent{Text: "b"}}}, matches: false},
+		{name: "code interpreter result", original: &message.CodeInterpreterToolResultContent{CallID: "c1", Outputs: message.Contents{&message.TextContent{Text: "a"}}}, replacement: &message.CodeInterpreterToolResultContent{CallID: "c1", Outputs: message.Contents{&message.TextContent{Text: "b"}}}, matches: false},
+		{name: "image generation call", original: &message.ImageGenerationToolCallContent{CallID: "c1"}, replacement: &message.ImageGenerationToolCallContent{CallID: "c2"}, matches: false},
+		{name: "image generation result", original: &message.ImageGenerationToolResultContent{CallID: "c1", Outputs: message.Contents{&message.TextContent{Text: "a"}}}, replacement: &message.ImageGenerationToolResultContent{CallID: "c1", Outputs: message.Contents{&message.TextContent{Text: "b"}}}, matches: false},
+		{name: "web search call", original: &message.WebSearchToolCallContent{CallID: "c1", Queries: []string{"a"}}, replacement: &message.WebSearchToolCallContent{CallID: "c1", Queries: []string{"b"}}, matches: false},
+		{name: "web search result", original: &message.WebSearchToolResultContent{CallID: "c1", Outputs: message.Contents{&message.URIContent{URI: "https://a"}}}, replacement: &message.WebSearchToolResultContent{CallID: "c1", Outputs: message.Contents{&message.URIContent{URI: "https://b"}}}, matches: false},
+		{name: "usage", original: &message.UsageContent{Details: message.UsageDetails{TotalTokenCount: 1}}, replacement: &message.UsageContent{Details: message.UsageDetails{TotalTokenCount: 2}}, matches: false},
+		{name: "approval request", original: &message.ToolApprovalRequestContent{RequestID: "r1", ToolCall: &message.FunctionCallContent{CallID: "c1"}}, replacement: &message.ToolApprovalRequestContent{RequestID: "r1", ToolCall: &message.FunctionCallContent{CallID: "c2"}}, matches: false},
+		{name: "approval response", original: &message.ToolApprovalResponseContent{RequestID: "r1", Approved: true, ToolCall: &message.FunctionCallContent{CallID: "c1"}}, replacement: &message.ToolApprovalResponseContent{RequestID: "r1", Approved: false, ToolCall: &message.FunctionCallContent{CallID: "c1"}}, matches: false},
 	}
 
 	for _, tt := range tests {
@@ -76,6 +95,8 @@ func TestMessageIndexUpdate_MatchesKnownContentTypes(t *testing.T) {
 		})
 	}
 }
+
+func ptr[T any](value T) *T { return &value }
 
 func TestMessageIndexUpdate_UsesContentListStructureForMatching(t *testing.T) {
 	original := &message.Message{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "reply"}, &message.FunctionCallContent{CallID: "c1", Name: "fn"}}}

@@ -63,6 +63,10 @@ func main() {
 	}
 	demo.Assistantf("Number of checkpoints created: %d", len(checkpoints))
 
+	// Rehydrated workflows must keep the same topology and executor identities as
+	// the workflow that created the checkpoint. This executor-only sample rebuilds
+	// identically. Workflows that host agents must recreate each hosted agent with
+	// the same agent ID and, when set, the same name so hosted executor IDs stay stable.
 	newWorkflow := buildWorkflow()
 	const checkpointIndex = 5
 	if len(checkpoints) <= checkpointIndex {

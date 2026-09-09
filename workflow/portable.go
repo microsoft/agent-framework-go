@@ -3,6 +3,7 @@
 package workflow
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -26,10 +27,16 @@ type PortableValue struct {
 func AnyPortableValue(v any) PortableValue {
 	switch val := v.(type) {
 	case PortableValue:
+		if !val.valid() {
+			panic("workflow: PortableValue cannot wrap zero value")
+		}
 		return val
 	case *PortableValue:
 		if val == nil {
 			panic("workflow: PortableValue cannot wrap nil")
+		}
+		if !val.valid() {
+			panic("workflow: PortableValue cannot wrap zero value")
 		}
 		return *val
 	default:
@@ -38,6 +45,10 @@ func AnyPortableValue(v any) PortableValue {
 		}
 		return PortableValue{any: v, TypeID: NewTypeID(reflect.TypeOf(v))}
 	}
+}
+
+func (v PortableValue) valid() bool {
+	return v.any != nil
 }
 
 // PortableValueAs attempts to convert the supplied [PortableValue] to the requested type T.
@@ -74,37 +85,8 @@ func (v *PortableValue) Any() any {
 }
 
 func decodeKnownPortableType(typeID TypeID, raw json.RawMessage) (any, bool) {
-	if typeID.PackageName == "" {
-		switch typeID.TypeName {
-		case "string":
-			return decodePortableJSON[string](raw)
-		case "bool":
-			return decodePortableJSON[bool](raw)
-		case "int":
-			return decodePortableJSON[int](raw)
-		case "int8":
-			return decodePortableJSON[int8](raw)
-		case "int16":
-			return decodePortableJSON[int16](raw)
-		case "int32":
-			return decodePortableJSON[int32](raw)
-		case "int64":
-			return decodePortableJSON[int64](raw)
-		case "uint":
-			return decodePortableJSON[uint](raw)
-		case "uint8":
-			return decodePortableJSON[uint8](raw)
-		case "uint16":
-			return decodePortableJSON[uint16](raw)
-		case "uint32":
-			return decodePortableJSON[uint32](raw)
-		case "uint64":
-			return decodePortableJSON[uint64](raw)
-		case "float32":
-			return decodePortableJSON[float32](raw)
-		case "float64":
-			return decodePortableJSON[float64](raw)
-		}
+	if decoded, ok := decodeBuiltinPortableType(typeID, raw); ok {
+		return decoded, true
 	}
 	if typ, ok := runtimeTypeForTypeID(typeID); ok {
 		if decoded, ok := decodePortableJSONType(typ, raw); ok {
@@ -112,6 +94,44 @@ func decodeKnownPortableType(typeID TypeID, raw json.RawMessage) (any, bool) {
 		}
 	}
 	return nil, false
+}
+
+func decodeBuiltinPortableType(typeID TypeID, raw json.RawMessage) (any, bool) {
+	if typeID.PackageName != "" {
+		return nil, false
+	}
+	switch typeID.TypeName {
+	case "string":
+		return decodePortableJSON[string](raw)
+	case "bool":
+		return decodePortableJSON[bool](raw)
+	case "int":
+		return decodePortableJSON[int](raw)
+	case "int8":
+		return decodePortableJSON[int8](raw)
+	case "int16":
+		return decodePortableJSON[int16](raw)
+	case "int32":
+		return decodePortableJSON[int32](raw)
+	case "int64":
+		return decodePortableJSON[int64](raw)
+	case "uint":
+		return decodePortableJSON[uint](raw)
+	case "uint8":
+		return decodePortableJSON[uint8](raw)
+	case "uint16":
+		return decodePortableJSON[uint16](raw)
+	case "uint32":
+		return decodePortableJSON[uint32](raw)
+	case "uint64":
+		return decodePortableJSON[uint64](raw)
+	case "float32":
+		return decodePortableJSON[float32](raw)
+	case "float64":
+		return decodePortableJSON[float64](raw)
+	default:
+		return nil, false
+	}
 }
 
 func decodePortableJSONType(typ reflect.Type, raw json.RawMessage) (any, bool) {
@@ -123,6 +143,17 @@ func decodePortableJSONType(typ reflect.Type, raw json.RawMessage) (any, bool) {
 		return nil, false
 	}
 	return target.Elem().Interface(), true
+}
+
+func decodePortableJSONAs(typ reflect.Type, raw json.RawMessage) (any, bool) {
+	decoded, ok := decodePortableJSONType(typ, raw)
+	if !ok {
+		return nil, false
+	}
+	if decoded == nil || !reflect.TypeOf(decoded).AssignableTo(typ) {
+		return nil, false
+	}
+	return decoded, true
 }
 
 func decodePortableJSON[T any](raw json.RawMessage) (any, bool) {
@@ -137,7 +168,7 @@ func decodePortableJSON[T any](raw json.RawMessage) (any, bool) {
 // If the value is stored in a delayed deserialized form, it will attempt to
 // deserialize it to the requested type.
 func (v *PortableValue) Is(typ reflect.Type) bool {
-	if v == nil {
+	if v == nil || typ == nil {
 		return false
 	}
 	if typ == reflect.TypeFor[PortableValue]() {
@@ -151,19 +182,20 @@ func (v *PortableValue) Is(typ reflect.Type) bool {
 		// not a delayed deserialization
 		return v.any != nil && reflect.TypeOf(v.any).AssignableTo(typ)
 	}
-	target := reflect.New(typ)
 	// Either we have no cache, or the types are incompatible; see if we can deserialize to the requested type
-	if err := json.Unmarshal(raw, target.Interface()); err != nil {
-		return false
-	}
-	deserialized := target.Elem().Interface()
-	if deserialized == nil || !reflect.TypeOf(deserialized).AssignableTo(typ) {
+	deserialized, ok := decodePortableJSONAs(typ, raw)
+	if !ok {
 		return false
 	}
 	v.cache = deserialized
 	return true
 }
 
+// As returns the contained value and true when it is assignable to typ (or can
+// be delayed-deserialized to a value assignable to typ); otherwise it returns
+// nil and false. No conversion is performed: when typ is an interface, the
+// returned value is the concrete value assignable to that interface. It is the
+// comma-ok extraction counterpart to [PortableValue.Is].
 func (v *PortableValue) As(typ reflect.Type) (any, bool) {
 	if v.Is(typ) {
 		return v.Any(), true
@@ -181,8 +213,15 @@ func (v *PortableValue) Delayed() bool {
 }
 
 func (v PortableValue) MarshalJSON() ([]byte, error) {
-	if v.any == nil {
+	if !v.valid() {
 		return nil, errors.New("cannot marshal zero PortableValue")
+	}
+	// Preserve the original wire bytes for a delayed value that was never read.
+	// Any() would generically decode the raw JSON (e.g. into map[string]any /
+	// float64) and lose type/large-integer fidelity on re-marshal, so short-circuit
+	// here to re-emit the retained JSON verbatim, matching .NET's JsonElement.
+	if raw, ok := v.any.(json.RawMessage); ok && v.cache == nil {
+		return json.Marshal(portableValueJSON{TypeID: v.TypeID, Value: raw})
 	}
 	value := v.Any()
 	if raw, ok := value.(json.RawMessage); ok {
@@ -200,12 +239,19 @@ func (v PortableValue) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PortableValue) UnmarshalJSON(data []byte) error {
-	if string(data) == "null" {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
 		return errors.New("cannot unmarshal null PortableValue")
 	}
 	var wire portableValueJSON
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return err
+	}
+	raw := bytes.TrimSpace(wire.Value)
+	if len(raw) == 0 {
+		return errors.New("cannot unmarshal PortableValue without a non-null value")
+	}
+	if bytes.Equal(raw, []byte("null")) && wire.TypeID == (TypeID{}) {
+		return errors.New("cannot unmarshal untyped null PortableValue")
 	}
 	*v = PortableValue{any: wire.Value, TypeID: wire.TypeID}
 	return nil

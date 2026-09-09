@@ -228,7 +228,7 @@ func (b *GroupChatWorkflowBuilder) Build() (*workflow.Workflow, error) {
 	participantBindings := make([]workflow.ExecutorBinding, len(participants))
 	bindingsByAgent := make(map[*agent.Agent]workflow.ExecutorBinding, len(participants))
 	bindingsByAgentID := make(map[string]workflow.ExecutorBinding, len(participants))
-	participantConfig := Config{DisableForwardIncomingMessages: true}
+	participantConfig := Config{ForwardIncomingMessages: new(false)}
 	for index, currentAgent := range participants {
 		binding := New(currentAgent, participantConfig)
 		participantBindings[index] = binding
@@ -302,11 +302,11 @@ func (host *groupChatHostExecutor) executor() *workflow.Executor {
 		},
 	}
 	messageworkflow.Configure(&executor, &messageworkflow.Options{
-		StateKey:                 groupChatHostBufferedStateKey,
-		TakeTurnHandler:          host.handleTurn,
-		StringMessageRole:        string(message.RoleUser),
-		DisableAutoSendTurnToken: true,
-		MessageState:             host.messageState,
+		StateKey:          groupChatHostBufferedStateKey,
+		TakeTurnHandler:   host.handleTurn,
+		StringMessageRole: message.RoleUser,
+		AutoSendTurnToken: new(false),
+		MessageState:      host.messageState,
 	})
 	executor.Extend(&workflow.Executor{
 		ResetFunc:                host.reset,
@@ -346,21 +346,45 @@ func (host *groupChatHostExecutor) handleTurn(ctx *workflow.Context, token workf
 		}
 	}
 
-	nextAgent, err := manager.SelectNextAgent(ctx, host.history)
+	dispatched, err := host.dispatchNextAgent(ctx, token, manager)
 	if err != nil {
 		return err
 	}
+	if dispatched {
+		return nil
+	}
+	return host.complete(ctx)
+}
+
+func (host *groupChatHostExecutor) dispatchNextAgent(ctx *workflow.Context, token workflow.TurnToken, manager *GroupChatManager) (bool, error) {
+	nextAgent, err := manager.SelectNextAgent(ctx, host.history)
+	if err != nil {
+		return false, err
+	}
 	if nextAgent == nil {
-		return host.complete(ctx)
+		return false, nil
 	}
 	nextBinding, ok := host.bindingForAgent(nextAgent)
 	if !ok {
-		return fmt.Errorf("agentworkflow: group chat manager selected non-participant agent %q", agentNameForError(nextAgent))
+		// Selecting an agent that is not a participant ends the chat and
+		// yields the accumulated conversation, matching .NET GroupChatHost
+		// falling through to CompleteAsync on a lookup miss.
+		return false, nil
+	}
+
+	// When the manager reselects the agent that just spoke, terminate by
+	// yielding output rather than re-invoking it on stale input: broadcast
+	// skips the current speaker, so a reselected same speaker would receive a
+	// TurnToken without any fresh input. This mirrors .NET GroupChatHost's
+	// TakeTurnAsync guard (string.Equals(executor.Id, _currentSpeakerExecutorId)
+	// -> CompleteAsync). The empty-string initial value never fires on turn one.
+	if host.currentSpeakerExecutorID != "" && nextBinding.ID == host.currentSpeakerExecutorID {
+		return false, host.complete(ctx)
 	}
 
 	host.iterationCount++
 	host.currentSpeakerExecutorID = nextBinding.ID
-	return ctx.SendMessage(nextBinding.ID, token)
+	return true, ctx.SendMessage(nextBinding.ID, token)
 }
 
 func (host *groupChatHostExecutor) shouldTerminate(ctx context.Context, manager *GroupChatManager) (bool, error) {
@@ -515,16 +539,15 @@ func restoreGroupChatManagerCheckpoint(ctx *workflow.Context, manager *GroupChat
 
 func prefixingWorkflowContext(inner *workflow.Context, prefix string) *workflow.Context {
 	wrapped := *inner
-	wrap := func(key string) string { return prefix + key }
 
 	if inner.ReadState != nil {
 		wrapped.ReadState = func(key string, scope string) (any, error) {
-			return inner.ReadState(wrap(key), scope)
+			return inner.ReadState(prefixWorkflowStateKey(prefix, key), scope)
 		}
 	}
 	if inner.ReadOrInitState != nil {
 		wrapped.ReadOrInitState = func(key string, scope string, initFunc func(context.Context, string, string) (any, error)) (any, error) {
-			return inner.ReadOrInitState(wrap(key), scope, func(ctx context.Context, wrappedKey string, wrappedScope string) (any, error) {
+			return inner.ReadOrInitState(prefixWorkflowStateKey(prefix, key), scope, func(ctx context.Context, wrappedKey string, wrappedScope string) (any, error) {
 				if initFunc == nil {
 					return nil, nil
 				}
@@ -542,8 +565,8 @@ func prefixingWorkflowContext(inner *workflow.Context, prefix string) *workflow.
 						}
 						continue
 					}
-					if strings.HasPrefix(key, prefix) {
-						if !yield(strings.TrimPrefix(key, prefix), nil) {
+					if after, ok := strings.CutPrefix(key, prefix); ok {
+						if !yield(after, nil) {
 							return
 						}
 					}
@@ -553,23 +576,29 @@ func prefixingWorkflowContext(inner *workflow.Context, prefix string) *workflow.
 	}
 	if inner.QueueStateUpdate != nil {
 		wrapped.QueueStateUpdate = func(key string, scope string, value any) error {
-			return inner.QueueStateUpdate(wrap(key), scope, value)
+			return inner.QueueStateUpdate(prefixWorkflowStateKey(prefix, key), scope, value)
 		}
 	}
 	if inner.QueueClearScope != nil && inner.ReadStateKeys != nil && inner.QueueStateUpdate != nil {
 		wrapped.QueueClearScope = func(scope string) error {
-			for key, err := range wrapped.ReadStateKeys(scope) {
+			for key, err := range inner.ReadStateKeys(scope) {
 				if err != nil {
 					return err
 				}
-				if err := wrapped.QueueStateUpdate(key, scope, nil); err != nil {
-					return err
+				if strings.HasPrefix(key, prefix) {
+					if err := inner.QueueStateUpdate(key, scope, nil); err != nil {
+						return err
+					}
 				}
 			}
 			return nil
 		}
 	}
 	return &wrapped
+}
+
+func prefixWorkflowStateKey(prefix string, key string) string {
+	return prefix + key
 }
 
 func readMessageSliceState(ctx *workflow.Context, key string) ([]*message.Message, error) {

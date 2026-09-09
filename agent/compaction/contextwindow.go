@@ -78,15 +78,16 @@ func (s *ContextWindowStrategy) Compact(ctx context.Context, index *MessageIndex
 	toolEvictionTokens := int(float64(inputBudget) * toolEviction)
 	truncationTokens := int(float64(inputBudget) * truncation)
 
+	minimumPreservedGroups := 2
 	pipeline := &PipelineStrategy{
 		Strategies: []Strategy{
 			&ToolResultStrategy{
 				Trigger:                TokensExceed(toolEvictionTokens),
-				MinimumPreservedGroups: 2,
+				MinimumPreservedGroups: &minimumPreservedGroups,
 			},
 			&TruncationStrategy{
 				Trigger:                TokensExceed(truncationTokens),
-				MinimumPreservedGroups: 2,
+				MinimumPreservedGroups: &minimumPreservedGroups,
 			},
 		},
 	}

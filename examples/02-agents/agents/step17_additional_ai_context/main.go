@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -192,7 +193,7 @@ func provideTodoListContext(_ context.Context, invoking agent.InvokingContext) (
 			return "", fmt.Errorf("todo item index %d is out of range", args.Index)
 		}
 		removed := state.Items[args.Index]
-		state.Items = append(state.Items[:args.Index], state.Items[args.Index+1:]...)
+		state.Items = slices.Delete(state.Items, args.Index, args.Index+1)
 		setTodoListState(session, state)
 		return fmt.Sprintf("Removed todo item: %s", removed), nil
 	})

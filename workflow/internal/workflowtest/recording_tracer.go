@@ -4,6 +4,8 @@ package workflowtest
 
 import (
 	"context"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -38,9 +40,7 @@ func (*RecordingTracer) ExtractTraceContext(ctx context.Context) map[string]stri
 		return nil
 	}
 	traceContextCopy := make(map[string]string, len(traceContext))
-	for key, value := range traceContext {
-		traceContextCopy[key] = value
-	}
+	maps.Copy(traceContextCopy, traceContext)
 	return traceContextCopy
 }
 
@@ -48,7 +48,7 @@ func (*RecordingTracer) ExtractTraceContext(ctx context.Context) map[string]stri
 func (tracer *RecordingTracer) Spans() []*RecordingSpan {
 	tracer.mu.Lock()
 	defer tracer.mu.Unlock()
-	return append([]*RecordingSpan(nil), tracer.spans...)
+	return slices.Clone(tracer.spans)
 }
 
 // LastSpan returns the most recently started span.
@@ -120,7 +120,7 @@ func (span *RecordingSpan) End() {
 func (span *RecordingSpan) AddEvent(name string, attrs ...observability.Attribute) {
 	span.mu.Lock()
 	defer span.mu.Unlock()
-	span.events = append(span.events, RecordingEvent{Name: name, Attributes: append([]observability.Attribute(nil), attrs...)})
+	span.events = append(span.events, RecordingEvent{Name: name, Attributes: slices.Clone(attrs)})
 }
 
 func (span *RecordingSpan) SetAttributes(attrs ...observability.Attribute) {
@@ -162,7 +162,7 @@ func (span *RecordingSpan) Attribute(key string) (any, bool) {
 func (span *RecordingSpan) Events() []RecordingEvent {
 	span.mu.Lock()
 	defer span.mu.Unlock()
-	return append([]RecordingEvent(nil), span.events...)
+	return slices.Clone(span.events)
 }
 
 // Ended reports whether End was called.
