@@ -253,6 +253,17 @@ func (p *providerState) provide(ctx context.Context, invoking agent.InvokingCont
 				case <-ctx.Done():
 					return nil, nil, ctx.Err()
 				}
+
+				p.mu.Lock()
+				if p.loading != nil {
+					if current, ok := p.loading[cacheKey]; ok && current == loading {
+						delete(p.loading, cacheKey)
+						if len(p.loading) == 0 {
+							p.loading = nil
+						}
+					}
+				}
+				p.mu.Unlock()
 				continue
 			}
 		} else {

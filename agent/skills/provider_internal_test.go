@@ -17,11 +17,11 @@ func TestProvider_CacheWaiterBuildPanicIsReturnedAsError(t *testing.T) {
 	loading := make(chan struct{})
 	close(loading)
 	state := &providerState{
-		sources: []Source{SourceFunc(func(context.Context) ([]*Skill, error) {
+		sources: []Source{SourceFunc(func(context.Context, SourceContext) ([]*Skill, error) {
 			panic("boom")
 		})},
 		logger:  slog.New(slog.DiscardHandler),
-		loading: loading,
+		loading: map[string]chan struct{}{sharedSkillsCacheKey: loading},
 	}
 
 	defer func() {
