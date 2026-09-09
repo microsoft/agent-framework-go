@@ -21,7 +21,7 @@ func NewDataContentFromFile(path string, mediaType string) (*DataContent, error)
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	content, err := NewDataContentFromReader(file, mediaType)
 	if err != nil {

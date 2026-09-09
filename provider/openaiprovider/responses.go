@@ -1828,8 +1828,9 @@ func webSearchQueries(item responses.ResponseFunctionWebSearch) []string {
 	if len(action.Queries) > 0 {
 		return slices.Clone(action.Queries)
 	}
-	if action.Query != "" {
-		return []string{action.Query}
+	query := action.Query //nolint:staticcheck // Query is deprecated but remains the fallback for older Responses API payloads.
+	if query != "" {
+		return []string{query}
 	}
 	return nil
 }
