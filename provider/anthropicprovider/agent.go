@@ -5,13 +5,17 @@ package anthropicprovider
 import (
 	"cmp"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"iter"
 	"maps"
 	"mime"
+	"net/url"
+	"path"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -157,6 +161,12 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				usage.OutputTokenCount = delta.OutputTokenCount
 				usage.ReasoningTokenCount = delta.ReasoningTokenCount
 				usage.TotalTokenCount = usage.InputTokenCount + usage.OutputTokenCount
+				if delta.AdditionalCounts != nil {
+					if usage.AdditionalCounts == nil {
+						usage.AdditionalCounts = make(map[string]int64)
+					}
+					maps.Copy(usage.AdditionalCounts, delta.AdditionalCounts)
+				}
 				// Later chunks may carry an empty stop_reason; don't clobber a
 				// value we already captured.
 				if fr := mapStopReason(event.Delta.StopReason); fr != "" {
@@ -164,7 +174,9 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				}
 			case anthropic.ContentBlockStartEvent:
 				block := event.ContentBlock.AsAny()
-				if _, isToolUse := block.(anthropic.ToolUseBlock); !isToolUse {
+				switch block.(type) {
+				case anthropic.ToolUseBlock, anthropic.ServerToolUseBlock:
+				default:
 					contents = a.buildBlock(int(event.Index), block, contents, nil)
 				}
 			case anthropic.ContentBlockDeltaEvent:
@@ -177,6 +189,8 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 						Name:      block.Name,
 						Arguments: string(block.Input),
 					})
+				case anthropic.ServerToolUseBlock:
+					contents = a.buildBlock(int(event.Index), block, contents, nil)
 				case anthropic.TextBlock:
 					// The text itself is streamed incrementally via TextDelta, but
 					// citations are only available on the accumulated block. Emit an
@@ -258,6 +272,18 @@ func toUsageDetails(usage anthropic.Usage) message.UsageDetails {
 		}
 		details.AdditionalCounts["cache_creation_input_tokens"] = usage.CacheCreationInputTokens
 	}
+	if usage.ServerToolUse.WebFetchRequests != 0 {
+		if details.AdditionalCounts == nil {
+			details.AdditionalCounts = make(map[string]int64)
+		}
+		details.AdditionalCounts["web_fetch_requests"] = usage.ServerToolUse.WebFetchRequests
+	}
+	if usage.ServerToolUse.WebSearchRequests != 0 {
+		if details.AdditionalCounts == nil {
+			details.AdditionalCounts = make(map[string]int64)
+		}
+		details.AdditionalCounts["web_search_requests"] = usage.ServerToolUse.WebSearchRequests
+	}
 	return details
 }
 
@@ -268,6 +294,7 @@ func toUsageDetailsDelta(usage anthropic.MessageDeltaUsage) message.UsageDetails
 		CacheCreationInputTokens: usage.CacheCreationInputTokens,
 		CacheReadInputTokens:     usage.CacheReadInputTokens,
 		OutputTokensDetails:      usage.OutputTokensDetails,
+		ServerToolUse:            usage.ServerToolUse,
 	})
 }
 
@@ -302,8 +329,223 @@ func (a *client) buildBlock(index int, v any, contents []message.Content, functi
 			Name:      v.Name,
 			Arguments: string(v.Input),
 		}
+	case anthropic.ServerToolUseBlock:
+		contents = append(contents, serverToolCallContent(v))
+	case anthropic.WebSearchToolResultBlock:
+		result := &message.WebSearchToolResultContent{
+			ContentHeader: message.ContentHeader{RawRepresentation: v},
+			CallID:        v.ToolUseID,
+		}
+		for _, searchResult := range v.Content.AsWebSearchResultBlockArray() {
+			result.Outputs = append(result.Outputs, &message.URIContent{
+				ContentHeader: message.ContentHeader{RawRepresentation: searchResult},
+				URI:           searchResult.URL,
+				MediaType:     inferMediaTypeFromURI(searchResult.URL),
+			})
+		}
+		if v.Content.ErrorCode != "" {
+			result.Outputs = append(result.Outputs, &message.ErrorContent{
+				ContentHeader: message.ContentHeader{RawRepresentation: v.Content.AsResponseWebSearchToolResultError()},
+				ErrorCode:     string(v.Content.ErrorCode),
+			})
+		}
+		contents = append(contents, result)
+	case anthropic.WebFetchToolResultBlock:
+		result := &message.WebSearchToolResultContent{
+			ContentHeader: message.ContentHeader{RawRepresentation: v},
+			CallID:        v.ToolUseID,
+		}
+		if v.Content.URL != "" {
+			fetchResult := v.Content.AsResponseWebFetchResultBlock()
+			result.Outputs = append(result.Outputs, &message.URIContent{
+				ContentHeader: message.ContentHeader{RawRepresentation: fetchResult},
+				URI:           fetchResult.URL,
+				MediaType:     inferMediaTypeFromURI(fetchResult.URL),
+			})
+		} else if v.Content.ErrorCode != "" {
+			result.Outputs = append(result.Outputs, &message.ErrorContent{
+				ContentHeader: message.ContentHeader{RawRepresentation: v.Content.AsResponseWebFetchToolResultError()},
+				ErrorCode:     string(v.Content.ErrorCode),
+			})
+		}
+		contents = append(contents, result)
+	case anthropic.CodeExecutionToolResultBlock:
+		result := &message.CodeInterpreterToolResultContent{
+			ContentHeader: message.ContentHeader{RawRepresentation: v},
+			CallID:        v.ToolUseID,
+		}
+		switch v.Content.Type {
+		case "code_execution_result":
+			output := v.Content.AsResponseCodeExecutionResultBlock()
+			appendCodeExecutionOutputs(result, output.Stdout, output.Stderr, output.ReturnCode, codeExecutionFileIDs(output.Content))
+		case "encrypted_code_execution_result":
+			output := v.Content.AsResponseEncryptedCodeExecutionResultBlock()
+			appendCodeExecutionOutputs(result, "", output.Stderr, output.ReturnCode, codeExecutionFileIDs(output.Content))
+		case "code_execution_tool_result_error":
+			output := v.Content.AsResponseCodeExecutionToolResultError()
+			result.Outputs = append(result.Outputs, &message.ErrorContent{ErrorCode: string(output.ErrorCode)})
+		}
+		contents = append(contents, result)
+	case anthropic.BashCodeExecutionToolResultBlock:
+		result := &message.CodeInterpreterToolResultContent{
+			ContentHeader: message.ContentHeader{RawRepresentation: v},
+			CallID:        v.ToolUseID,
+		}
+		switch v.Content.Type {
+		case "bash_code_execution_result":
+			output := v.Content.AsResponseBashCodeExecutionResultBlock()
+			fileIDs := make([]string, 0, len(output.Content))
+			for _, file := range output.Content {
+				fileIDs = append(fileIDs, file.FileID)
+			}
+			appendCodeExecutionOutputs(result, output.Stdout, output.Stderr, output.ReturnCode, fileIDs)
+		case "bash_code_execution_tool_result_error":
+			output := v.Content.AsResponseBashCodeExecutionToolResultError()
+			result.Outputs = append(result.Outputs, &message.ErrorContent{ErrorCode: string(output.ErrorCode)})
+		}
+		contents = append(contents, result)
+	case anthropic.TextEditorCodeExecutionToolResultBlock:
+		result := &message.CodeInterpreterToolResultContent{
+			ContentHeader: message.ContentHeader{RawRepresentation: v},
+			CallID:        v.ToolUseID,
+		}
+		switch v.Content.Type {
+		case "text_editor_code_execution_tool_result_error":
+			output := v.Content.AsResponseTextEditorCodeExecutionToolResultError()
+			result.Outputs = append(result.Outputs, &message.ErrorContent{
+				ContentHeader: message.ContentHeader{RawRepresentation: output},
+				Message:       output.ErrorMessage,
+				ErrorCode:     string(output.ErrorCode),
+			})
+		case "text_editor_code_execution_view_result":
+			output := v.Content.AsResponseTextEditorCodeExecutionViewResultBlock()
+			result.Outputs = append(result.Outputs, &message.TextContent{
+				ContentHeader: message.ContentHeader{RawRepresentation: output},
+				Text:          output.Content,
+			})
+		case "text_editor_code_execution_create_result":
+			output := v.Content.AsResponseTextEditorCodeExecutionCreateResultBlock()
+			text := "File created"
+			if output.IsFileUpdate {
+				text = "File updated"
+			}
+			result.Outputs = append(result.Outputs, &message.TextContent{
+				ContentHeader: message.ContentHeader{RawRepresentation: output},
+				Text:          text,
+			})
+		case "text_editor_code_execution_str_replace_result":
+			output := v.Content.AsResponseTextEditorCodeExecutionStrReplaceResultBlock()
+			text := "String replacement applied"
+			if len(output.Lines) > 0 {
+				text = strings.Join(output.Lines, "\n")
+			}
+			result.Outputs = append(result.Outputs, &message.TextContent{
+				ContentHeader: message.ContentHeader{RawRepresentation: output},
+				Text:          text,
+			})
+		}
+		contents = append(contents, result)
+	case anthropic.ToolSearchToolResultBlock:
+		contents = append(contents, &message.RawContent{ContentHeader: message.ContentHeader{
+			RawRepresentation: json.RawMessage(v.RawJSON()),
+		}})
+	case anthropic.ContainerUploadBlock:
+		contents = append(contents, &message.HostedFileContent{
+			ContentHeader: message.ContentHeader{RawRepresentation: v},
+			FileID:        v.FileID,
+		})
 	}
 	return contents
+}
+
+func codeExecutionFileIDs(files []anthropic.CodeExecutionOutputBlock) []string {
+	fileIDs := make([]string, 0, len(files))
+	for _, file := range files {
+		fileIDs = append(fileIDs, file.FileID)
+	}
+	return fileIDs
+}
+
+func appendCodeExecutionOutputs(result *message.CodeInterpreterToolResultContent, stdout, stderr string, returnCode int64, fileIDs []string) {
+	if strings.TrimSpace(stdout) != "" {
+		result.Outputs = append(result.Outputs, &message.TextContent{Text: stdout})
+	}
+	if strings.TrimSpace(stderr) != "" || returnCode != 0 {
+		result.Outputs = append(result.Outputs, &message.ErrorContent{
+			Message:   stderr,
+			ErrorCode: strconv.FormatInt(returnCode, 10),
+		})
+	}
+	for _, fileID := range fileIDs {
+		result.Outputs = append(result.Outputs, &message.HostedFileContent{FileID: fileID})
+	}
+}
+
+func serverToolCallContent(toolUse anthropic.ServerToolUseBlock) message.Content {
+	header := message.ContentHeader{RawRepresentation: toolUse}
+	switch string(toolUse.Name) {
+	case "web_search", "web_fetch":
+		call := &message.WebSearchToolCallContent{ContentHeader: header, CallID: toolUse.ID}
+		if query := serverToolInputString(toolUse.Input, "query"); query != "" {
+			call.Queries = []string{query}
+		}
+		return call
+	case "code_execution", "bash_code_execution", "text_editor_code_execution":
+		call := &message.CodeInterpreterToolCallContent{ContentHeader: header, CallID: toolUse.ID}
+		code := serverToolInputString(toolUse.Input, "code")
+		if code == "" {
+			code = serverToolInputString(toolUse.Input, "command")
+		}
+		if code != "" {
+			mediaType := "text/plain"
+			switch string(toolUse.Name) {
+			case "code_execution":
+				mediaType = "text/x-python"
+			case "bash_code_execution":
+				mediaType = "application/x-sh"
+			}
+			call.Inputs = message.Contents{&message.DataContent{
+				Data:      base64.StdEncoding.EncodeToString([]byte(code)),
+				MediaType: mediaType,
+			}}
+		}
+		return call
+	default:
+		return &message.RawContent{ContentHeader: message.ContentHeader{
+			RawRepresentation: json.RawMessage(toolUse.RawJSON()),
+		}}
+	}
+}
+
+func serverToolInputString(input any, key string) string {
+	if values, ok := input.(map[string]any); ok {
+		value, _ := values[key].(string)
+		return value
+	}
+	data, err := json.Marshal(input)
+	if err != nil {
+		return ""
+	}
+	var values map[string]any
+	if json.Unmarshal(data, &values) != nil {
+		return ""
+	}
+	value, _ := values[key].(string)
+	return value
+}
+
+func inferMediaTypeFromURI(rawURI string) string {
+	uriPath := rawURI
+	if parsed, err := url.Parse(rawURI); err == nil {
+		uriPath = parsed.Path
+	}
+	if mediaType := mime.TypeByExtension(path.Ext(uriPath)); mediaType != "" {
+		if baseType, _, err := mime.ParseMediaType(mediaType); err == nil {
+			return baseType
+		}
+		return mediaType
+	}
+	return "application/octet-stream"
 }
 
 // citationAnnotations converts Anthropic text-block citations into
@@ -312,11 +554,19 @@ func (a *client) buildBlock(index int, v any, contents []message.Content, functi
 func citationAnnotations(citations []anthropic.TextCitationUnion) []message.Annotation {
 	var annotations []message.Annotation
 	for _, citation := range citations {
+		var regions message.AnnotatedRegions
+		if citation.Type == "char_location" {
+			startIndex, endIndex := int(citation.StartCharIndex), int(citation.EndCharIndex)
+			regions = message.AnnotatedRegions{
+				&message.TextSpanAnnotatedRegion{StartIndex: &startIndex, EndIndex: &endIndex},
+			}
+		}
 		annotations = append(annotations, &message.CitationAnnotation{
 			FileID:            citation.FileID,
 			Snippet:           citation.CitedText,
 			Title:             cmp.Or(citation.DocumentTitle, citation.Title),
 			URL:               citation.URL,
+			AnnotatedRegions:  regions,
 			RawRepresentation: citation,
 		})
 	}
@@ -372,6 +622,12 @@ func (a *client) buildMessageParams(messages []*message.Message, opts []agent.Op
 		if ws, ok := tl.(*hostedtool.WebSearch); ok {
 			tools = append(tools, anthropic.ToolUnionParam{
 				OfWebSearchTool20250305: buildWebSearchTool(ws),
+			})
+			continue
+		}
+		if _, ok := tl.(*hostedtool.CodeInterpreter); ok {
+			tools = append(tools, anthropic.ToolUnionParam{
+				OfCodeExecutionTool20250825: &anthropic.CodeExecutionTool20250825Param{},
 			})
 			continue
 		}

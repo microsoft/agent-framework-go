@@ -246,6 +246,10 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 					yield(nil, err)
 					return
 				}
+				req = snapshotToolApprovalRequest(req)
+				if req == nil {
+					continue
+				}
 				if approved {
 					autoApproved = append(autoApproved, req.CreateResponse(true, ""))
 				} else {
@@ -443,6 +447,10 @@ func drainAutoApprovable(ctx context.Context, cfg Config, st *state, requestMess
 		if err != nil {
 			return err
 		}
+		req = snapshotToolApprovalRequest(req)
+		if req == nil {
+			continue
+		}
 		if approved {
 			st.CollectedApprovalResponses = append(st.CollectedApprovalResponses, req.CreateResponse(true, ""))
 		} else {
@@ -602,6 +610,29 @@ func cloneToolCallContent(content message.ToolCallContent) message.ToolCallConte
 		}
 		cloned := *content
 		cloned.ContentHeader = cloneContentHeader(content.ContentHeader)
+		return &cloned
+	case *message.CodeInterpreterToolCallContent:
+		if content == nil {
+			return nil
+		}
+		cloned := *content
+		cloned.ContentHeader = cloneContentHeader(content.ContentHeader)
+		cloned.Inputs = slices.Clone(content.Inputs)
+		return &cloned
+	case *message.ImageGenerationToolCallContent:
+		if content == nil {
+			return nil
+		}
+		cloned := *content
+		cloned.ContentHeader = cloneContentHeader(content.ContentHeader)
+		return &cloned
+	case *message.WebSearchToolCallContent:
+		if content == nil {
+			return nil
+		}
+		cloned := *content
+		cloned.ContentHeader = cloneContentHeader(content.ContentHeader)
+		cloned.Queries = slices.Clone(content.Queries)
 		return &cloned
 	default:
 		return content
