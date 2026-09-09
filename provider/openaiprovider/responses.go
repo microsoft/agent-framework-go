@@ -1672,7 +1672,7 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 // surfacing of FileSearch results. When the call returns no results, a single empty
 // annotated TextContent is emitted so the call is still surfaced and, being annotated,
 // is not coalesced away (which would strip its RawRepresentation).
-func fileSearchToolCallContents(item responses.ResponseFileSearchToolCall) []message.Content {
+func fileSearchToolCallContents(item responses.ResponseFileSearchToolCall) message.Contents {
 	if len(item.Results) == 0 {
 		textContent := &message.TextContent{
 			ContentHeader: message.ContentHeader{RawRepresentation: item},
@@ -1681,9 +1681,9 @@ func fileSearchToolCallContents(item responses.ResponseFileSearchToolCall) []mes
 			ToolName:          "file_search",
 			RawRepresentation: item,
 		})
-		return []message.Content{textContent}
+		return message.Contents{textContent}
 	}
-	contents := make([]message.Content, 0, len(item.Results))
+	contents := make(message.Contents, 0, len(item.Results))
 	for _, res := range item.Results {
 		textContent := &message.TextContent{
 			ContentHeader: message.ContentHeader{RawRepresentation: item},
@@ -1733,8 +1733,8 @@ func mcpApprovalResponseContent(item responses.ResponseOutputItemMcpApprovalResp
 // mcpCallContents surfaces a completed hosted MCP tool call, emitting both the
 // call (from its arguments) and its result so the output is not silently
 // dropped. Any tool-call error is surfaced as an ErrorContent.
-func mcpCallContents(item responses.ResponseOutputItemMcpCall) []message.Content {
-	contents := []message.Content{
+func mcpCallContents(item responses.ResponseOutputItemMcpCall) message.Contents {
+	contents := message.Contents{
 		&message.MCPServerToolCallContent{
 			Arguments:  item.Arguments,
 			CallID:     item.ID,

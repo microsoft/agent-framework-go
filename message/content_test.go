@@ -757,11 +757,11 @@ func TestToolApprovalRequestContent_AlwaysApproveSnapshotsAdditionalProperties(t
 	})
 }
 
-func TestCoalesceContents(t *testing.T) {
+func TestContentsCoalesce(t *testing.T) {
 	tests := []struct {
 		name     string
-		input    []message.Content
-		expected []message.Content
+		input    message.Contents
+		expected message.Contents
 	}{
 		{
 			name:     "empty list",
@@ -1305,7 +1305,7 @@ func TestCoalesceContents(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := message.CoalesceContents(tt.input)
+			result := tt.input.Coalesce()
 			if len(result) != len(tt.expected) {
 				t.Fatalf("expected %d contents, got %d", len(tt.expected), len(result))
 			}
@@ -1318,17 +1318,17 @@ func TestCoalesceContents(t *testing.T) {
 	}
 }
 
-func TestCoalesceContents_PreservesInvalidDataContent(t *testing.T) {
+func TestContentsCoalesce_PreservesInvalidDataContent(t *testing.T) {
 	invalid := &message.DataContent{Data: "%%%", MediaType: "text/plain"}
 	valid := &message.DataContent{Data: base64.StdEncoding.EncodeToString([]byte("valid")), MediaType: "text/plain"}
 
-	got := message.CoalesceContents([]message.Content{invalid, valid})
+	got := (message.Contents{invalid, valid}).Coalesce()
 	if len(got) != 2 || got[0] != invalid || got[1] != valid {
-		t.Fatalf("CoalesceContents() = %#v, want original contents", got)
+		t.Fatalf("Contents.Coalesce() = %#v, want original contents", got)
 	}
 }
 
-func TestCoalesceContents_PreservesSingleCodeInterpreterContentIdentity(t *testing.T) {
+func TestContentsCoalesce_PreservesSingleCodeInterpreterContentIdentity(t *testing.T) {
 	call := &message.CodeInterpreterToolCallContent{
 		CallID: "call-1",
 		Inputs: message.Contents{
@@ -1344,9 +1344,9 @@ func TestCoalesceContents_PreservesSingleCodeInterpreterContentIdentity(t *testi
 		},
 	}
 
-	got := message.CoalesceContents([]message.Content{call, result})
+	got := (message.Contents{call, result}).Coalesce()
 	if got[0] != call || got[1] != result {
-		t.Fatalf("CoalesceContents() replaced single code-interpreter content")
+		t.Fatalf("Contents.Coalesce() replaced single code-interpreter content")
 	}
 	if call.Inputs.Text() != "ab" || result.Outputs.Text() != "cd" {
 		t.Fatalf("nested contents = %q, %q", call.Inputs.Text(), result.Outputs.Text())
