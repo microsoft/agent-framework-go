@@ -31,7 +31,7 @@ func newLabeledEchoAgent(id, name, label string) *agent.Agent {
 	}
 	return agent.New(
 		agent.ProviderConfig{ProviderName: "echo", Run: run},
-		agent.Config{ID: id, Name: name, DisableFuncAutoCall: true},
+		agent.Config{ID: id, Name: name},
 	)
 }
 
@@ -51,7 +51,7 @@ func newDoubleEchoAgent(id string) *agent.Agent {
 	}
 	return agent.New(
 		agent.ProviderConfig{ProviderName: "double-echo", Run: run},
-		agent.Config{ID: id, Name: id, DisableFuncAutoCall: true},
+		agent.Config{ID: id, Name: id},
 	)
 }
 
@@ -105,7 +105,7 @@ func newBarrierDoubleEchoAgent(id string, barrier *runBarrier) *agent.Agent {
 	}
 	return agent.New(
 		agent.ProviderConfig{ProviderName: "barrier-double-echo", Run: run},
-		agent.Config{ID: id, Name: id, DisableFuncAutoCall: true},
+		agent.Config{ID: id, Name: id},
 	)
 }
 
@@ -132,7 +132,7 @@ func runBuiltWorkflowWithText(t *testing.T, wf *workflow.Workflow, inputText str
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	stream, err := inproc.Lockstep.RunStreaming(ctx, wf, nil)
+	stream, err := inproc.Lockstep.OpenStreaming(ctx, wf)
 	if err != nil {
 		t.Fatalf("RunStreaming: %v", err)
 	}
@@ -145,11 +145,11 @@ func runBuiltWorkflowWithText(t *testing.T, wf *workflow.Workflow, inputText str
 	userMsg := []*message.Message{
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: inputText}}},
 	}
-	if err := stream.SendMessage(ctx, userMsg); err != nil {
+	if _, err := stream.TrySendMessage(ctx, userMsg); err != nil {
 		t.Fatalf("SendMessage user msg: %v", err)
 	}
 	emitEvents := true
-	if err := stream.SendMessage(ctx, workflow.TurnToken{EmitEvents: &emitEvents}); err != nil {
+	if _, err := stream.TrySendMessage(ctx, workflow.TurnToken{EmitEvents: &emitEvents}); err != nil {
 		t.Fatalf("SendMessage turn token: %v", err)
 	}
 
@@ -168,11 +168,11 @@ func runStreamingWorkflowTurn(t *testing.T, ctx context.Context, stream *inproc.
 	userMsg := []*message.Message{
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: inputText}}},
 	}
-	if err := stream.SendMessage(ctx, userMsg); err != nil {
+	if _, err := stream.TrySendMessage(ctx, userMsg); err != nil {
 		t.Fatalf("SendMessage user msg: %v", err)
 	}
 	emitEvents := true
-	if err := stream.SendMessage(ctx, workflow.TurnToken{EmitEvents: &emitEvents}); err != nil {
+	if _, err := stream.TrySendMessage(ctx, workflow.TurnToken{EmitEvents: &emitEvents}); err != nil {
 		t.Fatalf("SendMessage turn token: %v", err)
 	}
 

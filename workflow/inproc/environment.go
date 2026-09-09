@@ -60,16 +60,28 @@ func (e *ExecutionEnvironment) IsCheckpointingEnabled() bool {
 	return e.checkpointManager != nil
 }
 
-func (e *ExecutionEnvironment) RunStreaming(ctx context.Context, wf *workflow.Workflow, msg any, opts ...ExecutionOption) (*StreamingRun, error) {
+// OpenStreaming opens a streaming workflow run without sending an initial
+// message. The caller can submit messages with [StreamingRun.TrySendMessage].
+func (e *ExecutionEnvironment) OpenStreaming(ctx context.Context, wf *workflow.Workflow, opts ...ExecutionOption) (*StreamingRun, error) {
 	options := applyExecutionOptions(opts)
 	handle, err := e.beginRun(ctx, wf, options.SessionID, nil)
 	if err != nil {
 		return nil, err
 	}
-	if msg != nil {
-		if err := handle.EnqueueMessage(ctx, msg); err != nil {
-			return nil, err
-		}
+	return newStreamingRun(handle), nil
+}
+
+func (e *ExecutionEnvironment) RunStreaming(ctx context.Context, wf *workflow.Workflow, msg any, opts ...ExecutionOption) (*StreamingRun, error) {
+	if msg == nil {
+		return nil, errors.New("message cannot be nil; use OpenStreaming to start without input")
+	}
+	options := applyExecutionOptions(opts)
+	handle, err := e.beginRun(ctx, wf, options.SessionID, nil)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := handle.EnqueueMessageUntyped(ctx, msg, nil); err != nil {
+		return nil, closeRunHandleAfterError(ctx, handle, err)
 	}
 	return newStreamingRun(handle), nil
 }
@@ -86,6 +98,9 @@ func (e *ExecutionEnvironment) ResumeStreaming(ctx context.Context, wf *workflow
 }
 
 func (e *ExecutionEnvironment) Run(ctx context.Context, wf *workflow.Workflow, msg any, opts ...ExecutionOption) (*Run, error) {
+	if msg == nil {
+		return nil, errors.New("message cannot be nil")
+	}
 	options := applyExecutionOptions(opts)
 	handle, err := e.beginRunHandlingChatProtocol(ctx, wf, options.SessionID, msg)
 	if err != nil {
@@ -93,7 +108,7 @@ func (e *ExecutionEnvironment) Run(ctx context.Context, wf *workflow.Workflow, m
 	}
 	run := newRun(handle)
 	if _, err := run.RunToNextHalt(ctx); err != nil {
-		return nil, err
+		return nil, closeRunHandleAfterError(ctx, handle, err)
 	}
 	return run, nil
 }
@@ -108,7 +123,7 @@ func (e *ExecutionEnvironment) Resume(ctx context.Context, wf *workflow.Workflow
 	}
 	run := newRun(handle)
 	if _, err := run.RunToNextHalt(ctx); err != nil {
-		return nil, err
+		return nil, closeRunHandleAfterError(ctx, handle, err)
 	}
 	return run, nil
 }
@@ -125,7 +140,11 @@ func (e *ExecutionEnvironment) beginRun(ctx context.Context, wf *workflow.Workfl
 	if err != nil {
 		return nil, err
 	}
-	return runner.beginStream(ctx, e.executionMode)
+	handle, err := runner.beginStream(ctx, e.executionMode)
+	if err != nil {
+		return nil, errors.Join(err, runner.RequestEndRun(context.WithoutCancel(ctx)))
+	}
+	return handle, nil
 }
 
 func (e *ExecutionEnvironment) resumeRun(ctx context.Context, wf *workflow.Workflow, fromCheckpoint workflow.CheckpointInfo, knownValidInputTypes []reflect.Type, opts ...ExecutionOption) (*execution.RunHandle, error) {
@@ -134,7 +153,11 @@ func (e *ExecutionEnvironment) resumeRun(ctx context.Context, wf *workflow.Workf
 	if err != nil {
 		return nil, err
 	}
-	return runner.resumeStreamWithRepublish(ctx, e.executionMode, fromCheckpoint, !options.DisablePendingRequestRepublish)
+	handle, err := runner.resumeStreamWithRepublish(ctx, e.executionMode, fromCheckpoint, !options.DisablePendingRequestRepublish)
+	if err != nil {
+		return nil, errors.Join(err, runner.RequestEndRun(context.WithoutCancel(ctx)))
+	}
+	return handle, nil
 }
 
 func (e *ExecutionEnvironment) beginRunHandlingChatProtocol(ctx context.Context, wf *workflow.Workflow, sessionID string, msg any) (*execution.RunHandle, error) {
@@ -148,19 +171,22 @@ func (e *ExecutionEnvironment) beginRunHandlingChatProtocol(ctx context.Context,
 	}
 	var hasToken bool
 	if msg != nil {
-		if err := handle.EnqueueMessage(ctx, msg); err != nil {
-			return nil, err
+		if _, err := handle.EnqueueMessageUntyped(ctx, msg, nil); err != nil {
+			return nil, closeRunHandleAfterError(ctx, handle, err)
 		}
 		if !hasToken && reflect.TypeOf(msg) == reflect.TypeFor[workflow.TurnToken]() {
 			hasToken = true
 		}
 	}
 	if !hasToken && slices.Contains(descriptor.Accepts, reflect.TypeFor[workflow.TurnToken]()) {
-		emitEvents := true
-		if err := handle.EnqueueMessage(ctx, workflow.TurnToken{EmitEvents: &emitEvents}); err != nil {
-			return nil, err
+		if _, err := handle.EnqueueMessageUntyped(ctx, workflow.TurnToken{EmitEvents: new(true)}, nil); err != nil {
+			return nil, closeRunHandleAfterError(ctx, handle, err)
 		}
 	}
 
 	return handle, nil
+}
+
+func closeRunHandleAfterError(ctx context.Context, handle *execution.RunHandle, err error) error {
+	return errors.Join(err, handle.Close(context.WithoutCancel(ctx)))
 }

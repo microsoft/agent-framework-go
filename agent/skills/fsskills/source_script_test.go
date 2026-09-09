@@ -6,9 +6,10 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/microsoft/agent-framework-go/agent/skills"
 	"github.com/microsoft/agent-framework-go/agent/skills/fsskills"
@@ -54,7 +55,7 @@ func TestFileSource_WithMultipleScriptExtensions_DiscoversAll(t *testing.T) {
 	for _, script := range loaded[0].Scripts {
 		scriptNames = append(scriptNames, script.Name)
 	}
-	sort.Strings(scriptNames)
+	slices.Sort(scriptNames)
 	if len(scriptNames) != 6 {
 		t.Fatalf("expected 6 scripts, got %d", len(scriptNames))
 	}
@@ -62,13 +63,7 @@ func TestFileSource_WithMultipleScriptExtensions_DiscoversAll(t *testing.T) {
 		if scriptNames[0] == "" {
 			break
 		}
-		found := false
-		for _, actual := range scriptNames {
-			if actual == expected {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(scriptNames, expected)
 		if !found {
 			t.Fatalf("expected script %q to be discovered, got %#v", expected, scriptNames)
 		}
@@ -235,7 +230,7 @@ func TestFileSource_ScriptAtConfigurableDepth_DiscoversWithSearchDepth(t *testin
 	createSkillDir(t, root, "nested-script-skill", "Nested script directory", "Body.")
 	createRelativeFile(t, filepath.Join(root, "nested-script-skill"), "f1/f2/f3/run.py", "print('nested')")
 	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
-		SearchDepth: 4,
+		SearchDepth: new(4),
 		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
 			return nil, nil
 		},
@@ -339,6 +334,32 @@ func TestFileSource_ScriptFilter_IncludesOnlyMatchingScripts(t *testing.T) {
 	}
 	if loaded[0].Scripts[0].Name != "scripts/run.py" {
 		t.Fatalf("expected scripts/run.py, got %q", loaded[0].Scripts[0].Name)
+	}
+}
+
+func TestFileSource_SymlinkedScript_IsSkipped(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "script-link-skill", "Symlinked script", "Body.")
+	outsideScript := filepath.Join(root, "outside.py")
+	if err := os.WriteFile(outsideScript, []byte("print('outside')"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	createSymlink(t, filepath.Join(root, "script-link-skill", "scripts", "run.py"), outsideScript)
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
+		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+			return nil, nil
+		},
+	}, os.DirFS(root))
+
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
+	}
+	if len(loaded[0].Scripts) != 0 {
+		t.Fatalf("expected symlinked script to be skipped, got %d scripts", len(loaded[0].Scripts))
 	}
 }
 
@@ -491,5 +512,68 @@ func TestFileSkill_ScriptContent_IncludesDefaultArraySchema(t *testing.T) {
 	// Quotes in JSON schema should be preserved (not escaped as &quot;).
 	if strings.Contains(content, "&quot;") {
 		t.Fatalf("expected JSON quotes to be preserved in schema content, got: %s", content)
+	}
+}
+
+// On a case-sensitive filesystem, two files in the same skill directory that
+// differ only in case (e.g. Data.json and data.json) are distinct files and
+// must both be discovered. Deduping on a lowercased path collapsed them.
+func TestFileSource_CaseSensitiveFS_KeepsDistinctlyCasedFiles(t *testing.T) {
+	// fstest.MapFS keys are case-sensitive regardless of the host filesystem.
+	fsys := fstest.MapFS{
+		"case-skill/SKILL.md":  {Data: []byte("---\nname: case-skill\ndescription: d\n---\nbody")},
+		"case-skill/Data.json": {Data: []byte("A")},
+		"case-skill/data.json": {Data: []byte("B")},
+		"case-skill/Run.py":    {Data: []byte("A")},
+		"case-skill/run.py":    {Data: []byte("B")},
+	}
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
+		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) { return nil, nil },
+	}, fsys)
+
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
+	}
+	if got := len(loaded[0].Resources); got != 2 {
+		t.Errorf("expected 2 resources (Data.json + data.json) on a case-sensitive FS, got %d", got)
+	}
+	if got := len(loaded[0].Scripts); got != 2 {
+		t.Errorf("expected 2 scripts (Run.py + run.py) on a case-sensitive FS, got %d", got)
+	}
+}
+
+// The runner-facing *Script must carry the same metadata as the discovered
+// Script (parameters schema and the fsskills.scriptFS backing FS), otherwise a
+// runner that inspects those fields to locate/execute the file sees empty values.
+func TestFileSource_Runner_ReceivesScriptMetadata(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "meta-skill", "Metadata test", "Body.")
+	createRelativeFile(t, filepath.Join(root, "meta-skill"), "scripts/test.py", "print('ok')")
+
+	var gotSchema string
+	var gotFS any
+	var hasFSKey bool
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: func(_ context.Context, _ *skills.Skill, script *skills.Script, _ []string) (any, error) {
+		gotSchema = script.ParametersSchema
+		gotFS, hasFSKey = script.AdditionalProperties["fsskills.scriptFS"]
+		return "ok", nil
+	}}, os.DirFS(root))
+
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loaded[0].Scripts[0].Run(t.Context(), loaded[0], nil); err != nil {
+		t.Fatal(err)
+	}
+	if gotSchema == "" {
+		t.Errorf("runner received empty ParametersSchema; want the discovered script's schema")
+	}
+	if !hasFSKey || gotFS == nil {
+		t.Errorf("runner received no fsskills.scriptFS in AdditionalProperties (hasKey=%v value=%v)", hasFSKey, gotFS)
 	}
 }

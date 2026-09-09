@@ -195,6 +195,9 @@ func (s *FileSystemJSONStore) loadIndex() error {
 		if entry.FileName == "" {
 			entry.FileName = checkpointFileName(info.SessionID, info)
 		}
+		if _, exists := s.checkpointIndex[info]; exists {
+			continue
+		}
 		s.index = append(s.index, entry)
 		s.checkpointIndex[info] = struct{}{}
 	}

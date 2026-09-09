@@ -69,7 +69,9 @@ func main() {
 	b := workflow.NewBuilder(analyze)
 	b.AddFanOutEdge(analyze, []workflow.ExecutorBinding{spam, assistant, summary, uncertain}, workflow.WithEdgeAssigner(routeAnalysis)).
 		AddEdge(assistant, send).
-		AddDirectEdge(analyze, log, false, func(msg any) bool { return msg.(AnalysisResult).EmailLength <= longEmailThreshold }).
+		AddEdge(analyze, log, workflow.WithEdgeCondition(func(result AnalysisResult) bool {
+			return result.EmailLength <= longEmailThreshold
+		})).
 		AddEdge(summary, log).
 		WithOutputFrom(spam, send, uncertain, log)
 
@@ -104,9 +106,8 @@ func analyzeEmail(email string) AnalysisResult {
 	return AnalysisResult{Email: email, Decision: decision, Reason: reason, EmailLength: len(email)}
 }
 
-func routeAnalysis(_ int, msg any) iter.Seq[int] {
+func routeAnalysis(_ int, result AnalysisResult) iter.Seq[int] {
 	return func(yield func(int) bool) {
-		result := msg.(AnalysisResult)
 		switch result.Decision {
 		case Spam:
 			yield(0)

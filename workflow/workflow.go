@@ -337,8 +337,8 @@ func (w *Workflow) describeOutputYields() ([]reflect.Type, error) {
 // HasResettableExecutors reports whether any executor binding can reset shared
 // resources between workflow runs.
 func (w *Workflow) HasResettableExecutors() bool {
-	for _, er := range w.executorBindings {
-		if er.ResetFunc != nil {
+	for _, binding := range w.executorBindings {
+		if binding.ResetFunc != nil {
 			return true
 		}
 	}

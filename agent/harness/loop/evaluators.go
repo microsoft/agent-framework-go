@@ -14,10 +14,11 @@ type CompletionMarkerConfig struct {
 	// latest response text.
 	Marker string
 
-	// FeedbackMessageTemplate is used when the marker is absent. The
+	// FeedbackMessageTemplate is used when the marker is absent. When nil, the
+	// default template is used. The
 	// completionMarkerPlaceholder token is replaced when the evaluator is
 	// created, and lastResponsePlaceholder is replaced on each evaluation.
-	FeedbackMessageTemplate string
+	FeedbackMessageTemplate *string
 }
 
 // CompletionMarkerEvaluator stops the loop once a marker appears in the latest
@@ -35,13 +36,12 @@ func NewCompletionMarkerEvaluator(config CompletionMarkerConfig) *CompletionMark
 		panic("loop: completion marker cannot be empty")
 	}
 	template := defaultCompletionMarkerFeedbackTemplate
-	if config.FeedbackMessageTemplate != "" {
-		template = config.FeedbackMessageTemplate
+	if config.FeedbackMessageTemplate != nil {
+		template = *config.FeedbackMessageTemplate
 	}
-	template = strings.ReplaceAll(template, completionMarkerPlaceholder, marker)
 	return &CompletionMarkerEvaluator{
 		completionMarker:        marker,
-		feedbackMessageTemplate: template,
+		feedbackMessageTemplate: prepareCompletionMarkerFeedbackTemplate(template, marker),
 	}
 }
 
@@ -57,6 +57,13 @@ func (e *CompletionMarkerEvaluator) Evaluate(_ context.Context, loop *Context) (
 	if strings.Contains(responseText, e.completionMarker) {
 		return Stop(), nil
 	}
-	feedback := strings.ReplaceAll(e.feedbackMessageTemplate, lastResponsePlaceholder, responseText)
-	return Continue(feedback), nil
+	return Continue(formatCompletionMarkerFeedback(e.feedbackMessageTemplate, responseText)), nil
+}
+
+func prepareCompletionMarkerFeedbackTemplate(template, marker string) string {
+	return strings.ReplaceAll(template, completionMarkerPlaceholder, marker)
+}
+
+func formatCompletionMarkerFeedback(template, responseText string) string {
+	return strings.ReplaceAll(template, lastResponsePlaceholder, responseText)
 }

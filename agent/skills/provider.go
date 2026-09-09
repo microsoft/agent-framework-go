@@ -55,13 +55,24 @@ type ContextProviderOptions struct {
 	Sources []Source
 
 	// SkillsInstructionPrompt is a custom system prompt template.
-	// When empty, a default template is used.
+	// When nil, a default template is used.
 	//
 	// The template must contain {skills}.
-	SkillsInstructionPrompt string
+	SkillsInstructionPrompt *string
 
-	// ScriptApproval marks the run_skill_script tool as requiring approval.
-	ScriptApproval bool
+	// DisableLoadSkillApproval disables approval for the load_skill tool.
+	// When false (the default), invoking load_skill requires approval.
+	DisableLoadSkillApproval bool
+
+	// DisableReadSkillResourceApproval disables approval for the
+	// read_skill_resource tool. When false (the default), invoking
+	// read_skill_resource requires approval.
+	DisableReadSkillResourceApproval bool
+
+	// DisableRunSkillScriptApproval disables approval for the
+	// run_skill_script tool. When false (the default), invoking
+	// run_skill_script requires approval.
+	DisableRunSkillScriptApproval bool
 
 	// IncludeDetailedErrors includes script execution error details in the
 	// run_skill_script result returned to the model.
@@ -141,8 +152,8 @@ func NewContextProvider(opts ContextProviderOptions) agent.ContextProvider {
 	if opts.Logger == nil {
 		opts.Logger = slog.New(slog.DiscardHandler)
 	}
-	if opts.SkillsInstructionPrompt != "" {
-		if err := validatePromptTemplate(opts.SkillsInstructionPrompt); err != nil {
+	if opts.SkillsInstructionPrompt != nil {
+		if err := validatePromptTemplate(*opts.SkillsInstructionPrompt); err != nil {
 			panic(err)
 		}
 	}
@@ -180,7 +191,7 @@ func newProviderSources(skills []*Skill, sources []Source) []Source {
 
 func (p *providerState) provide(ctx context.Context, invoking agent.InvokingContext) (outMessages []*message.Message, outOptions []agent.Option, err error) {
 	if p.options.DisableCaching {
-		result, err := p.buildContext(ctx)
+		result, err := p.buildContextSafely(ctx)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -188,58 +199,64 @@ func (p *providerState) provide(ctx context.Context, invoking agent.InvokingCont
 		return outMessages, outOptions, nil
 	}
 
-	p.mu.Lock()
-	if p.cached != nil {
-		cached := *p.cached
-		p.mu.Unlock()
-		outMessages, outOptions = providedContext(cached)
-		return outMessages, outOptions, nil
-	}
-	if p.loading != nil {
-		loading := p.loading
-		p.mu.Unlock()
-		<-loading
-
+	for {
 		p.mu.Lock()
-		defer p.mu.Unlock()
-		if p.cached == nil {
-			result, err := p.buildContext(ctx)
-			if err != nil {
-				return nil, nil, err
-			}
-			outMessages, outOptions = providedContext(result)
+		if p.cached != nil {
+			cached := *p.cached
+			p.mu.Unlock()
+			outMessages, outOptions = providedContext(cached)
 			return outMessages, outOptions, nil
 		}
-		cached := *p.cached
-		outMessages, outOptions = providedContext(cached)
-		return outMessages, outOptions, nil
-	}
-	p.loading = make(chan struct{})
-	loading := p.loading
-	p.mu.Unlock()
+		if p.loading != nil {
+			loading := p.loading
+			p.mu.Unlock()
+			if err := ctx.Err(); err != nil {
+				return nil, nil, err
+			}
+			select {
+			case <-loading:
+			case <-ctx.Done():
+				return nil, nil, ctx.Err()
+			}
 
-	var result providerContext
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("building skills context panicked: %v", recovered)
+			// The cache owner normally clears loading before waking waiters.
+			// Clear a matching completed load defensively so every retry goes
+			// through the same owner path and panic recovery below.
+			p.mu.Lock()
+			if p.loading == loading {
+				p.loading = nil
+			}
+			p.mu.Unlock()
+			continue
 		}
+		loading := make(chan struct{})
+		p.loading = loading
+		p.mu.Unlock()
 
+		result, err := p.buildContextSafely(ctx)
 		p.mu.Lock()
 		if err == nil {
 			cached := result
 			p.cached = &cached
 		}
-		close(loading)
 		p.loading = nil
+		close(loading)
 		p.mu.Unlock()
-	}()
-
-	result, err = p.buildContext(ctx)
-	if err != nil {
-		return nil, nil, err
+		if err != nil {
+			return nil, nil, err
+		}
+		outMessages, outOptions = providedContext(result)
+		return outMessages, outOptions, nil
 	}
-	outMessages, outOptions = providedContext(result)
-	return outMessages, outOptions, nil
+}
+
+func (p *providerState) buildContextSafely(ctx context.Context) (result providerContext, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("building skills context panicked: %v", recovered)
+		}
+	}()
+	return p.buildContext(ctx)
 }
 
 func providedContext(result providerContext) ([]*message.Message, []agent.Option) {
@@ -329,33 +346,31 @@ func indexSkills(skills []*Skill) providedSkillSet {
 }
 
 func (p *providerState) buildTools(skills providedSkillSet) []tool.Tool {
-	tools := []tool.Tool{
-		functool.MustNew(
-			functool.Config{
-				Name:        "load_skill",
-				Description: "Loads the full content of a specific skill.",
-			},
-			func(callCtx context.Context, in struct {
-				SkillName string `json:"skillName" jsonschema:"The name of the skill to load"`
-			},
-			) (string, error) {
-				return p.loadSkill(callCtx, skills, in.SkillName)
-			},
-		),
-		functool.MustNew(
-			functool.Config{
-				Name:        "read_skill_resource",
-				Description: "Reads a resource associated with a skill, such as references, assets, or dynamic data.",
-			},
-			func(callCtx context.Context, in struct {
-				SkillName    string `json:"skillName" jsonschema:"The name of the skill"`
-				ResourceName string `json:"resourceName" jsonschema:"The exact resource name to read"`
-			},
-			) (any, error) {
-				return p.readSkillResource(callCtx, skills, in.SkillName, in.ResourceName), nil
-			},
-		),
-	}
+	loadSkillTool := functool.MustNew(
+		functool.Config{
+			Name:        "load_skill",
+			Description: "Loads the full content of a specific skill.",
+		},
+		func(callCtx context.Context, in struct {
+			SkillName string `json:"skillName" jsonschema:"The name of the skill to load"`
+		},
+		) (string, error) {
+			return p.loadSkill(callCtx, skills, in.SkillName)
+		},
+	)
+	readSkillResourceTool := functool.MustNew(
+		functool.Config{
+			Name:        "read_skill_resource",
+			Description: "Reads a resource associated with a skill, such as references, assets, or dynamic data.",
+		},
+		func(callCtx context.Context, in struct {
+			SkillName    string `json:"skillName" jsonschema:"The name of the skill"`
+			ResourceName string `json:"resourceName" jsonschema:"The exact resource name to read"`
+		},
+		) (any, error) {
+			return p.readSkillResource(callCtx, skills, in.SkillName, in.ResourceName), nil
+		},
+	)
 
 	runScript := functool.MustNew(
 		functool.Config{
@@ -372,10 +387,17 @@ func (p *providerState) buildTools(skills providedSkillSet) []tool.Tool {
 		},
 	)
 
-	if p.options.ScriptApproval {
-		return append(tools, tool.ApprovalRequiredFunc(runScript))
+	if !p.options.DisableLoadSkillApproval {
+		loadSkillTool = tool.ApprovalRequiredFunc(loadSkillTool)
 	}
-	return append(tools, runScript)
+	if !p.options.DisableReadSkillResourceApproval {
+		readSkillResourceTool = tool.ApprovalRequiredFunc(readSkillResourceTool)
+	}
+	if !p.options.DisableRunSkillScriptApproval {
+		runScript = tool.ApprovalRequiredFunc(runScript)
+	}
+
+	return []tool.Tool{loadSkillTool, readSkillResourceTool, runScript}
 }
 
 func (p *providerState) loadSkill(ctx context.Context, skills providedSkillSet, skillName string) (string, error) {
@@ -397,19 +419,9 @@ func (p *providerState) loadSkill(ctx context.Context, skills providedSkillSet, 
 }
 
 func (p *providerState) readSkillResource(ctx context.Context, skills providedSkillSet, skillName, resourceName string) any {
-	if lookupError := validateSkillName(skillName); lookupError != "" {
-		return lookupError
-	}
-	if strings.TrimSpace(resourceName) == "" {
-		return "Error: Resource name cannot be empty."
-	}
-	resolved, lookupError := skills.lookupSkill(skillName)
+	_, resource, lookupError := resolveSkillItem(skills, skillName, resourceName, "Resource", providedSkill.lookupResource)
 	if lookupError != "" {
 		return lookupError
-	}
-	resource, ok := resolved.lookupResource(resourceName)
-	if !ok {
-		return fmt.Sprintf("Error: Resource '%s' not found in skill '%s'.", resourceName, skillName)
 	}
 	if resource.Read == nil {
 		p.logger.Error("Failed to read resource from skill", "resourceName", resourceName, "skillName", skillName, "error", "resource reader is nil")
@@ -424,19 +436,9 @@ func (p *providerState) readSkillResource(ctx context.Context, skills providedSk
 }
 
 func (p *providerState) runSkillScript(ctx context.Context, skills providedSkillSet, skillName, scriptName string, arguments []string) (any, error) {
-	if lookupError := validateSkillName(skillName); lookupError != "" {
-		return lookupError, nil
-	}
-	if strings.TrimSpace(scriptName) == "" {
-		return "Error: Script name cannot be empty.", nil
-	}
-	resolved, lookupError := skills.lookupSkill(skillName)
+	resolved, script, lookupError := resolveSkillItem(skills, skillName, scriptName, "Script", providedSkill.lookupScript)
 	if lookupError != "" {
 		return lookupError, nil
-	}
-	script, ok := resolved.lookupScript(scriptName)
-	if !ok {
-		return fmt.Sprintf("Error: Script '%s' not found in skill '%s'.", scriptName, skillName), nil
 	}
 	if script.Run == nil {
 		err := errors.New("script runner is nil")
@@ -472,6 +474,29 @@ func (skills providedSkillSet) lookupSkill(skillName string) (providedSkill, str
 	return resolved, ""
 }
 
+func resolveSkillItem[T any](
+	skills providedSkillSet,
+	skillName, itemName, itemKind string,
+	lookup func(providedSkill, string) (T, bool),
+) (providedSkill, T, string) {
+	var zero T
+	if lookupError := validateSkillName(skillName); lookupError != "" {
+		return providedSkill{}, zero, lookupError
+	}
+	if strings.TrimSpace(itemName) == "" {
+		return providedSkill{}, zero, fmt.Sprintf("Error: %s name cannot be empty.", itemKind)
+	}
+	resolved, lookupError := skills.lookupSkill(skillName)
+	if lookupError != "" {
+		return providedSkill{}, zero, lookupError
+	}
+	item, ok := lookup(resolved, itemName)
+	if !ok {
+		return providedSkill{}, zero, fmt.Sprintf("Error: %s '%s' not found in skill '%s'.", itemKind, itemName, skillName)
+	}
+	return resolved, item, ""
+}
+
 func validateSkillName(skillName string) string {
 	if strings.TrimSpace(skillName) == "" {
 		return "Error: Skill name cannot be empty."
@@ -479,15 +504,16 @@ func validateSkillName(skillName string) string {
 	return ""
 }
 
-func buildProviderSkillsInstructionPrompt(template string, skills []*Skill) string {
+func buildProviderSkillsInstructionPrompt(template *string, skills []*Skill) string {
 	if len(skills) == 0 {
 		return ""
 	}
-	if template == "" {
-		template = defaultSkillsInstructionPrompt
+	promptTemplate := defaultSkillsInstructionPrompt
+	if template != nil {
+		promptTemplate = *template
 	}
 
-	sortedSkills := append([]*Skill(nil), skills...)
+	sortedSkills := slices.Clone(skills)
 	slices.SortFunc(sortedSkills, func(left, right *Skill) int {
 		return strings.Compare(left.Frontmatter.Name, right.Frontmatter.Name)
 	})
@@ -504,7 +530,7 @@ func buildProviderSkillsInstructionPrompt(template string, skills []*Skill) stri
 	replacer := strings.NewReplacer(
 		skillsPlaceholder, skillList,
 	)
-	return replacer.Replace(template)
+	return replacer.Replace(promptTemplate)
 }
 
 func validatePromptTemplate(template string) error {

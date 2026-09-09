@@ -42,9 +42,9 @@ func main() {
 	}).Bind()
 
 	wf, err := workflow.NewBuilder(detect).
-		AddDirectEdge(detect, assistant, false, func(msg any) bool { return !msg.(DetectionResult).IsSpam }).
+		AddEdge(detect, assistant, workflow.WithEdgeCondition(func(result DetectionResult) bool { return !result.IsSpam })).
 		AddEdge(assistant, send).
-		AddDirectEdge(detect, spam, false, func(msg any) bool { return msg.(DetectionResult).IsSpam }).
+		AddEdge(detect, spam, workflow.WithEdgeCondition(func(result DetectionResult) bool { return result.IsSpam })).
 		WithOutputFrom(send, spam).
 		Build()
 	if err != nil {

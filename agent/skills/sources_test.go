@@ -10,14 +10,14 @@ import (
 	"github.com/microsoft/agent-framework-go/agent/skills"
 )
 
-type blockingSource struct {
+type countingBlockingSource struct {
 	mu      sync.Mutex
 	count   int
 	skills  []*skills.Skill
 	release chan struct{}
 }
 
-func (s *blockingSource) Skills(context.Context) ([]*skills.Skill, error) {
+func (s *countingBlockingSource) Skills(context.Context) ([]*skills.Skill, error) {
 	s.mu.Lock()
 	s.count++
 	release := s.release
@@ -137,7 +137,7 @@ func TestCachingSource_CachesResultsAfterFirstLoad(t *testing.T) {
 
 func TestCachingSource_SharesInFlightLoadAcrossConcurrentCallers(t *testing.T) {
 	skill := mustInlineSkill(skills.Frontmatter{Name: "cached", Description: "Cached skill."}, "Cached.", nil, nil)
-	inner := &blockingSource{
+	inner := &countingBlockingSource{
 		skills:  []*skills.Skill{skill},
 		release: make(chan struct{}),
 	}

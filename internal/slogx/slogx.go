@@ -19,6 +19,14 @@ type sensitiveData struct {
 	any
 }
 
+// LogValue unwraps the sensitive value so that, once sensitive logging is
+// enabled, handlers render the raw payload instead of the wrapper struct.
+// The Attr retains its KindLogValuer, so the redaction type assertion in Log
+// still resolves the sensitiveData wrapper when sensitive logging is disabled.
+func (s sensitiveData) LogValue() slog.Value {
+	return slog.AnyValue(s.any)
+}
+
 func SensitiveData(key string, value any) slog.Attr {
 	return slog.Any(key, sensitiveData{value})
 }

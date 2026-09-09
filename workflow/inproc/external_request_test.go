@@ -6,9 +6,11 @@ import (
 	"context"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/workflow"
+	"github.com/microsoft/agent-framework-go/workflow/checkpoint"
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
 )
 
@@ -87,7 +89,8 @@ func TestPostRequestFromExecutor(t *testing.T) {
 
 	// An executor that:
 	//   * on string input: posts an ExternalRequest, then halts.
-	//   * on *ExternalResponse: yields the response data as workflow output.
+	//   * on any other input: handles the concrete *ExternalResponse through an
+	//     interface route and yields its data as workflow output.
 	id := "asker"
 	binding := workflow.ExecutorBinding{
 		ID:               id,
@@ -97,8 +100,8 @@ func TestPostRequestFromExecutor(t *testing.T) {
 		return &workflow.Executor{
 			ID: id,
 
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.YieldsOutputType(reflect.TypeFor[string]())
 				rb.RouteBuilder.
@@ -109,7 +112,7 @@ func TestPostRequestFromExecutor(t *testing.T) {
 						}
 						return nil, wctx.PostRequest(req)
 					}).
-					AddHandlerRaw(reflect.TypeFor[*workflow.ExternalResponse](), nil, func(wctx *workflow.Context, msg any) (any, error) {
+					AddHandlerRaw(reflect.TypeFor[any](), nil, func(wctx *workflow.Context, msg any) (any, error) {
 						resp := msg.(*workflow.ExternalResponse)
 						data, _ := resp.Data.As(port.Response)
 						return nil, wctx.YieldOutput(data)
@@ -180,8 +183,8 @@ func TestPostRequestRoutingToOwner(t *testing.T) {
 		return &workflow.Executor{
 			ID: startID,
 
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.SendsMessageType(reflect.TypeFor[string]())
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(wctx *workflow.Context, msg any) (any, error) {
@@ -203,8 +206,8 @@ func TestPostRequestRoutingToOwner(t *testing.T) {
 		return &workflow.Executor{
 			ID: askerID,
 
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.YieldsOutputType(reflect.TypeFor[string]())
 				rb.RouteBuilder.
@@ -269,8 +272,8 @@ func TestExternalResponse_UnsolicitedResponseErrors(t *testing.T) {
 		return &workflow.Executor{
 			ID: id,
 
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(_ *workflow.Context, _ any) (any, error) {
 					return nil, nil
@@ -285,7 +288,7 @@ func TestExternalResponse_UnsolicitedResponseErrors(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	stream, err := inproc.Default.RunStreaming(ctx, wf, nil)
+	stream, err := inproc.Default.OpenStreaming(ctx, wf)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -331,8 +334,8 @@ func TestExternalResponse_RejectsForgedPortIDWithoutConsumingRequest(t *testing.
 		return &workflow.Executor{
 			ID: id,
 
-			DisableAutoSendMessageHandlerResultObject: true,
-			DisableAutoYieldOutputHandlerResultObject: true,
+			AutoSendMessageHandlerResultObject: new(false),
+			AutoYieldOutputHandlerResultObject: new(false),
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 				rb.YieldsOutputType(reflect.TypeFor[int]())
 				rb.RouteBuilder.
@@ -403,6 +406,149 @@ func TestExternalResponse_RejectsForgedPortIDWithoutConsumingRequest(t *testing.
 	}
 }
 
+// TestCheckpoint_RequestPortRestoresWrappedRequests verifies that a request-port
+// executor which re-wraps an inbound *ExternalRequest (the subworkflow-style
+// forwarding path) persists its wrapped-request map across checkpoint/restore.
+// After resuming in a fresh runner, the matching response must be re-wrapped
+// with the ORIGINAL request PortInfo and forwarded as a single *ExternalResponse
+// — not forwarded raw as the port response plus the decoded payload.
+func TestCheckpoint_RequestPortRestoresWrappedRequests(t *testing.T) {
+	ctx := context.Background()
+
+	outerPort := workflow.RequestPort{
+		ID:       "OuterPort",
+		Request:  reflect.TypeFor[string](),
+		Response: reflect.TypeFor[string](),
+	}
+	innerPort := workflow.RequestPort{
+		ID:       "InnerPort",
+		Request:  reflect.TypeFor[string](),
+		Response: reflect.TypeFor[string](),
+	}
+	portBinding := outerPort.Bind()
+
+	// Source executor forwards an *ExternalRequest (carrying the inner port's
+	// PortInfo) into the request-port executor, exercising the re-wrapping path.
+	sourceID := "Source"
+	sourceBinding := workflow.ExecutorBinding{
+		ID:               sourceID,
+		ImplementationID: "*workflow.Executor",
+		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
+			return &workflow.Executor{
+				ID:                                 sourceID,
+				AutoSendMessageHandlerResultObject: new(false),
+				AutoYieldOutputHandlerResultObject: new(false),
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.SendsMessageType(reflect.TypeFor[*workflow.ExternalRequest]())
+					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(wctx *workflow.Context, _ any) (any, error) {
+						req, err := workflow.NewExternalRequest("wrapped-req", innerPort, "question")
+						if err != nil {
+							return nil, err
+						}
+						return nil, wctx.SendMessage("", req)
+					})
+					return rb, nil
+				},
+			}, nil
+		},
+	}
+
+	// Sink records every message the request-port executor forwards to it.
+	var mu sync.Mutex
+	var received []any
+	sinkID := "Sink"
+	sinkBinding := workflow.ExecutorBinding{
+		ID:               sinkID,
+		ImplementationID: "*workflow.Executor",
+		NewExecutorFunc: func(_ string) (*workflow.Executor, error) {
+			record := func(msg any) (any, error) {
+				mu.Lock()
+				received = append(received, msg)
+				mu.Unlock()
+				return nil, nil
+			}
+			return &workflow.Executor{
+				ID:                                 sinkID,
+				AutoSendMessageHandlerResultObject: new(false),
+				AutoYieldOutputHandlerResultObject: new(false),
+				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+					rb.RouteBuilder.
+						AddHandlerRaw(reflect.TypeFor[*workflow.ExternalResponse](), nil, func(_ *workflow.Context, msg any) (any, error) {
+							return record(msg)
+						}).
+						AddHandlerRaw(reflect.TypeFor[string](), nil, func(_ *workflow.Context, msg any) (any, error) {
+							return record(msg)
+						})
+					return rb, nil
+				},
+			}, nil
+		},
+	}
+
+	wf, err := workflow.NewBuilder(sourceBinding).
+		AddEdge(sourceBinding, portBinding).
+		AddEdge(portBinding, sinkBinding).
+		Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	manager := checkpoint.NewInMemoryManager()
+	first, err := inproc.Default.WithCheckpointing(manager).Run(ctx, wf, "kick")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	pendingRequest := firstRequest(t, first.OutgoingEvents())
+	if pendingRequest.PortInfo.PortID != outerPort.ID {
+		t.Fatalf("pending request port = %q, want %q", pendingRequest.PortInfo.PortID, outerPort.ID)
+	}
+	checkpointInfo, ok := first.LastCheckpoint()
+	if !ok {
+		t.Fatal("expected checkpoint")
+	}
+	if err := first.Close(ctx); err != nil {
+		t.Fatalf("Close first run: %v", err)
+	}
+
+	// Resume in a fresh runner: the request-port executor's in-memory wrapped
+	// map starts empty and must be repopulated from the restored state.
+	resumed, err := inproc.Default.WithCheckpointing(manager).Resume(ctx, wf, checkpointInfo)
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	replayed := firstRequest(t, resumed.NewEvents())
+	if replayed.RequestID != pendingRequest.RequestID {
+		t.Fatalf("replayed request ID = %q, want %q", replayed.RequestID, pendingRequest.RequestID)
+	}
+
+	response, err := replayed.CreateResponse("answer")
+	if err != nil {
+		t.Fatalf("CreateResponse: %v", err)
+	}
+	if _, err := resumed.Resume(ctx, response); err != nil {
+		t.Fatalf("Resume with response: %v", err)
+	}
+	for range resumed.NewEvents() {
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(received) != 1 {
+		t.Fatalf("sink received %d messages %#v, want 1 re-wrapped *ExternalResponse", len(received), received)
+	}
+	resp, ok := received[0].(*workflow.ExternalResponse)
+	if !ok {
+		t.Fatalf("sink message type = %T, want *workflow.ExternalResponse", received[0])
+	}
+	if resp.PortInfo.PortID != innerPort.ID {
+		t.Fatalf("re-wrapped response port = %q, want original %q", resp.PortInfo.PortID, innerPort.ID)
+	}
+	data, dataOK := resp.Data.As(innerPort.Response)
+	if !dataOK || data != "answer" {
+		t.Fatalf("re-wrapped response data = %v (ok=%v), want %q", data, dataOK, "answer")
+	}
+}
+
 func TestExternalRequest_NewRequest_TypeValidation(t *testing.T) {
 	port := workflow.RequestPort{
 		ID:       "p",
@@ -414,6 +560,43 @@ func TestExternalRequest_NewRequest_TypeValidation(t *testing.T) {
 	}
 	if _, err := workflow.NewExternalRequest("", port, 42); err == nil {
 		t.Error("non-matching type should fail")
+	}
+}
+
+func TestExternalRequest_NewRequest_RejectsInvalidPort(t *testing.T) {
+	stringType := reflect.TypeFor[string]()
+	tests := []struct {
+		name string
+		port workflow.RequestPort
+		want string
+	}{
+		{
+			name: "empty ID",
+			port: workflow.RequestPort{Request: stringType, Response: stringType},
+			want: "workflow: request port ID is required",
+		},
+		{
+			name: "nil request type",
+			port: workflow.RequestPort{ID: "port", Response: stringType},
+			want: `workflow: request port "port" request type is required`,
+		},
+		{
+			name: "nil response type",
+			port: workflow.RequestPort{ID: "port", Request: stringType},
+			want: `workflow: request port "port" response type is required`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request, err := workflow.NewExternalRequest("request", test.port, "payload")
+			if err == nil || err.Error() != test.want {
+				t.Fatalf("NewExternalRequest() error = %v, want %q", err, test.want)
+			}
+			if request != nil {
+				t.Fatalf("NewExternalRequest() = %#v, want nil", request)
+			}
+		})
 	}
 }
 

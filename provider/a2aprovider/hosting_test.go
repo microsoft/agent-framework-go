@@ -12,6 +12,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/a2aproject/a2a-go/v2/a2asrv/taskstore"
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/provider/a2aprovider"
 )
@@ -113,6 +114,57 @@ func TestRequestHandler_OnSendMessage_PreservesContextID(t *testing.T) {
 	}
 }
 
+func TestRequestHandler_ContextIDIsNotProviderSessionID(t *testing.T) {
+	var serviceID string
+	a := newHostedTestAgent(func(_ context.Context, _ []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		session, _ := agent.GetOption(options, agent.WithSession)
+		serviceID = session.ServiceID()
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: "done"}}}, nil)
+		}
+	})
+
+	h := newRequestHandler(a, a2aprovider.ExecutorConfig{})
+	msg := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("ping"))
+	msg.ContextID = "a2a-context"
+	if _, err := h.SendMessage(t.Context(), &a2a.SendMessageRequest{Message: msg}); err != nil {
+		t.Fatal(err)
+	}
+	if serviceID != "" {
+		t.Fatalf("Session.ServiceID() = %q, want empty", serviceID)
+	}
+}
+
+func TestRequestHandler_ContextIDIsNotProviderSessionIDAndMetadataIsForwarded(t *testing.T) {
+	var serviceID string
+	var runMetadata map[string]any
+	a := newHostedTestAgent(func(_ context.Context, _ []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		session, _ := agent.GetOption(options, agent.WithSession)
+		serviceID = session.ServiceID()
+		runMetadata, _ = agent.GetOption(options, a2aprovider.WithMetadata)
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: "done"}}}, nil)
+		}
+	})
+
+	h := newRequestHandler(a, a2aprovider.ExecutorConfig{})
+	msg := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("ping"))
+	msg.ContextID = "a2a-context"
+	_, err := h.SendMessage(t.Context(), &a2a.SendMessageRequest{
+		Message:  msg,
+		Metadata: map[string]any{"tenant": "contoso"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if serviceID != "" {
+		t.Fatalf("Session.ServiceID() = %q, want empty", serviceID)
+	}
+	if runMetadata["tenant"] != "contoso" {
+		t.Fatalf("run metadata = %#v, want tenant=contoso", runMetadata)
+	}
+}
+
 func TestRequestHandler_OnSendMessageContinuation_UsesStoredTaskHistoryOnly(t *testing.T) {
 	var callCount int
 	var continuationInputs []string
@@ -186,6 +238,90 @@ func TestRequestHandler_OnSendMessageContinuation_UsesStoredTaskHistoryOnly(t *t
 		if got == "continue" {
 			t.Fatal("expected continuation request message to be excluded from continuation inputs")
 		}
+	}
+}
+
+func TestRequestHandler_BackgroundResponse_PollsContinuationToken(t *testing.T) {
+	var calls int
+	var resumedToken string
+	var resumedMessageCount int
+	a := newHostedTestAgent(func(_ context.Context, messagesIn []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		calls++
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			if calls == 1 {
+				yield(&agent.ResponseUpdate{
+					Role:              message.RoleAssistant,
+					ContinuationToken: "inner-token",
+				}, nil)
+				return
+			}
+			resumedToken, _ = agent.GetOption(options, agent.WithContinuationToken)
+			resumedMessageCount = len(messagesIn)
+			yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: "done"}}}, nil)
+		}
+	})
+	store := taskstore.NewInMemory(nil)
+	h := newRequestHandler(
+		a,
+		a2aprovider.ExecutorConfig{AllowBackgroundResponses: true},
+		a2asrv.WithTaskStore(store),
+	)
+
+	events := collectStreamingEvents(t, h.SendStreamingMessage(t.Context(), &a2a.SendMessageRequest{
+		Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("start")),
+	}))
+	statuses := collectStreamingStatuses(events)
+	if len(statuses) != 3 || statuses[0].Status.State != a2a.TaskStateWorking || statuses[1].Status.State != a2a.TaskStateWorking || statuses[2].Status.State != a2a.TaskStateCompleted {
+		t.Fatalf("unexpected background status sequence: %#v", statuses)
+	}
+	if resumedToken != "inner-token" {
+		t.Fatalf("resumed token = %q, want %q", resumedToken, "inner-token")
+	}
+	if resumedMessageCount != 0 {
+		t.Fatalf("resumed message count = %d, want 0", resumedMessageCount)
+	}
+}
+
+func TestRequestHandler_OnSendMessageContinuation_UsesStoredContinuationToken(t *testing.T) {
+	var resumedToken string
+	var resumedMessageCount int
+	a := newHostedTestAgent(func(_ context.Context, messagesIn []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		resumedToken, _ = agent.GetOption(options, agent.WithContinuationToken)
+		resumedMessageCount = len(messagesIn)
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: "done"}}}, nil)
+		}
+	})
+	storedTask := &a2a.Task{
+		ID:        a2a.NewTaskID(),
+		ContextID: "ctx-continuation",
+		Status:    a2a.TaskStatus{State: a2a.TaskStateWorking},
+		Metadata: map[string]any{
+			"__a2a__continuationToken": agenttest.NewContinuationToken(t, "inner-token"),
+		},
+	}
+	store := taskstore.NewInMemory(nil)
+	if _, err := store.Create(t.Context(), storedTask); err != nil {
+		t.Fatal(err)
+	}
+	h := newRequestHandler(a, a2aprovider.ExecutorConfig{AllowBackgroundResponses: true}, a2asrv.WithTaskStore(store))
+	continueMessage := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("continue"))
+	continueMessage.TaskID = storedTask.ID
+	continueMessage.ContextID = storedTask.ContextID
+
+	continued, err := h.SendMessage(t.Context(), &a2a.SendMessageRequest{Message: continueMessage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	continuedTask, ok := continued.(*a2a.Task)
+	if !ok || continuedTask.Status.State != a2a.TaskStateCompleted {
+		t.Fatalf("continued result = %#v, want completed task", continued)
+	}
+	if resumedToken != "inner-token" {
+		t.Fatalf("resumed token = %q, want %q", resumedToken, "inner-token")
+	}
+	if resumedMessageCount != 0 {
+		t.Fatalf("resumed message count = %d, want 0", resumedMessageCount)
 	}
 }
 
@@ -306,11 +442,11 @@ func TestRequestHandler_OnSendMessageStream_UsesTaskLifecycleAndArtifacts(t *tes
 		t.Fatalf("task event count = %d, want 1", len(collectStreamingTasks(events)))
 	}
 	statuses := collectStreamingStatuses(events)
-	if len(statuses) != 3 {
-		t.Fatalf("status event count = %d, want 3", len(statuses))
+	if len(statuses) != 2 {
+		t.Fatalf("status event count = %d, want 2", len(statuses))
 	}
-	if statuses[0].Status.State != a2a.TaskStateSubmitted || statuses[1].Status.State != a2a.TaskStateWorking || statuses[2].Status.State != a2a.TaskStateCompleted {
-		t.Fatalf("unexpected status sequence: %q, %q, %q", statuses[0].Status.State, statuses[1].Status.State, statuses[2].Status.State)
+	if statuses[0].Status.State != a2a.TaskStateWorking || statuses[1].Status.State != a2a.TaskStateCompleted {
+		t.Fatalf("unexpected status sequence: %q, %q", statuses[0].Status.State, statuses[1].Status.State)
 	}
 	artifacts := collectStreamingArtifacts(events)
 	if len(artifacts) != 2 {
@@ -321,6 +457,141 @@ func TestRequestHandler_OnSendMessageStream_UsesTaskLifecycleAndArtifacts(t *tes
 	}
 	if got := a2aArtifactText(artifacts[1]); got != "chunk 2" {
 		t.Fatalf("second streamed artifact text = %q, want %q", got, "chunk 2")
+	}
+	if artifacts[0].Artifact.ID == "" {
+		t.Fatal("expected first streamed artifact id")
+	}
+	if artifacts[1].Artifact.ID != artifacts[0].Artifact.ID {
+		t.Fatalf("artifact ids = %q, %q, want identical ids", artifacts[0].Artifact.ID, artifacts[1].Artifact.ID)
+	}
+	if artifacts[0].Append {
+		t.Fatal("expected first streamed artifact update to start a new artifact")
+	}
+	if artifacts[0].LastChunk {
+		t.Fatal("expected first streamed artifact update to remain open")
+	}
+	if !artifacts[1].Append {
+		t.Fatal("expected second streamed artifact update to append to the same artifact")
+	}
+	if !artifacts[1].LastChunk {
+		t.Fatal("expected second streamed artifact update to close the artifact")
+	}
+}
+
+func TestRequestHandler_OnSendMessageStream_ReusedMessageIDGetsNewArtifactID(t *testing.T) {
+	a := newHostedTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			if !yield(&agent.ResponseUpdate{
+				MessageID: "msg-1",
+				Role:      message.RoleAssistant,
+				Contents:  message.Contents{&message.TextContent{Text: "first"}},
+			}, nil) {
+				return
+			}
+			if !yield(&agent.ResponseUpdate{
+				MessageID: "msg-2",
+				Role:      message.RoleAssistant,
+				Contents:  message.Contents{&message.TextContent{Text: "second"}},
+			}, nil) {
+				return
+			}
+			yield(&agent.ResponseUpdate{
+				MessageID: "msg-1",
+				Role:      message.RoleAssistant,
+				Contents:  message.Contents{&message.TextContent{Text: "third"}},
+			}, nil)
+		}
+	})
+
+	h := newRequestHandler(a, a2aprovider.ExecutorConfig{})
+	artifacts := collectStreamingArtifacts(collectStreamingEvents(t, h.SendStreamingMessage(context.Background(), &a2a.SendMessageRequest{
+		Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("ping")),
+	})))
+
+	if len(artifacts) != 3 {
+		t.Fatalf("artifact event count = %d, want 3", len(artifacts))
+	}
+	if artifacts[0].Artifact.ID != "msg-1" {
+		t.Fatalf("first artifact id = %q, want %q", artifacts[0].Artifact.ID, "msg-1")
+	}
+	if artifacts[1].Artifact.ID != "msg-2" {
+		t.Fatalf("second artifact id = %q, want %q", artifacts[1].Artifact.ID, "msg-2")
+	}
+	if artifacts[2].Artifact.ID == "" || artifacts[2].Artifact.ID == "msg-1" {
+		t.Fatalf("third artifact id = %q, want generated id distinct from %q", artifacts[2].Artifact.ID, "msg-1")
+	}
+	if !artifacts[0].LastChunk || !artifacts[1].LastChunk || !artifacts[2].LastChunk {
+		t.Fatalf("expected each single-update artifact to be closed: %#v %#v %#v", artifacts[0].LastChunk, artifacts[1].LastChunk, artifacts[2].LastChunk)
+	}
+}
+
+func TestRequestHandler_OnSendMessageStream_MissingMessageIDFallsBackToResponseIDForArtifactID(t *testing.T) {
+	a := newHostedTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
+				ResponseID: "resp-1",
+				Role:       message.RoleAssistant,
+				Contents:   message.Contents{&message.TextContent{Text: "reply"}},
+			}, nil)
+		}
+	})
+
+	h := newRequestHandler(a, a2aprovider.ExecutorConfig{})
+	artifacts := collectStreamingArtifacts(collectStreamingEvents(t, h.SendStreamingMessage(context.Background(), &a2a.SendMessageRequest{
+		Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("ping")),
+	})))
+
+	if len(artifacts) != 1 {
+		t.Fatalf("artifact event count = %d, want 1", len(artifacts))
+	}
+	if artifacts[0].Artifact.ID != "resp-1" {
+		t.Fatalf("artifact id = %q, want %q", artifacts[0].Artifact.ID, "resp-1")
+	}
+}
+
+func TestRequestHandler_OnSendMessageStream_FlushesBufferedArtifactBeforeFailure(t *testing.T) {
+	a := newHostedTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			if !yield(&agent.ResponseUpdate{
+				MessageID: "msg-1",
+				Role:      message.RoleAssistant,
+				Contents:  message.Contents{&message.TextContent{Text: "partial"}},
+			}, nil) {
+				return
+			}
+			yield(nil, assertErr("boom"))
+		}
+	})
+
+	h := newRequestHandler(a, a2aprovider.ExecutorConfig{})
+	events := collectStreamingEvents(t, h.SendStreamingMessage(context.Background(), &a2a.SendMessageRequest{
+		Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("ping")),
+	}))
+
+	artifacts := collectStreamingArtifacts(events)
+	if len(artifacts) != 1 {
+		t.Fatalf("artifact event count = %d, want 1", len(artifacts))
+	}
+	if got := a2aArtifactText(artifacts[0]); got != "partial" {
+		t.Fatalf("artifact text = %q, want %q", got, "partial")
+	}
+	if artifacts[0].Append {
+		t.Fatal("expected failure artifact flush to start a new artifact")
+	}
+	if !artifacts[0].LastChunk {
+		t.Fatal("expected failure artifact flush to close the artifact")
+	}
+
+	statuses := collectStreamingStatuses(events)
+	if len(statuses) != 2 {
+		t.Fatalf("status event count = %d, want 2", len(statuses))
+	}
+	if statuses[0].Status.State != a2a.TaskStateWorking || statuses[1].Status.State != a2a.TaskStateFailed {
+		t.Fatalf("unexpected status sequence: %q, %q", statuses[0].Status.State, statuses[1].Status.State)
+	}
+	const want = "The agent encountered an unexpected error and could not complete the request."
+	if statuses[1].Status.Message == nil || statuses[1].Status.Message.Parts[0].Text() != want {
+		t.Fatalf("failed status message = %#v, want %q", statuses[1].Status.Message, want)
 	}
 }
 
@@ -479,7 +750,7 @@ func TestRequestHandler_OnSendMessageStream_WhenAgentYieldsNoUpdates_ReturnsLife
 	if len(statuses) != 2 {
 		t.Fatalf("status event count = %d, want 2", len(statuses))
 	}
-	if statuses[0].Status.State != a2a.TaskStateSubmitted || statuses[1].Status.State != a2a.TaskStateCompleted {
+	if statuses[0].Status.State != a2a.TaskStateWorking || statuses[1].Status.State != a2a.TaskStateCompleted {
 		t.Fatalf("unexpected status sequence: %q, %q", statuses[0].Status.State, statuses[1].Status.State)
 	}
 	if len(collectStreamingArtifacts(events)) != 0 {
@@ -544,18 +815,25 @@ func collectFirstStreamingTask(t *testing.T, stream iter.Seq2[a2a.Event, error])
 
 func collectStreamingEvents(t *testing.T, stream iter.Seq2[a2a.Event, error]) []a2a.Event {
 	t.Helper()
+	events, err := collectStreamingEventsAndError(stream)
+	if err != nil {
+		t.Fatalf("stream returned error: %v", err)
+	}
+	return events
+}
 
+func collectStreamingEventsAndError(stream iter.Seq2[a2a.Event, error]) ([]a2a.Event, error) {
 	var events []a2a.Event
 	for evt, err := range stream {
 		if err != nil {
-			t.Fatalf("stream returned error: %v", err)
+			return events, err
 		}
 		if evt == nil {
 			continue
 		}
 		events = append(events, evt)
 	}
-	return events
+	return events, nil
 }
 
 func collectStreamingArtifacts(events []a2a.Event) []*a2a.TaskArtifactUpdateEvent {

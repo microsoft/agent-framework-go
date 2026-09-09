@@ -36,6 +36,16 @@ type addHandlerOptions struct {
 	overwrite bool
 }
 
+func normalizeAddHandlerOptions(options []AddHandlerOption) addHandlerOptions {
+	addHandlerOptions := addHandlerOptions{}
+	for _, option := range options {
+		if option != nil {
+			option(&addHandlerOptions)
+		}
+	}
+	return addHandlerOptions
+}
+
 // WithHandlerOverwrite controls whether handler registration replaces an
 // existing handler.
 //
@@ -82,16 +92,11 @@ func (rb *RouteBuilder) AddHandlerRaw(messageType reflect.Type, outputType refle
 	if handler == nil {
 		panic("handler cannot be nil")
 	}
-	addHandlerOptions := addHandlerOptions{}
-	for _, option := range options {
-		if option != nil {
-			option(&addHandlerOptions)
-		}
-	}
+	addHandlerOptions := normalizeAddHandlerOptions(options)
 	if rb.err != nil {
 		return rb
 	}
-	if reflect.TypeOf(messageType) == reflect.TypeFor[PortableValue]() {
+	if messageType == reflect.TypeFor[PortableValue]() {
 		rb.err = errors.New("cannot register a handler for PortableValue. Use AddCatchAll() instead")
 		return rb
 	}
@@ -133,13 +138,12 @@ func (rb *RouteBuilder) AddCatchAll(handler func(*Context, PortableValue) (any, 
 	if handler == nil {
 		panic("handler cannot be nil")
 	}
-	addHandlerOptions := addHandlerOptions{}
-	for _, option := range options {
-		if option != nil {
-			option(&addHandlerOptions)
-		}
-	}
+	addHandlerOptions := normalizeAddHandlerOptions(options)
 	if rb.err != nil {
+		return rb
+	}
+	if rb.catchAll == nil && addHandlerOptions.overwrite {
+		rb.err = errors.New("cannot overwrite unregistered catch-all handler")
 		return rb
 	}
 	if rb.catchAll != nil && !addHandlerOptions.overwrite {
@@ -181,6 +185,11 @@ type typeHandlingInfo struct {
 	runtimeType reflect.Type
 	handler     MessageHandlerFunc
 	autoOutput  bool
+}
+
+func (info typeHandlingInfo) forRuntimeType(runtimeType reflect.Type) typeHandlingInfo {
+	info.runtimeType = runtimeType
+	return info
 }
 
 // newMessageRouter creates a router and indexes typed handlers by TypeID.
@@ -259,6 +268,8 @@ func (mr *messageRouter) routeMessage(ctx *Context, msg any) (result callResult,
 				// If we found a runtime type, we can use it
 				msg = v
 			}
+		} else if value := pvalue.Any(); value != nil && pvalue.TypeID.MatchPolymorphic(reflect.TypeOf(value)) {
+			msg = value
 		}
 	}
 	defer func() {
@@ -309,7 +320,7 @@ func (mr *messageRouter) findHandler(messageType reflect.Type) (typeHandlingInfo
 	for _, interfaceType := range mr.interfaceHandlers {
 		if messageType.AssignableTo(interfaceType) {
 			info := mr.typedHandlers[interfaceType]
-			info.runtimeType = messageType
+			info = info.forRuntimeType(messageType)
 			mr.typeInfos.Store(typeID, info)
 			return info, true
 		}

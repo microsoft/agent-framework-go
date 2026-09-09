@@ -38,7 +38,7 @@ type chatClient struct {
 
 type chatCompletionNewParamsOpt openai.ChatCompletionNewParams
 
-func (o chatCompletionNewParamsOpt) Value() any {
+func (o chatCompletionNewParamsOpt) MAFValue() any {
 	return openai.ChatCompletionNewParams(o)
 }
 
@@ -51,12 +51,23 @@ func ChatCompletionNewParams(params openai.ChatCompletionNewParams) agent.Option
 type AgentConfig struct {
 	agent.Config
 
+	// ToolAutoCall configures automatic function-tool invocation. When nil, defaults
+	// are used.
+	ToolAutoCall *toolautocall.Config
+
+	// ProviderName identifies the service powering the agent. It defaults to
+	// "openai". Adapters over the OpenAI protocol can set their own identity.
+	ProviderName string
+
 	// Instructions are provided to OpenAI as system instructions for each run.
 	Instructions string
 
 	// DisableStoreOutput is used only by [NewResponsesAgent]. It disables
 	// service-side output storage and prevents response IDs from being saved into
-	// agent sessions for later continuation.
+	// agent sessions for later continuation. While enabled, Responses requests
+	// also include `reasoning.encrypted_content` by default so reasoning items
+	// can be replayed statelessly; use [ResponsesIncludeReasoningEncryptedContent]
+	// to opt out per run.
 	// It is ignored by [NewChatCompletionsAgent].
 	DisableStoreOutput bool
 
@@ -70,17 +81,15 @@ func NewChatCompletionsAgent(oclient openai.Client, config AgentConfig) *agent.A
 		config: config,
 	}
 	if config.Instructions != "" {
-		config.RunOptions = append(config.RunOptions, agent.WithInstructions(config.Instructions))
+		config.RunOptions = append(slices.Clone(config.RunOptions), agent.WithInstructions(config.Instructions))
 	}
-	var providerMiddlewares []agent.Middleware
-	if !config.DisableFuncAutoCall {
-		providerMiddlewares = append(providerMiddlewares, toolautocall.New(toolautocall.Config{
-			Logger:           config.Logger,
-			LogSensitiveData: config.LogSensitiveData,
-		}))
+	autoCall := toolautocall.Config{Logger: config.Logger, LogSensitiveData: config.LogSensitiveData}
+	if config.ToolAutoCall != nil {
+		autoCall = *config.ToolAutoCall
 	}
+	providerMiddlewares := []agent.Middleware{toolautocall.New(autoCall)}
 	return agent.New(agent.ProviderConfig{
-		ProviderName: "openai",
+		ProviderName: cmp.Or(config.ProviderName, "openai"),
 		Run:          c.run,
 		Middlewares:  providerMiddlewares,
 		Format:       c.formatOf,
@@ -114,37 +123,58 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 				yield(nil, err)
 			}
 		}
-		choice := resp.Choices[0]
-		contents := make([]message.Content, 0, 1+len(choice.Message.ToolCalls))
-		for _, tc := range choice.Message.ToolCalls {
-			contents = append(contents, &message.FunctionCallContent{
-				CallID:    tc.ID,
-				Name:      tc.Function.Name,
-				Arguments: tc.Function.Arguments,
-			})
-		}
-		if choice.Message.Content != "" {
-			contents = append(contents, &message.TextContent{Text: choice.Message.Content})
-		}
-		if choice.Message.Refusal != "" {
-			contents = append(contents, &message.ErrorContent{Message: choice.Message.Refusal})
+		// Some services return a successful response with no choices, e.g.
+		// Azure OpenAI when the prompt is blocked by a content filter (the
+		// response carries prompt_filter_results and usage instead). Tolerate
+		// this by emitting an update with whatever metadata and usage are
+		// present rather than indexing into an empty Choices slice, mirroring
+		// the streaming path below.
+		var contents []message.Content
+		var finishReason string
+		if len(resp.Choices) > 0 {
+			choice := resp.Choices[0]
+			contents = make([]message.Content, 0, 1+len(choice.Message.ToolCalls))
+			for _, tc := range choice.Message.ToolCalls {
+				contents = append(contents, &message.FunctionCallContent{
+					CallID:    tc.ID,
+					Name:      tc.Function.Name,
+					Arguments: tc.Function.Arguments,
+				})
+			}
+			if choice.Message.Content != "" || len(choice.Message.Annotations) > 0 {
+				textContent := &message.TextContent{Text: choice.Message.Content}
+				populateChatAnnotations(choice.Message.Annotations, textContent)
+				contents = append(contents, textContent)
+			}
+			if choice.Message.Refusal != "" {
+				contents = append(contents, &message.ErrorContent{Message: choice.Message.Refusal, ErrorCode: "Refusal"})
+			}
+			finishReason = choice.FinishReason
 		}
 		if resp.JSON.Usage.Valid() {
 			contents = addUsage(contents, resp.Usage)
 		}
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			update := &agent.ResponseUpdate{
-				Contents:     contents,
-				Role:         message.RoleAssistant,
-				ResponseID:   resp.ID,
-				MessageID:    resp.ID,
-				FinishReason: choice.FinishReason,
-				CreatedAt:    time.Unix(resp.Created, 0),
+				Contents:          contents,
+				Role:              message.RoleAssistant,
+				ResponseID:        resp.ID,
+				MessageID:         resp.ID,
+				FinishReason:      finishReason,
+				CreatedAt:         time.Unix(resp.Created, 0),
+				RawRepresentation: resp,
 			}
 			if !yield(update, nil) {
 				return
 			}
 		}
+	}
+	// Request usage in the final stream chunk. OpenAI omits the usage chunk for
+	// streamed completions unless stream_options.include_usage is set, so without
+	// this a streamed run reports zero token usage, unlike the non-streaming path.
+	// Respect an explicit caller value if one was already supplied.
+	if !body.StreamOptions.IncludeUsage.Valid() {
+		body.StreamOptions.IncludeUsage = openai.Bool(true)
 	}
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		stream := a.client.Chat.Completions.NewStreaming(ctx, body, telemetryRequestOption)
@@ -163,6 +193,9 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 					Arguments: tc.Arguments,
 				})
 			}
+			if refusal, ok := acc.JustFinishedRefusal(); ok {
+				contents = append(contents, &message.ErrorContent{Message: refusal, ErrorCode: "Refusal"})
+			}
 			role := message.RoleAssistant
 			if len(chunk.Choices) > 0 {
 				choice := chunk.Choices[0]
@@ -179,12 +212,13 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 				finishReason = chunk.Choices[0].FinishReason
 			}
 			resp := &agent.ResponseUpdate{
-				Contents:     contents,
-				Role:         role,
-				ResponseID:   chunk.ID,
-				MessageID:    chunk.ID,
-				FinishReason: finishReason,
-				CreatedAt:    time.Unix(chunk.Created, 0),
+				Contents:          contents,
+				Role:              role,
+				ResponseID:        chunk.ID,
+				MessageID:         chunk.ID,
+				FinishReason:      finishReason,
+				CreatedAt:         time.Unix(chunk.Created, 0),
+				RawRepresentation: chunk,
 			}
 			if !yield(resp, nil) {
 				return
@@ -216,16 +250,26 @@ func buildCompletionParams(model string, messages []*message.Message, opts []age
 	var params openai.ChatCompletionNewParams
 	if p, ok := agent.GetOption(opts, ChatCompletionNewParams); ok {
 		params = p
+		params.Messages = slices.Clone(params.Messages)
+		params.Tools = slices.Clone(params.Tools)
 	}
 	params.Model = cmp.Or(params.Model, model)
 	if frmt, ok := agent.GetOption(opts, agent.WithResponseFormat); ok {
 		switch frmt.Kind {
 		case "json":
 			if schema := frmt.Schema; schema != nil {
+				wireSchema := schema
+				if frmt.Strict {
+					var err error
+					wireSchema, err = strictSchemaToMap(schema)
+					if err != nil {
+						return openai.ChatCompletionNewParams{}, fmt.Errorf("failed to convert response format schema (type %T) to JSON format: %w", schema, err)
+					}
+				}
 				params.ResponseFormat.OfJSONSchema = &shared.ResponseFormatJSONSchemaParam{
 					JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
 						Name:   frmt.Name,
-						Schema: schema,
+						Schema: wireSchema,
 					},
 				}
 				if desc := frmt.Description; desc != "" {
@@ -241,48 +285,29 @@ func buildCompletionParams(model string, messages []*message.Message, opts []age
 			}
 		}
 	}
-	first := true
-	for tl := range agent.AllOptions(opts, agent.WithTool) {
-		if first {
-			first = false
-			if mode, ok := agent.GetOption(opts, agent.WithToolMode); ok {
-				switch mode.Mode() {
-				case tool.ToolModeAuto, "":
-					params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
-						OfAuto: openai.String(string(openai.ChatCompletionToolChoiceOptionAutoAuto)),
-					}
-				case tool.ToolModeNone:
-					params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
-						OfAuto: openai.String(string(openai.ChatCompletionToolChoiceOptionAutoNone)),
-					}
-				case tool.ToolModeRequired:
-					names := mode.Required()
-					if len(names) == 0 {
-						params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
-							OfAuto: openai.String(string(openai.ChatCompletionToolChoiceOptionAutoRequired)),
-						}
-					} else if len(names) == 1 {
-						params.ToolChoice = openai.ToolChoiceOptionFunctionToolChoice(openai.ChatCompletionNamedToolChoiceFunctionParam{
-							Name: names[0],
-						})
-					} else {
-						toolsMap := make([]map[string]any, 0, len(names))
-						for _, name := range names {
-							toolsMap = append(toolsMap, map[string]any{
-								"type": "function",
-								"function": map[string]any{
-									"name": name,
-								},
-							})
-						}
-						params.ToolChoice = openai.ToolChoiceOptionAllowedTools(openai.ChatCompletionAllowedToolsParam{
-							Mode:  openai.ChatCompletionAllowedToolsModeRequired,
-							Tools: toolsMap,
-						})
-					}
+	if mode, ok := agent.GetOption(opts, agent.WithToolMode); ok {
+		switch mode.Mode() {
+		case tool.ToolModeAuto, "":
+			params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
+				OfAuto: openai.String(string(openai.ChatCompletionToolChoiceOptionAutoAuto)),
+			}
+		case tool.ToolModeNone:
+			params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
+				OfAuto: openai.String(string(openai.ChatCompletionToolChoiceOptionAutoNone)),
+			}
+		case tool.ToolModeRequired:
+			if name, ok := mode.RequiredTool(); !ok {
+				params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
+					OfAuto: openai.String(string(openai.ChatCompletionToolChoiceOptionAutoRequired)),
 				}
+			} else {
+				params.ToolChoice = openai.ToolChoiceOptionFunctionToolChoice(openai.ChatCompletionNamedToolChoiceFunctionParam{
+					Name: name,
+				})
 			}
 		}
+	}
+	for tl := range agent.AllOptions(opts, agent.WithTool) {
 		switch tl := tl.(type) {
 		case *hostedtool.WebSearch:
 			if location, ok := tl.AdditionalProperties["user_location"]; ok {
@@ -308,21 +333,10 @@ func buildCompletionParams(model string, messages []*message.Message, opts []age
 			}
 		case tool.FuncTool:
 			name, description := tl.Name(), tl.Description()
-			var funcParams map[string]any
-			switch schema := tl.Schema().(type) {
-			case map[string]any:
-				funcParams = schema
-			default:
-				if schema == nil {
-					break
-				}
-				data, err := json.Marshal(schema)
-				if err == nil {
-					err = json.Unmarshal(data, &funcParams)
-				}
-				if err != nil {
-					return openai.ChatCompletionNewParams{}, fmt.Errorf("failed to convert function tool schema to JSON format: %w", err)
-				}
+			schema := tl.Schema()
+			funcParams, err := schemaToMap(schema)
+			if err != nil {
+				return openai.ChatCompletionNewParams{}, fmt.Errorf("failed to convert function tool schema to JSON format: %w", err)
 			}
 			params.Tools = append(params.Tools, openai.ChatCompletionToolUnionParam{
 				OfFunction: &openai.ChatCompletionFunctionToolParam{
@@ -365,10 +379,16 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 		if len(contents) == 0 {
 			return nil, nil
 		}
+		sys := openai.ChatCompletionSystemMessageParam{}
 		if len(contents) == 1 {
-			return []openai.ChatCompletionMessageParamUnion{openai.SystemMessage(contents[0].Text)}, nil
+			sys.Content.OfString = openai.String(contents[0].Text)
+		} else {
+			sys.Content.OfArrayOfContentParts = contents
 		}
-		return []openai.ChatCompletionMessageParamUnion{openai.SystemMessage(contents)}, nil
+		if name := sanitizeAuthorName(msg.AuthorName); name != "" {
+			sys.Name = openai.String(name)
+		}
+		return []openai.ChatCompletionMessageParamUnion{{OfSystem: &sys}}, nil
 
 	case message.RoleUser:
 		var contents []openai.ChatCompletionContentPartUnionParam
@@ -388,7 +408,17 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 						},
 					})
 				default:
-					// For other URI content types, just ignore, they are not supported yet.
+					// A data: URI carries the bytes inline, so audio/PDF (and other
+					// non-image) content can be mapped to input_audio/file exactly like
+					// DataContent. Non-data http(s) audio/file URLs have no
+					// chat-completions mapping, so they are still dropped.
+					if data, ok := dataURIPayload(c.URI); ok {
+						contents = append(contents, dataContentPart(&message.DataContent{
+							ContentHeader: c.ContentHeader,
+							MediaType:     c.MediaType,
+							Data:          data,
+						}))
+					}
 				}
 			case *message.DataContent:
 				switch c.TopLevelMediaType() {
@@ -418,8 +448,8 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 					}))
 				default:
 					contents = append(contents, openai.FileContentPart(openai.ChatCompletionContentPartFileFileParam{
-						FileData: openai.String(c.Data),
-						Filename: openai.String(c.Name),
+						FileData: openai.String(c.URI()),
+						Filename: openai.String(requiredOpenAIFileName(c.Name, c.MediaType)),
 					}))
 				}
 			case *message.HostedFileContent:
@@ -431,14 +461,21 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 		if len(contents) == 0 {
 			return nil, nil
 		}
+		usr := openai.ChatCompletionUserMessageParam{}
 		if len(contents) == 1 && contents[0].OfText != nil {
-			return []openai.ChatCompletionMessageParamUnion{openai.UserMessage(contents[0].OfText.Text)}, nil
+			usr.Content.OfString = openai.String(contents[0].OfText.Text)
+		} else {
+			usr.Content.OfArrayOfContentParts = contents
 		}
-		return []openai.ChatCompletionMessageParamUnion{openai.UserMessage(contents)}, nil
+		if name := sanitizeAuthorName(msg.AuthorName); name != "" {
+			usr.Name = openai.String(name)
+		}
+		return []openai.ChatCompletionMessageParamUnion{{OfUser: &usr}}, nil
 
 	case message.RoleAssistant:
 		var contents []openai.ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion
 		var toolCalls []openai.ChatCompletionMessageToolCallUnionParam
+		var refusal string
 		for _, c := range msg.Contents {
 			switch c := c.(type) {
 			case *message.TextContent:
@@ -458,14 +495,18 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 					},
 				})
 			case *message.ErrorContent:
-				contents = append(contents, openai.ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion{
-					OfText: &openai.ChatCompletionContentPartTextParam{
-						Text: c.Message,
-					},
-				})
+				if c.ErrorCode == "Refusal" {
+					refusal = c.Message
+				} else {
+					contents = append(contents, openai.ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion{
+						OfText: &openai.ChatCompletionContentPartTextParam{
+							Text: c.Message,
+						},
+					})
+				}
 			}
 		}
-		if len(contents) == 0 && len(toolCalls) == 0 {
+		if len(contents) == 0 && len(toolCalls) == 0 && refusal == "" {
 			return nil, nil
 		}
 		var content openai.ChatCompletionAssistantMessageParamContentUnion
@@ -474,12 +515,17 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 		} else {
 			content = openai.ChatCompletionAssistantMessageParamContentUnion{OfArrayOfContentParts: contents}
 		}
-		return []openai.ChatCompletionMessageParamUnion{{
-			OfAssistant: &openai.ChatCompletionAssistantMessageParam{
-				Content:   content,
-				ToolCalls: toolCalls,
-			},
-		}}, nil
+		asst := openai.ChatCompletionAssistantMessageParam{
+			Content:   content,
+			ToolCalls: toolCalls,
+		}
+		if refusal != "" {
+			asst.Refusal = openai.String(refusal)
+		}
+		if name := sanitizeAuthorName(msg.AuthorName); name != "" {
+			asst.Name = openai.String(name)
+		}
+		return []openai.ChatCompletionMessageParamUnion{{OfAssistant: &asst}}, nil
 
 	case message.RoleTool:
 		// Each tool result needs its own separate message for OpenAI API compliance
@@ -489,32 +535,105 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 				ret := funcResult.Result
 				if funcResult.Error != nil {
 					ret = funcResult.Error
-				} else if b, ok := ret.(json.RawMessage); ok {
-					ret = string(b)
 				}
-				messages = append(messages, openai.ToolMessage(fmt.Sprintf("%v", ret), funcResult.CallID))
+				messages = append(messages, openai.ToolMessage(toolResultText(ret), funcResult.CallID))
 			}
 		}
 		return messages, nil
 
 	default:
-		panic("unknown message role: " + string(msg.Role))
+		return nil, fmt.Errorf("openaiprovider: unsupported message role %q", msg.Role)
 	}
 }
 
-func addUsage(contents []message.Content, usage openai.CompletionUsage) []message.Content {
+// sanitizeAuthorName mirrors the .NET OpenAIChatClient.SanitizeAuthorName used
+// for ChatMessage.AuthorName. The Chat Completions API only accepts a limited
+// character set for the participant "name" field, so it keeps only alphanumeric
+// characters and caps the result at 64 characters. It returns an empty string
+// when the input is empty, whitespace-only, or entirely disallowed characters,
+// in which case the caller leaves the name field unset.
+func sanitizeAuthorName(name string) string {
+	if strings.TrimSpace(name) == "" {
+		return ""
+	}
+	const maxLen = 64
+	var b strings.Builder
+	n := 0
+	for _, r := range name {
+		if r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			b.WriteRune(r)
+			n++
+			if n >= maxLen {
+				break
+			}
+		}
+	}
+	return b.String()
+}
+
+// toolResultText renders a function-tool result for the OpenAI wire format. A
+// non-string, non-raw result (e.g. a struct or map returned by a typed
+// functool) is JSON-encoded rather than rendered with Go's %v, which would send
+// an unparseable Go representation like "{Paris 20}" to the model.
+func toolResultText(ret any) string {
+	switch v := ret.(type) {
+	case nil:
+		return ""
+	case string:
+		return v
+	case json.RawMessage:
+		return string(v)
+	case []byte:
+		return string(v)
+	case error:
+		return v.Error()
+	}
+	if b, err := json.Marshal(ret); err == nil {
+		return string(b)
+	}
+	return fmt.Sprintf("%v", ret)
+}
+
+// populateChatAnnotations maps Chat Completions message annotations (e.g. the
+// url_citation entries produced by the web-search tool) onto the text content's
+// annotations, mirroring populateAnnotations on the Responses path.
+func populateChatAnnotations(anns []openai.ChatCompletionMessageAnnotation, content *message.TextContent) {
+	for _, ann := range anns {
+		// Only url_citation annotations carry a populated URLCitation payload;
+		// skip other variants (and empty URLs) to avoid emitting bogus citations.
+		if ann.Type != "url_citation" || ann.URLCitation.URL == "" {
+			continue
+		}
+		content.Annotations = append(content.Annotations, &message.CitationAnnotation{
+			URL:               ann.URLCitation.URL,
+			Title:             ann.URLCitation.Title,
+			AnnotatedRegions:  message.AnnotatedRegions{textSpanAnnotatedRegion(ann.URLCitation.StartIndex, ann.URLCitation.EndIndex)},
+			RawRepresentation: ann,
+		})
+	}
+}
+
+func addUsage(contents message.Contents, usage openai.CompletionUsage) message.Contents {
 	details := message.UsageDetails{
 		InputTokenCount:       usage.PromptTokens,
 		OutputTokenCount:      usage.CompletionTokens,
 		TotalTokenCount:       usage.TotalTokens,
 		CachedInputTokenCount: usage.PromptTokensDetails.CachedTokens,
 		ReasoningTokenCount:   usage.CompletionTokensDetails.ReasoningTokens,
-		AdditionalCounts:      make(map[string]int64),
 	}
-	details.AdditionalCounts["PromptTokensDetails.AudioTokens"] = usage.PromptTokensDetails.AudioTokens
-	details.AdditionalCounts["CompletionTokensDetails.AudioTokens"] = usage.CompletionTokensDetails.AudioTokens
-	details.AdditionalCounts["CompletionTokensDetails.AcceptedPredictionTokens"] = usage.CompletionTokensDetails.AcceptedPredictionTokens
-	details.AdditionalCounts["CompletionTokensDetails.RejectedPredictionTokens"] = usage.CompletionTokensDetails.RejectedPredictionTokens
+	add := func(k string, v int64) {
+		if v == 0 {
+			return
+		}
+		if details.AdditionalCounts == nil {
+			details.AdditionalCounts = make(map[string]int64)
+		}
+		details.AdditionalCounts[k] = v
+	}
+	add("PromptTokensDetails.AudioTokens", usage.PromptTokensDetails.AudioTokens)
+	add("CompletionTokensDetails.AudioTokens", usage.CompletionTokensDetails.AudioTokens)
+	add("CompletionTokensDetails.AcceptedPredictionTokens", usage.CompletionTokensDetails.AcceptedPredictionTokens)
+	add("CompletionTokensDetails.RejectedPredictionTokens", usage.CompletionTokensDetails.RejectedPredictionTokens)
 	return append(contents, &message.UsageContent{Details: details})
 }
 
@@ -525,4 +644,68 @@ func imageDetail(props map[string]any) string {
 		}
 	}
 	return ""
+}
+
+// imageFileID returns the string value of props["file_id"] or empty. This
+// allows an image referenced by an already-uploaded file to be forwarded to
+// the Responses API, mirroring the Python reference.
+func imageFileID(props map[string]any) string {
+	if id, ok := props["file_id"]; ok {
+		if v, ok := id.(string); ok {
+			return v
+		}
+	}
+	return ""
+}
+
+// dataContentPart maps in-memory content to the matching chat completions
+// content part: images become an image URL, audio becomes input_audio, and
+// everything else becomes a file. It is shared by the DataContent and the
+// data: URIContent branches so both stay symmetric, matching the Python SDK.
+func dataContentPart(c *message.DataContent) openai.ChatCompletionContentPartUnionParam {
+	switch c.TopLevelMediaType() {
+	case "image":
+		return openai.ChatCompletionContentPartUnionParam{
+			OfImageURL: &openai.ChatCompletionContentPartImageParam{
+				ImageURL: openai.ChatCompletionContentPartImageImageURLParam{
+					URL:    c.URI(),
+					Detail: imageDetail(c.AdditionalProperties),
+				},
+			},
+		}
+	case "audio":
+		var format string
+		switch c.MediaType {
+		case "audio/wav":
+			format = "wav"
+		case "audio/mp3", "audio/mpeg":
+			format = "mp3"
+		default:
+			// Default to mp3
+			format = "mp3"
+		}
+		return openai.InputAudioContentPart(openai.ChatCompletionContentPartInputAudioInputAudioParam{
+			Data:   c.Data,
+			Format: format,
+		})
+	default:
+		return openai.FileContentPart(openai.ChatCompletionContentPartFileFileParam{
+			FileData: openai.String(c.URI()),
+			Filename: openai.String(requiredOpenAIFileName(c.Name, c.MediaType)),
+		})
+	}
+}
+
+// dataURIPayload returns the base64-encoded payload of a data: URI, reporting
+// false for any other (e.g. http/https) URI. OpenAI chat completions cannot
+// accept audio or file content by URL, so only inline data: URIs are mappable.
+func dataURIPayload(uri string) (string, bool) {
+	if !strings.HasPrefix(strings.ToLower(uri), "data:") {
+		return "", false
+	}
+	_, data, ok := strings.Cut(uri, ",")
+	if !ok {
+		return "", false
+	}
+	return data, true
 }

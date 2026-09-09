@@ -52,9 +52,12 @@ type ExternalRequest struct {
 // id is an optional unique identifier for this request instance. If id is empty,
 // a UUID will be generated.
 //
-// NewExternalRequest returns an error when data does not match the expected
-// request type.
+// NewExternalRequest returns an error when the port is invalid or data does
+// not match the expected request type.
 func NewExternalRequest(id string, port RequestPort, data any) (*ExternalRequest, error) {
+	if err := validateRequestPort(port); err != nil {
+		return nil, err
+	}
 	if id == "" {
 		id = uuid.New().String()
 	}
@@ -67,6 +70,19 @@ func NewExternalRequest(id string, port RequestPort, data any) (*ExternalRequest
 		RequestID: id,
 		Data:      AnyPortableValue(data),
 	}, nil
+}
+
+func validateRequestPort(port RequestPort) error {
+	if port.ID == "" {
+		return fmt.Errorf("workflow: request port ID is required")
+	}
+	if port.Request == nil {
+		return fmt.Errorf("workflow: request port %q request type is required", port.ID)
+	}
+	if port.Response == nil {
+		return fmt.Errorf("workflow: request port %q response type is required", port.ID)
+	}
+	return nil
 }
 
 // CreateResponse creates a new [ExternalResponse] corresponding to r, with the
