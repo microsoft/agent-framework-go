@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"runtime"
 	"slices"
@@ -34,13 +35,13 @@ type Executor struct {
 	// ImplementationID identifies the implementation or semantic source for this executor.
 	ImplementationID string
 
-	// If true, the result of a message handler that returns a value will not be
-	// sent as a message from the executor.
-	DisableAutoSendMessageHandlerResultObject bool
+	// If true, the result of a message handler that returns a value will be sent
+	// as a message from the executor. The default is true.
+	AutoSendMessageHandlerResultObject *bool
 
-	// If true, the result of a message handler that returns a value will not be
-	// yielded as workflow output from the executor.
-	DisableAutoYieldOutputHandlerResultObject bool
+	// If true, the result of a message handler that returns a value will be
+	// yielded as workflow output from the executor. The default is true.
+	AutoYieldOutputHandlerResultObject *bool
 
 	// CrossRunShareable reports whether this executor instance can be shared
 	// safely by concurrent workflow runs. [Executor.Bind] copies this value to
@@ -117,8 +118,8 @@ func (e *Executor) SetCrossRunShareable(v bool) *Executor {
 // Most hooks stop on the first error. OnMessageDeliveryFinished runs every hook
 // and returns the first error encountered.
 //
-// Runtime policy fields are combined conservatively: disabling automatic send
-// or yield in either executor disables it in the receiver.
+// Runtime policy fields are combined conservatively: automatic send or yield
+// remains enabled only when both executors enable it.
 func (e *Executor) Extend(executor *Executor) *Executor {
 	if e == nil {
 		panic("workflow: cannot extend nil Executor")
@@ -127,8 +128,8 @@ func (e *Executor) Extend(executor *Executor) *Executor {
 		panic("workflow: cannot extend with nil Executor")
 	}
 
-	e.DisableAutoSendMessageHandlerResultObject = e.DisableAutoSendMessageHandlerResultObject || executor.DisableAutoSendMessageHandlerResultObject
-	e.DisableAutoYieldOutputHandlerResultObject = e.DisableAutoYieldOutputHandlerResultObject || executor.DisableAutoYieldOutputHandlerResultObject
+	e.AutoSendMessageHandlerResultObject = new(e.autoSendMessageHandlerResultObject() && executor.autoSendMessageHandlerResultObject())
+	e.AutoYieldOutputHandlerResultObject = new(e.autoYieldOutputHandlerResultObject() && executor.autoYieldOutputHandlerResultObject())
 	e.ConfigureProtocol = extendProtocol(e.ConfigureProtocol, executor.ConfigureProtocol)
 	e.InitializeFunc = extendContextHook(e.InitializeFunc, executor.InitializeFunc)
 	e.AttachRuntimeFunc = extendRuntimeHook(e.AttachRuntimeFunc, executor.AttachRuntimeFunc)
@@ -140,6 +141,14 @@ func (e *Executor) Extend(executor *Executor) *Executor {
 	e.OnMessageDeliveryFinishedFunc = extendFinishedHook(e.OnMessageDeliveryFinishedFunc, executor.OnMessageDeliveryFinishedFunc)
 	e.state = executorState{}
 	return e
+}
+
+func (e *Executor) autoSendMessageHandlerResultObject() bool {
+	return e.AutoSendMessageHandlerResultObject == nil || *e.AutoSendMessageHandlerResultObject
+}
+
+func (e *Executor) autoYieldOutputHandlerResultObject() bool {
+	return e.AutoYieldOutputHandlerResultObject == nil || *e.AutoYieldOutputHandlerResultObject
 }
 
 func appendUniqueTypes(dst []reflect.Type, src ...reflect.Type) []reflect.Type {
@@ -267,6 +276,9 @@ func (e *Executor) implementationID() string {
 }
 
 func (e *Executor) Initialize(ctx *Context) error {
+	if _, err := e.protocol(); err != nil {
+		return err
+	}
 	if e.InitializeFunc != nil {
 		return e.InitializeFunc(ctx)
 	}
@@ -413,12 +425,12 @@ func (e *Executor) Execute(ctx *Context, message any) (result any, err error) {
 	// If we had a real return type, raise it as a SendMessage
 	if ret.result != nil && ret.autoOutput {
 		telemetry.SetExecutorOutput(span, ret.result)
-		if !e.DisableAutoSendMessageHandlerResultObject {
+		if e.autoSendMessageHandlerResultObject() {
 			if err := ctx.SendMessage("", ret.result); err != nil {
 				return nil, err
 			}
 		}
-		if !e.DisableAutoYieldOutputHandlerResultObject {
+		if e.autoYieldOutputHandlerResultObject() {
 			if err := ctx.YieldOutput(ret.result); err != nil {
 				return nil, err
 			}
@@ -435,12 +447,62 @@ func (e *Executor) describeProtocol() (ProtocolDescriptor, error) {
 	return protocol.describe(), nil
 }
 
+// DescribeProtocol returns the executor's accepted, sent, and yielded message
+// types. It panics if the executor's protocol configuration is invalid.
 func (e *Executor) DescribeProtocol() ProtocolDescriptor {
 	protocol, err := e.describeProtocol()
 	if err != nil {
-		return ProtocolDescriptor{}
+		panic(err)
 	}
 	return protocol
+}
+
+// NewAggregatingExecutor creates an executor that incrementally aggregates
+// input messages. Aggregate state is persisted in workflow checkpoints.
+// The aggregator receives nil when no state is present; returning nil clears
+// the state. Non-nil aggregates are sent and yielded normally.
+func NewAggregatingExecutor[TInput, TAggregate any](id string, aggregator func(*TAggregate, TInput) *TAggregate) *Executor {
+	if aggregator == nil {
+		panic("workflow: aggregator cannot be nil")
+	}
+
+	cache := &StatefulExecutorCache[aggregatingExecutorState[TAggregate]]{StateKey: "Aggregate"}
+	return &Executor{
+		ID:                       id,
+		ImplementationID:         fmt.Sprintf("workflow.AggregatingExecutor[%v,%v]", reflect.TypeFor[TInput](), reflect.TypeFor[TAggregate]()),
+		ResetFunc:                cache.Reset,
+		OnCheckpointRestoredFunc: cache.OnCheckpointRestored,
+		ConfigureProtocol: func(builder *ProtocolBuilder) (*ProtocolBuilder, error) {
+			builder.RouteBuilder.AddHandlerRaw(
+				reflect.TypeFor[TInput](),
+				reflect.TypeFor[TAggregate](),
+				func(ctx *Context, message any) (any, error) {
+					var aggregate *TAggregate
+					err := cache.InvokeWithState(ctx, false, func(_ *Context, state aggregatingExecutorState[TAggregate]) (aggregatingExecutorState[TAggregate], error) {
+						var current *TAggregate
+						if state.Present {
+							current = &state.Value
+						}
+						aggregate = aggregator(current, message.(TInput))
+						if aggregate == nil {
+							return aggregatingExecutorState[TAggregate]{}, nil
+						}
+						return aggregatingExecutorState[TAggregate]{Value: *aggregate, Present: true}, nil
+					})
+					if err != nil || aggregate == nil {
+						return nil, err
+					}
+					return *aggregate, nil
+				},
+			)
+			return builder, nil
+		},
+	}
+}
+
+type aggregatingExecutorState[T any] struct {
+	Value   T
+	Present bool
 }
 
 // StatefulExecutorCache helps an executor read, update, and cache typed state.
@@ -590,6 +652,21 @@ func (s *StatefulExecutorCache[T]) Reset() error {
 	return nil
 }
 
+// wrappedRequestsStateKey is the workflow state key under which a request-port
+// executor persists its in-flight wrapped requests so they survive
+// checkpoint/restore. Mirrors the .NET RequestInfoExecutor
+// WrappedRequestsStateKey.
+const wrappedRequestsStateKey = "workflow.RequestPort.WrappedRequests"
+
+// OnCheckpointRestored invalidates the executor-local cache so the next read
+// observes the state imported from the checkpoint rather than a stale cached
+// value. Its signature matches [Executor.OnCheckpointRestoredFunc], so a shared
+// stateful executor should wire it there to stay consistent after an in-place
+// checkpoint restore.
+func (s *StatefulExecutorCache[T]) OnCheckpointRestored(*Context) error {
+	return s.Reset()
+}
+
 // newRequestPortExecutor creates the executor that turns request-port messages
 // into [ExternalRequest]s and routes matching [ExternalResponse]s back into the
 // workflow.
@@ -601,6 +678,38 @@ func newRequestPortExecutor(port RequestPort) *Executor {
 
 	return &Executor{
 		ID: port.ID,
+		OnCheckpointFunc: func(ctx *Context) error {
+			if ctx.QueueStateUpdate == nil {
+				return nil
+			}
+			wrappedMu.Lock()
+			snapshot := make(map[string]*ExternalRequest, len(wrappedRequests))
+			maps.Copy(snapshot, wrappedRequests)
+			wrappedMu.Unlock()
+			return ctx.QueueStateUpdate(wrappedRequestsStateKey, "", snapshot)
+		},
+		OnCheckpointRestoredFunc: func(ctx *Context) error {
+			if ctx.ReadState == nil {
+				return nil
+			}
+			value, err := ctx.ReadState(wrappedRequestsStateKey, "")
+			if err != nil {
+				return err
+			}
+			var restored map[string]*ExternalRequest
+			if value != nil {
+				typed, ok := value.(map[string]*ExternalRequest)
+				if !ok {
+					return fmt.Errorf("workflow: state %q has type %T, want map[string]*ExternalRequest", wrappedRequestsStateKey, value)
+				}
+				restored = typed
+			}
+			wrappedMu.Lock()
+			clear(wrappedRequests)
+			maps.Copy(wrappedRequests, restored)
+			wrappedMu.Unlock()
+			return nil
+		},
 		ConfigureProtocol: func(rb *ProtocolBuilder) (*ProtocolBuilder, error) {
 			rb.SendsMessageType(port.Response, reflect.TypeFor[*ExternalResponse]())
 			rb.RouteBuilder.
@@ -743,7 +852,7 @@ func hasAnonymousFuncOrdinal(s string) bool {
 //     significant; _ is recommended for marker-only fields.
 //
 // NewExecutor panics for nil values, nil functions, unsupported function
-// signatures, or mismatched IDs.
+// signatures, factory failures, or mismatched IDs.
 func NewExecutor(id string, v any) *Executor {
 	if v == nil {
 		panic("workflow: cannot create Executor from nil value")
@@ -754,7 +863,7 @@ func NewExecutor(id string, v any) *Executor {
 			panic("workflow: cannot create Executor from nil *Executor")
 		}
 		if id != "" && v.ID != id {
-			panic(fmt.Sprintf("workflow: executor ID %q does not match provided ID %q", v.ID, id))
+			panic(fmt.Errorf("workflow: executor ID %q does not match provided ID %q", v.ID, id))
 		}
 		return v
 	case RequestPort:
@@ -766,11 +875,11 @@ func NewExecutor(id string, v any) *Executor {
 		return newRequestPortExecutor(*v)
 	case ExecutorBinding:
 		if id != "" && v.ID != id {
-			panic(fmt.Sprintf("workflow: binding ID %q does not match provided ID %q", v.ID, id))
+			panic(fmt.Errorf("workflow: binding ID %q does not match provided ID %q", v.ID, id))
 		}
 		executor, err := v.CreateInstance(v.ID)
 		if err != nil {
-			panic(fmt.Sprintf("workflow: error creating Executor from binding for ID %q: %v", v.ID, err))
+			panic(fmt.Errorf("workflow: error creating Executor from binding for ID %q: %w", v.ID, err))
 		}
 		return executor
 	default:
@@ -793,9 +902,9 @@ func NewExecutor(id string, v any) *Executor {
 			if ok {
 				return executor
 			}
-			panic(fmt.Sprintf("workflow: cannot create Executor from value of type %T", v))
+			panic(fmt.Errorf("workflow: cannot create Executor from value of type %T", v))
 		default:
-			panic(fmt.Sprintf("workflow: cannot create Executor from value of type %T", v))
+			panic(fmt.Errorf("workflow: cannot create Executor from value of type %T", v))
 		}
 	}
 }
@@ -893,8 +1002,8 @@ func handleMethodValue(value reflect.Value) reflect.Value {
 }
 
 func executorAttrTypes(structType reflect.Type) (sendTypes []reflect.Type, yieldTypes []reflect.Type) {
-	for i := 0; i < structType.NumField(); i++ {
-		fieldType := structType.Field(i).Type
+	for field := range structType.Fields() {
+		fieldType := field.Type
 		if typ, ok := executorAttrType(fieldType, "AttrSendsMessage"); ok {
 			sendTypes = appendUniqueTypes(sendTypes, typ)
 		}

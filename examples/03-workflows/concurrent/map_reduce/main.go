@@ -6,10 +6,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -233,7 +234,7 @@ func newReducer(id string) workflow.ExecutorBinding {
 			return err
 		}
 		var lines []string
-		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		for line := range strings.SplitSeq(strings.TrimSpace(string(data)), "\n") {
 			if strings.TrimSpace(line) == "" {
 				continue
 			}
@@ -272,7 +273,7 @@ func newCompletion(id string, expected int) workflow.ExecutorBinding {
 			if len(paths) < expected {
 				return nil
 			}
-			out := append([]string(nil), paths...)
+			out := slices.Clone(paths)
 			paths = nil
 			return ctx.YieldOutput(out)
 		}).Extend(&workflow.Executor{
@@ -292,7 +293,7 @@ func preprocess(text string) []string {
 		if line == "" {
 			continue
 		}
-		for _, word := range strings.Split(line, " ") {
+		for word := range strings.SplitSeq(line, " ") {
 			if strings.TrimSpace(word) != "" {
 				words = append(words, word)
 			}
@@ -307,11 +308,8 @@ type wordGroup struct {
 }
 
 func partitionGroups(groups map[string][]int, count int) [][]wordGroup {
-	keys := make([]string, 0, len(groups))
-	for key := range groups {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
+	keys := slices.Collect(maps.Keys(groups))
+	slices.Sort(keys)
 
 	partitions := make([][]wordGroup, count)
 	if count == 0 {
@@ -341,7 +339,7 @@ func loadMapGroups(results []MapComplete) (map[string][]int, error) {
 		if err != nil {
 			return nil, err
 		}
-		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		for line := range strings.SplitSeq(strings.TrimSpace(string(data)), "\n") {
 			key, value, ok := strings.Cut(line, ": ")
 			if !ok {
 				continue

@@ -216,8 +216,12 @@ func BindNewExecutorFunc(id string, fn func(sessionID string, executorID string)
 //
 // Calling Bind multiple times on the same port is fine: each returned binding
 // has the same ID and port metadata, and creates request-port executor
-// instances from that port.
+// instances from that port. Bind panics if the port ID is empty or either
+// message type is nil.
 func (p RequestPort) Bind() ExecutorBinding {
+	if err := validateRequestPort(p); err != nil {
+		panic(err.Error())
+	}
 	return ExecutorBinding{
 		ID:               p.ID,
 		ImplementationID: "workflow.RequestPort.Bind",

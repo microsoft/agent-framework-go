@@ -6,6 +6,7 @@ import (
 	"context"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -23,6 +24,15 @@ func sessionOpts() []agent.Option {
 	return []agent.Option{agent.WithSession(agenttest.CreateSession())}
 }
 
+func mustSession(t *testing.T, opts []agent.Option) *agent.Session {
+	t.Helper()
+	session, ok := agent.GetOption(opts, agent.WithSession)
+	if !ok || session == nil {
+		t.Fatal("expected a session option")
+	}
+	return session
+}
+
 func invokeProvider(provider *agentmode.Provider, ctx context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
 	return provider.Invoking(ctx, agent.InvokingContext{Messages: messages, Options: options})
 }
@@ -30,7 +40,7 @@ func invokeProvider(provider *agentmode.Provider, ctx context.Context, messages 
 func collectTools(opts []agent.Option) []tool.Tool {
 	var tools []tool.Tool
 	for _, opt := range opts {
-		if tt, ok := opt.Value().(tool.Tool); ok {
+		if tt, ok := opt.MAFValue().(tool.Tool); ok {
 			tools = append(tools, tt)
 		}
 	}
@@ -46,6 +56,67 @@ func collectInstructions(opts []agent.Option) string {
 		sb.WriteString(inst)
 	}
 	return sb.String()
+}
+
+// TestConcurrentToolInvocations_NoDataRace mirrors toolautocall with
+// AllowConcurrentInvocations enabled, which invokes multiple tool calls from a
+// single model response on separate goroutines that share one session. The
+// mode_set/mode_get tools must therefore be safe for concurrent use. Run with
+// -race to surface unsynchronized session/state access.
+func TestConcurrentToolInvocations_NoDataRace(t *testing.T) {
+	p := agentmode.New(agentmode.Config{})
+	opts := sessionOpts()
+
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var setTool, getTool tool.FuncTool
+	for _, tt := range collectTools(outOpts) {
+		ft, ok := tt.(tool.FuncTool)
+		if !ok {
+			continue
+		}
+		switch ft.Name() {
+		case "mode_set":
+			setTool = ft
+		case "mode_get":
+			getTool = ft
+		}
+	}
+	if setTool == nil || getTool == nil {
+		t.Fatalf("expected mode_set and mode_get tools, got set=%v get=%v", setTool, getTool)
+	}
+
+	const n = 50
+	var wg sync.WaitGroup
+	wg.Add(n * 2)
+	// Each goroutine records its error in a distinct slot so the slice itself
+	// is not a source of races; assert them all after the goroutines finish so
+	// a functional regression (e.g. argument-decode failure) fails the test
+	// deterministically, independent of the race detector.
+	errs := make([]error, n*2)
+	for i := range n {
+		mode := "plan"
+		if i%2 == 0 {
+			mode = "execute"
+		}
+		go func(idx int, mode string) {
+			defer wg.Done()
+			_, errs[idx] = setTool.Call(context.Background(), `{"Arg0":"`+mode+`"}`)
+		}(i*2, mode)
+		go func(idx int) {
+			defer wg.Done()
+			_, errs[idx] = getTool.Call(context.Background(), "")
+		}(i*2 + 1)
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent tool call failed: %v", err)
+		}
+	}
 }
 
 // 1. ProvideAIContextAsync_ReturnsToolsAndInstructions
@@ -89,13 +160,13 @@ func TestProvide_InstructionsIncludeCurrentMode(t *testing.T) {
 func TestCustomModes_AreUsed(t *testing.T) {
 	p := agentmode.New(agentmode.Config{
 		Modes: []agentmode.Mode{
-			{Name: "draft", Description: "Draft mode"},
-			{Name: "review", Description: "Review mode"},
+			{Name: "draft", Instructions: "Draft mode"},
+			{Name: "review", Instructions: "Review mode"},
 		},
 	})
 	opts := sessionOpts()
 
-	mode := p.GetMode(opts...)
+	mode := p.ModeForSession(mustSession(t, opts))
 	if mode != "draft" {
 		t.Errorf("expected default mode 'draft', got %q", mode)
 	}
@@ -105,20 +176,20 @@ func TestCustomModes_AreUsed(t *testing.T) {
 func TestCustomModes_SetModeValidatesAgainstList(t *testing.T) {
 	p := agentmode.New(agentmode.Config{
 		Modes: []agentmode.Mode{
-			{Name: "draft", Description: "Draft mode"},
-			{Name: "review", Description: "Review mode"},
+			{Name: "draft", Instructions: "Draft mode"},
+			{Name: "review", Instructions: "Review mode"},
 		},
 	})
 	opts := sessionOpts()
 
-	if err := p.SetMode("review", opts...); err != nil {
+	if err := p.SetModeForSession(mustSession(t, opts), "review"); err != nil {
 		t.Fatalf("expected valid mode 'review' to succeed: %v", err)
 	}
-	if mode := p.GetMode(opts...); mode != "review" {
+	if mode := p.ModeForSession(mustSession(t, opts)); mode != "review" {
 		t.Errorf("expected 'review', got %q", mode)
 	}
 
-	if err := p.SetMode("invalid", opts...); err == nil {
+	if err := p.SetModeForSession(mustSession(t, opts), "invalid"); err == nil {
 		t.Fatal("expected error for invalid mode")
 	}
 }
@@ -127,14 +198,14 @@ func TestCustomModes_SetModeValidatesAgainstList(t *testing.T) {
 func TestCustomDefaultMode_IsUsed(t *testing.T) {
 	p := agentmode.New(agentmode.Config{
 		Modes: []agentmode.Mode{
-			{Name: "draft", Description: "Draft mode"},
-			{Name: "review", Description: "Review mode"},
+			{Name: "draft", Instructions: "Draft mode"},
+			{Name: "review", Instructions: "Review mode"},
 		},
-		DefaultMode: "review",
+		DefaultMode: new("review"),
 	})
 	opts := sessionOpts()
 
-	mode := p.GetMode(opts...)
+	mode := p.ModeForSession(mustSession(t, opts))
 	if mode != "review" {
 		t.Errorf("expected default mode 'review', got %q", mode)
 	}
@@ -149,9 +220,9 @@ func TestInvalidDefaultMode_Panics(t *testing.T) {
 	}()
 	agentmode.New(agentmode.Config{
 		Modes: []agentmode.Mode{
-			{Name: "plan", Description: "Plan mode"},
+			{Name: "plan", Instructions: "Plan mode"},
 		},
-		DefaultMode: "nonexistent",
+		DefaultMode: new("nonexistent"),
 	})
 }
 
@@ -162,7 +233,7 @@ func TestEmptyModes_UsesDefaults(t *testing.T) {
 		Modes: []agentmode.Mode{},
 	})
 	opts := sessionOpts()
-	mode := p.GetMode(opts...)
+	mode := p.ModeForSession(mustSession(t, opts))
 	if mode != "plan" {
 		t.Errorf("expected default mode 'plan' for empty modes, got %q", mode)
 	}
@@ -172,8 +243,8 @@ func TestEmptyModes_UsesDefaults(t *testing.T) {
 func TestCustomModes_AppearInInstructions(t *testing.T) {
 	p := agentmode.New(agentmode.Config{
 		Modes: []agentmode.Mode{
-			{Name: "alpha", Description: "Alpha mode description"},
-			{Name: "beta", Description: "Beta mode description"},
+			{Name: "alpha", Instructions: "Alpha mode description"},
+			{Name: "beta", Instructions: "Beta mode description"},
 		},
 	})
 	opts := sessionOpts()
@@ -198,7 +269,7 @@ func TestCustomModes_AppearInInstructions(t *testing.T) {
 	}
 }
 
-// 9. AgentMode_RequiresNameAndDescription
+// 9. AgentMode_RequiresNameAndInstructions
 func TestEmptyModeName_Panics(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
@@ -207,8 +278,19 @@ func TestEmptyModeName_Panics(t *testing.T) {
 	}()
 	agentmode.New(agentmode.Config{
 		Modes: []agentmode.Mode{
-			{Name: "", Description: "No name"},
+			{Name: "", Instructions: "No name"},
 		},
+	})
+}
+
+func TestEmptyModeInstructions_Panics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic for empty mode instructions")
+		}
+	}()
+	agentmode.New(agentmode.Config{
+		Modes: []agentmode.Mode{{Name: "plan"}},
 	})
 }
 
@@ -221,8 +303,8 @@ func TestDuplicateModeNames_Panics(t *testing.T) {
 	}()
 	agentmode.New(agentmode.Config{
 		Modes: []agentmode.Mode{
-			{Name: "plan", Description: "Plan mode"},
-			{Name: "plan", Description: "Duplicate"},
+			{Name: "plan", Instructions: "Plan mode"},
+			{Name: "plan", Instructions: "Duplicate"},
 		},
 	})
 }
@@ -231,6 +313,10 @@ func TestDuplicateModeNames_Panics(t *testing.T) {
 func TestExternalModeChange_InjectsNotification(t *testing.T) {
 	p := agentmode.New(agentmode.Config{})
 	opts := sessionOpts()
+	session, ok := agent.GetOption(opts, agent.WithSession)
+	if !ok || session == nil {
+		t.Fatal("expected session option from sessionOpts()")
+	}
 	msgs := newMessages("hi")
 
 	// Initialize state.
@@ -240,7 +326,7 @@ func TestExternalModeChange_InjectsNotification(t *testing.T) {
 	}
 
 	// Change mode externally.
-	if err := p.SetMode("execute", opts...); err != nil {
+	if err := p.SetModeForSession(session, "execute"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -266,10 +352,14 @@ func TestExternalModeChange_InjectsNotification(t *testing.T) {
 func TestExternalModeChange_NotificationClearedAfterFirstRead(t *testing.T) {
 	p := agentmode.New(agentmode.Config{})
 	opts := sessionOpts()
+	session, ok := agent.GetOption(opts, agent.WithSession)
+	if !ok || session == nil {
+		t.Fatal("expected session option from sessionOpts()")
+	}
 	msgs := newMessages("hi")
 
 	_, _, _ = invokeProvider(p, context.Background(), msgs, opts...)
-	_ = p.SetMode("execute", opts...)
+	_ = p.SetModeForSession(session, "execute")
 
 	// First read: should have notification.
 	outMessages, _, _ := invokeProvider(p, context.Background(), msgs, opts...)
@@ -297,12 +387,16 @@ func TestExternalModeChange_NotificationClearedAfterFirstRead(t *testing.T) {
 func TestExternalModeChange_SameMode_NoNotification(t *testing.T) {
 	p := agentmode.New(agentmode.Config{})
 	opts := sessionOpts()
+	session, ok := agent.GetOption(opts, agent.WithSession)
+	if !ok || session == nil {
+		t.Fatal("expected session option from sessionOpts()")
+	}
 	msgs := newMessages("hi")
 
 	_, _, _ = invokeProvider(p, context.Background(), msgs, opts...)
 
 	// Set to same mode.
-	_ = p.SetMode("plan", opts...)
+	_ = p.SetModeForSession(session, "plan")
 
 	outMessages, _, _ := invokeProvider(p, context.Background(), msgs, opts...)
 	for _, msg := range outMessages {
@@ -312,28 +406,28 @@ func TestExternalModeChange_SameMode_NoNotification(t *testing.T) {
 	}
 }
 
-// 14. SetMode_ChangesMode
-func TestSetMode_ChangesMode(t *testing.T) {
+// 14. SetModeForSession_ChangesMode
+func TestSetModeForSession_ChangesMode(t *testing.T) {
 	p := agentmode.New(agentmode.Config{})
 	opts := sessionOpts()
 
 	_, _, _ = invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 
-	if err := p.SetMode("execute", opts...); err != nil {
+	if err := p.SetModeForSession(mustSession(t, opts), "execute"); err != nil {
 		t.Fatal(err)
 	}
-	if mode := p.GetMode(opts...); mode != "execute" {
+	if mode := p.ModeForSession(mustSession(t, opts)); mode != "execute" {
 		t.Errorf("expected 'execute', got %q", mode)
 	}
 }
 
-// 15. SetMode_ReturnsConfirmation — verified via instructions reflecting the new mode
-func TestSetMode_ReflectedInInstructions(t *testing.T) {
+// 15. SetModeForSession_ReturnsConfirmation — verified via instructions reflecting the new mode
+func TestSetModeForSession_ReflectedInInstructions(t *testing.T) {
 	p := agentmode.New(agentmode.Config{})
 	opts := sessionOpts()
 
 	_, _, _ = invokeProvider(p, context.Background(), newMessages("hi"), opts...)
-	_ = p.SetMode("execute", opts...)
+	_ = p.SetModeForSession(mustSession(t, opts), "execute")
 
 	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
@@ -346,12 +440,12 @@ func TestSetMode_ReflectedInInstructions(t *testing.T) {
 	}
 }
 
-// 16. SetMode_InvalidMode_Throws
-func TestSetMode_InvalidMode_ReturnsError(t *testing.T) {
+// 16. SetModeForSession_InvalidMode_Throws
+func TestSetModeForSession_InvalidMode_ReturnsError(t *testing.T) {
 	p := agentmode.New(agentmode.Config{})
 	opts := sessionOpts()
 
-	err := p.SetMode("nonexistent", opts...)
+	err := p.SetModeForSession(mustSession(t, opts), "nonexistent")
 	if err == nil {
 		t.Fatal("expected error for invalid mode")
 	}
@@ -360,69 +454,81 @@ func TestSetMode_InvalidMode_ReturnsError(t *testing.T) {
 	}
 }
 
-// 17. GetMode_ReturnsDefaultMode
-func TestGetMode_ReturnsDefaultMode(t *testing.T) {
+// 17. ModeForSession_ReturnsDefaultMode
+func TestModeForSession_ReturnsDefaultMode(t *testing.T) {
 	p := agentmode.New(agentmode.Config{})
 	opts := sessionOpts()
 
-	mode := p.GetMode(opts...)
+	mode := p.ModeForSession(mustSession(t, opts))
 	if mode != "plan" {
 		t.Errorf("expected 'plan', got %q", mode)
 	}
 }
 
-// 18. GetMode_ReturnsUpdatedModeAfterSet
-func TestGetMode_ReturnsUpdatedModeAfterSet(t *testing.T) {
+// 18. ModeForSession_ReturnsUpdatedModeAfterSet
+func TestModeForSession_ReturnsUpdatedModeAfterSet(t *testing.T) {
 	p := agentmode.New(agentmode.Config{})
 	opts := sessionOpts()
 
-	_ = p.SetMode("execute", opts...)
-	mode := p.GetMode(opts...)
+	_ = p.SetModeForSession(mustSession(t, opts), "execute")
+	mode := p.ModeForSession(mustSession(t, opts))
 	if mode != "execute" {
 		t.Errorf("expected 'execute', got %q", mode)
 	}
 }
 
-// 19. PublicGetMode_ReturnsDefaultMode
-func TestPublicGetMode_ReturnsDefaultMode(t *testing.T) {
+// 19. ModeForSession_WithSessionOption_ReturnsDefaultMode
+func TestModeForSession_WithSessionOption_ReturnsDefaultMode(t *testing.T) {
 	p := agentmode.New(agentmode.Config{})
 	opts := sessionOpts()
 
-	if mode := p.GetMode(opts...); mode != "plan" {
+	if mode := p.ModeForSession(mustSession(t, opts)); mode != "plan" {
 		t.Errorf("expected 'plan', got %q", mode)
 	}
 }
 
-// 20. PublicSetMode_ChangesMode
-func TestPublicSetMode_ChangesMode(t *testing.T) {
+// 20. PublicModeForSession_ReturnsDefaultMode
+func TestPublicModeForSession_ReturnsDefaultMode(t *testing.T) {
 	p := agentmode.New(agentmode.Config{})
-	opts := sessionOpts()
+	session := agenttest.CreateSession()
 
-	if err := p.SetMode("execute", opts...); err != nil {
+	if mode := p.ModeForSession(session); mode != "plan" {
+		t.Errorf("expected 'plan', got %q", mode)
+	}
+}
+
+// 21. PublicSetModeForSession_ChangesMode
+func TestPublicSetModeForSession_ChangesMode(t *testing.T) {
+	p := agentmode.New(agentmode.Config{})
+	session := agenttest.CreateSession()
+
+	if err := p.SetModeForSession(session, "execute"); err != nil {
 		t.Fatal(err)
 	}
-	if mode := p.GetMode(opts...); mode != "execute" {
+	if mode := p.ModeForSession(session); mode != "execute" {
 		t.Errorf("expected 'execute', got %q", mode)
 	}
 }
 
-// 21. PublicSetMode_InvalidMode_Throws
-func TestPublicSetMode_InvalidMode_ReturnsError(t *testing.T) {
+// 22. PublicSetModeForSession_NoSession_ReturnsError
+func TestPublicSetModeForSession_NoSession_ReturnsError(t *testing.T) {
 	p := agentmode.New(agentmode.Config{})
-	opts := sessionOpts()
 
-	err := p.SetMode("bad", opts...)
+	err := p.SetModeForSession(nil, "execute")
 	if err == nil {
 		t.Fatal("expected error")
 	}
+	if !strings.Contains(err.Error(), "no session available") {
+		t.Fatalf("expected no-session error, got %v", err)
+	}
 }
 
-// 22. PublicSetMode_ReflectedInToolResults
-func TestPublicSetMode_ReflectedInInstructions(t *testing.T) {
+// 23. PublicSetModeForSession_ReflectedInToolResults
+func TestPublicSetModeForSession_ReflectedInInstructions(t *testing.T) {
 	p := agentmode.New(agentmode.Config{})
 	opts := sessionOpts()
 
-	_ = p.SetMode("execute", opts...)
+	_ = p.SetModeForSession(mustSession(t, opts), "execute")
 
 	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
@@ -435,13 +541,13 @@ func TestPublicSetMode_ReflectedInInstructions(t *testing.T) {
 	}
 }
 
-// 23. State_PersistsAcrossInvocations
+// 24. State_PersistsAcrossInvocations
 func TestState_PersistsAcrossInvocations(t *testing.T) {
 	p := agentmode.New(agentmode.Config{})
 	opts := sessionOpts()
 
 	_, _, _ = invokeProvider(p, context.Background(), newMessages("hi"), opts...)
-	_ = p.SetMode("execute", opts...)
+	_ = p.SetModeForSession(mustSession(t, opts), "execute")
 
 	// Second invocation — mode should persist.
 	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
@@ -454,15 +560,15 @@ func TestState_PersistsAcrossInvocations(t *testing.T) {
 		t.Error("expected mode 'execute' to persist across invocations")
 	}
 
-	if mode := p.GetMode(opts...); mode != "execute" {
+	if mode := p.ModeForSession(mustSession(t, opts)); mode != "execute" {
 		t.Errorf("expected 'execute', got %q", mode)
 	}
 }
 
-// 24. Options_CustomInstructions_OverridesDefault
+// 27. Options_CustomInstructions_OverridesDefault
 func TestCustomInstructions_OverridesDefault(t *testing.T) {
 	p := agentmode.New(agentmode.Config{
-		Instructions: "Custom instructions for mode {current_mode}",
+		Instructions: new("Custom instructions for mode {current_mode}"),
 	})
 	opts := sessionOpts()
 
@@ -515,10 +621,29 @@ func TestDefaultInstructions_ContainToolNamesAndModeCheckGuidance(t *testing.T) 
 	}
 
 	instructions := collectInstructions(outOpts)
-	for _, want := range []string{"mode_get", "mode_set", "check the current mode", "Mandatory Mode based Workflow"} {
+	for _, want := range []string{"mode_get", "mode_set", "check your current operating mode", "Mandatory Mode based Workflow"} {
 		if !strings.Contains(instructions, want) {
 			t.Errorf("expected instructions to contain %q", want)
 		}
+	}
+}
+
+// Verify the default instructions omit the extra hardcoded bullet that is not
+// present in the .NET AgentModeProvider default instructions. That bullet baked
+// the built-in 'plan'/'execute' names into the prose, which misleads when custom
+// modes are configured.
+func TestDefaultInstructions_OmitExtraHardcodedBullet(t *testing.T) {
+	p := agentmode.New(agentmode.Config{})
+	opts := sessionOpts()
+
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	instructions := collectInstructions(outOpts)
+	if strings.Contains(instructions, "You must check the current mode after any user input") {
+		t.Error("expected default instructions to omit the extra hardcoded bullet")
 	}
 }
 
@@ -538,5 +663,26 @@ func TestDefaultInstructions_ModesSectionHeaderFormat(t *testing.T) {
 	}
 	if !strings.Contains(instructions, "#### execute") {
 		t.Error("expected '#### execute' section header in instructions")
+	}
+}
+
+// Verify the execute-mode description matches the current .NET AgentModeProvider
+// text: it opens with the simple-vs-complex "Determine the type of ask" decision
+// and no longer uses the old "carrying out approved plans" phrasing.
+func TestDefaultInstructions_ExecuteModeDescription(t *testing.T) {
+	p := agentmode.New(agentmode.Config{})
+	opts := sessionOpts()
+
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	instructions := collectInstructions(outOpts)
+	if !strings.Contains(instructions, "Determine the type of ask:") {
+		t.Error("expected execute-mode instructions to contain 'Determine the type of ask:'")
+	}
+	if strings.Contains(instructions, "carrying out approved plans") {
+		t.Error("expected execute-mode instructions to no longer contain 'carrying out approved plans'")
 	}
 }

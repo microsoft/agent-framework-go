@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -24,6 +25,15 @@ func sessionOpts() []agent.Option {
 	return []agent.Option{agent.WithSession(agenttest.CreateSession())}
 }
 
+func mustSession(t *testing.T, opts []agent.Option) *agent.Session {
+	t.Helper()
+	session, ok := agent.GetOption(opts, agent.WithSession)
+	if !ok || session == nil {
+		t.Fatal("expected a session option")
+	}
+	return session
+}
+
 func invokeProvider(provider *todo.Provider, ctx context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
 	return provider.Invoking(ctx, agent.InvokingContext{Messages: messages, Options: options})
 }
@@ -31,7 +41,7 @@ func invokeProvider(provider *todo.Provider, ctx context.Context, messages []*me
 func collectTools(opts []agent.Option) []tool.Tool {
 	var tools []tool.Tool
 	for _, opt := range opts {
-		if tt, ok := opt.Value().(tool.Tool); ok {
+		if tt, ok := opt.MAFValue().(tool.Tool); ok {
 			tools = append(tools, tt)
 		}
 	}
@@ -49,19 +59,11 @@ func collectInstructions(opts []agent.Option) string {
 	return sb.String()
 }
 
-// addItems is a helper that uses the public API to set up todo items via session state.
-// It calls Invoking to initialize tools, then uses GetAllItems to verify.
-// Since we can't call tools directly, we manipulate state through the provider's public methods.
-// Instead, we add items by calling Invoking which creates tools bound to the session,
-// then we inspect state. For actual item creation, we rely on integration through Invoking.
-//
-// For tests that need items, we'll use a workaround: call Invoking to get the tools,
-// then invoke the tools via their Call method.
 func callTool(t *testing.T, opts []agent.Option, name string, argsJSON string) string {
 	t.Helper()
 	var tools []tool.Tool
 	for _, opt := range opts {
-		if tt, ok := opt.Value().(tool.Tool); ok {
+		if tt, ok := opt.MAFValue().(tool.Tool); ok {
 			tools = append(tools, tt)
 		}
 	}
@@ -101,6 +103,16 @@ func TestProvide_ReturnsToolsAndInstructions(t *testing.T) {
 	if instructions == "" {
 		t.Fatal("expected non-empty instructions")
 	}
+	// Default instructions mirror the current .NET TodoProvider text: a
+	// numbered simple-vs-complex decision and a General TODO Guidelines heading.
+	for _, want := range []string{
+		"### General TODO Guidelines",
+		"just complete the task directly",
+	} {
+		if !strings.Contains(instructions, want) {
+			t.Errorf("expected default instructions to contain %q", want)
+		}
+	}
 }
 
 // 2. AddTodos_CreatesSingleItem
@@ -115,7 +127,7 @@ func TestAddTodos_CreatesSingleItem(t *testing.T) {
 
 	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Buy milk"}]}`)
 
-	items := p.GetAllItems(opts...)
+	items := p.AllTodos(mustSession(t, opts))
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(items))
 	}
@@ -136,7 +148,7 @@ func TestAddTodos_CreatesMultipleItems(t *testing.T) {
 
 	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Item 1"},{"title":"Item 2"},{"title":"Item 3"}]}`)
 
-	items := p.GetAllItems(opts...)
+	items := p.AllTodos(mustSession(t, opts))
 	if len(items) != 3 {
 		t.Fatalf("expected 3 items, got %d", len(items))
 	}
@@ -156,7 +168,7 @@ func TestCompleteTodos_MarksItemComplete(t *testing.T) {
 	}
 
 	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Task A"}]}`)
-	items := p.GetAllItems(opts...)
+	items := p.AllTodos(mustSession(t, opts))
 	id := items[0].ID
 
 	result := callTool(t, outOpts, "todos_complete", fmt.Sprintf(`{"Arg0":[{"id":%d,"reason":"done"}]}`, id))
@@ -164,7 +176,7 @@ func TestCompleteTodos_MarksItemComplete(t *testing.T) {
 		t.Errorf("expected 1 completed, got %s", result)
 	}
 
-	items = p.GetAllItems(opts...)
+	items = p.AllTodos(mustSession(t, opts))
 	if !items[0].IsComplete {
 		t.Error("expected item to be complete")
 	}
@@ -181,11 +193,11 @@ func TestCompleteTodos_MarksMultipleComplete(t *testing.T) {
 	}
 
 	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"A"},{"title":"B"},{"title":"C"}]}`)
-	items := p.GetAllItems(opts...)
+	items := p.AllTodos(mustSession(t, opts))
 
 	callTool(t, outOpts, "todos_complete", fmt.Sprintf(`{"Arg0":[{"id":%d,"reason":"done"},{"id":%d,"reason":"done"}]}`, items[0].ID, items[1].ID))
 
-	remaining := p.GetRemainingItems(opts...)
+	remaining := p.RemainingTodos(mustSession(t, opts))
 	if len(remaining) != 1 {
 		t.Fatalf("expected 1 remaining, got %d", len(remaining))
 	}
@@ -221,12 +233,12 @@ func TestRemoveTodos_RemovesItem(t *testing.T) {
 	}
 
 	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Remove me"}]}`)
-	items := p.GetAllItems(opts...)
+	items := p.AllTodos(mustSession(t, opts))
 	id := items[0].ID
 
 	callTool(t, outOpts, "todos_remove", fmt.Sprintf(`{"Arg0":[%d]}`, id))
 
-	items = p.GetAllItems(opts...)
+	items = p.AllTodos(mustSession(t, opts))
 	if len(items) != 0 {
 		t.Fatalf("expected 0 items after remove, got %d", len(items))
 	}
@@ -243,11 +255,11 @@ func TestRemoveTodos_RemovesMultipleItems(t *testing.T) {
 	}
 
 	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"A"},{"title":"B"},{"title":"C"}]}`)
-	items := p.GetAllItems(opts...)
+	items := p.AllTodos(mustSession(t, opts))
 
 	callTool(t, outOpts, "todos_remove", fmt.Sprintf(`{"Arg0":[%d,%d]}`, items[0].ID, items[1].ID))
 
-	items = p.GetAllItems(opts...)
+	items = p.AllTodos(mustSession(t, opts))
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item remaining, got %d", len(items))
 	}
@@ -272,8 +284,8 @@ func TestRemoveTodos_ReturnsZeroForMissingIds(t *testing.T) {
 	}
 }
 
-// 10. GetRemainingTodos_ReturnsOnlyIncomplete
-func TestGetRemainingTodos_ReturnsOnlyIncomplete(t *testing.T) {
+// 10. RemainingTodos_ReturnsOnlyIncomplete
+func TestRemainingTodos_ReturnsOnlyIncomplete(t *testing.T) {
 	p := todo.New(nil)
 	opts := sessionOpts()
 
@@ -283,10 +295,10 @@ func TestGetRemainingTodos_ReturnsOnlyIncomplete(t *testing.T) {
 	}
 
 	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Done"},{"title":"Pending"}]}`)
-	items := p.GetAllItems(opts...)
+	items := p.AllTodos(mustSession(t, opts))
 	callTool(t, outOpts, "todos_complete", fmt.Sprintf(`{"Arg0":[{"id":%d,"reason":"done"}]}`, items[0].ID))
 
-	remaining := p.GetRemainingItems(opts...)
+	remaining := p.RemainingTodos(mustSession(t, opts))
 	if len(remaining) != 1 {
 		t.Fatalf("expected 1 remaining, got %d", len(remaining))
 	}
@@ -295,8 +307,8 @@ func TestGetRemainingTodos_ReturnsOnlyIncomplete(t *testing.T) {
 	}
 }
 
-// 11. GetAllTodos_ReturnsAllItems
-func TestGetAllTodos_ReturnsAllItems(t *testing.T) {
+// 11. AllTodos_ReturnsAllItems
+func TestAllTodos_ReturnsAllItems(t *testing.T) {
 	p := todo.New(nil)
 	opts := sessionOpts()
 
@@ -306,10 +318,10 @@ func TestGetAllTodos_ReturnsAllItems(t *testing.T) {
 	}
 
 	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Done"},{"title":"Pending"}]}`)
-	items := p.GetAllItems(opts...)
+	items := p.AllTodos(mustSession(t, opts))
 	callTool(t, outOpts, "todos_complete", fmt.Sprintf(`{"Arg0":[{"id":%d,"reason":"done"}]}`, items[0].ID))
 
-	all := p.GetAllItems(opts...)
+	all := p.AllTodos(mustSession(t, opts))
 	if len(all) != 2 {
 		t.Fatalf("expected 2 items, got %d", len(all))
 	}
@@ -334,7 +346,7 @@ func TestState_PersistsAcrossInvocations(t *testing.T) {
 	}
 	_ = outOpts2
 
-	items := p.GetAllItems(opts...)
+	items := p.AllTodos(mustSession(t, opts))
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item to persist, got %d", len(items))
 	}
@@ -343,10 +355,11 @@ func TestState_PersistsAcrossInvocations(t *testing.T) {
 	}
 }
 
-// 13. PublicGetAllTodos_ReturnsAllItems
-func TestPublicGetAllTodos_ReturnsAllItems(t *testing.T) {
+// 13. PublicAllTodos_ReturnsAllItems
+func TestPublicAllTodos_ReturnsAllItems(t *testing.T) {
 	p := todo.New(nil)
-	opts := sessionOpts()
+	session := agenttest.CreateSession()
+	opts := []agent.Option{agent.WithSession(session)}
 
 	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
@@ -355,16 +368,17 @@ func TestPublicGetAllTodos_ReturnsAllItems(t *testing.T) {
 
 	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"X"},{"title":"Y"}]}`)
 
-	all := p.GetAllItems(opts...)
+	all := p.AllTodos(session)
 	if len(all) != 2 {
 		t.Fatalf("expected 2 items, got %d", len(all))
 	}
 }
 
-// 14. PublicGetRemainingTodos_ReturnsOnlyIncomplete
-func TestPublicGetRemainingTodos_ReturnsOnlyIncomplete(t *testing.T) {
+// 14. PublicRemainingTodos_ReturnsOnlyIncomplete
+func TestPublicRemainingTodos_ReturnsOnlyIncomplete(t *testing.T) {
 	p := todo.New(nil)
-	opts := sessionOpts()
+	session := agenttest.CreateSession()
+	opts := []agent.Option{agent.WithSession(session)}
 
 	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
@@ -372,10 +386,10 @@ func TestPublicGetRemainingTodos_ReturnsOnlyIncomplete(t *testing.T) {
 	}
 
 	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Done"},{"title":"Open"}]}`)
-	items := p.GetAllItems(opts...)
+	items := p.AllTodos(session)
 	callTool(t, outOpts, "todos_complete", fmt.Sprintf(`{"Arg0":[{"id":%d,"reason":"done"}]}`, items[0].ID))
 
-	remaining := p.GetRemainingItems(opts...)
+	remaining := p.RemainingTodos(session)
 	if len(remaining) != 1 {
 		t.Fatalf("expected 1 remaining, got %d", len(remaining))
 	}
@@ -384,21 +398,30 @@ func TestPublicGetRemainingTodos_ReturnsOnlyIncomplete(t *testing.T) {
 	}
 }
 
-// 15. PublicGetAllTodos_ReturnsEmptyForNewSession
-func TestPublicGetAllTodos_ReturnsEmptyForNewSession(t *testing.T) {
+// 15. PublicAllTodos_ReturnsEmptyForNewSession
+func TestPublicAllTodos_ReturnsEmptyForNewSession(t *testing.T) {
 	p := todo.New(nil)
-	opts := sessionOpts()
+	session := agenttest.CreateSession()
 
-	items := p.GetAllItems(opts...)
+	items := p.AllTodos(session)
 	if len(items) != 0 {
 		t.Fatalf("expected 0 items for new session, got %d", len(items))
+	}
+}
+
+func TestPublicAllTodosFromNilSession_ReturnsEmpty(t *testing.T) {
+	p := todo.New(nil)
+
+	items := p.AllTodos(nil)
+	if len(items) != 0 {
+		t.Fatalf("expected 0 items for nil session, got %d", len(items))
 	}
 }
 
 // 16. Options_CustomInstructions_OverridesDefault
 func TestCustomInstructions_OverridesDefault(t *testing.T) {
 	p := todo.New(&todo.Options{
-		Instructions: "Custom todo instructions here",
+		Instructions: new("Custom todo instructions here"),
 	})
 	opts := sessionOpts()
 
@@ -462,7 +485,7 @@ func TestProvide_InjectsTodoListMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Task A"},{"title":"Task B"}]}`)
-	items := p.GetAllItems(opts...)
+	items := p.AllTodos(mustSession(t, opts))
 	callTool(t, outOpts, "todos_complete", fmt.Sprintf(`{"Arg0":[{"id":%d,"reason":"done"}]}`, items[0].ID))
 
 	// Second call should inject todo list message.
@@ -597,7 +620,7 @@ func TestCompleteTodos_WithReason(t *testing.T) {
 	}
 
 	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Task X"}]}`)
-	items := p.GetAllItems(opts...)
+	items := p.AllTodos(mustSession(t, opts))
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(items))
 	}
@@ -607,7 +630,7 @@ func TestCompleteTodos_WithReason(t *testing.T) {
 		t.Errorf("expected 1 completed, got %s", result)
 	}
 
-	all := p.GetAllItems(opts...)
+	all := p.AllTodos(mustSession(t, opts))
 	if !all[0].IsComplete {
 		t.Error("expected item to be complete after providing reason")
 	}
@@ -658,7 +681,7 @@ func TestCompleteTodos_EmptyReasonIsAccepted(t *testing.T) {
 			}
 
 			callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Task Z"}]}`)
-			items := p.GetAllItems(opts...)
+			items := p.AllTodos(mustSession(t, opts))
 			if len(items) != 1 {
 				t.Fatalf("expected 1 item, got %d", len(items))
 			}
@@ -668,10 +691,55 @@ func TestCompleteTodos_EmptyReasonIsAccepted(t *testing.T) {
 				t.Errorf("expected 1 completed with %q reason, got %s", tc.reason, result)
 			}
 
-			all := p.GetAllItems(opts...)
+			all := p.AllTodos(mustSession(t, opts))
 			if !all[0].IsComplete {
 				t.Errorf("item should be complete even with %q reason", tc.reason)
 			}
 		})
+	}
+}
+
+// Concurrent tool invocations and public reads on a shared session must be
+// serialized by the per-session lock rather than race on the session's todo
+// state. Run under -race.
+func TestTodo_ConcurrentSessionAccess_NoDataRace(t *testing.T) {
+	p := todo.New(nil)
+	session := agenttest.CreateSession()
+	opts := []agent.Option{agent.WithSession(session)}
+
+	_, outOpts, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var addTool tool.FuncTool
+	for _, tt := range collectTools(outOpts) {
+		if tt.Name() == "todos_add" {
+			addTool, _ = tt.(tool.FuncTool)
+		}
+	}
+	if addTool == nil {
+		t.Fatal("todos_add tool not found")
+	}
+
+	const n = 50
+	var wg sync.WaitGroup
+	wg.Add(n * 2)
+	errs := make([]error, n*2)
+	for i := range n {
+		go func(idx int) {
+			defer wg.Done()
+			_, errs[idx] = addTool.Call(context.Background(), fmt.Sprintf(`{"Arg0":[{"title":"item-%d"}]}`, idx))
+		}(i * 2)
+		go func(idx int) {
+			defer wg.Done()
+			_ = p.AllTodos(session)
+			_ = p.RemainingTodos(session)
+		}(i*2 + 1)
+	}
+	wg.Wait()
+	for _, e := range errs {
+		if e != nil {
+			t.Fatalf("concurrent todos_add failed: %v", e)
+		}
 	}
 }

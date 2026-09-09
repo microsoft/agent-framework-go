@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -43,6 +44,9 @@ func main() {
 
 	resp, err := a.RunText(ctx, "Tell me a joke about a pirate.", agent.WithSession(session)).Collect()
 	demo.Response(resp, err)
+	if hostedSessionID := foundryprovider.HostedAgentSessionID(session); hostedSessionID != "" {
+		fmt.Printf("Captured hosted session ID: %s\n\n", hostedSessionID)
+	}
 
 	data, err := json.Marshal(session)
 	if err != nil {

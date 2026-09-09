@@ -5,6 +5,7 @@ package workflow
 import (
 	"errors"
 	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -64,8 +65,8 @@ func TestProtocolBuilderBuildRespectsAutoReturnOptions(t *testing.T) {
 	outputType := reflect.TypeFor[protocolBuilderOutput]()
 
 	protocol, err := newProtocolBuilderWithHandler(inputType, outputType).build(&Executor{
-		DisableAutoSendMessageHandlerResultObject: true,
-		DisableAutoYieldOutputHandlerResultObject: true,
+		AutoSendMessageHandlerResultObject: new(false),
+		AutoYieldOutputHandlerResultObject: new(false),
 	})
 	if err != nil {
 		t.Fatalf("build error = %v", err)
@@ -98,10 +99,5 @@ func newProtocolBuilderWithHandler(inputType, outputType reflect.Type) *Protocol
 }
 
 func containsReflectType(types []reflect.Type, want reflect.Type) bool {
-	for _, typ := range types {
-		if typ == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(types, want)
 }

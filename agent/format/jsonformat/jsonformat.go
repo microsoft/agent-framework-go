@@ -40,8 +40,12 @@ func newFormat(name, description string, schema *jsonschema.Schema) *Format {
 	}
 }
 
-// New creates a new JSON response format with the given name, description, and schema.
+// New creates a new JSON response format with the given name, description, and
+// schema. A nil schema represents an unconstrained JSON value.
 func New(name, description string, schema *jsonschema.Schema) agent.ResponseFormat {
+	if schema == nil {
+		schema = &jsonschema.Schema{}
+	}
 	return newFormat(name, description, schema).ResponseFormat
 }
 
@@ -50,6 +54,9 @@ func FromResponseFormat(format agent.ResponseFormat) (*Format, error) {
 	schema, ok := format.Schema.(*jsonschema.Schema)
 	if !ok {
 		return nil, fmt.Errorf("response format schema has type %T, want *jsonschema.Schema", format.Schema)
+	}
+	if schema == nil {
+		return nil, fmt.Errorf("response format schema cannot be nil")
 	}
 	return newFormat(format.Name, format.Description, schema), nil
 }

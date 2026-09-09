@@ -166,6 +166,38 @@ func delayedPortableValue(t *testing.T, pv workflow.PortableValue) workflow.Port
 	return delayed
 }
 
+func TestPortableValueMarshal_PreservesUntouchedDelayedRawJSON(t *testing.T) {
+	// A delayed value with an unregistered TypeID and a large integer that
+	// cannot be represented exactly by float64. Re-marshaling without any typed
+	// access must re-emit the original bytes verbatim, so a durable-JSON
+	// restore -> re-checkpoint cycle stays idempotent and loses no fidelity.
+	const bigInt = "9007219254740993" // > 2^53
+	wire := []byte(`{"TypeID":{"PackageName":"example.invalid/missing","TypeName":"Missing"},"Value":` + bigInt + `}`)
+
+	var delayed workflow.PortableValue
+	if err := json.Unmarshal(wire, &delayed); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if !delayed.Delayed() {
+		t.Fatalf("expected delayed value after unmarshal")
+	}
+
+	// Re-marshal WITHOUT any typed access.
+	data, err := json.Marshal(delayed)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var wrapper struct {
+		Value json.RawMessage
+	}
+	if err := json.Unmarshal(data, &wrapper); err != nil {
+		t.Fatalf("Unmarshal wrapper: %v", err)
+	}
+	if got := string(wrapper.Value); got != bigInt {
+		t.Fatalf("re-emitted Value = %s, want %s (large-integer fidelity lost)", got, bigInt)
+	}
+}
+
 func TestPortableValue_RejectsNil(t *testing.T) {
 	defer func() {
 		if recover() == nil {
@@ -175,13 +207,72 @@ func TestPortableValue_RejectsNil(t *testing.T) {
 	_ = workflow.AnyPortableValue(nil)
 }
 
+func TestAnyPortableValue_RejectsInvalidValues(t *testing.T) {
+	zero := workflow.PortableValue{}
+	tests := []struct {
+		name  string
+		value any
+	}{
+		{name: "zero value", value: zero},
+		{name: "zero value pointer", value: &zero},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("expected panic")
+				}
+			}()
+			workflow.AnyPortableValue(test.value)
+		})
+	}
+}
+
+func TestPortableValue_TypedNilRoundTrip(t *testing.T) {
+	var input *int
+	data, err := json.Marshal(workflow.AnyPortableValue(input))
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	var decoded workflow.PortableValue
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	got, ok := workflow.PortableValueAs[*int](decoded)
+	if !ok || got != nil {
+		t.Fatalf("PortableValueAs[*int]() = (%v, %v), want (nil, true)", got, ok)
+	}
+}
+
+func TestPortableValue_NilTypeDoesNotMatch(t *testing.T) {
+	value := workflow.AnyPortableValue("value")
+	if value.Is(nil) {
+		t.Fatal("Is(nil) = true, want false")
+	}
+	if got, ok := value.As(nil); ok || got != nil {
+		t.Fatalf("As(nil) = (%v, %v), want (nil, false)", got, ok)
+	}
+}
+
 func TestPortableValue_RejectsZeroJSON(t *testing.T) {
 	if _, err := json.Marshal(workflow.PortableValue{}); err == nil {
 		t.Fatal("expected marshal error for zero PortableValue")
 	}
-	var got workflow.PortableValue
-	if err := json.Unmarshal([]byte("null"), &got); err == nil {
-		t.Fatal("expected unmarshal error for null PortableValue")
+	for _, data := range []string{"null", `{}`, `{"Value":null}`} {
+		t.Run(data, func(t *testing.T) {
+			var got workflow.PortableValue
+			if err := json.Unmarshal([]byte(data), &got); err == nil {
+				t.Fatalf("expected unmarshal error for %s", data)
+			}
+		})
+	}
+}
+
+func TestPortableValueIs_NilType(t *testing.T) {
+	value := workflow.AnyPortableValue("value")
+	if value.Is(nil) {
+		t.Fatal("Is(nil) = true, want false")
 	}
 }
 

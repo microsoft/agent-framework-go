@@ -31,6 +31,14 @@ func createSkillDir(t *testing.T, root, name, description, body string) {
 	}
 }
 
+func TestSourceFunc_NilReturnsError(t *testing.T) {
+	var source skills.SourceFunc
+	_, err := source.Skills(t.Context())
+	if err == nil || err.Error() != "skills: source function is nil" {
+		t.Fatalf("Skills() error = %v, want nil-function error", err)
+	}
+}
+
 func createSkillDirRaw(t *testing.T, root, dirName, rawContent string) {
 	t.Helper()
 	skillDir := filepath.Join(root, dirName)
@@ -306,7 +314,7 @@ func TestProvider_CustomPromptTemplate(t *testing.T) {
 	root := t.TempDir()
 	createSkillDir(t, root, "custom-prompt-skill", "Custom prompt", "Body.")
 
-	p := newProviderWithConfig(t, nil, &skills.ContextProviderOptions{SkillsInstructionPrompt: "Custom template:\n{skills}"}, root)
+	p := newProviderWithConfig(t, nil, &skills.ContextProviderOptions{SkillsInstructionPrompt: new("Custom template:\n{skills}")}, root)
 
 	instructions, _ := captureProviderContext(t, p)
 	if !strings.HasPrefix(instructions, "Custom template:") {
@@ -605,7 +613,7 @@ func TestDiscovery_ResourceInSkillRoot_AccessibleWithDepthOne(t *testing.T) {
 	}
 
 	p := newProviderWithConfig(t, &fsskills.SourceOptions{
-		SearchDepth: 1,
+		SearchDepth: new(1),
 	}, nil, root)
 
 	_, tools := captureProviderContext(t, p)
@@ -634,7 +642,7 @@ func TestDiscovery_SkillMdNotIncludedAsResource(t *testing.T) {
 
 	// Opt into root scanning — SKILL.md should still be excluded
 	p := newProviderWithConfig(t, &fsskills.SourceOptions{
-		SearchDepth: 1,
+		SearchDepth: new(1),
 	}, nil, root)
 
 	_, tools := captureProviderContext(t, p)
@@ -807,7 +815,7 @@ func TestDiscovery_SearchDepth_CanReachDeepNestedPath(t *testing.T) {
 	}
 
 	p := newProviderWithConfig(t, &fsskills.SourceOptions{
-		SearchDepth: 4,
+		SearchDepth: new(4),
 	}, nil, root)
 
 	_, tools := captureProviderContext(t, p)
@@ -822,16 +830,18 @@ func TestDiscovery_SearchDepth_CanReachDeepNestedPath(t *testing.T) {
 	}
 }
 
-func TestConfig_InvalidSearchDepth_UsesDefault(t *testing.T) {
+func TestConfig_InvalidSearchDepth_Panics(t *testing.T) {
 	tests := []int{0, -1, -5}
 	for _, depth := range tests {
 		t.Run(fmt.Sprintf("depth_%d", depth), func(t *testing.T) {
-			p := newProviderWithConfig(t, &fsskills.SourceOptions{
-				SearchDepth: depth,
+			defer func() {
+				if recover() == nil {
+					t.Fatal("expected panic for invalid search depth")
+				}
+			}()
+			_ = newProviderWithConfig(t, &fsskills.SourceOptions{
+				SearchDepth: new(depth),
 			}, nil, t.TempDir())
-			if p == nil {
-				t.Fatal("expected non-nil provider")
-			}
 		})
 	}
 }
@@ -841,7 +851,7 @@ func TestConfig_ValidSearchDepth(t *testing.T) {
 	for _, depth := range tests {
 		t.Run(fmt.Sprintf("depth_%d", depth), func(t *testing.T) {
 			p := newProviderWithConfig(t, &fsskills.SourceOptions{
-				SearchDepth: depth,
+				SearchDepth: new(depth),
 			}, nil, t.TempDir())
 			if p == nil {
 				t.Fatal("expected non-nil provider")

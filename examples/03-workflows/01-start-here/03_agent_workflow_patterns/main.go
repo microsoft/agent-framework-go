@@ -43,7 +43,7 @@ func runWorkflow(ctx context.Context, wf *workflow.Workflow, messages []*message
 	defer func() { _ = run.Close(ctx) }()
 
 	emitEvents := true
-	if err := run.SendMessage(ctx, workflow.TurnToken{EmitEvents: &emitEvents}); err != nil {
+	if _, err := run.TrySendMessage(ctx, workflow.TurnToken{EmitEvents: &emitEvents}); err != nil {
 		return nil, err
 	}
 
