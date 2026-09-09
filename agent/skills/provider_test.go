@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/harness/toolapproval"
 	"github.com/microsoft/agent-framework-go/agent/skills"
 	"github.com/microsoft/agent-framework-go/agent/skills/fsskills"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
@@ -243,7 +244,7 @@ func TestProvider_ReadOnlyToolsAutoApprovalRule(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := skills.ReadOnlyToolsAutoApprovalRule(t.Context(), tt.call)
+			got, err := skills.ReadOnlyToolsAutoApprovalRule(t.Context(), &toolapproval.ToolAutoApprovalRuleContext{FunctionCall: tt.call})
 			if err != nil {
 				t.Fatalf("expected no error, got %v", err)
 			}
@@ -289,7 +290,7 @@ func TestProvider_AllToolsAutoApprovalRule(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := skills.AllToolsAutoApprovalRule(t.Context(), tt.call)
+			got, err := skills.AllToolsAutoApprovalRule(t.Context(), &toolapproval.ToolAutoApprovalRuleContext{FunctionCall: tt.call})
 			if err != nil {
 				t.Fatalf("expected no error, got %v", err)
 			}

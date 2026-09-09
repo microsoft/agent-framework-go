@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/harness/toolapproval"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
@@ -50,11 +51,11 @@ Only load what is needed, when it is needed.`
 // Add this function to toolapproval.Config.AutoApprovalRules to automatically
 // approve load_skill and read_skill_resource while continuing to prompt for
 // run_skill_script and non-skill tools.
-func ReadOnlyToolsAutoApprovalRule(_ context.Context, functionCall *message.FunctionCallContent) (bool, error) {
-	if functionCall == nil {
+func ReadOnlyToolsAutoApprovalRule(_ context.Context, ruleContext *toolapproval.ToolAutoApprovalRuleContext) (bool, error) {
+	if ruleContext == nil || ruleContext.FunctionCall == nil {
 		return false, nil
 	}
-	switch functionCall.Name {
+	switch ruleContext.FunctionCall.Name {
 	case LoadSkillToolName, ReadSkillResourceToolName:
 		return true, nil
 	default:
@@ -66,11 +67,13 @@ func ReadOnlyToolsAutoApprovalRule(_ context.Context, functionCall *message.Func
 //
 // Add this function to toolapproval.Config.AutoApprovalRules to automatically
 // approve load_skill, read_skill_resource, and run_skill_script.
-func AllToolsAutoApprovalRule(_ context.Context, functionCall *message.FunctionCallContent) (bool, error) {
-	if functionCall == nil {
+// Warning: only use this rule when skill scripts are trusted, because it
+// auto-approves script execution.
+func AllToolsAutoApprovalRule(_ context.Context, ruleContext *toolapproval.ToolAutoApprovalRuleContext) (bool, error) {
+	if ruleContext == nil || ruleContext.FunctionCall == nil {
 		return false, nil
 	}
-	switch functionCall.Name {
+	switch ruleContext.FunctionCall.Name {
 	case LoadSkillToolName, ReadSkillResourceToolName, RunSkillScriptToolName:
 		return true, nil
 	default:

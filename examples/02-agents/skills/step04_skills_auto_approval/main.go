@@ -13,7 +13,6 @@ import (
 	"github.com/microsoft/agent-framework-go/agent/skills"
 	"github.com/microsoft/agent-framework-go/examples/02-agents/skills/internal/skillhelpers"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
-	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
 )
 
@@ -71,7 +70,7 @@ var unitConverterSkill = &skills.Skill{
 
 var logger = demo.NewLogger(
 	"Skills Auto Approval",
-	"Uses skills.AllToolsAutoApprovalRule to auto-approve skill tool calls, including script execution.",
+	"Uses skills.AllToolsAutoApprovalRule to auto-approve skill tool calls, including script execution. Only use with trusted skills and scripts.",
 	"Model", demo.FoundryModel,
 )
 
@@ -82,7 +81,7 @@ func main() {
 		Skills: []*skills.Skill{unitConverterSkill},
 	})
 	approvalMiddleware := toolapproval.New(toolapproval.Config{
-		AutoApprovalRules: []func(context.Context, *message.FunctionCallContent) (bool, error){
+		AutoApprovalRules: []toolapproval.AutoApprovalRule{
 			skills.AllToolsAutoApprovalRule,
 		},
 	})
