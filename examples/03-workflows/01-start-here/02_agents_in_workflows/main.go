@@ -23,7 +23,7 @@ var logger = demo.NewLogger(
 
 func main() {
 	cfg := agentworkflow.Config{
-		DisableForwardIncomingMessages: true,
+		ForwardIncomingMessages: new(false),
 	}
 	french := agentworkflow.New(newTranslationAgent("French"), cfg)
 	spanish := agentworkflow.New(newTranslationAgent("Spanish"), cfg)
@@ -47,7 +47,7 @@ func main() {
 	defer func() { _ = run.Close(ctx) }()
 
 	emitEvents := true
-	if err := run.SendMessage(ctx, workflow.TurnToken{EmitEvents: &emitEvents}); err != nil {
+	if _, err := run.TrySendMessage(ctx, workflow.TurnToken{EmitEvents: &emitEvents}); err != nil {
 		demo.Panic(err)
 	}
 	for evt, err := range run.WatchStream(ctx) {

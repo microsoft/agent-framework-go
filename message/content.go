@@ -7,12 +7,12 @@ import (
 	"cmp"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"maps"
 	"reflect"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/microsoft/agent-framework-go/internal/jsonx"
 )
@@ -29,6 +29,8 @@ func init() {
 		&FunctionResultContent{},
 		&HostedFileContent{},
 		&HostedVectorStoreContent{},
+		&ImageGenerationToolCallContent{},
+		&ImageGenerationToolResultContent{},
 		&TextReasoningContent{},
 		&URIContent{},
 		&UsageContent{},
@@ -36,6 +38,11 @@ func init() {
 		&ToolApprovalResponseContent{},
 		&AlwaysApproveToolApprovalResponseContent{},
 		&MCPServerToolCallContent{},
+		&CodeInterpreterToolCallContent{},
+		&CodeInterpreterToolResultContent{},
+		&MCPServerToolResultContent{},
+		&WebSearchToolCallContent{},
+		&WebSearchToolResultContent{},
 	} {
 		supportedContents[c.kind()] = reflect.TypeOf(c).Elem()
 	}
@@ -47,12 +54,12 @@ type contentKind string
 
 // ContentHeader contains common properties for all content types.
 type ContentHeader struct {
-	AdditionalProperties map[string]any `json:"-"`
+	AdditionalProperties map[string]any `json:",omitzero"`
 	Annotations          Annotations    `json:",omitempty"`
 	RawRepresentation    any            `json:"-"`
 }
 
-func (ch ContentHeader) Header() ContentHeader {
+func (ch *ContentHeader) Header() *ContentHeader {
 	return ch
 }
 
@@ -60,7 +67,7 @@ func (ch ContentHeader) Header() ContentHeader {
 type Content interface {
 	json.Marshaler
 	kind() contentKind
-	Header() ContentHeader
+	Header() *ContentHeader
 }
 
 // ToolCallContent represents content that requests a tool call.
@@ -68,6 +75,27 @@ type ToolCallContent interface {
 	Content
 
 	GetCallID() string
+}
+
+// ToolResultContent represents the result of a tool call.
+type ToolResultContent interface {
+	Content
+
+	GetCallID() string
+}
+
+// InputRequestContent represents a request for input from the user or application.
+type InputRequestContent interface {
+	Content
+
+	GetRequestID() string
+}
+
+// InputResponseContent represents the response to an [InputRequestContent].
+type InputResponseContent interface {
+	Content
+
+	GetRequestID() string
 }
 
 // Contents is a slice of Content that supports JSON encoding.
@@ -90,7 +118,8 @@ func unmarshalRawContent(data json.RawMessage) (Content, error) {
 	return &raw, nil
 }
 
-// Text returns the first text content in the response, or empty string.
+// Text returns the concatenation of the Text of all [TextContent] items in the
+// Contents, or the empty string if there are none.
 func (cs Contents) Text() string {
 	var sb strings.Builder
 	for _, c := range cs {
@@ -101,6 +130,7 @@ func (cs Contents) Text() string {
 	return sb.String()
 }
 
+// Usage sums the UsageDetails of every UsageContent in the slice, returning the aggregate token usage (a zero UsageDetails if none is present).
 func (cs Contents) Usage() UsageDetails {
 	var usage UsageDetails
 	for _, c := range cs {
@@ -160,6 +190,12 @@ type serializedDataContent struct {
 }
 
 func (t *DataContent) MarshalJSON() ([]byte, error) {
+	if !isValidMediaType(t.MediaType) {
+		return nil, fmt.Errorf("invalid media type: %s", t.MediaType)
+	}
+	if !isValidBase64Data(t.Data) {
+		return nil, fmt.Errorf("invalid base64 data")
+	}
 	tmp := serializedDataContent{
 		ContentHeader: t.ContentHeader,
 		Name:          t.Name,
@@ -174,7 +210,7 @@ func (t *DataContent) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &tmp); err != nil {
 		return err
 	}
-	d, err := newDataContentFromURI(tmp.URI, "")
+	d, err := NewDataContentFromURI(tmp.URI, "")
 	if err != nil {
 		return err
 	}
@@ -187,6 +223,17 @@ func (t *DataContent) UnmarshalJSON(data []byte) error {
 
 func (t DataContent) kind() contentKind { return "data" }
 
+// NewDataContent creates a [DataContent] from raw bytes and a media type.
+func NewDataContent(data []byte, mediaType string) (*DataContent, error) {
+	if !isValidMediaType(mediaType) {
+		return nil, fmt.Errorf("invalid media type: %s", mediaType)
+	}
+	return &DataContent{
+		Data:      base64.StdEncoding.EncodeToString(data),
+		MediaType: mediaType,
+	}, nil
+}
+
 // URI returns the Data URI representation of the content,
 // as defined in RFC 2397:
 //
@@ -195,10 +242,10 @@ func (t *DataContent) URI() string {
 	return fmt.Sprintf("data:%s;base64,%s", t.MediaType, t.Data)
 }
 
-// newDataContentFromURI creates a new DataContent from a Data URI string.
+// NewDataContentFromURI creates a new [DataContent] from a Data URI string.
 // The mediaType parameter is optional; if not provided, it must be present in the URI.
 // Returns an error if the URI is invalid or doesn't contain a media type when required.
-func newDataContentFromURI(uri string, mediaType string) (*DataContent, error) {
+func NewDataContentFromURI(uri string, mediaType string) (*DataContent, error) {
 	if uri == "" {
 		return nil, fmt.Errorf("uri cannot be empty")
 	}
@@ -235,8 +282,15 @@ func (t *DataContent) Bytes() ([]byte, error) {
 	return base64.StdEncoding.DecodeString(t.Data)
 }
 
+// TopLevelMediaType returns the normalized (lowercased, whitespace-trimmed) top-level part of the content's MediaType - the portion before the / (for example image for image/png). If MediaType contains no /, the whole normalized value is returned; if MediaType is unset, it returns an empty string.
 func (t *DataContent) TopLevelMediaType() string {
 	return topLevelMediaType(t.MediaType)
+}
+
+// HasTopLevelMediaType reports whether MediaType has the specified top-level type.
+func (t *DataContent) HasTopLevelMediaType(topLevelType string) bool {
+	topLevel := t.TopLevelMediaType()
+	return topLevel != "" && strings.EqualFold(topLevel, topLevelType)
 }
 
 // ErrorContent represents an error.
@@ -301,12 +355,44 @@ func (t *MCPServerToolCallContent) MarshalJSON() ([]byte, error) {
 	return json.Marshal(tmp)
 }
 
+// MCPServerToolResultContent represents the result of a tool call executed by
+// a hosted MCP server.
+//
+// It mirrors MCPServerToolCallContent and conveys the outputs (and any error)
+// produced when a hosted service runs an MCP server tool.
+type MCPServerToolResultContent struct {
+	ContentHeader
+
+	CallID  string
+	Outputs Contents `json:",omitempty"`
+}
+
+func (t MCPServerToolResultContent) kind() contentKind { return "mcpServerToolResult" }
+
+func (t *MCPServerToolResultContent) GetCallID() string {
+	if t == nil {
+		return ""
+	}
+	return t.CallID
+}
+
+func (t *MCPServerToolResultContent) MarshalJSON() ([]byte, error) {
+	type alias MCPServerToolResultContent
+	tmp := struct {
+		*alias
+		Type contentKind
+	}{
+		alias: (*alias)(t),
+		Type:  t.kind(),
+	}
+	return json.Marshal(tmp)
+}
+
 type serializedFunctionCallContent struct {
 	ContentHeader
 
 	Arguments         string
 	CallID            string
-	Error             string `json:",omitempty"`
 	Name              string
 	InformationalOnly bool
 
@@ -333,9 +419,6 @@ func (t *FunctionCallContent) MarshalJSON() ([]byte, error) {
 		InformationalOnly: t.InformationalOnly,
 		Type:              t.kind(),
 	}
-	if t.Error != nil {
-		tmp.Error = t.Error.Error()
-	}
 	return json.Marshal(tmp)
 }
 
@@ -349,9 +432,7 @@ func (t *FunctionCallContent) UnmarshalJSON(data []byte) error {
 	t.CallID = tmp.CallID
 	t.Name = tmp.Name
 	t.InformationalOnly = tmp.InformationalOnly
-	if tmp.Error != "" {
-		t.Error = errors.New(tmp.Error)
-	}
+	t.Error = nil
 	return nil
 }
 
@@ -368,8 +449,7 @@ type serializedFunctionResultContent struct {
 	ContentHeader
 
 	CallID string
-	Error  string `json:",omitempty"`
-	Result any    `json:",omitempty"`
+	Result any `json:",omitempty"`
 
 	Type contentKind
 }
@@ -390,9 +470,6 @@ func (t *FunctionResultContent) MarshalJSON() ([]byte, error) {
 		Result:        t.Result,
 		Type:          t.kind(),
 	}
-	if t.Error != nil {
-		tmp.Error = t.Error.Error()
-	}
 	return json.Marshal(tmp)
 }
 
@@ -404,13 +481,18 @@ func (t *FunctionResultContent) UnmarshalJSON(data []byte) error {
 	t.ContentHeader = tmp.ContentHeader
 	t.CallID = tmp.CallID
 	t.Result = tmp.Result
-	if tmp.Error != "" {
-		t.Error = errors.New(tmp.Error)
-	}
+	t.Error = nil
 	return nil
 }
 
 func (t FunctionResultContent) kind() contentKind { return "functionResult" }
+
+func (t *FunctionResultContent) GetCallID() string {
+	if t == nil {
+		return ""
+	}
+	return t.CallID
+}
 
 // HostedFileContent represents a file that is hosted by the AI service.
 //
@@ -420,13 +502,23 @@ func (t FunctionResultContent) kind() contentKind { return "functionResult" }
 type HostedFileContent struct {
 	ContentHeader
 
-	FileID    string
-	Name      string `json:",omitempty"`
-	MediaType string `json:",omitempty"`
+	FileID      string
+	Name        string     `json:",omitempty"`
+	MediaType   string     `json:",omitempty"`
+	Scope       string     `json:",omitempty"`
+	SizeInBytes *int64     `json:",omitempty"`
+	CreatedAt   *time.Time `json:",omitempty"`
 }
 
+// TopLevelMediaType returns the normalized (lowercased, whitespace-trimmed) top-level part of the content's MediaType - the portion before the / (for example image for image/png). If MediaType contains no /, the whole normalized value is returned; if MediaType is unset, it returns an empty string.
 func (t *HostedFileContent) TopLevelMediaType() string {
 	return topLevelMediaType(t.MediaType)
+}
+
+// HasTopLevelMediaType reports whether MediaType has the specified top-level type.
+func (t *HostedFileContent) HasTopLevelMediaType(topLevelType string) bool {
+	topLevel := t.TopLevelMediaType()
+	return topLevel != "" && strings.EqualFold(topLevel, topLevelType)
 }
 
 func (t *HostedFileContent) MarshalJSON() ([]byte, error) {
@@ -490,7 +582,7 @@ func (t *RawContent) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &header); err == nil {
 		t.ContentHeader = header
 	}
-	t.RawRepresentation = append(json.RawMessage(nil), data...)
+	t.RawRepresentation = slices.Clone(json.RawMessage(data))
 	return nil
 }
 
@@ -533,20 +625,38 @@ type URIContent struct {
 	URI       string
 }
 
+// NewURIContent creates a [URIContent] for the given URI. When mediaType is
+// empty it is inferred from the URI; a non-empty mediaType is validated. It
+// returns an error if the URI is invalid or the media type is malformed.
 func NewURIContent(uri string, mediaType string) (*URIContent, error) {
 	if err := validateURIContentURI(uri); err != nil {
 		return nil, err
 	}
 	if mediaType == "" {
-		mediaType = inferMediaTypeFromURI(uri)
+		if strings.HasPrefix(strings.ToLower(uri), dataURIScheme) {
+			parsed, err := parseDataURI(uri)
+			if err != nil {
+				return nil, err
+			}
+			mediaType = parsed.MediaType
+		} else {
+			mediaType = inferMediaTypeFromURI(uri)
+		}
 	} else if !isValidMediaType(mediaType) {
 		return nil, fmt.Errorf("invalid media type: %s", mediaType)
 	}
 	return &URIContent{URI: uri, MediaType: mediaType}, nil
 }
 
+// TopLevelMediaType returns the normalized (lowercased, whitespace-trimmed) top-level part of the content's MediaType - the portion before the / (for example image for image/png). If MediaType contains no /, the whole normalized value is returned; if MediaType is unset, it returns an empty string.
 func (t *URIContent) TopLevelMediaType() string {
 	return topLevelMediaType(t.MediaType)
+}
+
+// HasTopLevelMediaType reports whether MediaType has the specified top-level type.
+func (t *URIContent) HasTopLevelMediaType(topLevelType string) bool {
+	topLevel := t.TopLevelMediaType()
+	return topLevel != "" && strings.EqualFold(topLevel, topLevelType)
 }
 
 func (t *URIContent) MarshalJSON() ([]byte, error) {
@@ -573,6 +683,7 @@ type UsageDetails struct {
 	ReasoningTokenCount   int64
 }
 
+// Add accumulates other into u, summing each token count field and merging AdditionalCounts (allocating the map on first use).
 func (u *UsageDetails) Add(other UsageDetails) {
 	u.InputTokenCount += other.InputTokenCount
 	u.OutputTokenCount += other.OutputTokenCount
@@ -663,48 +774,21 @@ func (t *ToolApprovalRequestContent) UnmarshalJSON(data []byte) error {
 
 func (t ToolApprovalRequestContent) kind() contentKind { return "toolApprovalRequest" }
 
+func (t *ToolApprovalRequestContent) GetRequestID() string {
+	if t == nil {
+		return ""
+	}
+	return t.RequestID
+}
+
+// CreateResponse builds a [ToolApprovalResponseContent] that approves or rejects this
+// request. It carries over the RequestID and tool call, and records the decision and reason.
 func (t *ToolApprovalRequestContent) CreateResponse(approved bool, reason string) *ToolApprovalResponseContent {
 	return &ToolApprovalResponseContent{
 		RequestID: t.RequestID,
 		Approved:  approved,
 		Reason:    reason,
-		ToolCall:  cloneToolCallContent(t.ToolCall),
-		ContentHeader: ContentHeader{
-			AdditionalProperties: maps.Clone(t.AdditionalProperties),
-			Annotations:          slices.Clone(t.Annotations),
-			RawRepresentation:    t.RawRepresentation,
-		},
-	}
-}
-
-func cloneToolCallContent(toolCall ToolCallContent) ToolCallContent {
-	switch toolCall := toolCall.(type) {
-	case nil:
-		return nil
-	case *FunctionCallContent:
-		if toolCall == nil {
-			return nil
-		}
-		cloned := *toolCall
-		cloned.ContentHeader = cloneContentHeader(toolCall.ContentHeader)
-		return &cloned
-	case *MCPServerToolCallContent:
-		if toolCall == nil {
-			return nil
-		}
-		cloned := *toolCall
-		cloned.ContentHeader = cloneContentHeader(toolCall.ContentHeader)
-		return &cloned
-	default:
-		return toolCall
-	}
-}
-
-func cloneContentHeader(header ContentHeader) ContentHeader {
-	return ContentHeader{
-		AdditionalProperties: maps.Clone(header.AdditionalProperties),
-		Annotations:          slices.Clone(header.Annotations),
-		RawRepresentation:    header.RawRepresentation,
+		ToolCall:  t.ToolCall,
 	}
 }
 
@@ -715,7 +799,7 @@ func (t *ToolApprovalRequestContent) AlwaysApproveToolResponse() *AlwaysApproveT
 	return &AlwaysApproveToolApprovalResponseContent{
 		InnerResponse:     t.CreateResponse(true, ""),
 		AlwaysApproveTool: true,
-		ContentHeader:     ContentHeader{AdditionalProperties: t.AdditionalProperties},
+		ContentHeader:     ContentHeader{AdditionalProperties: maps.Clone(t.AdditionalProperties)},
 	}
 }
 
@@ -726,7 +810,7 @@ func (t *ToolApprovalRequestContent) AlwaysApproveToolWithArgumentsResponse() *A
 	return &AlwaysApproveToolApprovalResponseContent{
 		InnerResponse:                  t.CreateResponse(true, ""),
 		AlwaysApproveToolWithArguments: true,
-		ContentHeader:                  ContentHeader{AdditionalProperties: t.AdditionalProperties},
+		ContentHeader:                  ContentHeader{AdditionalProperties: maps.Clone(t.AdditionalProperties)},
 	}
 }
 
@@ -797,6 +881,13 @@ func (t *ToolApprovalResponseContent) UnmarshalJSON(data []byte) error {
 
 func (t ToolApprovalResponseContent) kind() contentKind { return "toolApprovalResponse" }
 
+func (t *ToolApprovalResponseContent) GetRequestID() string {
+	if t == nil {
+		return ""
+	}
+	return t.RequestID
+}
+
 func unmarshalToolApprovalToolCall(data json.RawMessage) (ToolCallContent, error) {
 	if len(data) == 0 || string(data) == "null" {
 		return nil, nil
@@ -816,6 +907,24 @@ func unmarshalToolApprovalToolCall(data json.RawMessage) (ToolCallContent, error
 		return &toolCall, nil
 	case contentKind("mcpServerToolCall"):
 		var toolCall MCPServerToolCallContent
+		if err := json.Unmarshal(data, &toolCall); err != nil {
+			return nil, err
+		}
+		return &toolCall, nil
+	case contentKind("codeInterpreterToolCall"):
+		var toolCall CodeInterpreterToolCallContent
+		if err := json.Unmarshal(data, &toolCall); err != nil {
+			return nil, err
+		}
+		return &toolCall, nil
+	case contentKind("imageGenerationToolCall"):
+		var toolCall ImageGenerationToolCallContent
+		if err := json.Unmarshal(data, &toolCall); err != nil {
+			return nil, err
+		}
+		return &toolCall, nil
+	case contentKind("webSearchToolCall"):
+		var toolCall WebSearchToolCallContent
 		if err := json.Unmarshal(data, &toolCall); err != nil {
 			return nil, err
 		}
@@ -858,11 +967,19 @@ func (t AlwaysApproveToolApprovalResponseContent) kind() contentKind {
 	return "alwaysApproveToolApprovalResponse"
 }
 
+// CodeInterpreterToolCallContent represents a call to a hosted code-interpreter tool, correlated by CallID, whose Inputs hold the submitted code or content.
 type CodeInterpreterToolCallContent struct {
 	ContentHeader
 
 	CallID string
 	Inputs Contents
+}
+
+func (t *CodeInterpreterToolCallContent) GetCallID() string {
+	if t == nil {
+		return ""
+	}
+	return t.CallID
 }
 
 func (t *CodeInterpreterToolCallContent) MarshalJSON() ([]byte, error) {
@@ -879,6 +996,7 @@ func (t *CodeInterpreterToolCallContent) MarshalJSON() ([]byte, error) {
 
 func (t CodeInterpreterToolCallContent) kind() contentKind { return "codeInterpreterToolCall" }
 
+// CodeInterpreterToolResultContent represents the result of a hosted code-interpreter tool call, correlated by CallID, whose Outputs hold the produced content.
 type CodeInterpreterToolResultContent struct {
 	ContentHeader
 
@@ -900,8 +1018,133 @@ func (t *CodeInterpreterToolResultContent) MarshalJSON() ([]byte, error) {
 
 func (t CodeInterpreterToolResultContent) kind() contentKind { return "codeInterpreterToolResult" }
 
-// CoalesceContents combines sequential contents elements.
-func CoalesceContents(contents []Content) []Content {
+func (t *CodeInterpreterToolResultContent) GetCallID() string {
+	if t == nil {
+		return ""
+	}
+	return t.CallID
+}
+
+// ImageGenerationToolCallContent represents the invocation of an image generation tool by a hosted service.
+type ImageGenerationToolCallContent struct {
+	ContentHeader
+
+	CallID string
+}
+
+func (t *ImageGenerationToolCallContent) GetCallID() string {
+	if t == nil {
+		return ""
+	}
+	return t.CallID
+}
+
+func (t *ImageGenerationToolCallContent) MarshalJSON() ([]byte, error) {
+	type alias ImageGenerationToolCallContent
+	tmp := struct {
+		*alias
+		Type contentKind
+	}{
+		alias: (*alias)(t),
+		Type:  t.kind(),
+	}
+	return json.Marshal(tmp)
+}
+
+func (t ImageGenerationToolCallContent) kind() contentKind { return "imageGenerationToolCall" }
+
+// ImageGenerationToolResultContent represents the result of an image generation tool invocation by a hosted service.
+type ImageGenerationToolResultContent struct {
+	ContentHeader
+
+	CallID  string
+	Outputs Contents
+}
+
+func (t *ImageGenerationToolResultContent) GetCallID() string {
+	if t == nil {
+		return ""
+	}
+	return t.CallID
+}
+
+func (t *ImageGenerationToolResultContent) MarshalJSON() ([]byte, error) {
+	type alias ImageGenerationToolResultContent
+	tmp := struct {
+		*alias
+		Type contentKind
+	}{
+		alias: (*alias)(t),
+		Type:  t.kind(),
+	}
+	return json.Marshal(tmp)
+}
+
+func (t ImageGenerationToolResultContent) kind() contentKind {
+	return "imageGenerationToolResult"
+}
+
+// WebSearchToolCallContent represents a web search tool invocation by a hosted service.
+type WebSearchToolCallContent struct {
+	ContentHeader
+
+	CallID  string
+	Queries []string
+}
+
+func (t *WebSearchToolCallContent) GetCallID() string {
+	if t == nil {
+		return ""
+	}
+	return t.CallID
+}
+
+func (t *WebSearchToolCallContent) MarshalJSON() ([]byte, error) {
+	type alias WebSearchToolCallContent
+	tmp := struct {
+		*alias
+		Type contentKind
+	}{
+		alias: (*alias)(t),
+		Type:  t.kind(),
+	}
+	return json.Marshal(tmp)
+}
+
+func (t WebSearchToolCallContent) kind() contentKind { return "webSearchToolCall" }
+
+// WebSearchToolResultContent represents the results of a web search tool invocation by a hosted service.
+type WebSearchToolResultContent struct {
+	ContentHeader
+
+	CallID  string
+	Outputs Contents
+}
+
+func (t *WebSearchToolResultContent) GetCallID() string {
+	if t == nil {
+		return ""
+	}
+	return t.CallID
+}
+
+func (t *WebSearchToolResultContent) MarshalJSON() ([]byte, error) {
+	type alias WebSearchToolResultContent
+	tmp := struct {
+		*alias
+		Type contentKind
+	}{
+		alias: (*alias)(t),
+		Type:  t.kind(),
+	}
+	return json.Marshal(tmp)
+}
+
+func (t WebSearchToolResultContent) kind() contentKind { return "webSearchToolResult" }
+
+// Coalesce combines adjacent compatible content elements and returns the
+// resulting slice. It may reuse and modify the receiver's backing array.
+func (contents Contents) Coalesce() Contents {
 	var sb strings.Builder
 	mergeText := func(contents []Content, start, end int) string {
 		sb.Reset()
@@ -954,27 +1197,136 @@ func CoalesceContents(contents []Content) []Content {
 			return content
 		})
 
+	contents = coalesceImageGenerationToolResults(contents)
+	contents = coalesceWebSearchToolCalls(contents)
+
 	contents = coalesce(contents, false,
 		func(a, b *DataContent) bool {
-			return strings.EqualFold(a.MediaType, b.MediaType) && a.TopLevelMediaType() == "text" && a.Name == b.Name
+			if a.MediaType != b.MediaType || !a.HasTopLevelMediaType("text") || a.Name != b.Name {
+				return false
+			}
+			if _, err := a.Bytes(); err != nil {
+				return false
+			}
+			_, err := b.Bytes()
+			return err == nil
 		},
 		func(contents []Content, start, end int) *DataContent {
 			first := contents[start].(*DataContent)
 
 			return &DataContent{
-				ContentHeader: ContentHeader{
-					AdditionalProperties: maps.Clone(first.AdditionalProperties),
-				},
 				Name:      first.Name,
 				MediaType: first.MediaType,
 				Data:      mergeBase64(contents, start, end),
 			}
 		})
 
+	contents = coalesce(contents, true,
+		func(a, b *CodeInterpreterToolCallContent) bool { return a.CallID == b.CallID },
+		func(contents []Content, start, end int) *CodeInterpreterToolCallContent {
+			first := contents[start].(*CodeInterpreterToolCallContent)
+			if end-start == 1 {
+				first.Inputs = first.Inputs.Coalesce()
+				return first
+			}
+			var inputs Contents
+			for _, c := range contents[start:end] {
+				inputs = append(inputs, c.(*CodeInterpreterToolCallContent).Inputs...)
+			}
+			return &CodeInterpreterToolCallContent{
+				ContentHeader: ContentHeader{AdditionalProperties: maps.Clone(first.AdditionalProperties)},
+				CallID:        first.CallID,
+				Inputs:        inputs.Coalesce(),
+			}
+		})
+
+	contents = coalesce(contents, true,
+		func(a, b *CodeInterpreterToolResultContent) bool { return a.CallID == b.CallID },
+		func(contents []Content, start, end int) *CodeInterpreterToolResultContent {
+			first := contents[start].(*CodeInterpreterToolResultContent)
+			if end-start == 1 {
+				first.Outputs = first.Outputs.Coalesce()
+				return first
+			}
+			var outputs Contents
+			for _, c := range contents[start:end] {
+				outputs = append(outputs, c.(*CodeInterpreterToolResultContent).Outputs...)
+			}
+			return &CodeInterpreterToolResultContent{
+				ContentHeader: ContentHeader{AdditionalProperties: maps.Clone(first.AdditionalProperties)},
+				CallID:        first.CallID,
+				Outputs:       outputs.Coalesce(),
+			}
+		})
+
 	return contents
 }
 
-func coalesce[T Content](contents []Content, mergeSingle bool, canMerge func(a, b T) bool, merge func([]Content, int, int) T) []Content {
+func coalesceImageGenerationToolResults(contents Contents) Contents {
+	indexByCallID := make(map[string]int)
+	for i, content := range contents {
+		result, ok := content.(*ImageGenerationToolResultContent)
+		if !ok || result == nil {
+			continue
+		}
+		if existingIndex, ok := indexByCallID[result.CallID]; ok {
+			contents[existingIndex] = result
+			contents[i] = nil
+		} else {
+			indexByCallID[result.CallID] = i
+		}
+	}
+	return slices.DeleteFunc(contents, func(c Content) bool { return c == nil })
+}
+
+func coalesceWebSearchToolCalls(contents Contents) Contents {
+	indexByCallID := make(map[string]int)
+	for i, content := range contents {
+		toolCall, ok := content.(*WebSearchToolCallContent)
+		if !ok || toolCall == nil {
+			continue
+		}
+
+		existingIndex, ok := indexByCallID[toolCall.CallID]
+		if !ok {
+			indexByCallID[toolCall.CallID] = i
+			continue
+		}
+
+		existing := contents[existingIndex].(*WebSearchToolCallContent)
+		if existing != toolCall {
+			header := existing.ContentHeader
+			if header.RawRepresentation == nil {
+				header.RawRepresentation = toolCall.RawRepresentation
+			}
+			if header.AdditionalProperties == nil {
+				header.AdditionalProperties = toolCall.AdditionalProperties
+			}
+			if header.Annotations == nil {
+				header.Annotations = toolCall.Annotations
+			}
+
+			queries := existing.Queries
+			switch {
+			case len(toolCall.Queries) == 0:
+			case len(existing.Queries) == 0:
+				queries = toolCall.Queries
+			default:
+				queries = slices.Concat(existing.Queries, toolCall.Queries)
+			}
+
+			contents[existingIndex] = &WebSearchToolCallContent{
+				ContentHeader: header,
+				CallID:        existing.CallID,
+				Queries:       queries,
+			}
+		}
+		contents[i] = nil
+	}
+	return slices.DeleteFunc(contents, func(c Content) bool { return c == nil })
+}
+
+func coalesce[T Content](contents Contents, mergeSingle bool, canMerge func(a, b T) bool, merge func([]Content, int, int) T) Contents {
 	// Iterate through all of the items in the list looking for contiguous items that can be coalesced.
 	start := 0
 	tryAsCoalescable := func(c Content) (T, bool) {

@@ -19,6 +19,14 @@ func newOutputFilter(wf *workflow.Workflow) *outputFilter {
 	return &outputFilter{tagsByExecutor: wf.OutputExecutors()}
 }
 
+func (f *outputFilter) canOutput(executorID string, _ any) bool {
+	if f == nil {
+		return false
+	}
+	_, ok := f.tagsByExecutor[executorID]
+	return ok
+}
+
 func (f *outputFilter) tryGetTags(executorID string) ([]workflow.OutputTag, bool) {
 	if f == nil {
 		return nil, false

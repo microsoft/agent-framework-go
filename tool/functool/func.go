@@ -4,6 +4,7 @@ package functool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 
@@ -35,6 +36,9 @@ type Handler func(ctx context.Context, args string) (any, error)
 //     Invalid input is rejected before getting to the handler.
 type HandlerFor[In, Out any] func(context.Context, In) (Out, error)
 
+// MustNew is like [New] but panics if schema construction fails. It is intended
+// for package-level initialization where a construction failure is a programming
+// error that should surface immediately.
 func MustNew[In, Out any](cfg Config, h HandlerFor[In, Out]) tool.FuncTool {
 	t, err := New(cfg, h)
 	if err != nil {
@@ -43,7 +47,14 @@ func MustNew[In, Out any](cfg Config, h HandlerFor[In, Out]) tool.FuncTool {
 	return t
 }
 
+// New builds a [tool.FuncTool] from cfg and the typed handler h. It derives the
+// JSON input schema from In and the output schema from Out, wrapping non-struct
+// inputs and validating arguments before invoking h. It returns an error if
+// either schema cannot be constructed.
 func New[In, Out any](cfg Config, h HandlerFor[In, Out]) (tool.FuncTool, error) {
+	if h == nil {
+		return nil, errors.New("functool: handler is required")
+	}
 	t := funcTool{
 		cfg: cfg,
 	}
@@ -55,6 +66,21 @@ func New[In, Out any](cfg Config, h HandlerFor[In, Out]) (tool.FuncTool, error) 
 	t.outputFormat, err = outputFormatFor[Out]()
 	if err != nil {
 		return nil, fmt.Errorf("output schema: %w", err)
+	}
+
+	// When Out is a pointer type, a handler may legitimately return a typed-nil
+	// pointer to mean "no result". A typed nil marshals to JSON null, which fails
+	// validation against the (non-nullable, object-rooted) output schema derived
+	// from the pointed-to type. Substitute the zero value of the element type in
+	// that case, mirroring the MCP go-sdk's HandlerFor behavior.
+	var elemZero Out
+	outType := reflect.TypeFor[Out]()
+	hasPointerOut := outType.Kind() == reflect.Pointer
+	if hasPointerOut {
+		// Convert to outType before asserting: for a named pointer type
+		// (e.g. type P *T), reflect.New yields an unnamed *T that is not
+		// directly assertable to P.
+		elemZero = reflect.New(outType.Elem()).Convert(outType).Interface().(Out)
 	}
 
 	t.handler = func(ctx context.Context, args string) (any, error) {
@@ -75,6 +101,9 @@ func New[In, Out any](cfg Config, h HandlerFor[In, Out]) (tool.FuncTool, error) 
 		out, err := h(ctx, in)
 		if err != nil {
 			return nil, err
+		}
+		if hasPointerOut && reflect.ValueOf(out).IsNil() {
+			out = elemZero
 		}
 		if err := t.outputFormat.Normalize(&out); err != nil {
 			return nil, fmt.Errorf("normalizing output: %w", err)
@@ -128,7 +157,14 @@ func inputFormatFor[T any]() (format *jsonformat.Format, wrapped bool, err error
 	if typ == reflect.TypeFor[any]() {
 		return nil, false, fmt.Errorf("input type any is not supported by HandlerFor; use Handler for dynamic inputs")
 	}
-	if typ.Kind() != reflect.Struct {
+	// Dereference pointers so a *Struct input produces the same flat schema as
+	// a Struct input (jsonformat.ForType treats pointers equivalently); only
+	// genuinely non-struct inputs are wrapped in inputWrapper.
+	elem := typ
+	for elem.Kind() == reflect.Pointer {
+		elem = elem.Elem()
+	}
+	if elem.Kind() != reflect.Struct {
 		typ = reflect.TypeFor[inputWrapper[T]]()
 		wrapped = true
 	}

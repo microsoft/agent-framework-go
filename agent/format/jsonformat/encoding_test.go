@@ -21,6 +21,30 @@ func requireFormat(t *testing.T, responseFormat agent.ResponseFormat) *jsonforma
 	return format
 }
 
+func TestNew_NilSchemaIsUnconstrained(t *testing.T) {
+	format := requireFormat(t, jsonformat.New("any", "", nil))
+	value := map[string]any{"status": "ok"}
+
+	data, err := format.Marshal(value)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if string(data) != `{"status":"ok"}` {
+		t.Fatalf("Marshal() = %s, want object JSON", data)
+	}
+}
+
+func TestFromResponseFormat_RejectsTypedNilSchema(t *testing.T) {
+	var schema *jsonschema.Schema
+	format, err := jsonformat.FromResponseFormat(agent.ResponseFormat{Kind: "json", Schema: schema})
+	if err == nil || err.Error() != "response format schema cannot be nil" {
+		t.Fatalf("FromResponseFormat() error = %v, want nil-schema error", err)
+	}
+	if format != nil {
+		t.Fatalf("FromResponseFormat() = %#v, want nil", format)
+	}
+}
+
 func TestEncodingRoundtrip(t *testing.T) {
 	tests := []struct {
 		name string

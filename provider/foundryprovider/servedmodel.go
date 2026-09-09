@@ -51,9 +51,6 @@ func servedModelRequestOption() option.RequestOption {
 			return resp, err
 		}
 		servedModel := strings.TrimSpace(resp.Header.Get(servedModelHeader))
-		if servedModel == "" {
-			return resp, nil
-		}
 		if box, ok := req.Context().Value(servedModelContextKey{}).(*servedModelBox); ok {
 			box.value = servedModel
 		}

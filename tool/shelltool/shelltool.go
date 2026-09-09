@@ -207,7 +207,9 @@ func (p *Policy) Evaluate(request ShellRequest) (allowed bool, reason string) {
 		}
 	}
 	if p.custom != nil {
-		if allowed, reason, ok := p.custom(request); ok {
+		sanitized := request
+		sanitized.Command = command
+		if allowed, reason, ok := p.custom(sanitized); ok {
 			return allowed, reason
 		}
 	}

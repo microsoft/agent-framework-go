@@ -32,13 +32,18 @@ type SummarizerFunc func(context.Context, []*message.Message) (string, error)
 
 // Summarize calls f(ctx, messages).
 func (f SummarizerFunc) Summarize(ctx context.Context, messages []*message.Message) (string, error) {
+	if f == nil {
+		return "", errors.New("compaction: summarizer function is nil")
+	}
 	return f(ctx, messages)
 }
 
 // SummarizationStrategy summarizes older groups into a single assistant summary message.
 //
 // The strategy protects system messages and the most recent non-system groups. Older groups are sent
-// to Summarizer, and the resulting summary is inserted as a GroupKindSummary message.
+// to Summarizer, and the resulting summary is inserted as a GroupKindSummary message. Summarizer
+// failures are best effort: excluded groups are restored and Compact reports no change. Context
+// cancellation and deadline errors are restored and returned to the caller.
 type SummarizationStrategy struct {
 	// Trigger controls whether summarization should run.
 	// When nil, summarization always runs.
@@ -54,11 +59,14 @@ type SummarizationStrategy struct {
 
 	// MinimumPreservedGroups is the minimum number of most-recent non-system groups to preserve.
 	// This is a hard floor; summarization will not summarize groups within this protected window.
-	MinimumPreservedGroups int
+	//
+	// When nil, a default floor is used. An explicit value is honored as-is, so a pointer to 0
+	// disables the floor entirely; a negative value is clamped to 0.
+	MinimumPreservedGroups *int
 
 	// SummarizationPrompt is the system prompt prepended to messages sent to Summarizer.
-	// When empty, a default prompt is used.
-	SummarizationPrompt string
+	// When nil, a default prompt is used.
+	SummarizationPrompt *string
 
 	// SummaryUnavailableMessage is used when Summarizer returns only whitespace.
 	// When empty, a default unavailable message is used.
@@ -75,16 +83,17 @@ func (strategy *SummarizationStrategy) Compact(ctx context.Context, index *Messa
 	if strategy.Summarizer == nil {
 		return false, nil
 	}
-	minimumPreservedGroups := cmp.Or(max(strategy.MinimumPreservedGroups, 0), defaultMinimumPreservedSummarizationGroups)
-	summarizationPrompt := cmp.Or(strategy.SummarizationPrompt, defaultSummarizationPrompt)
+	minimumPreservedGroups := defaultMinimumPreservedSummarizationGroups
+	if strategy.MinimumPreservedGroups != nil {
+		minimumPreservedGroups = max(*strategy.MinimumPreservedGroups, 0)
+	}
+	summarizationPrompt := defaultSummarizationPrompt
+	if strategy.SummarizationPrompt != nil {
+		summarizationPrompt = *strategy.SummarizationPrompt
+	}
 	summaryUnavailableMessage := cmp.Or(strategy.SummaryUnavailableMessage, "[Summary unavailable]")
 
-	nonSystemIncludedCount := 0
-	for _, group := range index.Groups {
-		if !group.IsExcluded && group.Kind != GroupKindSystem {
-			nonSystemIncludedCount++
-		}
-	}
+	nonSystemIncludedCount := index.IncludedNonSystemGroupCount()
 	protectedFromEnd := min(minimumPreservedGroups, nonSystemIncludedCount)
 	maxSummarizable := nonSystemIncludedCount - protectedFromEnd
 	if maxSummarizable <= 0 {
@@ -103,7 +112,7 @@ func (strategy *SummarizationStrategy) Compact(ctx context.Context, index *Messa
 		if len(excludedGroups) >= maxSummarizable {
 			break
 		}
-		if group.IsExcluded || group.Kind == GroupKindSystem {
+		if !group.isIncludedNonSystem() {
 			continue
 		}
 		if insertIndex < 0 {

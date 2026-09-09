@@ -8,11 +8,14 @@ import (
 )
 
 const (
-	taskIDsStateKey = "a2aprovider.taskIDs"
-	taskStateKey    = "a2aprovider.taskState"
+	taskIDStateKey = "a2aprovider.taskID"
+	taskStateKey   = "a2aprovider.taskState"
 )
 
 func setContextID(session *agent.Session, contextID string) {
+	if contextID == "" {
+		return
+	}
 	session.SetServiceID(contextID)
 }
 
@@ -21,30 +24,27 @@ func getContextID(session *agent.Session) string {
 }
 
 func setTaskID(session *agent.Session, taskID string) {
+	if session == nil {
+		return
+	}
 	if taskID == "" {
+		session.Delete(taskIDStateKey)
 		return
 	}
-	setTaskIDs(session, append(getTaskIDs(session), taskID))
+	session.Set(taskIDStateKey, taskID)
 }
 
-func setTaskIDs(session *agent.Session, taskIDs []string) {
-	if len(taskIDs) == 0 {
-		return
+func getTaskID(session *agent.Session) string {
+	var taskID string
+	if ok, err := session.Get(taskIDStateKey, &taskID); err != nil || !ok {
+		return ""
 	}
-	session.Set(taskIDsStateKey, taskIDs)
+	return taskID
 }
 
-func getTaskIDs(session *agent.Session) []string {
-	var taskIDs []string
-	if ok, err := session.Get(taskIDsStateKey, &taskIDs); err != nil || !ok {
-		return nil
-	}
-	return taskIDs
-}
-
-// TaskIDsFromSession returns all known A2A task IDs stored in session state.
-func TaskIDsFromSession(session *agent.Session) []string {
-	return getTaskIDs(session)
+// TaskIDFromSession returns the current A2A task ID stored in session state.
+func TaskIDFromSession(session *agent.Session) string {
+	return getTaskID(session)
 }
 
 func setLastTaskState(session *agent.Session, state a2a.TaskState) {

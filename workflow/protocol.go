@@ -89,11 +89,11 @@ func (pb *ProtocolBuilder) build(executor *Executor) (*executorProtocol, error) 
 	}
 
 	sendTypes := appendUniqueTypes(nil, pb.sendTypes...)
-	if !executor.DisableAutoSendMessageHandlerResultObject {
+	if executor.autoSendMessageHandlerResultObject() {
 		sendTypes = appendUniqueTypes(sendTypes, slices.Collect(router.defaultOutputTypes())...)
 	}
 	yieldTypes := appendUniqueTypes(nil, pb.yieldTypes...)
-	if !executor.DisableAutoYieldOutputHandlerResultObject {
+	if executor.autoYieldOutputHandlerResultObject() {
 		yieldTypes = appendUniqueTypes(yieldTypes, slices.Collect(router.defaultOutputTypes())...)
 	}
 	descriptor := ProtocolDescriptor{

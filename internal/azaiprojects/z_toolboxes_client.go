@@ -56,10 +56,11 @@ func (client *ToolboxesClient) CreateToolboxVersion(ctx context.Context, name st
 // createToolboxVersionCreateRequest creates the CreateToolboxVersion request.
 func (client *ToolboxesClient) createToolboxVersionCreateRequest(ctx context.Context, name string, tools []ToolboxToolClassification, options *ToolboxesClientCreateToolboxVersionOptions) (*policy.Request, error) {
 	urlPath := "/toolboxes/{name}/versions"
-	if name == "" {
-		return nil, errors.New("parameter name cannot be empty")
+	var err error
+	urlPath, err = replaceToolboxNamePathParameter(client.endpoint, urlPath, name)
+	if err != nil {
+		return nil, err
 	}
-	urlPath = strings.ReplaceAll(urlPath, "{name}", url.PathEscape(name))
 	req, err := runtime.NewRequest(ctx, http.MethodPost, runtime.JoinPaths(client.endpoint, urlPath))
 	if err != nil {
 		return nil, err
@@ -133,10 +134,11 @@ func (client *ToolboxesClient) DeleteToolbox(ctx context.Context, name string, o
 // deleteToolboxCreateRequest creates the DeleteToolbox request.
 func (client *ToolboxesClient) deleteToolboxCreateRequest(ctx context.Context, name string, _ *ToolboxesClientDeleteToolboxOptions) (*policy.Request, error) {
 	urlPath := "/toolboxes/{name}"
-	if name == "" {
-		return nil, errors.New("parameter name cannot be empty")
+	var err error
+	urlPath, err = replaceToolboxNamePathParameter(client.endpoint, urlPath, name)
+	if err != nil {
+		return nil, err
 	}
-	urlPath = strings.ReplaceAll(urlPath, "{name}", url.PathEscape(name))
 	req, err := runtime.NewRequest(ctx, http.MethodDelete, runtime.JoinPaths(client.endpoint, urlPath))
 	if err != nil {
 		return nil, err
@@ -177,10 +179,11 @@ func (client *ToolboxesClient) DeleteToolboxVersion(ctx context.Context, name st
 // deleteToolboxVersionCreateRequest creates the DeleteToolboxVersion request.
 func (client *ToolboxesClient) deleteToolboxVersionCreateRequest(ctx context.Context, name string, version string, _ *ToolboxesClientDeleteToolboxVersionOptions) (*policy.Request, error) {
 	urlPath := "/toolboxes/{name}/versions/{version}"
-	if name == "" {
-		return nil, errors.New("parameter name cannot be empty")
+	var err error
+	urlPath, err = replaceToolboxNamePathParameter(client.endpoint, urlPath, name)
+	if err != nil {
+		return nil, err
 	}
-	urlPath = strings.ReplaceAll(urlPath, "{name}", url.PathEscape(name))
 	if version == "" {
 		return nil, errors.New("parameter version cannot be empty")
 	}
@@ -224,10 +227,11 @@ func (client *ToolboxesClient) GetToolbox(ctx context.Context, name string, opti
 // getToolboxCreateRequest creates the GetToolbox request.
 func (client *ToolboxesClient) getToolboxCreateRequest(ctx context.Context, name string, _ *ToolboxesClientGetToolboxOptions) (*policy.Request, error) {
 	urlPath := "/toolboxes/{name}"
-	if name == "" {
-		return nil, errors.New("parameter name cannot be empty")
+	var err error
+	urlPath, err = replaceToolboxNamePathParameter(client.endpoint, urlPath, name)
+	if err != nil {
+		return nil, err
 	}
-	urlPath = strings.ReplaceAll(urlPath, "{name}", url.PathEscape(name))
 	req, err := runtime.NewRequest(ctx, http.MethodGet, runtime.JoinPaths(client.endpoint, urlPath))
 	if err != nil {
 		return nil, err
@@ -279,10 +283,11 @@ func (client *ToolboxesClient) GetToolboxVersion(ctx context.Context, name strin
 // getToolboxVersionCreateRequest creates the GetToolboxVersion request.
 func (client *ToolboxesClient) getToolboxVersionCreateRequest(ctx context.Context, name string, version string, _ *ToolboxesClientGetToolboxVersionOptions) (*policy.Request, error) {
 	urlPath := "/toolboxes/{name}/versions/{version}"
-	if name == "" {
-		return nil, errors.New("parameter name cannot be empty")
+	var err error
+	urlPath, err = replaceToolboxNamePathParameter(client.endpoint, urlPath, name)
+	if err != nil {
+		return nil, err
 	}
-	urlPath = strings.ReplaceAll(urlPath, "{name}", url.PathEscape(name))
 	if version == "" {
 		return nil, errors.New("parameter version cannot be empty")
 	}
@@ -346,10 +351,11 @@ func (client *ToolboxesClient) NewListToolboxVersionsPager(name string, options 
 // listToolboxVersionsCreateRequest creates the ListToolboxVersions request.
 func (client *ToolboxesClient) listToolboxVersionsCreateRequest(ctx context.Context, name string, options *ToolboxesClientListToolboxVersionsOptions) (*policy.Request, error) {
 	urlPath := "/toolboxes/{name}/versions"
-	if name == "" {
-		return nil, errors.New("parameter name cannot be empty")
+	var err error
+	urlPath, err = replaceToolboxNamePathParameter(client.endpoint, urlPath, name)
+	if err != nil {
+		return nil, err
 	}
-	urlPath = strings.ReplaceAll(urlPath, "{name}", url.PathEscape(name))
 	req, err := runtime.NewRequest(ctx, http.MethodGet, runtime.JoinPaths(client.endpoint, urlPath))
 	if err != nil {
 		return nil, err
@@ -483,10 +489,11 @@ func (client *ToolboxesClient) UpdateToolbox(ctx context.Context, name string, d
 // updateToolboxCreateRequest creates the UpdateToolbox request.
 func (client *ToolboxesClient) updateToolboxCreateRequest(ctx context.Context, name string, defaultVersion string, _ *ToolboxesClientUpdateToolboxOptions) (*policy.Request, error) {
 	urlPath := "/toolboxes/{name}"
-	if name == "" {
-		return nil, errors.New("parameter name cannot be empty")
+	var err error
+	urlPath, err = replaceToolboxNamePathParameter(client.endpoint, urlPath, name)
+	if err != nil {
+		return nil, err
 	}
-	urlPath = strings.ReplaceAll(urlPath, "{name}", url.PathEscape(name))
 	req, err := runtime.NewRequest(ctx, http.MethodPatch, runtime.JoinPaths(client.endpoint, urlPath))
 	if err != nil {
 		return nil, err

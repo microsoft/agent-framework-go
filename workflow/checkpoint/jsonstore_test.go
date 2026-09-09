@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -244,6 +245,36 @@ func TestFileSystemJSONStore_PersistsToDisk(t *testing.T) {
 	}
 	if len(index) != 1 {
 		t.Fatalf("expected 1 entry after reload, got %d", len(index))
+	}
+}
+
+func TestFileSystemJSONStore_RetrieveIndexDeduplicatesPersistedEntries(t *testing.T) {
+	dir := t.TempDir()
+	store := newFileSystemJSONStore(t, dir)
+	info, err := store.CreateCheckpoint(t.Context(), "session", json.RawMessage(`{}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	indexPath := filepath.Join(dir, "index.jsonl")
+	data, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(indexPath, append(data, data...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened := newFileSystemJSONStore(t, dir)
+	index, err := reopened.RetrieveIndex(t.Context(), "session", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []workflow.CheckpointInfo{info}; !slices.Equal(index, want) {
+		t.Fatalf("RetrieveIndex() = %v, want %v", index, want)
 	}
 }
 
