@@ -33,6 +33,14 @@ type statefulEdgeState struct {
 	unseen          map[string]struct{}
 }
 
+type edgeKind int
+
+const (
+	directEdge edgeKind = iota
+	fanOutEdge
+	fanInEdge
+)
+
 func newStatefulEdgeState(sourceIDs []string) *statefulEdgeState {
 	state := &statefulEdgeState{
 		sourceIDs: sourceIDs,
@@ -134,7 +142,7 @@ func NewEdgeRunner(wf *workflow.Workflow, tracer StepTracer, ensureExecutor func
 	var statefulEdges map[int]*statefulEdgeState
 	for _, edges := range wf.Edges() {
 		for _, edge := range edges {
-			if len(edge.Connection.SourceIDs) <= 1 {
+			if kindOfEdge(edge) != fanInEdge {
 				continue
 			}
 			if statefulEdges == nil {
@@ -458,11 +466,22 @@ func edgeGroupMetadata(edge workflow.Edge) observability.EdgeGroupMetadata {
 }
 
 func edgeGroupType(edge workflow.Edge) string {
-	if len(edge.Connection.SourceIDs) > 1 {
+	switch kindOfEdge(edge) {
+	case fanInEdge:
 		return "FanInEdgeRunner"
+	case fanOutEdge:
+		return "FanOutEdgeRunner"
+	default:
+		return "DirectEdgeRunner"
+	}
+}
+
+func kindOfEdge(edge workflow.Edge) edgeKind {
+	if len(edge.Connection.SourceIDs) > 1 {
+		return fanInEdge
 	}
 	if len(edge.Connection.SinkIDs) > 1 || edge.Assigner != nil {
-		return "FanOutEdgeRunner"
+		return fanOutEdge
 	}
-	return "DirectEdgeRunner"
+	return directEdge
 }
