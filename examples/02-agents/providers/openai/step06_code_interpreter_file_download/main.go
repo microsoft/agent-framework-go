@@ -120,7 +120,7 @@ func downloadContainerFile(ctx context.Context, client *openai.Client, outputDir
 	if err != nil {
 		return "", fmt.Errorf("download container file %q: %w", file.fileID, err)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 
 	filename := filepath.Base(strings.TrimSpace(file.filename))
 	if filename == "" || filename == "." || filename == ".." || filename == string(filepath.Separator) {
