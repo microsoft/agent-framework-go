@@ -823,6 +823,23 @@ func TestPolicy_custom_doesNotRunWhenDenyListMatches(t *testing.T) {
 	}
 }
 
+func TestPolicy_custom_receivesTrimmedCommand(t *testing.T) {
+	var seen string
+	p, err := shelltool.NewPolicy(shelltool.PolicyConfig{
+		Custom: func(request shelltool.ShellRequest) (bool, string, bool) {
+			seen = request.Command
+			return true, "", true
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Evaluate(shelltool.ShellRequest{Command: "  echo hello  "})
+	if seen != "echo hello" {
+		t.Errorf("expected custom callback to receive trimmed command %q, got %q", "echo hello", seen)
+	}
+}
+
 func TestPolicy_custom_doesNotOverrideAllowListDenial(t *testing.T) {
 	ran := false
 	p, err := shelltool.NewPolicy(shelltool.PolicyConfig{
