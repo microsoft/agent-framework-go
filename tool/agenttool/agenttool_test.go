@@ -5,6 +5,7 @@ package agenttool_test
 import (
 	"context"
 	"errors"
+	"iter"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -12,6 +13,16 @@ import (
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool/agenttool"
 )
+
+// newNamedAgent builds an agent with the given display name and description.
+// The provider Run function is never invoked by the metadata tests.
+func newNamedAgent(name, description string) *agent.Agent {
+	return agent.New(agent.ProviderConfig{
+		Run: func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			return func(func(*agent.ResponseUpdate, error) bool) {}
+		},
+	}, agent.Config{Name: name, Description: description})
+}
 
 func TestNew_ExposesAgentMetadataAndSchemas(t *testing.T) {
 	a := agenttest.New(agenttest.NewResponseBuilder().AddText("ok").Build())
@@ -62,6 +73,64 @@ func TestNew_ExposesAgentMetadataAndSchemas(t *testing.T) {
 	}
 }
 
+func TestNew_PanicsWithNilAgent(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic")
+		}
+	}()
+	agenttool.New(nil, agenttool.Config{})
+}
+
+func TestNew_ClonesRunOptions(t *testing.T) {
+	var capturedOptions []agent.Option
+	a := agenttest.New(agenttest.NewResponseBuilder(
+		func(_ context.Context, _ []*message.Message, opts ...agent.Option) {
+			capturedOptions = opts
+		},
+	).AddText("ok").Build())
+	runOptions := []agent.Option{agent.Stream(false)}
+	tl := agenttool.New(a, agenttool.Config{RunOptions: runOptions})
+	runOptions[0] = agent.Stream(true)
+
+	if _, err := tl.Call(t.Context(), `{"query":"hello"}`); err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+	stream, ok := agent.GetOption(capturedOptions, agent.Stream)
+	if !ok || stream {
+		t.Fatalf("stream option = %v, %v; want false, true", stream, ok)
+	}
+}
+
+func TestName_SanitizesInvalidCharacters(t *testing.T) {
+	tl := agenttool.New(newNamedAgent("Weather Agent!", "forecasts"), agenttool.Config{})
+
+	if got, want := tl.Name(), "Weather_Agent_"; got != want {
+		t.Fatalf("Name() = %q, want %q", got, want)
+	}
+}
+
+func TestName_FallsBackToAgentID(t *testing.T) {
+	a := agent.New(agent.ProviderConfig{
+		Run: func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			return func(func(*agent.ResponseUpdate, error) bool) {}
+		},
+	}, agent.Config{ID: "unnamed-agent"})
+	tl := agenttool.New(a, agenttool.Config{})
+
+	if got, want := tl.Name(), "unnamed_agent"; got != want {
+		t.Fatalf("Name() = %q, want %q", got, want)
+	}
+}
+
+func TestDescription_DefaultsWhenEmpty(t *testing.T) {
+	tl := agenttool.New(newNamedAgent("Agent", ""), agenttool.Config{})
+
+	if got, want := tl.Description(), "Invoke an agent to retrieve some information."; got != want {
+		t.Fatalf("Description() = %q, want %q", got, want)
+	}
+}
+
 func TestCall_PassesQueryAndRunOptionsAndReturnsResponse(t *testing.T) {
 	var capturedMessages []*message.Message
 	var capturedOptions []agent.Option
@@ -108,7 +177,7 @@ func TestCall_PassesQueryAndRunOptionsAndReturnsResponse(t *testing.T) {
 	}
 }
 
-func TestCall_EmptyArgsUsesEmptyQuery(t *testing.T) {
+func TestCall_EmptyArgsRejectsBlankQuery(t *testing.T) {
 	var capturedMessages []*message.Message
 
 	a := agenttest.New(agenttest.NewResponseBuilder(
@@ -119,22 +188,12 @@ func TestCall_EmptyArgsUsesEmptyQuery(t *testing.T) {
 
 	tl := agenttool.New(a, agenttool.Config{})
 
-	ret, err := tl.Call(t.Context(), "")
-	if err != nil {
-		t.Fatalf("Call() error = %v", err)
+	_, err := tl.Call(t.Context(), "")
+	if err == nil || err.Error() != "message cannot be blank" {
+		t.Fatalf("Call() error = %v, want blank-message error", err)
 	}
-	if got := ret.(string); got != "empty response" {
-		t.Fatalf("Call() result = %q, want %q", got, "empty response")
-	}
-	if len(capturedMessages) != 1 {
-		t.Fatalf("captured %d messages, want 1", len(capturedMessages))
-	}
-	text, ok := capturedMessages[0].Contents[0].(*message.TextContent)
-	if !ok {
-		t.Fatalf("message content type = %T, want *message.TextContent", capturedMessages[0].Contents[0])
-	}
-	if text.Text != "" {
-		t.Fatalf("message text = %q, want empty string", text.Text)
+	if len(capturedMessages) != 0 {
+		t.Fatalf("provider received %d messages, want no invocation", len(capturedMessages))
 	}
 }
 

@@ -11,6 +11,30 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow"
 )
 
+func TestOutputTag_JSONRoundtrip(t *testing.T) {
+	data, err := json.Marshal(workflow.OutputTagIntermediate)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	var got workflow.OutputTag
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if got != workflow.OutputTagIntermediate {
+		t.Fatalf("roundtrip = %q, want %q", got, workflow.OutputTagIntermediate)
+	}
+}
+
+func TestOutputTag_RejectsEmptyJSON(t *testing.T) {
+	if _, err := json.Marshal(workflow.OutputTag("")); err == nil {
+		t.Fatal("Marshal() error = nil, want empty-tag error")
+	}
+	var tag workflow.OutputTag
+	if err := json.Unmarshal([]byte(`""`), &tag); err == nil {
+		t.Fatal("Unmarshal() error = nil, want empty-tag error")
+	}
+}
+
 func TestEdgeConnection_JsonRoundtrip(t *testing.T) {
 	cases := []workflow.EdgeConnection{
 		{SourceIDs: []string{"a"}, SinkIDs: []string{"b"}},
@@ -269,6 +293,31 @@ func TestScopeID_JsonRoundtrip(t *testing.T) {
 				t.Errorf("ExecutorID = %q, want %q", got.ExecutorID, tc.id.ExecutorID)
 			}
 		})
+	}
+}
+
+func TestScopeID_Equal(t *testing.T) {
+	privateScope1 := workflow.ScopeID{ExecutorID: "executor1"}
+	privateScope2 := workflow.ScopeID{ExecutorID: "executor2"}
+
+	if privateScope1.Equal(privateScope2) {
+		t.Fatal("private scopes from different executors should not be equal")
+	}
+	if !privateScope1.Equal(workflow.ScopeID{ExecutorID: "executor1"}) {
+		t.Fatal("private scopes from the same executor should be equal")
+	}
+
+	sharedScope1 := workflow.ScopeID{ExecutorID: "executor1", ScopeName: "sharedScope"}
+	sharedScope2 := workflow.ScopeID{ExecutorID: "executor2", ScopeName: "sharedScope"}
+
+	if !sharedScope1.Equal(sharedScope2) {
+		t.Fatal("shared scopes with the same scope name should be equal")
+	}
+	if sharedScope1.Equal(workflow.ScopeID{ExecutorID: "executor1", ScopeName: "differentScope"}) {
+		t.Fatal("shared scopes with different scope names should not be equal")
+	}
+	if sharedScope1.Equal(privateScope1) {
+		t.Fatal("shared and private scopes should not be equal")
 	}
 }
 

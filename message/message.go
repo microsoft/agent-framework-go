@@ -4,6 +4,7 @@ package message
 
 import (
 	"maps"
+	"slices"
 	"time"
 )
 
@@ -48,7 +49,8 @@ type Message struct {
 	RawRepresentation    any       `json:"-"`
 }
 
-// New creates a new [Message] with the given role and contents.
+// New creates a new [Message] with the given contents and [RoleUser].
+// To use a different role, set [Message.Role] on the returned Message.
 func New(contents ...Content) *Message {
 	return &Message{
 		Role:     RoleUser,
@@ -61,20 +63,39 @@ func NewText(text string) *Message {
 	return New(&TextContent{Text: text})
 }
 
+// String implements fmt.Stringer, returning the concatenated text of all
+// TextContent in the message (delegating to Contents.Text).
 func (m *Message) String() string {
 	return m.Contents.Text()
 }
 
+// Usage returns the aggregated UsageDetails carried by the message's
+// UsageContent (delegating to Contents.Usage).
 func (m *Message) Usage() UsageDetails {
 	return m.Contents.Usage()
 }
 
-// Clone creates a shallow copy of the message.
+// WithSource returns the message tagged with the provided source.
+//
+// If the message already has the requested source, the original message is
+// returned. Otherwise, a cloned message is returned with the updated source.
+func (m *Message) WithSource(source Source) *Message {
+	if m == nil || m.Source == source {
+		return m
+	}
+	v := m.Clone()
+	v.Source = source
+	return v
+}
+
+// Clone creates a shallow copy of the message, cloning its top-level map and
+// slice containers while sharing their values and content objects.
 func (m *Message) Clone() *Message {
 	if m == nil {
 		return nil
 	}
 	v := *m
 	v.AdditionalProperties = maps.Clone(m.AdditionalProperties)
+	v.Contents = slices.Clone(m.Contents)
 	return &v
 }

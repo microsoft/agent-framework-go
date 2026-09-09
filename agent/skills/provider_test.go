@@ -85,6 +85,28 @@ func (s *panicOnceSource) Skills(context.Context) ([]*skills.Skill, error) {
 	return []*skills.Skill{s.skill}, nil
 }
 
+type blockingSource struct {
+	started     chan struct{}
+	startedOnce sync.Once
+	release     chan struct{}
+	releaseOnce sync.Once
+	skill       *skills.Skill
+}
+
+func (s *blockingSource) Skills(ctx context.Context) ([]*skills.Skill, error) {
+	s.startedOnce.Do(func() { close(s.started) })
+	select {
+	case <-s.release:
+		return []*skills.Skill{s.skill}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (s *blockingSource) unblock() {
+	s.releaseOnce.Do(func() { close(s.release) })
+}
+
 func TestProvider_CustomPromptTemplate_MissingSkillsPlaceholderPanics(t *testing.T) {
 	defer func() {
 		if recover() == nil {
@@ -93,13 +115,13 @@ func TestProvider_CustomPromptTemplate_MissingSkillsPlaceholderPanics(t *testing
 	}()
 
 	skill := mustInlineSkill(skills.Frontmatter{Name: "inline-skill", Description: "Inline skill"}, "Instructions.", nil, nil)
-	_ = skills.NewContextProvider(skills.ContextProviderOptions{SkillsInstructionPrompt: "No skills placeholder here {resource_instructions} {script_instructions}", Skills: []*skills.Skill{skill}})
+	_ = skills.NewContextProvider(skills.ContextProviderOptions{SkillsInstructionPrompt: new("No skills placeholder here {resource_instructions} {script_instructions}"), Skills: []*skills.Skill{skill}})
 }
 
 func TestProvider_CustomPromptTemplate_MissingLegacyInstructionPlaceholdersAccepted(t *testing.T) {
 	skill := mustInlineSkill(skills.Frontmatter{Name: "inline-skill", Description: "Inline skill"}, "Instructions.", nil, nil)
 	provider := skills.NewContextProvider(skills.ContextProviderOptions{
-		SkillsInstructionPrompt: "Custom skills:\n{skills}",
+		SkillsInstructionPrompt: new("Custom skills:\n{skills}"),
 		Skills:                  []*skills.Skill{skill},
 	})
 
@@ -115,7 +137,7 @@ func TestProvider_CustomPromptTemplate_MissingLegacyInstructionPlaceholdersAccep
 func TestProvider_CustomPromptTemplate_LegacyInstructionPlaceholdersRemainLiteral(t *testing.T) {
 	skill := mustInlineSkill(skills.Frontmatter{Name: "inline-skill", Description: "Inline skill"}, "Instructions.", nil, nil)
 	provider := skills.NewContextProvider(skills.ContextProviderOptions{
-		SkillsInstructionPrompt: "Custom skills:\n{skills}\n{resource_instructions}\n{script_instructions}",
+		SkillsInstructionPrompt: new("Custom skills:\n{skills}\n{resource_instructions}\n{script_instructions}"),
 		Skills:                  []*skills.Skill{skill},
 	})
 
@@ -262,6 +284,57 @@ func TestProvider_DefaultCaching_LoadsSourceOnce(t *testing.T) {
 
 	if source.count != 1 {
 		t.Fatalf("expected source to be loaded once, got %d", source.count)
+	}
+}
+
+// A caller waiting for another invocation to populate the cache must still
+// observe its own context cancellation promptly.
+func TestProvider_CanceledWaiterDoesNotBlockOnSharedLoad(t *testing.T) {
+	skill := mustInlineSkill(
+		skills.Frontmatter{Name: "blocking-skill", Description: "Blocking skill"},
+		"Instructions.",
+		nil,
+		nil,
+	)
+	source := &blockingSource{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+		skill:   skill,
+	}
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}})
+
+	ownerDone := make(chan error, 1)
+	go func() {
+		_, _, err := invokeProvider(provider, context.Background(), nil)
+		ownerDone <- err
+	}()
+	<-source.started
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	waiterDone := make(chan error, 1)
+	go func() {
+		_, _, err := invokeProvider(provider, canceledCtx, nil)
+		waiterDone <- err
+	}()
+
+	var waiterErr error
+	select {
+	case waiterErr = <-waiterDone:
+	case <-time.After(250 * time.Millisecond):
+		source.unblock()
+		if err := <-ownerDone; err != nil {
+			t.Fatalf("cache owner: %v", err)
+		}
+		waiterErr = <-waiterDone
+		t.Fatalf("canceled provider invocation remained blocked until the shared load completed; final error: %v", waiterErr)
+	}
+	source.unblock()
+	if err := <-ownerDone; err != nil {
+		t.Fatalf("cache owner: %v", err)
+	}
+	if !errors.Is(waiterErr, context.Canceled) {
+		t.Fatalf("canceled provider invocation error = %v, want context.Canceled", waiterErr)
 	}
 }
 
@@ -450,6 +523,65 @@ func TestProvider_RunSkillScript_RequiresExactName(t *testing.T) {
 	}
 	if resultStr != "Error: Script './scripts/run.py' not found in skill 'script-skill'." {
 		t.Fatalf("expected exact-name error, got %q", resultStr)
+	}
+}
+
+func TestProvider_SkillMemberLookupErrors(t *testing.T) {
+	skill := mustInlineSkill(
+		skills.Frontmatter{Name: "lookup-skill", Description: "Lookup skill"},
+		"Body.",
+		[]skills.Resource{{Name: "docs/readme.md", Read: func(context.Context) (any, error) {
+			return "docs", nil
+		}}},
+		[]skills.Script{{Name: "scripts/run", Run: func(context.Context, *skills.Skill, []string) (any, error) {
+			return "ok", nil
+		}}},
+	)
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}})
+	_, tools := captureProviderContext(t, provider)
+
+	tests := []struct {
+		name    string
+		tool    string
+		payload string
+		want    string
+	}{
+		{
+			name:    "empty resource name",
+			tool:    "read_skill_resource",
+			payload: `{"skillName":"lookup-skill","resourceName":" "}`,
+			want:    "Error: Resource name cannot be empty.",
+		},
+		{
+			name:    "missing resource",
+			tool:    "read_skill_resource",
+			payload: `{"skillName":"lookup-skill","resourceName":"missing.md"}`,
+			want:    "Error: Resource 'missing.md' not found in skill 'lookup-skill'.",
+		},
+		{
+			name:    "empty script name",
+			tool:    "run_skill_script",
+			payload: `{"skillName":"lookup-skill","scriptName":" "}`,
+			want:    "Error: Script name cannot be empty.",
+		},
+		{
+			name:    "missing script",
+			tool:    "run_skill_script",
+			payload: `{"skillName":"lookup-skill","scriptName":"missing"}`,
+			want:    "Error: Script 'missing' not found in skill 'lookup-skill'.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := findTool(t, tools, tt.tool).Call(t.Context(), tt.payload)
+			if err != nil {
+				t.Fatalf("expected no tool error, got %v", err)
+			}
+			if result != tt.want {
+				t.Fatalf("expected %q, got %#v", tt.want, result)
+			}
+		})
 	}
 }
 

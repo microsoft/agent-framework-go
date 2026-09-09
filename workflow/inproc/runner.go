@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"sync"
 	"sync/atomic"
 
 	"github.com/google/uuid"
@@ -38,9 +39,16 @@ type runner struct {
 	stepTracer      *stepTracer
 	outgoingEvents  *execution.ConcurrentEventSink
 
-	knownValidInputTypes map[reflect.Type]struct{}
+	knownValidInputTypes concurrent.Map[reflect.Type, struct{}]
 	needsRepublish       atomic.Bool
+	// executionMu prevents checkpoint restore from replacing runner state while
+	// an executor is reading or mutating that state in an active superstep.
+	executionMu sync.Mutex
 
+	// checkpointMu guards checkpoints and lastCheckpointInfo. The background
+	// run loop writes them during supersteps (and on restore) while consumers
+	// read them concurrently via the public Checkpoints/LastCheckpoint handles.
+	checkpointMu       sync.Mutex
 	checkpoints        []workflow.CheckpointInfo
 	lastCheckpointInfo *workflow.CheckpointInfo
 }
@@ -115,20 +123,19 @@ func newInProcessRunner(
 	}
 
 	runner := &runner{
-		sessionID:            sessionID,
-		startExecutorID:      wf.StartExecutorID(),
-		wf:                   wf,
-		runContext:           runContext,
-		checkpointMgr:        checkpointMgr,
-		edgeMap:              runContext.edgeMap,
-		stepTracer:           stepTracer,
-		outgoingEvents:       outgoingEvents,
-		knownValidInputTypes: make(map[reflect.Type]struct{}),
+		sessionID:       sessionID,
+		startExecutorID: wf.StartExecutorID(),
+		wf:              wf,
+		runContext:      runContext,
+		checkpointMgr:   checkpointMgr,
+		edgeMap:         runContext.edgeMap,
+		stepTracer:      stepTracer,
+		outgoingEvents:  outgoingEvents,
 	}
 
 	// Initialize known valid input types
 	for _, typ := range knownValidInputTypes {
-		runner.knownValidInputTypes[typ] = struct{}{}
+		runner.knownValidInputTypes.Store(typ, struct{}{})
 	}
 
 	return runner, nil
@@ -177,22 +184,30 @@ func (r *runner) RepublishPendingEvents(ctx context.Context) error {
 }
 
 // IsValidInputType checks if the given type is a valid input type for this workflow.
-func (r *runner) IsValidInputType(ctx context.Context, messageType reflect.Type) bool {
-	if _, known := r.knownValidInputTypes[messageType]; known {
-		return true
+func (r *runner) IsValidInputType(ctx context.Context, messageType reflect.Type) (bool, error) {
+	if _, known := r.knownValidInputTypes.Load(messageType); known {
+		return true, nil
 	}
 
 	startingExecutor, err := r.runContext.ensureExecutor(ctx, r.startExecutorID, nil)
 	if err != nil {
-		return false
+		return false, err
 	}
 
 	if execution.CanHandleType(startingExecutor, messageType) {
-		r.knownValidInputTypes[messageType] = struct{}{}
-		return true
+		r.knownValidInputTypes.Store(messageType, struct{}{})
+		return true, nil
 	}
 
-	return false
+	return false, nil
+}
+
+func (r *runner) startingExecutorInputTypes(ctx context.Context) ([]reflect.Type, error) {
+	startingExecutor, err := r.runContext.ensureExecutor(ctx, r.startExecutorID, nil)
+	if err != nil {
+		return nil, err
+	}
+	return startingExecutor.DescribeProtocol().Accepts, nil
 }
 
 func (r *runner) beginStream(_ context.Context, mode execution.Mode) (*execution.RunHandle, error) {
@@ -218,25 +233,28 @@ func (r *runner) resumeStreamWithRepublish(ctx context.Context, mode execution.M
 	return execution.NewRunHandle(r, r, mode), nil
 }
 
-// EnqueueMessage enqueues a typed message to the workflow.
-func (r *runner) EnqueueMessage(ctx context.Context, message any) error {
+// EnqueueMessageUntyped enqueues a message using declaredType for validation
+// and routing.
+func (r *runner) EnqueueMessageUntyped(ctx context.Context, message any, declaredType reflect.Type) (bool, error) {
 	if err := r.runContext.checkEnded(); err != nil {
-		return err
+		return false, err
 	}
 	if message == nil {
-		return fmt.Errorf("message cannot be nil")
+		return false, fmt.Errorf("message cannot be nil")
 	}
 
-	if response, ok := message.(*workflow.ExternalResponse); ok {
-		return r.runContext.addExternalResponse(response)
+	valid, err := r.IsValidInputType(ctx, declaredType)
+	if err != nil {
+		return false, err
+	}
+	if !valid {
+		return false, nil
 	}
 
-	messageType := reflect.TypeOf(message)
-	if !r.IsValidInputType(ctx, messageType) {
-		return fmt.Errorf("message type %v is not a valid input type for this workflow: %w", messageType, workflow.ErrInvalidInputType)
+	if err := r.runContext.addExternalMessage(message, declaredType); err != nil {
+		return false, err
 	}
-
-	return r.runContext.addExternalMessage(message, messageType)
+	return true, nil
 }
 
 // EnqueueResponse enqueues an external response to the workflow.
@@ -246,6 +264,9 @@ func (r *runner) EnqueueResponse(ctx context.Context, response *workflow.Externa
 
 // RunSuperStep executes a single super step of the workflow.
 func (r *runner) RunSuperStep(ctx context.Context) (bool, error) {
+	r.executionMu.Lock()
+	defer r.executionMu.Unlock()
+
 	if err := r.runContext.checkEnded(); err != nil {
 		return false, err
 	}
@@ -280,24 +301,23 @@ func (r *runner) RequestEndRun(ctx context.Context) error {
 	return r.runContext.endRun(ctx)
 }
 
-// Checkpoints returns the list of created checkpoints.
+// IsCheckpointingEnabled reports whether a checkpoint manager is configured for this run.
 func (r *runner) IsCheckpointingEnabled() bool {
 	return r.checkpointMgr != nil
 }
 
+// Checkpoints returns the list of created checkpoints.
 func (r *runner) Checkpoints() []workflow.CheckpointInfo {
+	r.checkpointMu.Lock()
+	defer r.checkpointMu.Unlock()
 	return slices.Clone(r.checkpoints)
-}
-
-func checkpointInfoPtr(info workflow.CheckpointInfo) *workflow.CheckpointInfo {
-	return &info
 }
 
 func cloneCheckpointInfoPtr(info *workflow.CheckpointInfo) *workflow.CheckpointInfo {
 	if info == nil {
 		return nil
 	}
-	return checkpointInfoPtr(*info)
+	return new(*info)
 }
 
 // RestoreCheckpoint restores the workflow state from a checkpoint.
@@ -309,6 +329,11 @@ func (r *runner) RestoreCheckpoint(ctx context.Context, checkpointInfo workflow.
 }
 
 func (r *runner) restoreCheckpointCore(ctx context.Context, checkpointInfo workflow.CheckpointInfo) error {
+	if !r.executionMu.TryLock() {
+		return fmt.Errorf("cannot restore a checkpoint while a workflow superstep is running")
+	}
+	defer r.executionMu.Unlock()
+
 	if err := r.runContext.checkEnded(); err != nil {
 		return err
 	}
@@ -343,8 +368,10 @@ func (r *runner) restoreCheckpointCore(ctx context.Context, checkpointInfo workf
 	if err != nil {
 		return fmt.Errorf("failed to retrieve checkpoint index: %w", err)
 	}
+	r.checkpointMu.Lock()
 	r.checkpoints = index
-	r.lastCheckpointInfo = checkpointInfoPtr(checkpointInfo)
+	r.lastCheckpointInfo = new(checkpointInfo)
+	r.checkpointMu.Unlock()
 	r.stepTracer.Reload(cp.StepNumber)
 	return nil
 }
@@ -371,11 +398,16 @@ func (r *runner) runSuperstep(ctx context.Context, currentStep *execution.StepCo
 		return err
 	}
 
-	// Process subworkflows
+	// Process joined subworkflows concurrently within the parent superstep.
+	var subworkflows errgroup.Group
 	for _, subRunner := range r.runContext.joinedSubworkflowRunnerSnapshot() {
-		if _, err := subRunner.RunSuperStep(ctx); err != nil {
+		subworkflows.Go(func() error {
+			_, err := subRunner.RunSuperStep(ctx)
 			return err
-		}
+		})
+	}
+	if err := subworkflows.Wait(); err != nil {
+		return err
 	}
 
 	// Create checkpoint
@@ -398,9 +430,6 @@ func (r *runner) deliverMessages(ctx context.Context, receiverID string, envelop
 
 	// Bind a context with no per-message trace context for delivery-level callbacks.
 	tracelessCtx := r.runContext.bind(ctx, receiverID, nil)
-	if err := executor.OnMessageDeliveryStarting(tracelessCtx); err != nil {
-		return err
-	}
 	defer func() {
 		// Always run the finished hook even on error / panic, but don't override
 		// any earlier error.
@@ -408,6 +437,9 @@ func (r *runner) deliverMessages(ctx context.Context, receiverID string, envelop
 			err = finishErr
 		}
 	}()
+	if err := executor.OnMessageDeliveryStarting(tracelessCtx); err != nil {
+		return err
+	}
 
 	for {
 		envelope, ok := envelopes.Dequeue()
@@ -456,20 +488,26 @@ func (r *runner) checkpoint(ctx context.Context) error {
 		stateData.Set(key, value)
 	}
 
+	r.checkpointMu.Lock()
+	parent := cloneCheckpointInfoPtr(r.lastCheckpointInfo)
+	r.checkpointMu.Unlock()
+
 	cp := &checkpoint.Checkpoint{
 		StepNumber:    r.stepTracer.StepNumber(),
 		WorkflowInfo:  workflowInfo,
 		RunnerData:    r.runContext.exportState(),
-		StateData:     *stateData,
+		StateData:     stateData,
 		EdgeStateData: edgeData,
-		Parent:        cloneCheckpointInfoPtr(r.lastCheckpointInfo),
+		Parent:        parent,
 	}
 	info, err := r.checkpointMgr.Commit(ctx, r.sessionID, cp)
 	if err != nil {
 		return err
 	}
 	r.stepTracer.TraceCheckpointCreated(info)
+	r.checkpointMu.Lock()
 	r.checkpoints = append(r.checkpoints, info)
-	r.lastCheckpointInfo = checkpointInfoPtr(info)
+	r.lastCheckpointInfo = new(info)
+	r.checkpointMu.Unlock()
 	return nil
 }

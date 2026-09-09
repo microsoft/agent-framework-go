@@ -21,11 +21,11 @@ const (
 	ToolModeNone ToolMode = "none"
 )
 
-// requiredPrefix marks a ToolMode created by RequireTools with specific tool names.
+// requiredPrefix marks a ToolMode created by RequireTool with a specific tool name.
 const requiredPrefix = "required:"
 
 // Mode returns the base tool mode represented by m.
-// Modes created by RequireTools return ToolModeRequired.
+// Modes created by RequireTool return ToolModeRequired.
 func (m ToolMode) Mode() ToolMode {
 	switch m {
 	case ToolModeAuto, ToolModeNone, ToolModeRequired:
@@ -37,18 +37,25 @@ func (m ToolMode) Mode() ToolMode {
 	return m
 }
 
-// Required returns the specific tool names required by m.
-// It returns nil unless m was created by RequireTools.
-func (m ToolMode) Required() []string {
+// RequiredTool returns the specific tool name required by m.
+// It returns false unless m was created by [RequireTool].
+func (m ToolMode) RequiredTool() (string, bool) {
 	if strings.HasPrefix(string(m), requiredPrefix) && m != ToolModeRequired {
-		return strings.Split(strings.TrimPrefix(string(m), requiredPrefix), ",")
+		name := strings.TrimPrefix(string(m), requiredPrefix)
+		if name != "" {
+			return name, true
+		}
 	}
-	return nil
+	return "", false
 }
 
-// RequireTools returns a ToolMode that requires the named tools to be used.
-func RequireTools(name ...string) ToolMode {
-	return ToolMode(requiredPrefix + strings.Join(name, ","))
+// RequireTool returns a ToolMode that requires the named tool to be used.
+func RequireTool(name string) ToolMode {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		panic("tool: required tool name cannot be blank")
+	}
+	return ToolMode(requiredPrefix + name)
 }
 
 // Tool describes a tool that can be made available to an agent.
@@ -99,6 +106,9 @@ func (approvalRequiredFunc) ApprovalRequired() bool { return true }
 // If the tool already requires approval, it is returned as-is.
 // Not all tools support approval, in which case the original tool is returned.
 func ApprovalRequiredFunc(t FuncTool) FuncTool {
+	if t == nil {
+		return nil
+	}
 	if approval, ok := t.(ApprovalRequiredTool); ok && approval.ApprovalRequired() {
 		return t
 	}

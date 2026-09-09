@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 )
 
 // stateValue wraps a session state value in either serialized or deserialized form,
@@ -61,13 +62,13 @@ func (v *stateValue) MarshalJSON() ([]byte, error) {
 		return json.Marshal(v.cached)
 	}
 	if v.raw != nil {
-		return append([]byte(nil), v.raw...), nil
+		return slices.Clone(v.raw), nil
 	}
 	return []byte("null"), nil
 }
 
 func (v *stateValue) UnmarshalJSON(data []byte) error {
-	v.raw = append(json.RawMessage(nil), data...)
+	v.raw = slices.Clone(json.RawMessage(data))
 	v.cached = nil
 	v.cachedTyp = nil
 	v.hasCached = false

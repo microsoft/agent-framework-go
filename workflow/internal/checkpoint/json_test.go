@@ -4,6 +4,7 @@ package checkpoint_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -113,5 +114,29 @@ func TestRunnerStateData_JsonRoundtrip(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.ResponsePortOwners, state.ResponsePortOwners) {
 		t.Fatalf("ResponsePortOwners = %+v, want %+v", got.ResponsePortOwners, state.ResponsePortOwners)
+	}
+}
+
+// A Checkpoint's StateData map is rebuilt from JSON on Unmarshal. The map must
+// consistently apply its per-instance seed so Get can find keys inserted while
+// restoring the checkpoint.
+func TestCheckpoint_JsonRoundtrip_StateDataRemainsLoadable(t *testing.T) {
+	key := workflow.ScopeKey{ID: workflow.ScopeID{ExecutorID: "exec1"}, Key: "k"}
+	keyJSON, err := json.Marshal(key)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+	valJSON, err := json.Marshal(workflow.AnyPortableValue("v"))
+	if err != nil {
+		t.Fatalf("marshal value: %v", err)
+	}
+	data := []byte(fmt.Sprintf(`{"StateData":[{"Key":%s,"Value":%s}]}`, keyJSON, valJSON))
+
+	var cp checkpoint.Checkpoint
+	if err := json.Unmarshal(data, &cp); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if _, ok := cp.StateData.Get(key); !ok {
+		t.Fatal("restored StateData.Get(key) = false: the scope-key hasher is not deterministic across calls")
 	}
 }

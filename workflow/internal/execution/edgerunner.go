@@ -33,6 +33,25 @@ type statefulEdgeState struct {
 	unseen          map[string]struct{}
 }
 
+func newStatefulEdgeState(sourceIDs []string) *statefulEdgeState {
+	state := &statefulEdgeState{
+		sourceIDs: sourceIDs,
+	}
+	state.resetUnseen()
+	return state
+}
+
+func (s *statefulEdgeState) resetUnseen() {
+	if s.unseen == nil {
+		s.unseen = make(map[string]struct{}, len(s.sourceIDs))
+	} else {
+		clear(s.unseen)
+	}
+	for _, id := range s.sourceIDs {
+		s.unseen[id] = struct{}{}
+	}
+}
+
 func (s *statefulEdgeState) MarshalJSON() ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -73,12 +92,7 @@ func (s *statefulEdgeState) processMessage(sourceID string, envelope *MessageEnv
 	}
 	taken := s.pendingMessages
 	s.pendingMessages = nil
-	if s.unseen == nil {
-		s.unseen = make(map[string]struct{}, len(s.sourceIDs))
-	}
-	for _, id := range s.sourceIDs {
-		s.unseen[id] = struct{}{}
-	}
+	s.resetUnseen()
 	s.mu.Unlock()
 
 	if len(taken) == 0 {
@@ -126,14 +140,7 @@ func NewEdgeRunner(wf *workflow.Workflow, tracer StepTracer, ensureExecutor func
 			if statefulEdges == nil {
 				statefulEdges = make(map[int]*statefulEdgeState)
 			}
-			unseen := make(map[string]struct{}, len(edge.Connection.SourceIDs))
-			for _, id := range edge.Connection.SourceIDs {
-				unseen[id] = struct{}{}
-			}
-			statefulEdges[edge.Index] = &statefulEdgeState{
-				sourceIDs: edge.Connection.SourceIDs,
-				unseen:    unseen,
-			}
+			statefulEdges[edge.Index] = newStatefulEdgeState(edge.Connection.SourceIDs)
 		}
 	}
 
@@ -209,7 +216,7 @@ func (em *EdgeRunner) PrepareDeliveryForEdge(ctx context.Context, edge workflow.
 		// Stateful edge - track source messages.
 		state, ok := em.statefulEdges[edge.Index]
 		if !ok {
-			return nil, fmt.Errorf("edge state for %q not found", edge.Index)
+			return nil, fmt.Errorf("edge state for %d not found", edge.Index)
 		}
 		envelopes = state.processMessage(envelope.SourceID, envelope)
 		if len(envelopes) == 0 {
@@ -252,10 +259,7 @@ func (em *EdgeRunner) PrepareDeliveryForEdge(ctx context.Context, edge workflow.
 		return nil, nil
 	}
 	span.SetDeliveryStatus(observability.DeliveryStatusDelivered)
-	return &DeliveryMapping{
-		Targets:   targets,
-		Envelopes: envelopes,
-	}, nil
+	return newDeliveryMapping(envelopes, targets), nil
 }
 
 func (em *EdgeRunner) filterEnvelopesForTarget(ctx context.Context, envelopes []*MessageEnvelope, target *workflow.Executor) ([]*MessageEnvelope, error) {
@@ -276,8 +280,15 @@ func selectedTargetIDs(edge workflow.Edge, envelope *MessageEnvelope) []string {
 	targetIDs := edge.Connection.SinkIDs
 	if edge.Assigner != nil {
 		targetIDs = make([]string, 0, len(edge.Connection.SinkIDs))
-		for id := range edge.Assigner(len(edge.Connection.SinkIDs), envelope.Message) {
-			targetIDs = append(targetIDs, edge.Connection.SinkIDs[id])
+		// Assigner is caller-supplied (WithEdgeAssigner). Guard against both a
+		// nil sequence (ranging over a nil iter.Seq panics) and out-of-range
+		// indices, so a misbehaving assigner cannot crash the workflow runtime.
+		if seq := edge.Assigner(len(edge.Connection.SinkIDs), envelope.Message); seq != nil {
+			for id := range seq {
+				if id >= 0 && id < len(edge.Connection.SinkIDs) {
+					targetIDs = append(targetIDs, edge.Connection.SinkIDs[id])
+				}
+			}
 		}
 	}
 	if envelope.TargetID == "" {
@@ -331,15 +342,18 @@ func (em *EdgeRunner) resolveTargets(ctx context.Context, targetIDs []string) ([
 
 func (em *EdgeRunner) messageRuntimeType(ctx context.Context, envelope *MessageEnvelope) (reflect.Type, error) {
 	if portable, ok := envelope.Message.(workflow.PortableValue); ok {
-		if envelope.SourceID == "" {
-			return nil, nil
+		if envelope.SourceID != "" {
+			source, err := em.ensureExecutor(ctx, envelope.SourceID, em.tracer)
+			if err != nil {
+				return nil, err
+			}
+			if typ, ok := SentRuntimeType(source, portable.TypeID); ok {
+				return typ, nil
+			}
 		}
-		source, err := em.ensureExecutor(ctx, envelope.SourceID, em.tracer)
-		if err != nil {
-			return nil, err
-		}
-		if typ, ok := SentRuntimeType(source, portable.TypeID); ok {
-			return typ, nil
+		valueType := reflect.TypeOf(portable.Any())
+		if portable.TypeID.MatchPolymorphic(valueType) {
+			return valueType, nil
 		}
 		return nil, nil
 	}
@@ -372,16 +386,17 @@ func (em *EdgeRunner) PrepareDeliveryForInput(ctx context.Context, envelope *Mes
 	if err != nil {
 		return nil, err
 	}
-	if !CanHandleTypeID(target, envelope.MessageType()) {
+	runtimeType, err := em.messageRuntimeType(ctx, envelope)
+	if err != nil {
+		return nil, err
+	}
+	if !canHandleRuntimeType(target, runtimeType) {
 		// Type mismatch.
 		span.SetDeliveryStatus(observability.DeliveryStatusDroppedTypeMismatch)
 		return nil, nil
 	}
 	span.SetDeliveryStatus(observability.DeliveryStatusDelivered)
-	return &DeliveryMapping{
-		Targets:   []*workflow.Executor{target},
-		Envelopes: []*MessageEnvelope{envelope},
-	}, nil
+	return newSingleDeliveryMapping(envelope, target), nil
 }
 
 // PrepareDeliveryForResponse prepares delivery of an external response to
@@ -407,16 +422,17 @@ func (em *EdgeRunner) PrepareDeliveryForResponse(ctx context.Context, response *
 	if err != nil {
 		return nil, err
 	}
-	if !CanHandleTypeID(target, envelope.MessageType()) {
+	runtimeType, err := em.messageRuntimeType(ctx, envelope)
+	if err != nil {
+		return nil, err
+	}
+	if !canHandleRuntimeType(target, runtimeType) {
 		// Type mismatch.
 		span.SetDeliveryStatus(observability.DeliveryStatusDroppedTypeMismatch)
 		return nil, nil
 	}
 	span.SetDeliveryStatus(observability.DeliveryStatusDelivered)
-	return &DeliveryMapping{
-		Targets:   []*workflow.Executor{target},
-		Envelopes: []*MessageEnvelope{envelope},
-	}, nil
+	return newSingleDeliveryMapping(envelope, target), nil
 }
 
 func edgeGroupMetadata(edge workflow.Edge) observability.EdgeGroupMetadata {

@@ -17,7 +17,7 @@ import (
 )
 
 func TestPrepareDeliveryForDirectEdge(t *testing.T) {
-	bools := []*bool{nil, ptr(true), ptr(false)}
+	bools := []*bool{nil, new(true), new(false)}
 	for _, conditionMatch := range bools {
 		for _, targetMatch := range bools {
 			name := fmt.Sprintf("condition=%v/target=%v", boolName(conditionMatch), boolName(targetMatch))
@@ -68,7 +68,7 @@ func TestPrepareDeliveryForDirectEdge(t *testing.T) {
 }
 
 func TestPrepareDeliveryForFanOutEdge(t *testing.T) {
-	bools := []*bool{nil, ptr(true), ptr(false)}
+	bools := []*bool{nil, new(true), new(false)}
 	for _, assignerSelectsEmpty := range bools {
 		for _, targetMatch := range bools {
 			name := fmt.Sprintf("assignerEmpty=%v/target=%v", boolName(assignerSelectsEmpty), boolName(targetMatch))
@@ -152,13 +152,11 @@ func TestPrepareDeliveryForFanInEdgeConcurrentProcessing(t *testing.T) {
 		var wg sync.WaitGroup
 		for _, sourceID := range sourceIDs {
 			envelope := mustEnvelopeTarget(t, "msg-from-"+sourceID, sourceID, "")
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				<-start
 				mapping, err := runner.PrepareDeliveryForEdge(context.Background(), edge, envelope)
 				results <- deliveryResult{mapping: mapping, err: err}
-			}()
+			})
 		}
 		close(start)
 		wg.Wait()
@@ -319,12 +317,15 @@ func newTestWorkflow(t *testing.T, edges ...workflow.Edge) (*workflow.Workflow, 
 		opts := edgeOptions(edge)
 		switch {
 		case len(sources) == 1 && len(sinks) == 1:
-			builder.AddDirectEdge(sources[0], sinks[0], false, edge.Condition, opts...)
+			if edge.Condition != nil {
+				opts = append(opts, workflow.WithEdgeCondition(edge.Condition))
+			}
+			builder.AddEdge(sources[0], sinks[0], opts...)
 		case len(sources) == 1:
 			builder.AddFanOutEdge(sources[0], sinks, opts...)
 		default:
 			for _, source := range sources[1:] {
-				builder.AddDirectEdge(sources[0], source, true, nil)
+				builder.AddEdge(sources[0], source, workflow.IdempotentEdge())
 			}
 			builder.AddFanInBarrierEdge(sources, sinks[0], opts...)
 		}
@@ -417,10 +418,6 @@ func sameStringSet(left []string, right []string) bool {
 		}
 	}
 	return true
-}
-
-func ptr(value bool) *bool {
-	return &value
 }
 
 func boolName(value *bool) string {
