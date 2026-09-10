@@ -14,12 +14,20 @@ import (
 	"sync"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/harness/toolapproval"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 )
 
 const (
+	// LoadSkillToolName is the name of the tool that loads a skill's full content.
+	LoadSkillToolName = "load_skill"
+	// ReadSkillResourceToolName is the name of the tool that reads a skill resource.
+	ReadSkillResourceToolName = "read_skill_resource"
+	// RunSkillScriptToolName is the name of the tool that runs a skill script.
+	RunSkillScriptToolName = "run_skill_script"
+
 	skillsPlaceholder = "{skills}"
 )
 
@@ -37,6 +45,41 @@ When a task aligns with a skill's domain, follow these steps in exact order:
    (e.g. ` + "`\"style-guide\"` not `\"style-guide.md\"`, `\"references/FAQ.md\"` not `\"FAQ.md\"`" + `).
 - Use ` + "`run_skill_script`" + ` to run referenced scripts, using the name exactly as listed.
 Only load what is needed, when it is needed.`
+
+// ReadOnlyToolsAutoApprovalRule auto-approves read-only skill tools.
+//
+// Add this function to toolapproval.Config.AutoApprovalRules to automatically
+// approve load_skill and read_skill_resource while continuing to prompt for
+// run_skill_script and non-skill tools.
+func ReadOnlyToolsAutoApprovalRule(_ context.Context, ruleContext *toolapproval.ToolAutoApprovalRuleContext) (bool, error) {
+	if ruleContext == nil || ruleContext.FunctionCall == nil {
+		return false, nil
+	}
+	switch ruleContext.FunctionCall.Name {
+	case LoadSkillToolName, ReadSkillResourceToolName:
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
+// AllToolsAutoApprovalRule auto-approves all skill tools.
+//
+// Add this function to toolapproval.Config.AutoApprovalRules to automatically
+// approve load_skill, read_skill_resource, and run_skill_script.
+// Warning: only use this rule when skill scripts are trusted, because it
+// auto-approves script execution.
+func AllToolsAutoApprovalRule(_ context.Context, ruleContext *toolapproval.ToolAutoApprovalRuleContext) (bool, error) {
+	if ruleContext == nil || ruleContext.FunctionCall == nil {
+		return false, nil
+	}
+	switch ruleContext.FunctionCall.Name {
+	case LoadSkillToolName, ReadSkillResourceToolName, RunSkillScriptToolName:
+		return true, nil
+	default:
+		return false, nil
+	}
+}
 
 // ContextProviderOptions configures a skills-backed agent.ContextProvider.
 type ContextProviderOptions struct {
@@ -384,7 +427,7 @@ func indexSkills(skills []*Skill) providedSkillSet {
 func (p *providerState) buildTools(skills providedSkillSet) []tool.Tool {
 	loadSkillTool := functool.MustNew(
 		functool.Config{
-			Name:        "load_skill",
+			Name:        LoadSkillToolName,
 			Description: "Loads the full content of a specific skill.",
 		},
 		func(callCtx context.Context, in struct {
@@ -396,7 +439,7 @@ func (p *providerState) buildTools(skills providedSkillSet) []tool.Tool {
 	)
 	readSkillResourceTool := functool.MustNew(
 		functool.Config{
-			Name:        "read_skill_resource",
+			Name:        ReadSkillResourceToolName,
 			Description: "Reads a resource associated with a skill, such as references, assets, or dynamic data.",
 		},
 		func(callCtx context.Context, in struct {
@@ -410,7 +453,7 @@ func (p *providerState) buildTools(skills providedSkillSet) []tool.Tool {
 
 	runScript := functool.MustNew(
 		functool.Config{
-			Name:        "run_skill_script",
+			Name:        RunSkillScriptToolName,
 			Description: "Runs a script associated with a skill.",
 		},
 		func(callCtx context.Context, in struct {
