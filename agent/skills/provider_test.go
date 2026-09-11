@@ -5,6 +5,7 @@ package skills_test
 import (
 	"context"
 	"errors"
+	"iter"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -56,16 +57,18 @@ func assertToolApprovalRequired(t *testing.T, value tool.FuncTool, want bool) {
 }
 
 type countingSource struct {
-	count  int
-	skills []*skills.Skill
+	count    int
+	skills   []*skills.Skill
+	contexts []skills.SourceContext
 }
 
 func invokeProvider(provider agent.ContextProvider, ctx context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, []agent.Option, error) {
 	return provider.Invoking(ctx, agent.InvokingContext{Messages: messages, Options: options})
 }
 
-func (s *countingSource) Skills(context.Context) ([]*skills.Skill, error) {
+func (s *countingSource) Skills(_ context.Context, sourceContext skills.SourceContext) ([]*skills.Skill, error) {
 	s.count++
+	s.contexts = append(s.contexts, sourceContext)
 	return s.skills, nil
 }
 
@@ -75,7 +78,7 @@ type panicOnceSource struct {
 	skill    *skills.Skill
 }
 
-func (s *panicOnceSource) Skills(context.Context) ([]*skills.Skill, error) {
+func (s *panicOnceSource) Skills(context.Context, skills.SourceContext) ([]*skills.Skill, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.panicked {
@@ -93,7 +96,7 @@ type blockingSource struct {
 	skill       *skills.Skill
 }
 
-func (s *blockingSource) Skills(ctx context.Context) ([]*skills.Skill, error) {
+func (s *blockingSource) Skills(ctx context.Context, _ skills.SourceContext) ([]*skills.Skill, error) {
 	s.startedOnce.Do(func() { close(s.started) })
 	select {
 	case <-s.release:
@@ -287,6 +290,67 @@ func TestProvider_DefaultCaching_LoadsSourceOnce(t *testing.T) {
 	}
 }
 
+func TestProvider_SourceContext_PassesAgentAndSessionToSourceAndFilter(t *testing.T) {
+	skill := mustInlineSkill(
+		skills.Frontmatter{Name: "context-skill", Description: "Context skill"},
+		"Instructions.",
+		nil,
+		nil,
+	)
+	source := &countingSource{skills: []*skills.Skill{skill}}
+	var filtered skills.SourceContext
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{
+		Sources: []skills.Source{source},
+		SkillFilter: func(skill *skills.Skill, sourceContext skills.SourceContext) bool {
+			filtered = sourceContext
+			return skill.Frontmatter.Name == "context-skill"
+		},
+	})
+	agentInstance := agent.New(
+		agent.ProviderConfig{
+			Run: func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+				return func(yield func(*agent.ResponseUpdate, error) bool) {
+					yield(&agent.ResponseUpdate{
+						Role:     message.RoleAssistant,
+						Contents: []message.Content{&message.TextContent{Text: "ok"}},
+					}, nil)
+				}
+			},
+		},
+		agent.Config{
+			ID:               "source-context-agent",
+			Name:             "source-context-agent",
+			ContextProviders: []agent.ContextProvider{provider},
+		},
+	)
+	session := agenttest.CreateSession()
+	session.SetServiceID("source-context-session")
+	for _, err := range agentInstance.RunText(t.Context(), "hello", agent.WithSession(session)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if source.count != 1 {
+		t.Fatalf("expected source to be invoked once, got %d", source.count)
+	}
+	if len(source.contexts) != 1 {
+		t.Fatalf("expected one source context, got %d", len(source.contexts))
+	}
+	if source.contexts[0].Agent != agentInstance {
+		t.Fatal("expected source context to include the invoking agent")
+	}
+	if source.contexts[0].Session != session {
+		t.Fatal("expected source context to include the invoking session")
+	}
+	if filtered.Agent != agentInstance {
+		t.Fatal("expected skill filter context to include the invoking agent")
+	}
+	if filtered.Session != session {
+		t.Fatal("expected skill filter context to include the invoking session")
+	}
+}
+
 // A caller waiting for another invocation to populate the cache must still
 // observe its own context cancellation promptly.
 func TestProvider_CanceledWaiterDoesNotBlockOnSharedLoad(t *testing.T) {
@@ -353,6 +417,64 @@ func TestProvider_DisableCaching_LoadsSourceEachTime(t *testing.T) {
 
 	if source.count < 2 {
 		t.Fatalf("expected source to be loaded at least twice, got %d", source.count)
+	}
+}
+
+func TestProvider_CacheIsolationKeySelector_SplitsSharedAndDedicatedBuckets(t *testing.T) {
+	skill := mustInlineSkill(
+		skills.Frontmatter{Name: "cached-skill", Description: "Cached skill"},
+		"Instructions.",
+		nil,
+		nil,
+	)
+	source := &countingSource{skills: []*skills.Skill{skill}}
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{
+		Sources: []skills.Source{source},
+		CacheIsolationKeySelector: func(sourceContext skills.SourceContext) (string, bool) {
+			if sourceContext.Session == nil {
+				return "", false
+			}
+			switch sourceContext.Session.ServiceID() {
+			case "shared":
+				return "", false
+			case "empty":
+				return "", true
+			default:
+				return sourceContext.Session.ServiceID(), true
+			}
+		},
+	})
+
+	sharedSession := agenttest.CreateSession()
+	sharedSession.SetServiceID("shared")
+	emptyKeySession := agenttest.CreateSession()
+	emptyKeySession.SetServiceID("empty")
+	isolatedSession := agenttest.CreateSession()
+	isolatedSession.SetServiceID("tenant-b")
+
+	_, _, err := invokeProvider(provider, t.Context(), nil, agent.WithSession(sharedSession))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = invokeProvider(provider, t.Context(), nil, agent.WithSession(sharedSession))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = invokeProvider(provider, t.Context(), nil, agent.WithSession(emptyKeySession))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = invokeProvider(provider, t.Context(), nil, agent.WithSession(isolatedSession))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = invokeProvider(provider, t.Context(), nil, agent.WithSession(isolatedSession))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if source.count != 3 {
+		t.Fatalf("expected three cache buckets to load once each, got %d source loads", source.count)
 	}
 }
 
@@ -901,7 +1023,7 @@ func TestProvider_SkillFilter_FiltersInlineAndSourceSkills(t *testing.T) {
 		Sources: []skills.Source{
 			fsskills.NewSourceOptions(fsskills.SourceOptions{}, os.DirFS(fileRoot)),
 		},
-		SkillFilter: func(skill *skills.Skill) bool {
+		SkillFilter: func(skill *skills.Skill, _ skills.SourceContext) bool {
 			return strings.HasPrefix(skill.Frontmatter.Name, "keep-")
 		},
 	})
@@ -936,7 +1058,7 @@ func TestProvider_SkillFilter_CanFilterOutAllSkills(t *testing.T) {
 	skill := mustInlineSkill(skills.Frontmatter{Name: "inline-skill", Description: "Inline skill"}, "Inline instructions.", nil, nil)
 	provider := skills.NewContextProvider(skills.ContextProviderOptions{
 		Skills: []*skills.Skill{skill},
-		SkillFilter: func(*skills.Skill) bool {
+		SkillFilter: func(*skills.Skill, skills.SourceContext) bool {
 			return false
 		},
 	})

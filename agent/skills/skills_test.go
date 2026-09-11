@@ -33,7 +33,7 @@ func createSkillDir(t *testing.T, root, name, description, body string) {
 
 func TestSourceFunc_NilReturnsError(t *testing.T) {
 	var source skills.SourceFunc
-	_, err := source.Skills(t.Context())
+	_, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err == nil || err.Error() != "skills: source function is nil" {
 		t.Fatalf("Skills() error = %v, want nil-function error", err)
 	}

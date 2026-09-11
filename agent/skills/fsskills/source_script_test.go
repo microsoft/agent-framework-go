@@ -23,7 +23,7 @@ func TestFileSource_WithScriptFiles_DiscoversScripts(t *testing.T) {
 		return nil, nil
 	}}, os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestFileSource_WithMultipleScriptExtensions_DiscoversAll(t *testing.T) {
 		return nil, nil
 	}}, os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestFileSource_NonScriptExtensionsAreNotDiscovered(t *testing.T) {
 		return nil, nil
 	}}, os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestFileSource_NoScriptFiles_ReturnsEmptyScripts(t *testing.T) {
 	createSkillDir(t, root, "no-scripts", "No scripts skill", "Body.")
 	source := fsskills.NewSource(os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestFileSource_ScriptsInAnyDirectory_AreDiscovered(t *testing.T) {
 		return nil, nil
 	}}, os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +140,7 @@ func TestFileSource_WithRunner_ScriptsCanRun(t *testing.T) {
 		return "executed", nil
 	}}, os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestFileSource_ScriptsWithNoRunner_ReturnsErrorOnRun(t *testing.T) {
 	createRelativeFile(t, filepath.Join(root, "no-runner-skill"), "scripts/run.sh", "echo 'hello'")
 	source := fsskills.NewSource(os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,7 @@ func TestFileSource_CustomScriptExtensions_OnlyDiscoversMatching(t *testing.T) {
 		},
 	}, os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +212,7 @@ func TestFileSource_ExecutorReceivesArguments(t *testing.T) {
 		return "done", nil
 	}}, os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +236,7 @@ func TestFileSource_ScriptAtConfigurableDepth_DiscoversWithSearchDepth(t *testin
 		},
 	}, os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +262,7 @@ func TestFileSource_ScriptsInMultipleSubdirectories_AllDiscovered(t *testing.T) 
 		},
 	}, os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +298,7 @@ func TestFileSource_ScriptAtSkillRoot_Discovered(t *testing.T) {
 		},
 	}, os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,7 +325,7 @@ func TestFileSource_ScriptFilter_IncludesOnlyMatchingScripts(t *testing.T) {
 		},
 	}, os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,7 +351,7 @@ func TestFileSource_SymlinkedScript_IsSkipped(t *testing.T) {
 		},
 	}, os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -371,7 +371,7 @@ func TestFileScript_RunWithNonFileSkill_ReturnsError(t *testing.T) {
 		return "result", nil
 	}}, os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -393,7 +393,7 @@ func TestFileScript_HasDefaultParametersSchema(t *testing.T) {
 	createRelativeFile(t, filepath.Join(root, "schema-skill"), "scripts/convert.py", "print('hello')")
 	source := fsskills.NewSource(os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -415,7 +415,7 @@ func TestFileSkill_WithScripts_ContentIncludesAvailableScriptsBlock(t *testing.T
 		},
 	}, os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -450,7 +450,7 @@ func TestFileSkill_WithScripts_ContentStartsWithOriginalSkillMd(t *testing.T) {
 		},
 	}, os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -474,7 +474,7 @@ func TestFileSkill_WithoutScripts_ContentIncludesEmptyAvailableScriptsBlock(t *t
 	createSkillDir(t, root, "no-script-content-skill", "A test skill", "Instructions here.")
 	source := fsskills.NewSource(os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -497,7 +497,7 @@ func TestFileSkill_ScriptContent_IncludesDefaultArraySchema(t *testing.T) {
 		},
 	}, os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -531,7 +531,7 @@ func TestFileSource_CaseSensitiveFS_KeepsDistinctlyCasedFiles(t *testing.T) {
 		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) { return nil, nil },
 	}, fsys)
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -563,7 +563,7 @@ func TestFileSource_Runner_ReceivesScriptMetadata(t *testing.T) {
 		return "ok", nil
 	}}, os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}

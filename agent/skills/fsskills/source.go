@@ -180,7 +180,7 @@ func NewSourceOptions(opts SourceOptions, filesystems ...fs.FS) *Source {
 }
 
 // Skills discovers and loads valid skills from the configured filesystems.
-func (s *Source) Skills(ctx context.Context) ([]*skills.Skill, error) {
+func (s *Source) Skills(ctx context.Context, _ skills.SourceContext) ([]*skills.Skill, error) {
 	directories := discoverSkillDirectories(s.filesystems, s.logger)
 	s.logger.Info("Discovered potential skills", "count", len(directories))
 

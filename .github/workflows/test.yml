@@ -8,6 +8,9 @@ on:
   merge_group:
     types: [checks_requested]
 
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Test Go Code (${{ matrix.target.name }}, Go ${{ matrix.go-version }})
