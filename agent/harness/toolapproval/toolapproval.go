@@ -129,6 +129,13 @@ type Config struct {
 	// without prompting the caller. Returning an error fails the current run.
 	AutoApprovalRules []AutoApprovalRule
 
+	// DisableNonApprovalRequiredToolBypassing disables the default behavior that
+	// auto-approves any approval request whose tool does not actually require
+	// approval. When true, such requests are surfaced to the caller instead of
+	// being transparently approved, unless they are auto-approved by a standing
+	// rule or by a configured AutoApprovalRules entry.
+	DisableNonApprovalRequiredToolBypassing bool
+
 	// DisableApprovalResponseBinding disables rebinding inbound approval responses
 	// to the tool approval requests previously surfaced by this middleware.
 	//
@@ -507,7 +514,7 @@ func isNotApprovalRequired(req *message.ToolApprovalRequestContent, opts []agent
 // configured auto-approval rules. This matches the .NET MatchesRule || MatchesAutoApprovalRule
 // evaluation pattern used in ToolApprovalAgent.
 func isAutoApprovable(ctx context.Context, cfg Config, rules []Rule, requestMessages []*message.Message, opts []agent.Option, req *message.ToolApprovalRequestContent) (bool, error) {
-	if matchesRule(rules, req) || isNotApprovalRequired(req, opts) {
+	if matchesRule(rules, req) || (!cfg.DisableNonApprovalRequiredToolBypassing && isNotApprovalRequired(req, opts)) {
 		return true, nil
 	}
 	return matchesAutoApprovalRules(ctx, cfg.AutoApprovalRules, requestMessages, opts, req)

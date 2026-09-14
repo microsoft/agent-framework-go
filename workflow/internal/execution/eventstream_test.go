@@ -6,7 +6,9 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/microsoft/agent-framework-go/workflow"
@@ -95,6 +97,282 @@ func TestStreamingRunEventStream_NoWorkWakeupDoesNotOpenWorkflowRunSpan(t *testi
 	if count := workflowtest.CountSpansWithPrefix(tracer.Spans(), observability.ActivityWorkflowInvoke); count != 0 {
 		t.Fatalf("workflow_invoke span count = %d, want 0 on no-work wakeup", count)
 	}
+}
+
+func TestStreamingRunEventStream_OlderHaltDoesNotCompleteNewInput(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		runner := newTestSuperStepRunner()
+		var workReady atomic.Bool
+		var haltCount atomic.Int32
+		finishingOldCycle := make(chan struct{})
+		finishOldCycle := make(chan struct{})
+		processNewInput := make(chan struct{})
+		runner.hasUnprocessedFn = workReady.Load
+		runner.hasUnservicedFn = func() bool {
+			if haltCount.Add(1) == 1 {
+				// Pause after the old cycle has checked for work, but before it
+				// publishes its completion. A response arrives in this gap.
+				close(finishingOldCycle)
+				<-finishOldCycle
+				return true
+			}
+			return false
+		}
+		runner.runSuperStepFn = func(ctx context.Context) (bool, error) {
+			select {
+			case <-processNewInput:
+			case <-ctx.Done():
+				return false, ctx.Err()
+			}
+			workReady.Store(false)
+			return true, runner.outgoingEvents.Enqueue(ctx, workflow.OutputEvent{Output: "response"})
+		}
+
+		stream := newStreamingRunEventStream(runner, false)
+		stream.Start()
+		defer stream.Stop()
+		stream.SignalInput()
+		<-finishingOldCycle
+
+		workReady.Store(true)
+		stream.SignalInput()
+		done := make(chan struct{})
+		var outputs int
+		go func() {
+			defer close(done)
+			for evt, err := range stream.TakeEventStream(t.Context(), false) {
+				if err != nil {
+					t.Errorf("TakeEventStream: %v", err)
+					return
+				}
+				if _, ok := evt.(workflow.OutputEvent); ok {
+					outputs++
+				}
+			}
+		}()
+		synctest.Wait()
+
+		close(finishOldCycle)
+		synctest.Wait()
+		select {
+		case <-done:
+			t.Error("the previous cycle's halt completed the stream before the new input was processed")
+		default:
+		}
+
+		close(processNewInput)
+		<-done
+		if outputs != 1 {
+			t.Errorf("output count = %d, want 1", outputs)
+		}
+	})
+}
+
+func TestStreamingRunEventStream_NoWorkSignalWaitsForFreshHalt(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		runner := newTestSuperStepRunner()
+		var restoring atomic.Bool
+		finishingNewCycle := make(chan struct{})
+		finishNewCycle := make(chan struct{})
+		runner.hasUnservicedFn = func() bool {
+			if restoring.Swap(false) {
+				close(finishingNewCycle)
+				<-finishNewCycle
+				return true
+			}
+			return false
+		}
+
+		stream := newStreamingRunEventStream(runner, false)
+		stream.Start()
+		defer stream.Stop()
+		stream.SignalInput()
+		for _, err := range stream.TakeEventStream(t.Context(), false) {
+			if err != nil {
+				t.Fatalf("initial TakeEventStream: %v", err)
+			}
+		}
+
+		// Restoring pending requests signals a cycle even when there are no
+		// queued messages. The old Idle status must not complete this wait.
+		synctest.Wait()
+		restoring.Store(true)
+		stream.SignalInput()
+		<-finishingNewCycle
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for _, err := range stream.TakeEventStream(t.Context(), false) {
+				if err != nil {
+					t.Errorf("TakeEventStream: %v", err)
+				}
+			}
+		}()
+		synctest.Wait()
+		select {
+		case <-done:
+			t.Error("the previous Idle status completed the stream before the signaled cycle halted")
+		default:
+		}
+
+		close(finishNewCycle)
+		<-done
+	})
+}
+
+func TestStreamingRunEventStream_RepeatedReadsAfterHalt(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status RunStatus
+	}{
+		{"idle", RunStatusIdle},
+		{"pending_requests", RunStatusPendingRequests},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				status := tc.status
+				runner := newTestSuperStepRunner()
+				var workReady atomic.Bool
+				workReady.Store(true)
+				runner.hasUnprocessedFn = workReady.Load
+				runner.hasUnservicedFn = func() bool { return status == RunStatusPendingRequests }
+				runner.runSuperStepFn = func(ctx context.Context) (bool, error) {
+					workReady.Store(false)
+					return true, runner.outgoingEvents.Enqueue(ctx, workflow.OutputEvent{Output: "response"})
+				}
+
+				stream := newStreamingRunEventStream(runner, false)
+				stream.Start()
+				defer stream.Stop()
+				stream.SignalInput()
+
+				for read := range 3 {
+					// A virtual deadline makes a missing halt fail without relying
+					// on how quickly the CI host schedules the run loop.
+					ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+					var events int
+					for _, err := range stream.TakeEventStream(ctx, false) {
+						if err != nil {
+							t.Fatalf("read %d: %v", read, err)
+						}
+						events++
+					}
+					err := ctx.Err()
+					cancel()
+					if err != nil {
+						t.Fatalf("read %d did not observe a halt: %v", read, err)
+					}
+					want := 0
+					if read == 0 {
+						want = 2 // StartedEvent and OutputEvent, once only.
+					}
+					if events != want {
+						t.Errorf("read %d event count = %d, want %d", read, events, want)
+					}
+					if got := stream.getStatus(); got != status {
+						t.Errorf("read %d status = %v, want %v", read, got, status)
+					}
+					synctest.Wait()
+				}
+			})
+		})
+	}
+}
+
+func TestStreamingRunEventStream_WatchBeforeInputWaits(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		runner := newTestSuperStepRunner()
+		var workReady atomic.Bool
+		runner.hasUnprocessedFn = workReady.Load
+		runner.runSuperStepFn = func(ctx context.Context) (bool, error) {
+			workReady.Store(false)
+			return true, runner.outgoingEvents.Enqueue(ctx, workflow.OutputEvent{Output: "response"})
+		}
+		stream := newStreamingRunEventStream(runner, false)
+		stream.Start()
+		defer stream.Stop()
+
+		done := make(chan struct{})
+		var outputs int
+		go func() {
+			defer close(done)
+			for evt, err := range stream.TakeEventStream(t.Context(), false) {
+				if err != nil {
+					t.Errorf("TakeEventStream: %v", err)
+					return
+				}
+				if _, ok := evt.(workflow.OutputEvent); ok {
+					outputs++
+				}
+			}
+		}()
+		synctest.Wait()
+		select {
+		case <-done:
+			t.Fatal("watch halted before any input was supplied")
+		default:
+		}
+
+		workReady.Store(true)
+		stream.SignalInput()
+		<-done
+		if outputs != 1 {
+			t.Errorf("output count = %d, want 1", outputs)
+		}
+	})
+}
+
+func TestStreamingRunEventStream_PendingWatchWaitsForResponse(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		runner := newTestSuperStepRunner()
+		var workReady, pending atomic.Bool
+		pending.Store(true)
+		runner.hasUnprocessedFn = workReady.Load
+		runner.hasUnservicedFn = pending.Load
+		runner.runSuperStepFn = func(ctx context.Context) (bool, error) {
+			workReady.Store(false)
+			pending.Store(false)
+			return true, runner.outgoingEvents.Enqueue(ctx, workflow.OutputEvent{Output: "response"})
+		}
+		stream := newStreamingRunEventStream(runner, false)
+		stream.Start()
+		defer stream.Stop()
+		stream.SignalInput()
+		for _, err := range stream.TakeEventStream(t.Context(), false) {
+			if err != nil {
+				t.Fatalf("initial TakeEventStream: %v", err)
+			}
+		}
+		synctest.Wait()
+
+		done := make(chan struct{})
+		var outputs int
+		go func() {
+			defer close(done)
+			for evt, err := range stream.TakeEventStream(t.Context(), true) {
+				if err != nil {
+					t.Errorf("TakeEventStream: %v", err)
+					return
+				}
+				if _, ok := evt.(workflow.OutputEvent); ok {
+					outputs++
+				}
+			}
+		}()
+		synctest.Wait()
+		select {
+		case <-done:
+			t.Fatal("blocking watch halted before the pending request was serviced")
+		default:
+		}
+
+		workReady.Store(true)
+		stream.SignalInput()
+		<-done
+		if outputs != 1 {
+			t.Errorf("output count = %d, want 1", outputs)
+		}
+	})
 }
 
 func TestLockstepRunEventStream_EarlyStopEndsWorkflowRunSpan(t *testing.T) {

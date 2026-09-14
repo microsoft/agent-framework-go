@@ -101,14 +101,18 @@ type streamingRunEventStream struct {
 	eventQueue concurrent.Queue[workflow.Event]
 	eventReady chan struct{}
 
-	stepRunner      SuperStepRunner
-	inputWaiter     inputWaiter
-	runLoopCancel   context.CancelFunc
-	runLoopCtx      context.Context
-	disableRunLoop  bool
-	runLoopDone     chan struct{}
-	runStatus       atomic.Int32 // stores RunStatus
-	completionEpoch atomic.Int64
+	stepRunner     SuperStepRunner
+	inputWaiter    inputWaiter
+	runLoopCancel  context.CancelFunc
+	runLoopCtx     context.Context
+	disableRunLoop bool
+	runLoopDone    chan struct{}
+	runStatus      atomic.Int32 // stores RunStatus
+
+	// A completion acknowledges the input signals observed at the start of its
+	// cycle, not the number of cycles that happened to finish. Older cycles
+	// must not satisfy a consumer waiting for subsequently signaled input.
+	inputEpoch atomic.Int64
 }
 
 func newStreamingRunEventStream(stepRunner SuperStepRunner, disableRunLoop bool) *streamingRunEventStream {
@@ -185,6 +189,7 @@ func (s *streamingRunEventStream) runLoop() {
 		default:
 		}
 
+		currentEpoch := s.inputEpoch.Load()
 		cycleCtx := ctx
 
 		// Run all available supersteps continuously
@@ -232,13 +237,11 @@ func (s *streamingRunEventStream) runLoop() {
 			runActivity.End()
 		}
 
-		// Update status based on what's waiting
-		s.setStatus(idleOrPendingRequestsStatus(s.stepRunner))
-
-		// Signal completion to consumer so they can check status and decide whether to continue
-		// Increment epoch so next consumer iteration gets a new completion signal
-		currentEpoch := s.completionEpoch.Add(1)
-		capturedStatus := s.getStatus()
+		// Acknowledge only the input observed before this cycle checked for
+		// work. Input signaled during the cycle also wakes the next iteration,
+		// which will publish its own completion even if the work is already done.
+		capturedStatus := idleOrPendingRequestsStatus(s.stepRunner)
+		s.setStatus(capturedStatus)
 
 		// Send internal halt signal
 		if err := s.enqueueEvent(ctx, &internalHaltSignal{epoch: currentEpoch, status: capturedStatus}); err != nil {
@@ -310,62 +313,24 @@ func (s *streamingRunEventStream) nextEvent(ctx context.Context) (workflow.Event
 // SignalInput signals that new input has been provided and the run loop should continue processing.
 // Called by RunHandle when the user enqueues a message or response.
 func (s *streamingRunEventStream) SignalInput() {
+	s.inputEpoch.Add(1)
 	s.inputWaiter.signalInput()
 }
 
 func (s *streamingRunEventStream) TakeEventStream(ctx context.Context, blockOnPendingRequest bool) iter.Seq2[workflow.Event, error] {
-	// Decide which completion epoch to expect. If the run loop has fresh
-	// work (or is currently running), we want the *next* completion signal;
-	// otherwise the run has already halted and we should consume the halt
-	// signal that was emitted before this consumer arrived.
-	currentEpoch := s.completionEpoch.Load()
-	expectingFreshWork := s.stepRunner.HasUnprocessedMessages() || s.getStatus() == RunStatusRunning
-	var myEpoch int64
-	if expectingFreshWork {
-		myEpoch = currentEpoch + 1
-	} else {
-		myEpoch = currentEpoch
-	}
-
 	return func(yield func(workflow.Event, error) bool) {
-		// Fast path: the run has already halted and there is no fresh work. The
-		// halt signal is a one-shot queue item, so a prior consumer may have
-		// already drained it for this epoch; blocking in nextEvent would then wait
-		// forever for a signal that is never re-emitted (the run loop is parked
-		// awaiting input). Drain whatever is still queued and stop at the
-		// terminal/pending halt instead, mirroring the lockstep stream. The
-		// blockOnPendingRequest path still falls through to block for serviced input.
-		if !expectingFreshWork {
-			for {
-				evt, ok := s.eventQueue.Dequeue()
-				if !ok {
-					break
-				}
-				if signal, ok := evt.(*internalHaltSignal); ok {
-					if signal.epoch < myEpoch {
-						continue
-					}
-					if signal.status == RunStatusIdle || signal.status == RunStatusEnded {
-						return
-					}
-					if !blockOnPendingRequest && signal.status == RunStatusPendingRequests {
-						return
-					}
-					continue
-				}
-				if !yield(evt, nil) {
-					return
-				}
-			}
-			switch s.getStatus() {
-			case RunStatusIdle, RunStatusEnded:
-				return
-			case RunStatusPendingRequests:
-				if !blockOnPendingRequest {
-					return
-				}
-			}
+		// Ask the run loop for a fresh halt, since a previous reader may have
+		// consumed the last one. Even an idle run acknowledges this signal
+		// without emitting user events or starting another workflow-run span.
+		// Before the first input, however, a watch must keep waiting for input.
+		if s.inputEpoch.Load() != 0 {
+			s.SignalInput()
 		}
+
+		// Snapshot input at enumeration time, not when creating the iterator.
+		// This also covers signals that restore pending requests without adding
+		// messages, which cannot be detected by inspecting the runner's queues.
+		myEpoch := s.inputEpoch.Load()
 
 		for {
 			evt, ok := s.nextEvent(ctx)
@@ -375,23 +340,13 @@ func (s *streamingRunEventStream) TakeEventStream(ctx context.Context, blockOnPe
 
 			// Filter out internal signals used for run loop coordination
 			if signal, ok := evt.(*internalHaltSignal); ok {
-				// Ignore completion signals from previous iterations
 				if signal.epoch < myEpoch {
 					continue
 				}
-
-				// Check if we should stop streaming based on the status captured at completion time
-				// - Idle: Workflow completed, no pending requests
-				// - Ended: Run loop cancelled
-				if signal.status == RunStatusIdle || signal.status == RunStatusEnded {
+				if signal.status == RunStatusIdle || signal.status == RunStatusEnded ||
+					(!blockOnPendingRequest && signal.status == RunStatusPendingRequests) {
 					return
 				}
-
-				if !blockOnPendingRequest && signal.status == RunStatusPendingRequests {
-					return
-				}
-
-				// Otherwise continue reading (more events coming after input provided)
 				continue
 			}
 

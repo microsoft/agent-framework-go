@@ -3,7 +3,10 @@
 package main
 
 import (
+	"cmp"
 	"context"
+	"os"
+	"strings"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
@@ -11,27 +14,27 @@ import (
 	"github.com/openai/openai-go/v3"
 )
 
+var model = cmp.Or(strings.TrimSpace(os.Getenv("OPENAI_CHAT_MODEL_NAME")), "gpt-5.4-mini")
+
 var logger = demo.NewLogger(
-	"Basic Run",
-	"Demonstrates a simple agent run.",
-	"Model", "gpt-4o-mini",
+	"Agent with OpenAI Responses",
+	"Demonstrates a simple agent backed by OpenAI Responses.",
+	"Model", model,
 )
 
 func main() {
-	// Create OpenAI agent.
-	a := openaiprovider.NewAgent(
+	a := openaiprovider.NewResponsesAgent(
 		openai.NewClient(),
 		openaiprovider.AgentConfig{
-			Model:        "gpt-4o-mini",
+			Model:        model,
 			Instructions: "You are good at telling jokes.",
 			Config: agent.Config{
 				Name:        "Joker",
-				Middlewares: []agent.Middleware{logger}, // for logging agent interactions
+				Middlewares: []agent.Middleware{logger},
 			},
 		},
 	)
 
-	// Invoke the agent and output the text result.
 	resp, err := a.RunText(context.Background(), "Tell me a joke about a pirate.").Collect()
 	demo.Response(resp, err)
 }
