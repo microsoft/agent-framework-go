@@ -21,14 +21,10 @@ import (
 )
 
 const (
-	// LoadSkillToolName is the name of the tool that loads a skill's full content.
-	LoadSkillToolName = "load_skill"
-	// ReadSkillResourceToolName is the name of the tool that reads a skill resource.
-	ReadSkillResourceToolName = "read_skill_resource"
-	// RunSkillScriptToolName is the name of the tool that runs a skill script.
-	RunSkillScriptToolName = "run_skill_script"
-
-	skillsPlaceholder = "{skills}"
+	loadSkillToolName         = "load_skill"
+	readSkillResourceToolName = "read_skill_resource"
+	runSkillScriptToolName    = "run_skill_script"
+	skillsPlaceholder         = "{skills}"
 )
 
 const defaultSkillsInstructionPrompt = `You have access to skills containing domain-specific knowledge and capabilities.
@@ -56,7 +52,7 @@ func ReadOnlyToolsAutoApprovalRule(_ context.Context, ruleContext *toolapproval.
 		return false, nil
 	}
 	switch ruleContext.FunctionCall.Name {
-	case LoadSkillToolName, ReadSkillResourceToolName:
+	case loadSkillToolName, readSkillResourceToolName:
 		return true, nil
 	default:
 		return false, nil
@@ -74,7 +70,7 @@ func AllToolsAutoApprovalRule(_ context.Context, ruleContext *toolapproval.ToolA
 		return false, nil
 	}
 	switch ruleContext.FunctionCall.Name {
-	case LoadSkillToolName, ReadSkillResourceToolName, RunSkillScriptToolName:
+	case loadSkillToolName, readSkillResourceToolName, runSkillScriptToolName:
 		return true, nil
 	default:
 		return false, nil
@@ -427,7 +423,7 @@ func indexSkills(skills []*Skill) providedSkillSet {
 func (p *providerState) buildTools(skills providedSkillSet) []tool.Tool {
 	loadSkillTool := functool.MustNew(
 		functool.Config{
-			Name:        LoadSkillToolName,
+			Name:        loadSkillToolName,
 			Description: "Loads the full content of a specific skill.",
 		},
 		func(callCtx context.Context, in struct {
@@ -439,7 +435,7 @@ func (p *providerState) buildTools(skills providedSkillSet) []tool.Tool {
 	)
 	readSkillResourceTool := functool.MustNew(
 		functool.Config{
-			Name:        ReadSkillResourceToolName,
+			Name:        readSkillResourceToolName,
 			Description: "Reads a resource associated with a skill, such as references, assets, or dynamic data.",
 		},
 		func(callCtx context.Context, in struct {
@@ -453,7 +449,7 @@ func (p *providerState) buildTools(skills providedSkillSet) []tool.Tool {
 
 	runScript := functool.MustNew(
 		functool.Config{
-			Name:        RunSkillScriptToolName,
+			Name:        runSkillScriptToolName,
 			Description: "Runs a script associated with a skill.",
 		},
 		func(callCtx context.Context, in struct {

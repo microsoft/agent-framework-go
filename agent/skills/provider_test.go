@@ -23,6 +23,12 @@ import (
 	"github.com/microsoft/agent-framework-go/tool"
 )
 
+const (
+	loadSkillToolName         = "load_skill"
+	readSkillResourceToolName = "read_skill_resource"
+	runSkillScriptToolName    = "run_skill_script"
+)
+
 func funcToolPointer(t *testing.T, value tool.FuncTool) uintptr {
 	t.Helper()
 	current := value
@@ -204,7 +210,7 @@ func TestProvider_DefaultApproval_RequiresAllSkillTools(t *testing.T) {
 	}}, nil, root)
 
 	_, tools := captureProviderContext(t, provider)
-	for _, name := range []string{skills.LoadSkillToolName, skills.ReadSkillResourceToolName, skills.RunSkillScriptToolName} {
+	for _, name := range []string{loadSkillToolName, readSkillResourceToolName, runSkillScriptToolName} {
 		assertToolApprovalRequired(t, findTool(t, tools, name), true)
 	}
 }
@@ -217,17 +223,17 @@ func TestProvider_ReadOnlyToolsAutoApprovalRule(t *testing.T) {
 	}{
 		{
 			name: "load_skill",
-			call: &message.FunctionCallContent{Name: skills.LoadSkillToolName},
+			call: &message.FunctionCallContent{Name: loadSkillToolName},
 			want: true,
 		},
 		{
 			name: "read_skill_resource",
-			call: &message.FunctionCallContent{Name: skills.ReadSkillResourceToolName},
+			call: &message.FunctionCallContent{Name: readSkillResourceToolName},
 			want: true,
 		},
 		{
 			name: "run_skill_script",
-			call: &message.FunctionCallContent{Name: skills.RunSkillScriptToolName},
+			call: &message.FunctionCallContent{Name: runSkillScriptToolName},
 			want: false,
 		},
 		{
@@ -263,17 +269,17 @@ func TestProvider_AllToolsAutoApprovalRule(t *testing.T) {
 	}{
 		{
 			name: "load_skill",
-			call: &message.FunctionCallContent{Name: skills.LoadSkillToolName},
+			call: &message.FunctionCallContent{Name: loadSkillToolName},
 			want: true,
 		},
 		{
 			name: "read_skill_resource",
-			call: &message.FunctionCallContent{Name: skills.ReadSkillResourceToolName},
+			call: &message.FunctionCallContent{Name: readSkillResourceToolName},
 			want: true,
 		},
 		{
 			name: "run_skill_script",
-			call: &message.FunctionCallContent{Name: skills.RunSkillScriptToolName},
+			call: &message.FunctionCallContent{Name: runSkillScriptToolName},
 			want: true,
 		},
 		{
@@ -574,7 +580,7 @@ func TestProvider_WithScripts_ExposesRunSkillScriptTool(t *testing.T) {
 	}, nil, root)
 
 	_, tools := captureProviderContext(t, provider)
-	runTool := findTool(t, tools, skills.RunSkillScriptToolName)
+	runTool := findTool(t, tools, runSkillScriptToolName)
 	result, err := runTool.Call(t.Context(), `{"skillName":"script-skill","scriptName":"scripts/run.py","arguments":["--value","42"]}`)
 	if err != nil {
 		t.Fatal(err)
@@ -605,7 +611,7 @@ func TestProvider_RunSkillScript_RequiresExactName(t *testing.T) {
 	}, nil, root)
 
 	_, tools := captureProviderContext(t, provider)
-	runTool := findTool(t, tools, skills.RunSkillScriptToolName)
+	runTool := findTool(t, tools, runSkillScriptToolName)
 	result, err := runTool.Call(t.Context(), `{"skillName":"script-skill","scriptName":"./scripts/run.py"}`)
 	if err != nil {
 		t.Fatalf("expected no tool error, got %v", err)
@@ -693,7 +699,7 @@ func TestProvider_RunSkillScript_PropagatesErrorByDefault(t *testing.T) {
 	provider := skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}})
 
 	_, tools := captureProviderContext(t, provider)
-	runTool := findTool(t, tools, skills.RunSkillScriptToolName)
+	runTool := findTool(t, tools, runSkillScriptToolName)
 	result, err := runTool.Call(t.Context(), `{"skillName":"script-skill","scriptName":"explode"}`)
 	if err == nil {
 		t.Fatalf("expected script error to propagate, got result %#v", result)
@@ -713,7 +719,7 @@ func TestProvider_RunSkillScript_PropagatesNilRunnerErrorByDefault(t *testing.T)
 	provider := skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}})
 
 	_, tools := captureProviderContext(t, provider)
-	runTool := findTool(t, tools, skills.RunSkillScriptToolName)
+	runTool := findTool(t, tools, runSkillScriptToolName)
 	result, err := runTool.Call(t.Context(), `{"skillName":"script-skill","scriptName":"explode"}`)
 	if err == nil {
 		t.Fatalf("expected nil-runner error to propagate, got result %#v", result)
@@ -741,7 +747,7 @@ func TestProvider_RunSkillScript_IncludesDetailsWhenEnabled(t *testing.T) {
 	})
 
 	_, tools := captureProviderContext(t, provider)
-	runTool := findTool(t, tools, skills.RunSkillScriptToolName)
+	runTool := findTool(t, tools, runSkillScriptToolName)
 	result, err := runTool.Call(t.Context(), `{"skillName":"script-skill","scriptName":"explode"}`)
 	if err != nil {
 		t.Fatal(err)
@@ -793,7 +799,7 @@ func TestProvider_DisableSkillToolApprovalOptions_DisableApprovalPerTool(t *test
 	}, root)
 
 	_, tools := captureProviderContext(t, provider)
-	for _, name := range []string{skills.LoadSkillToolName, skills.ReadSkillResourceToolName, skills.RunSkillScriptToolName} {
+	for _, name := range []string{loadSkillToolName, readSkillResourceToolName, runSkillScriptToolName} {
 		assertToolApprovalRequired(t, findTool(t, tools, name), false)
 	}
 }
@@ -813,27 +819,27 @@ func TestProvider_DisableSkillToolApprovalOptions_AffectOnlyTargetTool(t *testin
 			name: "load_skill",
 			opts: skills.ContextProviderOptions{DisableLoadSkillApproval: true},
 			want: map[string]bool{
-				skills.LoadSkillToolName:         false,
-				skills.ReadSkillResourceToolName: true,
-				skills.RunSkillScriptToolName:    true,
+				loadSkillToolName:         false,
+				readSkillResourceToolName: true,
+				runSkillScriptToolName:    true,
 			},
 		},
 		{
 			name: "read_skill_resource",
 			opts: skills.ContextProviderOptions{DisableReadSkillResourceApproval: true},
 			want: map[string]bool{
-				skills.LoadSkillToolName:         true,
-				skills.ReadSkillResourceToolName: false,
-				skills.RunSkillScriptToolName:    true,
+				loadSkillToolName:         true,
+				readSkillResourceToolName: false,
+				runSkillScriptToolName:    true,
 			},
 		},
 		{
 			name: "run_skill_script",
 			opts: skills.ContextProviderOptions{DisableRunSkillScriptApproval: true},
 			want: map[string]bool{
-				skills.LoadSkillToolName:         true,
-				skills.ReadSkillResourceToolName: true,
-				skills.RunSkillScriptToolName:    false,
+				loadSkillToolName:         true,
+				readSkillResourceToolName: true,
+				runSkillScriptToolName:    false,
 			},
 		},
 	}
@@ -871,7 +877,7 @@ func TestProvider_FromFileSourceWithRunner_UsesScriptRunner(t *testing.T) {
 	)
 
 	_, tools := captureProviderContext(t, provider)
-	runTool := findTool(t, tools, skills.RunSkillScriptToolName)
+	runTool := findTool(t, tools, runSkillScriptToolName)
 	result, err := runTool.Call(t.Context(), `{"skillName":"runner-skill","scriptName":"scripts/run.py"}`)
 	if err != nil {
 		t.Fatal(err)
@@ -903,7 +909,7 @@ func TestNewProvider_ProvidesInlineSkills(t *testing.T) {
 	for i, t2 := range tools {
 		toolNames[i] = t2.Name()
 	}
-	for _, name := range []string{skills.LoadSkillToolName, skills.ReadSkillResourceToolName, skills.RunSkillScriptToolName} {
+	for _, name := range []string{loadSkillToolName, readSkillResourceToolName, runSkillScriptToolName} {
 		if !slices.Contains(toolNames, name) {
 			t.Fatalf("expected %s tool to be present, got %v", name, toolNames)
 		}
