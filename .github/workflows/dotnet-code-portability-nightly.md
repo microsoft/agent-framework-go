@@ -29,6 +29,7 @@ tools:
       - find
       - sed
       - awk
+      - jq
       - grep
       - cat
       - ls
