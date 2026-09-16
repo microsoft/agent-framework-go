@@ -76,17 +76,13 @@ func hasLinkOrInspectionFailureInPath(filesystem fs.FS, pathToCheck string) bool
 
 func isUnsafePath(filesystem fs.FS, filePath string) bool {
 	readLinkFS, ok := filesystem.(fs.ReadLinkFS)
-	if ok {
-		info, err := readLinkFS.Lstat(filePath)
-		if err == nil {
-			return info.Mode()&fs.ModeSymlink != 0
-		}
-		return !errors.Is(err, fs.ErrNotExist)
-	}
-
-	info, err := fs.Stat(filesystem, filePath)
-	if err != nil {
+	if !ok {
 		return true
 	}
-	return info.Mode()&fs.ModeSymlink != 0
+
+	info, err := readLinkFS.Lstat(filePath)
+	if err == nil {
+		return info.Mode()&fs.ModeSymlink != 0
+	}
+	return !errors.Is(err, fs.ErrNotExist)
 }

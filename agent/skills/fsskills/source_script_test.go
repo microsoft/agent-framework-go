@@ -191,6 +191,32 @@ func TestFileSource_ScriptExecution_RevalidatesParentDirectoriesBeforeRun(t *tes
 	}
 }
 
+func TestFileSource_ScriptExecution_FailsWithoutLinkInspection(t *testing.T) {
+	runnerCalled := false
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: func(_ context.Context, _ *skills.Skill, _ *skills.Script, _ []string) (any, error) {
+		runnerCalled = true
+		return "executed", nil
+	}}, fsWithoutLinkInspection{fstest.MapFS{
+		"exec-skill/SKILL.md":        {Data: []byte("---\nname: exec-skill\ndescription: A skill\n---\nBody.")},
+		"exec-skill/scripts/test.py": {Data: []byte("print('test')")},
+	}})
+
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 || len(loaded[0].Scripts) != 1 {
+		t.Fatalf("expected one skill with one script, got %d skills and %d scripts", len(loaded), len(loaded[0].Scripts))
+	}
+
+	if _, err := loaded[0].Scripts[0].Run(t.Context(), loaded[0], nil); err == nil {
+		t.Fatal("expected script run to fail when the filesystem does not support link inspection")
+	}
+	if runnerCalled {
+		t.Fatal("expected script runner not to be called when link inspection is unavailable")
+	}
+}
+
 func TestFileSource_NullRunner_DoesNotPanic(t *testing.T) {
 	_ = fsskills.NewSource(os.DirFS(t.TempDir()))
 }
