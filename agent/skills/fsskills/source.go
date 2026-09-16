@@ -189,7 +189,7 @@ func (s *Source) Skills(ctx context.Context) ([]*skills.Skill, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		skill := s.parseSkillDirectory(directory.fsys, directory.path)
+		skill := s.parseSkillDirectory(directory)
 		if skill == nil {
 			continue
 		}
@@ -237,7 +237,7 @@ func searchForSkills(filesystem fs.FS, dir string, logger *slog.Logger, results 
 			sub, subErr = fs.Sub(filesystem, dir)
 		}
 		if subErr == nil {
-			*results = append(*results, discoveredSkillDir{fsys: sub, path: dir})
+			*results = append(*results, discoveredSkillDir{rootFS: filesystem, skillFS: sub, path: dir})
 		}
 		return
 	}
@@ -258,7 +258,10 @@ func searchForSkills(filesystem fs.FS, dir string, logger *slog.Logger, results 
 	}
 }
 
-func (s *Source) parseSkillDirectory(skillFS fs.FS, logPath string) *skills.Skill {
+func (s *Source) parseSkillDirectory(directory discoveredSkillDir) *skills.Skill {
+	scope := newSkillPathScope(directory.rootFS, directory.path)
+	skillFS := directory.skillFS
+	logPath := directory.path
 	data, err := fs.ReadFile(skillFS, skillFileName)
 	if err != nil {
 		s.logger.Error("Failed to read SKILL.md", "path", logPath, "error", err)
@@ -271,8 +274,8 @@ func (s *Source) parseSkillDirectory(skillFS fs.FS, logPath string) *skills.Skil
 		return nil
 	}
 
-	resources := s.discoverResourceFiles(skillFS, frontmatter.Name)
-	scripts := s.discoverScriptFiles(skillFS, frontmatter.Name)
+	resources := s.discoverResourceFiles(skillFS, scope, frontmatter.Name)
+	scripts := s.discoverScriptFiles(skillFS, scope, frontmatter.Name)
 	var (
 		contentOnce   sync.Once
 		cachedContent string
@@ -467,7 +470,7 @@ func leadingWhitespaceCount(line string) int {
 	return count
 }
 
-func (s *Source) discoverResourceFiles(skillFS fs.FS, skillName string) []skills.Resource {
+func (s *Source) discoverResourceFiles(skillFS fs.FS, scope skillPathScope, skillName string) []skills.Resource {
 	seen := make(map[string]bool)
 	var resources []skills.Resource
 	s.scanForFiles(skillFS, ".", skillName, 1, s.allowedResourceExtensions, s.resourceFilter, "resource", func(filePath string) {
@@ -482,7 +485,11 @@ func (s *Source) discoverResourceFiles(skillFS fs.FS, skillName string) []skills
 		resources = append(resources, skills.Resource{
 			Name: filePath,
 			Read: func(context.Context) (any, error) {
-				data, err := fs.ReadFile(skillFS, filePath)
+				validatedPath, err := scope.validateDiscoveredPathForUse(filePath, "resource")
+				if err != nil {
+					return nil, err
+				}
+				data, err := fs.ReadFile(scope.rootFS, validatedPath)
 				if err != nil {
 					return nil, err
 				}
@@ -493,7 +500,7 @@ func (s *Source) discoverResourceFiles(skillFS fs.FS, skillName string) []skills
 	return resources
 }
 
-func (s *Source) discoverScriptFiles(skillFS fs.FS, skillName string) []skills.Script {
+func (s *Source) discoverScriptFiles(skillFS fs.FS, scope skillPathScope, skillName string) []skills.Script {
 	seen := make(map[string]bool)
 	var scripts []skills.Script
 	s.scanForFiles(skillFS, ".", skillName, 1, s.allowedScriptExtensions, s.scriptFilter, "script", func(filePath string) {
@@ -504,7 +511,7 @@ func (s *Source) discoverScriptFiles(skillFS fs.FS, skillName string) []skills.S
 			return
 		}
 		seen[filePath] = true
-		scripts = append(scripts, newScript(filePath, skillFS, s.scriptRunner))
+		scripts = append(scripts, newScript(filePath, skillFS, scope, s.scriptRunner))
 	})
 	return scripts
 }
@@ -609,25 +616,28 @@ func validateExtensions(extensions []string) {
 	}
 }
 
-func newScript(name string, fsys fs.FS, runner skills.ScriptRunner) skills.Script {
+func newScript(name string, fsys fs.FS, scope skillPathScope, runner skills.ScriptRunner) skills.Script {
 	additionalProperties := map[string]any{
 		"fsskills.scriptFS": fsys,
 	}
 	return skills.Script{
 		Name:                 name,
 		ParametersSchema:     defaultFileScriptSchema,
-		Run:                  newFileScriptRunFunc(name, runner, additionalProperties),
+		Run:                  newFileScriptRunFunc(name, scope, runner, additionalProperties),
 		AdditionalProperties: additionalProperties,
 	}
 }
 
-func newFileScriptRunFunc(name string, runner skills.ScriptRunner, additionalProperties map[string]any) func(context.Context, *skills.Skill, []string) (any, error) {
+func newFileScriptRunFunc(name string, scope skillPathScope, runner skills.ScriptRunner, additionalProperties map[string]any) func(context.Context, *skills.Skill, []string) (any, error) {
 	return func(ctx context.Context, owner *skills.Skill, arguments []string) (any, error) {
 		if err := requireFileSkill(name, owner); err != nil {
 			return nil, err
 		}
 		if runner == nil {
 			return nil, fmt.Errorf("script %q cannot be executed because no file script runner was provided", name)
+		}
+		if _, err := scope.validateDiscoveredPathForUse(name, "script"); err != nil {
+			return nil, err
 		}
 		// Hand the runner a script carrying the same metadata the discovered
 		// Script exposes (parameters schema and the backing fs.FS), so runners
@@ -650,8 +660,9 @@ func requireFileSkill(scriptName string, skill *skills.Skill) error {
 }
 
 type discoveredSkillDir struct {
-	fsys fs.FS
-	path string
+	rootFS  fs.FS
+	skillFS fs.FS
+	path    string
 }
 
 func buildAvailableResourcesBlock(resources []skills.Resource) string {

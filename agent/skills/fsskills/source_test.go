@@ -300,6 +300,31 @@ func TestFileSource_ReadResource_ValidResource_ReturnsContent(t *testing.T) {
 	}
 }
 
+func TestFileSource_ReadResource_RevalidatesParentDirectoriesBeforeUse(t *testing.T) {
+	root := t.TempDir()
+	createSkillDirWithResource(t, filepath.Join(root, "trusted"), "read-skill", "A skill", "See docs.", "references/doc.md", "trusted content")
+	createSkillDirWithResource(t, filepath.Join(root, "outside", "trusted"), "read-skill", "A skill", "See docs.", "references/doc.md", "outside content")
+
+	source := fsskills.NewSource(os.DirFS(root))
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 || len(loaded[0].Resources) != 1 {
+		t.Fatalf("expected one skill with one resource, got %d skills and %d resources", len(loaded), len(loaded[0].Resources))
+	}
+
+	if err := os.Rename(filepath.Join(root, "trusted"), filepath.Join(root, "trusted-real")); err != nil {
+		t.Fatal(err)
+	}
+	createSymlink(t, filepath.Join(root, "trusted"), filepath.Join(root, "outside", "trusted"))
+
+	_, err = loaded[0].Resources[0].Read(t.Context())
+	if err == nil {
+		t.Fatal("expected resource read to fail after the discovered path was replaced with a symlink")
+	}
+}
+
 func TestFileSource_MetadataWithQuotedValues_ParsedCorrectly(t *testing.T) {
 	root := t.TempDir()
 	createSkillDirRaw(t, root, "quoted-meta", strings.Join([]string{
