@@ -56,10 +56,7 @@ func ConfigureForwarding(executor *workflow.Executor, options *ForwardingOptions
 
 func forwardStringMessage(role message.Role) func(*workflow.Context, any) (any, error) {
 	return func(ctx *workflow.Context, msg any) (any, error) {
-		return struct{}{}, ctx.SendMessage("", &message.Message{
-			Role:     role,
-			Contents: []message.Content{&message.TextContent{Text: msg.(string)}},
-		})
+		return struct{}{}, ctx.SendMessage("", newTextMessage(role, msg.(string)))
 	}
 }
 
