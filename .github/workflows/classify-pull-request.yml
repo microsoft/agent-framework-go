@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   classify-size-area:
-    uses: microsoft/go-infra/.github/workflows/classify-pull-request.yml@b0f24e8652f16600c4aa1cc97f4141242404c7ad
+    uses: microsoft/go-infra/.github/workflows/classify-pull-request.yml@07f3d56aea0a36460ca1e4a7171d3d9693f9fdfb
     permissions:
       contents: read
       issues: write
@@ -55,7 +55,7 @@ jobs:
   classify-kind:
     if: github.event_name != 'workflow_dispatch' || github.event.inputs.pr-number != '0'
     needs: classify-size-area
-    uses: microsoft/go-infra/.github/workflows/classify-pull-request-kind.lock.yml@b0f24e8652f16600c4aa1cc97f4141242404c7ad
+    uses: microsoft/go-infra/.github/workflows/classify-pull-request-kind.lock.yml@07f3d56aea0a36460ca1e4a7171d3d9693f9fdfb
     secrets: inherit
     permissions:
       actions: read
