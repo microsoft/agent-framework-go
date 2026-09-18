@@ -36,7 +36,10 @@ func newAgentBindings(agents []*agent.Agent, cfg Config) ([]workflow.ExecutorBin
 type outputDesignations map[*agent.Agent]map[workflow.OutputTag]struct{}
 
 func (d outputDesignations) explicit() bool {
-	return d != nil
+	// An empty (but non-nil) map means WithOutputFrom/WithIntermediateOutputFrom
+	// was called with no agents, which is not an explicit designation: fall back
+	// to the default terminal output rather than disabling all output.
+	return len(d) != 0
 }
 
 func (d outputDesignations) withOutputFrom(agents ...*agent.Agent) (outputDesignations, error) {

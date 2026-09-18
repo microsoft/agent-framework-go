@@ -267,3 +267,17 @@ func TestConcurrentWorkflowBuilder_AgentsRunInParallel(t *testing.T) {
 		}
 	}
 }
+
+func TestConcurrentWorkflowBuilder_NoArgWithOutputFromFallsBackToDefault(t *testing.T) {
+	a := newLabeledEchoAgent("a", "A", "from-a")
+	b := newLabeledEchoAgent("b", "B", "from-b")
+	// Spreading an empty slice (WithOutputFrom(empty...)) must not disable all
+	// output; it should fall back to the default terminal output.
+	wf, err := agentworkflow.NewConcurrentWorkflowBuilder(a, b).WithOutputFrom().Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(wf.OutputExecutorIDs()) == 0 {
+		t.Fatal("no-arg WithOutputFrom() disabled all workflow output")
+	}
+}
