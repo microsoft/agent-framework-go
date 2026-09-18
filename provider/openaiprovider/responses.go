@@ -1120,6 +1120,9 @@ func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func
 				case responses.ResponseOutputText:
 					textContent := &message.TextContent{Text: c.Text}
 					populateAnnotations(c.Annotations, textContent)
+					if len(c.Logprobs) > 0 {
+						textContent.AdditionalProperties = map[string]any{"Logprobs": c.Logprobs}
+					}
 					currentUpdate.Contents = append(currentUpdate.Contents, textContent)
 				case responses.ResponseOutputRefusal:
 					currentUpdate.Contents = append(currentUpdate.Contents, &message.ErrorContent{
@@ -1590,24 +1593,27 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 			u.Role = state.role
 			// For messages, only emit content if there are annotations that weren't in delta events
 			// Delta events handle the text itself, but annotations only appear in done events
-			hasAnnotations := false
+			hasMetadata := false
 			for _, c := range item.Content {
-				if c, ok := c.AsAny().(responses.ResponseOutputText); ok && len(c.Annotations) > 0 {
-					hasAnnotations = true
+				if c, ok := c.AsAny().(responses.ResponseOutputText); ok && (len(c.Annotations) > 0 || len(c.Logprobs) > 0) {
+					hasMetadata = true
 					break
 				}
 			}
 
-			if hasAnnotations {
+			if hasMetadata {
 				annotatedContent := &message.TextContent{}
 				for _, c := range item.Content {
 					if outputText, ok := c.AsAny().(responses.ResponseOutputText); ok {
 						populateAnnotations(outputText.Annotations, annotatedContent)
+						if len(outputText.Logprobs) > 0 {
+							annotatedContent.AdditionalProperties = map[string]any{"Logprobs": outputText.Logprobs}
+						}
 					}
 				}
 				u.Contents = []message.Content{annotatedContent}
 			}
-			// If no annotations, don't emit content (delta events already did)
+			// If no annotations or logprobs, don't emit content (delta events already did)
 
 		case responses.ResponseFunctionToolCall:
 			state.anyFunctions = true

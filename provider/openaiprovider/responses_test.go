@@ -153,6 +153,43 @@ func TestResponsesRequestIncludesAgentFrameworkUserAgent(t *testing.T) {
 	}
 }
 
+// output_text logprobs must be surfaced on the TextContent's
+// AdditionalProperties, matching the Python client which stores them there.
+func TestResponsesOutputTextLogprobsSurfaced_NonStreaming(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"id":"resp_lp",
+			"object":"response",
+			"created_at":1741891428,
+			"status":"completed",
+			"error":null,
+			"incomplete_details":null,
+			"model":"gpt-4o-mini",
+			"output":[{"type":"message","id":"msg_lp","status":"completed","role":"assistant","content":[{"type":"output_text","text":"hello","annotations":[],"logprobs":[{"token":"hello","logprob":-0.05,"bytes":[104,101,108,108,111],"top_logprobs":[]}]}]}]
+		}`)
+	}))
+	defer server.Close()
+
+	resp, err := newTestResponsesClient(server, "gpt-4o-mini").RunText(t.Context(), "hi").Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+
+	var text *message.TextContent
+	for content := range resp.Contents() {
+		if tc, ok := content.(*message.TextContent); ok {
+			text = tc
+		}
+	}
+	if text == nil {
+		t.Fatalf("no TextContent in response")
+	}
+	if _, ok := text.AdditionalProperties["Logprobs"]; !ok {
+		t.Errorf("Logprobs missing from TextContent AdditionalProperties: %#v", text.AdditionalProperties)
+	}
+}
+
 func TestNewAgentCurrentlyUsesResponsesAPI(t *testing.T) {
 	const input = `
 			{
