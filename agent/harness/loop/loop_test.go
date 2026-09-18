@@ -559,3 +559,32 @@ func cloneMessages(messages []*message.Message) []*message.Message {
 	}
 	return out
 }
+
+func TestLoop_FreshContextPerIteration_ContinueWithMessagesKeepsInitial(t *testing.T) {
+	capture := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate {
+		return textUpdates("ack")
+	})
+	a := agent.New(capture.provider(), agent.Config{
+		Middlewares: []agent.Middleware{loop.New(loop.Config{
+			FreshContextPerIteration: true,
+			Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(_ context.Context, ctx *loop.Context) (loop.Evaluation, error) {
+				if ctx.Iteration == 1 {
+					return loop.ContinueWithMessages([]*message.Message{message.NewText("explicit")}), nil
+				}
+				return loop.Stop(), nil
+			})},
+		})},
+	})
+
+	if _, err := a.RunText(context.Background(), "original").Collect(); err != nil {
+		t.Fatal(err)
+	}
+	secondCall := messageTexts(capture.messagesPerCall[1])
+	// Fresh mode must re-seed the original input; explicit messages compose with it.
+	if len(secondCall) == 0 || secondCall[0] != "original" {
+		t.Fatalf("second call = %v, want the original input preserved in fresh mode", secondCall)
+	}
+	if !slices.Contains(secondCall, "explicit") {
+		t.Fatalf("second call = %v, want the explicit message included", secondCall)
+	}
+}

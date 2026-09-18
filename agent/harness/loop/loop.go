@@ -281,18 +281,27 @@ func evaluate(ctx context.Context, evaluators []Evaluator, loopCtx *Context) (Ev
 }
 
 func nextMessages(cfg Config, loopCtx *Context, evaluation Evaluation) (messages []*message.Message, surfaced []*message.Message) {
-	if len(evaluation.Messages) > 0 {
-		cloned := cloneMessages(evaluation.Messages)
-		return cloned, cloned
-	}
 	if cfg.FreshContextPerIteration {
+		// Fresh mode always restarts from the original input (the session is also
+		// reset to a pristine snapshot). Explicit ContinueWithMessages compose
+		// with that fresh context rather than replacing it, so the original input
+		// is not lost.
 		nextMessages := cloneMessages(loopCtx.InitialMessages)
+		if len(evaluation.Messages) > 0 {
+			explicit := cloneMessages(evaluation.Messages)
+			nextMessages = append(nextMessages, explicit...)
+			return nextMessages, explicit
+		}
 		feedbackMessage := aggregatedFeedbackMessage(loopCtx.Feedback, cfg.OnBehalfOfAuthorName)
 		if feedbackMessage == nil {
 			return nextMessages, nil
 		}
 		nextMessages = append(nextMessages, feedbackMessage)
 		return nextMessages, []*message.Message{feedbackMessage}
+	}
+	if len(evaluation.Messages) > 0 {
+		cloned := cloneMessages(evaluation.Messages)
+		return cloned, cloned
 	}
 	if evaluation.Feedback == "" {
 		return nil, nil
