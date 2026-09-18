@@ -149,7 +149,7 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 			if choice.Message.Refusal != "" {
 				contents = append(contents, &message.ErrorContent{Message: choice.Message.Refusal, ErrorCode: "Refusal"})
 			}
-			finishReason = choice.FinishReason
+			finishReason = normalizeChatFinishReason(choice.FinishReason)
 		}
 		if resp.JSON.Usage.Valid() {
 			contents = addUsage(contents, resp.Usage)
@@ -209,7 +209,7 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 			}
 			var finishReason string
 			if len(chunk.Choices) > 0 {
-				finishReason = chunk.Choices[0].FinishReason
+				finishReason = normalizeChatFinishReason(chunk.Choices[0].FinishReason)
 			}
 			resp := &agent.ResponseUpdate{
 				Contents:          contents,
@@ -228,6 +228,17 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 			yield(nil, stream.Err())
 		}
 	}
+}
+
+// normalizeChatFinishReason maps the deprecated "function_call" finish reason,
+// still emitted by some OpenAI-compatible endpoints, onto the canonical
+// "tool_calls", matching the Python client. Other reasons pass through
+// unchanged.
+func normalizeChatFinishReason(reason string) string {
+	if reason == "function_call" {
+		return "tool_calls"
+	}
+	return reason
 }
 
 func mapRole(r string) message.Role {

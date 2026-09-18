@@ -428,6 +428,25 @@ func TestChatBasicRequestResponse_NonStreaming(t *testing.T) {
 	}
 }
 
+// Some OpenAI-compatible endpoints still emit the deprecated "function_call"
+// finish reason; it must be normalized to the canonical "tool_calls", matching
+// the Python client.
+func TestChatLegacyFunctionCallFinishReasonNormalized(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"chatcmpl-fc","object":"chat.completion","created":1727888631,"model":"gpt-4o-mini","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"function_call"}]}`)
+	}))
+	defer server.Close()
+
+	resp, err := newTestClient(server).RunText(t.Context(), "hi").Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if resp.FinishReason != "tool_calls" {
+		t.Errorf("FinishReason = %q, want %q", resp.FinishReason, "tool_calls")
+	}
+}
+
 func TestChatURLCitationAnnotations_NonStreaming(t *testing.T) {
 	const input = `
             {
