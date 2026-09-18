@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/compaction"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/message/messagefilter"
@@ -115,8 +116,16 @@ func newChatHistoryProvider() agent.HistoryProvider {
 	// By default, the history provider stores request messages that did not come from chat history.
 	// In this case, we explicitly exclude messages from chat history and AI context providers.
 	// You may want to store these messages, depending on their content and your requirements.
-	return agent.NewInMemoryHistoryProvider(agent.InMemoryHistoryProviderConfig{
+	//
+	// The compaction history provider keeps the most recent three turns in session state so
+	// long-running conversations do not grow without bound.
+	minimumPreservedTurns := 3
+	return compaction.NewHistoryProvider(compaction.HistoryProviderConfig{
 		SourceID: chatHistorySourceID,
+		Strategy: &compaction.SlidingWindowStrategy{
+			Trigger:               compaction.TurnsExceed(minimumPreservedTurns),
+			MinimumPreservedTurns: &minimumPreservedTurns,
+		},
 		StoreInputRequestMessageFilter: messagefilter.NotSourceTypes(
 			agent.SourceTypeHistoryProvider,
 			agent.SourceTypeContextProvider,
