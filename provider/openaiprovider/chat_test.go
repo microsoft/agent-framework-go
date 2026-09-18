@@ -428,6 +428,60 @@ func TestChatBasicRequestResponse_NonStreaming(t *testing.T) {
 	}
 }
 
+// system_fingerprint (response) and per-choice logprobs must be surfaced on the
+// update's AdditionalProperties, matching the Python client which carries both
+// as chat response metadata.
+func TestChatResponseMetadataSurfaced_NonStreaming(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"chatcmpl-md","object":"chat.completion","created":1727888631,"model":"gpt-4o-mini","system_fingerprint":"fp_test","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"logprobs":{"content":[{"token":"ok","logprob":-0.1,"bytes":[111,107],"top_logprobs":[]}]},"finish_reason":"stop"}]}`)
+	}))
+	defer server.Close()
+
+	resp, err := newTestClient(server).RunText(t.Context(), "hi").Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	props := lastMessageAdditionalProperties(t, resp)
+	if props["SystemFingerprint"] != "fp_test" {
+		t.Errorf("SystemFingerprint = %v, want %q", props["SystemFingerprint"], "fp_test")
+	}
+	if _, ok := props["Logprobs"]; !ok {
+		t.Errorf("Logprobs missing from AdditionalProperties: %#v", props)
+	}
+}
+
+func TestChatResponseMetadataSurfaced_Streaming(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"id\":\"chatcmpl-md\",\"object\":\"chat.completion.chunk\",\"created\":1727888631,\"model\":\"gpt-4o-mini\",\"system_fingerprint\":\"fp_test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n")
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	resp, err := newTestClient(server).RunText(t.Context(), "hi", agent.Stream(true)).Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	props := lastMessageAdditionalProperties(t, resp)
+	if props["SystemFingerprint"] != "fp_test" {
+		t.Errorf("SystemFingerprint = %v, want %q", props["SystemFingerprint"], "fp_test")
+	}
+}
+
+// lastMessageAdditionalProperties returns the AdditionalProperties of the last
+// message carrying any, so metadata assertions do not depend on message count.
+func lastMessageAdditionalProperties(t *testing.T, resp *agent.Response) map[string]any {
+	t.Helper()
+	for i := len(resp.Messages) - 1; i >= 0; i-- {
+		if len(resp.Messages[i].AdditionalProperties) > 0 {
+			return resp.Messages[i].AdditionalProperties
+		}
+	}
+	t.Fatalf("no message carried AdditionalProperties: %#v", resp.Messages)
+	return nil
+}
+
 func TestChatURLCitationAnnotations_NonStreaming(t *testing.T) {
 	const input = `
             {
