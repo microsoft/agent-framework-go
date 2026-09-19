@@ -39,6 +39,141 @@ func (schemaOnlyTool) ReturnSchema() any {
 	return nil
 }
 
+func TestFunctionInvoking_InvocationIdentity(t *testing.T) {
+	toolFailure := errors.New("tool failed")
+	for _, tc := range []struct {
+		name       string
+		concurrent bool
+		wrap       bool
+		additional bool
+		shadowed   bool
+		emptyID    bool
+		toolError  error
+	}{
+		{name: "without wrappers"},
+		{name: "middleware wrapper", wrap: true},
+		{name: "concurrent wrappers", wrap: true, concurrent: true},
+		{name: "empty call ID", wrap: true, emptyID: true},
+		{name: "additional tool", additional: true},
+		{name: "additional tool wrappers", additional: true, wrap: true},
+		{name: "concurrent additional tool wrappers", additional: true, wrap: true, concurrent: true},
+		{name: "additional tool failure", additional: true, wrap: true, toolError: toolFailure},
+		{name: "request tool takes precedence", shadowed: true, wrap: true},
+		{name: "tool failure", wrap: true, toolError: toolFailure},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			type auditKey struct{}
+			var handlerCalls, wrapperCalls, innerCalls atomic.Int32
+			firstID := "call-1"
+			if tc.emptyID {
+				firstID = ""
+			}
+			testTool := functool.MustNew(functool.Config{Name: "lookup"}, func(ctx context.Context, args struct {
+				ID string `json:"id"`
+			},
+			) (string, error) {
+				handlerCalls.Add(1)
+				invocation, ok := tool.InvocationFromContext(ctx)
+				if !ok || invocation.CallID != args.ID {
+					t.Errorf("handler identity = %#v, %v; want call ID %q", invocation, ok, args.ID)
+				}
+				if tc.wrap && ctx.Value(auditKey{}) != args.ID {
+					t.Errorf("wrapper context value = %v, want %q", ctx.Value(auditKey{}), args.ID)
+				}
+				return args.ID, tc.toolError
+			})
+			observer := agent.FunctionInvocationMiddleware(func(ctx context.Context, invocation *agent.FunctionInvocationContext, next agent.FunctionInvocationFunc) (any, error) {
+				wrapperCalls.Add(1)
+				identity, ok := tool.InvocationFromContext(ctx)
+				if !ok || identity.CallID != invocation.CallID || invocation.Function != testTool {
+					t.Error("callback did not receive the original tool and invocation identity")
+				}
+				result, err := next(context.WithValue(ctx, auditKey{}, invocation.CallID), invocation)
+				if result != invocation.CallID && err == nil {
+					t.Errorf("wrapper result = %v, want %q", result, invocation.CallID)
+				}
+				if !errors.Is(err, tc.toolError) {
+					t.Errorf("wrapper error = %v, want %v", err, tc.toolError)
+				}
+				return result, err
+			})
+			inner := agent.FunctionInvocationMiddleware(func(ctx context.Context, invocation *agent.FunctionInvocationContext, next agent.FunctionInvocationFunc) (any, error) {
+				innerCalls.Add(1)
+				if ctx.Value(auditKey{}) != invocation.CallID {
+					t.Error("callbacks did not execute in registration order")
+				}
+				return next(ctx, invocation)
+			})
+			checkProviderContext := func(ctx context.Context, _ []*message.Message, opts ...agent.Option) {
+				if invocation, ok := tool.InvocationFromContext(ctx); ok {
+					t.Errorf("invocation leaked to provider: %#v", invocation)
+				}
+				if tc.additional && len(slices.Collect(agent.AllOptions(opts, agent.WithTool))) != 0 {
+					t.Error("additional tools leaked into provider options")
+				}
+			}
+			runner := &agenttest.Runner{Responses: agenttest.NewResponseBuilder(checkProviderContext).
+				AddFunctionCall(firstID, "lookup", fmt.Sprintf(`{"id":%q}`, firstID)).
+				AddFunctionCall("call-2", "lookup", `{"id":"call-2"}`).
+				NewTurn(checkProviderContext).AddText("done").Build()}
+			cfg := toolautocall.Config{AllowConcurrentInvocations: tc.concurrent}
+			options := []agent.Option{agent.WithTool(testTool)}
+			if tc.additional {
+				cfg.AdditionalTools = []tool.Tool{testTool}
+				options = nil
+			}
+			if tc.shadowed {
+				cfg.AdditionalTools = []tool.Tool{functool.MustNew(functool.Config{Name: "lookup"}, func(context.Context, struct{}) (string, error) {
+					t.Error("additional tool took precedence over the request tool")
+					return "", nil
+				})}
+			}
+			run := toolautocall.New(cfg).Run
+			next := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+				return run(runner.Run, ctx, messages, options...)
+			}
+			var updates iter.Seq2[*agent.ResponseUpdate, error]
+			if tc.wrap {
+				updates = observer.Run(func(ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+					return inner.Run(next, ctx, messages, opts...)
+				}, t.Context(), []*message.Message{message.NewText("start")}, options...)
+			} else {
+				updates = next(t.Context(), []*message.Message{message.NewText("start")}, options...)
+			}
+			var results []*message.FunctionResultContent
+			for update, err := range updates {
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, content := range update.Contents {
+					if result, ok := content.(*message.FunctionResultContent); ok {
+						results = append(results, result)
+					}
+				}
+			}
+			if handlerCalls.Load() != 2 || len(results) != 2 {
+				t.Fatalf("handler calls = %d, results = %d; want 2 of each", handlerCalls.Load(), len(results))
+			}
+			for i, id := range []string{firstID, "call-2"} {
+				if results[i].CallID != id || !errors.Is(results[i].Error, tc.toolError) {
+					t.Errorf("result = %#v, want call ID %q and error %v", results[i], id, tc.toolError)
+				}
+			}
+			if tc.wrap && (wrapperCalls.Load() != 2 || innerCalls.Load() != 2) {
+				t.Errorf("wrapper calls = %d, inner calls = %d; want 2 of each", wrapperCalls.Load(), innerCalls.Load())
+			}
+			if tc.additional && cfg.AdditionalTools[0] != testTool {
+				t.Error("middleware mutated configured additional tools")
+			}
+			if !tc.additional {
+				if original, _ := agent.GetOption(options, agent.WithTool); original != testTool {
+					t.Error("middleware mutated the caller's options")
+				}
+			}
+		})
+	}
+}
+
 func TestFunctionInvoking_DoesNotInvokeServerHandledFunctionCalls(t *testing.T) {
 	var toolInvoked atomic.Int32
 

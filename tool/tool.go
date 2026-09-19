@@ -5,6 +5,8 @@ package tool
 import (
 	"context"
 	"strings"
+
+	"github.com/microsoft/agent-framework-go/internal/toolcontext"
 )
 
 // ToolMode represents how tools should be used by the agent.
@@ -83,7 +85,31 @@ type FuncTool interface {
 	SchemaTool
 
 	// Call invokes the tool with raw JSON arguments.
+	// During automatic tool invocation, [InvocationFromContext] exposes the call ID.
 	Call(ctx context.Context, args string) (any, error)
+}
+
+// Invocation identifies the logical function call being executed.
+// It is a correlation record, not an authorization or cross-run idempotency key.
+type Invocation struct {
+	// CallID is the ID from the originating function call. It matches the ID on
+	// the function result and is preserved when an approved call resumes.
+	// An empty provider-supplied ID remains empty; no synthetic ID is assigned.
+	CallID string
+}
+
+// InvocationFromContext returns the invocation identity supplied by the automatic
+// tool-call middleware. Tool wrappers can combine it with their tool reference,
+// Call arguments, and returned result or error to correlate lifecycle events.
+// The arguments passed to Call remain raw JSON; this accessor does not normalize them.
+//
+// The identity is scoped to the invocation context, including contexts derived by
+// wrappers, and is independent for parallel calls. A direct Call with an unrelated
+// context has no invocation identity. Direct calls made with an existing invocation
+// context inherit that identity; they do not create a new logical function call.
+func InvocationFromContext(ctx context.Context) (Invocation, bool) {
+	callID, ok := toolcontext.CallIDFromContext(ctx)
+	return Invocation{CallID: callID}, ok
 }
 
 // ApprovalRequiredTool indicates whether a tool requires user approval before invocation.

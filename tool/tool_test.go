@@ -3,10 +3,17 @@
 package tool_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/tool"
 )
+
+func TestInvocationFromContext_WithoutInvocation(t *testing.T) {
+	if invocation, ok := tool.InvocationFromContext(context.Background()); ok || invocation != (tool.Invocation{}) {
+		t.Fatalf("InvocationFromContext() = %#v, %v; want zero value, false", invocation, ok)
+	}
+}
 
 func TestToolModeRequiredHasNoSpecificTool(t *testing.T) {
 	if name, ok := tool.ToolModeRequired.RequiredTool(); ok {
