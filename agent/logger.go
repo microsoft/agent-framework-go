@@ -32,11 +32,7 @@ func (l *runLoggerMiddleware) Run(next RunFunc, ctx context.Context, messages []
 		l.log(ctx, slog.LevelDebug, "run invoked", slogx.SensitiveData("messages", messages), slogx.SensitiveData("opts", opts))
 		for update, err := range next(ctx, messages, opts...) {
 			if err != nil {
-				if errors.Is(err, context.Canceled) {
-					l.log(ctx, slog.LevelDebug, "run canceled", "error", err)
-				} else {
-					l.log(ctx, slog.LevelError, "run failed", "error", err)
-				}
+				l.logRunError(ctx, err)
 			} else if l.l.SensitiveData {
 				l.log(ctx, slog.LevelDebug, "run received update", slogx.SensitiveData("update", update))
 			}
@@ -46,6 +42,14 @@ func (l *runLoggerMiddleware) Run(next RunFunc, ctx context.Context, messages []
 		}
 		l.log(ctx, slog.LevelDebug, "run completed", "duration", time.Since(start).String())
 	}
+}
+
+func (l *runLoggerMiddleware) logRunError(ctx context.Context, err error) {
+	if errors.Is(err, context.Canceled) {
+		l.log(ctx, slog.LevelDebug, "run canceled", "error", err)
+		return
+	}
+	l.log(ctx, slog.LevelError, "run failed", "error", err)
 }
 
 func (l *runLoggerMiddleware) log(ctx context.Context, level slog.Level, msg string, args ...any) {
