@@ -119,10 +119,14 @@ func Configure(executor *workflow.Executor, options *Options) {
 
 func accumulateStringMessage(state *MessageState, role message.Role) func(*workflow.Context, any) (any, error) {
 	return func(ctx *workflow.Context, msg any) (any, error) {
-		return appendTurnMessages(ctx, state, &message.Message{
-			Role:     role,
-			Contents: []message.Content{&message.TextContent{Text: msg.(string)}},
-		})
+		return appendTurnMessages(ctx, state, newTextMessage(role, msg.(string)))
+	}
+}
+
+func newTextMessage(role message.Role, text string) *message.Message {
+	return &message.Message{
+		Role:     role,
+		Contents: []message.Content{&message.TextContent{Text: text}},
 	}
 }
 
