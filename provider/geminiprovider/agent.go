@@ -577,6 +577,53 @@ func buildResponsePart(part *genai.Part, contents message.Contents, state *respo
 			},
 		})
 	}
+	if part.ToolCall != nil {
+		// A server-side tool invocation echoed back by the model. Surface it as
+		// an informational function call so callers can observe it, but mark it
+		// InformationalOnly so the tool-call loop does not try to execute a call
+		// the server already ran. Mirrors the Python reference.
+		args := part.ToolCall.Args
+		if args == nil {
+			args = map[string]any{}
+		}
+		argsJSON, err := json.Marshal(args)
+		if err != nil {
+			return nil, fmt.Errorf("geminiprovider: failed to marshal tool call arguments: %w", err)
+		}
+		callID := part.ToolCall.ID
+		if callID == "" {
+			callID = "tool-call-" + uuid.NewString()
+		}
+		name := string(part.ToolCall.ToolType)
+		if name == "" {
+			name = "tool_call"
+		}
+		contents = append(contents, &message.FunctionCallContent{
+			CallID:            callID,
+			Name:              name,
+			Arguments:         string(argsJSON),
+			InformationalOnly: true,
+			ContentHeader: message.ContentHeader{
+				RawRepresentation: part,
+			},
+		})
+	}
+	if part.ToolResponse != nil {
+		// The output of a server-side tool invocation. Surface it as a function
+		// result so it travels with the conversation, mirroring the Python
+		// reference.
+		callID := part.ToolResponse.ID
+		if callID == "" {
+			callID = "tool-call-" + uuid.NewString()
+		}
+		contents = append(contents, &message.FunctionResultContent{
+			CallID: callID,
+			Result: part.ToolResponse.Response,
+			ContentHeader: message.ContentHeader{
+				RawRepresentation: part,
+			},
+		})
+	}
 	if part.InlineData != nil {
 		contents = append(contents, &message.DataContent{
 			ContentHeader: message.ContentHeader{RawRepresentation: part},
