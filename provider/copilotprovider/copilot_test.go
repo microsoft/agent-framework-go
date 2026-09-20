@@ -485,6 +485,28 @@ func TestConvertToAgentResponseUpdate_UsageEvent_SurfacesReasoningTokens(t *test
 	}
 }
 
+// The usage event reports which model actually served the request; it must be
+// surfaced on AdditionalProperties, matching the Python client.
+func TestConvertToAgentResponseUpdate_UsageEvent_SurfacesModel(t *testing.T) {
+	runtime := newFakeRuntime(t,
+		sessionEvent("assistant.usage", map[string]any{
+			"model":        "gpt-5",
+			"inputTokens":  10,
+			"outputTokens": 20,
+		}),
+		idleEvent(),
+	)
+	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
+
+	response, err := runText(t, agent, "hello")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if got, _ := response.AdditionalProperties["model"].(string); got != "gpt-5" {
+		t.Fatalf("AdditionalProperties[model] = %q, want gpt-5", got)
+	}
+}
+
 func TestConvertToAgentResponseUpdate_ReasoningEvent_SurfacesReasoningContent(t *testing.T) {
 	const thinking = "Let me work through this step by step."
 	runtime := newFakeRuntime(t,
