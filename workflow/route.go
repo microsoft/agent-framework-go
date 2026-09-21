@@ -263,7 +263,7 @@ func (mr *messageRouter) routeMessage(ctx *Context, msg any) (result callResult,
 	}
 	pvalue, isPortable := msg.(PortableValue)
 	if isPortable {
-		msg = mr.unwrapPortableMessage(pvalue)
+		msg = mr.unwrapPortableMessage(&pvalue)
 	}
 	defer func() {
 		if r := recover(); r != nil {
@@ -290,17 +290,17 @@ func (mr *messageRouter) routeMessage(ctx *Context, msg any) (result callResult,
 	return callResult{}, false
 }
 
-func (mr *messageRouter) unwrapPortableMessage(pvalue PortableValue) any {
+func (mr *messageRouter) unwrapPortableMessage(pvalue *PortableValue) any {
 	if info, ok := mr.typeInfo(pvalue.TypeID); ok {
 		if v, ok := pvalue.As(info.runtimeType); ok {
 			return v
 		}
-		return pvalue
+		return *pvalue
 	}
 	if value := pvalue.Any(); value != nil && pvalue.TypeID.MatchPolymorphic(reflect.TypeOf(value)) {
 		return value
 	}
-	return pvalue
+	return *pvalue
 }
 
 func (mr *messageRouter) typeInfo(typeID TypeID) (typeHandlingInfo, bool) {
