@@ -1326,15 +1326,28 @@ func responsesUsageToContent(usage responses.ResponseUsage) *message.UsageConten
 	if usage.InputTokens == 0 && usage.OutputTokens == 0 {
 		return nil
 	}
-	return &message.UsageContent{
-		Details: message.UsageDetails{
-			InputTokenCount:       usage.InputTokens,
-			OutputTokenCount:      usage.OutputTokens,
-			TotalTokenCount:       usage.TotalTokens,
-			CachedInputTokenCount: usage.InputTokensDetails.CachedTokens,
-			ReasoningTokenCount:   usage.OutputTokensDetails.ReasoningTokens,
-		},
+	details := message.UsageDetails{
+		InputTokenCount:       usage.InputTokens,
+		OutputTokenCount:      usage.OutputTokens,
+		TotalTokenCount:       usage.TotalTokens,
+		CachedInputTokenCount: usage.InputTokensDetails.CachedTokens,
+		ReasoningTokenCount:   usage.OutputTokensDetails.ReasoningTokens,
 	}
+	// UsageDetails has no first-class cache-creation field, so surface cache
+	// write tokens (prompt-cache writes / cache creation) via AdditionalCounts,
+	// matching the Python client. Initialize the map lazily so additional
+	// subfields can be added later without clobbering.
+	add := func(k string, v int64) {
+		if v == 0 {
+			return
+		}
+		if details.AdditionalCounts == nil {
+			details.AdditionalCounts = make(map[string]int64)
+		}
+		details.AdditionalCounts[k] = v
+	}
+	add("InputTokensDetails.CacheWriteTokens", usage.InputTokensDetails.CacheWriteTokens)
+	return &message.UsageContent{Details: details}
 }
 
 const (

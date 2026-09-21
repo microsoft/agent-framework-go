@@ -630,6 +630,7 @@ func addUsage(contents message.Contents, usage openai.CompletionUsage) message.C
 		}
 		details.AdditionalCounts[k] = v
 	}
+	add("PromptTokensDetails.CacheWriteTokens", usage.PromptTokensDetails.CacheWriteTokens)
 	add("PromptTokensDetails.AudioTokens", usage.PromptTokensDetails.AudioTokens)
 	add("CompletionTokensDetails.AudioTokens", usage.CompletionTokensDetails.AudioTokens)
 	add("CompletionTokensDetails.AcceptedPredictionTokens", usage.CompletionTokensDetails.AcceptedPredictionTokens)
