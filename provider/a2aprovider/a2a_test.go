@@ -299,7 +299,31 @@ func TestRunAllowsNonUserRoleMessages(t *testing.T) {
 	}
 }
 
-// TestRunWithValidUserMessage tests successful run with valid user message
+// A response message carrying the A2A user role must map to RoleUser, not be
+// hardcoded to assistant, matching the Python client.
+func TestRunPreservesInboundUserRole(t *testing.T) {
+	transport := &mockA2ATransport{
+		responseToReturn: &a2a.Message{
+			ID:    "m1",
+			Role:  a2a.MessageRoleUser,
+			Parts: a2a.ContentParts{a2a.NewTextPart("hi")},
+		},
+	}
+	a := newTestAgent(transport, agent.Config{})
+
+	result, err := a.RunText(t.Context(), "hello").Collect()
+	if err != nil {
+		t.Fatalf("error = %v, want nil", err)
+	}
+	if len(result.Messages) != 1 {
+		t.Fatalf("len(result.Messages) = %d, want 1", len(result.Messages))
+	}
+	if result.Messages[0].Role != message.RoleUser {
+		t.Errorf("Role = %q, want %q", result.Messages[0].Role, message.RoleUser)
+	}
+}
+
+// TestRunWithValidUserMessage tests successful run with valid user message.
 func TestRunWithValidUserMessage(t *testing.T) {
 	transport := &mockA2ATransport{
 		responseToReturn: &a2a.Message{
@@ -1304,6 +1328,42 @@ func TestRunWithInputRequiredTaskMessage(t *testing.T) {
 	}
 	if got := result.String(); got != question {
 		t.Errorf("response text = %q, want %q", got, question)
+	}
+}
+
+// An input-required task-status message carrying the A2A user role must map to
+// RoleUser, covering the yieldTask status-message role mapping.
+func TestRunWithInputRequiredTaskMessagePreservesUserRole(t *testing.T) {
+	transport := &mockA2ATransport{
+		responseToReturn: &a2a.Task{
+			ID:        a2a.TaskID("task-role"),
+			ContextID: "context-1",
+			Status: a2a.TaskStatus{
+				State: a2a.TaskStateInputRequired,
+				Message: &a2a.Message{
+					ID:    "msg-role",
+					Role:  a2a.MessageRoleUser,
+					Parts: a2a.ContentParts{a2a.NewTextPart("need input")},
+				},
+			},
+		},
+	}
+	a := newTestAgent(transport, agent.Config{})
+	session, err := a.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := a.RunText(t.Context(), "go", agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatalf("error = %v, want nil", err)
+	}
+	if len(result.Messages) == 0 {
+		t.Fatal("no messages returned")
+	}
+	last := result.Messages[len(result.Messages)-1]
+	if last.Role != message.RoleUser {
+		t.Errorf("status message Role = %q, want %q", last.Role, message.RoleUser)
 	}
 }
 
