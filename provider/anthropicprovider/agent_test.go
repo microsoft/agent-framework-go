@@ -267,6 +267,9 @@ var finishReasonCases = []struct {
 	{"max_tokens", "length"},
 	{"tool_use", "tool_calls"},
 	{"refusal", "content_filter"},
+	// Unmapped stop reasons pass through unchanged so newer Anthropic values
+	// still reach the caller.
+	{"model_context_window_exceeded", "model_context_window_exceeded"},
 }
 
 // TestNonStreamingFinishReason verifies the provider maps the Anthropic
