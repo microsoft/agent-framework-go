@@ -44,26 +44,20 @@ func (m *messageMerger) AddUpdate(update *agent.ResponseUpdate) {
 
 func (m *messageMerger) ComputeMerged(primaryResponseID string, primaryAgentID string, primaryAgentName string) *agent.Response {
 	var messages []*message.Message
-	agentIDs := make(map[string]struct{})
-	finishReasons := make(map[string]struct{})
-	var additionalProperties map[string]any
+	var responses []*agent.Response
 
 	for _, responseID := range m.stateOrder {
 		state := m.states[responseID]
-		responses := state.computeResponses()
-		merged := mergeResponseList(responses)
+		responseList := state.computeResponses()
+		merged := mergeResponseList(responseList)
 		if merged == nil {
 			continue
 		}
-		if merged.AgentID != "" {
-			agentIDs[merged.AgentID] = struct{}{}
-		}
-		if merged.FinishReason != "" {
-			finishReasons[merged.FinishReason] = struct{}{}
-		}
-		additionalProperties = mergeProperties(additionalProperties, merged.AdditionalProperties)
+		responses = append(responses, merged)
 		messages = append(messages, messagesWithCreatedAt(merged)...)
 	}
+
+	agentIDs, finishReasons, additionalProperties := collectMergedResponseMetadata(responses)
 
 	messages = append(messages, m.danglingState.computeFlattened()...)
 	messages = foldIdentifierlessMessages(messages)
@@ -86,6 +80,26 @@ func (m *messageMerger) ComputeMerged(primaryResponseID string, primaryAgentID s
 		response.FinishReason = slices.Collect(maps.Keys(finishReasons))[0]
 	}
 	return response
+}
+
+func collectMergedResponseMetadata(responses []*agent.Response) (map[string]struct{}, map[string]struct{}, map[string]any) {
+	agentIDs := make(map[string]struct{})
+	finishReasons := make(map[string]struct{})
+	var additionalProperties map[string]any
+
+	for _, response := range responses {
+		if response == nil {
+			continue
+		}
+		if response.AgentID != "" {
+			agentIDs[response.AgentID] = struct{}{}
+		}
+		if response.FinishReason != "" {
+			finishReasons[response.FinishReason] = struct{}{}
+		}
+		additionalProperties = mergeProperties(additionalProperties, response.AdditionalProperties)
+	}
+	return agentIDs, finishReasons, additionalProperties
 }
 
 type collectedResponseMergeState struct {
