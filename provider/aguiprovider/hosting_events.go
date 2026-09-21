@@ -321,6 +321,33 @@ func contentToEvents(content message.Content, messageID string) ([]aguiEvents.Ev
 		// message ID. MEAI batches all results under a shared MessageId, which
 		// collapses them in FE reconciliation when the same id is reused.
 		return []aguiEvents.Event{aguiEvents.NewToolCallResultEvent("result-"+callID, callID, contentStr)}, nil
+	case *message.MCPServerToolCallContent:
+		// A hosted MCP tool call the server ran; surface it as an AG-UI tool
+		// call (start/args/end) rather than dropping it, matching the Python
+		// host's _emit_mcp_tool_call.
+		callID := c.CallID
+		if callID == "" {
+			callID = aguiEvents.GenerateToolCallID()
+		}
+		args := strings.TrimSpace(c.Arguments)
+		if args == "" {
+			args = "{}"
+		}
+		return []aguiEvents.Event{
+			aguiEvents.NewToolCallStartEvent(callID, c.Name),
+			aguiEvents.NewToolCallArgsEvent(callID, args),
+			aguiEvents.NewToolCallEndEvent(callID),
+		}, nil
+	case *message.MCPServerToolResultContent:
+		callID := c.CallID
+		if callID == "" {
+			callID = aguiEvents.GenerateToolCallID()
+		}
+		contentStr, err := serializeToolResult(c.Outputs)
+		if err != nil {
+			return nil, err
+		}
+		return []aguiEvents.Event{aguiEvents.NewToolCallResultEvent("result-"+callID, callID, contentStr)}, nil
 	case *message.URIContent:
 		// AG-UI has no native reference/attachment event; surface the URI as
 		// text so it is not silently dropped (mirrors the DataContent fallback

@@ -227,6 +227,38 @@ func TestHandler_StateSnapshotEmitsStateEvent(t *testing.T) {
 	}
 }
 
+// Hosted MCP tool calls/results must be surfaced as AG-UI tool-call events
+// rather than dropped, matching the Python host.
+func TestHandler_MCPToolCallAndResultEmitEvents(t *testing.T) {
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
+				MessageID: "msg-1",
+				Role:      message.RoleAssistant,
+				Contents: message.Contents{
+					&message.MCPServerToolCallContent{CallID: "m1", Name: "mcp_tool", ServerName: "github", Arguments: `{}`},
+					&message.MCPServerToolResultContent{CallID: "m1", Outputs: message.Contents{&message.TextContent{Text: "ok"}}},
+				},
+			}, nil)
+		}
+	})
+	h := aguiprovider.NewJSONHTTPHandler(a, aguiprovider.HandlerConfig{})
+
+	body := `{"threadId":"thread-1","runId":"run-1","messages":[{"id":"u1","role":"user","content":"ping"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	content := rr.Body.String()
+	// Assert the full tool-call lifecycle and the serialized result, so a
+	// regression dropping any event or the payload is caught.
+	for _, want := range []string{"TOOL_CALL_START", "mcp_tool", "TOOL_CALL_ARGS", "TOOL_CALL_END", "TOOL_CALL_RESULT", "ok"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected MCP tool-call SSE stream to contain %q, got %q", want, content)
+		}
+	}
+}
+
 func TestHandler_MixedToolInvocations_SuppressesServerToolResults(t *testing.T) {
 	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
