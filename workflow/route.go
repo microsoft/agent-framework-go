@@ -290,6 +290,7 @@ func (mr *messageRouter) routeMessage(ctx *Context, msg any) (result callResult,
 	return callResult{}, false
 }
 
+// unwrapPortableMessage preserves delayed deserialization cache updates in pvalue.
 func (mr *messageRouter) unwrapPortableMessage(pvalue *PortableValue) any {
 	if info, ok := mr.typeInfo(pvalue.TypeID); ok {
 		if v, ok := pvalue.As(info.runtimeType); ok {
