@@ -121,7 +121,8 @@ func newChatHistoryProvider() agent.HistoryProvider {
 	// long-running conversations do not grow without bound.
 	minimumPreservedTurns := 3
 	return compaction.NewHistoryProvider(compaction.HistoryProviderConfig{
-		SourceID: chatHistorySourceID,
+		SourceID:     chatHistorySourceID,
+		TriggerEvent: compaction.HistoryProviderTriggerEventAfterMessageAdded,
 		Strategy: &compaction.SlidingWindowStrategy{
 			Trigger:               compaction.TurnsExceed(minimumPreservedTurns),
 			MinimumPreservedTurns: &minimumPreservedTurns,

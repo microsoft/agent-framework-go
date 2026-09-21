@@ -18,10 +18,24 @@ import (
 
 const defaultHistoryProviderSourceID = "CompactionHistoryProvider"
 
+// HistoryProviderTriggerEvent identifies when a history provider applies compaction.
+type HistoryProviderTriggerEvent int
+
+const (
+	// HistoryProviderTriggerEventBeforeMessagesRetrieval applies compaction before returning history.
+	HistoryProviderTriggerEventBeforeMessagesRetrieval HistoryProviderTriggerEvent = iota
+	// HistoryProviderTriggerEventAfterMessageAdded applies compaction after storing new messages.
+	HistoryProviderTriggerEventAfterMessageAdded
+)
+
 // HistoryProviderConfig configures the provider created by [NewHistoryProvider].
 type HistoryProviderConfig struct {
 	// Strategy is the compaction strategy applied to persisted history.
 	Strategy Strategy
+
+	// TriggerEvent controls when Strategy is applied.
+	// Defaults to HistoryProviderTriggerEventBeforeMessagesRetrieval.
+	TriggerEvent HistoryProviderTriggerEvent
 
 	// SourceID identifies messages loaded from this provider.
 	// When empty, a default compaction history provider source ID is used.
@@ -90,11 +104,15 @@ func (l *historyProviderSessionLocks) forOptions(options []agent.Option) *sync.M
 // NewHistoryProvider creates a session-backed history provider that compacts stored history.
 //
 // The provider stores conversation history in the session like [agent.NewInMemoryHistoryProvider],
-// but it automatically applies Strategy whenever history is loaded or updated. This gives history
-// providers first-class reducer-trigger behavior without requiring a separate context provider.
+// but it automatically applies Strategy at the configured TriggerEvent. This gives history providers
+// first-class reducer-trigger behavior without requiring a separate context provider.
 func NewHistoryProvider(cfg HistoryProviderConfig) agent.HistoryProvider {
 	if cfg.Strategy == nil {
 		panic("Strategy is required")
+	}
+	if cfg.TriggerEvent != HistoryProviderTriggerEventBeforeMessagesRetrieval &&
+		cfg.TriggerEvent != HistoryProviderTriggerEventAfterMessageAdded {
+		panic("TriggerEvent is invalid")
 	}
 	cfg.SourceID = cmp.Or(cfg.SourceID, defaultHistoryProviderSourceID)
 	cfg.StateKey = cmp.Or(cfg.StateKey, cfg.SourceID)
@@ -134,9 +152,12 @@ func (p *historyProvider) Invoking(ctx context.Context, invoking agent.InvokingC
 	}
 	messages = append(messages, invoking.Messages...)
 
-	compacted, err := compactHistory(ctx, p.config.Strategy, messages, p.config.TokenCounter, p.config.Logger)
-	if err != nil {
-		return nil, err
+	compacted := messages
+	if p.config.TriggerEvent == HistoryProviderTriggerEventBeforeMessagesRetrieval {
+		compacted, err = compactHistory(ctx, p.config.Strategy, messages, p.config.TokenCounter, p.config.Logger)
+		if err != nil {
+			return nil, err
+		}
 	}
 	inputMessages := make(map[*message.Message]struct{}, len(invoking.Messages))
 	for _, msg := range invoking.Messages {
@@ -188,7 +209,8 @@ func (p *historyProvider) Invoked(ctx context.Context, invoked agent.InvokedCont
 	}
 
 	messages := slices.Clone(state.Messages)
-	if p.config.ProvideOutputMessageFilter != nil {
+	if p.config.TriggerEvent == HistoryProviderTriggerEventAfterMessageAdded &&
+		p.config.ProvideOutputMessageFilter != nil {
 		messages, err = p.config.ProvideOutputMessageFilter(ctx, messages)
 		if err != nil {
 			return err
@@ -197,9 +219,12 @@ func (p *historyProvider) Invoked(ctx context.Context, invoked agent.InvokedCont
 	messages = append(messages, filteredRequest...)
 	messages = append(messages, filteredResponse...)
 
-	compacted, err := compactHistory(ctx, p.config.Strategy, messages, p.config.TokenCounter, p.config.Logger)
-	if err != nil {
-		return err
+	compacted := messages
+	if p.config.TriggerEvent == HistoryProviderTriggerEventAfterMessageAdded {
+		compacted, err = compactHistory(ctx, p.config.Strategy, compacted, p.config.TokenCounter, p.config.Logger)
+		if err != nil {
+			return err
+		}
 	}
 	state.Messages = slices.Clone(compacted)
 	session.Set(p.config.StateKey, state)

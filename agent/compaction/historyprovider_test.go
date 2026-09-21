@@ -15,6 +15,16 @@ import (
 	"github.com/microsoft/agent-framework-go/message/messagefilter"
 )
 
+type countingStrategy struct {
+	strategy compaction.Strategy
+	calls    int
+}
+
+func (s *countingStrategy) Compact(ctx context.Context, index *compaction.MessageIndex) (bool, error) {
+	s.calls++
+	return s.strategy.Compact(ctx, index)
+}
+
 func invokeHistoryProvider(provider agent.HistoryProvider, ctx context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, error) {
 	return provider.Invoking(ctx, agent.InvokingContext{Messages: messages, Options: options})
 }
@@ -23,15 +33,16 @@ func invokeHistoryProviderInvoked(provider agent.HistoryProvider, ctx context.Co
 	return provider.Invoked(ctx, agent.InvokedContext{RequestMessages: requestMessages, ResponseMessages: responseMessages, Options: options})
 }
 
-func TestNewHistoryProvider_CompactsPersistedHistory(t *testing.T) {
+func TestNewHistoryProvider_CompactsBeforeMessagesRetrievalByDefault(t *testing.T) {
 	session := agenttest.CreateSession()
 	minimumPreservedGroups := 2
+	strategy := &countingStrategy{strategy: &compaction.TruncationStrategy{
+		Trigger:                compaction.GroupsExceed(2),
+		MinimumPreservedGroups: &minimumPreservedGroups,
+	}}
 	provider := compaction.NewHistoryProvider(compaction.HistoryProviderConfig{
 		SourceID: "compaction-history",
-		Strategy: &compaction.TruncationStrategy{
-			Trigger:                compaction.GroupsExceed(2),
-			MinimumPreservedGroups: &minimumPreservedGroups,
-		},
+		Strategy: strategy,
 	})
 
 	if err := invokeHistoryProviderInvoked(provider, t.Context(), []*message.Message{textMessage(message.RoleUser, "u1")}, []*message.Message{textMessage(message.RoleAssistant, "a1")}, agent.WithSession(session)); err != nil {
@@ -47,6 +58,9 @@ func TestNewHistoryProvider_CompactsPersistedHistory(t *testing.T) {
 	}
 	if got, want := messageTexts(loaded), []string{"a2", "u3"}; !slices.Equal(got, want) {
 		t.Fatalf("loaded history = %v, want %v", got, want)
+	}
+	if strategy.calls != 1 {
+		t.Fatalf("strategy calls = %d, want 1", strategy.calls)
 	}
 
 	if got, want := loaded[0].Source, (message.Source{Type: agent.SourceTypeHistoryProvider, ID: "compaction-history"}); got != want {
@@ -68,8 +82,40 @@ func TestNewHistoryProvider_CompactsPersistedHistory(t *testing.T) {
 	if ok, err := restored.Get("compaction-history", &state); err != nil || !ok {
 		t.Fatalf("expected persisted state, ok=%v err=%v", ok, err)
 	}
-	if got, want := messageTexts(state.Messages), []string{"u2", "a2"}; !slices.Equal(got, want) {
+	if got, want := messageTexts(state.Messages), []string{"u1", "a1", "u2", "a2"}; !slices.Equal(got, want) {
 		t.Fatalf("persisted history = %v, want %v", got, want)
+	}
+}
+
+func TestNewHistoryProvider_CompactsAfterMessageAdded(t *testing.T) {
+	session := agenttest.CreateSession()
+	minimumPreservedGroups := 2
+	strategy := &countingStrategy{strategy: &compaction.TruncationStrategy{
+		Trigger:                compaction.GroupsExceed(2),
+		MinimumPreservedGroups: &minimumPreservedGroups,
+	}}
+	provider := compaction.NewHistoryProvider(compaction.HistoryProviderConfig{
+		SourceID:     "compaction-history",
+		TriggerEvent: compaction.HistoryProviderTriggerEventAfterMessageAdded,
+		Strategy:     strategy,
+	})
+
+	if err := invokeHistoryProviderInvoked(provider, t.Context(), []*message.Message{textMessage(message.RoleUser, "u1")}, []*message.Message{textMessage(message.RoleAssistant, "a1")}, agent.WithSession(session)); err != nil {
+		t.Fatalf("store turn 1: %v", err)
+	}
+	if err := invokeHistoryProviderInvoked(provider, t.Context(), []*message.Message{textMessage(message.RoleUser, "u2")}, []*message.Message{textMessage(message.RoleAssistant, "a2")}, agent.WithSession(session)); err != nil {
+		t.Fatalf("store turn 2: %v", err)
+	}
+
+	loaded, err := invokeHistoryProvider(provider, t.Context(), []*message.Message{textMessage(message.RoleUser, "u3")}, agent.WithSession(session))
+	if err != nil {
+		t.Fatalf("load history: %v", err)
+	}
+	if got, want := messageTexts(loaded), []string{"u2", "a2", "u3"}; !slices.Equal(got, want) {
+		t.Fatalf("loaded history = %v, want %v", got, want)
+	}
+	if strategy.calls != 2 {
+		t.Fatalf("strategy calls = %d, want 2", strategy.calls)
 	}
 }
 
