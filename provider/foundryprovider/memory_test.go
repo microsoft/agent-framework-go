@@ -160,6 +160,72 @@ func TestNewMemoryProviderStoreFiltersDefaultToExternalOnlyRequestAndPassThrough
 	}
 }
 
+// Static (user-profile) memories are fetched once per session with an item-less
+// search and prepended to the contextual memories on every turn, matching the
+// Python provider.
+func TestMemoryProviderInjectsStaticMemories(t *testing.T) {
+	transport := &recordingTransport{}
+	transport.handle = func(req *http.Request, body string) (*http.Response, error) {
+		// A populated items array marks the contextual search; the item-less
+		// static search sends no items.
+		if strings.Contains(body, `"items":[{`) {
+			return jsonResponse(req, http.StatusOK, `{"memories":[{"memory_item":{"content":"contextual memory","kind":"procedural","memory_id":"mem_c","scope":"user-456","updated_at":1}}]}`), nil
+		}
+		return jsonResponse(req, http.StatusOK, `{"memories":[{"memory_item":{"content":"static profile","kind":"user_profile","memory_id":"mem_s","scope":"user-456","updated_at":1}}]}`), nil
+	}
+	provider := foundryprovider.NewMemoryProvider(validEndpoint, validCredential, "memory", validScope, foundryprovider.MemoryProviderConfig{
+		ClientOptions: azcore.ClientOptions{Transport: transport},
+		ContextPrompt: new("Memories:"),
+	})
+	session := &agent.Session{}
+
+	// First turn: item-less static search + contextual search; both surfaced.
+	messages, _, err := provider.Invoking(t.Context(), agent.InvokingContext{
+		Messages: []*message.Message{message.NewText("what do you remember?")},
+		Options:  []agent.Option{agent.WithSession(session)},
+	})
+	if err != nil {
+		t.Fatalf("Invoking error = %v", err)
+	}
+	// Static memories are prepended before the contextual ones, so assert order,
+	// not just presence.
+	if ctx := messagesString(messages); !strings.Contains(ctx, "static profile\ncontextual memory") {
+		t.Fatalf("first-turn context = %q, want static memory prepended before contextual", ctx)
+	}
+
+	// Second turn: static is cached, so no second item-less search is issued,
+	// but the static memory is still prepended.
+	messages, _, err = provider.Invoking(t.Context(), agent.InvokingContext{
+		Messages: []*message.Message{message.NewText("again")},
+		Options:  []agent.Option{agent.WithSession(session)},
+	})
+	if err != nil {
+		t.Fatalf("Invoking error = %v", err)
+	}
+	if ctx := messagesString(messages); !strings.Contains(ctx, "static profile") {
+		t.Fatalf("second-turn context = %q, want static memory prepended", ctx)
+	}
+
+	// One item-less static search total (turn 1) + one contextual search per turn.
+	itemless := 0
+	for _, r := range transport.Requests() {
+		if !strings.Contains(r.Body, `"items":[{`) {
+			itemless++
+		}
+	}
+	if itemless != 1 {
+		t.Fatalf("item-less static searches = %d, want 1 (cached after first turn)", itemless)
+	}
+}
+
+func messagesString(messages []*message.Message) string {
+	var b strings.Builder
+	for _, m := range messages {
+		b.WriteString(m.String())
+	}
+	return b.String()
+}
+
 func TestMemoryProviderPanicsWhenScopeIsEmptyOnUse(t *testing.T) {
 	provider := foundryprovider.NewMemoryProvider(validEndpoint, validCredential, "memory", func(*agent.Session) string { return " " }, foundryprovider.MemoryProviderConfig{})
 	assertPanics(t, func() {

@@ -21,6 +21,11 @@ const (
 	defaultMemoryContextPrompt = "## Memories\nConsider the following memories when answering user questions:"
 	defaultMaxMemories         = 5
 	defaultSourceID            = "foundrymemory"
+
+	// Session-state keys for the static (item-less) memory cache, fetched once
+	// per session and reused on later turns.
+	memoryStaticInitStateKey     = "foundrymemory.staticInitialized"
+	memoryStaticMemoriesStateKey = "foundrymemory.staticMemories"
 )
 
 // MemoryProviderConfig configures a Foundry memory provider.
@@ -195,28 +200,77 @@ func (p *MemoryProvider) EnsureStoredMemoriesDeleted(ctx context.Context, sessio
 }
 
 func (p *MemoryProvider) provide(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
-	items := searchMemoryItems(invoking.Messages)
-	if len(items) == 0 {
-		return nil, nil, nil
-	}
 	session, _ := agent.GetOption(invoking.Options, agent.WithSession)
 	scope := p.scope(session)
-	searchOptions := &azaiprojects.MemoryStoresClientSearchMemoriesOptions{
-		Items:   items,
-		Options: &azaiprojects.MemorySearchResultOptions{MaxMemories: p.config.MaxMemories},
+
+	// Static (e.g. user-profile) memories are fetched once per session with an
+	// item-less search and prepended to the contextual memories on every turn,
+	// matching the Python provider.
+	staticMemories := p.staticMemories(ctx, session, scope)
+
+	var contextual []string
+	if items := searchMemoryItems(invoking.Messages); len(items) > 0 {
+		searchOptions := &azaiprojects.MemoryStoresClientSearchMemoriesOptions{
+			Items:   items,
+			Options: &azaiprojects.MemorySearchResultOptions{MaxMemories: p.config.MaxMemories},
+		}
+		result, err := p.client.SearchMemories(ctx, p.memoryStoreName, scope, searchOptions)
+		if err != nil {
+			p.log(ctx, slog.LevelError, "foundrymemory: failed to search memories", "memory_store", p.memoryStoreName, "error", err)
+		} else {
+			contextual = memoryContents(result.Memories)
+		}
 	}
-	result, err := p.client.SearchMemories(ctx, p.memoryStoreName, scope, searchOptions)
-	if err != nil {
-		p.log(ctx, slog.LevelError, "foundrymemory: failed to search memories", "memory_store", p.memoryStoreName, "error", err)
-		return nil, nil, nil
-	}
-	memories := memoryContents(result.Memories)
+
+	// Copy into a fresh slice so appending never mutates the cached static list.
+	memories := make([]string, 0, len(staticMemories)+len(contextual))
+	memories = append(memories, staticMemories...)
+	memories = append(memories, contextual...)
 	p.log(ctx, slog.LevelInfo, "foundrymemory: retrieved memories", "memory_store", p.memoryStoreName, "count", len(memories))
 	if len(memories) == 0 {
 		return nil, nil, nil
 	}
 	contextMessage := message.NewText(*p.config.ContextPrompt + "\n" + strings.Join(memories, "\n"))
 	return []*message.Message{contextMessage}, nil, nil
+}
+
+// staticMemories returns the scope's static (item-less) memories, fetching them
+// once per session and caching them on the session for reuse on later turns.
+// Without a session there is nowhere to cache, so it returns nothing rather
+// than issuing an item-less search on every turn.
+func (p *MemoryProvider) staticMemories(ctx context.Context, session *agent.Session, scope string) []string {
+	if session == nil {
+		return nil
+	}
+	// Key the cache by store and scope so a session shared across providers, or
+	// a scope callback whose result changes between turns, does not reuse the
+	// wrong scope's static memories.
+	initKey := p.staticStateKey(memoryStaticInitStateKey, scope)
+	memKey := p.staticStateKey(memoryStaticMemoriesStateKey, scope)
+	var initialized bool
+	if ok, _ := session.Get(initKey, &initialized); ok && initialized {
+		var cached []string
+		session.Get(memKey, &cached)
+		return cached
+	}
+	result, err := p.client.SearchMemories(ctx, p.memoryStoreName, scope, &azaiprojects.MemoryStoresClientSearchMemoriesOptions{
+		Options: &azaiprojects.MemorySearchResultOptions{MaxMemories: p.config.MaxMemories},
+	})
+	if err != nil {
+		// Leave the session uninitialized so the next turn retries.
+		p.log(ctx, slog.LevelError, "foundrymemory: failed to search static memories", "memory_store", p.memoryStoreName, "error", err)
+		return nil
+	}
+	static := memoryContents(result.Memories)
+	session.Set(memKey, static)
+	session.Set(initKey, true)
+	return static
+}
+
+// staticStateKey qualifies a static-memory session-state key with the store and
+// scope so cached state is not shared across providers or scopes on one session.
+func (p *MemoryProvider) staticStateKey(prefix, scope string) string {
+	return prefix + ":" + p.memoryStoreName + ":" + scope
 }
 
 func (p *MemoryProvider) store(ctx context.Context, invoked agent.InvokedContext) error {
