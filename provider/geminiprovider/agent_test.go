@@ -2568,6 +2568,87 @@ func TestFinishReason_Streaming(t *testing.T) {
 	}
 }
 
+// Server-side tool invocations echoed back by Gemini (toolCall/toolResponse
+// parts) must be surfaced: the call as an informational-only function call so
+// the tool loop does not re-execute it, and the response as a function result.
+func TestServerSideToolCallAndResponsePartsSurfaced(t *testing.T) {
+	body := `{
+		"candidates":[{
+			"content":{"role":"model","parts":[
+				{"toolCall":{"id":"tc_1","toolType":"google_search","args":{"query":"weather"}}},
+				{"toolResponse":{"id":"tc_1","toolType":"google_search","response":{"result":"sunny"}}}
+			]},
+			"finishReason":"STOP"
+		}],
+		"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"totalTokenCount":15}
+	}`
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "application/json", body))
+	defer server.Close()
+
+	resp, err := newTestClient(t, server).RunText(t.Context(), "hi").Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var call *message.FunctionCallContent
+	var result *message.FunctionResultContent
+	for content := range resp.Contents() {
+		switch c := content.(type) {
+		case *message.FunctionCallContent:
+			call = c
+		case *message.FunctionResultContent:
+			result = c
+		}
+	}
+	if call == nil || !call.InformationalOnly {
+		t.Fatalf("function call = %#v, want an informational-only server-side call", call)
+	}
+	if call.Name != "google_search" || call.CallID != "tc_1" {
+		t.Errorf("call = %#v, want name google_search / id tc_1", call)
+	}
+	if result == nil || result.CallID != "tc_1" {
+		t.Fatalf("function result = %#v, want id tc_1", result)
+	}
+}
+
+// When a tool response omits its own id, it must correlate with the preceding
+// tool call's id rather than getting an independent synthesized id.
+func TestServerSideToolResponseInheritsCallID(t *testing.T) {
+	body := `{
+		"candidates":[{
+			"content":{"role":"model","parts":[
+				{"toolCall":{"id":"tc_9","toolType":"google_search","args":{}}},
+				{"toolResponse":{"toolType":"google_search","response":{"result":"ok"}}}
+			]},
+			"finishReason":"STOP"
+		}],
+		"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"totalTokenCount":15}
+	}`
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "application/json", body))
+	defer server.Close()
+
+	resp, err := newTestClient(t, server).RunText(t.Context(), "hi").Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var call *message.FunctionCallContent
+	var result *message.FunctionResultContent
+	for content := range resp.Contents() {
+		switch c := content.(type) {
+		case *message.FunctionCallContent:
+			call = c
+		case *message.FunctionResultContent:
+			result = c
+		}
+	}
+	if call == nil || result == nil {
+		t.Fatalf("call/result missing: call=%#v result=%#v", call, result)
+	}
+	if result.CallID != "tc_9" || result.CallID != call.CallID {
+		t.Errorf("result CallID = %q, want it to match the call id %q", result.CallID, call.CallID)
+	}
+}
+
 // TestHostedTools_MappedToGenaiTools verifies that hosted tools attached via
 // agent.WithTool are mapped onto their native genai.Tool entries in the outgoing
 // request. Before this mapping, non-FuncTool options were silently dropped and
