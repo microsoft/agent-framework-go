@@ -131,6 +131,7 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 		// the streaming path below.
 		var contents []message.Content
 		var finishReason string
+		var additionalProperties map[string]any
 		if len(resp.Choices) > 0 {
 			choice := resp.Choices[0]
 			contents = make([]message.Content, 0, 1+len(choice.Message.ToolCalls))
@@ -150,19 +151,29 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 				contents = append(contents, &message.ErrorContent{Message: choice.Message.Refusal, ErrorCode: "Refusal"})
 			}
 			finishReason = choice.FinishReason
+			if len(choice.Logprobs.Content) > 0 || len(choice.Logprobs.Refusal) > 0 {
+				additionalProperties = map[string]any{"Logprobs": choice.Logprobs}
+			}
+		}
+		if resp.SystemFingerprint != "" {
+			if additionalProperties == nil {
+				additionalProperties = make(map[string]any)
+			}
+			additionalProperties["SystemFingerprint"] = resp.SystemFingerprint
 		}
 		if resp.JSON.Usage.Valid() {
 			contents = addUsage(contents, resp.Usage)
 		}
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			update := &agent.ResponseUpdate{
-				Contents:          contents,
-				Role:              message.RoleAssistant,
-				ResponseID:        resp.ID,
-				MessageID:         resp.ID,
-				FinishReason:      finishReason,
-				CreatedAt:         time.Unix(resp.Created, 0),
-				RawRepresentation: resp,
+				Contents:             contents,
+				Role:                 message.RoleAssistant,
+				ResponseID:           resp.ID,
+				MessageID:            resp.ID,
+				FinishReason:         finishReason,
+				CreatedAt:            time.Unix(resp.Created, 0),
+				AdditionalProperties: additionalProperties,
+				RawRepresentation:    resp,
 			}
 			if !yield(update, nil) {
 				return
@@ -180,6 +191,10 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 		stream := a.client.Chat.Completions.NewStreaming(ctx, body, telemetryRequestOption)
 		defer func() { _ = stream.Close() }()
 		var acc openai.ChatCompletionAccumulator
+		// Logprobs stream incrementally (one chunk carries only its own tokens),
+		// so accumulate them across chunks; each update carries the running total
+		// and the final message keeps the complete per-choice list.
+		var accLogprobs openai.ChatCompletionChunkChoiceLogprobs
 		for stream.Next() {
 			chunk := stream.Current()
 			if !acc.AddChunk(chunk) {
@@ -208,17 +223,32 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 				contents = addUsage(contents, chunk.Usage)
 			}
 			var finishReason string
+			var additionalProperties map[string]any
 			if len(chunk.Choices) > 0 {
 				finishReason = chunk.Choices[0].FinishReason
+				if logprobs := chunk.Choices[0].Logprobs; len(logprobs.Content) > 0 || len(logprobs.Refusal) > 0 {
+					accLogprobs.Content = append(accLogprobs.Content, logprobs.Content...)
+					accLogprobs.Refusal = append(accLogprobs.Refusal, logprobs.Refusal...)
+				}
+			}
+			if len(accLogprobs.Content) > 0 || len(accLogprobs.Refusal) > 0 {
+				additionalProperties = map[string]any{"Logprobs": accLogprobs}
+			}
+			if chunk.SystemFingerprint != "" {
+				if additionalProperties == nil {
+					additionalProperties = make(map[string]any)
+				}
+				additionalProperties["SystemFingerprint"] = chunk.SystemFingerprint
 			}
 			resp := &agent.ResponseUpdate{
-				Contents:          contents,
-				Role:              role,
-				ResponseID:        chunk.ID,
-				MessageID:         chunk.ID,
-				FinishReason:      finishReason,
-				CreatedAt:         time.Unix(chunk.Created, 0),
-				RawRepresentation: chunk,
+				Contents:             contents,
+				Role:                 role,
+				ResponseID:           chunk.ID,
+				MessageID:            chunk.ID,
+				FinishReason:         finishReason,
+				CreatedAt:            time.Unix(chunk.Created, 0),
+				AdditionalProperties: additionalProperties,
+				RawRepresentation:    chunk,
 			}
 			if !yield(resp, nil) {
 				return
