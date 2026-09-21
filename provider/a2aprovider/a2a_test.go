@@ -299,7 +299,36 @@ func TestRunAllowsNonUserRoleMessages(t *testing.T) {
 	}
 }
 
-// TestRunWithValidUserMessage tests successful run with valid user message
+// An ErrorContent must be sent to A2A as its human-readable text, not as an
+// opaque JSON blob (the default-branch behavior), matching the Python client.
+func TestRunSendsErrorContentAsText(t *testing.T) {
+	transport := &mockA2ATransport{
+		responseToReturn: &a2a.Message{
+			ID:    "response-err",
+			Role:  a2a.MessageRoleAgent,
+			Parts: a2a.ContentParts{a2a.NewTextPart("ok")},
+		},
+	}
+	a := newTestAgent(transport, agent.Config{})
+
+	msgs := []*message.Message{{Role: message.RoleUser, Contents: message.Contents{&message.ErrorContent{Message: "boom"}}}}
+	if _, err := a.Run(t.Context(), msgs).Collect(); err != nil {
+		t.Fatalf("error = %v, want nil", err)
+	}
+
+	if transport.capturedMessageSendParams == nil || transport.capturedMessageSendParams.Message == nil {
+		t.Fatal("captured message is nil")
+	}
+	parts := transport.capturedMessageSendParams.Message.Parts
+	if len(parts) != 1 {
+		t.Fatalf("parts count = %d, want 1", len(parts))
+	}
+	if got := parts[0].Text(); got != "boom" {
+		t.Errorf("error part text = %q, want %q", got, "boom")
+	}
+}
+
+// TestRunWithValidUserMessage tests successful run with valid user message.
 func TestRunWithValidUserMessage(t *testing.T) {
 	transport := &mockA2ATransport{
 		responseToReturn: &a2a.Message{

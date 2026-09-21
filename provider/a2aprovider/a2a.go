@@ -539,6 +539,10 @@ func contentsToParts(contents []message.Content, parts a2a.ContentParts) (a2a.Co
 		case *message.HostedFileContent:
 			part = a2a.NewFileURLPart(a2a.URL(c.FileID), c.MediaType)
 			part.Filename = c.Name
+		case *message.ErrorContent:
+			// Emit the human-readable error text, matching the Python client,
+			// rather than letting it fall through to the JSON-blob default.
+			part = a2a.NewTextPart(cmp.Or(c.Message, "An error occurred."))
 		case *message.FunctionCallContent, *message.FunctionResultContent:
 			data, err := json.Marshal(c)
 			if err != nil {
