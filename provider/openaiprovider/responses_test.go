@@ -3382,9 +3382,9 @@ func TestResponsesMCPServerToolAddressRouting(t *testing.T) {
 		wantTool      string
 	}{
 		{
-			name:          "bare connector id routes to connector_id",
+			name:          "bare connector id is not serialized",
 			serverAddress: "connector_googledrive",
-			wantTool:      `{"type":"mcp","server_label":"drive","connector_id":"connector_googledrive"}`,
+			wantTool:      `{"type":"mcp","server_label":"drive"}`,
 		},
 		{
 			name:          "https url routes to server_url",
