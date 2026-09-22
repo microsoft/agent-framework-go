@@ -211,6 +211,7 @@ func (em *EdgeRunner) PrepareDeliveryForEdge(ctx context.Context, edge workflow.
 		span.SetDeliveryStatus(observability.DeliveryStatusDroppedConditionFalse)
 		return nil, nil
 	}
+	kind := kindOfEdge(edge)
 	targetIDs := selectedTargetIDs(edge, envelope)
 	if len(targetIDs) == 0 {
 		span.SetDeliveryStatus(observability.DeliveryStatusDroppedTargetMismatch)
@@ -218,7 +219,7 @@ func (em *EdgeRunner) PrepareDeliveryForEdge(ctx context.Context, edge workflow.
 	}
 
 	var envelopes []*MessageEnvelope
-	if len(edge.Connection.SourceIDs) == 1 {
+	if kind != fanInEdge {
 		envelopes = []*MessageEnvelope{envelope}
 	} else {
 		// Stateful edge - track source messages.
@@ -243,7 +244,7 @@ func (em *EdgeRunner) PrepareDeliveryForEdge(ctx context.Context, edge workflow.
 		span.SetDeliveryStatus(observability.DeliveryStatusDroppedTargetMismatch)
 		return nil, nil
 	}
-	if len(edge.Connection.SourceIDs) == 1 {
+	if kind != fanInEdge {
 		// Filter targets that can handle the message type.
 		runtimeType, err := em.messageRuntimeType(ctx, envelope)
 		if err != nil {
