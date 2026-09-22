@@ -442,7 +442,7 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 			if u, err := url.Parse(tl.ServerAddress); err == nil && (u.Scheme == "http" || u.Scheme == "https") {
 				variant.ServerURL = openai.String(tl.ServerAddress)
 			} else {
-				variant.ConnectorID = tl.ServerAddress
+				variant.SetExtraFields(map[string]any{"connector_id": tl.ServerAddress})
 			}
 			if tl.ServerDescription != "" {
 				variant.ServerDescription = openai.String(tl.ServerDescription)
