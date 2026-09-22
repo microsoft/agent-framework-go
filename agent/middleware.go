@@ -75,7 +75,49 @@ type FunctionInvocationContext struct {
 // Multiple callbacks execute in registration order, with the first outermost.
 // Each call gets its own FunctionInvocationContext; callbacks must synchronize
 // shared application state if tools can execute concurrently.
+//
+// Providers that execute tools themselves set [ProviderConfig.ManagesToolExecution]
+// and use [WithFuncCallID] to identify each invocation.
 type FunctionInvocationMiddleware func(next func(context.Context, *FunctionInvocationContext) (any, error), ctx context.Context, invocation *FunctionInvocationContext) (any, error)
+
+// WithFuncCallID returns a context carrying callID for
+// [FunctionInvocationContext.CallID]. Providers that execute tools themselves
+// should pass the returned context to [tool.FuncTool.Call] so function invocation
+// middleware receives the ID. Use an empty callID when the provider supplies no
+// ID; this overrides any ID inherited from ctx.
+func WithFuncCallID(ctx context.Context, callID string) context.Context {
+	return toolmiddleware.WithCallID(ctx, callID)
+}
+
+// wrapFuncTools wraps option-provided function tools immediately before run,
+// leaving the options seen by outer middleware unchanged.
+func wrapFuncTools(run RunFunc) RunFunc {
+	return func(ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error] {
+		var cloned bool
+		for _, opt := range options {
+			wrap, ok := opt.(toolmiddleware.Wrapper)
+			if !ok {
+				continue
+			}
+			for i, opt := range options {
+				t, ok := opt.(toolOpt)
+				if !ok {
+					continue
+				}
+				fn, ok := t.Tool.(tool.FuncTool)
+				if !ok {
+					continue
+				}
+				if !cloned {
+					options = slices.Clone(options)
+					cloned = true
+				}
+				options[i] = WithTool(wrap(fn))
+			}
+		}
+		return run(ctx, messages, options...)
+	}
+}
 
 type functionInvocationTool struct {
 	tool.FuncTool

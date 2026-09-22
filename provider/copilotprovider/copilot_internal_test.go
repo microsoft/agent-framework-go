@@ -79,7 +79,7 @@ func TestCopilotTool_FunctionInvocationIdentity(t *testing.T) {
 			} else {
 				cfg.Tools = []tool.Tool{fn}
 			}
-			a := agent.New(agent.ProviderConfig{Run: run}, cfg)
+			a := agent.New(agent.ProviderConfig{Run: run, ManagesToolExecution: true}, cfg)
 			if _, err := a.RunText(t.Context(), "lookup").Collect(); err != nil {
 				t.Fatal(err)
 			}

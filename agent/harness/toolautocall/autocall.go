@@ -1164,7 +1164,7 @@ func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]too
 	}
 	f.logger.Debug(ctx, "calling function", "funcName", funcCall.Name, slogx.SensitiveData("arguments", funcCall.Arguments))
 	start := time.Now()
-	ctx = toolmiddleware.WithCallID(ctx, funcCall.CallID)
+	ctx = agent.WithFuncCallID(ctx, funcCall.CallID)
 	ctx, span := startToolSpan(ctx, funcCall, declaration)
 	if span != nil {
 		defer span.End()

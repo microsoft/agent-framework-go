@@ -33,6 +33,13 @@ type ProviderConfig struct {
 	// Middlewares wrap Run after agent history and context providers.
 	Middlewares []Middleware
 
+	// ManagesToolExecution indicates that Run invokes function tools supplied through
+	// [WithTool], rather than only returning function call requests. When true,
+	// [New] applies [Config.FunctionMiddlewares] to those tools immediately before
+	// Run, after provider middleware. Run must use the tools in its options, not
+	// retained originals. The provider remains responsible for execution and approvals.
+	ManagesToolExecution bool
+
 	// Format creates a provider response format for a structured output value.
 	Format func(v any) (ResponseFormat, error)
 
@@ -176,10 +183,14 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 		providerDoesNotManageHistory: prov.ServiceDoesNotManageHistory,
 		contextProviders:             contextProviders,
 	}
+	providerRun := prov.Run
+	if prov.ManagesToolExecution {
+		providerRun = wrapFuncTools(providerRun)
+	}
 	if len(providerMiddlewares) == 0 {
-		a.providerPipeline = prov.Run
+		a.providerPipeline = providerRun
 	} else {
-		a.providerPipeline = compileRunChain(prov.Run, providerMiddlewares)
+		a.providerPipeline = compileRunChain(providerRun, providerMiddlewares)
 	}
 	a.runPipeline = compileRunChain(a.invoke, agentMiddlewares)
 	return a
