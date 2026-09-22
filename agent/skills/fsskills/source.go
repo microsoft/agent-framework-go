@@ -35,10 +35,18 @@ var (
 )
 
 var (
+	knownFrontmatterFields = map[string]string{
+		"name":          "name",
+		"description":   "description",
+		"license":       "license",
+		"compatibility": "compatibility",
+		"metadata":      "metadata",
+		"allowed-tools": "allowed-tools",
+	}
 	frontmatterRegex          = regexp.MustCompile(`(?ms)\A^---\s*$(.+?)^---\s*$`)
-	yamlKeyValueRegex         = regexp.MustCompile(`(?m)^([\w-]+)\s*:\s*(?:["'](.+?)["']|(.+?))\s*$`)
-	yamlMetadataBlockRegex    = regexp.MustCompile(`(?m)^metadata\s*:\s*$\n((?:[ \t]+\S.*\n?|[ \t]*\r?\n)+)`)
-	yamlIndentedKeyValueRegex = regexp.MustCompile(`(?m)^\s+([\w-]+)\s*:\s*(?:["'](.+?)["']|(.+?))\s*$`)
+	yamlKeyValueRegex         = regexp.MustCompile(`(?m)^([\w-]+|["'][\w-]+["'])[ \t]*:[ \t]*(?:["'](.*?)["']|([^\r\n]*?))[ \t]*\r?$`)
+	yamlMetadataBlockRegex    = regexp.MustCompile(`(?m)^(?:metadata|"metadata"|'metadata')\s*:\s*$\r?\n((?:[ \t]+\S.*\n?|[ \t]*\r?\n)+)`)
+	yamlIndentedKeyValueRegex = regexp.MustCompile(`(?m)^[ \t]+([\w-]+)[ \t]*:[ \t]*(?:["'](.+?)["']|(.+?))[ \t]*\r?$`)
 )
 
 // FilterContext provides contextual information about a discovered file to the
@@ -315,16 +323,30 @@ func (s *Source) tryParseFrontmatter(content, skillFilePath string) (skills.Fron
 
 	yamlContent := strings.TrimSpace(contentForParsing[match[2]:match[3]])
 	frontmatter := skills.Frontmatter{}
+	seenFields := make(map[string]struct{}, len(knownFrontmatterFields))
 
 	for _, kv := range yamlKeyValueRegex.FindAllStringSubmatchIndex(yamlContent, -1) {
-		key := yamlContent[kv[2]:kv[3]]
-		value := ""
-		if kv[4] >= 0 {
-			value = yamlContent[kv[4]:kv[5]]
-		} else if kv[6] >= 0 {
-			value = parseYamlScalarValue(yamlContent, kv)
+		key := normalizeFrontmatterKey(yamlContent[kv[2]:kv[3]])
+		canonicalKey, recognized := knownFrontmatterFields[strings.ToLower(key)]
+		if !recognized {
+			continue
 		}
-		switch strings.ToLower(key) {
+		if key != canonicalKey {
+			s.logger.Error("SKILL.md uses incorrectly cased frontmatter field", "skillFilePath", skillFilePath, "fieldName", key, "expectedFieldName", canonicalKey)
+			return skills.Frontmatter{}, false
+		}
+		if _, duplicated := seenFields[canonicalKey]; duplicated {
+			s.logger.Error("SKILL.md contains duplicate frontmatter field", "skillFilePath", skillFilePath, "fieldName", canonicalKey)
+			return skills.Frontmatter{}, false
+		}
+		seenFields[canonicalKey] = struct{}{}
+
+		value, hasValue := parseYamlValue(yamlContent, kv)
+		if !hasValue && canonicalKey != "name" && canonicalKey != "description" {
+			continue
+		}
+
+		switch canonicalKey {
 		case "name":
 			frontmatter.Name = value
 		case "description":
@@ -340,11 +362,18 @@ func (s *Source) tryParseFrontmatter(content, skillFilePath string) (skills.Fron
 
 	if metadataMatch := yamlMetadataBlockRegex.FindStringSubmatch(yamlContent); len(metadataMatch) == 2 {
 		metadata := make(map[string]any)
+		seenMetadataKeys := make(map[string]struct{})
 		for _, kv := range yamlIndentedKeyValueRegex.FindAllStringSubmatch(metadataMatch[1], -1) {
 			value := kv[2]
 			if value == "" {
 				value = kv[3]
 			}
+			lowerKey := strings.ToLower(kv[1])
+			if _, duplicated := seenMetadataKeys[lowerKey]; duplicated {
+				s.logger.Warn("SKILL.md contains duplicate metadata key; keeping the first value", "skillFilePath", skillFilePath, "key", kv[1])
+				continue
+			}
+			seenMetadataKeys[lowerKey] = struct{}{}
 			metadata[kv[1]] = value
 		}
 		if len(metadata) > 0 {
@@ -368,6 +397,25 @@ func (s *Source) tryParseFrontmatter(content, skillFilePath string) (skills.Fron
 	return frontmatter, true
 }
 
+func normalizeFrontmatterKey(key string) string {
+	if len(key) >= 2 && (key[0] == '"' || key[0] == '\'') && key[len(key)-1] == key[0] {
+		return key[1 : len(key)-1]
+	}
+	return key
+}
+
+func parseYamlValue(yamlContent string, kv []int) (string, bool) {
+	if kv[4] >= 0 {
+		return yamlContent[kv[4]:kv[5]], true
+	}
+
+	if kv[6] < kv[7] {
+		return parseYamlScalarValue(yamlContent, kv), true
+	}
+
+	return parseYamlIndentedValue(yamlContent, kv)
+}
+
 func parseYamlScalarValue(yamlContent string, kv []int) string {
 	value := yamlContent[kv[6]:kv[7]]
 	if value == "" || (value[0] != '|' && value[0] != '>') {
@@ -376,9 +424,44 @@ func parseYamlScalarValue(yamlContent string, kv []int) string {
 
 	scalarStyle := value[0]
 	keepTrailingNewline := len(value) > 1 && value[1] == '+'
+	blockLines, ok := collectIndentedBlockLines(yamlContent, kv)
+	if !ok {
+		return ""
+	}
+
+	normalizedLines := normalizeIndentedLines(blockLines)
+
+	var parsedValue string
+	if scalarStyle == '|' {
+		parsedValue = strings.Join(normalizedLines, "\n")
+	} else {
+		parsedValue = foldYamlLines(normalizedLines)
+	}
+
+	if keepTrailingNewline {
+		return parsedValue + "\n"
+	}
+	return parsedValue
+}
+
+func parseYamlIndentedValue(yamlContent string, kv []int) (string, bool) {
+	blockLines, ok := collectIndentedBlockLines(yamlContent, kv)
+	if !ok {
+		return "", false
+	}
+
+	value := strings.TrimSpace(strings.Join(normalizeIndentedLines(blockLines), "\n"))
+	if value == "" {
+		return "", false
+	}
+
+	return normalizeFrontmatterKey(value), true
+}
+
+func collectIndentedBlockLines(yamlContent string, kv []int) ([]string, bool) {
 	lineBreak := strings.IndexByte(yamlContent[kv[1]:], '\n')
 	if lineBreak < 0 {
-		return value
+		return nil, false
 	}
 
 	remaining := yamlContent[kv[1]+lineBreak+1:]
@@ -400,9 +483,13 @@ func parseYamlScalarValue(yamlContent string, kv []int) string {
 	}
 
 	if len(blockLines) == 0 {
-		return ""
+		return nil, false
 	}
 
+	return blockLines, true
+}
+
+func normalizeIndentedLines(blockLines []string) []string {
 	commonIndent := -1
 	for _, line := range blockLines {
 		if line == "" {
@@ -427,17 +514,7 @@ func parseYamlScalarValue(yamlContent string, kv []int) string {
 		}
 	}
 
-	var parsedValue string
-	if scalarStyle == '|' {
-		parsedValue = strings.Join(normalizedLines, "\n")
-	} else {
-		parsedValue = foldYamlLines(normalizedLines)
-	}
-
-	if keepTrailingNewline {
-		return parsedValue + "\n"
-	}
-	return parsedValue
+	return normalizedLines
 }
 
 func foldYamlLines(lines []string) string {

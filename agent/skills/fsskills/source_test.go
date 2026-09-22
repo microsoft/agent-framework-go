@@ -564,6 +564,182 @@ func TestFileSource_NoOptionalFields_DefaultZeroValues(t *testing.T) {
 	}
 }
 
+func TestFileSource_QuotedFrontmatterPropertyNames_AreParsed(t *testing.T) {
+	root := t.TempDir()
+	createSkillDirRaw(t, root, "quoted-root-keys", strings.Join([]string{
+		"---",
+		`"name": quoted-root-keys`,
+		`'description': "A quoted root property skill"`,
+		`"metadata":`,
+		"  author: contoso",
+		"---",
+		"Body.",
+	}, "\n"))
+	source := fsskills.NewSource(os.DirFS(root))
+
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
+	}
+	fm := loaded[0].Frontmatter
+	if fm.Name != "quoted-root-keys" || fm.Description != "A quoted root property skill" {
+		t.Fatalf("unexpected frontmatter: %#v", fm)
+	}
+	if fm.Metadata["author"] != "contoso" {
+		t.Fatalf("expected metadata author contoso, got %#v", fm.Metadata["author"])
+	}
+}
+
+func TestFileSource_AmbiguousFrontmatter_IsRejected(t *testing.T) {
+	tests := []struct {
+		name   string
+		fields []string
+	}{
+		{
+			name: "duplicate recognized field",
+			fields: []string{
+				"description: first",
+				"description: second",
+			},
+		},
+		{
+			name: "incorrectly cased recognized field",
+			fields: []string{
+				"Description: invalid casing",
+			},
+		},
+		{
+			name: "duplicate quoted recognized field",
+			fields: []string{
+				"allowed-tools: read",
+				`"allowed-tools": write`,
+			},
+		},
+		{
+			name: "duplicate metadata root",
+			fields: []string{
+				"metadata:",
+				"  author: first",
+				`"metadata":`,
+				"  author: second",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			lines := []string{"---", "name: ambiguous-skill"}
+			lines = append(lines, tt.fields...)
+			lines = append(lines, "---", "Body.")
+			createSkillDirRaw(t, root, "ambiguous-skill", strings.Join(lines, "\n"))
+
+			source := fsskills.NewSource(os.DirFS(root))
+			loaded, err := source.Skills(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(loaded) != 0 {
+				t.Fatalf("expected ambiguous frontmatter to be rejected, got %d skill(s)", len(loaded))
+			}
+		})
+	}
+}
+
+func TestFileSource_IndentedValueOnNextLine_IsParsed(t *testing.T) {
+	root := t.TempDir()
+	createSkillDirRaw(t, root, "indented-next-line", strings.Join([]string{
+		"---",
+		"name: indented-next-line",
+		"description:",
+		"  'Read files'",
+		"license: MIT",
+		"---",
+		"Body.",
+	}, "\n"))
+	source := fsskills.NewSource(os.DirFS(root))
+
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
+	}
+	fm := loaded[0].Frontmatter
+	if fm.Description != "Read files" || fm.License != "MIT" {
+		t.Fatalf("unexpected frontmatter: %#v", fm)
+	}
+}
+
+func TestFileSource_EmptyOptionalScalar_RemainsZeroValue(t *testing.T) {
+	root := t.TempDir()
+	createSkillDirRaw(t, root, "empty-optionals", strings.Join([]string{
+		"---",
+		"name: empty-optionals",
+		"description: Read files",
+		"license:   ",
+		"compatibility:\t",
+		"allowed-tools: ",
+		"---",
+		"Body.",
+	}, "\n"))
+	source := fsskills.NewSource(os.DirFS(root))
+
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
+	}
+	fm := loaded[0].Frontmatter
+	if fm.License != "" || fm.Compatibility != "" || fm.AllowedTools != "" {
+		t.Fatalf("expected zero-value optional fields, got %#v", fm)
+	}
+}
+
+func TestFileSource_DuplicateMetadata_KeepsFirstValue(t *testing.T) {
+	root := t.TempDir()
+	createSkillDirRaw(t, root, "duplicate-metadata", strings.Join([]string{
+		"---",
+		"name: duplicate-metadata",
+		"description: Read files",
+		"metadata:",
+		"  author: First",
+		"  Author: Second",
+		"  author: Third",
+		"  version: 1.0",
+		"---",
+		"Body.",
+	}, "\n"))
+	source := fsskills.NewSource(os.DirFS(root))
+
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
+	}
+	fm := loaded[0].Frontmatter
+	if len(fm.Metadata) != 2 {
+		t.Fatalf("expected 2 metadata entries, got %#v", fm.Metadata)
+	}
+	if fm.Metadata["author"] != "First" {
+		t.Fatalf("expected first metadata value to win, got %#v", fm.Metadata["author"])
+	}
+	if _, exists := fm.Metadata["Author"]; exists {
+		t.Fatalf("expected first metadata key spelling to be preserved, got %#v", fm.Metadata)
+	}
+	if fm.Metadata["version"] != "1.0" {
+		t.Fatalf("expected version metadata to be preserved, got %#v", fm.Metadata["version"])
+	}
+}
+
 func TestFileSource_ResourcesInSubdirectory_DiscoveredWithDefaultDepth(t *testing.T) {
 	root := t.TempDir()
 	createSkillDir(t, root, "sub-res-skill", "Subdirectory resources", "Body.")
