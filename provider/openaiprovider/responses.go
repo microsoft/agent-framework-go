@@ -442,6 +442,7 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 			if u, err := url.Parse(tl.ServerAddress); err == nil && (u.Scheme == "http" || u.Scheme == "https") {
 				variant.ServerURL = openai.String(tl.ServerAddress)
 			} else {
+				// ConnectorID is deprecated in the SDK, but connector_id is still supported on the wire.
 				variant.SetExtraFields(map[string]any{"connector_id": tl.ServerAddress})
 			}
 			if tl.ServerDescription != "" {
