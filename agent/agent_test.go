@@ -27,9 +27,11 @@ func TestFunctionInvocationMiddleware_Composition(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		short     bool
+		replace   bool
 		toolError error
 	}{
 		{name: "arguments and result replacement"},
+		{name: "function replacement", replace: true},
 		{name: "error propagation", toolError: toolFailure},
 		{name: "short circuit", short: true},
 	} {
@@ -40,10 +42,23 @@ func TestFunctionInvocationMiddleware_Composition(t *testing.T) {
 			},
 			) (string, error) {
 				order = append(order, "tool")
+				if tc.replace {
+					t.Fatal("original tool invoked after middleware replaced it")
+				}
 				if args.Value != "changed" {
 					t.Errorf("tool argument = %q, want changed", args.Value)
 				}
 				return args.Value, tc.toolError
+			})
+			replacement := functool.MustNew(functool.Config{Name: "lookup", Description: "Look up a value"}, func(_ context.Context, args struct {
+				Value string `json:"value"`
+			},
+			) (string, error) {
+				order = append(order, "replacement tool")
+				if args.Value != "changed" {
+					t.Errorf("replacement tool argument = %q, want changed", args.Value)
+				}
+				return "replacement " + args.Value, tc.toolError
 			})
 			first := agent.FunctionInvocationMiddleware(func(next func(context.Context, *agent.FunctionInvocationContext) (any, error), ctx context.Context, invocation *agent.FunctionInvocationContext) (any, error) {
 				order = append(order, "first before")
@@ -52,6 +67,9 @@ func TestFunctionInvocationMiddleware_Composition(t *testing.T) {
 				}
 				if tc.short {
 					return "cached", nil
+				}
+				if tc.replace {
+					invocation.Function = replacement
 				}
 				invocation.Arguments = `{"value":"changed"}`
 				result, err := next(ctx, invocation)
@@ -63,6 +81,9 @@ func TestFunctionInvocationMiddleware_Composition(t *testing.T) {
 			})
 			second := agent.FunctionInvocationMiddleware(func(next func(context.Context, *agent.FunctionInvocationContext) (any, error), ctx context.Context, invocation *agent.FunctionInvocationContext) (any, error) {
 				order = append(order, "second before")
+				if tc.replace && invocation.Function != replacement {
+					t.Errorf("middleware did not receive replaced function: %#v", invocation)
+				}
 				result, err := next(ctx, invocation)
 				order = append(order, "second after")
 				return result, err
@@ -108,15 +129,17 @@ func TestFunctionInvocationMiddleware_Composition(t *testing.T) {
 					t.Fatalf("results = %v, want one result with error %v", results, tc.toolError)
 				}
 				wantResult := "wrapped changed"
+				wantOrder := []string{"first before", "second before", "tool", "second after", "first after"}
+				if tc.replace {
+					wantResult = "wrapped replacement changed"
+					wantOrder = []string{"first before", "second before", "replacement tool", "second after", "first after"}
+				}
 				if tc.short {
 					wantResult = "cached"
+					wantOrder = []string{"first before"}
 				}
 				if tc.toolError == nil && results[0].Result != wantResult {
 					t.Errorf("result = %v, want %q", results[0].Result, wantResult)
-				}
-				wantOrder := []string{"first before", "second before", "tool", "second after", "first after"}
-				if tc.short {
-					wantOrder = []string{"first before"}
 				}
 				if !slices.Equal(order, wantOrder) {
 					t.Errorf("callback order = %v, want %v", order, wantOrder)

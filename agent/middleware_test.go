@@ -283,6 +283,66 @@ func TestProviderConfig_ManagesToolExecution_InsideProviderMiddleware(t *testing
 	}
 }
 
+func TestProviderConfig_ManagesToolExecution_FunctionReplacement(t *testing.T) {
+	var order []string
+	original := functool.MustNew(functool.Config{Name: "lookup"}, func(context.Context, struct{}) (string, error) {
+		order = append(order, "original")
+		t.Fatal("original tool invoked after middleware replaced it")
+		return "", nil
+	})
+	replacement := functool.MustNew(functool.Config{Name: "lookup"}, func(context.Context, struct{}) (string, error) {
+		order = append(order, "replacement")
+		return "replacement", nil
+	})
+	first := agent.FunctionInvocationMiddleware(func(next func(context.Context, *agent.FunctionInvocationContext) (any, error), ctx context.Context, invocation *agent.FunctionInvocationContext) (any, error) {
+		order = append(order, "first before")
+		if invocation.Function != original {
+			t.Errorf("middleware received %v, want original function", invocation.Function)
+		}
+		invocation.Function = replacement
+		result, err := next(ctx, invocation)
+		order = append(order, "first after")
+		if err != nil {
+			return nil, err
+		}
+		return "wrapped " + result.(string), nil
+	})
+	second := agent.FunctionInvocationMiddleware(func(next func(context.Context, *agent.FunctionInvocationContext) (any, error), ctx context.Context, invocation *agent.FunctionInvocationContext) (any, error) {
+		order = append(order, "second before")
+		if invocation.Function != replacement {
+			t.Errorf("middleware did not observe the replaced function: %v", invocation.Function)
+		}
+		result, err := next(ctx, invocation)
+		order = append(order, "second after")
+		return result, err
+	})
+	run := func(ctx context.Context, _ []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			tl, _ := agent.GetOption(options, agent.WithTool)
+			result, err := tl.(tool.FuncTool).Call(ctx, "{}")
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+			yield(&agent.ResponseUpdate{Contents: []message.Content{&message.TextContent{Text: result.(string)}}}, nil)
+		}
+	}
+	a := agent.New(agent.ProviderConfig{Run: run, ManagesToolExecution: true}, agent.Config{
+		Tools:               []tool.Tool{original},
+		FunctionMiddlewares: []agent.FunctionInvocationMiddleware{first, second},
+	})
+	response, err := a.RunText(t.Context(), "lookup").Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.String() != "wrapped replacement" {
+		t.Errorf("response = %q, want %q", response.String(), "wrapped replacement")
+	}
+	if !slices.Equal(order, []string{"first before", "second before", "replacement", "second after", "first after"}) {
+		t.Errorf("order = %v, want [first before second before replacement second after first after]", order)
+	}
+}
+
 func TestWithFuncCallID_PreservesContext(t *testing.T) {
 	type contextKey struct{}
 	parent, cancel := context.WithCancel(context.WithValue(t.Context(), contextKey{}, "value"))
