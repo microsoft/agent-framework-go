@@ -145,7 +145,7 @@ Each Go provider under `provider/` has the following starting points. Paths are 
 | `foundryprovider` | `dotnet/src/Microsoft.Agents.AI.Foundry/`, including its `Memory/` directory; also follow the OpenAI Responses adapter below for shared response conversion | `python/packages/foundry/agent_framework_foundry/` |
 | `geminiprovider` | <https://github.com/googleapis/dotnet-genai>: `Google.GenAI/GoogleGenAIChatClient.cs` and `Google.GenAI/GoogleGenAIExtensions.cs` | `python/packages/gemini/agent_framework_gemini/` |
 | `openaiprovider` | `dotnet/src/Microsoft.Agents.AI.OpenAI/`; MEAI adapters in <https://github.com/dotnet/extensions>: `src/Libraries/Microsoft.Extensions.AI.OpenAI/OpenAIChatClient.cs` and `src/Libraries/Microsoft.Extensions.AI.OpenAI/OpenAIResponsesChatClient.cs` | `python/packages/openai/agent_framework_openai/` |
-| `otelprovider` | `dotnet/src/Microsoft.Agents.AI/OpenTelemetryAgent.cs`; MEAI instrumentation in <https://github.com/dotnet/extensions>: `src/Libraries/Microsoft.Extensions.AI/ChatCompletion/OpenTelemetryChatClient.cs` | `python/packages/core/agent_framework/observability.py` and `python/packages/core/agent_framework/_telemetry.py` |
+| `otelprovider` | `dotnet/src/Microsoft.Agents.AI/OpenTelemetryAgent.cs`; MEAI instrumentation in <https://github.com/dotnet/extensions>: `src/Libraries/Microsoft.Extensions.AI/ChatCompletion/OpenTelemetryChatClient.cs` | `python/packages/core/agent_framework/observability.py` |
 
 The former `dotnet/src/Microsoft.Agents.AI.AGUI/` package now contains a migration note, not the current protocol implementation. Gemini's .NET MEAI adapter is maintained in Google's SDK rather than a dedicated Agent Framework provider package.
 
