@@ -13,6 +13,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/internal/messagetest"
+	"github.com/microsoft/agent-framework-go/internal/toolmiddleware"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
@@ -23,6 +24,111 @@ func expectedMessages(t *testing.T, expected ...*message.Message) func(context.C
 		if err := messagetest.MessagesEqual(messages, expected); err != nil {
 			t.Errorf("Messages not equal: %v", err)
 		}
+	}
+}
+
+func TestFunctionInvoking_InvocationIdentityAfterApproval(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		approved     bool
+		shortCircuit bool
+		additional   bool
+		wantTools    int
+		wantWrappers int
+	}{
+		{name: "approved", approved: true, wantTools: 1, wantWrappers: 1},
+		{name: "denied"},
+		{name: "approved short circuit", approved: true, shortCircuit: true, wantWrappers: 1},
+		{name: "additional tool approved", additional: true, approved: true, wantTools: 1, wantWrappers: 1},
+		{name: "additional tool denied", additional: true},
+		{name: "additional tool approved short circuit", additional: true, approved: true, shortCircuit: true, wantWrappers: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var observedIDs []string
+			var toolCalls int
+			testTool := tool.ApprovalRequiredFunc(functool.MustNew(functool.Config{Name: "lookup"}, func(ctx context.Context, _ struct{}) (string, error) {
+				toolCalls++
+				callID, ok := toolmiddleware.CallIDFromContext(ctx)
+				if !ok || callID != "call-1" {
+					t.Errorf("handler call ID = %q, %v; want call-1", callID, ok)
+				}
+				return "done", nil
+			}))
+			observer := agent.FunctionInvocationMiddleware(func(next func(context.Context, *agent.FunctionInvocationContext) (any, error), ctx context.Context, invocation *agent.FunctionInvocationContext) (any, error) {
+				observedIDs = append(observedIDs, invocation.CallID)
+				if tc.shortCircuit {
+					return "cached", nil
+				}
+				return next(ctx, invocation)
+			})
+			var providerResumed bool
+			runner := &agenttest.Runner{Responses: agenttest.NewResponseBuilder().
+				AddFunctionCall("call-1", "lookup", `{}`).
+				NewTurn(func(context.Context, []*message.Message, ...agent.Option) { providerResumed = true }).
+				AddText("done").Build()}
+			cfg := toolautocall.Config{}
+			tools := []tool.Tool{testTool}
+			if tc.additional {
+				cfg.AdditionalTools = tools
+				tools = nil
+			}
+			a := agent.New(agent.ProviderConfig{
+				Run: runner.Run, Middlewares: []agent.Middleware{toolautocall.New(cfg)},
+			}, agent.Config{Tools: tools, FunctionMiddlewares: []agent.FunctionInvocationMiddleware{observer}})
+			session := &agent.Session{}
+			var request *message.ToolApprovalRequestContent
+			for update, err := range a.RunText(t.Context(), "start", agent.WithSession(session)) {
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, content := range update.Contents {
+					if approval, ok := content.(*message.ToolApprovalRequestContent); ok {
+						request = approval
+					}
+				}
+			}
+			if request == nil || toolCalls != 0 || len(observedIDs) != 0 {
+				t.Fatalf("expected approval before execution; request=%v tool calls=%d wrapper calls=%d", request, toolCalls, len(observedIDs))
+			}
+			call := request.ToolCall.(*message.FunctionCallContent)
+			if call.CallID != "call-1" {
+				t.Fatalf("approval call ID = %q, want call-1", call.CallID)
+			}
+			data, err := json.Marshal(session)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var restored agent.Session
+			if err := json.Unmarshal(data, &restored); err != nil {
+				t.Fatal(err)
+			}
+			var resultIDs []string
+			for update, err := range a.RunMessage(t.Context(), message.New(request.CreateResponse(tc.approved, "")), agent.WithSession(&restored)) {
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, content := range update.Contents {
+					if result, ok := content.(*message.FunctionResultContent); ok {
+						resultIDs = append(resultIDs, result.CallID)
+						if tc.shortCircuit && result.Result != "cached" {
+							t.Errorf("short-circuit result = %v, want cached", result.Result)
+						}
+					}
+				}
+			}
+			if toolCalls != tc.wantTools || len(observedIDs) != tc.wantWrappers {
+				t.Fatalf("tool calls=%d wrapper calls=%d, want %d and %d", toolCalls, len(observedIDs), tc.wantTools, tc.wantWrappers)
+			}
+			if tc.approved && observedIDs[0] != call.CallID {
+				t.Errorf("resumed call ID = %q, want %q", observedIDs[0], call.CallID)
+			}
+			if !providerResumed {
+				t.Error("provider did not receive the result after approval handling")
+			}
+			if len(resultIDs) != 1 || resultIDs[0] != call.CallID {
+				t.Errorf("result IDs = %v, want [%s]", resultIDs, call.CallID)
+			}
+		})
 	}
 }
 

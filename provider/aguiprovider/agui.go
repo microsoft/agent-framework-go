@@ -387,6 +387,10 @@ type toolCallAccumulator struct {
 	// kept separate from lastChunkMessageID so interleaved text and reasoning
 	// chunks that omit MessageID do not inherit each other's message.
 	lastReasoningChunkMessageID string
+	// lastThinkingMessageID is generated on ThinkingTextMessageStartEvent and
+	// reused across its content events, since the THINKING_TEXT_MESSAGE_* events
+	// carry no message id.
+	lastThinkingMessageID string
 }
 
 func (a *toolCallAccumulator) onEvent(evt aguiEvents.Event) ([]*agent.ResponseUpdate, error) {
@@ -486,6 +490,27 @@ func (a *toolCallAccumulator) onEvent(evt aguiEvents.Event) ([]*agent.ResponseUp
 			CreatedAt: eventTime(evt),
 			Contents:  message.Contents{&message.TextReasoningContent{ProtectedData: e.EncryptedValue}},
 		}}, nil
+	case *aguiEvents.ThinkingTextMessageStartEvent:
+		// The THINKING_TEXT_MESSAGE_* bracket carries no message id, so generate
+		// one to correlate its content events.
+		a.lastThinkingMessageID = aguiEvents.GenerateMessageID()
+		return nil, nil
+	case *aguiEvents.ThinkingTextMessageContentEvent:
+		if e.Delta == "" {
+			return nil, nil
+		}
+		if a.lastThinkingMessageID == "" {
+			a.lastThinkingMessageID = aguiEvents.GenerateMessageID()
+		}
+		return []*agent.ResponseUpdate{{
+			Role:      message.RoleAssistant,
+			MessageID: a.lastThinkingMessageID,
+			CreatedAt: eventTime(evt),
+			Contents:  message.Contents{&message.TextReasoningContent{Text: e.Delta}},
+		}}, nil
+	case *aguiEvents.ThinkingTextMessageEndEvent:
+		a.lastThinkingMessageID = ""
+		return nil, nil
 	case *aguiEvents.ToolCallStartEvent:
 		a.pending[e.ToolCallID] = &pendingToolCall{Name: e.ToolCallName, MessageID: cmp.Or(deref(e.ParentMessageID), e.ToolCallID)}
 		return nil, nil

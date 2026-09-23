@@ -431,6 +431,46 @@ func TestAGUIAgentRun_MapsReasoningEvents(t *testing.T) {
 	}
 }
 
+// The THINKING_TEXT_MESSAGE_* bracket is the protocol's other reasoning
+// representation; its content must be surfaced as reasoning, like REASONING_*.
+func TestAGUIAgentRun_MapsThinkingTextEvents(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var input aguiTypes.RunAgentInput
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeSSE(t, w, aguiEvents.NewRunStartedEvent(input.ThreadID, input.RunID))
+		writeSSE(t, w, aguiEvents.NewThinkingTextMessageStartEvent())
+		writeSSE(t, w, aguiEvents.NewThinkingTextMessageContentEvent("let me "))
+		writeSSE(t, w, aguiEvents.NewThinkingTextMessageContentEvent("think"))
+		writeSSE(t, w, aguiEvents.NewThinkingTextMessageEndEvent())
+		writeSSE(t, w, aguiEvents.NewRunFinishedEvent(input.ThreadID, input.RunID))
+	}))
+	defer server.Close()
+
+	a := aguiprovider.NewAgent(newTestClient(server.URL), aguiprovider.AgentConfig{})
+	resp, err := a.Run(context.Background(), []*message.Message{message.NewText("hi")}).Collect()
+	if err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+
+	var text string
+	var reasoningCount int
+	for content := range resp.Contents() {
+		if rc, ok := content.(*message.TextReasoningContent); ok {
+			reasoningCount++
+			text += rc.Text
+		}
+	}
+	if reasoningCount == 0 {
+		t.Fatal("no reasoning content surfaced from THINKING_TEXT_MESSAGE events")
+	}
+	if text != "let me think" {
+		t.Errorf("reasoning text = %q, want %q", text, "let me think")
+	}
+}
+
 func TestAGUIAgentRun_InvokesTools_WhenFunctionCallsReturned(t *testing.T) {
 	var mu sync.Mutex
 	requestCount := 0

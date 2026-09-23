@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
@@ -19,6 +20,113 @@ import (
 
 type stubTool struct {
 	name string
+}
+
+func TestFunctionInvocationMiddleware_Composition(t *testing.T) {
+	toolFailure := errors.New("tool failed")
+	for _, tc := range []struct {
+		name      string
+		short     bool
+		toolError error
+	}{
+		{name: "arguments and result replacement"},
+		{name: "error propagation", toolError: toolFailure},
+		{name: "short circuit", short: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var order []string
+			fn := functool.MustNew(functool.Config{Name: "lookup", Description: "Look up a value"}, func(_ context.Context, args struct {
+				Value string `json:"value"`
+			},
+			) (string, error) {
+				order = append(order, "tool")
+				if args.Value != "changed" {
+					t.Errorf("tool argument = %q, want changed", args.Value)
+				}
+				return args.Value, tc.toolError
+			})
+			first := agent.FunctionInvocationMiddleware(func(next func(context.Context, *agent.FunctionInvocationContext) (any, error), ctx context.Context, invocation *agent.FunctionInvocationContext) (any, error) {
+				order = append(order, "first before")
+				if invocation.Function != fn || invocation.Arguments != `{"value":"original"}` || invocation.CallID != "" {
+					t.Errorf("unexpected direct invocation: %#v", invocation)
+				}
+				if tc.short {
+					return "cached", nil
+				}
+				invocation.Arguments = `{"value":"changed"}`
+				result, err := next(ctx, invocation)
+				order = append(order, "first after")
+				if err != nil {
+					return nil, err
+				}
+				return "wrapped " + result.(string), nil
+			})
+			second := agent.FunctionInvocationMiddleware(func(next func(context.Context, *agent.FunctionInvocationContext) (any, error), ctx context.Context, invocation *agent.FunctionInvocationContext) (any, error) {
+				order = append(order, "second before")
+				result, err := next(ctx, invocation)
+				order = append(order, "second after")
+				return result, err
+			})
+			other := stubTool{name: "hosted"}
+			options := []agent.Option{agent.WithTool(fn), agent.WithTool(other), agent.WithTool(nil)}
+			provider := agent.NewContextProvider(agent.ContextProviderConfig{SourceID: "tools", Provide: func(context.Context, agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+				return nil, options, nil
+			}})
+			checkTools := func(_ context.Context, _ []*message.Message, opts ...agent.Option) {
+				tools := slices.Collect(agent.AllOptions(opts, agent.WithTool))
+				if len(tools) != 2 || tools[0] != fn || tools[1] != other {
+					t.Fatalf("provider tools changed: %v", tools)
+				}
+			}
+			var runner agenttest.Runner
+			middlewares := []agent.FunctionInvocationMiddleware{first, nil, second}
+			a := agent.New(agent.ProviderConfig{
+				Run: runner.Run, Middlewares: []agent.Middleware{toolautocall.New(toolautocall.Config{})},
+			}, agent.Config{
+				ContextProviders:    []agent.ContextProvider{provider},
+				FunctionMiddlewares: middlewares,
+			})
+			// Registration owns a copy; later changes to the caller's slice must not affect it.
+			middlewares[0] = nil
+			for range 2 {
+				order = nil
+				runner = agenttest.Runner{Responses: agenttest.NewResponseBuilder(checkTools).
+					AddFunctionCall("", "lookup", `{"value":"original"}`).
+					NewTurn(checkTools).AddText("done").Build()}
+				var results []*message.FunctionResultContent
+				for update, err := range a.RunText(t.Context(), "start") {
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, content := range update.Contents {
+						if result, ok := content.(*message.FunctionResultContent); ok {
+							results = append(results, result)
+						}
+					}
+				}
+				if len(results) != 1 || !errors.Is(results[0].Error, tc.toolError) {
+					t.Fatalf("results = %v, want one result with error %v", results, tc.toolError)
+				}
+				wantResult := "wrapped changed"
+				if tc.short {
+					wantResult = "cached"
+				}
+				if tc.toolError == nil && results[0].Result != wantResult {
+					t.Errorf("result = %v, want %q", results[0].Result, wantResult)
+				}
+				wantOrder := []string{"first before", "second before", "tool", "second after", "first after"}
+				if tc.short {
+					wantOrder = []string{"first before"}
+				}
+				if !slices.Equal(order, wantOrder) {
+					t.Errorf("callback order = %v, want %v", order, wantOrder)
+				}
+			}
+			if original, _ := agent.GetOption(options[:1], agent.WithTool); original != fn {
+				t.Error("middleware mutated the context provider's options")
+			}
+		})
+	}
 }
 
 func (t stubTool) Name() string {

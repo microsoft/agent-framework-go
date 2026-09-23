@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 
 	"github.com/google/uuid"
+	"github.com/microsoft/agent-framework-go/internal/toolmiddleware"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 )
@@ -31,6 +32,13 @@ type ProviderConfig struct {
 
 	// Middlewares wrap Run after agent history and context providers.
 	Middlewares []Middleware
+
+	// ManagesToolExecution indicates that Run invokes function tools supplied through
+	// [WithTool], rather than only returning function call requests. When true,
+	// [New] applies [Config.FunctionMiddlewares] to those tools immediately before
+	// Run, after provider middleware. Run must use the tools in its options, not
+	// retained originals. The provider remains responsible for execution and approvals.
+	ManagesToolExecution bool
 
 	// Format creates a provider response format for a structured output value.
 	Format func(v any) (ResponseFormat, error)
@@ -94,6 +102,11 @@ type Config struct {
 	// Middlewares wrap the agent lifecycle before history and context providers.
 	Middlewares []Middleware
 
+	// FunctionMiddlewares intercept individual function calls in registration order,
+	// with the first outermost. They apply to tools supplied by context providers
+	// and additional tools configured on automatic tool execution, as well as Tools.
+	FunctionMiddlewares []FunctionInvocationMiddleware
+
 	// MessageInjector configures mid-run message injection. Call its
 	// EnqueueMessages method to queue messages. Nil disables message injection.
 	MessageInjector *MessageInjector
@@ -116,6 +129,12 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 	}
 
 	cfg.RunOptions = slices.Clone(cfg.RunOptions)
+	functionMiddlewares := slices.DeleteFunc(slices.Clone(cfg.FunctionMiddlewares), func(mf FunctionInvocationMiddleware) bool { return mf == nil })
+	if len(functionMiddlewares) > 0 {
+		cfg.RunOptions = append(cfg.RunOptions, toolmiddleware.Wrapper(func(fn tool.FuncTool) tool.FuncTool {
+			return &functionInvocationTool{FuncTool: fn, middlewares: functionMiddlewares}
+		}))
+	}
 	for _, tool := range cfg.Tools {
 		if tool != nil {
 			cfg.RunOptions = append(cfg.RunOptions, WithTool(tool))
@@ -164,10 +183,14 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 		providerDoesNotManageHistory: prov.ServiceDoesNotManageHistory,
 		contextProviders:             contextProviders,
 	}
+	providerRun := prov.Run
+	if prov.ManagesToolExecution {
+		providerRun = wrapFuncTools(providerRun)
+	}
 	if len(providerMiddlewares) == 0 {
-		a.providerPipeline = prov.Run
+		a.providerPipeline = providerRun
 	} else {
-		a.providerPipeline = compileRunChain(prov.Run, providerMiddlewares)
+		a.providerPipeline = compileRunChain(providerRun, providerMiddlewares)
 	}
 	a.runPipeline = compileRunChain(a.invoke, agentMiddlewares)
 	return a

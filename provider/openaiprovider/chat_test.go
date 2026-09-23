@@ -27,6 +27,79 @@ import (
 	"github.com/openai/openai-go/v3/option"
 )
 
+func TestChatCompletionsAgent_FunctionInvocationMiddleware(t *testing.T) {
+	for _, source := range []string{"configured", "context provider", "additional"} {
+		for _, block := range []bool{false, true} {
+			name := source + "/allow"
+			if block {
+				name = source + "/block"
+			}
+			t.Run(name, func(t *testing.T) {
+				var requests atomic.Int32
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					if requests.Add(1)%2 == 1 {
+						_, _ = io.WriteString(w, `{"id":"chatcmpl-tools","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`)
+					} else {
+						_, _ = io.WriteString(w, `{"id":"chatcmpl-done","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}]}`)
+					}
+				}))
+				t.Cleanup(server.Close)
+				var toolCalls, middlewareCalls int
+				fn := functool.MustNew(functool.Config{Name: "lookup", Description: "Look up a value"}, func(context.Context, struct{}) (string, error) {
+					toolCalls++
+					return "found", nil
+				})
+				middleware := agent.FunctionInvocationMiddleware(func(next func(context.Context, *agent.FunctionInvocationContext) (any, error), ctx context.Context, invocation *agent.FunctionInvocationContext) (any, error) {
+					middlewareCalls++
+					if invocation.Function != fn || invocation.CallID != "call-1" {
+						t.Errorf("unexpected invocation: %#v", invocation)
+					}
+					if block {
+						return "blocked", nil
+					}
+					return next(ctx, invocation)
+				})
+				cfg := agent.Config{FunctionMiddlewares: []agent.FunctionInvocationMiddleware{middleware}}
+				autoCall := &toolautocall.Config{}
+				switch source {
+				case "configured":
+					cfg.Tools = []tool.Tool{fn}
+				case "additional":
+					autoCall.AdditionalTools = []tool.Tool{fn}
+				case "context provider":
+					cfg.ContextProviders = []agent.ContextProvider{agent.NewContextProvider(agent.ContextProviderConfig{
+						SourceID: "tools",
+						Provide: func(context.Context, agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+							return nil, []agent.Option{agent.WithTool(fn)}, nil
+						},
+					})}
+				}
+				a := openaiprovider.NewChatCompletionsAgent(openai.NewClient(option.WithAPIKey("test"), option.WithBaseURL(server.URL)), openaiprovider.AgentConfig{
+					Config:       cfg,
+					Model:        "test-model",
+					ToolAutoCall: autoCall,
+				})
+				for range 2 {
+					if _, err := a.RunText(t.Context(), "lookup").Collect(); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if middlewareCalls != 2 {
+					t.Errorf("middleware calls = %d, want 2", middlewareCalls)
+				}
+				wantToolCalls := 2
+				if block {
+					wantToolCalls = 0
+				}
+				if toolCalls != wantToolCalls {
+					t.Errorf("tool calls = %d, want %d", toolCalls, wantToolCalls)
+				}
+			})
+		}
+	}
+}
+
 func bodyEqual(t *testing.T, got string, want string) {
 	t.Helper()
 	var gotObj any

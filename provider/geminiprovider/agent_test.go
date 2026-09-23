@@ -2568,6 +2568,48 @@ func TestFinishReason_Streaming(t *testing.T) {
 	}
 }
 
+// On the Developer API, combining a function tool with a server-side (native)
+// tool must set toolConfig.includeServerSideToolInvocations so Gemini echoes its
+// server-side tool interactions. It must not be set when there are no function
+// declarations. Matches the Python client.
+func TestIncludeServerSideToolInvocations(t *testing.T) {
+	weatherTool := functool.MustNew(functool.Config{
+		Name:        "get_weather",
+		Description: "Get the weather for a city.",
+	}, func(_ context.Context, args struct{ City string }) (string, error) {
+		return "sunny", nil
+	})
+
+	requestFlag := func(t *testing.T, opts ...agent.Option) any {
+		t.Helper()
+		bodyCh := make(chan []byte, 1)
+		server := httptest.NewServer(captureAndRespond(t, bodyCh, "application/json", minimalTextResponse("ok")))
+		defer server.Close()
+		if _, err := newTestClient(t, server).RunText(t.Context(), "hi", opts...).Collect(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var req map[string]any
+		if err := json.Unmarshal(<-bodyCh, &req); err != nil {
+			t.Fatalf("unmarshal request body: %v", err)
+		}
+		flag, _ := nestedKey(req, "toolConfig", "includeServerSideToolInvocations")
+		return flag
+	}
+
+	// Function tool + native tool -> flag set.
+	if flag := requestFlag(t, agent.WithTool(weatherTool), agent.WithTool(&hostedtool.WebSearch{})); flag != true {
+		t.Errorf("includeServerSideToolInvocations = %v, want true", flag)
+	}
+	// Native tool only (no function declarations) -> flag absent.
+	if flag := requestFlag(t, agent.WithTool(&hostedtool.WebSearch{})); flag != nil {
+		t.Errorf("includeServerSideToolInvocations = %v, want absent for native-only", flag)
+	}
+	// Function tool only -> flag absent.
+	if flag := requestFlag(t, agent.WithTool(weatherTool)); flag != nil {
+		t.Errorf("includeServerSideToolInvocations = %v, want absent for function-only", flag)
+	}
+}
+
 // TestHostedTools_MappedToGenaiTools verifies that hosted tools attached via
 // agent.WithTool are mapped onto their native genai.Tool entries in the outgoing
 // request. Before this mapping, non-FuncTool options were silently dropped and

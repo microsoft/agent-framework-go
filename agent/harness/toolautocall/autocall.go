@@ -20,6 +20,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/internal/otelx"
 	"github.com/microsoft/agent-framework-go/internal/slogx"
+	"github.com/microsoft/agent-framework-go/internal/toolmiddleware"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 
@@ -64,6 +65,7 @@ type Config struct {
 	// provider requests. Request tools supplied through agent options take
 	// precedence; this collection is consulted afterward, which is useful when the
 	// provider is already configured with tool declarations out of band.
+	// Function invocation middleware registered before this middleware also wraps these tools.
 	AdditionalTools []tool.Tool
 
 	// IncludeDetailedErrors controls whether tool error details are included in
@@ -215,7 +217,7 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 			}
 			messagesCloned = messagesCloned || changed
 		}
-		tools, _ := f.createToolsMap(agent.AllOptions(opts, agent.WithTool))
+		tools, _ := f.createToolsMap(opts)
 
 		// This is a synthetic ID since we're generating the tool messages instead of getting them from
 		// the underlying provider. When emitting the streamed chunks, it's perfectly valid for us to
@@ -279,7 +281,7 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 				f.logger.Debug(ctx, "reached maximum iteration count; stopping function invocation loop", "maximumIterationsPerRequest", f.maximumIterationsPerRequest)
 				opts = prepareOptionsForLastIteration(opts)
 			}
-			tools, requiresApproval := f.createToolsMap(agent.AllOptions(opts, agent.WithTool))
+			tools, requiresApproval := f.createToolsMap(opts)
 
 			// Reset slice without reallocating.
 			updates = updates[:0]
@@ -619,8 +621,16 @@ func (f *autocall) shouldTerminateLoopBasedOnHandleableFunctions(ctx context.Con
 	return false
 }
 
-func (f *autocall) createToolsMap(tools iter.Seq[tool.Tool]) (mtools map[string]tool.SchemaTool, anyRequiredApproval bool) {
+func (f *autocall) createToolsMap(opts []agent.Option) (mtools map[string]tool.SchemaTool, anyRequiredApproval bool) {
 	fn := func(t tool.Tool) {
+		if function, ok := t.(tool.FuncTool); ok {
+			for _, opt := range opts {
+				if wrap, ok := opt.(toolmiddleware.Wrapper); ok {
+					function = wrap(function)
+				}
+			}
+			t = function
+		}
 		if !anyRequiredApproval {
 			if approval, ok := t.(tool.ApprovalRequiredTool); ok && approval.ApprovalRequired() {
 				anyRequiredApproval = true
@@ -638,7 +648,7 @@ func (f *autocall) createToolsMap(tools iter.Seq[tool.Tool]) (mtools map[string]
 		}
 		mtools[declaration.Name()] = declaration
 	}
-	for t := range tools {
+	for t := range agent.AllOptions(opts, agent.WithTool) {
 		fn(t)
 	}
 	for _, t := range f.additionalTools {
@@ -1154,6 +1164,7 @@ func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]too
 	}
 	f.logger.Debug(ctx, "calling function", "funcName", funcCall.Name, slogx.SensitiveData("arguments", funcCall.Arguments))
 	start := time.Now()
+	ctx = agent.WithFuncCallID(ctx, funcCall.CallID)
 	ctx, span := startToolSpan(ctx, funcCall, declaration)
 	if span != nil {
 		defer span.End()

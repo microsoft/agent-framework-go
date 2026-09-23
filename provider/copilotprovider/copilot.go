@@ -63,8 +63,9 @@ func NewAgent(cclient *copilot.Client, config AgentConfig) *agent.Agent {
 		cfg:    config,
 	}
 	return agent.New(agent.ProviderConfig{
-		ProviderName: "copilot",
-		Run:          p.run,
+		ProviderName:         "copilot",
+		Run:                  p.run,
+		ManagesToolExecution: true,
 	}, config.Config)
 }
 
@@ -499,6 +500,7 @@ func toCopilotTool(funcTool tool.FuncTool) (copilot.Tool, error) {
 			if ctx == nil {
 				ctx = context.Background()
 			}
+			ctx = agent.WithFuncCallID(ctx, invocation.ToolCallID)
 			result, err := funcTool.Call(ctx, arguments)
 			if err != nil {
 				return copilot.ToolResult{}, err
