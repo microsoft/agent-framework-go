@@ -159,11 +159,16 @@ func projectOpenAIBaseURL(projectEndpoint string) string {
 	return strings.TrimRight(projectEndpoint, "/") + "/openai/v1/"
 }
 
+// removeAzureOpenAIPrefix removes the Azure path prefix after the configured
+// base route, or a root-level prefix when applied before the base route.
 func removeAzureOpenAIPrefix(path, basePath string) string {
 	if relativePath, ok := strings.CutPrefix(path, basePath+"/openai/"); ok {
 		return basePath + "/" + relativePath
 	}
-	return strings.TrimPrefix(path, "/openai")
+	if relativePath, ok := strings.CutPrefix(path, "/openai/"); ok {
+		return "/" + relativePath
+	}
+	return path
 }
 
 func serverAgentEndpoint(projectEndpoint string, agentName string) string {
