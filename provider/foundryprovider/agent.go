@@ -122,7 +122,9 @@ func NewAgent(endpoint string, credential azcore.TokenCredential, target AgentTa
 			// contains the complete Foundry route. Update RawPath as well so escaped
 			// server agent names remain encoded.
 			req.URL.Path = removeAzureOpenAIPrefix(req.URL.Path, basePath)
-			req.URL.RawPath = removeAzureOpenAIPrefix(req.URL.RawPath, baseRawPath)
+			if req.URL.RawPath != "" {
+				req.URL.RawPath = removeAzureOpenAIPrefix(req.URL.RawPath, baseRawPath)
+			}
 			return next(req)
 		}),
 		// Use the Foundry audience while retaining the SDK's token refresh and
@@ -160,10 +162,16 @@ func projectOpenAIBaseURL(projectEndpoint string) string {
 }
 
 // removeAzureOpenAIPrefix removes the Azure path prefix after the configured
-// base route, or a root-level prefix when applied before the base route.
+// base route, or a leading root-level prefix when the path has no base route.
 func removeAzureOpenAIPrefix(path, basePath string) string {
+	if basePath != "" && path == basePath+"/openai" {
+		return basePath
+	}
 	if relativePath, ok := strings.CutPrefix(path, basePath+"/openai/"); ok {
 		return basePath + "/" + relativePath
+	}
+	if path == "/openai" {
+		return "/"
 	}
 	if relativePath, ok := strings.CutPrefix(path, "/openai/"); ok {
 		return "/" + relativePath
