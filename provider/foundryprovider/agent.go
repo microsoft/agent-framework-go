@@ -102,6 +102,9 @@ func NewAgent(endpoint string, credential azcore.TokenCredential, target AgentTa
 		panic(fmt.Sprintf("unsupported Foundry agent target %T", target))
 	}
 
+	parsedBaseURL, _ := url.Parse(baseURL)
+	basePath := strings.TrimRight(parsedBaseURL.Path, "/")
+	baseRawPath := strings.TrimRight(parsedBaseURL.EscapedPath(), "/")
 	openAIOptions := make([]option.RequestOption, 0, len(config.OpenAIOptions)+len(targetOptions)+6)
 	openAIOptions = append(openAIOptions, config.OpenAIOptions...)
 	openAIOptions = append(openAIOptions,
@@ -116,7 +119,9 @@ func NewAgent(endpoint string, credential azcore.TokenCredential, target AgentTa
 			// contains the complete Foundry route. Update RawPath as well so escaped
 			// server agent names remain encoded.
 			req.URL.Path = strings.TrimPrefix(req.URL.Path, "/openai")
+			req.URL.Path = strings.Replace(req.URL.Path, basePath+"/openai/", basePath+"/", 1)
 			req.URL.RawPath = strings.TrimPrefix(req.URL.RawPath, "/openai")
+			req.URL.RawPath = strings.Replace(req.URL.RawPath, baseRawPath+"/openai/", baseRawPath+"/", 1)
 			return next(req)
 		}),
 		// Use the Foundry audience while retaining the SDK's token refresh and
