@@ -422,13 +422,39 @@ func parseYamlScalarValue(yamlContent string, kv []int) string {
 		return value
 	}
 
-	scalarStyle := value[0]
-	keepTrailingNewline := len(value) > 1 && value[1] == '+'
 	blockLines, ok := collectIndentedBlockLines(yamlContent, kv)
 	if !ok {
 		return ""
 	}
 
+	return foldYamlBlockScalar(value, blockLines)
+}
+
+func parseYamlIndentedValue(yamlContent string, kv []int) (string, bool) {
+	blockLines, ok := collectIndentedBlockLines(yamlContent, kv)
+	if !ok {
+		return "", false
+	}
+
+	if len(blockLines) > 0 {
+		if indicator := strings.TrimSpace(blockLines[0]); indicator != "" && (indicator[0] == '|' || indicator[0] == '>') {
+			return foldYamlBlockScalar(indicator, blockLines[1:]), true
+		}
+	}
+
+	value := strings.TrimSpace(strings.Join(normalizeIndentedLines(blockLines), "\n"))
+	if value == "" {
+		return "", false
+	}
+
+	return normalizeFrontmatterKey(value), true
+}
+
+// foldYamlBlockScalar folds blockLines according to the YAML block scalar
+// indicator (e.g. "|", "|-", "|+", ">", ">-", ">+") given in indicator.
+func foldYamlBlockScalar(indicator string, blockLines []string) string {
+	scalarStyle := indicator[0]
+	keepTrailingNewline := len(indicator) > 1 && indicator[1] == '+'
 	normalizedLines := normalizeIndentedLines(blockLines)
 
 	var parsedValue string
@@ -442,20 +468,6 @@ func parseYamlScalarValue(yamlContent string, kv []int) string {
 		return parsedValue + "\n"
 	}
 	return parsedValue
-}
-
-func parseYamlIndentedValue(yamlContent string, kv []int) (string, bool) {
-	blockLines, ok := collectIndentedBlockLines(yamlContent, kv)
-	if !ok {
-		return "", false
-	}
-
-	value := strings.TrimSpace(strings.Join(normalizeIndentedLines(blockLines), "\n"))
-	if value == "" {
-		return "", false
-	}
-
-	return normalizeFrontmatterKey(value), true
 }
 
 func collectIndentedBlockLines(yamlContent string, kv []int) ([]string, bool) {

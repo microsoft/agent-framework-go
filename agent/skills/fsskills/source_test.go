@@ -675,6 +675,82 @@ func TestFileSource_IndentedValueOnNextLine_IsParsed(t *testing.T) {
 	}
 }
 
+func TestFileSource_IndentedBlockScalarOnNextLine_IsFolded(t *testing.T) {
+	tests := []struct {
+		name     string
+		newline  string
+		fields   []string
+		expected string
+	}{
+		{
+			name:    "folded scalar LF",
+			newline: "\n",
+			fields: []string{
+				"description:",
+				"  >-",
+				"  Read",
+				"  files",
+			},
+			expected: "Read files",
+		},
+		{
+			name:    "literal scalar LF",
+			newline: "\n",
+			fields: []string{
+				"description:",
+				"  |-",
+				"  Read",
+				"  files",
+			},
+			expected: "Read\nfiles",
+		},
+		{
+			name:    "folded scalar CRLF",
+			newline: "\r\n",
+			fields: []string{
+				"description:",
+				"  >-",
+				"  Read",
+				"  files",
+			},
+			expected: "Read files",
+		},
+		{
+			name:    "literal scalar CRLF",
+			newline: "\r\n",
+			fields: []string{
+				"description:",
+				"  |-",
+				"  Read",
+				"  files",
+			},
+			expected: "Read\nfiles",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			skillName := "indented-block-scalar"
+			lines := append([]string{"---", "name: " + skillName}, tt.fields...)
+			lines = append(lines, "---", "Body.")
+			createSkillDirRaw(t, root, skillName, strings.Join(lines, tt.newline))
+
+			source := fsskills.NewSource(os.DirFS(root))
+			loaded, err := source.Skills(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(loaded) != 1 {
+				t.Fatalf("expected 1 skill, got %d", len(loaded))
+			}
+			if loaded[0].Frontmatter.Description != tt.expected {
+				t.Fatalf("unexpected description: %q", loaded[0].Frontmatter.Description)
+			}
+		})
+	}
+}
+
 func TestFileSource_EmptyOptionalScalar_RemainsZeroValue(t *testing.T) {
 	root := t.TempDir()
 	createSkillDirRaw(t, root, "empty-optionals", strings.Join([]string{
