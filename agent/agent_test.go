@@ -152,6 +152,63 @@ func TestFunctionInvocationMiddleware_Composition(t *testing.T) {
 	}
 }
 
+func TestFunctionInvocationMiddleware_RejectsNilContinuationBeforeInnerMiddleware(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		nilInvoke  bool
+		wantErrMsg string
+	}{
+		{name: "nil invocation", nilInvoke: true, wantErrMsg: "agent: function invocation middleware called next with nil invocation"},
+		{name: "nil function", wantErrMsg: "agent: function invocation middleware called next with nil function"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fn := functool.MustNew(functool.Config{Name: "lookup"}, func(context.Context, struct{}) (string, error) {
+				t.Fatal("original tool invoked despite invalid continuation")
+				return "", nil
+			})
+			innerCalled := false
+			outer := agent.FunctionInvocationMiddleware(func(next func(context.Context, *agent.FunctionInvocationContext) (any, error), ctx context.Context, invocation *agent.FunctionInvocationContext) (any, error) {
+				if tc.nilInvoke {
+					return next(ctx, nil)
+				}
+				invocation.Function = nil
+				return next(ctx, invocation)
+			})
+			inner := agent.FunctionInvocationMiddleware(func(next func(context.Context, *agent.FunctionInvocationContext) (any, error), ctx context.Context, invocation *agent.FunctionInvocationContext) (any, error) {
+				innerCalled = true
+				return next(ctx, invocation)
+			})
+			var runner agenttest.Runner
+			a := agent.New(agent.ProviderConfig{
+				Run: runner.Run, Middlewares: []agent.Middleware{toolautocall.New(toolautocall.Config{})},
+			}, agent.Config{
+				RunOptions:          []agent.Option{agent.WithTool(fn)},
+				FunctionMiddlewares: []agent.FunctionInvocationMiddleware{outer, inner},
+			})
+			runner = agenttest.Runner{Responses: agenttest.NewResponseBuilder(nil).
+				AddFunctionCall("", "lookup", `{}`).
+				NewTurn(nil).AddText("done").Build()}
+			var results []*message.FunctionResultContent
+			for update, err := range a.RunText(t.Context(), "start") {
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, content := range update.Contents {
+					if result, ok := content.(*message.FunctionResultContent); ok {
+						results = append(results, result)
+					}
+				}
+			}
+			if innerCalled {
+				t.Error("inner middleware was invoked despite invalid continuation from outer middleware")
+			}
+			if len(results) != 1 || results[0].Error == nil || results[0].Error.Error() != tc.wantErrMsg {
+				t.Fatalf("results = %v, want one result with error %q", results, tc.wantErrMsg)
+			}
+		})
+	}
+}
+
 func (t stubTool) Name() string {
 	return t.name
 }
