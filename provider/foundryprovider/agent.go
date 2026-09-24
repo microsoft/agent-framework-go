@@ -102,7 +102,10 @@ func NewAgent(endpoint string, credential azcore.TokenCredential, target AgentTa
 		panic(fmt.Sprintf("unsupported Foundry agent target %T", target))
 	}
 
-	parsedBaseURL, _ := url.Parse(baseURL)
+	parsedBaseURL, err := url.Parse(baseURL)
+	if err != nil {
+		panic(fmt.Sprintf("invalid base URL %q: %v", baseURL, err))
+	}
 	basePath := strings.TrimRight(parsedBaseURL.Path, "/")
 	baseRawPath := strings.TrimRight(parsedBaseURL.EscapedPath(), "/")
 	openAIOptions := make([]option.RequestOption, 0, len(config.OpenAIOptions)+len(targetOptions)+6)
@@ -118,10 +121,8 @@ func NewAgent(endpoint string, credential azcore.TokenCredential, target AgentTa
 			// Undo WithEndpoint's Azure OpenAI path prefix because baseURL already
 			// contains the complete Foundry route. Update RawPath as well so escaped
 			// server agent names remain encoded.
-			req.URL.Path = strings.TrimPrefix(req.URL.Path, "/openai")
-			req.URL.Path = strings.Replace(req.URL.Path, basePath+"/openai/", basePath+"/", 1)
-			req.URL.RawPath = strings.TrimPrefix(req.URL.RawPath, "/openai")
-			req.URL.RawPath = strings.Replace(req.URL.RawPath, baseRawPath+"/openai/", baseRawPath+"/", 1)
+			req.URL.Path = removeAzureOpenAIPrefix(req.URL.Path, basePath)
+			req.URL.RawPath = removeAzureOpenAIPrefix(req.URL.RawPath, baseRawPath)
 			return next(req)
 		}),
 		// Use the Foundry audience while retaining the SDK's token refresh and
@@ -156,6 +157,13 @@ func serverAgentOpenAIBaseURL(agentEndpoint string) string {
 
 func projectOpenAIBaseURL(projectEndpoint string) string {
 	return strings.TrimRight(projectEndpoint, "/") + "/openai/v1/"
+}
+
+func removeAzureOpenAIPrefix(path, basePath string) string {
+	if relativePath, ok := strings.CutPrefix(path, basePath+"/openai/"); ok {
+		return basePath + "/" + relativePath
+	}
+	return strings.TrimPrefix(path, "/openai")
 }
 
 func serverAgentEndpoint(projectEndpoint string, agentName string) string {
