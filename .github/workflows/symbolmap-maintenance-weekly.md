@@ -4,7 +4,7 @@ description: Audit all assessed .NET-to-Go mappings for recent and preexisting s
 intent: Keep recorded .NET-to-Go mappings accurate as the Go SDK evolves, without maintaining the .NET inventory
 tracker-id: symbolmap-maintenance-weekly
 strict: true
-model: "gpt-6-sol"
+model: "gpt-5.5"
 on:
    schedule: weekly on tuesday
    workflow_dispatch:
