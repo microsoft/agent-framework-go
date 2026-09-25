@@ -71,6 +71,8 @@ github.com/keybase/go-keychain v0.0.1 h1:way+bWYa6lDppZoZcgMbYsvC7GxljxrskdNInRt
 github.com/keybase/go-keychain v0.0.1/go.mod h1:PdEILRW3i9D8JcdM+FmY6RwkHGnhHxXwkPPMeUgOK1k=
 github.com/kylelemons/godebug v1.1.0 h1:RPNrshWIDI6G2gRW9EHilWtl7Z6Sb1BR0xunSBf0SNc=
 github.com/kylelemons/godebug v1.1.0/go.mod h1:9/0rRGxNHcop5bhtWyNeEfOS8JIWk580+fNqagV/RAw=
+github.com/microsoft/go-winmd v0.0.0-20260922124842-16e7d31aeb8a h1:+1lDWJDOTXuUy11x61+xZEz5VKZDjSx8kJjElsMyc+g=
+github.com/microsoft/go-winmd v0.0.0-20260922124842-16e7d31aeb8a/go.mod h1:DwZXw1EdT93dmgUakSlwABXeY8Fz9JypqXL5vyCJOJA=
 github.com/modelcontextprotocol/go-sdk v1.8.0 h1:KIvahhYqwtbeniWVPs3TcXEA7b8jEtwfBpOTAI+Urx4=
 github.com/modelcontextprotocol/go-sdk v1.8.0/go.mod h1:dL7u98E/zjJTGzEq+j30jQ8K2k1mb6LeAH4inEcSGts=
 github.com/openai/openai-go/v3 v3.64.2 h1:3CxN8S9pYSOrrKd+Aj+NALoJJBUEoLR6+djTGhJcg7w=

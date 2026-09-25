@@ -12,6 +12,7 @@ require (
 	github.com/gofrs/flock v0.13.1
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
+	github.com/microsoft/go-winmd v0.0.0-20260922124842-16e7d31aeb8a
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/openai/openai-go/v3 v3.64.2
 	go.opentelemetry.io/otel v1.46.0
@@ -21,6 +22,7 @@ require (
 	go.opentelemetry.io/otel/sdk/metric v1.46.0
 	go.opentelemetry.io/otel/trace v1.46.0
 	golang.org/x/sync v0.23.0
+	golang.org/x/tools v0.48.0
 	google.golang.org/genai v1.71.0
 	google.golang.org/grpc v1.84.0
 )
