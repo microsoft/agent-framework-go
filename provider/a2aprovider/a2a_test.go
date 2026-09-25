@@ -1843,8 +1843,8 @@ func TestRunStreamingWithTaskStatusUpdateEvent(t *testing.T) {
 	}
 
 	update := updates[0]
-	if update.Role != message.RoleAssistant {
-		t.Errorf("update.Role = %q, want %q", update.Role, message.RoleAssistant)
+	if update.Role != "" {
+		t.Errorf("update.Role = %q, want empty for lifecycle-only status", update.Role)
 	}
 	if update.ResponseID != taskID {
 		t.Errorf("update.ResponseID = %q, want %q", update.ResponseID, taskID)
@@ -2151,5 +2151,25 @@ func TestRunStreamingWithTaskArtifactUpdateEvent(t *testing.T) {
 	}
 	if got := latestTaskID(session); got != taskID {
 		t.Errorf("session.TaskID = %q, want %q", got, taskID)
+	}
+}
+
+func TestAgentRunStreamingLifecycleOnlyTaskDoesNotCreateMessage(t *testing.T) {
+	transport := &mockA2ATransport{streamingResponseToReturn: &a2a.Task{
+		ID:        "task-raw",
+		ContextID: "ctx-raw",
+		Status:    a2a.TaskStatus{State: a2a.TaskStateSubmitted},
+	}}
+	a := newTestAgent(transport, agent.Config{})
+
+	resp, err := a.RunText(t.Context(), "start", agent.Stream(true)).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Messages) != 0 {
+		t.Fatalf("len(Messages) = %d, want 0", len(resp.Messages))
+	}
+	if resp.RawRepresentation == nil {
+		t.Fatal("RawRepresentation is nil")
 	}
 }

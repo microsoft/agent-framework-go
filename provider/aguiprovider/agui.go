@@ -397,7 +397,6 @@ func (a *toolCallAccumulator) onEvent(evt aguiEvents.Event) ([]*agent.ResponseUp
 	switch e := evt.(type) {
 	case *aguiEvents.RunStartedEvent:
 		return []*agent.ResponseUpdate{{
-			Role:       message.RoleAssistant,
 			ResponseID: e.RunID(),
 			CreatedAt:  eventTime(evt),
 			AdditionalProperties: map[string]any{
@@ -418,7 +417,6 @@ func (a *toolCallAccumulator) onEvent(evt aguiEvents.Event) ([]*agent.ResponseUp
 			props["result"] = e.Result
 		}
 		return []*agent.ResponseUpdate{{
-			Role:                 message.RoleAssistant,
 			ResponseID:           e.RunID(),
 			CreatedAt:            eventTime(evt),
 			FinishReason:         "stop",

@@ -146,6 +146,12 @@ func (resp *Response) ToUpdates() []*ResponseUpdate {
 		if createdAt.IsZero() {
 			createdAt = resp.CreatedAt
 		}
+		// A role distinguishes a metadata-only message update from the trailing
+		// response-level metadata update emitted below.
+		role := msg.Role
+		if role == "" {
+			role = message.RoleAssistant
+		}
 		updates = append(updates, &ResponseUpdate{
 			RawRepresentation:    msg.RawRepresentation,
 			AdditionalProperties: msg.AdditionalProperties,
@@ -154,7 +160,7 @@ func (resp *Response) ToUpdates() []*ResponseUpdate {
 			ResponseID:           resp.ID,
 			FinishReason:         resp.FinishReason,
 			AuthorName:           msg.AuthorName,
-			Role:                 msg.Role,
+			Role:                 role,
 			CreatedAt:            createdAt,
 			Contents:             msg.Contents,
 		})
@@ -179,25 +185,28 @@ func (resp *Response) Update(update *ResponseUpdate) {
 	if update == nil {
 		return
 	}
-	msg := resp.targetMessage(update)
-	// Some members on ResponseUpdate map to members of Message.
-	// Incorporate those into the latest message; in cases where the message
-	// stores a single value, prefer the latest update's value over anything
-	// stored in the message.
-	msg.AuthorName = cmp.Or(update.AuthorName, msg.AuthorName)
-	msg.Role = cmp.Or(update.Role, msg.Role)
-	msg.ID = cmp.Or(update.MessageID, msg.ID)
-	if !isValidCreatedAt(msg.CreatedAt) && isValidCreatedAt(update.CreatedAt) {
-		msg.CreatedAt = update.CreatedAt
-	}
-	msg.Contents = append(msg.Contents, update.Contents...)
-	if update.AdditionalProperties != nil {
-		if msg.AdditionalProperties == nil {
-			msg.AdditionalProperties = make(map[string]any)
+	// A response-level metadata update must not create an empty message.
+	if responseUpdateHasMessageData(update) {
+		msg := resp.targetMessage(update)
+		// Some members on ResponseUpdate map to members of Message.
+		// Incorporate those into the latest message; in cases where the message
+		// stores a single value, prefer the latest update's value over anything
+		// stored in the message.
+		msg.AuthorName = cmp.Or(update.AuthorName, msg.AuthorName)
+		msg.Role = cmp.Or(update.Role, msg.Role)
+		msg.ID = cmp.Or(update.MessageID, msg.ID)
+		if !isValidCreatedAt(msg.CreatedAt) && isValidCreatedAt(update.CreatedAt) {
+			msg.CreatedAt = update.CreatedAt
 		}
-		maps.Copy(msg.AdditionalProperties, update.AdditionalProperties)
+		msg.Contents = append(msg.Contents, update.Contents...)
+		if update.AdditionalProperties != nil {
+			if msg.AdditionalProperties == nil {
+				msg.AdditionalProperties = make(map[string]any)
+			}
+			maps.Copy(msg.AdditionalProperties, update.AdditionalProperties)
+		}
+		msg.RawRepresentation = appendRawRepresentation(msg.RawRepresentation, update.RawRepresentation)
 	}
-	msg.RawRepresentation = appendRawRepresentation(msg.RawRepresentation, update.RawRepresentation)
 
 	// Other members on a ResponseUpdate map to members of the response.
 	// Update the response object with those, preferring the values from later updates.
@@ -317,6 +326,10 @@ type ResponseUpdate struct {
 
 	// Contents contains the content items carried by this update.
 	Contents message.Contents `json:",omitzero"`
+}
+
+func responseUpdateHasMessageData(update *ResponseUpdate) bool {
+	return update != nil && (update.MessageID != "" || update.AuthorName != "" || update.Role != "" || len(update.Contents) > 0)
 }
 
 // String returns the concatenated text contents of this update.

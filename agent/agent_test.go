@@ -226,6 +226,49 @@ func newGenericTestAgent(runFn func(context.Context, []*message.Message, ...agen
 	})
 }
 
+func TestAgent_Collect_ResponseMetadataOnlyUpdateDoesNotCreateMessage(t *testing.T) {
+	run := func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
+				ContinuationToken: "next",
+			}, nil)
+		}
+	}
+	a := newGenericTestAgent(run, nil)
+
+	resp, err := a.RunText(t.Context(), "hello").Collect()
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if len(resp.Messages) != 0 {
+		t.Fatalf("len(Messages) = %d, want 0", len(resp.Messages))
+	}
+	if resp.ContinuationToken == "" {
+		t.Fatal("ContinuationToken is empty")
+	}
+}
+
+func TestAgent_Collect_RawOnlyUpdateDoesNotCreateMessage(t *testing.T) {
+	raw := struct{ Kind string }{Kind: "task-status"}
+	run := func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{RawRepresentation: raw}, nil)
+		}
+	}
+	a := newGenericTestAgent(run, nil)
+
+	resp, err := a.RunText(t.Context(), "hello").Collect()
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if len(resp.Messages) != 0 {
+		t.Fatalf("len(Messages) = %d, want 0", len(resp.Messages))
+	}
+	if resp.RawRepresentation != raw {
+		t.Fatalf("RawRepresentation = %#v, want %#v", resp.RawRepresentation, raw)
+	}
+}
+
 func TestNew_IgnoresNilMiddleware(t *testing.T) {
 	var providerCalls, agentMiddlewareCalls, providerMiddlewareCalls int
 	run := func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
