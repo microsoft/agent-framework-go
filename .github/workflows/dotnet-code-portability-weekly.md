@@ -14,6 +14,39 @@ on:
    workflow_dispatch:
 checkout:
    fetch-depth: 0
+jobs:
+   safe_outputs:
+      pre-steps:
+         - name: Decode GitHub App private key
+           id: decode-github-app-private-key
+           shell: bash
+           env:
+              PRIVATE_KEY_PEM_BASE64: ${{ secrets.GHMANAGER_GITHUBAPP_MICROSOFT_AGENT_FRAMEWORK_FOR_GO_PRIVATE_KEY_PEM }}
+           run: |
+              set -euo pipefail
+              private_key="$(
+                 printf '%s' "$PRIVATE_KEY_PEM_BASE64" |
+                    base64 -d |
+                    awk 'NR == 1 { printf "%s", $0; next } { printf "\\n%s", $0 }'
+              )"
+              echo "::add-mask::$private_key"
+              echo "private-key=$private_key" >> "$GITHUB_OUTPUT"
+   conclusion:
+      pre-steps:
+         - name: Decode GitHub App private key
+           id: decode-github-app-private-key
+           shell: bash
+           env:
+              PRIVATE_KEY_PEM_BASE64: ${{ secrets.GHMANAGER_GITHUBAPP_MICROSOFT_AGENT_FRAMEWORK_FOR_GO_PRIVATE_KEY_PEM }}
+           run: |
+              set -euo pipefail
+              private_key="$(
+                 printf '%s' "$PRIVATE_KEY_PEM_BASE64" |
+                    base64 -d |
+                    awk 'NR == 1 { printf "%s", $0; next } { printf "\\n%s", $0 }'
+              )"
+              echo "::add-mask::$private_key"
+              echo "private-key=$private_key" >> "$GITHUB_OUTPUT"
 steps:
    - name: Fetch upstream .NET reference
      shell: bash
@@ -59,7 +92,7 @@ tools:
 safe-outputs:
    github-app:
       client-id: Iv23liUO5H4lTSrArWgE
-      private-key: ${{ secrets.GHMANAGER_GITHUBAPP_MICROSOFT_AGENT_FRAMEWORK_FOR_GO_PRIVATE_KEY_PEM }}
+      private-key: ${{ steps.decode-github-app-private-key.outputs.private-key }}
    max-patch-size: 4096
    noop:
       report-as-issue: false
