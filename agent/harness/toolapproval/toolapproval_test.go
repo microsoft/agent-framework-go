@@ -1689,6 +1689,68 @@ func TestToolApproval_AutoApprovedRequestsStopAtConfiguredIterationCap(t *testin
 	}
 }
 
+func TestToolApproval_BindsResponsesAfterIterationCap(t *testing.T) {
+	for _, stopEarly := range []bool{false, true} {
+		name := "complete stream"
+		if stopEarly {
+			name = "stop after first request"
+		}
+		t.Run(name, func(t *testing.T) {
+			builder := agenttest.NewResponseBuilder()
+			for i, id := range []string{"r1", "r2", "r3"} {
+				if i == 1 {
+					builder.NewTurn()
+				}
+				builder.Add(&agent.ResponseUpdate{
+					Role: message.RoleAssistant,
+					Contents: []message.Content{&message.ToolApprovalRequestContent{
+						RequestID: id,
+						ToolCall:  &message.FunctionCallContent{CallID: id, Name: "deploy"},
+					}},
+				})
+			}
+			var innerCallMessages []*message.Message
+			runner := &agenttest.Runner{Responses: builder.NewTurn(func(_ context.Context, messages []*message.Message, _ ...agent.Option) {
+				innerCallMessages = messages
+			}).AddText("done").Build()}
+			mw := toolapproval.New(toolapproval.Config{
+				AutoApprovalRules: []toolapproval.AutoApprovalRule{
+					autoApprovalRule(func(*message.FunctionCallContent) (bool, error) { return true, nil }),
+				},
+				MaxAutoApprovalIterations: new(1),
+			})
+			session := agenttest.CreateSession()
+			var approvals []message.Content
+			for update, err := range mw.Run(runner.Run, context.Background(), nil, agent.WithSession(session)) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				req := firstApprovalRequest(t, []*agent.ResponseUpdate{update})
+				approvals = append(approvals, req.CreateResponse(true, "approved"))
+				if stopEarly {
+					break
+				}
+			}
+			wantIDs := []string{"r2", "r3"}
+			if stopEarly {
+				wantIDs = wantIDs[:1]
+			}
+			collectUpdates(t, mw, runner.Run, []*message.Message{
+				{Role: message.RoleUser, Contents: approvals},
+			}, agent.WithSession(session))
+			responses := approvalResponsesFromMessages(innerCallMessages)
+			if len(responses) != len(wantIDs) {
+				t.Fatalf("expected %d injected approval responses, got %d", len(wantIDs), len(responses))
+			}
+			for i, resp := range responses {
+				if resp.RequestID != wantIDs[i] || !resp.Approved {
+					t.Errorf("response %d = %+v, want approval for %s", i, resp, wantIDs[i])
+				}
+			}
+		})
+	}
+}
+
 func TestToolApproval_MaxAutoApprovalIterationsBelowOneReturnsError(t *testing.T) {
 	mw := toolapproval.New(toolapproval.Config{
 		MaxAutoApprovalIterations: new(0),
