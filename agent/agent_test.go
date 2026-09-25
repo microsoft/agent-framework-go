@@ -27,9 +27,11 @@ func TestFunctionInvocationMiddleware_Composition(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		short     bool
+		replace   bool
 		toolError error
 	}{
 		{name: "arguments and result replacement"},
+		{name: "function replacement", replace: true},
 		{name: "error propagation", toolError: toolFailure},
 		{name: "short circuit", short: true},
 	} {
@@ -40,10 +42,23 @@ func TestFunctionInvocationMiddleware_Composition(t *testing.T) {
 			},
 			) (string, error) {
 				order = append(order, "tool")
+				if tc.replace {
+					t.Fatal("original tool invoked after middleware replaced it")
+				}
 				if args.Value != "changed" {
 					t.Errorf("tool argument = %q, want changed", args.Value)
 				}
 				return args.Value, tc.toolError
+			})
+			replacement := functool.MustNew(functool.Config{Name: "lookup", Description: "Look up a value"}, func(_ context.Context, args struct {
+				Value string `json:"value"`
+			},
+			) (string, error) {
+				order = append(order, "replacement tool")
+				if args.Value != "changed" {
+					t.Errorf("replacement tool argument = %q, want changed", args.Value)
+				}
+				return "replacement " + args.Value, tc.toolError
 			})
 			first := agent.FunctionInvocationMiddleware(func(next func(context.Context, *agent.FunctionInvocationContext) (any, error), ctx context.Context, invocation *agent.FunctionInvocationContext) (any, error) {
 				order = append(order, "first before")
@@ -52,6 +67,9 @@ func TestFunctionInvocationMiddleware_Composition(t *testing.T) {
 				}
 				if tc.short {
 					return "cached", nil
+				}
+				if tc.replace {
+					invocation.Function = replacement
 				}
 				invocation.Arguments = `{"value":"changed"}`
 				result, err := next(ctx, invocation)
@@ -63,6 +81,9 @@ func TestFunctionInvocationMiddleware_Composition(t *testing.T) {
 			})
 			second := agent.FunctionInvocationMiddleware(func(next func(context.Context, *agent.FunctionInvocationContext) (any, error), ctx context.Context, invocation *agent.FunctionInvocationContext) (any, error) {
 				order = append(order, "second before")
+				if tc.replace && invocation.Function != replacement {
+					t.Errorf("middleware did not receive replaced function: %#v", invocation)
+				}
 				result, err := next(ctx, invocation)
 				order = append(order, "second after")
 				return result, err
@@ -108,15 +129,17 @@ func TestFunctionInvocationMiddleware_Composition(t *testing.T) {
 					t.Fatalf("results = %v, want one result with error %v", results, tc.toolError)
 				}
 				wantResult := "wrapped changed"
+				wantOrder := []string{"first before", "second before", "tool", "second after", "first after"}
+				if tc.replace {
+					wantResult = "wrapped replacement changed"
+					wantOrder = []string{"first before", "second before", "replacement tool", "second after", "first after"}
+				}
 				if tc.short {
 					wantResult = "cached"
+					wantOrder = []string{"first before"}
 				}
 				if tc.toolError == nil && results[0].Result != wantResult {
 					t.Errorf("result = %v, want %q", results[0].Result, wantResult)
-				}
-				wantOrder := []string{"first before", "second before", "tool", "second after", "first after"}
-				if tc.short {
-					wantOrder = []string{"first before"}
 				}
 				if !slices.Equal(order, wantOrder) {
 					t.Errorf("callback order = %v, want %v", order, wantOrder)
@@ -124,6 +147,63 @@ func TestFunctionInvocationMiddleware_Composition(t *testing.T) {
 			}
 			if original, _ := agent.GetOption(options[:1], agent.WithTool); original != fn {
 				t.Error("middleware mutated the context provider's options")
+			}
+		})
+	}
+}
+
+func TestFunctionInvocationMiddleware_RejectsNilContinuationBeforeInnerMiddleware(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		nilInvoke  bool
+		wantErrMsg string
+	}{
+		{name: "nil invocation", nilInvoke: true, wantErrMsg: "agent: function invocation middleware called next with nil invocation"},
+		{name: "nil function", wantErrMsg: "agent: function invocation middleware called next with nil function"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fn := functool.MustNew(functool.Config{Name: "lookup"}, func(context.Context, struct{}) (string, error) {
+				t.Fatal("original tool invoked despite invalid continuation")
+				return "", nil
+			})
+			innerCalled := false
+			outer := agent.FunctionInvocationMiddleware(func(next func(context.Context, *agent.FunctionInvocationContext) (any, error), ctx context.Context, invocation *agent.FunctionInvocationContext) (any, error) {
+				if tc.nilInvoke {
+					return next(ctx, nil)
+				}
+				invocation.Function = nil
+				return next(ctx, invocation)
+			})
+			inner := agent.FunctionInvocationMiddleware(func(next func(context.Context, *agent.FunctionInvocationContext) (any, error), ctx context.Context, invocation *agent.FunctionInvocationContext) (any, error) {
+				innerCalled = true
+				return next(ctx, invocation)
+			})
+			var runner agenttest.Runner
+			a := agent.New(agent.ProviderConfig{
+				Run: runner.Run, Middlewares: []agent.Middleware{toolautocall.New(toolautocall.Config{})},
+			}, agent.Config{
+				RunOptions:          []agent.Option{agent.WithTool(fn)},
+				FunctionMiddlewares: []agent.FunctionInvocationMiddleware{outer, inner},
+			})
+			runner = agenttest.Runner{Responses: agenttest.NewResponseBuilder(nil).
+				AddFunctionCall("", "lookup", `{}`).
+				NewTurn(nil).AddText("done").Build()}
+			var results []*message.FunctionResultContent
+			for update, err := range a.RunText(t.Context(), "start") {
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, content := range update.Contents {
+					if result, ok := content.(*message.FunctionResultContent); ok {
+						results = append(results, result)
+					}
+				}
+			}
+			if innerCalled {
+				t.Error("inner middleware was invoked despite invalid continuation from outer middleware")
+			}
+			if len(results) != 1 || results[0].Error == nil || results[0].Error.Error() != tc.wantErrMsg {
+				t.Fatalf("results = %v, want one result with error %q", results, tc.wantErrMsg)
 			}
 		})
 	}
