@@ -44,6 +44,9 @@ tools:
    github:
       toolsets: [context, repos, issues, pull_requests]
 safe-outputs:
+   github-app:
+      client-id: Iv23liUO5H4lTSrArWgE
+      private-key: ${{ secrets.GHMANAGER_GITHUBAPP_MICROSOFT_AGENT_FRAMEWORK_FOR_GO_PRIVATE_KEY_PEM }}
    max-patch-size: 4096
    noop:
       report-as-issue: false

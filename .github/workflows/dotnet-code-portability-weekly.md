@@ -10,8 +10,7 @@ network:
       - defaults
       - go
 on:
-   schedule:
-      - cron: "19 22 * * 1"
+   schedule: weekly on monday
    workflow_dispatch:
 checkout:
    fetch-depth: 0
@@ -58,6 +57,9 @@ tools:
    github:
       toolsets: [context, repos, issues, pull_requests]
 safe-outputs:
+   github-app:
+      client-id: Iv23liUO5H4lTSrArWgE
+      private-key: ${{ secrets.GHMANAGER_GITHUBAPP_MICROSOFT_AGENT_FRAMEWORK_FOR_GO_PRIVATE_KEY_PEM }}
    max-patch-size: 4096
    noop:
       report-as-issue: false
