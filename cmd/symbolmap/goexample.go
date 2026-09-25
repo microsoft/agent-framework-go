@@ -77,7 +77,7 @@ func parseGoExample(code string) (*token.FileSet, *ast.File, error) {
 
 func parseGoExampleMode(code string, callStatement bool) (*token.FileSet, *ast.File, error) {
 	if strings.TrimSpace(code) == "" {
-		return nil, nil, fmt.Errorf("Go example must not be empty")
+		return nil, nil, fmt.Errorf("go example must not be empty")
 	}
 	parse := func(body string) (*token.FileSet, *ast.File, error) {
 		fset := token.NewFileSet()
@@ -90,16 +90,16 @@ func parseGoExampleMode(code string, callStatement bool) (*token.FileSet, *ast.F
 			switch decl := decl.(type) {
 			case *ast.GenDecl:
 				if decl.Tok == token.IMPORT {
-					return nil, nil, fmt.Errorf("Go examples must not declare imports")
+					return nil, nil, fmt.Errorf("go examples must not declare imports")
 				}
 			case *ast.FuncDecl:
 				if decl.Recv == nil && decl.Name.Name == "init" {
-					return nil, nil, fmt.Errorf("Go examples must not declare init functions")
+					return nil, nil, fmt.Errorf("go examples must not declare init functions")
 				}
 			}
 		}
 		if len(file.Decls) == 0 {
-			return nil, nil, fmt.Errorf("Go example must contain code, not only comments")
+			return nil, nil, fmt.Errorf("go example must contain code, not only comments")
 		}
 		return fset, file, nil
 	}

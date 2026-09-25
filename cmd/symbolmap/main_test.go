@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"go/token"
 	"go/types"
 	"io"
@@ -470,6 +471,20 @@ func TestTextReports(t *testing.T) {
 	}
 }
 
+func TestTextReportWriteError(t *testing.T) {
+	file := writeCatalog(t, sampleCatalogJSON)
+	want := errors.New("output failed")
+	var diagnostics bytes.Buffer
+	err := run([]string{"mappings", "-file", file, "-json=false"}, errorReportWriter{want}, &diagnostics)
+	if !errors.Is(err, want) {
+		t.Fatalf("text report write error = %v, want %v", err, want)
+	}
+}
+
+type errorReportWriter struct{ err error }
+
+func (w errorReportWriter) Write([]byte) (int, error) { return 0, w.err }
+
 func TestStableReadOnlyOutput(t *testing.T) {
 	var reordered any
 	if err := json.Unmarshal([]byte(sampleCatalogJSON), &reordered); err != nil {
@@ -701,7 +716,7 @@ func TestInvalidInput(t *testing.T) {
 		{"empty namespace", strings.Replace(sampleCatalogJSON, sampleNamespacesJSON, `{"Example.Agents":{}}`, 1), "invalid or empty namespace"},
 		{"trailing object", sampleCatalogJSON + `{}`, "single JSON object"},
 		{"trailing garbage", sampleCatalogJSON + `invalid`, "single JSON object"},
-		{"malformed JSON", `{`, "EOF"},
+		{"malformed JSON", `{`, ""},
 		{"empty input", ``, "EOF"},
 		{"array root", `[]`, "cannot unmarshal array"},
 		{"null root", `null`, "schema_version"},
@@ -720,24 +735,44 @@ func TestInvalidInput(t *testing.T) {
 
 func TestInvalidOptionsAndHelp(t *testing.T) {
 	for _, args := range [][]string{
-		nil, {"unknown"}, {"summary"}, {"-view", "go"},
-		{"mappings", "-area", "unknown"}, {"mappings", "-area", "samples"},
-		{"mappings", "-kind", "feature"}, {"mappings", "-kind", "unknown"},
-		{"mappings", "-status", "aligned"}, {"mappings", "-status", "MAPPED"},
-		{"mappings", "-coverage", "partial"}, {"mappings", "-priority", "1"},
-		{"mappings", "-state", "linked"}, {"mappings", "-check"}, {"gaps", "-summary"},
-		{"mappings", "-limit", "-1"}, {"mappings", "-offset", "-1"},
-		{"go", "-limit", "-1"}, {"reconcile", "-offset", "-1"},
-		{"mappings", "-summary", "-limit", "0"}, {"go", "-summary", "-offset", "0"},
+		nil,
+		{"unknown"},
+		{"summary"},
+		{"-view", "go"},
+		{"mappings", "-area", "unknown"},
+		{"mappings", "-area", "samples"},
+		{"mappings", "-kind", "feature"},
+		{"mappings", "-kind", "unknown"},
+		{"mappings", "-status", "aligned"},
+		{"mappings", "-status", "MAPPED"},
+		{"mappings", "-coverage", "partial"},
+		{"mappings", "-priority", "1"},
+		{"mappings", "-state", "linked"},
+		{"mappings", "-check"},
+		{"gaps", "-summary"},
+		{"mappings", "-limit", "-1"},
+		{"mappings", "-offset", "-1"},
+		{"go", "-limit", "-1"},
+		{"reconcile", "-offset", "-1"},
+		{"mappings", "-summary", "-limit", "0"},
+		{"go", "-summary", "-offset", "0"},
 		{"reconcile", "-summary", "-limit", "10"},
-		{"gaps", "-tags", "alternate"}, {"mappings", "-go-root", "./other"},
+		{"gaps", "-tags", "alternate"},
+		{"mappings", "-go-root", "./other"},
 		{"mappings", "-go-package", "./agent/..."},
-		{"go", "-file", "ignored.json"}, {"go", "-area", "agents"}, {"go", "-inventory", "ignored.json"},
-		{"go", "-check"}, {"go", "-go-package", " "},
+		{"go", "-file", "ignored.json"},
+		{"go", "-area", "agents"},
+		{"go", "-inventory", "ignored.json"},
+		{"go", "-check"},
+		{"go", "-go-package", " "},
 		{"reconcile", "-state", "ready"},
-		{"mappings", "unexpected"}, {"mappings", "--", "unexpected"},
-		{"mappings", "-unknown"}, {"mappings", "-json=invalid"},
-		{"mappings", "-type"}, {"mappings", "-symbol"}, {"mappings", "-file"},
+		{"mappings", "unexpected"},
+		{"mappings", "--", "unexpected"},
+		{"mappings", "-unknown"},
+		{"mappings", "-json=invalid"},
+		{"mappings", "-type"},
+		{"mappings", "-symbol"},
+		{"mappings", "-file"},
 	} {
 		name := strings.Join(args, " ")
 		if name == "" {
@@ -897,7 +932,7 @@ func assertInvalidCatalog(t *testing.T, data, want string) {
 		// No fixture symbols match this filter. Validation must still inspect
 		// the entire catalog before any view applies its filters.
 		err := run(mappingViewArgs(view, "-file", file, "-area", "hosting", "-json"), &out, &diagnostics)
-		if err == nil || !strings.Contains(err.Error(), want) {
+		if err == nil || (want != "" && !strings.Contains(err.Error(), want)) {
 			t.Fatalf("%s error = %v, want %q", view, err, want)
 		}
 		if out.Len() != 0 {

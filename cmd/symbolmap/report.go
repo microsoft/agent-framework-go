@@ -42,12 +42,42 @@ func pageItems[T any](items []T, options pageOptions) ([]T, pageInfo) {
 	return items[start:end], page
 }
 
-func writePageText(out io.Writer, page pageInfo) {
-	fmt.Fprintf(out, "Page: offset %d; returned %d of %d matches", page.Offset, page.Returned, page.Total)
-	if page.NextOffset != nil {
-		fmt.Fprintf(out, "; next offset %d", *page.NextOffset)
+func writePageText(out io.Writer, page pageInfo) error {
+	if _, err := fmt.Fprintf(out, "Page: offset %d; returned %d of %d matches", page.Offset, page.Returned, page.Total); err != nil {
+		return err
 	}
-	fmt.Fprintln(out, ".")
+	if page.NextOffset != nil {
+		if _, err := fmt.Fprintf(out, "; next offset %d", *page.NextOffset); err != nil {
+			return err
+		}
+	}
+	_, err := fmt.Fprintln(out, ".")
+	return err
+}
+
+// Retain the first write failure until the table is flushed to the output.
+type tabularReportWriter struct {
+	*tabwriter.Writer
+	err error
+}
+
+func (w *tabularReportWriter) printf(format string, args ...any) {
+	if w.err == nil {
+		_, w.err = fmt.Fprintf(w.Writer, format, args...)
+	}
+}
+
+func (w *tabularReportWriter) page(page pageInfo) {
+	if w.err == nil {
+		w.err = writePageText(w.Writer, page)
+	}
+}
+
+func (w *tabularReportWriter) flush() error {
+	if w.err != nil {
+		return w.err
+	}
+	return w.Flush()
 }
 
 func writeReportJSON(out io.Writer, value any) error {
@@ -102,21 +132,21 @@ func writeMappingReport(out io.Writer, report mappingsReport, filter reportFilte
 		}
 		return writeReportJSON(out, value)
 	}
-	table := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	fmt.Fprintf(table, "Baseline: checked %s; .NET %s; Go %s.\n", report.Baseline.CheckedAt, report.Baseline.DotnetCommit, report.Baseline.GoCommit)
+	table := tabularReportWriter{Writer: tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)}
+	table.printf("Baseline: checked %s; .NET %s; Go %s.\n", report.Baseline.CheckedAt, report.Baseline.DotnetCommit, report.Baseline.GoCommit)
 	if *report.Baseline.InventoryComplete {
-		fmt.Fprintln(table, "Complete inventory as declared by the catalog; counts reflect the selected filters.")
+		table.printf("Complete inventory as declared by the catalog; counts reflect the selected filters.\n")
 	} else {
-		fmt.Fprintln(table, "Incomplete inventory: only explicitly listed symbols are counted.")
+		table.printf("Incomplete inventory: only explicitly listed symbols are counted.\n")
 	}
-	fmt.Fprintln(table, "No behavioral parity audit: mapped means a counterpart, not semantic parity.")
-	fmt.Fprintln(table, "Adapted means a Go idiom, not a gap; gaps include only partial and unmapped symbols.")
+	table.printf("No behavioral parity audit: mapped means a counterpart, not semantic parity.\n")
+	table.printf("Adapted means a Go idiom, not a gap; gaps include only partial and unmapped symbols.\n")
 	if report.Page != nil {
-		writePageText(table, *report.Page)
+		table.page(*report.Page)
 	}
 	if view == "summary" {
 		s := summarize(report)
-		fmt.Fprintf(table, "\n.NET symbols: %d; distinct Go symbols: %d. Counts are not a parity percentage.\n", s.DotnetSymbols, s.GoSymbols)
+		table.printf("\n.NET symbols: %d; distinct Go symbols: %d. Counts are not a parity percentage.\n", s.DotnetSymbols, s.GoSymbols)
 		for _, group := range []struct {
 			name   string
 			values []string
@@ -126,13 +156,13 @@ func writeMappingReport(out io.Writer, report mappingsReport, filter reportFilte
 			{"KIND", slices.Sorted(maps.Keys(s.ByKind)), s.ByKind},
 			{"AREA", areas, s.ByArea},
 		} {
-			fmt.Fprintf(table, "\n%s\tCOUNT\n", group.name)
+			table.printf("\n%s\tCOUNT\n", group.name)
 			for _, value := range group.values {
-				fmt.Fprintf(table, "%s\t%d\n", value, group.counts[value])
+				table.printf("%s\t%d\n", value, group.counts[value])
 			}
 		}
 	} else {
-		fmt.Fprintln(table, "\nAREA\tKIND\tSTATUS\tNAMESPACE\t.NET SYMBOL\tGO EXAMPLE\tGO SYMBOLS\tNOTE")
+		table.printf("\nAREA\tKIND\tSTATUS\tNAMESPACE\t.NET SYMBOL\tGO EXAMPLE\tGO SYMBOLS\tNOTE\n")
 		for _, row := range report.Mappings {
 			targets := strings.Join(row.GoSymbols, ", ")
 			if targets == "" {
@@ -142,10 +172,10 @@ func writeMappingReport(out io.Writer, report mappingsReport, filter reportFilte
 			if example == "" {
 				example = "-"
 			}
-			fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", row.Area, row.Kind, row.Status, row.Namespace, row.Dotnet, example, targets, row.Note)
+			table.printf("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", row.Area, row.Kind, row.Status, row.Namespace, row.Dotnet, example, targets, row.Note)
 		}
 	}
-	return table.Flush()
+	return table.flush()
 }
 
 func writeGoInventory(out io.Writer, api goInventory, symbol string, pageOptions pageOptions, asJSON, brief bool) error {
@@ -186,16 +216,18 @@ func writeGoInventory(out io.Writer, api goInventory, symbol string, pageOptions
 	writeGoReportContext(&buffer, metadata)
 	fmt.Fprintf(&buffer, "Exported symbols: %d selected of %d; indexed packages: %d (unfiltered).\n", matched, total, len(api.Packages))
 	if api.Page != nil {
-		writePageText(&buffer, *api.Page)
+		if err := writePageText(&buffer, *api.Page); err != nil {
+			return err
+		}
 	}
 	if !brief {
-		table := tabwriter.NewWriter(&buffer, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(table, "\nSYMBOL\tKIND\tSIGNATURE")
+		table := tabularReportWriter{Writer: tabwriter.NewWriter(&buffer, 0, 4, 2, ' ', 0)}
+		table.printf("\nSYMBOL\tKIND\tSIGNATURE\n")
 		for _, name := range slices.Sorted(maps.Keys(api.Symbols)) {
 			declaration := api.Symbols[name]
-			fmt.Fprintf(table, "%s\t%s\t%s\n", reportCell(name), reportCell(declaration.Kind), reportCell(declaration.Signature))
+			table.printf("%s\t%s\t%s\n", reportCell(name), reportCell(declaration.Kind), reportCell(declaration.Signature))
 		}
-		if err := table.Flush(); err != nil {
+		if err := table.flush(); err != nil {
 			return err
 		}
 	}
@@ -337,28 +369,30 @@ func writeReconciliationText(out io.Writer, report reconciliationReport, brief b
 	fmt.Fprintf(&buffer, "\nInventory declarations: %d (unfiltered); selected rows: %d; selected assessments: %d.\n", report.InventoryDeclarations, selectedRows, report.AssessedDeclarations)
 	fmt.Fprintf(&buffer, "Go exported symbols: %d; indexed packages: %d (both unfiltered).\n", report.Go.ExportedSymbols, len(report.Go.Packages))
 	if report.Page != nil {
-		writePageText(&buffer, *report.Page)
+		if err := writePageText(&buffer, *report.Page); err != nil {
+			return err
+		}
 	}
 
-	table := tabwriter.NewWriter(&buffer, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(table, "\nSTATE\tSELECTED ROWS")
+	table := tabularReportWriter{Writer: tabwriter.NewWriter(&buffer, 0, 4, 2, ' ', 0)}
+	table.printf("\nSTATE\tSELECTED ROWS\n")
 	for _, state := range reconciliationStates {
-		fmt.Fprintf(table, "%s\t%d\n", state, report.Counts[state])
+		table.printf("%s\t%d\n", state, report.Counts[state])
 	}
-	fmt.Fprint(table, "\nAREA")
+	table.printf("\nAREA")
 	for _, state := range reconciliationStates {
-		fmt.Fprintf(table, "\t%s", state)
+		table.printf("\t%s", state)
 	}
-	fmt.Fprintln(table)
+	table.printf("\n")
 	for _, area := range slices.Sorted(maps.Keys(report.ByArea)) {
-		fmt.Fprint(table, reportCell(area))
+		table.printf("%s", reportCell(area))
 		for _, state := range reconciliationStates {
-			fmt.Fprintf(table, "\t%d", report.ByArea[area][state])
+			table.printf("\t%d", report.ByArea[area][state])
 		}
-		fmt.Fprintln(table)
+		table.printf("\n")
 	}
 	if !brief {
-		fmt.Fprintln(table, "\nNAMESPACE\tTYPE\tMEMBER\tKIND\tAREA\tSTATE\tSTATUS\tGO EXAMPLE\tGO SYMBOLS\tEXPERIMENTAL\tMACHINERY\tREVIEW\tNOTE / REASON")
+		table.printf("\nNAMESPACE\tTYPE\tMEMBER\tKIND\tAREA\tSTATE\tSTATUS\tGO EXAMPLE\tGO SYMBOLS\tEXPERIMENTAL\tMACHINERY\tREVIEW\tNOTE / REASON\n")
 		for _, row := range report.Rows {
 			var machinery []string
 			if row.LanguageMachinery {
@@ -376,10 +410,10 @@ func writeReconciliationText(out io.Writer, report reconciliationReport, brief b
 			for i, cell := range cells {
 				cells[i] = reportCell(cell)
 			}
-			fmt.Fprintln(table, strings.Join(cells, "\t"))
+			table.printf("%s\n", strings.Join(cells, "\t"))
 		}
 	}
-	if err := table.Flush(); err != nil {
+	if err := table.flush(); err != nil {
 		return err
 	}
 	_, err := buffer.WriteTo(out)

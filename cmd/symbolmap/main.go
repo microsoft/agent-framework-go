@@ -139,13 +139,15 @@ func main() {
 func run(args []string, out, diagnostics io.Writer) error {
 	const usage = "Usage: symbolmap <mappings|gaps|go|reconcile> [flags]"
 	if len(args) == 0 {
-		fmt.Fprintln(diagnostics, usage)
+		if _, err := fmt.Fprintln(diagnostics, usage); err != nil {
+			return err
+		}
 		return errors.New("subcommand required")
 	}
 	command := args[0]
 	if command == "-h" || command == "-help" {
-		fmt.Fprintln(diagnostics, usage)
-		return nil
+		_, err := fmt.Fprintln(diagnostics, usage)
+		return err
 	}
 	switch command {
 	case "mappings", "gaps", "go", "reconcile":
@@ -258,7 +260,7 @@ func addIndexFlags(flags *flag.FlagSet, options *reportOptions) {
 	flags.BoolVar(&options.brief, "summary", false, "emit counts without declaration rows")
 	flags.Func("go-package", "repeat to replace the default SDK package set", func(value string) error {
 		if strings.TrimSpace(value) == "" {
-			return errors.New("Go package pattern must not be empty")
+			return errors.New("go package pattern must not be empty")
 		}
 		options.goPatterns = append(options.goPatterns, value)
 		return nil

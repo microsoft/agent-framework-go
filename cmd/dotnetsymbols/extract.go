@@ -47,13 +47,12 @@ func extractAssemblyBytes(data []byte, selected selection) (assemblyName string,
 	if err != nil {
 		return "", assemblyInfo{}, nil, fmt.Errorf("PE: %w", err)
 	}
-	defer image.Close()
 	metadata, err := winmd.New(image)
 	if err != nil {
 		return "", assemblyInfo{}, nil, fmt.Errorf("CLI metadata: %w", err)
 	}
 	if count := metadata.Tables.Assembly.Len(); count != 1 {
-		return "", assemblyInfo{}, nil, fmt.Errorf("Assembly: expected exactly one manifest row, got %d; netmodules are not supported", count)
+		return "", assemblyInfo{}, nil, fmt.Errorf("assembly: expected exactly one manifest row, got %d; netmodules are not supported", count)
 	}
 	assembly, err := metadata.Tables.Assembly.At(0)
 	if err != nil {
@@ -64,7 +63,7 @@ func extractAssemblyBytes(data []byte, selected selection) (assemblyName string,
 		return "", assemblyInfo{}, nil, fmt.Errorf("Assembly[0]: empty assembly name")
 	}
 	if count := metadata.Tables.Module.Len(); count != 1 {
-		return "", assemblyInfo{}, nil, fmt.Errorf("Module: expected exactly one manifest module, got %d", count)
+		return "", assemblyInfo{}, nil, fmt.Errorf("module: expected exactly one manifest module, got %d", count)
 	}
 	if _, err := metadata.Tables.Module.At(0); err != nil {
 		return "", assemblyInfo{}, nil, err
@@ -75,7 +74,7 @@ func extractAssemblyBytes(data []byte, selected selection) (assemblyName string,
 			return "", assemblyInfo{}, nil, err
 		}
 		if file.Flags.Content() == winmd.FileContent_ContainsMetaData {
-			return "", assemblyInfo{}, nil, fmt.Errorf("File[%d] %q: multi-module assemblies are not supported", index, file.Name)
+			return "", assemblyInfo{}, nil, fmt.Errorf("file[%d] %q: multi-module assemblies are not supported", index, file.Name)
 		}
 	}
 	extractor, err := newAssemblyExtractor(metadata, selected)
@@ -196,7 +195,7 @@ func (e *assemblyExtractor) indexMetadata() error {
 			return err
 		}
 		if _, exists := e.constantsByParent[constant.Parent]; exists {
-			return fmt.Errorf("Constant[%d]: duplicate constant for %s[%d]", index, constant.Parent.Tag, constant.Parent.Index)
+			return fmt.Errorf("constant[%d]: duplicate constant for %s[%d]", index, constant.Parent.Tag, constant.Parent.Index)
 		}
 		e.constantsByParent[constant.Parent] = index
 	}
@@ -226,7 +225,7 @@ func (e *assemblyExtractor) indexMetadata() error {
 		for index := range mapping.PropertyList.All() {
 			key := winmd.CodedIndex[winmd.HasSemantics]{Tag: winmd.HasSemantics_Property, Index: index}
 			if _, exists := owners[key]; exists {
-				return fmt.Errorf("Property[%d]: multiple declaring TypeDefs", index)
+				return fmt.Errorf("property[%d]: multiple declaring TypeDefs", index)
 			}
 			owners[key] = mapping.Parent
 		}
@@ -242,7 +241,7 @@ func (e *assemblyExtractor) indexMetadata() error {
 		for index := range mapping.EventList.All() {
 			key := winmd.CodedIndex[winmd.HasSemantics]{Tag: winmd.HasSemantics_Event, Index: index}
 			if _, exists := owners[key]; exists {
-				return fmt.Errorf("Event[%d]: multiple declaring TypeDefs", index)
+				return fmt.Errorf("event[%d]: multiple declaring TypeDefs", index)
 			}
 			owners[key] = mapping.Parent
 		}
@@ -370,26 +369,26 @@ func (e *assemblyExtractor) readType(index winmd.Index, assemblyName, name strin
 	for row := range e.propertiesByType[index].All() {
 		key, member, visible, err := e.readProperty(row)
 		if err != nil {
-			return typeInfo{}, fmt.Errorf("Property[%d]: %w", row, err)
+			return typeInfo{}, fmt.Errorf("property[%d]: %w", row, err)
 		}
 		if !visible {
 			continue
 		}
 		if _, exists := info.Properties[key]; exists {
-			return typeInfo{}, fmt.Errorf("Property[%d]: duplicate canonical property %q", row, key)
+			return typeInfo{}, fmt.Errorf("property[%d]: duplicate canonical property %q", row, key)
 		}
 		info.Properties[key] = member
 	}
 	for row := range e.eventsByType[index].All() {
 		key, member, visible, err := e.readEvent(row)
 		if err != nil {
-			return typeInfo{}, fmt.Errorf("Event[%d]: %w", row, err)
+			return typeInfo{}, fmt.Errorf("event[%d]: %w", row, err)
 		}
 		if !visible {
 			continue
 		}
 		if _, exists := info.Events[key]; exists {
-			return typeInfo{}, fmt.Errorf("Event[%d]: duplicate canonical event %q", row, key)
+			return typeInfo{}, fmt.Errorf("event[%d]: duplicate canonical event %q", row, key)
 		}
 		info.Events[key] = member
 	}
@@ -404,12 +403,12 @@ func (e *assemblyExtractor) readType(index winmd.Index, assemblyName, name strin
 		}
 		member, err := e.readField(row, field)
 		if err != nil {
-			return typeInfo{}, fmt.Errorf("Field[%d] %q: %w", row, key, err)
+			return typeInfo{}, fmt.Errorf("field[%d] %q: %w", row, key, err)
 		}
 		_, fieldExists := info.Fields[key]
 		_, constantExists := info.Constants[key]
 		if fieldExists || constantExists {
-			return typeInfo{}, fmt.Errorf("Field[%d]: duplicate canonical field %q", row, key)
+			return typeInfo{}, fmt.Errorf("field[%d]: duplicate canonical field %q", row, key)
 		}
 		if field.Flags.HasAll(winmd.FieldFlags_Literal) {
 			info.Constants[key] = member
@@ -465,10 +464,10 @@ func (e *assemblyExtractor) parameterRows(list winmd.Slice, count int) (map[int]
 		}
 		sequence := int(param.Sequence)
 		if sequence > count {
-			return nil, fmt.Errorf("Param[%d]: sequence %d exceeds signature parameter count %d", index, sequence, count)
+			return nil, fmt.Errorf("param[%d]: sequence %d exceeds signature parameter count %d", index, sequence, count)
 		}
 		if _, exists := rows[sequence]; exists {
-			return nil, fmt.Errorf("Param[%d]: duplicate sequence %d", index, sequence)
+			return nil, fmt.Errorf("param[%d]: duplicate sequence %d", index, sequence)
 		}
 		rows[sequence] = parameterRow{index: index, param: param}
 	}
@@ -502,7 +501,7 @@ func (e *assemblyExtractor) parameters(signature []winmd.SigParam, rows map[int]
 		if exists {
 			attrs, err := e.readAttributes(winmd.CodedIndex[winmd.HasCustomAttribute]{Tag: winmd.HasCustomAttribute_Param, Index: row.index})
 			if err != nil {
-				return nil, fmt.Errorf("Param[%d] %q: %w", row.index, row.param.Name.String(), err)
+				return nil, fmt.Errorf("param[%d] %q: %w", row.index, row.param.Name.String(), err)
 			}
 			info.Attributes = attrs.attributes
 		}

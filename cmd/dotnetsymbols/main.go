@@ -126,7 +126,10 @@ func run(args []string, out, diagnostics io.Writer) error {
 	if err := encoder.Encode(result); err != nil {
 		return err
 	}
-	_, err := out.Write(buffer.Bytes())
+	n, err := out.Write(buffer.Bytes())
+	if err == nil && n != buffer.Len() {
+		err = io.ErrShortWrite
+	}
 	return err
 }
 

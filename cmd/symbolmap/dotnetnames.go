@@ -20,11 +20,14 @@ type dotnetNames struct {
 	labels       map[dnGroup]map[string]string
 }
 
-type dnGroup struct{ owner, kind string }
-type dnType struct {
-	name string
-	args []dnType
-}
+type (
+	dnGroup struct{ owner, kind string }
+	dnType  struct {
+		name string
+		args []dnType
+	}
+)
+
 type dnSignature struct {
 	name   dnType
 	params []string
@@ -45,12 +48,16 @@ var dnPrimitives = map[string]string{
 	"System.IntPtr": "nint", "System.UIntPtr": "nuint", "System.String": "string", "System.Object": "object",
 }
 
-var dnIdentifier = regexp.MustCompile(`^[\p{L}_][\p{L}\p{Nd}_]*$`)
-var dnToken = regexp.MustCompile("[\\p{L}_][\\p{L}\\p{Nd}_]*(?:`[1-9][0-9]*)?(?:[.+][\\p{L}_][\\p{L}\\p{Nd}_]*(?:`[1-9][0-9]*)?)*")
+var (
+	dnIdentifier = regexp.MustCompile(`^[\p{L}_][\p{L}\p{Nd}_]*$`)
+	dnToken      = regexp.MustCompile("[\\p{L}_][\\p{L}\\p{Nd}_]*(?:`[1-9][0-9]*)?(?:[.+][\\p{L}_][\\p{L}\\p{Nd}_]*(?:`[1-9][0-9]*)?)*")
+)
 
 func newDotnetNames(inv declarationInventory) *dotnetNames {
-	n := &dotnetNames{inv: inv, full: map[string][]string{}, suffix: map[string][]string{},
-		namespaces: map[string]bool{}, classes: map[string]int{}, members: map[dnGroup]map[string]declarationMethod{}, labels: map[dnGroup]map[string]string{}}
+	n := &dotnetNames{
+		inv: inv, full: map[string][]string{}, suffix: map[string][]string{},
+		namespaces: map[string]bool{}, classes: map[string]int{}, members: map[dnGroup]map[string]declarationMethod{}, labels: map[dnGroup]map[string]string{},
+	}
 	known := map[string]bool{}
 	collect := func(text string) {
 		// Lex named atoms even in opaque fnptr/custom-modifier signatures. Never
@@ -86,8 +93,10 @@ func newDotnetNames(inv declarationInventory) *dotnetNames {
 		case "class", "interface", "delegate":
 			n.classes[dnDots(owner)] = 1
 		}
-		groups := map[string]map[string]declarationMethod{"method": t.Methods, "constructor": t.Constructors,
-			"property": {}, "event": {}, "field": {}, "constant": {}}
+		groups := map[string]map[string]declarationMethod{
+			"method": t.Methods, "constructor": t.Constructors,
+			"property": {}, "event": {}, "field": {}, "constant": {},
+		}
 		for key, p := range t.Properties {
 			groups["property"][key] = declarationMethod{Parameters: p.Parameters, ReturnType: p.Type, ReturnAttributes: p.Attributes}
 		}

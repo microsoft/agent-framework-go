@@ -132,7 +132,9 @@ func loadRelease(result *inventory, options releaseOptions, diagnostics io.Write
 		if err != nil {
 			return fmt.Errorf("resolve latest stable MAF release: %w", err)
 		}
-		fmt.Fprintf(diagnostics, "Resolved latest stable MAF release: %s\n", version)
+		if _, err := fmt.Fprintf(diagnostics, "Resolved latest stable MAF release: %s\n", version); err != nil {
+			return err
+		}
 	}
 	byID := make(map[string]packageRequest)
 	for _, request := range requests {
@@ -156,7 +158,9 @@ func loadRelease(result *inventory, options releaseOptions, diagnostics io.Write
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(diagnostics, "Reading NuGet package %s %s (%s)\n", request.ID, request.Version, framework)
+		if _, err := fmt.Fprintf(diagnostics, "Reading NuGet package %s %s (%s)\n", request.ID, request.Version, framework); err != nil {
+			return err
+		}
 		data, err := downloadPackageData(client, address, maxPackageBytes)
 		if err != nil {
 			return fmt.Errorf("package %s %s: %w", request.ID, request.Version, err)
@@ -260,7 +264,7 @@ func publicHTTPSURL(value string) error {
 	return nil
 }
 
-func downloadPackageData(client *http.Client, address string, limit int64) ([]byte, error) {
+func downloadPackageData(client *http.Client, address string, limit int64) (data []byte, err error) {
 	request, err := http.NewRequest(http.MethodGet, address, nil)
 	if err != nil {
 		return nil, err
@@ -270,14 +274,19 @@ func downloadPackageData(client *http.Client, address string, limit int64) ([]by
 	if err != nil {
 		return nil, err
 	}
-	defer response.Body.Close()
+	defer func() {
+		if closeErr := response.Body.Close(); err == nil && closeErr != nil {
+			data = nil
+			err = fmt.Errorf("close GET %s: %w", address, closeErr)
+		}
+	}()
 	if response.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GET %s: %s", address, response.Status)
 	}
 	if response.ContentLength > limit {
 		return nil, fmt.Errorf("GET %s: content exceeds %d-byte limit", address, limit)
 	}
-	data, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
+	data, err = io.ReadAll(io.LimitReader(response.Body, limit+1))
 	if err != nil {
 		return nil, err
 	}
@@ -287,7 +296,7 @@ func downloadPackageData(client *http.Client, address string, limit int64) ([]by
 	return data, nil
 }
 
-func readPackageEntry(entry *zip.File, limit int64) ([]byte, error) {
+func readPackageEntry(entry *zip.File, limit int64) (data []byte, err error) {
 	if entry.UncompressedSize64 > uint64(limit) {
 		return nil, fmt.Errorf("entry %q exceeds %d-byte limit", entry.Name, limit)
 	}
@@ -295,8 +304,13 @@ func readPackageEntry(entry *zip.File, limit int64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer reader.Close()
-	data, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	defer func() {
+		if closeErr := reader.Close(); err == nil && closeErr != nil {
+			data = nil
+			err = fmt.Errorf("close entry %q: %w", entry.Name, closeErr)
+		}
+	}()
+	data, err = io.ReadAll(io.LimitReader(reader, limit+1))
 	if err != nil {
 		return nil, err
 	}

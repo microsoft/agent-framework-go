@@ -185,7 +185,7 @@ func indexGo(root string, patterns []string, tags string) (goInventory, error) {
 				return goInventory{}, fmt.Errorf("inspect Go module directory %q: %w", mod.Dir, err)
 			}
 			if !os.SameFile(rootInfo, info) {
-				return goInventory{}, fmt.Errorf("Go module %q was loaded from %q, not requested root %q", module, mod.Dir, dir)
+				return goInventory{}, fmt.Errorf("go module %q was loaded from %q, not requested root %q", module, mod.Dir, dir)
 			}
 			checkedModuleDir = mod.Dir
 		}
@@ -193,12 +193,12 @@ func indexGo(root string, patterns []string, tags string) (goInventory, error) {
 			continue
 		}
 		if pkg.IllTyped || pkg.Types == nil || !pkg.Types.Complete() {
-			return goInventory{}, fmt.Errorf("Go package %q has incomplete or invalid type information", pkg.PkgPath)
+			return goInventory{}, fmt.Errorf("go package %q has incomplete or invalid type information", pkg.PkgPath)
 		}
 		packageName := goIndexPackageName(pkg.PkgPath, module)
 		if previous, ok := packageNames[packageName]; ok {
 			if previous != pkg.PkgPath {
-				return goInventory{}, fmt.Errorf("Go packages %q and %q have the same inventory name %q", previous, pkg.PkgPath, packageName)
+				return goInventory{}, fmt.Errorf("go packages %q and %q have the same inventory name %q", previous, pkg.PkgPath, packageName)
 			}
 			continue
 		}
