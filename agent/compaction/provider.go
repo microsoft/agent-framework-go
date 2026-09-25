@@ -51,6 +51,7 @@ type contextProvider struct {
 // When a local session is available, the provider stores message-group state so subsequent runs can
 // incrementally update the index. Without a session, it still performs stateless compaction over the
 // current message list. Service-managed sessions are skipped because the service owns history.
+// Generated summaries are marked as history so the default history store filter skips them.
 func NewContextProvider(cfg ContextProviderConfig) agent.ContextProvider {
 	if cfg.Strategy == nil {
 		panic("Strategy is required")
@@ -133,16 +134,17 @@ func (p *contextProvider) markGeneratedMessages(messages, inputMessages []*messa
 	if len(messages) == 0 {
 		return messages
 	}
-	source := message.Source{Type: agent.SourceTypeContextProvider, ID: p.sourceID}
+	// Summaries represent messages already in history and must not be stored again.
+	source := message.Source{Type: agent.SourceTypeHistoryProvider, ID: p.sourceID}
 	for i, msg := range messages {
-		if msg == nil || msg.Source == source || msg.Source.Type == agent.SourceTypeHistoryProvider {
+		if msg == nil || msg.Source.Type == agent.SourceTypeHistoryProvider {
 			continue
 		}
 		// A message is provider-generated only when it is not one of this turn's
 		// input messages. Compare by content, not pointer identity: with a session
 		// the index is rebuilt from persisted groups whose message pointers differ
 		// from the incoming messages, so an identity check would wrongly stamp
-		// genuine prior-turn history as context-provider generated.
+		// genuine prior-turn history as newly generated.
 		if containsMessageByContent(inputMessages, msg) {
 			continue
 		}

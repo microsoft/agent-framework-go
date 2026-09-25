@@ -664,11 +664,53 @@ func TestNewProvider_SourceStampsGeneratedMessages(t *testing.T) {
 	if got, want := messageTexts(compactedMessages), []string{"[Summary]\nolder context", "u3", "a3"}; !slices.Equal(got, want) {
 		t.Fatalf("unexpected compacted messages: got %v want %v", got, want)
 	}
-	if got, want := compactedMessages[0].Source, (message.Source{Type: agent.SourceTypeContextProvider, ID: "compaction-test"}); got != want {
+	if got, want := compactedMessages[0].Source, (message.Source{Type: agent.SourceTypeHistoryProvider, ID: "compaction-test"}); got != want {
 		t.Fatalf("summary source = %#v, want %#v", got, want)
 	}
 	if compactedMessages[1].Source != (message.Source{}) || compactedMessages[2].Source != (message.Source{}) {
 		t.Fatalf("expected preserved messages to keep original sources, got %#v and %#v", compactedMessages[1].Source, compactedMessages[2].Source)
+	}
+}
+
+func TestNewProvider_DoesNotStoreGeneratedSummaryInHistory(t *testing.T) {
+	options := []agent.Option{agent.WithSession(agenttest.CreateSession())}
+	history := agent.NewInMemoryHistoryProvider(agent.InMemoryHistoryProviderConfig{
+		StateInitializer: func(*agent.Session) []*message.Message { return turnMessages(1) },
+	})
+	provider := compaction.NewContextProvider(compaction.ContextProviderConfig{
+		Strategy: &compaction.SummarizationStrategy{
+			Summarizer:             compaction.SummarizerFunc(func(context.Context, []*message.Message) (string, error) { return "older context", nil }),
+			MinimumPreservedGroups: new(1),
+		},
+	})
+
+	messages, err := history.Invoking(t.Context(), agent.InvokingContext{
+		Messages: []*message.Message{textMessage(message.RoleUser, "u2")},
+		Options:  options,
+	})
+	if err != nil {
+		t.Fatalf("load history: %v", err)
+	}
+	messages, _, err = invokeProvider(provider, t.Context(), messages, options...)
+	if err != nil {
+		t.Fatalf("compact history: %v", err)
+	}
+	if got, want := messageTexts(messages), []string{"[Summary]\nolder context", "u2"}; !slices.Equal(got, want) {
+		t.Fatalf("model request = %v, want %v", got, want)
+	}
+	if err := history.Invoked(t.Context(), agent.InvokedContext{
+		RequestMessages:  messages,
+		ResponseMessages: []*message.Message{textMessage(message.RoleAssistant, "a2")},
+		Options:          options,
+	}); err != nil {
+		t.Fatalf("store history: %v", err)
+	}
+	stored, err := history.Invoking(t.Context(), agent.InvokingContext{Options: options})
+	if err != nil {
+		t.Fatalf("reload history: %v", err)
+	}
+	if got, want := messageTexts(stored), []string{"u1", "a1", "u2", "a2"}; !slices.Equal(got, want) {
+		t.Errorf("stored history = %v, want %v", got, want)
 	}
 }
 
