@@ -191,7 +191,11 @@ func (resp *Response) Update(update *ResponseUpdate) {
 		msg.CreatedAt = update.CreatedAt
 	}
 	msg.Contents = append(msg.Contents, update.Contents...)
-	if update.AdditionalProperties != nil {
+	// AdditionalProperties are scoped to the message when the update carries a
+	// MessageID, otherwise to the response (below), matching .NET's
+	// ChatResponseExtensions.ProcessUpdate. Copying to both would duplicate and
+	// mis-attribute provider metadata.
+	if update.AdditionalProperties != nil && update.MessageID != "" {
 		if msg.AdditionalProperties == nil {
 			msg.AdditionalProperties = make(map[string]any)
 		}
@@ -213,7 +217,7 @@ func (resp *Response) Update(update *ResponseUpdate) {
 	if !isValidCreatedAt(resp.CreatedAt) && isValidCreatedAt(update.CreatedAt) {
 		resp.CreatedAt = update.CreatedAt
 	}
-	if update.AdditionalProperties != nil {
+	if update.AdditionalProperties != nil && update.MessageID == "" {
 		if resp.AdditionalProperties == nil {
 			resp.AdditionalProperties = make(map[string]any)
 		}

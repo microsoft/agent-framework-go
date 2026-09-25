@@ -455,6 +455,38 @@ func TestResponse_CreatedAt(t *testing.T) {
 	}
 }
 
+// AdditionalProperties are scoped to the message when the update carries a
+// MessageID and to the response otherwise, matching .NET's ProcessUpdate. They
+// must not land on both.
+func TestResponse_Update_AdditionalPropertiesScopedByMessageID(t *testing.T) {
+	// With a MessageID -> message only.
+	withID := &agent.Response{}
+	withID.Update(&agent.ResponseUpdate{
+		MessageID:            "msg1",
+		AdditionalProperties: map[string]any{"k": "v"},
+		Contents:             message.Contents{&message.TextContent{Text: "hi"}},
+	})
+	if withID.Messages[0].AdditionalProperties["k"] != "v" {
+		t.Errorf("message AdditionalProperties = %v, want k=v", withID.Messages[0].AdditionalProperties)
+	}
+	if len(withID.AdditionalProperties) != 0 {
+		t.Errorf("response AdditionalProperties = %v, want empty (scoped to message)", withID.AdditionalProperties)
+	}
+
+	// Without a MessageID -> response only.
+	noID := &agent.Response{}
+	noID.Update(&agent.ResponseUpdate{
+		AdditionalProperties: map[string]any{"k": "v"},
+		Contents:             message.Contents{&message.TextContent{Text: "hi"}},
+	})
+	if noID.AdditionalProperties["k"] != "v" {
+		t.Errorf("response AdditionalProperties = %v, want k=v", noID.AdditionalProperties)
+	}
+	if len(noID.Messages[0].AdditionalProperties) != 0 {
+		t.Errorf("message AdditionalProperties = %v, want empty (scoped to response)", noID.Messages[0].AdditionalProperties)
+	}
+}
+
 func TestResponse_Update_AdditionalProperties(t *testing.T) {
 	resp := &agent.Response{}
 
