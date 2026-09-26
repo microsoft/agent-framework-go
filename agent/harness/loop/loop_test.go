@@ -559,3 +559,100 @@ func cloneMessages(messages []*message.Message) []*message.Message {
 	}
 	return out
 }
+
+// judgeReturning builds an agent whose every run returns the given fixed text,
+// for use as an AIJudgeEvaluator judge.
+func judgeReturning(text string) *agent.Agent {
+	capture := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate {
+		return textUpdates(text)
+	})
+	return agent.New(capture.provider(), agent.Config{})
+}
+
+func TestAIJudgeEvaluator_StructuredVerdict(t *testing.T) {
+	// Answered -> stop.
+	stop, err := loop.NewAIJudgeEvaluator(judgeReturning(`{"answered":true}`), loop.AIJudgeConfig{}).
+		Evaluate(context.Background(), contextWithResponse("done"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stop.ShouldReinvoke {
+		t.Fatal("answered verdict should stop the loop")
+	}
+
+	// Not answered with gap analysis -> continue with the gap in the feedback.
+	cont, err := loop.NewAIJudgeEvaluator(judgeReturning(`Here is my verdict: {"answered":false,"gapAnalysis":"missing the summary"}`), loop.AIJudgeConfig{}).
+		Evaluate(context.Background(), contextWithResponse("partial"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cont.ShouldReinvoke {
+		t.Fatal("unanswered verdict should continue the loop")
+	}
+	if !strings.Contains(cont.Feedback, "missing the summary") || strings.Contains(cont.Feedback, "{gap_analysis}") {
+		t.Fatalf("feedback = %q, want the gap analysis substituted", cont.Feedback)
+	}
+}
+
+func TestAIJudgeEvaluator_TextMarkerFallback(t *testing.T) {
+	// DONE marker (no structured JSON) -> stop.
+	stop, err := loop.NewAIJudgeEvaluator(judgeReturning("The task looks complete. "+loop.AIJudgeDoneMarker), loop.AIJudgeConfig{}).
+		Evaluate(context.Background(), contextWithResponse("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stop.ShouldReinvoke {
+		t.Fatal("DONE marker should stop the loop")
+	}
+
+	// MORE marker -> continue; and ambiguous (both markers) -> MORE wins.
+	for _, text := range []string{
+		"Not there yet. " + loop.AIJudgeMoreMarker,
+		loop.AIJudgeDoneMarker + " but also " + loop.AIJudgeMoreMarker,
+		"no verdict at all",
+	} {
+		cont, err := loop.NewAIJudgeEvaluator(judgeReturning(text), loop.AIJudgeConfig{}).
+			Evaluate(context.Background(), contextWithResponse("x"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !cont.ShouldReinvoke {
+			t.Fatalf("text %q should continue the loop (MORE wins when ambiguous/absent)", text)
+		}
+	}
+}
+
+func TestAIJudgeEvaluator_CriteriaRenderedIntoInstructions(t *testing.T) {
+	// Capture the system instructions the judge receives on its run.
+	var gotInstructions string
+	judge := agent.New(agent.ProviderConfig{
+		Run: func(_ context.Context, _ []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			gotInstructions, _ = agent.GetOption(opts, agent.WithInstructions)
+			return func(yield func(*agent.ResponseUpdate, error) bool) {
+				yield(textUpdates(`{"answered":true}`)[0], nil)
+			}
+		},
+	}, agent.Config{})
+
+	_, err := loop.NewAIJudgeEvaluator(judge, loop.AIJudgeConfig{Criteria: []string{"cite sources", "  ", "use markdown"}}).
+		Evaluate(context.Background(), contextWithResponse("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Blank criteria are skipped; the non-blank ones are rendered as a bullet list.
+	if !strings.Contains(gotInstructions, "The response must satisfy all of the following criteria:") ||
+		!strings.Contains(gotInstructions, "\n- cite sources") ||
+		!strings.Contains(gotInstructions, "\n- use markdown") ||
+		strings.Contains(gotInstructions, "{criteria}") {
+		t.Fatalf("judge instructions = %q, want rendered criteria and no placeholder", gotInstructions)
+	}
+}
+
+func TestNewAIJudgeEvaluator_PanicsWithNilJudge(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic")
+		}
+	}()
+	loop.NewAIJudgeEvaluator(nil, loop.AIJudgeConfig{})
+}
