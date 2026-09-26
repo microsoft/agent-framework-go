@@ -118,7 +118,8 @@ func (resp *Response) Usage() message.UsageDetails {
 	return usage
 }
 
-// Coalesce merges adjacent compatible content items within each message.
+// Coalesce merges compatible content items within each message (adjacent
+// text/reasoning/data runs, and call-ID-keyed results regardless of position).
 func (resp *Response) Coalesce() {
 	if resp == nil {
 		return
