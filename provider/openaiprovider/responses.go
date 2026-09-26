@@ -611,8 +611,7 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 			case *message.TextContent:
 				outputContents = append(outputContents, responses.ResponseOutputMessageContentUnionParam{
 					OfOutputText: &responses.ResponseOutputTextParam{
-						// TODO: Convert message annotations back to Responses output-text annotations.
-						Annotations: []responses.ResponseOutputTextAnnotationUnionParam{},
+						Annotations: annotationsToOutputText(c.Annotations),
 						Text:        c.Text,
 					},
 				})
@@ -1909,6 +1908,78 @@ func populateAnnotations(anns []responses.ResponseOutputTextAnnotationUnion, con
 			})
 		}
 	}
+}
+
+// annotationsToOutputText is the inverse of populateAnnotations: it converts
+// framework citation annotations back into Responses output-text annotation
+// params so that an assistant turn replayed from client-side history carries
+// the citations it originally arrived with. Which variant to emit is inferred
+// from the populated fields, mirroring how populateAnnotations maps each one.
+// Annotations that are not citations are skipped.
+func annotationsToOutputText(anns []message.Annotation) []responses.ResponseOutputTextAnnotationUnionParam {
+	out := make([]responses.ResponseOutputTextAnnotationUnionParam, 0, len(anns))
+	for _, ann := range anns {
+		cit, ok := ann.(*message.CitationAnnotation)
+		if !ok {
+			continue
+		}
+		containerID, _ := cit.AdditionalProperties["ContainerId"].(string)
+		switch {
+		case containerID != "" && cit.FileID != "":
+			for _, span := range citationSpans(cit.AnnotatedRegions) {
+				out = append(out, responses.ResponseOutputTextAnnotationUnionParam{
+					OfContainerFileCitation: &responses.ResponseOutputTextAnnotationContainerFileCitationParam{
+						ContainerID: containerID,
+						FileID:      cit.FileID,
+						Filename:    cit.Title,
+						StartIndex:  span[0],
+						EndIndex:    span[1],
+					},
+				})
+			}
+		case cit.URL != "":
+			for _, span := range citationSpans(cit.AnnotatedRegions) {
+				out = append(out, responses.ResponseOutputTextAnnotationUnionParam{
+					OfURLCitation: &responses.ResponseOutputTextAnnotationURLCitationParam{
+						URL:        cit.URL,
+						Title:      cit.Title,
+						StartIndex: span[0],
+						EndIndex:   span[1],
+					},
+				})
+			}
+		case cit.FileID != "" && cit.Title != "":
+			out = append(out, responses.ResponseOutputTextAnnotationUnionParam{
+				OfFileCitation: &responses.ResponseOutputTextAnnotationFileCitationParam{
+					FileID:   cit.FileID,
+					Filename: cit.Title,
+				},
+			})
+		case cit.FileID != "":
+			out = append(out, responses.ResponseOutputTextAnnotationUnionParam{
+				OfFilePath: &responses.ResponseOutputTextAnnotationFilePathParam{
+					FileID: cit.FileID,
+				},
+			})
+		}
+	}
+	return out
+}
+
+// citationSpans extracts the [start, end) index pairs from a citation's
+// annotated regions, skipping regions without both bounds set. Each Responses
+// annotation carries a single span, so a citation with multiple regions is
+// fanned out into one annotation per region.
+func citationSpans(regions message.AnnotatedRegions) [][2]int64 {
+	var spans [][2]int64
+	for _, region := range regions {
+		span, ok := region.(*message.TextSpanAnnotatedRegion)
+		if !ok || span.StartIndex == nil || span.EndIndex == nil {
+			continue
+		}
+		spans = append(spans, [2]int64{int64(*span.StartIndex), int64(*span.EndIndex)})
+	}
+	return spans
 }
 
 func textSpanAnnotatedRegion(start, end int64) *message.TextSpanAnnotatedRegion {
