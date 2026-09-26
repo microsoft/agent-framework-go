@@ -812,6 +812,17 @@ var agentsExamples = []ExampleDefinition{
 			"The output should not contain error messages or stack traces.",
 		},
 	},
+	{
+		Name:                         "02_agents_harness_step02_todo",
+		ProjectPath:                  "examples/02-agents/harness/step02_todo",
+		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
+		OptionalEnvironmentVariables: []string{"FOUNDRY_MODEL"},
+		ExpectedOutputDescription: []string{
+			"The output should show the agent planning a three-course dinner using todo items.",
+			"The agent should add todo items for the courses and complete them as it works.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
 }
 
 var workflowExamples = []ExampleDefinition{
