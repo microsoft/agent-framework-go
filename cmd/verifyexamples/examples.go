@@ -812,6 +812,17 @@ var agentsExamples = []ExampleDefinition{
 			"The output should not contain error messages or stack traces.",
 		},
 	},
+	{
+		Name:                         "02_agents_harness_step03_agentmode",
+		ProjectPath:                  "examples/02-agents/harness/step03_agentmode",
+		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
+		OptionalEnvironmentVariables: []string{"FOUNDRY_MODEL"},
+		ExpectedOutputDescription: []string{
+			"The output should show the agent planning steps for a study group and then executing them.",
+			"The agent may switch from plan mode to execute mode using the mode tools.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
 }
 
 var workflowExamples = []ExampleDefinition{
