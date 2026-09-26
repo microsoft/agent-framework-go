@@ -140,6 +140,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 			yield(&agent.ResponseUpdate{
 				Contents:          responseContents,
 				Role:              message.RoleAssistant,
+				ModelID:           resp.ModelVersion,
 				FinishReason:      finishReason,
 				CreatedAt:         time.Now(),
 				RawRepresentation: resp,

@@ -45,6 +45,10 @@ type Response struct {
 	// ID identifies this response.
 	ID string `json:",omitzero"`
 
+	// ModelID is the identifier of the model that produced this response, when
+	// the provider supplies it. It is empty otherwise.
+	ModelID string `json:",omitzero"`
+
 	// CreatedAt is the timestamp for the response. It is zero when the provider
 	// did not supply a creation time.
 	CreatedAt time.Time `json:",omitzero"`
@@ -152,6 +156,7 @@ func (resp *Response) ToUpdates() []*ResponseUpdate {
 			AgentID:              resp.AgentID,
 			MessageID:            msg.ID,
 			ResponseID:           resp.ID,
+			ModelID:              resp.ModelID,
 			FinishReason:         resp.FinishReason,
 			AuthorName:           msg.AuthorName,
 			Role:                 msg.Role,
@@ -203,6 +208,7 @@ func (resp *Response) Update(update *ResponseUpdate) {
 	// Update the response object with those, preferring the values from later updates.
 	resp.AgentID = cmp.Or(update.AgentID, resp.AgentID)
 	resp.ID = cmp.Or(update.ResponseID, resp.ID)
+	resp.ModelID = cmp.Or(update.ModelID, resp.ModelID)
 	resp.FinishReason = cmp.Or(update.FinishReason, resp.FinishReason)
 	resp.RawRepresentation = appendRawRepresentation(resp.RawRepresentation, update.RawRepresentation)
 	if update.ContinuationToken == "" {
@@ -294,6 +300,11 @@ type ResponseUpdate struct {
 
 	// ResponseID identifies the response of which this update is a part.
 	ResponseID string
+
+	// ModelID is the identifier of the model that produced this update, when the
+	// provider supplies it. It is typically set on updates that carry provider
+	// response metadata.
+	ModelID string `json:",omitzero"`
 
 	// FinishReason is the reason the generation ended. It is typically set only
 	// on the final update of a stream. Common values are "stop", "length", and

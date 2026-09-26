@@ -455,6 +455,26 @@ func TestResponse_CreatedAt(t *testing.T) {
 	}
 }
 
+// ModelID folds onto the response from later updates and round-trips through
+// ToUpdates, matching how ResponseID/FinishReason are handled.
+func TestResponse_Update_ModelID(t *testing.T) {
+	resp := &agent.Response{}
+	resp.Update(&agent.ResponseUpdate{MessageID: "m1", Contents: message.Contents{&message.TextContent{Text: "hi"}}})
+	resp.Update(&agent.ResponseUpdate{MessageID: "m1", ModelID: "gpt-4o-mini-2024-07-18"})
+	if resp.ModelID != "gpt-4o-mini-2024-07-18" {
+		t.Fatalf("ModelID = %q, want gpt-4o-mini-2024-07-18", resp.ModelID)
+	}
+
+	// Round-trip: ToUpdates carries ModelID, and re-collecting preserves it.
+	var collected agent.Response
+	for _, u := range resp.ToUpdates() {
+		collected.Update(u)
+	}
+	if collected.ModelID != resp.ModelID {
+		t.Errorf("round-tripped ModelID = %q, want %q", collected.ModelID, resp.ModelID)
+	}
+}
+
 func TestResponse_Update_AdditionalProperties(t *testing.T) {
 	resp := &agent.Response{}
 

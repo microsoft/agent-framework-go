@@ -1073,6 +1073,7 @@ func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func
 
 	currentUpdate := &agent.ResponseUpdate{
 		ResponseID:           resp.ID,
+		ModelID:              resp.Model,
 		FinishReason:         finishReason,
 		CreatedAt:            time.Unix(int64(resp.CreatedAt), 0),
 		Role:                 message.RoleAssistant,
@@ -1100,6 +1101,7 @@ func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func
 			}
 			currentUpdate.MessageID = out.ID
 			currentUpdate.ResponseID = resp.ID
+			currentUpdate.ModelID = resp.Model
 			currentUpdate.FinishReason = finishReason
 			// Only set ContinuationToken if it's not empty
 			if contToken != "" {

@@ -548,6 +548,23 @@ func TestChatLegacyFunctionCallFinishReasonNormalized_Streaming(t *testing.T) {
 	}
 }
 
+// The model that produced the response must be surfaced on Response.ModelID.
+func TestChatModelIDSurfaced(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"chatcmpl-m","object":"chat.completion","created":1727888631,"model":"gpt-4o-mini-2024-07-18","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
+	}))
+	defer server.Close()
+
+	resp, err := newTestClient(server).RunText(t.Context(), "hi").Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if resp.ModelID != "gpt-4o-mini-2024-07-18" {
+		t.Errorf("ModelID = %q, want gpt-4o-mini-2024-07-18", resp.ModelID)
+	}
+}
+
 func TestChatURLCitationAnnotations_NonStreaming(t *testing.T) {
 	const input = `
             {
